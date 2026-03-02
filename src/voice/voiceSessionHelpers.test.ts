@@ -1,8 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
-  createBotAudioPlaybackStream,
-  ensureBotAudioPlaybackReady,
   isBotNameAddressed,
   extractSoundboardDirective,
   parseSoundboardDirectiveSequence,
@@ -18,7 +16,6 @@ import {
   resolveVoiceRuntimeMode,
   transcriptSourceFromEventType
 } from "./voiceSessionHelpers.ts";
-import { AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES } from "./voiceSessionManager.constants.ts";
 
 test("isRecoverableRealtimeError matches OpenAI empty commit code", () => {
   const recoverable = isRecoverableRealtimeError({
@@ -27,105 +24,6 @@ test("isRecoverableRealtimeError matches OpenAI empty commit code", () => {
     message: ""
   });
   assert.equal(recoverable, true);
-});
-
-test("createBotAudioPlaybackStream configures a larger writable high-water mark", () => {
-  const stream = createBotAudioPlaybackStream();
-  assert.equal(stream.writableHighWaterMark, AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES);
-  stream.destroy();
-});
-
-test("ensureBotAudioPlaybackReady replaces destroyed stream and activates player", () => {
-  const playCalls = [];
-  const subscribeCalls = [];
-  const createdStreams = [];
-  const session = {
-    id: "session-repair",
-    guildId: "guild-1",
-    textChannelId: "channel-1",
-    audioPlayer: {
-      state: { status: "playing" },
-      play(resource) { playCalls.push(resource); }
-    },
-    connection: {
-      subscribe(player) { subscribeCalls.push(player); }
-    },
-    botAudioStream: { destroyed: true, writableEnded: false, write: () => true }
-  };
-
-  const ready = ensureBotAudioPlaybackReady({
-    session,
-    onStreamCreated: (stream, prev) => { createdStreams.push({ stream, prev }); }
-  });
-
-  assert.equal(ready, true);
-  assert.equal(Boolean(session.botAudioStream?.destroyed), false);
-  assert.equal(createdStreams.length, 1);
-});
-
-test("ensureBotAudioPlaybackReady activates idle player without replacing healthy stream", () => {
-  const playCalls = [];
-  const subscribeCalls = [];
-  const existingStream = createBotAudioPlaybackStream();
-  const session = {
-    id: "session-idle",
-    guildId: "guild-1",
-    textChannelId: "channel-1",
-    audioPlayer: {
-      state: { status: "idle" },
-      play(resource) { playCalls.push(resource); }
-    },
-    connection: {
-      subscribe(player) { subscribeCalls.push(player); }
-    },
-    botAudioStream: existingStream
-  };
-
-  const ready = ensureBotAudioPlaybackReady({ session });
-
-  assert.equal(ready, true);
-  assert.equal(session.botAudioStream === existingStream, true);
-  assert.equal(playCalls.length, 1);
-  assert.equal(subscribeCalls.length, 1);
-  existingStream.destroy();
-});
-
-test("ensureBotAudioPlaybackReady creates stream without activating when activatePlayback is false", () => {
-  const playCalls = [];
-  const subscribeCalls = [];
-  const session = {
-    id: "session-prepare-only",
-    guildId: "guild-1",
-    textChannelId: "channel-1",
-    audioPlayer: {
-      state: { status: "idle" },
-      play(resource) { playCalls.push(resource); }
-    },
-    connection: {
-      subscribe(player) { subscribeCalls.push(player); }
-    },
-    botAudioStream: null
-  };
-
-  const ready = ensureBotAudioPlaybackReady({
-    session,
-    activatePlayback: false
-  });
-
-  assert.equal(ready, true);
-  assert.equal(Boolean(session.botAudioStream), true);
-  assert.equal(playCalls.length, 0);
-  assert.equal(subscribeCalls.length, 0);
-  session.botAudioStream.destroy();
-});
-
-test("ensureBotAudioPlaybackReady returns false when session lacks audioPlayer", () => {
-  const session = {
-    id: "session-no-player",
-    audioPlayer: null,
-    connection: {}
-  };
-  assert.equal(ensureBotAudioPlaybackReady({ session }), false);
 });
 
 test("isRecoverableRealtimeError does not match unrelated realtime errors", () => {

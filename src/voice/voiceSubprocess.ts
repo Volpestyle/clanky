@@ -22,16 +22,10 @@ import {
   type VoiceConnection
 } from "@discordjs/voice";
 import { PassThrough } from "node:stream";
-import OpusScript from "opusscript";
 import prism from "prism-media";
 import { convertXaiOutputToDiscordPcm, convertDiscordPcmToXaiInput } from "./pcmAudio.ts";
 
 const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
-const DISCORD_PCM_FRAME_BYTES = 3840; // 20ms @ 48kHz stereo 16-bit
-const OPUS_FRAME_SAMPLES = 960;
-const OPUS_SET_BITRATE = 4002;
-const OPUS_SET_FEC = 4012;
-const OPUS_BITRATE = 64000;
 
 // --- State ---
 
@@ -39,9 +33,15 @@ let connection: VoiceConnection | null = null;
 let audioPlayer: AudioPlayer | null = null;
 let botAudioStream: PassThrough | null = null;
 let adapterMethods: { onVoiceServerUpdate: (data: any) => void; onVoiceStateUpdate: (data: any) => void } | null = null;
-let opusEncoder: any = null;
 const userSubscriptions = new Map<string, { opusStream: any; decoder: any; pcmStream: any }>();
 let defaultSilenceDurationMs = 700;
+
+// Silence keep-alive: fills gaps between audio deltas so the AudioPlayer
+// doesn't transition to idle when the PassThrough temporarily has no data.
+let silenceKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
+let lastRealAudioWriteAt = 0;
+const SILENCE_FRAME = Buffer.alloc(3840, 0); // 20ms silence at 48kHz stereo s16le
+const SILENCE_KEEPALIVE_TIMEOUT_MS = 5000; // Stop pumping after 5s of no real audio
 
 // --- IPC helpers ---
 
@@ -55,27 +55,41 @@ function sendError(message: string) {
   send({ type: "error", message });
 }
 
-// --- Opus encoder ---
+// --- Silence keep-alive pump ---
 
-function getOpusEncoder() {
-  if (!opusEncoder) {
-    opusEncoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO);
-    try { opusEncoder.encoderCTL(OPUS_SET_BITRATE, OPUS_BITRATE); } catch { /* ignore */ }
-    try { opusEncoder.encoderCTL(OPUS_SET_FEC, 1); } catch { /* ignore */ }
-  }
-  return opusEncoder;
+function startSilenceKeepAlive() {
+  if (silenceKeepAliveTimer) return;
+  silenceKeepAliveTimer = setInterval(() => {
+    if (!botAudioStream || botAudioStream.destroyed || botAudioStream.writableEnded) {
+      stopSilenceKeepAlive();
+      return;
+    }
+    const elapsed = Date.now() - lastRealAudioWriteAt;
+    if (elapsed > SILENCE_KEEPALIVE_TIMEOUT_MS) {
+      // No real audio for too long — end the stream gracefully so
+      // silencePaddingFrames can produce a clean tail-off.
+      stopSilenceKeepAlive();
+      try { botAudioStream.end(); } catch { /* ignore */ }
+      return;
+    }
+    // Only write silence when there's a gap (>40ms since last real write)
+    if (elapsed > 40) {
+      try { botAudioStream.write(SILENCE_FRAME); } catch { /* ignore */ }
+    }
+  }, 20);
 }
 
-function destroyOpusEncoder() {
-  if (opusEncoder) {
-    try { opusEncoder.delete?.(); } catch { /* ignore */ }
-    opusEncoder = null;
+function stopSilenceKeepAlive() {
+  if (silenceKeepAliveTimer) {
+    clearInterval(silenceKeepAliveTimer);
+    silenceKeepAliveTimer = null;
   }
 }
 
 // --- Audio playback pipeline ---
 
 function resetPlayback() {
+  stopSilenceKeepAlive();
   if (botAudioStream) {
     try { botAudioStream.destroy(); } catch { /* ignore */ }
     botAudioStream = null;
@@ -86,35 +100,22 @@ function resetPlayback() {
 }
 
 function ensurePlaybackStream() {
-  if (botAudioStream && !botAudioStream.destroyed) return true;
+  if (botAudioStream && !botAudioStream.destroyed && !botAudioStream.writableEnded) return true;
   if (!audioPlayer || !connection) return false;
 
   botAudioStream = new PassThrough();
+  // Use StreamType.Raw — write 48kHz stereo s16le PCM and let Discord.js
+  // handle Opus encoding internally via prism-media.  A binary PassThrough
+  // is incompatible with StreamType.Opus which expects individual Opus
+  // packets from an object-mode stream.
   const resource = createAudioResource(botAudioStream, {
-    inputType: StreamType.Opus
+    inputType: StreamType.Raw,
+    // Keep the resource alive across gaps between audio deltas (~5s).
+    silencePaddingFrames: 250
   });
   audioPlayer.play(resource);
   connection.subscribe(audioPlayer);
   return true;
-}
-
-function encodePcmToOpus(pcmBuffer: Buffer): Buffer[] {
-  const encoder = getOpusEncoder();
-  const packets: Buffer[] = [];
-  let offset = 0;
-
-  while (offset + DISCORD_PCM_FRAME_BYTES <= pcmBuffer.length) {
-    const frame = pcmBuffer.subarray(offset, offset + DISCORD_PCM_FRAME_BYTES);
-    offset += DISCORD_PCM_FRAME_BYTES;
-    try {
-      const opusPacket = encoder.encode(frame, OPUS_FRAME_SAMPLES);
-      packets.push(Buffer.from(opusPacket));
-    } catch {
-      // skip frame on encode error
-    }
-  }
-
-  return packets;
 }
 
 function handleAudio(pcmBase64: string, sampleRate: number) {
@@ -128,21 +129,18 @@ function handleAudio(pcmBase64: string, sampleRate: number) {
   }
   if (!rawPcm.length) return;
 
-  // Convert from provider sample rate to Discord format (48kHz stereo)
+  // Convert from provider sample rate to Discord format (48kHz stereo s16le)
   const discordPcm = convertXaiOutputToDiscordPcm(rawPcm, sampleRate);
   if (!discordPcm.length) return;
 
-  // Encode to Opus packets
-  const opusPackets = encodePcmToOpus(discordPcm);
-  if (!opusPackets.length) return;
-
-  // Ensure stream exists and write packets
+  // Ensure stream exists and write raw PCM — Discord.js encodes to Opus.
   if (!ensurePlaybackStream()) return;
 
-  for (const packet of opusPackets) {
-    if (botAudioStream && !botAudioStream.destroyed) {
-      botAudioStream.write(packet);
-    }
+  lastRealAudioWriteAt = Date.now();
+  startSilenceKeepAlive();
+
+  if (botAudioStream && !botAudioStream.destroyed && !botAudioStream.writableEnded) {
+    botAudioStream.write(discordPcm);
   }
 }
 
@@ -407,8 +405,6 @@ function handleDestroy() {
   }
 
   resetPlayback();
-  destroyOpusEncoder();
-
   if (connection) {
     try { connection.destroy(); } catch { /* ignore */ }
     connection = null;

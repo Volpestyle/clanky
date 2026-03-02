@@ -7853,6 +7853,51 @@ export class VoiceSessionManager {
       }
 
       const pcmBuffer = Buffer.concat(captureState.pcmChunks);
+
+      // Silence gate: drop near-silent captures that slipped past the
+      // in-flight near-silence abort (e.g., very short VAD false positives
+      // or receiver buffer burst artifacts).
+      const captureDurationMs = Math.max(0, finalizedAt - captureState.startedAt);
+      const sampleRateHz = isRealtimeMode(session.mode)
+        ? Number(session.realtimeInputSampleRateHz) || 24000
+        : 24000;
+      const silenceGate = this.evaluatePcmSilenceGate({ pcmBuffer, sampleRateHz });
+      const audioDurationMs = silenceGate.clipDurationMs;
+      // A capture whose wall-clock time is <25% of its audio duration
+      // means opus packets were delivered in a burst from the receiver
+      // buffer — not from live speech.
+      const isBurstArtifact = audioDurationMs > 200 && captureDurationMs < audioDurationMs * 0.25;
+
+      if (silenceGate.drop || isBurstArtifact) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: "voice_turn_dropped_silence_gate",
+          metadata: {
+            sessionId: session.id,
+            reason: String(reason || "stream_end"),
+            bytesSent: captureState.bytesSent,
+            captureDurationMs,
+            audioDurationMs,
+            rms: silenceGate.rms,
+            peak: silenceGate.peak,
+            activeSampleRatio: silenceGate.activeSampleRatio,
+            isBurstArtifact,
+            silenceGateDrop: silenceGate.drop
+          }
+        });
+        cleanupCapture();
+        if (useOpenAiPerUserAsr) {
+          this.scheduleOpenAiAsrSessionIdleClose({ session, userId });
+        } else if (useOpenAiSharedAsr) {
+          this.releaseOpenAiSharedAsrActiveUser(session, userId);
+          this.scheduleOpenAiSharedAsrSessionIdleClose(session);
+        }
+        return;
+      }
+
       cleanupCapture();
       if (session.mode === "stt_pipeline") {
         this.queueSttPipelineTurn({
