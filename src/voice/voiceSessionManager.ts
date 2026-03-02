@@ -7747,6 +7747,7 @@ export class VoiceSessionManager {
     for (const [candidateUserId, captureState] of session.userCaptures) {
       if (!captureState || !candidateUserId) continue;
       if (Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) > 0) continue;
+      if (Math.max(0, Number(captureState.bytesSent || 0)) <= 0) continue;
 
       const began = this.beginOpenAiSharedAsrUtterance({
         session,
@@ -7756,6 +7757,12 @@ export class VoiceSessionManager {
       if (!began) continue;
 
       const chunks = Array.isArray(captureState.pcmChunks) ? captureState.pcmChunks : [];
+      if (chunks.length <= 0) {
+        this.releaseOpenAiSharedAsrActiveUser(session, candidateUserId);
+        continue;
+      }
+      let replayedChunks = 0;
+      let replayedBytes = 0;
       for (const chunk of chunks) {
         if (!chunk || !chunk.length) continue;
         const appended = this.appendAudioToOpenAiSharedAsr({
@@ -7765,9 +7772,15 @@ export class VoiceSessionManager {
           pcmChunk: chunk
         });
         if (appended) {
+          replayedChunks += 1;
+          replayedBytes += chunk.length;
           captureState.sharedAsrBytesSent =
             Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) + chunk.length;
         }
+      }
+      if (replayedChunks <= 0 || replayedBytes <= 0) {
+        this.releaseOpenAiSharedAsrActiveUser(session, candidateUserId);
+        continue;
       }
 
       this.store.logAction({
@@ -7778,8 +7791,8 @@ export class VoiceSessionManager {
         content: "openai_shared_asr_handoff",
         metadata: {
           sessionId: session.id,
-          replayedChunks: chunks.length,
-          replayedBytes: Math.max(0, Number(captureState.sharedAsrBytesSent || 0))
+          replayedChunks,
+          replayedBytes
         }
       });
       return true;

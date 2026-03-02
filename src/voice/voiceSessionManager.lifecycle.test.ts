@@ -918,6 +918,7 @@ test("shared ASR hands off to waiting speaker after commit", () => {
   const pcmB = Buffer.alloc(960, 2);
   session.userCaptures.set("speaker-2", {
     userId: "speaker-2",
+    bytesSent: pcmA.length + pcmB.length,
     sharedAsrBytesSent: 0,
     pcmChunks: [pcmA, pcmB],
     speakingEndFinalizeTimer: null
@@ -1005,6 +1006,7 @@ test("shared ASR handoff skips captures that already had ASR audio", () => {
 
   session.userCaptures.set("speaker-already-had-asr", {
     userId: "speaker-already-had-asr",
+    bytesSent: 4800,
     sharedAsrBytesSent: 4800,
     pcmChunks: [Buffer.alloc(960, 3)],
     speakingEndFinalizeTimer: null
@@ -1012,6 +1014,7 @@ test("shared ASR handoff skips captures that already had ASR audio", () => {
   const freshPcm = Buffer.alloc(960, 4);
   session.userCaptures.set("speaker-fresh", {
     userId: "speaker-fresh",
+    bytesSent: freshPcm.length,
     sharedAsrBytesSent: 0,
     pcmChunks: [freshPcm],
     speakingEndFinalizeTimer: null
@@ -1027,6 +1030,66 @@ test("shared ASR handoff skips captures that already had ASR audio", () => {
   assert.equal(beginCalls[0]?.userId, "speaker-fresh");
   assert.equal(appendCalls.length, 1);
   assert.deepEqual(appendCalls[0]?.pcmChunk, freshPcm);
+});
+
+test("shared ASR handoff skips zero-audio captures and selects buffered speaker", () => {
+  const { manager, logs } = createManager();
+  manager.appConfig.openaiApiKey = "test-openai-key";
+  const beginCalls = [];
+  const appendCalls = [];
+  manager.beginOpenAiSharedAsrUtterance = (payload) => {
+    beginCalls.push(payload);
+    return true;
+  };
+  manager.appendAudioToOpenAiSharedAsr = (payload) => {
+    appendCalls.push(payload);
+    return true;
+  };
+  manager.shouldUseOpenAiSharedTranscription = () => true;
+
+  const session = createSession({
+    mode: "openai_realtime",
+    openAiSharedAsrState: {
+      userId: null,
+      client: null,
+      closing: false,
+      utterance: null,
+      idleTimer: null,
+      pendingAudioChunks: [],
+      pendingAudioBytes: 0,
+      isCommittingAsr: false
+    }
+  });
+
+  session.userCaptures.set("speaker-empty", {
+    userId: "speaker-empty",
+    bytesSent: 0,
+    sharedAsrBytesSent: 0,
+    pcmChunks: [],
+    speakingEndFinalizeTimer: null
+  });
+  const bufferedPcm = Buffer.alloc(960, 7);
+  session.userCaptures.set("speaker-buffered", {
+    userId: "speaker-buffered",
+    bytesSent: bufferedPcm.length,
+    sharedAsrBytesSent: 0,
+    pcmChunks: [bufferedPcm],
+    speakingEndFinalizeTimer: null
+  });
+
+  const result = manager.tryHandoffSharedAsrToWaitingCapture({
+    session,
+    settings: session.settingsSnapshot
+  });
+
+  assert.equal(result, true);
+  assert.equal(beginCalls.length, 1);
+  assert.equal(beginCalls[0]?.userId, "speaker-buffered");
+  assert.equal(appendCalls.length, 1);
+  assert.equal(appendCalls[0]?.userId, "speaker-buffered");
+  assert.deepEqual(appendCalls[0]?.pcmChunk, bufferedPcm);
+  const handoffLog = logs.find((l) => l?.content === "openai_shared_asr_handoff");
+  assert.equal(handoffLog?.userId, "speaker-buffered");
 });
 
 test("maybeHandleInterruptedReplyRecovery retries short barge-ins with the prior utterance", () => {
