@@ -9,10 +9,11 @@
 import { EventEmitter } from "node:events";
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
+import type { IVoiceClient, VoiceClientOptions } from "./voiceClient.ts";
 
 const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
 
-export class VoiceSubprocessClient extends EventEmitter {
+export class VoiceSubprocessClient extends EventEmitter implements IVoiceClient {
   private child: ChildProcess | null = null;
   private guildId: string;
   private channelId: string;

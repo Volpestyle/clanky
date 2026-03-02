@@ -1,11 +1,11 @@
 /**
  * Music player that delegates playback to the Node.js voice subprocess
- * via the VoiceSubprocessClient IPC layer.
+ * via the IVoiceClient IPC layer.
  *
  * The subprocess owns yt-dlp/ffmpeg pipelines and the AudioPlayer; this
  * class tracks state and proxies commands.
  */
-import type { VoiceSubprocessClient } from "./voiceSubprocessClient.ts";
+import type { IVoiceClient } from "./voiceClient.ts";
 import type { MusicSearchResult } from "./musicSearch.ts";
 
 export type MusicPlayerStatus = {
@@ -22,7 +22,7 @@ export type MusicPlayerResult = {
 };
 
 export class DiscordMusicPlayer {
-  private subprocessClient: VoiceSubprocessClient | null = null;
+  private audioClient: IVoiceClient | null = null;
   private currentTrack: MusicSearchResult | null = null;
   private _playing = false;
   private _paused = false;
@@ -30,14 +30,14 @@ export class DiscordMusicPlayer {
   constructor() {}
 
   /** Bind to the current session's subprocess client. */
-  setSubprocessClient(client: VoiceSubprocessClient | null): void {
+  setAudioClient(client: IVoiceClient | null): void {
     // Clean up old listeners
-    if (this.subprocessClient) {
-      this.subprocessClient.off("musicIdle", this._onMusicIdle);
-      this.subprocessClient.off("musicError", this._onMusicError);
+    if (this.audioClient) {
+      this.audioClient.off("musicIdle", this._onMusicIdle);
+      this.audioClient.off("musicError", this._onMusicError);
     }
 
-    this.subprocessClient = client;
+    this.audioClient = client;
 
     if (client) {
       client.on("musicIdle", this._onMusicIdle);
@@ -76,7 +76,7 @@ export class DiscordMusicPlayer {
   }
 
   async play(track: MusicSearchResult): Promise<MusicPlayerResult> {
-    if (!this.subprocessClient?.isAlive) {
+    if (!this.audioClient?.isAlive) {
       return { ok: false, error: "no voice connection", track: null };
     }
 
@@ -88,7 +88,7 @@ export class DiscordMusicPlayer {
 
       // Delegate to subprocess — it handles yt-dlp, ffmpeg, and AudioPlayer.
       // The subprocess calls resetPlayback() internally before starting.
-      this.subprocessClient.musicPlay(streamUrl);
+      this.audioClient.musicPlay(streamUrl);
       this.currentTrack = track;
       this._playing = true;
       this._paused = false;
@@ -101,9 +101,9 @@ export class DiscordMusicPlayer {
   }
 
   stop(): void {
-    if (this.subprocessClient?.isAlive) {
+    if (this.audioClient?.isAlive) {
       try {
-        this.subprocessClient.musicStop();
+        this.audioClient.musicStop();
       } catch {
         // ignore
       }
@@ -114,9 +114,9 @@ export class DiscordMusicPlayer {
   }
 
   pause(): void {
-    if (this.subprocessClient?.isAlive) {
+    if (this.audioClient?.isAlive) {
       try {
-        this.subprocessClient.musicPause();
+        this.audioClient.musicPause();
         this._paused = true;
       } catch {
         // ignore
@@ -125,9 +125,9 @@ export class DiscordMusicPlayer {
   }
 
   resume(): void {
-    if (this.subprocessClient?.isAlive) {
+    if (this.audioClient?.isAlive) {
       try {
-        this.subprocessClient.musicResume();
+        this.audioClient.musicResume();
         this._paused = false;
       } catch {
         // ignore

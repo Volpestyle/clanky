@@ -669,7 +669,7 @@ test("generateVoiceTurnReply logs voice errors when generation fails", async () 
     transcript: "hello there"
   });
 
-  assert.deepEqual(reply, { text: "" });
+  assert.deepEqual(reply, { text: "", generationContextSnapshot: null });
   assert.equal(logs.length, 1);
   assert.equal(logs[0]?.kind, "voice_error");
   assert.equal(String(logs[0]?.content || "").includes("voice_stt_generation_failed"), true);

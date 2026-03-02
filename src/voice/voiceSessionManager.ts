@@ -1,3 +1,8 @@
+import { injectMusicMethods } from "./voiceSessionManager.music.ts";
+import { injectStreamWatchMethods } from "./voiceSessionManager.streamWatch.ts";
+import { injectToolsMethods } from "./voiceSessionManager.tools.ts";
+import { injectAsrMethods } from "./voiceSessionManager.asr.ts";
+import { injectAddressingMethods } from "./voiceSessionManager.addressing.ts";
 import { PermissionFlagsBits, type ChatInputCommandInteraction } from "discord.js";
 import {
   buildVoiceToneGuardrails,
@@ -15,9 +20,9 @@ import {
   VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
   VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
 } from "../promptCore.ts";
-const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
-const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
-const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
+export const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
+export const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
+export const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
   "whisper-1",
   "gpt-4o-transcribe-latest",
   "gpt-4o-transcribe",
@@ -263,7 +268,7 @@ export function resolveVoiceThoughtTopicalityBias({
   };
 }
 
-const VOICE_ADDRESSING_ALL_TOKENS = new Set([
+export const VOICE_ADDRESSING_ALL_TOKENS = new Set([
   "ALL",
   "EVERYONE",
   "EVERYBODY",
@@ -272,7 +277,7 @@ const VOICE_ADDRESSING_ALL_TOKENS = new Set([
   "VC"
 ]);
 
-function normalizeVoiceAddressingTargetToken(value = "") {
+export function normalizeVoiceAddressingTargetToken(value = "") {
   const normalized = String(value || "")
     .replace(/\s+/g, " ")
     .trim()
@@ -283,25 +288,25 @@ function normalizeVoiceAddressingTargetToken(value = "") {
   return normalized;
 }
 
-const EN_MUSIC_STOP_VERB_RE = /\b(?:stop|pause|halt|end|quit|shut\s*off)\b/i;
-const EN_MUSIC_CUE_RE = /\b(?:music|song|songs|track|tracks|playback|playing)\b/i;
-const EN_MUSIC_PLAY_VERB_RE = /\b(?:play|start|queue|put\s+on|spin)\b/i;
-const EN_MUSIC_PLAY_QUERY_RE =
+export const EN_MUSIC_STOP_VERB_RE = /\b(?:stop|pause|halt|end|quit|shut\s*off)\b/i;
+export const EN_MUSIC_CUE_RE = /\b(?:music|song|songs|track|tracks|playback|playing)\b/i;
+export const EN_MUSIC_PLAY_VERB_RE = /\b(?:play|start|queue|put\s+on|spin)\b/i;
+export const EN_MUSIC_PLAY_QUERY_RE =
   /\b(?:play|start|queue|put\s+on|spin)\b\s+(.+)$/i;
-const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
-const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
-const MEMORY_NAMESPACE_USER_RE = /^user:([a-z0-9_-]{2,64})$/i;
-const MEMORY_NAMESPACE_GUILD_RE = /^guild:([a-z0-9_-]{2,64})$/i;
-const MEMORY_SENSITIVE_PATTERN_RE =
+export const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
+export const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
+export const MEMORY_NAMESPACE_USER_RE = /^user:([a-z0-9_-]{2,64})$/i;
+export const MEMORY_NAMESPACE_GUILD_RE = /^guild:([a-z0-9_-]{2,64})$/i;
+export const MEMORY_SENSITIVE_PATTERN_RE =
   /\b(?:sk-[a-z0-9]{20,}|api[_-]?key|token|password|passphrase|authorization|secret)\b/i;
-const OPENAI_FUNCTION_CALL_ITEM_TYPES = new Set([
+export const OPENAI_FUNCTION_CALL_ITEM_TYPES = new Set([
   "response.output_item.added",
   "response.output_item.done",
   "response.function_call_arguments.delta",
   "response.function_call_arguments.done"
 ]);
 
-function normalizeInlineText(value: unknown = "", maxChars = STT_TRANSCRIPT_MAX_CHARS) {
+export function normalizeInlineText(value: unknown = "", maxChars = STT_TRANSCRIPT_MAX_CHARS) {
   return String(value || "")
     .replace(/\s+/g, " ")
     .trim()
@@ -427,7 +432,7 @@ type VoiceToolCallEvent = {
   sourceEventType?: string | null;
 };
 
-type VoiceMcpServerStatus = {
+export type VoiceMcpServerStatus = {
   serverName: string;
   connected: boolean;
   tools: Array<{ name: string; description: string; inputSchema?: Record<string, unknown> }>;
@@ -486,7 +491,7 @@ type VoiceToolRuntimeSessionLike = {
   [key: string]: unknown;
 };
 
-function normalizeOpenAiRealtimeTranscriptionModel(
+export function normalizeOpenAiRealtimeTranscriptionModel(
   value,
   fallback = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
 ) {
@@ -1101,97 +1106,6 @@ export class VoiceSessionManager {
     return true;
   }
 
-  ensureSessionMusicState(session) {
-    if (!session || typeof session !== "object") return null;
-    const current = session.music && typeof session.music === "object" ? session.music : {};
-    const next = {
-      active: Boolean(current.active),
-      startedAt: Math.max(0, Number(current.startedAt || 0)),
-      stoppedAt: Math.max(0, Number(current.stoppedAt || 0)),
-      provider: String(current.provider || "").trim() || null,
-      source: String(current.source || "").trim() || null,
-      lastTrackId: String(current.lastTrackId || "").trim() || null,
-      lastTrackTitle: String(current.lastTrackTitle || "").trim() || null,
-      lastTrackArtists: Array.isArray(current.lastTrackArtists)
-        ? current.lastTrackArtists.map((entry) => String(entry || "").trim()).filter(Boolean).slice(0, 8)
-        : [],
-      lastTrackUrl: String(current.lastTrackUrl || "").trim() || null,
-      lastQuery: String(current.lastQuery || "").trim() || null,
-      lastRequestedByUserId: String(current.lastRequestedByUserId || "").trim() || null,
-      lastRequestText: String(current.lastRequestText || "").trim() || null,
-      lastCommandAt: Math.max(0, Number(current.lastCommandAt || 0)),
-      lastCommandReason: String(current.lastCommandReason || "").trim() || null,
-      pendingQuery: String(current.pendingQuery || "").trim() || null,
-      pendingPlatform: this.normalizeMusicPlatformToken(current.pendingPlatform, "auto"),
-      pendingResults: Array.isArray(current.pendingResults)
-        ? current.pendingResults
-          .map((entry) => this.normalizeMusicSelectionResult(entry))
-          .filter(Boolean)
-          .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS)
-        : [],
-      pendingRequestedByUserId: String(current.pendingRequestedByUserId || "").trim() || null,
-      pendingRequestedAt: Math.max(0, Number(current.pendingRequestedAt || 0))
-    };
-    session.music = next;
-    return next;
-  }
-
-  snapshotMusicRuntimeState(session) {
-    const music = this.ensureSessionMusicState(session);
-    const queueState = this.ensureToolMusicQueueState(session);
-    if (!music) return null;
-    return {
-      active: Boolean(music.active),
-      provider: music.provider || null,
-      source: music.source || null,
-      startedAt: music.startedAt > 0 ? new Date(music.startedAt).toISOString() : null,
-      stoppedAt: music.stoppedAt > 0 ? new Date(music.stoppedAt).toISOString() : null,
-      lastTrackId: music.lastTrackId || null,
-      lastTrackTitle: music.lastTrackTitle || null,
-      lastTrackArtists: Array.isArray(music.lastTrackArtists) ? music.lastTrackArtists : [],
-      lastTrackUrl: music.lastTrackUrl || null,
-      lastQuery: music.lastQuery || null,
-      lastRequestedByUserId: music.lastRequestedByUserId || null,
-      lastRequestText: music.lastRequestText || null,
-      lastCommandAt: music.lastCommandAt > 0 ? new Date(music.lastCommandAt).toISOString() : null,
-      lastCommandReason: music.lastCommandReason || null,
-      pendingQuery: music.pendingQuery || null,
-      pendingPlatform: music.pendingPlatform || null,
-      pendingRequestedByUserId: music.pendingRequestedByUserId || null,
-      pendingRequestedAt: music.pendingRequestedAt > 0 ? new Date(music.pendingRequestedAt).toISOString() : null,
-      pendingResults: Array.isArray(music.pendingResults) ? music.pendingResults : [],
-      disambiguationActive: this.isMusicDisambiguationActive(music),
-      queueState: queueState
-        ? {
-          tracks: queueState.tracks.map((track) => ({
-            id: track.id,
-            title: track.title,
-            artist: track.artist || null,
-            source: track.source
-          })),
-          nowPlayingIndex: queueState.nowPlayingIndex,
-          isPaused: queueState.isPaused,
-          volume: queueState.volume
-        }
-        : null
-    };
-  }
-
-  isMusicPlaybackActive(session) {
-    const music = this.ensureSessionMusicState(session);
-    return Boolean(music?.active);
-  }
-
-  normalizeMusicPlatformToken(value: unknown = "", fallback: "youtube" | "soundcloud" | "discord" | "auto" | null = null) {
-    const token = String(value || "")
-      .trim()
-      .toLowerCase();
-    if (token === "youtube" || token === "soundcloud" || token === "discord" || token === "auto") {
-      return token;
-    }
-    return fallback;
-  }
-
   normalizeMusicSelectionResult(rawResult: Record<string, unknown> | null = null): MusicSelectionResult | null {
     if (!rawResult || typeof rawResult !== "object") return null;
     const id = normalizeInlineText(rawResult.id, 180);
@@ -1210,26 +1124,6 @@ export class VoiceSessionManager {
       externalUrl,
       durationSeconds
     };
-  }
-
-  isMusicDisambiguationActive(musicState = null) {
-    const music = musicState && typeof musicState === "object" ? musicState : null;
-    if (!music) return false;
-    const pendingAt = Math.max(0, Number(music.pendingRequestedAt || 0));
-    if (!pendingAt) return false;
-    const ageMs = Math.max(0, Date.now() - pendingAt);
-    if (ageMs > MUSIC_DISAMBIGUATION_TTL_MS) return false;
-    return Array.isArray(music.pendingResults) && music.pendingResults.length > 0;
-  }
-
-  clearMusicDisambiguationState(session) {
-    const music = this.ensureSessionMusicState(session);
-    if (!music) return;
-    music.pendingQuery = null;
-    music.pendingPlatform = "auto";
-    music.pendingResults = [];
-    music.pendingRequestedByUserId = null;
-    music.pendingRequestedAt = 0;
   }
 
   setMusicDisambiguationState({
@@ -1257,22 +1151,6 @@ export class VoiceSessionManager {
     return music.pendingResults;
   }
 
-  findPendingMusicSelectionById(session, selectedResultId = "") {
-    const music = this.ensureSessionMusicState(session);
-    if (!music || !this.isMusicDisambiguationActive(music)) return null;
-    const targetId = normalizeInlineText(selectedResultId, 180);
-    if (!targetId) return null;
-    const normalizedTarget = targetId.toLowerCase();
-    return (
-      (Array.isArray(music.pendingResults) ? music.pendingResults : []).find((entry) => {
-        const entryId = String(entry?.id || "")
-          .trim()
-          .toLowerCase();
-        return Boolean(entryId) && entryId === normalizedTarget;
-      }) || null
-    );
-  }
-
   getMusicDisambiguationPromptContext(session): {
     active: true;
     query: string | null;
@@ -1292,136 +1170,6 @@ export class VoiceSessionManager {
         .filter((entry): entry is MusicSelectionResult => Boolean(entry))
         .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS)
     };
-  }
-
-  ensureSessionToolRuntimeState(session) {
-    if (!session || typeof session !== "object") return null;
-    if (!Array.isArray(session.toolCallEvents)) {
-      session.toolCallEvents = [];
-    }
-    if (!(session.openAiPendingToolCalls instanceof Map)) {
-      session.openAiPendingToolCalls = new Map();
-    }
-    if (!(session.openAiToolCallExecutions instanceof Map)) {
-      session.openAiToolCallExecutions = new Map();
-    }
-    if (!(session.toolMusicTrackCatalog instanceof Map)) {
-      session.toolMusicTrackCatalog = new Map();
-    }
-    if (!Array.isArray(session.memoryWriteWindow)) {
-      session.memoryWriteWindow = [];
-    }
-    if (!session.mcpStatus || !Array.isArray(session.mcpStatus)) {
-      session.mcpStatus = this.getVoiceMcpServerStatuses().map((entry) => ({
-        ...entry
-      }));
-    }
-    return session;
-  }
-
-  ensureToolMusicQueueState(session) {
-    if (!session || typeof session !== "object") return null;
-    const current =
-      session.musicQueueState && typeof session.musicQueueState === "object"
-        ? session.musicQueueState
-        : {};
-    const tracks = Array.isArray(current.tracks) ? current.tracks : [];
-    const normalizedTracks = tracks
-      .map((entry) => {
-        if (!entry || typeof entry !== "object") return null;
-        const id = normalizeInlineText(entry.id, 180);
-        const title = normalizeInlineText(entry.title, 220);
-        if (!id || !title) return null;
-        return {
-          id,
-          title,
-          artist: normalizeInlineText(entry.artist, 220) || null,
-          durationMs: Number.isFinite(Number(entry.durationMs))
-            ? Math.max(0, Math.round(Number(entry.durationMs)))
-            : null,
-          source:
-            String(entry.source || "")
-              .trim()
-              .toLowerCase() === "sc"
-              ? "sc"
-              : "yt",
-          streamUrl: normalizeInlineText(entry.streamUrl, 300) || null,
-          platform: this.normalizeMusicPlatformToken(entry.platform, "youtube") || "youtube",
-          externalUrl: normalizeInlineText(entry.externalUrl, 300) || null
-        };
-      })
-      .filter(Boolean);
-    const normalizedNowPlayingIndexRaw = Number(current.nowPlayingIndex);
-    const normalizedNowPlayingIndex =
-      Number.isInteger(normalizedNowPlayingIndexRaw) &&
-        normalizedNowPlayingIndexRaw >= 0 &&
-        normalizedNowPlayingIndexRaw < normalizedTracks.length
-        ? normalizedNowPlayingIndexRaw
-        : null;
-    const next = {
-      guildId: String(session.guildId || "").trim(),
-      voiceChannelId: String(session.voiceChannelId || "").trim(),
-      tracks: normalizedTracks,
-      nowPlayingIndex: normalizedNowPlayingIndex,
-      isPaused: Boolean(current.isPaused),
-      volume: Number.isFinite(Number(current.volume))
-        ? clamp(Number(current.volume), 0, 1)
-        : 1
-    };
-    session.musicQueueState = next;
-    return next;
-  }
-
-  getVoiceMcpServerStatuses() {
-    const servers = Array.isArray(this.appConfig?.voiceMcpServers) ? this.appConfig.voiceMcpServers : [];
-    return servers
-      .map((server) => {
-        if (!server || typeof server !== "object") return null;
-        const serverName = normalizeInlineText(server.serverName || server.name, 80);
-        const baseUrl = normalizeInlineText(server.baseUrl, 280);
-        if (!serverName || !baseUrl) return null;
-        const toolRows = Array.isArray(server.tools)
-          ? server.tools
-            .map((tool) => {
-              if (!tool || typeof tool !== "object") return null;
-              const toolName = normalizeInlineText(tool.name, 120);
-              if (!toolName) return null;
-              return {
-                name: toolName,
-                description: normalizeInlineText(tool.description, 800) || "",
-                inputSchema:
-                  tool.inputSchema && typeof tool.inputSchema === "object" && !Array.isArray(tool.inputSchema)
-                    ? tool.inputSchema
-                    : undefined
-              };
-            })
-            .filter(Boolean)
-          : [];
-        const headers =
-          server.headers && typeof server.headers === "object" && !Array.isArray(server.headers)
-            ? Object.fromEntries(
-              Object.entries(server.headers)
-                .map(([headerName, headerValue]) => [
-                  normalizeInlineText(headerName, 120),
-                  normalizeInlineText(headerValue, 320)
-                ])
-                .filter(([headerName, headerValue]) => Boolean(headerName) && Boolean(headerValue))
-            )
-            : {};
-        return {
-          serverName,
-          connected: true,
-          tools: toolRows,
-          lastError: null,
-          lastConnectedAt: null,
-          lastCallAt: null,
-          baseUrl,
-          toolPath: normalizeInlineText(server.toolPath, 220) || "/tools/call",
-          timeoutMs: clamp(Math.floor(Number(server.timeoutMs) || 10_000), 500, 60_000),
-          headers
-        };
-      })
-      .filter((entry): entry is VoiceMcpServerStatus => Boolean(entry));
   }
 
   resolveVoiceRealtimeToolDescriptors({
@@ -1672,114 +1420,6 @@ export class VoiceSessionManager {
     } else {
       session.toolCallEvents = events;
     }
-  }
-
-  hasBotNameCueForTranscript({ transcript = "", settings = null } = {}) {
-    const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedTranscript) return false;
-
-    const resolvedSettings = settings || this.store.getSettings();
-    const botName = getPromptBotName(resolvedSettings);
-    const aliases = Array.isArray(resolvedSettings?.botNameAliases) ? resolvedSettings.botNameAliases : [];
-    const primaryToken = String(botName || "")
-      .replace(/[^a-z0-9\s]+/gi, " ")
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean)
-      .at(0) || "";
-    const shortPrimaryToken = primaryToken.length >= 5 ? primaryToken.slice(0, 5) : "";
-    const candidateNames = [
-      botName,
-      ...aliases,
-      primaryToken,
-      shortPrimaryToken
-    ]
-      .map((entry) => String(entry || "").trim())
-      .filter(Boolean);
-
-    for (const candidate of candidateNames) {
-      if (hasBotNameCue({ transcript: normalizedTranscript, botName: candidate })) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  isLikelyMusicStopPhrase({ transcript = "", settings = null } = {}) {
-    const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedTranscript) return false;
-    if (!EN_MUSIC_STOP_VERB_RE.test(normalizedTranscript)) return false;
-    if (EN_MUSIC_CUE_RE.test(normalizedTranscript)) return true;
-    if (this.hasBotNameCueForTranscript({ transcript: normalizedTranscript, settings })) return true;
-    const tokenCount = normalizedTranscript.split(/\s+/).filter(Boolean).length;
-    return tokenCount <= 3;
-  }
-
-  isLikelyMusicPlayPhrase({ transcript = "", settings = null } = {}) {
-    const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedTranscript) return false;
-    if (!EN_MUSIC_PLAY_VERB_RE.test(normalizedTranscript)) return false;
-    if (EN_MUSIC_CUE_RE.test(normalizedTranscript)) return true;
-    return this.hasBotNameCueForTranscript({ transcript: normalizedTranscript, settings });
-  }
-
-  extractMusicPlayQuery(transcript = "") {
-    const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedTranscript) return "";
-
-    const quotedMatch = normalizedTranscript.match(/["'“”]([^"'“”]{2,120})["'“”]/);
-    if (quotedMatch && quotedMatch[1]) {
-      return normalizeInlineText(quotedMatch[1], 120);
-    }
-
-    const playMatch = normalizedTranscript.match(EN_MUSIC_PLAY_QUERY_RE);
-    const candidate = playMatch?.[1] ? String(playMatch[1]) : "";
-    if (!candidate) return "";
-
-    const cleaned = candidate
-      .replace(/\b(?:in\s+vc|in\s+voice|in\s+discord|right\s+now|rn|please|plz|for\s+me|for\s+us|thanks?)\b/gi, " ")
-      .replace(/\b(?:music|song|songs|track|tracks)\b/gi, " ")
-      .replace(/[^\w\s'"&+-]+/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (!cleaned) return "";
-    if (/^(?:something|anything|some|a|the|please|plz)$/i.test(cleaned)) return "";
-    return cleaned.slice(0, 120);
-  }
-
-  haltSessionOutputForMusicPlayback(session, reason = "music_playback_started") {
-    if (!session || session.ending) return;
-    this.clearPendingResponse(session);
-    this.resetBotAudioPlayback(session);
-    this.clearBargeInOutputSuppression(session, "music_playback_started");
-    if (session.botTurnResetTimer) {
-      clearTimeout(session.botTurnResetTimer);
-      session.botTurnResetTimer = null;
-    }
-    session.botTurnOpen = false;
-    session.pendingBargeInRetry = null;
-    session.lastRequestedRealtimeUtterance = null;
-    session.activeReplyInterruptionPolicy = null;
-    session.pendingDeferredTurns = [];
-
-    this.resetBotAudioPlayback(session);
-    this.abortActiveInboundCaptures({
-      session,
-      reason: "music_playback_active"
-    });
-
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: this.client.user?.id || null,
-      content: "voice_music_output_halted",
-      metadata: {
-        sessionId: session.id,
-        reason: String(reason || "music_playback_started")
-      }
-    });
   }
 
   async requestPlayMusic({
@@ -2156,35 +1796,6 @@ export class VoiceSessionManager {
       mustNotify
     });
     return true;
-  }
-
-  async playMusicViaDiscord(session: any, track: { id: string; title: string; artist: string; platform: string; externalUrl: string | null }) {
-    if (!session?.guildId) {
-      return { ok: false, error: "no session" };
-    }
-
-    const guild = this.client.guilds.cache.get(session.guildId);
-    if (!guild) {
-      return { ok: false, error: "guild not found" };
-    }
-
-    if (!session.subprocessClient?.isAlive) {
-      return { ok: false, error: "not connected to voice" };
-    }
-
-    const searchResult = {
-      id: track.id,
-      title: track.title,
-      artist: track.artist,
-      platform: track.platform as "youtube" | "soundcloud",
-      streamUrl: null,
-      durationSeconds: null,
-      thumbnailUrl: null,
-      externalUrl: track.externalUrl || ""
-    };
-
-    const result = await this.musicPlayer.play(searchResult);
-    return { ok: result.ok, error: result.error };
   }
 
   async requestStopMusic({
@@ -2795,34 +2406,6 @@ export class VoiceSessionManager {
     return true;
   }
 
-  async requestWatchStream({ message, settings, targetUserId = null }) {
-    return await requestWatchStream(this, { message, settings, targetUserId });
-  }
-
-  initializeStreamWatchState({ session, requesterUserId, targetUserId = null }) {
-    return initializeStreamWatchState(this, { session, requesterUserId, targetUserId });
-  }
-
-  supportsStreamWatchCommentary(session, settings = null) {
-    return supportsStreamWatchCommentary(this, session, settings);
-  }
-
-  supportsVisionFallbackStreamWatchCommentary({ session = null, settings = null } = {}) {
-    return supportsVisionFallbackStreamWatchCommentary(this, { session, settings });
-  }
-
-  supportsStreamWatchBrainContext({ session = null, settings = null } = {}) {
-    return supportsStreamWatchBrainContext(this, { session, settings });
-  }
-
-  resolveStreamWatchVisionProviderSettings(settings = null) {
-    return resolveStreamWatchVisionProviderSettings(this, settings);
-  }
-
-  getStreamWatchBrainContextForPrompt(session, settings = null) {
-    return getStreamWatchBrainContextForPrompt(session, settings);
-  }
-
   async generateVisionFallbackStreamWatchCommentary({
     session,
     settings,
@@ -2857,14 +2440,6 @@ export class VoiceSessionManager {
       settings,
       source
     });
-  }
-
-  async requestStopWatchingStream({ message, settings }) {
-    return await requestStopWatchingStream(this, { message, settings });
-  }
-
-  async requestStreamWatchStatus({ message, settings }) {
-    return await requestStreamWatchStatus(this, { message, settings });
   }
 
   async ingestStreamFrame({
@@ -3316,88 +2891,6 @@ export class VoiceSessionManager {
     });
   }
 
-  isBargeInOutputSuppressed(session, now = Date.now()) {
-    if (!session) return false;
-    const suppressedUntil = Number(session.bargeInSuppressionUntil || 0);
-    if (suppressedUntil <= 0) return false;
-    if (now < suppressedUntil) return true;
-    this.clearBargeInOutputSuppression(session, "timeout");
-    return false;
-  }
-
-  clearBargeInOutputSuppression(session, reason = "cleared") {
-    if (!session) return;
-    const suppressedUntil = Number(session.bargeInSuppressionUntil || 0);
-    if (suppressedUntil <= 0) return;
-    const droppedChunks = Math.max(0, Number(session.bargeInSuppressedAudioChunks || 0));
-    const droppedBytes = Math.max(0, Number(session.bargeInSuppressedAudioBytes || 0));
-
-    session.bargeInSuppressionUntil = 0;
-    session.bargeInSuppressedAudioChunks = 0;
-    session.bargeInSuppressedAudioBytes = 0;
-
-    if (reason === "timeout" && droppedChunks <= 0 && droppedBytes <= 0) return;
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: this.client.user?.id || null,
-      content: "voice_barge_in_suppression_cleared",
-      metadata: {
-        sessionId: session.id,
-        reason: String(reason || "cleared"),
-        droppedAudioChunks: droppedChunks,
-        droppedAudioBytes: droppedBytes
-      }
-    });
-  }
-
-  isBargeInInterruptTargetActive(session) {
-    if (!session || session.ending) return false;
-    if (this.isBargeInOutputSuppressed(session)) return false;
-    return this.getReplyOutputLockState(session).locked;
-  }
-
-  normalizeReplyInterruptionPolicy(rawPolicy = null) {
-    const policy = rawPolicy && typeof rawPolicy === "object" ? rawPolicy : null;
-    if (!policy) return null;
-
-    const normalizedTalkingTo = normalizeVoiceAddressingTargetToken(policy.talkingTo || "");
-    const scopeRaw = String(policy.scope || "")
-      .trim()
-      .toLowerCase();
-    const scope = scopeRaw === "all" || normalizedTalkingTo === "ALL" ? "all" : "speaker";
-    const allowedUserId = String(policy.allowedUserId || "").trim() || null;
-    const assertive =
-      policy.assertive === undefined
-        ? scope === "all" || Boolean(allowedUserId)
-        : Boolean(policy.assertive);
-    if (!assertive) return null;
-    if (scope === "speaker" && !allowedUserId) return null;
-
-    const normalizedReason =
-      String(policy.reason || "")
-        .replace(/\s+/g, "_")
-        .trim()
-        .toLowerCase()
-        .slice(0, 80) || null;
-    const normalizedSource =
-      String(policy.source || "")
-        .replace(/\s+/g, "_")
-        .trim()
-        .toLowerCase()
-        .slice(0, 80) || null;
-
-    return {
-      assertive: true,
-      scope,
-      allowedUserId: scope === "all" ? null : allowedUserId,
-      talkingTo: normalizedTalkingTo || null,
-      reason: normalizedReason,
-      source: normalizedSource
-    };
-  }
-
   buildReplyInterruptionPolicy({
     session = null,
     userId = null,
@@ -3445,18 +2938,6 @@ export class VoiceSessionManager {
     return normalizedUserId === String(normalizedPolicy.allowedUserId || "");
   }
 
-  setActiveReplyInterruptionPolicy(session, policy = null) {
-    if (!session) return;
-    session.activeReplyInterruptionPolicy = this.normalizeReplyInterruptionPolicy(policy);
-  }
-
-  maybeClearActiveReplyInterruptionPolicy(session) {
-    if (!session || session.ending) return;
-    const lockState = this.getReplyOutputLockState(session);
-    if (lockState.locked) return;
-    session.activeReplyInterruptionPolicy = null;
-  }
-
   maybeInterruptBotForAssertiveSpeech({
     session,
     userId = null,
@@ -3491,67 +2972,6 @@ export class VoiceSessionManager {
       source: String(source || "speaking_start"),
       minCaptureBytes
     });
-  }
-
-  isCaptureSignalAssertive(capture) {
-    if (!capture || typeof capture !== "object") return false;
-    const sampleCount = Math.max(0, Number(capture.signalSampleCount || 0));
-    if (sampleCount <= 0) return false;
-
-    const activeSampleCount = Math.max(0, Number(capture.signalActiveSampleCount || 0));
-    const peakAbs = Math.max(0, Number(capture.signalPeakAbs || 0));
-    const activeSampleRatio = activeSampleCount / sampleCount;
-    const peak = peakAbs / 32768;
-
-    const nearSilentSignal =
-      activeSampleRatio <= VOICE_SILENCE_GATE_ACTIVE_RATIO_MAX &&
-      peak <= VOICE_SILENCE_GATE_PEAK_MAX;
-    return !nearSilentSignal;
-  }
-
-  isCaptureEligibleForActivityTouch({ session, capture }) {
-    if (!session || !capture || typeof capture !== "object") return false;
-    const sampleRateHz = isRealtimeMode(session.mode)
-      ? Number(session.realtimeInputSampleRateHz) || 24000
-      : 24000;
-    const minSpeechBytes = Math.max(
-      2,
-      Math.ceil((sampleRateHz * 2 * ACTIVITY_TOUCH_MIN_SPEECH_MS) / 1000)
-    );
-    if (Number(capture.bytesSent || 0) < minSpeechBytes) return false;
-    return this.isCaptureSignalAssertive(capture);
-  }
-
-  findAssertiveInboundCaptureUserId(session, interruptionPolicy = null) {
-    if (!session || !(session.userCaptures instanceof Map) || session.userCaptures.size <= 0) return null;
-    const normalizedInterruptionPolicy = this.normalizeReplyInterruptionPolicy(interruptionPolicy);
-    const sampleRateHz = isRealtimeMode(session.mode)
-      ? Number(session.realtimeInputSampleRateHz) || 24000
-      : 24000;
-    const minCaptureBytes = Math.max(2, Math.ceil((sampleRateHz * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000));
-
-    for (const [captureUserId, capture] of session.userCaptures.entries()) {
-      if (!capture || typeof capture !== "object") continue;
-      const normalizedCaptureUserId = String(capture.userId || captureUserId || "").trim();
-      if (!normalizedCaptureUserId) continue;
-      if (capture.speakingEndFinalizeTimer) continue;
-      if (Number(capture.bytesSent || 0) < minCaptureBytes) continue;
-      if (!this.isCaptureSignalAssertive(capture)) continue;
-      if (
-        !this.isUserAllowedToInterruptReply({
-          policy: normalizedInterruptionPolicy,
-          userId: normalizedCaptureUserId
-        })
-      ) {
-        continue;
-      }
-      return normalizedCaptureUserId;
-    }
-    return null;
-  }
-
-  hasAssertiveInboundCapture(session, interruptionPolicy = null) {
-    return Boolean(this.findAssertiveInboundCaptureUserId(session, interruptionPolicy));
   }
 
   interruptBotSpeechForBargeIn({
@@ -3672,13 +3092,6 @@ export class VoiceSessionManager {
       }
     });
     return true;
-  }
-
-  isAudioActivelyFlowing(session) {
-    if (!session || session.ending) return false;
-    // With subprocess, we can't check stream buffer; rely on recent audio delta timing.
-    const msSinceLastDelta = Date.now() - Number(session.lastAudioDeltaAt || 0);
-    return msSinceLastDelta < 200;
   }
 
   armAssertiveBargeIn({
@@ -4336,44 +3749,6 @@ export class VoiceSessionManager {
       ? session.pendingRealtimeTurns.length
       : 0;
     return Math.max(0, (session.realtimeTurnDrainActive ? 1 : 0) + pendingQueueDepth);
-  }
-
-  resolveSpeakingEndFinalizeDelayMs({ session, captureAgeMs }) {
-    const normalizedCaptureAgeMs = Math.max(0, Number(captureAgeMs || 0));
-    let baseDelayMs = SPEAKING_END_FINALIZE_QUICK_MS;
-    if (normalizedCaptureAgeMs < SPEAKING_END_SHORT_CAPTURE_MS) {
-      baseDelayMs =
-        normalizedCaptureAgeMs < SPEAKING_END_MICRO_CAPTURE_MS
-          ? SPEAKING_END_FINALIZE_MICRO_MS
-          : SPEAKING_END_FINALIZE_SHORT_MS;
-    }
-
-    const activeCaptureCount = Number(session?.userCaptures?.size || 0);
-    const realtimeTurnBacklog = this.getRealtimeTurnBacklogSize(session);
-    const sttTurnBacklog = Number(session?.pendingSttTurns || 0);
-    const turnBacklog = Math.max(0, realtimeTurnBacklog, sttTurnBacklog);
-
-    if (
-      activeCaptureCount >= SPEAKING_END_ADAPTIVE_HEAVY_CAPTURE_COUNT ||
-      turnBacklog >= SPEAKING_END_ADAPTIVE_HEAVY_BACKLOG
-    ) {
-      return Math.max(
-        SPEAKING_END_FINALIZE_MIN_MS,
-        Math.round(baseDelayMs * SPEAKING_END_ADAPTIVE_HEAVY_SCALE)
-      );
-    }
-
-    if (
-      activeCaptureCount >= SPEAKING_END_ADAPTIVE_BUSY_CAPTURE_COUNT ||
-      turnBacklog >= SPEAKING_END_ADAPTIVE_BUSY_BACKLOG
-    ) {
-      return Math.max(
-        SPEAKING_END_FINALIZE_MIN_MS,
-        Math.round(baseDelayMs * SPEAKING_END_ADAPTIVE_BUSY_SCALE)
-      );
-    }
-
-    return baseDelayMs;
   }
 
   isInboundCaptureSuppressed(session) {
@@ -5891,60 +5266,6 @@ export class VoiceSessionManager {
     return true;
   }
 
-  shouldUseOpenAiPerUserTranscription({
-    session = null,
-    settings = null
-  }: {
-    session?: {
-      ending?: boolean;
-      mode?: string;
-      settingsSnapshot?: Record<string, unknown> | null;
-    } | null;
-    settings?: Record<string, unknown> | null;
-  } = {}) {
-    if (!session || session.ending) return false;
-    if (session.mode !== "openai_realtime") return false;
-    if (!this.appConfig?.openaiApiKey) return false;
-    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    if (this.resolveRealtimeReplyStrategy({
-      session,
-      settings: resolvedSettings
-    }) !== "brain") {
-      return false;
-    }
-    if (resolvedSettings?.voice?.openaiRealtime?.usePerUserAsrBridge === false) {
-      return false;
-    }
-    return true;
-  }
-
-  shouldUseOpenAiSharedTranscription({
-    session = null,
-    settings = null
-  }: {
-    session?: {
-      ending?: boolean;
-      mode?: string;
-      settingsSnapshot?: Record<string, unknown> | null;
-    } | null;
-    settings?: Record<string, unknown> | null;
-  } = {}) {
-    if (!session || session.ending) return false;
-    if (session.mode !== "openai_realtime") return false;
-    if (!this.appConfig?.openaiApiKey) return false;
-    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    if (this.resolveRealtimeReplyStrategy({
-      session,
-      settings: resolvedSettings
-    }) !== "brain") {
-      return false;
-    }
-    if (resolvedSettings?.voice?.openaiRealtime?.usePerUserAsrBridge === true) {
-      return false;
-    }
-    return true;
-  }
-
   shouldUseOpenAiRealtimeTranscriptBridge({
     session = null,
     settings = null
@@ -5960,408 +5281,6 @@ export class VoiceSessionManager {
       this.shouldUseOpenAiPerUserTranscription({ session, settings }) ||
       this.shouldUseOpenAiSharedTranscription({ session, settings })
     );
-  }
-
-  getOpenAiSharedAsrState(session) {
-    if (!session || session.ending) return null;
-    if (!session.openAiSharedAsrState) {
-      session.openAiSharedAsrState = {
-        userId: null,
-        client: null,
-        connectPromise: null,
-        closing: false,
-        isCommittingAsr: false,
-        committingUtteranceId: 0,
-        pendingAudioChunks: [],
-        pendingAudioBytes: 0,
-        connectedAt: 0,
-        lastAudioAt: 0,
-        lastTranscriptAt: 0,
-        lastPartialLogAt: 0,
-        lastPartialText: "",
-        idleTimer: null,
-        utterance: {
-          id: 0,
-          startedAt: 0,
-          bytesSent: 0,
-          partialText: "",
-          finalSegments: [],
-          finalSegmentEntries: [],
-          lastUpdateAt: 0
-        },
-        itemIdToUserId: new Map(),
-        finalTranscriptsByItemId: new Map(),
-        pendingCommitResolvers: [],
-        pendingCommitRequests: []
-      };
-    }
-    return session.openAiSharedAsrState;
-  }
-
-  getOpenAiAsrSessionMap(session) {
-    if (!session || session.ending) return null;
-    if (!(session.openAiAsrSessions instanceof Map)) {
-      session.openAiAsrSessions = new Map();
-    }
-    return session.openAiAsrSessions;
-  }
-
-  getOrCreateOpenAiAsrSessionState({ session, userId }) {
-    const sessionMap = this.getOpenAiAsrSessionMap(session);
-    const normalizedUserId = String(userId || "").trim();
-    if (!sessionMap || !normalizedUserId) return null;
-    const existing = sessionMap.get(normalizedUserId);
-    if (existing && typeof existing === "object") {
-      return existing;
-    }
-
-    const state = {
-      userId: normalizedUserId,
-      client: null,
-      connectPromise: null,
-      closing: false,
-      isCommittingAsr: false,
-      committingUtteranceId: 0,
-      pendingAudioChunks: [],
-      pendingAudioBytes: 0,
-      connectedAt: 0,
-      lastAudioAt: 0,
-      lastTranscriptAt: 0,
-      lastPartialLogAt: 0,
-      lastPartialText: "",
-      idleTimer: null,
-      utterance: {
-        id: 0,
-        startedAt: 0,
-        bytesSent: 0,
-        partialText: "",
-        finalSegments: [],
-        finalSegmentEntries: [],
-        lastUpdateAt: 0
-      }
-    };
-    sessionMap.set(normalizedUserId, state);
-    return state;
-  }
-
-  createOpenAiAsrRuntimeLogger(session, userId) {
-    return ({ level, event, metadata }) => {
-      this.store.logAction({
-        kind: level === "warn" ? "voice_error" : "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: String(userId || "").trim() || this.client.user?.id || null,
-        content: event,
-        metadata: {
-          sessionId: session.id,
-          ...(metadata && typeof metadata === "object" ? metadata : {})
-        }
-      });
-    };
-  }
-
-  async ensureOpenAiAsrSessionConnected({
-    session,
-    settings = null,
-    userId
-  }) {
-    if (!session || session.ending) return null;
-    if (!this.shouldUseOpenAiPerUserTranscription({ session, settings })) return null;
-    const asrState = this.getOrCreateOpenAiAsrSessionState({
-      session,
-      userId
-    });
-    if (!asrState) return null;
-    if (asrState.closing) return null;
-
-    const ws = asrState.client?.ws;
-    if (ws && ws.readyState === 1) {
-      return asrState;
-    }
-
-    if (asrState.connectPromise) {
-      await asrState.connectPromise.catch(() => undefined);
-      return asrState.client ? asrState : null;
-    }
-
-    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(resolvedSettings);
-    const model = String(
-      session.openAiPerUserAsrModel ||
-      resolvedSettings?.voice?.openaiRealtime?.inputTranscriptionModel ||
-      OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
-    )
-      .trim()
-      .slice(0, 120);
-    const normalizedModel = normalizeOpenAiRealtimeTranscriptionModel(
-      model,
-      OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
-    );
-    const language = String(
-      session.openAiPerUserAsrLanguage || voiceAsrGuidance.language || ""
-    )
-      .trim()
-      .toLowerCase()
-      .replace(/_/g, "-")
-      .slice(0, 24);
-    const prompt = String(session.openAiPerUserAsrPrompt || voiceAsrGuidance.prompt || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 280);
-    const runtimeLogger = this.createOpenAiAsrRuntimeLogger(session, userId);
-    const client = new OpenAiRealtimeTranscriptionClient({
-      apiKey: this.appConfig.openaiApiKey,
-      logger: runtimeLogger
-    });
-    asrState.client = client;
-    asrState.connectPromise = (async () => {
-      client.on("transcript", (payload) => {
-        if (session.ending) return;
-        const transcript = normalizeVoiceText(payload?.text || "", STT_TRANSCRIPT_MAX_CHARS);
-        if (!transcript) return;
-
-        const eventType = String(payload?.eventType || "").trim();
-        const isFinal = Boolean(payload?.final);
-        const itemId = normalizeInlineText(payload?.itemId, 180);
-        const previousItemId = normalizeInlineText(payload?.previousItemId, 180) || null;
-        const now = Date.now();
-        asrState.lastTranscriptAt = now;
-        asrState.utterance.lastUpdateAt = now;
-        if (isFinal) {
-          if (itemId) {
-            const entries = Array.isArray(asrState.utterance.finalSegmentEntries)
-              ? asrState.utterance.finalSegmentEntries
-              : [];
-            const nextEntry = {
-              itemId,
-              previousItemId,
-              text: transcript,
-              receivedAt: now
-            };
-            const existingIndex = entries.findIndex((entry) => String(entry?.itemId || "") === itemId);
-            if (existingIndex >= 0) {
-              entries[existingIndex] = nextEntry;
-            } else {
-              entries.push(nextEntry);
-            }
-            asrState.utterance.finalSegmentEntries = entries;
-            asrState.utterance.finalSegments = this.orderOpenAiAsrFinalSegments(entries);
-          } else {
-            asrState.utterance.finalSegments.push(transcript);
-          }
-          asrState.utterance.partialText = "";
-        } else {
-          asrState.utterance.partialText = transcript;
-        }
-
-        const speakerName = this.resolveVoiceSpeakerName(session, userId) || "someone";
-        const shouldLogPartial =
-          !isFinal &&
-          transcript !== asrState.lastPartialText &&
-          now - Number(asrState.lastPartialLogAt || 0) >= 180;
-        if (isFinal || shouldLogPartial) {
-          if (!isFinal) {
-            asrState.lastPartialLogAt = now;
-            asrState.lastPartialText = transcript;
-          }
-          this.store.logAction({
-            kind: "voice_runtime",
-            guildId: session.guildId,
-            channelId: session.textChannelId,
-            userId: String(userId || "").trim() || null,
-            content: isFinal ? "openai_realtime_asr_final_segment" : "openai_realtime_asr_partial_segment",
-            metadata: {
-              sessionId: session.id,
-              speakerName,
-              transcript,
-              eventType: eventType || null,
-              itemId: itemId || null,
-              previousItemId
-            }
-          });
-        }
-      });
-
-      client.on("error_event", (payload) => {
-        if (session.ending) return;
-        this.store.logAction({
-          kind: "voice_error",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: String(userId || "").trim() || null,
-          content: `openai_realtime_asr_error: ${String(payload?.message || "unknown error")}`,
-          metadata: {
-            sessionId: session.id,
-            code: payload?.code || null,
-            param: payload?.param || null
-          }
-        });
-      });
-
-      client.on("socket_closed", (payload) => {
-        if (session.ending) return;
-        this.store.logAction({
-          kind: "voice_runtime",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: String(userId || "").trim() || null,
-          content: "openai_realtime_asr_socket_closed",
-          metadata: {
-            sessionId: session.id,
-            code: Number(payload?.code || 0) || null,
-            reason: String(payload?.reason || "").trim() || null
-          }
-        });
-      });
-
-      await client.connect({
-        model: normalizedModel,
-        inputAudioFormat: "pcm16",
-        inputTranscriptionModel: normalizedModel,
-        inputTranscriptionLanguage: language,
-        inputTranscriptionPrompt: prompt
-      });
-      asrState.connectedAt = Date.now();
-      await this.flushPendingOpenAiAsrAudio({
-        session,
-        userId,
-        asrState
-      });
-    })();
-
-    try {
-      await asrState.connectPromise;
-      return asrState;
-    } catch (error) {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: String(userId || "").trim() || null,
-        content: `openai_realtime_asr_connect_failed: ${String(error?.message || error)}`,
-        metadata: {
-          sessionId: session.id
-        }
-      });
-      await this.closeOpenAiAsrSession({
-        session,
-        userId,
-        reason: "connect_failed"
-      });
-      return null;
-    } finally {
-      asrState.connectPromise = null;
-    }
-  }
-
-  async flushPendingOpenAiAsrAudio({
-    session,
-    userId,
-    asrState = null,
-    utteranceId = null
-  }) {
-    const state = asrState && typeof asrState === "object"
-      ? asrState
-      : this.getOrCreateOpenAiAsrSessionState({
-        session,
-        userId
-      });
-    if (!state || state.closing) return;
-    const client = state.client;
-    if (!client || !client.ws || client.ws.readyState !== 1) return;
-    const targetUtteranceId = Math.max(
-      0,
-      Number(
-        utteranceId !== null && utteranceId !== undefined
-          ? utteranceId
-          : state.utterance?.id || 0
-      )
-    );
-    if (!targetUtteranceId) return;
-    const committingUtteranceId = Math.max(0, Number(state.committingUtteranceId || 0));
-    if (
-      state.isCommittingAsr &&
-      committingUtteranceId > 0 &&
-      targetUtteranceId !== committingUtteranceId
-    ) {
-      return;
-    }
-    const chunks = Array.isArray(state.pendingAudioChunks) ? state.pendingAudioChunks : [];
-    if (!chunks.length) return;
-
-    const remainingChunks = [];
-    while (chunks.length > 0) {
-      const entry = chunks.shift();
-      if (!entry || !Buffer.isBuffer(entry.chunk)) continue;
-      if (Number(entry.utteranceId || 0) !== targetUtteranceId) {
-        remainingChunks.push(entry);
-        continue;
-      }
-      try {
-        client.appendInputAudioPcm(entry.chunk);
-      } catch (error) {
-        this.store.logAction({
-          kind: "voice_error",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: String(userId || "").trim() || null,
-          content: `openai_realtime_asr_audio_append_failed: ${String(error?.message || error)}`,
-          metadata: {
-            sessionId: session.id
-          }
-        });
-        break;
-      }
-    }
-    state.pendingAudioChunks = remainingChunks;
-    state.pendingAudioBytes = state.pendingAudioChunks.reduce(
-      (total, pendingChunk) => total + Number(pendingChunk?.chunk?.length || 0),
-      0
-    );
-  }
-
-  beginOpenAiAsrUtterance({
-    session,
-    settings = null,
-    userId
-  }) {
-    if (!session || session.ending) return;
-    if (!this.shouldUseOpenAiPerUserTranscription({ session, settings })) return;
-    const asrState = this.getOrCreateOpenAiAsrSessionState({
-      session,
-      userId
-    });
-    if (!asrState) return;
-
-    if (asrState.idleTimer) {
-      clearTimeout(asrState.idleTimer);
-      asrState.idleTimer = null;
-    }
-
-    asrState.utterance = {
-      id: Math.max(0, Number(asrState.utterance?.id || 0)) + 1,
-      startedAt: Date.now(),
-      bytesSent: 0,
-      partialText: "",
-      finalSegments: [],
-      finalSegmentEntries: [],
-      lastUpdateAt: 0
-    };
-    asrState.lastPartialText = "";
-    asrState.lastPartialLogAt = 0;
-    if (!asrState.isCommittingAsr) {
-      try {
-        asrState.client?.clearInputAudioBuffer?.();
-      } catch {
-        // ignore
-      }
-    }
-
-    void this.ensureOpenAiAsrSessionConnected({
-      session,
-      settings,
-      userId
-    });
   }
 
   appendAudioToOpenAiAsr({
@@ -6418,280 +5337,6 @@ export class VoiceSessionManager {
     });
   }
 
-  orderOpenAiAsrFinalSegments(entries = []) {
-    const normalizedEntries = Array.isArray(entries)
-      ? entries
-        .map((entry, index) => ({
-          itemId: normalizeInlineText(entry?.itemId, 180),
-          previousItemId: normalizeInlineText(entry?.previousItemId, 180) || null,
-          text: normalizeVoiceText(entry?.text || "", STT_TRANSCRIPT_MAX_CHARS),
-          receivedAt: Math.max(0, Number(entry?.receivedAt || 0)),
-          index
-        }))
-        .filter((entry) => entry.itemId && entry.text)
-      : [];
-    if (normalizedEntries.length <= 1) {
-      return normalizedEntries.map((entry) => entry.text);
-    }
-
-    const byId = new Map();
-    for (const entry of normalizedEntries) {
-      byId.set(entry.itemId, entry);
-    }
-    const sorted = [...byId.values()].sort((a, b) => {
-      const delta = Number(a.receivedAt || 0) - Number(b.receivedAt || 0);
-      if (delta !== 0) return delta;
-      return Number(a.index || 0) - Number(b.index || 0);
-    });
-
-    const placed = new Set();
-    const ordered = [];
-    while (ordered.length < sorted.length) {
-      let progressed = false;
-      for (const entry of sorted) {
-        if (placed.has(entry.itemId)) continue;
-        const previousItemId = String(entry.previousItemId || "");
-        if (!previousItemId || !byId.has(previousItemId) || placed.has(previousItemId)) {
-          placed.add(entry.itemId);
-          ordered.push(entry.text);
-          progressed = true;
-        }
-      }
-      if (progressed) continue;
-      // Fall back to arrival order if chain is incomplete/cyclic.
-      for (const entry of sorted) {
-        if (placed.has(entry.itemId)) continue;
-        placed.add(entry.itemId);
-        ordered.push(entry.text);
-      }
-    }
-
-    return ordered;
-  }
-
-  async waitForOpenAiAsrTranscriptSettle({
-    session,
-    asrState,
-    utterance = null
-  }) {
-    if (!session || session.ending || !asrState) return "";
-    const trackedUtterance = utterance && typeof utterance === "object"
-      ? utterance
-      : asrState.utterance;
-    const stableWindowMs = Math.max(
-      100,
-      Number(session.openAiAsrTranscriptStableMs || OPENAI_ASR_TRANSCRIPT_STABLE_MS)
-    );
-    const maxWaitMs = Math.max(
-      stableWindowMs + 120,
-      Number(session.openAiAsrTranscriptWaitMaxMs || OPENAI_ASR_TRANSCRIPT_WAIT_MAX_MS)
-    );
-    const startedAt = Date.now();
-    while (Date.now() - startedAt <= maxWaitMs) {
-      if (session.ending) return "";
-      const now = Date.now();
-      const lastUpdateAt = Math.max(0, Number(trackedUtterance?.lastUpdateAt || 0));
-      const stable = lastUpdateAt > 0 ? now - lastUpdateAt >= stableWindowMs : false;
-      const finalText = normalizeVoiceText(
-        Array.isArray(trackedUtterance?.finalSegments)
-          ? trackedUtterance.finalSegments.join(" ")
-          : "",
-        STT_TRANSCRIPT_MAX_CHARS
-      );
-      const partialText = normalizeVoiceText(
-        trackedUtterance?.partialText || "",
-        STT_TRANSCRIPT_MAX_CHARS
-      );
-      if (finalText && stable) return finalText;
-      if (!finalText && partialText && stable) return partialText;
-      await new Promise((resolve) => setTimeout(resolve, 40));
-    }
-
-    const finalText = normalizeVoiceText(
-      Array.isArray(trackedUtterance?.finalSegments)
-        ? trackedUtterance.finalSegments.join(" ")
-        : "",
-      STT_TRANSCRIPT_MAX_CHARS
-    );
-    if (finalText) return finalText;
-    return normalizeVoiceText(trackedUtterance?.partialText || "", STT_TRANSCRIPT_MAX_CHARS);
-  }
-
-  async commitOpenAiAsrUtterance({
-    session,
-    settings = null,
-    userId,
-    captureReason = "stream_end"
-  }) {
-    if (!session || session.ending) return null;
-    if (!this.shouldUseOpenAiPerUserTranscription({ session, settings })) return null;
-    const asrState = await this.ensureOpenAiAsrSessionConnected({
-      session,
-      settings,
-      userId
-    });
-    if (!asrState || asrState.closing) return null;
-    const trackedUtterance = asrState.utterance && typeof asrState.utterance === "object"
-      ? asrState.utterance
-      : null;
-    const trackedUtteranceId = Math.max(0, Number(trackedUtterance?.id || 0));
-    if (!trackedUtteranceId) return null;
-    const transcriptionModelPrimary = normalizeOpenAiRealtimeTranscriptionModel(
-      session.openAiPerUserAsrModel,
-      OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
-    );
-    const utteranceBytesSent = Math.max(0, Number(trackedUtterance?.bytesSent || 0));
-    const minCommitBytes = getRealtimeCommitMinimumBytes(
-      session.mode,
-      Number(session.realtimeInputSampleRateHz) || 24000
-    );
-    if (utteranceBytesSent < minCommitBytes) {
-      if (utteranceBytesSent > 0) {
-        this.store.logAction({
-          kind: "voice_runtime",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: String(userId || "").trim() || null,
-          content: "openai_realtime_asr_commit_skipped_small_buffer",
-          metadata: {
-            sessionId: session.id,
-            utteranceBytesSent,
-            minCommitBytes,
-            captureReason: String(captureReason || "stream_end")
-          }
-        });
-      }
-      this.scheduleOpenAiAsrSessionIdleClose({
-        session,
-        userId
-      });
-      return {
-        transcript: "",
-        asrStartedAtMs: 0,
-        asrCompletedAtMs: 0,
-        transcriptionModelPrimary,
-        transcriptionModelFallback: null,
-        transcriptionPlanReason: "openai_realtime_per_user_transcription",
-        usedFallbackModel: false,
-        captureReason: String(captureReason || "stream_end")
-      };
-    }
-
-    asrState.isCommittingAsr = true;
-    asrState.committingUtteranceId = trackedUtteranceId;
-    await this.flushPendingOpenAiAsrAudio({
-      session,
-      userId,
-      asrState,
-      utteranceId: trackedUtteranceId
-    });
-
-    if (trackedUtterance) {
-      trackedUtterance.finalSegments = [];
-      trackedUtterance.finalSegmentEntries = [];
-      trackedUtterance.partialText = "";
-      trackedUtterance.lastUpdateAt = 0;
-    }
-
-    const asrStartedAtMs = Date.now();
-    try {
-      asrState.client?.commitInputAudioBuffer?.();
-      const transcript = await this.waitForOpenAiAsrTranscriptSettle({
-        session,
-        asrState,
-        utterance: trackedUtterance
-      });
-      const asrCompletedAtMs = Date.now();
-
-      this.scheduleOpenAiAsrSessionIdleClose({
-        session,
-        userId
-      });
-      if (trackedUtterance) {
-        trackedUtterance.bytesSent = 0;
-      }
-
-      if (!transcript) {
-        this.store.logAction({
-          kind: "voice_runtime",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: String(userId || "").trim() || null,
-          content: "voice_realtime_transcription_empty",
-          metadata: {
-            sessionId: session.id,
-            source: "openai_realtime_asr",
-            model: transcriptionModelPrimary,
-            captureReason: String(captureReason || "stream_end")
-          }
-        });
-      }
-
-      return {
-        transcript,
-        asrStartedAtMs,
-        asrCompletedAtMs,
-        transcriptionModelPrimary,
-        transcriptionModelFallback: null,
-        transcriptionPlanReason: "openai_realtime_per_user_transcription",
-        usedFallbackModel: false,
-        captureReason: String(captureReason || "stream_end")
-      };
-    } catch (error) {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: String(userId || "").trim() || null,
-        content: `openai_realtime_asr_commit_failed: ${String(error?.message || error)}`,
-        metadata: {
-          sessionId: session.id
-        }
-      });
-      return null;
-    } finally {
-      asrState.isCommittingAsr = false;
-      asrState.committingUtteranceId = 0;
-      const activeUtteranceId = Math.max(0, Number(asrState.utterance?.id || 0));
-      if (activeUtteranceId > 0) {
-        void this.flushPendingOpenAiAsrAudio({
-          session,
-          userId,
-          asrState,
-          utteranceId: activeUtteranceId
-        });
-      }
-    }
-  }
-
-  scheduleOpenAiAsrSessionIdleClose({
-    session,
-    userId
-  }) {
-    if (!session || session.ending) return;
-    const asrState = this.getOrCreateOpenAiAsrSessionState({
-      session,
-      userId
-    });
-    if (!asrState) return;
-    if (asrState.idleTimer) {
-      clearTimeout(asrState.idleTimer);
-      asrState.idleTimer = null;
-    }
-    const ttlMs = Math.max(
-      1_000,
-      Number(session.openAiAsrSessionIdleTtlMs || OPENAI_ASR_SESSION_IDLE_TTL_MS)
-    );
-    asrState.idleTimer = setTimeout(() => {
-      asrState.idleTimer = null;
-      this.closeOpenAiAsrSession({
-        session,
-        userId,
-        reason: "idle_ttl"
-      }).catch(() => undefined);
-    }, ttlMs);
-  }
-
   async closeOpenAiAsrSession({
     session,
     userId,
@@ -6730,20 +5375,6 @@ export class VoiceSessionManager {
     });
   }
 
-  async closeAllOpenAiAsrSessions(session, reason = "session_end") {
-    if (!session) return;
-    const sessionMap = this.getOpenAiAsrSessionMap(session);
-    if (!sessionMap || sessionMap.size <= 0) return;
-    const userIds = [...sessionMap.keys()];
-    for (const userId of userIds) {
-      await this.closeOpenAiAsrSession({
-        session,
-        userId,
-        reason
-      });
-    }
-  }
-
   resolveOpenAiSharedAsrSpeakerUserId({
     session,
     asrState,
@@ -6760,29 +5391,6 @@ export class VoiceSessionManager {
     const activeSharedUserId = String(asrState?.userId || "").trim();
     if (activeSharedUserId) return activeSharedUserId;
     return this.client.user?.id || null;
-  }
-
-  getOpenAiSharedAsrPendingCommitRequests(asrState) {
-    if (!asrState || typeof asrState !== "object") return [];
-    const pendingCommitRequests = Array.isArray(asrState.pendingCommitRequests)
-      ? asrState.pendingCommitRequests
-      : [];
-    asrState.pendingCommitRequests = pendingCommitRequests;
-    return pendingCommitRequests;
-  }
-
-  pruneOpenAiSharedAsrPendingCommitRequests(asrState, maxAgeMs = 30_000) {
-    const pendingCommitRequests = this.getOpenAiSharedAsrPendingCommitRequests(asrState);
-    if (!pendingCommitRequests.length) return pendingCommitRequests;
-    const maxAge = Math.max(1_000, Number(maxAgeMs) || 30_000);
-    const now = Date.now();
-    while (pendingCommitRequests.length > 0) {
-      const head = pendingCommitRequests[0];
-      const requestedAt = Math.max(0, Number(head?.requestedAt || 0));
-      if (requestedAt > 0 && now - requestedAt <= maxAge) break;
-      pendingCommitRequests.shift();
-    }
-    return pendingCommitRequests;
   }
 
   trackOpenAiSharedAsrCommittedItem({
@@ -7111,68 +5719,6 @@ export class VoiceSessionManager {
     }
   }
 
-  async flushPendingOpenAiSharedAsrAudio({
-    session,
-    asrState = null,
-    utteranceId = null
-  }) {
-    const state = asrState && typeof asrState === "object"
-      ? asrState
-      : this.getOpenAiSharedAsrState(session);
-    if (!state || state.closing) return;
-    const client = state.client;
-    if (!client || !client.ws || client.ws.readyState !== 1) return;
-    const targetUtteranceId = Math.max(
-      0,
-      Number(
-        utteranceId !== null && utteranceId !== undefined
-          ? utteranceId
-          : state.utterance?.id || 0
-      )
-    );
-    if (!targetUtteranceId) return;
-    const committingUtteranceId = Math.max(0, Number(state.committingUtteranceId || 0));
-    if (
-      state.isCommittingAsr &&
-      committingUtteranceId > 0 &&
-      targetUtteranceId !== committingUtteranceId
-    ) {
-      return;
-    }
-    const chunks = Array.isArray(state.pendingAudioChunks) ? state.pendingAudioChunks : [];
-    if (!chunks.length) return;
-
-    const remainingChunks = [];
-    while (chunks.length > 0) {
-      const entry = chunks.shift();
-      if (!entry || !Buffer.isBuffer(entry.chunk)) continue;
-      if (Number(entry.utteranceId || 0) !== targetUtteranceId) {
-        remainingChunks.push(entry);
-        continue;
-      }
-      try {
-        client.appendInputAudioPcm(entry.chunk);
-      } catch (error) {
-        this.store.logAction({
-          kind: "voice_error",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: state.userId || null,
-          content: `openai_realtime_asr_audio_append_failed: ${String(error?.message || error)}`,
-          metadata: {
-            sessionId: session.id
-          }
-        });
-        break;
-      }
-    }
-    state.pendingAudioChunks = remainingChunks;
-    state.pendingAudioBytes = state.pendingAudioChunks.reduce(
-      (total, pendingChunk) => total + Number(pendingChunk?.chunk?.length || 0),
-      0
-    );
-  }
-
   beginOpenAiSharedAsrUtterance({
     session,
     settings = null,
@@ -7271,298 +5817,6 @@ export class VoiceSessionManager {
       });
     });
     return true;
-  }
-
-  async commitOpenAiSharedAsrUtterance({
-    session,
-    settings = null,
-    userId,
-    captureReason = "stream_end"
-  }) {
-    if (!session || session.ending) return null;
-    if (!this.shouldUseOpenAiSharedTranscription({ session, settings })) return null;
-    const asrState = await this.ensureOpenAiSharedAsrSessionConnected({
-      session,
-      settings
-    });
-    const normalizedUserId = String(userId || "").trim();
-    if (!asrState || asrState.closing || !normalizedUserId) return null;
-    if (asrState.userId && asrState.userId !== normalizedUserId) {
-      return null;
-    }
-    asrState.userId = normalizedUserId;
-    const trackedUtterance = asrState.utterance && typeof asrState.utterance === "object"
-      ? asrState.utterance
-      : null;
-    const trackedUtteranceId = Math.max(0, Number(trackedUtterance?.id || 0));
-    if (!trackedUtteranceId) return null;
-    const transcriptionModelPrimary = normalizeOpenAiRealtimeTranscriptionModel(
-      session.openAiPerUserAsrModel,
-      OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
-    );
-    const utteranceBytesSent = Math.max(0, Number(trackedUtterance?.bytesSent || 0));
-    const minCommitBytes = getRealtimeCommitMinimumBytes(
-      session.mode,
-      Number(session.realtimeInputSampleRateHz) || 24000
-    );
-    if (utteranceBytesSent < minCommitBytes) {
-      if (utteranceBytesSent > 0) {
-        this.store.logAction({
-          kind: "voice_runtime",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: normalizedUserId,
-          content: "openai_realtime_asr_commit_skipped_small_buffer",
-          metadata: {
-            sessionId: session.id,
-            utteranceBytesSent,
-            minCommitBytes,
-            captureReason: String(captureReason || "stream_end")
-          }
-        });
-      }
-      if (asrState.userId === normalizedUserId) {
-        asrState.userId = null;
-      }
-      if (!this.tryHandoffSharedAsrToWaitingCapture({ session, settings })) {
-        this.scheduleOpenAiSharedAsrSessionIdleClose(session);
-      }
-      return {
-        transcript: "",
-        asrStartedAtMs: 0,
-        asrCompletedAtMs: 0,
-        transcriptionModelPrimary,
-        transcriptionModelFallback: null,
-        transcriptionPlanReason: "openai_realtime_shared_transcription",
-        usedFallbackModel: false,
-        captureReason: String(captureReason || "stream_end")
-      };
-    }
-
-    asrState.isCommittingAsr = true;
-    asrState.committingUtteranceId = trackedUtteranceId;
-    await this.flushPendingOpenAiSharedAsrAudio({
-      session,
-      asrState,
-      utteranceId: trackedUtteranceId
-    });
-
-    const asrStartedAtMs = Date.now();
-    try {
-      const pendingCommitRequests = this.pruneOpenAiSharedAsrPendingCommitRequests(asrState);
-      const commitRequestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      pendingCommitRequests.push({
-        id: commitRequestId,
-        userId: normalizedUserId,
-        requestedAt: Date.now()
-      });
-      asrState.client?.commitInputAudioBuffer?.();
-      const committedItemId = await this.waitForOpenAiSharedAsrCommittedItem({
-        session,
-        asrState,
-        userId: normalizedUserId,
-        commitRequestId
-      });
-      const transcript = await this.waitForOpenAiSharedAsrTranscriptByItem({
-        session,
-        asrState,
-        itemId: committedItemId
-      });
-      const asrCompletedAtMs = Date.now();
-
-      if (asrState.utterance === trackedUtterance) {
-        trackedUtterance.bytesSent = 0;
-      }
-      if (asrState.userId === normalizedUserId) {
-        asrState.userId = null;
-      }
-      if (!this.tryHandoffSharedAsrToWaitingCapture({ session, settings })) {
-        this.scheduleOpenAiSharedAsrSessionIdleClose(session);
-      }
-
-      if (!transcript) {
-        this.store.logAction({
-          kind: "voice_runtime",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: normalizedUserId,
-          content: "voice_realtime_transcription_empty",
-          metadata: {
-            sessionId: session.id,
-            source: "openai_realtime_asr",
-            model: transcriptionModelPrimary,
-            captureReason: String(captureReason || "stream_end")
-          }
-        });
-      }
-
-      return {
-        transcript,
-        asrStartedAtMs,
-        asrCompletedAtMs,
-        transcriptionModelPrimary,
-        transcriptionModelFallback: null,
-        transcriptionPlanReason: "openai_realtime_shared_transcription",
-        usedFallbackModel: false,
-        captureReason: String(captureReason || "stream_end")
-      };
-    } catch (error) {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: normalizedUserId,
-        content: `openai_realtime_asr_commit_failed: ${String(error?.message || error)}`,
-        metadata: {
-          sessionId: session.id
-        }
-      });
-      return null;
-    } finally {
-      asrState.isCommittingAsr = false;
-      asrState.committingUtteranceId = 0;
-      const activeUtteranceId = Math.max(0, Number(asrState.utterance?.id || 0));
-      if (activeUtteranceId > 0) {
-        void this.flushPendingOpenAiSharedAsrAudio({
-          session,
-          asrState,
-          utteranceId: activeUtteranceId
-        });
-      }
-    }
-  }
-
-  scheduleOpenAiSharedAsrSessionIdleClose(session) {
-    if (!session || session.ending) return;
-    const asrState = this.getOpenAiSharedAsrState(session);
-    if (!asrState) return;
-    if (asrState.idleTimer) {
-      clearTimeout(asrState.idleTimer);
-      asrState.idleTimer = null;
-    }
-    const ttlMs = Math.max(
-      1_000,
-      Number(session.openAiAsrSessionIdleTtlMs || OPENAI_ASR_SESSION_IDLE_TTL_MS)
-    );
-    asrState.idleTimer = setTimeout(() => {
-      asrState.idleTimer = null;
-      this.closeOpenAiSharedAsrSession(session, "idle_ttl").catch(() => undefined);
-    }, ttlMs);
-  }
-
-  releaseOpenAiSharedAsrActiveUser(session, userId = null) {
-    if (!session || session.ending) return;
-    const asrState = session.openAiSharedAsrState && typeof session.openAiSharedAsrState === "object"
-      ? session.openAiSharedAsrState
-      : null;
-    if (!asrState) return;
-    const normalizedUserId = String(userId || "").trim();
-    if (!normalizedUserId || String(asrState.userId || "").trim() === normalizedUserId) {
-      asrState.userId = null;
-    }
-  }
-
-  tryHandoffSharedAsrToWaitingCapture({ session, settings = null }) {
-    if (!session || session.ending) return false;
-    if (!this.shouldUseOpenAiSharedTranscription({ session, settings })) return false;
-    const asrState = this.getOpenAiSharedAsrState(session);
-    if (!asrState || asrState.closing) return false;
-    if (asrState.userId) return false;
-
-    for (const [candidateUserId, captureState] of session.userCaptures) {
-      if (!captureState || !candidateUserId) continue;
-      if (Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) > 0) continue;
-      if (Math.max(0, Number(captureState.bytesSent || 0)) <= 0) continue;
-
-      const began = this.beginOpenAiSharedAsrUtterance({
-        session,
-        settings,
-        userId: candidateUserId
-      });
-      if (!began) continue;
-
-      const chunks = Array.isArray(captureState.pcmChunks) ? captureState.pcmChunks : [];
-      if (chunks.length <= 0) {
-        this.releaseOpenAiSharedAsrActiveUser(session, candidateUserId);
-        continue;
-      }
-      let replayedChunks = 0;
-      let replayedBytes = 0;
-      for (const chunk of chunks) {
-        if (!chunk || !chunk.length) continue;
-        const appended = this.appendAudioToOpenAiSharedAsr({
-          session,
-          settings,
-          userId: candidateUserId,
-          pcmChunk: chunk
-        });
-        if (appended) {
-          replayedChunks += 1;
-          replayedBytes += chunk.length;
-          captureState.sharedAsrBytesSent =
-            Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) + chunk.length;
-        }
-      }
-      if (replayedChunks <= 0 || replayedBytes <= 0) {
-        this.releaseOpenAiSharedAsrActiveUser(session, candidateUserId);
-        continue;
-      }
-
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: candidateUserId,
-        content: "openai_shared_asr_handoff",
-        metadata: {
-          sessionId: session.id,
-          replayedChunks,
-          replayedBytes
-        }
-      });
-      return true;
-    }
-    return false;
-  }
-
-  async closeOpenAiSharedAsrSession(session, reason = "manual") {
-    if (!session) return;
-    const state = session.openAiSharedAsrState && typeof session.openAiSharedAsrState === "object"
-      ? session.openAiSharedAsrState
-      : null;
-    if (!state) return;
-    state.closing = true;
-
-    if (state.idleTimer) {
-      clearTimeout(state.idleTimer);
-      state.idleTimer = null;
-    }
-    const pendingResolvers = Array.isArray(state.pendingCommitResolvers) ? state.pendingCommitResolvers : [];
-    while (pendingResolvers.length > 0) {
-      const entry = pendingResolvers.shift();
-      if (entry && typeof entry.resolve === "function") {
-        entry.resolve("");
-      }
-    }
-    session.openAiSharedAsrState = null;
-
-    try {
-      await state.client?.close?.();
-    } catch {
-      // ignore
-    }
-
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: String(state.userId || "").trim() || null,
-      content: "openai_realtime_asr_session_closed",
-      metadata: {
-        sessionId: session.id,
-        reason: String(reason || "manual")
-      }
-    });
   }
 
   bindSessionHandlers(session, settings) {
@@ -8625,59 +6879,6 @@ export class VoiceSessionManager {
     const normalizedBytes = Math.max(0, Number(pcmByteLength) || 0);
     const bytesPerSecond = 48_000 * 2 * 2;
     return Math.round((normalizedBytes / bytesPerSecond) * 1000);
-  }
-
-  analyzeMonoPcmSignal(pcmBuffer) {
-    const buffer = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
-    const evenByteLength = Math.max(0, buffer.length - (buffer.length % 2));
-    if (evenByteLength <= 0) {
-      return {
-        sampleCount: 0,
-        rms: 0,
-        peak: 0,
-        activeSampleRatio: 0
-      };
-    }
-
-    let sumSquares = 0;
-    let peakAbs = 0;
-    let activeSamples = 0;
-    const sampleCount = evenByteLength / 2;
-    for (let offset = 0; offset < evenByteLength; offset += 2) {
-      const sample = buffer.readInt16LE(offset);
-      const absSample = Math.abs(sample);
-      sumSquares += sample * sample;
-      if (absSample > peakAbs) {
-        peakAbs = absSample;
-      }
-      if (absSample >= VOICE_SILENCE_GATE_ACTIVE_SAMPLE_MIN_ABS) {
-        activeSamples += 1;
-      }
-    }
-
-    const rmsAbs = Math.sqrt(sumSquares / sampleCount);
-    return {
-      sampleCount,
-      rms: rmsAbs / 32768,
-      peak: peakAbs / 32768,
-      activeSampleRatio: activeSamples / sampleCount
-    };
-  }
-
-  evaluatePcmSilenceGate({ pcmBuffer, sampleRateHz = 24000 }) {
-    const clipDurationMs = this.estimatePcm16MonoDurationMs(pcmBuffer?.length || 0, sampleRateHz);
-    const signal = this.analyzeMonoPcmSignal(pcmBuffer);
-    const eligibleForGate = clipDurationMs >= VOICE_SILENCE_GATE_MIN_CLIP_MS;
-    const nearSilentSignal =
-      signal.rms <= VOICE_SILENCE_GATE_RMS_MAX &&
-      signal.peak <= VOICE_SILENCE_GATE_PEAK_MAX &&
-      signal.activeSampleRatio <= VOICE_SILENCE_GATE_ACTIVE_RATIO_MAX;
-
-    return {
-      clipDurationMs,
-      ...signal,
-      drop: Boolean(eligibleForGate && nearSilentSignal)
-    };
   }
 
   shouldDropFallbackLowSignalTurn({
@@ -10801,56 +9002,6 @@ export class VoiceSessionManager {
     }
   }
 
-  extractOpenAiFunctionCallEnvelope(event) {
-    if (!event || typeof event !== "object") return null;
-    const eventType = String(event.type || "").trim();
-    if (!OPENAI_FUNCTION_CALL_ITEM_TYPES.has(eventType)) return null;
-
-    const item =
-      event.item && typeof event.item === "object"
-        ? event.item
-        : event.output_item && typeof event.output_item === "object"
-          ? event.output_item
-          : null;
-    const itemType = String(item?.type || "").trim().toLowerCase();
-    if (item && itemType && itemType !== "function_call") return null;
-
-    const callId = normalizeInlineText(event.call_id || item?.call_id, 180);
-    const name = normalizeInlineText(event.name || item?.name, 120);
-    if (!callId && !name) return null;
-
-    if (eventType === "response.function_call_arguments.delta") {
-      const delta = String(event.delta || "").slice(0, OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS);
-      return {
-        phase: "delta",
-        eventType,
-        callId: callId || null,
-        name: name || null,
-        argumentsFragment: delta
-      };
-    }
-
-    if (eventType === "response.function_call_arguments.done") {
-      const argumentsText = String(event.arguments || "").slice(0, OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS);
-      return {
-        phase: "done",
-        eventType,
-        callId: callId || null,
-        name: name || null,
-        argumentsFragment: argumentsText
-      };
-    }
-
-    const itemArguments = String(item?.arguments || event.arguments || "").slice(0, OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS);
-    return {
-      phase: eventType === "response.output_item.done" ? "done" : "added",
-      eventType,
-      callId: callId || null,
-      name: name || null,
-      argumentsFragment: itemArguments
-    };
-  }
-
   scheduleOpenAiRealtimeToolFollowupResponse({
     session,
     userId = null
@@ -10891,105 +9042,6 @@ export class VoiceSessionManager {
         });
       }
     }, OPENAI_TOOL_RESPONSE_DEBOUNCE_MS);
-  }
-
-  async handleOpenAiRealtimeFunctionCallEvent({ session, settings, event }) {
-    if (!session || session.ending) return;
-    if (session.mode !== "openai_realtime") return;
-    const envelope = this.extractOpenAiFunctionCallEnvelope(event);
-    if (!envelope) return;
-    const runtimeSession = this.ensureSessionToolRuntimeState(session);
-    if (!runtimeSession) return;
-
-    const pendingCalls = runtimeSession.openAiPendingToolCalls;
-    const executions = runtimeSession.openAiToolCallExecutions;
-    const normalizedCallId = normalizeInlineText(envelope.callId, 180);
-    const normalizedName = normalizeInlineText(envelope.name, 120);
-    if (!normalizedCallId) return;
-
-    const existing = pendingCalls.get(normalizedCallId) || null;
-    const pendingCall = existing && typeof existing === "object"
-      ? existing
-      : {
-        callId: normalizedCallId,
-        name: normalizedName || "",
-        argumentsText: "",
-        done: false,
-        startedAtMs: Date.now(),
-        sourceEventType: envelope.eventType
-      };
-    if (normalizedName && !pendingCall.name) {
-      pendingCall.name = normalizedName;
-    }
-
-    const fragment = String(envelope.argumentsFragment || "");
-    if (fragment) {
-      if (envelope.phase === "delta") {
-        pendingCall.argumentsText = `${String(pendingCall.argumentsText || "")}${fragment}`.slice(
-          0,
-          OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS
-        );
-      } else {
-        pendingCall.argumentsText = fragment.slice(0, OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS);
-      }
-    }
-
-    if (envelope.phase === "done") {
-      pendingCall.done = true;
-    }
-    pendingCalls.set(normalizedCallId, pendingCall);
-    if (!pendingCall.done) return;
-    if (executions.has(normalizedCallId)) return;
-
-    executions.set(normalizedCallId, {
-      startedAtMs: Date.now(),
-      toolName: pendingCall.name
-    });
-    session.awaitingToolOutputs = true;
-
-    await this.executeOpenAiRealtimeFunctionCall({
-      session,
-      settings,
-      pendingCall
-    });
-  }
-
-  parseOpenAiRealtimeToolArguments(argumentsText = "") {
-    const normalizedText = String(argumentsText || "")
-      .trim()
-      .slice(0, OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS);
-    if (!normalizedText) return {};
-    try {
-      const parsed = JSON.parse(normalizedText);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-      return parsed;
-    } catch {
-      return {};
-    }
-  }
-
-  resolveOpenAiRealtimeToolDescriptor(session, toolName = "") {
-    const normalizedToolName = normalizeInlineText(toolName, 120);
-    if (!normalizedToolName) return null;
-    const configuredTools = Array.isArray(session?.openAiToolDefinitions)
-      ? session.openAiToolDefinitions
-      : this.buildOpenAiRealtimeFunctionTools({
-        session,
-        settings: session?.settingsSnapshot || this.store.getSettings()
-      });
-    return configuredTools.find((tool) => String(tool?.name || "") === normalizedToolName) || null;
-  }
-
-  summarizeVoiceToolOutput(output: unknown = null) {
-    if (output == null) return null;
-    if (typeof output === "string") {
-      return normalizeInlineText(output, 280) || null;
-    }
-    try {
-      return normalizeInlineText(JSON.stringify(output), 280) || null;
-    } catch {
-      return normalizeInlineText(String(output), 280) || null;
-    }
   }
 
   async executeOpenAiRealtimeFunctionCall({
@@ -11474,273 +9526,6 @@ export class VoiceSessionManager {
     };
   }
 
-  async executeVoiceMusicSearchTool({ session, args }) {
-    const query = normalizeInlineText(args?.query, 180);
-    if (!query) {
-      return {
-        ok: false,
-        tracks: [],
-        error: "query_required"
-      };
-    }
-    const maxResults = clamp(Math.floor(Number(args?.max_results || 5)), 1, 10);
-    const searchResponse = await this.musicSearch.search(query, {
-      platform: "auto",
-      limit: maxResults
-    });
-    const runtimeSession = this.ensureSessionToolRuntimeState(session);
-    const catalog = runtimeSession?.toolMusicTrackCatalog instanceof Map
-      ? runtimeSession.toolMusicTrackCatalog
-      : new Map();
-    if (runtimeSession && !(runtimeSession.toolMusicTrackCatalog instanceof Map)) {
-      runtimeSession.toolMusicTrackCatalog = catalog;
-    }
-    const tracks = (Array.isArray(searchResponse?.results) ? searchResponse.results : [])
-      .slice(0, maxResults)
-      .map((row) => {
-        const normalized = this.normalizeMusicSelectionResult({
-          id: row.id,
-          title: row.title,
-          artist: row.artist,
-          platform: row.platform,
-          externalUrl: row.externalUrl,
-          durationSeconds: row.durationSeconds
-        });
-        if (!normalized) return null;
-        catalog.set(normalized.id, normalized);
-        return {
-          id: normalized.id,
-          title: normalized.title,
-          artist: normalized.artist,
-          durationMs: Number.isFinite(Number(normalized.durationSeconds))
-            ? Math.max(0, Math.round(Number(normalized.durationSeconds) * 1000))
-            : null,
-          source: normalized.platform === "soundcloud" ? "sc" : "yt",
-          streamUrl: normalized.externalUrl || null
-        };
-      })
-      .filter(Boolean);
-
-    return {
-      ok: true,
-      query,
-      tracks
-    };
-  }
-
-  async executeVoiceMusicQueueAddTool({ session, args }) {
-    const queueState = this.ensureToolMusicQueueState(session);
-    const runtimeSession = this.ensureSessionToolRuntimeState(session);
-    if (!queueState || !runtimeSession) {
-      return {
-        ok: false,
-        queue_length: 0,
-        added: [],
-        error: "queue_unavailable"
-      };
-    }
-    const requestedTrackIds = Array.isArray(args?.tracks)
-      ? args.tracks.map((entry) => normalizeInlineText(entry, 180)).filter(Boolean).slice(0, 12)
-      : [];
-    if (!requestedTrackIds.length) {
-      return {
-        ok: false,
-        queue_length: queueState.tracks.length,
-        added: [],
-        error: "tracks_required"
-      };
-    }
-    const catalog = runtimeSession.toolMusicTrackCatalog instanceof Map ? runtimeSession.toolMusicTrackCatalog : new Map();
-    const resolvedTracks = requestedTrackIds
-      .map((trackId) => {
-        const fromCatalog = catalog.get(trackId);
-        if (!fromCatalog) return null;
-        return {
-          id: fromCatalog.id,
-          title: fromCatalog.title,
-          artist: fromCatalog.artist,
-          durationMs: Number.isFinite(Number(fromCatalog.durationSeconds))
-            ? Math.max(0, Math.round(Number(fromCatalog.durationSeconds) * 1000))
-            : null,
-          source: fromCatalog.platform === "soundcloud" ? "sc" : "yt",
-          streamUrl: fromCatalog.externalUrl || null,
-          platform: fromCatalog.platform,
-          externalUrl: fromCatalog.externalUrl
-        };
-      })
-      .filter(Boolean);
-    if (!resolvedTracks.length) {
-      return {
-        ok: false,
-        queue_length: queueState.tracks.length,
-        added: [],
-        error: "unknown_track_ids"
-      };
-    }
-
-    const positionRaw = args?.position;
-    const insertAt = typeof positionRaw === "number"
-      ? clamp(Math.floor(Number(positionRaw)), 0, queueState.tracks.length)
-      : queueState.tracks.length;
-    queueState.tracks.splice(insertAt, 0, ...resolvedTracks);
-    if (queueState.nowPlayingIndex == null && queueState.tracks.length > 0) {
-      queueState.nowPlayingIndex = 0;
-    }
-    return {
-      ok: true,
-      queue_length: queueState.tracks.length,
-      added: resolvedTracks.map((entry) => entry.id),
-      queue_state: {
-        tracks: queueState.tracks.map((entry) => ({
-          id: entry.id,
-          title: entry.title,
-          artist: entry.artist,
-          source: entry.source
-        })),
-        nowPlayingIndex: queueState.nowPlayingIndex,
-        isPaused: queueState.isPaused
-      }
-    };
-  }
-
-  async playVoiceQueueTrackByIndex({ session, settings, index }) {
-    const queueState = this.ensureToolMusicQueueState(session);
-    if (!queueState) {
-      return {
-        ok: false,
-        error: "queue_unavailable"
-      };
-    }
-    const normalizedIndex = Number.isInteger(Number(index))
-      ? clamp(Math.floor(Number(index)), 0, Math.max(0, queueState.tracks.length - 1))
-      : queueState.nowPlayingIndex != null
-        ? clamp(Math.floor(Number(queueState.nowPlayingIndex)), 0, Math.max(0, queueState.tracks.length - 1))
-        : 0;
-    const track = queueState.tracks[normalizedIndex];
-    if (!track) {
-      return {
-        ok: false,
-        error: "track_not_found"
-      };
-    }
-
-    const selectedTrack = {
-      id: track.id,
-      title: track.title,
-      artist: track.artist || "Unknown",
-      platform: this.normalizeMusicPlatformToken(track.platform, "youtube") || "youtube",
-      externalUrl: track.externalUrl || track.streamUrl || null,
-      durationSeconds: Number.isFinite(Number(track.durationMs))
-        ? Math.max(0, Math.round(Number(track.durationMs) / 1000))
-        : null
-    };
-    await this.requestPlayMusic({
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      requestedByUserId: session.lastOpenAiToolCallerUserId || null,
-      settings,
-      query: normalizeInlineText(`${track.title} ${track.artist || ""}`, 120),
-      trackId: track.id,
-      searchResults: [selectedTrack],
-      reason: "voice_tool_music_play",
-      source: "voice_tool_call",
-      mustNotify: false
-    });
-    queueState.nowPlayingIndex = normalizedIndex;
-    queueState.isPaused = false;
-    return {
-      ok: true,
-      now_playing: {
-        ...track
-      },
-      index: normalizedIndex
-    };
-  }
-
-  buildVoiceQueueStatePayload(session) {
-    const queueState = this.ensureToolMusicQueueState(session);
-    if (!queueState) return null;
-    return {
-      guildId: queueState.guildId,
-      voiceChannelId: queueState.voiceChannelId,
-      tracks: queueState.tracks.map((track) => ({
-        id: track.id,
-        title: track.title,
-        artist: track.artist || null,
-        durationMs: track.durationMs,
-        source: track.source,
-        streamUrl: track.streamUrl || null
-      })),
-      nowPlayingIndex: queueState.nowPlayingIndex,
-      isPaused: queueState.isPaused,
-      volume: queueState.volume
-    };
-  }
-
-  async executeVoiceWebSearchTool({ session, settings, args }) {
-    const query = normalizeInlineText(args?.query, 240);
-    if (!query) {
-      return {
-        ok: false,
-        results: [],
-        answer: "",
-        error: "query_required"
-      };
-    }
-    if (!this.search || typeof this.search.searchAndRead !== "function") {
-      return {
-        ok: false,
-        results: [],
-        answer: "",
-        error: "web_search_unavailable"
-      };
-    }
-
-    const maxResults = clamp(Math.floor(Number(args?.max_results || 5)), 1, 8);
-    const recencyDays = clamp(Math.floor(Number(args?.recency_days || settings?.webSearch?.recencyDaysDefault || 30)), 1, 3650);
-    const toolSettings = {
-      ...(settings || {}),
-      webSearch: {
-        ...((settings && typeof settings === "object" ? settings.webSearch : {}) || {}),
-        enabled: true,
-        maxResults,
-        recencyDaysDefault: recencyDays
-      }
-    };
-
-    const searchResult = await this.search.searchAndRead({
-      settings: toolSettings,
-      query,
-      trace: {
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: session.lastOpenAiToolCallerUserId || null,
-        source: "voice_realtime_tool_web_search"
-      }
-    });
-    const rows = (Array.isArray(searchResult?.results) ? searchResult.results : [])
-      .slice(0, maxResults)
-      .map((row) => ({
-        title: normalizeInlineText(row?.title || row?.pageTitle, 220) || "",
-        snippet: normalizeInlineText(row?.snippet || row?.pageSummary, 420) || "",
-        url: normalizeInlineText(row?.url, 300) || "",
-        source: normalizeInlineText(row?.provider, 60) || searchResult?.providerUsed || "web"
-      }));
-    const answer = rows
-      .slice(0, 3)
-      .map((row) => row.snippet)
-      .filter(Boolean)
-      .join(" ")
-      .slice(0, 1200);
-    return {
-      ok: true,
-      query,
-      recency_days: recencyDays,
-      results: rows,
-      answer
-    };
-  }
-
   async executeLocalVoiceToolCall({
     session,
     settings,
@@ -11886,19 +9671,6 @@ export class VoiceSessionManager {
       });
     }
     throw new Error(`unsupported_tool:${normalizedToolName}`);
-  }
-
-  updateVoiceMcpStatus(session, serverName, updates = {}) {
-    if (!session || !serverName) return;
-    this.ensureSessionToolRuntimeState(session);
-    const rows = Array.isArray(session.mcpStatus) ? session.mcpStatus : [];
-    const index = rows.findIndex((row) => String(row?.serverName || "") === String(serverName));
-    if (index < 0) return;
-    rows[index] = {
-      ...rows[index],
-      ...(updates && typeof updates === "object" ? updates : {})
-    };
-    session.mcpStatus = rows;
   }
 
   async executeMcpVoiceToolCall({
@@ -14598,3 +12370,13 @@ export {
   parseVoiceDecisionContract,
   resolveRealtimeTurnTranscriptionPlan
 } from "./voiceDecisionRuntime.ts";
+
+export interface VoiceSessionManager {
+  [key: string]: any;
+}
+injectMusicMethods(VoiceSessionManager);
+injectStreamWatchMethods(VoiceSessionManager);
+injectToolsMethods(VoiceSessionManager);
+injectAsrMethods(VoiceSessionManager);
+injectAddressingMethods(VoiceSessionManager);
+
