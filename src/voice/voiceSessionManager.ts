@@ -899,6 +899,7 @@ export class VoiceSessionManager {
             pendingAudioBytes: Number(shared.pendingAudioBytes || 0),
             pendingAudioChunks: Array.isArray(shared.pendingAudioChunks) ? shared.pendingAudioChunks.length : 0,
             pendingCommitResolvers: Array.isArray(shared.pendingCommitResolvers) ? shared.pendingCommitResolvers.length : 0,
+            pendingCommitRequests: Array.isArray(shared.pendingCommitRequests) ? shared.pendingCommitRequests.length : 0,
             transcriptByItemIds: shared.finalTranscriptsByItemId instanceof Map ? shared.finalTranscriptsByItemId.size : 0,
             speakerByItemIds: shared.itemIdToUserId instanceof Map ? shared.itemIdToUserId.size : 0,
             utterance: shared.utterance
@@ -6316,7 +6317,8 @@ export class VoiceSessionManager {
         },
         itemIdToUserId: new Map(),
         finalTranscriptsByItemId: new Map(),
-        pendingCommitResolvers: []
+        pendingCommitResolvers: [],
+        pendingCommitRequests: []
       };
     }
     return session.openAiSharedAsrState;
@@ -7079,6 +7081,29 @@ export class VoiceSessionManager {
     return this.client.user?.id || null;
   }
 
+  getOpenAiSharedAsrPendingCommitRequests(asrState) {
+    if (!asrState || typeof asrState !== "object") return [];
+    const pendingCommitRequests = Array.isArray(asrState.pendingCommitRequests)
+      ? asrState.pendingCommitRequests
+      : [];
+    asrState.pendingCommitRequests = pendingCommitRequests;
+    return pendingCommitRequests;
+  }
+
+  pruneOpenAiSharedAsrPendingCommitRequests(asrState, maxAgeMs = 30_000) {
+    const pendingCommitRequests = this.getOpenAiSharedAsrPendingCommitRequests(asrState);
+    if (!pendingCommitRequests.length) return pendingCommitRequests;
+    const maxAge = Math.max(1_000, Number(maxAgeMs) || 30_000);
+    const now = Date.now();
+    while (pendingCommitRequests.length > 0) {
+      const head = pendingCommitRequests[0];
+      const requestedAt = Math.max(0, Number(head?.requestedAt || 0));
+      if (requestedAt > 0 && now - requestedAt <= maxAge) break;
+      pendingCommitRequests.shift();
+    }
+    return pendingCommitRequests;
+  }
+
   trackOpenAiSharedAsrCommittedItem({
     asrState,
     itemId,
@@ -7087,7 +7112,10 @@ export class VoiceSessionManager {
     if (!asrState || !(asrState.itemIdToUserId instanceof Map)) return;
     const normalizedItemId = normalizeInlineText(itemId, 180);
     if (!normalizedItemId) return;
-    const mappedUserId = String(fallbackUserId || asrState.userId || "").trim();
+    const pendingCommitRequests = this.pruneOpenAiSharedAsrPendingCommitRequests(asrState);
+    const commitRequest = pendingCommitRequests.length > 0 ? pendingCommitRequests.shift() : null;
+    const commitRequestUserId = String(commitRequest?.userId || "").trim();
+    const mappedUserId = String(fallbackUserId || commitRequestUserId || "").trim();
     if (mappedUserId) {
       asrState.itemIdToUserId.set(normalizedItemId, mappedUserId);
       if (asrState.itemIdToUserId.size > 320) {
@@ -7104,16 +7132,22 @@ export class VoiceSessionManager {
       ? asrState.pendingCommitResolvers
       : [];
     asrState.pendingCommitResolvers = pendingResolvers;
-    const next = pendingResolvers.shift();
-    if (next && typeof next.resolve === "function") {
-      next.resolve(normalizedItemId);
+    if (!pendingResolvers.length) return;
+    const resolverIndex = mappedUserId
+      ? pendingResolvers.findIndex((entry) => String(entry?.userId || "").trim() === mappedUserId)
+      : pendingResolvers.findIndex((entry) => !String(entry?.userId || "").trim());
+    if (resolverIndex < 0) return;
+    const [resolver] = pendingResolvers.splice(resolverIndex, 1);
+    if (resolver && typeof resolver.resolve === "function") {
+      resolver.resolve(normalizedItemId);
     }
   }
 
   waitForOpenAiSharedAsrCommittedItem({
     session,
     asrState,
-    userId
+    userId,
+    commitRequestId = ""
   }): Promise<string> {
     if (!session || session.ending || !asrState) return Promise.resolve("");
     const waitMs = Math.max(
@@ -7121,6 +7155,7 @@ export class VoiceSessionManager {
       Number(session.openAiAsrTranscriptStableMs || OPENAI_ASR_TRANSCRIPT_STABLE_MS) * 4
     );
     const normalizedUserId = String(userId || "").trim() || null;
+    const normalizedCommitRequestId = String(commitRequestId || "").trim();
     return new Promise<string>((resolve) => {
       const pendingResolvers = Array.isArray(asrState.pendingCommitResolvers)
         ? asrState.pendingCommitResolvers
@@ -7135,6 +7170,7 @@ export class VoiceSessionManager {
       const waiter = {
         id: waiterId,
         userId: normalizedUserId,
+        commitRequestId: normalizedCommitRequestId || null,
         resolve: (itemId) => {
           clearTimeout(timeout);
           resolve(normalizeInlineText(itemId, 180) || "");
@@ -7632,11 +7668,19 @@ export class VoiceSessionManager {
 
     const asrStartedAtMs = Date.now();
     try {
+      const pendingCommitRequests = this.pruneOpenAiSharedAsrPendingCommitRequests(asrState);
+      const commitRequestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      pendingCommitRequests.push({
+        id: commitRequestId,
+        userId: normalizedUserId,
+        requestedAt: Date.now()
+      });
       asrState.client?.commitInputAudioBuffer?.();
       const committedItemId = await this.waitForOpenAiSharedAsrCommittedItem({
         session,
         asrState,
-        userId: normalizedUserId
+        userId: normalizedUserId,
+        commitRequestId
       });
       const transcript = await this.waitForOpenAiSharedAsrTranscriptByItem({
         session,

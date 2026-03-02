@@ -1092,6 +1092,64 @@ test("shared ASR handoff skips zero-audio captures and selects buffered speaker"
   assert.equal(handoffLog?.userId, "speaker-buffered");
 });
 
+test("shared ASR committed events resolve waiters by commit user instead of FIFO", () => {
+  const { manager } = createManager();
+  const resolvedItemIds = [];
+  const session = createSession({
+    mode: "openai_realtime",
+    openAiSharedAsrState: {
+      userId: null,
+      client: null,
+      closing: false,
+      utterance: null,
+      idleTimer: null,
+      pendingAudioChunks: [],
+      pendingAudioBytes: 0,
+      isCommittingAsr: false,
+      itemIdToUserId: new Map(),
+      finalTranscriptsByItemId: new Map(),
+      pendingCommitResolvers: [],
+      pendingCommitRequests: []
+    }
+  });
+  const asrState = session.openAiSharedAsrState;
+  asrState.pendingCommitResolvers.push({
+    id: "waiter-speaker-2",
+    userId: "speaker-2",
+    resolve: (itemId) => {
+      resolvedItemIds.push(String(itemId || ""));
+    }
+  });
+  asrState.pendingCommitRequests.push({
+    id: "request-speaker-1",
+    userId: "speaker-1",
+    requestedAt: Date.now()
+  });
+
+  manager.trackOpenAiSharedAsrCommittedItem({
+    asrState,
+    itemId: "item-speaker-1"
+  });
+
+  assert.deepEqual(resolvedItemIds, []);
+  assert.equal(asrState.pendingCommitResolvers.length, 1);
+  assert.equal(asrState.itemIdToUserId.get("item-speaker-1"), "speaker-1");
+
+  asrState.pendingCommitRequests.push({
+    id: "request-speaker-2",
+    userId: "speaker-2",
+    requestedAt: Date.now()
+  });
+  manager.trackOpenAiSharedAsrCommittedItem({
+    asrState,
+    itemId: "item-speaker-2"
+  });
+
+  assert.deepEqual(resolvedItemIds, ["item-speaker-2"]);
+  assert.equal(asrState.pendingCommitResolvers.length, 0);
+  assert.equal(asrState.itemIdToUserId.get("item-speaker-2"), "speaker-2");
+});
+
 test("maybeHandleInterruptedReplyRecovery retries short barge-ins with the prior utterance", () => {
   const { manager, logs } = createManager();
   const retryCalls = [];
