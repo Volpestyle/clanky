@@ -7656,12 +7656,15 @@ export class VoiceSessionManager {
         // ignore
       }
 
-      // Unsubscribe from subprocess audio for this user
-      try {
-        session.subprocessClient?.unsubscribeUser(userId);
-      } catch {
-        // ignore
-      }
+      // Do NOT unsubscribe from the subprocess here.  The subprocess manages
+      // its own subscription lifecycle via AfterSilence — when the user stops
+      // speaking, the opus stream ends naturally and the subscription is removed.
+      //
+      // Sending unsubscribe_user from the main process created a race condition:
+      // if the user starts speaking again between AfterSilence cleanup and the
+      // arrival of our unsubscribe IPC, the auto-subscribe creates a fresh
+      // subscription that our stale unsubscribe then destroys — leaving no
+      // active subscription for the new speech.
     };
 
     const scheduleIdleFlush = () => {
