@@ -401,6 +401,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
     );
 
     let subprocessClient: VoiceSubprocessClient | null = null;
+    let subprocessSpawnPromise: Promise<VoiceSubprocessClient> | null = null;
     let realtimeClient = null;
     let reservedConcurrencySlot = false;
     let realtimeInputSampleRateHz = 24000;
@@ -438,7 +439,15 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reservedConcurrencySlot = true;
       }
 
-      // --- Pre-warm: connect realtime API before joining Discord VC ---
+      // --- Spawn subprocess early so it boots in parallel with API connect ---
+      subprocessSpawnPromise = VoiceSubprocessClient.spawn(
+        String(message.guild.id),
+        String(memberVoiceChannel.id),
+        message.guild,
+        { selfDeaf: false, selfMute: false }
+      );
+
+      // --- Pre-warm: connect realtime API while subprocess boots ---
       const initialSoundboardCandidateInfo = await manager.resolveSoundboardCandidates({
         settings,
         guild: message.guild
@@ -554,13 +563,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         });
       }
 
-      // --- Realtime API is warm — now join Discord VC via Node.js subprocess ---
-      subprocessClient = await VoiceSubprocessClient.spawn(
-        String(message.guild.id),
-        String(memberVoiceChannel.id),
-        message.guild,
-        { selfDeaf: false, selfMute: false }
-      );
+      // --- Await subprocess that was spawning in parallel with API connect ---
+      subprocessClient = await subprocessSpawnPromise;
 
       const now = Date.now();
       const session = {
@@ -791,6 +795,17 @@ export async function requestJoin(manager, { message, settings, intentConfidence
 
       if (realtimeClient) {
         await realtimeClient.close().catch(() => undefined);
+      }
+
+      // If the realtime API connect failed, the subprocess may still be
+      // booting in the background. Await and clean it up to avoid leaks.
+      if (!subprocessClient && subprocessSpawnPromise) {
+        try {
+          const spawnedClient = await subprocessSpawnPromise;
+          spawnedClient.destroy();
+        } catch {
+          // subprocess also failed — nothing to clean up
+        }
       }
 
       if (subprocessClient) {

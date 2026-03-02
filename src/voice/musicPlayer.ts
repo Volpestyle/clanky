@@ -21,20 +21,13 @@ export type MusicPlayerResult = {
   track: MusicSearchResult | null;
 };
 
-type MusicPlayerConfig = {
-  ytdlOptions?: {
-    filter?: "audioonly" | "videoandaudio";
-    quality?: "highestaudio" | "lowestaudio";
-  };
-};
-
 export class DiscordMusicPlayer {
   private subprocessClient: VoiceSubprocessClient | null = null;
   private currentTrack: MusicSearchResult | null = null;
   private _playing = false;
   private _paused = false;
 
-  constructor(_config: MusicPlayerConfig = {}) {}
+  constructor() {}
 
   /** Bind to the current session's subprocess client. */
   setSubprocessClient(client: VoiceSubprocessClient | null): void {
@@ -88,15 +81,14 @@ export class DiscordMusicPlayer {
     }
 
     try {
-      this.stop();
-
       const streamUrl = this.getStreamUrl(track);
       if (!streamUrl) {
         return { ok: false, error: "could not resolve stream URL", track };
       }
 
       // Delegate to subprocess — it handles yt-dlp, ffmpeg, and AudioPlayer.
-      this.subprocessClient.musicPlay(streamUrl, track.platform || "auto");
+      // The subprocess calls resetPlayback() internally before starting.
+      this.subprocessClient.musicPlay(streamUrl);
       this.currentTrack = track;
       this._playing = true;
       this._paused = false;
@@ -161,6 +153,6 @@ export class DiscordMusicPlayer {
   }
 }
 
-export function createDiscordMusicPlayer(config?: MusicPlayerConfig): DiscordMusicPlayer {
-  return new DiscordMusicPlayer(config);
+export function createDiscordMusicPlayer(): DiscordMusicPlayer {
+  return new DiscordMusicPlayer();
 }

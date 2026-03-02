@@ -226,8 +226,8 @@ export class VoiceSubprocessClient extends EventEmitter {
     this._send({ type: "unsubscribe_user", userId });
   }
 
-  musicPlay(url: string, platform: string = "auto") {
-    this._send({ type: "music_play", url, platform });
+  musicPlay(url: string) {
+    this._send({ type: "music_play", url });
   }
 
   musicStop() {

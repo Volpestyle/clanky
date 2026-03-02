@@ -40,7 +40,6 @@ export const MIN_RESPONSE_REQUEST_GAP_MS = 700;
 export const RESPONSE_SILENCE_RETRY_DELAY_MS = 5200;
 export const MAX_RESPONSE_SILENCE_RETRIES = 2;
 export const RESPONSE_DONE_SILENCE_GRACE_MS = 1400;
-export const PENDING_SUPERSEDE_MIN_AGE_MS = 1800;
 // Keep ASR sessions warm longer to avoid reconnect penalties between turns.
 export const OPENAI_ASR_SESSION_IDLE_TTL_MS = 60_000;
 // Return ASR text sooner once transcript updates settle.
@@ -54,7 +53,7 @@ export const OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS = 24_000;
 export const OPENAI_TOOL_RESPONSE_DEBOUNCE_MS = 140;
 export const VOICE_MEMORY_WRITE_MAX_PER_MINUTE = 5;
 export const LEAVE_DIRECTIVE_PLAYBACK_POLL_MS = 40;
-export const LEAVE_DIRECTIVE_PLAYBACK_NO_SIGNAL_GRACE_MS = 260;
+export const LEAVE_DIRECTIVE_PLAYBACK_NO_SIGNAL_GRACE_MS = 400;
 export const LEAVE_DIRECTIVE_REALTIME_AUDIO_START_WAIT_MS = 2200;
 export const LEAVE_DIRECTIVE_PLAYBACK_MAX_WAIT_MS = 5000;
 // Keep only one pending realtime turn; newer finalized captures are merged into it.
@@ -112,14 +111,3 @@ export const RECENT_ENGAGEMENT_WINDOW_MS = 35_000;
 export const JOIN_GREETING_LLM_WINDOW_MS = 25_000;
 export const SOUNDBOARD_DECISION_TRANSCRIPT_MAX_CHARS = 280;
 export const SOUNDBOARD_CATALOG_REFRESH_MS = 60_000;
-export const DISCORD_PCM_FRAME_BYTES = 3840;
-// Smaller buffer = more responsive barge-in, still enough for burst absorption (~300ms).
-export const AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES = DISCORD_PCM_FRAME_BYTES * 15;
-// Hard cap on stream.writableLength before we destroy + recreate (~600ms).
-export const AUDIO_PLAYBACK_STREAM_OVERFLOW_BYTES = DISCORD_PCM_FRAME_BYTES * 30;
-// Pre-buffer Opus packets before starting the AudioPlayer so its first reads
-// always return data. Each packet = 20ms; 5 packets = 100ms head-start.
-export const AUDIO_PLAYBACK_PRE_BUFFER_PACKETS = 5;
-// Fallback: if the pre-buffer threshold isn't met within this window
-// (e.g. a very short response), start playback anyway.
-export const AUDIO_PLAYBACK_PRE_BUFFER_FALLBACK_MS = 300;

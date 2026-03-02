@@ -120,7 +120,6 @@ import {
   CAPTURE_NEAR_SILENCE_ABORT_MIN_AGE_MS,
   CAPTURE_NEAR_SILENCE_ABORT_PEAK_MAX,
   CAPTURE_MAX_DURATION_MS,
-  DISCORD_PCM_FRAME_BYTES,
   RECENT_ENGAGEMENT_WINDOW_MS,
   INPUT_SPEECH_END_SILENCE_MS,
   LEAVE_DIRECTIVE_PLAYBACK_MAX_WAIT_MS,
@@ -510,7 +509,6 @@ export class VoiceSessionManager {
   sessions;
   pendingSessionGuildIds;
   joinLocks;
-  boundBotAudioStreams;
   soundboardDirector;
   musicPlayback;
   musicSearch;
@@ -539,7 +537,6 @@ export class VoiceSessionManager {
     this.sessions = new Map();
     this.pendingSessionGuildIds = new Set();
     this.joinLocks = new Map();
-    this.boundBotAudioStreams = new WeakSet();
     this.soundboardDirector = new SoundboardDirector({
       client,
       store,
@@ -3305,48 +3302,15 @@ export class VoiceSessionManager {
       });
     };
 
-    const onCrashed = ({ code, signal }) => {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: this.client.user?.id || null,
-        content: "subprocess_crashed",
-        metadata: { sessionId: session.id, exitCode: code, signal }
-      });
-      if (!session.ending) {
-        this.endSession({
-          guildId: session.guildId,
-          reason: "subprocess_crashed",
-          announcement: "voice subprocess crashed, i'm out.",
-          settings: session.settingsSnapshot
-        }).catch(() => undefined);
-      }
-    };
-
-    const onConnectionState = (status) => {
-      if (status === "destroyed" || status === "disconnected") {
-        if (!session.ending) {
-          this.endSession({
-            guildId: session.guildId,
-            reason: "connection_lost",
-            announcement: "voice connection dropped, i'm out.",
-            settings: session.settingsSnapshot
-          }).catch(() => undefined);
-        }
-      }
-    };
+    // Note: connectionState and crashed handlers are registered in
+    // bindSessionHandlers to avoid duplicate endSession calls.
 
     session.subprocessClient.on("playerState", onPlayerState);
     session.subprocessClient.on("error", onError);
-    session.subprocessClient.on("crashed", onCrashed);
-    session.subprocessClient.on("connectionState", onConnectionState);
 
     session.cleanupHandlers.push(() => {
       session.subprocessClient?.off("playerState", onPlayerState);
       session.subprocessClient?.off("error", onError);
-      session.subprocessClient?.off("crashed", onCrashed);
-      session.subprocessClient?.off("connectionState", onConnectionState);
     });
   }
 
@@ -3784,13 +3748,13 @@ export class VoiceSessionManager {
     // No queue or yield logic is needed in the main process.
 
     const onAudioDelta = (audioBase64) => {
-      let chunk = null;
-      try {
-        chunk = Buffer.from(String(audioBase64 || ""), "base64");
-      } catch {
-        return;
-      }
-      if (!chunk || !chunk.length) return;
+      const b64Str = String(audioBase64 || "");
+      if (!b64Str.length) return;
+      // Compute PCM byte count from base64 length without allocating a Buffer.
+      // base64 encodes 3 bytes into 4 chars; padding '=' chars reduce decoded size.
+      const padding = b64Str.endsWith("==") ? 2 : b64Str.endsWith("=") ? 1 : 0;
+      const pcmByteLength = Math.floor((b64Str.length * 3) / 4) - padding;
+      if (pcmByteLength <= 0) return;
 
       const sampleRate = Number(session.realtimeOutputSampleRateHz) || 24000;
 
@@ -3800,13 +3764,13 @@ export class VoiceSessionManager {
         session.lastOpenAiAssistantAudioItemReceivedMs = Math.max(
           0,
           Number(session.lastOpenAiAssistantAudioItemReceivedMs || 0)
-        ) + this.estimatePcm16MonoDurationMs(chunk.length, sampleRate);
+        ) + this.estimatePcm16MonoDurationMs(pcmByteLength, sampleRate);
       }
 
       if (this.isBargeInOutputSuppressed(session)) {
         session.lastAudioDeltaAt = Date.now();
         session.bargeInSuppressedAudioChunks = Math.max(0, Number(session.bargeInSuppressedAudioChunks || 0)) + 1;
-        session.bargeInSuppressedAudioBytes = Math.max(0, Number(session.bargeInSuppressedAudioBytes || 0)) + chunk.length;
+        session.bargeInSuppressedAudioBytes = Math.max(0, Number(session.bargeInSuppressedAudioBytes || 0)) + pcmByteLength;
         const pending = session.pendingResponse;
         if (pending && typeof pending === "object") {
           pending.audioReceivedAt = Number(session.lastAudioDeltaAt || Date.now());
@@ -3819,7 +3783,7 @@ export class VoiceSessionManager {
       // Send raw PCM to subprocess — it handles conversion + Opus encoding.
       if (!session.subprocessClient?.isAlive) return;
       try {
-        session.subprocessClient.sendAudio(String(audioBase64 || ""), sampleRate);
+        session.subprocessClient.sendAudio(b64Str, sampleRate);
       } catch {
         return;
       }
@@ -4229,24 +4193,6 @@ export class VoiceSessionManager {
     };
 
     void runQueuedRefresh();
-  }
-
-  enqueueDiscordPcmForPlayback({ session, discordPcm }) {
-    if (!session || session.ending) return false;
-    const pcm = Buffer.isBuffer(discordPcm) ? discordPcm : Buffer.from(discordPcm || []);
-    if (!pcm.length) return false;
-
-    if (!session.subprocessClient?.isAlive) return false;
-
-    // Send PCM directly to the Node.js subprocess which handles Opus encoding
-    // and playback via its own reliable event loop.
-    try {
-      session.subprocessClient.sendAudio(pcm.toString("base64"), 48000);
-    } catch {
-      return false;
-    }
-
-    return true;
   }
 
   getReplyOutputLockState(session) {
@@ -7661,7 +7607,8 @@ export class VoiceSessionManager {
       speakingEndFinalizeTimer: null,
       bargeInAssertTimer: null,
       finalize: null,
-      abort: null
+      abort: null,
+      removeSubprocessListeners: null
     };
 
     session.userCaptures.set(userId, captureState);
@@ -7693,6 +7640,13 @@ export class VoiceSessionManager {
       }
       if (current.bargeInAssertTimer) {
         clearTimeout(current.bargeInAssertTimer);
+      }
+
+      // Remove per-capture IPC listeners so they don't accumulate across captures
+      try {
+        current.removeSubprocessListeners?.();
+      } catch {
+        // ignore
       }
 
       // Unsubscribe from subprocess audio for this user
@@ -8137,13 +8091,21 @@ export class VoiceSessionManager {
       }
     };
 
+    // Removes the per-capture IPC listeners. Called both from cleanupCapture
+    // (when the individual capture ends) and from session cleanup (as a safety net).
+    let listenersRemoved = false;
+    const removeListeners = () => {
+      if (listenersRemoved) return;
+      listenersRemoved = true;
+      session.subprocessClient?.off("userAudio", onUserAudio);
+      session.subprocessClient?.off("userAudioEnd", onUserAudioEnd);
+    };
+    captureState.removeSubprocessListeners = removeListeners;
+
     if (session.subprocessClient) {
       session.subprocessClient.on("userAudio", onUserAudio);
       session.subprocessClient.on("userAudioEnd", onUserAudioEnd);
-      session.cleanupHandlers.push(() => {
-        session.subprocessClient?.off("userAudio", onUserAudio);
-        session.subprocessClient?.off("userAudioEnd", onUserAudioEnd);
-      });
+      session.cleanupHandlers.push(removeListeners);
     }
   }
 

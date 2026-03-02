@@ -21,6 +21,7 @@ import {
   type AudioPlayer,
   type VoiceConnection
 } from "@discordjs/voice";
+import { spawn as spawnChild, type ChildProcess } from "node:child_process";
 import { PassThrough } from "node:stream";
 import prism from "prism-media";
 import { convertXaiOutputToDiscordPcm, convertDiscordPcmToXaiInput } from "./pcmAudio.ts";
@@ -35,6 +36,9 @@ let botAudioStream: PassThrough | null = null;
 let adapterMethods: { onVoiceServerUpdate: (data: any) => void; onVoiceStateUpdate: (data: any) => void } | null = null;
 const userSubscriptions = new Map<string, { opusStream: any; decoder: any; pcmStream: any }>();
 let defaultSilenceDurationMs = 700;
+
+// Music child processes — tracked for explicit cleanup on stop/skip
+let musicProcesses: { pid: number; kill: () => void }[] = [];
 
 // Silence keep-alive: fills gaps between audio deltas so the AudioPlayer
 // doesn't transition to idle when the PassThrough temporarily has no data.
@@ -88,8 +92,21 @@ function stopSilenceKeepAlive() {
 
 // --- Audio playback pipeline ---
 
+function killMusicProcesses() {
+  for (const proc of musicProcesses) {
+    try { proc.kill(); } catch { /* ignore */ }
+  }
+  musicProcesses = [];
+}
+
 function resetPlayback() {
   stopSilenceKeepAlive();
+  // Remove stale .once(Idle) listeners before stopping, so a forced idle
+  // transition doesn't fire handlers from the previous track.
+  if (audioPlayer) {
+    try { audioPlayer.removeAllListeners(AudioPlayerStatus.Idle); } catch { /* ignore */ }
+  }
+  killMusicProcesses();
   if (botAudioStream) {
     try { botAudioStream.destroy(); } catch { /* ignore */ }
     botAudioStream = null;
@@ -114,7 +131,6 @@ function ensurePlaybackStream() {
     silencePaddingFrames: 250
   });
   audioPlayer.play(resource);
-  connection.subscribe(audioPlayer);
   return true;
 }
 
@@ -314,6 +330,14 @@ function cleanupUserSubscription(userId: string) {
 
 // --- Music playback (yt-dlp/ffmpeg pipeline in subprocess) ---
 
+function trackMusicProcess(proc: ChildProcess) {
+  const entry = { pid: proc.pid ?? 0, kill: () => { try { proc.kill(); } catch { /* ignore */ } } };
+  musicProcesses.push(entry);
+  proc.once("exit", () => {
+    musicProcesses = musicProcesses.filter((p) => p !== entry);
+  });
+}
+
 function handleMusicPlay(msg: any) {
   const { url } = msg;
   if (!connection || !url) {
@@ -324,7 +348,6 @@ function handleMusicPlay(msg: any) {
   resetPlayback();
 
   try {
-    const { spawn: spawnChild } = require("node:child_process");
     const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
 
     if (isYouTube) {
@@ -341,6 +364,9 @@ function handleMusicPlay(msg: any) {
         "-f", "opus", "-ac", "2", "-ar", "48000", "-b:a", "128k",
         "pipe:1"
       ]);
+
+      trackMusicProcess(ytdlp);
+      trackMusicProcess(ffmpeg);
 
       ytdlp.stdout.pipe(ffmpeg.stdin);
 
@@ -371,6 +397,8 @@ function handleMusicPlay(msg: any) {
         "-f", "opus", "-ac", "2", "-ar", "48000", "-b:a", "128k",
         "pipe:1"
       ]);
+
+      trackMusicProcess(ffmpeg);
 
       const resource = createAudioResource(ffmpeg.stdout, {
         inputType: StreamType.OggOpus
