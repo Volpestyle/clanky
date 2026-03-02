@@ -6583,6 +6583,13 @@ export class VoiceSessionManager {
       utteranceId: trackedUtteranceId
     });
 
+    if (trackedUtterance) {
+      trackedUtterance.finalSegments = [];
+      trackedUtterance.finalSegmentEntries = [];
+      trackedUtterance.partialText = "";
+      trackedUtterance.lastUpdateAt = 0;
+    }
+
     const asrStartedAtMs = Date.now();
     try {
       asrState.client?.commitInputAudioBuffer?.();
@@ -8923,6 +8930,36 @@ export class VoiceSessionManager {
           transcriptionModelPrimary: transcriptionPlan.primaryModel,
           transcriptionModelFallback: resolvedFallbackModel || null,
           transcriptionUsedFallbackModel: true
+        }
+      });
+      return;
+    }
+
+    const isNonSpeechCapture =
+      String(captureReason || "") === "idle_timeout" ||
+      String(captureReason || "") === "near_silence_early_abort";
+    if (
+      turnTranscript &&
+      isNonSpeechCapture &&
+      isLowSignalVoiceFragment(turnTranscript)
+    ) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "voice_turn_dropped_idle_hallucination",
+        metadata: {
+          sessionId: session.id,
+          source: "realtime",
+          captureReason: String(captureReason || "stream_end"),
+          transcript: turnTranscript,
+          clipDurationMs,
+          rms: Number(silenceGate.rms.toFixed(6)),
+          peak: Number(silenceGate.peak.toFixed(6)),
+          activeSampleRatio: Number(silenceGate.activeSampleRatio.toFixed(6)),
+          transcriptionModelPrimary: transcriptionPlan.primaryModel,
+          hasTranscriptOverride
         }
       });
       return;
