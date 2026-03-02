@@ -176,7 +176,11 @@ function handleJoin(msg: any) {
       guildId,
       adapterCreator: createProxyAdapterCreator(guildId, channelId),
       selfDeaf: selfDeaf ?? false,
-      selfMute: selfMute ?? false
+      selfMute: selfMute ?? false,
+      // Higher tolerance for DAVE decryption failures during the E2EE
+      // handshake — the default (36) can be exceeded before the session
+      // negotiation completes on slower connections.
+      decryptionFailureTolerance: 200
     });
 
     audioPlayer = createAudioPlayer();
@@ -262,6 +266,13 @@ function handleSubscribeUser(userId: string, silenceDurationMs: number) {
   });
 
   const pcmStream = opusStream.pipe(decoder);
+
+  // DAVE decryption failures destroy the opus stream with an error.
+  // Without a handler this becomes an uncaught exception crashing the process.
+  opusStream.on("error", () => {
+    cleanupUserSubscription(userId);
+    send({ type: "user_audio_end", userId });
+  });
 
   pcmStream.on("data", (chunk: Buffer) => {
     // Convert to mono 24kHz (standard ASR input rate) and send to main process
@@ -471,8 +482,12 @@ process.on("disconnect", () => {
 });
 
 process.on("uncaughtException", (err) => {
+  const msg = String(err?.message || err);
   console.error("[subprocess] uncaught exception:", err);
-  sendError(`uncaught_exception: ${String(err?.message || err)}`);
+  sendError(`uncaught_exception: ${msg}`);
+  // DAVE decryption errors are transient during the E2EE handshake —
+  // don't crash the subprocess for these.
+  if (/decrypt/i.test(msg)) return;
   handleDestroy();
 });
 
