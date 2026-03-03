@@ -127,6 +127,10 @@ enum OutMsg {
         #[serde(rename = "userId")]
         user_id: String,
     },
+    ClientDisconnect {
+        #[serde(rename = "userId")]
+        user_id: String,
+    },
     MusicIdle,
     MusicError {
         message: String,
@@ -319,6 +323,15 @@ enum MusicEvent {
     Idle,
     Error(String),
 }
+
+/// Tracks per-user speaking state driven by actual UDP audio packet arrival.
+#[derive(Clone, Debug)]
+struct SpeakingState {
+    last_packet_at: Option<time::Instant>,
+    is_speaking: bool,
+}
+
+const SPEAKING_TIMEOUT_MS: u64 = 100;
 
 #[derive(Clone, Debug)]
 struct UserCaptureState {
@@ -667,6 +680,7 @@ async fn main() {
     let mut default_recv_sample_rate = default_sample_rate();
     let mut default_silence_duration_ms = default_silence_duration();
     let mut user_capture_states: HashMap<u64, UserCaptureState> = HashMap::new();
+    let mut speaking_states: HashMap<u64, SpeakingState> = HashMap::new();
 
     loop {
         tokio::select! {
@@ -964,32 +978,34 @@ async fn main() {
                         }
                     }
 
-                    VoiceEvent::SpeakingUpdate { ssrc, user_id, speaking } => {
+                    VoiceEvent::SsrcUpdate { ssrc, user_id } => {
                         ssrc_map.insert(ssrc, user_id);
+                    }
 
+                    VoiceEvent::ClientDisconnect { user_id } => {
                         if self_user_id == Some(user_id) {
-                            continue; // skip bot's own speaking events
+                            continue;
                         }
-
-                        let now = time::Instant::now();
-                        let state = user_capture_states.entry(user_id).or_insert_with(|| {
-                            UserCaptureState::new(
-                                default_recv_sample_rate,
-                                default_silence_duration_ms,
-                            )
-                        });
-                        if speaking {
-                            state.touch_audio(now);
-                        } else if state.stream_active && state.last_audio_at.is_none() {
-                            state.last_audio_at = Some(now);
-                        }
+                        // Remove from SSRC map
+                        ssrc_map.retain(|_, v| *v != user_id);
 
                         let uid_str = user_id.to_string();
-                        if speaking {
-                            send_msg(&OutMsg::SpeakingStart { user_id: uid_str });
-                        } else {
-                            send_msg(&OutMsg::SpeakingEnd { user_id: uid_str });
+
+                        // End speaking if active
+                        if let Some(ss) = speaking_states.remove(&user_id) {
+                            if ss.is_speaking {
+                                send_msg(&OutMsg::SpeakingEnd { user_id: uid_str.clone() });
+                            }
                         }
+
+                        // End user audio capture if active
+                        if let Some(state) = user_capture_states.remove(&user_id) {
+                            if state.stream_active {
+                                send_msg(&OutMsg::UserAudioEnd { user_id: uid_str.clone() });
+                            }
+                        }
+
+                        send_msg(&OutMsg::ClientDisconnect { user_id: uid_str });
                     }
 
                     VoiceEvent::OpusReceived { ssrc, opus_frame } => {
@@ -1002,6 +1018,18 @@ async fn main() {
                         };
                         if self_user_id == Some(uid) {
                             continue; // skip bot's own audio
+                        }
+
+                        // Audio-driven speaking detection
+                        let now = time::Instant::now();
+                        let ss = speaking_states.entry(uid).or_insert(SpeakingState {
+                            last_packet_at: None,
+                            is_speaking: false,
+                        });
+                        ss.last_packet_at = Some(now);
+                        if !ss.is_speaking {
+                            ss.is_speaking = true;
+                            send_msg(&OutMsg::SpeakingStart { user_id: uid.to_string() });
                         }
 
                         let target_sample_rate = user_capture_states
@@ -1068,6 +1096,7 @@ async fn main() {
                         drain_music_pcm_queue(&music_pcm_rx);
                         voice_conn = None;
                         *audio_send_state.lock() = None;
+                        speaking_states.clear();
                     }
 
                     VoiceEvent::Error { message } => {
@@ -1114,6 +1143,25 @@ async fn main() {
             // ---- 20ms audio send tick ----
             _ = send_interval.tick() => {
                 let now = time::Instant::now();
+
+                // Audio-driven speaking timeout: emit SpeakingEnd after SPEAKING_TIMEOUT_MS
+                // of no UDP audio packets from a user.
+                let mut speaking_ended_users: Vec<u64> = Vec::new();
+                for (&user_id, ss) in speaking_states.iter_mut() {
+                    if !ss.is_speaking {
+                        continue;
+                    }
+                    if let Some(last_at) = ss.last_packet_at {
+                        let silent_ms = now.duration_since(last_at).as_millis() as u64;
+                        if silent_ms >= SPEAKING_TIMEOUT_MS {
+                            ss.is_speaking = false;
+                            speaking_ended_users.push(user_id);
+                        }
+                    }
+                }
+                for user_id in speaking_ended_users {
+                    send_msg(&OutMsg::SpeakingEnd { user_id: user_id.to_string() });
+                }
 
                 // Emit user_audio_end when we've had enough silence after
                 // speaking/audio updates. This mirrors Node AfterSilence-driven

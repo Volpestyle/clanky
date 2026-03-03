@@ -30,10 +30,12 @@ pub enum VoiceEvent {
     Ready {
         ssrc: u32,
     },
-    SpeakingUpdate {
+    SsrcUpdate {
         ssrc: u32,
         user_id: u64,
-        speaking: bool,
+    },
+    ClientDisconnect {
+        user_id: u64,
     },
     OpusReceived {
         ssrc: u32,
@@ -758,22 +760,20 @@ async fn handle_text_opcode(
         6 => {
             debug!("Voice heartbeat ACK");
         }
-        // Speaking state update
+        // Speaking state update (OP5) — SSRC map only, speaking detection is audio-driven
         5 => {
             let ssrc = d["ssrc"].as_u64().unwrap_or(0) as u32;
             let uid = d["user_id"]
                 .as_str()
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(0);
-            let speaking = d["speaking"].as_u64().unwrap_or(0);
 
             ssrc_map.lock().insert(ssrc, uid);
 
             let _ = event_tx
-                .send(VoiceEvent::SpeakingUpdate {
+                .send(VoiceEvent::SsrcUpdate {
                     ssrc,
                     user_id: uid,
-                    speaking: speaking != 0,
                 })
                 .await;
         }
@@ -781,6 +781,9 @@ async fn handle_text_opcode(
         12 => {
             if let Some(uid) = d["user_id"].as_str().and_then(|s| s.parse::<u64>().ok()) {
                 ssrc_map.lock().retain(|_, v| *v != uid);
+                let _ = event_tx
+                    .send(VoiceEvent::ClientDisconnect { user_id: uid })
+                    .await;
             }
         }
         // OP21: DavePrepareTransition — a transition is upcoming, respond with OP23

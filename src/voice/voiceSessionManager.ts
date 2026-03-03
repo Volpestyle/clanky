@@ -7842,41 +7842,34 @@ export class VoiceSessionManager {
       }, finalizeDelayMs);
     };
 
-    const onUserAudioFallback = (audioUserId) => {
-      const normalizedUserId = String(audioUserId || "");
+    const onClientDisconnect = (disconnectUserId) => {
+      const normalizedUserId = String(disconnectUserId || "").trim();
       if (!normalizedUserId) return;
       if (normalizedUserId === String(this.client.user?.id || "")) return;
-      if (session.userCaptures.has(normalizedUserId)) return;
-      if (this.isInboundCaptureSuppressed(session)) return;
-
-      // Safety net: speaking events can occasionally be missed while user audio
-      // frames still arrive. Start capture from audio flow so ASR continues.
-      this.startInboundCapture({
-        session,
-        userId: normalizedUserId,
-        settings
-      });
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: normalizedUserId,
-        content: "voice_capture_started_from_audio_fallback",
-        metadata: {
-          sessionId: session.id,
-          mode: session.mode
-        }
-      });
+      const capture = session.userCaptures?.get?.(normalizedUserId);
+      if (!capture) return;
+      // Immediately finalize — the user has left the channel, no point waiting
+      if (capture.speakingEndFinalizeTimer) {
+        clearTimeout(capture.speakingEndFinalizeTimer);
+        capture.speakingEndFinalizeTimer = null;
+      }
+      if (capture.bargeInAssertTimer) {
+        clearTimeout(capture.bargeInAssertTimer);
+        capture.bargeInAssertTimer = null;
+      }
+      if (typeof capture.finalize === "function") {
+        capture.finalize("client_disconnect");
+      }
     };
 
     if (session.subprocessClient) {
       session.subprocessClient.on("speakingStart", onSpeakingStart);
       session.subprocessClient.on("speakingEnd", onSpeakingEnd);
-      session.subprocessClient.on("userAudio", onUserAudioFallback);
+      session.subprocessClient.on("clientDisconnect", onClientDisconnect);
       session.cleanupHandlers.push(() => {
         session.subprocessClient?.off("speakingStart", onSpeakingStart);
         session.subprocessClient?.off("speakingEnd", onSpeakingEnd);
-        session.subprocessClient?.off("userAudio", onUserAudioFallback);
+        session.subprocessClient?.off("clientDisconnect", onClientDisconnect);
       });
     }
   }

@@ -219,6 +219,9 @@ export class VoiceSubprocessClient extends EventEmitter {
       case "user_audio_end":
         this.emit("userAudioEnd", msg.userId);
         break;
+      case "client_disconnect":
+        this.emit("clientDisconnect", msg.userId);
+        break;
       case "music_idle":
         this.emit("musicIdle");
         break;
