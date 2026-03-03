@@ -89,6 +89,14 @@ class PcmJitterBuffer extends Readable {
     }
 
     this._tryPush();
+
+    // When the AudioPlayer is in Buffering state it does NOT call _read(),
+    // so _reading stays false and _tryPush() is a no-op — the "readable"
+    // event that Buffering→Playing depends on never fires.
+    // Emit "readable" so the AudioPlayer can transition to Playing.
+    if (!this._reading && this.chunks.length > 0) {
+      this.emit("readable");
+    }
   }
 
   private _tryPush() {
@@ -192,11 +200,6 @@ function ensurePlaybackStream() {
         silencePaddingFrames: 250
       });
       audioPlayer.play(resource);
-      // Synchronously emit readable so the Discord AudioPlayer correctly
-      // transitions out of Buffering state into Playing without getting stuck.
-      if (oldChunks.length > 0) {
-        botAudioStream.emit("readable");
-      }
     }
     return true;
   }
