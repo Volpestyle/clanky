@@ -5,6 +5,7 @@ import {
   REST,
   Routes
 } from "discord.js";
+import { clankCommand } from "./commands/clankCommand.ts";
 import { musicCommands } from "./voice/musicCommands.ts";
 import {
   buildAutomationPrompt,
@@ -282,8 +283,8 @@ export class ClankerBot {
 
       try {
         const rest = new REST({ version: "10" }).setToken(this.appConfig.discordToken);
-        await rest.put(Routes.applicationCommands(this.client.user?.id || ""), { body: musicCommands });
-        console.log("[musicCommands] Registered slash commands");
+        await rest.put(Routes.applicationCommands(this.client.user?.id || ""), { body: [...musicCommands, clankCommand] });
+        console.log("[slashCommands] Registered slash commands");
       } catch (error) {
         console.error("[musicCommands] Failed to register slash commands:", error);
       }
@@ -352,7 +353,14 @@ export class ClankerBot {
         try {
           await this.voiceSessionManager.handleMusicSlashCommand(interaction, this.store.getSettings());
         } catch (error) {
-          console.error("[musicCommands] Error handling slash command:", error);
+          console.error("[slashCommands] Error handling music command:", error);
+          await interaction.reply({ content: "An error occurred processing your command.", ephemeral: true });
+        }
+      } else if (commandName === "clank") {
+        try {
+          await this.voiceSessionManager.handleClankSlashCommand(interaction, this.store.getSettings());
+        } catch (error) {
+          console.error("[slashCommands] Error handling clank command:", error);
           await interaction.reply({ content: "An error occurred processing your command.", ephemeral: true });
         }
       }

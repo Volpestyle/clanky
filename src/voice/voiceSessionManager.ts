@@ -14911,6 +14911,99 @@ export class VoiceSessionManager {
     }
   }
 
+  async handleClankSlashCommand(
+    interaction: ChatInputCommandInteraction,
+    settings: Record<string, unknown> | null
+  ) {
+    const guild = interaction.guild;
+    const user = interaction.user;
+    if (!guild) {
+      await interaction.reply({ content: "This command must be used in a server.", ephemeral: true });
+      return;
+    }
+    const guildId = guild.id;
+    const session = this.sessions.get(guildId);
+    if (!session || session.ending) {
+      await interaction.reply({ content: "No active voice session in this server.", ephemeral: true });
+      return;
+    }
+    if (session.mode !== "stt_pipeline") {
+      await interaction.reply({ content: "The /clank command is only available in STT pipeline voice mode.", ephemeral: true });
+      return;
+    }
+
+    const message = interaction.options.getString("message", true);
+    const normalizedMessage = normalizeVoiceText(message, STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedMessage) {
+      await interaction.reply({ content: "Message cannot be empty.", ephemeral: true });
+      return;
+    }
+
+    await interaction.deferReply();
+    try {
+      await this.injectTextTurn({
+        session,
+        settings: settings || session.settingsSnapshot || this.store.getSettings(),
+        userId: user.id,
+        text: normalizedMessage,
+        source: "slash_command_clank"
+      });
+      await interaction.editReply(`Processing: "${normalizedMessage}"`);
+    } catch (error) {
+      await interaction.editReply(`Failed to process message: ${String(error?.message || error)}`);
+    }
+  }
+
+  async injectTextTurn({
+    session,
+    settings = null,
+    userId,
+    text,
+    source = "text_injection"
+  }) {
+    if (!session || session.ending) return;
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    const normalizedText = normalizeVoiceText(text, STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedText) return;
+
+    this.recordVoiceTurn(session, {
+      role: "user",
+      userId,
+      text: normalizedText
+    });
+
+    session.lastActivityAt = Date.now();
+    session.lastDirectAddressAt = Date.now();
+    session.lastDirectAddressUserId = userId;
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: "voice_text_turn_injected",
+      metadata: {
+        sessionId: session.id,
+        source,
+        textLength: normalizedText.length
+      }
+    });
+
+    await this.runSttPipelineReply({
+      session,
+      settings: resolvedSettings,
+      userId,
+      transcript: normalizedText,
+      directAddressed: true,
+      directAddressConfidence: 1.0,
+      conversationContext: this.buildVoiceConversationContext({
+        session,
+        userId,
+        directAddressed: true
+      })
+    });
+  }
+
 }
 
 
