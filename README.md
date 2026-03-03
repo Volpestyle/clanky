@@ -14,7 +14,7 @@ Features:
 - Optional Grok Imagine image/video generation for complex visuals and clips.
 - Video link understanding for YouTube/TikTok/embedded video links (captions first, optional ASR fallback, optional keyframes).
 - NL-controlled Discord voice sessions (join/leave/status) with session limits and runtime guards.
-- Voice runtime mode selector: `voice_agent` (xAI realtime), `openai_realtime` (OpenAI Realtime), `gemini_realtime` (Gemini Live API), or `elevenlabs_realtime` (ElevenLabs Agents websocket).
+- Voice runtime mode selector: `voice_agent` (xAI realtime), `openai_realtime` (OpenAI Realtime), `gemini_realtime` (Gemini Live API), `elevenlabs_realtime` (ElevenLabs Agents websocket), or `stt_pipeline` (STT/TTS pipeline mode).
 - Stream-watch voice controls (`watch_stream`, `stop_watching_stream`, `stream_status`) with external frame ingest path.
 - Model-directed screen-share link offers (`screenShareIntent`) with temporary browser capture links (localhost fallback or public HTTPS).
 - Optional auto-managed public HTTPS dashboard entrypoint via Cloudflare Quick Tunnel.
@@ -178,9 +178,7 @@ Use dashboard to:
 ## 6. Technical Docs
 
 - Architecture and flow diagrams: `docs/technical-architecture.md`
-- LLM orchestration mental model: `docs/llm-orchestration-mental-model.md`
 - Claude Code brain session mode: `docs/claude-code-brain-session-mode.md`
-- Reply decision & conversation context flow: `docs/reply-and-context-flow.md`
 - Memory system source of truth: `docs/memory-system.md`
 - Replay harness guide (flooding + authoring): `docs/replay-test-suite.md`
 - Voice golden validation suite: `docs/voice-golden-test-suite.md`
