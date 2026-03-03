@@ -642,10 +642,13 @@ function handleMusicStop() {
 }
 
 function handleMusicPause() {
+  musicActive = false;
   audioPlayer?.pause();
+  armVoicePlayback("music_pause");
 }
 
 function handleMusicResume() {
+  musicActive = true;
   audioPlayer?.unpause();
 }
 
