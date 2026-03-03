@@ -30,7 +30,8 @@
     "logs:loki:up": "docker compose -f docker-compose.loki.yml up -d",
     "logs:loki:down": "docker compose -f docker-compose.loki.yml down",
     "check": "bun run lint && bun run typecheck && bun scripts/check-backend.mjs && bunx vite build",
-    "diagrams": "bun scripts/gen-diagrams.mjs"
+    "diagrams": "bun scripts/gen-diagrams.mjs",
+    "build:voice": "cd src/voice/rust_subprocess && OPUS_STATIC=1 OPUS_NO_PKG=1 cargo build --release"
   },
   "engines": {
     "bun": ">=1.3.10"

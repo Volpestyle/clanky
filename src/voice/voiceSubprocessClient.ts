@@ -43,22 +43,53 @@ export class VoiceSubprocessClient extends EventEmitter {
     selfMute?: boolean;
     timeoutMs?: number;
   }) {
-    const nodeExec = process.env.NODE_EXEC_PATH || "node";
-    const subprocessPath = path.resolve(
+    const subprocessDir = path.resolve(
       path.dirname(new URL(import.meta.url).pathname),
-      "voiceSubprocess.ts"
+      "rust_subprocess"
     );
 
-    this.child = spawn(
-      nodeExec,
-      ["--experimental-strip-types", subprocessPath],
-      {
-        stdio: ["ignore", "inherit", "inherit", "ipc"]
+    // Prefer pre-built release binary; fall back to cargo run for development
+    const releaseBin = path.join(subprocessDir, "target", "release", "voice_subprocess");
+    const fs = await import("node:fs");
+    const usePrebuilt = fs.existsSync(releaseBin);
+
+    const spawnEnv = {
+      ...process.env,
+      // audiopus_sys needs these to build opus from source on arm64 macOS
+      // (the homebrew x86 opus won't link). These are no-ops if opus is already
+      // linked or the binary is pre-built.
+      OPUS_STATIC: "1",
+      OPUS_NO_PKG: "1",
+    };
+
+    if (usePrebuilt) {
+      this.child = spawn(releaseBin, [], {
+        cwd: subprocessDir,
+        stdio: ["pipe", "pipe", "inherit"],
+        env: spawnEnv,
+      });
+    } else {
+      console.warn(
+        "[voiceSubprocessClient] Pre-built binary not found, using cargo run --release (slow first start)"
+      );
+      this.child = spawn("cargo", ["run", "--release"], {
+        cwd: subprocessDir,
+        stdio: ["pipe", "pipe", "inherit"],
+        env: spawnEnv,
+      });
+    }
+
+    this.child.stdout?.on("data", (data: Buffer) => {
+      const lines = data.toString().split("\n");
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          this._handleMessage(msg);
+        } catch (e) {
+          // ignore non-json stdout (e.g. cargo build logs)
+        }
       }
-    );
-
-    this.child.on("message", (msg: any) => {
-      this._handleMessage(msg);
     });
 
     this.child.on("exit", (code, signal) => {
@@ -202,9 +233,9 @@ export class VoiceSubprocessClient extends EventEmitter {
   }
 
   private _send(msg: any) {
-    if (!this.child || !this.child.connected) return;
+    if (!this.child || this.child.killed || !this.child.stdin) return;
     try {
-      this.child.send(msg);
+      this.child.stdin.write(JSON.stringify(msg) + "\n");
     } catch (err) {
       if (AUDIO_DEBUG) {
         console.error("[voiceSubprocessClient] IPC send error:", err);
