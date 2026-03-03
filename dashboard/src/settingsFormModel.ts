@@ -230,7 +230,6 @@ export function settingsToForm(settings) {
     voiceSoundboardPreferredSoundIds: formatLineList(settings?.voice?.soundboard?.preferredSoundIds),
     voiceAsrDuringMusic: settings?.voice?.asrDuringMusic ?? defaultVoice.asrDuringMusic ?? true,
     voiceAsrEnabled: settings?.voice?.asrEnabled ?? defaultVoice.asrEnabled ?? true,
-    voiceCommandOnlyMode: settings?.voice?.commandOnlyMode ?? defaultVoice.commandOnlyMode ?? false,
     voiceOperationalMessages: settings?.voice?.operationalMessages ?? defaultVoice.operationalMessages ?? "all",
     maxMessages: settings?.permissions?.maxMessagesPerHour ?? defaultPermissions.maxMessagesPerHour,
     maxReactions: settings?.permissions?.maxReactionsPerHour ?? defaultPermissions.maxReactionsPerHour,
@@ -441,7 +440,6 @@ export function formToSettingsPatch(form) {
       },
       asrDuringMusic: Boolean(form.voiceAsrDuringMusic),
       asrEnabled: Boolean(form.voiceAsrEnabled),
-      commandOnlyMode: Boolean(form.voiceCommandOnlyMode),
       operationalMessages: String(form.voiceOperationalMessages || "all").trim().toLowerCase()
     },
     startup: {

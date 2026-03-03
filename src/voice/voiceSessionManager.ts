@@ -1182,11 +1182,6 @@ export class VoiceSessionManager {
     return Boolean(music?.active);
   }
 
-  isCommandOnlyActive(session, settings = null) {
-    const resolved = settings || session?.settingsSnapshot || this.store.getSettings();
-    if (resolved?.voice?.commandOnlyMode) return true;
-    return this.isMusicPlaybackActive(session);
-  }
 
   isAsrActive(session, settings = null) {
     const resolved = settings || session?.settingsSnapshot || this.store.getSettings();
@@ -4738,10 +4733,10 @@ export class VoiceSessionManager {
       };
     }
 
-    if (this.isCommandOnlyActive(session, settings)) {
+    if (this.isMusicPlaybackActive(session)) {
       return {
         allow: false,
-        reason: "command_only_mode_active",
+        reason: "music_playback_active",
         retryAfterMs: thoughtConfig.minSilenceSeconds * 1000
       };
     }
@@ -10270,7 +10265,10 @@ export class VoiceSessionManager {
     const directAddressed =
       !addressedToOtherParticipant &&
       directAddressConfidence >= directAddressThreshold;
-    const replyEagerness = clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
+    const musicActive = this.isMusicPlaybackActive(session);
+    const replyEagerness = musicActive
+      ? 0
+      : clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
     const baseConversationContext = this.buildVoiceConversationContext({
       session,
       userId: normalizedUserId,
@@ -10316,52 +10314,6 @@ export class VoiceSessionManager {
         conversationContext,
         retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS,
         outputLockReason: replyOutputLockState.reason
-      };
-    }
-
-    if (this.isCommandOnlyActive(session, settings)) {
-      if (directAddressed || directAddressedByWakePhrase) {
-        return {
-          allow: true,
-          reason: "command_only_direct_address",
-          participantCount,
-          directAddressed: true,
-          directAddressConfidence,
-          directAddressThreshold,
-          transcript: normalizedTranscript,
-          conversationContext
-        };
-      }
-      return {
-        allow: false,
-        reason: "command_only_not_addressed",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        conversationContext
-      };
-    }
-
-    const lowSignalFragment = isLowSignalVoiceFragment(normalizedTranscript);
-
-    const botRecentReplyFollowup =
-      !directAddressed &&
-      !addressedToOtherParticipant &&
-      !lowSignalFragment &&
-      Boolean(conversationContext.recentAssistantReply) &&
-      Boolean(conversationContext.sameAsRecentDirectAddress);
-    if (botRecentReplyFollowup) {
-      return {
-        allow: true,
-        reason: "bot_recent_reply_followup",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        conversationContext
       };
     }
 

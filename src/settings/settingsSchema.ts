@@ -202,7 +202,6 @@ export const DEFAULT_SETTINGS = {
     replyPath: "bridge",
     asrDuringMusic: true,
     asrEnabled: true,
-    commandOnlyMode: false,
     operationalMessages: "all"
   },
   startup: {

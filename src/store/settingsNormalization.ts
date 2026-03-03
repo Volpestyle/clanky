@@ -446,7 +446,6 @@ export function normalizeSettings(raw) {
     soundboard?: VoiceSoundboardDefaults;
     asrDuringMusic?: boolean;
     asrEnabled?: boolean;
-    commandOnlyMode?: boolean;
     operationalMessages?: string;
   };
 
@@ -876,11 +875,6 @@ export function normalizeSettings(raw) {
     merged.voice?.asrEnabled !== undefined
       ? Boolean(merged.voice?.asrEnabled)
       : Boolean(defaultVoice.asrEnabled ?? true);
-
-  merged.voice.commandOnlyMode =
-    merged.voice?.commandOnlyMode !== undefined
-      ? Boolean(merged.voice?.commandOnlyMode)
-      : Boolean(defaultVoice.commandOnlyMode);
 
   const validOperationalMessageLevels = ["all", "essential", "minimal", "none"];
   const rawOperationalMessages = String(merged.voice?.operationalMessages || "").trim().toLowerCase();

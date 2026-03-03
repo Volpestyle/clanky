@@ -944,14 +944,6 @@ export function VoiceModeSettingsSection({
               />
               ASR during music (enables voice stop detection while music plays)
             </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={form.voiceCommandOnlyMode}
-                onChange={set("voiceCommandOnlyMode")}
-              />
-              Command-only mode (only respond to wake word, instant sleep after reply)
-            </label>
           </div>
 
           <label htmlFor="voice-allowed-channels">Allowed voice channel IDs (optional)</label>
