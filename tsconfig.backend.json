@@ -11,6 +11,8 @@
     "node_modules",
     "dashboard/dist",
     "dist",
+    "src/voice/rust_subprocess/target",
+    "src/voice/rust_subprocess/target/**",
     "src/**/*.test.ts",
     "src/**/*.spec.ts"
   ]

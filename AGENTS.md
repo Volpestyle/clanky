@@ -8,7 +8,7 @@
 - Classifiers
   - haiku
   - gpt-5-nano reasoning low
-- Use `docs/llm-orchestration-mental-model.md` as the canonical guide for how to think about, reason about, and expand LLM routing/decision orchestration in this bot.
+
 - Refer to docs\openai-realtime-transcription.md when working with openai realtime transcripton or ASR.
 - Refer to docs\openai-realtime-speech.md when working with openai realtime speech.
 - Runtime/package manager standard: use Bun (`bun`, `bun run`, `bunx`) over Node/NPM (`node`, `npm`, `npx`) unless explicitly requested.
@@ -65,10 +65,13 @@ This runs `@mermaid-js/mermaid-cli` (`mmdc`) at 4x scale to produce crisp PNGs. 
 1. Create `docs/diagrams/<name>.mmd` with valid Mermaid syntax.
 2. Run `bun run diagrams -- <name>.mmd` to generate `docs/diagrams/<name>.png`.
 3. Embed in the target markdown file:
+
    ```md
    ![Diagram Title](diagrams/<name>.png)
+
    <!-- source: docs/diagrams/<name>.mmd -->
    ```
+
 4. Commit the `.mmd`, `.png`, and updated `.md` together.
 
 ## Code Hygiene (Desloppifying)

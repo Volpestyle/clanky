@@ -19,6 +19,7 @@ export class VoiceSubprocessClient extends EventEmitter {
   private guild: any;
   private destroyed = false;
   private adapterCleanup: (() => void) | null = null;
+  private stdoutBuffer = "";
 
   constructor(guildId: string, channelId: string, guild: any) {
     super();
@@ -43,8 +44,9 @@ export class VoiceSubprocessClient extends EventEmitter {
     selfMute?: boolean;
     timeoutMs?: number;
   }) {
+    const moduleDir = path.dirname(decodeURIComponent(new URL(import.meta.url).pathname));
     const subprocessDir = path.resolve(
-      path.dirname(new URL(import.meta.url).pathname),
+      moduleDir,
       "rust_subprocess"
     );
 
@@ -80,15 +82,20 @@ export class VoiceSubprocessClient extends EventEmitter {
     }
 
     this.child.stdout?.on("data", (data: Buffer) => {
-      const lines = data.toString().split("\n");
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const msg = JSON.parse(line);
-          this._handleMessage(msg);
-        } catch (e) {
-          // ignore non-json stdout (e.g. cargo build logs)
+      this.stdoutBuffer += data.toString("utf8");
+      let newlineIndex = this.stdoutBuffer.indexOf("\n");
+      while (newlineIndex >= 0) {
+        const line = this.stdoutBuffer.slice(0, newlineIndex).trim();
+        this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
+        if (line.length > 0) {
+          try {
+            const msg = JSON.parse(line);
+            this._handleMessage(msg);
+          } catch {
+            // ignore non-json stdout (e.g. cargo build logs)
+          }
         }
+        newlineIndex = this.stdoutBuffer.indexOf("\n");
       }
     });
 
@@ -142,15 +149,27 @@ export class VoiceSubprocessClient extends EventEmitter {
     });
   }
 
+  private adapterCallbackCount = { voiceState: 0, voiceServer: 0, op4Forward: 0 };
+
   private _setupAdapterProxy() {
     const guild = this.guild;
     if (!guild?.voiceAdapterCreator) return;
 
     const adapter = guild.voiceAdapterCreator({
       onVoiceServerUpdate: (data: any) => {
+        this.adapterCallbackCount.voiceServer++;
+        console.log(
+          `[voiceSubprocessClient] adapter onVoiceServerUpdate #${this.adapterCallbackCount.voiceServer}`,
+          `endpoint=${data?.endpoint ?? "null"} token=${data?.token ? "present" : "missing"}`
+        );
         this._send({ type: "voice_server", data });
       },
       onVoiceStateUpdate: (data: any) => {
+        this.adapterCallbackCount.voiceState++;
+        console.log(
+          `[voiceSubprocessClient] adapter onVoiceStateUpdate #${this.adapterCallbackCount.voiceState}`,
+          `session_id=${data?.session_id ?? "null"} channel_id=${data?.channel_id ?? "null"} user_id=${data?.user_id ?? "null"}`
+        );
         this._send({ type: "voice_state", data });
       }
     });
@@ -219,6 +238,11 @@ export class VoiceSubprocessClient extends EventEmitter {
 
   private _forwardToGateway(payload: any) {
     if (!payload || !this.guild) return;
+    this.adapterCallbackCount.op4Forward++;
+    console.log(
+      `[voiceSubprocessClient] _forwardToGateway OP4 #${this.adapterCallbackCount.op4Forward}`,
+      `guild_id=${payload?.d?.guild_id ?? "null"} channel_id=${payload?.d?.channel_id ?? "null"}`
+    );
     try {
       const shard = this.guild.shard;
       if (shard && typeof shard.send === "function") {
@@ -317,6 +341,7 @@ export class VoiceSubprocessClient extends EventEmitter {
       clearTimeout(this.audioBatchTimer);
       this.audioBatchTimer = null;
     }
+    this.stdoutBuffer = "";
 
     this._send({ type: "destroy" });
     this._cleanupAdapter();
@@ -339,6 +364,9 @@ export class VoiceSubprocessClient extends EventEmitter {
   }
 
   get isAlive(): boolean {
-    return !this.destroyed && this.child !== null && this.child.connected;
+    if (this.destroyed || this.child === null) return false;
+    if (this.child.exitCode !== null) return false;
+    if (this.child.signalCode !== null) return false;
+    return !this.child.killed;
   }
 }

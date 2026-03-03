@@ -819,7 +819,8 @@ function handleMusicResume() {
   pausedMusicResource = null;
 
   // Check if the saved resource's stream is still alive.
-  const resourceAlive = resource?.readable && !resource.readable.destroyed && !resource.readable.readableEnded;
+  const resourceStream = resource?.playStream;
+  const resourceAlive = Boolean(resourceStream) && !resourceStream.destroyed && !resourceStream.readableEnded;
 
   if (resourceAlive) {
     // Stream is still alive — replay it directly.

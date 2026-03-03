@@ -8062,7 +8062,7 @@ export class VoiceSessionManager {
         }
         return;
       }
-      
+
       if (isBurstArtifact) {
         this.store.logAction({
           kind: "voice_runtime",
@@ -9759,7 +9759,7 @@ export class VoiceSessionManager {
       });
       session.pendingBargeInRetry = null;
       session.lastRequestedRealtimeUtterance = null;
-      
+
       session.lastGenerationContext = {
         capturedAt: new Date().toISOString(),
         incomingTranscript: normalizedTranscript,

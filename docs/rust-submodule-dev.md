@@ -157,6 +157,16 @@ The decoded PCM feeds into the same outbound audio buffer as TTS, so DAVE encryp
 - Decision: replace songbird's Driver with custom voice WS + UDP + transport crypto
 - Keep the same IPC protocol so the main process needs no changes
 
+### 2026-03-03: DAVE WebSocket Nuances and Handshake Blockers
+- **`max_dave_protocol_version`:** Discord voice servers *will not* initiate the DAVE MLS handshake unless the client includes `"max_dave_protocol_version": 1` in the initial `OP0 Identify` JSON payload.
+- **Client OP26 Initiation:** Discord's DAVE documentation implies the server begins the handshake (by sending OP21 / OP25). While the server does send OP21 (`dave_protocol_prepare_epoch`), it waits for the client to send an **`OP26 DaveMlsKeyPackage`** binary WS frame before it will reply with `OP25 DaveMlsExternalSender`.
+- **Binary WebSocket Frame Structure:** Beware: Discord Voice WebSocket binary frames (`OP25`, `OP27`, etc) do **not** just start with a 1-byte opcode. Discord prepends a **2-byte Big Endian sequence number** to every incoming binary frame. The format is `[ seq (2 bytes BE) | opcode (1 byte) | payload (N bytes) ]`.
+- **DAVE Payload Metadata:** Beyond the sequence number and opcode, several DAVE opcodes prepend their own metadata to the payload before the TLS-encoded bytes:
+  - `OP27 Proposals` prepends a 1-byte `optype` (0 for Append, 1 for Revoke). The rest of the payload is the proposals TLS string.
+  - `OP29 Announce Commit` and `OP30 Welcome` prepend a 2-byte Big Endian `transition_id`. The rest is the commit or welcome TLS string.
+  - *These metadata bytes must be stripped before passing data to `davey`, and the `transition_id` must be used to reply with `OP32 DaveTransitionReady`.*
+- **Latency Issue Context:** For DAVE E2EE to succeed, the `DaveManager` must transmit the OP26 KeyPackage immediately after connection establishment, and must carefully parse incoming binary frames by skipping the 2-byte seq prefix.
+
 ## Build Commands
 
 ```sh
