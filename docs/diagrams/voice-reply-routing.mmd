@@ -1,0 +1,50 @@
+flowchart TD
+    A[Discord user speaks] --> B[Audio captured + speaking_end]
+    B --> C[runRealtimeTurn]
+
+    C --> D{Silence gate\nshort-clip filter}
+    D -- too short/silent --> DROP[Drop capture]
+    D -- passes --> E[Transcription]
+
+    E --> F[evaluateVoiceReplyDecision\naddressing classifier]
+    F -- "deny: bot_turn_open\neagerness too low\nsilence window needed" --> SKIP[Skip / defer turn]
+    F -- allow --> G{resolveRealtimeReplyStrategy}
+
+    G -- "realtimeReplyStrategy == native\nOR brainProvider == native" --> NATIVE
+    G -- "brainProvider != native\n(resolves to brain)" --> BRAIN_CHECK
+
+    subgraph NATIVE[Native Path]
+        N1[forwardRealtimeTurnAudio]
+        N2[Send raw PCM to\nOpenAI Realtime session]
+        N3["gpt-realtime generates\naudio reply directly"]
+        N1 --> N2 --> N3
+    end
+
+    BRAIN_CHECK{shouldUseOpenAi\nRealtimeTranscriptBridge?}
+
+    BRAIN_CHECK -- "YES\nusePerUserAsrBridge: true\nOR usePerUserAsrBridge: false\n(shared ASR active)" --> BRIDGE
+    BRAIN_CHECK -- "NO\n(no transcript bridge)" --> FULL_BRAIN
+
+    subgraph BRIDGE["Transcript Bridge Path ⭐ YOU ARE HERE"]
+        B1[forwardOpenAiRealtimeTextTurnToBrain]
+        B2["Send labeled text to OpenAI Realtime:\n(speakerName): transcript"]
+        B3["gpt-realtime generates\naudio reply from text"]
+        B1 --> B2 --> B3
+    end
+
+    subgraph FULL_BRAIN[Full Brain Path]
+        FB1[runRealtimeBrainReply]
+        FB2[generateVoiceTurn]
+        FB3["generationLlm model generates text\n(e.g. claude-sonnet-4-6)"]
+        FB4[Text reply sent to TTS\nvia playVoiceReplyInOrder]
+        FB1 --> FB2 --> FB3 --> FB4
+    end
+
+    style BRIDGE fill:#2d4a2d,stroke:#4a8c4a,stroke-width:3px
+    style FULL_BRAIN fill:#4a2d2d,stroke:#8c4a4a,stroke-width:1px,stroke-dasharray: 5 5
+    style NATIVE fill:#2d2d4a,stroke:#4a4a8c,stroke-width:1px
+
+    classDef setting fill:#553300,stroke:#aa6600
+    classDef gate fill:#333355,stroke:#6666aa
+
+    class D,F gate
