@@ -5819,10 +5819,10 @@ export class VoiceSessionManager {
       };
     }
 
-    // Auto-pause music while the bot speaks, resume after.
+    // Duck music while the bot speaks, unduck after.
     const musicWasPlaying = this.isMusicPlaybackActive(session) && !this.musicPlayer?.isPaused?.();
     if (musicWasPlaying) {
-      this.musicPlayer?.pause();
+      await this.musicPlayer?.duck(300);
     }
 
     const requiresOrderedPlayback = steps.some((entry) => entry?.type === "soundboard");
@@ -5927,8 +5927,8 @@ export class VoiceSessionManager {
         }
       }
     } finally {
-      if (musicWasPlaying && this.isMusicPlaybackActive(session) && this.musicPlayer?.isPaused?.()) {
-        this.musicPlayer?.resume();
+      if (musicWasPlaying && this.isMusicPlaybackActive(session) && this.musicPlayer?.isDucked?.()) {
+        this.musicPlayer?.unduck(300);
       }
     }
 

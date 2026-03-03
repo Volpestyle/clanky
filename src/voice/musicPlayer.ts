@@ -26,6 +26,7 @@ export class DiscordMusicPlayer {
   private currentTrack: MusicSearchResult | null = null;
   private _playing = false;
   private _paused = false;
+  private _ducked = false;
 
   constructor() {}
 
@@ -48,6 +49,7 @@ export class DiscordMusicPlayer {
   private _onMusicIdle = () => {
     this._playing = false;
     this._paused = false;
+    this._ducked = false;
     this.currentTrack = null;
   };
 
@@ -55,6 +57,7 @@ export class DiscordMusicPlayer {
     console.error(`[musicPlayer] subprocess error: ${message}`);
     this._playing = false;
     this._paused = false;
+    this._ducked = false;
     this.currentTrack = null;
   };
 
@@ -110,6 +113,7 @@ export class DiscordMusicPlayer {
     }
     this._playing = false;
     this._paused = false;
+    this._ducked = false;
     this.currentTrack = null;
   }
 
@@ -133,6 +137,28 @@ export class DiscordMusicPlayer {
         // ignore
       }
     }
+  }
+
+  async duck(fadeMs = 300): Promise<void> {
+    if (!this.subprocessClient?.isAlive || !this._playing) return;
+    this.subprocessClient.musicSetGain(0.15, fadeMs);
+    this._ducked = true;
+    await new Promise(resolve => setTimeout(resolve, fadeMs));
+  }
+
+  unduck(fadeMs = 300): void {
+    if (!this.subprocessClient?.isAlive || !this._playing) return;
+    this.subprocessClient.musicSetGain(1.0, fadeMs);
+    this._ducked = false;
+  }
+
+  setGain(target: number, fadeMs = 0): void {
+    if (!this.subprocessClient?.isAlive) return;
+    this.subprocessClient.musicSetGain(target, fadeMs);
+  }
+
+  isDucked(): boolean {
+    return this._ducked;
   }
 
   private getStreamUrl(track: MusicSearchResult): string | null {

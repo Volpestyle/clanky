@@ -228,6 +228,9 @@ export class VoiceSubprocessClient extends EventEmitter {
       case "music_error":
         this.emit("musicError", msg.message);
         break;
+      case "music_gain_reached":
+        this.emit("musicGainReached", msg.gain);
+        break;
       case "error":
         this.emit("error", msg.message);
         break;
@@ -340,6 +343,10 @@ export class VoiceSubprocessClient extends EventEmitter {
 
   musicResume() {
     this._send({ type: "music_resume" });
+  }
+
+  musicSetGain(target: number, fadeMs: number) {
+    this._send({ type: "music_set_gain", target, fadeMs });
   }
 
   destroy() {

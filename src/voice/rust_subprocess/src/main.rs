@@ -82,6 +82,11 @@ enum InMsg {
     MusicStop,
     MusicPause,
     MusicResume,
+    MusicSetGain {
+        target: f32,
+        #[serde(rename = "fadeMs", default)]
+        fade_ms: u32,
+    },
     Destroy,
 }
 
@@ -134,6 +139,9 @@ enum OutMsg {
     MusicIdle,
     MusicError {
         message: String,
+    },
+    MusicGainReached {
+        gain: f32,
     },
     Error {
         message: String,
@@ -246,11 +254,63 @@ impl PendingConnection {
 }
 
 // ---------------------------------------------------------------------------
-// Audio send state (outbound TTS pipeline)
+// Gain envelope for smooth volume transitions
+// ---------------------------------------------------------------------------
+
+struct GainEnvelope {
+    current: f32,
+    target: f32,
+    step_per_sample: f32,
+}
+
+impl GainEnvelope {
+    fn new(current: f32, target: f32, fade_ms: u32) -> Self {
+        let total_samples = 48_000.0 * fade_ms as f64 / 1000.0;
+        let step = if total_samples > 0.0 {
+            (target as f64 - current as f64) / total_samples
+        } else {
+            0.0
+        };
+        Self {
+            current,
+            target,
+            step_per_sample: step as f32,
+        }
+    }
+
+    fn apply_sample(&mut self, sample: i16) -> i16 {
+        let out = (sample as f32 * self.current).clamp(-32768.0, 32767.0) as i16;
+        self.advance();
+        out
+    }
+
+    fn advance(&mut self) {
+        if (self.step_per_sample > 0.0 && self.current < self.target)
+            || (self.step_per_sample < 0.0 && self.current > self.target)
+        {
+            self.current += self.step_per_sample;
+            if (self.step_per_sample > 0.0 && self.current > self.target)
+                || (self.step_per_sample < 0.0 && self.current < self.target)
+            {
+                self.current = self.target;
+            }
+        }
+    }
+
+    fn is_complete(&self) -> bool {
+        (self.current - self.target).abs() < 0.0001
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Audio send state (outbound TTS + music pipeline with mixing)
 // ---------------------------------------------------------------------------
 
 struct AudioSendState {
-    pcm_buffer: VecDeque<i16>,
+    pcm_buffer: VecDeque<i16>,          // TTS audio
+    music_buffer: VecDeque<i16>,        // Music audio (separate for mixing)
+    music_gain: GainEnvelope,           // Gain envelope applied to music
+    music_gain_notified: f32,           // Last gain value we sent MusicGainReached for
     encoder: OpusEncoder,
     speaking: bool,
     trailing_silence_frames: u32,
@@ -264,6 +324,9 @@ impl AudioSendState {
             .map_err(|e| anyhow::anyhow!("Opus encoder init: {:?}", e))?;
         Ok(Self {
             pcm_buffer: VecDeque::new(),
+            music_buffer: VecDeque::new(),
+            music_gain: GainEnvelope::new(1.0, 1.0, 0),
+            music_gain_notified: 1.0,
             encoder,
             speaking: false,
             trailing_silence_frames: 0,
@@ -275,17 +338,48 @@ impl AudioSendState {
         self.trailing_silence_frames = 0;
     }
 
+    fn push_music_pcm(&mut self, samples: Vec<i16>) {
+        self.music_buffer.extend(samples);
+        self.trailing_silence_frames = 0;
+    }
+
+    fn set_music_gain(&mut self, target: f32, fade_ms: u32) {
+        self.music_gain = GainEnvelope::new(self.music_gain.current, target, fade_ms);
+    }
+
     fn clear(&mut self) {
         self.pcm_buffer.clear();
+        self.music_buffer.clear();
         self.trailing_silence_frames = MAX_TRAILING_SILENCE;
     }
 
-    /// Encode the next 20ms frame. Returns None if idle.
+    /// Encode the next 20ms frame, mixing TTS and music buffers.
+    /// Music samples have the gain envelope applied. Returns None if idle.
     fn next_opus_frame(&mut self) -> Option<Vec<u8>> {
         const FRAME_SIZE: usize = 960; // 20ms @ 48kHz mono
 
-        if self.pcm_buffer.len() >= FRAME_SIZE {
-            let pcm: Vec<i16> = self.pcm_buffer.drain(..FRAME_SIZE).collect();
+        let has_tts = self.pcm_buffer.len() >= FRAME_SIZE;
+        let has_music = self.music_buffer.len() >= FRAME_SIZE;
+
+        if has_tts || has_music {
+            let mut mixed = [0i32; FRAME_SIZE];
+
+            if has_music {
+                for (i, s) in self.music_buffer.drain(..FRAME_SIZE).enumerate() {
+                    mixed[i] += self.music_gain.apply_sample(s) as i32;
+                }
+            }
+            if has_tts {
+                for (i, s) in self.pcm_buffer.drain(..FRAME_SIZE).enumerate() {
+                    mixed[i] += s as i32; // TTS at full volume always
+                }
+            }
+
+            let pcm: Vec<i16> = mixed
+                .iter()
+                .map(|&s| s.clamp(-32768, 32767) as i16)
+                .collect();
+
             let mut opus_buf = vec![0u8; 4000];
             match self.encoder.encode(&pcm, &mut opus_buf) {
                 Ok(len) => {
@@ -669,6 +763,7 @@ async fn main() {
     let mut pending_music_last_audio_at: Option<time::Instant> = None;
     let mut pending_music_waiting_for_drain = false;
     let mut pending_music_drain_started_at: Option<time::Instant> = None;
+    let mut pending_music_stop = false; // Set when fade-out starts before actual stop
 
     // Opus decoder for inbound audio (stereo 48kHz)
     let mut opus_decoder =
@@ -776,10 +871,16 @@ async fn main() {
                             pending_music_last_audio_at = Some(now);
                         }
 
-                        // Preserve Node behavior: while music is actively playing,
-                        // drop bot TTS audio deltas instead of mixing streams.
+                        // When music is playing at full volume (not ducked), drop TTS.
+                        // When music is ducked (gain < 1.0), allow TTS through for mixing.
                         if music_active && !music_paused {
-                            continue;
+                            let is_ducked = {
+                                let guard = audio_send_state.lock();
+                                guard.as_ref().map_or(false, |s| s.music_gain.target < 1.0)
+                            };
+                            if !is_ducked {
+                                continue;
+                            }
                         }
 
                         let engine = base64::engine::general_purpose::STANDARD;
@@ -877,26 +978,37 @@ async fn main() {
                     }
 
                     InMsg::MusicStop => {
-                        if let Some(ref mut mp) = music_player {
-                            mp.stop();
+                        if music_player.is_some() && music_active {
+                            // Start a quick fade-out; actual stop happens in the
+                            // 20ms tick when the fade completes.
+                            let mut guard = audio_send_state.lock();
+                            if let Some(ref mut state) = *guard {
+                                state.set_music_gain(0.0, 300);
+                            }
+                            pending_music_stop = true;
+                        } else {
+                            // No active music, stop immediately
+                            if let Some(ref mut mp) = music_player {
+                                mp.stop();
+                            }
+                            music_player = None;
+                            music_active = false;
+                            music_paused = false;
+                            active_music_url = None;
+                            pending_music_url = None;
+                            pending_music_received_at = None;
+                            pending_music_audio_seen = false;
+                            pending_music_last_audio_at = None;
+                            pending_music_waiting_for_drain = false;
+                            pending_music_drain_started_at = None;
+                            drain_music_pcm_queue(&music_pcm_rx);
+                            clear_audio_send_buffer(&audio_send_state);
+                            send_msg(&OutMsg::PlayerState {
+                                status: "idle".into(),
+                            });
+                            send_msg(&OutMsg::MusicIdle);
+                            emit_playback_armed("music_stop", &audio_send_state);
                         }
-                        music_player = None;
-                        music_active = false;
-                        music_paused = false;
-                        active_music_url = None;
-                        pending_music_url = None;
-                        pending_music_received_at = None;
-                        pending_music_audio_seen = false;
-                        pending_music_last_audio_at = None;
-                        pending_music_waiting_for_drain = false;
-                        pending_music_drain_started_at = None;
-                        drain_music_pcm_queue(&music_pcm_rx);
-                        clear_audio_send_buffer(&audio_send_state);
-                        send_msg(&OutMsg::PlayerState {
-                            status: "idle".into(),
-                        });
-                        send_msg(&OutMsg::MusicIdle);
-                        emit_playback_armed("music_stop", &audio_send_state);
                     }
 
                     InMsg::MusicPause => {
@@ -945,6 +1057,19 @@ async fn main() {
                             send_msg(&OutMsg::PlayerState {
                                 status: "playing".into(),
                             });
+                        }
+                    }
+
+                    InMsg::MusicSetGain { target, fade_ms } => {
+                        let clamped = target.clamp(0.0, 1.0);
+                        let mut guard = audio_send_state.lock();
+                        if let Some(ref mut state) = *guard {
+                            state.set_music_gain(clamped, fade_ms);
+                            if fade_ms == 0 {
+                                state.music_gain_notified = clamped;
+                                drop(guard);
+                                send_msg(&OutMsg::MusicGainReached { gain: clamped });
+                            }
                         }
                     }
 
@@ -1251,6 +1376,16 @@ async fn main() {
                         active_music_url = Some(url.clone());
                         music_active = true;
                         music_paused = false;
+
+                        // Fade in over 1.5s
+                        {
+                            let mut guard = audio_send_state.lock();
+                            if let Some(ref mut state) = *guard {
+                                state.music_gain = GainEnvelope::new(0.0, 1.0, 1500);
+                                state.music_gain_notified = 0.0;
+                            }
+                        }
+
                         send_msg(&OutMsg::PlayerState {
                             status: "playing".into(),
                         });
@@ -1258,13 +1393,61 @@ async fn main() {
                     }
                 }
 
-                // Drain music PCM into the audio send buffer only while active.
+                // Drain music PCM into the dedicated music buffer only while active.
                 if music_active && !music_paused {
                     while let Ok(chunk) = music_pcm_rx.try_recv() {
                         let mut guard = audio_send_state.lock();
                         if let Some(ref mut state) = *guard {
-                            state.push_pcm(chunk);
+                            state.push_music_pcm(chunk);
                         }
+                    }
+                }
+
+                // Check if a gain fade completed; emit event and handle pending stop.
+                {
+                    let mut guard = audio_send_state.lock();
+                    if let Some(ref mut state) = *guard {
+                        if state.music_gain.is_complete()
+                            && (state.music_gain_notified - state.music_gain.target).abs() > 0.0001
+                        {
+                            let reached = state.music_gain.target;
+                            state.music_gain_notified = reached;
+                            drop(guard);
+                            send_msg(&OutMsg::MusicGainReached { gain: reached });
+                        }
+                    }
+                }
+
+                // Deferred music stop: execute after fade-out completes.
+                if pending_music_stop {
+                    let fade_done = {
+                        let guard = audio_send_state.lock();
+                        guard.as_ref().map_or(true, |s| {
+                            s.music_gain.is_complete() && s.music_gain.target < 0.001
+                        })
+                    };
+                    if fade_done {
+                        pending_music_stop = false;
+                        if let Some(ref mut mp) = music_player {
+                            mp.stop();
+                        }
+                        music_player = None;
+                        music_active = false;
+                        music_paused = false;
+                        active_music_url = None;
+                        pending_music_url = None;
+                        pending_music_received_at = None;
+                        pending_music_audio_seen = false;
+                        pending_music_last_audio_at = None;
+                        pending_music_waiting_for_drain = false;
+                        pending_music_drain_started_at = None;
+                        drain_music_pcm_queue(&music_pcm_rx);
+                        clear_audio_send_buffer(&audio_send_state);
+                        send_msg(&OutMsg::PlayerState {
+                            status: "idle".into(),
+                        });
+                        send_msg(&OutMsg::MusicIdle);
+                        emit_playback_armed("music_stop", &audio_send_state);
                     }
                 }
 
