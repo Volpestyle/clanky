@@ -877,15 +877,31 @@ export function VoiceModeSettingsSection({
             </>
           )}
 
-          <h4>Music</h4>
+          <h4>ASR Controls</h4>
           <div className="toggles">
             <label>
               <input
                 type="checkbox"
-                checked={form.voiceMusicTranscriptionEnabled}
-                onChange={set("voiceMusicTranscriptionEnabled")}
+                checked={form.voiceAsrEnabled}
+                onChange={set("voiceAsrEnabled")}
               />
-              Transcribe voice during music (enables "stop music" voice detection)
+              ASR enabled (disable to use slash commands only)
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={form.voiceAsrDuringMusic}
+                onChange={set("voiceAsrDuringMusic")}
+              />
+              ASR during music (enables voice stop detection while music plays)
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={form.voiceCommandOnlyMode}
+                onChange={set("voiceCommandOnlyMode")}
+              />
+              Command-only mode (only respond to wake word, instant sleep after reply)
             </label>
           </div>
 

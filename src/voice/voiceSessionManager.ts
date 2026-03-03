@@ -1184,6 +1184,19 @@ export class VoiceSessionManager {
     return Boolean(music?.active);
   }
 
+  isCommandOnlyActive(session, settings = null) {
+    const resolved = settings || session?.settingsSnapshot || this.store.getSettings();
+    if (resolved?.voice?.commandOnlyMode) return true;
+    return this.isMusicPlaybackActive(session);
+  }
+
+  isAsrActive(session, settings = null) {
+    const resolved = settings || session?.settingsSnapshot || this.store.getSettings();
+    if (!resolved?.voice?.asrEnabled) return false;
+    if (this.isMusicPlaybackActive(session) && !resolved?.voice?.asrDuringMusic) return false;
+    return true;
+  }
+
   normalizeMusicPlatformToken(value: unknown = "", fallback: "youtube" | "soundcloud" | "discord" | "auto" | null = null) {
     const token = String(value || "")
       .trim()
@@ -2682,8 +2695,8 @@ export class VoiceSessionManager {
     if (!pcmBuffer?.length) return true;
 
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    if (!resolvedSettings?.voice?.musicTranscriptionEnabled) {
-      return true; // music active but transcription disabled — swallow turn silently
+    if (!resolvedSettings?.voice?.asrDuringMusic) {
+      return true; // music active but ASR during music disabled — swallow turn silently
     }
 
     if (!this.llm?.transcribeAudio) {
@@ -4666,6 +4679,14 @@ export class VoiceSessionManager {
       return {
         allow: false,
         reason: "thought_engine_disabled",
+        retryAfterMs: thoughtConfig.minSilenceSeconds * 1000
+      };
+    }
+
+    if (this.isCommandOnlyActive(session, settings)) {
+      return {
+        allow: false,
+        reason: "command_only_mode_active",
         retryAfterMs: thoughtConfig.minSilenceSeconds * 1000
       };
     }
@@ -7790,6 +7811,7 @@ export class VoiceSessionManager {
         }
         return;
       }
+      if (!this.isAsrActive(session, settings)) return;
       const normalizedUserId = String(userId || "");
       const activeCapture = session.userCaptures.get(normalizedUserId);
       if (activeCapture?.speakingEndFinalizeTimer) {
@@ -10226,6 +10248,31 @@ export class VoiceSessionManager {
         conversationContext,
         retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS,
         outputLockReason: replyOutputLockState.reason
+      };
+    }
+
+    if (this.isCommandOnlyActive(session, settings)) {
+      if (directAddressed || directAddressedByWakePhrase) {
+        return {
+          allow: true,
+          reason: "command_only_direct_address",
+          participantCount,
+          directAddressed: true,
+          directAddressConfidence,
+          directAddressThreshold,
+          transcript: normalizedTranscript,
+          conversationContext
+        };
+      }
+      return {
+        allow: false,
+        reason: "command_only_not_addressed",
+        participantCount,
+        directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
+        transcript: normalizedTranscript,
+        conversationContext
       };
     }
 

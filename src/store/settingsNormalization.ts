@@ -455,7 +455,9 @@ export function normalizeSettings(raw) {
     replyDecisionLlm?: VoiceReplyDecisionDefaults;
     streamWatch?: VoiceStreamWatchDefaults;
     soundboard?: VoiceSoundboardDefaults;
-    musicTranscriptionEnabled?: boolean;
+    asrDuringMusic?: boolean;
+    asrEnabled?: boolean;
+    commandOnlyMode?: boolean;
     operationalMessages?: string;
   };
 
@@ -869,10 +871,29 @@ export function normalizeSettings(raw) {
       : Boolean(defaultVoiceSoundboard.allowExternalSounds);
   merged.voice.soundboard.preferredSoundIds = uniqueIdList(merged.voice?.soundboard?.preferredSoundIds).slice(0, 40);
 
-  merged.voice.musicTranscriptionEnabled =
-    merged.voice?.musicTranscriptionEnabled !== undefined
-      ? Boolean(merged.voice?.musicTranscriptionEnabled)
-      : Boolean(defaultVoice.musicTranscriptionEnabled);
+  // Migration: musicTranscriptionEnabled → asrDuringMusic
+  if (
+    raw?.voice?.musicTranscriptionEnabled !== undefined &&
+    raw?.voice?.asrDuringMusic === undefined
+  ) {
+    merged.voice.asrDuringMusic = Boolean(raw.voice.musicTranscriptionEnabled);
+  } else {
+    merged.voice.asrDuringMusic =
+      merged.voice?.asrDuringMusic !== undefined
+        ? Boolean(merged.voice?.asrDuringMusic)
+        : Boolean(defaultVoice.asrDuringMusic);
+  }
+  delete merged.voice.musicTranscriptionEnabled;
+
+  merged.voice.asrEnabled =
+    merged.voice?.asrEnabled !== undefined
+      ? Boolean(merged.voice?.asrEnabled)
+      : Boolean(defaultVoice.asrEnabled ?? true);
+
+  merged.voice.commandOnlyMode =
+    merged.voice?.commandOnlyMode !== undefined
+      ? Boolean(merged.voice?.commandOnlyMode)
+      : Boolean(defaultVoice.commandOnlyMode);
 
   const validOperationalMessageLevels = ["all", "essential", "minimal", "none"];
   const rawOperationalMessages = String(merged.voice?.operationalMessages || "").trim().toLowerCase();

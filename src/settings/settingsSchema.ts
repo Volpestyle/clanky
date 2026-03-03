@@ -204,7 +204,9 @@ export const DEFAULT_SETTINGS = {
       allowExternalSounds: false,
       preferredSoundIds: []
     },
-    musicTranscriptionEnabled: true,
+    asrDuringMusic: true,
+    asrEnabled: true,
+    commandOnlyMode: false,
     operationalMessages: "all"
   },
   startup: {

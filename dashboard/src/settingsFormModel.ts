@@ -235,7 +235,9 @@ export function settingsToForm(settings) {
     voiceSoundboardEnabled: settings?.voice?.soundboard?.enabled ?? defaultVoiceSoundboard.enabled,
     voiceSoundboardAllowExternalSounds: settings?.voice?.soundboard?.allowExternalSounds ?? defaultVoiceSoundboard.allowExternalSounds,
     voiceSoundboardPreferredSoundIds: formatLineList(settings?.voice?.soundboard?.preferredSoundIds),
-    voiceMusicTranscriptionEnabled: settings?.voice?.musicTranscriptionEnabled ?? defaultVoice.musicTranscriptionEnabled,
+    voiceAsrDuringMusic: settings?.voice?.asrDuringMusic ?? defaultVoice.asrDuringMusic ?? true,
+    voiceAsrEnabled: settings?.voice?.asrEnabled ?? defaultVoice.asrEnabled ?? true,
+    voiceCommandOnlyMode: settings?.voice?.commandOnlyMode ?? defaultVoice.commandOnlyMode ?? false,
     voiceOperationalMessages: settings?.voice?.operationalMessages ?? defaultVoice.operationalMessages ?? "all",
     maxMessages: settings?.permissions?.maxMessagesPerHour ?? defaultPermissions.maxMessagesPerHour,
     maxReactions: settings?.permissions?.maxReactionsPerHour ?? defaultPermissions.maxReactionsPerHour,
@@ -448,7 +450,9 @@ export function formToSettingsPatch(form) {
         allowExternalSounds: form.voiceSoundboardAllowExternalSounds,
         preferredSoundIds: parseUniqueList(form.voiceSoundboardPreferredSoundIds)
       },
-      musicTranscriptionEnabled: Boolean(form.voiceMusicTranscriptionEnabled),
+      asrDuringMusic: Boolean(form.voiceAsrDuringMusic),
+      asrEnabled: Boolean(form.voiceAsrEnabled),
+      commandOnlyMode: Boolean(form.voiceCommandOnlyMode),
       operationalMessages: String(form.voiceOperationalMessages || "all").trim().toLowerCase()
     },
     startup: {
