@@ -56,6 +56,12 @@ export const LEAVE_DIRECTIVE_PLAYBACK_POLL_MS = 40;
 export const LEAVE_DIRECTIVE_PLAYBACK_NO_SIGNAL_GRACE_MS = 400;
 export const LEAVE_DIRECTIVE_REALTIME_AUDIO_START_WAIT_MS = 2200;
 export const LEAVE_DIRECTIVE_PLAYBACK_MAX_WAIT_MS = 5000;
+// Hold a finalized realtime turn for this window before dispatching, so a
+// mid-sentence pause ("Play a Future song… like the rapper") can be
+// coalesced into a single turn instead of splitting into two responses.
+export const REALTIME_TURN_COALESCE_WINDOW_MS = 1100;
+// Maximum PCM bytes allowed in a coalesced multi-segment turn.
+export const REALTIME_TURN_COALESCE_MAX_BYTES = 24_000 * 2 * 12;
 // Keep only one pending realtime turn; newer finalized captures are merged into it.
 export const REALTIME_TURN_QUEUE_MAX = 1;
 export const REALTIME_TURN_STALE_SKIP_MS = 2200;

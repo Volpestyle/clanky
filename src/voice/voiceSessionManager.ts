@@ -139,6 +139,8 @@ import {
   REALTIME_CONTEXT_MEMBER_LIMIT,
   REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS,
   REALTIME_INSTRUCTION_REFRESH_DEBOUNCE_MS,
+  REALTIME_TURN_COALESCE_MAX_BYTES,
+  REALTIME_TURN_COALESCE_WINDOW_MS,
   REALTIME_TURN_PENDING_MERGE_MAX_BYTES,
   REALTIME_TURN_QUEUE_MAX,
   REALTIME_TURN_STALE_SKIP_MS,
@@ -8555,6 +8557,12 @@ export class VoiceSessionManager {
     }
 
     if (pendingQueue.length > 0) {
+      // A coalesce timer may be running — cancel it since we are merging and
+      // draining now (a new turn arrived within the window).
+      if (session.realtimeTurnCoalesceTimer) {
+        clearTimeout(session.realtimeTurnCoalesceTimer);
+        session.realtimeTurnCoalesceTimer = null;
+      }
       let nextTurn = pendingQueue.shift() || queuedTurn;
       while (pendingQueue.length > 0) {
         const pendingTurn = pendingQueue.shift();
@@ -8564,6 +8572,36 @@ export class VoiceSessionManager {
       nextTurn = this.mergeRealtimeQueuedTurn(nextTurn, queuedTurn);
       if (!nextTurn) return;
       this.drainRealtimeTurnQueue(nextTurn).catch(() => undefined);
+      return;
+    }
+
+    // --- Realtime turn coalesce window ---
+    // Hold the turn briefly before dispatching so a mid-sentence pause
+    // ("Play a Future song… like the rapper") can be merged into one turn
+    // instead of producing two separate responses.
+    // Skip the window when the PCM is already large enough to suggest a
+    // complete utterance, or when there is no user capture that might
+    // produce a follow-up segment soon.
+    const pcmBytes = queuedTurn.pcmBuffer?.length || 0;
+    const skipCoalesce =
+      pcmBytes >= REALTIME_TURN_COALESCE_MAX_BYTES ||
+      session.ending;
+
+    if (!skipCoalesce && REALTIME_TURN_COALESCE_WINDOW_MS > 0) {
+      pendingQueue.push(queuedTurn);
+      session.realtimeTurnCoalesceTimer = setTimeout(() => {
+        session.realtimeTurnCoalesceTimer = null;
+        if (session.ending) return;
+        let turn = pendingQueue.shift() || null;
+        while (pendingQueue.length > 0) {
+          const next = pendingQueue.shift();
+          if (!next) continue;
+          turn = turn ? this.mergeRealtimeQueuedTurn(turn, next) : next;
+        }
+        if (turn) {
+          this.drainRealtimeTurnQueue(turn).catch(() => undefined);
+        }
+      }, REALTIME_TURN_COALESCE_WINDOW_MS);
       return;
     }
 
@@ -14123,6 +14161,10 @@ export class VoiceSessionManager {
     session.pendingSttTurnsQueue = [];
     session.pendingSttTurns = 0;
     session.pendingRealtimeTurns = [];
+    if (session.realtimeTurnCoalesceTimer) {
+      clearTimeout(session.realtimeTurnCoalesceTimer);
+      session.realtimeTurnCoalesceTimer = null;
+    }
     session.pendingDeferredTurns = [];
     session.awaitingToolOutputs = false;
     session.openAiPendingToolCalls = new Map();
