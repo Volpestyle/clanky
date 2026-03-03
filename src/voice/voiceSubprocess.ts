@@ -187,7 +187,6 @@ function resetPlayback() {
 function ensurePlaybackStream() {
   if (botAudioStream && !botAudioStream.destroyed && !botAudioStream.readableEnded) {
     if (audioPlayer && audioPlayer.state.status === AudioPlayerStatus.Idle) {
-      // Create new buffer, copy old chunks
       const oldChunks = botAudioStream.getBufferedChunks();
       try { botAudioStream.destroy(); } catch { /* ignore */ }
       
@@ -200,17 +199,37 @@ function ensurePlaybackStream() {
         silencePaddingFrames: 250
       });
       audioPlayer.play(resource);
+      if (AUDIO_DEBUG) {
+        const ts = new Date().toISOString().slice(11, 23);
+        console.log(`[subprocess:audio] ${ts} player.play() called (recycled stream)  oldChunks=${oldChunks.length}  playerStatus=${audioPlayer.state.status}`);
+      }
     }
     return true;
   }
   if (!audioPlayer || !connection) return false;
 
+  if (AUDIO_DEBUG && !firstAudioPlayedAt) {
+    const ts = new Date().toISOString().slice(11, 23);
+    console.log(`[subprocess:audio] ${ts} ensurePlaybackStream: creating fresh stream...`);
+  }
   botAudioStream = new PcmJitterBuffer();
+  if (AUDIO_DEBUG && !firstAudioPlayedAt) {
+    const ts = new Date().toISOString().slice(11, 23);
+    console.log(`[subprocess:audio] ${ts} ensurePlaybackStream: PcmJitterBuffer created, calling createAudioResource...`);
+  }
   const resource = createAudioResource(botAudioStream, {
     inputType: StreamType.Raw,
     silencePaddingFrames: 250
   });
+  if (AUDIO_DEBUG && !firstAudioPlayedAt) {
+    const ts = new Date().toISOString().slice(11, 23);
+    console.log(`[subprocess:audio] ${ts} ensurePlaybackStream: resource created, calling audioPlayer.play()...`);
+  }
   audioPlayer.play(resource);
+  if (AUDIO_DEBUG) {
+    const ts = new Date().toISOString().slice(11, 23);
+    console.log(`[subprocess:audio] ${ts} player.play() called (fresh stream)  playerStatus=${audioPlayer.state.status}`);
+  }
   return true;
 }
 
@@ -221,10 +240,11 @@ const audioDeltaQueue: { pcmBase64: string; sampleRate: number }[] = [];
 let isDrainingAudio = false;
 
 function drainAudioQueue() {
+  if (AUDIO_DEBUG && !firstAudioPlayedAt) {
+    const ts = new Date().toISOString().slice(11, 23);
+    console.log(`[subprocess:audio] ${ts} drainAudioQueue ENTER  queueDepth=${audioDeltaQueue.length}`);
+  }
   let processed = 0;
-  // Process up to 10 chunks per tick to yield the event loop
-  // The Mac event loop can run very fast, causing us to queue too much audio
-  // to the PcmJitterBuffer too quickly, bypassing its intended backpressure.
   while (audioDeltaQueue.length > 0) {
     const { pcmBase64, sampleRate } = audioDeltaQueue.shift()!;
     
@@ -235,11 +255,29 @@ function drainAudioQueue() {
       continue;
     }
     if (rawPcm.length) {
+      if (AUDIO_DEBUG && !firstAudioPlayedAt) {
+        const ts = new Date().toISOString().slice(11, 23);
+        console.log(`[subprocess:audio] ${ts} pre-convert  rawBytes=${rawPcm.length}  sampleRate=${sampleRate}`);
+      }
       const discordPcm = convertXaiOutputToDiscordPcm(rawPcm, sampleRate);
+      if (AUDIO_DEBUG && !firstAudioPlayedAt) {
+        const ts = new Date().toISOString().slice(11, 23);
+        console.log(`[subprocess:audio] ${ts} post-convert  discordPcmBytes=${discordPcm.length}`);
+      }
       if (discordPcm.length) {
+        if (AUDIO_DEBUG && !firstAudioPlayedAt) {
+          const ts = new Date().toISOString().slice(11, 23);
+          console.log(`[subprocess:audio] ${ts} pre-ensurePlaybackStream  hasStream=${!!botAudioStream}  hasPlayer=${!!audioPlayer}  hasConn=${!!connection}`);
+        }
         if (ensurePlaybackStream()) {
           if (botAudioStream && !botAudioStream.destroyed && !botAudioStream.readableEnded) {
             botAudioStream.pushPcm(discordPcm);
+            if (AUDIO_DEBUG && !firstAudioPlayedAt) {
+              firstAudioPlayedAt = Date.now();
+              const ts = new Date().toISOString().slice(11, 23);
+              const ipcToPlayMs = firstAudioReceivedAt ? firstAudioPlayedAt - firstAudioReceivedAt : -1;
+              console.log(`[subprocess:audio] ${ts} first chunk pushed to jitter buffer  pcmBytes=${discordPcm.length}  ipcToPlayMs=${ipcToPlayMs}  playerStatus=${audioPlayer?.state.status}`);
+            }
           }
         }
       }
@@ -247,7 +285,6 @@ function drainAudioQueue() {
 
     processed++;
     if (processed >= 10) {
-      // 1ms yield to give the AudioPlayer timer a chance to run
       setTimeout(drainAudioQueue, 1);
       return;
     }
@@ -255,16 +292,32 @@ function drainAudioQueue() {
   isDrainingAudio = false;
 }
 
+let firstAudioReceivedAt = 0;
+let firstAudioPlayedAt = 0;
+
+let audioChunksReceived = 0;
+
 function handleAudio(pcmBase64: string, sampleRate: number) {
+  audioChunksReceived++;
+  if (AUDIO_DEBUG && audioChunksReceived <= 3) {
+    if (!firstAudioReceivedAt) firstAudioReceivedAt = Date.now();
+    const ts = new Date().toISOString().slice(11, 23);
+    console.log(`[subprocess:audio] ${ts} IPC audio #${audioChunksReceived}  isDraining=${isDrainingAudio}  queueDepth=${audioDeltaQueue.length}  hasPlayer=${!!audioPlayer}  hasConnection=${!!connection}  playerStatus=${audioPlayer?.state?.status ?? "null"}`);
+  }
   audioDeltaQueue.push({ pcmBase64, sampleRate });
   if (!isDrainingAudio) {
     isDrainingAudio = true;
-    setTimeout(drainAudioQueue, 1);
+    // Drain synchronously on the IPC message tick — setTimeout(…, 1)
+    // gets starved for 10-20s when the DAVE E2EE handshake is running
+    // synchronous native crypto on the event loop.
+    drainAudioQueue();
   }
 }
 
 function handleStopPlayback() {
   resetPlayback();
+  firstAudioReceivedAt = 0;
+  firstAudioPlayedAt = 0;
   send({ type: "player_state", status: "idle" });
 }
 
@@ -310,7 +363,8 @@ function handleJoin(msg: any) {
     // Audio player state tracking
     audioPlayer.on("stateChange", (oldState, newState) => {
       if (AUDIO_DEBUG && oldState.status !== newState.status) {
-        console.log(`[subprocess:audio-player] ${oldState.status} → ${newState.status}`);
+        const ts = new Date().toISOString().slice(11, 23);
+        console.log(`[subprocess:audio-player] ${ts} ${oldState.status} → ${newState.status}`);
       }
       send({ type: "player_state", status: newState.status });
     });
