@@ -136,6 +136,7 @@ export function settingsToForm(settings) {
     videoContextMaxAsrSeconds: settings?.videoContext?.maxAsrSeconds ?? defaultVideoContext.maxAsrSeconds,
     voiceEnabled: settings?.voice?.enabled ?? defaultVoice.enabled,
     voiceProvider: selectedVoiceProvider,
+    voiceReplyPath: settings?.voice?.replyPath ?? (settings?.voice?.realtimeReplyStrategy === "native" ? "native" : "bridge"),
     voiceBrainProvider: settings?.voice?.brainProvider ?? defaultVoice.brainProvider,
     voiceAsrLanguageMode: settings?.voice?.asrLanguageMode ?? defaultVoice.asrLanguageMode,
     voiceAsrLanguageHint: settings?.voice?.asrLanguageHint ?? defaultVoice.asrLanguageHint,
@@ -363,6 +364,7 @@ export function formToSettingsPatch(form) {
     voice: {
       enabled: form.voiceEnabled,
       voiceProvider: String(form.voiceProvider || "openai").trim(),
+      replyPath: String(form.voiceReplyPath || "bridge").trim().toLowerCase(),
       brainProvider:
         String(form.voiceBrainProvider || "openai").trim().toLowerCase() === "native"
           ? "openai"

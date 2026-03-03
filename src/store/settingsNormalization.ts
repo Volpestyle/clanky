@@ -553,6 +553,22 @@ export function normalizeSettings(raw) {
   merged.voice.replyEagerness = clamp(
     Number.isFinite(voiceEagernessRaw) ? voiceEagernessRaw : 0, 0, 100
   );
+
+  // replyPath: "native" | "bridge" | "brain" — migrate from realtimeReplyStrategy
+  const rawReplyPath = String(merged.voice?.replyPath || "").trim().toLowerCase();
+  const rawStrategy = String(merged.voice?.realtimeReplyStrategy || "").trim().toLowerCase();
+  const resolvedReplyPath =
+    rawReplyPath === "native" || rawReplyPath === "bridge" || rawReplyPath === "brain"
+      ? rawReplyPath
+      : rawStrategy === "native"
+        ? "native"
+        : rawStrategy === "brain"
+          ? "bridge"
+          : "bridge";
+  merged.voice.replyPath = resolvedReplyPath;
+  // Keep realtimeReplyStrategy in sync for backward compatibility
+  merged.voice.realtimeReplyStrategy = resolvedReplyPath === "native" ? "native" : "brain";
+
   merged.voice.thoughtEngine.enabled =
     merged.voice?.thoughtEngine?.enabled !== undefined
       ? Boolean(merged.voice?.thoughtEngine?.enabled)

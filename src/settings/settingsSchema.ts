@@ -204,6 +204,7 @@ export const DEFAULT_SETTINGS = {
       allowExternalSounds: false,
       preferredSoundIds: []
     },
+    replyPath: "bridge",
     asrDuringMusic: true,
     asrEnabled: true,
     commandOnlyMode: false,

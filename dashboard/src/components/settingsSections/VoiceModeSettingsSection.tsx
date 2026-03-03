@@ -35,20 +35,23 @@ export function VoiceModeSettingsSection({
 }) {
   const isRealtimeMode =
     isVoiceAgentMode || isOpenAiRealtimeMode || isGeminiRealtimeMode || isElevenLabsRealtimeMode;
+  const replyPath = String(form.voiceReplyPath || "bridge").trim().toLowerCase();
+  const isBridgePath = replyPath === "bridge";
+  const isBrainPath = replyPath === "brain";
+  const isNativePath = replyPath === "native";
   const brainProvider = String(form.voiceBrainProvider || "openai")
     .trim()
     .toLowerCase();
-  const usesBrainLlm = brainProvider !== "native";
+  const usesBrainLlm = !isNativePath;
   const openAiPerUserAsrBridge =
-    isOpenAiRealtimeMode &&
-    usesBrainLlm &&
+    isBridgePath &&
     Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge);
   const usesBrainGeneration = isRealtimeMode && usesBrainLlm && !openAiPerUserAsrBridge;
   const classifierMergedWithGeneration =
     !form.voiceReplyDecisionLlmEnabled &&
     usesBrainGeneration;
   const classifierDisabledNativeRealtime =
-    !form.voiceReplyDecisionLlmEnabled && isRealtimeMode && !usesBrainLlm;
+    !form.voiceReplyDecisionLlmEnabled && isRealtimeMode && isNativePath;
   return (
     <SettingsSection id={id} title="Voice Mode" active={form.voiceEnabled}>
       <div className="toggles">
@@ -69,17 +72,81 @@ export function VoiceModeSettingsSection({
 
           {isRealtimeMode && (
             <>
-              <label htmlFor="voice-brain-provider">Brain provider</label>
-              <select
-                id="voice-brain-provider"
-                value={form.voiceBrainProvider || "openai"}
-                onChange={set("voiceBrainProvider")}
-              >
-                <option value="openai">OpenAI</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="xai">xAI</option>
-                <option value="gemini">Gemini</option>
-              </select>
+              <h4>Reply Path</h4>
+              <div className="radio-group">
+                <label>
+                  <input
+                    type="radio"
+                    name="voiceReplyPath"
+                    value="native"
+                    checked={isNativePath}
+                    onChange={set("voiceReplyPath")}
+                  />
+                  <strong>Native</strong>
+                  <span> &mdash; Raw audio in &rarr; realtime model &rarr; audio out. Fastest, but no text context or tools.</span>
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="voiceReplyPath"
+                    value="bridge"
+                    checked={isBridgePath}
+                    onChange={set("voiceReplyPath")}
+                  />
+                  <strong>Bridge</strong> (Recommended)
+                  <span> &mdash; Audio &rarr; ASR transcript &rarr; realtime model &rarr; audio out. Rich context, tools, multi-speaker labels. Requires OpenAI API key for ASR.</span>
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="voiceReplyPath"
+                    value="brain"
+                    checked={isBrainPath}
+                    onChange={set("voiceReplyPath")}
+                  />
+                  <strong>Full Brain</strong>
+                  <span> &mdash; Audio &rarr; ASR &rarr; text LLM &rarr; TTS &rarr; audio out. Maximum control, any text model. Requires OpenAI API key for ASR + TTS provider.</span>
+                </label>
+              </div>
+
+              {(isBridgePath || isBrainPath) && (
+                <>
+                  <label htmlFor="voice-brain-provider">Brain provider</label>
+                  <select
+                    id="voice-brain-provider"
+                    value={form.voiceBrainProvider || "openai"}
+                    onChange={set("voiceBrainProvider")}
+                  >
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="xai">xAI</option>
+                    <option value="gemini">Gemini</option>
+                  </select>
+                </>
+              )}
+
+              {isBridgePath && (
+                <div className="split">
+                  <div>
+                    <label>ASR mode</label>
+                    <div className="toggles">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge)}
+                          onChange={set("voiceOpenAiRealtimeUsePerUserAsrBridge")}
+                        />
+                        Per-user ASR (separate session per speaker)
+                      </label>
+                    </div>
+                    <p>
+                      {openAiPerUserAsrBridge
+                        ? "Each speaker gets a dedicated ASR session for labeled transcripts."
+                        : "Single shared ASR session for all speakers."}
+                    </p>
+                  </div>
+                </div>
+              )}
             </>
           )}
 
@@ -478,24 +545,6 @@ export function VoiceModeSettingsSection({
 
           {isOpenAiRealtimeMode && (
             <>
-              <div className="toggles">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge)}
-                    onChange={set("voiceOpenAiRealtimeUsePerUserAsrBridge")}
-                    disabled={!usesBrainLlm}
-                  />
-                  Use OpenAI per-user ASR bridge (bypass local voice LLM)
-                </label>
-              </div>
-              <p>
-                {usesBrainLlm
-                  ? openAiPerUserAsrBridge
-                    ? "Enabled: speaker transcripts are forwarded as labeled text into OpenAI runtime."
-                    : "Disabled: per-speaker transcripts go through the local voice brain."
-                  : "Native brain provider does not use this setting."}
-              </p>
               <div className="split">
                 <div>
                   <label htmlFor="voice-openai-realtime-model">OpenAI realtime model</label>
