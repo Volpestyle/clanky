@@ -13,6 +13,7 @@ voice_subprocess v0.2.0
 ├── audiopus 0.3.0-rc.0 (standalone Opus encode/decode)
 ├── tokio-tungstenite    (voice WebSocket client)
 ├── aes-gcm 0.10        (transport encryption: aead_aes256_gcm_rtpsize)
+├── chacha20poly1305 0.10 (transport encryption fallback: aead_xchacha20_poly1305_rtpsize)
 └── tokio + serde + tracing (runtime, IPC, logging)
 ```
 
@@ -32,7 +33,7 @@ Since songbird doesn't expose the voice WebSocket or audio pipeline intercept po
 ```
 src/
   main.rs        — IPC types, audio conversion, Opus codec, state, message loop
-  voice_conn.rs  — Voice WebSocket + UDP/RTP + transport crypto (AES-256-GCM)
+  voice_conn.rs  — Voice WebSocket + UDP/RTP + transport crypto (AES-256-GCM + XChaCha20-Poly1305 RTP-size)
   dave.rs        — DaveSession lifecycle wrapper around the davey crate
 ```
 
@@ -96,7 +97,9 @@ Binary voice WS frames use `[seq?: u16 BE][opcode: u8][payload]`, where `seq` is
 ### Transport Encryption
 
 Discord voice v8 uses RTP-size AEAD transport modes (`aead_aes256_gcm_rtpsize` preferred, `aead_xchacha20_poly1305_rtpsize` always supported):
-- **Nonce**: 4-byte big-endian incrementing counter, padded to 12 bytes (`[nonce_be(4), 0x00 * 8]`)
+- **Nonce**: 4-byte big-endian incrementing counter (`nonce_be`) with mode-specific expansion:
+  - AES-256-GCM RTP-size: `[nonce_be(4), 0x00 * 8]` (12 bytes)
+  - XChaCha20-Poly1305 RTP-size: `[nonce_be(4), 0x00 * 20]` (24 bytes)
 - **AAD**: Full RTP header (12+ bytes)
 - **Wire format**: `[RTP header | AES-GCM ciphertext + 16-byte tag | 4-byte nonce]`
 
@@ -108,7 +111,7 @@ Communication with the main Bun process uses JSON-line IPC over stdin/stdout. Th
 
 Music uses `yt-dlp` piped through `ffmpeg` for decoding to raw PCM:
 ```sh
-yt-dlp -q -f bestaudio -o - '<url>' | ffmpeg -i pipe:0 -f s16le -ar 48000 -ac 1 pipe:1
+yt-dlp --no-warnings --quiet --no-playlist --extractor-args 'youtube:player_client=android' -f bestaudio/best -o - '<url>' | ffmpeg -i pipe:0 -f s16le -ar 48000 -ac 1 pipe:1
 ```
 The decoded PCM feeds into the same outbound audio buffer as TTS, so DAVE encryption is applied transparently.
 
@@ -169,13 +172,13 @@ The decoded PCM feeds into the same outbound audio buffer as TTS, so DAVE encryp
 - **DAVE Payload Metadata:** Beyond the sequence number and opcode, several DAVE opcodes prepend their own metadata to the payload before the TLS-encoded bytes:
   - `OP27 Proposals` prepends a 1-byte `optype` (0 for Append, 1 for Revoke). The rest of the payload is the proposals TLS string.
   - `OP29 Announce Commit` and `OP30 Welcome` prepend a 2-byte Big Endian `transition_id`. The rest is the commit or welcome TLS string.
-  - *These metadata bytes must be stripped before passing data to `davey`, and the `transition_id` must be used to reply with `OP32 DaveTransitionReady`.*
+  - *These metadata bytes must be stripped before passing data to `davey`, and the `transition_id` must be used to reply with `OP23 DaveTransitionReady`.*
 - **Latency Issue Context:** For DAVE E2EE to succeed, the `DaveManager` must transmit the OP26 KeyPackage immediately after connection establishment, and must carefully parse incoming binary frames by skipping the 2-byte seq prefix.
 
 ### 2026-03-03: DAVE decrypt failures — missing OP22/OP30 handling
 - **Symptom**: `NoValidCryptorFound` and `UnencryptedWhenPassthroughDisabled` errors on inbound audio
-- **Root cause 1**: OP22 (Prepare Transition) was completely ignored — no OP32 response sent. Discord waits for OP32 before sending OP23 (Execute Transition), so transitions stalled and keys diverged.
-- **Root cause 2**: OP30 (Welcome) failure (`AlreadyInGroup`) sent OP32 anyway instead of triggering recovery. discord.js calls `recoverFromInvalidTransition()` which reinits the session and sends OP31 + OP26.
+- **Root cause 1**: OP21 (Prepare Transition) was completely ignored — no OP23 response sent. Discord waits for OP23 before sending OP22 (Execute Transition), so transitions stalled and keys diverged.
+- **Root cause 2**: OP30 (Welcome) failure (`AlreadyInGroup`) sent OP23 anyway instead of triggering recovery. discord.js calls `recoverFromInvalidTransition()` which reinits the session and sends OP31 + OP26.
 - **Root cause 3**: No decrypt failure recovery — discord.js tracks consecutive failures and after 36 packets reinitializes the DAVE session.
 - **Fix**: Implemented full transition lifecycle matching discord.js: OP21→OP23 response, OP22 execute, OP29/OP30 with pending transitions and recovery, UDP recv failure tracking with OP31+OP26 reinit.
 
@@ -186,7 +189,7 @@ The decoded PCM feeds into the same outbound audio buffer as TTS, so DAVE encryp
 
 ### 2026-03-03: Transition ACK alignment with discord.js
 - **Symptom**: Voice join succeeds, but inbound audio logs repeated `NoValidCryptorFound`, `UnencryptedWhenPassthroughDisabled`, and `Opus(InvalidPacket)` with no OP23 transition execution observed.
-- **Root cause 1**: Rust diverged from current `discord.js` behavior. For successful non-zero OP29/OP30 transitions, `discord.js` sends `OP32 DaveTransitionReady`, but Rust only sent OP32 from OP22.
+- **Root cause 1**: Rust diverged from current `discord.js` behavior. For successful non-zero OP29/OP30 transitions, `discord.js` sends `OP23 DaveTransitionReady`, but Rust only sent OP23 from OP21.
 - **Root cause 2**: Transition `id=0` was being stored as pending after commit/welcome processing. That leaves stale pending state and suppresses decrypt-failure recovery logic.
 - **Root cause 3**: Some live sessions never emit OP23 after OP22 downgrade prepare. Keeping `protocol_version=1` indefinitely in that case causes continuous DAVE decrypt failures on plaintext user audio.
 - **Root cause 4**: Non-Opus RTP payload types were not filtered before decode, so non-audio packets could reach Opus decode.
@@ -217,6 +220,63 @@ The decoded PCM feeds into the same outbound audio buffer as TTS, so DAVE encryp
 - **Symptom**: User could speak and davey ratchet logs appeared, but no new `voice_activity_started`/ASR turn followed; session logged `voice_turn_finalized bytesSent=0` and `voice_turn_skipped_empty_capture`.
 - **Root cause**: The JS session manager started captures only from `speaking_start`. In some runs, `user_audio` frames arrived without a matching `speaking_start`, so no capture/ASR bridge was opened.
 - **Fix**: Added a `userAudio` fallback in `voiceSessionManager` that starts capture when audio arrives for a user with no active capture (`voice_capture_started_from_audio_fallback`).
+
+## Reliability Gaps vs discord.js (Hardening Plan)
+
+The current stack is stable enough for live use, but we still rely on a few compatibility fallbacks that indicate architectural gaps versus `discord.js` reliability.
+
+### Key Gaps
+
+1. **Voice lifecycle modeled as event handlers, not a strict state machine**
+   - Today: join/ready/speaking/capture behavior is spread across WS handlers, UDP loops, and JS session manager callbacks.
+   - Gap: ordering-sensitive behavior can drift (e.g., audio frames before speaking events).
+   - Target: explicit per-session state machine (`connecting -> ready -> active -> recovering -> draining -> idle`) with deterministic transitions.
+
+2. **Capture bootstrap depended on OP5 speaking events**
+   - Today: primary capture start was `speaking_start`, with `user_audio` fallback added later.
+   - Gap: OP5 is not a hard ordering guarantee; missing/late OP5 can drop ASR turns.
+   - Target: audio-first capture bootstrap (`user_audio` is source of truth), OP5 used as a timing hint only.
+
+3. **Participant and mapping model not yet a single source of truth**
+   - Today: multiple places infer active speaker identity from `ssrc -> user_id`, speaking updates, and capture maps.
+   - Gap: stale/missing mapping windows still occur under churn.
+   - Target: canonical participant state with: `{user_id, ssrcs, speaking, last_audio_at, last_speaking_at, stream_state}` and TTL-based cleanup.
+
+4. **Ordering variance tolerance still partly heuristic**
+   - Today: several safeguards recover after divergence (decrypt passthrough, fallback capture, transition recovery).
+   - Gap: correctness depends on fallback logic more than first-path deterministic handling.
+   - Target: first-path behavior that is naturally order-tolerant; keep fallbacks as guardrails, not primary path.
+
+5. **Operational surface lacks clear subsystem ownership boundaries**
+   - Today: Rust and JS both influence when turns start/stop and when playback/capture are armed.
+   - Gap: cross-boundary races are harder to reason about.
+   - Target: Rust owns transport/crypto/packet validity; JS owns turn semantics and conversational policy; interface events become minimal and idempotent.
+
+### Hardening Priorities
+
+1. **Promote audio-first capture to canonical behavior**
+   - Keep `speaking_start` as advisory signal; never require it for capture correctness.
+
+2. **Implement explicit participant state manager**
+   - Centralize SSRC/speaking/lifecycle and expose one read model to capture and decrypt paths.
+
+3. **Formalize session state machine transitions**
+   - Add transition guards, invariant checks, and structured logs for state transitions.
+
+4. **Reduce fallback-only paths over time**
+   - As first-path robustness improves, shrink opportunistic heuristics and keep only essential recovery mechanisms.
+
+5. **Add targeted golden tests for ordering variance**
+   - Cases: `user_audio` before OP5, missing OP5, delayed OP22, plaintext bursts in pv=1, SSRC remap churn.
+
+### Practical Rule Going Forward
+
+When `discord.js` and Rust behavior diverge, prefer the `discord.js` lifecycle model unless we have a clear protocol-level reason not to. In practice, this means modeling voice state as a robust state machine, maintaining mature participant/mapping state, and explicitly tolerating event ordering variance instead of assuming ideal sequencing.
+
+### 2026-03-03: YouTube SABR/403 failures in Rust music pipeline
+- **Symptom**: Music started, then subprocess exited with `status 183`; stderr showed YouTube SABR warning and `HTTP Error 403` from `yt-dlp`.
+- **Root cause**: YouTube `web` client formats can be SABR-restricted and intermittently unavailable to default `yt-dlp` extraction path.
+- **Fix**: Updated Rust music pipeline invocation to match the hardened Node path: `--extractor-args 'youtube:player_client=android' --no-playlist --no-warnings --quiet -f bestaudio/best`, and captured stderr tail for actionable diagnostics.
 
 ## Build Commands
 

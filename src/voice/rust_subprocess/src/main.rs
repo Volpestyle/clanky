@@ -392,6 +392,8 @@ fn start_music_pipeline(
     ));
 }
 
+const MUSIC_PIPELINE_STDERR_TAIL_LINES: usize = 24;
+
 struct MusicPlayer {
     stop: Arc<AtomicBool>,
     child_pid: Arc<AtomicU32>,
@@ -415,12 +417,12 @@ impl MusicPlayer {
                 .args([
                     "-c",
                     &format!(
-                        "yt-dlp -q -f bestaudio -o - '{}' | ffmpeg -i pipe:0 -f s16le -ar 48000 -ac 1 pipe:1 2>/dev/null",
+                        "yt-dlp --no-warnings --quiet --no-playlist --extractor-args 'youtube:player_client=android' -f bestaudio/best -o - '{}' | ffmpeg -i pipe:0 -f s16le -ar 48000 -ac 1 pipe:1",
                         url.replace('\'', "'\\''")
                     ),
                 ])
                 .stdout(Stdio::piped())
-                .stderr(Stdio::null())
+                .stderr(Stdio::piped())
                 .spawn();
 
             let mut child = match child {
@@ -435,6 +437,28 @@ impl MusicPlayer {
             };
             child_pid_thread.store(child.id(), Ordering::SeqCst);
 
+            let stderr_tail = Arc::new(Mutex::new(VecDeque::<String>::new()));
+            let mut stderr_thread = child.stderr.take().map(|stderr| {
+                let stderr_tail = stderr_tail.clone();
+                std::thread::spawn(move || {
+                    let reader = io::BufReader::new(stderr);
+                    for line_result in reader.lines() {
+                        let line = match line_result {
+                            Ok(value) => value.trim().to_string(),
+                            Err(_) => break,
+                        };
+                        if line.is_empty() {
+                            continue;
+                        }
+                        let mut tail = stderr_tail.lock();
+                        if tail.len() >= MUSIC_PIPELINE_STDERR_TAIL_LINES {
+                            tail.pop_front();
+                        }
+                        tail.push_back(line);
+                    }
+                })
+            });
+
             let stdout = match child.stdout.take() {
                 Some(s) => s,
                 None => {
@@ -443,6 +467,9 @@ impl MusicPlayer {
                     ));
                     let _ = child.kill();
                     let _ = child.wait();
+                    if let Some(handle) = stderr_thread.take() {
+                        let _ = handle.join();
+                    }
                     child_pid_thread.store(0, Ordering::SeqCst);
                     return;
                 }
@@ -471,7 +498,19 @@ impl MusicPlayer {
 
             let _ = child.kill();
             let wait_result = child.wait();
+            if let Some(handle) = stderr_thread.take() {
+                let _ = handle.join();
+            }
             child_pid_thread.store(0, Ordering::SeqCst);
+
+            let stderr_summary = {
+                let tail = stderr_tail.lock();
+                if tail.is_empty() {
+                    String::new()
+                } else {
+                    format!(" | stderr tail: {}", tail.iter().cloned().collect::<Vec<_>>().join(" || "))
+                }
+            };
 
             if !stop_clone.load(Ordering::Relaxed) {
                 match wait_result {
@@ -480,14 +519,14 @@ impl MusicPlayer {
                     }
                     Ok(status) => {
                         let _ = music_event_tx.blocking_send(MusicEvent::Error(format!(
-                            "music pipeline exited with status {}",
-                            status
+                            "music pipeline exited with status {}{}",
+                            status, stderr_summary
                         )));
                     }
                     Err(error) => {
                         let _ = music_event_tx.blocking_send(MusicEvent::Error(format!(
-                            "music pipeline wait failed: {}",
-                            error
+                            "music pipeline wait failed: {}{}",
+                            error, stderr_summary
                         )));
                     }
                 }
