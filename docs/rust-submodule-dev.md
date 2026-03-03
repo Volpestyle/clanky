@@ -68,9 +68,11 @@ The subprocess connects to Discord's voice WebSocket at `wss://{endpoint}/?v=8`,
 2. **OP0 Identify** — send server_id, user_id, session_id, token, `max_dave_protocol_version: 1`
 3. **OP2 Ready** — receive SSRC, UDP endpoint, encryption modes
 4. **UDP IP Discovery** — STUN-like hole-punch to find external IP/port
-5. **OP1 Select Protocol** — send external addr + `aead_aes256_gcm_rtpsize` mode
+5. **OP1 Select Protocol** — send external addr + selected transport mode (`aead_aes256_gcm_rtpsize` preferred, `aead_xchacha20_poly1305_rtpsize` required fallback)
 6. **OP4 Session Description** — receive 32-byte AES secret key
 7. Connection ready — emit `ready` to main process
+
+For v8, heartbeats (OP3) and resume (OP7) should include `seq_ack` with the last sequence-numbered gateway message.
 
 ### DAVE Handshake (on voice WS, after connection)
 
@@ -78,19 +80,22 @@ DAVE opcodes are handled entirely within the subprocess. The main process is not
 
 | Step | Direction | Opcode | Action |
 |------|-----------|--------|--------|
-| 1 | Server→Client | OP21 (JSON) | Prepare epoch: create DaveSession |
-| 2 | Server→Client | OP25 (binary) | MLS external sender → `session.set_external_sender()` |
+| 1 | Server→Client | OP24 (JSON) | Prepare epoch: initialize/update local DAVE epoch state |
+| 2 | Server→Client | OP25 (binary) | MLS external sender package → `session.set_external_sender()` |
 | 3 | Client→Server | OP26 (binary) | Send key package → `session.create_key_package()` |
-| 4 | Server→Client | OP27 (binary) | MLS proposals → `session.process_proposals()` |
-| 5 | Client→Server | OP28 (binary) | Send commit → from process_proposals result |
-| 6 | Server→Client | OP29/OP30 (binary) | Announce commit / Welcome → `session.process_commit()` / `session.process_welcome()` |
-| 7 | Server→Client | OP23 (JSON) | Execute transition → DAVE session is now active |
+| 4 | Server→Client | OP27 (binary) | MLS proposals → append/revoke, then build commit/welcome |
+| 5 | Client→Server | OP28 (binary) | Send MLS commit (+ optional welcome) |
+| 6 | Server→Client | OP29/OP30 (binary) | Announce winning commit / welcome → `process_commit()` / `process_welcome()` |
+| 7 | Client→Server | OP23 (JSON) | Transition ready ACK for prepared transition |
+| 8 | Server→Client | OP22 (JSON) | Execute transition; switch active protocol/epoch context |
 
-Binary voice WS frames use a 1-byte opcode prefix followed by the MLS payload.
+Downgrades to non-E2EE are prepared with OP21 (Prepare Transition, e.g. protocol version 0), acknowledged with OP23, then executed via OP22.
+
+Binary voice WS frames use `[seq?: u16 BE][opcode: u8][payload]`, where `seq` is present on server→client binary frames.
 
 ### Transport Encryption
 
-Discord voice v8 uses `aead_aes256_gcm_rtpsize`:
+Discord voice v8 uses RTP-size AEAD transport modes (`aead_aes256_gcm_rtpsize` preferred, `aead_xchacha20_poly1305_rtpsize` always supported):
 - **Nonce**: 4-byte big-endian incrementing counter, padded to 12 bytes (`[nonce_be(4), 0x00 * 8]`)
 - **AAD**: Full RTP header (12+ bytes)
 - **Wire format**: `[RTP header | AES-GCM ciphertext + 16-byte tag | 4-byte nonce]`
@@ -111,17 +116,17 @@ The decoded PCM feeds into the same outbound audio buffer as TTS, so DAVE encryp
 
 | Opcode | Name | Direction | Format |
 |--------|------|-----------|--------|
-| 21 | dave_protocol_prepare_epoch | Server → Client | JSON |
-| 22 | dave_protocol_prepare_transition | Server → Client | JSON |
-| 23 | dave_protocol_execute_transition | Server → Client | JSON |
-| 24 | dave_protocol_prepare_epoch | Server → Client | JSON |
-| 25 | dave_mls_external_sender_package | Server → Client | Binary |
-| 26 | dave_mls_key_package | Client → Server | Binary |
-| 27 | dave_mls_proposals | Server → Client | Binary |
-| 28 | dave_mls_commit_welcome | Client → Server | Binary |
-| 29 | dave_mls_announce_commit_transition | Server → Client | Binary |
-| 30 | dave_mls_welcome | Server → Client | Binary |
-| 31 | dave_mls_invalid_commit_welcome | Client → Server | Binary |
+| 21 | DaveProtocolPrepareTransition | Server → Client | JSON `{transition_id, protocol_version}` |
+| 22 | DaveProtocolExecuteTransition | Server → Client | JSON `{transition_id}` |
+| 23 | DaveProtocolTransitionReady | Client → Server | JSON `{transition_id}` |
+| 24 | DaveProtocolPrepareEpoch | Server → Client | JSON `{transition_id, epoch, protocol_version}` |
+| 25 | DaveMlsExternalSenderPackage | Server → Client | Binary |
+| 26 | DaveMlsKeyPackage | Client → Server | Binary |
+| 27 | DaveMlsProposals | Server → Client | Binary |
+| 28 | DaveMlsCommitWelcome | Client → Server | Binary |
+| 29 | DaveMlsAnnounceCommitTransition | Server → Client | Binary |
+| 30 | DaveMlsWelcome | Server → Client | Binary |
+| 31 | DaveMlsInvalidCommitWelcome | Client → Server | Binary |
 
 ## Findings Log
 
@@ -189,7 +194,19 @@ The decoded PCM feeds into the same outbound audio buffer as TTS, so DAVE encryp
 - **Root cause 6**: Bypassing DAVE `decrypt` early when `protocol_version=0` broke the DAVE passthrough window where the other side is still sending encrypted packets during transition. DAVE's `decrypt` intrinsically handles passthrough and auto-strips encryption when ready.
 - **Root cause 7**: The extension length logic was incorrectly reading the length from the encrypted payload bytes instead of looking up the unencrypted AAD portion first.
 - **Root cause 8**: DAVE `encrypt_opus` was still applying DAVE encryption to outbound audio (TTS) even after `protocol_version=0` (downgrade) was executed, making the bot inaudible to others.
-- **Fix**: (1) Send OP32 for successful non-zero OP29/OP30 transitions, (2) treat transition `id=0` as immediate (do not keep it pending), (3) auto-execute non-zero `pv=0` downgrades after OP22 while still sending OP32 (fallback for missing OP23), (4) drop non-Opus RTP payload types before decode, (5) compute transport AAD from RTP header flags + CSRC count with stricter extension bounds checks, (6) realigned `can_decrypt` logic strictly with `discord.js` (`session.ready && (pv !== 0 || session.canPassthrough(userId))`), (7) correctly extract the extension length by reading the length directly from the unencrypted `packet` buffer instead of looking for it inside the already-decrypted payload body, and (8) correctly skip `encrypt_opus` when `protocol_version == 0` so TTS audio is sent in plaintext when DAVE is disabled.
+- **Fix**: (1) Send OP23 for successful non-zero OP29/OP30 transitions, (2) treat transition `id=0` as immediate (do not keep it pending), (3) auto-execute non-zero `pv=0` downgrades after OP21 while still sending OP23 (fallback for missing OP22), (4) drop non-Opus RTP payload types before decode, (5) compute transport AAD from RTP header flags + CSRC count with stricter extension bounds checks, (6) realigned `can_decrypt` logic strictly with `discord.js` (`session.ready && (pv !== 0 || session.canPassthrough(userId))`), (7) correctly extract the extension length by reading the length directly from the unencrypted `packet` buffer instead of looking for it inside the already-decrypted payload body, and (8) correctly skip `encrypt_opus` when `protocol_version == 0` so TTS audio is sent in plaintext when DAVE is disabled.
+
+### 2026-03-03: DAVE text opcode mapping was wrong — inbound audio completely broken
+- **Symptom**: Bot could never decrypt inbound user audio. `NoValidCryptorFound` on every packet, OP23 "execute transition" never arrived. After auto-execute workaround, `Opus(InvalidPacket)` on every frame.
+- **Root cause**: The voice WS text opcode handlers had opcodes 21–24 mapped incorrectly:
+  - OP21 was handled as `PrepareEpoch` (should be `DavePrepareTransition`)
+  - OP22 was handled as `PrepareTransition` (should be `DaveExecuteTransition`)
+  - OP23 was handled as `ExecuteTransition` (should be `DaveTransitionReady`, client→server only)
+  - OP24 was not handled (should be `DavePrepareEpoch`)
+- **Effect 1**: OP21 (`DavePrepareTransition` with `{transition_id, protocol_version}`) was silently dropped by the old PrepareEpoch handler because `protocol_version=0` failed the `if pv > 0` check. The bot never prepared for the transition.
+- **Effect 2**: OP22 (`DaveExecuteTransition` with `{transition_id}`) was misinterpreted as PrepareTransition. The bot called `prepare_transition()` with `pv=0` (missing field defaulted) instead of `execute_transition()`. The transition was never finalized.
+- **Effect 3**: The bot was sending OP32 (non-existent opcode) instead of OP23 (`DaveTransitionReady`) to acknowledge transitions. Discord ignored the OP32 and never sent `DaveExecuteTransition` for subsequent transitions.
+- **Fix**: Corrected opcode mapping to match `discord-api-types/voice/v8`: OP21=PrepareTransition, OP22=ExecuteTransition, OP23=TransitionReady (client→server), OP24=PrepareEpoch. Updated all OP32 sends to OP23.
 
 ## Build Commands
 

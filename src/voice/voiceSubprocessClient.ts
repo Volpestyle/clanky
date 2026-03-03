@@ -20,6 +20,7 @@ export class VoiceSubprocessClient extends EventEmitter {
   private destroyed = false;
   private adapterCleanup: (() => void) | null = null;
   private stdoutBuffer = "";
+  private lastPlaybackArmedReason: string | null = null;
 
   constructor(guildId: string, channelId: string, guild: any) {
     super();
@@ -203,6 +204,7 @@ export class VoiceSubprocessClient extends EventEmitter {
         this.emit("playerState", msg.status);
         break;
       case "playback_armed":
+        this.lastPlaybackArmedReason = String(msg.reason || "").trim() || null;
         this.emit("playbackArmed", msg.reason);
         break;
       case "speaking_start":
@@ -234,6 +236,10 @@ export class VoiceSubprocessClient extends EventEmitter {
         }
         break;
     }
+  }
+
+  getPlaybackArmedReason(): string | null {
+    return this.lastPlaybackArmedReason;
   }
 
   private _forwardToGateway(payload: any) {

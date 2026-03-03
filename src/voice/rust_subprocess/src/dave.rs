@@ -1,19 +1,26 @@
 use std::collections::HashMap;
 use std::num::NonZeroU16;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
+use davey::errors::{DecryptError, DecryptorDecryptError};
 use davey::{DaveSession, MediaType, ProposalsOperationType};
 use tracing::{debug, info, warn};
 
 /// Maximum consecutive DAVE decrypt failures before triggering session recovery.
-/// Matches discord.js DEFAULT_DECRYPTION_FAILURE_TOLERANCE.
-pub const FAILURE_TOLERANCE: u32 = 36;
+/// Node version uses 200 to give clients enough time to transition.
+pub const FAILURE_TOLERANCE: u32 = 200;
 
 /// Passthrough expiry (seconds) for pending downgrades (protocol_version → 0).
 const PASSTHROUGH_DOWNGRADE_EXPIRY: u32 = 24;
 
 /// Passthrough expiry (seconds) for upgrades (protocol_version 0 → N).
 const PASSTHROUGH_TRANSITION_EXPIRY: u32 = 10;
+
+/// Maximum seconds to wait for OP22 (Execute Transition) after OP21 prepares a pv=0
+/// downgrade. If OP22 hasn't arrived after this timeout, auto-execute the downgrade
+/// so the bot can hear unencrypted audio from peers who have already transitioned.
+const PENDING_DOWNGRADE_AUTO_EXECUTE_SECS: u64 = 3;
 
 pub struct DaveManager {
     session: DaveSession,
@@ -22,12 +29,15 @@ pub struct DaveManager {
     channel_id: u64,
     protocol_version: u16,
     /// Pending transitions: transition_id → protocol_version.
-    /// Populated by OP22 (prepare transition) and OP29/OP30 (commit/welcome).
-    /// Consumed by OP23 (execute transition).
+    /// Populated by OP21 (prepare transition) and OP29/OP30 (commit/welcome).
+    /// Consumed by OP22 (execute transition).
     pending_transitions: HashMap<u16, u16>,
     last_transition_id: u16,
     consecutive_failures: u32,
     reinitializing: bool,
+    /// Timestamp of when a pv=0 downgrade transition was prepared (OP22).
+    /// Used to auto-execute the transition if OP22 never arrives.
+    pending_downgrade_since: Option<Instant>,
 }
 
 /// Serialized commit+welcome ready to send as OP28 binary.
@@ -69,6 +79,7 @@ impl DaveManager {
                 last_transition_id: 0,
                 consecutive_failures: 0,
                 reinitializing: false,
+                pending_downgrade_since: None,
             },
             pkg,
         ))
@@ -155,8 +166,10 @@ impl DaveManager {
         }
         if self.protocol_version == 0 {
             // DAVE disabled (downgrade executed). Frames should be plain Opus, but
-            // peers still transitioning may send a few encrypted frames. Try decrypt
-            // first; fall back to passthrough on failure.
+            // peers still transitioning may send DAVE-encrypted frames with keys from
+            // their old MLS group. Try decrypt; if the frame is unencrypted (no magic
+            // marker), pass it through. If it's encrypted with unknown keys, drop it —
+            // passing raw DAVE frames to Opus produces garbage.
             return match self
                 .session
                 .decrypt(sender_user_id, MediaType::AUDIO, frame)
@@ -165,7 +178,18 @@ impl DaveManager {
                     self.consecutive_failures = 0;
                     Ok(decrypted)
                 }
-                Err(_) => Ok(frame.to_vec()),
+                Err(DecryptError::DecryptionFailed(
+                    DecryptorDecryptError::UnencryptedWhenPassthroughDisabled,
+                )) => {
+                    // Frame has no DAVE magic marker — it's plain Opus. Pass through.
+                    Ok(frame.to_vec())
+                }
+                Err(_) => {
+                    // Frame is DAVE-encrypted with keys we don't have. Drop it.
+                    Err(anyhow::anyhow!(
+                        "decrypt: encrypted with unknown keys (pv=0 transition)"
+                    ))
+                }
             };
         }
         match self
@@ -186,7 +210,7 @@ impl DaveManager {
 
     // --- Transition management (matches discord.js DAVESession) ---
 
-    /// Handle OP22 (prepare transition). Returns `true` if the caller should send OP32.
+    /// Handle OP21 (prepare transition). Returns `true` if the caller should send OP23.
     pub fn prepare_transition(&mut self, transition_id: u16, protocol_version: u16) -> bool {
         info!(
             "DAVE: prepare transition id={} pv={}",
@@ -203,16 +227,15 @@ impl DaveManager {
             if protocol_version == 0 {
                 // Downgrade pending — set passthrough mode so mixed encrypted/plain
                 // frames are tolerated during the transition window.
-                // Do NOT auto-execute: wait for OP23 (execute transition) from the server
-                // so all participants switch simultaneously. Matches discord.js behavior.
                 self.session
                     .set_passthrough_mode(true, Some(PASSTHROUGH_DOWNGRADE_EXPIRY));
+                self.pending_downgrade_since = Some(Instant::now());
             }
-            true // caller should send OP32 DaveTransitionReady
+            true // caller should send OP23 DaveTransitionReady
         }
     }
 
-    /// Handle OP23 (execute transition). Returns `true` if transition was executed.
+    /// Handle OP22 (execute transition). Returns `true` if transition was executed.
     pub fn execute_transition(&mut self, transition_id: u16) -> bool {
         if let Some(new_pv) = self.pending_transitions.remove(&transition_id) {
             let old_pv = self.protocol_version;
@@ -220,10 +243,11 @@ impl DaveManager {
 
             if old_pv != new_pv && new_pv == 0 {
                 info!("DAVE: session downgraded (v{} -> v0)", old_pv);
-            } else if transition_id > 0 && old_pv == 0 && new_pv > 0 {
+                self.pending_downgrade_since = None;
+            } else if transition_id > 0 && new_pv > 0 {
                 self.session
                     .set_passthrough_mode(true, Some(PASSTHROUGH_TRANSITION_EXPIRY));
-                info!("DAVE: session upgraded (v0 -> v{})", new_pv);
+                info!("DAVE: session upgraded (v{} -> v{})", old_pv, new_pv);
             }
 
             self.reinitializing = false;
@@ -259,20 +283,29 @@ impl DaveManager {
     /// Track a decryption failure. Returns `true` if recovery should be triggered.
     /// Failures during reinitialization or pending transitions are NOT counted
     /// (matches discord.js behavior).
+    ///
+    /// NOTE: Recovery (OP31 + OP26) causes Discord to close the voice WS with
+    /// code 4006 ("Session is no longer valid"). discord.js handles this by
+    /// auto-rejoining the voice channel, but our subprocess doesn't support
+    /// reconnect yet. So we log the threshold but do NOT trigger recovery to
+    /// keep the session alive. Undecryptable packets (from users with stale
+    /// MLS group keys) are silently dropped.
     pub fn track_decrypt_failure(&mut self) -> bool {
         if self.reinitializing || !self.pending_transitions.is_empty() {
             return false;
         }
         self.consecutive_failures += 1;
-        if self.consecutive_failures > FAILURE_TOLERANCE {
+        if self.consecutive_failures == FAILURE_TOLERANCE + 1 {
             warn!(
-                "DAVE: {} consecutive decrypt failures exceeded tolerance ({}), recovery needed",
+                "DAVE: {} consecutive decrypt failures exceeded tolerance ({}); \
+                 suppressing OP31 recovery to avoid 4006 disconnect",
                 self.consecutive_failures, FAILURE_TOLERANCE
             );
-            true
-        } else {
-            false
         }
+        // Return false to suppress recovery — the session stays alive and
+        // undecryptable packets are dropped. If the remote user eventually
+        // re-keys (e.g. via a new epoch), decryption will resume.
+        false
     }
 
     /// Reinitialize the DAVE session from scratch. Returns a `RecoveryAction`
@@ -300,6 +333,7 @@ impl DaveManager {
         self.reinitializing = true;
         self.consecutive_failures = 0;
         self.pending_transitions.clear();
+        self.pending_downgrade_since = None;
 
         info!(
             "DAVE: session reinitialized, new key package ({} bytes)",
@@ -312,8 +346,43 @@ impl DaveManager {
         })
     }
 
+    /// Check if a pending pv=0 downgrade has timed out waiting for OP22.
+    /// If so, auto-execute it so the bot can hear unencrypted audio.
+    /// Returns the transition_id that was auto-executed, if any.
+    pub fn maybe_auto_execute_downgrade(&mut self) -> Option<u16> {
+        let since = self.pending_downgrade_since?;
+        if since.elapsed().as_secs() < PENDING_DOWNGRADE_AUTO_EXECUTE_SECS {
+            return None;
+        }
+
+        // Find the pending pv=0 transition
+        let tid = self
+            .pending_transitions
+            .iter()
+            .find(|(_, &pv)| pv == 0)
+            .map(|(&tid, _)| tid);
+
+        if let Some(tid) = tid {
+            warn!(
+                "DAVE: auto-executing pv=0 downgrade (transition_id={}) after {}s without OP23",
+                tid,
+                since.elapsed().as_secs()
+            );
+            self.execute_transition(tid);
+            Some(tid)
+        } else {
+            // Pending transitions changed — clear the timestamp
+            self.pending_downgrade_since = None;
+            None
+        }
+    }
+
     pub fn has_pending_transitions(&self) -> bool {
         !self.pending_transitions.is_empty()
+    }
+
+    pub fn has_pending_transition_id(&self, transition_id: u16) -> bool {
+        self.pending_transitions.contains_key(&transition_id)
     }
 
     pub fn is_reinitializing(&self) -> bool {
@@ -335,6 +404,10 @@ impl DaveManager {
 
     pub fn channel_id(&self) -> u64 {
         self.channel_id
+    }
+
+    pub fn known_user_ids(&self) -> Vec<u64> {
+        self.session.get_user_ids().unwrap_or_default()
     }
 
     pub fn protocol_version(&self) -> u16 {
