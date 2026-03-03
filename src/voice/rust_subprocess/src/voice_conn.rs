@@ -84,9 +84,18 @@ fn parse_rtp_header(data: &[u8]) -> Option<(u16, u32, u32, usize)> {
     let ssrc = u32::from_be_bytes([data[8], data[9], data[10], data[11]]);
 
     let mut header_size = RTP_HEADER_LEN + cc * 4;
-    if has_ext && data.len() >= header_size + 4 {
+    if data.len() < header_size {
+        return None;
+    }
+    if has_ext {
+        if data.len() < header_size + 4 {
+            return None;
+        }
         let ext_len = u16::from_be_bytes([data[header_size + 2], data[header_size + 3]]) as usize;
         header_size += 4 + ext_len * 4;
+        if data.len() < header_size {
+            return None;
+        }
     }
     Some((seq, ts, ssrc, header_size))
 }
@@ -140,14 +149,18 @@ impl TransportCrypto {
         if packet.len() < 16 + 4 + 16 {
             bail!("Packet too small for transport decryption");
         }
-        
-        // In "aead_aes256_gcm_rtpsize", the AAD is just the first 12 bytes, 
-        // plus 4 bytes if the extension bit (X) is set.
-        let mut aad_size = 12;
+
+        // In "aead_aes256_gcm_rtpsize", the AAD is:
+        // RTP fixed header + CSRC list, plus 4 bytes of extension header if X is set.
+        let cc = (packet[0] & 0x0F) as usize;
+        let mut aad_size = RTP_HEADER_LEN + cc * 4;
         if (packet[0] >> 4) & 0x01 != 0 {
             aad_size += 4;
         }
-        
+        if packet.len() <= aad_size + 4 {
+            bail!("Packet too small for computed AAD size {}", aad_size);
+        }
+
         let rtp_header = &packet[..aad_size];
         let nonce_start = packet.len() - 4;
         let nonce_raw = &packet[nonce_start..];
@@ -417,8 +430,9 @@ impl VoiceConnection {
             let dave = dave.clone();
             let udp = udp.clone();
             let ssrc_map = ssrc_map.clone();
+            let ws_cmd_tx = ws_cmd_tx.clone();
             tokio::spawn(async move {
-                udp_recv_loop(udp, crypto, dave, ssrc_map, event_tx, shutdown).await;
+                udp_recv_loop(udp, crypto, dave, ssrc_map, event_tx, ws_cmd_tx, shutdown).await;
             });
         }
 
@@ -733,7 +747,19 @@ async fn handle_text_opcode(
                             }
                         }
                     } else {
-                        None
+                        // DaveManager already exists — reinit for new epoch
+                        // (matches discord.js prepareEpoch which calls reinit())
+                        if let Some(ref mut dm) = *guard {
+                            match dm.reinit() {
+                                Ok(recovery) => Some(recovery.key_package),
+                                Err(e) => {
+                                    error!("Failed to reinit DaveManager for new epoch: {}", e);
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        }
                     }
                 };
 
@@ -746,19 +772,47 @@ async fn handle_text_opcode(
                 }
             }
         }
-        // DAVE: Prepare Transition
+        // DAVE: Prepare Transition — must respond with OP32 for non-zero transition IDs
         22 => {
-            debug!("DAVE: prepare transition");
-        }
-        // DAVE: Execute Transition — the new epoch is active
-        23 => {
-            info!("DAVE: execute transition (epoch active)");
-            let ready = {
-                let guard = dave.lock();
-                guard.as_ref().map_or(false, |dm| dm.is_ready())
+            let transition_id = d["transition_id"].as_u64().unwrap_or(0) as u16;
+            let pv = d["protocol_version"].as_u64().unwrap_or(0) as u16;
+            let send_ready = {
+                let mut guard = dave.lock();
+                if let Some(ref mut dm) = *guard {
+                    dm.prepare_transition(transition_id, pv)
+                } else {
+                    false
+                }
             };
-            if ready {
-                let _ = event_tx.send(VoiceEvent::DaveReady).await;
+            if send_ready {
+                let _ = ws_cmd_tx
+                    .send(WsCommand::SendJson(json!({
+                        "op": 32,
+                        "d": { "transition_id": transition_id }
+                    })))
+                    .await;
+                info!("DAVE: sent OP32 transition ready for prepare transition {}", transition_id);
+            }
+        }
+        // DAVE: Execute Transition — finalize the pending transition
+        23 => {
+            let transition_id = d["transition_id"].as_u64().unwrap_or(0) as u16;
+            let transitioned = {
+                let mut guard = dave.lock();
+                if let Some(ref mut dm) = *guard {
+                    dm.execute_transition(transition_id)
+                } else {
+                    false
+                }
+            };
+            if transitioned {
+                let ready = {
+                    let guard = dave.lock();
+                    guard.as_ref().map_or(false, |dm| dm.is_ready())
+                };
+                if ready {
+                    let _ = event_tx.send(VoiceEvent::DaveReady).await;
+                }
             }
         }
         _ => {
@@ -870,34 +924,55 @@ async fn handle_binary_opcode(
             }
             let transition_id = u16::from_be_bytes([payload[0], payload[1]]);
             let commit_payload = &payload[2..];
-            
+
             info!(
                 "DAVE binary OP29: announce commit (transition_id: {}, {} bytes)",
                 transition_id,
                 commit_payload.len()
             );
-            let ready = {
+
+            // Process commit under lock, collect any recovery action, then drop lock
+            let (ready, success, recovery_action) = {
                 let mut guard = dave.lock();
                 if let Some(ref mut dm) = *guard {
-                    if let Err(e) = dm.process_commit(commit_payload) {
-                        error!("DAVE process_commit: {}", e);
+                    match dm.process_commit(commit_payload) {
+                        Ok(()) => {
+                            dm.store_pending_transition(transition_id);
+                            (dm.is_ready(), true, None)
+                        }
+                        Err(e) => {
+                            error!("DAVE process_commit: {}", e);
+                            let recovery = dm.reinit().ok();
+                            (false, false, recovery)
+                        }
                     }
-                    dm.is_ready()
                 } else {
-                    false
+                    (false, false, None)
                 }
             };
-            
-            // Send transition ready
-            let payload = serde_json::json!({
-                "op": 32, // DaveTransitionReady
-                "d": {
-                    "transition_id": transition_id
-                }
-            });
-            let _ = ws_cmd_tx.send(WsCommand::SendJson(payload)).await;
-            debug!("DAVE: sent transition ready OP32 for transition {}", transition_id);
-            
+            // Lock is dropped — safe to await
+
+            if let Some(recovery) = recovery_action {
+                let mut op31 = vec![31u8];
+                op31.extend_from_slice(&recovery.transition_id.to_be_bytes());
+                let _ = ws_cmd_tx.send(WsCommand::SendBinary(op31)).await;
+                let mut op26 = vec![26u8];
+                op26.extend_from_slice(&recovery.key_package);
+                let _ = ws_cmd_tx.send(WsCommand::SendBinary(op26)).await;
+                warn!("DAVE: recovery from failed commit, sent OP31 + OP26");
+            }
+
+            // Match discord.js behavior: for non-zero transitions, confirm readiness.
+            if success && transition_id != 0 {
+                let _ = ws_cmd_tx
+                    .send(WsCommand::SendJson(json!({
+                        "op": 32,
+                        "d": { "transition_id": transition_id }
+                    })))
+                    .await;
+                info!("DAVE: sent OP32 transition ready for commit transition {}", transition_id);
+            }
+
             if ready {
                 let _ = event_tx.send(VoiceEvent::DaveReady).await;
             }
@@ -912,27 +987,60 @@ async fn handle_binary_opcode(
             let welcome_payload = &payload[2..];
 
             info!("DAVE binary OP30: welcome (transition_id: {}, {} bytes)", transition_id, welcome_payload.len());
-            let ready = {
+
+            // Process welcome under lock, collect any recovery action, then drop lock
+            let (ready, success, recovery_action) = {
                 let mut guard = dave.lock();
                 if let Some(ref mut dm) = *guard {
-                    if let Err(e) = dm.process_welcome(welcome_payload) {
-                        error!("DAVE process_welcome: {}", e);
+                    match dm.process_welcome(welcome_payload) {
+                        Ok(()) => {
+                            dm.store_pending_transition(transition_id);
+                            (dm.is_ready(), true, None)
+                        }
+                        Err(e) => {
+                            let err_msg = format!("{:?}", e);
+                            if err_msg.contains("AlreadyInGroup") || err_msg.contains("already") {
+                                // AlreadyInGroup is expected when we were the committer —
+                                // we joined via our own commit (OP29), so welcome is redundant.
+                                debug!("DAVE process_welcome: AlreadyInGroup (expected as committer)");
+                                dm.store_pending_transition(transition_id);
+                                (dm.is_ready(), true, None)
+                            } else {
+                                error!("DAVE process_welcome failed: {}", e);
+                                let recovery = dm.reinit().ok();
+                                (false, false, recovery)
+                            }
+                        }
                     }
-                    dm.is_ready()
                 } else {
-                    false
+                    (false, false, None)
                 }
             };
-            
-            // Send transition ready
-            let payload = serde_json::json!({
-                "op": 32, // DaveTransitionReady
-                "d": {
-                    "transition_id": transition_id
-                }
-            });
-            let _ = ws_cmd_tx.send(WsCommand::SendJson(payload)).await;
-            debug!("DAVE: sent transition ready OP32 for transition {}", transition_id);
+            // Lock is dropped — safe to await
+
+            if let Some(recovery) = recovery_action {
+                let mut op31 = vec![31u8];
+                op31.extend_from_slice(&recovery.transition_id.to_be_bytes());
+                let _ = ws_cmd_tx.send(WsCommand::SendBinary(op31)).await;
+                let mut op26 = vec![26u8];
+                op26.extend_from_slice(&recovery.key_package);
+                let _ = ws_cmd_tx.send(WsCommand::SendBinary(op26)).await;
+                warn!("DAVE: recovery from failed welcome, sent OP31 + OP26");
+            }
+
+            // Match discord.js behavior: for non-zero transitions, confirm readiness.
+            if success && transition_id != 0 {
+                let _ = ws_cmd_tx
+                    .send(WsCommand::SendJson(json!({
+                        "op": 32,
+                        "d": { "transition_id": transition_id }
+                    })))
+                    .await;
+                info!(
+                    "DAVE: sent OP32 transition ready for welcome transition {}",
+                    transition_id
+                );
+            }
 
             if ready {
                 let _ = event_tx.send(VoiceEvent::DaveReady).await;
@@ -1017,6 +1125,7 @@ async fn udp_recv_loop(
     dave: Arc<Mutex<Option<DaveManager>>>,
     ssrc_map: Arc<Mutex<HashMap<u32, u64>>>,
     event_tx: mpsc::Sender<VoiceEvent>,
+    ws_cmd_tx: mpsc::Sender<WsCommand>,
     shutdown: Arc<AtomicBool>,
 ) {
     let mut buf = [0u8; 2048];
@@ -1041,6 +1150,13 @@ async fn udp_recv_loop(
             }
         };
 
+        // Only handle Opus RTP packets (PT=120). Drop RTCP/other media payloads.
+        let payload_type = packet[1] & 0x7F;
+        if payload_type != OPUS_PT {
+            debug!("UDP drop: non-Opus RTP payload type {}", payload_type);
+            continue;
+        }
+
         // Transport decrypt
         let decrypted = match crypto.decrypt(packet, header_size) {
             Ok(p) => p,
@@ -1050,39 +1166,87 @@ async fn udp_recv_loop(
             }
         };
 
-        // In aead_aes256_gcm_rtpsize, the RTP extension DATA is encrypted
-        // alongside the opus payload. The AAD only covers the first 12 bytes
-        // (or 16 if X bit set). So the decrypted result starts with
-        // (header_size - aad_size) bytes of extension data we must skip.
-        let aad_size: usize = if (packet[0] >> 4) & 0x01 != 0 { 16 } else { 12 };
-        let ext_data_len = header_size.saturating_sub(aad_size);
-        let opus_or_dave = if ext_data_len > 0 && decrypted.len() > ext_data_len {
-            decrypted[ext_data_len..].to_vec()
-        } else {
-            decrypted
-        };
+        let cc = (packet[0] & 0x0F) as usize;
+        let aad_size = RTP_HEADER_LEN + cc * 4;
+        let has_ext = (packet[0] >> 4) & 0x01 != 0;
 
-        // DAVE decrypt (if session active)
-        let user_id = ssrc_map.lock().get(&ssrc).copied();
-        let opus_frame = if let Some(uid) = user_id {
-            let mut guard = dave.lock();
-            if let Some(ref mut dm) = *guard {
-                if dm.is_ready() {
-                    match dm.decrypt(uid, &opus_or_dave) {
-                        Ok(decrypted) => decrypted,
-                        Err(e) => {
-                            debug!("UDP drop: DAVE decrypt failed for {}: {}", uid, e);
-                            opus_or_dave
-                        }
-                    }
+        let mut opus_or_dave = decrypted;
+        
+        // Strip RTP Header Extension if present and matches the one-byte profile (0xBEDE).
+        // The extension body lives at the beginning of the `decrypted` payload.
+        if has_ext && packet.len() >= aad_size + 4 {
+            let profile = &packet[aad_size..aad_size + 2];
+            let ext_len = u16::from_be_bytes([packet[aad_size + 2], packet[aad_size + 3]]) as usize;
+            let extension_bytes = ext_len * 4;
+
+            if profile == [0xbe, 0xde] {
+                if opus_or_dave.len() > extension_bytes {
+                    opus_or_dave = opus_or_dave[extension_bytes..].to_vec();
                 } else {
-                    opus_or_dave
+                    debug!("UDP drop: RTP extension body exceeds decrypted payload");
+                    continue;
                 }
             } else {
-                opus_or_dave
+                // Not 0xBEDE, but it is an extension. discord.js does NOT strip this.
+                // Let's print what profile it is to see if we're missing something.
+                debug!("UDP: Unknown RTP extension profile: {:x?}", profile);
+                // The RTP spec says we should strip it anyway, but discord.js doesn't.
+                // Let's strip it to be safe, because it's part of the extension body.
+                if opus_or_dave.len() > extension_bytes {
+                    opus_or_dave = opus_or_dave[extension_bytes..].to_vec();
+                }
             }
-        } else {
-            opus_or_dave
+        }
+
+        // DAVE decrypt (if session active) with failure tracking + recovery
+        // Mirrors discord.js: canDecrypt = session.ready && (protocolVersion !== 0 || session.canPassthrough(userId))
+        let user_id = ssrc_map.lock().get(&ssrc).copied();
+
+        let (opus_frame_opt, needs_recovery) = {
+            let mut guard = dave.lock();
+            match (&mut *guard, user_id) {
+                (Some(dm), Some(uid)) => {
+                    let can_decrypt = dm.is_ready() && (dm.protocol_version() != 0 || dm.can_passthrough(uid));
+                    if can_decrypt {
+                        match dm.decrypt(uid, &opus_or_dave) {
+                            Ok(decrypted) => (Some(decrypted), false),
+                            Err(e) => {
+                                debug!("UDP drop: DAVE decrypt failed for {}: {}", uid, e);
+                                let recovery = dm.track_decrypt_failure();
+                                (None, recovery)
+                            }
+                        }
+                    } else {
+                        // Bypass DAVE and pass payload to Opus directly
+                        (Some(opus_or_dave), false)
+                    }
+                }
+                _ => (Some(opus_or_dave), false),
+            }
+        };
+
+        let opus_frame = match opus_frame_opt {
+            Some(frame) => frame,
+            None => {
+                // DAVE decrypt failed — trigger recovery if threshold exceeded
+                if needs_recovery {
+                    let recovery = {
+                        let mut guard = dave.lock();
+                        guard.as_mut().and_then(|dm| dm.reinit().ok())
+                    };
+                    if let Some(recovery) = recovery {
+                        let mut op31 = vec![31u8];
+                        op31.extend_from_slice(&recovery.transition_id.to_be_bytes());
+                        let _ = ws_cmd_tx.send(WsCommand::SendBinary(op31)).await;
+                        let mut op26 = vec![26u8];
+                        op26.extend_from_slice(&recovery.key_package);
+                        let _ = ws_cmd_tx.send(WsCommand::SendBinary(op26)).await;
+                        warn!("DAVE: recovery initiated from UDP recv ({} failures), sent OP31 + OP26",
+                            crate::dave::FAILURE_TOLERANCE);
+                    }
+                }
+                continue;
+            }
         };
 
         let _ = event_tx
