@@ -465,6 +465,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         botUserId: manager.client.user?.id || null
       });
       const openAiRealtimeSettings = settings.voice?.openaiRealtime || {};
+      const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(settings);
       if (runtimeMode === "voice_agent") {
         realtimeClient = new XaiRealtimeClient({
           apiKey: manager.appConfig.xaiApiKey,
@@ -558,7 +559,6 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       // Enable per-user or shared ASR when the provider supports it and
       // the OpenAI API key is available.
       if (manager.appConfig?.openaiApiKey && isRealtimeMode(runtimeMode)) {
-        const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(settings);
         const usePerUser = providerSupports(runtimeMode, "perUserAsr") &&
           openAiRealtimeSettings.usePerUserAsrBridge !== false;
         const useShared = providerSupports(runtimeMode, "sharedAsr") && !usePerUser;
