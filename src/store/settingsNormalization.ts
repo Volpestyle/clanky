@@ -456,6 +456,7 @@ export function normalizeSettings(raw) {
     streamWatch?: VoiceStreamWatchDefaults;
     soundboard?: VoiceSoundboardDefaults;
     musicTranscriptionEnabled?: boolean;
+    operationalMessages?: string;
   };
 
   const defaultVoice: VoiceDefaults = DEFAULT_SETTINGS.voice;
@@ -872,6 +873,12 @@ export function normalizeSettings(raw) {
     merged.voice?.musicTranscriptionEnabled !== undefined
       ? Boolean(merged.voice?.musicTranscriptionEnabled)
       : Boolean(defaultVoice.musicTranscriptionEnabled);
+
+  const validOperationalMessageLevels = ["all", "essential", "minimal", "none"];
+  const rawOperationalMessages = String(merged.voice?.operationalMessages || "").trim().toLowerCase();
+  merged.voice.operationalMessages = validOperationalMessageLevels.includes(rawOperationalMessages)
+    ? rawOperationalMessages
+    : String(defaultVoice.operationalMessages || "all");
 
   merged.startup.catchupEnabled =
     merged.startup?.catchupEnabled !== undefined ? Boolean(merged.startup?.catchupEnabled) : true;

@@ -156,6 +156,23 @@ export function VoiceModeSettingsSection({
             language for transcription.
           </p>
 
+          <label htmlFor="voice-operational-messages">Text channel status messages</label>
+          <select
+            id="voice-operational-messages"
+            value={form.voiceOperationalMessages}
+            onChange={set("voiceOperationalMessages")}
+          >
+            <option value="all">All (always post)</option>
+            <option value="essential">Essential (skip routine lifecycle)</option>
+            <option value="minimal">Minimal (only direct requests + critical errors)</option>
+            <option value="none">None (suppress all)</option>
+          </select>
+          <p>
+            Controls how chatty the bot is in text when voice events happen. "Essential" lets the LLM skip routine
+            messages like session end or music state changes. "Minimal" also suppresses error announcements unless
+            critical. "None" silences all operational messages.
+          </p>
+
           <div className="toggles">
             <label>
               <input

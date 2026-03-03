@@ -204,7 +204,8 @@ export const DEFAULT_SETTINGS = {
       allowExternalSounds: false,
       preferredSoundIds: []
     },
-    musicTranscriptionEnabled: true
+    musicTranscriptionEnabled: true,
+    operationalMessages: "all"
   },
   startup: {
     catchupEnabled: true,
