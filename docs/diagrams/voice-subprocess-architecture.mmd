@@ -1,0 +1,45 @@
+sequenceDiagram
+    participant User as Discord User
+    participant DV as Discord Voice Server
+    participant Sub as Node.js Subprocess<br/>(voiceSubprocess.ts)
+    participant Main as Bun Main Process<br/>(voiceSessionManager.ts)
+    participant LLM as OpenAI Realtime API
+    participant ASR as OpenAI ASR<br/>(Transcription WS)
+
+    Note over Main,Sub: Session Start — Parallel Boot
+    Main->>Sub: spawn(node --experimental-strip-types)
+    Main->>LLM: WebSocket connect (realtime API)
+    Sub->>DV: joinVoiceChannel (UDP + WebSocket)
+    DV-->>Sub: SessionDescription + DAVE MLS handshake
+    Note over Sub: DAVE E2EE: ~10-20s sync native crypto<br/>Event loop blocked
+    Sub-->>Main: IPC: { type: "ready" }
+    Sub->>Sub: armVoicePlayback("connection_ready")
+    Sub-->>Main: IPC: { type: "playback_armed" }
+    Main->>Main: Schedule join greeting (3s timer)
+
+    Note over User,ASR: User Speaks
+    User->>DV: Opus audio (UDP)
+    DV->>Sub: Encrypted Opus packets
+    Sub->>Sub: Opus decode → PCM (48kHz stereo)
+    Sub->>Sub: Downmix stereo→mono, resample 48k→24k
+    Sub-->>Main: IPC: { type: "user_audio", pcmBase64 }
+    Main->>ASR: input_audio_buffer.append (base64 PCM)
+
+    Note over Sub: AfterSilence (700ms) or speaking_end
+    Sub-->>Main: IPC: { type: "user_audio_end" }
+    Main->>ASR: input_audio_buffer.commit
+    ASR-->>Main: transcription.completed: "Yo, what's up?"
+    Main->>Main: evaluateVoiceReplyDecision()
+    Main->>Main: Coalesce window (1100ms)
+    Main->>LLM: conversation.item.create + response.create
+
+    Note over Main,Sub: Bot Response Audio
+    LLM-->>Main: response.audio.delta (base64 PCM 24kHz)
+    Main->>Main: Barge-in suppression check
+    Main-->>Sub: IPC: { type: "audio", pcmBase64 }
+    Sub->>Sub: drainAudioQueue() — synchronous
+    Sub->>Sub: Resample 24k→48k mono→stereo
+    Sub->>Sub: PcmJitterBuffer.pushPcm()
+    Sub->>Sub: Opus encode (prism-media pipeline)
+    Sub->>DV: Opus packet (UDP)
+    DV->>User: Voice audio

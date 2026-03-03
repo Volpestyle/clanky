@@ -1,0 +1,33 @@
+stateDiagram-v2
+    [*] --> Idle: Session start
+
+    Idle --> Capturing: speaking_start
+    Capturing --> Capturing: onUserAudio (PCM chunks)
+    Capturing --> SpeakingEndDelay: speaking_end
+    Capturing --> Finalizing: stream_end (AfterSilence 700ms)
+    Capturing --> Finalizing: max_duration (8s cap)
+    Capturing --> Finalizing: near_silence_abort
+
+    SpeakingEndDelay --> Capturing: speaking_start (user resumes)
+    SpeakingEndDelay --> Finalizing: timer fires (220-800ms)
+
+    Finalizing --> SilenceGate: PCM signal analysis
+    SilenceGate --> Dropped: near-silent (RMS/peak below threshold)
+    SilenceGate --> ASRBridge: real speech detected
+
+    ASRBridge --> CoalesceWindow: transcript ready
+    ASRBridge --> CoalesceWindow: ASR timeout fallback (700ms)
+
+    CoalesceWindow --> Dispatched: timer fires (1100ms, no follow-up)
+    CoalesceWindow --> CoalesceWindow: new turn arrives → merge + reset timer
+    CoalesceWindow --> Dispatched: follow-up arrives → merge + dispatch immediately
+
+    Dispatched --> ReplyDecision: evaluateVoiceReplyDecision()
+    ReplyDecision --> BotSpeaking: allow=true → response.create
+    ReplyDecision --> Deferred: allow=false, reason=bot_turn_open
+    ReplyDecision --> Idle: allow=false (skip)
+
+    Deferred --> ReplyDecision: flush timer (1320ms) + re-evaluate
+    BotSpeaking --> Idle: response_done + silence timeout
+
+    Dropped --> Idle

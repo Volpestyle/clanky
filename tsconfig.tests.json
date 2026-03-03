@@ -7,6 +7,6 @@
     "noCheck": true,
     "types": ["bun-types"]
   },
-  "include": ["src/**/*.test.ts", "src/**/*.spec.ts"],
+  "include": ["src/**/*.test.ts", "src/**/*.spec.ts", "tests/**/*.ts"],
   "exclude": ["node_modules", "dashboard/dist", "dist"]
 }

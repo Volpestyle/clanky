@@ -181,7 +181,7 @@ Use dashboard to:
 - Claude Code brain session mode: `docs/claude-code-brain-session-mode.md`
 - Memory system source of truth: `docs/memory-system.md`
 - Replay harness guide (flooding + authoring): `docs/replay-test-suite.md`
-- Voice golden validation suite: `docs/voice-golden-test-suite.md`
+- Voice test suites (golden + E2E): `docs/e2e-test-spec.md`
 - Initiative creative discovery: `docs/initiative-discovery-spec.md`
 - Public HTTPS entrypoint: `docs/public-https-entrypoint-spec.md`
 - Screen-share link flow: `docs/screen-share-link-spec.md`

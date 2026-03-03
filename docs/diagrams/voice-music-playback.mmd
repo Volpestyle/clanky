@@ -1,0 +1,51 @@
+sequenceDiagram
+    participant User as Discord User
+    participant Main as Main Process
+    participant LLM as OpenAI Realtime
+    participant Sub as Subprocess
+    participant YT as yt-dlp
+    participant FF as ffmpeg
+    participant DV as Discord Voice
+
+    User->>Main: "Play a Future song" (voice turn)
+    Main->>LLM: transcript forwarded
+    LLM-->>Main: tool_call: music_search({ query: "Future" })
+    Main->>Main: YouTube + SoundCloud search (parallel)
+    Main-->>LLM: tool_result: [{ id: "youtube:abc", title: "..." }]
+    LLM-->>Main: tool_call: music_queue_add({ tracks: ["youtube:abc"] })
+    Main-->>LLM: tool_result: { ok: true }
+    LLM-->>Main: tool_call: music_play({ index: 0 })
+
+    Main->>Main: playVoiceQueueTrackByIndex()
+    Main->>Main: requestPlayMusic() → playMusicViaDiscord()
+    Main-->>Sub: IPC: { type: "music_play", url }
+    Sub->>Sub: resetPlayback() — kill voice stream
+    Sub->>YT: spawn yt-dlp -o - <url>
+    Sub->>FF: spawn ffmpeg -f ogg -c:a libopus
+    YT->>FF: raw audio (pipe)
+    FF->>Sub: Ogg/Opus stream (pipe)
+    Sub->>Sub: createAudioResource(StreamType.OggOpus)
+    Sub->>Sub: audioPlayer.play(resource)
+    Sub->>DV: Opus packets (UDP)
+    DV->>User: Music audio
+
+    Main->>Main: haltSessionOutputForMusicPlayback()
+    Note over Main: Clears voice state (botTurnOpen,<br/>pending responses, barge-in)<br/>WITHOUT sending stop_playback IPC
+
+    Note over Sub: Track ends naturally
+    Sub->>Sub: AudioPlayer → Idle
+    Sub-->>Main: IPC: { type: "music_idle" }
+    Sub->>Sub: armVoicePlayback("music_idle")
+    Note over Sub: Fresh PcmJitterBuffer created,<br/>ready for next voice response
+
+    Note over User: "Can you pause that?"
+    User->>Main: voice turn → LLM
+    LLM-->>Main: tool_call: music_pause()
+    Main-->>Sub: IPC: { type: "music_pause" }
+    Sub->>Sub: audioPlayer.pause()
+
+    Note over User: "Resume the song"
+    User->>Main: voice turn → LLM
+    LLM-->>Main: tool_call: music_resume()
+    Main-->>Sub: IPC: { type: "music_resume" }
+    Sub->>Sub: audioPlayer.unpause()

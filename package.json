@@ -21,6 +21,8 @@
     "test:voice-golden:live": "RUN_LIVE_VOICE_GOLDEN=1 bun test ./src/voice/voiceGoldenValidation.live.smoke.test.ts",
     "test:golden": "bun run test:voice-golden && bun test ./src/bot.replyDecisionPolicy.test.ts --test-name-pattern \"text reply follow-up can run web search and append cited sources\"",
     "test:text-reply:live": "RUN_LIVE_TEXT_REPLY_SMOKE=1 bun test ./src/bot/textReplyDecision.live.smoke.test.ts",
+    "test:e2e": "bun test ./tests/e2e",
+    "test:e2e:voice": "RUN_E2E_VOICE_PHYSICAL=1 bun test ./tests/e2e/voicePhysicalHarness.test.ts",
     "test:coverage": "bun test --coverage ./src ./dashboard/src --test-name-pattern \"^(?!smoke: .*live)\"",
     "test:coverage:check": "bun test --coverage ./src ./dashboard/src --test-name-pattern \"^(?!smoke: .*live)\"",
     "replay:flooding": "bun scripts/floodingReplayHarness.ts --mode recorded",

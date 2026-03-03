@@ -34,6 +34,8 @@
 - Golden tests assert the exact behavior we describe — write the expectation first, then implement to satisfy it.
 - When the user explicitly asks to validate smoke/golden behavior, prefer the live suite/path by default (for example `test:voice-golden:live`) unless they explicitly ask for simulated-only.
 - When running live smoke or golden test suites, make sure we use `claude-code` as the provider
+- E2E Discord bot-to-bot tests (`tests/e2e/`) validate the physical voice layer but require separate bot tokens and test guild setup (see `docs/e2e-testing.md`)
+- Do not run E2E tests unless the user explicitly directs it, since they require live Discord infrastructure
 
 ## Dashboard UI Preferences
 
