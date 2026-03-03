@@ -7604,9 +7604,11 @@ export class VoiceSessionManager {
           }
         });
       }
-      this.scheduleOpenAiSharedAsrSessionIdleClose(session);
       if (asrState.userId === normalizedUserId) {
         asrState.userId = null;
+      }
+      if (!this.tryHandoffSharedAsrToWaitingCapture({ session, settings })) {
+        this.scheduleOpenAiSharedAsrSessionIdleClose(session);
       }
       return {
         transcript: "",
@@ -7643,12 +7645,14 @@ export class VoiceSessionManager {
       });
       const asrCompletedAtMs = Date.now();
 
-      this.scheduleOpenAiSharedAsrSessionIdleClose(session);
       if (asrState.utterance === trackedUtterance) {
         trackedUtterance.bytesSent = 0;
       }
       if (asrState.userId === normalizedUserId) {
         asrState.userId = null;
+      }
+      if (!this.tryHandoffSharedAsrToWaitingCapture({ session, settings })) {
+        this.scheduleOpenAiSharedAsrSessionIdleClose(session);
       }
 
       if (!transcript) {
@@ -7731,6 +7735,56 @@ export class VoiceSessionManager {
     if (!normalizedUserId || String(asrState.userId || "").trim() === normalizedUserId) {
       asrState.userId = null;
     }
+  }
+
+  tryHandoffSharedAsrToWaitingCapture({ session, settings = null }) {
+    if (!session || session.ending) return false;
+    if (!this.shouldUseOpenAiSharedTranscription({ session, settings })) return false;
+    const asrState = this.getOpenAiSharedAsrState(session);
+    if (!asrState || asrState.closing) return false;
+    if (asrState.userId) return false;
+
+    for (const [candidateUserId, captureState] of session.userCaptures) {
+      if (!captureState || !candidateUserId) continue;
+      if (Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) > 0) continue;
+
+      const began = this.beginOpenAiSharedAsrUtterance({
+        session,
+        settings,
+        userId: candidateUserId
+      });
+      if (!began) continue;
+
+      const chunks = Array.isArray(captureState.pcmChunks) ? captureState.pcmChunks : [];
+      for (const chunk of chunks) {
+        if (!chunk || !chunk.length) continue;
+        const appended = this.appendAudioToOpenAiSharedAsr({
+          session,
+          settings,
+          userId: candidateUserId,
+          pcmChunk: chunk
+        });
+        if (appended) {
+          captureState.sharedAsrBytesSent =
+            Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) + chunk.length;
+        }
+      }
+
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: candidateUserId,
+        content: "openai_shared_asr_handoff",
+        metadata: {
+          sessionId: session.id,
+          replayedChunks: chunks.length,
+          replayedBytes: Math.max(0, Number(captureState.sharedAsrBytesSent || 0))
+        }
+      });
+      return true;
+    }
+    return false;
   }
 
   async closeOpenAiSharedAsrSession(session, reason = "manual") {
@@ -7839,7 +7893,7 @@ export class VoiceSessionManager {
           userId: normalizedUserId
         });
       }
-      if (useOpenAiSharedAsr && !activeCapture && Number(session.userCaptures?.size || 0) <= 0) {
+      if (useOpenAiSharedAsr && !activeCapture) {
         this.beginOpenAiSharedAsrUtterance({
           session,
           settings,
@@ -8123,7 +8177,9 @@ export class VoiceSessionManager {
           });
         } else if (useOpenAiSharedAsr) {
           this.releaseOpenAiSharedAsrActiveUser(session, userId);
-          this.scheduleOpenAiSharedAsrSessionIdleClose(session);
+          if (!this.tryHandoffSharedAsrToWaitingCapture({ session, settings })) {
+            this.scheduleOpenAiSharedAsrSessionIdleClose(session);
+          }
         }
         return;
       }
@@ -8352,7 +8408,9 @@ export class VoiceSessionManager {
         });
       } else if (useOpenAiSharedAsr) {
         this.releaseOpenAiSharedAsrActiveUser(session, userId);
-        this.scheduleOpenAiSharedAsrSessionIdleClose(session);
+        if (!this.tryHandoffSharedAsrToWaitingCapture({ session, settings })) {
+          this.scheduleOpenAiSharedAsrSessionIdleClose(session);
+        }
       }
     };
     captureState.maxFlushTimer = setTimeout(() => {
