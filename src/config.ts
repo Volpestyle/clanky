@@ -24,7 +24,7 @@ export const appConfig = {
   serpApiKey: process.env.SERPAPI_API_KEY ?? "",
   giphyApiKey: process.env.GIPHY_API_KEY ?? "",
   giphyRating: process.env.GIPHY_RATING ?? "pg-13",
-  youtubeApiKey: process.env.YOUTUBE_API_KEY ?? "",
+  youtubeApiKey: String(process.env.YOUTUBE_API_KEY || process.env.GOOGLE_API_KEY || "").trim(),
   soundcloudClientId: process.env.SOUNDCLOUD_CLIENT_ID ?? "",
   defaultProvider: normalizeLlmProvider(process.env.DEFAULT_PROVIDER, "anthropic"),
   defaultOpenAiModel: process.env.DEFAULT_MODEL_OPENAI ?? "claude-haiku-4-5",

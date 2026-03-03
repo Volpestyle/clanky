@@ -127,6 +127,20 @@ test("config falls back for invalid values", async () => {
   );
 });
 
+test("config falls back youtube key to GOOGLE_API_KEY", async () => {
+  await withConfigEnv(
+    {
+      DISCORD_TOKEN: "token-youtube-fallback",
+      GOOGLE_API_KEY: "google-api-key",
+      YOUTUBE_API_KEY: ""
+    },
+    async () => {
+      const { appConfig } = await importFreshConfig("youtube-key-fallback");
+      assert.equal(appConfig.youtubeApiKey, "google-api-key");
+    }
+  );
+});
+
 test("config accepts other provider normalizations", async () => {
   await withConfigEnv(
     {
