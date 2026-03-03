@@ -42,15 +42,10 @@ let defaultSampleRate = 24000;
 let musicProcesses: { pid: number; kill: () => void }[] = [];
 
 const FRAME_SIZE = 3840; // 20ms at 48kHz stereo s16le
-const SILENCE_FRAME = Buffer.alloc(FRAME_SIZE, 0);
-const SILENCE_TIMEOUT_MS = 5000; // End stream after 5s of no real audio
 
 // --- Pull-based jitter buffer ---
 // Replaces the old PassThrough + setInterval silence pump.
 // The AudioPlayer calls _read() every ~20ms to pull the next frame.
-// When the buffer is empty, it returns silence to keep the player in
-// "playing" state. After SILENCE_TIMEOUT_MS of no real audio, it signals
-// EOF so silencePaddingFrames can produce a clean tail-off.
 
 class PcmJitterBuffer extends Readable {
   private chunks: Buffer[] = [];
@@ -111,6 +106,12 @@ class PcmJitterBuffer extends Readable {
     const res = [...this.chunks];
     if (this.partial) res.push(this.partial);
     return res;
+  }
+
+  clearBufferedAudio() {
+    this.chunks = [];
+    this.bufferedBytes = 0;
+    this.partial = null;
   }
 
   // Finish is no longer called by an idle timer.
@@ -233,6 +234,16 @@ function ensurePlaybackStream() {
   return true;
 }
 
+function armVoicePlayback(reason: string) {
+  if (!audioPlayer || !connection) return false;
+  const armed = ensurePlaybackStream();
+  if (armed && AUDIO_DEBUG) {
+    const ts = new Date().toISOString().slice(11, 23);
+    console.log(`[subprocess:audio] ${ts} voice playback armed  reason=${reason}  playerStatus=${audioPlayer.state.status}`);
+  }
+  return armed;
+}
+
 // --- Async Audio Processing Queue ---
 // Process audio chunks asynchronously to avoid blocking the event loop
 // during large burst arrivals (e.g., from OpenAI/xAI).
@@ -316,8 +327,10 @@ function handleAudio(pcmBase64: string, sampleRate: number) {
 
 function handleStopPlayback() {
   resetPlayback();
+  armVoicePlayback("stop_playback");
   firstAudioReceivedAt = 0;
   firstAudioPlayedAt = 0;
+  audioChunksReceived = 0;
   send({ type: "player_state", status: "idle" });
 }
 
@@ -380,6 +393,7 @@ function handleJoin(msg: any) {
 
       if (newState.status === VoiceConnectionStatus.Ready) {
         send({ type: "ready" });
+        armVoicePlayback("connection_ready");
       }
     });
 
@@ -543,6 +557,7 @@ function handleMusicPlay(msg: any) {
 
       audioPlayer.once(AudioPlayerStatus.Idle, () => {
         send({ type: "music_idle" });
+        armVoicePlayback("music_idle");
       });
 
       ytdlp.on("error", (err: any) => {
@@ -575,6 +590,7 @@ function handleMusicPlay(msg: any) {
 
       audioPlayer.once(AudioPlayerStatus.Idle, () => {
         send({ type: "music_idle" });
+        armVoicePlayback("music_idle");
       });
 
       ffmpeg.on("error", (err: any) => {
@@ -588,6 +604,7 @@ function handleMusicPlay(msg: any) {
 
 function handleMusicStop() {
   resetPlayback();
+  armVoicePlayback("music_stop");
   send({ type: "music_idle" });
 }
 
