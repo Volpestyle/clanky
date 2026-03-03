@@ -7525,6 +7525,13 @@ export class VoiceSessionManager {
       utteranceId: trackedUtteranceId
     });
 
+    if (trackedUtterance) {
+      trackedUtterance.finalSegments = [];
+      trackedUtterance.finalSegmentEntries = [];
+      trackedUtterance.partialText = "";
+      trackedUtterance.lastUpdateAt = 0;
+    }
+
     const asrStartedAtMs = Date.now();
     try {
       const pendingCommitRequests = this.pruneOpenAiSharedAsrPendingCommitRequests(asrState);

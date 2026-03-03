@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 use tokio::time;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::MaybeTlsStream;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::dave::DaveManager;
 
@@ -1234,7 +1234,7 @@ async fn udp_recv_loop(
         // Only handle Opus RTP packets (PT=120). Drop RTCP/other media payloads.
         let payload_type = packet[1] & 0x7F;
         if payload_type != OPUS_PT {
-            debug!("UDP drop: non-Opus RTP payload type {}", payload_type);
+            trace!("UDP drop: non-Opus RTP payload type {}", payload_type);
             continue;
         }
 

@@ -594,7 +594,7 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,davey=warn")),
         )
         .with_writer(io::stderr)
         .init();
@@ -1020,18 +1020,6 @@ async fn main() {
                             continue; // skip bot's own audio
                         }
 
-                        // Audio-driven speaking detection
-                        let now = time::Instant::now();
-                        let ss = speaking_states.entry(uid).or_insert(SpeakingState {
-                            last_packet_at: None,
-                            is_speaking: false,
-                        });
-                        ss.last_packet_at = Some(now);
-                        if !ss.is_speaking {
-                            ss.is_speaking = true;
-                            send_msg(&OutMsg::SpeakingStart { user_id: uid.to_string() });
-                        }
-
                         let target_sample_rate = user_capture_states
                             .entry(uid)
                             .or_insert_with(|| {
@@ -1055,6 +1043,20 @@ async fn main() {
                                 let total_samples = samples_per_channel * 2; // stereo
                                 let decoded = &pcm_stereo[..total_samples];
 
+                                // Audio-driven speaking detection — only after
+                                // successful Opus decode to avoid phantom starts
+                                // from DAVE decrypt artifacts / invalid frames.
+                                let now = time::Instant::now();
+                                let ss = speaking_states.entry(uid).or_insert(SpeakingState {
+                                    last_packet_at: None,
+                                    is_speaking: false,
+                                });
+                                ss.last_packet_at = Some(now);
+                                if !ss.is_speaking {
+                                    ss.is_speaking = true;
+                                    send_msg(&OutMsg::SpeakingStart { user_id: uid.to_string() });
+                                }
+
                                 let llm_pcm = convert_decoded_to_llm(decoded, target_sample_rate);
                                 if !llm_pcm.is_empty() {
                                     let engine = base64::engine::general_purpose::STANDARD;
@@ -1068,7 +1070,7 @@ async fn main() {
                                 }
                             }
                             Err(e) => {
-                                error!("Opus decode error for ssrc={}: {:?}", ssrc, e);
+                                debug!("Opus decode error for ssrc={}: {:?}", ssrc, e);
                             }
                         }
                     }
