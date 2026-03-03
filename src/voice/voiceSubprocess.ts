@@ -644,8 +644,9 @@ function pollPendingMusic() {
 
   const elapsed = Date.now() - pendingMusicReceivedAt;
 
-  // Safety timeout: 8s max wait from music_play received
-  if (elapsed > 8000) {
+  // Safety timeout: 15s max wait from music_play received
+  // (5s for audio to arrive + 3s delivery + 0.5s gap + ~5s playback drain)
+  if (elapsed > 15000) {
     if (AUDIO_DEBUG) {
       const ts = new Date().toISOString().slice(11, 23);
       console.log(`[subprocess:music] ${ts} pending music safety timeout — starting`);
@@ -669,20 +670,64 @@ function pollPendingMusic() {
     return;
   }
 
-  // Phase B: Audio has been seen — wait for a 500ms gap (TTS done).
+  // Phase B: Audio has been seen — wait for a 500ms gap in IPC delivery.
   // Audio chunks arrive every ~30-40ms during active TTS, so 500ms of
-  // silence clearly indicates the announcement has finished.
+  // silence clearly indicates all audio has been delivered via IPC.
   const gapMs = Date.now() - pendingMusicLastAudioAt;
   if (gapMs > 500 && audioDeltaQueue.length === 0 && !isDrainingAudio) {
     if (AUDIO_DEBUG) {
       const ts = new Date().toISOString().slice(11, 23);
-      console.log(`[subprocess:music] ${ts} announcement audio done (gap=${gapMs}ms) — starting music`);
+      console.log(`[subprocess:music] ${ts} announcement IPC done (gap=${gapMs}ms) — draining playback buffer`);
     }
-    commitPendingMusic(url);
+    // IPC delivery is done, but the jitter buffer may still have frames
+    // the AudioPlayer hasn't read yet. Finish the stream and wait for
+    // the player to consume all real frames before starting music.
+    drainBotAudioThenCommit(url);
     return;
   }
 
   setTimeout(pollPendingMusic, 50);
+}
+
+function drainBotAudioThenCommit(url: string) {
+  if (pendingMusicUrl !== url) return;
+
+  // No stream or already finished — commit immediately
+  if (!botAudioStream || botAudioStream.destroyed || botAudioStream.readableEnded) {
+    commitPendingMusic(url);
+    return;
+  }
+
+  // Flush remaining partial frame + push null (EOF).
+  const stream = botAudioStream;
+  stream.finish();
+
+  // Wait for the AudioPlayer to consume all real audio frames.
+  // The 'end' event fires when all data has been read from the stream,
+  // i.e. right after the last real frame has been played.
+  const onEnd = () => {
+    clearTimeout(safety);
+    if (pendingMusicUrl === url) {
+      if (AUDIO_DEBUG) {
+        const ts = new Date().toISOString().slice(11, 23);
+        console.log(`[subprocess:music] ${ts} bot audio stream ended — starting music`);
+      }
+      commitPendingMusic(url);
+    }
+  };
+  stream.once("end", onEnd);
+
+  // Safety timeout in case 'end' never fires (stream destroyed externally, etc.)
+  const safety = setTimeout(() => {
+    stream.removeListener("end", onEnd);
+    if (pendingMusicUrl === url) {
+      if (AUDIO_DEBUG) {
+        const ts = new Date().toISOString().slice(11, 23);
+        console.log(`[subprocess:music] ${ts} drain safety timeout — starting music`);
+      }
+      commitPendingMusic(url);
+    }
+  }, 5000);
 }
 
 function commitPendingMusic(url: string) {
