@@ -432,10 +432,12 @@ export function isBotNameAddressed({
 }
 
 export function isVoiceTurnAddressedToBot(transcript, settings) {
-  return isBotNameAddressed({
-    transcript,
-    botName: settings?.botName || ""
-  });
+  if (isBotNameAddressed({ transcript, botName: settings?.botName || "" })) return true;
+  const aliases = Array.isArray(settings?.botNameAliases) ? settings.botNameAliases : [];
+  for (const alias of aliases) {
+    if (alias && isBotNameAddressed({ transcript, botName: String(alias) })) return true;
+  }
+  return false;
 }
 
 export function isLikelyVocativeAddressToOtherParticipant({
