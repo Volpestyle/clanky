@@ -19,6 +19,7 @@ import {
   VoiceConnectionStatus,
   entersState,
   type AudioPlayer,
+  type AudioResource,
   type VoiceConnection
 } from "@discordjs/voice";
 import { spawn as spawnChild, type ChildProcess } from "node:child_process";
@@ -41,6 +42,7 @@ let defaultSampleRate = 24000;
 // Music child processes — tracked for explicit cleanup on stop/skip
 let musicProcesses: { pid: number; kill: () => void }[] = [];
 let musicActive = false;
+let pausedMusicResource: AudioResource<null> | null = null;
 
 const FRAME_SIZE = 3840; // 20ms at 48kHz stereo s16le
 
@@ -172,6 +174,7 @@ function killMusicProcesses() {
 
 function resetPlayback() {
   musicActive = false;
+  pausedMusicResource = null;
   // Remove stale .once(Idle) listeners before stopping, so a forced idle
   // transition doesn't fire handlers from the previous track.
   if (audioPlayer) {
@@ -643,13 +646,58 @@ function handleMusicStop() {
 
 function handleMusicPause() {
   musicActive = false;
-  audioPlayer?.pause();
+
+  // Save the current music resource so we can replay it on resume.
+  // yt-dlp/ffmpeg stay alive — OS pipe backpressure stalls them while
+  // nobody reads from the resource.
+  pausedMusicResource = null;
+  if (audioPlayer) {
+    const st = audioPlayer.state;
+    if (st.status === AudioPlayerStatus.Playing || st.status === AudioPlayerStatus.Buffering) {
+      pausedMusicResource = st.resource as AudioResource<null>;
+    }
+  }
+
+  // Remove stale .once(Idle) listener from music setup so it doesn't
+  // fire when the bot's voice audio finishes.
+  if (audioPlayer) {
+    try { audioPlayer.removeAllListeners(AudioPlayerStatus.Idle); } catch { /* ignore */ }
+  }
+
+  // Destroy old bot stream so armVoicePlayback creates a fresh one.
+  if (botAudioStream) {
+    try { botAudioStream.destroy(); } catch { /* ignore */ }
+    botAudioStream = null;
+  }
+
   armVoicePlayback("music_pause");
 }
 
 function handleMusicResume() {
+  if (!pausedMusicResource || !audioPlayer) {
+    if (AUDIO_DEBUG) {
+      const ts = new Date().toISOString().slice(11, 23);
+      console.log(`[subprocess:music] ${ts} resume requested but no paused resource — no-op`);
+    }
+    return;
+  }
+
   musicActive = true;
-  audioPlayer?.unpause();
+  // Flush any queued bot audio so it doesn't leak into the music stream.
+  audioDeltaQueue.length = 0;
+  isDrainingAudio = false;
+
+  const resource = pausedMusicResource;
+  pausedMusicResource = null;
+
+  audioPlayer.play(resource);
+
+  // Re-register the Idle listener for when the track finishes naturally.
+  audioPlayer.once(AudioPlayerStatus.Idle, () => {
+    musicActive = false;
+    send({ type: "music_idle" });
+    armVoicePlayback("music_idle");
+  });
 }
 
 // --- Destroy ---
