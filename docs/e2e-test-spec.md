@@ -252,17 +252,23 @@ class DriverBot {
   async destroy(): Promise<void>;
 
   // Audio injection
-  async playAudio(audioPath: string): Promise<void>;
+  playAudio(audioPath: string): Promise<void>;
 
   // Audio capture
   getReceivedAudioBytes(): number;
   getReceivedAudioBuffer(): Buffer;
   clearReceivedAudio(): void;
 
+  // Text channel
+  async sendTextMessage(content: string): Promise<Message>;
+  async waitForMessage(userId: string, timeoutMs?: number): Promise<Message>;
+  async waitForNoMessage(userId: string, timeoutMs?: number): Promise<boolean>;
+
   // State
   client: Client;
   connection: VoiceConnection | null;
   player: AudioPlayer | null;
+  readonly config: DriverBotConfig;
 }
 ```
 
@@ -275,13 +281,15 @@ All audio fixtures must be:
 - **Channels**: 1 (mono)
 - **File Extension**: `.pcm`
 
-#### Generation via TTS
+#### Generation via macOS TTS
+
+Requires macOS (`say` command). Generates AIFF via `say`, then converts to raw PCM via `ffmpeg`:
 
 ```sh
-ffmpeg -f tts -i "yo clanker" -ar 48000 -ac 1 -f s16le tests/fixtures/greeting_yo.pcm
+say -o /tmp/yo.aiff "yo clanker" && ffmpeg -y -i /tmp/yo.aiff -ar 48000 -ac 1 -f s16le tests/fixtures/greeting_yo.pcm
 ```
 
-#### Generation via Script
+#### Generation via Script (recommended)
 
 ```sh
 bun tests/e2e/scripts/generate-fixtures.ts
@@ -359,11 +367,31 @@ const maxExpectedBytes = envNumber("E2E_MAX_CHATTER_RESPONSE_BYTES", 1024);
 assert.ok(receivedBytes <= maxExpectedBytes, "Bot should ignore undirected chatter");
 ```
 
-### 5. Smoke Test
+### 5. Text Message Response
+
+**Test**: `E2E: Bot responds to text messages`
+
+**Validates**: Bot receives and replies to a text message in the configured text channel.
+
+**Gating**: Only runs when `E2E_TEST_TEXT_CHANNEL_ID` is set and `RUN_E2E_TEXT=1`.
+
+### 6. Response Latency SLO
+
+**Test**: `E2E: Response latency is within SLO`
+
+**Validates**: Time from audio injection to first received audio chunk is under 8s.
+
+### 7. Network Interruption Recovery
+
+**Test**: `E2E: Bot handles network interruption gracefully`
+
+**Validates**: Driver disconnects mid-stream, reconnects, sends new audio, and system bot still responds.
+
+### 8. Smoke Test
 
 **Test**: `smoke: E2E harness validates physical voice layer`
 
-**Validates**: Complete E2E flow in a single test
+**Validates**: Complete E2E flow in a single test with optional LLM-as-judge quality scoring.
 
 **Gating**: Only runs when `RUN_E2E_VOICE_PHYSICAL=1`
 
@@ -401,9 +429,9 @@ bun test v1.3.10
 tests/e2e/voicePhysicalHarness.test.ts:
 Skipping E2E tests: missing E2E environment variables
 
- 5 pass
+ 8 pass
  0 fail
-Ran 5 tests across 1 file. [232.00ms]
+Ran 8 tests across 1 file. [229.00ms]
 ```
 
 If E2E variables are configured:
@@ -414,8 +442,12 @@ tests/e2e/voicePhysicalHarness.test.ts:
 ✓ E2E: Bot hears greeting and replies with audio [8234ms]
 ✓ E2E: Bot responds to direct question [7123ms]
 ✓ E2E: Bot ignores undirected chatter [3012ms]
+✓ E2E: Bot responds to text messages [5123ms]
+✓ E2E: Response latency is within SLO [4521ms]
+✓ E2E: Bot handles network interruption gracefully [15234ms]
+✓ smoke: E2E harness validates physical voice layer [12345ms]
 
- 4 pass
+ 8 pass
  0 fail
 ```
 
@@ -423,11 +455,13 @@ tests/e2e/voicePhysicalHarness.test.ts:
 
 ### Adding New Test Cases
 
-1. **Generate or record audio fixture**:
+1. **Generate audio fixture** (macOS):
 
 ```sh
-ffmpeg -f tts -i "clanker explain recursion" -ar 48000 -ac 1 -f s16le tests/fixtures/explain_recursion.pcm
+say -o /tmp/explain.aiff "clanker explain recursion" && ffmpeg -y -i /tmp/explain.aiff -ar 48000 -ac 1 -f s16le tests/fixtures/explain_recursion.pcm
 ```
+
+Or programmatically: `await generatePcmAudioFixture("explain_recursion", "clanker explain recursion");`
 
 2. **Add test case to suite**:
 
@@ -512,9 +546,9 @@ E2E_TEST_VOICE_CHANNEL_ID=...
 bun tests/e2e/scripts/generate-fixtures.ts
 ```
 
-Or manually:
+Or manually (macOS):
 ```sh
-ffmpeg -f tts -i "yo clanker" -ar 48000 -ac 1 -f s16le tests/fixtures/greeting_yo.pcm
+say -o /tmp/yo.aiff "yo clanker" && ffmpeg -y -i /tmp/yo.aiff -ar 48000 -ac 1 -f s16le tests/fixtures/greeting_yo.pcm
 ```
 
 ### "Expected system bot to send audio back, got 0 bytes"
@@ -531,21 +565,13 @@ ffmpeg -f tts -i "yo clanker" -ar 48000 -ac 1 -f s16le tests/fixtures/greeting_y
 3. Verify system bot is in test guild
 4. Increase wait: `E2E_RESPONSE_WAIT_MS=20000 bun run test:e2e:voice`
 
-### "ffprobe exited with code 127"
+### "say not available" or fixture generation fails
 
-**Cause**: ffmpeg/ffprobe not installed
+**Cause**: Fixture generation uses macOS `say` for TTS synthesis. Not available on Linux/Windows.
 
 **Fix**:
-```sh
-# macOS
-brew install ffmpeg
-
-# Ubuntu/Debian
-sudo apt install ffmpeg
-
-# Verify
-ffmpeg -version
-```
+- On macOS: `say` is built-in, ensure `ffmpeg` is installed (`brew install ffmpeg`)
+- On Linux/CI: Pre-generate fixtures on macOS and commit them, or provide pre-recorded PCM files
 
 ## CI Integration
 
@@ -561,16 +587,16 @@ on:
 
 jobs:
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest  # Required: fixture generation uses macOS `say` for TTS
     steps:
       - uses: actions/checkout@v4
-      
+
       - uses: oven-sh/setup-bun@v1
-      
+
       - run: bun install
-      
+
       - run: bun tests/e2e/scripts/generate-fixtures.ts
-      
+
       - name: Run E2E Tests
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
@@ -580,6 +606,8 @@ jobs:
           E2E_TEST_VOICE_CHANNEL_ID: ${{ secrets.E2E_TEST_VOICE_CHANNEL_ID }}
         run: bun run test:e2e
 ```
+
+Alternatively, pre-generate and commit fixtures to `tests/fixtures/` to allow `ubuntu-latest` runners.
 
 ### Timing and Cost Considerations
 
@@ -619,29 +647,16 @@ Both are **complementary**:
 
 ## Future Extensions
 
-### Text Channel E2E
-
-```typescript
-test("E2E: Bot responds to text messages", async () => {
-  const textChannel = await driver.getTextChannel();
-  await textChannel.send("yo clanker");
-  
-  const response = await waitForMessage(textChannel, driver.config.systemBotUserId);
-  assert.ok(response.content.length > 0);
-});
-```
-
 ### Voice State Validation
+
+Test that the system bot persists in the channel when users leave:
 
 ```typescript
 test("E2E: Bot correctly handles user join/leave", async () => {
   await driver.joinVoiceChannel();
-  
-  // User leaves
   await driver.disconnect();
   await new Promise(r => setTimeout(r, 2000));
-  
-  // Bot should still be in channel
+
   const botState = await getBotVoiceState(guild, systemBotUserId);
   assert.ok(botState?.channelId === voiceChannelId);
 });
@@ -649,34 +664,25 @@ test("E2E: Bot correctly handles user join/leave", async () => {
 
 ### Multi-User Scenarios
 
+Requires a second driver bot token to test speaker discrimination (Discord assigns SSRCs server-side, so a single bot cannot impersonate multiple users):
+
 ```typescript
 test("E2E: Bot distinguishes between multiple speakers", async () => {
   const driver2 = new DriverBot({ ...config, token: secondDriverToken });
   await driver2.connect();
   await driver2.joinVoiceChannel();
-  
-  await driver.playAudio(getFixturePath("question_to_alice"));
-  // Bot should respond to "alice", not "bob"
-});
-```
 
-### Performance Regression Detection
-
-```typescript
-test("E2E: Response latency within SLO", async () => {
-  const start = Date.now();
-  await driver.playAudio(getFixturePath("greeting"));
-  await waitForResponse(driver);
-  const latency = Date.now() - start;
-  
-  assert.ok(latency < 8000, `Response latency ${latency}ms exceeds 8s SLO`);
+  await driver.playAudio(getFixturePath("question_from_alice"));
+  await driver2.playAudio(getFixturePath("question_from_bob"));
+  // Assert bot correctly attributes speech to each user
 });
 ```
 
 ## References
 
 - **Implementation**: `tests/e2e/driver/DriverBot.ts`
-- **Test Suite**: `tests/e2e/voicePhysicalHarness.test.ts`
+- **Voice Test Suite**: `tests/e2e/voicePhysicalHarness.test.ts`
+- **Text Test Suite**: `tests/e2e/textHarness.test.ts`
 - **Audio Generation**: `tests/e2e/driver/audioGenerator.ts`
 - **Environment Config**: `tests/e2e/driver/env.ts`
 - **Discord.js Voice Guide**: https://discordjs.guide/voice/

@@ -26,11 +26,11 @@ async function main() {
     const fixturePath = getFixturePath(fixture.name);
     
     if (existsSync(fixturePath)) {
-      console.log(`✓ ${fixture.name}.pcm already exists, skipping`);
+      console.log(`✓ ${fixture.name}.wav already exists, skipping`);
       continue;
     }
 
-    console.log(`Generating ${fixture.name}.pcm: "${fixture.text}"`);
+    console.log(`Generating ${fixture.name}.wav: "${fixture.text}"`);
     try {
       const result = await generatePcmAudioFixture(fixture.name, fixture.text);
       console.log(`  ✓ Created: ${result.path} (${result.durationMs}ms)\n`);
