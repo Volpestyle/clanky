@@ -33,13 +33,16 @@ runtimeMode = resolveVoiceRuntimeMode(settings)       // openai/xai/gemini/eleve
 - `elevenlabs_realtime`
 - `stt_pipeline`
 
-`src/voice/voiceSessionManager.ts` decides reply strategy:
-- `brainProvider !== "native"` => `brain` strategy
-- else => `native` strategy
+`src/voice/voiceSessionManager.ts` decides reply strategy via `resolveRealtimeReplyStrategy()`:
+- `voice.replyPath == "native"` => `native` strategy
+- `voice.replyPath == "bridge"` or `"brain"` => `brain` strategy
+- Falls back to legacy `brainProvider` check if `replyPath` is not set
 
 Key implication:
-- In `openai_realtime + brain`, we can run per-speaker OpenAI transcription fan-out, inject labeled text into the OpenAI realtime session, and let that brain do tool calling.
+- In any realtime mode + `brain` strategy, we can run per-speaker ASR transcription fan-out, inject labeled text into the realtime session, and let that brain do tool calling. This works with any provider that supports `textInput` (OpenAI, xAI, Gemini, ElevenLabs).
 - In `native`, we forward audio and let provider-native realtime flow handle response generation.
+
+Provider capabilities are declared in `REALTIME_PROVIDER_CAPABILITIES` in `src/voice/voiceModes.ts`. Guards use `providerSupports(mode, capability)` instead of hardcoded provider checks.
 
 ## How Overall Voice Chat Is Achieved (Code-Backed)
 
@@ -48,7 +51,7 @@ Key implication:
 In `src/voice/voiceJoinFlow.ts`, join flow does all of the following in one place:
 - Resolves runtime mode and provider clients.
 - Connects provider realtime client.
-- For OpenAI, sets `turnDetection: null` and initializes tool schema via `buildOpenAiRealtimeFunctionTools(...)`.
+- For OpenAI, sets `turnDetection: null` and initializes tool schema via `buildRealtimeFunctionTools(...)`.
 - Joins Discord voice, creates audio player and raw bot audio stream.
 - Initializes per-session runtime state:
   - `openAiAsrSessions` (per-user ASR map)
@@ -82,17 +85,17 @@ ASR session client details are in `src/voice/openaiRealtimeTranscriptionClient.t
 - reply admission decision (`evaluateVoiceReplyDecision(...)`)
 - branch:
   - `native` strategy => `forwardRealtimeTurnAudio(...)`
-  - `brain` strategy + OpenAI per-user ASR => `forwardOpenAiRealtimeTextTurnToBrain(...)`
-  - `brain` strategy without per-user bridge => `runRealtimeBrainReply(...)`
+  - `brain` strategy + transcript bridge active => `forwardRealtimeTextTurnToBrain(...)`
+  - `brain` strategy without transcript bridge => `runRealtimeBrainReply(...)`
 
 ### 4) Brain session input format and instruction refresh
 
-`forwardOpenAiRealtimeTextTurnToBrain(...)`:
+`forwardRealtimeTextTurnToBrain(...)`:
 - labels transcript as `(<speakerName>): <text>`
 - refreshes context-aware instructions and tool config before request
-- sends turn into OpenAI realtime via `realtimeClient.requestTextUtterance(...)`
+- sends turn into the realtime provider via `realtimeClient.requestTextUtterance(...)`
 
-`refreshOpenAiRealtimeInstructions(...)` and `prepareOpenAiRealtimeTurnContext(...)` refresh:
+`refreshRealtimeInstructions(...)` and `prepareRealtimeTurnContext(...)` refresh:
 - participant/membership context
 - memory slice
 - tool policy context
@@ -105,7 +108,7 @@ OpenAI realtime client (`src/voice/openaiRealtimeClient.ts`) supports:
 - `conversation.item.create` `function_call_output` for tool results
 
 Runtime loop in `src/voice/voiceSessionManager.ts`:
-- `bindRealtimeHandlers(...)` routes raw provider events to `handleOpenAiRealtimeFunctionCallEvent(...)`.
+- `bindRealtimeHandlers(...)` routes raw provider events to the function-call handler.
 - Function-call envelopes are parsed from OpenAI function-call delta/done events.
 - Arguments are accumulated until done.
 - Tool execution dispatch:
@@ -191,7 +194,7 @@ Status against the spec in this repo:
 Compatibility behavior is still preserved:
 1. `resolveVoiceRuntimeMode()` honors legacy `settings.voice.mode`.
 2. Older mode values continue to map to equivalent runtime behavior.
-3. `brainProvider: "native"` keeps provider-native brain behavior.
+3. `voice.replyPath` supersedes `realtimeReplyStrategy` and `brainProvider` for reply routing. Legacy values are migrated automatically in `settingsNormalization.ts`.
 
 ## Screen Share Integration
 
@@ -202,7 +205,7 @@ Screen share stays provider-agnostic and is layered onto the same brain/runtime 
 
 ## Extensibility
 
-- Add voice providers in `src/voice/voiceModes.ts` and map runtime in `resolveVoiceRuntimeMode(...)`.
+- Add voice providers in `src/voice/voiceModes.ts`: add an entry to `REALTIME_PROVIDER_CAPABILITIES` and map runtime in `resolveVoiceRuntimeMode(...)`.
 - Add brain providers by extending provider resolution and reply strategy handling.
 - Add transcriber providers by extending `TRANSCRIBER_PROVIDERS` and per-turn transcription plumbing.
 - Add new local or MCP tools by extending `resolveVoiceRealtimeToolDescriptors(...)`.

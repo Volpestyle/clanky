@@ -10,8 +10,8 @@ flowchart TD
     F -- "deny: bot_turn_open\neagerness too low\nsilence window needed" --> SKIP[Skip / defer turn]
     F -- allow --> G{resolveRealtimeReplyStrategy}
 
-    G -- "realtimeReplyStrategy == native\nOR brainProvider == native" --> NATIVE
-    G -- "brainProvider != native\n(resolves to brain)" --> BRAIN_CHECK
+    G -- "replyPath == native\nOR brainProvider == native" --> NATIVE
+    G -- "replyPath == bridge or brain\n(resolves to brain strategy)" --> BRAIN_CHECK
 
     subgraph NATIVE[Native Path]
         N1[forwardRealtimeTurnAudio]
@@ -20,15 +20,15 @@ flowchart TD
         N1 --> N2 --> N3
     end
 
-    BRAIN_CHECK{shouldUseOpenAi\nRealtimeTranscriptBridge?}
+    BRAIN_CHECK{shouldUseRealtime\nTranscriptBridge?}
 
     BRAIN_CHECK -- "YES\nusePerUserAsrBridge: true\nOR usePerUserAsrBridge: false\n(shared ASR active)" --> BRIDGE
     BRAIN_CHECK -- "NO\n(no transcript bridge)" --> FULL_BRAIN
 
     subgraph BRIDGE["Transcript Bridge Path ⭐ YOU ARE HERE"]
-        B1[forwardOpenAiRealtimeTextTurnToBrain]
-        B2["Send labeled text to OpenAI Realtime:\n(speakerName): transcript"]
-        B3["gpt-realtime generates\naudio reply from text"]
+        B1[forwardRealtimeTextTurnToBrain]
+        B2["Send labeled text to realtime provider:\n(speakerName): transcript"]
+        B3["Realtime model generates\naudio reply from text"]
         B1 --> B2 --> B3
     end
 

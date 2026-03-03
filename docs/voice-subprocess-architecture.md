@@ -1,8 +1,8 @@
-# Voice Subprocess Architecture (Node Reference)
+# Voice Subprocess Architecture (Legacy Node Reference)
 
-This document covers the Node.js voice chat and music playback systems in `src/voice/voiceSubprocess.ts` — how audio flows, how the bot decides when to speak, and how music integrates without disrupting voice conversation.
+> **Note:** The voice subprocess has been rewritten in Rust (`src/voice/rust_subprocess/`). This document describes the original Node.js implementation in `src/voice/voiceSubprocess.ts` and serves as the behavioral reference for Rust parity validation. For the Rust implementation, see `docs/rust-submodule-dev.md`.
 
-Treat this as the Node behavior reference when validating parity work.
+This document covers the Node.js voice chat and music playback systems — how audio flows, how the bot decides when to speak, and how music integrates without disrupting voice conversation.
 
 ![Voice Subprocess Architecture](diagrams/voice-subprocess-architecture.png)
 <!-- source: docs/diagrams/voice-subprocess-architecture.mmd -->
@@ -101,8 +101,7 @@ Both use the ASR bridge pattern: after capture finalization, the bridge commits 
 
 ### Turn Detection
 
-![Voice Turn Lifecycle](diagrams/voice-turn-lifecycle.png)
-<!-- source: docs/diagrams/voice-turn-lifecycle.mmd -->
+<!-- Diagram not yet generated: diagrams/voice-turn-lifecycle.png -->
 
 Turn boundaries are detected through multiple layers:
 
@@ -176,8 +175,7 @@ When the bot is actively speaking (`botTurnOpen = true`), new user turns are **d
 
 ## YouTube Music Playback
 
-![Music Playback Flow](diagrams/voice-music-playback.png)
-<!-- source: docs/diagrams/voice-music-playback.mmd -->
+<!-- Diagram not yet generated: diagrams/voice-music-playback.png -->
 
 ### Search → Queue → Play
 
