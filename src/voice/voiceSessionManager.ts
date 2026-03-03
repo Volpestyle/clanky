@@ -2322,26 +2322,35 @@ export class VoiceSessionManager {
       }
     });
 
-    await this.sendOperationalMessage({
-      channel: resolvedChannel,
-      settings: resolvedSettings,
-      guildId: resolvedGuildId,
-      channelId: resolvedChannelId || session.textChannelId || null,
-      userId: resolvedUserId || null,
-      messageId: message?.id || null,
-      event: "voice_music_request",
-      reason: stopSucceeded ? (wasActive ? "stopped" : "already_stopped") : playbackResult.reason || "music_stop_failed",
-      details: {
-        source: String(source || "text_voice_intent"),
-        provider: resolvedProvider,
-        stopResultReason,
-        status: Number(playbackResult.status || 0),
-        error: stopSucceeded ? null : playbackResult.message || null,
-        previouslyActive: wasActive,
-        requestText: normalizedRequestText
-      },
-      mustNotify
-    });
+    // When a voice tool triggers stop on already-idle music, suppress the
+    // operational text-channel message entirely — the voice AI already
+    // responds vocally and a text message like "nothing was playing" breaks
+    // continuity.
+    const suppressOperationalMessage =
+      !wasActive && String(source || "") === "voice_tool_call";
+
+    if (!suppressOperationalMessage) {
+      await this.sendOperationalMessage({
+        channel: resolvedChannel,
+        settings: resolvedSettings,
+        guildId: resolvedGuildId,
+        channelId: resolvedChannelId || session.textChannelId || null,
+        userId: resolvedUserId || null,
+        messageId: message?.id || null,
+        event: "voice_music_request",
+        reason: stopSucceeded ? (wasActive ? "stopped" : "already_stopped") : playbackResult.reason || "music_stop_failed",
+        details: {
+          source: String(source || "text_voice_intent"),
+          provider: resolvedProvider,
+          stopResultReason,
+          status: Number(playbackResult.status || 0),
+          error: stopSucceeded ? null : playbackResult.message || null,
+          previouslyActive: wasActive,
+          requestText: normalizedRequestText
+        },
+        mustNotify
+      });
+    }
     return true;
   }
 
@@ -3799,6 +3808,18 @@ export class VoiceSessionManager {
     }
     session.botTurnOpen = false;
 
+    // Unduck music immediately on barge-in so the user hears it while speaking.
+    if (session._realtimeMusicDucked) {
+      if (session._realtimeUnduckTimer) {
+        clearTimeout(session._realtimeUnduckTimer);
+        session._realtimeUnduckTimer = null;
+      }
+      session._realtimeMusicDucked = false;
+      if (this.isMusicPlaybackActive(session) && this.musicPlayer?.isDucked?.()) {
+        this.musicPlayer?.unduck(300);
+      }
+    }
+
     if (session.pendingResponse && typeof session.pendingResponse === "object") {
       session.lastAudioDeltaAt = Math.max(Number(session.lastAudioDeltaAt || 0), now);
       session.pendingResponse.audioReceivedAt = Number(session.lastAudioDeltaAt || now);
@@ -3957,6 +3978,22 @@ export class VoiceSessionManager {
       }
 
       session.lastAudioDeltaAt = Date.now();
+
+      // Duck music when realtime TTS starts speaking — playVoiceReplyInOrder
+      // handles ducking for the STT pipeline, but realtime audio arrives here
+      // directly and bypasses that path.
+      if (
+        !session._realtimeMusicDucked &&
+        this.isMusicPlaybackActive(session) &&
+        !this.musicPlayer?.isPaused?.()
+      ) {
+        if (session._realtimeUnduckTimer) {
+          clearTimeout(session._realtimeUnduckTimer);
+          session._realtimeUnduckTimer = null;
+        }
+        this.musicPlayer?.duck(300);
+        session._realtimeMusicDucked = true;
+      }
 
       // Send raw PCM to subprocess — it handles conversion + Opus encoding.
       if (!session.subprocessClient?.isAlive) return;
@@ -4211,6 +4248,20 @@ export class VoiceSessionManager {
       if (!pending) return;
 
       if (hadAudio) {
+        // Schedule music unduck after the subprocess finishes playing
+        // buffered audio (~BOT_TURN_SILENCE_RESET_MS after last delta).
+        if (session._realtimeMusicDucked) {
+          if (session._realtimeUnduckTimer) clearTimeout(session._realtimeUnduckTimer);
+          session._realtimeUnduckTimer = setTimeout(() => {
+            session._realtimeUnduckTimer = null;
+            if (session._realtimeMusicDucked) {
+              session._realtimeMusicDucked = false;
+              if (this.isMusicPlaybackActive(session) && this.musicPlayer?.isDucked?.()) {
+                this.musicPlayer?.unduck(300);
+              }
+            }
+          }, BOT_TURN_SILENCE_RESET_MS);
+        }
         this.clearPendingResponse(session);
         return;
       }

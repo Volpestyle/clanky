@@ -140,7 +140,7 @@ export const DEFAULT_SETTINGS = {
       model: "claude-sonnet-4-6"
     },
     replyDecisionLlm: {
-      enabled: false,
+      enabled: true,
       provider: "anthropic",
       model: "claude-haiku-4-5",
       reasoningEffort: "minimal",

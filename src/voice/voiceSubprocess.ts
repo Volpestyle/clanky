@@ -590,7 +590,11 @@ function startMusicPlayback(url: string) {
 
       audioPlayer.play(resource);
 
+      // Guard: only fire musicIdle if this URL is still the active track.
+      // Prevents stale listeners from prematurely ending a new track.
+      const expectedUrl = url;
       audioPlayer.once(AudioPlayerStatus.Idle, () => {
+        if (activeMusicUrl !== expectedUrl) return;
         musicActive = false;
         send({ type: "music_idle" });
         armVoicePlayback("music_idle");
@@ -622,7 +626,9 @@ function startMusicPlayback(url: string) {
 
       audioPlayer.play(resource);
 
+      const expectedUrl = url;
       audioPlayer.once(AudioPlayerStatus.Idle, () => {
+        if (activeMusicUrl !== expectedUrl) return;
         musicActive = false;
         send({ type: "music_idle" });
         armVoicePlayback("music_idle");
