@@ -1113,37 +1113,29 @@ export class VoiceSessionManager {
 
   ensureSessionMusicState(session) {
     if (!session || typeof session !== "object") return null;
-    const current = session.music && typeof session.music === "object" ? session.music : {};
-    const next = {
-      active: Boolean(current.active),
-      startedAt: Math.max(0, Number(current.startedAt || 0)),
-      stoppedAt: Math.max(0, Number(current.stoppedAt || 0)),
-      provider: String(current.provider || "").trim() || null,
-      source: String(current.source || "").trim() || null,
-      lastTrackId: String(current.lastTrackId || "").trim() || null,
-      lastTrackTitle: String(current.lastTrackTitle || "").trim() || null,
-      lastTrackArtists: Array.isArray(current.lastTrackArtists)
-        ? current.lastTrackArtists.map((entry) => String(entry || "").trim()).filter(Boolean).slice(0, 8)
-        : [],
-      lastTrackUrl: String(current.lastTrackUrl || "").trim() || null,
-      lastQuery: String(current.lastQuery || "").trim() || null,
-      lastRequestedByUserId: String(current.lastRequestedByUserId || "").trim() || null,
-      lastRequestText: String(current.lastRequestText || "").trim() || null,
-      lastCommandAt: Math.max(0, Number(current.lastCommandAt || 0)),
-      lastCommandReason: String(current.lastCommandReason || "").trim() || null,
-      pendingQuery: String(current.pendingQuery || "").trim() || null,
-      pendingPlatform: this.normalizeMusicPlatformToken(current.pendingPlatform, "auto"),
-      pendingResults: Array.isArray(current.pendingResults)
-        ? current.pendingResults
-          .map((entry) => this.normalizeMusicSelectionResult(entry))
-          .filter(Boolean)
-          .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS)
-        : [],
-      pendingRequestedByUserId: String(current.pendingRequestedByUserId || "").trim() || null,
-      pendingRequestedAt: Math.max(0, Number(current.pendingRequestedAt || 0))
+    if (session.music && typeof session.music === "object") return session.music;
+    session.music = {
+      active: false,
+      startedAt: 0,
+      stoppedAt: 0,
+      provider: null,
+      source: null,
+      lastTrackId: null,
+      lastTrackTitle: null,
+      lastTrackArtists: [],
+      lastTrackUrl: null,
+      lastQuery: null,
+      lastRequestedByUserId: null,
+      lastRequestText: null,
+      lastCommandAt: 0,
+      lastCommandReason: null,
+      pendingQuery: null,
+      pendingPlatform: "auto",
+      pendingResults: [],
+      pendingRequestedByUserId: null,
+      pendingRequestedAt: 0
     };
-    session.music = next;
-    return next;
+    return session.music;
   }
 
   snapshotMusicRuntimeState(session) {
@@ -3352,8 +3344,17 @@ export class VoiceSessionManager {
       }, 3000);
     };
 
+    const onMusicIdle = () => {
+      const music = this.ensureSessionMusicState(session);
+      if (music) {
+        music.active = false;
+        music.stoppedAt = Date.now();
+      }
+    };
+
     session.subprocessClient.on("playerState", onPlayerState);
     session.subprocessClient.on("playbackArmed", onPlaybackArmed);
+    session.subprocessClient.on("musicIdle", onMusicIdle);
     session.subprocessClient.on("error", onError);
 
     // Replay sticky playback-armed state in case the subprocess emitted it
@@ -3366,6 +3367,7 @@ export class VoiceSessionManager {
     session.cleanupHandlers.push(() => {
       session.subprocessClient?.off("playerState", onPlayerState);
       session.subprocessClient?.off("playbackArmed", onPlaybackArmed);
+      session.subprocessClient?.off("musicIdle", onMusicIdle);
       session.subprocessClient?.off("error", onError);
       if (session.joinGreetingTimer) {
         clearTimeout(session.joinGreetingTimer);
