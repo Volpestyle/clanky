@@ -43,6 +43,10 @@ let defaultSampleRate = 24000;
 let musicProcesses: { pid: number; kill: () => void }[] = [];
 let musicActive = false;
 let pausedMusicResource: AudioResource<null> | null = null;
+let pendingMusicUrl: string | null = null;
+let pendingMusicReceivedAt = 0;
+let pendingMusicAudioSeen = false;
+let pendingMusicLastAudioAt = 0;
 
 const FRAME_SIZE = 3840; // 20ms at 48kHz stereo s16le
 
@@ -175,6 +179,10 @@ function killMusicProcesses() {
 function resetPlayback() {
   musicActive = false;
   pausedMusicResource = null;
+  pendingMusicUrl = null;
+  pendingMusicReceivedAt = 0;
+  pendingMusicAudioSeen = false;
+  pendingMusicLastAudioAt = 0;
   // Remove stale .once(Idle) listeners before stopping, so a forced idle
   // transition doesn't fire handlers from the previous track.
   if (audioPlayer) {
@@ -323,6 +331,12 @@ function handleAudio(pcmBase64: string, sampleRate: number) {
       console.log(`[subprocess:audio] ${ts} bot audio dropped — music active`);
     }
     return;
+  }
+  // Track audio arrival timing for pending music deferral.
+  // musicActive is false here, so the audio plays normally while we wait.
+  if (pendingMusicUrl) {
+    pendingMusicAudioSeen = true;
+    pendingMusicLastAudioAt = Date.now();
   }
   audioChunksReceived++;
   if (AUDIO_DEBUG && audioChunksReceived <= 3) {
@@ -526,18 +540,11 @@ function trackMusicProcess(proc: ChildProcess) {
   });
 }
 
-function handleMusicPlay(msg: any) {
-  const { url } = msg;
-  if (!connection || !url) {
-    send({ type: "music_error", message: "no connection or URL" });
+function startMusicPlayback(url: string) {
+  if (!connection || !audioPlayer) {
+    send({ type: "music_error", message: "no connection or audio player" });
     return;
   }
-
-  resetPlayback();
-  musicActive = true;
-  // Flush any bot audio that was already queued from in-flight IPC messages.
-  audioDeltaQueue.length = 0;
-  isDrainingAudio = false;
 
   try {
     const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
@@ -577,12 +584,6 @@ function handleMusicPlay(msg: any) {
         inputType: StreamType.OggOpus
       });
 
-      if (!audioPlayer) {
-        audioPlayer = createAudioPlayer({
-      behaviors: { maxMissedFrames: 250 }
-    });
-        connection.subscribe(audioPlayer);
-      }
       audioPlayer.play(resource);
 
       audioPlayer.once(AudioPlayerStatus.Idle, () => {
@@ -615,12 +616,6 @@ function handleMusicPlay(msg: any) {
         inputType: StreamType.OggOpus
       });
 
-      if (!audioPlayer) {
-        audioPlayer = createAudioPlayer({
-      behaviors: { maxMissedFrames: 250 }
-    });
-        connection.subscribe(audioPlayer);
-      }
       audioPlayer.play(resource);
 
       audioPlayer.once(AudioPlayerStatus.Idle, () => {
@@ -638,6 +633,92 @@ function handleMusicPlay(msg: any) {
   }
 }
 
+// --- Deferred music start ---
+// music_play IPC arrives BEFORE the bot's announcement audio (the tool call
+// fires first, then OpenAI generates the audio response ~2-3s later).
+// We let the announcement play through, detect when it's done, then start music.
+
+function pollPendingMusic() {
+  const url = pendingMusicUrl;
+  if (!url) return;
+
+  const elapsed = Date.now() - pendingMusicReceivedAt;
+
+  // Safety timeout: 8s max wait from music_play received
+  if (elapsed > 8000) {
+    if (AUDIO_DEBUG) {
+      const ts = new Date().toISOString().slice(11, 23);
+      console.log(`[subprocess:music] ${ts} pending music safety timeout — starting`);
+    }
+    commitPendingMusic(url);
+    return;
+  }
+
+  if (!pendingMusicAudioSeen) {
+    // Phase A: No audio has arrived yet — wait up to 5s for an announcement.
+    // (Tool call → tool result → response.create → first audio can take ~3s)
+    if (elapsed > 5000) {
+      if (AUDIO_DEBUG) {
+        const ts = new Date().toISOString().slice(11, 23);
+        console.log(`[subprocess:music] ${ts} no announcement audio arrived — starting music`);
+      }
+      commitPendingMusic(url);
+      return;
+    }
+    setTimeout(pollPendingMusic, 50);
+    return;
+  }
+
+  // Phase B: Audio has been seen — wait for a 500ms gap (TTS done).
+  // Audio chunks arrive every ~30-40ms during active TTS, so 500ms of
+  // silence clearly indicates the announcement has finished.
+  const gapMs = Date.now() - pendingMusicLastAudioAt;
+  if (gapMs > 500 && audioDeltaQueue.length === 0 && !isDrainingAudio) {
+    if (AUDIO_DEBUG) {
+      const ts = new Date().toISOString().slice(11, 23);
+      console.log(`[subprocess:music] ${ts} announcement audio done (gap=${gapMs}ms) — starting music`);
+    }
+    commitPendingMusic(url);
+    return;
+  }
+
+  setTimeout(pollPendingMusic, 50);
+}
+
+function commitPendingMusic(url: string) {
+  if (pendingMusicUrl !== url) return;
+  pendingMusicUrl = null;
+  pendingMusicReceivedAt = 0;
+  pendingMusicAudioSeen = false;
+  pendingMusicLastAudioAt = 0;
+  resetPlayback();
+  musicActive = true;
+  startMusicPlayback(url);
+}
+
+function handleMusicPlay(msg: any) {
+  const { url } = msg;
+  if (!connection || !url) {
+    send({ type: "music_error", message: "no connection or URL" });
+    return;
+  }
+
+  // Do NOT set musicActive = true yet — let the bot's announcement audio
+  // ("now playing X") flow through and be heard first. The announcement
+  // arrives via IPC *after* this music_play message.
+  pendingMusicUrl = url;
+  pendingMusicReceivedAt = Date.now();
+  pendingMusicAudioSeen = false;
+  pendingMusicLastAudioAt = 0;
+
+  if (AUDIO_DEBUG) {
+    const ts = new Date().toISOString().slice(11, 23);
+    console.log(`[subprocess:music] ${ts} music_play received — waiting for announcement audio before starting`);
+  }
+
+  pollPendingMusic();
+}
+
 function handleMusicStop() {
   resetPlayback();
   armVoicePlayback("music_stop");
@@ -645,6 +726,11 @@ function handleMusicStop() {
 }
 
 function handleMusicPause() {
+  // Cancel any pending deferred music start
+  pendingMusicUrl = null;
+  pendingMusicReceivedAt = 0;
+  pendingMusicAudioSeen = false;
+  pendingMusicLastAudioAt = 0;
   musicActive = false;
 
   // Save the current music resource so we can replay it on resume.
