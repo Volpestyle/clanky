@@ -28,10 +28,10 @@ test("XaiRealtimeClient appendInputAudioPcm encodes and sends audio chunk", () =
     outbound.push(payload);
   };
 
-  client.appendInputAudioPcm(Buffer.from([1, 2, 3, 4]));
+  client.appendInputAudioPcm(Buffer.from([1, 2, 3, 4, 5, 6]));
   assert.equal(outbound.length, 1);
   assert.equal(outbound[0]?.type, "input_audio_buffer.append");
-  assert.equal(outbound[0]?.audio, Buffer.from([1, 2, 3, 4]).toString("base64"));
+  assert.equal(outbound[0]?.audio, Buffer.from([1, 2, 3, 4, 5, 6]).toString("base64"));
 });
 
 test("XaiRealtimeClient cancelActiveResponse sends response.cancel", () => {

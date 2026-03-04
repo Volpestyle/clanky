@@ -63,6 +63,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
   activeResponseId;
   activeResponseStatus;
   latestVideoFrame;
+  audioBase64Buffer: Buffer | null;
 
   constructor({ apiKey, baseUrl = DEFAULT_OPENAI_BASE_URL, logger = null }) {
     super();
@@ -84,15 +85,16 @@ export class OpenAiRealtimeClient extends EventEmitter {
     this.activeResponseId = null;
     this.activeResponseStatus = null;
     this.latestVideoFrame = null;
+    this.audioBase64Buffer = null;
   }
 
   async connect({
     model = OPENAI_REALTIME_DEFAULT_SESSION_MODEL,
     voice = "",
     instructions = "",
-      inputAudioFormat = "pcm16",
-      outputAudioFormat = "pcm16",
-      inputTranscriptionModel = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
+    inputAudioFormat = "pcm16",
+    outputAudioFormat = "pcm16",
+    inputTranscriptionModel = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
     inputTranscriptionLanguage = "",
     inputTranscriptionPrompt = "",
     tools = [],
@@ -298,7 +300,26 @@ export class OpenAiRealtimeClient extends EventEmitter {
 
   appendInputAudioPcm(audioBuffer) {
     if (!audioBuffer || !audioBuffer.length) return;
-    this.appendInputAudioBase64(audioBuffer.toString("base64"));
+
+    // Base64 encoding requires groups of 3 bytes to avoid `=` padding characters natively.
+    // The OpenAI API requires PCM16 format, which means samples are 2 bytes each.
+    // The Least Common Multiple of 3 (Base64) and 2 (PCM16) is 6 bytes.
+    // Therefore, we must buffer audio bits to a multiple of 6 bytes.
+    const combined = this.audioBase64Buffer
+      ? Buffer.concat([this.audioBase64Buffer, audioBuffer])
+      : audioBuffer;
+
+    const remainder = combined.length % 6;
+    const sendLength = combined.length - remainder;
+
+    if (sendLength > 0) {
+      const sendBuffer = combined.subarray(0, sendLength);
+      this.appendInputAudioBase64(sendBuffer.toString("base64"));
+    }
+
+    this.audioBase64Buffer = remainder > 0
+      ? combined.subarray(sendLength)
+      : null;
   }
 
   appendInputAudioBase64(audioBase64) {
@@ -755,10 +776,10 @@ function summarizeOutboundPayload(payload) {
       type,
       response: response
         ? {
-            outputModalities: Array.isArray(response.output_modalities)
-              ? response.output_modalities.slice(0, 4)
-              : null
-          }
+          outputModalities: Array.isArray(response.output_modalities)
+            ? response.output_modalities.slice(0, 4)
+            : null
+        }
         : null
     });
   }
@@ -784,14 +805,14 @@ function summarizeOutboundPayload(payload) {
       type,
       response: response
         ? {
-            conversation: response.conversation || null,
-            outputModalities: Array.isArray(response.output_modalities)
-              ? response.output_modalities.slice(0, 4)
-              : null,
-            inputItems: inputItems.length,
-            inputTextChars,
-            hasInputImage
-          }
+          conversation: response.conversation || null,
+          outputModalities: Array.isArray(response.output_modalities)
+            ? response.output_modalities.slice(0, 4)
+            : null,
+          inputItems: inputItems.length,
+          inputTextChars,
+          hasInputImage
+        }
         : null
     });
   }

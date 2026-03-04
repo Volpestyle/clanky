@@ -1,14 +1,5 @@
 # Repository Instructions
 
-- Clanker conk current preferred models (see pricing.ts)
-- Main
-  - sonnet
-  - gpt-5-mini reasoning medium
-  - grok-4
-- Classifiers
-  - haiku
-  - gpt-5-nano reasoning low
-
 - Refer to docs/openai/openai-realtime-transcription.md when working with openai realtime transcripton or ASR.
 - Refer to docs/openai/openai-realtime-speech.md when working with openai realtime speech.
 - Runtime/package manager standard: use Bun (`bun`, `bun run`, `bunx`) over Node/NPM (`node`, `npm`, `npx`) unless explicitly requested.

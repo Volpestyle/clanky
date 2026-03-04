@@ -117,3 +117,5 @@ export const RECENT_ENGAGEMENT_WINDOW_MS = 35_000;
 export const JOIN_GREETING_LLM_WINDOW_MS = 25_000;
 export const SOUNDBOARD_DECISION_TRANSCRIPT_MAX_CHARS = 280;
 export const SOUNDBOARD_CATALOG_REFRESH_MS = 60_000;
+export const MEMORY_SENSITIVE_PATTERN_RE =
+  /\b(?:sk-[a-z0-9]{20,}|api[_-]?key|token|password|passphrase|authorization|secret)\b/i;

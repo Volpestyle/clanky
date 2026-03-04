@@ -67,7 +67,7 @@ function ensureIsolatedWorkspace(): string {
 
 const XAI_VIDEO_POLL_INTERVAL_MS = 2500;
 const XAI_VIDEO_TIMEOUT_MS = 4 * 60_000;
-const XAI_REQUEST_TIMEOUT_MS = 20_000;
+export const XAI_REQUEST_TIMEOUT_MS = 20_000;
 const XAI_VIDEO_FAILED_STATUSES = new Set(["failed", "error", "cancelled", "canceled"]);
 type XaiJsonPrimitive = string | number | boolean | null;
 type XaiJsonValue = XaiJsonPrimitive | XaiJsonRecord | XaiJsonValue[];
@@ -75,11 +75,11 @@ type XaiJsonRecord = {
   [key: string]: XaiJsonValue;
 };
 
-type XaiJsonRequestOptions = {
+export type XaiJsonRequestOptions = {
   method?: string;
   body?: XaiJsonRecord | null;
 };
-const MEMORY_EXTRACTION_SCHEMA = {
+export const MEMORY_EXTRACTION_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
@@ -102,7 +102,7 @@ const MEMORY_EXTRACTION_SCHEMA = {
   required: ["facts"]
 };
 
-function buildOpenAiTemperatureParam(model: string, temperature: number) {
+export function buildOpenAiTemperatureParam(model: string, temperature: number) {
   const normalizedModel = String(model || "")
     .trim()
     .toLowerCase();
@@ -114,7 +114,7 @@ function buildOpenAiTemperatureParam(model: string, temperature: number) {
   };
 }
 
-function buildOpenAiReasoningParam(model: string, reasoningEffort: unknown = "") {
+export function buildOpenAiReasoningParam(model: string, reasoningEffort: unknown = "") {
   const normalizedModel = String(model || "")
     .trim()
     .toLowerCase();
@@ -143,7 +143,7 @@ function appendJsonSchemaInstruction(systemPrompt: string, jsonSchema: string) {
     .join("\n\n");
 }
 
-function buildOpenAiJsonSchemaTextFormat(jsonSchema: string) {
+export function buildOpenAiJsonSchemaTextFormat(jsonSchema: string) {
   const normalizedSchema = String(jsonSchema || "").trim();
   if (!normalizedSchema) return null;
 

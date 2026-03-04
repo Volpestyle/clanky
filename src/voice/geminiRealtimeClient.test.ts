@@ -41,8 +41,8 @@ test("GeminiRealtimeClient append/commit audio emits start, media, and end event
     outbound.push(payload);
   };
 
-  client.appendInputAudioBase64("AAA");
-  client.appendInputAudioBase64("BBB");
+  client.appendInputAudioPcm(Buffer.from([1, 2, 3, 4, 5, 6]));
+  client.appendInputAudioPcm(Buffer.from([7, 8, 9, 10, 11, 12]));
   client.commitInputAudioBuffer();
 
   assert.equal(outbound.length, 4);
@@ -51,8 +51,8 @@ test("GeminiRealtimeClient append/commit audio emits start, media, and end event
       activityStart: {}
     }
   });
-  assert.equal(outbound[1]?.realtimeInput?.mediaChunks?.[0]?.data, "AAA");
-  assert.equal(outbound[2]?.realtimeInput?.mediaChunks?.[0]?.data, "BBB");
+  assert.equal(outbound[1]?.realtimeInput?.mediaChunks?.[0]?.data, Buffer.from([1, 2, 3, 4, 5, 6]).toString("base64"));
+  assert.equal(outbound[2]?.realtimeInput?.mediaChunks?.[0]?.data, Buffer.from([7, 8, 9, 10, 11, 12]).toString("base64"));
   assert.deepEqual(outbound[3], {
     realtimeInput: {
       activityEnd: {}

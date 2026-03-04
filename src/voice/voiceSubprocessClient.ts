@@ -23,7 +23,7 @@ export class VoiceSubprocessClient extends EventEmitter {
   private destroyed = false;
   private destroyPromise: Promise<void> | null = null;
   private adapterCleanup: (() => void) | null = null;
-  private stdoutBuffer = "";
+  private stdoutBuffer: Buffer = Buffer.alloc(0);
   private lastPlaybackArmedReason: string | null = null;
 
   constructor(guildId: string, channelId: string, guild: any) {
@@ -89,20 +89,45 @@ export class VoiceSubprocessClient extends EventEmitter {
     VoiceSubprocessClient.liveClients.add(this);
 
     this.child.stdout?.on("data", (data: Buffer) => {
-      this.stdoutBuffer += data.toString("utf8");
-      let newlineIndex = this.stdoutBuffer.indexOf("\n");
-      while (newlineIndex >= 0) {
-        const line = this.stdoutBuffer.slice(0, newlineIndex).trim();
-        this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
-        if (line.length > 0) {
-          try {
-            const msg = JSON.parse(line);
-            this._handleMessage(msg);
-          } catch {
-            // ignore non-json stdout (e.g. cargo build logs)
+      this.stdoutBuffer = Buffer.concat([this.stdoutBuffer, data]);
+
+      while (this.stdoutBuffer.length >= 5) {
+        const format = this.stdoutBuffer.readUInt8(0);
+        const length = this.stdoutBuffer.readUInt32LE(1);
+
+        if (this.stdoutBuffer.length >= 5 + length) {
+          const payload = this.stdoutBuffer.subarray(5, 5 + length);
+          this.stdoutBuffer = this.stdoutBuffer.subarray(5 + length);
+
+          if (format === 0) {
+            try {
+              const msg = JSON.parse(payload.toString("utf8"));
+              this._handleMessage(msg);
+            } catch {
+              // ignore non-json payload
+            }
+          } else if (format === 1) {
+            // Binary audio frame: [8-byte user_id][2-byte peak][4-byte active][4-byte total][PCM...]
+            if (payload.length >= 18) {
+              const audioUserId = payload.readBigUInt64LE(0).toString();
+              const signalPeakAbs = payload.readUInt16LE(8);
+              const signalActiveSampleCount = payload.readUInt32LE(10);
+              const signalSampleCount = payload.readUInt32LE(14);
+              const pcmBuffer = payload.subarray(18);
+
+              this.emit(
+                "userAudio",
+                audioUserId,
+                pcmBuffer, // Passing raw Buffer now instead of base64 string
+                signalPeakAbs,
+                signalActiveSampleCount,
+                signalSampleCount
+              );
+            }
           }
+        } else {
+          break;
         }
-        newlineIndex = this.stdoutBuffer.indexOf("\n");
       }
     });
 
@@ -166,18 +191,22 @@ export class VoiceSubprocessClient extends EventEmitter {
     const adapter = guild.voiceAdapterCreator({
       onVoiceServerUpdate: (data: any) => {
         this.adapterCallbackCount.voiceServer++;
-        console.log(
-          `[voiceSubprocessClient] adapter onVoiceServerUpdate #${this.adapterCallbackCount.voiceServer}`,
-          `endpoint=${data?.endpoint ?? "null"} token=${data?.token ? "present" : "missing"}`
-        );
+        if (AUDIO_DEBUG) {
+          console.log(
+            `[voiceSubprocessClient] adapter onVoiceServerUpdate #${this.adapterCallbackCount.voiceServer}`,
+            `endpoint=${data?.endpoint ?? "null"} token=${data?.token ? "present" : "missing"}`
+          );
+        }
         this._send({ type: "voice_server", data });
       },
       onVoiceStateUpdate: (data: any) => {
         this.adapterCallbackCount.voiceState++;
-        console.log(
-          `[voiceSubprocessClient] adapter onVoiceStateUpdate #${this.adapterCallbackCount.voiceState}`,
-          `session_id=${data?.session_id ?? "null"} channel_id=${data?.channel_id ?? "null"} user_id=${data?.user_id ?? "null"}`
-        );
+        if (AUDIO_DEBUG) {
+          console.log(
+            `[voiceSubprocessClient] adapter onVoiceStateUpdate #${this.adapterCallbackCount.voiceState}`,
+            `session_id=${data?.session_id ?? "null"} channel_id=${data?.channel_id ?? "null"} user_id=${data?.user_id ?? "null"}`
+          );
+        }
         this._send({ type: "voice_state", data });
       }
     });
@@ -220,11 +249,25 @@ export class VoiceSubprocessClient extends EventEmitter {
       case "speaking_end":
         this.emit("speakingEnd", msg.userId);
         break;
+      // "user_audio" (JSON) is bypassed above in the binary fast path, but kept here for fallback or tests
       case "user_audio":
-        this.emit("userAudio", msg.userId, msg.pcmBase64);
+        this.emit(
+          "userAudio",
+          msg.userId,
+          msg.pcmBase64,
+          msg.signalPeakAbs,
+          msg.signalActiveSampleCount,
+          msg.signalSampleCount
+        );
         break;
       case "user_audio_end":
         this.emit("userAudioEnd", msg.userId);
+        break;
+      case "asr_transcript":
+        this.emit("asrTranscript", msg.userId, msg.text, msg.isFinal);
+        break;
+      case "asr_disconnected":
+        this.emit("asrDisconnected", msg.userId, msg.reason);
         break;
       case "client_disconnect":
         this.emit("clientDisconnect", msg.userId);
@@ -258,10 +301,12 @@ export class VoiceSubprocessClient extends EventEmitter {
   private _forwardToGateway(payload: any) {
     if (!payload || !this.guild) return;
     this.adapterCallbackCount.op4Forward++;
-    console.log(
-      `[voiceSubprocessClient] _forwardToGateway OP4 #${this.adapterCallbackCount.op4Forward}`,
-      `guild_id=${payload?.d?.guild_id ?? "null"} channel_id=${payload?.d?.channel_id ?? "null"}`
-    );
+    if (AUDIO_DEBUG) {
+      console.log(
+        `[voiceSubprocessClient] _forwardToGateway OP4 #${this.adapterCallbackCount.op4Forward}`,
+        `guild_id=${payload?.d?.guild_id ?? "null"} channel_id=${payload?.d?.channel_id ?? "null"}`
+      );
+    }
     try {
       const shard = this.guild.shard;
       if (shard && typeof shard.send === "function") {
@@ -336,8 +381,8 @@ export class VoiceSubprocessClient extends EventEmitter {
     this._send({ type: "unsubscribe_user", userId });
   }
 
-  musicPlay(url: string) {
-    this._send({ type: "music_play", url });
+  musicPlay(url: string, resolvedDirectUrl = false) {
+    this._send({ type: "music_play", url, resolvedDirectUrl });
   }
 
   musicStop() {
@@ -356,6 +401,29 @@ export class VoiceSubprocessClient extends EventEmitter {
     this._send({ type: "music_set_gain", target, fadeMs });
   }
 
+  connectAsr({ userId, apiKey, model, language, prompt }) {
+    this._send({
+      type: "connect_asr",
+      userId,
+      apiKey,
+      model,
+      language: language || null,
+      prompt: prompt || null
+    });
+  }
+
+  disconnectAsr(userId: string) {
+    this._send({ type: "disconnect_asr", userId });
+  }
+
+  commitAsr(userId: string) {
+    this._send({ type: "commit_asr", userId });
+  }
+
+  clearAsr(userId: string) {
+    this._send({ type: "clear_asr", userId });
+  }
+
   async destroy(): Promise<void> {
     if (this.destroyPromise) return this.destroyPromise;
     this.destroyed = true;
@@ -364,7 +432,7 @@ export class VoiceSubprocessClient extends EventEmitter {
       clearTimeout(this.audioBatchTimer);
       this.audioBatchTimer = null;
     }
-    this.stdoutBuffer = "";
+    this.stdoutBuffer = Buffer.alloc(0);
     this._cleanupAdapter();
 
     const child = this.child;

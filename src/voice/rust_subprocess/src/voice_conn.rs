@@ -27,27 +27,13 @@ type WsStream = tokio_tungstenite::WebSocketStream<MaybeTlsStream<tokio::net::Tc
 // ---------------------------------------------------------------------------
 
 pub enum VoiceEvent {
-    Ready {
-        ssrc: u32,
-    },
-    SsrcUpdate {
-        ssrc: u32,
-        user_id: u64,
-    },
-    ClientDisconnect {
-        user_id: u64,
-    },
-    OpusReceived {
-        ssrc: u32,
-        opus_frame: Vec<u8>,
-    },
+    Ready { ssrc: u32 },
+    SsrcUpdate { ssrc: u32, user_id: u64 },
+    ClientDisconnect { user_id: u64 },
+    OpusReceived { ssrc: u32, opus_frame: Vec<u8> },
     DaveReady,
-    Disconnected {
-        reason: String,
-    },
-    Error {
-        message: String,
-    },
+    Disconnected { reason: String },
+    Error { message: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -121,15 +107,12 @@ impl TransportCrypto {
     fn new(secret_key: &[u8], mode: &str) -> Result<Self> {
         let cipher = match mode {
             "aead_aes256_gcm_rtpsize" => TransportCipher::Aes256GcmRtpSize(
-                Aes256Gcm::new_from_slice(secret_key)
-                    .context("Invalid AES-256-GCM secret key")?,
+                Aes256Gcm::new_from_slice(secret_key).context("Invalid AES-256-GCM secret key")?,
             ),
-            "aead_xchacha20_poly1305_rtpsize" => {
-                TransportCipher::XChaCha20Poly1305RtpSize(
-                    XChaCha20Poly1305::new_from_slice(secret_key)
-                        .context("Invalid XChaCha20-Poly1305 secret key")?,
-                )
-            }
+            "aead_xchacha20_poly1305_rtpsize" => TransportCipher::XChaCha20Poly1305RtpSize(
+                XChaCha20Poly1305::new_from_slice(secret_key)
+                    .context("Invalid XChaCha20-Poly1305 secret key")?,
+            ),
             other => bail!("Unsupported transport mode: {}", other),
         };
         Ok(Self {
@@ -346,10 +329,7 @@ impl VoiceConnection {
         // ---- Select encryption mode ----
         let mode = if modes.iter().any(|m| m == "aead_aes256_gcm_rtpsize") {
             "aead_aes256_gcm_rtpsize"
-        } else if modes
-            .iter()
-            .any(|m| m == "aead_xchacha20_poly1305_rtpsize")
-        {
+        } else if modes.iter().any(|m| m == "aead_xchacha20_poly1305_rtpsize") {
             warn!("AES256-GCM RTP-size unavailable; using XChaCha20-Poly1305 RTP-size fallback");
             "aead_xchacha20_poly1305_rtpsize"
         } else {
@@ -393,7 +373,7 @@ impl VoiceConnection {
                 Ok((dm, pkg)) => {
                     *dave.lock() = Some(dm);
                     info!("DaveManager initialized with protocol version {}", dave_pv);
-                    
+
                     // Transmit DAVE KeyPackage (`OP26`) to Discord Voice Server
                     // so the Voice Server will initiate `OP25 ExternalSender`
                     let mut op26_payload = vec![26u8];
@@ -442,8 +422,15 @@ impl VoiceConnection {
                                 info!("Replay [{}]: Text OP={}", i, op);
                                 let d = &v["d"];
                                 handle_text_opcode(
-                                    op, d, &event_tx, &ws_cmd_tx, &dave, &ssrc_map,
-                                    user_id, channel_id, &ws_sequence,
+                                    op,
+                                    d,
+                                    &event_tx,
+                                    &ws_cmd_tx,
+                                    &dave,
+                                    &ssrc_map,
+                                    user_id,
+                                    channel_id,
+                                    &ws_sequence,
                                 )
                                 .await;
                             } else {
@@ -453,7 +440,13 @@ impl VoiceConnection {
                         Message::Binary(ref data) if data.len() >= 3 => {
                             let seq = u16::from_be_bytes([data[0], data[1]]);
                             let op = data[2];
-                            info!("Replay [{}]: Binary OP={} seq={} len={}", i, op, seq, data.len());
+                            info!(
+                                "Replay [{}]: Binary OP={} seq={} len={}",
+                                i,
+                                op,
+                                seq,
+                                data.len()
+                            );
                             handle_binary_opcode(data, &event_tx, &ws_cmd_tx, &dave, &ws_sequence)
                                 .await;
                         }
@@ -466,7 +459,15 @@ impl VoiceConnection {
                     }
                 }
                 ws_read_loop(
-                    ws_read, event_tx, ws_cmd_tx, dave, ssrc_map, shutdown, user_id, channel_id, ws_sequence,
+                    ws_read,
+                    event_tx,
+                    ws_cmd_tx,
+                    dave,
+                    ssrc_map,
+                    shutdown,
+                    user_id,
+                    channel_id,
+                    ws_sequence,
                 )
                 .await;
             });
@@ -477,7 +478,14 @@ impl VoiceConnection {
             let shutdown = shutdown.clone();
             let ws_sequence = ws_sequence.clone();
             tokio::spawn(async move {
-                ws_write_loop(ws_write, ws_cmd_rx, shutdown, heartbeat_interval, ws_sequence).await;
+                ws_write_loop(
+                    ws_write,
+                    ws_cmd_rx,
+                    shutdown,
+                    heartbeat_interval,
+                    ws_sequence,
+                )
+                .await;
             });
         }
 
@@ -688,7 +696,7 @@ async fn ws_read_loop(
                     Ok(v) => v,
                     Err(_) => continue,
                 };
-                
+
                 // Track WebSocket sequence numbers for OP3 Heartbeat
                 if let Some(s) = v["seq"].as_i64() {
                     ws_sequence.store(s as i32, Ordering::Relaxed);
@@ -724,9 +732,7 @@ async fn ws_read_loop(
                     None => "WebSocket closed by server (no close frame)".into(),
                 };
                 warn!("{}", reason);
-                let _ = event_tx
-                    .send(VoiceEvent::Disconnected { reason })
-                    .await;
+                let _ = event_tx.send(VoiceEvent::Disconnected { reason }).await;
                 break;
             }
             Err(e) => {
@@ -771,10 +777,7 @@ async fn handle_text_opcode(
             ssrc_map.lock().insert(ssrc, uid);
 
             let _ = event_tx
-                .send(VoiceEvent::SsrcUpdate {
-                    ssrc,
-                    user_id: uid,
-                })
+                .send(VoiceEvent::SsrcUpdate { ssrc, user_id: uid })
                 .await;
         }
         // Client disconnect
@@ -790,7 +793,10 @@ async fn handle_text_opcode(
         21 => {
             let transition_id = d["transition_id"].as_u64().unwrap_or(0) as u16;
             let pv = d["protocol_version"].as_u64().unwrap_or(0) as u16;
-            info!("DAVE OP21: prepare transition id={} pv={}", transition_id, pv);
+            info!(
+                "DAVE OP21: prepare transition id={} pv={}",
+                transition_id, pv
+            );
             let send_ready = {
                 let mut guard = dave.lock();
                 if let Some(ref mut dm) = *guard {
@@ -807,13 +813,19 @@ async fn handle_text_opcode(
                         "d": { "transition_id": transition_id }
                     })))
                     .await;
-                info!("DAVE: sent OP23 transition ready for prepare transition {}", transition_id);
+                info!(
+                    "DAVE: sent OP23 transition ready for prepare transition {}",
+                    transition_id
+                );
             }
         }
         // OP22: DaveExecuteTransition — finalize the pending transition
         22 => {
             let transition_id = d["transition_id"].as_u64().unwrap_or(0) as u16;
-            info!("DAVE OP22: execute transition received, transition_id={}", transition_id);
+            info!(
+                "DAVE OP22: execute transition received, transition_id={}",
+                transition_id
+            );
             let transitioned = {
                 let mut guard = dave.lock();
                 if let Some(ref mut dm) = *guard {
@@ -874,7 +886,10 @@ async fn handle_text_opcode(
                     let mut op26_payload = vec![26u8];
                     op26_payload.extend_from_slice(&pkg);
                     let _ = ws_cmd_tx.send(WsCommand::SendBinary(op26_payload)).await;
-                    info!("OP24: Sent DAVE OP26 KeyPackage to Discord ({} bytes)", pkg.len());
+                    info!(
+                        "OP24: Sent DAVE OP26 KeyPackage to Discord ({} bytes)",
+                        pkg.len()
+                    );
                 }
             }
         }
@@ -940,8 +955,12 @@ async fn handle_binary_opcode(
             }
             let optype = payload[0];
             let proposals_payload = &payload[1..];
-            info!("DAVE binary OP27: proposals (optype: {}, {} bytes)", optype, proposals_payload.len());
-            
+            info!(
+                "DAVE binary OP27: proposals (optype: {}, {} bytes)",
+                optype,
+                proposals_payload.len()
+            );
+
             let operation = if optype == 0 {
                 davey::ProposalsOperationType::APPEND
             } else {
@@ -951,8 +970,7 @@ async fn handle_binary_opcode(
             let response = {
                 let mut guard = dave.lock();
                 if let Some(ref mut dm) = *guard {
-                    match dm.process_proposals(operation, proposals_payload, None)
-                    {
+                    match dm.process_proposals(operation, proposals_payload, None) {
                         Ok(Some(cr)) => Some(cr.data),
                         Ok(None) => {
                             debug!("DAVE: no commit needed for proposals");
@@ -1030,7 +1048,10 @@ async fn handle_binary_opcode(
                         "d": { "transition_id": transition_id }
                     })))
                     .await;
-                info!("DAVE: sent OP23 transition ready for commit transition {}", transition_id);
+                info!(
+                    "DAVE: sent OP23 transition ready for commit transition {}",
+                    transition_id
+                );
             }
 
             if ready {
@@ -1046,7 +1067,11 @@ async fn handle_binary_opcode(
             let transition_id = u16::from_be_bytes([payload[0], payload[1]]);
             let welcome_payload = &payload[2..];
 
-            info!("DAVE binary OP30: welcome (transition_id: {}, {} bytes)", transition_id, welcome_payload.len());
+            info!(
+                "DAVE binary OP30: welcome (transition_id: {}, {} bytes)",
+                transition_id,
+                welcome_payload.len()
+            );
 
             // Process welcome under lock, collect any recovery action, then drop lock
             let (ready, success, recovery_action) = {
@@ -1156,7 +1181,7 @@ async fn ws_write_loop(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64;
-                
+
                 // Read the latest sequence from shared state (-1 means no sequence yet).
                 let seq = ws_sequence.load(Ordering::Relaxed);
 
@@ -1253,7 +1278,7 @@ async fn udp_recv_loop(
 
         let original_payload = decrypted;
         let mut stripped_payload: Option<Vec<u8>> = None;
-        
+
         // Strip RTP Header Extension if present and matches the one-byte profile (0xBEDE).
         // The extension body lives at the beginning of the `decrypted` payload.
         if has_ext && packet.len() >= aad_size + 4 {
@@ -1280,12 +1305,8 @@ async fn udp_recv_loop(
             }
         }
 
-        let primary_payload = stripped_payload
-            .as_ref()
-            .unwrap_or(&original_payload);
-        let fallback_payload = stripped_payload
-            .as_ref()
-            .map(|_| &original_payload);
+        let primary_payload = stripped_payload.as_ref().unwrap_or(&original_payload);
+        let fallback_payload = stripped_payload.as_ref().map(|_| &original_payload);
 
         // DAVE decrypt (if session active) with failure tracking + recovery
         // Mirrors discord.js: canDecrypt = session.ready && (protocolVersion !== 0 || session.canPassthrough(userId))
@@ -1299,7 +1320,8 @@ async fn udp_recv_loop(
                     // arrived in time (e.g. due to network delays).
                     dm.maybe_auto_execute_downgrade();
 
-                    let can_decrypt = dm.is_ready() && (dm.protocol_version() != 0 || dm.can_passthrough(uid));
+                    let can_decrypt =
+                        dm.is_ready() && (dm.protocol_version() != 0 || dm.can_passthrough(uid));
                     if can_decrypt {
                         match dm.decrypt(uid, primary_payload) {
                             Ok(decrypted) => (Some(decrypted), false),
@@ -1323,7 +1345,9 @@ async fn udp_recv_loop(
                                         if candidate_uid == uid || candidate_uid == dm.user_id() {
                                             continue;
                                         }
-                                        if let Ok(decrypted) = dm.decrypt(candidate_uid, primary_payload) {
+                                        if let Ok(decrypted) =
+                                            dm.decrypt(candidate_uid, primary_payload)
+                                        {
                                             ssrc_map.lock().insert(ssrc, candidate_uid);
                                             debug!(
                                                 "UDP: remapped ssrc {} from user {} to {} after successful DAVE decrypt",
@@ -1333,7 +1357,9 @@ async fn udp_recv_loop(
                                             break;
                                         }
                                         if let Some(alt_payload) = fallback_payload {
-                                            if let Ok(decrypted) = dm.decrypt(candidate_uid, alt_payload) {
+                                            if let Ok(decrypted) =
+                                                dm.decrypt(candidate_uid, alt_payload)
+                                            {
                                                 ssrc_map.lock().insert(ssrc, candidate_uid);
                                                 debug!(
                                                     "UDP: remapped ssrc {} from user {} to {} with alternate RTP ext handling",

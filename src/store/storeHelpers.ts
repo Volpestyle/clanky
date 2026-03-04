@@ -1,5 +1,92 @@
-import { nowIso } from "../utils.ts";
+import { clamp, nowIso } from "../utils.ts";
 import { safeJsonParse } from "../normalization/valueParsers.ts";
+import { normalizeWhitespaceText } from "../normalization/text.ts";
+import { LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT } from "../store.ts";
+
+export const LOOKUP_CONTEXT_QUERY_MAX_CHARS = 220;
+export const LOOKUP_CONTEXT_SOURCE_MAX_CHARS = 120;
+export const LOOKUP_CONTEXT_PROVIDER_MAX_CHARS = 64;
+export const LOOKUP_CONTEXT_RESULT_MAX_CHARS = 420;
+export const LOOKUP_CONTEXT_MATCH_TEXT_MAX_CHARS = 1800;
+export const LOOKUP_CONTEXT_MAX_TTL_HOURS = 168;
+export const LOOKUP_CONTEXT_MAX_AGE_HOURS = 168;
+export const LOOKUP_CONTEXT_MAX_SEARCH_LIMIT = 16;
+
+export function normalizeLookupResultText(value, maxChars = LOOKUP_CONTEXT_RESULT_MAX_CHARS) {
+  return normalizeWhitespaceText(value, {
+    maxLen: maxChars,
+    minLen: 40
+  });
+}
+
+export function normalizeLookupResultRows(rows, maxResults = LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT) {
+  const source = Array.isArray(rows) ? rows : [];
+  const boundedMaxResults = clamp(
+    Math.floor(Number(maxResults) || LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT),
+    1,
+    10
+  );
+  const normalizedRows = [];
+  for (const row of source) {
+    if (normalizedRows.length >= boundedMaxResults) break;
+    const url = normalizeLookupResultText(row?.url, 420);
+    if (!url) continue;
+    normalizedRows.push({
+      title: normalizeLookupResultText(row?.title, 180),
+      url,
+      domain: normalizeLookupResultText(row?.domain, 120),
+      snippet: normalizeLookupResultText(row?.snippet, 260),
+      pageSummary: normalizeLookupResultText(row?.pageSummary, 320)
+    });
+  }
+  return normalizedRows;
+}
+
+export function buildLookupContextMatchText({ query, results = [] }) {
+  const normalizedQuery = normalizeLookupResultText(query, LOOKUP_CONTEXT_QUERY_MAX_CHARS);
+  const resultRows = Array.isArray(results) ? results : [];
+  const segments = [normalizedQuery];
+  for (const row of resultRows) {
+    const title = normalizeLookupResultText(row?.title, 180);
+    const domain = normalizeLookupResultText(row?.domain, 120);
+    const snippet = normalizeLookupResultText(row?.snippet, 220);
+    const pageSummary = normalizeLookupResultText(row?.pageSummary, 220);
+    if (title) segments.push(title);
+    if (domain) segments.push(domain);
+    if (snippet) segments.push(snippet);
+    if (pageSummary) segments.push(pageSummary);
+  }
+  return segments
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, LOOKUP_CONTEXT_MATCH_TEXT_MAX_CHARS);
+}
+
+export function scoreLookupContextRow(row, tokens = []) {
+  const normalizedTokens = Array.isArray(tokens) ? tokens : [];
+  if (!normalizedTokens.length) return 0;
+  const query = String(row?.query || "")
+    .toLowerCase()
+    .trim();
+  const matchText = String(row?.match_text || "")
+    .toLowerCase()
+    .trim();
+  if (!query && !matchText) return 0;
+
+  let score = 0;
+  for (const token of normalizedTokens) {
+    if (!token) continue;
+    if (query.includes(token)) {
+      score += 3;
+      continue;
+    }
+    if (matchText.includes(token)) {
+      score += 1;
+    }
+  }
+  return score;
+}
 
 export function normalizeEmbeddingVector(rawEmbedding) {
   if (!Array.isArray(rawEmbedding) || !rawEmbedding.length) return [];

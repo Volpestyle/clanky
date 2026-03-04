@@ -4,6 +4,7 @@ import { Collapse } from "../Collapse";
 import { FullPromptPreview } from "../FullPromptPreview";
 import { rangeStyle } from "../../utils";
 import { LlmProviderOptions } from "./LlmProviderOptions";
+import { OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS } from "../../settingsFormModel";
 
 export function VoiceModeSettingsSection({
   id,
@@ -30,8 +31,7 @@ export function VoiceModeSettingsSection({
   openAiRealtimeModelOptions,
   openAiRealtimeVoiceOptions,
   openAiTranscriptionModelOptions,
-  geminiRealtimeModelOptions,
-  onResetVoiceReplyDecisionPrompts
+  geminiRealtimeModelOptions
 }) {
   const isRealtimeMode =
     isVoiceAgentMode || isOpenAiRealtimeMode || isGeminiRealtimeMode || isElevenLabsRealtimeMode;
@@ -42,9 +42,17 @@ export function VoiceModeSettingsSection({
   const brainProvider = String(form.voiceBrainProvider || "openai")
     .trim()
     .toLowerCase();
+  const openAiRealtimeTranscriptionMethodOptions = OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS;
+  const openAiRealtimeTranscriptionMethod = String(
+    form.voiceOpenAiRealtimeTranscriptionMethod || "realtime_bridge"
+  )
+    .trim()
+    .toLowerCase();
+  const usesRealtimeAsrBridge = openAiRealtimeTranscriptionMethod !== "file_wav";
   const usesBrainLlm = !isNativePath;
   const openAiPerUserAsrBridge =
     isBridgePath &&
+    usesRealtimeAsrBridge &&
     Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge);
   const usesBrainGeneration = isRealtimeMode && usesBrainLlm && !openAiPerUserAsrBridge;
   const classifierMergedWithGeneration =
@@ -122,10 +130,49 @@ export function VoiceModeSettingsSection({
                     <option value="xai">xAI</option>
                     <option value="gemini">Gemini</option>
                   </select>
+
+                  <div className="split">
+                    <div>
+                      <label htmlFor="voice-openai-realtime-transcription-method">Transcription method</label>
+                      <select
+                        id="voice-openai-realtime-transcription-method"
+                        value={form.voiceOpenAiRealtimeTranscriptionMethod}
+                        onChange={set("voiceOpenAiRealtimeTranscriptionMethod")}
+                      >
+                        {openAiRealtimeTranscriptionMethodOptions.map((methodId) => (
+                          <option key={methodId} value={methodId}>
+                            {methodId}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="voice-openai-realtime-transcription-model">
+                        OpenAI transcription model
+                      </label>
+                      <select
+                        id="voice-openai-realtime-transcription-model"
+                        value={form.voiceOpenAiRealtimeInputTranscriptionModel}
+                        onChange={set("voiceOpenAiRealtimeInputTranscriptionModel")}
+                      >
+                        {openAiTranscriptionModelOptions.map((modelId) => (
+                          <option key={modelId} value={modelId}>
+                            {modelId}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <p>
+                    {usesRealtimeAsrBridge
+                      ? "Realtime bridge streams audio into OpenAI transcription sessions and uses those transcripts as the source of truth."
+                      : "File WAV transcribes each finalized turn from captured PCM after the turn ends. It is slower, but does not use realtime ASR bridge sessions."}
+                  </p>
                 </>
               )}
 
-              {isBridgePath && (
+              {isBridgePath && usesRealtimeAsrBridge && (
                 <div className="split">
                   <div>
                     <label>ASR mode</label>
@@ -314,7 +361,23 @@ export function VoiceModeSettingsSection({
             value={form.voiceReplyEagerness}
             onChange={set("voiceReplyEagerness")}
             style={rangeStyle(form.voiceReplyEagerness)}
+            disabled={Boolean(form.voiceCommandOnlyMode)}
           />
+          <div className="toggles">
+            <label>
+              <input
+                type="checkbox"
+                checked={Boolean(form.voiceCommandOnlyMode)}
+                onChange={set("voiceCommandOnlyMode")}
+              />
+              Command-only mode
+            </label>
+          </div>
+          <p>
+            {form.voiceCommandOnlyMode
+              ? "Command-only mode overrides reply eagerness. Clanker will only respond to wake-word or direct-address turns. Music playback also forces this mode automatically while audible."
+              : "When disabled, Clanker can answer unaddressed turns based on reply eagerness. Music playback still forces command-only mode while audible."}
+          </p>
 
           <h4>Voice Reply Decider</h4>
           <p>Controls when Clank should chime in during VC.</p>
@@ -369,37 +432,13 @@ export function VoiceModeSettingsSection({
               </div>
 
               <details>
-                <summary>Advanced classifier prompts/rules</summary>
+                <summary>Advanced classifier preview</summary>
                 <p>
-                  These are the YES/NO gate system prompts used before voice replies. Use <code>{"{{botName}}"}</code>{" "}
+                  Preview the prompt guidance that feeds the classifier and generation stages. Use <code>{"{{botName}}"}</code>{" "}
                   to reference the configured bot name.
                 </p>
 
                 <FullPromptPreview form={form} />
-
-                <label htmlFor="voice-reply-decision-wake-variant-hint">Wake-variant rule hint</label>
-                <textarea
-                  id="voice-reply-decision-wake-variant-hint"
-                  rows={4}
-                  value={form.voiceReplyDecisionWakeVariantHint}
-                  onChange={set("voiceReplyDecisionWakeVariantHint")}
-                />
-
-                <label htmlFor="voice-reply-decision-system-prompt-compact">System prompt (compact)</label>
-                <textarea
-                  id="voice-reply-decision-system-prompt-compact"
-                  rows={8}
-                  value={form.voiceReplyDecisionSystemPromptCompact}
-                  onChange={set("voiceReplyDecisionSystemPromptCompact")}
-                />
-
-                <button
-                  type="button"
-                  className="sm"
-                  onClick={onResetVoiceReplyDecisionPrompts}
-                >
-                  Reset decider prompts
-                </button>
               </details>
             </>
           )}
@@ -577,26 +616,6 @@ export function VoiceModeSettingsSection({
               </div>
 
               <p>Audio transport is fixed to `pcm16` for stable Discord playback.</p>
-
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-openai-realtime-transcription-model">
-                    OpenAI realtime input transcription model
-                  </label>
-                  <select
-                    id="voice-openai-realtime-transcription-model"
-                    value={form.voiceOpenAiRealtimeInputTranscriptionModel}
-                    onChange={set("voiceOpenAiRealtimeInputTranscriptionModel")}
-                  >
-                    {openAiTranscriptionModelOptions.map((modelId) => (
-                      <option key={modelId} value={modelId}>
-                        {modelId}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div />
-              </div>
             </>
           )}
 

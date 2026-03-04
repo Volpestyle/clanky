@@ -31,6 +31,7 @@ export class ElevenLabsRealtimeClient extends EventEmitter {
   recentOutboundEvents;
   sessionConfig;
   pendingInputAudioBase64;
+  audioBase64Buffer: Buffer | null;
 
   constructor({ apiKey, baseUrl = DEFAULT_ELEVENLABS_BASE_URL, logger = null }) {
     super();
@@ -50,6 +51,7 @@ export class ElevenLabsRealtimeClient extends EventEmitter {
     this.recentOutboundEvents = [];
     this.sessionConfig = null;
     this.pendingInputAudioBase64 = [];
+    this.audioBase64Buffer = null;
   }
 
   async connect({
@@ -287,12 +289,12 @@ export class ElevenLabsRealtimeClient extends EventEmitter {
     const instructions = String(this.sessionConfig?.instructions || "").trim();
     const conversationConfigOverride = instructions
       ? {
-          agent: {
-            prompt: {
-              prompt: instructions
-            }
+        agent: {
+          prompt: {
+            prompt: instructions
           }
         }
+      }
       : null;
     this.send(
       compactObject({
@@ -304,7 +306,22 @@ export class ElevenLabsRealtimeClient extends EventEmitter {
 
   appendInputAudioPcm(audioBuffer) {
     if (!audioBuffer || !audioBuffer.length) return;
-    this.appendInputAudioBase64(audioBuffer.toString("base64"));
+
+    const combined = this.audioBase64Buffer
+      ? Buffer.concat([this.audioBase64Buffer, audioBuffer])
+      : audioBuffer;
+
+    const remainder = combined.length % 6;
+    const sendLength = combined.length - remainder;
+
+    if (sendLength > 0) {
+      const sendBuffer = combined.subarray(0, sendLength);
+      this.appendInputAudioBase64(sendBuffer.toString("base64"));
+    }
+
+    this.audioBase64Buffer = remainder > 0
+      ? combined.subarray(sendLength)
+      : null;
   }
 
   appendInputAudioBase64(audioBase64) {
@@ -367,6 +384,7 @@ export class ElevenLabsRealtimeClient extends EventEmitter {
     }
     await closeRealtimeSocket(this.ws);
     this.ws = null;
+    this.audioBase64Buffer = null;
   }
 
   getState() {
@@ -374,10 +392,10 @@ export class ElevenLabsRealtimeClient extends EventEmitter {
       ...buildCommonRealtimeState(this),
       sessionConfig: this.sessionConfig
         ? {
-            agentId: this.sessionConfig.agentId || null,
-            inputSampleRateHz: this.sessionConfig.inputSampleRateHz || null,
-            outputSampleRateHz: this.sessionConfig.outputSampleRateHz || null
-          }
+          agentId: this.sessionConfig.agentId || null,
+          inputSampleRateHz: this.sessionConfig.inputSampleRateHz || null,
+          outputSampleRateHz: this.sessionConfig.outputSampleRateHz || null
+        }
         : null,
       pendingInputChunks: Array.isArray(this.pendingInputAudioBase64) ? this.pendingInputAudioBase64.length : 0
     };

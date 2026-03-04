@@ -1,4 +1,24 @@
 import { parseSoundboardReference } from "./soundboardDirector.ts";
+
+export const VOICE_ADDRESSING_ALL_TOKENS = new Set([
+  "ALL",
+  "EVERYONE",
+  "EVERYBODY",
+  "WHOLE_ROOM",
+  "WHOLE_CHAT",
+  "VC"
+]);
+
+export function normalizeVoiceAddressingTargetToken(value = "") {
+  const normalized = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+  if (!normalized) return "";
+  const upper = normalized.toUpperCase();
+  if (VOICE_ADDRESSING_ALL_TOKENS.has(upper)) return "ALL";
+  return normalized;
+}
 import {
   normalizeVoiceRuntimeMode,
   normalizeVoiceProvider,
@@ -26,8 +46,28 @@ const EN_VOCATIVE_GREETING_TOKENS = new Set([
   "hello",
   "hola"
 ]);
-const EN_VOCATIVE_IGNORE_TOKENS = new Set(["guys", "everyone", "all", "chat", "yall", "yaall"]);
-const VOICE_ASR_LANGUAGE_MODES = new Set(["auto", "fixed"]);
+export const EN_VOCATIVE_IGNORE_TOKENS = new Set(["guys", "everyone", "all", "chat", "yall", "yaall"]);
+export const VOICE_ASR_LANGUAGE_MODES = new Set(["auto", "fixed"]);
+export const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
+export const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
+  "whisper-1",
+  "gpt-4o-transcribe-latest",
+  "gpt-4o-transcribe",
+  "gpt-4o-mini-transcribe-2025-12-15",
+  "gpt-4o-mini-transcribe"
+]);
+export const STT_TRANSCRIPT_MAX_CHARS = 2000;
+
+export function normalizeOpenAiRealtimeTranscriptionModel(
+  value: unknown,
+  fallback = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+) {
+  const normalized =
+    String(value || "").trim() || String(fallback || "").trim() || OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
+  return OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS.has(normalized)
+    ? normalized
+    : OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
+}
 
 export function parseRealtimeErrorPayload(payload) {
   if (!payload || typeof payload !== "object") {
@@ -590,6 +630,13 @@ export function normalizeVoiceText(value, maxChars = 1200) {
     maxLen: maxChars,
     minLen: 40
   });
+}
+
+export function normalizeInlineText(value: unknown = "", maxChars = STT_TRANSCRIPT_MAX_CHARS) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, Math.max(1, Number(maxChars) || STT_TRANSCRIPT_MAX_CHARS));
 }
 
 export function buildRealtimeTextUtterancePrompt(text, maxLineChars = 1200) {

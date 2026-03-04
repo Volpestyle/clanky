@@ -233,14 +233,6 @@ export default function SettingsForm({
   const selectVoiceGenerationPresetModel = createPresetSelector("voiceGenerationLlmModel");
   const selectVoiceThoughtEnginePresetModel = createPresetSelector("voiceThoughtEngineModel");
 
-  function resetVoiceReplyDecisionPrompts() {
-    setForm((current) => ({
-      ...current,
-      voiceReplyDecisionWakeVariantHint: defaultForm.voiceReplyDecisionWakeVariantHint,
-      voiceReplyDecisionSystemPromptCompact: defaultForm.voiceReplyDecisionSystemPromptCompact
-    }));
-  }
-
   function resetPromptGuidanceFields() {
     setForm((current) => ({
       ...current,
@@ -359,7 +351,6 @@ export default function SettingsForm({
             openAiRealtimeVoiceOptions={openAiRealtimeVoiceOptions}
             openAiTranscriptionModelOptions={openAiTranscriptionModelOptions}
             geminiRealtimeModelOptions={geminiRealtimeModelOptions}
-            onResetVoiceReplyDecisionPrompts={resetVoiceReplyDecisionPrompts}
           />
 
           <RateLimitsSettingsSection id="sec-rate" form={form} set={set} />

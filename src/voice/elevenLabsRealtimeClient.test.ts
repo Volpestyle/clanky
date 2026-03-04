@@ -29,13 +29,13 @@ test("ElevenLabsRealtimeClient buffers audio chunks until commit and can nudge r
     outbound.push(payload);
   };
 
-  client.appendInputAudioPcm(Buffer.from([1, 2, 3, 4]));
+  client.appendInputAudioPcm(Buffer.from([1, 2, 3, 4, 5, 6]));
   client.appendInputAudioBase64("B64_CHUNK");
   client.commitInputAudioBuffer();
   client.createAudioResponse();
 
   assert.equal(outbound.length, 3);
-  assert.equal(outbound[0]?.user_audio_chunk, Buffer.from([1, 2, 3, 4]).toString("base64"));
+  assert.equal(outbound[0]?.user_audio_chunk, Buffer.from([1, 2, 3, 4, 5, 6]).toString("base64"));
   assert.equal(outbound[1]?.user_audio_chunk, "B64_CHUNK");
   assert.equal(outbound[2]?.type, "user_activity");
 });

@@ -398,6 +398,7 @@ export function normalizeSettings(raw) {
     voice?: string;
     inputAudioFormat?: string;
     outputAudioFormat?: string;
+    transcriptionMethod?: string;
     inputTranscriptionModel?: string;
     usePerUserAsrBridge?: boolean;
   };
@@ -469,6 +470,8 @@ export function normalizeSettings(raw) {
     inactivityLeaveSeconds?: number;
     maxSessionsPerDay?: number;
     maxConcurrentSessions?: number;
+    replyEagerness?: number;
+    commandOnlyMode?: boolean;
     xai?: VoiceXaiDefaults;
     openaiRealtime?: VoiceOpenAiRealtimeDefaults;
     elevenLabsRealtime?: VoiceElevenLabsRealtimeDefaults;
@@ -574,6 +577,10 @@ export function normalizeSettings(raw) {
   merged.voice.replyEagerness = clamp(
     Number.isFinite(voiceEagernessRaw) ? voiceEagernessRaw : 0, 0, 100
   );
+  merged.voice.commandOnlyMode =
+    merged.voice?.commandOnlyMode !== undefined
+      ? Boolean(merged.voice?.commandOnlyMode)
+      : Boolean(defaultVoice.commandOnlyMode);
 
   // replyPath: "native" | "bridge" | "brain" — migrate from realtimeReplyStrategy
   const rawReplyPath = String(merged.voice?.replyPath || "").trim().toLowerCase();
@@ -726,6 +733,17 @@ export function normalizeSettings(raw) {
   merged.voice.openaiRealtime.outputAudioFormat = normalizeOpenAiRealtimeAudioFormat(
     merged.voice?.openaiRealtime?.outputAudioFormat || defaultVoiceOpenAiRealtime.outputAudioFormat || "pcm16"
   );
+  const openAiRealtimeTranscriptionMethod = String(
+    merged.voice?.openaiRealtime?.transcriptionMethod ||
+      defaultVoiceOpenAiRealtime.transcriptionMethod ||
+      "realtime_bridge"
+  )
+    .trim()
+    .toLowerCase();
+  merged.voice.openaiRealtime.transcriptionMethod =
+    openAiRealtimeTranscriptionMethod === "file_wav"
+      ? "file_wav"
+      : "realtime_bridge";
   merged.voice.openaiRealtime.inputTranscriptionModel = String(
     normalizeOpenAiRealtimeTranscriptionModel(
       merged.voice?.openaiRealtime?.inputTranscriptionModel ||

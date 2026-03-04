@@ -20,6 +20,8 @@ export const MAX_GIF_QUERY_LEN = 120;
 const MAX_SOUNDBOARD_REF_LEN = 180;
 export const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
 export const MAX_IMAGE_LOOKUP_QUERY_LEN = 220;
+const MAX_OPEN_ARTICLE_REF_LEN = 260;
+const MAX_MEMORY_WRITE_LINE_LEN = 180;
 const MAX_REPLY_TEXT_LEN = 3600;
 const MAX_AUTOMATION_TITLE_LEN = 90;
 const MAX_AUTOMATION_INSTRUCTION_LEN = 360;
@@ -123,6 +125,12 @@ export const REPLY_OUTPUT_SCHEMA = {
         }
       ]
     },
+    webSearchQuery: { type: ["string", "null"] },
+    memoryLookupQuery: { type: ["string", "null"] },
+    imageLookupQuery: { type: ["string", "null"] },
+    openArticleRef: { type: ["string", "null"] },
+    memoryLine: { type: ["string", "null"] },
+    selfMemoryLine: { type: ["string", "null"] },
     soundboardRefs: {
       type: "array",
       items: {
@@ -225,6 +233,12 @@ export const REPLY_OUTPUT_SCHEMA = {
     "skip",
     "reactionEmoji",
     "media",
+    "webSearchQuery",
+    "memoryLookupQuery",
+    "imageLookupQuery",
+    "openArticleRef",
+    "memoryLine",
+    "selfMemoryLine",
     "soundboardRefs",
     "leaveVoiceChannel",
     "automationAction",
@@ -664,6 +678,12 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
       gifQuery: null,
       mediaDirective: null,
       reactionEmoji: null,
+      webSearchQuery: null,
+      memoryLookupQuery: null,
+      imageLookupQuery: null,
+      openArticleRef: null,
+      memoryLine: null,
+      selfMemoryLine: null,
       soundboardRefs: [],
       leaveVoiceChannel: false,
       automationAction: emptyStructuredAutomationAction(),
@@ -695,6 +715,12 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     gifQuery: mediaDirective?.type === "gif" ? mediaDirective.prompt : null,
     mediaDirective,
     reactionEmoji,
+    webSearchQuery: normalizeDirectiveText(parsed?.webSearchQuery, MAX_WEB_QUERY_LEN) || null,
+    memoryLookupQuery: normalizeDirectiveText(parsed?.memoryLookupQuery, MAX_MEMORY_LOOKUP_QUERY_LEN) || null,
+    imageLookupQuery: normalizeDirectiveText(parsed?.imageLookupQuery, MAX_IMAGE_LOOKUP_QUERY_LEN) || null,
+    openArticleRef: normalizeDirectiveText(parsed?.openArticleRef, MAX_OPEN_ARTICLE_REF_LEN) || null,
+    memoryLine: normalizeDirectiveText(parsed?.memoryLine, MAX_MEMORY_WRITE_LINE_LEN) || null,
+    selfMemoryLine: normalizeDirectiveText(parsed?.selfMemoryLine, MAX_MEMORY_WRITE_LINE_LEN) || null,
     soundboardRefs,
     leaveVoiceChannel,
     automationAction,

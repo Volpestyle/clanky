@@ -2149,6 +2149,7 @@ dependencies = [
  "crossbeam-channel",
  "davey",
  "futures-util",
+ "libc",
  "parking_lot 0.12.5",
  "rustls",
  "serde",

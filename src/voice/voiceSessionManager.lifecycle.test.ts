@@ -543,6 +543,64 @@ test("maybeInterruptBotForAssertiveSpeech ignores assertive captures in realtime
   assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
 });
 
+test("maybeInterruptBotForAssertiveSpeech does not interrupt music-only playback lock", () => {
+  const { manager, logs } = createManager();
+  const stopCalls = [];
+  const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
+  const session = createSession({
+    mode: "openai_realtime",
+    playerState: "playing",
+    music: {
+      active: true,
+      startedAt: Date.now() - 5_000,
+      stoppedAt: 0,
+      provider: "discord",
+      source: "voice_tool_call",
+      lastTrackId: "youtube:test",
+      lastTrackTitle: "test track",
+      lastTrackArtists: ["artist"],
+      lastTrackUrl: "https://example.com",
+      lastQuery: "test track",
+      lastRequestedByUserId: "user-1",
+      lastRequestText: "play test track",
+      lastCommandAt: Date.now() - 5_000,
+      lastCommandReason: "voice_tool_music_play",
+      pendingQuery: null,
+      pendingPlatform: "auto",
+      pendingResults: [],
+      pendingRequestedByUserId: null,
+      pendingRequestedAt: 0
+    },
+    userCaptures: new Map([
+      [
+        "user-1",
+        {
+          bytesSent: minBytes + 2_400,
+          signalSampleCount: 24_000,
+          signalActiveSampleCount: 1_680,
+          signalPeakAbs: 5_400,
+          speakingEndFinalizeTimer: null
+        }
+      ]
+    ]),
+    subprocessClient: {
+      stopPlayback() {
+        stopCalls.push("stop");
+      }
+    }
+  });
+
+  const interrupted = manager.maybeInterruptBotForAssertiveSpeech({
+    session,
+    userId: "user-1",
+    source: "test_music_only_lock"
+  });
+
+  assert.equal(interrupted, false);
+  assert.equal(stopCalls.length, 0);
+  assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
+});
+
 test("maybeInterruptBotForAssertiveSpeech interrupts queued playback even when botTurnOpen already reset", () => {
   const { manager, logs } = createManager();
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
@@ -1105,6 +1163,68 @@ test("shared ASR committed events resolve waiters by commit user instead of FIFO
   assert.equal(asrState.itemIdToUserId.get("item-speaker-2"), "speaker-2");
 });
 
+test("commitOpenAiSharedAsrUtterance preserves already-received final segments when commit item is empty", async () => {
+  const { manager, logs } = createManager();
+  manager.appConfig.openaiApiKey = "test-openai-key";
+  manager.shouldUseSharedTranscription = () => true;
+  manager.ensureOpenAiSharedAsrSessionConnected = async ({ session }) => session.openAiSharedAsrState;
+  manager.flushPendingOpenAiSharedAsrAudio = async () => {};
+  manager.waitForOpenAiSharedAsrCommittedItem = async () => "";
+  manager.tryHandoffSharedAsrToWaitingCapture = () => false;
+  manager.scheduleOpenAiSharedAsrSessionIdleClose = () => {};
+
+  let commitCalls = 0;
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000,
+    openAiSharedAsrState: {
+      userId: "speaker-1",
+      client: {
+        commitInputAudioBuffer() {
+          commitCalls += 1;
+        }
+      },
+      closing: false,
+      idleTimer: null,
+      pendingAudioChunks: [],
+      pendingAudioBytes: 0,
+      isCommittingAsr: false,
+      committingUtteranceId: 0,
+      pendingCommitResolvers: [],
+      pendingCommitRequests: [],
+      itemIdToUserId: new Map(),
+      finalTranscriptsByItemId: new Map(),
+      utterance: {
+        id: 1,
+        startedAt: Date.now() - 1_000,
+        bytesSent: DISCORD_PCM_FRAME_BYTES * 2,
+        partialText: "",
+        finalSegments: ["What's goin'?"],
+        finalSegmentEntries: [
+          {
+            itemId: "item_1",
+            previousItemId: null,
+            text: "What's goin'?",
+            receivedAt: Date.now() - 300
+          }
+        ],
+        lastUpdateAt: Date.now() - 300
+      }
+    }
+  });
+
+  const result = await manager.commitOpenAiSharedAsrUtterance({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    captureReason: "stream_end"
+  });
+
+  assert.equal(commitCalls, 1);
+  assert.equal(result?.transcript, "What's goin'?");
+  assert.equal(logs.some((entry) => entry?.content === "voice_realtime_transcription_empty"), false);
+});
+
 test("maybeHandleInterruptedReplyRecovery retries short barge-ins with the prior utterance", () => {
   const { manager, logs } = createManager();
   const retryCalls = [];
@@ -1185,7 +1305,7 @@ test("maybeHandleInterruptedReplyRecovery treats long barge-ins as full override
   assert.equal(Boolean(skipLog), true);
 });
 
-test("queueRealtimeTurnFromAsrBridge falls back to PCM when ASR transcript is empty", () => {
+test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript instead of queueing PCM", () => {
   const { manager, logs } = createManager();
   const queuedTurns = [];
   manager.queueRealtimeTurn = (payload) => {
@@ -1209,15 +1329,14 @@ test("queueRealtimeTurnFromAsrBridge falls back to PCM when ASR transcript is em
   });
 
   assert.equal(usedTranscript, false);
-  assert.equal(queuedTurns.length, 1);
-  assert.equal(queuedTurns[0]?.pcmBuffer, pcmBuffer);
-  assert.equal(queuedTurns[0]?.captureReason, "stream_end");
-  const fallbackLog = logs.find((entry) => entry?.content === "openai_realtime_asr_bridge_fallback_pcm");
-  assert.equal(Boolean(fallbackLog), true);
-  assert.equal(fallbackLog?.metadata?.source, "per_user");
+  assert.equal(queuedTurns.length, 0);
+  const droppedLog = logs.find((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped");
+  assert.equal(Boolean(droppedLog), true);
+  assert.equal(droppedLog?.metadata?.source, "per_user");
+  assert.equal(droppedLog?.metadata?.pcmBytes, pcmBuffer.length);
 });
 
-test("queueRealtimeTurnFromAsrBridge forwards receive_error fallback audio when capture is sizable", () => {
+test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript for all capture reasons", () => {
   const { manager, logs } = createManager();
   const queuedTurns = [];
   manager.queueRealtimeTurn = (payload) => {
@@ -1263,14 +1382,10 @@ test("queueRealtimeTurnFromAsrBridge forwards receive_error fallback audio when 
   assert.equal(droppedNearSilence, false);
   assert.equal(droppedReceiveError, false);
   assert.equal(droppedTinyClip, false);
-  assert.equal(queuedTurns.length, 1);
-  assert.equal(queuedTurns[0]?.pcmBuffer?.length, DISCORD_PCM_FRAME_BYTES * 2);
-  assert.equal(queuedTurns[0]?.captureReason, "receive_error");
-  const droppedLogs = logs.filter((entry) => entry?.content === "openai_realtime_asr_bridge_fallback_dropped");
-  assert.equal(droppedLogs.length, 2);
-  const fallbackLog = logs.find((entry) => entry?.content === "openai_realtime_asr_bridge_fallback_pcm");
-  assert.equal(Boolean(fallbackLog), true);
-  assert.equal(fallbackLog?.metadata?.captureReason, "receive_error");
+  assert.equal(queuedTurns.length, 0);
+  const droppedLogs = logs.filter((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped");
+  assert.equal(droppedLogs.length, 3);
+  assert.equal(droppedLogs.some((entry) => entry?.metadata?.captureReason === "receive_error"), true);
 });
 
 test("queueRealtimeTurnFromAsrBridge forwards transcript metadata when ASR transcript exists", () => {
@@ -1310,7 +1425,7 @@ test("queueRealtimeTurnFromAsrBridge forwards transcript metadata when ASR trans
   assert.equal(queuedTurns[0]?.transcriptionModelFallbackOverride, "whisper-1");
   assert.equal(queuedTurns[0]?.transcriptionPlanReasonOverride, "openai_realtime_per_user_transcription");
   assert.equal(queuedTurns[0]?.usedFallbackModelForTranscriptOverride, true);
-  assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_fallback_pcm"), false);
+  assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"), false);
 });
 
 test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown", () => {
@@ -1359,6 +1474,34 @@ test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown",
   });
   assert.equal(allowed.allow, true);
   assert.equal(allowed.reason, "ok");
+});
+
+test("evaluateVoiceThoughtLoopGate blocks thoughts in command-only mode", () => {
+  const { manager } = createManager();
+  const now = Date.now();
+  const session = createSession({
+    lastActivityAt: now - 25_000,
+    lastThoughtAttemptAt: 0
+  });
+
+  const blocked = manager.evaluateVoiceThoughtLoopGate({
+    session,
+    settings: {
+      voice: {
+        commandOnlyMode: true,
+        thoughtEngine: {
+          enabled: true,
+          eagerness: 100,
+          minSilenceSeconds: 20,
+          minSecondsBetweenThoughts: 20
+        }
+      }
+    },
+    now
+  });
+
+  assert.equal(blocked.allow, false);
+  assert.equal(blocked.reason, "command_only_mode");
 });
 
 test("maybeRunVoiceThoughtLoop speaks approved thought candidates", async () => {
@@ -1515,6 +1658,7 @@ test("requestStatus reports offline and online states", async () => {
 test("getReplyOutputLockState locks output while music playback is active", () => {
   const { manager } = createManager();
   const session = createSession({
+    playerState: "playing",
     music: {
       active: true
     }
@@ -1524,6 +1668,21 @@ test("getReplyOutputLockState locks output while music playback is active", () =
   assert.equal(lockState.locked, true);
   assert.equal(lockState.reason, "music_playback_active");
   assert.equal(lockState.musicActive, true);
+});
+
+test("getReplyOutputLockState does not treat stale music.active as audible playback", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    playerState: "idle",
+    music: {
+      active: true
+    }
+  });
+
+  const lockState = manager.getReplyOutputLockState(session);
+  assert.equal(lockState.locked, false);
+  assert.equal(lockState.reason, "idle");
+  assert.equal(lockState.musicActive, false);
 });
 
 test("maybeHandleMusicTextStopRequest routes stop phrase from text chat", async () => {

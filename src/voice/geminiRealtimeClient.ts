@@ -34,6 +34,7 @@ export class GeminiRealtimeClient extends EventEmitter {
   setupComplete;
   pendingResponseActive;
   audioActivityOpen;
+  audioBase64Buffer: Buffer | null;
 
   constructor({ apiKey, baseUrl = DEFAULT_GEMINI_BASE_URL, logger = null }) {
     super();
@@ -82,6 +83,7 @@ export class GeminiRealtimeClient extends EventEmitter {
     this.setupComplete = false;
     this.pendingResponseActive = false;
     this.audioActivityOpen = false;
+    this.audioBase64Buffer = null;
 
     ws.on("message", (payload) => {
       this.lastEventAt = Date.now();
@@ -248,7 +250,22 @@ export class GeminiRealtimeClient extends EventEmitter {
 
   appendInputAudioPcm(audioBuffer) {
     if (!audioBuffer || !audioBuffer.length) return;
-    this.appendInputAudioBase64(audioBuffer.toString("base64"));
+
+    const combined = this.audioBase64Buffer
+      ? Buffer.concat([this.audioBase64Buffer, audioBuffer])
+      : audioBuffer;
+
+    const remainder = combined.length % 6;
+    const sendLength = combined.length - remainder;
+
+    if (sendLength > 0) {
+      const sendBuffer = combined.subarray(0, sendLength);
+      this.appendInputAudioBase64(sendBuffer.toString("base64"));
+    }
+
+    this.audioBase64Buffer = remainder > 0
+      ? combined.subarray(sendLength)
+      : null;
   }
 
   appendInputAudioBase64(audioBase64) {
@@ -420,6 +437,7 @@ export class GeminiRealtimeClient extends EventEmitter {
     this.ws = null;
     this.pendingResponseActive = false;
     this.audioActivityOpen = false;
+    this.audioBase64Buffer = null;
   }
 
   getState() {
@@ -475,8 +493,8 @@ function summarizeOutboundPayload(payload) {
       model: setup.model || null,
       instructionsChars: Array.isArray(setup?.systemInstruction?.parts)
         ? setup.systemInstruction.parts
-            .map((part) => (typeof part?.text === "string" ? part.text.length : 0))
-            .reduce((sum, value) => sum + value, 0)
+          .map((part) => (typeof part?.text === "string" ? part.text.length : 0))
+          .reduce((sum, value) => sum + value, 0)
         : 0
     });
   }
