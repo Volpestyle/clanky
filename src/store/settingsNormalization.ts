@@ -470,6 +470,8 @@ export function normalizeSettings(raw) {
     inactivityLeaveSeconds?: number;
     maxSessionsPerDay?: number;
     maxConcurrentSessions?: number;
+    replyEagerness?: number;
+    commandOnlyMode?: boolean;
     xai?: VoiceXaiDefaults;
     openaiRealtime?: VoiceOpenAiRealtimeDefaults;
     elevenLabsRealtime?: VoiceElevenLabsRealtimeDefaults;

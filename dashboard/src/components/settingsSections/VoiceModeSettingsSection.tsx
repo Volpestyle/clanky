@@ -31,8 +31,7 @@ export function VoiceModeSettingsSection({
   openAiRealtimeModelOptions,
   openAiRealtimeVoiceOptions,
   openAiTranscriptionModelOptions,
-  geminiRealtimeModelOptions,
-  onResetVoiceReplyDecisionPrompts
+  geminiRealtimeModelOptions
 }) {
   const isRealtimeMode =
     isVoiceAgentMode || isOpenAiRealtimeMode || isGeminiRealtimeMode || isElevenLabsRealtimeMode;
@@ -433,37 +432,13 @@ export function VoiceModeSettingsSection({
               </div>
 
               <details>
-                <summary>Advanced classifier prompts/rules</summary>
+                <summary>Advanced classifier preview</summary>
                 <p>
-                  These are the YES/NO gate system prompts used before voice replies. Use <code>{"{{botName}}"}</code>{" "}
+                  Preview the prompt guidance that feeds the classifier and generation stages. Use <code>{"{{botName}}"}</code>{" "}
                   to reference the configured bot name.
                 </p>
 
                 <FullPromptPreview form={form} />
-
-                <label htmlFor="voice-reply-decision-wake-variant-hint">Wake-variant rule hint</label>
-                <textarea
-                  id="voice-reply-decision-wake-variant-hint"
-                  rows={4}
-                  value={form.voiceReplyDecisionWakeVariantHint}
-                  onChange={set("voiceReplyDecisionWakeVariantHint")}
-                />
-
-                <label htmlFor="voice-reply-decision-system-prompt-compact">System prompt (compact)</label>
-                <textarea
-                  id="voice-reply-decision-system-prompt-compact"
-                  rows={8}
-                  value={form.voiceReplyDecisionSystemPromptCompact}
-                  onChange={set("voiceReplyDecisionSystemPromptCompact")}
-                />
-
-                <button
-                  type="button"
-                  className="sm"
-                  onClick={onResetVoiceReplyDecisionPrompts}
-                >
-                  Reset decider prompts
-                </button>
               </details>
             </>
           )}

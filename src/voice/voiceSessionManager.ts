@@ -447,6 +447,12 @@ type VoiceRealtimeToolSettings = {
     maxResults?: number;
     recencyDaysDefault?: number;
   };
+  memory?: {
+    enabled?: boolean;
+  };
+  browser?: {
+    enabled?: boolean;
+  };
   voice?: {
     realtimeReplyStrategy?: string;
   };
@@ -506,6 +512,7 @@ export class VoiceSessionManager {
   llm;
   memory;
   search;
+  browserManager;
   composeOperationalMessage;
   generateVoiceTurn;
   sessions;
@@ -9944,14 +9951,14 @@ export class VoiceSessionManager {
     const directAddressedByWakePhrase = normalizedTranscript
       ? isVoiceTurnAddressedToBot(normalizedTranscript, settings)
       : false;
-    const normalizeWakeTokens = (value = "") =>
+    const normalizeWakeTokens = (value = ""): string[] =>
       String(value || "")
         .trim()
         .toLowerCase()
         .normalize("NFKD")
         .replace(/\p{M}+/gu, "")
         .match(/[\p{L}\p{N}]+/gu) || [];
-    const containsTokenSequence = (tokens = [], sequence = []) => {
+    const containsTokenSequence = (tokens: string[] = [], sequence: string[] = []) => {
       if (!Array.isArray(tokens) || !Array.isArray(sequence)) return false;
       if (!tokens.length || !sequence.length || sequence.length > tokens.length) return false;
       for (let start = 0; start <= tokens.length - sequence.length; start += 1) {

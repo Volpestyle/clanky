@@ -16,8 +16,6 @@ export function FullPromptPreview({ form }) {
   const botName = form.botName || "clanker conk";
 
   const voiceLookupBusy = interpolatePromptTemplate(form.promptVoiceLookupBusySystemPrompt, { botName });
-  const voiceReplyWakeVariant = interpolatePromptTemplate(form.voiceReplyDecisionWakeVariantHint, { botName });
-  const voiceReplyDecision = interpolatePromptTemplate(form.voiceReplyDecisionSystemPromptCompact, { botName });
   const textGuidance = interpolatePromptTemplate(form.promptTextGuidance, { botName });
   const voiceGuidance = interpolatePromptTemplate(form.promptVoiceGuidance, { botName });
   const voiceOperationalGuidance = interpolatePromptTemplate(form.promptVoiceOperationalGuidance, { botName });
@@ -64,8 +62,6 @@ Low eagerness mode: treat spontaneous insertion as an exception, not the default
 
   const hasAnyPrompts =
     voiceLookupBusy ||
-    voiceReplyWakeVariant ||
-    voiceReplyDecision ||
     textGuidance ||
     voiceGuidance ||
     voiceOperationalGuidance ||
@@ -90,8 +86,6 @@ Low eagerness mode: treat spontaneous insertion as an exception, not the default
       {expanded && (
         <div className="full-prompt-preview-content">
           <ScenarioSection title="Voice Lookup Busy" prompt={voiceLookupBusy} />
-          <ScenarioSection title="Voice Reply Wake Variant" prompt={voiceReplyWakeVariant} />
-          <ScenarioSection title="Voice Reply Decision" prompt={voiceReplyDecision} />
           <ScenarioSection title="Text Guidance" prompt={textGuidance} />
           <ScenarioSection title="Voice Guidance" prompt={voiceGuidance} />
           <ScenarioSection title="Voice Operational Guidance" prompt={voiceOperationalGuidance} />

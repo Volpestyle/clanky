@@ -110,6 +110,12 @@ export type VoiceRealtimeToolSettings = {
         maxResults?: number;
         recencyDaysDefault?: number;
     };
+    memory?: {
+        enabled?: boolean;
+    };
+    browser?: {
+        enabled?: boolean;
+    };
     voice?: {
         realtimeReplyStrategy?: string;
     };
