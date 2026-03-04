@@ -295,6 +295,10 @@ export const DEFAULT_SETTINGS = {
   browser: {
     enabled: false,
     maxBrowseCallsPerHour: 10,
+    llm: {
+      provider: "anthropic",
+      model: "claude-sonnet-4-5-20250929"
+    },
     maxStepsPerTask: 15,
     stepTimeoutMs: 30_000,
     sessionTimeoutMs: 300_000

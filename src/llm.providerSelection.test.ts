@@ -314,6 +314,123 @@ test("callOpenAiMemoryExtraction uses Responses JSON schema format", async () =>
   );
 });
 
+test("chatWithTools supports OpenAI function-call loops", async () => {
+  const logs = [];
+  const service = createService(
+    {
+      openaiApiKey: "test-openai-key"
+    },
+    { logs }
+  );
+  let seenPayload = null;
+  service.openai = {
+    responses: {
+      async create(payload) {
+        seenPayload = payload;
+        return {
+          output: [
+            {
+              id: "msg_1",
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [
+                {
+                  type: "output_text",
+                  text: "Looking now.",
+                  annotations: []
+                }
+              ]
+            },
+            {
+              id: "fc_1",
+              type: "function_call",
+              call_id: "call_browser_open",
+              name: "browser_open",
+              arguments: "{\"url\":\"https://example.com\"}",
+              status: "completed"
+            }
+          ],
+          usage: {
+            input_tokens: 14,
+            output_tokens: 6,
+            input_tokens_details: {
+              cached_tokens: 2
+            }
+          }
+        };
+      }
+    }
+  };
+
+  const result = await service.chatWithTools({
+    provider: "openai",
+    model: "gpt-5-mini",
+    systemPrompt: "browse the web",
+    messages: [
+      { role: "user", content: "Find example.com" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_call",
+            id: "call_browser_open",
+            name: "browser_open",
+            input: { url: "https://example.com" }
+          }
+        ]
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            toolCallId: "call_browser_open",
+            content: "Opened page."
+          }
+        ]
+      }
+    ],
+    tools: [
+      {
+        name: "browser_open",
+        description: "Open a URL",
+        input_schema: {
+          type: "object",
+          properties: {
+            url: { type: "string" }
+          },
+          required: ["url"]
+        }
+      }
+    ]
+  });
+
+  assert.deepEqual(result.content, [
+    { type: "text", text: "Looking now." },
+    {
+      type: "tool_call",
+      id: "call_browser_open",
+      name: "browser_open",
+      input: { url: "https://example.com" }
+    }
+  ]);
+  assert.deepEqual(result.usage, {
+    inputTokens: 14,
+    outputTokens: 6,
+    cacheWriteTokens: 0,
+    cacheReadTokens: 2
+  });
+  assert.equal(seenPayload.instructions, "browse the web");
+  assert.equal(seenPayload.input?.[0]?.role, "user");
+  assert.equal(seenPayload.input?.[0]?.content?.[0]?.type, "input_text");
+  assert.equal(seenPayload.input?.[1]?.type, "function_call");
+  assert.equal(seenPayload.input?.[1]?.call_id, "call_browser_open");
+  assert.equal(seenPayload.input?.[2]?.type, "function_call_output");
+  assert.equal(seenPayload.input?.[2]?.call_id, "call_browser_open");
+  assert.equal(logs.some((entry) => entry.kind === "llm_tool_call" && entry.content === "openai:gpt-5-mini"), true);
+});
+
 test("generateImage uses OpenAI Responses image_generation tool", async () => {
   const service = createService({
     openaiApiKey: "test-openai-key"

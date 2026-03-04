@@ -1,7 +1,15 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
 
-export function BrowserSettingsSection({ id, form, set }) {
+export function BrowserSettingsSection({
+  id,
+  form,
+  set,
+  setBrowserLlmProvider,
+  selectBrowserLlmPresetModel,
+  browserLlmModelOptions,
+  selectedBrowserLlmPresetModel
+}) {
   return (
     <SettingsSection id={id} title="Browser Agent" active={form.browserEnabled}>
       <div className="toggles">
@@ -17,6 +25,34 @@ export function BrowserSettingsSection({ id, form, set }) {
 
       {form.browserEnabled && (
         <>
+          <div className="split">
+            <div>
+              <label htmlFor="browser-llm-provider">Provider</label>
+              <select
+                id="browser-llm-provider"
+                value={form.browserLlmProvider}
+                onChange={setBrowserLlmProvider}
+              >
+                <option value="anthropic">anthropic</option>
+                <option value="openai">openai</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="browser-llm-model-preset">Model ID</label>
+              <select
+                id="browser-llm-model-preset"
+                value={selectedBrowserLlmPresetModel}
+                onChange={selectBrowserLlmPresetModel}
+              >
+                {browserLlmModelOptions.map((modelId) => (
+                  <option key={modelId} value={modelId}>
+                    {modelId}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
           <div className="split">
             <div>
               <label htmlFor="browser-max-per-hour">Max browse calls/hour</label>

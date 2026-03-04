@@ -1,5 +1,4 @@
-import type Anthropic from "@anthropic-ai/sdk";
-import type { LLMService } from "../llm.ts";
+import type { LLMService, ToolLoopContentBlock, ToolLoopMessage } from "../llm.ts";
 import type { BrowserManager } from "../services/BrowserManager.ts";
 import { BROWSER_AGENT_TOOL_DEFINITIONS, executeBrowserTool } from "../tools/browserTools.ts";
 
@@ -34,6 +33,8 @@ interface BrowseAgentOptions {
   }) => void };
   sessionKey: string;
   instruction: string;
+  provider: string;
+  model: string;
   maxSteps: number;
   stepTimeoutMs: number;
   trace: BrowseAgentTrace;
@@ -53,12 +54,14 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
     store,
     sessionKey,
     instruction,
+    provider,
+    model,
     maxSteps,
     stepTimeoutMs,
     trace
   } = options;
 
-  const messages: Anthropic.MessageParam[] = [
+  const messages: ToolLoopMessage[] = [
     { role: "user", content: instruction }
   ];
 
@@ -72,7 +75,8 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
       step++;
 
       const response = await llm.chatWithTools({
-        model: "claude-sonnet-4-5-20250929",
+        provider,
+        model,
         systemPrompt: BROWSE_AGENT_SYSTEM_PROMPT,
         messages,
         tools: BROWSER_AGENT_TOOL_DEFINITIONS,
@@ -83,19 +87,12 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
 
       totalCostUsd += response.costUsd;
 
-      messages.push({
-        role: "assistant",
-        content: response.content
-      });
+      messages.push({ role: "assistant", content: response.content });
 
-      const toolCalls = response.content.filter(
-        (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
-      );
+      const toolCalls = response.content.filter((block) => block.type === "tool_call");
 
       if (toolCalls.length === 0) {
-        const textBlocks = response.content.filter(
-          (block): block is Anthropic.TextBlock => block.type === "text"
-        );
+        const textBlocks = response.content.filter((block) => block.type === "text");
         finalText = textBlocks
           .map((block) => block.text.trim())
           .filter(Boolean)
@@ -103,7 +100,7 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
         break;
       }
 
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
+      const toolResults: ToolLoopContentBlock[] = [];
 
       for (const toolCall of toolCalls) {
         store.logAction({
@@ -129,8 +126,9 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
 
         toolResults.push({
           type: "tool_result",
-          tool_use_id: toolCall.id,
-          content: result
+          toolCallId: toolCall.id,
+          content: result,
+          isError: result.toLowerCase().startsWith("error:")
         });
       }
 

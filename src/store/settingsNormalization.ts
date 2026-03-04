@@ -21,6 +21,15 @@ import {
 } from "../voice/realtimeProviderNormalization.ts";
 
 export const PERSONA_FLAVOR_MAX_CHARS = 2_000;
+const BROWSER_LLM_PROVIDER_FALLBACK_MODELS = {
+  anthropic: "claude-sonnet-4-5-20250929",
+  openai: "gpt-5-mini"
+} as const;
+
+function normalizeBrowserLlmProvider(value, fallback = "anthropic") {
+  const provider = normalizeLlmProvider(value, fallback);
+  return provider === "openai" || provider === "anthropic" ? provider : fallback;
+}
 
 export function normalizeSettings(raw) {
   const merged = deepMerge(DEFAULT_SETTINGS, raw ?? {});
@@ -53,6 +62,7 @@ export function normalizeSettings(raw) {
   merged.memoryLlm.model = normalizedMemoryLlm.model;
   if (!merged.webSearch || typeof merged.webSearch !== "object") merged.webSearch = {};
   if (!merged.browser || typeof merged.browser !== "object") merged.browser = {};
+  if (!merged.browser.llm || typeof merged.browser.llm !== "object") merged.browser.llm = {};
   if (!merged.videoContext || typeof merged.videoContext !== "object") merged.videoContext = {};
   if (!merged.voice || typeof merged.voice !== "object") merged.voice = {};
   if (!merged.prompt || typeof merged.prompt !== "object") merged.prompt = {};
@@ -270,6 +280,26 @@ export function normalizeSettings(raw) {
   );
 
   merged.browser.enabled = Boolean(merged.browser?.enabled);
+  const defaultBrowserLlmProvider = normalizeBrowserLlmProvider(DEFAULT_SETTINGS.browser?.llm?.provider || "anthropic");
+  const browserLlmProvider = normalizeBrowserLlmProvider(merged.browser?.llm?.provider, defaultBrowserLlmProvider);
+  const browserLlmDefaultModel =
+    BROWSER_LLM_PROVIDER_FALLBACK_MODELS[browserLlmProvider] ||
+    String(DEFAULT_SETTINGS.browser?.llm?.model || "").trim() ||
+    defaultModelForLlmProvider(browserLlmProvider);
+  const normalizedBrowserLlm = normalizeProviderModelPair(
+    merged.browser.llm,
+    defaultBrowserLlmProvider,
+    browserLlmDefaultModel
+  );
+  const resolvedBrowserLlmProvider = normalizeBrowserLlmProvider(
+    normalizedBrowserLlm.provider,
+    defaultBrowserLlmProvider
+  );
+  merged.browser.llm.provider = resolvedBrowserLlmProvider;
+  merged.browser.llm.model =
+    resolvedBrowserLlmProvider === normalizedBrowserLlm.provider
+      ? normalizedBrowserLlm.model
+      : BROWSER_LLM_PROVIDER_FALLBACK_MODELS[resolvedBrowserLlmProvider];
   const browserMaxPerHourRaw = Number(merged.browser?.maxBrowseCallsPerHour);
   const browserMaxStepsRaw = Number(merged.browser?.maxStepsPerTask);
   const browserStepTimeoutRaw = Number(merged.browser?.stepTimeoutMs);

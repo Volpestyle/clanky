@@ -1,6 +1,5 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import type Anthropic from "@anthropic-ai/sdk";
 import type { LLMService } from "../llm.ts";
 import type { BrowserManager } from "../services/BrowserManager.ts";
 import { runBrowseAgent } from "./browseAgent.ts";
@@ -8,21 +7,23 @@ import { runBrowseAgent } from "./browseAgent.ts";
 test("runBrowseAgent forwards step timeout to browser tools and preserves multi-block final text", async () => {
   const browserCalls: Array<{ sessionKey: string; url: string; timeoutMs: number }> = [];
   const closeCalls: string[] = [];
+  const llmCalls: Array<{ provider: string; model: string }> = [];
   let llmCallCount = 0;
 
   const llm = {
-    async chatWithTools() {
+    async chatWithTools(args: { provider: string; model: string }) {
+      llmCalls.push({ provider: args.provider, model: args.model });
       llmCallCount += 1;
       if (llmCallCount === 1) {
         return {
           content: [
             {
-              type: "tool_use",
+              type: "tool_call",
               id: "toolu_1",
               name: "browser_open",
               input: { url: "https://example.com" }
-            } satisfies Anthropic.ToolUseBlock
-          ] as Anthropic.ContentBlock[],
+            }
+          ],
           stopReason: "tool_use",
           usage: { inputTokens: 1, outputTokens: 1, cacheWriteTokens: 0, cacheReadTokens: 0 },
           costUsd: 0.01
@@ -30,9 +31,9 @@ test("runBrowseAgent forwards step timeout to browser tools and preserves multi-
       }
       return {
         content: [
-          { type: "text", text: "First answer block." } satisfies Anthropic.TextBlock,
-          { type: "text", text: "Second answer block." } satisfies Anthropic.TextBlock
-        ] as Anthropic.ContentBlock[],
+          { type: "text", text: "First answer block." },
+          { type: "text", text: "Second answer block." }
+        ],
         stopReason: "end_turn",
         usage: { inputTokens: 1, outputTokens: 1, cacheWriteTokens: 0, cacheReadTokens: 0 },
         costUsd: 0.02
@@ -62,6 +63,8 @@ test("runBrowseAgent forwards step timeout to browser tools and preserves multi-
     store,
     sessionKey: "guild-1",
     instruction: "open example.com",
+    provider: "anthropic",
+    model: "claude-sonnet-4-5-20250929",
     maxSteps: 3,
     stepTimeoutMs: 6_789,
     trace: {
@@ -74,6 +77,10 @@ test("runBrowseAgent forwards step timeout to browser tools and preserves multi-
 
   assert.deepEqual(browserCalls, [
     { sessionKey: "guild-1", url: "https://example.com", timeoutMs: 6_789 }
+  ]);
+  assert.deepEqual(llmCalls, [
+    { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
+    { provider: "anthropic", model: "claude-sonnet-4-5-20250929" }
   ]);
   assert.deepEqual(closeCalls, ["guild-1"]);
   assert.equal(result.text, "First answer block.\n\nSecond answer block.");

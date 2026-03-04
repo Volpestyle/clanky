@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   formToSettingsPatch,
+  resolveBrowserProviderModelOptions,
   resolveModelOptionsFromText,
   resolvePresetModelSelection,
   resolveProviderModelOptions,
@@ -45,6 +46,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.replyFollowupMaxMemoryLookupCalls, 2);
   assert.equal(form.replyFollowupMaxImageLookupCalls, 2);
   assert.equal(form.replyFollowupToolTimeoutMs, 10000);
+  assert.equal(form.browserLlmProvider, "anthropic");
+  assert.equal(form.browserLlmModel, "claude-sonnet-4-5-20250929");
   assert.equal(form.memoryReflectionStrategy, "two_pass_extract_then_main");
   assert.equal(form.adaptiveDirectivesEnabled, true);
   assert.equal(form.automationsEnabled, true);
@@ -113,6 +116,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.replyFollowupLlm.maxMemoryLookupCalls, 3);
   assert.equal(patch.replyFollowupLlm.maxImageLookupCalls, 1);
   assert.equal(patch.replyFollowupLlm.toolTimeoutMs, 16000);
+  assert.equal(patch.browser.llm.provider, "anthropic");
+  assert.equal(patch.browser.llm.model, "claude-sonnet-4-5-20250929");
   assert.equal(patch.memory.reflection.strategy, "one_pass_main");
   assert.equal(patch.adaptiveDirectives.enabled, false);
   assert.equal(patch.automations.enabled, false);
@@ -204,6 +209,24 @@ test("resolveProviderModelOptions merges catalog values with provider fallback d
   assert.deepEqual(anthropic, ["claude-haiku-4-5"]);
 });
 
+test("resolveBrowserProviderModelOptions merges catalog values with browser defaults", () => {
+  const openai = resolveBrowserProviderModelOptions(
+    {
+      openai: ["gpt-5-mini", "gpt-5-mini", "gpt-5.2"]
+    },
+    "openai"
+  );
+  assert.deepEqual(openai, ["gpt-5-mini", "gpt-5.2"]);
+
+  const anthropic = resolveBrowserProviderModelOptions(
+    {
+      anthropic: []
+    },
+    "anthropic"
+  );
+  assert.deepEqual(anthropic, ["claude-sonnet-4-5-20250929"]);
+});
+
 test("resolvePresetModelSelection always resolves to a real dropdown option", () => {
   const nonClaude = resolvePresetModelSelection({
     modelCatalog: {
@@ -244,6 +267,24 @@ test("settingsFormModel round-trips voice provider and brain provider", () => {
   assert.equal(form.voiceBrainProvider, "anthropic");
   const patch = formToSettingsPatch(form);
   assert.equal(patch.voice.brainProvider, "anthropic");
+});
+
+test("settingsFormModel round-trips browser llm provider and model", () => {
+  const form = settingsToForm({
+    browser: {
+      llm: {
+        provider: "openai",
+        model: "gpt-5-mini"
+      }
+    }
+  });
+
+  assert.equal(form.browserLlmProvider, "openai");
+  assert.equal(form.browserLlmModel, "gpt-5-mini");
+
+  const patch = formToSettingsPatch(form);
+  assert.equal(patch.browser.llm.provider, "openai");
+  assert.equal(patch.browser.llm.model, "gpt-5-mini");
 });
 
 test("settingsFormModel round-trips elevenlabs realtime settings", () => {

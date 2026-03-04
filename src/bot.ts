@@ -362,6 +362,8 @@ export class ClankerBot {
 
         try {
           const settings = this.store.getSettings();
+          const browserLlmProvider = String(settings?.browser?.llm?.provider || "anthropic").trim();
+          const browserLlmModel = String(settings?.browser?.llm?.model || "claude-sonnet-4-5-20250929").trim();
           const maxSteps = Math.max(1, Math.min(30, Number(settings?.browser?.maxStepsPerTask) || 15));
           const stepTimeoutMs = Math.max(5000, Math.min(120000, Number(settings?.browser?.stepTimeoutMs) || 30000));
 
@@ -371,6 +373,8 @@ export class ClankerBot {
             store: this.store,
             sessionKey: interaction.guildId || interaction.channelId || interaction.id,
             instruction: task,
+            provider: browserLlmProvider,
+            model: browserLlmModel,
             maxSteps,
             stepTimeoutMs,
             trace: {
@@ -2762,6 +2766,8 @@ export class ClankerBot {
 
     const maxSteps = clamp(Number(settings?.browser?.maxStepsPerTask) || 15, 1, 30);
     const stepTimeoutMs = clamp(Number(settings?.browser?.stepTimeoutMs) || 30_000, 5_000, 120_000);
+    const browserLlmProvider = String(settings?.browser?.llm?.provider || "anthropic").trim();
+    const browserLlmModel = String(settings?.browser?.llm?.model || "claude-sonnet-4-5-20250929").trim();
 
     try {
       const result = await runBrowseAgent({
@@ -2770,6 +2776,8 @@ export class ClankerBot {
         store: this.store,
         sessionKey: `reply:${String(guildId || "dm")}:${Date.now()}`,
         instruction: normalizedQuery,
+        provider: browserLlmProvider,
+        model: browserLlmModel,
         maxSteps,
         stepTimeoutMs,
         trace: {

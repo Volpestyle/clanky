@@ -1331,6 +1331,8 @@ export async function executeVoiceBrowserBrowseTool(manager: any, { session, set
 
   const maxSteps = clamp(Number(settings?.browser?.maxStepsPerTask) || 15, 1, 30);
   const stepTimeoutMs = clamp(Number(settings?.browser?.stepTimeoutMs) || 30_000, 5_000, 120_000);
+  const browserLlmProvider = String(settings?.browser?.llm?.provider || "anthropic").trim();
+  const browserLlmModel = String(settings?.browser?.llm?.model || "claude-sonnet-4-5-20250929").trim();
 
   try {
     const result = await runBrowseAgent({
@@ -1339,6 +1341,8 @@ export async function executeVoiceBrowserBrowseTool(manager: any, { session, set
       store: manager.store,
       sessionKey: session.guildId,
       instruction,
+      provider: browserLlmProvider,
+      model: browserLlmModel,
       maxSteps,
       stepTimeoutMs,
       trace: {

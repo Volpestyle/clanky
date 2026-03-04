@@ -7,6 +7,7 @@ import {
   OPENAI_TRANSCRIPTION_MODEL_OPTIONS,
   XAI_VOICE_OPTIONS,
   formToSettingsPatch,
+  resolveBrowserProviderModelOptions,
   resolveModelOptions,
   resolveModelOptionsFromText,
   resolvePresetModelSelection,
@@ -93,6 +94,20 @@ export default function SettingsForm({
     selectedPresetModel: selectedMemoryLlmPresetModel
   } = resolvePresetSelection("memoryLlmProvider", "memoryLlmModel");
   const {
+    options: browserLlmModelOptions,
+    selectedPresetModel: selectedBrowserLlmPresetModel
+  } = resolvePresetModelSelection({
+    modelCatalog: {
+      ...modelCatalog,
+      [effectiveForm.browserLlmProvider]: resolveBrowserProviderModelOptions(
+        modelCatalog,
+        effectiveForm.browserLlmProvider
+      )
+    },
+    provider: effectiveForm.browserLlmProvider,
+    model: effectiveForm.browserLlmModel
+  });
+  const {
     options: voiceGenerationModelOptions,
     selectedPresetModel: selectedVoiceGenerationPresetModel
   } = resolvePresetSelection("voiceGenerationLlmProvider", "voiceGenerationLlmModel");
@@ -152,6 +167,7 @@ export default function SettingsForm({
       syncModel("model", selectedPresetModel);
       syncModel("replyFollowupLlmModel", selectedReplyFollowupPresetModel);
       syncModel("memoryLlmModel", selectedMemoryLlmPresetModel);
+      syncModel("browserLlmModel", selectedBrowserLlmPresetModel);
       syncModel("voiceGenerationLlmModel", selectedVoiceGenerationPresetModel);
       syncModel("voiceThoughtEngineModel", selectedVoiceThoughtEnginePresetModel);
       if (next.voiceGenerationLlmUseTextModel) {
@@ -164,6 +180,7 @@ export default function SettingsForm({
     selectedPresetModel,
     selectedReplyFollowupPresetModel,
     selectedMemoryLlmPresetModel,
+    selectedBrowserLlmPresetModel,
     selectedVoiceGenerationPresetModel,
     selectedVoiceThoughtEnginePresetModel
   ]);
@@ -189,7 +206,10 @@ export default function SettingsForm({
   function setProviderWithPresetFallback(providerField, modelField, provider) {
     setForm((current) => {
       const next = { ...current, [providerField]: provider };
-      const options = resolveProviderModelOptions(modelCatalog, provider);
+      const options =
+        providerField === "browserLlmProvider"
+          ? resolveBrowserProviderModelOptions(modelCatalog, provider)
+          : resolveProviderModelOptions(modelCatalog, provider);
       const currentModel = String(current?.[modelField] || "").trim();
       if (options.includes(currentModel)) return next;
       next[modelField] = options[0] || currentModel;
@@ -206,6 +226,7 @@ export default function SettingsForm({
   const setProvider = createProviderSetter("provider", "model");
   const setMemoryLlmProvider = createProviderSetter("memoryLlmProvider", "memoryLlmModel");
   const setReplyFollowupProvider = createProviderSetter("replyFollowupLlmProvider", "replyFollowupLlmModel");
+  const setBrowserLlmProvider = createProviderSetter("browserLlmProvider", "browserLlmModel");
   const setVoiceGenerationProvider = createProviderSetter("voiceGenerationLlmProvider", "voiceGenerationLlmModel");
   const setVoiceThoughtEngineProvider = createProviderSetter("voiceThoughtEngineProvider", "voiceThoughtEngineModel");
 
@@ -222,6 +243,7 @@ export default function SettingsForm({
   const selectPresetModel = createPresetSelector("model");
   const selectReplyFollowupPresetModel = createPresetSelector("replyFollowupLlmModel");
   const selectMemoryLlmPresetModel = createPresetSelector("memoryLlmModel");
+  const selectBrowserLlmPresetModel = createPresetSelector("browserLlmModel");
   const selectVoiceGenerationPresetModel = createPresetSelector("voiceGenerationLlmModel");
   const selectVoiceThoughtEnginePresetModel = createPresetSelector("voiceThoughtEngineModel");
 
@@ -314,7 +336,15 @@ export default function SettingsForm({
           />
 
           <WebSearchSettingsSection id="sec-search" form={form} set={set} />
-          <BrowserSettingsSection id="sec-browser" form={form} set={set} />
+          <BrowserSettingsSection
+            id="sec-browser"
+            form={form}
+            set={set}
+            setBrowserLlmProvider={setBrowserLlmProvider}
+            selectBrowserLlmPresetModel={selectBrowserLlmPresetModel}
+            browserLlmModelOptions={browserLlmModelOptions}
+            selectedBrowserLlmPresetModel={selectedBrowserLlmPresetModel}
+          />
           <VideoContextSettingsSection id="sec-video" form={form} set={set} />
 
           <VoiceModeSettingsSection

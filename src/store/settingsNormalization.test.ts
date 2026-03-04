@@ -34,6 +34,17 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
       recencyDaysDefault: 0,
       maxConcurrentFetches: 99
     },
+    browser: {
+      enabled: true,
+      llm: {
+        provider: "OPENAI",
+        model: ""
+      },
+      maxBrowseCallsPerHour: 999,
+      maxStepsPerTask: 0,
+      stepTimeoutMs: 1000,
+      sessionTimeoutMs: 999999
+    },
     videoContext: {
       enabled: true,
       maxLookupsPerHour: -1,
@@ -136,6 +147,14 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.webSearch.maxConcurrentFetches, 10);
   assert.deepEqual(normalized.webSearch.providerOrder, ["serpapi", "brave"]);
 
+  assert.equal(normalized.browser.enabled, true);
+  assert.equal(normalized.browser.llm.provider, "openai");
+  assert.equal(normalized.browser.llm.model, "gpt-5-mini");
+  assert.equal(normalized.browser.maxBrowseCallsPerHour, 60);
+  assert.equal(normalized.browser.maxStepsPerTask, 1);
+  assert.equal(normalized.browser.stepTimeoutMs, 5_000);
+  assert.equal(normalized.browser.sessionTimeoutMs, 600_000);
+
   assert.equal(normalized.videoContext.maxLookupsPerHour, 0);
   assert.equal(normalized.videoContext.maxVideosPerMessage, 6);
   assert.equal(normalized.videoContext.maxTranscriptChars, 4000);
@@ -217,6 +236,20 @@ test("normalizeSettings preserves explicit file_wav transcription mode", () => {
   });
 
   assert.equal(normalized.voice.openaiRealtime.transcriptionMethod, "file_wav");
+});
+
+test("normalizeSettings restricts browser llm provider to supported browser providers", () => {
+  const normalized = normalizeSettings({
+    browser: {
+      llm: {
+        provider: "xai",
+        model: ""
+      }
+    }
+  });
+
+  assert.equal(normalized.browser.llm.provider, "anthropic");
+  assert.equal(normalized.browser.llm.model, "claude-sonnet-4-5-20250929");
 });
 
 test("normalizeSettings preserves explicit commandOnlyMode", () => {

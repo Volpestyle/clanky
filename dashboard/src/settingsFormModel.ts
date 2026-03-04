@@ -50,6 +50,11 @@ export const XAI_VOICE_OPTIONS = Object.freeze([
   "Leo"
 ]);
 
+export const BROWSER_PROVIDER_MODEL_FALLBACKS = Object.freeze({
+  anthropic: ["claude-sonnet-4-5-20250929"],
+  openai: ["gpt-5-mini"]
+});
+
 export function settingsToForm(settings) {
   const defaults = DEFAULT_SETTINGS;
   const defaultPrompt = defaults.prompt;
@@ -130,6 +135,8 @@ export function settingsToForm(settings) {
     maxTokens: settings?.llm?.maxOutputTokens ?? defaultLlm.maxOutputTokens,
     browserEnabled: settings?.browser?.enabled ?? defaults.browser.enabled,
     browserMaxPerHour: settings?.browser?.maxBrowseCallsPerHour ?? defaults.browser.maxBrowseCallsPerHour,
+    browserLlmProvider: settings?.browser?.llm?.provider ?? defaults.browser.llm.provider,
+    browserLlmModel: settings?.browser?.llm?.model ?? defaults.browser.llm.model,
     browserMaxSteps: settings?.browser?.maxStepsPerTask ?? defaults.browser.maxStepsPerTask,
     browserStepTimeoutMs: settings?.browser?.stepTimeoutMs ?? defaults.browser.stepTimeoutMs,
     browserSessionTimeoutMs: settings?.browser?.sessionTimeoutMs ?? defaults.browser.sessionTimeoutMs,
@@ -353,6 +360,10 @@ export function formToSettingsPatch(form) {
     browser: {
       enabled: form.browserEnabled,
       maxBrowseCallsPerHour: Number(form.browserMaxPerHour),
+      llm: {
+        provider: String(form.browserLlmProvider || "").trim(),
+        model: String(form.browserLlmModel || "").trim()
+      },
       maxStepsPerTask: Number(form.browserMaxSteps),
       stepTimeoutMs: Number(form.browserStepTimeoutMs),
       sessionTimeoutMs: Number(form.browserSessionTimeoutMs)
@@ -597,6 +608,15 @@ export function resolveProviderModelOptions(modelCatalog, provider) {
   const key = normalizeLlmProvider(provider);
   const fromCatalog = Array.isArray(modelCatalog?.[key]) ? modelCatalog[key] : [];
   const fallback = PROVIDER_MODEL_FALLBACKS[key] || [];
+  return normalizeBoundedStringList([...fromCatalog, ...fallback], { maxItems: 80, maxLen: 120 });
+}
+
+export function resolveBrowserProviderModelOptions(modelCatalog, provider) {
+  const key = normalizeLlmProvider(provider);
+  const fromCatalog = Array.isArray(modelCatalog?.[key]) ? modelCatalog[key] : [];
+  const fallback = Array.isArray(BROWSER_PROVIDER_MODEL_FALLBACKS[key])
+    ? BROWSER_PROVIDER_MODEL_FALLBACKS[key]
+    : [];
   return normalizeBoundedStringList([...fromCatalog, ...fallback], { maxItems: 80, maxLen: 120 });
 }
 

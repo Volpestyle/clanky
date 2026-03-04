@@ -75,6 +75,32 @@ type XaiJsonRecord = {
   [key: string]: XaiJsonValue;
 };
 
+export type ToolLoopTextBlock = {
+  type: "text";
+  text: string;
+};
+
+export type ToolLoopToolCall = {
+  type: "tool_call";
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+};
+
+export type ToolLoopToolResult = {
+  type: "tool_result";
+  toolCallId: string;
+  content: string;
+  isError?: boolean;
+};
+
+export type ToolLoopContentBlock = ToolLoopTextBlock | ToolLoopToolCall | ToolLoopToolResult;
+
+export type ToolLoopMessage = {
+  role: "user" | "assistant";
+  content: string | ToolLoopContentBlock[];
+};
+
 export type XaiJsonRequestOptions = {
   method?: string;
   body?: XaiJsonRecord | null;
@@ -160,6 +186,170 @@ export function buildOpenAiJsonSchemaTextFormat(jsonSchema: string) {
       schema: parsedSchema
     }
   };
+}
+
+function normalizeToolLoopTextBlocks(content: string | ToolLoopContentBlock[]): ToolLoopTextBlock[] {
+  if (typeof content === "string") {
+    const text = String(content || "").trim();
+    return text ? [{ type: "text", text }] : [];
+  }
+  if (!Array.isArray(content)) return [];
+  return content.filter((block): block is ToolLoopTextBlock => block?.type === "text");
+}
+
+function normalizeToolLoopCallBlocks(content: string | ToolLoopContentBlock[]): ToolLoopToolCall[] {
+  if (!Array.isArray(content)) return [];
+  return content.filter((block): block is ToolLoopToolCall => block?.type === "tool_call");
+}
+
+function normalizeToolLoopResultBlocks(content: string | ToolLoopContentBlock[]): ToolLoopToolResult[] {
+  if (!Array.isArray(content)) return [];
+  return content.filter((block): block is ToolLoopToolResult => block?.type === "tool_result");
+}
+
+function buildAnthropicToolLoopMessages(messages: ToolLoopMessage[]): Anthropic.MessageParam[] {
+  return messages.map((message) => {
+    if (typeof message.content === "string") {
+      return {
+        role: message.role,
+        content: message.content
+      };
+    }
+
+    const content: Anthropic.ContentBlockParam[] = [];
+    for (const block of message.content) {
+      if (block.type === "text") {
+        content.push({
+          type: "text",
+          text: block.text
+        });
+        continue;
+      }
+      if (block.type === "tool_call") {
+        content.push({
+          type: "tool_use",
+          id: block.id,
+          name: block.name,
+          input: block.input
+        });
+        continue;
+      }
+      content.push({
+        type: "tool_result",
+        tool_use_id: block.toolCallId,
+        content: block.content,
+        is_error: Boolean(block.isError)
+      });
+    }
+
+    return {
+      role: message.role,
+      content
+    };
+  });
+}
+
+function buildOpenAiToolLoopInput(messages: ToolLoopMessage[]) {
+  const input = [];
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    const textBlocks = normalizeToolLoopTextBlocks(message.content);
+    const toolCallBlocks = normalizeToolLoopCallBlocks(message.content);
+    const toolResultBlocks = normalizeToolLoopResultBlocks(message.content);
+
+    if (message.role === "assistant") {
+      if (textBlocks.length) {
+        input.push({
+          id: `assistant-message-${index}`,
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: textBlocks.map((block) => ({
+            type: "output_text" as const,
+            text: block.text,
+            annotations: []
+          }))
+        });
+      }
+
+      for (const block of toolCallBlocks) {
+        input.push({
+          id: `assistant-tool-${block.id}`,
+          type: "function_call",
+          call_id: block.id,
+          name: block.name,
+          arguments: JSON.stringify(block.input ?? {}),
+          status: "completed"
+        });
+      }
+
+      continue;
+    }
+
+    if (textBlocks.length) {
+      input.push({
+        type: "message",
+        role: "user",
+        content: textBlocks.map((block) => ({
+          type: "input_text" as const,
+          text: block.text
+        }))
+      });
+    }
+
+    for (const block of toolResultBlocks) {
+      input.push({
+        type: "function_call_output",
+        call_id: block.toolCallId,
+        output: block.content
+      });
+    }
+  }
+
+  return input;
+}
+
+function buildToolLoopContentFromOpenAiOutput(output: unknown): ToolLoopContentBlock[] {
+  const items = Array.isArray(output) ? output : [];
+  const blocks: ToolLoopContentBlock[] = [];
+
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    if (item.type === "message" && item.role === "assistant") {
+      const contentParts = Array.isArray(item.content) ? item.content : [];
+      for (const part of contentParts) {
+        if (!part || typeof part !== "object") continue;
+        if (part.type === "output_text") {
+          const text = String(part.text || "").trim();
+          if (text) blocks.push({ type: "text", text });
+        } else if (part.type === "refusal") {
+          const text = String(part.refusal || "").trim();
+          if (text) blocks.push({ type: "text", text });
+        }
+      }
+      continue;
+    }
+
+    if (item.type !== "function_call") continue;
+    const name = String(item.name || "").trim();
+    const toolCallId = String(item.call_id || item.id || "").trim();
+    const input =
+      typeof item.arguments === "string"
+        ? safeJsonParse(item.arguments, {})
+        : item.arguments && typeof item.arguments === "object"
+          ? item.arguments
+          : {};
+    if (!name || !toolCallId) continue;
+    blocks.push({
+      type: "tool_call",
+      id: toolCallId,
+      name,
+      input
+    });
+  }
+
+  return blocks;
 }
 
 function buildClaudeCodeTurnPreamble({
@@ -1758,6 +1948,7 @@ export class LLMService {
   }
 
   async chatWithTools({
+    provider = "anthropic",
     model = "claude-sonnet-4-5-20250929",
     systemPrompt,
     messages,
@@ -1771,9 +1962,10 @@ export class LLMService {
       source: null as string | null
     }
   }: {
+    provider?: string;
     model?: string;
     systemPrompt: string;
-    messages: Anthropic.MessageParam[];
+    messages: ToolLoopMessage[];
     tools: Array<{
       name: string;
       description: string;
@@ -1788,36 +1980,88 @@ export class LLMService {
       source?: string | null;
     };
   }): Promise<{
-    content: Anthropic.ContentBlock[];
+    content: ToolLoopContentBlock[];
     stopReason: string;
     usage: { inputTokens: number; outputTokens: number; cacheWriteTokens: number; cacheReadTokens: number };
     costUsd: number;
   }> {
-    if (!this.anthropic) {
-      throw new Error("chatWithTools requires ANTHROPIC_API_KEY.");
-    }
-
+    const resolvedProvider = normalizeLlmProvider(provider, "anthropic");
     const resolvedModel = String(model || "claude-sonnet-4-5-20250929").trim();
     const resolvedTemperature = Math.max(0, Math.min(Number(temperature) || 0, 1));
-
-    const response = await this.anthropic.messages.create({
-      model: resolvedModel,
-      system: systemPrompt,
-      temperature: resolvedTemperature,
-      max_tokens: maxOutputTokens,
-      messages,
-      tools
-    });
-
-    const usage = {
-      inputTokens: Number(response.usage?.input_tokens || 0),
-      outputTokens: Number(response.usage?.output_tokens || 0),
-      cacheWriteTokens: Number(response.usage?.cache_creation_input_tokens || 0),
-      cacheReadTokens: Number(response.usage?.cache_read_input_tokens || 0)
+    let content: ToolLoopContentBlock[] = [];
+    let stopReason = "end_turn";
+    let usage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheWriteTokens: 0,
+      cacheReadTokens: 0
     };
 
+    if (resolvedProvider === "anthropic") {
+      if (!this.anthropic) {
+        throw new Error("chatWithTools requires ANTHROPIC_API_KEY.");
+      }
+
+      const response = await this.anthropic.messages.create({
+        model: resolvedModel,
+        system: systemPrompt,
+        temperature: resolvedTemperature,
+        max_tokens: maxOutputTokens,
+        messages: buildAnthropicToolLoopMessages(messages),
+        tools
+      });
+
+      content = response.content.flatMap((block) => {
+        if (block.type === "text") {
+          const text = String(block.text || "").trim();
+          return text ? [{ type: "text" as const, text }] : [];
+        }
+        if (block.type === "tool_use") {
+          return [{
+            type: "tool_call" as const,
+            id: block.id,
+            name: block.name,
+            input: block.input as Record<string, unknown>
+          }];
+        }
+        return [];
+      });
+      stopReason = response.stop_reason || "end_turn";
+      usage = {
+        inputTokens: Number(response.usage?.input_tokens || 0),
+        outputTokens: Number(response.usage?.output_tokens || 0),
+        cacheWriteTokens: Number(response.usage?.cache_creation_input_tokens || 0),
+        cacheReadTokens: Number(response.usage?.cache_read_input_tokens || 0)
+      };
+    } else if (resolvedProvider === "openai") {
+      if (!this.openai) {
+        throw new Error("chatWithTools requires OPENAI_API_KEY.");
+      }
+
+      const response = await this.openai.responses.create({
+        model: resolvedModel,
+        instructions: systemPrompt,
+        ...buildOpenAiTemperatureParam(resolvedModel, resolvedTemperature),
+        ...buildOpenAiReasoningParam(resolvedModel, "minimal"),
+        max_output_tokens: maxOutputTokens,
+        tools: tools.map((tool) => ({
+          type: "function" as const,
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.input_schema,
+          strict: false
+        })),
+        input: buildOpenAiToolLoopInput(messages)
+      });
+
+      content = buildToolLoopContentFromOpenAiOutput(response.output);
+      usage = extractOpenAiResponseUsage(response);
+    } else {
+      throw new Error(`Browser agent tool loop does not support provider '${resolvedProvider}'.`);
+    }
+
     const costUsd = estimateUsdCost({
-      provider: "anthropic",
+      provider: resolvedProvider,
       model: resolvedModel,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
@@ -1830,9 +2074,9 @@ export class LLMService {
       guildId: trace.guildId || null,
       channelId: trace.channelId || null,
       userId: trace.userId || null,
-      content: `anthropic:${resolvedModel}`,
+      content: `${resolvedProvider}:${resolvedModel}`,
       metadata: {
-        provider: "anthropic",
+        provider: resolvedProvider,
         model: resolvedModel,
         usage,
         source: trace.source || null
@@ -1841,8 +2085,8 @@ export class LLMService {
     });
 
     return {
-      content: response.content,
-      stopReason: response.stop_reason || "end_turn",
+      content,
+      stopReason,
       usage,
       costUsd
     };
