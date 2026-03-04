@@ -374,14 +374,12 @@ export class VoiceSubprocessClient extends EventEmitter {
   }
 
   private _send(msg: any) {
-    if (!this.child || this.child.killed) return;
+    if (!this.child || this.destroyed || this.child.killed || this.child.exitCode !== null) return;
     try {
       this.child.stdin.write(JSON.stringify(msg) + "\n");
       this.child.stdin.flush();
-    } catch (err) {
-      if (AUDIO_DEBUG) {
-        console.error("[voiceSubprocessClient] IPC send error:", err);
-      }
+    } catch {
+      // EPIPE expected during shutdown — silently ignore
     }
   }
 

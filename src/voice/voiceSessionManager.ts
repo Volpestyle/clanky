@@ -105,6 +105,7 @@ import {
   transcriptSourceFromEventType
 } from "./voiceSessionHelpers.ts";
 import { requestJoin } from "./voiceJoinFlow.ts";
+import { evaluateVoiceReplyDecision as evaluateVoiceReplyDecisionModule } from "./voiceReplyDecision.ts";
 import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
   ACTIVITY_TOUCH_THROTTLE_MS,
@@ -3610,13 +3611,31 @@ export class VoiceSessionManager {
       });
       return;
     }
-    // Skip if someone is currently talking
+    // Skip if someone is actively speaking (assertive signal, not just Discord VAD noise).
+    // If captures exist but none are assertive yet, retry once after a short delay
+    // to let the silence gate decide before permanently skipping.
     if (Number(session.userCaptures?.size || 0) > 0) {
-      this.logJoinGreetingState(session, "voice_join_greeting_skipped", {
-        reason: "active_user_capture",
-        userCaptureCount: Number(session.userCaptures?.size || 0)
-      });
-      return;
+      const hasAssertive = this.hasAssertiveInboundCapture(session);
+      if (hasAssertive) {
+        this.logJoinGreetingState(session, "voice_join_greeting_skipped", {
+          reason: "assertive_user_capture",
+          userCaptureCount: Number(session.userCaptures?.size || 0)
+        });
+        return;
+      }
+      // Captures exist but none assertive — retry once after silence gate has time to finalize
+      if (!session.joinGreetingRetried) {
+        session.joinGreetingRetried = true;
+        session.joinGreetingTimer = setTimeout(() => {
+          session.joinGreetingTimer = null;
+          this.maybeFireJoinGreeting(session);
+        }, 2000);
+        this.logJoinGreetingState(session, "voice_join_greeting_deferred", {
+          reason: "non_assertive_capture_retry",
+          userCaptureCount: Number(session.userCaptures?.size || 0)
+        });
+        return;
+      }
     }
     // Skip if the bot already spoke (user greeted first, normal pipeline handled it)
     if (session.lastAssistantReplyAt) {
@@ -9737,9 +9756,6 @@ export class VoiceSessionManager {
         transcriptionPlanReason: resolvedTranscriptionPlanReason,
         clipDurationMs,
         asrSkippedShortClip: skipShortClipAsr,
-        llmResponse: decision.llmResponse || null,
-        llmProvider: decision.llmProvider || null,
-        llmModel: decision.llmModel || null,
         conversationState: decision.conversationContext?.engagementState || null,
         conversationEngaged: Boolean(decision.conversationContext?.engaged),
         engagedWithCurrentSpeaker: Boolean(decision.conversationContext?.engagedWithCurrentSpeaker),
@@ -10003,9 +10019,6 @@ export class VoiceSessionManager {
           : 0,
         transcript: decision.transcript || coalescedTranscript || null,
         deferredTurnCount: coalescedTurns.length,
-        llmResponse: decision.llmResponse || null,
-        llmProvider: decision.llmProvider || null,
-        llmModel: decision.llmModel || null,
         conversationState: decision.conversationContext?.engagementState || null,
         conversationEngaged: Boolean(decision.conversationContext?.engaged),
         engagedWithCurrentSpeaker: Boolean(decision.conversationContext?.engagedWithCurrentSpeaker),
@@ -10375,277 +10388,17 @@ export class VoiceSessionManager {
     settings,
     userId,
     transcript,
-    source: _source = "stt_pipeline",
+    source = "stt_pipeline",
     transcriptionContext = null
   }): Promise<VoiceReplyDecision> {
-    const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
-    const normalizedUserId = String(userId || "").trim();
-    const participantCount = this.countHumanVoiceParticipants(session);
-    const speakerName = this.resolveVoiceSpeakerName(session, userId) || "someone";
-    const participantList = this.getVoiceChannelParticipants(session)
-      .map((entry) => entry.displayName)
-      .filter(Boolean)
-      .slice(0, 10);
-    const addressedToOtherParticipant = isLikelyVocativeAddressToOtherParticipant({
-      transcript: normalizedTranscript,
-      participantDisplayNames: participantList,
-      botName: getPromptBotName(settings),
-      speakerName
-    });
-    const now = Date.now();
-    if (!normalizedTranscript) {
-      const emptyConversationContext = this.buildVoiceConversationContext({
-        session,
-        userId: normalizedUserId,
-        directAddressed: false,
-        addressedToOtherParticipant,
-        now
-      });
-      return {
-        allow: false,
-        reason: "missing_transcript",
-        participantCount,
-        directAddressed: false,
-        directAddressConfidence: 0,
-        directAddressThreshold: DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
-        transcript: "",
-        conversationContext: emptyConversationContext
-      };
-    }
-    const directAddressedByWakePhrase = normalizedTranscript
-      ? isVoiceTurnAddressedToBot(normalizedTranscript, settings)
-      : false;
-    const normalizeWakeTokens = (value = ""): string[] =>
-      String(value || "")
-        .trim()
-        .toLowerCase()
-        .normalize("NFKD")
-        .replace(/\p{M}+/gu, "")
-        .match(/[\p{L}\p{N}]+/gu) || [];
-    const containsTokenSequence = (tokens: string[] = [], sequence: string[] = []) => {
-      if (!Array.isArray(tokens) || !Array.isArray(sequence)) return false;
-      if (!tokens.length || !sequence.length || sequence.length > tokens.length) return false;
-      for (let start = 0; start <= tokens.length - sequence.length; start += 1) {
-        let matched = true;
-        for (let index = 0; index < sequence.length; index += 1) {
-          if (tokens[start + index] !== sequence[index]) {
-            matched = false;
-            break;
-          }
-        }
-        if (matched) return true;
-      }
-      return false;
-    };
-    const botWakeTokens = normalizeWakeTokens(settings?.botName || "");
-    const transcriptWakeTokens = normalizeWakeTokens(normalizedTranscript);
-    const transcriptWakeTokenSet = new Set(transcriptWakeTokens);
-    const mergedWakeToken = botWakeTokens.length >= 2 ? botWakeTokens.join("") : "";
-    const mergedWakeTokenAddressed = Boolean(mergedWakeToken) && transcriptWakeTokenSet.has(mergedWakeToken);
-    const exactWakeSequenceAddressed = containsTokenSequence(transcriptWakeTokens, botWakeTokens);
-    const primaryWakeToken = botWakeTokens.find((token) => token.length >= 4 && !["bot", "ai", "assistant"].includes(token))
-      || botWakeTokens.find((token) => token.length >= 4)
-      || "";
-    const primaryWakeTokenAddressed = primaryWakeToken ? transcriptWakeTokenSet.has(primaryWakeToken) : false;
-    const deterministicDirectAddressed =
-      directAddressedByWakePhrase &&
-      (
-        primaryWakeTokenAddressed ||
-        exactWakeSequenceAddressed ||
-        !mergedWakeTokenAddressed
-      );
-    const nameCueDetected = hasBotNameCue({
-      transcript: normalizedTranscript,
-      botName: getPromptBotName(settings)
-    });
-    const directAddressAssessment = {
-      confidence: deterministicDirectAddressed ? 0.92 : 0,
-      threshold: DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
-      addressed: deterministicDirectAddressed,
-      reason: deterministicDirectAddressed ? "deterministic_wake_phrase" : "deterministic_not_direct",
-      source: "fallback",
-      llmProvider: null,
-      llmModel: null,
-      llmResponse: null,
-      error: null
-    };
-    const directAddressConfidence = Number(directAddressAssessment.confidence) || 0;
-    const directAddressThreshold = Number(directAddressAssessment.threshold) || DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD;
-    const directAddressed =
-      !addressedToOtherParticipant &&
-      directAddressConfidence >= directAddressThreshold;
-    const commandOnlyMode = this.isCommandOnlyActive(session, settings);
-    const replyEagerness = commandOnlyMode
-      ? 0
-      : clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
-    const baseConversationContext = this.buildVoiceConversationContext({
+    return evaluateVoiceReplyDecisionModule(this, {
       session,
-      userId: normalizedUserId,
-      directAddressed,
-      addressedToOtherParticipant,
-      now
+      settings,
+      userId,
+      transcript,
+      source,
+      transcriptionContext
     });
-    const voiceAddressingState = this.buildVoiceAddressingState({
-      session,
-      userId: normalizedUserId,
-      now
-    });
-    const currentTurnAddressing = this.normalizeVoiceAddressingAnnotation({
-      directAddressed,
-      directedConfidence: directAddressConfidence,
-      source: "decision",
-      reason: directAddressAssessment?.reason || null
-    });
-    const conversationContext = {
-      ...baseConversationContext,
-      voiceAddressingState,
-      currentTurnAddressing
-    };
-    const configuredNonDirectSilenceMs = Number(settings?.voice?.nonDirectReplyMinSilenceMs);
-    const nonDirectReplyMinSilenceMs = clamp(
-      Number.isFinite(configuredNonDirectSilenceMs)
-        ? Math.round(configuredNonDirectSilenceMs)
-        : NON_DIRECT_REPLY_MIN_SILENCE_MS,
-      600,
-      12_000
-    );
-
-    const replyOutputLockState = this.getReplyOutputLockState(session);
-    if (replyOutputLockState.locked) {
-      return {
-        allow: false,
-        reason: "bot_turn_open",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        conversationContext,
-        retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS,
-        outputLockReason: replyOutputLockState.reason
-      };
-    }
-
-    if (directAddressed) {
-      return {
-        allow: true,
-        reason: "direct_address_fast_path",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        conversationContext
-      };
-    }
-
-    const sameSpeakerPendingCommandFollowup = this.isMusicDisambiguationResolutionTurn(
-      session,
-      normalizedUserId,
-      normalizedTranscript
-    );
-    if (sameSpeakerPendingCommandFollowup && !addressedToOtherParticipant) {
-      return {
-        allow: true,
-        reason: "pending_command_followup",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        conversationContext
-      };
-    }
-
-    if (commandOnlyMode) {
-      if (directAddressedByWakePhrase) {
-        return {
-          allow: true,
-          reason: "command_only_direct_address",
-          participantCount,
-          directAddressed: true,
-          directAddressConfidence,
-          directAddressThreshold,
-          transcript: normalizedTranscript,
-          conversationContext
-        };
-      }
-      return {
-        allow: false,
-        reason: "command_only_not_addressed",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        conversationContext
-      };
-    }
-
-    if (!directAddressed && replyEagerness <= 0) {
-      return {
-        allow: false,
-        reason: "eagerness_disabled_without_direct_address",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        conversationContext
-      };
-    }
-
-    const sessionMode = String(session?.mode || settings?.voice?.mode || "")
-      .trim()
-      .toLowerCase();
-
-    const mergedWithGeneration =
-      sessionMode === "stt_pipeline" ||
-      (isRealtimeMode(sessionMode) &&
-        this.resolveRealtimeReplyStrategy({
-          session,
-          settings
-        }) === "brain");
-    const lastInboundAudioAt = Number(session?.lastInboundAudioAt || 0);
-    const msSinceInboundAudio =
-      lastInboundAudioAt > 0 ? Math.max(0, now - lastInboundAudioAt) : null;
-    const wakeModeActive =
-      Boolean(conversationContext?.recentAssistantReply) ||
-      Boolean(conversationContext?.sameAsRecentDirectAddress);
-    const shouldDelayNonDirectMergedRealtimeReply =
-      isRealtimeMode(sessionMode) &&
-      mergedWithGeneration &&
-      participantCount > 1 &&
-      !directAddressed &&
-      (addressedToOtherParticipant || (!nameCueDetected && directAddressConfidence < directAddressThreshold && !wakeModeActive)) &&
-      Number.isFinite(msSinceInboundAudio) &&
-      msSinceInboundAudio < nonDirectReplyMinSilenceMs;
-    if (shouldDelayNonDirectMergedRealtimeReply) {
-      return {
-        allow: false,
-        reason: "awaiting_non_direct_silence_window",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        conversationContext,
-        msSinceInboundAudio,
-        requiredSilenceMs: nonDirectReplyMinSilenceMs,
-        retryAfterMs: Math.max(60, nonDirectReplyMinSilenceMs - Number(msSinceInboundAudio || 0))
-      };
-    }
-
-    return {
-      allow: mergedWithGeneration,
-      reason: mergedWithGeneration ? "brain_decides" : "no_brain_session",
-      participantCount,
-      directAddressed,
-      directAddressConfidence,
-      directAddressThreshold,
-      transcript: normalizedTranscript,
-      conversationContext
-    };
   }
 
   formatVoiceDecisionHistory(session, maxTurns = 6, maxTotalChars = VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS) {
@@ -12216,9 +11969,6 @@ export class VoiceSessionManager {
         transcriptionPlanReason,
         clipDurationMs,
         asrSkippedShortClip: false,
-        llmResponse: turnDecision.llmResponse || null,
-        llmProvider: turnDecision.llmProvider || null,
-        llmModel: turnDecision.llmModel || null,
         conversationState: turnDecision.conversationContext?.engagementState || null,
         conversationEngaged: Boolean(turnDecision.conversationContext?.engaged),
         engagedWithCurrentSpeaker: Boolean(turnDecision.conversationContext?.engagedWithCurrentSpeaker),
