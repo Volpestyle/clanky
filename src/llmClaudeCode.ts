@@ -669,6 +669,22 @@ export function parseClaudeCodeJsonOutput(rawOutput) {
   });
 }
 
+export function buildCodeAgentCliArgs({ model, maxTurns = 30, instruction = "" }) {
+  const args = [
+    "-p",
+    "--verbose",
+    "--output-format", "stream-json",
+    "--no-session-persistence",
+    "--model", String(model || "sonnet"),
+    "--max-turns", String(clampInt(maxTurns, 1, 10000))
+  ];
+  const normalizedInstruction = String(instruction || "").trim();
+  if (normalizedInstruction) {
+    args.push(normalizedInstruction);
+  }
+  return args;
+}
+
 function buildClaudeCodeBaseCliArgs({
   model,
   verbose = false,

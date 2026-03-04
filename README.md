@@ -20,6 +20,7 @@ Ask it to check your GitHub issues? It can browse the page and summarize them. A
 - Image generation (GPT Image, Grok Imagine)
 - Video generation (Grok Imagine Video)
 - GIF search (GIPHY)
+- Claude Code agent for coding tasks (file editing, git, PRs) — allowed users only
 - Music playback with queue management (yt-dlp + ffmpeg)
 - MCP servers for extensibility
 
@@ -121,7 +122,7 @@ Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details 
 |-----|-------------|
 | `docs/technical-architecture.md` | System architecture, data model, runtime flows |
 | `docs/clanker-activity.md` | Text activity model: direct replies, reply/lurk channels, thought loop, discovery |
-| `docs/agent-code.md` | Design doc for a possible future Claude Code orchestrator |
+| `docs/agent-code.md` | Claude Code orchestrator design and implementation |
 | `docs/agent-browser.md` | Browser agent spec |
 | `docs/realtime-voice-agent-spec.md` | Voice architecture and tool strategy |
 | `docs/claude-code-brain-session-mode.md` | Claude Code as LLM brain provider |

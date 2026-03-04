@@ -7,6 +7,8 @@ import {
 } from "discord.js";
 import { clankCommand } from "./commands/clankCommand.ts";
 import { browseCommand } from "./commands/browseCommand.ts";
+import { codeCommand } from "./commands/codeCommand.ts";
+import { runCodeAgent, isCodeAgentUserAllowed, resolveCodeAgentCwd, getActiveCodeAgentTaskCount } from "./agents/codeAgent.ts";
 import { musicCommands } from "./voice/musicCommands.ts";
 import {
   buildAutomationPrompt,
@@ -285,7 +287,7 @@ export class ClankerBot {
 
       try {
         const rest = new REST({ version: "10" }).setToken(this.appConfig.discordToken);
-        await rest.put(Routes.applicationCommands(this.client.user?.id || ""), { body: [...musicCommands, clankCommand, browseCommand] });
+        await rest.put(Routes.applicationCommands(this.client.user?.id || ""), { body: [...musicCommands, clankCommand, browseCommand, codeCommand] });
         console.log("[slashCommands] Registered slash commands");
       } catch (error) {
         console.error("[musicCommands] Failed to register slash commands:", error);
@@ -431,6 +433,67 @@ export class ClankerBot {
           }
         } finally {
           this.activeBrowserTasks.clear(activeBrowserTask);
+        }
+      } else if (commandName === "code") {
+        await interaction.deferReply();
+        const codeInstruction = interaction.options.getString("task", true);
+        const codeCwd = interaction.options.getString("cwd", false) || undefined;
+        const settings = this.store.getSettings();
+
+        if (!settings?.codeAgent?.enabled) {
+          await interaction.editReply("Code agent is disabled in settings.");
+          return;
+        }
+        if (!isCodeAgentUserAllowed(interaction.user.id, settings)) {
+          await interaction.editReply("This capability is restricted to allowed users.");
+          return;
+        }
+
+        const maxParallel = Number(settings?.codeAgent?.maxParallelTasks) || 2;
+        if (getActiveCodeAgentTaskCount() >= maxParallel) {
+          await interaction.editReply("Too many code agent tasks are already running. Try again shortly.");
+          return;
+        }
+
+        try {
+          const cwd = codeCwd || resolveCodeAgentCwd(
+            String(settings?.codeAgent?.defaultCwd || ""),
+            process.cwd()
+          );
+          const model = String(settings?.codeAgent?.model || "sonnet").trim();
+          const maxTurns = clamp(Number(settings?.codeAgent?.maxTurns) || 30, 1, 200);
+          const timeoutMs = clamp(Number(settings?.codeAgent?.timeoutMs) || 300_000, 10_000, 1_800_000);
+          const maxBufferBytes = clamp(Number(settings?.codeAgent?.maxBufferBytes) || 2 * 1024 * 1024, 4096, 10 * 1024 * 1024);
+
+          const result = await runCodeAgent({
+            instruction: codeInstruction,
+            cwd,
+            maxTurns,
+            timeoutMs,
+            maxBufferBytes,
+            model,
+            trace: {
+              guildId: interaction.guildId,
+              channelId: interaction.channelId,
+              userId: interaction.user.id,
+              source: "slash_command_code"
+            },
+            store: this.store
+          });
+
+          let responseText = result.text;
+          if (result.costUsd > 0) {
+            responseText += `\n\n*(Cost: $${result.costUsd.toFixed(4)})*`;
+          }
+          if (responseText.length > 2000) {
+            await interaction.editReply(responseText.substring(0, 1997) + "...");
+          } else {
+            await interaction.editReply(responseText || "Code task completed with no output.");
+          }
+        } catch (error) {
+          console.error("[slashCommands] Error handling code command:", error);
+          const message = error instanceof Error ? error.message : String(error);
+          await interaction.editReply(`An error occurred while running code task: ${message}`).catch(() => undefined);
         }
       }
     });
@@ -2853,6 +2916,74 @@ export class ClankerBot {
       };
     } finally {
       this.activeBrowserTasks.clear(activeBrowserTask);
+    }
+  }
+
+  async runModelRequestedCodeTask({
+    settings,
+    task,
+    cwd: cwdOverride,
+    guildId,
+    channelId = null,
+    userId = null,
+    source = "reply_message"
+  }) {
+    if (!settings?.codeAgent?.enabled) {
+      return { text: "", error: "code_agent_disabled" };
+    }
+    if (userId && !isCodeAgentUserAllowed(userId, settings)) {
+      return { text: "", blockedByPermission: true };
+    }
+
+    const maxParallel = Number(settings?.codeAgent?.maxParallelTasks) || 2;
+    if (getActiveCodeAgentTaskCount() >= maxParallel) {
+      return { text: "", blockedByParallelLimit: true };
+    }
+
+    const maxPerHour = Number(settings?.codeAgent?.maxTasksPerHour) || 10;
+    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const used = this.store.countActionsSince("code_agent_call", since1h);
+    if (used >= maxPerHour) {
+      return { text: "", blockedByBudget: true };
+    }
+
+    const cwd = cwdOverride || resolveCodeAgentCwd(
+      String(settings?.codeAgent?.defaultCwd || ""),
+      process.cwd()
+    );
+    const model = String(settings?.codeAgent?.model || "sonnet").trim();
+    const maxTurns = clamp(Number(settings?.codeAgent?.maxTurns) || 30, 1, 200);
+    const timeoutMs = clamp(Number(settings?.codeAgent?.timeoutMs) || 300_000, 10_000, 1_800_000);
+    const maxBufferBytes = clamp(Number(settings?.codeAgent?.maxBufferBytes) || 2 * 1024 * 1024, 4096, 10 * 1024 * 1024);
+
+    try {
+      const result = await runCodeAgent({
+        instruction: task,
+        cwd,
+        maxTurns,
+        timeoutMs,
+        maxBufferBytes,
+        model,
+        trace: {
+          guildId,
+          channelId,
+          userId,
+          source
+        },
+        store: this.store
+      });
+
+      return {
+        text: result.text,
+        isError: result.isError,
+        costUsd: result.costUsd,
+        error: result.isError ? result.errorMessage : null
+      };
+    } catch (error) {
+      return {
+        text: "",
+        error: String(error?.message || error)
+      };
     }
   }
 

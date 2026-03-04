@@ -289,7 +289,8 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     memoryAvailable: Boolean(settings?.memory?.enabled),
     adaptiveDirectivesAvailable: Boolean(settings?.adaptiveDirectives?.enabled),
     imageLookupAvailable: Boolean(imageLookup?.enabled),
-    openArticleAvailable: false
+    openArticleAvailable: false,
+    codeAgentAvailable: Boolean(settings?.codeAgent?.enabled)
   });
   const replyToolRuntime = {
     search: bot.search,
@@ -306,6 +307,18 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
         });
         return browserBrowse;
       }
+    },
+    codeAgent: {
+      runTask: async ({ settings: toolSettings, task, cwd, guildId, channelId, userId, source }) =>
+        await bot.runModelRequestedCodeTask({
+          settings: toolSettings,
+          task,
+          cwd,
+          guildId,
+          channelId,
+          userId,
+          source
+        })
     },
     memory: bot.memory,
     store: bot.store

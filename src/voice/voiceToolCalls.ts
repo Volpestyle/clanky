@@ -363,6 +363,20 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
         required: ["query"],
         additionalProperties: false
       }
+    },
+    {
+      toolType: "function",
+      name: "code_task",
+      description: "Spawn Claude Code to perform a coding task. Can read/write files, run commands, use git, create PRs. Only available to allowed users.",
+      parameters: {
+        type: "object",
+        properties: {
+          task: { type: "string", description: "Detailed instruction for Claude Code." },
+          cwd: { type: "string", description: "Working directory. Defaults to configured project root." }
+        },
+        required: ["task"],
+        additionalProperties: false
+      }
     }
   ];
 
@@ -427,11 +441,15 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
       : null;
   const includeAdaptiveDirectives = Boolean(adaptiveDirectivesSettings?.enabled);
   const includeBrowser = Boolean(settings?.browser?.enabled);
+  const includeCodeAgent = Boolean(
+    (settings?.codeAgent as Record<string, unknown> | undefined)?.enabled
+  );
   const filteredLocalTools = localTools.filter((entry) => {
     if (entry.name === "web_search" && !includeWebSearch) return false;
     if ((entry.name === "memory_search" || entry.name === "memory_write") && !includeMemory) return false;
     if ((entry.name === "adaptive_directive_add" || entry.name === "adaptive_directive_remove") && !includeAdaptiveDirectives) return false;
     if (entry.name === "browser_browse" && !includeBrowser) return false;
+    if (entry.name === "code_task" && !includeCodeAgent) return false;
     return true;
   });
   return [
@@ -1380,6 +1398,50 @@ export async function executeVoiceBrowserBrowseTool(manager: any, { session, set
   }
 }
 
+export async function executeVoiceCodeTaskTool(manager: any, { session, settings, args }: { session: any, settings: any, args: any }) {
+  const task = normalizeInlineText(args?.task, 2000);
+  if (!task) {
+    return { ok: false, text: "", error: "task_required" };
+  }
+  if (!manager.runModelRequestedCodeTask) {
+    return { ok: false, text: "", error: "code_agent_unavailable" };
+  }
+
+  try {
+    const result = await manager.runModelRequestedCodeTask({
+      settings,
+      task,
+      cwd: typeof args?.cwd === "string" ? String(args.cwd).trim() : undefined,
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: session.lastOpenAiToolCallerUserId || null,
+      source: "voice_realtime_tool_code_task"
+    });
+
+    if (result?.blockedByPermission) {
+      return { ok: false, text: "", error: "restricted_to_allowed_users" };
+    }
+    if (result?.blockedByBudget) {
+      return { ok: false, text: "", error: "rate_limited" };
+    }
+    if (result?.blockedByParallelLimit) {
+      return { ok: false, text: "", error: "too_many_parallel_tasks" };
+    }
+    if (result?.error) {
+      return { ok: false, text: "", error: String(result.error) };
+    }
+
+    return {
+      ok: true,
+      text: String(result?.text || "").trim() || "Code task completed.",
+      cost_usd: result?.costUsd || 0
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, text: "", error: message };
+  }
+}
+
 export async function executeLocalVoiceToolCall(manager: any, {
   session,
   settings,
@@ -1614,6 +1676,13 @@ export async function executeLocalVoiceToolCall(manager: any, {
       settings,
       args,
       signal
+    });
+  }
+  if (normalizedToolName === "code_task") {
+    return await executeVoiceCodeTaskTool(manager, {
+      session,
+      settings,
+      args
     });
   }
   throw new Error(`unsupported_tool:${normalizedToolName}`);

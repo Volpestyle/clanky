@@ -15,6 +15,7 @@ const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
 const MAX_CONVERSATION_LOOKUP_QUERY_LEN = 220;
 const MAX_IMAGE_LOOKUP_QUERY_LEN = 220;
 const MAX_BROWSER_BROWSE_QUERY_LEN = 500;
+const MAX_CODE_TASK_LEN = 2000;
 const MAX_OPEN_ARTICLE_REF_LEN = 260;
 
 interface ReplyToolDefinition {
@@ -66,6 +67,25 @@ type ReplyToolRuntime = {
       hitStepLimit?: boolean;
       error?: string | null;
       blockedByBudget?: boolean;
+    }>;
+  };
+  codeAgent?: {
+    runTask: (opts: {
+      settings: Record<string, unknown>;
+      task: string;
+      cwd?: string;
+      guildId: string;
+      channelId: string | null;
+      userId: string | null;
+      source: string;
+    }) => Promise<{
+      text?: string;
+      isError?: boolean;
+      costUsd?: number;
+      error?: string | null;
+      blockedByBudget?: boolean;
+      blockedByPermission?: boolean;
+      blockedByParallelLimit?: boolean;
     }>;
   };
   memory?: {
@@ -343,6 +363,26 @@ const OPEN_ARTICLE_TOOL: ReplyToolDefinition = {
   }
 };
 
+const CODE_TASK_TOOL: ReplyToolDefinition = {
+  name: "code_task",
+  description:
+    "Spawn Claude Code to perform a coding task in a project directory. Can read/write files, run commands, use git, create PRs. Only available to allowed users.",
+  input_schema: {
+    type: "object",
+    properties: {
+      task: {
+        type: "string",
+        description: "Detailed instruction for what Claude Code should do. Be specific — include repo context, file paths, issue numbers, expected behavior."
+      },
+      cwd: {
+        type: "string",
+        description: "Working directory for the task. Defaults to the configured project root if omitted."
+      }
+    },
+    required: ["task"]
+  }
+};
+
 const ALL_REPLY_TOOLS: ReplyToolDefinition[] = [
   WEB_SEARCH_TOOL,
   BROWSER_BROWSE_TOOL,
@@ -352,7 +392,8 @@ const ALL_REPLY_TOOLS: ReplyToolDefinition[] = [
   ADAPTIVE_STYLE_REMOVE_TOOL,
   CONVERSATION_SEARCH_TOOL,
   IMAGE_LOOKUP_TOOL,
-  OPEN_ARTICLE_TOOL
+  OPEN_ARTICLE_TOOL,
+  CODE_TASK_TOOL
 ];
 
 // --- Settings-gated tool set builder ---
@@ -377,6 +418,11 @@ function isBrowserBrowseEnabled(settings: Record<string, unknown>): boolean {
   return Boolean(browser?.enabled);
 }
 
+function isCodeAgentEnabled(settings: Record<string, unknown>): boolean {
+  const codeAgent = settings?.codeAgent as Record<string, unknown> | undefined;
+  return Boolean(codeAgent?.enabled);
+}
+
 export function buildReplyToolSet(
   settings: Record<string, unknown>,
   capabilities: {
@@ -387,6 +433,7 @@ export function buildReplyToolSet(
     conversationSearchAvailable?: boolean;
     imageLookupAvailable?: boolean;
     openArticleAvailable?: boolean;
+    codeAgentAvailable?: boolean;
   } = {}
 ): ReplyToolDefinition[] {
   const tools: ReplyToolDefinition[] = [];
@@ -429,6 +476,13 @@ export function buildReplyToolSet(
     tools.push(OPEN_ARTICLE_TOOL);
   }
 
+  if (
+    capabilities.codeAgentAvailable !== false &&
+    isCodeAgentEnabled(settings)
+  ) {
+    tools.push(CODE_TASK_TOOL);
+  }
+
   return tools;
 }
 
@@ -459,6 +513,8 @@ export async function executeReplyTool(
       return executeImageLookup(input, context);
     case "open_article":
       return executeOpenArticle(input, runtime, context);
+    case "code_task":
+      return executeCodeTask(input, runtime, context);
     default:
       return { content: `Unknown tool: ${toolName}`, isError: true };
   }
@@ -851,13 +907,67 @@ async function executeOpenArticle(
   };
 }
 
+async function executeCodeTask(
+  input: ReplyToolCallInput,
+  runtime: ReplyToolRuntime,
+  context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  const task = normalizeDirectiveText(
+    String(input?.task || ""),
+    MAX_CODE_TASK_LEN
+  );
+  if (!task) {
+    return { content: "Missing or empty code task instruction.", isError: true };
+  }
+  if (!runtime.codeAgent?.runTask) {
+    return { content: "Code agent is not available.", isError: true };
+  }
+
+  try {
+    const result = await runtime.codeAgent.runTask({
+      settings: context.settings,
+      task,
+      cwd: typeof input?.cwd === "string" ? String(input.cwd).trim() : undefined,
+      guildId: context.guildId,
+      channelId: context.channelId,
+      userId: context.userId,
+      source: String(context.trace?.source || "reply_tool_code_task")
+    });
+
+    if (result?.blockedByPermission) {
+      return { content: "This capability is restricted to allowed users.", isError: true };
+    }
+    if (result?.blockedByBudget) {
+      return { content: "Code agent is currently blocked by rate limits.", isError: true };
+    }
+    if (result?.blockedByParallelLimit) {
+      return { content: "Too many code agent tasks are already running. Try again shortly.", isError: true };
+    }
+    if (result?.error) {
+      return { content: `Code task failed: ${String(result.error)}`, isError: true };
+    }
+
+    const text = String(result?.text || "").trim();
+    const costNote = result?.costUsd ? ` (cost: $${result.costUsd.toFixed(4)})` : "";
+    return {
+      content: text ? `${text}${costNote}` : `Code task completed with no text result.${costNote}`
+    };
+  } catch (error) {
+    return {
+      content: `Code task failed: ${String((error as Error)?.message || error)}`,
+      isError: true
+    };
+  }
+}
+
 export {
   ALL_REPLY_TOOLS,
   WEB_SEARCH_TOOL,
   MEMORY_SEARCH_TOOL,
   MEMORY_WRITE_TOOL,
   IMAGE_LOOKUP_TOOL,
-  OPEN_ARTICLE_TOOL
+  OPEN_ARTICLE_TOOL,
+  CODE_TASK_TOOL
 };
 
 export type {

@@ -609,7 +609,8 @@ export async function generateVoiceTurnReply(runtime, {
       memoryAvailable: allowMemoryToolCalls,
       adaptiveDirectivesAvailable: allowAdaptiveDirectiveToolCalls,
       imageLookupAvailable: false,
-      openArticleAvailable: allowOpenArticleToolCall && openArticleCandidates.length > 0
+      openArticleAvailable: allowOpenArticleToolCall && openArticleCandidates.length > 0,
+      codeAgentAvailable: Boolean((settings as Record<string, unknown>)?.codeAgent?.enabled)
     });
 
     const voiceToolRuntime: ReplyToolRuntime = {
@@ -626,6 +627,18 @@ export async function generateVoiceTurnReply(runtime, {
             source
           })
       },
+      codeAgent: runtime.runModelRequestedCodeTask ? {
+        runTask: async ({ settings: toolSettings, task, cwd, guildId, channelId, userId, source }) =>
+          await runtime.runModelRequestedCodeTask({
+            settings: toolSettings,
+            task,
+            cwd,
+            guildId,
+            channelId,
+            userId,
+            source
+          })
+      } : undefined,
       memory: runtime.memory,
       store: runtime.store
     };

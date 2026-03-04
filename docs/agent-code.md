@@ -1,6 +1,6 @@
 # Claude Code Orchestrator Design Spec
 
-Status as of March 4, 2026: this document is aspirational. The current runtime does not expose a `code_task` tool, does not register `src/agents/codeAgent.ts`, and does not use `BOT_OWNER_DISCORD_ID`. Keep this doc as a future design reference, not a description of shipped behavior.
+Status as of March 4, 2026: **Implemented.** The `code_task` tool is registered for both voice and text paths, backed by `src/agents/codeAgent.ts`. Access control uses a settings-based `allowedUserIds` list (configured via dashboard) instead of the originally proposed `BOT_OWNER_DISCORD_ID` env var. Claude Code instances are sandboxed to the configured `defaultCwd` (defaults to `../web` relative to the app root). Parallel task limits and rate limits are configurable in dashboard settings.
 
 ## Overview
 
