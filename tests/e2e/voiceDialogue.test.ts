@@ -2,12 +2,14 @@ import { test, describe, beforeAll, afterAll, beforeEach } from "bun:test";
 import assert from "node:assert/strict";
 import { env } from "node:process";
 import {
+  beginTemporaryE2EEagerness50,
   DriverBot,
   type DriverBotConfig,
   getE2EConfig,
   hasDialogueE2EConfig,
   getFixturePath,
-  generatePcmAudioFixture
+  generatePcmAudioFixture,
+  restoreTemporaryE2ESettings
 } from "./driver/index.ts";
 
 function envNumber(name: string, defaultValue: number): number {
@@ -39,6 +41,7 @@ describe("E2E: Voice Dialogue (Two Speakers)", () => {
     }
 
     const config = getE2EConfig();
+    await beginTemporaryE2EEagerness50();
 
     const baseConfig = {
       guildId: config.testGuildId,
@@ -71,6 +74,7 @@ describe("E2E: Voice Dialogue (Two Speakers)", () => {
       driverA?.destroy(),
       driverB?.destroy()
     ]);
+    await restoreTemporaryE2ESettings();
   });
 
   beforeEach(() => {
@@ -299,6 +303,126 @@ describe("E2E: Voice Dialogue (Two Speakers)", () => {
         bytesB,
         0,
         `Bot should return to silence after undirected dialogue resumes, but driverB got ${bytesB} bytes`
+      );
+    },
+    DEFAULT_TIMEOUT_MS
+  );
+
+  test(
+    "Dialogue: Speaker redirects to another person after addressing bot",
+    async () => {
+      if (!hasDialogueE2EConfig()) return;
+
+      const responseWaitMs = envNumber("E2E_RESPONSE_WAIT_MS", 12_000);
+
+      const addressFixture = await ensureFixture(
+        "dialogue_a_redirect_address_bot",
+        "Hey clanker, what's your take on this idea?"
+      );
+      const redirectFixture = await ensureFixture(
+        "dialogue_a_redirect_to_b",
+        "Actually Sarah, what do you think? I'm asking you, not clanker."
+      );
+      const replyFixture = await ensureFixture(
+        "dialogue_b_redirect_reply",
+        "I think it's solid, we just need to tighten the rollout plan."
+      );
+
+      driverA.clearReceivedAudio();
+      driverB.clearReceivedAudio();
+
+      console.log("[Dialogue] Speaker A addressing bot...");
+      await driverA.playAudio(addressFixture);
+      await new Promise((r) => setTimeout(r, responseWaitMs));
+
+      assert.ok(
+        driverA.getReceivedAudioBytes() > 0,
+        "Bot should respond to the initial direct address before the redirect"
+      );
+
+      driverA.clearReceivedAudio();
+      driverB.clearReceivedAudio();
+
+      console.log("[Dialogue] Speaker A redirecting to speaker B...");
+      await driverA.playAudio(redirectFixture);
+      await new Promise((r) => setTimeout(r, 1_200));
+
+      console.log("[Dialogue] Speaker B replying to speaker A...");
+      await driverB.playAudio(replyFixture);
+      await new Promise((r) => setTimeout(r, SILENCE_WINDOW_MS));
+
+      const bytesA = driverA.getReceivedAudioBytes();
+      const bytesB = driverB.getReceivedAudioBytes();
+
+      assert.strictEqual(
+        bytesA,
+        0,
+        `Bot should stay silent after the speaker redirects to another person, but driverA got ${bytesA} bytes`
+      );
+      assert.strictEqual(
+        bytesB,
+        0,
+        `Bot should stay silent after the speaker redirects to another person, but driverB got ${bytesB} bytes`
+      );
+    },
+    DEFAULT_TIMEOUT_MS
+  );
+
+  test(
+    "Dialogue: Speaker drops bot thread and switches to unrelated side conversation",
+    async () => {
+      if (!hasDialogueE2EConfig()) return;
+
+      const responseWaitMs = envNumber("E2E_RESPONSE_WAIT_MS", 12_000);
+
+      const addressFixture = await ensureFixture(
+        "dialogue_a_sidequest_address_bot",
+        "Clanker, should we ship this today or wait until tomorrow?"
+      );
+      const pivotFixture = await ensureFixture(
+        "dialogue_a_sidequest_pivot",
+        "Never mind, did you end up ordering that pizza for the team?"
+      );
+      const replyFixture = await ensureFixture(
+        "dialogue_b_sidequest_reply",
+        "Yeah, I ordered it already, it should be here in twenty minutes."
+      );
+
+      driverA.clearReceivedAudio();
+      driverB.clearReceivedAudio();
+
+      console.log("[Dialogue] Speaker A addressing bot...");
+      await driverA.playAudio(addressFixture);
+      await new Promise((r) => setTimeout(r, responseWaitMs));
+
+      assert.ok(
+        driverA.getReceivedAudioBytes() > 0,
+        "Bot should respond to the initial direct address before the speaker pivots away"
+      );
+
+      driverA.clearReceivedAudio();
+      driverB.clearReceivedAudio();
+
+      console.log("[Dialogue] Speaker A pivoting to unrelated side conversation...");
+      await driverA.playAudio(pivotFixture);
+      await new Promise((r) => setTimeout(r, 1_200));
+
+      console.log("[Dialogue] Speaker B answering side conversation...");
+      await driverB.playAudio(replyFixture);
+      await new Promise((r) => setTimeout(r, SILENCE_WINDOW_MS));
+
+      const bytesA = driverA.getReceivedAudioBytes();
+      const bytesB = driverB.getReceivedAudioBytes();
+
+      assert.strictEqual(
+        bytesA,
+        0,
+        `Bot should ignore an unrelated side conversation after a topic switch, but driverA got ${bytesA} bytes`
+      );
+      assert.strictEqual(
+        bytesB,
+        0,
+        `Bot should ignore an unrelated side conversation after a topic switch, but driverB got ${bytesB} bytes`
       );
     },
     DEFAULT_TIMEOUT_MS

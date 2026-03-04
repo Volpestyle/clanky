@@ -2,10 +2,12 @@ import { test, describe, beforeAll, afterAll } from "bun:test";
 import assert from "node:assert/strict";
 import { env } from "node:process";
 import {
+  beginTemporaryE2EEagerness50,
   DriverBot,
   type DriverBotConfig,
   getE2EConfig,
-  hasTextE2EConfig
+  hasTextE2EConfig,
+  restoreTemporaryE2ESettings
 } from "./driver/index.ts";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -28,6 +30,7 @@ describe("E2E: Text Channel", () => {
     }
 
     const config = getE2EConfig();
+    await beginTemporaryE2EEagerness50();
     const driverConfig: DriverBotConfig = {
       token: config.driverBotToken,
       guildId: config.testGuildId,
@@ -43,6 +46,7 @@ describe("E2E: Text Channel", () => {
     if (driver) {
       await driver.destroy();
     }
+    await restoreTemporaryE2ESettings();
   });
 
   test(

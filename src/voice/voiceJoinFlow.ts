@@ -813,7 +813,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       if (!subprocessClient && subprocessSpawnPromise) {
         try {
           const spawnedClient = await subprocessSpawnPromise;
-          spawnedClient.destroy();
+          await spawnedClient.destroy();
         } catch {
           // subprocess also failed — nothing to clean up
         }
@@ -821,7 +821,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
 
       if (subprocessClient) {
         try {
-          subprocessClient.destroy();
+          await subprocessClient.destroy();
         } catch {
           // ignore
         }

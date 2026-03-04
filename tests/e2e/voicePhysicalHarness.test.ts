@@ -2,13 +2,15 @@ import { test, describe, beforeAll, afterAll, beforeEach, afterEach } from "bun:
 import assert from "node:assert/strict";
 import { env } from "node:process";
 import {
+  beginTemporaryE2EEagerness50,
   DriverBot,
   type DriverBotConfig,
   getE2EConfig,
   hasE2EConfig,
   hasTextE2EConfig,
   getFixturePath,
-  generatePcmAudioFixture
+  generatePcmAudioFixture,
+  restoreTemporaryE2ESettings
 } from "./driver/index.ts";
 import { Store } from "../../src/store.ts";
 import { LLMService } from "../../src/llm.ts";
@@ -41,6 +43,7 @@ describe("E2E: Voice Physical Layer", () => {
     }
 
     const config = getE2EConfig();
+    await beginTemporaryE2EEagerness50();
     const driverConfig: DriverBotConfig = {
       token: config.driverBotToken,
       guildId: config.testGuildId,
@@ -58,6 +61,7 @@ describe("E2E: Voice Physical Layer", () => {
     if (driver) {
       await driver.destroy();
     }
+    await restoreTemporaryE2ESettings();
   });
 
   beforeEach(() => {

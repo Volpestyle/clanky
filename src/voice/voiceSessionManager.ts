@@ -14433,7 +14433,7 @@ export class VoiceSessionManager {
     // Destroy subprocess — this handles connection teardown, audio player
     // stop, and all stream cleanup inside the Node.js subprocess.
     try {
-      session.subprocessClient?.destroy();
+      await session.subprocessClient?.destroy();
     } catch {
       // ignore
     }

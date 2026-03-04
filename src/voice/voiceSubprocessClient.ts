@@ -1,5 +1,5 @@
 /**
- * Main-process (Bun) client for the Node.js voice subprocess.
+ * Main-process (Bun) client for the Rust voice subprocess.
  *
  * Spawns the subprocess, relays IPC messages, proxies the Discord gateway
  * adapter so the subprocess can join voice channels through the main
@@ -13,17 +13,22 @@ import path from "node:path";
 const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
 
 export class VoiceSubprocessClient extends EventEmitter {
+  private static liveClients = new Set<VoiceSubprocessClient>();
+  private static processExitHandlersInstalled = false;
+
   private child: ChildProcess | null = null;
   private guildId: string;
   private channelId: string;
   private guild: any;
   private destroyed = false;
+  private destroyPromise: Promise<void> | null = null;
   private adapterCleanup: (() => void) | null = null;
   private stdoutBuffer = "";
   private lastPlaybackArmedReason: string | null = null;
 
   constructor(guildId: string, channelId: string, guild: any) {
     super();
+    VoiceSubprocessClient.installProcessExitHandlers();
     this.guildId = guildId;
     this.channelId = channelId;
     this.guild = guild;
@@ -51,7 +56,7 @@ export class VoiceSubprocessClient extends EventEmitter {
       "rust_subprocess"
     );
 
-    // Prefer pre-built release binary; fall back to cargo run for development
+    // Prefer the pre-built Rust binary; fall back to cargo run for development.
     const releaseBin = path.join(subprocessDir, "target", "release", "voice_subprocess");
     const fs = await import("node:fs");
     const usePrebuilt = fs.existsSync(releaseBin);
@@ -69,7 +74,7 @@ export class VoiceSubprocessClient extends EventEmitter {
       this.child = spawn(releaseBin, [], {
         cwd: subprocessDir,
         stdio: ["pipe", "pipe", "inherit"],
-        env: spawnEnv,
+        env: spawnEnv
       });
     } else {
       console.warn(
@@ -78,9 +83,10 @@ export class VoiceSubprocessClient extends EventEmitter {
       this.child = spawn("cargo", ["run", "--release"], {
         cwd: subprocessDir,
         stdio: ["pipe", "pipe", "inherit"],
-        env: spawnEnv,
+        env: spawnEnv
       });
     }
+    VoiceSubprocessClient.liveClients.add(this);
 
     this.child.stdout?.on("data", (data: Buffer) => {
       this.stdoutBuffer += data.toString("utf8");
@@ -107,6 +113,7 @@ export class VoiceSubprocessClient extends EventEmitter {
         );
         this.emit("crashed", { code, signal });
       }
+      VoiceSubprocessClient.liveClients.delete(this);
       this._cleanupAdapter();
       this.child = null;
     });
@@ -122,7 +129,7 @@ export class VoiceSubprocessClient extends EventEmitter {
 
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.destroy();
+        void this.destroy();
         reject(new Error(`voice subprocess ready timeout after ${timeoutMs}ms`));
       }, timeoutMs);
 
@@ -349,8 +356,8 @@ export class VoiceSubprocessClient extends EventEmitter {
     this._send({ type: "music_set_gain", target, fadeMs });
   }
 
-  destroy() {
-    if (this.destroyed) return;
+  async destroy(): Promise<void> {
+    if (this.destroyPromise) return this.destroyPromise;
     this.destroyed = true;
 
     if (this.audioBatchTimer) {
@@ -358,25 +365,45 @@ export class VoiceSubprocessClient extends EventEmitter {
       this.audioBatchTimer = null;
     }
     this.stdoutBuffer = "";
-
-    this._send({ type: "destroy" });
     this._cleanupAdapter();
 
-    const killTimer = setTimeout(() => {
-      if (this.child) {
-        try { this.child.kill("SIGKILL"); } catch { /* ignore */ }
-        this.child = null;
-      }
-    }, 5000);
-
-    if (this.child) {
-      this.child.once("exit", () => {
-        clearTimeout(killTimer);
-        this.child = null;
-      });
-    } else {
-      clearTimeout(killTimer);
+    const child = this.child;
+    if (!child) {
+      VoiceSubprocessClient.liveClients.delete(this);
+      return;
     }
+
+    this.destroyPromise = new Promise<void>((resolve) => {
+      let finished = false;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(termTimer);
+        clearTimeout(killTimer);
+        VoiceSubprocessClient.liveClients.delete(this);
+        resolve();
+      };
+
+      child.once("exit", finish);
+      child.once("error", finish);
+
+      this._send({ type: "destroy" });
+      try {
+        child.stdin?.end();
+      } catch {
+        // ignore
+      }
+
+      const termTimer = setTimeout(() => {
+        this.killChild("SIGTERM");
+      }, 250);
+
+      const killTimer = setTimeout(() => {
+        this.killChild("SIGKILL");
+      }, 5_000);
+    });
+
+    return this.destroyPromise;
   }
 
   get isAlive(): boolean {
@@ -384,5 +411,30 @@ export class VoiceSubprocessClient extends EventEmitter {
     if (this.child.exitCode !== null) return false;
     if (this.child.signalCode !== null) return false;
     return !this.child.killed;
+  }
+
+  private killChild(signal: NodeJS.Signals): void {
+    const child = this.child;
+    if (!child) return;
+    if (child.exitCode !== null || child.signalCode !== null || child.killed) return;
+    try {
+      child.kill(signal);
+    } catch {
+      // ignore
+    }
+  }
+
+  private static installProcessExitHandlers(): void {
+    if (VoiceSubprocessClient.processExitHandlersInstalled) return;
+    VoiceSubprocessClient.processExitHandlersInstalled = true;
+
+    const killLiveChildren = () => {
+      for (const client of VoiceSubprocessClient.liveClients) {
+        client.killChild("SIGKILL");
+      }
+      VoiceSubprocessClient.liveClients.clear();
+    };
+
+    process.once("exit", killLiveChildren);
   }
 }
