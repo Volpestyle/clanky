@@ -42,35 +42,6 @@ export const DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT = [
   "Line must clearly indicate you're checking something on the web right now.",
   "Keep it natural and direct. No markdown, no tags, no directives."
 ].join("\n");
-export const VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT = [
-  "Treat near-phonetic or misspelled tokens that appear to target the bot name as direct address.",
-  "Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" usually indicate direct address.",
-  "Questions like \"is that you <name-ish-token>?\" usually indicate direct address."
-].join(" ");
-
-export const VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT = [
-  "You decide if \"{{botName}}\" should reply right now in a live Discord voice chat.",
-  "Output exactly one token: YES or NO.",
-  "Interpret second-person wording (\"you\", \"your\", \"show me\") as potentially aimed at {{botName}} unless another person is explicitly targeted.",
-  "When reply eagerness is low, prefer NO unless the turn clearly warrants a response.",
-  "At medium eagerness, only insert when it adds clear value.",
-  "At high eagerness, be more available for follow-ups while staying grounded.",
-  "At near-max eagerness (90-100), allow more proactive social inserts when context allows.",
-  "Prefer YES for direct wake-word mentions and likely ASR variants of the bot name.",
-  "Treat near-phonetic or misspelled tokens that appear to target the bot name as direct address.",
-  "Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" should usually be YES.",
-  "Questions like \"is that you <name-ish-token>?\" should usually be YES.",
-  "Do not use rhyme alone as evidence of direct address.",
-  "Generic chatter such as prank/stank/stinky phrasing without a clear name-like callout should usually be NO.",
-  "When Join window active is yes, you can acknowledge a greeting naturally, but do not feel obligated to respond to every hello — read the room first, especially if multiple people are mid-conversation.",
-  "When conversation engagement state is engaged and current speaker matches engaged flow, lean YES for coherent follow-ups.",
-  "Prefer YES for clear questions/requests that seem aimed at the bot or the current speaker flow.",
-  "If this sounds like a follow-up from an engaged speaker, lean YES.",
-  "Prefer NO for filler/noise, pure acknowledgements, or turns clearly aimed at another human.",
-  "When uncertain and the utterance is a clear question, prefer YES.",
-  "Never output anything except YES or NO."
-].join("\n");
-
 export function interpolatePromptTemplate(template, variables = {}) {
   const input = String(template || "");
   if (!input) return "";

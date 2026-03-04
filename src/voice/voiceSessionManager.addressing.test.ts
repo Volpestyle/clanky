@@ -176,7 +176,7 @@ test("reply decider lets brain decide same-speaker followup after recent bot rep
   });
 
   assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "brain_decides");
+  assert.equal(decision.reason, "bot_recent_reply_followup");
 });
 
 test("reply decider lets brain decide low-signal fragments for recently addressed speaker", async () => {
@@ -500,7 +500,7 @@ test("reply decider allows direct-addressed turns in command-only mode", async (
   });
 
   assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "direct_address_fast_path");
+  assert.equal(decision.reason, "command_only_direct_address");
 });
 
 test("reply decider blocks unaddressed turns while subprocess playback is still audible", async () => {
@@ -1183,7 +1183,7 @@ test("reply decider keeps non-bot vocatives in slow-listen mode", async () => {
   });
 
   assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "awaiting_non_direct_silence_window");
+  assert.equal(decision.reason, "addressed_to_other_participant");
   assert.equal(callCount, 0);
 });
 

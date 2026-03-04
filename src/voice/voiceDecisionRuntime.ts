@@ -4,6 +4,7 @@ const VOICE_LOW_SIGNAL_MIN_ALNUM_CHARS = 10;
 const VOICE_LOW_SIGNAL_MIN_WORDS = 2;
 const OPENAI_REALTIME_SHORT_CLIP_ASR_MS = 1200;
 const PCM16_MONO_BYTES_PER_SAMPLE = 2;
+// English-only low-signal fallback tokens; this should stay a cheap fast-path, not the main admission policy.
 const EN_LOW_SIGNAL_GUARD_TOKENS = new Set(["yo", "hi", "sup", "ey", "oi", "oy", "ha"]);
 
 export function isLowSignalVoiceFragment(transcript = "") {

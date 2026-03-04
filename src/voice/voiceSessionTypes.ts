@@ -36,6 +36,10 @@ export type VoiceConversationContext = {
     sameAsRecentDirectAddress: boolean;
     msSinceAssistantReply: number | null;
     msSinceDirectAddress: number | null;
+    activeCommandSpeaker?: string | null;
+    activeCommandDomain?: string | null;
+    activeCommandIntent?: string | null;
+    msUntilCommandSessionExpiry?: number | null;
     voiceAddressingState?: VoiceAddressingState | null;
     currentTurnAddressing?: VoiceAddressingAnnotation | null;
 };
@@ -50,9 +54,6 @@ export type VoiceReplyDecision = {
     transcript: string;
     conversationContext: VoiceConversationContext;
     voiceAddressing?: VoiceAddressingAnnotation | null;
-    llmResponse?: string | null;
-    llmProvider?: string | null;
-    llmModel?: string | null;
     error?: string | null;
     retryAfterMs?: number | null;
     requiredSilenceMs?: number | null;
@@ -147,12 +148,20 @@ export type VoiceToolRuntimeSessionLike = {
     openAiToolResponseDebounceTimer?: ReturnType<typeof setTimeout> | null;
     openAiToolCallExecutions?: Map<string, Promise<void>>;
     openAiPendingToolCalls?: Map<string, unknown>;
+    openAiCompletedToolCallIds?: Map<string, number>;
     toolMusicTrackCatalog?: Map<string, unknown>;
     memoryWriteWindow?: number[];
     toolCallEvents?: VoiceToolCallEvent[];
     musicQueueState?: Record<string, unknown>;
     lastOpenAiToolCallerUserId?: string | null;
     awaitingToolOutputs?: boolean;
+    voiceCommandState?: {
+        userId: string | null;
+        domain: string | null;
+        intent: string | null;
+        startedAt: number;
+        expiresAt: number;
+    } | null;
     [key: string]: unknown;
 };
 
@@ -169,6 +178,7 @@ export type MusicDisambiguationPayload = {
     session?: Record<string, unknown> | null;
     query?: string;
     platform?: string;
+    action?: "play_now" | "queue_next" | "queue_add";
     results?: Array<Record<string, unknown>>;
     requestedByUserId?: string | null;
 };
@@ -205,9 +215,18 @@ export interface VoiceSessionMusicState {
     lastCommandReason: string | null;
     pendingQuery: string | null;
     pendingPlatform: "auto" | "youtube" | "soundcloud" | "discord";
+    pendingAction: "play_now" | "queue_next" | "queue_add";
     pendingResults: any[];
     pendingRequestedByUserId: string | null;
     pendingRequestedAt: number;
+}
+
+export interface VoiceCommandState {
+    userId: string | null;
+    domain: string | null;
+    intent: string | null;
+    startedAt: number;
+    expiresAt: number;
 }
 
 export interface VoiceSessionStreamWatchState {
@@ -299,6 +318,7 @@ export interface VoiceSession {
     openAiPendingToolCalls: Map<string, any>;
     openAiToolCallExecutions: Map<string, Promise<void>>;
     openAiToolResponseDebounceTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
+    openAiCompletedToolCallIds: Map<string, number>;
     lastOpenAiAssistantAudioItemId: string | null;
     lastOpenAiAssistantAudioItemContentIndex: number;
     lastOpenAiAssistantAudioItemReceivedMs: number;
@@ -311,6 +331,7 @@ export interface VoiceSession {
     mcpStatus: VoiceMcpServerStatus[];
     toolMusicTrackCatalog: Map<string, any>;
     memoryWriteWindow: number[];
+    voiceCommandState: VoiceCommandState | null;
     musicQueueState: {
         guildId: string;
         voiceChannelId: string;

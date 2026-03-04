@@ -80,9 +80,6 @@ type DecisionResult = {
   reason: string;
   directAddressed: boolean;
   transcript: string;
-  llmProvider: string;
-  llmModel: string;
-  llmResponse: string;
   error: string;
 };
 
@@ -384,8 +381,8 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     id: "join-window-non-greeting-undirected",
     title: "Join Window Non-Greeting Undirected",
     userText: "the build passed on main",
-    expectedAllow: false,
-    objective: "Do not reply to non-greeting, non-directed status chatter during join window.",
+    expectedAllow: true,
+    objective: "Non-greeting, non-directed chatter is passed to the brain which may skip.",
     participantCount: 2,
     participantDisplayNames: ["alice", "bob"],
     sessionAgeMs: 4_000
@@ -394,8 +391,8 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     id: "join-window-non-greeting-undirected-single",
     title: "Join Window Non-Greeting Undirected (Single)",
     userText: "the build passed on main",
-    expectedAllow: false,
-    objective: "Do not reply to non-greeting, non-directed status chatter during join window, even in 1:1.",
+    expectedAllow: true,
+    objective: "Non-greeting, non-directed chatter is passed to the brain which may skip, even in 1:1.",
     participantCount: 1,
     participantDisplayNames: ["alice"],
     sessionAgeMs: 4_000
@@ -404,8 +401,8 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     id: "join-window-non-greeting-directed-to-other",
     title: "Join Window Directed To Other Human",
     userText: "bob can you share the link",
-    expectedAllow: false,
-    objective: "Do not reply when the speaker is clearly addressing another human.",
+    expectedAllow: true,
+    objective: "Passed to brain which detects this is addressed to another human and may skip.",
     participantCount: 2,
     participantDisplayNames: ["alice", "bob"],
     sessionAgeMs: 4_000
@@ -414,15 +411,15 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     id: "low-signal-lol",
     title: "Low Signal Fragment",
     userText: "lol",
-    expectedAllow: false,
-    objective: "Do not respond because this is low-signal unaddressed chatter."
+    expectedAllow: true,
+    objective: "Low-signal fragment passed to brain which decides whether to skip."
   },
   {
     id: "low-signal-comment",
     title: "Low Signal Comment",
     userText: "ha!",
-    expectedAllow: false,
-    objective: "Do not respond because this is unaddressed side chatter."
+    expectedAllow: true,
+    objective: "Low-signal fragment passed to brain which decides whether to skip."
   },
   {
     id: "unaddressed-clear-question",
@@ -854,9 +851,6 @@ async function evaluateDecision({
       reason: String(decision.reason || ""),
       directAddressed: Boolean(decision.directAddressed),
       transcript: String(decision.transcript || caseRow.userText || "").trim(),
-      llmProvider: String(decision.llmProvider || ""),
-      llmModel: String(decision.llmModel || ""),
-      llmResponse: String(decision.llmResponse || ""),
       error: String(decision.error || "")
     }
   };
@@ -1260,9 +1254,6 @@ async function runSingleCase({
     reason: "",
     directAddressed: false,
     transcript: "",
-    llmProvider: "",
-    llmModel: "",
-    llmResponse: "",
     error: ""
   };
   let timings = buildEmptyTimings(0);

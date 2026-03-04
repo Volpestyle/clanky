@@ -37,6 +37,7 @@ const SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*([\s\S]*?)\s*\]\]/gi;
 const MAX_SOUNDBOARD_DIRECTIVE_REF_LEN = 180;
 const ASR_LANGUAGE_BIAS_PROMPT_MAX_LEN = 280;
 const PRIMARY_WAKE_TOKEN_MIN_LEN = 4;
+// English-token wake/vocative fallbacks. These help with cheap fast-path detection only.
 const EN_WAKE_PRIMARY_GENERIC_TOKENS = new Set(["bot", "ai", "assistant"]);
 const EN_VOCATIVE_GREETING_TOKENS = new Set([
   "hey",
