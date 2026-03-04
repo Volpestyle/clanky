@@ -4,6 +4,9 @@ This document now covers both:
 1. provider abstraction and swappability
 2. how the shipped runtime actually delivers end-to-end voice chat (source of truth: code in `src/voice/*`)
 
+Operator-facing behavior rules, eagerness knobs, and text/voice interaction expectations are documented in:
+- `docs/clanker-activity.md`
+
 ## Design Philosophy
 
 The v2 system keeps voice chat split into independently swappable layers:
@@ -91,6 +94,13 @@ ASR session client details are in `src/voice/openaiRealtimeTranscriptionClient.t
 
 Assistant spoken replies are also persisted into shared message history, so text and voice share one searchable conversation record instead of two disconnected timelines.
 
+For operator-facing interpretation of this behavior:
+- when voice should reply
+- how the voice thought engine differs from direct address
+- which sliders and dashboard knobs matter
+
+see `docs/clanker-activity.md`.
+
 ### 4) Brain session input format and instruction refresh
 
 `forwardRealtimeTextTurnToBrain(...)`:
@@ -150,17 +160,9 @@ Runtime loop in `src/voice/voiceSessionManager.ts`:
 - `music_skip`
 - `music_now_playing`
 - `web_search` (when enabled)
+- `browser_browse` (when enabled)
 
-`conversation_search` is intentionally separate from `memory_search`:
-- `conversation_search` recalls prior exchanges from persisted text/voice history.
-- `memory_search` recalls durable long-lived facts extracted from that history.
-
-`adaptive_directive_add` / `adaptive_directive_remove` are intentionally separate from both:
-- they persist standing bot behavior guidance, not facts
-- they are auditable and editable from the dashboard
-- they apply across text and voice because they feed the shared continuity/prompt layer rather than a provider-specific path
-
-This keeps the realtime prompt compact while still allowing explicit recall of earlier conversation when the speaker asks about something from minutes, hours, or days ago.
+Tool semantics and operator expectations for shared text/voice conversational tools are documented in `docs/clanker-activity.md`. This section focuses on the voice runtime surface and transport.
 
 ### 7) Vector memory write behavior (no approvals)
 

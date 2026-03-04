@@ -3303,11 +3303,25 @@ export class ClankerBot {
     return allowList.includes(id);
   }
 
+  isNonPrivateReplyEligibleChannel(channel) {
+    if (!channel || typeof channel !== "object") return false;
+    if (!channel.isTextBased?.() || typeof channel.send !== "function") return false;
+    if (channel.isDMBased?.()) return false;
+    if (!String(channel.guildId || channel.guild?.id || "").trim()) return false;
+    if (channel.isThread?.() && Boolean(channel.private)) return false;
+    return true;
+  }
+
   isReplyChannel(settings, channelId) {
     const id = String(channelId);
     const replyChannelIds = Array.isArray(settings?.permissions?.replyChannelIds)
       ? settings.permissions.replyChannelIds
       : [];
+    if (!replyChannelIds.length) {
+      const channel = this.client.channels.cache.get(id);
+      if (!channel) return true;
+      return this.isNonPrivateReplyEligibleChannel(channel);
+    }
     return replyChannelIds.includes(id);
   }
 
@@ -3969,7 +3983,6 @@ export class ClankerBot {
     try {
       const settings = this.store.getSettings();
       if (!settings.textThoughtLoop?.enabled) return;
-      if (!settings.permissions.replyChannelIds.length) return;
       if (settings.textThoughtLoop.maxThoughtsPerDay <= 0) return;
       if (!this.canSendMessage(settings.permissions.maxMessagesPerHour)) return;
       if (!this.canTalkNow(settings)) return;
@@ -4028,9 +4041,17 @@ export class ClankerBot {
         .map((value) => String(value || "").trim())
         .filter(Boolean)
     )];
-    if (!replyChannelIds.length) return null;
+    const candidateIds = replyChannelIds.length
+      ? replyChannelIds
+      : [...new Set(
+        this.client.channels.cache
+          .filter((channel) => this.isNonPrivateReplyEligibleChannel(channel))
+          .map((channel) => String(channel.id || "").trim())
+          .filter(Boolean)
+      )];
+    if (!candidateIds.length) return null;
 
-    const shuffled = replyChannelIds
+    const shuffled = candidateIds
       .map((id) => ({ id, sortKey: Math.random() }))
       .sort((a, b) => a.sortKey - b.sortKey)
       .map((entry) => entry.id);
@@ -4039,7 +4060,7 @@ export class ClankerBot {
     for (const channelId of shuffled) {
       if (!this.isChannelAllowed(settings, channelId)) continue;
       const channel = this.client.channels.cache.get(channelId);
-      if (!channel || !channel.isTextBased?.() || typeof channel.send !== "function") continue;
+      if (!this.isNonPrivateReplyEligibleChannel(channel)) continue;
 
       await this.hydrateRecentMessages(channel, lookback);
       const recentMessages = this.store.getRecentMessages(channel.id, lookback);

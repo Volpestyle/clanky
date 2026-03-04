@@ -1,0 +1,59 @@
+flowchart TD
+    Start["Text activity entrypoint"]
+
+    subgraph Incoming["Incoming message path"]
+        Msg["New Discord text message"]
+        Direct{"Direct mention, reply-to-bot,\nor exact bot name / alias?"}
+        DirectPath["Immediate reply path\nresponse required"]
+        Unsolicited{"allowUnsolicitedReplies enabled?"}
+        RecentWindow{"Bot already in recent\nmessage window?"}
+        RecentPath["Recent-window follow-up path\nreplyLevelReplyChannels or\nreplyLevelOtherChannels shapes reply"]
+        NoImmediate["No immediate unsolicited reply\nmessage is stored for future continuity"]
+    end
+
+    subgraph ThoughtLoop["Text thought loop"]
+        Tick["60s in-process timer"]
+        ThoughtEnabled{"textThoughtLoop.enabled\nand under caps/cooldown?"}
+        ReplyScope["Reply/lurk scope\nreplyChannelIds set => explicit list\nblank => all non-private allowed text channels"]
+        CandidateRules["Candidate channel must:\n- be allowed\n- have recent human activity < 24h\n- not already contain bot in recent window"]
+        ThoughtDecision["LLM decides whether to chime in\ntextThoughtLoop.eagerness shapes this"]
+    end
+
+    subgraph Discovery["Discovery posting"]
+        DiscTick["Discovery scheduler tick"]
+        DiscEnabled{"discovery.enabled\nexplicit channelIds present\nand schedule due?"}
+        DiscScope["Only discovery.channelIds"]
+        DiscDecision["LLM creates standalone discovery post\npaced by discovery settings"]
+    end
+
+    subgraph Shared["Shared global blockers"]
+        Guardrails["allowReplies\nmessage rate limits\nmin gap between messages\nsafety/runtime failure"]
+    end
+
+    Start --> Msg
+    Start --> Tick
+    Start --> DiscTick
+
+    Msg --> Direct
+    Direct -->|Yes| DirectPath
+    Direct -->|No| Unsolicited
+    Unsolicited -->|No| NoImmediate
+    Unsolicited -->|Yes| RecentWindow
+    RecentWindow -->|Yes| RecentPath
+    RecentWindow -->|No| NoImmediate
+
+    Tick --> ThoughtEnabled
+    ThoughtEnabled -->|No| NoThought["Skip this tick"]
+    ThoughtEnabled -->|Yes| ReplyScope
+    ReplyScope --> CandidateRules
+    CandidateRules --> ThoughtDecision
+
+    DiscTick --> DiscEnabled
+    DiscEnabled -->|No| NoDisc["Skip this tick"]
+    DiscEnabled -->|Yes| DiscScope
+    DiscScope --> DiscDecision
+
+    DirectPath --> Guardrails
+    RecentPath --> Guardrails
+    ThoughtDecision --> Guardrails
+    DiscDecision --> Guardrails

@@ -120,6 +120,7 @@ Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details 
 | Doc | Description |
 |-----|-------------|
 | `docs/technical-architecture.md` | System architecture, data model, runtime flows |
+| `docs/clanker-activity.md` | Text activity model: direct replies, reply/lurk channels, thought loop, discovery |
 | `docs/agent-code.md` | Design doc for a possible future Claude Code orchestrator |
 | `docs/agent-browser.md` | Browser agent spec |
 | `docs/realtime-voice-agent-spec.md` | Voice architecture and tool strategy |

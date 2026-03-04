@@ -156,8 +156,7 @@ Key guardrails:
 - blocked users.
 - per-hour message and reaction limits.
 - minimum seconds between bot messages.
-- direct-address and recent-bot-context gating for immediate unsolicited replies.
-- timer-driven text thought loop for cold reply/lurk channels, capped by its own daily and cooldown settings, and only active when the channel has recent human activity within the last 24 hours.
+- high-level activity behavior is documented in `docs/clanker-activity.md`.
 
 ## 7. Latency-Critical Model Choices
 
@@ -173,8 +172,11 @@ Validation signals:
 ## 8. Text Thought Loop + Discovery Post Flow
 
 Text-channel proactivity is now split in two:
-- `replyChannelIds` + `textThoughtLoop.*`: periodic conversational lurking. The bot scans configured reply channels, inspects recent chat, and may decide to chime in.
+- `replyChannelIds` + `textThoughtLoop.*`: periodic conversational lurking.
 - `discovery.channelIds` + `discovery.*`: proactive standalone discovery posting with optional external links/media.
+
+Canonical activity rules, sliders, and edge cases are documented in:
+- `docs/clanker-activity.md`
 
 ![Discovery Post Flow](diagrams/discovery-post-flow.png)
 <!-- source: docs/diagrams/discovery-post-flow.mmd -->

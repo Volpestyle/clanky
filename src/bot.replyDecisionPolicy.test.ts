@@ -63,6 +63,27 @@ function buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef })
   };
 }
 
+function buildPrivateThreadChannel({ guild, channelId = "private-thread-1" } = {}) {
+  return {
+    id: channelId,
+    guildId: guild.id,
+    guild,
+    private: true,
+    isTextBased() {
+      return true;
+    },
+    isThread() {
+      return true;
+    },
+    isDMBased() {
+      return false;
+    },
+    async send() {
+      return undefined;
+    }
+  };
+}
+
 function buildIncomingMessage({
   guild,
   channel,
@@ -633,6 +654,46 @@ test("reply channels do not immediately evaluate cold non-addressed turns withou
     assert.equal(replyPayloads.length, 0);
     assert.equal(channelSendPayloads.length, 0);
     assert.equal(typingCallsRef.count, 0);
+  });
+});
+
+test("empty reply channel list defaults reply-channel behavior to all non-private allowed channels", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-default-reply";
+    applyBaselineSettings(store, channelId);
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: null,
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+
+    const guild = buildGuild();
+    const publicChannel = buildChannel({
+      guild,
+      channelId,
+      channelSendPayloads: [],
+      typingCallsRef: { count: 0 }
+    });
+    const privateThread = buildPrivateThreadChannel({ guild });
+
+    bot.client.channels.cache.set(publicChannel.id, publicChannel);
+    bot.client.channels.cache.set(privateThread.id, privateThread);
+
+    const settings = store.getSettings();
+    assert.equal(bot.isReplyChannel(settings, publicChannel.id), true);
+    assert.equal(bot.isReplyChannel(settings, privateThread.id), false);
   });
 });
 

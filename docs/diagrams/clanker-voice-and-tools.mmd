@@ -1,0 +1,63 @@
+flowchart TD
+    Start["Voice activity entrypoint"]
+
+    subgraph Session["Active voice session"]
+        Audio["Incoming speaker audio / transcript"]
+        TurnDecision{"Addressed to bot,\nconversation engaged,\nor command follow-up?"}
+        VoiceReply["Generate voice reply"]
+        Skip["Skip / stay quiet"]
+        ThoughtTimer["Per-session silence timer"]
+        ThoughtEligible{"voice.thoughtEngine.enabled\nsilence met\ncooldown met?"}
+        VoiceThought["Voice thought engine\nmay chime in"]
+    end
+
+    subgraph Modes["Voice runtime modes"]
+        Native["Native realtime"]
+        Bridge["Realtime bridge / brain"]
+        Stt["STT pipeline"]
+    end
+
+    subgraph SharedBrain["Shared continuity + tool layer"]
+        Continuity["Conversation windows\nmemory facts\nadaptive directives\nrecent lookup continuity"]
+        ToolChoice{"Need a tool?"}
+        SharedTools["conversation_search\nmemory_search / write\nadaptive_directive_add/remove\nweb_search\nbrowser_browse"]
+        VoiceOnly["Voice-only tools\nmusic / playback / transport controls"]
+    end
+
+    subgraph Controls["Main knobs"]
+        ReplyDecision["voice.replyDecisionLlm.*"]
+        VoiceEager["voice.replyEagerness"]
+        ThoughtKnobs["voice.thoughtEngine.*"]
+        ReplyPath["voice.replyPath\nprovider/runtime settings"]
+    end
+
+    Audio --> TurnDecision
+    TurnDecision -->|No| Skip
+    TurnDecision -->|Yes| VoiceReply
+
+    ThoughtTimer --> ThoughtEligible
+    ThoughtEligible -->|No| Skip
+    ThoughtEligible -->|Yes| VoiceThought
+
+    VoiceReply --> Native
+    VoiceReply --> Bridge
+    VoiceReply --> Stt
+    VoiceThought --> Native
+    VoiceThought --> Bridge
+    VoiceThought --> Stt
+
+    Native --> Continuity
+    Bridge --> Continuity
+    Stt --> Continuity
+
+    Continuity --> ToolChoice
+    ToolChoice -->|No| Output["Answer from context only"]
+    ToolChoice -->|Yes| SharedTools
+    ToolChoice -->|Yes, voice-specific| VoiceOnly
+
+    ReplyDecision --> TurnDecision
+    VoiceEager --> VoiceReply
+    ThoughtKnobs --> ThoughtEligible
+    ReplyPath --> Native
+    ReplyPath --> Bridge
+    ReplyPath --> Stt

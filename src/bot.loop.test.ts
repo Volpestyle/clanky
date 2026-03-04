@@ -276,3 +276,105 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
     }
   });
 }, 15_000);
+
+test("text thought loop can select an allowed public channel when reply channel list is empty", async () => {
+  await withTempStore(async (store) => {
+    const guildId = "guild-thought";
+    const channelId = "chan-thought";
+
+    store.patchSettings({
+      textThoughtLoop: {
+        enabled: true,
+        minMinutesBetweenThoughts: 1,
+        maxThoughtsPerDay: 5,
+        lookbackMessages: 12
+      },
+      permissions: {
+        allowReplies: true,
+        allowUnsolicitedReplies: true,
+        allowReactions: true,
+        replyChannelIds: [],
+        allowedChannelIds: [channelId],
+        blockedChannelIds: [],
+        blockedUserIds: [],
+        maxMessagesPerHour: 100,
+        maxReactionsPerHour: 100
+      }
+    });
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: null,
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+
+    const guild = {
+      id: guildId,
+      emojis: {
+        cache: {
+          map() {
+            return [];
+          }
+        }
+      },
+      members: {
+        cache: new Map()
+      }
+    };
+
+    const channel = {
+      id: channelId,
+      guildId,
+      name: "general",
+      guild,
+      isTextBased() {
+        return true;
+      },
+      isDMBased() {
+        return false;
+      },
+      isThread() {
+        return false;
+      },
+      async sendTyping() {
+        return undefined;
+      },
+      async send() {
+        return undefined;
+      }
+    };
+
+    bot.client.channels.cache.set(channelId, channel);
+
+    store.recordMessage({
+      messageId: "human-thought-1",
+      createdAt: Date.now() - 5_000,
+      guildId,
+      channelId,
+      authorId: "user-1",
+      authorName: "alice",
+      isBot: false,
+      content: "anyone trying the new patch",
+      referencedMessageId: null
+    });
+
+    try {
+      const candidate = await bot.pickTextThoughtLoopCandidate(store.getSettings());
+      assert.equal(candidate?.channel?.id, channelId);
+      assert.equal(candidate?.message?.content, "anyone trying the new patch");
+    } finally {
+      await bot.stop();
+    }
+  });
+});
