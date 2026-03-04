@@ -1428,6 +1428,72 @@ test("queueRealtimeTurnFromAsrBridge forwards transcript metadata when ASR trans
   assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"), false);
 });
 
+test("shared ASR bridge forwards recovered transcript after timeout instead of discarding it", async () => {
+  const { manager, logs } = createManager();
+  manager.appConfig.openaiApiKey = "test-openai-key";
+  manager.evaluatePcmSilenceGate = () => ({
+    drop: false,
+    clipDurationMs: 480,
+    rms: 0.2,
+    peak: 0.4,
+    activeSampleRatio: 0.4
+  });
+  manager.maybeHandleInterruptedReplyRecovery = () => false;
+
+  const bridgedTurns = [];
+  manager.queueRealtimeTurnFromAsrBridge = (payload) => {
+    bridgedTurns.push(payload);
+    return true;
+  };
+  manager.commitOpenAiSharedAsrUtterance = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    return {
+      transcript: "can i show you my screen?"
+    };
+  };
+
+  const settings = {
+    botName: "clanker conk",
+    llm: {
+      provider: "anthropic",
+      model: "claude-haiku-4-5"
+    },
+    voice: {
+      openaiRealtime: {
+        transcriptionMethod: "realtime_bridge",
+        usePerUserAsrBridge: false
+      }
+    }
+  };
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000,
+    settingsSnapshot: settings
+  });
+
+  manager.startInboundCapture({
+    session,
+    userId: "speaker-1",
+    settings
+  });
+
+  const capture = session.userCaptures.get("speaker-1");
+  const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 8, 0x10);
+  capture.pcmChunks.push(pcmBuffer);
+  capture.bytesSent = pcmBuffer.length;
+  capture.sharedAsrBytesSent = pcmBuffer.length;
+
+  capture.finalize("stream_end");
+  await new Promise((resolve) => setTimeout(resolve, 900));
+
+  assert.equal(bridgedTurns.length, 1);
+  assert.equal(bridgedTurns[0]?.source, "shared");
+  assert.equal(bridgedTurns[0]?.asrResult?.transcript, "can i show you my screen?");
+  assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_timeout_fallback"), true);
+  assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_late_result_ignored"), false);
+  assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"), false);
+});
+
 test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown", () => {
   const { manager } = createManager();
   const now = Date.now();

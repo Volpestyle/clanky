@@ -317,6 +317,32 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
     }
   ];
 
+  const screenShareCapability =
+    typeof manager.getVoiceScreenShareCapability === "function"
+      ? manager.getVoiceScreenShareCapability({
+        settings,
+        guildId: session?.guildId || null,
+        channelId: session?.textChannelId || null,
+        requesterUserId: session?.lastOpenAiToolCallerUserId || null
+      })
+      : null;
+  if (
+    screenShareCapability?.available &&
+    typeof manager.offerVoiceScreenShareLink === "function" &&
+    session?.guildId &&
+    session?.textChannelId
+  ) {
+    localTools.push({
+      toolType: "function",
+      name: "offer_screen_share_link",
+      description: "Send the active speaker a temporary screen-share link in the text channel so they can start sharing their screen.",
+      parameters: {
+        type: "object",
+        additionalProperties: false
+      }
+    });
+  }
+
   const sessionState = manager.ensureSessionToolRuntimeState(session);
   const mcpTools = (Array.isArray(sessionState?.mcpStatus) ? sessionState.mcpStatus : [])
     .flatMap((server) => {
@@ -1497,6 +1523,43 @@ export async function executeLocalVoiceToolCall(manager: any, {
     return {
       ok: true,
       queue_state: manager.buildVoiceQueueStatePayload(session)
+    };
+  }
+  if (normalizedToolName === "offer_screen_share_link") {
+    const requesterUserId = normalizeInlineText(session.lastOpenAiToolCallerUserId, 80) || null;
+    if (!requesterUserId || !session.guildId || !session.textChannelId) {
+      return {
+        ok: false,
+        offered: false,
+        error: "screen_share_context_unavailable"
+      };
+    }
+    let transcript = "";
+    const recentVoiceTurns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
+    for (let i = recentVoiceTurns.length - 1; i >= 0; i -= 1) {
+      const turn = recentVoiceTurns[i];
+      if (String(turn?.role || "") !== "user") continue;
+      if (String(turn?.userId || "") !== requesterUserId) continue;
+      transcript = normalizeInlineText(turn?.text, 220) || "";
+      break;
+    }
+    const result = await manager.offerVoiceScreenShareLink({
+      settings,
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      requesterUserId,
+      transcript,
+      source: "voice_realtime_tool_call"
+    });
+    return {
+      ok: Boolean(result?.offered || result?.reused),
+      offered: Boolean(result?.offered),
+      reused: Boolean(result?.reused),
+      reason: normalizeInlineText(result?.reason, 120) || null,
+      linkUrl: normalizeInlineText(result?.linkUrl, 320) || null,
+      expiresInMinutes: Number.isFinite(Number(result?.expiresInMinutes))
+        ? Math.max(0, Math.round(Number(result.expiresInMinutes)))
+        : null
     };
   }
   if (normalizedToolName === "music_now_playing") {

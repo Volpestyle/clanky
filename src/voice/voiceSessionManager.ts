@@ -524,6 +524,8 @@ export class VoiceSessionManager {
   browserManager;
   composeOperationalMessage;
   generateVoiceTurn;
+  getVoiceScreenShareCapabilityHook;
+  offerVoiceScreenShareLinkHook;
   sessions;
   pendingSessionGuildIds;
   joinLocks;
@@ -542,7 +544,9 @@ export class VoiceSessionManager {
     search = null,
     browserManager = null,
     composeOperationalMessage = null,
-    generateVoiceTurn = null
+    generateVoiceTurn = null,
+    getVoiceScreenShareCapability = null,
+    offerVoiceScreenShareLink = null
   }) {
     this.client = client;
     this.store = store;
@@ -554,6 +558,10 @@ export class VoiceSessionManager {
     this.composeOperationalMessage =
       typeof composeOperationalMessage === "function" ? composeOperationalMessage : null;
     this.generateVoiceTurn = typeof generateVoiceTurn === "function" ? generateVoiceTurn : null;
+    this.getVoiceScreenShareCapabilityHook =
+      typeof getVoiceScreenShareCapability === "function" ? getVoiceScreenShareCapability : null;
+    this.offerVoiceScreenShareLinkHook =
+      typeof offerVoiceScreenShareLink === "function" ? offerVoiceScreenShareLink : null;
     this.sessions = new Map();
     this.pendingSessionGuildIds = new Set();
     this.joinLocks = new Map();
@@ -578,6 +586,68 @@ export class VoiceSessionManager {
     };
 
     this.client.on("voiceStateUpdate", this.onVoiceStateUpdate);
+  }
+
+  getVoiceScreenShareCapability({
+    settings = null,
+    guildId = null,
+    channelId = null,
+    requesterUserId = null
+  } = {}) {
+    if (typeof this.getVoiceScreenShareCapabilityHook === "function") {
+      return (
+        this.getVoiceScreenShareCapabilityHook({
+          settings,
+          guildId,
+          channelId,
+          requesterUserId
+        }) || {
+          supported: false,
+          enabled: false,
+          available: false,
+          status: "disabled",
+          publicUrl: "",
+          reason: "screen_share_manager_unavailable"
+        }
+      );
+    }
+    return {
+      supported: false,
+      enabled: false,
+      available: false,
+      status: "disabled",
+      publicUrl: "",
+      reason: "screen_share_manager_unavailable"
+    };
+  }
+
+  async offerVoiceScreenShareLink({
+    settings = null,
+    guildId = null,
+    channelId = null,
+    requesterUserId = null,
+    transcript = "",
+    source = "voice_realtime_tool_call"
+  } = {}) {
+    if (typeof this.offerVoiceScreenShareLinkHook !== "function") {
+      return {
+        offered: false,
+        reason: "screen_share_manager_unavailable"
+      };
+    }
+    return (
+      await this.offerVoiceScreenShareLinkHook({
+        settings,
+        guildId,
+        channelId,
+        requesterUserId,
+        transcript,
+        source
+      })
+    ) || {
+      offered: false,
+      reason: "screen_share_manager_unavailable"
+    };
   }
 
   getSession(guildId) {
@@ -8477,8 +8547,7 @@ export class VoiceSessionManager {
           };
 
           const fallbackTimer = setTimeout(() => {
-            const forwarded = forwardAsrBridgeTurn(null, "per_user_timeout_fallback");
-            if (!forwarded) return;
+            if (bridgeForwarded || session.ending) return;
             this.store.logAction({
               kind: "voice_runtime",
               guildId: session.guildId,
@@ -8577,8 +8646,7 @@ export class VoiceSessionManager {
           }
 
           const fallbackTimer = setTimeout(() => {
-            const forwarded = forwardAsrBridgeTurn(null, "shared_timeout_fallback");
-            if (!forwarded) return;
+            if (bridgeForwarded || session.ending) return;
             this.store.logAction({
               kind: "voice_runtime",
               guildId: session.guildId,
@@ -10112,14 +10180,6 @@ export class VoiceSessionManager {
       this.clearPendingResponse(session);
     }
 
-    this.queueRealtimeTurnContextRefresh({
-      session,
-      settings,
-      userId: normalizedUserId,
-      transcript: normalizedTranscript,
-      captureReason
-    });
-
     const replyInterruptionPolicy = this.buildReplyInterruptionPolicy({
       session,
       userId: normalizedUserId,
@@ -10128,6 +10188,13 @@ export class VoiceSessionManager {
       source: String(source || "openai_realtime_text_turn")
     });
     try {
+      await this.prepareRealtimeTurnContext({
+        session,
+        settings,
+        userId: normalizedUserId,
+        transcript: normalizedTranscript,
+        captureReason
+      });
       session.realtimeClient.requestTextUtterance(labeledTranscript);
       this.createTrackedAudioResponse({
         session,
@@ -11227,6 +11294,13 @@ export class VoiceSessionManager {
     const speakerName = this.resolveVoiceSpeakerName(session, speakerUserId);
     const normalizedTranscript = normalizeVoiceText(transcript, REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS);
     const streamWatchBrainContext = this.getStreamWatchBrainContextForPrompt(session, settings);
+    const hasScreenFrameContext = Array.isArray(streamWatchBrainContext?.notes) && streamWatchBrainContext.notes.length > 0;
+    const screenShareCapability = this.getVoiceScreenShareCapability({
+      settings,
+      guildId: session?.guildId || null,
+      channelId: session?.textChannelId || null,
+      requesterUserId: speakerUserId || null
+    });
     const participants = this.getVoiceChannelParticipants(session);
     const recentMembershipEvents = this.getRecentVoiceMembershipEvents(session, {
       maxItems: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
@@ -11378,7 +11452,54 @@ export class VoiceSessionManager {
       );
     }
 
-    if (streamWatchBrainContext?.notes?.length) {
+    if (hasScreenFrameContext) {
+      sections.push(
+        [
+          "Visual context:",
+          "- You currently have screen-share frame snapshots for this conversation.",
+          "- You may comment only on what those snapshots show.",
+          "- Do not imply you have a continuous live view beyond the provided frame context."
+        ].join("\n")
+      );
+    } else {
+      const rawScreenShareReason = String(screenShareCapability?.reason || "").trim().toLowerCase();
+      const screenShareReason = rawScreenShareReason || "unavailable";
+      const screenShareAvailable = Boolean(screenShareCapability?.available);
+      const screenShareSupported = Boolean(screenShareCapability?.supported);
+      if (screenShareAvailable) {
+        sections.push(
+          [
+            "Visual context:",
+            "- You do not currently see the user's screen.",
+            "- Do not claim to see, watch, or react to on-screen content until actual frame context is provided.",
+            "- If the speaker asks you to see/watch/share their screen or stream, call offer_screen_share_link.",
+            "- After offering the link, you may briefly tell them to open the link and start sharing."
+          ].join("\n")
+        );
+      } else if (screenShareSupported) {
+        sections.push(
+          [
+            "Visual context:",
+            "- You do not currently see the user's screen.",
+            "- Screen-share link capability exists but is unavailable right now.",
+            `- Current unavailability reason: ${screenShareReason}.`,
+            "- If asked, say the link flow is unavailable right now.",
+            "- Do not claim to see or watch the screen."
+          ].join("\n")
+        );
+      } else {
+        sections.push(
+          [
+            "Visual context:",
+            "- You do not currently see the user's screen.",
+            "- Do not claim to see, watch, or react to on-screen content.",
+            "- If asked about screen sharing, explain that you need an active screen-share link and incoming frame context before you can comment on what is on screen."
+          ].join("\n")
+        );
+      }
+    }
+
+    if (hasScreenFrameContext) {
       sections.push(
         [
           "Screen-share stream frame context:",

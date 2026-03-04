@@ -2454,7 +2454,7 @@ test("runRealtimeTurn uses brain reply generation when admission allows turn", a
   assert.equal(brainPayloads[0]?.source, "realtime");
 });
 
-test("forwardRealtimeTextTurnToBrain does not block on turn-context refresh", async () => {
+test("forwardRealtimeTextTurnToBrain waits for turn-context refresh before sending the utterance", async () => {
   const requestCalls = [];
   let releaseContextRefresh = () => undefined;
   const manager = createManager();
@@ -2494,10 +2494,11 @@ test("forwardRealtimeTextTurnToBrain does not block on turn-context refresh", as
     new Promise((resolve) => setTimeout(() => resolve("timeout"), 80))
   ]);
 
-  assert.equal(result, true);
-  assert.equal(requestCalls.length, 1);
+  assert.equal(result, "timeout");
+  assert.equal(requestCalls.length, 0);
   releaseContextRefresh();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(await forwardCall, true);
+  assert.equal(requestCalls.length, 1);
 });
 
 test("forwardRealtimeTurnAudio schedules response without waiting for turn-context refresh", async () => {
@@ -4858,6 +4859,18 @@ test("voice decision history deduplicates consecutive identical turns", () => {
 
 test("refreshRealtimeTools registers local and MCP tool definitions", async () => {
   const manager = createManager();
+  manager.getVoiceScreenShareCapability = () => ({
+    supported: true,
+    enabled: true,
+    available: true,
+    status: "ready",
+    publicUrl: "https://screen.example",
+    reason: null
+  });
+  manager.offerVoiceScreenShareLink = async () => ({
+    offered: true,
+    reason: "offered"
+  });
   manager.appConfig.voiceMcpServers = [
     {
       serverName: "ops_tools",
@@ -4916,10 +4929,42 @@ test("refreshRealtimeTools registers local and MCP tool definitions", async () =
   assert.equal(toolNames.includes("memory_search"), true);
   assert.equal(toolNames.includes("memory_write"), true);
   assert.equal(toolNames.includes("music_search"), true);
+  assert.equal(toolNames.includes("offer_screen_share_link"), true);
   assert.equal(toolNames.includes("server_status"), true);
   const descriptorRows = Array.isArray(session.openAiToolDefinitions) ? session.openAiToolDefinitions : [];
   const mcpDescriptor = descriptorRows.find((entry) => entry?.name === "server_status");
   assert.equal(mcpDescriptor?.toolType, "mcp");
+});
+
+test("buildRealtimeInstructions forbids claiming screen vision before frame context exists", () => {
+  const manager = createManager();
+  manager.getVoiceScreenShareCapability = () => ({
+    supported: true,
+    enabled: true,
+    available: true,
+    status: "ready",
+    publicUrl: "https://screen.example",
+    reason: null
+  });
+
+  const instructions = manager.buildRealtimeInstructions({
+    session: {
+      id: "session-screen-vision-1",
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      startedAt: Date.now() - 5_000,
+      membershipEvents: []
+    },
+    settings: baseSettings(),
+    speakerUserId: "speaker-1",
+    transcript: "can i share my screen with you"
+  });
+
+  assert.equal(instructions.includes("You do not currently see the user's screen."), true);
+  assert.equal(instructions.includes("Do not claim to see, watch, or react to on-screen content until actual frame context is provided."), true);
+  assert.equal(instructions.includes("call offer_screen_share_link"), true);
 });
 
 test("handleOpenAiRealtimeFunctionCallEvent executes music_now_playing and sends function output", async () => {
@@ -4992,6 +5037,83 @@ test("handleOpenAiRealtimeFunctionCallEvent executes music_now_playing and sends
   const toolEvents = Array.isArray(session.toolCallEvents) ? session.toolCallEvents : [];
   assert.equal(toolEvents.length, 1);
   assert.equal(toolEvents[0]?.toolName, "music_now_playing");
+});
+
+test("handleOpenAiRealtimeFunctionCallEvent executes offer_screen_share_link and sends function output", async () => {
+  const manager = createManager();
+  manager.scheduleOpenAiRealtimeToolFollowupResponse = () => {};
+  const offerCalls = [];
+  manager.getVoiceScreenShareCapability = () => ({
+    supported: true,
+    enabled: true,
+    available: true,
+    status: "ready",
+    publicUrl: "https://screen.example",
+    reason: null
+  });
+  manager.offerVoiceScreenShareLink = async (payload) => {
+    offerCalls.push(payload);
+    return {
+      offered: true,
+      reason: "offered",
+      linkUrl: "https://screen.example/session/abc",
+      expiresInMinutes: 12
+    };
+  };
+
+  const sentFunctionOutputs = [];
+  const session = {
+    id: "session-openai-tool-call-screen-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    ending: false,
+    lastOpenAiToolCallerUserId: "speaker-1",
+    recentVoiceTurns: [
+      {
+        role: "user",
+        userId: "speaker-1",
+        text: "can i show you my screen?"
+      }
+    ],
+    realtimeClient: {
+      sendFunctionCallOutput(payload) {
+        sentFunctionOutputs.push(payload);
+      }
+    }
+  };
+
+  session.openAiToolDefinitions = manager.buildRealtimeFunctionTools({
+    session,
+    settings: baseSettings()
+  });
+
+  await manager.handleOpenAiRealtimeFunctionCallEvent({
+    session,
+    settings: baseSettings(),
+    event: {
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        call_id: "call_screen_1",
+        name: "offer_screen_share_link",
+        arguments: "{}"
+      }
+    }
+  });
+
+  assert.equal(offerCalls.length, 1);
+  assert.equal(offerCalls[0]?.guildId, "guild-1");
+  assert.equal(offerCalls[0]?.channelId, "chan-1");
+  assert.equal(offerCalls[0]?.requesterUserId, "speaker-1");
+  assert.equal(offerCalls[0]?.transcript, "can i show you my screen?");
+  assert.equal(offerCalls[0]?.source, "voice_realtime_tool_call");
+  assert.equal(sentFunctionOutputs.length, 1);
+  const outputPayload = JSON.parse(String(sentFunctionOutputs[0]?.output || "{}"));
+  assert.equal(outputPayload?.ok, true);
+  assert.equal(outputPayload?.offered, true);
+  assert.equal(outputPayload?.linkUrl, "https://screen.example/session/abc");
 });
 
 test("handleOpenAiRealtimeFunctionCallEvent ignores duplicate completed call ids", async () => {
