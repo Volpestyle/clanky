@@ -3,6 +3,7 @@ import { env } from "node:process";
 export type E2EConfig = {
   systemBotToken: string;
   driverBotToken: string;
+  driverBot2Token: string;
   testGuildId: string;
   testVoiceChannelId: string;
   testTextChannelId: string;
@@ -42,6 +43,7 @@ export function getE2EConfig(): E2EConfig {
   return {
     systemBotToken,
     driverBotToken: requiredEnv("E2E_DRIVER_BOT_TOKEN"),
+    driverBot2Token: env.E2E_DRIVER_BOT_2_TOKEN || "",
     testGuildId: requiredEnv("E2E_TEST_GUILD_ID"),
     testVoiceChannelId: requiredEnv("E2E_TEST_VOICE_CHANNEL_ID"),
     testTextChannelId: env.E2E_TEST_TEXT_CHANNEL_ID || "",
@@ -61,4 +63,8 @@ export function hasE2EConfig(): boolean {
 
 export function hasTextE2EConfig(): boolean {
   return hasE2EConfig() && Boolean(env.E2E_TEST_TEXT_CHANNEL_ID) && env.RUN_E2E_TEXT === "1";
+}
+
+export function hasDialogueE2EConfig(): boolean {
+  return hasE2EConfig() && Boolean(env.E2E_DRIVER_BOT_2_TOKEN);
 }
