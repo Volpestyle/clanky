@@ -205,6 +205,42 @@ export function parseDailyEntryLine(line) {
   };
 }
 
+const SCOPE_FRAGMENT_RE = /\[guild:(\S+)\s+channel:(\S+)\s+message:(\S+)\]/;
+const AUTHOR_ID_RE = /\((\d+)\)$/;
+
+export function parseDailyEntryLineWithScope(line) {
+  if (!String(line).startsWith("- ")) return null;
+  const payload = line.slice(2).trim();
+  const parts = payload.split(" | ");
+  if (parts.length < 3) return null;
+
+  const [timestampIso, authorPart, ...textParts] = parts;
+  const rawText = textParts.join(" | ").trim();
+  const author = authorPart.replace(/\s*\([^)]+\)\s*$/, "").trim();
+  if (!timestampIso || !author || !rawText) return null;
+
+  const timestampMs = Date.parse(timestampIso);
+  const authorIdMatch = authorPart.trim().match(AUTHOR_ID_RE);
+  const authorId = authorIdMatch ? authorIdMatch[1] : null;
+
+  const scopeMatch = rawText.match(SCOPE_FRAGMENT_RE);
+  const guildId = scopeMatch ? scopeMatch[1] : null;
+  const channelId = scopeMatch ? scopeMatch[2] : null;
+  const messageId = scopeMatch ? scopeMatch[3] : null;
+  const content = scopeMatch ? rawText.slice(scopeMatch.index + scopeMatch[0].length).trim() : rawText;
+
+  return {
+    timestampIso,
+    timestampMs: Number.isFinite(timestampMs) ? timestampMs : 0,
+    author,
+    authorId,
+    guildId,
+    channelId,
+    messageId,
+    content
+  };
+}
+
 export function normalizeLoreFactForDisplay(rawFact) {
   let text = String(rawFact || "")
     .replace(/\s+/g, " ")

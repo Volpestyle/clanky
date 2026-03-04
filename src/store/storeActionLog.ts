@@ -213,6 +213,20 @@ export function indexResponseTriggersForAction(store: any, {
   insertTx(triggerMessageIds, normalizedActionId, String(createdAt || nowIso()));
 }
 
+export function hasReflectionBeenCompleted(store: any, dateKey: string, guildId: string): boolean {
+  const row = store.db
+    .prepare(
+      `SELECT 1
+         FROM actions
+         WHERE kind = 'memory_reflection_complete'
+           AND guild_id = ?
+           AND json_extract(metadata, '$.dateKey') = ?
+         LIMIT 1`
+    )
+    .get(String(guildId), String(dateKey));
+  return Boolean(row);
+}
+
 export function hasTriggeredResponse(store: any, triggerMessageId) {
   const id = String(triggerMessageId).trim();
   if (!id) return false;

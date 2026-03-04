@@ -699,7 +699,7 @@ export function normalizeSettings(raw) {
   const defaultVoiceReplyDecisionProvider = normalizeLlmProvider(defaultVoiceReplyDecisionLlm.provider || "anthropic");
   const defaultReplyDecisionModel =
     normalizeLlmProvider(voiceReplyDecisionProviderRaw, defaultVoiceReplyDecisionProvider) ===
-    defaultVoiceReplyDecisionProvider
+      defaultVoiceReplyDecisionProvider
       ? String(defaultVoiceReplyDecisionLlm.model || "").trim()
       : "";
   const normalizedVoiceReplyDecisionLlm = normalizeProviderModelPair(
@@ -746,8 +746,8 @@ export function normalizeSettings(raw) {
   );
   const openAiRealtimeTranscriptionMethod = String(
     merged.voice?.openaiRealtime?.transcriptionMethod ||
-      defaultVoiceOpenAiRealtime.transcriptionMethod ||
-      "realtime_bridge"
+    defaultVoiceOpenAiRealtime.transcriptionMethod ||
+    "realtime_bridge"
   )
     .trim()
     .toLowerCase();
@@ -758,8 +758,8 @@ export function normalizeSettings(raw) {
   merged.voice.openaiRealtime.inputTranscriptionModel = String(
     normalizeOpenAiRealtimeTranscriptionModel(
       merged.voice?.openaiRealtime?.inputTranscriptionModel ||
-        defaultVoiceOpenAiRealtime.inputTranscriptionModel ||
-        OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
+      defaultVoiceOpenAiRealtime.inputTranscriptionModel ||
+      OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
       OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
     )
   ).slice(0, 120);
@@ -1086,8 +1086,8 @@ export function normalizeSettings(raw) {
     ),
     maxCandidatesForPrompt: clamp(
       Number(merged.initiative.discovery?.maxCandidatesForPrompt) ||
-        Number(defaultDiscovery.maxCandidatesForPrompt) ||
-        6,
+      Number(defaultDiscovery.maxCandidatesForPrompt) ||
+      6,
       1,
       12
     ),
@@ -1158,6 +1158,40 @@ export function normalizeSettings(raw) {
   merged.memory.enabled = Boolean(merged.memory?.enabled);
   merged.memory.maxRecentMessages = clamp(Number(merged.memory?.maxRecentMessages) || 35, 10, 120);
   merged.memory.embeddingModel = String(merged.memory?.embeddingModel || "text-embedding-3-small").slice(0, 120);
+
+  if (!merged.memory.reflection || typeof merged.memory.reflection !== "object") {
+    merged.memory.reflection = {};
+  }
+  const defaultMemoryReflection = DEFAULT_SETTINGS.memory?.reflection || {
+    enabled: true,
+    hour: 4,
+    minute: 0,
+    maxFactsPerReflection: 20
+  };
+  merged.memory.reflection.enabled =
+    merged.memory.reflection?.enabled !== undefined
+      ? Boolean(merged.memory.reflection?.enabled)
+      : Boolean(defaultMemoryReflection.enabled);
+  merged.memory.reflection.hour = clamp(
+    Number(merged.memory.reflection?.hour) || Number(defaultMemoryReflection.hour) || 4,
+    0,
+    23
+  );
+  merged.memory.reflection.minute = clamp(
+    Number(merged.memory.reflection?.minute) || Number(defaultMemoryReflection.minute) || 0,
+    0,
+    59
+  );
+  merged.memory.reflection.maxFactsPerReflection = clamp(
+    Number(merged.memory.reflection?.maxFactsPerReflection) || Number(defaultMemoryReflection.maxFactsPerReflection) || 20,
+    1,
+    100
+  );
+  merged.memory.dailyLogRetentionDays = clamp(
+    Number(merged.memory?.dailyLogRetentionDays) || Number(DEFAULT_SETTINGS.memory?.dailyLogRetentionDays) || 30,
+    1,
+    365
+  );
 
   return merged;
 }

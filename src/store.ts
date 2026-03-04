@@ -42,7 +42,7 @@ import {
 import { pushPerformanceMetric, summarizeLatencyMetric } from "./store/storePerformance.ts";
 import { rewriteRuntimeSettingsRow, getSettings, setSettings, patchSettings, resetSettings } from "./store/storeSettings.ts";
 import { recordMessage, getRecentMessages, getRecentMessagesAcrossGuild, searchRelevantMessages, getActiveChannels } from "./store/storeMessages.ts";
-import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, countInitiativePostsSince, getRecentActions, indexResponseTriggersForAction, hasTriggeredResponse } from "./store/storeActionLog.ts";
+import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, countInitiativePostsSince, getRecentActions, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./store/storeActionLog.ts";
 import { wasLinkSharedSince, recordSharedLink, pruneLookupContext, recordLookupContext, searchLookupContext } from "./store/storeLookups.ts";
 import { getRecentVoiceSessions, getVoiceSessionEvents } from "./store/storeVoice.ts";
 import { getReplyPerformanceStats, getStats } from "./store/storeStats.ts";
@@ -355,6 +355,10 @@ export class Store {
 
   hasTriggeredResponse(triggerMessageId) {
     return hasTriggeredResponse(this, triggerMessageId);
+  }
+
+  hasReflectionBeenCompleted(dateKey: string, guildId: string): boolean {
+    return hasReflectionBeenCompleted(this, dateKey, guildId);
   }
 
   wasLinkSharedSince(url, sinceIso) {

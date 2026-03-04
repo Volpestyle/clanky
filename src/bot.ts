@@ -46,7 +46,8 @@ import {
 } from "./botHelpers.ts";
 import {
   getLocalTimeZoneLabel,
-  resolveFollowingNextRunAt
+  resolveFollowingNextRunAt,
+  resolveInitialNextRunAt
 } from "./automation.ts";
 import { normalizeDiscoveryUrl } from "./discovery.ts";
 import { chance, clamp, sanitizeBotText, sleep } from "./utils.ts";
@@ -113,6 +114,7 @@ const STARTUP_TASK_DELAY_MS = 4500;
 const INITIATIVE_TICK_MS = 60_000;
 const AUTOMATION_TICK_MS = 30_000;
 const GATEWAY_WATCHDOG_TICK_MS = 30_000;
+const REFLECTION_TICK_MS = 60_000;
 const MAX_MODEL_IMAGE_INPUTS = 8;
 const MAX_HISTORY_IMAGE_CANDIDATES = 24;
 const MAX_HISTORY_IMAGE_LOOKUP_RESULTS = 6;
@@ -216,6 +218,8 @@ export class ClankerBot {
   replyQueues;
   replyQueueWorkers;
   replyQueuedMessageIds: Set<string>;
+  reflectionTimer;
+  nextReflectionRunAt: string | null;
   screenShareSessionManager: any;
   client: any;
   voiceSessionManager: VoiceSessionManager;
@@ -250,6 +254,8 @@ export class ClankerBot {
     this.replyQueues = new Map();
     this.replyQueueWorkers = new Set();
     this.replyQueuedMessageIds = new Set();
+    this.reflectionTimer = null;
+    this.nextReflectionRunAt = null;
     this.screenShareSessionManager = null;
 
     this.client = new Client({
@@ -528,6 +534,14 @@ export class ClankerBot {
         });
       });
     }, GATEWAY_WATCHDOG_TICK_MS);
+    this.reflectionTimer = setInterval(() => {
+      this.maybeRunReflection().catch((error) => {
+        this.store.logAction({
+          kind: "bot_error",
+          content: `reflection_cycle: ${String(error?.message || error)}`
+        });
+      });
+    }, REFLECTION_TICK_MS);
 
     this.startupTimeout = setTimeout(() => {
       if (this.isStopping) return;
@@ -547,8 +561,10 @@ export class ClankerBot {
     if (this.initiativeTimer) clearInterval(this.initiativeTimer);
     if (this.automationTimer) clearInterval(this.automationTimer);
     if (this.gatewayWatchdogTimer) clearInterval(this.gatewayWatchdogTimer);
+    if (this.reflectionTimer) clearInterval(this.reflectionTimer);
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
     this.gatewayWatchdogTimer = null;
+    this.reflectionTimer = null;
     this.automationTimer = null;
     this.reconnectTimeout = null;
     this.startupTimeout = null;
@@ -3196,6 +3212,31 @@ export class ClankerBot {
     );
     await this.maybeRunInitiativeCycle({ startup: true });
     await this.maybeRunAutomationCycle();
+  }
+
+  async maybeRunReflection() {
+    const settings = this.store.getSettings();
+    if (!settings?.memory?.enabled || !settings?.memory?.reflection?.enabled) return;
+
+    const hour = Number(settings.memory.reflection.hour ?? 4);
+    const minute = Number(settings.memory.reflection.minute ?? 0);
+    const schedule = { kind: "daily" as const, hour, minute };
+
+    if (!this.nextReflectionRunAt) {
+      this.nextReflectionRunAt = resolveInitialNextRunAt({ schedule, nowMs: Date.now() });
+    }
+    if (!this.nextReflectionRunAt) return;
+
+    if (Date.now() < Date.parse(this.nextReflectionRunAt)) return;
+
+    try {
+      await this.memory.runDailyReflection(settings);
+    } finally {
+      this.nextReflectionRunAt = resolveFollowingNextRunAt({
+        schedule,
+        runFinishedMs: Date.now()
+      });
+    }
   }
 
   async maybeRunAutomationCycle() {

@@ -25,6 +25,7 @@ import {
   resolveDirectiveScopeConfig,
   sanitizeInline,
 } from "./memory/memoryHelpers.ts";
+import { runDailyReflection } from "./memory/dailyReflection.ts";
 
 const DAILY_FILE_PATTERN = /^\d{4}-\d{2}-\d{2}\.md$/;
 const LORE_SUBJECT = "__lore__";
@@ -980,6 +981,16 @@ export class MemoryManager {
     } catch {
       // Avoid cascading failures while handling memory errors.
     }
+  }
+
+  async runDailyReflection(settings) {
+    if (!settings?.memory?.enabled || !settings?.memory?.reflection?.enabled) return;
+    return await runDailyReflection({
+      memory: this,
+      store: this.store,
+      llm: this.llm,
+      settings
+    });
   }
 }
 

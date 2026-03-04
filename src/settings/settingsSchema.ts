@@ -293,6 +293,13 @@ export const DEFAULT_SETTINGS = {
     enabled: true,
     maxRecentMessages: 35,
     maxHighlights: 16,
-    embeddingModel: "text-embedding-3-small"
+    embeddingModel: "text-embedding-3-small",
+    reflection: {
+      enabled: true,
+      hour: 4,
+      minute: 0,
+      maxFactsPerReflection: 20
+    },
+    dailyLogRetentionDays: 30
   }
 };
