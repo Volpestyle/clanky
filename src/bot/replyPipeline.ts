@@ -1,5 +1,5 @@
 import { clamp } from "lodash";
-import { sanitizeBotText } from "../utils.ts";
+import { sanitizeBotText, sleep } from "../utils.ts";
 import { 
   buildReplyPrompt, 
   buildSystemPrompt 
@@ -14,7 +14,8 @@ import {
   parseStructuredReplyOutput,
   pickReplyMediaDirective,
   resolveMaxMediaPromptLen,
-  normalizeSkipSentinel
+  normalizeSkipSentinel,
+  splitDiscordMessage
 } from "../botHelpers.ts";
 import { getLocalTimeZoneLabel } from "../automation.ts";
 import {
@@ -23,6 +24,7 @@ import {
   runModelRequestedWebSearch as runModelRequestedWebSearchForReplyFollowup
 } from "./replyFollowup.ts";
 import { resolveDeterministicMentions as resolveDeterministicMentionsForMentions } from "./mentions.ts";
+import { finalizeReplyPerformanceSample } from "../bot.ts";
 
 // Helper copied from bot.ts (or re-implemented)
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
@@ -195,6 +197,11 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     typeof bot.voiceSessionManager?.getMusicDisambiguationPromptContext === "function"
       ? bot.voiceSessionManager.getMusicDisambiguationPromptContext(activeVoiceSession)
       : null;
+  const musicState =
+    inVoiceChannelNow &&
+    typeof bot.voiceSessionManager?.getMusicPromptContext === "function"
+      ? bot.voiceSessionManager.getMusicPromptContext(activeVoiceSession)
+      : null;
   
   const systemPrompt = buildSystemPrompt(settings);
   const replyPromptBase = {
@@ -236,6 +243,7 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
       enabled: Boolean(settings?.voice?.enabled),
       activeSession: inVoiceChannelNow,
       participantRoster: activeVoiceParticipantRoster,
+      musicState,
       musicDisambiguation
     },
     recentWebLookups,
@@ -269,7 +277,7 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     mediaCapabilities, simpleImageCapabilityReady, complexImageCapabilityReady, imageCapabilityReady,
     videoCapabilityReady, gifBudget, gifsConfigured, webSearch, recentWebLookups, memoryLookup,
     videoContext, modelImageInputs, imageLookup, replyTrace, screenShareCapability,
-    activeVoiceSession, inVoiceChannelNow, activeVoiceParticipantRoster, musicDisambiguation,
+    activeVoiceSession, inVoiceChannelNow, activeVoiceParticipantRoster, musicState, musicDisambiguation,
     systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture, replyPrompts
   };
 }
@@ -283,7 +291,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     mediaCapabilities, simpleImageCapabilityReady, complexImageCapabilityReady, imageCapabilityReady,
     videoCapabilityReady, gifBudget, gifsConfigured, webSearch, recentWebLookups, memoryLookup,
     videoContext, modelImageInputs, imageLookup, replyTrace, screenShareCapability,
-    activeVoiceSession, inVoiceChannelNow, activeVoiceParticipantRoster, musicDisambiguation,
+    activeVoiceSession, inVoiceChannelNow, activeVoiceParticipantRoster, musicState, musicDisambiguation,
     systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture, replyPrompts
   } = ctx;
 
@@ -452,7 +460,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
     mediaCapabilities, simpleImageCapabilityReady, complexImageCapabilityReady, imageCapabilityReady,
     videoCapabilityReady, gifBudget, gifsConfigured, recentWebLookups,
     videoContext, replyTrace, screenShareCapability,
-    activeVoiceSession, inVoiceChannelNow, activeVoiceParticipantRoster, musicDisambiguation,
+    activeVoiceSession, inVoiceChannelNow, activeVoiceParticipantRoster, musicState, musicDisambiguation,
     systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture
   } = ctx;
   let {
@@ -741,7 +749,7 @@ export async function sendReplyMessage(bot: any, message: any, settings: any, op
     mediaCapabilities, simpleImageCapabilityReady, complexImageCapabilityReady, imageCapabilityReady,
     videoCapabilityReady, gifBudget, gifsConfigured, recentWebLookups,
     videoContext, replyTrace, screenShareCapability,
-    activeVoiceSession, inVoiceChannelNow, activeVoiceParticipantRoster, musicDisambiguation,
+    activeVoiceSession, inVoiceChannelNow, activeVoiceParticipantRoster, musicState, musicDisambiguation,
     systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture
   } = ctx;
   let {
@@ -757,7 +765,154 @@ export async function sendReplyMessage(bot: any, message: any, settings: any, op
     gifBudgetBlocked, gifConfigBlocked, imagePrompt, complexImagePrompt, videoPrompt, gifQuery
   } = actionResult;
 
-  
+  const typingStartedAtMs = Date.now();
+  await message.channel.sendTyping();
+  await sleep(bot.getSimulatedTypingDelayMs(600, 1800));
+  const typingDelayMs = Math.max(0, Date.now() - typingStartedAtMs);
+
+  const shouldThreadReply = addressed || options.forceRespond;
+  const canStandalonePost = isInitiativeChannel || !shouldThreadReply;
+  const sendAsReply = bot.shouldSendAsReply({
+    isInitiativeChannel,
+    shouldThreadReply,
+    replyText: finalText
+  });
+  const sendStartedAtMs = Date.now();
+  const textChunks = splitDiscordMessage(payload.content);
+  const firstPayload = { ...payload, content: textChunks[0] };
+  const sent = sendAsReply
+    ? await message.reply({
+      ...firstPayload,
+      allowedMentions: { repliedUser: false }
+    })
+    : await message.channel.send(firstPayload);
+  for (let i = 1; i < textChunks.length; i++) {
+    await message.channel.send({ content: textChunks[i] });
+  }
+  const sendMs = Math.max(0, Date.now() - sendStartedAtMs);
+  const actionKind = sendAsReply ? "sent_reply" : "sent_message";
+  const referencedMessageId = sendAsReply ? message.id : null;
+
+  bot.markSpoke();
+  bot.store.recordMessage({
+    messageId: sent.id,
+    createdAt: sent.createdTimestamp,
+    guildId: sent.guildId,
+    channelId: sent.channelId,
+    authorId: bot.client.user.id,
+    authorName: settings.botName,
+    isBot: true,
+    content: bot.composeMessageContentForHistory(sent, finalText),
+    referencedMessageId
+  });
+  bot.store.logAction({
+    kind: actionKind,
+    guildId: sent.guildId,
+    channelId: sent.channelId,
+    messageId: sent.id,
+    userId: bot.client.user.id,
+    content: finalText,
+    metadata: {
+      triggerMessageId: message.id,
+      triggerMessageIds,
+      source,
+      addressing: addressSignal,
+      replyPrompts,
+      sendAsReply,
+      canStandalonePost,
+      image: {
+        requestedByModel: Boolean(imagePrompt || complexImagePrompt),
+        requestedSimpleByModel: Boolean(imagePrompt),
+        requestedComplexByModel: Boolean(complexImagePrompt),
+        selectedVariant: imageVariantUsed,
+        used: imageUsed,
+        blockedByDailyCap: imageBudgetBlocked,
+        blockedByCapability: imageCapabilityBlocked,
+        maxPerDay: imageBudget.maxPerDay,
+        remainingAtPromptTime: imageBudget.remaining,
+        simpleCapabilityReadyAtPromptTime: simpleImageCapabilityReady,
+        complexCapabilityReadyAtPromptTime: complexImageCapabilityReady,
+        capabilityReadyAtPromptTime: imageCapabilityReady
+      },
+      videoGeneration: {
+        requestedByModel: Boolean(videoPrompt),
+        used: videoUsed,
+        blockedByDailyCap: videoBudgetBlocked,
+        blockedByCapability: videoCapabilityBlocked,
+        maxPerDay: videoBudget.maxPerDay,
+        remainingAtPromptTime: videoBudget.remaining,
+        capabilityReadyAtPromptTime: videoCapabilityReady
+      },
+      gif: {
+        requestedByModel: Boolean(gifQuery),
+        used: gifUsed,
+        blockedByDailyCap: gifBudgetBlocked,
+        blockedByConfiguration: gifConfigBlocked,
+        maxPerDay: gifBudget.maxPerDay,
+        remainingAtPromptTime: gifBudget.remaining
+      },
+      memory: {
+        toolCallsUsed: usedMemoryLookupFollowup,
+        saved: Boolean(memorySaved || selfMemorySaved)
+      },
+      imageLookup: {
+        requested: imageLookup.requested,
+        used: imageLookup.used,
+        query: imageLookup.query,
+        candidateCount: imageLookup.candidates?.length || 0,
+        resultCount: imageLookup.results?.length || 0,
+        error: imageLookup.error || null
+      },
+      mentions: mentionResolution,
+      reaction,
+      screenShareOffer,
+      webSearch: {
+        requested: webSearch.requested,
+        used: webSearch.used,
+        query: webSearch.query,
+        resultCount: webSearch.results?.length || 0,
+        fetchedPages: webSearch.fetchedPages || 0,
+        providerUsed: webSearch.providerUsed || null,
+        providerFallbackUsed: Boolean(webSearch.providerFallbackUsed),
+        blockedByHourlyCap: webSearch.blockedByBudget,
+        maxPerHour: webSearch.budget?.maxPerHour ?? null,
+        remainingAtPromptTime: webSearch.budget?.remaining ?? null,
+        configured: webSearch.configured,
+        optedOutByUser: webSearch.optedOutByUser,
+        error: webSearch.error || null
+      },
+      video: {
+        requested: videoContext.requested,
+        used: videoContext.used,
+        detectedVideos: videoContext.detectedVideos,
+        detectedFromRecentMessages: videoContext.detectedFromRecentMessages,
+        fetchedVideos: videoContext.videos?.length || 0,
+        extractedKeyframes: videoContext.frameImages?.length || 0,
+        blockedByHourlyCap: videoContext.blockedByBudget,
+        maxPerHour: videoContext.budget?.maxPerHour ?? null,
+        remainingAtPromptTime: videoContext.budget?.remaining ?? null,
+        enabled: videoContext.enabled,
+        errorCount: videoContext.errors?.length || 0
+      },
+      llm: {
+        provider: generation.provider,
+        model: generation.model,
+        usage: generation.usage,
+        costUsd: generation.costUsd,
+        usedWebSearchFollowup,
+        usedMemoryLookupFollowup,
+        usedImageLookupFollowup
+      },
+      performance: finalizeReplyPerformanceSample({
+        performance,
+        actionKind,
+        typingDelayMs,
+        sendMs
+      })
+    }
+  });
+
+  return true;
 }
 
 

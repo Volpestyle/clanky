@@ -4444,7 +4444,7 @@ function normalizeImageContentTypeFromExt(rawExt) {
   return "";
 }
 
-function normalizeNonNegativeMs(value) {
+export function normalizeNonNegativeMs(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return null;
   if (parsed < 0) return null;
@@ -4492,7 +4492,7 @@ function createReplyPerformanceTracker({
   };
 }
 
-function finalizeReplyPerformanceSample({
+export function finalizeReplyPerformanceSample({
   performance,
   actionKind,
   typingDelayMs = null,
