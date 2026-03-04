@@ -122,6 +122,9 @@ import {
 } from "./voice/voiceOperationalMessaging.ts";
 import { loadPromptMemorySliceFromMemory } from "./memory/promptMemorySlice.ts";
 import { maybeReplyToMessagePipeline } from "./bot/replyPipeline.ts";
+import { SubAgentSessionManager } from "./agents/subAgentSession.ts";
+import { CodeAgentSession } from "./agents/codeAgent.ts";
+import { BrowserAgentSession } from "./agents/browseAgent.ts";
 
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
@@ -210,6 +213,7 @@ export class ClankerBot {
   voiceSessionManager: VoiceSessionManager;
   browserManager: BrowserManager | null;
   activeBrowserTasks: BrowserTaskRegistry;
+  subAgentSessions: SubAgentSessionManager;
 
   constructor({ appConfig, store, llm, memory, discovery, search, gifs, video, browserManager = null }) {
     this.appConfig = appConfig;
@@ -246,6 +250,8 @@ export class ClankerBot {
     this.nextReflectionRunAt = null;
     this.screenShareSessionManager = null;
     this.activeBrowserTasks = new BrowserTaskRegistry();
+    this.subAgentSessions = new SubAgentSessionManager();
+    this.subAgentSessions.startSweep();
 
     this.client = new Client({
       intents: [
@@ -2985,6 +2991,85 @@ export class ClankerBot {
         error: String(error?.message || error)
       };
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sub-agent session factories for multi-turn interactive mode
+  // ---------------------------------------------------------------------------
+
+  createCodeAgentSession({
+    settings,
+    cwd: cwdOverride,
+    guildId,
+    channelId = null,
+    userId = null,
+    source = "reply_session"
+  }) {
+    if (!settings?.codeAgent?.enabled) return null;
+    if (userId && !isCodeAgentUserAllowed(userId, settings)) return null;
+
+    const maxParallel = Number(settings?.codeAgent?.maxParallelTasks) || 2;
+    if (getActiveCodeAgentTaskCount() >= maxParallel) return null;
+
+    const cwd = cwdOverride || resolveCodeAgentCwd(
+      String(settings?.codeAgent?.defaultCwd || ""),
+      process.cwd()
+    );
+    const model = String(settings?.codeAgent?.model || "sonnet").trim();
+    const maxTurns = clamp(Number(settings?.codeAgent?.maxTurns) || 30, 1, 200);
+    const timeoutMs = clamp(Number(settings?.codeAgent?.timeoutMs) || 300_000, 10_000, 1_800_000);
+    const maxBufferBytes = clamp(Number(settings?.codeAgent?.maxBufferBytes) || 2 * 1024 * 1024, 4096, 10 * 1024 * 1024);
+
+    const scopeKey = `${guildId || "dm"}:${channelId || "dm"}`;
+    return new CodeAgentSession({
+      scopeKey,
+      cwd,
+      model,
+      maxTurns,
+      timeoutMs,
+      maxBufferBytes,
+      trace: { guildId, channelId, userId, source },
+      store: this.store
+    });
+  }
+
+  createBrowserAgentSession({
+    settings,
+    guildId,
+    channelId = null,
+    userId = null,
+    source = "reply_session"
+  }) {
+    if (!this.browserManager) return null;
+
+    const maxSteps = clamp(Number(settings?.browser?.maxStepsPerTask) || 15, 1, 30);
+    const stepTimeoutMs = clamp(Number(settings?.browser?.stepTimeoutMs) || 30_000, 5_000, 120_000);
+    const browserLlmProvider = String(settings?.browser?.llm?.provider || "anthropic").trim();
+    const browserLlmModel = String(settings?.browser?.llm?.model || "claude-sonnet-4-5-20250929").trim();
+
+    const scopeKey = `${guildId || "dm"}:${channelId || "dm"}`;
+    const sessionKey = `session:${scopeKey}:${Date.now()}`;
+    return new BrowserAgentSession({
+      scopeKey,
+      llm: this.llm,
+      browserManager: this.browserManager,
+      store: this.store,
+      sessionKey,
+      provider: browserLlmProvider,
+      model: browserLlmModel,
+      maxSteps,
+      stepTimeoutMs,
+      trace: { guildId, channelId, userId, source }
+    });
+  }
+
+  /** Build the subAgentSessions runtime adapter for the reply tool pipeline. */
+  buildSubAgentSessionsRuntime() {
+    return {
+      manager: this.subAgentSessions,
+      createCodeSession: (opts) => this.createCodeAgentSession(opts),
+      createBrowserSession: (opts) => this.createBrowserAgentSession(opts)
+    };
   }
 
   mergeImageInputs({ baseInputs = [], extraInputs = [], maxInputs = MAX_MODEL_IMAGE_INPUTS } = {}) {

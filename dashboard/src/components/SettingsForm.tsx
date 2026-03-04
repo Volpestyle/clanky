@@ -29,6 +29,7 @@ import { RateLimitsSettingsSection } from "./settingsSections/RateLimitsSettings
 import { StartupCatchupSettingsSection } from "./settingsSections/StartupCatchupSettingsSection";
 import { DiscoverySettingsSection } from "./settingsSections/DiscoverySettingsSection";
 import { ChannelsPermissionsSettingsSection } from "./settingsSections/ChannelsPermissionsSettingsSection";
+import { SubAgentOrchestrationSettingsSection } from "./settingsSections/SubAgentOrchestrationSettingsSection";
 
 const SECTIONS = [
   { id: "sec-core", label: "Core Behavior" },
@@ -37,6 +38,7 @@ const SECTIONS = [
   { id: "sec-search", label: "Web Search" },
   { id: "sec-browser", label: "Browser" },
   { id: "sec-code-agent", label: "Code Agent" },
+  { id: "sec-orchestration", label: "Orchestration" },
   { id: "sec-video", label: "Video Context" },
   { id: "sec-voice", label: "Voice Mode" },
   { id: "sec-rate", label: "Rate Limits" },
@@ -348,6 +350,7 @@ export default function SettingsForm({
             selectedBrowserLlmPresetModel={selectedBrowserLlmPresetModel}
           />
           <CodeAgentSettingsSection id="sec-code-agent" form={form} set={set} />
+          <SubAgentOrchestrationSettingsSection id="sec-orchestration" form={form} set={set} />
           <VideoContextSettingsSection id="sec-video" form={form} set={set} />
 
           <VoiceModeSettingsSection

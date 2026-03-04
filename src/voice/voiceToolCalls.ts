@@ -354,11 +354,12 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
     {
       toolType: "function",
       name: "browser_browse",
-      description: "Browse a webpage interactively and report back with the result.",
+      description: "Browse a webpage interactively and report back with the result. Pass session_id to continue a previous session.",
       parameters: {
         type: "object",
         properties: {
-          query: { type: "string" }
+          query: { type: "string" },
+          session_id: { type: "string", description: "Session ID to continue a previous browser session." }
         },
         required: ["query"],
         additionalProperties: false
@@ -367,12 +368,13 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
     {
       toolType: "function",
       name: "code_task",
-      description: "Spawn Claude Code to perform a coding task. Can read/write files, run commands, use git, create PRs. Only available to allowed users.",
+      description: "Spawn Claude Code to perform a coding task. Can read/write files, run commands, use git, create PRs. Only available to allowed users. Pass session_id to continue a previous session.",
       parameters: {
         type: "object",
         properties: {
           task: { type: "string", description: "Detailed instruction for Claude Code." },
-          cwd: { type: "string", description: "Working directory. Defaults to configured project root." }
+          cwd: { type: "string", description: "Working directory. Defaults to configured project root." },
+          session_id: { type: "string", description: "Session ID to continue a previous code session." }
         },
         required: ["task"],
         additionalProperties: false
@@ -1349,6 +1351,61 @@ export async function executeVoiceBrowserBrowseTool(manager: any, { session, set
   if (!instruction) {
     return { ok: false, text: "", error: "query_required" };
   }
+
+  const sessionId = typeof args?.session_id === "string" ? String(args.session_id).trim() : "";
+
+  // --- Multi-turn session continuation ---
+  if (sessionId && manager.subAgentSessions) {
+    const existingSession = manager.subAgentSessions.get(sessionId);
+    if (!existingSession) {
+      return { ok: false, text: "", error: `Browser session '${sessionId}' not found or expired.` };
+    }
+    try {
+      const turnResult = await existingSession.runTurn(instruction);
+      if (turnResult.isError) {
+        return { ok: false, text: "", error: turnResult.errorMessage };
+      }
+      return {
+        ok: true,
+        text: turnResult.text.trim() || "Browser browse completed.",
+        session_id: existingSession.id
+      };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, text: "", error: message };
+    }
+  }
+
+  // --- New interactive session (if session manager is available) ---
+  if (manager.createBrowserAgentSession && manager.subAgentSessions) {
+    const newSession = manager.createBrowserAgentSession({
+      settings,
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: session.lastOpenAiToolCallerUserId || null,
+      source: "voice_realtime_tool_browser_browse"
+    });
+
+    if (newSession) {
+      manager.subAgentSessions.register(newSession);
+      try {
+        const turnResult = await newSession.runTurn(instruction);
+        if (turnResult.isError) {
+          return { ok: false, text: "", error: turnResult.errorMessage, session_id: newSession.id };
+        }
+        return {
+          ok: true,
+          text: turnResult.text.trim() || "Browser browse completed.",
+          session_id: newSession.id
+        };
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { ok: false, text: "", error: message };
+      }
+    }
+  }
+
+  // --- Legacy one-shot fallback ---
   if (!manager.browserManager) {
     return { ok: false, text: "", error: "browser_unavailable" };
   }
@@ -1403,6 +1460,64 @@ export async function executeVoiceCodeTaskTool(manager: any, { session, settings
   if (!task) {
     return { ok: false, text: "", error: "task_required" };
   }
+
+  const sessionId = typeof args?.session_id === "string" ? String(args.session_id).trim() : "";
+
+  // --- Multi-turn session continuation ---
+  if (sessionId && manager.subAgentSessions) {
+    const existingSession = manager.subAgentSessions.get(sessionId);
+    if (!existingSession) {
+      return { ok: false, text: "", error: `Code session '${sessionId}' not found or expired.` };
+    }
+    try {
+      const turnResult = await existingSession.runTurn(task);
+      if (turnResult.isError) {
+        return { ok: false, text: "", error: turnResult.errorMessage };
+      }
+      return {
+        ok: true,
+        text: turnResult.text.trim() || "Code task completed.",
+        cost_usd: turnResult.costUsd || 0,
+        session_id: existingSession.id
+      };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, text: "", error: message };
+    }
+  }
+
+  // --- New interactive session (if session manager is available) ---
+  if (manager.createCodeAgentSession && manager.subAgentSessions) {
+    const newSession = manager.createCodeAgentSession({
+      settings,
+      cwd: typeof args?.cwd === "string" ? String(args.cwd).trim() : undefined,
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: session.lastOpenAiToolCallerUserId || null,
+      source: "voice_realtime_tool_code_task"
+    });
+
+    if (newSession) {
+      manager.subAgentSessions.register(newSession);
+      try {
+        const turnResult = await newSession.runTurn(task);
+        if (turnResult.isError) {
+          return { ok: false, text: "", error: turnResult.errorMessage, session_id: newSession.id };
+        }
+        return {
+          ok: true,
+          text: turnResult.text.trim() || "Code task completed.",
+          cost_usd: turnResult.costUsd || 0,
+          session_id: newSession.id
+        };
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { ok: false, text: "", error: message };
+      }
+    }
+  }
+
+  // --- Legacy one-shot fallback ---
   if (!manager.runModelRequestedCodeTask) {
     return { ok: false, text: "", error: "code_agent_unavailable" };
   }

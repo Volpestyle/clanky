@@ -685,6 +685,38 @@ export function buildCodeAgentCliArgs({ model, maxTurns = 30, instruction = "" }
   return args;
 }
 
+/**
+ * Build CLI args for a persistent multi-turn code agent session.
+ * Uses stream-json for both input and output so follow-up messages
+ * can be sent on stdin after the initial instruction completes.
+ */
+export function buildCodeAgentSessionCliArgs({ model, maxTurns = 30 }) {
+  return [
+    "-p",
+    "--verbose",
+    "--input-format", "stream-json",
+    "--output-format", "stream-json",
+    "--no-session-persistence",
+    "--model", String(model || "sonnet"),
+    "--max-turns", String(clampInt(maxTurns, 1, 10000))
+  ];
+}
+
+/**
+ * Build stream-json input for a code agent session turn.
+ * Wraps the user's message as a stream-json user event.
+ */
+export function buildCodeAgentSessionTurnInput(userMessage: string) {
+  const event = {
+    type: "user",
+    message: {
+      role: "user",
+      content: [{ type: "text", text: String(userMessage || "").trim() }]
+    }
+  };
+  return `${JSON.stringify(event)}\n`;
+}
+
 function buildClaudeCodeBaseCliArgs({
   model,
   verbose = false,

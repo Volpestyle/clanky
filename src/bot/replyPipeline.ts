@@ -321,7 +321,8 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
         })
     },
     memory: bot.memory,
-    store: bot.store
+    store: bot.store,
+    subAgentSessions: bot.buildSubAgentSessionsRuntime()
   };
   const replyToolContext = {
     settings,
@@ -375,10 +376,32 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     ];
 
     const toolResultMessages: Array<{ type: string; tool_use_id: string; content: string }> = [];
-    for (const toolCall of generation.toolCalls) {
-      if (replyTotalToolCalls >= REPLY_TOOL_LOOP_MAX_CALLS) break;
-      replyTotalToolCalls += 1;
 
+    // Separate sub-agent tools (can run concurrently) from sequential tools
+    const CONCURRENT_TOOL_NAMES = new Set(["code_task", "browser_browse"]);
+    const eligibleToolCalls = generation.toolCalls.slice(
+      0,
+      Math.max(0, REPLY_TOOL_LOOP_MAX_CALLS - replyTotalToolCalls)
+    );
+    replyTotalToolCalls += eligibleToolCalls.length;
+
+    const concurrentCalls = eligibleToolCalls.filter((tc) => CONCURRENT_TOOL_NAMES.has(tc.name));
+    const sequentialCalls = eligibleToolCalls.filter((tc) => !CONCURRENT_TOOL_NAMES.has(tc.name));
+
+    // Run concurrent sub-agent calls in parallel
+    const concurrentResults = new Map<string, { content: string; isError?: boolean }>();
+    if (concurrentCalls.length > 0) {
+      const promises = concurrentCalls.map(async (toolCall) => {
+        const toolInput = toolCall.input as Record<string, unknown>;
+        const result = await executeReplyTool(toolCall.name, toolInput, replyToolRuntime, replyToolContext);
+        concurrentResults.set(toolCall.id, result);
+      });
+      await Promise.all(promises);
+    }
+
+    // Run sequential tools in order
+    const sequentialResults = new Map<string, { content: string; isError?: boolean }>();
+    for (const toolCall of sequentialCalls) {
       const toolInput = toolCall.input as Record<string, unknown>;
       let result;
       if (toolCall.name === "web_search") {
@@ -428,8 +451,6 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
 
       if (toolCall.name === "memory_search" && !result.isError) {
         usedMemoryLookupFollowup = true;
-      } else if (toolCall.name === "browser_browse" && !result.isError) {
-        usedBrowserBrowseFollowup = Boolean(browserBrowse?.used);
       } else if (toolCall.name === "image_lookup" && !result.isError) {
         imageLookup = await bot.runModelRequestedImageLookup({
           imageLookup,
@@ -443,11 +464,22 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
         usedImageLookupFollowup = Boolean(imageLookup?.used);
       }
 
-      toolResultMessages.push({
-        type: "tool_result",
-        tool_use_id: toolCall.id,
-        content: result.content
-      });
+      sequentialResults.set(toolCall.id, result);
+    }
+
+    // Collect results in original order
+    for (const toolCall of eligibleToolCalls) {
+      const result = concurrentResults.get(toolCall.id) || sequentialResults.get(toolCall.id);
+      if (result) {
+        if (toolCall.name === "browser_browse" && !result.isError) {
+          usedBrowserBrowseFollowup = Boolean(browserBrowse?.used);
+        }
+        toolResultMessages.push({
+          type: "tool_result",
+          tool_use_id: toolCall.id,
+          content: result.content
+        });
+      }
     }
 
     replyContextMessages = [

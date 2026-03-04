@@ -9,6 +9,7 @@ import {
   executeSharedMemoryToolWrite
 } from "../memory/memoryToolRuntime.ts";
 import { formatConversationWindows } from "../prompts/promptFormatters.ts";
+import type { SubAgentSessionManager, SubAgentSession } from "../agents/subAgentSession.ts";
 
 const MAX_WEB_QUERY_LEN = 220;
 const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
@@ -159,6 +160,24 @@ type ReplyToolRuntime = {
       note?: Record<string, unknown> | null;
     };
   };
+  subAgentSessions?: {
+    manager: SubAgentSessionManager;
+    createCodeSession: (opts: {
+      settings: Record<string, unknown>;
+      cwd?: string;
+      guildId: string;
+      channelId: string | null;
+      userId: string | null;
+      source: string;
+    }) => SubAgentSession | null;
+    createBrowserSession: (opts: {
+      settings: Record<string, unknown>;
+      guildId: string;
+      channelId: string | null;
+      userId: string | null;
+      source: string;
+    }) => SubAgentSession | null;
+  };
 };
 
 type ReplyToolContext = {
@@ -194,13 +213,17 @@ const WEB_SEARCH_TOOL: ReplyToolDefinition = {
 const BROWSER_BROWSE_TOOL: ReplyToolDefinition = {
   name: "browser_browse",
   description:
-    "Browse the web interactively with a headless browser agent and report back with the result. Use for tasks that need clicking, navigating, scrolling, or reading dynamic page content beyond normal web search.",
+    "Browse the web interactively with a headless browser agent and report back with the result. Use for tasks that need clicking, navigating, scrolling, or reading dynamic page content beyond normal web search. Pass session_id to continue a previous interactive session.",
   input_schema: {
     type: "object",
     properties: {
       query: {
         type: "string",
-        description: "Instruction for what to browse and find out (max 500 chars)"
+        description: "Instruction for what to browse and find out (max 500 chars). For follow-up turns, this is the continuation message."
+      },
+      session_id: {
+        type: "string",
+        description: "Session ID from a previous browser_browse result. Pass this to continue an interactive multi-turn session instead of starting a new one."
       }
     },
     required: ["query"]
@@ -366,17 +389,21 @@ const OPEN_ARTICLE_TOOL: ReplyToolDefinition = {
 const CODE_TASK_TOOL: ReplyToolDefinition = {
   name: "code_task",
   description:
-    "Spawn Claude Code to perform a coding task in a project directory. Can read/write files, run commands, use git, create PRs. Only available to allowed users.",
+    "Spawn Claude Code to perform a coding task in a project directory. Can read/write files, run commands, use git, create PRs. Only available to allowed users. Pass session_id to continue a previous interactive session.",
   input_schema: {
     type: "object",
     properties: {
       task: {
         type: "string",
-        description: "Detailed instruction for what Claude Code should do. Be specific — include repo context, file paths, issue numbers, expected behavior."
+        description: "Detailed instruction for what Claude Code should do. Be specific — include repo context, file paths, issue numbers, expected behavior. For follow-up turns, this is the continuation message."
       },
       cwd: {
         type: "string",
         description: "Working directory for the task. Defaults to the configured project root if omitted."
+      },
+      session_id: {
+        type: "string",
+        description: "Session ID from a previous code_task result. Pass this to continue an interactive multi-turn session instead of starting a new one."
       }
     },
     required: ["task"]
@@ -631,6 +658,54 @@ async function executeBrowserBrowse(
   if (!query) {
     return { content: "Missing or empty browser browse query.", isError: true };
   }
+
+  const sessionId = typeof input?.session_id === "string" ? String(input.session_id).trim() : "";
+
+  // --- Multi-turn session continuation ---
+  if (sessionId && runtime.subAgentSessions) {
+    const session = runtime.subAgentSessions.manager.get(sessionId);
+    if (!session) {
+      return { content: `Browser session '${sessionId}' not found or expired.`, isError: true };
+    }
+    try {
+      const turnResult = await session.runTurn(query);
+      const sessionNote = `\n\n[session_id: ${session.id}]`;
+      if (turnResult.isError) {
+        return { content: `Browser browse failed: ${turnResult.errorMessage}${sessionNote}`, isError: true };
+      }
+      return { content: (turnResult.text.trim() || "Browser browse completed.") + sessionNote };
+    } catch (error) {
+      return { content: `Browser browse session failed: ${String((error as Error)?.message || error)}`, isError: true };
+    }
+  }
+
+  // --- New interactive session (if session manager is available) ---
+  if (runtime.subAgentSessions?.createBrowserSession) {
+    const session = runtime.subAgentSessions.createBrowserSession({
+      settings: context.settings,
+      guildId: context.guildId,
+      channelId: context.channelId,
+      userId: context.userId,
+      source: String(context.trace?.source || "reply_tool_browser_browse")
+    });
+
+    if (session) {
+      runtime.subAgentSessions.manager.register(session);
+      try {
+        const turnResult = await session.runTurn(query);
+        const sessionNote = `\n\n[session_id: ${session.id}]`;
+        if (turnResult.isError) {
+          return { content: `Browser browse failed: ${turnResult.errorMessage}${sessionNote}`, isError: true };
+        }
+        return { content: (turnResult.text.trim() || "Browser browse completed.") + sessionNote };
+      } catch (error) {
+        return { content: `Browser browse failed: ${String((error as Error)?.message || error)}`, isError: true };
+      }
+    }
+    // Fallback to one-shot if session creation returned null
+  }
+
+  // --- Legacy one-shot fallback ---
   if (!runtime.browser?.browse) {
     return { content: "Browser browsing is not available.", isError: true };
   }
@@ -919,6 +994,63 @@ async function executeCodeTask(
   if (!task) {
     return { content: "Missing or empty code task instruction.", isError: true };
   }
+
+  const sessionId = typeof input?.session_id === "string" ? String(input.session_id).trim() : "";
+
+  // --- Multi-turn session continuation ---
+  if (sessionId && runtime.subAgentSessions) {
+    const session = runtime.subAgentSessions.manager.get(sessionId);
+    if (!session) {
+      return { content: `Code session '${sessionId}' not found or expired.`, isError: true };
+    }
+    try {
+      const turnResult = await session.runTurn(task);
+      const costNote = turnResult.costUsd ? ` (cost: $${turnResult.costUsd.toFixed(4)})` : "";
+      const sessionNote = `\n\n[session_id: ${session.id}]`;
+      if (turnResult.isError) {
+        return { content: `Code task failed: ${turnResult.errorMessage}${costNote}${sessionNote}`, isError: true };
+      }
+      const text = turnResult.text.trim();
+      return {
+        content: (text ? `${text}${costNote}` : `Code task completed with no text result.${costNote}`) + sessionNote
+      };
+    } catch (error) {
+      return { content: `Code task session failed: ${String((error as Error)?.message || error)}`, isError: true };
+    }
+  }
+
+  // --- New interactive session (if session manager is available) ---
+  if (runtime.subAgentSessions?.createCodeSession) {
+    const session = runtime.subAgentSessions.createCodeSession({
+      settings: context.settings,
+      cwd: typeof input?.cwd === "string" ? String(input.cwd).trim() : undefined,
+      guildId: context.guildId,
+      channelId: context.channelId,
+      userId: context.userId,
+      source: String(context.trace?.source || "reply_tool_code_task")
+    });
+
+    if (session) {
+      runtime.subAgentSessions.manager.register(session);
+      try {
+        const turnResult = await session.runTurn(task);
+        const costNote = turnResult.costUsd ? ` (cost: $${turnResult.costUsd.toFixed(4)})` : "";
+        const sessionNote = `\n\n[session_id: ${session.id}]`;
+        if (turnResult.isError) {
+          return { content: `Code task failed: ${turnResult.errorMessage}${costNote}${sessionNote}`, isError: true };
+        }
+        const text = turnResult.text.trim();
+        return {
+          content: (text ? `${text}${costNote}` : `Code task completed with no text result.${costNote}`) + sessionNote
+        };
+      } catch (error) {
+        return { content: `Code task failed: ${String((error as Error)?.message || error)}`, isError: true };
+      }
+    }
+    // Fallback to one-shot if session creation returned null (e.g. blocked)
+  }
+
+  // --- Legacy one-shot fallback ---
   if (!runtime.codeAgent?.runTask) {
     return { content: "Code agent is not available.", isError: true };
   }
