@@ -129,14 +129,6 @@ export function settingsToForm(settings) {
       settings?.subAgentOrchestration?.sessionIdleTimeoutMs ?? defaults.subAgentOrchestration.sessionIdleTimeoutMs,
     subAgentMaxConcurrentSessions:
       settings?.subAgentOrchestration?.maxConcurrentSessions ?? defaults.subAgentOrchestration.maxConcurrentSessions,
-    subAgentCodeOrchestrationModel:
-      settings?.subAgentOrchestration?.codeAgent?.orchestrationModel ?? defaults.subAgentOrchestration.codeAgent.orchestrationModel,
-    subAgentCodeMaxSessionTurns:
-      settings?.subAgentOrchestration?.codeAgent?.maxSessionTurns ?? defaults.subAgentOrchestration.codeAgent.maxSessionTurns,
-    subAgentBrowserOrchestrationModel:
-      settings?.subAgentOrchestration?.browserAgent?.orchestrationModel ?? defaults.subAgentOrchestration.browserAgent.orchestrationModel,
-    subAgentBrowserMaxSessionTurns:
-      settings?.subAgentOrchestration?.browserAgent?.maxSessionTurns ?? defaults.subAgentOrchestration.browserAgent.maxSessionTurns,
     memoryReflectionStrategy:
       settings?.memory?.reflection?.strategy ?? defaults.memory.reflection.strategy,
     provider: settings?.llm?.provider ?? defaultLlm.provider,
@@ -651,15 +643,7 @@ export function formToSettingsPatch(form) {
     },
     subAgentOrchestration: {
       sessionIdleTimeoutMs: Math.max(10000, Number(form.subAgentSessionIdleTimeoutMs) || 300_000),
-      maxConcurrentSessions: Math.max(1, Number(form.subAgentMaxConcurrentSessions) || 20),
-      codeAgent: {
-        orchestrationModel: String(form.subAgentCodeOrchestrationModel || "").trim(),
-        maxSessionTurns: Math.max(1, Number(form.subAgentCodeMaxSessionTurns) || 10)
-      },
-      browserAgent: {
-        orchestrationModel: String(form.subAgentBrowserOrchestrationModel || "").trim(),
-        maxSessionTurns: Math.max(1, Number(form.subAgentBrowserMaxSessionTurns) || 10)
-      }
+      maxConcurrentSessions: Math.max(1, Number(form.subAgentMaxConcurrentSessions) || 20)
     }
   };
 }

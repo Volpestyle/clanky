@@ -1360,6 +1360,9 @@ export async function executeVoiceBrowserBrowseTool(manager: any, { session, set
     if (!existingSession) {
       return { ok: false, text: "", error: `Browser session '${sessionId}' not found or expired.` };
     }
+    if (existingSession.ownerUserId && existingSession.ownerUserId !== session.lastOpenAiToolCallerUserId) {
+      return { ok: false, text: "", error: `Not authorized to continue browser session '${sessionId}'.` };
+    }
     try {
       const turnResult = await existingSession.runTurn(instruction);
       if (turnResult.isError) {
@@ -1468,6 +1471,9 @@ export async function executeVoiceCodeTaskTool(manager: any, { session, settings
     const existingSession = manager.subAgentSessions.get(sessionId);
     if (!existingSession) {
       return { ok: false, text: "", error: `Code session '${sessionId}' not found or expired.` };
+    }
+    if (existingSession.ownerUserId && existingSession.ownerUserId !== session.lastOpenAiToolCallerUserId) {
+      return { ok: false, text: "", error: `Not authorized to continue code session '${sessionId}'.` };
     }
     try {
       const turnResult = await existingSession.runTurn(task);

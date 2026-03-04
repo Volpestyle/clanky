@@ -153,7 +153,9 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
       hitStepLimit = true;
     }
   } finally {
-    await browserManager.close(sessionKey).catch(() => undefined);
+    await browserManager.close(sessionKey).catch((err) => {
+      console.warn(`[browseAgent] Error closing browser session ${sessionKey}:`, err);
+    });
   }
 
   return {
@@ -268,6 +270,7 @@ export class BrowserAgentSession implements SubAgentSession {
 
     let turnCostUsd = 0;
     const turnStartMs = Date.now();
+    const turnUsage = { ...EMPTY_USAGE };
 
     try {
       // Run the tool loop until we get text without tool calls (yield point)
@@ -289,6 +292,10 @@ export class BrowserAgentSession implements SubAgentSession {
 
         turnCostUsd += response.costUsd;
         this.totalCostUsd += response.costUsd;
+        turnUsage.inputTokens += response.usage.inputTokens;
+        turnUsage.outputTokens += response.usage.outputTokens;
+        turnUsage.cacheWriteTokens += response.usage.cacheWriteTokens;
+        turnUsage.cacheReadTokens += response.usage.cacheReadTokens;
         this.messages.push({ role: "assistant", content: response.content });
 
         const toolCalls = response.content.filter((block) => block.type === "tool_call");
@@ -325,7 +332,7 @@ export class BrowserAgentSession implements SubAgentSession {
             costUsd: turnCostUsd,
             isError: false,
             errorMessage: "",
-            usage: { ...EMPTY_USAGE }
+            usage: turnUsage
           };
         }
 
@@ -375,7 +382,7 @@ export class BrowserAgentSession implements SubAgentSession {
         costUsd: turnCostUsd,
         isError: false,
         errorMessage: "",
-        usage: { ...EMPTY_USAGE }
+        usage: turnUsage
       };
     } catch (error) {
       this.status = "error";
@@ -387,7 +394,7 @@ export class BrowserAgentSession implements SubAgentSession {
         costUsd: turnCostUsd,
         isError: true,
         errorMessage: message,
-        usage: { ...EMPTY_USAGE }
+        usage: turnUsage
       };
     }
   }
@@ -397,7 +404,9 @@ export class BrowserAgentSession implements SubAgentSession {
     this.status = "cancelled";
     if (!this.browserClosed) {
       this.browserClosed = true;
-      this.browserManager.close(this.sessionKey).catch(() => undefined);
+      this.browserManager.close(this.sessionKey).catch((err) => {
+        console.warn(`[BrowserAgentSession] Error closing session ${this.sessionKey}:`, err);
+      });
     }
   }
 }

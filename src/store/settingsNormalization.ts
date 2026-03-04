@@ -1353,6 +1353,19 @@ export function normalizeSettings(raw) {
   );
   merged.codeAgent.allowedUserIds = uniqueIdList(merged.codeAgent?.allowedUserIds, 50);
 
+  if (!merged.subAgentOrchestration || typeof merged.subAgentOrchestration !== "object") merged.subAgentOrchestration = {};
+  const defaultOrch = DEFAULT_SETTINGS.subAgentOrchestration;
+  merged.subAgentOrchestration.sessionIdleTimeoutMs = clamp(
+    Number(merged.subAgentOrchestration?.sessionIdleTimeoutMs) || Number(defaultOrch.sessionIdleTimeoutMs) || 300_000,
+    10_000,
+    1_800_000
+  );
+  merged.subAgentOrchestration.maxConcurrentSessions = clamp(
+    Number(merged.subAgentOrchestration?.maxConcurrentSessions) || Number(defaultOrch.maxConcurrentSessions) || 20,
+    1,
+    50
+  );
+
   return merged;
 }
 

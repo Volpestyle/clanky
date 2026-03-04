@@ -341,14 +341,6 @@ export const DEFAULT_SETTINGS = {
   },
   subAgentOrchestration: {
     sessionIdleTimeoutMs: 300_000,
-    maxConcurrentSessions: 20,
-    codeAgent: {
-      orchestrationModel: "",
-      maxSessionTurns: 10
-    },
-    browserAgent: {
-      orchestrationModel: "",
-      maxSessionTurns: 10
-    }
+    maxConcurrentSessions: 20
   }
 };

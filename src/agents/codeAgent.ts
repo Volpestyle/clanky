@@ -10,6 +10,7 @@ import {
 import type { ClaudeCliStreamSessionLike } from "../llmClaudeCode.ts";
 import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
 import { generateSessionId } from "./subAgentSession.ts";
+import { clamp } from "../utils.ts";
 import path from "node:path";
 
 interface CodeAgentTrace {
@@ -64,6 +65,27 @@ export function resolveCodeAgentCwd(settingsCwd: string, fallbackBaseDir: string
   if (raw) return raw;
   // Default: "web" directory one level above the app root
   return path.resolve(fallbackBaseDir, "..", "web");
+}
+
+export interface CodeAgentConfig {
+  cwd: string;
+  model: string;
+  maxTurns: number;
+  timeoutMs: number;
+  maxBufferBytes: number;
+}
+
+export function resolveCodeAgentConfig(settings: Record<string, unknown>, cwdOverride?: string): CodeAgentConfig {
+  const codeAgent = settings?.codeAgent as Record<string, unknown> | undefined;
+  const cwd = cwdOverride || resolveCodeAgentCwd(
+    String(codeAgent?.defaultCwd || ""),
+    process.cwd()
+  );
+  const model = String(codeAgent?.model || "sonnet").trim();
+  const maxTurns = clamp(Number(codeAgent?.maxTurns) || 30, 1, 200);
+  const timeoutMs = clamp(Number(codeAgent?.timeoutMs) || 300_000, 10_000, 1_800_000);
+  const maxBufferBytes = clamp(Number(codeAgent?.maxBufferBytes) || 2 * 1024 * 1024, 4096, 10 * 1024 * 1024);
+  return { cwd, model, maxTurns, timeoutMs, maxBufferBytes };
 }
 
 export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgentResult> {
@@ -270,7 +292,7 @@ export class CodeAgentSession implements SubAgentSession {
       this.lastUsedAt = Date.now();
 
       this.store.logAction({
-        kind: "code_agent_session_turn",
+        kind: "code_agent_call",
         guildId: this.trace.guildId || null,
         channelId: this.trace.channelId || null,
         userId: this.trace.userId || null,
@@ -297,7 +319,7 @@ export class CodeAgentSession implements SubAgentSession {
       this.lastUsedAt = Date.now();
 
       this.store.logAction({
-        kind: "code_agent_session_error",
+        kind: "code_agent_error",
         guildId: this.trace.guildId || null,
         channelId: this.trace.channelId || null,
         userId: this.trace.userId || null,

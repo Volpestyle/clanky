@@ -8,7 +8,7 @@ import {
 import { clankCommand } from "./commands/clankCommand.ts";
 import { browseCommand } from "./commands/browseCommand.ts";
 import { codeCommand } from "./commands/codeCommand.ts";
-import { runCodeAgent, isCodeAgentUserAllowed, resolveCodeAgentCwd, getActiveCodeAgentTaskCount } from "./agents/codeAgent.ts";
+import { runCodeAgent, isCodeAgentUserAllowed, resolveCodeAgentConfig, getActiveCodeAgentTaskCount } from "./agents/codeAgent.ts";
 import { musicCommands } from "./voice/musicCommands.ts";
 import {
   buildAutomationPrompt,
@@ -465,14 +465,7 @@ export class ClankerBot {
         }
 
         try {
-          const cwd = codeCwd || resolveCodeAgentCwd(
-            String(settings?.codeAgent?.defaultCwd || ""),
-            process.cwd()
-          );
-          const model = String(settings?.codeAgent?.model || "sonnet").trim();
-          const maxTurns = clamp(Number(settings?.codeAgent?.maxTurns) || 30, 1, 200);
-          const timeoutMs = clamp(Number(settings?.codeAgent?.timeoutMs) || 300_000, 10_000, 1_800_000);
-          const maxBufferBytes = clamp(Number(settings?.codeAgent?.maxBufferBytes) || 2 * 1024 * 1024, 4096, 10 * 1024 * 1024);
+          const { cwd, model, maxTurns, timeoutMs, maxBufferBytes } = resolveCodeAgentConfig(settings, codeCwd);
 
           const result = await runCodeAgent({
             instruction: codeInstruction,
@@ -2956,14 +2949,7 @@ export class ClankerBot {
       return { text: "", blockedByBudget: true };
     }
 
-    const cwd = cwdOverride || resolveCodeAgentCwd(
-      String(settings?.codeAgent?.defaultCwd || ""),
-      process.cwd()
-    );
-    const model = String(settings?.codeAgent?.model || "sonnet").trim();
-    const maxTurns = clamp(Number(settings?.codeAgent?.maxTurns) || 30, 1, 200);
-    const timeoutMs = clamp(Number(settings?.codeAgent?.timeoutMs) || 300_000, 10_000, 1_800_000);
-    const maxBufferBytes = clamp(Number(settings?.codeAgent?.maxBufferBytes) || 2 * 1024 * 1024, 4096, 10 * 1024 * 1024);
+    const { cwd, model, maxTurns, timeoutMs, maxBufferBytes } = resolveCodeAgentConfig(settings, cwdOverride);
 
     try {
       const result = await runCodeAgent({
@@ -3020,14 +3006,7 @@ export class ClankerBot {
     const used = this.store.countActionsSince("code_agent_call", since1h);
     if (used >= maxPerHour) return null;
 
-    const cwd = cwdOverride || resolveCodeAgentCwd(
-      String(settings?.codeAgent?.defaultCwd || ""),
-      process.cwd()
-    );
-    const model = String(settings?.codeAgent?.model || "sonnet").trim();
-    const maxTurns = clamp(Number(settings?.codeAgent?.maxTurns) || 30, 1, 200);
-    const timeoutMs = clamp(Number(settings?.codeAgent?.timeoutMs) || 300_000, 10_000, 1_800_000);
-    const maxBufferBytes = clamp(Number(settings?.codeAgent?.maxBufferBytes) || 2 * 1024 * 1024, 4096, 10 * 1024 * 1024);
+    const { cwd, model, maxTurns, timeoutMs, maxBufferBytes } = resolveCodeAgentConfig(settings, cwdOverride);
 
     const scopeKey = `${guildId || "dm"}:${channelId || "dm"}`;
     return new CodeAgentSession({
