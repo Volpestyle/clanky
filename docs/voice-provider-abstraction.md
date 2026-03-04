@@ -123,8 +123,10 @@ Runtime loop in `src/voice/voiceSessionManager.ts`:
 - `memory_search`
 - `memory_write`
 - `music_search`
+- `music_play_now`
+- `music_queue_next`
 - `music_queue_add`
-- `music_play`
+- `music_stop`
 - `music_pause`
 - `music_resume`
 - `music_skip`
@@ -159,9 +161,18 @@ MCP call path:
 Queue/tool behavior in `src/voice/voiceSessionManager.ts`:
 - queue state in `musicQueueState`
 - search/catalog in `executeVoiceMusicSearchTool(...)`
-- enqueue in `executeVoiceMusicQueueAddTool(...)`
-- playback in `playVoiceQueueTrackByIndex(...)`
+- immediate playback in `executeVoiceMusicPlayNowTool(...)`
+- insert-next queueing in `executeVoiceMusicQueueNextTool(...)`
+- append queueing in `executeVoiceMusicQueueAddTool(...)`
+- stop + queue reset in `requestStopMusic(..., clearQueue: true)`
 - pause/resume/skip/now-playing in `executeLocalVoiceToolCall(...)`
+
+Command-only music follow-up behavior:
+- when the runtime asks a speaker to clarify a music selection, it opens a short `voiceCommandState` lock for that speaker
+- pending music clarification reuses the existing `music.pending*` disambiguation state
+- same-speaker clarification turns are admitted before command-only/eagerness rejection only when they look like actual selection/cancel follow-ups
+- numeric/cancel clarification replies are resolved directly in runtime via `maybeHandlePendingMusicDisambiguationTurn(...)`
+- duplicate OpenAI function-call completions are ignored via `openAiCompletedToolCallIds`
 
 When music playback starts, `haltSessionOutputForMusicPlayback(...)`:
 - clears pending assistant response/output queue
@@ -183,7 +194,7 @@ If conditions allow, `maybeHandleInterruptedReplyRecovery(...)` can retry the in
 Status against the spec in this repo:
 
 1. `Option B per-speaker transcription`: implemented for OpenAI realtime brain path via per-user ASR sessions (`openAiAsrSessions` + `OpenAiRealtimeTranscriptionClient`).
-2. `Queue controls`: implemented as local tools (`music_search`, `music_queue_add`, `music_play`, `music_pause`, `music_resume`, `music_skip`, `music_now_playing`).
+2. `Queue controls`: implemented as explicit local tools (`music_search`, `music_play_now`, `music_queue_next`, `music_queue_add`, `music_stop`, `music_pause`, `music_resume`, `music_skip`, `music_now_playing`).
 3. `Vector memory read + write, no approvals`: implemented as local function tools (`memory_search`, `memory_write`) with guardrails.
 4. `MCP tool surface + governance`: implemented via merged MCP tool descriptors and explicit MCP call runtime.
 5. `Realtime brain session does tool calling`: implemented in OpenAI realtime event/tool loop.

@@ -45,6 +45,11 @@ import { createMusicPlaybackProvider } from "./musicPlayback.ts";
 import { createMusicSearchProvider } from "./musicSearch.ts";
 import { createDiscordMusicPlayer } from "./musicPlayer.ts";
 import {
+  extractMusicPlayQuery as extractMusicPlayQueryFallback,
+  isLikelyMusicPlayPhrase as isLikelyMusicPlayPhraseFallback,
+  isLikelyMusicStopPhrase as isLikelyMusicStopPhraseFallback
+} from "./voiceMusicPlayback.ts";
+import {
   enableWatchStreamForUser,
   getStreamWatchBrainContextForPrompt,
   generateVisionFallbackStreamWatchCommentary,
@@ -210,7 +215,7 @@ import {
 } from "./voiceSessionManager.constants.ts";
 import { loadPromptMemorySliceFromMemory } from "../memory/promptMemorySlice.ts";
 import { providerSupports } from "./voiceModes.ts";
-import { ensureSessionToolRuntimeState, getVoiceMcpServerStatuses, resolveVoiceRealtimeToolDescriptors, buildRealtimeFunctionTools, recordVoiceToolCallEvent, parseOpenAiRealtimeToolArguments, resolveOpenAiRealtimeToolDescriptor, summarizeVoiceToolOutput, executeOpenAiRealtimeFunctionCall, refreshRealtimeTools, executeVoiceMemorySearchTool, executeVoiceMemoryWriteTool, executeVoiceMusicSearchTool, executeVoiceMusicQueueAddTool, executeVoiceWebSearchTool, executeLocalVoiceToolCall, executeMcpVoiceToolCall } from "./voiceToolCalls.ts";
+import { ensureSessionToolRuntimeState, getVoiceMcpServerStatuses, resolveVoiceRealtimeToolDescriptors, buildRealtimeFunctionTools, recordVoiceToolCallEvent, parseOpenAiRealtimeToolArguments, resolveOpenAiRealtimeToolDescriptor, summarizeVoiceToolOutput, executeOpenAiRealtimeFunctionCall, refreshRealtimeTools, executeVoiceMemorySearchTool, executeVoiceMemoryWriteTool, executeVoiceMusicSearchTool, executeVoiceMusicQueueAddTool, executeVoiceMusicQueueNextTool, executeVoiceMusicPlayNowTool, executeVoiceWebSearchTool, executeLocalVoiceToolCall, executeMcpVoiceToolCall } from "./voiceToolCalls.ts";
 
 export function resolveVoiceThoughtTopicalityBias({
   silenceMs = 0,
@@ -286,13 +291,11 @@ function normalizeVoiceAddressingTargetToken(value = "") {
   return normalized;
 }
 
-const EN_MUSIC_STOP_VERB_RE = /\b(?:stop|pause|halt|end|quit|shut\s*off)\b/i;
-const EN_MUSIC_CUE_RE = /\b(?:music|song|songs|track|tracks|playback|playing)\b/i;
-const EN_MUSIC_PLAY_VERB_RE = /\b(?:play|start|queue|put\s+on|spin)\b/i;
-const EN_MUSIC_PLAY_QUERY_RE =
-  /\b(?:play|start|queue|put\s+on|spin)\b\s+(.+)$/i;
 const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
 const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
+const VOICE_COMMAND_SESSION_TTL_MS = 20 * 1000;
+const OPENAI_COMPLETED_TOOL_CALL_TTL_MS = 10 * 60 * 1000;
+const OPENAI_COMPLETED_TOOL_CALL_MAX = 256;
 const MEMORY_NAMESPACE_USER_RE = /^user:([a-z0-9_-]{2,64})$/i;
 const MEMORY_NAMESPACE_GUILD_RE = /^guild:([a-z0-9_-]{2,64})$/i;
 const OPENAI_FUNCTION_CALL_ITEM_TYPES = new Set([
@@ -322,6 +325,7 @@ type MusicDisambiguationPayload = {
   session?: Record<string, unknown> | null;
   query?: string;
   platform?: string;
+  action?: "play_now" | "queue_next" | "queue_add";
   results?: Array<Record<string, unknown>>;
   requestedByUserId?: string | null;
 };
@@ -373,6 +377,10 @@ type VoiceConversationContext = {
   sameAsRecentDirectAddress: boolean;
   msSinceAssistantReply: number | null;
   msSinceDirectAddress: number | null;
+  activeCommandSpeaker?: string | null;
+  activeCommandDomain?: string | null;
+  activeCommandIntent?: string | null;
+  msUntilCommandSessionExpiry?: number | null;
   voiceAddressingState?: VoiceAddressingState | null;
   currentTurnAddressing?: VoiceAddressingAnnotation | null;
 };
@@ -1140,11 +1148,91 @@ export class VoiceSessionManager {
       lastCommandReason: null,
       pendingQuery: null,
       pendingPlatform: "auto",
+      pendingAction: "play_now",
       pendingResults: [],
       pendingRequestedByUserId: null,
       pendingRequestedAt: 0
     };
     return session.music;
+  }
+
+  ensureVoiceCommandState(session) {
+    if (!session || typeof session !== "object") return null;
+    const current =
+      session.voiceCommandState && typeof session.voiceCommandState === "object"
+        ? session.voiceCommandState
+        : null;
+    if (!current) {
+      session.voiceCommandState = null;
+      return null;
+    }
+    const expiresAt = Math.max(0, Number(current.expiresAt || 0));
+    if (!expiresAt || expiresAt <= Date.now()) {
+      session.voiceCommandState = null;
+      return null;
+    }
+    const next = {
+      userId: String(current.userId || "").trim() || null,
+      domain: normalizeInlineText(current.domain, 40) || null,
+      intent: normalizeInlineText(current.intent, 80) || null,
+      startedAt: Math.max(0, Number(current.startedAt || 0)),
+      expiresAt
+    };
+    session.voiceCommandState = next;
+    return next;
+  }
+
+  beginVoiceCommandSession({
+    session,
+    userId = null,
+    domain = "voice",
+    intent = "followup",
+    ttlMs = VOICE_COMMAND_SESSION_TTL_MS
+  }: {
+    session?: VoiceToolRuntimeSessionLike | null;
+    userId?: string | null;
+    domain?: string | null;
+    intent?: string | null;
+    ttlMs?: number | null;
+  } = {}) {
+    if (!session || session.ending) return null;
+    const normalizedUserId = String(userId || "").trim();
+    if (!normalizedUserId) return null;
+    const now = Date.now();
+    const durationMs = clamp(Math.round(Number(ttlMs) || VOICE_COMMAND_SESSION_TTL_MS), 3_000, 120_000);
+    const next = {
+      userId: normalizedUserId,
+      domain: normalizeInlineText(domain, 40) || "voice",
+      intent: normalizeInlineText(intent, 80) || "followup",
+      startedAt: now,
+      expiresAt: now + durationMs
+    };
+    session.voiceCommandState = next;
+    return next;
+  }
+
+  clearVoiceCommandSession(session) {
+    if (!session || typeof session !== "object") return;
+    session.voiceCommandState = null;
+  }
+
+  isVoiceCommandSessionActiveForUser(session, userId, { domain = null } = {}) {
+    const state = this.ensureVoiceCommandState(session);
+    if (!state) return false;
+    const normalizedUserId = String(userId || "").trim();
+    if (!normalizedUserId || state.userId !== normalizedUserId) return false;
+    const normalizedDomain = normalizeInlineText(domain, 40);
+    if (normalizedDomain && state.domain && state.domain !== normalizedDomain) return false;
+    return true;
+  }
+
+  resetToolMusicQueueState(session) {
+    const queueState = this.ensureToolMusicQueueState(session);
+    if (!queueState) return null;
+    queueState.tracks = [];
+    queueState.nowPlayingIndex = null;
+    queueState.isPaused = false;
+    return queueState;
   }
 
   snapshotMusicRuntimeState(session) {
@@ -1168,10 +1256,12 @@ export class VoiceSessionManager {
       lastCommandReason: music.lastCommandReason || null,
       pendingQuery: music.pendingQuery || null,
       pendingPlatform: music.pendingPlatform || null,
+      pendingAction: music.pendingAction || "play_now",
       pendingRequestedByUserId: music.pendingRequestedByUserId || null,
       pendingRequestedAt: music.pendingRequestedAt > 0 ? new Date(music.pendingRequestedAt).toISOString() : null,
       pendingResults: Array.isArray(music.pendingResults) ? music.pendingResults : [],
       disambiguationActive: this.isMusicDisambiguationActive(music),
+      voiceCommandState: this.ensureVoiceCommandState(session),
       queueState: queueState
         ? {
           tracks: queueState.tracks.map((track) => ({
@@ -1186,6 +1276,84 @@ export class VoiceSessionManager {
         }
         : null
     };
+  }
+
+  getMusicPromptContext(session): {
+    playbackState: "playing" | "paused" | "stopped" | "idle";
+    currentTrack: { title: string; artists: string[] } | null;
+    lastTrack: { title: string; artists: string[] } | null;
+    queueLength: number;
+    upcomingTracks: Array<{ title: string; artist: string | null }>;
+    lastAction: "play_now" | "stop" | "pause" | "resume" | "skip" | null;
+    lastQuery: string | null;
+  } | null {
+    const snapshot = this.snapshotMusicRuntimeState(session);
+    if (!snapshot) return null;
+    const queueTracks = Array.isArray(snapshot.queueState?.tracks) ? snapshot.queueState.tracks : [];
+    const nowPlayingIndex = Number.isInteger(snapshot.queueState?.nowPlayingIndex)
+      ? Number(snapshot.queueState?.nowPlayingIndex)
+      : null;
+    const currentQueueTrack =
+      nowPlayingIndex != null && nowPlayingIndex >= 0 && nowPlayingIndex < queueTracks.length
+        ? queueTracks[nowPlayingIndex]
+        : null;
+    const currentTrack = currentQueueTrack?.title
+      ? {
+        title: currentQueueTrack.title,
+        artists: currentQueueTrack.artist ? [currentQueueTrack.artist] : []
+      }
+      : snapshot.active && snapshot.lastTrackTitle
+        ? {
+          title: snapshot.lastTrackTitle,
+          artists: Array.isArray(snapshot.lastTrackArtists) ? snapshot.lastTrackArtists : []
+        }
+        : null;
+    const lastTrack = snapshot.lastTrackTitle
+      ? {
+        title: snapshot.lastTrackTitle,
+        artists: Array.isArray(snapshot.lastTrackArtists) ? snapshot.lastTrackArtists : []
+      }
+      : null;
+    const upcomingTracks =
+      nowPlayingIndex != null && nowPlayingIndex >= 0
+        ? queueTracks.slice(nowPlayingIndex + 1)
+        : queueTracks;
+    let playbackState: "playing" | "paused" | "stopped" | "idle" = "idle";
+    if (snapshot.queueState?.isPaused) {
+      playbackState = "paused";
+    } else if (snapshot.active) {
+      playbackState = "playing";
+    } else if (snapshot.lastCommandReason && this.describeMusicPromptAction(snapshot.lastCommandReason) === "stop") {
+      playbackState = "stopped";
+    }
+    return {
+      playbackState,
+      currentTrack,
+      lastTrack,
+      queueLength: queueTracks.length,
+      upcomingTracks: upcomingTracks
+        .map((track) => ({
+          title: String(track?.title || "").trim(),
+          artist: track?.artist ? String(track.artist).trim() : null
+        }))
+        .filter((track) => track.title)
+        .slice(0, 3),
+      lastAction: this.describeMusicPromptAction(snapshot.lastCommandReason),
+      lastQuery: snapshot.lastQuery || null
+    };
+  }
+
+  describeMusicPromptAction(reason: unknown): "play_now" | "stop" | "pause" | "resume" | "skip" | null {
+    const normalizedReason = String(reason || "")
+      .trim()
+      .toLowerCase();
+    if (!normalizedReason) return null;
+    if (normalizedReason.includes("pause")) return "pause";
+    if (normalizedReason.includes("resume")) return "resume";
+    if (normalizedReason.includes("skip")) return "skip";
+    if (normalizedReason.includes("stop") || normalizedReason === "session_end") return "stop";
+    if (normalizedReason.includes("play")) return "play_now";
+    return null;
   }
 
   isMusicPlaybackActive(session) {
@@ -1343,6 +1511,7 @@ export class VoiceSessionManager {
     if (!music) return;
     music.pendingQuery = null;
     music.pendingPlatform = "auto";
+    music.pendingAction = "play_now";
     music.pendingResults = [];
     music.pendingRequestedByUserId = null;
     music.pendingRequestedAt = 0;
@@ -1352,6 +1521,7 @@ export class VoiceSessionManager {
     session,
     query = "",
     platform = "auto",
+    action = "play_now",
     results = [],
     requestedByUserId = null
   }: MusicDisambiguationPayload = {}) {
@@ -1367,6 +1537,10 @@ export class VoiceSessionManager {
     }
     music.pendingQuery = normalizeInlineText(query, 120) || null;
     music.pendingPlatform = this.normalizeMusicPlatformToken(platform, "auto");
+    music.pendingAction =
+      action === "queue_next" || action === "queue_add"
+        ? action
+        : "play_now";
     music.pendingResults = normalizedResults;
     music.pendingRequestedByUserId = String(requestedByUserId || "").trim() || null;
     music.pendingRequestedAt = Date.now();
@@ -1393,6 +1567,7 @@ export class VoiceSessionManager {
     active: true;
     query: string | null;
     platform: "youtube" | "soundcloud" | "discord" | "auto";
+    action: "play_now" | "queue_next" | "queue_add";
     requestedByUserId: string | null;
     options: MusicSelectionResult[];
   } | null {
@@ -1402,6 +1577,10 @@ export class VoiceSessionManager {
       active: true,
       query: music.pendingQuery || null,
       platform: this.normalizeMusicPlatformToken(music.pendingPlatform, "auto") || "auto",
+      action:
+        music.pendingAction === "queue_next" || music.pendingAction === "queue_add"
+          ? music.pendingAction
+          : "play_now",
       requestedByUserId: music.pendingRequestedByUserId || null,
       options: (Array.isArray(music.pendingResults) ? music.pendingResults : [])
         .map((entry) => this.normalizeMusicSelectionResult(entry))
@@ -1495,46 +1674,15 @@ export class VoiceSessionManager {
   }
 
   isLikelyMusicStopPhrase({ transcript = "", settings = null } = {}) {
-    const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedTranscript) return false;
-    if (!EN_MUSIC_STOP_VERB_RE.test(normalizedTranscript)) return false;
-    if (EN_MUSIC_CUE_RE.test(normalizedTranscript)) return true;
-    if (this.hasBotNameCueForTranscript({ transcript: normalizedTranscript, settings })) return true;
-    const tokenCount = normalizedTranscript.split(/\s+/).filter(Boolean).length;
-    return tokenCount <= 3;
+    return isLikelyMusicStopPhraseFallback(this, { transcript, settings });
   }
 
   isLikelyMusicPlayPhrase({ transcript = "", settings = null } = {}) {
-    const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedTranscript) return false;
-    if (!EN_MUSIC_PLAY_VERB_RE.test(normalizedTranscript)) return false;
-    if (EN_MUSIC_CUE_RE.test(normalizedTranscript)) return true;
-    return this.hasBotNameCueForTranscript({ transcript: normalizedTranscript, settings });
+    return isLikelyMusicPlayPhraseFallback(this, { transcript, settings });
   }
 
   extractMusicPlayQuery(transcript = "") {
-    const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedTranscript) return "";
-
-    const quotedMatch = normalizedTranscript.match(/["'“”]([^"'“”]{2,120})["'“”]/);
-    if (quotedMatch && quotedMatch[1]) {
-      return normalizeInlineText(quotedMatch[1], 120);
-    }
-
-    const playMatch = normalizedTranscript.match(EN_MUSIC_PLAY_QUERY_RE);
-    const candidate = playMatch?.[1] ? String(playMatch[1]) : "";
-    if (!candidate) return "";
-
-    const cleaned = candidate
-      .replace(/\b(?:in\s+vc|in\s+voice|in\s+discord|right\s+now|rn|please|plz|for\s+me|for\s+us|thanks?)\b/gi, " ")
-      .replace(/\b(?:music|song|songs|track|tracks)\b/gi, " ")
-      .replace(/[^\w\s'"&+-]+/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (!cleaned) return "";
-    if (/^(?:something|anything|some|a|the|please|plz)$/i.test(cleaned)) return "";
-    return cleaned.slice(0, 120);
+    return extractMusicPlayQueryFallback(this, transcript);
   }
 
   haltSessionOutputForMusicPlayback(session, reason = "music_playback_started") {
@@ -1584,6 +1732,7 @@ export class VoiceSessionManager {
     query = "",
     trackId = null,
     platform = "auto",
+    action = "play_now",
     searchResults = null,
     reason = "nl_play_music",
     source = "text_voice_intent",
@@ -1646,9 +1795,21 @@ export class VoiceSessionManager {
         session,
         query: resolvedQuery,
         platform: resolvedPlatform,
+        action: action === "queue_next" || action === "queue_add" ? action : "play_now",
         results: options,
         requestedByUserId: resolvedUserId
       });
+      if (resolvedUserId) {
+        this.beginVoiceCommandSession({
+          session,
+          userId: resolvedUserId,
+          domain: "music",
+          intent:
+            action === "queue_next" || action === "queue_add"
+              ? `${action}_disambiguation`
+              : "music_disambiguation"
+        });
+      }
 
       this.store.logAction({
         kind: "voice_runtime",
@@ -1906,6 +2067,7 @@ export class VoiceSessionManager {
       music.lastCommandAt = Date.now();
       music.lastCommandReason = String(reason || "nl_play_music");
       this.clearMusicDisambiguationState(session);
+      this.clearVoiceCommandSession(session);
     }
 
     this.haltSessionOutputForMusicPlayback(session, "music_playback_started");
@@ -2001,6 +2163,7 @@ export class VoiceSessionManager {
     reason = "nl_stop_music",
     source = "text_voice_intent",
     requestText = "",
+    clearQueue = false,
     mustNotify = true
   } = {}) {
     const resolvedGuildId = String(guildId || message?.guild?.id || message?.guildId || "").trim();
@@ -2085,6 +2248,9 @@ export class VoiceSessionManager {
       music.lastCommandReason = String(reason || "nl_stop_music");
       this.clearMusicDisambiguationState(session);
     }
+    if (clearQueue) {
+      this.resetToolMusicQueueState(session);
+    }
 
     // No-op: subprocess manages its own audio pipeline after music stop.
 
@@ -2099,6 +2265,7 @@ export class VoiceSessionManager {
         provider: resolvedProvider,
         source: String(source || "text_voice_intent"),
         reason: String(reason || "nl_stop_music"),
+        clearedQueue: Boolean(clearQueue),
         stopResultReason,
         status: Number(playbackResult.status || 0),
         error: stopSucceeded ? null : playbackResult.message || null,
@@ -2126,6 +2293,7 @@ export class VoiceSessionManager {
         reason: stopSucceeded ? (wasActive ? "stopped" : "already_stopped") : playbackResult.reason || "music_stop_failed",
         details: {
           source: String(source || "text_voice_intent"),
+          clearedQueue: Boolean(clearQueue),
           provider: resolvedProvider,
           stopResultReason,
           status: Number(playbackResult.status || 0),
@@ -2283,57 +2451,262 @@ export class VoiceSessionManager {
 
     const text = normalizeInlineText(message?.content || "", STT_TRANSCRIPT_MAX_CHARS);
     if (!text) return false;
-    const normalizedText = text.toLowerCase();
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    return await this.maybeHandlePendingMusicDisambiguationTurn({
+      session,
+      settings: resolvedSettings,
+      userId: message.author?.id || null,
+      transcript: text,
+      reason: "text_music_disambiguation_selection",
+      source: "text_disambiguation_failsafe",
+      channel: message.channel || null,
+      channelId: message.channelId || session.textChannelId || null,
+      messageId: message.id || null,
+      mustNotify: true
+    });
+  }
 
+  hasPendingMusicDisambiguationForUser(session, userId = null) {
+    const disambiguation = this.getMusicDisambiguationPromptContext(session);
+    if (!disambiguation?.active) return false;
+    const normalizedUserId = String(userId || "").trim();
+    const requestedByUserId = String(disambiguation.requestedByUserId || "").trim();
+    if (!normalizedUserId || !requestedByUserId) return false;
+    return normalizedUserId === requestedByUserId;
+  }
+
+  isMusicDisambiguationResolutionTurn(session, userId = null, transcript = "") {
+    const normalizedUserId = String(userId || "").trim();
+    if (!normalizedUserId) return false;
+    if (!this.hasPendingMusicDisambiguationForUser(session, normalizedUserId)) {
+      return false;
+    }
+    if (!this.isVoiceCommandSessionActiveForUser(session, normalizedUserId, { domain: "music" })) {
+      return false;
+    }
+    const text = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    if (!text) return false;
     if (/^(?:cancel|nevermind|never mind|nvm|forget it)$/i.test(text)) {
-      this.clearMusicDisambiguationState(session);
-      await this.sendOperationalMessage({
-        channel: message.channel || null,
-        settings: settings || session.settingsSnapshot || this.store.getSettings(),
-        guildId,
-        channelId: message.channelId || session.textChannelId || null,
-        userId: message.author?.id || null,
-        messageId: message.id || null,
-        event: "voice_music_request",
-        reason: "disambiguation_cancelled",
-        details: {
-          source: "text_disambiguation_failsafe",
-          requestText: text
-        },
-        mustNotify: true
+      return true;
+    }
+    return Boolean(this.resolvePendingMusicDisambiguationSelection(session, text));
+  }
+
+  resolvePendingMusicDisambiguationSelection(session, transcript = "") {
+    const disambiguation = this.getMusicDisambiguationPromptContext(session);
+    if (!disambiguation?.active || !Array.isArray(disambiguation.options) || !disambiguation.options.length) {
+      return null;
+    }
+    const text = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    if (!text) return null;
+    const normalizedText = text.toLowerCase();
+    const options = disambiguation.options;
+    const parsedIndex = Number.parseInt(text, 10);
+    if (Number.isFinite(parsedIndex) && String(parsedIndex) === text && parsedIndex >= 1) {
+      return options[parsedIndex - 1] || null;
+    }
+    const ordinalIndexByToken = new Map<string, number>([
+      ["first", 0],
+      ["1st", 0],
+      ["second", 1],
+      ["2nd", 1],
+      ["third", 2],
+      ["3rd", 2],
+      ["fourth", 3],
+      ["4th", 3],
+      ["fifth", 4],
+      ["5th", 4]
+    ]);
+    for (const [token, optionIndex] of ordinalIndexByToken.entries()) {
+      if (normalizedText.includes(token)) {
+        return options[optionIndex] || null;
+      }
+    }
+
+    const cleanedSelectionText = normalizedText
+      .replace(/\b(?:the|one|version|song|track|by|please|plz|uh|um|like)\b/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return options.find((entry) => {
+      const idToken = String(entry?.id || "").trim().toLowerCase();
+      if (idToken && normalizedText === idToken) return true;
+      const artistToken = String(entry?.artist || "").trim().toLowerCase();
+      const titleToken = String(entry?.title || "").trim().toLowerCase();
+      const combined = `${titleToken} ${artistToken}`.trim();
+      if (cleanedSelectionText && combined.includes(cleanedSelectionText)) return true;
+      if (cleanedSelectionText && artistToken && cleanedSelectionText.includes(artistToken)) return true;
+      if (cleanedSelectionText && titleToken && cleanedSelectionText.includes(titleToken)) return true;
+      return false;
+    }) || null;
+  }
+
+  async completePendingMusicDisambiguationSelection({
+    session,
+    settings,
+    userId = null,
+    selected,
+    reason = "voice_music_disambiguation_selection",
+    source = "voice_disambiguation",
+    channel = null,
+    channelId = null,
+    messageId = null,
+    mustNotify = false
+  }: {
+    session?: VoiceToolRuntimeSessionLike | null;
+    settings?: Record<string, unknown> | null;
+    userId?: string | null;
+    selected?: MusicSelectionResult | null;
+    reason?: string;
+    source?: string;
+    channel?: unknown;
+    channelId?: string | null;
+    messageId?: string | null;
+    mustNotify?: boolean;
+  } = {}) {
+    const disambiguation = this.getMusicDisambiguationPromptContext(session);
+    if (!session || !disambiguation?.active || !selected) return false;
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    const normalizedUserId = String(userId || "").trim() || null;
+    const action = disambiguation.action || "play_now";
+    if (action === "play_now") {
+      await this.requestPlayMusic({
+        guildId: session.guildId,
+        channel,
+        channelId: channelId || session.textChannelId || null,
+        requestedByUserId: normalizedUserId,
+        settings: resolvedSettings,
+        query: disambiguation.query || "",
+        platform: disambiguation.platform || "auto",
+        trackId: selected.id,
+        searchResults: disambiguation.options,
+        reason,
+        source,
+        mustNotify
       });
       return true;
     }
 
-    const options = disambiguation.options;
-    const parsedIndex = Number.parseInt(text, 10);
-    let selected: MusicSelectionResult | null = null;
-    if (Number.isFinite(parsedIndex) && String(parsedIndex) === text && parsedIndex >= 1) {
-      selected = options[parsedIndex - 1] || null;
+    const runtimeSession = this.ensureSessionToolRuntimeState(session);
+    const catalog = runtimeSession?.toolMusicTrackCatalog instanceof Map
+      ? runtimeSession.toolMusicTrackCatalog
+      : new Map();
+    if (runtimeSession && !(runtimeSession.toolMusicTrackCatalog instanceof Map)) {
+      runtimeSession.toolMusicTrackCatalog = catalog;
     }
-
-    if (!selected) {
-      selected = options.find((entry) => {
-        const idToken = String(entry?.id || "").trim().toLowerCase();
-        return Boolean(idToken) && normalizedText === idToken;
-      }) || null;
+    catalog.set(selected.id, selected);
+    this.clearMusicDisambiguationState(session);
+    if (action === "queue_next") {
+      await this.executeVoiceMusicQueueNextTool({
+        session,
+        settings: resolvedSettings,
+        args: {
+          tracks: [selected.id]
+        }
+      });
+    } else {
+      await this.executeVoiceMusicQueueAddTool({
+        session,
+        settings: resolvedSettings,
+        args: {
+          tracks: [selected.id],
+          position: "end"
+        }
+      });
     }
-
-    if (!selected) return false;
-
-    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    await this.requestPlayMusic({
-      message,
+    this.clearVoiceCommandSession(session);
+    await this.sendOperationalMessage({
+      channel,
       settings: resolvedSettings,
-      query: disambiguation.query || "",
-      platform: disambiguation.platform || "auto",
-      trackId: selected.id,
-      searchResults: options,
-      reason: "text_music_disambiguation_selection",
-      source: "text_disambiguation_failsafe",
-      mustNotify: true
+      guildId: session.guildId,
+      channelId: channelId || session.textChannelId || null,
+      userId: normalizedUserId,
+      messageId,
+      event: "voice_music_request",
+      reason: action === "queue_next" ? "queued_next" : "queued",
+      details: {
+        source,
+        query: disambiguation.query || null,
+        trackId: selected.id,
+        trackTitle: selected.title,
+        trackArtists: selected.artist ? [selected.artist] : []
+      },
+      mustNotify
     });
     return true;
+  }
+
+  async maybeHandlePendingMusicDisambiguationTurn({
+    session,
+    settings,
+    userId = null,
+    transcript = "",
+    reason = "voice_music_disambiguation_selection",
+    source = "voice_disambiguation",
+    channel = null,
+    channelId = null,
+    messageId = null,
+    mustNotify = false
+  }: {
+    session?: VoiceToolRuntimeSessionLike | null;
+    settings?: Record<string, unknown> | null;
+    userId?: string | null;
+    transcript?: string;
+    reason?: string;
+    source?: string;
+    channel?: unknown;
+    channelId?: string | null;
+    messageId?: string | null;
+    mustNotify?: boolean;
+  } = {}) {
+    const disambiguation = this.getMusicDisambiguationPromptContext(session);
+    if (!session || !disambiguation?.active || !Array.isArray(disambiguation.options) || !disambiguation.options.length) {
+      return false;
+    }
+    const normalizedUserId = String(userId || "").trim();
+    const requestedByUserId = String(disambiguation.requestedByUserId || "").trim();
+    if (!normalizedUserId) {
+      return false;
+    }
+    if (requestedByUserId && normalizedUserId !== requestedByUserId) {
+      return false;
+    }
+    const text = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    if (!text) return false;
+    if (/^(?:cancel|nevermind|never mind|nvm|forget it)$/i.test(text)) {
+      this.clearMusicDisambiguationState(session);
+      this.clearVoiceCommandSession(session);
+      await this.sendOperationalMessage({
+        channel,
+        settings: settings || session.settingsSnapshot || this.store.getSettings(),
+        guildId: session.guildId,
+        channelId: channelId || session.textChannelId || null,
+        userId: normalizedUserId,
+        messageId,
+        event: "voice_music_request",
+        reason: "disambiguation_cancelled",
+        details: {
+          source,
+          requestText: text
+        },
+        mustNotify
+      });
+      return true;
+    }
+
+    const selected = this.resolvePendingMusicDisambiguationSelection(session, text);
+    if (!selected) return false;
+    return await this.completePendingMusicDisambiguationSelection({
+      session,
+      settings,
+      userId: normalizedUserId,
+      selected,
+      reason,
+      source,
+      channel,
+      channelId,
+      messageId,
+      mustNotify
+    });
   }
 
   async maybeHandleMusicTextStopRequest({
@@ -2362,6 +2735,7 @@ export class VoiceSessionManager {
       reason: "text_music_stop_failsafe",
       source: "text_failsafe",
       requestText: text,
+      clearQueue: true,
       mustNotify: true
     });
     return true;
@@ -2569,6 +2943,24 @@ export class VoiceSessionManager {
       });
       return true;
     }
+    const directAddressedToBot = isVoiceTurnAddressedToBot(normalizedTranscript, resolvedSettings);
+    const disambiguationResolutionTurn = this.isMusicDisambiguationResolutionTurn(
+      session,
+      userId,
+      normalizedTranscript
+    );
+    const handledPendingDisambiguation = await this.maybeHandlePendingMusicDisambiguationTurn({
+      session,
+      settings: resolvedSettings,
+      userId,
+      transcript: normalizedTranscript,
+      source: `voice_${String(source || "voice_turn")}`,
+      channelId: session.textChannelId || null,
+      mustNotify: false
+    });
+    if (handledPendingDisambiguation) {
+      return true;
+    }
 
     // Heuristic-only stop detection — no LLM round-trip.
     // NOTE: isLikelyMusicStopPhrase uses English-only regex patterns (EN_MUSIC_STOP_VERB_RE,
@@ -2594,9 +2986,10 @@ export class VoiceSessionManager {
     });
 
     if (!shouldStop) {
-      // Wake-word addressed turns during music fall through to the normal
-      // reply pipeline so the bot can answer while music plays.
-      if (isVoiceTurnAddressedToBot(normalizedTranscript, resolvedSettings)) {
+      // During command-only playback mode, keep a short speaker-locked
+      // follow-up window so actual disambiguation replies like "the second one" do not
+      // require the wake word again.
+      if (directAddressedToBot || disambiguationResolutionTurn) {
         return false;
       }
       return true;
@@ -2610,6 +3003,7 @@ export class VoiceSessionManager {
       reason: "voice_music_stop_phrase",
       source: `voice_${String(source || "voice_turn")}`,
       requestText: normalizedTranscript,
+      clearQueue: true,
       mustNotify: false
     });
     return true;
@@ -9943,9 +10337,15 @@ export class VoiceSessionManager {
     const recentDirectAddress =
       Number.isFinite(msSinceDirectAddress) &&
       msSinceDirectAddress <= RECENT_ENGAGEMENT_WINDOW_MS;
+    const activeVoiceCommandState = this.ensureVoiceCommandState(session);
+    const sameAsVoiceCommandUser =
+      Boolean(normalizedUserId) &&
+      Boolean(activeVoiceCommandState?.userId) &&
+      normalizedUserId === activeVoiceCommandState.userId;
 
     const engagedWithCurrentSpeaker =
       Boolean(directAddressed) ||
+      sameAsVoiceCommandUser ||
       (recentAssistantReply && sameAsRecentDirectAddress) ||
       (recentDirectAddress && sameAsRecentDirectAddress);
     const engaged =
@@ -9953,14 +10353,20 @@ export class VoiceSessionManager {
       engagedWithCurrentSpeaker;
 
     return {
-      engagementState: engaged ? "engaged" : "wake_word_biased",
+      engagementState: engaged ? "engaged" : activeVoiceCommandState ? "command_only_engaged" : "wake_word_biased",
       engaged,
       engagedWithCurrentSpeaker,
       recentAssistantReply,
       recentDirectAddress,
       sameAsRecentDirectAddress,
       msSinceAssistantReply: Number.isFinite(msSinceAssistantReply) ? msSinceAssistantReply : null,
-      msSinceDirectAddress: Number.isFinite(msSinceDirectAddress) ? msSinceDirectAddress : null
+      msSinceDirectAddress: Number.isFinite(msSinceDirectAddress) ? msSinceDirectAddress : null,
+      activeCommandSpeaker: activeVoiceCommandState?.userId || null,
+      activeCommandDomain: activeVoiceCommandState?.domain || null,
+      activeCommandIntent: activeVoiceCommandState?.intent || null,
+      msUntilCommandSessionExpiry: activeVoiceCommandState
+        ? Math.max(0, activeVoiceCommandState.expiresAt - now)
+        : null
     };
   }
 
@@ -10133,8 +10539,26 @@ export class VoiceSessionManager {
       };
     }
 
+    const sameSpeakerPendingCommandFollowup = this.isMusicDisambiguationResolutionTurn(
+      session,
+      normalizedUserId,
+      normalizedTranscript
+    );
+    if (sameSpeakerPendingCommandFollowup && !addressedToOtherParticipant) {
+      return {
+        allow: true,
+        reason: "pending_command_followup",
+        participantCount,
+        directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
+        transcript: normalizedTranscript,
+        conversationContext
+      };
+    }
+
     if (commandOnlyMode) {
-      if (directAddressed || directAddressedByWakePhrase) {
+      if (directAddressedByWakePhrase) {
         return {
           allow: true,
           reason: "command_only_direct_address",
@@ -10769,10 +11193,27 @@ export class VoiceSessionManager {
     if (!runtimeSession) return;
 
     const pendingCalls = runtimeSession.openAiPendingToolCalls;
+    const completedCalls = runtimeSession.openAiCompletedToolCallIds;
     const executions = runtimeSession.openAiToolCallExecutions;
     const normalizedCallId = normalizeInlineText(envelope.callId, 180);
     const normalizedName = normalizeInlineText(envelope.name, 120);
     if (!normalizedCallId) return;
+    if (completedCalls instanceof Map) {
+      for (const [callId, completedAtMs] of completedCalls.entries()) {
+        if (Date.now() - Number(completedAtMs || 0) > OPENAI_COMPLETED_TOOL_CALL_TTL_MS) {
+          completedCalls.delete(callId);
+        }
+      }
+      if (completedCalls.has(normalizedCallId)) {
+        return;
+      }
+      if (completedCalls.size > OPENAI_COMPLETED_TOOL_CALL_MAX) {
+        const prunedEntries = [...completedCalls.entries()]
+          .sort((a, b) => a[1] - b[1])
+          .slice(-OPENAI_COMPLETED_TOOL_CALL_MAX);
+        runtimeSession.openAiCompletedToolCallIds = new Map(prunedEntries);
+      }
+    }
 
     const existing = pendingCalls.get(normalizedCallId) || null;
     const pendingCall = existing && typeof existing === "object"
@@ -11098,6 +11539,8 @@ export class VoiceSessionManager {
       : "none";
     const userFacts = formatRealtimeMemoryFacts(memorySlice?.userFacts, REALTIME_MEMORY_FACT_LIMIT);
     const relevantFacts = formatRealtimeMemoryFacts(memorySlice?.relevantFacts, REALTIME_MEMORY_FACT_LIMIT);
+    const activeVoiceCommandState = this.ensureVoiceCommandState(session);
+    const musicDisambiguation = this.getMusicDisambiguationPromptContext(session);
 
     const sections = [baseInstructions];
     sections.push(
@@ -11136,6 +11579,38 @@ export class VoiceSessionManager {
       );
     }
 
+    if (activeVoiceCommandState || musicDisambiguation) {
+      sections.push(
+        [
+          "Active command session:",
+          activeVoiceCommandState?.userId
+            ? `- Locked speaker user ID: ${activeVoiceCommandState.userId}`
+            : null,
+          activeVoiceCommandState?.domain
+            ? `- Domain: ${activeVoiceCommandState.domain}`
+            : null,
+          activeVoiceCommandState?.intent
+            ? `- Intent: ${activeVoiceCommandState.intent}`
+            : null,
+          activeVoiceCommandState
+            ? `- Command session expires in about ${Math.max(0, Math.round((activeVoiceCommandState.expiresAt - Date.now()) / 1000))} seconds.`
+            : null,
+          "- In command-only mode, a follow-up from the locked speaker does not need the wake word again.",
+          musicDisambiguation?.active
+            ? `- Pending music action: ${musicDisambiguation.action}`
+            : null,
+          musicDisambiguation?.query
+            ? `- Pending music query: ${musicDisambiguation.query}`
+            : null,
+          ...(musicDisambiguation?.options || []).slice(0, 5).map((option, index) =>
+            `- Music option ${index + 1}: ${option.title} - ${option.artist} [${option.id}]`
+          )
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
+    }
+
     const configuredTools = Array.isArray(session.openAiToolDefinitions) ? session.openAiToolDefinitions : [];
     if (configuredTools.length > 0) {
       const localToolNames = configuredTools
@@ -11155,7 +11630,9 @@ export class VoiceSessionManager {
           mcpToolNames.length > 0 ? `- MCP tools: ${mcpToolNames.join(", ")}` : null,
           "- Use tools when they improve factuality or action execution.",
           "- For memory writes, only store concise durable facts and avoid secrets.",
-          "- For music controls, prefer queue-aware tools over guessing current state.",
+          "- For music controls, use music_play_now for immediate playback, music_queue_next to place a track after the current one, music_queue_add to append, and music_stop to stop playback.",
+          "- Do not emulate play-now by chaining music_queue_add and music_skip.",
+          "- Do not use music_skip as a substitute for music_stop.",
           "- If a tool fails, explain the failure briefly and continue naturally."
         ]
           .filter(Boolean)
@@ -13563,6 +14040,7 @@ export class VoiceSessionManager {
         settings,
         reason: "slash_command_stop",
         source: "slash_command",
+        clearQueue: true,
         mustNotify: false
       });
       await interaction.editReply("Music stopped.");
@@ -13779,6 +14257,14 @@ export class VoiceSessionManager {
 
   async executeVoiceMusicQueueAddTool(opts: { session; settings; args }) {
     return executeVoiceMusicQueueAddTool(this, opts);
+  }
+
+  async executeVoiceMusicQueueNextTool(opts: { session; settings; args }) {
+    return executeVoiceMusicQueueNextTool(this, opts);
+  }
+
+  async executeVoiceMusicPlayNowTool(opts: { session; settings; args }) {
+    return executeVoiceMusicPlayNowTool(this, opts);
   }
 
   async executeVoiceWebSearchTool(opts: { session; settings; args }) {

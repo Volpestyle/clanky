@@ -1457,37 +1457,49 @@ export class ClankerBot {
       });
     }
 
-    if (intent.intent === "play_music") {
+    if (
+      intent.intent === "music_play_now" ||
+      intent.intent === "music_queue_next" ||
+      intent.intent === "music_queue_add"
+    ) {
       const query = String(intent.query || "").trim();
       const trackId = String(intent.selectedResultId || "").trim() || null;
       const platform = String(intent.platform || "").trim().toLowerCase() || "auto";
       const searchResults = Array.isArray(intent.searchResults) ? intent.searchResults : null;
+      const action =
+        intent.intent === "music_queue_next"
+          ? "queue_next"
+          : intent.intent === "music_queue_add"
+            ? "queue_add"
+            : "play_now";
       return await this.voiceSessionManager.requestPlayMusic({
         message,
         settings,
         query,
         trackId,
         platform,
+        action,
         searchResults,
-        reason: "nl_play_music",
+        reason: `nl_${intent.intent}`,
         source: "text_voice_intent"
       });
     }
 
-    if (intent.intent === "stop_music") {
+    if (intent.intent === "music_stop") {
       return await this.voiceSessionManager.requestStopMusic({
         message,
         settings,
-        reason: "nl_stop_music",
+        reason: "nl_music_stop",
+        clearQueue: true,
         source: "text_voice_intent"
       });
     }
 
-    if (intent.intent === "pause_music") {
+    if (intent.intent === "music_pause") {
       return await this.voiceSessionManager.requestPauseMusic({
         message,
         settings,
-        reason: "nl_pause_music",
+        reason: "nl_music_pause",
         source: "text_voice_intent"
       });
     }

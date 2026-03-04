@@ -288,7 +288,7 @@ export const REPLY_JSON_SCHEMA = `{
     "targetChannelId": "string or null"
   },
   "voiceIntent": {
-    "intent": "join|leave|status|watch_stream|stop_watching_stream|stream_status|play_music|stop_music|pause_music|none",
+    "intent": "join|leave|status|watch_stream|stop_watching_stream|stream_status|music_play_now|music_queue_next|music_queue_add|music_stop|music_pause|none",
     "confidence": 0,
     "reason": "string or null",
     "query": "string or null",

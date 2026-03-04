@@ -232,6 +232,27 @@ function formatImageLookupResults(results) {
     .join("\n");
 }
 
+function formatPromptTrackLabel(track) {
+  const title = String(track?.title || "").trim();
+  if (!title) return "";
+  const artist = Array.isArray(track?.artists)
+    ? track.artists.map((value) => String(value || "").trim()).filter(Boolean).join(", ")
+    : String(track?.artist || "").trim();
+  return artist ? `${title} by ${artist}` : title;
+}
+
+function formatPromptUpcomingTracks(tracks) {
+  const rows = Array.isArray(tracks) ? tracks : [];
+  return rows
+    .slice(0, 3)
+    .map((track, index) => {
+      const label = formatPromptTrackLabel(track);
+      return label ? `${index + 1}. ${label}` : "";
+    })
+    .filter(Boolean)
+    .join(" | ");
+}
+
 export function buildSystemPrompt(settings) {
   const memoryEnabled = Boolean(settings?.memory?.enabled);
   const textGuidance = getPromptTextGuidance(settings, DEFAULT_PROMPT_TEXT_GUIDANCE);
@@ -496,14 +517,44 @@ export function buildReplyPrompt({
       "If the user asks whether stream watch is on/off, set voiceIntent.intent to stream_status."
     );
     parts.push(
-      "If the user clearly asks you to play music or a song in VC, set voiceIntent.intent to play_music."
+      "If the user clearly asks you to play music immediately, replace the current track, or start a song now in VC, set voiceIntent.intent to music_play_now."
     );
     parts.push(
-      "If the user clearly asks you to stop music, set voiceIntent.intent to stop_music."
+      "If the user clearly asks you to queue a song next in VC, set voiceIntent.intent to music_queue_next."
     );
     parts.push(
-      "If the user clearly asks you to pause music, set voiceIntent.intent to pause_music."
+      "If the user clearly asks you to add a song to the queue without interrupting current playback in VC, set voiceIntent.intent to music_queue_add."
     );
+    parts.push(
+      "If the user clearly asks you to stop music, set voiceIntent.intent to music_stop."
+    );
+    parts.push(
+      "If the user clearly asks you to pause music, set voiceIntent.intent to music_pause."
+    );
+    if (voiceMode?.musicState) {
+      const musicPlaybackState = String(voiceMode.musicState.playbackState || "idle").trim().toLowerCase() || "idle";
+      const currentTrackLabel = formatPromptTrackLabel(voiceMode.musicState.currentTrack);
+      const lastTrackLabel = formatPromptTrackLabel(voiceMode.musicState.lastTrack);
+      const queueLength = Math.max(0, Math.floor(Number(voiceMode.musicState.queueLength) || 0));
+      const upcomingTracksLabel = formatPromptUpcomingTracks(voiceMode.musicState.upcomingTracks);
+      const lastAction = String(voiceMode.musicState.lastAction || "").trim().toLowerCase() || null;
+      const lastQuery = String(voiceMode.musicState.lastQuery || "").trim() || null;
+      parts.push(
+        [
+          "Current voice music state:",
+          `- Playback: ${musicPlaybackState}`,
+          currentTrackLabel ? `- Current track: ${currentTrackLabel}` : null,
+          !currentTrackLabel && lastTrackLabel ? `- Most recent track: ${lastTrackLabel}` : null,
+          `- Queue length: ${queueLength} total track${queueLength === 1 ? "" : "s"}`,
+          upcomingTracksLabel ? `- Next queued tracks: ${upcomingTracksLabel}` : null,
+          lastAction ? `- Most recent music action: ${lastAction}` : null,
+          lastQuery ? `- Most recent music request: ${lastQuery}` : null,
+          "- If the user asks what is playing, what was stopped, or what is queued, answer from this state directly."
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
+    }
     const musicDisambiguationActive = Boolean(voiceMode?.musicDisambiguation?.active);
     const musicDisambiguationOptions = Array.isArray(voiceMode?.musicDisambiguation?.options)
       ? voiceMode.musicDisambiguation.options
@@ -512,7 +563,7 @@ export function buildReplyPrompt({
       const pendingQuery = String(voiceMode?.musicDisambiguation?.query || "").trim() || null;
       const pendingPlatform = String(voiceMode?.musicDisambiguation?.platform || "auto").trim().toLowerCase() || "auto";
       parts.push(
-        `There is a pending music disambiguation request${pendingQuery ? ` for query "${pendingQuery}"` : ""} on platform ${pendingPlatform}.`
+        `There is a pending music disambiguation request${pendingQuery ? ` for query "${pendingQuery}"` : ""} on platform ${pendingPlatform} for action ${voiceMode.musicDisambiguation.action === "queue_next" ? "music_queue_next" : voiceMode.musicDisambiguation.action === "queue_add" ? "music_queue_add" : "music_play_now"}.`
       );
       parts.push(
         [
@@ -527,7 +578,7 @@ export function buildReplyPrompt({
         ].join("\n")
       );
       parts.push(
-        "If the user picks one of those options (by number or by naming it), set voiceIntent.intent=play_music and voiceIntent.selectedResultId to that exact id."
+        `If the user picks one of those options (by number or by naming it), set voiceIntent.intent=${voiceMode.musicDisambiguation.action === "queue_next" ? "music_queue_next" : voiceMode.musicDisambiguation.action === "queue_add" ? "music_queue_add" : "music_play_now"} and voiceIntent.selectedResultId to that exact id.`
       );
     }
     parts.push(
@@ -737,6 +788,9 @@ export function buildReplyPrompt({
   parts.push("If recent messages are one coherent thread, you may combine and answer multiple messages in one reply.");
   parts.push("If recent messages are unrelated, prioritize the latest message and keep the reply focused.");
   parts.push("Use tools (web_search, memory_search, memory_write) as needed before producing your final JSON reply.");
+  parts.push(
+    "Use memory_write sparingly and with judgment: save only genuine durable facts, never requests, insults, toxic phrasing, or future-behavior rules."
+  );
   parts.push("Return strict JSON only. Do not output markdown or code fences.");
   parts.push("JSON format:");
   parts.push(REPLY_JSON_SCHEMA);
@@ -746,11 +800,11 @@ export function buildReplyPrompt({
   parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false for text-channel replies.");
   parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");
   parts.push(
-    "Set voiceIntent.intent to one of join|leave|status|watch_stream|stop_watching_stream|stream_status|play_music|stop_music|pause_music|none."
+    "Set voiceIntent.intent to one of join|leave|status|watch_stream|stop_watching_stream|stream_status|music_play_now|music_queue_next|music_queue_add|music_stop|music_pause|none."
   );
-  parts.push("When voiceIntent.intent is play_music, set voiceIntent.query to the song name the user wants to play.");
-  parts.push("Set voiceIntent.platform to youtube|soundcloud|auto when intent is play_music. Use auto to search all platforms.");
-  parts.push("When searchResults are provided (from a previous music search), set voiceIntent.selectedResultId to the ID of the track to play.");
+  parts.push("When voiceIntent.intent is music_play_now, music_queue_next, or music_queue_add, set voiceIntent.query to the song name the user wants.");
+  parts.push("Set voiceIntent.platform to youtube|soundcloud|auto when intent is music_play_now, music_queue_next, or music_queue_add. Use auto to search all platforms.");
+  parts.push("When searchResults are provided (from a previous music search), set voiceIntent.selectedResultId to the ID of the track to use for music_play_now, music_queue_next, or music_queue_add.");
   parts.push("When not issuing voice control, set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null, and other voiceIntent fields to null.");
   parts.push("Set screenShareIntent.action to one of offer_link|none.");
   parts.push("When not offering a share link, set screenShareIntent.action=none, screenShareIntent.confidence=0, screenShareIntent.reason=null.");
@@ -1199,6 +1253,9 @@ export function buildVoiceTurnPrompt({
 
   if (allowMemoryToolCalls) {
     parts.push("Memory tools (memory_search, memory_write) are available. Use them as tool calls when needed.");
+    parts.push(
+      "Use memory_write only for genuine durable facts. Do not save requests, insults, toxic phrasing, or rules for future behavior."
+    );
   }
 
   if (allowSoundboardToolCall && normalizedSoundboardCandidates.length) {

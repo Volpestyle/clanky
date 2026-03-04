@@ -138,7 +138,7 @@ test("parseStructuredReplyOutput accepts music control voice intents", () => {
       text: "playing now",
       skip: false,
       voiceIntent: {
-        intent: "play_music",
+        intent: "music_play_now",
         confidence: 0.96,
         reason: "explicit play request",
         query: "mf doom all caps",
@@ -147,25 +147,44 @@ test("parseStructuredReplyOutput accepts music control voice intents", () => {
       }
     })
   );
-  assert.equal(play.voiceIntent.intent, "play_music");
+  assert.equal(play.voiceIntent.intent, "music_play_now");
   assert.equal(play.voiceIntent.confidence, 0.96);
   assert.equal(play.voiceIntent.reason, "explicit play request");
   assert.equal(play.voiceIntent.query, "mf doom all caps");
   assert.equal(play.voiceIntent.platform, "youtube");
   assert.equal(play.voiceIntent.selectedResultId, "track:123");
 
+  const queueNext = parseStructuredReplyOutput(
+    JSON.stringify({
+      text: "queued next",
+      skip: false,
+      voiceIntent: {
+        intent: "music_queue_next",
+        confidence: 0.91,
+        reason: "explicit queue-next request",
+        query: "accordion",
+        platform: "soundcloud",
+        selectedResultId: "track:456"
+      }
+    })
+  );
+  assert.equal(queueNext.voiceIntent.intent, "music_queue_next");
+  assert.equal(queueNext.voiceIntent.query, "accordion");
+  assert.equal(queueNext.voiceIntent.platform, "soundcloud");
+  assert.equal(queueNext.voiceIntent.selectedResultId, "track:456");
+
   const pause = parseStructuredReplyOutput(
     JSON.stringify({
       text: "paused",
       skip: false,
       voiceIntent: {
-        intent: "pause_music",
+        intent: "music_pause",
         confidence: 0.9,
         reason: "explicit pause request"
       }
     })
   );
-  assert.equal(pause.voiceIntent.intent, "pause_music");
+  assert.equal(pause.voiceIntent.intent, "music_pause");
   assert.equal(pause.voiceIntent.confidence, 0.9);
   assert.equal(pause.voiceIntent.reason, "explicit pause request");
   assert.equal(pause.voiceIntent.query, null);

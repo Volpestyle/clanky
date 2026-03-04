@@ -11,6 +11,7 @@ const VIDEO_PROMPT_DIRECTIVE_RE = /\[\[VIDEO_PROMPT:\s*([^\]]*?)\s*\]\]\s*$/i;
 const STRUCTURED_REPLY_CODE_FENCE_OPEN_RE = /^```(?:json)?\s*/i;
 const STRUCTURED_REPLY_TEXT_FIELD_RE = /"text"\s*:\s*"((?:\\.|[^"\\])*)"/s;
 const STRUCTURED_REPLY_SKIP_TRUE_RE = /"skip"\s*:\s*true\b/i;
+// English-only fallback for explicit user opt-outs; normal prompt/tool policy remains the source of truth.
 const EN_WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
 const DEFAULT_MAX_MEDIA_PROMPT_LEN = 900;
 const MAX_MEDIA_PROMPT_FLOOR = 120;
@@ -45,10 +46,17 @@ const REPLY_VOICE_INTENT_TYPES = new Set([
   "watch_stream",
   "stop_watching_stream",
   "stream_status",
-  "play_music",
-  "stop_music",
-  "pause_music",
+  "music_play_now",
+  "music_queue_next",
+  "music_queue_add",
+  "music_stop",
+  "music_pause",
   "none"
+]);
+const REPLY_VOICE_MUSIC_QUERY_INTENT_TYPES = new Set([
+  "music_play_now",
+  "music_queue_next",
+  "music_queue_add"
 ]);
 const REPLY_AUTOMATION_OPERATION_TYPES = new Set(["create", "pause", "resume", "delete", "list", "none"]);
 const MAX_VOICE_INTENT_REASON_LEN = 180;
@@ -178,9 +186,11 @@ export const REPLY_OUTPUT_SCHEMA = {
             "watch_stream",
             "stop_watching_stream",
             "stream_status",
-            "play_music",
-            "stop_music",
-            "pause_music",
+            "music_play_now",
+            "music_queue_next",
+            "music_queue_add",
+            "music_stop",
+            "music_pause",
             "none"
           ]
         },
@@ -809,10 +819,10 @@ function normalizeStructuredVoiceIntent(rawIntent) {
     intent: intentLabel === "none" ? null : intentLabel,
     confidence,
     reason,
-    query: intentLabel === "play_music" ? query : null,
-    platform: intentLabel === "play_music" ? platform : null,
-    searchResults: intentLabel === "play_music" ? searchResults : null,
-    selectedResultId: intentLabel === "play_music" ? selectedResultId : null
+    query: REPLY_VOICE_MUSIC_QUERY_INTENT_TYPES.has(intentLabel) ? query : null,
+    platform: REPLY_VOICE_MUSIC_QUERY_INTENT_TYPES.has(intentLabel) ? platform : null,
+    searchResults: REPLY_VOICE_MUSIC_QUERY_INTENT_TYPES.has(intentLabel) ? searchResults : null,
+    selectedResultId: REPLY_VOICE_MUSIC_QUERY_INTENT_TYPES.has(intentLabel) ? selectedResultId : null
   };
 }
 

@@ -1530,16 +1530,23 @@ test("voice intent dispatcher routes all supported intents to voice session mana
       called.push("stream_status");
       return true;
     };
-    bot.voiceSessionManager.requestPlayMusic = async () => {
-      called.push("play_music");
+    bot.voiceSessionManager.requestPlayMusic = async (payload: { action?: string } = {}) => {
+      const action = payload.action;
+      called.push(
+        action === "queue_next"
+          ? "music_queue_next"
+          : action === "queue_add"
+            ? "music_queue_add"
+            : "music_play_now"
+      );
       return true;
     };
     bot.voiceSessionManager.requestStopMusic = async () => {
-      called.push("stop_music");
+      called.push("music_stop");
       return true;
     };
     bot.voiceSessionManager.requestPauseMusic = async () => {
-      called.push("pause_music");
+      called.push("music_pause");
       return true;
     };
 
@@ -1558,9 +1565,11 @@ test("voice intent dispatcher routes all supported intents to voice session mana
       "watch_stream",
       "stop_watching_stream",
       "stream_status",
-      "play_music",
-      "stop_music",
-      "pause_music"
+      "music_play_now",
+      "music_queue_next",
+      "music_queue_add",
+      "music_stop",
+      "music_pause"
     ];
 
     for (const intent of intents) {
