@@ -3579,6 +3579,13 @@ export class VoiceSessionManager {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
     if (session.lastAssistantReplyAt) return;
+    // Wait for active captures to resolve — if they produce a transcript the
+    // normal reply pipeline will set lastAssistantReplyAt and we skip the
+    // greeting. If they turn out to be ambient noise, cleanupCapture re-calls us.
+    if (Number(session.userCaptures?.size || 0) > 0) {
+      session.joinGreetingPending = true;
+      return;
+    }
     session.joinGreetingPending = false;
     this.createTrackedAudioResponse({
       session,
@@ -8138,6 +8145,11 @@ export class VoiceSessionManager {
       // arrival of our unsubscribe IPC, the auto-subscribe creates a fresh
       // subscription that our stale unsubscribe then destroys — leaving no
       // active subscription for the new speech.
+
+      // All captures resolved — if join greeting is still pending, fire it now.
+      if (session.joinGreetingPending && session.userCaptures.size === 0) {
+        this.fireJoinGreeting(session);
+      }
     };
 
     const scheduleIdleFlush = () => {
