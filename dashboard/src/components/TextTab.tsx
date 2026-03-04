@@ -159,6 +159,9 @@ function ToolCallsSection({ metadata }: { metadata: Record<string, unknown> }) {
   const video = safeRecord(metadata.video);
   const llm = safeRecord(metadata.llm) as LLMInfo;
 
+  const webSearchResults: { title: string; url: string; domain: string }[] =
+    Array.isArray(webSearch.results) ? webSearch.results : [];
+
   if (webSearch.used) {
     const query = String(webSearch.query || "");
     const results = num(webSearch.resultCount);
@@ -218,6 +221,16 @@ function ToolCallsSection({ metadata }: { metadata: Record<string, unknown> }) {
           </div>
         ))}
       </div>
+      {webSearchResults.length > 0 && (
+        <div className="tt-search-results">
+          {webSearchResults.map((r, i) => (
+            <a key={i} className="tt-search-result" href={r.url} target="_blank" rel="noopener noreferrer">
+              <span className="tt-search-result-domain">{r.domain}</span>
+              <span className="tt-search-result-title">{r.title}</span>
+            </a>
+          ))}
+        </div>
+      )}
     </Section>
   );
 }

@@ -1,7 +1,6 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
 import { Collapse } from "../Collapse";
-import { FullPromptPreview } from "../FullPromptPreview";
 import { rangeStyle } from "../../utils";
 import { LlmProviderOptions } from "./LlmProviderOptions";
 import { OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS } from "../../settingsFormModel";
@@ -15,10 +14,6 @@ export function VoiceModeSettingsSection({
   isOpenAiRealtimeMode,
   isGeminiRealtimeMode,
   isElevenLabsRealtimeMode,
-  setVoiceReplyDecisionProvider,
-  selectVoiceReplyDecisionPresetModel,
-  voiceReplyDecisionModelOptions,
-  selectedVoiceReplyDecisionPresetModel,
   setVoiceGenerationProvider,
   selectVoiceGenerationPresetModel,
   voiceGenerationModelOptions,
@@ -52,11 +47,6 @@ export function VoiceModeSettingsSection({
     usesRealtimeAsrBridge &&
     Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge);
   const usesBrainGeneration = isRealtimeMode && usesBrainLlm && !openAiPerUserAsrBridge;
-  const classifierMergedWithGeneration =
-    !form.voiceReplyDecisionLlmEnabled &&
-    usesBrainGeneration;
-  const classifierDisabledNativeRealtime =
-    !form.voiceReplyDecisionLlmEnabled && isRealtimeMode && isNativePath;
   return (
     <SettingsSection id={id} title="Voice Mode" active={form.voiceEnabled}>
       <div className="toggles">
@@ -375,70 +365,6 @@ export function VoiceModeSettingsSection({
               ? "Command-only mode overrides reply eagerness. Clanker will only respond to wake-word or direct-address turns. Music playback also forces this mode automatically while audible."
               : "When disabled, Clanker can answer unaddressed turns based on reply eagerness. Music playback still forces command-only mode while audible."}
           </p>
-
-          <h4>Voice Reply Decider</h4>
-          <p>Controls when Clank should chime in during VC.</p>
-          <div className="toggles">
-            <label>
-              <input
-                type="checkbox"
-                checked={form.voiceReplyDecisionLlmEnabled}
-                onChange={set("voiceReplyDecisionLlmEnabled")}
-              />
-              Enable pre-reply classifier LLM step
-            </label>
-          </div>
-          {classifierMergedWithGeneration && (
-            <p>
-              With classifier disabled, reply generation decides whether to speak by returning <code>[SKIP]</code>.
-            </p>
-          )}
-          {classifierDisabledNativeRealtime && (
-            <p>
-              Native realtime mode has no Brain-generation step, so disabling the classifier keeps only
-              deterministic fast-path admissions.
-            </p>
-          )}
-          {form.voiceReplyDecisionLlmEnabled && (
-            <>
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-reply-decision-provider">Provider</label>
-                  <select
-                    id="voice-reply-decision-provider"
-                    value={form.voiceReplyDecisionLlmProvider}
-                    onChange={setVoiceReplyDecisionProvider}
-                  >
-                    <LlmProviderOptions />
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="voice-reply-decision-model-preset">Model ID</label>
-                  <select
-                    id="voice-reply-decision-model-preset"
-                    value={selectedVoiceReplyDecisionPresetModel}
-                    onChange={selectVoiceReplyDecisionPresetModel}
-                  >
-                    {voiceReplyDecisionModelOptions.map((modelId) => (
-                      <option key={modelId} value={modelId}>
-                        {modelId}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <details>
-                <summary>Advanced classifier preview</summary>
-                <p>
-                  Preview the prompt guidance that feeds the classifier and generation stages. Use <code>{"{{botName}}"}</code>{" "}
-                  to reference the configured bot name.
-                </p>
-
-                <FullPromptPreview form={form} />
-              </details>
-            </>
-          )}
 
           <h4>Thought Engine</h4>
           <p>

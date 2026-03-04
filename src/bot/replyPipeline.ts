@@ -255,7 +255,6 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
 
 export async function executeReplyLlm(bot: any, message: any, settings: any, options: any, ctx: any) {
   const {
-    recentMessages,
     addressSignal, triggerMessageIds, source, performance,
     replyTrace, systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture
   } = ctx;
@@ -265,8 +264,8 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     webSearchAvailable:
       Boolean(webSearch?.enabled) &&
       Boolean(webSearch?.configured) &&
-      !Boolean(webSearch?.optedOutByUser) &&
-      !Boolean(webSearch?.blockedByBudget) &&
+      !webSearch?.optedOutByUser &&
+      !webSearch?.blockedByBudget &&
       webSearch?.budget?.canSearch !== false,
     memoryAvailable: Boolean(settings?.memory?.enabled),
     imageLookupAvailable: Boolean(imageLookup?.enabled),
@@ -997,6 +996,11 @@ export async function sendReplyMessage(bot: any, message: any, settings: any, op
         used: webSearch.used,
         query: webSearch.query,
         resultCount: webSearch.results?.length || 0,
+        results: (webSearch.results || []).map((r) => ({
+          title: r.title,
+          url: r.url,
+          domain: r.domain
+        })),
         fetchedPages: webSearch.fetchedPages || 0,
         providerUsed: webSearch.providerUsed || null,
         providerFallbackUsed: Boolean(webSearch.providerFallbackUsed),

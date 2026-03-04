@@ -93,10 +93,6 @@ export default function SettingsForm({
     selectedPresetModel: selectedMemoryLlmPresetModel
   } = resolvePresetSelection("memoryLlmProvider", "memoryLlmModel");
   const {
-    options: voiceReplyDecisionModelOptions,
-    selectedPresetModel: selectedVoiceReplyDecisionPresetModel
-  } = resolvePresetSelection("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel");
-  const {
     options: voiceGenerationModelOptions,
     selectedPresetModel: selectedVoiceGenerationPresetModel
   } = resolvePresetSelection("voiceGenerationLlmProvider", "voiceGenerationLlmModel");
@@ -157,7 +153,6 @@ export default function SettingsForm({
       syncModel("replyFollowupLlmModel", selectedReplyFollowupPresetModel);
       syncModel("memoryLlmModel", selectedMemoryLlmPresetModel);
       syncModel("voiceGenerationLlmModel", selectedVoiceGenerationPresetModel);
-      syncModel("voiceReplyDecisionLlmModel", selectedVoiceReplyDecisionPresetModel);
       syncModel("voiceThoughtEngineModel", selectedVoiceThoughtEnginePresetModel);
       if (next.voiceGenerationLlmUseTextModel) {
         syncModel("voiceGenerationLlmProvider", next.provider);
@@ -170,7 +165,6 @@ export default function SettingsForm({
     selectedReplyFollowupPresetModel,
     selectedMemoryLlmPresetModel,
     selectedVoiceGenerationPresetModel,
-    selectedVoiceReplyDecisionPresetModel,
     selectedVoiceThoughtEnginePresetModel
   ]);
 
@@ -212,7 +206,6 @@ export default function SettingsForm({
   const setProvider = createProviderSetter("provider", "model");
   const setMemoryLlmProvider = createProviderSetter("memoryLlmProvider", "memoryLlmModel");
   const setReplyFollowupProvider = createProviderSetter("replyFollowupLlmProvider", "replyFollowupLlmModel");
-  const setVoiceReplyDecisionProvider = createProviderSetter("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel");
   const setVoiceGenerationProvider = createProviderSetter("voiceGenerationLlmProvider", "voiceGenerationLlmModel");
   const setVoiceThoughtEngineProvider = createProviderSetter("voiceThoughtEngineProvider", "voiceThoughtEngineModel");
 
@@ -229,7 +222,6 @@ export default function SettingsForm({
   const selectPresetModel = createPresetSelector("model");
   const selectReplyFollowupPresetModel = createPresetSelector("replyFollowupLlmModel");
   const selectMemoryLlmPresetModel = createPresetSelector("memoryLlmModel");
-  const selectVoiceReplyDecisionPresetModel = createPresetSelector("voiceReplyDecisionLlmModel");
   const selectVoiceGenerationPresetModel = createPresetSelector("voiceGenerationLlmModel");
   const selectVoiceThoughtEnginePresetModel = createPresetSelector("voiceThoughtEngineModel");
 
@@ -334,10 +326,6 @@ export default function SettingsForm({
             isOpenAiRealtimeMode={isOpenAiRealtimeMode}
             isGeminiRealtimeMode={isGeminiRealtimeMode}
             isElevenLabsRealtimeMode={isElevenLabsRealtimeMode}
-            setVoiceReplyDecisionProvider={setVoiceReplyDecisionProvider}
-            selectVoiceReplyDecisionPresetModel={selectVoiceReplyDecisionPresetModel}
-            voiceReplyDecisionModelOptions={voiceReplyDecisionModelOptions}
-            selectedVoiceReplyDecisionPresetModel={selectedVoiceReplyDecisionPresetModel}
             setVoiceGenerationProvider={setVoiceGenerationProvider}
             selectVoiceGenerationPresetModel={selectVoiceGenerationPresetModel}
             voiceGenerationModelOptions={voiceGenerationModelOptions}
