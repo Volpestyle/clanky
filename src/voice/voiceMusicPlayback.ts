@@ -5,11 +5,17 @@ import { parseVoiceDecisionContract, normalizeVoiceReplyDecisionProvider, defaul
 import { getPromptBotName } from "../promptCore.ts";
 import { clamp } from "lodash";
 
-
+// English-only fallback/fast-path heuristics for obvious music control turns.
+// These are convenience shortcuts, not the primary music-command decision logic.
 export const EN_MUSIC_STOP_VERB_RE = /\b(?:stop|pause|halt|end|quit|shut\s*off)\b/i;
 export const EN_MUSIC_CUE_RE = /\b(?:music|song|songs|track|tracks|playback|playing)\b/i;
 export const EN_MUSIC_PLAY_VERB_RE = /\b(?:play|start|queue|put\s+on|spin)\b/i;
-export const EN_MUSIC_PLAY_QUERY_RE = /\b(?:play|start|queue|put\s+on|spin)\s+(.+?)\b(?:in\s+vc|in\s+voice|in\s+discord|right\s+now|rn|please|plz)?$/i;
+export const EN_MUSIC_PLAY_QUERY_RE =
+  /\b(?:play|start|queue|put\s+on|spin)\s+(.+?)\b(?:in\s+vc|in\s+the\s+vc|in\s+voice|in\s+discord|right\s+now|rn|please|plz)?$/i;
+export const EN_MUSIC_QUERY_TRAILING_NOISE_RE =
+  /\b(?:in\s+vc|in\s+the\s+vc|in\s+voice|in\s+discord|right\s+now|rn|please|plz|for\s+me|for\s+us|for\s+everyone|for\s+everybody|for\s+the\s+chat|thanks?)\b/gi;
+export const EN_MUSIC_QUERY_MEDIA_WORD_RE = /\b(?:music|song|songs|track|tracks)\b/gi;
+export const EN_MUSIC_QUERY_EMPTY_RE = /^(?:something|anything|some|a|the|please|plz)$/i;
 export const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
 export const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
 export const VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK = 5;
@@ -292,14 +298,14 @@ export function extractMusicPlayQuery(manager: any, transcript = "") {
   if (!candidate) return "";
 
   const cleaned = candidate
-    .replace(/\b(?:in\s+vc|in\s+voice|in\s+discord|right\s+now|rn|please|plz|for\s+me|for\s+us|thanks?)\b/gi, " ")
-    .replace(/\b(?:music|song|songs|track|tracks)\b/gi, " ")
+    .replace(EN_MUSIC_QUERY_TRAILING_NOISE_RE, " ")
+    .replace(EN_MUSIC_QUERY_MEDIA_WORD_RE, " ")
     .replace(/[^\w\s'"&+-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
   if (!cleaned) return "";
-  if (/^(?:something|anything|some|a|the|please|plz)$/i.test(cleaned)) return "";
+  if (EN_MUSIC_QUERY_EMPTY_RE.test(cleaned)) return "";
   return cleaned.slice(0, 120);
 }
 
