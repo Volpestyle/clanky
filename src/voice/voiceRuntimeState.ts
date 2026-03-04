@@ -167,8 +167,7 @@ export function buildRuntimeStateSnapshot({
                     active: joinWindowActive,
                     ageMs: Math.round(joinWindowAgeMs),
                     windowMs: JOIN_GREETING_LLM_WINDOW_MS,
-                    greetingScheduled: Boolean(session.joinGreetingScheduled),
-                    greetingTimerActive: Boolean(session.joinGreetingTimer),
+                    greetingPending: Boolean(session.joinGreetingPending),
                 },
                 thoughtEngine: {
                     busy: Boolean(session.thoughtLoopBusy),

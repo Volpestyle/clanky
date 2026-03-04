@@ -738,8 +738,7 @@ export class VoiceSessionManager {
             active: joinWindowActive,
             ageMs: Math.round(joinWindowAgeMs),
             windowMs: JOIN_GREETING_LLM_WINDOW_MS,
-            greetingScheduled: Boolean(session.joinGreetingScheduled),
-            greetingTimerActive: Boolean(session.joinGreetingTimer),
+            greetingPending: Boolean(session.joinGreetingPending),
           },
           thoughtEngine: {
             busy: Boolean(session.thoughtLoopBusy),
@@ -3538,30 +3537,14 @@ export class VoiceSessionManager {
       session.playbackArmed = true;
       session.playbackArmedReason = reason;
       session.playbackArmedAt = Date.now();
-      if (reason !== "connection_ready") {
-        this.logJoinGreetingState(session, "voice_join_greeting_not_scheduled", {
-          reason: "playback_armed_reason_mismatch",
-          playbackArmedReason: String(reason || "unknown")
-        });
-        return;
+      if (reason !== "connection_ready") return;
+      // If instructions are already set, fire greeting immediately.
+      // Otherwise mark pending — refreshRealtimeInstructions will fire it.
+      if (session.lastOpenAiRealtimeInstructions && !session.lastAssistantReplyAt) {
+        this.fireJoinGreeting(session);
+      } else {
+        session.joinGreetingPending = true;
       }
-      if (session.joinGreetingScheduled) {
-        this.logJoinGreetingState(session, "voice_join_greeting_not_scheduled", {
-          reason: "already_scheduled"
-        });
-        return;
-      }
-      session.joinGreetingScheduled = true;
-      // Schedule a deferred greeting — if the user speaks first the
-      // normal reply pipeline handles it (with join-window bias) and
-      // cancels this timer. If nobody talks, the bot announces itself.
-      this.logJoinGreetingState(session, "voice_join_greeting_scheduled", {
-        delayMs: 3000
-      });
-      session.joinGreetingTimer = setTimeout(() => {
-        session.joinGreetingTimer = null;
-        this.maybeFireJoinGreeting(session);
-      }, 3000);
     };
 
     const onMusicIdle = () => {
@@ -3589,131 +3572,28 @@ export class VoiceSessionManager {
       session.subprocessClient?.off("playbackArmed", onPlaybackArmed);
       session.subprocessClient?.off("musicIdle", onMusicIdle);
       session.subprocessClient?.off("error", onError);
-      if (session.joinGreetingTimer) {
-        clearTimeout(session.joinGreetingTimer);
-        session.joinGreetingTimer = null;
-      }
     });
   }
 
-  maybeFireJoinGreeting(session) {
-    if (!session) return;
-    if (session.ending) {
-      this.logJoinGreetingState(session, "voice_join_greeting_skipped", {
-        reason: "session_ending"
-      });
-      return;
-    }
-    if (!isRealtimeMode(session.mode)) {
-      this.logJoinGreetingState(session, "voice_join_greeting_skipped", {
-        reason: "mode_not_realtime",
-        mode: session.mode
-      });
-      return;
-    }
-    // Skip if someone is actively speaking (assertive signal, not just Discord VAD noise).
-    // If captures exist but none are assertive yet, retry once after a short delay
-    // to let the silence gate decide before permanently skipping.
-    if (Number(session.userCaptures?.size || 0) > 0) {
-      const hasAssertive = this.hasAssertiveInboundCapture(session);
-      if (hasAssertive) {
-        this.logJoinGreetingState(session, "voice_join_greeting_skipped", {
-          reason: "assertive_user_capture",
-          userCaptureCount: Number(session.userCaptures?.size || 0)
-        });
-        return;
-      }
-      // Captures exist but none assertive — retry once after silence gate has time to finalize
-      if (!session.joinGreetingRetried) {
-        session.joinGreetingRetried = true;
-        session.joinGreetingTimer = setTimeout(() => {
-          session.joinGreetingTimer = null;
-          this.maybeFireJoinGreeting(session);
-        }, 2000);
-        this.logJoinGreetingState(session, "voice_join_greeting_deferred", {
-          reason: "non_assertive_capture_retry",
-          userCaptureCount: Number(session.userCaptures?.size || 0)
-        });
-        return;
-      }
-    }
-    // Skip if the bot already spoke (user greeted first, normal pipeline handled it)
-    if (session.lastAssistantReplyAt) {
-      this.logJoinGreetingState(session, "voice_join_greeting_skipped", {
-        reason: "assistant_already_replied",
-        lastAssistantReplyAt: Number(session.lastAssistantReplyAt || 0)
-      });
-      return;
-    }
-    // Skip if a user turn is queued/draining (user speech arrived, response incoming)
-    if (session.realtimeTurnDrainActive) {
-      this.logJoinGreetingState(session, "voice_join_greeting_skipped", {
-        reason: "turn_drain_active"
-      });
-      return;
-    }
-    const pendingQueue = Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns : [];
-    if (pendingQueue.length > 0) {
-      this.logJoinGreetingState(session, "voice_join_greeting_skipped", {
-        reason: "pending_turns",
-        pendingTurns: pendingQueue.length
-      });
-      return;
-    }
-
-    const settings = session.settingsSnapshot || this.store.getSettings();
-    const botName = getPromptBotName(settings);
-    const participants = this.getVoiceChannelParticipants(session);
-    const participantCount = participants.length;
-    const summoner = participants.find(p => p.userId === session.requestedByUserId);
-    const participantNames = participants.map(p => p.displayName).filter(Boolean);
-
-    const greetingPrompt = [
-      `You are ${botName}. You just joined a voice channel.`,
-      summoner
-        ? `${summoner.displayName} summoned you.`
-        : null,
-      participantNames.length > 0
-        ? `People here: ${participantNames.join(", ")}.`
-        : "Nobody else is here yet.",
-      "Say a brief, casual greeting to announce your presence.",
-      "Keep it to one short sentence. Be natural — match the vibe of the channel."
-    ].filter(Boolean).join(" ");
-
-    const spoke = this.requestRealtimePromptUtterance({
+  fireJoinGreeting(session) {
+    if (!session || session.ending) return;
+    if (!isRealtimeMode(session.mode)) return;
+    if (session.lastAssistantReplyAt) return;
+    session.joinGreetingPending = false;
+    this.createTrackedAudioResponse({
       session,
-      prompt: greetingPrompt,
-      userId: this.client.user?.id || null,
-      source: "voice_join_greeting"
+      source: "voice_join_greeting",
+      emitCreateEvent: true,
+      resetRetryState: true
     });
-
-    if (spoke) {
-      session.lastAssistantReplyAt = Date.now();
-      this.logJoinGreetingState(session, "voice_join_greeting_fired", {
-        participantCount: participants.length
-      });
-    } else {
-      this.logJoinGreetingState(session, "voice_join_greeting_skipped", {
-        reason: "prompt_utterance_not_sent",
-        participantCount: participants.length,
-        realtimeResponseActive: this.isRealtimeResponseActive(session)
-      });
-    }
-  }
-
-  logJoinGreetingState(session, content, metadata = {}) {
-    if (!session) return;
+    session.lastAssistantReplyAt = Date.now();
     this.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
       channelId: session.textChannelId,
       userId: this.client.user?.id || null,
-      content,
-      metadata: {
-        sessionId: session.id,
-        mode: session.mode,
-        ...metadata
-      }
+      content: "voice_join_greeting_fired",
+      metadata: { sessionId: session.id, mode: session.mode }
     });
   }
 
@@ -5798,7 +5678,6 @@ export class VoiceSessionManager {
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
-    if (Number(session.userCaptures?.size || 0) > 0) return false;
     const realtimeClient = session.realtimeClient;
     if (!realtimeClient || typeof realtimeClient.requestTextUtterance !== "function") return false;
 
@@ -11249,6 +11128,11 @@ export class VoiceSessionManager {
           instructionsChars: instructions.length
         }
       });
+
+      // Fire pending join greeting now that instructions are set.
+      if (session.joinGreetingPending && session.playbackArmed && !session.lastAssistantReplyAt) {
+        this.fireJoinGreeting(session);
+      }
     } catch (error) {
       this.store.logAction({
         kind: "voice_error",
@@ -11307,6 +11191,12 @@ export class VoiceSessionManager {
         "- If someone recently left, a brief natural goodbye/acknowledgement is usually good."
       ].join("\n")
     );
+
+    const joinWindowAgeMs = Math.max(0, Date.now() - Number(session?.startedAt || 0));
+    const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
+    if (joinWindowActive && !session.lastAssistantReplyAt) {
+      sections.push("You just joined this voice channel. Say a brief, casual greeting to announce your presence. Keep it to one short sentence. Be natural.");
+    }
 
     if (speakerName || normalizedTranscript) {
       sections.push(
@@ -12957,15 +12847,8 @@ export class VoiceSessionManager {
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
-    // Cancel deferred join greeting — bot is about to speak for another reason.
-    if (session.joinGreetingTimer) {
-      clearTimeout(session.joinGreetingTimer);
-      session.joinGreetingTimer = null;
-      this.logJoinGreetingState(session, "voice_join_greeting_canceled", {
-        reason: "bot_spoke_for_other_reason",
-        source: String(source || "turn_flush")
-      });
-    }
+    // Clear pending join greeting — bot is about to speak for another reason.
+    session.joinGreetingPending = false;
     if (emitCreateEvent && this.isRealtimeResponseActive(session)) {
       this.store.logAction({
         kind: "voice_runtime",
@@ -13363,10 +13246,7 @@ export class VoiceSessionManager {
       clearTimeout(session.realtimeTurnCoalesceTimer);
       session.realtimeTurnCoalesceTimer = null;
     }
-    if (session.joinGreetingTimer) {
-      clearTimeout(session.joinGreetingTimer);
-      session.joinGreetingTimer = null;
-    }
+    session.joinGreetingPending = false;
     session.pendingDeferredTurns = [];
     session.awaitingToolOutputs = false;
     session.openAiPendingToolCalls = new Map();
