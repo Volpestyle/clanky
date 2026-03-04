@@ -11,7 +11,7 @@ import { runBrowseAgent } from "./agents/browseAgent.ts";
 import { musicCommands } from "./voice/musicCommands.ts";
 import {
   buildAutomationPrompt,
-  buildInitiativePrompt,
+  buildDiscoveryPrompt,
   buildSystemPrompt
 } from "./prompts.ts";
 import { getMediaPromptCraftGuidance } from "./promptCore.ts";
@@ -22,8 +22,8 @@ import {
   MAX_VIDEO_FALLBACK_MESSAGES,
   MAX_VIDEO_TARGET_SCAN,
   collectMemoryFactHints,
-  composeInitiativeImagePrompt,
-  composeInitiativeVideoPrompt,
+  composeDiscoveryImagePrompt,
+  composeDiscoveryVideoPrompt,
   composeReplyImagePrompt,
   composeReplyVideoPrompt,
   extractRecentVideoTargets,
@@ -34,9 +34,9 @@ import {
   normalizeDirectiveText,
   normalizeReactionEmojiToken,
   normalizeSkipSentinel,
-  parseInitiativeMediaDirective,
+  parseDiscoveryMediaDirective,
   parseStructuredReplyOutput,
-  pickInitiativeMediaDirective,
+  pickDiscoveryMediaDirective,
   pickReplyMediaDirective,
   REPLY_OUTPUT_JSON_SCHEMA,
   resolveMaxMediaPromptLen,
@@ -98,14 +98,14 @@ import {
   scheduleReconnect
 } from "./bot/queueGateway.ts";
 import {
-  evaluateInitiativeSchedule,
-  evaluateSpontaneousInitiativeSchedule,
-  getInitiativeAverageIntervalMs,
-  getInitiativeMinGapMs,
-  getInitiativePacingMode,
-  getInitiativePostingIntervalMs,
-  pickInitiativeChannel
-} from "./bot/initiativeSchedule.ts";
+  evaluateDiscoverySchedule,
+  evaluateSpontaneousDiscoverySchedule,
+  getDiscoveryAverageIntervalMs,
+  getDiscoveryMinGapMs,
+  getDiscoveryPacingMode,
+  getDiscoveryPostingIntervalMs,
+  pickDiscoveryChannel
+} from "./bot/discoverySchedule.ts";
 import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
 import type { BrowserManager } from "./services/BrowserManager.ts";
 import {
@@ -128,6 +128,7 @@ const MAX_HISTORY_IMAGE_LOOKUP_RESULTS = 6;
 const MAX_IMAGE_LOOKUP_QUERY_TOKENS = 7;
 const UNSOLICITED_REPLY_CONTEXT_WINDOW = 5;
 const MAX_AUTOMATION_RUNS_PER_TICK = 4;
+const PROACTIVE_TEXT_CHANNEL_ACTIVE_WINDOW_MS = 24 * 60 * 60_000;
 const SCREEN_SHARE_MESSAGE_MAX_CHARS = 420;
 const SCREEN_SHARE_INTENT_THRESHOLD = 0.66;
 const LOOKUP_CONTEXT_TTL_HOURS = 48;
@@ -151,6 +152,7 @@ type ReplyAttemptOptions = {
   } | null;
   triggerMessageIds?: string[];
   forceRespond?: boolean;
+  forceDecisionLoop?: boolean;
   source?: string;
   performanceSeed?: ReplyPerformanceSeed | null;
 };
@@ -175,13 +177,15 @@ export class ClankerBot {
   video;
   lastBotMessageAt;
   memoryTimer;
-  initiativeTimer;
+  discoveryTimer;
+  textThoughtLoopTimer;
   automationTimer;
   gatewayWatchdogTimer;
   reconnectTimeout;
   startupTasksRan;
   startupTimeout;
-  initiativePosting;
+  discoveryPosting;
+  textThoughtLoopRunning;
   automationCycleRunning;
   reconnectInFlight;
   isStopping;
@@ -197,6 +201,7 @@ export class ClankerBot {
   client: any;
   voiceSessionManager: VoiceSessionManager;
   browserManager: BrowserManager | null;
+  activeBrowserTasks: Map<string, AbortController>;
 
   constructor({ appConfig, store, llm, memory, discovery, search, gifs, video, browserManager = null }) {
     this.appConfig = appConfig;
@@ -211,13 +216,15 @@ export class ClankerBot {
 
     this.lastBotMessageAt = 0;
     this.memoryTimer = null;
-    this.initiativeTimer = null;
+    this.discoveryTimer = null;
+    this.textThoughtLoopTimer = null;
     this.automationTimer = null;
     this.gatewayWatchdogTimer = null;
     this.reconnectTimeout = null;
     this.startupTasksRan = false;
     this.startupTimeout = null;
-    this.initiativePosting = false;
+    this.discoveryPosting = false;
+    this.textThoughtLoopRunning = false;
     this.automationCycleRunning = false;
     this.reconnectInFlight = false;
     this.isStopping = false;
@@ -230,6 +237,7 @@ export class ClankerBot {
     this.reflectionTimer = null;
     this.nextReflectionRunAt = null;
     this.screenShareSessionManager = null;
+    this.activeBrowserTasks = new Map();
 
     this.client = new Client({
       intents: [
@@ -354,18 +362,26 @@ export class ClankerBot {
       } else if (commandName === "browse") {
         await interaction.deferReply();
         const task = interaction.options.getString("task", true);
+        const settings = this.store.getSettings();
 
         if (!this.browserManager) {
           await interaction.editReply("Browser agent is currently unavailable on this server.");
           return;
         }
+        if (!settings?.browser?.enabled) {
+          await interaction.editReply("Browser agent is disabled in settings on this server.");
+          return;
+        }
 
         try {
-          const settings = this.store.getSettings();
           const browserLlmProvider = String(settings?.browser?.llm?.provider || "anthropic").trim();
           const browserLlmModel = String(settings?.browser?.llm?.model || "claude-sonnet-4-5-20250929").trim();
           const maxSteps = Math.max(1, Math.min(30, Number(settings?.browser?.maxStepsPerTask) || 15));
           const stepTimeoutMs = Math.max(5000, Math.min(120000, Number(settings?.browser?.stepTimeoutMs) || 30000));
+          const taskKey = String(interaction.guildId || interaction.channelId || interaction.id);
+
+          const abortController = new AbortController();
+          this.activeBrowserTasks.set(taskKey, abortController);
 
           const result = await runBrowseAgent({
             llm: this.llm,
@@ -382,7 +398,8 @@ export class ClankerBot {
               channelId: interaction.channelId,
               userId: interaction.user.id,
               source: "slash_command_browse"
-            }
+            },
+            signal: abortController.signal
           });
 
           this.store.logAction({
@@ -413,7 +430,14 @@ export class ClankerBot {
         } catch (error) {
           console.error("[slashCommands] Error handling browse command:", error);
           const message = error instanceof Error ? error.message : String(error);
-          await interaction.editReply(`An error occurred while browsing: ${message}`);
+          if (message.includes("AbortError")) {
+            await interaction.editReply("Browser session was cancelled.").catch(() => undefined);
+          } else {
+            await interaction.editReply(`An error occurred while browsing: ${message}`).catch(() => undefined);
+          }
+        } finally {
+          const taskKey = String(interaction.guildId || interaction.channelId || interaction.id);
+          this.activeBrowserTasks.delete(taskKey);
         }
       }
     });
@@ -488,11 +512,19 @@ export class ClankerBot {
       this.memory.refreshMemoryMarkdown().catch(() => undefined);
     }, 5 * 60_000);
 
-    this.initiativeTimer = setInterval(() => {
-      this.maybeRunInitiativeCycle().catch((error) => {
+    this.discoveryTimer = setInterval(() => {
+      this.maybeRunDiscoveryCycle().catch((error) => {
         this.store.logAction({
           kind: "bot_error",
-          content: `initiative_cycle: ${String(error?.message || error)}`
+          content: `discovery_cycle: ${String(error?.message || error)}`
+        });
+      });
+    }, INITIATIVE_TICK_MS);
+    this.textThoughtLoopTimer = setInterval(() => {
+      this.maybeRunTextThoughtLoopCycle().catch((error) => {
+        this.store.logAction({
+          kind: "bot_error",
+          content: `text_thought_loop: ${String(error?.message || error)}`
         });
       });
     }, INITIATIVE_TICK_MS);
@@ -537,7 +569,8 @@ export class ClankerBot {
     this.isStopping = true;
     if (this.startupTimeout) clearTimeout(this.startupTimeout);
     if (this.memoryTimer) clearInterval(this.memoryTimer);
-    if (this.initiativeTimer) clearInterval(this.initiativeTimer);
+    if (this.discoveryTimer) clearInterval(this.discoveryTimer);
+    if (this.textThoughtLoopTimer) clearInterval(this.textThoughtLoopTimer);
     if (this.automationTimer) clearInterval(this.automationTimer);
     if (this.gatewayWatchdogTimer) clearInterval(this.gatewayWatchdogTimer);
     if (this.reflectionTimer) clearInterval(this.reflectionTimer);
@@ -974,6 +1007,19 @@ export class ClankerBot {
     if (String(message.author.id) === String(this.client.user?.id || "")) return;
     if (!this.isChannelAllowed(settings, message.channelId)) return;
     if (this.isUserBlocked(settings, message.author.id)) return;
+
+    const lowerText = text.toLowerCase().trim();
+    if (lowerText === "stop" || lowerText === "cancel" || lowerText === "never mind" || lowerText === "nevermind") {
+      const taskKey = String(message.guildId || message.channelId || "dm");
+      const activeTask = this.activeBrowserTasks.get(taskKey);
+      if (activeTask) {
+        activeTask.abort("User requested cancellation via text");
+        this.activeBrowserTasks.delete(taskKey);
+        await message.reply("Cancelled the active browser session.").catch(() => undefined);
+        return;
+      }
+    }
+
     const musicSelectionHandled = await this.voiceSessionManager.maybeHandleMusicTextSelectionRequest({
       message,
       settings
@@ -1014,13 +1060,10 @@ export class ClankerBot {
       settings.memory.maxRecentMessages
     );
     const addressSignal = await this.getReplyAddressSignal(settings, message, recentMessages);
-    const isInitiativeChannel = this.isInitiativeChannel(settings, message.channelId);
-
     const shouldQueueReply = this.shouldAttemptReplyDecision({
       settings,
       recentMessages,
       addressSignal,
-      isInitiativeChannel,
       forceRespond: false,
       triggerMessageId: message.id
     });
@@ -1137,12 +1180,12 @@ export class ClankerBot {
     });
   }
 
-  shouldSendAsReply({ isInitiativeChannel = false, shouldThreadReply = false, replyText = "" } = {}) {
+  shouldSendAsReply({ isReplyChannel = false, shouldThreadReply = false, replyText = "" } = {}) {
     if (!shouldThreadReply) return false;
     const textLength = String(replyText || "").trim().length;
     const isShortReply = textLength > 0 && textLength <= 30;
     if (isShortReply) return chance(0.25);
-    if (!isInitiativeChannel) return chance(0.82);
+    if (!isReplyChannel) return chance(0.82);
     return chance(0.55);
   }
 
@@ -1599,7 +1642,7 @@ export class ClankerBot {
         triggerMessageIds,
         source,
         sendAsReply: true,
-        canStandalonePost: this.isInitiativeChannel(settings, message.channelId),
+        canStandalonePost: this.isReplyChannel(settings, message.channelId),
         addressing,
         replyPrompts,
         automationControl: resultMetadata || null,
@@ -2069,12 +2112,12 @@ export class ClankerBot {
     const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const sentReplies = this.store.countActionsSince("sent_reply", since);
     const sentMessages = this.store.countActionsSince("sent_message", since);
-    const initiativePosts = this.store.countActionsSince("initiative_post", since);
-    return sentReplies + sentMessages + initiativePosts < maxPerHour;
+    const discoveryPosts = this.store.countActionsSince("discovery_post", since);
+    return sentReplies + sentMessages + discoveryPosts < maxPerHour;
   }
 
   getImageBudgetState(settings) {
-    const maxPerDay = clamp(Number(settings.initiative?.maxImagesPerDay) || 0, 0, 200);
+    const maxPerDay = clamp(Number(settings.discovery?.maxImagesPerDay) || 0, 0, 200);
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const used = this.store.countActionsSince("image_call", since24h);
     const remaining = Math.max(0, maxPerDay - used);
@@ -2088,7 +2131,7 @@ export class ClankerBot {
   }
 
   getVideoGenerationBudgetState(settings) {
-    const maxPerDay = clamp(Number(settings.initiative?.maxVideosPerDay) || 0, 0, 120);
+    const maxPerDay = clamp(Number(settings.discovery?.maxVideosPerDay) || 0, 0, 120);
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const used = this.store.countActionsSince("video_call", since24h);
     const remaining = Math.max(0, maxPerDay - used);
@@ -2102,7 +2145,7 @@ export class ClankerBot {
   }
 
   getGifBudgetState(settings) {
-    const maxPerDay = clamp(Number(settings.initiative?.maxGifsPerDay) || 0, 0, 300);
+    const maxPerDay = clamp(Number(settings.discovery?.maxGifsPerDay) || 0, 0, 300);
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const used = this.store.countActionsSince("gif_call", since24h);
     const remaining = Math.max(0, maxPerDay - used);
@@ -2769,6 +2812,10 @@ export class ClankerBot {
     const browserLlmProvider = String(settings?.browser?.llm?.provider || "anthropic").trim();
     const browserLlmModel = String(settings?.browser?.llm?.model || "claude-sonnet-4-5-20250929").trim();
 
+    const taskKey = String(guildId || channelId || "dm");
+    const abortController = new AbortController();
+    this.activeBrowserTasks.set(taskKey, abortController);
+
     try {
       const result = await runBrowseAgent({
         llm: this.llm,
@@ -2785,7 +2832,8 @@ export class ClankerBot {
           channelId,
           userId,
           source: `${source}_browser_browse`
-        }
+        },
+        signal: abortController.signal
       });
 
       this.store.logAction({
@@ -2811,10 +2859,19 @@ export class ClankerBot {
         hitStepLimit: result.hitStepLimit
       };
     } catch (error) {
+      if (error?.message?.includes("AbortError")) {
+        return {
+          ...state,
+          error: "Browser session cancelled by user."
+        };
+      }
       return {
         ...state,
         error: String(error?.message || error)
       };
+    } finally {
+      const taskKey = String(guildId || channelId || "dm");
+      this.activeBrowserTasks.delete(taskKey);
     }
   }
 
@@ -3104,7 +3161,7 @@ export class ClankerBot {
     const budget = this.getGifBudgetState(settings);
     const normalizedQuery = normalizeDirectiveText(query, MAX_GIF_QUERY_LEN);
 
-    if (!settings.initiative.allowReplyGifs) {
+    if (!settings.discovery.allowReplyGifs) {
       return {
         payload,
         gifUsed: false,
@@ -3265,12 +3322,20 @@ export class ClankerBot {
     return allowList.includes(id);
   }
 
-  isInitiativeChannel(settings, channelId) {
+  isReplyChannel(settings, channelId) {
     const id = String(channelId);
-    const initiativeChannelIds = Array.isArray(settings?.permissions?.initiativeChannelIds)
-      ? settings.permissions.initiativeChannelIds
+    const replyChannelIds = Array.isArray(settings?.permissions?.replyChannelIds)
+      ? settings.permissions.replyChannelIds
       : [];
-    return initiativeChannelIds.includes(id);
+    return replyChannelIds.includes(id);
+  }
+
+  isDiscoveryChannel(settings, channelId) {
+    const id = String(channelId);
+    const discoveryChannelIds = Array.isArray(settings?.discovery?.channelIds)
+      ? settings.discovery.channelIds
+      : [];
+    return discoveryChannelIds.includes(id);
   }
 
   isDirectlyAddressed(_settings, message) {
@@ -3311,8 +3376,8 @@ export class ClankerBot {
     settings,
     recentMessages,
     addressSignal,
-    isInitiativeChannel = false,
     forceRespond = false,
+    forceDecisionLoop = false,
     triggerMessageId = null
   }) {
     return shouldAttemptReplyDecisionForReplyAdmission({
@@ -3320,8 +3385,8 @@ export class ClankerBot {
       settings,
       recentMessages,
       addressSignal,
-      isInitiativeChannel,
       forceRespond,
+      forceDecisionLoop,
       triggerMessageId,
       windowSize: UNSOLICITED_REPLY_CONTEXT_WINDOW
     });
@@ -3361,7 +3426,7 @@ export class ClankerBot {
       },
       settings
     );
-    await this.maybeRunInitiativeCycle({ startup: true });
+    await this.maybeRunDiscoveryCycle({ startup: true });
     await this.maybeRunAutomationCycle();
 
     // Catch up on any missed reflections from past days
@@ -3613,12 +3678,12 @@ export class ClankerBot {
       userFacts: memorySlice.userFacts,
       relevantFacts: memorySlice.relevantFacts,
       allowSimpleImagePosts:
-        settings.initiative.allowImagePosts && mediaCapabilities.simpleImageReady && imageBudget.canGenerate,
+        settings.discovery.allowImagePosts && mediaCapabilities.simpleImageReady && imageBudget.canGenerate,
       allowComplexImagePosts:
-        settings.initiative.allowImagePosts && mediaCapabilities.complexImageReady && imageBudget.canGenerate,
+        settings.discovery.allowImagePosts && mediaCapabilities.complexImageReady && imageBudget.canGenerate,
       allowVideoPosts:
-        settings.initiative.allowVideoPosts && mediaCapabilities.videoReady && videoBudget.canGenerate,
-      allowGifs: settings.initiative.allowReplyGifs && this.gifs?.isConfigured?.() && gifBudget.canFetch,
+        settings.discovery.allowVideoPosts && mediaCapabilities.videoReady && videoBudget.canGenerate,
+      allowGifs: settings.discovery.allowReplyGifs && this.gifs?.isConfigured?.() && gifBudget.canFetch,
       remainingImages: imageBudget.remaining,
       remainingVideos: videoBudget.remaining,
       remainingGifs: gifBudget.remaining,
@@ -3859,7 +3924,8 @@ export class ClankerBot {
     const seen = new Set();
 
     const explicit = [
-      ...settings.permissions.initiativeChannelIds,
+      ...settings.permissions.replyChannelIds,
+      ...settings.discovery.channelIds,
       ...settings.permissions.allowedChannelIds
     ];
 
@@ -3914,27 +3980,192 @@ export class ClankerBot {
     }
   }
 
-  async maybeRunInitiativeCycle({ startup = false } = {}) {
-    if (this.initiativePosting) return;
-    this.initiativePosting = true;
+  async maybeRunTextThoughtLoopCycle() {
+    if (this.textThoughtLoopRunning) return;
+    this.textThoughtLoopRunning = true;
 
     try {
       const settings = this.store.getSettings();
-      if (!settings.initiative?.enabled) return;
-      if (!settings.permissions.initiativeChannelIds.length) return;
-      if (settings.initiative.maxPostsPerDay <= 0) return;
+      if (!settings.textThoughtLoop?.enabled) return;
+      if (!settings.permissions.replyChannelIds.length) return;
+      if (settings.textThoughtLoop.maxThoughtsPerDay <= 0) return;
       if (!this.canSendMessage(settings.permissions.maxMessagesPerHour)) return;
       if (!this.canTalkNow(settings)) return;
 
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      const posts24h = this.store.countInitiativePostsSince(since24h);
-      if (posts24h >= settings.initiative.maxPostsPerDay) return;
+      const thoughts24h = this.store.countActionsSince("text_thought_loop_post", since24h);
+      if (thoughts24h >= settings.textThoughtLoop.maxThoughtsPerDay) return;
 
-      const lastPostAt = this.store.getLastActionTime("initiative_post");
+      const lastThoughtAt = this.store.getLastActionTime("text_thought_loop_post");
+      const lastThoughtTs = lastThoughtAt ? new Date(lastThoughtAt).getTime() : 0;
+      const minGapMs = Math.max(
+        1,
+        Number(settings.textThoughtLoop.minMinutesBetweenThoughts || 0) * 60_000
+      );
+      if (lastThoughtTs && Date.now() - lastThoughtTs < minGapMs) return;
+
+      const candidate = await this.pickTextThoughtLoopCandidate(settings);
+      if (!candidate) return;
+
+      const sent = await this.maybeReplyToMessage(candidate.message, settings, {
+        source: "text_thought_loop",
+        recentMessages: candidate.recentMessages,
+        addressSignal: {
+          direct: false,
+          inferred: false,
+          triggered: false,
+          reason: "llm_decides",
+          confidence: 0,
+          threshold: 0.62,
+          confidenceSource: "fallback"
+        },
+        forceDecisionLoop: true
+      });
+      if (!sent) return;
+
+      this.store.logAction({
+        kind: "text_thought_loop_post",
+        guildId: candidate.message.guildId,
+        channelId: candidate.message.channelId,
+        messageId: candidate.message.id,
+        userId: this.client.user?.id || null,
+        content: candidate.message.content,
+        metadata: {
+          lookbackMessages: settings.textThoughtLoop.lookbackMessages,
+          source: "text_thought_loop"
+        }
+      });
+    } finally {
+      this.textThoughtLoopRunning = false;
+    }
+  }
+
+  async pickTextThoughtLoopCandidate(settings) {
+    const replyChannelIds = [...new Set(
+      (Array.isArray(settings?.permissions?.replyChannelIds) ? settings.permissions.replyChannelIds : [])
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    )];
+    if (!replyChannelIds.length) return null;
+
+    const shuffled = replyChannelIds
+      .map((id) => ({ id, sortKey: Math.random() }))
+      .sort((a, b) => a.sortKey - b.sortKey)
+      .map((entry) => entry.id);
+
+    const lookback = clamp(Number(settings.textThoughtLoop.lookbackMessages) || 0, 4, 80);
+    for (const channelId of shuffled) {
+      if (!this.isChannelAllowed(settings, channelId)) continue;
+      const channel = this.client.channels.cache.get(channelId);
+      if (!channel || !channel.isTextBased?.() || typeof channel.send !== "function") continue;
+
+      await this.hydrateRecentMessages(channel, lookback);
+      const recentMessages = this.store.getRecentMessages(channel.id, lookback);
+      if (!recentMessages.length) continue;
+      if (this.hasBotMessageInRecentWindow({ recentMessages, windowSize: UNSOLICITED_REPLY_CONTEXT_WINDOW })) {
+        continue;
+      }
+
+      const latestHuman = this.getLatestRecentHumanMessage(recentMessages);
+      if (!latestHuman) continue;
+      if (!this.isRecentHumanActivity(latestHuman)) {
+        continue;
+      }
+
+      return {
+        channel,
+        recentMessages,
+        message: this.buildStoredMessageRuntime(channel, latestHuman)
+      };
+    }
+
+    return null;
+  }
+
+  buildStoredMessageRuntime(channel, row) {
+    const guild = channel.guild;
+    const guildId = String(row?.guild_id || channel.guildId || guild?.id || "").trim();
+    const channelId = String(row?.channel_id || channel.id || "").trim();
+    const messageId = String(row?.message_id || "").trim() || `stored-${Date.now()}`;
+    const authorId = String(row?.author_id || "unknown").trim();
+    const authorName = String(row?.author_name || "unknown").trim() || "unknown";
+    const content = String(row?.content || "").trim();
+    const createdAtMs = Date.parse(String(row?.created_at || ""));
+
+    return {
+      id: messageId,
+      createdTimestamp: Number.isFinite(createdAtMs) ? createdAtMs : Date.now(),
+      guildId,
+      channelId,
+      guild,
+      channel,
+      author: {
+        id: authorId,
+        username: authorName,
+        bot: Boolean(row?.is_bot)
+      },
+      member: {
+        displayName: authorName
+      },
+      content,
+      mentions: {
+        users: {
+          has() {
+            return false;
+          }
+        },
+        repliedUser: null
+      },
+      reference: null,
+      attachments: new Map(),
+      embeds: [],
+      reactions: {
+        cache: new Map()
+      },
+      async react() {
+        return undefined;
+      },
+      async reply(payload) {
+        return await channel.send({
+          ...payload,
+          allowedMentions: { repliedUser: false }
+        });
+      }
+    };
+  }
+
+  getLatestRecentHumanMessage(rows = []) {
+    return (Array.isArray(rows) ? rows : []).find((row) => !row?.is_bot) || null;
+  }
+
+  isRecentHumanActivity(row, { maxAgeMs = PROACTIVE_TEXT_CHANNEL_ACTIVE_WINDOW_MS } = {}) {
+    if (!row || row.is_bot) return false;
+    const createdAtMs = Date.parse(String(row.created_at || ""));
+    if (!Number.isFinite(createdAtMs)) return false;
+    return Date.now() - createdAtMs <= Math.max(60_000, Number(maxAgeMs) || PROACTIVE_TEXT_CHANNEL_ACTIVE_WINDOW_MS);
+  }
+
+  async maybeRunDiscoveryCycle({ startup = false } = {}) {
+    if (this.discoveryPosting) return;
+    this.discoveryPosting = true;
+
+    try {
+      const settings = this.store.getSettings();
+      if (!settings.discovery?.enabled) return;
+      if (!settings.discovery.channelIds.length) return;
+      if (settings.discovery.maxPostsPerDay <= 0) return;
+      if (!this.canSendMessage(settings.permissions.maxMessagesPerHour)) return;
+      if (!this.canTalkNow(settings)) return;
+
+      const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const posts24h = this.store.countActionsSince("discovery_post", since24h);
+      if (posts24h >= settings.discovery.maxPostsPerDay) return;
+
+      const lastPostAt = this.store.getLastActionTime("discovery_post");
       const lastPostTs = lastPostAt ? new Date(lastPostAt).getTime() : 0;
       const nowTs = Date.now();
       const elapsedMs = lastPostTs ? nowTs - lastPostTs : null;
-      const scheduleDecision = this.evaluateInitiativeSchedule({
+      const scheduleDecision = this.evaluateDiscoverySchedule({
         settings,
         startup,
         lastPostTs,
@@ -3943,21 +4174,23 @@ export class ClankerBot {
       });
       if (!scheduleDecision.shouldPost) return;
 
-      const channel = this.pickInitiativeChannel(settings);
+      const channel = this.pickDiscoveryChannel(settings);
       if (!channel) return;
 
       const recent = await this.hydrateRecentMessages(channel, settings.memory.maxRecentMessages);
       const recentMessages = recent.length
         ? recent
-          .slice()
-          .reverse()
-          .slice(0, settings.memory.maxRecentMessages)
-          .map((msg) => ({
-            author_name: msg.member?.displayName || msg.author?.username || "unknown",
-            content: String(msg.content || "").trim()
-          }))
+            .slice()
+            .reverse()
+            .slice(0, settings.memory.maxRecentMessages)
+            .map((msg) => ({
+              author_name: msg.member?.displayName || msg.author?.username || "unknown",
+              content: String(msg.content || "").trim(),
+              created_at: new Date(msg.createdTimestamp).toISOString(),
+              is_bot: Boolean(msg.author?.bot)
+            }))
         : this.store.getRecentMessages(channel.id, settings.memory.maxRecentMessages);
-      const initiativeMemoryQuery = recentMessages
+      const discoveryMemoryQuery = recentMessages
         .slice(0, 6)
         .map((row) => String(row?.content || "").trim())
         .filter(Boolean)
@@ -3965,25 +4198,25 @@ export class ClankerBot {
         .replace(/\s+/g, " ")
         .trim()
         .slice(0, 320);
-      const initiativeRelevantFacts = await this.loadRelevantMemoryFacts({
+      const discoveryRelevantFacts = await this.loadRelevantMemoryFacts({
         settings,
         guildId: channel.guildId,
         channelId: channel.id,
-        queryText: initiativeMemoryQuery,
+        queryText: discoveryMemoryQuery,
         trace: {
           guildId: channel.guildId,
           channelId: channel.id,
           userId: this.client.user.id,
-          source: "initiative_prompt"
+          source: "discovery_prompt"
         },
         limit: 8
       });
-      const initiativeMediaMemoryFacts = this.buildMediaMemoryFacts({
+      const discoveryMediaMemoryFacts = this.buildMediaMemoryFacts({
         userFacts: [],
-        relevantFacts: initiativeRelevantFacts
+        relevantFacts: discoveryRelevantFacts
       });
 
-      const discoveryResult = await this.collectDiscoveryForInitiative({
+      const discoveryResult = await this.collectDiscoveryForPost({
         settings,
         channel,
         recentMessages
@@ -3991,38 +4224,38 @@ export class ClankerBot {
       const requireDiscoveryLink =
         discoveryResult.enabled &&
         discoveryResult.candidates.length > 0 &&
-        chance((settings.initiative?.discovery?.linkChancePercent || 0) / 100);
-      const initiativeImageBudget = this.getImageBudgetState(settings);
-      const initiativeVideoBudget = this.getVideoGenerationBudgetState(settings);
-      const initiativeMediaCapabilities = this.getMediaGenerationCapabilities(settings);
-      const initiativeSimpleImageCapabilityReady = initiativeMediaCapabilities.simpleImageReady;
-      const initiativeComplexImageCapabilityReady = initiativeMediaCapabilities.complexImageReady;
-      const initiativeImageCapabilityReady =
-        initiativeSimpleImageCapabilityReady || initiativeComplexImageCapabilityReady;
-      const initiativeVideoCapabilityReady = initiativeMediaCapabilities.videoReady;
+        chance((settings.discovery?.linkChancePercent || 0) / 100);
+      const discoveryImageBudget = this.getImageBudgetState(settings);
+      const discoveryVideoBudget = this.getVideoGenerationBudgetState(settings);
+      const discoveryMediaCapabilities = this.getMediaGenerationCapabilities(settings);
+      const discoverySimpleImageCapabilityReady = discoveryMediaCapabilities.simpleImageReady;
+      const discoveryComplexImageCapabilityReady = discoveryMediaCapabilities.complexImageReady;
+      const discoveryImageCapabilityReady =
+        discoverySimpleImageCapabilityReady || discoveryComplexImageCapabilityReady;
+      const discoveryVideoCapabilityReady = discoveryMediaCapabilities.videoReady;
 
       const systemPrompt = buildSystemPrompt(settings);
-      const userPrompt = buildInitiativePrompt({
+      const userPrompt = buildDiscoveryPrompt({
         channelName: channel.name || "channel",
         recentMessages,
-        relevantFacts: initiativeRelevantFacts,
+        relevantFacts: discoveryRelevantFacts,
         emojiHints: this.getEmojiHints(channel.guild),
         allowSimpleImagePosts:
-          settings.initiative.allowImagePosts &&
-          initiativeSimpleImageCapabilityReady &&
-          initiativeImageBudget.canGenerate,
+          settings.discovery.allowImagePosts &&
+          discoverySimpleImageCapabilityReady &&
+          discoveryImageBudget.canGenerate,
         allowComplexImagePosts:
-          settings.initiative.allowImagePosts &&
-          initiativeComplexImageCapabilityReady &&
-          initiativeImageBudget.canGenerate,
-        remainingInitiativeImages: initiativeImageBudget.remaining,
+          settings.discovery.allowImagePosts &&
+          discoveryComplexImageCapabilityReady &&
+          discoveryImageBudget.canGenerate,
+        remainingDiscoveryImages: discoveryImageBudget.remaining,
         allowVideoPosts:
-          settings.initiative.allowVideoPosts &&
-          initiativeVideoCapabilityReady &&
-          initiativeVideoBudget.canGenerate,
-        remainingInitiativeVideos: initiativeVideoBudget.remaining,
+          settings.discovery.allowVideoPosts &&
+          discoveryVideoCapabilityReady &&
+          discoveryVideoBudget.canGenerate,
+        remainingDiscoveryVideos: discoveryVideoBudget.remaining,
         discoveryFindings: discoveryResult.candidates,
-        maxLinksPerPost: settings.initiative?.discovery?.maxLinksPerPost || 2,
+        maxLinksPerPost: settings.discovery?.maxLinksPerPost || 2,
         requireDiscoveryLink,
         maxMediaPromptChars: resolveMaxMediaPromptLen(settings),
         mediaPromptCraftGuidance: getMediaPromptCraftGuidance(settings)
@@ -4039,25 +4272,25 @@ export class ClankerBot {
         }
       });
 
-      const initiativeMediaPromptLimit = resolveMaxMediaPromptLen(settings);
-      const initiativeDirective = parseInitiativeMediaDirective(generation.text, initiativeMediaPromptLimit);
-      const imagePrompt = initiativeDirective.imagePrompt;
-      const complexImagePrompt = initiativeDirective.complexImagePrompt;
-      const videoPrompt = initiativeDirective.videoPrompt;
-      const mediaDirective = pickInitiativeMediaDirective(initiativeDirective);
-      let finalText = sanitizeBotText(initiativeDirective.text || (mediaDirective ? "" : generation.text));
+      const discoveryMediaPromptLimit = resolveMaxMediaPromptLen(settings);
+      const discoveryDirective = parseDiscoveryMediaDirective(generation.text, discoveryMediaPromptLimit);
+      const imagePrompt = discoveryDirective.imagePrompt;
+      const complexImagePrompt = discoveryDirective.complexImagePrompt;
+      const videoPrompt = discoveryDirective.videoPrompt;
+      const mediaDirective = pickDiscoveryMediaDirective(discoveryDirective);
+      let finalText = sanitizeBotText(discoveryDirective.text || (mediaDirective ? "" : generation.text));
       finalText = normalizeSkipSentinel(finalText);
-      const allowMediaOnlyInitiative = !finalText && Boolean(mediaDirective);
+      const allowMediaOnlyDiscovery = !finalText && Boolean(mediaDirective);
       if (finalText === "[SKIP]") return;
-      if (!finalText && !allowMediaOnlyInitiative) {
+      if (!finalText && !allowMediaOnlyDiscovery) {
         this.store.logAction({
           kind: "bot_error",
           guildId: channel.guildId,
           channelId: channel.id,
           userId: this.client.user?.id || null,
-          content: "initiative_model_output_empty",
+          content: "discovery_model_output_empty",
           metadata: {
-            source: startup ? "initiative_startup" : "initiative_scheduler"
+            source: startup ? "discovery_startup" : "discovery_scheduler"
           }
         });
         return;
@@ -4077,9 +4310,9 @@ export class ClankerBot {
           guildId: channel.guildId,
           channelId: channel.id,
           userId: this.client.user?.id || null,
-          content: "initiative_model_output_empty_after_link_policy",
+          content: "discovery_model_output_empty_after_link_policy",
           metadata: {
-            source: startup ? "initiative_startup" : "initiative_scheduler",
+            source: startup ? "discovery_startup" : "discovery_scheduler",
             forcedLink: Boolean(linkPolicy.forcedLink)
           }
         });
@@ -4103,22 +4336,22 @@ export class ClankerBot {
       let videoUsed = false;
       let videoBudgetBlocked = false;
       let videoCapabilityBlocked = false;
-      if (mediaDirective?.type === "image_simple" && settings.initiative.allowImagePosts && imagePrompt) {
+      if (mediaDirective?.type === "image_simple" && settings.discovery.allowImagePosts && imagePrompt) {
         const imageResult = await this.maybeAttachGeneratedImage({
           settings,
           text: finalText,
-          prompt: composeInitiativeImagePrompt(
+          prompt: composeDiscoveryImagePrompt(
             imagePrompt,
             finalText,
-            initiativeMediaPromptLimit,
-            initiativeMediaMemoryFacts
+            discoveryMediaPromptLimit,
+            discoveryMediaMemoryFacts
           ),
           variant: "simple",
           trace: {
             guildId: channel.guildId,
             channelId: channel.id,
             userId: this.client.user.id,
-            source: "initiative_post"
+            source: "discovery_post"
           }
         });
         payload = imageResult.payload;
@@ -4130,24 +4363,24 @@ export class ClankerBot {
 
       if (
         mediaDirective?.type === "image_complex" &&
-        settings.initiative.allowImagePosts &&
+        settings.discovery.allowImagePosts &&
         complexImagePrompt
       ) {
         const imageResult = await this.maybeAttachGeneratedImage({
           settings,
           text: finalText,
-          prompt: composeInitiativeImagePrompt(
+          prompt: composeDiscoveryImagePrompt(
             complexImagePrompt,
             finalText,
-            initiativeMediaPromptLimit,
-            initiativeMediaMemoryFacts
+            discoveryMediaPromptLimit,
+            discoveryMediaMemoryFacts
           ),
           variant: "complex",
           trace: {
             guildId: channel.guildId,
             channelId: channel.id,
             userId: this.client.user.id,
-            source: "initiative_post"
+            source: "discovery_post"
           }
         });
         payload = imageResult.payload;
@@ -4157,21 +4390,21 @@ export class ClankerBot {
         imageVariantUsed = imageResult.variant || "complex";
       }
 
-      if (mediaDirective?.type === "video" && settings.initiative.allowVideoPosts && videoPrompt) {
+      if (mediaDirective?.type === "video" && settings.discovery.allowVideoPosts && videoPrompt) {
         const videoResult = await this.maybeAttachGeneratedVideo({
           settings,
           text: finalText,
-          prompt: composeInitiativeVideoPrompt(
+          prompt: composeDiscoveryVideoPrompt(
             videoPrompt,
             finalText,
-            initiativeMediaPromptLimit,
-            initiativeMediaMemoryFacts
+            discoveryMediaPromptLimit,
+            discoveryMediaMemoryFacts
           ),
           trace: {
             guildId: channel.guildId,
             channelId: channel.id,
             userId: this.client.user.id,
-            source: "initiative_post"
+            source: "discovery_post"
           }
         });
         payload = videoResult.payload;
@@ -4186,9 +4419,9 @@ export class ClankerBot {
           guildId: channel.guildId,
           channelId: channel.id,
           userId: this.client.user?.id || null,
-          content: "initiative_model_output_empty_after_media",
+          content: "discovery_model_output_empty_after_media",
           metadata: {
-            source: startup ? "initiative_startup" : "initiative_scheduler"
+            source: startup ? "discovery_startup" : "discovery_scheduler"
           }
         });
         return;
@@ -4197,11 +4430,11 @@ export class ClankerBot {
       await channel.sendTyping();
       await sleep(this.getSimulatedTypingDelayMs(500, 1200));
 
-      const initChunks = splitDiscordMessage(payload.content);
-      const initFirstPayload = { ...payload, content: initChunks[0] };
-      const sent = await channel.send(initFirstPayload);
-      for (let i = 1; i < initChunks.length; i++) {
-        await channel.send({ content: initChunks[i] });
+      const discoveryChunks = splitDiscordMessage(payload.content);
+      const discoveryFirstPayload = { ...payload, content: discoveryChunks[0] };
+      const sent = await channel.send(discoveryFirstPayload);
+      for (let i = 1; i < discoveryChunks.length; i++) {
+        await channel.send({ content: discoveryChunks[i] });
       }
 
       this.markSpoke();
@@ -4224,14 +4457,14 @@ export class ClankerBot {
       }
 
       this.store.logAction({
-        kind: "initiative_post",
+        kind: "discovery_post",
         guildId: sent.guildId,
         channelId: sent.channelId,
         messageId: sent.id,
         userId: this.client.user.id,
         content: finalText,
         metadata: {
-          source: startup ? "initiative_startup" : "initiative_scheduler",
+          source: startup ? "discovery_startup" : "discovery_scheduler",
           pacing: {
             mode: scheduleDecision.mode,
             trigger: scheduleDecision.trigger,
@@ -4259,14 +4492,14 @@ export class ClankerBot {
           imageVariantUsed,
           imageBudgetBlocked,
           imageCapabilityBlocked,
-          imageSimpleCapabilityReadyAtPromptTime: initiativeSimpleImageCapabilityReady,
-          imageComplexCapabilityReadyAtPromptTime: initiativeComplexImageCapabilityReady,
-          imageCapabilityReadyAtPromptTime: initiativeImageCapabilityReady,
+          imageSimpleCapabilityReadyAtPromptTime: discoverySimpleImageCapabilityReady,
+          imageComplexCapabilityReadyAtPromptTime: discoveryComplexImageCapabilityReady,
+          imageCapabilityReadyAtPromptTime: discoveryImageCapabilityReady,
           videoRequestedByModel: Boolean(videoPrompt),
           videoUsed,
           videoBudgetBlocked,
           videoCapabilityBlocked,
-          videoCapabilityReadyAtPromptTime: initiativeVideoCapabilityReady,
+          videoCapabilityReadyAtPromptTime: discoveryVideoCapabilityReady,
           llm: {
             provider: generation.provider,
             model: generation.model,
@@ -4276,12 +4509,12 @@ export class ClankerBot {
         }
       });
     } finally {
-      this.initiativePosting = false;
+      this.discoveryPosting = false;
     }
   }
 
-  async collectDiscoveryForInitiative({ settings, channel, recentMessages }) {
-    if (!this.discovery || !settings.initiative?.discovery?.enabled) {
+  async collectDiscoveryForPost({ settings, channel, recentMessages }) {
+    if (!this.discovery) {
       return {
         enabled: false,
         topics: [],
@@ -4306,7 +4539,7 @@ export class ClankerBot {
         guildId: channel.guildId,
         channelId: channel.id,
         userId: this.client.user?.id || null,
-        content: `initiative_discovery: ${String(error?.message || error)}`
+        content: `discovery_collect: ${String(error?.message || error)}`
       });
 
       return {
@@ -4346,7 +4579,7 @@ export class ClankerBot {
       .filter((url, index, arr) => arr.indexOf(url) === index)
       .map((url) => ({
         url,
-        source: candidateMap.get(url)?.source || "initiative"
+        source: candidateMap.get(url)?.source || "discovery"
       }));
 
     if (matchedLinks.length || !requireDiscoveryLink) {
@@ -4374,31 +4607,31 @@ export class ClankerBot {
       usedLinks: [
         {
           url: fallbackUrl,
-          source: fallback.source || "initiative"
+          source: fallback.source || "discovery"
         }
       ],
       forcedLink: true
     };
   }
 
-  getInitiativePostingIntervalMs(settings) {
-    return getInitiativePostingIntervalMs(settings);
+  getDiscoveryPostingIntervalMs(settings) {
+    return getDiscoveryPostingIntervalMs(settings);
   }
 
-  getInitiativeAverageIntervalMs(settings) {
-    return getInitiativeAverageIntervalMs(settings);
+  getDiscoveryAverageIntervalMs(settings) {
+    return getDiscoveryAverageIntervalMs(settings);
   }
 
-  getInitiativePacingMode(settings) {
-    return getInitiativePacingMode(settings);
+  getDiscoveryPacingMode(settings) {
+    return getDiscoveryPacingMode(settings);
   }
 
-  getInitiativeMinGapMs(settings) {
-    return getInitiativeMinGapMs(settings);
+  getDiscoveryMinGapMs(settings) {
+    return getDiscoveryMinGapMs(settings);
   }
 
-  evaluateInitiativeSchedule({ settings, startup, lastPostTs, elapsedMs, posts24h }) {
-    return evaluateInitiativeSchedule({
+  evaluateDiscoverySchedule({ settings, startup, lastPostTs, elapsedMs, posts24h }) {
+    return evaluateDiscoverySchedule({
       settings,
       startup,
       lastPostTs,
@@ -4407,8 +4640,8 @@ export class ClankerBot {
     });
   }
 
-  evaluateSpontaneousInitiativeSchedule({ settings, lastPostTs, elapsedMs, posts24h, minGapMs }) {
-    return evaluateSpontaneousInitiativeSchedule({
+  evaluateSpontaneousDiscoverySchedule({ settings, lastPostTs, elapsedMs, posts24h, minGapMs }) {
+    return evaluateSpontaneousDiscoverySchedule({
       settings,
       lastPostTs,
       elapsedMs,
@@ -4417,8 +4650,8 @@ export class ClankerBot {
     });
   }
 
-  pickInitiativeChannel(settings) {
-    return pickInitiativeChannel({
+  pickDiscoveryChannel(settings) {
+    return pickDiscoveryChannel({
       settings,
       client: this.client,
       isChannelAllowed: (resolvedSettings, channelId) => this.isChannelAllowed(resolvedSettings, channelId)

@@ -32,7 +32,7 @@ const AGENT_STYLES = {
   bot: { bg: BG_GREEN, fg: BLACK },
   memory: { bg: BG_MAGENTA, fg: BLACK },
   automation: { bg: BG_YELLOW, fg: BLACK },
-  initiative: { bg: BG_BLUE, fg: WHITE },
+  discovery: { bg: BG_BLUE, fg: WHITE },
   runtime: { bg: `\x1b[100m`, fg: WHITE } // bright-black bg
 };
 
@@ -203,7 +203,7 @@ function resolveAgent(kind, metadata) {
 
   const normalizedKind = String(kind || "");
   if (normalizedKind.startsWith("voice_")) return "voice";
-  if (normalizedKind.startsWith("initiative_")) return "initiative";
+  if (normalizedKind.startsWith("discovery_")) return "discovery";
   if (normalizedKind.startsWith("automation_")) return "automation";
   if (normalizedKind.startsWith("memory_")) return "memory";
   if (normalizedKind.startsWith("bot_")) return "bot";

@@ -72,12 +72,19 @@ export const DEFAULT_SETTINGS = {
     mediaPromptCraftGuidance: "Write media prompts as vivid scene descriptions, not abstract concepts. Include: subject/action, visual style or medium (photo, illustration, 3D render, pixel art, etc.), lighting/mood, camera angle or framing, and color palette when relevant. Be specific: 'a golden retriever leaping through autumn leaves, warm backlit sunset, low angle, film grain' beats 'a dog outside'. For video prompts, describe the motion arc: what starts, what changes, and how it ends. Never put text, words, or UI elements in media prompts."
   },
   activity: {
-    replyLevelInitiative: 50,
-    replyLevelNonInitiative: 10,
+    replyLevelReplyChannels: 50,
+    replyLevelOtherChannels: 10,
     reactionLevel: 30,
     minSecondsBetweenMessages: 5,
     replyCoalesceWindowSeconds: 6,
     replyCoalesceMaxMessages: 6
+  },
+  textThoughtLoop: {
+    enabled: false,
+    eagerness: 45,
+    minMinutesBetweenThoughts: 60,
+    maxThoughtsPerDay: 8,
+    lookbackMessages: 20
   },
   llm: {
     provider: "anthropic",
@@ -228,17 +235,18 @@ export const DEFAULT_SETTINGS = {
   },
   permissions: {
     allowReplies: true,
-    allowInitiativeReplies: true,
+    allowUnsolicitedReplies: true,
     allowReactions: true,
-    initiativeChannelIds: [],
+    replyChannelIds: [],
     allowedChannelIds: [],
     blockedChannelIds: [],
     blockedUserIds: [],
     maxMessagesPerHour: 20,
     maxReactionsPerHour: 24
   },
-  initiative: {
+  discovery: {
     enabled: true,
+    channelIds: [],
     maxPostsPerDay: 1,
     minMinutesBetweenPosts: 120,
     pacingMode: "even",
@@ -258,32 +266,29 @@ export const DEFAULT_SETTINGS = {
     allowedImageModels: ["gpt-image-1.5", "grok-imagine-image", "grok-2-image-1212"],
     allowedVideoModels: ["grok-imagine-video", "grok-2-video"],
     maxMediaPromptChars: 900,
-    discovery: {
-      enabled: true,
-      linkChancePercent: 80,
-      maxLinksPerPost: 2,
-      maxCandidatesForPrompt: 6,
-      freshnessHours: 96,
-      dedupeHours: 168,
-      randomness: 55,
-      sourceFetchLimit: 10,
-      allowNsfw: false,
-      preferredTopics: [],
-      redditSubreddits: ["technology", "programming", "games", "memes"],
-      youtubeChannelIds: [],
-      rssFeeds: [
-        "https://www.theverge.com/rss/index.xml",
-        "https://feeds.arstechnica.com/arstechnica/index"
-      ],
-      xHandles: [],
-      xNitterBaseUrl: "https://nitter.net",
-      sources: {
-        reddit: true,
-        hackerNews: true,
-        youtube: true,
-        rss: true,
-        x: false
-      }
+    linkChancePercent: 80,
+    maxLinksPerPost: 2,
+    maxCandidatesForPrompt: 6,
+    freshnessHours: 96,
+    dedupeHours: 168,
+    randomness: 55,
+    sourceFetchLimit: 10,
+    allowNsfw: false,
+    preferredTopics: [],
+    redditSubreddits: ["technology", "programming", "games", "memes"],
+    youtubeChannelIds: [],
+    rssFeeds: [
+      "https://www.theverge.com/rss/index.xml",
+      "https://feeds.arstechnica.com/arstechnica/index"
+    ],
+    xHandles: [],
+    xNitterBaseUrl: "https://nitter.net",
+    sources: {
+      reddit: true,
+      hackerNews: true,
+      youtube: true,
+      rss: true,
+      x: false
     }
   },
   memoryLlm: {

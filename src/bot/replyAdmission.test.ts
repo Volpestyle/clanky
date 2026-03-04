@@ -78,12 +78,12 @@ test("reply admission ignores ambiguous soundalike tokens in generic prose", asy
   assert.equal(signal.reason, "llm_decides");
 });
 
-test("reply admission initiative channels always run decision loop when allowed", () => {
+test("reply admission forceDecisionLoop bypasses unsolicited gating", () => {
   const shouldRun = shouldAttemptReplyDecision({
     botUserId: "bot-1",
     settings: {
       permissions: {
-        allowInitiativeReplies: true
+        allowUnsolicitedReplies: false
       }
     },
     recentMessages: [],
@@ -93,17 +93,17 @@ test("reply admission initiative channels always run decision loop when allowed"
       triggered: false,
       reason: "llm_decides"
     },
-    isInitiativeChannel: true,
+    forceDecisionLoop: true,
     triggerMessageId: "msg-1"
   });
 
   assert.equal(shouldRun, true);
 });
 
-test("reply admission non-initiative channels require hard signal or followup window", () => {
+test("reply admission unsolicited turns require followup window when not directly addressed", () => {
   const settings = {
     permissions: {
-      allowInitiativeReplies: true
+      allowUnsolicitedReplies: true
     }
   };
 
@@ -117,7 +117,6 @@ test("reply admission non-initiative channels require hard signal or followup wi
       triggered: true,
       reason: "llm_direct_address"
     },
-    isInitiativeChannel: false,
     triggerMessageId: "msg-1"
   });
   assert.equal(withoutWindow, false);
@@ -137,7 +136,6 @@ test("reply admission non-initiative channels require hard signal or followup wi
       triggered: false,
       reason: "llm_decides"
     },
-    isInitiativeChannel: false,
     triggerMessageId: "msg-1"
   });
   assert.equal(withWindow, true);

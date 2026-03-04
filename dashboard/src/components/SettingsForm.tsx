@@ -26,7 +26,7 @@ import { VideoContextSettingsSection } from "./settingsSections/VideoContextSett
 import { VoiceModeSettingsSection } from "./settingsSections/VoiceModeSettingsSection";
 import { RateLimitsSettingsSection } from "./settingsSections/RateLimitsSettingsSection";
 import { StartupCatchupSettingsSection } from "./settingsSections/StartupCatchupSettingsSection";
-import { InitiativeMediaSettingsSection } from "./settingsSections/InitiativeMediaSettingsSection";
+import { DiscoverySettingsSection } from "./settingsSections/DiscoverySettingsSection";
 import { ChannelsPermissionsSettingsSection } from "./settingsSections/ChannelsPermissionsSettingsSection";
 
 const SECTIONS = [
@@ -39,7 +39,7 @@ const SECTIONS = [
   { id: "sec-voice", label: "Voice Mode" },
   { id: "sec-rate", label: "Rate Limits" },
   { id: "sec-startup", label: "Startup" },
-  { id: "sec-initiative", label: "Initiative" },
+  { id: "sec-discovery", label: "Discovery" },
   { id: "sec-channels", label: "Channels" },
 ] as const;
 
@@ -135,23 +135,23 @@ export default function SettingsForm({
     GEMINI_REALTIME_MODEL_OPTIONS,
     effectiveForm.voiceGeminiRealtimeModel
   );
-  const initiativeImageModelOptions = resolveModelOptionsFromText(
-    effectiveForm.initiativeAllowedImageModels,
-    effectiveForm.initiativeSimpleImageModel,
-    effectiveForm.initiativeComplexImageModel
+  const discoveryImageModelOptions = resolveModelOptionsFromText(
+    effectiveForm.discoveryAllowedImageModels,
+    effectiveForm.discoverySimpleImageModel,
+    effectiveForm.discoveryComplexImageModel
   );
-  const initiativeVideoModelOptions = resolveModelOptionsFromText(
-    effectiveForm.initiativeAllowedVideoModels,
-    effectiveForm.initiativeVideoModel
+  const discoveryVideoModelOptions = resolveModelOptionsFromText(
+    effectiveForm.discoveryAllowedVideoModels,
+    effectiveForm.discoveryVideoModel
   );
   const isVoiceAgentMode = effectiveForm.voiceProvider === "xai";
   const isOpenAiRealtimeMode = effectiveForm.voiceProvider === "openai";
   const isGeminiRealtimeMode = effectiveForm.voiceProvider === "gemini";
   const isElevenLabsRealtimeMode = effectiveForm.voiceProvider === "elevenlabs";
   const showVoiceAdvanced = effectiveForm.voiceEnabled;
-  const showInitiativeAdvanced = effectiveForm.autonomousInitiativeEnabled;
-  const showInitiativeImageControls = effectiveForm.initiativeImageEnabled || effectiveForm.replyImageEnabled;
-  const showInitiativeVideoControls = effectiveForm.initiativeVideoEnabled || effectiveForm.replyVideoEnabled;
+  const showDiscoveryAdvanced = effectiveForm.discoveryEnabled;
+  const showDiscoveryImageControls = effectiveForm.discoveryImageEnabled || effectiveForm.replyImageEnabled;
+  const showDiscoveryVideoControls = effectiveForm.discoveryVideoEnabled || effectiveForm.replyVideoEnabled;
 
   useEffect(() => {
     setForm((current) => {
@@ -374,15 +374,15 @@ export default function SettingsForm({
           <RateLimitsSettingsSection id="sec-rate" form={form} set={set} />
           <StartupCatchupSettingsSection id="sec-startup" form={form} set={set} />
 
-          <InitiativeMediaSettingsSection
-            id="sec-initiative"
+          <DiscoverySettingsSection
+            id="sec-discovery"
             form={form}
             set={set}
-            showInitiativeAdvanced={showInitiativeAdvanced}
-            showInitiativeImageControls={showInitiativeImageControls}
-            showInitiativeVideoControls={showInitiativeVideoControls}
-            initiativeImageModelOptions={initiativeImageModelOptions}
-            initiativeVideoModelOptions={initiativeVideoModelOptions}
+            showDiscoveryAdvanced={showDiscoveryAdvanced}
+            showDiscoveryImageControls={showDiscoveryImageControls}
+            showDiscoveryVideoControls={showDiscoveryVideoControls}
+            discoveryImageModelOptions={discoveryImageModelOptions}
+            discoveryVideoModelOptions={discoveryVideoModelOptions}
           />
 
           <ChannelsPermissionsSettingsSection id="sec-channels" form={form} set={set} />

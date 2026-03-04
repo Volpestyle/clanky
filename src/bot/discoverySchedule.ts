@@ -1,34 +1,34 @@
 import { clamp } from "../utils.ts";
 
-const INITIATIVE_TICK_MS = 60_000;
+const DISCOVERY_TICK_MS = 60_000;
 
-export function getInitiativePostingIntervalMs(settings) {
-  const minByGap = settings.initiative.minMinutesBetweenPosts * 60_000;
-  const perDay = Math.max(settings.initiative.maxPostsPerDay, 1);
+export function getDiscoveryPostingIntervalMs(settings) {
+  const minByGap = settings.discovery.minMinutesBetweenPosts * 60_000;
+  const perDay = Math.max(settings.discovery.maxPostsPerDay, 1);
   const evenPacing = Math.floor((24 * 60 * 60 * 1000) / perDay);
   return Math.max(minByGap, evenPacing);
 }
 
-export function getInitiativeAverageIntervalMs(settings) {
-  const perDay = Math.max(settings.initiative.maxPostsPerDay, 1);
+export function getDiscoveryAverageIntervalMs(settings) {
+  const perDay = Math.max(settings.discovery.maxPostsPerDay, 1);
   return Math.floor((24 * 60 * 60 * 1000) / perDay);
 }
 
-export function getInitiativePacingMode(settings) {
-  return String(settings.initiative?.pacingMode || "even").toLowerCase() === "spontaneous"
+export function getDiscoveryPacingMode(settings) {
+  return String(settings.discovery?.pacingMode || "even").toLowerCase() === "spontaneous"
     ? "spontaneous"
     : "even";
 }
 
-export function getInitiativeMinGapMs(settings) {
-  return Math.max(1, Number(settings.initiative?.minMinutesBetweenPosts || 0) * 60_000);
+export function getDiscoveryMinGapMs(settings) {
+  return Math.max(1, Number(settings.discovery?.minMinutesBetweenPosts || 0) * 60_000);
 }
 
-export function evaluateSpontaneousInitiativeSchedule({ settings, lastPostTs, elapsedMs, posts24h, minGapMs }) {
+export function evaluateSpontaneousDiscoverySchedule({ settings, lastPostTs, elapsedMs, posts24h, minGapMs }) {
   const mode = "spontaneous";
-  const spontaneity01 = clamp(Number(settings.initiative?.spontaneity) || 0, 0, 100) / 100;
-  const maxPostsPerDay = Math.max(Number(settings.initiative?.maxPostsPerDay) || 1, 1);
-  const averageIntervalMs = getInitiativeAverageIntervalMs(settings);
+  const spontaneity01 = clamp(Number(settings.discovery?.spontaneity) || 0, 0, 100) / 100;
+  const maxPostsPerDay = Math.max(Number(settings.discovery?.maxPostsPerDay) || 1, 1);
+  const averageIntervalMs = getDiscoveryAverageIntervalMs(settings);
 
   if (!lastPostTs || !Number.isFinite(elapsedMs)) {
     const chanceNow = 0.05 + spontaneity01 * 0.12;
@@ -44,7 +44,7 @@ export function evaluateSpontaneousInitiativeSchedule({ settings, lastPostTs, el
     };
   }
 
-  const rampWindowMs = Math.max(averageIntervalMs - minGapMs, INITIATIVE_TICK_MS);
+  const rampWindowMs = Math.max(averageIntervalMs - minGapMs, DISCOVERY_TICK_MS);
   const progress = clamp((elapsedMs - minGapMs) / rampWindowMs, 0, 1);
   const baseChance = 0.015 + spontaneity01 * 0.03;
   const peakChance = 0.1 + spontaneity01 * 0.28;
@@ -78,11 +78,11 @@ export function evaluateSpontaneousInitiativeSchedule({ settings, lastPostTs, el
   };
 }
 
-export function evaluateInitiativeSchedule({ settings, startup, lastPostTs, elapsedMs, posts24h }) {
-  const mode = getInitiativePacingMode(settings);
-  const minGapMs = getInitiativeMinGapMs(settings);
+export function evaluateDiscoverySchedule({ settings, startup, lastPostTs, elapsedMs, posts24h }) {
+  const mode = getDiscoveryPacingMode(settings);
+  const minGapMs = getDiscoveryMinGapMs(settings);
 
-  if (startup && !settings.initiative.postOnStartup) {
+  if (startup && !settings.discovery.postOnStartup) {
     return {
       shouldPost: false,
       mode,
@@ -109,7 +109,7 @@ export function evaluateInitiativeSchedule({ settings, startup, lastPostTs, elap
   }
 
   if (mode === "even") {
-    const requiredIntervalMs = getInitiativePostingIntervalMs(settings);
+    const requiredIntervalMs = getDiscoveryPostingIntervalMs(settings);
     const due = !lastPostTs || !Number.isFinite(elapsedMs) || elapsedMs >= requiredIntervalMs;
     return {
       shouldPost: due,
@@ -130,7 +130,7 @@ export function evaluateInitiativeSchedule({ settings, startup, lastPostTs, elap
     };
   }
 
-  return evaluateSpontaneousInitiativeSchedule({
+  return evaluateSpontaneousDiscoverySchedule({
     settings,
     lastPostTs,
     elapsedMs,
@@ -139,8 +139,8 @@ export function evaluateInitiativeSchedule({ settings, startup, lastPostTs, elap
   });
 }
 
-export function pickInitiativeChannel({ settings, client, isChannelAllowed }) {
-  const ids = settings.permissions.initiativeChannelIds
+export function pickDiscoveryChannel({ settings, client, isChannelAllowed }) {
+  const ids = settings.discovery.channelIds
     .map((id) => String(id).trim())
     .filter(Boolean);
   if (!ids.length) return null;

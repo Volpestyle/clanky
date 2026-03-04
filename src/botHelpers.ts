@@ -35,7 +35,7 @@ const MAX_VOICE_INTENT_SELECTED_RESULT_ID_LEN = 180;
 const MAX_VOICE_INTENT_MUSIC_RESULT_FIELD_LEN = 220;
 
 export function resolveMaxMediaPromptLen(settings) {
-  const raw = Number(settings?.initiative?.maxMediaPromptChars);
+  const raw = Number(settings?.discovery?.maxMediaPromptChars);
   if (!Number.isFinite(raw)) return DEFAULT_MAX_MEDIA_PROMPT_LEN;
   return clamp(Math.floor(raw), MAX_MEDIA_PROMPT_FLOOR, MAX_MEDIA_PROMPT_CEILING);
 }
@@ -461,7 +461,7 @@ export function extractRecentVideoTargets({
   return targets;
 }
 
-export function composeInitiativeImagePrompt(
+export function composeDiscoveryImagePrompt(
   imagePrompt,
   postText,
   maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN,
@@ -496,7 +496,7 @@ export function composeInitiativeImagePrompt(
     .join("\n");
 }
 
-export function composeInitiativeVideoPrompt(
+export function composeDiscoveryVideoPrompt(
   videoPrompt,
   postText,
   maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN,
@@ -623,7 +623,7 @@ export function composeReplyVideoPrompt(
     .join("\n");
 }
 
-export function parseInitiativeMediaDirective(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
+export function parseDiscoveryMediaDirective(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
   const parsed = {
     text: String(rawText || "").trim(),
     imagePrompt: null,
@@ -1015,7 +1015,7 @@ export function pickReplyMediaDirective(parsed) {
   return parsed?.mediaDirective || null;
 }
 
-export function pickInitiativeMediaDirective(parsed) {
+export function pickDiscoveryMediaDirective(parsed) {
   return parsed?.mediaDirective || null;
 }
 

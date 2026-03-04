@@ -38,7 +38,7 @@ The flooding harness runs this pipeline:
 6. Resolve the turn outcome:
    - `recorded` mode: reuse recorded action rows from DB.
    - `live` mode: call the actor LLM (`buildSystemPrompt` + `buildReplyPrompt`) for admitted turns.
-7. Accumulate per-channel-mode stats (`initiative` vs `non_initiative`), timeline events, and turn snapshots.
+7. Accumulate per-channel-mode stats (`reply_channel` vs `other_channel`), timeline events, and turn snapshots.
 8. Optionally run a judge LLM in `live` mode to score flooding for a specific `window-start`/`window-end`.
 9. Evaluate assertions; any failure sets process exit code to `1`.
 

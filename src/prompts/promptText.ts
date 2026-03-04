@@ -78,13 +78,13 @@ export function buildReplyPrompt({
   voiceMode = null,
   screenShare = null,
   videoContext = null,
-  channelMode = "non_initiative",
+  channelMode = "other_channel",
   maxMediaPromptChars = 900,
   mediaPromptCraftGuidance = null
 }) {
   const parts = [];
   const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance(null);
-  const normalizedChannelMode = channelMode === "initiative" ? "initiative" : "non_initiative";
+  const normalizedChannelMode = channelMode === "reply_channel" ? "reply_channel" : "other_channel";
   const triggerCount = Array.isArray(triggerMessageIds) ? triggerMessageIds.length : 0;
 
   parts.push("=== LATEST MESSAGE (TURN ANCHOR) ===");
@@ -229,11 +229,11 @@ export function buildReplyPrompt({
     } else {
       parts.push("Be selective about when you jump in. If you do not have something genuinely useful, interesting, or funny to add, output [SKIP].");
     }
-    if (normalizedChannelMode === "initiative") {
-      parts.push("This is one of your active channels. Short riffs and acknowledgements are fine when they fit naturally.");
+    if (normalizedChannelMode === "reply_channel") {
+      parts.push("This is one of your reply/lurk channels. Short riffs and acknowledgements are fine when they fit naturally.");
       parts.push("If your reply would derail, interrupt, or just repeat what was said, output [SKIP].");
     } else {
-      parts.push("This is not one of your main channels. Only jump in if your message is worth the interruption.");
+      parts.push("This is not one of your reply/lurk channels. Only jump in if your message is worth the interruption.");
       parts.push("If this message is not meant for you or you would be inserting yourself into someone else's conversation, output [SKIP].");
     }
   }
@@ -710,7 +710,7 @@ export function buildReplyPrompt({
   return parts.join("\n\n");
 }
 
-export function buildInitiativePrompt({
+export function buildDiscoveryPrompt({
   channelName,
   recentMessages,
   relevantFacts = [],
@@ -718,8 +718,8 @@ export function buildInitiativePrompt({
   allowSimpleImagePosts,
   allowComplexImagePosts,
   allowVideoPosts,
-  remainingInitiativeImages = 0,
-  remainingInitiativeVideos = 0,
+  remainingDiscoveryImages = 0,
+  remainingDiscoveryVideos = 0,
   discoveryFindings = [],
   maxLinksPerPost = 2,
   requireDiscoveryLink = false,
@@ -743,8 +743,8 @@ export function buildInitiativePrompt({
     parts.push(`Server emoji options: ${emojiHints.join(", ")}`);
   }
 
-  const remainingImages = Math.max(0, Math.floor(Number(remainingInitiativeImages) || 0));
-  const remainingVideos = Math.max(0, Math.floor(Number(remainingInitiativeVideos) || 0));
+  const remainingImages = Math.max(0, Math.floor(Number(remainingDiscoveryImages) || 0));
+  const remainingVideos = Math.max(0, Math.floor(Number(remainingDiscoveryVideos) || 0));
   const simpleImageAvailable = allowSimpleImagePosts && remainingImages > 0;
   const complexImageAvailable = allowComplexImagePosts && remainingImages > 0;
   const videoAvailable = allowVideoPosts && remainingVideos > 0;
@@ -777,7 +777,7 @@ export function buildInitiativePrompt({
       "If no media is needed, output only the post text. If media is needed, output at most one media directive."
     );
   } else {
-    parts.push("Image/video generation for initiative posts is unavailable right now. Output text only.");
+    parts.push("Image/video generation for discovery posts is unavailable right now. Output text only.");
   }
 
   if (discoveryFindings?.length) {

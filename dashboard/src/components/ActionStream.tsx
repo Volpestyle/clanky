@@ -50,7 +50,7 @@ const ALL_FILTERS = [
   "sent_reply",
   "sent_message",
   "reply_skipped",
-  "initiative_post",
+  "discovery_post",
   "reacted",
   "llm_call",
   "image_call",

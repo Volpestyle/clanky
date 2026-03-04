@@ -75,8 +75,8 @@ export function settingsToForm(settings) {
   const defaultVoiceStreamWatch = defaults.voice.streamWatch;
   const defaultVoiceSoundboard = defaults.voice.soundboard;
   const defaultStartup = defaults.startup;
-  const defaultInitiative = defaults.initiative;
-  const defaultDiscovery = defaults.initiative.discovery;
+  const defaultTextThoughtLoop = defaults.textThoughtLoop;
+  const defaultDiscovery = defaults.discovery;
   const activity = settings?.activity ?? {};
   const selectedVoiceProvider = settings?.voice?.voiceProvider ?? defaultVoice.voiceProvider;
   return {
@@ -99,13 +99,27 @@ export function settingsToForm(settings) {
     promptVoiceLookupBusySystemPrompt:
       settings?.prompt?.voiceLookupBusySystemPrompt ?? defaultPrompt.voiceLookupBusySystemPrompt,
     promptMediaPromptCraftGuidance: settings?.prompt?.mediaPromptCraftGuidance ?? defaultPrompt.mediaPromptCraftGuidance,
-    replyLevelInitiative: activity.replyLevelInitiative ?? defaultActivity.replyLevelInitiative,
-    replyLevelNonInitiative: activity.replyLevelNonInitiative ?? defaultActivity.replyLevelNonInitiative,
+    replyLevelReplyChannels:
+      activity.replyLevelReplyChannels ?? defaultActivity.replyLevelReplyChannels,
+    replyLevelOtherChannels:
+      activity.replyLevelOtherChannels ?? defaultActivity.replyLevelOtherChannels,
     reactionLevel: activity.reactionLevel ?? defaultActivity.reactionLevel,
     minGap: activity.minSecondsBetweenMessages ?? defaultActivity.minSecondsBetweenMessages,
     allowReplies: settings?.permissions?.allowReplies ?? defaultPermissions.allowReplies,
-    allowInitiative: settings?.permissions?.allowInitiativeReplies !== false,
+    allowUnsolicitedReplies:
+      settings?.permissions?.allowUnsolicitedReplies ?? defaultPermissions.allowUnsolicitedReplies,
     allowReactions: settings?.permissions?.allowReactions ?? defaultPermissions.allowReactions,
+    textThoughtLoopEnabled:
+      settings?.textThoughtLoop?.enabled ?? defaultTextThoughtLoop.enabled,
+    textThoughtLoopEagerness:
+      settings?.textThoughtLoop?.eagerness ?? defaultTextThoughtLoop.eagerness,
+    textThoughtLoopMinMinutesBetweenThoughts:
+      settings?.textThoughtLoop?.minMinutesBetweenThoughts ??
+      defaultTextThoughtLoop.minMinutesBetweenThoughts,
+    textThoughtLoopMaxThoughtsPerDay:
+      settings?.textThoughtLoop?.maxThoughtsPerDay ?? defaultTextThoughtLoop.maxThoughtsPerDay,
+    textThoughtLoopLookbackMessages:
+      settings?.textThoughtLoop?.lookbackMessages ?? defaultTextThoughtLoop.lookbackMessages,
     memoryEnabled: settings?.memory?.enabled ?? defaults.memory.enabled,
     adaptiveDirectivesEnabled:
       settings?.adaptiveDirectives?.enabled ?? defaults.adaptiveDirectives.enabled,
@@ -263,47 +277,87 @@ export function settingsToForm(settings) {
     catchupLookbackHours: settings?.startup?.catchupLookbackHours ?? defaultStartup.catchupLookbackHours,
     catchupMaxMessages: settings?.startup?.catchupMaxMessagesPerChannel ?? defaultStartup.catchupMaxMessagesPerChannel,
     catchupMaxReplies: settings?.startup?.maxCatchupRepliesPerChannel ?? defaultStartup.maxCatchupRepliesPerChannel,
-    autonomousInitiativeEnabled: settings?.initiative?.enabled ?? defaultInitiative.enabled,
-    initiativePostsPerDay: settings?.initiative?.maxPostsPerDay ?? defaultInitiative.maxPostsPerDay,
-    initiativeMinMinutes: settings?.initiative?.minMinutesBetweenPosts ?? defaultInitiative.minMinutesBetweenPosts,
-    initiativePacingMode: settings?.initiative?.pacingMode === "spontaneous" ? "spontaneous" : "even",
-    initiativeSpontaneity: settings?.initiative?.spontaneity ?? defaultInitiative.spontaneity,
-    initiativeStartupPost: settings?.initiative?.postOnStartup ?? defaultInitiative.postOnStartup,
-    initiativeImageEnabled: settings?.initiative?.allowImagePosts ?? defaultInitiative.allowImagePosts,
-    initiativeVideoEnabled: settings?.initiative?.allowVideoPosts ?? defaultInitiative.allowVideoPosts,
-    replyImageEnabled: settings?.initiative?.allowReplyImages ?? defaultInitiative.allowReplyImages,
-    replyVideoEnabled: settings?.initiative?.allowReplyVideos ?? defaultInitiative.allowReplyVideos,
-    replyGifEnabled: settings?.initiative?.allowReplyGifs ?? defaultInitiative.allowReplyGifs,
-    maxImagesPerDay: settings?.initiative?.maxImagesPerDay ?? defaultInitiative.maxImagesPerDay,
-    maxVideosPerDay: settings?.initiative?.maxVideosPerDay ?? defaultInitiative.maxVideosPerDay,
-    maxGifsPerDay: settings?.initiative?.maxGifsPerDay ?? defaultInitiative.maxGifsPerDay,
-    initiativeSimpleImageModel: settings?.initiative?.simpleImageModel ?? defaultInitiative.simpleImageModel,
-    initiativeComplexImageModel: settings?.initiative?.complexImageModel ?? defaultInitiative.complexImageModel,
-    initiativeVideoModel: settings?.initiative?.videoModel ?? defaultInitiative.videoModel,
-    initiativeAllowedImageModels: formatLineList(settings?.initiative?.allowedImageModels ?? []),
-    initiativeAllowedVideoModels: formatLineList(settings?.initiative?.allowedVideoModels ?? []),
-    initiativeDiscoveryEnabled: settings?.initiative?.discovery?.enabled ?? defaultDiscovery.enabled,
-    initiativeDiscoveryLinkChance: settings?.initiative?.discovery?.linkChancePercent ?? defaultDiscovery.linkChancePercent,
-    initiativeDiscoveryMaxLinks: settings?.initiative?.discovery?.maxLinksPerPost ?? defaultDiscovery.maxLinksPerPost,
-    initiativeDiscoveryMaxCandidates: settings?.initiative?.discovery?.maxCandidatesForPrompt ?? defaultDiscovery.maxCandidatesForPrompt,
-    initiativeDiscoveryFreshnessHours: settings?.initiative?.discovery?.freshnessHours ?? defaultDiscovery.freshnessHours,
-    initiativeDiscoveryDedupeHours: settings?.initiative?.discovery?.dedupeHours ?? defaultDiscovery.dedupeHours,
-    initiativeDiscoveryRandomness: settings?.initiative?.discovery?.randomness ?? defaultDiscovery.randomness,
-    initiativeDiscoveryFetchLimit: settings?.initiative?.discovery?.sourceFetchLimit ?? defaultDiscovery.sourceFetchLimit,
-    initiativeDiscoveryAllowNsfw: settings?.initiative?.discovery?.allowNsfw ?? defaultDiscovery.allowNsfw,
-    initiativeDiscoverySourceReddit: settings?.initiative?.discovery?.sources?.reddit ?? defaultDiscovery.sources.reddit,
-    initiativeDiscoverySourceHackerNews: settings?.initiative?.discovery?.sources?.hackerNews ?? defaultDiscovery.sources.hackerNews,
-    initiativeDiscoverySourceYoutube: settings?.initiative?.discovery?.sources?.youtube ?? defaultDiscovery.sources.youtube,
-    initiativeDiscoverySourceRss: settings?.initiative?.discovery?.sources?.rss ?? defaultDiscovery.sources.rss,
-    initiativeDiscoverySourceX: settings?.initiative?.discovery?.sources?.x ?? defaultDiscovery.sources.x,
-    initiativeDiscoveryPreferredTopics: formatLineList(settings?.initiative?.discovery?.preferredTopics),
-    initiativeDiscoveryRedditSubs: formatLineList(settings?.initiative?.discovery?.redditSubreddits),
-    initiativeDiscoveryYoutubeChannels: formatLineList(settings?.initiative?.discovery?.youtubeChannelIds),
-    initiativeDiscoveryRssFeeds: formatLineList(settings?.initiative?.discovery?.rssFeeds),
-    initiativeDiscoveryXHandles: formatLineList(settings?.initiative?.discovery?.xHandles),
-    initiativeDiscoveryXNitterBase:
-      settings?.initiative?.discovery?.xNitterBaseUrl ?? defaultDiscovery.xNitterBaseUrl,
-    initiativeChannels: formatLineList(settings?.permissions?.initiativeChannelIds),
+    discoveryEnabled: settings?.discovery?.enabled ?? defaultDiscovery.enabled,
+    discoveryPostsPerDay:
+      settings?.discovery?.maxPostsPerDay ?? defaultDiscovery.maxPostsPerDay,
+    discoveryMinMinutes:
+      settings?.discovery?.minMinutesBetweenPosts ?? defaultDiscovery.minMinutesBetweenPosts,
+    discoveryPacingMode:
+      settings?.discovery?.pacingMode === "spontaneous" ? "spontaneous" : "even",
+    discoverySpontaneity:
+      settings?.discovery?.spontaneity ?? defaultDiscovery.spontaneity,
+    discoveryStartupPost:
+      settings?.discovery?.postOnStartup ?? defaultDiscovery.postOnStartup,
+    discoveryImageEnabled:
+      settings?.discovery?.allowImagePosts ?? defaultDiscovery.allowImagePosts,
+    discoveryVideoEnabled:
+      settings?.discovery?.allowVideoPosts ?? defaultDiscovery.allowVideoPosts,
+    replyImageEnabled:
+      settings?.discovery?.allowReplyImages ?? defaultDiscovery.allowReplyImages,
+    replyVideoEnabled:
+      settings?.discovery?.allowReplyVideos ?? defaultDiscovery.allowReplyVideos,
+    replyGifEnabled:
+      settings?.discovery?.allowReplyGifs ?? defaultDiscovery.allowReplyGifs,
+    maxImagesPerDay: settings?.discovery?.maxImagesPerDay ?? defaultDiscovery.maxImagesPerDay,
+    maxVideosPerDay: settings?.discovery?.maxVideosPerDay ?? defaultDiscovery.maxVideosPerDay,
+    maxGifsPerDay: settings?.discovery?.maxGifsPerDay ?? defaultDiscovery.maxGifsPerDay,
+    discoverySimpleImageModel:
+      settings?.discovery?.simpleImageModel ?? defaultDiscovery.simpleImageModel,
+    discoveryComplexImageModel:
+      settings?.discovery?.complexImageModel ?? defaultDiscovery.complexImageModel,
+    discoveryVideoModel:
+      settings?.discovery?.videoModel ?? defaultDiscovery.videoModel,
+    discoveryAllowedImageModels:
+      formatLineList(settings?.discovery?.allowedImageModels ?? []),
+    discoveryAllowedVideoModels:
+      formatLineList(settings?.discovery?.allowedVideoModels ?? []),
+    discoveryExternalEnabled:
+      settings?.discovery?.linkChancePercent > 0 ||
+      settings?.discovery?.sources?.reddit === true ||
+      settings?.discovery?.sources?.hackerNews === true ||
+      settings?.discovery?.sources?.youtube === true ||
+      settings?.discovery?.sources?.rss === true ||
+      settings?.discovery?.sources?.x === true,
+    discoveryLinkChance:
+      settings?.discovery?.linkChancePercent ?? defaultDiscovery.linkChancePercent,
+    discoveryMaxLinks:
+      settings?.discovery?.maxLinksPerPost ?? defaultDiscovery.maxLinksPerPost,
+    discoveryMaxCandidates:
+      settings?.discovery?.maxCandidatesForPrompt ?? defaultDiscovery.maxCandidatesForPrompt,
+    discoveryFreshnessHours:
+      settings?.discovery?.freshnessHours ?? defaultDiscovery.freshnessHours,
+    discoveryDedupeHours:
+      settings?.discovery?.dedupeHours ?? defaultDiscovery.dedupeHours,
+    discoveryRandomness:
+      settings?.discovery?.randomness ?? defaultDiscovery.randomness,
+    discoveryFetchLimit:
+      settings?.discovery?.sourceFetchLimit ?? defaultDiscovery.sourceFetchLimit,
+    discoveryAllowNsfw:
+      settings?.discovery?.allowNsfw ?? defaultDiscovery.allowNsfw,
+    discoverySourceReddit:
+      settings?.discovery?.sources?.reddit ?? defaultDiscovery.sources.reddit,
+    discoverySourceHackerNews:
+      settings?.discovery?.sources?.hackerNews ?? defaultDiscovery.sources.hackerNews,
+    discoverySourceYoutube:
+      settings?.discovery?.sources?.youtube ?? defaultDiscovery.sources.youtube,
+    discoverySourceRss:
+      settings?.discovery?.sources?.rss ?? defaultDiscovery.sources.rss,
+    discoverySourceX:
+      settings?.discovery?.sources?.x ?? defaultDiscovery.sources.x,
+    discoveryPreferredTopics:
+      formatLineList(settings?.discovery?.preferredTopics),
+    discoveryRedditSubs:
+      formatLineList(settings?.discovery?.redditSubreddits),
+    discoveryYoutubeChannels:
+      formatLineList(settings?.discovery?.youtubeChannelIds),
+    discoveryRssFeeds:
+      formatLineList(settings?.discovery?.rssFeeds),
+    discoveryXHandles:
+      formatLineList(settings?.discovery?.xHandles),
+    discoveryXNitterBase:
+      settings?.discovery?.xNitterBaseUrl ?? defaultDiscovery.xNitterBaseUrl,
+    replyChannels: formatLineList(settings?.permissions?.replyChannelIds),
+    discoveryChannels: formatLineList(settings?.discovery?.channelIds),
     allowedChannels: formatLineList(settings?.permissions?.allowedChannelIds),
     blockedChannels: formatLineList(settings?.permissions?.blockedChannelIds),
     blockedUsers: formatLineList(settings?.permissions?.blockedUserIds)
@@ -311,6 +365,7 @@ export function settingsToForm(settings) {
 }
 
 export function formToSettingsPatch(form) {
+  const discoveryExternalEnabled = Boolean(form.discoveryExternalEnabled);
   return {
     botName: form.botName.trim(),
     botNameAliases: parseUniqueList(form.botNameAliases),
@@ -331,10 +386,17 @@ export function formToSettingsPatch(form) {
       mediaPromptCraftGuidance: String(form.promptMediaPromptCraftGuidance || "").trim()
     },
     activity: {
-      replyLevelInitiative: Number(form.replyLevelInitiative),
-      replyLevelNonInitiative: Number(form.replyLevelNonInitiative),
+      replyLevelReplyChannels: Number(form.replyLevelReplyChannels),
+      replyLevelOtherChannels: Number(form.replyLevelOtherChannels),
       reactionLevel: Number(form.reactionLevel),
       minSecondsBetweenMessages: Number(form.minGap)
+    },
+    textThoughtLoop: {
+      enabled: Boolean(form.textThoughtLoopEnabled),
+      eagerness: Number(form.textThoughtLoopEagerness),
+      minMinutesBetweenThoughts: Number(form.textThoughtLoopMinMinutesBetweenThoughts),
+      maxThoughtsPerDay: Number(form.textThoughtLoopMaxThoughtsPerDay),
+      lookbackMessages: Number(form.textThoughtLoopLookbackMessages)
     },
     llm: {
       provider: form.provider,
@@ -489,58 +551,56 @@ export function formToSettingsPatch(form) {
     },
     permissions: {
       allowReplies: form.allowReplies,
-      allowInitiativeReplies: form.allowInitiative,
+      allowUnsolicitedReplies: form.allowUnsolicitedReplies,
       allowReactions: form.allowReactions,
-      initiativeChannelIds: parseUniqueList(form.initiativeChannels),
+      replyChannelIds: parseUniqueList(form.replyChannels),
       allowedChannelIds: parseUniqueList(form.allowedChannels),
       blockedChannelIds: parseUniqueList(form.blockedChannels),
       blockedUserIds: parseUniqueList(form.blockedUsers),
       maxMessagesPerHour: Number(form.maxMessages),
       maxReactionsPerHour: Number(form.maxReactions)
     },
-    initiative: {
-      enabled: form.autonomousInitiativeEnabled,
-      maxPostsPerDay: Number(form.initiativePostsPerDay),
-      minMinutesBetweenPosts: Number(form.initiativeMinMinutes),
-      pacingMode: form.initiativePacingMode,
-      spontaneity: Number(form.initiativeSpontaneity),
-      postOnStartup: form.initiativeStartupPost,
-      allowImagePosts: form.initiativeImageEnabled,
-      allowVideoPosts: form.initiativeVideoEnabled,
+    discovery: {
+      enabled: form.discoveryEnabled,
+      channelIds: parseUniqueList(form.discoveryChannels),
+      maxPostsPerDay: Number(form.discoveryPostsPerDay),
+      minMinutesBetweenPosts: Number(form.discoveryMinMinutes),
+      pacingMode: form.discoveryPacingMode,
+      spontaneity: Number(form.discoverySpontaneity),
+      postOnStartup: form.discoveryStartupPost,
+      allowImagePosts: form.discoveryImageEnabled,
+      allowVideoPosts: form.discoveryVideoEnabled,
       allowReplyImages: form.replyImageEnabled,
       allowReplyVideos: form.replyVideoEnabled,
       allowReplyGifs: form.replyGifEnabled,
       maxImagesPerDay: Number(form.maxImagesPerDay),
       maxVideosPerDay: Number(form.maxVideosPerDay),
       maxGifsPerDay: Number(form.maxGifsPerDay),
-      simpleImageModel: form.initiativeSimpleImageModel.trim(),
-      complexImageModel: form.initiativeComplexImageModel.trim(),
-      videoModel: form.initiativeVideoModel.trim(),
-      allowedImageModels: parseUniqueList(form.initiativeAllowedImageModels),
-      allowedVideoModels: parseUniqueList(form.initiativeAllowedVideoModels),
-      discovery: {
-        enabled: form.initiativeDiscoveryEnabled,
-        linkChancePercent: Number(form.initiativeDiscoveryLinkChance),
-        maxLinksPerPost: Number(form.initiativeDiscoveryMaxLinks),
-        maxCandidatesForPrompt: Number(form.initiativeDiscoveryMaxCandidates),
-        freshnessHours: Number(form.initiativeDiscoveryFreshnessHours),
-        dedupeHours: Number(form.initiativeDiscoveryDedupeHours),
-        randomness: Number(form.initiativeDiscoveryRandomness),
-        sourceFetchLimit: Number(form.initiativeDiscoveryFetchLimit),
-        allowNsfw: form.initiativeDiscoveryAllowNsfw,
-        preferredTopics: parseUniqueList(form.initiativeDiscoveryPreferredTopics),
-        redditSubreddits: parseUniqueList(form.initiativeDiscoveryRedditSubs),
-        youtubeChannelIds: parseUniqueList(form.initiativeDiscoveryYoutubeChannels),
-        rssFeeds: parseUniqueList(form.initiativeDiscoveryRssFeeds),
-        xHandles: parseUniqueList(form.initiativeDiscoveryXHandles),
-        xNitterBaseUrl: form.initiativeDiscoveryXNitterBase.trim(),
-        sources: {
-          reddit: form.initiativeDiscoverySourceReddit,
-          hackerNews: form.initiativeDiscoverySourceHackerNews,
-          youtube: form.initiativeDiscoverySourceYoutube,
-          rss: form.initiativeDiscoverySourceRss,
-          x: form.initiativeDiscoverySourceX
-        }
+      simpleImageModel: form.discoverySimpleImageModel.trim(),
+      complexImageModel: form.discoveryComplexImageModel.trim(),
+      videoModel: form.discoveryVideoModel.trim(),
+      allowedImageModels: parseUniqueList(form.discoveryAllowedImageModels),
+      allowedVideoModels: parseUniqueList(form.discoveryAllowedVideoModels),
+      linkChancePercent: discoveryExternalEnabled ? Number(form.discoveryLinkChance) : 0,
+      maxLinksPerPost: Number(form.discoveryMaxLinks),
+      maxCandidatesForPrompt: Number(form.discoveryMaxCandidates),
+      freshnessHours: Number(form.discoveryFreshnessHours),
+      dedupeHours: Number(form.discoveryDedupeHours),
+      randomness: Number(form.discoveryRandomness),
+      sourceFetchLimit: Number(form.discoveryFetchLimit),
+      allowNsfw: discoveryExternalEnabled ? form.discoveryAllowNsfw : false,
+      preferredTopics: parseUniqueList(form.discoveryPreferredTopics),
+      redditSubreddits: parseUniqueList(form.discoveryRedditSubs),
+      youtubeChannelIds: parseUniqueList(form.discoveryYoutubeChannels),
+      rssFeeds: parseUniqueList(form.discoveryRssFeeds),
+      xHandles: parseUniqueList(form.discoveryXHandles),
+      xNitterBaseUrl: form.discoveryXNitterBase.trim(),
+      sources: {
+        reddit: discoveryExternalEnabled ? form.discoverySourceReddit : false,
+        hackerNews: discoveryExternalEnabled ? form.discoverySourceHackerNews : false,
+        youtube: discoveryExternalEnabled ? form.discoverySourceYoutube : false,
+        rss: discoveryExternalEnabled ? form.discoverySourceRss : false,
+        x: discoveryExternalEnabled ? form.discoverySourceX : false
       }
     },
     memory: {
@@ -574,14 +634,15 @@ const LIST_FORM_KEYS: ReadonlySet<string> = new Set([
   "voiceBlockedChannelIds",
   "voiceBlockedUserIds",
   "voiceSoundboardPreferredSoundIds",
-  "initiativeAllowedImageModels",
-  "initiativeAllowedVideoModels",
-  "initiativeDiscoveryPreferredTopics",
-  "initiativeDiscoveryRedditSubs",
-  "initiativeDiscoveryYoutubeChannels",
-  "initiativeDiscoveryRssFeeds",
-  "initiativeDiscoveryXHandles",
-  "initiativeChannels",
+  "discoveryAllowedImageModels",
+  "discoveryAllowedVideoModels",
+  "discoveryPreferredTopics",
+  "discoveryRedditSubs",
+  "discoveryYoutubeChannels",
+  "discoveryRssFeeds",
+  "discoveryXHandles",
+  "replyChannels",
+  "discoveryChannels",
   "allowedChannels",
   "blockedChannels",
   "blockedUsers"

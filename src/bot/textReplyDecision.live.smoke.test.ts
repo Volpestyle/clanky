@@ -180,8 +180,8 @@ test("smoke: live text reply admission handles wake variants and prank-like nega
         maxOutputTokens: 220
       },
       activity: {
-        replyLevelInitiative: 50,
-        replyLevelNonInitiative: 50,
+        replyLevelReplyChannels: 50,
+        replyLevelOtherChannels: 50,
         reactionLevel: 0,
         minSecondsBetweenMessages: 0,
         replyCoalesceWindowSeconds: 0,
@@ -189,9 +189,9 @@ test("smoke: live text reply admission handles wake variants and prank-like nega
       },
       permissions: {
         allowReplies: true,
-        allowInitiativeReplies: true,
+        allowUnsolicitedReplies: true,
         allowReactions: false,
-        initiativeChannelIds: [],
+        replyChannelIds: [],
         allowedChannelIds: [channelId],
         blockedChannelIds: [],
         blockedUserIds: [],
@@ -210,7 +210,7 @@ test("smoke: live text reply admission handles wake variants and prank-like nega
         enabled: false,
         maxLookupsPerHour: 0
       },
-      initiative: {
+      discovery: {
         enabled: false,
         allowReplyImages: false,
         allowReplyVideos: false,

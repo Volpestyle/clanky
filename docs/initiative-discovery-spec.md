@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The discovery subsystem enriches initiative posts with fresh external content by fetching, filtering, and ranking candidate links from configured sources. This enables initiative channels to surface timely topics and real links instead of generating content purely from the model's training data.
+The discovery subsystem enriches discovery posts with fresh external content by fetching, filtering, and ranking candidate links from configured sources. This enables discovery channels to surface timely topics and real links instead of generating content purely from the model's training data.
 
 ## Design Properties
 
@@ -12,9 +12,9 @@ The discovery subsystem enriches initiative posts with fresh external content by
 
 ## Runtime Behavior
 
-1. On each initiative cycle that is due, `DiscoveryService.collect()` gathers candidate links from enabled sources.
+1. On each discovery cycle that is due, `DiscoveryService.collect()` gathers candidate links from enabled sources.
 2. Candidates are filtered by freshness window and repost-avoid window.
-3. Highest-scoring candidates are injected into the initiative prompt as optional inspiration.
+3. Highest-scoring candidates are injected into the discovery-post prompt as optional inspiration.
 4. The bot generates one standalone message; if `requireLink` is enabled, the post must include at least one discovered link.
 5. Any links actually posted are recorded in the `shared_links` table for dedupe on later cycles.
 
@@ -47,7 +47,7 @@ The discovery subsystem enriches initiative posts with fresh external content by
 Under `Autonomous Initiative Posts -> Creative Discovery`:
 
 - `discovery.enabled`: master toggle.
-- `discovery.linkChancePercent`: probability that an initiative post should include links.
+- `discovery.linkChancePercent`: probability that a discovery post should include links.
 - `discovery.maxLinksPerPost`: upper bound on links per post.
 - `discovery.candidateCount`: number of candidates injected into the prompt.
 - `discovery.freshnessWindowHours`: maximum age of candidate content.
@@ -69,7 +69,7 @@ Under `Autonomous Initiative Posts -> Creative Discovery`:
 
 ## Observability
 
-`initiative_post` action metadata includes:
+`discovery_post` action metadata includes:
 
 - Discovery enablement flag
 - Required-link flag

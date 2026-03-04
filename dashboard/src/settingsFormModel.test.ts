@@ -24,7 +24,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
       model: "claude-haiku-4-5"
     },
     permissions: {
-      initiativeChannelIds: ["1", "2"],
+      replyChannelIds: ["1", "2"],
       allowedChannelIds: ["2", "3"],
       blockedChannelIds: ["9"],
       blockedUserIds: ["u-1"]
@@ -71,15 +71,15 @@ test("settingsFormModel converts settings to form defaults and back to normalize
     form.voiceStreamWatchBrainContextPrompt,
     "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or observational shout-out commentary."
   );
-  assert.equal(form.initiativeChannels, "1\n2");
+  assert.equal(form.replyChannels, "1\n2");
   assert.equal(form.allowedChannels, "2\n3");
   assert.equal(form.voiceBrainProvider, "openai");
 
   form.personaHardLimits = "no hate\nno hate\nkeep it fun\n";
   form.botNameAliases = "clank\nconk\nclank\n";
   form.allowedChannels = "2\n2\n3\n";
-  form.initiativeDiscoveryRssFeeds = "https://one.example/feed\nhttps://one.example/feed\n";
-  form.initiativeDiscoveryXHandles = "@alice\n@alice\nbob\n";
+  form.discoveryRssFeeds = "https://one.example/feed\nhttps://one.example/feed\n";
+  form.discoveryXHandles = "@alice\n@alice\nbob\n";
   form.replyFollowupMaxToolSteps = 5;
   form.replyFollowupMaxTotalToolCalls = 11;
   form.replyFollowupMaxWebSearchCalls = 4;
@@ -107,8 +107,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.deepEqual(patch.botNameAliases, ["clank", "conk"]);
   assert.deepEqual(patch.persona.hardLimits, ["no hate", "keep it fun"]);
   assert.deepEqual(patch.permissions.allowedChannelIds, ["2", "3"]);
-  assert.deepEqual(patch.initiative.discovery.rssFeeds, ["https://one.example/feed"]);
-  assert.deepEqual(patch.initiative.discovery.xHandles, ["@alice", "bob"]);
+  assert.deepEqual(patch.discovery.rssFeeds, ["https://one.example/feed"]);
+  assert.deepEqual(patch.discovery.xHandles, ["@alice", "bob"]);
   assert.equal(patch.voice.brainProvider, "openai");
   assert.equal(patch.replyFollowupLlm.maxToolSteps, 5);
   assert.equal(patch.replyFollowupLlm.maxTotalToolCalls, 11);

@@ -44,9 +44,9 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
       },
       permissions: {
         allowReplies: true,
-        allowInitiativeReplies: false,
+        allowUnsolicitedReplies: false,
         allowReactions: true,
-        initiativeChannelIds: [],
+        replyChannelIds: [],
         allowedChannelIds: [channelId],
         blockedChannelIds: [],
         blockedUserIds: [],
@@ -65,7 +65,7 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
         enabled: false,
         maxLookupsPerHour: 0
       },
-      initiative: {
+      discovery: {
         enabled: false,
         allowReplyImages: false,
         allowReplyVideos: false,

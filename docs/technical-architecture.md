@@ -9,12 +9,12 @@ Code entrypoint:
 
 Core runtime:
 - `src/bot.ts`: Discord event handling and orchestration.
-- `src/bot/*`: extracted bot domains (`automationControl`, `initiativeSchedule`, `queueGateway`, `replyAdmission`, `replyFollowup`, `startupCatchup`, `voiceReplies`).
+- `src/bot/*`: extracted bot domains (`automationControl`, `discoverySchedule`, `queueGateway`, `replyAdmission`, `replyFollowup`, `startupCatchup`, `voiceReplies`).
 - `src/llm.ts`: model provider abstraction (OpenAI, Anthropic, xAI/Grok, or Claude Code), usage + cost logging, embeddings, image/video generation, ASR, and TTS.
 - `src/llmClaudeCode.ts`: Claude Code CLI invocation/parsing helpers used by `LLMService`.
 - `docs/claude-code-brain-session-mode.md`: Claude Code persistent-brain behavior and how it differs from stateless API providers.
 - `src/memory.ts`: append-only daily journaling + LLM-based fact extraction + hybrid memory retrieval (lexical + vector).
-- `src/discovery.ts`: external link discovery for initiative posts.
+- `src/discovery.ts`: external link discovery for discovery posts.
 - `src/store.ts`: SQLite persistence orchestration.
 - `src/store/*`: settings normalization and store helper utilities.
 - `src/voice/voiceSessionManager.ts`: voice orchestration and session lifecycle.
@@ -106,7 +106,7 @@ No step here is hardcoded. The brain chose which tools to use and in what order 
 Main tables created in `src/store.ts`:
 - `settings`: single `runtime_settings` JSON blob.
 - `messages`: normalized message history across text chat, persisted user voice transcripts, and persisted assistant spoken turns.
-- `actions`: event log (replies, reactions, initiative posts, llm/image calls, errors) with `usd_cost`.
+- `actions`: event log (replies, reactions, discovery posts, llm/image calls, errors) with `usd_cost`.
 - `memory_facts`: LLM-extracted durable facts with type/confidence/evidence.
 - `memory_fact_vectors_native`: sqlite-vec-compatible embeddings per fact/model for semantic recall.
 - `adaptive_style_notes`: active persistent adaptive directives, including `directive_kind` (`guidance` or `behavior`), audit metadata, and soft-delete fields.
@@ -132,7 +132,7 @@ Settings are patched through dashboard API and normalized in `Store.patchSetting
 - clamping numeric ranges,
 - sanitizing list fields,
 - defaulting missing keys,
-- ensuring initiative/discovery config is always valid.
+- ensuring reply-channel, text-thought-loop, and discovery config is always valid.
 
 The bot reads settings at decision time (`store.getSettings()`), so updates apply without restart.
 
@@ -151,7 +151,8 @@ Key guardrails:
 - blocked users.
 - per-hour message and reaction limits.
 - minimum seconds between bot messages.
-- direct-address and recent-bot-context gating for unsolicited replies (with LLM skip as backstop).
+- direct-address and recent-bot-context gating for immediate unsolicited replies.
+- timer-driven text thought loop for cold reply/lurk channels, capped by its own daily and cooldown settings, and only active when the channel has recent human activity within the last 24 hours.
 
 ## 7. Latency-Critical Model Choices
 
@@ -164,20 +165,22 @@ Validation signals:
 - `Store.getReplyPerformanceStats()` (`memorySliceMs`, `llm1Ms`, `followupMs`).
 - voice `voice_turn_addressing` runtime logs.
 
-## 8. Initiative Post Flow
+## 8. Text Thought Loop + Discovery Post Flow
 
-Initiative logic runs every 60 seconds, but posting depends on schedule rules and caps.
+Text-channel proactivity is now split in two:
+- `replyChannelIds` + `textThoughtLoop.*`: periodic conversational lurking. The bot scans configured reply channels, inspects recent chat, and may decide to chime in.
+- `discovery.channelIds` + `discovery.*`: proactive standalone discovery posting with optional external links/media.
 
-![Initiative Post Flow](diagrams/initiative-post-flow.png)
-<!-- source: docs/diagrams/initiative-post-flow.mmd -->
+![Discovery Post Flow](diagrams/discovery-post-flow.png)
+<!-- source: docs/diagrams/discovery-post-flow.mmd -->
 
 Scheduling modes:
 - `even`: post only when elapsed time exceeds `max(minMinutesBetweenPosts, 24h/maxPostsPerDay)`.
 - `spontaneous`: after min gap, uses probabilistic ramps + force-due bound.
 
-## 9. Discovery Subsystem (Initiative Creativity)
+## 9. Discovery Subsystem
 
-`DiscoveryService.collect()` builds topic seeds, fetches enabled sources in parallel, filters/ranks candidates, and provides a shortlist to initiative prompting.
+`DiscoveryService.collect()` builds topic seeds, fetches enabled sources in parallel, filters/ranks candidates, and provides a shortlist to discovery-post prompting.
 
 Canonical discovery behavior, controls, and rollout guidance live in:
 - `docs/initiative-discovery-spec.md`.
@@ -204,7 +207,7 @@ Dashboard read APIs also include:
 ## 11. Action Log Kinds
 
 Common `actions.kind` values in current runtime:
-- Messaging/initiative: `sent_reply`, `sent_message`, `reply_skipped`, `initiative_post`, `automation_post`
+- Messaging/discovery: `sent_reply`, `sent_message`, `reply_skipped`, `discovery_post`, `text_thought_loop_post`, `automation_post`
 - Reactions: `reacted`, `voice_soundboard_play`
 - LLM + media generation: `llm_call`, `llm_error`, `image_call`, `image_error`, `video_call`, `video_error`, `gif_call`, `gif_error`
 - Memory pipeline: `memory_fact`, `memory_extract_call`, `memory_extract_error`, `memory_embedding_call`, `memory_embedding_error`
@@ -222,5 +225,5 @@ These power the activity stream and metrics/cost widgets in the dashboard.
 
 - LLM failures are logged (`llm_error`) and bubble to caller; bot-level wrappers log `bot_error`.
 - Reaction failures (permission/emoji issues) are swallowed.
-- Image generation failures fall back to text-only initiative posts.
-- Discovery fetch failures are captured per source; initiative cycle can still continue with no links.
+- Image generation failures fall back to text-only discovery posts.
+- Discovery fetch failures are captured per source; discovery cycle can still continue with no links.

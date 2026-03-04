@@ -33,32 +33,46 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
         onChange={set("personaHardLimits")}
       />
 
-      <label htmlFor="reply-level-initiative">
-        Unsolicited reply eagerness (initiative channels): <strong>{form.replyLevelInitiative}%</strong>
+      <label htmlFor="reply-level-reply-channels">
+        Unsolicited reply eagerness (reply channels): <strong>{form.replyLevelReplyChannels}%</strong>
       </label>
       <input
-        id="reply-level-initiative"
+        id="reply-level-reply-channels"
         type="range"
         min="0"
         max="100"
         step="1"
-        value={form.replyLevelInitiative}
-        onChange={set("replyLevelInitiative")}
-        style={rangeStyle(form.replyLevelInitiative)}
+        value={form.replyLevelReplyChannels}
+        onChange={set("replyLevelReplyChannels")}
+        style={rangeStyle(form.replyLevelReplyChannels)}
       />
 
-      <label htmlFor="reply-level-non-initiative">
-        Unsolicited reply eagerness (non-initiative channels): <strong>{form.replyLevelNonInitiative}%</strong>
+      <label htmlFor="reply-level-other-channels">
+        Unsolicited reply eagerness (other channels): <strong>{form.replyLevelOtherChannels}%</strong>
       </label>
       <input
-        id="reply-level-non-initiative"
+        id="reply-level-other-channels"
         type="range"
         min="0"
         max="100"
         step="1"
-        value={form.replyLevelNonInitiative}
-        onChange={set("replyLevelNonInitiative")}
-        style={rangeStyle(form.replyLevelNonInitiative)}
+        value={form.replyLevelOtherChannels}
+        onChange={set("replyLevelOtherChannels")}
+        style={rangeStyle(form.replyLevelOtherChannels)}
+      />
+
+      <label htmlFor="text-thought-loop-eagerness">
+        Text thought-loop eagerness: <strong>{form.textThoughtLoopEagerness}%</strong>
+      </label>
+      <input
+        id="text-thought-loop-eagerness"
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        value={form.textThoughtLoopEagerness}
+        onChange={set("textThoughtLoopEagerness")}
+        style={rangeStyle(form.textThoughtLoopEagerness)}
       />
 
       <label htmlFor="reaction-level">
@@ -81,8 +95,20 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
           Allow replies
         </label>
         <label>
-          <input type="checkbox" checked={form.allowInitiative} onChange={set("allowInitiative")} />
-          Allow initiative replies
+          <input
+            type="checkbox"
+            checked={form.allowUnsolicitedReplies}
+            onChange={set("allowUnsolicitedReplies")}
+          />
+          Allow unsolicited replies
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.textThoughtLoopEnabled}
+            onChange={set("textThoughtLoopEnabled")}
+          />
+          Enable text thought loop
         </label>
         <label>
           <input type="checkbox" checked={form.allowReactions} onChange={set("allowReactions")} />
@@ -109,6 +135,47 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
           Automations enabled
         </label>
       </div>
+
+      {form.textThoughtLoopEnabled && (
+        <div className="split">
+          <div>
+            <label htmlFor="text-thought-loop-min-minutes">Min minutes between thoughts</label>
+            <input
+              id="text-thought-loop-min-minutes"
+              type="number"
+              min="5"
+              max="1440"
+              value={form.textThoughtLoopMinMinutesBetweenThoughts}
+              onChange={set("textThoughtLoopMinMinutesBetweenThoughts")}
+            />
+          </div>
+          <div>
+            <label htmlFor="text-thought-loop-max-per-day">Max thought replies/day</label>
+            <input
+              id="text-thought-loop-max-per-day"
+              type="number"
+              min="0"
+              max="100"
+              value={form.textThoughtLoopMaxThoughtsPerDay}
+              onChange={set("textThoughtLoopMaxThoughtsPerDay")}
+            />
+          </div>
+        </div>
+      )}
+
+      {form.textThoughtLoopEnabled && (
+        <div>
+          <label htmlFor="text-thought-loop-lookback">Recent messages to inspect per channel</label>
+          <input
+            id="text-thought-loop-lookback"
+            type="number"
+            min="4"
+            max="80"
+            value={form.textThoughtLoopLookbackMessages}
+            onChange={set("textThoughtLoopLookbackMessages")}
+          />
+        </div>
+      )}
     </SettingsSection>
   );
 }

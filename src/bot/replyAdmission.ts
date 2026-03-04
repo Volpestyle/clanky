@@ -85,14 +85,13 @@ export function shouldAttemptReplyDecision({
   settings,
   recentMessages,
   addressSignal,
-  isInitiativeChannel = false,
   forceRespond = false,
+  forceDecisionLoop = false,
   triggerMessageId = null,
   windowSize = 5
 }) {
-  if (forceRespond || isHardAddressSignal(addressSignal)) return true;
-  if (!settings?.permissions?.allowInitiativeReplies) return false;
-  if (isInitiativeChannel) return true;
+  if (forceRespond || forceDecisionLoop || isHardAddressSignal(addressSignal)) return true;
+  if (!settings?.permissions?.allowUnsolicitedReplies) return false;
   return hasBotMessageInRecentWindow({
     botUserId,
     recentMessages,

@@ -41,7 +41,7 @@ export default function MetricsBar({ stats }) {
       label: "Text Activity",
       cards: [
         { label: "Replies (24h)", value: String(s?.last24h?.sent_reply || 0) },
-        { label: "Drop-ins (24h)", value: String(Number(s?.last24h?.sent_message || 0) + Number(s?.last24h?.initiative_post || 0)) },
+        { label: "Drop-ins (24h)", value: String(Number(s?.last24h?.sent_message || 0) + Number(s?.last24h?.discovery_post || 0)) },
         { label: "Reactions (24h)", value: String(s?.last24h?.reacted || 0) },
         { label: "Searches (24h)", value: String(s?.last24h?.search_call || 0) },
         { label: "Memory (24h)", value: String(s?.last24h?.memory_extract_call || 0) },

@@ -404,9 +404,9 @@ export class LLMService {
     this.openai = appConfig.openaiApiKey ? new OpenAI({ apiKey: appConfig.openaiApiKey }) : null;
     this.xai = appConfig.xaiApiKey
       ? new OpenAI({
-          apiKey: appConfig.xaiApiKey,
-          baseURL: normalizeXaiBaseUrl(appConfig.xaiBaseUrl)
-        })
+        apiKey: appConfig.xaiApiKey,
+        baseURL: normalizeXaiBaseUrl(appConfig.xaiBaseUrl)
+      })
       : null;
     this.anthropic = appConfig.anthropicApiKey
       ? new Anthropic({ apiKey: appConfig.anthropicApiKey })
@@ -783,22 +783,22 @@ export class LLMService {
     try {
       const { stdout } = usePersistentBrainStream
         ? await this.runClaudeCodeBrainStream({
-            model,
-            input: streamInput,
-            timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
-            maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
-          })
+          model,
+          input: streamInput,
+          timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
+          maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
+        })
         : await runClaudeCli({
-            args: buildClaudeCodeCliArgs({
-              model,
-              systemPrompt: fallbackSystemPrompt,
-              jsonSchema: normalizedJsonSchema,
-              maxTurns: 1
-            }),
-            input: streamInput,
-            timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
-            maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
-          });
+          args: buildClaudeCodeCliArgs({
+            model,
+            systemPrompt: fallbackSystemPrompt,
+            jsonSchema: normalizedJsonSchema,
+            maxTurns: 1
+          }),
+          input: streamInput,
+          timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
+          maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
+        });
 
       const parsed = parseClaudeCodeStreamOutput(stdout);
       if (parsed?.isError) {
@@ -1273,10 +1273,10 @@ export class LLMService {
 
       const durationSeconds = Number(
         statusResponse?.video?.duration_seconds ??
-          statusResponse?.video?.duration ??
-          statusResponse?.duration_seconds ??
-          statusResponse?.duration ??
-          0
+        statusResponse?.video?.duration ??
+        statusResponse?.duration_seconds ??
+        statusResponse?.duration ??
+        0
       );
       const normalizedDuration = Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : null;
       const costUsd = 0;
@@ -1391,7 +1391,7 @@ export class LLMService {
     }
     return Boolean(
       this.resolveImageGenerationTarget(settings, "simple") ||
-        this.resolveImageGenerationTarget(settings, "complex")
+      this.resolveImageGenerationTarget(settings, "complex")
     );
   }
 
@@ -1400,11 +1400,11 @@ export class LLMService {
   }
 
   resolveImageGenerationTarget(settings, variant = "simple") {
-    const allowedModels = normalizeModelAllowlist(settings?.initiative?.allowedImageModels);
+    const allowedModels = normalizeModelAllowlist(settings?.discovery?.allowedImageModels);
     if (!allowedModels.length) return null;
 
     const preferredModel = String(
-      variant === "complex" ? settings?.initiative?.complexImageModel : settings?.initiative?.simpleImageModel
+      variant === "complex" ? settings?.discovery?.complexImageModel : settings?.discovery?.simpleImageModel
     ).trim();
     const candidates = prioritizePreferredModel(allowedModels, preferredModel);
 
@@ -1420,10 +1420,10 @@ export class LLMService {
   resolveVideoGenerationTarget(settings) {
     if (!this.xai) return null;
 
-    const allowedModels = normalizeModelAllowlist(settings?.initiative?.allowedVideoModels);
+    const allowedModels = normalizeModelAllowlist(settings?.discovery?.allowedVideoModels);
     if (!allowedModels.length) return null;
 
-    const preferredModel = String(settings?.initiative?.videoModel || "").trim();
+    const preferredModel = String(settings?.discovery?.videoModel || "").trim();
     const candidates = prioritizePreferredModel(allowedModels, preferredModel);
     for (const model of candidates) {
       if (inferProviderFromModel(model) === "xai") {
@@ -1752,12 +1752,12 @@ export class LLMService {
     const normalizedTools = Array.isArray(tools) ? tools : [];
     const openAiTools = normalizedTools.length
       ? normalizedTools.map((t) => ({
-          type: "function" as const,
-          name: t.name,
-          description: t.description,
-          parameters: t.input_schema,
-          strict: false
-        }))
+        type: "function" as const,
+        name: t.name,
+        description: t.description,
+        parameters: t.input_schema,
+        strict: false
+      }))
       : [];
     const responseFormat = !openAiTools.length ? buildOpenAiJsonSchemaTextFormat(jsonSchema) : null;
     const response = await this.openai.responses.create({
@@ -1819,9 +1819,9 @@ export class LLMService {
       .filter(Boolean);
     const userContent = imageParts.length
       ? [
-          { type: "text", text: userPrompt },
-          ...imageParts
-        ]
+        { type: "text", text: userPrompt },
+        ...imageParts
+      ]
       : userPrompt;
 
     const messages = [
@@ -1836,13 +1836,13 @@ export class LLMService {
     const normalizedTools = Array.isArray(tools) ? tools : [];
     const xaiTools = normalizedTools.length
       ? normalizedTools.map((t) => ({
-          type: "function" as const,
-          function: {
-            name: t.name,
-            description: t.description,
-            parameters: t.input_schema
-          }
-        }))
+        type: "function" as const,
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: t.input_schema
+        }
+      }))
       : [];
     const response = await this.xai.chat.completions.create({
       model,
@@ -1886,9 +1886,9 @@ export class LLMService {
     const imageParts = buildAnthropicImageParts(imageInputs);
     const userContent = imageParts.length
       ? [
-          { type: "text", text: userPrompt },
-          ...imageParts
-        ]
+        { type: "text", text: userPrompt },
+        ...imageParts
+      ]
       : userPrompt;
 
     const messages = [
@@ -1903,12 +1903,12 @@ export class LLMService {
     const normalizedTools = Array.isArray(tools) ? tools : [];
     const toolsParam = normalizedTools.length
       ? {
-          tools: normalizedTools.map((t) => ({
-            name: t.name,
-            description: t.description,
-            input_schema: t.input_schema
-          }))
-        }
+        tools: normalizedTools.map((t) => ({
+          name: t.name,
+          description: t.description,
+          input_schema: t.input_schema
+        }))
+      }
       : {};
     const response = await this.anthropic.messages.create({
       model,
@@ -1960,7 +1960,8 @@ export class LLMService {
       channelId: null as string | null,
       userId: null as string | null,
       source: null as string | null
-    }
+    },
+    signal
   }: {
     provider?: string;
     model?: string;
@@ -1979,6 +1980,7 @@ export class LLMService {
       userId?: string | null;
       source?: string | null;
     };
+    signal?: AbortSignal;
   }): Promise<{
     content: ToolLoopContentBlock[];
     stopReason: string;
@@ -2009,7 +2011,7 @@ export class LLMService {
         max_tokens: maxOutputTokens,
         messages: buildAnthropicToolLoopMessages(messages),
         tools
-      });
+      }, { signal });
 
       content = response.content.flatMap((block) => {
         if (block.type === "text") {
@@ -2052,7 +2054,7 @@ export class LLMService {
           strict: false
         })),
         input: buildOpenAiToolLoopInput(messages)
-      });
+      }, { signal });
 
       content = buildToolLoopContentFromOpenAiOutput(response.output);
       usage = extractOpenAiResponseUsage(response);

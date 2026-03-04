@@ -86,7 +86,7 @@ bun run start
 Builds the React dashboard, then starts bot + dashboard together.
 
 - Dashboard: `http://localhost:8787` (or configured `DASHBOARD_PORT`)
-- Configure everything through the dashboard: persona, permissions, LLM provider/model, voice settings, initiative behavior, memory, and more
+- Configure everything through the dashboard: persona, permissions, LLM provider/model, voice settings, reply/discovery behavior, memory, and more
 
 ### Keep It Running
 
@@ -125,7 +125,7 @@ Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details 
 | `docs/realtime-voice-agent-spec.md` | Voice architecture and tool strategy |
 | `docs/claude-code-brain-session-mode.md` | Claude Code as LLM brain provider |
 | `docs/memory-system.md` | Memory system design |
-| `docs/initiative-discovery-spec.md` | Initiative content discovery |
+| `docs/initiative-discovery-spec.md` | Discovery post content sourcing |
 | `docs/voice-provider-abstraction.md` | Voice provider swappability |
 | `docs/public-https-entrypoint-spec.md` | Public HTTPS tunnel |
 | `docs/screen-share-link-spec.md` | Screen share flow |

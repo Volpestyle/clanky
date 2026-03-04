@@ -6,7 +6,7 @@ import { isRedirectStatus } from "./retry.ts";
 const DISCOVERY_TIMEOUT_MS = 9_000;
 const DISCOVERY_MAX_REDIRECTS = 5;
 const DISCOVERY_USER_AGENT =
-  "clanker-conk/0.1 (+initiative-discovery; https://github.com/Volpestyle/clanker_conk)";
+  "clanker-conk/0.1 (+discovery-posts; https://github.com/Volpestyle/clanker_conk)";
 
 const TRACKING_QUERY_PREFIXES = ["utm_"];
 const TRACKING_QUERY_KEYS = new Set([
@@ -76,7 +76,7 @@ export class DiscoveryService {
     channelName,
     recentMessages
   }) {
-    const config = normalizeDiscoveryConfig(settings?.initiative?.discovery);
+    const config = normalizeDiscoveryConfig(settings?.discovery);
     if (!config.enabled) {
       return {
         enabled: false,

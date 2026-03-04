@@ -7,18 +7,18 @@ sequenceDiagram
     participant LLM as LLMService
     participant Discord as Discord
 
-    Tick->>Bot: maybeRunInitiativeCycle()
+    Tick->>Bot: maybeRunDiscoveryCycle()
     Bot->>Store: getSettings()
     Bot->>Bot: eligibility checks (enabled, limits, cooldown)
-    Bot->>Store: countInitiativePostsSince(24h)
-    Bot->>Store: getLastActionTime(initiative_post)
+    Bot->>Store: countActionsSince(discovery_post, 24h)
+    Bot->>Store: getLastActionTime(discovery_post)
     Bot->>Bot: evaluate schedule (even/spontaneous)
 
     alt due to post
-      Bot->>Bot: pick initiative channel + hydrate recent messages
-      Bot->>Disc: collect(...) if discovery enabled
+      Bot->>Bot: pick discovery channel + hydrate recent messages
+      Bot->>Disc: collect(...) if discovery sources are enabled
       Disc->>Store: wasLinkSharedSince(...) during dedupe
-      Bot->>LLM: generate() with initiative prompt
+      Bot->>LLM: generate() with discovery-post prompt
       LLM->>Store: logAction(llm_call or llm_error)
       Bot->>Bot: applyDiscoveryLinkPolicy()
       opt image post selected
@@ -28,7 +28,7 @@ sequenceDiagram
       Bot->>Discord: channel.send(payload)
       Bot->>Store: recordMessage(outgoing)
       Bot->>Store: recordSharedLink(url) for used links
-      Bot->>Store: logAction(initiative_post + pacing/discovery metadata)
+      Bot->>Store: logAction(discovery_post + pacing/discovery metadata)
     else not due
       Bot->>Bot: return
     end

@@ -121,8 +121,8 @@ function buildIncomingMessage({
 function applyBaselineSettings(store, channelId) {
   store.patchSettings({
     activity: {
-      replyLevelInitiative: 65,
-      replyLevelNonInitiative: 10,
+      replyLevelReplyChannels: 65,
+      replyLevelOtherChannels: 10,
       reactionLevel: 20,
       minSecondsBetweenMessages: 5,
       replyCoalesceWindowSeconds: 0,
@@ -130,9 +130,9 @@ function applyBaselineSettings(store, channelId) {
     },
     permissions: {
       allowReplies: true,
-      allowInitiativeReplies: true,
+      allowUnsolicitedReplies: true,
       allowReactions: true,
-      initiativeChannelIds: [],
+      replyChannelIds: [],
       allowedChannelIds: [channelId],
       blockedChannelIds: [],
       blockedUserIds: [],
@@ -151,7 +151,7 @@ function applyBaselineSettings(store, channelId) {
       enabled: false,
       maxLookupsPerHour: 0
     },
-    initiative: {
+    discovery: {
       enabled: false,
       allowReplyImages: false,
       allowReplyVideos: false,
@@ -460,7 +460,7 @@ test("non-addressed initiative turn can still contribute when model responds", a
     applyBaselineSettings(store, channelId);
     store.patchSettings({
       permissions: {
-        initiativeChannelIds: [channelId]
+        replyChannelIds: [channelId]
       }
     });
 
@@ -552,13 +552,13 @@ test("non-addressed initiative turn can still contribute when model responds", a
   });
 });
 
-test("initiative channel evaluates non-addressed turns without prior bot message context", async () => {
+test("reply channels do not immediately evaluate cold non-addressed turns without prior bot context", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";
     applyBaselineSettings(store, channelId);
     store.patchSettings({
       permissions: {
-        initiativeChannelIds: [channelId]
+        replyChannelIds: [channelId]
       }
     });
 
@@ -628,11 +628,11 @@ test("initiative channel evaluates non-addressed turns without prior bot message
       }
     });
 
-    assert.equal(sent, true);
-    assert.equal(llmCalls.length, 1);
+    assert.equal(sent, false);
+    assert.equal(llmCalls.length, 0);
     assert.equal(replyPayloads.length, 0);
-    assert.equal(channelSendPayloads.length, 1);
-    assert.equal(typingCallsRef.count > 0, true);
+    assert.equal(channelSendPayloads.length, 0);
+    assert.equal(typingCallsRef.count, 0);
   });
 });
 
@@ -722,7 +722,7 @@ test("direct-addressed turn bypasses unsolicited gate and marks response as requ
     applyBaselineSettings(store, channelId);
     store.patchSettings({
       permissions: {
-        allowInitiativeReplies: false
+        allowUnsolicitedReplies: false
       }
     });
 
@@ -1077,7 +1077,7 @@ test("reply follow-up regeneration can add history images when model requests im
     applyBaselineSettings(store, channelId);
     store.patchSettings({
       activity: {
-        replyLevelNonInitiative: 100
+        replyLevelOtherChannels: 100
       }
     });
 
@@ -1929,7 +1929,7 @@ test("initiative-channel direct turns can be routed to thread replies when polic
     applyBaselineSettings(store, channelId);
     store.patchSettings({
       permissions: {
-        initiativeChannelIds: [channelId]
+        replyChannelIds: [channelId]
       }
     });
 
@@ -2011,7 +2011,7 @@ test("initiative-channel direct turns can be routed to standalone channel messag
     applyBaselineSettings(store, channelId);
     store.patchSettings({
       permissions: {
-        initiativeChannelIds: [channelId]
+        replyChannelIds: [channelId]
       }
     });
 

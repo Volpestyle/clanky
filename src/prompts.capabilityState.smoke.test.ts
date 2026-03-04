@@ -101,7 +101,7 @@ test("smoke: reply prompt surfaces interactive browser capability state", () => 
       error: null,
       videos: []
     },
-    channelMode: "non_initiative",
+    channelMode: "other_channel",
     maxMediaPromptChars: 900,
     mediaPromptCraftGuidance: "be specific"
   });
@@ -181,7 +181,7 @@ test("smoke: reply prompt surfaces current voice music state", () => {
     },
     screenShare: null,
     videoContext: null,
-    channelMode: "non_initiative",
+    channelMode: "other_channel",
     maxMediaPromptChars: 900,
     mediaPromptCraftGuidance: "be specific"
   });

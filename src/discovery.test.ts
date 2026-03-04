@@ -35,9 +35,14 @@ test("DiscoveryService.collect returns disabled payload when discovery is off", 
 
   const result = await service.collect({
     settings: {
-      initiative: {
-        discovery: {
-          enabled: false
+      discovery: {
+        enabled: false,
+        sources: {
+          reddit: false,
+          hackerNews: false,
+          youtube: false,
+          rss: false,
+          x: false
         }
       }
     },
@@ -151,25 +156,22 @@ test("DiscoveryService.collect dedupes, filters, and aggregates source errors", 
   await withFrozenTimeAndRandom({ nowMs, randomValue: 0.5 }, async () => {
     const result = await service.collect({
       settings: {
-        initiative: {
-          discovery: {
-            enabled: true,
-            maxLinksPerPost: 2,
-            maxCandidatesForPrompt: 6,
-            freshnessHours: 48,
-            dedupeHours: 24,
-            randomness: 0,
-            allowNsfw: false,
-            preferredTopics: ["space"],
-            redditSubreddits: ["r/space"],
-            rssFeeds: ["https://feeds.example.org/rss"],
-            sources: {
-              reddit: true,
-              hackerNews: true,
-              youtube: false,
-              rss: true,
-              x: false
-            }
+        discovery: {
+          maxLinksPerPost: 2,
+          maxCandidatesForPrompt: 6,
+          freshnessHours: 48,
+          dedupeHours: 24,
+          randomness: 0,
+          allowNsfw: false,
+          preferredTopics: ["space"],
+          redditSubreddits: ["r/space"],
+          rssFeeds: ["https://feeds.example.org/rss"],
+          sources: {
+            reddit: true,
+            hackerNews: true,
+            youtube: false,
+            rss: true,
+            x: false
           }
         }
       },

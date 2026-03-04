@@ -178,7 +178,7 @@ Primary consumers of this slice:
 
 - Text replies (`src/bot.ts`, `maybeReplyToMessage` path)
 - Automation runs (`src/bot.ts`, automation generation path)
-- Initiative generation (`src/bot.ts`, initiative post path)
+- Discovery generation (`src/bot.ts`, discovery post path)
 - Voice turn generation/realtime voice context (`src/bot/voiceReplies.ts`, `src/voice/voiceSessionManager.ts`)
 
 ### Search API retrieval (`searchDurableFacts`)

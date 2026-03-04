@@ -107,18 +107,16 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
         fadeMs: 99999
       }
     },
-    initiative: {
+    discovery: {
       allowedImageModels: "gpt-image-1.5, gpt-image-1.5, grok-imagine-image",
       allowedVideoModels: ["grok-imagine-video", "grok-imagine-video"],
-      discovery: {
-        rssFeeds: ["https://ok.example/feed", "not-a-url"],
-        xHandles: ["@alice", "@alice", "bob"],
-        redditSubreddits: ["r/memes", "memes"],
-        xNitterBaseUrl: "https://nitter.example/path",
-        sources: {
-          reddit: false,
-          x: true
-        }
+      rssFeeds: ["https://ok.example/feed", "not-a-url"],
+      xHandles: ["@alice", "@alice", "bob"],
+      redditSubreddits: ["r/memes", "memes"],
+      xNitterBaseUrl: "https://nitter.example/path",
+      sources: {
+        reddit: false,
+        x: true
       }
     }
   });
@@ -204,14 +202,14 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.musicDucking.targetGain, 0.05);
   assert.equal(normalized.voice.musicDucking.fadeMs, 5000);
 
-  assert.deepEqual(normalized.initiative.allowedImageModels, ["gpt-image-1.5", "grok-imagine-image"]);
-  assert.deepEqual(normalized.initiative.allowedVideoModels, ["grok-imagine-video"]);
-  assert.deepEqual(normalized.initiative.discovery.rssFeeds, ["https://ok.example/feed"]);
-  assert.deepEqual(normalized.initiative.discovery.xHandles, ["alice", "bob"]);
-  assert.deepEqual(normalized.initiative.discovery.redditSubreddits, ["memes", "memes"]);
-  assert.equal(normalized.initiative.discovery.xNitterBaseUrl, "https://nitter.example");
-  assert.equal(normalized.initiative.discovery.sources.reddit, false);
-  assert.equal(normalized.initiative.discovery.sources.x, true);
+  assert.deepEqual(normalized.discovery.allowedImageModels, ["gpt-image-1.5", "grok-imagine-image"]);
+  assert.deepEqual(normalized.discovery.allowedVideoModels, ["grok-imagine-video"]);
+  assert.deepEqual(normalized.discovery.rssFeeds, ["https://ok.example/feed"]);
+  assert.deepEqual(normalized.discovery.xHandles, ["alice", "bob"]);
+  assert.deepEqual(normalized.discovery.redditSubreddits, ["memes", "memes"]);
+  assert.equal(normalized.discovery.xNitterBaseUrl, "https://nitter.example");
+  assert.equal(normalized.discovery.sources.reddit, false);
+  assert.equal(normalized.discovery.sources.x, true);
 });
 
 test("normalizeSettings respects explicit false for openaiRealtime usePerUserAsrBridge", () => {
@@ -279,15 +277,13 @@ test("normalizeSettings preserves explicit adaptive directive and automation tog
 test("normalizeSettings handles memoryLlm defaults and discovery source fallbacks", () => {
   const normalized = normalizeSettings({
     memoryLlm: {},
-    initiative: {
-      discovery: {
-        sources: {
-          reddit: undefined,
-          hackerNews: undefined,
-          youtube: undefined,
-          rss: undefined,
-          x: undefined
-        }
+    discovery: {
+      sources: {
+        reddit: undefined,
+        hackerNews: undefined,
+        youtube: undefined,
+        rss: undefined,
+        x: undefined
       }
     },
     prompt: {
@@ -303,11 +299,11 @@ test("normalizeSettings handles memoryLlm defaults and discovery source fallback
   assert.deepEqual(normalized.prompt.voiceGuidance, ["alpha", "beta"]);
   assert.deepEqual(normalized.prompt.voiceOperationalGuidance, ["a", "b"]);
 
-  assert.equal(typeof normalized.initiative.discovery.sources.reddit, "boolean");
-  assert.equal(typeof normalized.initiative.discovery.sources.hackerNews, "boolean");
-  assert.equal(typeof normalized.initiative.discovery.sources.youtube, "boolean");
-  assert.equal(typeof normalized.initiative.discovery.sources.rss, "boolean");
-  assert.equal(typeof normalized.initiative.discovery.sources.x, "boolean");
+  assert.equal(typeof normalized.discovery.sources.reddit, "boolean");
+  assert.equal(typeof normalized.discovery.sources.hackerNews, "boolean");
+  assert.equal(typeof normalized.discovery.sources.youtube, "boolean");
+  assert.equal(typeof normalized.discovery.sources.rss, "boolean");
+  assert.equal(typeof normalized.discovery.sources.x, "boolean");
 });
 
 test("normalizeSettings defaults llm maxOutputTokens to 2500 and preserves high values", () => {

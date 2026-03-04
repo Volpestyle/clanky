@@ -12,14 +12,14 @@ test("dashboard API smoke: health/settings/actions/stats endpoints", async () =>
     const settingsResponse = await fetch(`${baseUrl}/api/settings`);
     assert.equal(settingsResponse.status, 200);
     const settingsJson = await settingsResponse.json();
-    assert.equal(typeof settingsJson.activity?.replyLevelInitiative, "number");
-    assert.equal(typeof settingsJson.activity?.replyLevelNonInitiative, "number");
+    assert.equal(typeof settingsJson.activity?.replyLevelReplyChannels, "number");
+    assert.equal(typeof settingsJson.activity?.replyLevelOtherChannels, "number");
     assert.equal(typeof settingsJson.replyFollowupLlm?.enabled, "boolean");
 
     const updatePayload = {
       activity: {
-        replyLevelInitiative: 62,
-        replyLevelNonInitiative: 14
+        replyLevelReplyChannels: 62,
+        replyLevelOtherChannels: 14
       },
       replyFollowupLlm: {
         enabled: true,
@@ -42,8 +42,8 @@ test("dashboard API smoke: health/settings/actions/stats endpoints", async () =>
     });
     assert.equal(updateResponse.status, 200);
     const updatedSettings = await updateResponse.json();
-    assert.equal(updatedSettings.activity.replyLevelInitiative, 62);
-    assert.equal(updatedSettings.activity.replyLevelNonInitiative, 14);
+    assert.equal(updatedSettings.activity.replyLevelReplyChannels, 62);
+    assert.equal(updatedSettings.activity.replyLevelOtherChannels, 14);
     assert.equal(updatedSettings.replyFollowupLlm.enabled, true);
     assert.equal(updatedSettings.replyFollowupLlm.provider, "anthropic");
     assert.equal(updatedSettings.replyFollowupLlm.model, "claude-haiku-4-5");
@@ -56,8 +56,8 @@ test("dashboard API smoke: health/settings/actions/stats endpoints", async () =>
     assert.equal(bot.appliedSettings.length, 1);
 
     const persisted = store.getSettings();
-    assert.equal(persisted.activity.replyLevelInitiative, 62);
-    assert.equal(persisted.activity.replyLevelNonInitiative, 14);
+    assert.equal(persisted.activity.replyLevelReplyChannels, 62);
+    assert.equal(persisted.activity.replyLevelOtherChannels, 14);
     assert.equal(persisted.replyFollowupLlm.enabled, true);
     assert.equal(persisted.replyFollowupLlm.maxToolSteps, 4);
 

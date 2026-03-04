@@ -1,8 +1,8 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
-  composeInitiativeImagePrompt,
-  composeInitiativeVideoPrompt,
+  composeDiscoveryImagePrompt,
+  composeDiscoveryVideoPrompt,
   composeReplyImagePrompt,
   composeReplyVideoPrompt,
   parseStructuredReplyOutput
@@ -47,8 +47,8 @@ test("parseStructuredReplyOutput falls back to plain text when output is not JSO
 });
 
 test("compose media prompts fall back to contextual defaults when no prompt is provided", () => {
-  const initiativeImage = composeInitiativeImagePrompt("", "", 900, []);
-  const initiativeVideo = composeInitiativeVideoPrompt("", "", 900, []);
+  const initiativeImage = composeDiscoveryImagePrompt("", "", 900, []);
+  const initiativeVideo = composeDiscoveryVideoPrompt("", "", 900, []);
   const replyImage = composeReplyImagePrompt("", "", 900, []);
   const replyVideo = composeReplyVideoPrompt("", "", 900, []);
 

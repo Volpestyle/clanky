@@ -159,12 +159,12 @@ export function getLastActionTime(store: any, kind) {
   return row?.created_at ?? null;
 }
 
-export function countInitiativePostsSince(store: any, sinceIso) {
+export function countDiscoveryPostsSince(store: any, sinceIso) {
   const row = store.db
     .prepare(
       `SELECT COUNT(*) AS count
          FROM actions
-         WHERE kind = 'initiative_post' AND created_at >= ?`
+         WHERE kind = 'discovery_post' AND created_at >= ?`
     )
     .get(String(sinceIso));
   return Number(row?.count ?? 0);

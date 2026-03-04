@@ -4,12 +4,20 @@ import { SettingsSection } from "../SettingsSection";
 export function ChannelsPermissionsSettingsSection({ id, form, set }) {
   return (
     <SettingsSection id={id} title="Channels & Permissions">
-      <label htmlFor="initiative-channels">Standalone post channel IDs (only these)</label>
+      <label htmlFor="reply-channels">Reply/lurk channel IDs</label>
       <textarea
-        id="initiative-channels"
+        id="reply-channels"
         rows={2}
-        value={form.initiativeChannels}
-        onChange={set("initiativeChannels")}
+        value={form.replyChannels}
+        onChange={set("replyChannels")}
+      />
+
+      <label htmlFor="discovery-channels">Discovery post channel IDs</label>
+      <textarea
+        id="discovery-channels"
+        rows={2}
+        value={form.discoveryChannels}
+        onChange={set("discoveryChannels")}
       />
 
       <h4>Text channels & users</h4>

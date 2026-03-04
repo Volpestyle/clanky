@@ -1,35 +1,34 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
-  evaluateInitiativeSchedule,
-  evaluateSpontaneousInitiativeSchedule,
-  getInitiativeAverageIntervalMs,
-  getInitiativeMinGapMs,
-  getInitiativePacingMode,
-  getInitiativePostingIntervalMs,
-  pickInitiativeChannel
-} from "./initiativeSchedule.ts";
+  evaluateDiscoverySchedule,
+  evaluateSpontaneousDiscoverySchedule,
+  getDiscoveryAverageIntervalMs,
+  getDiscoveryMinGapMs,
+  getDiscoveryPacingMode,
+  getDiscoveryPostingIntervalMs,
+  pickDiscoveryChannel
+} from "./discoverySchedule.ts";
 
 function baseSettings(overrides = {}) {
   const base = {
-    initiative: {
+    discovery: {
       maxPostsPerDay: 12,
       minMinutesBetweenPosts: 30,
       pacingMode: "even",
       postOnStartup: true,
-      spontaneity: 40
+      spontaneity: 40,
+      channelIds: []
     },
-    permissions: {
-      initiativeChannelIds: []
-    }
+    permissions: {}
   };
 
   return {
     ...base,
     ...overrides,
-    initiative: {
-      ...base.initiative,
-      ...(overrides.initiative || {})
+    discovery: {
+      ...base.discovery,
+      ...(overrides.discovery || {})
     },
     permissions: {
       ...base.permissions,
@@ -38,10 +37,10 @@ function baseSettings(overrides = {}) {
   };
 }
 
-test("initiative interval uses the larger of min-gap and even pacing", () => {
-  const gapDominant = getInitiativePostingIntervalMs(
+test("discovery interval uses the larger of min-gap and even pacing", () => {
+  const gapDominant = getDiscoveryPostingIntervalMs(
     baseSettings({
-      initiative: {
+      discovery: {
         maxPostsPerDay: 999,
         minMinutesBetweenPosts: 60
       }
@@ -49,9 +48,9 @@ test("initiative interval uses the larger of min-gap and even pacing", () => {
   );
   assert.equal(gapDominant, 60 * 60 * 1000);
 
-  const pacingDominant = getInitiativePostingIntervalMs(
+  const pacingDominant = getDiscoveryPostingIntervalMs(
     baseSettings({
-      initiative: {
+      discovery: {
         maxPostsPerDay: 2,
         minMinutesBetweenPosts: 1
       }
@@ -60,23 +59,23 @@ test("initiative interval uses the larger of min-gap and even pacing", () => {
   assert.equal(pacingDominant, 12 * 60 * 60 * 1000);
 });
 
-test("initiative helper accessors normalize mode and timing values", () => {
+test("discovery helper accessors normalize mode and timing values", () => {
   const settings = baseSettings({
-    initiative: {
+    discovery: {
       maxPostsPerDay: 6,
       minMinutesBetweenPosts: 7,
       pacingMode: "SpOnTaNeOuS"
     }
   });
-  assert.equal(getInitiativeAverageIntervalMs(settings), 4 * 60 * 60 * 1000);
-  assert.equal(getInitiativePacingMode(settings), "spontaneous");
-  assert.equal(getInitiativeMinGapMs(settings), 7 * 60 * 1000);
+  assert.equal(getDiscoveryAverageIntervalMs(settings), 4 * 60 * 60 * 1000);
+  assert.equal(getDiscoveryPacingMode(settings), "spontaneous");
+  assert.equal(getDiscoveryMinGapMs(settings), 7 * 60 * 1000);
 });
 
-test("evaluateInitiativeSchedule blocks startup posting when disabled", () => {
-  const result = evaluateInitiativeSchedule({
+test("evaluateDiscoverySchedule blocks startup posting when disabled", () => {
+  const result = evaluateDiscoverySchedule({
     settings: baseSettings({
-      initiative: {
+      discovery: {
         postOnStartup: false
       }
     }),
@@ -90,8 +89,8 @@ test("evaluateInitiativeSchedule blocks startup posting when disabled", () => {
   assert.equal(result.trigger, "startup_disabled");
 });
 
-test("evaluateInitiativeSchedule bootstraps first startup post when enabled", () => {
-  const result = evaluateInitiativeSchedule({
+test("evaluateDiscoverySchedule bootstraps first startup post when enabled", () => {
+  const result = evaluateDiscoverySchedule({
     settings: baseSettings(),
     startup: true,
     lastPostTs: null,
@@ -103,13 +102,13 @@ test("evaluateInitiativeSchedule bootstraps first startup post when enabled", ()
   assert.equal(result.trigger, "startup_bootstrap");
 });
 
-test("evaluateInitiativeSchedule enforces min-gap before any non-startup post", () => {
+test("evaluateDiscoverySchedule enforces min-gap before any non-startup post", () => {
   const settings = baseSettings({
-    initiative: {
+    discovery: {
       minMinutesBetweenPosts: 15
     }
   });
-  const result = evaluateInitiativeSchedule({
+  const result = evaluateDiscoverySchedule({
     settings,
     startup: false,
     lastPostTs: Date.now() - 120_000,
@@ -122,17 +121,17 @@ test("evaluateInitiativeSchedule enforces min-gap before any non-startup post", 
   assert.equal(result.requiredIntervalMs, 15 * 60 * 1000);
 });
 
-test("evaluateInitiativeSchedule supports even pacing wait and due transitions", () => {
+test("evaluateDiscoverySchedule supports even pacing wait and due transitions", () => {
   const settings = baseSettings({
-    initiative: {
+    discovery: {
       maxPostsPerDay: 8,
       minMinutesBetweenPosts: 30,
       pacingMode: "even"
     }
   });
-  const required = getInitiativePostingIntervalMs(settings);
+  const required = getDiscoveryPostingIntervalMs(settings);
 
-  const waiting = evaluateInitiativeSchedule({
+  const waiting = evaluateDiscoverySchedule({
     settings,
     startup: false,
     lastPostTs: Date.now() - (required - 10_000),
@@ -142,7 +141,7 @@ test("evaluateInitiativeSchedule supports even pacing wait and due transitions",
   assert.equal(waiting.shouldPost, false);
   assert.equal(waiting.trigger, "even_wait");
 
-  const due = evaluateInitiativeSchedule({
+  const due = evaluateDiscoverySchedule({
     settings,
     startup: false,
     lastPostTs: Date.now() - (required + 1_000),
@@ -153,20 +152,20 @@ test("evaluateInitiativeSchedule supports even pacing wait and due transitions",
   assert.equal(due.trigger, "even_due");
 });
 
-test("evaluateSpontaneousInitiativeSchedule forces a post after force window", () => {
+test("evaluateSpontaneousDiscoverySchedule forces a post after force window", () => {
   const settings = baseSettings({
-    initiative: {
+    discovery: {
       pacingMode: "spontaneous",
       maxPostsPerDay: 10,
       minMinutesBetweenPosts: 20,
       spontaneity: 80
     }
   });
-  const average = getInitiativeAverageIntervalMs(settings);
-  const minGap = getInitiativeMinGapMs(settings);
+  const average = getDiscoveryAverageIntervalMs(settings);
+  const minGap = getDiscoveryMinGapMs(settings);
   const forceAfterMs = Math.max(minGap, Math.round(average * (1.6 - 0.8 * 0.55)));
 
-  const result = evaluateSpontaneousInitiativeSchedule({
+  const result = evaluateSpontaneousDiscoverySchedule({
     settings,
     lastPostTs: Date.now() - (forceAfterMs + 5_000),
     elapsedMs: forceAfterMs + 5_000,
@@ -179,7 +178,7 @@ test("evaluateSpontaneousInitiativeSchedule forces a post after force window", (
   assert.equal(result.requiredIntervalMs, forceAfterMs);
 });
 
-test("pickInitiativeChannel skips unavailable and disallowed channels", () => {
+test("pickDiscoveryChannel skips unavailable and disallowed channels", () => {
   const channels = new Map();
   channels.set("voice-1", {
     id: "voice-1",
@@ -195,10 +194,10 @@ test("pickInitiativeChannel skips unavailable and disallowed channels", () => {
     async send() {}
   });
 
-  const picked = pickInitiativeChannel({
+  const picked = pickDiscoveryChannel({
     settings: baseSettings({
-      permissions: {
-        initiativeChannelIds: ["voice-1", "text-2"]
+      discovery: {
+        channelIds: ["voice-1", "text-2"]
       }
     }),
     client: {
@@ -213,10 +212,10 @@ test("pickInitiativeChannel skips unavailable and disallowed channels", () => {
 
   assert.equal(picked?.id, "text-2");
 
-  const none = pickInitiativeChannel({
+  const none = pickDiscoveryChannel({
     settings: baseSettings({
-      permissions: {
-        initiativeChannelIds: ["text-2"]
+      discovery: {
+        channelIds: ["text-2"]
       }
     }),
     client: {

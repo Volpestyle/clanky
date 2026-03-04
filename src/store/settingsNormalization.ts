@@ -35,9 +35,10 @@ export function normalizeSettings(raw) {
   const merged = deepMerge(DEFAULT_SETTINGS, raw ?? {});
   if (!merged.persona || typeof merged.persona !== "object") merged.persona = {};
   if (!merged.activity || typeof merged.activity !== "object") merged.activity = {};
+  if (!merged.textThoughtLoop || typeof merged.textThoughtLoop !== "object") merged.textThoughtLoop = {};
   if (!merged.startup || typeof merged.startup !== "object") merged.startup = {};
   if (!merged.permissions || typeof merged.permissions !== "object") merged.permissions = {};
-  if (!merged.initiative || typeof merged.initiative !== "object") merged.initiative = {};
+  if (!merged.discovery || typeof merged.discovery !== "object") merged.discovery = {};
   if (!merged.memory || typeof merged.memory !== "object") merged.memory = {};
   if (!merged.adaptiveDirectives || typeof merged.adaptiveDirectives !== "object") merged.adaptiveDirectives = {};
   if (!merged.automations || typeof merged.automations !== "object") merged.automations = {};
@@ -126,13 +127,13 @@ export function normalizeSettings(raw) {
     8_000
   );
 
-  const replyLevelInitiative = clamp(
-    Number(merged.activity?.replyLevelInitiative ?? DEFAULT_SETTINGS.activity.replyLevelInitiative) || 0,
+  const replyLevelReplyChannels = clamp(
+    Number(merged.activity?.replyLevelReplyChannels ?? DEFAULT_SETTINGS.activity.replyLevelReplyChannels) || 0,
     0,
     100
   );
-  const replyLevelNonInitiative = clamp(
-    Number(merged.activity?.replyLevelNonInitiative ?? DEFAULT_SETTINGS.activity.replyLevelNonInitiative) || 0,
+  const replyLevelOtherChannels = clamp(
+    Number(merged.activity?.replyLevelOtherChannels ?? DEFAULT_SETTINGS.activity.replyLevelOtherChannels) || 0,
     0,
     100
   );
@@ -163,13 +164,41 @@ export function normalizeSettings(raw) {
     20
   );
   merged.activity = {
-    replyLevelInitiative,
-    replyLevelNonInitiative,
+    replyLevelReplyChannels,
+    replyLevelOtherChannels,
     reactionLevel,
     minSecondsBetweenMessages,
     replyCoalesceWindowSeconds,
     replyCoalesceMaxMessages
   };
+
+  merged.textThoughtLoop.enabled =
+    merged.textThoughtLoop?.enabled !== undefined
+      ? Boolean(merged.textThoughtLoop?.enabled)
+      : Boolean(DEFAULT_SETTINGS.textThoughtLoop?.enabled);
+  merged.textThoughtLoop.eagerness = clamp(
+    Number(merged.textThoughtLoop?.eagerness ?? DEFAULT_SETTINGS.textThoughtLoop?.eagerness) || 0,
+    0,
+    100
+  );
+  merged.textThoughtLoop.minMinutesBetweenThoughts = clamp(
+    Number(
+      merged.textThoughtLoop?.minMinutesBetweenThoughts ??
+      DEFAULT_SETTINGS.textThoughtLoop?.minMinutesBetweenThoughts
+    ) || 60,
+    5,
+    24 * 60
+  );
+  merged.textThoughtLoop.maxThoughtsPerDay = clamp(
+    Number(merged.textThoughtLoop?.maxThoughtsPerDay ?? DEFAULT_SETTINGS.textThoughtLoop?.maxThoughtsPerDay) || 0,
+    0,
+    100
+  );
+  merged.textThoughtLoop.lookbackMessages = clamp(
+    Number(merged.textThoughtLoop?.lookbackMessages ?? DEFAULT_SETTINGS.textThoughtLoop?.lookbackMessages) || 0,
+    4,
+    80
+  );
 
   const defaultLlmProvider = normalizeLlmProvider(DEFAULT_SETTINGS.llm?.provider || "anthropic");
   const defaultLlmModel =
@@ -999,12 +1028,12 @@ export function normalizeSettings(raw) {
   );
 
   merged.permissions.allowReplies = Boolean(merged.permissions?.allowReplies);
-  merged.permissions.allowInitiativeReplies =
-    merged.permissions?.allowInitiativeReplies !== undefined
-      ? Boolean(merged.permissions?.allowInitiativeReplies)
+  merged.permissions.allowUnsolicitedReplies =
+    merged.permissions?.allowUnsolicitedReplies !== undefined
+      ? Boolean(merged.permissions?.allowUnsolicitedReplies)
       : true;
   merged.permissions.allowReactions = Boolean(merged.permissions?.allowReactions);
-  merged.permissions.initiativeChannelIds = uniqueIdList(merged.permissions?.initiativeChannelIds);
+  merged.permissions.replyChannelIds = uniqueIdList(merged.permissions?.replyChannelIds);
   merged.permissions.allowedChannelIds = uniqueIdList(merged.permissions?.allowedChannelIds);
   merged.permissions.blockedChannelIds = uniqueIdList(merged.permissions?.blockedChannelIds);
   merged.permissions.blockedUserIds = uniqueIdList(merged.permissions?.blockedUserIds);
@@ -1015,71 +1044,51 @@ export function normalizeSettings(raw) {
   );
   merged.permissions.maxReactionsPerHour = clamp(Number(merged.permissions?.maxReactionsPerHour) || 24, 1, 300);
 
-  merged.initiative.enabled =
-    merged.initiative?.enabled !== undefined ? Boolean(merged.initiative?.enabled) : false;
-  merged.initiative.maxPostsPerDay = clamp(Number(merged.initiative?.maxPostsPerDay) || 0, 0, 100);
-  merged.initiative.minMinutesBetweenPosts = clamp(
-    Number(merged.initiative?.minMinutesBetweenPosts) || 120,
+  merged.discovery.enabled =
+    merged.discovery?.enabled !== undefined ? Boolean(merged.discovery?.enabled) : false;
+  merged.discovery.channelIds = uniqueIdList(merged.discovery?.channelIds);
+  merged.discovery.maxPostsPerDay = clamp(Number(merged.discovery?.maxPostsPerDay) || 0, 0, 100);
+  merged.discovery.minMinutesBetweenPosts = clamp(
+    Number(merged.discovery?.minMinutesBetweenPosts) || 120,
     5,
     24 * 60
   );
-  merged.initiative.pacingMode =
-    String(merged.initiative?.pacingMode || "even").toLowerCase() === "spontaneous"
+  merged.discovery.pacingMode =
+    String(merged.discovery?.pacingMode || "even").toLowerCase() === "spontaneous"
       ? "spontaneous"
       : "even";
-  merged.initiative.spontaneity = clamp(Number(merged.initiative?.spontaneity) || 65, 0, 100);
-  merged.initiative.postOnStartup = Boolean(merged.initiative?.postOnStartup);
-  merged.initiative.allowImagePosts = Boolean(merged.initiative?.allowImagePosts);
-  merged.initiative.allowVideoPosts = Boolean(merged.initiative?.allowVideoPosts);
-  merged.initiative.allowReplyImages = Boolean(merged.initiative?.allowReplyImages);
-  merged.initiative.allowReplyVideos = Boolean(merged.initiative?.allowReplyVideos);
-  merged.initiative.allowReplyGifs = Boolean(merged.initiative?.allowReplyGifs);
-  merged.initiative.maxImagesPerDay = clamp(Number(merged.initiative?.maxImagesPerDay) || 0, 0, 200);
-  merged.initiative.maxVideosPerDay = clamp(Number(merged.initiative?.maxVideosPerDay) || 0, 0, 120);
-  merged.initiative.maxGifsPerDay = clamp(Number(merged.initiative?.maxGifsPerDay) || 0, 0, 300);
-  merged.initiative.simpleImageModel = String(
-    merged.initiative?.simpleImageModel || "gpt-image-1.5"
+  merged.discovery.spontaneity = clamp(Number(merged.discovery?.spontaneity) || 65, 0, 100);
+  merged.discovery.postOnStartup = Boolean(merged.discovery?.postOnStartup);
+  merged.discovery.allowImagePosts = Boolean(merged.discovery?.allowImagePosts);
+  merged.discovery.allowVideoPosts = Boolean(merged.discovery?.allowVideoPosts);
+  merged.discovery.allowReplyImages = Boolean(merged.discovery?.allowReplyImages);
+  merged.discovery.allowReplyVideos = Boolean(merged.discovery?.allowReplyVideos);
+  merged.discovery.allowReplyGifs = Boolean(merged.discovery?.allowReplyGifs);
+  merged.discovery.maxImagesPerDay = clamp(Number(merged.discovery?.maxImagesPerDay) || 0, 0, 200);
+  merged.discovery.maxVideosPerDay = clamp(Number(merged.discovery?.maxVideosPerDay) || 0, 0, 120);
+  merged.discovery.maxGifsPerDay = clamp(Number(merged.discovery?.maxGifsPerDay) || 0, 0, 300);
+  merged.discovery.simpleImageModel = String(
+    merged.discovery?.simpleImageModel || "gpt-image-1.5"
   ).slice(0, 120);
-  merged.initiative.complexImageModel = String(
-    merged.initiative?.complexImageModel || "grok-imagine-image"
+  merged.discovery.complexImageModel = String(
+    merged.discovery?.complexImageModel || "grok-imagine-image"
   ).slice(0, 120);
-  merged.initiative.videoModel = String(merged.initiative?.videoModel || "grok-imagine-video").slice(0, 120);
-  merged.initiative.allowedImageModels = uniqueStringList(
-    merged.initiative?.allowedImageModels ?? DEFAULT_SETTINGS.initiative?.allowedImageModels ?? [],
+  merged.discovery.videoModel = String(merged.discovery?.videoModel || "grok-imagine-video").slice(0, 120);
+  merged.discovery.allowedImageModels = uniqueStringList(
+    merged.discovery?.allowedImageModels ?? DEFAULT_SETTINGS.discovery?.allowedImageModels ?? [],
     12,
     120
   );
-  merged.initiative.allowedVideoModels = uniqueStringList(
-    merged.initiative?.allowedVideoModels ?? DEFAULT_SETTINGS.initiative?.allowedVideoModels ?? [],
+  merged.discovery.allowedVideoModels = uniqueStringList(
+    merged.discovery?.allowedVideoModels ?? DEFAULT_SETTINGS.discovery?.allowedVideoModels ?? [],
     8,
     120
   );
-  if (!merged.initiative.discovery || typeof merged.initiative.discovery !== "object") {
-    merged.initiative.discovery = {};
-  }
-  if (!merged.initiative.discovery.sources || typeof merged.initiative.discovery.sources !== "object") {
-    merged.initiative.discovery.sources = {};
+  if (!merged.discovery.sources || typeof merged.discovery.sources !== "object") {
+    merged.discovery.sources = {};
   }
 
-  const defaultDiscovery = DEFAULT_SETTINGS.initiative?.discovery ?? {
-    enabled: false,
-    linkChancePercent: 0,
-    maxLinksPerPost: 2,
-    maxCandidatesForPrompt: 6,
-    freshnessHours: 96,
-    dedupeHours: 168,
-    randomness: 55,
-    sourceFetchLimit: 10,
-    preferredTopics: [],
-    xNitterBaseUrl: "https://nitter.net",
-    sources: {
-      reddit: true,
-      hackerNews: true,
-      youtube: true,
-      rss: true,
-      x: false
-    }
-  };
+  const defaultDiscovery = DEFAULT_SETTINGS.discovery;
   const defaultSources = defaultDiscovery.sources ?? {
     reddit: true,
     hackerNews: true,
@@ -1087,67 +1096,155 @@ export function normalizeSettings(raw) {
     rss: true,
     x: false
   };
-  const sourceConfig = merged.initiative.discovery.sources ?? {};
-  merged.initiative.discovery = {
+  const sourceConfig = merged.discovery.sources ?? {};
+  merged.discovery = {
     enabled:
-      merged.initiative.discovery?.enabled !== undefined
-        ? Boolean(merged.initiative.discovery?.enabled)
+      merged.discovery?.enabled !== undefined
+        ? Boolean(merged.discovery?.enabled)
         : Boolean(defaultDiscovery.enabled),
+    channelIds: uniqueIdList(merged.discovery?.channelIds),
+    maxPostsPerDay: clamp(
+      Number(merged.discovery?.maxPostsPerDay) || Number(defaultDiscovery.maxPostsPerDay) || 0,
+      0,
+      100
+    ),
+    minMinutesBetweenPosts: clamp(
+      Number(merged.discovery?.minMinutesBetweenPosts) ||
+      Number(defaultDiscovery.minMinutesBetweenPosts) ||
+      120,
+      5,
+      24 * 60
+    ),
+    pacingMode:
+      String(merged.discovery?.pacingMode || defaultDiscovery.pacingMode || "even").toLowerCase() ===
+      "spontaneous"
+        ? "spontaneous"
+        : "even",
+    spontaneity: clamp(
+      Number(merged.discovery?.spontaneity) || Number(defaultDiscovery.spontaneity) || 65,
+      0,
+      100
+    ),
+    postOnStartup:
+      merged.discovery?.postOnStartup !== undefined
+        ? Boolean(merged.discovery.postOnStartup)
+        : Boolean(defaultDiscovery.postOnStartup),
+    allowImagePosts:
+      merged.discovery?.allowImagePosts !== undefined
+        ? Boolean(merged.discovery.allowImagePosts)
+        : Boolean(defaultDiscovery.allowImagePosts),
+    allowVideoPosts:
+      merged.discovery?.allowVideoPosts !== undefined
+        ? Boolean(merged.discovery.allowVideoPosts)
+        : Boolean(defaultDiscovery.allowVideoPosts),
+    allowReplyImages:
+      merged.discovery?.allowReplyImages !== undefined
+        ? Boolean(merged.discovery.allowReplyImages)
+        : Boolean(defaultDiscovery.allowReplyImages),
+    allowReplyVideos:
+      merged.discovery?.allowReplyVideos !== undefined
+        ? Boolean(merged.discovery.allowReplyVideos)
+        : Boolean(defaultDiscovery.allowReplyVideos),
+    allowReplyGifs:
+      merged.discovery?.allowReplyGifs !== undefined
+        ? Boolean(merged.discovery.allowReplyGifs)
+        : Boolean(defaultDiscovery.allowReplyGifs),
+    maxImagesPerDay: clamp(
+      Number(merged.discovery?.maxImagesPerDay) || Number(defaultDiscovery.maxImagesPerDay) || 0,
+      0,
+      200
+    ),
+    maxVideosPerDay: clamp(
+      Number(merged.discovery?.maxVideosPerDay) || Number(defaultDiscovery.maxVideosPerDay) || 0,
+      0,
+      120
+    ),
+    maxGifsPerDay: clamp(
+      Number(merged.discovery?.maxGifsPerDay) || Number(defaultDiscovery.maxGifsPerDay) || 0,
+      0,
+      300
+    ),
+    simpleImageModel: String(
+      merged.discovery?.simpleImageModel || defaultDiscovery.simpleImageModel || "gpt-image-1.5"
+    ).slice(0, 120),
+    complexImageModel: String(
+      merged.discovery?.complexImageModel ||
+      defaultDiscovery.complexImageModel ||
+      "grok-imagine-image"
+    ).slice(0, 120),
+    videoModel: String(
+      merged.discovery?.videoModel || defaultDiscovery.videoModel || "grok-imagine-video"
+    ).slice(0, 120),
+    allowedImageModels: uniqueStringList(
+      merged.discovery?.allowedImageModels ?? defaultDiscovery.allowedImageModels ?? [],
+      12,
+      120
+    ),
+    allowedVideoModels: uniqueStringList(
+      merged.discovery?.allowedVideoModels ?? defaultDiscovery.allowedVideoModels ?? [],
+      8,
+      120
+    ),
+    maxMediaPromptChars: clamp(
+      Number(merged.discovery?.maxMediaPromptChars) || Number(defaultDiscovery.maxMediaPromptChars) || 900,
+      120,
+      2000
+    ),
     linkChancePercent: clamp(
-      Number(merged.initiative.discovery?.linkChancePercent) || Number(defaultDiscovery.linkChancePercent) || 0,
+      Number(merged.discovery?.linkChancePercent) || Number(defaultDiscovery.linkChancePercent) || 0,
       0,
       100
     ),
     maxLinksPerPost: clamp(
-      Number(merged.initiative.discovery?.maxLinksPerPost) || Number(defaultDiscovery.maxLinksPerPost) || 2,
+      Number(merged.discovery?.maxLinksPerPost) || Number(defaultDiscovery.maxLinksPerPost) || 2,
       1,
       4
     ),
     maxCandidatesForPrompt: clamp(
-      Number(merged.initiative.discovery?.maxCandidatesForPrompt) ||
+      Number(merged.discovery?.maxCandidatesForPrompt) ||
       Number(defaultDiscovery.maxCandidatesForPrompt) ||
       6,
       1,
       12
     ),
     freshnessHours: clamp(
-      Number(merged.initiative.discovery?.freshnessHours) || Number(defaultDiscovery.freshnessHours) || 96,
+      Number(merged.discovery?.freshnessHours) || Number(defaultDiscovery.freshnessHours) || 96,
       1,
       24 * 14
     ),
     dedupeHours: clamp(
-      Number(merged.initiative.discovery?.dedupeHours) || Number(defaultDiscovery.dedupeHours) || 168,
+      Number(merged.discovery?.dedupeHours) || Number(defaultDiscovery.dedupeHours) || 168,
       1,
       24 * 45
     ),
     randomness: clamp(
-      Number(merged.initiative.discovery?.randomness) || Number(defaultDiscovery.randomness) || 55,
+      Number(merged.discovery?.randomness) || Number(defaultDiscovery.randomness) || 55,
       0,
       100
     ),
     sourceFetchLimit: clamp(
-      Number(merged.initiative.discovery?.sourceFetchLimit) || Number(defaultDiscovery.sourceFetchLimit) || 10,
+      Number(merged.discovery?.sourceFetchLimit) || Number(defaultDiscovery.sourceFetchLimit) || 10,
       2,
       30
     ),
-    allowNsfw: Boolean(merged.initiative.discovery?.allowNsfw),
+    allowNsfw: Boolean(merged.discovery?.allowNsfw),
     preferredTopics: uniqueStringList(
-      merged.initiative.discovery?.preferredTopics,
+      merged.discovery?.preferredTopics,
       Number(defaultDiscovery.preferredTopics?.length ? defaultDiscovery.preferredTopics.length : 12),
       80
     ),
     redditSubreddits: uniqueStringList(
-      merged.initiative.discovery?.redditSubreddits,
+      merged.discovery?.redditSubreddits,
       20,
       40
     ).map((entry) => entry.replace(/^r\//i, "")),
-    youtubeChannelIds: uniqueStringList(merged.initiative.discovery?.youtubeChannelIds, 20, 80),
-    rssFeeds: uniqueStringList(merged.initiative.discovery?.rssFeeds, 30, 240).filter(isHttpLikeUrl),
-    xHandles: uniqueStringList(merged.initiative.discovery?.xHandles, 20, 40).map((entry) =>
+    youtubeChannelIds: uniqueStringList(merged.discovery?.youtubeChannelIds, 20, 80),
+    rssFeeds: uniqueStringList(merged.discovery?.rssFeeds, 30, 240).filter(isHttpLikeUrl),
+    xHandles: uniqueStringList(merged.discovery?.xHandles, 20, 40).map((entry) =>
       entry.replace(/^@/, "")
     ),
     xNitterBaseUrl: normalizeHttpBaseUrl(
-      merged.initiative.discovery?.xNitterBaseUrl,
+      merged.discovery?.xNitterBaseUrl,
       defaultDiscovery.xNitterBaseUrl || "https://nitter.net"
     ),
     sources: {

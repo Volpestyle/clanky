@@ -50,12 +50,12 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
   ];
   const addressed = addressSignal.triggered;
   const reactionEagerness = clamp(Number(settings.activity?.reactionLevel) || 0, 0, 100);
-  const isInitiativeChannel = bot.isInitiativeChannel(settings, message.channelId);
+  const isReplyChannel = bot.isReplyChannel(settings, message.channelId);
   const replyEagerness = clamp(
     Number(
-      isInitiativeChannel
-        ? settings.activity?.replyLevelInitiative
-        : settings.activity?.replyLevelNonInitiative
+      isReplyChannel
+        ? settings.activity?.replyLevelReplyChannels
+        : settings.activity?.replyLevelOtherChannels
     ) || 0,
     0,
     100
@@ -68,8 +68,8 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     settings,
     recentMessages,
     addressSignal,
-    isInitiativeChannel,
     forceRespond: Boolean(options.forceRespond),
+    forceDecisionLoop: Boolean(options.forceDecisionLoop),
     triggerMessageId: message.id
   });
   if (!shouldRunDecisionLoop) return false;
@@ -197,16 +197,16 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     emojiHints: bot.getEmojiHints(message.guild),
     reactionEmojiOptions,
     allowReplySimpleImages:
-      settings.initiative.allowReplyImages && simpleImageCapabilityReady && imageBudget.canGenerate,
+      settings.discovery.allowReplyImages && simpleImageCapabilityReady && imageBudget.canGenerate,
     allowReplyComplexImages:
-      settings.initiative.allowReplyImages && complexImageCapabilityReady && imageBudget.canGenerate,
+      settings.discovery.allowReplyImages && complexImageCapabilityReady && imageBudget.canGenerate,
     remainingReplyImages: imageBudget.remaining,
     allowReplyVideos:
-      settings.initiative.allowReplyVideos && videoCapabilityReady && videoBudget.canGenerate,
+      settings.discovery.allowReplyVideos && videoCapabilityReady && videoBudget.canGenerate,
     remainingReplyVideos: videoBudget.remaining,
-    allowReplyGifs: settings.initiative.allowReplyGifs && gifsConfigured && gifBudget.canFetch,
+    allowReplyGifs: settings.discovery.allowReplyGifs && gifsConfigured && gifBudget.canFetch,
     remainingReplyGifs: gifBudget.remaining,
-    gifRepliesEnabled: settings.initiative.allowReplyGifs,
+    gifRepliesEnabled: settings.discovery.allowReplyGifs,
     gifsConfigured,
     replyEagerness,
     reactionEagerness,
@@ -231,7 +231,7 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     recentWebLookups,
     screenShare: screenShareCapability,
     videoContext,
-    channelMode: isInitiativeChannel ? "initiative" : "non_initiative",
+    channelMode: isReplyChannel ? "reply_channel" : "other_channel",
     maxMediaPromptChars: resolveMaxMediaPromptLen(settings),
     mediaPromptCraftGuidance: getMediaPromptCraftGuidance(settings)
   };
@@ -256,7 +256,7 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
   return {
     shouldRun: true,
     recentMessages, addressSignal, triggerMessageIds, addressed, reactionEagerness,
-    isInitiativeChannel, replyEagerness, reactionEmojiOptions, source, performance,
+    isReplyChannel, replyEagerness, reactionEmojiOptions, source, performance,
     memorySlice, replyMediaMemoryFacts, attachmentImageInputs, imageBudget, videoBudget,
     mediaCapabilities, simpleImageCapabilityReady, complexImageCapabilityReady, imageCapabilityReady,
     videoCapabilityReady, gifBudget, gifsConfigured, webSearch, browserBrowse, recentConversationHistory, recentWebLookups, memoryLookup,
@@ -771,7 +771,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
     gifConfigBlocked = gifResult.blockedByConfiguration;
   }
   
-  if (mediaDirective?.type === "image_simple" && settings.initiative.allowReplyImages && imagePrompt) {
+  if (mediaDirective?.type === "image_simple" && settings.discovery.allowReplyImages && imagePrompt) {
     const imageResult = await bot.maybeAttachGeneratedImage({
       settings,
       text: finalText,
@@ -796,7 +796,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
     imageVariantUsed = imageResult.variant || "simple";
   }
   
-  if (mediaDirective?.type === "image_complex" && settings.initiative.allowReplyImages && complexImagePrompt) {
+  if (mediaDirective?.type === "image_complex" && settings.discovery.allowReplyImages && complexImagePrompt) {
     const imageResult = await bot.maybeAttachGeneratedImage({
       settings,
       text: finalText,
@@ -821,7 +821,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
     imageVariantUsed = imageResult.variant || "complex";
   }
   
-  if (mediaDirective?.type === "video" && settings.initiative.allowReplyVideos && videoPrompt) {
+  if (mediaDirective?.type === "video" && settings.discovery.allowReplyVideos && videoPrompt) {
     const videoResult = await bot.maybeAttachGeneratedVideo({
       settings,
       text: finalText,
@@ -889,7 +889,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
 export async function sendReplyMessage(bot: any, message: any, settings: any, options: any, ctx: any, llmResult: any, actionResult: any) {
   const {
     addressSignal, triggerMessageIds, addressed,
-    isInitiativeChannel, source, performance,
+    isReplyChannel, source, performance,
     imageBudget, videoBudget,
     simpleImageCapabilityReady, complexImageCapabilityReady, imageCapabilityReady,
     videoCapabilityReady, gifBudget,
@@ -912,9 +912,9 @@ export async function sendReplyMessage(bot: any, message: any, settings: any, op
   const typingDelayMs = Math.max(0, Date.now() - typingStartedAtMs);
 
   const shouldThreadReply = addressed || options.forceRespond;
-  const canStandalonePost = isInitiativeChannel || !shouldThreadReply;
+  const canStandalonePost = isReplyChannel || !shouldThreadReply;
   const sendAsReply = bot.shouldSendAsReply({
-    isInitiativeChannel,
+    isReplyChannel,
     shouldThreadReply,
     replyText: finalText
   });

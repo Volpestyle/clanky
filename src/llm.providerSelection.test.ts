@@ -78,7 +78,7 @@ test("media generation capability helpers select configured provider/model targe
   });
 
   const settings = {
-    initiative: {
+    discovery: {
       simpleImageModel: "gpt-image-1.5",
       complexImageModel: "grok-imagine-image",
       videoModel: "grok-imagine-video",
@@ -107,7 +107,7 @@ test("resolveVideoGenerationTarget returns null when xai is unavailable", () => 
   });
 
   const settings = {
-    initiative: {
+    discovery: {
       videoModel: "grok-imagine-video",
       allowedVideoModels: ["grok-imagine-video"]
     }
@@ -456,7 +456,7 @@ test("generateImage uses OpenAI Responses image_generation tool", async () => {
 
   const result = await service.generateImage({
     settings: {
-      initiative: {
+      discovery: {
         simpleImageModel: "gpt-image-1.5",
         allowedImageModels: ["gpt-image-1.5"]
       }
