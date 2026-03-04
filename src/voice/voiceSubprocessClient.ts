@@ -373,6 +373,18 @@ export class VoiceSubprocessClient extends EventEmitter {
     }
   }
 
+  private _sendGatewayVoiceStateUpdate(channelId: string | null) {
+    this._forwardToGateway({
+      op: 4,
+      d: {
+        guild_id: this.guildId,
+        channel_id: channelId,
+        self_mute: false,
+        self_deaf: false
+      }
+    });
+  }
+
   private _send(msg: any) {
     if (!this.child || this.destroyed || this.child.killed || this.child.exitCode !== null) return;
     try {
@@ -495,6 +507,12 @@ export class VoiceSubprocessClient extends EventEmitter {
       VoiceSubprocessClient.liveClients.delete(this);
       return;
     }
+
+    // Explicitly leave the voice channel through the main gateway before the
+    // subprocess exits. Killing the subprocess alone does not send OP4 with
+    // channel_id=null, so Discord can keep the bot shown in VC until the
+    // session times out.
+    this._sendGatewayVoiceStateUpdate(null);
 
     this.destroyPromise = new Promise<void>((resolve) => {
       let finished = false;

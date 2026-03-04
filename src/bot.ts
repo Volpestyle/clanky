@@ -542,13 +542,13 @@ export class ClankerBot {
     this.replyQueues.clear();
     this.replyQueueWorkers.clear();
     this.replyQueuedMessageIds.clear();
+    await this.voiceSessionManager.dispose("shutdown");
     if (this.memory?.drainIngestQueue) {
       await this.memory.drainIngestQueue({ timeoutMs: 4000 }).catch(() => undefined);
     }
     if (this.browserManager?.closeAll) {
       await this.browserManager.closeAll().catch(() => undefined);
     }
-    await this.voiceSessionManager.dispose("shutdown");
     await this.client.destroy();
   }
 

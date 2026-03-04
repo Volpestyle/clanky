@@ -39,6 +39,16 @@ class FakeSubprocess {
   }
 }
 
+type GatewayPayload = {
+  op: number;
+  d: {
+    guild_id: string;
+    channel_id: string | null;
+    self_mute: boolean;
+    self_deaf: boolean;
+  };
+};
+
 test("VoiceSubprocessClient destroy waits for child exit", async () => {
   const client = new VoiceSubprocessClient("guild-1", "channel-1", null);
   const child = new FakeSubprocess();
@@ -63,4 +73,41 @@ test("VoiceSubprocessClient destroy waits for child exit", async () => {
   assert.equal(child.killed, true);
   assert.equal(elapsedMs >= 200, true);
   assert.equal(elapsedMs < 5_000, true);
+});
+
+test("VoiceSubprocessClient destroy sends gateway leave before subprocess exit", async () => {
+  const sentPayloads: GatewayPayload[] = [];
+  const guild = {
+    shard: {
+      send(payload: GatewayPayload) {
+        sentPayloads.push(payload);
+      }
+    }
+  };
+  const client = new VoiceSubprocessClient("guild-1", "channel-1", guild);
+  const child = new FakeSubprocess();
+
+  let resolveExitWaiter!: () => void;
+  const exitWaiterPromise = new Promise<void>((resolve) => {
+    resolveExitWaiter = resolve;
+  });
+  child._injectExitWaiter(resolveExitWaiter);
+
+  Reflect.set(client, "child", child);
+  Reflect.set(client, "_resolveExitWaiter", resolveExitWaiter);
+  Reflect.set(client, "_exitWaiterPromise", exitWaiterPromise);
+
+  await client.destroy();
+
+  assert.deepEqual(sentPayloads, [
+    {
+      op: 4,
+      d: {
+        guild_id: "guild-1",
+        channel_id: null,
+        self_mute: false,
+        self_deaf: false
+      }
+    }
+  ]);
 });
