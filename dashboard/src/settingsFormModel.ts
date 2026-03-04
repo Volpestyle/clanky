@@ -156,6 +156,7 @@ export function settingsToForm(settings) {
     voiceInactivityLeaveSeconds: settings?.voice?.inactivityLeaveSeconds ?? defaultVoice.inactivityLeaveSeconds,
     voiceMaxSessionsPerDay: settings?.voice?.maxSessionsPerDay ?? defaultVoice.maxSessionsPerDay,
     voiceReplyEagerness: settings?.voice?.replyEagerness ?? defaultVoice.replyEagerness,
+    voiceCommandOnlyMode: settings?.voice?.commandOnlyMode ?? defaultVoice.commandOnlyMode,
     voiceThoughtEngineEnabled:
       settings?.voice?.thoughtEngine?.enabled ?? defaultVoiceThoughtEngine.enabled,
     voiceThoughtEngineProvider:
@@ -388,6 +389,7 @@ export function formToSettingsPatch(form) {
       inactivityLeaveSeconds: Number(form.voiceInactivityLeaveSeconds),
       maxSessionsPerDay: Number(form.voiceMaxSessionsPerDay),
       replyEagerness: Number(form.voiceReplyEagerness),
+      commandOnlyMode: Boolean(form.voiceCommandOnlyMode),
       thoughtEngine: {
         enabled: Boolean(form.voiceThoughtEngineEnabled),
         provider: String(form.voiceThoughtEngineProvider || "").trim(),

@@ -159,6 +159,7 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, undefined);
   assert.equal(normalized.voice.replyDecisionLlm.reasoningEffort, "high");
   assert.equal(normalized.voice.replyDecisionLlm.prompts, undefined);
+  assert.equal(normalized.voice.commandOnlyMode, false);
   assert.equal(normalized.voice.openaiRealtime.inputAudioFormat, "pcm16");
   assert.equal(normalized.voice.openaiRealtime.outputAudioFormat, "pcm16");
   assert.equal(normalized.voice.openaiRealtime.transcriptionMethod, "realtime_bridge");
@@ -210,6 +211,16 @@ test("normalizeSettings preserves explicit file_wav transcription mode", () => {
   });
 
   assert.equal(normalized.voice.openaiRealtime.transcriptionMethod, "file_wav");
+});
+
+test("normalizeSettings preserves explicit commandOnlyMode", () => {
+  const normalized = normalizeSettings({
+    voice: {
+      commandOnlyMode: true
+    }
+  });
+
+  assert.equal(normalized.voice.commandOnlyMode, true);
 });
 
 test("normalizeSettings handles memoryLlm defaults and discovery source fallbacks", () => {

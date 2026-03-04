@@ -575,6 +575,10 @@ export function normalizeSettings(raw) {
   merged.voice.replyEagerness = clamp(
     Number.isFinite(voiceEagernessRaw) ? voiceEagernessRaw : 0, 0, 100
   );
+  merged.voice.commandOnlyMode =
+    merged.voice?.commandOnlyMode !== undefined
+      ? Boolean(merged.voice?.commandOnlyMode)
+      : Boolean(defaultVoice.commandOnlyMode);
 
   // replyPath: "native" | "bridge" | "brain" — migrate from realtimeReplyStrategy
   const rawReplyPath = String(merged.voice?.replyPath || "").trim().toLowerCase();

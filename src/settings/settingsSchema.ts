@@ -125,6 +125,7 @@ export const DEFAULT_SETTINGS = {
     blockedVoiceChannelIds: [],
     blockedVoiceUserIds: [],
     replyEagerness: 50,
+    commandOnlyMode: false,
     thoughtEngine: {
       enabled: true,
       provider: "anthropic",

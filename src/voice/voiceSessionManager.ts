@@ -1189,6 +1189,12 @@ export class VoiceSessionManager {
     return Boolean(music?.active);
   }
 
+  isCommandOnlyActive(session, settings = null) {
+    const resolved = settings || session?.settingsSnapshot || this.store.getSettings();
+    if (resolved?.voice?.commandOnlyMode) return true;
+    return this.isMusicPlaybackActive(session);
+  }
+
   isMusicPlaybackAudible(session) {
     const playerState = String(session?.playerState || "")
       .trim()
@@ -1539,6 +1545,7 @@ export class VoiceSessionManager {
       .filter(Boolean)
       .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS);
     const disambiguationFromPrompt = this.getMusicDisambiguationPromptContext(session);
+    const requestStartedAt = Date.now();
 
     const requestDisambiguation = async (candidateResults = []) => {
       const options = candidateResults
@@ -1611,6 +1618,7 @@ export class VoiceSessionManager {
     }
 
     if (!resolvedTrackId && !selectedResult && resolvedQuery && this.musicSearch?.isConfigured?.()) {
+      const searchStartedAt = Date.now();
       const searchResponse = await this.musicSearch.search(resolvedQuery, {
         platform: resolvedPlatform || "auto",
         limit: MUSIC_DISAMBIGUATION_MAX_RESULTS
@@ -1628,6 +1636,9 @@ export class VoiceSessionManager {
         )
         .filter(Boolean)
         .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS);
+      console.info(
+        `[voiceMusic] search complete guildId=${resolvedGuildId} sessionId=${session.id} query=${JSON.stringify(resolvedQuery)} platform=${resolvedPlatform || "auto"} resultCount=${normalizedSearchResults.length} durationMs=${Date.now() - searchStartedAt}`
+      );
 
       if (normalizedSearchResults.length > 1) {
         const handled = await requestDisambiguation(normalizedSearchResults);
@@ -1853,6 +1864,9 @@ export class VoiceSessionManager {
       },
       mustNotify
     });
+    console.info(
+      `[voiceMusic] request complete guildId=${resolvedGuildId} sessionId=${session.id} provider=${playbackResult.provider} totalMs=${Date.now() - requestStartedAt} query=${JSON.stringify(playbackResult.query || playbackQuery || "")}`
+    );
     return true;
   }
 
@@ -1881,7 +1895,11 @@ export class VoiceSessionManager {
       externalUrl: track.externalUrl || ""
     };
 
+    const playbackStartedAt = Date.now();
     const result = await this.musicPlayer.play(searchResult);
+    console.info(
+      `[voiceMusic] discord playback handoff guildId=${session.guildId} trackId=${JSON.stringify(track.id)} platform=${JSON.stringify(track.platform)} durationMs=${Date.now() - playbackStartedAt}`
+    );
     return { ok: result.ok, error: result.error };
   }
 
@@ -3237,7 +3255,17 @@ export class VoiceSessionManager {
   isBargeInInterruptTargetActive(session) {
     if (!session || session.ending) return false;
     if (this.isBargeInOutputSuppressed(session)) return false;
-    return this.getReplyOutputLockState(session).locked;
+    const lockState = this.getReplyOutputLockState(session);
+    if (!lockState.locked) return false;
+    if (
+      lockState.musicActive &&
+      !lockState.botTurnOpen &&
+      !lockState.pendingResponse &&
+      !lockState.openAiActiveResponse
+    ) {
+      return false;
+    }
+    return true;
   }
 
   normalizeReplyInterruptionPolicy(rawPolicy = null) {
@@ -4434,6 +4462,14 @@ export class VoiceSessionManager {
       return {
         allow: false,
         reason: "thought_engine_disabled",
+        retryAfterMs: thoughtConfig.minSilenceSeconds * 1000
+      };
+    }
+
+    if (this.isCommandOnlyActive(session, settings)) {
+      return {
+        allow: false,
+        reason: "command_only_mode",
         retryAfterMs: thoughtConfig.minSilenceSeconds * 1000
       };
     }
@@ -9967,8 +10003,8 @@ export class VoiceSessionManager {
     const directAddressed =
       !addressedToOtherParticipant &&
       directAddressConfidence >= directAddressThreshold;
-    const musicActive = this.isMusicPlaybackAudible(session);
-    const replyEagerness = musicActive
+    const commandOnlyMode = this.isCommandOnlyActive(session, settings);
+    const replyEagerness = commandOnlyMode
       ? 0
       : clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
     const baseConversationContext = this.buildVoiceConversationContext({
@@ -10023,6 +10059,31 @@ export class VoiceSessionManager {
       return {
         allow: true,
         reason: "direct_address_fast_path",
+        participantCount,
+        directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
+        transcript: normalizedTranscript,
+        conversationContext
+      };
+    }
+
+    if (commandOnlyMode) {
+      if (directAddressed || directAddressedByWakePhrase) {
+        return {
+          allow: true,
+          reason: "command_only_direct_address",
+          participantCount,
+          directAddressed: true,
+          directAddressConfidence,
+          directAddressThreshold,
+          transcript: normalizedTranscript,
+          conversationContext
+        };
+      }
+      return {
+        allow: false,
+        reason: "command_only_not_addressed",
         participantCount,
         directAddressed,
         directAddressConfidence,

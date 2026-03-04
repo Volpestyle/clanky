@@ -362,7 +362,23 @@ export function VoiceModeSettingsSection({
             value={form.voiceReplyEagerness}
             onChange={set("voiceReplyEagerness")}
             style={rangeStyle(form.voiceReplyEagerness)}
+            disabled={Boolean(form.voiceCommandOnlyMode)}
           />
+          <div className="toggles">
+            <label>
+              <input
+                type="checkbox"
+                checked={Boolean(form.voiceCommandOnlyMode)}
+                onChange={set("voiceCommandOnlyMode")}
+              />
+              Command-only mode
+            </label>
+          </div>
+          <p>
+            {form.voiceCommandOnlyMode
+              ? "Command-only mode overrides reply eagerness. Clanker will only respond to wake-word or direct-address turns. Music playback also forces this mode automatically while audible."
+              : "When disabled, Clanker can answer unaddressed turns based on reply eagerness. Music playback still forces command-only mode while audible."}
+          </p>
 
           <h4>Voice Reply Decider</h4>
           <p>Controls when Clank should chime in during VC.</p>

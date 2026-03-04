@@ -543,6 +543,64 @@ test("maybeInterruptBotForAssertiveSpeech ignores assertive captures in realtime
   assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
 });
 
+test("maybeInterruptBotForAssertiveSpeech does not interrupt music-only playback lock", () => {
+  const { manager, logs } = createManager();
+  const stopCalls = [];
+  const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
+  const session = createSession({
+    mode: "openai_realtime",
+    playerState: "playing",
+    music: {
+      active: true,
+      startedAt: Date.now() - 5_000,
+      stoppedAt: 0,
+      provider: "discord",
+      source: "voice_tool_call",
+      lastTrackId: "youtube:test",
+      lastTrackTitle: "test track",
+      lastTrackArtists: ["artist"],
+      lastTrackUrl: "https://example.com",
+      lastQuery: "test track",
+      lastRequestedByUserId: "user-1",
+      lastRequestText: "play test track",
+      lastCommandAt: Date.now() - 5_000,
+      lastCommandReason: "voice_tool_music_play",
+      pendingQuery: null,
+      pendingPlatform: "auto",
+      pendingResults: [],
+      pendingRequestedByUserId: null,
+      pendingRequestedAt: 0
+    },
+    userCaptures: new Map([
+      [
+        "user-1",
+        {
+          bytesSent: minBytes + 2_400,
+          signalSampleCount: 24_000,
+          signalActiveSampleCount: 1_680,
+          signalPeakAbs: 5_400,
+          speakingEndFinalizeTimer: null
+        }
+      ]
+    ]),
+    subprocessClient: {
+      stopPlayback() {
+        stopCalls.push("stop");
+      }
+    }
+  });
+
+  const interrupted = manager.maybeInterruptBotForAssertiveSpeech({
+    session,
+    userId: "user-1",
+    source: "test_music_only_lock"
+  });
+
+  assert.equal(interrupted, false);
+  assert.equal(stopCalls.length, 0);
+  assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
+});
+
 test("maybeInterruptBotForAssertiveSpeech interrupts queued playback even when botTurnOpen already reset", () => {
   const { manager, logs } = createManager();
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
@@ -1416,6 +1474,34 @@ test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown",
   });
   assert.equal(allowed.allow, true);
   assert.equal(allowed.reason, "ok");
+});
+
+test("evaluateVoiceThoughtLoopGate blocks thoughts in command-only mode", () => {
+  const { manager } = createManager();
+  const now = Date.now();
+  const session = createSession({
+    lastActivityAt: now - 25_000,
+    lastThoughtAttemptAt: 0
+  });
+
+  const blocked = manager.evaluateVoiceThoughtLoopGate({
+    session,
+    settings: {
+      voice: {
+        commandOnlyMode: true,
+        thoughtEngine: {
+          enabled: true,
+          eagerness: 100,
+          minSilenceSeconds: 20,
+          minSecondsBetweenThoughts: 20
+        }
+      }
+    },
+    now
+  });
+
+  assert.equal(blocked.allow, false);
+  assert.equal(blocked.reason, "command_only_mode");
 });
 
 test("maybeRunVoiceThoughtLoop speaks approved thought candidates", async () => {

@@ -442,6 +442,67 @@ test("reply decider blocks unaddressed turns when eagerness is disabled", async 
   assert.equal(decision.reason, "eagerness_disabled_without_direct_address");
 });
 
+test("reply decider blocks unaddressed turns in command-only mode", async () => {
+  const manager = createManager({
+    participantCount: 1
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        commandOnlyMode: true,
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "what do you think about this"
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "command_only_not_addressed");
+});
+
+test("reply decider allows direct-addressed turns in command-only mode", async () => {
+  const manager = createManager({
+    participantCount: 1
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      botName: "clanker conk",
+      voice: {
+        commandOnlyMode: true,
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "yo clanker what time is it"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "direct_address_fast_path");
+});
+
 test("reply decider blocks unaddressed turns while subprocess playback is still audible", async () => {
   const manager = createManager({
     participantCount: 1
