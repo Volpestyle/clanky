@@ -1209,6 +1209,87 @@ export class VoiceSessionManager {
     return playerState === "playing";
   }
 
+  resolveMusicDuckingConfig(settings = null) {
+    const resolved = settings || this.store.getSettings();
+    const targetGainRaw = Number(resolved?.voice?.musicDucking?.targetGain);
+    const fadeMsRaw = Number(resolved?.voice?.musicDucking?.fadeMs);
+    return {
+      targetGain: clamp(
+        Number.isFinite(targetGainRaw) ? targetGainRaw : 0.15,
+        0.05,
+        1
+      ),
+      fadeMs: clamp(
+        Number.isFinite(fadeMsRaw) ? Math.round(fadeMsRaw) : 300,
+        0,
+        5000
+      )
+    };
+  }
+
+  clearBotSpeechMusicUnduckTimer(session) {
+    if (!session) return;
+    if (session.botSpeechMusicUnduckTimer) {
+      clearTimeout(session.botSpeechMusicUnduckTimer);
+      session.botSpeechMusicUnduckTimer = null;
+    }
+  }
+
+  async engageBotSpeechMusicDuck(session, settings = null, { awaitFade = false } = {}) {
+    if (!session || session.ending) return false;
+    if (!this.isMusicPlaybackAudible(session) || this.musicPlayer?.isPaused?.()) {
+      session.botSpeechMusicDucked = false;
+      return false;
+    }
+    this.clearBotSpeechMusicUnduckTimer(session);
+    if (this.musicPlayer?.isDucked?.()) {
+      session.botSpeechMusicDucked = true;
+      return true;
+    }
+    const { targetGain, fadeMs } = this.resolveMusicDuckingConfig(
+      settings || session.settingsSnapshot || this.store.getSettings()
+    );
+    const duckPromise = this.musicPlayer?.duck({ targetGain, fadeMs });
+    session.botSpeechMusicDucked = Boolean(this.musicPlayer?.isDucked?.());
+    if (awaitFade) {
+      await duckPromise;
+      session.botSpeechMusicDucked = Boolean(this.musicPlayer?.isDucked?.());
+    }
+    return Boolean(session.botSpeechMusicDucked);
+  }
+
+  scheduleBotSpeechMusicUnduck(session, settings = null, delayMs = BOT_TURN_SILENCE_RESET_MS) {
+    if (!session || session.ending) return;
+    if (!session.botSpeechMusicDucked && !this.musicPlayer?.isDucked?.()) return;
+    this.clearBotSpeechMusicUnduckTimer(session);
+    const normalizedDelayMs = clamp(Math.round(Number(delayMs) || 0), 0, 15_000);
+    session.botSpeechMusicUnduckTimer = setTimeout(() => {
+      session.botSpeechMusicUnduckTimer = null;
+      this.releaseBotSpeechMusicDuck(session, settings).catch(() => undefined);
+    }, normalizedDelayMs);
+  }
+
+  async releaseBotSpeechMusicDuck(session, settings = null, { force = false } = {}) {
+    if (!session) return false;
+    this.clearBotSpeechMusicUnduckTimer(session);
+    const playerDucked = Boolean(this.musicPlayer?.isDucked?.());
+    if (!playerDucked && !session.botSpeechMusicDucked) {
+      return false;
+    }
+    session.botSpeechMusicDucked = false;
+    if (!force && !this.isMusicPlaybackAudible(session)) {
+      return false;
+    }
+    if (!playerDucked) {
+      return false;
+    }
+    const { fadeMs } = this.resolveMusicDuckingConfig(
+      settings || session.settingsSnapshot || this.store.getSettings()
+    );
+    this.musicPlayer?.unduck({ targetGain: 1, fadeMs });
+    return true;
+  }
+
 
   isAsrActive(session, settings = null) {
     const resolved = settings || session?.settingsSnapshot || this.store.getSettings();
@@ -3541,16 +3622,8 @@ export class VoiceSessionManager {
     session.botTurnOpen = false;
 
     // Unduck music immediately on barge-in so the user hears it while speaking.
-    if (session._realtimeMusicDucked) {
-      if (session._realtimeUnduckTimer) {
-        clearTimeout(session._realtimeUnduckTimer);
-        session._realtimeUnduckTimer = null;
-      }
-      session._realtimeMusicDucked = false;
-      if (this.isMusicPlaybackAudible(session) && this.musicPlayer?.isDucked?.()) {
-        this.musicPlayer?.unduck(300);
-      }
-    }
+    const resolvedSettings = session.settingsSnapshot || this.store.getSettings();
+    this.releaseBotSpeechMusicDuck(session, resolvedSettings, { force: true }).catch(() => undefined);
 
     if (session.pendingResponse && typeof session.pendingResponse === "object") {
       session.lastAudioDeltaAt = Math.max(Number(session.lastAudioDeltaAt || 0), now);
@@ -3714,17 +3787,11 @@ export class VoiceSessionManager {
       // Duck music when realtime TTS starts speaking — playVoiceReplyInOrder
       // handles ducking for the STT pipeline, but realtime audio arrives here
       // directly and bypasses that path.
-      if (
-        !session._realtimeMusicDucked &&
-        this.isMusicPlaybackAudible(session) &&
-        !this.musicPlayer?.isPaused?.()
-      ) {
-        if (session._realtimeUnduckTimer) {
-          clearTimeout(session._realtimeUnduckTimer);
-          session._realtimeUnduckTimer = null;
-        }
-        this.musicPlayer?.duck(300);
-        session._realtimeMusicDucked = true;
+      if (this.isMusicPlaybackAudible(session) && !this.musicPlayer?.isPaused?.()) {
+        this.engageBotSpeechMusicDuck(
+          session,
+          session.settingsSnapshot || this.store.getSettings()
+        ).catch(() => undefined);
       }
 
       // Send raw PCM to subprocess — it handles conversion + Opus encoding.
@@ -3982,18 +4049,7 @@ export class VoiceSessionManager {
       if (hadAudio) {
         // Schedule music unduck after the subprocess finishes playing
         // buffered audio (~BOT_TURN_SILENCE_RESET_MS after last delta).
-        if (session._realtimeMusicDucked) {
-          if (session._realtimeUnduckTimer) clearTimeout(session._realtimeUnduckTimer);
-          session._realtimeUnduckTimer = setTimeout(() => {
-            session._realtimeUnduckTimer = null;
-            if (session._realtimeMusicDucked) {
-              session._realtimeMusicDucked = false;
-              if (this.isMusicPlaybackAudible(session) && this.musicPlayer?.isDucked?.()) {
-                this.musicPlayer?.unduck(300);
-              }
-            }
-          }, BOT_TURN_SILENCE_RESET_MS);
-        }
+        this.scheduleBotSpeechMusicUnduck(session, resolvedSettings, BOT_TURN_SILENCE_RESET_MS);
         this.clearPendingResponse(session);
         return;
       }
@@ -5610,12 +5666,6 @@ export class VoiceSessionManager {
       };
     }
 
-    // Duck music while the bot speaks, unduck after.
-    const musicWasPlaying = this.isMusicPlaybackAudible(session) && !this.musicPlayer?.isPaused?.();
-    if (musicWasPlaying) {
-      await this.musicPlayer?.duck(300);
-    }
-
     const requiresOrderedPlayback = steps.some((entry) => entry?.type === "soundboard");
     let speechStep = 0;
     let soundboardStep = 0;
@@ -5624,102 +5674,96 @@ export class VoiceSessionManager {
     let playedSoundboardCount = 0;
     let completed = true;
 
-    try {
-      for (const step of steps) {
-        if (session.ending) {
-          completed = false;
-          break;
-        }
-        if (!step || typeof step !== "object") continue;
-        if (step.type === "speech") {
-          const segmentText = normalizeVoiceText(step.text, STT_REPLY_MAX_CHARS);
-          if (!segmentText) continue;
-          speechStep += 1;
-          const speechSource = `${String(source || "voice_reply")}:speech_${speechStep}`;
-          if (preferRealtimeUtterance) {
-            if (
-              this.maybeSupersedeRealtimeReplyBeforePlayback({
-                session,
-                source: speechSource,
-                speechStep,
-                generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0)
-              })
-            ) {
-              completed = false;
-              break;
-            }
-            const requested = this.requestRealtimeTextUtterance({
+    for (const step of steps) {
+      if (session.ending) {
+        completed = false;
+        break;
+      }
+      if (!step || typeof step !== "object") continue;
+      if (step.type === "speech") {
+        const segmentText = normalizeVoiceText(step.text, STT_REPLY_MAX_CHARS);
+        if (!segmentText) continue;
+        speechStep += 1;
+        const speechSource = `${String(source || "voice_reply")}:speech_${speechStep}`;
+        if (preferRealtimeUtterance) {
+          if (
+            this.maybeSupersedeRealtimeReplyBeforePlayback({
               session,
-              text: segmentText,
-              userId: this.client.user?.id || null,
               source: speechSource,
-              interruptionPolicy,
-              latencyContext
-            });
-            if (requested) {
-              spokeLine = true;
-              requestedRealtimeUtterance = true;
-              if (requiresOrderedPlayback) {
-                await this.waitForLeaveDirectivePlayback({
-                  session,
-                  expectRealtimeAudio: true,
-                  source: speechSource
-                });
-              }
-              continue;
-            }
-            if (
-              this.maybeSupersedeRealtimeReplyBeforePlayback({
-                session,
-                source: speechSource,
-                speechStep,
-                generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0)
-              })
-            ) {
-              completed = false;
-              break;
-            }
-          }
-          const spoke = await this.speakVoiceLineWithTts({
-            session,
-            settings,
-            text: segmentText,
-            source: `${speechSource}:tts_fallback`
-          });
-          if (!spoke) {
+              speechStep,
+              generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0)
+            })
+          ) {
             completed = false;
             break;
           }
-          spokeLine = true;
-          if (requiresOrderedPlayback) {
-            await this.waitForLeaveDirectivePlayback({
-              session,
-              expectRealtimeAudio: false,
-              source: speechSource
-            });
-          }
-          continue;
-        }
-        if (step.type === "soundboard") {
-          const requestedRef = String(step.reference || "")
-            .trim()
-            .slice(0, 180);
-          if (!requestedRef) continue;
-          soundboardStep += 1;
-          await this.maybeTriggerAssistantDirectedSoundboard({
+          const requested = this.requestRealtimeTextUtterance({
             session,
-            settings,
+            text: segmentText,
             userId: this.client.user?.id || null,
-            transcript: spokenText,
-            requestedRef,
-            source: `${String(source || "voice_reply")}:soundboard_${soundboardStep}`
+            source: speechSource,
+            interruptionPolicy,
+            latencyContext
           });
-          playedSoundboardCount += 1;
+          if (requested) {
+            spokeLine = true;
+            requestedRealtimeUtterance = true;
+            if (requiresOrderedPlayback) {
+              await this.waitForLeaveDirectivePlayback({
+                session,
+                expectRealtimeAudio: true,
+                source: speechSource
+              });
+            }
+            continue;
+          }
+          if (
+            this.maybeSupersedeRealtimeReplyBeforePlayback({
+              session,
+              source: speechSource,
+              speechStep,
+              generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0)
+            })
+          ) {
+            completed = false;
+            break;
+          }
         }
+        const spoke = await this.speakVoiceLineWithTts({
+          session,
+          settings,
+          text: segmentText,
+          source: `${speechSource}:tts_fallback`
+        });
+        if (!spoke) {
+          completed = false;
+          break;
+        }
+        spokeLine = true;
+        if (requiresOrderedPlayback) {
+          await this.waitForLeaveDirectivePlayback({
+            session,
+            expectRealtimeAudio: false,
+            source: speechSource
+          });
+        }
+        continue;
       }
-    } finally {
-      if (musicWasPlaying && this.isMusicPlaybackAudible(session) && this.musicPlayer?.isDucked?.()) {
-        this.musicPlayer?.unduck(300);
+      if (step.type === "soundboard") {
+        const requestedRef = String(step.reference || "")
+          .trim()
+          .slice(0, 180);
+        if (!requestedRef) continue;
+        soundboardStep += 1;
+        await this.maybeTriggerAssistantDirectedSoundboard({
+          session,
+          settings,
+          userId: this.client.user?.id || null,
+          transcript: spokenText,
+          requestedRef,
+          source: `${String(source || "voice_reply")}:soundboard_${soundboardStep}`
+        });
+        playedSoundboardCount += 1;
       }
     }
 
@@ -5853,14 +5897,28 @@ export class VoiceSessionManager {
       return false;
     }
 
-    if (!ttsPcm.length || session.ending) return false;
+    const duckedMusic = await this.engageBotSpeechMusicDuck(session, settings, { awaitFade: true });
+    if (!ttsPcm.length || session.ending) {
+      if (duckedMusic) {
+        await this.releaseBotSpeechMusicDuck(session, settings, { force: true });
+      }
+      return false;
+    }
     const queued = await this.enqueueChunkedTtsPcmForPlayback({
       session,
       ttsPcm,
       inputSampleRateHz: 24000
     });
-    if (!queued) return false;
+    if (!queued) {
+      if (duckedMusic) {
+        await this.releaseBotSpeechMusicDuck(session, settings, { force: true });
+      }
+      return false;
+    }
     this.markBotTurnOut(session, settings);
+    if (duckedMusic) {
+      this.scheduleBotSpeechMusicUnduck(session, settings, BOT_TURN_SILENCE_RESET_MS);
+    }
     return true;
   }
 

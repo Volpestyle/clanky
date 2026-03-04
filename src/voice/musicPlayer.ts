@@ -174,16 +174,40 @@ export class DiscordMusicPlayer {
     }
   }
 
-  async duck(fadeMs = 300): Promise<void> {
+  async duck(options: { targetGain?: number; fadeMs?: number } | number = 300): Promise<void> {
     if (!this.subprocessClient?.isAlive || !this._playing) return;
-    this.subprocessClient.musicSetGain(0.15, fadeMs);
+    const fadeMs =
+      typeof options === "number"
+        ? options
+        : Number.isFinite(Number(options?.fadeMs))
+          ? Number(options.fadeMs)
+          : 300;
+    const targetGain =
+      typeof options === "number"
+        ? 0.15
+        : Number.isFinite(Number(options?.targetGain))
+          ? Number(options.targetGain)
+          : 0.15;
+    this.subprocessClient.musicSetGain(targetGain, fadeMs);
     this._ducked = true;
     await new Promise(resolve => setTimeout(resolve, fadeMs));
   }
 
-  unduck(fadeMs = 300): void {
+  unduck(options: { targetGain?: number; fadeMs?: number } | number = 300): void {
     if (!this.subprocessClient?.isAlive || !this._playing) return;
-    this.subprocessClient.musicSetGain(1.0, fadeMs);
+    const fadeMs =
+      typeof options === "number"
+        ? options
+        : Number.isFinite(Number(options?.fadeMs))
+          ? Number(options.fadeMs)
+          : 300;
+    const targetGain =
+      typeof options === "number"
+        ? 1.0
+        : Number.isFinite(Number(options?.targetGain))
+          ? Number(options.targetGain)
+          : 1.0;
+    this.subprocessClient.musicSetGain(targetGain, fadeMs);
     this._ducked = false;
   }
 

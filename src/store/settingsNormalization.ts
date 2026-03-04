@@ -386,6 +386,9 @@ export function normalizeSettings(raw) {
   if (!merged.voice.soundboard || typeof merged.voice.soundboard !== "object") {
     merged.voice.soundboard = {};
   }
+  if (!merged.voice.musicDucking || typeof merged.voice.musicDucking !== "object") {
+    merged.voice.musicDucking = {};
+  }
 
   type VoiceXaiDefaults = {
     voice?: string;
@@ -457,6 +460,10 @@ export function normalizeSettings(raw) {
     enabled?: boolean;
     allowExternalSounds?: boolean;
   };
+  type VoiceMusicDuckingDefaults = {
+    targetGain?: number;
+    fadeMs?: number;
+  };
   type VoiceDefaults = {
     enabled?: boolean;
     voiceProvider?: string;
@@ -482,6 +489,7 @@ export function normalizeSettings(raw) {
     replyDecisionLlm?: VoiceReplyDecisionDefaults;
     streamWatch?: VoiceStreamWatchDefaults;
     soundboard?: VoiceSoundboardDefaults;
+    musicDucking?: VoiceMusicDuckingDefaults;
     asrDuringMusic?: boolean;
     asrEnabled?: boolean;
     operationalMessages?: string;
@@ -498,6 +506,7 @@ export function normalizeSettings(raw) {
   const defaultVoiceReplyDecisionLlm: VoiceReplyDecisionDefaults = defaultVoice.replyDecisionLlm ?? {};
   const defaultVoiceStreamWatch: VoiceStreamWatchDefaults = defaultVoice.streamWatch ?? {};
   const defaultVoiceSoundboard: VoiceSoundboardDefaults = defaultVoice.soundboard ?? {};
+  const defaultVoiceMusicDucking: VoiceMusicDuckingDefaults = defaultVoice.musicDucking ?? {};
   const voiceIntentThresholdRaw = Number(merged.voice?.intentConfidenceThreshold);
   const voiceMaxSessionRaw = Number(merged.voice?.maxSessionMinutes);
   const voiceInactivityRaw = Number(merged.voice?.inactivityLeaveSeconds);
@@ -515,6 +524,8 @@ export function normalizeSettings(raw) {
   const streamWatchKeyframeIntervalRaw = Number(merged.voice?.streamWatch?.keyframeIntervalMs);
   const streamWatchBrainContextIntervalRaw = Number(merged.voice?.streamWatch?.brainContextMinIntervalSeconds);
   const streamWatchBrainContextMaxEntriesRaw = Number(merged.voice?.streamWatch?.brainContextMaxEntries);
+  const voiceMusicDuckingTargetGainRaw = Number(merged.voice?.musicDucking?.targetGain);
+  const voiceMusicDuckingFadeMsRaw = Number(merged.voice?.musicDucking?.fadeMs);
 
   merged.voice.enabled =
     merged.voice?.enabled !== undefined ? Boolean(merged.voice?.enabled) : Boolean(defaultVoice.enabled);
@@ -909,6 +920,20 @@ export function normalizeSettings(raw) {
       ? Boolean(merged.voice?.soundboard?.allowExternalSounds)
       : Boolean(defaultVoiceSoundboard.allowExternalSounds);
   merged.voice.soundboard.preferredSoundIds = uniqueIdList(merged.voice?.soundboard?.preferredSoundIds).slice(0, 40);
+  merged.voice.musicDucking.targetGain = clamp(
+    Number.isFinite(voiceMusicDuckingTargetGainRaw)
+      ? voiceMusicDuckingTargetGainRaw
+      : Number(defaultVoiceMusicDucking.targetGain) || 0.15,
+    0.05,
+    1
+  );
+  merged.voice.musicDucking.fadeMs = clamp(
+    Number.isFinite(voiceMusicDuckingFadeMsRaw)
+      ? Math.round(voiceMusicDuckingFadeMsRaw)
+      : Math.round(Number(defaultVoiceMusicDucking.fadeMs) || 300),
+    0,
+    5000
+  );
 
   // Migration: musicTranscriptionEnabled → asrDuringMusic
   if (

@@ -201,6 +201,10 @@ export const DEFAULT_SETTINGS = {
       allowExternalSounds: false,
       preferredSoundIds: []
     },
+    musicDucking: {
+      targetGain: 0.15,
+      fadeMs: 300
+    },
     replyPath: "bridge",
     asrDuringMusic: true,
     asrEnabled: true,

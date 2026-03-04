@@ -90,6 +90,10 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
       },
       soundboard: {
         preferredSoundIds: ["first", "first", "second"]
+      },
+      musicDucking: {
+        targetGain: -2,
+        fadeMs: 99999
       }
     },
     initiative: {
@@ -178,6 +182,8 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.streamWatch.brainContextMaxEntries, 24);
   assert.equal(normalized.voice.streamWatch.brainContextPrompt.length, 420);
   assert.deepEqual(normalized.voice.soundboard.preferredSoundIds, ["first", "second"]);
+  assert.equal(normalized.voice.musicDucking.targetGain, 0.05);
+  assert.equal(normalized.voice.musicDucking.fadeMs, 5000);
 
   assert.deepEqual(normalized.initiative.allowedImageModels, ["gpt-image-1.5", "grok-imagine-image"]);
   assert.deepEqual(normalized.initiative.allowedVideoModels, ["grok-imagine-video"]);

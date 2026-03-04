@@ -1685,6 +1685,58 @@ test("getReplyOutputLockState does not treat stale music.active as audible playb
   assert.equal(lockState.musicActive, false);
 });
 
+test("bot speech music duck helpers use configured gain and release after inactivity", async () => {
+  const { manager } = createManager();
+  const session = createSession();
+  const settings = {
+    voice: {
+      enabled: true,
+      musicDucking: {
+        targetGain: 0.22,
+        fadeMs: 120
+      }
+    }
+  };
+  const duckCalls = [];
+  const unduckCalls = [];
+  let ducked = false;
+
+  manager.musicPlayer = {
+    isPaused() {
+      return false;
+    },
+    isDucked() {
+      return ducked;
+    },
+    async duck(options) {
+      duckCalls.push(options);
+      ducked = true;
+    },
+    unduck(options) {
+      unduckCalls.push(options);
+      ducked = false;
+    }
+  };
+  manager.isMusicPlaybackAudible = () => true;
+
+  const engaged = await manager.engageBotSpeechMusicDuck(session, settings, { awaitFade: true });
+  assert.equal(engaged, true);
+  assert.equal(session.botSpeechMusicDucked, true);
+  assert.deepEqual(duckCalls[0], {
+    targetGain: 0.22,
+    fadeMs: 120
+  });
+
+  manager.scheduleBotSpeechMusicUnduck(session, settings, 0);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(session.botSpeechMusicDucked, false);
+  assert.deepEqual(unduckCalls[0], {
+    targetGain: 1,
+    fadeMs: 120
+  });
+});
+
 test("maybeHandleMusicTextStopRequest routes stop phrase from text chat", async () => {
   const { manager } = createManager();
   const stopCalls = [];
