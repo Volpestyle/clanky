@@ -4,6 +4,7 @@ import { Collapse } from "../Collapse";
 import { FullPromptPreview } from "../FullPromptPreview";
 import { rangeStyle } from "../../utils";
 import { LlmProviderOptions } from "./LlmProviderOptions";
+import { OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS } from "../../settingsFormModel";
 
 export function VoiceModeSettingsSection({
   id,
@@ -42,9 +43,17 @@ export function VoiceModeSettingsSection({
   const brainProvider = String(form.voiceBrainProvider || "openai")
     .trim()
     .toLowerCase();
+  const openAiRealtimeTranscriptionMethodOptions = OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS;
+  const openAiRealtimeTranscriptionMethod = String(
+    form.voiceOpenAiRealtimeTranscriptionMethod || "realtime_bridge"
+  )
+    .trim()
+    .toLowerCase();
+  const usesRealtimeAsrBridge = openAiRealtimeTranscriptionMethod !== "file_wav";
   const usesBrainLlm = !isNativePath;
   const openAiPerUserAsrBridge =
     isBridgePath &&
+    usesRealtimeAsrBridge &&
     Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge);
   const usesBrainGeneration = isRealtimeMode && usesBrainLlm && !openAiPerUserAsrBridge;
   const classifierMergedWithGeneration =
@@ -122,10 +131,49 @@ export function VoiceModeSettingsSection({
                     <option value="xai">xAI</option>
                     <option value="gemini">Gemini</option>
                   </select>
+
+                  <div className="split">
+                    <div>
+                      <label htmlFor="voice-openai-realtime-transcription-method">Transcription method</label>
+                      <select
+                        id="voice-openai-realtime-transcription-method"
+                        value={form.voiceOpenAiRealtimeTranscriptionMethod}
+                        onChange={set("voiceOpenAiRealtimeTranscriptionMethod")}
+                      >
+                        {openAiRealtimeTranscriptionMethodOptions.map((methodId) => (
+                          <option key={methodId} value={methodId}>
+                            {methodId}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="voice-openai-realtime-transcription-model">
+                        OpenAI transcription model
+                      </label>
+                      <select
+                        id="voice-openai-realtime-transcription-model"
+                        value={form.voiceOpenAiRealtimeInputTranscriptionModel}
+                        onChange={set("voiceOpenAiRealtimeInputTranscriptionModel")}
+                      >
+                        {openAiTranscriptionModelOptions.map((modelId) => (
+                          <option key={modelId} value={modelId}>
+                            {modelId}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <p>
+                    {usesRealtimeAsrBridge
+                      ? "Realtime bridge streams audio into OpenAI transcription sessions and uses those transcripts as the source of truth."
+                      : "File WAV transcribes each finalized turn from captured PCM after the turn ends. It is slower, but does not use realtime ASR bridge sessions."}
+                  </p>
                 </>
               )}
 
-              {isBridgePath && (
+              {isBridgePath && usesRealtimeAsrBridge && (
                 <div className="split">
                   <div>
                     <label>ASR mode</label>
@@ -577,26 +625,6 @@ export function VoiceModeSettingsSection({
               </div>
 
               <p>Audio transport is fixed to `pcm16` for stable Discord playback.</p>
-
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-openai-realtime-transcription-model">
-                    OpenAI realtime input transcription model
-                  </label>
-                  <select
-                    id="voice-openai-realtime-transcription-model"
-                    value={form.voiceOpenAiRealtimeInputTranscriptionModel}
-                    onChange={set("voiceOpenAiRealtimeInputTranscriptionModel")}
-                  >
-                    {openAiTranscriptionModelOptions.map((modelId) => (
-                      <option key={modelId} value={modelId}>
-                        {modelId}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div />
-              </div>
             </>
           )}
 

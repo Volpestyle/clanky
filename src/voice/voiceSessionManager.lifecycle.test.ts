@@ -1185,7 +1185,7 @@ test("maybeHandleInterruptedReplyRecovery treats long barge-ins as full override
   assert.equal(Boolean(skipLog), true);
 });
 
-test("queueRealtimeTurnFromAsrBridge falls back to PCM when ASR transcript is empty", () => {
+test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript instead of queueing PCM", () => {
   const { manager, logs } = createManager();
   const queuedTurns = [];
   manager.queueRealtimeTurn = (payload) => {
@@ -1209,15 +1209,14 @@ test("queueRealtimeTurnFromAsrBridge falls back to PCM when ASR transcript is em
   });
 
   assert.equal(usedTranscript, false);
-  assert.equal(queuedTurns.length, 1);
-  assert.equal(queuedTurns[0]?.pcmBuffer, pcmBuffer);
-  assert.equal(queuedTurns[0]?.captureReason, "stream_end");
-  const fallbackLog = logs.find((entry) => entry?.content === "openai_realtime_asr_bridge_fallback_pcm");
-  assert.equal(Boolean(fallbackLog), true);
-  assert.equal(fallbackLog?.metadata?.source, "per_user");
+  assert.equal(queuedTurns.length, 0);
+  const droppedLog = logs.find((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped");
+  assert.equal(Boolean(droppedLog), true);
+  assert.equal(droppedLog?.metadata?.source, "per_user");
+  assert.equal(droppedLog?.metadata?.pcmBytes, pcmBuffer.length);
 });
 
-test("queueRealtimeTurnFromAsrBridge forwards receive_error fallback audio when capture is sizable", () => {
+test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript for all capture reasons", () => {
   const { manager, logs } = createManager();
   const queuedTurns = [];
   manager.queueRealtimeTurn = (payload) => {
@@ -1263,14 +1262,10 @@ test("queueRealtimeTurnFromAsrBridge forwards receive_error fallback audio when 
   assert.equal(droppedNearSilence, false);
   assert.equal(droppedReceiveError, false);
   assert.equal(droppedTinyClip, false);
-  assert.equal(queuedTurns.length, 1);
-  assert.equal(queuedTurns[0]?.pcmBuffer?.length, DISCORD_PCM_FRAME_BYTES * 2);
-  assert.equal(queuedTurns[0]?.captureReason, "receive_error");
-  const droppedLogs = logs.filter((entry) => entry?.content === "openai_realtime_asr_bridge_fallback_dropped");
-  assert.equal(droppedLogs.length, 2);
-  const fallbackLog = logs.find((entry) => entry?.content === "openai_realtime_asr_bridge_fallback_pcm");
-  assert.equal(Boolean(fallbackLog), true);
-  assert.equal(fallbackLog?.metadata?.captureReason, "receive_error");
+  assert.equal(queuedTurns.length, 0);
+  const droppedLogs = logs.filter((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped");
+  assert.equal(droppedLogs.length, 3);
+  assert.equal(droppedLogs.some((entry) => entry?.metadata?.captureReason === "receive_error"), true);
 });
 
 test("queueRealtimeTurnFromAsrBridge forwards transcript metadata when ASR transcript exists", () => {
@@ -1310,7 +1305,7 @@ test("queueRealtimeTurnFromAsrBridge forwards transcript metadata when ASR trans
   assert.equal(queuedTurns[0]?.transcriptionModelFallbackOverride, "whisper-1");
   assert.equal(queuedTurns[0]?.transcriptionPlanReasonOverride, "openai_realtime_per_user_transcription");
   assert.equal(queuedTurns[0]?.usedFallbackModelForTranscriptOverride, true);
-  assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_fallback_pcm"), false);
+  assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"), false);
 });
 
 test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown", () => {
@@ -1515,6 +1510,7 @@ test("requestStatus reports offline and online states", async () => {
 test("getReplyOutputLockState locks output while music playback is active", () => {
   const { manager } = createManager();
   const session = createSession({
+    playerState: "playing",
     music: {
       active: true
     }
@@ -1524,6 +1520,21 @@ test("getReplyOutputLockState locks output while music playback is active", () =
   assert.equal(lockState.locked, true);
   assert.equal(lockState.reason, "music_playback_active");
   assert.equal(lockState.musicActive, true);
+});
+
+test("getReplyOutputLockState does not treat stale music.active as audible playback", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    playerState: "idle",
+    music: {
+      active: true
+    }
+  });
+
+  const lockState = manager.getReplyOutputLockState(session);
+  assert.equal(lockState.locked, false);
+  assert.equal(lockState.reason, "idle");
+  assert.equal(lockState.musicActive, false);
 });
 
 test("maybeHandleMusicTextStopRequest routes stop phrase from text chat", async () => {

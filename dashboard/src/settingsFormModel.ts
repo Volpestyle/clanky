@@ -32,6 +32,11 @@ export const OPENAI_TRANSCRIPTION_MODEL_OPTIONS = Object.freeze([
   "gpt-4o-transcribe-latest"
 ]);
 
+export const OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS = Object.freeze([
+  "realtime_bridge",
+  "file_wav"
+]);
+
 export const GEMINI_REALTIME_MODEL_OPTIONS = Object.freeze([
   "gemini-2.5-flash-native-audio-preview-12-2025",
   "gemini-2.5-flash"
@@ -185,6 +190,8 @@ export function settingsToForm(settings) {
     voiceXaiRegion: settings?.voice?.xai?.region ?? defaultVoiceXai.region,
     voiceOpenAiRealtimeModel: settings?.voice?.openaiRealtime?.model ?? defaultVoiceOpenAiRealtime.model,
     voiceOpenAiRealtimeVoice: settings?.voice?.openaiRealtime?.voice ?? defaultVoiceOpenAiRealtime.voice,
+    voiceOpenAiRealtimeTranscriptionMethod:
+      settings?.voice?.openaiRealtime?.transcriptionMethod ?? defaultVoiceOpenAiRealtime.transcriptionMethod,
     voiceOpenAiRealtimeInputTranscriptionModel:
       settings?.voice?.openaiRealtime?.inputTranscriptionModel ?? defaultVoiceOpenAiRealtime.inputTranscriptionModel,
     voiceOpenAiRealtimeUsePerUserAsrBridge:
@@ -413,6 +420,7 @@ export function formToSettingsPatch(form) {
         voice: String(form.voiceOpenAiRealtimeVoice || "").trim(),
         inputAudioFormat: "pcm16",
         outputAudioFormat: "pcm16",
+        transcriptionMethod: String(form.voiceOpenAiRealtimeTranscriptionMethod || "").trim().toLowerCase(),
         inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
         usePerUserAsrBridge: Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge)
       },

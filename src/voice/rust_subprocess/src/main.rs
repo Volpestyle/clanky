@@ -385,6 +385,42 @@ async fn run_asr_client(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn music_output_not_drained_while_pcm_queue_has_chunks() {
+        let (music_pcm_tx, music_pcm_rx) = crossbeam::bounded::<Vec<i16>>(4);
+        let audio_send_state = Arc::new(Mutex::new(Some(AudioSendState::new().expect("audio state"))));
+
+        music_pcm_tx.send(vec![0; 960]).expect("queue chunk");
+
+        assert!(!is_music_output_drained(&music_pcm_rx, &audio_send_state));
+    }
+
+    #[test]
+    fn music_output_not_drained_while_mixer_buffer_has_music() {
+        let (_music_pcm_tx, music_pcm_rx) = crossbeam::bounded::<Vec<i16>>(4);
+        let audio_send_state = Arc::new(Mutex::new(Some(AudioSendState::new().expect("audio state"))));
+        {
+            let mut guard = audio_send_state.lock();
+            let state = guard.as_mut().expect("state");
+            state.push_music_pcm(vec![0; 960]);
+        }
+
+        assert!(!is_music_output_drained(&music_pcm_rx, &audio_send_state));
+    }
+
+    #[test]
+    fn music_output_drained_when_queue_and_mixer_are_empty() {
+        let (_music_pcm_tx, music_pcm_rx) = crossbeam::bounded::<Vec<i16>>(4);
+        let audio_send_state = Arc::new(Mutex::new(Some(AudioSendState::new().expect("audio state"))));
+
+        assert!(is_music_output_drained(&music_pcm_rx, &audio_send_state));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // PCM resampling
 // ---------------------------------------------------------------------------
@@ -689,6 +725,18 @@ fn clear_audio_send_buffer(audio_send_state: &Arc<Mutex<Option<AudioSendState>>>
 
 fn drain_music_pcm_queue(music_pcm_rx: &crossbeam::Receiver<Vec<i16>>) {
     while music_pcm_rx.try_recv().is_ok() {}
+}
+
+fn is_music_output_drained(
+    music_pcm_rx: &crossbeam::Receiver<Vec<i16>>,
+    audio_send_state: &Arc<Mutex<Option<AudioSendState>>>,
+) -> bool {
+    if !music_pcm_rx.is_empty() {
+        return false;
+    }
+
+    let guard = audio_send_state.lock();
+    guard.as_ref().map_or(true, |state| state.music_buffer.is_empty())
 }
 
 fn emit_playback_armed(reason: &str, audio_send_state: &Arc<Mutex<Option<AudioSendState>>>) {
@@ -1000,6 +1048,7 @@ async fn main() {
     let mut pending_music_waiting_for_drain = false;
     let mut pending_music_drain_started_at: Option<time::Instant> = None;
     let mut pending_music_stop = false; // Set when fade-out starts before actual stop
+    let mut music_finishing = false;
 
     // Opus decoder for inbound audio (stereo 48kHz)
     let mut opus_decoder =
@@ -1208,6 +1257,7 @@ async fn main() {
                         pending_music_last_audio_at = None;
                         pending_music_waiting_for_drain = false;
                         pending_music_drain_started_at = None;
+                        music_finishing = false;
                         drain_music_pcm_queue(&music_pcm_rx);
                         info!(
                             "music_play queued pending start url={} (waiting for announcement drain)",
@@ -1239,6 +1289,7 @@ async fn main() {
                             pending_music_last_audio_at = None;
                             pending_music_waiting_for_drain = false;
                             pending_music_drain_started_at = None;
+                            music_finishing = false;
                             drain_music_pcm_queue(&music_pcm_rx);
                             clear_audio_send_buffer(&audio_send_state);
                             send_msg(&OutMsg::PlayerState {
@@ -1256,6 +1307,7 @@ async fn main() {
                         pending_music_last_audio_at = None;
                         pending_music_waiting_for_drain = false;
                         pending_music_drain_started_at = None;
+                        music_finishing = false;
                         if music_player.is_some() {
                             music_paused = true;
                             music_active = false;
@@ -1274,6 +1326,7 @@ async fn main() {
                         pending_music_last_audio_at = None;
                         pending_music_waiting_for_drain = false;
                         pending_music_drain_started_at = None;
+                        music_finishing = false;
 
                         if music_player.is_some() {
                             music_paused = false;
@@ -1532,14 +1585,16 @@ async fn main() {
                             mp.stop();
                         }
                         music_player = None;
-                        music_active = false;
                         music_paused = false;
-                        drain_music_pcm_queue(&music_pcm_rx);
-                        send_msg(&OutMsg::PlayerState {
-                            status: "idle".into(),
-                        });
-                        send_msg(&OutMsg::MusicIdle);
-                        emit_playback_armed("music_idle", &audio_send_state);
+                        music_finishing = music_active;
+                        if !music_finishing {
+                            active_music_url = None;
+                            send_msg(&OutMsg::PlayerState {
+                                status: "idle".into(),
+                            });
+                            send_msg(&OutMsg::MusicIdle);
+                            emit_playback_armed("music_idle", &audio_send_state);
+                        }
                     }
                     MusicEvent::Error(message) => {
                         if let Some(ref mut mp) = music_player {
@@ -1548,6 +1603,8 @@ async fn main() {
                         music_player = None;
                         music_active = false;
                         music_paused = false;
+                        music_finishing = false;
+                        active_music_url = None;
                         drain_music_pcm_queue(&music_pcm_rx);
                         send_msg(&OutMsg::MusicError { message });
                         send_msg(&OutMsg::PlayerState {
@@ -1679,6 +1736,7 @@ async fn main() {
                         pending_music_last_audio_at = None;
                         pending_music_waiting_for_drain = false;
                         pending_music_drain_started_at = None;
+                        music_finishing = false;
                         active_music_url = Some(url.clone());
                         music_active = true;
                         music_paused = false;
@@ -1707,6 +1765,18 @@ async fn main() {
                             state.push_music_pcm(chunk);
                         }
                     }
+                }
+
+                if music_finishing && is_music_output_drained(&music_pcm_rx, &audio_send_state) {
+                    music_finishing = false;
+                    music_active = false;
+                    music_paused = false;
+                    active_music_url = None;
+                    send_msg(&OutMsg::PlayerState {
+                        status: "idle".into(),
+                    });
+                    send_msg(&OutMsg::MusicIdle);
+                    emit_playback_armed("music_idle", &audio_send_state);
                 }
 
                 // Check if a gain fade completed; emit event and handle pending stop.
@@ -1740,6 +1810,7 @@ async fn main() {
                         music_player = None;
                         music_active = false;
                         music_paused = false;
+                        music_finishing = false;
                         active_music_url = None;
                         pending_music_url = None;
                         pending_music_received_at = None;

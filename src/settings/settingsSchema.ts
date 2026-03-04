@@ -155,6 +155,7 @@ export const DEFAULT_SETTINGS = {
       voice: "marin",
       inputAudioFormat: "pcm16",
       outputAudioFormat: "pcm16",
+      transcriptionMethod: "realtime_bridge",
       inputTranscriptionModel: "gpt-4o-transcribe",
       usePerUserAsrBridge: true
     },

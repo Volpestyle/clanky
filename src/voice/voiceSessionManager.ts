@@ -1182,8 +1182,18 @@ export class VoiceSessionManager {
   }
 
   isMusicPlaybackActive(session) {
+    if (this.isMusicPlaybackAudible(session)) {
+      return true;
+    }
     const music = this.ensureSessionMusicState(session);
     return Boolean(music?.active);
+  }
+
+  isMusicPlaybackAudible(session) {
+    const playerState = String(session?.playerState || "")
+      .trim()
+      .toLowerCase();
+    return playerState === "playing";
   }
 
 
@@ -2989,6 +2999,18 @@ export class VoiceSessionManager {
 
     const onPlayerState = (status) => {
       session.playerState = status;
+      const music = this.ensureSessionMusicState(session);
+      if (music) {
+        if (status === "playing") {
+          music.active = true;
+          music.stoppedAt = 0;
+        } else if (status === "paused" || status === "idle") {
+          music.active = false;
+          if (status === "idle") {
+            music.stoppedAt = Date.now();
+          }
+        }
+      }
       if (status === "playing") {
         session.lastActivityAt = Date.now();
       }
@@ -3490,7 +3512,7 @@ export class VoiceSessionManager {
         session._realtimeUnduckTimer = null;
       }
       session._realtimeMusicDucked = false;
-      if (this.isMusicPlaybackActive(session) && this.musicPlayer?.isDucked?.()) {
+      if (this.isMusicPlaybackAudible(session) && this.musicPlayer?.isDucked?.()) {
         this.musicPlayer?.unduck(300);
       }
     }
@@ -3659,7 +3681,7 @@ export class VoiceSessionManager {
       // directly and bypasses that path.
       if (
         !session._realtimeMusicDucked &&
-        this.isMusicPlaybackActive(session) &&
+        this.isMusicPlaybackAudible(session) &&
         !this.musicPlayer?.isPaused?.()
       ) {
         if (session._realtimeUnduckTimer) {
@@ -3931,7 +3953,7 @@ export class VoiceSessionManager {
             session._realtimeUnduckTimer = null;
             if (session._realtimeMusicDucked) {
               session._realtimeMusicDucked = false;
-              if (this.isMusicPlaybackActive(session) && this.musicPlayer?.isDucked?.()) {
+              if (this.isMusicPlaybackAudible(session) && this.musicPlayer?.isDucked?.()) {
                 this.musicPlayer?.unduck(300);
               }
             }
@@ -4114,7 +4136,7 @@ export class VoiceSessionManager {
     }
 
     const streamBufferedBytes = 0; // Subprocess manages its own stream buffer
-    const musicActive = this.isMusicPlaybackActive(session);
+    const musicActive = this.isMusicPlaybackAudible(session);
     const botTurnOpen = Boolean(session.botTurnOpen);
     const pendingResponse = Boolean(session.pendingResponse && typeof session.pendingResponse === "object");
     const openAiActiveResponse = this.isRealtimeResponseActive(session);
@@ -5546,7 +5568,7 @@ export class VoiceSessionManager {
     }
 
     // Duck music while the bot speaks, unduck after.
-    const musicWasPlaying = this.isMusicPlaybackActive(session) && !this.musicPlayer?.isPaused?.();
+    const musicWasPlaying = this.isMusicPlaybackAudible(session) && !this.musicPlayer?.isPaused?.();
     if (musicWasPlaying) {
       await this.musicPlayer?.duck(300);
     }
@@ -5653,7 +5675,7 @@ export class VoiceSessionManager {
         }
       }
     } finally {
-      if (musicWasPlaying && this.isMusicPlaybackActive(session) && this.musicPlayer?.isDucked?.()) {
+      if (musicWasPlaying && this.isMusicPlaybackAudible(session) && this.musicPlayer?.isDucked?.()) {
         this.musicPlayer?.unduck(300);
       }
     }
@@ -5814,10 +5836,18 @@ export class VoiceSessionManager {
     if (!providerSupports(session.mode || "", "perUserAsr")) return false;
     if (!this.appConfig?.openaiApiKey) return false;
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    const transcriptionMethod = String(
+      resolvedSettings?.voice?.openaiRealtime?.transcriptionMethod || "realtime_bridge"
+    )
+      .trim()
+      .toLowerCase();
     if (this.resolveRealtimeReplyStrategy({
       session,
       settings: resolvedSettings
     }) !== "brain") {
+      return false;
+    }
+    if (transcriptionMethod !== "realtime_bridge") {
       return false;
     }
     if (resolvedSettings?.voice?.openaiRealtime?.usePerUserAsrBridge === false) {
@@ -5841,10 +5871,18 @@ export class VoiceSessionManager {
     if (!providerSupports(session.mode || "", "sharedAsr")) return false;
     if (!this.appConfig?.openaiApiKey) return false;
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    const transcriptionMethod = String(
+      resolvedSettings?.voice?.openaiRealtime?.transcriptionMethod || "realtime_bridge"
+    )
+      .trim()
+      .toLowerCase();
     if (this.resolveRealtimeReplyStrategy({
       session,
       settings: resolvedSettings
     }) !== "brain") {
+      return false;
+    }
+    if (transcriptionMethod !== "realtime_bridge") {
       return false;
     }
     if (resolvedSettings?.voice?.openaiRealtime?.usePerUserAsrBridge === true) {
@@ -5864,10 +5902,15 @@ export class VoiceSessionManager {
     } | null;
     settings?: Record<string, unknown> | null;
   } = {}) {
-    return (
-      this.shouldUsePerUserTranscription({ session, settings }) ||
-      this.shouldUseSharedTranscription({ session, settings })
-    );
+    if (!session || session.ending) return false;
+    if (!isRealtimeMode(session.mode || "")) return false;
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    const replyPath = String(resolvedSettings?.voice?.replyPath || "")
+      .trim()
+      .toLowerCase();
+    if (replyPath === "bridge") return true;
+    if (replyPath === "brain" || replyPath === "native") return false;
+    return false;
   }
 
   getOpenAiSharedAsrState(session) {
@@ -8313,49 +8356,24 @@ export class VoiceSessionManager {
     const normalizedPcmBuffer = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
     const transcript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
     if (!transcript) {
-      const sampleRateHz = Number(session.realtimeInputSampleRateHz) || 24000;
-      const minFallbackBytes = Math.max(
-        2,
-        Math.ceil(((VOICE_TURN_MIN_ASR_CLIP_MS / 1000) * sampleRateHz * 2))
+      const clipDurationMs = this.estimatePcm16MonoDurationMs(
+        normalizedPcmBuffer.length,
+        Number(session.realtimeInputSampleRateHz) || 24000
       );
-      const shouldDropFallbackPcm = normalizedPcmBuffer.length < minFallbackBytes;
-      if (shouldDropFallbackPcm) {
-        this.store.logAction({
-          kind: "voice_runtime",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId,
-          content: "openai_realtime_asr_bridge_fallback_dropped",
-          metadata: {
-            sessionId: session.id,
-            captureReason: String(captureReason || "stream_end"),
-            source: String(source || "unknown"),
-            pcmBytes: normalizedPcmBuffer.length,
-            minFallbackBytes,
-            asrResultAvailable: Boolean(asrResult)
-          }
-        });
-        return false;
-      }
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId,
-        content: "openai_realtime_asr_bridge_fallback_pcm",
+        content: "openai_realtime_asr_bridge_empty_dropped",
         metadata: {
           sessionId: session.id,
           captureReason: String(captureReason || "stream_end"),
           source: String(source || "unknown"),
+          pcmBytes: normalizedPcmBuffer.length,
+          clipDurationMs,
           asrResultAvailable: Boolean(asrResult)
         }
-      });
-      this.queueRealtimeTurn({
-        session,
-        userId,
-        pcmBuffer: normalizedPcmBuffer,
-        captureReason,
-        finalizedAt
       });
       return false;
     }
@@ -9963,7 +9981,7 @@ export class VoiceSessionManager {
     const directAddressed =
       !addressedToOtherParticipant &&
       directAddressConfidence >= directAddressThreshold;
-    const musicActive = this.isMusicPlaybackActive(session);
+    const musicActive = this.isMusicPlaybackAudible(session);
     const replyEagerness = musicActive
       ? 0
       : clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);

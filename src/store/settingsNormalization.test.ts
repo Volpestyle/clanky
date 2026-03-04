@@ -161,6 +161,7 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.replyDecisionLlm.prompts, undefined);
   assert.equal(normalized.voice.openaiRealtime.inputAudioFormat, "pcm16");
   assert.equal(normalized.voice.openaiRealtime.outputAudioFormat, "pcm16");
+  assert.equal(normalized.voice.openaiRealtime.transcriptionMethod, "realtime_bridge");
   assert.equal(normalized.voice.openaiRealtime.usePerUserAsrBridge, true);
   assert.equal(normalized.voice.geminiRealtime.apiBaseUrl, "https://generativelanguage.googleapis.com");
   assert.equal(normalized.voice.geminiRealtime.inputSampleRateHz, 8000);
@@ -197,6 +198,18 @@ test("normalizeSettings respects explicit false for openaiRealtime usePerUserAsr
   });
 
   assert.equal(normalized.voice.openaiRealtime.usePerUserAsrBridge, false);
+});
+
+test("normalizeSettings preserves explicit file_wav transcription mode", () => {
+  const normalized = normalizeSettings({
+    voice: {
+      openaiRealtime: {
+        transcriptionMethod: "file_wav"
+      }
+    }
+  });
+
+  assert.equal(normalized.voice.openaiRealtime.transcriptionMethod, "file_wav");
 });
 
 test("normalizeSettings handles memoryLlm defaults and discovery source fallbacks", () => {

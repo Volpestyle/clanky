@@ -442,6 +442,40 @@ test("reply decider blocks unaddressed turns when eagerness is disabled", async 
   assert.equal(decision.reason, "eagerness_disabled_without_direct_address");
 });
 
+test("reply decider blocks unaddressed turns while subprocess playback is still audible", async () => {
+  const manager = createManager({
+    participantCount: 1
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      playerState: "playing",
+      music: {
+        active: false
+      },
+      botTurnOpen: false
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "blah blah blah i'm gonna build a building"
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "bot_turn_open");
+  assert.equal(decision.outputLockReason, "music_playback_active");
+});
+
 test("reply decider lets brain decide unaddressed turns in stt_pipeline mode", async () => {
   const manager = createManager();
   const decision = await manager.evaluateVoiceReplyDecision({
@@ -3032,7 +3066,7 @@ test("runRealtimeTurn forwards per-user ASR transcript turns into OpenAI room-br
     settingsSnapshot: baseSettings({
       voice: {
         replyEagerness: 60,
-        realtimeReplyStrategy: "brain",
+        replyPath: "bridge",
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -3101,7 +3135,7 @@ test("runRealtimeTurn forwards shared ASR transcript turns into OpenAI room-brai
     settingsSnapshot: baseSettings({
       voice: {
         replyEagerness: 60,
-        realtimeReplyStrategy: "brain",
+        replyPath: "bridge",
         openaiRealtime: {
           usePerUserAsrBridge: false
         },
@@ -3158,6 +3192,15 @@ test("shouldUsePerUserTranscription follows strategy and setting", () => {
       }
     }
   });
+  const fileWavSettings = baseSettings({
+    voice: {
+      realtimeReplyStrategy: "brain",
+      openaiRealtime: {
+        transcriptionMethod: "file_wav",
+        usePerUserAsrBridge: true
+      }
+    }
+  });
 
   const session = {
     id: "session-openai-bridge-mode-test",
@@ -3177,6 +3220,10 @@ test("shouldUsePerUserTranscription follows strategy and setting", () => {
   );
   assert.equal(
     manager.shouldUsePerUserTranscription({ session, settings: nativeSettings }),
+    false
+  );
+  assert.equal(
+    manager.shouldUsePerUserTranscription({ session, settings: fileWavSettings }),
     false
   );
 });
@@ -3209,6 +3256,15 @@ test("shouldUseSharedTranscription follows strategy and setting", () => {
       }
     }
   });
+  const fileWavSettings = baseSettings({
+    voice: {
+      realtimeReplyStrategy: "brain",
+      openaiRealtime: {
+        transcriptionMethod: "file_wav",
+        usePerUserAsrBridge: false
+      }
+    }
+  });
 
   const session = {
     id: "session-openai-shared-bridge-mode-test",
@@ -3228,6 +3284,59 @@ test("shouldUseSharedTranscription follows strategy and setting", () => {
   );
   assert.equal(
     manager.shouldUseSharedTranscription({ session, settings: nativeSettings }),
+    false
+  );
+  assert.equal(
+    manager.shouldUseSharedTranscription({ session, settings: fileWavSettings }),
+    false
+  );
+});
+
+test("shouldUseRealtimeTranscriptBridge follows replyPath, not transcription method", () => {
+  const manager = createManager();
+  const session = {
+    id: "session-openai-transcript-bridge-mode-test",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false
+  };
+
+  const bridgeRealtimeSettings = baseSettings({
+    voice: {
+      replyPath: "bridge",
+      openaiRealtime: {
+        transcriptionMethod: "realtime_bridge"
+      }
+    }
+  });
+  const bridgeFileWavSettings = baseSettings({
+    voice: {
+      replyPath: "bridge",
+      openaiRealtime: {
+        transcriptionMethod: "file_wav"
+      }
+    }
+  });
+  const fullBrainSettings = baseSettings({
+    voice: {
+      replyPath: "brain",
+      openaiRealtime: {
+        transcriptionMethod: "realtime_bridge"
+      }
+    }
+  });
+
+  assert.equal(
+    manager.shouldUseRealtimeTranscriptBridge({ session, settings: bridgeRealtimeSettings }),
+    true
+  );
+  assert.equal(
+    manager.shouldUseRealtimeTranscriptBridge({ session, settings: bridgeFileWavSettings }),
+    true
+  );
+  assert.equal(
+    manager.shouldUseRealtimeTranscriptBridge({ session, settings: fullBrainSettings }),
     false
   );
 });

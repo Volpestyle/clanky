@@ -398,6 +398,7 @@ export function normalizeSettings(raw) {
     voice?: string;
     inputAudioFormat?: string;
     outputAudioFormat?: string;
+    transcriptionMethod?: string;
     inputTranscriptionModel?: string;
     usePerUserAsrBridge?: boolean;
   };
@@ -726,6 +727,17 @@ export function normalizeSettings(raw) {
   merged.voice.openaiRealtime.outputAudioFormat = normalizeOpenAiRealtimeAudioFormat(
     merged.voice?.openaiRealtime?.outputAudioFormat || defaultVoiceOpenAiRealtime.outputAudioFormat || "pcm16"
   );
+  const openAiRealtimeTranscriptionMethod = String(
+    merged.voice?.openaiRealtime?.transcriptionMethod ||
+      defaultVoiceOpenAiRealtime.transcriptionMethod ||
+      "realtime_bridge"
+  )
+    .trim()
+    .toLowerCase();
+  merged.voice.openaiRealtime.transcriptionMethod =
+    openAiRealtimeTranscriptionMethod === "file_wav"
+      ? "file_wav"
+      : "realtime_bridge";
   merged.voice.openaiRealtime.inputTranscriptionModel = String(
     normalizeOpenAiRealtimeTranscriptionModel(
       merged.voice?.openaiRealtime?.inputTranscriptionModel ||

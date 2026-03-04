@@ -560,11 +560,18 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       // Enable per-user or shared ASR when the provider supports it and
       // the OpenAI API key is available.
       if (manager.appConfig?.openaiApiKey && isRealtimeMode(runtimeMode)) {
-        const usePerUser = providerSupports(runtimeMode, "perUserAsr") &&
+        const transcriptionMethod = String(
+          openAiRealtimeSettings.transcriptionMethod || "realtime_bridge"
+        )
+          .trim()
+          .toLowerCase();
+        const usesRealtimeTranscriptionBridge = transcriptionMethod !== "file_wav";
+        const usePerUser = usesRealtimeTranscriptionBridge &&
+          providerSupports(runtimeMode, "perUserAsr") &&
           openAiRealtimeSettings.usePerUserAsrBridge !== false;
         const useShared = providerSupports(runtimeMode, "sharedAsr") && !usePerUser;
         perUserAsrEnabled = usePerUser;
-        sharedAsrEnabled = useShared;
+        sharedAsrEnabled = usesRealtimeTranscriptionBridge && useShared;
         openAiPerUserAsrModel = normalizeOpenAiRealtimeTranscriptionModel(
           openAiRealtimeSettings.inputTranscriptionModel,
           OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL

@@ -58,6 +58,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.voiceStreamWatchBrainContextMaxEntries, 8);
   assert.equal(form.voiceAsrLanguageMode, "auto");
   assert.equal(form.voiceAsrLanguageHint, "en");
+  assert.equal(form.voiceOpenAiRealtimeTranscriptionMethod, "realtime_bridge");
   assert.equal(form.voiceOpenAiRealtimeUsePerUserAsrBridge, true);
   assert.equal(
     form.voiceStreamWatchBrainContextPrompt,
@@ -88,6 +89,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.voiceStreamWatchBrainContextPrompt = "Use stream snapshots as context for replies.";
   form.voiceAsrLanguageMode = "fixed";
   form.voiceAsrLanguageHint = "en-us";
+  form.voiceOpenAiRealtimeTranscriptionMethod = "file_wav";
   form.voiceOpenAiRealtimeUsePerUserAsrBridge = false;
 
   const patch = formToSettingsPatch(form);
@@ -111,6 +113,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.voice.streamWatch.brainContextMinIntervalSeconds, 6);
   assert.equal(patch.voice.streamWatch.brainContextMaxEntries, 5);
   assert.equal(patch.voice.streamWatch.brainContextPrompt, "Use stream snapshots as context for replies.");
+  assert.equal(patch.voice.openaiRealtime.transcriptionMethod, "file_wav");
   assert.equal(patch.voice.openaiRealtime.usePerUserAsrBridge, false);
   assert.equal(patch.voice.asrLanguageMode, "fixed");
   assert.equal(patch.voice.asrLanguageHint, "en-us");
