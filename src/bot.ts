@@ -3212,6 +3212,12 @@ export class ClankerBot {
     );
     await this.maybeRunInitiativeCycle({ startup: true });
     await this.maybeRunAutomationCycle();
+
+    // Catch up on any missed reflections from past days
+    const startupSettings = this.store.getSettings();
+    if (startupSettings?.memory?.enabled && startupSettings?.memory?.reflection?.enabled) {
+      await this.memory.runDailyReflection(startupSettings);
+    }
   }
 
   async maybeRunReflection() {
