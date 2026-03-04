@@ -273,9 +273,9 @@
 .tt-tool-gif .tt-tool-label    { color: #fbbf24; }
 .tt-tool-video .tt-tool-label  { color: #22d3ee; }
 
-/* ---- WEB SEARCH RESULTS ---- */
+/* ---- TOOL RESULT LISTS (shared) ---- */
 
-.tt-search-results {
+.tt-tool-results {
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -285,7 +285,7 @@
   overflow: hidden;
 }
 
-.tt-search-result {
+.tt-tool-result-row {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -295,26 +295,58 @@
   transition: background var(--transition);
 }
 
-.tt-search-result:hover {
-  background: rgba(96, 165, 250, 0.08);
-}
-
-.tt-search-result-domain {
+.tt-tool-result-badge {
   font-size: 0.66rem;
   font-weight: 600;
-  color: #60a5fa;
   white-space: nowrap;
   flex-shrink: 0;
-  min-width: 80px;
+  min-width: 56px;
 }
 
-.tt-search-result-title {
+.tt-tool-result-text {
   font-size: 0.68rem;
   color: var(--ink-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.tt-tool-result-text strong {
+  color: var(--ink-1);
+  font-weight: 600;
+}
+
+.tt-tool-result-link {
+  text-decoration: none;
+  transition: color var(--transition);
+}
+
+.tt-tool-result-link:hover {
+  color: var(--ink-1);
+}
+
+.tt-tool-result-meta {
+  margin-left: auto;
+  font-size: 0.62rem;
+  color: var(--ink-3);
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-family: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+}
+
+/* ---- Tool result color variants ---- */
+
+.tt-tool-results-web .tt-tool-result-row:hover { background: rgba(96, 165, 250, 0.08); }
+.tt-tool-results-web .tt-tool-result-badge { color: #60a5fa; }
+
+.tt-tool-results-memory .tt-tool-result-row:hover { background: rgba(168, 130, 255, 0.08); }
+.tt-tool-results-memory .tt-tool-result-badge { color: #a882ff; }
+
+.tt-tool-results-image .tt-tool-result-row:hover { background: rgba(244, 114, 182, 0.08); }
+.tt-tool-results-image .tt-tool-result-badge { color: #f472b6; }
+
+.tt-tool-results-video .tt-tool-result-row:hover { background: rgba(34, 211, 238, 0.08); }
+.tt-tool-results-video .tt-tool-result-badge { color: #22d3ee; }
 
 /* ---- PERFORMANCE ---- */
 

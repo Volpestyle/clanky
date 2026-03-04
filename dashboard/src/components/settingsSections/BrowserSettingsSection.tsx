@@ -19,7 +19,7 @@ export function BrowserSettingsSection({
             checked={form.browserEnabled}
             onChange={set("browserEnabled")}
           />
-          Enable browser agent for voice tool calls
+          Enable browser agent
         </label>
       </div>
 

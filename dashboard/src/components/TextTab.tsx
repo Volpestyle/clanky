@@ -162,6 +162,15 @@ function ToolCallsSection({ metadata }: { metadata: Record<string, unknown> }) {
   const webSearchResults: { title: string; url: string; domain: string }[] =
     Array.isArray(webSearch.results) ? webSearch.results : [];
 
+  const memoryResults: { fact: string; fact_type: string; subject: string; confidence: number }[] =
+    Array.isArray(memory.results) ? memory.results : [];
+
+  const imageLookupResults: { filename: string; authorName: string; url: string; matchReason: string }[] =
+    Array.isArray(imageLookup.results) ? imageLookup.results : [];
+
+  const videoResults: { title: string; url: string; provider: string; channel: string }[] =
+    Array.isArray(video.videos) ? video.videos : [];
+
   if (webSearch.used) {
     const query = String(webSearch.query || "");
     const results = num(webSearch.resultCount);
@@ -177,9 +186,13 @@ function ToolCallsSection({ metadata }: { metadata: Record<string, unknown> }) {
 
   if (memory.saved || memory.toolCallsUsed) {
     const parts: string[] = [];
-    if (memory.toolCallsUsed) parts.push("lookup used");
+    if (memory.toolCallsUsed) {
+      const query = String(memory.query || "");
+      parts.push(query ? `query: "${query.slice(0, 40)}"` : "lookup used");
+      if (memoryResults.length) parts.push(`${memoryResults.length} fact${memoryResults.length !== 1 ? "s" : ""}`);
+    }
     if (memory.saved) parts.push("fact saved");
-    tools.push({ label: "Memory", cls: "tt-tool-memory", details: parts.join(", ") });
+    tools.push({ label: "Memory", cls: "tt-tool-memory", details: parts.join(" \u2014 ") });
   } else if (llm.usedMemoryLookupFollowup) {
     tools.push({ label: "Memory Followup", cls: "tt-tool-memory", details: "followup lookup used" });
   }
@@ -222,12 +235,59 @@ function ToolCallsSection({ metadata }: { metadata: Record<string, unknown> }) {
         ))}
       </div>
       {webSearchResults.length > 0 && (
-        <div className="tt-search-results">
+        <div className="tt-tool-results tt-tool-results-web">
           {webSearchResults.map((r, i) => (
-            <a key={i} className="tt-search-result" href={r.url} target="_blank" rel="noopener noreferrer">
-              <span className="tt-search-result-domain">{r.domain}</span>
-              <span className="tt-search-result-title">{r.title}</span>
+            <a key={i} className="tt-tool-result-row" href={r.url} target="_blank" rel="noopener noreferrer">
+              <span className="tt-tool-result-badge">{r.domain}</span>
+              <span className="tt-tool-result-text">{r.title}</span>
             </a>
+          ))}
+        </div>
+      )}
+      {memoryResults.length > 0 && (
+        <div className="tt-tool-results tt-tool-results-memory">
+          {memoryResults.map((r, i) => (
+            <div key={i} className="tt-tool-result-row">
+              <span className="tt-tool-result-badge">{r.fact_type || "fact"}</span>
+              <span className="tt-tool-result-text">
+                {r.subject ? <strong>{r.subject}:</strong> : null} {r.fact}
+              </span>
+              {r.confidence != null && (
+                <span className="tt-tool-result-meta">{Number(r.confidence).toFixed(2)}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {imageLookupResults.length > 0 && (
+        <div className="tt-tool-results tt-tool-results-image">
+          {imageLookupResults.map((r, i) => (
+            <div key={i} className="tt-tool-result-row">
+              <span className="tt-tool-result-badge">{r.authorName || "unknown"}</span>
+              <span className="tt-tool-result-text">{r.filename || "(unnamed)"}</span>
+              {r.matchReason && (
+                <span className="tt-tool-result-meta">{r.matchReason}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {videoResults.length > 0 && (
+        <div className="tt-tool-results tt-tool-results-video">
+          {videoResults.map((r, i) => (
+            <div key={i} className="tt-tool-result-row">
+              <span className="tt-tool-result-badge">{r.provider || "video"}</span>
+              {r.url ? (
+                <a className="tt-tool-result-text tt-tool-result-link" href={r.url} target="_blank" rel="noopener noreferrer">
+                  {r.title || "(untitled)"}
+                </a>
+              ) : (
+                <span className="tt-tool-result-text">{r.title || "(untitled)"}</span>
+              )}
+              {r.channel && (
+                <span className="tt-tool-result-meta">{r.channel}</span>
+              )}
+            </div>
           ))}
         </div>
       )}
