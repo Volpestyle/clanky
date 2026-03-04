@@ -6,6 +6,8 @@ import {
   Routes
 } from "discord.js";
 import { clankCommand } from "./commands/clankCommand.ts";
+import { browseCommand } from "./commands/browseCommand.ts";
+import { runBrowseAgent } from "./agents/browseAgent.ts";
 import { musicCommands } from "./voice/musicCommands.ts";
 import {
   buildAutomationPrompt,
@@ -95,6 +97,7 @@ import {
   pickInitiativeChannel
 } from "./bot/initiativeSchedule.ts";
 import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
+import type { BrowserManager } from "./services/BrowserManager.ts";
 import {
   resolveOperationalChannel,
   sendToChannel
@@ -211,10 +214,11 @@ export class ClankerBot {
   reconnectAttempts;
   replyQueues;
   replyQueueWorkers;
-  replyQueuedMessageIds;
-  screenShareSessionManager;
-  client;
-  voiceSessionManager;
+  replyQueuedMessageIds: Set<string>;
+  screenShareSessionManager: any;
+  client: any;
+  voiceSessionManager: VoiceSessionManager;
+  browserManager: BrowserManager | null;
 
   constructor({ appConfig, store, llm, memory, discovery, search, gifs, video, browserManager = null }) {
     this.appConfig = appConfig;
@@ -285,7 +289,7 @@ export class ClankerBot {
 
       try {
         const rest = new REST({ version: "10" }).setToken(this.appConfig.discordToken);
-        await rest.put(Routes.applicationCommands(this.client.user?.id || ""), { body: [...musicCommands, clankCommand] });
+        await rest.put(Routes.applicationCommands(this.client.user?.id || ""), { body: [...musicCommands, clankCommand, browseCommand] });
         console.log("[slashCommands] Registered slash commands");
       } catch (error) {
         console.error("[musicCommands] Failed to register slash commands:", error);
@@ -364,6 +368,66 @@ export class ClankerBot {
         } catch (error) {
           console.error("[slashCommands] Error handling clank command:", error);
           await interaction.reply({ content: "An error occurred processing your command.", ephemeral: true });
+        }
+      } else if (commandName === "browse") {
+        await interaction.deferReply();
+        const task = interaction.options.getString("task", true);
+
+        if (!this.browserManager) {
+          await interaction.editReply("Browser agent is currently unavailable on this server.");
+          return;
+        }
+
+        try {
+          const settings = this.store.getSettings();
+          const maxSteps = Math.max(1, Math.min(30, Number(settings?.browser?.maxStepsPerTask) || 15));
+          const stepTimeoutMs = Math.max(5000, Math.min(120000, Number(settings?.browser?.stepTimeoutMs) || 30000));
+
+          const result = await runBrowseAgent({
+            llm: this.llm,
+            browserManager: this.browserManager,
+            store: this.store,
+            sessionKey: interaction.guildId || interaction.channelId || interaction.id,
+            instruction: task,
+            maxSteps,
+            stepTimeoutMs,
+            trace: {
+              guildId: interaction.guildId,
+              channelId: interaction.channelId,
+              userId: interaction.user.id,
+              source: "slash_command_browse"
+            }
+          });
+
+          this.store.logAction({
+            kind: "browser_browse_call",
+            guildId: interaction.guildId,
+            channelId: interaction.channelId,
+            userId: interaction.user.id,
+            content: task.slice(0, 200),
+            metadata: {
+              steps: result.steps,
+              hitStepLimit: result.hitStepLimit,
+              totalCostUsd: result.totalCostUsd,
+              source: "slash_command_browse"
+            },
+            usdCost: result.totalCostUsd
+          });
+
+          let responseText = result.text;
+          if (result.hitStepLimit) {
+            responseText += "\n\n*(Note: I reached my maximum step limit before finishing the task completely.)*";
+          }
+
+          if (responseText.length > 2000) {
+            await interaction.editReply(responseText.substring(0, 1997) + "...");
+          } else {
+            await interaction.editReply(responseText);
+          }
+        } catch (error) {
+          console.error("[slashCommands] Error handling browse command:", error);
+          const message = error instanceof Error ? error.message : String(error);
+          await interaction.editReply(`An error occurred while browsing: ${message}`);
         }
       }
     });
