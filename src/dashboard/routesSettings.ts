@@ -151,4 +151,15 @@ export function attachSettingsRoutes(app: any, deps: any) {
       res.json([]);
     }
   });
+
+  app.get("/api/guilds/:guildId/channels", (req, res) => {
+    try {
+      const guildId = String(req.params?.guildId || "").trim();
+      if (!guildId) return res.status(400).json({ error: "guildId is required" });
+      const channels = bot.getGuildChannels(guildId);
+      return res.json(channels);
+    } catch {
+      return res.json([]);
+    }
+  });
 }

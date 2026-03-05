@@ -277,7 +277,7 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
   });
 }, 15_000);
 
-test("text thought loop can select an allowed public channel when reply channel list is empty", async () => {
+test("text thought loop selects from explicit reply channel list", async () => {
   await withTempStore(async (store) => {
     const guildId = "guild-thought";
     const channelId = "chan-thought";
@@ -293,7 +293,7 @@ test("text thought loop can select an allowed public channel when reply channel 
         allowReplies: true,
         allowUnsolicitedReplies: true,
         allowReactions: true,
-        replyChannelIds: [],
+        replyChannelIds: [channelId],
         allowedChannelIds: [channelId],
         blockedChannelIds: [],
         blockedUserIds: [],

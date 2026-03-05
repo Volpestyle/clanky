@@ -1,5 +1,9 @@
 # Voice Interruption Policy
 
+> **Scope:** Voice barge-in rules and noise rejection gates — can this user interrupt right now, and should this audio reach the brain.
+> Operator-facing activity paths and setting map: [`clanker-activity.md`](clanker-activity.md)
+> Voice pipeline stages, providers, and per-stage settings: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
+
 Controls whether users can barge-in (interrupt) the bot while it is speaking.
 
 ## Policy Object
@@ -75,13 +79,32 @@ manager.requestRealtimePromptUtterance({
 });
 ```
 
-## Barge-In Flow
+## Why We Handle Barge-In Ourselves
 
-When a user starts speaking during bot audio (`voiceSessionManager.ts:6254`):
+OpenAI's Realtime API has built-in interruption handling — when VAD detects user speech during a response, it cancels the response and auto-truncates unplayed audio. But this only works when audio flows directly through OpenAI's channels:
 
-1. `isUserAllowedToInterruptReply()` checks the active policy.
-2. If allowed → bot audio is cancelled, user speech is transcribed.
-3. If blocked → user speech is ignored, bot continues speaking.
+- **WebRTC**: Server manages the output audio buffer and knows playback position — auto-truncates on interruption.
+- **WebSocket with direct audio**: Server VAD sees `input_audio_buffer` speech, cancels the in-progress response.
+
+Our bot uses neither path. Audio I/O goes through Discord, not OpenAI:
+
+1. **Input**: User audio arrives as Opus packets from Discord's voice gateway → decoded/resampled locally → transcribed by ASR sessions → forwarded as **text** to the brain via `conversation.item.create`.
+2. **Output**: Brain generates audio → streamed to the Rust subprocess → encoded to Opus → sent to Discord voice.
+
+OpenAI's VAD never "hears" the user — it only receives text items. It has no way to detect that someone is talking over the bot's audio output, because that audio is playing in Discord, not through an OpenAI media channel.
+
+So we implement barge-in manually via `interruptBotSpeechForBargeIn()`:
+
+1. Discord voice activity (subprocess VAD) detects a user speaking while `botTurnOpen = true`.
+2. `isUserAllowedToInterruptReply()` checks the active interruption policy.
+3. If allowed:
+   - Sends `response.cancel` to the Realtime API to stop generation.
+   - Sends `conversation.item.truncate` so the API's conversation history only contains what was actually spoken.
+   - Calls `resetBotAudioPlayback()` to stop the subprocess audio player.
+   - Sets `botTurnOpen = false` to release the output lock.
+   - Unducks music volume if it was reduced for bot speech.
+   - Queues a deferred `interrupted_reply` action so the bot can retry after processing the user's turn.
+4. If blocked → user speech is ignored, bot continues speaking.
 
 ---
 

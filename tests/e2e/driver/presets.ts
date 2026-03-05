@@ -6,8 +6,7 @@ type E2EPipelinePreset = {
 
 const SHARED_TEST_DEFAULTS: Record<string, unknown> = {
   activity: {
-    replyLevelReplyChannels: 50,
-    replyLevelOtherChannels: 50
+    replyEagerness: 50
   },
   voice: {
     replyEagerness: 50,

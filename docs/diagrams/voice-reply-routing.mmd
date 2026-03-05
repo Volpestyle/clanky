@@ -25,7 +25,7 @@ flowchart TD
     BRAIN_CHECK -- "YES\nusePerUserAsrBridge: true\nOR usePerUserAsrBridge: false\n(shared ASR active)" --> BRIDGE
     BRAIN_CHECK -- "NO\n(no transcript bridge)" --> FULL_BRAIN
 
-    subgraph BRIDGE["Transcript Bridge Path ⭐ YOU ARE HERE"]
+    subgraph BRIDGE["Transcript Bridge Path"]
         B1[forwardRealtimeTextTurnToBrain]
         B2["Send labeled text to realtime provider:\n(speakerName): transcript"]
         B3["Realtime model generates\naudio reply from text"]

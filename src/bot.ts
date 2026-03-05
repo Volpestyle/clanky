@@ -708,6 +708,20 @@ export class ClankerBot {
     return [...this.client.guilds.cache.values()].map((g) => ({ id: g.id, name: g.name }));
   }
 
+  getGuildChannels(guildId: string) {
+    const guild = this.client.guilds.cache.get(guildId);
+    if (!guild) return [];
+    const results: { id: string; name: string; type: string; category: string | null }[] = [];
+    for (const channel of guild.channels.cache.values()) {
+      if (!channel.isTextBased?.() && !channel.isVoiceBased?.()) continue;
+      const type = channel.isVoiceBased?.() ? "voice" : "text";
+      const category = (channel as { parent?: { name?: string } | null }).parent?.name ?? null;
+      results.push({ id: channel.id, name: channel.name, type, category });
+    }
+    results.sort((a, b) => (a.category ?? "").localeCompare(b.category ?? "") || a.name.localeCompare(b.name));
+    return results;
+  }
+
   resolveDashboardVoiceJoinRequester(guild, requesterUserId = "") {
     if (!guild?.voiceStates?.cache) {
       return {
@@ -3656,11 +3670,7 @@ export class ClankerBot {
     const replyChannelIds = Array.isArray(settings?.permissions?.replyChannelIds)
       ? settings.permissions.replyChannelIds
       : [];
-    if (!replyChannelIds.length) {
-      const channel = this.client.channels.cache.get(id);
-      if (!channel) return true;
-      return this.isNonPrivateReplyEligibleChannel(channel);
-    }
+    if (!replyChannelIds.length) return false;
     return replyChannelIds.includes(id);
   }
 
@@ -4376,19 +4386,11 @@ export class ClankerBot {
   }
 
   async pickTextThoughtLoopCandidate(settings) {
-    const replyChannelIds = [...new Set(
+    const candidateIds = [...new Set(
       (Array.isArray(settings?.permissions?.replyChannelIds) ? settings.permissions.replyChannelIds : [])
         .map((value) => String(value || "").trim())
         .filter(Boolean)
     )];
-    const candidateIds = replyChannelIds.length
-      ? replyChannelIds
-      : [...new Set(
-        this.client.channels.cache
-          .filter((channel) => this.isNonPrivateReplyEligibleChannel(channel))
-          .map((channel) => String(channel.id || "").trim())
-          .filter(Boolean)
-      )];
     if (!candidateIds.length) return null;
 
     const shuffled = candidateIds

@@ -142,8 +142,7 @@ function buildIncomingMessage({
 function applyBaselineSettings(store, channelId) {
   store.patchSettings({
     activity: {
-      replyLevelReplyChannels: 65,
-      replyLevelOtherChannels: 10,
+      replyEagerness: 65,
       reactionLevel: 20,
       minSecondsBetweenMessages: 5,
       replyCoalesceWindowSeconds: 0,
@@ -657,7 +656,7 @@ test("reply channels do not immediately evaluate cold non-addressed turns withou
   });
 });
 
-test("empty reply channel list defaults reply-channel behavior to all non-private allowed channels", async () => {
+test("empty reply channel list disables reply-channel behavior everywhere (explicit-only)", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-default-reply";
     applyBaselineSettings(store, channelId);
@@ -692,7 +691,7 @@ test("empty reply channel list defaults reply-channel behavior to all non-privat
     bot.client.channels.cache.set(privateThread.id, privateThread);
 
     const settings = store.getSettings();
-    assert.equal(bot.isReplyChannel(settings, publicChannel.id), true);
+    assert.equal(bot.isReplyChannel(settings, publicChannel.id), false);
     assert.equal(bot.isReplyChannel(settings, privateThread.id), false);
   });
 });
@@ -1138,7 +1137,7 @@ test("reply follow-up regeneration can add history images when model requests im
     applyBaselineSettings(store, channelId);
     store.patchSettings({
       activity: {
-        replyLevelOtherChannels: 100
+        replyEagerness: 100
       }
     });
 

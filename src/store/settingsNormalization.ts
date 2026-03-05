@@ -144,13 +144,8 @@ export function normalizeSettings(raw) {
     8_000
   );
 
-  const replyLevelReplyChannels = clamp(
-    Number(merged.activity?.replyLevelReplyChannels ?? DEFAULT_SETTINGS.activity.replyLevelReplyChannels) || 0,
-    0,
-    100
-  );
-  const replyLevelOtherChannels = clamp(
-    Number(merged.activity?.replyLevelOtherChannels ?? DEFAULT_SETTINGS.activity.replyLevelOtherChannels) || 0,
+  const replyEagerness = clamp(
+    Number(merged.activity?.replyEagerness ?? merged.activity?.replyLevelReplyChannels ?? DEFAULT_SETTINGS.activity.replyEagerness) || 0,
     0,
     100
   );
@@ -181,8 +176,7 @@ export function normalizeSettings(raw) {
     20
   );
   merged.activity = {
-    replyLevelReplyChannels,
-    replyLevelOtherChannels,
+    replyEagerness,
     reactionLevel,
     minSecondsBetweenMessages,
     replyCoalesceWindowSeconds,

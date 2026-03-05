@@ -6,8 +6,7 @@ import { resolveE2EPipelineOverrides } from "./presets.ts";
 
 type E2ESettingsSnapshot = {
   activity?: {
-    replyLevelReplyChannels?: number;
-    replyLevelOtherChannels?: number;
+    replyEagerness?: number;
   };
   voice?: {
     replyEagerness?: number;
@@ -142,8 +141,7 @@ export async function beginTemporaryE2EEagerness(voiceEagerness: number, textEag
   const text = textEagerness ?? voiceEagerness;
   return beginTemporaryE2ESettings({
     activity: {
-      replyLevelReplyChannels: text,
-      replyLevelOtherChannels: text
+      replyEagerness: text
     },
     voice: {
       replyEagerness: voiceEagerness,

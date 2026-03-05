@@ -1,6 +1,7 @@
 import { DEFAULT_SETTINGS, PROVIDER_MODEL_FALLBACKS } from "../../src/settings/settingsSchema.ts";
 import { normalizeLlmProvider } from "../../src/llm/llmHelpers.ts";
 import {
+  formatCommaList,
   formatLineList,
   normalizeBoundedStringList,
   parseUniqueLineList,
@@ -82,7 +83,7 @@ export function settingsToForm(settings) {
   const selectedVoiceProvider = settings?.voice?.voiceProvider ?? defaultVoice.voiceProvider;
   return {
     botName: settings?.botName ?? defaults.botName,
-    botNameAliases: formatLineList(settings?.botNameAliases ?? defaults.botNameAliases),
+    botNameAliases: formatCommaList(settings?.botNameAliases ?? defaults.botNameAliases),
     personaFlavor: settings?.persona?.flavor ?? defaults.persona.flavor,
     personaHardLimits: formatLineList(settings?.persona?.hardLimits),
     promptCapabilityHonestyLine: settings?.prompt?.capabilityHonestyLine ?? defaultPrompt.capabilityHonestyLine,
@@ -100,10 +101,8 @@ export function settingsToForm(settings) {
     promptVoiceLookupBusySystemPrompt:
       settings?.prompt?.voiceLookupBusySystemPrompt ?? defaultPrompt.voiceLookupBusySystemPrompt,
     promptMediaPromptCraftGuidance: settings?.prompt?.mediaPromptCraftGuidance ?? defaultPrompt.mediaPromptCraftGuidance,
-    replyLevelReplyChannels:
-      activity.replyLevelReplyChannels ?? defaultActivity.replyLevelReplyChannels,
-    replyLevelOtherChannels:
-      activity.replyLevelOtherChannels ?? defaultActivity.replyLevelOtherChannels,
+    replyEagerness:
+      activity.replyEagerness ?? activity.replyLevelReplyChannels ?? defaultActivity.replyEagerness,
     reactionLevel: activity.reactionLevel ?? defaultActivity.reactionLevel,
     minGap: activity.minSecondsBetweenMessages ?? defaultActivity.minSecondsBetweenMessages,
     allowReplies: settings?.permissions?.allowReplies ?? defaultPermissions.allowReplies,
@@ -417,8 +416,7 @@ export function formToSettingsPatch(form) {
       mediaPromptCraftGuidance: String(form.promptMediaPromptCraftGuidance || "").trim()
     },
     activity: {
-      replyLevelReplyChannels: Number(form.replyLevelReplyChannels),
-      replyLevelOtherChannels: Number(form.replyLevelOtherChannels),
+      replyEagerness: Number(form.replyEagerness),
       reactionLevel: Number(form.reactionLevel),
       minSecondsBetweenMessages: Number(form.minGap)
     },
@@ -683,7 +681,7 @@ export function formToSettingsPatch(form) {
 }
 
 export function sanitizeAliasListInput(value) {
-  return formatLineList(parseUniqueList(value));
+  return formatCommaList(parseUniqueList(value));
 }
 
 const LIST_FORM_KEYS: ReadonlySet<string> = new Set([

@@ -1,5 +1,9 @@
 # Clanker Activity Model
 
+> **Scope:** All activity paths (text + voice) — which path fired and which slider controls it.
+> Barge-in and noise rejection: [`voice-interruption-policy.md`](voice-interruption-policy.md)
+> Voice pipeline stages, providers, and per-stage settings: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
+
 This document explains how Clanker decides when to speak in text channels and voice sessions, which settings control each path, how tool calling fits into the runtime, and where to look in code and the dashboard when behavior needs to change.
 
 It is the source of truth for the current activity model:

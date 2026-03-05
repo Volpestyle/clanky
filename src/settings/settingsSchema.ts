@@ -72,8 +72,7 @@ export const DEFAULT_SETTINGS = {
     mediaPromptCraftGuidance: "Write media prompts as vivid scene descriptions, not abstract concepts. Include: subject/action, visual style or medium (photo, illustration, 3D render, pixel art, etc.), lighting/mood, camera angle or framing, and color palette when relevant. Be specific: 'a golden retriever leaping through autumn leaves, warm backlit sunset, low angle, film grain' beats 'a dog outside'. For video prompts, describe the motion arc: what starts, what changes, and how it ends. Never put text, words, or UI elements in media prompts."
   },
   activity: {
-    replyLevelReplyChannels: 50,
-    replyLevelOtherChannels: 10,
+    replyEagerness: 50,
     reactionLevel: 30,
     minSecondsBetweenMessages: 5,
     replyCoalesceWindowSeconds: 6,

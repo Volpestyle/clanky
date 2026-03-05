@@ -52,11 +52,7 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
   const reactionEagerness = clamp(Number(settings.activity?.reactionLevel) || 0, 0, 100);
   const isReplyChannel = bot.isReplyChannel(settings, message.channelId);
   const replyEagerness = clamp(
-    Number(
-      isReplyChannel
-        ? settings.activity?.replyLevelReplyChannels
-        : settings.activity?.replyLevelOtherChannels
-    ) || 0,
+    Number(settings.activity?.replyEagerness) || 0,
     0,
     100
   );

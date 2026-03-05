@@ -1198,30 +1198,6 @@ export function VoiceModeSettingsSection({
             </>
           )}
 
-          {/* ── Access Control ── */}
-          <label htmlFor="voice-allowed-channels">Allowed voice channel IDs (optional)</label>
-          <textarea
-            id="voice-allowed-channels"
-            rows={3}
-            value={form.voiceAllowedChannelIds}
-            onChange={set("voiceAllowedChannelIds")}
-          />
-
-          <label htmlFor="voice-blocked-channels">Blocked voice channel IDs</label>
-          <textarea
-            id="voice-blocked-channels"
-            rows={3}
-            value={form.voiceBlockedChannelIds}
-            onChange={set("voiceBlockedChannelIds")}
-          />
-
-          <label htmlFor="voice-blocked-users">Blocked voice user IDs</label>
-          <textarea
-            id="voice-blocked-users"
-            rows={3}
-            value={form.voiceBlockedUserIds}
-            onChange={set("voiceBlockedUserIds")}
-          />
       </Collapse>
     </SettingsSection>
   );

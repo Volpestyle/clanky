@@ -1,0 +1,95 @@
+flowchart TD
+    subgraph Input["Stage 1: Audio Input"]
+        DISC[Discord Voice Channel]
+        OPUS[Opus Decode → PCM 48k→24k]
+        DISC --> OPUS
+    end
+
+    OPUS --> PATH{Reply Path?}
+
+    PATH -- native --> NATIVE_IN[Forward raw PCM\nto Realtime API]
+    PATH -- "bridge / brain" --> ASR_STAGE
+
+    subgraph ASR_STAGE["Stage 2: ASR Transcription"]
+        direction TB
+        ASR_PER["Per-Speaker ASR Bridge\n(bridge path)"]
+        ASR_SHARED["Shared ASR\n(brain path)"]
+        ASR_LP["Logprobs\nConfidence"]
+    end
+
+    subgraph GATES["Stage 3: Noise Rejection"]
+        direction TB
+        G1["Silence Gate\n(RMS/peak/ratio)"]
+        G2["Short Clip Filter\n(<100ms)"]
+        G3["Low Signal Fallback\n(<10 chars / trivial)"]
+        G4["ASR Logprob Gate\n(mean < -1.0)"]
+        G5["Bridge Fallback\nHallucination Guard"]
+        G6["Idle Hallucination\nGuard"]
+        G1 --> G2 --> G3 --> G4 --> G5 --> G6
+    end
+
+    ASR_STAGE --> GATES
+
+    GATES --> ADMISSION
+
+    subgraph ADMISSION["Stage 4: Reply Admission"]
+        direction TB
+        DET["Deterministic Gates\n(output lock, command-only,\neagerness, direct address)"]
+        CLASS["LLM Classifier\n(bridge path, YES/NO)"]
+        DET --> CLASS
+    end
+
+    ADMISSION -- deny --> DROP[Drop Turn]
+    ADMISSION -- allow --> BRAIN_STAGE
+    NATIVE_IN --> NATIVE_BRAIN
+
+    subgraph NATIVE_BRAIN["Stage 5a: Native Brain"]
+        NB["Realtime API handles\nreasoning + audio\nend-to-end"]
+    end
+
+    subgraph BRAIN_STAGE["Stage 5b: Brain"]
+        direction TB
+        BRIDGE_BRAIN["Bridge: Send labeled text\nto Realtime API brain"]
+        TEXT_BRAIN["Brain: Text LLM generates\nresponse (generationLlm)"]
+    end
+
+    subgraph TOOLS["Tool Runtime"]
+        direction TB
+        T_MEM["memory_search / write"]
+        T_MUS["music_* controls"]
+        T_WEB["web_search / browse"]
+        T_MCP["MCP tools"]
+    end
+
+    BRAIN_STAGE <--> TOOLS
+
+    BRAIN_STAGE --> OUTPUT
+    NATIVE_BRAIN --> OUTPUT
+
+    subgraph OUTPUT["Stage 6: Voice Output"]
+        direction TB
+        RT_AUDIO["Realtime Audio Stream\n(native + bridge)"]
+        TTS["OpenAI TTS API Fallback\n(brain path)"]
+        ENCODE["PCM 24k→48k → Opus\n→ Discord"]
+        RT_AUDIO --> ENCODE
+        TTS --> ENCODE
+    end
+
+    subgraph THOUGHT["Thought Engine (Parallel)"]
+        direction TB
+        SILENCE["Silence Timer\n(minSilenceSeconds)"]
+        PROB["Eagerness Roll\n(0-100%)"]
+        TGEN["Generate Candidate\n(thoughtEngine LLM)"]
+        TDEC["Decision Gate\n(allow/reject + memory)"]
+        SILENCE --> PROB --> TGEN --> TDEC
+        TDEC -- allow --> OUTPUT
+    end
+
+    classDef stage fill:#1a3a4a,stroke:#3a7a9a,stroke-width:2px
+    classDef gate fill:#333355,stroke:#6666aa
+    classDef drop fill:#4a2d2d,stroke:#8c4a4a
+    classDef thought fill:#3a3a1a,stroke:#7a7a3a,stroke-width:2px,stroke-dasharray: 5 5
+
+    class Input,ASR_STAGE,GATES,ADMISSION,BRAIN_STAGE,NATIVE_BRAIN,OUTPUT stage
+    class THOUGHT thought
+    class DROP drop

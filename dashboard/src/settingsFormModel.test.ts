@@ -32,7 +32,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   });
 
   assert.equal(form.botName, "clanker conk");
-  assert.equal(form.botNameAliases, "clank\nconk\nclank");
+  assert.equal(form.botNameAliases, "clank, conk, clank");
   assert.equal(form.personaFlavor, "chaotic but kind");
   assert.equal(form.personaHardLimits, "no hate\nno hate\nkeep it fun");
   assert.equal(form.provider, "openai");
@@ -187,7 +187,7 @@ test("formToSettingsPatch parses bot aliases from comma-separated single-line in
 test("sanitizeAliasListInput removes duplicate aliases and normalizes separators", () => {
   assert.equal(
     sanitizeAliasListInput("clank, conk\nclank,clanky\nconk"),
-    "clank\nconk\nclanky"
+    "clank, conk, clanky"
   );
 });
 
@@ -376,7 +376,7 @@ test("settingsToFormPreserving updates value when server content actually change
 
   // server returns different values (e.g. another admin added an alias)
   const preserved = settingsToFormPreserving({ botNameAliases: ["clank", "conk", "clanky"] }, currentForm);
-  assert.equal(preserved.botNameAliases, "clank\nconk\nclanky");
+  assert.equal(preserved.botNameAliases, "clank, conk, clanky");
 });
 
 test("settingsToFormPreserving preserves newline format when user prefers it", () => {

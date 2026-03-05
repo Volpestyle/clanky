@@ -8,10 +8,10 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
       <label htmlFor="bot-name">Bot display name</label>
       <input id="bot-name" type="text" value={form.botName} onChange={set("botName")} />
 
-      <label htmlFor="bot-name-aliases">Bot aliases/nicknames (comma or newline separated)</label>
+      <label htmlFor="bot-name-aliases">Bot aliases/nicknames (comma separated)</label>
       <textarea
         id="bot-name-aliases"
-        rows={3}
+        rows={4}
         value={form.botNameAliases}
         onChange={set("botNameAliases")}
         onBlur={onSanitizeBotNameAliases}
@@ -33,32 +33,18 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
         onChange={set("personaHardLimits")}
       />
 
-      <label htmlFor="reply-level-reply-channels">
-        Unsolicited reply eagerness (reply channels): <strong>{form.replyLevelReplyChannels}%</strong>
+      <label htmlFor="reply-eagerness">
+        Unsolicited reply eagerness: <strong>{form.replyEagerness}%</strong>
       </label>
       <input
-        id="reply-level-reply-channels"
+        id="reply-eagerness"
         type="range"
         min="0"
         max="100"
         step="1"
-        value={form.replyLevelReplyChannels}
-        onChange={set("replyLevelReplyChannels")}
-        style={rangeStyle(form.replyLevelReplyChannels)}
-      />
-
-      <label htmlFor="reply-level-other-channels">
-        Unsolicited reply eagerness (other channels): <strong>{form.replyLevelOtherChannels}%</strong>
-      </label>
-      <input
-        id="reply-level-other-channels"
-        type="range"
-        min="0"
-        max="100"
-        step="1"
-        value={form.replyLevelOtherChannels}
-        onChange={set("replyLevelOtherChannels")}
-        style={rangeStyle(form.replyLevelOtherChannels)}
+        value={form.replyEagerness}
+        onChange={set("replyEagerness")}
+        style={rangeStyle(form.replyEagerness)}
       />
 
       <label htmlFor="text-thought-loop-eagerness">

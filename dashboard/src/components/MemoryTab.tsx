@@ -63,21 +63,21 @@ export default function MemoryTab({ markdown, onRefresh, notify }: Props) {
           Simulator
         </button>
       </div>
-      {subTab === "snapshot" && (
+      <div style={{ display: subTab === "snapshot" ? undefined : "none" }}>
         <MemorySnapshot markdown={markdown} onRefresh={onRefresh} />
-      )}
-      {subTab === "directives" && (
+      </div>
+      <div style={{ display: subTab === "directives" ? undefined : "none" }}>
         <MemoryAdaptiveDirectives guilds={guilds} />
-      )}
-      {subTab === "reflections" && (
+      </div>
+      <div style={{ display: subTab === "reflections" ? undefined : "none" }}>
         <MemoryReflections guilds={guilds} />
-      )}
-      {subTab === "search" && (
+      </div>
+      <div style={{ display: subTab === "search" ? undefined : "none" }}>
         <MemorySearch guilds={guilds} notify={notify} />
-      )}
-      {subTab === "simulator" && (
+      </div>
+      <div style={{ display: subTab === "simulator" ? undefined : "none" }}>
         <MemorySimulator guilds={guilds} notify={notify} />
-      )}
+      </div>
     </section>
   );
 }

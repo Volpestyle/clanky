@@ -1,53 +1,42 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
+import { ChannelChecklist } from "../ChannelChecklist";
 
 export function ChannelsPermissionsSettingsSection({ id, form, set }) {
   return (
     <SettingsSection id={id} title="Channels & Permissions">
-      <label htmlFor="reply-channels">Reply/lurk channel IDs (text, optional)</label>
-      <textarea
-        id="reply-channels"
-        rows={2}
+      <ChannelChecklist
+        label="Reply channels (text)"
+        hint="Channels where unsolicited replies are allowed. Leave empty to disable unsolicited replies everywhere."
         value={form.replyChannels}
         onChange={set("replyChannels")}
+        channelType="text"
       />
-      <p className="settings-hint">
-        Comma or newline separated. Leave blank to allow reply/lurk behavior in all non-private text channels that are otherwise allowed.
-      </p>
 
-      <label htmlFor="discovery-channels">Discovery post channel IDs (text, explicit only)</label>
-      <textarea
-        id="discovery-channels"
-        rows={2}
+      <ChannelChecklist
+        label="Discovery post channels (text)"
+        hint="Channels where discovery posts are allowed. Leave empty to disable discovery posting."
         value={form.discoveryChannels}
         onChange={set("discoveryChannels")}
+        channelType="text"
       />
-      <p className="settings-hint">
-        Comma or newline separated. Leave blank to disable discovery posting in all channels.
-      </p>
 
       <h4>Text channels & users</h4>
-      <label htmlFor="allowed-channels">Allowed text channel IDs (optional)</label>
-      <textarea
-        id="allowed-channels"
-        rows={3}
+      <ChannelChecklist
+        label="Allowed text channels"
+        hint="Leave empty to allow all text channels unless blocked below."
         value={form.allowedChannels}
         onChange={set("allowedChannels")}
+        channelType="text"
       />
-      <p className="settings-hint">
-        Comma or newline separated. Leave blank to allow all text channels unless blocked below.
-      </p>
 
-      <label htmlFor="blocked-channels">Blocked text channel IDs (optional)</label>
-      <textarea
-        id="blocked-channels"
-        rows={3}
+      <ChannelChecklist
+        label="Blocked text channels"
+        hint="These text channels are always excluded, even if they are otherwise allowed."
         value={form.blockedChannels}
         onChange={set("blockedChannels")}
+        channelType="text"
       />
-      <p className="settings-hint">
-        Comma or newline separated. These text channels are always excluded, even if they are otherwise allowed.
-      </p>
 
       <label htmlFor="blocked-users">Blocked user IDs (text, optional)</label>
       <textarea
@@ -61,27 +50,21 @@ export function ChannelsPermissionsSettingsSection({ id, form, set }) {
       </p>
 
       <h4>Voice channels & users</h4>
-      <label htmlFor="voice-allowed-channels">Allowed voice channel IDs (optional)</label>
-      <textarea
-        id="voice-allowed-channels"
-        rows={3}
+      <ChannelChecklist
+        label="Allowed voice channels"
+        hint="Leave empty to allow voice mode in all voice channels unless blocked below."
         value={form.voiceAllowedChannelIds}
         onChange={set("voiceAllowedChannelIds")}
+        channelType="voice"
       />
-      <p className="settings-hint">
-        Comma or newline separated. Leave blank to allow voice mode in all voice channels unless blocked below.
-      </p>
 
-      <label htmlFor="voice-blocked-channels">Blocked voice channel IDs (optional)</label>
-      <textarea
-        id="voice-blocked-channels"
-        rows={3}
+      <ChannelChecklist
+        label="Blocked voice channels"
+        hint="These voice channels are always excluded, even if voice mode is otherwise allowed."
         value={form.voiceBlockedChannelIds}
         onChange={set("voiceBlockedChannelIds")}
+        channelType="voice"
       />
-      <p className="settings-hint">
-        Comma or newline separated. These voice channels are always excluded, even if voice mode is otherwise allowed.
-      </p>
 
       <label htmlFor="voice-blocked-users">Blocked voice user IDs (optional)</label>
       <textarea

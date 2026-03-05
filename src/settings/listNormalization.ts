@@ -51,3 +51,8 @@ export function formatLineList(items: unknown) {
   if (!Array.isArray(items)) return "";
   return items.map((item) => String(item || "").trim()).filter(Boolean).join("\n");
 }
+
+export function formatCommaList(items: unknown) {
+  if (!Array.isArray(items)) return "";
+  return items.map((item) => String(item || "").trim()).filter(Boolean).join(", ");
+}
