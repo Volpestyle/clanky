@@ -443,8 +443,13 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
       : null;
   const includeAdaptiveDirectives = Boolean(adaptiveDirectivesSettings?.enabled);
   const includeBrowser = Boolean(settings?.browser?.enabled);
+  const codeAgentRuntimeAvailable = Boolean(
+    (manager.createCodeAgentSession && manager.subAgentSessions) ||
+    manager.runModelRequestedCodeTask
+  );
   const includeCodeAgent = Boolean(
-    (settings?.codeAgent as Record<string, unknown> | undefined)?.enabled
+    (settings?.codeAgent as Record<string, unknown> | undefined)?.enabled &&
+    codeAgentRuntimeAvailable
   );
   const filteredLocalTools = localTools.filter((entry) => {
     if (entry.name === "web_search" && !includeWebSearch) return false;

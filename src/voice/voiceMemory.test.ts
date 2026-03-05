@@ -147,6 +147,33 @@ test("web_search included when settings.webSearch.enabled is true", () => {
   assert.ok(names.includes("web_search"), "web_search should be included");
 });
 
+test("code_task excluded when code agent is enabled but runtime hooks are unavailable", () => {
+  const { manager } = createManager();
+  const tools = manager.resolveVoiceRealtimeToolDescriptors({
+    session: null,
+    settings: {
+      codeAgent: { enabled: true }
+    }
+  });
+
+  const names = tools.map((t: { name: string }) => t.name);
+  assert.ok(!names.includes("code_task"), "code_task should be excluded without executable hooks");
+});
+
+test("code_task included when code agent is enabled and one-shot runtime hook is available", () => {
+  const { manager } = createManager();
+  manager.runModelRequestedCodeTask = async () => ({ text: "ok" });
+  const tools = manager.resolveVoiceRealtimeToolDescriptors({
+    session: null,
+    settings: {
+      codeAgent: { enabled: true }
+    }
+  });
+
+  const names = tools.map((t: { name: string }) => t.name);
+  assert.ok(names.includes("code_task"), "code_task should be included when runtime hook is available");
+});
+
 // --- Fix 2: Short transcript passes through normalizeVoiceText ---
 
 test("normalizeVoiceText passes through short text", () => {

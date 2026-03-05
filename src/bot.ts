@@ -468,6 +468,13 @@ export class ClankerBot {
           await interaction.editReply("Too many code agent tasks are already running. Try again shortly.");
           return;
         }
+        const maxPerHour = Number(settings?.codeAgent?.maxTasksPerHour) || 10;
+        const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+        const usedThisHour = this.store.countActionsSince("code_agent_call", since1h);
+        if (usedThisHour >= maxPerHour) {
+          await interaction.editReply("Code agent is currently blocked by hourly limits. Try again shortly.");
+          return;
+        }
 
         try {
           const {

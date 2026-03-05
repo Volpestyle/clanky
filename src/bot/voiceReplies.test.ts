@@ -780,6 +780,55 @@ test("generateVoiceTurnReply uses text llm provider/model when voice generation 
   assert.equal(generationPayloads[0]?.settings?.llm?.model, "sonnet");
 });
 
+test("generateVoiceTurnReply does not advertise code_task when runtime cannot execute code tasks", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "all good"
+    })
+  });
+
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      codeAgent: {
+        enabled: true
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "can you patch that file?"
+  });
+
+  const firstTools = Array.isArray(generationPayloads[0]?.tools) ? generationPayloads[0].tools : [];
+  const toolNames = firstTools.map((entry) => String(entry?.name || ""));
+  assert.ok(!toolNames.includes("code_task"), "code_task should be excluded when runtime hook is missing");
+});
+
+test("generateVoiceTurnReply advertises code_task when runtime can execute code tasks", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "all good"
+    })
+  });
+  bot.runModelRequestedCodeTask = async () => ({ text: "done", isError: false, costUsd: 0, error: null });
+
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      codeAgent: {
+        enabled: true
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "can you patch that file?"
+  });
+
+  const firstTools = Array.isArray(generationPayloads[0]?.tools) ? generationPayloads[0].tools : [];
+  const toolNames = firstTools.map((entry) => String(entry?.name || ""));
+  assert.ok(toolNames.includes("code_task"), "code_task should be included when runtime hook exists");
+});
+
 test("generateVoiceTurnReply runs web lookup follow-up with start/complete callbacks via tool calls", async () => {
   const { bot, webSearchCalls, getGenerationCalls } = createVoiceBot({
     generationSequence: [

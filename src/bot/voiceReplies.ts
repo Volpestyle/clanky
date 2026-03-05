@@ -605,6 +605,7 @@ export async function generateVoiceTurnReply(runtime, {
 
     const codeAgentSettings =
       (settings as Record<string, unknown>)?.codeAgent as Record<string, unknown> | undefined;
+    const codeAgentRuntimeAvailable = typeof runtime.runModelRequestedCodeTask === "function";
     const voiceReplyTools = buildReplyToolSet(settings as Record<string, unknown>, {
       webSearchAvailable: allowWebSearchToolCall && webSearchAvailableNow,
       browserBrowseAvailable: allowBrowserBrowseToolCall && browserBrowseAvailableNow,
@@ -612,7 +613,7 @@ export async function generateVoiceTurnReply(runtime, {
       adaptiveDirectivesAvailable: allowAdaptiveDirectiveToolCalls,
       imageLookupAvailable: false,
       openArticleAvailable: allowOpenArticleToolCall && openArticleCandidates.length > 0,
-      codeAgentAvailable: Boolean(codeAgentSettings?.enabled)
+      codeAgentAvailable: Boolean(codeAgentSettings?.enabled && codeAgentRuntimeAvailable)
     });
 
     const voiceToolRuntime: ReplyToolRuntime = {
