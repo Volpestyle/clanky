@@ -2482,18 +2482,6 @@ export class VoiceSessionManager {
 
     const onPlayerState = (status) => {
       session.playerState = status;
-      const music = this.ensureSessionMusicState(session);
-      if (music) {
-        if (status === "playing") {
-          music.active = true;
-          music.stoppedAt = 0;
-        } else if (status === "paused" || status === "idle") {
-          music.active = false;
-          if (status === "idle") {
-            music.stoppedAt = Date.now();
-          }
-        }
-      }
       if (status === "playing") {
         session.lastActivityAt = Date.now();
       }
@@ -2552,9 +2540,18 @@ export class VoiceSessionManager {
       });
     };
 
+    const onMusicError = () => {
+      const music = this.ensureSessionMusicState(session);
+      if (music) {
+        music.active = false;
+        music.stoppedAt = Date.now();
+      }
+    };
+
     session.subprocessClient.on("playerState", onPlayerState);
     session.subprocessClient.on("playbackArmed", onPlaybackArmed);
     session.subprocessClient.on("musicIdle", onMusicIdle);
+    session.subprocessClient.on("musicError", onMusicError);
     session.subprocessClient.on("error", onError);
 
     // Replay sticky playback-armed state in case the subprocess emitted it
@@ -2568,6 +2565,7 @@ export class VoiceSessionManager {
       session.subprocessClient?.off("playerState", onPlayerState);
       session.subprocessClient?.off("playbackArmed", onPlaybackArmed);
       session.subprocessClient?.off("musicIdle", onMusicIdle);
+      session.subprocessClient?.off("musicError", onMusicError);
       session.subprocessClient?.off("error", onError);
     });
   }
@@ -6099,6 +6097,12 @@ export class VoiceSessionManager {
             sessionId: session.id
           }
         });
+        remainingChunks.push(entry);
+        while (chunks.length > 0) {
+          const pendingEntry = chunks.shift();
+          if (!pendingEntry || !Buffer.isBuffer(pendingEntry.chunk)) continue;
+          remainingChunks.push(pendingEntry);
+        }
         break;
       }
     }
@@ -6314,10 +6318,11 @@ export class VoiceSessionManager {
   }) {
     if (!session || session.ending) return null;
     if (!this.shouldUsePerUserTranscription({ session, settings })) return null;
-    const asrState = await this.ensureOpenAiAsrSessionConnected({
+    const normalizedUserId = String(userId || "").trim();
+    if (!normalizedUserId) return null;
+    const asrState = this.getOrCreateOpenAiAsrSessionState({
       session,
-      settings,
-      userId
+      userId: normalizedUserId
     });
     if (!asrState || asrState.closing) return null;
     const trackedUtterance = asrState.utterance && typeof asrState.utterance === "object"
@@ -6325,6 +6330,19 @@ export class VoiceSessionManager {
       : null;
     const trackedUtteranceId = Math.max(0, Number(trackedUtterance?.id || 0));
     if (!trackedUtteranceId) return null;
+    asrState.isCommittingAsr = true;
+    asrState.committingUtteranceId = trackedUtteranceId;
+
+    const connectedAsrState = await this.ensureOpenAiAsrSessionConnected({
+      session,
+      settings,
+      userId: normalizedUserId
+    });
+    if (!connectedAsrState || connectedAsrState !== asrState || asrState.closing) {
+      asrState.isCommittingAsr = false;
+      asrState.committingUtteranceId = 0;
+      return null;
+    }
     const transcriptionModelPrimary = normalizeOpenAiRealtimeTranscriptionModel(
       session.openAiPerUserAsrModel,
       OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
@@ -6340,7 +6358,7 @@ export class VoiceSessionManager {
           kind: "voice_runtime",
           guildId: session.guildId,
           channelId: session.textChannelId,
-          userId: String(userId || "").trim() || null,
+          userId: normalizedUserId,
           content: "openai_realtime_asr_commit_skipped_small_buffer",
           metadata: {
             sessionId: session.id,
@@ -6352,7 +6370,7 @@ export class VoiceSessionManager {
       }
       this.scheduleOpenAiAsrSessionIdleClose({
         session,
-        userId
+        userId: normalizedUserId
       });
       return {
         transcript: "",
@@ -6366,11 +6384,9 @@ export class VoiceSessionManager {
       };
     }
 
-    asrState.isCommittingAsr = true;
-    asrState.committingUtteranceId = trackedUtteranceId;
     await this.flushPendingOpenAiAsrAudio({
       session,
-      userId,
+      userId: normalizedUserId,
       asrState,
       utteranceId: trackedUtteranceId
     });
@@ -6387,7 +6403,7 @@ export class VoiceSessionManager {
 
       this.scheduleOpenAiAsrSessionIdleClose({
         session,
-        userId
+        userId: normalizedUserId
       });
       if (trackedUtterance) {
         trackedUtterance.bytesSent = 0;
@@ -6398,7 +6414,7 @@ export class VoiceSessionManager {
           kind: "voice_runtime",
           guildId: session.guildId,
           channelId: session.textChannelId,
-          userId: String(userId || "").trim() || null,
+          userId: normalizedUserId,
           content: "voice_realtime_transcription_empty",
           metadata: {
             sessionId: session.id,
@@ -6424,7 +6440,7 @@ export class VoiceSessionManager {
         kind: "voice_error",
         guildId: session.guildId,
         channelId: session.textChannelId,
-        userId: String(userId || "").trim() || null,
+        userId: normalizedUserId,
         content: `openai_realtime_asr_commit_failed: ${String(error?.message || error)}`,
         metadata: {
           sessionId: session.id
@@ -6438,7 +6454,7 @@ export class VoiceSessionManager {
       if (activeUtteranceId > 0) {
         void this.flushPendingOpenAiAsrAudio({
           session,
-          userId,
+          userId: normalizedUserId,
           asrState,
           utteranceId: activeUtteranceId
         });
@@ -6945,6 +6961,12 @@ export class VoiceSessionManager {
             sessionId: session.id
           }
         });
+        remainingChunks.push(entry);
+        while (chunks.length > 0) {
+          const pendingEntry = chunks.shift();
+          if (!pendingEntry || !Buffer.isBuffer(pendingEntry.chunk)) continue;
+          remainingChunks.push(pendingEntry);
+        }
         break;
       }
     }

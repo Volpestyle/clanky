@@ -41,12 +41,11 @@ export function VoiceModeSettingsSection({
     .trim()
     .toLowerCase();
   const usesRealtimeAsrBridge = openAiRealtimeTranscriptionMethod !== "file_wav";
-  const usesBrainLlm = !isNativePath;
+  const asrModeConfigVisible = (isBridgePath || isBrainPath) && usesRealtimeAsrBridge;
   const openAiPerUserAsrBridge =
-    isBridgePath &&
-    usesRealtimeAsrBridge &&
+    asrModeConfigVisible &&
     Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge);
-  const usesBrainGeneration = isRealtimeMode && usesBrainLlm && !openAiPerUserAsrBridge;
+  const usesBrainGeneration = isRealtimeMode && isBrainPath;
   return (
     <SettingsSection id={id} title="Voice Mode" active={form.voiceEnabled}>
       <div className="toggles">
@@ -106,7 +105,9 @@ export function VoiceModeSettingsSection({
 
               {(isBridgePath || isBrainPath) && (
                 <>
-                  <label htmlFor="voice-brain-provider">Brain provider</label>
+                  <label htmlFor="voice-brain-provider">
+                    {isBridgePath ? "Realtime provider (brain + TTS)" : "Realtime provider (ASR pipeline)"}
+                  </label>
                   <select
                     id="voice-brain-provider"
                     value={form.voiceBrainProvider || "openai"}
@@ -159,7 +160,7 @@ export function VoiceModeSettingsSection({
                 </>
               )}
 
-              {isBridgePath && usesRealtimeAsrBridge && (
+              {asrModeConfigVisible && (
                 <div className="split">
                   <div>
                     <label>ASR mode</label>

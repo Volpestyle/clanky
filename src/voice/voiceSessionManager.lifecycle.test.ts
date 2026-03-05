@@ -857,6 +857,76 @@ test("bindSessionHandlers does not restart per-user OpenAI ASR on repeated speak
   assert.equal(beginCalls[0]?.userId, "speaker-1");
 });
 
+test("commitOpenAiAsrUtterance marks per-user commit in-flight before awaiting connect", async () => {
+  const { manager } = createManager();
+  manager.shouldUsePerUserTranscription = () => true;
+
+  const session = createSession({
+    mode: "openai_realtime"
+  });
+  const userId = "speaker-1";
+  const asrState = manager.getOrCreateOpenAiAsrSessionState({
+    session,
+    userId
+  });
+  let clearCalls = 0;
+  let commitCalls = 0;
+  asrState.client = {
+    ws: { readyState: 1 },
+    clearInputAudioBuffer() {
+      clearCalls += 1;
+    },
+    appendInputAudioPcm() {},
+    commitInputAudioBuffer() {
+      commitCalls += 1;
+    }
+  };
+  asrState.utterance = {
+    id: 1,
+    startedAt: Date.now() - 200,
+    bytesSent: 9_600,
+    partialText: "",
+    finalSegments: [],
+    finalSegmentEntries: [],
+    lastUpdateAt: Date.now() - 10
+  };
+  asrState.pendingAudioChunks = [{ utteranceId: 1, chunk: Buffer.alloc(9_600, 1) }];
+  asrState.pendingAudioBytes = 9_600;
+
+  let resolveConnect: (() => void) | null = null;
+  const connectGate = new Promise((resolve) => {
+    resolveConnect = () => {
+      resolve(undefined);
+    };
+  });
+  manager.ensureOpenAiAsrSessionConnected = async () => {
+    await connectGate;
+    return asrState;
+  };
+  manager.waitForOpenAiAsrTranscriptSettle = async () => "";
+
+  const commitPromise = manager.commitOpenAiAsrUtterance({
+    session,
+    settings: session.settingsSnapshot,
+    userId,
+    captureReason: "speaking_end"
+  });
+
+  assert.equal(asrState.isCommittingAsr, true);
+  assert.equal(asrState.committingUtteranceId, 1);
+
+  manager.beginOpenAiAsrUtterance({
+    session,
+    settings: session.settingsSnapshot,
+    userId
+  });
+  assert.equal(clearCalls, 0);
+
+  resolveConnect?.();
+  await commitPromise;
+  assert.equal(commitCalls, 1);
+});
+
 test("bindSessionHandlers starts shared OpenAI ASR only for the first concurrent speaker", () => {
   const { manager } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
