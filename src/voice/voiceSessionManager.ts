@@ -7973,11 +7973,18 @@ export class VoiceSessionManager {
                 captureReason: reason
               });
               clearTimeout(fallbackTimer);
-              const forwarded = forwardAsrBridgeTurn(asrResult, "per_user");
-              if (forwarded) return;
+              const commitTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
+
+              // If commit returned a transcript, forward immediately.
+              if (commitTranscript) {
+                const forwarded = forwardAsrBridgeTurn(asrResult, "per_user");
+                if (forwarded) return;
+              }
 
               // Commit returned empty — poll the tracked utterance for
               // late-arriving streaming transcript segments before giving up.
+              // Skip the initial forward to avoid logging a premature empty-drop
+              // and triggering deferred actions before recovery has a chance.
               if (!bridgeForwarded && !session.ending) {
                 const lateAsrState = this.getOrCreateOpenAiAsrSessionState({ session, userId });
                 const trackedUtterance = lateAsrState?.utterance;
@@ -7985,6 +7992,9 @@ export class VoiceSessionManager {
                   const lateDeadlineMs = Date.now() + 1500;
                   while (Date.now() < lateDeadlineMs && !bridgeForwarded && !session.ending) {
                     await new Promise((r) => setTimeout(r, 80));
+                    // Bail if the utterance was replaced by new speech — we'd
+                    // be reading transcript from a different user turn.
+                    if (lateAsrState.utterance !== trackedUtterance) break;
                     const lateFinal = normalizeVoiceText(
                       Array.isArray(trackedUtterance.finalSegments)
                         ? trackedUtterance.finalSegments.join(" ")
@@ -8017,6 +8027,10 @@ export class VoiceSessionManager {
                 }
               }
 
+              // Recovery failed — now record the empty drop.
+              if (!bridgeForwarded) {
+                forwardAsrBridgeTurn(asrResult, "per_user");
+              }
               const lateTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
               if (!lateTranscript) return;
               this.store.logAction({
@@ -8114,11 +8128,18 @@ export class VoiceSessionManager {
                 captureReason: reason
               });
               clearTimeout(fallbackTimer);
-              const forwarded = forwardAsrBridgeTurn(asrResult, "shared");
-              if (forwarded) return;
+              const commitTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
+
+              // If commit returned a transcript, forward immediately.
+              if (commitTranscript) {
+                const forwarded = forwardAsrBridgeTurn(asrResult, "shared");
+                if (forwarded) return;
+              }
 
               // Commit returned empty — poll the shared ASR state for
               // late-arriving streaming transcript segments before giving up.
+              // Skip the initial forward to avoid logging a premature empty-drop
+              // and triggering deferred actions before recovery has a chance.
               if (!bridgeForwarded && !session.ending) {
                 const lateSharedState = this.getOpenAiSharedAsrState(session);
                 const trackedUtterance = lateSharedState?.utterance;
@@ -8126,6 +8147,8 @@ export class VoiceSessionManager {
                   const lateDeadlineMs = Date.now() + 1500;
                   while (Date.now() < lateDeadlineMs && !bridgeForwarded && !session.ending) {
                     await new Promise((r) => setTimeout(r, 80));
+                    // Bail if the utterance was replaced by new speech.
+                    if (lateSharedState.utterance !== trackedUtterance) break;
                     const lateFinal = normalizeVoiceText(
                       Array.isArray(trackedUtterance.finalSegments)
                         ? trackedUtterance.finalSegments.join(" ")
@@ -8159,6 +8182,10 @@ export class VoiceSessionManager {
                 }
               }
 
+              // Recovery failed — now record the empty drop.
+              if (!bridgeForwarded) {
+                forwardAsrBridgeTurn(asrResult, "shared");
+              }
               const lateTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
               if (!lateTranscript) return;
               this.store.logAction({
