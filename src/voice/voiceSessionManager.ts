@@ -141,10 +141,9 @@ import { evaluateVoiceReplyDecision as evaluateVoiceReplyDecisionModule } from "
 import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
   ACTIVITY_TOUCH_THROTTLE_MS,
-  BARGE_IN_ASSERTION_MS,
-  BARGE_IN_ASSERTION_IDLE_MS,
   BARGE_IN_FULL_OVERRIDE_MIN_MS,
   BARGE_IN_MIN_SPEECH_MS,
+  BARGE_IN_STT_MIN_CAPTURE_AGE_MS,
   BARGE_IN_RETRY_MAX_AGE_MS,
   BARGE_IN_SUPPRESSION_MAX_MS,
   BOT_DISCONNECT_GRACE_MS,
@@ -3238,40 +3237,34 @@ export class VoiceSessionManager {
     session.activeReplyInterruptionPolicy = null;
   }
 
-  maybeInterruptBotForAssertiveSpeech({
-    session,
-    userId = null,
-    source = "speaking_start"
-  }) {
-    if (!session || session.ending) return false;
-    if (isRealtimeMode(session.mode)) return false;
-    if (!this.isBargeInInterruptTargetActive(session)) return false;
+  shouldBargeIn({ session, userId, captureState }) {
+    if (!session || session.ending) return { allowed: false };
+    if (!this.isBargeInInterruptTargetActive(session)) return { allowed: false };
     const normalizedUserId = String(userId || "").trim();
-    if (!normalizedUserId) return false;
+    if (!normalizedUserId) return { allowed: false };
+    if (captureState?.speakingEndFinalizeTimer) return { allowed: false };
+    const interruptionPolicy = this.normalizeReplyInterruptionPolicy(
+      session.pendingResponse?.interruptionPolicy || session.activeReplyInterruptionPolicy
+    );
     if (
       !this.isUserAllowedToInterruptReply({
-        policy: session.activeReplyInterruptionPolicy,
+        policy: interruptionPolicy,
         userId: normalizedUserId
       })
     ) {
-      return false;
+      return { allowed: false };
     }
-    const capture = session.userCaptures?.get?.(normalizedUserId);
-    if (!capture) return false;
-    if (capture.speakingEndFinalizeTimer) return false;
     const sampleRateHz = isRealtimeMode(session.mode)
       ? Number(session.realtimeInputSampleRateHz) || 24000
       : 24000;
     const minCaptureBytes = Math.max(2, Math.ceil((sampleRateHz * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000));
-    if (Number(capture.bytesSent || 0) < minCaptureBytes) return false;
-    if (!this.isCaptureSignalAssertive(capture)) return false;
-
-    return this.interruptBotSpeechForBargeIn({
-      session,
-      userId: normalizedUserId,
-      source: String(source || "speaking_start"),
-      minCaptureBytes
-    });
+    if (!isRealtimeMode(session.mode)) {
+      const captureAgeMs = Math.max(0, Date.now() - Number(captureState?.startedAt || Date.now()));
+      if (captureAgeMs < BARGE_IN_STT_MIN_CAPTURE_AGE_MS) return { allowed: false };
+    }
+    if (Number(captureState?.bytesSent || 0) < minCaptureBytes) return { allowed: false };
+    if (!this.isCaptureSignalAssertive(captureState)) return { allowed: false };
+    return { allowed: true, minCaptureBytes, interruptionPolicy };
   }
 
   isCaptureSignalAssertive(capture) {
@@ -3335,24 +3328,7 @@ export class VoiceSessionManager {
     return Boolean(this.findAssertiveInboundCaptureUserId(session, interruptionPolicy));
   }
 
-  interruptBotSpeechForBargeIn({
-    session,
-    userId = null,
-    source = "speaking_start",
-    minCaptureBytes = 0
-  }) {
-    if (!session || session.ending) return false;
-
-    const streamBufferedBytes = 0;
-    const now = Date.now();
-    const pendingRequestId = Number(session.pendingResponse?.requestId || 0) || null;
-    const interruptionPolicy = this.normalizeReplyInterruptionPolicy(
-      session.pendingResponse?.interruptionPolicy || session.activeReplyInterruptionPolicy
-    );
-    const retryUtteranceText = normalizeVoiceText(
-      session.pendingResponse?.utteranceText || session.lastRequestedRealtimeUtterance?.utteranceText || "",
-      STT_REPLY_MAX_CHARS
-    );
+  cancelRealtimeResponseForBargeIn(session) {
     let responseCancelAttempted = false;
     let responseCancelSucceeded = false;
     let responseCancelError = null;
@@ -3381,7 +3357,7 @@ export class VoiceSessionManager {
         truncateItemId = latestItemId;
         truncateContentIndex = Math.max(0, Number(session.lastOpenAiAssistantAudioItemContentIndex || 0));
         const estimatedReceivedMs = Math.max(0, Number(session.lastOpenAiAssistantAudioItemReceivedMs || 0));
-        const estimatedUnplayedMs = this.estimateDiscordPcmPlaybackDurationMs(streamBufferedBytes);
+        const estimatedUnplayedMs = this.estimateDiscordPcmPlaybackDurationMs(0);
         truncateAudioEndMs = Math.max(0, Math.round(estimatedReceivedMs - estimatedUnplayedMs));
         try {
           truncateSucceeded = Boolean(
@@ -3396,6 +3372,39 @@ export class VoiceSessionManager {
         }
       }
     }
+
+    return {
+      responseCancelAttempted,
+      responseCancelSucceeded,
+      responseCancelError,
+      truncateAttempted,
+      truncateSucceeded,
+      truncateError,
+      truncateItemId,
+      truncateContentIndex,
+      truncateAudioEndMs
+    };
+  }
+
+  interruptBotSpeechForBargeIn({
+    session,
+    userId = null,
+    source = "speaking_start",
+    minCaptureBytes = 0
+  }) {
+    if (!session || session.ending) return false;
+
+    const now = Date.now();
+    const pendingRequestId = Number(session.pendingResponse?.requestId || 0) || null;
+    const interruptionPolicy = this.normalizeReplyInterruptionPolicy(
+      session.pendingResponse?.interruptionPolicy || session.activeReplyInterruptionPolicy
+    );
+    const retryUtteranceText = normalizeVoiceText(
+      session.pendingResponse?.utteranceText || session.lastRequestedRealtimeUtterance?.utteranceText || "",
+      STT_REPLY_MAX_CHARS
+    );
+
+    const cancelTelemetry = this.cancelRealtimeResponseForBargeIn(session);
 
     this.resetBotAudioPlayback(session);
     if (session.botTurnResetTimer) {
@@ -3447,22 +3456,16 @@ export class VoiceSessionManager {
       metadata: {
         sessionId: session.id,
         source: String(source || "speaking_start"),
-        streamBufferedBytesDropped: streamBufferedBytes,
+        streamBufferedBytesDropped: 0,
         pendingRequestId,
         minCaptureBytes: Math.max(0, Number(minCaptureBytes || 0)),
         suppressionMs: BARGE_IN_SUPPRESSION_MAX_MS,
         queuedRetryUtterance: Boolean(isRealtimeMode(session.mode) && retryUtteranceText),
         retryInterruptionPolicyScope: interruptionPolicy?.scope || null,
         retryInterruptionPolicyAllowedUserId: interruptionPolicy?.allowedUserId || null,
-        responseCancelAttempted,
-        responseCancelSucceeded,
-        responseCancelError,
-        truncateAttempted,
-        truncateSucceeded,
-        truncateError,
-        truncateItemId,
-        truncateContentIndex: truncateAttempted ? truncateContentIndex : null,
-        truncateAudioEndMs: truncateAttempted ? truncateAudioEndMs : null
+        ...cancelTelemetry,
+        truncateContentIndex: cancelTelemetry.truncateAttempted ? cancelTelemetry.truncateContentIndex : null,
+        truncateAudioEndMs: cancelTelemetry.truncateAttempted ? cancelTelemetry.truncateAudioEndMs : null
       }
     });
     return true;
@@ -3473,44 +3476,6 @@ export class VoiceSessionManager {
     // With subprocess, we can't check stream buffer; rely on recent audio delta timing.
     const msSinceLastDelta = Date.now() - Number(session.lastAudioDeltaAt || 0);
     return msSinceLastDelta < 200;
-  }
-
-  armAssertiveBargeIn({
-    session,
-    userId = null,
-    source = "speaking_start",
-    delayMs = null
-  }) {
-    if (!session || session.ending) return;
-    if (isRealtimeMode(session.mode)) return;
-    if (!this.isBargeInInterruptTargetActive(session)) return;
-    const normalizedUserId = String(userId || "").trim();
-    if (!normalizedUserId) return;
-    const capture = session.userCaptures?.get?.(normalizedUserId);
-    if (!capture) return;
-    if (capture.speakingEndFinalizeTimer) return;
-    if (capture.bargeInAssertTimer) return;
-    const audioActivelyFlowing = this.isAudioActivelyFlowing(session);
-    const effectiveDelayMs = delayMs != null
-      ? Math.max(60, Math.round(Number(delayMs)))
-      : (audioActivelyFlowing ? BARGE_IN_ASSERTION_MS : BARGE_IN_ASSERTION_IDLE_MS);
-    capture.bargeInAssertTimer = setTimeout(() => {
-      capture.bargeInAssertTimer = null;
-      const interrupted = this.maybeInterruptBotForAssertiveSpeech({
-        session,
-        userId: normalizedUserId,
-        source: String(source || "speaking_start")
-      });
-      if (interrupted) return;
-      const currentCapture = session.userCaptures?.get?.(normalizedUserId);
-      if (!currentCapture || currentCapture.speakingEndFinalizeTimer || !session.botTurnOpen) return;
-      this.armAssertiveBargeIn({
-        session,
-        userId: normalizedUserId,
-        source: String(source || "speaking_start"),
-        delayMs: BARGE_IN_ASSERTION_IDLE_MS
-      });
-    }, effectiveDelayMs);
   }
 
   trackOpenAiRealtimeAssistantAudioEvent(session, event) {
@@ -6025,21 +5990,12 @@ export class VoiceSessionManager {
         userId: normalizedUserId,
         settings
       });
-      this.armAssertiveBargeIn({
-        session,
-        userId: normalizedUserId,
-        source: "speaking_start"
-      });
     };
 
     const onSpeakingEnd = (userId) => {
       if (String(userId || "") === String(this.client.user?.id || "")) return;
       const capture = session.userCaptures.get(String(userId || ""));
       if (!capture || typeof capture.finalize !== "function") return;
-      if (capture.bargeInAssertTimer) {
-        clearTimeout(capture.bargeInAssertTimer);
-        capture.bargeInAssertTimer = null;
-      }
       if (capture.speakingEndFinalizeTimer) return;
       const captureAgeMs = Math.max(0, Date.now() - Number(capture.startedAt || Date.now()));
       const finalizeDelayMs = this.resolveSpeakingEndFinalizeDelayMs({
@@ -6062,10 +6018,6 @@ export class VoiceSessionManager {
       if (capture.speakingEndFinalizeTimer) {
         clearTimeout(capture.speakingEndFinalizeTimer);
         capture.speakingEndFinalizeTimer = null;
-      }
-      if (capture.bargeInAssertTimer) {
-        clearTimeout(capture.bargeInAssertTimer);
-        capture.bargeInAssertTimer = null;
       }
       if (typeof capture.finalize === "function") {
         capture.finalize("client_disconnect");
@@ -6114,7 +6066,6 @@ export class VoiceSessionManager {
       idleFlushTimer: null,
       maxFlushTimer: null,
       speakingEndFinalizeTimer: null,
-      bargeInAssertTimer: null,
       finalize: null,
       abort: null,
       removeSubprocessListeners: null
@@ -6147,10 +6098,6 @@ export class VoiceSessionManager {
       if (current.speakingEndFinalizeTimer) {
         clearTimeout(current.speakingEndFinalizeTimer);
       }
-      if (current.bargeInAssertTimer) {
-        clearTimeout(current.bargeInAssertTimer);
-      }
-
       // Remove per-capture IPC listeners so they don't accumulate across captures
       try {
         current.removeSubprocessListeners?.();
@@ -6262,29 +6209,14 @@ export class VoiceSessionManager {
         captureState.lastActivityTouchAt = now;
       }
 
-      if (isRealtimeMode(session.mode) && this.isBargeInInterruptTargetActive(session)) {
-        const interruptionPolicy = this.normalizeReplyInterruptionPolicy(
-          session.pendingResponse?.interruptionPolicy || session.activeReplyInterruptionPolicy
-        );
-        const canInterrupt = this.isUserAllowedToInterruptReply({
-          policy: interruptionPolicy,
-          userId
+      const bargeDecision = this.shouldBargeIn({ session, userId, captureState });
+      if (bargeDecision.allowed) {
+        this.interruptBotSpeechForBargeIn({
+          session,
+          userId,
+          source: "speaking_data",
+          minCaptureBytes: bargeDecision.minCaptureBytes
         });
-        if (canInterrupt && this.isCaptureSignalAssertive(captureState)) {
-          const sampleRateHz = Number(session.realtimeInputSampleRateHz) || 24000;
-          const minCaptureBytes = Math.max(
-            2,
-            Math.ceil((sampleRateHz * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000)
-          );
-          if (Number(captureState.bytesSent || 0) >= minCaptureBytes) {
-            this.interruptBotSpeechForBargeIn({
-              session,
-              userId,
-              source: "speaking_data",
-              minCaptureBytes
-            });
-          }
-        }
       }
 
       const captureAgeMs = Math.max(0, now - Number(captureState.startedAt || now));
@@ -11401,9 +11333,6 @@ export class VoiceSessionManager {
       }
       if (capture.speakingEndFinalizeTimer) {
         clearTimeout(capture.speakingEndFinalizeTimer);
-      }
-      if (capture.bargeInAssertTimer) {
-        clearTimeout(capture.bargeInAssertTimer);
       }
     }
     session.userCaptures.clear();

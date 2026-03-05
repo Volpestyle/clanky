@@ -26,9 +26,10 @@ export const CAPTURE_NEAR_SILENCE_ABORT_ACTIVE_RATIO_MAX = 0.009;
 export const CAPTURE_NEAR_SILENCE_ABORT_PEAK_MAX = 0.011;
 export const BOT_TURN_SILENCE_RESET_MS = 1200;
 // Make barge-in intentionally stubborn so brief talk-over/echo does not cut bot playback.
-export const BARGE_IN_ASSERTION_MS = 1500;
-export const BARGE_IN_ASSERTION_IDLE_MS = 500;
 export const BARGE_IN_MIN_SPEECH_MS = 700;
+// STT pipeline captures must be at least this old before barge-in fires, replacing
+// the old timer-based armAssertiveBargeIn delay.
+export const BARGE_IN_STT_MIN_CAPTURE_AGE_MS = 500;
 export const BARGE_IN_SUPPRESSION_MAX_MS = 12_000;
 export const BARGE_IN_FULL_OVERRIDE_MIN_MS = 2200;
 export const BARGE_IN_RETRY_MAX_AGE_MS = 10_000;

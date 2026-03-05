@@ -5,7 +5,8 @@ import { VoiceSessionManager } from "./voiceSessionManager.ts";
 import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
   BARGE_IN_FULL_OVERRIDE_MIN_MS,
-  BARGE_IN_MIN_SPEECH_MS
+  BARGE_IN_MIN_SPEECH_MS,
+  BARGE_IN_STT_MIN_CAPTURE_AGE_MS
 } from "./voiceSessionManager.constants.ts";
 import { trackSharedAsrCommittedItem, commitAsrUtterance } from "./voiceAsrBridge.ts";
 import type { AsrBridgeState } from "./voiceAsrBridge.ts";
@@ -321,35 +322,37 @@ test("resolveSpeakingEndFinalizeDelayMs adapts delays when room load increases",
   );
 });
 
-test("maybeInterruptBotForAssertiveSpeech requires sustained capture bytes", () => {
-  const { manager, logs } = createManager();
+test("shouldBargeIn requires sustained capture bytes", () => {
+  const { manager } = createManager();
+  const captureState = {
+    bytesSent: 4_000,
+    startedAt: Date.now() - 2_000,
+    speakingEndFinalizeTimer: null,
+    signalSampleCount: 24_000,
+    signalActiveSampleCount: 1_680,
+    signalPeakAbs: 5_400
+  };
   const session = createSession({
     mode: "stt_pipeline",
     botTurnOpen: true,
-    userCaptures: new Map([
-      [
-        "user-1",
-        {
-          bytesSent: 4_000,
-          speakingEndFinalizeTimer: null
-        }
-      ]
-    ])
+    userCaptures: new Map([["user-1", captureState]])
   });
 
-  const interrupted = manager.maybeInterruptBotForAssertiveSpeech({
-    session,
-    userId: "user-1",
-    source: "test"
-  });
-  assert.equal(interrupted, false);
-  assert.equal(session.botTurnOpen, true);
-  assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
+  const result = manager.shouldBargeIn({ session, userId: "user-1", captureState });
+  assert.equal(result.allowed, false);
 });
 
-test("maybeInterruptBotForAssertiveSpeech ignores non-target speaker under assertive reply policy", () => {
-  const { manager, logs } = createManager();
+test("shouldBargeIn ignores non-target speaker under assertive reply policy", () => {
+  const { manager } = createManager();
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
+  const captureState = {
+    bytesSent: minBytes + 2_400,
+    startedAt: Date.now() - 2_000,
+    signalSampleCount: 24_000,
+    signalActiveSampleCount: 1_680,
+    signalPeakAbs: 5_400,
+    speakingEndFinalizeTimer: null
+  };
   const session = createSession({
     mode: "openai_realtime",
     botTurnOpen: true,
@@ -360,33 +363,24 @@ test("maybeInterruptBotForAssertiveSpeech ignores non-target speaker under asser
       reason: "engaged_continuation",
       source: "test"
     },
-    userCaptures: new Map([
-      [
-        "user-2",
-        {
-          bytesSent: minBytes + 2_400,
-          signalSampleCount: 24_000,
-          signalActiveSampleCount: 1_680,
-          signalPeakAbs: 5_400,
-          speakingEndFinalizeTimer: null
-        }
-      ]
-    ])
+    userCaptures: new Map([["user-2", captureState]])
   });
 
-  const interrupted = manager.maybeInterruptBotForAssertiveSpeech({
-    session,
-    userId: "user-2",
-    source: "test_assertive_scope"
-  });
-  assert.equal(interrupted, false);
-  assert.equal(session.botTurnOpen, true);
-  assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
+  const result = manager.shouldBargeIn({ session, userId: "user-2", captureState });
+  assert.equal(result.allowed, false);
 });
 
-test("maybeInterruptBotForAssertiveSpeech blocks all interruptions when reply targets ALL", () => {
-  const { manager, logs } = createManager();
+test("shouldBargeIn blocks all interruptions when reply targets ALL", () => {
+  const { manager } = createManager();
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
+  const captureState = {
+    bytesSent: minBytes + 2_400,
+    startedAt: Date.now() - 2_000,
+    signalSampleCount: 24_000,
+    signalActiveSampleCount: 1_680,
+    signalPeakAbs: 5_400,
+    speakingEndFinalizeTimer: null
+  };
   const session = createSession({
     mode: "openai_realtime",
     botTurnOpen: true,
@@ -398,56 +392,27 @@ test("maybeInterruptBotForAssertiveSpeech blocks all interruptions when reply ta
       reason: "assistant_target_all",
       source: "test"
     },
-    userCaptures: new Map([
-      [
-        "user-1",
-        {
-          bytesSent: minBytes + 2_400,
-          signalSampleCount: 24_000,
-          signalActiveSampleCount: 1_680,
-          signalPeakAbs: 5_400,
-          speakingEndFinalizeTimer: null
-        }
-      ]
-    ])
+    userCaptures: new Map([["user-1", captureState]])
   });
 
-  const interrupted = manager.maybeInterruptBotForAssertiveSpeech({
-    session,
-    userId: "user-1",
-    source: "test_all_scope"
-  });
-  assert.equal(interrupted, false);
-  assert.equal(session.botTurnOpen, true);
-  assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
+  const result = manager.shouldBargeIn({ session, userId: "user-1", captureState });
+  assert.equal(result.allowed, false);
 });
 
-test("maybeInterruptBotForAssertiveSpeech cuts playback after assertive speech", () => {
-  const { manager, logs } = createManager();
-  const cancelCalls = [];
+test("shouldBargeIn allows barge-in after assertive speech", () => {
+  const { manager } = createManager();
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
+  const captureState = {
+    bytesSent: minBytes + 2_400,
+    startedAt: Date.now() - 2_000,
+    signalSampleCount: 24_000,
+    signalActiveSampleCount: 1_680,
+    signalPeakAbs: 5_400,
+    speakingEndFinalizeTimer: null
+  };
   const session = createSession({
     mode: "stt_pipeline",
     botTurnOpen: true,
-    botTurnResetTimer: setTimeout(() => undefined, 10_000),
-    userCaptures: new Map([
-      [
-        "user-1",
-        {
-          bytesSent: minBytes + 2_400,
-          signalSampleCount: 24_000,
-          signalActiveSampleCount: 1_680,
-          signalPeakAbs: 5_400,
-          speakingEndFinalizeTimer: null
-        }
-      ]
-    ]),
-    realtimeClient: {
-      cancelActiveResponse() {
-        cancelCalls.push("cancel");
-        return true;
-      }
-    },
     pendingResponse: {
       requestId: 9,
       requestedAt: Date.now() - 1200,
@@ -456,109 +421,47 @@ test("maybeInterruptBotForAssertiveSpeech cuts playback after assertive speech",
       source: "turn_flush",
       handlingSilence: false,
       audioReceivedAt: 0
-    }
+    },
+    userCaptures: new Map([["user-1", captureState]])
   });
 
-  const interrupted = manager.maybeInterruptBotForAssertiveSpeech({
-    session,
-    userId: "user-1",
-    source: "test"
-  });
-  assert.equal(interrupted, true);
-  assert.equal(session.botTurnOpen, false);
-  assert.equal(cancelCalls.length, 1);
-  assert.equal(Number(session.pendingResponse?.audioReceivedAt || 0) > 0, true);
-  assert.equal(Number(session.bargeInSuppressionUntil || 0) > Date.now(), true);
-  const interruptLog = logs.find((entry) => entry?.content === "voice_barge_in_interrupt");
-  assert.ok(interruptLog);
-  assert.equal(interruptLog?.metadata?.responseCancelAttempted, true);
-  assert.equal(interruptLog?.metadata?.responseCancelSucceeded, true);
-  assert.equal(interruptLog?.metadata?.responseCancelError, null);
+  const result = manager.shouldBargeIn({ session, userId: "user-1", captureState });
+  assert.equal(result.allowed, true);
+  assert.equal(typeof result.minCaptureBytes, "number");
+  assert.ok(result.minCaptureBytes > 0);
 });
 
-test("maybeInterruptBotForAssertiveSpeech ignores near-silent captures", () => {
-  const { manager, logs } = createManager();
-  const stopCalls = [];
+test("shouldBargeIn ignores near-silent captures", () => {
+  const { manager } = createManager();
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
+  const captureState = {
+    bytesSent: minBytes + 2_400,
+    startedAt: Date.now() - 2_000,
+    signalSampleCount: 24_000,
+    signalActiveSampleCount: 120,
+    signalPeakAbs: 220,
+    speakingEndFinalizeTimer: null
+  };
   const session = createSession({
     botTurnOpen: true,
-    userCaptures: new Map([
-      [
-        "user-1",
-        {
-          bytesSent: minBytes + 2_400,
-          signalSampleCount: 24_000,
-          signalActiveSampleCount: 120,
-          signalPeakAbs: 220,
-          speakingEndFinalizeTimer: null
-        }
-      ]
-    ]),
-    audioPlayer: {
-      stop(force) {
-        stopCalls.push(force);
-      }
-    },
-    botAudioStream: {
-      destroy() {}
-    }
+    userCaptures: new Map([["user-1", captureState]])
   });
 
-  const interrupted = manager.maybeInterruptBotForAssertiveSpeech({
-    session,
-    userId: "user-1",
-    source: "test"
-  });
-  assert.equal(interrupted, false);
-  assert.equal(session.botTurnOpen, true);
-  assert.equal(stopCalls.length, 0);
-  assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
+  const result = manager.shouldBargeIn({ session, userId: "user-1", captureState });
+  assert.equal(result.allowed, false);
 });
 
-test("maybeInterruptBotForAssertiveSpeech ignores assertive captures in realtime mode", () => {
-  const { manager, logs } = createManager();
-  const stopCalls = [];
+test("shouldBargeIn does not interrupt music-only playback lock", () => {
+  const { manager } = createManager();
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
-  const session = createSession({
-    mode: "openai_realtime",
-    botTurnOpen: true,
-    userCaptures: new Map([
-      [
-        "user-1",
-        {
-          bytesSent: minBytes + 2_400,
-          signalSampleCount: 24_000,
-          signalActiveSampleCount: 1_680,
-          signalPeakAbs: 5_400,
-          speakingEndFinalizeTimer: null
-        }
-      ]
-    ]),
-    audioPlayer: {
-      stop(force) {
-        stopCalls.push(force);
-      }
-    },
-    botAudioStream: {
-      destroy() {}
-    }
-  });
-
-  const interrupted = manager.maybeInterruptBotForAssertiveSpeech({
-    session,
-    userId: "user-1",
-    source: "test_realtime_mode"
-  });
-  assert.equal(interrupted, false);
-  assert.equal(session.botTurnOpen, true);
-  assert.equal(stopCalls.length, 0);
-  assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
-});
-
-test("maybeInterruptBotForAssertiveSpeech does not interrupt music-only playback lock", () => {
-  const { manager, logs } = createManager();
-  const stopCalls = [];
-  const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
+  const captureState = {
+    bytesSent: minBytes + 2_400,
+    startedAt: Date.now() - 2_000,
+    signalSampleCount: 24_000,
+    signalActiveSampleCount: 1_680,
+    signalPeakAbs: 5_400,
+    speakingEndFinalizeTimer: null
+  };
   const session = createSession({
     mode: "openai_realtime",
     playerState: "playing",
@@ -586,39 +489,24 @@ test("maybeInterruptBotForAssertiveSpeech does not interrupt music-only playback
       pendingRequestedByUserId: null,
       pendingRequestedAt: 0
     },
-    userCaptures: new Map([
-      [
-        "user-1",
-        {
-          bytesSent: minBytes + 2_400,
-          signalSampleCount: 24_000,
-          signalActiveSampleCount: 1_680,
-          signalPeakAbs: 5_400,
-          speakingEndFinalizeTimer: null
-        }
-      ]
-    ]),
-    voxClient: {
-      stopPlayback() {
-        stopCalls.push("stop");
-      }
-    }
+    userCaptures: new Map([["user-1", captureState]])
   });
 
-  const interrupted = manager.maybeInterruptBotForAssertiveSpeech({
-    session,
-    userId: "user-1",
-    source: "test_music_only_lock"
-  });
-
-  assert.equal(interrupted, false);
-  assert.equal(stopCalls.length, 0);
-  assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
+  const result = manager.shouldBargeIn({ session, userId: "user-1", captureState });
+  assert.equal(result.allowed, false);
 });
 
-test("maybeInterruptBotForAssertiveSpeech interrupts queued playback even when botTurnOpen already reset", () => {
-  const { manager, logs } = createManager();
+test("shouldBargeIn interrupts queued playback even when botTurnOpen already reset", () => {
+  const { manager } = createManager();
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
+  const captureState = {
+    bytesSent: minBytes + 2_400,
+    startedAt: Date.now() - 2_000,
+    signalSampleCount: 24_000,
+    signalActiveSampleCount: 1_680,
+    signalPeakAbs: 5_400,
+    speakingEndFinalizeTimer: null
+  };
   const session = createSession({
     mode: "stt_pipeline",
     botTurnOpen: false,
@@ -631,29 +519,41 @@ test("maybeInterruptBotForAssertiveSpeech interrupts queued playback even when b
       handlingSilence: false,
       audioReceivedAt: 0
     },
-    userCaptures: new Map([
-      [
-        "user-1",
-        {
-          bytesSent: minBytes + 2_400,
-          signalSampleCount: 24_000,
-          signalActiveSampleCount: 1_680,
-          signalPeakAbs: 5_400,
-          speakingEndFinalizeTimer: null
-        }
-      ]
-    ])
+    userCaptures: new Map([["user-1", captureState]])
   });
 
-  const interrupted = manager.maybeInterruptBotForAssertiveSpeech({
-    session,
-    userId: "user-1",
-    source: "test_queued_audio"
+  const result = manager.shouldBargeIn({ session, userId: "user-1", captureState });
+  assert.equal(result.allowed, true);
+});
+
+test("shouldBargeIn requires minimum capture age for STT pipeline", () => {
+  const { manager } = createManager();
+  const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
+  const captureState = {
+    bytesSent: minBytes + 2_400,
+    startedAt: Date.now() - 100,
+    signalSampleCount: 24_000,
+    signalActiveSampleCount: 1_680,
+    signalPeakAbs: 5_400,
+    speakingEndFinalizeTimer: null
+  };
+  const session = createSession({
+    mode: "stt_pipeline",
+    botTurnOpen: true,
+    pendingResponse: {
+      requestId: 30,
+      requestedAt: Date.now() - 200,
+      retryCount: 0,
+      hardRecoveryAttempted: false,
+      source: "turn_flush",
+      handlingSilence: false,
+      audioReceivedAt: 0
+    },
+    userCaptures: new Map([["user-1", captureState]])
   });
-  assert.equal(interrupted, true);
-  const interruptLog = logs.find((entry) => entry?.content === "voice_barge_in_interrupt");
-  assert.equal(Boolean(interruptLog), true);
-  assert.equal(interruptLog?.metadata?.source, "test_queued_audio");
+
+  const result = manager.shouldBargeIn({ session, userId: "user-1", captureState });
+  assert.equal(result.allowed, false);
 });
 
 test("interruptBotSpeechForBargeIn truncates OpenAI assistant audio to played duration", () => {
@@ -696,47 +596,6 @@ test("interruptBotSpeechForBargeIn truncates OpenAI assistant audio to played du
   assert.equal(Boolean(interruptLog), true);
   assert.equal(interruptLog?.metadata?.truncateAttempted, true);
   assert.equal(interruptLog?.metadata?.truncateSucceeded, true);
-});
-
-test("armAssertiveBargeIn schedules interrupt checks while buffered playback remains", async () => {
-  const { manager } = createManager();
-  const session = createSession({
-    mode: "stt_pipeline",
-    botTurnOpen: true,
-    userCaptures: new Map([
-      [
-        "user-1",
-        {
-          bytesSent: DISCORD_PCM_FRAME_BYTES * 20,
-          signalSampleCount: 24_000,
-          signalActiveSampleCount: 1_680,
-          signalPeakAbs: 5_400,
-          speakingEndFinalizeTimer: null,
-          bargeInAssertTimer: null
-        }
-      ]
-    ])
-  });
-
-  const callArgs = [];
-  manager.maybeInterruptBotForAssertiveSpeech = (args) => {
-    callArgs.push(args);
-    return true;
-  };
-
-  manager.armAssertiveBargeIn({
-    session,
-    userId: "user-1",
-    source: "queued_playback",
-    delayMs: 20
-  });
-
-  await new Promise((resolve) => setTimeout(resolve, 70));
-  assert.equal(callArgs.length, 1);
-  assert.equal(callArgs[0]?.source, "queued_playback");
-  assert.equal(callArgs[0]?.userId, "user-1");
-  const capture = session.userCaptures.get("user-1");
-  assert.equal(capture?.bargeInAssertTimer, null);
 });
 
 test("isCaptureEligibleForActivityTouch requires both speech window and non-silent signal", () => {
@@ -794,12 +653,8 @@ test("bindSessionHandlers does not touch activity on speaking.start before speec
   const { manager, touchCalls } = createManager();
   const voxClient = new EventEmitter();
   const startCalls = [];
-  const bargeCalls = [];
   manager.startInboundCapture = (payload) => {
     startCalls.push(payload);
-  };
-  manager.armAssertiveBargeIn = (payload) => {
-    bargeCalls.push(payload);
   };
 
   const session = createSession({
@@ -819,7 +674,6 @@ test("bindSessionHandlers does not touch activity on speaking.start before speec
 
   assert.equal(startCalls.length, 1);
   assert.equal(startCalls[0]?.userId, "speaker-1");
-  assert.equal(bargeCalls.length, 1);
   assert.equal(touchCalls.length, 0);
 });
 
@@ -838,7 +692,6 @@ test("bindSessionHandlers does not restart per-user OpenAI ASR on repeated speak
       });
     }
   };
-  manager.armAssertiveBargeIn = () => {};
 
   const session = createSession({
     mode: "openai_realtime",
@@ -951,7 +804,6 @@ test("bindSessionHandlers starts shared OpenAI ASR only for the first concurrent
       });
     }
   };
-  manager.armAssertiveBargeIn = () => {};
 
   const session = createSession({
     mode: "openai_realtime",
