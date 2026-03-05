@@ -26,6 +26,7 @@ test("OpenAiRealtimeClient sendSessionUpdate uses GA session audio schema", () =
   assert.equal(outbound.session.instructions, "Keep it short.");
   assert.equal(outbound.session.audio.input.format.type, "audio/pcm");
   assert.equal(outbound.session.audio.input.format.rate, 24000);
+  assert.equal(outbound.session.audio.input.turn_detection, null);
   assert.equal(outbound.session.audio.output.format.type, "audio/pcm");
   assert.equal(outbound.session.audio.output.format.rate, 24000);
   assert.equal(outbound.session.audio.output.voice, "alloy");
@@ -248,6 +249,7 @@ test("OpenAiRealtimeClient sendSessionUpdate includes function tools and manual 
   assert.equal(outbound.session.tools.length, 1);
   assert.equal(outbound.session.tools[0]?.type, "function");
   assert.equal(outbound.session.tools[0]?.name, "memory_search");
+  assert.equal(outbound.session.audio.input.turn_detection, null);
   assert.equal(outbound.session.tool_choice, "auto");
 });
 

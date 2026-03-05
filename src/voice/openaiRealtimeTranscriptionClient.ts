@@ -296,30 +296,32 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
 
   sendSessionUpdate() {
     const session = this.sessionConfig && typeof this.sessionConfig === "object" ? this.sessionConfig : {};
+    const transcription = compactObject({
+      model: normalizeOpenAiRealtimeTranscriptionModel(
+        session.inputTranscriptionModel,
+        OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+      ),
+      language: String(session.inputTranscriptionLanguage || "").trim() || null,
+      prompt: String(session.inputTranscriptionPrompt || "").trim() || null
+    });
+    const inputAudio = {
+      format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat),
+      noise_reduction: { type: "near_field" },
+      // Turn boundaries are controlled by Discord speaking lifecycle + explicit
+      // input_audio_buffer.commit, so keep realtime VAD disabled here.
+      turn_detection: null,
+      transcription
+    };
     this.send({
       type: "session.update",
-      session: compactObject({
+      session: {
         type: "transcription",
-        audio: compactObject({
-          input: compactObject({
-            format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat),
-            noise_reduction: { type: "near_field" },
-            // Turn boundaries are controlled by Discord speaking lifecycle + explicit
-            // input_audio_buffer.commit, so keep realtime VAD disabled here.
-            turn_detection: null,
-            transcription: compactObject({
-              model: normalizeOpenAiRealtimeTranscriptionModel(
-                session.inputTranscriptionModel,
-                OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
-              ),
-              language: String(session.inputTranscriptionLanguage || "").trim() || null,
-              prompt: String(session.inputTranscriptionPrompt || "").trim() || null
-            })
-          })
-        }),
+        audio: {
+          input: inputAudio
+        },
         // Include logprobs so downstream can compute transcript confidence when needed.
         include: ["item.input_audio_transcription.logprobs"]
-      })
+      }
     });
   }
 

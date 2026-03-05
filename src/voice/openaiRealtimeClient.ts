@@ -599,28 +599,29 @@ export class OpenAiRealtimeClient extends EventEmitter {
       throw new Error("OpenAI realtime voice is required (configure voice.openaiRealtime.voice).");
     }
     const normalizedTools = normalizeRealtimeTools(session.tools);
+    const inputAudio = {
+      format: {
+        type: "audio/pcm",
+        rate: 24000
+      },
+      turn_detection: null,
+      transcription: compactObject({
+        model:
+          normalizeOpenAiRealtimeTranscriptionModel(
+            session.inputTranscriptionModel,
+            OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+          ),
+        language: String(session.inputTranscriptionLanguage || "").trim() || null,
+        prompt: String(session.inputTranscriptionPrompt || "").trim() || null
+      })
+    };
     const sessionPayload: Record<string, unknown> = compactObject({
       type: "realtime",
       model: String(session.model || OPENAI_REALTIME_DEFAULT_SESSION_MODEL).trim() || OPENAI_REALTIME_DEFAULT_SESSION_MODEL,
       output_modalities: ["audio"],
       instructions: String(session.instructions || ""),
       audio: compactObject({
-        input: compactObject({
-          format: {
-            type: "audio/pcm",
-            rate: 24000
-          },
-          turn_detection: null,
-          transcription: compactObject({
-            model:
-              normalizeOpenAiRealtimeTranscriptionModel(
-                session.inputTranscriptionModel,
-                OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
-              ),
-            language: String(session.inputTranscriptionLanguage || "").trim() || null,
-            prompt: String(session.inputTranscriptionPrompt || "").trim() || null
-          })
-        }),
+        input: inputAudio,
         output: compactObject({
           format: normalizeOpenAiRealtimeAudioFormat(session.outputAudioFormat, "output"),
           voice: resolvedVoice

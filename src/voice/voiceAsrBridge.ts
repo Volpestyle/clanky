@@ -535,7 +535,10 @@ export async function waitForAsrTranscriptSettle(
       STT_TRANSCRIPT_MAX_CHARS_LOCAL
     );
     if (finalText && stable) return finalText;
-    if (!finalText && partialText && stable) return partialText;
+    // Don't early-return partials — they're inherently incomplete.
+    // A 120ms gap between partial updates is normal ASR batching,
+    // not an indication the transcript is finished. Let the timeout
+    // fallback (below) handle partials when no final arrives in time.
     await new Promise((resolve) => setTimeout(resolve, 40));
   }
 
@@ -664,16 +667,21 @@ function wireClientEvents(
   client.on("error_event", (payload: Record<string, unknown>) => {
     if (session.ending) return;
     const errorUserId = mode === "shared" ? asrState.userId : (userId ? String(userId).trim() : null);
+    const code = String(payload?.code || "").trim() || null;
+    const normalizedCode = String(code || "").trim().toLowerCase();
+    const message = String(payload?.message || "unknown error");
+    const isEmptyCommit = normalizedCode === "input_audio_buffer_commit_empty";
     store.logAction({
-      kind: "voice_error",
+      kind: isEmptyCommit ? "voice_runtime" : "voice_error",
       guildId: session.guildId,
       channelId: session.textChannelId,
       userId: errorUserId || null,
-      content: `openai_realtime_asr_error: ${String(payload?.message || "unknown error")}`,
+      content: isEmptyCommit ? "openai_realtime_asr_commit_empty" : `openai_realtime_asr_error: ${message}`,
       metadata: {
         sessionId: session.id,
-        code: (payload?.code as string) || null,
-        param: (payload?.param as string) || null
+        code,
+        param: (payload?.param as string) || null,
+        message
       }
     });
   });
