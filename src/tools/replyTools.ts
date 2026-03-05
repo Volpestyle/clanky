@@ -10,6 +10,18 @@ import {
 } from "../memory/memoryToolRuntime.ts";
 import { formatConversationWindows } from "../prompts/promptFormatters.ts";
 import type { SubAgentSessionManager, SubAgentSession } from "../agents/subAgentSession.ts";
+import {
+  WEB_SEARCH_SCHEMA,
+  WEB_SCRAPE_SCHEMA,
+  BROWSER_BROWSE_SCHEMA,
+  MEMORY_SEARCH_SCHEMA,
+  MEMORY_WRITE_SCHEMA,
+  ADAPTIVE_DIRECTIVE_ADD_SCHEMA,
+  ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA,
+  CONVERSATION_SEARCH_SCHEMA,
+  CODE_TASK_SCHEMA,
+  toAnthropicTool
+} from "./sharedToolSchemas.ts";
 
 const MAX_WEB_QUERY_LEN = 220;
 const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
@@ -196,165 +208,17 @@ type ReplyToolContext = {
 };
 
 // --- Tool definitions ---
+// Shared tools use the canonical schemas from sharedToolSchemas.ts.
 
-const WEB_SEARCH_TOOL: ReplyToolDefinition = {
-  name: "web_search",
-  description:
-    "Search the live web for current information. Returns condensed search results with titles, snippets, and page summaries. Use when the reply needs fresh or factual web info.",
-  input_schema: {
-    type: "object",
-    properties: {
-      query: {
-        type: "string",
-        description: "Concise search query (max 220 chars)"
-      }
-    },
-    required: ["query"]
-  }
-};
-
-const BROWSER_BROWSE_TOOL: ReplyToolDefinition = {
-  name: "browser_browse",
-  description:
-    "Browse the web interactively with a headless browser agent. Use ONLY when web_scrape fails or the task requires clicking, navigating, scrolling, filling forms, or reading JS-rendered dynamic content. Always try web_scrape first for simple page reads. Pass session_id to continue a previous interactive session.",
-  input_schema: {
-    type: "object",
-    properties: {
-      query: {
-        type: "string",
-        description: "Instruction for what to browse and find out (max 500 chars). For follow-up turns, this is the continuation message."
-      },
-      session_id: {
-        type: "string",
-        description: "Session ID from a previous browser_browse result. Pass this to continue an interactive multi-turn session instead of starting a new one."
-      }
-    },
-    required: ["query"]
-  }
-};
-
-const MEMORY_SEARCH_TOOL: ReplyToolDefinition = {
-  name: "memory_search",
-  description:
-    'Search durable memory. Set `namespace` to `speaker`, `self`, or `guild` (or `user:<current speaker id>` / `guild:<current guild id>`). Use `query="__ALL__"` to list everything in that namespace.',
-  input_schema: {
-    type: "object",
-    properties: {
-      query: {
-        type: "string",
-        description:
-          'Concise lookup query (max 220 chars). Use "__ALL__" to retrieve everything remembered.'
-      },
-      namespace: {
-        type: "string",
-        description: "Memory namespace: `speaker`, `self`, `guild`, `user:<current speaker id>`, or `guild:<current guild id>`."
-      }
-    },
-    required: ["query"]
-  }
-};
-
-const MEMORY_WRITE_TOOL: ReplyToolDefinition = {
-  name: "memory_write",
-  description:
-    "Store one or more durable facts to long-term memory. Set `namespace` to `speaker`, `self`, or `guild`. Only store genuinely durable facts, not throwaway chatter, requests, insults, or future-behavior rules.",
-  input_schema: {
-    type: "object",
-    properties: {
-      namespace: {
-        type: "string",
-        description: "Memory namespace: `speaker`, `self`, `guild`, `user:<current speaker id>`, or `guild:<current guild id>`."
-      },
-      items: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            text: {
-              type: "string",
-              description: "The fact to remember (max 180 chars)"
-            }
-          },
-          required: ["text"]
-        },
-        minItems: 1,
-        maxItems: 5
-      }
-    },
-    required: ["items"]
-  }
-};
-
-const CONVERSATION_SEARCH_TOOL: ReplyToolDefinition = {
-  name: "conversation_search",
-  description:
-    "Search past conversation history across saved text chat and voice transcripts. Returns short windows of what people previously said. Use for continuity and recall of prior exchanges, not for durable facts.",
-  input_schema: {
-    type: "object",
-    properties: {
-      query: {
-        type: "string",
-        description: "Concise lookup query describing the earlier conversation to find (max 220 chars)"
-      },
-      scope: {
-        type: "string",
-        description: "Search scope: `channel` for the current channel history or `guild` for all saved channels in this server."
-      },
-      top_k: {
-        type: "integer",
-        description: "Number of conversation windows to return (1-4)"
-      },
-      max_age_hours: {
-        type: "integer",
-        description: "Maximum age of messages to consider in hours (1-720)"
-      }
-    },
-    required: ["query"]
-  }
-};
-
-const ADAPTIVE_STYLE_ADD_TOOL: ReplyToolDefinition = {
-  name: "adaptive_directive_add",
-  description:
-    "Save a persistent server-level directive so you remember it in future conversations. You MUST call this whenever someone uses language like 'always', 'never', 'from now on', 'every time', 'start calling me', 'stop doing', or any request that implies a standing rule — even casual ones like 'call me pookie' or 'talk like a pirate'. Covers style/tone, nicknames, recurring triggers/actions, and operating instructions. Keep the note concise (1-2 sentences).",
-  input_schema: {
-    type: "object",
-    properties: {
-      kind: {
-        type: "string",
-        description: "Directive kind: `guidance` for style/tone/persona guidance, or `behavior` for recurring trigger/action behavior."
-      },
-      note: {
-        type: "string",
-        description: "The persistent directive to save (max 420 chars)."
-      }
-    },
-    required: ["note"]
-  }
-};
-
-const ADAPTIVE_STYLE_REMOVE_TOOL: ReplyToolDefinition = {
-  name: "adaptive_directive_remove",
-  description:
-    "Remove a saved directive. Call this when someone says to stop doing something you previously saved — 'stop calling me pookie', 'don't do that anymore', 'go back to normal', etc. Use `note_ref` from the active directives in your prompt when available, otherwise describe the directive in `target`.",
-  input_schema: {
-    type: "object",
-    properties: {
-      note_ref: {
-        type: "string",
-        description: "Preferred exact note reference from prompt context, like `S12`."
-      },
-      target: {
-        type: "string",
-        description: "Fallback text describing the directive to remove."
-      },
-      reason: {
-        type: "string",
-        description: "Short reason or quoted request for removal."
-      }
-    }
-  }
-};
+const WEB_SEARCH_TOOL: ReplyToolDefinition = toAnthropicTool(WEB_SEARCH_SCHEMA);
+const WEB_SCRAPE_TOOL: ReplyToolDefinition = toAnthropicTool(WEB_SCRAPE_SCHEMA);
+const BROWSER_BROWSE_TOOL: ReplyToolDefinition = toAnthropicTool(BROWSER_BROWSE_SCHEMA);
+const MEMORY_SEARCH_TOOL: ReplyToolDefinition = toAnthropicTool(MEMORY_SEARCH_SCHEMA);
+const MEMORY_WRITE_TOOL: ReplyToolDefinition = toAnthropicTool(MEMORY_WRITE_SCHEMA);
+const ADAPTIVE_STYLE_ADD_TOOL: ReplyToolDefinition = toAnthropicTool(ADAPTIVE_DIRECTIVE_ADD_SCHEMA);
+const ADAPTIVE_STYLE_REMOVE_TOOL: ReplyToolDefinition = toAnthropicTool(ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA);
+const CONVERSATION_SEARCH_TOOL: ReplyToolDefinition = toAnthropicTool(CONVERSATION_SEARCH_SCHEMA);
+const CODE_TASK_TOOL: ReplyToolDefinition = toAnthropicTool(CODE_TASK_SCHEMA);
 
 const IMAGE_LOOKUP_TOOL: ReplyToolDefinition = {
   name: "image_lookup",
@@ -389,49 +253,7 @@ const OPEN_ARTICLE_TOOL: ReplyToolDefinition = {
   }
 };
 
-const WEB_SCRAPE_TOOL: ReplyToolDefinition = {
-  name: "web_scrape",
-  description:
-    "Fetch and read a specific web page by URL. Returns the page title and extracted text content. Use this when you have a direct URL to read — much faster and cheaper than browser_browse. Only use browser_browse if this tool fails or you need to interact with the page (click, scroll, fill forms, JS-rendered content).",
-  input_schema: {
-    type: "object",
-    properties: {
-      url: {
-        type: "string",
-        description: "The full URL of the page to fetch and read."
-      },
-      max_chars: {
-        type: "integer",
-        description: "Maximum characters of page content to return (default 8000, max 24000)."
-      }
-    },
-    required: ["url"]
-  }
-};
-
-const CODE_TASK_TOOL: ReplyToolDefinition = {
-  name: "code_task",
-  description:
-    "Spawn Claude Code to perform a coding task in a project directory. Can read/write files, run commands, use git, create PRs. Only available to allowed users. Pass session_id to continue a previous interactive session.",
-  input_schema: {
-    type: "object",
-    properties: {
-      task: {
-        type: "string",
-        description: "Detailed instruction for what Claude Code should do. Be specific — include repo context, file paths, issue numbers, expected behavior. For follow-up turns, this is the continuation message."
-      },
-      cwd: {
-        type: "string",
-        description: "Working directory for the task. Defaults to the configured project root if omitted."
-      },
-      session_id: {
-        type: "string",
-        description: "Session ID from a previous code_task result. Pass this to continue an interactive multi-turn session instead of starting a new one."
-      }
-    },
-    required: ["task"]
-  }
-};
+// WEB_SCRAPE_TOOL and CODE_TASK_TOOL are defined above via toAnthropicTool().
 
 const ALL_REPLY_TOOLS: ReplyToolDefinition[] = [
   WEB_SEARCH_TOOL,

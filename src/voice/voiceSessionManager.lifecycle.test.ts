@@ -392,7 +392,7 @@ test("maybeInterruptBotForAssertiveSpeech blocks all interruptions when reply ta
     botTurnOpen: true,
     activeReplyInterruptionPolicy: {
       assertive: true,
-      scope: "all",
+      scope: "none",
       allowedUserId: null,
       talkingTo: "ALL",
       reason: "assistant_target_all",

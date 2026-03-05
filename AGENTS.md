@@ -26,6 +26,13 @@
 - The E2E Discord bot-to-bot tests are our primary testing method for this.
 - When running live smoke or golden test suites, make sure we test different configurations, and are conscious about watching the integration test and the actual process logs at the same time, to cross reference. Integration test timings are most accurate when we read directly from our process logs.
 
+### Test Commands
+
+- `bun run test` — unit/integration tests only (files in `src/` and `dashboard/src/`). E2E tests are excluded. Always use this for verification after code changes.
+- `bun run test:e2e` — E2E tests only (`tests/e2e/`). Requires running dashboard, bot tokens, and test guild.
+- `bun run test:e2e:voice` / `bun run test:e2e:text` — targeted E2E suites.
+- Never run bare `bun test` — it discovers all `*.test.ts` files including E2E. Always use `bun run test`.
+
 ## Dashboard UI Preferences
 
 - No floating toasts. Prefer inline/in-UI alerts (status messages near the action that triggered them).
