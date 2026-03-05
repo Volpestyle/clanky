@@ -15,7 +15,7 @@ sequenceDiagram
     Sub-->>Main: IPC: { type: "ready" }
     Sub->>Sub: armVoicePlayback("connection_ready")
     Sub-->>Main: IPC: { type: "playback_armed" }
-    Main->>Main: Schedule join greeting (3s timer)
+    Main->>Main: Schedule deferred join greeting (2.5s grace)
 
     Note over User,ASR: User Speaks
     User->>DV: Opus audio (UDP)

@@ -232,7 +232,7 @@ import {
   loadConversationContinuityContext
 } from "../bot/conversationContinuity.ts";
 import type { ConversationContinuityPayload } from "../bot/conversationContinuity.ts";
-import type { DeferredQueuedUserTurn, DeferredQueuedUserTurnsAction } from "./voiceSessionTypes.ts";
+import type { DeferredQueuedUserTurn, DeferredQueuedUserTurnsAction, DeferredVoiceAction, DeferredVoiceActionType } from "./voiceSessionTypes.ts";
 import {
   musicPhaseIsActive,
   musicPhaseIsAudible,
@@ -2541,7 +2541,15 @@ export class VoiceSessionManager {
       });
       // If instructions are already set, start the observation grace window.
       if (session.lastOpenAiRealtimeInstructions && !session.lastAssistantReplyAt) {
-        this.scheduleJoinGreetingGrace(session);
+        const greetingAction = this.getDeferredVoiceAction(session, "join_greeting");
+        if (greetingAction) {
+          const delayMs = Math.max(0, Number(greetingAction.notBeforeAt || 0) - Date.now());
+          this.scheduleDeferredVoiceActionRecheck(session, {
+            type: "join_greeting",
+            delayMs,
+            reason: "join_greeting_grace"
+          });
+        }
       }
     };
 
@@ -2707,10 +2715,13 @@ export class VoiceSessionManager {
     type,
     delayMs = 0,
     reason = "scheduled_recheck"
+  }: {
+    type: DeferredVoiceActionType;
+    delayMs?: number;
+    reason?: string;
   }) {
     if (!session || session.ending) return;
-    const normalizedType = String(type || "").trim();
-    if (!normalizedType) return;
+    const normalizedType = type;
     const action = this.getDeferredVoiceAction(session, normalizedType);
     if (!action) return;
     this.clearDeferredVoiceActionTimer(session, normalizedType);
@@ -2725,16 +2736,37 @@ export class VoiceSessionManager {
     }, Math.max(0, Number(delayMs) || 0));
   }
 
-  scheduleJoinGreetingGrace(session) {
-    if (!session || session.ending) return;
-    const action = this.getDeferredVoiceAction(session, "join_greeting");
-    if (!action || session.lastAssistantReplyAt) return;
-    const delayMs = Math.max(0, Number(action.notBeforeAt || 0) - Date.now());
-    this.scheduleDeferredVoiceActionRecheck(session, {
-      type: "join_greeting",
-      delayMs,
-      reason: "join_greeting_grace"
-    });
+  /**
+   * Generic gating check shared by all deferred action types.
+   * Returns null if the action can fire, or a block-reason string if not.
+   *
+   * Covers: session validity, expiry, notBeforeAt floor, and output channel
+   * clear (captures, pendingResponse, active response, tool calls).
+   */
+  canFireDeferredAction(session, action: DeferredVoiceAction | null): string | null {
+    if (!session || session.ending) return "session_inactive";
+    if (!action) return "no_action";
+
+    const now = Date.now();
+
+    // Expiry check
+    const expiresAt = Math.max(0, Number(action.expiresAt || 0));
+    if (expiresAt > 0 && now >= expiresAt) return "expired";
+
+    // notBeforeAt floor
+    const notBeforeAt = Math.max(0, Number(action.notBeforeAt || 0));
+    if (notBeforeAt > now) return "not_before_at";
+
+    // Output channel blockers
+    if (Number(session.userCaptures?.size || 0) > 0) return "active_captures";
+    if (session.pendingResponse) return "pending_response";
+    if (this.isRealtimeResponseActive(session)) return "active_response";
+    if (session.awaitingToolOutputs) return "awaiting_tool_outputs";
+    if (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0) {
+      return "tool_calls_running";
+    }
+
+    return null;
   }
 
   recheckDeferredVoiceActions({
@@ -2742,75 +2774,99 @@ export class VoiceSessionManager {
     reason = "manual",
     preferredTypes = null,
     context = null
+  }: {
+    session;
+    reason?: string;
+    preferredTypes?: DeferredVoiceActionType[] | null;
+    context?;
   }) {
     if (!session || session.ending) return false;
-    const actionPriority = ["interrupted_reply", "queued_user_turns", "join_greeting"];
+    const actionPriority: DeferredVoiceActionType[] = ["interrupted_reply", "queued_user_turns", "join_greeting"];
     const knownActions = this.getDeferredVoiceActions(session);
     const types = Array.isArray(preferredTypes) && preferredTypes.length > 0
       ? preferredTypes
       : actionPriority.filter((type) => Boolean(knownActions[type]));
+
     for (const type of types) {
-      if (type === "queued_user_turns" && this.recheckDeferredQueuedUserTurns(session, {
-        action: this.getDeferredQueuedUserTurnsAction(session),
-        reason
-      })) {
-        return true;
+      const action = type === "queued_user_turns"
+        ? this.getDeferredQueuedUserTurnsAction(session)
+        : this.getDeferredVoiceAction(session, type);
+      if (!action) continue;
+
+      const blockReason = this.canFireDeferredAction(session, action as DeferredVoiceAction);
+
+      // Handle block reasons that require rescheduling
+      if (blockReason === "not_before_at") {
+        const delayMs = Math.max(0, Number(action.notBeforeAt || 0) - Date.now());
+        if (type === "queued_user_turns") {
+          this.scheduleDeferredBotTurnOpenFlush({ session, delayMs, reason });
+        } else {
+          this.scheduleDeferredVoiceActionRecheck(session, { type, delayMs, reason });
+        }
+        continue;
       }
-      if (type === "join_greeting" && this.recheckDeferredJoinGreeting(session, {
-        action: this.getDeferredVoiceAction(session, type),
-        reason
-      })) {
-        return true;
+
+      if (blockReason === "expired") {
+        this.clearDeferredVoiceAction(session, type);
+        continue;
       }
-      if (type === "interrupted_reply" && this.recheckDeferredInterruptedReply(session, {
-        action: this.getDeferredVoiceAction(session, type),
-        reason,
-        context
-      })) {
-        return true;
+
+      if (blockReason) {
+        // Blocked — downgrade to deferred status and reschedule if applicable
+        if (type === "queued_user_turns") {
+          this.scheduleDeferredBotTurnOpenFlush({ session, reason });
+        } else if (type === "join_greeting") {
+          const expiresAt = Math.max(0, Number(action.expiresAt || 0));
+          this.setDeferredVoiceAction(session, {
+            type: "join_greeting",
+            goal: "announce_join",
+            freshnessPolicy: "regenerate_from_goal",
+            status: "deferred",
+            reason,
+            notBeforeAt: 0,
+            expiresAt,
+            payload: {
+              trigger: String((action as any)?.payload?.trigger || action.reason || "join").trim() || null
+            }
+          });
+        }
+        // interrupted_reply: no reschedule — waits for next capture resolution
+        continue;
+      }
+
+      // Gating passed — delegate to action-specific fire logic
+      switch (type) {
+        case "join_greeting":
+          if (this.fireDeferredJoinGreeting(session, action, reason)) return true;
+          break;
+        case "queued_user_turns":
+          if (this.fireDeferredQueuedUserTurns(session, action as DeferredQueuedUserTurnsAction, reason)) return true;
+          break;
+        case "interrupted_reply":
+          if (this.fireDeferredInterruptedReply(session, action, reason, context)) return true;
+          break;
       }
     }
     return false;
   }
 
-  recheckDeferredQueuedUserTurns(session, {
-    action = null,
-    reason = "manual"
-  }: {
-    action?: DeferredQueuedUserTurnsAction | null;
-    reason?: string;
-  } = {}) {
-    if (!session || session.ending) return false;
-    const queuedTurnsAction = action && typeof action === "object"
-      ? action
-      : this.getDeferredQueuedUserTurnsAction(session);
-    if (!queuedTurnsAction) return false;
-
-    const pendingQueue = Array.isArray(queuedTurnsAction?.payload?.turns)
-      ? queuedTurnsAction.payload.turns
+  /**
+   * Fire logic for queued_user_turns. Called only after canFireDeferredAction()
+   * returns null. Handles queue-specific validation (empty queue, output lock).
+   */
+  fireDeferredQueuedUserTurns(session, action: DeferredQueuedUserTurnsAction, reason: string): boolean {
+    const pendingQueue = Array.isArray(action?.payload?.turns)
+      ? action.payload.turns
       : [];
     if (!pendingQueue.length) {
       this.clearDeferredVoiceAction(session, "queued_user_turns");
       return false;
     }
 
-    const now = Date.now();
-    const notBeforeAt = Math.max(0, Number(queuedTurnsAction.notBeforeAt || 0));
-    if (notBeforeAt > now) {
-      this.scheduleDeferredBotTurnOpenFlush({
-        session,
-        delayMs: notBeforeAt - now,
-        reason
-      });
-      return false;
-    }
-
+    // queued_user_turns has an additional output lock check (includes music phase)
     const replyOutputLockState = this.getReplyOutputLockState(session);
-    if (replyOutputLockState.locked || Number(session.userCaptures?.size || 0) > 0) {
-      this.scheduleDeferredBotTurnOpenFlush({
-        session,
-        reason
-      });
+    if (replyOutputLockState.locked) {
+      this.scheduleDeferredBotTurnOpenFlush({ session, reason });
       return false;
     }
 
@@ -2831,58 +2887,20 @@ export class VoiceSessionManager {
     });
   }
 
-  recheckDeferredJoinGreeting(session, {
-    action = null,
-    reason = "manual"
-  } = {}) {
-    if (!session || session.ending) return false;
-    const joinGreetingAction = action && typeof action === "object"
-      ? action
-      : this.getDeferredVoiceAction(session, "join_greeting");
-    if (!joinGreetingAction) return false;
+  /**
+   * Fire logic for join_greeting. Called only after canFireDeferredAction()
+   * returns null. Handles join-greeting-specific preconditions and dispatch.
+   */
+  fireDeferredJoinGreeting(session, action, reason: string): boolean {
     if (!isRealtimeMode(session.mode) || !session.playbackArmed || session.lastAssistantReplyAt) {
       this.clearDeferredVoiceAction(session, "join_greeting");
       return false;
     }
 
-    const now = Date.now();
-    const joinWindowAgeMs = Math.max(0, now - Number(session?.startedAt || 0));
+    const joinWindowAgeMs = Math.max(0, Date.now() - Number(session?.startedAt || 0));
     const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
-    const expiresAt = Math.max(0, Number(joinGreetingAction.expiresAt || 0));
-    if (!joinWindowActive || (expiresAt > 0 && now >= expiresAt)) {
+    if (!joinWindowActive) {
       this.clearDeferredVoiceAction(session, "join_greeting");
-      return false;
-    }
-
-    const notBeforeAt = Math.max(0, Number(joinGreetingAction.notBeforeAt || 0));
-    if (notBeforeAt > now) {
-      this.scheduleDeferredVoiceActionRecheck(session, {
-        type: "join_greeting",
-        delayMs: notBeforeAt - now,
-        reason
-      });
-      return false;
-    }
-
-    if (
-      Number(session.userCaptures?.size || 0) > 0 ||
-      session.pendingResponse ||
-      this.isRealtimeResponseActive(session) ||
-      Boolean(session.awaitingToolOutputs) ||
-      (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0)
-    ) {
-      this.setDeferredVoiceAction(session, {
-        type: "join_greeting",
-        goal: "announce_join",
-        freshnessPolicy: "regenerate_from_goal",
-        status: "deferred",
-        reason,
-        notBeforeAt: 0,
-        expiresAt,
-        payload: {
-          trigger: String(joinGreetingAction?.payload?.trigger || joinGreetingAction.reason || "join").trim() || null
-        }
-      });
       return false;
     }
 
@@ -2901,7 +2919,7 @@ export class VoiceSessionManager {
       session.lastAssistantReplyAt = Date.now();
     } else {
       const joinGreetingTrigger = String(
-        joinGreetingAction?.payload?.trigger || joinGreetingAction.reason || "join_greeting"
+        action?.payload?.trigger || action.reason || "join_greeting"
       )
         .replace(/\s+/g, " ")
         .trim()
@@ -2951,29 +2969,25 @@ export class VoiceSessionManager {
         sessionId: session.id,
         mode: session.mode,
         strategy: useNativeRealtimeReply ? "native" : "brain",
-        deferredActionReason: String(joinGreetingAction.reason || "deferred"),
+        deferredActionReason: String(action.reason || "deferred"),
         recheckReason: String(reason || "manual")
       }
     });
     return true;
   }
 
-  recheckDeferredInterruptedReply(session, {
-    action = null,
-    reason = "manual",
-    context = null
-  } = {}) {
-    if (!session || session.ending) return false;
-    const interruptedReplyAction = action && typeof action === "object"
-      ? action
-      : this.getDeferredVoiceAction(session, "interrupted_reply");
-    if (!interruptedReplyAction) return false;
+  /**
+   * Fire logic for interrupted_reply. Called only after canFireDeferredAction()
+   * returns null. Handles barge-in-specific validation (user matching, duration,
+   * retry text).
+   */
+  fireDeferredInterruptedReply(session, action, reason: string, context): boolean {
     if (!isRealtimeMode(session.mode)) {
       this.clearDeferredVoiceAction(session, "interrupted_reply");
       return false;
     }
 
-    const interruptedAt = Math.max(0, Number(interruptedReplyAction?.payload?.interruptedAt || 0));
+    const interruptedAt = Math.max(0, Number(action?.payload?.interruptedAt || 0));
     const now = Date.now();
     if (!interruptedAt || now - interruptedAt > BARGE_IN_RETRY_MAX_AGE_MS) {
       this.clearDeferredVoiceAction(session, "interrupted_reply");
@@ -2981,12 +2995,8 @@ export class VoiceSessionManager {
     }
 
     const normalizedUserId = String(context?.userId || "").trim();
-    const interruptedByUserId = String(interruptedReplyAction?.payload?.interruptedByUserId || "").trim();
+    const interruptedByUserId = String(action?.payload?.interruptedByUserId || "").trim();
     if (!normalizedUserId || !interruptedByUserId || normalizedUserId !== interruptedByUserId) {
-      return false;
-    }
-
-    if (Number(session.userCaptures?.size || 0) > 0) {
       return false;
     }
 
@@ -3014,9 +3024,9 @@ export class VoiceSessionManager {
       return false;
     }
 
-    const retryText = normalizeVoiceText(interruptedReplyAction?.payload?.utteranceText || "", STT_REPLY_MAX_CHARS);
+    const retryText = normalizeVoiceText(action?.payload?.utteranceText || "", STT_REPLY_MAX_CHARS);
     const interruptionPolicy = this.normalizeReplyInterruptionPolicy(
-      interruptedReplyAction?.payload?.interruptionPolicy
+      action?.payload?.interruptionPolicy
     );
     if (!retryText) {
       this.clearDeferredVoiceAction(session, "interrupted_reply");
@@ -3046,7 +3056,7 @@ export class VoiceSessionManager {
         fullOverrideMinMs: BARGE_IN_FULL_OVERRIDE_MIN_MS,
         interruptionPolicyScope: interruptionPolicy?.scope || null,
         interruptionPolicyAllowedUserId: interruptionPolicy?.allowedUserId || null,
-        freshnessPolicy: interruptedReplyAction?.freshnessPolicy || null,
+        freshnessPolicy: action?.freshnessPolicy || null,
         deferredActionReason: String(reason || "manual")
       }
     });
@@ -7674,11 +7684,11 @@ export class VoiceSessionManager {
     };
 
     // Called after a capture resolves with no usable speech (empty, silence-
-    // gated, or suppressed). If this was the last capture and a join greeting
-    // is still pending, fire it now.
-    const maybeTriggerJoinGreeting = () => {
-      if (this.getDeferredVoiceAction(session, "join_greeting") && session.userCaptures.size === 0) {
-        this.fireJoinGreeting(session, "capture_resolved");
+    // gated, or suppressed). If this was the last capture and deferred actions
+    // are pending, recheck them now that the output channel may be clear.
+    const maybeTriggerDeferredActions = () => {
+      if (session.userCaptures.size === 0) {
+        this.recheckDeferredVoiceActions({ session, reason: "capture_resolved" });
       }
     };
 
@@ -7843,7 +7853,7 @@ export class VoiceSessionManager {
           }
         });
         cleanupCapture();
-        maybeTriggerJoinGreeting();
+        maybeTriggerDeferredActions();
         if (useOpenAiPerUserAsr) {
           this.scheduleOpenAiAsrSessionIdleClose({
             session,
@@ -7895,7 +7905,7 @@ export class VoiceSessionManager {
           }
         });
         cleanupCapture();
-        maybeTriggerJoinGreeting();
+        maybeTriggerDeferredActions();
         if (useOpenAiPerUserAsr) {
           this.scheduleOpenAiAsrSessionIdleClose({ session, userId });
         } else if (useOpenAiSharedAsr) {
@@ -8269,7 +8279,7 @@ export class VoiceSessionManager {
         }
       });
       cleanupCapture();
-      maybeTriggerJoinGreeting();
+      maybeTriggerDeferredActions();
       if (useOpenAiPerUserAsr) {
         this.scheduleOpenAiAsrSessionIdleClose({
           session,
@@ -8367,8 +8377,7 @@ export class VoiceSessionManager {
       });
       this.recheckDeferredVoiceActions({
         session,
-        reason: "empty_asr_bridge_drop",
-        preferredTypes: ["join_greeting"]
+        reason: "empty_asr_bridge_drop"
       });
       return false;
     }
@@ -10814,8 +10823,14 @@ export class VoiceSessionManager {
       });
 
       // Start greeting observation window now that instructions are set.
-      if (this.getDeferredVoiceAction(session, "join_greeting") && session.playbackArmed && !session.lastAssistantReplyAt) {
-        this.scheduleJoinGreetingGrace(session);
+      const greetingAction = this.getDeferredVoiceAction(session, "join_greeting");
+      if (greetingAction && session.playbackArmed && !session.lastAssistantReplyAt) {
+        const delayMs = Math.max(0, Number(greetingAction.notBeforeAt || 0) - Date.now());
+        this.scheduleDeferredVoiceActionRecheck(session, {
+          type: "join_greeting",
+          delayMs,
+          reason: "join_greeting_grace"
+        });
       }
     } catch (error) {
       this.store.logAction({

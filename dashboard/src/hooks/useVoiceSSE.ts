@@ -217,8 +217,6 @@ export type VoiceSession = {
       active: boolean;
       ageMs: number;
       windowMs: number;
-      greetingScheduled?: boolean;
-      greetingTimerActive?: boolean;
     };
     thoughtEngine: {
       busy: boolean;

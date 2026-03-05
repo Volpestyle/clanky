@@ -2496,3 +2496,225 @@ test("dispose detaches handlers and clears join locks", async () => {
   assert.equal(offCalls.includes("voiceStateUpdate"), true);
   assert.equal(manager.joinLocks.size, 0);
 });
+
+// ---------------------------------------------------------------------------
+// canFireDeferredAction — generic gating layer
+// ---------------------------------------------------------------------------
+
+test("canFireDeferredAction returns null (can fire) when session is valid and output channel is clear", () => {
+  const { manager } = createManager();
+  const session = createSession({ mode: "openai_realtime" });
+  const action = {
+    type: "join_greeting",
+    goal: "announce_join",
+    freshnessPolicy: "regenerate_from_goal",
+    status: "scheduled",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    notBeforeAt: 0,
+    expiresAt: Date.now() + 30_000,
+    reason: "connection_ready",
+    revision: 1,
+    payload: { trigger: "connection_ready" }
+  };
+  const result = manager.canFireDeferredAction(session, action);
+  assert.equal(result, null);
+});
+
+test("canFireDeferredAction returns 'session_inactive' when session is null", () => {
+  const { manager } = createManager();
+  const result = manager.canFireDeferredAction(null, { type: "join_greeting" } as any);
+  assert.equal(result, "session_inactive");
+});
+
+test("canFireDeferredAction returns 'session_inactive' when session.ending is true", () => {
+  const { manager } = createManager();
+  const session = createSession({ ending: true });
+  const action = {
+    type: "join_greeting",
+    status: "scheduled",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    notBeforeAt: 0,
+    expiresAt: Date.now() + 30_000,
+    reason: "test",
+    revision: 1,
+    payload: {}
+  };
+  const result = manager.canFireDeferredAction(session, action);
+  assert.equal(result, "session_inactive");
+});
+
+test("canFireDeferredAction returns 'no_action' when action is null", () => {
+  const { manager } = createManager();
+  const session = createSession();
+  const result = manager.canFireDeferredAction(session, null);
+  assert.equal(result, "no_action");
+});
+
+test("canFireDeferredAction returns 'expired' when expiresAt is in the past", () => {
+  const { manager } = createManager();
+  const session = createSession();
+  const action = {
+    type: "join_greeting",
+    status: "scheduled",
+    createdAt: Date.now() - 60_000,
+    updatedAt: Date.now() - 60_000,
+    notBeforeAt: 0,
+    expiresAt: Date.now() - 1_000,
+    reason: "test",
+    revision: 1,
+    payload: {}
+  };
+  const result = manager.canFireDeferredAction(session, action);
+  assert.equal(result, "expired");
+});
+
+test("canFireDeferredAction returns 'not_before_at' when notBeforeAt is in the future", () => {
+  const { manager } = createManager();
+  const session = createSession();
+  const action = {
+    type: "join_greeting",
+    status: "scheduled",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    notBeforeAt: Date.now() + 5_000,
+    expiresAt: Date.now() + 30_000,
+    reason: "test",
+    revision: 1,
+    payload: {}
+  };
+  const result = manager.canFireDeferredAction(session, action);
+  assert.equal(result, "not_before_at");
+});
+
+test("canFireDeferredAction returns 'active_captures' when user captures are in progress", () => {
+  const { manager } = createManager();
+  const session = createSession();
+  session.userCaptures.set("user-1", { startedAt: Date.now() });
+  const action = {
+    type: "join_greeting",
+    status: "scheduled",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    notBeforeAt: 0,
+    expiresAt: Date.now() + 30_000,
+    reason: "test",
+    revision: 1,
+    payload: {}
+  };
+  const result = manager.canFireDeferredAction(session, action);
+  assert.equal(result, "active_captures");
+});
+
+test("canFireDeferredAction returns 'pending_response' when session has pendingResponse", () => {
+  const { manager } = createManager();
+  const session = createSession({ pendingResponse: { id: "resp-1" } });
+  const action = {
+    type: "join_greeting",
+    status: "scheduled",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    notBeforeAt: 0,
+    expiresAt: Date.now() + 30_000,
+    reason: "test",
+    revision: 1,
+    payload: {}
+  };
+  const result = manager.canFireDeferredAction(session, action);
+  assert.equal(result, "pending_response");
+});
+
+test("canFireDeferredAction returns 'active_response' when realtime response is active", () => {
+  const { manager } = createManager();
+  const session = createSession({ mode: "openai_realtime" });
+  manager.isRealtimeResponseActive = () => true;
+  const action = {
+    type: "join_greeting",
+    status: "scheduled",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    notBeforeAt: 0,
+    expiresAt: Date.now() + 30_000,
+    reason: "test",
+    revision: 1,
+    payload: {}
+  };
+  const result = manager.canFireDeferredAction(session, action);
+  assert.equal(result, "active_response");
+});
+
+test("canFireDeferredAction returns 'awaiting_tool_outputs' when tools are pending", () => {
+  const { manager } = createManager();
+  const session = createSession({ awaitingToolOutputs: true });
+  const action = {
+    type: "join_greeting",
+    status: "scheduled",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    notBeforeAt: 0,
+    expiresAt: Date.now() + 30_000,
+    reason: "test",
+    revision: 1,
+    payload: {}
+  };
+  const result = manager.canFireDeferredAction(session, action);
+  assert.equal(result, "awaiting_tool_outputs");
+});
+
+test("canFireDeferredAction returns 'tool_calls_running' when openAiToolCallExecutions is non-empty", () => {
+  const { manager } = createManager();
+  const session = createSession();
+  session.openAiToolCallExecutions = new Map([["call-1", {}]]);
+  const action = {
+    type: "join_greeting",
+    status: "scheduled",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    notBeforeAt: 0,
+    expiresAt: Date.now() + 30_000,
+    reason: "test",
+    revision: 1,
+    payload: {}
+  };
+  const result = manager.canFireDeferredAction(session, action);
+  assert.equal(result, "tool_calls_running");
+});
+
+test("canFireDeferredAction treats expiresAt=0 as no expiry", () => {
+  const { manager } = createManager();
+  const session = createSession();
+  const action = {
+    type: "join_greeting",
+    status: "scheduled",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    notBeforeAt: 0,
+    expiresAt: 0,
+    reason: "test",
+    revision: 1,
+    payload: {}
+  };
+  const result = manager.canFireDeferredAction(session, action);
+  assert.equal(result, null);
+});
+
+test("canFireDeferredAction checks blockers in priority order (captures before pending_response)", () => {
+  const { manager } = createManager();
+  const session = createSession({ pendingResponse: { id: "resp-1" } });
+  session.userCaptures.set("user-1", { startedAt: Date.now() });
+  const action = {
+    type: "join_greeting",
+    status: "scheduled",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    notBeforeAt: 0,
+    expiresAt: Date.now() + 30_000,
+    reason: "test",
+    revision: 1,
+    payload: {}
+  };
+  // Should return the first blocker hit: active_captures
+  const result = manager.canFireDeferredAction(session, action);
+  assert.equal(result, "active_captures");
+});
