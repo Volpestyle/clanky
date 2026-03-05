@@ -81,6 +81,12 @@ export async function main() {
     }
     closing = true;
 
+    const forceTimer = setTimeout(() => {
+      console.error("Shutdown timed out after 10s. Forcing exit.");
+      process.exit(1);
+    }, 10_000);
+    forceTimer.unref();
+
     console.log(`Shutting down (${signal})...`);
 
     try {
