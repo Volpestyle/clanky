@@ -5,6 +5,64 @@ import { rangeStyle } from "../../utils";
 import { LlmProviderOptions } from "./LlmProviderOptions";
 import { OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS } from "../../settingsFormModel";
 
+/* ── Inline constants ── */
+
+const OPENAI_TTS_MODEL_OPTIONS = Object.freeze([
+  "gpt-4o-mini-tts",
+  "tts-1",
+  "tts-1-hd"
+]);
+
+/* ── Pipeline flow indicator ── */
+
+type PipelineStage = { label: string; active: boolean };
+
+function PipelineFlowIndicator({ stages }: { stages: PipelineStage[] }) {
+  return (
+    <div className="vps-pipeline-flow">
+      {stages.map((stage, i) => (
+        <React.Fragment key={stage.label}>
+          {i > 0 && <span className="vps-stage-arrow">&rarr;</span>}
+          <span
+            className={`vps-stage-pill ${
+              stage.active ? "vps-stage-pill-active" : "vps-stage-pill-bypassed"
+            }`}
+          >
+            {stage.label}
+          </span>
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+/* ── Stage panel wrapper ── */
+
+function StagePanel({
+  number,
+  label,
+  pathTag,
+  children
+}: {
+  number: number;
+  label: string;
+  pathTag?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="vps-stage-panel">
+      <div className="vps-stage-panel-header">
+        <span className="vps-stage-number">{number}</span>
+        <span className="vps-stage-label">{label}</span>
+        {pathTag && <span className="vps-stage-path-tag">{pathTag}</span>}
+      </div>
+      <div className="vps-stage-body">{children}</div>
+    </div>
+  );
+}
+
+/* ── Main component ── */
+
 export function VoiceModeSettingsSection({
   id,
   form,
@@ -51,6 +109,31 @@ export function VoiceModeSettingsSection({
     Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge);
   const usesBrainGeneration = isRealtimeMode && isBrainPath;
   const classifierVisible = isRealtimeMode && isBridgePath && !form.voiceCommandOnlyMode;
+
+  /* Pipeline stages for indicator */
+  const pipelineStages: PipelineStage[] = isNativePath
+    ? [
+        { label: "Audio In", active: true },
+        { label: "Realtime Model", active: true },
+        { label: "Audio Out", active: true }
+      ]
+    : isBridgePath
+    ? [
+        { label: "Audio In", active: true },
+        { label: "ASR", active: true },
+        { label: "Classifier", active: true },
+        { label: "Realtime Brain + TTS", active: true },
+        { label: "Audio Out", active: true }
+      ]
+    : [
+        { label: "Audio In", active: true },
+        { label: "ASR", active: true },
+        { label: "Classifier", active: true },
+        { label: "Text Brain", active: true },
+        { label: "TTS", active: true },
+        { label: "Audio Out", active: true }
+      ];
+
   return (
     <SettingsSection id={id} title="Voice Mode" active={form.voiceEnabled}>
       <div className="toggles">
@@ -61,7 +144,7 @@ export function VoiceModeSettingsSection({
       </div>
 
       <Collapse open={showVoiceAdvanced}>
-          {/* ── Pipeline ── */}
+          {/* ── Top: Runtime + Reply Path ── */}
           <label htmlFor="voice-mode">Voice runtime mode</label>
           <select id="voice-mode" value={form.voiceProvider} onChange={set("voiceProvider")}>
             <option value="xai">xAI realtime (low-latency)</option>
@@ -108,27 +191,15 @@ export function VoiceModeSettingsSection({
                   <span> &mdash; Audio &rarr; ASR transcript &rarr; text LLM &rarr; TTS &rarr; audio out. Maximum control, any text model. Requires OpenAI API key for ASR + TTS provider.</span>
                 </label>
               </div>
+
+              {/* ── Pipeline Flow Indicator ── */}
+              <PipelineFlowIndicator stages={pipelineStages} />
             </>
           )}
 
-          {/* ── ASR Pipeline ── */}
+          {/* ── Stage 1: ASR ── */}
           {isRealtimeMode && (isBridgePath || isBrainPath) && (
-            <>
-              <h4>ASR Pipeline</h4>
-              <label htmlFor="voice-brain-provider">
-                {isBridgePath ? "Realtime provider (brain + TTS)" : "Realtime provider (ASR pipeline)"}
-              </label>
-              <select
-                id="voice-brain-provider"
-                value={form.voiceBrainProvider || "openai"}
-                onChange={set("voiceBrainProvider")}
-              >
-                <option value="openai">OpenAI</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="xai">xAI</option>
-                <option value="gemini">Gemini</option>
-              </select>
-
+            <StagePanel number={1} label="ASR" pathTag="Bridge / Brain">
               <div className="split">
                 <div>
                   <label htmlFor="voice-openai-realtime-transcription-method">Transcription method</label>
@@ -229,13 +300,12 @@ export function VoiceModeSettingsSection({
                 Auto mode keeps multilingual switching and uses the hint only for ambiguity bias. Fixed mode forces that
                 language for transcription.
               </p>
-            </>
+            </StagePanel>
           )}
 
-          {/* ── ASR Controls (native path fallback) ── */}
-          {(!isRealtimeMode || isNativePath) && (
-            <>
-              <h4>ASR Controls</h4>
+          {/* ── ASR Controls (native path — minimal) ── */}
+          {isRealtimeMode && isNativePath && (
+            <StagePanel number={1} label="ASR" pathTag="Native">
               <div className="toggles">
                 <label>
                   <input
@@ -274,10 +344,106 @@ export function VoiceModeSettingsSection({
                 Auto mode keeps multilingual switching and uses the hint only for ambiguity bias. Fixed mode forces that
                 language for transcription.
               </p>
-            </>
+            </StagePanel>
           )}
 
-          {/* ── Reply Decision ── */}
+          {/* ── Non-realtime ASR Controls ── */}
+          {!isRealtimeMode && (
+            <StagePanel number={1} label="ASR">
+              <div className="toggles">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={form.voiceAsrEnabled}
+                    onChange={set("voiceAsrEnabled")}
+                  />
+                  ASR enabled (disable to use slash commands only)
+                </label>
+              </div>
+
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-asr-language-mode-legacy">ASR language mode</label>
+                  <select
+                    id="voice-asr-language-mode-legacy"
+                    value={form.voiceAsrLanguageMode}
+                    onChange={set("voiceAsrLanguageMode")}
+                  >
+                    <option value="auto">Auto detect (allow switching)</option>
+                    <option value="fixed">Fixed language</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="voice-asr-language-hint-legacy">ASR language hint (BCP-47, e.g. en, en-us)</label>
+                  <input
+                    id="voice-asr-language-hint-legacy"
+                    type="text"
+                    value={form.voiceAsrLanguageHint}
+                    onChange={set("voiceAsrLanguageHint")}
+                    placeholder="en"
+                  />
+                </div>
+              </div>
+              <p>
+                Auto mode keeps multilingual switching and uses the hint only for ambiguity bias. Fixed mode forces that
+                language for transcription.
+              </p>
+            </StagePanel>
+          )}
+
+          {/* ── Stage 2: Reply Classifier (bridge mode only) ── */}
+          {classifierVisible && (
+            <StagePanel number={2} label="Reply Classifier" pathTag="Bridge">
+              <p>
+                LLM gate for bridge mode. Classifies each non-direct-address turn as YES/NO before forwarding to the realtime brain. Replaces heuristic engagement gates with actual language understanding.
+              </p>
+              <div className="toggles">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(form.voiceReplyDecisionLlmEnabled)}
+                    onChange={set("voiceReplyDecisionLlmEnabled")}
+                  />
+                  Enable reply classifier
+                </label>
+              </div>
+              {form.voiceReplyDecisionLlmEnabled && (
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-reply-decision-provider">Provider</label>
+                    <select
+                      id="voice-reply-decision-provider"
+                      value={form.voiceReplyDecisionLlmProvider}
+                      onChange={setVoiceReplyDecisionProvider}
+                    >
+                      <LlmProviderOptions />
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="voice-reply-decision-model-preset">Model ID</label>
+                    <select
+                      id="voice-reply-decision-model-preset"
+                      value={selectedVoiceReplyDecisionPresetModel}
+                      onChange={selectVoiceReplyDecisionPresetModel}
+                    >
+                      {voiceReplyDecisionModelOptions.map((modelId) => (
+                        <option key={modelId} value={modelId}>
+                          {modelId}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+              {!form.voiceReplyDecisionLlmEnabled && (
+                <p>
+                  When disabled, all non-direct-address turns in bridge mode are blocked (conservative fallback).
+                </p>
+              )}
+            </StagePanel>
+          )}
+
+          {/* ── Reply Decision (all paths) ── */}
           <h4>Reply Decision</h4>
           <label htmlFor="voice-reply-eagerness">
             Voice reply eagerness (unaddressed turns): <strong>{form.voiceReplyEagerness}%</strong>
@@ -325,68 +491,9 @@ export function VoiceModeSettingsSection({
             <div />
           </div>
 
-          {/* ── Reply Classifier (bridge mode only) ── */}
-          {classifierVisible && (
-            <>
-              <h4>Reply Classifier</h4>
-              <p>
-                LLM gate for bridge mode. Classifies each non-direct-address turn as YES/NO before forwarding to the realtime brain. Replaces heuristic engagement gates with actual language understanding.
-              </p>
-              <div className="toggles">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(form.voiceReplyDecisionLlmEnabled)}
-                    onChange={set("voiceReplyDecisionLlmEnabled")}
-                  />
-                  Enable reply classifier
-                </label>
-              </div>
-              {form.voiceReplyDecisionLlmEnabled && (
-                <div className="split">
-                  <div>
-                    <label htmlFor="voice-reply-decision-provider">Provider</label>
-                    <select
-                      id="voice-reply-decision-provider"
-                      value={form.voiceReplyDecisionLlmProvider}
-                      onChange={setVoiceReplyDecisionProvider}
-                    >
-                      <LlmProviderOptions />
-                    </select>
-                  </div>
-                  <div>
-                    <label htmlFor="voice-reply-decision-model-preset">Model ID</label>
-                    <select
-                      id="voice-reply-decision-model-preset"
-                      value={selectedVoiceReplyDecisionPresetModel}
-                      onChange={selectVoiceReplyDecisionPresetModel}
-                    >
-                      {voiceReplyDecisionModelOptions.map((modelId) => (
-                        <option key={modelId} value={modelId}>
-                          {modelId}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              )}
-              {!form.voiceReplyDecisionLlmEnabled && (
-                <p>
-                  When disabled, all non-direct-address turns in bridge mode are blocked (conservative fallback).
-                </p>
-              )}
-            </>
-          )}
-
-          {/* ── Voice Output ── */}
-          <h4>Voice Output</h4>
-          <p>
-            Model and voice used for spoken audio output. In Native mode the model handles end-to-end; in Bridge/Brain modes it receives generated text and produces speech.
-          </p>
-
+          {/* ── Stage 3: Brain (brain path only) ── */}
           {usesBrainGeneration && (
-            <>
-              <h4>Brain LLM</h4>
+            <StagePanel number={3} label="Brain" pathTag="Brain">
               <p>Used for voice reply generation when the reply path is set to Brain.</p>
               <div className="toggles">
                 <label>
@@ -426,208 +533,274 @@ export function VoiceModeSettingsSection({
                   </select>
                 </div>
               </div>
-            </>
+            </StagePanel>
           )}
 
-          {isVoiceAgentMode && (
-            <>
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-xai-voice">xAI voice</label>
-                  <select id="voice-xai-voice" value={form.voiceXaiVoice} onChange={set("voiceXaiVoice")}>
-                    {xAiVoiceOptions.map((voiceName) => (
-                      <option key={voiceName} value={voiceName}>
-                        {voiceName}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="voice-xai-region">xAI region</label>
-                  <input id="voice-xai-region" type="text" value={form.voiceXaiRegion} onChange={set("voiceXaiRegion")} />
-                </div>
-              </div>
+          {/* ── Stage 4: Voice Output ── */}
+          <StagePanel number={usesBrainGeneration ? 4 : isBridgePath ? 3 : 2} label="Voice Output">
+            <p>
+              {isBridgePath
+                ? "In Bridge mode, the realtime model handles both reasoning and speech."
+                : isBrainPath
+                ? "In Brain mode, the realtime API speaks generated text; OpenAI TTS API is the fallback."
+                : "Model and voice used for spoken audio output. In Native mode the model handles end-to-end."}
+            </p>
 
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-xai-audio-format">xAI audio format</label>
-                  <input
-                    id="voice-xai-audio-format"
-                    type="text"
-                    value={form.voiceXaiAudioFormat}
-                    onChange={set("voiceXaiAudioFormat")}
-                  />
+            {isVoiceAgentMode && (
+              <>
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-xai-voice">xAI voice</label>
+                    <select id="voice-xai-voice" value={form.voiceXaiVoice} onChange={set("voiceXaiVoice")}>
+                      {xAiVoiceOptions.map((voiceName) => (
+                        <option key={voiceName} value={voiceName}>
+                          {voiceName}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="voice-xai-region">xAI region</label>
+                    <input id="voice-xai-region" type="text" value={form.voiceXaiRegion} onChange={set("voiceXaiRegion")} />
+                  </div>
                 </div>
-                <div>
-                  <label htmlFor="voice-xai-sample-rate">xAI sample rate (Hz)</label>
-                  <input
-                    id="voice-xai-sample-rate"
-                    type="number"
-                    min="8000"
-                    max="48000"
-                    value={form.voiceXaiSampleRateHz}
-                    onChange={set("voiceXaiSampleRateHz")}
-                  />
-                </div>
-              </div>
-            </>
-          )}
 
-          {isOpenAiRealtimeMode && (
-            <>
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-openai-realtime-model">OpenAI output model</label>
-                  <select
-                    id="voice-openai-realtime-model"
-                    value={form.voiceOpenAiRealtimeModel}
-                    onChange={set("voiceOpenAiRealtimeModel")}
-                  >
-                    {openAiRealtimeModelOptions.map((modelId) => (
-                      <option key={modelId} value={modelId}>
-                        {modelId}
-                      </option>
-                    ))}
-                  </select>
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-xai-audio-format">xAI audio format</label>
+                    <input
+                      id="voice-xai-audio-format"
+                      type="text"
+                      value={form.voiceXaiAudioFormat}
+                      onChange={set("voiceXaiAudioFormat")}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="voice-xai-sample-rate">xAI sample rate (Hz)</label>
+                    <input
+                      id="voice-xai-sample-rate"
+                      type="number"
+                      min="8000"
+                      max="48000"
+                      value={form.voiceXaiSampleRateHz}
+                      onChange={set("voiceXaiSampleRateHz")}
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label htmlFor="voice-openai-realtime-voice">OpenAI realtime voice</label>
-                  <select
-                    id="voice-openai-realtime-voice"
-                    value={form.voiceOpenAiRealtimeVoice}
-                    onChange={set("voiceOpenAiRealtimeVoice")}
-                  >
-                    {openAiRealtimeVoiceOptions.map((voiceName) => (
-                      <option key={voiceName} value={voiceName}>
-                        {voiceName}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+              </>
+            )}
 
-              <p>Audio transport is fixed to `pcm16` for stable Discord playback.</p>
-            </>
-          )}
+            {isOpenAiRealtimeMode && (
+              <>
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-openai-realtime-model">OpenAI output model</label>
+                    <select
+                      id="voice-openai-realtime-model"
+                      value={form.voiceOpenAiRealtimeModel}
+                      onChange={set("voiceOpenAiRealtimeModel")}
+                    >
+                      {openAiRealtimeModelOptions.map((modelId) => (
+                        <option key={modelId} value={modelId}>
+                          {modelId}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="voice-openai-realtime-voice">OpenAI realtime voice</label>
+                    <select
+                      id="voice-openai-realtime-voice"
+                      value={form.voiceOpenAiRealtimeVoice}
+                      onChange={set("voiceOpenAiRealtimeVoice")}
+                    >
+                      {openAiRealtimeVoiceOptions.map((voiceName) => (
+                        <option key={voiceName} value={voiceName}>
+                          {voiceName}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
 
-          {isGeminiRealtimeMode && (
-            <>
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-gemini-realtime-model">Gemini realtime model</label>
-                  <select
-                    id="voice-gemini-realtime-model"
-                    value={form.voiceGeminiRealtimeModel}
-                    onChange={set("voiceGeminiRealtimeModel")}
-                  >
-                    {geminiRealtimeModelOptions.map((modelId) => (
-                      <option key={modelId} value={modelId}>
-                        {modelId}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="voice-gemini-realtime-voice">Gemini realtime voice</label>
-                  <input
-                    id="voice-gemini-realtime-voice"
-                    type="text"
-                    value={form.voiceGeminiRealtimeVoice}
-                    onChange={set("voiceGeminiRealtimeVoice")}
-                  />
-                </div>
-              </div>
+                <p>Audio transport is fixed to `pcm16` for stable Discord playback.</p>
+              </>
+            )}
 
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-gemini-realtime-api-base-url">Gemini API base URL</label>
-                  <input
-                    id="voice-gemini-realtime-api-base-url"
-                    type="text"
-                    value={form.voiceGeminiRealtimeApiBaseUrl}
-                    onChange={set("voiceGeminiRealtimeApiBaseUrl")}
-                  />
+            {isGeminiRealtimeMode && (
+              <>
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-gemini-realtime-model">Gemini realtime model</label>
+                    <select
+                      id="voice-gemini-realtime-model"
+                      value={form.voiceGeminiRealtimeModel}
+                      onChange={set("voiceGeminiRealtimeModel")}
+                    >
+                      {geminiRealtimeModelOptions.map((modelId) => (
+                        <option key={modelId} value={modelId}>
+                          {modelId}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="voice-gemini-realtime-voice">Gemini realtime voice</label>
+                    <input
+                      id="voice-gemini-realtime-voice"
+                      type="text"
+                      value={form.voiceGeminiRealtimeVoice}
+                      onChange={set("voiceGeminiRealtimeVoice")}
+                    />
+                  </div>
                 </div>
-                <div />
-              </div>
 
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-gemini-realtime-input-sample-rate">Gemini input sample rate (Hz)</label>
-                  <input
-                    id="voice-gemini-realtime-input-sample-rate"
-                    type="number"
-                    min="8000"
-                    max="48000"
-                    value={form.voiceGeminiRealtimeInputSampleRateHz}
-                    onChange={set("voiceGeminiRealtimeInputSampleRateHz")}
-                  />
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-gemini-realtime-api-base-url">Gemini API base URL</label>
+                    <input
+                      id="voice-gemini-realtime-api-base-url"
+                      type="text"
+                      value={form.voiceGeminiRealtimeApiBaseUrl}
+                      onChange={set("voiceGeminiRealtimeApiBaseUrl")}
+                    />
+                  </div>
+                  <div />
                 </div>
-                <div>
-                  <label htmlFor="voice-gemini-realtime-output-sample-rate">Gemini output sample rate (Hz)</label>
-                  <input
-                    id="voice-gemini-realtime-output-sample-rate"
-                    type="number"
-                    min="8000"
-                    max="48000"
-                    value={form.voiceGeminiRealtimeOutputSampleRateHz}
-                    onChange={set("voiceGeminiRealtimeOutputSampleRateHz")}
-                  />
-                </div>
-              </div>
-            </>
-          )}
 
-          {isElevenLabsRealtimeMode && (
-            <>
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-elevenlabs-agent-id">ElevenLabs agent ID</label>
-                  <input
-                    id="voice-elevenlabs-agent-id"
-                    type="text"
-                    value={form.voiceElevenLabsRealtimeAgentId}
-                    onChange={set("voiceElevenLabsRealtimeAgentId")}
-                    placeholder="agent_..."
-                  />
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-gemini-realtime-input-sample-rate">Gemini input sample rate (Hz)</label>
+                    <input
+                      id="voice-gemini-realtime-input-sample-rate"
+                      type="number"
+                      min="8000"
+                      max="48000"
+                      value={form.voiceGeminiRealtimeInputSampleRateHz}
+                      onChange={set("voiceGeminiRealtimeInputSampleRateHz")}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="voice-gemini-realtime-output-sample-rate">Gemini output sample rate (Hz)</label>
+                    <input
+                      id="voice-gemini-realtime-output-sample-rate"
+                      type="number"
+                      min="8000"
+                      max="48000"
+                      value={form.voiceGeminiRealtimeOutputSampleRateHz}
+                      onChange={set("voiceGeminiRealtimeOutputSampleRateHz")}
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label htmlFor="voice-elevenlabs-api-base-url">ElevenLabs API base URL</label>
-                  <input
-                    id="voice-elevenlabs-api-base-url"
-                    type="text"
-                    value={form.voiceElevenLabsRealtimeApiBaseUrl}
-                    onChange={set("voiceElevenLabsRealtimeApiBaseUrl")}
-                  />
-                </div>
-              </div>
+              </>
+            )}
 
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-elevenlabs-input-sample-rate">ElevenLabs input sample rate (Hz)</label>
-                  <input
-                    id="voice-elevenlabs-input-sample-rate"
-                    type="number"
-                    min="8000"
-                    max="48000"
-                    value={form.voiceElevenLabsRealtimeInputSampleRateHz}
-                    onChange={set("voiceElevenLabsRealtimeInputSampleRateHz")}
-                  />
+            {isElevenLabsRealtimeMode && (
+              <>
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-elevenlabs-agent-id">ElevenLabs agent ID</label>
+                    <input
+                      id="voice-elevenlabs-agent-id"
+                      type="text"
+                      value={form.voiceElevenLabsRealtimeAgentId}
+                      onChange={set("voiceElevenLabsRealtimeAgentId")}
+                      placeholder="agent_..."
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="voice-elevenlabs-api-base-url">ElevenLabs API base URL</label>
+                    <input
+                      id="voice-elevenlabs-api-base-url"
+                      type="text"
+                      value={form.voiceElevenLabsRealtimeApiBaseUrl}
+                      onChange={set("voiceElevenLabsRealtimeApiBaseUrl")}
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label htmlFor="voice-elevenlabs-output-sample-rate">ElevenLabs output sample rate (Hz)</label>
-                  <input
-                    id="voice-elevenlabs-output-sample-rate"
-                    type="number"
-                    min="8000"
-                    max="48000"
-                    value={form.voiceElevenLabsRealtimeOutputSampleRateHz}
-                    onChange={set("voiceElevenLabsRealtimeOutputSampleRateHz")}
-                  />
+
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-elevenlabs-input-sample-rate">ElevenLabs input sample rate (Hz)</label>
+                    <input
+                      id="voice-elevenlabs-input-sample-rate"
+                      type="number"
+                      min="8000"
+                      max="48000"
+                      value={form.voiceElevenLabsRealtimeInputSampleRateHz}
+                      onChange={set("voiceElevenLabsRealtimeInputSampleRateHz")}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="voice-elevenlabs-output-sample-rate">ElevenLabs output sample rate (Hz)</label>
+                    <input
+                      id="voice-elevenlabs-output-sample-rate"
+                      type="number"
+                      min="8000"
+                      max="48000"
+                      value={form.voiceElevenLabsRealtimeOutputSampleRateHz}
+                      onChange={set("voiceElevenLabsRealtimeOutputSampleRateHz")}
+                    />
+                  </div>
                 </div>
-              </div>
-            </>
-          )}
+              </>
+            )}
+
+            {/* ── TTS Fallback (brain path only) ── */}
+            {usesBrainGeneration && (
+              <>
+                <h4>TTS Fallback</h4>
+                <p>
+                  When the realtime API utterance path is unavailable, the OpenAI TTS API is used as a fallback to speak generated text.
+                </p>
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-stt-pipeline-tts-model">TTS model</label>
+                    <select
+                      id="voice-stt-pipeline-tts-model"
+                      value={form.voiceSttPipelineTtsModel}
+                      onChange={set("voiceSttPipelineTtsModel")}
+                    >
+                      {OPENAI_TTS_MODEL_OPTIONS.map((modelId) => (
+                        <option key={modelId} value={modelId}>
+                          {modelId}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="voice-stt-pipeline-tts-voice">TTS voice</label>
+                    <select
+                      id="voice-stt-pipeline-tts-voice"
+                      value={form.voiceSttPipelineTtsVoice}
+                      onChange={set("voiceSttPipelineTtsVoice")}
+                    >
+                      {openAiRealtimeVoiceOptions.map((voiceName) => (
+                        <option key={voiceName} value={voiceName}>
+                          {voiceName}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-stt-pipeline-tts-speed">TTS speed</label>
+                    <input
+                      id="voice-stt-pipeline-tts-speed"
+                      type="number"
+                      min="0.25"
+                      max="4"
+                      step="0.05"
+                      value={form.voiceSttPipelineTtsSpeed}
+                      onChange={set("voiceSttPipelineTtsSpeed")}
+                    />
+                  </div>
+                  <div />
+                </div>
+              </>
+            )}
+          </StagePanel>
 
           {/* ── Session ── */}
           <h4>Session</h4>

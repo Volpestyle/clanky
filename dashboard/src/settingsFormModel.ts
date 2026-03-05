@@ -291,6 +291,12 @@ export function settingsToForm(settings) {
     voiceSoundboardEnabled: settings?.voice?.soundboard?.enabled ?? defaultVoiceSoundboard.enabled,
     voiceSoundboardAllowExternalSounds: settings?.voice?.soundboard?.allowExternalSounds ?? defaultVoiceSoundboard.allowExternalSounds,
     voiceSoundboardPreferredSoundIds: formatLineList(settings?.voice?.soundboard?.preferredSoundIds),
+    voiceSttPipelineTtsModel:
+      settings?.voice?.sttPipeline?.ttsModel ?? defaults.voice.sttPipeline.ttsModel,
+    voiceSttPipelineTtsVoice:
+      settings?.voice?.sttPipeline?.ttsVoice ?? defaults.voice.sttPipeline.ttsVoice,
+    voiceSttPipelineTtsSpeed:
+      settings?.voice?.sttPipeline?.ttsSpeed ?? defaults.voice.sttPipeline.ttsSpeed,
     voiceAsrEnabled: settings?.voice?.asrEnabled ?? defaultVoice.asrEnabled ?? true,
     voiceTextOnlyMode: settings?.voice?.textOnlyMode ?? defaultVoice.textOnlyMode ?? false,
     voiceOperationalMessages: settings?.voice?.operationalMessages ?? defaultVoice.operationalMessages ?? "all",
@@ -498,10 +504,7 @@ export function formToSettingsPatch(form) {
       enabled: form.voiceEnabled,
       voiceProvider: String(form.voiceProvider || "openai").trim(),
       replyPath: String(form.voiceReplyPath || "bridge").trim().toLowerCase(),
-      brainProvider:
-        String(form.voiceBrainProvider || "openai").trim().toLowerCase() === "native"
-          ? "openai"
-          : String(form.voiceBrainProvider || "openai").trim(),
+      brainProvider: "openai", // hardcoded — UI dropdown removed
       transcriberProvider: "openai",
       asrLanguageMode: String(form.voiceAsrLanguageMode || "").trim(),
       asrLanguageHint: String(form.voiceAsrLanguageHint || "").trim(),
@@ -548,6 +551,12 @@ export function formToSettingsPatch(form) {
         transcriptionMethod: String(form.voiceOpenAiRealtimeTranscriptionMethod || "").trim().toLowerCase(),
         inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
         usePerUserAsrBridge: Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge)
+      },
+      sttPipeline: {
+        transcriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
+        ttsModel: String(form.voiceSttPipelineTtsModel || "").trim(),
+        ttsVoice: String(form.voiceSttPipelineTtsVoice || "").trim(),
+        ttsSpeed: Number(form.voiceSttPipelineTtsSpeed)
       },
       elevenLabsRealtime: {
         agentId: String(form.voiceElevenLabsRealtimeAgentId || "").trim(),
