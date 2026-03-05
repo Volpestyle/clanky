@@ -1,7 +1,7 @@
 sequenceDiagram
     participant User as Discord User
     participant DV as Discord Voice Server
-    participant Sub as Node.js Subprocess<br/>(voiceSubprocess.ts)
+    participant Sub as Clankvox<br/>(Rust voice engine)
     participant Main as Bun Main Process<br/>(voiceSessionManager.ts)
     participant LLM as OpenAI Realtime API
     participant ASR as OpenAI ASR<br/>(Transcription WS)

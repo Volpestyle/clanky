@@ -83,7 +83,7 @@ The user asked for a review of the project's commit history to identify patterns
 
 - Capped `pcm_buffer` at 240,000 samples (5s @ 48kHz) in Rust `push_pcm()` — drops oldest on overflow
 - Added `BufferDepth` IPC message (`ttsSamples`, `musicSamples`) emitted every 500ms when buffers non-empty
-- TS side: `voiceSubprocessClient` handles `buffer_depth`, exposes `ttsBufferDepthSamples` + `getTtsBufferDepthSeconds()`
+- TS side: `clankvoxClient` handles `buffer_depth`, exposes `ttsBufferDepthSamples` + `getTtsBufferDepthSeconds()`
 - **Deferred to phase 2:** Chunked TTS sends — need real-world buffer depth metrics to inform pacing (drain rate is 960 samples/20ms tick, pacing should match that, not an arbitrary constant)
 - Typecheck clean, `cargo check` clean
 
@@ -126,8 +126,8 @@ The user asked for a review of the project's commit history to identify patterns
 
 | File | What Changed |
 |------|-------------|
-| `src/voice/rust_subprocess/src/main.rs` | `BufferDepth` OutMsg variant, `MAX_PCM_BUFFER_SAMPLES` cap, drop-oldest in `push_pcm()`, periodic depth reporting in 20ms tick loop |
-| `src/voice/voiceSubprocessClient.ts` | `buffer_depth` IPC handler, `ttsBufferDepthSamples` field, `getTtsBufferDepthSeconds()` accessor |
+| `src/voice/clankvox/src/main.rs` | `BufferDepth` OutMsg variant, `MAX_PCM_BUFFER_SAMPLES` cap, drop-oldest in `push_pcm()`, periodic depth reporting in 20ms tick loop |
+| `src/voice/clankvoxClient.ts` | `buffer_depth` IPC handler, `ttsBufferDepthSamples` field, `getTtsBufferDepthSeconds()` accessor |
 | `src/voice/voiceSessionManager.ts` | Updated `enqueueChunkedTtsPcmForPlayback()` comment to document Rust-side cap |
 
 ### Read During Analysis (not changed, relevant for future work)

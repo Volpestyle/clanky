@@ -91,9 +91,9 @@ This document tracks the cleanup pass requested across the repository, starting 
 
 ### Lint / repository hygiene
 
-- ESLint now ignores `src/voice/rust_subprocess/target/**` and the Rust build log.
+- ESLint now ignores `src/voice/clankvox/target/**` and the Rust build log.
 - `.gitignore` now ignores the same generated artifacts.
-- `src/voice/rust_subprocess/build_log.txt` was removed from the repository.
+- `src/voice/clankvox/build_log.txt` was removed from the repository.
 
 ## Verification Checklist
 

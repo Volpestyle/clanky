@@ -598,7 +598,7 @@ test("maybeInterruptBotForAssertiveSpeech does not interrupt music-only playback
         }
       ]
     ]),
-    subprocessClient: {
+    voxClient: {
       stopPlayback() {
         stopCalls.push("stop");
       }
@@ -792,7 +792,7 @@ test("isCaptureEligibleForActivityTouch requires both speech window and non-sile
 
 test("bindSessionHandlers does not touch activity on speaking.start before speech is confirmed", () => {
   const { manager, touchCalls } = createManager();
-  const subprocessClient = new EventEmitter();
+  const voxClient = new EventEmitter();
   const startCalls = [];
   const bargeCalls = [];
   manager.startInboundCapture = (payload) => {
@@ -804,7 +804,7 @@ test("bindSessionHandlers does not touch activity on speaking.start before speec
 
   const session = createSession({
     cleanupHandlers: [],
-    subprocessClient,
+    voxClient,
     settingsSnapshot: {
       botName: "clanker conk",
       voice: {
@@ -815,7 +815,7 @@ test("bindSessionHandlers does not touch activity on speaking.start before speec
   });
 
   manager.bindSessionHandlers(session, session.settingsSnapshot);
-  subprocessClient.emit("speakingStart", "speaker-1");
+  voxClient.emit("speakingStart", "speaker-1");
 
   assert.equal(startCalls.length, 1);
   assert.equal(startCalls[0]?.userId, "speaker-1");
@@ -826,7 +826,7 @@ test("bindSessionHandlers does not touch activity on speaking.start before speec
 test("bindSessionHandlers does not restart per-user OpenAI ASR on repeated speaking.start for same capture", () => {
   const { manager } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
-  const subprocessClient = new EventEmitter();
+  const voxClient = new EventEmitter();
   const beginCalls = [];
   manager.beginOpenAiAsrUtterance = (payload) => {
     beginCalls.push(payload);
@@ -851,12 +851,12 @@ test("bindSessionHandlers does not restart per-user OpenAI ASR on repeated speak
         brainProvider: "anthropic"
       }
     },
-    subprocessClient
+    voxClient
   });
 
   manager.bindSessionHandlers(session, session.settingsSnapshot);
-  subprocessClient.emit("speakingStart", "speaker-1");
-  subprocessClient.emit("speakingStart", "speaker-1");
+  voxClient.emit("speakingStart", "speaker-1");
+  voxClient.emit("speakingStart", "speaker-1");
 
   assert.equal(beginCalls.length, 1);
   assert.equal(beginCalls[0]?.userId, "speaker-1");
@@ -935,7 +935,7 @@ test("commitOpenAiAsrUtterance marks per-user commit in-flight before awaiting c
 test("bindSessionHandlers starts shared OpenAI ASR only for the first concurrent speaker", () => {
   const { manager } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
-  const subprocessClient = new EventEmitter();
+  const voxClient = new EventEmitter();
   const beginCalls = [];
   let activeAsrUserId = null;
   manager.beginOpenAiSharedAsrUtterance = (payload) => {
@@ -968,12 +968,12 @@ test("bindSessionHandlers starts shared OpenAI ASR only for the first concurrent
         }
       }
     },
-    subprocessClient
+    voxClient
   });
 
   manager.bindSessionHandlers(session, session.settingsSnapshot);
-  subprocessClient.emit("speakingStart", "speaker-1");
-  subprocessClient.emit("speakingStart", "speaker-2");
+  voxClient.emit("speakingStart", "speaker-1");
+  voxClient.emit("speakingStart", "speaker-2");
 
   assert.equal(beginCalls.length, 2);
   assert.equal(beginCalls[0]?.userId, "speaker-1");

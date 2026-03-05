@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { clamp } from "../utils.ts";
-import { VoiceSubprocessClient } from "./voiceSubprocessClient.ts";
+import { ClankvoxClient } from "./clankvoxClient.ts";
 import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
 import { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
@@ -402,8 +402,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       maxSessionMinutesCap
     );
 
-    let subprocessClient: VoiceSubprocessClient | null = null;
-    let subprocessSpawnPromise: Promise<VoiceSubprocessClient> | null = null;
+    let voxClient: ClankvoxClient | null = null;
+    let subprocessSpawnPromise: Promise<ClankvoxClient> | null = null;
     let realtimeClient = null;
     let reservedConcurrencySlot = false;
     let realtimeInputSampleRateHz = 24000;
@@ -442,7 +442,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       }
 
       // --- Spawn subprocess early so it boots in parallel with API connect ---
-      subprocessSpawnPromise = VoiceSubprocessClient.spawn(
+      subprocessSpawnPromise = ClankvoxClient.spawn(
         String(message.guild.id),
         String(memberVoiceChannel.id),
         message.guild,
@@ -581,7 +581,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       }
 
       // --- Await subprocess that was spawning in parallel with API connect ---
-      subprocessClient = await subprocessSpawnPromise;
+      voxClient = await subprocessSpawnPromise;
 
       const now = Date.now();
       const session: VoiceSession = {
@@ -600,7 +600,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           generation: null,
           decider: null
         },
-        subprocessClient,
+        voxClient,
         realtimeClient,
         startedAt: now,
         lastActivityAt: now,
@@ -754,8 +754,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       };
 
       manager.sessions.set(guildId, session);
-      manager.bindSubprocessHandlers(session);
-      manager.musicPlayer?.setSubprocessClient?.(session.subprocessClient);
+      manager.bindVoxHandlers(session);
+      manager.musicPlayer?.setVoxClient?.(session.voxClient);
       manager.bindSessionHandlers(session, settings);
       if (isRealtimeMode(runtimeMode)) {
         manager.bindRealtimeHandlers(session, settings);
@@ -830,7 +830,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
 
       // If the realtime API connect failed, the subprocess may still be
       // booting in the background. Await and clean it up to avoid leaks.
-      if (!subprocessClient && subprocessSpawnPromise) {
+      if (!voxClient && subprocessSpawnPromise) {
         try {
           const spawnedClient = await subprocessSpawnPromise;
           await spawnedClient.destroy();
@@ -839,9 +839,9 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         }
       }
 
-      if (subprocessClient) {
+      if (voxClient) {
         try {
-          await subprocessClient.destroy();
+          await voxClient.destroy();
         } catch {
           // ignore
         }

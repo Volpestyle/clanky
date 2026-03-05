@@ -1,23 +1,23 @@
 /**
- * Main-process (Bun) client for the Rust voice subprocess.
+ * Main-process (Bun) client for the clankvox Rust voice engine.
  *
- * Spawns the subprocess, relays IPC messages, proxies the Discord gateway
- * adapter so the subprocess can join voice channels through the main
+ * Spawns clankvox, relays IPC messages, proxies the Discord gateway
+ * adapter so clankvox can join voice channels through the main
  * process's gateway connection, and emits events for the session manager.
  */
 
 import { EventEmitter } from "node:events";
 import path from "node:path";
 
-type VoiceSubprocess = ReturnType<typeof Bun.spawn<"pipe", "pipe", "inherit">>;
+type ClankvoxProcess = ReturnType<typeof Bun.spawn<"pipe", "pipe", "inherit">>;
 
 const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
 
-export class VoiceSubprocessClient extends EventEmitter {
-  private static liveClients = new Set<VoiceSubprocessClient>();
+export class ClankvoxClient extends EventEmitter {
+  private static liveClients = new Set<ClankvoxClient>();
   private static processExitHandlersInstalled = false;
 
-  private child: VoiceSubprocess | null = null;
+  private child: ClankvoxProcess | null = null;
   private guildId: string;
   private channelId: string;
   private guild: any;
@@ -26,7 +26,7 @@ export class VoiceSubprocessClient extends EventEmitter {
   private adapterCleanup: (() => void) | null = null;
   private stdoutBuffer: Buffer = Buffer.alloc(0);
   private lastPlaybackArmedReason: string | null = null;
-  /** Latest TTS buffer depth reported by the Rust subprocess (samples @ 48kHz) */
+  /** Latest TTS buffer depth reported by clankvox (samples @ 48kHz) */
   ttsBufferDepthSamples: number = 0;
   private stdoutReaderController: AbortController | null = null;
   private _resolveExitWaiter: (() => void) | null = null;
@@ -34,7 +34,7 @@ export class VoiceSubprocessClient extends EventEmitter {
 
   constructor(guildId: string, channelId: string, guild: any) {
     super();
-    VoiceSubprocessClient.installProcessExitHandlers();
+    ClankvoxClient.installProcessExitHandlers();
     this.guildId = guildId;
     this.channelId = channelId;
     this.guild = guild;
@@ -45,8 +45,8 @@ export class VoiceSubprocessClient extends EventEmitter {
     channelId: string,
     guild: any,
     opts: { selfDeaf?: boolean; selfMute?: boolean; timeoutMs?: number } = {}
-  ): Promise<VoiceSubprocessClient> {
-    const client = new VoiceSubprocessClient(guildId, channelId, guild);
+  ): Promise<ClankvoxClient> {
+    const client = new ClankvoxClient(guildId, channelId, guild);
     await client._spawn(opts);
     return client;
   }
@@ -57,13 +57,13 @@ export class VoiceSubprocessClient extends EventEmitter {
     timeoutMs?: number;
   }) {
     const moduleDir = path.dirname(decodeURIComponent(new URL(import.meta.url).pathname));
-    const subprocessDir = path.resolve(
+    const clankvoxDir = path.resolve(
       moduleDir,
-      "rust_subprocess"
+      "clankvox"
     );
 
     // Prefer the pre-built Rust binary; fall back to cargo run for development.
-    const releaseBin = path.join(subprocessDir, "target", "release", "voice_subprocess");
+    const releaseBin = path.join(clankvoxDir, "target", "release", "clankvox");
     const usePrebuilt = await Bun.file(releaseBin).exists();
 
     const spawnEnv = {
@@ -83,7 +83,7 @@ export class VoiceSubprocessClient extends EventEmitter {
     try {
       if (usePrebuilt) {
         this.child = Bun.spawn([releaseBin], {
-          cwd: subprocessDir,
+          cwd: clankvoxDir,
           stdin: "pipe",
           stdout: "pipe",
           stderr: "inherit",
@@ -94,10 +94,10 @@ export class VoiceSubprocessClient extends EventEmitter {
         });
       } else {
         console.warn(
-          "[voiceSubprocessClient] Pre-built binary not found, using cargo run --release (slow first start)"
+          "[clankvox] Pre-built binary not found, using cargo run --release (slow first start)"
         );
         this.child = Bun.spawn(["cargo", "run", "--release"], {
-          cwd: subprocessDir,
+          cwd: clankvoxDir,
           stdin: "pipe",
           stdout: "pipe",
           stderr: "inherit",
@@ -108,13 +108,13 @@ export class VoiceSubprocessClient extends EventEmitter {
         });
       }
     } catch (err) {
-      console.error("[voiceSubprocessClient] subprocess spawn error:", err);
+      console.error("[clankvox] spawn error:", err);
       this.emit("error", `spawn_error: ${String((err as Error)?.message || err)}`);
       this._resolveExitWaiter?.();
       throw err;
     }
 
-    VoiceSubprocessClient.liveClients.add(this);
+    ClankvoxClient.liveClients.add(this);
 
     this._startStdoutReader();
 
@@ -125,7 +125,7 @@ export class VoiceSubprocessClient extends EventEmitter {
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         void this.destroy();
-        reject(new Error(`voice subprocess ready timeout after ${timeoutMs}ms`));
+        reject(new Error(`clankvox ready timeout after ${timeoutMs}ms`));
       }, timeoutMs);
 
       this.once("ready", () => {
@@ -137,7 +137,7 @@ export class VoiceSubprocessClient extends EventEmitter {
         clearTimeout(timer);
         reject(
           new Error(
-            `voice subprocess crashed before ready code=${code} signal=${signal}`
+            `clankvox crashed before ready code=${code} signal=${signal}`
           )
         );
       });
@@ -155,11 +155,11 @@ export class VoiceSubprocessClient extends EventEmitter {
   private _handleExit(exitCode: number | null, signalCode: number | null) {
     if (!this.destroyed) {
       console.error(
-        `[voiceSubprocessClient] subprocess exited unexpectedly code=${exitCode} signal=${signalCode}`
+        `[clankvox] exited unexpectedly code=${exitCode} signal=${signalCode}`
       );
       this.emit("crashed", { code: exitCode, signal: signalCode });
     }
-    VoiceSubprocessClient.liveClients.delete(this);
+    ClankvoxClient.liveClients.delete(this);
     this._cleanupAdapter();
     this.child = null;
     this._resolveExitWaiter?.();
@@ -248,7 +248,7 @@ export class VoiceSubprocessClient extends EventEmitter {
         this.adapterCallbackCount.voiceServer++;
         if (AUDIO_DEBUG) {
           console.log(
-            `[voiceSubprocessClient] adapter onVoiceServerUpdate #${this.adapterCallbackCount.voiceServer}`,
+            `[clankvox] adapter onVoiceServerUpdate #${this.adapterCallbackCount.voiceServer}`,
             `endpoint=${data?.endpoint ?? "null"} token=${data?.token ? "present" : "missing"}`
           );
         }
@@ -258,7 +258,7 @@ export class VoiceSubprocessClient extends EventEmitter {
         this.adapterCallbackCount.voiceState++;
         if (AUDIO_DEBUG) {
           console.log(
-            `[voiceSubprocessClient] adapter onVoiceStateUpdate #${this.adapterCallbackCount.voiceState}`,
+            `[clankvox] adapter onVoiceStateUpdate #${this.adapterCallbackCount.voiceState}`,
             `session_id=${data?.session_id ?? "null"} channel_id=${data?.channel_id ?? "null"} user_id=${data?.user_id ?? "null"}`
           );
         }
@@ -346,7 +346,7 @@ export class VoiceSubprocessClient extends EventEmitter {
       default:
         if (AUDIO_DEBUG) {
           console.log(
-            `[voiceSubprocessClient] unknown message from subprocess: ${msg.type}`
+            `[clankvox] unknown message: ${msg.type}`
           );
         }
         break;
@@ -367,7 +367,7 @@ export class VoiceSubprocessClient extends EventEmitter {
     this.adapterCallbackCount.op4Forward++;
     if (AUDIO_DEBUG) {
       console.log(
-        `[voiceSubprocessClient] _forwardToGateway OP4 #${this.adapterCallbackCount.op4Forward}`,
+        `[clankvox] _forwardToGateway OP4 #${this.adapterCallbackCount.op4Forward}`,
         `guild_id=${payload?.d?.guild_id ?? "null"} channel_id=${payload?.d?.channel_id ?? "null"}`
       );
     }
@@ -378,7 +378,7 @@ export class VoiceSubprocessClient extends EventEmitter {
       }
     } catch (err) {
       console.error(
-        "[voiceSubprocessClient] failed to forward OP4 to gateway:",
+        "[clankvox] failed to forward OP4 to gateway:",
         err
       );
     }
@@ -519,12 +519,12 @@ export class VoiceSubprocessClient extends EventEmitter {
 
     const child = this.child;
     if (!child) {
-      VoiceSubprocessClient.liveClients.delete(this);
+      ClankvoxClient.liveClients.delete(this);
       return;
     }
 
-    // Explicitly leave the voice channel through the main gateway before the
-    // subprocess exits. Killing the subprocess alone does not send OP4 with
+    // Explicitly leave the voice channel through the main gateway before
+    // clankvox exits. Killing clankvox alone does not send OP4 with
     // channel_id=null, so Discord can keep the bot shown in VC until the
     // session times out.
     this._sendGatewayVoiceStateUpdate(null);
@@ -536,11 +536,11 @@ export class VoiceSubprocessClient extends EventEmitter {
         finished = true;
         clearTimeout(termTimer);
         clearTimeout(killTimer);
-        VoiceSubprocessClient.liveClients.delete(this);
+        ClankvoxClient.liveClients.delete(this);
         resolve();
       };
 
-      // Wait for the onExit callback to fire (via _handleExit → _resolveExitWaiter)
+      // Wait for the onExit callback to fire (via _handleExit -> _resolveExitWaiter)
       this._exitWaiterPromise?.then(finish);
 
       this._send({ type: "destroy" });
@@ -581,14 +581,14 @@ export class VoiceSubprocessClient extends EventEmitter {
   }
 
   private static installProcessExitHandlers(): void {
-    if (VoiceSubprocessClient.processExitHandlersInstalled) return;
-    VoiceSubprocessClient.processExitHandlersInstalled = true;
+    if (ClankvoxClient.processExitHandlersInstalled) return;
+    ClankvoxClient.processExitHandlersInstalled = true;
 
     const killLiveChildren = () => {
-      for (const client of VoiceSubprocessClient.liveClients) {
+      for (const client of ClankvoxClient.liveClients) {
         client.killChild("SIGKILL");
       }
-      VoiceSubprocessClient.liveClients.clear();
+      ClankvoxClient.liveClients.clear();
     };
 
     process.once("exit", killLiveChildren);

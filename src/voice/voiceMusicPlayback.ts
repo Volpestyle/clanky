@@ -805,7 +805,7 @@ export async function playMusicViaDiscord(manager: any, session: any, track: { i
     return { ok: false, error: "guild not found" };
   }
 
-  if (!session.subprocessClient?.isAlive) {
+  if (!session.voxClient?.isAlive) {
     return { ok: false, error: "not connected to voice" };
   }
 

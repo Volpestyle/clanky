@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { VoiceSubprocessClient } from "./voiceSubprocessClient.ts";
+import { ClankvoxClient } from "./clankvoxClient.ts";
 
 class FakeSubprocess {
   exitCode: number | null = null;
@@ -49,8 +49,8 @@ type GatewayPayload = {
   };
 };
 
-test("VoiceSubprocessClient destroy waits for child exit", async () => {
-  const client = new VoiceSubprocessClient("guild-1", "channel-1", null);
+test("ClankvoxClient destroy waits for child exit", async () => {
+  const client = new ClankvoxClient("guild-1", "channel-1", null);
   const child = new FakeSubprocess();
 
   // Wire up the exit-waiter that _handleExit would normally resolve
@@ -75,7 +75,7 @@ test("VoiceSubprocessClient destroy waits for child exit", async () => {
   assert.equal(elapsedMs < 5_000, true);
 });
 
-test("VoiceSubprocessClient destroy sends gateway leave before subprocess exit", async () => {
+test("ClankvoxClient destroy sends gateway leave before exit", async () => {
   const sentPayloads: GatewayPayload[] = [];
   const guild = {
     shard: {
@@ -84,7 +84,7 @@ test("VoiceSubprocessClient destroy sends gateway leave before subprocess exit",
       }
     }
   };
-  const client = new VoiceSubprocessClient("guild-1", "channel-1", guild);
+  const client = new ClankvoxClient("guild-1", "channel-1", guild);
   const child = new FakeSubprocess();
 
   let resolveExitWaiter!: () => void;

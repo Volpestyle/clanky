@@ -7,8 +7,11 @@ bun-debug.log*
 .DS_Store
 memory/*.md
 *.tsbuildinfo
-src/voice/rust_subprocess/build_log.txt
-src/voice/rust_subprocess/target/
+src/voice/clankvox/build_log.txt
+src/voice/clankvox/target/
+
+# E2E settings snapshot (crash recovery, never commit)
+tests/e2e/.settings-snapshot.json
 
 # Audio test fixtures (binary, regenerated on first run)
 tests/fixtures/*.wav

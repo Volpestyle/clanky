@@ -34,7 +34,7 @@ use crate::voice_conn::{VoiceConnection, VoiceEvent};
 static IPC_TX: std::sync::OnceLock<crossbeam::Sender<OutMsg>> = std::sync::OnceLock::new();
 
 // ---------------------------------------------------------------------------
-// IPC message types — must match voiceSubprocessClient.ts exactly
+// IPC message types — must match clankvoxClient.ts exactly
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize, Debug)]

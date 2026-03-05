@@ -1,14 +1,14 @@
-# Rust Voice Subprocess Development Notes
+# Clankvox Development Notes
 
-Working document for the Rust voice subprocess rewrite. Tracks breakthroughs, blockers, and architectural decisions.
+Working document for clankvox (the Rust voice engine). Tracks breakthroughs, blockers, and architectural decisions.
 
 ## Status: DAVE Integration Complete (v0.2.0)
 
-The Rust voice subprocess now handles the full audio pipeline including DAVE E2EE. Songbird has been replaced with a custom voice connection layer that owns the voice WebSocket directly, giving us full control over DAVE opcode processing.
+Clankvox now handles the full audio pipeline including DAVE E2EE. Songbird has been replaced with a custom voice connection layer that owns the voice WebSocket directly, giving us full control over DAVE opcode processing.
 
 **Dependency chain:**
 ```
-voice_subprocess v0.2.0
+clankvox v0.2.0
 ├── davey 0.1.2         (DAVE E2EE: MLS handshake, frame encrypt/decrypt)
 ├── audiopus 0.3.0-rc.0 (standalone Opus encode/decode)
 ├── tokio-tungstenite    (voice WebSocket client)
@@ -282,7 +282,7 @@ When `discord.js` and Rust behavior diverge, prefer the `discord.js` lifecycle m
 
 ```sh
 # Build the Rust subprocess
-cd src/voice/rust_subprocess
+cd src/voice/clankvox
 OPUS_STATIC=1 OPUS_NO_PKG=1 cargo build --release
 
 # Or via package.json

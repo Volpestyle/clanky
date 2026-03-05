@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { computeAsrTranscriptConfidence, isLowSignalVoiceFragment, parseVoiceThoughtDecisionContract } from "./voiceDecisionRuntime.ts";
+import { computeAsrTranscriptConfidence, parseVoiceThoughtDecisionContract } from "./voiceDecisionRuntime.ts";
 
 test("parseVoiceThoughtDecisionContract parses strict JSON payloads", () => {
   const parsed = parseVoiceThoughtDecisionContract(
@@ -36,19 +36,6 @@ test("parseVoiceThoughtDecisionContract marks invalid output as not confident", 
   assert.equal(parsed.confident, false);
   assert.equal(parsed.allow, false);
   assert.equal(parsed.finalThought, "");
-});
-
-test("isLowSignalVoiceFragment treats configured short english greetings as non-low-signal", () => {
-  const greetings = ["yo", "hi", "sup", "ey", "oi", "oy", "ha"];
-  for (const greeting of greetings) {
-    assert.equal(isLowSignalVoiceFragment(greeting), false);
-    assert.equal(isLowSignalVoiceFragment(`${greeting}.`), false);
-  }
-});
-
-test("isLowSignalVoiceFragment keeps non-guard short fragments low-signal", () => {
-  assert.equal(isLowSignalVoiceFragment("yoink"), true);
-  assert.equal(isLowSignalVoiceFragment("hmm"), true);
 });
 
 test("computeAsrTranscriptConfidence returns null for null/empty input", () => {

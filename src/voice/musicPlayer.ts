@@ -11,7 +11,7 @@
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { VoiceSubprocessClient } from "./voiceSubprocessClient.ts";
+import type { ClankvoxClient } from "./clankvoxClient.ts";
 import type { MusicSearchResult } from "./musicSearch.ts";
 
 const execFileAsync = promisify(execFile);
@@ -51,14 +51,14 @@ export class DiscordMusicPlayer {
   private static readonly resolvedStreamUrlCache = new Map<string, StreamUrlCacheEntry>();
   private static readonly inFlightStreamResolutions = new Map<string, Promise<ResolvedPlaybackUrl | null>>();
 
-  private subprocessClient: VoiceSubprocessClient | null = null;
+  private voxClient: ClankvoxClient | null = null;
   private currentTrack: MusicSearchResult | null = null;
 
   constructor() {}
 
   /** Bind to the current session's subprocess client. */
-  setSubprocessClient(client: VoiceSubprocessClient | null): void {
-    this.subprocessClient = client;
+  setVoxClient(client: ClankvoxClient | null): void {
+    this.voxClient = client;
   }
 
   /** Get the current track metadata (not playback state). */
@@ -72,7 +72,7 @@ export class DiscordMusicPlayer {
   }
 
   async play(track: MusicSearchResult): Promise<MusicPlayerResult> {
-    if (!this.subprocessClient?.isAlive) {
+    if (!this.voxClient?.isAlive) {
       return { ok: false, error: "no voice connection", track: null };
     }
 
@@ -85,7 +85,7 @@ export class DiscordMusicPlayer {
 
       // Delegate to subprocess — it handles yt-dlp, ffmpeg, and AudioPlayer.
       // The subprocess calls resetPlayback() internally before starting.
-      this.subprocessClient.musicPlay(
+      this.voxClient.musicPlay(
         resolvedPlaybackUrl.url,
         resolvedPlaybackUrl.resolvedDirectUrl
       );
@@ -105,9 +105,9 @@ export class DiscordMusicPlayer {
   }
 
   stop(): void {
-    if (this.subprocessClient?.isAlive) {
+    if (this.voxClient?.isAlive) {
       try {
-        this.subprocessClient.musicStop();
+        this.voxClient.musicStop();
       } catch {
         // ignore
       }
@@ -116,9 +116,9 @@ export class DiscordMusicPlayer {
   }
 
   pause(): void {
-    if (this.subprocessClient?.isAlive) {
+    if (this.voxClient?.isAlive) {
       try {
-        this.subprocessClient.musicPause();
+        this.voxClient.musicPause();
       } catch {
         // ignore
       }
@@ -126,9 +126,9 @@ export class DiscordMusicPlayer {
   }
 
   resume(): void {
-    if (this.subprocessClient?.isAlive) {
+    if (this.voxClient?.isAlive) {
       try {
-        this.subprocessClient.musicResume();
+        this.voxClient.musicResume();
       } catch {
         // ignore
       }
@@ -136,7 +136,7 @@ export class DiscordMusicPlayer {
   }
 
   async duck(options: { targetGain?: number; fadeMs?: number } | number = 300): Promise<void> {
-    if (!this.subprocessClient?.isAlive) return;
+    if (!this.voxClient?.isAlive) return;
     const fadeMs =
       typeof options === "number"
         ? options
@@ -149,12 +149,12 @@ export class DiscordMusicPlayer {
         : Number.isFinite(Number(options?.targetGain))
           ? Number(options.targetGain)
           : 0.15;
-    this.subprocessClient.musicSetGain(targetGain, fadeMs);
+    this.voxClient.musicSetGain(targetGain, fadeMs);
     await new Promise(resolve => setTimeout(resolve, fadeMs));
   }
 
   unduck(options: { targetGain?: number; fadeMs?: number } | number = 300): void {
-    if (!this.subprocessClient?.isAlive) return;
+    if (!this.voxClient?.isAlive) return;
     const fadeMs =
       typeof options === "number"
         ? options
@@ -167,12 +167,12 @@ export class DiscordMusicPlayer {
         : Number.isFinite(Number(options?.targetGain))
           ? Number(options.targetGain)
           : 1.0;
-    this.subprocessClient.musicSetGain(targetGain, fadeMs);
+    this.voxClient.musicSetGain(targetGain, fadeMs);
   }
 
   setGain(target: number, fadeMs = 0): void {
-    if (!this.subprocessClient?.isAlive) return;
-    this.subprocessClient.musicSetGain(target, fadeMs);
+    if (!this.voxClient?.isAlive) return;
+    this.voxClient.musicSetGain(target, fadeMs);
   }
 
   private async resolvePlaybackUrl(track: MusicSearchResult): Promise<ResolvedPlaybackUrl | null> {

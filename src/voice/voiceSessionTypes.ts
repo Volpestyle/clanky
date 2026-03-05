@@ -1,4 +1,4 @@
-import type { VoiceSubprocessClient } from "./voiceSubprocessClient.ts";
+import type { ClankvoxClient } from "./clankvoxClient.ts";
 import type { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import type { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
 import type { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
@@ -421,7 +421,7 @@ export interface VoiceSession {
         generation: any;
         decider: any;
     };
-    subprocessClient: VoiceSubprocessClient | null;
+    voxClient: ClankvoxClient | null;
     realtimeClient: OpenAiRealtimeClient | GeminiRealtimeClient | XaiRealtimeClient | ElevenLabsRealtimeClient | null;
     startedAt: number;
     lastActivityAt: number;

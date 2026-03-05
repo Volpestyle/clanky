@@ -22,7 +22,6 @@ import { SoundboardDirector } from "./soundboardDirector.ts";
 import {
   computeAsrTranscriptConfidence,
   defaultVoiceReplyDecisionModel,
-  isLowSignalVoiceFragment,
   normalizeVoiceReplyDecisionProvider,
   parseVoiceThoughtDecisionContract,
   resolveRealtimeTurnTranscriptionPlan
@@ -2520,8 +2519,8 @@ export class VoiceSessionManager {
     };
   }
 
-  bindSubprocessHandlers(session) {
-    if (!session?.subprocessClient) return;
+  bindVoxHandlers(session) {
+    if (!session?.voxClient) return;
 
     const onPlayerState = (status) => {
       session.playerState = status;
@@ -2603,25 +2602,25 @@ export class VoiceSessionManager {
       this.musicPlayer?.clearCurrentTrack?.();
     };
 
-    session.subprocessClient.on("playerState", onPlayerState);
-    session.subprocessClient.on("playbackArmed", onPlaybackArmed);
-    session.subprocessClient.on("musicIdle", onMusicIdle);
-    session.subprocessClient.on("musicError", onMusicError);
-    session.subprocessClient.on("error", onError);
+    session.voxClient.on("playerState", onPlayerState);
+    session.voxClient.on("playbackArmed", onPlaybackArmed);
+    session.voxClient.on("musicIdle", onMusicIdle);
+    session.voxClient.on("musicError", onMusicError);
+    session.voxClient.on("error", onError);
 
     // Replay sticky playback-armed state in case the subprocess emitted it
     // before handlers were attached (join bootstrap race).
-    const armedReason = session.subprocessClient.getPlaybackArmedReason?.();
+    const armedReason = session.voxClient.getPlaybackArmedReason?.();
     if (armedReason) {
       onPlaybackArmed(armedReason);
     }
 
     session.cleanupHandlers.push(() => {
-      session.subprocessClient?.off("playerState", onPlayerState);
-      session.subprocessClient?.off("playbackArmed", onPlaybackArmed);
-      session.subprocessClient?.off("musicIdle", onMusicIdle);
-      session.subprocessClient?.off("musicError", onMusicError);
-      session.subprocessClient?.off("error", onError);
+      session.voxClient?.off("playerState", onPlayerState);
+      session.voxClient?.off("playbackArmed", onPlaybackArmed);
+      session.voxClient?.off("musicIdle", onMusicIdle);
+      session.voxClient?.off("musicError", onMusicError);
+      session.voxClient?.off("error", onError);
     });
   }
 
@@ -3588,9 +3587,9 @@ export class VoiceSessionManager {
       }
 
       // Send raw PCM to subprocess — it handles conversion + Opus encoding.
-      if (!session.subprocessClient?.isAlive) return;
+      if (!session.voxClient?.isAlive) return;
       try {
-        session.subprocessClient.sendAudio(b64Str, sampleRate);
+        session.voxClient.sendAudio(b64Str, sampleRate);
       } catch {
         return;
       }
@@ -3935,9 +3934,9 @@ export class VoiceSessionManager {
     if (!session) return;
     if (musicPhaseIsActive(this.getMusicPhase(session))) {
       // Clear TTS buffer only — stopPlayback would kill the pending music pipeline.
-      try { session.subprocessClient?.stopTtsPlayback(); } catch { /* ignore */ }
+      try { session.voxClient?.stopTtsPlayback(); } catch { /* ignore */ }
     } else {
-      try { session.subprocessClient?.stopPlayback(); } catch { /* ignore */ }
+      try { session.voxClient?.stopPlayback(); } catch { /* ignore */ }
     }
     this.maybeClearActiveReplyInterruptionPolicy(session);
   }
@@ -4079,14 +4078,14 @@ export class VoiceSessionManager {
     const pcm = Buffer.isBuffer(ttsPcm) ? ttsPcm : Buffer.from(ttsPcm || []);
     if (!pcm.length) return false;
 
-    if (!session.subprocessClient?.isAlive) return false;
+    if (!session.voxClient?.isAlive) return false;
 
     // Send the entire TTS PCM buffer to the subprocess. The Rust side now
     // caps pcm_buffer at 5s (240k samples @ 48kHz) and drops oldest samples
     // on overflow, so unbounded growth is no longer possible.
     const sampleRate = Math.max(8_000, Math.floor(Number(inputSampleRateHz) || 24_000));
     try {
-      session.subprocessClient.sendAudio(pcm.toString("base64"), sampleRate);
+      session.voxClient.sendAudio(pcm.toString("base64"), sampleRate);
     } catch {
       return false;
     }
@@ -4235,7 +4234,7 @@ export class VoiceSessionManager {
 
       // Unsubscribe from subprocess audio for this user
       try {
-        session.subprocessClient?.unsubscribeUser(String(userId || ""));
+        session.voxClient?.unsubscribeUser(String(userId || ""));
       } catch {
         // ignore
       }
@@ -5969,12 +5968,12 @@ export class VoiceSessionManager {
       }).catch(() => undefined);
     };
 
-    if (session.subprocessClient) {
-      session.subprocessClient.on("connectionState", onConnectionState);
-      session.subprocessClient.on("crashed", onCrashed);
+    if (session.voxClient) {
+      session.voxClient.on("connectionState", onConnectionState);
+      session.voxClient.on("crashed", onCrashed);
       session.cleanupHandlers.push(() => {
-        session.subprocessClient?.off("connectionState", onConnectionState);
-        session.subprocessClient?.off("crashed", onCrashed);
+        session.voxClient?.off("connectionState", onConnectionState);
+        session.voxClient?.off("crashed", onCrashed);
       });
     }
 
@@ -6073,14 +6072,14 @@ export class VoiceSessionManager {
       }
     };
 
-    if (session.subprocessClient) {
-      session.subprocessClient.on("speakingStart", onSpeakingStart);
-      session.subprocessClient.on("speakingEnd", onSpeakingEnd);
-      session.subprocessClient.on("clientDisconnect", onClientDisconnect);
+    if (session.voxClient) {
+      session.voxClient.on("speakingStart", onSpeakingStart);
+      session.voxClient.on("speakingEnd", onSpeakingEnd);
+      session.voxClient.on("clientDisconnect", onClientDisconnect);
       session.cleanupHandlers.push(() => {
-        session.subprocessClient?.off("speakingStart", onSpeakingStart);
-        session.subprocessClient?.off("speakingEnd", onSpeakingEnd);
-        session.subprocessClient?.off("clientDisconnect", onClientDisconnect);
+        session.voxClient?.off("speakingStart", onSpeakingStart);
+        session.voxClient?.off("speakingEnd", onSpeakingEnd);
+        session.voxClient?.off("clientDisconnect", onClientDisconnect);
       });
     }
   }
@@ -6100,7 +6099,7 @@ export class VoiceSessionManager {
     // Subprocess auto-subscribes on speaking_start; this call updates
     // the default silence duration for future auto-subscriptions.
     const sampleRate = isRealtimeMode(session.mode) ? Number(session.realtimeInputSampleRateHz) || 24000 : 24000;
-    session.subprocessClient?.subscribeUser(userId, INPUT_SPEECH_END_SILENCE_MS, sampleRate);
+    session.voxClient?.subscribeUser(userId, INPUT_SPEECH_END_SILENCE_MS, sampleRate);
 
     const captureState = {
       userId,
@@ -6638,14 +6637,14 @@ export class VoiceSessionManager {
     const removeListeners = () => {
       if (listenersRemoved) return;
       listenersRemoved = true;
-      session.subprocessClient?.off("userAudio", onUserAudio);
-      session.subprocessClient?.off("userAudioEnd", onUserAudioEnd);
+      session.voxClient?.off("userAudio", onUserAudio);
+      session.voxClient?.off("userAudioEnd", onUserAudioEnd);
     };
     captureState.removeSubprocessListeners = removeListeners;
 
-    if (session.subprocessClient) {
-      session.subprocessClient.on("userAudio", onUserAudio);
-      session.subprocessClient.on("userAudioEnd", onUserAudioEnd);
+    if (session.voxClient) {
+      session.voxClient.on("userAudio", onUserAudio);
+      session.voxClient.on("userAudioEnd", onUserAudioEnd);
       session.cleanupHandlers.push(removeListeners);
     }
   }
@@ -7046,31 +7045,6 @@ export class VoiceSessionManager {
     };
   }
 
-  shouldDropFallbackLowSignalTurn({
-    transcript,
-    usedFallbackModel = false,
-    silenceGate,
-    captureReason = "stream_end"
-  }) {
-    if (!usedFallbackModel) return false;
-    if (String(captureReason || "stream_end") !== "speaking_end") return false;
-    const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedTranscript || !isLowSignalVoiceFragment(normalizedTranscript)) return false;
-
-    const clipDurationMs = Number(silenceGate?.clipDurationMs || 0);
-    const rms = Number(silenceGate?.rms || 0);
-    const peak = Number(silenceGate?.peak || 0);
-    const activeSampleRatio = Number(silenceGate?.activeSampleRatio || 0);
-
-    return (
-      clipDurationMs > 0 &&
-      clipDurationMs <= VOICE_FALLBACK_NOISE_GATE_MAX_CLIP_MS &&
-      rms <= VOICE_FALLBACK_NOISE_GATE_RMS_MAX &&
-      peak <= VOICE_FALLBACK_NOISE_GATE_PEAK_MAX &&
-      activeSampleRatio <= VOICE_FALLBACK_NOISE_GATE_ACTIVE_RATIO_MAX
-    );
-  }
-
   computeLatencyMs(startMs = 0, endMs = 0) {
     const normalizedStart = Number(startMs || 0);
     const normalizedEnd = Number(endMs || 0);
@@ -7402,39 +7376,6 @@ export class VoiceSessionManager {
       asrCompletedAtMs = Date.now();
     }
 
-    if (
-      !hasTranscriptOverride &&
-      turnTranscript &&
-      this.shouldDropFallbackLowSignalTurn({
-        transcript: turnTranscript,
-        usedFallbackModel: usedFallbackModelForTranscript,
-        silenceGate,
-        captureReason
-      })
-    ) {
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: "voice_turn_dropped_low_signal_fallback",
-        metadata: {
-          sessionId: session.id,
-          source: "realtime",
-          captureReason: String(captureReason || "stream_end"),
-          transcript: turnTranscript,
-          clipDurationMs,
-          rms: Number(silenceGate.rms.toFixed(6)),
-          peak: Number(silenceGate.peak.toFixed(6)),
-          activeSampleRatio: Number(silenceGate.activeSampleRatio.toFixed(6)),
-          transcriptionModelPrimary: transcriptionPlan.primaryModel,
-          transcriptionModelFallback: resolvedFallbackModel || null,
-          transcriptionUsedFallbackModel: true
-        }
-      });
-      return;
-    }
-
     // Guard: ASR bridge returned transcript with low logprob confidence → likely hallucination
     // from mic noise, breathing, or ambient audio on the per-user stream.
     if (
@@ -7465,43 +7406,6 @@ export class VoiceSessionManager {
         });
         return;
       }
-    }
-
-    // Guard: ASR bridge was active but returned empty → PCM fallback produced transcript
-    // This catches hallucinations from non-speech audio (coughs, throat clears, mic bumps)
-    // where the ASR buffer race caused empty commit and gpt-4o-transcribe hallucinated.
-    const asrBridgeWasActive = session.perUserAsrEnabled || session.sharedAsrEnabled;
-    if (
-      asrBridgeWasActive &&
-      !hasTranscriptOverride &&
-      turnTranscript &&
-      clipDurationMs > 0 &&
-      clipDurationMs <= VOICE_FALLBACK_NOISE_GATE_MAX_CLIP_MS &&
-      silenceGate.rms <= VOICE_FALLBACK_NOISE_GATE_RMS_MAX &&
-      silenceGate.peak <= VOICE_FALLBACK_NOISE_GATE_PEAK_MAX &&
-      silenceGate.activeSampleRatio <= VOICE_FALLBACK_NOISE_GATE_ACTIVE_RATIO_MAX
-    ) {
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: "voice_turn_dropped_asr_bridge_fallback_hallucination",
-        metadata: {
-          sessionId: session.id,
-          source: "realtime",
-          captureReason: String(captureReason || "stream_end"),
-          transcript: turnTranscript,
-          clipDurationMs,
-          rms: Number(silenceGate.rms.toFixed(6)),
-          peak: Number(silenceGate.peak.toFixed(6)),
-          activeSampleRatio: Number(silenceGate.activeSampleRatio.toFixed(6)),
-          transcriptionModelPrimary: transcriptionPlan.primaryModel,
-          transcriptionModelFallback: resolvedFallbackModel || null,
-          hasTranscriptOverride
-        }
-      });
-      return;
     }
 
     const isNonSpeechCapture =
@@ -7868,10 +7772,7 @@ export class VoiceSessionManager {
     }
     const deferredTurnsToFlush = pendingQueue;
     const coalescedTurns = deferredTurnsToFlush.slice(-BOT_TURN_DEFERRED_COALESCE_MAX);
-    const substantiveTurns = coalescedTurns.filter(
-      (entry) => !isLowSignalVoiceFragment(String(entry?.transcript || ""))
-    );
-    const turnsForTranscript = substantiveTurns.length > 0 ? substantiveTurns : coalescedTurns;
+    const turnsForTranscript = coalescedTurns;
     // If any deferred turn was direct-addressed, use that turn's userId and
     // place its transcript first so the wake phrase isn't buried mid-string.
     const directAddressedTurn = turnsForTranscript.find((entry) => entry?.directAddressed) || null;
@@ -8105,7 +8006,7 @@ export class VoiceSessionManager {
           cancel.call(session.realtimeClient);
         }
       } catch { /* best-effort */ }
-      try { session.subprocessClient?.stopPlayback(); } catch { /* ignore */ }
+      try { session.voxClient?.stopPlayback(); } catch { /* ignore */ }
       this.clearPendingResponse(session);
     }
 
@@ -8616,11 +8517,7 @@ export class VoiceSessionManager {
 
   shouldPersistUserTranscriptTimelineTurn({ session = null, settings = null, transcript = "" } = {}) {
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedTranscript) return false;
-    const resolvedSettings = settings || session?.settingsSnapshot || this.store.getSettings();
-    const directAddressed = isVoiceTurnAddressedToBot(normalizedTranscript, resolvedSettings);
-    if (directAddressed) return true;
-    return !isLowSignalVoiceFragment(normalizedTranscript);
+    return Boolean(normalizedTranscript);
   }
 
   persistAssistantVoiceTimelineTurn(session, text = "", createdAtMs = Date.now()) {
@@ -9934,36 +9831,6 @@ export class VoiceSessionManager {
       }
     }
     if (!transcript) return;
-    if (
-      this.shouldDropFallbackLowSignalTurn({
-        transcript,
-        usedFallbackModel: usedFallbackModelForTranscript,
-        silenceGate,
-        captureReason
-      })
-    ) {
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: "voice_turn_dropped_low_signal_fallback",
-        metadata: {
-          sessionId: session.id,
-          source: "stt_pipeline",
-          captureReason: String(captureReason || "stream_end"),
-          transcript,
-          clipDurationMs,
-          rms: Number(silenceGate.rms.toFixed(6)),
-          peak: Number(silenceGate.peak.toFixed(6)),
-          activeSampleRatio: Number(silenceGate.activeSampleRatio.toFixed(6)),
-          transcriptionModelPrimary,
-          transcriptionModelFallback,
-          transcriptionUsedFallbackModel: true
-        }
-      });
-      return;
-    }
     if (session.ending) return;
 
     this.touchActivity(session.guildId, settings);
@@ -11560,7 +11427,7 @@ export class VoiceSessionManager {
     // Destroy subprocess — this handles connection teardown, audio player
     // stop, and all stream cleanup inside the Node.js subprocess.
     try {
-      await session.subprocessClient?.destroy();
+      await session.voxClient?.destroy();
     } catch {
       // ignore
     }
