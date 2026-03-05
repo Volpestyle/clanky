@@ -9,3 +9,7 @@ memory/*.md
 *.tsbuildinfo
 src/voice/rust_subprocess/build_log.txt
 src/voice/rust_subprocess/target/
+
+# Audio test fixtures (binary, regenerated on first run)
+tests/fixtures/*.wav
+tests/fixtures/*.pcm

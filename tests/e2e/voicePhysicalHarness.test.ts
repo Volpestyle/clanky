@@ -64,11 +64,12 @@ describe("E2E: Voice Physical Layer", () => {
   }, 90_000);
 
   afterAll(async () => {
+    try { await driver?.dismissBot("dismiss_physical", "Alright clanker, see ya later! Peace out!"); } catch { /* ignore */ }
     if (driver) {
       await driver.destroy();
     }
     await restoreTemporaryE2ESettings();
-  });
+  }, 60_000);
 
   beforeEach(() => {
     if (!driver) return;

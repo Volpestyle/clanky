@@ -23,14 +23,33 @@ import type {
   MusicSelectionResult,
   MusicDisambiguationPayload,
   MusicTextRequestPayload,
-  MusicTextCommandMessage
+  MusicTextCommandMessage,
+  MusicPlaybackPhase,
+  MusicPauseReason
+} from "./voiceSessionTypes.ts";
+import {
+  musicPhaseIsActive,
+  musicPhaseCanResume,
+  musicPhaseCanPause,
+  musicPhaseShouldLockOutput
 } from "./voiceSessionTypes.ts";
 export function ensureSessionMusicState(manager: any, session) {
   void manager;
   if (!session || typeof session !== "object") return null;
-  if (session.music && typeof session.music === "object") return session.music;
+  if (session.music && typeof session.music === "object") {
+    // Ensure existing music state has the phase field (migration from pre-enum sessions).
+    if (!session.music.phase) {
+      session.music.phase = session.music.active ? "playing" : "idle";
+      session.music.ducked = session.music.ducked ?? false;
+      session.music.pauseReason = session.music.pauseReason ?? null;
+    }
+    return session.music;
+  }
   session.music = {
+    phase: "idle" as const,
     active: false,
+    ducked: false,
+    pauseReason: null,
     startedAt: 0,
     stoppedAt: 0,
     provider: null,
@@ -59,7 +78,8 @@ export function snapshotMusicRuntimeState(manager: any, session) {
   const queueState = ensureToolMusicQueueState(manager, session);
   if (!music) return null;
   return {
-    active: Boolean(music.active),
+    phase: music.phase || "idle",
+    active: musicPhaseIsActive(music.phase || "idle"),
     provider: music.provider || null,
     source: music.source || null,
     startedAt: music.startedAt > 0 ? new Date(music.startedAt).toISOString() : null,
@@ -95,9 +115,32 @@ export function snapshotMusicRuntimeState(manager: any, session) {
   };
 }
 
-export function isMusicPlaybackActive(manager: any, session) {
+/** Get the current music playback phase (single source of truth). */
+export function getMusicPhase(manager: any, session): MusicPlaybackPhase {
   const music = ensureSessionMusicState(manager, session);
-  return Boolean(music?.active);
+  return music?.phase ?? "idle";
+}
+
+/**
+ * Set the music playback phase and sync the deprecated `active` boolean.
+ * ALL music state transitions MUST go through this function.
+ */
+export function setMusicPhase(
+  manager: any,
+  session,
+  phase: MusicPlaybackPhase,
+  pauseReason: MusicPauseReason = null
+): void {
+  const music = ensureSessionMusicState(manager, session);
+  if (!music) return;
+  music.phase = phase;
+  music.pauseReason = pauseReason;
+  // Sync deprecated boolean for any stragglers during migration
+  music.active = musicPhaseIsActive(phase);
+}
+
+export function isMusicPlaybackActive(manager: any, session) {
+  return musicPhaseIsActive(getMusicPhase(manager, session));
 }
 
 export function normalizeMusicPlatformToken(manager: any, value: unknown = "", fallback: "youtube" | "soundcloud" | "discord" | "auto" | null = null) {
@@ -683,8 +726,7 @@ export async function requestPlayMusic(manager: any, {
   }
 
   if (music) {
-    music.active = true;
-    music.pausedForWakeWord = false;
+    setMusicPhase(manager, session, "playing");
     music.startedAt = Date.now();
     music.stoppedAt = 0;
     music.provider = playbackResult.provider || null;
@@ -831,10 +873,9 @@ export async function requestStopMusic(manager: any, {
   }
 
   const music = ensureSessionMusicState(manager, session);
-  const wasActive = Boolean(music?.active);
-  const playerWasPlaying = Boolean(manager.musicPlayer?.isPlaying?.());
-  const playerWasPaused = Boolean(manager.musicPlayer?.isPaused?.());
-  const playerWasActive = playerWasPlaying || playerWasPaused;
+  const prevPhase = getMusicPhase(manager, session);
+  const wasActive = musicPhaseIsActive(prevPhase);
+  const playerWasActive = wasActive;
 
   if (manager.musicPlayer) {
     manager.musicPlayer.stop();
@@ -866,8 +907,7 @@ export async function requestStopMusic(manager: any, {
         : "already_stopped"
       : playbackResult.reason || null;
   if (music) {
-    music.active = false;
-    music.pausedForWakeWord = false;
+    setMusicPhase(manager, session, "idle");
     music.stoppedAt = Date.now();
     if (!music.provider) {
       music.provider = resolvedProvider || null;
@@ -996,13 +1036,12 @@ export async function requestPauseMusic(manager: any, {
   }
 
   const music = ensureSessionMusicState(manager, session);
-  const wasPlaying = Boolean(manager.musicPlayer?.isPlaying?.());
-  const wasPaused = Boolean(manager.musicPlayer?.isPaused?.());
-  if (wasPlaying) {
-    manager.musicPlayer.pause();
+  const currentPhase = getMusicPhase(manager, session);
+  if (musicPhaseCanPause(currentPhase)) {
+    manager.musicPlayer?.pause?.();
   }
-  const paused = wasPlaying || wasPaused;
-  if (!paused) {
+  const canPause = musicPhaseCanPause(currentPhase) || currentPhase === "paused" || currentPhase === "paused_wake_word";
+  if (!canPause) {
     return await manager.requestStopMusic({
       message,
       guildId: resolvedGuildId,
@@ -1021,10 +1060,9 @@ export async function requestPauseMusic(manager: any, {
     if (!music.provider) {
       music.provider = "discord";
     }
-    // Mark inactive so the session unlocks — bot can converse while
-    // music is paused.  Resume will re-activate.
-    music.active = false;
-    music.pausedForWakeWord = false;
+    // Transition to paused — session unlocks so the bot can converse,
+    // but musicPhaseCanResume() returns true so /resume works.
+    setMusicPhase(manager, session, "paused", "user_pause");
     music.source = String(source || "text_voice_intent");
     music.lastRequestedByUserId = resolvedUserId || music.lastRequestedByUserId || null;
     music.lastRequestText = normalizedRequestText;
@@ -1384,11 +1422,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
     if (directAddressedToBot || disambiguationResolutionTurn) {
       // Pause music so the output lock releases and the bot can respond.
       if (directAddressedToBot) {
-        const music = ensureSessionMusicState(manager, session);
-        if (music) {
-          music.active = false;
-          music.pausedForWakeWord = true;
-        }
+        setMusicPhase(manager, session, "paused_wake_word", "wake_word");
         manager.musicPlayer?.pause?.();
         manager.store.logAction({
           kind: "voice_runtime",
@@ -1463,7 +1497,7 @@ export async function handleMusicSlashCommand(manager: any, interaction: ChatInp
         return;
       }
       const music = ensureSessionMusicState(manager, updatedSession);
-      if (music?.active) {
+      if (musicPhaseIsActive(music?.phase ?? "idle")) {
         const nowPlaying = String(music.lastTrackTitle || "").trim() || query;
         await interaction.editReply(`Playing: ${nowPlaying}`);
         return;
@@ -1490,12 +1524,9 @@ export async function handleMusicSlashCommand(manager: any, interaction: ChatInp
     });
     await interaction.editReply("Music stopped.");
   } else if (command === "pause") {
-    if (!session || !manager.isMusicPlaybackActive(session)) {
+    const phase = getMusicPhase(manager, session);
+    if (!session || !musicPhaseCanPause(phase)) {
       await interaction.reply({ content: "No music is currently playing.", ephemeral: true });
-      return;
-    }
-    if (manager.musicPlayer?.isPaused()) {
-      await interaction.reply({ content: "Music is already paused.", ephemeral: true });
       return;
     }
     await interaction.deferReply();
@@ -1511,18 +1542,17 @@ export async function handleMusicSlashCommand(manager: any, interaction: ChatInp
     });
     await interaction.editReply("Music paused.");
   } else if (command === "resume") {
-    if (!session || !manager.isMusicPlaybackActive(session)) {
-      await interaction.reply({ content: "No music is currently playing.", ephemeral: true });
-      return;
-    }
-    if (!manager.musicPlayer?.isPaused()) {
-      await interaction.reply({ content: "Music is not paused.", ephemeral: true });
+    const phase = getMusicPhase(manager, session);
+    if (!session || !musicPhaseCanResume(phase)) {
+      await interaction.reply({ content: "No music is currently playing or paused.", ephemeral: true });
       return;
     }
     manager.musicPlayer?.resume();
+    setMusicPhase(manager, session, "playing");
+    manager.haltSessionOutputForMusicPlayback(session, "music_resumed_slash_command");
     await interaction.reply("Music resumed.");
   } else if (command === "skip") {
-    if (!session || !manager.isMusicPlaybackActive(session)) {
+    if (!session || !musicPhaseIsActive(getMusicPhase(manager, session))) {
       await interaction.reply({ content: "No music is currently playing.", ephemeral: true });
       return;
     }

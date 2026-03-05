@@ -507,15 +507,19 @@ test("reply decider blocks unaddressed turns while subprocess playback is still 
   const manager = createManager({
     participantCount: 1
   });
+  // Music phase "playing" is the single source of truth for the output lock.
+  // Subprocess playerState is no longer authoritative.
   const decision = await manager.evaluateVoiceReplyDecision({
     session: {
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       mode: "openai_realtime",
-      playerState: "playing",
       music: {
-        active: false
+        phase: "playing",
+        active: true,
+        ducked: false,
+        pauseReason: null
       },
       botTurnOpen: false
     },
@@ -1562,7 +1566,10 @@ test("reply decider keeps unrelated chatter blocked during pending music followu
         expiresAt: now + 10_000
       },
       music: {
+        phase: "playing",
         active: true,
+        ducked: false,
+        pauseReason: null,
         pendingQuery: "all caps",
         pendingPlatform: "auto",
         pendingAction: "play_now",
@@ -1602,8 +1609,11 @@ test("reply decider keeps unrelated chatter blocked during pending music followu
     transcript: "that song is crazy"
   });
 
+  // Unrelated chatter is blocked by the output lock (music is playing)
+  // rather than command-only mode. The outcome is the same: allow: false.
   assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "command_only_not_addressed");
+  assert.equal(decision.reason, "bot_turn_open");
+  assert.equal(decision.outputLockReason, "music_playback_active");
 });
 
 test("reply decider ignores other speakers during pending command followup in command-only mode", async () => {
@@ -1615,7 +1625,10 @@ test("reply decider ignores other speakers during pending command followup in co
       voiceChannelId: "voice-1",
       botTurnOpen: false,
       music: {
+        phase: "playing",
         active: true,
+        ducked: false,
+        pauseReason: null,
         pendingQuery: "all caps",
         pendingPlatform: "auto",
         pendingAction: "play_now",
@@ -1647,8 +1660,12 @@ test("reply decider ignores other speakers during pending command followup in co
     transcript: "2"
   });
 
+  // Other speakers are blocked by the output lock (music is playing).
+  // The disambiguation followup only allows through the same speaker who
+  // initiated the music request.
   assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "command_only_not_addressed");
+  assert.equal(decision.reason, "bot_turn_open");
+  assert.equal(decision.outputLockReason, "music_playback_active");
 });
 
 test("reply decider drops expired command followup sessions", async () => {

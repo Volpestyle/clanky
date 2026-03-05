@@ -27,6 +27,10 @@ import type {
   VoiceAddressingState,
   VoiceAddressingAnnotation
 } from "./voiceSessionTypes.ts";
+import {
+  musicPhaseShouldForceCommandOnly,
+  musicPhaseShouldLockOutput
+} from "./voiceSessionTypes.ts";
 
 
 export function hasBotNameCueForTranscript(manager: any, { transcript = "", settings = null } = {}) {
@@ -342,22 +346,9 @@ export async function evaluateVoiceReplyDecision(manager: any, {
     currentTurnAddressing
   };
 
-  const replyOutputLockState = manager.getReplyOutputLockState(session);
-  if (replyOutputLockState.locked) {
-    return {
-      allow: false,
-      reason: "bot_turn_open",
-      participantCount,
-      directAddressed,
-      directAddressConfidence,
-      directAddressThreshold,
-      transcript: normalizedTranscript,
-      conversationContext,
-      retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS,
-      outputLockReason: replyOutputLockState.reason
-    };
-  }
-
+  // Pending command followup (e.g., music disambiguation "2" / "the second one")
+  // must be checked BEFORE the output lock — during music playback the session is
+  // locked, but disambiguation resolution turns still need to pass through.
   const sameSpeakerPendingCommandFollowup =
     typeof manager.isMusicDisambiguationResolutionTurn === "function" &&
     manager.isMusicDisambiguationResolutionTurn(session, normalizedUserId, normalizedTranscript);
@@ -371,6 +362,22 @@ export async function evaluateVoiceReplyDecision(manager: any, {
       directAddressThreshold,
       transcript: normalizedTranscript,
       conversationContext
+    };
+  }
+
+  const replyOutputLockState = manager.getReplyOutputLockState(session);
+  if (replyOutputLockState.locked) {
+    return {
+      allow: false,
+      reason: "bot_turn_open",
+      participantCount,
+      directAddressed,
+      directAddressConfidence,
+      directAddressThreshold,
+      transcript: normalizedTranscript,
+      conversationContext,
+      retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS,
+      outputLockReason: replyOutputLockState.reason
     };
   }
 
@@ -523,7 +530,7 @@ export async function evaluateVoiceReplyDecision(manager: any, {
 export function isCommandOnlyActive(manager: any, session, settings = null) {
   const resolved = settings || session?.settingsSnapshot || manager.store.getSettings();
   if (resolved?.voice?.commandOnlyMode) return true;
-  return manager.isMusicPlaybackActive(session);
+  return musicPhaseShouldForceCommandOnly(manager.getMusicPhase(session));
 }
 
 export function getReplyOutputLockState(manager: any, session) {
@@ -540,7 +547,7 @@ export function getReplyOutputLockState(manager: any, session) {
   }
 
   const streamBufferedBytes = 0; // Subprocess manages its own stream buffer
-  const musicActive = manager.isMusicPlaybackActive(session);
+  const musicActive = musicPhaseShouldLockOutput(manager.getMusicPhase(session));
   const botTurnOpen = Boolean(session.botTurnOpen);
   const pendingResponse = Boolean(session.pendingResponse && typeof session.pendingResponse === "object");
   const openAiActiveResponse = manager.isRealtimeResponseActive(session);

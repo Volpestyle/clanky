@@ -268,6 +268,10 @@ export class XaiRealtimeClient extends EventEmitter {
   }
 
   createAudioResponse() {
+    // Set response-in-progress before sending so concurrent callers see it
+    // immediately, closing the TOCTOU window between the send and the async
+    // response.created event from the server.
+    this._responseInProgress = true;
     this.send({
       type: "response.create",
       response: {

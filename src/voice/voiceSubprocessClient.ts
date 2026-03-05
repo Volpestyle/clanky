@@ -437,6 +437,10 @@ export class VoiceSubprocessClient extends EventEmitter {
     this._send({ type: "stop_playback" });
   }
 
+  stopTtsPlayback() {
+    this._send({ type: "stop_tts_playback" });
+  }
+
   subscribeUser(userId: string, silenceDurationMs: number = 700, sampleRate: number = 24000) {
     this._send({ type: "subscribe_user", userId, silenceDurationMs, sampleRate });
   }

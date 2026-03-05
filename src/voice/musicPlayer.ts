@@ -1,9 +1,13 @@
 /**
- * Music player that delegates playback to the Node.js voice subprocess
- * via the VoiceSubprocessClient IPC layer.
+ * Stateless IPC proxy for music playback commands.
  *
- * The subprocess owns yt-dlp/ffmpeg pipelines and the AudioPlayer; this
- * class tracks state and proxies commands.
+ * The subprocess owns yt-dlp/ffmpeg pipelines and the AudioPlayer.
+ * This class sends commands and resolves stream URLs — it does NOT
+ * track playback state. All state lives on the session's
+ * `VoiceSessionMusicState.phase` enum (single source of truth).
+ *
+ * Callers should query music state via `musicPhase*` helpers from
+ * voiceSessionTypes.ts, not through this class.
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -49,58 +53,22 @@ export class DiscordMusicPlayer {
 
   private subprocessClient: VoiceSubprocessClient | null = null;
   private currentTrack: MusicSearchResult | null = null;
-  private _playing = false;
-  private _paused = false;
-  private _ducked = false;
 
   constructor() {}
 
   /** Bind to the current session's subprocess client. */
   setSubprocessClient(client: VoiceSubprocessClient | null): void {
-    // Clean up old listeners
-    if (this.subprocessClient) {
-      this.subprocessClient.off("musicIdle", this._onMusicIdle);
-      this.subprocessClient.off("musicError", this._onMusicError);
-    }
-
     this.subprocessClient = client;
-
-    if (client) {
-      client.on("musicIdle", this._onMusicIdle);
-      client.on("musicError", this._onMusicError);
-    }
   }
 
-  private _onMusicIdle = () => {
-    this._playing = false;
-    this._paused = false;
-    this._ducked = false;
+  /** Get the current track metadata (not playback state). */
+  getCurrentTrack(): MusicSearchResult | null {
+    return this.currentTrack;
+  }
+
+  /** Clear track metadata (called on stop/idle/error). */
+  clearCurrentTrack(): void {
     this.currentTrack = null;
-  };
-
-  private _onMusicError = (message: string) => {
-    console.error(`[musicPlayer] subprocess error: ${message}`);
-    this._playing = false;
-    this._paused = false;
-    this._ducked = false;
-    this.currentTrack = null;
-  };
-
-  isPlaying(): boolean {
-    return this._playing && !this._paused;
-  }
-
-  isPaused(): boolean {
-    return this._paused;
-  }
-
-  getStatus(): MusicPlayerStatus {
-    return {
-      playing: this.isPlaying(),
-      paused: this.isPaused(),
-      currentTrack: this.currentTrack,
-      position: 0
-    };
   }
 
   async play(track: MusicSearchResult): Promise<MusicPlayerResult> {
@@ -122,8 +90,6 @@ export class DiscordMusicPlayer {
         resolvedPlaybackUrl.resolvedDirectUrl
       );
       this.currentTrack = track;
-      this._playing = true;
-      this._paused = false;
 
       console.info(
         `[musicPlayer] queued subprocess playback title=${JSON.stringify(track.title)} platform=${track.platform} resolveMs=${Date.now() - resolutionStartedAt} source=${resolvedPlaybackUrl.source} direct=${resolvedPlaybackUrl.resolvedDirectUrl}`
@@ -146,9 +112,6 @@ export class DiscordMusicPlayer {
         // ignore
       }
     }
-    this._playing = false;
-    this._paused = false;
-    this._ducked = false;
     this.currentTrack = null;
   }
 
@@ -156,7 +119,6 @@ export class DiscordMusicPlayer {
     if (this.subprocessClient?.isAlive) {
       try {
         this.subprocessClient.musicPause();
-        this._paused = true;
       } catch {
         // ignore
       }
@@ -167,7 +129,6 @@ export class DiscordMusicPlayer {
     if (this.subprocessClient?.isAlive) {
       try {
         this.subprocessClient.musicResume();
-        this._paused = false;
       } catch {
         // ignore
       }
@@ -175,7 +136,7 @@ export class DiscordMusicPlayer {
   }
 
   async duck(options: { targetGain?: number; fadeMs?: number } | number = 300): Promise<void> {
-    if (!this.subprocessClient?.isAlive || !this._playing) return;
+    if (!this.subprocessClient?.isAlive) return;
     const fadeMs =
       typeof options === "number"
         ? options
@@ -189,12 +150,11 @@ export class DiscordMusicPlayer {
           ? Number(options.targetGain)
           : 0.15;
     this.subprocessClient.musicSetGain(targetGain, fadeMs);
-    this._ducked = true;
     await new Promise(resolve => setTimeout(resolve, fadeMs));
   }
 
   unduck(options: { targetGain?: number; fadeMs?: number } | number = 300): void {
-    if (!this.subprocessClient?.isAlive || !this._playing) return;
+    if (!this.subprocessClient?.isAlive) return;
     const fadeMs =
       typeof options === "number"
         ? options
@@ -208,16 +168,11 @@ export class DiscordMusicPlayer {
           ? Number(options.targetGain)
           : 1.0;
     this.subprocessClient.musicSetGain(targetGain, fadeMs);
-    this._ducked = false;
   }
 
   setGain(target: number, fadeMs = 0): void {
     if (!this.subprocessClient?.isAlive) return;
     this.subprocessClient.musicSetGain(target, fadeMs);
-  }
-
-  isDucked(): boolean {
-    return this._ducked;
   }
 
   private async resolvePlaybackUrl(track: MusicSearchResult): Promise<ResolvedPlaybackUrl | null> {

@@ -698,7 +698,10 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           latestFrameAt: 0
         },
         music: {
+          phase: "idle",
           active: false,
+          ducked: false,
+          pauseReason: null,
           startedAt: 0,
           stoppedAt: 0,
           provider: null,

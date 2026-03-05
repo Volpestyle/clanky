@@ -64,6 +64,7 @@ enum InMsg {
         sample_rate: u32,
     },
     StopPlayback,
+    StopTtsPlayback,
     SubscribeUser {
         #[serde(rename = "userId")]
         user_id: String,
@@ -639,6 +640,10 @@ impl AudioSendState {
         self.trailing_silence_frames = MAX_TRAILING_SILENCE;
     }
 
+    fn clear_tts(&mut self) {
+        self.pcm_buffer.clear();
+    }
+
     /// Encode the next 20ms frame, mixing TTS and music buffers.
     /// Music samples have the gain envelope applied. Returns None if idle.
     fn next_opus_frame(&mut self) -> Option<Vec<u8>> {
@@ -753,6 +758,13 @@ fn clear_audio_send_buffer(audio_send_state: &Arc<Mutex<Option<AudioSendState>>>
     let mut guard = audio_send_state.lock();
     if let Some(ref mut state) = *guard {
         state.clear();
+    }
+}
+
+fn clear_tts_send_buffer(audio_send_state: &Arc<Mutex<Option<AudioSendState>>>) {
+    let mut guard = audio_send_state.lock();
+    if let Some(ref mut state) = *guard {
+        state.clear_tts();
     }
 }
 
@@ -1283,6 +1295,10 @@ async fn main() {
                         emit_playback_armed("stop_playback", &audio_send_state);
                     }
 
+                    InMsg::StopTtsPlayback => {
+                        clear_tts_send_buffer(&audio_send_state);
+                    }
+
                     InMsg::SubscribeUser {
                         user_id,
                         silence_duration_ms,
@@ -1404,8 +1420,9 @@ async fn main() {
                         pending_music_drain_started_at = None;
                         pending_music_first_pcm_at = None;
                         pending_music_resolved_direct_url = false;
+                        let was_finishing = music_finishing;
                         music_finishing = false;
-                        if music_player.is_some() {
+                        if music_player.is_some() || music_active || was_finishing {
                             music_paused = true;
                             music_active = false;
                             clear_audio_send_buffer(&audio_send_state);

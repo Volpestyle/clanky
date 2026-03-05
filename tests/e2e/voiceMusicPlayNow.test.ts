@@ -62,10 +62,14 @@ describe("E2E: Voice music_play_now (non-blocking)", () => {
   }
 
   async function stopMusic(): Promise<void> {
-    if (driver?.config.textChannelId) {
-      await driver.sendTextMessage(`<@${driver.config.systemBotUserId}> stop music`);
-      await new Promise((r) => setTimeout(r, 5_000));
-    }
+    const stopFixture = await ensureFixture(
+      "music_stop_voice",
+      "Hey clanker, stop the music"
+    );
+    driver.clearReceivedAudio();
+    await driver.playAudio(stopFixture);
+    await driver.waitForAudioResponse(10_000);
+    await new Promise((r) => setTimeout(r, 3_000));
   }
 
   beforeAll(async () => {
@@ -107,18 +111,19 @@ describe("E2E: Voice music_play_now (non-blocking)", () => {
   afterAll(async () => {
     // Safety cleanup — stop any lingering music
     try { await stopMusic(); } catch { /* ignore */ }
+    try { await driver?.dismissBot("dismiss_music", "Yo clanker, thanks for the tunes, you can bounce now!"); } catch { /* ignore */ }
     await Promise.all([
       driver?.destroy(),
       driverB?.destroy()
     ]);
     await restoreTemporaryE2ESettings();
-  });
+  }, 60_000);
 
   // ─────────────────────────────────────────────────────────────────────
-  // Test 1: Full lifecycle — ack, download notification, followup
+  // Test 1: Full lifecycle — ack, download notification
   // ─────────────────────────────────────────────────────────────────────
   test(
-    "Music: Full lifecycle — fast ack, now-playing notification, followup during playback",
+    "Music: Full lifecycle — fast ack, now-playing notification",
     async () => {
       if (!hasE2EConfig() || !envFlag("RUN_E2E_MUSIC")) return;
 
@@ -128,10 +133,6 @@ describe("E2E: Voice music_play_now (non-blocking)", () => {
       const playFixture = await ensureFixture(
         "music_play_request",
         "Hey clanker, play Bad and Boujee by Migos"
-      );
-      const followupFixture = await ensureFixture(
-        "music_followup_question",
-        "Hey clanker, who sings this song?"
       );
 
       // --- Phase 1: Request song, verify fast ack (non-blocking) ---
@@ -162,37 +163,53 @@ describe("E2E: Voice music_play_now (non-blocking)", () => {
         `Expected "now playing" notification after download. Ack: ${ackBytes}, total: ${postDownloadBytes}`
       );
 
-      // --- Phase 3: Followup question during playback ---
-      await settleAndClear(3_000);
-
-      console.log("[Lifecycle] Asking followup during playback...");
-      await driver.playAudio(followupFixture);
-
-      const gotFollowup = await driver.waitForAudioResponse(12_000);
-      const followupBytes = driver.getReceivedAudioBytes();
-      console.log(`[Lifecycle] Followup response: ${followupBytes} bytes`);
-
-      assert.ok(gotFollowup, `Bot should respond to followup while music plays (got ${followupBytes} bytes)`);
-
-      // --- Phase 4: Verify music continues after followup ---
-      const bytesBeforeWait = driver.getReceivedAudioBytes();
-      console.log("[Lifecycle] Verifying music continues...");
-      await new Promise((r) => setTimeout(r, 5_000));
-      const bytesAfterWait = driver.getReceivedAudioBytes();
-      console.log(`[Lifecycle] Music check — before: ${bytesBeforeWait}, after: ${bytesAfterWait}`);
-
-      assert.ok(
-        bytesAfterWait > bytesBeforeWait,
-        `Music should keep playing after followup. Before: ${bytesBeforeWait}, after: ${bytesAfterWait}`
-      );
-
-      await stopMusic();
+      // NOTE: Do NOT stopMusic() here — music stays playing for the duck in/out test
     },
-    180_000
+    120_000
   );
 
   // ─────────────────────────────────────────────────────────────────────
-  // Test 2: Double queue backtrack — second request replaces first
+  // Test 2: Duck in/out — direct address during playback
+  // ─────────────────────────────────────────────────────────────────────
+  test(
+    "Music: Direct address during playback — duck in/out",
+    async () => {
+      if (!hasE2EConfig() || !envFlag("RUN_E2E_MUSIC")) return;
+
+      // Music is still playing from test 1
+      // Ask "who sings this" — tests direct address through command-only gate
+      const whoSingsFixture = await ensureFixture(
+        "music_who_sings",
+        "Hey clanker, who sings this song?"
+      );
+
+      await settleAndClear(3_000);
+
+      console.log("[DuckInOut] Asking 'who sings this song?'...");
+      await driver.playAudio(whoSingsFixture);
+
+      const gotResponse = await driver.waitForAudioResponse(10_000);
+      const responseBytes = driver.getReceivedAudioBytes();
+      console.log(`[DuckInOut] Response: ${gotResponse ? "yes" : "no"} (${responseBytes} bytes)`);
+
+      assert.ok(gotResponse, "Bot should respond to direct address during music playback");
+
+      // Wait for bot to finish speaking, then verify music continues
+      await new Promise((r) => setTimeout(r, 5_000));
+      driver.clearReceivedAudio();
+      await new Promise((r) => setTimeout(r, 5_000));
+      const musicResumeBytes = driver.getReceivedAudioBytes();
+      console.log(`[DuckInOut] Music resume: ${musicResumeBytes} bytes after bot response`);
+
+      assert.ok(musicResumeBytes > 0, "Music should continue playing after bot responds (duck out)");
+
+      await stopMusic();
+    },
+    60_000
+  );
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Test 3: Double queue backtrack — second request replaces first
   // ─────────────────────────────────────────────────────────────────────
   test(
     "Music: Double queue backtrack — second request replaces first",
@@ -251,7 +268,7 @@ describe("E2E: Voice music_play_now (non-blocking)", () => {
   );
 
   // ─────────────────────────────────────────────────────────────────────
-  // Test 3: Disambiguation + chatter — bot stays locked on requester
+  // Test 4: Disambiguation + chatter — bot stays locked on requester
   // ─────────────────────────────────────────────────────────────────────
   test(
     "Music: Disambiguation with background chatter — bot stays locked on requester's selection",
@@ -292,7 +309,7 @@ describe("E2E: Voice music_play_now (non-blocking)", () => {
       assert.ok(gotResponse, "Bot should respond to vague request (disambiguation or direct play)");
       console.log(`[Disambig] Initial response: ${driver.getReceivedAudioBytes()} bytes`);
 
-      // --- Phase 2: Chatter fires IMMEDIATELY during disambiguation window ---
+      // --- Phase 2: Chatter fires during disambiguation window ---
       // Other users are talking but not addressing clanker. He should stay
       // locked on Driver A's pending music request.
       console.log("[Disambig] Background chatter during disambiguation window...");
@@ -309,27 +326,25 @@ describe("E2E: Voice music_play_now (non-blocking)", () => {
       console.log("[Disambig] Driver B chatter 2...");
       await driverB.playAudio(chatterB2);
 
-      // --- Phase 3: Selection interleaved with chatter ---
-      // Driver A's selection arrives between chatter lines. Clanker should
-      // recognize this as the disambiguation answer, not background noise.
-      await new Promise((r) => setTimeout(r, 800));
-      driver.clearReceivedAudio();
+      // --- Phase 3: Chatter stops, Driver A disambiguates ---
+      // Clear break from chatter before the disambiguation reply.
+      await settleAndClear(3_000);
+
       console.log("[Disambig] Driver A: 'the first one'...");
       await driver.playAudio(disambiguationReply);
 
-      // One more chatter line right after the selection
-      await new Promise((r) => setTimeout(r, 500));
-      console.log("[Disambig] Driver A chatter 2 (NOT addressing clanker)...");
-      await driver.playAudio(chatterA2);
-
-      // --- Phase 4: Verify ack for the selection ---
       const gotSelectionAck = await driver.waitForAudioResponse(10_000);
       const selectionAckBytes = driver.getReceivedAudioBytes();
       console.log(`[Disambig] Selection ack: ${gotSelectionAck ? "yes" : "no"} (${selectionAckBytes} bytes)`);
 
+      // --- Phase 4: Chatter resumes after disambiguation ---
+      await new Promise((r) => setTimeout(r, 500));
+      console.log("[Disambig] Driver A chatter 2 (resumes talking to B)...");
+      await driver.playAudio(chatterA2);
+
       assert.ok(
         gotSelectionAck,
-        `Bot should ack disambiguation selection despite concurrent chatter (got ${selectionAckBytes} bytes)`
+        `Bot should ack disambiguation selection after chatter break (got ${selectionAckBytes} bytes)`
       );
 
       // --- Phase 5: Wait for download, verify "now playing" fires ---

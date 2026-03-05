@@ -1696,14 +1696,9 @@ export async function executeLocalVoiceToolCall(manager: any, {
     };
   }
   if (normalizedToolName === "music_resume") {
-    if (manager.musicPlayer?.isPaused?.()) {
-      manager.musicPlayer.resume();
-    } else if (manager.ensureSessionMusicState(session)?.lastTrackId) {
-      manager.musicPlayer?.resume?.();
-    }
-    // Re-lock the session so bot goes quiet while music plays
-    const musicState = manager.ensureSessionMusicState(session);
-    if (musicState) musicState.active = true;
+    manager.musicPlayer?.resume?.();
+    // Transition to playing and re-lock the session
+    manager.setMusicPhase(session, "playing");
     manager.haltSessionOutputForMusicPlayback(session, "music_resumed");
     const queueState = manager.ensureToolMusicQueueState(session);
     if (queueState) queueState.isPaused = false;

@@ -198,8 +198,71 @@ export type MusicTextRequestPayload = {
     settings?: Record<string, unknown> | null;
 };
 
+/**
+ * Explicit music playback state machine.
+ *
+ * Every piece of code that needs to know about music state should derive
+ * its answer from this single enum via the `musicPhase*` query helpers
+ * rather than checking scattered booleans.
+ */
+export type MusicPlaybackPhase =
+    | "idle"              // no music context — nothing loaded, nothing paused
+    | "loading"           // track URL is being resolved / subprocess is buffering
+    | "playing"           // audio is actively being sent to Discord
+    | "paused"            // user-initiated pause — bot can converse, music can resume
+    | "paused_wake_word"  // auto-paused because user addressed the bot by wake word
+    | "stopping";         // stop requested, waiting for subprocess acknowledgement
+
+/** Why music was paused — only meaningful when phase is "paused" or "paused_wake_word". */
+export type MusicPauseReason = "user_pause" | "wake_word" | "slash_command" | "tool_call" | null;
+
+// ── Derived query helpers ────────────────────────────────────────────
+// These are the ONLY way consuming code should ask questions about music
+// state. They replace the old isMusicPlaybackActive / isMusicPlaybackAudible
+// scattered boolean checks.
+
+/** Music is conceptually "present" — a track is loaded, playing, or paused. */
+export function musicPhaseIsActive(phase: MusicPlaybackPhase): boolean {
+    return phase === "loading" || phase === "playing" || phase === "paused" || phase === "paused_wake_word";
+}
+
+/** Audio is physically being sent to Discord right now. */
+export function musicPhaseIsAudible(phase: MusicPlaybackPhase): boolean {
+    return phase === "playing";
+}
+
+/** The session output lock should be engaged (bot should not generate new replies). */
+export function musicPhaseShouldLockOutput(phase: MusicPlaybackPhase): boolean {
+    return phase === "playing" || phase === "loading";
+}
+
+/** Command-only mode should be active (only wake-word / direct address passes through). */
+export function musicPhaseShouldForceCommandOnly(phase: MusicPlaybackPhase): boolean {
+    return phase === "playing" || phase === "loading";
+}
+
+/** Music can be resumed from its current state. */
+export function musicPhaseCanResume(phase: MusicPlaybackPhase): boolean {
+    return phase === "paused" || phase === "paused_wake_word";
+}
+
+/** Music can be paused from its current state. */
+export function musicPhaseCanPause(phase: MusicPlaybackPhase): boolean {
+    return phase === "playing" || phase === "loading";
+}
+
+/** Ducking is relevant (music is audible and not paused). */
+export function musicPhaseShouldAllowDucking(phase: MusicPlaybackPhase): boolean {
+    return phase === "playing";
+}
+
 export interface VoiceSessionMusicState {
+    /** Single source of truth for music playback lifecycle. */
+    phase: MusicPlaybackPhase;
+    /** @deprecated Use `phase` instead. Kept temporarily for backward compat during migration. */
     active: boolean;
+    ducked: boolean;
+    pauseReason: MusicPauseReason;
     startedAt: number;
     stoppedAt: number;
     provider: any;

@@ -15,12 +15,12 @@ Ask it to check your GitHub issues? It can browse the page and summarize them. A
 
 **Tools the Brain Can Use**
 - Web search (Brave, SerpApi) with page inspection
-- Headless browser agent for navigating and interacting with websites
+- Headless browser agents for navigating and interacting with websites
 - Persistent memory system (append-only journals + curated facts + vector search)
 - Image generation (GPT Image, Grok Imagine)
 - Video generation (Grok Imagine Video)
 - GIF search (GIPHY)
-- Claude Code agent for coding tasks (file editing, git, PRs) — allowed users only
+- Claude Code/Codex agents for coding tasks (file editing, git, PRs) — allowed users only
 - Music playback with queue management (yt-dlp + ffmpeg)
 - MCP servers for extensibility
 

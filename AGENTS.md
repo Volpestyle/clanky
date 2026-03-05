@@ -3,14 +3,13 @@
 - Refer to docs/openai/openai-realtime-transcription.md when working with openai realtime transcripton or ASR.
 - Refer to docs/openai/openai-realtime-speech.md when working with openai realtime speech.
 - Runtime/package manager standard: use Bun (`bun`, `bun run`, `bunx`) over Node/NPM (`node`, `npm`, `npx`) unless explicitly requested.
-- Do not run smoke tests unless the user explicitly directs you to run them, since they incur cost.
+- Do not run 'smoke' or 'live' tests unless the user explicitly directs you to run them, since they incur cost. E2E tests and essential unit tests are the primary focus.
+- We want to avoid building monolithic architecture. We want to build modular, composable, and easily testable components.
 - For runtime debugging and incident analysis, prefer Grafana/Loki log exploration first; see `docs/logs.md` for setup and query workflow.
-
 - Always remove legacy compatibility paths and dead code as part of the same change.
 - Do not keep backward-compatibility shims, aliases, or old-field fallbacks unless the user explicitly asks for them.
-- Prefer a single source of truth over parallel old/new code paths.
+- Prefer a single source of truth over parallel/duplicate old/new code paths.
 - After refactors, delete unused settings, branches, helpers, and UI wiring instead of leaving dormant code behind.
-- Pull inspiration from ../openclaw when designing and coding agentic capabilites for clanker conk
 - Expect parallel in-flight edits from the user or other agents; treat unexpected diffs as active work, and never revert/reset/checkout files you did not explicitly change for the current task.
 - Do not call out unrelated in-flight edits unless they directly interfere with your ability to complete the current task. If you can work around them with low ambiguity, proceed without mentioning them.
 - Avoid typecasts to `any` or `unknown`; prefer explicit, concrete types and narrow unions. Use casts only as a last resort with clear justification.
@@ -18,15 +17,14 @@
 - Never use hardcoded fallback text or voice lines for bot output. User-visible bot speech/messages must be model-generated unless the user explicitly requests deterministic wording.
 - Bot name is a customizable setting. bot is not always named 'clanker conk'
 - Use git commit author `Volpestyle <14805252+Volpestyle@users.noreply.github.com>` for all commits in this repository.
+- Pull inspiration from ../openclaw when designing and coding agentic capabilites for clanker conk
 
 ## Testing Philosophy
 
-- Design around Test Driven Development using Golden Test Suites/Harnesses.
-- Golden tests assert the exact behavior we describe — write the expectation first, then implement to satisfy it.
-- When the user explicitly asks to validate smoke/golden behavior, prefer the live suite/path by default (for example `test:voice-golden:live`) unless they explicitly ask for simulated-only.
-- When running live smoke or golden test suites, make sure we use `claude-code` as the provider
+- Design around Test Driven Development using Golden E2E Test Suites/Harnesses.
 - E2E Discord bot-to-bot tests (`tests/e2e/`) validate the physical voice layer but require separate bot tokens and test guild setup (see `docs/e2e-testing.md`)
-- Do not run E2E tests unless the user explicitly directs it, since they require live Discord infrastructure
+- The E2E Discord bot-to-bot tests are our primary testing method for this.
+- When running live smoke or golden test suites, make sure we test different configurations, and are conscious about watching the integration test and the actual process logs at the same time, to cross reference. Integration test timings are most accurate when we read directly from our process logs.
 
 ## Dashboard UI Preferences
 

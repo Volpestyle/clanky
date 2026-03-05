@@ -346,6 +346,39 @@ export class DriverBot {
     return channel.members.has(this.config.systemBotUserId);
   }
 
+  /**
+   * Play a farewell fixture and wait for the bot to leave voice.
+   * Returns true if the bot left, false if it stayed (timeout).
+   */
+  async dismissBot(
+    fixtureName: string,
+    farewellText: string,
+    timeoutMs = 30_000
+  ): Promise<boolean> {
+    const { stat } = await import("node:fs/promises");
+    const { generatePcmAudioFixture, getFixturePath } = await import("./audioGenerator.ts");
+
+    const path = getFixturePath(fixtureName);
+    try {
+      await stat(path);
+    } catch {
+      console.log(`[DriverBot] Generating dismiss fixture: ${fixtureName} ("${farewellText}")`);
+      await generatePcmAudioFixture(fixtureName, farewellText);
+    }
+
+    this.clearReceivedAudio();
+    console.log(`[DriverBot] Playing dismiss fixture: ${fixtureName}`);
+    await this.playAudio(getFixturePath(fixtureName));
+
+    // Wait for bot to respond (say goodbye)
+    await this.waitForAudioResponse(10_000);
+    // Give bot time to finish speaking before checking leave
+    await new Promise((r) => setTimeout(r, 3_000));
+
+    console.log("[DriverBot] Waiting for bot to leave voice...");
+    return this.waitForBotLeave(timeoutMs);
+  }
+
   async waitForBotLeave(timeoutMs = 120_000, pollMs = 2000): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {

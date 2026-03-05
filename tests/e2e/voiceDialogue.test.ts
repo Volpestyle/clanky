@@ -69,12 +69,13 @@ describe("E2E: Voice Dialogue (Two Speakers)", () => {
   }, 120_000);
 
   afterAll(async () => {
+    try { await driverA?.dismissBot("dismiss_dialogue", "Hey clanker, we're done here, catch ya later!"); } catch { /* ignore */ }
     await Promise.all([
       driverA?.destroy(),
       driverB?.destroy()
     ]);
     await restoreTemporaryE2ESettings();
-  });
+  }, 60_000);
 
   beforeEach(() => {
     if (!driverA || !driverB) return;

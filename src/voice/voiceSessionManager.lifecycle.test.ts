@@ -561,7 +561,10 @@ test("maybeInterruptBotForAssertiveSpeech does not interrupt music-only playback
     mode: "openai_realtime",
     playerState: "playing",
     music: {
+      phase: "playing",
       active: true,
+      ducked: false,
+      pauseReason: null,
       startedAt: Date.now() - 5_000,
       stoppedAt: 0,
       provider: "discord",
@@ -2031,8 +2034,8 @@ test("requestStatus reports offline and online states", async () => {
 test("getReplyOutputLockState locks output while music playback is active", () => {
   const { manager } = createManager();
   const session = createSession({
-    playerState: "playing",
     music: {
+      phase: "playing",
       active: true
     }
   });
@@ -2043,11 +2046,11 @@ test("getReplyOutputLockState locks output while music playback is active", () =
   assert.equal(lockState.musicActive, true);
 });
 
-test("getReplyOutputLockState does not treat stale music.active as audible playback", () => {
+test("getReplyOutputLockState does not lock output when music is paused", () => {
   const { manager } = createManager();
   const session = createSession({
-    playerState: "idle",
     music: {
+      phase: "paused",
       active: true
     }
   });
@@ -2060,7 +2063,14 @@ test("getReplyOutputLockState does not treat stale music.active as audible playb
 
 test("bot speech music duck helpers use configured gain and release after inactivity", async () => {
   const { manager } = createManager();
-  const session = createSession();
+  const session = createSession({
+    music: {
+      phase: "playing",
+      active: true,
+      ducked: false,
+      pauseReason: null
+    }
+  });
   const settings = {
     voice: {
       enabled: true,
@@ -2072,29 +2082,20 @@ test("bot speech music duck helpers use configured gain and release after inacti
   };
   const duckCalls = [];
   const unduckCalls = [];
-  let ducked = false;
 
   manager.musicPlayer = {
-    isPaused() {
-      return false;
-    },
-    isDucked() {
-      return ducked;
-    },
     async duck(options) {
       duckCalls.push(options);
-      ducked = true;
     },
     unduck(options) {
       unduckCalls.push(options);
-      ducked = false;
     }
   };
-  manager.isMusicPlaybackAudible = () => true;
 
   const engaged = await manager.engageBotSpeechMusicDuck(session, settings, { awaitFade: true });
   assert.equal(engaged, true);
   assert.equal(session.botSpeechMusicDucked, true);
+  assert.equal(session.music.ducked, true);
   assert.deepEqual(duckCalls[0], {
     targetGain: 0.22,
     fadeMs: 120
@@ -2104,6 +2105,7 @@ test("bot speech music duck helpers use configured gain and release after inacti
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.equal(session.botSpeechMusicDucked, false);
+  assert.equal(session.music.ducked, false);
   assert.deepEqual(unduckCalls[0], {
     targetGain: 1,
     fadeMs: 120

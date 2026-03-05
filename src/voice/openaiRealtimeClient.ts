@@ -332,6 +332,12 @@ export class OpenAiRealtimeClient extends EventEmitter {
   }
 
   createAudioResponse() {
+    // Set a provisional active response before sending so that concurrent
+    // callers see isResponseInProgress() === true immediately, closing the
+    // TOCTOU window between the send and OpenAI's async response event.
+    if (!this.activeResponseId) {
+      this.setActiveResponse(`pending_${Date.now()}`, "in_progress");
+    }
     this.send({
       type: "response.create",
       response: {

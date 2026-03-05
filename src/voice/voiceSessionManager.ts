@@ -47,6 +47,8 @@ import {
   isLikelyMusicPlayPhrase as isLikelyMusicPlayPhraseFallback,
   isLikelyMusicStopPhrase as isLikelyMusicStopPhraseFallback,
   isMusicDisambiguationActive as isMusicDisambiguationActiveRuntime,
+  getMusicPhase as getMusicPhaseRuntime,
+  setMusicPhase as setMusicPhaseRuntime,
   isMusicPlaybackActive as isMusicPlaybackActiveRuntime,
   maybeHandleMusicPlaybackTurn as maybeHandleMusicPlaybackTurnRuntime,
   maybeHandleMusicTextSelectionRequest as maybeHandleMusicTextSelectionRequestRuntime,
@@ -231,6 +233,14 @@ import {
 } from "../bot/conversationContinuity.ts";
 import type { ConversationContinuityPayload } from "../bot/conversationContinuity.ts";
 import type { DeferredQueuedUserTurn, DeferredQueuedUserTurnsAction } from "./voiceSessionTypes.ts";
+import {
+  musicPhaseIsActive,
+  musicPhaseIsAudible,
+  musicPhaseShouldLockOutput,
+  musicPhaseShouldForceCommandOnly,
+  musicPhaseShouldAllowDucking,
+  musicPhaseCanResume
+} from "./voiceSessionTypes.ts";
 
 export function resolveVoiceThoughtTopicalityBias({
   silenceMs = 0,
@@ -1369,21 +1379,28 @@ export class VoiceSessionManager {
     return null;
   }
 
+  /** Get the current music playback phase (single source of truth). */
+  getMusicPhase(session) {
+    return getMusicPhaseRuntime(this, session);
+  }
+
+  /** Set the music playback phase. ALL state transitions go through this. */
+  setMusicPhase(session, phase, pauseReason = null) {
+    return setMusicPhaseRuntime(this, session, phase, pauseReason);
+  }
+
   isMusicPlaybackActive(session) {
-    return isMusicPlaybackActiveRuntime(this, session);
+    return musicPhaseIsActive(this.getMusicPhase(session));
   }
 
   isCommandOnlyActive(session, settings = null) {
     const resolved = settings || session?.settingsSnapshot || this.store.getSettings();
     if (resolved?.voice?.commandOnlyMode) return true;
-    return this.isMusicPlaybackActive(session);
+    return musicPhaseShouldForceCommandOnly(this.getMusicPhase(session));
   }
 
   isMusicPlaybackAudible(session) {
-    const playerState = String(session?.playerState || "")
-      .trim()
-      .toLowerCase();
-    return playerState === "playing";
+    return musicPhaseIsAudible(this.getMusicPhase(session));
   }
 
   resolveMusicDuckingConfig(settings = null) {
@@ -1414,12 +1431,13 @@ export class VoiceSessionManager {
 
   async engageBotSpeechMusicDuck(session, settings = null, { awaitFade = false } = {}) {
     if (!session || session.ending) return false;
-    if (!this.isMusicPlaybackAudible(session) || this.musicPlayer?.isPaused?.()) {
+    if (!musicPhaseShouldAllowDucking(this.getMusicPhase(session))) {
       session.botSpeechMusicDucked = false;
       return false;
     }
     this.clearBotSpeechMusicUnduckTimer(session);
-    if (this.musicPlayer?.isDucked?.()) {
+    const music = this.ensureSessionMusicState(session);
+    if (music?.ducked) {
       session.botSpeechMusicDucked = true;
       return true;
     }
@@ -1427,17 +1445,18 @@ export class VoiceSessionManager {
       settings || session.settingsSnapshot || this.store.getSettings()
     );
     const duckPromise = this.musicPlayer?.duck({ targetGain, fadeMs });
-    session.botSpeechMusicDucked = Boolean(this.musicPlayer?.isDucked?.());
+    if (music) music.ducked = true;
+    session.botSpeechMusicDucked = true;
     if (awaitFade) {
       await duckPromise;
-      session.botSpeechMusicDucked = Boolean(this.musicPlayer?.isDucked?.());
     }
-    return Boolean(session.botSpeechMusicDucked);
+    return true;
   }
 
   scheduleBotSpeechMusicUnduck(session, settings = null, delayMs = BOT_TURN_SILENCE_RESET_MS) {
     if (!session || session.ending) return;
-    if (!session.botSpeechMusicDucked && !this.musicPlayer?.isDucked?.()) return;
+    const music = this.ensureSessionMusicState(session);
+    if (!session.botSpeechMusicDucked && !music?.ducked) return;
     this.clearBotSpeechMusicUnduckTimer(session);
     const normalizedDelayMs = clamp(Math.round(Number(delayMs) || 0), 0, 15_000);
     session.botSpeechMusicUnduckTimer = setTimeout(() => {
@@ -1449,15 +1468,14 @@ export class VoiceSessionManager {
   async releaseBotSpeechMusicDuck(session, settings = null, { force = false } = {}) {
     if (!session) return false;
     this.clearBotSpeechMusicUnduckTimer(session);
-    const playerDucked = Boolean(this.musicPlayer?.isDucked?.());
-    if (!playerDucked && !session.botSpeechMusicDucked) {
+    const music = this.ensureSessionMusicState(session);
+    const ducked = Boolean(music?.ducked) || Boolean(session.botSpeechMusicDucked);
+    if (!ducked) {
       return false;
     }
     session.botSpeechMusicDucked = false;
-    if (!force && !this.isMusicPlaybackAudible(session)) {
-      return false;
-    }
-    if (!playerDucked) {
+    if (music) music.ducked = false;
+    if (!force && !musicPhaseShouldAllowDucking(this.getMusicPhase(session))) {
       return false;
     }
     const { fadeMs } = this.resolveMusicDuckingConfig(
@@ -2528,11 +2546,13 @@ export class VoiceSessionManager {
     };
 
     const onMusicIdle = () => {
+      this.setMusicPhase(session, "idle");
       const music = this.ensureSessionMusicState(session);
       if (music) {
-        music.active = false;
         music.stoppedAt = Date.now();
+        music.ducked = false;
       }
+      this.musicPlayer?.clearCurrentTrack?.();
       this.scheduleRealtimeInstructionRefresh({
         session,
         settings: session.settingsSnapshot || this.store.getSettings(),
@@ -2541,11 +2561,13 @@ export class VoiceSessionManager {
     };
 
     const onMusicError = () => {
+      this.setMusicPhase(session, "idle");
       const music = this.ensureSessionMusicState(session);
       if (music) {
-        music.active = false;
         music.stoppedAt = Date.now();
+        music.ducked = false;
       }
+      this.musicPlayer?.clearCurrentTrack?.();
     };
 
     session.subprocessClient.on("playerState", onPlayerState);
@@ -3523,7 +3545,7 @@ export class VoiceSessionManager {
       // Duck music when realtime TTS starts speaking — playVoiceReplyInOrder
       // handles ducking for the STT pipeline, but realtime audio arrives here
       // directly and bypasses that path.
-      if (this.isMusicPlaybackAudible(session) && !this.musicPlayer?.isPaused?.()) {
+      if (musicPhaseShouldAllowDucking(this.getMusicPhase(session))) {
         this.engageBotSpeechMusicDuck(
           session,
           session.settingsSnapshot || this.store.getSettings()
@@ -3788,12 +3810,11 @@ export class VoiceSessionManager {
         this.scheduleBotSpeechMusicUnduck(session, resolvedSettings, BOT_TURN_SILENCE_RESET_MS);
 
         // Resume music if it was paused for a wake-word direct address.
-        const music = this.ensureSessionMusicState(session);
-        if (music?.pausedForWakeWord && this.musicPlayer?.isPaused?.()) {
-          music.pausedForWakeWord = false;
+        const musicPhase = this.getMusicPhase(session);
+        if (musicPhase === "paused_wake_word") {
           setTimeout(() => {
             if (session.ending) return;
-            music.active = true;
+            this.setMusicPhase(session, "playing");
             this.musicPlayer?.resume?.();
             this.haltSessionOutputForMusicPlayback(session, "music_resumed_after_wake_word");
           }, BOT_TURN_SILENCE_RESET_MS);
@@ -3877,7 +3898,7 @@ export class VoiceSessionManager {
 
   resetBotAudioPlayback(session) {
     if (!session) return;
-    if (this.isMusicPlaybackActive(session)) {
+    if (musicPhaseIsActive(this.getMusicPhase(session))) {
       // Clear TTS buffer only — stopPlayback would kill the pending music pipeline.
       try { session.subprocessClient?.stopTtsPlayback(); } catch { /* ignore */ }
     } else {
@@ -3982,7 +4003,7 @@ export class VoiceSessionManager {
     }
 
     const streamBufferedBytes = 0; // Subprocess manages its own stream buffer
-    const musicActive = this.isMusicPlaybackAudible(session);
+    const musicActive = musicPhaseShouldLockOutput(this.getMusicPhase(session));
     const botTurnOpen = Boolean(session.botTurnOpen);
     const pendingResponse = Boolean(session.pendingResponse && typeof session.pendingResponse === "object");
     const openAiActiveResponse = this.isRealtimeResponseActive(session);
@@ -4292,7 +4313,7 @@ export class VoiceSessionManager {
       };
     }
 
-    if (this.isMusicPlaybackActive(session)) {
+    if (musicPhaseIsActive(this.getMusicPhase(session))) {
       return {
         allow: false,
         reason: "music_playback_active",
@@ -7920,7 +7941,7 @@ export class VoiceSessionManager {
           // During music, per-user ASR bridge fails (audio buffers cleared).
           // Route directly to processRealtimeTurn so maybeHandleMusicPlaybackTurn
           // can transcribe the PCM and detect wake words.
-          if (this.isMusicPlaybackActive(session)) {
+          if (musicPhaseIsActive(this.getMusicPhase(session))) {
             this.queueRealtimeTurn({
               session,
               userId,
@@ -13009,14 +13030,14 @@ export class VoiceSessionManager {
     if (session.ending) return false;
 
     const music = this.ensureSessionMusicState(session);
-    const musicWasActive = Boolean(music?.active);
+    const musicWasActive = musicPhaseIsActive(this.getMusicPhase(session));
     if (musicWasActive) {
       try {
         const playbackResult = this.musicPlayback?.isConfigured?.()
           ? await this.musicPlayback.stopPlayback()
           : null;
+        this.setMusicPhase(session, "idle");
         if (music) {
-          music.active = false;
           music.stoppedAt = Date.now();
           music.lastCommandAt = Date.now();
           music.lastCommandReason = "session_end";
@@ -13025,8 +13046,8 @@ export class VoiceSessionManager {
           }
         }
       } catch {
+        this.setMusicPhase(session, "idle");
         if (music) {
-          music.active = false;
           music.stoppedAt = Date.now();
           music.lastCommandAt = Date.now();
           music.lastCommandReason = "session_end";
