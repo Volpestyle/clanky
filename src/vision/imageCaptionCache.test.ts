@@ -239,3 +239,49 @@ describe("ImageCaptionCache getOrCaption", () => {
         assert.equal(await cache.getOrCaption({ url: "", llm }), null);
     });
 });
+
+
+// --- hasOrInflight ---
+
+describe("ImageCaptionCache hasOrInflight", () => {
+    test("returns false for unknown URL", () => {
+        const cache = new ImageCaptionCache();
+        assert.equal(cache.hasOrInflight("https://example.com/unknown.jpg"), false);
+    });
+
+    test("returns true for cached URL", () => {
+        const cache = new ImageCaptionCache();
+        cache.set("https://example.com/cached.jpg", "A cached image");
+        assert.equal(cache.hasOrInflight("https://example.com/cached.jpg"), true);
+    });
+
+    test("returns true while caption is in-flight", async () => {
+        const cache = new ImageCaptionCache();
+        let resolveGenerate;
+        const llm = {
+            isProviderConfigured: () => true,
+            generate: () => new Promise((resolve) => {
+                resolveGenerate = resolve;
+            })
+        };
+
+        // Start captioning but don't await — it's now in-flight
+        const captionPromise = cache.getOrCaption({
+            url: "https://example.com/inflight.jpg",
+            llm
+        });
+
+        // While in-flight, hasOrInflight should return true
+        assert.equal(cache.hasOrInflight("https://example.com/inflight.jpg"), true);
+        // But has() should still return false (not yet cached)
+        assert.equal(cache.has("https://example.com/inflight.jpg"), false);
+
+        // Resolve and clean up
+        resolveGenerate({ text: "Done", provider: "anthropic", model: "claude-haiku-4-5" });
+        await captionPromise;
+
+        // Now both should be true (cached)
+        assert.equal(cache.hasOrInflight("https://example.com/inflight.jpg"), true);
+        assert.equal(cache.has("https://example.com/inflight.jpg"), true);
+    });
+});

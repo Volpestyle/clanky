@@ -2630,7 +2630,7 @@ export class ClankerBot {
       if (scheduled >= maxPerBatch) break;
       if (scheduled >= remainingBudget) break;
       if (!candidate?.url) continue;
-      if (this.imageCaptionCache.has(candidate.url)) continue;
+      if (this.imageCaptionCache.hasOrInflight(candidate.url)) continue;
 
       scheduled++;
       this.captionTimestamps.push(now);

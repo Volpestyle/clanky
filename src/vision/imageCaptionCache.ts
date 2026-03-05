@@ -55,6 +55,15 @@ export class ImageCaptionCache {
     }
 
     /**
+     * Check if a URL has a cached caption or is currently being captioned.
+     */
+    hasOrInflight(rawUrl: string): boolean {
+        const key = normalizeUrl(rawUrl);
+        if (!key) return false;
+        return this.cache.has(key) || this.inflight.has(key);
+    }
+
+    /**
      * Get cached caption or generate + cache via captionImage().
      * Concurrent requests for the same URL are coalesced.
      */
