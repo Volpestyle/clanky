@@ -20,6 +20,17 @@ import {
   ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA,
   CONVERSATION_SEARCH_SCHEMA,
   CODE_TASK_SCHEMA,
+  MUSIC_SEARCH_SCHEMA,
+  MUSIC_QUEUE_ADD_SCHEMA,
+  MUSIC_PLAY_NOW_SCHEMA,
+  MUSIC_QUEUE_NEXT_SCHEMA,
+  MUSIC_STOP_SCHEMA,
+  MUSIC_PAUSE_SCHEMA,
+  MUSIC_RESUME_SCHEMA,
+  MUSIC_SKIP_SCHEMA,
+  MUSIC_NOW_PLAYING_SCHEMA,
+  LEAVE_VOICE_CHANNEL_SCHEMA,
+  VOICE_TOOL_SCHEMAS,
   toAnthropicTool
 } from "./sharedToolSchemas.ts";
 
@@ -193,6 +204,18 @@ type ReplyToolRuntime = {
       source: string;
     }) => SubAgentSession | null;
   };
+  voiceSession?: {
+    musicSearch: (query: string, limit: number) => Promise<{ ok: boolean; tracks: Record<string, unknown>[] }>;
+    musicQueueAdd: (trackIds: string[], position?: number | "end") => Promise<{ ok: boolean; queue_length: number; added: string[] }>;
+    musicPlayNow: (trackId: string) => Promise<{ ok: boolean; error?: string }>;
+    musicQueueNext: (trackIds: string[]) => Promise<{ ok: boolean; queue_length: number }>;
+    musicStop: () => Promise<{ ok: boolean }>;
+    musicPause: () => Promise<{ ok: boolean }>;
+    musicResume: () => Promise<{ ok: boolean }>;
+    musicSkip: () => Promise<{ ok: boolean; nextTrack?: Record<string, unknown> }>;
+    musicNowPlaying: () => Promise<{ ok: boolean; now_playing: Record<string, unknown> | null; queue_state: Record<string, unknown> }>;
+    leaveVoiceChannel: () => Promise<{ ok: boolean }>;
+  };
 };
 
 type ReplyToolContext = {
@@ -308,6 +331,7 @@ export function buildReplyToolSet(
     imageLookupAvailable?: boolean;
     openArticleAvailable?: boolean;
     codeAgentAvailable?: boolean;
+    voiceToolsAvailable?: boolean;
   } = {}
 ): ReplyToolDefinition[] {
   const tools: ReplyToolDefinition[] = [];
@@ -364,6 +388,12 @@ export function buildReplyToolSet(
     tools.push(CODE_TASK_TOOL);
   }
 
+  if (capabilities.voiceToolsAvailable) {
+    for (const schema of VOICE_TOOL_SCHEMAS) {
+      tools.push(toAnthropicTool(schema));
+    }
+  }
+
   return tools;
 }
 
@@ -398,6 +428,17 @@ export async function executeReplyTool(
       return executeOpenArticle(input, runtime, context);
     case "code_task":
       return executeCodeTask(input, runtime, context);
+    case "music_search":
+    case "music_queue_add":
+    case "music_play_now":
+    case "music_queue_next":
+    case "music_stop":
+    case "music_pause":
+    case "music_resume":
+    case "music_skip":
+    case "music_now_playing":
+    case "leave_voice_channel":
+      return executeVoiceTool(toolName, input, runtime);
     default:
       return { content: `Unknown tool: ${toolName}`, isError: true };
   }
@@ -986,6 +1027,79 @@ async function executeCodeTask(
   } catch (error) {
     return {
       content: `Code task failed: ${String((error as Error)?.message || error)}`,
+      isError: true
+    };
+  }
+}
+
+async function executeVoiceTool(
+  toolName: string,
+  input: ReplyToolCallInput,
+  runtime: ReplyToolRuntime
+): Promise<ReplyToolResult> {
+  if (!runtime.voiceSession) {
+    return { content: "Voice session tools are not available.", isError: true };
+  }
+  try {
+    let result: Record<string, unknown>;
+    switch (toolName) {
+      case "music_search": {
+        const query = String(input?.query || "").trim().slice(0, 180);
+        if (!query) return { content: "Missing or empty search query.", isError: true };
+        const limit = Math.max(1, Math.min(10, Math.floor(Number(input?.max_results) || 5)));
+        result = await runtime.voiceSession.musicSearch(query, limit);
+        break;
+      }
+      case "music_queue_add": {
+        const tracks = Array.isArray(input?.tracks)
+          ? (input.tracks as string[]).map((t) => String(t).trim()).filter(Boolean).slice(0, 12)
+          : [];
+        if (!tracks.length) return { content: "No track IDs provided.", isError: true };
+        const position = typeof input?.position === "number"
+          ? Math.max(0, Math.floor(input.position))
+          : (input?.position === "end" ? "end" : undefined);
+        result = await runtime.voiceSession.musicQueueAdd(tracks, position);
+        break;
+      }
+      case "music_play_now": {
+        const trackId = String(input?.track_id || "").trim();
+        if (!trackId) return { content: "Missing track_id.", isError: true };
+        result = await runtime.voiceSession.musicPlayNow(trackId);
+        break;
+      }
+      case "music_queue_next": {
+        const tracks = Array.isArray(input?.tracks)
+          ? (input.tracks as string[]).map((t) => String(t).trim()).filter(Boolean).slice(0, 12)
+          : [];
+        if (!tracks.length) return { content: "No track IDs provided.", isError: true };
+        result = await runtime.voiceSession.musicQueueNext(tracks);
+        break;
+      }
+      case "music_stop":
+        result = await runtime.voiceSession.musicStop();
+        break;
+      case "music_pause":
+        result = await runtime.voiceSession.musicPause();
+        break;
+      case "music_resume":
+        result = await runtime.voiceSession.musicResume();
+        break;
+      case "music_skip":
+        result = await runtime.voiceSession.musicSkip();
+        break;
+      case "music_now_playing":
+        result = await runtime.voiceSession.musicNowPlaying();
+        break;
+      case "leave_voice_channel":
+        result = await runtime.voiceSession.leaveVoiceChannel();
+        break;
+      default:
+        return { content: `Unknown voice tool: ${toolName}`, isError: true };
+    }
+    return { content: JSON.stringify(result) };
+  } catch (error) {
+    return {
+      content: `Voice tool ${toolName} failed: ${String((error as Error)?.message || error)}`,
       isError: true
     };
   }

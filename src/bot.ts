@@ -1229,7 +1229,8 @@ export class ClankerBot {
     soundboardCandidates = [],
     onWebLookupStart = null,
     onWebLookupComplete = null,
-    webSearchTimeoutMs = null
+    webSearchTimeoutMs = null,
+    voiceToolCallbacks = null
   }) {
     const runtime = {
       llm: this.llm,
@@ -1268,7 +1269,8 @@ export class ClankerBot {
       soundboardCandidates,
       onWebLookupStart,
       onWebLookupComplete,
-      webSearchTimeoutMs
+      webSearchTimeoutMs,
+      voiceToolCallbacks
     });
   }
 

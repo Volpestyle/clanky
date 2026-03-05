@@ -291,7 +291,8 @@ export async function generateVoiceTurnReply(runtime, {
   soundboardCandidates = [],
   onWebLookupStart = null,
   onWebLookupComplete = null,
-  webSearchTimeoutMs: _webSearchTimeoutMs = null
+  webSearchTimeoutMs: _webSearchTimeoutMs = null,
+  voiceToolCallbacks = null
 }) {
   if (!runtime.llm?.generate || !settings) return { text: "" };
   const normalizedInputKind = String(inputKind || "").trim().toLowerCase() === "event"
@@ -618,7 +619,8 @@ export async function generateVoiceTurnReply(runtime, {
       adaptiveDirectivesAvailable: allowAdaptiveDirectiveToolCalls,
       imageLookupAvailable: false,
       openArticleAvailable: allowOpenArticleToolCall && openArticleCandidates.length > 0,
-      codeAgentAvailable: Boolean(codeAgentSettings?.enabled && codeAgentRuntimeAvailable)
+      codeAgentAvailable: Boolean(codeAgentSettings?.enabled && codeAgentRuntimeAvailable),
+      voiceToolsAvailable: Boolean(voiceToolCallbacks)
     });
 
     const voiceToolRuntime: ReplyToolRuntime = {
@@ -648,7 +650,8 @@ export async function generateVoiceTurnReply(runtime, {
           })
       } : undefined,
       memory: runtime.memory,
-      store: runtime.store
+      store: runtime.store,
+      voiceSession: voiceToolCallbacks || undefined
     };
     const voiceToolContext: ReplyToolContext = {
       settings: settings as Record<string, unknown>,

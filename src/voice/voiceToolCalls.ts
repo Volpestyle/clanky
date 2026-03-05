@@ -34,6 +34,16 @@ import {
   ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA,
   CONVERSATION_SEARCH_SCHEMA,
   CODE_TASK_SCHEMA,
+  MUSIC_SEARCH_SCHEMA,
+  MUSIC_QUEUE_ADD_SCHEMA,
+  MUSIC_PLAY_NOW_SCHEMA,
+  MUSIC_QUEUE_NEXT_SCHEMA,
+  MUSIC_STOP_SCHEMA,
+  MUSIC_PAUSE_SCHEMA,
+  MUSIC_RESUME_SCHEMA,
+  MUSIC_SKIP_SCHEMA,
+  MUSIC_NOW_PLAYING_SCHEMA,
+  LEAVE_VOICE_CHANNEL_SCHEMA,
   toRealtimeTool
 } from "../tools/sharedToolSchemas.ts";
 
@@ -131,127 +141,17 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
     toRealtimeTool(ADAPTIVE_DIRECTIVE_ADD_SCHEMA),
     toRealtimeTool(ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA),
     toRealtimeTool(CONVERSATION_SEARCH_SCHEMA),
-    // Voice-only tools
-    {
-      toolType: "function",
-      name: "music_search",
-      description: "Search for music tracks to queue or play.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string" },
-          max_results: { type: "integer", minimum: 1, maximum: 10 }
-        },
-        required: ["query"],
-        additionalProperties: false
-      }
-    },
-    {
-      toolType: "function",
-      name: "music_queue_add",
-      description: "Add one or more track IDs to the voice music queue.",
-      parameters: {
-        type: "object",
-        properties: {
-          tracks: {
-            type: "array",
-            items: { type: "string" },
-            minItems: 1,
-            maxItems: 12
-          },
-          position: {
-            oneOf: [
-              { type: "string", enum: ["end"] },
-              { type: "integer", minimum: 0 }
-            ]
-          }
-        },
-        required: ["tracks"],
-        additionalProperties: false
-      }
-    },
-    {
-      toolType: "function",
-      name: "music_play_now",
-      description: "Start playing a specific track immediately.",
-      parameters: {
-        type: "object",
-        properties: {
-          track_id: { type: "string" }
-        },
-        required: ["track_id"],
-        additionalProperties: false
-      }
-    },
-    {
-      toolType: "function",
-      name: "music_queue_next",
-      description: "Insert one or more track IDs immediately after the current track.",
-      parameters: {
-        type: "object",
-        properties: {
-          tracks: {
-            type: "array",
-            items: { type: "string" },
-            minItems: 1,
-            maxItems: 12
-          }
-        },
-        required: ["tracks"],
-        additionalProperties: false
-      }
-    },
-    {
-      toolType: "function",
-      name: "music_stop",
-      description: "Stop playback and clear the active queue.",
-      parameters: {
-        type: "object",
-        additionalProperties: false
-      }
-    },
-    {
-      toolType: "function",
-      name: "music_pause",
-      description: "Pause music playback.",
-      parameters: {
-        type: "object",
-        additionalProperties: false
-      }
-    },
-    {
-      toolType: "function",
-      name: "music_resume",
-      description: "Resume paused music playback.",
-      parameters: {
-        type: "object",
-        additionalProperties: false
-      }
-    },
-    {
-      toolType: "function",
-      name: "music_skip",
-      description: "Skip current track and advance to next queued track.",
-      parameters: {
-        type: "object",
-        additionalProperties: false
-      }
-    },
-    {
-      toolType: "function",
-      name: "music_now_playing",
-      description: "Read now-playing and queue status.",
-      parameters: {
-        type: "object",
-        additionalProperties: false
-      }
-    },
-    {
-      toolType: "function",
-      name: "leave_voice_channel",
-      description: "Leave the voice channel and end this session. Only call this when you intentionally choose to end your own VC session — another person saying goodbye does not require you to leave.",
-      parameters: { type: "object", properties: {}, required: [], additionalProperties: false }
-    },
+    // Voice-only tools (canonical schemas from sharedToolSchemas.ts)
+    toRealtimeTool(MUSIC_SEARCH_SCHEMA),
+    toRealtimeTool(MUSIC_QUEUE_ADD_SCHEMA),
+    toRealtimeTool(MUSIC_PLAY_NOW_SCHEMA),
+    toRealtimeTool(MUSIC_QUEUE_NEXT_SCHEMA),
+    toRealtimeTool(MUSIC_STOP_SCHEMA),
+    toRealtimeTool(MUSIC_PAUSE_SCHEMA),
+    toRealtimeTool(MUSIC_RESUME_SCHEMA),
+    toRealtimeTool(MUSIC_SKIP_SCHEMA),
+    toRealtimeTool(MUSIC_NOW_PLAYING_SCHEMA),
+    toRealtimeTool(LEAVE_VOICE_CHANNEL_SCHEMA),
     toRealtimeTool(WEB_SEARCH_SCHEMA),
     toRealtimeTool(WEB_SCRAPE_SCHEMA),
     toRealtimeTool(BROWSER_BROWSE_SCHEMA),

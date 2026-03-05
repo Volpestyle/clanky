@@ -194,6 +194,146 @@ export const SHARED_TOOL_SCHEMAS: SharedToolSchema[] = [
   CODE_TASK_SCHEMA
 ];
 
+// ── Voice-only tool schemas ─────────────────────────────────────────
+
+export const MUSIC_SEARCH_SCHEMA: SharedToolSchema = {
+  name: "music_search",
+  description: "Search for music tracks to queue or play.",
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string" },
+      max_results: { type: "integer", minimum: 1, maximum: 10 }
+    },
+    required: ["query"],
+    additionalProperties: false
+  }
+};
+
+export const MUSIC_QUEUE_ADD_SCHEMA: SharedToolSchema = {
+  name: "music_queue_add",
+  description: "Add one or more track IDs to the voice music queue.",
+  parameters: {
+    type: "object",
+    properties: {
+      tracks: {
+        type: "array",
+        items: { type: "string" },
+        minItems: 1,
+        maxItems: 12
+      },
+      position: {
+        oneOf: [
+          { type: "string", enum: ["end"] },
+          { type: "integer", minimum: 0 }
+        ]
+      }
+    },
+    required: ["tracks"],
+    additionalProperties: false
+  }
+};
+
+export const MUSIC_PLAY_NOW_SCHEMA: SharedToolSchema = {
+  name: "music_play_now",
+  description: "Start playing a specific track immediately.",
+  parameters: {
+    type: "object",
+    properties: {
+      track_id: { type: "string" }
+    },
+    required: ["track_id"],
+    additionalProperties: false
+  }
+};
+
+export const MUSIC_QUEUE_NEXT_SCHEMA: SharedToolSchema = {
+  name: "music_queue_next",
+  description: "Insert one or more track IDs immediately after the current track.",
+  parameters: {
+    type: "object",
+    properties: {
+      tracks: {
+        type: "array",
+        items: { type: "string" },
+        minItems: 1,
+        maxItems: 12
+      }
+    },
+    required: ["tracks"],
+    additionalProperties: false
+  }
+};
+
+export const MUSIC_STOP_SCHEMA: SharedToolSchema = {
+  name: "music_stop",
+  description: "Stop playback and clear the active queue.",
+  parameters: {
+    type: "object",
+    properties: {},
+    additionalProperties: false
+  }
+};
+
+export const MUSIC_PAUSE_SCHEMA: SharedToolSchema = {
+  name: "music_pause",
+  description: "Pause music playback.",
+  parameters: {
+    type: "object",
+    properties: {},
+    additionalProperties: false
+  }
+};
+
+export const MUSIC_RESUME_SCHEMA: SharedToolSchema = {
+  name: "music_resume",
+  description: "Resume paused music playback.",
+  parameters: {
+    type: "object",
+    properties: {},
+    additionalProperties: false
+  }
+};
+
+export const MUSIC_SKIP_SCHEMA: SharedToolSchema = {
+  name: "music_skip",
+  description: "Skip current track and advance to next queued track.",
+  parameters: {
+    type: "object",
+    properties: {},
+    additionalProperties: false
+  }
+};
+
+export const MUSIC_NOW_PLAYING_SCHEMA: SharedToolSchema = {
+  name: "music_now_playing",
+  description: "Read now-playing and queue status.",
+  parameters: {
+    type: "object",
+    properties: {},
+    additionalProperties: false
+  }
+};
+
+export const LEAVE_VOICE_CHANNEL_SCHEMA: SharedToolSchema = {
+  name: "leave_voice_channel",
+  description: "Leave the voice channel and end this session. Only call this when you intentionally choose to end your own VC session — another person saying goodbye does not require you to leave.",
+  parameters: { type: "object", properties: {}, required: [], additionalProperties: false }
+};
+
+export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
+  MUSIC_SEARCH_SCHEMA,
+  MUSIC_QUEUE_ADD_SCHEMA,
+  MUSIC_PLAY_NOW_SCHEMA,
+  MUSIC_QUEUE_NEXT_SCHEMA,
+  MUSIC_STOP_SCHEMA,
+  MUSIC_PAUSE_SCHEMA,
+  MUSIC_RESUME_SCHEMA,
+  MUSIC_SKIP_SCHEMA,
+  MUSIC_NOW_PLAYING_SCHEMA,
+  LEAVE_VOICE_CHANNEL_SCHEMA
+];
+
 // ── Format adapters ──────────────────────────────────────────────────
 
 /** Convert to Anthropic Claude API tool format (for replyTools.ts). */

@@ -10240,7 +10240,8 @@ export class VoiceSessionManager {
           releaseLookupBusy();
           releaseLookupBusy = null;
         },
-        webSearchTimeoutMs: Number(settings?.voice?.webSearchTimeoutMs)
+        webSearchTimeoutMs: Number(settings?.voice?.webSearchTimeoutMs),
+        voiceToolCallbacks: this.buildVoiceToolCallbacks({ session, settings })
       });
       const generatedPayload =
         generated && typeof generated === "object"
@@ -10575,7 +10576,8 @@ export class VoiceSessionManager {
           releaseLookupBusy();
           releaseLookupBusy = null;
         },
-        webSearchTimeoutMs: Number(settings?.voice?.webSearchTimeoutMs)
+        webSearchTimeoutMs: Number(settings?.voice?.webSearchTimeoutMs),
+        voiceToolCallbacks: this.buildVoiceToolCallbacks({ session, settings })
       });
       generatedPayload =
         generated && typeof generated === "object"
@@ -12047,6 +12049,31 @@ export class VoiceSessionManager {
     args;
   }) {
     return executeMcpVoiceToolCall(this, opts);
+  }
+
+  buildVoiceToolCallbacks({ session, settings }) {
+    return {
+      musicSearch: (query: string, limit: number) =>
+        this.executeVoiceMusicSearchTool({ session, args: { query, max_results: limit } }),
+      musicQueueAdd: (trackIds: string[], position?: number | "end") =>
+        this.executeVoiceMusicQueueAddTool({ session, settings, args: { tracks: trackIds, position } }),
+      musicPlayNow: (trackId: string) =>
+        this.executeVoiceMusicPlayNowTool({ session, settings, args: { track_id: trackId } }),
+      musicQueueNext: (trackIds: string[]) =>
+        this.executeVoiceMusicQueueNextTool({ session, settings, args: { tracks: trackIds } }),
+      musicStop: () =>
+        this.executeLocalVoiceToolCall({ session, settings, toolName: "music_stop", args: {} }),
+      musicPause: () =>
+        this.executeLocalVoiceToolCall({ session, settings, toolName: "music_pause", args: {} }),
+      musicResume: () =>
+        this.executeLocalVoiceToolCall({ session, settings, toolName: "music_resume", args: {} }),
+      musicSkip: () =>
+        this.executeLocalVoiceToolCall({ session, settings, toolName: "music_skip", args: {} }),
+      musicNowPlaying: () =>
+        this.executeLocalVoiceToolCall({ session, settings, toolName: "music_now_playing", args: {} }),
+      leaveVoiceChannel: () =>
+        this.executeLocalVoiceToolCall({ session, settings, toolName: "leave_voice_channel", args: {} })
+    };
   }
 }
 
