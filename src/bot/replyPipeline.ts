@@ -214,7 +214,17 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
       directlyAddressed: addressed,
       directAddressConfidence: Number(addressSignal?.confidence) || 0,
       directAddressThreshold: Number(addressSignal?.threshold) || 0.62,
-      responseRequired: Boolean(options.forceRespond)
+      responseRequired: Boolean(options.forceRespond),
+      mentionsOtherUsers: Boolean(
+        !addressed &&
+        message.mentions?.users?.size > 0 &&
+        !message.mentions.users.has(bot.client.user?.id)
+      ),
+      repliesToOtherUser: Boolean(
+        !addressed &&
+        message.mentions?.repliedUser &&
+        message.mentions.repliedUser.id !== bot.client.user?.id
+      )
     },
     allowMemoryDirective: settings.memory.enabled,
     allowAdaptiveDirective: Boolean(settings?.adaptiveDirectives?.enabled),

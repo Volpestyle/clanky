@@ -220,21 +220,46 @@ export function buildReplyPrompt({
     parts.push("Do not output [SKIP] except for safety refusals.");
   } else {
     const eagerness = Math.max(0, Math.min(100, Number(replyEagerness) || 0));
-    if (eagerness <= 25) {
-      parts.push("You tend to observe more than talk. Only chime in when you genuinely have something to say or someone is clearly talking to you.");
-    } else if (eagerness >= 90) {
-      parts.push("You are an active, social participant who enjoys riffing with people. Jump in when you have something — even lighter contributions are fine.");
-    } else if (eagerness >= 75) {
-      parts.push("You are pretty engaged in this server. Contribute when you have something that fits the flow.");
-    } else {
+    parts.push(`Your reply eagerness is ${eagerness}/100.`);
+
+    // Core eagerness personality
+    if (eagerness <= 15) {
+      parts.push("You are mostly a lurker. Only speak when someone is clearly talking to you or you have something genuinely important to say.");
+    } else if (eagerness <= 35) {
+      parts.push("You tend to observe more than talk. Only chime in when you genuinely have something to say or someone is clearly engaging with you.");
+    } else if (eagerness <= 55) {
       parts.push("Be selective about when you jump in. If you do not have something genuinely useful, interesting, or funny to add, output [SKIP].");
+    } else if (eagerness <= 75) {
+      parts.push("You are fairly engaged. Contribute when you have something that fits the flow, but still pick your moments.");
+    } else if (eagerness <= 90) {
+      parts.push("You are an active participant. Jump in when you have something — even lighter contributions are fine if they fit naturally.");
+    } else {
+      parts.push("You are very social and love riffing with people. Jump in freely when you have something, even casual reactions and banter.");
     }
+
+    // Directed-at-someone-else signal (scaled by eagerness)
+    const directedAtSomeoneElse = Boolean(addressing?.mentionsOtherUsers) || Boolean(addressing?.repliesToOtherUser);
+    if (directedAtSomeoneElse) {
+      if (eagerness <= 75) {
+        parts.push("This message is directed at another user (via @mention or reply). It is not for you. Output [SKIP] unless the message also clearly invites you to participate.");
+      } else {
+        parts.push("This message is directed at another user (via @mention or reply). Strongly prefer [SKIP] — only jump in if you have something genuinely worth adding to their exchange.");
+      }
+    }
+
+    // Conversational awareness (always present, strength scales with eagerness)
+    if (eagerness <= 60) {
+      parts.push("If people are talking to each other (using names, replying back and forth, making plans together), output [SKIP]. Do not insert yourself into someone else's conversation.");
+    } else {
+      parts.push("If people are clearly having a private or directed exchange with each other, prefer [SKIP] unless you can genuinely add to the conversation.");
+    }
+
+    // Channel mode
     if (normalizedChannelMode === "reply_channel") {
       parts.push("This is one of your reply/lurk channels. Short riffs and acknowledgements are fine when they fit naturally.");
       parts.push("If your reply would derail, interrupt, or just repeat what was said, output [SKIP].");
     } else {
       parts.push("This is not one of your reply/lurk channels. Only jump in if your message is worth the interruption.");
-      parts.push("If this message is not meant for you or you would be inserting yourself into someone else's conversation, output [SKIP].");
     }
   }
 
