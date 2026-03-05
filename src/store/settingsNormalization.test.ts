@@ -250,6 +250,32 @@ test("normalizeSettings restricts browser llm provider to supported browser prov
   assert.equal(normalized.browser.llm.model, "claude-sonnet-4-5-20250929");
 });
 
+test("normalizeSettings normalizes code agent provider and model fields", () => {
+  const fallback = normalizeSettings({
+    codeAgent: {
+      provider: "not-real",
+      model: "",
+      codexModel: ""
+    }
+  });
+
+  assert.equal(fallback.codeAgent.provider, "claude-code");
+  assert.equal(fallback.codeAgent.model, "sonnet");
+  assert.equal(fallback.codeAgent.codexModel, "codex-mini-latest");
+
+  const codex = normalizeSettings({
+    codeAgent: {
+      provider: "CODEX",
+      model: "opus",
+      codexModel: "gpt-5-codex"
+    }
+  });
+
+  assert.equal(codex.codeAgent.provider, "codex");
+  assert.equal(codex.codeAgent.model, "opus");
+  assert.equal(codex.codeAgent.codexModel, "gpt-5-codex");
+});
+
 test("normalizeSettings preserves explicit commandOnlyMode", () => {
   const normalized = normalizeSettings({
     voice: {

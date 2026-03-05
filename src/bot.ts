@@ -8,7 +8,13 @@ import {
 import { clankCommand } from "./commands/clankCommand.ts";
 import { browseCommand } from "./commands/browseCommand.ts";
 import { codeCommand } from "./commands/codeCommand.ts";
-import { runCodeAgent, isCodeAgentUserAllowed, resolveCodeAgentConfig, getActiveCodeAgentTaskCount } from "./agents/codeAgent.ts";
+import {
+  runCodeAgent,
+  isCodeAgentUserAllowed,
+  resolveCodeAgentConfig,
+  getActiveCodeAgentTaskCount,
+  createCodeAgentSession as createCodeAgentSessionRuntime
+} from "./agents/codeAgent.ts";
 import { musicCommands } from "./voice/musicCommands.ts";
 import {
   buildAutomationPrompt,
@@ -123,7 +129,6 @@ import {
 import { loadPromptMemorySliceFromMemory } from "./memory/promptMemorySlice.ts";
 import { maybeReplyToMessagePipeline } from "./bot/replyPipeline.ts";
 import { SubAgentSessionManager } from "./agents/subAgentSession.ts";
-import { CodeAgentSession } from "./agents/codeAgent.ts";
 import { BrowserAgentSession } from "./agents/browseAgent.ts";
 
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
@@ -465,15 +470,26 @@ export class ClankerBot {
         }
 
         try {
-          const { cwd, model, maxTurns, timeoutMs, maxBufferBytes } = resolveCodeAgentConfig(settings, codeCwd);
+          const {
+            cwd,
+            provider,
+            model,
+            codexModel,
+            maxTurns,
+            timeoutMs,
+            maxBufferBytes
+          } = resolveCodeAgentConfig(settings, codeCwd);
 
           const result = await runCodeAgent({
             instruction: codeInstruction,
             cwd,
+            provider,
             maxTurns,
             timeoutMs,
             maxBufferBytes,
             model,
+            codexModel,
+            openai: this.llm?.openai || null,
             trace: {
               guildId: interaction.guildId,
               channelId: interaction.channelId,
@@ -2949,16 +2965,27 @@ export class ClankerBot {
       return { text: "", blockedByBudget: true };
     }
 
-    const { cwd, model, maxTurns, timeoutMs, maxBufferBytes } = resolveCodeAgentConfig(settings, cwdOverride);
+    const {
+      cwd,
+      provider,
+      model,
+      codexModel,
+      maxTurns,
+      timeoutMs,
+      maxBufferBytes
+    } = resolveCodeAgentConfig(settings, cwdOverride);
 
     try {
       const result = await runCodeAgent({
         instruction: task,
         cwd,
+        provider,
         maxTurns,
         timeoutMs,
         maxBufferBytes,
         model,
+        codexModel,
+        openai: this.llm?.openai || null,
         trace: {
           guildId,
           channelId,
@@ -3006,19 +3033,34 @@ export class ClankerBot {
     const used = this.store.countActionsSince("code_agent_call", since1h);
     if (used >= maxPerHour) return null;
 
-    const { cwd, model, maxTurns, timeoutMs, maxBufferBytes } = resolveCodeAgentConfig(settings, cwdOverride);
-
-    const scopeKey = `${guildId || "dm"}:${channelId || "dm"}`;
-    return new CodeAgentSession({
-      scopeKey,
+    const {
       cwd,
+      provider,
       model,
+      codexModel,
       maxTurns,
       timeoutMs,
-      maxBufferBytes,
-      trace: { guildId, channelId, userId, source },
-      store: this.store
-    });
+      maxBufferBytes
+    } = resolveCodeAgentConfig(settings, cwdOverride);
+
+    const scopeKey = `${guildId || "dm"}:${channelId || "dm"}`;
+    try {
+      return createCodeAgentSessionRuntime({
+        scopeKey,
+        cwd,
+        provider,
+        model,
+        codexModel,
+        maxTurns,
+        timeoutMs,
+        maxBufferBytes,
+        trace: { guildId, channelId, userId, source },
+        store: this.store,
+        openai: this.llm?.openai || null
+      });
+    } catch {
+      return null;
+    }
   }
 
   createBrowserAgentSession({

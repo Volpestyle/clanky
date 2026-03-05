@@ -324,7 +324,9 @@ export const DEFAULT_SETTINGS = {
   },
   codeAgent: {
     enabled: false,
+    provider: "claude-code",
     model: "sonnet",
+    codexModel: "codex-mini-latest",
     maxTurns: 30,
     timeoutMs: 300_000,
     maxBufferBytes: 2 * 1024 * 1024,

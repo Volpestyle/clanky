@@ -31,6 +31,22 @@ function normalizeBrowserLlmProvider(value, fallback = "anthropic") {
   return provider === "openai" || provider === "anthropic" ? provider : fallback;
 }
 
+function normalizeCodeAgentProvider(value, fallback = "claude-code") {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "claude-code") return "claude-code";
+  if (normalized === "codex") return "codex";
+  if (normalized === "auto") return "auto";
+
+  const fallbackProvider = String(fallback || "")
+    .trim()
+    .toLowerCase();
+  if (fallbackProvider === "codex") return "codex";
+  if (fallbackProvider === "auto") return "auto";
+  return "claude-code";
+}
+
 export function normalizeSettings(raw) {
   const merged = deepMerge(DEFAULT_SETTINGS, raw ?? {});
   if (!merged.persona || typeof merged.persona !== "object") merged.persona = {};
@@ -1324,7 +1340,16 @@ export function normalizeSettings(raw) {
   );
 
   merged.codeAgent.enabled = Boolean(merged.codeAgent?.enabled);
+  merged.codeAgent.provider = normalizeCodeAgentProvider(
+    merged.codeAgent?.provider,
+    String(DEFAULT_SETTINGS.codeAgent?.provider || "claude-code")
+  );
   merged.codeAgent.model = String(merged.codeAgent?.model || DEFAULT_SETTINGS.codeAgent?.model || "sonnet").trim().slice(0, 120);
+  const normalizedCodeAgentCodexModel = String(
+    merged.codeAgent?.codexModel || DEFAULT_SETTINGS.codeAgent?.codexModel || "codex-mini-latest"
+  ).trim().slice(0, 120);
+  merged.codeAgent.codexModel =
+    normalizedCodeAgentCodexModel || String(DEFAULT_SETTINGS.codeAgent?.codexModel || "codex-mini-latest");
   merged.codeAgent.maxTurns = clamp(
     Number(merged.codeAgent?.maxTurns) || Number(DEFAULT_SETTINGS.codeAgent?.maxTurns) || 30,
     1,
@@ -1351,7 +1376,7 @@ export function normalizeSettings(raw) {
     1,
     10
   );
-  merged.codeAgent.allowedUserIds = uniqueIdList(merged.codeAgent?.allowedUserIds, 50);
+  merged.codeAgent.allowedUserIds = uniqueIdList(merged.codeAgent?.allowedUserIds).slice(0, 50);
 
   if (!merged.subAgentOrchestration || typeof merged.subAgentOrchestration !== "object") merged.subAgentOrchestration = {};
   const defaultOrch = DEFAULT_SETTINGS.subAgentOrchestration;

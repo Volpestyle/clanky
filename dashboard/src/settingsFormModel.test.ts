@@ -48,6 +48,9 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.replyFollowupToolTimeoutMs, 10000);
   assert.equal(form.browserLlmProvider, "anthropic");
   assert.equal(form.browserLlmModel, "claude-sonnet-4-5-20250929");
+  assert.equal(form.codeAgentProvider, "claude-code");
+  assert.equal(form.codeAgentModel, "sonnet");
+  assert.equal(form.codeAgentCodexModel, "codex-mini-latest");
   assert.equal(form.memoryReflectionStrategy, "two_pass_extract_then_main");
   assert.equal(form.adaptiveDirectivesEnabled, true);
   assert.equal(form.automationsEnabled, true);
@@ -102,6 +105,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.voiceCommandOnlyMode = true;
   form.voiceOpenAiRealtimeTranscriptionMethod = "file_wav";
   form.voiceOpenAiRealtimeUsePerUserAsrBridge = false;
+  form.codeAgentProvider = "codex";
+  form.codeAgentCodexModel = "gpt-5-codex";
 
   const patch = formToSettingsPatch(form);
   assert.deepEqual(patch.botNameAliases, ["clank", "conk"]);
@@ -134,6 +139,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.voice.openaiRealtime.usePerUserAsrBridge, false);
   assert.equal(patch.voice.asrLanguageMode, "fixed");
   assert.equal(patch.voice.asrLanguageHint, "en-us");
+  assert.equal(patch.codeAgent.provider, "codex");
+  assert.equal(patch.codeAgent.codexModel, "gpt-5-codex");
   assert.equal(patch.voice.thoughtEngine.enabled, true);
   assert.equal(patch.voice.thoughtEngine.provider, "anthropic");
   assert.equal(patch.voice.thoughtEngine.model, "claude-sonnet-4-6");
@@ -285,6 +292,25 @@ test("settingsFormModel round-trips browser llm provider and model", () => {
   const patch = formToSettingsPatch(form);
   assert.equal(patch.browser.llm.provider, "openai");
   assert.equal(patch.browser.llm.model, "gpt-5-mini");
+});
+
+test("settingsFormModel round-trips code agent provider fields", () => {
+  const form = settingsToForm({
+    codeAgent: {
+      provider: "codex",
+      model: "sonnet",
+      codexModel: "gpt-5-codex"
+    }
+  });
+
+  assert.equal(form.codeAgentProvider, "codex");
+  assert.equal(form.codeAgentModel, "sonnet");
+  assert.equal(form.codeAgentCodexModel, "gpt-5-codex");
+
+  const patch = formToSettingsPatch(form);
+  assert.equal(patch.codeAgent.provider, "codex");
+  assert.equal(patch.codeAgent.model, "sonnet");
+  assert.equal(patch.codeAgent.codexModel, "gpt-5-codex");
 });
 
 test("settingsFormModel round-trips elevenlabs realtime settings", () => {

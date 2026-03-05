@@ -2,6 +2,10 @@ import React from "react";
 import { SettingsSection } from "../SettingsSection";
 
 export function CodeAgentSettingsSection({ id, form, set }) {
+  const provider = String(form.codeAgentProvider || "claude-code").trim().toLowerCase();
+  const showClaudeModel = provider === "claude-code" || provider === "auto";
+  const showCodexModel = provider === "codex" || provider === "auto";
+
   return (
     <SettingsSection id={id} title="Code Agent" active={form.codeAgentEnabled}>
       <div className="toggles">
@@ -11,7 +15,7 @@ export function CodeAgentSettingsSection({ id, form, set }) {
             checked={form.codeAgentEnabled}
             onChange={set("codeAgentEnabled")}
           />
-          Enable code agent (Claude Code)
+          Enable code agent
         </label>
       </div>
 
@@ -30,14 +34,16 @@ export function CodeAgentSettingsSection({ id, form, set }) {
 
           <div className="split">
             <div>
-              <label htmlFor="code-agent-model">Model</label>
-              <input
-                id="code-agent-model"
-                type="text"
-                value={form.codeAgentModel}
-                onChange={set("codeAgentModel")}
-                placeholder="sonnet"
-              />
+              <label htmlFor="code-agent-provider">Provider</label>
+              <select
+                id="code-agent-provider"
+                value={form.codeAgentProvider}
+                onChange={set("codeAgentProvider")}
+              >
+                <option value="claude-code">Claude Code (local)</option>
+                <option value="codex">Codex (OpenAI)</option>
+                <option value="auto">Auto (currently Claude Code)</option>
+              </select>
             </div>
             <div>
               <label htmlFor="code-agent-max-parallel">Max parallel tasks</label>
@@ -51,6 +57,32 @@ export function CodeAgentSettingsSection({ id, form, set }) {
               />
             </div>
           </div>
+
+          {showClaudeModel && (
+            <div className="field">
+              <label htmlFor="code-agent-model">Claude model</label>
+              <input
+                id="code-agent-model"
+                type="text"
+                value={form.codeAgentModel}
+                onChange={set("codeAgentModel")}
+                placeholder="sonnet"
+              />
+            </div>
+          )}
+
+          {showCodexModel && (
+            <div className="field">
+              <label htmlFor="code-agent-codex-model">Codex model</label>
+              <input
+                id="code-agent-codex-model"
+                type="text"
+                value={form.codeAgentCodexModel}
+                onChange={set("codeAgentCodexModel")}
+                placeholder="codex-mini-latest"
+              />
+            </div>
+          )}
 
           <div className="split">
             <div>
