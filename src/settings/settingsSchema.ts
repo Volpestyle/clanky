@@ -308,6 +308,13 @@ export const DEFAULT_SETTINGS = {
     stepTimeoutMs: 30_000,
     sessionTimeoutMs: 300_000
   },
+  vision: {
+    captionEnabled: true,
+    provider: "anthropic",
+    model: "claude-haiku-4-5",
+    maxAutoIncludeImages: 3,
+    maxCaptionsPerHour: 60
+  },
   memory: {
     enabled: true,
     maxRecentMessages: 35,

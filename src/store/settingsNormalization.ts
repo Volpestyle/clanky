@@ -362,6 +362,42 @@ export function normalizeSettings(raw) {
     600_000
   );
 
+  // --- Vision ---
+  if (!merged.vision || typeof merged.vision !== "object") merged.vision = {};
+  merged.vision.captionEnabled =
+    merged.vision?.captionEnabled !== undefined
+      ? Boolean(merged.vision.captionEnabled)
+      : Boolean(DEFAULT_SETTINGS.vision?.captionEnabled);
+  const defaultVisionProvider = normalizeLlmProvider(DEFAULT_SETTINGS.vision?.provider || "anthropic");
+  const visionProvider = normalizeLlmProvider(merged.vision?.provider, defaultVisionProvider);
+  const defaultVisionModel =
+    visionProvider === defaultVisionProvider
+      ? String(DEFAULT_SETTINGS.vision?.model || "").trim()
+      : "";
+  const normalizedVisionLlm = normalizeProviderModelPair(
+    merged.vision,
+    defaultVisionProvider,
+    defaultVisionModel
+  );
+  merged.vision.provider = normalizedVisionLlm.provider;
+  merged.vision.model = normalizedVisionLlm.model;
+  const visionAutoIncludeRaw = Number(merged.vision?.maxAutoIncludeImages);
+  merged.vision.maxAutoIncludeImages = clamp(
+    Number.isFinite(visionAutoIncludeRaw)
+      ? visionAutoIncludeRaw
+      : Number(DEFAULT_SETTINGS.vision?.maxAutoIncludeImages) || 3,
+    0,
+    6
+  );
+  const visionCaptionsPerHourRaw = Number(merged.vision?.maxCaptionsPerHour);
+  merged.vision.maxCaptionsPerHour = clamp(
+    Number.isFinite(visionCaptionsPerHourRaw)
+      ? visionCaptionsPerHourRaw
+      : Number(DEFAULT_SETTINGS.vision?.maxCaptionsPerHour) || 60,
+    0,
+    300
+  );
+
   merged.videoContext.enabled =
     merged.videoContext?.enabled !== undefined
       ? Boolean(merged.videoContext?.enabled)
@@ -1117,7 +1153,7 @@ export function normalizeSettings(raw) {
     ),
     pacingMode:
       String(merged.discovery?.pacingMode || defaultDiscovery.pacingMode || "even").toLowerCase() ===
-      "spontaneous"
+        "spontaneous"
         ? "spontaneous"
         : "even",
     spontaneity: clamp(

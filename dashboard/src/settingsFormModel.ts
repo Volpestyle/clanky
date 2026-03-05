@@ -65,6 +65,7 @@ export function settingsToForm(settings) {
   const defaultMemoryLlm = defaults.memoryLlm;
   const defaultWebSearch = defaults.webSearch;
   const defaultVideoContext = defaults.videoContext;
+  const defaultVision = defaults.vision;
   const defaultVoice = defaults.voice;
   const defaultVoiceXai = defaults.voice.xai;
   const defaultVoiceOpenAiRealtime = defaults.voice.openaiRealtime;
@@ -154,6 +155,11 @@ export function settingsToForm(settings) {
     browserMaxSteps: settings?.browser?.maxStepsPerTask ?? defaults.browser.maxStepsPerTask,
     browserStepTimeoutMs: settings?.browser?.stepTimeoutMs ?? defaults.browser.stepTimeoutMs,
     browserSessionTimeoutMs: settings?.browser?.sessionTimeoutMs ?? defaults.browser.sessionTimeoutMs,
+    visionCaptionEnabled: settings?.vision?.captionEnabled ?? defaultVision.captionEnabled,
+    visionProvider: settings?.vision?.provider ?? defaultVision.provider,
+    visionModel: settings?.vision?.model ?? defaultVision.model,
+    visionMaxAutoIncludeImages: settings?.vision?.maxAutoIncludeImages ?? defaultVision.maxAutoIncludeImages,
+    visionMaxCaptionsPerHour: settings?.vision?.maxCaptionsPerHour ?? defaultVision.maxCaptionsPerHour,
     webSearchEnabled: settings?.webSearch?.enabled ?? defaultWebSearch.enabled,
     webSearchSafeMode: settings?.webSearch?.safeSearch ?? defaultWebSearch.safeSearch,
     webSearchPerHour: settings?.webSearch?.maxSearchesPerHour ?? defaultWebSearch.maxSearchesPerHour,
@@ -429,6 +435,13 @@ export function formToSettingsPatch(form) {
       maxStepsPerTask: Number(form.browserMaxSteps),
       stepTimeoutMs: Number(form.browserStepTimeoutMs),
       sessionTimeoutMs: Number(form.browserSessionTimeoutMs)
+    },
+    vision: {
+      captionEnabled: Boolean(form.visionCaptionEnabled),
+      provider: String(form.visionProvider || "").trim(),
+      model: String(form.visionModel || "").trim(),
+      maxAutoIncludeImages: Number(form.visionMaxAutoIncludeImages),
+      maxCaptionsPerHour: Number(form.visionMaxCaptionsPerHour)
     },
     webSearch: {
       enabled: form.webSearchEnabled,

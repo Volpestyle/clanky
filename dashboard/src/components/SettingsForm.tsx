@@ -22,6 +22,7 @@ import { PromptGuidanceSettingsSection } from "./settingsSections/PromptGuidance
 import { LlmConfigurationSettingsSection } from "./settingsSections/LlmConfigurationSettingsSection";
 import { WebSearchSettingsSection } from "./settingsSections/WebSearchSettingsSection";
 import { BrowserSettingsSection } from "./settingsSections/BrowserSettingsSection";
+import { VisionSettingsSection } from "./settingsSections/VisionSettingsSection";
 import { VideoContextSettingsSection } from "./settingsSections/VideoContextSettingsSection";
 import { VoiceModeSettingsSection } from "./settingsSections/VoiceModeSettingsSection";
 import { RateLimitsSettingsSection } from "./settingsSections/RateLimitsSettingsSection";
@@ -35,6 +36,7 @@ const SECTIONS = [
   { id: "sec-llm", label: "LLM Config" },
   { id: "sec-search", label: "Web Search" },
   { id: "sec-browser", label: "Browser" },
+  { id: "sec-vision", label: "Vision" },
   { id: "sec-video", label: "Video Context" },
   { id: "sec-voice", label: "Voice Mode" },
   { id: "sec-rate", label: "Rate Limits" },
@@ -108,6 +110,10 @@ export default function SettingsForm({
     model: effectiveForm.browserLlmModel
   });
   const {
+    options: visionModelOptions,
+    selectedPresetModel: selectedVisionPresetModel
+  } = resolvePresetSelection("visionProvider", "visionModel");
+  const {
     options: voiceGenerationModelOptions,
     selectedPresetModel: selectedVoiceGenerationPresetModel
   } = resolvePresetSelection("voiceGenerationLlmProvider", "voiceGenerationLlmModel");
@@ -168,6 +174,7 @@ export default function SettingsForm({
       syncModel("replyFollowupLlmModel", selectedReplyFollowupPresetModel);
       syncModel("memoryLlmModel", selectedMemoryLlmPresetModel);
       syncModel("browserLlmModel", selectedBrowserLlmPresetModel);
+      syncModel("visionModel", selectedVisionPresetModel);
       syncModel("voiceGenerationLlmModel", selectedVoiceGenerationPresetModel);
       syncModel("voiceThoughtEngineModel", selectedVoiceThoughtEnginePresetModel);
       if (next.voiceGenerationLlmUseTextModel) {
@@ -182,7 +189,8 @@ export default function SettingsForm({
     selectedMemoryLlmPresetModel,
     selectedBrowserLlmPresetModel,
     selectedVoiceGenerationPresetModel,
-    selectedVoiceThoughtEnginePresetModel
+    selectedVoiceThoughtEnginePresetModel,
+    selectedVisionPresetModel
   ]);
 
   if (!form) return null;
@@ -229,6 +237,7 @@ export default function SettingsForm({
   const setBrowserLlmProvider = createProviderSetter("browserLlmProvider", "browserLlmModel");
   const setVoiceGenerationProvider = createProviderSetter("voiceGenerationLlmProvider", "voiceGenerationLlmModel");
   const setVoiceThoughtEngineProvider = createProviderSetter("voiceThoughtEngineProvider", "voiceThoughtEngineModel");
+  const setVisionProvider = createProviderSetter("visionProvider", "visionModel");
 
   function selectModelFieldPreset(modelField, selected) {
     setForm((current) => ({ ...current, [modelField]: selected }));
@@ -246,6 +255,7 @@ export default function SettingsForm({
   const selectBrowserLlmPresetModel = createPresetSelector("browserLlmModel");
   const selectVoiceGenerationPresetModel = createPresetSelector("voiceGenerationLlmModel");
   const selectVoiceThoughtEnginePresetModel = createPresetSelector("voiceThoughtEngineModel");
+  const selectVisionPresetModel = createPresetSelector("visionModel");
 
   function resetPromptGuidanceFields() {
     setForm((current) => ({
@@ -344,6 +354,15 @@ export default function SettingsForm({
             selectBrowserLlmPresetModel={selectBrowserLlmPresetModel}
             browserLlmModelOptions={browserLlmModelOptions}
             selectedBrowserLlmPresetModel={selectedBrowserLlmPresetModel}
+          />
+          <VisionSettingsSection
+            id="sec-vision"
+            form={form}
+            set={set}
+            setVisionProvider={setVisionProvider}
+            selectVisionPresetModel={selectVisionPresetModel}
+            visionModelOptions={visionModelOptions}
+            selectedVisionPresetModel={selectedVisionPresetModel}
           />
           <VideoContextSettingsSection id="sec-video" form={form} set={set} />
 
