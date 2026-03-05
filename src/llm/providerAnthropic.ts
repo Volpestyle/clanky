@@ -45,7 +45,7 @@ const userContent = imageParts.length
   : userPrompt;
 
 const messages = [
-  ...contextMessages.map((msg) => ({
+  ...(contextMessages || []).map((msg) => ({
     role: msg.role === "assistant" ? "assistant" : "user",
     content: msg.content
   })),

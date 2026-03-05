@@ -120,7 +120,7 @@ const response = await llm.openai.responses.create({
   max_output_tokens: maxOutputTokens,
   ...(responseFormat ? { text: responseFormat } : {}),
   input: [
-    ...contextMessages.map((msg) => ({
+    ...(contextMessages || []).map((msg) => ({
       role: msg.role === "assistant" ? "assistant" : "user",
       content: String(msg.content || "")
     })),

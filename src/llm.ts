@@ -1769,7 +1769,7 @@ export class LLMService {
       ...(responseFormat ? { text: responseFormat } : {}),
       ...(openAiTools.length ? { tools: openAiTools } : {}),
       input: [
-        ...contextMessages.map((msg) => ({
+        ...(contextMessages || []).map((msg) => ({
           role: msg.role === "assistant" ? "assistant" : "user",
           content: String(msg.content || "")
         })),
@@ -1826,7 +1826,7 @@ export class LLMService {
 
     const messages = [
       { role: "system", content: systemPrompt },
-      ...contextMessages.map((msg) => ({
+      ...(contextMessages || []).map((msg) => ({
         role: msg.role === "assistant" ? "assistant" : "user",
         content: msg.content
       })),
@@ -1892,7 +1892,7 @@ export class LLMService {
       : userPrompt;
 
     const messages = [
-      ...contextMessages.map((msg) => ({
+      ...(contextMessages || []).map((msg) => ({
         role: msg.role === "assistant" ? "assistant" : "user",
         content: msg.content
       })),

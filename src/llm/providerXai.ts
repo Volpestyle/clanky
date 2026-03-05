@@ -136,7 +136,7 @@ const userContent = imageParts.length
 
 const messages = [
   { role: "system", content: systemPrompt },
-  ...contextMessages.map((msg) => ({
+  ...(contextMessages || []).map((msg) => ({
     role: msg.role === "assistant" ? "assistant" : "user",
     content: msg.content
   })),
