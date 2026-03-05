@@ -601,6 +601,7 @@ export function normalizeSettings(raw) {
     musicDucking?: VoiceMusicDuckingDefaults;
     asrDuringMusic?: boolean;
     asrEnabled?: boolean;
+    textOnlyMode?: boolean;
     operationalMessages?: string;
   };
 
@@ -1054,6 +1055,11 @@ export function normalizeSettings(raw) {
     merged.voice?.asrEnabled !== undefined
       ? Boolean(merged.voice?.asrEnabled)
       : Boolean(defaultVoice.asrEnabled ?? true);
+
+  merged.voice.textOnlyMode =
+    merged.voice?.textOnlyMode !== undefined
+      ? Boolean(merged.voice?.textOnlyMode)
+      : Boolean(defaultVoice.textOnlyMode ?? false);
 
   const validOperationalMessageLevels = ["all", "essential", "minimal", "none"];
   const rawOperationalMessages = String(merged.voice?.operationalMessages || "").trim().toLowerCase();

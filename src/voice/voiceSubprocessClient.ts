@@ -26,6 +26,8 @@ export class VoiceSubprocessClient extends EventEmitter {
   private adapterCleanup: (() => void) | null = null;
   private stdoutBuffer: Buffer = Buffer.alloc(0);
   private lastPlaybackArmedReason: string | null = null;
+  /** Latest TTS buffer depth reported by the Rust subprocess (samples @ 48kHz) */
+  ttsBufferDepthSamples: number = 0;
   private stdoutReaderController: AbortController | null = null;
   private _resolveExitWaiter: (() => void) | null = null;
   private _exitWaiterPromise: Promise<void> | null = null;
@@ -334,6 +336,10 @@ export class VoiceSubprocessClient extends EventEmitter {
       case "music_gain_reached":
         this.emit("musicGainReached", msg.gain);
         break;
+      case "buffer_depth":
+        this.ttsBufferDepthSamples = msg.ttsSamples ?? 0;
+        this.emit("bufferDepth", msg.ttsSamples, msg.musicSamples);
+        break;
       case "error":
         this.emit("error", msg.message);
         break;
@@ -349,6 +355,11 @@ export class VoiceSubprocessClient extends EventEmitter {
 
   getPlaybackArmedReason(): string | null {
     return this.lastPlaybackArmedReason;
+  }
+
+  /** Returns the latest reported TTS buffer depth in seconds (48kHz sample rate). */
+  getTtsBufferDepthSeconds(): number {
+    return this.ttsBufferDepthSamples / 48_000;
   }
 
   private _forwardToGateway(payload: any) {

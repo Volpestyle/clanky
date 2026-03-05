@@ -7,6 +7,8 @@ import {
   BARGE_IN_FULL_OVERRIDE_MIN_MS,
   BARGE_IN_MIN_SPEECH_MS
 } from "./voiceSessionManager.constants.ts";
+import { trackSharedAsrCommittedItem, commitAsrUtterance } from "./voiceAsrBridge.ts";
+import type { AsrBridgeState } from "./voiceAsrBridge.ts";
 
 // Discord sends 48kHz stereo 16-bit PCM in 20ms frames = 3840 bytes
 const DISCORD_PCM_FRAME_BYTES = 3840;
@@ -915,7 +917,7 @@ test("commitOpenAiAsrUtterance marks per-user commit in-flight before awaiting c
     captureReason: "speaking_end"
   });
 
-  assert.equal(asrState.isCommittingAsr, true);
+  assert.equal(asrState.phase, "committing");
   assert.equal(asrState.committingUtteranceId, 1);
 
   manager.beginOpenAiAsrUtterance({
@@ -997,14 +999,13 @@ test("shared ASR hands off to waiting speaker after commit", () => {
   const session = createSession({
     mode: "openai_realtime",
     openAiSharedAsrState: {
+      phase: "ready",
       userId: null,
       client: null,
-      closing: false,
       utterance: null,
       idleTimer: null,
       pendingAudioChunks: [],
-      pendingAudioBytes: 0,
-      isCommittingAsr: false
+      pendingAudioBytes: 0
     }
   });
 
@@ -1048,14 +1049,13 @@ test("shared ASR handoff skipped when no waiting captures", () => {
   const session = createSession({
     mode: "openai_realtime",
     openAiSharedAsrState: {
+      phase: "ready",
       userId: null,
       client: null,
-      closing: false,
       utterance: null,
       idleTimer: null,
       pendingAudioChunks: [],
-      pendingAudioBytes: 0,
-      isCommittingAsr: false
+      pendingAudioBytes: 0
     }
   });
 
@@ -1087,14 +1087,13 @@ test("shared ASR handoff skips captures that already had ASR audio", () => {
   const session = createSession({
     mode: "openai_realtime",
     openAiSharedAsrState: {
+      phase: "ready",
       userId: null,
       client: null,
-      closing: false,
       utterance: null,
       idleTimer: null,
       pendingAudioChunks: [],
-      pendingAudioBytes: 0,
-      isCommittingAsr: false
+      pendingAudioBytes: 0
     }
   });
 
@@ -1144,14 +1143,13 @@ test("shared ASR handoff skips zero-audio captures and selects buffered speaker"
   const session = createSession({
     mode: "openai_realtime",
     openAiSharedAsrState: {
+      phase: "ready",
       userId: null,
       client: null,
-      closing: false,
       utterance: null,
       idleTimer: null,
       pendingAudioChunks: [],
-      pendingAudioBytes: 0,
-      isCommittingAsr: false
+      pendingAudioBytes: 0
     }
   });
 
@@ -1192,14 +1190,13 @@ test("shared ASR committed events resolve waiters by commit user instead of FIFO
   const session = createSession({
     mode: "openai_realtime",
     openAiSharedAsrState: {
+      phase: "ready",
       userId: null,
       client: null,
-      closing: false,
       utterance: null,
       idleTimer: null,
       pendingAudioChunks: [],
       pendingAudioBytes: 0,
-      isCommittingAsr: false,
       itemIdToUserId: new Map(),
       finalTranscriptsByItemId: new Map(),
       pendingCommitResolvers: [],
@@ -1220,10 +1217,7 @@ test("shared ASR committed events resolve waiters by commit user instead of FIFO
     requestedAt: Date.now()
   });
 
-  manager.trackOpenAiSharedAsrCommittedItem({
-    asrState,
-    itemId: "item-speaker-1"
-  });
+  trackSharedAsrCommittedItem(asrState as AsrBridgeState, "item-speaker-1");
 
   assert.deepEqual(resolvedItemIds, []);
   assert.equal(asrState.pendingCommitResolvers.length, 1);
@@ -1234,42 +1228,41 @@ test("shared ASR committed events resolve waiters by commit user instead of FIFO
     userId: "speaker-2",
     requestedAt: Date.now()
   });
-  manager.trackOpenAiSharedAsrCommittedItem({
-    asrState,
-    itemId: "item-speaker-2"
-  });
+  trackSharedAsrCommittedItem(asrState as AsrBridgeState, "item-speaker-2");
 
   assert.deepEqual(resolvedItemIds, ["item-speaker-2"]);
   assert.equal(asrState.pendingCommitResolvers.length, 0);
   assert.equal(asrState.itemIdToUserId.get("item-speaker-2"), "speaker-2");
 });
 
-test("commitOpenAiSharedAsrUtterance preserves already-received final segments when commit item is empty", async () => {
-  const { manager, logs } = createManager();
-  manager.appConfig.openaiApiKey = "test-openai-key";
-  manager.shouldUseSharedTranscription = () => true;
-  manager.ensureOpenAiSharedAsrSessionConnected = async ({ session }) => session.openAiSharedAsrState;
-  manager.flushPendingOpenAiSharedAsrAudio = async () => {};
-  manager.waitForOpenAiSharedAsrCommittedItem = async () => "";
-  manager.tryHandoffSharedAsrToWaitingCapture = () => false;
-  manager.scheduleOpenAiSharedAsrSessionIdleClose = () => {};
-
+test("commitAsrUtterance (shared) preserves already-received final segments when commit item is empty", async () => {
+  const logs: Record<string, unknown>[] = [];
   let commitCalls = 0;
+
   const session = createSession({
     mode: "openai_realtime",
     realtimeInputSampleRateHz: 24_000,
+    // Set very short wait times so the test doesn't block on commit/transcript polling
+    openAiAsrTranscriptStableMs: 10,
+    openAiAsrTranscriptWaitMaxMs: 50,
     openAiSharedAsrState: {
+      phase: "ready",
       userId: "speaker-1",
       client: {
+        ws: { readyState: 1 },
         commitInputAudioBuffer() {
           commitCalls += 1;
         }
       },
-      closing: false,
+      connectPromise: null,
+      connectedAt: Date.now(),
+      lastAudioAt: 0,
+      lastTranscriptAt: 0,
+      lastPartialLogAt: 0,
+      lastPartialText: "",
       idleTimer: null,
       pendingAudioChunks: [],
       pendingAudioBytes: 0,
-      isCommittingAsr: false,
       committingUtteranceId: 0,
       pendingCommitResolvers: [],
       pendingCommitRequests: [],
@@ -1294,12 +1287,18 @@ test("commitOpenAiSharedAsrUtterance preserves already-received final segments w
     }
   });
 
-  const result = await manager.commitOpenAiSharedAsrUtterance({
+  const deps = {
     session,
-    settings: session.settingsSnapshot,
-    userId: "speaker-1",
-    captureReason: "stream_end"
-  });
+    appConfig: { openaiApiKey: "test-openai-key" },
+    store: {
+      logAction(entry: Record<string, unknown>) { logs.push(entry); },
+      getSettings() { return session.settingsSnapshot; }
+    },
+    botUserId: "bot-user",
+    resolveVoiceSpeakerName: () => "speaker-1"
+  };
+
+  const result = await commitAsrUtterance("shared", deps, session.settingsSnapshot, "speaker-1", "stream_end");
 
   assert.equal(commitCalls, 1);
   assert.equal(result?.transcript, "What's goin'?");

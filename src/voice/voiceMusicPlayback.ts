@@ -1284,73 +1284,81 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
   userId,
   pcmBuffer,
   captureReason = "stream_end",
-  source = "voice_turn"
+  source = "voice_turn",
+  transcript: preTranscript = undefined as string | undefined
 }) {
   if (!session || session.ending) return false;
   if (!manager.isMusicPlaybackActive(session)) return false;
-  if (!pcmBuffer?.length) return true;
+  if (!pcmBuffer?.length && !preTranscript) return true;
 
   const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
   const asrDuringMusic = Boolean(resolvedSettings?.voice?.asrDuringMusic);
 
-  if (!manager.llm?.transcribeAudio) {
-    manager.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId,
-      content: "voice_music_turn_ignored_no_asr",
-      metadata: {
-        sessionId: session.id,
-        source: String(source || "voice_turn"),
-        captureReason: String(captureReason || "stream_end")
-      }
-    });
-    return true;
-  }
+  // When a bridge transcript is provided, skip the Whisper REST call entirely.
+  let normalizedTranscript: string;
+  if (preTranscript !== undefined) {
+    normalizedTranscript = normalizeInlineText(preTranscript, STT_TRANSCRIPT_MAX_CHARS);
+  } else {
+    // Fallback: transcribe raw PCM via Whisper (stt_pipeline path or no bridge).
+    if (!manager.llm?.transcribeAudio) {
+      manager.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "voice_music_turn_ignored_no_asr",
+        metadata: {
+          sessionId: session.id,
+          source: String(source || "voice_turn"),
+          captureReason: String(captureReason || "stream_end")
+        }
+      });
+      return true;
+    }
 
-  const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
-  const sampleRateHz = source === "stt_pipeline" ? 24000 : Number(session.realtimeInputSampleRateHz) || 24000;
-  const preferredModel = source === "stt_pipeline"
-    ? settings?.voice?.sttPipeline?.transcriptionModel
-    : settings?.voice?.openaiRealtime?.inputTranscriptionModel || settings?.voice?.sttPipeline?.transcriptionModel;
-  const primaryModel = String(preferredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
-  const fallbackModel = primaryModel === "gpt-4o-mini-transcribe" ? "whisper-1" : "";
+    const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
+    const sampleRateHz = source === "stt_pipeline" ? 24000 : Number(session.realtimeInputSampleRateHz) || 24000;
+    const preferredModel = source === "stt_pipeline"
+      ? settings?.voice?.sttPipeline?.transcriptionModel
+      : settings?.voice?.openaiRealtime?.inputTranscriptionModel || settings?.voice?.sttPipeline?.transcriptionModel;
+    const primaryModel = String(preferredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
+    const fallbackModel = primaryModel === "gpt-4o-mini-transcribe" ? "whisper-1" : "";
 
-  let transcript = await manager.transcribePcmTurn({
-    session,
-    userId,
-    pcmBuffer,
-    model: primaryModel,
-    sampleRateHz,
-    captureReason,
-    traceSource: `voice_music_stop_${String(source || "voice_turn")}`,
-    errorPrefix: "voice_music_transcription_failed",
-    emptyTranscriptRuntimeEvent: "voice_music_transcription_empty",
-    emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
-    asrLanguage: asrLanguageGuidance.language,
-    asrPrompt: asrLanguageGuidance.prompt
-  });
-
-  if (!transcript && fallbackModel && fallbackModel !== primaryModel) {
-    transcript = await manager.transcribePcmTurn({
+    let transcript = await manager.transcribePcmTurn({
       session,
       userId,
       pcmBuffer,
-      model: fallbackModel,
+      model: primaryModel,
       sampleRateHz,
       captureReason,
-      traceSource: `voice_music_stop_${String(source || "voice_turn")}_fallback`,
-      errorPrefix: "voice_music_transcription_fallback_failed",
+      traceSource: `voice_music_stop_${String(source || "voice_turn")}`,
+      errorPrefix: "voice_music_transcription_failed",
       emptyTranscriptRuntimeEvent: "voice_music_transcription_empty",
       emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
-      suppressEmptyTranscriptLogs: true,
       asrLanguage: asrLanguageGuidance.language,
       asrPrompt: asrLanguageGuidance.prompt
     });
-  }
 
-  const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    if (!transcript && fallbackModel && fallbackModel !== primaryModel) {
+      transcript = await manager.transcribePcmTurn({
+        session,
+        userId,
+        pcmBuffer,
+        model: fallbackModel,
+        sampleRateHz,
+        captureReason,
+        traceSource: `voice_music_stop_${String(source || "voice_turn")}_fallback`,
+        errorPrefix: "voice_music_transcription_fallback_failed",
+        emptyTranscriptRuntimeEvent: "voice_music_transcription_empty",
+        emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
+        suppressEmptyTranscriptLogs: true,
+        asrLanguage: asrLanguageGuidance.language,
+        asrPrompt: asrLanguageGuidance.prompt
+      });
+    }
+
+    normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+  }
   if (!normalizedTranscript) {
     manager.store.logAction({
       kind: "voice_runtime",
@@ -1362,8 +1370,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
         sessionId: session.id,
         source: String(source || "voice_turn"),
         captureReason: String(captureReason || "stream_end"),
-        primaryModel,
-        fallbackModel: fallbackModel || null
+        transcriptSource: preTranscript !== undefined ? "bridge" : "whisper"
       }
     });
     return true;

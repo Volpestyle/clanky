@@ -3649,6 +3649,107 @@ test("shouldUseSharedTranscription follows strategy and setting", () => {
   );
 });
 
+test("isAsrActive returns false when textOnlyMode is enabled", () => {
+  const manager = createManager();
+
+  const normalSettings = baseSettings({
+    voice: { asrEnabled: true, textOnlyMode: false }
+  });
+  const textOnlySettings = baseSettings({
+    voice: { asrEnabled: true, textOnlyMode: true }
+  });
+  const asrDisabledSettings = baseSettings({
+    voice: { asrEnabled: false, textOnlyMode: false }
+  });
+
+  const session = {
+    id: "session-text-only-asr-test",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    settingsSnapshot: null
+  };
+
+  assert.equal(manager.isAsrActive(session, normalSettings), true);
+  assert.equal(manager.isAsrActive(session, textOnlySettings), false);
+  assert.equal(manager.isAsrActive(session, asrDisabledSettings), false);
+});
+
+test("shouldUsePerUserTranscription returns false when textOnlyMode is enabled", () => {
+  const manager = createManager();
+  manager.appConfig.openaiApiKey = "test-key";
+
+  const normalSettings = baseSettings({
+    voice: {
+      replyPath: "brain",
+      openaiRealtime: { usePerUserAsrBridge: true },
+      textOnlyMode: false
+    }
+  });
+  const textOnlySettings = baseSettings({
+    voice: {
+      replyPath: "brain",
+      openaiRealtime: { usePerUserAsrBridge: true },
+      textOnlyMode: true
+    }
+  });
+
+  const session = {
+    id: "session-text-only-per-user-test",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false
+  };
+
+  assert.equal(
+    manager.shouldUsePerUserTranscription({ session, settings: normalSettings }),
+    true
+  );
+  assert.equal(
+    manager.shouldUsePerUserTranscription({ session, settings: textOnlySettings }),
+    false
+  );
+});
+
+test("shouldUseSharedTranscription returns false when textOnlyMode is enabled", () => {
+  const manager = createManager();
+  manager.appConfig.openaiApiKey = "test-key";
+
+  const normalSettings = baseSettings({
+    voice: {
+      replyPath: "brain",
+      openaiRealtime: { usePerUserAsrBridge: false },
+      textOnlyMode: false
+    }
+  });
+  const textOnlySettings = baseSettings({
+    voice: {
+      replyPath: "brain",
+      openaiRealtime: { usePerUserAsrBridge: false },
+      textOnlyMode: true
+    }
+  });
+
+  const session = {
+    id: "session-text-only-shared-test",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false
+  };
+
+  assert.equal(
+    manager.shouldUseSharedTranscription({ session, settings: normalSettings }),
+    true
+  );
+  assert.equal(
+    manager.shouldUseSharedTranscription({ session, settings: textOnlySettings }),
+    false
+  );
+});
+
 test("shouldUseRealtimeTranscriptBridge follows replyPath, not transcription method", () => {
   const manager = createManager();
   const session = {

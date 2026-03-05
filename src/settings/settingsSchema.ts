@@ -225,6 +225,7 @@ export const DEFAULT_SETTINGS = {
     replyPath: "bridge",
     asrDuringMusic: true,
     asrEnabled: true,
+    textOnlyMode: false,
     operationalMessages: "all"
   },
   startup: {

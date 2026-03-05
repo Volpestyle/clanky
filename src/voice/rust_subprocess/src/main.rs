@@ -188,6 +188,12 @@ enum OutMsg {
     Error {
         message: String,
     },
+    BufferDepth {
+        #[serde(rename = "ttsSamples")]
+        tts_samples: usize,
+        #[serde(rename = "musicSamples")]
+        music_samples: usize,
+    },
 }
 
 fn send_msg(msg: &OutMsg) {
@@ -604,6 +610,7 @@ struct AudioSendState {
 }
 
 const MAX_TRAILING_SILENCE: u32 = 5; // 100ms of trailing silence
+const MAX_PCM_BUFFER_SAMPLES: usize = 240_000; // 5 seconds @ 48kHz mono
 
 impl AudioSendState {
     fn new() -> Result<Self> {
@@ -622,6 +629,11 @@ impl AudioSendState {
 
     fn push_pcm(&mut self, samples: Vec<i16>) {
         self.pcm_buffer.extend(samples);
+        // Drop oldest samples to keep the buffer bounded (prevents runaway latency)
+        if self.pcm_buffer.len() > MAX_PCM_BUFFER_SAMPLES {
+            let overflow = self.pcm_buffer.len() - MAX_PCM_BUFFER_SAMPLES;
+            self.pcm_buffer.drain(..overflow);
+        }
         self.trailing_silence_frames = 0;
     }
 
@@ -632,6 +644,14 @@ impl AudioSendState {
 
     fn set_music_gain(&mut self, target: f32, fade_ms: u32) {
         self.music_gain = GainEnvelope::new(self.music_gain.current, target, fade_ms);
+    }
+
+    fn tts_buffer_samples(&self) -> usize {
+        self.pcm_buffer.len()
+    }
+
+    fn music_buffer_samples(&self) -> usize {
+        self.music_buffer.len()
     }
 
     fn clear(&mut self) {
@@ -1151,6 +1171,10 @@ async fn main() {
     let mut asr_txs: HashMap<u64, mpsc::UnboundedSender<AsrCommand>> = HashMap::new();
     let (asr_exit_tx, mut asr_exit_rx) = mpsc::channel::<(u64, String)>(32);
     let mut speaking_states: HashMap<u64, SpeakingState> = HashMap::new();
+
+    // Buffer depth reporting: emit every 25 ticks (500ms) when buffer is non-empty
+    let mut buffer_depth_tick_counter: u32 = 0;
+    const BUFFER_DEPTH_REPORT_INTERVAL: u32 = 25; // 25 × 20ms = 500ms
 
     loop {
         tokio::select! {
@@ -1999,6 +2023,24 @@ async fn main() {
                         });
                         send_msg(&OutMsg::MusicIdle);
                         emit_playback_armed("music_stop", &audio_send_state);
+                    }
+                }
+
+                // Report buffer depth periodically (every 500ms when non-empty)
+                buffer_depth_tick_counter += 1;
+                if buffer_depth_tick_counter >= BUFFER_DEPTH_REPORT_INTERVAL {
+                    buffer_depth_tick_counter = 0;
+                    let guard = audio_send_state.lock();
+                    if let Some(ref state) = *guard {
+                        let tts = state.tts_buffer_samples();
+                        let music = state.music_buffer_samples();
+                        if tts > 0 || music > 0 {
+                            drop(guard);
+                            send_msg(&OutMsg::BufferDepth {
+                                tts_samples: tts,
+                                music_samples: music,
+                            });
+                        }
                     }
                 }
 
