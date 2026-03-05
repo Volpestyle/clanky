@@ -1295,6 +1295,11 @@ export async function maybeTriggerStreamWatchCommentary(manager, {
   const realtimeClient = session.realtimeClient;
   if (!realtimeClient) return;
 
+  if (typeof realtimeClient.isCommentaryResponsePending === "function"
+    && realtimeClient.isCommentaryResponsePending()) {
+    return;
+  }
+
   const speakerName = manager.resolveVoiceSpeakerName(session, streamerUserId) || "the streamer";
   const nativePrompt = normalizeVoiceText(
     [
