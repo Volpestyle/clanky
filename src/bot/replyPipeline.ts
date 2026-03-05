@@ -63,7 +63,7 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
   const reactionEmojiOptions = [
     ...new Set([...bot.getReactionEmojiOptions(message.guild), ...UNICODE_REACTIONS])
   ];
-  
+
   const shouldRunDecisionLoop = bot.shouldAttemptReplyDecision({
     settings,
     recentMessages,
@@ -73,14 +73,14 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     triggerMessageId: message.id
   });
   if (!shouldRunDecisionLoop) return false;
-  
+
   const source = String(options.source || "message_event");
   const performance = createReplyPerformanceTracker({
     messageCreatedAtMs: message?.createdTimestamp,
     source,
     seed: options.performanceSeed
   });
-  
+
   const memorySliceStartedAtMs = Date.now();
   const continuity = await loadConversationContinuityContext({
     settings,
@@ -100,13 +100,13 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     loadRecentConversationHistory: (payload) => bot.getConversationHistoryForPrompt(payload),
     loadAdaptiveDirectives:
       Boolean(settings?.adaptiveDirectives?.enabled) &&
-      typeof bot.store?.searchAdaptiveStyleNotesForPrompt === "function"
+        typeof bot.store?.searchAdaptiveStyleNotesForPrompt === "function"
         ? (payload) =>
-            bot.store.searchAdaptiveStyleNotesForPrompt({
-              guildId: String(payload.guildId || "").trim(),
-              queryText: String(payload.queryText || ""),
-              limit: 8
-            })
+          bot.store.searchAdaptiveStyleNotesForPrompt({
+            guildId: String(payload.guildId || "").trim(),
+            queryText: String(payload.queryText || ""),
+            limit: 8
+          })
         : null
   });
   const memorySlice = continuity.memorySlice;
@@ -147,6 +147,32 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     recentMessages,
     excludedUrls: modelImageInputs.map((image) => String(image?.url || "").trim())
   });
+
+  // Auto-include recent history images as direct vision inputs
+  const visionSettings = settings?.vision || {};
+  const maxAutoInclude = Math.min(
+    (visionSettings.maxAutoIncludeImages != null ? Number(visionSettings.maxAutoIncludeImages) : 3),
+    Math.max(0, MAX_MODEL_IMAGE_INPUTS - modelImageInputs.length)
+  );
+  if (maxAutoInclude > 0 && visionSettings.captionEnabled !== false && imageLookup.candidates?.length) {
+    const autoImageInputs = bot.getAutoIncludeImageInputs({
+      candidates: imageLookup.candidates,
+      maxImages: maxAutoInclude
+    });
+    modelImageInputs.push(...autoImageInputs);
+
+    // Fire-and-forget: caption uncaptioned images in background for future text matching
+    bot.captionRecentHistoryImages({
+      candidates: imageLookup.candidates,
+      settings,
+      trace: {
+        guildId: message.guildId,
+        channelId: message.channelId,
+        userId: message.author.id,
+        source: "reply_pipeline_auto_caption"
+      }
+    });
+  }
   const replyTrace = {
     guildId: message.guildId,
     channelId: message.channelId,
@@ -166,21 +192,21 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
   const activeVoiceParticipantRoster =
     inVoiceChannelNow && typeof bot.voiceSessionManager?.getVoiceChannelParticipants === "function"
       ? bot.voiceSessionManager
-          .getVoiceChannelParticipants(activeVoiceSession)
-          .map((entry) => String(entry?.displayName || "").trim())
-          .filter(Boolean)
+        .getVoiceChannelParticipants(activeVoiceSession)
+        .map((entry) => String(entry?.displayName || "").trim())
+        .filter(Boolean)
       : [];
   const musicDisambiguation =
     inVoiceChannelNow &&
-    typeof bot.voiceSessionManager?.getMusicDisambiguationPromptContext === "function"
+      typeof bot.voiceSessionManager?.getMusicDisambiguationPromptContext === "function"
       ? bot.voiceSessionManager.getMusicDisambiguationPromptContext(activeVoiceSession)
       : null;
   const musicState =
     inVoiceChannelNow &&
-    typeof bot.voiceSessionManager?.getMusicPromptContext === "function"
+      typeof bot.voiceSessionManager?.getMusicPromptContext === "function"
       ? bot.voiceSessionManager.getMusicPromptContext(activeVoiceSession)
       : null;
-  
+
   const systemPrompt = buildSystemPrompt(settings, {
     adaptiveDirectives
   });
@@ -262,7 +288,7 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     initialUserPrompt
   });
   const replyPrompts = buildLoggedReplyPrompts(replyPromptCapture, 0);
-  
+
   return {
     shouldRun: true,
     recentMessages, addressSignal, triggerMessageIds, addressed, reactionEagerness,
@@ -436,18 +462,18 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
             ? `Web search failed: ${String(webSearch.error)}`
             : rows.length
               ? `Web results for "${String(webSearch?.query || toolQuery)}":\n\n${rows
-                  .map((item, index) => {
-                    const title = String(item?.title || "untitled").trim();
-                    const url = String(item?.url || "").trim();
-                    const domain = String(item?.domain || "").trim();
-                    const snippet = String(item?.snippet || "").trim();
-                    const pageSummary = String(item?.pageSummary || "").trim();
-                    const domainLabel = domain ? ` (${domain})` : "";
-                    const snippetLine = snippet ? `\nSnippet: ${snippet}` : "";
-                    const pageLine = pageSummary ? `\nPage: ${pageSummary}` : "";
-                    return `[${index + 1}] ${title}${domainLabel}\nURL: ${url}${snippetLine}${pageLine}`;
-                  })
-                  .join("\n\n")}`
+                .map((item, index) => {
+                  const title = String(item?.title || "untitled").trim();
+                  const url = String(item?.url || "").trim();
+                  const domain = String(item?.domain || "").trim();
+                  const snippet = String(item?.snippet || "").trim();
+                  const pageSummary = String(item?.pageSummary || "").trim();
+                  const domainLabel = domain ? ` (${domain})` : "";
+                  const snippetLine = snippet ? `\nSnippet: ${snippet}` : "";
+                  const pageLine = pageSummary ? `\nPage: ${pageSummary}` : "";
+                  return `[${index + 1}] ${title}${domainLabel}\nURL: ${url}${snippetLine}${pageLine}`;
+                })
+                .join("\n\n")}`
               : `No results found for: "${toolQuery}"`
         };
       } else {
@@ -522,7 +548,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     replyDirective
   });
   if (voiceIntentHandled) return { handledByIntent: true };
-  
+
   const automationIntentHandled = await bot.maybeHandleStructuredAutomationIntent({
     message,
     settings,
@@ -535,7 +561,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     replyPrompts
   });
   if (automationIntentHandled) return { handledByIntent: true };
-  
+
   const followupStartedAtMs = Date.now();
   const followup = await maybeRegenerateWithMemoryLookupForReplyFollowup(
     { llm: bot.llm, search: bot.search, memory: bot.memory },
@@ -626,7 +652,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
   usedMemoryLookupFollowup = followup.usedMemoryLookup;
   usedImageLookupFollowup = followup.usedImageLookup;
   replyPrompts = buildLoggedReplyPrompts(replyPromptCapture, followup.followupSteps);
-  
+
   if (usedWebSearchFollowup && webSearch.used && Array.isArray(webSearch.results) && webSearch.results.length) {
     bot.rememberRecentLookupContext({
       guildId: message.guildId,
@@ -638,7 +664,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
       results: webSearch.results
     });
   }
-  
+
   if (followup.regenerated) {
     voiceIntentHandled = await bot.maybeHandleStructuredVoiceIntent({
       message,
@@ -646,7 +672,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
       replyDirective
     });
     if (voiceIntentHandled) return { handledByIntent: true };
-  
+
     const followupAutomationHandled = await bot.maybeHandleStructuredAutomationIntent({
       message,
       settings,
@@ -669,7 +695,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
   ) {
     performance.followupMs = Math.max(0, Date.now() - followupStartedAtMs);
   }
-  
+
 
   return {
     handledByIntent: false,
@@ -701,7 +727,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
     triggerMessageIds,
     addressing: addressSignal
   });
-  
+
   const memoryLine = replyDirective.memoryLine;
   const selfMemoryLine = replyDirective.selfMemoryLine;
   let memorySaved = false;
@@ -728,7 +754,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
       });
     }
   }
-  
+
   const mediaDirective = pickReplyMediaDirective(replyDirective);
   let finalText = sanitizeBotText(replyDirective.text || "");
   let mentionResolution = emptyMentionResolution();
@@ -778,7 +804,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
     });
     return { skipped: true };
   }
-  
+
   if (settings.memory.enabled && selfMemoryLine) {
     try {
       selfMemorySaved = await bot.memory.rememberDirectiveLine({
@@ -801,7 +827,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
       });
     }
   }
-  
+
   mentionResolution = await resolveDeterministicMentionsForMentions(
     { store: bot.store },
     {
@@ -812,7 +838,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
   );
   finalText = mentionResolution.text;
   finalText = embedWebSearchSources(finalText, webSearch);
-  
+
   let payload = { content: finalText };
   let imageUsed = false;
   let imageBudgetBlocked = false;
@@ -828,7 +854,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
   const complexImagePrompt = replyDirective.complexImagePrompt;
   const videoPrompt = replyDirective.videoPrompt;
   const gifQuery = replyDirective.gifQuery;
-  
+
   if (mediaDirective?.type === "gif" && gifQuery) {
     const gifResult = await bot.maybeAttachReplyGif({
       settings,
@@ -846,7 +872,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
     gifBudgetBlocked = gifResult.blockedByBudget;
     gifConfigBlocked = gifResult.blockedByConfiguration;
   }
-  
+
   if (mediaDirective?.type === "image_simple" && settings.discovery.allowReplyImages && imagePrompt) {
     const imageResult = await bot.maybeAttachGeneratedImage({
       settings,
@@ -871,7 +897,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
     imageCapabilityBlocked = imageResult.blockedByCapability;
     imageVariantUsed = imageResult.variant || "simple";
   }
-  
+
   if (mediaDirective?.type === "image_complex" && settings.discovery.allowReplyImages && complexImagePrompt) {
     const imageResult = await bot.maybeAttachGeneratedImage({
       settings,
@@ -896,7 +922,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
     imageCapabilityBlocked = imageResult.blockedByCapability;
     imageVariantUsed = imageResult.variant || "complex";
   }
-  
+
   if (mediaDirective?.type === "video" && settings.discovery.allowReplyVideos && videoPrompt) {
     const videoResult = await bot.maybeAttachGeneratedVideo({
       settings,
@@ -919,7 +945,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
     videoBudgetBlocked = videoResult.blockedByBudget;
     videoCapabilityBlocked = videoResult.blockedByCapability;
   }
-  
+
   if (!finalText && !imageUsed && !videoUsed && !gifUsed) {
     bot.store.logAction({
       kind: "bot_error",
@@ -949,7 +975,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
     });
     return { skipped: true };
   }
-  
+
 
   return {
     skipped: false,
