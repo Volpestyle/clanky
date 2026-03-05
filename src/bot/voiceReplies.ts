@@ -276,6 +276,7 @@ export async function generateVoiceTurnReply(runtime, {
   channelId = null,
   userId = null,
   transcript = "",
+  inputKind = "transcript",
   directAddressed = false,
   contextMessages = [],
   sessionId = null,
@@ -293,6 +294,9 @@ export async function generateVoiceTurnReply(runtime, {
   webSearchTimeoutMs: _webSearchTimeoutMs = null
 }) {
   if (!runtime.llm?.generate || !settings) return { text: "" };
+  const normalizedInputKind = String(inputKind || "").trim().toLowerCase() === "event"
+    ? "event"
+    : "transcript";
   const incomingTranscript = String(transcript || "")
     .replace(/\s+/g, " ")
     .trim()
@@ -531,6 +535,7 @@ export async function generateVoiceTurnReply(runtime, {
     allowOpenArticle = allowOpenArticleToolCall
   } = {}) =>
     buildVoiceTurnPrompt({
+      inputKind: normalizedInputKind,
       speakerName,
       transcript: incomingTranscript,
       directAddressed,

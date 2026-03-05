@@ -14,6 +14,7 @@ import {
 export function buildVoiceTurnPrompt({
   speakerName = "unknown",
   transcript = "",
+  inputKind = "transcript",
   directAddressed = false,
   userFacts = [],
   relevantFacts = [],
@@ -43,6 +44,9 @@ export function buildVoiceTurnPrompt({
   const parts = [];
   const voiceToneGuardrails = buildVoiceToneGuardrails();
   const speaker = String(speakerName || "unknown").trim() || "unknown";
+  const normalizedInputKind = String(inputKind || "").trim().toLowerCase() === "event"
+    ? "event"
+    : "transcript";
   const text = String(transcript || "")
     .replace(/\s+/g, " ")
     .trim()
@@ -199,7 +203,11 @@ export function buildVoiceTurnPrompt({
         }
       : null;
 
-  parts.push(`Incoming live voice transcript from ${speaker}: ${text || "(empty)"}`);
+  if (normalizedInputKind === "event") {
+    parts.push(`Voice runtime event cue: ${text || "(empty)"}`);
+  } else {
+    parts.push(`Incoming live voice transcript from ${speaker}: ${text || "(empty)"}`);
+  }
   if (normalizedDirectAddressed) {
     parts.push("This turn appears directly addressed to you.");
     parts.push(

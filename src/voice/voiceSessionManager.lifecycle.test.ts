@@ -1372,10 +1372,11 @@ test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript instead of queue
   assert.equal(droppedLog?.metadata?.pcmBytes, pcmBuffer.length);
 });
 
-test("queueRealtimeTurnFromAsrBridge refires pending join greeting after empty ASR drop", () => {
+test("queueRealtimeTurnFromAsrBridge refires pending join greeting through brain strategy after empty ASR drop", () => {
   const { manager, logs } = createManager();
   const queuedTurns = [];
   const createdResponses = [];
+  const brainReplies = [];
   manager.queueRealtimeTurn = (payload) => {
     queuedTurns.push(payload);
   };
@@ -1383,10 +1384,94 @@ test("queueRealtimeTurnFromAsrBridge refires pending join greeting after empty A
     createdResponses.push(payload);
     return true;
   };
+  manager.runRealtimeBrainReply = async (payload) => {
+    brainReplies.push(payload);
+    return true;
+  };
   const session = createSession({
     mode: "openai_realtime",
     playbackArmed: true,
     startedAt: Date.now() - 2_000,
+    settingsSnapshot: {
+      botName: "clanker conk",
+      voice: {
+        enabled: true,
+        replyPath: "brain"
+      }
+    },
+    deferredVoiceActions: {
+      join_greeting: {
+        type: "join_greeting",
+        status: "deferred",
+        createdAt: Date.now() - 500,
+        updatedAt: Date.now() - 500,
+        notBeforeAt: 0,
+        expiresAt: Date.now() + 5_000,
+        reason: "capture_resolved",
+        revision: 1
+      }
+    },
+    lastAssistantReplyAt: 0,
+    userCaptures: new Map()
+  });
+  const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 6);
+
+  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-1",
+    pcmBuffer,
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    asrResult: {
+      transcript: ""
+    },
+    source: "per_user"
+  });
+
+  assert.equal(usedTranscript, false);
+  assert.equal(queuedTurns.length, 0);
+  assert.equal(createdResponses.length, 0);
+  assert.equal(brainReplies.length, 1);
+  assert.equal(brainReplies[0]?.source, "voice_join_greeting");
+  assert.equal(
+    String(brainReplies[0]?.transcript || "").includes("Join greeting opportunity."),
+    true
+  );
+  assert.equal(brainReplies[0]?.inputKind, "event");
+  assert.equal(Boolean(session.deferredVoiceActions?.join_greeting), false);
+  assert.equal(Number(session.lastAssistantReplyAt || 0) > 0, true);
+  assert.equal(logs.some((entry) => entry?.content === "voice_join_greeting_fired"), true);
+  const firedLog = logs.find((entry) => entry?.content === "voice_join_greeting_fired");
+  assert.equal(firedLog?.metadata?.strategy, "brain");
+});
+
+test("queueRealtimeTurnFromAsrBridge refires pending join greeting through native strategy after empty ASR drop", () => {
+  const { manager, logs } = createManager();
+  const queuedTurns = [];
+  const createdResponses = [];
+  const brainReplies = [];
+  manager.queueRealtimeTurn = (payload) => {
+    queuedTurns.push(payload);
+  };
+  manager.createTrackedAudioResponse = (payload) => {
+    createdResponses.push(payload);
+    return true;
+  };
+  manager.runRealtimeBrainReply = async (payload) => {
+    brainReplies.push(payload);
+    return true;
+  };
+  const session = createSession({
+    mode: "openai_realtime",
+    playbackArmed: true,
+    startedAt: Date.now() - 2_000,
+    settingsSnapshot: {
+      botName: "clanker conk",
+      voice: {
+        enabled: true,
+        replyPath: "native"
+      }
+    },
     deferredVoiceActions: {
       join_greeting: {
         type: "join_greeting",
@@ -1420,9 +1505,12 @@ test("queueRealtimeTurnFromAsrBridge refires pending join greeting after empty A
   assert.equal(queuedTurns.length, 0);
   assert.equal(createdResponses.length, 1);
   assert.equal(createdResponses[0]?.source, "voice_join_greeting");
+  assert.equal(brainReplies.length, 0);
   assert.equal(Boolean(session.deferredVoiceActions?.join_greeting), false);
   assert.equal(Number(session.lastAssistantReplyAt || 0) > 0, true);
   assert.equal(logs.some((entry) => entry?.content === "voice_join_greeting_fired"), true);
+  const firedLog = logs.find((entry) => entry?.content === "voice_join_greeting_fired");
+  assert.equal(firedLog?.metadata?.strategy, "native");
 });
 
 test("createTrackedAudioResponse clears deferred join greeting when newer bot speech starts", () => {

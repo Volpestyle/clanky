@@ -2866,13 +2866,60 @@ export class VoiceSessionManager {
       return false;
     }
 
-    this.createTrackedAudioResponse({
+    const resolvedSettings = session.settingsSnapshot || this.store.getSettings();
+    const useNativeRealtimeReply = this.shouldUseNativeRealtimeReply({
       session,
-      source: "voice_join_greeting",
-      emitCreateEvent: true,
-      resetRetryState: true
+      settings: resolvedSettings
     });
-    session.lastAssistantReplyAt = Date.now();
+    if (useNativeRealtimeReply) {
+      this.createTrackedAudioResponse({
+        session,
+        source: "voice_join_greeting",
+        emitCreateEvent: true,
+        resetRetryState: true
+      });
+      session.lastAssistantReplyAt = Date.now();
+    } else {
+      const joinGreetingTrigger = String(
+        joinGreetingAction?.payload?.trigger || joinGreetingAction.reason || "join_greeting"
+      )
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 120);
+      const joinGreetingBrainEventText = [
+        "Join greeting opportunity.",
+        `Trigger: ${joinGreetingTrigger || "join_greeting"}.`,
+        "If it fits naturally, greet briefly. If not, return [SKIP]."
+      ].join(" ");
+      void this.runRealtimeBrainReply({
+        session,
+        settings: resolvedSettings,
+        userId: null,
+        transcript: joinGreetingBrainEventText,
+        inputKind: "event",
+        directAddressed: false,
+        directAddressConfidence: 0,
+        conversationContext: this.buildVoiceConversationContext({
+          session,
+          userId: null,
+          directAddressed: false
+        }),
+        source: "voice_join_greeting"
+      }).catch((error) => {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          content: `voice_join_greeting_brain_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id,
+            mode: session.mode
+          }
+        });
+      });
+      session.lastAssistantReplyAt = Date.now();
+    }
     this.clearDeferredVoiceAction(session, "join_greeting");
     this.store.logAction({
       kind: "voice_runtime",
@@ -2883,6 +2930,7 @@ export class VoiceSessionManager {
       metadata: {
         sessionId: session.id,
         mode: session.mode,
+        strategy: useNativeRealtimeReply ? "native" : "brain",
         deferredActionReason: String(joinGreetingAction.reason || "deferred"),
         recheckReason: String(reason || "manual")
       }
@@ -11804,6 +11852,7 @@ export class VoiceSessionManager {
     settings,
     userId,
     transcript = "",
+    inputKind = "transcript",
     directAddressed = false,
     directAddressConfidence = Number.NaN,
     conversationContext = null,
@@ -11927,6 +11976,7 @@ export class VoiceSessionManager {
         channelId: session.textChannelId,
         userId,
         transcript: normalizedTranscript,
+        inputKind,
         directAddressed: Boolean(directAddressed),
         contextMessages,
         sessionId: session.id,
