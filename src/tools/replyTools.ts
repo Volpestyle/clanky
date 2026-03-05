@@ -15,6 +15,9 @@ const MAX_WEB_QUERY_LEN = 220;
 const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
 const MAX_CONVERSATION_LOOKUP_QUERY_LEN = 220;
 const MAX_IMAGE_LOOKUP_QUERY_LEN = 220;
+const MAX_WEB_SCRAPE_URL_LEN = 2000;
+const MAX_WEB_SCRAPE_MAX_CHARS = 24000;
+const MAX_WEB_SCRAPE_DEFAULT_CHARS = 8000;
 const MAX_BROWSER_BROWSE_QUERY_LEN = 500;
 const MAX_CODE_TASK_LEN = 2000;
 const MAX_OPEN_ARTICLE_REF_LEN = 260;
@@ -213,7 +216,7 @@ const WEB_SEARCH_TOOL: ReplyToolDefinition = {
 const BROWSER_BROWSE_TOOL: ReplyToolDefinition = {
   name: "browser_browse",
   description:
-    "Browse the web interactively with a headless browser agent and report back with the result. Use for tasks that need clicking, navigating, scrolling, or reading dynamic page content beyond normal web search. Pass session_id to continue a previous interactive session.",
+    "Browse the web interactively with a headless browser agent. Use ONLY when web_scrape fails or the task requires clicking, navigating, scrolling, filling forms, or reading JS-rendered dynamic content. Always try web_scrape first for simple page reads. Pass session_id to continue a previous interactive session.",
   input_schema: {
     type: "object",
     properties: {
@@ -386,6 +389,26 @@ const OPEN_ARTICLE_TOOL: ReplyToolDefinition = {
   }
 };
 
+const WEB_SCRAPE_TOOL: ReplyToolDefinition = {
+  name: "web_scrape",
+  description:
+    "Fetch and read a specific web page by URL. Returns the page title and extracted text content. Use this when you have a direct URL to read — much faster and cheaper than browser_browse. Only use browser_browse if this tool fails or you need to interact with the page (click, scroll, fill forms, JS-rendered content).",
+  input_schema: {
+    type: "object",
+    properties: {
+      url: {
+        type: "string",
+        description: "The full URL of the page to fetch and read."
+      },
+      max_chars: {
+        type: "integer",
+        description: "Maximum characters of page content to return (default 8000, max 24000)."
+      }
+    },
+    required: ["url"]
+  }
+};
+
 const CODE_TASK_TOOL: ReplyToolDefinition = {
   name: "code_task",
   description:
@@ -412,6 +435,7 @@ const CODE_TASK_TOOL: ReplyToolDefinition = {
 
 const ALL_REPLY_TOOLS: ReplyToolDefinition[] = [
   WEB_SEARCH_TOOL,
+  WEB_SCRAPE_TOOL,
   BROWSER_BROWSE_TOOL,
   MEMORY_SEARCH_TOOL,
   MEMORY_WRITE_TOOL,
@@ -454,6 +478,7 @@ export function buildReplyToolSet(
   settings: Record<string, unknown>,
   capabilities: {
     webSearchAvailable?: boolean;
+    webScrapeAvailable?: boolean;
     browserBrowseAvailable?: boolean;
     memoryAvailable?: boolean;
     adaptiveDirectivesAvailable?: boolean;
@@ -470,6 +495,13 @@ export function buildReplyToolSet(
     isWebSearchEnabled(settings)
   ) {
     tools.push(WEB_SEARCH_TOOL);
+  }
+
+  if (
+    capabilities.webScrapeAvailable !== false &&
+    isWebSearchEnabled(settings)
+  ) {
+    tools.push(WEB_SCRAPE_TOOL);
   }
 
   if (
@@ -524,6 +556,8 @@ export async function executeReplyTool(
   switch (toolName) {
     case "web_search":
       return executeWebSearch(input, runtime, context);
+    case "web_scrape":
+      return executeWebScrape(input, runtime, context);
     case "browser_browse":
       return executeBrowserBrowse(input, runtime, context);
     case "memory_search":
@@ -641,6 +675,41 @@ async function executeWebSearch(
   } catch (error) {
     return {
       content: `Web search failed: ${String((error as Error)?.message || error)}`,
+      isError: true
+    };
+  }
+}
+
+async function executeWebScrape(
+  input: ReplyToolCallInput,
+  runtime: ReplyToolRuntime,
+  _context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  const url = String(input?.url || "").trim().slice(0, MAX_WEB_SCRAPE_URL_LEN);
+  if (!url) {
+    return { content: "Missing or empty URL.", isError: true };
+  }
+  if (!runtime.search?.readPageSummary) {
+    return { content: "Web scraping is not available.", isError: true };
+  }
+
+  const maxChars = Math.min(
+    MAX_WEB_SCRAPE_MAX_CHARS,
+    Math.max(350, Math.floor(Number(input?.max_chars) || MAX_WEB_SCRAPE_DEFAULT_CHARS))
+  );
+
+  try {
+    const result = await runtime.search.readPageSummary(url, maxChars);
+    const title = result?.title ? `Title: ${result.title}\n` : "";
+    const body = String(result?.summary || "").trim();
+    if (!body) {
+      return { content: `Page at ${url} returned no readable content. Try browser_browse for JS-rendered pages.` };
+    }
+    return { content: `${title}URL: ${url}\n\n${body}` };
+  } catch (error) {
+    const message = String((error as Error)?.message || error);
+    return {
+      content: `Web scrape failed for ${url}: ${message}. If the page requires JavaScript or interaction, try browser_browse instead.`,
       isError: true
     };
   }
@@ -1103,6 +1172,7 @@ async function executeCodeTask(
 export {
   ALL_REPLY_TOOLS,
   WEB_SEARCH_TOOL,
+  WEB_SCRAPE_TOOL,
   MEMORY_SEARCH_TOOL,
   MEMORY_WRITE_TOOL,
   IMAGE_LOOKUP_TOOL,

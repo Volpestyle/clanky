@@ -38,7 +38,7 @@ import {
   clearMusicDisambiguationState as clearMusicDisambiguationStateRuntime,
   ensureSessionMusicState as ensureSessionMusicStateRuntime,
   ensureToolMusicQueueState as ensureToolMusicQueueStateRuntime,
-  evaluateMusicStopIntentFromTranscript as evaluateMusicStopIntentFromTranscriptRuntime,
+
   extractMusicPlayQuery as extractMusicPlayQueryFallback,
   findPendingMusicSelectionById as findPendingMusicSelectionByIdRuntime,
   getMusicDisambiguationPromptContext as getMusicDisambiguationPromptContextRuntime,
@@ -1981,21 +1981,7 @@ export class VoiceSessionManager {
     });
   }
 
-  async evaluateMusicStopIntentFromTranscript({
-    session,
-    settings,
-    userId,
-    transcript = "",
-    source = "voice_music_turn"
-  }) {
-    return await evaluateMusicStopIntentFromTranscriptRuntime(this, {
-      session,
-      settings,
-      userId,
-      transcript,
-      source
-    });
-  }
+
 
   async maybeHandleMusicPlaybackTurn({
     session,

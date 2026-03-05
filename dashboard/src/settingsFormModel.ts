@@ -289,7 +289,6 @@ export function settingsToForm(settings) {
     voiceSoundboardEnabled: settings?.voice?.soundboard?.enabled ?? defaultVoiceSoundboard.enabled,
     voiceSoundboardAllowExternalSounds: settings?.voice?.soundboard?.allowExternalSounds ?? defaultVoiceSoundboard.allowExternalSounds,
     voiceSoundboardPreferredSoundIds: formatLineList(settings?.voice?.soundboard?.preferredSoundIds),
-    voiceAsrDuringMusic: settings?.voice?.asrDuringMusic ?? defaultVoice.asrDuringMusic ?? true,
     voiceAsrEnabled: settings?.voice?.asrEnabled ?? defaultVoice.asrEnabled ?? true,
     voiceTextOnlyMode: settings?.voice?.textOnlyMode ?? defaultVoice.textOnlyMode ?? false,
     voiceOperationalMessages: settings?.voice?.operationalMessages ?? defaultVoice.operationalMessages ?? "all",
@@ -581,7 +580,6 @@ export function formToSettingsPatch(form) {
         allowExternalSounds: form.voiceSoundboardAllowExternalSounds,
         preferredSoundIds: parseUniqueList(form.voiceSoundboardPreferredSoundIds)
       },
-      asrDuringMusic: Boolean(form.voiceAsrDuringMusic),
       asrEnabled: Boolean(form.voiceAsrEnabled),
       textOnlyMode: Boolean(form.voiceTextOnlyMode),
       operationalMessages: String(form.voiceOperationalMessages || "all").trim().toLowerCase()

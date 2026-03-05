@@ -4038,6 +4038,7 @@ export class ClankerBot {
     };
     const automationReplyTools = buildReplyToolSet(settings, {
       webSearchAvailable: false,
+      webScrapeAvailable: false,
       browserBrowseAvailable: false,
       memoryAvailable: settings.memory?.enabled,
       adaptiveDirectivesAvailable: false,

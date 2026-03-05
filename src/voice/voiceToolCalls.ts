@@ -359,8 +359,22 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
     },
     {
       toolType: "function",
+      name: "web_scrape",
+      description: "Fetch and read a specific web page by URL. Returns extracted text content. Much faster than browser_browse. Only use browser_browse if this fails or the page needs JS/interaction.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "The full URL of the page to fetch and read." },
+          max_chars: { type: "integer", description: "Maximum characters of page content to return (default 8000)." }
+        },
+        required: ["url"],
+        additionalProperties: false
+      }
+    },
+    {
+      toolType: "function",
       name: "browser_browse",
-      description: "Browse a webpage interactively and report back with the result. Pass session_id to continue a previous session.",
+      description: "Browse a webpage interactively and report back with the result. Use only when web_scrape fails or you need to click, scroll, or interact with the page. Pass session_id to continue a previous session.",
       parameters: {
         type: "object",
         properties: {
@@ -459,6 +473,7 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
   );
   const filteredLocalTools = localTools.filter((entry) => {
     if (entry.name === "web_search" && !includeWebSearch) return false;
+    if (entry.name === "web_scrape" && !includeWebSearch) return false;
     if ((entry.name === "memory_search" || entry.name === "memory_write") && !includeMemory) return false;
     if ((entry.name === "adaptive_directive_add" || entry.name === "adaptive_directive_remove") && !includeAdaptiveDirectives) return false;
     if (entry.name === "browser_browse" && !includeBrowser) return false;
@@ -1375,6 +1390,46 @@ export async function executeVoiceWebSearchTool(manager: any, { session, setting
   };
 }
 
+export async function executeVoiceWebScrapeTool(manager: any, { session, args }: { session: any, args: any }) {
+  const url = String(args?.url || "").trim().slice(0, 2000);
+  if (!url) {
+    return { ok: false, text: "", error: "url_required" };
+  }
+  if (!manager.search || typeof manager.search.readPageSummary !== "function") {
+    return { ok: false, text: "", error: "web_scrape_unavailable" };
+  }
+
+  const maxChars = clamp(Math.floor(Number(args?.max_chars) || 8000), 350, 24000);
+
+  try {
+    const result = await manager.search.readPageSummary(url, maxChars);
+    const title = result?.title ? String(result.title).trim() : null;
+    const body = String(result?.summary || "").trim();
+    if (!body) {
+      return {
+        ok: true,
+        text: `Page at ${url} returned no readable content. Try browser_browse for JS-rendered pages.`,
+        title: null,
+        url
+      };
+    }
+    return {
+      ok: true,
+      title,
+      url,
+      text: body
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      text: "",
+      url,
+      error: `${message}. If the page requires JavaScript or interaction, try browser_browse.`
+    };
+  }
+}
+
 export async function executeVoiceBrowserBrowseTool(manager: any, { session, settings, args, signal }: { session: any, settings: any, args: any, signal?: AbortSignal }) {
   const instruction = normalizeInlineText(args?.query, 500);
   if (!instruction) {
@@ -1812,6 +1867,12 @@ export async function executeLocalVoiceToolCall(manager: any, {
     return await manager.executeVoiceWebSearchTool({
       session,
       settings,
+      args
+    });
+  }
+  if (normalizedToolName === "web_scrape") {
+    return await executeVoiceWebScrapeTool(manager, {
+      session,
       args
     });
   }

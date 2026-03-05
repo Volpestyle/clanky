@@ -599,7 +599,6 @@ export function normalizeSettings(raw) {
     streamWatch?: VoiceStreamWatchDefaults;
     soundboard?: VoiceSoundboardDefaults;
     musicDucking?: VoiceMusicDuckingDefaults;
-    asrDuringMusic?: boolean;
     asrEnabled?: boolean;
     textOnlyMode?: boolean;
     operationalMessages?: string;
@@ -1037,19 +1036,9 @@ export function normalizeSettings(raw) {
     5000
   );
 
-  // Migration: musicTranscriptionEnabled → asrDuringMusic
-  if (
-    raw?.voice?.musicTranscriptionEnabled !== undefined &&
-    raw?.voice?.asrDuringMusic === undefined
-  ) {
-    merged.voice.asrDuringMusic = Boolean(raw.voice.musicTranscriptionEnabled);
-  } else {
-    merged.voice.asrDuringMusic =
-      merged.voice?.asrDuringMusic !== undefined
-        ? Boolean(merged.voice?.asrDuringMusic)
-        : Boolean(defaultVoice.asrDuringMusic);
-  }
+  // Clean up legacy fields
   delete merged.voice.musicTranscriptionEnabled;
+  delete merged.voice.asrDuringMusic;
 
   merged.voice.asrEnabled =
     merged.voice?.asrEnabled !== undefined

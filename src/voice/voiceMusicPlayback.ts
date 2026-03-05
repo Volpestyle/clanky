@@ -1,7 +1,6 @@
 import { ChatInputCommandInteraction } from "discord.js";
 import { normalizeInlineText, STT_TRANSCRIPT_MAX_CHARS, isVoiceTurnAddressedToBot, resolveVoiceAsrLanguageGuidance } from "./voiceSessionHelpers.ts";
-import { parseVoiceDecisionContract, normalizeVoiceReplyDecisionProvider, defaultVoiceReplyDecisionModel, resolveVoiceReplyDecisionMaxOutputTokens } from "./voiceDecisionRuntime.ts";
-import { getPromptBotName } from "../promptCore.ts";
+
 import { clamp } from "lodash";
 
 // English-only fallback/fast-path heuristics for obvious music control turns.
@@ -1168,115 +1167,6 @@ export async function maybeHandleMusicTextStopRequest(manager: any, {
   return true;
 }
 
-export async function evaluateMusicStopIntentFromTranscript(manager: any, {
-  session,
-  settings,
-  userId,
-  transcript = "",
-  source = "voice_music_turn"
-}) {
-  const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-  const candidate = manager.isLikelyMusicStopPhrase({
-    transcript: normalizedTranscript,
-    settings
-  });
-  if (!candidate) {
-    return {
-      shouldStop: false,
-      reason: "no_stop_cue",
-      llmProvider: null,
-      llmModel: null,
-      llmResponse: null,
-      error: null
-    };
-  }
-
-  if (!manager.llm?.generate) {
-    return {
-      shouldStop: true,
-      reason: "heuristic_stop_without_llm",
-      llmProvider: null,
-      llmModel: null,
-      llmResponse: null,
-      error: null
-    };
-  }
-
-  const replyDecisionLlm = settings?.voice?.replyDecisionLlm || {};
-  const llmProvider = normalizeVoiceReplyDecisionProvider(replyDecisionLlm?.provider);
-  const llmModel = String(replyDecisionLlm?.model || defaultVoiceReplyDecisionModel(llmProvider))
-    .trim()
-    .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
-  const decisionSettings = {
-    ...settings,
-    llm: {
-      ...(settings?.llm || {}),
-      provider: llmProvider,
-      model: llmModel,
-      temperature: 0,
-      maxOutputTokens: resolveVoiceReplyDecisionMaxOutputTokens(llmProvider, llmModel),
-      reasoningEffort: String(replyDecisionLlm?.reasoningEffort || "minimal").trim().toLowerCase() || "minimal"
-    }
-  };
-
-  const systemPrompt = [
-    "You are a strict classifier for voice-chat music controls.",
-    "Context: music playback is currently active.",
-    "Decide if the speaker is instructing the bot to stop or pause the music right now.",
-    "Output exactly YES or NO.",
-    "Answer YES for direct stop/pause commands like 'hey bot stop', 'stop music', 'pause', 'stop playing'.",
-    "Answer NO when the speaker is not asking the bot to stop music."
-  ].join("\n");
-  const userPrompt = [
-    `Bot name: ${getPromptBotName(settings)}`,
-    `Transcript: "${normalizedTranscript}"`
-  ].join("\n");
-
-  try {
-    const generation = await manager.llm.generate({
-      settings: decisionSettings,
-      systemPrompt,
-      userPrompt,
-      contextMessages: [],
-      trace: {
-        guildId: session?.guildId || null,
-        channelId: session?.textChannelId || null,
-        userId: userId || null,
-        source: "voice_music_stop_classifier",
-        event: String(source || "voice_music_turn")
-      }
-    });
-    const llmResponse = String(generation?.text || "").trim();
-    const parsed = parseVoiceDecisionContract(llmResponse);
-    if (parsed.confident) {
-      return {
-        shouldStop: Boolean(parsed.allow),
-        reason: parsed.allow ? "llm_yes" : "llm_no",
-        llmProvider: generation?.provider || llmProvider,
-        llmModel: generation?.model || llmModel,
-        llmResponse,
-        error: null
-      };
-    }
-    return {
-      shouldStop: true,
-      reason: "llm_contract_violation_fallback_yes",
-      llmProvider: generation?.provider || llmProvider,
-      llmModel: generation?.model || llmModel,
-      llmResponse,
-      error: null
-    };
-  } catch (error) {
-    return {
-      shouldStop: true,
-      reason: "llm_error_fallback_yes",
-      llmProvider,
-      llmModel,
-      llmResponse: null,
-      error: String(error?.message || error)
-    };
-  }
-}
 
 export async function maybeHandleMusicPlaybackTurn(manager: any, {
   session,
@@ -1292,7 +1182,6 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
   if (!pcmBuffer?.length && !preTranscript) return true;
 
   const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
-  const asrDuringMusic = Boolean(resolvedSettings?.voice?.asrDuringMusic);
 
   // When a bridge transcript is provided, skip the Whisper REST call entirely.
   let normalizedTranscript: string;
@@ -1414,7 +1303,6 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
       transcript: normalizedTranscript,
       shouldStop,
       directAddressedToBot,
-      asrDuringMusic,
       decisionReason: shouldStop
         ? "heuristic_stop"
         : directAddressedToBot

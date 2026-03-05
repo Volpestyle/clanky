@@ -195,14 +195,7 @@ export function VoiceModeSettingsSection({
               />
               ASR enabled (disable to use slash commands only)
             </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={form.voiceAsrDuringMusic}
-                onChange={set("voiceAsrDuringMusic")}
-              />
-              ASR during music (enables voice stop detection while music plays)
-            </label>
+
           </div>
 
           <div className="split">
