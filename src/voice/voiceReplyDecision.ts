@@ -236,9 +236,10 @@ export async function evaluateVoiceReplyDecision(manager: any, {
 }): Promise<VoiceReplyDecision> {
   const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
   const normalizedUserId = String(userId || "").trim();
-  const participantCount = manager.countHumanVoiceParticipants(session);
+  const voiceChannelParticipants = manager.getVoiceChannelParticipants(session);
+  const participantCount = voiceChannelParticipants.length;
   const speakerName = manager.resolveVoiceSpeakerName(session, userId) || "someone";
-  const participantList = manager.getVoiceChannelParticipants(session)
+  const participantList = voiceChannelParticipants
     .map((entry) => entry.displayName)
     .filter(Boolean)
     .slice(0, 10);

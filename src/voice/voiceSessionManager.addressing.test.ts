@@ -37,6 +37,11 @@ function createManager({
     memory
   });
   manager.countHumanVoiceParticipants = () => participantCount;
+  const defaultParticipants = Array.from({ length: participantCount }, (_, i) => ({
+    userId: `speaker-${i + 1}`,
+    displayName: `speaker ${i + 1}`
+  }));
+  manager.getVoiceChannelParticipants = () => defaultParticipants;
   return manager;
 }
 
