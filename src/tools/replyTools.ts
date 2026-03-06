@@ -1,5 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import { normalizeDirectiveText } from "../botHelpers.ts";
+import { normalizeDirectiveText } from "../bot/botHelpers.ts";
 import {
   executeSharedAdaptiveDirectiveAdd,
   executeSharedAdaptiveDirectiveRemove

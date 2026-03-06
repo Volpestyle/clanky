@@ -1,5 +1,5 @@
 import type OpenAI from "openai";
-import { estimateUsdCost } from "../pricing.ts";
+import { estimateUsdCost } from "./pricing.ts";
 import { normalizeInlineText } from "./llmHelpers.ts";
 import { getMemorySettings, getReplyGenerationSettings } from "../settings/agentStack.ts";
 import type { LlmActionStore, LlmTrace } from "./serviceShared.ts";

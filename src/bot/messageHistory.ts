@@ -1,4 +1,4 @@
-import { formatReactionSummary } from "../botHelpers.ts";
+import { formatReactionSummary } from "./botHelpers.ts";
 import { getBotName } from "../settings/agentStack.ts";
 import type { BotContext } from "./botContext.ts";
 import {

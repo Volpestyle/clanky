@@ -1,4 +1,4 @@
-import { buildSystemPrompt, buildVoiceTurnPrompt } from "../prompts.ts";
+import { buildSystemPrompt, buildVoiceTurnPrompt } from "../prompts/index.ts";
 import {
   buildHardLimitsSection,
   DEFAULT_PROMPT_VOICE_OPERATIONAL_GUIDANCE,
@@ -7,13 +7,13 @@ import {
   getPromptVoiceOperationalGuidance,
   getPromptStyle,
   buildVoiceToneGuardrails
-} from "../promptCore.ts";
+} from "../prompts/promptCore.ts";
 import {
   normalizeSkipSentinel,
   parseStructuredReplyOutput,
   REPLY_OUTPUT_JSON_SCHEMA,
   serializeForPrompt
-} from "../botHelpers.ts";
+} from "./botHelpers.ts";
 import {
   buildReplyToolSet,
   executeReplyTool
@@ -84,7 +84,7 @@ function normalizeVoiceMemorySlice(value: unknown): VoiceMemorySlice {
   };
 }
 
-function runAsyncCallback(callback: unknown, payload: Record<string, unknown>) {
+function runAsyncCallback(callback: unknown, payload: Record<string, unknown>, callbackName: string) {
   if (typeof callback !== "function") return;
   try {
     const maybePromise = callback(payload);
@@ -94,10 +94,12 @@ function runAsyncCallback(callback: unknown, payload: Record<string, unknown>) {
       "catch" in maybePromise &&
       typeof maybePromise.catch === "function"
     ) {
-      maybePromise.catch(() => undefined);
+      maybePromise.catch((error: unknown) => {
+        console.error(`[voiceReplies] ${callbackName} callback failed:`, error);
+      });
     }
-  } catch {
-    // callback errors should not block voice generation
+  } catch (error) {
+    console.error(`[voiceReplies] ${callbackName} callback threw:`, error);
   }
 }
 
@@ -734,7 +736,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
             guildId,
             channelId,
             userId
-          });
+          }, "onWebLookupStart");
         }
 
         const result = await executeReplyTool(
@@ -784,7 +786,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         guildId,
         channelId,
         userId
-      });
+      }, "onWebLookupComplete");
     }
 
     const parsed = parseStructuredReplyOutput(generation.text);

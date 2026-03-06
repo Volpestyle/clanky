@@ -1,4 +1,4 @@
-import { MAX_GIF_QUERY_LEN, normalizeDirectiveText } from "../botHelpers.ts";
+import { MAX_GIF_QUERY_LEN, normalizeDirectiveText } from "./botHelpers.ts";
 import { getDiscoverySettings } from "../settings/agentStack.ts";
 import type { Settings } from "../settings/settingsSchema.ts";
 import {

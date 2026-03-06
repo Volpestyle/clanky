@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { WebSearchService } from "./search.ts";
-import { createTestSettings } from "./testSettings.ts";
+import { createTestSettings } from "../testSettings.ts";
 
 function createService() {
   const logs = [];

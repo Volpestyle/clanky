@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { nowIso } from "./utils.ts";
+import { nowIso } from "../utils.ts";
 
 const MAX_STRING_LENGTH = 2_000;
 const MAX_DEPTH = 6;

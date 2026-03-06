@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
-import { MemoryManager, __memoryTestables } from "./memory.ts";
+import { MemoryManager, __memoryTestables } from "./memoryManager.ts";
 
 test("memory grounding requires substantial overlap", () => {
   const source = "I talked about pizza and coding today.";

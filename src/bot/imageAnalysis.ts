@@ -2,7 +2,7 @@ import {
   MAX_IMAGE_LOOKUP_QUERY_LEN,
   extractUrlsFromText,
   normalizeDirectiveText
-} from "../botHelpers.ts";
+} from "./botHelpers.ts";
 import type { BotContext } from "./botContext.ts";
 import { isLikelyImageUrl, parseHistoryImageReference } from "./messageHistory.ts";
 import { MAX_MODEL_IMAGE_INPUTS } from "./replyPipelineShared.ts";
@@ -145,7 +145,17 @@ export function captionRecentHistoryImages(
           source: "history_image_caption"
         }
       })
-      .catch(() => {});
+      .catch((error) => {
+        ctx.store.logAction({
+          kind: "bot_error",
+          content: `history_image_caption: ${String(error?.message || error)}`.slice(0, 2000),
+          metadata: {
+            url: candidate.url,
+            contentType: candidate.contentType || null,
+            source: String(trace?.source || "history_image_caption")
+          }
+        });
+      });
   }
 }
 

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import { estimateUsdCost } from "./pricing.ts";
+import { estimateUsdCost } from "./llm/pricing.ts";
 import {
   isAsrReady as isAsrReadyRequest,
   isSpeechSynthesisReady as isSpeechSynthesisReadyRequest,
@@ -77,7 +77,7 @@ import {
   getReplyGenerationSettings,
   getResolvedOrchestratorBinding
 } from "./settings/agentStack.ts";
-import type { ClaudeCliStreamSessionLike } from "./llmClaudeCode.ts";
+import type { ClaudeCliStreamSessionLike } from "./llm/llmClaudeCode.ts";
 
 export {
   buildOpenAiJsonSchemaTextFormat,
@@ -556,4 +556,4 @@ export {
   createClaudeCliStreamSession,
   parseClaudeCodeJsonOutput,
   parseClaudeCodeStreamOutput
-} from "./llmClaudeCode.ts";
+} from "./llm/llmClaudeCode.ts";

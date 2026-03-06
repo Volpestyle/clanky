@@ -1,6 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type OpenAI from "openai";
-import { estimateUsdCost } from "../pricing.ts";
+import { estimateUsdCost } from "./pricing.ts";
 import { getBotName, getReplyGenerationSettings, getResolvedMemoryBinding } from "../settings/agentStack.ts";
 import {
   extractOpenAiResponseText,

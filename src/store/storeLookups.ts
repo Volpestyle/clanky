@@ -1,6 +1,6 @@
 // Extracted Store Methods
 import { clamp, nowIso } from "../utils.ts";
-import { LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL_DEFAULT, LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT } from "../store.ts";
+import { LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL_DEFAULT, LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT } from "./store.ts";
 import { safeJsonParse } from "../normalization/valueParsers.ts";
 import {
   normalizeLookupResultText,

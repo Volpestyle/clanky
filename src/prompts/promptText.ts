@@ -2,7 +2,7 @@ import {
   buildVoiceSelfContextLines,
   getMediaPromptCraftGuidance,
   REPLY_JSON_SCHEMA
-} from "../promptCore.ts";
+} from "./promptCore.ts";
 
 import {
   formatRecentChat,

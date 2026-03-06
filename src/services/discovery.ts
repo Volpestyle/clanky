@@ -1,8 +1,8 @@
 import { assertPublicUrl, isBlockedHost } from "./urlSafety.ts";
-import { clamp } from "./utils.ts";
-import { getDiscoverySettings } from "./settings/agentStack.ts";
-import { normalizeWhitespaceText } from "./normalization/text.ts";
-import { isRedirectStatus } from "./retry.ts";
+import { clamp } from "../utils.ts";
+import { getDiscoverySettings } from "../settings/agentStack.ts";
+import { normalizeWhitespaceText } from "../normalization/text.ts";
+import { isRedirectStatus } from "../retry.ts";
 
 const DISCOVERY_TIMEOUT_MS = 9_000;
 const DISCOVERY_MAX_REDIRECTS = 5;

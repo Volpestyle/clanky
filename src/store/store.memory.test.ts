@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { getResolvedVoiceAdmissionClassifierBinding } from "../settings/agentStack.ts";
-import { Store } from "../store.ts";
+import { Store } from "./store.ts";
 import { createTestSettingsPatch } from "../testSettings.ts";
 
 async function withTempStore(run) {

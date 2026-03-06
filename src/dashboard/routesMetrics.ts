@@ -1,8 +1,19 @@
+import type { Express } from "express";
+import type { DashboardPublicHttpsEntrypoint, DashboardSseClient } from "../dashboard.ts";
+import type { Store } from "../store/store.ts";
 import { parseBoundedInt } from "../dashboard.ts";
 
-export function attachMetricsRoutes(app: any, deps: any) {
+export interface MetricsRouteDeps {
+  store: Store;
+  publicHttpsEntrypoint: DashboardPublicHttpsEntrypoint | null;
+  getStatsPayload: () => unknown;
+  activitySseClients: Set<DashboardSseClient>;
+  writeSseEvent: (client: DashboardSseClient, eventName: string, payload: unknown) => void;
+}
+
+export function attachMetricsRoutes(app: Express, deps: MetricsRouteDeps) {
   const { store, publicHttpsEntrypoint, getStatsPayload, activitySseClients, writeSseEvent } = deps;
-  
+
   app.get("/api/actions", (req, res) => {
     const limit = parseBoundedInt(req.query.limit, 200, 1, 1000);
     const kinds = String(req.query.kinds || "")
@@ -42,7 +53,7 @@ export function attachMetricsRoutes(app: any, deps: any) {
       "X-Accel-Buffering": "no"
     });
 
-    const client = { res, blocked: false };
+    const client: DashboardSseClient = { res, blocked: false };
     activitySseClients.add(client);
 
     const sendSnapshot = () => {

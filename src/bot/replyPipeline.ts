@@ -1,7 +1,7 @@
 import { clamp } from "lodash";
 import { sanitizeBotText, sleep } from "../utils.ts";
-import { buildReplyPrompt, buildSystemPrompt } from "../prompts.ts";
-import { getMediaPromptCraftGuidance } from "../promptCore.ts";
+import { buildReplyPrompt, buildSystemPrompt } from "../prompts/index.ts";
+import { getMediaPromptCraftGuidance } from "../prompts/promptCore.ts";
 import type { ReplyAttemptOptions } from "../bot.ts";
 import {
   REPLY_OUTPUT_JSON_SCHEMA,
@@ -14,8 +14,8 @@ import {
   resolveMaxMediaPromptLen,
   normalizeSkipSentinel,
   splitDiscordMessage
-} from "../botHelpers.ts";
-import { getLocalTimeZoneLabel } from "../automation.ts";
+} from "./botHelpers.ts";
+import { getLocalTimeZoneLabel } from "./automation.ts";
 import { buildReplyToolSet, executeReplyTool } from "../tools/replyTools.ts";
 import type { ReplyToolContext, ReplyToolRuntime } from "../tools/replyTools.ts";
 import {

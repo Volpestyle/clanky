@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { buildVoiceTurnPrompt } from "./prompts.ts";
+import { buildVoiceTurnPrompt } from "./index.ts";
 
 test("buildVoiceTurnPrompt includes multi-participant join-window greeting bias guidance", () => {
   const prompt = buildVoiceTurnPrompt({

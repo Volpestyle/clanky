@@ -1,9 +1,41 @@
+import type { Database } from "bun:sqlite";
+
 import { clamp, nowIso } from "../utils.ts";
 import { safeJsonParse } from "../normalization/valueParsers.ts";
 
 const ADAPTIVE_DIRECTIVE_TEXT_MAX_CHARS = 420;
 const ADAPTIVE_DIRECTIVE_PREVIEW_MAX_CHARS = 220;
 const ADAPTIVE_DIRECTIVE_KIND_SET = new Set(["guidance", "behavior"]);
+
+interface AdaptiveDirectiveAction {
+  kind: string;
+  guildId?: string | null;
+  channelId?: string | null;
+  messageId?: string | null;
+  userId?: string | null;
+  content?: string | null;
+  metadata?: Record<string, unknown> | null;
+  usdCost?: number | null;
+}
+
+interface AdaptiveDirectiveStore {
+  db: Database;
+  logAction(entry: AdaptiveDirectiveAction): void;
+}
+
+type AdaptiveDirectiveSqlRow = Record<string, unknown>;
+
+function isAdaptiveDirectiveSqlRow(value: unknown): value is AdaptiveDirectiveSqlRow {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function toAdaptiveDirectiveSqlRow(value: unknown): AdaptiveDirectiveSqlRow | null {
+  return isAdaptiveDirectiveSqlRow(value) ? value : null;
+}
+
+function toAdaptiveDirectiveSqlRows(value: unknown): AdaptiveDirectiveSqlRow[] {
+  return Array.isArray(value) ? value.filter(isAdaptiveDirectiveSqlRow) : [];
+}
 
 function normalizeAdaptiveDirectiveText(value: unknown) {
   return String(value || "")
@@ -41,7 +73,7 @@ function normalizeAdaptiveDirectiveTokens(value: unknown) {
   )].slice(0, 20);
 }
 
-function mapAdaptiveDirectiveRow(row: Record<string, unknown> | null) {
+function mapAdaptiveDirectiveRow(row: AdaptiveDirectiveSqlRow | null) {
   if (!row) return null;
   return {
     id: Number(row.id),
@@ -64,7 +96,7 @@ function mapAdaptiveDirectiveRow(row: Record<string, unknown> | null) {
   };
 }
 
-function insertAdaptiveDirectiveEvent(store: any, {
+function insertAdaptiveDirectiveEvent(store: AdaptiveDirectiveStore, {
   noteId = null,
   guildId,
   directiveKind = "guidance",
@@ -116,8 +148,8 @@ function insertAdaptiveDirectiveEvent(store: any, {
   );
 }
 
-function getAdaptiveDirectiveRowById(store: any, noteId: number, guildId: string) {
-  return store.db.prepare(
+function getAdaptiveDirectiveRowById(store: AdaptiveDirectiveStore, noteId: number, guildId: string) {
+  return toAdaptiveDirectiveSqlRow(store.db.prepare(
     `SELECT id,
             guild_id,
             directive_kind,
@@ -138,17 +170,17 @@ function getAdaptiveDirectiveRowById(store: any, noteId: number, guildId: string
        FROM adaptive_style_notes
        WHERE id = ? AND guild_id = ?
        LIMIT 1`
-  ).get(noteId, guildId);
+  ).get(noteId, guildId));
 }
 
 function getAdaptiveDirectiveRowByExactText(
-  store: any,
+  store: AdaptiveDirectiveStore,
   guildId: string,
   directiveKind: string,
   noteText: string,
   isActive: boolean
 ) {
-  return store.db.prepare(
+  return toAdaptiveDirectiveSqlRow(store.db.prepare(
     `SELECT id,
             guild_id,
             directive_kind,
@@ -173,10 +205,15 @@ function getAdaptiveDirectiveRowByExactText(
          AND is_active = ?
        ORDER BY updated_at DESC
        LIMIT 1`
-  ).get(guildId, normalizeAdaptiveDirectiveKind(directiveKind), noteText, isActive ? 1 : 0);
+  ).get(
+    guildId,
+    normalizeAdaptiveDirectiveKind(directiveKind),
+    noteText,
+    isActive ? 1 : 0
+  ));
 }
 
-function scoreAdaptiveDirectiveRow(row: Record<string, unknown>, queryText: string) {
+function scoreAdaptiveDirectiveRow(row: AdaptiveDirectiveSqlRow, queryText: string) {
   const directiveKind = normalizeAdaptiveDirectiveKind(row.directiveKind ?? row.directive_kind);
   const noteText = normalizeAdaptiveDirectiveText(row.noteText ?? row.note_text).toLowerCase();
   if (!noteText) return -1;
@@ -195,11 +232,11 @@ function scoreAdaptiveDirectiveRow(row: Record<string, unknown>, queryText: stri
   return score;
 }
 
-export function getActiveAdaptiveStyleNotes(store: any, guildId: string, limit = 24) {
+export function getActiveAdaptiveStyleNotes(store: AdaptiveDirectiveStore, guildId: string, limit = 24) {
   const normalizedGuildId = String(guildId || "").trim();
   if (!normalizedGuildId) return [];
   const boundedLimit = clamp(Math.floor(Number(limit) || 24), 1, 200);
-  const rows = store.db.prepare(
+  const rows = toAdaptiveDirectiveSqlRows(store.db.prepare(
     `SELECT id,
             guild_id,
             directive_kind,
@@ -222,12 +259,12 @@ export function getActiveAdaptiveStyleNotes(store: any, guildId: string, limit =
          AND is_active = 1
        ORDER BY updated_at DESC, id DESC
        LIMIT ?`
-  ).all(normalizedGuildId, boundedLimit);
-  return rows.map((row: Record<string, unknown>) => mapAdaptiveDirectiveRow(row)).filter(Boolean);
+  ).all(normalizedGuildId, boundedLimit));
+  return rows.map((row) => mapAdaptiveDirectiveRow(row)).filter(Boolean);
 }
 
 export function searchAdaptiveStyleNotesForPrompt(
-  store: any,
+  store: AdaptiveDirectiveStore,
   {
     guildId,
     queryText = "",
@@ -257,11 +294,11 @@ export function searchAdaptiveStyleNotesForPrompt(
     .map(({ _score, ...row }) => row);
 }
 
-export function getAdaptiveStyleNoteAuditLog(store: any, guildId: string, limit = 100) {
+export function getAdaptiveStyleNoteAuditLog(store: AdaptiveDirectiveStore, guildId: string, limit = 100) {
   const normalizedGuildId = String(guildId || "").trim();
   if (!normalizedGuildId) return [];
   const boundedLimit = clamp(Math.floor(Number(limit) || 100), 1, 500);
-  const rows = store.db.prepare(
+  const rows = toAdaptiveDirectiveSqlRows(store.db.prepare(
     `SELECT id,
             created_at,
             note_id,
@@ -278,8 +315,8 @@ export function getAdaptiveStyleNoteAuditLog(store: any, guildId: string, limit 
        WHERE guild_id = ?
        ORDER BY created_at DESC, id DESC
        LIMIT ?`
-  ).all(normalizedGuildId, boundedLimit);
-  return rows.map((row: Record<string, unknown>) => ({
+  ).all(normalizedGuildId, boundedLimit));
+  return rows.map((row) => ({
     id: Number(row.id),
     createdAt: String(row.created_at || ""),
     noteId: Number.isInteger(Number(row.note_id)) ? Number(row.note_id) : null,
@@ -295,7 +332,7 @@ export function getAdaptiveStyleNoteAuditLog(store: any, guildId: string, limit 
   }));
 }
 
-export function addAdaptiveStyleNote(store: any, {
+export function addAdaptiveStyleNote(store: AdaptiveDirectiveStore, {
   guildId,
   noteText,
   directiveKind = "guidance",
@@ -470,7 +507,7 @@ export function addAdaptiveStyleNote(store: any, {
   };
 }
 
-export function updateAdaptiveStyleNote(store: any, {
+export function updateAdaptiveStyleNote(store: AdaptiveDirectiveStore, {
   noteId,
   guildId,
   noteText,
@@ -581,7 +618,7 @@ export function updateAdaptiveStyleNote(store: any, {
   };
 }
 
-export function removeAdaptiveStyleNote(store: any, {
+export function removeAdaptiveStyleNote(store: AdaptiveDirectiveStore, {
   noteId,
   guildId,
   actorUserId = null,

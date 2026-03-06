@@ -1,4 +1,4 @@
-import { collectMemoryFactHints } from "../botHelpers.ts";
+import { collectMemoryFactHints } from "./botHelpers.ts";
 import { loadPromptMemorySliceFromMemory } from "../memory/promptMemorySlice.ts";
 import { clamp } from "../utils.ts";
 import type { BotContext } from "./botContext.ts";

@@ -1,4 +1,4 @@
-import { normalizeSkipSentinel } from "../botHelpers.ts";
+import { normalizeSkipSentinel } from "./botHelpers.ts";
 import { sanitizeBotText } from "../utils.ts";
 import type { BotContext } from "./botContext.ts";
 import {

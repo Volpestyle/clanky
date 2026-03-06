@@ -5,7 +5,7 @@ import { isBotNameAddressed } from "../voice/voiceSessionHelpers.ts";
 import type { Settings } from "../settings/settingsSchema.ts";
 import {
   DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD
-} from "../directAddressConfidence.ts";
+} from "./directAddressConfidence.ts";
 
 export type ReplyAddressSignal = {
   direct: boolean;

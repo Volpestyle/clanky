@@ -1,6 +1,6 @@
 // Extracted Store Methods
 import { clamp, nowIso } from "../utils.ts";
-import { ACTION_LOG_RETENTION_DAYS_MIN, ACTION_LOG_RETENTION_DAYS_MAX, ACTION_LOG_MAX_ROWS_RUNTIME_MIN, ACTION_LOG_MAX_ROWS_MAX } from "../store.ts";
+import { ACTION_LOG_RETENTION_DAYS_MIN, ACTION_LOG_RETENTION_DAYS_MAX, ACTION_LOG_MAX_ROWS_RUNTIME_MIN, ACTION_LOG_MAX_ROWS_MAX } from "./store.ts";
 import { safeJsonParse } from "../normalization/valueParsers.ts";
 import { shouldTrackResponseTriggerKind, normalizeResponseTriggerMessageIds } from "./responseTriggers.ts";
 

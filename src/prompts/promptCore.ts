@@ -1,5 +1,5 @@
-import { normalizeBoundedStringList } from "./settings/listNormalization.ts";
-import { getBotName, getPersonaSettings, getPromptingSettings } from "./settings/agentStack.ts";
+import { normalizeBoundedStringList } from "../settings/listNormalization.ts";
+import { getBotName, getPersonaSettings, getPromptingSettings } from "../settings/agentStack.ts";
 
 const DEFAULT_BOT_NAME = "clanker conk";
 const PROMPT_TEMPLATE_TOKEN_RE = /\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g;

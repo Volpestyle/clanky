@@ -1,7 +1,7 @@
 import {
   buildVoiceSelfContextLines,
   buildVoiceToneGuardrails,
-} from "../promptCore.ts";
+} from "./promptCore.ts";
 
 import {
   formatWebSearchFindings,

@@ -1,7 +1,7 @@
 import { clamp, nowIso } from "../utils.ts";
 import { safeJsonParse } from "../normalization/valueParsers.ts";
 import { normalizeWhitespaceText } from "../normalization/text.ts";
-import { LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT } from "../store.ts";
+import { LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT } from "./store.ts";
 
 export const LOOKUP_CONTEXT_QUERY_MAX_CHARS = 220;
 export const LOOKUP_CONTEXT_SOURCE_MAX_CHARS = 120;

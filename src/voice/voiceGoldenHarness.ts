@@ -5,7 +5,7 @@ import { ClankerBot } from "../bot.ts";
 import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
 import { normalizeSettings } from "../store/settingsNormalization.ts";
 import { parseBooleanFlag } from "../normalization/valueParsers.ts";
-import { WebSearchService } from "../search.ts";
+import { WebSearchService } from "../services/search.ts";
 import { runJsonJudge } from "../../scripts/replay/core/judge.ts";
 import { summarizeNamedMetricRows, type NumericStats } from "../../scripts/replay/core/metrics.ts";
 import { formatPct, stableNumber } from "../../scripts/replay/core/utils.ts";

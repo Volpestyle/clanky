@@ -1,5 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import { safeJsonParse } from "../llmClaudeCode.ts";
+import { safeJsonParse } from "./llmClaudeCode.ts";
 import {
   MEMORY_FACT_SUBJECTS,
   MEMORY_FACT_TYPES,

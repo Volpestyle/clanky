@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { DiscoveryService, normalizeDiscoveryUrl } from "./discovery.ts";
-import { normalizeSettings } from "./store/settingsNormalization.ts";
+import { normalizeSettings } from "../store/settingsNormalization.ts";
 
 function withFrozenTimeAndRandom({ nowMs, randomValue }, run) {
   const originalNow = Date.now;

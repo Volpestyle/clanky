@@ -5,12 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { appConfig } from "../config.ts";
 import { LLMService } from "../llm.ts";
-import { MemoryManager } from "../memory.ts";
+import { MemoryManager } from "../memory/memoryManager.ts";
 import { BrowserManager } from "../services/BrowserManager.ts";
-import { WebSearchService } from "../search.ts";
-import { Store } from "../store.ts";
+import { WebSearchService } from "../services/search.ts";
+import { Store } from "../store/store.ts";
 import { createTestSettings } from "../testSettings.ts";
-import { VideoContextService } from "../video.ts";
+import { VideoContextService } from "../video/videoContextService.ts";
 import { ImageCaptionCache } from "../vision/imageCaptionCache.ts";
 import type { BudgetContext } from "./botContext.ts";
 import {

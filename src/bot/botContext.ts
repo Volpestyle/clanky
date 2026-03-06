@@ -1,14 +1,14 @@
 import type { ClankerBot } from "../bot.ts";
 import type { appConfig } from "../config.ts";
-import type { DiscoveryService } from "../discovery.ts";
-import type { GifService } from "../gif.ts";
+import type { DiscoveryService } from "../services/discovery.ts";
+import type { GifService } from "../services/gif.ts";
 import type { LLMService } from "../llm.ts";
-import type { MemoryManager } from "../memory.ts";
+import type { MemoryManager } from "../memory/memoryManager.ts";
 import type { BrowserManager } from "../services/BrowserManager.ts";
-import type { WebSearchService } from "../search.ts";
-import type { Store } from "../store.ts";
+import type { WebSearchService } from "../services/search.ts";
+import type { Store } from "../store/store.ts";
 import type { BrowserTaskRegistry } from "../tools/browserTaskRuntime.ts";
-import type { VideoContextService } from "../video.ts";
+import type { VideoContextService } from "../video/videoContextService.ts";
 import type { ImageCaptionCache } from "../vision/imageCaptionCache.ts";
 import type { SubAgentSessionManager } from "../agents/subAgentSession.ts";
 

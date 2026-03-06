@@ -5,8 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { appConfig } from "../config.ts";
 import { LLMService } from "../llm.ts";
-import { MemoryManager } from "../memory.ts";
-import { Store } from "../store.ts";
+import { MemoryManager } from "../memory/memoryManager.ts";
+import { Store } from "../store/store.ts";
 import type { BotContext } from "./botContext.ts";
 import {
   composeMessageContentForHistory,

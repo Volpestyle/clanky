@@ -1,4 +1,4 @@
-import { normalizeDiscoveryUrl } from "../discovery.ts";
+import { normalizeDiscoveryUrl } from "../services/discovery.ts";
 
 const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
 const VIDEO_EXT_RE = /\.(mp4|m4v|mov|webm|mkv|avi|mpeg|mpg)$/i;

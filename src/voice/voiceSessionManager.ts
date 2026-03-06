@@ -28,9 +28,9 @@ import {
   getPromptStyle,
   getPromptVoiceGuidance,
   interpolatePromptTemplate
-} from "../promptCore.ts";
+} from "../prompts/promptCore.ts";
 import { clamp } from "../utils.ts";
-import { hasBotNameCue } from "../directAddressConfidence.ts";
+import { hasBotNameCue } from "../bot/directAddressConfidence.ts";
 import { SoundboardDirector } from "./soundboardDirector.ts";
 import {
   defaultVoiceReplyDecisionModel,

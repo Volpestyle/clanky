@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import readline from "node:readline";
-import { nowIso } from "./utils.ts";
+import { nowIso } from "../utils.ts";
 
 const CLOUDFLARED_PUBLIC_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com\b/i;
 const CLOUDFLARED_READY_RE = /\b(registered tunnel connection|connection established)\b/i;

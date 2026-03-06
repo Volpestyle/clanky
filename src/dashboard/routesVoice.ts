@@ -1,10 +1,21 @@
+import type { Express } from "express";
+import type { DashboardBot, DashboardMemory, DashboardScreenShareSessionManager, DashboardSseClient } from "../dashboard.ts";
+import type { Store } from "../store/store.ts";
 import { parseBoundedInt } from "../dashboard.ts";
 import { STREAM_INGEST_API_PATH } from "../dashboard.ts";
 import { getDirectiveSettings } from "../settings/agentStack.ts";
 
-export function attachVoiceRoutes(app: any, deps: any) {
+export interface VoiceRouteDeps {
+  store: Store;
+  bot: DashboardBot;
+  memory: DashboardMemory;
+  screenShareSessionManager: DashboardScreenShareSessionManager | null;
+  voiceSseClients: Set<DashboardSseClient>;
+}
+
+export function attachVoiceRoutes(app: Express, deps: VoiceRouteDeps) {
   const { store, bot, memory, screenShareSessionManager, voiceSseClients } = deps;
-  
+
   app.post("/api/voice/share-session", async (req, res, next) => {
     try {
       if (!screenShareSessionManager) {
@@ -166,7 +177,7 @@ export function attachVoiceRoutes(app: any, deps: any) {
       try { res.write(": heartbeat\n\n"); } catch { /* swallow */ }
     }, 15_000);
 
-    const client = { res, blocked: false };
+    const client: DashboardSseClient = { res, blocked: false };
     voiceSseClients.add(client);
 
     req.on("close", () => {

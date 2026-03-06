@@ -1,6 +1,6 @@
 // Extracted Store Methods
 import { deepMerge, nowIso } from "../utils.ts";
-import { SETTINGS_KEY } from "../store.ts";
+import { SETTINGS_KEY } from "./store.ts";
 import { safeJsonParse } from "../normalization/valueParsers.ts";
 import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
 import { normalizeSettings } from "./settingsNormalization.ts";

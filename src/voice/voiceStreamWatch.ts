@@ -1,5 +1,5 @@
 import { clamp } from "../utils.ts";
-import { getPromptBotName } from "../promptCore.ts";
+import { getPromptBotName } from "../prompts/promptCore.ts";
 import { safeJsonParseFromString } from "../normalization/valueParsers.ts";
 import {
   getBotName,

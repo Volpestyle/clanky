@@ -4,17 +4,17 @@ import {
   getResearchRuntimeConfig,
   getResolvedOrchestratorBinding,
   resolveAgentStack
-} from "./settings/agentStack.ts";
+} from "../settings/agentStack.ts";
 import { assertPublicUrl } from "./urlSafety.ts";
-import { clamp } from "./utils.ts";
-import { normalizeWhitespaceText } from "./normalization/text.ts";
-import { sleep } from "./normalization/time.ts";
+import { clamp } from "../utils.ts";
+import { normalizeWhitespaceText } from "../normalization/text.ts";
+import { sleep } from "../normalization/time.ts";
 import {
   getRetryDelayMs,
   isRetryableFetchError,
   shouldRetryHttpStatus,
   withAttemptCount
-} from "./retry.ts";
+} from "../retry.ts";
 
 const BRAVE_SEARCH_API_URL = "https://api.search.brave.com/res/v1/web/search";
 const SERPAPI_SEARCH_API_URL = "https://serpapi.com/search.json";
@@ -691,7 +691,11 @@ async function readResponseBodyLimited(response, maxBytes) {
       chunks.push(value);
     }
   } finally {
-    await reader.cancel().catch(() => {});
+    try {
+      await reader.cancel();
+    } catch (error) {
+      console.warn("[WebSearchService] Failed to cancel response reader:", error);
+    }
   }
 
   const buffer = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));

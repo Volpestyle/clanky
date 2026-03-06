@@ -2,10 +2,10 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { normalizeDiscoveryUrl } from "./discovery.ts";
-import { assertPublicUrl } from "./urlSafety.ts";
-import { clamp } from "./utils.ts";
-import { sleep } from "./normalization/time.ts";
+import { normalizeDiscoveryUrl } from "../services/discovery.ts";
+import { assertPublicUrl } from "../services/urlSafety.ts";
+import { clamp } from "../utils.ts";
+import { sleep } from "../normalization/time.ts";
 import {
   dedupeTargets,
   extractTikTokIdFromUrl,
@@ -15,14 +15,14 @@ import {
   parseEmbedTargets,
   parseVideoTarget,
   type VideoTarget
-} from "./video/videoTargets.ts";
+} from "./videoTargets.ts";
 import {
   getRetryDelayMs,
   isRetryableFetchError,
   isRedirectStatus,
   shouldRetryHttpStatus,
   withAttemptCount
-} from "./retry.ts";
+} from "../retry.ts";
 
 const REQUEST_TIMEOUT_MS = 5_500;
 const MAX_FETCH_ATTEMPTS = 3;
@@ -56,6 +56,19 @@ export class VideoContextService {
     this.llm = llm;
     this.cache = new Map();
     this.toolAvailabilityPromise = null;
+  }
+
+  logCleanupError(scope: string, error: unknown, metadata: Record<string, unknown> | null = null) {
+    const detail = error instanceof Error ? error.message : String(error);
+    try {
+      this.store.logAction({
+        kind: "video_context_error",
+        content: `${scope}: ${detail}`.slice(0, 2000),
+        metadata
+      });
+    } catch {
+      console.warn(`[VideoContextService] ${scope}:`, error);
+    }
   }
 
   extractVideoTargets(text, limit = 2) {
@@ -305,7 +318,15 @@ export class VideoContextService {
       }
     } finally {
       if (media?.cleanup) {
-        await media.cleanup().catch(() => undefined);
+        try {
+          await media.cleanup();
+        } catch (error) {
+          this.logCleanupError("video_media_cleanup_failed", error, {
+            source: trace.source || "unknown",
+            key: target.key,
+            url: target.url
+          });
+        }
       }
     }
 
@@ -606,7 +627,14 @@ export class VideoContextService {
         }
       };
     } catch (error) {
-      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+      try {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      } catch (cleanupError) {
+        this.logCleanupError("video_download_tempdir_cleanup_failed", cleanupError, {
+          url,
+          tempDir
+        });
+      }
       throw error;
     }
   }
@@ -659,7 +687,14 @@ export class VideoContextService {
       }
       return images;
     } finally {
-      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+      try {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      } catch (error) {
+        this.logCleanupError("video_keyframe_tempdir_cleanup_failed", error, {
+          input,
+          tempDir
+        });
+      }
     }
   }
 
@@ -716,7 +751,15 @@ export class VideoContextService {
       });
       return sanitizeText(transcript, maxTranscriptChars);
     } finally {
-      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+      try {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      } catch (error) {
+        this.logCleanupError("video_asr_tempdir_cleanup_failed", error, {
+          input,
+          tempDir,
+          source: trace.source || "video_context_asr"
+        });
+      }
     }
   }
 

@@ -3,7 +3,7 @@ import { test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { MemoryManager } from "./memory.ts";
+import { MemoryManager } from "./memoryManager.ts";
 
 function createMemoryForIngestTests(storeOverrides = {}) {
   return new MemoryManager({

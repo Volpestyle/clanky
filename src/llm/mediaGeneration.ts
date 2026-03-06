@@ -1,5 +1,5 @@
 import type OpenAI from "openai";
-import { estimateImageUsdCost } from "../pricing.ts";
+import { estimateImageUsdCost } from "./pricing.ts";
 import { sleepMs } from "../normalization/time.ts";
 import {
   extractOpenAiImageBase64,
@@ -12,7 +12,7 @@ import {
   normalizeXaiBaseUrl,
   prioritizePreferredModel
 } from "./llmHelpers.ts";
-import { safeJsonParse } from "../llmClaudeCode.ts";
+import { safeJsonParse } from "./llmClaudeCode.ts";
 import { getDiscoverySettings, getReplyGenerationSettings } from "../settings/agentStack.ts";
 import type {
   LLMAppConfig,

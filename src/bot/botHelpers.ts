@@ -1,9 +1,9 @@
-import { clamp } from "./utils.ts";
+import { clamp } from "../utils.ts";
 import { normalizeAutomationSchedule } from "./automation.ts";
-import { normalizeMentionLookupKey } from "./bot/mentionLookup.ts";
-import { normalizeWhitespaceText } from "./normalization/text.ts";
-import { extractJsonObjectFromText } from "./normalization/jsonExtraction.ts";
-import { getDiscoverySettings } from "./settings/agentStack.ts";
+import { normalizeMentionLookupKey } from "./mentionLookup.ts";
+import { normalizeWhitespaceText } from "../normalization/text.ts";
+import { extractJsonObjectFromText } from "../normalization/jsonExtraction.ts";
+import { getDiscoverySettings } from "../settings/agentStack.ts";
 
 const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
 const IMAGE_PROMPT_DIRECTIVE_RE = /\[\[IMAGE_PROMPT:\s*([^\]]*?)\s*\]\]\s*$/i;

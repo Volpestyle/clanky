@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { VideoContextService } from "./video.ts";
+import { VideoContextService } from "./videoContextService.ts";
 
 function createService() {
   const logs = [];

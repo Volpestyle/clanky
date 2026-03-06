@@ -1,5 +1,5 @@
 import type OpenAI from "openai";
-import { estimateUsdCost } from "../pricing.ts";
+import { estimateUsdCost } from "../llm/pricing.ts";
 import { extractOpenAiResponseText, extractOpenAiResponseUsage } from "../llm/llmHelpers.ts";
 import type { BrowserManager } from "../services/BrowserManager.ts";
 import { createAbortError, isAbortError, throwIfAborted } from "./browserTaskRuntime.ts";
@@ -465,6 +465,6 @@ export async function runOpenAiComputerUseTask({
     }
     throw error;
   } finally {
-    await browserManager.close(sessionKey).catch(() => undefined);
+    await browserManager.close(sessionKey);
   }
 }

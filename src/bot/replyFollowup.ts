@@ -5,7 +5,7 @@ import {
   MAX_WEB_QUERY_LEN,
   normalizeDirectiveText,
   parseStructuredReplyOutput
-} from "../botHelpers.ts";
+} from "./botHelpers.ts";
 import { getFollowupSettings, getResolvedFollowupBinding } from "../settings/agentStack.ts";
 import { deepMerge } from "../utils.ts";
 

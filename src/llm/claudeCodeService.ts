@@ -14,7 +14,7 @@ import {
   parseClaudeCodeJsonOutput,
   parseClaudeCodeStreamOutput,
   runClaudeCli
-} from "../llmClaudeCode.ts";
+} from "./llmClaudeCode.ts";
 import type {
   ChatModelRequest,
   LlmTrace,

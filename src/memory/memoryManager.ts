@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { clamp01, clampInt } from "./normalization/numbers.ts";
-import { sleepMs } from "./normalization/time.ts";
+import { clamp01, clampInt } from "../normalization/numbers.ts";
+import { sleepMs } from "../normalization/time.ts";
 import {
   LORE_SUBJECT,
   SELF_SUBJECT,
@@ -26,8 +26,8 @@ import {
   passesHybridRelevanceGate,
   resolveDirectiveScopeConfig,
   sanitizeInline,
-} from "./memory/memoryHelpers.ts";
-import { runDailyReflection, rerunDailyReflectionForDateGuild } from "./memory/dailyReflection.ts";
+} from "./memoryHelpers.ts";
+import { runDailyReflection, rerunDailyReflectionForDateGuild } from "./dailyReflection.ts";
 
 const DAILY_FILE_PATTERN = /^\d{4}-\d{2}-\d{2}\.md$/;
 const HYBRID_FACT_LIMIT = 10;
@@ -123,7 +123,7 @@ export class MemoryManager {
     };
     this.ingestQueue.push(job);
     this.ingestQueuedJobs.set(normalizedMessageId, job);
-    this.runIngestWorker().catch(() => undefined);
+    void this.runIngestWorker();
     return promise;
   }
 
@@ -879,14 +879,14 @@ export class MemoryManager {
 
     const factRow = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, subject, factText);
     if (factRow) {
-      this.ensureFactVector({
+      void this.ensureFactVector({
         factRow,
         settings: null,
         trace: {
           userId,
           source: scopeConfig.traceSource
         }
-      }).catch(() => undefined);
+      });
     }
     this.queueMemoryRefresh();
     return {

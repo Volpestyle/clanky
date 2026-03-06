@@ -1,9 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type {
+  DashboardBot,
+  DashboardMemory,
+  DashboardPublicHttpsState,
+  DashboardScreenShareSessionManager
+} from "./dashboard.ts";
 import { parseBooleanFlag, parseNumberOrFallback } from "./normalization/valueParsers.ts";
 import { createDashboardServer } from "./dashboard.ts";
-import { Store } from "./store.ts";
+import { Store } from "./store/store.ts";
 
 type ErrorLike = {
   code?: unknown;
@@ -13,20 +19,16 @@ type ErrorLike = {
 type TestDashboardServerOptions = {
   dashboardToken?: string;
   appConfigOverrides?: Record<string, unknown>;
-  publicHttpsState?: unknown;
-  botOverrides?: Record<string, unknown>;
-  memoryOverrides?: Record<string, unknown>;
-  screenShareSessionManager?: unknown;
+  publicHttpsState?: DashboardPublicHttpsState | null;
+  botOverrides?: Partial<DashboardBot> & Record<string, unknown>;
+  memoryOverrides?: Partial<DashboardMemory> & Record<string, unknown>;
+  screenShareSessionManager?: DashboardScreenShareSessionManager | null;
 };
 
 type TestDashboardServerResult = {
   baseUrl: string;
-  bot: {
-    [key: string]: unknown;
-  };
-  memory: {
-    [key: string]: unknown;
-  };
+  bot: DashboardBot & { appliedSettings: unknown[] };
+  memory: DashboardMemory;
   store: Store;
   ingestCalls: unknown[];
   memoryCalls: unknown[];
@@ -73,7 +75,7 @@ export async function withDashboardServer<T>(
   const memoryCalls = [];
 
   const appliedSettings: unknown[] = [];
-  const bot = {
+  const bot: DashboardBot & { appliedSettings: unknown[] } = {
     appliedSettings,
     async applyRuntimeSettings(nextSettings) {
       appliedSettings.push(nextSettings);
@@ -85,6 +87,12 @@ export async function withDashboardServer<T>(
         replyQueuePending: 0
       };
     },
+    getGuilds() {
+      return [];
+    },
+    getGuildChannels() {
+      return [];
+    },
     async ingestVoiceStreamFrame(payload) {
       ingestCalls.push(payload);
       return {
@@ -95,7 +103,7 @@ export async function withDashboardServer<T>(
     ...botOverrides
   };
 
-  const memory = {
+  const memory: DashboardMemory = {
     async readMemoryMarkdown() {
       return "# memory";
     },
@@ -105,6 +113,12 @@ export async function withDashboardServer<T>(
     async searchDurableFacts(payload) {
       memoryCalls.push(payload);
       return [{ fact: "remember this" }];
+    },
+    async rerunDailyReflection() {
+      return { ok: true };
+    },
+    async buildPromptMemorySlice() {
+      return { facts: [] };
     },
     ...memoryOverrides
   };
@@ -178,7 +192,7 @@ export async function withDashboardServer<T>(
           closed = true;
           resolve();
         });
-      }).catch(() => undefined);
+      });
     }
     store.close();
     await fs.rm(dir, { recursive: true, force: true });

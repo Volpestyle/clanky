@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { withDashboardServer } from "./testHelpers.ts";
+import { withDashboardServer } from "../testHelpers.ts";
 
 test("dashboard memory search handles missing params and valid lookups", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl, memoryCalls }) => {

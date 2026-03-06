@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { clampInt } from "./normalization/numbers.ts";
-import { safeJsonParseFromString } from "./normalization/valueParsers.ts";
+import { clampInt } from "../normalization/numbers.ts";
+import { safeJsonParseFromString } from "../normalization/valueParsers.ts";
 
 type ClaudeCliResult = {
   stdout: string;

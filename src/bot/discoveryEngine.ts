@@ -1,4 +1,4 @@
-import { normalizeDiscoveryUrl } from "../discovery.ts";
+import { normalizeDiscoveryUrl } from "../services/discovery.ts";
 import {
   composeDiscoveryImagePrompt,
   composeDiscoveryVideoPrompt,
@@ -8,9 +8,9 @@ import {
   pickDiscoveryMediaDirective,
   resolveMaxMediaPromptLen,
   splitDiscordMessage
-} from "../botHelpers.ts";
-import { buildDiscoveryPrompt, buildSystemPrompt } from "../prompts.ts";
-import { getMediaPromptCraftGuidance } from "../promptCore.ts";
+} from "./botHelpers.ts";
+import { buildDiscoveryPrompt, buildSystemPrompt } from "../prompts/index.ts";
+import { getMediaPromptCraftGuidance } from "../prompts/promptCore.ts";
 import { chance, sanitizeBotText, sleep } from "../utils.ts";
 import {
   getBotName,

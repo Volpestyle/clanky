@@ -1,7 +1,7 @@
 import { clamp } from "lodash";
 import {
   getPromptBotName
-} from "../promptCore.ts";
+} from "../prompts/promptCore.ts";
 import {
   buildVoiceAdmissionPolicyLines
 } from "../prompts/voiceAdmissionPolicy.ts";
@@ -24,7 +24,7 @@ import {
   normalizeVoiceReplyDecisionProvider,
   defaultVoiceReplyDecisionModel
 } from "./voiceDecisionRuntime.ts";
-import { hasBotNameCue, DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD } from "../directAddressConfidence.ts";
+import { hasBotNameCue, DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD } from "../bot/directAddressConfidence.ts";
 import type {
   VoiceConversationContext,
   VoiceReplyDecision,

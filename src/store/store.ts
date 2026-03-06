@@ -3,10 +3,10 @@ export const LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT = 5;
 import fs from "node:fs";
 import path from "node:path";
 import { Database } from "bun:sqlite";
-import { DEFAULT_SETTINGS } from "./settings/settingsSchema.ts";
-import { clamp, nowIso } from "./utils.ts";
-import { normalizeSettings } from "./store/settingsNormalization.ts";
-import { rewriteRuntimeSettingsRow, getSettings, setSettings, patchSettings, resetSettings } from "./store/storeSettings.ts";
+import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
+import { clamp, nowIso } from "../utils.ts";
+import { normalizeSettings } from "./settingsNormalization.ts";
+import { rewriteRuntimeSettingsRow, getSettings, setSettings, patchSettings, resetSettings } from "./storeSettings.ts";
 import {
   recordMessage,
   getRecentMessages,
@@ -14,14 +14,14 @@ import {
   searchRelevantMessages,
   searchConversationWindows,
   getActiveChannels
-} from "./store/storeMessages.ts";
-import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, countDiscoveryPostsSince, getRecentActions, getRecentMemoryReflections, getRecentBrowserSessions, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./store/storeActionLog.ts";
-import { wasLinkSharedSince, recordSharedLink, pruneLookupContext, recordLookupContext, searchLookupContext } from "./store/storeLookups.ts";
-import { getRecentVoiceSessions, getVoiceSessionEvents } from "./store/storeVoice.ts";
-import { getReplyPerformanceStats, getStats } from "./store/storeStats.ts";
-import { createAutomation, getAutomationById, countAutomations, listAutomations, getMostRecentAutomations, findAutomationsByQuery, setAutomationStatus, claimDueAutomations, finalizeAutomationRun, recordAutomationRun, getAutomationRuns } from "./store/storeAutomation.ts";
-import { addMemoryFact, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactBySubjectAndFact, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject } from "./store/storeMemory.ts";
-import { addAdaptiveStyleNote, getActiveAdaptiveStyleNotes, getAdaptiveStyleNoteAuditLog, removeAdaptiveStyleNote, searchAdaptiveStyleNotesForPrompt, updateAdaptiveStyleNote } from "./store/storeAdaptiveDirectives.ts";
+} from "./storeMessages.ts";
+import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, countDiscoveryPostsSince, getRecentActions, getRecentMemoryReflections, getRecentBrowserSessions, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./storeActionLog.ts";
+import { wasLinkSharedSince, recordSharedLink, pruneLookupContext, recordLookupContext, searchLookupContext } from "./storeLookups.ts";
+import { getRecentVoiceSessions, getVoiceSessionEvents } from "./storeVoice.ts";
+import { getReplyPerformanceStats, getStats } from "./storeStats.ts";
+import { createAutomation, getAutomationById, countAutomations, listAutomations, getMostRecentAutomations, findAutomationsByQuery, setAutomationStatus, claimDueAutomations, finalizeAutomationRun, recordAutomationRun, getAutomationRuns } from "./storeAutomation.ts";
+import { addMemoryFact, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactBySubjectAndFact, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject } from "./storeMemory.ts";
+import { addAdaptiveStyleNote, getActiveAdaptiveStyleNotes, getAdaptiveStyleNoteAuditLog, removeAdaptiveStyleNote, searchAdaptiveStyleNotesForPrompt, updateAdaptiveStyleNote } from "./storeAdaptiveDirectives.ts";
 
 export const SETTINGS_KEY = "runtime_settings";
 export const ACTION_LOG_RETENTION_DAYS_DEFAULT = 14;

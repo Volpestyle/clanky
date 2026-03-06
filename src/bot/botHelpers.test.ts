@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { resolveMaxMediaPromptLen } from "./botHelpers.ts";
-import { normalizeSettings } from "./store/settingsNormalization.ts";
+import { normalizeSettings } from "../store/settingsNormalization.ts";
 
 test("resolveMaxMediaPromptLen reads canonical discovery settings", () => {
   const settings = normalizeSettings({

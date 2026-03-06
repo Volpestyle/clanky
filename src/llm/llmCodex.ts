@@ -2,8 +2,8 @@ import type OpenAI from "openai";
 import {
   extractOpenAiResponseText,
   extractOpenAiResponseUsage
-} from "./llm/llmHelpers.ts";
-import { sleepMs } from "./normalization/time.ts";
+} from "./llmHelpers.ts";
+import { sleepMs } from "../normalization/time.ts";
 import { estimateUsdCost } from "./pricing.ts";
 
 const CODEX_POLL_INTERVAL_MS = 1200;

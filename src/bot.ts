@@ -18,11 +18,11 @@ import { musicCommands } from "./voice/musicCommands.ts";
 import { ImageCaptionCache } from "./vision/imageCaptionCache.ts";
 import {
   normalizeReactionEmojiToken
-} from "./botHelpers.ts";
+} from "./bot/botHelpers.ts";
 import {
   resolveFollowingNextRunAt,
   resolveInitialNextRunAt
-} from "./automation.ts";
+} from "./bot/automation.ts";
 import { chance, clamp, sleep } from "./utils.ts";
 import {
   applyAutomationControlAction,
@@ -936,9 +936,17 @@ export class ClankerBot {
           console.error("[slashCommands] Error handling browse command:", error);
           const message = error instanceof Error ? error.message : String(error);
           if (isAbortError(error)) {
-            await interaction.editReply("Browser session was cancelled.").catch(() => undefined);
+            try {
+              await interaction.editReply("Browser session was cancelled.");
+            } catch (replyError) {
+              console.warn("[slashCommands] Failed to edit cancelled browse reply:", replyError);
+            }
           } else {
-            await interaction.editReply(`An error occurred while browsing: ${message}`).catch(() => undefined);
+            try {
+              await interaction.editReply(`An error occurred while browsing: ${message}`);
+            } catch (replyError) {
+              console.warn("[slashCommands] Failed to edit browse error reply:", replyError);
+            }
           }
         }
       } else if (commandName === "code") {
@@ -1012,7 +1020,11 @@ export class ClankerBot {
         } catch (error) {
           console.error("[slashCommands] Error handling code command:", error);
           const message = error instanceof Error ? error.message : String(error);
-          await interaction.editReply(`An error occurred while running code task: ${message}`).catch(() => undefined);
+          try {
+            await interaction.editReply(`An error occurred while running code task: ${message}`);
+          } catch (replyError) {
+            console.warn("[slashCommands] Failed to edit code error reply:", replyError);
+          }
         }
       }
     });
@@ -1085,7 +1097,12 @@ export class ClankerBot {
     this.markGatewayEvent();
 
     this.memoryTimer = setInterval(() => {
-      this.memory.refreshMemoryMarkdown().catch(() => undefined);
+      this.memory.refreshMemoryMarkdown().catch((error) => {
+        this.store.logAction({
+          kind: "bot_error",
+          content: `memory_refresh: ${String(error?.message || error)}`
+        });
+      });
     }, 5 * 60_000);
 
     this.discoveryTimer = setInterval(() => {
@@ -1161,10 +1178,18 @@ export class ClankerBot {
     this.replyQueuedMessageIds.clear();
     await this.voiceSessionManager.dispose("shutdown");
     if (this.memory?.drainIngestQueue) {
-      await this.memory.drainIngestQueue({ timeoutMs: 4000 }).catch(() => undefined);
+      try {
+        await this.memory.drainIngestQueue({ timeoutMs: 4000 });
+      } catch (error) {
+        console.warn("[ClankerBot] Failed to drain memory ingest queue during shutdown:", error);
+      }
     }
     if (this.browserManager?.closeAll) {
-      await this.browserManager.closeAll().catch(() => undefined);
+      try {
+        await this.browserManager.closeAll();
+      } catch (error) {
+        console.warn("[ClankerBot] Failed to close browser sessions during shutdown:", error);
+      }
     }
     await this.client.destroy();
   }
@@ -1393,7 +1418,11 @@ export class ClankerBot {
       });
       const cancelled = this.activeBrowserTasks.abort(scopeKey, "User requested cancellation via text");
       if (cancelled) {
-        await message.reply("Cancelled the active browser session.").catch(() => undefined);
+        try {
+          await message.reply("Cancelled the active browser session.");
+        } catch (replyError) {
+          console.warn("[textCommands] Failed to send browser cancellation reply:", replyError);
+        }
         return;
       }
     }

@@ -1,5 +1,5 @@
 import type OpenAI from "openai";
-import { runCodexSessionTurn } from "../llmCodex.ts";
+import { runCodexSessionTurn } from "../llm/llmCodex.ts";
 import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
 import { generateSessionId } from "./subAgentSession.ts";
 

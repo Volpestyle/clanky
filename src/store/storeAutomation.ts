@@ -1,7 +1,7 @@
 // Extracted Store Methods
 import { clamp, nowIso } from "../utils.ts";
 import { safeJsonParse } from "../normalization/valueParsers.ts";
-import { normalizeAutomationTitle, normalizeAutomationInstruction, buildAutomationMatchText } from "../automation.ts";
+import { normalizeAutomationTitle, normalizeAutomationInstruction, buildAutomationMatchText } from "../bot/automation.ts";
 import {
   mapAutomationRow,
   normalizeAutomationStatusFilter,

@@ -1,9 +1,18 @@
-import { getLlmModelCatalog } from "../pricing.ts";
+import type { Express } from "express";
+import type { DashboardAppConfig, DashboardBot } from "../dashboard.ts";
+import type { Store } from "../store/store.ts";
+import { getLlmModelCatalog } from "../llm/pricing.ts";
 import { getReplyGenerationSettings } from "../settings/agentStack.ts";
 
-export function attachSettingsRoutes(app: any, deps: any) {
+export interface SettingsRouteDeps {
+  store: Store;
+  bot: DashboardBot;
+  appConfig: DashboardAppConfig;
+}
+
+export function attachSettingsRoutes(app: Express, deps: SettingsRouteDeps) {
   const { store, bot, appConfig } = deps;
-  
+
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true });
   });

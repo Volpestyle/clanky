@@ -2,7 +2,7 @@ import {
   MAX_MENTION_CANDIDATES,
   collectMemberLookupKeys,
   extractMentionCandidates
-} from "../botHelpers.ts";
+} from "./botHelpers.ts";
 import { normalizeMentionLookupKey } from "./mentionLookup.ts";
 
 const MENTION_GUILD_HISTORY_LOOKBACK = 500;

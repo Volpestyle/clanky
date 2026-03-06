@@ -1,4 +1,4 @@
-import { resolveFollowingNextRunAt } from "../automation.ts";
+import { resolveFollowingNextRunAt } from "./automation.ts";
 import {
   composeReplyImagePrompt,
   composeReplyVideoPrompt,
@@ -8,9 +8,9 @@ import {
   REPLY_OUTPUT_JSON_SCHEMA,
   resolveMaxMediaPromptLen,
   splitDiscordMessage
-} from "../botHelpers.ts";
-import { buildAutomationPrompt, buildSystemPrompt } from "../prompts.ts";
-import { getMediaPromptCraftGuidance } from "../promptCore.ts";
+} from "./botHelpers.ts";
+import { buildAutomationPrompt, buildSystemPrompt } from "../prompts/index.ts";
+import { getMediaPromptCraftGuidance } from "../prompts/promptCore.ts";
 import { buildReplyToolSet, executeReplyTool } from "../tools/replyTools.ts";
 import type { ReplyToolContext, ReplyToolRuntime } from "../tools/replyTools.ts";
 import { sanitizeBotText, sleep } from "../utils.ts";

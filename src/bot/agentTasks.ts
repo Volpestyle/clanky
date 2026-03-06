@@ -13,7 +13,7 @@ import {
   runBrowserBrowseTask
 } from "../tools/browserTaskRuntime.ts";
 import { clamp } from "../utils.ts";
-import { MAX_BROWSER_BROWSE_QUERY_LEN, normalizeDirectiveText } from "../botHelpers.ts";
+import { MAX_BROWSER_BROWSE_QUERY_LEN, normalizeDirectiveText } from "./botHelpers.ts";
 import { getResolvedBrowserTaskConfig, isDevTaskEnabled } from "../settings/agentStack.ts";
 import type { BrowserBrowseContextState } from "./budgetTracking.ts";
 import type { AgentContext } from "./botContext.ts";

@@ -1,12 +1,40 @@
 import {
   formatAutomationSchedule,
   resolveInitialNextRunAt
-} from "../automation.ts";
-import { normalizeSkipSentinel } from "../botHelpers.ts";
+} from "./automation.ts";
+import { normalizeSkipSentinel } from "./botHelpers.ts";
 import { sanitizeBotText } from "../utils.ts";
 
 const MAX_AUTOMATIONS_PER_GUILD = 90;
 const MAX_AUTOMATION_LIST_ROWS = 10;
+
+function queueAutomationCycle(runtime, {
+  guildId = null,
+  channelId = null,
+  userId = null,
+  trigger,
+  automationId = null
+}: {
+  guildId?: string | null;
+  channelId?: string | null;
+  userId?: string | null;
+  trigger: string;
+  automationId?: number | null;
+}) {
+  runtime.maybeRunAutomationCycle().catch((error) => {
+    runtime.store.logAction({
+      kind: "bot_error",
+      guildId,
+      channelId,
+      userId,
+      content: `automation_cycle_trigger_${trigger}: ${String(error?.message || error)}`.slice(0, 2000),
+      metadata: {
+        trigger,
+        automationId
+      }
+    });
+  });
+}
 
 export function composeAutomationControlReply({ modelText, detailLines = [] }) {
   const cleanedModel = sanitizeBotText(normalizeSkipSentinel(modelText || ""), 500);
@@ -185,7 +213,13 @@ export async function applyAutomationControlAction(runtime, { message, settings,
       }
     });
 
-    runtime.maybeRunAutomationCycle().catch(() => undefined);
+    queueAutomationCycle(runtime, {
+      guildId,
+      channelId: created.channel_id,
+      userId: message.author?.id || null,
+      trigger: "create",
+      automationId: created.id
+    });
 
     return {
       handled: true,
@@ -288,7 +322,13 @@ export async function applyAutomationControlAction(runtime, { message, settings,
     });
 
     if (operation === "resume") {
-      runtime.maybeRunAutomationCycle().catch(() => undefined);
+      queueAutomationCycle(runtime, {
+        guildId,
+        channelId: message.channelId,
+        userId: message.author?.id || null,
+        trigger: "resume",
+        automationId: updatedRows[0]?.id || null
+      });
     }
 
     return {

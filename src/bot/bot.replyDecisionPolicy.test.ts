@@ -6,16 +6,16 @@ import { test } from "bun:test";
 import {
   getMemorySettings,
   getResolvedOrchestratorBinding
-} from "./settings/agentStack.ts";
-import { ClankerBot } from "./bot.ts";
+} from "../settings/agentStack.ts";
+import { ClankerBot } from "../bot.ts";
 import {
   getVoiceScreenShareCapability,
   offerVoiceScreenShareLink
-} from "./bot/screenShare.ts";
-import { getReplyAddressSignal as getReplyAddressSignalForReplyAdmission } from "./bot/replyAdmission.ts";
-import { isReplyChannel as isReplyChannelForPermissions } from "./bot/permissions.ts";
-import { Store } from "./store.ts";
-import { createTestSettingsPatch } from "./testSettings.ts";
+} from "./screenShare.ts";
+import { getReplyAddressSignal as getReplyAddressSignalForReplyAdmission } from "./replyAdmission.ts";
+import { isReplyChannel as isReplyChannelForPermissions } from "./permissions.ts";
+import { Store } from "../store/store.ts";
+import { createTestSettingsPatch } from "../testSettings.ts";
 
 async function withTempStore(run) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-bot-reply-policy-test-"));

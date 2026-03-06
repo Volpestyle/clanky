@@ -1,6 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type OpenAI from "openai";
-import { buildAnthropicImageParts, safeJsonParse } from "../llmClaudeCode.ts";
+import { buildAnthropicImageParts, safeJsonParse } from "./llmClaudeCode.ts";
 import {
   extractOpenAiResponseText,
   extractOpenAiResponseUsage,

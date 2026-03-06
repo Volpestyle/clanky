@@ -1,4 +1,4 @@
-import { clamp } from "./utils.ts";
+import { clamp } from "../utils.ts";
 
 const AUTOMATION_SCHEDULE_KINDS = new Set(["daily", "interval", "once"]);
 

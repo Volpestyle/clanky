@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { clampInt, normalizeInlineText, parseMemoryExtractionJson } from "../llm/llmHelpers.ts";
-import { estimateUsdCost } from "../pricing.ts";
+import { estimateUsdCost } from "../llm/pricing.ts";
 import {
   getBotName,
   getMemorySettings,

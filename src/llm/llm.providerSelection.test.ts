@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { LLMService } from "./llm.ts";
+import { LLMService } from "../llm.ts";
 
 function createService(appConfig = {}, { logs = null } = {}) {
   return new LLMService({

@@ -3,8 +3,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import type { Response } from "express";
+import type { Store } from "./store/store.ts";
 import { normalizeDashboardHost } from "./config.ts";
-import { classifyApiAccessPath, isAllowedPublicApiPath, isPublicTunnelRequestHost } from "./publicIngressAccess.ts";
+import { classifyApiAccessPath, isAllowedPublicApiPath, isPublicTunnelRequestHost } from "./services/publicIngressAccess.ts";
 import { attachSettingsRoutes } from "./dashboard/routesSettings.ts";
 import { attachMetricsRoutes } from "./dashboard/routesMetrics.ts";
 import { attachVoiceRoutes } from "./dashboard/routesVoice.ts";
@@ -18,6 +19,119 @@ const PUBLIC_FRAME_REQUEST_MAX_PER_WINDOW = 1200;
 const PUBLIC_FRAME_DECLARED_BYTES_MAX = 6_000_000;
 const PUBLIC_SHARE_FRAME_PATH_RE = /^\/api\/voice\/share-session\/[a-z0-9_-]{16,}\/frame\/?$/i;
 
+export interface DashboardAppConfig {
+  dashboardPort: number;
+  dashboardHost: string;
+  dashboardToken: string;
+  publicApiToken: string;
+  elevenLabsApiKey?: string | null;
+}
+export interface DashboardSseClient {
+  res: Response;
+  blocked: boolean;
+}
+
+export interface DashboardBot {
+  applyRuntimeSettings(settings: unknown): Promise<unknown>;
+  getRuntimeState(): Record<string, unknown> & {
+    voice?: {
+      activeCount?: unknown;
+      sessions?: Array<Record<string, unknown>>;
+    };
+  };
+  getGuilds(): Array<{ id: string; name: string }>;
+  getGuildChannels(guildId: string): unknown;
+  requestVoiceJoinFromDashboard?(payload: {
+    guildId: string | null;
+    requesterUserId: string | null;
+    textChannelId: string | null;
+    source: string;
+  }): Promise<unknown>;
+  ingestVoiceStreamFrame(payload: {
+    guildId: string;
+    streamerUserId: string | null;
+    mimeType: string;
+    dataBase64: string;
+    source: string;
+  }): Promise<unknown>;
+}
+
+export interface DashboardMemory {
+  readMemoryMarkdown(): Promise<string>;
+  refreshMemoryMarkdown(): Promise<unknown>;
+  searchDurableFacts(payload: {
+    guildId: string;
+    queryText: string;
+    settings: unknown;
+    channelId?: string | null;
+    trace?: Record<string, unknown>;
+    limit?: number;
+  }): Promise<unknown[]>;
+  rerunDailyReflection?(payload: {
+    dateKey: string;
+    guildId: string;
+    settings?: unknown;
+  }): Promise<unknown>;
+  buildPromptMemorySlice(payload: {
+    guildId: string;
+    queryText: string;
+    settings: unknown;
+    userId?: string | null;
+    channelId?: string | null;
+    trace?: Record<string, unknown>;
+  }): Promise<{
+    userFacts?: unknown[];
+    relevantFacts?: unknown[];
+    relevantMessages?: unknown[];
+    [key: string]: unknown;
+  }>;
+}
+
+export interface DashboardPublicHttpsState {
+  enabled?: boolean;
+  publicUrl?: string;
+  [key: string]: unknown;
+}
+
+export interface DashboardPublicHttpsEntrypoint {
+  getState?(): DashboardPublicHttpsState | null;
+}
+
+export interface DashboardScreenShareSessionManager {
+  getRuntimeState?(): unknown;
+  renderSharePage(token: string): {
+    statusCode?: number | null;
+    html?: string | null;
+  };
+  createSession(payload: {
+    guildId: string;
+    channelId: string;
+    requesterUserId: string;
+    requesterDisplayName?: string;
+    targetUserId?: string | null;
+    source?: string;
+  }): Promise<Record<string, unknown>>;
+  ingestFrameByToken(payload: {
+    token: string;
+    mimeType: string;
+    dataBase64: string;
+    source?: string;
+  }): Promise<Record<string, unknown>>;
+  stopSessionByToken(payload: {
+    token: string;
+    reason: string;
+  }): Promise<unknown> | unknown;
+}
+
+export interface DashboardDeps {
+  appConfig: DashboardAppConfig;
+  store: Store;
+  bot: DashboardBot;
+  memory: DashboardMemory;
+  publicHttpsEntrypoint?: DashboardPublicHttpsEntrypoint | null;
+  screenShareSessionManager?: DashboardScreenShareSessionManager | null;
+}
+
 export function createDashboardServer({
   appConfig,
   store,
@@ -25,7 +139,7 @@ export function createDashboardServer({
   memory,
   publicHttpsEntrypoint = null,
   screenShareSessionManager = null
-}) {
+}: DashboardDeps) {
   const app = express();
   const publicFrameIngressRateLimit = new Map();
   const getStatsPayload = () => {
@@ -128,9 +242,9 @@ export function createDashboardServer({
   });
   // ---- ElevenLabs voice management ----
   // ---- Dashboard/Voice SSE live-stream ----
-  const voiceSseClients = new Set<{ res: Response; blocked: boolean }>();
-  const activitySseClients = new Set<{ res: Response; blocked: boolean }>();
-  const writeSseEvent = (client: { res: Response; blocked: boolean }, eventName: string, payload: unknown) => {
+  const voiceSseClients = new Set<DashboardSseClient>();
+  const activitySseClients = new Set<DashboardSseClient>();
+  const writeSseEvent = (client: DashboardSseClient, eventName: string, payload: unknown) => {
     if (!client || client.blocked) return;
     try {
       const wirePayload = `event: ${String(eventName || "message")}\ndata: ${JSON.stringify(payload)}\n\n`;
@@ -147,7 +261,7 @@ export function createDashboardServer({
     }
   };
   const broadcastSseEvent = (
-    clients: Set<{ res: Response; blocked: boolean }>,
+    clients: Set<DashboardSseClient>,
     eventName: string,
     payload: unknown
   ) => {
@@ -160,9 +274,21 @@ export function createDashboardServer({
       }
     }
   };
-    attachSettingsRoutes(app, { store, bot, memory, appConfig, publicHttpsEntrypoint, screenShareSessionManager, getStatsPayload, voiceSseClients, activitySseClients });
-    attachMetricsRoutes(app, { store, bot, memory, appConfig, publicHttpsEntrypoint, screenShareSessionManager, getStatsPayload, voiceSseClients, activitySseClients, writeSseEvent, broadcastSseEvent });
-    attachVoiceRoutes(app, { store, bot, memory, appConfig, publicHttpsEntrypoint, screenShareSessionManager, getStatsPayload, voiceSseClients, activitySseClients });
+  attachSettingsRoutes(app, { store, bot, appConfig });
+  attachMetricsRoutes(app, {
+    store,
+    publicHttpsEntrypoint,
+    getStatsPayload,
+    activitySseClients,
+    writeSseEvent
+  });
+  attachVoiceRoutes(app, {
+    store,
+    bot,
+    memory,
+    screenShareSessionManager,
+    voiceSseClients
+  });
 
   const previousActionListener = typeof store.onActionLogged === "function" ? store.onActionLogged : null;
   store.onActionLogged = (action) => {

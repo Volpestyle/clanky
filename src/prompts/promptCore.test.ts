@@ -6,7 +6,7 @@ import {
   getPromptVoiceLookupBusySystemPrompt,
   interpolatePromptTemplate
 } from "./promptCore.ts";
-import { normalizeSettings } from "./store/settingsNormalization.ts";
+import { normalizeSettings } from "../store/settingsNormalization.ts";
 
 test("interpolatePromptTemplate resolves known variables and preserves unknown ones", () => {
   const rendered = interpolatePromptTemplate("hi {{ botName }} + {{guildName}}", {

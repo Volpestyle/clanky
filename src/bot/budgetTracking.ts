@@ -4,7 +4,7 @@ import {
   extractRecentVideoTargets,
   isWebSearchOptOutText,
   looksLikeVideoFollowupMessage
-} from "../botHelpers.ts";
+} from "./botHelpers.ts";
 import {
   getBrowserRuntimeConfig,
   getDiscoverySettings,

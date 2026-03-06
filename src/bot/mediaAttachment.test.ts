@@ -4,13 +4,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { appConfig } from "../config.ts";
-import { GifService } from "../gif.ts";
+import { GifService } from "../services/gif.ts";
 import { LLMService } from "../llm.ts";
-import { MemoryManager } from "../memory.ts";
-import { WebSearchService } from "../search.ts";
-import { Store } from "../store.ts";
+import { MemoryManager } from "../memory/memoryManager.ts";
+import { WebSearchService } from "../services/search.ts";
+import { Store } from "../store/store.ts";
 import { createTestSettings } from "../testSettings.ts";
-import { VideoContextService } from "../video.ts";
+import { VideoContextService } from "../video/videoContextService.ts";
 import { ImageCaptionCache } from "../vision/imageCaptionCache.ts";
 import type { MediaAttachmentContext } from "./botContext.ts";
 import {

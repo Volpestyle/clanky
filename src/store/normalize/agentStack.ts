@@ -1,4 +1,4 @@
-import { normalizeProviderOrder } from "../../search.ts";
+import { normalizeProviderOrder } from "../../services/search.ts";
 import {
   DEFAULT_SETTINGS,
   type Settings,

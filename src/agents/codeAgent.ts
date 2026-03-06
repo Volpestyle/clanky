@@ -7,9 +7,9 @@ import {
   parseClaudeCodeStreamOutput,
   normalizeClaudeCodeCliError,
   createClaudeCliStreamSession
-} from "../llmClaudeCode.ts";
-import { runCodexTask } from "../llmCodex.ts";
-import type { ClaudeCliStreamSessionLike } from "../llmClaudeCode.ts";
+} from "../llm/llmClaudeCode.ts";
+import { runCodexTask } from "../llm/llmCodex.ts";
+import type { ClaudeCliStreamSessionLike } from "../llm/llmClaudeCode.ts";
 import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
 import { generateSessionId } from "./subAgentSession.ts";
 import { CodexAgentSession, getActiveCodexAgentTaskCount } from "./codexAgent.ts";

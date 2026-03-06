@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
-import { assertPublicUrl } from "../urlSafety.ts";
+import { assertPublicUrl } from "./urlSafety.ts";
 import { createAbortError, isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
 
 const execFileAsync = promisify(execFile);
@@ -35,6 +35,10 @@ export class BrowserManager {
     this.staleTimer = setInterval(() => {
       this.cleanupStaleSessions();
     }, STALE_CHECK_INTERVAL_MS);
+  }
+
+  private logCleanupError(context: string, error: unknown): void {
+    console.warn(`[BrowserManager] ${context}:`, error);
   }
 
   private getOrCreateSession(sessionKey: string): BrowserSession {
@@ -239,7 +243,11 @@ export class BrowserManager {
       const png = await readFile(screenshotPath);
       return `data:image/png;base64,${png.toString("base64")}`;
     } finally {
-      await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+      try {
+        await rm(tempDir, { recursive: true, force: true });
+      } catch (error) {
+        this.logCleanupError(`failed to remove screenshot temp dir ${tempDir}`, error);
+      }
     }
   }
 
@@ -262,7 +270,7 @@ export class BrowserManager {
   async closeAll(): Promise<void> {
     const keys = [...this.sessions.keys()];
     for (const key of keys) {
-      await this.close(key).catch(() => undefined);
+      await this.close(key);
     }
     if (this.staleTimer) {
       clearInterval(this.staleTimer);
@@ -274,7 +282,7 @@ export class BrowserManager {
     const now = Date.now();
     for (const [key, session] of this.sessions) {
       if (now - session.lastActiveAt > this.sessionTimeoutMs) {
-        this.close(key).catch(() => undefined);
+        void this.close(key);
       }
     }
   }

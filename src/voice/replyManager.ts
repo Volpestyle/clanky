@@ -1,4 +1,4 @@
-import { estimateUsdCost } from "../pricing.ts";
+import { estimateUsdCost } from "../llm/pricing.ts";
 import {
   getReplyGenerationSettings,
   getVoiceRuntimeConfig

@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { ClankerBot } from "./bot.ts";
-import { pickTextThoughtLoopCandidate } from "./bot/textThoughtLoop.ts";
-import { Store } from "./store.ts";
-import { createTestSettingsPatch } from "./testSettings.ts";
+import { ClankerBot } from "../bot.ts";
+import { pickTextThoughtLoopCandidate } from "./textThoughtLoop.ts";
+import { Store } from "../store/store.ts";
+import { createTestSettingsPatch } from "../testSettings.ts";
 
 async function withTempStore(run) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-bot-loop-test-"));

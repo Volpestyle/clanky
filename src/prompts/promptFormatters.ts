@@ -9,8 +9,8 @@ import {
   getPromptSkipLine,
   getPromptStyle,
   getPromptTextGuidance
-} from "../promptCore.ts";
-import { extractUrlsFromText } from "../botHelpers.ts";
+} from "./promptCore.ts";
+import { extractUrlsFromText } from "../bot/botHelpers.ts";
 
 const IMAGE_URL_RE = /\.(?:jpe?g|png|gif|webp|bmp|heic)(?:$|[?#])/i;
 

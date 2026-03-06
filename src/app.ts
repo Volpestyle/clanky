@@ -15,17 +15,17 @@ import { fileURLToPath } from "node:url";
 import { appConfig, ensureRuntimeEnv } from "./config.ts";
 import { createDashboardServer } from "./dashboard.ts";
 import { ClankerBot } from "./bot.ts";
-import { DiscoveryService } from "./discovery.ts";
-import { GifService } from "./gif.ts";
+import { DiscoveryService } from "./services/discovery.ts";
+import { GifService } from "./services/gif.ts";
 import { LLMService } from "./llm.ts";
-import { MemoryManager } from "./memory.ts";
-import { WebSearchService } from "./search.ts";
-import { Store } from "./store.ts";
-import { VideoContextService } from "./video.ts";
+import { MemoryManager } from "./memory/memoryManager.ts";
+import { WebSearchService } from "./services/search.ts";
+import { Store } from "./store/store.ts";
+import { VideoContextService } from "./video/videoContextService.ts";
 import { BrowserManager } from "./services/BrowserManager.ts";
-import { PublicHttpsEntrypoint } from "./publicHttpsEntrypoint.ts";
-import { ScreenShareSessionManager } from "./screenShareSessionManager.ts";
-import { RuntimeActionLogger } from "./runtimeActionLogger.ts";
+import { PublicHttpsEntrypoint } from "./services/publicHttpsEntrypoint.ts";
+import { ScreenShareSessionManager } from "./services/screenShareSessionManager.ts";
+import { RuntimeActionLogger } from "./services/runtimeActionLogger.ts";
 
 export async function main() {
   ensureRuntimeEnv();
