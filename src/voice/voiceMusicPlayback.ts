@@ -161,6 +161,19 @@ export interface MusicPlaybackHost {
     settings?: MusicPlaybackSettings;
     index: number;
   }) => Promise<unknown>;
+  requestStopMusic: (args: {
+    message?: unknown;
+    guildId?: string | null;
+    channel?: unknown;
+    channelId?: string | null;
+    requestedByUserId?: string | null;
+    settings?: MusicPlaybackSettings | null;
+    reason?: string;
+    source?: string;
+    requestText?: string;
+    clearQueue?: boolean;
+    mustNotify?: boolean;
+  }) => Promise<unknown>;
 }
 
 function logMusicAction(
