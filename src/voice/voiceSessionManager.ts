@@ -94,6 +94,7 @@ import {
   beginAsrUtterance,
   appendAudioToAsr,
   commitAsrUtterance,
+  discardAsrUtterance,
   scheduleAsrIdleClose,
   closeAllPerUserAsrSessions,
   closeSharedAsrSession,
@@ -141,6 +142,7 @@ import {
   resolveSystemSpeechOpportunityType,
   resolveSystemSpeechReplyAccountingOnLocalPlayback,
   resolveSystemSpeechReplyAccountingOnRequest,
+  shouldAllowSystemSpeechSkipAfterFire,
   shouldCancelSystemSpeechBeforeAudioOnPromotedUserSpeech,
   shouldSupersedeSystemSpeechBeforePlayback
 } from "./systemSpeechOpportunity.ts";
@@ -249,6 +251,9 @@ import {
   VOICE_TURN_PROMOTION_ACTIVE_RATIO_MIN,
   VOICE_TURN_PROMOTION_MIN_CLIP_MS,
   VOICE_TURN_PROMOTION_PEAK_MIN,
+  VOICE_TURN_PROMOTION_STRONG_LOCAL_ACTIVE_RATIO_MIN,
+  VOICE_TURN_PROMOTION_STRONG_LOCAL_PEAK_MIN,
+  VOICE_TURN_PROMOTION_STRONG_LOCAL_RMS_MIN,
   VOICE_SILENCE_GATE_ACTIVE_RATIO_MAX,
   VOICE_SILENCE_GATE_ACTIVE_SAMPLE_MIN_ABS,
   VOICE_SILENCE_GATE_MIN_CLIP_MS,
@@ -3068,7 +3073,7 @@ export class VoiceSessionManager {
       const joinGreetingBrainEventText = [
         "Join greeting opportunity.",
         `Trigger: ${joinGreetingTrigger || "join_greeting"}.`,
-        "If it fits naturally, greet briefly. If not, return [SKIP]."
+        "Say one brief natural spoken greeting line now."
       ].join(" ");
       void this.runRealtimeBrainReply({
         session,
@@ -3083,7 +3088,8 @@ export class VoiceSessionManager {
           userId: null,
           directAddressed: false
         }),
-        source: SYSTEM_SPEECH_SOURCE.JOIN_GREETING
+        source: SYSTEM_SPEECH_SOURCE.JOIN_GREETING,
+        forceSpokenOutput: true
       }).catch((error) => {
         this.store.logAction({
           kind: "voice_error",
@@ -3708,8 +3714,24 @@ export class VoiceSessionManager {
     return Math.max(0, Number(capture?.promotedAt || 0)) > 0;
   }
 
-  isCaptureEligibleForTurnPromotion({ session, capture }) {
+  hasCaptureServerVadSpeech({ session, capture }) {
     if (!session || !capture || typeof capture !== "object") return false;
+    const normalizedUserId = String(capture.userId || "").trim();
+    const utteranceId = Math.max(0, Number(capture.asrUtteranceId || 0));
+    if (!normalizedUserId || !utteranceId) return false;
+    const asrState = this.getOrCreateOpenAiAsrSessionState({
+      session,
+      userId: normalizedUserId
+    });
+    if (!asrState || typeof asrState !== "object") return false;
+    return (
+      Math.max(0, Number(asrState.speechDetectedUtteranceId || 0)) === utteranceId &&
+      Math.max(0, Number(asrState.speechDetectedAt || 0)) > 0
+    );
+  }
+
+  resolveCaptureTurnPromotionReason({ session, capture }) {
+    if (!session || !capture || typeof capture !== "object") return null;
     const sampleRateHz = isRealtimeMode(session.mode)
       ? Number(session.realtimeInputSampleRateHz) || 24000
       : 24000;
@@ -3717,11 +3739,33 @@ export class VoiceSessionManager {
       2,
       Math.ceil((sampleRateHz * 2 * VOICE_TURN_PROMOTION_MIN_CLIP_MS) / 1000)
     );
-    if (Math.max(0, Number(capture.bytesSent || 0)) < minPromotionBytes) return false;
+    if (Math.max(0, Number(capture.bytesSent || 0)) < minPromotionBytes) return null;
+
     const signal = this.getCaptureSignalMetrics(capture);
-    if (signal.sampleCount <= 0) return false;
-    return signal.activeSampleRatio >= VOICE_TURN_PROMOTION_ACTIVE_RATIO_MIN &&
-      signal.peak >= VOICE_TURN_PROMOTION_PEAK_MIN;
+    if (signal.sampleCount <= 0) return null;
+
+    const serverVadConfirmed = this.hasCaptureServerVadSpeech({ session, capture });
+    if (
+      serverVadConfirmed &&
+      signal.activeSampleRatio >= VOICE_TURN_PROMOTION_ACTIVE_RATIO_MIN &&
+      signal.peak >= VOICE_TURN_PROMOTION_PEAK_MIN
+    ) {
+      return "server_vad_confirmed";
+    }
+
+    if (
+      signal.activeSampleRatio >= VOICE_TURN_PROMOTION_STRONG_LOCAL_ACTIVE_RATIO_MIN &&
+      signal.peak >= VOICE_TURN_PROMOTION_STRONG_LOCAL_PEAK_MIN &&
+      signal.rms >= VOICE_TURN_PROMOTION_STRONG_LOCAL_RMS_MIN
+    ) {
+      return "strong_local_audio";
+    }
+
+    return null;
+  }
+
+  isCaptureEligibleForTurnPromotion({ session, capture }) {
+    return this.resolveCaptureTurnPromotionReason({ session, capture }) !== null;
   }
 
   isCaptureEligibleForActivityTouch({ session, capture }) {
@@ -6470,6 +6514,11 @@ export class VoiceSessionManager {
     return commitAsrUtterance("per_user", this.buildAsrBridgeDeps(session), settings, userId, captureReason);
   }
 
+  discardOpenAiAsrUtterance({ session, userId }) {
+    if (!session || session.ending) return false;
+    return discardAsrUtterance("per_user", session, userId);
+  }
+
   scheduleOpenAiAsrSessionIdleClose({ session, userId }) {
     scheduleAsrIdleClose("per_user", session, this.buildAsrBridgeDeps(session), userId);
   }
@@ -6498,6 +6547,11 @@ export class VoiceSessionManager {
     if (!session || session.ending) return null;
     if (!this.shouldUseSharedTranscription({ session, settings })) return null;
     return commitAsrUtterance("shared", this.buildAsrBridgeDeps(session), settings, userId, captureReason);
+  }
+
+  discardOpenAiSharedAsrUtterance({ session, userId }) {
+    if (!session || session.ending) return false;
+    return discardAsrUtterance("shared", session, userId);
   }
 
   scheduleOpenAiSharedAsrSessionIdleClose(session) {
@@ -6678,6 +6732,7 @@ export class VoiceSessionManager {
       startedAt: Date.now(),
       promotedAt: 0,
       promotionReason: null,
+      asrUtteranceId: 0,
       bytesSent: 0,
       signalSampleCount: 0,
       signalActiveSampleCount: 0,
@@ -6695,6 +6750,16 @@ export class VoiceSessionManager {
     };
 
     session.userCaptures.set(userId, captureState);
+
+    if (useOpenAiPerUserAsr) {
+      this.beginOpenAiAsrUtterance({
+        session,
+        settings,
+        userId
+      });
+      const asrState = this.getOrCreateOpenAiAsrSessionState({ session, userId });
+      captureState.asrUtteranceId = Math.max(0, Number(asrState?.utterance?.id || 0));
+    }
 
     const cleanupCapture = () => {
       const current = session.userCaptures.get(userId);
@@ -6740,15 +6805,6 @@ export class VoiceSessionManager {
 
     const appendBufferedCaptureToAsr = () => {
       if (useOpenAiPerUserAsr) {
-        for (const chunk of captureState.pcmChunks) {
-          if (!Buffer.isBuffer(chunk) || !chunk.length) continue;
-          this.appendAudioToOpenAiAsr({
-            session,
-            settings,
-            userId,
-            pcmChunk: chunk
-          });
-        }
         return;
       }
       if (!useOpenAiSharedAsr) return;
@@ -6769,12 +6825,16 @@ export class VoiceSessionManager {
       }
     };
 
-    const promoteCapture = (reason = "assertive_audio", now = Date.now()) => {
+    const promoteCapture = (now = Date.now()) => {
       if (this.hasCaptureBeenPromoted(captureState)) return true;
-      if (!this.isCaptureEligibleForTurnPromotion({ session, capture: captureState })) return false;
+      const promotionReason = this.resolveCaptureTurnPromotionReason({
+        session,
+        capture: captureState
+      });
+      if (!promotionReason) return false;
       const signal = this.getCaptureSignalMetrics(captureState);
       captureState.promotedAt = now;
-      captureState.promotionReason = String(reason || "assertive_audio");
+      captureState.promotionReason = String(promotionReason);
       this.cancelPendingSystemSpeechForUserSpeech({
         session,
         userId,
@@ -6782,13 +6842,7 @@ export class VoiceSessionManager {
         source: "capture_promoted",
         now
       });
-      if (useOpenAiPerUserAsr) {
-        this.beginOpenAiAsrUtterance({
-          session,
-          settings,
-          userId
-        });
-      } else if (useOpenAiSharedAsr) {
+      if (useOpenAiSharedAsr) {
         this.beginOpenAiSharedAsrUtterance({
           session,
           settings,
@@ -6810,6 +6864,10 @@ export class VoiceSessionManager {
           promotionReason: captureState.promotionReason,
           promotionDelayMs: Math.max(0, now - Number(captureState.startedAt || now)),
           promotionBytes: Math.max(0, Number(captureState.bytesSent || 0)),
+          promotionServerVadConfirmed: this.hasCaptureServerVadSpeech({
+            session,
+            capture: captureState
+          }),
           promotionPeak: signal.peak,
           promotionRms: signal.rms,
           promotionActiveSampleRatio: signal.activeSampleRatio
@@ -6871,30 +6929,29 @@ export class VoiceSessionManager {
         captureState.signalSumSquares = sumSquares;
       }
       captureState.pcmChunks.push(normalizedPcm);
+      if (useOpenAiPerUserAsr) {
+        this.appendAudioToOpenAiAsr({
+          session,
+          settings,
+          userId,
+          pcmChunk: normalizedPcm
+        });
+      }
       const wasPromoted = this.hasCaptureBeenPromoted(captureState);
       if (!wasPromoted) {
-        promoteCapture("assertive_audio", now);
+        promoteCapture(now);
       }
       const isPromoted = this.hasCaptureBeenPromoted(captureState);
-      if (isPromoted && wasPromoted) {
-        if (useOpenAiPerUserAsr) {
-          this.appendAudioToOpenAiAsr({
-            session,
-            settings,
-            userId,
-            pcmChunk: normalizedPcm
-          });
-        } else if (useOpenAiSharedAsr) {
-          const appendedToSharedAsr = this.appendAudioToOpenAiSharedAsr({
-            session,
-            settings,
-            userId,
-            pcmChunk: normalizedPcm
-          });
-          if (appendedToSharedAsr) {
-            captureState.sharedAsrBytesSent =
-              Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) + normalizedPcm.length;
-          }
+      if (isPromoted && wasPromoted && useOpenAiSharedAsr) {
+        const appendedToSharedAsr = this.appendAudioToOpenAiSharedAsr({
+          session,
+          settings,
+          userId,
+          pcmChunk: normalizedPcm
+        });
+        if (appendedToSharedAsr) {
+          captureState.sharedAsrBytesSent =
+            Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) + normalizedPcm.length;
         }
       }
       if (captureState.speakingEndFinalizeTimer) {
@@ -6970,6 +7027,10 @@ export class VoiceSessionManager {
         cleanupCapture();
         maybeTriggerDeferredActions();
         if (useOpenAiPerUserAsr) {
+          this.discardOpenAiAsrUtterance({
+            session,
+            userId
+          });
           this.scheduleOpenAiAsrSessionIdleClose({
             session,
             userId
@@ -7014,6 +7075,10 @@ export class VoiceSessionManager {
         cleanupCapture();
         maybeTriggerDeferredActions();
         if (useOpenAiPerUserAsr) {
+          this.discardOpenAiAsrUtterance({
+            session,
+            userId
+          });
           this.scheduleOpenAiAsrSessionIdleClose({
             session,
             userId
@@ -7065,6 +7130,10 @@ export class VoiceSessionManager {
         cleanupCapture();
         maybeTriggerDeferredActions();
         if (useOpenAiPerUserAsr) {
+          this.discardOpenAiAsrUtterance({
+            session,
+            userId
+          });
           this.scheduleOpenAiAsrSessionIdleClose({ session, userId });
         } else if (useOpenAiSharedAsr) {
           this.releaseOpenAiSharedAsrActiveUser(session, userId);
@@ -11034,7 +11103,9 @@ export class VoiceSessionManager {
     directAddressConfidence = Number.NaN,
     conversationContext = null,
     source = "realtime",
-    latencyContext = null
+    latencyContext = null,
+    forceSpokenOutput = false,
+    spokenOutputRetryCount = 0
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
@@ -11252,6 +11323,40 @@ export class VoiceSessionManager {
       generatedVoiceAddressing,
       source: String(source || "realtime")
     });
+    const shouldRetryForcedSpeech =
+      Boolean(forceSpokenOutput) &&
+      !shouldAllowSystemSpeechSkipAfterFire(source) &&
+      Number(spokenOutputRetryCount || 0) < 1 &&
+      (!replyText || replyText === "[SKIP]");
+    if (shouldRetryForcedSpeech) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "realtime_reply_retrying_forced_system_speech",
+        metadata: {
+          sessionId: session.id,
+          mode: session.mode,
+          source: String(source || "realtime"),
+          retryCount: Number(spokenOutputRetryCount || 0) + 1
+        }
+      });
+      return await this.runRealtimeBrainReply({
+        session,
+        settings,
+        userId,
+        transcript: `${normalizedTranscript} Respond now with one short spoken line. Do not return [SKIP].`,
+        inputKind,
+        directAddressed,
+        directAddressConfidence,
+        conversationContext: resolvedConversationContext,
+        source,
+        latencyContext,
+        forceSpokenOutput: true,
+        spokenOutputRetryCount: Number(spokenOutputRetryCount || 0) + 1
+      });
+    }
     const playbackPlan = this.buildVoiceReplyPlaybackPlan({
       replyText,
       trailingSoundboardRefs: requestedSoundboardRefs
@@ -11272,6 +11377,7 @@ export class VoiceSessionManager {
           sessionId: session.id,
           mode: session.mode,
           source: String(source || "realtime"),
+          forceSpokenOutput: Boolean(forceSpokenOutput),
           usedWebSearchFollowup,
           usedOpenArticleFollowup,
           usedScreenShareOffer,

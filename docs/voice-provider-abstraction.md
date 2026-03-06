@@ -96,6 +96,16 @@ Discord Opus audio is decoded to PCM 48kHz, downsampled to 24kHz, and routed bas
 **Per-speaker ASR (bridge path)**
 
 Each active speaker gets a dedicated `OpenAiRealtimeTranscriptionClient` in `openAiAsrSessions: Map<userId, state>`.
+Per-speaker audio now streams into ASR while the capture is still provisional. Local capture ownership stays per-user, but promotion to a real turn is hybrid:
+
+- local provisional capture buffers PCM immediately
+- per-user OpenAI Realtime transcription receives `input_audio_buffer.append` immediately
+- OpenAI `server_vad` confirms speech boundaries for that utterance
+- the capture promotes when either:
+  - server VAD has fired for the current utterance and the local signal clears the normal promotion gate
+  - or the local signal is strong enough to use the explicit strong-local fallback
+
+This keeps Discord speaker attribution local while making speech promotion less dependent on fixed noise heuristics.
 
 | Setting | Key Path | Default |
 |---|---|---|
@@ -104,6 +114,7 @@ Each active speaker gets a dedicated `OpenAiRealtimeTranscriptionClient` in `ope
 | Per-user bridge | `voice.openaiRealtime.usePerUserAsrBridge` | `true` |
 | Language mode | `voice.asrLanguageMode` | `"auto"` |
 | Language hint | `voice.asrLanguageHint` | `"en"` |
+| Turn detection | OpenAI realtime `audio.input.turn_detection` | `server_vad` |
 
 Code: `ensureOpenAiAsrSessionConnected()`, `appendAudioToOpenAiAsr()`, `commitOpenAiAsrUtterance()` in `voiceSessionManager.ts`
 Client: `src/voice/openaiRealtimeTranscriptionClient.ts`
@@ -122,11 +133,24 @@ OpenAI realtime transcription returns per-token logprobs on `completed` events. 
 
 ---
 
-### Stage 2: Noise Rejection Gates
+### Stage 2: Turn Promotion and Noise Rejection Gates
 
-Sequential gates that drop low-quality captures before they consume brain resources. Each gate fires independently — a turn is dropped at the first gate that rejects it.
+Before a capture becomes a real voice turn, it must first promote out of provisional state. After promotion, sequential rejection gates can still drop the turn before it consumes brain resources. Each gate fires independently — a turn is dropped at the first gate that rejects it.
 
 Applied in `runRealtimeTurn()` in `voiceSessionManager.ts`:
+
+Promotion signals:
+
+- `voice_activity_started` now means a provisional capture promoted to a real turn
+- `promotionReason=server_vad_confirmed` means OpenAI VAD confirmed speech for the same utterance
+- `promotionReason=strong_local_audio` means the local fallback path promoted without waiting for VAD
+- `voice_turn_dropped_provisional_capture` means the capture never promoted and was discarded as noise / near-silence
+
+The hybrid design is deliberate:
+
+- OpenAI VAD helps reject ambient TV / room noise better than fixed local thresholds alone
+- local fallback still exists so clearly strong speech can promote even if server VAD is delayed
+- shared ASR stays promotion-gated, while per-user ASR buffers provisional audio so VAD has enough context to help
 
 | Order | Gate | Drop Reason | Threshold / Constants | Applies To |
 |---|---|---|---|---|
@@ -255,11 +279,16 @@ When music playback starts, `haltSessionOutputForMusicPlayback()` clears pending
 
 Bot turn tracking via `botTurnOpen` / `activeResponseId`. When a human speaks during bot output, `interruptBotSpeechForBargeIn()` cancels the active response, clears queued audio, and stores a retry candidate for brief interruptions. See `docs/voice-interruption-policy.md`.
 
+System-initiated speech uses a separate opportunity lifecycle:
+
+- join greetings and thought-engine utterances can be cancelled before `bot_audio_started` if promoted user speech takes the floor first
+- once a join greeting actually fires, the brain path must produce one short spoken line rather than silently returning `[SKIP]`
+
 ---
 
 ## 5. Thought Engine
 
-The thought engine generates ambient thoughts during silence — a parallel pipeline that feeds into voice output.
+The thought engine generates ambient thoughts during silence — a parallel pipeline that feeds into voice output. It uses the same system-speech opportunity lifecycle as join greetings, but remains skippable after fire.
 
 ### Flow
 

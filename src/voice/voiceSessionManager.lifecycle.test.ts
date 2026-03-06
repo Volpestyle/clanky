@@ -754,7 +754,7 @@ test("bindSessionHandlers does not touch activity on speaking.start before speec
   assert.equal(touchCalls.length, 0);
 });
 
-test("startInboundCapture drops provisional noise before ASR or activity promotion", () => {
+test("startInboundCapture drops provisional noise before activity promotion while streaming provisional ASR audio", () => {
   const { manager, logs, touchCalls } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
   const beginCalls = [];
@@ -796,15 +796,17 @@ test("startInboundCapture drops provisional noise before ASR or activity promoti
   assert.ok(capture);
   capture.finalize("stream_end");
 
-  assert.equal(beginCalls.length, 0);
-  assert.equal(appendCalls.length, 0);
+  assert.equal(beginCalls.length, 1);
+  assert.equal(beginCalls[0]?.userId, "speaker-1");
+  assert.equal(appendCalls.length, 1);
+  assert.deepEqual(appendCalls[0]?.pcmChunk, noisePcm);
   assert.equal(touchCalls.length, 0);
   assert.equal(logs.some((entry) => entry?.content === "voice_activity_started"), false);
   assert.equal(logs.some((entry) => entry?.content === "voice_turn_dropped_provisional_capture"), true);
   assert.equal(session.userCaptures.has("speaker-1"), false);
 });
 
-test("startInboundCapture promotes assertive audio and replays buffered PCM into per-user ASR", () => {
+test("startInboundCapture promotes strong local speech while streaming per-user ASR audio", () => {
   const { manager, logs, touchCalls } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
   const beginCalls = [];
@@ -849,13 +851,65 @@ test("startInboundCapture promotes assertive audio and replays buffered PCM into
   assert.equal(appendCalls.length, 1);
   assert.deepEqual(appendCalls[0]?.pcmChunk, speechPcm);
   assert.ok(Number(capture.promotedAt || 0) > 0);
+  assert.equal(capture.promotionReason, "strong_local_audio");
   assert.equal(touchCalls.length, 1);
   const activityLog = logs.find((entry) => entry?.content === "voice_activity_started");
   assert.ok(activityLog);
   assert.equal(activityLog?.userId, "speaker-1");
 });
 
-test("startInboundCapture keeps sparse spike noise provisional even with sharp peaks", () => {
+test("startInboundCapture promotes modest speech once server VAD confirms the provisional capture", () => {
+  const { manager, logs, touchCalls } = createManager();
+  manager.appConfig.openaiApiKey = "test-openai-key";
+  const beginCalls = [];
+  const appendCalls = [];
+  manager.beginOpenAiAsrUtterance = (payload) => {
+    beginCalls.push(payload);
+  };
+  manager.appendAudioToOpenAiAsr = (payload) => {
+    appendCalls.push(payload);
+  };
+  manager.hasCaptureServerVadSpeech = () => true;
+  manager.shouldUsePerUserTranscription = () => true;
+  const voxClient = new EventEmitter();
+  voxClient.subscribeUser = () => {};
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000,
+    cleanupHandlers: [],
+    settingsSnapshot: {
+      botName: "clanker conk",
+      voice: {
+        enabled: true,
+        asrEnabled: true,
+        brainProvider: "anthropic"
+      }
+    },
+    voxClient
+  });
+
+  manager.startInboundCapture({
+    session,
+    userId: "speaker-1",
+    settings: session.settingsSnapshot
+  });
+
+  const speechPcm = makeMonoPcm16(Math.ceil((24_000 * (VOICE_TURN_PROMOTION_MIN_CLIP_MS + 40)) / 1000), 700);
+  voxClient.emit("userAudio", "speaker-1", speechPcm);
+
+  const capture = session.userCaptures.get("speaker-1");
+  assert.ok(capture);
+  assert.equal(beginCalls.length, 1);
+  assert.equal(appendCalls.length, 1);
+  assert.ok(Number(capture.promotedAt || 0) > 0);
+  assert.equal(capture.promotionReason, "server_vad_confirmed");
+  assert.equal(touchCalls.length, 1);
+  const activityLog = logs.find((entry) => entry?.content === "voice_activity_started");
+  assert.ok(activityLog);
+  assert.equal(activityLog?.metadata?.promotionServerVadConfirmed, true);
+});
+
+test("startInboundCapture keeps sparse spike noise provisional even while streaming provisional ASR audio", () => {
   const { manager, logs, touchCalls } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
   const beginCalls = [];
@@ -902,14 +956,16 @@ test("startInboundCapture keeps sparse spike noise provisional even with sharp p
   assert.equal(Number(capture.promotedAt || 0), 0);
   capture.finalize("stream_end");
 
-  assert.equal(beginCalls.length, 0);
-  assert.equal(appendCalls.length, 0);
+  assert.equal(beginCalls.length, 1);
+  assert.equal(beginCalls[0]?.userId, "speaker-1");
+  assert.equal(appendCalls.length, 1);
+  assert.deepEqual(appendCalls[0]?.pcmChunk, noisyPcm);
   assert.equal(touchCalls.length, 0);
   assert.equal(logs.some((entry) => entry?.content === "voice_activity_started"), false);
   assert.equal(logs.some((entry) => entry?.content === "voice_turn_dropped_provisional_capture"), true);
 });
 
-test("bindSessionHandlers defers per-user OpenAI ASR start until speech is confirmed", () => {
+test("bindSessionHandlers does not duplicate provisional capture creation for repeated speaking.start", () => {
   const { manager } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
   const voxClient = new EventEmitter();
@@ -1709,7 +1765,9 @@ test("queueRealtimeTurnFromAsrBridge refires pending join greeting through brain
     String(brainReplies[0]?.transcript || "").includes("Join greeting opportunity."),
     true
   );
+  assert.equal(String(brainReplies[0]?.transcript || "").includes("[SKIP]"), false);
   assert.equal(brainReplies[0]?.inputKind, "event");
+  assert.equal(brainReplies[0]?.forceSpokenOutput, true);
   assert.equal(session.joinGreetingOpportunity, null);
   assert.equal(Number(session.lastAssistantReplyAt || 0), 0);
   assert.equal(logs.some((entry) => entry?.content === "voice_join_greeting_fired"), true);

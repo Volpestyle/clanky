@@ -86,12 +86,12 @@ OpenAI's Realtime API has built-in interruption handling — when VAD detects us
 - **WebRTC**: Server manages the output audio buffer and knows playback position — auto-truncates on interruption.
 - **WebSocket with direct audio**: Server VAD sees `input_audio_buffer` speech, cancels the in-progress response.
 
-Our bot uses neither path. Audio I/O goes through Discord, not OpenAI:
+Our bot does not use OpenAI's media channel for the actual bot reply. Audio I/O goes through Discord, not OpenAI:
 
-1. **Input**: User audio arrives as Opus packets from Discord's voice gateway → decoded/resampled locally → transcribed by ASR sessions → forwarded as **text** to the brain via `conversation.item.create`.
+1. **Input**: User audio arrives as Opus packets from Discord's voice gateway → decoded/resampled locally → streamed to separate ASR sessions for transcription/VAD → forwarded to the brain as **text** via `conversation.item.create`.
 2. **Output**: Brain generates audio → streamed to the Rust subprocess → encoded to Opus → sent to Discord voice.
 
-OpenAI's VAD never "hears" the user — it only receives text items. It has no way to detect that someone is talking over the bot's audio output, because that audio is playing in Discord, not through an OpenAI media channel.
+OpenAI VAD does hear the user on the transcription websocket, but that ASR session is not the output-owning realtime response session. It can help confirm speech promotion and turn boundaries, but it still does not know what portion of the bot's Discord playback has been heard. It therefore cannot safely own interruption/truncation of Discord-side bot speech by itself.
 
 So we implement barge-in manually via `shouldBargeIn()` → `interruptBotSpeechForBargeIn()`.
 

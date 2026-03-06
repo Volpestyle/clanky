@@ -22,7 +22,14 @@ test("OpenAiRealtimeTranscriptionClient sendSessionUpdate uses transcription ses
   assert.equal(outbound.session.type, "transcription");
   assert.equal(outbound.session.audio.input.format.type, "audio/pcm");
   assert.equal(outbound.session.audio.input.format.rate, 24000);
-  assert.equal(outbound.session.audio.input.turn_detection, null);
+  assert.deepEqual(outbound.session.audio.input.turn_detection, {
+    type: "server_vad",
+    threshold: 0.55,
+    prefix_padding_ms: 240,
+    silence_duration_ms: 450,
+    create_response: false,
+    interrupt_response: false
+  });
   assert.equal(outbound.session.audio.input.transcription.model, "gpt-4o-mini-transcribe");
   assert.equal(outbound.session.audio.input.transcription.language, "en");
   assert.equal(outbound.session.audio.input.transcription.prompt, "Prefer English.");
@@ -190,6 +197,47 @@ test("OpenAiRealtimeTranscriptionClient completed events without logprobs emit n
   assert.equal(received.length, 1);
   assert.equal(received[0]?.final, true);
   assert.equal(received[0]?.logprobs, null);
+});
+
+test("OpenAiRealtimeTranscriptionClient emits speech start and stop events", () => {
+  const client = new OpenAiRealtimeTranscriptionClient({ apiKey: "test-key" });
+  const speechEvents: Array<Record<string, unknown>> = [];
+  client.on("speech_started", (payload: Record<string, unknown>) => {
+    speechEvents.push({ phase: "started", ...payload });
+  });
+  client.on("speech_stopped", (payload: Record<string, unknown>) => {
+    speechEvents.push({ phase: "stopped", ...payload });
+  });
+
+  client.handleIncoming(
+    JSON.stringify({
+      type: "input_audio_buffer.speech_started",
+      audio_start_ms: 120
+    })
+  );
+  client.handleIncoming(
+    JSON.stringify({
+      type: "input_audio_buffer.speech_stopped",
+      audio_end_ms: 860,
+      item_id: "item_200"
+    })
+  );
+
+  assert.equal(speechEvents.length, 2);
+  assert.deepEqual(speechEvents[0], {
+    phase: "started",
+    eventType: "input_audio_buffer.speech_started",
+    audioStartMs: 120,
+    audioEndMs: null,
+    itemId: null
+  });
+  assert.deepEqual(speechEvents[1], {
+    phase: "stopped",
+    eventType: "input_audio_buffer.speech_stopped",
+    audioStartMs: null,
+    audioEndMs: 860,
+    itemId: "item_200"
+  });
 });
 
 test("OpenAiRealtimeTranscriptionClient buildRealtimeUrl uses transcription intent", () => {

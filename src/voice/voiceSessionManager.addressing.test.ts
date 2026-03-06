@@ -2955,6 +2955,74 @@ test("smoke: runRealtimeBrainReply passes join-window context into generation", 
   assert.equal(generationPayloads[0]?.conversationContext?.streamWatchBrainContext?.notes?.length, 1);
 });
 
+test("runRealtimeBrainReply retries fired join greetings instead of accepting an empty reply", async () => {
+  const runtimeLogs = [];
+  const generationPayloads = [];
+  const requestedRealtimeUtterances = [];
+  let generationCallCount = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
+  manager.prepareRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = (payload) => {
+    requestedRealtimeUtterances.push(payload);
+    return true;
+  };
+  manager.generateVoiceTurn = async (payload) => {
+    generationPayloads.push(payload);
+    generationCallCount += 1;
+    return generationCallCount === 1
+      ? { text: "[SKIP]" }
+      : { text: "yo, back again" };
+  };
+
+  const session = {
+    id: "session-join-greeting-force-speech",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 2_000,
+    realtimeClient: {},
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: null,
+    transcript: "Join greeting opportunity. Trigger: connection_ready. Say one brief natural spoken greeting line now.",
+    inputKind: "event",
+    directAddressed: false,
+    source: SYSTEM_SPEECH_SOURCE.JOIN_GREETING,
+    forceSpokenOutput: true
+  });
+
+  assert.equal(result, true);
+  assert.equal(generationPayloads.length, 2);
+  assert.equal(
+    String(generationPayloads[1]?.transcript || "").includes("Do not return [SKIP]."),
+    true
+  );
+  assert.equal(requestedRealtimeUtterances.length, 1);
+  assert.equal(requestedRealtimeUtterances[0]?.text, "yo, back again");
+  assert.equal(
+    runtimeLogs.some((entry) => entry?.content === "realtime_reply_retrying_forced_system_speech"),
+    true
+  );
+  assert.equal(
+    runtimeLogs.some((entry) => entry?.content === "realtime_reply_skipped"),
+    false
+  );
+});
+
 test("runRealtimeBrainReply supersedes stale reply when newer realtime input is queued", async () => {
   const runtimeLogs = [];
   let requestedRealtimeUtterances = 0;

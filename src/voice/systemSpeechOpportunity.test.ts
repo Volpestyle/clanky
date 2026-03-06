@@ -1,13 +1,16 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
+  SYSTEM_SPEECH_CLASS,
   SYSTEM_SPEECH_OPPORTUNITY,
   SYSTEM_SPEECH_SOURCE,
   isJoinGreetingOpportunitySource,
   isSystemSpeechOpportunitySource,
+  resolveSystemSpeechClass,
   resolveSystemSpeechOpportunityType,
   resolveSystemSpeechReplyAccountingOnLocalPlayback,
   resolveSystemSpeechReplyAccountingOnRequest,
+  shouldAllowSystemSpeechSkipAfterFire,
   shouldCancelSystemSpeechBeforeAudioOnPromotedUserSpeech,
   shouldSupersedeSystemSpeechBeforePlayback
 } from "./systemSpeechOpportunity.ts";
@@ -66,4 +69,18 @@ test("system speech reply accounting is explicit for request and local playback 
   );
   assert.equal(resolveSystemSpeechReplyAccountingOnRequest("stt_pipeline_reply"), null);
   assert.equal(resolveSystemSpeechReplyAccountingOnLocalPlayback("stt_pipeline_reply"), null);
+});
+
+test("system speech definitions expose speech class and skip policy", () => {
+  assert.equal(
+    resolveSystemSpeechClass(SYSTEM_SPEECH_SOURCE.JOIN_GREETING),
+    SYSTEM_SPEECH_CLASS.SYSTEM_OPTIONAL
+  );
+  assert.equal(
+    resolveSystemSpeechClass(SYSTEM_SPEECH_SOURCE.THOUGHT_TTS),
+    SYSTEM_SPEECH_CLASS.SYSTEM_OPTIONAL
+  );
+  assert.equal(shouldAllowSystemSpeechSkipAfterFire(SYSTEM_SPEECH_SOURCE.JOIN_GREETING), false);
+  assert.equal(shouldAllowSystemSpeechSkipAfterFire(SYSTEM_SPEECH_SOURCE.THOUGHT), true);
+  assert.equal(shouldAllowSystemSpeechSkipAfterFire("stt_pipeline_reply"), true);
 });

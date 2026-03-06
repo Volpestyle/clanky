@@ -25,6 +25,17 @@ const TRANSCRIPT_FINAL_TYPES = new Set([
   "conversation.item.input_audio_transcription.completed"
 ]);
 
+const INPUT_AUDIO_SPEECH_STARTED_TYPE = "input_audio_buffer.speech_started";
+const INPUT_AUDIO_SPEECH_STOPPED_TYPE = "input_audio_buffer.speech_stopped";
+const OPENAI_REALTIME_ASR_TURN_DETECTION = Object.freeze({
+  type: "server_vad",
+  threshold: 0.55,
+  prefix_padding_ms: 240,
+  silence_duration_ms: 450,
+  create_response: false,
+  interrupt_response: false
+});
+
 export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
   apiKey;
   baseUrl;
@@ -216,6 +227,23 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
     }
 
     const eventType = String(event.type || "");
+    if (
+      eventType === INPUT_AUDIO_SPEECH_STARTED_TYPE ||
+      eventType === INPUT_AUDIO_SPEECH_STOPPED_TYPE
+    ) {
+      this.emit(eventType === INPUT_AUDIO_SPEECH_STARTED_TYPE ? "speech_started" : "speech_stopped", {
+        eventType,
+        audioStartMs: Number.isFinite(Number(event.audio_start_ms))
+          ? Math.max(0, Math.round(Number(event.audio_start_ms)))
+          : null,
+        audioEndMs: Number.isFinite(Number(event.audio_end_ms))
+          ? Math.max(0, Math.round(Number(event.audio_end_ms)))
+          : null,
+        itemId: normalizeRealtimeItemId(event.item_id || event.item?.id) || null
+      });
+      return;
+    }
+
     if (TRANSCRIPT_DELTA_TYPES.has(eventType) || TRANSCRIPT_FINAL_TYPES.has(eventType)) {
       const itemId = normalizeRealtimeItemId(event.item_id || event.item?.id);
       const previousItemId =
@@ -307,9 +335,7 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
     const inputAudio = {
       format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat),
       noise_reduction: { type: "near_field" },
-      // Turn boundaries are controlled by Discord speaking lifecycle + explicit
-      // input_audio_buffer.commit, so keep realtime VAD disabled here.
-      turn_detection: null,
+      turn_detection: OPENAI_REALTIME_ASR_TURN_DETECTION,
       transcription
     };
     this.send({
@@ -407,6 +433,7 @@ function summarizeOutboundPayload(payload) {
       type,
       sessionType: session.type || null,
       inputFormat: audio?.input?.format || null,
+      inputTurnDetectionType: audio?.input?.turn_detection?.type || null,
       inputTranscriptionModel: audio?.input?.transcription?.model || null
     });
   }

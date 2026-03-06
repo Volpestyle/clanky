@@ -133,6 +133,11 @@ export interface AsrBridgeState {
   _flushAccumChunks: number;
   _flushAccumSkipped: number;
   _lastFlushLogAt: number;
+  speechDetectedAt: number;
+  speechStoppedAt: number;
+  speechActive: boolean;
+  speechDetectedUtteranceId: number;
+  speechStoppedUtteranceId: number;
 }
 
 export interface AsrCommitResult {
@@ -197,7 +202,12 @@ export function createAsrBridgeState(): AsrBridgeState {
     _flushAccumBytes: 0,
     _flushAccumChunks: 0,
     _flushAccumSkipped: 0,
-    _lastFlushLogAt: 0
+    _lastFlushLogAt: 0,
+    speechDetectedAt: 0,
+    speechStoppedAt: 0,
+    speechActive: false,
+    speechDetectedUtteranceId: 0,
+    speechStoppedUtteranceId: 0
   };
 }
 
@@ -680,6 +690,56 @@ function wireClientEvents(
     }
   });
 
+  client.on("speech_started", (payload: Record<string, unknown>) => {
+    if (session.ending) return;
+    const now = Date.now();
+    const utteranceId = Math.max(0, Number(asrState.utterance?.id || 0));
+    asrState.speechActive = true;
+    asrState.speechDetectedAt = now;
+    asrState.speechDetectedUtteranceId = utteranceId;
+    const speechUserId = mode === "shared" ? asrState.userId : (userId ? String(userId).trim() : null);
+    store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: speechUserId || null,
+      content: "openai_realtime_asr_speech_started",
+      metadata: {
+        sessionId: session.id,
+        utteranceId: utteranceId || null,
+        audioStartMs: Number.isFinite(Number(payload?.audioStartMs))
+          ? Math.max(0, Math.round(Number(payload.audioStartMs)))
+          : null,
+        itemId: normalizeInlineText(payload?.itemId, 180) || null
+      }
+    });
+  });
+
+  client.on("speech_stopped", (payload: Record<string, unknown>) => {
+    if (session.ending) return;
+    const now = Date.now();
+    const utteranceId = Math.max(0, Number(asrState.utterance?.id || 0));
+    asrState.speechActive = false;
+    asrState.speechStoppedAt = now;
+    asrState.speechStoppedUtteranceId = utteranceId;
+    const speechUserId = mode === "shared" ? asrState.userId : (userId ? String(userId).trim() : null);
+    store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: speechUserId || null,
+      content: "openai_realtime_asr_speech_stopped",
+      metadata: {
+        sessionId: session.id,
+        utteranceId: utteranceId || null,
+        audioEndMs: Number.isFinite(Number(payload?.audioEndMs))
+          ? Math.max(0, Math.round(Number(payload.audioEndMs)))
+          : null,
+        itemId: normalizeInlineText(payload?.itemId, 180) || null
+      }
+    });
+  });
+
   client.on("error_event", (payload: Record<string, unknown>) => {
     if (session.ending) return;
     const errorUserId = mode === "shared" ? asrState.userId : (userId ? String(userId).trim() : null);
@@ -938,6 +998,11 @@ export function beginAsrUtterance(
   asrState.utterance = createAsrUtteranceState(asrState.utterance?.id || 0);
   asrState.lastPartialText = "";
   asrState.lastPartialLogAt = 0;
+  asrState.speechActive = false;
+  asrState.speechDetectedAt = 0;
+  asrState.speechStoppedAt = 0;
+  asrState.speechDetectedUtteranceId = 0;
+  asrState.speechStoppedUtteranceId = 0;
 
   void ensureAsrSessionConnected(mode, deps, settings, userId);
   return true;
@@ -992,6 +1057,44 @@ export function appendAudioToAsr(
     if (!state) return;
     flushPendingAsrAudio(mode, session, deps, state, userId, utteranceId);
   });
+  return true;
+}
+
+export function discardAsrUtterance(
+  mode: AsrBridgeMode,
+  session: VoiceSession,
+  userId: string
+): boolean {
+  if (!session || session.ending) return false;
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) return false;
+  const asrState = getAsrState(mode, session, normalizedUserId);
+  if (!asrState || asrPhaseIsClosing(asrState.phase)) return false;
+
+  if (mode === "shared" && asrState.userId && asrState.userId !== normalizedUserId) {
+    return false;
+  }
+
+  try {
+    asrState.client?.clearInputAudioBuffer?.();
+  } catch {
+    // ignore best-effort buffer reset
+  }
+
+  asrState.pendingAudioChunks = [];
+  asrState.pendingAudioBytes = 0;
+  asrState.lastPartialText = "";
+  asrState.lastPartialLogAt = 0;
+  asrState.speechActive = false;
+  asrState.speechDetectedAt = 0;
+  asrState.speechStoppedAt = 0;
+  asrState.speechDetectedUtteranceId = 0;
+  asrState.speechStoppedUtteranceId = 0;
+  asrState.utterance = createAsrUtteranceState(asrState.utterance?.id || 0);
+
+  if (mode === "shared" && asrState.userId === normalizedUserId) {
+    asrState.userId = null;
+  }
   return true;
 }
 

@@ -60,6 +60,11 @@ export const OPENAI_ASR_TRANSCRIPT_WAIT_MAX_MS = 700;
 // Deadline for waiting on per-user/shared ASR bridge before falling back to
 // local turn processing so first-reply latency is not blocked by slow ASR.
 export const OPENAI_ASR_BRIDGE_MAX_WAIT_MS = 700;
+// Promotion fallback when server VAD has not confirmed speech yet. This should
+// only pass obviously voiced local speech, not quiet background chatter.
+export const VOICE_TURN_PROMOTION_STRONG_LOCAL_RMS_MIN = 0.004;
+export const VOICE_TURN_PROMOTION_STRONG_LOCAL_PEAK_MIN = 0.04;
+export const VOICE_TURN_PROMOTION_STRONG_LOCAL_ACTIVE_RATIO_MIN = 0.06;
 export const OPENAI_TOOL_CALL_EVENT_MAX = 180;
 export const OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS = 24_000;
 export const OPENAI_TOOL_RESPONSE_DEBOUNCE_MS = 140;

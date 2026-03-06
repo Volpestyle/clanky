@@ -13,12 +13,23 @@ export const SYSTEM_SPEECH_SOURCE = {
 } as const;
 
 export type SystemSpeechReplyAccounting = "none" | "requested" | "spoken";
+export const SYSTEM_SPEECH_CLASS = {
+  SYSTEM_OPTIONAL: "system_optional",
+  REPLY_NORMAL: "reply_normal",
+  OPERATIONAL_REQUIRED: "operational_required",
+  OPERATIONAL_CRITICAL: "operational_critical"
+} as const;
+
+export type SystemSpeechClass =
+  typeof SYSTEM_SPEECH_CLASS[keyof typeof SYSTEM_SPEECH_CLASS];
 
 type SystemSpeechOpportunityDefinition = {
   type: SystemSpeechOpportunityType;
   sourcePrefixes: readonly string[];
+  speechClass: SystemSpeechClass;
   cancelOnPromotedUserSpeechBeforePlayback: boolean;
   liveCaptureSupersedeBeforePlayback: boolean;
+  allowSkipAfterFire: boolean;
   replyAccountingOnRequest: SystemSpeechReplyAccounting;
   replyAccountingOnLocalPlayback: SystemSpeechReplyAccounting;
 };
@@ -27,16 +38,20 @@ const SYSTEM_SPEECH_OPPORTUNITY_DEFINITIONS: readonly SystemSpeechOpportunityDef
   {
     type: SYSTEM_SPEECH_OPPORTUNITY.JOIN_GREETING,
     sourcePrefixes: [SYSTEM_SPEECH_SOURCE.JOIN_GREETING],
+    speechClass: SYSTEM_SPEECH_CLASS.SYSTEM_OPTIONAL,
     cancelOnPromotedUserSpeechBeforePlayback: true,
     liveCaptureSupersedeBeforePlayback: true,
+    allowSkipAfterFire: false,
     replyAccountingOnRequest: "requested",
     replyAccountingOnLocalPlayback: "spoken"
   },
   {
     type: SYSTEM_SPEECH_OPPORTUNITY.THOUGHT,
     sourcePrefixes: [SYSTEM_SPEECH_SOURCE.THOUGHT, SYSTEM_SPEECH_SOURCE.THOUGHT_TTS],
+    speechClass: SYSTEM_SPEECH_CLASS.SYSTEM_OPTIONAL,
     cancelOnPromotedUserSpeechBeforePlayback: true,
     liveCaptureSupersedeBeforePlayback: true,
+    allowSkipAfterFire: true,
     replyAccountingOnRequest: "requested",
     replyAccountingOnLocalPlayback: "spoken"
   }
@@ -88,6 +103,20 @@ export function shouldSupersedeSystemSpeechBeforePlayback(
   source: string | null | undefined
 ): boolean {
   return Boolean(resolveSystemSpeechOpportunityDefinition(source)?.liveCaptureSupersedeBeforePlayback);
+}
+
+export function resolveSystemSpeechClass(
+  source: string | null | undefined
+): SystemSpeechClass | null {
+  return resolveSystemSpeechOpportunityDefinition(source)?.speechClass || null;
+}
+
+export function shouldAllowSystemSpeechSkipAfterFire(
+  source: string | null | undefined
+): boolean {
+  const definition = resolveSystemSpeechOpportunityDefinition(source);
+  if (!definition) return true;
+  return Boolean(definition.allowSkipAfterFire);
 }
 
 export function resolveSystemSpeechReplyAccountingOnRequest(

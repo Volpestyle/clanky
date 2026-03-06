@@ -114,3 +114,45 @@ Operator notes:
 
 - if `outputLockReason=bot_audio_buffered` persists for more than a couple seconds after `openai_realtime_response_done`, suspect stale `clankvox` playback telemetry rather than real remaining speech
 - if a deferred turn keeps rescheduling, inspect whether `voice_activity_started` is followed by `voice_turn_dropped_silence_gate`; silence-only captures should not be treated the same as real live speech
+
+## Voice input / VAD workflow
+
+When the bot appears to ignore speech or ambient audio keeps opening turns, inspect the provisional-capture path before looking at reply admission.
+
+Start with these events:
+
+- `voice_activity_started`
+- `voice_turn_dropped_provisional_capture`
+- `openai_realtime_asr_speech_started`
+- `openai_realtime_asr_speech_stopped`
+- `voice_realtime_transcription_empty`
+- `openai_realtime_asr_bridge_empty_dropped`
+
+Important interpretation rules:
+
+- `voice_activity_started` now means a provisional capture promoted to a real turn
+- `promotionReason=server_vad_confirmed` means OpenAI Realtime transcription VAD confirmed speech for that utterance
+- `promotionReason=strong_local_audio` means the local fallback promoted without waiting for VAD
+- `voice_turn_dropped_provisional_capture` means the capture never became a real turn and was discarded before normal reply admission
+
+Suggested query:
+
+```logql
+{job="clanker_runtime",kind="voice_runtime"} |= "voice_activity_started"
+```
+
+Inspect these metadata fields together:
+
+- `promotionReason`
+- `promotionServerVadConfirmed`
+- `promotionBytes`
+- `promotionPeak`
+- `promotionRms`
+- `promotionActiveSampleRatio`
+
+Ambient-noise triage:
+
+- repeated `voice_activity_started` followed by `voice_realtime_transcription_empty` or `openai_realtime_asr_bridge_empty_dropped` usually means local promotion is still too permissive for the room
+- repeated `voice_turn_dropped_provisional_capture` means the new provisional gate is working and the noise is being rejected before it becomes a turn
+- if `openai_realtime_asr_speech_started` never appears for a promoted turn and `promotionReason=strong_local_audio`, the fallback path promoted without server VAD confirmation
+- if a join greeting fires but no greeting is heard, check `realtime_reply_skipped` for `source=voice_join_greeting`; a fired join greeting now retries once, but a persistent `empty_reply_text` still means the brain path produced no spoken output
