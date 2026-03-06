@@ -2,6 +2,7 @@ import {
   emptyPromptMemorySlice,
   normalizePromptMemorySlice
 } from "../memory/promptMemorySlice.ts";
+import { getMemorySettings } from "../settings/agentStack.ts";
 import {
   CONVERSATION_HISTORY_PROMPT_LIMIT,
   CONVERSATION_HISTORY_PROMPT_MAX_AGE_HOURS,
@@ -43,11 +44,7 @@ function normalizeQueryText(value: unknown, maxChars = 420) {
 }
 
 function isMemoryEnabled(settings: Record<string, unknown>) {
-  const memory =
-    settings?.memory && typeof settings.memory === "object" && !Array.isArray(settings.memory)
-      ? settings.memory
-      : null;
-  return Boolean(memory && "enabled" in memory && memory.enabled);
+  return Boolean(getMemorySettings(settings).enabled);
 }
 
 async function resolvePromptMemorySlice({

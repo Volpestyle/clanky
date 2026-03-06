@@ -116,6 +116,79 @@ export class BrowserManager {
     return stdout;
   }
 
+  async press(sessionKey: string, key: string, timeoutMs = DEFAULT_STEP_TIMEOUT_MS, signal?: AbortSignal): Promise<string> {
+    this.touchSession(sessionKey);
+    const { stdout } = await this.runAgentBrowser(sessionKey, ["press", key], timeoutMs, signal);
+    return stdout;
+  }
+
+  async keyboardType(sessionKey: string, text: string, timeoutMs = DEFAULT_STEP_TIMEOUT_MS, signal?: AbortSignal): Promise<string> {
+    this.touchSession(sessionKey);
+    const { stdout } = await this.runAgentBrowser(sessionKey, ["keyboard", "type", text], timeoutMs, signal);
+    return stdout;
+  }
+
+  async mouseMove(sessionKey: string, x: number, y: number, timeoutMs = DEFAULT_STEP_TIMEOUT_MS, signal?: AbortSignal): Promise<string> {
+    this.touchSession(sessionKey);
+    const { stdout } = await this.runAgentBrowser(
+      sessionKey,
+      ["mouse", "move", String(Math.round(x)), String(Math.round(y))],
+      timeoutMs,
+      signal
+    );
+    return stdout;
+  }
+
+  async mouseClick(
+    sessionKey: string,
+    x: number,
+    y: number,
+    button: "left" | "middle" | "right" = "left",
+    timeoutMs = DEFAULT_STEP_TIMEOUT_MS,
+    signal?: AbortSignal
+  ): Promise<string> {
+    this.touchSession(sessionKey);
+    await this.mouseMove(sessionKey, x, y, timeoutMs, signal);
+    await this.runAgentBrowser(sessionKey, ["mouse", "down", button], timeoutMs, signal);
+    const { stdout } = await this.runAgentBrowser(sessionKey, ["mouse", "up", button], timeoutMs, signal);
+    return stdout;
+  }
+
+  async mouseDoubleClick(
+    sessionKey: string,
+    x: number,
+    y: number,
+    button: "left" | "middle" | "right" = "left",
+    timeoutMs = DEFAULT_STEP_TIMEOUT_MS,
+    signal?: AbortSignal
+  ): Promise<string> {
+    this.touchSession(sessionKey);
+    await this.mouseClick(sessionKey, x, y, button, timeoutMs, signal);
+    return await this.mouseClick(sessionKey, x, y, button, timeoutMs, signal);
+  }
+
+  async mouseWheel(
+    sessionKey: string,
+    deltaY: number,
+    deltaX = 0,
+    timeoutMs = DEFAULT_STEP_TIMEOUT_MS,
+    signal?: AbortSignal
+  ): Promise<string> {
+    this.touchSession(sessionKey);
+    const args = ["mouse", "wheel", String(Math.round(deltaY))];
+    if (deltaX) {
+      args.push(String(Math.round(deltaX)));
+    }
+    const { stdout } = await this.runAgentBrowser(sessionKey, args, timeoutMs, signal);
+    return stdout;
+  }
+
+  async wait(sessionKey: string, timeoutMs = DEFAULT_STEP_TIMEOUT_MS, signal?: AbortSignal): Promise<string> {
+    this.touchSession(sessionKey);
+    const { stdout } = await this.runAgentBrowser(sessionKey, ["wait", String(Math.max(1, Math.round(timeoutMs)))], timeoutMs, signal);
+    return stdout;
+  }
+
   async extract(sessionKey: string, ref?: string, timeoutMs = DEFAULT_STEP_TIMEOUT_MS, signal?: AbortSignal): Promise<string> {
     this.touchSession(sessionKey);
     if (ref) {
@@ -136,6 +209,12 @@ export class BrowserManager {
     } finally {
       await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
     }
+  }
+
+  async currentUrl(sessionKey: string, timeoutMs = DEFAULT_STEP_TIMEOUT_MS, signal?: AbortSignal): Promise<string> {
+    this.touchSession(sessionKey);
+    const { stdout } = await this.runAgentBrowser(sessionKey, ["get", "url"], timeoutMs, signal);
+    return stdout;
   }
 
   async close(sessionKey: string): Promise<void> {

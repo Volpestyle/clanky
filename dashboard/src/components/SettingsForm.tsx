@@ -17,6 +17,7 @@ import {
   settingsToFormPreserving
 } from "../settingsFormModel";
 import { useActiveSection } from "../hooks/useActiveSection";
+import { SettingsSection } from "./SettingsSection";
 import { CoreBehaviorSettingsSection } from "./settingsSections/CoreBehaviorSettingsSection";
 import { PromptGuidanceSettingsSection } from "./settingsSections/PromptGuidanceSettingsSection";
 import { LlmConfigurationSettingsSection } from "./settingsSections/LlmConfigurationSettingsSection";
@@ -31,25 +32,19 @@ import { StartupCatchupSettingsSection } from "./settingsSections/StartupCatchup
 import { DiscoverySettingsSection } from "./settingsSections/DiscoverySettingsSection";
 import { ChannelsPermissionsSettingsSection } from "./settingsSections/ChannelsPermissionsSettingsSection";
 import { SubAgentOrchestrationSettingsSection } from "./settingsSections/SubAgentOrchestrationSettingsSection";
+import { resolveAgentStack } from "../../../src/settings/agentStack.ts";
 
-const SECTIONS = [
-  { id: "sec-core", label: "Core Behavior" },
-  { id: "sec-prompts", label: "Prompts" },
-  { id: "sec-llm", label: "LLM Config" },
-  { id: "sec-search", label: "Web Search" },
-  { id: "sec-browser", label: "Browser" },
-  { id: "sec-code-agent", label: "Code Agent" },
-  { id: "sec-orchestration", label: "Orchestration" },
-  { id: "sec-vision", label: "Vision" },
-  { id: "sec-video", label: "Video Context" },
-  { id: "sec-voice", label: "Voice Mode" },
-  { id: "sec-rate", label: "Rate Limits" },
-  { id: "sec-startup", label: "Startup" },
-  { id: "sec-discovery", label: "Discovery" },
-  { id: "sec-channels", label: "Channels" },
-] as const;
+function formatCapabilityPolicy(policy) {
+  if (!policy || policy.mode !== "dedicated_model") {
+    return "inherit_orchestrator";
+  }
+  return `${policy.model?.provider || "unknown"}:${policy.model?.model || "default"}`;
+}
 
-const SECTION_IDS = SECTIONS.map((s) => s.id);
+function formatSessionPolicy(sessionPolicy) {
+  if (!sessionPolicy) return "transient";
+  return `${sessionPolicy.persistent ? "persistent" : "ephemeral"} (voice=${sessionPolicy.toolPolicy?.voice || "full"}, text=${sessionPolicy.toolPolicy?.text || "full"})`;
+}
 
 export default function SettingsForm({
   settings,
@@ -73,11 +68,40 @@ export default function SettingsForm({
     savedFormRef.current = JSON.stringify(next);
   }, [settings]);
 
-  const { activeId: activeSection, setClickedId } = useActiveSection(SECTION_IDS);
+  const sections = useMemo(() => {
+    const items = [
+      { id: "sec-core", label: "Identity" },
+      { id: "sec-prompts", label: "Prompting" },
+      { id: "sec-stack", label: "Stack Preset" },
+      { id: "sec-voice", label: "Voice" },
+      { id: "sec-rate", label: "Rate Limits" },
+      { id: "sec-startup", label: "Startup" },
+      { id: "sec-discovery", label: "Discovery" },
+      { id: "sec-vision", label: "Vision" },
+      { id: "sec-video", label: "Video Context" },
+      { id: "sec-channels", label: "Channels" }
+    ];
+    if (effectiveForm.stackAdvancedOverridesEnabled) {
+      items.splice(3, 0,
+        { id: "sec-llm", label: "Advanced Stack" },
+        { id: "sec-search", label: "Research Runtime" },
+        { id: "sec-browser", label: "Browser Runtime" },
+        { id: "sec-code-agent", label: "Dev Team" },
+        { id: "sec-orchestration", label: "Sessions" }
+      );
+    }
+    return items;
+  }, [effectiveForm.stackAdvancedOverridesEnabled]);
+
+  const sectionIds = useMemo(() => sections.map((section) => section.id), [sections]);
+
+  const { activeId: activeSection, setClickedId } = useActiveSection(sectionIds);
   const isDirty = useMemo(() => {
     if (!form || !savedFormRef.current) return false;
     return JSON.stringify(form) !== savedFormRef.current;
   }, [form]);
+
+  const resolvedStack = useMemo(() => resolveAgentStack(formToSettingsPatch(effectiveForm)), [effectiveForm]);
 
   function resolvePresetSelection(providerField, modelField) {
     return resolvePresetModelSelection({
@@ -162,7 +186,7 @@ export default function SettingsForm({
   const isOpenAiRealtimeMode = effectiveForm.voiceProvider === "openai";
   const isGeminiRealtimeMode = effectiveForm.voiceProvider === "gemini";
   const isElevenLabsRealtimeMode = effectiveForm.voiceProvider === "elevenlabs";
-  const showVoiceAdvanced = effectiveForm.voiceEnabled;
+  const showVoiceAdvanced = effectiveForm.voiceEnabled && effectiveForm.stackAdvancedOverridesEnabled;
   const showDiscoveryAdvanced = effectiveForm.discoveryEnabled;
   const showDiscoveryImageControls = effectiveForm.discoveryImageEnabled || effectiveForm.replyImageEnabled;
   const showDiscoveryVideoControls = effectiveForm.discoveryVideoEnabled || effectiveForm.replyVideoEnabled;
@@ -312,7 +336,7 @@ export default function SettingsForm({
       <h3 className="settings-title">Settings</h3>
       <div className="settings-layout">
         <nav className="settings-sidebar">
-          {SECTIONS.map((s) => (
+          {sections.map((s) => (
             <button
               key={s.id}
               type="button"
@@ -338,36 +362,116 @@ export default function SettingsForm({
             onResetPromptGuidance={resetPromptGuidanceFields}
           />
 
-          <LlmConfigurationSettingsSection
-            id="sec-llm"
-            form={form}
-            set={set}
-            setProvider={setProvider}
-            selectPresetModel={selectPresetModel}
-            providerModelOptions={providerModelOptions}
-            selectedPresetModel={selectedPresetModel}
-            setReplyFollowupProvider={setReplyFollowupProvider}
-            selectReplyFollowupPresetModel={selectReplyFollowupPresetModel}
-            replyFollowupModelOptions={replyFollowupModelOptions}
-            selectedReplyFollowupPresetModel={selectedReplyFollowupPresetModel}
-            setMemoryLlmProvider={setMemoryLlmProvider}
-            selectMemoryLlmPresetModel={selectMemoryLlmPresetModel}
-            memoryLlmModelOptions={memoryLlmModelOptions}
-            selectedMemoryLlmPresetModel={selectedMemoryLlmPresetModel}
-          />
+          <SettingsSection id="sec-stack" title="Stack Preset">
+            <label htmlFor="stack-preset">Preset</label>
+            <select id="stack-preset" value={form.stackPreset} onChange={set("stackPreset")}>
+              <option value="openai_native">OpenAI Native</option>
+              <option value="anthropic_brain_openai_tools">Anthropic Brain + OpenAI Tools</option>
+              <option value="claude_code_max">Claude Code Max</option>
+              <option value="multi_provider_legacy">Multi-Provider Legacy</option>
+              <option value="custom">Custom</option>
+            </select>
 
-          <WebSearchSettingsSection id="sec-search" form={form} set={set} />
-          <BrowserSettingsSection
-            id="sec-browser"
-            form={form}
-            set={set}
-            setBrowserLlmProvider={setBrowserLlmProvider}
-            selectBrowserLlmPresetModel={selectBrowserLlmPresetModel}
-            browserLlmModelOptions={browserLlmModelOptions}
-            selectedBrowserLlmPresetModel={selectedBrowserLlmPresetModel}
-          />
-          <CodeAgentSettingsSection id="sec-code-agent" form={form} set={set} />
-          <SubAgentOrchestrationSettingsSection id="sec-orchestration" form={form} set={set} />
+            <div className="toggles">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={form.stackAdvancedOverridesEnabled}
+                  onChange={set("stackAdvancedOverridesEnabled")}
+                />
+                Enable advanced stack overrides
+              </label>
+            </div>
+
+            <p>
+              Presets choose the harness, orchestrator, research runtime, browser runtime, voice runtime, and dev-team defaults.
+              Advanced overrides expose provider/model and runtime-specific tuning.
+            </p>
+
+            <div className="split">
+              <div>
+                <label>Harness</label>
+                <input value={resolvedStack.harness} readOnly />
+              </div>
+              <div>
+                <label>Orchestrator</label>
+                <input value={`${resolvedStack.orchestrator.provider}:${resolvedStack.orchestrator.model}`} readOnly />
+              </div>
+            </div>
+
+            <div className="split">
+              <div>
+                <label>Research Runtime</label>
+                <input value={resolvedStack.researchRuntime} readOnly />
+              </div>
+              <div>
+                <label>Browser Runtime</label>
+                <input value={resolvedStack.browserRuntime} readOnly />
+              </div>
+            </div>
+
+            <div className="split">
+              <div>
+                <label>Voice Runtime</label>
+                <input value={resolvedStack.voiceRuntime} readOnly />
+              </div>
+              <div>
+                <label>Voice Admission</label>
+                <input value={resolvedStack.voiceAdmissionPolicy.mode} readOnly />
+              </div>
+            </div>
+
+            <div>
+              <label>Dev Team</label>
+              <textarea
+                readOnly
+                value={[
+                  `session: ${formatSessionPolicy(resolvedStack.sessionPolicy)}`,
+                  `orchestrator: ${resolvedStack.devTeam.orchestrator.provider}:${resolvedStack.devTeam.orchestrator.model}`,
+                  `design: ${formatCapabilityPolicy(resolvedStack.devTeam.roles.design)}`,
+                  `implementation: ${formatCapabilityPolicy(resolvedStack.devTeam.roles.implementation)}`,
+                  `review: ${formatCapabilityPolicy(resolvedStack.devTeam.roles.review)}`,
+                  `research: ${formatCapabilityPolicy(resolvedStack.devTeam.roles.research)}`,
+                  `workers: ${resolvedStack.devTeam.codingWorkers.join(", ") || "none"}`
+                ].join("\n")}
+              />
+            </div>
+          </SettingsSection>
+
+          {form.stackAdvancedOverridesEnabled && (
+            <>
+              <LlmConfigurationSettingsSection
+                id="sec-llm"
+                form={form}
+                set={set}
+                setProvider={setProvider}
+                selectPresetModel={selectPresetModel}
+                providerModelOptions={providerModelOptions}
+                selectedPresetModel={selectedPresetModel}
+                setReplyFollowupProvider={setReplyFollowupProvider}
+                selectReplyFollowupPresetModel={selectReplyFollowupPresetModel}
+                replyFollowupModelOptions={replyFollowupModelOptions}
+                selectedReplyFollowupPresetModel={selectedReplyFollowupPresetModel}
+                setMemoryLlmProvider={setMemoryLlmProvider}
+                selectMemoryLlmPresetModel={selectMemoryLlmPresetModel}
+                memoryLlmModelOptions={memoryLlmModelOptions}
+                selectedMemoryLlmPresetModel={selectedMemoryLlmPresetModel}
+              />
+
+              <WebSearchSettingsSection id="sec-search" form={form} set={set} />
+              <BrowserSettingsSection
+                id="sec-browser"
+                form={form}
+                set={set}
+                setBrowserLlmProvider={setBrowserLlmProvider}
+                selectBrowserLlmPresetModel={selectBrowserLlmPresetModel}
+                browserLlmModelOptions={browserLlmModelOptions}
+                selectedBrowserLlmPresetModel={selectedBrowserLlmPresetModel}
+              />
+              <CodeAgentSettingsSection id="sec-code-agent" form={form} set={set} />
+              <SubAgentOrchestrationSettingsSection id="sec-orchestration" form={form} set={set} />
+            </>
+          )}
           <VisionSettingsSection
             id="sec-vision"
             form={form}

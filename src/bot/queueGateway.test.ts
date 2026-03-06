@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { dequeueReplyBurst } from "./queueGateway.ts";
+import { createTestSettings } from "../testSettings.ts";
 
 function createJob(messageId, createdTimestamp, authorId = "user-1") {
   return {
@@ -29,12 +30,12 @@ test("dequeueReplyBurst coalesces rolling bursts across authors within window", 
     createJob("m2", baseTs + 3_500, "u2"),
     createJob("m3", baseTs + 7_000, "u3")
   ]);
-  const settings = {
+  const settings = createTestSettings({
     activity: {
       replyCoalesceWindowSeconds: 4,
       replyCoalesceMaxMessages: 6
     }
-  };
+  });
 
   const burst = dequeueReplyBurst(bot, "channel-1", settings);
 
@@ -54,12 +55,12 @@ test("dequeueReplyBurst respects coalesce max messages", () => {
     createJob("m3", baseTs + 2_000),
     createJob("m4", baseTs + 3_000)
   ]);
-  const settings = {
+  const settings = createTestSettings({
     activity: {
       replyCoalesceWindowSeconds: 4,
       replyCoalesceMaxMessages: 2
     }
-  };
+  });
 
   const burst = dequeueReplyBurst(bot, "channel-1", settings);
 

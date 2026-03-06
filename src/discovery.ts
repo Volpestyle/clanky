@@ -1,5 +1,6 @@
 import { assertPublicUrl, isBlockedHost } from "./urlSafety.ts";
 import { clamp } from "./utils.ts";
+import { getDiscoverySettings } from "./settings/agentStack.ts";
 import { normalizeWhitespaceText } from "./normalization/text.ts";
 import { isRedirectStatus } from "./retry.ts";
 
@@ -76,7 +77,7 @@ export class DiscoveryService {
     channelName,
     recentMessages
   }) {
-    const config = normalizeDiscoveryConfig(settings?.discovery);
+    const config = normalizeDiscoveryConfig(getDiscoverySettings(settings));
     if (!config.enabled) {
       return {
         enabled: false,

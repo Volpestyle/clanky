@@ -32,13 +32,32 @@ import {
   finalizeReplyPerformanceSample
 } from "./replyPipelineShared.ts";
 import { loadConversationContinuityContext } from "./conversationContinuity.ts";
+import {
+  getActivitySettings,
+  getAutomationsSettings,
+  getBotName,
+  getDirectiveSettings,
+  getDiscoverySettings,
+  getMemorySettings,
+  getReplyPermissions,
+  getVisionSettings,
+  getVoiceSettings,
+  isDevTaskEnabled
+} from "../settings/agentStack.ts";
 
 
 
 export async function buildReplyContext(bot: any, message: any, settings: any, options: any) {
+  const memorySettings = getMemorySettings(settings);
+  const activity = getActivitySettings(settings);
+  const directiveSettings = getDirectiveSettings(settings);
+  const automationsSettings = getAutomationsSettings(settings);
+  const discovery = getDiscoverySettings(settings);
+  const voiceSettings = getVoiceSettings(settings);
+  const visionSettings = getVisionSettings(settings);
   const recentMessages = Array.isArray(options.recentMessages)
     ? options.recentMessages
-    : bot.store.getRecentMessages(message.channelId, settings.memory.maxRecentMessages);
+    : bot.store.getRecentMessages(message.channelId, memorySettings.promptSlice.maxRecentMessages);
   const addressSignal =
     options.addressSignal || await bot.getReplyAddressSignal(settings, message, recentMessages);
   const triggerMessageIds = [
@@ -49,10 +68,10 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     )
   ];
   const addressed = addressSignal.triggered;
-  const reactionEagerness = clamp(Number(settings.activity?.reactionLevel) || 0, 0, 100);
+  const reactionEagerness = clamp(Number(activity.reactionLevel) || 0, 0, 100);
   const isReplyChannel = bot.isReplyChannel(settings, message.channelId);
   const replyEagerness = clamp(
-    Number(settings.activity?.replyEagerness) || 0,
+    Number(activity.replyEagerness) || 0,
     0,
     100
   );
@@ -95,7 +114,7 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     loadRecentLookupContext: (payload) => bot.getRecentLookupContextForPrompt(payload),
     loadRecentConversationHistory: (payload) => bot.getConversationHistoryForPrompt(payload),
     loadAdaptiveDirectives:
-      Boolean(settings?.adaptiveDirectives?.enabled) &&
+      Boolean(directiveSettings.enabled) &&
         typeof bot.store?.searchAdaptiveStyleNotesForPrompt === "function"
         ? (payload) =>
           bot.store.searchAdaptiveStyleNotesForPrompt({
@@ -145,12 +164,11 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
   });
 
   // Auto-include recent history images as direct vision inputs
-  const visionSettings = settings?.vision || {};
   const maxAutoInclude = Math.min(
     (visionSettings.maxAutoIncludeImages != null ? Number(visionSettings.maxAutoIncludeImages) : 3),
     Math.max(0, MAX_MODEL_IMAGE_INPUTS - modelImageInputs.length)
   );
-  if (maxAutoInclude > 0 && visionSettings.captionEnabled !== false && imageLookup.candidates?.length) {
+  if (maxAutoInclude > 0 && Boolean(visionSettings.enabled) && imageLookup.candidates?.length) {
     const autoImageInputs = bot.getAutoIncludeImageInputs({
       candidates: imageLookup.candidates,
       maxImages: maxAutoInclude
@@ -219,16 +237,16 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     emojiHints: bot.getEmojiHints(message.guild),
     reactionEmojiOptions,
     allowReplySimpleImages:
-      settings.discovery.allowReplyImages && simpleImageCapabilityReady && imageBudget.canGenerate,
+      discovery.allowReplyImages && simpleImageCapabilityReady && imageBudget.canGenerate,
     allowReplyComplexImages:
-      settings.discovery.allowReplyImages && complexImageCapabilityReady && imageBudget.canGenerate,
+      discovery.allowReplyImages && complexImageCapabilityReady && imageBudget.canGenerate,
     remainingReplyImages: imageBudget.remaining,
     allowReplyVideos:
-      settings.discovery.allowReplyVideos && videoCapabilityReady && videoBudget.canGenerate,
+      discovery.allowReplyVideos && videoCapabilityReady && videoBudget.canGenerate,
     remainingReplyVideos: videoBudget.remaining,
-    allowReplyGifs: settings.discovery.allowReplyGifs && gifsConfigured && gifBudget.canFetch,
+    allowReplyGifs: discovery.allowReplyGifs && gifsConfigured && gifBudget.canFetch,
     remainingReplyGifs: gifBudget.remaining,
-    gifRepliesEnabled: settings.discovery.allowReplyGifs,
+    gifRepliesEnabled: discovery.allowReplyGifs,
     gifsConfigured,
     replyEagerness,
     reactionEagerness,
@@ -248,12 +266,12 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
         message.mentions.repliedUser.id !== bot.client.user?.id
       )
     },
-    allowMemoryDirective: settings.memory.enabled,
-    allowAdaptiveDirective: Boolean(settings?.adaptiveDirectives?.enabled),
-    allowAutomationDirective: Boolean(settings?.automations?.enabled),
+    allowMemoryDirective: memorySettings.enabled,
+    allowAdaptiveDirective: Boolean(directiveSettings.enabled),
+    allowAutomationDirective: Boolean(automationsSettings.enabled),
     automationTimeZoneLabel: getLocalTimeZoneLabel(),
     voiceMode: {
-      enabled: Boolean(settings?.voice?.enabled),
+      enabled: Boolean(voiceSettings.enabled),
       activeSession: inVoiceChannelNow,
       participantRoster: activeVoiceParticipantRoster,
       musicState,
@@ -318,11 +336,11 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
       Boolean(browserBrowse?.configured) &&
       !browserBrowse?.blockedByBudget &&
       browserBrowse?.budget?.canBrowse !== false,
-    memoryAvailable: Boolean(settings?.memory?.enabled),
-    adaptiveDirectivesAvailable: Boolean(settings?.adaptiveDirectives?.enabled),
+    memoryAvailable: Boolean(getMemorySettings(settings).enabled),
+    adaptiveDirectivesAvailable: Boolean(getDirectiveSettings(settings).enabled),
     imageLookupAvailable: Boolean(imageLookup?.enabled),
     openArticleAvailable: false,
-    codeAgentAvailable: Boolean(settings?.codeAgent?.enabled)
+    codeAgentAvailable: isDevTaskEnabled(settings)
   });
   const replyToolRuntime = {
     search: bot.search,
@@ -383,6 +401,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     tools: replyTools,
     trace: replyTrace
   });
+  const followupGenerationSettings = resolveReplyFollowupGenerationSettingsForReplyFollowup(settings);
   performance.llm1Ms = Math.max(0, Date.now() - llm1StartedAtMs);
   let usedWebSearchFollowup = false;
   let usedBrowserBrowseFollowup = false;
@@ -456,19 +475,26 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
           isError: Boolean(webSearch?.error),
           content: webSearch?.error
             ? `Web search failed: ${String(webSearch.error)}`
-            : rows.length
-              ? `Web results for "${String(webSearch?.query || toolQuery)}":\n\n${rows
-                .map((item, index) => {
-                  const title = String(item?.title || "untitled").trim();
-                  const url = String(item?.url || "").trim();
-                  const domain = String(item?.domain || "").trim();
-                  const snippet = String(item?.snippet || "").trim();
-                  const pageSummary = String(item?.pageSummary || "").trim();
-                  const domainLabel = domain ? ` (${domain})` : "";
-                  const snippetLine = snippet ? `\nSnippet: ${snippet}` : "";
-                  const pageLine = pageSummary ? `\nPage: ${pageSummary}` : "";
-                  return `[${index + 1}] ${title}${domainLabel}\nURL: ${url}${snippetLine}${pageLine}`;
-                })
+            : rows.length || String(webSearch?.summaryText || "").trim()
+              ? `Web results for "${String(webSearch?.query || toolQuery)}":\n\n${[
+                String(webSearch?.summaryText || "").trim()
+                  ? `Summary:\n${String(webSearch?.summaryText || "").trim()}`
+                  : "",
+                rows
+                  .map((item, index) => {
+                    const title = String(item?.title || "untitled").trim();
+                    const url = String(item?.url || "").trim();
+                    const domain = String(item?.domain || "").trim();
+                    const snippet = String(item?.snippet || "").trim();
+                    const pageSummary = String(item?.pageSummary || "").trim();
+                    const domainLabel = domain ? ` (${domain})` : "";
+                    const snippetLine = snippet ? `\nSnippet: ${snippet}` : "";
+                    const pageLine = pageSummary ? `\nPage: ${pageSummary}` : "";
+                    return `[${index + 1}] ${title}${domainLabel}\nURL: ${url}${snippetLine}${pageLine}`;
+                  })
+                  .join("\n\n")
+              ]
+                .filter(Boolean)
                 .join("\n\n")}`
               : `No results found for: "${toolQuery}"`
         };
@@ -520,7 +546,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     ];
 
     generation = await bot.llm.generate({
-      settings,
+      settings: followupGenerationSettings,
       systemPrompt,
       userPrompt: "",
       imageInputs: modelImageInputs,
@@ -535,7 +561,6 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     replyToolLoopSteps += 1;
   }
 
-  const followupGenerationSettings = resolveReplyFollowupGenerationSettingsForReplyFollowup(settings);
   const mediaPromptLimit = resolveMaxMediaPromptLen(settings);
   let replyDirective = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
   let voiceIntentHandled = await bot.maybeHandleStructuredVoiceIntent({
@@ -703,6 +728,8 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
 
 
 export async function dispatchReplyActions(bot: any, message: any, settings: any, options: any, ctx: any, llmResult: any) {
+  const memorySettings = getMemorySettings(settings);
+  const discovery = getDiscoverySettings(settings);
   const {
     addressSignal, triggerMessageIds, reactionEmojiOptions, source, performance,
     replyMediaMemoryFacts
@@ -728,7 +755,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
   const selfMemoryLine = replyDirective.selfMemoryLine;
   let memorySaved = false;
   let selfMemorySaved = false;
-  if (settings.memory.enabled && memoryLine) {
+  if (memorySettings.enabled && memoryLine) {
     try {
       memorySaved = await bot.memory.rememberDirectiveLine({
         line: memoryLine,
@@ -801,7 +828,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
     return { skipped: true };
   }
 
-  if (settings.memory.enabled && selfMemoryLine) {
+  if (memorySettings.enabled && selfMemoryLine) {
     try {
       selfMemorySaved = await bot.memory.rememberDirectiveLine({
         line: selfMemoryLine,
@@ -869,7 +896,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
     gifConfigBlocked = gifResult.blockedByConfiguration;
   }
 
-  if (mediaDirective?.type === "image_simple" && settings.discovery.allowReplyImages && imagePrompt) {
+  if (mediaDirective?.type === "image_simple" && discovery.allowReplyImages && imagePrompt) {
     const imageResult = await bot.maybeAttachGeneratedImage({
       settings,
       text: finalText,
@@ -894,7 +921,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
     imageVariantUsed = imageResult.variant || "simple";
   }
 
-  if (mediaDirective?.type === "image_complex" && settings.discovery.allowReplyImages && complexImagePrompt) {
+  if (mediaDirective?.type === "image_complex" && discovery.allowReplyImages && complexImagePrompt) {
     const imageResult = await bot.maybeAttachGeneratedImage({
       settings,
       text: finalText,
@@ -919,7 +946,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
     imageVariantUsed = imageResult.variant || "complex";
   }
 
-  if (mediaDirective?.type === "video" && settings.discovery.allowReplyVideos && videoPrompt) {
+  if (mediaDirective?.type === "video" && discovery.allowReplyVideos && videoPrompt) {
     const videoResult = await bot.maybeAttachGeneratedVideo({
       settings,
       text: finalText,
@@ -985,6 +1012,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
 
 
 export async function sendReplyMessage(bot: any, message: any, settings: any, options: any, ctx: any, llmResult: any, actionResult: any) {
+  const botName = getBotName(settings);
   const {
     addressSignal, triggerMessageIds, addressed,
     isReplyChannel, source, performance,
@@ -1039,7 +1067,7 @@ export async function sendReplyMessage(bot: any, message: any, settings: any, op
     guildId: sent.guildId,
     channelId: sent.channelId,
     authorId: bot.client.user.id,
-    authorName: settings.botName,
+    authorName: botName,
     isBot: true,
     content: bot.composeMessageContentForHistory(sent, finalText),
     referencedMessageId
@@ -1180,8 +1208,9 @@ export async function sendReplyMessage(bot: any, message: any, settings: any, op
 
 
 export async function maybeReplyToMessagePipeline(bot: any, message: any, settings: any, options: any = {}) {
-  if (!settings.permissions.allowReplies) return false;
-  if (!bot.canSendMessage(settings.permissions.maxMessagesPerHour)) return false;
+  const permissions = getReplyPermissions(settings);
+  if (!permissions.allowReplies) return false;
+  if (!bot.canSendMessage(permissions.maxMessagesPerHour)) return false;
   if (!bot.canTalkNow(settings)) return false;
 
   const ctx = await buildReplyContext(bot, message, settings, options);

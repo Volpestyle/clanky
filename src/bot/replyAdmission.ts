@@ -1,4 +1,5 @@
 import { clamp } from "../utils.ts";
+import { getBotName, getBotNameAliases } from "../settings/agentStack.ts";
 import { isBotNameAddressed } from "../voice/voiceSessionHelpers.ts";
 import {
   DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD
@@ -91,7 +92,7 @@ export function shouldAttemptReplyDecision({
   windowSize = 5
 }) {
   if (forceRespond || forceDecisionLoop || isHardAddressSignal(addressSignal)) return true;
-  if (!settings?.permissions?.allowUnsolicitedReplies) return false;
+  if (!getReplyPermissions(settings).allowUnsolicitedReplies) return false;
   return hasBotMessageInRecentWindow({
     botUserId,
     recentMessages,
@@ -167,12 +168,12 @@ function resolveReferencedAuthorId(message, recentMessages = []) {
 
 function resolveExactNameReason(settings, message) {
   const transcript = String(message?.content || "");
-  const botName = String(settings?.botName || "").trim();
+  const botName = getBotName(settings).trim();
   if (botName && isBotNameAddressed({ transcript, botName })) {
     return "name_exact";
   }
 
-  const aliases = Array.isArray(settings?.botNameAliases) ? settings.botNameAliases : [];
+  const aliases = getBotNameAliases(settings);
   for (const alias of aliases) {
     const normalizedAlias = String(alias || "").trim();
     if (!normalizedAlias) continue;
@@ -193,3 +194,4 @@ function isHardAddressSignal(addressSignal: Partial<ReplyAddressSignal> | null =
     .toLowerCase();
   return reason === "direct" || reason === "name_exact" || reason === "name_alias";
 }
+import { getReplyPermissions } from "../settings/agentStack.ts";

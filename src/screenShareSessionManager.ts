@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { clamp } from "./utils.ts";
+import { getVoiceStreamWatchSettings } from "./settings/agentStack.ts";
 
 const DEFAULT_SESSION_TTL_MINUTES = 12;
 const MIN_SESSION_TTL_MINUTES = 2;
@@ -422,10 +423,7 @@ export class ScreenShareSessionManager {
     }
 
     const settings = this.store.getSettings();
-    const streamWatchSettings =
-      settings?.voice?.streamWatch && typeof settings.voice.streamWatch === "object"
-        ? settings.voice.streamWatch
-        : {};
+    const streamWatchSettings = getVoiceStreamWatchSettings(settings);
     const keyframeIntervalMs = clamp(
       Number(streamWatchSettings.keyframeIntervalMs) || DEFAULT_SHARE_KEYFRAME_INTERVAL_MS,
       MIN_SHARE_KEYFRAME_INTERVAL_MS,

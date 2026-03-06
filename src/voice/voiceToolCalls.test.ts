@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { executeLocalVoiceToolCall, executeVoiceMusicPlayNowTool } from "./voiceToolCalls.ts";
+import { createTestSettings } from "../testSettings.ts";
 
 test("executeLocalVoiceToolCall forwards browser abort signals to browser_browse", async () => {
   const controller = new AbortController();
@@ -43,7 +44,7 @@ test("executeLocalVoiceToolCall forwards browser abort signals to browser_browse
       textChannelId: "channel-1",
       lastOpenAiToolCallerUserId: "user-1"
     },
-    settings: {
+    settings: createTestSettings({
       browser: {
         maxStepsPerTask: 5,
         stepTimeoutMs: 10_000,
@@ -52,7 +53,7 @@ test("executeLocalVoiceToolCall forwards browser abort signals to browser_browse
           model: "claude-sonnet-4-5-20250929"
         }
       }
-    },
+    }),
     toolName: "browser_browse",
     args: {
       query: "check example.com"
@@ -129,7 +130,7 @@ test("music_play_now returns immediately with status loading", async () => {
 
   const result = await executeVoiceMusicPlayNowTool(manager, {
     session,
-    settings: {},
+    settings: createTestSettings({}),
     args: { track_id: "track-abc" }
   });
 
@@ -163,7 +164,7 @@ test("music_play_now injects error utterance when download fails", async () => {
 
   const result = await executeVoiceMusicPlayNowTool(manager, {
     session,
-    settings: {},
+    settings: createTestSettings({}),
     args: { track_id: "track-abc" }
   });
 
@@ -214,7 +215,7 @@ test("music_play_now updates queue state synchronously before returning", async 
 
   await executeVoiceMusicPlayNowTool(manager, {
     session: { id: "s1", guildId: "g1", textChannelId: "tc1", lastOpenAiToolCallerUserId: null },
-    settings: {},
+    settings: createTestSettings({}),
     args: { track_id: "track-abc" }
   });
 

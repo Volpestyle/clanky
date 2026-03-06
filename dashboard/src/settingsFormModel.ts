@@ -7,6 +7,48 @@ import {
   parseUniqueLineList,
   parseUniqueList
 } from "../../src/settings/listNormalization.ts";
+import {
+  getActivitySettings,
+  getAgentStackSettings,
+  getAutomationsSettings,
+  getBotName,
+  getBotNameAliases,
+  getBrowserRuntimeConfig,
+  getDevTaskPermissions,
+  getDevTeamRuntimeConfig,
+  getDirectiveSettings,
+  getDiscoverySettings,
+  getFollowupSettings,
+  getMemorySettings,
+  getPersonaSettings,
+  getPromptingSettings,
+  getReplyPermissions,
+  getResearchRuntimeConfig,
+  getResolvedFollowupBinding,
+  getResolvedLegacyVoiceProvider,
+  getResolvedMemoryBinding,
+  getResolvedOrchestratorBinding,
+  getResolvedVisionBinding,
+  getResolvedVoiceAdmissionClassifierBinding,
+  getResolvedVoiceGenerationBinding,
+  getResolvedVoiceInitiativeBinding,
+  getSessionOrchestrationSettings,
+  getStartupSettings,
+  getTextInitiativeSettings,
+  getVideoContextSettings,
+  getVisionSettings,
+  getVoiceAdmissionSettings,
+  getVoiceChannelPolicy,
+  getVoiceConversationPolicy,
+  getVoiceInitiativeSettings,
+  getVoiceRuntimeConfig,
+  getVoiceSessionLimits,
+  getVoiceSettings,
+  getVoiceSoundboardSettings,
+  getVoiceStreamWatchSettings,
+  getVoiceTranscriptionSettings,
+  resolveAgentStack
+} from "../../src/settings/agentStack.ts";
 
 export const OPENAI_REALTIME_MODEL_OPTIONS = Object.freeze([
   "gpt-realtime",
@@ -56,8 +98,206 @@ export const BROWSER_PROVIDER_MODEL_FALLBACKS = Object.freeze({
   openai: ["gpt-5-mini"]
 });
 
-export function settingsToForm(settings) {
-  const defaults = DEFAULT_SETTINGS;
+function buildSettingsFormView(settings) {
+  const source = settings || DEFAULT_SETTINGS;
+  const agentStack = getAgentStackSettings(source);
+  const prompting = getPromptingSettings(source);
+  const activity = getActivitySettings(source);
+  const permissions = getReplyPermissions(source);
+  const textThoughtLoop = getTextInitiativeSettings(source);
+  const memory = getMemorySettings(source);
+  const directives = getDirectiveSettings(source);
+  const automations = getAutomationsSettings(source);
+  const sessions = getSessionOrchestrationSettings(source);
+  const followup = getFollowupSettings(source);
+  const followupBinding = getResolvedFollowupBinding(source);
+  const orchestrator = getResolvedOrchestratorBinding(source);
+  const memoryBinding = getResolvedMemoryBinding(source);
+  const research = getResearchRuntimeConfig(source);
+  const browser = getBrowserRuntimeConfig(source);
+  const browserExecution = browser.localBrowserAgent?.execution;
+  const browserBinding =
+    browserExecution?.mode === "dedicated_model" && browserExecution.model
+      ? browserExecution.model
+      : orchestrator;
+  const devPermissions = getDevTaskPermissions(source);
+  const devTeam = getDevTeamRuntimeConfig(source);
+  const resolvedStack = resolveAgentStack(source);
+  const vision = getVisionSettings(source);
+  const visionBinding = getResolvedVisionBinding(source);
+  const videoContext = getVideoContextSettings(source);
+  const voiceSettings = getVoiceSettings(source);
+  const transcription = getVoiceTranscriptionSettings(source);
+  const voiceChannelPolicy = getVoiceChannelPolicy(source);
+  const voiceSessionLimits = getVoiceSessionLimits(source);
+  const voiceConversation = getVoiceConversationPolicy(source);
+  const voiceAdmission = getVoiceAdmissionSettings(source);
+  const voiceInitiative = getVoiceInitiativeSettings(source);
+  const voiceInitiativeBinding = getResolvedVoiceInitiativeBinding(source);
+  const voiceRuntime = getVoiceRuntimeConfig(source);
+  const voiceGenerationBinding = getResolvedVoiceGenerationBinding(source);
+  const voiceClassifierBinding = getResolvedVoiceAdmissionClassifierBinding(source);
+  const voiceStreamWatch = getVoiceStreamWatchSettings(source);
+  const voiceSoundboard = getVoiceSoundboardSettings(source);
+  const startup = getStartupSettings(source);
+  const discovery = getDiscoverySettings(source);
+  const codingWorkers = Array.isArray(resolvedStack.devTeam?.codingWorkers) ? resolvedStack.devTeam.codingWorkers : [];
+  const codeAgentProvider =
+    codingWorkers.length === 1
+      ? codingWorkers[0] === "codex"
+        ? "codex"
+        : "claude-code"
+      : "auto";
+
+  return {
+    agentStack,
+    botName: getBotName(source),
+    botNameAliases: getBotNameAliases(source),
+    persona: getPersonaSettings(source),
+    prompt: {
+      capabilityHonestyLine: prompting.global.capabilityHonestyLine,
+      impossibleActionLine: prompting.global.impossibleActionLine,
+      memoryEnabledLine: prompting.global.memoryEnabledLine,
+      memoryDisabledLine: prompting.global.memoryDisabledLine,
+      skipLine: prompting.global.skipLine,
+      textGuidance: prompting.text.guidance,
+      voiceGuidance: prompting.voice.guidance,
+      voiceOperationalGuidance: prompting.voice.operationalGuidance,
+      voiceLookupBusySystemPrompt: prompting.voice.lookupBusySystemPrompt,
+      mediaPromptCraftGuidance: prompting.media.promptCraftGuidance
+    },
+    activity,
+    permissions,
+    textThoughtLoop,
+    memory,
+    adaptiveDirectives: directives,
+    automations,
+    subAgentOrchestration: sessions,
+    llm: orchestrator,
+    replyFollowupLlm: {
+      enabled: followup.enabled,
+      provider: followupBinding.provider,
+      model: followupBinding.model,
+      maxToolSteps: followup.toolBudget.maxToolSteps,
+      maxTotalToolCalls: followup.toolBudget.maxTotalToolCalls,
+      maxWebSearchCalls: followup.toolBudget.maxWebSearchCalls,
+      maxMemoryLookupCalls: followup.toolBudget.maxMemoryLookupCalls,
+      maxImageLookupCalls: followup.toolBudget.maxImageLookupCalls,
+      toolTimeoutMs: followup.toolBudget.toolTimeoutMs
+    },
+    memoryLlm: memoryBinding,
+    browser: {
+      runtime: resolvedStack.browserRuntime,
+      enabled: browser.enabled,
+      openAiComputerUseModel: String(browser.openaiComputerUse?.model || ""),
+      maxBrowseCallsPerHour: browser.localBrowserAgent.maxBrowseCallsPerHour,
+      llm: browserBinding,
+      maxStepsPerTask: browser.localBrowserAgent.maxStepsPerTask,
+      stepTimeoutMs: browser.localBrowserAgent.stepTimeoutMs,
+      sessionTimeoutMs: browser.localBrowserAgent.sessionTimeoutMs
+    },
+    codeAgent: {
+      enabled: devPermissions.allowedUserIds.length > 0 && Boolean(devTeam.codex?.enabled || devTeam.claudeCode?.enabled),
+      provider: codeAgentProvider,
+      model: String(devTeam.claudeCode?.model || ""),
+      codexModel: String(devTeam.codex?.model || ""),
+      maxTurns: Math.max(Number(devTeam.codex?.maxTurns || 0), Number(devTeam.claudeCode?.maxTurns || 0)),
+      timeoutMs: Math.max(Number(devTeam.codex?.timeoutMs || 0), Number(devTeam.claudeCode?.timeoutMs || 0)),
+      maxBufferBytes: Math.max(
+        Number(devTeam.codex?.maxBufferBytes || 0),
+        Number(devTeam.claudeCode?.maxBufferBytes || 0)
+      ),
+      defaultCwd: String(devTeam.codex?.defaultCwd || devTeam.claudeCode?.defaultCwd || ""),
+      maxTasksPerHour: Math.max(
+        Number(devTeam.codex?.maxTasksPerHour || 0),
+        Number(devTeam.claudeCode?.maxTasksPerHour || 0)
+      ),
+      maxParallelTasks: Math.max(
+        Number(devTeam.codex?.maxParallelTasks || 0),
+        Number(devTeam.claudeCode?.maxParallelTasks || 0)
+      ),
+      allowedUserIds: devPermissions.allowedUserIds
+    },
+    vision: {
+      captionEnabled: vision.enabled,
+      provider: visionBinding.provider,
+      model: visionBinding.model,
+      maxAutoIncludeImages: vision.maxAutoIncludeImages,
+      maxCaptionsPerHour: vision.maxCaptionsPerHour
+    },
+    webSearch: {
+      runtime: resolvedStack.researchRuntime,
+      enabled: research.enabled,
+      nativeUserLocation: research.openaiNativeWebSearch.userLocation,
+      nativeAllowedDomains: research.openaiNativeWebSearch.allowedDomains,
+      safeSearch: research.localExternalSearch.safeSearch,
+      maxSearchesPerHour: research.maxSearchesPerHour,
+      maxResults: research.localExternalSearch.maxResults,
+      maxPagesToRead: research.localExternalSearch.maxPagesToRead,
+      maxCharsPerPage: research.localExternalSearch.maxCharsPerPage,
+      providerOrder: research.localExternalSearch.providerOrder,
+      recencyDaysDefault: research.localExternalSearch.recencyDaysDefault,
+      maxConcurrentFetches: research.localExternalSearch.maxConcurrentFetches
+    },
+    videoContext,
+    voice: {
+      enabled: voiceSettings.enabled,
+      voiceProvider: getResolvedLegacyVoiceProvider(source),
+      replyPath: voiceConversation.replyPath,
+      ttsMode: voiceConversation.ttsMode,
+      asrLanguageMode: transcription.languageMode,
+      asrLanguageHint: transcription.languageHint,
+      allowNsfwHumor: voiceConversation.allowNsfwHumor,
+      intentConfidenceThreshold: voiceAdmission.intentConfidenceThreshold,
+      maxSessionMinutes: voiceSessionLimits.maxSessionMinutes,
+      inactivityLeaveSeconds: voiceSessionLimits.inactivityLeaveSeconds,
+      maxSessionsPerDay: voiceSessionLimits.maxSessionsPerDay,
+      replyEagerness: voiceConversation.replyEagerness,
+      commandOnlyMode: voiceConversation.commandOnlyMode,
+      thoughtEngine: {
+        enabled: voiceInitiative.enabled,
+        provider: voiceInitiativeBinding.provider,
+        model: voiceInitiativeBinding.model,
+        temperature: voiceInitiativeBinding.temperature,
+        eagerness: voiceInitiative.eagerness,
+        minSilenceSeconds: voiceInitiative.minSilenceSeconds,
+        minSecondsBetweenThoughts: voiceInitiative.minSecondsBetweenThoughts
+      },
+      replyDecisionLlm: {
+        realtimeAdmissionMode: voiceAdmission.mode,
+        musicWakeLatchSeconds: voiceAdmission.musicWakeLatchSeconds,
+        provider: voiceClassifierBinding?.provider || orchestrator.provider,
+        model: voiceClassifierBinding?.model || orchestrator.model
+      },
+      generationLlm: {
+        useTextModel: voiceRuntime.legacyVoiceStack?.generation?.mode !== "dedicated_model",
+        provider: voiceGenerationBinding.provider,
+        model: voiceGenerationBinding.model
+      },
+      allowedVoiceChannelIds: voiceChannelPolicy.allowedChannelIds,
+      blockedVoiceChannelIds: voiceChannelPolicy.blockedChannelIds,
+      blockedVoiceUserIds: voiceChannelPolicy.blockedUserIds,
+      xai: voiceRuntime.legacyVoiceStack.xai,
+      openaiRealtime: voiceRuntime.openaiRealtime,
+      elevenLabsRealtime: voiceRuntime.legacyVoiceStack.elevenLabsRealtime,
+      geminiRealtime: voiceRuntime.legacyVoiceStack.geminiRealtime,
+      sttPipeline: voiceRuntime.legacyVoiceStack.sttPipeline,
+      streamWatch: voiceStreamWatch,
+      soundboard: voiceSoundboard,
+      asrEnabled: transcription.enabled,
+      textOnlyMode: voiceConversation.textOnlyMode,
+      operationalMessages: voiceConversation.operationalMessages
+    },
+    startup,
+    discovery
+  };
+}
+
+const DEFAULT_SETTINGS_LEGACY_VIEW = buildSettingsFormView(DEFAULT_SETTINGS);
+
+export function settingsToForm(settings): any {
+  const defaults: any = DEFAULT_SETTINGS_LEGACY_VIEW;
+  const resolved: any = buildSettingsFormView(settings || DEFAULT_SETTINGS);
   const defaultPrompt = defaults.prompt;
   const defaultActivity = defaults.activity;
   const defaultPermissions = defaults.permissions;
@@ -79,503 +319,672 @@ export function settingsToForm(settings) {
   const defaultStartup = defaults.startup;
   const defaultTextThoughtLoop = defaults.textThoughtLoop;
   const defaultDiscovery = defaults.discovery;
-  const activity = settings?.activity ?? {};
-  const selectedVoiceProvider = settings?.voice?.voiceProvider ?? defaultVoice.voiceProvider;
+  const activity: any = resolved?.activity ?? {};
+  const selectedVoiceProvider = resolved?.voice?.voiceProvider ?? defaultVoice.voiceProvider;
   return {
-    botName: settings?.botName ?? defaults.botName,
-    botNameAliases: formatCommaList(settings?.botNameAliases ?? defaults.botNameAliases),
-    personaFlavor: settings?.persona?.flavor ?? defaults.persona.flavor,
-    personaHardLimits: formatLineList(settings?.persona?.hardLimits),
-    promptCapabilityHonestyLine: settings?.prompt?.capabilityHonestyLine ?? defaultPrompt.capabilityHonestyLine,
+    stackPreset: resolved?.agentStack?.preset ?? DEFAULT_SETTINGS.agentStack.preset,
+    stackAdvancedOverridesEnabled:
+      resolved?.agentStack?.advancedOverridesEnabled ?? DEFAULT_SETTINGS.agentStack.advancedOverridesEnabled,
+    botName: resolved?.botName ?? defaults.botName,
+    botNameAliases: formatCommaList(resolved?.botNameAliases ?? defaults.botNameAliases),
+    personaFlavor: resolved?.persona?.flavor ?? defaults.persona.flavor,
+    personaHardLimits: formatLineList(resolved?.persona?.hardLimits),
+    promptCapabilityHonestyLine: resolved?.prompt?.capabilityHonestyLine ?? defaultPrompt.capabilityHonestyLine,
     promptImpossibleActionLine:
-      settings?.prompt?.impossibleActionLine ?? defaultPrompt.impossibleActionLine,
+      resolved?.prompt?.impossibleActionLine ?? defaultPrompt.impossibleActionLine,
     promptMemoryEnabledLine:
-      settings?.prompt?.memoryEnabledLine ?? defaultPrompt.memoryEnabledLine,
+      resolved?.prompt?.memoryEnabledLine ?? defaultPrompt.memoryEnabledLine,
     promptMemoryDisabledLine:
-      settings?.prompt?.memoryDisabledLine ?? defaultPrompt.memoryDisabledLine,
-    promptSkipLine: settings?.prompt?.skipLine ?? defaultPrompt.skipLine,
-    promptTextGuidance: formatLineList(settings?.prompt?.textGuidance ?? defaultPrompt.textGuidance),
-    promptVoiceGuidance: formatLineList(settings?.prompt?.voiceGuidance ?? defaultPrompt.voiceGuidance),
+      resolved?.prompt?.memoryDisabledLine ?? defaultPrompt.memoryDisabledLine,
+    promptSkipLine: resolved?.prompt?.skipLine ?? defaultPrompt.skipLine,
+    promptTextGuidance: formatLineList(resolved?.prompt?.textGuidance ?? defaultPrompt.textGuidance),
+    promptVoiceGuidance: formatLineList(resolved?.prompt?.voiceGuidance ?? defaultPrompt.voiceGuidance),
     promptVoiceOperationalGuidance:
-      formatLineList(settings?.prompt?.voiceOperationalGuidance ?? defaultPrompt.voiceOperationalGuidance),
+      formatLineList(resolved?.prompt?.voiceOperationalGuidance ?? defaultPrompt.voiceOperationalGuidance),
     promptVoiceLookupBusySystemPrompt:
-      settings?.prompt?.voiceLookupBusySystemPrompt ?? defaultPrompt.voiceLookupBusySystemPrompt,
-    promptMediaPromptCraftGuidance: settings?.prompt?.mediaPromptCraftGuidance ?? defaultPrompt.mediaPromptCraftGuidance,
+      resolved?.prompt?.voiceLookupBusySystemPrompt ?? defaultPrompt.voiceLookupBusySystemPrompt,
+    promptMediaPromptCraftGuidance: resolved?.prompt?.mediaPromptCraftGuidance ?? defaultPrompt.mediaPromptCraftGuidance,
     replyEagerness:
       activity.replyEagerness ?? activity.replyLevelReplyChannels ?? defaultActivity.replyEagerness,
     reactionLevel: activity.reactionLevel ?? defaultActivity.reactionLevel,
     minGap: activity.minSecondsBetweenMessages ?? defaultActivity.minSecondsBetweenMessages,
-    allowReplies: settings?.permissions?.allowReplies ?? defaultPermissions.allowReplies,
+    allowReplies: resolved?.permissions?.allowReplies ?? defaultPermissions.allowReplies,
     allowUnsolicitedReplies:
-      settings?.permissions?.allowUnsolicitedReplies ?? defaultPermissions.allowUnsolicitedReplies,
-    allowReactions: settings?.permissions?.allowReactions ?? defaultPermissions.allowReactions,
+      resolved?.permissions?.allowUnsolicitedReplies ?? defaultPermissions.allowUnsolicitedReplies,
+    allowReactions: resolved?.permissions?.allowReactions ?? defaultPermissions.allowReactions,
     textThoughtLoopEnabled:
-      settings?.textThoughtLoop?.enabled ?? defaultTextThoughtLoop.enabled,
+      resolved?.textThoughtLoop?.enabled ?? defaultTextThoughtLoop.enabled,
     textThoughtLoopEagerness:
-      settings?.textThoughtLoop?.eagerness ?? defaultTextThoughtLoop.eagerness,
+      resolved?.textThoughtLoop?.eagerness ?? defaultTextThoughtLoop.eagerness,
     textThoughtLoopMinMinutesBetweenThoughts:
-      settings?.textThoughtLoop?.minMinutesBetweenThoughts ??
+      resolved?.textThoughtLoop?.minMinutesBetweenThoughts ??
       defaultTextThoughtLoop.minMinutesBetweenThoughts,
     textThoughtLoopMaxThoughtsPerDay:
-      settings?.textThoughtLoop?.maxThoughtsPerDay ?? defaultTextThoughtLoop.maxThoughtsPerDay,
+      resolved?.textThoughtLoop?.maxThoughtsPerDay ?? defaultTextThoughtLoop.maxThoughtsPerDay,
     textThoughtLoopLookbackMessages:
-      settings?.textThoughtLoop?.lookbackMessages ?? defaultTextThoughtLoop.lookbackMessages,
-    memoryEnabled: settings?.memory?.enabled ?? defaults.memory.enabled,
+      resolved?.textThoughtLoop?.lookbackMessages ?? defaultTextThoughtLoop.lookbackMessages,
+    memoryEnabled: resolved?.memory?.enabled ?? defaults.memory.enabled,
     adaptiveDirectivesEnabled:
-      settings?.adaptiveDirectives?.enabled ?? defaults.adaptiveDirectives.enabled,
+      resolved?.adaptiveDirectives?.enabled ?? defaults.adaptiveDirectives.enabled,
     automationsEnabled:
-      settings?.automations?.enabled ?? defaults.automations.enabled,
+      resolved?.automations?.enabled ?? defaults.automations.enabled,
     subAgentSessionIdleTimeoutMs:
-      settings?.subAgentOrchestration?.sessionIdleTimeoutMs ?? defaults.subAgentOrchestration.sessionIdleTimeoutMs,
+      resolved?.subAgentOrchestration?.sessionIdleTimeoutMs ?? defaults.subAgentOrchestration.sessionIdleTimeoutMs,
     subAgentMaxConcurrentSessions:
-      settings?.subAgentOrchestration?.maxConcurrentSessions ?? defaults.subAgentOrchestration.maxConcurrentSessions,
+      resolved?.subAgentOrchestration?.maxConcurrentSessions ?? defaults.subAgentOrchestration.maxConcurrentSessions,
     memoryReflectionStrategy:
-      settings?.memory?.reflection?.strategy ?? defaults.memory.reflection.strategy,
-    provider: settings?.llm?.provider ?? defaultLlm.provider,
-    model: settings?.llm?.model ?? defaultLlm.model,
-    replyFollowupLlmEnabled: settings?.replyFollowupLlm?.enabled ?? defaultReplyFollowupLlm.enabled,
-    replyFollowupLlmProvider: settings?.replyFollowupLlm?.provider ?? defaultReplyFollowupLlm.provider,
-    replyFollowupLlmModel: settings?.replyFollowupLlm?.model ?? defaultReplyFollowupLlm.model,
-    replyFollowupMaxToolSteps: settings?.replyFollowupLlm?.maxToolSteps ?? defaultReplyFollowupLlm.maxToolSteps,
+      resolved?.memory?.reflection?.strategy ?? defaults.memory.reflection.strategy,
+    provider: resolved?.llm?.provider ?? defaultLlm.provider,
+    model: resolved?.llm?.model ?? defaultLlm.model,
+    replyFollowupLlmEnabled: resolved?.replyFollowupLlm?.enabled ?? defaultReplyFollowupLlm.enabled,
+    replyFollowupLlmProvider: resolved?.replyFollowupLlm?.provider ?? defaultReplyFollowupLlm.provider,
+    replyFollowupLlmModel: resolved?.replyFollowupLlm?.model ?? defaultReplyFollowupLlm.model,
+    replyFollowupMaxToolSteps: resolved?.replyFollowupLlm?.maxToolSteps ?? defaultReplyFollowupLlm.maxToolSteps,
     replyFollowupMaxTotalToolCalls:
-      settings?.replyFollowupLlm?.maxTotalToolCalls ?? defaultReplyFollowupLlm.maxTotalToolCalls,
+      resolved?.replyFollowupLlm?.maxTotalToolCalls ?? defaultReplyFollowupLlm.maxTotalToolCalls,
     replyFollowupMaxWebSearchCalls:
-      settings?.replyFollowupLlm?.maxWebSearchCalls ?? defaultReplyFollowupLlm.maxWebSearchCalls,
+      resolved?.replyFollowupLlm?.maxWebSearchCalls ?? defaultReplyFollowupLlm.maxWebSearchCalls,
     replyFollowupMaxMemoryLookupCalls:
-      settings?.replyFollowupLlm?.maxMemoryLookupCalls ?? defaultReplyFollowupLlm.maxMemoryLookupCalls,
+      resolved?.replyFollowupLlm?.maxMemoryLookupCalls ?? defaultReplyFollowupLlm.maxMemoryLookupCalls,
     replyFollowupMaxImageLookupCalls:
-      settings?.replyFollowupLlm?.maxImageLookupCalls ?? defaultReplyFollowupLlm.maxImageLookupCalls,
+      resolved?.replyFollowupLlm?.maxImageLookupCalls ?? defaultReplyFollowupLlm.maxImageLookupCalls,
     replyFollowupToolTimeoutMs:
-      settings?.replyFollowupLlm?.toolTimeoutMs ?? defaultReplyFollowupLlm.toolTimeoutMs,
-    memoryLlmProvider: settings?.memoryLlm?.provider ?? defaultMemoryLlm.provider,
-    memoryLlmModel: settings?.memoryLlm?.model ?? defaultMemoryLlm.model,
-    temperature: settings?.llm?.temperature ?? defaultLlm.temperature,
-    maxTokens: settings?.llm?.maxOutputTokens ?? defaultLlm.maxOutputTokens,
-    browserEnabled: settings?.browser?.enabled ?? defaults.browser.enabled,
-    browserMaxPerHour: settings?.browser?.maxBrowseCallsPerHour ?? defaults.browser.maxBrowseCallsPerHour,
-    browserLlmProvider: settings?.browser?.llm?.provider ?? defaults.browser.llm.provider,
-    browserLlmModel: settings?.browser?.llm?.model ?? defaults.browser.llm.model,
-    browserMaxSteps: settings?.browser?.maxStepsPerTask ?? defaults.browser.maxStepsPerTask,
-    browserStepTimeoutMs: settings?.browser?.stepTimeoutMs ?? defaults.browser.stepTimeoutMs,
-    browserSessionTimeoutMs: settings?.browser?.sessionTimeoutMs ?? defaults.browser.sessionTimeoutMs,
-    codeAgentEnabled: settings?.codeAgent?.enabled ?? defaults.codeAgent.enabled,
-    codeAgentProvider: settings?.codeAgent?.provider ?? defaults.codeAgent.provider,
-    codeAgentModel: settings?.codeAgent?.model ?? defaults.codeAgent.model,
-    codeAgentCodexModel: settings?.codeAgent?.codexModel ?? defaults.codeAgent.codexModel,
-    codeAgentMaxTurns: settings?.codeAgent?.maxTurns ?? defaults.codeAgent.maxTurns,
-    codeAgentTimeoutMs: settings?.codeAgent?.timeoutMs ?? defaults.codeAgent.timeoutMs,
-    codeAgentMaxBufferBytes: settings?.codeAgent?.maxBufferBytes ?? defaults.codeAgent.maxBufferBytes,
-    codeAgentDefaultCwd: settings?.codeAgent?.defaultCwd ?? defaults.codeAgent.defaultCwd,
-    codeAgentMaxTasksPerHour: settings?.codeAgent?.maxTasksPerHour ?? defaults.codeAgent.maxTasksPerHour,
-    codeAgentMaxParallelTasks: settings?.codeAgent?.maxParallelTasks ?? defaults.codeAgent.maxParallelTasks,
-    codeAgentAllowedUserIds: formatLineList(settings?.codeAgent?.allowedUserIds ?? defaults.codeAgent.allowedUserIds),
-    visionCaptionEnabled: settings?.vision?.captionEnabled ?? defaultVision.captionEnabled,
-    visionProvider: settings?.vision?.provider ?? defaultVision.provider,
-    visionModel: settings?.vision?.model ?? defaultVision.model,
-    visionMaxAutoIncludeImages: settings?.vision?.maxAutoIncludeImages ?? defaultVision.maxAutoIncludeImages,
-    visionMaxCaptionsPerHour: settings?.vision?.maxCaptionsPerHour ?? defaultVision.maxCaptionsPerHour,
-    webSearchEnabled: settings?.webSearch?.enabled ?? defaultWebSearch.enabled,
-    webSearchSafeMode: settings?.webSearch?.safeSearch ?? defaultWebSearch.safeSearch,
-    webSearchPerHour: settings?.webSearch?.maxSearchesPerHour ?? defaultWebSearch.maxSearchesPerHour,
-    webSearchMaxResults: settings?.webSearch?.maxResults ?? defaultWebSearch.maxResults,
-    webSearchMaxPages: settings?.webSearch?.maxPagesToRead ?? defaultWebSearch.maxPagesToRead,
-    webSearchMaxChars: settings?.webSearch?.maxCharsPerPage ?? defaultWebSearch.maxCharsPerPage,
-    webSearchProviderOrder: (settings?.webSearch?.providerOrder || defaultWebSearch.providerOrder).join(","),
-    webSearchRecencyDaysDefault: settings?.webSearch?.recencyDaysDefault ?? defaultWebSearch.recencyDaysDefault,
-    webSearchMaxConcurrentFetches: settings?.webSearch?.maxConcurrentFetches ?? defaultWebSearch.maxConcurrentFetches,
-    videoContextEnabled: settings?.videoContext?.enabled ?? defaultVideoContext.enabled,
-    videoContextPerHour: settings?.videoContext?.maxLookupsPerHour ?? defaultVideoContext.maxLookupsPerHour,
-    videoContextMaxVideos: settings?.videoContext?.maxVideosPerMessage ?? defaultVideoContext.maxVideosPerMessage,
-    videoContextMaxChars: settings?.videoContext?.maxTranscriptChars ?? defaultVideoContext.maxTranscriptChars,
-    videoContextKeyframeInterval: settings?.videoContext?.keyframeIntervalSeconds ?? defaultVideoContext.keyframeIntervalSeconds,
-    videoContextMaxKeyframes: settings?.videoContext?.maxKeyframesPerVideo ?? defaultVideoContext.maxKeyframesPerVideo,
-    videoContextAsrFallback: settings?.videoContext?.allowAsrFallback ?? defaultVideoContext.allowAsrFallback,
-    videoContextMaxAsrSeconds: settings?.videoContext?.maxAsrSeconds ?? defaultVideoContext.maxAsrSeconds,
-    voiceEnabled: settings?.voice?.enabled ?? defaultVoice.enabled,
+      resolved?.replyFollowupLlm?.toolTimeoutMs ?? defaultReplyFollowupLlm.toolTimeoutMs,
+    memoryLlmProvider: resolved?.memoryLlm?.provider ?? defaultMemoryLlm.provider,
+    memoryLlmModel: resolved?.memoryLlm?.model ?? defaultMemoryLlm.model,
+    temperature: resolved?.llm?.temperature ?? defaultLlm.temperature,
+    maxTokens: resolved?.llm?.maxOutputTokens ?? defaultLlm.maxOutputTokens,
+    browserEnabled: resolved?.browser?.enabled ?? defaults.browser.enabled,
+    stackResolvedResearchRuntime: resolved?.webSearch?.runtime ?? defaultWebSearch.runtime,
+    stackResolvedBrowserRuntime: resolved?.browser?.runtime ?? defaults.browser.runtime,
+    browserOpenAiComputerUseModel:
+      resolved?.browser?.openAiComputerUseModel ?? defaults.browser.openAiComputerUseModel,
+    browserMaxPerHour: resolved?.browser?.maxBrowseCallsPerHour ?? defaults.browser.maxBrowseCallsPerHour,
+    browserLlmProvider: resolved?.browser?.llm?.provider ?? defaults.browser.llm.provider,
+    browserLlmModel: resolved?.browser?.llm?.model ?? defaults.browser.llm.model,
+    browserMaxSteps: resolved?.browser?.maxStepsPerTask ?? defaults.browser.maxStepsPerTask,
+    browserStepTimeoutMs: resolved?.browser?.stepTimeoutMs ?? defaults.browser.stepTimeoutMs,
+    browserSessionTimeoutMs: resolved?.browser?.sessionTimeoutMs ?? defaults.browser.sessionTimeoutMs,
+    codeAgentEnabled: resolved?.codeAgent?.enabled ?? defaults.codeAgent.enabled,
+    codeAgentProvider: resolved?.codeAgent?.provider ?? defaults.codeAgent.provider,
+    codeAgentModel: resolved?.codeAgent?.model ?? defaults.codeAgent.model,
+    codeAgentCodexModel: resolved?.codeAgent?.codexModel ?? defaults.codeAgent.codexModel,
+    codeAgentMaxTurns: resolved?.codeAgent?.maxTurns ?? defaults.codeAgent.maxTurns,
+    codeAgentTimeoutMs: resolved?.codeAgent?.timeoutMs ?? defaults.codeAgent.timeoutMs,
+    codeAgentMaxBufferBytes: resolved?.codeAgent?.maxBufferBytes ?? defaults.codeAgent.maxBufferBytes,
+    codeAgentDefaultCwd: resolved?.codeAgent?.defaultCwd ?? defaults.codeAgent.defaultCwd,
+    codeAgentMaxTasksPerHour: resolved?.codeAgent?.maxTasksPerHour ?? defaults.codeAgent.maxTasksPerHour,
+    codeAgentMaxParallelTasks: resolved?.codeAgent?.maxParallelTasks ?? defaults.codeAgent.maxParallelTasks,
+    codeAgentAllowedUserIds: formatLineList(resolved?.codeAgent?.allowedUserIds ?? defaults.codeAgent.allowedUserIds),
+    visionCaptionEnabled: resolved?.vision?.captionEnabled ?? defaultVision.captionEnabled,
+    visionProvider: resolved?.vision?.provider ?? defaultVision.provider,
+    visionModel: resolved?.vision?.model ?? defaultVision.model,
+    visionMaxAutoIncludeImages: resolved?.vision?.maxAutoIncludeImages ?? defaultVision.maxAutoIncludeImages,
+    visionMaxCaptionsPerHour: resolved?.vision?.maxCaptionsPerHour ?? defaultVision.maxCaptionsPerHour,
+    webSearchEnabled: resolved?.webSearch?.enabled ?? defaultWebSearch.enabled,
+    webSearchOpenAiUserLocation: resolved?.webSearch?.nativeUserLocation ?? defaultWebSearch.nativeUserLocation,
+    webSearchOpenAiAllowedDomains:
+      formatLineList(resolved?.webSearch?.nativeAllowedDomains ?? defaultWebSearch.nativeAllowedDomains),
+    webSearchSafeMode: resolved?.webSearch?.safeSearch ?? defaultWebSearch.safeSearch,
+    webSearchPerHour: resolved?.webSearch?.maxSearchesPerHour ?? defaultWebSearch.maxSearchesPerHour,
+    webSearchMaxResults: resolved?.webSearch?.maxResults ?? defaultWebSearch.maxResults,
+    webSearchMaxPages: resolved?.webSearch?.maxPagesToRead ?? defaultWebSearch.maxPagesToRead,
+    webSearchMaxChars: resolved?.webSearch?.maxCharsPerPage ?? defaultWebSearch.maxCharsPerPage,
+    webSearchProviderOrder: (resolved?.webSearch?.providerOrder || defaultWebSearch.providerOrder).join(","),
+    webSearchRecencyDaysDefault: resolved?.webSearch?.recencyDaysDefault ?? defaultWebSearch.recencyDaysDefault,
+    webSearchMaxConcurrentFetches: resolved?.webSearch?.maxConcurrentFetches ?? defaultWebSearch.maxConcurrentFetches,
+    videoContextEnabled: resolved?.videoContext?.enabled ?? defaultVideoContext.enabled,
+    videoContextPerHour: resolved?.videoContext?.maxLookupsPerHour ?? defaultVideoContext.maxLookupsPerHour,
+    videoContextMaxVideos: resolved?.videoContext?.maxVideosPerMessage ?? defaultVideoContext.maxVideosPerMessage,
+    videoContextMaxChars: resolved?.videoContext?.maxTranscriptChars ?? defaultVideoContext.maxTranscriptChars,
+    videoContextKeyframeInterval: resolved?.videoContext?.keyframeIntervalSeconds ?? defaultVideoContext.keyframeIntervalSeconds,
+    videoContextMaxKeyframes: resolved?.videoContext?.maxKeyframesPerVideo ?? defaultVideoContext.maxKeyframesPerVideo,
+    videoContextAsrFallback: resolved?.videoContext?.allowAsrFallback ?? defaultVideoContext.allowAsrFallback,
+    videoContextMaxAsrSeconds: resolved?.videoContext?.maxAsrSeconds ?? defaultVideoContext.maxAsrSeconds,
+    voiceEnabled: resolved?.voice?.enabled ?? defaultVoice.enabled,
     voiceProvider: selectedVoiceProvider,
-    voiceReplyPath: settings?.voice?.replyPath ?? (settings?.voice?.realtimeReplyStrategy === "native" ? "native" : "bridge"),
-    voiceTtsMode: settings?.voice?.ttsMode ?? defaultVoice.ttsMode ?? "realtime",
-    voiceBrainProvider: settings?.voice?.brainProvider ?? defaultVoice.brainProvider,
-    voiceAsrLanguageMode: settings?.voice?.asrLanguageMode ?? defaultVoice.asrLanguageMode,
-    voiceAsrLanguageHint: settings?.voice?.asrLanguageHint ?? defaultVoice.asrLanguageHint,
-    voiceAllowNsfwHumor: settings?.voice?.allowNsfwHumor ?? defaultVoice.allowNsfwHumor,
-    voiceIntentConfidenceThreshold: settings?.voice?.intentConfidenceThreshold ?? defaultVoice.intentConfidenceThreshold,
-    voiceMaxSessionMinutes: settings?.voice?.maxSessionMinutes ?? defaultVoice.maxSessionMinutes,
-    voiceInactivityLeaveSeconds: settings?.voice?.inactivityLeaveSeconds ?? defaultVoice.inactivityLeaveSeconds,
-    voiceMaxSessionsPerDay: settings?.voice?.maxSessionsPerDay ?? defaultVoice.maxSessionsPerDay,
-    voiceReplyEagerness: settings?.voice?.replyEagerness ?? defaultVoice.replyEagerness,
-    voiceCommandOnlyMode: settings?.voice?.commandOnlyMode ?? defaultVoice.commandOnlyMode,
+    voiceReplyPath: resolved?.voice?.replyPath ?? defaultVoice.replyPath,
+    voiceTtsMode: resolved?.voice?.ttsMode ?? defaultVoice.ttsMode ?? "realtime",
+    voiceAsrLanguageMode: resolved?.voice?.asrLanguageMode ?? defaultVoice.asrLanguageMode,
+    voiceAsrLanguageHint: resolved?.voice?.asrLanguageHint ?? defaultVoice.asrLanguageHint,
+    voiceAllowNsfwHumor: resolved?.voice?.allowNsfwHumor ?? defaultVoice.allowNsfwHumor,
+    voiceIntentConfidenceThreshold: resolved?.voice?.intentConfidenceThreshold ?? defaultVoice.intentConfidenceThreshold,
+    voiceMaxSessionMinutes: resolved?.voice?.maxSessionMinutes ?? defaultVoice.maxSessionMinutes,
+    voiceInactivityLeaveSeconds: resolved?.voice?.inactivityLeaveSeconds ?? defaultVoice.inactivityLeaveSeconds,
+    voiceMaxSessionsPerDay: resolved?.voice?.maxSessionsPerDay ?? defaultVoice.maxSessionsPerDay,
+    voiceReplyEagerness: resolved?.voice?.replyEagerness ?? defaultVoice.replyEagerness,
+    voiceCommandOnlyMode: resolved?.voice?.commandOnlyMode ?? defaultVoice.commandOnlyMode,
     voiceThoughtEngineEnabled:
-      settings?.voice?.thoughtEngine?.enabled ?? defaultVoiceThoughtEngine.enabled,
+      resolved?.voice?.thoughtEngine?.enabled ?? defaultVoiceThoughtEngine.enabled,
     voiceThoughtEngineProvider:
-      settings?.voice?.thoughtEngine?.provider ?? defaultVoiceThoughtEngine.provider,
+      resolved?.voice?.thoughtEngine?.provider ?? defaultVoiceThoughtEngine.provider,
     voiceThoughtEngineModel:
-      settings?.voice?.thoughtEngine?.model ?? defaultVoiceThoughtEngine.model,
+      resolved?.voice?.thoughtEngine?.model ?? defaultVoiceThoughtEngine.model,
     voiceThoughtEngineTemperature:
-      settings?.voice?.thoughtEngine?.temperature ?? defaultVoiceThoughtEngine.temperature,
+      resolved?.voice?.thoughtEngine?.temperature ?? defaultVoiceThoughtEngine.temperature,
     voiceThoughtEngineEagerness:
-      settings?.voice?.thoughtEngine?.eagerness ?? defaultVoiceThoughtEngine.eagerness,
+      resolved?.voice?.thoughtEngine?.eagerness ?? defaultVoiceThoughtEngine.eagerness,
     voiceThoughtEngineMinSilenceSeconds:
-      settings?.voice?.thoughtEngine?.minSilenceSeconds ?? defaultVoiceThoughtEngine.minSilenceSeconds,
+      resolved?.voice?.thoughtEngine?.minSilenceSeconds ?? defaultVoiceThoughtEngine.minSilenceSeconds,
     voiceThoughtEngineMinSecondsBetweenThoughts:
-      settings?.voice?.thoughtEngine?.minSecondsBetweenThoughts ??
+      resolved?.voice?.thoughtEngine?.minSecondsBetweenThoughts ??
       defaultVoiceThoughtEngine.minSecondsBetweenThoughts,
     voiceReplyDecisionRealtimeAdmissionMode:
-      settings?.voice?.replyDecisionLlm?.realtimeAdmissionMode ?? defaultVoice.replyDecisionLlm.realtimeAdmissionMode,
+      resolved?.voice?.replyDecisionLlm?.realtimeAdmissionMode ?? defaultVoice.replyDecisionLlm.realtimeAdmissionMode,
     voiceReplyDecisionMusicWakeLatchSeconds:
-      settings?.voice?.replyDecisionLlm?.musicWakeLatchSeconds ?? defaultVoice.replyDecisionLlm.musicWakeLatchSeconds,
+      resolved?.voice?.replyDecisionLlm?.musicWakeLatchSeconds ?? defaultVoice.replyDecisionLlm.musicWakeLatchSeconds,
     voiceReplyDecisionLlmProvider:
-      settings?.voice?.replyDecisionLlm?.provider ?? defaultVoice.replyDecisionLlm.provider,
+      resolved?.voice?.replyDecisionLlm?.provider ?? defaultVoice.replyDecisionLlm.provider,
     voiceReplyDecisionLlmModel:
-      settings?.voice?.replyDecisionLlm?.model ?? defaultVoice.replyDecisionLlm.model,
+      resolved?.voice?.replyDecisionLlm?.model ?? defaultVoice.replyDecisionLlm.model,
     voiceGenerationLlmUseTextModel:
-      settings?.voice?.generationLlm?.useTextModel ?? defaultVoiceGenerationLlm.useTextModel,
+      resolved?.voice?.generationLlm?.useTextModel ?? defaultVoiceGenerationLlm.useTextModel,
     voiceGenerationLlmProvider:
-      settings?.voice?.generationLlm?.provider ?? defaultVoiceGenerationLlm.provider,
+      resolved?.voice?.generationLlm?.provider ?? defaultVoiceGenerationLlm.provider,
     voiceGenerationLlmModel:
-      settings?.voice?.generationLlm?.model ?? defaultVoiceGenerationLlm.model,
-    voiceAllowedChannelIds: formatLineList(settings?.voice?.allowedVoiceChannelIds),
-    voiceBlockedChannelIds: formatLineList(settings?.voice?.blockedVoiceChannelIds),
-    voiceBlockedUserIds: formatLineList(settings?.voice?.blockedVoiceUserIds),
-    voiceXaiVoice: settings?.voice?.xai?.voice ?? defaultVoiceXai.voice,
-    voiceXaiAudioFormat: settings?.voice?.xai?.audioFormat ?? defaultVoiceXai.audioFormat,
-    voiceXaiSampleRateHz: settings?.voice?.xai?.sampleRateHz ?? defaultVoiceXai.sampleRateHz,
-    voiceXaiRegion: settings?.voice?.xai?.region ?? defaultVoiceXai.region,
-    voiceOpenAiRealtimeModel: settings?.voice?.openaiRealtime?.model ?? defaultVoiceOpenAiRealtime.model,
-    voiceOpenAiRealtimeVoice: settings?.voice?.openaiRealtime?.voice ?? defaultVoiceOpenAiRealtime.voice,
+      resolved?.voice?.generationLlm?.model ?? defaultVoiceGenerationLlm.model,
+    voiceAllowedChannelIds: formatLineList(resolved?.voice?.allowedVoiceChannelIds),
+    voiceBlockedChannelIds: formatLineList(resolved?.voice?.blockedVoiceChannelIds),
+    voiceBlockedUserIds: formatLineList(resolved?.voice?.blockedVoiceUserIds),
+    voiceXaiVoice: resolved?.voice?.xai?.voice ?? defaultVoiceXai.voice,
+    voiceXaiAudioFormat: resolved?.voice?.xai?.audioFormat ?? defaultVoiceXai.audioFormat,
+    voiceXaiSampleRateHz: resolved?.voice?.xai?.sampleRateHz ?? defaultVoiceXai.sampleRateHz,
+    voiceXaiRegion: resolved?.voice?.xai?.region ?? defaultVoiceXai.region,
+    voiceOpenAiRealtimeModel: resolved?.voice?.openaiRealtime?.model ?? defaultVoiceOpenAiRealtime.model,
+    voiceOpenAiRealtimeVoice: resolved?.voice?.openaiRealtime?.voice ?? defaultVoiceOpenAiRealtime.voice,
     voiceOpenAiRealtimeTranscriptionMethod:
-      settings?.voice?.openaiRealtime?.transcriptionMethod ?? defaultVoiceOpenAiRealtime.transcriptionMethod,
+      resolved?.voice?.openaiRealtime?.transcriptionMethod ?? defaultVoiceOpenAiRealtime.transcriptionMethod,
     voiceOpenAiRealtimeInputTranscriptionModel:
-      settings?.voice?.openaiRealtime?.inputTranscriptionModel ?? defaultVoiceOpenAiRealtime.inputTranscriptionModel,
+      resolved?.voice?.openaiRealtime?.inputTranscriptionModel ?? defaultVoiceOpenAiRealtime.inputTranscriptionModel,
     voiceOpenAiRealtimeUsePerUserAsrBridge:
-      settings?.voice?.openaiRealtime?.usePerUserAsrBridge ?? defaultVoiceOpenAiRealtime.usePerUserAsrBridge,
+      resolved?.voice?.openaiRealtime?.usePerUserAsrBridge ?? defaultVoiceOpenAiRealtime.usePerUserAsrBridge,
     voiceElevenLabsRealtimeAgentId:
-      settings?.voice?.elevenLabsRealtime?.agentId ?? defaultVoiceElevenLabsRealtime.agentId,
+      resolved?.voice?.elevenLabsRealtime?.agentId ?? defaultVoiceElevenLabsRealtime.agentId,
     voiceElevenLabsRealtimeVoiceId:
-      settings?.voice?.elevenLabsRealtime?.voiceId ?? defaultVoiceElevenLabsRealtime.voiceId,
+      resolved?.voice?.elevenLabsRealtime?.voiceId ?? defaultVoiceElevenLabsRealtime.voiceId,
     voiceElevenLabsRealtimeApiBaseUrl:
-      settings?.voice?.elevenLabsRealtime?.apiBaseUrl ?? defaultVoiceElevenLabsRealtime.apiBaseUrl,
+      resolved?.voice?.elevenLabsRealtime?.apiBaseUrl ?? defaultVoiceElevenLabsRealtime.apiBaseUrl,
     voiceElevenLabsRealtimeInputSampleRateHz:
-      settings?.voice?.elevenLabsRealtime?.inputSampleRateHz ?? defaultVoiceElevenLabsRealtime.inputSampleRateHz,
+      resolved?.voice?.elevenLabsRealtime?.inputSampleRateHz ?? defaultVoiceElevenLabsRealtime.inputSampleRateHz,
     voiceElevenLabsRealtimeOutputSampleRateHz:
-      settings?.voice?.elevenLabsRealtime?.outputSampleRateHz ?? defaultVoiceElevenLabsRealtime.outputSampleRateHz,
+      resolved?.voice?.elevenLabsRealtime?.outputSampleRateHz ?? defaultVoiceElevenLabsRealtime.outputSampleRateHz,
     voiceGeminiRealtimeModel:
-      settings?.voice?.geminiRealtime?.model ?? defaultVoiceGeminiRealtime.model,
-    voiceGeminiRealtimeVoice: settings?.voice?.geminiRealtime?.voice ?? defaultVoiceGeminiRealtime.voice,
+      resolved?.voice?.geminiRealtime?.model ?? defaultVoiceGeminiRealtime.model,
+    voiceGeminiRealtimeVoice: resolved?.voice?.geminiRealtime?.voice ?? defaultVoiceGeminiRealtime.voice,
     voiceGeminiRealtimeApiBaseUrl:
-      settings?.voice?.geminiRealtime?.apiBaseUrl ?? defaultVoiceGeminiRealtime.apiBaseUrl,
-    voiceGeminiRealtimeInputSampleRateHz: settings?.voice?.geminiRealtime?.inputSampleRateHz ?? defaultVoiceGeminiRealtime.inputSampleRateHz,
-    voiceGeminiRealtimeOutputSampleRateHz: settings?.voice?.geminiRealtime?.outputSampleRateHz ?? defaultVoiceGeminiRealtime.outputSampleRateHz,
-    voiceStreamWatchEnabled: settings?.voice?.streamWatch?.enabled ?? defaultVoiceStreamWatch.enabled,
+      resolved?.voice?.geminiRealtime?.apiBaseUrl ?? defaultVoiceGeminiRealtime.apiBaseUrl,
+    voiceGeminiRealtimeInputSampleRateHz: resolved?.voice?.geminiRealtime?.inputSampleRateHz ?? defaultVoiceGeminiRealtime.inputSampleRateHz,
+    voiceGeminiRealtimeOutputSampleRateHz: resolved?.voice?.geminiRealtime?.outputSampleRateHz ?? defaultVoiceGeminiRealtime.outputSampleRateHz,
+    voiceStreamWatchEnabled: resolved?.voice?.streamWatch?.enabled ?? defaultVoiceStreamWatch.enabled,
     voiceStreamWatchMinCommentaryIntervalSeconds:
-      settings?.voice?.streamWatch?.minCommentaryIntervalSeconds ?? defaultVoiceStreamWatch.minCommentaryIntervalSeconds,
-    voiceStreamWatchMaxFramesPerMinute: settings?.voice?.streamWatch?.maxFramesPerMinute ?? defaultVoiceStreamWatch.maxFramesPerMinute,
-    voiceStreamWatchMaxFrameBytes: settings?.voice?.streamWatch?.maxFrameBytes ?? defaultVoiceStreamWatch.maxFrameBytes,
+      resolved?.voice?.streamWatch?.minCommentaryIntervalSeconds ?? defaultVoiceStreamWatch.minCommentaryIntervalSeconds,
+    voiceStreamWatchMaxFramesPerMinute: resolved?.voice?.streamWatch?.maxFramesPerMinute ?? defaultVoiceStreamWatch.maxFramesPerMinute,
+    voiceStreamWatchMaxFrameBytes: resolved?.voice?.streamWatch?.maxFrameBytes ?? defaultVoiceStreamWatch.maxFrameBytes,
     voiceStreamWatchCommentaryPath:
-      settings?.voice?.streamWatch?.commentaryPath ?? defaultVoiceStreamWatch.commentaryPath,
+      resolved?.voice?.streamWatch?.commentaryPath ?? defaultVoiceStreamWatch.commentaryPath,
     voiceStreamWatchKeyframeIntervalMs:
-      settings?.voice?.streamWatch?.keyframeIntervalMs ?? defaultVoiceStreamWatch.keyframeIntervalMs,
+      resolved?.voice?.streamWatch?.keyframeIntervalMs ?? defaultVoiceStreamWatch.keyframeIntervalMs,
     voiceStreamWatchAutonomousCommentaryEnabled:
-      settings?.voice?.streamWatch?.autonomousCommentaryEnabled ?? defaultVoiceStreamWatch.autonomousCommentaryEnabled,
+      resolved?.voice?.streamWatch?.autonomousCommentaryEnabled ?? defaultVoiceStreamWatch.autonomousCommentaryEnabled,
     voiceStreamWatchBrainContextEnabled:
-      settings?.voice?.streamWatch?.brainContextEnabled ?? defaultVoiceStreamWatch.brainContextEnabled,
+      resolved?.voice?.streamWatch?.brainContextEnabled ?? defaultVoiceStreamWatch.brainContextEnabled,
     voiceStreamWatchBrainContextMinIntervalSeconds:
-      settings?.voice?.streamWatch?.brainContextMinIntervalSeconds ??
+      resolved?.voice?.streamWatch?.brainContextMinIntervalSeconds ??
       defaultVoiceStreamWatch.brainContextMinIntervalSeconds,
     voiceStreamWatchBrainContextMaxEntries:
-      settings?.voice?.streamWatch?.brainContextMaxEntries ?? defaultVoiceStreamWatch.brainContextMaxEntries,
+      resolved?.voice?.streamWatch?.brainContextMaxEntries ?? defaultVoiceStreamWatch.brainContextMaxEntries,
     voiceStreamWatchBrainContextPrompt:
-      settings?.voice?.streamWatch?.brainContextPrompt ?? defaultVoiceStreamWatch.brainContextPrompt,
+      resolved?.voice?.streamWatch?.brainContextPrompt ?? defaultVoiceStreamWatch.brainContextPrompt,
     voiceStreamWatchSharePageMaxWidthPx:
-      settings?.voice?.streamWatch?.sharePageMaxWidthPx ?? defaultVoiceStreamWatch.sharePageMaxWidthPx,
+      resolved?.voice?.streamWatch?.sharePageMaxWidthPx ?? defaultVoiceStreamWatch.sharePageMaxWidthPx,
     voiceStreamWatchSharePageJpegQuality:
-      settings?.voice?.streamWatch?.sharePageJpegQuality ?? defaultVoiceStreamWatch.sharePageJpegQuality,
-    voiceSoundboardEnabled: settings?.voice?.soundboard?.enabled ?? defaultVoiceSoundboard.enabled,
-    voiceSoundboardAllowExternalSounds: settings?.voice?.soundboard?.allowExternalSounds ?? defaultVoiceSoundboard.allowExternalSounds,
-    voiceSoundboardPreferredSoundIds: formatLineList(settings?.voice?.soundboard?.preferredSoundIds),
+      resolved?.voice?.streamWatch?.sharePageJpegQuality ?? defaultVoiceStreamWatch.sharePageJpegQuality,
+    voiceSoundboardEnabled: resolved?.voice?.soundboard?.enabled ?? defaultVoiceSoundboard.enabled,
+    voiceSoundboardAllowExternalSounds: resolved?.voice?.soundboard?.allowExternalSounds ?? defaultVoiceSoundboard.allowExternalSounds,
+    voiceSoundboardPreferredSoundIds: formatLineList(resolved?.voice?.soundboard?.preferredSoundIds),
     voiceSttPipelineTtsModel:
-      settings?.voice?.sttPipeline?.ttsModel ?? defaults.voice.sttPipeline.ttsModel,
+      resolved?.voice?.sttPipeline?.ttsModel ?? defaults.voice.sttPipeline.ttsModel,
     voiceSttPipelineTtsVoice:
-      settings?.voice?.sttPipeline?.ttsVoice ?? defaults.voice.sttPipeline.ttsVoice,
+      resolved?.voice?.sttPipeline?.ttsVoice ?? defaults.voice.sttPipeline.ttsVoice,
     voiceSttPipelineTtsSpeed:
-      settings?.voice?.sttPipeline?.ttsSpeed ?? defaults.voice.sttPipeline.ttsSpeed,
-    voiceAsrEnabled: settings?.voice?.asrEnabled ?? defaultVoice.asrEnabled ?? true,
-    voiceTextOnlyMode: settings?.voice?.textOnlyMode ?? defaultVoice.textOnlyMode ?? false,
-    voiceOperationalMessages: settings?.voice?.operationalMessages ?? defaultVoice.operationalMessages ?? "all",
-    maxMessages: settings?.permissions?.maxMessagesPerHour ?? defaultPermissions.maxMessagesPerHour,
-    maxReactions: settings?.permissions?.maxReactionsPerHour ?? defaultPermissions.maxReactionsPerHour,
-    catchupEnabled: settings?.startup?.catchupEnabled !== false,
-    catchupLookbackHours: settings?.startup?.catchupLookbackHours ?? defaultStartup.catchupLookbackHours,
-    catchupMaxMessages: settings?.startup?.catchupMaxMessagesPerChannel ?? defaultStartup.catchupMaxMessagesPerChannel,
-    catchupMaxReplies: settings?.startup?.maxCatchupRepliesPerChannel ?? defaultStartup.maxCatchupRepliesPerChannel,
-    discoveryEnabled: settings?.discovery?.enabled ?? defaultDiscovery.enabled,
+      resolved?.voice?.sttPipeline?.ttsSpeed ?? defaults.voice.sttPipeline.ttsSpeed,
+    voiceAsrEnabled: resolved?.voice?.asrEnabled ?? defaultVoice.asrEnabled ?? true,
+    voiceTextOnlyMode: resolved?.voice?.textOnlyMode ?? defaultVoice.textOnlyMode ?? false,
+    voiceOperationalMessages: resolved?.voice?.operationalMessages ?? defaultVoice.operationalMessages ?? "all",
+    maxMessages: resolved?.permissions?.maxMessagesPerHour ?? defaultPermissions.maxMessagesPerHour,
+    maxReactions: resolved?.permissions?.maxReactionsPerHour ?? defaultPermissions.maxReactionsPerHour,
+    catchupEnabled: Boolean(resolved?.startup?.catchupEnabled ?? true),
+    catchupLookbackHours: resolved?.startup?.catchupLookbackHours ?? defaultStartup.catchupLookbackHours,
+    catchupMaxMessages: resolved?.startup?.catchupMaxMessagesPerChannel ?? defaultStartup.catchupMaxMessagesPerChannel,
+    catchupMaxReplies: resolved?.startup?.maxCatchupRepliesPerChannel ?? defaultStartup.maxCatchupRepliesPerChannel,
+    discoveryEnabled: resolved?.discovery?.enabled ?? defaultDiscovery.enabled,
     discoveryPostsPerDay:
-      settings?.discovery?.maxPostsPerDay ?? defaultDiscovery.maxPostsPerDay,
+      resolved?.discovery?.maxPostsPerDay ?? defaultDiscovery.maxPostsPerDay,
     discoveryMinMinutes:
-      settings?.discovery?.minMinutesBetweenPosts ?? defaultDiscovery.minMinutesBetweenPosts,
+      resolved?.discovery?.minMinutesBetweenPosts ?? defaultDiscovery.minMinutesBetweenPosts,
     discoveryPacingMode:
-      settings?.discovery?.pacingMode === "spontaneous" ? "spontaneous" : "even",
+      String(resolved?.discovery?.pacingMode || defaultDiscovery.pacingMode) === "spontaneous" ? "spontaneous" : "even",
     discoverySpontaneity:
-      settings?.discovery?.spontaneity ?? defaultDiscovery.spontaneity,
+      resolved?.discovery?.spontaneity ?? defaultDiscovery.spontaneity,
     discoveryStartupPost:
-      settings?.discovery?.postOnStartup ?? defaultDiscovery.postOnStartup,
+      resolved?.discovery?.postOnStartup ?? defaultDiscovery.postOnStartup,
     discoveryImageEnabled:
-      settings?.discovery?.allowImagePosts ?? defaultDiscovery.allowImagePosts,
+      resolved?.discovery?.allowImagePosts ?? defaultDiscovery.allowImagePosts,
     discoveryVideoEnabled:
-      settings?.discovery?.allowVideoPosts ?? defaultDiscovery.allowVideoPosts,
+      resolved?.discovery?.allowVideoPosts ?? defaultDiscovery.allowVideoPosts,
     replyImageEnabled:
-      settings?.discovery?.allowReplyImages ?? defaultDiscovery.allowReplyImages,
+      resolved?.discovery?.allowReplyImages ?? defaultDiscovery.allowReplyImages,
     replyVideoEnabled:
-      settings?.discovery?.allowReplyVideos ?? defaultDiscovery.allowReplyVideos,
+      resolved?.discovery?.allowReplyVideos ?? defaultDiscovery.allowReplyVideos,
     replyGifEnabled:
-      settings?.discovery?.allowReplyGifs ?? defaultDiscovery.allowReplyGifs,
-    maxImagesPerDay: settings?.discovery?.maxImagesPerDay ?? defaultDiscovery.maxImagesPerDay,
-    maxVideosPerDay: settings?.discovery?.maxVideosPerDay ?? defaultDiscovery.maxVideosPerDay,
-    maxGifsPerDay: settings?.discovery?.maxGifsPerDay ?? defaultDiscovery.maxGifsPerDay,
+      resolved?.discovery?.allowReplyGifs ?? defaultDiscovery.allowReplyGifs,
+    maxImagesPerDay: resolved?.discovery?.maxImagesPerDay ?? defaultDiscovery.maxImagesPerDay,
+    maxVideosPerDay: resolved?.discovery?.maxVideosPerDay ?? defaultDiscovery.maxVideosPerDay,
+    maxGifsPerDay: resolved?.discovery?.maxGifsPerDay ?? defaultDiscovery.maxGifsPerDay,
     discoverySimpleImageModel:
-      settings?.discovery?.simpleImageModel ?? defaultDiscovery.simpleImageModel,
+      resolved?.discovery?.simpleImageModel ?? defaultDiscovery.simpleImageModel,
     discoveryComplexImageModel:
-      settings?.discovery?.complexImageModel ?? defaultDiscovery.complexImageModel,
+      resolved?.discovery?.complexImageModel ?? defaultDiscovery.complexImageModel,
     discoveryVideoModel:
-      settings?.discovery?.videoModel ?? defaultDiscovery.videoModel,
+      resolved?.discovery?.videoModel ?? defaultDiscovery.videoModel,
     discoveryAllowedImageModels:
-      formatLineList(settings?.discovery?.allowedImageModels ?? []),
+      formatLineList(resolved?.discovery?.allowedImageModels ?? []),
     discoveryAllowedVideoModels:
-      formatLineList(settings?.discovery?.allowedVideoModels ?? []),
-    discoveryExternalEnabled:
-      settings?.discovery?.linkChancePercent > 0 ||
-      settings?.discovery?.sources?.reddit === true ||
-      settings?.discovery?.sources?.hackerNews === true ||
-      settings?.discovery?.sources?.youtube === true ||
-      settings?.discovery?.sources?.rss === true ||
-      settings?.discovery?.sources?.x === true,
+      formatLineList(resolved?.discovery?.allowedVideoModels ?? []),
+    discoveryExternalEnabled: Boolean(
+      Number(resolved?.discovery?.linkChancePercent) > 0 ||
+      resolved?.discovery?.sources?.reddit ||
+      resolved?.discovery?.sources?.hackerNews ||
+      resolved?.discovery?.sources?.youtube ||
+      resolved?.discovery?.sources?.rss ||
+      resolved?.discovery?.sources?.x
+    ),
     discoveryLinkChance:
-      settings?.discovery?.linkChancePercent ?? defaultDiscovery.linkChancePercent,
+      resolved?.discovery?.linkChancePercent ?? defaultDiscovery.linkChancePercent,
     discoveryMaxLinks:
-      settings?.discovery?.maxLinksPerPost ?? defaultDiscovery.maxLinksPerPost,
+      resolved?.discovery?.maxLinksPerPost ?? defaultDiscovery.maxLinksPerPost,
     discoveryMaxCandidates:
-      settings?.discovery?.maxCandidatesForPrompt ?? defaultDiscovery.maxCandidatesForPrompt,
+      resolved?.discovery?.maxCandidatesForPrompt ?? defaultDiscovery.maxCandidatesForPrompt,
     discoveryFreshnessHours:
-      settings?.discovery?.freshnessHours ?? defaultDiscovery.freshnessHours,
+      resolved?.discovery?.freshnessHours ?? defaultDiscovery.freshnessHours,
     discoveryDedupeHours:
-      settings?.discovery?.dedupeHours ?? defaultDiscovery.dedupeHours,
+      resolved?.discovery?.dedupeHours ?? defaultDiscovery.dedupeHours,
     discoveryRandomness:
-      settings?.discovery?.randomness ?? defaultDiscovery.randomness,
+      resolved?.discovery?.randomness ?? defaultDiscovery.randomness,
     discoveryFetchLimit:
-      settings?.discovery?.sourceFetchLimit ?? defaultDiscovery.sourceFetchLimit,
+      resolved?.discovery?.sourceFetchLimit ?? defaultDiscovery.sourceFetchLimit,
     discoveryAllowNsfw:
-      settings?.discovery?.allowNsfw ?? defaultDiscovery.allowNsfw,
+      resolved?.discovery?.allowNsfw ?? defaultDiscovery.allowNsfw,
     discoverySourceReddit:
-      settings?.discovery?.sources?.reddit ?? defaultDiscovery.sources.reddit,
+      resolved?.discovery?.sources?.reddit ?? defaultDiscovery.sources.reddit,
     discoverySourceHackerNews:
-      settings?.discovery?.sources?.hackerNews ?? defaultDiscovery.sources.hackerNews,
+      resolved?.discovery?.sources?.hackerNews ?? defaultDiscovery.sources.hackerNews,
     discoverySourceYoutube:
-      settings?.discovery?.sources?.youtube ?? defaultDiscovery.sources.youtube,
+      resolved?.discovery?.sources?.youtube ?? defaultDiscovery.sources.youtube,
     discoverySourceRss:
-      settings?.discovery?.sources?.rss ?? defaultDiscovery.sources.rss,
+      resolved?.discovery?.sources?.rss ?? defaultDiscovery.sources.rss,
     discoverySourceX:
-      settings?.discovery?.sources?.x ?? defaultDiscovery.sources.x,
+      resolved?.discovery?.sources?.x ?? defaultDiscovery.sources.x,
     discoveryPreferredTopics:
-      formatLineList(settings?.discovery?.preferredTopics),
+      formatLineList(resolved?.discovery?.preferredTopics),
     discoveryRedditSubs:
-      formatLineList(settings?.discovery?.redditSubreddits),
+      formatLineList(resolved?.discovery?.redditSubreddits),
     discoveryYoutubeChannels:
-      formatLineList(settings?.discovery?.youtubeChannelIds),
+      formatLineList(resolved?.discovery?.youtubeChannelIds),
     discoveryRssFeeds:
-      formatLineList(settings?.discovery?.rssFeeds),
+      formatLineList(resolved?.discovery?.rssFeeds),
     discoveryXHandles:
-      formatLineList(settings?.discovery?.xHandles),
+      formatLineList(resolved?.discovery?.xHandles),
     discoveryXNitterBase:
-      settings?.discovery?.xNitterBaseUrl ?? defaultDiscovery.xNitterBaseUrl,
-    replyChannels: formatLineList(settings?.permissions?.replyChannelIds),
-    discoveryChannels: formatLineList(settings?.discovery?.channelIds),
-    allowedChannels: formatLineList(settings?.permissions?.allowedChannelIds),
-    blockedChannels: formatLineList(settings?.permissions?.blockedChannelIds),
-    blockedUsers: formatLineList(settings?.permissions?.blockedUserIds)
+      resolved?.discovery?.xNitterBaseUrl ?? defaultDiscovery.xNitterBaseUrl,
+    replyChannels: formatLineList(resolved?.permissions?.replyChannelIds),
+    discoveryChannels: formatLineList(resolved?.discovery?.channelIds),
+    allowedChannels: formatLineList(resolved?.permissions?.allowedChannelIds),
+    blockedChannels: formatLineList(resolved?.permissions?.blockedChannelIds),
+    blockedUsers: formatLineList(resolved?.permissions?.blockedUserIds)
   };
 }
 
 export function formToSettingsPatch(form) {
   const discoveryExternalEnabled = Boolean(form.discoveryExternalEnabled);
+  const advancedOverridesEnabled = Boolean(form.stackAdvancedOverridesEnabled);
   return {
-    botName: form.botName.trim(),
-    botNameAliases: parseUniqueList(form.botNameAliases),
+    identity: {
+      botName: form.botName.trim(),
+      botNameAliases: parseUniqueList(form.botNameAliases)
+    },
     persona: {
       flavor: form.personaFlavor.trim(),
       hardLimits: parseUniqueLineList(form.personaHardLimits)
     },
-    prompt: {
-      capabilityHonestyLine: String(form.promptCapabilityHonestyLine || "").trim(),
-      impossibleActionLine: String(form.promptImpossibleActionLine || "").trim(),
-      memoryEnabledLine: String(form.promptMemoryEnabledLine || "").trim(),
-      memoryDisabledLine: String(form.promptMemoryDisabledLine || "").trim(),
-      skipLine: String(form.promptSkipLine || "").trim(),
-      textGuidance: parseUniqueLineList(form.promptTextGuidance),
-      voiceGuidance: parseUniqueLineList(form.promptVoiceGuidance),
-      voiceOperationalGuidance: parseUniqueLineList(form.promptVoiceOperationalGuidance),
-      voiceLookupBusySystemPrompt: String(form.promptVoiceLookupBusySystemPrompt || "").trim(),
-      mediaPromptCraftGuidance: String(form.promptMediaPromptCraftGuidance || "").trim()
-    },
-    activity: {
-      replyEagerness: Number(form.replyEagerness),
-      reactionLevel: Number(form.reactionLevel),
-      minSecondsBetweenMessages: Number(form.minGap)
-    },
-    textThoughtLoop: {
-      enabled: Boolean(form.textThoughtLoopEnabled),
-      eagerness: Number(form.textThoughtLoopEagerness),
-      minMinutesBetweenThoughts: Number(form.textThoughtLoopMinMinutesBetweenThoughts),
-      maxThoughtsPerDay: Number(form.textThoughtLoopMaxThoughtsPerDay),
-      lookbackMessages: Number(form.textThoughtLoopLookbackMessages)
-    },
-    llm: {
-      provider: form.provider,
-      model: form.model.trim(),
-      temperature: Number(form.temperature),
-      maxOutputTokens: Number(form.maxTokens)
-    },
-    replyFollowupLlm: {
-      enabled: Boolean(form.replyFollowupLlmEnabled),
-      provider: String(form.replyFollowupLlmProvider || "").trim(),
-      model: String(form.replyFollowupLlmModel || "").trim(),
-      maxToolSteps: Number(form.replyFollowupMaxToolSteps),
-      maxTotalToolCalls: Number(form.replyFollowupMaxTotalToolCalls),
-      maxWebSearchCalls: Number(form.replyFollowupMaxWebSearchCalls),
-      maxMemoryLookupCalls: Number(form.replyFollowupMaxMemoryLookupCalls),
-      maxImageLookupCalls: Number(form.replyFollowupMaxImageLookupCalls),
-      toolTimeoutMs: Number(form.replyFollowupToolTimeoutMs)
-    },
-    memoryLlm: {
-      provider: String(form.memoryLlmProvider || "").trim(),
-      model: String(form.memoryLlmModel || "").trim()
-    },
-    browser: {
-      enabled: form.browserEnabled,
-      maxBrowseCallsPerHour: Number(form.browserMaxPerHour),
-      llm: {
-        provider: String(form.browserLlmProvider || "").trim(),
-        model: String(form.browserLlmModel || "").trim()
+    prompting: {
+      global: {
+        capabilityHonestyLine: String(form.promptCapabilityHonestyLine || "").trim(),
+        impossibleActionLine: String(form.promptImpossibleActionLine || "").trim(),
+        memoryEnabledLine: String(form.promptMemoryEnabledLine || "").trim(),
+        memoryDisabledLine: String(form.promptMemoryDisabledLine || "").trim(),
+        skipLine: String(form.promptSkipLine || "").trim()
       },
-      maxStepsPerTask: Number(form.browserMaxSteps),
-      stepTimeoutMs: Number(form.browserStepTimeoutMs),
-      sessionTimeoutMs: Number(form.browserSessionTimeoutMs)
+      text: {
+        guidance: parseUniqueLineList(form.promptTextGuidance)
+      },
+      voice: {
+        guidance: parseUniqueLineList(form.promptVoiceGuidance),
+        operationalGuidance: parseUniqueLineList(form.promptVoiceOperationalGuidance),
+        lookupBusySystemPrompt: String(form.promptVoiceLookupBusySystemPrompt || "").trim()
+      },
+      media: {
+        promptCraftGuidance: String(form.promptMediaPromptCraftGuidance || "").trim()
+      }
     },
-    codeAgent: {
-      enabled: Boolean(form.codeAgentEnabled),
-      provider: String(form.codeAgentProvider || "claude-code").trim().toLowerCase(),
-      model: String(form.codeAgentModel || "sonnet").trim(),
-      codexModel: String(form.codeAgentCodexModel || "codex-mini-latest").trim(),
-      maxTurns: Number(form.codeAgentMaxTurns),
-      timeoutMs: Number(form.codeAgentTimeoutMs),
-      maxBufferBytes: Number(form.codeAgentMaxBufferBytes),
-      defaultCwd: String(form.codeAgentDefaultCwd || "").trim(),
-      maxTasksPerHour: Number(form.codeAgentMaxTasksPerHour),
-      maxParallelTasks: Number(form.codeAgentMaxParallelTasks),
-      allowedUserIds: parseUniqueList(form.codeAgentAllowedUserIds)
+    permissions: {
+      replies: {
+        allowReplies: form.allowReplies,
+        allowUnsolicitedReplies: form.allowUnsolicitedReplies,
+        allowReactions: form.allowReactions,
+        replyChannelIds: parseUniqueList(form.replyChannels),
+        allowedChannelIds: parseUniqueList(form.allowedChannels),
+        blockedChannelIds: parseUniqueList(form.blockedChannels),
+        blockedUserIds: parseUniqueList(form.blockedUsers),
+        maxMessagesPerHour: Number(form.maxMessages),
+        maxReactionsPerHour: Number(form.maxReactions)
+      },
+      devTasks: {
+        allowedUserIds: parseUniqueList(form.codeAgentAllowedUserIds)
+      }
     },
-    vision: {
-      captionEnabled: Boolean(form.visionCaptionEnabled),
-      provider: String(form.visionProvider || "").trim(),
-      model: String(form.visionModel || "").trim(),
-      maxAutoIncludeImages: Number(form.visionMaxAutoIncludeImages),
-      maxCaptionsPerHour: Number(form.visionMaxCaptionsPerHour)
+    interaction: {
+      activity: {
+        replyEagerness: Number(form.replyEagerness),
+        reactionLevel: Number(form.reactionLevel),
+        minSecondsBetweenMessages: Number(form.minGap)
+      },
+      replyGeneration: {
+        temperature: Number(form.temperature),
+        maxOutputTokens: Number(form.maxTokens)
+      },
+      followup: {
+        enabled: Boolean(form.replyFollowupLlmEnabled),
+        execution: {
+          mode: "dedicated_model",
+          model: {
+            provider: String(form.replyFollowupLlmProvider || "").trim(),
+            model: String(form.replyFollowupLlmModel || "").trim()
+          }
+        },
+        toolBudget: {
+          maxToolSteps: Number(form.replyFollowupMaxToolSteps),
+          maxTotalToolCalls: Number(form.replyFollowupMaxTotalToolCalls),
+          maxWebSearchCalls: Number(form.replyFollowupMaxWebSearchCalls),
+          maxMemoryLookupCalls: Number(form.replyFollowupMaxMemoryLookupCalls),
+          maxImageLookupCalls: Number(form.replyFollowupMaxImageLookupCalls),
+          toolTimeoutMs: Number(form.replyFollowupToolTimeoutMs)
+        }
+      },
+      startup: {
+        catchupEnabled: form.catchupEnabled,
+        catchupLookbackHours: Number(form.catchupLookbackHours),
+        catchupMaxMessagesPerChannel: Number(form.catchupMaxMessages),
+        maxCatchupRepliesPerChannel: Number(form.catchupMaxReplies)
+      },
+      sessions: {
+        sessionIdleTimeoutMs: Math.max(10_000, Number(form.subAgentSessionIdleTimeoutMs) || 300_000),
+        maxConcurrentSessions: Math.max(1, Number(form.subAgentMaxConcurrentSessions) || 20)
+      }
     },
-    webSearch: {
-      enabled: form.webSearchEnabled,
-      maxSearchesPerHour: Number(form.webSearchPerHour),
-      maxResults: Number(form.webSearchMaxResults),
-      maxPagesToRead: Number(form.webSearchMaxPages),
-      maxCharsPerPage: Number(form.webSearchMaxChars),
-      safeSearch: form.webSearchSafeMode,
-      providerOrder: parseUniqueList(form.webSearchProviderOrder),
-      recencyDaysDefault: Number(form.webSearchRecencyDaysDefault),
-      maxConcurrentFetches: Number(form.webSearchMaxConcurrentFetches)
+    agentStack: {
+      preset: String(form.stackPreset || "openai_native").trim(),
+      advancedOverridesEnabled,
+      overrides: advancedOverridesEnabled ? {
+        orchestrator: {
+          provider: form.provider,
+          model: form.model.trim()
+        },
+        devTeam: {
+          codingWorkers:
+            String(form.codeAgentProvider || "auto").trim().toLowerCase() === "codex"
+              ? ["codex"]
+              : String(form.codeAgentProvider || "auto").trim().toLowerCase() === "claude-code"
+                ? ["claude_code"]
+                : ["codex", "claude_code"]
+        },
+        voiceAdmissionClassifier: {
+          mode: "dedicated_model",
+          model: {
+            provider: String(form.voiceReplyDecisionLlmProvider || "").trim(),
+            model: String(form.voiceReplyDecisionLlmModel || "").trim()
+          }
+        }
+      } : {},
+      runtimeConfig: {
+        research: {
+          enabled: form.webSearchEnabled,
+          maxSearchesPerHour: Number(form.webSearchPerHour),
+          openaiNativeWebSearch: {
+            userLocation: String(form.webSearchOpenAiUserLocation || "").trim(),
+            allowedDomains: parseUniqueList(form.webSearchOpenAiAllowedDomains)
+          },
+          localExternalSearch: {
+            safeSearch: form.webSearchSafeMode,
+            providerOrder: parseUniqueList(form.webSearchProviderOrder),
+            maxResults: Number(form.webSearchMaxResults),
+            maxPagesToRead: Number(form.webSearchMaxPages),
+            maxCharsPerPage: Number(form.webSearchMaxChars),
+            recencyDaysDefault: Number(form.webSearchRecencyDaysDefault),
+            maxConcurrentFetches: Number(form.webSearchMaxConcurrentFetches)
+          }
+        },
+        browser: {
+          enabled: form.browserEnabled,
+          openaiComputerUse: {
+            model: String(form.browserOpenAiComputerUseModel || "computer-use-preview").trim()
+          },
+          localBrowserAgent: {
+            execution: {
+              mode: "dedicated_model",
+              model: {
+                provider: String(form.browserLlmProvider || "").trim(),
+                model: String(form.browserLlmModel || "").trim()
+              }
+            },
+            maxBrowseCallsPerHour: Number(form.browserMaxPerHour),
+            maxStepsPerTask: Number(form.browserMaxSteps),
+            stepTimeoutMs: Number(form.browserStepTimeoutMs),
+            sessionTimeoutMs: Number(form.browserSessionTimeoutMs)
+          }
+        },
+        voice: {
+          openaiRealtime: {
+            model: String(form.voiceOpenAiRealtimeModel || "").trim(),
+            voice: String(form.voiceOpenAiRealtimeVoice || "").trim(),
+            inputAudioFormat: "pcm16",
+            outputAudioFormat: "pcm16",
+            transcriptionMethod: String(form.voiceOpenAiRealtimeTranscriptionMethod || "").trim().toLowerCase(),
+            inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
+            usePerUserAsrBridge: Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge)
+          },
+          legacyVoiceStack: {
+            selectedProvider: String(form.voiceProvider || "openai").trim(),
+            generation: Boolean(form.voiceGenerationLlmUseTextModel)
+              ? { mode: "inherit_orchestrator" }
+              : {
+                  mode: "dedicated_model",
+                  model: {
+                    provider: String(form.voiceGenerationLlmProvider || "").trim(),
+                    model: String(form.voiceGenerationLlmModel || "").trim()
+                  }
+                },
+            xai: {
+              voice: String(form.voiceXaiVoice || "").trim(),
+              audioFormat: String(form.voiceXaiAudioFormat || "").trim(),
+              sampleRateHz: Number(form.voiceXaiSampleRateHz),
+              region: String(form.voiceXaiRegion || "").trim()
+            },
+            elevenLabsRealtime: {
+              agentId: String(form.voiceElevenLabsRealtimeAgentId || "").trim(),
+              voiceId: String(form.voiceElevenLabsRealtimeVoiceId || "").trim(),
+              apiBaseUrl: String(form.voiceElevenLabsRealtimeApiBaseUrl || "").trim(),
+              inputSampleRateHz: Number(form.voiceElevenLabsRealtimeInputSampleRateHz),
+              outputSampleRateHz: Number(form.voiceElevenLabsRealtimeOutputSampleRateHz)
+            },
+            geminiRealtime: {
+              model: String(form.voiceGeminiRealtimeModel || "").trim(),
+              voice: String(form.voiceGeminiRealtimeVoice || "").trim(),
+              apiBaseUrl: String(form.voiceGeminiRealtimeApiBaseUrl || "").trim(),
+              inputSampleRateHz: Number(form.voiceGeminiRealtimeInputSampleRateHz),
+              outputSampleRateHz: Number(form.voiceGeminiRealtimeOutputSampleRateHz)
+            },
+            sttPipeline: {
+              transcriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
+              ttsModel: String(form.voiceSttPipelineTtsModel || "").trim(),
+              ttsVoice: String(form.voiceSttPipelineTtsVoice || "").trim(),
+              ttsSpeed: Number(form.voiceSttPipelineTtsSpeed)
+            }
+          }
+        },
+        devTeam: {
+          codex: {
+            enabled: Boolean(form.codeAgentEnabled),
+            model: String(form.codeAgentCodexModel || "gpt-5-codex").trim(),
+            maxTurns: Number(form.codeAgentMaxTurns),
+            timeoutMs: Number(form.codeAgentTimeoutMs),
+            maxBufferBytes: Number(form.codeAgentMaxBufferBytes),
+            defaultCwd: String(form.codeAgentDefaultCwd || "").trim(),
+            maxTasksPerHour: Number(form.codeAgentMaxTasksPerHour),
+            maxParallelTasks: Number(form.codeAgentMaxParallelTasks)
+          },
+          claudeCode: {
+            enabled: Boolean(form.codeAgentEnabled),
+            model: String(form.codeAgentModel || "sonnet").trim(),
+            maxTurns: Number(form.codeAgentMaxTurns),
+            timeoutMs: Number(form.codeAgentTimeoutMs),
+            maxBufferBytes: Number(form.codeAgentMaxBufferBytes),
+            defaultCwd: String(form.codeAgentDefaultCwd || "").trim(),
+            maxTasksPerHour: Number(form.codeAgentMaxTasksPerHour),
+            maxParallelTasks: Number(form.codeAgentMaxParallelTasks)
+          }
+        }
+      }
     },
-    videoContext: {
-      enabled: form.videoContextEnabled,
-      maxLookupsPerHour: Number(form.videoContextPerHour),
-      maxVideosPerMessage: Number(form.videoContextMaxVideos),
-      maxTranscriptChars: Number(form.videoContextMaxChars),
-      keyframeIntervalSeconds: Number(form.videoContextKeyframeInterval),
-      maxKeyframesPerVideo: Number(form.videoContextMaxKeyframes),
-      allowAsrFallback: form.videoContextAsrFallback,
-      maxAsrSeconds: Number(form.videoContextMaxAsrSeconds)
+    memory: {
+      enabled: form.memoryEnabled,
+      execution: {
+        mode: "dedicated_model",
+        model: {
+          provider: String(form.memoryLlmProvider || "").trim(),
+          model: String(form.memoryLlmModel || "").trim()
+        }
+      },
+      reflection: {
+        strategy:
+          String(form.memoryReflectionStrategy || "").trim().toLowerCase() === "one_pass_main"
+            ? "one_pass_main"
+            : "two_pass_extract_then_main"
+      }
     },
-    voice: {
-      enabled: form.voiceEnabled,
-      voiceProvider: String(form.voiceProvider || "openai").trim(),
-      replyPath: String(form.voiceReplyPath || "bridge").trim().toLowerCase(),
-      ttsMode: String(form.voiceTtsMode || "realtime").trim().toLowerCase(),
-      brainProvider: String(form.voiceBrainProvider || "openai").trim().toLowerCase(),
-      transcriberProvider: "openai",
-      asrLanguageMode: String(form.voiceAsrLanguageMode || "").trim(),
-      asrLanguageHint: String(form.voiceAsrLanguageHint || "").trim(),
-      allowNsfwHumor: form.voiceAllowNsfwHumor,
-      intentConfidenceThreshold: Number(form.voiceIntentConfidenceThreshold),
-      maxSessionMinutes: Number(form.voiceMaxSessionMinutes),
-      inactivityLeaveSeconds: Number(form.voiceInactivityLeaveSeconds),
-      maxSessionsPerDay: Number(form.voiceMaxSessionsPerDay),
-      replyEagerness: Number(form.voiceReplyEagerness),
-      commandOnlyMode: Boolean(form.voiceCommandOnlyMode),
-      thoughtEngine: {
+    directives: {
+      enabled: Boolean(form.adaptiveDirectivesEnabled)
+    },
+    initiative: {
+      text: {
+        enabled: Boolean(form.textThoughtLoopEnabled),
+        execution: {
+          mode: "inherit_orchestrator"
+        },
+        eagerness: Number(form.textThoughtLoopEagerness),
+        minMinutesBetweenThoughts: Number(form.textThoughtLoopMinMinutesBetweenThoughts),
+        maxThoughtsPerDay: Number(form.textThoughtLoopMaxThoughtsPerDay),
+        lookbackMessages: Number(form.textThoughtLoopLookbackMessages)
+      },
+      voice: {
         enabled: Boolean(form.voiceThoughtEngineEnabled),
-        provider: String(form.voiceThoughtEngineProvider || "").trim(),
-        model: String(form.voiceThoughtEngineModel || "").trim(),
-        temperature: Number(form.voiceThoughtEngineTemperature),
+        execution: {
+          mode: "dedicated_model",
+          model: {
+            provider: String(form.voiceThoughtEngineProvider || "").trim(),
+            model: String(form.voiceThoughtEngineModel || "").trim()
+          },
+          temperature: Number(form.voiceThoughtEngineTemperature)
+        },
         eagerness: Number(form.voiceThoughtEngineEagerness),
         minSilenceSeconds: Number(form.voiceThoughtEngineMinSilenceSeconds),
         minSecondsBetweenThoughts: Number(form.voiceThoughtEngineMinSecondsBetweenThoughts)
       },
-      replyDecisionLlm: {
-        realtimeAdmissionMode: String(form.voiceReplyDecisionRealtimeAdmissionMode || "hard_classifier")
-          .trim()
-          .toLowerCase(),
-        musicWakeLatchSeconds: Number(form.voiceReplyDecisionMusicWakeLatchSeconds),
-        provider: String(form.voiceReplyDecisionLlmProvider || "").trim(),
-        model: String(form.voiceReplyDecisionLlmModel || "").trim()
+      discovery: {
+        enabled: form.discoveryEnabled,
+        channelIds: parseUniqueList(form.discoveryChannels),
+        maxPostsPerDay: Number(form.discoveryPostsPerDay),
+        minMinutesBetweenPosts: Number(form.discoveryMinMinutes),
+        pacingMode: form.discoveryPacingMode,
+        spontaneity: Number(form.discoverySpontaneity),
+        postOnStartup: form.discoveryStartupPost,
+        allowImagePosts: form.discoveryImageEnabled,
+        allowVideoPosts: form.discoveryVideoEnabled,
+        allowReplyImages: form.replyImageEnabled,
+        allowReplyVideos: form.replyVideoEnabled,
+        allowReplyGifs: form.replyGifEnabled,
+        maxImagesPerDay: Number(form.maxImagesPerDay),
+        maxVideosPerDay: Number(form.maxVideosPerDay),
+        maxGifsPerDay: Number(form.maxGifsPerDay),
+        simpleImageModel: form.discoverySimpleImageModel.trim(),
+        complexImageModel: form.discoveryComplexImageModel.trim(),
+        videoModel: form.discoveryVideoModel.trim(),
+        allowedImageModels: parseUniqueList(form.discoveryAllowedImageModels),
+        allowedVideoModels: parseUniqueList(form.discoveryAllowedVideoModels),
+        linkChancePercent: discoveryExternalEnabled ? Number(form.discoveryLinkChance) : 0,
+        maxLinksPerPost: Number(form.discoveryMaxLinks),
+        maxCandidatesForPrompt: Number(form.discoveryMaxCandidates),
+        freshnessHours: Number(form.discoveryFreshnessHours),
+        dedupeHours: Number(form.discoveryDedupeHours),
+        randomness: Number(form.discoveryRandomness),
+        sourceFetchLimit: Number(form.discoveryFetchLimit),
+        allowNsfw: discoveryExternalEnabled ? form.discoveryAllowNsfw : false,
+        preferredTopics: parseUniqueList(form.discoveryPreferredTopics),
+        redditSubreddits: parseUniqueList(form.discoveryRedditSubs),
+        youtubeChannelIds: parseUniqueList(form.discoveryYoutubeChannels),
+        rssFeeds: parseUniqueList(form.discoveryRssFeeds),
+        xHandles: parseUniqueList(form.discoveryXHandles),
+        xNitterBaseUrl: form.discoveryXNitterBase.trim(),
+        sources: {
+          reddit: discoveryExternalEnabled ? form.discoverySourceReddit : false,
+          hackerNews: discoveryExternalEnabled ? form.discoverySourceHackerNews : false,
+          youtube: discoveryExternalEnabled ? form.discoverySourceYoutube : false,
+          rss: discoveryExternalEnabled ? form.discoverySourceRss : false,
+          x: discoveryExternalEnabled ? form.discoverySourceX : false
+        }
+      }
+    },
+    voice: {
+      enabled: form.voiceEnabled,
+      transcription: {
+        enabled: Boolean(form.voiceAsrEnabled),
+        languageMode: String(form.voiceAsrLanguageMode || "").trim(),
+        languageHint: String(form.voiceAsrLanguageHint || "").trim()
       },
-      generationLlm: {
-        useTextModel: Boolean(form.voiceGenerationLlmUseTextModel),
-        provider: String(form.voiceGenerationLlmProvider || "").trim(),
-        model: String(form.voiceGenerationLlmModel || "").trim()
+      channelPolicy: {
+        allowedChannelIds: parseUniqueList(form.voiceAllowedChannelIds),
+        blockedChannelIds: parseUniqueList(form.voiceBlockedChannelIds),
+        blockedUserIds: parseUniqueList(form.voiceBlockedUserIds)
       },
-      allowedVoiceChannelIds: parseUniqueList(form.voiceAllowedChannelIds),
-      blockedVoiceChannelIds: parseUniqueList(form.voiceBlockedChannelIds),
-      blockedVoiceUserIds: parseUniqueList(form.voiceBlockedUserIds),
-      xai: {
-        voice: String(form.voiceXaiVoice || "").trim(),
-        audioFormat: String(form.voiceXaiAudioFormat || "").trim(),
-        sampleRateHz: Number(form.voiceXaiSampleRateHz),
-        region: String(form.voiceXaiRegion || "").trim()
+      sessionLimits: {
+        maxSessionMinutes: Number(form.voiceMaxSessionMinutes),
+        inactivityLeaveSeconds: Number(form.voiceInactivityLeaveSeconds),
+        maxSessionsPerDay: Number(form.voiceMaxSessionsPerDay),
+        maxConcurrentSessions: Number(form.subAgentMaxConcurrentSessions || 1)
       },
-      openaiRealtime: {
-        model: String(form.voiceOpenAiRealtimeModel || "").trim(),
-        voice: String(form.voiceOpenAiRealtimeVoice || "").trim(),
-        inputAudioFormat: "pcm16",
-        outputAudioFormat: "pcm16",
-        transcriptionMethod: String(form.voiceOpenAiRealtimeTranscriptionMethod || "").trim().toLowerCase(),
-        inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
-        usePerUserAsrBridge: Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge)
+      conversationPolicy: {
+        replyEagerness: Number(form.voiceReplyEagerness),
+        commandOnlyMode: Boolean(form.voiceCommandOnlyMode),
+        allowNsfwHumor: form.voiceAllowNsfwHumor,
+        textOnlyMode: Boolean(form.voiceTextOnlyMode),
+        replyPath: String(form.voiceReplyPath || "bridge").trim().toLowerCase(),
+        ttsMode: String(form.voiceTtsMode || "realtime").trim().toLowerCase(),
+        operationalMessages: String(form.voiceOperationalMessages || "all").trim().toLowerCase()
       },
-      sttPipeline: {
-        transcriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
-        ttsModel: String(form.voiceSttPipelineTtsModel || "").trim(),
-        ttsVoice: String(form.voiceSttPipelineTtsVoice || "").trim(),
-        ttsSpeed: Number(form.voiceSttPipelineTtsSpeed)
-      },
-      elevenLabsRealtime: {
-        agentId: String(form.voiceElevenLabsRealtimeAgentId || "").trim(),
-        voiceId: String(form.voiceElevenLabsRealtimeVoiceId || "").trim(),
-        apiBaseUrl: String(form.voiceElevenLabsRealtimeApiBaseUrl || "").trim(),
-        inputSampleRateHz: Number(form.voiceElevenLabsRealtimeInputSampleRateHz),
-        outputSampleRateHz: Number(form.voiceElevenLabsRealtimeOutputSampleRateHz)
-      },
-      geminiRealtime: {
-        model: String(form.voiceGeminiRealtimeModel || "").trim(),
-        voice: String(form.voiceGeminiRealtimeVoice || "").trim(),
-        apiBaseUrl: String(form.voiceGeminiRealtimeApiBaseUrl || "").trim(),
-        inputSampleRateHz: Number(form.voiceGeminiRealtimeInputSampleRateHz),
-        outputSampleRateHz: Number(form.voiceGeminiRealtimeOutputSampleRateHz)
+      admission: {
+        mode: String(form.voiceReplyDecisionRealtimeAdmissionMode || "adaptive").trim().toLowerCase(),
+        intentConfidenceThreshold: Number(form.voiceIntentConfidenceThreshold),
+        musicWakeLatchSeconds: Number(form.voiceReplyDecisionMusicWakeLatchSeconds)
       },
       streamWatch: {
         enabled: form.voiceStreamWatchEnabled,
@@ -596,88 +1005,34 @@ export function formToSettingsPatch(form) {
         enabled: form.voiceSoundboardEnabled,
         allowExternalSounds: form.voiceSoundboardAllowExternalSounds,
         preferredSoundIds: parseUniqueList(form.voiceSoundboardPreferredSoundIds)
+      }
+    },
+    media: {
+      vision: {
+        enabled: Boolean(form.visionCaptionEnabled),
+        execution: {
+          mode: "dedicated_model",
+          model: {
+            provider: String(form.visionProvider || "").trim(),
+            model: String(form.visionModel || "").trim()
+          }
+        },
+        maxAutoIncludeImages: Number(form.visionMaxAutoIncludeImages),
+        maxCaptionsPerHour: Number(form.visionMaxCaptionsPerHour)
       },
-      asrEnabled: Boolean(form.voiceAsrEnabled),
-      textOnlyMode: Boolean(form.voiceTextOnlyMode),
-      operationalMessages: String(form.voiceOperationalMessages || "all").trim().toLowerCase()
-    },
-    startup: {
-      catchupEnabled: form.catchupEnabled,
-      catchupLookbackHours: Number(form.catchupLookbackHours),
-      catchupMaxMessagesPerChannel: Number(form.catchupMaxMessages),
-      maxCatchupRepliesPerChannel: Number(form.catchupMaxReplies)
-    },
-    permissions: {
-      allowReplies: form.allowReplies,
-      allowUnsolicitedReplies: form.allowUnsolicitedReplies,
-      allowReactions: form.allowReactions,
-      replyChannelIds: parseUniqueList(form.replyChannels),
-      allowedChannelIds: parseUniqueList(form.allowedChannels),
-      blockedChannelIds: parseUniqueList(form.blockedChannels),
-      blockedUserIds: parseUniqueList(form.blockedUsers),
-      maxMessagesPerHour: Number(form.maxMessages),
-      maxReactionsPerHour: Number(form.maxReactions)
-    },
-    discovery: {
-      enabled: form.discoveryEnabled,
-      channelIds: parseUniqueList(form.discoveryChannels),
-      maxPostsPerDay: Number(form.discoveryPostsPerDay),
-      minMinutesBetweenPosts: Number(form.discoveryMinMinutes),
-      pacingMode: form.discoveryPacingMode,
-      spontaneity: Number(form.discoverySpontaneity),
-      postOnStartup: form.discoveryStartupPost,
-      allowImagePosts: form.discoveryImageEnabled,
-      allowVideoPosts: form.discoveryVideoEnabled,
-      allowReplyImages: form.replyImageEnabled,
-      allowReplyVideos: form.replyVideoEnabled,
-      allowReplyGifs: form.replyGifEnabled,
-      maxImagesPerDay: Number(form.maxImagesPerDay),
-      maxVideosPerDay: Number(form.maxVideosPerDay),
-      maxGifsPerDay: Number(form.maxGifsPerDay),
-      simpleImageModel: form.discoverySimpleImageModel.trim(),
-      complexImageModel: form.discoveryComplexImageModel.trim(),
-      videoModel: form.discoveryVideoModel.trim(),
-      allowedImageModels: parseUniqueList(form.discoveryAllowedImageModels),
-      allowedVideoModels: parseUniqueList(form.discoveryAllowedVideoModels),
-      linkChancePercent: discoveryExternalEnabled ? Number(form.discoveryLinkChance) : 0,
-      maxLinksPerPost: Number(form.discoveryMaxLinks),
-      maxCandidatesForPrompt: Number(form.discoveryMaxCandidates),
-      freshnessHours: Number(form.discoveryFreshnessHours),
-      dedupeHours: Number(form.discoveryDedupeHours),
-      randomness: Number(form.discoveryRandomness),
-      sourceFetchLimit: Number(form.discoveryFetchLimit),
-      allowNsfw: discoveryExternalEnabled ? form.discoveryAllowNsfw : false,
-      preferredTopics: parseUniqueList(form.discoveryPreferredTopics),
-      redditSubreddits: parseUniqueList(form.discoveryRedditSubs),
-      youtubeChannelIds: parseUniqueList(form.discoveryYoutubeChannels),
-      rssFeeds: parseUniqueList(form.discoveryRssFeeds),
-      xHandles: parseUniqueList(form.discoveryXHandles),
-      xNitterBaseUrl: form.discoveryXNitterBase.trim(),
-      sources: {
-        reddit: discoveryExternalEnabled ? form.discoverySourceReddit : false,
-        hackerNews: discoveryExternalEnabled ? form.discoverySourceHackerNews : false,
-        youtube: discoveryExternalEnabled ? form.discoverySourceYoutube : false,
-        rss: discoveryExternalEnabled ? form.discoverySourceRss : false,
-        x: discoveryExternalEnabled ? form.discoverySourceX : false
+      videoContext: {
+        enabled: form.videoContextEnabled,
+        maxLookupsPerHour: Number(form.videoContextPerHour),
+        maxVideosPerMessage: Number(form.videoContextMaxVideos),
+        maxTranscriptChars: Number(form.videoContextMaxChars),
+        keyframeIntervalSeconds: Number(form.videoContextKeyframeInterval),
+        maxKeyframesPerVideo: Number(form.videoContextMaxKeyframes),
+        allowAsrFallback: form.videoContextAsrFallback,
+        maxAsrSeconds: Number(form.videoContextMaxAsrSeconds)
       }
-    },
-    memory: {
-      enabled: form.memoryEnabled,
-      reflection: {
-        strategy: String(form.memoryReflectionStrategy || "").trim().toLowerCase() === "one_pass_main"
-          ? "one_pass_main"
-          : "two_pass_extract_then_main"
-      }
-    },
-    adaptiveDirectives: {
-      enabled: Boolean(form.adaptiveDirectivesEnabled)
     },
     automations: {
       enabled: Boolean(form.automationsEnabled)
-    },
-    subAgentOrchestration: {
-      sessionIdleTimeoutMs: Math.max(10000, Number(form.subAgentSessionIdleTimeoutMs) || 300_000),
-      maxConcurrentSessions: Math.max(1, Number(form.subAgentMaxConcurrentSessions) || 20)
     }
   };
 }

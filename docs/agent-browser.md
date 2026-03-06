@@ -124,17 +124,19 @@ This is implemented in:
 
 ## Settings
 
-Browser-agent settings live under `settings.browser`.
+Browser-agent settings live under `settings.agentStack.runtimeConfig.browser`, with the selected runtime resolved from `settings.agentStack`.
 
 Important fields:
 
-- `browser.enabled`
-- `browser.maxStepsPerTask`
-- `browser.stepTimeoutMs`
-- `browser.llm.provider`
-- `browser.llm.model`
+- `agentStack.runtimeConfig.browser.enabled`
+- `agentStack.overrides.browserRuntime`
+- `agentStack.runtimeConfig.browser.localBrowserAgent.maxStepsPerTask`
+- `agentStack.runtimeConfig.browser.localBrowserAgent.stepTimeoutMs`
+- `agentStack.runtimeConfig.browser.localBrowserAgent.execution.model.provider`
+- `agentStack.runtimeConfig.browser.localBrowserAgent.execution.model.model`
+- `agentStack.runtimeConfig.browser.openaiComputerUse.model`
 
-These are edited in the dashboard Browser Agent section.
+These are edited in the dashboard Browser Runtime section.
 
 The browser agent uses its own configurable LLM provider/model instead of always inheriting the main chat brain model.
 

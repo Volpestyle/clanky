@@ -1,4 +1,5 @@
 import { getLlmModelCatalog } from "../pricing.ts";
+import { getReplyGenerationSettings } from "../settings/agentStack.ts";
 
 export function attachSettingsRoutes(app: any, deps: any) {
   const { store, bot, appConfig } = deps;
@@ -60,7 +61,7 @@ export function attachSettingsRoutes(app: any, deps: any) {
 
   app.get("/api/llm/models", (_req, res) => {
     const settings = store.getSettings();
-    res.json(getLlmModelCatalog(settings?.llm?.pricing));
+    res.json(getLlmModelCatalog(getReplyGenerationSettings(settings).pricing));
   });
 
   app.get("/api/elevenlabs/voices", async (_req, res, next) => {

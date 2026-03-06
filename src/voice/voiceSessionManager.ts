@@ -1,6 +1,25 @@
 import { PermissionFlagsBits, type ChatInputCommandInteraction } from "discord.js";
 import { resolveMemoryToolNamespaceScope } from "../memory/memoryToolRuntime.ts";
 import {
+  applyOrchestratorOverrideSettings,
+  getBotNameAliases,
+  getMemorySettings,
+  getDirectiveSettings,
+  getReplyGenerationSettings,
+  getResolvedOrchestratorBinding,
+  getResolvedVoiceAdmissionClassifierBinding,
+  getResolvedVoiceInitiativeBinding,
+  getVoiceAdmissionSettings,
+  getVoiceChannelPolicy,
+  getVoiceConversationPolicy,
+  getVoiceInitiativeSettings,
+  getVoiceRuntimeConfig,
+  getVoiceSessionLimits,
+  getVoiceSettings,
+  getVoiceSoundboardSettings,
+  getVoiceTranscriptionSettings
+} from "../settings/agentStack.ts";
+import {
   buildVoiceToneGuardrails,
   buildHardLimitsSection,
   DEFAULT_PROMPT_VOICE_GUIDANCE,
@@ -1482,7 +1501,7 @@ export class VoiceSessionManager {
 
   isCommandOnlyActive(session, settings = null) {
     const resolved = settings || session?.settingsSnapshot || this.store.getSettings();
-    if (resolved?.voice?.commandOnlyMode) return true;
+    if (getVoiceConversationPolicy(resolved).commandOnlyMode) return true;
     return musicPhaseShouldForceCommandOnly(this.getMusicPhase(session));
   }
 
@@ -1579,8 +1598,8 @@ export class VoiceSessionManager {
 
   isAsrActive(session, settings = null) {
     const resolved = settings || session?.settingsSnapshot || this.store.getSettings();
-    if (!resolved?.voice?.asrEnabled) return false;
-    if (resolved?.voice?.textOnlyMode) return false;
+    if (!getVoiceTranscriptionSettings(resolved).enabled) return false;
+    if (getVoiceConversationPolicy(resolved).textOnlyMode) return false;
     // PCM capture stays open during music — the music gate downstream
     // (maybeHandleMusicPlaybackTurn) decides which turns to act on vs swallow.
     return true;
@@ -1645,7 +1664,7 @@ export class VoiceSessionManager {
 
     const resolvedSettings = settings || this.store.getSettings();
     const botName = getPromptBotName(resolvedSettings);
-    const aliases = Array.isArray(resolvedSettings?.botNameAliases) ? resolvedSettings.botNameAliases : [];
+    const aliases = getBotNameAliases(resolvedSettings);
     const primaryToken = String(botName || "")
       .replace(/[^a-z0-9\s]+/gi, " ")
       .trim()
@@ -2304,7 +2323,7 @@ export class VoiceSessionManager {
   }
 
   async resolveSoundboardCandidates({ session = null, settings, guild = null }) {
-    const preferred = parsePreferredSoundboardReferences(settings?.voice?.soundboard?.preferredSoundIds);
+    const preferred = parsePreferredSoundboardReferences(getVoiceSoundboardSettings(settings).preferredSoundIds);
     if (preferred.length) {
       return {
         source: "preferred",
@@ -2441,9 +2460,10 @@ export class VoiceSessionManager {
   }
 
   async reconcileSettings(settings) {
-    const voiceEnabled = Boolean(settings?.voice?.enabled);
-    const allowlist = new Set(settings?.voice?.allowedVoiceChannelIds || []);
-    const blocklist = new Set(settings?.voice?.blockedVoiceChannelIds || []);
+    const voiceEnabled = Boolean(getVoiceSettings(settings).enabled);
+    const voiceChannelPolicy = getVoiceChannelPolicy(settings);
+    const allowlist = new Set(voiceChannelPolicy.allowedChannelIds || []);
+    const blocklist = new Set(voiceChannelPolicy.blockedChannelIds || []);
 
     for (const session of [...this.sessions.values()]) {
       session.settingsSnapshot = settings || session.settingsSnapshot;
@@ -2483,11 +2503,12 @@ export class VoiceSessionManager {
   }
 
   startSessionTimers(session, settings) {
+    const voiceSessionLimits = getVoiceSessionLimits(settings);
     const maxSessionMinutesCap = isRealtimeMode(session?.mode)
       ? OPENAI_REALTIME_MAX_SESSION_MINUTES
       : MAX_MAX_SESSION_MINUTES;
     const maxSessionMinutes = clamp(
-      Number(settings.voice?.maxSessionMinutes) || 30,
+      Number(voiceSessionLimits.maxSessionMinutes) || 30,
       MIN_MAX_SESSION_MINUTES,
       maxSessionMinutesCap
     );
@@ -2511,9 +2532,10 @@ export class VoiceSessionManager {
     if (!session) return;
 
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    const voiceSessionLimits = getVoiceSessionLimits(resolvedSettings);
 
     const inactivitySeconds = clamp(
-      Number(resolvedSettings?.voice?.inactivityLeaveSeconds) || 300,
+      Number(voiceSessionLimits.inactivityLeaveSeconds) || 300,
       MIN_INACTIVITY_SECONDS,
       MAX_INACTIVITY_SECONDS
     );
@@ -4395,11 +4417,13 @@ export class VoiceSessionManager {
       const responseStatus = parseResponseDoneStatus(event);
       const responseUsage = parseResponseDoneUsage(event);
       const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+      const voiceRuntime = getVoiceRuntimeConfig(resolvedSettings);
+      const replyGeneration = getReplyGenerationSettings(resolvedSettings);
       const realtimeProvider = resolveRealtimeProvider(session.mode);
       const resolvedResponseModel = isRealtimeMode(session.mode)
         ? parseResponseDoneModel(event) ||
         String(session.realtimeClient?.sessionConfig?.model || "").trim() ||
-        String(resolvedSettings?.voice?.openaiRealtime?.model || "gpt-realtime").trim() ||
+        String(voiceRuntime.openaiRealtime?.model || "gpt-realtime").trim() ||
         "gpt-realtime"
         : parseResponseDoneModel(event);
       const responseUsdCost =
@@ -4411,7 +4435,7 @@ export class VoiceSessionManager {
             outputTokens: Number(responseUsage.outputTokens || 0),
             cacheReadTokens: Number(responseUsage.cacheReadTokens || 0),
             cacheWriteTokens: 0,
-            customPricing: resolvedSettings?.llm?.pricing
+            customPricing: replyGeneration.pricing
           })
           : 0;
       const hadAudio = pending ? this.pendingResponseHasAudio(session, pending) : false;
@@ -4856,26 +4880,22 @@ export class VoiceSessionManager {
 
   resolveVoiceThoughtEngineConfig(settings = null) {
     const resolvedSettings = settings || this.store.getSettings();
-    const voiceSettings = resolvedSettings?.voice || {};
-    const thoughtEngine = voiceSettings?.thoughtEngine || {};
-    const enabled =
-      thoughtEngine?.enabled !== undefined ? Boolean(thoughtEngine.enabled) : true;
-    const provider = normalizeLlmProvider(
-      thoughtEngine?.provider,
-      voiceSettings?.generationLlm?.provider || "anthropic"
-    );
-    const configuredModel = String(thoughtEngine?.model || "").trim().slice(0, 120);
-    const model = configuredModel || defaultModelForLlmProvider(provider);
-    const configuredTemperature = Number(thoughtEngine?.temperature);
+    const thoughtEngine = getVoiceInitiativeSettings(resolvedSettings);
+    const thoughtBinding = getResolvedVoiceInitiativeBinding(resolvedSettings);
+    const enabled = Boolean(thoughtEngine.enabled);
+    const provider = normalizeLlmProvider(thoughtBinding.provider, "anthropic");
+    const model = String(thoughtBinding.model || defaultModelForLlmProvider(provider)).trim().slice(0, 120) ||
+      defaultModelForLlmProvider(provider);
+    const configuredTemperature = Number(thoughtBinding.temperature);
     const temperature = clamp(Number.isFinite(configuredTemperature) ? configuredTemperature : 0.8, 0, 2);
-    const eagerness = clamp(Number(thoughtEngine?.eagerness) || 0, 0, 100);
+    const eagerness = clamp(Number(thoughtEngine.eagerness) || 0, 0, 100);
     const minSilenceSeconds = clamp(
-      Number(thoughtEngine?.minSilenceSeconds) || 20,
+      Number(thoughtEngine.minSilenceSeconds) || 20,
       VOICE_THOUGHT_LOOP_MIN_SILENCE_SECONDS,
       VOICE_THOUGHT_LOOP_MAX_SILENCE_SECONDS
     );
     const minSecondsBetweenThoughts = clamp(
-      Number(thoughtEngine?.minSecondsBetweenThoughts) || minSilenceSeconds,
+      Number(thoughtEngine.minSecondsBetweenThoughts) || minSilenceSeconds,
       VOICE_THOUGHT_LOOP_MIN_INTERVAL_SECONDS,
       VOICE_THOUGHT_LOOP_MAX_INTERVAL_SECONDS
     );
@@ -5271,16 +5291,12 @@ export class VoiceSessionManager {
       userPromptParts.push(`Recent voice turns:\n${recentHistory}`);
     }
     const userPrompt = userPromptParts.join("\n");
-    const generationSettings = {
-      ...settings,
-      llm: {
-        ...(settings?.llm || {}),
-        provider: thoughtConfig.provider,
-        model: thoughtConfig.model,
-        temperature: thoughtConfig.temperature,
-        maxOutputTokens: 96
-      }
-    };
+    const generationSettings = applyOrchestratorOverrideSettings(settings, {
+      provider: thoughtConfig.provider,
+      model: thoughtConfig.model,
+      temperature: thoughtConfig.temperature,
+      maxOutputTokens: 96
+    });
 
     const generation = await this.llm.generate({
       settings: generationSettings,
@@ -5383,7 +5399,7 @@ export class VoiceSessionManager {
       };
     }
 
-    const replyDecisionLlm = settings?.voice?.replyDecisionLlm || {};
+    const classifierBinding = getResolvedVoiceAdmissionClassifierBinding(settings);
     if (!this.llm?.generate) {
       return {
         allow: false,
@@ -5394,8 +5410,8 @@ export class VoiceSessionManager {
       };
     }
 
-    const llmProvider = normalizeVoiceReplyDecisionProvider(replyDecisionLlm?.provider);
-    const llmModel = String(replyDecisionLlm?.model || defaultVoiceReplyDecisionModel(llmProvider))
+    const llmProvider = normalizeVoiceReplyDecisionProvider(classifierBinding?.provider || "openai");
+    const llmModel = String(classifierBinding?.model || defaultVoiceReplyDecisionModel(llmProvider))
       .trim()
       .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
     const participants = this.getVoiceChannelParticipants(session).map((entry) => entry.displayName).filter(Boolean);
@@ -5410,7 +5426,7 @@ export class VoiceSessionManager {
           minSilenceSeconds: resolvedThoughtConfig.minSilenceSeconds,
           minSecondsBetweenThoughts: resolvedThoughtConfig.minSecondsBetweenThoughts
         });
-    const thoughtEagerness = clamp(Number(settings?.voice?.thoughtEngine?.eagerness) || 0, 0, 100);
+    const thoughtEagerness = clamp(Number(resolvedThoughtConfig.eagerness) || 0, 0, 100);
     const ambientMemoryFacts = Array.isArray(memoryFacts) ? memoryFacts : [];
     const ambientMemory = formatRealtimeMemoryFacts(ambientMemoryFacts, VOICE_THOUGHT_MEMORY_SEARCH_LIMIT);
     const botName = getPromptBotName(settings);
@@ -5450,17 +5466,13 @@ export class VoiceSessionManager {
 
     try {
       const generation = await this.llm.generate({
-        settings: {
-          ...settings,
-          llm: {
-            ...(settings?.llm || {}),
-            provider: llmProvider,
-            model: llmModel,
-            temperature: 0,
-            maxOutputTokens: VOICE_THOUGHT_DECISION_MAX_OUTPUT_TOKENS,
-            reasoningEffort: String(replyDecisionLlm?.reasoningEffort || "minimal").trim().toLowerCase() || "minimal"
-          }
-        },
+        settings: applyOrchestratorOverrideSettings(settings, {
+          provider: llmProvider,
+          model: llmModel,
+          temperature: 0,
+          maxOutputTokens: VOICE_THOUGHT_DECISION_MAX_OUTPUT_TOKENS,
+          reasoningEffort: "minimal"
+        }),
         systemPrompt,
         userPrompt: userPromptParts.join("\n"),
         contextMessages: [],
@@ -5557,7 +5569,7 @@ export class VoiceSessionManager {
     const line = normalizeVoiceText(thoughtCandidate, STT_REPLY_MAX_CHARS);
     if (!line) return false;
 
-    const useApiTts = String(settings?.voice?.ttsMode || "").trim().toLowerCase() === "api";
+    const useApiTts = String(getVoiceConversationPolicy(settings).ttsMode || "").trim().toLowerCase() === "api";
     let requestedRealtimeUtterance = false;
     if (isRealtimeMode(session.mode) && !useApiTts) {
       requestedRealtimeUtterance = this.requestRealtimeTextUtterance({
@@ -5718,7 +5730,7 @@ export class VoiceSessionManager {
     if (!line) return;
 
     const realtimeMode = isRealtimeMode(session.mode);
-    const busyUseApiTts = String(settings?.voice?.ttsMode || "").trim().toLowerCase() === "api";
+    const busyUseApiTts = String(getVoiceConversationPolicy(settings).ttsMode || "").trim().toLowerCase() === "api";
     if (realtimeMode && !busyUseApiTts && this.requestRealtimeTextUtterance({
       session,
       text: line,
@@ -5745,14 +5757,15 @@ export class VoiceSessionManager {
   }) {
     if (!this.llm?.generate) return "";
     const normalizedQuery = normalizeVoiceText(query, 80);
-    const tunedSettings = {
-      ...settings,
-      llm: {
-        ...(settings?.llm || {}),
-        temperature: clamp(Number(settings?.llm?.temperature) || 0.75, 0.2, 1.1),
-        maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || 28, 8, 40)
-      }
-    };
+    const orchestrator = getResolvedOrchestratorBinding(settings);
+    const replyGeneration = getReplyGenerationSettings(settings);
+    const tunedSettings = applyOrchestratorOverrideSettings(settings, {
+      provider: orchestrator.provider,
+      model: orchestrator.model,
+      temperature: clamp(Number(replyGeneration.temperature) || 0.75, 0.2, 1.1),
+      maxOutputTokens: clamp(Number(replyGeneration.maxOutputTokens) || 28, 8, 40),
+      reasoningEffort: orchestrator.reasoningEffort
+    });
     const systemPrompt = interpolatePromptTemplate(getPromptVoiceLookupBusySystemPrompt(settings), {
       botName: getPromptBotName(settings)
     });
@@ -6308,7 +6321,7 @@ export class VoiceSessionManager {
     if (!line) return false;
     if (!this.llm?.synthesizeSpeech) return false;
 
-    const sttSettings = settings?.voice?.sttPipeline || {};
+    const sttSettings = getVoiceRuntimeConfig(settings).legacyVoiceStack?.sttPipeline;
     const ttsModel = String(sttSettings?.ttsModel || "gpt-4o-mini-tts").trim() || "gpt-4o-mini-tts";
     const ttsVoice = String(sttSettings?.ttsVoice || "alloy").trim() || "alloy";
     const ttsSpeedRaw = Number(sttSettings?.ttsSpeed);
@@ -6385,9 +6398,11 @@ export class VoiceSessionManager {
     if (!providerSupports(session.mode || "", "perUserAsr")) return false;
     if (!this.appConfig?.openaiApiKey) return false;
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    if (resolvedSettings?.voice?.textOnlyMode) return false;
+    const voiceConversation = getVoiceConversationPolicy(resolvedSettings);
+    const voiceRuntime = getVoiceRuntimeConfig(resolvedSettings);
+    if (voiceConversation.textOnlyMode) return false;
     const transcriptionMethod = String(
-      resolvedSettings?.voice?.openaiRealtime?.transcriptionMethod || "realtime_bridge"
+      voiceRuntime.openaiRealtime?.transcriptionMethod || "realtime_bridge"
     )
       .trim()
       .toLowerCase();
@@ -6400,7 +6415,7 @@ export class VoiceSessionManager {
     if (transcriptionMethod !== "realtime_bridge") {
       return false;
     }
-    if (resolvedSettings?.voice?.openaiRealtime?.usePerUserAsrBridge === false) {
+    if (!Boolean(voiceRuntime.openaiRealtime?.usePerUserAsrBridge)) {
       return false;
     }
     return true;
@@ -6421,9 +6436,11 @@ export class VoiceSessionManager {
     if (!providerSupports(session.mode || "", "sharedAsr")) return false;
     if (!this.appConfig?.openaiApiKey) return false;
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    if (resolvedSettings?.voice?.textOnlyMode) return false;
+    const voiceConversation = getVoiceConversationPolicy(resolvedSettings);
+    const voiceRuntime = getVoiceRuntimeConfig(resolvedSettings);
+    if (voiceConversation.textOnlyMode) return false;
     const transcriptionMethod = String(
-      resolvedSettings?.voice?.openaiRealtime?.transcriptionMethod || "realtime_bridge"
+      voiceRuntime.openaiRealtime?.transcriptionMethod || "realtime_bridge"
     )
       .trim()
       .toLowerCase();
@@ -6436,7 +6453,7 @@ export class VoiceSessionManager {
     if (transcriptionMethod !== "realtime_bridge") {
       return false;
     }
-    if (resolvedSettings?.voice?.openaiRealtime?.usePerUserAsrBridge === true) {
+    if (Boolean(voiceRuntime.openaiRealtime?.usePerUserAsrBridge)) {
       return false;
     }
     return true;
@@ -6456,11 +6473,12 @@ export class VoiceSessionManager {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode || "")) return false;
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    const replyPath = String(resolvedSettings?.voice?.replyPath || "")
+    const voiceConversation = getVoiceConversationPolicy(resolvedSettings);
+    const replyPath = String(voiceConversation.replyPath || "")
       .trim()
       .toLowerCase();
     if (replyPath === "bridge") {
-      const ttsMode = String(resolvedSettings?.voice?.ttsMode || "").trim().toLowerCase();
+      const ttsMode = String(voiceConversation.ttsMode || "").trim().toLowerCase();
       if (ttsMode === "api") return false;
       return true;
     }
@@ -7902,7 +7920,7 @@ export class VoiceSessionManager {
   resolveRealtimeReplyStrategy({ session, settings = null }) {
     if (!session || !isRealtimeMode(session.mode)) return "brain";
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    const replyPath = String(resolvedSettings?.voice?.replyPath || "").trim().toLowerCase();
+    const replyPath = String(getVoiceConversationPolicy(resolvedSettings).replyPath || "").trim().toLowerCase();
     if (replyPath === "native") return "native";
     return "brain";
   }
@@ -7972,10 +7990,11 @@ export class VoiceSessionManager {
     if (consumedByMusicMode) return;
 
     const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
+    const voiceRuntime = getVoiceRuntimeConfig(settings);
     const preferredModel =
       isRealtimeMode(session.mode)
-        ? settings?.voice?.openaiRealtime?.inputTranscriptionModel
-        : settings?.voice?.sttPipeline?.transcriptionModel;
+        ? voiceRuntime.openaiRealtime?.inputTranscriptionModel
+        : voiceRuntime.legacyVoiceStack?.sttPipeline?.transcriptionModel;
     const transcriptionModel = String(preferredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
     const sampleRateHz = Number(session.realtimeInputSampleRateHz) || 24000;
     const transcriptionPlan = hasTranscriptOverride
@@ -9428,7 +9447,7 @@ export class VoiceSessionManager {
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedTranscript) {
       const adaptiveDirectives =
-        Boolean(settings?.adaptiveDirectives?.enabled) &&
+        Boolean(getDirectiveSettings(settings).enabled) &&
           this.store && typeof this.store.searchAdaptiveStyleNotesForPrompt === "function"
           ? this.store.searchAdaptiveStyleNotesForPrompt({
             guildId: String(session?.guildId || "").trim(),
@@ -9515,7 +9534,7 @@ export class VoiceSessionManager {
             })
           : null,
       loadAdaptiveDirectives:
-        Boolean(settings?.adaptiveDirectives?.enabled) &&
+        Boolean(getDirectiveSettings(settings).enabled) &&
           this.store && typeof this.store.searchAdaptiveStyleNotesForPrompt === "function"
           ? (payload) =>
             this.store.searchAdaptiveStyleNotesForPrompt({
@@ -10095,7 +10114,7 @@ export class VoiceSessionManager {
           "- When users ask you to look something up, search for something, find prices, or need current/factual information, call web_search immediately in the same response. Do not respond with only audio saying you will search — include the tool call.",
           "- Use conversation_search when the speaker asks what was said earlier or asks you to remember a prior exchange.",
           "- For memory writes, only store concise durable facts and avoid secrets.",
-          settings?.adaptiveDirectives?.enabled
+          getDirectiveSettings(settings).enabled
             ? "- If someone explicitly asks you to change how you talk, follow a standing instruction, or perform a recurring trigger/action behavior in future conversations, use adaptive_directive_add or adaptive_directive_remove instead of memory_write."
             : "- Adaptive directives are disabled right now. Do not imply you can save standing behavior changes for later.",
           "- For music controls, use music_play_now for immediate playback, music_queue_next to place a track after the current one, music_queue_add to append, and music_stop to stop playback.",
@@ -10504,7 +10523,7 @@ export class VoiceSessionManager {
     if (consumedByMusicMode) return;
 
     const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
-    const sttSettings = settings?.voice?.sttPipeline || {};
+    const sttSettings = getVoiceRuntimeConfig(settings).legacyVoiceStack?.sttPipeline;
     const transcriptionModelPrimary =
       String(sttSettings?.transcriptionModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
     const sampleRateHz = 24000;
@@ -11438,7 +11457,7 @@ export class VoiceSessionManager {
     };
     this.setActiveReplyInterruptionPolicy(session, replyInterruptionPolicy);
     session.lastAssistantReplyAt = replyRequestedAt;
-    const useRealtimeTts = String(settings?.voice?.ttsMode || "").trim().toLowerCase() !== "api";
+    const useRealtimeTts = String(getVoiceConversationPolicy(settings).ttsMode || "").trim().toLowerCase() !== "api";
     const playbackResult = await this.playVoiceReplyInOrder({
       session,
       settings,
@@ -12417,8 +12436,8 @@ export class VoiceSessionManager {
     const botName = getPromptBotName(settings);
     const style = getPromptStyle(settings);
     const allowNsfwHumor = shouldAllowVoiceNsfwHumor(settings);
-    const memoryEnabled = Boolean(settings?.memory?.enabled);
-    const soundboardEnabled = Boolean(settings?.voice?.soundboard?.enabled);
+    const memoryEnabled = Boolean(getMemorySettings(settings).enabled);
+    const soundboardEnabled = Boolean(getVoiceSoundboardSettings(settings).enabled);
     const soundboardCandidateLines = (Array.isArray(soundboardCandidates) ? soundboardCandidates : [])
       .map((entry) => formatSoundboardCandidateLine(entry))
       .filter(Boolean)

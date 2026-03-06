@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { requestJoin } from "./voiceJoinFlow.ts";
+import { createTestSettings } from "../testSettings.ts";
 
 function baseSettings(overrides = {}) {
   const base = {
@@ -17,14 +18,14 @@ function baseSettings(overrides = {}) {
     }
   };
 
-  return {
+  return createTestSettings({
     ...base,
     ...overrides,
     voice: {
       ...base.voice,
       ...(overrides.voice || {})
     }
-  };
+  });
 }
 
 function createMessage({ userId = "user-1", voiceChannelId = "voice-1", ...overrides } = {}) {

@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
+import { createTestSettings } from "../testSettings.ts";
 
 function createManager() {
   const logs = [];
@@ -16,9 +17,9 @@ function createManager() {
       logs.push(entry);
     },
     getSettings() {
-      return {
+      return createTestSettings({
         botName: "clanker conk"
-      };
+      });
     }
   };
 
@@ -57,9 +58,9 @@ function createRealtimeSession(overrides = {}) {
     responseDoneGraceTimer: null,
     pendingResponse: null,
     userCaptures: new Map(),
-    settingsSnapshot: {
+    settingsSnapshot: createTestSettings({
       botName: "clanker conk"
-    },
+    }),
     realtimeClient: {
       createAudioResponse() {},
       commitInputAudioBuffer() {},
@@ -77,12 +78,12 @@ test("flushResponseFromBufferedAudio emits response.create for OpenAI native rep
   const creates = [];
   const session = createRealtimeSession({
     pendingRealtimeInputBytes: 5_000,
-    settingsSnapshot: {
+    settingsSnapshot: createTestSettings({
       botName: "clanker conk",
       voice: {
         replyPath: "native"
       }
-    },
+    }),
     realtimeClient: {
       createAudioResponse() {
         creates.push("create");
@@ -112,13 +113,13 @@ test("flushResponseFromBufferedAudio skips response.create for OpenAI brain repl
   const creates = [];
   const session = createRealtimeSession({
     pendingRealtimeInputBytes: 5_000,
-    settingsSnapshot: {
+    settingsSnapshot: createTestSettings({
       botName: "clanker conk",
       voice: {
         replyPath: "brain",
         brainProvider: "anthropic"
       }
-    },
+    }),
     realtimeClient: {
       createAudioResponse() {
         creates.push("create");

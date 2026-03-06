@@ -1,20 +1,14 @@
-import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
+import { DEFAULT_SETTINGS, PROVIDER_MODEL_FALLBACKS } from "../settings/settingsSchema.ts";
 import { normalizeBoundedStringList } from "../settings/listNormalization.ts";
+import { normalizeProviderOrder } from "../search.ts";
+import { clamp, deepMerge } from "../utils.ts";
 import {
-  defaultModelForLlmProvider,
   normalizeLlmProvider,
   normalizeOpenAiReasoningEffort
 } from "../llm/llmHelpers.ts";
-import { normalizeProviderOrder } from "../search.ts";
-import { clamp, deepMerge, uniqueIdList } from "../utils.ts";
 import {
-  normalizeVoiceProvider,
-  normalizeBrainProvider,
-  normalizeTranscriberProvider
+  normalizeVoiceProvider
 } from "../voice/voiceModes.ts";
-import {
-  DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT
-} from "../promptCore.ts";
 import {
   OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
   normalizeOpenAiRealtimeTranscriptionModel
@@ -22,1550 +16,1954 @@ import {
 
 export const PERSONA_FLAVOR_MAX_CHARS = 2_000;
 export const BOT_NAME_ALIAS_MAX_ITEMS = 100;
-const BROWSER_LLM_PROVIDER_FALLBACK_MODELS = {
-  anthropic: "claude-sonnet-4-5-20250929",
-  openai: "gpt-5-mini"
-} as const;
 
-function normalizeBrowserLlmProvider(value, fallback = "anthropic") {
-  const provider = normalizeLlmProvider(value, fallback);
-  return provider === "openai" || provider === "anthropic" ? provider : fallback;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function normalizeCodeAgentProvider(value, fallback = "claude-code") {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "claude-code") return "claude-code";
-  if (normalized === "codex") return "codex";
-  if (normalized === "auto") return "auto";
-
-  const fallbackProvider = String(fallback || "")
-    .trim()
-    .toLowerCase();
-  if (fallbackProvider === "codex") return "codex";
-  if (fallbackProvider === "auto") return "auto";
-  return "claude-code";
+function normalizeString(value: unknown, fallback = "", maxLen = 500) {
+  const normalized = String(value ?? fallback ?? "").trim();
+  return normalized.slice(0, Math.max(0, maxLen));
 }
 
-export function normalizeSettings(raw) {
-  const merged = deepMerge(DEFAULT_SETTINGS, raw ?? {});
-  if (!merged.persona || typeof merged.persona !== "object") merged.persona = {};
-  if (!merged.activity || typeof merged.activity !== "object") merged.activity = {};
-  if (!merged.textThoughtLoop || typeof merged.textThoughtLoop !== "object") merged.textThoughtLoop = {};
-  if (!merged.startup || typeof merged.startup !== "object") merged.startup = {};
-  if (!merged.permissions || typeof merged.permissions !== "object") merged.permissions = {};
-  if (!merged.discovery || typeof merged.discovery !== "object") merged.discovery = {};
-  if (!merged.memory || typeof merged.memory !== "object") merged.memory = {};
-  if (!merged.codeAgent || typeof merged.codeAgent !== "object") merged.codeAgent = {};
-  if (!merged.adaptiveDirectives || typeof merged.adaptiveDirectives !== "object") merged.adaptiveDirectives = {};
-  if (!merged.automations || typeof merged.automations !== "object") merged.automations = {};
-  if (!merged.llm || typeof merged.llm !== "object") merged.llm = {};
-  if (!merged.replyFollowupLlm || typeof merged.replyFollowupLlm !== "object") merged.replyFollowupLlm = {};
-  if (!merged.memoryLlm || typeof merged.memoryLlm !== "object") merged.memoryLlm = {};
-  const defaultMemoryLlmProvider = normalizeLlmProvider(DEFAULT_SETTINGS.memoryLlm?.provider || "anthropic");
-  const normalizedMemoryProviderForDefaults = normalizeLlmProvider(
-    merged.memoryLlm?.provider,
-    defaultMemoryLlmProvider
-  );
-  const defaultMemoryLlmModel =
-    normalizedMemoryProviderForDefaults === defaultMemoryLlmProvider
-      ? String(DEFAULT_SETTINGS.memoryLlm?.model || "").trim()
-      : "";
-  const normalizedMemoryLlm = normalizeProviderModelPair(
-    merged.memoryLlm,
-    defaultMemoryLlmProvider,
-    defaultMemoryLlmModel
-  );
-  merged.memoryLlm.provider = normalizedMemoryLlm.provider;
-  merged.memoryLlm.model = normalizedMemoryLlm.model;
-  if (!merged.webSearch || typeof merged.webSearch !== "object") merged.webSearch = {};
-  if (!merged.browser || typeof merged.browser !== "object") merged.browser = {};
-  if (!merged.browser.llm || typeof merged.browser.llm !== "object") merged.browser.llm = {};
-  if (!merged.videoContext || typeof merged.videoContext !== "object") merged.videoContext = {};
-  if (!merged.voice || typeof merged.voice !== "object") merged.voice = {};
-  if (!merged.prompt || typeof merged.prompt !== "object") merged.prompt = {};
-
-  merged.botName = String(merged.botName || "clanker conk").slice(0, 50);
-  merged.botNameAliases = uniqueStringList(
-    merged.botNameAliases,
-    BOT_NAME_ALIAS_MAX_ITEMS,
-    50
-  );
-  merged.persona.flavor = String(merged.persona?.flavor || DEFAULT_SETTINGS.persona.flavor).slice(
-    0,
-    PERSONA_FLAVOR_MAX_CHARS
-  );
-  merged.persona.hardLimits = normalizeHardLimitList(
-    merged.persona?.hardLimits,
-    DEFAULT_SETTINGS.persona?.hardLimits ?? []
-  );
-
-  const defaultPrompt = DEFAULT_SETTINGS.prompt;
-  merged.prompt.capabilityHonestyLine = normalizePromptLine(
-    merged.prompt?.capabilityHonestyLine,
-    defaultPrompt.capabilityHonestyLine
-  );
-  merged.prompt.impossibleActionLine = normalizePromptLine(
-    merged.prompt?.impossibleActionLine,
-    defaultPrompt.impossibleActionLine
-  );
-  merged.prompt.memoryEnabledLine = normalizePromptLine(
-    merged.prompt?.memoryEnabledLine,
-    defaultPrompt.memoryEnabledLine
-  );
-  merged.prompt.memoryDisabledLine = normalizePromptLine(
-    merged.prompt?.memoryDisabledLine,
-    defaultPrompt.memoryDisabledLine
-  );
-  merged.prompt.skipLine = normalizePromptLine(
-    merged.prompt?.skipLine,
-    defaultPrompt.skipLine
-  );
-  merged.prompt.textGuidance = normalizePromptLineList(
-    merged.prompt?.textGuidance,
-    defaultPrompt.textGuidance
-  );
-  merged.prompt.voiceGuidance = normalizePromptLineList(
-    merged.prompt?.voiceGuidance,
-    defaultPrompt.voiceGuidance
-  );
-  merged.prompt.voiceOperationalGuidance = normalizePromptLineList(
-    merged.prompt?.voiceOperationalGuidance,
-    defaultPrompt.voiceOperationalGuidance
-  );
-  merged.prompt.voiceLookupBusySystemPrompt = normalizeLongPromptBlock(
-    merged.prompt?.voiceLookupBusySystemPrompt,
-    defaultPrompt.voiceLookupBusySystemPrompt ?? DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT,
-    4000
-  );
-  merged.prompt.mediaPromptCraftGuidance = normalizeLongPromptBlock(
-    merged.prompt?.mediaPromptCraftGuidance,
-    defaultPrompt.mediaPromptCraftGuidance,
-    8_000
-  );
-
-  const replyEagerness = clamp(
-    Number(merged.activity?.replyEagerness ?? merged.activity?.replyLevelReplyChannels ?? DEFAULT_SETTINGS.activity.replyEagerness) || 0,
-    0,
-    100
-  );
-  const reactionLevel = clamp(
-    Number(merged.activity?.reactionLevel ?? DEFAULT_SETTINGS.activity.reactionLevel) || 0,
-    0,
-    100
-  );
-  const minSecondsBetweenMessages = clamp(
-    Number(merged.activity?.minSecondsBetweenMessages) || 5,
-    5,
-    300
-  );
-  const replyCoalesceWindowSecondsRaw = Number(merged.activity?.replyCoalesceWindowSeconds);
-  const replyCoalesceMaxMessagesRaw = Number(merged.activity?.replyCoalesceMaxMessages);
-  const replyCoalesceWindowSeconds = clamp(
-    Number.isFinite(replyCoalesceWindowSecondsRaw)
-      ? replyCoalesceWindowSecondsRaw
-      : Number(DEFAULT_SETTINGS.activity?.replyCoalesceWindowSeconds) || 6,
-    0,
-    20
-  );
-  const replyCoalesceMaxMessages = clamp(
-    Number.isFinite(replyCoalesceMaxMessagesRaw)
-      ? replyCoalesceMaxMessagesRaw
-      : Number(DEFAULT_SETTINGS.activity?.replyCoalesceMaxMessages) || 6,
-    1,
-    20
-  );
-  merged.activity = {
-    replyEagerness,
-    reactionLevel,
-    minSecondsBetweenMessages,
-    replyCoalesceWindowSeconds,
-    replyCoalesceMaxMessages
-  };
-
-  merged.textThoughtLoop.enabled =
-    merged.textThoughtLoop?.enabled !== undefined
-      ? Boolean(merged.textThoughtLoop?.enabled)
-      : Boolean(DEFAULT_SETTINGS.textThoughtLoop?.enabled);
-  merged.textThoughtLoop.eagerness = clamp(
-    Number(merged.textThoughtLoop?.eagerness ?? DEFAULT_SETTINGS.textThoughtLoop?.eagerness) || 0,
-    0,
-    100
-  );
-  merged.textThoughtLoop.minMinutesBetweenThoughts = clamp(
-    Number(
-      merged.textThoughtLoop?.minMinutesBetweenThoughts ??
-      DEFAULT_SETTINGS.textThoughtLoop?.minMinutesBetweenThoughts
-    ) || 60,
-    5,
-    24 * 60
-  );
-  merged.textThoughtLoop.maxThoughtsPerDay = clamp(
-    Number(merged.textThoughtLoop?.maxThoughtsPerDay ?? DEFAULT_SETTINGS.textThoughtLoop?.maxThoughtsPerDay) || 0,
-    0,
-    100
-  );
-  merged.textThoughtLoop.lookbackMessages = clamp(
-    Number(merged.textThoughtLoop?.lookbackMessages ?? DEFAULT_SETTINGS.textThoughtLoop?.lookbackMessages) || 0,
-    4,
-    80
-  );
-
-  const defaultLlmProvider = normalizeLlmProvider(DEFAULT_SETTINGS.llm?.provider || "anthropic");
-  const defaultLlmModel =
-    normalizeLlmProvider(merged.llm?.provider, defaultLlmProvider) === defaultLlmProvider
-      ? String(DEFAULT_SETTINGS.llm?.model || "").trim()
-      : "";
-  const normalizedLlm = normalizeProviderModelPair(
-    merged.llm,
-    defaultLlmProvider,
-    defaultLlmModel
-  );
-  merged.llm.provider = normalizedLlm.provider;
-  merged.llm.model = normalizedLlm.model;
-  merged.llm.temperature = clamp(Number(merged.llm?.temperature) || 0.9, 0, 2);
-  const defaultLlmMaxOutputTokens = Number(DEFAULT_SETTINGS.llm?.maxOutputTokens) || 800;
-  const configuredLlmMaxOutputTokens = Number(merged.llm?.maxOutputTokens);
-  const normalizedLlmMaxOutputTokens = Number.isFinite(configuredLlmMaxOutputTokens)
-    ? Math.floor(configuredLlmMaxOutputTokens)
-    : Math.floor(defaultLlmMaxOutputTokens);
-  merged.llm.maxOutputTokens = Math.max(32, normalizedLlmMaxOutputTokens);
-  merged.replyFollowupLlm.enabled =
-    merged.replyFollowupLlm?.enabled !== undefined
-      ? Boolean(merged.replyFollowupLlm?.enabled)
-      : Boolean(DEFAULT_SETTINGS.replyFollowupLlm?.enabled);
-  const normalizedReplyFollowupLlm = normalizeProviderModelPair(
-    merged.replyFollowupLlm,
-    merged.llm.provider || "anthropic",
-    merged.llm.model || ""
-  );
-  merged.replyFollowupLlm.provider = normalizedReplyFollowupLlm.provider;
-  merged.replyFollowupLlm.model = normalizedReplyFollowupLlm.model;
-  delete merged.replyFollowupLlm.useTextModel;
-  const defaultReplyFollowup = DEFAULT_SETTINGS.replyFollowupLlm;
-  const maxToolStepsRaw = Number(merged.replyFollowupLlm?.maxToolSteps);
-  const maxTotalToolCallsRaw = Number(merged.replyFollowupLlm?.maxTotalToolCalls);
-  const maxWebSearchCallsRaw = Number(merged.replyFollowupLlm?.maxWebSearchCalls);
-  const maxMemoryLookupCallsRaw = Number(merged.replyFollowupLlm?.maxMemoryLookupCalls);
-  const maxImageLookupCallsRaw = Number(merged.replyFollowupLlm?.maxImageLookupCalls);
-  const toolTimeoutMsRaw = Number(merged.replyFollowupLlm?.toolTimeoutMs);
-  merged.replyFollowupLlm.maxToolSteps = clamp(
-    Number.isFinite(maxToolStepsRaw)
-      ? maxToolStepsRaw
-      : Number(defaultReplyFollowup.maxToolSteps) || 2,
-    0,
-    6
-  );
-  merged.replyFollowupLlm.maxTotalToolCalls = clamp(
-    Number.isFinite(maxTotalToolCallsRaw)
-      ? maxTotalToolCallsRaw
-      : Number(defaultReplyFollowup.maxTotalToolCalls) || 3,
-    0,
-    12
-  );
-  merged.replyFollowupLlm.maxWebSearchCalls = clamp(
-    Number.isFinite(maxWebSearchCallsRaw)
-      ? maxWebSearchCallsRaw
-      : Number(defaultReplyFollowup.maxWebSearchCalls) || 2,
-    0,
-    6
-  );
-  merged.replyFollowupLlm.maxMemoryLookupCalls = clamp(
-    Number.isFinite(maxMemoryLookupCallsRaw)
-      ? maxMemoryLookupCallsRaw
-      : Number(defaultReplyFollowup.maxMemoryLookupCalls) || 2,
-    0,
-    6
-  );
-  merged.replyFollowupLlm.maxImageLookupCalls = clamp(
-    Number.isFinite(maxImageLookupCallsRaw)
-      ? maxImageLookupCallsRaw
-      : Number(defaultReplyFollowup.maxImageLookupCalls) || 2,
-    0,
-    6
-  );
-  merged.replyFollowupLlm.toolTimeoutMs = clamp(
-    Number.isFinite(toolTimeoutMsRaw)
-      ? toolTimeoutMsRaw
-      : Number(defaultReplyFollowup.toolTimeoutMs) || 10_000,
-    0,
-    60_000
-  );
-
-  merged.webSearch.enabled = Boolean(merged.webSearch?.enabled);
-  const maxSearchesRaw = Number(merged.webSearch?.maxSearchesPerHour);
-  const maxResultsRaw = Number(merged.webSearch?.maxResults);
-  const maxPagesRaw = Number(merged.webSearch?.maxPagesToRead);
-  const maxCharsRaw = Number(merged.webSearch?.maxCharsPerPage);
-  const recencyDaysRaw = Number(merged.webSearch?.recencyDaysDefault);
-  const maxConcurrentFetchesRaw = Number(merged.webSearch?.maxConcurrentFetches);
-  merged.webSearch.maxSearchesPerHour = clamp(
-    Number.isFinite(maxSearchesRaw)
-      ? maxSearchesRaw
-      : Number(DEFAULT_SETTINGS.webSearch?.maxSearchesPerHour) || 20,
-    1,
-    120
-  );
-  merged.webSearch.maxResults = clamp(Number.isFinite(maxResultsRaw) ? maxResultsRaw : 5, 1, 10);
-  merged.webSearch.maxPagesToRead = clamp(Number.isFinite(maxPagesRaw) ? maxPagesRaw : 3, 0, 5);
-  merged.webSearch.maxCharsPerPage = clamp(Number.isFinite(maxCharsRaw) ? maxCharsRaw : 6000, 350, 24000);
-  merged.webSearch.safeSearch =
-    merged.webSearch?.safeSearch !== undefined ? Boolean(merged.webSearch?.safeSearch) : true;
-  merged.webSearch.providerOrder = normalizeProviderOrder(merged.webSearch?.providerOrder);
-  merged.webSearch.recencyDaysDefault = clamp(Number.isFinite(recencyDaysRaw) ? recencyDaysRaw : 30, 1, 365);
-  merged.webSearch.maxConcurrentFetches = clamp(
-    Number.isFinite(maxConcurrentFetchesRaw) ? maxConcurrentFetchesRaw : 5,
-    1,
-    10
-  );
-
-  merged.browser.enabled = Boolean(merged.browser?.enabled);
-  const defaultBrowserLlmProvider = normalizeBrowserLlmProvider(DEFAULT_SETTINGS.browser?.llm?.provider || "anthropic");
-  const browserLlmProvider = normalizeBrowserLlmProvider(merged.browser?.llm?.provider, defaultBrowserLlmProvider);
-  const browserLlmDefaultModel =
-    BROWSER_LLM_PROVIDER_FALLBACK_MODELS[browserLlmProvider] ||
-    String(DEFAULT_SETTINGS.browser?.llm?.model || "").trim() ||
-    defaultModelForLlmProvider(browserLlmProvider);
-  const normalizedBrowserLlm = normalizeProviderModelPair(
-    merged.browser.llm,
-    defaultBrowserLlmProvider,
-    browserLlmDefaultModel
-  );
-  const resolvedBrowserLlmProvider = normalizeBrowserLlmProvider(
-    normalizedBrowserLlm.provider,
-    defaultBrowserLlmProvider
-  );
-  merged.browser.llm.provider = resolvedBrowserLlmProvider;
-  merged.browser.llm.model =
-    resolvedBrowserLlmProvider === normalizedBrowserLlm.provider
-      ? normalizedBrowserLlm.model
-      : BROWSER_LLM_PROVIDER_FALLBACK_MODELS[resolvedBrowserLlmProvider];
-  const browserMaxPerHourRaw = Number(merged.browser?.maxBrowseCallsPerHour);
-  const browserMaxStepsRaw = Number(merged.browser?.maxStepsPerTask);
-  const browserStepTimeoutRaw = Number(merged.browser?.stepTimeoutMs);
-  const browserSessionTimeoutRaw = Number(merged.browser?.sessionTimeoutMs);
-  merged.browser.maxBrowseCallsPerHour = clamp(
-    Number.isFinite(browserMaxPerHourRaw)
-      ? browserMaxPerHourRaw
-      : Number(DEFAULT_SETTINGS.browser?.maxBrowseCallsPerHour) || 10,
-    1,
-    60
-  );
-  merged.browser.maxStepsPerTask = clamp(
-    Number.isFinite(browserMaxStepsRaw)
-      ? browserMaxStepsRaw
-      : Number(DEFAULT_SETTINGS.browser?.maxStepsPerTask) || 15,
-    1,
-    30
-  );
-  merged.browser.stepTimeoutMs = clamp(
-    Number.isFinite(browserStepTimeoutRaw)
-      ? browserStepTimeoutRaw
-      : Number(DEFAULT_SETTINGS.browser?.stepTimeoutMs) || 30_000,
-    5_000,
-    120_000
-  );
-  merged.browser.sessionTimeoutMs = clamp(
-    Number.isFinite(browserSessionTimeoutRaw)
-      ? browserSessionTimeoutRaw
-      : Number(DEFAULT_SETTINGS.browser?.sessionTimeoutMs) || 300_000,
-    30_000,
-    600_000
-  );
-
-  // --- Vision ---
-  if (!merged.vision || typeof merged.vision !== "object") merged.vision = {};
-  merged.vision.captionEnabled =
-    merged.vision?.captionEnabled !== undefined
-      ? Boolean(merged.vision.captionEnabled)
-      : Boolean(DEFAULT_SETTINGS.vision?.captionEnabled);
-  const defaultVisionProvider = normalizeLlmProvider(DEFAULT_SETTINGS.vision?.provider || "anthropic");
-  const visionProvider = normalizeLlmProvider(merged.vision?.provider, defaultVisionProvider);
-  const defaultVisionModel =
-    visionProvider === defaultVisionProvider
-      ? String(DEFAULT_SETTINGS.vision?.model || "").trim()
-      : "";
-  const normalizedVisionLlm = normalizeProviderModelPair(
-    merged.vision,
-    defaultVisionProvider,
-    defaultVisionModel
-  );
-  merged.vision.provider = normalizedVisionLlm.provider;
-  merged.vision.model = normalizedVisionLlm.model;
-  const visionAutoIncludeRaw = Number(merged.vision?.maxAutoIncludeImages);
-  merged.vision.maxAutoIncludeImages = clamp(
-    Number.isFinite(visionAutoIncludeRaw)
-      ? visionAutoIncludeRaw
-      : Number(DEFAULT_SETTINGS.vision?.maxAutoIncludeImages) || 3,
-    0,
-    6
-  );
-  const visionCaptionsPerHourRaw = Number(merged.vision?.maxCaptionsPerHour);
-  merged.vision.maxCaptionsPerHour = clamp(
-    Number.isFinite(visionCaptionsPerHourRaw)
-      ? visionCaptionsPerHourRaw
-      : Number(DEFAULT_SETTINGS.vision?.maxCaptionsPerHour) || 60,
-    0,
-    300
-  );
-
-  merged.videoContext.enabled =
-    merged.videoContext?.enabled !== undefined
-      ? Boolean(merged.videoContext?.enabled)
-      : Boolean(DEFAULT_SETTINGS.videoContext?.enabled);
-  const videoPerHourRaw = Number(merged.videoContext?.maxLookupsPerHour);
-  const videoPerMessageRaw = Number(merged.videoContext?.maxVideosPerMessage);
-  const transcriptCharsRaw = Number(merged.videoContext?.maxTranscriptChars);
-  const keyframeIntervalRaw = Number(merged.videoContext?.keyframeIntervalSeconds);
-  const keyframeCountRaw = Number(merged.videoContext?.maxKeyframesPerVideo);
-  const maxAsrSecondsRaw = Number(merged.videoContext?.maxAsrSeconds);
-  merged.videoContext.maxLookupsPerHour = clamp(
-    Number.isFinite(videoPerHourRaw) ? videoPerHourRaw : Number(DEFAULT_SETTINGS.videoContext?.maxLookupsPerHour) || 12,
-    0,
-    120
-  );
-  merged.videoContext.maxVideosPerMessage = clamp(
-    Number.isFinite(videoPerMessageRaw)
-      ? videoPerMessageRaw
-      : Number(DEFAULT_SETTINGS.videoContext?.maxVideosPerMessage) || 2,
-    0,
-    6
-  );
-  merged.videoContext.maxTranscriptChars = clamp(
-    Number.isFinite(transcriptCharsRaw)
-      ? transcriptCharsRaw
-      : Number(DEFAULT_SETTINGS.videoContext?.maxTranscriptChars) || 1200,
-    200,
-    4000
-  );
-  merged.videoContext.keyframeIntervalSeconds = clamp(
-    Number.isFinite(keyframeIntervalRaw)
-      ? keyframeIntervalRaw
-      : Number(DEFAULT_SETTINGS.videoContext?.keyframeIntervalSeconds) || 8,
-    0,
-    120
-  );
-  merged.videoContext.maxKeyframesPerVideo = clamp(
-    Number.isFinite(keyframeCountRaw)
-      ? keyframeCountRaw
-      : Number(DEFAULT_SETTINGS.videoContext?.maxKeyframesPerVideo) || 3,
-    0,
-    8
-  );
-  merged.videoContext.allowAsrFallback = Boolean(merged.videoContext?.allowAsrFallback);
-  merged.videoContext.maxAsrSeconds = clamp(
-    Number.isFinite(maxAsrSecondsRaw) ? maxAsrSecondsRaw : Number(DEFAULT_SETTINGS.videoContext?.maxAsrSeconds) || 120,
-    15,
-    600
-  );
-
-  if (!merged.voice.xai || typeof merged.voice.xai !== "object") {
-    merged.voice.xai = {};
-  }
-  if (!merged.voice.openaiRealtime || typeof merged.voice.openaiRealtime !== "object") {
-    merged.voice.openaiRealtime = {};
-  }
-  if (!merged.voice.elevenLabsRealtime || typeof merged.voice.elevenLabsRealtime !== "object") {
-    merged.voice.elevenLabsRealtime = {};
-  }
-  if (!merged.voice.geminiRealtime || typeof merged.voice.geminiRealtime !== "object") {
-    merged.voice.geminiRealtime = {};
-  }
-  if (!merged.voice.sttPipeline || typeof merged.voice.sttPipeline !== "object") {
-    merged.voice.sttPipeline = {};
-  }
-  if (!merged.voice.thoughtEngine || typeof merged.voice.thoughtEngine !== "object") {
-    merged.voice.thoughtEngine = {};
-  }
-  if (!merged.voice.generationLlm || typeof merged.voice.generationLlm !== "object") {
-    merged.voice.generationLlm = {};
-  }
-  if (!merged.voice.replyDecisionLlm || typeof merged.voice.replyDecisionLlm !== "object") {
-    merged.voice.replyDecisionLlm = {};
-  }
-  if (!merged.voice.streamWatch || typeof merged.voice.streamWatch !== "object") {
-    merged.voice.streamWatch = {};
-  }
-  if (!merged.voice.soundboard || typeof merged.voice.soundboard !== "object") {
-    merged.voice.soundboard = {};
-  }
-  if (!merged.voice.musicDucking || typeof merged.voice.musicDucking !== "object") {
-    merged.voice.musicDucking = {};
-  }
-
-  type VoiceXaiDefaults = {
-    voice?: string;
-    audioFormat?: string;
-    sampleRateHz?: number;
-    region?: string;
-  };
-  type VoiceOpenAiRealtimeDefaults = {
-    model?: string;
-    voice?: string;
-    inputAudioFormat?: string;
-    outputAudioFormat?: string;
-    transcriptionMethod?: string;
-    inputTranscriptionModel?: string;
-    usePerUserAsrBridge?: boolean;
-  };
-  type VoiceElevenLabsRealtimeDefaults = {
-    agentId?: string;
-    apiBaseUrl?: string;
-    inputSampleRateHz?: number;
-    outputSampleRateHz?: number;
-  };
-  type VoiceGeminiRealtimeDefaults = {
-    model?: string;
-    voice?: string;
-    apiBaseUrl?: string;
-    inputSampleRateHz?: number;
-    outputSampleRateHz?: number;
-  };
-  type VoiceSttPipelineDefaults = {
-    transcriptionModel?: string;
-    ttsModel?: string;
-    ttsVoice?: string;
-    ttsSpeed?: number;
-  };
-  type VoiceThoughtEngineDefaults = {
-    enabled?: boolean;
-    provider?: string;
-    model?: string;
-    temperature?: number;
-    eagerness?: number;
-    minSilenceSeconds?: number;
-    minSecondsBetweenThoughts?: number;
-  };
-  type VoiceReplyDecisionDefaults = {
-    enabled?: boolean;
-    provider?: string;
-    model?: string;
-    reasoningEffort?: string;
-    realtimeAdmissionMode?: string;
-    musicWakeLatchSeconds?: number;
-  };
-  type VoiceGenerationDefaults = {
-    useTextModel?: boolean;
-    provider?: string;
-    model?: string;
-  };
-  type VoiceStreamWatchDefaults = {
-    enabled?: boolean;
-    minCommentaryIntervalSeconds?: number;
-    maxFramesPerMinute?: number;
-    maxFrameBytes?: number;
-    commentaryPath?: string;
-    keyframeIntervalMs?: number;
-    autonomousCommentaryEnabled?: boolean;
-    brainContextEnabled?: boolean;
-    brainContextMinIntervalSeconds?: number;
-    brainContextMaxEntries?: number;
-    brainContextPrompt?: string;
-  };
-  type VoiceSoundboardDefaults = {
-    enabled?: boolean;
-    allowExternalSounds?: boolean;
-  };
-  type VoiceMusicDuckingDefaults = {
-    targetGain?: number;
-    fadeMs?: number;
-  };
-  type VoiceDefaults = {
-    enabled?: boolean;
-    voiceProvider?: string;
-    brainProvider?: string;
-    transcriberProvider?: string;
-    asrLanguageMode?: string;
-    asrLanguageHint?: string;
-    allowNsfwHumor?: boolean;
-    intentConfidenceThreshold?: number;
-    maxSessionMinutes?: number;
-    inactivityLeaveSeconds?: number;
-    maxSessionsPerDay?: number;
-    maxConcurrentSessions?: number;
-    replyEagerness?: number;
-    commandOnlyMode?: boolean;
-    xai?: VoiceXaiDefaults;
-    openaiRealtime?: VoiceOpenAiRealtimeDefaults;
-    elevenLabsRealtime?: VoiceElevenLabsRealtimeDefaults;
-    geminiRealtime?: VoiceGeminiRealtimeDefaults;
-    sttPipeline?: VoiceSttPipelineDefaults;
-    thoughtEngine?: VoiceThoughtEngineDefaults;
-    generationLlm?: VoiceGenerationDefaults;
-    replyDecisionLlm?: VoiceReplyDecisionDefaults;
-    streamWatch?: VoiceStreamWatchDefaults;
-    soundboard?: VoiceSoundboardDefaults;
-    musicDucking?: VoiceMusicDuckingDefaults;
-    asrEnabled?: boolean;
-    textOnlyMode?: boolean;
-    operationalMessages?: string;
-  };
-
-  const defaultVoice: VoiceDefaults = DEFAULT_SETTINGS.voice;
-  const defaultVoiceXai: VoiceXaiDefaults = defaultVoice.xai ?? {};
-  const defaultVoiceOpenAiRealtime: VoiceOpenAiRealtimeDefaults = defaultVoice.openaiRealtime ?? {};
-  const defaultVoiceElevenLabsRealtime: VoiceElevenLabsRealtimeDefaults = defaultVoice.elevenLabsRealtime ?? {};
-  const defaultVoiceGeminiRealtime: VoiceGeminiRealtimeDefaults = defaultVoice.geminiRealtime ?? {};
-  const defaultVoiceSttPipeline: VoiceSttPipelineDefaults = defaultVoice.sttPipeline ?? {};
-  const defaultVoiceThoughtEngine: VoiceThoughtEngineDefaults = defaultVoice.thoughtEngine ?? {};
-  const defaultVoiceGenerationLlm: VoiceGenerationDefaults = defaultVoice.generationLlm ?? {};
-  const defaultVoiceReplyDecisionLlm: VoiceReplyDecisionDefaults = defaultVoice.replyDecisionLlm ?? {};
-  const defaultVoiceStreamWatch: VoiceStreamWatchDefaults = defaultVoice.streamWatch ?? {};
-  const defaultVoiceSoundboard: VoiceSoundboardDefaults = defaultVoice.soundboard ?? {};
-  const defaultVoiceMusicDucking: VoiceMusicDuckingDefaults = defaultVoice.musicDucking ?? {};
-  const voiceIntentThresholdRaw = Number(merged.voice?.intentConfidenceThreshold);
-  const voiceMaxSessionRaw = Number(merged.voice?.maxSessionMinutes);
-  const voiceInactivityRaw = Number(merged.voice?.inactivityLeaveSeconds);
-  const voiceDailySessionsRaw = Number(merged.voice?.maxSessionsPerDay);
-  const voiceConcurrentSessionsRaw = Number(merged.voice?.maxConcurrentSessions);
-  const voiceSampleRateRaw = Number(merged.voice?.xai?.sampleRateHz);
-  const elevenLabsRealtimeInputSampleRateRaw = Number(merged.voice?.elevenLabsRealtime?.inputSampleRateHz);
-  const elevenLabsRealtimeOutputSampleRateRaw = Number(merged.voice?.elevenLabsRealtime?.outputSampleRateHz);
-  const geminiRealtimeInputSampleRateRaw = Number(merged.voice?.geminiRealtime?.inputSampleRateHz);
-  const geminiRealtimeOutputSampleRateRaw = Number(merged.voice?.geminiRealtime?.outputSampleRateHz);
-  const voiceSttTtsSpeedRaw = Number(merged.voice?.sttPipeline?.ttsSpeed);
-  const streamWatchCommentaryIntervalRaw = Number(merged.voice?.streamWatch?.minCommentaryIntervalSeconds);
-  const streamWatchMaxFramesPerMinuteRaw = Number(merged.voice?.streamWatch?.maxFramesPerMinute);
-  const streamWatchMaxFrameBytesRaw = Number(merged.voice?.streamWatch?.maxFrameBytes);
-  const streamWatchKeyframeIntervalRaw = Number(merged.voice?.streamWatch?.keyframeIntervalMs);
-  const streamWatchBrainContextIntervalRaw = Number(merged.voice?.streamWatch?.brainContextMinIntervalSeconds);
-  const streamWatchBrainContextMaxEntriesRaw = Number(merged.voice?.streamWatch?.brainContextMaxEntries);
-  const voiceMusicDuckingTargetGainRaw = Number(merged.voice?.musicDucking?.targetGain);
-  const voiceMusicDuckingFadeMsRaw = Number(merged.voice?.musicDucking?.fadeMs);
-
-  merged.voice.enabled =
-    merged.voice?.enabled !== undefined ? Boolean(merged.voice?.enabled) : Boolean(defaultVoice.enabled);
-  merged.voice.voiceProvider = normalizeVoiceProvider(merged.voice?.voiceProvider, "openai");
-  merged.voice.brainProvider = normalizeBrainProvider(
-    merged.voice?.brainProvider,
-    merged.voice?.voiceProvider,
-    "openai"
-  );
-  merged.voice.transcriberProvider = normalizeTranscriberProvider(
-    merged.voice?.transcriberProvider,
-    "openai"
-  );
-  merged.voice.asrLanguageMode = normalizeVoiceAsrLanguageMode(
-    merged.voice?.asrLanguageMode,
-    defaultVoice.asrLanguageMode || "auto"
-  );
-  merged.voice.asrLanguageHint = normalizeVoiceAsrLanguageHint(
-    merged.voice?.asrLanguageHint,
-    defaultVoice.asrLanguageHint || "en"
-  );
-  merged.voice.allowNsfwHumor =
-    merged.voice?.allowNsfwHumor !== undefined
-      ? Boolean(merged.voice?.allowNsfwHumor)
-      : Boolean(defaultVoice.allowNsfwHumor);
-  merged.voice.intentConfidenceThreshold = clamp(
-    Number.isFinite(voiceIntentThresholdRaw)
-      ? voiceIntentThresholdRaw
-      : Number(defaultVoice.intentConfidenceThreshold) || 0.75,
-    0.4,
-    0.99
-  );
-  merged.voice.maxSessionMinutes = clamp(
-    Number.isFinite(voiceMaxSessionRaw) ? voiceMaxSessionRaw : Number(defaultVoice.maxSessionMinutes) || 30,
-    1,
-    120
-  );
-  merged.voice.inactivityLeaveSeconds = clamp(
-    Number.isFinite(voiceInactivityRaw) ? voiceInactivityRaw : Number(defaultVoice.inactivityLeaveSeconds) || 300,
-    20,
-    3600
-  );
-  merged.voice.maxSessionsPerDay = clamp(
-    Number.isFinite(voiceDailySessionsRaw) ? voiceDailySessionsRaw : Number(defaultVoice.maxSessionsPerDay) || 12,
-    0,
-    120
-  );
-  merged.voice.maxConcurrentSessions = clamp(
-    Number.isFinite(voiceConcurrentSessionsRaw)
-      ? voiceConcurrentSessionsRaw
-      : Number(defaultVoice.maxConcurrentSessions) || 1,
-    1,
-    3
-  );
-  merged.voice.allowedVoiceChannelIds = uniqueIdList(merged.voice?.allowedVoiceChannelIds);
-  merged.voice.blockedVoiceChannelIds = uniqueIdList(merged.voice?.blockedVoiceChannelIds);
-  merged.voice.blockedVoiceUserIds = uniqueIdList(merged.voice?.blockedVoiceUserIds);
-
-  const voiceEagernessRaw = Number(merged.voice?.replyEagerness);
-  merged.voice.replyEagerness = clamp(
-    Number.isFinite(voiceEagernessRaw) ? voiceEagernessRaw : 0, 0, 100
-  );
-  merged.voice.commandOnlyMode =
-    merged.voice?.commandOnlyMode !== undefined
-      ? Boolean(merged.voice?.commandOnlyMode)
-      : Boolean(defaultVoice.commandOnlyMode);
-
-  const rawReplyPath = String(merged.voice?.replyPath || "").trim().toLowerCase();
-  const resolvedReplyPath =
-    rawReplyPath === "native" || rawReplyPath === "bridge" || rawReplyPath === "brain"
-      ? rawReplyPath
-      : "bridge";
-  merged.voice.replyPath = resolvedReplyPath;
-
-  const rawTtsMode = String(merged.voice?.ttsMode || "").trim().toLowerCase();
-  merged.voice.ttsMode = rawTtsMode === "api" ? "api" : "realtime";
-
-  merged.voice.thoughtEngine.enabled =
-    merged.voice?.thoughtEngine?.enabled !== undefined
-      ? Boolean(merged.voice?.thoughtEngine?.enabled)
-      : defaultVoiceThoughtEngine?.enabled !== undefined
-        ? Boolean(defaultVoiceThoughtEngine.enabled)
-        : true;
-  const voiceThoughtEagernessRaw = Number(merged.voice?.thoughtEngine?.eagerness);
-  const defaultVoiceThoughtEagernessRaw = Number(defaultVoiceThoughtEngine.eagerness);
-  merged.voice.thoughtEngine.eagerness = clamp(
-    Number.isFinite(voiceThoughtEagernessRaw)
-      ? voiceThoughtEagernessRaw
-      : Number.isFinite(defaultVoiceThoughtEagernessRaw)
-        ? defaultVoiceThoughtEagernessRaw
-        : 0,
-    0,
-    100
-  );
-  const voiceThoughtProviderRaw = String(merged.voice?.thoughtEngine?.provider || "").trim();
-  const defaultVoiceThoughtProvider = normalizeLlmProvider(defaultVoiceThoughtEngine.provider || "anthropic");
-  const voiceThoughtProvider = normalizeLlmProvider(voiceThoughtProviderRaw, defaultVoiceThoughtProvider);
-  const defaultVoiceThoughtModel =
-    voiceThoughtProvider === defaultVoiceThoughtProvider
-      ? String(defaultVoiceThoughtEngine.model || "").trim()
-      : "";
-  const normalizedVoiceThoughtLlm = normalizeProviderModelPair(
-    merged.voice.thoughtEngine,
-    defaultVoiceThoughtProvider,
-    defaultVoiceThoughtModel
-  );
-  merged.voice.thoughtEngine.provider = normalizedVoiceThoughtLlm.provider;
-  merged.voice.thoughtEngine.model = normalizedVoiceThoughtLlm.model;
-  const voiceThoughtTemperatureRaw = Number(merged.voice?.thoughtEngine?.temperature);
-  const defaultVoiceThoughtTemperatureRaw = Number(defaultVoiceThoughtEngine.temperature);
-  merged.voice.thoughtEngine.temperature = clamp(
-    Number.isFinite(voiceThoughtTemperatureRaw)
-      ? voiceThoughtTemperatureRaw
-      : Number.isFinite(defaultVoiceThoughtTemperatureRaw)
-        ? defaultVoiceThoughtTemperatureRaw
-        : 0.8,
-    0,
-    2
-  );
-  const voiceThoughtMinSilenceRaw = Number(merged.voice?.thoughtEngine?.minSilenceSeconds);
-  const defaultVoiceThoughtMinSilenceRaw = Number(defaultVoiceThoughtEngine.minSilenceSeconds);
-  merged.voice.thoughtEngine.minSilenceSeconds = clamp(
-    Number.isFinite(voiceThoughtMinSilenceRaw)
-      ? voiceThoughtMinSilenceRaw
-      : Number.isFinite(defaultVoiceThoughtMinSilenceRaw)
-        ? defaultVoiceThoughtMinSilenceRaw
-        : 20,
-    8,
-    300
-  );
-  const voiceThoughtMinGapRaw = Number(merged.voice?.thoughtEngine?.minSecondsBetweenThoughts);
-  const defaultVoiceThoughtMinGapRaw = Number(defaultVoiceThoughtEngine.minSecondsBetweenThoughts);
-  merged.voice.thoughtEngine.minSecondsBetweenThoughts = clamp(
-    Number.isFinite(voiceThoughtMinGapRaw)
-      ? voiceThoughtMinGapRaw
-      : Number.isFinite(defaultVoiceThoughtMinGapRaw)
-        ? defaultVoiceThoughtMinGapRaw
-        : merged.voice.thoughtEngine.minSilenceSeconds,
-    8,
-    600
-  );
-  merged.voice.generationLlm.useTextModel =
-    merged.voice?.generationLlm?.useTextModel !== undefined
-      ? Boolean(merged.voice?.generationLlm?.useTextModel)
-      : Boolean(defaultVoiceGenerationLlm.useTextModel);
-  const voiceGenerationProviderRaw = String(merged.voice?.generationLlm?.provider || "").trim();
-  const defaultVoiceGenerationProvider = normalizeLlmProvider(defaultVoiceGenerationLlm.provider || "anthropic");
-  const defaultVoiceGenerationModel =
-    normalizeLlmProvider(voiceGenerationProviderRaw, defaultVoiceGenerationProvider) === defaultVoiceGenerationProvider
-      ? String(defaultVoiceGenerationLlm.model || "").trim()
-      : "";
-  const normalizedVoiceGenerationLlm = normalizeProviderModelPair(
-    merged.voice.generationLlm,
-    defaultVoiceGenerationProvider,
-    defaultVoiceGenerationModel
-  );
-  merged.voice.generationLlm.provider = merged.voice.generationLlm.useTextModel
-    ? merged.llm.provider
-    : normalizedVoiceGenerationLlm.provider;
-  merged.voice.generationLlm.model = merged.voice.generationLlm.useTextModel
-    ? merged.llm.model
-    : normalizedVoiceGenerationLlm.model;
-  delete merged.voice.replyDecisionLlm.prompts;
-  const voiceReplyDecisionProviderRaw = String(merged.voice?.replyDecisionLlm?.provider || "").trim();
-  const defaultVoiceReplyDecisionProvider = normalizeLlmProvider(defaultVoiceReplyDecisionLlm.provider || "anthropic");
-  const defaultReplyDecisionModel =
-    normalizeLlmProvider(voiceReplyDecisionProviderRaw, defaultVoiceReplyDecisionProvider) ===
-      defaultVoiceReplyDecisionProvider
-      ? String(defaultVoiceReplyDecisionLlm.model || "").trim()
-      : "";
-  const normalizedVoiceReplyDecisionLlm = normalizeProviderModelPair(
-    merged.voice.replyDecisionLlm,
-    defaultVoiceReplyDecisionProvider,
-    defaultReplyDecisionModel
-  );
-  merged.voice.replyDecisionLlm.provider = normalizedVoiceReplyDecisionLlm.provider;
-  merged.voice.replyDecisionLlm.model = normalizedVoiceReplyDecisionLlm.model;
-  delete merged.voice.replyDecisionLlm.maxAttempts;
-  const defaultReplyDecisionReasoningEffort = defaultVoiceReplyDecisionLlm.reasoningEffort || "minimal";
-  merged.voice.replyDecisionLlm.reasoningEffort = normalizeOpenAiReasoningEffort(
-    merged.voice?.replyDecisionLlm?.reasoningEffort,
-    defaultReplyDecisionReasoningEffort
-  ) || defaultReplyDecisionReasoningEffort;
-  const rawRealtimeAdmissionMode = String(raw?.voice?.replyDecisionLlm?.realtimeAdmissionMode || "")
-    .trim()
-    .toLowerCase();
-  const legacyClassifierEnabled = raw?.voice?.replyDecisionLlm?.enabled;
-  const defaultRealtimeAdmissionMode = String(defaultVoiceReplyDecisionLlm.realtimeAdmissionMode || "hard_classifier")
-    .trim()
-    .toLowerCase();
-  const normalizedRealtimeAdmissionMode = rawRealtimeAdmissionMode === "generation_only" || rawRealtimeAdmissionMode === "hard_classifier"
-    ? rawRealtimeAdmissionMode
-    : legacyClassifierEnabled === false
-      ? "generation_only"
-      : defaultRealtimeAdmissionMode === "generation_only"
-        ? "generation_only"
-        : "hard_classifier";
-  merged.voice.replyDecisionLlm.realtimeAdmissionMode = normalizedRealtimeAdmissionMode;
-  const musicWakeLatchSecondsRaw = Number(merged.voice?.replyDecisionLlm?.musicWakeLatchSeconds);
-  const defaultMusicWakeLatchSecondsRaw = Number(defaultVoiceReplyDecisionLlm.musicWakeLatchSeconds);
-  merged.voice.replyDecisionLlm.musicWakeLatchSeconds = clamp(
-    Number.isFinite(musicWakeLatchSecondsRaw)
-      ? musicWakeLatchSecondsRaw
-      : Number.isFinite(defaultMusicWakeLatchSecondsRaw)
-        ? defaultMusicWakeLatchSecondsRaw
-        : 15,
-    5,
-    60
-  );
-  delete merged.voice.replyDecisionLlm.enabled;
-
-  merged.voice.xai.voice = String(merged.voice?.xai?.voice || defaultVoiceXai.voice || "Rex").slice(0, 60);
-  merged.voice.xai.audioFormat = String(merged.voice?.xai?.audioFormat || defaultVoiceXai.audioFormat || "audio/pcm")
-    .trim()
-    .slice(0, 40);
-  merged.voice.xai.sampleRateHz = clamp(
-    Number.isFinite(voiceSampleRateRaw) ? voiceSampleRateRaw : Number(defaultVoiceXai.sampleRateHz) || 24000,
-    8000,
-    48000
-  );
-  merged.voice.xai.region = String(merged.voice?.xai?.region || defaultVoiceXai.region || "us-east-1")
-    .trim()
-    .slice(0, 40);
-  merged.voice.openaiRealtime.model = String(
-    merged.voice?.openaiRealtime?.model || defaultVoiceOpenAiRealtime.model || "gpt-realtime"
-  )
-    .trim()
-    .slice(0, 120);
-  merged.voice.openaiRealtime.voice = String(
-    merged.voice?.openaiRealtime?.voice || defaultVoiceOpenAiRealtime.voice || "alloy"
-  )
-    .trim()
-    .slice(0, 60);
-  merged.voice.openaiRealtime.inputAudioFormat = normalizeOpenAiRealtimeAudioFormat(
-    merged.voice?.openaiRealtime?.inputAudioFormat || defaultVoiceOpenAiRealtime.inputAudioFormat || "pcm16"
-  );
-  merged.voice.openaiRealtime.outputAudioFormat = normalizeOpenAiRealtimeAudioFormat(
-    merged.voice?.openaiRealtime?.outputAudioFormat || defaultVoiceOpenAiRealtime.outputAudioFormat || "pcm16"
-  );
-  const openAiRealtimeTranscriptionMethod = String(
-    merged.voice?.openaiRealtime?.transcriptionMethod ||
-    defaultVoiceOpenAiRealtime.transcriptionMethod ||
-    "realtime_bridge"
-  )
-    .trim()
-    .toLowerCase();
-  merged.voice.openaiRealtime.transcriptionMethod =
-    openAiRealtimeTranscriptionMethod === "file_wav"
-      ? "file_wav"
-      : "realtime_bridge";
-  merged.voice.openaiRealtime.inputTranscriptionModel = String(
-    normalizeOpenAiRealtimeTranscriptionModel(
-      merged.voice?.openaiRealtime?.inputTranscriptionModel ||
-      defaultVoiceOpenAiRealtime.inputTranscriptionModel ||
-      OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
-      OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
-    )
-  ).slice(0, 120);
-  merged.voice.openaiRealtime.usePerUserAsrBridge =
-    merged.voice?.openaiRealtime?.usePerUserAsrBridge !== undefined
-      ? Boolean(merged.voice?.openaiRealtime?.usePerUserAsrBridge)
-      : Boolean(defaultVoiceOpenAiRealtime.usePerUserAsrBridge);
-  merged.voice.elevenLabsRealtime.agentId = String(
-    merged.voice?.elevenLabsRealtime?.agentId || defaultVoiceElevenLabsRealtime.agentId || ""
-  )
-    .trim()
-    .slice(0, 120);
-  merged.voice.elevenLabsRealtime.apiBaseUrl = normalizeHttpBaseUrl(
-    merged.voice?.elevenLabsRealtime?.apiBaseUrl,
-    defaultVoiceElevenLabsRealtime.apiBaseUrl || "https://api.elevenlabs.io"
-  );
-  merged.voice.elevenLabsRealtime.inputSampleRateHz = clamp(
-    Number.isFinite(elevenLabsRealtimeInputSampleRateRaw)
-      ? elevenLabsRealtimeInputSampleRateRaw
-      : Number(defaultVoiceElevenLabsRealtime.inputSampleRateHz) || 16000,
-    8000,
-    48000
-  );
-  merged.voice.elevenLabsRealtime.outputSampleRateHz = clamp(
-    Number.isFinite(elevenLabsRealtimeOutputSampleRateRaw)
-      ? elevenLabsRealtimeOutputSampleRateRaw
-      : Number(defaultVoiceElevenLabsRealtime.outputSampleRateHz) || 16000,
-    8000,
-    48000
-  );
-  merged.voice.geminiRealtime.model = String(
-    merged.voice?.geminiRealtime?.model || defaultVoiceGeminiRealtime.model || "gemini-2.5-flash-native-audio-preview-12-2025"
-  )
-    .trim()
-    .slice(0, 140);
-  merged.voice.geminiRealtime.voice = String(
-    merged.voice?.geminiRealtime?.voice || defaultVoiceGeminiRealtime.voice || "Aoede"
-  )
-    .trim()
-    .slice(0, 60);
-  merged.voice.geminiRealtime.apiBaseUrl = normalizeHttpBaseUrl(
-    merged.voice?.geminiRealtime?.apiBaseUrl,
-    defaultVoiceGeminiRealtime.apiBaseUrl || "https://generativelanguage.googleapis.com"
-  );
-  merged.voice.geminiRealtime.inputSampleRateHz = clamp(
-    Number.isFinite(geminiRealtimeInputSampleRateRaw)
-      ? geminiRealtimeInputSampleRateRaw
-      : Number(defaultVoiceGeminiRealtime.inputSampleRateHz) || 16000,
-    8000,
-    48000
-  );
-  merged.voice.geminiRealtime.outputSampleRateHz = clamp(
-    Number.isFinite(geminiRealtimeOutputSampleRateRaw)
-      ? geminiRealtimeOutputSampleRateRaw
-      : Number(defaultVoiceGeminiRealtime.outputSampleRateHz) || 24000,
-    8000,
-    48000
-  );
-  merged.voice.sttPipeline.transcriptionModel = String(
-    merged.voice?.sttPipeline?.transcriptionModel || defaultVoiceSttPipeline.transcriptionModel || "gpt-4o-mini-transcribe"
-  )
-    .trim()
-    .slice(0, 120);
-  merged.voice.sttPipeline.ttsModel = String(
-    merged.voice?.sttPipeline?.ttsModel || defaultVoiceSttPipeline.ttsModel || "gpt-4o-mini-tts"
-  )
-    .trim()
-    .slice(0, 120);
-  merged.voice.sttPipeline.ttsVoice = String(
-    merged.voice?.sttPipeline?.ttsVoice || defaultVoiceSttPipeline.ttsVoice || "alloy"
-  )
-    .trim()
-    .slice(0, 60);
-  merged.voice.sttPipeline.ttsSpeed = clamp(
-    Number.isFinite(voiceSttTtsSpeedRaw)
-      ? voiceSttTtsSpeedRaw
-      : Number(defaultVoiceSttPipeline.ttsSpeed) || 1,
-    0.25,
-    2
-  );
-  merged.voice.streamWatch.enabled =
-    merged.voice?.streamWatch?.enabled !== undefined
-      ? Boolean(merged.voice?.streamWatch?.enabled)
-      : Boolean(defaultVoiceStreamWatch.enabled);
-  merged.voice.streamWatch.minCommentaryIntervalSeconds = clamp(
-    Number.isFinite(streamWatchCommentaryIntervalRaw)
-      ? streamWatchCommentaryIntervalRaw
-      : Number(defaultVoiceStreamWatch.minCommentaryIntervalSeconds) || 8,
-    3,
-    120
-  );
-  merged.voice.streamWatch.maxFramesPerMinute = clamp(
-    Number.isFinite(streamWatchMaxFramesPerMinuteRaw)
-      ? streamWatchMaxFramesPerMinuteRaw
-      : Number(defaultVoiceStreamWatch.maxFramesPerMinute) || 180,
-    6,
-    600
-  );
-  merged.voice.streamWatch.maxFrameBytes = clamp(
-    Number.isFinite(streamWatchMaxFrameBytesRaw)
-      ? streamWatchMaxFrameBytesRaw
-      : Number(defaultVoiceStreamWatch.maxFrameBytes) || 350000,
-    50_000,
-    4_000_000
-  );
-  merged.voice.streamWatch.commentaryPath = normalizeStreamWatchCommentaryPath(
-    merged.voice?.streamWatch?.commentaryPath,
-    defaultVoiceStreamWatch.commentaryPath || "auto"
-  );
-  merged.voice.streamWatch.keyframeIntervalMs = clamp(
-    Number.isFinite(streamWatchKeyframeIntervalRaw)
-      ? streamWatchKeyframeIntervalRaw
-      : Number(defaultVoiceStreamWatch.keyframeIntervalMs) || 1200,
-    250,
-    5000
-  );
-  merged.voice.streamWatch.autonomousCommentaryEnabled =
-    merged.voice?.streamWatch?.autonomousCommentaryEnabled !== undefined
-      ? Boolean(merged.voice?.streamWatch?.autonomousCommentaryEnabled)
-      : defaultVoiceStreamWatch.autonomousCommentaryEnabled !== undefined
-        ? Boolean(defaultVoiceStreamWatch.autonomousCommentaryEnabled)
-        : true;
-  merged.voice.streamWatch.brainContextEnabled =
-    merged.voice?.streamWatch?.brainContextEnabled !== undefined
-      ? Boolean(merged.voice?.streamWatch?.brainContextEnabled)
-      : defaultVoiceStreamWatch.brainContextEnabled !== undefined
-        ? Boolean(defaultVoiceStreamWatch.brainContextEnabled)
-        : true;
-  merged.voice.streamWatch.brainContextMinIntervalSeconds = clamp(
-    Number.isFinite(streamWatchBrainContextIntervalRaw)
-      ? streamWatchBrainContextIntervalRaw
-      : Number(defaultVoiceStreamWatch.brainContextMinIntervalSeconds) || 4,
-    1,
-    120
-  );
-  merged.voice.streamWatch.brainContextMaxEntries = clamp(
-    Number.isFinite(streamWatchBrainContextMaxEntriesRaw)
-      ? streamWatchBrainContextMaxEntriesRaw
-      : Number(defaultVoiceStreamWatch.brainContextMaxEntries) || 8,
-    1,
-    24
-  );
-  const brainContextPrompt = String(
-    merged.voice?.streamWatch?.brainContextPrompt ?? defaultVoiceStreamWatch.brainContextPrompt ?? ""
-  )
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 420);
-  merged.voice.streamWatch.brainContextPrompt =
-    brainContextPrompt || String(defaultVoiceStreamWatch.brainContextPrompt || "");
-
-  merged.voice.soundboard.enabled =
-    merged.voice?.soundboard?.enabled !== undefined
-      ? Boolean(merged.voice?.soundboard?.enabled)
-      : Boolean(defaultVoiceSoundboard.enabled);
-  merged.voice.soundboard.allowExternalSounds =
-    merged.voice?.soundboard?.allowExternalSounds !== undefined
-      ? Boolean(merged.voice?.soundboard?.allowExternalSounds)
-      : Boolean(defaultVoiceSoundboard.allowExternalSounds);
-  merged.voice.soundboard.preferredSoundIds = uniqueIdList(merged.voice?.soundboard?.preferredSoundIds).slice(0, 40);
-  merged.voice.musicDucking.targetGain = clamp(
-    Number.isFinite(voiceMusicDuckingTargetGainRaw)
-      ? voiceMusicDuckingTargetGainRaw
-      : Number(defaultVoiceMusicDucking.targetGain) || 0.15,
-    0.05,
-    1
-  );
-  merged.voice.musicDucking.fadeMs = clamp(
-    Number.isFinite(voiceMusicDuckingFadeMsRaw)
-      ? Math.round(voiceMusicDuckingFadeMsRaw)
-      : Math.round(Number(defaultVoiceMusicDucking.fadeMs) || 300),
-    0,
-    5000
-  );
-
-  // Clean up legacy fields
-  delete merged.voice.musicTranscriptionEnabled;
-  delete merged.voice.asrDuringMusic;
-
-  merged.voice.asrEnabled =
-    merged.voice?.asrEnabled !== undefined
-      ? Boolean(merged.voice?.asrEnabled)
-      : Boolean(defaultVoice.asrEnabled ?? true);
-
-  merged.voice.textOnlyMode =
-    merged.voice?.textOnlyMode !== undefined
-      ? Boolean(merged.voice?.textOnlyMode)
-      : Boolean(defaultVoice.textOnlyMode ?? false);
-
-  const validOperationalMessageLevels = ["all", "essential", "minimal", "none"];
-  const rawOperationalMessages = String(merged.voice?.operationalMessages || "").trim().toLowerCase();
-  merged.voice.operationalMessages = validOperationalMessageLevels.includes(rawOperationalMessages)
-    ? rawOperationalMessages
-    : String(defaultVoice.operationalMessages || "all");
-
-  merged.startup.catchupEnabled =
-    merged.startup?.catchupEnabled !== undefined ? Boolean(merged.startup?.catchupEnabled) : true;
-  const catchupLookbackHoursRaw = Number(merged.startup?.catchupLookbackHours);
-  merged.startup.catchupLookbackHours = clamp(
-    Number.isFinite(catchupLookbackHoursRaw) ? catchupLookbackHoursRaw : 6,
-    1,
-    24
-  );
-  merged.startup.catchupMaxMessagesPerChannel = clamp(
-    Number(merged.startup?.catchupMaxMessagesPerChannel) || 20,
-    5,
-    80
-  );
-  merged.startup.maxCatchupRepliesPerChannel = clamp(
-    Number(merged.startup?.maxCatchupRepliesPerChannel) || 2,
-    1,
-    12
-  );
-
-  merged.permissions.allowReplies = Boolean(merged.permissions?.allowReplies);
-  merged.permissions.allowUnsolicitedReplies =
-    merged.permissions?.allowUnsolicitedReplies !== undefined
-      ? Boolean(merged.permissions?.allowUnsolicitedReplies)
-      : true;
-  merged.permissions.allowReactions = Boolean(merged.permissions?.allowReactions);
-  merged.permissions.replyChannelIds = uniqueIdList(merged.permissions?.replyChannelIds);
-  merged.permissions.allowedChannelIds = uniqueIdList(merged.permissions?.allowedChannelIds);
-  merged.permissions.blockedChannelIds = uniqueIdList(merged.permissions?.blockedChannelIds);
-  merged.permissions.blockedUserIds = uniqueIdList(merged.permissions?.blockedUserIds);
-  merged.permissions.maxMessagesPerHour = clamp(
-    Number(merged.permissions?.maxMessagesPerHour) || 20,
-    1,
-    200
-  );
-  merged.permissions.maxReactionsPerHour = clamp(Number(merged.permissions?.maxReactionsPerHour) || 24, 1, 300);
-
-  merged.discovery.enabled =
-    merged.discovery?.enabled !== undefined ? Boolean(merged.discovery?.enabled) : false;
-  merged.discovery.channelIds = uniqueIdList(merged.discovery?.channelIds);
-  merged.discovery.maxPostsPerDay = clamp(Number(merged.discovery?.maxPostsPerDay) || 0, 0, 100);
-  merged.discovery.minMinutesBetweenPosts = clamp(
-    Number(merged.discovery?.minMinutesBetweenPosts) || 120,
-    5,
-    24 * 60
-  );
-  merged.discovery.pacingMode =
-    String(merged.discovery?.pacingMode || "even").toLowerCase() === "spontaneous"
-      ? "spontaneous"
-      : "even";
-  merged.discovery.spontaneity = clamp(Number(merged.discovery?.spontaneity) || 65, 0, 100);
-  merged.discovery.postOnStartup = Boolean(merged.discovery?.postOnStartup);
-  merged.discovery.allowImagePosts = Boolean(merged.discovery?.allowImagePosts);
-  merged.discovery.allowVideoPosts = Boolean(merged.discovery?.allowVideoPosts);
-  merged.discovery.allowReplyImages = Boolean(merged.discovery?.allowReplyImages);
-  merged.discovery.allowReplyVideos = Boolean(merged.discovery?.allowReplyVideos);
-  merged.discovery.allowReplyGifs = Boolean(merged.discovery?.allowReplyGifs);
-  merged.discovery.maxImagesPerDay = clamp(Number(merged.discovery?.maxImagesPerDay) || 0, 0, 200);
-  merged.discovery.maxVideosPerDay = clamp(Number(merged.discovery?.maxVideosPerDay) || 0, 0, 120);
-  merged.discovery.maxGifsPerDay = clamp(Number(merged.discovery?.maxGifsPerDay) || 0, 0, 300);
-  merged.discovery.simpleImageModel = String(
-    merged.discovery?.simpleImageModel || "gpt-image-1.5"
-  ).slice(0, 120);
-  merged.discovery.complexImageModel = String(
-    merged.discovery?.complexImageModel || "grok-imagine-image"
-  ).slice(0, 120);
-  merged.discovery.videoModel = String(merged.discovery?.videoModel || "grok-imagine-video").slice(0, 120);
-  merged.discovery.allowedImageModels = uniqueStringList(
-    merged.discovery?.allowedImageModels ?? DEFAULT_SETTINGS.discovery?.allowedImageModels ?? [],
-    12,
-    120
-  );
-  merged.discovery.allowedVideoModels = uniqueStringList(
-    merged.discovery?.allowedVideoModels ?? DEFAULT_SETTINGS.discovery?.allowedVideoModels ?? [],
-    8,
-    120
-  );
-  if (!merged.discovery.sources || typeof merged.discovery.sources !== "object") {
-    merged.discovery.sources = {};
-  }
-
-  const defaultDiscovery = DEFAULT_SETTINGS.discovery;
-  const defaultSources = defaultDiscovery.sources ?? {
-    reddit: true,
-    hackerNews: true,
-    youtube: true,
-    rss: true,
-    x: false
-  };
-  const sourceConfig = merged.discovery.sources ?? {};
-  merged.discovery = {
-    enabled:
-      merged.discovery?.enabled !== undefined
-        ? Boolean(merged.discovery?.enabled)
-        : Boolean(defaultDiscovery.enabled),
-    channelIds: uniqueIdList(merged.discovery?.channelIds),
-    maxPostsPerDay: clamp(
-      Number(merged.discovery?.maxPostsPerDay) || Number(defaultDiscovery.maxPostsPerDay) || 0,
-      0,
-      100
-    ),
-    minMinutesBetweenPosts: clamp(
-      Number(merged.discovery?.minMinutesBetweenPosts) ||
-      Number(defaultDiscovery.minMinutesBetweenPosts) ||
-      120,
-      5,
-      24 * 60
-    ),
-    pacingMode:
-      String(merged.discovery?.pacingMode || defaultDiscovery.pacingMode || "even").toLowerCase() ===
-        "spontaneous"
-        ? "spontaneous"
-        : "even",
-    spontaneity: clamp(
-      Number(merged.discovery?.spontaneity) || Number(defaultDiscovery.spontaneity) || 65,
-      0,
-      100
-    ),
-    postOnStartup:
-      merged.discovery?.postOnStartup !== undefined
-        ? Boolean(merged.discovery.postOnStartup)
-        : Boolean(defaultDiscovery.postOnStartup),
-    allowImagePosts:
-      merged.discovery?.allowImagePosts !== undefined
-        ? Boolean(merged.discovery.allowImagePosts)
-        : Boolean(defaultDiscovery.allowImagePosts),
-    allowVideoPosts:
-      merged.discovery?.allowVideoPosts !== undefined
-        ? Boolean(merged.discovery.allowVideoPosts)
-        : Boolean(defaultDiscovery.allowVideoPosts),
-    allowReplyImages:
-      merged.discovery?.allowReplyImages !== undefined
-        ? Boolean(merged.discovery.allowReplyImages)
-        : Boolean(defaultDiscovery.allowReplyImages),
-    allowReplyVideos:
-      merged.discovery?.allowReplyVideos !== undefined
-        ? Boolean(merged.discovery.allowReplyVideos)
-        : Boolean(defaultDiscovery.allowReplyVideos),
-    allowReplyGifs:
-      merged.discovery?.allowReplyGifs !== undefined
-        ? Boolean(merged.discovery.allowReplyGifs)
-        : Boolean(defaultDiscovery.allowReplyGifs),
-    maxImagesPerDay: clamp(
-      Number(merged.discovery?.maxImagesPerDay) || Number(defaultDiscovery.maxImagesPerDay) || 0,
-      0,
-      200
-    ),
-    maxVideosPerDay: clamp(
-      Number(merged.discovery?.maxVideosPerDay) || Number(defaultDiscovery.maxVideosPerDay) || 0,
-      0,
-      120
-    ),
-    maxGifsPerDay: clamp(
-      Number(merged.discovery?.maxGifsPerDay) || Number(defaultDiscovery.maxGifsPerDay) || 0,
-      0,
-      300
-    ),
-    simpleImageModel: String(
-      merged.discovery?.simpleImageModel || defaultDiscovery.simpleImageModel || "gpt-image-1.5"
-    ).slice(0, 120),
-    complexImageModel: String(
-      merged.discovery?.complexImageModel ||
-      defaultDiscovery.complexImageModel ||
-      "grok-imagine-image"
-    ).slice(0, 120),
-    videoModel: String(
-      merged.discovery?.videoModel || defaultDiscovery.videoModel || "grok-imagine-video"
-    ).slice(0, 120),
-    allowedImageModels: uniqueStringList(
-      merged.discovery?.allowedImageModels ?? defaultDiscovery.allowedImageModels ?? [],
-      12,
-      120
-    ),
-    allowedVideoModels: uniqueStringList(
-      merged.discovery?.allowedVideoModels ?? defaultDiscovery.allowedVideoModels ?? [],
-      8,
-      120
-    ),
-    maxMediaPromptChars: clamp(
-      Number(merged.discovery?.maxMediaPromptChars) || Number(defaultDiscovery.maxMediaPromptChars) || 900,
-      120,
-      2000
-    ),
-    linkChancePercent: clamp(
-      Number(merged.discovery?.linkChancePercent) || Number(defaultDiscovery.linkChancePercent) || 0,
-      0,
-      100
-    ),
-    maxLinksPerPost: clamp(
-      Number(merged.discovery?.maxLinksPerPost) || Number(defaultDiscovery.maxLinksPerPost) || 2,
-      1,
-      4
-    ),
-    maxCandidatesForPrompt: clamp(
-      Number(merged.discovery?.maxCandidatesForPrompt) ||
-      Number(defaultDiscovery.maxCandidatesForPrompt) ||
-      6,
-      1,
-      12
-    ),
-    freshnessHours: clamp(
-      Number(merged.discovery?.freshnessHours) || Number(defaultDiscovery.freshnessHours) || 96,
-      1,
-      24 * 14
-    ),
-    dedupeHours: clamp(
-      Number(merged.discovery?.dedupeHours) || Number(defaultDiscovery.dedupeHours) || 168,
-      1,
-      24 * 45
-    ),
-    randomness: clamp(
-      Number(merged.discovery?.randomness) || Number(defaultDiscovery.randomness) || 55,
-      0,
-      100
-    ),
-    sourceFetchLimit: clamp(
-      Number(merged.discovery?.sourceFetchLimit) || Number(defaultDiscovery.sourceFetchLimit) || 10,
-      2,
-      30
-    ),
-    allowNsfw: Boolean(merged.discovery?.allowNsfw),
-    preferredTopics: uniqueStringList(
-      merged.discovery?.preferredTopics,
-      Number(defaultDiscovery.preferredTopics?.length ? defaultDiscovery.preferredTopics.length : 12),
-      80
-    ),
-    redditSubreddits: uniqueStringList(
-      merged.discovery?.redditSubreddits,
-      20,
-      40
-    ).map((entry) => entry.replace(/^r\//i, "")),
-    youtubeChannelIds: uniqueStringList(merged.discovery?.youtubeChannelIds, 20, 80),
-    rssFeeds: uniqueStringList(merged.discovery?.rssFeeds, 30, 240).filter(isHttpLikeUrl),
-    xHandles: uniqueStringList(merged.discovery?.xHandles, 20, 40).map((entry) =>
-      entry.replace(/^@/, "")
-    ),
-    xNitterBaseUrl: normalizeHttpBaseUrl(
-      merged.discovery?.xNitterBaseUrl,
-      defaultDiscovery.xNitterBaseUrl || "https://nitter.net"
-    ),
-    sources: {
-      reddit:
-        sourceConfig.reddit !== undefined
-          ? Boolean(sourceConfig.reddit)
-          : Boolean(defaultSources.reddit ?? true),
-      hackerNews:
-        sourceConfig.hackerNews !== undefined
-          ? Boolean(sourceConfig.hackerNews)
-          : Boolean(defaultSources.hackerNews ?? true),
-      youtube:
-        sourceConfig.youtube !== undefined
-          ? Boolean(sourceConfig.youtube)
-          : Boolean(defaultSources.youtube ?? true),
-      rss:
-        sourceConfig.rss !== undefined
-          ? Boolean(sourceConfig.rss)
-          : Boolean(defaultSources.rss ?? true),
-      x:
-        sourceConfig.x !== undefined
-          ? Boolean(sourceConfig.x)
-          : Boolean(defaultSources.x ?? false)
-    }
-  };
-
-  merged.memory.enabled = Boolean(merged.memory?.enabled);
-  merged.adaptiveDirectives.enabled =
-    merged.adaptiveDirectives?.enabled !== undefined
-      ? Boolean(merged.adaptiveDirectives?.enabled)
-      : Boolean(DEFAULT_SETTINGS.adaptiveDirectives?.enabled);
-  merged.automations.enabled =
-    merged.automations?.enabled !== undefined
-      ? Boolean(merged.automations?.enabled)
-      : Boolean(DEFAULT_SETTINGS.automations?.enabled);
-  merged.memory.maxRecentMessages = clamp(Number(merged.memory?.maxRecentMessages) || 35, 10, 120);
-  merged.memory.embeddingModel = String(merged.memory?.embeddingModel || "text-embedding-3-small").slice(0, 120);
-
-  if (!merged.memory.reflection || typeof merged.memory.reflection !== "object") {
-    merged.memory.reflection = {};
-  }
-  const defaultMemoryReflection = DEFAULT_SETTINGS.memory?.reflection || {
-    enabled: true,
-    strategy: "two_pass_extract_then_main",
-    hour: 4,
-    minute: 0,
-    maxFactsPerReflection: 20
-  };
-  merged.memory.reflection.enabled =
-    merged.memory.reflection?.enabled !== undefined
-      ? Boolean(merged.memory.reflection?.enabled)
-      : Boolean(defaultMemoryReflection.enabled);
-  merged.memory.reflection.strategy =
-    String(merged.memory.reflection?.strategy || "").trim().toLowerCase() === "one_pass_main"
-      ? "one_pass_main"
-      : "two_pass_extract_then_main";
-  merged.memory.reflection.hour = clamp(
-    Number(merged.memory.reflection?.hour) || Number(defaultMemoryReflection.hour) || 4,
-    0,
-    23
-  );
-  merged.memory.reflection.minute = clamp(
-    Number(merged.memory.reflection?.minute) || Number(defaultMemoryReflection.minute) || 0,
-    0,
-    59
-  );
-  merged.memory.reflection.maxFactsPerReflection = clamp(
-    Number(merged.memory.reflection?.maxFactsPerReflection) || Number(defaultMemoryReflection.maxFactsPerReflection) || 20,
-    1,
-    100
-  );
-  merged.memory.dailyLogRetentionDays = clamp(
-    Number(merged.memory?.dailyLogRetentionDays) || Number(DEFAULT_SETTINGS.memory?.dailyLogRetentionDays) || 30,
-    1,
-    365
-  );
-
-  merged.codeAgent.enabled = Boolean(merged.codeAgent?.enabled);
-  merged.codeAgent.provider = normalizeCodeAgentProvider(
-    merged.codeAgent?.provider,
-    String(DEFAULT_SETTINGS.codeAgent?.provider || "claude-code")
-  );
-  merged.codeAgent.model = String(merged.codeAgent?.model || DEFAULT_SETTINGS.codeAgent?.model || "sonnet").trim().slice(0, 120);
-  const normalizedCodeAgentCodexModel = String(
-    merged.codeAgent?.codexModel || DEFAULT_SETTINGS.codeAgent?.codexModel || "codex-mini-latest"
-  ).trim().slice(0, 120);
-  merged.codeAgent.codexModel =
-    normalizedCodeAgentCodexModel || String(DEFAULT_SETTINGS.codeAgent?.codexModel || "codex-mini-latest");
-  merged.codeAgent.maxTurns = clamp(
-    Number(merged.codeAgent?.maxTurns) || Number(DEFAULT_SETTINGS.codeAgent?.maxTurns) || 30,
-    1,
-    200
-  );
-  merged.codeAgent.timeoutMs = clamp(
-    Number(merged.codeAgent?.timeoutMs) || Number(DEFAULT_SETTINGS.codeAgent?.timeoutMs) || 300_000,
-    10_000,
-    1_800_000
-  );
-  merged.codeAgent.maxBufferBytes = clamp(
-    Number(merged.codeAgent?.maxBufferBytes) || Number(DEFAULT_SETTINGS.codeAgent?.maxBufferBytes) || 2 * 1024 * 1024,
-    4096,
-    10 * 1024 * 1024
-  );
-  merged.codeAgent.defaultCwd = String(merged.codeAgent?.defaultCwd ?? DEFAULT_SETTINGS.codeAgent?.defaultCwd ?? "").trim().slice(0, 500);
-  merged.codeAgent.maxTasksPerHour = clamp(
-    Number(merged.codeAgent?.maxTasksPerHour) || Number(DEFAULT_SETTINGS.codeAgent?.maxTasksPerHour) || 10,
-    1,
-    100
-  );
-  merged.codeAgent.maxParallelTasks = clamp(
-    Number(merged.codeAgent?.maxParallelTasks) || Number(DEFAULT_SETTINGS.codeAgent?.maxParallelTasks) || 2,
-    1,
-    10
-  );
-  merged.codeAgent.allowedUserIds = uniqueIdList(merged.codeAgent?.allowedUserIds).slice(0, 50);
-
-  if (!merged.subAgentOrchestration || typeof merged.subAgentOrchestration !== "object") merged.subAgentOrchestration = {};
-  const defaultOrch = DEFAULT_SETTINGS.subAgentOrchestration;
-  merged.subAgentOrchestration.sessionIdleTimeoutMs = clamp(
-    Number(merged.subAgentOrchestration?.sessionIdleTimeoutMs) || Number(defaultOrch.sessionIdleTimeoutMs) || 300_000,
-    10_000,
-    1_800_000
-  );
-  merged.subAgentOrchestration.maxConcurrentSessions = clamp(
-    Number(merged.subAgentOrchestration?.maxConcurrentSessions) || Number(defaultOrch.maxConcurrentSessions) || 20,
-    1,
-    50
-  );
-
-  return merged;
+function normalizeBoolean(value: unknown, fallback: boolean) {
+  return value === undefined ? fallback : Boolean(value);
 }
 
-function uniqueStringList(input, maxItems = 20, maxLen = 120) {
-  return normalizeBoundedStringList(input, { maxItems, maxLen });
+function normalizeNumber(value: unknown, fallback: number, min: number, max: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return clamp(parsed, min, max);
 }
 
-function isHttpLikeUrl(rawUrl) {
-  const value = String(rawUrl || "").trim();
-  if (!value) return false;
+function normalizeInt(value: unknown, fallback: number, min: number, max: number) {
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed)) return fallback;
+  return clamp(parsed, min, max);
+}
 
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
+function fallbackModelForProvider(
+  provider: string,
+  fallbackProvider: string,
+  fallbackModel: string
+) {
+  if (provider === fallbackProvider) {
+    return normalizeString(fallbackModel, fallbackModel, 120) || fallbackModel;
   }
+  const providerDefaults = PROVIDER_MODEL_FALLBACKS[provider as keyof typeof PROVIDER_MODEL_FALLBACKS];
+  const providerFallback = Array.isArray(providerDefaults) ? providerDefaults[0] : fallbackModel;
+  return normalizeString(providerFallback, fallbackModel, 120) || fallbackModel;
 }
 
-function normalizeHttpBaseUrl(value, fallback) {
-  const target = String(value || fallback || "").trim();
-
-  try {
-    const parsed = new URL(target);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return String(fallback || "https://nitter.net");
-    }
-    return `${parsed.protocol}//${parsed.host}`;
-  } catch {
-    return String(fallback || "https://nitter.net");
-  }
-}
-
-function normalizeVoiceAsrLanguageMode(value, fallback = "auto") {
-  const normalized = String(value || fallback || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "fixed") return "fixed";
-  return "auto";
-}
-
-function normalizeVoiceAsrLanguageHint(value, fallback = "en") {
-  if (value === undefined || value === null) {
-    return normalizeVoiceAsrLanguageHint(fallback, "");
-  }
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/_/g, "-");
-  if (!normalized) return "";
-  if (!/^[a-z]{2,3}(?:-[a-z0-9]{2,8}){0,2}$/u.test(normalized)) {
-    return normalizeVoiceAsrLanguageHint(fallback, "");
-  }
-  return normalized.slice(0, 24);
-}
-
-function normalizeStreamWatchCommentaryPath(value, fallback = "auto") {
-  const normalized = String(value || fallback || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "anthropic_keyframes") return "anthropic_keyframes";
-  return "auto";
-}
-
-function normalizeOpenAiRealtimeAudioFormat(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (normalized === "audio/pcm") return "pcm16";
-  return "pcm16";
-}
-
-function normalizeHardLimitList(input, fallback = []) {
-  const source = Array.isArray(input) ? input : fallback;
-  return normalizeBoundedStringList(source, { maxItems: 24, maxLen: 180 });
-}
-
-function normalizePromptLine(value, fallback = "") {
-  const resolved = String(value === undefined || value === null ? fallback : value)
-    .replace(/\s+/g, " ")
-    .trim();
-  return resolved.slice(0, 400);
-}
-
-function normalizeLongPromptBlock(value, fallback = "", maxLen = 8000) {
-  const limit = clamp(Number(maxLen) || 8000, 256, 20_000);
-  const candidate = String(value ?? "")
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .join("\n")
-    .trim();
-  if (candidate) return candidate.slice(0, limit);
-  const fallbackText = String(fallback ?? "")
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .join("\n")
-    .trim();
-  return fallbackText.slice(0, limit);
-}
-
-function normalizePromptLineList(input, fallback = []) {
-  const source = Array.isArray(input) ? input : fallback;
-  return normalizeBoundedStringList(source, { maxItems: 40, maxLen: 240 });
-}
-
-function normalizeProviderModelPair(input, fallbackProvider, fallbackModel = "") {
-  const provider = normalizeLlmProvider(input?.provider, fallbackProvider);
-  const normalizedFallbackModel = String(fallbackModel || "")
-    .trim()
-    .slice(0, 120);
-  const model = String(
-    String(input?.model || "")
-      .trim()
-      .slice(0, 120) || normalizedFallbackModel || defaultModelForLlmProvider(provider)
-  );
+function normalizeModelBinding(
+  binding: unknown,
+  fallbackProvider: string,
+  fallbackModel: string
+) {
+  const source = isRecord(binding) ? binding : {};
+  const provider = normalizeLlmProvider(source.provider, fallbackProvider);
+  const modelFallback = fallbackModelForProvider(provider, fallbackProvider, fallbackModel);
+  const model = normalizeString(source.model, modelFallback, 120) || modelFallback;
   return {
     provider,
     model
   };
+}
+
+function normalizeBrowserProvider(value: unknown, fallback = "anthropic") {
+  const provider = normalizeLlmProvider(value, fallback);
+  return provider === "openai" || provider === "anthropic" ? provider : fallback;
+}
+
+function normalizeBrowserExecutionPolicy(policy: unknown) {
+  const normalized = normalizeExecutionPolicy(
+    policy,
+    "anthropic",
+    "claude-sonnet-4-5-20250929"
+  ) as Record<string, unknown>;
+  if (normalized.mode !== "dedicated_model") {
+    return normalized;
+  }
+  const rawModel = isRecord(normalized.model) ? normalized.model : {};
+  const rawProvider = normalizeLlmProvider(rawModel.provider, "anthropic");
+  const provider = normalizeBrowserProvider(rawProvider, "anthropic");
+  const fallbackModel =
+    provider === "openai"
+      ? "gpt-5-mini"
+      : "claude-sonnet-4-5-20250929";
+  return {
+    ...normalized,
+    model: {
+      provider,
+      model:
+        normalizeString(rawProvider === provider ? rawModel.model : "", fallbackModel, 120) ||
+        fallbackModel
+    }
+  };
+}
+
+function normalizeHttpBaseUrl(value: unknown, fallback: string, maxLen = 300) {
+  const candidate = normalizeString(value, fallback, maxLen) || fallback;
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return fallback;
+    }
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeDiscoveryRssFeeds(value: unknown, fallback: readonly string[]) {
+  return normalizeStringList(value, 50, 500, fallback).filter((entry) => {
+    try {
+      const parsed = new URL(entry);
+      return parsed.protocol === "https:" || parsed.protocol === "http:";
+    } catch {
+      return false;
+    }
+  });
+}
+
+function normalizeXHandles(value: unknown) {
+  return normalizeStringList(value, 50, 120)
+    .map((entry) => entry.replace(/^@+/, "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function normalizeSubreddits(value: unknown, fallback: readonly string[]) {
+  return normalizeStringList(value, 50, 80, fallback)
+    .map((entry) => entry.replace(/^r\//i, "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function normalizeLanguageHint(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 20)
+    .toLowerCase()
+    .replace(/_/g, "-");
+  if (!/^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/.test(normalized)) {
+    return fallback;
+  }
+  return normalized || fallback;
+}
+
+function normalizeOpenAiRealtimeAudioFormat(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 40).toLowerCase();
+  if (normalized === "audio/pcm" || normalized === "pcm16") return "pcm16";
+  if (normalized === "g711_ulaw" || normalized === "g711_alaw") return normalized;
+  return fallback;
+}
+
+function normalizeOpenAiRealtimeTranscriptionMethod(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 40).toLowerCase();
+  if (normalized === "file_wav") return "file_wav";
+  if (normalized === "realtime_bridge") return "realtime_bridge";
+  return fallback;
+}
+
+function normalizeReplyPath(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 20).toLowerCase();
+  if (normalized === "native") return "native";
+  if (normalized === "brain") return "brain";
+  if (normalized === "bridge") return "bridge";
+  return fallback;
+}
+
+function normalizeOperationalMessages(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 40).toLowerCase();
+  if (normalized === "all") return "all";
+  if (normalized === "essential" || normalized === "important_only") return "essential";
+  if (normalized === "minimal") return "minimal";
+  if (normalized === "none" || normalized === "off") return "none";
+  return fallback;
+}
+
+function normalizeStreamWatchCommentaryPath(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 40).toLowerCase();
+  if (normalized === "anthropic_keyframes") return "anthropic_keyframes";
+  if (normalized === "auto") return "auto";
+  return fallback;
+}
+
+function normalizeReflectionStrategy(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 64).toLowerCase();
+  if (normalized === "one_pass_main") return "one_pass_main";
+  if (normalized === "two_pass_extract_then_main") return "two_pass_extract_then_main";
+  return fallback;
+}
+
+function normalizeClaudeCodeSessionScope(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 32).toLowerCase();
+  if (normalized === "guild") return "guild";
+  if (normalized === "channel") return "channel";
+  if (normalized === "voice_session") return "voice_session";
+  return fallback;
+}
+
+function normalizeClaudeCodeContextPruningStrategy(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 32).toLowerCase();
+  if (normalized === "summarize") return "summarize";
+  if (normalized === "evict_oldest") return "evict_oldest";
+  if (normalized === "sliding_window") return "sliding_window";
+  return fallback;
+}
+
+function normalizeAgentSessionToolPolicy(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 16).toLowerCase();
+  if (normalized === "none") return "none";
+  if (normalized === "fast_only") return "fast_only";
+  if (normalized === "full") return "full";
+  return fallback;
+}
+
+function normalizeExecutionPolicy(
+  policy: unknown,
+  fallbackProvider: string,
+  fallbackModel: string,
+  {
+    fallbackMode = "inherit_orchestrator",
+    fallbackTemperature,
+    fallbackMaxOutputTokens,
+    fallbackReasoningEffort = ""
+  }: {
+    fallbackMode?: string;
+    fallbackTemperature?: number;
+    fallbackMaxOutputTokens?: number;
+    fallbackReasoningEffort?: string;
+  } = {}
+) {
+  const source = isRecord(policy) ? policy : {};
+  const modeRaw = normalizeString(source.mode, fallbackMode, 40).toLowerCase();
+  const mode = modeRaw === "dedicated_model" ? "dedicated_model" : "inherit_orchestrator";
+  const normalized: Record<string, unknown> = { mode };
+  if (mode === "dedicated_model") {
+    normalized.model = normalizeModelBinding(source.model, fallbackProvider, fallbackModel);
+  }
+  if (source.temperature !== undefined || fallbackTemperature !== undefined) {
+    normalized.temperature = normalizeNumber(source.temperature, fallbackTemperature ?? 0.7, 0, 2);
+  }
+  if (source.maxOutputTokens !== undefined || fallbackMaxOutputTokens !== undefined) {
+    normalized.maxOutputTokens = normalizeInt(
+      source.maxOutputTokens,
+      fallbackMaxOutputTokens ?? 800,
+      32,
+      16_384
+    );
+  }
+  const reasoningEffort = normalizeOpenAiReasoningEffort(
+    source.reasoningEffort,
+    fallbackReasoningEffort
+  );
+  if (reasoningEffort) {
+    normalized.reasoningEffort = reasoningEffort;
+  }
+  return normalized;
+}
+
+function normalizeStringList(
+  value: unknown,
+  maxItems = 50,
+  maxLen = 160,
+  fallback: readonly string[] = []
+) {
+  if (!Array.isArray(value) && value === undefined) return [...fallback];
+  return normalizeBoundedStringList(value, { maxItems, maxLen });
+}
+
+function normalizePromptLineList(value: unknown, fallback: readonly string[]) {
+  return normalizeStringList(value, 40, 320, fallback);
+}
+
+function normalizePromptLine(value: unknown, fallback: string, maxLen = 400) {
+  return normalizeString(value, fallback, maxLen) || fallback;
+}
+
+function normalizePromptBlock(value: unknown, fallback: string, maxLen = 8_000) {
+  return normalizeString(value, fallback, maxLen) || fallback;
+}
+
+function normalizeDiscoverySourceMap(value: unknown) {
+  const defaults = DEFAULT_SETTINGS.initiative.discovery.sources;
+  const source = isRecord(value) ? value : {};
+  return {
+    reddit: normalizeBoolean(source.reddit, defaults.reddit),
+    hackerNews: normalizeBoolean(source.hackerNews, defaults.hackerNews),
+    youtube: normalizeBoolean(source.youtube, defaults.youtube),
+    rss: normalizeBoolean(source.rss, defaults.rss),
+    x: normalizeBoolean(source.x, defaults.x)
+  };
+}
+
+function normalizeVoiceAdmissionMode(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 40).toLowerCase();
+  if (normalized === "deterministic_only") return "deterministic_only";
+  if (normalized === "classifier_gate" || normalized === "hard_classifier") return "classifier_gate";
+  if (
+    normalized === "generation_decides" ||
+    normalized === "generation_only" ||
+    normalized === "generation"
+  ) {
+    return "generation_decides";
+  }
+  if (normalized === "adaptive") return "adaptive";
+  return fallback;
+}
+
+function inferLegacyPreset(raw: Record<string, unknown>) {
+  const llmProvider = normalizeLlmProvider(raw?.llm && isRecord(raw.llm) ? raw.llm.provider : undefined, "anthropic");
+  const legacyVoiceProvider = normalizeVoiceProvider(
+    raw?.voice && isRecord(raw.voice) ? raw.voice.voiceProvider : undefined,
+    "openai"
+  );
+  if (llmProvider === "openai" && legacyVoiceProvider === "openai") {
+    return "openai_native";
+  }
+  if (llmProvider === "anthropic" && legacyVoiceProvider === "openai") {
+    return "anthropic_brain_openai_tools";
+  }
+  return "multi_provider_legacy";
+}
+
+function migrateLegacySettings(raw: Record<string, unknown>) {
+  const prompt = isRecord(raw.prompt) ? raw.prompt : {};
+  const activity = isRecord(raw.activity) ? raw.activity : {};
+  const llm = isRecord(raw.llm) ? raw.llm : {};
+  const replyFollowupLlm = isRecord(raw.replyFollowupLlm) ? raw.replyFollowupLlm : {};
+  const memoryLlm = isRecord(raw.memoryLlm) ? raw.memoryLlm : {};
+  const webSearch = isRecord(raw.webSearch) ? raw.webSearch : {};
+  const browser = isRecord(raw.browser) ? raw.browser : {};
+  const voice = isRecord(raw.voice) ? raw.voice : {};
+  const permissions = isRecord(raw.permissions) ? raw.permissions : {};
+  const discovery = isRecord(raw.discovery) ? raw.discovery : {};
+  const startup = isRecord(raw.startup) ? raw.startup : {};
+  const textThoughtLoop = isRecord(raw.textThoughtLoop) ? raw.textThoughtLoop : {};
+  const memory = isRecord(raw.memory) ? raw.memory : {};
+  const reflection = isRecord(memory.reflection) ? memory.reflection : {};
+  const codeAgent = isRecord(raw.codeAgent) ? raw.codeAgent : {};
+  const adaptiveDirectives = isRecord(raw.adaptiveDirectives) ? raw.adaptiveDirectives : {};
+  const automations = isRecord(raw.automations) ? raw.automations : {};
+  const subAgentOrchestration = isRecord(raw.subAgentOrchestration) ? raw.subAgentOrchestration : {};
+  const voiceThoughtEngine = isRecord(voice.thoughtEngine) ? voice.thoughtEngine : {};
+  const voiceGenerationLlm = isRecord(voice.generationLlm) ? voice.generationLlm : {};
+  const voiceReplyDecisionLlm = isRecord(voice.replyDecisionLlm) ? voice.replyDecisionLlm : {};
+  const vision = isRecord(raw.vision) ? raw.vision : {};
+  const videoContext = isRecord(raw.videoContext) ? raw.videoContext : {};
+
+  const migrated: Record<string, unknown> = {
+    identity: {
+      botName: raw.botName,
+      botNameAliases: raw.botNameAliases
+    },
+    persona: raw.persona,
+    prompting: {
+      global: {
+        capabilityHonestyLine: prompt.capabilityHonestyLine,
+        impossibleActionLine: prompt.impossibleActionLine,
+        memoryEnabledLine: prompt.memoryEnabledLine,
+        memoryDisabledLine: prompt.memoryDisabledLine,
+        skipLine: prompt.skipLine
+      },
+      text: {
+        guidance: prompt.textGuidance
+      },
+      voice: {
+        guidance: prompt.voiceGuidance,
+        operationalGuidance: prompt.voiceOperationalGuidance,
+        lookupBusySystemPrompt: prompt.voiceLookupBusySystemPrompt
+      },
+      media: {
+        promptCraftGuidance: prompt.mediaPromptCraftGuidance
+      }
+    },
+    permissions: {
+      replies: {
+        allowReplies: permissions.allowReplies,
+        allowUnsolicitedReplies: permissions.allowUnsolicitedReplies,
+        allowReactions: permissions.allowReactions,
+        replyChannelIds: permissions.replyChannelIds,
+        allowedChannelIds: permissions.allowedChannelIds,
+        blockedChannelIds: permissions.blockedChannelIds,
+        blockedUserIds: permissions.blockedUserIds,
+        maxMessagesPerHour: permissions.maxMessagesPerHour,
+        maxReactionsPerHour: permissions.maxReactionsPerHour
+      },
+      devTasks: {
+        allowedUserIds: codeAgent.allowedUserIds
+      }
+    },
+    interaction: {
+      activity: {
+        replyEagerness: activity.replyEagerness ?? activity.replyLevelReplyChannels,
+        reactionLevel: activity.reactionLevel,
+        minSecondsBetweenMessages: activity.minSecondsBetweenMessages,
+        replyCoalesceWindowSeconds: activity.replyCoalesceWindowSeconds,
+        replyCoalesceMaxMessages: activity.replyCoalesceMaxMessages
+      },
+      replyGeneration: {
+        temperature: llm.temperature,
+        maxOutputTokens: llm.maxOutputTokens,
+        reasoningEffort: llm.reasoningEffort,
+        pricing: llm.pricing
+      },
+      followup: {
+        enabled: replyFollowupLlm.enabled,
+        execution: {
+          mode: "dedicated_model",
+          model: {
+            provider: replyFollowupLlm.provider ?? llm.provider,
+            model: replyFollowupLlm.model ?? llm.model
+          }
+        },
+        toolBudget: {
+          maxToolSteps: replyFollowupLlm.maxToolSteps,
+          maxTotalToolCalls: replyFollowupLlm.maxTotalToolCalls,
+          maxWebSearchCalls: replyFollowupLlm.maxWebSearchCalls,
+          maxMemoryLookupCalls: replyFollowupLlm.maxMemoryLookupCalls,
+          maxImageLookupCalls: replyFollowupLlm.maxImageLookupCalls,
+          toolTimeoutMs: replyFollowupLlm.toolTimeoutMs
+        }
+      },
+      startup: {
+        catchupEnabled: startup.catchupEnabled,
+        catchupLookbackHours: startup.catchupLookbackHours,
+        catchupMaxMessagesPerChannel: startup.catchupMaxMessagesPerChannel,
+        maxCatchupRepliesPerChannel: startup.maxCatchupRepliesPerChannel
+      },
+      sessions: {
+        sessionIdleTimeoutMs: subAgentOrchestration.sessionIdleTimeoutMs,
+        maxConcurrentSessions: subAgentOrchestration.maxConcurrentSessions
+      }
+    },
+    agentStack: {
+      preset: inferLegacyPreset(raw),
+      advancedOverridesEnabled: true,
+      overrides: {
+        orchestrator: {
+          provider: llm.provider,
+          model: llm.model
+        },
+        devTeam: {
+          codingWorkers:
+            String(codeAgent.provider || "").trim().toLowerCase() === "codex"
+              ? ["codex"]
+              : String(codeAgent.provider || "").trim().toLowerCase() === "claude-code"
+                ? ["claude_code"]
+                : undefined
+        },
+        voiceAdmissionClassifier: {
+          mode: "dedicated_model",
+          model: {
+            provider: voiceReplyDecisionLlm.provider,
+            model: voiceReplyDecisionLlm.model
+          }
+        }
+      },
+      runtimeConfig: {
+        research: {
+          enabled: webSearch.enabled,
+          maxSearchesPerHour: webSearch.maxSearchesPerHour,
+          localExternalSearch: {
+            safeSearch: webSearch.safeSearch,
+            providerOrder: webSearch.providerOrder,
+            maxResults: webSearch.maxResults,
+            maxPagesToRead: webSearch.maxPagesToRead,
+            maxCharsPerPage: webSearch.maxCharsPerPage,
+            recencyDaysDefault: webSearch.recencyDaysDefault,
+            maxConcurrentFetches: webSearch.maxConcurrentFetches
+          }
+        },
+        browser: {
+          enabled: browser.enabled,
+          localBrowserAgent: {
+            execution: {
+              mode: "dedicated_model",
+              model: {
+                provider: browser.llm && isRecord(browser.llm) ? browser.llm.provider : undefined,
+                model: browser.llm && isRecord(browser.llm) ? browser.llm.model : undefined
+              }
+            },
+            maxBrowseCallsPerHour: browser.maxBrowseCallsPerHour,
+            maxStepsPerTask: browser.maxStepsPerTask,
+            stepTimeoutMs: browser.stepTimeoutMs,
+            sessionTimeoutMs: browser.sessionTimeoutMs
+          }
+        },
+        voice: {
+          openaiRealtime: voice.openaiRealtime,
+          legacyVoiceStack: {
+            selectedProvider: voice.voiceProvider,
+            xai: voice.xai,
+            elevenLabsRealtime: voice.elevenLabsRealtime,
+            geminiRealtime: voice.geminiRealtime,
+            sttPipeline: voice.sttPipeline,
+            generation: Boolean(voiceGenerationLlm.useTextModel)
+              ? { mode: "inherit_orchestrator" }
+              : {
+                  mode: "dedicated_model",
+                  model: {
+                    provider: voiceGenerationLlm.provider,
+                    model: voiceGenerationLlm.model
+                  }
+                }
+          }
+        },
+        devTeam: {
+          codex: {
+            enabled:
+              String(codeAgent.provider || "").trim().toLowerCase() === "codex" ||
+              String(codeAgent.provider || "").trim().toLowerCase() === "auto",
+            model: codeAgent.codexModel,
+            maxTurns: codeAgent.maxTurns,
+            timeoutMs: codeAgent.timeoutMs,
+            maxBufferBytes: codeAgent.maxBufferBytes,
+            defaultCwd: codeAgent.defaultCwd,
+            maxTasksPerHour: codeAgent.maxTasksPerHour,
+            maxParallelTasks: codeAgent.maxParallelTasks
+          },
+          claudeCode: {
+            enabled:
+              String(codeAgent.provider || "").trim().toLowerCase() !== "codex",
+            model: codeAgent.model,
+            maxTurns: codeAgent.maxTurns,
+            timeoutMs: codeAgent.timeoutMs,
+            maxBufferBytes: codeAgent.maxBufferBytes,
+            defaultCwd: codeAgent.defaultCwd,
+            maxTasksPerHour: codeAgent.maxTasksPerHour,
+            maxParallelTasks: codeAgent.maxParallelTasks
+          }
+        }
+      }
+    },
+    memory: {
+      enabled: memory.enabled,
+      promptSlice: {
+        maxRecentMessages: memory.maxRecentMessages,
+        maxHighlights: memory.maxHighlights
+      },
+      execution: {
+        mode: "dedicated_model",
+        model: {
+          provider: memoryLlm.provider ?? llm.provider,
+          model: memoryLlm.model ?? llm.model
+        },
+        temperature: memoryLlm.temperature,
+        maxOutputTokens: memoryLlm.maxOutputTokens
+      },
+      extraction: {
+        enabled: true
+      },
+      embeddingModel: memory.embeddingModel,
+      reflection: {
+        enabled: reflection.enabled,
+        strategy: reflection.strategy,
+        hour: reflection.hour,
+        minute: reflection.minute,
+        maxFactsPerReflection: reflection.maxFactsPerReflection
+      },
+      dailyLogRetentionDays: memory.dailyLogRetentionDays
+    },
+    directives: {
+      enabled: adaptiveDirectives.enabled
+    },
+    initiative: {
+      text: {
+        enabled: textThoughtLoop.enabled,
+        execution: {
+          mode: "inherit_orchestrator"
+        },
+        eagerness: textThoughtLoop.eagerness,
+        minMinutesBetweenThoughts: textThoughtLoop.minMinutesBetweenThoughts,
+        maxThoughtsPerDay: textThoughtLoop.maxThoughtsPerDay,
+        lookbackMessages: textThoughtLoop.lookbackMessages
+      },
+      voice: {
+        enabled: voiceThoughtEngine.enabled,
+        execution: {
+          mode: "dedicated_model",
+          model: {
+            provider: voiceThoughtEngine.provider,
+            model: voiceThoughtEngine.model
+          },
+          temperature: voiceThoughtEngine.temperature
+        },
+        eagerness: voiceThoughtEngine.eagerness,
+        minSilenceSeconds: voiceThoughtEngine.minSilenceSeconds,
+        minSecondsBetweenThoughts: voiceThoughtEngine.minSecondsBetweenThoughts
+      },
+      discovery
+    },
+    voice: {
+      enabled: voice.enabled,
+      transcription: {
+        enabled: voice.asrEnabled,
+        languageMode: voice.asrLanguageMode,
+        languageHint: voice.asrLanguageHint
+      },
+      channelPolicy: {
+        allowedChannelIds: voice.allowedVoiceChannelIds,
+        blockedChannelIds: voice.blockedVoiceChannelIds,
+        blockedUserIds: voice.blockedVoiceUserIds
+      },
+      sessionLimits: {
+        maxSessionMinutes: voice.maxSessionMinutes,
+        inactivityLeaveSeconds: voice.inactivityLeaveSeconds,
+        maxSessionsPerDay: voice.maxSessionsPerDay,
+        maxConcurrentSessions: voice.maxConcurrentSessions
+      },
+      conversationPolicy: {
+        replyEagerness: voice.replyEagerness,
+        commandOnlyMode: voice.commandOnlyMode,
+        allowNsfwHumor: voice.allowNsfwHumor,
+        textOnlyMode: voice.textOnlyMode,
+        replyPath: voice.replyPath,
+        ttsMode: voice.ttsMode,
+        operationalMessages: voice.operationalMessages
+      },
+      admission: {
+        mode:
+          voiceReplyDecisionLlm.enabled === false
+            ? "generation_decides"
+            : voiceReplyDecisionLlm.realtimeAdmissionMode,
+        intentConfidenceThreshold: voice.intentConfidenceThreshold,
+        musicWakeLatchSeconds: voiceReplyDecisionLlm.musicWakeLatchSeconds
+      },
+      streamWatch: voice.streamWatch,
+      soundboard: voice.soundboard
+    },
+    media: {
+      vision: {
+        enabled: vision.captionEnabled,
+        execution: {
+          mode: "dedicated_model",
+          model: {
+            provider: vision.provider,
+            model: vision.model
+          }
+        },
+        maxAutoIncludeImages: vision.maxAutoIncludeImages,
+        maxCaptionsPerHour: vision.maxCaptionsPerHour
+      },
+      videoContext
+    },
+    music: {
+      ducking: voice.musicDucking
+    },
+    automations: {
+      enabled: automations.enabled
+    }
+  };
+
+  return migrated;
+}
+
+export function normalizeSettings(raw: unknown) {
+  const rawRecord = isRecord(raw) ? raw : {};
+  const canonicalInput =
+    isRecord(rawRecord.identity) || isRecord(rawRecord.agentStack)
+      ? rawRecord
+      : migrateLegacySettings(rawRecord);
+
+  const merged = deepMerge(DEFAULT_SETTINGS, canonicalInput);
+
+  const identity = isRecord(merged.identity) ? merged.identity : {};
+  const persona = isRecord(merged.persona) ? merged.persona : {};
+  const prompting = isRecord(merged.prompting) ? merged.prompting : {};
+  const permissions = isRecord(merged.permissions) ? merged.permissions : {};
+  const interaction = isRecord(merged.interaction) ? merged.interaction : {};
+  const agentStack = isRecord(merged.agentStack) ? merged.agentStack : {};
+  const memory = isRecord(merged.memory) ? merged.memory : {};
+  const directives = isRecord(merged.directives) ? merged.directives : {};
+  const initiative = isRecord(merged.initiative) ? merged.initiative : {};
+  const voice = isRecord(merged.voice) ? merged.voice : {};
+  const media = isRecord(merged.media) ? merged.media : {};
+  const music = isRecord(merged.music) ? merged.music : {};
+  const automations = isRecord(merged.automations) ? merged.automations : {};
+
+  const presetRaw = normalizeString(agentStack.preset, DEFAULT_SETTINGS.agentStack.preset, 48);
+  const preset = (
+    presetRaw === "openai_native" ||
+    presetRaw === "anthropic_brain_openai_tools" ||
+    presetRaw === "claude_code_max" ||
+    presetRaw === "multi_provider_legacy" ||
+    presetRaw === "custom"
+  )
+    ? presetRaw
+    : DEFAULT_SETTINGS.agentStack.preset;
+  const presetOrchestratorFallback =
+    preset === "anthropic_brain_openai_tools" || preset === "multi_provider_legacy"
+      ? { provider: "anthropic", model: "claude-sonnet-4-6" }
+      : preset === "claude_code_max"
+        ? { provider: "claude_code_session", model: "max" }
+        : { provider: "openai", model: "gpt-5" };
+  const presetVoiceAdmissionClassifierFallback =
+    preset === "claude_code_max"
+      ? { provider: "claude_code_session", model: "max" }
+      : { provider: "openai", model: "gpt-5-mini" };
+  const orchestratorOverride = normalizeModelBinding(
+    (agentStack.overrides as any)?.orchestrator,
+    presetOrchestratorFallback.provider,
+    presetOrchestratorFallback.model
+  );
+
+  const normalized = {
+    identity: {
+      botName: normalizeString(identity.botName, DEFAULT_SETTINGS.identity.botName, 50),
+      botNameAliases: normalizeStringList(
+        identity.botNameAliases,
+        BOT_NAME_ALIAS_MAX_ITEMS,
+        50,
+        DEFAULT_SETTINGS.identity.botNameAliases
+      )
+    },
+    persona: {
+      flavor: normalizeString(persona.flavor, DEFAULT_SETTINGS.persona.flavor, PERSONA_FLAVOR_MAX_CHARS),
+      hardLimits: normalizeStringList(persona.hardLimits, 40, 220, DEFAULT_SETTINGS.persona.hardLimits)
+    },
+    prompting: {
+      global: {
+        capabilityHonestyLine: normalizePromptLine(
+          (prompting.global as any)?.capabilityHonestyLine,
+          DEFAULT_SETTINGS.prompting.global.capabilityHonestyLine
+        ),
+        impossibleActionLine: normalizePromptLine(
+          (prompting.global as any)?.impossibleActionLine,
+          DEFAULT_SETTINGS.prompting.global.impossibleActionLine
+        ),
+        memoryEnabledLine: normalizePromptLine(
+          (prompting.global as any)?.memoryEnabledLine,
+          DEFAULT_SETTINGS.prompting.global.memoryEnabledLine
+        ),
+        memoryDisabledLine: normalizePromptLine(
+          (prompting.global as any)?.memoryDisabledLine,
+          DEFAULT_SETTINGS.prompting.global.memoryDisabledLine
+        ),
+        skipLine: normalizePromptLine(
+          (prompting.global as any)?.skipLine,
+          DEFAULT_SETTINGS.prompting.global.skipLine
+        )
+      },
+      text: {
+        guidance: normalizePromptLineList(
+          (prompting.text as any)?.guidance,
+          DEFAULT_SETTINGS.prompting.text.guidance
+        )
+      },
+      voice: {
+        guidance: normalizePromptLineList(
+          (prompting.voice as any)?.guidance,
+          DEFAULT_SETTINGS.prompting.voice.guidance
+        ),
+        operationalGuidance: normalizePromptLineList(
+          (prompting.voice as any)?.operationalGuidance,
+          DEFAULT_SETTINGS.prompting.voice.operationalGuidance
+        ),
+        lookupBusySystemPrompt: normalizePromptBlock(
+          (prompting.voice as any)?.lookupBusySystemPrompt,
+          DEFAULT_SETTINGS.prompting.voice.lookupBusySystemPrompt,
+          4_000
+        )
+      },
+      media: {
+        promptCraftGuidance: normalizePromptBlock(
+          (prompting.media as any)?.promptCraftGuidance,
+          DEFAULT_SETTINGS.prompting.media.promptCraftGuidance,
+          8_000
+        )
+      }
+    },
+    permissions: {
+      replies: {
+        allowReplies: normalizeBoolean((permissions.replies as any)?.allowReplies, DEFAULT_SETTINGS.permissions.replies.allowReplies),
+        allowUnsolicitedReplies: normalizeBoolean(
+          (permissions.replies as any)?.allowUnsolicitedReplies,
+          DEFAULT_SETTINGS.permissions.replies.allowUnsolicitedReplies
+        ),
+        allowReactions: normalizeBoolean(
+          (permissions.replies as any)?.allowReactions,
+          DEFAULT_SETTINGS.permissions.replies.allowReactions
+        ),
+        replyChannelIds: normalizeStringList((permissions.replies as any)?.replyChannelIds, 200, 60),
+        allowedChannelIds: normalizeStringList((permissions.replies as any)?.allowedChannelIds, 200, 60),
+        blockedChannelIds: normalizeStringList((permissions.replies as any)?.blockedChannelIds, 200, 60),
+        blockedUserIds: normalizeStringList((permissions.replies as any)?.blockedUserIds, 200, 60),
+        maxMessagesPerHour: normalizeInt(
+          (permissions.replies as any)?.maxMessagesPerHour,
+          DEFAULT_SETTINGS.permissions.replies.maxMessagesPerHour,
+          0,
+          500
+        ),
+        maxReactionsPerHour: normalizeInt(
+          (permissions.replies as any)?.maxReactionsPerHour,
+          DEFAULT_SETTINGS.permissions.replies.maxReactionsPerHour,
+          0,
+          500
+        )
+      },
+      devTasks: {
+        allowedUserIds: normalizeStringList((permissions.devTasks as any)?.allowedUserIds, 200, 60)
+      }
+    },
+    interaction: {
+      activity: {
+        replyEagerness: normalizeInt(
+          (interaction.activity as any)?.replyEagerness,
+          DEFAULT_SETTINGS.interaction.activity.replyEagerness,
+          0,
+          100
+        ),
+        reactionLevel: normalizeInt(
+          (interaction.activity as any)?.reactionLevel,
+          DEFAULT_SETTINGS.interaction.activity.reactionLevel,
+          0,
+          100
+        ),
+        minSecondsBetweenMessages: normalizeInt(
+          (interaction.activity as any)?.minSecondsBetweenMessages,
+          DEFAULT_SETTINGS.interaction.activity.minSecondsBetweenMessages,
+          5,
+          300
+        ),
+        replyCoalesceWindowSeconds: normalizeInt(
+          (interaction.activity as any)?.replyCoalesceWindowSeconds,
+          DEFAULT_SETTINGS.interaction.activity.replyCoalesceWindowSeconds,
+          0,
+          20
+        ),
+        replyCoalesceMaxMessages: normalizeInt(
+          (interaction.activity as any)?.replyCoalesceMaxMessages,
+          DEFAULT_SETTINGS.interaction.activity.replyCoalesceMaxMessages,
+          1,
+          20
+        )
+      },
+      replyGeneration: {
+        temperature: normalizeNumber(
+          (interaction.replyGeneration as any)?.temperature,
+          DEFAULT_SETTINGS.interaction.replyGeneration.temperature,
+          0,
+          2
+        ),
+        maxOutputTokens: normalizeInt(
+          (interaction.replyGeneration as any)?.maxOutputTokens,
+          DEFAULT_SETTINGS.interaction.replyGeneration.maxOutputTokens,
+          32,
+          16_384
+        ),
+        reasoningEffort:
+          normalizeOpenAiReasoningEffort(
+            (interaction.replyGeneration as any)?.reasoningEffort,
+            DEFAULT_SETTINGS.interaction.replyGeneration.reasoningEffort
+          ) || "",
+        pricing:
+          isRecord((interaction.replyGeneration as any)?.pricing)
+            ? (interaction.replyGeneration as any).pricing
+            : {}
+      },
+      followup: {
+        enabled: normalizeBoolean(
+          (interaction.followup as any)?.enabled,
+          DEFAULT_SETTINGS.interaction.followup.enabled
+        ),
+        execution: normalizeExecutionPolicy(
+          (interaction.followup as any)?.execution,
+          orchestratorOverride.provider,
+          orchestratorOverride.model
+        ),
+        toolBudget: {
+          maxToolSteps: normalizeInt(
+            (interaction.followup as any)?.toolBudget?.maxToolSteps,
+            DEFAULT_SETTINGS.interaction.followup.toolBudget.maxToolSteps,
+            0,
+            6
+          ),
+          maxTotalToolCalls: normalizeInt(
+            (interaction.followup as any)?.toolBudget?.maxTotalToolCalls,
+            DEFAULT_SETTINGS.interaction.followup.toolBudget.maxTotalToolCalls,
+            0,
+            12
+          ),
+          maxWebSearchCalls: normalizeInt(
+            (interaction.followup as any)?.toolBudget?.maxWebSearchCalls,
+            DEFAULT_SETTINGS.interaction.followup.toolBudget.maxWebSearchCalls,
+            0,
+            8
+          ),
+          maxMemoryLookupCalls: normalizeInt(
+            (interaction.followup as any)?.toolBudget?.maxMemoryLookupCalls,
+            DEFAULT_SETTINGS.interaction.followup.toolBudget.maxMemoryLookupCalls,
+            0,
+            8
+          ),
+          maxImageLookupCalls: normalizeInt(
+            (interaction.followup as any)?.toolBudget?.maxImageLookupCalls,
+            DEFAULT_SETTINGS.interaction.followup.toolBudget.maxImageLookupCalls,
+            0,
+            8
+          ),
+          toolTimeoutMs: normalizeInt(
+            (interaction.followup as any)?.toolBudget?.toolTimeoutMs,
+            DEFAULT_SETTINGS.interaction.followup.toolBudget.toolTimeoutMs,
+            1_000,
+            120_000
+          )
+        }
+      },
+      startup: {
+        catchupEnabled: normalizeBoolean(
+          (interaction.startup as any)?.catchupEnabled,
+          DEFAULT_SETTINGS.interaction.startup.catchupEnabled
+        ),
+        catchupLookbackHours: normalizeInt(
+          (interaction.startup as any)?.catchupLookbackHours,
+          DEFAULT_SETTINGS.interaction.startup.catchupLookbackHours,
+          1,
+          168
+        ),
+        catchupMaxMessagesPerChannel: normalizeInt(
+          (interaction.startup as any)?.catchupMaxMessagesPerChannel,
+          DEFAULT_SETTINGS.interaction.startup.catchupMaxMessagesPerChannel,
+          1,
+          200
+        ),
+        maxCatchupRepliesPerChannel: normalizeInt(
+          (interaction.startup as any)?.maxCatchupRepliesPerChannel,
+          DEFAULT_SETTINGS.interaction.startup.maxCatchupRepliesPerChannel,
+          0,
+          20
+        )
+      },
+      sessions: {
+        sessionIdleTimeoutMs: normalizeInt(
+          (interaction.sessions as any)?.sessionIdleTimeoutMs,
+          DEFAULT_SETTINGS.interaction.sessions.sessionIdleTimeoutMs,
+          10_000,
+          1_800_000
+        ),
+        maxConcurrentSessions: normalizeInt(
+          (interaction.sessions as any)?.maxConcurrentSessions,
+          DEFAULT_SETTINGS.interaction.sessions.maxConcurrentSessions,
+          1,
+          100
+        )
+      }
+    },
+    agentStack: {
+      preset,
+      advancedOverridesEnabled: normalizeBoolean(
+        agentStack.advancedOverridesEnabled,
+        DEFAULT_SETTINGS.agentStack.advancedOverridesEnabled
+      ),
+      overrides: {
+        ...(isRecord(agentStack.overrides) ? agentStack.overrides : {}),
+        orchestrator: orchestratorOverride,
+        ...(isRecord((agentStack.overrides as any)?.devTeam)
+          ? {
+              devTeam: {
+                ...(agentStack.overrides as any).devTeam,
+                orchestrator: normalizeModelBinding(
+                  (agentStack.overrides as any)?.devTeam?.orchestrator,
+                  presetOrchestratorFallback.provider,
+                  presetOrchestratorFallback.model
+                ),
+                codingWorkers: normalizeStringList(
+                  (agentStack.overrides as any)?.devTeam?.codingWorkers,
+                  4,
+                  40
+                )
+              }
+            }
+          : {}),
+        voiceAdmissionClassifier: normalizeExecutionPolicy(
+          (agentStack.overrides as any)?.voiceAdmissionClassifier,
+          presetVoiceAdmissionClassifierFallback.provider,
+          presetVoiceAdmissionClassifierFallback.model,
+          { fallbackMode: "dedicated_model" }
+        )
+      },
+      runtimeConfig: {
+        research: {
+          enabled: normalizeBoolean(
+            (agentStack.runtimeConfig as any)?.research?.enabled,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.research.enabled
+          ),
+          maxSearchesPerHour: normalizeInt(
+            (agentStack.runtimeConfig as any)?.research?.maxSearchesPerHour,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.research.maxSearchesPerHour,
+            0,
+            120
+          ),
+          openaiNativeWebSearch: {
+            userLocation: normalizeString(
+              (agentStack.runtimeConfig as any)?.research?.openaiNativeWebSearch?.userLocation,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.research.openaiNativeWebSearch.userLocation,
+              120
+            ),
+            allowedDomains: normalizeStringList(
+              (agentStack.runtimeConfig as any)?.research?.openaiNativeWebSearch?.allowedDomains,
+              50,
+              200
+            )
+          },
+          localExternalSearch: {
+            safeSearch: normalizeBoolean(
+              (agentStack.runtimeConfig as any)?.research?.localExternalSearch?.safeSearch,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.research.localExternalSearch.safeSearch
+            ),
+            providerOrder: normalizeProviderOrder(
+              (agentStack.runtimeConfig as any)?.research?.localExternalSearch?.providerOrder
+            ),
+            maxResults: normalizeInt(
+              (agentStack.runtimeConfig as any)?.research?.localExternalSearch?.maxResults,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.research.localExternalSearch.maxResults,
+              1,
+              10
+            ),
+            maxPagesToRead: normalizeInt(
+              (agentStack.runtimeConfig as any)?.research?.localExternalSearch?.maxPagesToRead,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.research.localExternalSearch.maxPagesToRead,
+              0,
+              5
+            ),
+            maxCharsPerPage: normalizeInt(
+              (agentStack.runtimeConfig as any)?.research?.localExternalSearch?.maxCharsPerPage,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.research.localExternalSearch.maxCharsPerPage,
+              350,
+              24_000
+            ),
+            recencyDaysDefault: normalizeInt(
+              (agentStack.runtimeConfig as any)?.research?.localExternalSearch?.recencyDaysDefault,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.research.localExternalSearch.recencyDaysDefault,
+              1,
+              3_650
+            ),
+            maxConcurrentFetches: normalizeInt(
+              (agentStack.runtimeConfig as any)?.research?.localExternalSearch?.maxConcurrentFetches,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.research.localExternalSearch.maxConcurrentFetches,
+              1,
+              10
+            )
+          }
+        },
+        browser: {
+          enabled: normalizeBoolean(
+            (agentStack.runtimeConfig as any)?.browser?.enabled,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.enabled
+          ),
+          openaiComputerUse: {
+            model: normalizeString(
+              (agentStack.runtimeConfig as any)?.browser?.openaiComputerUse?.model,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.openaiComputerUse.model,
+              120
+            )
+          },
+          localBrowserAgent: {
+            execution: normalizeBrowserExecutionPolicy(
+              (agentStack.runtimeConfig as any)?.browser?.localBrowserAgent?.execution
+            ),
+            maxBrowseCallsPerHour: normalizeInt(
+              (agentStack.runtimeConfig as any)?.browser?.localBrowserAgent?.maxBrowseCallsPerHour,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.localBrowserAgent.maxBrowseCallsPerHour,
+              0,
+              60
+            ),
+            maxStepsPerTask: normalizeInt(
+              (agentStack.runtimeConfig as any)?.browser?.localBrowserAgent?.maxStepsPerTask,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.localBrowserAgent.maxStepsPerTask,
+              1,
+              30
+            ),
+            stepTimeoutMs: normalizeInt(
+              (agentStack.runtimeConfig as any)?.browser?.localBrowserAgent?.stepTimeoutMs,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.localBrowserAgent.stepTimeoutMs,
+              5_000,
+              120_000
+            ),
+            sessionTimeoutMs: normalizeInt(
+              (agentStack.runtimeConfig as any)?.browser?.localBrowserAgent?.sessionTimeoutMs,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.localBrowserAgent.sessionTimeoutMs,
+              10_000,
+              1_800_000
+            )
+          }
+        },
+        voice: {
+          openaiRealtime: {
+            model: normalizeString(
+              (agentStack.runtimeConfig as any)?.voice?.openaiRealtime?.model,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.model,
+              120
+            ),
+            voice: normalizeString(
+              (agentStack.runtimeConfig as any)?.voice?.openaiRealtime?.voice,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.voice,
+              120
+            ),
+            inputAudioFormat: normalizeString(
+              normalizeOpenAiRealtimeAudioFormat(
+                (agentStack.runtimeConfig as any)?.voice?.openaiRealtime?.inputAudioFormat,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.inputAudioFormat
+              ),
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.inputAudioFormat,
+              120
+            ),
+            outputAudioFormat: normalizeString(
+              normalizeOpenAiRealtimeAudioFormat(
+                (agentStack.runtimeConfig as any)?.voice?.openaiRealtime?.outputAudioFormat,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.outputAudioFormat
+              ),
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.outputAudioFormat,
+              120
+            ),
+            transcriptionMethod: normalizeOpenAiRealtimeTranscriptionMethod(
+              (agentStack.runtimeConfig as any)?.voice?.openaiRealtime?.transcriptionMethod,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod
+            ),
+            inputTranscriptionModel: normalizeOpenAiRealtimeTranscriptionModel(
+              (agentStack.runtimeConfig as any)?.voice?.openaiRealtime?.inputTranscriptionModel,
+              OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+            ),
+            usePerUserAsrBridge: normalizeBoolean(
+              (agentStack.runtimeConfig as any)?.voice?.openaiRealtime?.usePerUserAsrBridge,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge
+            )
+          },
+          legacyVoiceStack: {
+            selectedProvider: normalizeVoiceProvider(
+              (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.selectedProvider,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.selectedProvider as any
+            ),
+            xai: {
+              voice: normalizeString(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.xai?.voice,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.xai.voice,
+                120
+              ),
+              audioFormat: normalizeString(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.xai?.audioFormat,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.xai.audioFormat,
+                120
+              ),
+              sampleRateHz: normalizeInt(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.xai?.sampleRateHz,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.xai.sampleRateHz,
+                8_000,
+                96_000
+              ),
+              region: normalizeString(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.xai?.region,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.xai.region,
+                120
+              )
+            },
+            elevenLabsRealtime: {
+              agentId: normalizeString(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.elevenLabsRealtime?.agentId,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.agentId,
+                200
+              ),
+              voiceId: normalizeString(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.elevenLabsRealtime?.voiceId,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.voiceId,
+                200
+              ),
+              apiBaseUrl: normalizeHttpBaseUrl(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.elevenLabsRealtime?.apiBaseUrl,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.apiBaseUrl
+              ),
+              inputSampleRateHz: normalizeInt(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.elevenLabsRealtime?.inputSampleRateHz,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.inputSampleRateHz,
+                8_000,
+                96_000
+              ),
+              outputSampleRateHz: normalizeInt(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.elevenLabsRealtime?.outputSampleRateHz,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.outputSampleRateHz,
+                8_000,
+                96_000
+              )
+            },
+            geminiRealtime: {
+              model: normalizeString(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.geminiRealtime?.model,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.model,
+                120
+              ),
+              voice: normalizeString(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.geminiRealtime?.voice,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.voice,
+                120
+              ),
+              apiBaseUrl: normalizeHttpBaseUrl(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.geminiRealtime?.apiBaseUrl,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.apiBaseUrl
+              ),
+              inputSampleRateHz: normalizeInt(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.geminiRealtime?.inputSampleRateHz,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.inputSampleRateHz,
+                8_000,
+                96_000
+              ),
+              outputSampleRateHz: normalizeInt(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.geminiRealtime?.outputSampleRateHz,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.outputSampleRateHz,
+                8_000,
+                96_000
+              )
+            },
+            sttPipeline: {
+              transcriptionModel: normalizeString(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.sttPipeline?.transcriptionModel,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.sttPipeline.transcriptionModel,
+                120
+              ),
+              ttsModel: normalizeString(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.sttPipeline?.ttsModel,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.sttPipeline.ttsModel,
+                120
+              ),
+              ttsVoice: normalizeString(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.sttPipeline?.ttsVoice,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.sttPipeline.ttsVoice,
+                120
+              ),
+              ttsSpeed: normalizeNumber(
+                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.sttPipeline?.ttsSpeed,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.sttPipeline.ttsSpeed,
+                0.25,
+                4
+              )
+            },
+            generation: normalizeExecutionPolicy(
+              (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.generation,
+              "anthropic",
+              "claude-sonnet-4-6"
+            )
+          }
+        },
+        claudeCodeSession: {
+          sessionScope: normalizeClaudeCodeSessionScope(
+            (agentStack.runtimeConfig as any)?.claudeCodeSession?.sessionScope,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.sessionScope
+          ),
+          inactivityTimeoutMs: normalizeInt(
+            (agentStack.runtimeConfig as any)?.claudeCodeSession?.inactivityTimeoutMs,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.inactivityTimeoutMs,
+            10_000,
+            12 * 60 * 60 * 1000
+          ),
+          contextPruningStrategy: normalizeClaudeCodeContextPruningStrategy(
+            (agentStack.runtimeConfig as any)?.claudeCodeSession?.contextPruningStrategy,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.contextPruningStrategy
+          ),
+          maxPinnedStateChars: normalizeInt(
+            (agentStack.runtimeConfig as any)?.claudeCodeSession?.maxPinnedStateChars,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.maxPinnedStateChars,
+            0,
+            200_000
+          ),
+          voiceToolPolicy: normalizeAgentSessionToolPolicy(
+            (agentStack.runtimeConfig as any)?.claudeCodeSession?.voiceToolPolicy,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.voiceToolPolicy
+          ),
+          textToolPolicy: normalizeAgentSessionToolPolicy(
+            (agentStack.runtimeConfig as any)?.claudeCodeSession?.textToolPolicy,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.textToolPolicy
+          )
+        },
+        devTeam: {
+          codex: {
+            enabled: normalizeBoolean(
+              (agentStack.runtimeConfig as any)?.devTeam?.codex?.enabled,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.enabled
+            ),
+            model:
+              normalizeString(
+              (agentStack.runtimeConfig as any)?.devTeam?.codex?.model,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.model,
+              120
+              ) || DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.model,
+            maxTurns: normalizeInt(
+              (agentStack.runtimeConfig as any)?.devTeam?.codex?.maxTurns,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.maxTurns,
+              1,
+              200
+            ),
+            timeoutMs: normalizeInt(
+              (agentStack.runtimeConfig as any)?.devTeam?.codex?.timeoutMs,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.timeoutMs,
+              10_000,
+              1_800_000
+            ),
+            maxBufferBytes: normalizeInt(
+              (agentStack.runtimeConfig as any)?.devTeam?.codex?.maxBufferBytes,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.maxBufferBytes,
+              4_096,
+              10 * 1024 * 1024
+            ),
+            defaultCwd: normalizeString(
+              (agentStack.runtimeConfig as any)?.devTeam?.codex?.defaultCwd,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.defaultCwd,
+              400
+            ),
+            maxTasksPerHour: normalizeInt(
+              (agentStack.runtimeConfig as any)?.devTeam?.codex?.maxTasksPerHour,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.maxTasksPerHour,
+              0,
+              200
+            ),
+            maxParallelTasks: normalizeInt(
+              (agentStack.runtimeConfig as any)?.devTeam?.codex?.maxParallelTasks,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.maxParallelTasks,
+              1,
+              20
+            )
+          },
+          claudeCode: {
+            enabled: normalizeBoolean(
+              (agentStack.runtimeConfig as any)?.devTeam?.claudeCode?.enabled,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.enabled
+            ),
+            model:
+              normalizeString(
+              (agentStack.runtimeConfig as any)?.devTeam?.claudeCode?.model,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.model,
+              120
+              ) || DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.model,
+            maxTurns: normalizeInt(
+              (agentStack.runtimeConfig as any)?.devTeam?.claudeCode?.maxTurns,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.maxTurns,
+              1,
+              200
+            ),
+            timeoutMs: normalizeInt(
+              (agentStack.runtimeConfig as any)?.devTeam?.claudeCode?.timeoutMs,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.timeoutMs,
+              10_000,
+              1_800_000
+            ),
+            maxBufferBytes: normalizeInt(
+              (agentStack.runtimeConfig as any)?.devTeam?.claudeCode?.maxBufferBytes,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.maxBufferBytes,
+              4_096,
+              10 * 1024 * 1024
+            ),
+            defaultCwd: normalizeString(
+              (agentStack.runtimeConfig as any)?.devTeam?.claudeCode?.defaultCwd,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.defaultCwd,
+              400
+            ),
+            maxTasksPerHour: normalizeInt(
+              (agentStack.runtimeConfig as any)?.devTeam?.claudeCode?.maxTasksPerHour,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.maxTasksPerHour,
+              0,
+              200
+            ),
+            maxParallelTasks: normalizeInt(
+              (agentStack.runtimeConfig as any)?.devTeam?.claudeCode?.maxParallelTasks,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.maxParallelTasks,
+              1,
+              20
+            )
+          }
+        }
+      }
+    },
+    memory: {
+      enabled: normalizeBoolean(memory.enabled, DEFAULT_SETTINGS.memory.enabled),
+      promptSlice: {
+        maxRecentMessages: normalizeInt(
+          (memory.promptSlice as any)?.maxRecentMessages,
+          DEFAULT_SETTINGS.memory.promptSlice.maxRecentMessages,
+          4,
+          120
+        ),
+        maxHighlights: normalizeInt(
+          (memory.promptSlice as any)?.maxHighlights,
+          DEFAULT_SETTINGS.memory.promptSlice.maxHighlights,
+          1,
+          40
+        )
+      },
+      execution: normalizeExecutionPolicy(memory.execution, "anthropic", "claude-haiku-4-5", {
+        fallbackMode: "dedicated_model",
+        fallbackTemperature: 0,
+        fallbackMaxOutputTokens: 320
+      }),
+      extraction: {
+        enabled: normalizeBoolean(
+          (memory.extraction as any)?.enabled,
+          DEFAULT_SETTINGS.memory.extraction.enabled
+        )
+      },
+      embeddingModel: normalizeString(memory.embeddingModel, DEFAULT_SETTINGS.memory.embeddingModel, 120),
+      reflection: {
+        enabled: normalizeBoolean(
+          (memory.reflection as any)?.enabled,
+          DEFAULT_SETTINGS.memory.reflection.enabled
+        ),
+        strategy: normalizeReflectionStrategy(
+          (memory.reflection as any)?.strategy,
+          DEFAULT_SETTINGS.memory.reflection.strategy
+        ),
+        hour: normalizeInt(
+          (memory.reflection as any)?.hour,
+          DEFAULT_SETTINGS.memory.reflection.hour,
+          0,
+          23
+        ),
+        minute: normalizeInt(
+          (memory.reflection as any)?.minute,
+          DEFAULT_SETTINGS.memory.reflection.minute,
+          0,
+          59
+        ),
+        maxFactsPerReflection: normalizeInt(
+          (memory.reflection as any)?.maxFactsPerReflection,
+          DEFAULT_SETTINGS.memory.reflection.maxFactsPerReflection,
+          1,
+          100
+        )
+      },
+      dailyLogRetentionDays: normalizeInt(
+        memory.dailyLogRetentionDays,
+        DEFAULT_SETTINGS.memory.dailyLogRetentionDays,
+        1,
+        365
+      )
+    },
+    directives: {
+      enabled: normalizeBoolean(directives.enabled, DEFAULT_SETTINGS.directives.enabled)
+    },
+    initiative: {
+      text: {
+        enabled: normalizeBoolean(
+          (initiative.text as any)?.enabled,
+          DEFAULT_SETTINGS.initiative.text.enabled
+        ),
+        execution: normalizeExecutionPolicy(
+          (initiative.text as any)?.execution,
+          "openai",
+          "gpt-5"
+        ),
+        eagerness: normalizeInt(
+          (initiative.text as any)?.eagerness,
+          DEFAULT_SETTINGS.initiative.text.eagerness,
+          0,
+          100
+        ),
+        minMinutesBetweenThoughts: normalizeInt(
+          (initiative.text as any)?.minMinutesBetweenThoughts,
+          DEFAULT_SETTINGS.initiative.text.minMinutesBetweenThoughts,
+          5,
+          24 * 60
+        ),
+        maxThoughtsPerDay: normalizeInt(
+          (initiative.text as any)?.maxThoughtsPerDay,
+          DEFAULT_SETTINGS.initiative.text.maxThoughtsPerDay,
+          0,
+          100
+        ),
+        lookbackMessages: normalizeInt(
+          (initiative.text as any)?.lookbackMessages,
+          DEFAULT_SETTINGS.initiative.text.lookbackMessages,
+          4,
+          80
+        )
+      },
+      voice: {
+        enabled: normalizeBoolean(
+          (initiative.voice as any)?.enabled,
+          DEFAULT_SETTINGS.initiative.voice.enabled
+        ),
+        execution: normalizeExecutionPolicy(
+          (initiative.voice as any)?.execution,
+          "anthropic",
+          "claude-sonnet-4-6",
+          { fallbackMode: "dedicated_model", fallbackTemperature: 1.2 }
+        ),
+        eagerness: normalizeInt(
+          (initiative.voice as any)?.eagerness,
+          DEFAULT_SETTINGS.initiative.voice.eagerness,
+          0,
+          100
+        ),
+        minSilenceSeconds: normalizeInt(
+          (initiative.voice as any)?.minSilenceSeconds,
+          DEFAULT_SETTINGS.initiative.voice.minSilenceSeconds,
+          1,
+          300
+        ),
+        minSecondsBetweenThoughts: normalizeInt(
+          (initiative.voice as any)?.minSecondsBetweenThoughts,
+          DEFAULT_SETTINGS.initiative.voice.minSecondsBetweenThoughts,
+          1,
+          600
+        )
+      },
+      discovery: {
+        enabled: normalizeBoolean(
+          (initiative.discovery as any)?.enabled,
+          DEFAULT_SETTINGS.initiative.discovery.enabled
+        ),
+        channelIds: normalizeStringList((initiative.discovery as any)?.channelIds, 200, 60),
+        maxPostsPerDay: normalizeInt(
+          (initiative.discovery as any)?.maxPostsPerDay,
+          DEFAULT_SETTINGS.initiative.discovery.maxPostsPerDay,
+          0,
+          50
+        ),
+        minMinutesBetweenPosts: normalizeInt(
+          (initiative.discovery as any)?.minMinutesBetweenPosts,
+          DEFAULT_SETTINGS.initiative.discovery.minMinutesBetweenPosts,
+          1,
+          24 * 60
+        ),
+        pacingMode:
+          normalizeString(
+            (initiative.discovery as any)?.pacingMode,
+            DEFAULT_SETTINGS.initiative.discovery.pacingMode,
+            40
+          ).toLowerCase() === "spontaneous"
+            ? "spontaneous"
+            : "even",
+        spontaneity: normalizeInt(
+          (initiative.discovery as any)?.spontaneity,
+          DEFAULT_SETTINGS.initiative.discovery.spontaneity,
+          0,
+          100
+        ),
+        postOnStartup: normalizeBoolean(
+          (initiative.discovery as any)?.postOnStartup,
+          DEFAULT_SETTINGS.initiative.discovery.postOnStartup
+        ),
+        allowImagePosts: normalizeBoolean(
+          (initiative.discovery as any)?.allowImagePosts,
+          DEFAULT_SETTINGS.initiative.discovery.allowImagePosts
+        ),
+        allowVideoPosts: normalizeBoolean(
+          (initiative.discovery as any)?.allowVideoPosts,
+          DEFAULT_SETTINGS.initiative.discovery.allowVideoPosts
+        ),
+        allowReplyImages: normalizeBoolean(
+          (initiative.discovery as any)?.allowReplyImages,
+          DEFAULT_SETTINGS.initiative.discovery.allowReplyImages
+        ),
+        allowReplyVideos: normalizeBoolean(
+          (initiative.discovery as any)?.allowReplyVideos,
+          DEFAULT_SETTINGS.initiative.discovery.allowReplyVideos
+        ),
+        allowReplyGifs: normalizeBoolean(
+          (initiative.discovery as any)?.allowReplyGifs,
+          DEFAULT_SETTINGS.initiative.discovery.allowReplyGifs
+        ),
+        maxImagesPerDay: normalizeInt(
+          (initiative.discovery as any)?.maxImagesPerDay,
+          DEFAULT_SETTINGS.initiative.discovery.maxImagesPerDay,
+          0,
+          200
+        ),
+        maxVideosPerDay: normalizeInt(
+          (initiative.discovery as any)?.maxVideosPerDay,
+          DEFAULT_SETTINGS.initiative.discovery.maxVideosPerDay,
+          0,
+          120
+        ),
+        maxGifsPerDay: normalizeInt(
+          (initiative.discovery as any)?.maxGifsPerDay,
+          DEFAULT_SETTINGS.initiative.discovery.maxGifsPerDay,
+          0,
+          300
+        ),
+        simpleImageModel: normalizeString(
+          (initiative.discovery as any)?.simpleImageModel,
+          DEFAULT_SETTINGS.initiative.discovery.simpleImageModel,
+          120
+        ),
+        complexImageModel: normalizeString(
+          (initiative.discovery as any)?.complexImageModel,
+          DEFAULT_SETTINGS.initiative.discovery.complexImageModel,
+          120
+        ),
+        videoModel: normalizeString(
+          (initiative.discovery as any)?.videoModel,
+          DEFAULT_SETTINGS.initiative.discovery.videoModel,
+          120
+        ),
+        allowedImageModels: normalizeStringList(
+          (initiative.discovery as any)?.allowedImageModels,
+          20,
+          120,
+          DEFAULT_SETTINGS.initiative.discovery.allowedImageModels as unknown as string[]
+        ),
+        allowedVideoModels: normalizeStringList(
+          (initiative.discovery as any)?.allowedVideoModels,
+          20,
+          120,
+          DEFAULT_SETTINGS.initiative.discovery.allowedVideoModels as unknown as string[]
+        ),
+        maxMediaPromptChars: normalizeInt(
+          (initiative.discovery as any)?.maxMediaPromptChars,
+          DEFAULT_SETTINGS.initiative.discovery.maxMediaPromptChars,
+          100,
+          2_000
+        ),
+        linkChancePercent: normalizeInt(
+          (initiative.discovery as any)?.linkChancePercent,
+          DEFAULT_SETTINGS.initiative.discovery.linkChancePercent,
+          0,
+          100
+        ),
+        maxLinksPerPost: normalizeInt(
+          (initiative.discovery as any)?.maxLinksPerPost,
+          DEFAULT_SETTINGS.initiative.discovery.maxLinksPerPost,
+          0,
+          5
+        ),
+        maxCandidatesForPrompt: normalizeInt(
+          (initiative.discovery as any)?.maxCandidatesForPrompt,
+          DEFAULT_SETTINGS.initiative.discovery.maxCandidatesForPrompt,
+          1,
+          20
+        ),
+        freshnessHours: normalizeInt(
+          (initiative.discovery as any)?.freshnessHours,
+          DEFAULT_SETTINGS.initiative.discovery.freshnessHours,
+          1,
+          24 * 30
+        ),
+        dedupeHours: normalizeInt(
+          (initiative.discovery as any)?.dedupeHours,
+          DEFAULT_SETTINGS.initiative.discovery.dedupeHours,
+          1,
+          24 * 90
+        ),
+        randomness: normalizeInt(
+          (initiative.discovery as any)?.randomness,
+          DEFAULT_SETTINGS.initiative.discovery.randomness,
+          0,
+          100
+        ),
+        sourceFetchLimit: normalizeInt(
+          (initiative.discovery as any)?.sourceFetchLimit,
+          DEFAULT_SETTINGS.initiative.discovery.sourceFetchLimit,
+          1,
+          50
+        ),
+        allowNsfw: normalizeBoolean(
+          (initiative.discovery as any)?.allowNsfw,
+          DEFAULT_SETTINGS.initiative.discovery.allowNsfw
+        ),
+        preferredTopics: normalizeStringList((initiative.discovery as any)?.preferredTopics, 50, 120),
+        redditSubreddits: normalizeSubreddits(
+          (initiative.discovery as any)?.redditSubreddits,
+          DEFAULT_SETTINGS.initiative.discovery.redditSubreddits as unknown as string[]
+        ),
+        youtubeChannelIds: normalizeStringList((initiative.discovery as any)?.youtubeChannelIds, 50, 120),
+        rssFeeds: normalizeDiscoveryRssFeeds(
+          (initiative.discovery as any)?.rssFeeds,
+          DEFAULT_SETTINGS.initiative.discovery.rssFeeds as unknown as string[]
+        ),
+        xHandles: normalizeXHandles((initiative.discovery as any)?.xHandles),
+        xNitterBaseUrl: normalizeHttpBaseUrl(
+          (initiative.discovery as any)?.xNitterBaseUrl,
+          DEFAULT_SETTINGS.initiative.discovery.xNitterBaseUrl
+        ),
+        sources: normalizeDiscoverySourceMap((initiative.discovery as any)?.sources)
+      }
+    },
+    voice: {
+      enabled: normalizeBoolean(voice.enabled, DEFAULT_SETTINGS.voice.enabled),
+      transcription: {
+        enabled: normalizeBoolean(
+          (voice.transcription as any)?.enabled,
+          DEFAULT_SETTINGS.voice.transcription.enabled
+        ),
+        languageMode:
+          normalizeString(
+            (voice.transcription as any)?.languageMode,
+            DEFAULT_SETTINGS.voice.transcription.languageMode,
+            40
+          ).toLowerCase() === "fixed"
+            ? "fixed"
+            : "auto",
+        languageHint: normalizeLanguageHint(
+          (voice.transcription as any)?.languageHint,
+          DEFAULT_SETTINGS.voice.transcription.languageHint
+        )
+      },
+      channelPolicy: {
+        allowedChannelIds: normalizeStringList((voice.channelPolicy as any)?.allowedChannelIds, 200, 60),
+        blockedChannelIds: normalizeStringList((voice.channelPolicy as any)?.blockedChannelIds, 200, 60),
+        blockedUserIds: normalizeStringList((voice.channelPolicy as any)?.blockedUserIds, 200, 60)
+      },
+      sessionLimits: {
+        maxSessionMinutes: normalizeInt(
+          (voice.sessionLimits as any)?.maxSessionMinutes,
+          DEFAULT_SETTINGS.voice.sessionLimits.maxSessionMinutes,
+          1,
+          240
+        ),
+        inactivityLeaveSeconds: normalizeInt(
+          (voice.sessionLimits as any)?.inactivityLeaveSeconds,
+          DEFAULT_SETTINGS.voice.sessionLimits.inactivityLeaveSeconds,
+          15,
+          3_600
+        ),
+        maxSessionsPerDay: normalizeInt(
+          (voice.sessionLimits as any)?.maxSessionsPerDay,
+          DEFAULT_SETTINGS.voice.sessionLimits.maxSessionsPerDay,
+          0,
+          240
+        ),
+        maxConcurrentSessions: normalizeInt(
+          (voice.sessionLimits as any)?.maxConcurrentSessions,
+          DEFAULT_SETTINGS.voice.sessionLimits.maxConcurrentSessions,
+          1,
+          3
+        )
+      },
+      conversationPolicy: {
+        replyEagerness: normalizeInt(
+          (voice.conversationPolicy as any)?.replyEagerness,
+          DEFAULT_SETTINGS.voice.conversationPolicy.replyEagerness,
+          0,
+          100
+        ),
+        commandOnlyMode: normalizeBoolean(
+          (voice.conversationPolicy as any)?.commandOnlyMode,
+          DEFAULT_SETTINGS.voice.conversationPolicy.commandOnlyMode
+        ),
+        allowNsfwHumor: normalizeBoolean(
+          (voice.conversationPolicy as any)?.allowNsfwHumor,
+          DEFAULT_SETTINGS.voice.conversationPolicy.allowNsfwHumor
+        ),
+        textOnlyMode: normalizeBoolean(
+          (voice.conversationPolicy as any)?.textOnlyMode,
+          DEFAULT_SETTINGS.voice.conversationPolicy.textOnlyMode
+        ),
+        replyPath: normalizeReplyPath(
+          (voice.conversationPolicy as any)?.replyPath,
+          DEFAULT_SETTINGS.voice.conversationPolicy.replyPath
+        ),
+        ttsMode:
+          normalizeString(
+            (voice.conversationPolicy as any)?.ttsMode,
+            DEFAULT_SETTINGS.voice.conversationPolicy.ttsMode,
+            20
+          ).toLowerCase() === "api"
+            ? "api"
+            : "realtime",
+        operationalMessages: normalizeOperationalMessages(
+          (voice.conversationPolicy as any)?.operationalMessages,
+          DEFAULT_SETTINGS.voice.conversationPolicy.operationalMessages
+        )
+      },
+      admission: {
+        mode: normalizeVoiceAdmissionMode(
+          (voice.admission as any)?.mode,
+          DEFAULT_SETTINGS.voice.admission.mode
+        ),
+        wakeSignals: normalizeStringList(
+          (voice.admission as any)?.wakeSignals,
+          10,
+          40,
+          DEFAULT_SETTINGS.voice.admission.wakeSignals as unknown as string[]
+        ),
+        intentConfidenceThreshold: normalizeNumber(
+          (voice.admission as any)?.intentConfidenceThreshold,
+          DEFAULT_SETTINGS.voice.admission.intentConfidenceThreshold,
+          0,
+          1
+        ),
+        musicWakeLatchSeconds: normalizeInt(
+          (voice.admission as any)?.musicWakeLatchSeconds,
+          DEFAULT_SETTINGS.voice.admission.musicWakeLatchSeconds,
+          0,
+          120
+        )
+      },
+      streamWatch: {
+        enabled: normalizeBoolean(
+          (voice.streamWatch as any)?.enabled,
+          DEFAULT_SETTINGS.voice.streamWatch.enabled
+        ),
+        minCommentaryIntervalSeconds: normalizeInt(
+          (voice.streamWatch as any)?.minCommentaryIntervalSeconds,
+          DEFAULT_SETTINGS.voice.streamWatch.minCommentaryIntervalSeconds,
+          3,
+          120
+        ),
+        maxFramesPerMinute: normalizeInt(
+          (voice.streamWatch as any)?.maxFramesPerMinute,
+          DEFAULT_SETTINGS.voice.streamWatch.maxFramesPerMinute,
+          6,
+          600
+        ),
+        maxFrameBytes: normalizeInt(
+          (voice.streamWatch as any)?.maxFrameBytes,
+          DEFAULT_SETTINGS.voice.streamWatch.maxFrameBytes,
+          50_000,
+          4_000_000
+        ),
+        commentaryPath: normalizeStreamWatchCommentaryPath(
+          (voice.streamWatch as any)?.commentaryPath,
+          DEFAULT_SETTINGS.voice.streamWatch.commentaryPath
+        ),
+        keyframeIntervalMs: normalizeInt(
+          (voice.streamWatch as any)?.keyframeIntervalMs,
+          DEFAULT_SETTINGS.voice.streamWatch.keyframeIntervalMs,
+          250,
+          10_000
+        ),
+        autonomousCommentaryEnabled: normalizeBoolean(
+          (voice.streamWatch as any)?.autonomousCommentaryEnabled,
+          DEFAULT_SETTINGS.voice.streamWatch.autonomousCommentaryEnabled
+        ),
+        brainContextEnabled: normalizeBoolean(
+          (voice.streamWatch as any)?.brainContextEnabled,
+          DEFAULT_SETTINGS.voice.streamWatch.brainContextEnabled
+        ),
+        brainContextMinIntervalSeconds: normalizeInt(
+          (voice.streamWatch as any)?.brainContextMinIntervalSeconds,
+          DEFAULT_SETTINGS.voice.streamWatch.brainContextMinIntervalSeconds,
+          1,
+          60
+        ),
+        brainContextMaxEntries: normalizeInt(
+          (voice.streamWatch as any)?.brainContextMaxEntries,
+          DEFAULT_SETTINGS.voice.streamWatch.brainContextMaxEntries,
+          1,
+          24
+        ),
+        brainContextPrompt: normalizePromptBlock(
+          (voice.streamWatch as any)?.brainContextPrompt,
+          DEFAULT_SETTINGS.voice.streamWatch.brainContextPrompt,
+          420
+        ),
+        sharePageMaxWidthPx: normalizeInt(
+          (voice.streamWatch as any)?.sharePageMaxWidthPx,
+          DEFAULT_SETTINGS.voice.streamWatch.sharePageMaxWidthPx,
+          320,
+          1_920
+        ),
+        sharePageJpegQuality: normalizeNumber(
+          (voice.streamWatch as any)?.sharePageJpegQuality,
+          DEFAULT_SETTINGS.voice.streamWatch.sharePageJpegQuality,
+          0.1,
+          1
+        )
+      },
+      soundboard: {
+        enabled: normalizeBoolean(
+          (voice.soundboard as any)?.enabled,
+          DEFAULT_SETTINGS.voice.soundboard.enabled
+        ),
+        allowExternalSounds: normalizeBoolean(
+          (voice.soundboard as any)?.allowExternalSounds,
+          DEFAULT_SETTINGS.voice.soundboard.allowExternalSounds
+        ),
+        preferredSoundIds: normalizeStringList((voice.soundboard as any)?.preferredSoundIds, 100, 160)
+      }
+    },
+    media: {
+      vision: {
+        enabled: normalizeBoolean(
+          (media.vision as any)?.enabled,
+          DEFAULT_SETTINGS.media.vision.enabled
+        ),
+        execution: normalizeExecutionPolicy(
+          (media.vision as any)?.execution,
+          "anthropic",
+          "claude-haiku-4-5",
+          { fallbackMode: "dedicated_model" }
+        ),
+        maxAutoIncludeImages: normalizeInt(
+          (media.vision as any)?.maxAutoIncludeImages,
+          DEFAULT_SETTINGS.media.vision.maxAutoIncludeImages,
+          0,
+          10
+        ),
+        maxCaptionsPerHour: normalizeInt(
+          (media.vision as any)?.maxCaptionsPerHour,
+          DEFAULT_SETTINGS.media.vision.maxCaptionsPerHour,
+          0,
+          500
+        )
+      },
+      videoContext: {
+        enabled: normalizeBoolean(
+          (media.videoContext as any)?.enabled,
+          DEFAULT_SETTINGS.media.videoContext.enabled
+        ),
+        execution: normalizeExecutionPolicy(
+          (media.videoContext as any)?.execution,
+          "openai",
+          "gpt-5"
+        ),
+        maxLookupsPerHour: normalizeInt(
+          (media.videoContext as any)?.maxLookupsPerHour,
+          DEFAULT_SETTINGS.media.videoContext.maxLookupsPerHour,
+          0,
+          200
+        ),
+        maxVideosPerMessage: normalizeInt(
+          (media.videoContext as any)?.maxVideosPerMessage,
+          DEFAULT_SETTINGS.media.videoContext.maxVideosPerMessage,
+          0,
+          6
+        ),
+        maxTranscriptChars: normalizeInt(
+          (media.videoContext as any)?.maxTranscriptChars,
+          DEFAULT_SETTINGS.media.videoContext.maxTranscriptChars,
+          200,
+          4_000
+        ),
+        keyframeIntervalSeconds: normalizeInt(
+          (media.videoContext as any)?.keyframeIntervalSeconds,
+          DEFAULT_SETTINGS.media.videoContext.keyframeIntervalSeconds,
+          0,
+          120
+        ),
+        maxKeyframesPerVideo: normalizeInt(
+          (media.videoContext as any)?.maxKeyframesPerVideo,
+          DEFAULT_SETTINGS.media.videoContext.maxKeyframesPerVideo,
+          0,
+          8
+        ),
+        allowAsrFallback: normalizeBoolean(
+          (media.videoContext as any)?.allowAsrFallback,
+          DEFAULT_SETTINGS.media.videoContext.allowAsrFallback
+        ),
+        maxAsrSeconds: normalizeInt(
+          (media.videoContext as any)?.maxAsrSeconds,
+          DEFAULT_SETTINGS.media.videoContext.maxAsrSeconds,
+          15,
+          600
+        )
+      }
+    },
+    music: {
+      ducking: {
+        targetGain: normalizeNumber(
+          (music.ducking as any)?.targetGain,
+          DEFAULT_SETTINGS.music.ducking.targetGain,
+          0,
+          1
+        ),
+        fadeMs: normalizeInt(
+          (music.ducking as any)?.fadeMs,
+          DEFAULT_SETTINGS.music.ducking.fadeMs,
+          0,
+          10_000
+        )
+      }
+    },
+    automations: {
+      enabled: normalizeBoolean(automations.enabled, DEFAULT_SETTINGS.automations.enabled)
+    }
+  };
+
+  return normalized;
 }

@@ -34,6 +34,13 @@ import type {
 import {
   musicPhaseShouldForceCommandOnly
 } from "./voiceSessionTypes.ts";
+import {
+  applyOrchestratorOverrideSettings,
+  getBotNameAliases,
+  getResolvedVoiceAdmissionClassifierBinding,
+  getVoiceAdmissionSettings,
+  getVoiceConversationPolicy
+} from "../settings/agentStack.ts";
 
 const DEFAULT_REALTIME_ADMISSION_MODE = "hard_classifier";
 const DEFAULT_MUSIC_WAKE_LATCH_SECONDS = 15;
@@ -43,15 +50,15 @@ const VOICE_CLASSIFIER_DEBUG_PROMPT_MAX_CHARS = 12_000;
 const VOICE_CLASSIFIER_DEBUG_OUTPUT_MAX_CHARS = 1_200;
 
 function resolveRealtimeAdmissionMode(settings: any): "hard_classifier" | "generation_only" {
-  const raw = String(settings?.voice?.replyDecisionLlm?.realtimeAdmissionMode || "")
+  const raw = String(getVoiceAdmissionSettings(settings).mode || "")
     .trim()
     .toLowerCase();
-  return raw === "generation_only" ? "generation_only" : DEFAULT_REALTIME_ADMISSION_MODE;
+  return raw === "generation_decides" ? "generation_only" : DEFAULT_REALTIME_ADMISSION_MODE;
 }
 
 function resolveMusicWakeLatchSeconds(settings: any): number {
   return clamp(
-    Number(settings?.voice?.replyDecisionLlm?.musicWakeLatchSeconds) || DEFAULT_MUSIC_WAKE_LATCH_SECONDS,
+    Number(getVoiceAdmissionSettings(settings).musicWakeLatchSeconds) || DEFAULT_MUSIC_WAKE_LATCH_SECONDS,
     5,
     60
   );
@@ -107,7 +114,7 @@ export function hasBotNameCueForTranscript(manager: any, { transcript = "", sett
 
   const resolvedSettings = settings || manager.store.getSettings();
   const botName = getPromptBotName(resolvedSettings);
-  const aliases = Array.isArray(resolvedSettings?.botNameAliases) ? resolvedSettings.botNameAliases : [];
+  const aliases = getBotNameAliases(resolvedSettings);
   const primaryToken = String(botName || "")
     .replace(/[^a-z0-9\s]+/gi, " ")
     .trim()
@@ -710,9 +717,11 @@ export async function runVoiceReplyClassifier(manager: any, {
   reason: string | null;
   error: string | null;
 }> {
-  const replyDecisionLlm = settings?.voice?.replyDecisionLlm || {};
-  const llmProvider = normalizeVoiceReplyDecisionProvider(replyDecisionLlm?.provider);
-  const llmModel = String(replyDecisionLlm?.model || defaultVoiceReplyDecisionModel(llmProvider))
+  const classifierBinding = getResolvedVoiceAdmissionClassifierBinding(settings);
+  const llmProvider = normalizeVoiceReplyDecisionProvider(
+    classifierBinding?.provider || "openai"
+  );
+  const llmModel = String(classifierBinding?.model || defaultVoiceReplyDecisionModel(llmProvider))
     .trim()
     .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
   const classifierDebugEnabled = parseBooleanFlag(process.env.VOICE_CLASSIFIER_DEBUG, false);
@@ -875,17 +884,13 @@ export async function runVoiceReplyClassifier(manager: any, {
   const startMs = Date.now();
   try {
     const result = await manager.llm.generate({
-      settings: {
-        ...settings,
-        llm: {
-          ...(settings?.llm || {}),
-          provider: llmProvider,
-          model: llmModel,
-          temperature: 0,
-          maxOutputTokens: 4,
-          reasoningEffort: String(replyDecisionLlm?.reasoningEffort || "minimal").trim().toLowerCase() || "minimal"
-        }
-      },
+      settings: applyOrchestratorOverrideSettings(settings, {
+        provider: llmProvider,
+        model: llmModel,
+        temperature: 0,
+        maxOutputTokens: 4,
+        reasoningEffort: "minimal"
+      }),
       systemPrompt: "",
       userPrompt: promptParts.join("\n"),
       contextMessages: [],
@@ -982,6 +987,6 @@ export async function runVoiceReplyClassifier(manager: any, {
 
 export function isCommandOnlyActive(manager: any, session, settings = null) {
   const resolved = settings || session?.settingsSnapshot || manager.store.getSettings();
-  if (resolved?.voice?.commandOnlyMode) return true;
+  if (getVoiceConversationPolicy(resolved).commandOnlyMode) return true;
   return musicPhaseShouldForceCommandOnly(manager.getMusicPhase(session));
 }

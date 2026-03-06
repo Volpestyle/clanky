@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
+import { createTestSettings } from "../testSettings.ts";
 import {
   SYSTEM_SPEECH_OPPORTUNITY,
   SYSTEM_SPEECH_SOURCE
@@ -62,13 +63,24 @@ function createManager() {
         logs.push(entry);
       },
       getSettings() {
-        return {
-          botName: "clanker conk"
-        };
+        return createTestSettings({
+          botName: "clanker conk",
+          voice: {
+            replyPath: "brain"
+          }
+        });
       }
     },
-    appConfig: {},
+    appConfig: {
+      openaiApiKey: "test-openai-key"
+    },
     llm: {
+      isAsrReady() {
+        return true;
+      },
+      isSpeechSynthesisReady() {
+        return true;
+      },
       async generate() {
         return {
           text: "NO"
@@ -117,7 +129,7 @@ function createMessage(overrides = {}) {
 
 function createSession(overrides = {}) {
   const now = Date.now();
-  return {
+  const session = {
     id: "session-1",
     guildId: "guild-1",
     voiceChannelId: "voice-1",
@@ -196,14 +208,17 @@ function createSession(overrides = {}) {
     joinGreetingOpportunity: null,
     joinGreetingTimer: null,
     lastRequestedRealtimeUtterance: null,
-    settingsSnapshot: {
+    settingsSnapshot: createTestSettings({
       botName: "clanker conk",
       voice: {
-        enabled: true
+        enabled: true,
+        replyPath: "brain"
       }
-    },
+    }),
     ...overrides
   };
+  session.settingsSnapshot = createTestSettings(session.settingsSnapshot || {});
+  return session;
 }
 
 function createInterruptedReplyAction(overrides = {}) {
@@ -2114,7 +2129,7 @@ test("shared ASR bridge forwards recovered transcript after timeout instead of d
     };
   };
 
-  const settings = {
+  const settings = createTestSettings({
     botName: "clanker conk",
     llm: {
       provider: "anthropic",
@@ -2126,7 +2141,7 @@ test("shared ASR bridge forwards recovered transcript after timeout instead of d
         usePerUserAsrBridge: false
       }
     }
-  };
+  });
   const session = createSession({
     mode: "openai_realtime",
     realtimeInputSampleRateHz: 24_000,
@@ -2167,7 +2182,7 @@ test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown",
 
   const blockedBySilence = manager.evaluateVoiceThoughtLoopGate({
     session,
-    settings: {
+    settings: createTestSettings({
       voice: {
         replyEagerness: 100,
         thoughtEngine: {
@@ -2177,7 +2192,7 @@ test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown",
           minSecondsBetweenThoughts: 20
         }
       }
-    },
+    }),
     now
   });
   assert.equal(blockedBySilence.allow, false);
@@ -2188,7 +2203,7 @@ test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown",
       ...session,
       lastActivityAt: now - 25_000
     },
-    settings: {
+    settings: createTestSettings({
       voice: {
         replyEagerness: 100,
         thoughtEngine: {
@@ -2198,7 +2213,7 @@ test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown",
           minSecondsBetweenThoughts: 20
         }
       }
-    },
+    }),
     now
   });
   assert.equal(allowed.allow, true);
@@ -2215,7 +2230,7 @@ test("evaluateVoiceThoughtLoopGate blocks thoughts in command-only mode", () => 
 
   const blocked = manager.evaluateVoiceThoughtLoopGate({
     session,
-    settings: {
+    settings: createTestSettings({
       voice: {
         commandOnlyMode: true,
         thoughtEngine: {
@@ -2225,7 +2240,7 @@ test("evaluateVoiceThoughtLoopGate blocks thoughts in command-only mode", () => 
           minSecondsBetweenThoughts: 20
         }
       }
-    },
+    }),
     now
   });
 
@@ -2236,7 +2251,7 @@ test("evaluateVoiceThoughtLoopGate blocks thoughts in command-only mode", () => 
 test("maybeRunVoiceThoughtLoop speaks approved thought candidates", async () => {
   const { manager } = createManager();
   const now = Date.now();
-  const settings = {
+  const settings = createTestSettings({
     botName: "clanker conk",
     voice: {
       enabled: true,
@@ -2250,7 +2265,7 @@ test("maybeRunVoiceThoughtLoop speaks approved thought candidates", async () => 
         minSecondsBetweenThoughts: 20
       }
     }
-  };
+  });
   const session = createSession({
     mode: "stt_pipeline",
     lastActivityAt: now - 25_000,
@@ -2292,7 +2307,7 @@ test("maybeRunVoiceThoughtLoop speaks approved thought candidates", async () => 
 
 test("maybeRunVoiceThoughtLoop skips generation when eagerness probability roll fails", async () => {
   const { manager } = createManager();
-  const settings = {
+  const settings = createTestSettings({
     botName: "clanker conk",
     voice: {
       enabled: true,
@@ -2306,7 +2321,7 @@ test("maybeRunVoiceThoughtLoop skips generation when eagerness probability roll 
         minSecondsBetweenThoughts: 20
       }
     }
-  };
+  });
   const session = createSession({
     mode: "stt_pipeline",
     lastActivityAt: Date.now() - 25_000,
@@ -2938,13 +2953,13 @@ test("reconcileSettings ends blocked sessions and touches allowed sessions", asy
     })
   );
 
-  await manager.reconcileSettings({
+  await manager.reconcileSettings(createTestSettings({
     voice: {
       enabled: true,
       blockedVoiceChannelIds: ["voice-blocked"],
       allowedVoiceChannelIds: ["voice-allowed"]
     }
-  });
+  }));
 
   assert.equal(endCalls.length, 2);
   assert.deepEqual(

@@ -123,6 +123,7 @@ import {
   runBrowserBrowseTask
 } from "./tools/browserTaskRuntime.ts";
 import type { ActiveBrowserTask } from "./tools/browserTaskRuntime.ts";
+import { runOpenAiComputerUseTask } from "./tools/openAiComputerUseRuntime.ts";
 import {
   resolveOperationalChannel,
   sendToChannel
@@ -131,6 +132,21 @@ import { loadPromptMemorySliceFromMemory } from "./memory/promptMemorySlice.ts";
 import { maybeReplyToMessagePipeline } from "./bot/replyPipeline.ts";
 import { SubAgentSessionManager } from "./agents/subAgentSession.ts";
 import { BrowserAgentSession } from "./agents/browseAgent.ts";
+import {
+  getAutomationsSettings,
+  getBotName,
+  getDiscoverySettings,
+  getMemorySettings,
+  getReplyPermissions,
+  getStartupSettings,
+  getTextInitiativeSettings,
+  getVideoContextSettings,
+  getActivitySettings,
+  getBrowserRuntimeConfig,
+  getResearchRuntimeConfig,
+  getResolvedBrowserTaskConfig,
+  isDevTaskEnabled
+} from "./settings/agentStack.ts";
 
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
@@ -393,51 +409,36 @@ export class ClankerBot {
         await interaction.deferReply();
         const browseInstruction = interaction.options.getString("task", true);
         const settings = this.store.getSettings();
-        let activeBrowserTask: ActiveBrowserTask | null = null;
-
-        if (!this.browserManager) {
-          await interaction.editReply("Browser agent is currently unavailable on this server.");
-          return;
-        }
-        if (!settings?.browser?.enabled) {
-          await interaction.editReply("Browser agent is disabled in settings on this server.");
-          return;
-        }
-
         try {
-          const browserLlmProvider = String(settings?.browser?.llm?.provider || "anthropic").trim();
-          const browserLlmModel = String(settings?.browser?.llm?.model || "claude-sonnet-4-5-20250929").trim();
-          const maxSteps = Math.max(1, Math.min(30, Number(settings?.browser?.maxStepsPerTask) || 15));
-          const stepTimeoutMs = Math.max(5000, Math.min(120000, Number(settings?.browser?.stepTimeoutMs) || 30000));
-          const scopeKey = buildBrowserTaskScopeKey({
+          const browserContext = this.buildBrowserBrowseContext(settings);
+          if (!browserContext.configured) {
+            await interaction.editReply("Browser runtime is currently unavailable on this server.");
+            return;
+          }
+          if (!browserContext.enabled) {
+            await interaction.editReply("Browser runtime is disabled in settings on this server.");
+            return;
+          }
+
+          const result = await this.runModelRequestedBrowserBrowse({
+            settings,
+            browserBrowse: browserContext,
+            query: browseInstruction,
             guildId: interaction.guildId,
-            channelId: interaction.channelId
-          });
-          activeBrowserTask = this.activeBrowserTasks.beginTask(scopeKey);
-
-          const result = await runBrowserBrowseTask({
-            llm: this.llm,
-            browserManager: this.browserManager,
-            store: this.store,
-            sessionKey: `slash:${activeBrowserTask.taskId}`,
-            instruction: browseInstruction,
-            provider: browserLlmProvider,
-            model: browserLlmModel,
-            maxSteps,
-            stepTimeoutMs,
-            trace: {
-              guildId: interaction.guildId,
-              channelId: interaction.channelId,
-              userId: interaction.user.id,
-              source: "slash_command_browse"
-            },
-            logSource: "slash_command_browse",
-            signal: activeBrowserTask.abortController.signal
+            channelId: interaction.channelId,
+            userId: interaction.user.id,
+            source: "slash_command_browse"
           });
 
-          let responseText = result.text;
+          let responseText = String(result.text || "").trim();
+          if (result.error) {
+            responseText = result.error;
+          }
           if (result.hitStepLimit) {
             responseText += "\n\n*(Note: I reached my maximum step limit before finishing the task completely.)*";
+          }
+          if (!responseText) {
+            responseText = "Browser task completed with no text result.";
           }
 
           if (responseText.length > 2000) {
@@ -453,8 +454,6 @@ export class ClankerBot {
           } else {
             await interaction.editReply(`An error occurred while browsing: ${message}`).catch(() => undefined);
           }
-        } finally {
-          this.activeBrowserTasks.clear(activeBrowserTask);
         }
       } else if (commandName === "code") {
         await interaction.deferReply();
@@ -462,7 +461,7 @@ export class ClankerBot {
         const codeCwd = interaction.options.getString("cwd", false) || undefined;
         const settings = this.store.getSettings();
 
-        if (!settings?.codeAgent?.enabled) {
+        if (!isDevTaskEnabled(settings)) {
           await interaction.editReply("Code agent is disabled in settings.");
           return;
         }
@@ -471,12 +470,13 @@ export class ClankerBot {
           return;
         }
 
-        const maxParallel = Number(settings?.codeAgent?.maxParallelTasks) || 2;
+        const codeAgentConfig = resolveCodeAgentConfig(settings, codeCwd);
+        const maxParallel = codeAgentConfig.maxParallelTasks;
         if (getActiveCodeAgentTaskCount() >= maxParallel) {
           await interaction.editReply("Too many code agent tasks are already running. Try again shortly.");
           return;
         }
-        const maxPerHour = Number(settings?.codeAgent?.maxTasksPerHour) || 10;
+        const maxPerHour = codeAgentConfig.maxTasksPerHour;
         const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
         const usedThisHour = this.store.countActionsSince("code_agent_call", since1h);
         if (usedThisHour >= maxPerHour) {
@@ -493,7 +493,7 @@ export class ClankerBot {
             maxTurns,
             timeoutMs,
             maxBufferBytes
-          } = resolveCodeAgentConfig(settings, codeCwd);
+          } = codeAgentConfig;
 
           const result = await runCodeAgent({
             instruction: codeInstruction,
@@ -1135,7 +1135,8 @@ export class ClankerBot {
     });
     if (musicStopHandled) return;
 
-    if (settings.memory.enabled) {
+    const memorySettings = getMemorySettings(settings);
+    if (memorySettings.enabled) {
       void this.memory.ingestMessage({
         messageId: message.id,
         authorId: message.author.id,
@@ -1161,7 +1162,7 @@ export class ClankerBot {
 
     const recentMessages = this.store.getRecentMessages(
       message.channelId,
-      settings.memory.maxRecentMessages
+      memorySettings.promptSlice.maxRecentMessages
     );
     const addressSignal = await this.getReplyAddressSignal(settings, message, recentMessages);
     const shouldQueueReply = this.shouldAttemptReplyDecision({
@@ -1733,7 +1734,7 @@ export class ClankerBot {
       guildId: sent.guildId,
       channelId: sent.channelId,
       authorId: this.client.user.id,
-      authorName: settings.botName,
+      authorName: getBotName(settings),
       isBot: true,
       content: this.composeMessageContentForHistory(sent, finalText),
       referencedMessageId: message.id
@@ -2095,14 +2096,15 @@ export class ClankerBot {
     const normalized = normalizeReactionEmojiToken(emojiToken);
     if (!normalized) return result;
 
-    if (!settings.permissions.allowReactions) {
+    const permissions = getReplyPermissions(settings);
+    if (!permissions.allowReactions) {
       return {
         ...result,
         blockedByPermission: true
       };
     }
 
-    if (!this.canTakeAction("reacted", settings.permissions.maxReactionsPerHour)) {
+    if (!this.canTakeAction("reacted", permissions.maxReactionsPerHour)) {
       return {
         ...result,
         blockedByHourlyCap: true
@@ -2202,8 +2204,9 @@ export class ClankerBot {
   }
 
   canTalkNow(settings) {
+    const activity = getActivitySettings(settings);
     const elapsed = Date.now() - this.lastBotMessageAt;
-    return elapsed >= settings.activity.minSecondsBetweenMessages * 1000;
+    return elapsed >= activity.minSecondsBetweenMessages * 1000;
   }
 
   markSpoke() {
@@ -2225,7 +2228,8 @@ export class ClankerBot {
   }
 
   getImageBudgetState(settings) {
-    const maxPerDay = clamp(Number(settings.discovery?.maxImagesPerDay) || 0, 0, 200);
+    const discovery = getDiscoverySettings(settings);
+    const maxPerDay = clamp(Number(discovery.maxImagesPerDay) || 0, 0, 200);
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const used = this.store.countActionsSince("image_call", since24h);
     const remaining = Math.max(0, maxPerDay - used);
@@ -2239,7 +2243,8 @@ export class ClankerBot {
   }
 
   getVideoGenerationBudgetState(settings) {
-    const maxPerDay = clamp(Number(settings.discovery?.maxVideosPerDay) || 0, 0, 120);
+    const discovery = getDiscoverySettings(settings);
+    const maxPerDay = clamp(Number(discovery.maxVideosPerDay) || 0, 0, 120);
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const used = this.store.countActionsSince("video_call", since24h);
     const remaining = Math.max(0, maxPerDay - used);
@@ -2253,7 +2258,8 @@ export class ClankerBot {
   }
 
   getGifBudgetState(settings) {
-    const maxPerDay = clamp(Number(settings.discovery?.maxGifsPerDay) || 0, 0, 300);
+    const discovery = getDiscoverySettings(settings);
+    const maxPerDay = clamp(Number(discovery.maxGifsPerDay) || 0, 0, 300);
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const used = this.store.countActionsSince("gif_call", since24h);
     const remaining = Math.max(0, maxPerDay - used);
@@ -2290,7 +2296,8 @@ export class ClankerBot {
   }
 
   getWebSearchBudgetState(settings) {
-    const maxPerHour = clamp(Number(settings.webSearch?.maxSearchesPerHour) || 0, 0, 120);
+    const research = getResearchRuntimeConfig(settings);
+    const maxPerHour = clamp(Number(research.maxSearchesPerHour) || 0, 0, 120);
     const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const successCount = this.store.countActionsSince("search_call", since1h);
     const errorCount = this.store.countActionsSince("search_error", since1h);
@@ -2308,7 +2315,8 @@ export class ClankerBot {
   }
 
   getBrowserBudgetState(settings) {
-    const maxPerHour = clamp(Number(settings.browser?.maxBrowseCallsPerHour) || 0, 0, 60);
+    const browser = getBrowserRuntimeConfig(settings);
+    const maxPerHour = clamp(Number(browser.localBrowserAgent?.maxBrowseCallsPerHour) || 0, 0, 60);
     const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const used = this.store.countActionsSince("browser_browse_call", since1h);
     const remaining = Math.max(0, maxPerHour - used);
@@ -2322,7 +2330,8 @@ export class ClankerBot {
   }
 
   getVideoContextBudgetState(settings) {
-    const maxPerHour = clamp(Number(settings.videoContext?.maxLookupsPerHour) || 0, 0, 120);
+    const videoContext = getVideoContextSettings(settings);
+    const maxPerHour = clamp(Number(videoContext.maxLookupsPerHour) || 0, 0, 120);
     const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const successCount = this.store.countActionsSince("video_context_call", since1h);
     const errorCount = this.store.countActionsSince("video_context_error", since1h);
@@ -2340,15 +2349,16 @@ export class ClankerBot {
   }
 
   async buildVideoReplyContext({ settings, message, recentMessages = [], trace = {} }) {
+    const videoContextSettings = getVideoContextSettings(settings);
     const messageText = String(message?.content || "");
-    const enabled = Boolean(settings.videoContext?.enabled);
+    const enabled = Boolean(videoContextSettings.enabled);
     const budget = this.getVideoContextBudgetState(settings);
-    const maxVideosPerMessage = clamp(Number(settings.videoContext?.maxVideosPerMessage) || 0, 0, 6);
-    const maxTranscriptChars = clamp(Number(settings.videoContext?.maxTranscriptChars) || 1200, 200, 4000);
-    const keyframeIntervalSeconds = clamp(Number(settings.videoContext?.keyframeIntervalSeconds) || 0, 0, 120);
-    const maxKeyframesPerVideo = clamp(Number(settings.videoContext?.maxKeyframesPerVideo) || 0, 0, 8);
-    const allowAsrFallback = Boolean(settings.videoContext?.allowAsrFallback);
-    const maxAsrSeconds = clamp(Number(settings.videoContext?.maxAsrSeconds) || 120, 15, 600);
+    const maxVideosPerMessage = clamp(Number(videoContextSettings.maxVideosPerMessage) || 0, 0, 6);
+    const maxTranscriptChars = clamp(Number(videoContextSettings.maxTranscriptChars) || 1200, 200, 4000);
+    const keyframeIntervalSeconds = clamp(Number(videoContextSettings.keyframeIntervalSeconds) || 0, 0, 120);
+    const maxKeyframesPerVideo = clamp(Number(videoContextSettings.maxKeyframesPerVideo) || 0, 0, 8);
+    const allowAsrFallback = Boolean(videoContextSettings.allowAsrFallback);
+    const maxAsrSeconds = clamp(Number(videoContextSettings.maxAsrSeconds) || 120, 15, 600);
 
     const base = {
       requested: false,
@@ -2640,7 +2650,7 @@ export class ClankerBot {
   buildWebSearchContext(settings, messageText) {
     const text = String(messageText || "");
     const configured = Boolean(this.search?.isConfigured?.());
-    const enabled = Boolean(settings.webSearch?.enabled);
+    const enabled = Boolean(getResearchRuntimeConfig(settings).enabled);
     const budget = this.getWebSearchBudgetState(settings);
 
     return {
@@ -2661,8 +2671,12 @@ export class ClankerBot {
   }
 
   buildBrowserBrowseContext(settings) {
-    const configured = Boolean(this.browserManager);
-    const enabled = Boolean(settings?.browser?.enabled);
+    const browserTaskConfig = getResolvedBrowserTaskConfig(settings);
+    const configured = Boolean(
+      this.browserManager &&
+      (browserTaskConfig.runtime !== "openai_computer_use" || this.llm?.openai)
+    );
+    const enabled = Boolean(getBrowserRuntimeConfig(settings).enabled);
     const budget = this.getBrowserBudgetState(settings);
 
     return {
@@ -2681,7 +2695,7 @@ export class ClankerBot {
   }
 
   buildMemoryLookupContext({ settings }) {
-    const enabled = Boolean(settings?.memory?.enabled && this.memory?.searchDurableFacts);
+    const enabled = Boolean(getMemorySettings(settings).enabled && this.memory?.searchDurableFacts);
     return {
       enabled,
       requested: false,
@@ -2989,10 +3003,15 @@ export class ClankerBot {
       };
     }
 
-    const maxSteps = clamp(Number(settings?.browser?.maxStepsPerTask) || 15, 1, 30);
-    const stepTimeoutMs = clamp(Number(settings?.browser?.stepTimeoutMs) || 30_000, 5_000, 120_000);
-    const browserLlmProvider = String(settings?.browser?.llm?.provider || "anthropic").trim();
-    const browserLlmModel = String(settings?.browser?.llm?.model || "claude-sonnet-4-5-20250929").trim();
+    const browserTaskConfig = getResolvedBrowserTaskConfig(settings);
+    const maxSteps = clamp(Number(browserTaskConfig.maxStepsPerTask) || 15, 1, 30);
+    const stepTimeoutMs = clamp(Number(browserTaskConfig.stepTimeoutMs) || 30_000, 5_000, 120_000);
+    if (browserTaskConfig.runtime === "openai_computer_use" && !this.llm?.openai) {
+      return {
+        ...state,
+        error: "openai_computer_use_unavailable"
+      };
+    }
 
     const scopeKey = buildBrowserTaskScopeKey({
       guildId,
@@ -3001,25 +3020,42 @@ export class ClankerBot {
     const activeBrowserTask = this.activeBrowserTasks.beginTask(scopeKey);
 
     try {
-      const result = await runBrowserBrowseTask({
-        llm: this.llm,
-        browserManager: this.browserManager,
-        store: this.store,
-        sessionKey: `reply:${activeBrowserTask.taskId}`,
-        instruction: normalizedQuery,
-        provider: browserLlmProvider,
-        model: browserLlmModel,
-        maxSteps,
-        stepTimeoutMs,
-        trace: {
-          guildId,
-          channelId,
-          userId,
-          source: `${source}_browser_browse`
-        },
-        logSource: source,
-        signal: activeBrowserTask.abortController.signal
-      });
+      const sessionKey = `reply:${activeBrowserTask.taskId}`;
+      const trace = {
+        guildId,
+        channelId,
+        userId,
+        source: `${source}_browser_browse`
+      };
+      const result =
+        browserTaskConfig.runtime === "openai_computer_use"
+          ? await runOpenAiComputerUseTask({
+              openai: this.llm?.openai,
+              browserManager: this.browserManager,
+              store: this.store,
+              sessionKey,
+              instruction: normalizedQuery,
+              model: browserTaskConfig.openaiComputerUse.model,
+              maxSteps,
+              stepTimeoutMs,
+              trace,
+              logSource: source,
+              signal: activeBrowserTask.abortController.signal
+            })
+          : await runBrowserBrowseTask({
+              llm: this.llm,
+              browserManager: this.browserManager,
+              store: this.store,
+              sessionKey,
+              instruction: normalizedQuery,
+              provider: browserTaskConfig.localAgent.provider,
+              model: browserTaskConfig.localAgent.model,
+              maxSteps,
+              stepTimeoutMs,
+              trace,
+              logSource: source,
+              signal: activeBrowserTask.abortController.signal
+            });
 
       return {
         ...state,
@@ -3053,19 +3089,20 @@ export class ClankerBot {
     userId = null,
     source = "reply_message"
   }) {
-    if (!settings?.codeAgent?.enabled) {
+    if (!isDevTaskEnabled(settings)) {
       return { text: "", error: "code_agent_disabled" };
     }
     if (userId && !isCodeAgentUserAllowed(userId, settings)) {
       return { text: "", blockedByPermission: true };
     }
 
-    const maxParallel = Number(settings?.codeAgent?.maxParallelTasks) || 2;
+    const codeAgentConfig = resolveCodeAgentConfig(settings, cwdOverride);
+    const maxParallel = codeAgentConfig.maxParallelTasks;
     if (getActiveCodeAgentTaskCount() >= maxParallel) {
       return { text: "", blockedByParallelLimit: true };
     }
 
-    const maxPerHour = Number(settings?.codeAgent?.maxTasksPerHour) || 10;
+    const maxPerHour = codeAgentConfig.maxTasksPerHour;
     const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const used = this.store.countActionsSince("code_agent_call", since1h);
     if (used >= maxPerHour) {
@@ -3080,7 +3117,7 @@ export class ClankerBot {
       maxTurns,
       timeoutMs,
       maxBufferBytes
-    } = resolveCodeAgentConfig(settings, cwdOverride);
+    } = codeAgentConfig;
 
     try {
       const result = await runCodeAgent({
@@ -3128,14 +3165,15 @@ export class ClankerBot {
     userId = null,
     source = "reply_session"
   }) {
-    if (!settings?.codeAgent?.enabled) return null;
+    if (!isDevTaskEnabled(settings)) return null;
     if (userId && !isCodeAgentUserAllowed(userId, settings)) return null;
 
-    const maxParallel = Number(settings?.codeAgent?.maxParallelTasks) || 2;
+    const codeAgentConfig = resolveCodeAgentConfig(settings, cwdOverride);
+    const maxParallel = codeAgentConfig.maxParallelTasks;
     if (getActiveCodeAgentTaskCount() >= maxParallel) return null;
 
     // Enforce hourly task budget (same check as tryRunCodeAgentTask)
-    const maxPerHour = Number(settings?.codeAgent?.maxTasksPerHour) || 10;
+    const maxPerHour = codeAgentConfig.maxTasksPerHour;
     const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const used = this.store.countActionsSince("code_agent_call", since1h);
     if (used >= maxPerHour) return null;
@@ -3148,7 +3186,7 @@ export class ClankerBot {
       maxTurns,
       timeoutMs,
       maxBufferBytes
-    } = resolveCodeAgentConfig(settings, cwdOverride);
+    } = codeAgentConfig;
 
     const scopeKey = `${guildId || "dm"}:${channelId || "dm"}`;
     try {
@@ -3178,11 +3216,10 @@ export class ClankerBot {
     source = "reply_session"
   }) {
     if (!this.browserManager) return null;
-
-    const maxSteps = clamp(Number(settings?.browser?.maxStepsPerTask) || 15, 1, 30);
-    const stepTimeoutMs = clamp(Number(settings?.browser?.stepTimeoutMs) || 30_000, 5_000, 120_000);
-    const browserLlmProvider = String(settings?.browser?.llm?.provider || "anthropic").trim();
-    const browserLlmModel = String(settings?.browser?.llm?.model || "claude-sonnet-4-5-20250929").trim();
+    const browserTaskConfig = getResolvedBrowserTaskConfig(settings);
+    if (browserTaskConfig.runtime === "openai_computer_use") return null;
+    const maxSteps = clamp(Number(browserTaskConfig.maxStepsPerTask) || 15, 1, 30);
+    const stepTimeoutMs = clamp(Number(browserTaskConfig.stepTimeoutMs) || 30_000, 5_000, 120_000);
 
     const scopeKey = `${guildId || "dm"}:${channelId || "dm"}`;
     const sessionKey = `session:${scopeKey}:${Date.now()}`;
@@ -3192,8 +3229,8 @@ export class ClankerBot {
       browserManager: this.browserManager,
       store: this.store,
       sessionKey,
-      provider: browserLlmProvider,
-      model: browserLlmModel,
+      provider: browserTaskConfig.localAgent.provider,
+      model: browserTaskConfig.localAgent.model,
       maxSteps,
       stepTimeoutMs,
       trace: { guildId, channelId, userId, source }
@@ -3494,8 +3531,9 @@ export class ClankerBot {
     const payload = { content: text };
     const budget = this.getGifBudgetState(settings);
     const normalizedQuery = normalizeDirectiveText(query, MAX_GIF_QUERY_LEN);
+    const discovery = getDiscoverySettings(settings);
 
-    if (!settings.discovery.allowReplyGifs) {
+    if (!discovery.allowReplyGifs) {
       return {
         payload,
         gifUsed: false,
@@ -3631,20 +3669,15 @@ export class ClankerBot {
   }
 
   isUserBlocked(settings, userId) {
-    const blockedUserIds = Array.isArray(settings?.permissions?.blockedUserIds)
-      ? settings.permissions.blockedUserIds
-      : [];
+    const blockedUserIds = [...getReplyPermissions(settings).blockedUserIds].map((value) => String(value));
     return blockedUserIds.includes(String(userId));
   }
 
   isChannelAllowed(settings, channelId) {
     const id = String(channelId);
-    const blockedChannelIds = Array.isArray(settings?.permissions?.blockedChannelIds)
-      ? settings.permissions.blockedChannelIds
-      : [];
-    const allowedChannelIds = Array.isArray(settings?.permissions?.allowedChannelIds)
-      ? settings.permissions.allowedChannelIds
-      : [];
+    const permissions = getReplyPermissions(settings);
+    const blockedChannelIds = [...permissions.blockedChannelIds].map((value) => String(value));
+    const allowedChannelIds = [...permissions.allowedChannelIds].map((value) => String(value));
 
     if (blockedChannelIds.includes(id)) {
       return false;
@@ -3667,18 +3700,14 @@ export class ClankerBot {
 
   isReplyChannel(settings, channelId) {
     const id = String(channelId);
-    const replyChannelIds = Array.isArray(settings?.permissions?.replyChannelIds)
-      ? settings.permissions.replyChannelIds
-      : [];
+    const replyChannelIds = [...getReplyPermissions(settings).replyChannelIds].map((value) => String(value));
     if (!replyChannelIds.length) return false;
     return replyChannelIds.includes(id);
   }
 
   isDiscoveryChannel(settings, channelId) {
     const id = String(channelId);
-    const discoveryChannelIds = Array.isArray(settings?.discovery?.channelIds)
-      ? settings.discovery.channelIds
-      : [];
+    const discoveryChannelIds = [...getDiscoverySettings(settings).channelIds].map((value) => String(value));
     return discoveryChannelIds.includes(id);
   }
 
@@ -3775,17 +3804,19 @@ export class ClankerBot {
 
     // Catch up on any missed reflections from past days
     const startupSettings = this.store.getSettings();
-    if (startupSettings?.memory?.enabled && startupSettings?.memory?.reflection?.enabled) {
+    const startupMemory = getMemorySettings(startupSettings);
+    if (startupMemory.enabled && startupMemory.reflection?.enabled) {
       await this.memory.runDailyReflection(startupSettings);
     }
   }
 
   async maybeRunReflection() {
     const settings = this.store.getSettings();
-    if (!settings?.memory?.enabled || !settings?.memory?.reflection?.enabled) return;
+    const memory = getMemorySettings(settings);
+    if (!memory.enabled || !memory.reflection?.enabled) return;
 
-    const hour = Number(settings.memory.reflection.hour ?? 4);
-    const minute = Number(settings.memory.reflection.minute ?? 0);
+    const hour = Number(memory.reflection.hour ?? 4);
+    const minute = Number(memory.reflection.minute ?? 0);
     const schedule = { kind: "daily" as const, hour, minute };
 
     if (!this.nextReflectionRunAt) {
@@ -3807,7 +3838,7 @@ export class ClankerBot {
 
   async maybeRunAutomationCycle() {
     const settings = this.store.getSettings();
-    if (!settings?.automations?.enabled) return;
+    if (!getAutomationsSettings(settings).enabled) return;
     if (this.automationCycleRunning) return;
     this.automationCycleRunning = true;
 
@@ -3834,6 +3865,8 @@ export class ClankerBot {
     if (!guildId || !channelId || !Number.isInteger(automationId) || automationId <= 0) return;
 
     const settings = this.store.getSettings();
+    const permissions = getReplyPermissions(settings);
+    const botName = getBotName(settings);
     let status = "active";
     let nextRunAt = null;
     let runStatus = "ok";
@@ -3846,7 +3879,7 @@ export class ClankerBot {
       if (!this.isChannelAllowed(settings, channelId)) {
         runStatus = "error";
         errorText = "channel blocked by current settings";
-      } else if (!this.canSendMessage(settings.permissions.maxMessagesPerHour)) {
+      } else if (!this.canSendMessage(permissions.maxMessagesPerHour)) {
         runStatus = "skipped";
         summary = "hourly message cap hit; retrying soon";
         retrySoon = true;
@@ -3887,7 +3920,7 @@ export class ClankerBot {
               guildId: sent.guildId,
               channelId: sent.channelId,
               authorId: this.client.user.id,
-              authorName: settings.botName,
+              authorName: botName,
               isBot: true,
               content: this.composeMessageContentForHistory(sent, generationResult.text),
               referencedMessageId: null
@@ -3973,6 +4006,8 @@ export class ClankerBot {
   }
 
   async generateAutomationPayload({ automation, settings, channel }) {
+    const memory = getMemorySettings(settings);
+    const discovery = getDiscoverySettings(settings);
     if (!this.llm?.generate) {
       const fallback = sanitizeBotText(String(automation?.instruction || "scheduled task"), 1200);
       return {
@@ -3985,7 +4020,7 @@ export class ClankerBot {
       };
     }
 
-    const recentMessages = this.store.getRecentMessages(channel.id, settings.memory.maxRecentMessages);
+    const recentMessages = this.store.getRecentMessages(channel.id, memory.promptSlice.maxRecentMessages);
     const automationOwnerId = String(automation?.created_by_user_id || "").trim() || null;
     const automationQuery = `${String(automation?.title || "")} ${String(automation?.instruction || "")}`
       .replace(/\s+/g, " ")
@@ -4022,12 +4057,12 @@ export class ClankerBot {
       userFacts: memorySlice.userFacts,
       relevantFacts: memorySlice.relevantFacts,
       allowSimpleImagePosts:
-        settings.discovery.allowImagePosts && mediaCapabilities.simpleImageReady && imageBudget.canGenerate,
+        discovery.allowImagePosts && mediaCapabilities.simpleImageReady && imageBudget.canGenerate,
       allowComplexImagePosts:
-        settings.discovery.allowImagePosts && mediaCapabilities.complexImageReady && imageBudget.canGenerate,
+        discovery.allowImagePosts && mediaCapabilities.complexImageReady && imageBudget.canGenerate,
       allowVideoPosts:
-        settings.discovery.allowVideoPosts && mediaCapabilities.videoReady && videoBudget.canGenerate,
-      allowGifs: settings.discovery.allowReplyGifs && this.gifs?.isConfigured?.() && gifBudget.canFetch,
+        discovery.allowVideoPosts && mediaCapabilities.videoReady && videoBudget.canGenerate,
+      allowGifs: discovery.allowReplyGifs && this.gifs?.isConfigured?.() && gifBudget.canFetch,
       remainingImages: imageBudget.remaining,
       remainingVideos: videoBudget.remaining,
       remainingGifs: gifBudget.remaining,
@@ -4052,7 +4087,7 @@ export class ClankerBot {
       webSearchAvailable: false,
       webScrapeAvailable: false,
       browserBrowseAvailable: false,
-      memoryAvailable: settings.memory?.enabled,
+      memoryAvailable: memory.enabled,
       adaptiveDirectivesAvailable: false,
       imageLookupAvailable: false,
       openArticleAvailable: false
@@ -4266,13 +4301,15 @@ export class ClankerBot {
   }
 
   getStartupScanChannels(settings) {
+    const permissions = getReplyPermissions(settings);
+    const discovery = getDiscoverySettings(settings);
     const channels = [];
     const seen = new Set();
 
     const explicit = [
-      ...settings.permissions.replyChannelIds,
-      ...settings.discovery.channelIds,
-      ...settings.permissions.allowedChannelIds
+      ...permissions.replyChannelIds,
+      ...discovery.channelIds,
+      ...permissions.allowedChannelIds
     ];
 
     for (const id of explicit) {
@@ -4332,20 +4369,22 @@ export class ClankerBot {
 
     try {
       const settings = this.store.getSettings();
-      if (!settings.textThoughtLoop?.enabled) return;
-      if (settings.textThoughtLoop.maxThoughtsPerDay <= 0) return;
-      if (!this.canSendMessage(settings.permissions.maxMessagesPerHour)) return;
+      const textThoughtLoop = getTextInitiativeSettings(settings);
+      const permissions = getReplyPermissions(settings);
+      if (!textThoughtLoop.enabled) return;
+      if (textThoughtLoop.maxThoughtsPerDay <= 0) return;
+      if (!this.canSendMessage(permissions.maxMessagesPerHour)) return;
       if (!this.canTalkNow(settings)) return;
 
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const thoughts24h = this.store.countActionsSince("text_thought_loop_post", since24h);
-      if (thoughts24h >= settings.textThoughtLoop.maxThoughtsPerDay) return;
+      if (thoughts24h >= textThoughtLoop.maxThoughtsPerDay) return;
 
       const lastThoughtAt = this.store.getLastActionTime("text_thought_loop_post");
       const lastThoughtTs = lastThoughtAt ? new Date(lastThoughtAt).getTime() : 0;
       const minGapMs = Math.max(
         1,
-        Number(settings.textThoughtLoop.minMinutesBetweenThoughts || 0) * 60_000
+        Number(textThoughtLoop.minMinutesBetweenThoughts || 0) * 60_000
       );
       if (lastThoughtTs && Date.now() - lastThoughtTs < minGapMs) return;
 
@@ -4376,7 +4415,7 @@ export class ClankerBot {
         userId: this.client.user?.id || null,
         content: candidate.message.content,
         metadata: {
-          lookbackMessages: settings.textThoughtLoop.lookbackMessages,
+          lookbackMessages: textThoughtLoop.lookbackMessages,
           source: "text_thought_loop"
         }
       });
@@ -4386,8 +4425,10 @@ export class ClankerBot {
   }
 
   async pickTextThoughtLoopCandidate(settings) {
+    const permissions = getReplyPermissions(settings);
+    const textThoughtLoop = getTextInitiativeSettings(settings);
     const candidateIds = [...new Set(
-      (Array.isArray(settings?.permissions?.replyChannelIds) ? settings.permissions.replyChannelIds : [])
+      permissions.replyChannelIds
         .map((value) => String(value || "").trim())
         .filter(Boolean)
     )];
@@ -4398,7 +4439,7 @@ export class ClankerBot {
       .sort((a, b) => a.sortKey - b.sortKey)
       .map((entry) => entry.id);
 
-    const lookback = clamp(Number(settings.textThoughtLoop.lookbackMessages) || 0, 4, 80);
+    const lookback = clamp(Number(textThoughtLoop.lookbackMessages) || 0, 4, 80);
     for (const channelId of shuffled) {
       if (!this.isChannelAllowed(settings, channelId)) continue;
       const channel = this.client.channels.cache.get(channelId);
@@ -4496,15 +4537,19 @@ export class ClankerBot {
 
     try {
       const settings = this.store.getSettings();
-      if (!settings.discovery?.enabled) return;
-      if (!settings.discovery.channelIds.length) return;
-      if (settings.discovery.maxPostsPerDay <= 0) return;
-      if (!this.canSendMessage(settings.permissions.maxMessagesPerHour)) return;
+      const discovery = getDiscoverySettings(settings);
+      const memory = getMemorySettings(settings);
+      const permissions = getReplyPermissions(settings);
+      const botName = getBotName(settings);
+      if (!discovery.enabled) return;
+      if (!discovery.channelIds.length) return;
+      if (discovery.maxPostsPerDay <= 0) return;
+      if (!this.canSendMessage(permissions.maxMessagesPerHour)) return;
       if (!this.canTalkNow(settings)) return;
 
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const posts24h = this.store.countActionsSince("discovery_post", since24h);
-      if (posts24h >= settings.discovery.maxPostsPerDay) return;
+      if (posts24h >= discovery.maxPostsPerDay) return;
 
       const lastPostAt = this.store.getLastActionTime("discovery_post");
       const lastPostTs = lastPostAt ? new Date(lastPostAt).getTime() : 0;
@@ -4522,19 +4567,19 @@ export class ClankerBot {
       const channel = this.pickDiscoveryChannel(settings);
       if (!channel) return;
 
-      const recent = await this.hydrateRecentMessages(channel, settings.memory.maxRecentMessages);
+      const recent = await this.hydrateRecentMessages(channel, memory.promptSlice.maxRecentMessages);
       const recentMessages = recent.length
         ? recent
           .slice()
           .reverse()
-          .slice(0, settings.memory.maxRecentMessages)
+          .slice(0, memory.promptSlice.maxRecentMessages)
           .map((msg) => ({
             author_name: msg.member?.displayName || msg.author?.username || "unknown",
             content: String(msg.content || "").trim(),
             created_at: new Date(msg.createdTimestamp).toISOString(),
             is_bot: Boolean(msg.author?.bot)
           }))
-        : this.store.getRecentMessages(channel.id, settings.memory.maxRecentMessages);
+        : this.store.getRecentMessages(channel.id, memory.promptSlice.maxRecentMessages);
       const discoveryMemoryQuery = recentMessages
         .slice(0, 6)
         .map((row) => String(row?.content || "").trim())
@@ -4569,7 +4614,7 @@ export class ClankerBot {
       const requireDiscoveryLink =
         discoveryResult.enabled &&
         discoveryResult.candidates.length > 0 &&
-        chance((settings.discovery?.linkChancePercent || 0) / 100);
+        chance((discovery.linkChancePercent || 0) / 100);
       const discoveryImageBudget = this.getImageBudgetState(settings);
       const discoveryVideoBudget = this.getVideoGenerationBudgetState(settings);
       const discoveryMediaCapabilities = this.getMediaGenerationCapabilities(settings);
@@ -4586,21 +4631,21 @@ export class ClankerBot {
         relevantFacts: discoveryRelevantFacts,
         emojiHints: this.getEmojiHints(channel.guild),
         allowSimpleImagePosts:
-          settings.discovery.allowImagePosts &&
+          discovery.allowImagePosts &&
           discoverySimpleImageCapabilityReady &&
           discoveryImageBudget.canGenerate,
         allowComplexImagePosts:
-          settings.discovery.allowImagePosts &&
+          discovery.allowImagePosts &&
           discoveryComplexImageCapabilityReady &&
           discoveryImageBudget.canGenerate,
         remainingDiscoveryImages: discoveryImageBudget.remaining,
         allowVideoPosts:
-          settings.discovery.allowVideoPosts &&
+          discovery.allowVideoPosts &&
           discoveryVideoCapabilityReady &&
           discoveryVideoBudget.canGenerate,
         remainingDiscoveryVideos: discoveryVideoBudget.remaining,
         discoveryFindings: discoveryResult.candidates,
-        maxLinksPerPost: settings.discovery?.maxLinksPerPost || 2,
+        maxLinksPerPost: discovery.maxLinksPerPost || 2,
         requireDiscoveryLink,
         maxMediaPromptChars: resolveMaxMediaPromptLen(settings),
         mediaPromptCraftGuidance: getMediaPromptCraftGuidance(settings)
@@ -4681,7 +4726,7 @@ export class ClankerBot {
       let videoUsed = false;
       let videoBudgetBlocked = false;
       let videoCapabilityBlocked = false;
-      if (mediaDirective?.type === "image_simple" && settings.discovery.allowImagePosts && imagePrompt) {
+      if (mediaDirective?.type === "image_simple" && discovery.allowImagePosts && imagePrompt) {
         const imageResult = await this.maybeAttachGeneratedImage({
           settings,
           text: finalText,
@@ -4708,7 +4753,7 @@ export class ClankerBot {
 
       if (
         mediaDirective?.type === "image_complex" &&
-        settings.discovery.allowImagePosts &&
+        discovery.allowImagePosts &&
         complexImagePrompt
       ) {
         const imageResult = await this.maybeAttachGeneratedImage({
@@ -4735,7 +4780,7 @@ export class ClankerBot {
         imageVariantUsed = imageResult.variant || "complex";
       }
 
-      if (mediaDirective?.type === "video" && settings.discovery.allowVideoPosts && videoPrompt) {
+      if (mediaDirective?.type === "video" && discovery.allowVideoPosts && videoPrompt) {
         const videoResult = await this.maybeAttachGeneratedVideo({
           settings,
           text: finalText,
@@ -4789,7 +4834,7 @@ export class ClankerBot {
         guildId: sent.guildId,
         channelId: sent.channelId,
         authorId: this.client.user.id,
-        authorName: settings.botName,
+        authorName: botName,
         isBot: true,
         content: this.composeMessageContentForHistory(sent, finalText),
         referencedMessageId: null

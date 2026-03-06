@@ -1,4 +1,5 @@
 import { normalizeBoundedStringList } from "./settings/listNormalization.ts";
+import { getBotName, getPersonaSettings, getPromptingSettings } from "./settings/agentStack.ts";
 
 const DEFAULT_BOT_NAME = "clanker conk";
 const PROMPT_TEMPLATE_TOKEN_RE = /\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g;
@@ -59,12 +60,12 @@ export function interpolatePromptTemplate(template, variables = {}) {
 }
 
 export function getPromptBotName(settings, fallback = DEFAULT_BOT_NAME) {
-  const configured = String(settings?.botName || "").trim();
+  const configured = getBotName(settings).trim();
   return configured || String(fallback || DEFAULT_BOT_NAME);
 }
 
 export function getPromptStyle(settings, fallback = DEFAULT_PROMPT_STYLE) {
-  const configured = String(settings?.persona?.flavor || "").trim();
+  const configured = String(getPersonaSettings(settings).flavor || "").trim();
   const resolved = configured || String(fallback || DEFAULT_PROMPT_STYLE);
   return interpolatePromptTemplate(resolved, {
     botName: getPromptBotName(settings)
@@ -72,7 +73,7 @@ export function getPromptStyle(settings, fallback = DEFAULT_PROMPT_STYLE) {
 }
 
 export function getPromptCapabilityHonestyLine(settings, fallback = PROMPT_CAPABILITY_HONESTY_LINE) {
-  const configured = String(settings?.prompt?.capabilityHonestyLine || "").trim();
+  const configured = String(getPromptingSettings(settings).global.capabilityHonestyLine || "").trim();
   const resolved = configured || String(fallback || PROMPT_CAPABILITY_HONESTY_LINE);
   return interpolatePromptTemplate(resolved, {
     botName: getPromptBotName(settings)
@@ -80,7 +81,7 @@ export function getPromptCapabilityHonestyLine(settings, fallback = PROMPT_CAPAB
 }
 
 export function getPromptImpossibleActionLine(settings, fallback = DEFAULT_PROMPT_IMPOSSIBLE_ACTION_LINE) {
-  const configured = String(settings?.prompt?.impossibleActionLine || "").trim();
+  const configured = String(getPromptingSettings(settings).global.impossibleActionLine || "").trim();
   const resolved = configured || String(fallback || DEFAULT_PROMPT_IMPOSSIBLE_ACTION_LINE);
   return interpolatePromptTemplate(resolved, {
     botName: getPromptBotName(settings)
@@ -88,7 +89,7 @@ export function getPromptImpossibleActionLine(settings, fallback = DEFAULT_PROMP
 }
 
 export function getPromptMemoryEnabledLine(settings, fallback = DEFAULT_MEMORY_ENABLED_LINE) {
-  const configured = String(settings?.prompt?.memoryEnabledLine || "").trim();
+  const configured = String(getPromptingSettings(settings).global.memoryEnabledLine || "").trim();
   const resolved = configured || String(fallback || DEFAULT_MEMORY_ENABLED_LINE);
   return interpolatePromptTemplate(resolved, {
     botName: getPromptBotName(settings)
@@ -96,7 +97,7 @@ export function getPromptMemoryEnabledLine(settings, fallback = DEFAULT_MEMORY_E
 }
 
 export function getPromptMemoryDisabledLine(settings, fallback = DEFAULT_MEMORY_DISABLED_LINE) {
-  const configured = String(settings?.prompt?.memoryDisabledLine || "").trim();
+  const configured = String(getPromptingSettings(settings).global.memoryDisabledLine || "").trim();
   const resolved = configured || String(fallback || DEFAULT_MEMORY_DISABLED_LINE);
   return interpolatePromptTemplate(resolved, {
     botName: getPromptBotName(settings)
@@ -104,7 +105,7 @@ export function getPromptMemoryDisabledLine(settings, fallback = DEFAULT_MEMORY_
 }
 
 export function getPromptSkipLine(settings, fallback = DEFAULT_SKIP_LINE) {
-  const configured = String(settings?.prompt?.skipLine || "").trim();
+  const configured = String(getPromptingSettings(settings).global.skipLine || "").trim();
   const resolved = configured || String(fallback || DEFAULT_SKIP_LINE);
   return interpolatePromptTemplate(resolved, {
     botName: getPromptBotName(settings)
@@ -113,27 +114,27 @@ export function getPromptSkipLine(settings, fallback = DEFAULT_SKIP_LINE) {
 
 export function getPromptTextGuidance(settings, fallback = []) {
   const botName = getPromptBotName(settings);
-  return normalizePromptLineList(settings?.prompt?.textGuidance, fallback).map((line) =>
+  return normalizePromptLineList(getPromptingSettings(settings).text.guidance, fallback).map((line) =>
     interpolatePromptTemplate(line, { botName })
   );
 }
 
 export function getPromptVoiceGuidance(settings, fallback = []) {
   const botName = getPromptBotName(settings);
-  return normalizePromptLineList(settings?.prompt?.voiceGuidance, fallback).map((line) =>
+  return normalizePromptLineList(getPromptingSettings(settings).voice.guidance, fallback).map((line) =>
     interpolatePromptTemplate(line, { botName })
   );
 }
 
 export function getPromptVoiceOperationalGuidance(settings, fallback = []) {
   const botName = getPromptBotName(settings);
-  return normalizePromptLineList(settings?.prompt?.voiceOperationalGuidance, fallback).map((line) =>
+  return normalizePromptLineList(getPromptingSettings(settings).voice.operationalGuidance, fallback).map((line) =>
     interpolatePromptTemplate(line, { botName })
   );
 }
 
 export function getMediaPromptCraftGuidance(settings, fallback = DEFAULT_MEDIA_PROMPT_CRAFT_GUIDANCE) {
-  const configured = String(settings?.prompt?.mediaPromptCraftGuidance || "").trim();
+  const configured = String(getPromptingSettings(settings).media.promptCraftGuidance || "").trim();
   const resolved = configured || String(fallback || DEFAULT_MEDIA_PROMPT_CRAFT_GUIDANCE);
   return interpolatePromptTemplate(resolved, {
     botName: getPromptBotName(settings)
@@ -144,7 +145,7 @@ export function getPromptVoiceLookupBusySystemPrompt(
   settings,
   fallback = DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT
 ) {
-  const configured = String(settings?.prompt?.voiceLookupBusySystemPrompt || "").trim();
+  const configured = String(getPromptingSettings(settings).voice.lookupBusySystemPrompt || "").trim();
   const resolved = configured || String(fallback || DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT);
   return interpolatePromptTemplate(resolved, {
     botName: getPromptBotName(settings)
@@ -153,7 +154,9 @@ export function getPromptVoiceLookupBusySystemPrompt(
 
 function getPromptHardLimits(settings, { maxItems = null } = {}) {
   const botName = getPromptBotName(settings);
-  const source = Array.isArray(settings?.persona?.hardLimits) ? settings.persona.hardLimits : [];
+  const source = Array.isArray(getPersonaSettings(settings).hardLimits)
+    ? getPersonaSettings(settings).hardLimits
+    : [];
   const limits = source
     .map((line) => String(line || "").trim())
     .filter(Boolean)

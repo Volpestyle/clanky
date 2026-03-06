@@ -1,9 +1,13 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
+  getResolvedOrchestratorBinding
+} from "../settings/agentStack.ts";
+import {
   composeVoiceOperationalMessage,
   generateVoiceTurnReply
 } from "./voiceReplies.ts";
+import { createTestSettings } from "../testSettings.ts";
 
 function baseSettings(overrides = {}) {
   const base = {
@@ -35,7 +39,7 @@ function baseSettings(overrides = {}) {
     }
   };
 
-  return {
+  return createTestSettings({
     ...base,
     ...overrides,
     persona: {
@@ -66,7 +70,7 @@ function baseSettings(overrides = {}) {
         ...(overrides.voice?.soundboard || {})
       }
     }
-  };
+  });
 }
 
 function structuredVoiceOutput(overrides: {
@@ -747,8 +751,8 @@ test("generateVoiceTurnReply uses voice generation llm provider/model instead of
   });
 
   assert.equal(generationPayloads.length > 0, true);
-  assert.equal(generationPayloads[0]?.settings?.llm?.provider, "anthropic");
-  assert.equal(generationPayloads[0]?.settings?.llm?.model, "claude-haiku-4-5");
+  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).provider, "anthropic");
+  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).model, "claude-haiku-4-5");
 });
 
 test("generateVoiceTurnReply uses text llm provider/model when voice generation useTextModel is enabled", async () => {
@@ -776,8 +780,8 @@ test("generateVoiceTurnReply uses text llm provider/model when voice generation 
   });
 
   assert.equal(generationPayloads.length > 0, true);
-  assert.equal(generationPayloads[0]?.settings?.llm?.provider, "claude-code");
-  assert.equal(generationPayloads[0]?.settings?.llm?.model, "sonnet");
+  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).provider, "claude-code");
+  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).model, "sonnet");
 });
 
 test("generateVoiceTurnReply does not advertise code_task when runtime cannot execute code tasks", async () => {
@@ -790,7 +794,8 @@ test("generateVoiceTurnReply does not advertise code_task when runtime cannot ex
   await generateVoiceTurnReply(bot, {
     settings: baseSettings({
       codeAgent: {
-        enabled: true
+        provider: "claude-code",
+        allowedUserIds: ["user-1"]
       }
     }),
     guildId: "guild-1",
@@ -815,7 +820,8 @@ test("generateVoiceTurnReply advertises code_task when runtime can execute code 
   await generateVoiceTurnReply(bot, {
     settings: baseSettings({
       codeAgent: {
-        enabled: true
+        provider: "claude-code",
+        allowedUserIds: ["user-1"]
       }
     }),
     guildId: "guild-1",

@@ -155,16 +155,24 @@ export function normalizeLlmProvider(value, fallback = "openai") {
     .toLowerCase();
   if (normalized === "openai") return "openai";
   if (normalized === "anthropic") return "anthropic";
+  if (normalized === "ai_sdk_anthropic") return "ai_sdk_anthropic";
+  if (normalized === "litellm") return "litellm";
+  if (normalized === "claude_code_session") return "claude_code_session";
   if (normalized === "xai") return "xai";
   if (normalized === "claude-code") return "claude-code";
+  if (normalized === "codex") return "codex";
 
   const fallbackProvider = String(fallback || "")
     .trim()
     .toLowerCase();
   if (fallbackProvider === "openai") return "openai";
   if (fallbackProvider === "anthropic") return "anthropic";
+  if (fallbackProvider === "ai_sdk_anthropic") return "ai_sdk_anthropic";
+  if (fallbackProvider === "litellm") return "litellm";
+  if (fallbackProvider === "claude_code_session") return "claude_code_session";
   if (fallbackProvider === "xai") return "xai";
   if (fallbackProvider === "claude-code") return "claude-code";
+  if (fallbackProvider === "codex") return "codex";
   return "openai";
 }
 
@@ -181,13 +189,23 @@ export function normalizeOpenAiReasoningEffort(value, fallback = "") {
 
 export function defaultModelForLlmProvider(provider) {
   if (provider === "anthropic") return "claude-haiku-4-5";
+  if (provider === "ai_sdk_anthropic") return "claude-haiku-4-5";
+  if (provider === "litellm") return "claude-haiku-4-5";
+  if (provider === "claude_code_session") return "max";
   if (provider === "xai") return "grok-3-mini-latest";
   if (provider === "claude-code") return "sonnet";
+  if (provider === "codex") return "gpt-5-codex";
   return "claude-haiku-4-5";
 }
 
 export function resolveProviderFallbackOrder(provider) {
+  if (provider === "claude_code_session") {
+    return ["claude_code_session", "claude-code", "anthropic", "openai", "xai", "codex"];
+  }
   if (provider === "claude-code") return ["claude-code", "anthropic", "openai", "xai"];
+  if (provider === "codex") return ["codex", "openai", "anthropic", "claude-code", "xai", "claude_code_session"];
+  if (provider === "ai_sdk_anthropic") return ["ai_sdk_anthropic", "anthropic", "openai", "xai", "claude-code"];
+  if (provider === "litellm") return ["litellm", "openai", "anthropic", "xai", "claude-code"];
   if (provider === "anthropic") return ["anthropic", "openai", "xai", "claude-code"];
   if (provider === "xai") return ["xai", "openai", "anthropic", "claude-code"];
   return ["openai", "anthropic", "xai", "claude-code"];

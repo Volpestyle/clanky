@@ -17,6 +17,12 @@ import {
 import { providerSupports } from "./voiceModes.ts";
 import type { VoiceSession } from "./voiceSessionTypes.ts";
 import { createAssistantOutputState } from "./assistantOutputState.ts";
+import {
+  getVoiceChannelPolicy,
+  getVoiceRuntimeConfig,
+  getVoiceSessionLimits,
+  getVoiceSettings
+} from "../settings/agentStack.ts";
 
 const MIN_MAX_SESSION_MINUTES = 1;
 const MAX_MAX_SESSION_MINUTES = 120;
@@ -75,9 +81,13 @@ export async function requestJoin(manager, { message, settings, intentConfidence
   const guildId = String(message.guild.id);
   const userId = String(message.author?.id || "");
   if (!userId) return false;
+  const voiceSettings = getVoiceSettings(settings);
+  const voiceChannelPolicy = getVoiceChannelPolicy(settings);
+  const voiceSessionLimits = getVoiceSessionLimits(settings);
+  const voiceRuntime = getVoiceRuntimeConfig(settings);
 
   return await manager.withJoinLock(guildId, async () => {
-    if (!settings?.voice?.enabled) {
+    if (!voiceSettings.enabled) {
       await manager.sendOperationalMessage({
         channel: message.channel,
         settings,
@@ -88,14 +98,14 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         event: "voice_join_request",
         reason: "voice_disabled",
         details: {
-          voiceEnabled: Boolean(settings?.voice?.enabled)
+          voiceEnabled: Boolean(voiceSettings.enabled)
         },
         mustNotify: true
       });
       return true;
     }
 
-    const blockedUsers = settings.voice?.blockedVoiceUserIds || [];
+    const blockedUsers = [...(voiceChannelPolicy.blockedUserIds || [])].map((value) => String(value));
     if (blockedUsers.includes(userId)) {
       await manager.sendOperationalMessage({
         channel: message.channel,
@@ -132,8 +142,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
     }
 
     const targetVoiceChannelId = String(memberVoiceChannel.id);
-    const blockedChannels = settings.voice?.blockedVoiceChannelIds || [];
-    const allowedChannels = settings.voice?.allowedVoiceChannelIds || [];
+    const blockedChannels = [...(voiceChannelPolicy.blockedChannelIds || [])].map((value) => String(value));
+    const allowedChannels = [...(voiceChannelPolicy.allowedChannelIds || [])].map((value) => String(value));
 
     if (blockedChannels.includes(targetVoiceChannelId)) {
       await manager.sendOperationalMessage({
@@ -172,7 +182,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       return true;
     }
 
-    const maxSessionsPerDay = clamp(Number(settings.voice?.maxSessionsPerDay) || 0, 0, 120);
+    const maxSessionsPerDay = clamp(Number(voiceSessionLimits.maxSessionsPerDay) || 0, 0, 120);
     if (maxSessionsPerDay > 0) {
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const startedLastDay = manager.store.countActionsSince("voice_session_start", since24h);
@@ -298,8 +308,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       return true;
     }
     if (runtimeMode === "elevenlabs_realtime") {
-      const elevenLabsSettings = settings.voice?.elevenLabsRealtime || {};
-      const elevenLabsAgentId = String(elevenLabsSettings.agentId || "").trim();
+      const elevenLabsSettings = voiceRuntime.legacyVoiceStack?.elevenLabsRealtime;
+      const elevenLabsAgentId = String(elevenLabsSettings?.agentId || "").trim();
       if (!elevenLabsAgentId) {
         await manager.sendOperationalMessage({
           channel: message.channel,
@@ -398,7 +408,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       ? OPENAI_REALTIME_MAX_SESSION_MINUTES
       : MAX_MAX_SESSION_MINUTES;
     const maxSessionMinutes = clamp(
-      Number(settings.voice?.maxSessionMinutes) || 30,
+      Number(voiceSessionLimits.maxSessionMinutes) || 30,
       MIN_MAX_SESSION_MINUTES,
       maxSessionMinutesCap
     );
@@ -416,7 +426,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
     let openAiPerUserAsrPrompt = "";
 
     try {
-      const maxConcurrentSessions = clamp(Number(settings.voice?.maxConcurrentSessions) || 1, 1, 3);
+      const maxConcurrentSessions = clamp(Number(voiceSessionLimits.maxConcurrentSessions) || 1, 1, 3);
       if (!existing) {
         const activeOrPendingSessions = manager.sessions.size + manager.pendingSessionGuildIds.size;
         if (activeOrPendingSessions >= maxConcurrentSessions) {
@@ -466,7 +476,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         channelId: message.channelId,
         botUserId: manager.client.user?.id || null
       });
-      const openAiRealtimeSettings = settings.voice?.openaiRealtime || {};
+      const openAiRealtimeSettings = voiceRuntime.openaiRealtime;
       const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(settings);
       if (runtimeMode === "voice_agent") {
         realtimeClient = new XaiRealtimeClient({
@@ -474,15 +484,15 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           logger: realtimeRuntimeLogger
         });
 
-        const xaiSettings = settings.voice?.xai || {};
-        realtimeInputSampleRateHz = Number(xaiSettings.sampleRateHz) || 24000;
-        realtimeOutputSampleRateHz = Number(xaiSettings.sampleRateHz) || 24000;
+        const xaiSettings = voiceRuntime.legacyVoiceStack?.xai;
+        realtimeInputSampleRateHz = Number(xaiSettings?.sampleRateHz) || 24000;
+        realtimeOutputSampleRateHz = Number(xaiSettings?.sampleRateHz) || 24000;
         await realtimeClient.connect({
-          voice: xaiSettings.voice || "Rex",
+          voice: xaiSettings?.voice || "Rex",
           instructions: baseVoiceInstructions,
-          region: xaiSettings.region || "us-east-1",
-          inputAudioFormat: xaiSettings.audioFormat || "audio/pcm",
-          outputAudioFormat: xaiSettings.audioFormat || "audio/pcm",
+          region: xaiSettings?.region || "us-east-1",
+          inputAudioFormat: xaiSettings?.audioFormat || "audio/pcm",
+          outputAudioFormat: xaiSettings?.audioFormat || "audio/pcm",
           inputSampleRateHz: realtimeInputSampleRateHz,
           outputSampleRateHz: realtimeOutputSampleRateHz
         });
@@ -496,16 +506,16 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         realtimeOutputSampleRateHz = 24000;
         await realtimeClient.connect({
           model: normalizeOpenAiRealtimeSessionModel(
-            openAiRealtimeSettings.model,
+            openAiRealtimeSettings?.model,
             OPENAI_REALTIME_DEFAULT_SESSION_MODEL
           ),
-          voice: String(openAiRealtimeSettings.voice || "alloy").trim() || "alloy",
+          voice: String(openAiRealtimeSettings?.voice || "alloy").trim() || "alloy",
           instructions: baseVoiceInstructions,
-          inputAudioFormat: String(openAiRealtimeSettings.inputAudioFormat || "pcm16").trim() || "pcm16",
-          outputAudioFormat: String(openAiRealtimeSettings.outputAudioFormat || "pcm16").trim() || "pcm16",
+          inputAudioFormat: String(openAiRealtimeSettings?.inputAudioFormat || "pcm16").trim() || "pcm16",
+          outputAudioFormat: String(openAiRealtimeSettings?.outputAudioFormat || "pcm16").trim() || "pcm16",
           inputTranscriptionModel:
             normalizeOpenAiRealtimeTranscriptionModel(
-              openAiRealtimeSettings.inputTranscriptionModel,
+              openAiRealtimeSettings?.inputTranscriptionModel,
               OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
             ),
           inputTranscriptionLanguage: voiceAsrGuidance.language,
@@ -517,39 +527,39 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           toolChoice: "auto"
         });
       } else if (runtimeMode === "gemini_realtime") {
-        const geminiRealtimeSettings = settings.voice?.geminiRealtime || {};
+        const geminiRealtimeSettings = voiceRuntime.legacyVoiceStack?.geminiRealtime;
         realtimeClient = new GeminiRealtimeClient({
           apiKey: manager.appConfig.geminiApiKey,
           baseUrl:
-            String(geminiRealtimeSettings.apiBaseUrl || "https://generativelanguage.googleapis.com").trim() ||
+            String(geminiRealtimeSettings?.apiBaseUrl || "https://generativelanguage.googleapis.com").trim() ||
             "https://generativelanguage.googleapis.com",
           logger: realtimeRuntimeLogger
         });
 
-        realtimeInputSampleRateHz = Number(geminiRealtimeSettings.inputSampleRateHz) || 16000;
-        realtimeOutputSampleRateHz = Number(geminiRealtimeSettings.outputSampleRateHz) || 24000;
+        realtimeInputSampleRateHz = Number(geminiRealtimeSettings?.inputSampleRateHz) || 16000;
+        realtimeOutputSampleRateHz = Number(geminiRealtimeSettings?.outputSampleRateHz) || 24000;
         await realtimeClient.connect({
           model:
-            String(geminiRealtimeSettings.model || "gemini-2.5-flash-native-audio-preview-12-2025").trim() ||
+            String(geminiRealtimeSettings?.model || "gemini-2.5-flash-native-audio-preview-12-2025").trim() ||
             "gemini-2.5-flash-native-audio-preview-12-2025",
-          voice: String(geminiRealtimeSettings.voice || "Aoede").trim() || "Aoede",
+          voice: String(geminiRealtimeSettings?.voice || "Aoede").trim() || "Aoede",
           instructions: baseVoiceInstructions,
           inputSampleRateHz: realtimeInputSampleRateHz,
           outputSampleRateHz: realtimeOutputSampleRateHz
         });
       } else if (runtimeMode === "elevenlabs_realtime") {
-        const elevenLabsRealtimeSettings = settings.voice?.elevenLabsRealtime || {};
+        const elevenLabsRealtimeSettings = voiceRuntime.legacyVoiceStack?.elevenLabsRealtime;
         realtimeClient = new ElevenLabsRealtimeClient({
           apiKey: manager.appConfig.elevenLabsApiKey,
           baseUrl:
-            String(elevenLabsRealtimeSettings.apiBaseUrl || "https://api.elevenlabs.io").trim() ||
+            String(elevenLabsRealtimeSettings?.apiBaseUrl || "https://api.elevenlabs.io").trim() ||
             "https://api.elevenlabs.io",
           logger: realtimeRuntimeLogger
         });
-        realtimeInputSampleRateHz = Number(elevenLabsRealtimeSettings.inputSampleRateHz) || 16000;
-        realtimeOutputSampleRateHz = Number(elevenLabsRealtimeSettings.outputSampleRateHz) || 16000;
+        realtimeInputSampleRateHz = Number(elevenLabsRealtimeSettings?.inputSampleRateHz) || 16000;
+        realtimeOutputSampleRateHz = Number(elevenLabsRealtimeSettings?.outputSampleRateHz) || 16000;
         await realtimeClient.connect({
-          agentId: String(elevenLabsRealtimeSettings.agentId || "").trim(),
+          agentId: String(elevenLabsRealtimeSettings?.agentId || "").trim(),
           instructions: baseVoiceInstructions,
           inputSampleRateHz: realtimeInputSampleRateHz,
           outputSampleRateHz: realtimeOutputSampleRateHz
@@ -562,19 +572,20 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       // the OpenAI API key is available.
       if (manager.appConfig?.openaiApiKey && isRealtimeMode(runtimeMode)) {
         const transcriptionMethod = String(
-          openAiRealtimeSettings.transcriptionMethod || "realtime_bridge"
+          openAiRealtimeSettings?.transcriptionMethod || "realtime_bridge"
         )
           .trim()
           .toLowerCase();
         const usesRealtimeTranscriptionBridge = transcriptionMethod !== "file_wav";
+        const perUserAsrBridgeEnabled = Boolean(openAiRealtimeSettings?.usePerUserAsrBridge);
         const usePerUser = usesRealtimeTranscriptionBridge &&
           providerSupports(runtimeMode, "perUserAsr") &&
-          openAiRealtimeSettings.usePerUserAsrBridge !== false;
+          perUserAsrBridgeEnabled;
         const useShared = providerSupports(runtimeMode, "sharedAsr") && !usePerUser;
         perUserAsrEnabled = usePerUser;
         sharedAsrEnabled = usesRealtimeTranscriptionBridge && useShared;
         openAiPerUserAsrModel = normalizeOpenAiRealtimeTranscriptionModel(
-          openAiRealtimeSettings.inputTranscriptionModel,
+          openAiRealtimeSettings?.inputTranscriptionModel,
           OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
         );
         openAiPerUserAsrLanguage = voiceAsrGuidance.language;
@@ -805,7 +816,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           voiceChannelId: targetVoiceChannelId,
           maxSessionMinutes,
           inactivityLeaveSeconds: clamp(
-            Number(settings.voice?.inactivityLeaveSeconds) || 300,
+            Number(voiceSessionLimits.inactivityLeaveSeconds) || 300,
             MIN_INACTIVITY_SECONDS,
             MAX_INACTIVITY_SECONDS
           ),

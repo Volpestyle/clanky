@@ -1,5 +1,10 @@
 import { clamp, sleep } from "../utils.ts";
 import { shouldForceRespondForAddressSignal } from "./replyAdmission.ts";
+import {
+  getActivitySettings,
+  getMemorySettings,
+  getReplyPermissions
+} from "../settings/agentStack.ts";
 
 const REPLY_QUEUE_RATE_LIMIT_WAIT_MS = 15_000;
 const REPLY_QUEUE_SEND_RETRY_BASE_MS = 2_500;
@@ -16,23 +21,27 @@ type ReplyCoalesceWaitOptions = {
 };
 
 export function getReplyQueueWaitMs(bot, settings) {
-  const cooldownMs = settings.activity.minSecondsBetweenMessages * 1000;
+  const activity = getActivitySettings(settings);
+  const permissions = getReplyPermissions(settings);
+  const cooldownMs = activity.minSecondsBetweenMessages * 1000;
   const elapsed = Date.now() - bot.lastBotMessageAt;
   const cooldownWaitMs = Math.max(0, cooldownMs - elapsed);
   if (cooldownWaitMs > 0) return cooldownWaitMs;
-  if (!bot.canSendMessage(settings.permissions.maxMessagesPerHour)) {
+  if (!bot.canSendMessage(permissions.maxMessagesPerHour)) {
     return REPLY_QUEUE_RATE_LIMIT_WAIT_MS;
   }
   return 0;
 }
 
 export function getReplyCoalesceWindowMs(settings) {
-  const seconds = clamp(Number(settings.activity?.replyCoalesceWindowSeconds) || 0, 0, 20);
+  const activity = getActivitySettings(settings);
+  const seconds = clamp(Number(activity.replyCoalesceWindowSeconds) || 0, 0, 20);
   return Math.floor(seconds * 1000);
 }
 
 export function getReplyCoalesceMaxMessages(settings) {
-  return clamp(Number(settings.activity?.replyCoalesceMaxMessages) || 1, 1, 20);
+  const activity = getActivitySettings(settings);
+  return clamp(Number(activity.replyCoalesceMaxMessages) || 1, 1, 20);
 }
 
 export function getReplyCoalesceWaitMs(settings, message, options: ReplyCoalesceWaitOptions = {}) {
@@ -146,8 +155,10 @@ export async function processReplyQueue(bot, channelId) {
       }
 
       const settings = bot.store.getSettings();
+      const permissions = getReplyPermissions(settings);
+      const memory = getMemorySettings(settings);
 
-      if (!settings.permissions.allowReplies) {
+      if (!permissions.allowReplies) {
         dequeueReplyJob(bot, channelId);
         continue;
       }
@@ -207,7 +218,7 @@ export async function processReplyQueue(bot, channelId) {
 
       const recentMessages = bot.store.getRecentMessages(
         message.channelId,
-        settings.memory.maxRecentMessages
+        memory.promptSlice.maxRecentMessages
       );
       const addressSignal = {
         ...(latestJob.addressSignal || await bot.getReplyAddressSignal(settings, message, recentMessages))

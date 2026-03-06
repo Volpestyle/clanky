@@ -6,6 +6,8 @@ import {
   normalizeDirectiveText,
   parseStructuredReplyOutput
 } from "../botHelpers.ts";
+import { getFollowupSettings, getResolvedFollowupBinding } from "../settings/agentStack.ts";
+import { deepMerge } from "../utils.ts";
 
 type ReplyFollowupTrace = Record<string, unknown> & {
   event?: string;
@@ -25,6 +27,7 @@ type WebSearchState = {
   fetchedPages?: number;
   providerUsed?: string | null;
   providerFallbackUsed?: boolean;
+  summaryText?: string;
   budget?: {
     canSearch?: boolean;
   };
@@ -112,41 +115,41 @@ function clampFollowupInt(value: unknown, fallback: number, min: number, max: nu
 }
 
 function resolveReplyFollowupLoopLimits(settings, loopConfig = null): ReplyFollowupLoopLimits {
-  const followupConfig = settings?.replyFollowupLlm || {};
+  const followupConfig = getFollowupSettings(settings);
   const overrides = loopConfig && typeof loopConfig === "object" ? loopConfig : {};
   return {
     maxSteps: clampFollowupInt(
-      overrides.maxSteps ?? followupConfig.maxToolSteps,
+      overrides.maxSteps ?? followupConfig.toolBudget?.maxToolSteps,
       DEFAULT_FOLLOWUP_MAX_STEPS,
       0,
       6
     ),
     maxTotalToolCalls: clampFollowupInt(
-      overrides.maxTotalToolCalls ?? followupConfig.maxTotalToolCalls,
+      overrides.maxTotalToolCalls ?? followupConfig.toolBudget?.maxTotalToolCalls,
       DEFAULT_FOLLOWUP_MAX_TOTAL_TOOL_CALLS,
       0,
       12
     ),
     maxWebSearchCalls: clampFollowupInt(
-      overrides.maxWebSearchCalls ?? followupConfig.maxWebSearchCalls,
+      overrides.maxWebSearchCalls ?? followupConfig.toolBudget?.maxWebSearchCalls,
       DEFAULT_FOLLOWUP_MAX_WEB_SEARCH_CALLS,
       0,
       6
     ),
     maxMemoryLookupCalls: clampFollowupInt(
-      overrides.maxMemoryLookupCalls ?? followupConfig.maxMemoryLookupCalls,
+      overrides.maxMemoryLookupCalls ?? followupConfig.toolBudget?.maxMemoryLookupCalls,
       DEFAULT_FOLLOWUP_MAX_MEMORY_LOOKUP_CALLS,
       0,
       6
     ),
     maxImageLookupCalls: clampFollowupInt(
-      overrides.maxImageLookupCalls ?? followupConfig.maxImageLookupCalls,
+      overrides.maxImageLookupCalls ?? followupConfig.toolBudget?.maxImageLookupCalls,
       DEFAULT_FOLLOWUP_MAX_IMAGE_LOOKUP_CALLS,
       0,
       6
     ),
     toolTimeoutMs: clampFollowupInt(
-      overrides.toolTimeoutMs ?? followupConfig.toolTimeoutMs,
+      overrides.toolTimeoutMs ?? followupConfig.toolBudget?.toolTimeoutMs,
       DEFAULT_FOLLOWUP_TOOL_TIMEOUT_MS,
       0,
       60_000
@@ -185,21 +188,24 @@ async function runWithOptionalTimeout<T>(task: () => Promise<T>, timeoutMs = 0, 
 }
 
 export function resolveReplyFollowupGenerationSettings(settings) {
-  const followupConfig = settings?.replyFollowupLlm || {};
+  const followupConfig = getFollowupSettings(settings);
   if (!followupConfig.enabled) return settings;
 
-  const provider = String(followupConfig.provider || settings?.llm?.provider || "").trim();
-  const model = String(followupConfig.model || settings?.llm?.model || "").trim();
+  const binding = getResolvedFollowupBinding(settings);
+  const provider = String(binding.provider || "").trim();
+  const model = String(binding.model || "").trim();
   if (!provider || !model) return settings;
 
-  return {
-    ...settings,
-    llm: {
-      ...(settings?.llm || {}),
-      provider,
-      model
+  return deepMerge(deepMerge({}, settings), {
+    agentStack: {
+      overrides: {
+        orchestrator: {
+          provider,
+          model
+        }
+      }
     }
-  };
+  });
 }
 
 export async function runModelRequestedWebSearch<T extends WebSearchState>(runtime, {
@@ -252,7 +258,8 @@ export async function runModelRequestedWebSearch<T extends WebSearchState>(runti
       results: result.results,
       fetchedPages: result.fetchedPages || 0,
       providerUsed: result.providerUsed || null,
-      providerFallbackUsed: Boolean(result.providerFallbackUsed)
+      providerFallbackUsed: Boolean(result.providerFallbackUsed),
+      summaryText: String(result.summaryText || "").trim()
     } as T;
   } catch (error) {
     return {

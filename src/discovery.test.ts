@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { DiscoveryService, normalizeDiscoveryUrl } from "./discovery.ts";
+import { normalizeSettings } from "./store/settingsNormalization.ts";
 
 function withFrozenTimeAndRandom({ nowMs, randomValue }, run) {
   const originalNow = Date.now;
@@ -34,7 +35,7 @@ test("DiscoveryService.collect returns disabled payload when discovery is off", 
   });
 
   const result = await service.collect({
-    settings: {
+    settings: normalizeSettings({
       discovery: {
         enabled: false,
         sources: {
@@ -45,7 +46,7 @@ test("DiscoveryService.collect returns disabled payload when discovery is off", 
           x: false
         }
       }
-    },
+    }),
     guildId: "guild-1",
     channelId: "chan-1",
     channelName: "general",
@@ -155,7 +156,7 @@ test("DiscoveryService.collect dedupes, filters, and aggregates source errors", 
 
   await withFrozenTimeAndRandom({ nowMs, randomValue: 0.5 }, async () => {
     const result = await service.collect({
-      settings: {
+      settings: normalizeSettings({
         discovery: {
           maxLinksPerPost: 2,
           maxCandidatesForPrompt: 6,
@@ -174,7 +175,7 @@ test("DiscoveryService.collect dedupes, filters, and aggregates source errors", 
             x: false
           }
         }
-      },
+      }),
       guildId: "guild-1",
       channelId: "chan-1",
       channelName: "space-lounge",

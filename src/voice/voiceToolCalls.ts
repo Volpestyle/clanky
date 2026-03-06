@@ -7,7 +7,7 @@ import {
   executeSharedMemoryToolSearch,
   executeSharedMemoryToolWrite
 } from "../memory/memoryToolRuntime.ts";
-import { clamp } from "../utils.ts";
+import { clamp, deepMerge } from "../utils.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
 import type {
   VoiceMcpServerStatus,
@@ -24,6 +24,7 @@ import {
 } from "./voiceSessionManager.constants.ts";
 import { providerSupports } from "./voiceModes.ts";
 import { isAbortError, runBrowserBrowseTask } from "../tools/browserTaskRuntime.ts";
+import { runOpenAiComputerUseTask } from "../tools/openAiComputerUseRuntime.ts";
 import {
   WEB_SEARCH_SCHEMA,
   WEB_SCRAPE_SCHEMA,
@@ -46,6 +47,15 @@ import {
   LEAVE_VOICE_CHANNEL_SCHEMA,
   toRealtimeTool
 } from "../tools/sharedToolSchemas.ts";
+import {
+  getDirectiveSettings,
+  getMemorySettings,
+  getResearchRuntimeConfig,
+  getResolvedBrowserTaskConfig,
+  isBrowserEnabled,
+  isDevTaskEnabled,
+  isResearchEnabled
+} from "../settings/agentStack.ts";
 
 export function ensureSessionToolRuntimeState(manager: any, session) {
   if (!session || typeof session !== "object") return null;
@@ -211,20 +221,21 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
         .filter((entry): entry is VoiceRealtimeToolDescriptor => Boolean(entry));
     });
 
-  const includeWebSearch = Boolean(settings?.webSearch?.enabled);
-  const includeMemory = Boolean(settings?.memory?.enabled);
-  const adaptiveDirectivesSettings =
-    settings?.adaptiveDirectives && typeof settings.adaptiveDirectives === "object"
-      ? settings.adaptiveDirectives as { enabled?: boolean }
-      : null;
-  const includeAdaptiveDirectives = Boolean(adaptiveDirectivesSettings?.enabled);
-  const includeBrowser = Boolean(settings?.browser?.enabled);
+  const includeWebSearch = isResearchEnabled(settings);
+  const includeMemory = Boolean(getMemorySettings(settings).enabled);
+  const includeAdaptiveDirectives = Boolean(getDirectiveSettings(settings).enabled);
+  const browserTaskConfig = getResolvedBrowserTaskConfig(settings);
+  const includeBrowser = Boolean(
+    isBrowserEnabled(settings) &&
+    manager.browserManager &&
+    (browserTaskConfig.runtime !== "openai_computer_use" || manager.llm?.openai)
+  );
   const codeAgentRuntimeAvailable = Boolean(
     (manager.createCodeAgentSession && manager.subAgentSessions) ||
     manager.runModelRequestedCodeTask
   );
   const includeCodeAgent = Boolean(
-    (settings?.codeAgent as Record<string, unknown> | undefined)?.enabled &&
+    isDevTaskEnabled(settings) &&
     codeAgentRuntimeAvailable
   );
   const filteredLocalTools = localTools.filter((entry) => {
@@ -1103,17 +1114,28 @@ export async function executeVoiceWebSearchTool(manager: any, { session, setting
     };
   }
 
+  const researchConfig = getResearchRuntimeConfig(settings);
   const maxResults = clamp(Math.floor(Number(args?.max_results || 5)), 1, 8);
-  const recencyDays = clamp(Math.floor(Number(args?.recency_days || settings?.webSearch?.recencyDaysDefault || 30)), 1, 3650);
-  const toolSettings = {
-    ...(settings || {}),
-    webSearch: {
-      ...((settings && typeof settings === "object" ? settings.webSearch : {}) || {}),
-      enabled: true,
-      maxResults,
-      recencyDaysDefault: recencyDays
+  const recencyDays = clamp(
+    Math.floor(Number(args?.recency_days || researchConfig.localExternalSearch.recencyDaysDefault || 30)),
+    1,
+    3650
+  );
+  const toolSettings = deepMerge(deepMerge({}, settings || {}), {
+    agentStack: {
+      runtimeConfig: {
+        research: {
+          ...researchConfig,
+          enabled: true,
+          localExternalSearch: {
+            ...researchConfig.localExternalSearch,
+            maxResults,
+            recencyDaysDefault: recencyDays
+          }
+        }
+      }
     }
-  };
+  });
 
   const searchResult = await manager.search.searchAndRead({
     settings: toolSettings,
@@ -1133,9 +1155,14 @@ export async function executeVoiceWebSearchTool(manager: any, { session, setting
       url: normalizeInlineText(row?.url, 300) || "",
       source: normalizeInlineText(row?.provider, 60) || searchResult?.providerUsed || "web"
     }));
-  const answer = rows
-    .slice(0, 3)
-    .map((row) => row.snippet)
+  const answer = [
+    normalizeInlineText(searchResult?.summaryText, 1200),
+    rows
+      .slice(0, 3)
+      .map((row) => row.snippet)
+      .filter(Boolean)
+      .join(" ")
+  ]
     .filter(Boolean)
     .join(" ")
     .slice(0, 1200);
@@ -1258,31 +1285,50 @@ export async function executeVoiceBrowserBrowseTool(manager: any, { session, set
     return { ok: false, text: "", error: "llm_unavailable" };
   }
 
-  const maxSteps = clamp(Number(settings?.browser?.maxStepsPerTask) || 15, 1, 30);
-  const stepTimeoutMs = clamp(Number(settings?.browser?.stepTimeoutMs) || 30_000, 5_000, 120_000);
-  const browserLlmProvider = String(settings?.browser?.llm?.provider || "anthropic").trim();
-  const browserLlmModel = String(settings?.browser?.llm?.model || "claude-sonnet-4-5-20250929").trim();
+  const browserTaskConfig = getResolvedBrowserTaskConfig(settings);
+  const maxSteps = clamp(Number(browserTaskConfig.maxStepsPerTask) || 15, 1, 30);
+  const stepTimeoutMs = clamp(Number(browserTaskConfig.stepTimeoutMs) || 30_000, 5_000, 120_000);
+  if (browserTaskConfig.runtime === "openai_computer_use" && !manager.llm?.openai) {
+    return { ok: false, text: "", error: "openai_computer_use_unavailable" };
+  }
 
   try {
-    const result = await runBrowserBrowseTask({
-      llm: manager.llm,
-      browserManager: manager.browserManager,
-      store: manager.store,
-      sessionKey: `voice:${String(session.id || session.guildId || "unknown")}:${Date.now()}`,
-      instruction,
-      provider: browserLlmProvider,
-      model: browserLlmModel,
-      maxSteps,
-      stepTimeoutMs,
-      trace: {
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: session.lastOpenAiToolCallerUserId || null,
-        source: "voice_realtime_tool_browser_browse"
-      },
-      logSource: "voice_realtime_tool_browser_browse",
-      signal
-    });
+    const sessionKey = `voice:${String(session.id || session.guildId || "unknown")}:${Date.now()}`;
+    const trace = {
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: session.lastOpenAiToolCallerUserId || null,
+      source: "voice_realtime_tool_browser_browse"
+    };
+    const result =
+      browserTaskConfig.runtime === "openai_computer_use"
+        ? await runOpenAiComputerUseTask({
+            openai: manager.llm?.openai,
+            browserManager: manager.browserManager,
+            store: manager.store,
+            sessionKey,
+            instruction,
+            model: browserTaskConfig.openaiComputerUse.model,
+            maxSteps,
+            stepTimeoutMs,
+            trace,
+            logSource: "voice_realtime_tool_browser_browse",
+            signal
+          })
+        : await runBrowserBrowseTask({
+            llm: manager.llm,
+            browserManager: manager.browserManager,
+            store: manager.store,
+            sessionKey,
+            instruction,
+            provider: browserTaskConfig.localAgent.provider,
+            model: browserTaskConfig.localAgent.model,
+            maxSteps,
+            stepTimeoutMs,
+            trace,
+            logSource: "voice_realtime_tool_browser_browse",
+            signal
+          });
 
     return {
       ok: true,

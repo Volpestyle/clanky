@@ -1,5 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { createTestSettings } from "../testSettings.ts";
 import {
   VoiceSessionManager,
   resolveRealtimeTurnTranscriptionPlan,
@@ -23,17 +24,28 @@ function createManager({
   const fakeStore = {
     logAction() {},
     getSettings() {
-      return {
-        botName: "clanker conk"
-      };
+      return createTestSettings({
+        botName: "clanker conk",
+        voice: {
+          replyPath: "brain"
+        }
+      });
     }
   };
   const manager = new VoiceSessionManager({
     client: fakeClient,
     store: fakeStore,
-    appConfig: {},
+    appConfig: {
+      openaiApiKey: "test-openai-key"
+    },
     llm: {
-      generate
+      generate,
+      isAsrReady() {
+        return true;
+      },
+      isSpeechSynthesisReady() {
+        return true;
+      }
     },
     memory
   });
@@ -47,7 +59,7 @@ function createManager({
 }
 
 function baseSettings(overrides = {}) {
-  return {
+  const base = {
     botName: "clanker conk",
     memory: {
       enabled: false
@@ -58,13 +70,33 @@ function baseSettings(overrides = {}) {
     },
     voice: {
       replyEagerness: 60,
+      replyPath: "brain",
       replyDecisionLlm: {
         provider: "anthropic",
         model: "claude-haiku-4-5"
       }
-    },
-    ...overrides
+    }
   };
+  return createTestSettings({
+    ...base,
+    ...overrides,
+    memory: {
+      ...base.memory,
+      ...(overrides.memory || {})
+    },
+    llm: {
+      ...base.llm,
+      ...(overrides.llm || {})
+    },
+    voice: {
+      ...base.voice,
+      ...(overrides.voice || {}),
+      replyDecisionLlm: {
+        ...base.voice.replyDecisionLlm,
+        ...(overrides.voice?.replyDecisionLlm || {})
+      }
+    }
+  });
 }
 
 test("reply decider blocks turns when transcript is missing", async () => {
@@ -1045,7 +1077,7 @@ test("reply decider runs classifier for non-direct multi-user realtime turns", a
   assert.equal(callCount, 1);
 });
 
-test("reply decider treats name-variant hints as classifier candidates", async () => {
+test("reply decider fast-paths merged bot-name tokens as direct address", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -1076,9 +1108,9 @@ test("reply decider treats name-variant hints as classifier candidates", async (
   });
 
   assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "classifier_allow");
-  assert.equal(decision.directAddressed, false);
-  assert.equal(callCount, 1);
+  assert.equal(decision.reason, "direct_address_fast_path");
+  assert.equal(decision.directAddressed, true);
+  assert.equal(callCount, 0);
 });
 
 test("reply decider keeps bot awake across speakers after a recent direct address", async () => {
@@ -1545,7 +1577,7 @@ test("reply decider keeps direct-address fast-path in native realtime mode", asy
   assert.equal(callCount, 0);
 });
 
-test("reply decider lets generation decide merged bot-name token turns", async () => {
+test("reply decider keeps merged bot-name token turns on the direct-address fast path", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -1576,8 +1608,8 @@ test("reply decider lets generation decide merged bot-name token turns", async (
   });
 
   assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "generation_decides");
-  assert.equal(decision.directAddressed, false);
+  assert.equal(decision.reason, "direct_address_fast_path");
+  assert.equal(decision.directAddressed, true);
   assert.equal(callCount, 0);
 });
 

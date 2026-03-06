@@ -48,6 +48,13 @@ import {
   prioritizePreferredModel,
   resolveProviderFallbackOrder
 } from "./llm/llmHelpers.ts";
+import {
+  getBotName,
+  getDiscoverySettings,
+  getReplyGenerationSettings,
+  getResolvedMemoryBinding,
+  getResolvedOrchestratorBinding
+} from "./settings/agentStack.ts";
 
 const CLAUDE_CODE_TIMEOUT_MS = 30_000;
 const CLAUDE_CODE_MAX_BUFFER_BYTES = 1024 * 1024;
@@ -443,9 +450,11 @@ export class LLMService {
     jsonSchema = "",
     tools = []
   }) {
-    const { provider, model } = this.resolveProviderAndModel(settings?.llm ?? {});
-    const temperature = Number(settings?.llm?.temperature) || 0.9;
-    const maxOutputTokens = Number(settings?.llm?.maxOutputTokens) || 800;
+    const orchestrator = getResolvedOrchestratorBinding(settings);
+    const replyGeneration = getReplyGenerationSettings(settings);
+    const { provider, model } = this.resolveProviderAndModel(orchestrator);
+    const temperature = Number(orchestrator.temperature) || 0.9;
+    const maxOutputTokens = Number(orchestrator.maxOutputTokens) || 800;
     const normalizedJsonSchema = String(jsonSchema || "").trim();
     const normalizedTools = Array.isArray(tools) ? tools : [];
     const effectiveSystemPrompt =
@@ -462,7 +471,7 @@ export class LLMService {
         contextMessages,
         temperature,
         maxOutputTokens,
-        reasoningEffort: settings?.llm?.reasoningEffort,
+        reasoningEffort: orchestrator.reasoningEffort,
         jsonSchema: normalizedJsonSchema,
         trace,
         tools: normalizedTools
@@ -475,7 +484,7 @@ export class LLMService {
         outputTokens: response.usage.outputTokens,
         cacheWriteTokens: Number(response.usage.cacheWriteTokens || 0),
         cacheReadTokens: Number(response.usage.cacheReadTokens || 0),
-        customPricing: settings?.llm?.pricing
+        customPricing: replyGeneration.pricing
       });
 
       this.store.logAction({
@@ -569,10 +578,10 @@ export class LLMService {
     const inputText = normalizeInlineText(messageContent, 900);
     if (!inputText || inputText.length < 4) return [];
 
-    const llmOverride = settings?.memoryLlm ?? settings?.llm ?? {};
-    const { provider, model } = this.resolveProviderAndModel(llmOverride);
+    const memoryBinding = getResolvedMemoryBinding(settings);
+    const { provider, model } = this.resolveProviderAndModel(memoryBinding);
     const boundedMaxFacts = clampInt(maxFacts, 1, 6);
-    const normalizedBotName = normalizeInlineText(settings?.botName || "the bot", 80) || "the bot";
+    const normalizedBotName = normalizeInlineText(getBotName(settings) || "the bot", 80) || "the bot";
     const systemPrompt = [
       "You extract durable memory facts from one Discord user message.",
       "Only keep long-lived facts worth remembering later (preferences, identity, recurring relationships, ongoing projects).",
@@ -608,7 +617,7 @@ export class LLMService {
         outputTokens: response.usage.outputTokens,
         cacheWriteTokens: response.usage.cacheWriteTokens,
         cacheReadTokens: response.usage.cacheReadTokens,
-        customPricing: settings?.llm?.pricing
+        customPricing: getReplyGenerationSettings(settings).pricing
       });
       const parsed = parseMemoryExtractionJson(response.text);
       const facts = normalizeExtractedFacts(parsed, boundedMaxFacts);
@@ -1035,7 +1044,7 @@ export class LLMService {
         outputTokens: 0,
         cacheWriteTokens: 0,
         cacheReadTokens: 0,
-        customPricing: settings?.llm?.pricing
+        customPricing: getReplyGenerationSettings(settings).pricing
       });
 
       this.store.logAction({
@@ -1159,7 +1168,7 @@ export class LLMService {
         model,
         size,
         imageCount: 1,
-        customPricing: settings?.llm?.pricing
+        customPricing: getReplyGenerationSettings(settings).pricing
       });
 
       this.store.logAction({
@@ -1400,11 +1409,12 @@ export class LLMService {
   }
 
   resolveImageGenerationTarget(settings, variant = "simple") {
-    const allowedModels = normalizeModelAllowlist(settings?.discovery?.allowedImageModels);
+    const discovery = getDiscoverySettings(settings);
+    const allowedModels = normalizeModelAllowlist(discovery.allowedImageModels);
     if (!allowedModels.length) return null;
 
     const preferredModel = String(
-      variant === "complex" ? settings?.discovery?.complexImageModel : settings?.discovery?.simpleImageModel
+      variant === "complex" ? discovery.complexImageModel : discovery.simpleImageModel
     ).trim();
     const candidates = prioritizePreferredModel(allowedModels, preferredModel);
 
@@ -1420,10 +1430,11 @@ export class LLMService {
   resolveVideoGenerationTarget(settings) {
     if (!this.xai) return null;
 
-    const allowedModels = normalizeModelAllowlist(settings?.discovery?.allowedVideoModels);
+    const discovery = getDiscoverySettings(settings);
+    const allowedModels = normalizeModelAllowlist(discovery.allowedVideoModels);
     if (!allowedModels.length) return null;
 
-    const preferredModel = String(settings?.discovery?.videoModel || "").trim();
+    const preferredModel = String(discovery.videoModel || "").trim();
     const candidates = prioritizePreferredModel(allowedModels, preferredModel);
     for (const model of candidates) {
       if (inferProviderFromModel(model) === "xai") {

@@ -5,11 +5,12 @@ import {
   shouldAttemptReplyDecision,
   shouldForceRespondForAddressSignal
 } from "./replyAdmission.ts";
+import { createTestSettings } from "../testSettings.ts";
 
-const BASE_SETTINGS = {
+const BASE_SETTINGS = createTestSettings({
   botName: "clanker conk",
   botNameAliases: ["clank"]
-};
+});
 
 const BASE_RUNTIME = {
   botUserId: "bot-1",

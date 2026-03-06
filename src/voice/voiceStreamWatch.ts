@@ -1,6 +1,11 @@
 import { clamp } from "../utils.ts";
 import { getPromptBotName } from "../promptCore.ts";
 import { safeJsonParseFromString } from "../normalization/valueParsers.ts";
+import {
+  getBotName,
+  getResolvedOrchestratorBinding,
+  getVoiceStreamWatchSettings
+} from "../settings/agentStack.ts";
 import { buildRealtimeTextUtterancePrompt, isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
 
 const STREAM_WATCH_AUDIO_QUIET_WINDOW_MS = 2200;
@@ -47,15 +52,12 @@ function normalizeStreamWatchCommentaryPath(value, fallback = STREAM_WATCH_COMME
 }
 
 function resolveStreamWatchCommentaryPath(settings = null) {
-  const configured = settings?.voice?.streamWatch?.commentaryPath;
+  const configured = getVoiceStreamWatchSettings(settings).commentaryPath;
   return normalizeStreamWatchCommentaryPath(configured, STREAM_WATCH_COMMENTARY_PATH_AUTO);
 }
 
 function resolveStreamWatchBrainContextSettings(settings = null) {
-  const streamWatchSettings =
-    settings?.voice?.streamWatch && typeof settings.voice.streamWatch === "object"
-      ? settings.voice.streamWatch
-      : {};
+  const streamWatchSettings = getVoiceStreamWatchSettings(settings);
   const prompt = normalizeVoiceText(
     String(streamWatchSettings.brainContextPrompt || ""),
     STREAM_WATCH_BRAIN_CONTEXT_PROMPT_MAX_CHARS
@@ -403,7 +405,7 @@ export function supportsStreamWatchBrainContext(manager, { session = null, setti
 
 export function resolveStreamWatchVisionProviderSettings(manager, settings = null) {
   const commentaryPath = resolveStreamWatchCommentaryPath(settings);
-  const llmSettings = settings?.llm && typeof settings.llm === "object" ? settings.llm : {};
+  const llmSettings = getResolvedOrchestratorBinding(settings);
   const fallbackCandidates = [
     {
       provider: "anthropic",
@@ -720,7 +722,7 @@ async function persistStreamWatchRecapToMemory(manager, {
 
   const messageId = `voice-screen-share-recap-${session.id}-${Date.now()}`;
   const authorId = String(manager.client.user?.id || "bot");
-  const authorName = String(settings?.botName || manager.client.user?.username || "bot");
+  const authorName = String(getBotName(settings) || manager.client.user?.username || "bot");
   const logContent = normalizeVoiceText(`Screen share recap: ${recap.recap}`, 320);
   if (logContent) {
     await manager.memory.ingestMessage({

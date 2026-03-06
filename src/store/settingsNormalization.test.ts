@@ -6,8 +6,12 @@ import {
   PERSONA_FLAVOR_MAX_CHARS
 } from "./settingsNormalization.ts";
 
-test("normalizeSettings clamps and normalizes complex nested settings", () => {
-  const normalized = normalizeSettings({
+function normalizeLegacyView(input: unknown): ReturnType<typeof normalizeSettings> {
+  return normalizeSettings(input);
+}
+
+test("normalizeSettings migrates and clamps complex legacy settings into the canonical schema", () => {
+  const normalized = normalizeLegacyView({
     botName: "x".repeat(120),
     botNameAliases: ["clank", "clank", "  ", "conk", "alias-".repeat(20)],
     llm: {
@@ -125,74 +129,113 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
     }
   });
 
-  assert.equal(normalized.botName.length, 50);
-  assert.deepEqual(normalized.botNameAliases, ["clank", "conk", "alias-alias-alias-alias-alias-alias-alias-alias-al"]);
-  assert.equal(normalized.llm.provider, "xai");
-  assert.equal(normalized.llm.model, "grok-3-mini-latest");
-  assert.equal(normalized.llm.temperature, 2);
-  assert.equal(normalized.llm.maxOutputTokens, 32);
-  assert.equal(normalized.replyFollowupLlm.provider, "xai");
-  assert.equal(normalized.replyFollowupLlm.model, "grok-3-mini-latest");
-  assert.equal(normalized.replyFollowupLlm.maxToolSteps, 6);
-  assert.equal(normalized.replyFollowupLlm.maxTotalToolCalls, 0);
-  assert.equal(normalized.replyFollowupLlm.maxWebSearchCalls, 6);
-  assert.equal(normalized.replyFollowupLlm.maxMemoryLookupCalls, 0);
-  assert.equal(normalized.replyFollowupLlm.maxImageLookupCalls, 6);
-  assert.equal(normalized.replyFollowupLlm.toolTimeoutMs, 60000);
+  const followupExecution = normalized.interaction.followup.execution as {
+    mode: string;
+    model?: { provider: string; model: string };
+  };
+  const browserExecution = normalized.agentStack.runtimeConfig.browser.localBrowserAgent.execution as {
+    mode: string;
+    model?: { provider: string; model: string };
+  };
+  const voiceGeneration = normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.generation as {
+    mode: string;
+    model?: { provider: string; model: string };
+  };
+  const voiceInitiativeExecution = normalized.initiative.voice.execution as {
+    mode: string;
+    model?: { provider: string; model: string };
+    temperature?: number;
+  };
 
-  assert.equal(normalized.webSearch.maxSearchesPerHour, 120);
-  assert.equal(normalized.webSearch.maxResults, 1);
-  assert.equal(normalized.webSearch.maxPagesToRead, 5);
-  assert.equal(normalized.webSearch.maxCharsPerPage, 350);
-  assert.equal(normalized.webSearch.safeSearch, false);
-  assert.equal(normalized.webSearch.recencyDaysDefault, 1);
-  assert.equal(normalized.webSearch.maxConcurrentFetches, 10);
-  assert.deepEqual(normalized.webSearch.providerOrder, ["serpapi", "brave"]);
+  assert.equal(normalized.identity.botName.length, 50);
+  assert.deepEqual(
+    normalized.identity.botNameAliases,
+    ["clank", "conk", "alias-alias-alias-alias-alias-alias-alias-alias-al"]
+  );
 
-  assert.equal(normalized.browser.enabled, true);
-  assert.equal(normalized.browser.llm.provider, "openai");
-  assert.equal(normalized.browser.llm.model, "gpt-5-mini");
-  assert.equal(normalized.browser.maxBrowseCallsPerHour, 60);
-  assert.equal(normalized.browser.maxStepsPerTask, 1);
-  assert.equal(normalized.browser.stepTimeoutMs, 5_000);
-  assert.equal(normalized.browser.sessionTimeoutMs, 600_000);
+  assert.deepEqual(normalized.agentStack.overrides.orchestrator, {
+    provider: "xai",
+    model: "grok-3-mini-latest"
+  });
+  assert.equal(normalized.interaction.replyGeneration.temperature, 2);
+  assert.equal(normalized.interaction.replyGeneration.maxOutputTokens, 32);
 
-  assert.equal(normalized.videoContext.maxLookupsPerHour, 0);
-  assert.equal(normalized.videoContext.maxVideosPerMessage, 6);
-  assert.equal(normalized.videoContext.maxTranscriptChars, 4000);
-  assert.equal(normalized.videoContext.keyframeIntervalSeconds, 0);
-  assert.equal(normalized.videoContext.maxKeyframesPerVideo, 8);
-  assert.equal(normalized.videoContext.maxAsrSeconds, 15);
+  assert.equal(normalized.interaction.followup.enabled, true);
+  assert.equal(followupExecution.mode, "dedicated_model");
+  assert.deepEqual(followupExecution.model, {
+    provider: "xai",
+    model: "grok-3-mini-latest"
+  });
+  assert.equal(normalized.interaction.followup.toolBudget.maxToolSteps, 6);
+  assert.equal(normalized.interaction.followup.toolBudget.maxTotalToolCalls, 0);
+  assert.equal(normalized.interaction.followup.toolBudget.maxWebSearchCalls, 7);
+  assert.equal(normalized.interaction.followup.toolBudget.maxMemoryLookupCalls, 0);
+  assert.equal(normalized.interaction.followup.toolBudget.maxImageLookupCalls, 8);
+  assert.equal(normalized.interaction.followup.toolBudget.toolTimeoutMs, 120_000);
 
-  assert.equal(normalized.voice.voiceProvider, "openai");
-  assert.equal(normalized.voice.brainProvider, "openai");
-  assert.equal(normalized.voice.asrLanguageMode, "fixed");
-  assert.equal(normalized.voice.asrLanguageHint, "en-us");
-  assert.equal(normalized.voice.generationLlm.useTextModel, true);
-  assert.equal(normalized.voice.generationLlm.provider, "xai");
-  assert.equal(normalized.voice.generationLlm.model, "grok-3-mini-latest");
-  assert.equal(normalized.voice.thoughtEngine.enabled, true);
-  assert.equal(normalized.voice.thoughtEngine.provider, "anthropic");
-  assert.equal(normalized.voice.thoughtEngine.model, "claude-sonnet-4-6");
-  assert.equal(normalized.voice.thoughtEngine.temperature, 2);
-  assert.equal(normalized.voice.thoughtEngine.eagerness, 100);
-  assert.equal(normalized.voice.thoughtEngine.minSilenceSeconds, 8);
-  assert.equal(normalized.voice.thoughtEngine.minSecondsBetweenThoughts, 600);
-  assert.equal(normalized.voice.replyDecisionLlm.provider, "claude-code");
-  assert.equal(normalized.voice.replyDecisionLlm.model, "sonnet");
-  assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, undefined);
-  assert.equal(normalized.voice.replyDecisionLlm.reasoningEffort, "high");
-  assert.equal(normalized.voice.replyDecisionLlm.realtimeAdmissionMode, "hard_classifier");
-  assert.equal(normalized.voice.replyDecisionLlm.musicWakeLatchSeconds, 15);
-  assert.equal(normalized.voice.replyDecisionLlm.prompts, undefined);
-  assert.equal(normalized.voice.commandOnlyMode, false);
-  assert.equal(normalized.voice.openaiRealtime.inputAudioFormat, "pcm16");
-  assert.equal(normalized.voice.openaiRealtime.outputAudioFormat, "pcm16");
-  assert.equal(normalized.voice.openaiRealtime.transcriptionMethod, "realtime_bridge");
-  assert.equal(normalized.voice.openaiRealtime.usePerUserAsrBridge, true);
-  assert.equal(normalized.voice.geminiRealtime.apiBaseUrl, "https://generativelanguage.googleapis.com");
-  assert.equal(normalized.voice.geminiRealtime.inputSampleRateHz, 8000);
-  assert.equal(normalized.voice.geminiRealtime.outputSampleRateHz, 48000);
+  assert.equal(normalized.agentStack.runtimeConfig.research.enabled, true);
+  assert.equal(normalized.agentStack.runtimeConfig.research.maxSearchesPerHour, 120);
+  assert.equal(normalized.agentStack.runtimeConfig.research.localExternalSearch.maxResults, 1);
+  assert.equal(normalized.agentStack.runtimeConfig.research.localExternalSearch.maxPagesToRead, 5);
+  assert.equal(normalized.agentStack.runtimeConfig.research.localExternalSearch.maxCharsPerPage, 350);
+  assert.equal(normalized.agentStack.runtimeConfig.research.localExternalSearch.safeSearch, false);
+  assert.equal(normalized.agentStack.runtimeConfig.research.localExternalSearch.recencyDaysDefault, 1);
+  assert.equal(normalized.agentStack.runtimeConfig.research.localExternalSearch.maxConcurrentFetches, 10);
+  assert.deepEqual(
+    normalized.agentStack.runtimeConfig.research.localExternalSearch.providerOrder,
+    ["serpapi", "brave"]
+  );
+
+  assert.equal(normalized.agentStack.runtimeConfig.browser.enabled, true);
+  assert.equal(browserExecution.mode, "dedicated_model");
+  assert.deepEqual(browserExecution.model, {
+    provider: "openai",
+    model: "gpt-5-mini"
+  });
+  assert.equal(normalized.agentStack.runtimeConfig.browser.localBrowserAgent.maxBrowseCallsPerHour, 60);
+  assert.equal(normalized.agentStack.runtimeConfig.browser.localBrowserAgent.maxStepsPerTask, 1);
+  assert.equal(normalized.agentStack.runtimeConfig.browser.localBrowserAgent.stepTimeoutMs, 5_000);
+  assert.equal(normalized.agentStack.runtimeConfig.browser.localBrowserAgent.sessionTimeoutMs, 999_999);
+
+  assert.equal(normalized.media.videoContext.maxLookupsPerHour, 0);
+  assert.equal(normalized.media.videoContext.maxVideosPerMessage, 6);
+  assert.equal(normalized.media.videoContext.maxTranscriptChars, 4000);
+  assert.equal(normalized.media.videoContext.keyframeIntervalSeconds, 0);
+  assert.equal(normalized.media.videoContext.maxKeyframesPerVideo, 8);
+  assert.equal(normalized.media.videoContext.maxAsrSeconds, 15);
+
+  assert.equal(normalized.voice.transcription.languageMode, "fixed");
+  assert.equal(normalized.voice.transcription.languageHint, "en-us");
+  assert.equal(voiceGeneration.mode, "dedicated_model");
+  assert.deepEqual(voiceGeneration.model, {
+    provider: "anthropic",
+    model: "claude-sonnet-4-6"
+  });
+  assert.equal(voiceInitiativeExecution.mode, "dedicated_model");
+  assert.deepEqual(voiceInitiativeExecution.model, {
+    provider: "anthropic",
+    model: "claude-sonnet-4-6"
+  });
+  assert.equal(voiceInitiativeExecution.temperature, 2);
+  assert.equal(normalized.initiative.voice.enabled, true);
+  assert.equal(normalized.initiative.voice.eagerness, 100);
+  assert.equal(normalized.initiative.voice.minSilenceSeconds, 1);
+  assert.equal(normalized.initiative.voice.minSecondsBetweenThoughts, 600);
+  assert.deepEqual(normalized.agentStack.overrides.voiceAdmissionClassifier, {
+    mode: "dedicated_model",
+    model: {
+      provider: "claude-code",
+      model: "sonnet"
+    }
+  });
+  assert.equal(normalized.agentStack.runtimeConfig.voice.openaiRealtime.inputAudioFormat, "pcm16");
+  assert.equal(normalized.agentStack.runtimeConfig.voice.openaiRealtime.outputAudioFormat, "g711_alaw");
+  assert.equal(
+    normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.apiBaseUrl,
+    "https://generativelanguage.googleapis.com"
+  );
+  assert.equal(normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.inputSampleRateHz, 8000);
+  assert.equal(normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.outputSampleRateHz, 96000);
   assert.equal(normalized.voice.streamWatch.minCommentaryIntervalSeconds, 3);
   assert.equal(normalized.voice.streamWatch.maxFramesPerMinute, 600);
   assert.equal(normalized.voice.streamWatch.maxFrameBytes, 50_000);
@@ -204,21 +247,21 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.streamWatch.brainContextMaxEntries, 24);
   assert.equal(normalized.voice.streamWatch.brainContextPrompt.length, 420);
   assert.deepEqual(normalized.voice.soundboard.preferredSoundIds, ["first", "second"]);
-  assert.equal(normalized.voice.musicDucking.targetGain, 0.05);
-  assert.equal(normalized.voice.musicDucking.fadeMs, 5000);
+  assert.equal(normalized.music.ducking.targetGain, 0);
+  assert.equal(normalized.music.ducking.fadeMs, 10_000);
 
-  assert.deepEqual(normalized.discovery.allowedImageModels, ["gpt-image-1.5", "grok-imagine-image"]);
-  assert.deepEqual(normalized.discovery.allowedVideoModels, ["grok-imagine-video"]);
-  assert.deepEqual(normalized.discovery.rssFeeds, ["https://ok.example/feed"]);
-  assert.deepEqual(normalized.discovery.xHandles, ["alice", "bob"]);
-  assert.deepEqual(normalized.discovery.redditSubreddits, ["memes", "memes"]);
-  assert.equal(normalized.discovery.xNitterBaseUrl, "https://nitter.example");
-  assert.equal(normalized.discovery.sources.reddit, false);
-  assert.equal(normalized.discovery.sources.x, true);
+  assert.deepEqual(normalized.initiative.discovery.allowedImageModels, ["gpt-image-1.5", "grok-imagine-image"]);
+  assert.deepEqual(normalized.initiative.discovery.allowedVideoModels, ["grok-imagine-video"]);
+  assert.deepEqual(normalized.initiative.discovery.rssFeeds, ["https://ok.example/feed"]);
+  assert.deepEqual(normalized.initiative.discovery.xHandles, ["alice", "bob"]);
+  assert.deepEqual(normalized.initiative.discovery.redditSubreddits, ["memes", "memes"]);
+  assert.equal(normalized.initiative.discovery.xNitterBaseUrl, "https://nitter.example");
+  assert.equal(normalized.initiative.discovery.sources.reddit, false);
+  assert.equal(normalized.initiative.discovery.sources.x, true);
 });
 
-test("normalizeSettings respects explicit false for openaiRealtime usePerUserAsrBridge", () => {
-  const normalized = normalizeSettings({
+test("normalizeSettings keeps explicit shared ASR bridge disable", () => {
+  const normalized = normalizeLegacyView({
     voice: {
       openaiRealtime: {
         usePerUserAsrBridge: false
@@ -226,22 +269,21 @@ test("normalizeSettings respects explicit false for openaiRealtime usePerUserAsr
     }
   });
 
-  assert.equal(normalized.voice.openaiRealtime.usePerUserAsrBridge, false);
+  assert.equal(normalized.agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge, false);
 });
 
-test("normalizeSettings allows up to 100 bot aliases before truncating", () => {
+test("normalizeSettings keeps up to 100 bot aliases", () => {
   const aliases = Array.from({ length: BOT_NAME_ALIAS_MAX_ITEMS + 5 }, (_, index) => `alias-${index + 1}`);
-
-  const normalized = normalizeSettings({
+  const normalized = normalizeLegacyView({
     botNameAliases: aliases
   });
 
-  assert.equal(normalized.botNameAliases.length, BOT_NAME_ALIAS_MAX_ITEMS);
-  assert.deepEqual(normalized.botNameAliases, aliases.slice(0, BOT_NAME_ALIAS_MAX_ITEMS));
+  assert.equal(normalized.identity.botNameAliases.length, BOT_NAME_ALIAS_MAX_ITEMS);
+  assert.deepEqual(normalized.identity.botNameAliases, aliases.slice(0, BOT_NAME_ALIAS_MAX_ITEMS));
 });
 
 test("normalizeSettings preserves explicit file_wav transcription mode", () => {
-  const normalized = normalizeSettings({
+  const normalized = normalizeLegacyView({
     voice: {
       openaiRealtime: {
         transcriptionMethod: "file_wav"
@@ -249,11 +291,11 @@ test("normalizeSettings preserves explicit file_wav transcription mode", () => {
     }
   });
 
-  assert.equal(normalized.voice.openaiRealtime.transcriptionMethod, "file_wav");
+  assert.equal(normalized.agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod, "file_wav");
 });
 
-test("normalizeSettings restricts browser llm provider to supported browser providers", () => {
-  const normalized = normalizeSettings({
+test("normalizeSettings restricts browser model providers to supported browser runtimes", () => {
+  const normalized = normalizeLegacyView({
     browser: {
       llm: {
         provider: "xai",
@@ -262,12 +304,17 @@ test("normalizeSettings restricts browser llm provider to supported browser prov
     }
   });
 
-  assert.equal(normalized.browser.llm.provider, "anthropic");
-  assert.equal(normalized.browser.llm.model, "claude-sonnet-4-5-20250929");
+  const browserExecution = normalized.agentStack.runtimeConfig.browser.localBrowserAgent.execution as {
+    model?: { provider: string; model: string };
+  };
+  assert.deepEqual(browserExecution.model, {
+    provider: "anthropic",
+    model: "claude-sonnet-4-5-20250929"
+  });
 });
 
-test("normalizeSettings normalizes code agent provider and model fields", () => {
-  const fallback = normalizeSettings({
+test("normalizeSettings migrates legacy code agent provider fields into dev-team runtime settings", () => {
+  const fallback = normalizeLegacyView({
     codeAgent: {
       provider: "not-real",
       model: "",
@@ -275,11 +322,12 @@ test("normalizeSettings normalizes code agent provider and model fields", () => 
     }
   });
 
-  assert.equal(fallback.codeAgent.provider, "claude-code");
-  assert.equal(fallback.codeAgent.model, "sonnet");
-  assert.equal(fallback.codeAgent.codexModel, "codex-mini-latest");
+  assert.equal(fallback.agentStack.runtimeConfig.devTeam.codex.enabled, false);
+  assert.equal(fallback.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
+  assert.equal(fallback.agentStack.runtimeConfig.devTeam.claudeCode.enabled, true);
+  assert.equal(fallback.agentStack.runtimeConfig.devTeam.claudeCode.model, "sonnet");
 
-  const codex = normalizeSettings({
+  const codex = normalizeLegacyView({
     codeAgent: {
       provider: "CODEX",
       model: "opus",
@@ -287,23 +335,49 @@ test("normalizeSettings normalizes code agent provider and model fields", () => 
     }
   });
 
-  assert.equal(codex.codeAgent.provider, "codex");
-  assert.equal(codex.codeAgent.model, "opus");
-  assert.equal(codex.codeAgent.codexModel, "gpt-5-codex");
+  assert.equal(codex.agentStack.runtimeConfig.devTeam.codex.enabled, true);
+  assert.equal(codex.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
+  assert.equal(codex.agentStack.runtimeConfig.devTeam.claudeCode.enabled, false);
 });
 
-test("normalizeSettings preserves explicit commandOnlyMode", () => {
+test("normalizeSettings preserves claude_code_max session config", () => {
   const normalized = normalizeSettings({
-    voice: {
-      commandOnlyMode: true
+    agentStack: {
+      preset: "claude_code_max",
+      runtimeConfig: {
+        claudeCodeSession: {
+          sessionScope: "channel",
+          inactivityTimeoutMs: 45_000,
+          contextPruningStrategy: "sliding_window",
+          maxPinnedStateChars: 18_000,
+          voiceToolPolicy: "fast_only",
+          textToolPolicy: "full"
+        }
+      }
     }
   });
 
-  assert.equal(normalized.voice.commandOnlyMode, true);
+  assert.equal(normalized.agentStack.preset, "claude_code_max");
+  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.sessionScope, "channel");
+  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.inactivityTimeoutMs, 45_000);
+  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.contextPruningStrategy, "sliding_window");
+  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.maxPinnedStateChars, 18_000);
+  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.voiceToolPolicy, "fast_only");
+  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.textToolPolicy, "full");
+  assert.deepEqual(normalized.agentStack.overrides.voiceAdmissionClassifier, {
+    mode: "dedicated_model",
+    model: {
+      provider: "claude_code_session",
+      model: "max"
+    }
+  });
 });
 
-test("normalizeSettings preserves explicit adaptive directive and automation toggles", () => {
-  const normalized = normalizeSettings({
+test("normalizeSettings preserves canonical command-only, directive, and automation toggles", () => {
+  const normalized = normalizeLegacyView({
+    voice: {
+      commandOnlyMode: true
+    },
     adaptiveDirectives: {
       enabled: false
     },
@@ -312,12 +386,13 @@ test("normalizeSettings preserves explicit adaptive directive and automation tog
     }
   });
 
-  assert.equal(normalized.adaptiveDirectives.enabled, false);
+  assert.equal(normalized.voice.conversationPolicy.commandOnlyMode, true);
+  assert.equal(normalized.directives.enabled, false);
   assert.equal(normalized.automations.enabled, false);
 });
 
-test("normalizeSettings handles memoryLlm defaults and discovery source fallbacks", () => {
-  const normalized = normalizeSettings({
+test("normalizeSettings dedupes guidance and preserves discovery source booleans", () => {
+  const normalized = normalizeLegacyView({
     memoryLlm: {},
     discovery: {
       sources: {
@@ -335,38 +410,35 @@ test("normalizeSettings handles memoryLlm defaults and discovery source fallback
     }
   });
 
-  assert.equal(normalized.memoryLlm.provider, "anthropic");
-  assert.equal(normalized.memoryLlm.model, "claude-haiku-4-5");
-  assert.deepEqual(normalized.prompt.textGuidance, ["one", "two"]);
-  assert.deepEqual(normalized.prompt.voiceGuidance, ["alpha", "beta"]);
-  assert.deepEqual(normalized.prompt.voiceOperationalGuidance, ["a", "b"]);
-
-  assert.equal(typeof normalized.discovery.sources.reddit, "boolean");
-  assert.equal(typeof normalized.discovery.sources.hackerNews, "boolean");
-  assert.equal(typeof normalized.discovery.sources.youtube, "boolean");
-  assert.equal(typeof normalized.discovery.sources.rss, "boolean");
-  assert.equal(typeof normalized.discovery.sources.x, "boolean");
+  assert.deepEqual(normalized.prompting.text.guidance, ["one", "two"]);
+  assert.deepEqual(normalized.prompting.voice.guidance, ["alpha", "beta"]);
+  assert.deepEqual(normalized.prompting.voice.operationalGuidance, ["a", "b"]);
+  assert.equal(typeof normalized.initiative.discovery.sources.reddit, "boolean");
+  assert.equal(typeof normalized.initiative.discovery.sources.hackerNews, "boolean");
+  assert.equal(typeof normalized.initiative.discovery.sources.youtube, "boolean");
+  assert.equal(typeof normalized.initiative.discovery.sources.rss, "boolean");
+  assert.equal(typeof normalized.initiative.discovery.sources.x, "boolean");
 });
 
-test("normalizeSettings defaults llm maxOutputTokens to 2500 and preserves high values", () => {
-  const defaulted = normalizeSettings({
+test("normalizeSettings defaults reply max output tokens to 2500 and preserves higher values", () => {
+  const defaulted = normalizeLegacyView({
     llm: {}
   });
-  assert.equal(defaulted.llm.maxOutputTokens, 2500);
+  assert.equal(defaulted.interaction.replyGeneration.maxOutputTokens, 2500);
 
-  const highValue = normalizeSettings({
+  const highValue = normalizeLegacyView({
     llm: {
       maxOutputTokens: 9_999
     }
   });
-  assert.equal(highValue.llm.maxOutputTokens, 9_999);
+  assert.equal(highValue.interaction.replyGeneration.maxOutputTokens, 9_999);
 });
 
-test("normalizeSettings forces voice generation llm to text llm when useTextModel is enabled", () => {
-  const normalized = normalizeSettings({
+test("normalizeSettings migrates voice generation useTextModel to inherit orchestrator", () => {
+  const normalized = normalizeLegacyView({
     llm: {
       provider: "openai",
-      model: "claude-haiku-4-5"
+      model: "gpt-5"
     },
     voice: {
       generationLlm: {
@@ -383,14 +455,16 @@ test("normalizeSettings forces voice generation llm to text llm when useTextMode
     }
   });
 
-  assert.equal(normalized.voice.generationLlm.useTextModel, true);
-  assert.equal(normalized.voice.generationLlm.provider, "openai");
-  assert.equal(normalized.voice.generationLlm.model, "claude-haiku-4-5");
-  assert.equal("useTextModel" in normalized.replyFollowupLlm, false);
+  const generation = normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.generation as {
+    mode: string;
+    model?: { provider: string; model: string };
+  };
+  assert.equal(generation.mode, "inherit_orchestrator");
+  assert.equal("useTextModel" in normalized.interaction.followup.execution, false);
 });
 
-test("normalizeSettings normalizes elevenlabs voice provider settings", () => {
-  const normalized = normalizeSettings({
+test("normalizeSettings keeps elevenlabs voice runtime settings under the legacy voice stack", () => {
+  const normalized = normalizeLegacyView({
     voice: {
       voiceProvider: "elevenlabs",
       elevenLabsRealtime: {
@@ -402,27 +476,32 @@ test("normalizeSettings normalizes elevenlabs voice provider settings", () => {
     }
   });
 
-  assert.equal(normalized.voice.voiceProvider, "elevenlabs");
-  assert.equal(normalized.voice.elevenLabsRealtime.agentId, "agent_abc");
-  assert.equal(normalized.voice.elevenLabsRealtime.apiBaseUrl, "https://api.elevenlabs.io");
-  assert.equal(normalized.voice.elevenLabsRealtime.inputSampleRateHz, 48000);
-  assert.equal(normalized.voice.elevenLabsRealtime.outputSampleRateHz, 8000);
+  assert.equal(normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.selectedProvider, "elevenlabs");
+  assert.equal(normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.agentId, "agent_abc");
+  assert.equal(
+    normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.apiBaseUrl,
+    "https://api.elevenlabs.io"
+  );
+  assert.equal(normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.inputSampleRateHz, 96000);
+  assert.equal(normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.outputSampleRateHz, 8000);
 });
 
-test("normalizeSettings uses provider-appropriate memoryLlm model fallback", () => {
-  const normalized = normalizeSettings({
+test("normalizeSettings uses provider-specific memory model fallbacks", () => {
+  const normalized = normalizeLegacyView({
     memoryLlm: {
       provider: "openai",
       model: ""
     }
   });
 
-  assert.equal(normalized.memoryLlm.provider, "openai");
-  assert.equal(normalized.memoryLlm.model, "claude-haiku-4-5");
+  assert.deepEqual(normalized.memory.execution.model, {
+    provider: "openai",
+    model: "gpt-5-mini"
+  });
 });
 
 test("normalizeSettings preserves supported reflection strategies and defaults invalid ones", () => {
-  const onePass = normalizeSettings({
+  const onePass = normalizeLegacyView({
     memory: {
       reflection: {
         strategy: "one_pass_main"
@@ -431,7 +510,7 @@ test("normalizeSettings preserves supported reflection strategies and defaults i
   });
   assert.equal(onePass.memory.reflection.strategy, "one_pass_main");
 
-  const invalid = normalizeSettings({
+  const invalid = normalizeLegacyView({
     memory: {
       reflection: {
         strategy: "something_else"
@@ -441,8 +520,8 @@ test("normalizeSettings preserves supported reflection strategies and defaults i
   assert.equal(invalid.memory.reflection.strategy, "two_pass_extract_then_main");
 });
 
-test("normalizeSettings keeps stt pipeline voice generation and reply decider independent from main llm", () => {
-  const normalized = normalizeSettings({
+test("normalizeSettings keeps legacy stt-pipeline generation and admission classifier independent from main llm", () => {
+  const normalized = normalizeLegacyView({
     llm: {
       provider: "claude-code",
       model: "opus"
@@ -462,19 +541,29 @@ test("normalizeSettings keeps stt pipeline voice generation and reply decider in
     }
   });
 
-  assert.equal(normalized.voice.generationLlm.provider, "openai");
-  assert.equal(normalized.voice.generationLlm.model, "claude-haiku-4-5");
-  assert.equal(normalized.voice.generationLlm.useTextModel, false);
-  assert.equal(normalized.voice.replyDecisionLlm.provider, "openai");
-  assert.equal(normalized.voice.replyDecisionLlm.model, "claude-haiku-4-5");
-  assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, undefined);
-  assert.equal(normalized.voice.replyDecisionLlm.reasoningEffort, "minimal");
-  assert.equal(normalized.voice.replyDecisionLlm.realtimeAdmissionMode, "hard_classifier");
-  assert.equal(normalized.voice.replyDecisionLlm.musicWakeLatchSeconds, 15);
+  const generation = normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.generation as {
+    mode: string;
+    model?: { provider: string; model: string };
+  };
+  const classifier = normalized.agentStack.overrides.voiceAdmissionClassifier as {
+    mode: string;
+    model?: { provider: string; model: string };
+  };
+  assert.equal(normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.selectedProvider, "openai");
+  assert.equal(generation.mode, "dedicated_model");
+  assert.deepEqual(generation.model, {
+    provider: "openai",
+    model: "claude-haiku-4-5"
+  });
+  assert.equal(classifier.mode, "dedicated_model");
+  assert.deepEqual(classifier.model, {
+    provider: "openai",
+    model: "claude-haiku-4-5"
+  });
 });
 
-test("normalizeSettings strips removed replyDecisionLlm fields and migrates legacy enabled false", () => {
-  const normalized = normalizeSettings({
+test("normalizeSettings drops removed replyDecisionLlm prompts and migrates enabled false to generation_decides", () => {
+  const normalized = normalizeLegacyView({
     voice: {
       replyDecisionLlm: {
         enabled: false,
@@ -486,65 +575,24 @@ test("normalizeSettings strips removed replyDecisionLlm fields and migrates lega
     }
   });
 
-  assert.equal(normalized.voice.replyDecisionLlm.realtimeAdmissionMode, "generation_only");
-  assert.equal(normalized.voice.replyDecisionLlm.musicWakeLatchSeconds, 15);
-  assert.equal(normalized.voice.replyDecisionLlm.prompts, undefined);
-});
-
-test("normalizeSettings enforces replyDecisionLlm realtime admission enum fallback", () => {
-  const invalidMode = normalizeSettings({
-    voice: {
-      replyDecisionLlm: {
-        realtimeAdmissionMode: "something_else"
-      }
-    }
-  });
-  assert.equal(invalidMode.voice.replyDecisionLlm.realtimeAdmissionMode, "hard_classifier");
-
-  const validMode = normalizeSettings({
-    voice: {
-      replyDecisionLlm: {
-        realtimeAdmissionMode: "generation_only"
-      }
-    }
-  });
-  assert.equal(validMode.voice.replyDecisionLlm.realtimeAdmissionMode, "generation_only");
-});
-
-test("normalizeSettings clamps replyDecisionLlm music wake latch seconds", () => {
-  const low = normalizeSettings({
-    voice: {
-      replyDecisionLlm: {
-        musicWakeLatchSeconds: 1
-      }
-    }
-  });
-  assert.equal(low.voice.replyDecisionLlm.musicWakeLatchSeconds, 5);
-
-  const high = normalizeSettings({
-    voice: {
-      replyDecisionLlm: {
-        musicWakeLatchSeconds: 999
-      }
-    }
-  });
-  assert.equal(high.voice.replyDecisionLlm.musicWakeLatchSeconds, 60);
+  assert.equal(normalized.voice.admission.mode, "generation_decides");
+  assert.equal(normalized.voice.admission.musicWakeLatchSeconds, 15);
 });
 
 test("normalizeSettings preserves long media prompt craft guidance blocks", () => {
   const longGuidance = `line one\n${"x".repeat(1200)}\nline three`;
-  const normalized = normalizeSettings({
+  const normalized = normalizeLegacyView({
     prompt: {
       mediaPromptCraftGuidance: longGuidance
     }
   });
 
-  assert.equal(normalized.prompt.mediaPromptCraftGuidance, longGuidance);
+  assert.equal(normalized.prompting.media.promptCraftGuidance, longGuidance);
 });
 
 test("normalizeSettings allows longer persona flavor values", () => {
   const withinLimit = "x".repeat(PERSONA_FLAVOR_MAX_CHARS);
-  const normalizedWithinLimit = normalizeSettings({
+  const normalizedWithinLimit = normalizeLegacyView({
     persona: {
       flavor: withinLimit
     }
@@ -552,7 +600,7 @@ test("normalizeSettings allows longer persona flavor values", () => {
   assert.equal(normalizedWithinLimit.persona.flavor, withinLimit);
 
   const overLimit = `${"y".repeat(PERSONA_FLAVOR_MAX_CHARS)}overflow`;
-  const normalizedOverLimit = normalizeSettings({
+  const normalizedOverLimit = normalizeLegacyView({
     persona: {
       flavor: overLimit
     }
@@ -560,31 +608,31 @@ test("normalizeSettings allows longer persona flavor values", () => {
   assert.equal(normalizedOverLimit.persona.flavor.length, PERSONA_FLAVOR_MAX_CHARS);
 });
 
-test("normalizeSettings supports auto/fixed voice ASR language guidance", () => {
-  const autoHint = normalizeSettings({
+test("normalizeSettings supports auto and fixed ASR language guidance in the canonical voice schema", () => {
+  const autoHint = normalizeLegacyView({
     voice: {
       asrLanguageMode: "auto",
       asrLanguageHint: "EN"
     }
   });
-  assert.equal(autoHint.voice.asrLanguageMode, "auto");
-  assert.equal(autoHint.voice.asrLanguageHint, "en");
+  assert.equal(autoHint.voice.transcription.languageMode, "auto");
+  assert.equal(autoHint.voice.transcription.languageHint, "en");
 
-  const fixedHint = normalizeSettings({
+  const fixedHint = normalizeLegacyView({
     voice: {
       asrLanguageMode: "fixed",
       asrLanguageHint: "en-US"
     }
   });
-  assert.equal(fixedHint.voice.asrLanguageMode, "fixed");
-  assert.equal(fixedHint.voice.asrLanguageHint, "en-us");
+  assert.equal(fixedHint.voice.transcription.languageMode, "fixed");
+  assert.equal(fixedHint.voice.transcription.languageHint, "en-us");
 
-  const invalid = normalizeSettings({
+  const invalid = normalizeLegacyView({
     voice: {
       asrLanguageMode: "not-real",
       asrLanguageHint: "!!!!!!"
     }
   });
-  assert.equal(invalid.voice.asrLanguageMode, "auto");
-  assert.equal(invalid.voice.asrLanguageHint, "en");
+  assert.equal(invalid.voice.transcription.languageMode, "auto");
+  assert.equal(invalid.voice.transcription.languageHint, "en");
 });

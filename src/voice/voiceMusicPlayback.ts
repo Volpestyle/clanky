@@ -1,5 +1,6 @@
 import { ChatInputCommandInteraction } from "discord.js";
 import { normalizeInlineText, STT_TRANSCRIPT_MAX_CHARS, isVoiceTurnAddressedToBot, resolveVoiceAsrLanguageGuidance } from "./voiceSessionHelpers.ts";
+import { getVoiceRuntimeConfig } from "../settings/agentStack.ts";
 
 import { clamp } from "lodash";
 
@@ -1207,9 +1208,10 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
 
     const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
     const sampleRateHz = source === "stt_pipeline" ? 24000 : Number(session.realtimeInputSampleRateHz) || 24000;
+    const voiceRuntime = getVoiceRuntimeConfig(settings);
     const preferredModel = source === "stt_pipeline"
-      ? settings?.voice?.sttPipeline?.transcriptionModel
-      : settings?.voice?.openaiRealtime?.inputTranscriptionModel || settings?.voice?.sttPipeline?.transcriptionModel;
+      ? voiceRuntime.legacyVoiceStack?.sttPipeline?.transcriptionModel
+      : voiceRuntime.openaiRealtime?.inputTranscriptionModel || voiceRuntime.legacyVoiceStack?.sttPipeline?.transcriptionModel;
     const primaryModel = String(preferredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
     const fallbackModel = primaryModel === "gpt-4o-mini-transcribe" ? "whisper-1" : "";
 

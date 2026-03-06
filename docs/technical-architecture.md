@@ -2,7 +2,7 @@
 
 This document explains how the bot is wired, how data moves through the system, and the key runtime flows.
 
-For the proposed preset-driven future architecture, including `openai_native` and hybrid Anthropic/OpenAI stacks, see:
+The preset-driven stack spec now informs the live settings/runtime layer. For the full target architecture, including `openai_native` and hybrid Anthropic/OpenAI stacks, see:
 - `docs/preset-driven-agent-stack-spec.md`
 
 ## 1. High-Level Components
@@ -13,6 +13,8 @@ Code entrypoint:
 Core runtime:
 - `src/bot.ts`: Discord event handling and orchestration.
 - `src/bot/*`: extracted bot domains (`automationControl`, `discoverySchedule`, `queueGateway`, `replyAdmission`, `replyFollowup`, `startupCatchup`, `voiceReplies`).
+- `src/settings/settingsSchema.ts`: canonical persisted settings schema.
+- `src/settings/agentStack.ts`: preset resolution + capability/runtime accessors (`research`, `browser`, `voice`, `devTeam`, orchestrator bindings).
 - `src/llm.ts`: model provider abstraction (OpenAI, Anthropic, xAI/Grok, or Claude Code), usage + cost logging, embeddings, image/video generation, ASR, and TTS.
 - `src/llmClaudeCode.ts`: Claude Code CLI invocation/parsing helpers used by `LLMService`.
 - `src/llmCodex.ts`: OpenAI Responses/Codex integration used by the code-agent runtime.
@@ -35,6 +37,7 @@ Agents:
 
 Tool definitions:
 - `src/tools/browserTools.ts`: browser tool schemas + execution wrappers for the browse agent.
+- `src/tools/openAiComputerUseRuntime.ts`: OpenAI computer-use sub-runtime that drives the browser manager when the resolved browser runtime is `openai_computer_use`.
 - `src/tools/replyTools.ts`: tool schemas available to the text chat brain (`conversation_search`, web search, memory, image lookup, open-article lookup, etc.).
 - `src/voice/voiceToolCalls.ts`: voice tool definitions + execution handlers for all tools available in voice sessions, including shared conversation-history recall.
 
@@ -54,7 +57,7 @@ Storage:
 
 ## 3. Tool Orchestration
 
-The central architectural idea: the brain is an LLM with a growing set of tools, and it composes them through natural conversation. There are no hardcoded workflows — the brain decides which tools to chain based on what the user is asking.
+The central architectural idea: Clanker owns the product control plane, while the agent stack resolves external runtimes by preset. The orchestrator is still tool-using LLM-driven, but capability routing is now resolved through a canonical stack instead of scattered provider toggles.
 
 ```
 User (voice or text)
@@ -71,7 +74,13 @@ Brain (LLM with tool-use)
     └── MCP tools                      →  extensible third-party capabilities
 ```
 
-Most conversational tools are shared across both voice and text paths. The brain generally sees the same core tool surface regardless of input modality — `conversation_search`, memory tools, web search, adaptive directives, and `browser_browse` all work in both text and voice conversational flows. A few tools remain modality-specific when the capability only makes sense in one runtime (for example realtime voice transport controls or voice-only playback controls).
+Most conversational tools are shared across both voice and text paths. The brain generally sees the same core tool surface regardless of input modality, while the backing runtime is chosen by the resolved stack:
+- research capability: `agentStack.runtimeConfig.research`
+- browser capability: `agentStack.runtimeConfig.browser`
+- voice runtime: `agentStack.runtimeConfig.voice`
+- dev-team workers: `agentStack.runtimeConfig.devTeam`
+
+A few tools remain modality-specific when the capability only makes sense in one runtime (for example realtime voice transport controls or voice-only playback controls).
 
 Conversation continuity is split into two retrieval layers:
 - `conversation_search`: recall of prior exchanges from persisted message history, across text chat and voice transcripts.
@@ -152,10 +161,34 @@ Cost aggregation:
 
 ## 5. Settings Flow
 
-Settings are patched through dashboard API and normalized in `Store.patchSettings()` / `normalizeSettings()`:
+Settings are patched through dashboard API and normalized in `Store.patchSettings()` / `normalizeSettings()`.
+
+Canonical top-level settings groups:
+- `identity`
+- `persona`
+- `prompting`
+- `permissions`
+- `interaction`
+- `agentStack`
+- `memory`
+- `directives`
+- `initiative`
+- `voice`
+- `media`
+- `music`
+- `automations`
+
+Preset-driven stack settings:
+- `agentStack.preset`: `openai_native`, `anthropic_brain_openai_tools`, `multi_provider_legacy`, or `custom`
+- `agentStack.advancedOverridesEnabled`: whether per-runtime overrides are exposed and persisted
+- `agentStack.overrides`: orchestrator / worker override bindings
+- `agentStack.runtimeConfig`: capability-runtime configuration for research, browser, voice, and dev-team workers
+
+Normalization responsibilities:
 - clamping numeric ranges,
 - sanitizing list fields,
 - defaulting missing keys,
+- migrating legacy flat settings into the canonical preset-driven shape,
 - ensuring reply-channel, text-thought-loop, and discovery config is always valid.
 
 The bot reads settings at decision time (`store.getSettings()`), so updates apply without restart.

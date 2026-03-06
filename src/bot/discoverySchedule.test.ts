@@ -9,6 +9,7 @@ import {
   getDiscoveryPostingIntervalMs,
   pickDiscoveryChannel
 } from "./discoverySchedule.ts";
+import { createTestSettings } from "../testSettings.ts";
 
 function baseSettings(overrides = {}) {
   const base = {
@@ -23,7 +24,7 @@ function baseSettings(overrides = {}) {
     permissions: {}
   };
 
-  return {
+  return createTestSettings({
     ...base,
     ...overrides,
     discovery: {
@@ -34,7 +35,7 @@ function baseSettings(overrides = {}) {
       ...base.permissions,
       ...(overrides.permissions || {})
     }
-  };
+  });
 }
 
 test("discovery interval uses the larger of min-gap and even pacing", () => {

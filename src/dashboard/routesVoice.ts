@@ -1,5 +1,6 @@
 import { parseBoundedInt } from "../dashboard.ts";
 import { STREAM_INGEST_API_PATH } from "../dashboard.ts";
+import { getDirectiveSettings } from "../settings/agentStack.ts";
 
 export function attachVoiceRoutes(app: any, deps: any) {
   const { store, bot, memory, screenShareSessionManager, voiceSseClients } = deps;
@@ -419,7 +420,7 @@ export function attachVoiceRoutes(app: any, deps: any) {
 
   app.post("/api/memory/adaptive-directives", (req, res, next) => {
     try {
-      const adaptiveDirectivesEnabled = Boolean(store.getSettings?.()?.adaptiveDirectives?.enabled);
+      const adaptiveDirectivesEnabled = Boolean(getDirectiveSettings(store.getSettings?.()).enabled);
       if (!adaptiveDirectivesEnabled) {
         return res.status(503).json({
           ok: false,
@@ -457,7 +458,7 @@ export function attachVoiceRoutes(app: any, deps: any) {
 
   app.patch("/api/memory/adaptive-directives/:noteId", (req, res, next) => {
     try {
-      const adaptiveDirectivesEnabled = Boolean(store.getSettings?.()?.adaptiveDirectives?.enabled);
+      const adaptiveDirectivesEnabled = Boolean(getDirectiveSettings(store.getSettings?.()).enabled);
       if (!adaptiveDirectivesEnabled) {
         return res.status(503).json({
           ok: false,
@@ -501,7 +502,7 @@ export function attachVoiceRoutes(app: any, deps: any) {
 
   app.post("/api/memory/adaptive-directives/:noteId/remove", (req, res, next) => {
     try {
-      const adaptiveDirectivesEnabled = Boolean(store.getSettings?.()?.adaptiveDirectives?.enabled);
+      const adaptiveDirectivesEnabled = Boolean(getDirectiveSettings(store.getSettings?.()).enabled);
       if (!adaptiveDirectivesEnabled) {
         return res.status(503).json({
           ok: false,

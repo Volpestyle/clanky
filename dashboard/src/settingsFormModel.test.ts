@@ -10,9 +10,10 @@ import {
   settingsToForm,
   settingsToFormPreserving
 } from "./settingsFormModel.ts";
+import { normalizeSettings } from "../../src/store/settingsNormalization.ts";
 
 test("settingsFormModel converts settings to form defaults and back to normalized patch", () => {
-  const form = settingsToForm({
+  const form = settingsToForm(normalizeSettings({
     botName: "clanker conk",
     botNameAliases: ["clank", "conk", "clank"],
     persona: {
@@ -29,15 +30,17 @@ test("settingsFormModel converts settings to form defaults and back to normalize
       blockedChannelIds: ["9"],
       blockedUserIds: ["u-1"]
     }
-  });
+  }));
 
   assert.equal(form.botName, "clanker conk");
-  assert.equal(form.botNameAliases, "clank, conk, clank");
+  assert.equal(form.botNameAliases, "clank, conk");
   assert.equal(form.personaFlavor, "chaotic but kind");
-  assert.equal(form.personaHardLimits, "no hate\nno hate\nkeep it fun");
+  assert.equal(form.personaHardLimits, "no hate\nkeep it fun");
+  assert.equal(form.stackPreset, "openai_native");
+  assert.equal(form.stackAdvancedOverridesEnabled, true);
   assert.equal(form.provider, "openai");
   assert.equal(form.model, "claude-haiku-4-5");
-  assert.equal(form.voiceGenerationLlmUseTextModel, true);
+  assert.equal(form.voiceGenerationLlmUseTextModel, false);
   assert.equal(form.voiceGenerationLlmProvider, "anthropic");
   assert.equal(form.voiceGenerationLlmModel, "claude-sonnet-4-6");
   assert.equal(form.replyFollowupMaxToolSteps, 2);
@@ -50,7 +53,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.browserLlmModel, "claude-sonnet-4-5-20250929");
   assert.equal(form.codeAgentProvider, "claude-code");
   assert.equal(form.codeAgentModel, "sonnet");
-  assert.equal(form.codeAgentCodexModel, "codex-mini-latest");
+  assert.equal(form.codeAgentCodexModel, "gpt-5-codex");
   assert.equal(form.memoryReflectionStrategy, "two_pass_extract_then_main");
   assert.equal(form.adaptiveDirectivesEnabled, true);
   assert.equal(form.automationsEnabled, true);
@@ -76,7 +79,6 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   );
   assert.equal(form.replyChannels, "1\n2");
   assert.equal(form.allowedChannels, "2\n3");
-  assert.equal(form.voiceBrainProvider, "openai");
 
   form.personaHardLimits = "no hate\nno hate\nkeep it fun\n";
   form.botNameAliases = "clank\nconk\nclank\n";
@@ -109,24 +111,29 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.codeAgentCodexModel = "gpt-5-codex";
 
   const patch = formToSettingsPatch(form);
-  assert.deepEqual(patch.botNameAliases, ["clank", "conk"]);
+  assert.deepEqual(patch.identity.botNameAliases, ["clank", "conk"]);
   assert.deepEqual(patch.persona.hardLimits, ["no hate", "keep it fun"]);
-  assert.deepEqual(patch.permissions.allowedChannelIds, ["2", "3"]);
-  assert.deepEqual(patch.discovery.rssFeeds, ["https://one.example/feed"]);
-  assert.deepEqual(patch.discovery.xHandles, ["@alice", "bob"]);
-  assert.equal(patch.voice.brainProvider, "openai");
-  assert.equal(patch.replyFollowupLlm.maxToolSteps, 5);
-  assert.equal(patch.replyFollowupLlm.maxTotalToolCalls, 11);
-  assert.equal(patch.replyFollowupLlm.maxWebSearchCalls, 4);
-  assert.equal(patch.replyFollowupLlm.maxMemoryLookupCalls, 3);
-  assert.equal(patch.replyFollowupLlm.maxImageLookupCalls, 1);
-  assert.equal(patch.replyFollowupLlm.toolTimeoutMs, 16000);
-  assert.equal(patch.browser.llm.provider, "anthropic");
-  assert.equal(patch.browser.llm.model, "claude-sonnet-4-5-20250929");
+  assert.deepEqual(patch.permissions.replies.allowedChannelIds, ["2", "3"]);
+  assert.deepEqual(patch.initiative.discovery.rssFeeds, ["https://one.example/feed"]);
+  assert.deepEqual(patch.initiative.discovery.xHandles, ["@alice", "bob"]);
+  assert.equal(patch.interaction.followup.toolBudget.maxToolSteps, 5);
+  assert.equal(patch.interaction.followup.toolBudget.maxTotalToolCalls, 11);
+  assert.equal(patch.interaction.followup.toolBudget.maxWebSearchCalls, 4);
+  assert.equal(patch.interaction.followup.toolBudget.maxMemoryLookupCalls, 3);
+  assert.equal(patch.interaction.followup.toolBudget.maxImageLookupCalls, 1);
+  assert.equal(patch.interaction.followup.toolBudget.toolTimeoutMs, 16000);
+  assert.equal(
+    patch.agentStack.runtimeConfig.browser.localBrowserAgent.execution.model.provider,
+    "anthropic"
+  );
+  assert.equal(
+    patch.agentStack.runtimeConfig.browser.localBrowserAgent.execution.model.model,
+    "claude-sonnet-4-5-20250929"
+  );
   assert.equal(patch.memory.reflection.strategy, "one_pass_main");
-  assert.equal(patch.adaptiveDirectives.enabled, false);
+  assert.equal(patch.directives.enabled, false);
   assert.equal(patch.automations.enabled, false);
-  assert.equal(patch.voice.generationLlm.useTextModel, true);
+  assert.equal(patch.agentStack.runtimeConfig.voice.legacyVoiceStack.generation.mode, "inherit_orchestrator");
   assert.equal(patch.voice.streamWatch.commentaryPath, "anthropic_keyframes");
   assert.equal(patch.voice.streamWatch.keyframeIntervalMs, 1750);
   assert.equal(patch.voice.streamWatch.autonomousCommentaryEnabled, false);
@@ -134,33 +141,41 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.voice.streamWatch.brainContextMinIntervalSeconds, 6);
   assert.equal(patch.voice.streamWatch.brainContextMaxEntries, 5);
   assert.equal(patch.voice.streamWatch.brainContextPrompt, "Use stream snapshots as context for replies.");
-  assert.equal(patch.voice.commandOnlyMode, true);
-  assert.equal(patch.voice.openaiRealtime.transcriptionMethod, "file_wav");
-  assert.equal(patch.voice.openaiRealtime.usePerUserAsrBridge, false);
-  assert.equal(patch.voice.asrLanguageMode, "fixed");
-  assert.equal(patch.voice.asrLanguageHint, "en-us");
-  assert.equal(patch.codeAgent.provider, "codex");
-  assert.equal(patch.codeAgent.codexModel, "gpt-5-codex");
-  assert.equal(patch.voice.thoughtEngine.enabled, true);
-  assert.equal(patch.voice.thoughtEngine.provider, "anthropic");
-  assert.equal(patch.voice.thoughtEngine.model, "claude-sonnet-4-6");
-  assert.equal(patch.voice.thoughtEngine.temperature, 1.2);
-  assert.equal(patch.voice.thoughtEngine.eagerness, 50);
+  assert.equal(patch.voice.conversationPolicy.commandOnlyMode, true);
+  assert.equal(patch.agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod, "file_wav");
+  assert.equal(patch.agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge, false);
+  assert.equal(patch.voice.transcription.languageMode, "fixed");
+  assert.equal(patch.voice.transcription.languageHint, "en-us");
+  assert.deepEqual(patch.agentStack.overrides.devTeam.codingWorkers, ["codex"]);
+  assert.equal(patch.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
+  assert.equal(patch.initiative.voice.enabled, true);
+  assert.equal(patch.initiative.voice.execution.model.provider, "anthropic");
+  assert.equal(patch.initiative.voice.execution.model.model, "claude-sonnet-4-6");
+  assert.equal(patch.initiative.voice.execution.temperature, 1.2);
+  assert.equal(patch.initiative.voice.eagerness, 50);
 });
 
 test("settingsToForm preserves explicit empty prompt overrides", () => {
   const form = settingsToForm({
-    prompt: {
-      capabilityHonestyLine: "",
-      impossibleActionLine: "",
-      memoryEnabledLine: "",
-      memoryDisabledLine: "",
-      skipLine: "",
-      textGuidance: [],
-      voiceGuidance: [],
-      voiceOperationalGuidance: [],
-      voiceLookupBusySystemPrompt: "",
-      mediaPromptCraftGuidance: ""
+    prompting: {
+      global: {
+        capabilityHonestyLine: "",
+        impossibleActionLine: "",
+        memoryEnabledLine: "",
+        memoryDisabledLine: "",
+        skipLine: ""
+      },
+      text: {
+        guidance: []
+      },
+      voice: {
+        guidance: [],
+        operationalGuidance: [],
+        lookupBusySystemPrompt: ""
+      },
+      media: {
+        promptCraftGuidance: ""
+      }
     }
   });
 
@@ -181,7 +196,7 @@ test("formToSettingsPatch parses bot aliases from comma-separated single-line in
   form.botNameAliases = "clank, conk, clank";
 
   const patch = formToSettingsPatch(form);
-  assert.deepEqual(patch.botNameAliases, ["clank", "conk"]);
+  assert.deepEqual(patch.identity.botNameAliases, ["clank", "conk"]);
 });
 
 test("sanitizeAliasListInput removes duplicate aliases and normalizes separators", () => {
@@ -205,7 +220,7 @@ test("resolveProviderModelOptions merges catalog values with provider fallback d
     },
     "openai"
   );
-  assert.deepEqual(openai, ["claude-haiku-4-5", "gpt-5.2"]);
+  assert.deepEqual(openai, ["claude-haiku-4-5", "gpt-5.2", "gpt-5-mini", "gpt-5", "gpt-4.1-mini"]);
 
   const anthropic = resolveProviderModelOptions(
     {
@@ -213,7 +228,7 @@ test("resolveProviderModelOptions merges catalog values with provider fallback d
     },
     "anthropic"
   );
-  assert.deepEqual(anthropic, ["claude-haiku-4-5"]);
+  assert.deepEqual(anthropic, ["claude-haiku-4-5", "claude-sonnet-4-6"]);
 });
 
 test("resolveBrowserProviderModelOptions merges catalog values with browser defaults", () => {
@@ -264,57 +279,79 @@ test("resolveModelOptionsFromText normalizes model lists for dropdown options", 
 });
 
 test("settingsFormModel round-trips voice provider and brain provider", () => {
-  const form = settingsToForm({
+  const form = settingsToForm(normalizeSettings({
     voice: {
       voiceProvider: "openai",
       brainProvider: "anthropic"
     }
-  });
+  }));
 
-  assert.equal(form.voiceBrainProvider, "anthropic");
+  assert.equal(form.voiceProvider, "openai");
+  assert.equal(form.stackAdvancedOverridesEnabled, true);
   const patch = formToSettingsPatch(form);
-  assert.equal(patch.voice.brainProvider, "anthropic");
+  assert.equal(patch.agentStack.runtimeConfig.voice.legacyVoiceStack.selectedProvider, "openai");
 });
 
 test("settingsFormModel round-trips browser llm provider and model", () => {
-  const form = settingsToForm({
+  const form = settingsToForm(normalizeSettings({
     browser: {
       llm: {
         provider: "openai",
         model: "gpt-5-mini"
       }
     }
-  });
+  }));
 
   assert.equal(form.browserLlmProvider, "openai");
   assert.equal(form.browserLlmModel, "gpt-5-mini");
 
   const patch = formToSettingsPatch(form);
-  assert.equal(patch.browser.llm.provider, "openai");
-  assert.equal(patch.browser.llm.model, "gpt-5-mini");
+  assert.equal(
+    patch.agentStack.runtimeConfig.browser.localBrowserAgent.execution.model.provider,
+    "openai"
+  );
+  assert.equal(
+    patch.agentStack.runtimeConfig.browser.localBrowserAgent.execution.model.model,
+    "gpt-5-mini"
+  );
 });
 
 test("settingsFormModel round-trips code agent provider fields", () => {
-  const form = settingsToForm({
+  const form = settingsToForm(normalizeSettings({
     codeAgent: {
       provider: "codex",
       model: "sonnet",
       codexModel: "gpt-5-codex"
     }
-  });
+  }));
 
   assert.equal(form.codeAgentProvider, "codex");
   assert.equal(form.codeAgentModel, "sonnet");
   assert.equal(form.codeAgentCodexModel, "gpt-5-codex");
 
   const patch = formToSettingsPatch(form);
-  assert.equal(patch.codeAgent.provider, "codex");
-  assert.equal(patch.codeAgent.model, "sonnet");
-  assert.equal(patch.codeAgent.codexModel, "gpt-5-codex");
+  assert.deepEqual(patch.agentStack.overrides.devTeam.codingWorkers, ["codex"]);
+  assert.equal(patch.agentStack.runtimeConfig.devTeam.claudeCode.model, "sonnet");
+  assert.equal(patch.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
+});
+
+test("settingsFormModel supports the claude_code_max preset", () => {
+  const form = settingsToForm(normalizeSettings({
+    agentStack: {
+      preset: "claude_code_max"
+    }
+  }));
+
+  assert.equal(form.stackPreset, "claude_code_max");
+  assert.equal(form.provider, "claude_code_session");
+  assert.equal(form.model, "max");
+
+  const patch = formToSettingsPatch(form);
+  assert.equal(patch.agentStack.preset, "claude_code_max");
 });
 
 test("settingsFormModel round-trips elevenlabs realtime settings", () => {
-  const form = settingsToForm({
+  const form = settingsToForm(normalizeSettings({
     voice: {
       voiceProvider: "elevenlabs",
       elevenLabsRealtime: {
@@ -324,7 +361,7 @@ test("settingsFormModel round-trips elevenlabs realtime settings", () => {
         outputSampleRateHz: 22050
       }
     }
-  });
+  }));
 
   assert.equal(form.voiceProvider, "elevenlabs");
   assert.equal(form.voiceElevenLabsRealtimeAgentId, "agent_123");
@@ -333,11 +370,20 @@ test("settingsFormModel round-trips elevenlabs realtime settings", () => {
   assert.equal(form.voiceElevenLabsRealtimeOutputSampleRateHz, 22050);
 
   const patch = formToSettingsPatch(form);
-  assert.equal(patch.voice.voiceProvider, "elevenlabs");
-  assert.equal(patch.voice.elevenLabsRealtime.agentId, "agent_123");
-  assert.equal(patch.voice.elevenLabsRealtime.apiBaseUrl, "https://api.elevenlabs.io");
-  assert.equal(patch.voice.elevenLabsRealtime.inputSampleRateHz, 16000);
-  assert.equal(patch.voice.elevenLabsRealtime.outputSampleRateHz, 22050);
+  assert.equal(patch.agentStack.runtimeConfig.voice.legacyVoiceStack.selectedProvider, "elevenlabs");
+  assert.equal(patch.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.agentId, "agent_123");
+  assert.equal(
+    patch.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.apiBaseUrl,
+    "https://api.elevenlabs.io"
+  );
+  assert.equal(
+    patch.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.inputSampleRateHz,
+    16000
+  );
+  assert.equal(
+    patch.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.outputSampleRateHz,
+    22050
+  );
 });
 
 test("settingsFormModel preserves explicit reflection strategy values", () => {
@@ -357,33 +403,39 @@ test("settingsFormModel preserves explicit reflection strategy values", () => {
 });
 
 test("settingsToFormPreserving keeps user's comma format for aliases on reload", () => {
-  const currentForm = settingsToForm({ botNameAliases: ["clank", "conk"] });
+  const currentForm = settingsToForm(normalizeSettings({ botNameAliases: ["clank", "conk"] }));
   // user edits to comma-separated
   currentForm.botNameAliases = "clank, conk";
 
   // server returns the same values after save
-  const preserved = settingsToFormPreserving({ botNameAliases: ["clank", "conk"] }, currentForm);
+  const preserved = settingsToFormPreserving(
+    normalizeSettings({ botNameAliases: ["clank", "conk"] }),
+    currentForm
+  );
   assert.equal(preserved.botNameAliases, "clank, conk");
 
   // parsing still yields the correct array
   const patch = formToSettingsPatch(preserved);
-  assert.deepEqual(patch.botNameAliases, ["clank", "conk"]);
+  assert.deepEqual(patch.identity.botNameAliases, ["clank", "conk"]);
 });
 
 test("settingsToFormPreserving updates value when server content actually changed", () => {
-  const currentForm = settingsToForm({ botNameAliases: ["clank", "conk"] });
+  const currentForm = settingsToForm(normalizeSettings({ botNameAliases: ["clank", "conk"] }));
   currentForm.botNameAliases = "clank, conk";
 
   // server returns different values (e.g. another admin added an alias)
-  const preserved = settingsToFormPreserving({ botNameAliases: ["clank", "conk", "clanky"] }, currentForm);
+  const preserved = settingsToFormPreserving(
+    normalizeSettings({ botNameAliases: ["clank", "conk", "clanky"] }),
+    currentForm
+  );
   assert.equal(preserved.botNameAliases, "clank, conk, clanky");
 });
 
 test("settingsToFormPreserving preserves newline format when user prefers it", () => {
-  const currentForm = settingsToForm({ botNameAliases: ["a", "b"] });
+  const currentForm = settingsToForm(normalizeSettings({ botNameAliases: ["a", "b"] }));
   // user keeps newlines
   currentForm.botNameAliases = "a\nb";
 
-  const preserved = settingsToFormPreserving({ botNameAliases: ["a", "b"] }, currentForm);
+  const preserved = settingsToFormPreserving(normalizeSettings({ botNameAliases: ["a", "b"] }), currentForm);
   assert.equal(preserved.botNameAliases, "a\nb");
 });

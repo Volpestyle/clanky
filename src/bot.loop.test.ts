@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import { ClankerBot } from "./bot.ts";
 import { Store } from "./store.ts";
+import { createTestSettingsPatch } from "./testSettings.ts";
 
 async function withTempStore(run) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-bot-loop-test-"));
@@ -36,7 +37,7 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
     const botUserId = "bot-1";
     const incomingMessageId = "msg-100";
 
-    store.patchSettings({
+    store.patchSettings(createTestSettingsPatch({
       activity: {
         minSecondsBetweenMessages: 0,
         replyCoalesceWindowSeconds: 0,
@@ -71,7 +72,7 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
         allowReplyVideos: false,
         allowReplyGifs: false
       }
-    });
+    }));
 
     const memoryIngestCalls = [];
     const llmCalls = [];
@@ -282,7 +283,7 @@ test("text thought loop selects from explicit reply channel list", async () => {
     const guildId = "guild-thought";
     const channelId = "chan-thought";
 
-    store.patchSettings({
+    store.patchSettings(createTestSettingsPatch({
       textThoughtLoop: {
         enabled: true,
         minMinutesBetweenThoughts: 1,
@@ -300,7 +301,7 @@ test("text thought loop selects from explicit reply channel list", async () => {
         maxMessagesPerHour: 100,
         maxReactionsPerHour: 100
       }
-    });
+    }));
 
     const bot = new ClankerBot({
       appConfig: {},

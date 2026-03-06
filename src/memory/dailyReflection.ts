@@ -2,6 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { clampInt, normalizeInlineText, parseMemoryExtractionJson } from "../llm/llmHelpers.ts";
 import { estimateUsdCost } from "../pricing.ts";
+import {
+  getBotName,
+  getMemorySettings,
+  getResolvedMemoryBinding,
+  getResolvedOrchestratorBinding,
+  getReplyGenerationSettings
+} from "../settings/agentStack.ts";
 import { parseDailyEntryLineWithScope } from "./memoryHelpers.ts";
 
 type ParsedEntry = {
@@ -338,6 +345,8 @@ async function runReflectionPass({
   settings: ReflectionSettings;
   maxFacts: number;
 }) {
+  const orchestratorBinding = getResolvedOrchestratorBinding(settings);
+  const replyGeneration = getReplyGenerationSettings(settings);
   const response =
     mode === "extract"
       ? await llm.callMemoryExtractionModel(provider, {
@@ -349,8 +358,8 @@ async function runReflectionPass({
           model,
           systemPrompt,
           userPrompt,
-          temperature: Number(settings?.llm?.temperature) || 0.9,
-          maxOutputTokens: Number(settings?.llm?.maxOutputTokens) || 2500,
+          temperature: Number(orchestratorBinding.temperature) || 0.9,
+          maxOutputTokens: Number(orchestratorBinding.maxOutputTokens) || 2500,
           jsonSchema: REFLECTION_FACTS_JSON_SCHEMA
         });
 
@@ -362,7 +371,7 @@ async function runReflectionPass({
     outputTokens: usage.outputTokens,
     cacheWriteTokens: usage.cacheWriteTokens,
     cacheReadTokens: usage.cacheReadTokens,
-    customPricing: settings?.llm?.pricing
+    customPricing: replyGeneration.pricing
   });
   const rawResponseText = String(response.text || "");
   const facts = normalizeReflectionFacts(rawResponseText, maxFacts);
@@ -405,7 +414,7 @@ export async function runDailyReflection({
     if (!mdFiles.length) return;
 
     const todayDateKey = new Date().toISOString().split("T")[0];
-    const dailyLogRetentionDays = settings.memory?.dailyLogRetentionDays || 30;
+    const dailyLogRetentionDays = getMemorySettings(settings).dailyLogRetentionDays || 30;
     const pruneDate = new Date();
     pruneDate.setDate(pruneDate.getDate() - dailyLogRetentionDays);
     const pruneDateKey = pruneDate.toISOString().split("T")[0];
@@ -570,6 +579,9 @@ async function reflectGuildJournal({
   let authorCount = 0;
 
   try {
+    const memorySettings = getMemorySettings(settings);
+    const orchestratorBinding = getResolvedOrchestratorBinding(settings);
+    const memoryBinding = getResolvedMemoryBinding(settings);
     const nameToAuthorId = new Map<string, string>();
     for (const entry of guildEntries) {
       if (entry.author && entry.authorId) {
@@ -582,22 +594,18 @@ async function reflectGuildJournal({
       .join("\n")
       .slice(0, 100_000);
 
-    maxFacts = clampInt(settings.memory?.reflection?.maxFactsPerReflection || 20, 1, 100);
-    const normalizedBotName = normalizeInlineText(settings.botName || "the bot", 80) || "the bot";
+    maxFacts = clampInt(memorySettings.reflection?.maxFactsPerReflection || 20, 1, 100);
+    const normalizedBotName = normalizeInlineText(getBotName(settings) || "the bot", 80) || "the bot";
     const authorList = [...new Set(guildEntries.map((entry) => entry.author).filter(Boolean))];
     const authorNames = authorList.join(", ");
     authorCount = authorList.length;
 
-    const resolvedMainModel = llm.resolveProviderAndModel((settings.llm || {}) as Record<string, unknown>);
-    adjudicatorProvider = resolvedMainModel.provider;
-    adjudicatorModel = resolvedMainModel.model;
+    adjudicatorProvider = orchestratorBinding.provider;
+    adjudicatorModel = orchestratorBinding.model;
 
     if (strategy === "two_pass_extract_then_main") {
-      const resolvedExtractorModel = llm.resolveProviderAndModel(
-        (settings.memoryLlm || settings.llm || {}) as Record<string, unknown>
-      );
-      extractorProvider = resolvedExtractorModel.provider;
-      extractorModel = resolvedExtractorModel.model;
+      extractorProvider = memoryBinding.provider;
+      extractorModel = memoryBinding.model;
     }
 
     const startModelLabel =

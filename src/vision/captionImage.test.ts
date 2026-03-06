@@ -5,6 +5,7 @@ import {
     resolveVisionProviderSettings,
     fetchImageAsBase64
 } from "./captionImage.ts";
+import { createTestSettings } from "../testSettings.ts";
 
 
 // --- resolveVisionProviderSettings ---
@@ -51,12 +52,12 @@ describe("resolveVisionProviderSettings", () => {
         const llm = {
             isProviderConfigured: (provider) => provider === "anthropic" || provider === "openai"
         };
-        const settings = {
+        const settings = createTestSettings({
             vision: {
-                captionProvider: "anthropic",
-                captionModel: "claude-sonnet-4-5-20250929"
+                provider: "anthropic",
+                model: "claude-sonnet-4-5-20250929"
             }
-        };
+        });
         const result = resolveVisionProviderSettings(llm, settings);
         assert.equal(result.provider, "anthropic");
         assert.equal(result.model, "claude-sonnet-4-5-20250929");
@@ -66,12 +67,12 @@ describe("resolveVisionProviderSettings", () => {
         const llm = {
             isProviderConfigured: (provider) => provider === "anthropic"
         };
-        const settings = {
+        const settings = createTestSettings({
             vision: {
-                captionProvider: "xai",
-                captionModel: "grok-2-vision-latest"
+                provider: "xai",
+                model: "grok-2-vision-latest"
             }
-        };
+        });
         const result = resolveVisionProviderSettings(llm, settings);
         assert.equal(result.provider, "anthropic");
         assert.equal(result.model, "claude-haiku-4-5");

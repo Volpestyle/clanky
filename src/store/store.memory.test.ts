@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
+import { getResolvedVoiceAdmissionClassifierBinding } from "../settings/agentStack.ts";
 import { Store } from "../store.ts";
+import { createTestSettingsPatch } from "../testSettings.ts";
 
 async function withTempStore(run) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-store-test-"));
@@ -97,17 +99,17 @@ test("archiveOldFactsForSubject deactivates older facts", async () => {
 
 test("voice reply decision llm settings normalize provider and model", async () => {
   await withTempStore(async (store) => {
-    const patched = store.patchSettings({
+    const patched = store.patchSettings(createTestSettingsPatch({
       voice: {
         replyDecisionLlm: {
           provider: "CLAUDE-CODE",
           model: " opus "
         }
       }
-    });
+    }));
 
-    assert.equal(patched.voice.replyDecisionLlm.provider, "claude-code");
-    assert.equal(patched.voice.replyDecisionLlm.model, "opus");
-    assert.equal(patched.voice.replyDecisionLlm.maxAttempts, undefined);
+    const binding = getResolvedVoiceAdmissionClassifierBinding(patched);
+    assert.equal(binding?.provider, "claude-code");
+    assert.equal(binding?.model, "opus");
   });
 });

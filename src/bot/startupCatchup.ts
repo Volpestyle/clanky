@@ -1,11 +1,20 @@
+import {
+  getMemorySettings,
+  getReplyPermissions,
+  getStartupSettings
+} from "../settings/agentStack.ts";
+
 export async function runStartupCatchup(runtime, settings) {
-  if (!settings?.startup?.catchupEnabled) return;
-  if (!settings?.permissions?.allowReplies) return;
+  const startup = getStartupSettings(settings);
+  const replyPermissions = getReplyPermissions(settings);
+  const memory = getMemorySettings(settings);
+  if (!startup.catchupEnabled) return;
+  if (!replyPermissions.allowReplies) return;
 
   const channels = runtime.getStartupScanChannels(settings);
-  const lookbackMs = settings.startup.catchupLookbackHours * 60 * 60_000;
-  const maxMessages = settings.startup.catchupMaxMessagesPerChannel;
-  const maxRepliesPerChannel = settings.startup.maxCatchupRepliesPerChannel;
+  const lookbackMs = startup.catchupLookbackHours * 60 * 60_000;
+  const maxMessages = startup.catchupMaxMessagesPerChannel;
+  const maxRepliesPerChannel = startup.maxCatchupRepliesPerChannel;
   const now = Date.now();
 
   for (const channel of channels) {
@@ -25,7 +34,7 @@ export async function runStartupCatchup(runtime, settings) {
 
       const recentMessages = runtime.store.getRecentMessages(
         message.channelId,
-        settings.memory.maxRecentMessages
+        memory.promptSlice.maxRecentMessages
       );
       const addressSignal = await runtime.getReplyAddressSignal(settings, message, recentMessages);
       if (!addressSignal.triggered) continue;

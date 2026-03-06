@@ -3,8 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
+import {
+  getMemorySettings,
+  getResolvedOrchestratorBinding
+} from "./settings/agentStack.ts";
 import { ClankerBot } from "./bot.ts";
 import { Store } from "./store.ts";
+import { createTestSettingsPatch } from "./testSettings.ts";
 
 async function withTempStore(run) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-bot-reply-policy-test-"));
@@ -139,8 +144,12 @@ function buildIncomingMessage({
   };
 }
 
+function patchTestSettings(store, patch) {
+  store.patchSettings(createTestSettingsPatch(patch));
+}
+
 function applyBaselineSettings(store, channelId) {
-  store.patchSettings({
+  patchTestSettings(store, {
     activity: {
       replyEagerness: 65,
       reactionLevel: 20,
@@ -867,9 +876,16 @@ test("text reply follow-up can run web search and append cited sources", async (
     const channelId = "chan-1";
     applyBaselineSettings(store, channelId);
     store.patchSettings({
-      webSearch: {
-        enabled: true,
-        maxSearchesPerHour: 8
+      agentStack: {
+        overrides: {
+          researchRuntime: "local_external_search"
+        },
+        runtimeConfig: {
+          research: {
+            enabled: true,
+            maxSearchesPerHour: 8
+          }
+        }
       }
     });
 
@@ -981,7 +997,10 @@ test("text reply follow-up can run web search and append cited sources", async (
     });
 
     const settings = store.getSettings();
-    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const recentMessages = store.getRecentMessages(
+      channelId,
+      getMemorySettings(settings).promptSlice.maxRecentMessages
+    );
     const sent = await bot.maybeReplyToMessage(incoming, settings, {
       source: "message_event",
       recentMessages,
@@ -1009,14 +1028,27 @@ test("reply follow-up regeneration can use dedicated provider/model override", a
     const channelId = "chan-1";
     applyBaselineSettings(store, channelId);
     store.patchSettings({
-      llm: {
-        provider: "openai",
-        model: "claude-haiku-4-5"
+      agentStack: {
+        preset: "openai_native",
+        advancedOverridesEnabled: true,
+        overrides: {
+          orchestrator: {
+            provider: "openai",
+            model: "claude-haiku-4-5"
+          }
+        }
       },
-      replyFollowupLlm: {
-        enabled: true,
-        provider: "anthropic",
-        model: "claude-haiku-4-5"
+      interaction: {
+        followup: {
+          enabled: true,
+          execution: {
+            mode: "dedicated_model",
+            model: {
+              provider: "anthropic",
+              model: "claude-haiku-4-5"
+            }
+          }
+        }
       }
     });
 
@@ -1110,7 +1142,10 @@ test("reply follow-up regeneration can use dedicated provider/model override", a
     });
 
     const settings = store.getSettings();
-    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const recentMessages = store.getRecentMessages(
+      channelId,
+      getMemorySettings(settings).promptSlice.maxRecentMessages
+    );
     const sent = await bot.maybeReplyToMessage(incoming, settings, {
       source: "message_event",
       recentMessages,
@@ -1126,8 +1161,10 @@ test("reply follow-up regeneration can use dedicated provider/model override", a
     assert.equal(replyPayloads.length, 0);
     assert.equal(channelSendPayloads.length, 1);
     assert.equal(llmCalls.length, 2);
-    assert.equal(llmCalls[0]?.settings?.llm?.provider, "openai");
-    assert.equal(llmCalls[0]?.settings?.llm?.model, "claude-haiku-4-5");
+    assert.equal(getResolvedOrchestratorBinding(llmCalls[0]?.settings).provider, "openai");
+    assert.equal(getResolvedOrchestratorBinding(llmCalls[0]?.settings).model, "claude-haiku-4-5");
+    assert.equal(getResolvedOrchestratorBinding(llmCalls[1]?.settings).provider, "anthropic");
+    assert.equal(getResolvedOrchestratorBinding(llmCalls[1]?.settings).model, "claude-haiku-4-5");
   });
 });
 

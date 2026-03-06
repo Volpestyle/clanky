@@ -1,4 +1,13 @@
 import { parseSoundboardReference } from "./soundboardDirector.ts";
+import {
+  getBotName,
+  getBotNameAliases,
+  getResolvedLegacyVoiceProvider,
+  getResolvedVoiceGenerationBinding,
+  getVoiceConversationPolicy,
+  getVoiceTranscriptionSettings,
+  resolveAgentStack
+} from "../settings/agentStack.ts";
 
 export const VOICE_ADDRESSING_ALL_TOKENS = new Set([
   "ALL",
@@ -325,25 +334,27 @@ export function shortError(text) {
 }
 
 export function resolveVoiceProvider(settings) {
-  return normalizeVoiceProvider(settings?.voice?.voiceProvider, "openai");
+  return normalizeVoiceProvider(getResolvedLegacyVoiceProvider(settings), "openai");
 }
 
 export function resolveBrainProvider(settings) {
   const voiceProvider = resolveVoiceProvider(settings);
-  return normalizeBrainProvider(settings?.voice?.brainProvider, voiceProvider, "openai");
+  return normalizeBrainProvider(getResolvedVoiceGenerationBinding(settings).provider, voiceProvider, "openai");
 }
 
 export function resolveTranscriberProvider(settings) {
-  return normalizeTranscriberProvider(settings?.voice?.transcriberProvider, "openai");
+  const voiceProvider = resolveVoiceProvider(settings);
+  return normalizeTranscriberProvider(voiceProvider === "elevenlabs" ? "openai" : voiceProvider, "openai");
 }
 
 export function resolveVoiceRuntimeMode(settings) {
-  if (settings?.voice?.mode) {
-    return normalizeVoiceRuntimeMode(settings.voice.mode);
+  const resolvedStack = resolveAgentStack(settings);
+  if (resolvedStack.voiceRuntime === "openai_realtime") {
+    return "openai_realtime";
   }
   const voiceProvider = resolveVoiceProvider(settings);
   const modeMap = {
-    openai: "openai_realtime",
+    openai: "stt_pipeline",
     xai: "voice_agent",
     gemini: "gemini_realtime",
     elevenlabs: "elevenlabs_realtime"
@@ -454,8 +465,8 @@ export function isBotNameAddressed({
 }
 
 export function isVoiceTurnAddressedToBot(transcript, settings) {
-  if (isBotNameAddressed({ transcript, botName: settings?.botName || "" })) return true;
-  const aliases = Array.isArray(settings?.botNameAliases) ? settings.botNameAliases : [];
+  if (isBotNameAddressed({ transcript, botName: getBotName(settings) })) return true;
+  const aliases = getBotNameAliases(settings);
   for (const alias of aliases) {
     if (alias && isBotNameAddressed({ transcript, botName: String(alias) })) return true;
   }
@@ -547,7 +558,7 @@ function resolveMergedWakeToken(botTokens = []) {
 }
 
 export function shouldAllowVoiceNsfwHumor(settings) {
-  const voiceFlag = settings?.voice?.allowNsfwHumor;
+  const voiceFlag = getVoiceConversationPolicy(settings).allowNsfwHumor;
   if (voiceFlag === true) return true;
   if (voiceFlag === false) return false;
   return false;
@@ -576,8 +587,9 @@ export function normalizeVoiceAsrLanguageHint(hint = "", fallback = "") {
 }
 
 export function resolveVoiceAsrLanguageGuidance(settings = null) {
-  const mode = normalizeVoiceAsrLanguageMode(settings?.voice?.asrLanguageMode, "auto");
-  const hint = normalizeVoiceAsrLanguageHint(settings?.voice?.asrLanguageHint, "en");
+  const transcription = getVoiceTranscriptionSettings(settings);
+  const mode = normalizeVoiceAsrLanguageMode(transcription.languageMode, "auto");
+  const hint = normalizeVoiceAsrLanguageHint(transcription.languageHint, "en");
   const fixedLanguage = mode === "fixed" ? hint : "";
   const promptHint = hint
     ? `Language hint: ${hint}. Prefer this language when uncertain, but transcribe the actual spoken language.`

@@ -15,16 +15,21 @@ import {
   serializeForPrompt
 } from "../botHelpers.ts";
 import {
-  defaultModelForLlmProvider,
-  normalizeLlmProvider
-} from "../llm/llmHelpers.ts";
-import {
   buildReplyToolSet,
   executeReplyTool
 } from "../tools/replyTools.ts";
 import type { ReplyToolRuntime, ReplyToolContext } from "../tools/replyTools.ts";
 import { clamp, sanitizeBotText } from "../utils.ts";
 import { loadConversationContinuityContext } from "./conversationContinuity.ts";
+import {
+  applyOrchestratorOverrideSettings,
+  getDirectiveSettings,
+  getMemorySettings,
+  getResolvedOrchestratorBinding,
+  getResolvedVoiceGenerationBinding,
+  getReplyGenerationSettings,
+  getVoiceSoundboardSettings
+} from "../settings/agentStack.ts";
 
 const MAX_SOUNDBOARD_LEAK_TOKEN_SCAN = 24;
 const SOUNDBOARD_CANDIDATE_PARSE_LIMIT = 40;
@@ -141,14 +146,15 @@ export async function composeVoiceOperationalMessage(runtime, {
       .slice(0, 220)
     : "";
 
-  const tunedSettings = {
-    ...settings,
-    llm: {
-      ...(settings?.llm || {}),
-      temperature: clamp(Number(settings?.llm?.temperature) || operationalTemperature, 0, 0.7),
-      maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || operationalMaxOutputTokens, 32, 110)
-    }
-  };
+  const operationalBinding = getResolvedOrchestratorBinding(settings);
+  const operationalReplyGeneration = getReplyGenerationSettings(settings);
+  const tunedSettings = applyOrchestratorOverrideSettings(settings, {
+    provider: operationalBinding.provider,
+    model: operationalBinding.model,
+    temperature: clamp(Number(operationalReplyGeneration.temperature) || operationalTemperature, 0, 0.7),
+    maxOutputTokens: clamp(Number(operationalReplyGeneration.maxOutputTokens) || operationalMaxOutputTokens, 32, 110),
+    reasoningEffort: operationalBinding.reasoningEffort
+  });
   const operationalMemoryFacts = await runtime.loadRelevantMemoryFacts({
     settings,
     guildId,
@@ -319,10 +325,10 @@ export async function generateVoiceTurnReply(runtime, {
     .filter(Boolean)
     .slice(0, 40);
   const allowSoundboardToolCall = Boolean(
-    settings?.voice?.soundboard?.enabled && normalizedSoundboardCandidates.length
+    getVoiceSoundboardSettings(settings).enabled && normalizedSoundboardCandidates.length
   );
-  const allowMemoryToolCalls = Boolean(settings?.memory?.enabled);
-  const allowAdaptiveDirectiveToolCalls = Boolean(settings?.adaptiveDirectives?.enabled);
+  const allowMemoryToolCalls = Boolean(getMemorySettings(settings).enabled);
+  const allowAdaptiveDirectiveToolCalls = Boolean(getDirectiveSettings(settings).enabled);
   const allowWebSearchToolCall = Boolean(
     typeof runtime.search?.searchAndRead === "function"
   );
@@ -420,26 +426,15 @@ export async function generateVoiceTurnReply(runtime, {
   const recentConversationHistory = continuity.recentConversationHistory;
   const adaptiveDirectives = Array.isArray(continuity.adaptiveDirectives) ? continuity.adaptiveDirectives : [];
 
-  const voiceGenerationUsesTextModel = Boolean(settings?.voice?.generationLlm?.useTextModel);
-  const voiceGenerationProvider = normalizeLlmProvider(
-    voiceGenerationUsesTextModel ? settings?.llm?.provider : settings?.voice?.generationLlm?.provider
-  );
-  const voiceGenerationModel = String(
-    (voiceGenerationUsesTextModel ? settings?.llm?.model : settings?.voice?.generationLlm?.model) ||
-    defaultModelForLlmProvider(voiceGenerationProvider)
-  )
-    .trim()
-    .slice(0, 120) || defaultModelForLlmProvider(voiceGenerationProvider);
-  const tunedSettings = {
-    ...settings,
-    llm: {
-      ...(settings?.llm || {}),
-      provider: voiceGenerationProvider,
-      model: voiceGenerationModel,
-      temperature: clamp(Number(settings?.llm?.temperature) || 0.8, 0, 1.2),
-      maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || 220, 40, 420)
-    }
-  };
+  const voiceGenerationBinding = getResolvedVoiceGenerationBinding(settings);
+  const replyGeneration = getReplyGenerationSettings(settings);
+  const tunedSettings = applyOrchestratorOverrideSettings(settings, {
+    provider: voiceGenerationBinding.provider,
+    model: voiceGenerationBinding.model,
+    temperature: clamp(Number(replyGeneration.temperature) || 0.8, 0, 1.2),
+    maxOutputTokens: clamp(Number(replyGeneration.maxOutputTokens) || 220, 40, 420)
+  });
+  const tunedBinding = getResolvedOrchestratorBinding(tunedSettings);
 
   const webSearch = allowWebSearchToolCall && typeof runtime.buildWebSearchContext === "function"
     ? runtime.buildWebSearchContext(settings, incomingTranscript)
@@ -593,10 +588,10 @@ export async function generateVoiceTurnReply(runtime, {
     },
     soundboardCandidateCount: normalizedSoundboardCandidates.length,
     llmConfig: {
-      provider: tunedSettings.llm.provider,
-      model: tunedSettings.llm.model,
-      temperature: tunedSettings.llm.temperature,
-      maxOutputTokens: tunedSettings.llm.maxOutputTokens
+      provider: tunedBinding.provider,
+      model: tunedBinding.model,
+      temperature: tunedBinding.temperature,
+      maxOutputTokens: tunedBinding.maxOutputTokens
     }
   };
 
@@ -609,8 +604,6 @@ export async function generateVoiceTurnReply(runtime, {
       event: sessionId ? "voice_session" : "voice_turn"
     };
 
-    const codeAgentSettings =
-      (settings as Record<string, unknown>)?.codeAgent as Record<string, unknown> | undefined;
     const codeAgentRuntimeAvailable = typeof runtime.runModelRequestedCodeTask === "function";
     const voiceReplyTools = buildReplyToolSet(settings as Record<string, unknown>, {
       webSearchAvailable: allowWebSearchToolCall && webSearchAvailableNow,
@@ -619,7 +612,7 @@ export async function generateVoiceTurnReply(runtime, {
       adaptiveDirectivesAvailable: allowAdaptiveDirectiveToolCalls,
       imageLookupAvailable: false,
       openArticleAvailable: allowOpenArticleToolCall && openArticleCandidates.length > 0,
-      codeAgentAvailable: Boolean(codeAgentSettings?.enabled && codeAgentRuntimeAvailable),
+      codeAgentAvailable: codeAgentRuntimeAvailable,
       voiceToolsAvailable: Boolean(voiceToolCallbacks)
     });
 

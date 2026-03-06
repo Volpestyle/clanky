@@ -1,4 +1,10 @@
+import OpenAI from "openai";
 import { normalizeDiscoveryUrl } from "./discovery.ts";
+import {
+  getResearchRuntimeConfig,
+  getResolvedOrchestratorBinding,
+  resolveAgentStack
+} from "./settings/agentStack.ts";
 import { assertPublicUrl } from "./urlSafety.ts";
 import { clamp } from "./utils.ts";
 import { normalizeWhitespaceText } from "./normalization/text.ts";
@@ -48,14 +54,18 @@ class AttemptError extends Error {
 export class WebSearchService {
   store;
   providers;
+  openai;
 
   constructor({ appConfig, store }) {
     this.store = store;
     this.providers = buildProviders(appConfig);
+    this.openai = String(appConfig?.openaiApiKey || "").trim()
+      ? new OpenAI({ apiKey: String(appConfig?.openaiApiKey || "").trim() })
+      : null;
   }
 
   isConfigured() {
-    return this.providers.some((provider) => provider.isConfigured());
+    return Boolean(this.openai) || this.providers.some((provider) => provider.isConfigured());
   }
 
   async searchAndRead({
@@ -63,7 +73,8 @@ export class WebSearchService {
     query,
     trace = { guildId: null, channelId: null, userId: null, source: null }
   }) {
-    const config = normalizeWebSearchConfig(settings?.webSearch);
+    const config = normalizeWebSearchConfig(getResearchRuntimeConfig(settings).localExternalSearch);
+    const resolvedStack = resolveAgentStack(settings);
     const normalizedQuery = sanitizeExternalText(query, 220);
     if (!normalizedQuery) {
       return {
@@ -71,8 +82,17 @@ export class WebSearchService {
         results: [],
         fetchedPages: 0,
         providerUsed: null,
-        providerFallbackUsed: false
+        providerFallbackUsed: false,
+        summaryText: ""
       };
+    }
+
+    if (resolvedStack.researchRuntime === "openai_native_web_search") {
+      return await this.searchWithOpenAiHostedWebSearch({
+        settings,
+        query: normalizedQuery,
+        trace
+      });
     }
 
     const providers = resolveProviderOrder(this.providers, config.providerOrder);
@@ -168,7 +188,8 @@ export class WebSearchService {
         results,
         fetchedPages,
         providerUsed,
-        providerFallbackUsed
+        providerFallbackUsed,
+        summaryText: ""
       };
     } catch (error) {
       this.logSearchError({
@@ -181,6 +202,90 @@ export class WebSearchService {
       });
       throw error;
     }
+  }
+
+  async searchWithOpenAiHostedWebSearch({
+    settings,
+    query,
+    trace
+  }) {
+    if (!this.openai) {
+      throw new Error("OpenAI native web search requires OPENAI_API_KEY.");
+    }
+
+    const researchConfig = getResearchRuntimeConfig(settings);
+    const nativeConfig = researchConfig.openaiNativeWebSearch as {
+      userLocation?: string;
+      allowedDomains?: readonly string[];
+    };
+    const tool = {
+      type: "web_search_preview_2025_03_11",
+      ...(buildOpenAiWebSearchUserLocation(nativeConfig.userLocation)
+        ? { user_location: buildOpenAiWebSearchUserLocation(nativeConfig.userLocation) }
+        : {}),
+      ...(normalizeAllowedDomains(nativeConfig.allowedDomains).length
+        ? {
+            filters: {
+              allowed_domains: normalizeAllowedDomains(nativeConfig.allowedDomains)
+            }
+          }
+        : {})
+    };
+    const orchestrator = getResolvedOrchestratorBinding(settings);
+    const model =
+      String(orchestrator?.provider || "").trim() === "openai" && String(orchestrator?.model || "").trim()
+        ? String(orchestrator.model).trim()
+        : "gpt-5.2";
+    const started = Date.now();
+    const response = await this.openai.responses.create({
+      model,
+      input: [{
+        role: "user",
+        content: [{
+          type: "input_text",
+          text: query
+        }]
+      }],
+      tools: [tool],
+      include: ["web_search_call.action.sources"]
+    });
+
+    const summaryText = normalizeWhitespaceText(String(response.output_text || "").trim(), {
+      maxLen: 6_000
+    });
+    const results = extractOpenAiWebSearchResults(response).slice(
+      0,
+      Math.max(1, Number(researchConfig.localExternalSearch?.maxResults) || 5)
+    );
+    const fetchedPages = results.filter((row) => row.pageSummary).length;
+
+    this.store.logAction({
+      kind: "search_call",
+      guildId: trace.guildId,
+      channelId: trace.channelId,
+      userId: trace.userId,
+      content: query,
+      metadata: {
+        query,
+        source: trace.source || "unknown",
+        runtime: "openai_native_web_search",
+        returnedResults: results.length,
+        pageReadsRequested: 0,
+        pageReadsSucceeded: fetchedPages,
+        providerUsed: "openai_native_web_search",
+        fallbackUsed: false,
+        latencyMs: Date.now() - started
+      }
+    });
+
+    return {
+      query,
+      results,
+      fetchedPages,
+      providerUsed: "openai_native_web_search",
+      providerFallbackUsed: false,
+      summaryText
+    };
   }
 
   async readPageSummary(url, maxChars) {
@@ -281,6 +386,67 @@ function buildProviders(appConfig) {
     new BraveSearchProvider(appConfig),
     new SerpApiSearchProvider(appConfig)
   ];
+}
+
+function normalizeAllowedDomains(value) {
+  return Array.isArray(value)
+    ? value.map((entry) => String(entry || "").trim().toLowerCase()).filter(Boolean)
+    : [];
+}
+
+function buildOpenAiWebSearchUserLocation(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const parts = raw.split(",").map((entry) => entry.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  const [city = "", region = "", country = ""] = parts;
+  return {
+    type: "approximate",
+    ...(city ? { city } : {}),
+    ...(region ? { region } : {}),
+    ...(country ? { country } : {})
+  };
+}
+
+function extractOpenAiWebSearchResults(response) {
+  const output = Array.isArray(response?.output) ? response.output : [];
+  const results = [];
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue;
+    if (item.type !== "web_search_call") continue;
+    const sources = Array.isArray(item?.action?.sources) ? item.action.sources : [];
+    for (const source of sources) {
+      if (!source || typeof source !== "object") continue;
+      const url = normalizeDiscoveryUrl(String(source.url || "").trim());
+      if (!url) continue;
+      let domain = "";
+      try {
+        domain = new URL(url).hostname.replace(/^www\./, "");
+      } catch {
+        domain = "";
+      }
+      results.push({
+        title: String(source.title || domain || "untitled").trim() || "untitled",
+        url,
+        domain,
+        snippet: normalizeWhitespaceText(String(source.description || source.snippet || "").trim(), { maxLen: 500 }),
+        provider: "openai_native_web_search"
+      });
+    }
+  }
+  return dedupeOpenAiWebSearchResults(results);
+}
+
+function dedupeOpenAiWebSearchResults(results) {
+  const deduped = [];
+  const seen = new Set();
+  for (const result of Array.isArray(results) ? results : []) {
+    const url = String(result?.url || "").trim();
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    deduped.push(result);
+  }
+  return deduped;
 }
 
 function resolveProviderOrder(providers = [], configuredOrder) {

@@ -1,3 +1,5 @@
+import { getVoiceConversationPolicy } from "../settings/agentStack.ts";
+
 /**
  * Operational message verbosity tiers.
  *
@@ -127,7 +129,7 @@ export async function sendOperationalMessage(manager, {
       : { detail: String(details || "") };
 
   // --- Verbosity gate ---
-  const verbosity = normalizeVerbosity(resolvedSettings?.voice?.operationalMessages);
+  const verbosity = normalizeVerbosity(getVoiceConversationPolicy(resolvedSettings).operationalMessages);
   const tier = classifyOperationalMessageTier(String(event || ""), reason);
   const disposition = resolveMessageDisposition(mustNotify, tier, verbosity);
 

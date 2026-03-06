@@ -1,33 +1,39 @@
+import { getDiscoverySettings } from "../settings/agentStack.ts";
 import { clamp } from "../utils.ts";
 
 const DISCOVERY_TICK_MS = 60_000;
 
 export function getDiscoveryPostingIntervalMs(settings) {
-  const minByGap = settings.discovery.minMinutesBetweenPosts * 60_000;
-  const perDay = Math.max(settings.discovery.maxPostsPerDay, 1);
+  const discovery = getDiscoverySettings(settings);
+  const minByGap = discovery.minMinutesBetweenPosts * 60_000;
+  const perDay = Math.max(discovery.maxPostsPerDay, 1);
   const evenPacing = Math.floor((24 * 60 * 60 * 1000) / perDay);
   return Math.max(minByGap, evenPacing);
 }
 
 export function getDiscoveryAverageIntervalMs(settings) {
-  const perDay = Math.max(settings.discovery.maxPostsPerDay, 1);
+  const discovery = getDiscoverySettings(settings);
+  const perDay = Math.max(discovery.maxPostsPerDay, 1);
   return Math.floor((24 * 60 * 60 * 1000) / perDay);
 }
 
 export function getDiscoveryPacingMode(settings) {
-  return String(settings.discovery?.pacingMode || "even").toLowerCase() === "spontaneous"
+  const discovery = getDiscoverySettings(settings);
+  return String(discovery.pacingMode || "even").toLowerCase() === "spontaneous"
     ? "spontaneous"
     : "even";
 }
 
 export function getDiscoveryMinGapMs(settings) {
-  return Math.max(1, Number(settings.discovery?.minMinutesBetweenPosts || 0) * 60_000);
+  const discovery = getDiscoverySettings(settings);
+  return Math.max(1, Number(discovery.minMinutesBetweenPosts || 0) * 60_000);
 }
 
 export function evaluateSpontaneousDiscoverySchedule({ settings, lastPostTs, elapsedMs, posts24h, minGapMs }) {
+  const discovery = getDiscoverySettings(settings);
   const mode = "spontaneous";
-  const spontaneity01 = clamp(Number(settings.discovery?.spontaneity) || 0, 0, 100) / 100;
-  const maxPostsPerDay = Math.max(Number(settings.discovery?.maxPostsPerDay) || 1, 1);
+  const spontaneity01 = clamp(Number(discovery.spontaneity) || 0, 0, 100) / 100;
+  const maxPostsPerDay = Math.max(Number(discovery.maxPostsPerDay) || 1, 1);
   const averageIntervalMs = getDiscoveryAverageIntervalMs(settings);
 
   if (!lastPostTs || !Number.isFinite(elapsedMs)) {
@@ -79,10 +85,11 @@ export function evaluateSpontaneousDiscoverySchedule({ settings, lastPostTs, ela
 }
 
 export function evaluateDiscoverySchedule({ settings, startup, lastPostTs, elapsedMs, posts24h }) {
+  const discovery = getDiscoverySettings(settings);
   const mode = getDiscoveryPacingMode(settings);
   const minGapMs = getDiscoveryMinGapMs(settings);
 
-  if (startup && !settings.discovery.postOnStartup) {
+  if (startup && !discovery.postOnStartup) {
     return {
       shouldPost: false,
       mode,
@@ -140,7 +147,7 @@ export function evaluateDiscoverySchedule({ settings, startup, lastPostTs, elaps
 }
 
 export function pickDiscoveryChannel({ settings, client, isChannelAllowed }) {
-  const ids = settings.discovery.channelIds
+  const ids = getDiscoverySettings(settings).channelIds
     .map((id) => String(id).trim())
     .filter(Boolean);
   if (!ids.length) return null;

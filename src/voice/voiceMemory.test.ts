@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
 import { normalizeVoiceText } from "./voiceSessionHelpers.ts";
+import { createTestSettings } from "../testSettings.ts";
 
 function createManager({ memory = null }: { memory?: unknown } = {}) {
   const logs: unknown[] = [];
@@ -25,7 +26,12 @@ function createManager({ memory = null }: { memory?: unknown } = {}) {
         recordedMessages.push(entry);
       },
       getSettings() {
-        return { botName: "clanker conk" };
+        return createTestSettings({
+          botName: "clanker conk",
+          memory: { enabled: false },
+          webSearch: { enabled: false },
+          adaptiveDirectives: { enabled: false }
+        });
       }
     },
     appConfig: {},
@@ -46,7 +52,7 @@ test("memory tools excluded when settings.memory.enabled is false", () => {
   const { manager } = createManager();
   const tools = manager.resolveVoiceRealtimeToolDescriptors({
     session: null,
-    settings: { memory: { enabled: false }, webSearch: { enabled: true } }
+    settings: createTestSettings({ memory: { enabled: false }, webSearch: { enabled: true } })
   });
 
   const names = tools.map((t: { name: string }) => t.name);
@@ -58,11 +64,11 @@ test("memory tools included when settings.memory.enabled is true", () => {
   const { manager } = createManager();
   const tools = manager.resolveVoiceRealtimeToolDescriptors({
     session: null,
-    settings: {
+    settings: createTestSettings({
       memory: { enabled: true },
       adaptiveDirectives: { enabled: true },
       webSearch: { enabled: true }
-    }
+    })
   });
 
   const names = tools.map((t: { name: string }) => t.name);
@@ -76,11 +82,11 @@ test("adaptive directive tools can stay enabled when durable memory is disabled"
   const { manager } = createManager();
   const tools = manager.resolveVoiceRealtimeToolDescriptors({
     session: null,
-    settings: {
+    settings: createTestSettings({
       memory: { enabled: false },
       adaptiveDirectives: { enabled: true },
       webSearch: { enabled: true }
-    }
+    })
   });
 
   const names = tools.map((t: { name: string }) => t.name);
@@ -94,11 +100,11 @@ test("adaptive directive tools can be disabled independently of durable memory",
   const { manager } = createManager();
   const tools = manager.resolveVoiceRealtimeToolDescriptors({
     session: null,
-    settings: {
+    settings: createTestSettings({
       memory: { enabled: true },
       adaptiveDirectives: { enabled: false },
       webSearch: { enabled: true }
-    }
+    })
   });
 
   const names = tools.map((t: { name: string }) => t.name);
@@ -108,7 +114,7 @@ test("adaptive directive tools can be disabled independently of durable memory",
   assert.ok(!names.includes("adaptive_directive_remove"), "adaptive_directive_remove should be excluded");
 });
 
-test("memory tools excluded when settings is null", () => {
+test("memory tools fall back to canonical defaults when settings is null", () => {
   const { manager } = createManager();
   const tools = manager.resolveVoiceRealtimeToolDescriptors({
     session: null,
@@ -116,10 +122,10 @@ test("memory tools excluded when settings is null", () => {
   });
 
   const names = tools.map((t: { name: string }) => t.name);
-  assert.ok(!names.includes("memory_search"), "memory_search should be excluded");
-  assert.ok(!names.includes("memory_write"), "memory_write should be excluded");
-  assert.ok(!names.includes("adaptive_directive_add"), "adaptive_directive_add should be excluded");
-  assert.ok(!names.includes("adaptive_directive_remove"), "adaptive_directive_remove should be excluded");
+  assert.ok(names.includes("memory_search"), "memory_search should be included");
+  assert.ok(names.includes("memory_write"), "memory_write should be included");
+  assert.ok(names.includes("adaptive_directive_add"), "adaptive_directive_add should be included");
+  assert.ok(names.includes("adaptive_directive_remove"), "adaptive_directive_remove should be included");
 });
 
 // --- Fix 1 regression: web_search still gated ---
@@ -128,7 +134,7 @@ test("web_search excluded when settings.webSearch.enabled is false", () => {
   const { manager } = createManager();
   const tools = manager.resolveVoiceRealtimeToolDescriptors({
     session: null,
-    settings: { memory: { enabled: true }, webSearch: { enabled: false } }
+    settings: createTestSettings({ memory: { enabled: true }, webSearch: { enabled: false } })
   });
 
   const names = tools.map((t: { name: string }) => t.name);
@@ -140,7 +146,7 @@ test("web_search included when settings.webSearch.enabled is true", () => {
   const { manager } = createManager();
   const tools = manager.resolveVoiceRealtimeToolDescriptors({
     session: null,
-    settings: { memory: { enabled: false }, webSearch: { enabled: true } }
+    settings: createTestSettings({ memory: { enabled: false }, webSearch: { enabled: true } })
   });
 
   const names = tools.map((t: { name: string }) => t.name);
@@ -151,9 +157,9 @@ test("code_task excluded when code agent is enabled but runtime hooks are unavai
   const { manager } = createManager();
   const tools = manager.resolveVoiceRealtimeToolDescriptors({
     session: null,
-    settings: {
-      codeAgent: { enabled: true }
-    }
+    settings: createTestSettings({
+      codeAgent: { provider: "claude-code" }
+    })
   });
 
   const names = tools.map((t: { name: string }) => t.name);
@@ -165,9 +171,9 @@ test("code_task included when code agent is enabled and one-shot runtime hook is
   manager.runModelRequestedCodeTask = async () => ({ text: "ok" });
   const tools = manager.resolveVoiceRealtimeToolDescriptors({
     session: null,
-    settings: {
-      codeAgent: { enabled: true }
-    }
+    settings: createTestSettings({
+      codeAgent: { provider: "claude-code", allowedUserIds: ["user-1"] }
+    })
   });
 
   const names = tools.map((t: { name: string }) => t.name);
@@ -197,7 +203,7 @@ test("assistant voice turns are persisted into searchable message history", () =
     guildId: "guild-1",
     textChannelId: "text-1",
     ending: false,
-    settingsSnapshot: { botName: "clanker conk" },
+    settingsSnapshot: createTestSettings({ botName: "clanker conk" }),
     recentVoiceTurns: [],
     transcriptTurns: []
   };
@@ -246,7 +252,7 @@ test("pending ingestion is awaited before memory slice lookup", async () => {
   // Queue ingestion — stores promise on session
   manager.queueVoiceMemoryIngest({
     session,
-    settings: { memory: { enabled: true } },
+    settings: createTestSettings({ memory: { enabled: true } }),
     userId: "user-1",
     transcript: "remember this fact about me"
   });

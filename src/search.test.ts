@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { WebSearchService } from "./search.ts";
+import { createTestSettings } from "./testSettings.ts";
 
 function createService() {
   const logs = [];
@@ -45,13 +46,13 @@ test("searchAndRead falls back to secondary provider and reads pages", async () 
   });
 
   const result = await service.searchAndRead({
-    settings: {
+    settings: createTestSettings({
       webSearch: {
         maxResults: 3,
         maxPagesToRead: 1,
         providerOrder: ["brave", "serpapi"]
       }
-    },
+    }),
     query: "  space cats ",
     trace: { guildId: "guild-1", channelId: "chan-1", userId: "user-1", source: "test" }
   });
@@ -76,7 +77,7 @@ test("searchAndRead logs provider-stage errors and rethrows when all providers f
 
   await assert.rejects(
     () => service.searchAndRead({
-      settings: { webSearch: { providerOrder: ["brave"] } },
+      settings: createTestSettings({ webSearch: { providerOrder: ["brave"] } }),
       query: "deep topic",
       trace: { guildId: "guild-1", channelId: "chan-2", userId: "user-9", source: "policy" }
     }),
