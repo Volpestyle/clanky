@@ -32,9 +32,14 @@ export type ImageInput = {
   url?: string | null;
 };
 
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+  | { type: "tool_result"; tool_use_id: string; content: string };
+
 export type ContextMessage = {
   role?: string | null;
-  content?: string | null | unknown;
+  content?: string | null | ContentBlock[];
 };
 
 export type ChatTool = {
@@ -144,6 +149,155 @@ export type XaiJsonRequestOptions = {
   method?: string;
   body?: XaiJsonRecord | null;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeContextText(value: unknown) {
+  const text = String(value ?? "").trim();
+  return text ? text : null;
+}
+
+function normalizeContentBlockInput(value: unknown): Record<string, unknown> {
+  if (isRecord(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = safeJsonParse(value, null);
+    if (isRecord(parsed)) {
+      return parsed;
+    }
+  }
+  return {};
+}
+
+function normalizeCanonicalContentBlocks(value: unknown): ContentBlock[] {
+  if (!Array.isArray(value)) return [];
+
+  const blocks: ContentBlock[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+
+    if (item.type === "text") {
+      const text = normalizeContextText(item.text);
+      if (text) {
+        blocks.push({ type: "text", text });
+      }
+      continue;
+    }
+
+    if (item.type === "tool_use" || item.type === "tool_call") {
+      const id = normalizeContextText(item.id);
+      const name = normalizeContextText(item.name);
+      if (!id || !name) continue;
+      blocks.push({
+        type: "tool_use",
+        id,
+        name,
+        input: normalizeContentBlockInput(item.input)
+      });
+      continue;
+    }
+
+    if (item.type === "tool_result") {
+      const toolUseId = normalizeContextText(item.tool_use_id ?? item.toolCallId);
+      const content = normalizeContextText(item.content);
+      if (!toolUseId || !content) continue;
+      blocks.push({
+        type: "tool_result",
+        tool_use_id: toolUseId,
+        content
+      });
+    }
+  }
+
+  return blocks;
+}
+
+function normalizeOpenAiRawContent(value: unknown): ContentBlock[] {
+  if (!Array.isArray(value)) return [];
+
+  const blocks: ContentBlock[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+
+    if (item.type === "message" && item.role === "assistant") {
+      const contentParts = Array.isArray(item.content) ? item.content : [];
+      for (const part of contentParts) {
+        if (!isRecord(part)) continue;
+        if (part.type === "output_text") {
+          const text = normalizeContextText(part.text);
+          if (text) {
+            blocks.push({ type: "text", text });
+          }
+          continue;
+        }
+        if (part.type === "refusal") {
+          const text = normalizeContextText(part.refusal);
+          if (text) {
+            blocks.push({ type: "text", text });
+          }
+        }
+      }
+      continue;
+    }
+
+    if (item.type !== "function_call") continue;
+    const id = normalizeContextText(item.call_id ?? item.id);
+    const name = normalizeContextText(item.name);
+    if (!id || !name) continue;
+    blocks.push({
+      type: "tool_use",
+      id,
+      name,
+      input: normalizeContentBlockInput(item.arguments)
+    });
+  }
+
+  return blocks;
+}
+
+function normalizeXaiRawContent(value: unknown): ContentBlock[] {
+  if (!isRecord(value)) return [];
+
+  const blocks: ContentBlock[] = [];
+  const text = normalizeContextText(value.content);
+  if (text) {
+    blocks.push({ type: "text", text });
+  }
+
+  const toolCalls = Array.isArray(value.tool_calls) ? value.tool_calls : [];
+  for (const toolCall of toolCalls) {
+    if (!isRecord(toolCall)) continue;
+    const id = normalizeContextText(toolCall.id);
+    const functionPayload = isRecord(toolCall.function) ? toolCall.function : {};
+    const name = normalizeContextText(functionPayload.name);
+    if (!id || !name) continue;
+    blocks.push({
+      type: "tool_use",
+      id,
+      name,
+      input: normalizeContentBlockInput(functionPayload.arguments)
+    });
+  }
+
+  return blocks;
+}
+
+export function buildContextContentBlocks(rawContent: unknown, fallbackText = ""): ContentBlock[] {
+  const canonicalBlocks = normalizeCanonicalContentBlocks(rawContent);
+  if (canonicalBlocks.length > 0) return canonicalBlocks;
+
+  const openAiBlocks = normalizeOpenAiRawContent(rawContent);
+  if (openAiBlocks.length > 0) return openAiBlocks;
+
+  const xaiBlocks = normalizeXaiRawContent(rawContent);
+  if (xaiBlocks.length > 0) return xaiBlocks;
+
+  const text = normalizeContextText(fallbackText);
+  return text ? [{ type: "text", text }] : [];
+}
 
 export const MEMORY_EXTRACTION_SCHEMA = {
   type: "object",

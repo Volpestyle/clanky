@@ -47,6 +47,11 @@ import {
   isDevTaskEnabled
 } from "../settings/agentStack.ts";
 import type { Settings } from "../settings/settingsSchema.ts";
+import {
+  buildContextContentBlocks,
+  type ContentBlock,
+  type ContextMessage
+} from "../llm/serviceShared.ts";
 import type { ReplyPipelineRuntime } from "./botContext.ts";
 
 type ReplyPipelineAttachment = {
@@ -666,7 +671,7 @@ export async function executeReplyLlm(
       source
     }
   };
-  let replyContextMessages: Array<{ role: string; content: unknown }> = [];
+  let replyContextMessages: ContextMessage[] = [];
 
   const llm1StartedAtMs = Date.now();
   let generation: ReplyGeneration = await bot.llm.generate({
@@ -695,16 +700,14 @@ export async function executeReplyLlm(
     replyToolLoopSteps < REPLY_TOOL_LOOP_MAX_STEPS &&
     replyTotalToolCalls < REPLY_TOOL_LOOP_MAX_CALLS
   ) {
-    const assistantContent = generation.rawContent || [
-      { type: "text", text: generation.text || "" }
-    ];
+    const assistantContent = buildContextContentBlocks(generation.rawContent, generation.text);
     replyContextMessages = [
       ...replyContextMessages,
       { role: "user", content: initialUserPrompt },
       { role: "assistant", content: assistantContent }
     ];
 
-    const toolResultMessages: Array<{ type: string; tool_use_id: string; content: string }> = [];
+    const toolResultMessages: ContentBlock[] = [];
 
     // Separate sub-agent tools (can run concurrently) from sequential tools
     const CONCURRENT_TOOL_NAMES = new Set(["code_task", "browser_browse"]);

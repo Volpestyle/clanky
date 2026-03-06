@@ -30,6 +30,11 @@ import {
   getReplyGenerationSettings,
   getVoiceSoundboardSettings
 } from "../settings/agentStack.ts";
+import {
+  buildContextContentBlocks,
+  type ContentBlock,
+  type ContextMessage
+} from "../llm/serviceShared.ts";
 import type { VoiceReplyRuntime } from "./botContext.ts";
 
 const MAX_SOUNDBOARD_LEAK_TOKEN_SCAN = 24;
@@ -311,7 +316,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     .slice(0, 700);
   if (!incomingTranscript) return { text: "" };
 
-  const normalizedContextMessages = (Array.isArray(contextMessages) ? contextMessages : [])
+  const normalizedContextMessages: ContextMessage[] = (Array.isArray(contextMessages) ? contextMessages : [])
     .map((row) => ({
       role: row?.role === "assistant" ? "assistant" : "user",
       content: String(row?.content || "")
@@ -685,7 +690,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     };
 
     const initialUserPrompt = buildVoiceUserPrompt();
-    let voiceContextMessages: Array<{ role: string; content: unknown }> = [
+    let voiceContextMessages: ContextMessage[] = [
       ...normalizedContextMessages
     ];
 
@@ -710,16 +715,14 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       voiceToolLoopSteps < VOICE_TOOL_LOOP_MAX_STEPS &&
       voiceTotalToolCalls < VOICE_TOOL_LOOP_MAX_CALLS
     ) {
-      const assistantContent = generation.rawContent || [
-        { type: "text", text: generation.text || "" }
-      ];
+      const assistantContent = buildContextContentBlocks(generation.rawContent, generation.text);
       voiceContextMessages = [
         ...voiceContextMessages,
         { role: "user", content: initialUserPrompt },
         { role: "assistant", content: assistantContent }
       ];
 
-      const toolResultMessages: Array<{ type: string; tool_use_id: string; content: string }> = [];
+      const toolResultMessages: ContentBlock[] = [];
       for (const toolCall of generation.toolCalls) {
         if (voiceTotalToolCalls >= VOICE_TOOL_LOOP_MAX_CALLS) break;
         voiceTotalToolCalls += 1;

@@ -21,6 +21,11 @@ import {
   getMemorySettings,
   getReplyPermissions
 } from "../settings/agentStack.ts";
+import {
+  buildContextContentBlocks,
+  type ContentBlock,
+  type ContextMessage
+} from "../llm/serviceShared.ts";
 import type { BotContext } from "./botContext.ts";
 
 const MAX_AUTOMATION_RUNS_PER_TICK = 4;
@@ -438,7 +443,7 @@ export async function generateAutomationPayload(
     trace: automationTrace
   };
 
-  let automationContextMessages: Array<{ role: string; content: unknown }> = [];
+  let automationContextMessages: ContextMessage[] = [];
   let generation = await runtime.llm.generate({
     settings,
     systemPrompt: automationSystemPrompt,
@@ -459,16 +464,14 @@ export async function generateAutomationPayload(
     automationToolLoopSteps < AUTOMATION_TOOL_LOOP_MAX_STEPS &&
     automationTotalToolCalls < AUTOMATION_TOOL_LOOP_MAX_CALLS
   ) {
-    const assistantContent = generation.rawContent || [
-      { type: "text", text: generation.text || "" }
-    ];
+    const assistantContent = buildContextContentBlocks(generation.rawContent, generation.text);
     automationContextMessages = [
       ...automationContextMessages,
       { role: "user", content: userPrompt },
       { role: "assistant", content: assistantContent }
     ];
 
-    const toolResultMessages: Array<{ type: string; tool_use_id: string; content: string }> = [];
+    const toolResultMessages: ContentBlock[] = [];
     for (const toolCall of generation.toolCalls) {
       if (automationTotalToolCalls >= AUTOMATION_TOOL_LOOP_MAX_CALLS) break;
       automationTotalToolCalls += 1;
