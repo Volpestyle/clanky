@@ -152,8 +152,10 @@ Default OpenAI-first preset.
 | Voice | OpenAI Realtime |
 | Voice admission | `adaptive` policy with optional classifier gate |
 | Dev orchestrator | GPT-5.4 |
-| Coding worker | Codex default |
-| Secondary coding worker | Claude Code optional reviewer/fallback |
+| Dev design | Claude Code |
+| Dev implementation | Codex |
+| Dev review | Claude Code |
+| Dev research | inherit orchestrator |
 
 ### 6.2 `anthropic_brain_openai_tools`
 
@@ -168,18 +170,54 @@ Anthropic provides the actual orchestrator model, but OpenAI still provides sele
 | Voice | OpenAI Realtime or legacy voice stack |
 | Voice admission | `adaptive` or `classifier_gate`, configurable |
 | Dev orchestrator | Anthropic or OpenAI, configurable |
-| Coding worker | Codex and Claude Code |
+| Dev design | Claude Code |
+| Dev implementation | Claude Code primary, Codex parallel |
+| Dev review | Claude Code |
+| Dev research | inherit orchestrator |
 
 Important constraint:
 
 - OpenAI native hosted tools are only directly available when the active orchestrator is an OpenAI model in the OpenAI tool loop.
 - When the orchestrator is non-OpenAI, OpenAI-native capabilities must be exposed through local bridge tools that call OpenAI sub-runtimes.
 
-### 6.3 `multi_provider_legacy`
+### 6.3 `claude_code_max`
+
+Persistent Claude Code Max session as the primary brain. OpenAI provides voice transport and TTS only. All reasoning, research, and dev work runs through a single long-running Claude Code process powered by a Max subscription.
+
+| Layer | Runtime |
+|---|---|
+| Harness | Persistent Claude Code session (`claude_code_session`) |
+| Text brain | Claude Code session (full tool access) |
+| Voice brain | Claude Code session (fast-only tool policy) |
+| Voice transport | OpenAI Realtime (audio in/out, ASR, TTS) |
+| Voice admission | `adaptive` policy, classifier runs inside Claude Code session |
+| Research | Claude Code session (codebase tools, web fetch, shell) |
+| Browser/UI ops | Claude Code session or bridged OpenAI computer use |
+| Dev orchestrator | Claude Code session |
+| Dev design | Claude Code session |
+| Dev implementation | Claude Code session or Codex for parallel bulk work |
+| Dev review | Claude Code session |
+| Dev research | Claude Code session |
+
+Key properties:
+
+- One persistent process per guild or session scope, not spawned per request.
+- The session accumulates conversational context over time, similar to an OpenAI Realtime session.
+- Tool availability varies by turn type: voice turns use `fast_only` policy (no multi-file reads mid-utterance), text turns use `full` policy.
+- The only OpenAI API cost is voice transport (Realtime audio, ASR, TTS). All reasoning is covered by the Max subscription.
+- Context window management is required: the session must prune or summarize history as it approaches limits.
+
+Cost model:
+
+- Fixed: Claude Code Max subscription (unlimited usage)
+- Variable: OpenAI Realtime audio transport only
+- Eliminates per-token API billing for text responses, voice brain, classifier, thought engine, memory extraction, research, and dev tasks
+
+### 6.4 `multi_provider_legacy`
 
 Current architecture preserved during migration.
 
-### 6.4 `custom`
+### 6.5 `custom`
 
 Advanced per-runtime override mode.
 
@@ -188,13 +226,14 @@ Advanced per-runtime override mode.
 The runtime must explicitly model four independent choices:
 
 ```ts
-type AgentHarnessKind = "internal" | "openai_agents";
+type AgentHarnessKind = "internal" | "openai_agents" | "claude_code_session";
 
 type ModelProviderKind =
   | "openai"
   | "anthropic"
   | "ai_sdk_anthropic"
-  | "litellm";
+  | "litellm"
+  | "claude_code_session";
 
 type ResearchRuntimeKind =
   | "openai_native_web_search"
@@ -222,9 +261,20 @@ type CodingWorkerRuntimeKind =
 Top-level resolved stack:
 
 ```ts
+type AgentSessionToolPolicy = "none" | "fast_only" | "full";
+
+interface AgentSessionPolicy {
+  persistent: boolean;
+  toolPolicy: {
+    voice: AgentSessionToolPolicy;
+    text: AgentSessionToolPolicy;
+  };
+}
+
 interface ResolvedAgentStack {
-  preset: "openai_native" | "anthropic_brain_openai_tools" | "multi_provider_legacy" | "custom";
+  preset: "openai_native" | "anthropic_brain_openai_tools" | "claude_code_max" | "multi_provider_legacy" | "custom";
   harness: AgentHarnessKind;
+  sessionPolicy?: AgentSessionPolicy;
   orchestrator: {
     provider: ModelProviderKind;
     model: string;
@@ -238,9 +288,19 @@ interface ResolvedAgentStack {
     classifierModel?: string;
     musicWakeLatchSeconds?: number;
   };
-  devOrchestratorProvider: ModelProviderKind;
-  devOrchestratorModel: string;
-  codingWorkers: CodingWorkerRuntimeKind[];
+  devTeam: {
+    orchestrator: {
+      provider: ModelProviderKind;
+      model: string;
+    };
+    roles: {
+      design: CapabilityExecutionPolicy;
+      implementation: CapabilityExecutionPolicy;
+      review: CapabilityExecutionPolicy;
+      research?: CapabilityExecutionPolicy;
+    };
+    codingWorkers: CodingWorkerRuntimeKind[];
+  };
 }
 ```
 
@@ -561,17 +621,19 @@ Migration target:
 
 ## 12. Dev Team Architecture
 
-### 12.1 Roles
+### 12.1 Dev Task Lifecycle Roles
 
-The runtime should define explicit internal specialist roles:
+Dev tasks follow a phased lifecycle. Each phase is a distinct capability role with its own model binding, resolved by the active preset.
 
-- `triage_agent`
-- `research_agent`
-- `operator_agent`
-- `dev_orchestrator`
-- `codex_worker`
-- `claude_worker`
-- `review_agent`
+| Role | Responsibility |
+|---|---|
+| `dev_orchestrator` | Scopes the task, sequences phases, chooses role bindings, creates job record |
+| `design` | Architectural reasoning, interface contracts, design decisions, pre-implementation spec |
+| `implementation` | Code changes across files, refactors, feature builds, test updates |
+| `review` | Post-implementation diff review, correctness checks, risk flagging |
+| `research` | Pre-task codebase survey, large-context analysis, log/trace diagnosis |
+
+The role abstraction is stable even when model bindings change. "Design" is always "design" whether it resolves to Claude Code, Codex, Gemini, or a future model.
 
 ### 12.2 Expected Flow
 
@@ -579,18 +641,48 @@ For a dev request:
 
 1. top-level orchestrator determines the request is a software task
 2. orchestrator calls `delegate_dev_task`
-3. `dev_orchestrator` scopes the work, chooses workers, and creates a job record
-4. `codex_worker` or `claude_worker` performs implementation
-5. `review_agent` summarizes diff, tests, and open risks
-6. Clanker posts status updates and final result back into Discord
+3. `dev_orchestrator` scopes the work, selects role bindings from the active preset, and creates a job record
+4. `design` role produces a spec or implementation plan when the task requires architectural reasoning (skip for mechanical tasks)
+5. `implementation` role performs code changes
+6. `review` role reads the diff, flags issues, verifies invariants
+7. Clanker posts status updates and final result back into Discord
 
-### 12.3 Worker Selection Policy
+The `research` role is optional and dispatched when the orchestrator determines the task requires a codebase survey or large-context analysis before design or implementation.
 
-Initial policy:
+### 12.3 Role Binding Policy
 
-- Codex is the default implementation worker in `openai_native`
-- Claude Code is the preferred secondary reviewer or fallback worker
-- both can be enabled in a single task when parallel review is explicitly valuable
+Role bindings are resolved per-preset using `CapabilityExecutionPolicy`. Each role can inherit the orchestrator model or bind a dedicated worker runtime.
+
+```ts
+interface DevTeamPolicy {
+  orchestrator: ModelBinding;
+  roles: {
+    design: CapabilityExecutionPolicy;
+    implementation: CapabilityExecutionPolicy;
+    review: CapabilityExecutionPolicy;
+    research?: CapabilityExecutionPolicy;
+  };
+  codingWorkers: CodingWorkerRuntimeKind[];
+}
+```
+
+Default `openai_native` bindings:
+
+| Role | Default binding | Rationale |
+|---|---|---|
+| `design` | Claude Code | Strong at architectural reasoning, interface contracts, catching subtle invariants |
+| `implementation` | Codex | Fast at multi-file refactors, pattern-matching existing codebase conventions |
+| `review` | Claude Code | Catches issues the implementation worker may miss, validates design intent |
+| `research` | inherit orchestrator | Pre-task survey, codebase exploration, log analysis |
+
+These bindings are preset defaults, not hardcoded. The `custom` preset allows overriding any role binding. As model capabilities evolve, presets update their default bindings without changing the role abstraction.
+
+Selection heuristics for the orchestrator:
+
+- file count > 3 and change is structural/mechanical: Codex implements, Claude reviews
+- change requires novel design or touches subtle invariants: Claude implements
+- task needs large existing context understood first: research role surveys, then hand off
+- always: review role validates before merge
 
 ### 12.4 Long-Running Jobs
 
@@ -727,6 +819,55 @@ Constraint:
 
 - direct hosted OpenAI tools are tied to OpenAI models in the active loop
 
+### 14.3 `claude_code_session`
+
+Persistent Claude Code process as harness and model provider.
+
+Properties:
+
+- one long-running process per session scope (guild, channel, or voice session)
+- the process stays warm between requests, eliminating startup latency
+- conversational context accumulates naturally within the session
+- tool access is governed by `AgentSessionPolicy.toolPolicy` per turn type
+- the underlying model is whatever the Claude Code Max subscription provides (currently Claude Opus/Sonnet)
+
+Voice turn policy:
+
+- `fast_only`: no multi-file reads, no shell commands, no long tool loops
+- the session can reference its accumulated context and memory without tool calls
+- response tokens stream directly into the TTS pipeline
+
+Text turn policy:
+
+- `full`: codebase search, file reads, shell execution, web fetch, memory operations
+- the session can reason through files and produce grounded responses
+- no different from a normal Claude Code interaction, just triggered by Discord events
+
+Context window management:
+
+- the session must implement conversation pruning or summarization as context fills
+- critical state (memory facts, directive cache, channel roster) should be pinned outside the conversation window
+- stale conversation turns should be evicted before tool context
+
+Session lifecycle:
+
+- sessions are started on first interaction or voice join
+- sessions are kept alive across multiple interactions within the same scope
+- sessions are torn down on inactivity timeout or explicit reset
+- session crash recovery should restart the process and restore pinned state
+
+Advantages:
+
+- fixed cost via Max subscription regardless of usage volume
+- the same session handles chat, voice brain, research, and dev work
+- accumulated context means the bot genuinely "remembers" the conversation without re-fetching
+
+Constraints:
+
+- no direct access to OpenAI hosted tools (web search, computer use) — must bridge
+- voice latency depends on tool policy discipline
+- context window is finite — long sessions require active management
+
 ## 15. Provider Adapters
 
 ### 15.1 OpenAI
@@ -804,6 +945,7 @@ The canonical settings object should look more like this:
 type AgentStackPreset =
   | "openai_native"
   | "anthropic_brain_openai_tools"
+  | "claude_code_max"
   | "multi_provider_legacy"
   | "custom";
 
@@ -939,6 +1081,14 @@ interface CanonicalSettings {
         legacyVoiceStack?: {
           selectedProvider: string;
         };
+      };
+      claudeCodeSession?: {
+        sessionScope: "guild" | "channel" | "voice_session";
+        inactivityTimeoutMs: number;
+        contextPruningStrategy: "summarize" | "evict_oldest" | "sliding_window";
+        maxPinnedStateChars: number;
+        voiceToolPolicy: AgentSessionToolPolicy;
+        textToolPolicy: AgentSessionToolPolicy;
       };
       devTeam?: {
         codex?: {
@@ -1350,6 +1500,9 @@ The dashboard should gain:
 - Should Codex and Claude Code both be available to the dev orchestrator by default, or should one require explicit enablement?
 - How much of the current `voice.*` settings surface should survive once presets exist?
 - Should session state use stored OpenAI conversation objects or `previous_response_id` chains as the primary state handle?
+- For `claude_code_max`: should voice brain calls block on the serialized session queue, or should voice get a dedicated fast-path session separate from text?
+- For `claude_code_max`: what is the right session scope — one per guild, one per channel, or one per voice session? Guild scope maximizes context reuse but risks cross-channel bleed.
+- For `claude_code_max`: should the persistent session have access to Clanker's own source code, enabling self-modification under operator approval?
 
 ## 21. External References
 
