@@ -3,7 +3,11 @@ import type { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import type { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
 import type { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
 import type { ElevenLabsRealtimeClient } from "./elevenLabsRealtimeClient.ts";
-import type { AssistantOutputState } from "./assistantOutputState.ts";
+import type {
+    AssistantOutputLockReason,
+    AssistantOutputPhase,
+    AssistantOutputState
+} from "./assistantOutputState.ts";
 
 export type {
     AssistantOutputLockReason,
@@ -410,6 +414,32 @@ export interface VoiceSessionSoundboardState {
     catalogFetchedAt: number;
     lastDirectiveKey: string;
     lastDirectiveAt: number;
+}
+
+export type OutputChannelDeferredBlockReason =
+    | "session_inactive"
+    | "active_captures"
+    | "pending_response"
+    | "active_response"
+    | "awaiting_tool_outputs"
+    | "tool_calls_running";
+
+export interface OutputChannelState {
+    phase: AssistantOutputPhase;
+    locked: boolean;
+    lockReason: AssistantOutputLockReason | null;
+    musicActive: boolean;
+    captureBlocking: boolean;
+    bargeInSuppressed: boolean;
+    turnBacklog: number;
+    toolCallsRunning: boolean;
+    botTurnOpen: boolean;
+    bufferedBotSpeech: boolean;
+    pendingResponse: boolean;
+    openAiActiveResponse: boolean;
+    awaitingToolOutputs: boolean;
+    streamBufferedBytes: number;
+    deferredBlockReason: OutputChannelDeferredBlockReason | null;
 }
 
 export interface VoiceSession {

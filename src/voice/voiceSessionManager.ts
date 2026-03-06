@@ -10,7 +10,6 @@ import {
   getResolvedOrchestratorBinding,
   getResolvedVoiceAdmissionClassifierBinding,
   getResolvedVoiceInitiativeBinding,
-  getVoiceAdmissionSettings,
   getVoiceChannelPolicy,
   getVoiceConversationPolicy,
   getVoiceInitiativeSettings,
@@ -35,7 +34,6 @@ import {
   interpolatePromptTemplate
 } from "../promptCore.ts";
 const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
-import { estimateUsdCost } from "../pricing.ts";
 import { clamp } from "../utils.ts";
 import { hasBotNameCue } from "../directAddressConfidence.ts";
 import { SoundboardDirector } from "./soundboardDirector.ts";
@@ -47,10 +45,6 @@ import {
   resolveRealtimeTurnTranscriptionPlan
 } from "./voiceDecisionRuntime.ts";
 import { defaultModelForLlmProvider, normalizeLlmProvider } from "../llm/llmHelpers.ts";
-import {
-  OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
-  normalizeOpenAiRealtimeTranscriptionModel
-} from "./realtimeProviderNormalization.ts";
 import { createMusicPlaybackProvider } from "./musicPlayback.ts";
 import { createMusicSearchProvider } from "./musicSearch.ts";
 import { createDiscordMusicPlayer } from "./musicPlayer.ts";
@@ -69,7 +63,6 @@ import {
   isMusicDisambiguationActive as isMusicDisambiguationActiveRuntime,
   getMusicPhase as getMusicPhaseRuntime,
   setMusicPhase as setMusicPhaseRuntime,
-  isMusicPlaybackActive as isMusicPlaybackActiveRuntime,
   maybeHandleMusicPlaybackTurn as maybeHandleMusicPlaybackTurnRuntime,
   maybeHandleMusicTextSelectionRequest as maybeHandleMusicTextSelectionRequestRuntime,
   maybeHandleMusicTextStopRequest as maybeHandleMusicTextStopRequestRuntime,
@@ -104,12 +97,10 @@ import {
   sendOperationalMessage,
   sendToChannel
 } from "./voiceOperationalMessaging.ts";
-import { OpenAiRealtimeTranscriptionClient } from "./openaiRealtimeTranscriptionClient.ts";
 import {
   type AsrBridgeMode,
   type AsrBridgeDeps,
   type AsrBridgeState,
-  type AsrCommitResult,
   asrPhaseIsClosing,
   beginAsrUtterance,
   appendAudioToAsr,
@@ -122,9 +113,7 @@ import {
   releaseSharedAsrActiveUser,
   tryHandoffSharedAsr,
   getOrCreatePerUserAsrState,
-  getOrCreateSharedAsrState,
-  orderAsrFinalSegments,
-  flushPendingAsrAudio
+  getOrCreateSharedAsrState
 } from "./voiceAsrBridge.ts";
 import {
   REALTIME_MEMORY_FACT_LIMIT,
@@ -141,16 +130,11 @@ import {
   isFinalRealtimeTranscriptEventType,
   isRecoverableRealtimeError,
   isRealtimeMode,
-  isVoiceTurnAddressedToBot,
   matchSoundboardReference,
   normalizeVoiceText,
   parseSoundboardDirectiveSequence,
   parsePreferredSoundboardReferences,
   parseRealtimeErrorPayload,
-  parseResponseDoneId,
-  parseResponseDoneModel,
-  parseResponseDoneStatus,
-  parseResponseDoneUsage,
   resolveVoiceAsrLanguageGuidance,
   resolveRealtimeProvider,
   shortError,
@@ -172,11 +156,8 @@ import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
   ACTIVITY_TOUCH_THROTTLE_MS,
   BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS,
-  BARGE_IN_BOT_SPEAKING_ACTIVE_RATIO_MIN,
-  BARGE_IN_BOT_SPEAKING_PEAK_MIN,
   BARGE_IN_FULL_OVERRIDE_MIN_MS,
   BARGE_IN_MIN_SPEECH_MS,
-  BARGE_IN_STT_MIN_CAPTURE_AGE_MS,
   BARGE_IN_RETRY_MAX_AGE_MS,
   BARGE_IN_SUPPRESSION_MAX_MS,
   BOT_DISCONNECT_GRACE_MS,
@@ -188,7 +169,6 @@ import {
   CAPTURE_NEAR_SILENCE_ABORT_ACTIVE_RATIO_MAX,
   CAPTURE_NEAR_SILENCE_ABORT_MIN_AGE_MS,
   CAPTURE_NEAR_SILENCE_ABORT_PEAK_MAX,
-  CLANKVOX_TTS_TELEMETRY_STALE_MS,
   CAPTURE_MAX_DURATION_MS,
   RECENT_ENGAGEMENT_WINDOW_MS,
   INPUT_SPEECH_END_SILENCE_MS,
@@ -199,7 +179,6 @@ import {
   MAX_INACTIVITY_SECONDS,
   MAX_MAX_SESSION_MINUTES,
   OPENAI_REALTIME_MAX_SESSION_MINUTES,
-  MAX_RESPONSE_SILENCE_RETRIES,
   MIN_INACTIVITY_SECONDS,
   MIN_MAX_SESSION_MINUTES,
   MIN_RESPONSE_REQUEST_GAP_MS,
@@ -213,13 +192,9 @@ import {
   REALTIME_TURN_PENDING_MERGE_MAX_BYTES,
   REALTIME_TURN_QUEUE_MAX,
   REALTIME_TURN_STALE_SKIP_MS,
-  RESPONSE_DONE_SILENCE_GRACE_MS,
   RESPONSE_FLUSH_DEBOUNCE_MS,
-  RESPONSE_SILENCE_RETRY_DELAY_MS,
   OPENAI_ASR_SESSION_IDLE_TTL_MS,
   OPENAI_ASR_BRIDGE_MAX_WAIT_MS,
-  OPENAI_ASR_TRANSCRIPT_STABLE_MS,
-  OPENAI_ASR_TRANSCRIPT_WAIT_MAX_MS,
   OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS,
   OPENAI_TOOL_CALL_EVENT_MAX,
   OPENAI_TOOL_RESPONSE_DEBOUNCE_MS,
@@ -259,7 +234,6 @@ import {
   VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS,
   VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
   VOICE_FALLBACK_NOISE_GATE_ACTIVE_RATIO_MAX,
-  VOICE_FALLBACK_NOISE_GATE_MAX_CLIP_MS,
   VOICE_FALLBACK_NOISE_GATE_PEAK_MAX,
   VOICE_FALLBACK_NOISE_GATE_RMS_MAX,
   VOICE_INACTIVITY_WARNING_SECONDS,
@@ -281,7 +255,6 @@ import {
   VOICE_SILENCE_GATE_RMS_MAX,
   VOICE_LOOKUP_BUSY_MAX_CHARS,
   VOICE_TURN_MIN_ASR_CLIP_MS,
-  VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS,
   VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD
 } from "./voiceSessionManager.constants.ts";
 import { loadPromptMemorySliceFromMemory } from "../memory/promptMemorySlice.ts";
@@ -296,7 +269,8 @@ import type {
   DeferredQueuedUserTurn,
   DeferredQueuedUserTurnsAction,
   DeferredVoiceAction,
-  DeferredVoiceActionType
+  DeferredVoiceActionType,
+  OutputChannelState
 } from "./voiceSessionTypes.ts";
 import type {
   AssistantOutputState,
@@ -304,23 +278,13 @@ import type {
   TtsPlaybackState
 } from "./assistantOutputState.ts";
 import {
-  TTS_PLAYBACK_STATE,
-  buildReplyOutputLockState,
-  createAssistantOutputState,
-  getAssistantOutputActivityAt,
-  normalizeAssistantOutputState,
-  normalizeTtsPlaybackState,
-  patchAssistantOutputState,
-  syncAssistantOutputStateRecord
-} from "./assistantOutputState.ts";
-import {
   musicPhaseIsActive,
   musicPhaseIsAudible,
-  musicPhaseShouldLockOutput,
   musicPhaseShouldForceCommandOnly,
   musicPhaseShouldAllowDucking,
-  musicPhaseCanResume
 } from "./voiceSessionTypes.ts";
+import { BargeInController } from "./bargeInController.ts";
+import { ReplyManager } from "./replyManager.ts";
 
 export function resolveVoiceThoughtTopicalityBias({
   silenceMs = 0,
@@ -632,6 +596,8 @@ export class VoiceSessionManager {
   musicPlayback;
   musicSearch;
   musicPlayer;
+  bargeInController;
+  replyManager;
   onVoiceStateUpdate;
 
   constructor({
@@ -672,6 +638,8 @@ export class VoiceSessionManager {
     this.musicPlayback = createMusicPlaybackProvider(this.appConfig || {});
     this.musicSearch = createMusicSearchProvider(this.appConfig || {});
     this.musicPlayer = createDiscordMusicPlayer();
+    this.bargeInController = new BargeInController(this);
+    this.replyManager = new ReplyManager(this);
     this.onVoiceStateUpdate = (oldState, newState) => {
       this.handleVoiceStateUpdate(oldState, newState).catch((error) => {
         this.store.logAction({
@@ -2768,17 +2736,8 @@ export class VoiceSessionManager {
     }, Math.max(0, Number(delayMs) || 0));
   }
 
-  getDeferredOutputChannelBlockReason(session): string | null {
-    if (Number(session.userCaptures?.size || 0) > 0 && this.hasReplayBlockingActiveCapture(session)) {
-      return "active_captures";
-    }
-    if (session.pendingResponse) return "pending_response";
-    if (this.isRealtimeResponseActive(session)) return "active_response";
-    if (session.awaitingToolOutputs) return "awaiting_tool_outputs";
-    if (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0) {
-      return "tool_calls_running";
-    }
-    return null;
+  getDeferredOutputChannelBlockReason(session): OutputChannelState["deferredBlockReason"] {
+    return this.getOutputChannelState(session).deferredBlockReason;
   }
 
   canFireJoinGreetingOpportunity(session, opportunity = null): string | null {
@@ -3040,8 +2999,8 @@ export class VoiceSessionManager {
     }
 
     // queued_user_turns has an additional output lock check (includes music phase)
-    const replyOutputLockState = this.getReplyOutputLockState(session);
-    if (replyOutputLockState.locked) {
+    const outputChannelState = this.getOutputChannelState(session);
+    if (outputChannelState.locked) {
       this.scheduleDeferredBotTurnOpenFlush({ session, reason });
       return false;
     }
@@ -3233,55 +3192,15 @@ export class VoiceSessionManager {
   }
 
   isBargeInOutputSuppressed(session, now = Date.now()) {
-    if (!session) return false;
-    const suppressedUntil = Number(session.bargeInSuppressionUntil || 0);
-    if (suppressedUntil <= 0) return false;
-    if (now < suppressedUntil) return true;
-    this.clearBargeInOutputSuppression(session, "timeout");
-    return false;
+    return this.bargeInController.isBargeInOutputSuppressed(session, now);
   }
 
   clearBargeInOutputSuppression(session, reason = "cleared") {
-    if (!session) return;
-    const suppressedUntil = Number(session.bargeInSuppressionUntil || 0);
-    if (suppressedUntil <= 0) return;
-    const droppedChunks = Math.max(0, Number(session.bargeInSuppressedAudioChunks || 0));
-    const droppedBytes = Math.max(0, Number(session.bargeInSuppressedAudioBytes || 0));
-
-    session.bargeInSuppressionUntil = 0;
-    session.bargeInSuppressedAudioChunks = 0;
-    session.bargeInSuppressedAudioBytes = 0;
-
-    if (reason === "timeout" && droppedChunks <= 0 && droppedBytes <= 0) return;
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: this.client.user?.id || null,
-      content: "voice_barge_in_suppression_cleared",
-      metadata: {
-        sessionId: session.id,
-        reason: String(reason || "cleared"),
-        droppedAudioChunks: droppedChunks,
-        droppedAudioBytes: droppedBytes
-      }
-    });
+    return this.bargeInController.clearBargeInOutputSuppression(session, reason);
   }
 
   isBargeInInterruptTargetActive(session) {
-    if (!session || session.ending) return false;
-    if (this.isBargeInOutputSuppressed(session)) return false;
-    const lockState = this.getReplyOutputLockState(session);
-    if (!lockState.locked) return false;
-    if (
-      lockState.musicActive &&
-      !lockState.botTurnOpen &&
-      !lockState.pendingResponse &&
-      !lockState.openAiActiveResponse
-    ) {
-      return false;
-    }
-    return true;
+    return this.bargeInController.isBargeInInterruptTargetActive(session);
   }
 
   normalizeReplyInterruptionPolicy(rawPolicy = null) {
@@ -3378,27 +3297,13 @@ export class VoiceSessionManager {
 
   maybeClearActiveReplyInterruptionPolicy(session) {
     if (!session || session.ending) return;
-    const lockState = this.getReplyOutputLockState(session);
-    if (lockState.locked) return;
+    const outputChannelState = this.getOutputChannelState(session);
+    if (outputChannelState.locked) return;
     session.activeReplyInterruptionPolicy = null;
   }
 
   ensureAssistantOutputState(session): AssistantOutputState | null {
-    if (!session || session.ending) return null;
-    const now = Date.now();
-    const existing =
-      session.assistantOutput && typeof session.assistantOutput === "object"
-        ? session.assistantOutput
-        : null;
-    if (existing) {
-      const normalized = normalizeAssistantOutputState(existing, { now });
-      session.assistantOutput = normalized;
-      return normalized;
-    }
-
-    const seeded = createAssistantOutputState({ now, trigger: "session_seed" });
-    session.assistantOutput = seeded;
-    return seeded;
+    return this.replyManager.ensureAssistantOutputState(session);
   }
 
   patchAssistantOutputTelemetry(
@@ -3410,327 +3315,61 @@ export class VoiceSessionManager {
       ttsBufferedSamples?: number | null;
     } = {}
   ) {
-    const state = this.ensureAssistantOutputState(session);
-    if (!state) return null;
-    const nextState = patchAssistantOutputState(state, {
-      now: Date.now(),
-      trigger: metadata.trigger,
-      requestId: metadata.requestId,
-      ttsPlaybackState: metadata.ttsPlaybackState,
-      ttsBufferedSamples: metadata.ttsBufferedSamples
-    });
-    session.assistantOutput = nextState;
-    return nextState;
+    return this.replyManager.patchAssistantOutputTelemetry(session, metadata);
   }
 
   getSessionTtsPlaybackState(
     session,
     fallbackState: AssistantOutputState | null = null
   ): TtsPlaybackState {
-    if (!session || session.ending) return TTS_PLAYBACK_STATE.IDLE;
-    const telemetryFresh = this.isClankvoxTtsTelemetryFresh(session);
-    const bufferedSamples = this.getBufferedTtsSamples(session);
-    const voxPlaybackState = session.voxClient?.getTtsPlaybackState?.();
-    if (typeof voxPlaybackState === "string") {
-      if (!telemetryFresh) {
-        return TTS_PLAYBACK_STATE.IDLE;
-      }
-      if (bufferedSamples > 0) {
-        return TTS_PLAYBACK_STATE.BUFFERED;
-      }
-      return normalizeTtsPlaybackState(voxPlaybackState);
-    }
-    return normalizeTtsPlaybackState(fallbackState?.ttsPlaybackState);
+    return this.replyManager.getSessionTtsPlaybackState(session, fallbackState);
   }
 
   getClankvoxReportedTtsPlaybackState(session) {
-    if (!session || session.ending) return null;
-    const playbackState = session.voxClient?.getTtsPlaybackState?.();
-    if (typeof playbackState !== "string") return null;
-    return normalizeTtsPlaybackState(playbackState);
+    return this.replyManager.getClankvoxReportedTtsPlaybackState(session);
   }
 
   getClankvoxReportedTtsBufferedSamples(session) {
-    if (!session || session.ending) return null;
-    const voxClient = session.voxClient;
-    if (!voxClient || typeof voxClient !== "object") return null;
-    const rawBufferedSamples =
-      typeof voxClient.getTtsBufferDepthSamples === "function"
-        ? Number(voxClient.getTtsBufferDepthSamples())
-        : Number(voxClient.ttsBufferDepthSamples || 0);
-    if (!Number.isFinite(rawBufferedSamples)) return null;
-    return Math.max(0, Math.round(rawBufferedSamples));
+    return this.replyManager.getClankvoxReportedTtsBufferedSamples(session);
   }
 
   getClankvoxTtsTelemetryAgeMs(session) {
-    if (!session || session.ending) return null;
-    const updatedAt = Number(session.voxClient?.getTtsTelemetryUpdatedAt?.() || 0);
-    if (!Number.isFinite(updatedAt) || updatedAt <= 0) return null;
-    return Math.max(0, Date.now() - updatedAt);
+    return this.replyManager.getClankvoxTtsTelemetryAgeMs(session);
   }
 
   isClankvoxTtsTelemetryFresh(session) {
-    const telemetryAgeMs = this.getClankvoxTtsTelemetryAgeMs(session);
-    if (telemetryAgeMs == null) return true;
-    return telemetryAgeMs <= CLANKVOX_TTS_TELEMETRY_STALE_MS;
+    return this.replyManager.isClankvoxTtsTelemetryFresh(session);
   }
 
   getOutputLockDebugMetadata(session, outputLockReason = null) {
-    if (!session || session.ending) return {};
-    if (String(outputLockReason || "").trim() !== "bot_audio_buffered") return {};
-    const assistantOutput = this.ensureAssistantOutputState(session);
-    const reportedTtsPlaybackState =
-      this.getClankvoxReportedTtsPlaybackState(session) ||
-      assistantOutput?.ttsPlaybackState ||
-      null;
-    const reportedTtsBufferedSamples = this.getClankvoxReportedTtsBufferedSamples(session);
-    const telemetryAgeMs = this.getClankvoxTtsTelemetryAgeMs(session);
-    return {
-      outputLockPhase: assistantOutput?.phase || null,
-      outputLockAssistantReason: assistantOutput?.reason || null,
-      outputLockAssistantLastTrigger: assistantOutput?.lastTrigger || null,
-      outputLockTtsPlaybackState: reportedTtsPlaybackState,
-      outputLockTtsBufferedSamples: reportedTtsBufferedSamples,
-      outputLockTtsTelemetryAgeMs: telemetryAgeMs == null ? null : Math.round(telemetryAgeMs),
-      outputLockTtsTelemetryFresh: this.isClankvoxTtsTelemetryFresh(session)
-    };
+    return this.replyManager.getOutputLockDebugMetadata(session, outputLockReason);
   }
 
   maybeClearStaleRealtimeResponseState(session, { liveAudioStreaming = false, bufferedBotSpeech = false } = {}) {
-    if (!session || session.ending) return false;
-    if (session.pendingResponse) return false;
-    if (liveAudioStreaming || bufferedBotSpeech) return false;
-    if (Boolean(session.awaitingToolOutputs)) return false;
-    if (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0) {
-      return false;
-    }
-    if (!this.isRealtimeResponseActive(session)) return false;
-
-    const lastRelevantAt = Math.max(
-      0,
-      Number(session.lastResponseRequestAt || 0),
-      Number(session.lastAudioDeltaAt || 0),
-      getAssistantOutputActivityAt(session.assistantOutput)
-    );
-    if (!lastRelevantAt) return false;
-    const staleAgeMs = Math.max(0, Date.now() - lastRelevantAt);
-    if (staleAgeMs < RESPONSE_DONE_SILENCE_GRACE_MS) return false;
-
-    const realtimeClient = session.realtimeClient;
-    if (
-      !realtimeClient ||
-      typeof realtimeClient !== "object" ||
-      !("clearActiveResponse" in realtimeClient) ||
-      typeof realtimeClient.clearActiveResponse !== "function"
-    ) {
-      return false;
-    }
-
-    try {
-      realtimeClient.clearActiveResponse("completed");
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: this.client.user?.id || null,
-        content: "openai_realtime_active_response_cleared_stale",
-        metadata: {
-          sessionId: session.id,
-          staleAgeMs
-        }
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  syncAssistantOutputState(session, trigger = "state_sync") {
-    const state = this.ensureAssistantOutputState(session);
-    if (!state) return null;
-    const previousPhase = String(state.phase || "idle");
-
-    const liveAudioStreaming = this.hasRecentAssistantAudioDelta(session);
-    const pendingResponse =
-      session?.pendingResponse && typeof session.pendingResponse === "object"
-        ? session.pendingResponse
-        : null;
-    const awaitingToolOutputs =
-      Boolean(session.awaitingToolOutputs) ||
-      (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0);
-    const bufferedSamples = this.getBufferedTtsSamples(session);
-
-    let ttsPlaybackState = this.getSessionTtsPlaybackState(session, state);
-
-    let bufferedBotSpeech = ttsPlaybackState === TTS_PLAYBACK_STATE.BUFFERED || bufferedSamples > 0;
-    this.maybeClearStaleRealtimeResponseState(session, {
+    return this.replyManager.maybeClearStaleRealtimeResponseState(session, {
       liveAudioStreaming,
       bufferedBotSpeech
     });
-    let openAiActiveResponse = this.isRealtimeResponseActive(session);
-    const bufferedStateAgeMs = Math.max(0, Date.now() - Number(state.phaseEnteredAt || 0));
+  }
 
-    // If buffered playback was inferred only from an earlier event and all
-    // other output signals are now clear, treat it as stale and clear it.
-    if (
-      bufferedBotSpeech &&
-      bufferedSamples <= 0 &&
-      !liveAudioStreaming &&
-      !pendingResponse &&
-      !openAiActiveResponse &&
-      bufferedStateAgeMs >= RESPONSE_DONE_SILENCE_GRACE_MS
-    ) {
-      ttsPlaybackState = TTS_PLAYBACK_STATE.IDLE;
-      bufferedBotSpeech = false;
-    }
-
-    const nextState = syncAssistantOutputStateRecord(state, {
-      now: Date.now(),
-      trigger,
-      liveAudioStreaming,
-      pendingResponse: Boolean(pendingResponse),
-      openAiActiveResponse,
-      awaitingToolOutputs,
-      requestId: pendingResponse?.requestId || state.requestId || null,
-      ttsPlaybackState,
-      ttsBufferedSamples: bufferedSamples
-    });
-    session.assistantOutput = nextState;
-    if (
-      previousPhase !== "idle" &&
-      nextState.phase === "idle" &&
-      this.getDeferredQueuedUserTurns(session).length > 0
-    ) {
-      this.scheduleDeferredVoiceActionRecheck(session, {
-        type: "queued_user_turns",
-        delayMs: 0,
-        reason: "assistant_output_idle"
-      });
-    }
-    return nextState;
+  syncAssistantOutputState(session, trigger = "state_sync") {
+    return this.replyManager.syncAssistantOutputState(session, trigger);
   }
 
   shouldBargeIn({ session, userId, captureState }) {
-    if (!session || session.ending) return { allowed: false };
-    if (!this.isBargeInInterruptTargetActive(session)) return { allowed: false };
-    const botTurnOpenAt = Number(session.botTurnOpenAt || 0);
-    const liveAudioStreaming = this.hasRecentAssistantAudioDelta(session);
-    const bufferedBotSpeech = this.hasBufferedTtsPlayback(session);
-    if (!session.botTurnOpen && botTurnOpenAt <= 0) {
-      // Bot is not currently speaking and turn was never opened (or was
-      // reset). Only allow barge-in if the pending response already
-      // produced audio (turn was played then reset). If no audio was
-      // ever sent, the user can't be interrupting something they
-      // haven't heard — prevents false barge-in when speaking while
-      // waiting for a tool call result.
-      const pendingEverProducedAudio = Number(session.pendingResponse?.audioReceivedAt || 0) > 0;
-      if (!pendingEverProducedAudio) {
-        return { allowed: false };
-      }
-    } else if (botTurnOpenAt > 0 && Date.now() - botTurnOpenAt < BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS) {
-      return { allowed: false };
-    }
-    if (!liveAudioStreaming && bufferedBotSpeech) {
-      return { allowed: false };
-    }
-    // If the bot isn't actively streaming audio (just subprocess draining
-    // buffered frames), the response is effectively complete. Don't barge-in
-    // on tail-end playback — it just truncates finished sentences.
-    if (!liveAudioStreaming && !session.botTurnOpen) {
-      return { allowed: false };
-    }
-    const normalizedUserId = String(userId || "").trim();
-    if (!normalizedUserId) return { allowed: false };
-    if (captureState?.speakingEndFinalizeTimer) return { allowed: false };
-    const interruptionPolicy = this.normalizeReplyInterruptionPolicy(
-      session.pendingResponse?.interruptionPolicy || session.activeReplyInterruptionPolicy
-    );
-    if (
-      !this.isUserAllowedToInterruptReply({
-        policy: interruptionPolicy,
-        userId: normalizedUserId
-      })
-    ) {
-      return { allowed: false };
-    }
-    const sampleRateHz = isRealtimeMode(session.mode)
-      ? Number(session.realtimeInputSampleRateHz) || 24000
-      : 24000;
-    const minCaptureBytes = Math.max(2, Math.ceil((sampleRateHz * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000));
-    if (!isRealtimeMode(session.mode)) {
-      const captureAgeMs = Math.max(0, Date.now() - Number(captureState?.startedAt || Date.now()));
-      if (captureAgeMs < BARGE_IN_STT_MIN_CAPTURE_AGE_MS) return { allowed: false };
-    }
-    if (Number(captureState?.bytesSent || 0) < minCaptureBytes) return { allowed: false };
-    if (!this.isCaptureSignalAssertive(captureState)) return { allowed: false };
-    // Use the stricter echo-rejection gate whenever the bot is speaking or
-    // has recently been speaking. The bot's own audio echoes back through
-    // Discord voice capture and can trigger false barge-in.
-    const botRecentlySpeaking = session.botTurnOpen || liveAudioStreaming || bufferedBotSpeech;
-    if (botRecentlySpeaking && !this.isCaptureSignalAssertiveDuringBotSpeech(captureState)) {
-      return { allowed: false };
-    }
-    return { allowed: true, minCaptureBytes, interruptionPolicy };
+    return this.bargeInController.shouldBargeIn({ session, userId, captureState });
   }
 
   isCaptureSignalAssertive(capture) {
-    if (!capture || typeof capture !== "object") return false;
-    const sampleCount = Math.max(0, Number(capture.signalSampleCount || 0));
-    if (sampleCount <= 0) return false;
-
-    const activeSampleCount = Math.max(0, Number(capture.signalActiveSampleCount || 0));
-    const peakAbs = Math.max(0, Number(capture.signalPeakAbs || 0));
-    const activeSampleRatio = activeSampleCount / sampleCount;
-    const peak = peakAbs / 32768;
-
-    const nearSilentSignal =
-      activeSampleRatio <= VOICE_SILENCE_GATE_ACTIVE_RATIO_MAX &&
-      peak <= VOICE_SILENCE_GATE_PEAK_MAX;
-    return !nearSilentSignal;
+    return this.bargeInController.isCaptureSignalAssertive(capture);
   }
 
   isCaptureSignalAssertiveDuringBotSpeech(capture) {
-    if (!capture || typeof capture !== "object") return false;
-    const sampleCount = Math.max(0, Number(capture.signalSampleCount || 0));
-    if (sampleCount <= 0) return false;
-    const activeSampleCount = Math.max(0, Number(capture.signalActiveSampleCount || 0));
-    const peakAbs = Math.max(0, Number(capture.signalPeakAbs || 0));
-    const activeSampleRatio = activeSampleCount / sampleCount;
-    const peak = peakAbs / 32768;
-    return activeSampleRatio >= BARGE_IN_BOT_SPEAKING_ACTIVE_RATIO_MIN &&
-      peak >= BARGE_IN_BOT_SPEAKING_PEAK_MIN;
+    return this.bargeInController.isCaptureSignalAssertiveDuringBotSpeech(capture);
   }
 
   getCaptureSignalMetrics(capture) {
-    if (!capture || typeof capture !== "object") {
-      return {
-        sampleCount: 0,
-        activeSampleRatio: 0,
-        peak: 0,
-        rms: 0
-      };
-    }
-    const sampleCount = Math.max(0, Number(capture.signalSampleCount || 0));
-    if (sampleCount <= 0) {
-      return {
-        sampleCount,
-        activeSampleRatio: 0,
-        peak: 0,
-        rms: 0
-      };
-    }
-    const activeSampleCount = Math.max(0, Number(capture.signalActiveSampleCount || 0));
-    const peakAbs = Math.max(0, Number(capture.signalPeakAbs || 0));
-    const sumSquares = Math.max(0, Number(capture.signalSumSquares || 0));
-    const activeSampleRatio = activeSampleCount / sampleCount;
-    const peak = peakAbs / 32768;
-    const rms = Math.sqrt(sumSquares / sampleCount) / 32768;
-    return {
-      sampleCount,
-      activeSampleRatio,
-      peak,
-      rms
-    };
+    return this.bargeInController.getCaptureSignalMetrics(capture);
   }
 
   hasCaptureBeenPromoted(capture) {
@@ -4012,18 +3651,19 @@ export class VoiceSessionManager {
     minCaptureBytes = 0,
     captureState = null
   }) {
-    if (!session || session.ending) return false;
+    const command = this.bargeInController.buildInterruptBotSpeechForBargeInCommand({
+      session,
+      userId,
+      source,
+      minCaptureBytes,
+      captureState
+    });
+    if (!command) return false;
+    return this.executeBargeInInterruptCommand({ session, command });
+  }
 
-    const now = Date.now();
-    const pendingRequestId = Number(session.pendingResponse?.requestId || 0) || null;
-    const interruptionPolicy = this.normalizeReplyInterruptionPolicy(
-      session.pendingResponse?.interruptionPolicy || session.activeReplyInterruptionPolicy
-    );
-    const retryUtteranceText = normalizeVoiceText(
-      session.pendingResponse?.utteranceText || session.lastRequestedRealtimeUtterance?.utteranceText || "",
-      STT_REPLY_MAX_CHARS
-    );
-
+  executeBargeInInterruptCommand({ session, command }) {
+    if (!session || session.ending || !command) return false;
     const cancelTelemetry = this.cancelRealtimeResponseForBargeIn(session);
 
     this.resetBotAudioPlayback(session);
@@ -4040,8 +3680,8 @@ export class VoiceSessionManager {
     this.releaseBotSpeechMusicDuck(session, resolvedSettings, { force: true }).catch(() => undefined);
 
     if (session.pendingResponse && typeof session.pendingResponse === "object") {
-      session.lastAudioDeltaAt = Math.max(Number(session.lastAudioDeltaAt || 0), now);
-      session.pendingResponse.audioReceivedAt = Number(session.lastAudioDeltaAt || now);
+      session.lastAudioDeltaAt = Math.max(Number(session.lastAudioDeltaAt || 0), command.now);
+      session.pendingResponse.audioReceivedAt = Number(session.lastAudioDeltaAt || command.now);
     }
 
     // Only queue a retry and set full suppression if the response was
@@ -4050,7 +3690,7 @@ export class VoiceSessionManager {
     // the follow-up audio (which would be a new legitimate response).
     const responseWasActuallyCancelled = Boolean(cancelTelemetry.responseCancelSucceeded);
 
-    if (isRealtimeMode(session.mode) && retryUtteranceText && responseWasActuallyCancelled) {
+    if (isRealtimeMode(session.mode) && command.retryUtteranceText && responseWasActuallyCancelled) {
       this.setDeferredVoiceAction(session, {
         type: "interrupted_reply",
         goal: "complete_interrupted_reply",
@@ -4058,13 +3698,13 @@ export class VoiceSessionManager {
         status: "deferred",
         reason: "barge_in_interrupt",
         notBeforeAt: 0,
-        expiresAt: now + BARGE_IN_RETRY_MAX_AGE_MS,
+        expiresAt: command.now + BARGE_IN_RETRY_MAX_AGE_MS,
         payload: {
-          utteranceText: retryUtteranceText,
-          interruptedByUserId: String(userId || "").trim() || null,
-          interruptedAt: now,
-          source: String(source || "speaking_start"),
-          interruptionPolicy
+          utteranceText: command.retryUtteranceText,
+          interruptedByUserId: command.userId,
+          interruptedAt: command.now,
+          source: command.source,
+          interruptionPolicy: command.interruptionPolicy
         }
       });
     } else {
@@ -4072,8 +3712,8 @@ export class VoiceSessionManager {
     }
 
     session.bargeInSuppressionUntil = responseWasActuallyCancelled
-      ? now + BARGE_IN_SUPPRESSION_MAX_MS
-      : now + BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS;
+      ? command.now + BARGE_IN_SUPPRESSION_MAX_MS
+      : command.now + BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS;
     session.bargeInSuppressedAudioChunks = 0;
     session.bargeInSuppressedAudioBytes = 0;
 
@@ -4081,27 +3721,27 @@ export class VoiceSessionManager {
       kind: "voice_runtime",
       guildId: session.guildId,
       channelId: session.textChannelId,
-      userId: String(userId || "").trim() || null,
+      userId: command.userId,
       content: "voice_barge_in_interrupt",
       metadata: {
         sessionId: session.id,
-        source: String(source || "speaking_start"),
+        source: command.source,
         streamBufferedBytesDropped: 0,
-        pendingRequestId,
-        minCaptureBytes: Math.max(0, Number(minCaptureBytes || 0)),
+        pendingRequestId: command.pendingRequestId,
+        minCaptureBytes: command.minCaptureBytes,
         suppressionMs: responseWasActuallyCancelled ? BARGE_IN_SUPPRESSION_MAX_MS : BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS,
-        captureSignalPeak: captureState ? Math.max(0, Number(captureState.signalPeakAbs || 0)) / 32768 : null,
-        captureSignalActiveSampleRatio: captureState && Number(captureState.signalSampleCount || 0) > 0
-          ? Math.max(0, Number(captureState.signalActiveSampleCount || 0)) / Number(captureState.signalSampleCount)
-          : null,
-        captureBytesSent: captureState ? Number(captureState.bytesSent || 0) : null,
-        botTurnOpen: Boolean(session.botTurnOpen),
-        botTurnAgeMs: Number(session.botTurnOpenAt || 0) > 0
-          ? Math.max(0, now - Number(session.botTurnOpenAt))
-          : null,
-        queuedRetryUtterance: Boolean(isRealtimeMode(session.mode) && retryUtteranceText && responseWasActuallyCancelled),
-        retryInterruptionPolicyScope: interruptionPolicy?.scope || null,
-        retryInterruptionPolicyAllowedUserId: interruptionPolicy?.allowedUserId || null,
+        captureSignalPeak: command.captureSignalPeak,
+        captureSignalActiveSampleRatio: command.captureSignalActiveSampleRatio,
+        captureBytesSent: command.captureBytesSent,
+        botTurnOpen: command.botTurnWasOpen,
+        botTurnAgeMs: command.botTurnAgeMs,
+        queuedRetryUtterance: Boolean(
+          isRealtimeMode(session.mode) &&
+          command.retryUtteranceText &&
+          responseWasActuallyCancelled
+        ),
+        retryInterruptionPolicyScope: command.interruptionPolicy?.scope || null,
+        retryInterruptionPolicyAllowedUserId: command.interruptionPolicy?.allowedUserId || null,
         ...cancelTelemetry,
         truncateContentIndex: cancelTelemetry.truncateAttempted ? cancelTelemetry.truncateContentIndex : null,
         truncateAudioEndMs: cancelTelemetry.truncateAttempted ? cancelTelemetry.truncateAudioEndMs : null
@@ -4111,33 +3751,15 @@ export class VoiceSessionManager {
   }
 
   hasRecentAssistantAudioDelta(session) {
-    if (!session || session.ending) return false;
-    // This is only a live-stream heuristic. Buffered subprocess playback is tracked
-    // separately through the assistant output state machine and clankvox IPC.
-    const msSinceLastDelta = Date.now() - Number(session.lastAudioDeltaAt || 0);
-    return msSinceLastDelta < 200;
+    return this.replyManager.hasRecentAssistantAudioDelta(session);
   }
 
   getBufferedTtsSamples(session) {
-    if (!session || session.ending) return 0;
-    const voxClient = session.voxClient;
-    if (!voxClient || typeof voxClient !== "object") return 0;
-    if ("isAlive" in voxClient && voxClient.isAlive === false) return 0;
-    const rawBufferedSamples =
-      typeof voxClient.getTtsBufferDepthSamples === "function"
-        ? Number(voxClient.getTtsBufferDepthSamples())
-        : Number(voxClient.ttsBufferDepthSamples || 0);
-    const bufferedSamples = Math.max(0, rawBufferedSamples);
-    if (bufferedSamples <= 0) return 0;
-    return this.isClankvoxTtsTelemetryFresh(session) ? bufferedSamples : 0;
+    return this.replyManager.getBufferedTtsSamples(session);
   }
 
   hasBufferedTtsPlayback(session) {
-    const state = this.ensureAssistantOutputState(session);
-    return (
-      this.getBufferedTtsSamples(session) > 0 ||
-      this.getSessionTtsPlaybackState(session, state) === TTS_PLAYBACK_STATE.BUFFERED
-    );
+    return this.replyManager.hasBufferedTtsPlayback(session);
   }
 
   trackOpenAiRealtimeAssistantAudioEvent(session, event) {
@@ -4408,121 +4030,12 @@ export class VoiceSessionManager {
     };
 
     const onResponseDone = (event) => {
-      if (session.ending) return;
-      const hadBargeSuppression = this.isBargeInOutputSuppressed(session);
-      if (hadBargeSuppression) {
-        this.clearBargeInOutputSuppression(session, "response_done");
-      }
-      const pending = session.pendingResponse;
-      const responseId = parseResponseDoneId(event);
-      const responseStatus = parseResponseDoneStatus(event);
-      const responseUsage = parseResponseDoneUsage(event);
-      const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-      const voiceRuntime = getVoiceRuntimeConfig(resolvedSettings);
-      const replyGeneration = getReplyGenerationSettings(resolvedSettings);
-      const realtimeProvider = resolveRealtimeProvider(session.mode);
-      const resolvedResponseModel = isRealtimeMode(session.mode)
-        ? parseResponseDoneModel(event) ||
-        String(session.realtimeClient?.sessionConfig?.model || "").trim() ||
-        String(voiceRuntime.openaiRealtime?.model || "gpt-realtime").trim() ||
-        "gpt-realtime"
-        : parseResponseDoneModel(event);
-      const responseUsdCost =
-        isRealtimeMode(session.mode) && responseUsage
-          ? estimateUsdCost({
-            provider: realtimeProvider || "openai",
-            model: resolvedResponseModel || "gpt-realtime",
-            inputTokens: Number(responseUsage.inputTokens || 0),
-            outputTokens: Number(responseUsage.outputTokens || 0),
-            cacheReadTokens: Number(responseUsage.cacheReadTokens || 0),
-            cacheWriteTokens: 0,
-            customPricing: replyGeneration.pricing
-          })
-          : 0;
-      const hadAudio = pending ? this.pendingResponseHasAudio(session, pending) : false;
-      const hasInFlightToolCalls =
-        Boolean(session.awaitingToolOutputs) ||
-        (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0);
-
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: this.client.user?.id || null,
-        content: `${runtimeLabel}_response_done`,
-        usdCost: responseUsdCost,
-        metadata: {
-          sessionId: session.id,
-          requestId: pending?.requestId || null,
-          responseId,
-          responseStatus,
-          responseModel: resolvedResponseModel || null,
-          responseUsage,
-          hadAudio,
-          retryCount: pending ? Number(pending.retryCount || 0) : null,
-          hardRecoveryAttempted:
-            pending && Object.hasOwn(pending, "hardRecoveryAttempted")
-              ? Boolean(pending.hardRecoveryAttempted)
-              : null
-        }
+      this.handleResponseDone({
+        session,
+        event,
+        settings,
+        runtimeLabel
       });
-
-      if (!pending) {
-        this.syncAssistantOutputState(session, "response_done_without_pending");
-        return;
-      }
-
-      if (hadAudio) {
-        // Schedule music unduck after the subprocess finishes playing
-        // buffered audio (~BOT_TURN_SILENCE_RESET_MS after last delta).
-        this.scheduleBotSpeechMusicUnduck(session, resolvedSettings, BOT_TURN_SILENCE_RESET_MS);
-
-        // Resume music if it was paused for a wake-word direct address.
-        const musicPhase = this.getMusicPhase(session);
-        if (musicPhase === "paused_wake_word") {
-          setTimeout(() => {
-            if (session.ending) return;
-            this.setMusicPhase(session, "playing");
-            this.musicPlayer?.resume?.();
-            this.haltSessionOutputForMusicPlayback(session, "music_resumed_after_wake_word");
-          }, BOT_TURN_SILENCE_RESET_MS);
-        }
-
-        this.clearPendingResponse(session);
-        this.syncAssistantOutputState(session, "response_done_had_audio");
-        return;
-      }
-
-      if (hasInFlightToolCalls) {
-        this.clearPendingResponse(session);
-        this.syncAssistantOutputState(session, "response_done_tool_calls_in_flight");
-        return;
-      }
-
-      if (session.responseDoneGraceTimer) {
-        clearTimeout(session.responseDoneGraceTimer);
-      }
-
-      const requestId = Number(pending.requestId || 0);
-      const responseUserId = pending.userId || null;
-      session.responseDoneGraceTimer = setTimeout(() => {
-        session.responseDoneGraceTimer = null;
-        if (!session || session.ending) return;
-        const current = session.pendingResponse;
-        if (!current || Number(current.requestId || 0) !== requestId) return;
-        if (this.pendingResponseHasAudio(session, current)) {
-          this.clearPendingResponse(session);
-          this.syncAssistantOutputState(session, "response_done_grace_audio_detected");
-          return;
-        }
-        this.handleSilentResponse({
-          session,
-          userId: responseUserId,
-          trigger: "response_done",
-          responseId,
-          responseStatus
-        }).catch(() => undefined);
-      }, RESPONSE_DONE_SILENCE_GRACE_MS);
     };
 
     const onEvent = (event) => {
@@ -4568,21 +4081,21 @@ export class VoiceSessionManager {
   }
 
   resetBotAudioPlayback(session) {
-    if (!session) return;
-    if (musicPhaseIsActive(this.getMusicPhase(session))) {
-      // Clear TTS buffer only — stopPlayback would kill the pending music pipeline.
-      try { session.voxClient?.stopTtsPlayback(); } catch { /* ignore */ }
-    } else {
-      try { session.voxClient?.stopPlayback(); } catch { /* ignore */ }
-    }
-    session.voxClient?.clearTtsPlaybackTelemetry?.();
-    this.patchAssistantOutputTelemetry(session, {
-      trigger: "reset_bot_audio_playback",
-      ttsPlaybackState: TTS_PLAYBACK_STATE.IDLE,
-      ttsBufferedSamples: 0
+    return this.replyManager.resetBotAudioPlayback(session);
+  }
+
+  handleResponseDone({
+    session,
+    event,
+    settings = null,
+    runtimeLabel = "openai_realtime"
+  }) {
+    return this.replyManager.handleResponseDone({
+      session,
+      event,
+      settings,
+      runtimeLabel
     });
-    this.syncAssistantOutputState(session, "reset_bot_audio_playback");
-    this.maybeClearActiveReplyInterruptionPolicy(session);
   }
 
   queueRealtimeTurnContextRefresh({
@@ -4668,40 +4181,53 @@ export class VoiceSessionManager {
   }
 
   getReplyOutputLockState(session): ReplyOutputLockState {
-    if (!session || session.ending) {
-      return {
-        locked: true,
-        reason: "session_inactive",
-        phase: "idle",
-        musicActive: false,
-        botTurnOpen: false,
-        bufferedBotSpeech: false,
-        pendingResponse: false,
-        openAiActiveResponse: false,
-        awaitingToolOutputs: false,
-        streamBufferedBytes: 0
-      };
-    }
+    return this.replyManager.getReplyOutputLockState(session);
+  }
 
-    const streamBufferedBytes = 0; // Subprocess manages its own stream buffer
-    const musicActive = musicPhaseShouldLockOutput(this.getMusicPhase(session));
-    const assistantOutput = this.syncAssistantOutputState(session, "reply_output_lock");
-    const botTurnOpen = Boolean(session.botTurnOpen);
-    const bufferedBotSpeech = assistantOutput?.phase === "speaking_buffered";
-    const pendingResponse = Boolean(session.pendingResponse && typeof session.pendingResponse === "object");
-    const openAiActiveResponse = this.isRealtimeResponseActive(session);
+  getOutputChannelState(session): OutputChannelState {
+    const replyOutputLockState = this.getReplyOutputLockState(session);
+    const sessionInactive = !session || session.ending;
+    const captureBlocking =
+      !sessionInactive &&
+      Number(session.userCaptures?.size || 0) > 0 &&
+      this.hasReplayBlockingActiveCapture(session);
+    const toolCallsRunning =
+      !sessionInactive &&
+      session.openAiToolCallExecutions instanceof Map &&
+      session.openAiToolCallExecutions.size > 0;
     const awaitingToolOutputs =
-      Boolean(session.awaitingToolOutputs) ||
-      (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0);
-    return buildReplyOutputLockState({
-      assistantOutput,
-      musicActive,
-      botTurnOpen,
-      pendingResponse,
-      openAiActiveResponse,
+      replyOutputLockState.awaitingToolOutputs || toolCallsRunning;
+    const deferredBlockReason: OutputChannelState["deferredBlockReason"] = sessionInactive
+      ? "session_inactive"
+      : captureBlocking
+        ? "active_captures"
+        : replyOutputLockState.pendingResponse
+          ? "pending_response"
+          : replyOutputLockState.openAiActiveResponse
+            ? "active_response"
+            : session.awaitingToolOutputs
+              ? "awaiting_tool_outputs"
+              : toolCallsRunning
+                ? "tool_calls_running"
+                : null;
+
+    return {
+      phase: replyOutputLockState.phase,
+      locked: replyOutputLockState.locked,
+      lockReason: replyOutputLockState.reason || null,
+      musicActive: replyOutputLockState.musicActive,
+      captureBlocking,
+      bargeInSuppressed: !sessionInactive && this.isBargeInOutputSuppressed(session),
+      turnBacklog: this.getTurnBacklogSize(session),
+      toolCallsRunning,
+      botTurnOpen: replyOutputLockState.botTurnOpen,
+      bufferedBotSpeech: replyOutputLockState.bufferedBotSpeech,
+      pendingResponse: replyOutputLockState.pendingResponse,
+      openAiActiveResponse: replyOutputLockState.openAiActiveResponse,
       awaitingToolOutputs,
-      streamBufferedBytes
-    });
+      streamBufferedBytes: replyOutputLockState.streamBufferedBytes,
+      deferredBlockReason
+    };
   }
 
   async enqueueChunkedTtsPcmForPlayback({
@@ -4729,69 +4255,7 @@ export class VoiceSessionManager {
   }
 
   markBotTurnOut(session, settings = session.settingsSnapshot) {
-    const now = Date.now();
-    if (now - Number(session.lastBotActivityTouchAt || 0) >= ACTIVITY_TOUCH_THROTTLE_MS) {
-      this.touchActivity(session.guildId, settings);
-      session.lastBotActivityTouchAt = now;
-    }
-
-    const pendingResponse =
-      session.pendingResponse && typeof session.pendingResponse === "object"
-        ? session.pendingResponse
-        : null;
-    const pendingLatencyContext =
-      pendingResponse?.latencyContext && typeof pendingResponse.latencyContext === "object"
-        ? pendingResponse.latencyContext
-        : null;
-    if (pendingLatencyContext && Number(pendingLatencyContext.audioStartedAtMs || 0) <= 0) {
-      pendingLatencyContext.audioStartedAtMs = now;
-      this.logVoiceLatencyStage({
-        session,
-        userId: this.client.user?.id || null,
-        stage: "audio_started",
-        source: pendingLatencyContext.source || pendingResponse?.source || "realtime",
-        captureReason: pendingLatencyContext.captureReason || null,
-        requestId: pendingResponse?.requestId || null,
-        queueWaitMs: pendingLatencyContext.queueWaitMs,
-        pendingQueueDepth: pendingLatencyContext.pendingQueueDepth,
-        finalizedAtMs: pendingLatencyContext.finalizedAtMs,
-        asrStartedAtMs: pendingLatencyContext.asrStartedAtMs,
-        asrCompletedAtMs: pendingLatencyContext.asrCompletedAtMs,
-        generationStartedAtMs: pendingLatencyContext.generationStartedAtMs,
-        replyRequestedAtMs:
-          Number(pendingLatencyContext.replyRequestedAtMs || 0) ||
-          Number(pendingResponse?.requestedAt || 0) ||
-          0,
-        audioStartedAtMs: now
-      });
-    }
-
-    if (!session.botTurnOpen) {
-      session.botTurnOpen = true;
-      session.botTurnOpenAt = now;
-      session.lastAssistantReplyAt = now;
-      this.store.logAction({
-        kind: "voice_turn_out",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: this.client.user?.id || null,
-        content: "bot_audio_started",
-        metadata: {
-          sessionId: session.id
-        }
-      });
-    }
-    if (session.botTurnResetTimer) {
-      clearTimeout(session.botTurnResetTimer);
-    }
-
-    session.botTurnResetTimer = setTimeout(() => {
-      session.botTurnOpen = false;
-      session.botTurnOpenAt = 0;
-      session.botTurnResetTimer = null;
-      this.syncAssistantOutputState(session, "bot_turn_reset");
-      this.maybeClearActiveReplyInterruptionPolicy(session);
-    }, BOT_TURN_SILENCE_RESET_MS);
+    return this.replyManager.markBotTurnOut(session, settings);
   }
 
   getRealtimeTurnBacklogSize(session) {
@@ -4800,6 +4264,11 @@ export class VoiceSessionManager {
       ? session.pendingRealtimeTurns.length
       : 0;
     return Math.max(0, (session.realtimeTurnDrainActive ? 1 : 0) + pendingQueueDepth);
+  }
+
+  getTurnBacklogSize(session) {
+    if (!session) return 0;
+    return Math.max(0, this.getRealtimeTurnBacklogSize(session) + Number(session.pendingSttTurns || 0));
   }
 
   resolveSpeakingEndFinalizeDelayMs({ session, captureAgeMs }) {
@@ -5016,13 +4485,13 @@ export class VoiceSessionManager {
         retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
       };
     }
-    const replyOutputLockState = this.getReplyOutputLockState(session);
-    if (replyOutputLockState.locked) {
+    const outputChannelState = this.getOutputChannelState(session);
+    if (outputChannelState.locked) {
       return {
         allow: false,
         reason: "bot_turn_open",
         retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS,
-        outputLockReason: replyOutputLockState.reason
+        outputLockReason: outputChannelState.lockReason
       };
     }
     if (Number(session.voiceLookupBusyCount || 0) > 0) {
@@ -6416,7 +5885,7 @@ export class VoiceSessionManager {
     if (transcriptionMethod !== "realtime_bridge") {
       return false;
     }
-    if (!Boolean(voiceRuntime.openaiRealtime?.usePerUserAsrBridge)) {
+    if (!voiceRuntime.openaiRealtime?.usePerUserAsrBridge) {
       return false;
     }
     return true;
@@ -6454,7 +5923,7 @@ export class VoiceSessionManager {
     if (transcriptionMethod !== "realtime_bridge") {
       return false;
     }
-    if (Boolean(voiceRuntime.openaiRealtime?.usePerUserAsrBridge)) {
+    if (voiceRuntime.openaiRealtime?.usePerUserAsrBridge) {
       return false;
     }
     return true;
@@ -6604,15 +6073,6 @@ export class VoiceSessionManager {
   }
 
   bindSessionHandlers(session, settings) {
-    const useOpenAiPerUserAsr = this.shouldUsePerUserTranscription({
-      session,
-      settings
-    });
-    const useOpenAiSharedAsr = this.shouldUseSharedTranscription({
-      session,
-      settings
-    });
-
     // Connection state from subprocess
     const onConnectionState = (status) => {
       if (session.ending) return;
@@ -8463,10 +7923,10 @@ export class VoiceSessionManager {
         nextFlushAt
       }
     });
-    const replyOutputLockState = this.getReplyOutputLockState(session);
+    const outputChannelState = this.getOutputChannelState(session);
     const deferredOutputLockDebugMetadata = this.getOutputLockDebugMetadata(
       session,
-      replyOutputLockState.reason
+      outputChannelState.lockReason
     );
     this.store.logAction({
       kind: "voice_runtime",
@@ -8480,7 +7940,7 @@ export class VoiceSessionManager {
         mode: session.mode,
         captureReason: String(captureReason || "stream_end"),
         deferReason: normalizedDeferReason,
-        outputLockReason: replyOutputLockState.reason,
+        outputLockReason: outputChannelState.lockReason,
         directAddressed: Boolean(directAddressed),
         flushDelayMs: normalizedFlushDelayMs,
         deferredQueueSize: pendingQueue.length,
@@ -8536,8 +7996,8 @@ export class VoiceSessionManager {
     const pendingQueue = Array.isArray(deferredTurns) ? deferredTurns : this.getDeferredQueuedUserTurns(session).slice();
     if (!pendingQueue.length) return;
     if (!Array.isArray(deferredTurns)) {
-      const replyOutputLockState = this.getReplyOutputLockState(session);
-      if (replyOutputLockState.locked || this.hasReplayBlockingActiveCapture(session)) {
+      const outputChannelState = this.getOutputChannelState(session);
+      if (outputChannelState.locked || outputChannelState.captureBlocking) {
         this.scheduleDeferredBotTurnOpenFlush({ session, reason });
         return;
       }
@@ -9296,7 +8756,15 @@ export class VoiceSessionManager {
     };
   }
 
-  shouldPersistUserTranscriptTimelineTurn({ session = null, settings = null, transcript = "" } = {}) {
+  shouldPersistUserTranscriptTimelineTurn({
+    session: _session = null,
+    settings: _settings = null,
+    transcript = ""
+  }: {
+    session?: unknown;
+    settings?: unknown;
+    transcript?: string;
+  } = {}) {
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     return Boolean(normalizedTranscript);
   }
@@ -11700,18 +11168,18 @@ export class VoiceSessionManager {
 
     // Don't commit/request while users are still actively streaming audio chunks.
     // This avoids partial-turn commits that can return no-audio responses.
-    if (this.hasReplayBlockingActiveCapture(session)) {
+    const outputChannelState = this.getOutputChannelState(session);
+    if (outputChannelState.captureBlocking) {
       this.scheduleResponseFromBufferedAudio({ session, userId });
       return;
     }
 
-    if (this.isBargeInOutputSuppressed(session)) {
+    if (outputChannelState.bargeInSuppressed) {
       this.scheduleResponseFromBufferedAudio({ session, userId });
       return;
     }
 
-    const replyOutputLockState = this.getReplyOutputLockState(session);
-    if (replyOutputLockState.locked) {
+    if (outputChannelState.locked) {
       this.scheduleResponseFromBufferedAudio({
         session,
         userId: session.pendingResponse?.userId || userId
@@ -11728,7 +11196,7 @@ export class VoiceSessionManager {
       return;
     }
 
-    if (this.getRealtimeTurnBacklogSize(session) > 0) {
+    if (outputChannelState.turnBacklog > 0) {
       this.scheduleResponseFromBufferedAudio({ session, userId });
       return;
     }
@@ -11782,178 +11250,40 @@ export class VoiceSessionManager {
     utteranceText = undefined,
     latencyContext = undefined
   }) {
-    if (!session || session.ending) return false;
-    if (!isRealtimeMode(session.mode)) return false;
-    // Any fresh bot response supersedes older deferred voice intents.
-    this.clearAllDeferredVoiceActions(session);
-    this.clearJoinGreetingOpportunity(session);
-    if (emitCreateEvent && this.isRealtimeResponseActive(session)) {
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: this.client.user?.id || null,
-        content: "response_create_skipped_active_response",
-        metadata: {
-          sessionId: session.id,
-          source: String(source || "turn_flush")
-        }
-      });
-      return false;
-    }
-    if (emitCreateEvent) {
-      session.realtimeClient.createAudioResponse();
-    }
-
-    const now = Date.now();
-    if (isRealtimeMode(session.mode)) {
-      session.lastOpenAiAssistantAudioItemId = null;
-      session.lastOpenAiAssistantAudioItemContentIndex = 0;
-      session.lastOpenAiAssistantAudioItemReceivedMs = 0;
-    }
-    const requestId = Number(session.nextResponseRequestId || 0) + 1;
-    session.nextResponseRequestId = requestId;
-    const previous = session.pendingResponse;
-    const interruptionPolicySeed =
-      interruptionPolicy === undefined
-        ? previous?.interruptionPolicy || session.activeReplyInterruptionPolicy
-        : interruptionPolicy;
-    const normalizedInterruptionPolicy = this.normalizeReplyInterruptionPolicy(interruptionPolicySeed);
-    const utteranceTextSeed = utteranceText === undefined ? previous?.utteranceText || "" : utteranceText || "";
-    const normalizedUtteranceText =
-      normalizeVoiceText(utteranceTextSeed, STT_REPLY_MAX_CHARS) || null;
-    const latencyContextSeed =
-      latencyContext === undefined
-        ? previous?.latencyContext || null
-        : latencyContext;
-    const normalizedLatencyContext =
-      latencyContextSeed && typeof latencyContextSeed === "object"
-        ? {
-          finalizedAtMs: Math.max(0, Number(latencyContextSeed.finalizedAtMs || 0)),
-          asrStartedAtMs: Math.max(0, Number(latencyContextSeed.asrStartedAtMs || 0)),
-          asrCompletedAtMs: Math.max(0, Number(latencyContextSeed.asrCompletedAtMs || 0)),
-          generationStartedAtMs: Math.max(0, Number(latencyContextSeed.generationStartedAtMs || 0)),
-          replyRequestedAtMs: Math.max(
-            0,
-            Number(latencyContextSeed.replyRequestedAtMs || 0)
-          ) || now,
-          audioStartedAtMs: Math.max(0, Number(latencyContextSeed.audioStartedAtMs || 0)),
-          source: String(latencyContextSeed.source || source || "turn_flush"),
-          captureReason: String(latencyContextSeed.captureReason || "").trim() || null,
-          queueWaitMs: Number.isFinite(Number(latencyContextSeed.queueWaitMs))
-            ? Math.max(0, Math.round(Number(latencyContextSeed.queueWaitMs)))
-            : null,
-          pendingQueueDepth: Number.isFinite(Number(latencyContextSeed.pendingQueueDepth))
-            ? Math.max(0, Math.round(Number(latencyContextSeed.pendingQueueDepth)))
-            : null
-        }
-        : null;
-
-    session.pendingResponse = {
-      requestId,
-      userId: userId || previous?.userId || null,
-      requestedAt: now,
-      retryCount: resetRetryState ? 0 : Number(previous?.retryCount || 0),
-      hardRecoveryAttempted: resetRetryState ? false : Boolean(previous?.hardRecoveryAttempted),
-      source: String(source || "turn_flush"),
-      handlingSilence: false,
-      audioReceivedAt: 0,
-      interruptionPolicy: normalizedInterruptionPolicy,
-      utteranceText: normalizedUtteranceText,
-      latencyContext: normalizedLatencyContext
-    };
-    session.lastResponseRequestAt = now;
-    this.setActiveReplyInterruptionPolicy(session, normalizedInterruptionPolicy);
-    this.clearResponseSilenceTimers(session);
-    this.armResponseSilenceWatchdog({
+    return this.replyManager.runCreateTrackedAudioResponse({
       session,
-      requestId,
-      userId: session.pendingResponse.userId
+      userId,
+      source,
+      resetRetryState,
+      emitCreateEvent,
+      interruptionPolicy,
+      utteranceText,
+      latencyContext
     });
-    this.syncAssistantOutputState(session, "response_requested");
-    return true;
   }
 
   pendingResponseHasAudio(session, pendingResponse = session?.pendingResponse) {
-    if (!session || !pendingResponse) return false;
-    const requestedAt = Number(pendingResponse.requestedAt || 0);
-    if (!requestedAt) return false;
-    return Number(session.lastAudioDeltaAt || 0) >= requestedAt;
+    return this.replyManager.runPendingResponseHasAudio(session, pendingResponse);
   }
 
   clearResponseSilenceTimers(session) {
-    if (!session) return;
-    if (session.responseWatchdogTimer) {
-      clearTimeout(session.responseWatchdogTimer);
-      session.responseWatchdogTimer = null;
-    }
-    if (session.responseDoneGraceTimer) {
-      clearTimeout(session.responseDoneGraceTimer);
-      session.responseDoneGraceTimer = null;
-    }
+    return this.replyManager.clearResponseSilenceTimers(session);
   }
 
   clearPendingResponse(session) {
-    if (!session) return;
-    this.clearResponseSilenceTimers(session);
-
-    if (session.openAiPendingToolAbortControllers) {
-      for (const controller of session.openAiPendingToolAbortControllers.values()) {
-        try {
-          controller.abort("Pending response cleared");
-        } catch {
-          // ignore
-        }
-      }
-      session.openAiPendingToolAbortControllers.clear();
-    }
-
-    session.pendingResponse = null;
-    this.syncAssistantOutputState(session, "pending_response_cleared");
-    this.maybeClearActiveReplyInterruptionPolicy(session);
-    this.recheckDeferredVoiceActions({
-      session,
-      reason: "pending_response_cleared"
-    });
-    this.maybeFireJoinGreetingOpportunity(session, "pending_response_cleared");
+    return this.replyManager.runClearPendingResponse(session);
   }
 
   isRealtimeResponseActive(session) {
-    if (!session || !isRealtimeMode(session.mode)) return false;
-    const checker = session.realtimeClient?.isResponseInProgress;
-    if (typeof checker !== "function") return false;
-    try {
-      return Boolean(checker.call(session.realtimeClient));
-    } catch {
-      return false;
-    }
+    return this.replyManager.runIsRealtimeResponseActive(session);
   }
 
   armResponseSilenceWatchdog({ session, requestId, userId = null }) {
-    if (!session || session.ending) return;
-    if (!isRealtimeMode(session.mode)) return;
-    if (!Number.isFinite(Number(requestId)) || Number(requestId) <= 0) return;
-
-    if (session.responseWatchdogTimer) {
-      clearTimeout(session.responseWatchdogTimer);
-    }
-
-    session.responseWatchdogTimer = setTimeout(() => {
-      session.responseWatchdogTimer = null;
-      if (!session || session.ending) return;
-      const pending = session.pendingResponse;
-      if (!pending) return;
-      if (Number(pending.requestId || 0) !== Number(requestId)) return;
-      if (this.pendingResponseHasAudio(session, pending)) {
-        this.clearPendingResponse(session);
-        return;
-      }
-      this.handleSilentResponse({
-        session,
-        userId: pending.userId || userId,
-        trigger: "watchdog"
-      }).catch(() => undefined);
-    }, RESPONSE_SILENCE_RETRY_DELAY_MS);
+    return this.replyManager.runArmResponseSilenceWatchdog({
+      session,
+      requestId,
+      userId
+    });
   }
 
   async handleSilentResponse({
@@ -11963,180 +11293,13 @@ export class VoiceSessionManager {
     responseId = null,
     responseStatus = null
   }) {
-    if (!session || session.ending) return;
-    if (!isRealtimeMode(session.mode)) return;
-    const pending = session.pendingResponse;
-    if (!pending) return;
-    if (pending.handlingSilence) return;
-    if (this.pendingResponseHasAudio(session, pending)) {
-      this.clearPendingResponse(session);
-      return;
-    }
-
-    pending.handlingSilence = true;
-    this.clearResponseSilenceTimers(session);
-
-    if (this.hasReplayBlockingActiveCapture(session)) {
-      pending.handlingSilence = false;
-      this.armResponseSilenceWatchdog({
-        session,
-        requestId: pending.requestId,
-        userId: pending.userId || userId
-      });
-      return;
-    }
-
-    const resolvedUserId = pending.userId || userId || this.client.user?.id || null;
-    const setHandlingDone = () => {
-      const active = session.pendingResponse;
-      if (active && Number(active.requestId || 0) === Number(pending.requestId || 0)) {
-        active.handlingSilence = false;
-      }
-    };
-
-    if (pending.retryCount < MAX_RESPONSE_SILENCE_RETRIES) {
-      pending.retryCount += 1;
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: resolvedUserId,
-        content: "response_silent_retry",
-        metadata: {
-          sessionId: session.id,
-          requestId: pending.requestId,
-          retryCount: pending.retryCount,
-          maxRetries: MAX_RESPONSE_SILENCE_RETRIES,
-          responseRequestedAt: pending.requestedAt,
-          trigger,
-          responseId,
-          responseStatus
-        }
-      });
-
-      try {
-        const created = this.createTrackedAudioResponse({
-          session,
-          userId: resolvedUserId,
-          source: "silent_retry",
-          resetRetryState: false
-        });
-        if (!created) {
-          this.armResponseSilenceWatchdog({
-            session,
-            requestId: pending.requestId,
-            userId: pending.userId || userId
-          });
-        }
-      } catch (error) {
-        this.store.logAction({
-          kind: "voice_error",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: resolvedUserId,
-          content: `response_retry_failed: ${String(error?.message || error)}`,
-          metadata: {
-            sessionId: session.id,
-            requestId: pending.requestId
-          }
-        });
-        this.clearPendingResponse(session);
-        await this.endSession({
-          guildId: session.guildId,
-          reason: "response_stalled",
-          announcement: "voice output stalled and stayed silent, leaving vc.",
-          settings: session.settingsSnapshot
-        });
-      } finally {
-        setHandlingDone();
-      }
-      return;
-    }
-
-    if (!pending.hardRecoveryAttempted) {
-      pending.hardRecoveryAttempted = true;
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: resolvedUserId,
-        content: "response_silent_hard_recovery",
-        metadata: {
-          sessionId: session.id,
-          requestId: pending.requestId,
-          retryCount: pending.retryCount,
-          trigger,
-          responseId,
-          responseStatus
-        }
-      });
-
-      try {
-        const pendingInputBytes = Math.max(0, Number(session.pendingRealtimeInputBytes || 0));
-        const minCommitBytes = getRealtimeCommitMinimumBytes(
-          session.mode,
-          Number(session.realtimeInputSampleRateHz) || 24000
-        );
-        if (pendingInputBytes >= minCommitBytes) {
-          session.realtimeClient.commitInputAudioBuffer();
-          session.pendingRealtimeInputBytes = 0;
-        }
-        const created = this.createTrackedAudioResponse({
-          session,
-          userId: resolvedUserId,
-          source: "hard_recovery",
-          resetRetryState: false
-        });
-        if (!created) {
-          this.armResponseSilenceWatchdog({
-            session,
-            requestId: pending.requestId,
-            userId: pending.userId || userId
-          });
-        }
-      } catch (error) {
-        this.store.logAction({
-          kind: "voice_error",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: resolvedUserId,
-          content: `response_hard_recovery_failed: ${String(error?.message || error)}`,
-          metadata: {
-            sessionId: session.id,
-            requestId: pending.requestId
-          }
-        });
-        this.clearPendingResponse(session);
-        await this.endSession({
-          guildId: session.guildId,
-          reason: "response_stalled",
-          announcement: "voice output stalled and stayed silent, leaving vc.",
-          settings: session.settingsSnapshot
-        });
-      } finally {
-        setHandlingDone();
-      }
-      return;
-    }
-
-    this.store.logAction({
-      kind: "voice_error",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: resolvedUserId,
-      content: "response_silent_fallback",
-      metadata: {
-        sessionId: session.id,
-        requestId: pending.requestId,
-        retryCount: pending.retryCount,
-        hardRecoveryAttempted: pending.hardRecoveryAttempted,
-        trigger,
-        responseId,
-        responseStatus
-      }
+    return this.replyManager.runHandleSilentResponse({
+      session,
+      userId,
+      trigger,
+      responseId,
+      responseStatus
     });
-    this.clearPendingResponse(session);
-    // Drop this stuck turn and keep the VC session alive; a fresh user turn can recover.
   }
 
   async endSession({

@@ -11,7 +11,6 @@ import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
   BARGE_IN_FULL_OVERRIDE_MIN_MS,
   BARGE_IN_MIN_SPEECH_MS,
-  BARGE_IN_STT_MIN_CAPTURE_AGE_MS,
   VOICE_SILENCE_GATE_MIN_CLIP_MS,
   VOICE_TURN_PROMOTION_MIN_CLIP_MS
 } from "./voiceSessionManager.constants.ts";
@@ -1380,7 +1379,7 @@ test("shared ASR handoff skips zero-audio captures and selects buffered speaker"
 });
 
 test("shared ASR committed events resolve waiters by commit user instead of FIFO", () => {
-  const { manager } = createManager();
+  createManager();
   const resolvedItemIds = [];
   const session = createSession({
     mode: "openai_realtime",
@@ -2484,6 +2483,47 @@ test("getReplyOutputLockState ignores stale botTurnOpen when no output signals r
   assert.equal(lockState.reason, "idle");
   assert.equal(lockState.phase, "idle");
   assert.equal(lockState.botTurnOpen, true);
+});
+
+test("getOutputChannelState mirrors lock state for music playback", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    music: {
+      phase: "playing",
+      active: true
+    }
+  });
+
+  const outputChannelState = manager.getOutputChannelState(session);
+  assert.equal(outputChannelState.locked, true);
+  assert.equal(outputChannelState.lockReason, "music_playback_active");
+  assert.equal(outputChannelState.musicActive, true);
+  assert.equal(outputChannelState.deferredBlockReason, null);
+});
+
+test("getOutputChannelState surfaces deferred blockers and turn backlog", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    pendingSttTurns: 2,
+    awaitingToolOutputs: true,
+    openAiToolCallExecutions: new Map([["call-1", Promise.resolve()]]),
+    userCaptures: new Map([[
+      "user-a",
+      {
+        userId: "user-a",
+        bytesSent: 0,
+        signalSampleCount: 0,
+        speakingEndFinalizeTimer: null
+      }
+    ]])
+  });
+
+  const outputChannelState = manager.getOutputChannelState(session);
+  assert.equal(outputChannelState.captureBlocking, true);
+  assert.equal(outputChannelState.turnBacklog, 2);
+  assert.equal(outputChannelState.awaitingToolOutputs, true);
+  assert.equal(outputChannelState.toolCallsRunning, true);
+  assert.equal(outputChannelState.deferredBlockReason, "active_captures");
 });
 
 test("getReplyOutputLockState clears stale active realtime response once playback is idle", () => {

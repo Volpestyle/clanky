@@ -440,11 +440,11 @@ export async function evaluateVoiceReplyDecision(manager: any, {
   });
   let conversationContext = buildConversationContext();
 
-  const replyOutputLockState = manager.getReplyOutputLockState(session);
+  const outputChannelState = manager.getOutputChannelState(session);
   const lockedByMusicOnly =
-    Boolean(replyOutputLockState.locked) &&
-    replyOutputLockState.reason === "music_playback_active";
-  if (replyOutputLockState.locked && !lockedByMusicOnly) {
+    Boolean(outputChannelState.locked) &&
+    outputChannelState.lockReason === "music_playback_active";
+  if (outputChannelState.locked && !lockedByMusicOnly) {
     return {
       allow: false,
       reason: "bot_turn_open",
@@ -455,7 +455,7 @@ export async function evaluateVoiceReplyDecision(manager: any, {
       transcript: normalizedTranscript,
       conversationContext,
       retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS,
-      outputLockReason: replyOutputLockState.reason
+      outputLockReason: outputChannelState.lockReason
     };
   }
 
