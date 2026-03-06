@@ -27,6 +27,7 @@ type HistoryImageCandidate = {
   messageId?: string | null;
   authorName?: string;
   createdAt?: string;
+  imageRef?: string;
   url?: string;
   filename?: string;
   contentType?: string;
@@ -43,11 +44,6 @@ type CaptionRecentHistoryImagesOptions = {
   candidates?: HistoryImageCandidate[];
   settings?: Record<string, unknown> | null;
   trace?: Record<string, unknown> | null;
-};
-
-type GetAutoIncludeImageInputsOptions = {
-  candidates?: HistoryImageCandidate[];
-  maxImages?: number;
 };
 
 type ExtractHistoryImageCandidatesOptions = {
@@ -153,27 +149,6 @@ export function captionRecentHistoryImages(
   }
 }
 
-export function getAutoIncludeImageInputs({
-  candidates = [],
-  maxImages = 3
-}: GetAutoIncludeImageInputsOptions = {}) {
-  const list = Array.isArray(candidates) ? candidates : [];
-  const cap = Math.max(0, Math.min(Number(maxImages) || 3, 6));
-  const inputs = [];
-
-  for (const candidate of list) {
-    if (inputs.length >= cap) break;
-    if (!candidate?.url) continue;
-    inputs.push({
-      url: candidate.url,
-      filename: candidate.filename || "(unnamed)",
-      contentType: candidate.contentType || ""
-    });
-  }
-
-  return inputs;
-}
-
 export function extractHistoryImageCandidates({
   recentMessages = [],
   excluded = new Set(),
@@ -212,6 +187,7 @@ export function extractHistoryImageCandidates({
         messageId: String(row?.message_id || "").trim() || null,
         authorName: String(row?.author_name || "unknown").trim() || "unknown",
         createdAt: String(row?.created_at || "").trim(),
+        imageRef: `IMG ${candidates.length + 1}`,
         url,
         filename: parsed.filename || "(unnamed)",
         contentType: parsed.contentType || "",
@@ -290,6 +266,7 @@ export async function runModelRequestedImageLookup({
   query
 }: RunModelRequestedImageLookupOptions) {
   const normalizedQuery = normalizeDirectiveText(query, MAX_IMAGE_LOOKUP_QUERY_LEN);
+  const directRef = normalizeHistoryImageRef(normalizedQuery);
   const baseState = imageLookup || {};
   const state = {
     ...baseState,
@@ -318,6 +295,34 @@ export async function runModelRequestedImageLookup({
     return {
       ...state,
       error: "No recent history images are available for lookup."
+    };
+  }
+
+  if (directRef) {
+    const directMatch = candidates.find((candidate) => normalizeHistoryImageRef(candidate?.imageRef) === directRef);
+    if (!directMatch) {
+      return {
+        ...state,
+        error: `No history image matched ${directRef}.`
+      };
+    }
+
+    return {
+      ...state,
+      used: true,
+      results: [
+        {
+          ...directMatch,
+          matchReason: "direct image ref"
+        }
+      ],
+      selectedImageInputs: [
+        {
+          url: directMatch.url,
+          filename: directMatch.filename,
+          contentType: directMatch.contentType
+        }
+      ]
     };
   }
 
@@ -377,4 +382,13 @@ export function mergeImageInputs({
   }
 
   return merged.slice(0, maxInputs);
+}
+
+function normalizeHistoryImageRef(value: unknown) {
+  const match = String(value || "")
+    .trim()
+    .toUpperCase()
+    .match(/^IMG\s*(\d+)$/);
+  if (!match) return "";
+  return `IMG ${Number(match[1])}`;
 }

@@ -226,7 +226,6 @@ function buildSettingsFormView(settings: unknown) {
       captionEnabled: vision.enabled,
       provider: visionBinding.provider,
       model: visionBinding.model,
-      maxAutoIncludeImages: vision.maxAutoIncludeImages,
       maxCaptionsPerHour: vision.maxCaptionsPerHour
     },
     webSearch: {
@@ -422,7 +421,6 @@ export function settingsToForm(settings: unknown) {
     visionCaptionEnabled: resolved.vision.captionEnabled ?? defaultVision.captionEnabled,
     visionProvider: resolved.vision.provider ?? defaultVision.provider,
     visionModel: resolved.vision.model ?? defaultVision.model,
-    visionMaxAutoIncludeImages: resolved.vision.maxAutoIncludeImages ?? defaultVision.maxAutoIncludeImages,
     visionMaxCaptionsPerHour: resolved.vision.maxCaptionsPerHour ?? defaultVision.maxCaptionsPerHour,
     webSearchEnabled: resolved.webSearch.enabled ?? defaultWebSearch.enabled,
     webSearchOpenAiUserLocation: resolved.webSearch.nativeUserLocation ?? defaultWebSearch.nativeUserLocation,
@@ -1027,7 +1025,6 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
             model: String(form.visionModel || "").trim()
           }
         },
-        maxAutoIncludeImages: Number(form.visionMaxAutoIncludeImages),
         maxCaptionsPerHour: Number(form.visionMaxCaptionsPerHour)
       },
       videoContext: {

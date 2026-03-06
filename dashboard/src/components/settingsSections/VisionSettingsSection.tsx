@@ -56,17 +56,6 @@ export function VisionSettingsSection({
 
           <div className="split">
             <div>
-              <label htmlFor="vision-max-auto-include">Max auto-include images</label>
-              <input
-                id="vision-max-auto-include"
-                type="number"
-                min="0"
-                max="6"
-                value={form.visionMaxAutoIncludeImages}
-                onChange={set("visionMaxAutoIncludeImages")}
-              />
-            </div>
-            <div>
               <label htmlFor="vision-max-captions-per-hour">Max captions/hour</label>
               <input
                 id="vision-max-captions-per-hour"

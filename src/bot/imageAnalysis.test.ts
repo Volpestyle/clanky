@@ -11,7 +11,6 @@ import type { BotContext } from "./botContext.ts";
 import {
   captionRecentHistoryImages,
   extractHistoryImageCandidates,
-  getAutoIncludeImageInputs,
   mergeImageInputs,
   rankImageLookupCandidates,
   runModelRequestedImageLookup,
@@ -80,6 +79,7 @@ test("extractHistoryImageCandidates keeps image URLs, skips excluded URLs, and e
 
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0]?.url, "https://cdn.example.com/cat.png");
+  assert.equal(candidates[0]?.imageRef, "IMG 1");
   assert.equal(candidates[0]?.filename, "cat.png");
   assert.equal(candidates[0]?.contentType, "image/png");
   assert.equal(candidates[0]?.hasCachedCaption, true);
@@ -111,41 +111,7 @@ test("rankImageLookupCandidates prefers phrase and token matches over recency fa
   assert.equal(String(ranked[0]?.matchReason || "").includes("phrase match"), true);
 });
 
-test("getAutoIncludeImageInputs and mergeImageInputs clamp and dedupe image inputs", () => {
-  const autoInputs = getAutoIncludeImageInputs({
-    candidates: [
-      {
-        url: "https://cdn.example.com/one.png",
-        filename: "one.png",
-        contentType: "image/png"
-      },
-      {
-        url: "https://cdn.example.com/two.png",
-        filename: "two.png",
-        contentType: "image/png"
-      },
-      {
-        url: "https://cdn.example.com/three.png",
-        filename: "three.png",
-        contentType: "image/png"
-      }
-    ],
-    maxImages: 2
-  });
-
-  assert.deepEqual(autoInputs, [
-    {
-      url: "https://cdn.example.com/one.png",
-      filename: "one.png",
-      contentType: "image/png"
-    },
-    {
-      url: "https://cdn.example.com/two.png",
-      filename: "two.png",
-      contentType: "image/png"
-    }
-  ]);
-
+test("mergeImageInputs clamps and dedupes image inputs", () => {
   const merged = mergeImageInputs({
     baseInputs: [
       { url: "https://cdn.example.com/one.png", contentType: "image/png" },
@@ -200,6 +166,30 @@ test("runModelRequestedImageLookup normalizes the query and selects matching his
     filename: "cat.png",
     contentType: "image/png"
   });
+});
+
+test("runModelRequestedImageLookup resolves direct IMG refs", async () => {
+  const lookup = await runModelRequestedImageLookup({
+    imageLookup: {
+      enabled: true,
+      candidates: [
+        {
+          imageRef: "IMG 1",
+          url: "https://cdn.example.com/cat.png",
+          filename: "cat.png",
+          contentType: "image/png",
+          context: "orange cat on the sofa",
+          authorName: "alice",
+          recencyRank: 1
+        }
+      ]
+    },
+    query: "img 1"
+  });
+
+  assert.equal(lookup.used, true);
+  assert.equal(lookup.results[0]?.matchReason, "direct image ref");
+  assert.equal(lookup.selectedImageInputs[0]?.filename, "cat.png");
 });
 
 test("captionRecentHistoryImages respects hourly budget and skips inflight URLs", async () => {

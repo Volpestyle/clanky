@@ -551,7 +551,6 @@ export const DEFAULT_SETTINGS = {
           model: "claude-haiku-4-5"
         }
       },
-      maxAutoIncludeImages: 3,
       maxCaptionsPerHour: 60
     },
     videoContext: {

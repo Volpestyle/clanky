@@ -365,7 +365,6 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
             model: vision.model
           }
         },
-        maxAutoIncludeImages: vision.maxAutoIncludeImages,
         maxCaptionsPerHour: vision.maxCaptionsPerHour
       },
       videoContext

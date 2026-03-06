@@ -1295,11 +1295,124 @@ test("reply follow-up regeneration can add history images when model requests im
     assert.equal(sent, true);
     assert.equal(replyPayloads.length + channelSendPayloads.length, 1);
     assert.equal(llmCalls.length, 2);
+    assert.match(String(llmCalls[0]?.userPrompt || ""), /smelly conk: \[IMG 1 by smelly conk/);
+    assert.doesNotMatch(String(llmCalls[0]?.userPrompt || ""), /Current message attachments:\n- starter-dog/);
     const secondCallContext = llmCalls[1]?.contextMessages || [];
     const hasToolResult = secondCallContext.some((msg) =>
       Array.isArray(msg?.content) && msg.content.some((c) => c?.type === "tool_result")
     );
     assert.equal(hasToolResult, true);
+  });
+});
+
+test("image lookup tool accepts direct IMG refs from chat history", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+
+    const llmCalls = [];
+    const replyPayloads = [];
+    const channelSendPayloads = [];
+    const typingCallsRef = { count: 0 };
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate(payload) {
+          llmCalls.push(payload);
+          if (llmCalls.length === 1) {
+            return {
+              text: "",
+              toolCalls: [
+                {
+                  id: "tc_img_1",
+                  name: "image_lookup",
+                  input: { imageId: "IMG 1" }
+                }
+              ],
+              rawContent: [
+                { type: "text", text: "" },
+                { type: "tool_use", id: "tc_img_1", name: "image_lookup", input: { imageId: "IMG 1" } }
+              ],
+              provider: "test",
+              model: "test-model",
+              usage: null,
+              costUsd: 0
+            };
+          }
+
+          return {
+            text: JSON.stringify({
+              text: "yep that was the earlier image",
+              skip: false,
+              reactionEmoji: null,
+              media: null,
+              automationAction: { operation: "none" },
+              voiceIntent: { intent: "none", confidence: 0, reason: null },
+              screenShareIntent: { action: "none", confidence: 0, reason: null }
+            }),
+            provider: "test",
+            model: "test-model",
+            usage: null,
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+
+    const guild = buildGuild();
+    const channel = buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef });
+    store.recordMessage({
+      messageId: "img-context-1",
+      createdAt: Date.now() - 3_000,
+      guildId: guild.id,
+      channelId,
+      authorId: "bot-1",
+      authorName: "clanker conk",
+      isBot: true,
+      content: "https://cdn.discordapp.com/attachments/chan-1/9001/selfie.png?ex=69a358b6&is=69a20736&hm=abc",
+      referencedMessageId: null
+    });
+
+    const incoming = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-image-lookup-direct-ref",
+      content: "what was in that earlier pic",
+      replyPayloads
+    });
+
+    const settings = store.getSettings();
+    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const sent = await bot.maybeReplyToMessage(incoming, settings, {
+      source: "message_event",
+      forceRespond: true,
+      recentMessages,
+      addressSignal: {
+        direct: false,
+        inferred: false,
+        triggered: false,
+        reason: "llm_decides"
+      }
+    });
+
+    assert.equal(sent, true);
+    assert.equal(llmCalls.length, 2);
+    assert.equal(Array.isArray(llmCalls[1]?.imageInputs), true);
+    assert.equal(llmCalls[1].imageInputs.length, 1);
+    assert.equal(llmCalls[1].imageInputs[0].filename, "selfie.png");
   });
 });
 

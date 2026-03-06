@@ -51,7 +51,6 @@ import {
 } from "./bot/budgetTracking.ts";
 import {
   captionRecentHistoryImages as captionRecentHistoryImagesForImageAnalysis,
-  getAutoIncludeImageInputs as getAutoIncludeImageInputsForImageAnalysis,
   mergeImageInputs as mergeImageInputsForImageAnalysis,
   runModelRequestedImageLookup as runModelRequestedImageLookupForImageAnalysis
 } from "./bot/imageAnalysis.ts";
@@ -718,7 +717,6 @@ export class ClankerBot {
       buildMemoryLookupContext: (payload) => buildMemoryLookupContextForBudgetTracking(budgetContext, payload),
       buildVideoReplyContext: (payload) => buildVideoReplyContextForBudgetTracking(budgetContext, payload),
       buildImageLookupContext: (payload) => buildImageLookupContextForBudgetTracking(budgetContext, payload),
-      getAutoIncludeImageInputs: (payload) => getAutoIncludeImageInputsForImageAnalysis(payload),
       captionRecentHistoryImages: (payload = {}) =>
         captionRecentHistoryImagesForImageAnalysis(botContext, {
           imageCaptionCache: this.imageCaptionCache,

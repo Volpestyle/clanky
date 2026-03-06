@@ -254,16 +254,21 @@ const CODE_TASK_TOOL: ReplyToolDefinition = toAnthropicTool(CODE_TASK_SCHEMA);
 const IMAGE_LOOKUP_TOOL: ReplyToolDefinition = {
   name: "image_lookup",
   description:
-    "Look up a previously shared image from message history. Use when the user refers to an earlier image/photo.",
+    "Look up a previously shared image from message history. Use a specific image ref like IMG 3 or a short query when the user refers to an earlier image/photo.",
   input_schema: {
     type: "object",
     properties: {
+      imageId: {
+        type: "string",
+        description: "Specific history image ref from chat context, for example IMG 3"
+      },
       query: {
         type: "string",
-        description: "Concise description of the image to find (max 220 chars)"
+        description: "Concise description of the image to find, or the image ref itself (max 220 chars)"
       }
     },
-    required: ["query"]
+    anyOf: [{ required: ["imageId"] }, { required: ["query"] }],
+    additionalProperties: false
   }
 };
 
@@ -886,18 +891,23 @@ async function executeImageLookup(
   input: ReplyToolCallInput,
   _context: ReplyToolContext
 ): Promise<ReplyToolResult> {
+  const imageId = normalizeDirectiveText(
+    String(input?.imageId || ""),
+    MAX_IMAGE_LOOKUP_QUERY_LEN
+  );
   const query = normalizeDirectiveText(
     String(input?.query || ""),
     MAX_IMAGE_LOOKUP_QUERY_LEN
   );
-  if (!query) {
-    return { content: "Missing or empty image lookup query.", isError: true };
+  const request = imageId || query;
+  if (!request) {
+    return { content: "Missing image lookup request.", isError: true };
   }
   // Image lookup is handled by the caller since it needs access to
   // message history image candidates which are passed at the call site.
   // This tool returns a placeholder that the caller intercepts.
   return {
-    content: `__IMAGE_LOOKUP_REQUEST__:${query}`
+    content: `__IMAGE_LOOKUP_REQUEST__:${request}`
   };
 }
 

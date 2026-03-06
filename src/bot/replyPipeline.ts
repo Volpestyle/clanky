@@ -440,19 +440,9 @@ export async function buildReplyContext(
     excludedUrls: modelImageInputs.map((image) => String(image?.url || "").trim())
   });
 
-  // Auto-include recent history images as direct vision inputs
-  const maxAutoInclude = Math.min(
-    (visionSettings.maxAutoIncludeImages != null ? Number(visionSettings.maxAutoIncludeImages) : 3),
-    Math.max(0, MAX_MODEL_IMAGE_INPUTS - modelImageInputs.length)
-  );
-  if (maxAutoInclude > 0 && Boolean(visionSettings.enabled) && imageLookup.candidates?.length) {
-    const autoImageInputs = bot.getAutoIncludeImageInputs({
-      candidates: imageLookup.candidates,
-      maxImages: maxAutoInclude
-    });
-    modelImageInputs.push(...autoImageInputs);
-
-    // Fire-and-forget: caption uncaptioned images in background for future text matching
+  if (Boolean(visionSettings.enabled) && imageLookup.candidates?.length) {
+    // Fire-and-forget: caption uncaptioned images in background for future text matching.
+    // Historical images stay out of direct model vision context until the model explicitly asks.
     bot.captionRecentHistoryImages({
       candidates: imageLookup.candidates,
       settings,
@@ -822,9 +812,10 @@ export async function executeReplyLlm(
       if (toolCall.name === "memory_search" && !result.isError) {
         usedMemoryLookupFollowup = true;
       } else if (toolCall.name === "image_lookup" && !result.isError) {
+        const imageLookupRequest = String(toolInput.imageId || toolInput.query || "");
         imageLookup = await bot.runModelRequestedImageLookup({
           imageLookup,
-          query: String(toolInput.query || "")
+          query: imageLookupRequest
         });
         modelImageInputs = bot.mergeImageInputs({
           baseInputs: modelImageInputs,

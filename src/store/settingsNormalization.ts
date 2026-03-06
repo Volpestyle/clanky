@@ -1550,12 +1550,6 @@ function normalizeMediaSection(section: Settings["media"]): Settings["media"] {
       execution: normalizeExecutionPolicy(vision.execution, "anthropic", "claude-haiku-4-5", {
         fallbackMode: "dedicated_model"
       }),
-      maxAutoIncludeImages: normalizeInt(
-        vision.maxAutoIncludeImages,
-        DEFAULT_SETTINGS.media.vision.maxAutoIncludeImages,
-        0,
-        10
-      ),
       maxCaptionsPerHour: normalizeInt(
         vision.maxCaptionsPerHour,
         DEFAULT_SETTINGS.media.vision.maxCaptionsPerHour,

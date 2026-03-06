@@ -105,7 +105,6 @@ type BuildBrowserBrowseContextFn = typeof import("./budgetTracking.ts").buildBro
 type BuildMemoryLookupContextFn = typeof import("./budgetTracking.ts").buildMemoryLookupContext;
 type BuildVideoReplyContextFn = typeof import("./budgetTracking.ts").buildVideoReplyContext;
 type BuildImageLookupContextFn = typeof import("./budgetTracking.ts").buildImageLookupContext;
-type GetAutoIncludeImageInputsFn = typeof import("./imageAnalysis.ts").getAutoIncludeImageInputs;
 type RunModelRequestedImageLookupFn = typeof import("./imageAnalysis.ts").runModelRequestedImageLookup;
 type MergeImageInputsFn = typeof import("./imageAnalysis.ts").mergeImageInputs;
 type GetVoiceScreenShareCapabilityFn = typeof import("./screenShare.ts").getVoiceScreenShareCapability;
@@ -215,7 +214,6 @@ export interface ReplyPipelineRuntime extends BotContext, Pick<ClankerBot, Reply
   buildMemoryLookupContext: StripFirstArg<BuildMemoryLookupContextFn>;
   buildVideoReplyContext: StripFirstArg<BuildVideoReplyContextFn>;
   buildImageLookupContext: StripFirstArg<BuildImageLookupContextFn>;
-  getAutoIncludeImageInputs: GetAutoIncludeImageInputsFn;
   captionRecentHistoryImages: CaptionRecentHistoryImagesRuntimeFn;
   getVoiceScreenShareCapability: StripFirstArg<GetVoiceScreenShareCapabilityFn>;
   runModelRequestedBrowserBrowse: StripFirstArg<RunModelRequestedBrowserBrowseFn>;

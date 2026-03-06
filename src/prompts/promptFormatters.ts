@@ -10,6 +10,9 @@ import {
   getPromptStyle,
   getPromptTextGuidance
 } from "../promptCore.ts";
+import { extractUrlsFromText } from "../botHelpers.ts";
+
+const IMAGE_URL_RE = /\.(?:jpe?g|png|gif|webp|bmp|heic)(?:$|[?#])/i;
 
 export function formatAdaptiveDirectives(notes, maxItems = 8) {
   const rows = Array.isArray(notes) ? notes : [];
@@ -66,8 +69,14 @@ export function stripEmojiForPrompt(text) {
   return value.replace(/\s+/g, " ").trim();
 }
 
-export function formatRecentChat(messages) {
+export function formatRecentChat(messages, options = {}) {
   if (!messages?.length) return "(no recent messages available)";
+
+  const imageCandidates =
+    options && typeof options === "object" && !Array.isArray(options)
+      ? (options as { imageCandidates?: unknown }).imageCandidates
+      : [];
+  const imageRefMap = buildHistoryImageReferenceMap(imageCandidates);
 
   return messages
     .slice()
@@ -76,10 +85,62 @@ export function formatRecentChat(messages) {
       const isBot = msg.is_bot === 1 || msg.is_bot === true || msg.is_bot === "1";
       const rawText = String(msg.content || "");
       const normalized = isBot ? stripEmojiForPrompt(rawText) : rawText;
-      const text = normalized.replace(/\s+/g, " ").trim();
+      const text = replaceHistoryImageUrlsWithRefs(normalized, imageRefMap).replace(/\s+/g, " ").trim();
       return `- ${msg.author_name}: ${text || "(empty)"}`;
     })
     .join("\n");
+}
+
+function buildHistoryImageReferenceMap(candidates) {
+  const rows = Array.isArray(candidates) ? candidates : [];
+  const map = new Map();
+  for (const row of rows) {
+    const url = String(row?.url || "").trim();
+    const imageRef = String(row?.imageRef || "").trim();
+    if (!url || !imageRef) continue;
+    map.set(url, {
+      imageRef,
+      authorName: String(row?.authorName || "unknown").trim() || "unknown",
+      when: formatRelativePromptAge(row?.createdAt)
+    });
+  }
+  return map;
+}
+
+function replaceHistoryImageUrlsWithRefs(text, imageRefMap) {
+  const source = String(text || "");
+  if (!source || !(imageRefMap instanceof Map) || imageRefMap.size === 0) return source;
+
+  let replaced = source;
+  for (const rawUrl of extractUrlsFromText(source)) {
+    const url = String(rawUrl || "").trim();
+    if (!url || !isLikelyPromptImageUrl(url)) continue;
+    const ref = imageRefMap.get(url);
+    if (!ref) continue;
+    const whenLabel = ref.when ? `, ${ref.when}` : "";
+    const replacement = `[${ref.imageRef} by ${ref.authorName}${whenLabel}]`;
+    replaced = replaced.split(url).join(replacement);
+  }
+
+  return replaced;
+}
+
+function isLikelyPromptImageUrl(rawUrl) {
+  const text = String(rawUrl || "").trim();
+  if (!text) return false;
+  return IMAGE_URL_RE.test(text);
+}
+
+function formatRelativePromptAge(createdAt) {
+  const createdAtMs = Date.parse(String(createdAt || ""));
+  if (!Number.isFinite(createdAtMs)) return "";
+  const deltaMinutes = Math.max(0, Math.round((Date.now() - createdAtMs) / 60000));
+  if (deltaMinutes < 1) return "just now";
+  if (deltaMinutes < 60) return `${deltaMinutes}m ago`;
+  const deltaHours = Math.round(deltaMinutes / 60);
+  if (deltaHours < 24) return `${deltaHours}h ago`;
+  const deltaDays = Math.round(deltaHours / 24);
+  return `${deltaDays}d ago`;
 }
 
 function formatConversationWindowAge(ageMinutes) {
@@ -283,11 +344,12 @@ export function formatImageLookupCandidates(candidates) {
     .map((row, index) => {
       const filename = String(row?.filename || "(unnamed)").trim();
       const author = String(row?.authorName || "unknown").trim();
-      const when = String(row?.createdAt || "").trim();
+      const when = formatRelativePromptAge(row?.createdAt) || String(row?.createdAt || "").trim();
       const context = String(row?.context || "").trim();
-      const whenLabel = when ? ` at ${when}` : "";
+      const ref = String(row?.imageRef || `IMG ${index + 1}`).trim();
+      const whenLabel = when ? `, ${when}` : "";
       const contextLabel = context ? ` | context: ${context}` : "";
-      return `- [I${index + 1}] ${filename} by ${author}${whenLabel}${contextLabel}`;
+      return `- [${ref}] ${filename} by ${author}${whenLabel}${contextLabel}`;
     })
     .join("\n");
 }
@@ -298,11 +360,12 @@ export function formatImageLookupResults(results) {
     .map((row, index) => {
       const filename = String(row?.filename || "(unnamed)").trim();
       const author = String(row?.authorName || "unknown").trim();
-      const when = String(row?.createdAt || "").trim();
+      const when = formatRelativePromptAge(row?.createdAt) || String(row?.createdAt || "").trim();
       const reason = String(row?.matchReason || "").trim();
-      const whenLabel = when ? ` at ${when}` : "";
+      const ref = String(row?.imageRef || `IMG ${index + 1}`).trim();
+      const whenLabel = when ? `, ${when}` : "";
       const reasonLabel = reason ? ` | match: ${reason}` : "";
-      return `- [I${index + 1}] ${filename} by ${author}${whenLabel}${reasonLabel}`;
+      return `- [${ref}] ${filename} by ${author}${whenLabel}${reasonLabel}`;
     })
     .join("\n");
 }

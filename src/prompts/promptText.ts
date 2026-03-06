@@ -98,7 +98,7 @@ export function buildReplyPrompt({
   if (imageInputs?.length) {
     parts.push(
       [
-        "Attachments:",
+        "Current message attachments:",
         ...imageInputs.map((image) => {
           const name = image.filename || "(unnamed)";
           const type = image.contentType || "unknown";
@@ -108,11 +108,11 @@ export function buildReplyPrompt({
     );
   }
   parts.push("=== RECENT MESSAGES ===");
-  parts.push(formatRecentChat(recentMessages));
+  parts.push(formatRecentChat(recentMessages, { imageCandidates: imageLookup?.candidates }));
 
   if (relevantMessages?.length) {
     parts.push("=== RELEVANT PAST MESSAGES ===");
-    parts.push(formatRecentChat(relevantMessages));
+    parts.push(formatRecentChat(relevantMessages, { imageCandidates: imageLookup?.candidates }));
   }
 
   if (recentConversationHistory?.length) {
@@ -539,8 +539,9 @@ export function buildReplyPrompt({
       parts.push("Recent image references from message history:");
       parts.push(formatImageLookupCandidates(imageLookup.candidates));
       parts.push(
-        "If the user refers to an earlier image/photo and current image attachments are insufficient, set imageLookupQuery to a concise lookup query."
+        "If the user refers to an earlier image/photo and current message attachments are insufficient, set imageLookupQuery to a concise lookup query or a specific image ref like IMG 3."
       );
+      parts.push("The [IMG n] markers in recent chat are historical images, not fresh attachments on the latest user message.");
       parts.push("Use imageLookupQuery only when needed and keep it under 220 characters.");
       parts.push("If no historical image lookup is needed, set imageLookupQuery to null.");
       parts.push("Do not claim you cannot review earlier shared images when history lookup is available.");
