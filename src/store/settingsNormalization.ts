@@ -11,7 +11,7 @@ import {
   normalizeOpenAiReasoningEffort
 } from "../llm/llmHelpers.ts";
 import {
-  normalizeVoiceProvider
+  normalizeVoiceRuntimeMode
 } from "../voice/voiceModes.ts";
 import {
   OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
@@ -314,359 +314,9 @@ function normalizeVoiceAdmissionMode(value: unknown, fallback: string) {
   return fallback;
 }
 
-function inferLegacyPreset(raw: Record<string, unknown>) {
-  const llmProvider = normalizeLlmProvider(raw?.llm && isRecord(raw.llm) ? raw.llm.provider : undefined, "anthropic");
-  const legacyVoiceProvider = normalizeVoiceProvider(
-    raw?.voice && isRecord(raw.voice) ? raw.voice.voiceProvider : undefined,
-    "openai"
-  );
-  if (llmProvider === "openai" && legacyVoiceProvider === "openai") {
-    return "openai_native";
-  }
-  if (llmProvider === "anthropic" && legacyVoiceProvider === "openai") {
-    return "anthropic_brain_openai_tools";
-  }
-  return "multi_provider_legacy";
-}
-
-function migrateLegacySettings(raw: Record<string, unknown>): SettingsInput {
-  const prompt = isRecord(raw.prompt) ? raw.prompt : {};
-  const activity = isRecord(raw.activity) ? raw.activity : {};
-  const llm = isRecord(raw.llm) ? raw.llm : {};
-  const replyFollowupLlm = isRecord(raw.replyFollowupLlm) ? raw.replyFollowupLlm : {};
-  const memoryLlm = isRecord(raw.memoryLlm) ? raw.memoryLlm : {};
-  const webSearch = isRecord(raw.webSearch) ? raw.webSearch : {};
-  const browser = isRecord(raw.browser) ? raw.browser : {};
-  const voice = isRecord(raw.voice) ? raw.voice : {};
-  const permissions = isRecord(raw.permissions) ? raw.permissions : {};
-  const discovery = isRecord(raw.discovery) ? raw.discovery : {};
-  const startup = isRecord(raw.startup) ? raw.startup : {};
-  const textThoughtLoop = isRecord(raw.textThoughtLoop) ? raw.textThoughtLoop : {};
-  const memory = isRecord(raw.memory) ? raw.memory : {};
-  const reflection = isRecord(memory.reflection) ? memory.reflection : {};
-  const codeAgent = isRecord(raw.codeAgent) ? raw.codeAgent : {};
-  const adaptiveDirectives = isRecord(raw.adaptiveDirectives) ? raw.adaptiveDirectives : {};
-  const automations = isRecord(raw.automations) ? raw.automations : {};
-  const subAgentOrchestration = isRecord(raw.subAgentOrchestration) ? raw.subAgentOrchestration : {};
-  const voiceThoughtEngine = isRecord(voice.thoughtEngine) ? voice.thoughtEngine : {};
-  const voiceGenerationLlm = isRecord(voice.generationLlm) ? voice.generationLlm : {};
-  const voiceReplyDecisionLlm = isRecord(voice.replyDecisionLlm) ? voice.replyDecisionLlm : {};
-  const vision = isRecord(raw.vision) ? raw.vision : {};
-  const videoContext = isRecord(raw.videoContext) ? raw.videoContext : {};
-
-  const migrated: Record<string, unknown> = {
-    identity: {
-      botName: raw.botName,
-      botNameAliases: raw.botNameAliases
-    },
-    persona: raw.persona,
-    prompting: {
-      global: {
-        capabilityHonestyLine: prompt.capabilityHonestyLine,
-        impossibleActionLine: prompt.impossibleActionLine,
-        memoryEnabledLine: prompt.memoryEnabledLine,
-        memoryDisabledLine: prompt.memoryDisabledLine,
-        skipLine: prompt.skipLine
-      },
-      text: {
-        guidance: prompt.textGuidance
-      },
-      voice: {
-        guidance: prompt.voiceGuidance,
-        operationalGuidance: prompt.voiceOperationalGuidance,
-        lookupBusySystemPrompt: prompt.voiceLookupBusySystemPrompt
-      },
-      media: {
-        promptCraftGuidance: prompt.mediaPromptCraftGuidance
-      }
-    },
-    permissions: {
-      replies: {
-        allowReplies: permissions.allowReplies,
-        allowUnsolicitedReplies: permissions.allowUnsolicitedReplies,
-        allowReactions: permissions.allowReactions,
-        replyChannelIds: permissions.replyChannelIds,
-        allowedChannelIds: permissions.allowedChannelIds,
-        blockedChannelIds: permissions.blockedChannelIds,
-        blockedUserIds: permissions.blockedUserIds,
-        maxMessagesPerHour: permissions.maxMessagesPerHour,
-        maxReactionsPerHour: permissions.maxReactionsPerHour
-      },
-      devTasks: {
-        allowedUserIds: codeAgent.allowedUserIds
-      }
-    },
-    interaction: {
-      activity: {
-        replyEagerness: activity.replyEagerness ?? activity.replyLevelReplyChannels,
-        reactionLevel: activity.reactionLevel,
-        minSecondsBetweenMessages: activity.minSecondsBetweenMessages,
-        replyCoalesceWindowSeconds: activity.replyCoalesceWindowSeconds,
-        replyCoalesceMaxMessages: activity.replyCoalesceMaxMessages
-      },
-      replyGeneration: {
-        temperature: llm.temperature,
-        maxOutputTokens: llm.maxOutputTokens,
-        reasoningEffort: llm.reasoningEffort,
-        pricing: llm.pricing
-      },
-      followup: {
-        enabled: replyFollowupLlm.enabled,
-        execution: {
-          mode: "dedicated_model",
-          model: {
-            provider: replyFollowupLlm.provider ?? llm.provider,
-            model: replyFollowupLlm.model ?? llm.model
-          }
-        },
-        toolBudget: {
-          maxToolSteps: replyFollowupLlm.maxToolSteps,
-          maxTotalToolCalls: replyFollowupLlm.maxTotalToolCalls,
-          maxWebSearchCalls: replyFollowupLlm.maxWebSearchCalls,
-          maxMemoryLookupCalls: replyFollowupLlm.maxMemoryLookupCalls,
-          maxImageLookupCalls: replyFollowupLlm.maxImageLookupCalls,
-          toolTimeoutMs: replyFollowupLlm.toolTimeoutMs
-        }
-      },
-      startup: {
-        catchupEnabled: startup.catchupEnabled,
-        catchupLookbackHours: startup.catchupLookbackHours,
-        catchupMaxMessagesPerChannel: startup.catchupMaxMessagesPerChannel,
-        maxCatchupRepliesPerChannel: startup.maxCatchupRepliesPerChannel
-      },
-      sessions: {
-        sessionIdleTimeoutMs: subAgentOrchestration.sessionIdleTimeoutMs,
-        maxConcurrentSessions: subAgentOrchestration.maxConcurrentSessions
-      }
-    },
-    agentStack: {
-      preset: inferLegacyPreset(raw),
-      advancedOverridesEnabled: true,
-      overrides: {
-        orchestrator: {
-          provider: llm.provider,
-          model: llm.model
-        },
-        devTeam: {
-          codingWorkers:
-            String(codeAgent.provider || "").trim().toLowerCase() === "codex"
-              ? ["codex"]
-              : String(codeAgent.provider || "").trim().toLowerCase() === "claude-code"
-                ? ["claude_code"]
-                : undefined
-        },
-        voiceAdmissionClassifier: {
-          mode: "dedicated_model",
-          model: {
-            provider: voiceReplyDecisionLlm.provider,
-            model: voiceReplyDecisionLlm.model
-          }
-        }
-      },
-      runtimeConfig: {
-        research: {
-          enabled: webSearch.enabled,
-          maxSearchesPerHour: webSearch.maxSearchesPerHour,
-          localExternalSearch: {
-            safeSearch: webSearch.safeSearch,
-            providerOrder: webSearch.providerOrder,
-            maxResults: webSearch.maxResults,
-            maxPagesToRead: webSearch.maxPagesToRead,
-            maxCharsPerPage: webSearch.maxCharsPerPage,
-            recencyDaysDefault: webSearch.recencyDaysDefault,
-            maxConcurrentFetches: webSearch.maxConcurrentFetches
-          }
-        },
-        browser: {
-          enabled: browser.enabled,
-          localBrowserAgent: {
-            execution: {
-              mode: "dedicated_model",
-              model: {
-                provider: browser.llm && isRecord(browser.llm) ? browser.llm.provider : undefined,
-                model: browser.llm && isRecord(browser.llm) ? browser.llm.model : undefined
-              }
-            },
-            maxBrowseCallsPerHour: browser.maxBrowseCallsPerHour,
-            maxStepsPerTask: browser.maxStepsPerTask,
-            stepTimeoutMs: browser.stepTimeoutMs,
-            sessionTimeoutMs: browser.sessionTimeoutMs
-          }
-        },
-        voice: {
-          openaiRealtime: voice.openaiRealtime,
-          legacyVoiceStack: {
-            selectedProvider: voice.voiceProvider,
-            xai: voice.xai,
-            elevenLabsRealtime: voice.elevenLabsRealtime,
-            geminiRealtime: voice.geminiRealtime,
-            sttPipeline: voice.sttPipeline,
-            generation: Boolean(voiceGenerationLlm.useTextModel)
-              ? { mode: "inherit_orchestrator" }
-              : {
-                  mode: "dedicated_model",
-                  model: {
-                    provider: voiceGenerationLlm.provider,
-                    model: voiceGenerationLlm.model
-                  }
-                }
-          }
-        },
-        devTeam: {
-          codex: {
-            enabled:
-              String(codeAgent.provider || "").trim().toLowerCase() === "codex" ||
-              String(codeAgent.provider || "").trim().toLowerCase() === "auto",
-            model: codeAgent.codexModel,
-            maxTurns: codeAgent.maxTurns,
-            timeoutMs: codeAgent.timeoutMs,
-            maxBufferBytes: codeAgent.maxBufferBytes,
-            defaultCwd: codeAgent.defaultCwd,
-            maxTasksPerHour: codeAgent.maxTasksPerHour,
-            maxParallelTasks: codeAgent.maxParallelTasks
-          },
-          claudeCode: {
-            enabled:
-              String(codeAgent.provider || "").trim().toLowerCase() !== "codex",
-            model: codeAgent.model,
-            maxTurns: codeAgent.maxTurns,
-            timeoutMs: codeAgent.timeoutMs,
-            maxBufferBytes: codeAgent.maxBufferBytes,
-            defaultCwd: codeAgent.defaultCwd,
-            maxTasksPerHour: codeAgent.maxTasksPerHour,
-            maxParallelTasks: codeAgent.maxParallelTasks
-          }
-        }
-      }
-    },
-    memory: {
-      enabled: memory.enabled,
-      promptSlice: {
-        maxRecentMessages: memory.maxRecentMessages,
-        maxHighlights: memory.maxHighlights
-      },
-      execution: {
-        mode: "dedicated_model",
-        model: {
-          provider: memoryLlm.provider ?? llm.provider,
-          model: memoryLlm.model ?? llm.model
-        },
-        temperature: memoryLlm.temperature,
-        maxOutputTokens: memoryLlm.maxOutputTokens
-      },
-      extraction: {
-        enabled: true
-      },
-      embeddingModel: memory.embeddingModel,
-      reflection: {
-        enabled: reflection.enabled,
-        strategy: reflection.strategy,
-        hour: reflection.hour,
-        minute: reflection.minute,
-        maxFactsPerReflection: reflection.maxFactsPerReflection
-      },
-      dailyLogRetentionDays: memory.dailyLogRetentionDays
-    },
-    directives: {
-      enabled: adaptiveDirectives.enabled
-    },
-    initiative: {
-      text: {
-        enabled: textThoughtLoop.enabled,
-        execution: {
-          mode: "inherit_orchestrator"
-        },
-        eagerness: textThoughtLoop.eagerness,
-        minMinutesBetweenThoughts: textThoughtLoop.minMinutesBetweenThoughts,
-        maxThoughtsPerDay: textThoughtLoop.maxThoughtsPerDay,
-        lookbackMessages: textThoughtLoop.lookbackMessages
-      },
-      voice: {
-        enabled: voiceThoughtEngine.enabled,
-        execution: {
-          mode: "dedicated_model",
-          model: {
-            provider: voiceThoughtEngine.provider,
-            model: voiceThoughtEngine.model
-          },
-          temperature: voiceThoughtEngine.temperature
-        },
-        eagerness: voiceThoughtEngine.eagerness,
-        minSilenceSeconds: voiceThoughtEngine.minSilenceSeconds,
-        minSecondsBetweenThoughts: voiceThoughtEngine.minSecondsBetweenThoughts
-      },
-      discovery
-    },
-    voice: {
-      enabled: voice.enabled,
-      transcription: {
-        enabled: voice.asrEnabled,
-        languageMode: voice.asrLanguageMode,
-        languageHint: voice.asrLanguageHint
-      },
-      channelPolicy: {
-        allowedChannelIds: voice.allowedVoiceChannelIds,
-        blockedChannelIds: voice.blockedVoiceChannelIds,
-        blockedUserIds: voice.blockedVoiceUserIds
-      },
-      sessionLimits: {
-        maxSessionMinutes: voice.maxSessionMinutes,
-        inactivityLeaveSeconds: voice.inactivityLeaveSeconds,
-        maxSessionsPerDay: voice.maxSessionsPerDay,
-        maxConcurrentSessions: voice.maxConcurrentSessions
-      },
-      conversationPolicy: {
-        replyEagerness: voice.replyEagerness,
-        commandOnlyMode: voice.commandOnlyMode,
-        allowNsfwHumor: voice.allowNsfwHumor,
-        textOnlyMode: voice.textOnlyMode,
-        replyPath: voice.replyPath,
-        ttsMode: voice.ttsMode,
-        operationalMessages: voice.operationalMessages
-      },
-      admission: {
-        mode:
-          voiceReplyDecisionLlm.enabled === false
-            ? "generation_decides"
-            : voiceReplyDecisionLlm.realtimeAdmissionMode,
-        intentConfidenceThreshold: voice.intentConfidenceThreshold,
-        musicWakeLatchSeconds: voiceReplyDecisionLlm.musicWakeLatchSeconds
-      },
-      streamWatch: voice.streamWatch,
-      soundboard: voice.soundboard
-    },
-    media: {
-      vision: {
-        enabled: vision.captionEnabled,
-        execution: {
-          mode: "dedicated_model",
-          model: {
-            provider: vision.provider,
-            model: vision.model
-          }
-        },
-        maxAutoIncludeImages: vision.maxAutoIncludeImages,
-        maxCaptionsPerHour: vision.maxCaptionsPerHour
-      },
-      videoContext
-    },
-    music: {
-      ducking: voice.musicDucking
-    },
-    automations: {
-      enabled: automations.enabled
-    }
-  };
-
-  return migrated;
-}
-
 export function normalizeSettings(raw: unknown) {
   const rawRecord = isRecord(raw) ? raw : {};
-  const canonicalInput =
-    isRecord(rawRecord.identity) || isRecord(rawRecord.agentStack)
-      ? rawRecord
-      : migrateLegacySettings(rawRecord);
+  const canonicalInput: SettingsInput = rawRecord;
 
   const merged = deepMerge(DEFAULT_SETTINGS, canonicalInput);
 
@@ -690,13 +340,12 @@ export function normalizeSettings(raw: unknown) {
     presetRaw === "openai_native" ||
     presetRaw === "anthropic_brain_openai_tools" ||
     presetRaw === "claude_code_max" ||
-    presetRaw === "multi_provider_legacy" ||
     presetRaw === "custom"
   )
     ? presetRaw
     : DEFAULT_SETTINGS.agentStack.preset;
   const presetOrchestratorFallback =
-    preset === "anthropic_brain_openai_tools" || preset === "multi_provider_legacy"
+    preset === "anthropic_brain_openai_tools"
       ? { provider: "anthropic", model: "claude-sonnet-4-6" }
       : preset === "claude_code_max"
         ? { provider: "claude_code_session", model: "max" }
@@ -1093,6 +742,10 @@ export function normalizeSettings(raw: unknown) {
           }
         },
         voice: {
+          runtimeMode: normalizeVoiceRuntimeMode(
+            (agentStack.runtimeConfig as any)?.voice?.runtimeMode,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.runtimeMode
+          ),
           openaiRealtime: {
             model: normalizeString(
               (agentStack.runtimeConfig as any)?.voice?.openaiRealtime?.model,
@@ -1133,119 +786,113 @@ export function normalizeSettings(raw: unknown) {
               DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge
             )
           },
-          legacyVoiceStack: {
-            selectedProvider: normalizeVoiceProvider(
-              (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.selectedProvider,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.selectedProvider as any
+          xai: {
+            voice: normalizeString(
+              (agentStack.runtimeConfig as any)?.voice?.xai?.voice,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.xai.voice,
+              120
             ),
-            xai: {
-              voice: normalizeString(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.xai?.voice,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.xai.voice,
-                120
-              ),
-              audioFormat: normalizeString(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.xai?.audioFormat,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.xai.audioFormat,
-                120
-              ),
-              sampleRateHz: normalizeInt(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.xai?.sampleRateHz,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.xai.sampleRateHz,
-                8_000,
-                96_000
-              ),
-              region: normalizeString(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.xai?.region,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.xai.region,
-                120
-              )
-            },
-            elevenLabsRealtime: {
-              agentId: normalizeString(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.elevenLabsRealtime?.agentId,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.agentId,
-                200
-              ),
-              voiceId: normalizeString(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.elevenLabsRealtime?.voiceId,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.voiceId,
-                200
-              ),
-              apiBaseUrl: normalizeHttpBaseUrl(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.elevenLabsRealtime?.apiBaseUrl,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.apiBaseUrl
-              ),
-              inputSampleRateHz: normalizeInt(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.elevenLabsRealtime?.inputSampleRateHz,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.inputSampleRateHz,
-                8_000,
-                96_000
-              ),
-              outputSampleRateHz: normalizeInt(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.elevenLabsRealtime?.outputSampleRateHz,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.outputSampleRateHz,
-                8_000,
-                96_000
-              )
-            },
-            geminiRealtime: {
-              model: normalizeString(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.geminiRealtime?.model,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.model,
-                120
-              ),
-              voice: normalizeString(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.geminiRealtime?.voice,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.voice,
-                120
-              ),
-              apiBaseUrl: normalizeHttpBaseUrl(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.geminiRealtime?.apiBaseUrl,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.apiBaseUrl
-              ),
-              inputSampleRateHz: normalizeInt(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.geminiRealtime?.inputSampleRateHz,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.inputSampleRateHz,
-                8_000,
-                96_000
-              ),
-              outputSampleRateHz: normalizeInt(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.geminiRealtime?.outputSampleRateHz,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.outputSampleRateHz,
-                8_000,
-                96_000
-              )
-            },
-            sttPipeline: {
-              transcriptionModel: normalizeString(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.sttPipeline?.transcriptionModel,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.sttPipeline.transcriptionModel,
-                120
-              ),
-              ttsModel: normalizeString(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.sttPipeline?.ttsModel,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.sttPipeline.ttsModel,
-                120
-              ),
-              ttsVoice: normalizeString(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.sttPipeline?.ttsVoice,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.sttPipeline.ttsVoice,
-                120
-              ),
-              ttsSpeed: normalizeNumber(
-                (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.sttPipeline?.ttsSpeed,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.sttPipeline.ttsSpeed,
-                0.25,
-                4
-              )
-            },
-            generation: normalizeExecutionPolicy(
-              (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.generation,
-              "anthropic",
-              "claude-sonnet-4-6"
+            audioFormat: normalizeString(
+              (agentStack.runtimeConfig as any)?.voice?.xai?.audioFormat,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.xai.audioFormat,
+              120
+            ),
+            sampleRateHz: normalizeInt(
+              (agentStack.runtimeConfig as any)?.voice?.xai?.sampleRateHz,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.xai.sampleRateHz,
+              8_000,
+              96_000
+            ),
+            region: normalizeString(
+              (agentStack.runtimeConfig as any)?.voice?.xai?.region,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.xai.region,
+              120
             )
-          }
+          },
+          elevenLabsRealtime: {
+            agentId: normalizeString(
+              (agentStack.runtimeConfig as any)?.voice?.elevenLabsRealtime?.agentId,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.elevenLabsRealtime.agentId,
+              200
+            ),
+            voiceId: normalizeString(
+              (agentStack.runtimeConfig as any)?.voice?.elevenLabsRealtime?.voiceId,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.elevenLabsRealtime.voiceId,
+              200
+            ),
+            apiBaseUrl: normalizeHttpBaseUrl(
+              (agentStack.runtimeConfig as any)?.voice?.elevenLabsRealtime?.apiBaseUrl,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.elevenLabsRealtime.apiBaseUrl
+            ),
+            inputSampleRateHz: normalizeInt(
+              (agentStack.runtimeConfig as any)?.voice?.elevenLabsRealtime?.inputSampleRateHz,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.elevenLabsRealtime.inputSampleRateHz,
+              8_000,
+              96_000
+            ),
+            outputSampleRateHz: normalizeInt(
+              (agentStack.runtimeConfig as any)?.voice?.elevenLabsRealtime?.outputSampleRateHz,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.elevenLabsRealtime.outputSampleRateHz,
+              8_000,
+              96_000
+            )
+          },
+          geminiRealtime: {
+            model: normalizeString(
+              (agentStack.runtimeConfig as any)?.voice?.geminiRealtime?.model,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.geminiRealtime.model,
+              120
+            ),
+            voice: normalizeString(
+              (agentStack.runtimeConfig as any)?.voice?.geminiRealtime?.voice,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.geminiRealtime.voice,
+              120
+            ),
+            apiBaseUrl: normalizeHttpBaseUrl(
+              (agentStack.runtimeConfig as any)?.voice?.geminiRealtime?.apiBaseUrl,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.geminiRealtime.apiBaseUrl
+            ),
+            inputSampleRateHz: normalizeInt(
+              (agentStack.runtimeConfig as any)?.voice?.geminiRealtime?.inputSampleRateHz,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.geminiRealtime.inputSampleRateHz,
+              8_000,
+              96_000
+            ),
+            outputSampleRateHz: normalizeInt(
+              (agentStack.runtimeConfig as any)?.voice?.geminiRealtime?.outputSampleRateHz,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.geminiRealtime.outputSampleRateHz,
+              8_000,
+              96_000
+            )
+          },
+          sttPipeline: {
+            transcriptionModel: normalizeString(
+              (agentStack.runtimeConfig as any)?.voice?.sttPipeline?.transcriptionModel,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.sttPipeline.transcriptionModel,
+              120
+            ),
+            ttsModel: normalizeString(
+              (agentStack.runtimeConfig as any)?.voice?.sttPipeline?.ttsModel,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.sttPipeline.ttsModel,
+              120
+            ),
+            ttsVoice: normalizeString(
+              (agentStack.runtimeConfig as any)?.voice?.sttPipeline?.ttsVoice,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.sttPipeline.ttsVoice,
+              120
+            ),
+            ttsSpeed: normalizeNumber(
+              (agentStack.runtimeConfig as any)?.voice?.sttPipeline?.ttsSpeed,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.sttPipeline.ttsSpeed,
+              0.25,
+              4
+            )
+          },
+          generation: normalizeExecutionPolicy(
+            (agentStack.runtimeConfig as any)?.voice?.generation,
+            "anthropic",
+            "claude-sonnet-4-6"
+          )
         },
         claudeCodeSession: {
           sessionScope: normalizeClaudeCodeSessionScope(

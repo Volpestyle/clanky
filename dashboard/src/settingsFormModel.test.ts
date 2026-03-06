@@ -14,21 +14,31 @@ import { normalizeSettings } from "../../src/store/settingsNormalization.ts";
 
 test("settingsFormModel converts settings to form defaults and back to normalized patch", () => {
   const form = settingsToForm(normalizeSettings({
-    botName: "clanker conk",
-    botNameAliases: ["clank", "conk", "clank"],
+    identity: {
+      botName: "clanker conk",
+      botNameAliases: ["clank", "conk", "clank"]
+    },
     persona: {
       flavor: "chaotic but kind",
       hardLimits: ["no hate", "no hate", "keep it fun"]
     },
-    llm: {
-      provider: "openai",
-      model: "claude-haiku-4-5"
+    agentStack: {
+      preset: "openai_native",
+      advancedOverridesEnabled: true,
+      overrides: {
+        orchestrator: {
+          provider: "openai",
+          model: "claude-haiku-4-5"
+        }
+      }
     },
     permissions: {
-      replyChannelIds: ["1", "2"],
-      allowedChannelIds: ["2", "3"],
-      blockedChannelIds: ["9"],
-      blockedUserIds: ["u-1"]
+      replies: {
+        replyChannelIds: ["1", "2"],
+        allowedChannelIds: ["2", "3"],
+        blockedChannelIds: ["9"],
+        blockedUserIds: ["u-1"]
+      }
     }
   }));
 
@@ -42,7 +52,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.model, "claude-haiku-4-5");
   assert.equal(form.voiceGenerationLlmUseTextModel, false);
   assert.equal(form.voiceGenerationLlmProvider, "anthropic");
-  assert.equal(form.voiceGenerationLlmModel, "claude-sonnet-4-6");
+  assert.equal(form.voiceGenerationLlmModel, "claude-haiku-4-5");
   assert.equal(form.replyFollowupMaxToolSteps, 2);
   assert.equal(form.replyFollowupMaxTotalToolCalls, 3);
   assert.equal(form.replyFollowupMaxWebSearchCalls, 2);
@@ -52,7 +62,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.browserOpenAiComputerUseModel, "gpt-5.4");
   assert.equal(form.browserLlmProvider, "anthropic");
   assert.equal(form.browserLlmModel, "claude-sonnet-4-5-20250929");
-  assert.equal(form.codeAgentProvider, "claude-code");
+  assert.equal(form.codeAgentProvider, "auto");
   assert.equal(form.codeAgentModel, "sonnet");
   assert.equal(form.codeAgentCodexModel, "codex-mini-latest");
   assert.equal(form.memoryReflectionStrategy, "two_pass_extract_then_main");
@@ -61,7 +71,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.voiceThoughtEngineEnabled, false);
   assert.equal(form.voiceThoughtEngineProvider, "anthropic");
   assert.equal(form.voiceThoughtEngineModel, "claude-sonnet-4-6");
-  assert.equal(form.voiceThoughtEngineTemperature, 1.2);
+  assert.equal(form.voiceThoughtEngineTemperature, 1);
   assert.equal(form.voiceThoughtEngineEagerness, 50);
   assert.equal(form.voiceStreamWatchCommentaryPath, "auto");
   assert.equal(form.voiceStreamWatchKeyframeIntervalMs, 1200);
@@ -134,7 +144,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.memory.reflection.strategy, "one_pass_main");
   assert.equal(patch.directives.enabled, false);
   assert.equal(patch.automations.enabled, false);
-  assert.equal(patch.agentStack.runtimeConfig.voice.legacyVoiceStack.generation.mode, "inherit_orchestrator");
+  assert.equal(patch.agentStack.runtimeConfig.voice.generation.mode, "inherit_orchestrator");
   assert.equal(patch.voice.streamWatch.commentaryPath, "anthropic_keyframes");
   assert.equal(patch.voice.streamWatch.keyframeIntervalMs, 1750);
   assert.equal(patch.voice.streamWatch.autonomousCommentaryEnabled, false);
@@ -152,7 +162,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.initiative.voice.enabled, false);
   assert.equal(patch.initiative.voice.execution.model.provider, "anthropic");
   assert.equal(patch.initiative.voice.execution.model.model, "claude-sonnet-4-6");
-  assert.equal(patch.initiative.voice.execution.temperature, 1.2);
+  assert.equal(patch.initiative.voice.execution.temperature, 1);
   assert.equal(patch.initiative.voice.eagerness, 50);
 });
 
@@ -279,26 +289,39 @@ test("resolveModelOptionsFromText normalizes model lists for dropdown options", 
   assert.deepEqual(options, ["gpt-image-1.5", "grok-imagine-image"]);
 });
 
-test("settingsFormModel round-trips voice provider and brain provider", () => {
+test("settingsFormModel round-trips canonical voice runtime mode", () => {
   const form = settingsToForm(normalizeSettings({
-    voice: {
-      voiceProvider: "openai",
-      brainProvider: "anthropic"
+    agentStack: {
+      advancedOverridesEnabled: true,
+      runtimeConfig: {
+        voice: {
+          runtimeMode: "openai_realtime"
+        }
+      }
     }
   }));
 
   assert.equal(form.voiceProvider, "openai");
   assert.equal(form.stackAdvancedOverridesEnabled, true);
   const patch = formToSettingsPatch(form);
-  assert.equal(patch.agentStack.runtimeConfig.voice.legacyVoiceStack.selectedProvider, "openai");
+  assert.equal(patch.agentStack.runtimeConfig.voice.runtimeMode, "openai_realtime");
 });
 
 test("settingsFormModel round-trips browser llm provider and model", () => {
   const form = settingsToForm(normalizeSettings({
-    browser: {
-      llm: {
-        provider: "openai",
-        model: "gpt-5-mini"
+    agentStack: {
+      runtimeConfig: {
+        browser: {
+          localBrowserAgent: {
+            execution: {
+              mode: "dedicated_model",
+              model: {
+                provider: "openai",
+                model: "gpt-5-mini"
+              }
+            }
+          }
+        }
       }
     }
   }));
@@ -319,10 +342,25 @@ test("settingsFormModel round-trips browser llm provider and model", () => {
 
 test("settingsFormModel round-trips code agent provider fields", () => {
   const form = settingsToForm(normalizeSettings({
-    codeAgent: {
-      provider: "codex",
-      model: "sonnet",
-      codexModel: "gpt-5-codex"
+    agentStack: {
+      advancedOverridesEnabled: true,
+      overrides: {
+        devTeam: {
+          codingWorkers: ["codex"]
+        }
+      },
+      runtimeConfig: {
+        devTeam: {
+          claudeCode: {
+            enabled: false,
+            model: "sonnet"
+          },
+          codex: {
+            enabled: true,
+            model: "gpt-5-codex"
+          }
+        }
+      }
     }
   }));
 
@@ -353,14 +391,19 @@ test("settingsFormModel supports the claude_code_max preset", () => {
 
 test("settingsFormModel round-trips elevenlabs realtime settings", () => {
   const form = settingsToForm(normalizeSettings({
-    voice: {
-      voiceProvider: "elevenlabs",
-      elevenLabsRealtime: {
-        agentId: "agent_123",
-        apiBaseUrl: "https://api.elevenlabs.io",
-        inputSampleRateHz: 16000,
-        outputSampleRateHz: 22050
-      }
+    agentStack: {
+      advancedOverridesEnabled: true,
+        runtimeConfig: {
+          voice: {
+            runtimeMode: "elevenlabs_realtime",
+            elevenLabsRealtime: {
+              agentId: "agent_123",
+              apiBaseUrl: "https://api.elevenlabs.io",
+              inputSampleRateHz: 16000,
+              outputSampleRateHz: 22050
+            }
+          }
+        }
     }
   }));
 
@@ -371,18 +414,18 @@ test("settingsFormModel round-trips elevenlabs realtime settings", () => {
   assert.equal(form.voiceElevenLabsRealtimeOutputSampleRateHz, 22050);
 
   const patch = formToSettingsPatch(form);
-  assert.equal(patch.agentStack.runtimeConfig.voice.legacyVoiceStack.selectedProvider, "elevenlabs");
-  assert.equal(patch.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.agentId, "agent_123");
+  assert.equal(patch.agentStack.runtimeConfig.voice.runtimeMode, "elevenlabs_realtime");
+  assert.equal(patch.agentStack.runtimeConfig.voice.elevenLabsRealtime.agentId, "agent_123");
   assert.equal(
-    patch.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.apiBaseUrl,
+    patch.agentStack.runtimeConfig.voice.elevenLabsRealtime.apiBaseUrl,
     "https://api.elevenlabs.io"
   );
   assert.equal(
-    patch.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.inputSampleRateHz,
+    patch.agentStack.runtimeConfig.voice.elevenLabsRealtime.inputSampleRateHz,
     16000
   );
   assert.equal(
-    patch.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.outputSampleRateHz,
+    patch.agentStack.runtimeConfig.voice.elevenLabsRealtime.outputSampleRateHz,
     22050
   );
 });
@@ -404,13 +447,21 @@ test("settingsFormModel preserves explicit reflection strategy values", () => {
 });
 
 test("settingsToFormPreserving keeps user's comma format for aliases on reload", () => {
-  const currentForm = settingsToForm(normalizeSettings({ botNameAliases: ["clank", "conk"] }));
+  const currentForm = settingsToForm(normalizeSettings({
+    identity: {
+      botNameAliases: ["clank", "conk"]
+    }
+  }));
   // user edits to comma-separated
   currentForm.botNameAliases = "clank, conk";
 
   // server returns the same values after save
   const preserved = settingsToFormPreserving(
-    normalizeSettings({ botNameAliases: ["clank", "conk"] }),
+    normalizeSettings({
+      identity: {
+        botNameAliases: ["clank", "conk"]
+      }
+    }),
     currentForm
   );
   assert.equal(preserved.botNameAliases, "clank, conk");
@@ -421,22 +472,41 @@ test("settingsToFormPreserving keeps user's comma format for aliases on reload",
 });
 
 test("settingsToFormPreserving updates value when server content actually changed", () => {
-  const currentForm = settingsToForm(normalizeSettings({ botNameAliases: ["clank", "conk"] }));
+  const currentForm = settingsToForm(normalizeSettings({
+    identity: {
+      botNameAliases: ["clank", "conk"]
+    }
+  }));
   currentForm.botNameAliases = "clank, conk";
 
   // server returns different values (e.g. another admin added an alias)
   const preserved = settingsToFormPreserving(
-    normalizeSettings({ botNameAliases: ["clank", "conk", "clanky"] }),
+    normalizeSettings({
+      identity: {
+        botNameAliases: ["clank", "conk", "clanky"]
+      }
+    }),
     currentForm
   );
   assert.equal(preserved.botNameAliases, "clank, conk, clanky");
 });
 
 test("settingsToFormPreserving preserves newline format when user prefers it", () => {
-  const currentForm = settingsToForm(normalizeSettings({ botNameAliases: ["a", "b"] }));
+  const currentForm = settingsToForm(normalizeSettings({
+    identity: {
+      botNameAliases: ["a", "b"]
+    }
+  }));
   // user keeps newlines
   currentForm.botNameAliases = "a\nb";
 
-  const preserved = settingsToFormPreserving(normalizeSettings({ botNameAliases: ["a", "b"] }), currentForm);
+  const preserved = settingsToFormPreserving(
+    normalizeSettings({
+      identity: {
+        botNameAliases: ["a", "b"]
+      }
+    }),
+    currentForm
+  );
   assert.equal(preserved.botNameAliases, "a\nb");
 });

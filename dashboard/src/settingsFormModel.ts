@@ -25,9 +25,9 @@ import {
   getReplyPermissions,
   getResearchRuntimeConfig,
   getResolvedFollowupBinding,
-  getResolvedLegacyVoiceProvider,
   getResolvedMemoryBinding,
   getResolvedOrchestratorBinding,
+  getResolvedVoiceProvider,
   getResolvedVisionBinding,
   getResolvedVoiceAdmissionClassifierBinding,
   getResolvedVoiceGenerationBinding,
@@ -242,7 +242,7 @@ function buildSettingsFormView(settings) {
     videoContext,
     voice: {
       enabled: voiceSettings.enabled,
-      voiceProvider: getResolvedLegacyVoiceProvider(source),
+      voiceProvider: getResolvedVoiceProvider(source),
       replyPath: voiceConversation.replyPath,
       ttsMode: voiceConversation.ttsMode,
       asrLanguageMode: transcription.languageMode,
@@ -270,18 +270,18 @@ function buildSettingsFormView(settings) {
         model: voiceClassifierBinding?.model || orchestrator.model
       },
       generationLlm: {
-        useTextModel: voiceRuntime.legacyVoiceStack?.generation?.mode !== "dedicated_model",
+        useTextModel: voiceRuntime.generation?.mode !== "dedicated_model",
         provider: voiceGenerationBinding.provider,
         model: voiceGenerationBinding.model
       },
       allowedVoiceChannelIds: voiceChannelPolicy.allowedChannelIds,
       blockedVoiceChannelIds: voiceChannelPolicy.blockedChannelIds,
       blockedVoiceUserIds: voiceChannelPolicy.blockedUserIds,
-      xai: voiceRuntime.legacyVoiceStack.xai,
+      xai: voiceRuntime.xai,
       openaiRealtime: voiceRuntime.openaiRealtime,
-      elevenLabsRealtime: voiceRuntime.legacyVoiceStack.elevenLabsRealtime,
-      geminiRealtime: voiceRuntime.legacyVoiceStack.geminiRealtime,
-      sttPipeline: voiceRuntime.legacyVoiceStack.sttPipeline,
+      elevenLabsRealtime: voiceRuntime.elevenLabsRealtime,
+      geminiRealtime: voiceRuntime.geminiRealtime,
+      sttPipeline: voiceRuntime.sttPipeline,
       streamWatch: voiceStreamWatch,
       soundboard: voiceSoundboard,
       asrEnabled: transcription.enabled,
@@ -794,6 +794,14 @@ export function formToSettingsPatch(form) {
           }
         },
         voice: {
+          runtimeMode:
+            String(form.voiceProvider || "openai").trim() === "xai"
+              ? "voice_agent"
+              : String(form.voiceProvider || "openai").trim() === "gemini"
+                ? "gemini_realtime"
+                : String(form.voiceProvider || "openai").trim() === "elevenlabs"
+                  ? "elevenlabs_realtime"
+                  : "openai_realtime",
           openaiRealtime: {
             model: String(form.voiceOpenAiRealtimeModel || "").trim(),
             voice: String(form.voiceOpenAiRealtimeVoice || "").trim(),
@@ -803,43 +811,40 @@ export function formToSettingsPatch(form) {
             inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
             usePerUserAsrBridge: Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge)
           },
-          legacyVoiceStack: {
-            selectedProvider: String(form.voiceProvider || "openai").trim(),
-            generation: Boolean(form.voiceGenerationLlmUseTextModel)
-              ? { mode: "inherit_orchestrator" }
-              : {
-                  mode: "dedicated_model",
-                  model: {
-                    provider: String(form.voiceGenerationLlmProvider || "").trim(),
-                    model: String(form.voiceGenerationLlmModel || "").trim()
-                  }
-                },
-            xai: {
-              voice: String(form.voiceXaiVoice || "").trim(),
-              audioFormat: String(form.voiceXaiAudioFormat || "").trim(),
-              sampleRateHz: Number(form.voiceXaiSampleRateHz),
-              region: String(form.voiceXaiRegion || "").trim()
-            },
-            elevenLabsRealtime: {
-              agentId: String(form.voiceElevenLabsRealtimeAgentId || "").trim(),
-              voiceId: String(form.voiceElevenLabsRealtimeVoiceId || "").trim(),
-              apiBaseUrl: String(form.voiceElevenLabsRealtimeApiBaseUrl || "").trim(),
-              inputSampleRateHz: Number(form.voiceElevenLabsRealtimeInputSampleRateHz),
-              outputSampleRateHz: Number(form.voiceElevenLabsRealtimeOutputSampleRateHz)
-            },
-            geminiRealtime: {
-              model: String(form.voiceGeminiRealtimeModel || "").trim(),
-              voice: String(form.voiceGeminiRealtimeVoice || "").trim(),
-              apiBaseUrl: String(form.voiceGeminiRealtimeApiBaseUrl || "").trim(),
-              inputSampleRateHz: Number(form.voiceGeminiRealtimeInputSampleRateHz),
-              outputSampleRateHz: Number(form.voiceGeminiRealtimeOutputSampleRateHz)
-            },
-            sttPipeline: {
-              transcriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
-              ttsModel: String(form.voiceSttPipelineTtsModel || "").trim(),
-              ttsVoice: String(form.voiceSttPipelineTtsVoice || "").trim(),
-              ttsSpeed: Number(form.voiceSttPipelineTtsSpeed)
-            }
+          generation: Boolean(form.voiceGenerationLlmUseTextModel)
+            ? { mode: "inherit_orchestrator" }
+            : {
+                mode: "dedicated_model",
+                model: {
+                  provider: String(form.voiceGenerationLlmProvider || "").trim(),
+                  model: String(form.voiceGenerationLlmModel || "").trim()
+                }
+              },
+          xai: {
+            voice: String(form.voiceXaiVoice || "").trim(),
+            audioFormat: String(form.voiceXaiAudioFormat || "").trim(),
+            sampleRateHz: Number(form.voiceXaiSampleRateHz),
+            region: String(form.voiceXaiRegion || "").trim()
+          },
+          elevenLabsRealtime: {
+            agentId: String(form.voiceElevenLabsRealtimeAgentId || "").trim(),
+            voiceId: String(form.voiceElevenLabsRealtimeVoiceId || "").trim(),
+            apiBaseUrl: String(form.voiceElevenLabsRealtimeApiBaseUrl || "").trim(),
+            inputSampleRateHz: Number(form.voiceElevenLabsRealtimeInputSampleRateHz),
+            outputSampleRateHz: Number(form.voiceElevenLabsRealtimeOutputSampleRateHz)
+          },
+          geminiRealtime: {
+            model: String(form.voiceGeminiRealtimeModel || "").trim(),
+            voice: String(form.voiceGeminiRealtimeVoice || "").trim(),
+            apiBaseUrl: String(form.voiceGeminiRealtimeApiBaseUrl || "").trim(),
+            inputSampleRateHz: Number(form.voiceGeminiRealtimeInputSampleRateHz),
+            outputSampleRateHz: Number(form.voiceGeminiRealtimeOutputSampleRateHz)
+          },
+          sttPipeline: {
+            transcriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
+            ttsModel: String(form.voiceSttPipelineTtsModel || "").trim(),
+            ttsVoice: String(form.voiceSttPipelineTtsVoice || "").trim(),
+            ttsSpeed: Number(form.voiceSttPipelineTtsSpeed)
           }
         },
         devTeam: {

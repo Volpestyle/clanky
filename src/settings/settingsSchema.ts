@@ -11,7 +11,6 @@ export const AGENT_STACK_PRESETS = [
   "openai_native",
   "anthropic_brain_openai_tools",
   "claude_code_max",
-  "multi_provider_legacy",
   "custom"
 ] as const;
 
@@ -40,7 +39,10 @@ export const BROWSER_RUNTIME_KINDS = [
 
 export const VOICE_RUNTIME_KINDS = [
   "openai_realtime",
-  "legacy_voice_stack"
+  "voice_agent",
+  "gemini_realtime",
+  "elevenlabs_realtime",
+  "stt_pipeline"
 ] as const;
 
 export const VOICE_ADMISSION_MODES = [
@@ -53,13 +55,6 @@ export const VOICE_ADMISSION_MODES = [
 export const CODING_WORKER_RUNTIME_KINDS = [
   "codex",
   "claude_code"
-] as const;
-
-export const LEGACY_VOICE_PROVIDER_KINDS = [
-  "openai",
-  "xai",
-  "gemini",
-  "elevenlabs"
 ] as const;
 
 type Primitive = string | number | boolean | bigint | symbol | null | undefined;
@@ -298,6 +293,7 @@ export const DEFAULT_SETTINGS = {
         }
       },
       voice: {
+        runtimeMode: "openai_realtime",
         openaiRealtime: {
           model: "gpt-realtime",
           voice: "ash",
@@ -307,40 +303,37 @@ export const DEFAULT_SETTINGS = {
           inputTranscriptionModel: "gpt-4o-mini-transcribe",
           usePerUserAsrBridge: true
         },
-        legacyVoiceStack: {
-          selectedProvider: "openai",
-          xai: {
-            voice: "Rex",
-            audioFormat: "audio/pcm",
-            sampleRateHz: 24000,
-            region: "us-east-1"
-          },
-          elevenLabsRealtime: {
-            agentId: "",
-            voiceId: "",
-            apiBaseUrl: "https://api.elevenlabs.io",
-            inputSampleRateHz: 16000,
-            outputSampleRateHz: 16000
-          },
-          geminiRealtime: {
-            model: "gemini-2.5-flash-native-audio-preview-12-2025",
-            voice: "Aoede",
-            apiBaseUrl: "https://generativelanguage.googleapis.com",
-            inputSampleRateHz: 16000,
-            outputSampleRateHz: 24000
-          },
-          sttPipeline: {
-            transcriptionModel: "gpt-4o-mini-transcribe",
-            ttsModel: "gpt-4o-mini-tts",
-            ttsVoice: "alloy",
-            ttsSpeed: 1
-          },
-          generation: {
-            mode: "dedicated_model",
-            model: {
-              provider: "anthropic",
-              model: "claude-haiku-4-5"
-            }
+        xai: {
+          voice: "Rex",
+          audioFormat: "audio/pcm",
+          sampleRateHz: 24000,
+          region: "us-east-1"
+        },
+        elevenLabsRealtime: {
+          agentId: "",
+          voiceId: "",
+          apiBaseUrl: "https://api.elevenlabs.io",
+          inputSampleRateHz: 16000,
+          outputSampleRateHz: 16000
+        },
+        geminiRealtime: {
+          model: "gemini-2.5-flash-native-audio-preview-12-2025",
+          voice: "Aoede",
+          apiBaseUrl: "https://generativelanguage.googleapis.com",
+          inputSampleRateHz: 16000,
+          outputSampleRateHz: 24000
+        },
+        sttPipeline: {
+          transcriptionModel: "gpt-4o-mini-transcribe",
+          ttsModel: "gpt-4o-mini-tts",
+          ttsVoice: "alloy",
+          ttsSpeed: 1
+        },
+        generation: {
+          mode: "dedicated_model",
+          model: {
+            provider: "anthropic",
+            model: "claude-haiku-4-5"
           }
         }
       },

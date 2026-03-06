@@ -6322,7 +6322,7 @@ export class VoiceSessionManager {
     if (!line) return false;
     if (!this.llm?.synthesizeSpeech) return false;
 
-    const sttSettings = getVoiceRuntimeConfig(settings).legacyVoiceStack?.sttPipeline;
+    const sttSettings = getVoiceRuntimeConfig(settings).sttPipeline;
     const ttsModel = String(sttSettings?.ttsModel || "gpt-4o-mini-tts").trim() || "gpt-4o-mini-tts";
     const ttsVoice = String(sttSettings?.ttsVoice || "alloy").trim() || "alloy";
     const ttsSpeedRaw = Number(sttSettings?.ttsSpeed);
@@ -7995,7 +7995,7 @@ export class VoiceSessionManager {
     const preferredModel =
       isRealtimeMode(session.mode)
         ? voiceRuntime.openaiRealtime?.inputTranscriptionModel
-        : voiceRuntime.legacyVoiceStack?.sttPipeline?.transcriptionModel;
+        : voiceRuntime.sttPipeline?.transcriptionModel;
     const transcriptionModel = String(preferredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
     const sampleRateHz = Number(session.realtimeInputSampleRateHz) || 24000;
     const transcriptionPlan = hasTranscriptOverride
@@ -10524,7 +10524,7 @@ export class VoiceSessionManager {
     if (consumedByMusicMode) return;
 
     const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
-    const sttSettings = getVoiceRuntimeConfig(settings).legacyVoiceStack?.sttPipeline;
+    const sttSettings = getVoiceRuntimeConfig(settings).sttPipeline;
     const transcriptionModelPrimary =
       String(sttSettings?.transcriptionModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
     const sampleRateHz = 24000;

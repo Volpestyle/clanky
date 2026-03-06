@@ -17,11 +17,19 @@ test("interpolatePromptTemplate resolves known variables and preserves unknown o
 
 test("prompt getters interpolate botName placeholders", () => {
   const settings = normalizeSettings({
-    botName: "clanker",
-    prompt: {
-      impossibleActionLine: "cannot do that, {{botName}} mode",
-      textGuidance: ["reply as {{ BOTNAME }} only"],
-      voiceLookupBusySystemPrompt: "You are {{ botName }} in VC."
+    identity: {
+      botName: "clanker"
+    },
+    prompting: {
+      global: {
+        impossibleActionLine: "cannot do that, {{botName}} mode"
+      },
+      text: {
+        guidance: ["reply as {{ BOTNAME }} only"]
+      },
+      voice: {
+        lookupBusySystemPrompt: "You are {{ botName }} in VC."
+      }
     }
   });
 

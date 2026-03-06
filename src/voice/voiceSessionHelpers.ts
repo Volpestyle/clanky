@@ -2,7 +2,7 @@ import { parseSoundboardReference } from "./soundboardDirector.ts";
 import {
   getBotName,
   getBotNameAliases,
-  getResolvedLegacyVoiceProvider,
+  getResolvedVoiceProvider,
   getResolvedVoiceGenerationBinding,
   getVoiceConversationPolicy,
   getVoiceTranscriptionSettings,
@@ -334,7 +334,7 @@ export function shortError(text) {
 }
 
 export function resolveVoiceProvider(settings) {
-  return normalizeVoiceProvider(getResolvedLegacyVoiceProvider(settings), "openai");
+  return normalizeVoiceProvider(getResolvedVoiceProvider(settings), "openai");
 }
 
 export function resolveBrainProvider(settings) {
@@ -349,17 +349,7 @@ export function resolveTranscriberProvider(settings) {
 
 export function resolveVoiceRuntimeMode(settings) {
   const resolvedStack = resolveAgentStack(settings);
-  if (resolvedStack.voiceRuntime === "openai_realtime") {
-    return "openai_realtime";
-  }
-  const voiceProvider = resolveVoiceProvider(settings);
-  const modeMap = {
-    openai: "stt_pipeline",
-    xai: "voice_agent",
-    gemini: "gemini_realtime",
-    elevenlabs: "elevenlabs_realtime"
-  };
-  return (modeMap[voiceProvider] || "openai_realtime") as VoiceRuntimeMode;
+  return normalizeVoiceRuntimeMode(resolvedStack.voiceRuntime, "openai_realtime") as VoiceRuntimeMode;
 }
 
 export function resolveRealtimeProvider(mode) {

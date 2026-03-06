@@ -1210,8 +1210,8 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
     const sampleRateHz = source === "stt_pipeline" ? 24000 : Number(session.realtimeInputSampleRateHz) || 24000;
     const voiceRuntime = getVoiceRuntimeConfig(settings);
     const preferredModel = source === "stt_pipeline"
-      ? voiceRuntime.legacyVoiceStack?.sttPipeline?.transcriptionModel
-      : voiceRuntime.openaiRealtime?.inputTranscriptionModel || voiceRuntime.legacyVoiceStack?.sttPipeline?.transcriptionModel;
+      ? voiceRuntime.sttPipeline?.transcriptionModel
+      : voiceRuntime.openaiRealtime?.inputTranscriptionModel || voiceRuntime.sttPipeline?.transcriptionModel;
     const primaryModel = String(preferredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
     const fallbackModel = primaryModel === "gpt-4o-mini-transcribe" ? "whisper-1" : "";
 

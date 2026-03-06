@@ -5,9 +5,11 @@ import {
   normalizeSettings,
   PERSONA_FLAVOR_MAX_CHARS
 } from "./settingsNormalization.ts";
+import { resolveAgentStack } from "../settings/agentStack.ts";
+import { normalizeTestSettingsInput } from "../testSettings.ts";
 
 function normalizeLegacyView(input: unknown): ReturnType<typeof normalizeSettings> {
-  return normalizeSettings(input);
+  return normalizeSettings(normalizeTestSettingsInput(input));
 }
 
 test("normalizeSettings migrates and clamps complex legacy settings into the canonical schema", () => {
@@ -137,7 +139,7 @@ test("normalizeSettings migrates and clamps complex legacy settings into the can
     mode: string;
     model?: { provider: string; model: string };
   };
-  const voiceGeneration = normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.generation as {
+  const voiceGeneration = normalized.agentStack.runtimeConfig.voice.generation as {
     mode: string;
     model?: { provider: string; model: string };
   };
@@ -231,11 +233,11 @@ test("normalizeSettings migrates and clamps complex legacy settings into the can
   assert.equal(normalized.agentStack.runtimeConfig.voice.openaiRealtime.inputAudioFormat, "pcm16");
   assert.equal(normalized.agentStack.runtimeConfig.voice.openaiRealtime.outputAudioFormat, "g711_alaw");
   assert.equal(
-    normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.apiBaseUrl,
+    normalized.agentStack.runtimeConfig.voice.geminiRealtime.apiBaseUrl,
     "https://generativelanguage.googleapis.com"
   );
-  assert.equal(normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.inputSampleRateHz, 8000);
-  assert.equal(normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.outputSampleRateHz, 96000);
+  assert.equal(normalized.agentStack.runtimeConfig.voice.geminiRealtime.inputSampleRateHz, 8000);
+  assert.equal(normalized.agentStack.runtimeConfig.voice.geminiRealtime.outputSampleRateHz, 96000);
   assert.equal(normalized.voice.streamWatch.minCommentaryIntervalSeconds, 3);
   assert.equal(normalized.voice.streamWatch.maxFramesPerMinute, 600);
   assert.equal(normalized.voice.streamWatch.maxFrameBytes, 50_000);
@@ -455,7 +457,7 @@ test("normalizeSettings migrates voice generation useTextModel to inherit orches
     }
   });
 
-  const generation = normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.generation as {
+  const generation = normalized.agentStack.runtimeConfig.voice.generation as {
     mode: string;
     model?: { provider: string; model: string };
   };
@@ -463,7 +465,7 @@ test("normalizeSettings migrates voice generation useTextModel to inherit orches
   assert.equal("useTextModel" in normalized.interaction.followup.execution, false);
 });
 
-test("normalizeSettings keeps elevenlabs voice runtime settings under the legacy voice stack", () => {
+test("normalizeSettings keeps elevenlabs voice runtime settings under canonical voice runtime config", () => {
   const normalized = normalizeLegacyView({
     voice: {
       voiceProvider: "elevenlabs",
@@ -476,14 +478,15 @@ test("normalizeSettings keeps elevenlabs voice runtime settings under the legacy
     }
   });
 
-  assert.equal(normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.selectedProvider, "elevenlabs");
-  assert.equal(normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.agentId, "agent_abc");
+  assert.equal(resolveAgentStack(normalized).voiceRuntime, "elevenlabs_realtime");
+  assert.equal(normalized.agentStack.runtimeConfig.voice.runtimeMode, "elevenlabs_realtime");
+  assert.equal(normalized.agentStack.runtimeConfig.voice.elevenLabsRealtime.agentId, "agent_abc");
   assert.equal(
-    normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.apiBaseUrl,
+    normalized.agentStack.runtimeConfig.voice.elevenLabsRealtime.apiBaseUrl,
     "https://api.elevenlabs.io"
   );
-  assert.equal(normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.inputSampleRateHz, 96000);
-  assert.equal(normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.outputSampleRateHz, 8000);
+  assert.equal(normalized.agentStack.runtimeConfig.voice.elevenLabsRealtime.inputSampleRateHz, 96000);
+  assert.equal(normalized.agentStack.runtimeConfig.voice.elevenLabsRealtime.outputSampleRateHz, 8000);
 });
 
 test("normalizeSettings uses provider-specific memory model fallbacks", () => {
@@ -541,7 +544,7 @@ test("normalizeSettings keeps legacy stt-pipeline generation and admission class
     }
   });
 
-  const generation = normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.generation as {
+  const generation = normalized.agentStack.runtimeConfig.voice.generation as {
     mode: string;
     model?: { provider: string; model: string };
   };
@@ -549,7 +552,7 @@ test("normalizeSettings keeps legacy stt-pipeline generation and admission class
     mode: string;
     model?: { provider: string; model: string };
   };
-  assert.equal(normalized.agentStack.runtimeConfig.voice.legacyVoiceStack.selectedProvider, "openai");
+  assert.equal(normalized.agentStack.runtimeConfig.voice.runtimeMode, "stt_pipeline");
   assert.equal(generation.mode, "dedicated_model");
   assert.deepEqual(generation.model, {
     provider: "openai",

@@ -193,36 +193,6 @@ const PRESET_DEFAULTS = {
       codingWorkers: ["claude_code", "codex"]
     }
   },
-  multi_provider_legacy: {
-    harness: "internal",
-    orchestrator: {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6"
-    },
-    researchRuntime: "local_external_search",
-    browserRuntime: "local_browser_agent",
-    voiceRuntime: "legacy_voice_stack",
-    voiceAdmissionPolicy: {
-      mode: "classifier_gate"
-    },
-    voiceAdmissionClassifier: {
-      provider: "openai",
-      model: "gpt-5-mini"
-    },
-    devTeam: {
-      orchestrator: {
-        provider: "anthropic",
-        model: "claude-sonnet-4-6"
-      },
-      roles: {
-        design: dedicatedModel("claude-code", "sonnet"),
-        implementation: dedicatedModel("claude-code", "sonnet"),
-        review: dedicatedModel("claude-code", "sonnet"),
-        research: inheritOrchestrator()
-      },
-      codingWorkers: ["claude_code", "codex"]
-    }
-  },
   custom: {
     harness: "internal",
     orchestrator: {
@@ -561,6 +531,16 @@ function getPresetDefaults(settings: unknown): PresetDefaults {
   return PRESET_DEFAULTS[presetName] || PRESET_DEFAULTS.openai_native;
 }
 
+function normalizeResolvedVoiceRuntime(value: unknown, fallback: string) {
+  const normalized = String(value || fallback || "").trim().toLowerCase();
+  if (normalized === "openai_realtime") return "openai_realtime";
+  if (normalized === "voice_agent") return "voice_agent";
+  if (normalized === "gemini_realtime") return "gemini_realtime";
+  if (normalized === "elevenlabs_realtime") return "elevenlabs_realtime";
+  if (normalized === "stt_pipeline") return "stt_pipeline";
+  return fallback;
+}
+
 export function getResolvedOrchestratorBinding(settings: unknown) {
   const interaction = getReplyGenerationSettings(settings);
   const agentStack = getAgentStackSettings(settings);
@@ -663,15 +643,21 @@ export function getResolvedVoiceAdmissionClassifierBinding(settings: unknown) {
   };
 }
 
-export function getResolvedLegacyVoiceProvider(settings: unknown): string {
-  return String(getVoiceRuntimeConfig(settings).legacyVoiceStack?.selectedProvider || "openai").trim() || "openai";
+export function getResolvedVoiceProvider(settings: unknown): string {
+  const runtimeMode = String(getVoiceRuntimeConfig(settings).runtimeMode || resolveAgentStack(settings).voiceRuntime || "")
+    .trim()
+    .toLowerCase();
+  if (runtimeMode === "voice_agent") return "xai";
+  if (runtimeMode === "gemini_realtime") return "gemini";
+  if (runtimeMode === "elevenlabs_realtime") return "elevenlabs";
+  return "openai";
 }
 
 export function getResolvedVoiceGenerationBinding(settings: unknown) {
   const voiceRuntime = getVoiceRuntimeConfig(settings);
   const fallback = getResolvedOrchestratorBinding(settings);
   const policy = resolveExecutionPolicy(
-    voiceRuntime.legacyVoiceStack?.generation,
+    voiceRuntime.generation,
     fallback
   );
   const binding = policy.mode === "dedicated_model"
@@ -790,7 +776,7 @@ export function resolveAgentStack(settings: unknown) {
     orchestrator: resolveModelBinding(overrides?.orchestrator, presetDefaults.orchestrator),
     researchRuntime: String(overrides?.researchRuntime || presetDefaults.researchRuntime),
     browserRuntime: String(overrides?.browserRuntime || presetDefaults.browserRuntime),
-    voiceRuntime: String(overrides?.voiceRuntime || presetDefaults.voiceRuntime),
+    voiceRuntime: normalizeResolvedVoiceRuntime(overrides?.voiceRuntime, presetDefaults.voiceRuntime),
     voiceAdmissionPolicy: {
       mode: String(voiceAdmission.mode || presetDefaults.voiceAdmissionPolicy.mode),
       classifierProvider: getResolvedVoiceAdmissionClassifierBinding(settings)?.provider,

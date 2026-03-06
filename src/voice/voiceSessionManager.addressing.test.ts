@@ -26,6 +26,7 @@ function createManager({
     getSettings() {
       return createTestSettings({
         botName: "clanker conk",
+        botNameAliases: ["clankerconk"],
         voice: {
           replyPath: "brain"
         }
@@ -61,6 +62,7 @@ function createManager({
 function baseSettings(overrides = {}) {
   const base = {
     botName: "clanker conk",
+    botNameAliases: ["clankerconk"],
     memory: {
       enabled: false
     },
@@ -1104,7 +1106,7 @@ test("reply decider fast-paths merged bot-name tokens as direct address", async 
         }
       }
     }),
-    transcript: "clankerconk you there?"
+    transcript: "clanker conk you there?"
   });
 
   assert.equal(decision.allow, true);
@@ -1609,7 +1611,7 @@ test("reply decider keeps merged bot-name token turns on the direct-address fast
         }
       }
     }),
-    transcript: "clankerconk can you help with this"
+    transcript: "clanker conk can you help with this"
   });
 
   assert.equal(decision.allow, true);

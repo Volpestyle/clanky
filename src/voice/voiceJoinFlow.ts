@@ -308,7 +308,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       return true;
     }
     if (runtimeMode === "elevenlabs_realtime") {
-      const elevenLabsSettings = voiceRuntime.legacyVoiceStack?.elevenLabsRealtime;
+      const elevenLabsSettings = voiceRuntime.elevenLabsRealtime;
       const elevenLabsAgentId = String(elevenLabsSettings?.agentId || "").trim();
       if (!elevenLabsAgentId) {
         await manager.sendOperationalMessage({
@@ -484,7 +484,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           logger: realtimeRuntimeLogger
         });
 
-        const xaiSettings = voiceRuntime.legacyVoiceStack?.xai;
+        const xaiSettings = voiceRuntime.xai;
         realtimeInputSampleRateHz = Number(xaiSettings?.sampleRateHz) || 24000;
         realtimeOutputSampleRateHz = Number(xaiSettings?.sampleRateHz) || 24000;
         await realtimeClient.connect({
@@ -527,7 +527,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           toolChoice: "auto"
         });
       } else if (runtimeMode === "gemini_realtime") {
-        const geminiRealtimeSettings = voiceRuntime.legacyVoiceStack?.geminiRealtime;
+        const geminiRealtimeSettings = voiceRuntime.geminiRealtime;
         realtimeClient = new GeminiRealtimeClient({
           apiKey: manager.appConfig.geminiApiKey,
           baseUrl:
@@ -548,7 +548,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           outputSampleRateHz: realtimeOutputSampleRateHz
         });
       } else if (runtimeMode === "elevenlabs_realtime") {
-        const elevenLabsRealtimeSettings = voiceRuntime.legacyVoiceStack?.elevenLabsRealtime;
+        const elevenLabsRealtimeSettings = voiceRuntime.elevenLabsRealtime;
         realtimeClient = new ElevenLabsRealtimeClient({
           apiKey: manager.appConfig.elevenLabsApiKey,
           baseUrl:
