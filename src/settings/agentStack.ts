@@ -612,7 +612,7 @@ export function getResolvedBrowserTaskConfig(settings: unknown) {
       model: String(browserBinding?.model || orchestrator.model || "claude-sonnet-4-5-20250929")
     },
     openaiComputerUse: {
-      model: String(browserRuntime.openaiComputerUse?.model || "computer-use-preview").trim() || "computer-use-preview"
+      model: String(browserRuntime.openaiComputerUse?.model || "gpt-5.4").trim() || "gpt-5.4"
     }
   };
 }

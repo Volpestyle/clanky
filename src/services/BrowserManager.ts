@@ -143,7 +143,7 @@ export class BrowserManager {
     sessionKey: string,
     x: number,
     y: number,
-    button: "left" | "middle" | "right" = "left",
+    button: "left" | "middle" | "right" | "wheel" | "back" | "forward" = "left",
     timeoutMs = DEFAULT_STEP_TIMEOUT_MS,
     signal?: AbortSignal
   ): Promise<string> {
@@ -158,13 +158,45 @@ export class BrowserManager {
     sessionKey: string,
     x: number,
     y: number,
-    button: "left" | "middle" | "right" = "left",
+    button: "left" | "middle" | "right" | "wheel" | "back" | "forward" = "left",
     timeoutMs = DEFAULT_STEP_TIMEOUT_MS,
     signal?: AbortSignal
   ): Promise<string> {
     this.touchSession(sessionKey);
     await this.mouseClick(sessionKey, x, y, button, timeoutMs, signal);
     return await this.mouseClick(sessionKey, x, y, button, timeoutMs, signal);
+  }
+
+  async mouseDrag(
+    sessionKey: string,
+    path: Array<{ x: number; y: number }>,
+    timeoutMs = DEFAULT_STEP_TIMEOUT_MS,
+    signal?: AbortSignal
+  ): Promise<string> {
+    this.touchSession(sessionKey);
+    const points = Array.isArray(path)
+      ? path.filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
+      : [];
+    if (points.length < 2) {
+      throw new Error("mouse_drag_requires_path");
+    }
+
+    await this.mouseMove(sessionKey, points[0]!.x, points[0]!.y, timeoutMs, signal);
+    await this.runAgentBrowser(sessionKey, ["mouse", "down", "left"], timeoutMs, signal);
+
+    let stdout = "";
+    for (const point of points.slice(1)) {
+      const result = await this.runAgentBrowser(
+        sessionKey,
+        ["mouse", "move", String(Math.round(point.x)), String(Math.round(point.y))],
+        timeoutMs,
+        signal
+      );
+      stdout = result.stdout;
+    }
+
+    const release = await this.runAgentBrowser(sessionKey, ["mouse", "up", "left"], timeoutMs, signal);
+    return release.stdout || stdout;
   }
 
   async mouseWheel(

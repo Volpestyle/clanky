@@ -4,6 +4,7 @@ const DEFAULT_PRICING = {
   openai: {
     "gpt-5.2": { inputPer1M: 1.75, cacheReadPer1M: 0.175, outputPer1M: 14.0 },
     "gpt-5.1": { inputPer1M: 1.25, cacheReadPer1M: 0.125, outputPer1M: 10.0 },
+    "gpt-5.4": { inputPer1M: 1.25, cacheReadPer1M: 0.125, outputPer1M: 10.0 },
     "gpt-5": { inputPer1M: 1.25, cacheReadPer1M: 0.125, outputPer1M: 10.0 },
     "gpt-5-mini": { inputPer1M: 0.25, cacheReadPer1M: 0.025, outputPer1M: 2.0 },
     "gpt-5-nano": { inputPer1M: 0.05, cacheReadPer1M: 0.005, outputPer1M: 0.4 },
@@ -47,7 +48,6 @@ const DEFAULT_PRICING = {
     "gpt-5-search-api": { inputPer1M: 1.25, cacheReadPer1M: 0.125, outputPer1M: 10.0 },
     "gpt-4o-mini-search-preview": { inputPer1M: 0.15, outputPer1M: 0.6 },
     "gpt-4o-search-preview": { inputPer1M: 2.5, outputPer1M: 10.0 },
-    "computer-use-preview": { inputPer1M: 3.0, outputPer1M: 12.0 },
     "text-embedding-3-small": { inputPer1M: 0.02, outputPer1M: 0 },
     "text-embedding-3-large": { inputPer1M: 0.13, outputPer1M: 0 },
     "text-embedding-ada-002": { inputPer1M: 0.1, outputPer1M: 0 }
@@ -203,13 +203,14 @@ const MODEL_ALIASES = {
   "grok code fast 1": "grok-code-fast-1-latest",
   "grok 3": "grok-3-latest",
   "grok 3 fast": "grok-3-fast-latest",
-  "grok 3 mini": "grok-3-mini-latest",
-  "grok 3 mini fast": "grok-3-mini-fast-latest",
-  "grok 2": "grok-2-latest",
-  "grok 2 vision": "grok-2-vision-latest",
-  "grok beta": "grok-beta",
-  "grok vision beta": "grok-vision-beta"
-};
+    "grok 3 mini": "grok-3-mini-latest",
+    "grok 3 mini fast": "grok-3-mini-fast-latest",
+    "grok 2": "grok-2-latest",
+    "grok 2 vision": "grok-2-vision-latest",
+    "grok beta": "grok-beta",
+    "gpt 5.4": "gpt-5.4",
+    "grok vision beta": "grok-vision-beta"
+  };
 const LLM_PROVIDER_KEYS = ["openai", "anthropic", "xai", "claude-code"];
 const NON_TEXT_MODEL_PATTERNS = [
   /embedding/i,
@@ -364,7 +365,6 @@ function listLlmModelsForProvider(providerPricing, provider) {
 function isTextLlmModel(model, provider) {
   const normalized = String(model || "").trim().toLowerCase();
   if (!normalized) return false;
-  if (provider === "openai" && normalized === "computer-use-preview") return false;
   if (NON_TEXT_MODEL_PATTERNS.some((pattern) => pattern.test(normalized))) return false;
   return true;
 }

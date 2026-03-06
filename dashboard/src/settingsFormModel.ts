@@ -777,7 +777,7 @@ export function formToSettingsPatch(form) {
         browser: {
           enabled: form.browserEnabled,
           openaiComputerUse: {
-            model: String(form.browserOpenAiComputerUseModel || "computer-use-preview").trim()
+            model: String(form.browserOpenAiComputerUseModel || "gpt-5.4").trim()
           },
           localBrowserAgent: {
             execution: {

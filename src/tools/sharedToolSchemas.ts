@@ -46,7 +46,7 @@ export const WEB_SCRAPE_SCHEMA: SharedToolSchema = {
 
 export const BROWSER_BROWSE_SCHEMA: SharedToolSchema = {
   name: "browser_browse",
-  description: "Browse a webpage interactively and report back with the result. Use only when web_scrape fails or you need to click, scroll, or interact with the page. Pass session_id to continue a previous session.",
+  description: "Browse a webpage interactively and report back with the result. Use only when web_scrape fails or you need to click, type, scroll, drag, or otherwise interact with the page. Pass session_id to continue a previous session.",
   parameters: {
     type: "object",
     properties: {

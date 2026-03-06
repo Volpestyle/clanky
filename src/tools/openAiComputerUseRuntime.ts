@@ -4,7 +4,7 @@ import { extractOpenAiResponseText, extractOpenAiResponseUsage } from "../llm/ll
 import type { BrowserManager } from "../services/BrowserManager.ts";
 import { createAbortError, isAbortError, throwIfAborted } from "./browserTaskRuntime.ts";
 
-const COMPUTER_USE_DEFAULT_MODEL = "computer-use-preview";
+const COMPUTER_USE_DEFAULT_MODEL = "gpt-5.4";
 const COMPUTER_USE_DEFAULT_START_URL = "https://example.com";
 const COMPUTER_USE_DISPLAY_WIDTH = 1024;
 const COMPUTER_USE_DISPLAY_HEIGHT = 768;
@@ -42,16 +42,53 @@ type ComputerUseOptions = {
   signal?: AbortSignal;
 };
 
-type ComputerAction = {
-  type?: string;
-  x?: number;
-  y?: number;
-  button?: string;
-  scroll_x?: number;
-  scroll_y?: number;
-  text?: string;
-  keys?: unknown;
+type ComputerActionPoint = {
+  x: number;
+  y: number;
 };
+
+type ComputerAction =
+  | {
+      type: "click";
+      x: number;
+      y: number;
+      button?: "left" | "right" | "wheel" | "back" | "forward";
+    }
+  | {
+      type: "double_click";
+      x: number;
+      y: number;
+    }
+  | {
+      type: "scroll";
+      x?: number;
+      y?: number;
+      scroll_x?: number;
+      scroll_y?: number;
+    }
+  | {
+      type: "type";
+      text: string;
+    }
+  | {
+      type: "wait";
+    }
+  | {
+      type: "keypress";
+      keys: string[];
+    }
+  | {
+      type: "drag";
+      path: ComputerActionPoint[];
+    }
+  | {
+      type: "move";
+      x: number;
+      y: number;
+    }
+  | {
+      type: "screenshot";
+    };
 
 type SafetyCheck = {
   id?: string;
@@ -62,8 +99,69 @@ type SafetyCheck = {
 type ComputerCall = {
   id?: string;
   call_id?: string;
-  action?: ComputerAction;
+  actions?: ComputerAction[];
   pending_safety_checks?: SafetyCheck[];
+  type?: string;
+};
+
+type ComputerToolDefinition = {
+  type: "computer";
+  display_width: number;
+  display_height: number;
+  environment: "browser";
+};
+
+type ResponseImageInput = {
+  type: "input_image";
+  image_url: string;
+  detail: "original";
+};
+
+type ResponseTextInput = {
+  type: "input_text";
+  text: string;
+};
+
+type ResponseUserMessage = {
+  role: "user";
+  content: Array<ResponseTextInput | ResponseImageInput>;
+};
+
+type ComputerCallOutputItem = {
+  type: "computer_call_output";
+  call_id: string;
+  acknowledged_safety_checks?: Array<{
+    id: string;
+    code: string;
+    message: string;
+  }>;
+  output: {
+    type: "computer_screenshot";
+    image_url: string;
+  };
+};
+
+type OpenAiComputerRequest = {
+  model: string;
+  tools: [ComputerToolDefinition];
+  input: Array<ResponseUserMessage | ComputerCallOutputItem>;
+  previous_response_id?: string;
+  reasoning?: {
+    summary: "concise";
+  };
+};
+
+type OpenAiComputerResponse = {
+  id?: string;
+  output?: Array<ComputerCall | Record<string, unknown>>;
+  output_text?: string;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    input_tokens_details?: {
+      cached_tokens?: number;
+    };
+  };
 };
 
 export type OpenAiComputerUseResult = {
@@ -90,12 +188,8 @@ function normalizeKeyToken(value: unknown) {
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
-function normalizeShortcut(keys: unknown) {
-  if (!Array.isArray(keys)) return "";
-  return keys
-    .map((entry) => normalizeKeyToken(entry))
-    .filter(Boolean)
-    .join("+");
+function normalizeShortcut(keys: string[]) {
+  return keys.map((entry) => normalizeKeyToken(entry)).filter(Boolean).join("+");
 }
 
 function extractComputerCalls(output: unknown): ComputerCall[] {
@@ -105,69 +199,112 @@ function extractComputerCalls(output: unknown): ComputerCall[] {
   });
 }
 
+function getComputerToolDefinition(): ComputerToolDefinition {
+  return {
+    type: "computer",
+    display_width: COMPUTER_USE_DISPLAY_WIDTH,
+    display_height: COMPUTER_USE_DISPLAY_HEIGHT,
+    environment: "browser"
+  };
+}
+
+async function sendComputerRequest(
+  openai: OpenAI,
+  body: OpenAiComputerRequest,
+  signal?: AbortSignal
+): Promise<OpenAiComputerResponse> {
+  return await openai.post<OpenAiComputerRequest, OpenAiComputerResponse>("/responses", {
+    body,
+    signal
+  });
+}
+
 async function executeComputerAction(
   browserManager: BrowserManager,
   sessionKey: string,
-  action: ComputerAction | undefined,
+  action: ComputerAction,
   stepTimeoutMs: number,
   signal?: AbortSignal
 ) {
-  const type = String(action?.type || "").trim().toLowerCase();
-  const x = Number(action?.x);
-  const y = Number(action?.y);
-  const button = String(action?.button || "left").trim().toLowerCase() || "left";
-
-  if (type === "click") {
-    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+  if (action.type === "click") {
+    if (!Number.isFinite(action.x) || !Number.isFinite(action.y)) {
       throw new Error("computer_use_click_missing_coordinates");
     }
-    await browserManager.mouseClick(sessionKey, x, y, button as "left" | "middle" | "right", stepTimeoutMs, signal);
-    return;
+    const button = action.button === "wheel" ? "middle" : action.button || "left";
+    await browserManager.mouseClick(sessionKey, action.x, action.y, button, stepTimeoutMs, signal);
+    return false;
   }
 
-  if (type === "double_click") {
-    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+  if (action.type === "double_click") {
+    if (!Number.isFinite(action.x) || !Number.isFinite(action.y)) {
       throw new Error("computer_use_double_click_missing_coordinates");
     }
-    await browserManager.mouseDoubleClick(sessionKey, x, y, button as "left" | "middle" | "right", stepTimeoutMs, signal);
-    return;
+    await browserManager.mouseDoubleClick(sessionKey, action.x, action.y, "left", stepTimeoutMs, signal);
+    return false;
   }
 
-  if (type === "scroll") {
+  if (action.type === "scroll") {
+    if (Number.isFinite(action.x) && Number.isFinite(action.y)) {
+      await browserManager.mouseMove(sessionKey, action.x, action.y, stepTimeoutMs, signal);
+    }
     await browserManager.mouseWheel(
       sessionKey,
-      Number.isFinite(Number(action?.scroll_y)) ? Number(action?.scroll_y) : 0,
-      Number.isFinite(Number(action?.scroll_x)) ? Number(action?.scroll_x) : 0,
+      Number.isFinite(Number(action.scroll_y)) ? Number(action.scroll_y) : 0,
+      Number.isFinite(Number(action.scroll_x)) ? Number(action.scroll_x) : 0,
       stepTimeoutMs,
       signal
     );
-    return;
+    return false;
   }
 
-  if (type === "keypress") {
-    const shortcut = normalizeShortcut(action?.keys);
+  if (action.type === "keypress") {
+    const shortcut = normalizeShortcut(Array.isArray(action.keys) ? action.keys : []);
     if (!shortcut) {
       throw new Error("computer_use_keypress_missing_keys");
     }
     await browserManager.press(sessionKey, shortcut, stepTimeoutMs, signal);
-    return;
+    return false;
   }
 
-  if (type === "type") {
-    const text = String(action?.text || "");
+  if (action.type === "type") {
+    const text = String(action.text || "");
     if (!text) {
       throw new Error("computer_use_type_missing_text");
     }
     await browserManager.keyboardType(sessionKey, text, stepTimeoutMs, signal);
-    return;
+    return false;
   }
 
-  if (type === "wait") {
+  if (action.type === "wait") {
     await browserManager.wait(sessionKey, stepTimeoutMs, signal);
-    return;
+    return false;
   }
 
-  throw new Error(`computer_use_action_unsupported:${type || "unknown"}`);
+  if (action.type === "move") {
+    if (!Number.isFinite(action.x) || !Number.isFinite(action.y)) {
+      throw new Error("computer_use_move_missing_coordinates");
+    }
+    await browserManager.mouseMove(sessionKey, action.x, action.y, stepTimeoutMs, signal);
+    return false;
+  }
+
+  if (action.type === "drag") {
+    const path = Array.isArray(action.path)
+      ? action.path.filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
+      : [];
+    if (path.length < 2) {
+      throw new Error("computer_use_drag_missing_path");
+    }
+    await browserManager.mouseDrag(sessionKey, path, stepTimeoutMs, signal);
+    return false;
+  }
+
+  if (action.type === "screenshot") {
+    return true;
+  }
+
+  const actionType = (action as { type?: string }).type || "unknown";
+  throw new Error(`computer_use_action_unsupported:${actionType}`);
 }
 
 export async function runOpenAiComputerUseTask({
@@ -188,6 +325,7 @@ export async function runOpenAiComputerUseTask({
   const startedAt = Date.now();
   const initialUrl = resolveInitialUrl(instruction);
   const resolvedModel = String(model || COMPUTER_USE_DEFAULT_MODEL).trim() || COMPUTER_USE_DEFAULT_MODEL;
+  const toolDefinition = getComputerToolDefinition();
   let step = 0;
   let totalCostUsd = 0;
   let hitStepLimit = false;
@@ -198,36 +336,31 @@ export async function runOpenAiComputerUseTask({
     let screenshot = await browserManager.screenshot(sessionKey, stepTimeoutMs, signal);
     let currentUrl = await browserManager.currentUrl(sessionKey, stepTimeoutMs, signal).catch(() => initialUrl);
 
-    let response = await openai.responses.create({
-      model: resolvedModel,
-      tools: [{
-        type: "computer-preview",
-        display_width: COMPUTER_USE_DISPLAY_WIDTH,
-        display_height: COMPUTER_USE_DISPLAY_HEIGHT,
-        environment: "browser"
-      }],
-      input: [{
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: [
-              `Current browser URL: ${currentUrl || initialUrl}`,
-              `Task: ${instruction}`
-            ].join("\n")
-          },
-          {
-            type: "input_image",
-            image_url: screenshot,
-            detail: "auto"
-          }
-        ]
-      }],
-      reasoning: {
-        summary: "concise"
+    let response = await sendComputerRequest(
+      openai,
+      {
+        model: resolvedModel,
+        tools: [toolDefinition],
+        input: [{
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: [`Current browser URL: ${currentUrl || initialUrl}`, `Task: ${instruction}`].join("\n")
+            },
+            {
+              type: "input_image",
+              image_url: screenshot,
+              detail: "original"
+            }
+          ]
+        }],
+        reasoning: {
+          summary: "concise"
+        }
       },
-      truncation: "auto"
-    }, { signal });
+      signal
+    );
 
     while (step < maxSteps) {
       throwIfAborted(signal, "Computer use task cancelled");
@@ -248,7 +381,7 @@ export async function runOpenAiComputerUseTask({
       }
 
       step += 1;
-      const nextInputs = [];
+      const nextInputs: ComputerCallOutputItem[] = [];
 
       for (const computerCall of computerCalls) {
         const callId = String(computerCall.call_id || computerCall.id || "").trim();
@@ -267,13 +400,10 @@ export async function runOpenAiComputerUseTask({
           throw new Error(`computer_use_safety_check_required:${codes || "manual_review"}`);
         }
 
-        await executeComputerAction(
-          browserManager,
-          sessionKey,
-          computerCall.action,
-          stepTimeoutMs,
-          signal
-        );
+        const actions = Array.isArray(computerCall.actions) ? computerCall.actions : [];
+        for (const action of actions) {
+          await executeComputerAction(browserManager, sessionKey, action, stepTimeoutMs, signal);
+        }
 
         screenshot = await browserManager.screenshot(sessionKey, stepTimeoutMs, signal);
         currentUrl = await browserManager.currentUrl(sessionKey, stepTimeoutMs, signal).catch(() => currentUrl);
@@ -284,23 +414,20 @@ export async function runOpenAiComputerUseTask({
           output: {
             type: "computer_screenshot",
             image_url: screenshot
-          },
-          current_url: currentUrl || undefined
+          }
         });
       }
 
-      response = await openai.responses.create({
-        model: resolvedModel,
-        previous_response_id: response.id,
-        tools: [{
-          type: "computer-preview",
-          display_width: COMPUTER_USE_DISPLAY_WIDTH,
-          display_height: COMPUTER_USE_DISPLAY_HEIGHT,
-          environment: "browser"
-        }],
-        input: nextInputs,
-        truncation: "auto"
-      }, { signal });
+      response = await sendComputerRequest(
+        openai,
+        {
+          model: resolvedModel,
+          previous_response_id: response.id,
+          tools: [toolDefinition],
+          input: nextInputs
+        },
+        signal
+      );
     }
 
     if (!finalText) {
@@ -317,6 +444,7 @@ export async function runOpenAiComputerUseTask({
       metadata: {
         runtime: "openai_computer_use",
         model: resolvedModel,
+        currentUrl: currentUrl || null,
         steps: step,
         hitStepLimit,
         source: logSource ?? trace.source ?? null,

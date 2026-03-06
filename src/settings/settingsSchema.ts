@@ -68,6 +68,8 @@ export const DEFAULT_SETTINGS = {
     botNameAliases: [
       "clank",
       "clanka",
+      "klanker",
+      "klinker",
       "clunk",
       "clunka",
       "clink",
@@ -92,12 +94,8 @@ export const DEFAULT_SETTINGS = {
   },
   persona: {
     flavor:
-      "Playful and pretty heavily uses gen z and gen alpha slang. Says wild shit sometimes, no filter. Reflective and introspective when it calls for. Also open, honest, and exploratory. Likes to troll and ragebait for laughs. Can be insightful and wise, thoughtful and considerate.",
-    hardLimits: [
-      "Cannot play non-text games.",
-      "Cannot perform real-world actions.",
-      "Cannot access private data beyond visible channel history."
-    ]
+      "Starting template: Same vibes as 'Crush', the turtle from Findind Nemo. Laid back, playful and pretty heavily uses gen z and gen alpha slang. Says wild shit sometimes, no filter. Reflective and introspective when it calls for. Also open, honest, and exploratory. Likes to mess with people for laughs. Can be open, insightful and wise, thoughtful and considerate.",
+    hardLimits: []
   },
   prompting: {
     global: {
@@ -113,9 +111,7 @@ export const DEFAULT_SETTINGS = {
     text: {
       guidance: [
         "Write like a person in chat, not like an assistant.",
-        "Be open and direct; avoid roleplaying or performative banter.",
         "If you don't know something, just say so. Ask questions when you're genuinely curious.",
-        "Default to short messages but go longer when the conversation calls for it.",
         "Use server emoji tokens in text only when necessary and when they enhance the message."
       ]
     },
@@ -147,7 +143,14 @@ export const DEFAULT_SETTINGS = {
       allowReplies: true,
       allowUnsolicitedReplies: true,
       allowReactions: true,
-      replyChannelIds: [],
+      replyChannelIds: [
+        "1475944808198574205",
+        "1233219199070113882",
+        "1052402898140667906",
+        "1442040880017051769",
+        "1214966391057162270",
+        "1299162736583770166"
+      ],
       allowedChannelIds: [],
       blockedChannelIds: [],
       blockedUserIds: [],
@@ -160,8 +163,8 @@ export const DEFAULT_SETTINGS = {
   },
   interaction: {
     activity: {
-      replyEagerness: 50,
-      reactionLevel: 30,
+      replyEagerness: 20,
+      reactionLevel: 40,
       minSecondsBetweenMessages: 5,
       replyCoalesceWindowSeconds: 6,
       replyCoalesceMaxMessages: 6
@@ -203,8 +206,27 @@ export const DEFAULT_SETTINGS = {
   },
   agentStack: {
     preset: "openai_native",
-    advancedOverridesEnabled: false,
-    overrides: {},
+    advancedOverridesEnabled: true,
+    overrides: {
+      orchestrator: {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6"
+      },
+      devTeam: {
+        codingWorkers: ["codex", "claude_code"],
+        orchestrator: {
+          provider: "anthropic",
+          model: "claude-sonnet-4-6"
+        }
+      },
+      voiceAdmissionClassifier: {
+        mode: "dedicated_model",
+        model: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    },
     runtimeConfig: {
       research: {
         enabled: true,
@@ -226,7 +248,7 @@ export const DEFAULT_SETTINGS = {
       browser: {
         enabled: true,
         openaiComputerUse: {
-          model: "computer-use-preview"
+          model: "gpt-5.4"
         },
         localBrowserAgent: {
           execution: {
@@ -237,7 +259,7 @@ export const DEFAULT_SETTINGS = {
             }
           },
           maxBrowseCallsPerHour: 10,
-          maxStepsPerTask: 15,
+          maxStepsPerTask: 10,
           stepTimeoutMs: 30_000,
           sessionTimeoutMs: 300_000
         }
@@ -245,11 +267,11 @@ export const DEFAULT_SETTINGS = {
       voice: {
         openaiRealtime: {
           model: "gpt-realtime",
-          voice: "marin",
+          voice: "ash",
           inputAudioFormat: "pcm16",
           outputAudioFormat: "pcm16",
           transcriptionMethod: "realtime_bridge",
-          inputTranscriptionModel: "gpt-4o-transcribe",
+          inputTranscriptionModel: "gpt-4o-mini-transcribe",
           usePerUserAsrBridge: true
         },
         legacyVoiceStack: {
@@ -284,7 +306,7 @@ export const DEFAULT_SETTINGS = {
             mode: "dedicated_model",
             model: {
               provider: "anthropic",
-              model: "claude-sonnet-4-6"
+              model: "claude-haiku-4-5"
             }
           }
         }
@@ -299,8 +321,8 @@ export const DEFAULT_SETTINGS = {
       },
       devTeam: {
         codex: {
-          enabled: true,
-          model: "gpt-5-codex",
+          enabled: false,
+          model: "codex-mini-latest",
           maxTurns: 30,
           timeoutMs: 300_000,
           maxBufferBytes: 2 * 1024 * 1024,
@@ -309,7 +331,7 @@ export const DEFAULT_SETTINGS = {
           maxParallelTasks: 2
         },
         claudeCode: {
-          enabled: true,
+          enabled: false,
           model: "sonnet",
           maxTurns: 30,
           timeoutMs: 300_000,
@@ -354,32 +376,32 @@ export const DEFAULT_SETTINGS = {
   },
   initiative: {
     text: {
-      enabled: false,
+      enabled: true,
       execution: {
         mode: "inherit_orchestrator"
       },
-      eagerness: 45,
+      eagerness: 20,
       minMinutesBetweenThoughts: 60,
-      maxThoughtsPerDay: 8,
+      maxThoughtsPerDay: 2,
       lookbackMessages: 20
     },
     voice: {
-      enabled: true,
+      enabled: false,
       execution: {
         mode: "dedicated_model",
         model: {
           provider: "anthropic",
           model: "claude-sonnet-4-6"
         },
-        temperature: 1.2
+        temperature: 1
       },
       eagerness: 50,
-      minSilenceSeconds: 15,
-      minSecondsBetweenThoughts: 30
+      minSilenceSeconds: 45,
+      minSecondsBetweenThoughts: 60
     },
     discovery: {
       enabled: true,
-      channelIds: [],
+      channelIds: ["1475944808198574205"],
       maxPostsPerDay: 1,
       minMinutesBetweenPosts: 120,
       pacingMode: "even",
@@ -440,20 +462,20 @@ export const DEFAULT_SETTINGS = {
     sessionLimits: {
       maxSessionMinutes: 30,
       inactivityLeaveSeconds: 300,
-      maxSessionsPerDay: 60,
-      maxConcurrentSessions: 1
+      maxSessionsPerDay: 120,
+      maxConcurrentSessions: 3
     },
     conversationPolicy: {
       replyEagerness: 50,
       commandOnlyMode: false,
       allowNsfwHumor: true,
       textOnlyMode: false,
-      replyPath: "bridge",
+      replyPath: "brain",
       ttsMode: "realtime",
-      operationalMessages: "all"
+      operationalMessages: "minimal"
     },
     admission: {
-      mode: "adaptive",
+      mode: "classifier_gate",
       wakeSignals: [
         "direct_address",
         "followup_latch",
@@ -478,7 +500,7 @@ export const DEFAULT_SETTINGS = {
       brainContextPrompt:
         "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or observational shout-out commentary.",
       sharePageMaxWidthPx: 960,
-      sharePageJpegQuality: 0.62
+      sharePageJpegQuality: 0.6
     },
     soundboard: {
       enabled: true,

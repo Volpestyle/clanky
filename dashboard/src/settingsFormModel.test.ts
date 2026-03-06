@@ -49,6 +49,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.replyFollowupMaxMemoryLookupCalls, 2);
   assert.equal(form.replyFollowupMaxImageLookupCalls, 2);
   assert.equal(form.replyFollowupToolTimeoutMs, 10000);
+  assert.equal(form.browserOpenAiComputerUseModel, "gpt-5.4");
   assert.equal(form.browserLlmProvider, "anthropic");
   assert.equal(form.browserLlmModel, "claude-sonnet-4-5-20250929");
   assert.equal(form.codeAgentProvider, "claude-code");

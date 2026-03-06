@@ -39,8 +39,11 @@ export function BrowserSettingsSection({
                   type="text"
                   value={form.browserOpenAiComputerUseModel}
                   onChange={set("browserOpenAiComputerUseModel")}
-                  placeholder="computer-use-preview"
+                  placeholder="gpt-5.4"
                 />
+                <p className="status-msg info">
+                  Uses OpenAI&apos;s GA `computer` tool. `gpt-5.4` is the recommended default.
+                </p>
               </div>
             </div>
           ) : (

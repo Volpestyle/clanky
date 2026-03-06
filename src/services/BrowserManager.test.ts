@@ -54,3 +54,29 @@ test("BrowserManager screenshot returns a base64 data URL", async () => {
 
   clearInterval(Reflect.get(manager, "staleTimer") as ReturnType<typeof setInterval>);
 });
+
+test("BrowserManager mouseDrag uses mouse down, move, and up", async () => {
+  const manager = new BrowserManager();
+  const calls: Array<{ sessionKey: string; args: string[]; timeoutMs: number }> = [];
+
+  Reflect.set(
+    manager,
+    "runAgentBrowser",
+    async (sessionKey: string, args: string[], timeoutMs = 0) => {
+      calls.push({ sessionKey, args, timeoutMs });
+      return { stdout: "ok", stderr: "" };
+    }
+  );
+
+  await manager.mouseDrag("session-1", [{ x: 10, y: 20 }, { x: 30, y: 40 }, { x: 50, y: 60 }], 7_654);
+
+  assert.deepEqual(calls, [
+    { sessionKey: "session-1", args: ["mouse", "move", "10", "20"], timeoutMs: 7_654 },
+    { sessionKey: "session-1", args: ["mouse", "down", "left"], timeoutMs: 7_654 },
+    { sessionKey: "session-1", args: ["mouse", "move", "30", "40"], timeoutMs: 7_654 },
+    { sessionKey: "session-1", args: ["mouse", "move", "50", "60"], timeoutMs: 7_654 },
+    { sessionKey: "session-1", args: ["mouse", "up", "left"], timeoutMs: 7_654 }
+  ]);
+
+  clearInterval(Reflect.get(manager, "staleTimer") as ReturnType<typeof setInterval>);
+});
