@@ -1,0 +1,49 @@
+flowchart LR
+    subgraph Discord["Discord Product Layer"]
+        User["User"]
+        Transport["Discord transport\nmessages, voice, threads, permissions"]
+        User --> Transport
+    end
+
+    subgraph Control["Agent Control Plane"]
+        Router["Session router\nsession key + preset resolution"]
+        Stack["Resolved agent stack\nharness + orchestrator + runtimes"]
+        Jobs["Job manager\nbackground jobs + progress events"]
+        Transport --> Router
+        Router --> Stack
+        Stack --> Jobs
+    end
+
+    subgraph Harness["Harness Layer"]
+        Orchestrator["Top-level orchestrator agent"]
+        Memory["Local product tools\nmemory, directives, music, automations"]
+        Router --> Orchestrator
+        Orchestrator --> Memory
+    end
+
+    subgraph Capabilities["Capability Runtimes"]
+        Search["Research runtime\nOpenAI web search or local search"]
+        Browser["Browser runtime\nOpenAI computer use or local browser agent"]
+        Voice["Voice runtime\nOpenAI Realtime or legacy voice stack"]
+        Orchestrator --> Search
+        Orchestrator --> Browser
+        Orchestrator --> Voice
+    end
+
+    subgraph DevTeam["Dev Team"]
+        DevOrch["Dev orchestrator"]
+        Codex["Codex worker"]
+        Claude["Claude Code worker"]
+        Review["Review agent"]
+        Orchestrator --> DevOrch
+        DevOrch --> Codex
+        DevOrch --> Claude
+        Codex --> Review
+        Claude --> Review
+        Review --> Jobs
+    end
+
+    Search --> Jobs
+    Browser --> Jobs
+    Voice --> Jobs
+    Jobs --> Transport

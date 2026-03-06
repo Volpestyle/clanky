@@ -7,7 +7,7 @@ flowchart TD
     D -- passes --> E[Transcription]
 
     E --> F[evaluateVoiceReplyDecision\ndeterministic gates + brain decides]
-    F -- "deny: bot_turn_open\neagerness too low\nsilence window needed" --> SKIP[Skip / defer turn]
+    F -- "deny: output lock\n(public reason bot_turn_open),\neagerness too low,\nsilence window needed" --> SKIP[Skip / defer turn]
     F -- allow --> G{resolveRealtimeReplyStrategy}
 
     G -- "replyPath == native\nOR brainProvider == native" --> NATIVE

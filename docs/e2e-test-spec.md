@@ -15,18 +15,12 @@ Validates voice-chat behavior across all runtime modes with golden utterance cas
 
 ```sh
 bun run replay:voice-golden
-# or
-bun run test:voice-golden
-# or (voice golden + text-mode web-search regression)
-bun run test:golden
 ```
 
 ### Run Live APIs (real perf)
 
 ```sh
 bun run replay:voice-golden:live
-# or
-bun run test:voice-golden:live
 ```
 
 By default judge scoring is enabled in both simulated and live runs. Use `--no-judge` to disable it.
@@ -49,20 +43,20 @@ bun scripts/voiceGoldenHarness.ts \
 
 Additional flags: `--judge`, `--allow-missing-credentials`, `--max-cases <n>`, `--no-judge`
 
-### Live Test Env Vars
+### Live Harness Configuration
 
-Used by `src/voice/voiceGoldenValidation.live.smoke.test.ts`:
+The voice golden harness is configured via CLI flags (`scripts/voiceGoldenHarness.ts`), not dedicated `RUN_LIVE_*` env gates.
 
-- `RUN_LIVE_VOICE_GOLDEN=1`
-- `LIVE_VOICE_GOLDEN_MODES`
-- `LIVE_VOICE_GOLDEN_ITERATIONS`
-- `LIVE_VOICE_GOLDEN_MAX_CASES`
-- `LIVE_VOICE_GOLDEN_ALLOW_MISSING_CREDENTIALS`
-- `LIVE_VOICE_GOLDEN_ACTOR_PROVIDER`, `LIVE_VOICE_GOLDEN_ACTOR_MODEL`
-- `LIVE_VOICE_GOLDEN_DECIDER_PROVIDER`, `LIVE_VOICE_GOLDEN_DECIDER_MODEL`
-- `LIVE_VOICE_GOLDEN_JUDGE_PROVIDER`, `LIVE_VOICE_GOLDEN_JUDGE_MODEL`
-- `LIVE_VOICE_GOLDEN_NO_JUDGE=1`
-- `LIVE_VOICE_GOLDEN_MIN_PASS_RATE`
+Use:
+
+- `--mode live`
+- `--modes`
+- `--iterations`
+- `--actor-provider`, `--actor-model`
+- `--decider-provider`, `--decider-model`
+- `--judge`, `--no-judge`, `--judge-provider`, `--judge-model`
+- `--allow-missing-credentials`
+- `--max-cases`
 
 ### Credential Requirements
 
@@ -109,7 +103,7 @@ This provides **full physical layer coverage** that golden tests cannot achieve.
          │
     ┌────▼────┐
     │ Test    │──── polls ────▶ Dashboard API
-    │ Harness │                /api/voice/recent-transcripts
+    │ Harness │                /api/voice/history/sessions*
     │ (Bun)   │
     └─────────┘
 ```
@@ -122,7 +116,7 @@ This provides **full physical layer coverage** that golden tests cannot achieve.
 4. **Processing**: System bot receives audio → STT → LLM decision → LLM generation → TTS → audio out
 5. **Capture**: Driver bot records audio bytes from system bot
 6. **Assertion**: Test validates received audio meets expectations
-7. **Transcript verification** (optional): Test polls dashboard API for TTS transcript events to disambiguate from music audio
+7. **Voice-history verification** (optional): Test can query dashboard voice-history APIs to disambiguate bot speech from music audio
 
 ## Infrastructure Requirements
 
@@ -428,57 +422,16 @@ When music is playing, the system bot sends both TTS voice responses and music a
 
 This makes it impossible to reliably test "does the bot respond to a voice question while music is playing?" using byte counting alone.
 
-### Solution: Dashboard Transcript API
+### Current Dashboard Voice History APIs
 
-Expose recent voice transcripts via a dashboard API endpoint. The voice session manager already emits `openai_realtime_transcript` events with `transcriptSource=output` for TTS and `transcriptSource=input` for user speech.
+The dashboard already exposes persisted voice history:
 
-#### Planned Endpoint
+- `GET /api/voice/history/sessions?sinceHours=<n>&limit=<n>`
+- `GET /api/voice/history/sessions/:sessionId/events`
 
-```
-GET /api/voice/recent-transcripts?since=<epoch_ms>
-```
+These endpoints can be used to disambiguate output events from raw audio-byte detection when needed. The current E2E harness still primarily uses `waitForAudioResponse()` byte presence checks.
 
-**Response:**
-```json
-[
-  {
-    "timestamp": 1709600323000,
-    "transcript": "Sicko Mode's loading up—get ready for that switch up!",
-    "source": "output",
-    "sessionId": "e6bf2059-..."
-  },
-  {
-    "timestamp": 1709600320000,
-    "transcript": "Hey Clanker, play Sicko Mode by Travis Scott",
-    "source": "input",
-    "speaker": "oathkeeper",
-    "sessionId": "e6bf2059-..."
-  }
-]
-```
-
-#### Implementation Plan
-
-1. **Ring buffer in VoiceSessionManager**: Store the last ~50 transcript events (both input and output) with timestamps
-2. **Dashboard route**: `GET /api/voice/recent-transcripts` reads from the buffer, filters by `since` param
-3. **Test helper on DriverBot or dashboard.ts**: `waitForTranscript(since, source, timeoutMs)` polls the endpoint
-
-#### Test Usage
-
-```typescript
-// Record timestamp before playing fixture
-const before = Date.now();
-
-// Play the followup question
-await driver.playAudio(followupFixture);
-
-// Poll for a TTS output transcript (not music bytes)
-const transcript = await waitForOutputTranscript(before, 15_000);
-assert.ok(transcript, "Bot should respond to followup with TTS while music plays");
-console.log(`[Lifecycle] Bot said: "${transcript.transcript}"`);
-```
-
-This provides **zero-ambiguity TTS detection** — the transcript event only fires for voice responses, never for music playback.
+In the current harness, this is an optional extension point. Existing suites still use byte-level `waitForAudioResponse()` checks and do not yet include a built-in transcript/history polling helper.
 
 ## Pipeline Presets & CLI Flags
 
@@ -554,10 +507,10 @@ bun run test:e2e
 ### Run Single Suite
 
 ```sh
-RUN_E2E_VOICE_PHYSICAL=1 bun test tests/e2e/voicePhysicalHarness.test.ts
-RUN_E2E_MUSIC=1 bun test tests/e2e/voiceMusicPlayNow.test.ts
-RUN_E2E_CROWDED=1 bun test tests/e2e/voiceCrowdedChannel.test.ts
-RUN_E2E_TEXT=1 bun test tests/e2e/textHarness.test.ts
+bun run test:e2e:voice
+bun run test:e2e:text
+RUN_E2E_MUSIC=1 bun run test:e2e -- tests/e2e/voiceMusicPlayNow.test.ts
+RUN_E2E_CROWDED=1 bun run test:e2e -- tests/e2e/voiceCrowdedChannel.test.ts
 ```
 
 ### Run via NPM Script

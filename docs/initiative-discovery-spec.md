@@ -15,7 +15,7 @@ The discovery subsystem enriches discovery posts with fresh external content by 
 1. On each discovery cycle that is due, `DiscoveryService.collect()` gathers candidate links from enabled sources.
 2. Candidates are filtered by freshness window and repost-avoid window.
 3. Highest-scoring candidates are injected into the discovery-post prompt as optional inspiration.
-4. The bot generates one standalone message; if `requireLink` is enabled, the post must include at least one discovered link.
+4. The bot generates one standalone message; link inclusion is probabilistic via `discovery.linkChancePercent` and bounded by `discovery.maxLinksPerPost`.
 5. Any links actually posted are recorded in the `shared_links` table for dedupe on later cycles.
 
 ## Supported Sources
@@ -49,9 +49,9 @@ Under `Autonomous Initiative Posts -> Creative Discovery`:
 - `discovery.enabled`: master toggle.
 - `discovery.linkChancePercent`: probability that a discovery post should include links.
 - `discovery.maxLinksPerPost`: upper bound on links per post.
-- `discovery.candidateCount`: number of candidates injected into the prompt.
-- `discovery.freshnessWindowHours`: maximum age of candidate content.
-- `discovery.repostAvoidWindowHours`: dedupe cooldown after posting a link.
+- `discovery.maxCandidatesForPrompt`: number of candidates injected into the prompt.
+- `discovery.freshnessHours`: maximum age of candidate content.
+- `discovery.dedupeHours`: dedupe cooldown after posting a link.
 - `discovery.randomness`: randomness factor applied during ranking.
 - `discovery.sourceFetchLimit`: per-source fetch cap.
 - Source toggles and source lists (subreddits, YouTube channel IDs, RSS feeds, X handles, Nitter base URL).

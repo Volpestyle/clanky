@@ -3,6 +3,7 @@
 > **Scope:** Voice pipeline architecture — what stages audio passes through, which providers are active, and what settings configure each stage.
 > Operator-facing activity paths and setting map: [`clanker-activity.md`](clanker-activity.md)
 > Barge-in and noise rejection: [`voice-interruption-policy.md`](voice-interruption-policy.md)
+> Assistant reply/output lifecycle: [`voice-output-state-machine.md`](voice-output-state-machine.md)
 
 This document describes the voice chat pipeline as a linear sequence of stages, from audio input to voice output. Each stage is independently configurable, and the active set of stages depends on which **reply path** is selected.
 
@@ -153,7 +154,7 @@ Evaluated in order by `evaluateVoiceReplyDecision()` in `voiceReplyDecision.ts`:
 |---|---|---|---|
 | 1 | Missing transcript | `missing_transcript` | deny |
 | 2 | Pending command followup | `pending_command_followup` | allow |
-| 3 | Output lock (bot speaking, non-music) | `bot_turn_open` | deny (retry after 1400ms) |
+| 3 | Output lock (assistant output phase, non-music) | `bot_turn_open` (coarse) / `outputLockReason` (authoritative) | deny (retry after 1400ms) |
 | 4 | Command-only + direct address | `command_only_direct_address` | allow |
 | 5 | Command-only + not addressed | `command_only_not_addressed` | deny |
 | 6 | Music playing + not awake | `music_playing_not_awake` | deny |

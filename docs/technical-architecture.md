@@ -2,6 +2,9 @@
 
 This document explains how the bot is wired, how data moves through the system, and the key runtime flows.
 
+For the proposed preset-driven future architecture, including `openai_native` and hybrid Anthropic/OpenAI stacks, see:
+- `docs/preset-driven-agent-stack-spec.md`
+
 ## 1. High-Level Components
 
 Code entrypoint:
@@ -12,6 +15,7 @@ Core runtime:
 - `src/bot/*`: extracted bot domains (`automationControl`, `discoverySchedule`, `queueGateway`, `replyAdmission`, `replyFollowup`, `startupCatchup`, `voiceReplies`).
 - `src/llm.ts`: model provider abstraction (OpenAI, Anthropic, xAI/Grok, or Claude Code), usage + cost logging, embeddings, image/video generation, ASR, and TTS.
 - `src/llmClaudeCode.ts`: Claude Code CLI invocation/parsing helpers used by `LLMService`.
+- `src/llmCodex.ts`: OpenAI Responses/Codex integration used by the code-agent runtime.
 - `docs/claude-code-brain-session-mode.md`: Claude Code persistent-brain behavior and how it differs from stateless API providers.
 - `src/memory.ts`: append-only daily journaling + LLM-based fact extraction + hybrid memory retrieval (lexical + vector).
 - `src/discovery.ts`: external link discovery for discovery posts.
@@ -19,11 +23,15 @@ Core runtime:
 - `src/store/*`: settings normalization and store helper utilities.
 - `src/voice/voiceSessionManager.ts`: voice orchestration and session lifecycle.
 - `src/voice/voiceJoinFlow.ts`, `src/voice/voiceStreamWatch.ts`, `src/voice/voiceOperationalMessaging.ts`, `src/voice/voiceDecisionRuntime.ts`: extracted voice domains.
+- `docs/voice-output-state-machine.md`: canonical assistant reply/output phase model and incident workflow.
 - `src/publicHttpsEntrypoint.ts`: optional Cloudflare Quick Tunnel runtime for exposing local dashboard/API over public HTTPS.
 - `src/screenShareSessionManager.ts`: tokenized browser screen-share session lifecycle and frame relay into voice stream-watch ingest.
 
 Agents:
 - `src/agents/browseAgent.ts`: headless browser agent — LLM + browser tool loop for navigating websites and extracting information.
+- `src/agents/codeAgent.ts`: code-agent orchestration (Claude Code + Codex providers), including one-shot tasks and session-backed turns.
+- `src/agents/codexAgent.ts`: Codex-backed `SubAgentSession` implementation.
+- `src/agents/subAgentSession.ts`: shared session manager + lifecycle for long-running tool sessions (`browser`, `code`).
 
 Tool definitions:
 - `src/tools/browserTools.ts`: browser tool schemas + execution wrappers for the browse agent.
@@ -57,6 +65,7 @@ Brain (LLM with tool-use)
     ├── memory_search / memory_write   →  persistent facts + vector recall
     ├── web_search                     →  live web search + page inspection
     ├── browser_browse                 →  headless browser agent (navigate, click, extract)
+    ├── code_task                      →  code agent runtime (Claude Code or Codex)
     ├── music_*                        →  queue management + playback control
     ├── image/video/gif generation     →  media creation via model APIs
     └── MCP tools                      →  extensible third-party capabilities
@@ -92,7 +101,17 @@ Unlike durable memory facts, adaptive directives are injected into prompts direc
 
 ### Host-Access Tools
 
-No host-access coding tool is currently registered in the runtime. `docs/agent-code.md` is a forward-looking design doc for a possible future `code_task` integration, not current behavior.
+`code_task` is now a shipped tool in text and voice tool loops:
+
+- text: `src/tools/replyTools.ts`
+- voice: `src/voice/voiceToolCalls.ts`
+
+Execution is routed through `src/agents/codeAgent.ts` and gated by settings:
+
+- `codeAgent.enabled`
+- `codeAgent.allowedUserIds` (allowlist)
+- `codeAgent.maxTasksPerHour`
+- `codeAgent.maxParallelTasks`
 
 ### Tool Composition Example
 
@@ -221,9 +240,11 @@ Common `actions.kind` values in current runtime:
 - Adaptive directives: `adaptive_style_note` (current internal action-log kind for directive lifecycle events)
 - Search + video context: `search_call`, `search_error`, `video_context_call`, `video_context_error`
 - Agent tools: `browser_browse_call`, `browser_tool_step`
+- Code agent: `code_agent_call`, `code_agent_error`
 - Voice runtime: `voice_session_start`, `voice_session_end`, `voice_turn_in`, `voice_turn_out`, `voice_runtime`, `voice_intent_detected`, `voice_error`
 - Speech services: `asr_call`, `asr_error`, `tts_call`, `tts_error`
 - Automation lifecycle: `automation_created`, `automation_updated`, `automation_run`, `automation_error`
+- Reflection lifecycle: `memory_reflection_start`, `memory_reflection_complete`, `memory_reflection_error`
 - Runtime + generic failures: `bot_runtime`, `bot_error`
 
 These power the activity stream and metrics/cost widgets in the dashboard.

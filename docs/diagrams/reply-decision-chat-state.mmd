@@ -3,7 +3,7 @@ stateDiagram-v2
     AudioTurnCaptured --> AdmissionGate : evaluateVoiceReplyDecision
 
     AdmissionGate --> Denied : missing_transcript / eagerness_disabled / command_only_not_addressed / music_playing_not_awake / classifier_deny
-    AdmissionGate --> Deferred : bot_turn_open
+    AdmissionGate --> Deferred : output lock\n(public reason bot_turn_open)
     AdmissionGate --> Admitted : direct_address / pending_command_followup / classifier_allow / generation_decides
 
     Deferred --> AudioTurnCaptured : deferred flush retry

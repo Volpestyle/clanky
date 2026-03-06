@@ -26,7 +26,7 @@ the readable/writable sides haven't finished yet.
 ### Bun-level fix (not applied — we bypass instead)
 Two patch options if contributing upstream:
 
-**Option A — Harden `isClosed()` in `src/js/internal/streams/utils.ts`:**
+**Option A — Harden `isClosed()` in Bun source (src/js/internal/streams/utils.ts in the Bun repo):**
 Refuse to believe `closed === true` when `destroyed`, `readableEnded`,
 `writableEnded`, and `writableFinished` are all still false.
 

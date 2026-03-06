@@ -26,7 +26,7 @@ sequenceDiagram
     Voice->>Store: log voice_turn_addressing
 
     alt denied
-      alt reason is bot_turn_open
+      alt denied by output lock\n(public reason bot_turn_open,\nsee outputLockReason)
         Voice->>Voice: queueDeferredBotTurnOpenTurn(...)
       else hard deny
         Voice-->>Voice: stop turn

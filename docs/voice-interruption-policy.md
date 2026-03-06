@@ -93,18 +93,84 @@ Our bot uses neither path. Audio I/O goes through Discord, not OpenAI:
 
 OpenAI's VAD never "hears" the user — it only receives text items. It has no way to detect that someone is talking over the bot's audio output, because that audio is playing in Discord, not through an OpenAI media channel.
 
-So we implement barge-in manually via `interruptBotSpeechForBargeIn()`:
+So we implement barge-in manually via `shouldBargeIn()` → `interruptBotSpeechForBargeIn()`.
 
-1. Discord voice activity (subprocess VAD) detects a user speaking while `botTurnOpen = true`.
-2. `isUserAllowedToInterruptReply()` checks the active interruption policy.
-3. If allowed:
-   - Sends `response.cancel` to the Realtime API to stop generation.
-   - Sends `conversation.item.truncate` so the API's conversation history only contains what was actually spoken.
-   - Calls `resetBotAudioPlayback()` to stop the subprocess audio player.
-   - Sets `botTurnOpen = false` to release the output lock.
-   - Unducks music volume if it was reduced for bot speech.
-   - Queues a deferred `interrupted_reply` action so the bot can retry after processing the user's turn.
-4. If blocked → user speech is ignored, bot continues speaking.
+### Two Distinct Concerns
+
+The system separates two questions:
+
+1. **"Is the output channel busy?"** — `getReplyOutputLockState()` / `isBargeInInterruptTargetActive()`. Checks whether the bot is occupying the audio channel (pending response, active generation, subprocess playing). This is the precondition.
+
+2. **"Should we interrupt right now?"** — `shouldBargeIn()`. The output lock being held doesn't mean the user is interrupting. The bot might not have started speaking, might be draining cached frames from a completed response, or the user might have been talking before the response was created. These gates narrow the decision to match the actual intent: **the user is intentionally talking over active bot speech**.
+
+### Gate Checks (`shouldBargeIn`)
+
+```
+User audio arrives during output lock
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 1. Pre-audio guard                                          │
+│    Condition: botTurnOpen=false AND botTurnOpenAt=0          │
+│    Blocks unless pendingResponse.audioReceivedAt > 0         │
+│    Why: User can't interrupt something they haven't heard.   │
+│    Scenario: User speaking while waiting for tool call,      │
+│    new response just created but no audio generated yet.     │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 2. Active flow guard                                         │
+│    Condition: !isAudioActivelyFlowing AND !botTurnOpen        │
+│    Blocks: always                                            │
+│    Why: Bot finished generating audio, subprocess is just    │
+│    draining buffered Opus frames. Response is effectively    │
+│    complete — barge-in would truncate a finished sentence.   │
+│    isAudioActivelyFlowing = audio delta within last 200ms.   │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 3. Echo guard                                                │
+│    Condition: botTurnOpenAt > 0 AND age < 1500ms             │
+│    Blocks: always                                            │
+│    Why: Bot's own audio echoing through user's mic.          │
+│    Constant: BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS (1500)        │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 4. Assertiveness check                                       │
+│    Min capture: BARGE_IN_MIN_SPEECH_MS (700ms) of audio      │
+│    Signal gate: isCaptureSignalAssertive (not near-silent)   │
+│    Bot speaking: isCaptureSignalAssertiveDuringBotSpeech     │
+│      peak ≥ 0.05, active ratio ≥ 0.06 (stricter)            │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 5. Interruption policy check                                 │
+│    isUserAllowedToInterruptReply({ policy, userId })         │
+│    See "Policy Object" section above.                        │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼  ALLOWED → interruptBotSpeechForBargeIn()
+```
+
+### Interrupt Execution (`interruptBotSpeechForBargeIn`)
+
+1. Sends `response.cancel` to the Realtime API to stop generation.
+2. Sends `conversation.item.truncate` so the API's conversation history only contains what was actually spoken.
+3. Calls `resetBotAudioPlayback()` to stop the subprocess audio player.
+4. Sets `botTurnOpen = false` to release the output lock.
+5. Unducks music volume if it was reduced for bot speech.
+6. **Post-cancel guard**: Checks `responseCancelSucceeded`. If the cancel failed (response already completed server-side due to event loop race), the interrupt only stops subprocess playback — it does NOT queue a retry utterance or set full suppression. This prevents phantom retries and audio suppression when the response was already done.
+7. If cancel succeeded: queues a deferred `interrupted_reply` action and sets full barge-in suppression (`BARGE_IN_SUPPRESSION_MAX_MS`, 12s).
+8. If cancel failed: sets short echo-guard suppression (`BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS`, 1.5s) only.
+
+### Why the Event Loop Race Exists
+
+The `response_done` WebSocket event and user audio IPC data are separate async event sources on the same event loop. If a user audio chunk arrives before the `response_done` handler clears `pendingResponse`, the output lock is still held and barge-in can fire on an already-completed response. The active flow guard (gate 2) catches most of these, and the post-cancel guard (step 6) handles any that slip through.
 
 ---
 

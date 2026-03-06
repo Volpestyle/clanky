@@ -7,14 +7,14 @@ flowchart TD
         DirectPath["Immediate reply path\nresponse required"]
         Unsolicited{"allowUnsolicitedReplies enabled?"}
         RecentWindow{"Bot already in recent\nmessage window?"}
-        RecentPath["Recent-window follow-up path\nreplyLevelReplyChannels or\nreplyLevelOtherChannels shapes reply"]
+        RecentPath["Recent-window follow-up path\nactivity.replyEagerness shapes reply"]
         NoImmediate["No immediate unsolicited reply\nmessage is stored for future continuity"]
     end
 
     subgraph ThoughtLoop["Text thought loop"]
         Tick["60s in-process timer"]
         ThoughtEnabled{"textThoughtLoop.enabled\nand under caps/cooldown?"}
-        ReplyScope["Reply/lurk scope\nreplyChannelIds set => explicit list\nblank => all non-private allowed text channels"]
+        ReplyScope["Reply/lurk scope\nreplyChannelIds are explicit-only\nblank => no thought-loop candidates"]
         CandidateRules["Candidate channel must:\n- be allowed\n- have recent human activity < 24h\n- not already contain bot in recent window"]
         ThoughtDecision["LLM decides whether to chime in\ntextThoughtLoop.eagerness shapes this"]
     end

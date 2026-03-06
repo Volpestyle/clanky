@@ -115,6 +115,7 @@ The thought loop is:
 - timer-driven
 - in-process only
 - checked every 60 seconds
+- scoped to explicit `permissions.replyChannelIds`
 - capped by cooldown and daily limits
 - limited to channels with recent human activity
 - intentionally separate from the normal unsolicited-reply admission flag
@@ -147,7 +148,6 @@ These are not normal conversational chime-ins. They are standalone posts based o
 Behavior:
 
 - only allowed in explicit `discovery.channelIds`
-- not affected by the default reply-channel fallback
 - uses discovery pacing/schedule settings, not thought-loop cadence
 - does not require recent human activity in the channel
 
@@ -273,8 +273,6 @@ Current behavior:
 
 - if `replyChannelIds` is non-empty:
   - only those listed channels are reply channels
-- if `replyChannelIds` is empty:
-  - all non-private allowed text channels are treated as reply channels by default
 
 `non-private` here means:
 
@@ -320,20 +318,16 @@ Text reply-channel defaults do not affect voice session eligibility.
   - does not disable direct-address replies
   - does not disable the text thought loop
 
-- `activity.replyLevelReplyChannels`
-  - eagerness for admitted unsolicited replies in reply channels (0–100)
-  - most relevant when Clanker is already in the recent window
-
-- `activity.replyLevelOtherChannels`
-  - eagerness for admitted unsolicited replies in non-reply-channel contexts (0–100)
-  - matters much less if `replyChannelIds` is blank, because most public channels then become reply channels by default
+- `activity.replyEagerness`
+  - eagerness for admitted unsolicited replies (0–100)
+  - primarily affects recent-window follow-up and model skip behavior once the reply loop runs
 
 - `activity.minSecondsBetweenMessages`
   - global text spacing between bot messages
 
 ### Reply Eagerness Tiers
 
-The eagerness value (0–100) from `replyLevelReplyChannels` or `replyLevelOtherChannels` maps to graduated prompt tiers. The raw number is also exposed to the LLM so it has a continuous sense of the scale.
+The eagerness value (0–100) from `activity.replyEagerness` maps to graduated prompt tiers. The raw number is also exposed to the LLM so it has a continuous sense of the scale.
 
 | Range | Label | Prompt behavior |
 |-------|-------|-----------------|
@@ -616,8 +610,9 @@ This prevents the thought loop from piling on while Clanker is already active in
 
 ### Example D: `replyChannelIds` is blank
 
-- all non-private allowed text channels behave as reply channels by default
-- `replyLevelReplyChannels` becomes the de facto public-channel unsolicited reply slider
+- no channels are treated as reply channels
+- the text thought loop has no eligible channel candidates and will not post
+- direct-address replies still work
 
 ### Example E: `discovery.channelIds` is blank
 
@@ -651,7 +646,7 @@ This prevents the thought loop from piling on while Clanker is already active in
 - thought-loop scheduler check cadence: 60 seconds
 - thought-loop active-channel requirement: recent human activity within the last 24 hours
 - discovery channel selection: explicit-only
-- empty `replyChannelIds`: default to all non-private allowed text channels
+- empty `replyChannelIds`: disables reply-channel classification and thought-loop candidate scanning
 - voice thought engine defaults to enabled
 - voice thought timing is silence/cooldown driven, not a 60-second global poll
 

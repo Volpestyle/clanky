@@ -31,8 +31,7 @@ The screen-share link system enables the bot to send a temporary clickable link 
   - active voice session in guild
   - requester in same VC
   - stream watch enabled
-  - `voice.mode` supports stream-watch commentary:
-    `openai_realtime`, `gemini_realtime`, `elevenlabs_realtime`, or `voice_agent` with a configured vision fallback provider (`anthropic`, `xai`, or `claude-code`)
+  - current voice session supports stream-watch commentary (`supportsStreamWatchCommentary`) — either native realtime frame commentary support or configured vision-fallback commentary
 - Frame ingest revalidates requester/target VC presence and auto-stops the share session if either leaves.
 - Commentary responses are tracked separately from conversation responses via `metadata: { source: "stream_watch_commentary" }`. New commentary is skipped while a previous one is in-flight, preventing stale frame descriptions from stacking up on the provider side.
 - Public ingress route-gating and token/header auth rules are defined in `docs/public-https-entrypoint-spec.md`.

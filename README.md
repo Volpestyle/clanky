@@ -121,6 +121,7 @@ Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details 
 | Doc | Description |
 |-----|-------------|
 | `docs/technical-architecture.md` | System architecture, data model, runtime flows |
+| `docs/preset-driven-agent-stack-spec.md` | Target spec for the preset-driven agent stack architecture and its `openai_native` profile |
 | `docs/clanker-activity.md` | Text activity model: direct replies, reply/lurk channels, thought loop, discovery |
 | `docs/agent-code.md` | Claude Code orchestrator design and implementation |
 | `docs/agent-browser.md` | Browser agent spec |

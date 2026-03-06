@@ -70,3 +70,47 @@ Filter examples:
 {job="clanker_runtime",kind="voice_runtime"}
 {job="clanker_runtime",agent="voice",level="error"}
 ```
+
+## Voice output incident workflow
+
+When a voice turn is transcribed correctly but the bot does not answer, use the
+assistant output state machine doc first:
+
+- [`voice-output-state-machine.md`](voice-output-state-machine.md)
+
+Start with these events:
+
+- `voice_turn_addressing`
+- `bot_audio_started`
+- `openai_realtime_response_done`
+- `openai_realtime_active_response_cleared_stale`
+
+Important interpretation rule:
+
+- top-level `reason="bot_turn_open"` is a coarse public deny label
+- `outputLockReason` is the authoritative blocker for reply/output lock incidents
+
+Suggested query:
+
+```logql
+{job="clanker_runtime",kind=~"voice_runtime|voice_turn_out"} |= "voice_turn_addressing"
+```
+
+Inspect these metadata fields together:
+
+- `outputLockReason`
+- `reason`
+- `msSinceAssistantReply`
+- `retryAfterMs`
+
+Common blockers:
+
+- `outputLockReason=bot_audio_buffered`
+- `outputLockReason=pending_response`
+- `outputLockReason=openai_active_response`
+- `outputLockReason=awaiting_tool_outputs`
+
+Operator notes:
+
+- if `outputLockReason=bot_audio_buffered` persists for more than a couple seconds after `openai_realtime_response_done`, suspect stale `clankvox` playback telemetry rather than real remaining speech
+- if a deferred turn keeps rescheduling, inspect whether `voice_activity_started` is followed by `voice_turn_dropped_silence_gate`; silence-only captures should not be treated the same as real live speech
