@@ -333,3 +333,102 @@ The 3 dead `src/llm/provider*.ts` files, legacy migration code, duplicate consta
 
 ### 5. Extract media attachment logic from `bot.ts`
 The image/video/GIF cascade is duplicated in 3 places. Pull into a `mediaAttachment.ts` module.
+
+---
+
+## Post-Refactor Re-Evaluation (March 6, 2026 — Evening)
+
+Four concurrent worktrees executed the decomposition plans. All merged cleanly to master with 2 minor reconciliation fixes. 702 tests passing, typecheck clean.
+
+### Before vs After
+
+| Metric | Before | After | Change |
+|--------|--------|-------|--------|
+| `bot.ts` | 5,428 lines | 2,112 lines | **-61%** |
+| `voiceSessionManager.ts` | 12,819 lines | 7,713 lines | **-40%** |
+| `llm.ts` | 2,119 lines | 559 lines | **-74%** |
+| `settingsNormalization.ts` | 1,969 lines | 1,668 lines | -15% |
+| `main.rs` (clankvox) | 2,299 lines | 1,208 lines | **-47%** |
+| `as any` casts (production) | 255+ | **0** | **-100%** |
+| `bot: any` params | many | **0** | **-100%** |
+| `manager: any` params | many | 39 (2 files) | Reduced |
+| Tests passing | 651 | 702 | +51 |
+| Test files | ~65 | 74 | +9 new |
+| Files in `src/bot/` | ~8 | 37 | +29 modules |
+| Files in `src/voice/` | ~45 | 60 | +15 modules |
+| Files in `src/llm/` | ~2 | 9 | +7 modules |
+| Largest file | 12,819 lines | 7,713 lines | -40% |
+| Total TypeScript | 105,118 lines | 114,321 lines | +9% (module boilerplate) |
+| Total test lines | 24,703 | 27,212 | +10% |
+
+### Top 15 Largest Files (After)
+
+| Rank | File | Lines |
+|------|------|-------|
+| 1 | `src/voice/voiceSessionManager.ts` | 7,713 |
+| 2 | `src/voice/voiceSessionManager.addressing.test.ts` | 5,959 |
+| 3 | `src/voice/voiceSessionManager.lifecycle.test.ts` | 3,246 |
+| 4 | `src/bot.replyDecisionPolicy.test.ts` | 2,419 |
+| 5 | `src/bot.ts` | 2,112 |
+| 6 | `src/voice/voiceToolCalls.ts` | 2,002 |
+| 7 | `dashboard/src/components/VoiceMonitor.tsx` | 1,940 |
+| 8 | `src/store/settingsNormalization.ts` | 1,668 |
+| 9 | `src/voice/voiceGoldenHarness.ts` | 1,642 |
+| 10 | `src/voice/turnProcessor.ts` | 1,631 |
+| 11 | `src/voice/voiceMusicPlayback.ts` | 1,599 |
+| 12 | `src/voice/voiceAsrBridge.ts` | 1,571 |
+| 13 | `src/bot/replyPipeline.ts` | 1,529 |
+| 14 | `src/voice/voiceStreamWatch.ts` | 1,405 |
+| 15 | `dashboard/src/components/settingsSections/VoiceModeSettingsSection.tsx` | 1,224 |
+
+### Revised Grades
+
+| Module | Before | After | Key Changes |
+|--------|--------|-------|-------------|
+| **Dashboard (React)** | B+ | **B+** | Unchanged — already well-decomposed |
+| **Agent framework** | A- | **A-** | Unchanged — already the best code |
+| **Memory system** | B+ | **A-** | Duplicated constants fixed, cleaner imports |
+| **Reply pipeline** | B- | **B+** | Typed via BotContext, `bot: any` eliminated, extracted into proper modules |
+| **Bot core** | C | **B+** | 5,428 → 2,112 lines. 13 new modules with BotContext. 7 new test files. Zero `any` casts. |
+| **LLM service** | C+ | **A-** | 2,119 → 559 lines. 7 domain modules. Dead code gone. |
+| **Settings/config** | C | **B+** | 224 `as any` → 0. Typed section normalizers. `Settings` type flows end-to-end. |
+| **Voice session manager** | D+ | **C+/B-** | 12,819 → 7,713 lines. 9 extracted modules. Still 39 `manager: any` in 2 files. Still the largest file. |
+| **Clankvox (Rust)** | B- | **B+** | Per-SSRC Opus decoders (real bug fix), main.rs split into modules, `MusicState` struct, typed IPC, `killpg` fix. |
+| **Tests** | B+ | **A-** | 651 → 702 tests. 9 new test files for extracted modules. All passing. |
+
+### Overall Grade: **B+** (up from C+/B-)
+
+### What Moved the Needle Most
+
+1. **Zero `as any` in production code.** TypeScript is no longer cosmetic — the compiler provides real safety guarantees.
+2. **God-objects broken up.** The two files that were 17% of the codebase are now distributed across 50+ focused modules. No file except VSM exceeds 2,200 lines.
+3. **51 new tests** with 9 new test files for extracted modules (permissions, budgetTracking, imageAnalysis, mediaAttachment, memorySlice, messageHistory, agentTasks).
+4. **Clankvox bug fixes** — per-SSRC Opus decoder was a real audio quality bug affecting every multi-user voice session.
+
+### Original Red Flags — Status
+
+| Red Flag | Status |
+|----------|--------|
+| Race conditions in voice (boolean guards) | **Partially addressed** — extracted modules have cleaner state, but VSM still has implicit state |
+| `Promise.all` without `Promise.allSettled` | **Already fixed** (was fixed before this review cycle) |
+| No `Settings` type | **Fixed** — `Settings` type exported, flows end-to-end, 0 `as any` |
+| Fire-and-forget patterns | **Reduced** — 73 → 53 (bot.ts batch addressed, voice batch pending) |
+| Unsustainable pace | Not a code issue — organizational |
+
+### Original Recommendations — Status
+
+| Recommendation | Status |
+|----------------|--------|
+| 1. Type the `Settings` interface | **Done** |
+| 2. Break `voiceSessionManager.ts` into modules | **Done** (9 modules extracted, 40% reduction) |
+| 3. Type `ClankerBot` constructor and fields | **Done** (BotContext pattern, 0 `bot: any`) |
+| 4. Delete dead code | **Done** (provider files, duplicated constants) |
+| 5. Extract media attachment logic | **Done** (`mediaAttachment.ts` with unified cascade) |
+
+### Remaining Work
+
+1. **Voice session manager** — prune delegation stubs (7,713 → ~4,000-5,000), type 39 remaining `manager: any` params, audit ~30 fire-and-forget patterns
+2. **ContextMessage.content type** — narrow from `unknown` to `string | null | ContentBlock[]`
+3. **Settings normalization file split** — optional organizational split into per-section files
+
+Plans written: `docs/tmp/voice-final-cleanup-plan.md`, `docs/tmp/type-tightening-settings-split-plan.md`
