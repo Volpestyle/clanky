@@ -1,6 +1,6 @@
 import { ChatInputCommandInteraction } from "discord.js";
 import { normalizeInlineText, STT_TRANSCRIPT_MAX_CHARS, isVoiceTurnAddressedToBot, resolveVoiceAsrLanguageGuidance } from "./voiceSessionHelpers.ts";
-import { getVoiceRuntimeConfig } from "../settings/agentStack.ts";
+import { getVoiceConversationPolicy, getVoiceRuntimeConfig } from "../settings/agentStack.ts";
 
 import { clamp } from "lodash";
 
@@ -31,7 +31,8 @@ import {
   musicPhaseIsActive,
   musicPhaseCanResume,
   musicPhaseCanPause,
-  musicPhaseShouldLockOutput
+  musicPhaseShouldAllowDucking,
+  musicPhaseShouldForceCommandOnly
 } from "./voiceSessionTypes.ts";
 export function ensureSessionMusicState(manager: any, session) {
   void manager;
@@ -141,6 +142,112 @@ export function setMusicPhase(
 
 export function isMusicPlaybackActive(manager: any, session) {
   return musicPhaseIsActive(getMusicPhase(manager, session));
+}
+
+export function isCommandOnlyActive(manager: any, session, settings = null) {
+  const resolved = settings || session?.settingsSnapshot || manager.store.getSettings();
+  if (getVoiceConversationPolicy(resolved).commandOnlyMode) return true;
+  return musicPhaseShouldForceCommandOnly(getMusicPhase(manager, session));
+}
+
+export function resolveMusicDuckingConfig(manager: any, settings = null) {
+  void manager;
+  const resolved = settings || manager.store.getSettings();
+  const targetGainRaw = Number(resolved?.voice?.musicDucking?.targetGain);
+  const fadeMsRaw = Number(resolved?.voice?.musicDucking?.fadeMs);
+  return {
+    targetGain: clamp(
+      Number.isFinite(targetGainRaw) ? targetGainRaw : 0.15,
+      0.05,
+      1
+    ),
+    fadeMs: clamp(
+      Number.isFinite(fadeMsRaw) ? Math.round(fadeMsRaw) : 300,
+      0,
+      5000
+    )
+  };
+}
+
+export function clearBotSpeechMusicUnduckTimer(manager: any, session) {
+  void manager;
+  if (!session) return;
+  if (session.botSpeechMusicUnduckTimer) {
+    clearTimeout(session.botSpeechMusicUnduckTimer);
+    session.botSpeechMusicUnduckTimer = null;
+  }
+}
+
+export async function engageBotSpeechMusicDuck(
+  manager: any,
+  session,
+  settings = null,
+  { awaitFade = false } = {}
+) {
+  if (!session || session.ending) return false;
+  if (!musicPhaseShouldAllowDucking(getMusicPhase(manager, session))) {
+    session.botSpeechMusicDucked = false;
+    return false;
+  }
+  clearBotSpeechMusicUnduckTimer(manager, session);
+  const music = ensureSessionMusicState(manager, session);
+  if (music?.ducked) {
+    session.botSpeechMusicDucked = true;
+    return true;
+  }
+  const { targetGain, fadeMs } = resolveMusicDuckingConfig(
+    manager,
+    settings || session.settingsSnapshot || manager.store.getSettings()
+  );
+  const duckPromise = manager.musicPlayer?.duck({ targetGain, fadeMs });
+  if (music) music.ducked = true;
+  session.botSpeechMusicDucked = true;
+  if (awaitFade) {
+    await duckPromise;
+  }
+  return true;
+}
+
+export function scheduleBotSpeechMusicUnduck(manager: any, session, settings = null, delayMs = 0) {
+  if (!session || session.ending) return;
+  const music = ensureSessionMusicState(manager, session);
+  if (!session.botSpeechMusicDucked && !music?.ducked) return;
+  clearBotSpeechMusicUnduckTimer(manager, session);
+  const normalizedDelayMs = clamp(Math.round(Number(delayMs) || 0), 0, 15_000);
+  session.botSpeechMusicUnduckTimer = setTimeout(() => {
+    session.botSpeechMusicUnduckTimer = null;
+    if (manager.hasBufferedTtsPlayback(session) || Boolean(session.botTurnOpen)) {
+      scheduleBotSpeechMusicUnduck(manager, session, settings, Math.min(200, normalizedDelayMs || 200));
+      return;
+    }
+    releaseBotSpeechMusicDuck(manager, session, settings).catch(() => undefined);
+  }, normalizedDelayMs);
+}
+
+export async function releaseBotSpeechMusicDuck(
+  manager: any,
+  session,
+  settings = null,
+  { force = false } = {}
+) {
+  if (!session) return false;
+  clearBotSpeechMusicUnduckTimer(manager, session);
+  const music = ensureSessionMusicState(manager, session);
+  const ducked = Boolean(music?.ducked) || Boolean(session.botSpeechMusicDucked);
+  if (!ducked) {
+    return false;
+  }
+  session.botSpeechMusicDucked = false;
+  if (music) music.ducked = false;
+  if (!force && !musicPhaseShouldAllowDucking(getMusicPhase(manager, session))) {
+    return false;
+  }
+  const { fadeMs } = resolveMusicDuckingConfig(
+    manager,
+    settings || session.settingsSnapshot || manager.store.getSettings()
+  );
+  manager.musicPlayer?.unduck({ targetGain: 1, fadeMs });
+  return true;
 }
 
 export function normalizeMusicPlatformToken(manager: any, value: unknown = "", fallback: "youtube" | "soundcloud" | "discord" | "auto" | null = null) {

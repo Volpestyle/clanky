@@ -63,6 +63,7 @@ import {
   isMusicDisambiguationActive as isMusicDisambiguationActiveRuntime,
   getMusicPhase as getMusicPhaseRuntime,
   setMusicPhase as setMusicPhaseRuntime,
+  isCommandOnlyActive as isCommandOnlyActiveRuntime,
   maybeHandleMusicPlaybackTurn as maybeHandleMusicPlaybackTurnRuntime,
   maybeHandleMusicTextSelectionRequest as maybeHandleMusicTextSelectionRequestRuntime,
   maybeHandleMusicTextStopRequest as maybeHandleMusicTextStopRequestRuntime,
@@ -72,6 +73,11 @@ import {
   requestPauseMusic as requestPauseMusicRuntime,
   requestPlayMusic as requestPlayMusicRuntime,
   requestStopMusic as requestStopMusicRuntime,
+  resolveMusicDuckingConfig as resolveMusicDuckingConfigRuntime,
+  clearBotSpeechMusicUnduckTimer as clearBotSpeechMusicUnduckTimerRuntime,
+  engageBotSpeechMusicDuck as engageBotSpeechMusicDuckRuntime,
+  scheduleBotSpeechMusicUnduck as scheduleBotSpeechMusicUnduckRuntime,
+  releaseBotSpeechMusicDuck as releaseBotSpeechMusicDuckRuntime,
   setMusicDisambiguationState as setMusicDisambiguationStateRuntime,
   snapshotMusicRuntimeState as snapshotMusicRuntimeStateRuntime
 } from "./voiceMusicPlayback.ts";
@@ -98,7 +104,6 @@ import {
   sendToChannel
 } from "./voiceOperationalMessaging.ts";
 import {
-  type AsrBridgeMode,
   type AsrBridgeDeps,
   type AsrBridgeState,
   asrPhaseIsClosing,
@@ -154,7 +159,6 @@ import { requestJoin } from "./voiceJoinFlow.ts";
 import { evaluateVoiceReplyDecision as evaluateVoiceReplyDecisionModule } from "./voiceReplyDecision.ts";
 import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
-  ACTIVITY_TOUCH_THROTTLE_MS,
   BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS,
   BARGE_IN_FULL_OVERRIDE_MIN_MS,
   BARGE_IN_MIN_SPEECH_MS,
@@ -165,13 +169,7 @@ import {
   BOT_TURN_DEFERRED_FLUSH_DELAY_MS,
   BOT_TURN_DEFERRED_QUEUE_MAX,
   BOT_TURN_SILENCE_RESET_MS,
-  CAPTURE_IDLE_FLUSH_MS,
-  CAPTURE_NEAR_SILENCE_ABORT_ACTIVE_RATIO_MAX,
-  CAPTURE_NEAR_SILENCE_ABORT_MIN_AGE_MS,
-  CAPTURE_NEAR_SILENCE_ABORT_PEAK_MAX,
-  CAPTURE_MAX_DURATION_MS,
   RECENT_ENGAGEMENT_WINDOW_MS,
-  INPUT_SPEECH_END_SILENCE_MS,
   LEAVE_DIRECTIVE_PLAYBACK_MAX_WAIT_MS,
   LEAVE_DIRECTIVE_PLAYBACK_NO_SIGNAL_GRACE_MS,
   LEAVE_DIRECTIVE_PLAYBACK_POLL_MS,
@@ -194,7 +192,6 @@ import {
   REALTIME_TURN_STALE_SKIP_MS,
   RESPONSE_FLUSH_DEBOUNCE_MS,
   OPENAI_ASR_SESSION_IDLE_TTL_MS,
-  OPENAI_ASR_BRIDGE_MAX_WAIT_MS,
   OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS,
   OPENAI_TOOL_CALL_EVENT_MAX,
   OPENAI_TOOL_RESPONSE_DEBOUNCE_MS,
@@ -280,10 +277,10 @@ import type {
 import {
   musicPhaseIsActive,
   musicPhaseIsAudible,
-  musicPhaseShouldForceCommandOnly,
   musicPhaseShouldAllowDucking,
 } from "./voiceSessionTypes.ts";
 import { BargeInController } from "./bargeInController.ts";
+import { CaptureManager } from "./captureManager.ts";
 import { ReplyManager } from "./replyManager.ts";
 
 export function resolveVoiceThoughtTopicalityBias({
@@ -597,6 +594,7 @@ export class VoiceSessionManager {
   musicSearch;
   musicPlayer;
   bargeInController;
+  captureManager;
   replyManager;
   onVoiceStateUpdate;
 
@@ -639,6 +637,7 @@ export class VoiceSessionManager {
     this.musicSearch = createMusicSearchProvider(this.appConfig || {});
     this.musicPlayer = createDiscordMusicPlayer();
     this.bargeInController = new BargeInController(this);
+    this.captureManager = new CaptureManager(this);
     this.replyManager = new ReplyManager(this);
     this.onVoiceStateUpdate = (oldState, newState) => {
       this.handleVoiceStateUpdate(oldState, newState).catch((error) => {
@@ -1469,9 +1468,7 @@ export class VoiceSessionManager {
   }
 
   isCommandOnlyActive(session, settings = null) {
-    const resolved = settings || session?.settingsSnapshot || this.store.getSettings();
-    if (getVoiceConversationPolicy(resolved).commandOnlyMode) return true;
-    return musicPhaseShouldForceCommandOnly(this.getMusicPhase(session));
+    return isCommandOnlyActiveRuntime(this, session, settings);
   }
 
   isMusicPlaybackAudible(session) {
@@ -1479,89 +1476,23 @@ export class VoiceSessionManager {
   }
 
   resolveMusicDuckingConfig(settings = null) {
-    const resolved = settings || this.store.getSettings();
-    const targetGainRaw = Number(resolved?.voice?.musicDucking?.targetGain);
-    const fadeMsRaw = Number(resolved?.voice?.musicDucking?.fadeMs);
-    return {
-      targetGain: clamp(
-        Number.isFinite(targetGainRaw) ? targetGainRaw : 0.15,
-        0.05,
-        1
-      ),
-      fadeMs: clamp(
-        Number.isFinite(fadeMsRaw) ? Math.round(fadeMsRaw) : 300,
-        0,
-        5000
-      )
-    };
+    return resolveMusicDuckingConfigRuntime(this, settings);
   }
 
   clearBotSpeechMusicUnduckTimer(session) {
-    if (!session) return;
-    if (session.botSpeechMusicUnduckTimer) {
-      clearTimeout(session.botSpeechMusicUnduckTimer);
-      session.botSpeechMusicUnduckTimer = null;
-    }
+    return clearBotSpeechMusicUnduckTimerRuntime(this, session);
   }
 
   async engageBotSpeechMusicDuck(session, settings = null, { awaitFade = false } = {}) {
-    if (!session || session.ending) return false;
-    if (!musicPhaseShouldAllowDucking(this.getMusicPhase(session))) {
-      session.botSpeechMusicDucked = false;
-      return false;
-    }
-    this.clearBotSpeechMusicUnduckTimer(session);
-    const music = this.ensureSessionMusicState(session);
-    if (music?.ducked) {
-      session.botSpeechMusicDucked = true;
-      return true;
-    }
-    const { targetGain, fadeMs } = this.resolveMusicDuckingConfig(
-      settings || session.settingsSnapshot || this.store.getSettings()
-    );
-    const duckPromise = this.musicPlayer?.duck({ targetGain, fadeMs });
-    if (music) music.ducked = true;
-    session.botSpeechMusicDucked = true;
-    if (awaitFade) {
-      await duckPromise;
-    }
-    return true;
+    return engageBotSpeechMusicDuckRuntime(this, session, settings, { awaitFade });
   }
 
   scheduleBotSpeechMusicUnduck(session, settings = null, delayMs = BOT_TURN_SILENCE_RESET_MS) {
-    if (!session || session.ending) return;
-    const music = this.ensureSessionMusicState(session);
-    if (!session.botSpeechMusicDucked && !music?.ducked) return;
-    this.clearBotSpeechMusicUnduckTimer(session);
-    const normalizedDelayMs = clamp(Math.round(Number(delayMs) || 0), 0, 15_000);
-    session.botSpeechMusicUnduckTimer = setTimeout(() => {
-      session.botSpeechMusicUnduckTimer = null;
-      if (this.hasBufferedTtsPlayback(session) || Boolean(session.botTurnOpen)) {
-        this.scheduleBotSpeechMusicUnduck(session, settings, Math.min(200, normalizedDelayMs || 200));
-        return;
-      }
-      this.releaseBotSpeechMusicDuck(session, settings).catch(() => undefined);
-    }, normalizedDelayMs);
+    return scheduleBotSpeechMusicUnduckRuntime(this, session, settings, delayMs);
   }
 
   async releaseBotSpeechMusicDuck(session, settings = null, { force = false } = {}) {
-    if (!session) return false;
-    this.clearBotSpeechMusicUnduckTimer(session);
-    const music = this.ensureSessionMusicState(session);
-    const ducked = Boolean(music?.ducked) || Boolean(session.botSpeechMusicDucked);
-    if (!ducked) {
-      return false;
-    }
-    session.botSpeechMusicDucked = false;
-    if (music) music.ducked = false;
-    if (!force && !musicPhaseShouldAllowDucking(this.getMusicPhase(session))) {
-      return false;
-    }
-    const { fadeMs } = this.resolveMusicDuckingConfig(
-      settings || session.settingsSnapshot || this.store.getSettings()
-    );
-    this.musicPlayer?.unduck({ targetGain: 1, fadeMs });
-    return true;
+    return releaseBotSpeechMusicDuckRuntime(this, session, settings, { force });
   }
 
 
@@ -6190,683 +6121,11 @@ export class VoiceSessionManager {
   }
 
   startInboundCapture({ session, userId, settings = session?.settingsSnapshot }) {
-    if (!session || !userId) return;
-    if (session.userCaptures.has(userId)) return;
-    const useOpenAiPerUserAsr = this.shouldUsePerUserTranscription({
+    return this.captureManager.startInboundCapture({
       session,
-      settings
-    });
-    const useOpenAiSharedAsr = this.shouldUseSharedTranscription({
-      session,
-      settings
-    });
-
-    // Subprocess auto-subscribes on speaking_start; this call updates
-    // the default silence duration for future auto-subscriptions.
-    const sampleRate = isRealtimeMode(session.mode) ? Number(session.realtimeInputSampleRateHz) || 24000 : 24000;
-    session.voxClient?.subscribeUser(userId, INPUT_SPEECH_END_SILENCE_MS, sampleRate);
-
-    const captureState = {
       userId,
-      startedAt: Date.now(),
-      promotedAt: 0,
-      promotionReason: null,
-      asrUtteranceId: 0,
-      bytesSent: 0,
-      signalSampleCount: 0,
-      signalActiveSampleCount: 0,
-      signalPeakAbs: 0,
-      signalSumSquares: 0,
-      pcmChunks: [],
-      sharedAsrBytesSent: 0,
-      lastActivityTouchAt: 0,
-      idleFlushTimer: null,
-      maxFlushTimer: null,
-      speakingEndFinalizeTimer: null,
-      finalize: null,
-      abort: null,
-      removeSubprocessListeners: null
-    };
-
-    session.userCaptures.set(userId, captureState);
-
-    if (useOpenAiPerUserAsr) {
-      this.beginOpenAiAsrUtterance({
-        session,
-        settings,
-        userId
-      });
-      const asrState = this.getOrCreateOpenAiAsrSessionState({ session, userId });
-      captureState.asrUtteranceId = Math.max(0, Number(asrState?.utterance?.id || 0));
-    }
-
-    const cleanupCapture = () => {
-      const current = session.userCaptures.get(userId);
-      if (!current) return;
-      session.userCaptures.delete(userId);
-
-      if (current.idleFlushTimer) {
-        clearTimeout(current.idleFlushTimer);
-      }
-      if (current.maxFlushTimer) {
-        clearTimeout(current.maxFlushTimer);
-      }
-      if (current.speakingEndFinalizeTimer) {
-        clearTimeout(current.speakingEndFinalizeTimer);
-      }
-      // Remove per-capture IPC listeners so they don't accumulate across captures
-      try {
-        current.removeSubprocessListeners?.();
-      } catch {
-        // ignore
-      }
-
-      // Do NOT unsubscribe from the subprocess here.  The subprocess manages
-      // its own subscription lifecycle via AfterSilence — when the user stops
-      // speaking, the opus stream ends naturally and the subscription is removed.
-      //
-      // Sending unsubscribe_user from the main process created a race condition:
-      // if the user starts speaking again between AfterSilence cleanup and the
-      // arrival of our unsubscribe IPC, the auto-subscribe creates a fresh
-      // subscription that our stale unsubscribe then destroys — leaving no
-      // active subscription for the new speech.
-    };
-
-    // Called after a capture resolves with no usable speech (empty, silence-
-    // gated, or suppressed). If this was the last capture and deferred actions
-    // are pending, recheck them now that the output channel may be clear.
-    const maybeTriggerDeferredActions = () => {
-      if (!this.hasReplayBlockingActiveCapture(session)) {
-        this.recheckDeferredVoiceActions({ session, reason: "capture_resolved" });
-        this.maybeFireJoinGreetingOpportunity(session, "capture_resolved");
-      }
-    };
-
-    const appendBufferedCaptureToAsr = () => {
-      if (useOpenAiPerUserAsr) {
-        return;
-      }
-      if (!useOpenAiSharedAsr) return;
-      let appendedBytes = 0;
-      for (const chunk of captureState.pcmChunks) {
-        if (!Buffer.isBuffer(chunk) || !chunk.length) continue;
-        const appended = this.appendAudioToOpenAiSharedAsr({
-          session,
-          settings,
-          userId,
-          pcmChunk: chunk
-        });
-        if (appended) appendedBytes += chunk.length;
-      }
-      if (appendedBytes > 0) {
-        captureState.sharedAsrBytesSent =
-          Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) + appendedBytes;
-      }
-    };
-
-    const promoteCapture = (now = Date.now()) => {
-      if (this.hasCaptureBeenPromoted(captureState)) return true;
-      const promotionReason = this.resolveCaptureTurnPromotionReason({
-        session,
-        capture: captureState
-      });
-      if (!promotionReason) return false;
-      const signal = this.getCaptureSignalMetrics(captureState);
-      captureState.promotedAt = now;
-      captureState.promotionReason = String(promotionReason);
-      this.cancelPendingSystemSpeechForUserSpeech({
-        session,
-        userId,
-        captureState,
-        source: "capture_promoted",
-        now
-      });
-      if (useOpenAiSharedAsr) {
-        this.beginOpenAiSharedAsrUtterance({
-          session,
-          settings,
-          userId
-        });
-      }
-      appendBufferedCaptureToAsr();
-      session.lastInboundAudioAt = now;
-      captureState.lastActivityTouchAt = now;
-      this.touchActivity(session.guildId, settings);
-      this.store.logAction({
-        kind: "voice_turn_in",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: "voice_activity_started",
-        metadata: {
-          sessionId: session.id,
-          promotionReason: captureState.promotionReason,
-          promotionDelayMs: Math.max(0, now - Number(captureState.startedAt || now)),
-          promotionBytes: Math.max(0, Number(captureState.bytesSent || 0)),
-          promotionServerVadConfirmed: this.hasCaptureServerVadSpeech({
-            session,
-            capture: captureState
-          }),
-          promotionPeak: signal.peak,
-          promotionRms: signal.rms,
-          promotionActiveSampleRatio: signal.activeSampleRatio
-        }
-      });
-      return true;
-    };
-
-    const scheduleIdleFlush = () => {
-      if (captureState.idleFlushTimer) {
-        clearTimeout(captureState.idleFlushTimer);
-      }
-      captureState.idleFlushTimer = setTimeout(() => {
-        finalizeUserTurn("idle_timeout");
-      }, CAPTURE_IDLE_FLUSH_MS);
-    };
-
-    // Subprocess userAudio handler — receives already-converted mono PCM
-    const onUserAudio = (audioUserId, pcmBase64) => {
-      if (String(audioUserId || "") !== userId) return;
-      const now = Date.now();
-      let normalizedPcm: Buffer;
-      try {
-        if (Buffer.isBuffer(pcmBase64)) {
-          normalizedPcm = pcmBase64;
-        } else {
-          normalizedPcm = Buffer.from(String(pcmBase64 || ""), "base64");
-        }
-      } catch (e) {
-        this.store.logAction({
-          kind: "voice_warn",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          content: "invalid_pcm_base64_from_subprocess",
-          metadata: { userId, error: e.message }
-        });
-        return;
-      }
-      if (!normalizedPcm.length) return;
-      captureState.bytesSent += normalizedPcm.length;
-      const sampleCount = Math.floor(normalizedPcm.length / 2);
-      if (sampleCount > 0) {
-        let peakAbs = Math.max(0, Number(captureState.signalPeakAbs || 0));
-        let activeSamples = 0;
-        let sumSquares = Math.max(0, Number(captureState.signalSumSquares || 0));
-        for (let offset = 0; offset + 1 < normalizedPcm.length; offset += 2) {
-          const sample = normalizedPcm.readInt16LE(offset);
-          const absSample = Math.abs(sample);
-          if (absSample > peakAbs) peakAbs = absSample;
-          if (absSample >= VOICE_SILENCE_GATE_ACTIVE_SAMPLE_MIN_ABS) {
-            activeSamples += 1;
-          }
-          sumSquares += sample * sample;
-        }
-        captureState.signalSampleCount = Math.max(0, Number(captureState.signalSampleCount || 0)) + sampleCount;
-        captureState.signalActiveSampleCount =
-          Math.max(0, Number(captureState.signalActiveSampleCount || 0)) + activeSamples;
-        captureState.signalPeakAbs = peakAbs;
-        captureState.signalSumSquares = sumSquares;
-      }
-      captureState.pcmChunks.push(normalizedPcm);
-      if (useOpenAiPerUserAsr) {
-        this.appendAudioToOpenAiAsr({
-          session,
-          settings,
-          userId,
-          pcmChunk: normalizedPcm
-        });
-      }
-      const wasPromoted = this.hasCaptureBeenPromoted(captureState);
-      if (!wasPromoted) {
-        promoteCapture(now);
-      }
-      const isPromoted = this.hasCaptureBeenPromoted(captureState);
-      if (isPromoted && wasPromoted && useOpenAiSharedAsr) {
-        const appendedToSharedAsr = this.appendAudioToOpenAiSharedAsr({
-          session,
-          settings,
-          userId,
-          pcmChunk: normalizedPcm
-        });
-        if (appendedToSharedAsr) {
-          captureState.sharedAsrBytesSent =
-            Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) + normalizedPcm.length;
-        }
-      }
-      if (captureState.speakingEndFinalizeTimer) {
-        clearTimeout(captureState.speakingEndFinalizeTimer);
-        captureState.speakingEndFinalizeTimer = null;
-      }
-      scheduleIdleFlush();
-
-      if (isPromoted) {
-        session.lastInboundAudioAt = now;
-        if (
-          this.isCaptureConfirmedLiveSpeech({ session, capture: captureState }) &&
-          now - captureState.lastActivityTouchAt >= ACTIVITY_TOUCH_THROTTLE_MS
-        ) {
-          this.touchActivity(session.guildId, settings);
-          captureState.lastActivityTouchAt = now;
-        }
-      }
-
-      const bargeDecision = this.shouldBargeIn({ session, userId, captureState });
-      if (bargeDecision.allowed) {
-        this.interruptBotSpeechForBargeIn({
-          session,
-          userId,
-          source: "speaking_data",
-          minCaptureBytes: bargeDecision.minCaptureBytes,
-          captureState
-        });
-      }
-
-      const captureAgeMs = Math.max(0, now - Number(captureState.startedAt || now));
-      const signalSampleCount = Math.max(0, Number(captureState.signalSampleCount || 0));
-      if (captureAgeMs >= CAPTURE_NEAR_SILENCE_ABORT_MIN_AGE_MS && signalSampleCount > 0) {
-        const activeSampleCount = Math.max(0, Number(captureState.signalActiveSampleCount || 0));
-        const activeSampleRatio = activeSampleCount / signalSampleCount;
-        const peak = Math.max(0, Number(captureState.signalPeakAbs || 0)) / 32768;
-        if (
-          activeSampleRatio <= CAPTURE_NEAR_SILENCE_ABORT_ACTIVE_RATIO_MAX &&
-          peak <= CAPTURE_NEAR_SILENCE_ABORT_PEAK_MAX
-        ) {
-          finalizeUserTurn("near_silence_early_abort");
-          return;
-        }
-      }
-
-    };
-
-    let captureFinalized = false;
-    const finalizeUserTurn = (reason = "stream_end") => {
-      if (captureFinalized) return;
-      captureFinalized = true;
-      const finalizedAt = Date.now();
-      const captureDurationMs = Math.max(0, finalizedAt - captureState.startedAt);
-      const signal = this.getCaptureSignalMetrics(captureState);
-
-      if (!this.hasCaptureBeenPromoted(captureState) && Number(captureState.bytesSent || 0) > 0 && !session.ending) {
-        this.store.logAction({
-          kind: "voice_runtime",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId,
-          content: "voice_turn_dropped_provisional_capture",
-          metadata: {
-            sessionId: session.id,
-            reason: String(reason || "stream_end"),
-            bytesSent: Number(captureState.bytesSent || 0),
-            durationMs: captureDurationMs,
-            peak: signal.peak,
-            rms: signal.rms,
-            activeSampleRatio: signal.activeSampleRatio
-          }
-        });
-        cleanupCapture();
-        maybeTriggerDeferredActions();
-        if (useOpenAiPerUserAsr) {
-          this.discardOpenAiAsrUtterance({
-            session,
-            userId
-          });
-          this.scheduleOpenAiAsrSessionIdleClose({
-            session,
-            userId
-          });
-        } else if (useOpenAiSharedAsr) {
-          this.releaseOpenAiSharedAsrActiveUser(session, userId);
-          if (!this.tryHandoffSharedAsrToWaitingCapture({ session, settings })) {
-            this.scheduleOpenAiSharedAsrSessionIdleClose(session);
-          }
-        }
-        return;
-      }
-
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: "voice_turn_finalized",
-        metadata: {
-          sessionId: session.id,
-          reason: String(reason || "stream_end"),
-          bytesSent: captureState.bytesSent,
-          durationMs: captureDurationMs
-        }
-      });
-
-      if (captureState.bytesSent <= 0 || session.ending) {
-        this.store.logAction({
-          kind: "voice_runtime",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId,
-          content: "voice_turn_skipped_empty_capture",
-          metadata: {
-            sessionId: session.id,
-            reason: String(reason || "stream_end"),
-            bytesSent: Number(captureState.bytesSent || 0),
-            ending: Boolean(session.ending)
-          }
-        });
-        cleanupCapture();
-        maybeTriggerDeferredActions();
-        if (useOpenAiPerUserAsr) {
-          this.discardOpenAiAsrUtterance({
-            session,
-            userId
-          });
-          this.scheduleOpenAiAsrSessionIdleClose({
-            session,
-            userId
-          });
-        } else if (useOpenAiSharedAsr) {
-          this.releaseOpenAiSharedAsrActiveUser(session, userId);
-          if (!this.tryHandoffSharedAsrToWaitingCapture({ session, settings })) {
-            this.scheduleOpenAiSharedAsrSessionIdleClose(session);
-          }
-        }
-        return;
-      }
-
-      const pcmBuffer = Buffer.concat(captureState.pcmChunks);
-
-      // Silence gate: drop near-silent captures that slipped past the
-      // in-flight near-silence abort (e.g., very short VAD false positives
-      // or receiver buffer burst artifacts).
-      const sampleRateHz = isRealtimeMode(session.mode)
-        ? Number(session.realtimeInputSampleRateHz) || 24000
-        : 24000;
-      const silenceGate = this.evaluatePcmSilenceGate({ pcmBuffer, sampleRateHz });
-      const audioDurationMs = silenceGate.clipDurationMs;
-      // A capture whose wall-clock time is <25% of its audio duration
-      // means opus packets were delivered in a burst from the receiver
-      // buffer — not from live speech.
-      const isBurstArtifact = audioDurationMs > 200 && captureDurationMs < audioDurationMs * 0.25;
-
-      if (silenceGate.drop) {
-        this.store.logAction({
-          kind: "voice_runtime",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId,
-          content: "voice_turn_dropped_silence_gate",
-          metadata: {
-            sessionId: session.id,
-            reason: String(reason || "stream_end"),
-            bytesSent: captureState.bytesSent,
-            captureDurationMs,
-            audioDurationMs,
-            rms: silenceGate.rms,
-            peak: silenceGate.peak,
-            activeSampleRatio: silenceGate.activeSampleRatio,
-            isBurstArtifact,
-            silenceGateDrop: silenceGate.drop
-          }
-        });
-        cleanupCapture();
-        maybeTriggerDeferredActions();
-        if (useOpenAiPerUserAsr) {
-          this.discardOpenAiAsrUtterance({
-            session,
-            userId
-          });
-          this.scheduleOpenAiAsrSessionIdleClose({ session, userId });
-        } else if (useOpenAiSharedAsr) {
-          this.releaseOpenAiSharedAsrActiveUser(session, userId);
-          this.scheduleOpenAiSharedAsrSessionIdleClose(session);
-        }
-        return;
-      }
-
-      if (isBurstArtifact) {
-        this.store.logAction({
-          kind: "voice_runtime",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId,
-          content: "voice_turn_burst_artifact_processed",
-          metadata: {
-            sessionId: session.id,
-            reason: String(reason || "stream_end"),
-            bytesSent: captureState.bytesSent,
-            captureDurationMs,
-            audioDurationMs
-          }
-        });
-      }
-
-      cleanupCapture();
-      if (session.mode === "stt_pipeline") {
-        this.queueSttPipelineTurn({
-          session,
-          userId,
-          pcmBuffer,
-          captureReason: reason
-        });
-      } else {
-        const handledInterruptedReply = this.maybeHandleInterruptedReplyRecovery({
-          session,
-          userId,
-          pcmBuffer,
-          captureReason: reason
-        });
-        if (!handledInterruptedReply && (useOpenAiPerUserAsr || useOpenAiSharedAsr)) {
-          const asrMode: AsrBridgeMode = useOpenAiPerUserAsr ? "per_user" : "shared";
-          const asrSource = useOpenAiPerUserAsr ? "per_user" : "shared";
-
-          // For shared mode, skip the bridge if no audio was actually streamed to it.
-          if (useOpenAiSharedAsr) {
-            const hasSharedAsrAudio = Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) > 0;
-            if (!hasSharedAsrAudio) {
-              this.queueRealtimeTurn({ session, userId, pcmBuffer, captureReason: reason, finalizedAt });
-              return;
-            }
-            // Mark commit in-flight synchronously so a new utterance's
-            // beginOpenAiSharedAsrUtterance won't clear the buffer before
-            // the async commit runs.
-            const sharedAsrState = this.getOpenAiSharedAsrState(session);
-            if (sharedAsrState) {
-              sharedAsrState.phase = "committing";
-            }
-          }
-
-          const asrBridgeMaxWaitMs = Math.max(120, Number(OPENAI_ASR_BRIDGE_MAX_WAIT_MS) || 700);
-          let bridgeForwarded = false;
-          const forwardAsrBridgeTurn = (asrResult, source) => {
-            if (bridgeForwarded || session.ending) return false;
-            const queued = this.queueRealtimeTurnFromAsrBridge({
-              session, userId, pcmBuffer, captureReason: reason, finalizedAt, asrResult, source
-            });
-            if (queued) bridgeForwarded = true;
-            return queued;
-          };
-
-          const fallbackTimer = setTimeout(() => {
-            if (bridgeForwarded || session.ending) return;
-            this.store.logAction({
-              kind: "voice_runtime",
-              guildId: session.guildId,
-              channelId: session.textChannelId,
-              userId,
-              content: "openai_realtime_asr_bridge_timeout_fallback",
-              metadata: {
-                sessionId: session.id,
-                captureReason: String(reason || "stream_end"),
-                source: asrSource,
-                waitMs: asrBridgeMaxWaitMs
-              }
-            });
-          }, asrBridgeMaxWaitMs);
-
-          void (async () => {
-            try {
-              const asrResult = asrMode === "per_user"
-                ? await this.commitOpenAiAsrUtterance({ session, settings, userId, captureReason: reason })
-                : await this.commitOpenAiSharedAsrUtterance({ session, settings, userId, captureReason: reason });
-              clearTimeout(fallbackTimer);
-              const commitTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
-
-              if (commitTranscript) {
-                const forwarded = forwardAsrBridgeTurn(asrResult, asrSource);
-                if (forwarded) return;
-              }
-
-              // Commit returned empty — poll the tracked utterance for
-              // late-arriving streaming transcript segments before giving up.
-              if (!bridgeForwarded && !session.ending) {
-                const lateAsrState = asrMode === "per_user"
-                  ? this.getOrCreateOpenAiAsrSessionState({ session, userId })
-                  : this.getOpenAiSharedAsrState(session);
-                const trackedUtterance = lateAsrState?.utterance;
-                if (trackedUtterance) {
-                  const lateDeadlineMs = Date.now() + 1500;
-                  while (Date.now() < lateDeadlineMs && !bridgeForwarded && !session.ending) {
-                    await new Promise((r) => setTimeout(r, 80));
-                    if (lateAsrState.utterance !== trackedUtterance) break;
-                    const lateFinal = normalizeVoiceText(
-                      Array.isArray(trackedUtterance.finalSegments)
-                        ? trackedUtterance.finalSegments.join(" ")
-                        : "",
-                      STT_TRANSCRIPT_MAX_CHARS
-                    );
-                    if (lateFinal) {
-                      const lateForwarded = forwardAsrBridgeTurn(
-                        { ...asrResult, transcript: lateFinal },
-                        `${asrSource}_late_streaming`
-                      );
-                      if (lateForwarded) {
-                        this.store.logAction({
-                          kind: "voice_runtime",
-                          guildId: session.guildId,
-                          channelId: session.textChannelId,
-                          userId,
-                          content: "openai_realtime_asr_bridge_late_streaming_recovered",
-                          metadata: {
-                            sessionId: session.id,
-                            captureReason: String(reason || "stream_end"),
-                            source: asrSource,
-                            transcriptChars: lateFinal.length,
-                            lateWaitMs: Date.now() - (lateDeadlineMs - 1500)
-                          }
-                        });
-                      }
-                      return;
-                    }
-                  }
-                }
-              }
-
-              // Recovery failed — now record the empty drop.
-              if (!bridgeForwarded) {
-                forwardAsrBridgeTurn(asrResult, asrSource);
-              }
-              const lateTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
-              if (!lateTranscript) return;
-              this.store.logAction({
-                kind: "voice_runtime",
-                guildId: session.guildId,
-                channelId: session.textChannelId,
-                userId,
-                content: "openai_realtime_asr_bridge_late_result_ignored",
-                metadata: {
-                  sessionId: session.id,
-                  captureReason: String(reason || "stream_end"),
-                  source: asrSource,
-                  transcriptChars: lateTranscript.length
-                }
-              });
-            } catch (error) {
-              clearTimeout(fallbackTimer);
-              this.store.logAction({
-                kind: "voice_error",
-                guildId: session.guildId,
-                channelId: session.textChannelId,
-                userId,
-                content: `openai_realtime_asr_turn_failed: ${String(error?.message || error)}`,
-                metadata: {
-                  sessionId: session.id,
-                  captureReason: String(reason || "stream_end")
-                }
-              });
-              forwardAsrBridgeTurn(null, `${asrSource}_error`);
-            }
-          })();
-          return;
-        }
-        if (!handledInterruptedReply) {
-          this.queueRealtimeTurn({
-            session,
-            userId,
-            pcmBuffer,
-            captureReason: reason,
-            finalizedAt
-          });
-        }
-      }
-    };
-    captureState.finalize = finalizeUserTurn;
-    captureState.abort = (reason = "capture_suppressed") => {
-      if (captureFinalized) return;
-      captureFinalized = true;
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: "voice_turn_dropped",
-        metadata: {
-          sessionId: session.id,
-          reason: String(reason || "capture_suppressed"),
-          bytesSent: captureState.bytesSent,
-          durationMs: Math.max(0, Date.now() - captureState.startedAt)
-        }
-      });
-      cleanupCapture();
-      maybeTriggerDeferredActions();
-      if (useOpenAiPerUserAsr) {
-        this.scheduleOpenAiAsrSessionIdleClose({
-          session,
-          userId
-        });
-      } else if (useOpenAiSharedAsr) {
-        this.releaseOpenAiSharedAsrActiveUser(session, userId);
-        if (!this.tryHandoffSharedAsrToWaitingCapture({ session, settings })) {
-          this.scheduleOpenAiSharedAsrSessionIdleClose(session);
-        }
-      }
-    };
-    captureState.maxFlushTimer = setTimeout(() => {
-      finalizeUserTurn("max_duration");
-    }, CAPTURE_MAX_DURATION_MS);
-
-    // Listen for user audio and stream-end from subprocess
-    const onUserAudioEnd = (audioUserId) => {
-      if (String(audioUserId || "") !== userId) return;
-      // Subprocess AfterSilence stream ended — finalize if not already done.
-      if (!captureFinalized) {
-        finalizeUserTurn("stream_end");
-      }
-    };
-
-    // Removes the per-capture IPC listeners. Called both from cleanupCapture
-    // (when the individual capture ends) and from session cleanup (as a safety net).
-    let listenersRemoved = false;
-    const removeListeners = () => {
-      if (listenersRemoved) return;
-      listenersRemoved = true;
-      session.voxClient?.off("userAudio", onUserAudio);
-      session.voxClient?.off("userAudioEnd", onUserAudioEnd);
-    };
-    captureState.removeSubprocessListeners = removeListeners;
-
-    if (session.voxClient) {
-      session.voxClient.on("userAudio", onUserAudio);
-      session.voxClient.on("userAudioEnd", onUserAudioEnd);
-      session.cleanupHandlers.push(removeListeners);
-    }
+      settings
+    });
   }
 
   maybeHandleInterruptedReplyRecovery({

@@ -416,6 +416,28 @@ export interface VoiceSessionSoundboardState {
     lastDirectiveAt: number;
 }
 
+export interface CaptureState {
+    userId: string;
+    startedAt: number;
+    promotedAt: number;
+    promotionReason: string | null;
+    asrUtteranceId: number;
+    bytesSent: number;
+    signalSampleCount: number;
+    signalActiveSampleCount: number;
+    signalPeakAbs: number;
+    signalSumSquares: number;
+    pcmChunks: Buffer[];
+    sharedAsrBytesSent: number;
+    lastActivityTouchAt: number;
+    idleFlushTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
+    maxFlushTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
+    speakingEndFinalizeTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
+    finalize: ((reason?: string) => void) | null;
+    abort: ((reason?: string) => void) | null;
+    removeSubprocessListeners: (() => void) | null;
+}
+
 export type OutputChannelDeferredBlockReason =
     | "session_inactive"
     | "active_captures"
@@ -537,7 +559,7 @@ export interface VoiceSession {
     lastThoughtSpokenAt: number;
     joinGreetingOpportunity: JoinGreetingOpportunityState | null;
     joinGreetingTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
-    userCaptures: Map<string, any>;
+    userCaptures: Map<string, CaptureState>;
     streamWatch: VoiceSessionStreamWatchState;
     music: VoiceSessionMusicState;
     soundboard: VoiceSessionSoundboardState;
