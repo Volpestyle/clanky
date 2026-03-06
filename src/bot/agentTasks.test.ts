@@ -79,6 +79,9 @@ test("runModelRequestedBrowserBrowse reports openai computer use unavailable wit
       browserManager: new BrowserManager()
     },
     async (ctx) => {
+      // Null out the OpenAI client so the guard fires
+      (ctx.llm as any).openai = null;
+
       const settings = createTestSettings({
         browser: {
           enabled: true
