@@ -224,6 +224,7 @@ export const DEFAULT_SETTINGS = {
       fadeMs: 300
     },
     replyPath: "bridge",
+    ttsMode: "realtime",
     asrEnabled: true,
     textOnlyMode: false,
     operationalMessages: "all"

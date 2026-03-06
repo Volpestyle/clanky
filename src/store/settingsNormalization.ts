@@ -706,6 +706,9 @@ export function normalizeSettings(raw) {
       : "bridge";
   merged.voice.replyPath = resolvedReplyPath;
 
+  const rawTtsMode = String(merged.voice?.ttsMode || "").trim().toLowerCase();
+  merged.voice.ttsMode = rawTtsMode === "api" ? "api" : "realtime";
+
   merged.voice.thoughtEngine.enabled =
     merged.voice?.thoughtEngine?.enabled !== undefined
       ? Boolean(merged.voice?.thoughtEngine?.enabled)

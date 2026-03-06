@@ -1498,6 +1498,10 @@ export class VoiceSessionManager {
     const normalizedDelayMs = clamp(Math.round(Number(delayMs) || 0), 0, 15_000);
     session.botSpeechMusicUnduckTimer = setTimeout(() => {
       session.botSpeechMusicUnduckTimer = null;
+      if (this.hasBufferedTtsPlayback(session) || Boolean(session.botTurnOpen)) {
+        this.scheduleBotSpeechMusicUnduck(session, settings, Math.min(200, normalizedDelayMs || 200));
+        return;
+      }
       this.releaseBotSpeechMusicDuck(session, settings).catch(() => undefined);
     }, normalizedDelayMs);
   }
@@ -3244,6 +3248,8 @@ export class VoiceSessionManager {
     if (!session || session.ending) return { allowed: false };
     if (!this.isBargeInInterruptTargetActive(session)) return { allowed: false };
     const botTurnOpenAt = Number(session.botTurnOpenAt || 0);
+    const liveAudioStreaming = this.isAudioActivelyFlowing(session);
+    const bufferedBotSpeech = this.hasBufferedTtsPlayback(session);
     if (!session.botTurnOpen && botTurnOpenAt <= 0) {
       // Bot is not currently speaking and turn was never opened (or was
       // reset). Only allow barge-in if the pending response already
@@ -3256,6 +3262,15 @@ export class VoiceSessionManager {
         return { allowed: false };
       }
     } else if (botTurnOpenAt > 0 && Date.now() - botTurnOpenAt < BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS) {
+      return { allowed: false };
+    }
+    if (!liveAudioStreaming && bufferedBotSpeech) {
+      return { allowed: false };
+    }
+    // If the bot isn't actively streaming audio (just subprocess draining
+    // buffered frames), the response is effectively complete. Don't barge-in
+    // on tail-end playback — it just truncates finished sentences.
+    if (!liveAudioStreaming && !session.botTurnOpen) {
       return { allowed: false };
     }
     const normalizedUserId = String(userId || "").trim();
@@ -3282,7 +3297,11 @@ export class VoiceSessionManager {
     }
     if (Number(captureState?.bytesSent || 0) < minCaptureBytes) return { allowed: false };
     if (!this.isCaptureSignalAssertive(captureState)) return { allowed: false };
-    if (session.botTurnOpen && !this.isCaptureSignalAssertiveDuringBotSpeech(captureState)) {
+    // Use the stricter echo-rejection gate whenever the bot is speaking or
+    // has recently been speaking. The bot's own audio echoes back through
+    // Discord voice capture and can trigger false barge-in.
+    const botRecentlySpeaking = session.botTurnOpen || liveAudioStreaming || bufferedBotSpeech;
+    if (botRecentlySpeaking && !this.isCaptureSignalAssertiveDuringBotSpeech(captureState)) {
       return { allowed: false };
     }
     return { allowed: true, minCaptureBytes, interruptionPolicy };
@@ -3457,7 +3476,13 @@ export class VoiceSessionManager {
       session.pendingResponse.audioReceivedAt = Number(session.lastAudioDeltaAt || now);
     }
 
-    if (isRealtimeMode(session.mode) && retryUtteranceText) {
+    // Only queue a retry and set full suppression if the response was
+    // actually cancelled. If the cancel failed, the response already
+    // completed — there's nothing to retry and we should not suppress
+    // the follow-up audio (which would be a new legitimate response).
+    const responseWasActuallyCancelled = Boolean(cancelTelemetry.responseCancelSucceeded);
+
+    if (isRealtimeMode(session.mode) && retryUtteranceText && responseWasActuallyCancelled) {
       this.setDeferredVoiceAction(session, {
         type: "interrupted_reply",
         goal: "complete_interrupted_reply",
@@ -3478,7 +3503,9 @@ export class VoiceSessionManager {
       this.clearDeferredVoiceAction(session, "interrupted_reply");
     }
 
-    session.bargeInSuppressionUntil = now + BARGE_IN_SUPPRESSION_MAX_MS;
+    session.bargeInSuppressionUntil = responseWasActuallyCancelled
+      ? now + BARGE_IN_SUPPRESSION_MAX_MS
+      : now + BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS;
     session.bargeInSuppressedAudioChunks = 0;
     session.bargeInSuppressedAudioBytes = 0;
 
@@ -3494,7 +3521,7 @@ export class VoiceSessionManager {
         streamBufferedBytesDropped: 0,
         pendingRequestId,
         minCaptureBytes: Math.max(0, Number(minCaptureBytes || 0)),
-        suppressionMs: BARGE_IN_SUPPRESSION_MAX_MS,
+        suppressionMs: responseWasActuallyCancelled ? BARGE_IN_SUPPRESSION_MAX_MS : BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS,
         captureSignalPeak: captureState ? Math.max(0, Number(captureState.signalPeakAbs || 0)) / 32768 : null,
         captureSignalActiveSampleRatio: captureState && Number(captureState.signalSampleCount || 0) > 0
           ? Math.max(0, Number(captureState.signalActiveSampleCount || 0)) / Number(captureState.signalSampleCount)
@@ -3504,7 +3531,7 @@ export class VoiceSessionManager {
         botTurnAgeMs: Number(session.botTurnOpenAt || 0) > 0
           ? Math.max(0, now - Number(session.botTurnOpenAt))
           : null,
-        queuedRetryUtterance: Boolean(isRealtimeMode(session.mode) && retryUtteranceText),
+        queuedRetryUtterance: Boolean(isRealtimeMode(session.mode) && retryUtteranceText && responseWasActuallyCancelled),
         retryInterruptionPolicyScope: interruptionPolicy?.scope || null,
         retryInterruptionPolicyAllowedUserId: interruptionPolicy?.allowedUserId || null,
         ...cancelTelemetry,
@@ -3520,6 +3547,18 @@ export class VoiceSessionManager {
     // With subprocess, we can't check stream buffer; rely on recent audio delta timing.
     const msSinceLastDelta = Date.now() - Number(session.lastAudioDeltaAt || 0);
     return msSinceLastDelta < 200;
+  }
+
+  getBufferedTtsSamples(session) {
+    if (!session || session.ending) return 0;
+    const voxClient = session.voxClient;
+    if (!voxClient || typeof voxClient !== "object") return 0;
+    if ("isAlive" in voxClient && voxClient.isAlive === false) return 0;
+    return Math.max(0, Number(voxClient.ttsBufferDepthSamples || 0));
+  }
+
+  hasBufferedTtsPlayback(session) {
+    return this.getBufferedTtsSamples(session) > 0;
   }
 
   trackOpenAiRealtimeAssistantAudioEvent(session, event) {
@@ -4039,6 +4078,7 @@ export class VoiceSessionManager {
         reason: "session_inactive",
         musicActive: false,
         botTurnOpen: false,
+        bufferedBotSpeech: false,
         pendingResponse: false,
         openAiActiveResponse: false,
         streamBufferedBytes: 0
@@ -4048,11 +4088,13 @@ export class VoiceSessionManager {
     const streamBufferedBytes = 0; // Subprocess manages its own stream buffer
     const musicActive = musicPhaseShouldLockOutput(this.getMusicPhase(session));
     const botTurnOpen = Boolean(session.botTurnOpen);
+    const bufferedBotSpeech = this.hasBufferedTtsPlayback(session);
     const pendingResponse = Boolean(session.pendingResponse && typeof session.pendingResponse === "object");
     const openAiActiveResponse = this.isRealtimeResponseActive(session);
     const locked =
       musicActive ||
       botTurnOpen ||
+      bufferedBotSpeech ||
       pendingResponse ||
       openAiActiveResponse;
 
@@ -4063,6 +4105,8 @@ export class VoiceSessionManager {
       reason = "pending_response";
     } else if (openAiActiveResponse) {
       reason = "openai_active_response";
+    } else if (bufferedBotSpeech) {
+      reason = "bot_audio_buffered";
     } else if (botTurnOpen) {
       reason = "bot_turn_open";
     }
@@ -4072,6 +4116,7 @@ export class VoiceSessionManager {
       reason,
       musicActive,
       botTurnOpen,
+      bufferedBotSpeech,
       pendingResponse,
       openAiActiveResponse,
       streamBufferedBytes
@@ -4090,7 +4135,7 @@ export class VoiceSessionManager {
     if (!session.voxClient?.isAlive) return false;
 
     // Send the entire TTS PCM buffer to the subprocess. The Rust side now
-    // caps pcm_buffer at 5s (240k samples @ 48kHz) and drops oldest samples
+    // caps pcm_buffer at 15s (720k samples @ 48kHz) and drops oldest samples
     // on overflow, so unbounded growth is no longer possible.
     const sampleRate = Math.max(8_000, Math.floor(Number(inputSampleRateHz) || 24_000));
     try {
@@ -4956,8 +5001,10 @@ export class VoiceSessionManager {
     const line = normalizeVoiceText(thoughtCandidate, STT_REPLY_MAX_CHARS);
     if (!line) return false;
 
-    if (isRealtimeMode(session.mode)) {
-      const requestedRealtimeUtterance = this.requestRealtimeTextUtterance({
+    const useApiTts = String(settings?.voice?.ttsMode || "").trim().toLowerCase() === "api";
+    let requestedRealtimeUtterance = false;
+    if (isRealtimeMode(session.mode) && !useApiTts) {
+      requestedRealtimeUtterance = this.requestRealtimeTextUtterance({
         session,
         text: line,
         userId: this.client.user?.id || null,
@@ -5110,7 +5157,8 @@ export class VoiceSessionManager {
     if (!line) return;
 
     const realtimeMode = isRealtimeMode(session.mode);
-    if (realtimeMode && this.requestRealtimeTextUtterance({
+    const busyUseApiTts = String(settings?.voice?.ttsMode || "").trim().toLowerCase() === "api";
+    if (realtimeMode && !busyUseApiTts && this.requestRealtimeTextUtterance({
       session,
       text: line,
       userId,
@@ -5118,7 +5166,7 @@ export class VoiceSessionManager {
     })) {
       return;
     }
-    if (realtimeMode) return;
+    if (realtimeMode && !busyUseApiTts) return;
 
     await this.speakVoiceLineWithTts({
       session,
@@ -5619,15 +5667,16 @@ export class VoiceSessionManager {
       const now = Date.now();
       if (now >= deadlineAt) break;
       const botTurnOpen = Boolean(session.botTurnOpen);
+      const bufferedBotSpeech = this.hasBufferedTtsPlayback(session);
       const pending = session.pendingResponse;
       const pendingHasAudio = pending ? this.pendingResponseHasAudio(session, pending) : false;
       const hasPostRequestAudio = Number(session.lastAudioDeltaAt || 0) >= audioRequestedAt;
 
-      if (botTurnOpen || pendingHasAudio || hasPostRequestAudio) {
+      if (botTurnOpen || bufferedBotSpeech || pendingHasAudio || hasPostRequestAudio) {
         observedPlayback = true;
       }
 
-      if (observedPlayback && !botTurnOpen && (session.playerState === "idle" || session.playerState === "buffering")) {
+      if (observedPlayback && !botTurnOpen && !bufferedBotSpeech) {
         break;
       }
 
@@ -5827,7 +5876,11 @@ export class VoiceSessionManager {
     const replyPath = String(resolvedSettings?.voice?.replyPath || "")
       .trim()
       .toLowerCase();
-    if (replyPath === "bridge") return true;
+    if (replyPath === "bridge") {
+      const ttsMode = String(resolvedSettings?.voice?.ttsMode || "").trim().toLowerCase();
+      if (ttsMode === "api") return false;
+      return true;
+    }
     if (replyPath === "brain" || replyPath === "native") return false;
     return false;
   }
@@ -9316,7 +9369,9 @@ export class VoiceSessionManager {
           "Tooling policy:",
           localToolNames.length > 0 ? `- Local tools: ${localToolNames.join(", ")}` : null,
           mcpToolNames.length > 0 ? `- MCP tools: ${mcpToolNames.join(", ")}` : null,
-          "- Use tools when they improve factuality or action execution.",
+          "- Use tools when they improve factuality or action execution. Always call the tool — never just say you will.",
+          "- Lookup chain: web_search → web_scrape → browser_browse. Start with web_search for general queries. Use web_scrape to read a specific URL. Use browser_browse only when you need JS rendering or page interaction (clicking, scrolling).",
+          "- When users ask you to look something up, search for something, find prices, or need current/factual information, call web_search immediately in the same response. Do not respond with only audio saying you will search — include the tool call.",
           "- Use conversation_search when the speaker asks what was said earlier or asks you to remember a prior exchange.",
           "- For memory writes, only store concise durable facts and avoid secrets.",
           settings?.adaptiveDirectives?.enabled
@@ -10619,13 +10674,14 @@ export class VoiceSessionManager {
     };
     this.setActiveReplyInterruptionPolicy(session, replyInterruptionPolicy);
     session.lastAssistantReplyAt = replyRequestedAt;
+    const useRealtimeTts = String(settings?.voice?.ttsMode || "").trim().toLowerCase() !== "api";
     const playbackResult = await this.playVoiceReplyInOrder({
       session,
       settings,
       spokenText: playbackPlan.spokenText,
       playbackSteps: playbackPlan.steps,
       source: `${String(source || "realtime")}:reply`,
-      preferRealtimeUtterance: true,
+      preferRealtimeUtterance: useRealtimeTts,
       interruptionPolicy: replyInterruptionPolicy,
       latencyContext: replyLatencyContext
     });

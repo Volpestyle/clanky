@@ -88,6 +88,8 @@ export function VoiceModeSettingsSection({
   const isBridgePath = replyPath === "bridge";
   const isBrainPath = replyPath === "brain";
   const isNativePath = replyPath === "native";
+  const ttsMode = String(form.voiceTtsMode || "realtime").trim().toLowerCase();
+  const isApiTts = ttsMode === "api";
   const openAiRealtimeTranscriptionMethodOptions = OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS;
   const openAiRealtimeTranscriptionMethod = String(
     form.voiceOpenAiRealtimeTranscriptionMethod || "realtime_bridge"
@@ -115,7 +117,7 @@ export function VoiceModeSettingsSection({
         { label: "Realtime Model", active: true },
         { label: "Audio Out", active: true }
       ]
-    : isBridgePath
+    : isBridgePath && !isApiTts
     ? [
         { label: "Audio In", active: true },
         { label: "ASR", active: true },
@@ -128,7 +130,7 @@ export function VoiceModeSettingsSection({
         { label: "ASR", active: true },
         { label: "Admission (Text Brain)", active: true },
         { label: "Text Brain", active: true },
-        { label: "TTS", active: true },
+        { label: isApiTts ? "TTS API" : "Realtime TTS", active: true },
         { label: "Audio Out", active: true }
       ];
 
@@ -192,6 +194,86 @@ export function VoiceModeSettingsSection({
 
               {/* ── Pipeline Flow Indicator ── */}
               <PipelineFlowIndicator stages={pipelineStages} />
+
+              {/* ── TTS Mode ── */}
+              {!isNativePath && (
+                <>
+                  <h4>TTS Mode</h4>
+                  <div className="radio-group">
+                    <label>
+                      <input
+                        type="radio"
+                        name="voiceTtsMode"
+                        value="realtime"
+                        checked={!isApiTts}
+                        onChange={set("voiceTtsMode")}
+                      />
+                      <strong>Realtime</strong>
+                      <span> &mdash; Uses the realtime WebSocket for text-to-speech. Lower latency, voice tied to realtime model.</span>
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="voiceTtsMode"
+                        value="api"
+                        checked={isApiTts}
+                        onChange={set("voiceTtsMode")}
+                      />
+                      <strong>TTS API</strong>
+                      <span> &mdash; Uses OpenAI TTS REST API (gpt-4o-mini-tts). More voice options, independent of realtime model.</span>
+                    </label>
+                  </div>
+                  {isApiTts && (
+                    <div className="split">
+                      <div>
+                        <label htmlFor="voice-tts-api-model">TTS model</label>
+                        <select
+                          id="voice-tts-api-model"
+                          value={form.voiceSttPipelineTtsModel}
+                          onChange={set("voiceSttPipelineTtsModel")}
+                        >
+                          <option value="gpt-4o-mini-tts">gpt-4o-mini-tts</option>
+                          <option value="tts-1">tts-1</option>
+                          <option value="tts-1-hd">tts-1-hd</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label htmlFor="voice-tts-api-voice">TTS voice</label>
+                        <select
+                          id="voice-tts-api-voice"
+                          value={form.voiceSttPipelineTtsVoice}
+                          onChange={set("voiceSttPipelineTtsVoice")}
+                        >
+                          <option value="alloy">alloy</option>
+                          <option value="ash">ash</option>
+                          <option value="ballad">ballad</option>
+                          <option value="coral">coral</option>
+                          <option value="echo">echo</option>
+                          <option value="fable">fable</option>
+                          <option value="nova">nova</option>
+                          <option value="onyx">onyx</option>
+                          <option value="sage">sage</option>
+                          <option value="shimmer">shimmer</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label htmlFor="voice-tts-api-speed">TTS speed</label>
+                        <input
+                          id="voice-tts-api-speed"
+                          type="range"
+                          min="0.25"
+                          max="2"
+                          step="0.05"
+                          value={form.voiceSttPipelineTtsSpeed}
+                          onChange={set("voiceSttPipelineTtsSpeed")}
+                          style={rangeStyle(form.voiceSttPipelineTtsSpeed, 0.25, 2)}
+                        />
+                        <span className="range-value">{Number(form.voiceSttPipelineTtsSpeed).toFixed(2)}x</span>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
             </>
           )}
 
