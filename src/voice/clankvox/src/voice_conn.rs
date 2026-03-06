@@ -10,6 +10,7 @@ use anyhow::{bail, Context, Result};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
@@ -21,6 +22,73 @@ use tracing::{debug, error, info, trace, warn};
 use crate::dave::DaveManager;
 
 type WsStream = tokio_tungstenite::WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+
+#[derive(Debug, Deserialize)]
+struct VoiceOpcode<T> {
+    op: u64,
+    d: T,
+}
+
+#[derive(Debug, Deserialize)]
+struct HelloPayload {
+    heartbeat_interval: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReadyPayload {
+    ssrc: u32,
+    ip: String,
+    port: u16,
+    modes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionDescriptionPayload {
+    secret_key: Vec<u8>,
+    #[serde(default)]
+    dave_protocol_version: u16,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpeakingPayload {
+    ssrc: u32,
+    user_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UserIdPayload {
+    user_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TransitionPayload {
+    transition_id: u16,
+    #[serde(default)]
+    protocol_version: u16,
+}
+
+#[derive(Debug, Deserialize)]
+struct EpochPayload {
+    protocol_version: u16,
+    epoch: u64,
+}
+
+fn parse_voice_opcode<T>(text: &str) -> Result<VoiceOpcode<T>>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    serde_json::from_str(text).context("invalid voice gateway payload")
+}
+
+fn parse_user_id(user_id: &str, context: &str) -> Option<u64> {
+    match user_id.parse::<u64>() {
+        Ok(user_id) => Some(user_id),
+        Err(error) => {
+            warn!(user_id, context, error = %error, "ignoring voice gateway payload with invalid user id");
+            None
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Events emitted by the voice connection back to the main loop
@@ -579,9 +647,9 @@ async fn recv_hello(
             .context("WS stream ended")?
             .context("WS error")?;
         if let Message::Text(text) = msg {
-            let v: Value = serde_json::from_str(&text)?;
-            if v["op"].as_u64() == Some(8) {
-                return Ok(v["d"]["heartbeat_interval"].as_f64().unwrap_or(13750.0));
+            let message: VoiceOpcode<HelloPayload> = parse_voice_opcode(&text)?;
+            if message.op == 8 {
+                return Ok(message.d.heartbeat_interval.unwrap_or(13_750.0));
             }
         }
     }
@@ -600,21 +668,17 @@ async fn recv_ready(
             .context("WS error")?;
         match &msg {
             Message::Text(text) => {
-                let v: Value = serde_json::from_str(text)?;
-                if v["op"].as_u64() == Some(2) {
-                    let d = &v["d"];
-                    let ssrc = d["ssrc"].as_u64().context("missing ssrc")? as u32;
-                    let ip = d["ip"].as_str().context("missing ip")?.to_string();
-                    let port = d["port"].as_u64().context("missing port")? as u16;
-                    let modes: Vec<String> = d["modes"]
-                        .as_array()
-                        .context("missing modes")?
-                        .iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect();
+                let message: VoiceOpcode<ReadyPayload> = parse_voice_opcode(text)?;
+                if message.op == 2 {
+                    let ReadyPayload {
+                        ssrc,
+                        ip,
+                        port,
+                        modes,
+                    } = message.d;
                     return Ok((ssrc, ip, port, modes));
                 }
-                debug!("Handshake (waiting OP2): buffered text op={}", v["op"]);
+                debug!("Handshake (waiting OP2): buffered text op={}", message.op);
                 overflow.push(msg);
             }
             Message::Binary(data) => {
@@ -643,18 +707,11 @@ async fn recv_session_description(
             .context("WS error")?;
         match &msg {
             Message::Text(text) => {
-                let v: Value = serde_json::from_str(text)?;
-                if v["op"].as_u64() == Some(4) {
-                    let key: Vec<u8> = v["d"]["secret_key"]
-                        .as_array()
-                        .context("missing secret_key")?
-                        .iter()
-                        .map(|b| b.as_u64().unwrap_or(0) as u8)
-                        .collect();
-                    let dave_pv = v["d"]["dave_protocol_version"].as_u64().unwrap_or(0) as u16;
-                    return Ok((key, dave_pv));
+                let message: VoiceOpcode<SessionDescriptionPayload> = parse_voice_opcode(text)?;
+                if message.op == 4 {
+                    return Ok((message.d.secret_key, message.d.dave_protocol_version));
                 }
-                debug!("Handshake (waiting OP4): buffered text op={}", v["op"]);
+                debug!("Handshake (waiting OP4): buffered text op={}", message.op);
                 overflow.push(msg);
             }
             Message::Binary(data) => {
@@ -768,39 +825,60 @@ async fn handle_text_opcode(
         }
         // Speaking state update (OP5) — SSRC map only, speaking detection is audio-driven
         5 => {
-            let ssrc = d["ssrc"].as_u64().unwrap_or(0) as u32;
-            let uid = d["user_id"]
-                .as_str()
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(0);
+            let payload: SpeakingPayload = match serde_json::from_value(d.clone()) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    warn!(error = %error, "ignoring malformed speaking payload");
+                    return;
+                }
+            };
+            let Some(uid) = parse_user_id(&payload.user_id, "speaking") else {
+                return;
+            };
 
-            ssrc_map.lock().insert(ssrc, uid);
+            ssrc_map.lock().insert(payload.ssrc, uid);
 
             let _ = event_tx
-                .send(VoiceEvent::SsrcUpdate { ssrc, user_id: uid })
+                .send(VoiceEvent::SsrcUpdate {
+                    ssrc: payload.ssrc,
+                    user_id: uid,
+                })
                 .await;
         }
         // Client disconnect
         12 => {
-            if let Some(uid) = d["user_id"].as_str().and_then(|s| s.parse::<u64>().ok()) {
-                ssrc_map.lock().retain(|_, v| *v != uid);
-                let _ = event_tx
-                    .send(VoiceEvent::ClientDisconnect { user_id: uid })
-                    .await;
-            }
+            let payload: UserIdPayload = match serde_json::from_value(d.clone()) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    warn!(error = %error, "ignoring malformed client disconnect payload");
+                    return;
+                }
+            };
+            let Some(uid) = parse_user_id(&payload.user_id, "client_disconnect") else {
+                return;
+            };
+            ssrc_map.lock().retain(|_, v| *v != uid);
+            let _ = event_tx
+                .send(VoiceEvent::ClientDisconnect { user_id: uid })
+                .await;
         }
         // OP21: DavePrepareTransition — a transition is upcoming, respond with OP23
         21 => {
-            let transition_id = d["transition_id"].as_u64().unwrap_or(0) as u16;
-            let pv = d["protocol_version"].as_u64().unwrap_or(0) as u16;
+            let payload: TransitionPayload = match serde_json::from_value(d.clone()) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    warn!(error = %error, "ignoring malformed DAVE OP21 payload");
+                    return;
+                }
+            };
             info!(
                 "DAVE OP21: prepare transition id={} pv={}",
-                transition_id, pv
+                payload.transition_id, payload.protocol_version
             );
             let send_ready = {
                 let mut guard = dave.lock();
                 if let Some(ref mut dm) = *guard {
-                    dm.prepare_transition(transition_id, pv)
+                    dm.prepare_transition(payload.transition_id, payload.protocol_version)
                 } else {
                     false
                 }
@@ -810,26 +888,32 @@ async fn handle_text_opcode(
                 let _ = ws_cmd_tx
                     .send(WsCommand::SendJson(json!({
                         "op": 23,
-                        "d": { "transition_id": transition_id }
+                        "d": { "transition_id": payload.transition_id }
                     })))
                     .await;
                 info!(
                     "DAVE: sent OP23 transition ready for prepare transition {}",
-                    transition_id
+                    payload.transition_id
                 );
             }
         }
         // OP22: DaveExecuteTransition — finalize the pending transition
         22 => {
-            let transition_id = d["transition_id"].as_u64().unwrap_or(0) as u16;
+            let payload: TransitionPayload = match serde_json::from_value(d.clone()) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    warn!(error = %error, "ignoring malformed DAVE OP22 payload");
+                    return;
+                }
+            };
             info!(
                 "DAVE OP22: execute transition received, transition_id={}",
-                transition_id
+                payload.transition_id
             );
             let transitioned = {
                 let mut guard = dave.lock();
                 if let Some(ref mut dm) = *guard {
-                    dm.execute_transition(transition_id)
+                    dm.execute_transition(payload.transition_id)
                 } else {
                     false
                 }
@@ -846,15 +930,23 @@ async fn handle_text_opcode(
         }
         // OP24: DavePrepareEpoch — a new DAVE epoch is upcoming
         24 => {
-            let pv = d["protocol_version"].as_u64().unwrap_or(0) as u16;
-            let epoch = d["epoch"].as_u64().unwrap_or(0);
-            info!("DAVE OP24: prepare epoch pv={} epoch={}", pv, epoch);
+            let payload: EpochPayload = match serde_json::from_value(d.clone()) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    warn!(error = %error, "ignoring malformed DAVE OP24 payload");
+                    return;
+                }
+            };
+            info!(
+                "DAVE OP24: prepare epoch pv={} epoch={}",
+                payload.protocol_version, payload.epoch
+            );
 
-            if pv > 0 {
+            if payload.protocol_version > 0 {
                 let pkg_to_send = {
                     let mut guard = dave.lock();
                     if guard.is_none() {
-                        match DaveManager::new(pv, bot_user_id, channel_id) {
+                        match DaveManager::new(payload.protocol_version, bot_user_id, channel_id) {
                             Ok((dm, pkg)) => {
                                 *guard = Some(dm);
                                 Some(pkg)
@@ -1423,7 +1515,10 @@ async fn udp_recv_loop(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_rtp_header, parse_rtp_header, TransportCrypto, OPUS_PT, RTP_HEADER_LEN};
+    use super::{
+        build_rtp_header, parse_rtp_header, parse_user_id, parse_voice_opcode, HelloPayload,
+        SessionDescriptionPayload, TransportCrypto, VoiceOpcode, OPUS_PT, RTP_HEADER_LEN,
+    };
 
     #[test]
     fn rtp_header_round_trips() {
@@ -1488,5 +1583,28 @@ mod tests {
             .decrypt(&packet, header.len())
             .expect("decrypt should succeed");
         assert_eq!(decrypted, payload);
+    }
+
+    #[test]
+    fn parse_voice_opcode_rejects_invalid_secret_key_bytes() {
+        let text = r#"{"op":4,"d":{"secret_key":[1,999],"dave_protocol_version":1}}"#;
+
+        let parsed = parse_voice_opcode::<SessionDescriptionPayload>(text);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn parse_voice_opcode_reads_hello_payload() {
+        let text = r#"{"op":8,"d":{"heartbeat_interval":2500.0}}"#;
+
+        let parsed: VoiceOpcode<HelloPayload> = parse_voice_opcode(text).expect("hello payload");
+        assert_eq!(parsed.op, 8);
+        assert_eq!(parsed.d.heartbeat_interval, Some(2500.0));
+    }
+
+    #[test]
+    fn parse_user_id_rejects_non_numeric_values() {
+        assert_eq!(parse_user_id("42", "test"), Some(42));
+        assert_eq!(parse_user_id("bad", "test"), None);
     }
 }
