@@ -44,6 +44,16 @@ type ConnectAsrOptions = {
   language?: string | null;
   prompt?: string | null;
 };
+export type ClankvoxIpcErrorCode =
+  | "invalid_request"
+  | "invalid_json"
+  | "input_too_large"
+  | "voice_connect_failed"
+  | "voice_runtime_error";
+type ClankvoxIpcError = {
+  code: ClankvoxIpcErrorCode | null;
+  message: string;
+};
 type ClankvoxCommand =
   | {
       type: "join";
@@ -94,6 +104,19 @@ function asString(value: unknown): string | null {
 
 function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asClankvoxIpcErrorCode(value: unknown): ClankvoxIpcErrorCode | null {
+  switch (value) {
+    case "invalid_request":
+    case "invalid_json":
+    case "input_too_large":
+    case "voice_connect_failed":
+    case "voice_runtime_error":
+      return value;
+    default:
+      return null;
+  }
 }
 
 export class ClankvoxClient extends EventEmitter {
@@ -499,8 +522,11 @@ export class ClankvoxClient extends EventEmitter {
       }
       case "error": {
         const message = asString(msg.message);
+        const code = asClankvoxIpcErrorCode(msg.code);
         if (message !== null) {
-          this.emit("error", message);
+          const ipcError: ClankvoxIpcError = { message, code };
+          this.emit("ipcError", ipcError);
+          this.emit("error", message, code ?? undefined);
         }
         break;
       }

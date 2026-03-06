@@ -137,3 +137,36 @@ test("ClankvoxClient buffer depth telemetry clears buffered playback state at ze
   assert.equal(client.getTtsPlaybackState(), "idle");
   assert.equal(client.getTtsTelemetryUpdatedAt() >= firstUpdatedAt, true);
 });
+
+test("ClankvoxClient emits structured IPC errors while preserving error message listeners", () => {
+  const client = new ClankvoxClient("guild-1", "channel-1", null);
+  const handleMessage = Reflect.get(client, "_handleMessage").bind(client);
+  const errorEvents: Array<{ message: string; code: string | undefined }> = [];
+  const ipcErrors: Array<{ message: string; code: string | null }> = [];
+
+  client.on("error", (message: string, code?: string) => {
+    errorEvents.push({ message, code });
+  });
+  client.on("ipcError", (error: { message: string; code: string | null }) => {
+    ipcErrors.push(error);
+  });
+
+  handleMessage({
+    type: "error",
+    code: "voice_connect_failed",
+    message: "Voice connect failed: websocket closed"
+  });
+
+  assert.deepEqual(errorEvents, [
+    {
+      message: "Voice connect failed: websocket closed",
+      code: "voice_connect_failed"
+    }
+  ]);
+  assert.deepEqual(ipcErrors, [
+    {
+      message: "Voice connect failed: websocket closed",
+      code: "voice_connect_failed"
+    }
+  ]);
+});
