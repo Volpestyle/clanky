@@ -771,37 +771,11 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       };
 
       manager.sessions.set(guildId, session);
-      manager.bindVoxHandlers(session);
-      manager.musicPlayer?.setVoxClient?.(session.voxClient);
-      manager.bindSessionHandlers(session, settings);
-      if (isRealtimeMode(runtimeMode)) {
-        manager.bindRealtimeHandlers(session, settings);
-      }
-      if (providerSupports(runtimeMode, "updateTools")) {
-        await manager.refreshRealtimeTools({
-          session,
-          settings,
-          reason: "session_start"
-        });
-      }
-      if (providerSupports(runtimeMode, "updateInstructions")) {
-        manager.scheduleRealtimeInstructionRefresh({
-          session,
-          settings,
-          reason: "session_start"
-        });
-      }
-      manager.startSessionTimers(session, settings);
-
-      // Pre-warm per-user ASR WebSocket so the first utterance doesn't
-      // pay the ~1-4 s connection cost.
-      if (perUserAsrEnabled && typeof manager.ensureOpenAiAsrSessionConnected === "function") {
-        void manager.ensureOpenAiAsrSessionConnected({
-          session,
-          settings,
-          userId
-        });
-      }
+      await manager.attachSessionRuntime({
+        session,
+        settings,
+        initialSpeakerUserId: userId
+      });
 
       manager.store.logAction({
         kind: "voice_session_start",
