@@ -8,6 +8,7 @@
 
 import { EventEmitter } from "node:events";
 import path from "node:path";
+import type { TtsPlaybackState } from "./assistantOutputState.ts";
 
 type ClankvoxProcess = ReturnType<typeof Bun.spawn<"pipe", "pipe", "inherit">>;
 
@@ -26,6 +27,8 @@ export class ClankvoxClient extends EventEmitter {
   private adapterCleanup: (() => void) | null = null;
   private stdoutBuffer: Buffer = Buffer.alloc(0);
   private lastPlaybackArmedReason: string | null = null;
+  private lastTtsPlaybackState: TtsPlaybackState = "idle";
+  private lastTtsTelemetryAt = 0;
   /** Latest TTS buffer depth reported by clankvox (samples @ 48kHz) */
   ttsBufferDepthSamples: number = 0;
   private stdoutReaderController: AbortController | null = null;
@@ -298,6 +301,13 @@ export class ClankvoxClient extends EventEmitter {
         this.lastPlaybackArmedReason = String(msg.reason || "").trim() || null;
         this.emit("playbackArmed", msg.reason);
         break;
+      case "tts_playback_state": {
+        const status = String(msg.status || "").trim().toLowerCase() === "buffered" ? "buffered" : "idle";
+        this.lastTtsTelemetryAt = Date.now();
+        this.lastTtsPlaybackState = status;
+        this.emit("ttsPlaybackState", status);
+        break;
+      }
       case "speaking_start":
         this.emit("speakingStart", msg.userId);
         break;
@@ -337,7 +347,10 @@ export class ClankvoxClient extends EventEmitter {
         this.emit("musicGainReached", msg.gain);
         break;
       case "buffer_depth":
-        this.ttsBufferDepthSamples = msg.ttsSamples ?? 0;
+        this.lastTtsTelemetryAt = Date.now();
+        this.ttsBufferDepthSamples = Math.max(0, Number(msg.ttsSamples ?? 0));
+        this.lastTtsPlaybackState =
+          this.ttsBufferDepthSamples > 0 ? "buffered" : "idle";
         this.emit("bufferDepth", msg.ttsSamples, msg.musicSamples);
         break;
       case "error":
@@ -355,6 +368,24 @@ export class ClankvoxClient extends EventEmitter {
 
   getPlaybackArmedReason(): string | null {
     return this.lastPlaybackArmedReason;
+  }
+
+  clearTtsPlaybackTelemetry(): void {
+    this.lastTtsTelemetryAt = Date.now();
+    this.lastTtsPlaybackState = "idle";
+    this.ttsBufferDepthSamples = 0;
+  }
+
+  getTtsPlaybackState(): TtsPlaybackState {
+    return this.lastTtsPlaybackState;
+  }
+
+  getTtsBufferDepthSamples(): number {
+    return Math.max(0, Number(this.ttsBufferDepthSamples || 0));
+  }
+
+  getTtsTelemetryUpdatedAt(): number {
+    return Math.max(0, Number(this.lastTtsTelemetryAt || 0));
   }
 
   /** Returns the latest reported TTS buffer depth in seconds (48kHz sample rate). */

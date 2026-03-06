@@ -111,3 +111,29 @@ test("ClankvoxClient destroy sends gateway leave before exit", async () => {
     }
   ]);
 });
+
+test("ClankvoxClient buffer depth telemetry clears buffered playback state at zero depth", () => {
+  const client = new ClankvoxClient("guild-1", "channel-1", null);
+  const handleMessage = Reflect.get(client, "_handleMessage").bind(client);
+
+  handleMessage({
+    type: "buffer_depth",
+    ttsSamples: 24_000,
+    musicSamples: 0
+  });
+
+  const firstUpdatedAt = client.getTtsTelemetryUpdatedAt();
+  assert.equal(client.getTtsBufferDepthSamples(), 24_000);
+  assert.equal(client.getTtsPlaybackState(), "buffered");
+  assert.equal(firstUpdatedAt > 0, true);
+
+  handleMessage({
+    type: "buffer_depth",
+    ttsSamples: 0,
+    musicSamples: 0
+  });
+
+  assert.equal(client.getTtsBufferDepthSamples(), 0);
+  assert.equal(client.getTtsPlaybackState(), "idle");
+  assert.equal(client.getTtsTelemetryUpdatedAt() >= firstUpdatedAt, true);
+});
