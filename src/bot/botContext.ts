@@ -171,13 +171,13 @@ type QueueGatewayRuntimeMember =
   | "hasConnectedAtLeastOnce"
   | "lastGatewayEventAt"
   | "reconnectTimeout"
-  | "markGatewayEvent"
   | "reconnectAttempts";
 
 export interface QueueGatewayRuntime extends BotContext, Pick<ClankerBot, QueueGatewayRuntimeMember> {
   isChannelAllowed: IsChannelAllowedRuntimeFn;
   isUserBlocked: IsUserBlockedRuntimeFn;
   getReplyAddressSignal: GetReplyAddressSignalRuntimeFn;
+  markGatewayEvent: () => void;
 }
 
 type ReplyPipelineRuntimeMember =
@@ -192,7 +192,6 @@ type ReplyPipelineRuntimeMember =
   | "logSkippedReply"
   | "getSimulatedTypingDelayMs"
   | "shouldSendAsReply"
-  | "markSpoke"
   | "canSendMessage"
   | "canTalkNow";
 
@@ -228,6 +227,7 @@ export interface ReplyPipelineRuntime extends BotContext, Pick<ClankerBot, Reply
   maybeAttachGeneratedImage: StripFirstArg<MaybeAttachGeneratedImageFn>;
   maybeAttachGeneratedVideo: StripFirstArg<MaybeAttachGeneratedVideoFn>;
   composeMessageContentForHistory: ComposeMessageContentForHistoryRuntimeFn;
+  markSpoke: () => void;
 }
 
 export interface VoiceReplyRuntime extends BotContext {

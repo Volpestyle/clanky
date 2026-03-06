@@ -112,9 +112,6 @@ import {
   dequeueReplyBurst,
   dequeueReplyJob,
   ensureGatewayHealthy,
-  getReplyCoalesceMaxMessages,
-  getReplyCoalesceWaitMs,
-  getReplyCoalesceWindowMs,
   getReplyQueueWaitMs,
   processReplyQueue,
   reconnectGateway,
@@ -124,10 +121,6 @@ import {
 import {
   evaluateDiscoverySchedule,
   evaluateSpontaneousDiscoverySchedule,
-  getDiscoveryAverageIntervalMs,
-  getDiscoveryMinGapMs,
-  getDiscoveryPacingMode,
-  getDiscoveryPostingIntervalMs,
   pickDiscoveryChannel
 } from "./bot/discoverySchedule.ts";
 import type {
@@ -476,7 +469,9 @@ export class ClankerBot {
         composeMessageContentForHistoryForMessageHistory(message as Parameters<
           typeof composeMessageContentForHistoryForMessageHistory
         >[0], baseText),
-      markSpoke: () => this.markSpoke(),
+      markSpoke: () => {
+        this.lastBotMessageAt = Date.now();
+      },
       getSimulatedTypingDelayMs: (minMs, jitterMs) => this.getSimulatedTypingDelayMs(minMs, jitterMs),
       isChannelAllowed: (settings, channelId) =>
         isChannelAllowedForPermissions(settings, String(channelId)),
@@ -507,7 +502,9 @@ export class ClankerBot {
       canSendMessage: (maxPerHour) => this.canSendMessage(maxPerHour),
       canTalkNow: (settings) => this.canTalkNow(settings),
       getSimulatedTypingDelayMs: (minMs, jitterMs) => this.getSimulatedTypingDelayMs(minMs, jitterMs),
-      markSpoke: () => this.markSpoke(),
+      markSpoke: () => {
+        this.lastBotMessageAt = Date.now();
+      },
       composeMessageContentForHistory: (message, baseText) =>
         composeMessageContentForHistoryForMessageHistory(message as Parameters<
           typeof composeMessageContentForHistoryForMessageHistory
@@ -604,7 +601,9 @@ export class ClankerBot {
       hasConnectedAtLeastOnce: this.hasConnectedAtLeastOnce,
       lastGatewayEventAt: this.lastGatewayEventAt,
       reconnectTimeout: this.reconnectTimeout,
-      markGatewayEvent: () => this.markGatewayEvent(),
+      markGatewayEvent: () => {
+        this.lastGatewayEventAt = Date.now();
+      },
       reconnectAttempts: this.reconnectAttempts
     };
 
@@ -759,7 +758,9 @@ export class ClankerBot {
         maybeAttachGeneratedVideoForMediaAttachment(mediaAttachmentContext, payload),
       getSimulatedTypingDelayMs: (minMs, jitterMs) => this.getSimulatedTypingDelayMs(minMs, jitterMs),
       shouldSendAsReply: (payload) => this.shouldSendAsReply(payload),
-      markSpoke: () => this.markSpoke(),
+      markSpoke: () => {
+        this.lastBotMessageAt = Date.now();
+      },
       composeMessageContentForHistory: (message, baseText) =>
         composeMessageContentForHistoryForMessageHistory(message as Parameters<
           typeof composeMessageContentForHistoryForMessageHistory
@@ -803,7 +804,7 @@ export class ClankerBot {
     this.client.on("clientReady", async () => {
       this.hasConnectedAtLeastOnce = true;
       this.reconnectAttempts = 0;
-      this.markGatewayEvent();
+      this.lastGatewayEventAt = Date.now();
       console.log(`Logged in as ${this.client.user?.tag || "unknown"}`);
 
       try {
@@ -816,11 +817,11 @@ export class ClankerBot {
     });
 
     this.client.on("shardResume", () => {
-      this.markGatewayEvent();
+      this.lastGatewayEventAt = Date.now();
     });
 
     this.client.on("shardDisconnect", (event, shardId) => {
-      this.markGatewayEvent();
+      this.lastGatewayEventAt = Date.now();
       this.store.logAction({
         kind: "bot_error",
         userId: this.client.user?.id,
@@ -829,7 +830,7 @@ export class ClankerBot {
     });
 
     this.client.on("shardError", (error, shardId) => {
-      this.markGatewayEvent();
+      this.lastGatewayEventAt = Date.now();
       this.store.logAction({
         kind: "bot_error",
         userId: this.client.user?.id,
@@ -838,7 +839,7 @@ export class ClankerBot {
     });
 
     this.client.on("error", (error) => {
-      this.markGatewayEvent();
+      this.lastGatewayEventAt = Date.now();
       this.store.logAction({
         kind: "bot_error",
         userId: this.client.user?.id,
@@ -847,7 +848,7 @@ export class ClankerBot {
     });
 
     this.client.on("invalidated", () => {
-      this.markGatewayEvent();
+      this.lastGatewayEventAt = Date.now();
       this.store.logAction({
         kind: "bot_error",
         userId: this.client.user?.id,
@@ -1082,7 +1083,7 @@ export class ClankerBot {
   async start() {
     this.isStopping = false;
     await this.client.login(this.appConfig.discordToken);
-    this.markGatewayEvent();
+    this.lastGatewayEventAt = Date.now();
 
     this.memoryTimer = setInterval(() => {
       this.memory.refreshMemoryMarkdown().catch(() => undefined);
@@ -1246,10 +1247,6 @@ export class ClankerBot {
     });
   }
 
-  markGatewayEvent() {
-    this.lastGatewayEventAt = Date.now();
-  }
-
   getReplyQueuePendingCount() {
     let total = 0;
     for (const queue of this.replyQueues.values()) {
@@ -1317,18 +1314,6 @@ export class ClankerBot {
 
   getReplyQueueWaitMs(settings) {
     return getReplyQueueWaitMs(this.toQueueGatewayRuntime(), settings);
-  }
-
-  getReplyCoalesceWindowMs(settings) {
-    return getReplyCoalesceWindowMs(settings);
-  }
-
-  getReplyCoalesceMaxMessages(settings) {
-    return getReplyCoalesceMaxMessages(settings);
-  }
-
-  getReplyCoalesceWaitMs(settings, message) {
-    return getReplyCoalesceWaitMs(settings, message);
   }
 
   dequeueReplyJob(channelId) {
@@ -1683,7 +1668,7 @@ export class ClankerBot {
     });
     const sendMs = Math.max(0, Date.now() - sendStartedAtMs);
 
-    this.markSpoke();
+    this.lastBotMessageAt = Date.now();
     this.store.recordMessage({
       messageId: sent.id,
       createdAt: sent.createdTimestamp,
@@ -1867,10 +1852,6 @@ export class ClankerBot {
     return elapsed >= activity.minSecondsBetweenMessages * 1000;
   }
 
-  markSpoke() {
-    this.lastBotMessageAt = Date.now();
-  }
-
   canTakeAction(kind, maxPerHour) {
     const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const count = this.store.countActionsSince(kind, since);
@@ -2036,22 +2017,6 @@ export class ClankerBot {
     } catch {
       return [];
     }
-  }
-
-  getDiscoveryPostingIntervalMs(settings) {
-    return getDiscoveryPostingIntervalMs(settings);
-  }
-
-  getDiscoveryAverageIntervalMs(settings) {
-    return getDiscoveryAverageIntervalMs(settings);
-  }
-
-  getDiscoveryPacingMode(settings) {
-    return getDiscoveryPacingMode(settings);
-  }
-
-  getDiscoveryMinGapMs(settings) {
-    return getDiscoveryMinGapMs(settings);
   }
 
   evaluateDiscoverySchedule({ settings, startup, lastPostTs, elapsedMs, posts24h }) {
