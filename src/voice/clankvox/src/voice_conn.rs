@@ -884,17 +884,7 @@ async fn handle_text_opcode(
                 }
             };
             if send_ready {
-                // OP23 = DaveTransitionReady (client → server)
-                let _ = ws_cmd_tx
-                    .send(WsCommand::SendJson(json!({
-                        "op": 23,
-                        "d": { "transition_id": payload.transition_id }
-                    })))
-                    .await;
-                info!(
-                    "DAVE: sent OP23 transition ready for prepare transition {}",
-                    payload.transition_id
-                );
+                send_transition_ready(ws_cmd_tx, payload.transition_id, "prepare").await;
             }
         }
         // OP22: DaveExecuteTransition — finalize the pending transition
@@ -1101,49 +1091,37 @@ async fn handle_binary_opcode(
             );
 
             // Process commit under lock, collect any recovery action, then drop lock
-            let (ready, success, recovery_action) = {
-                let mut guard = dave.lock();
-                if let Some(ref mut dm) = *guard {
-                    match dm.process_commit(commit_payload) {
-                        Ok(()) => {
-                            dm.store_pending_transition(transition_id);
-                            (dm.is_ready(), true, None)
+            let (ready, success, recovery_action) =
+                {
+                    let mut guard = dave.lock();
+                    if let Some(ref mut dm) = *guard {
+                        match dm.process_commit(commit_payload) {
+                            Ok(()) => {
+                                dm.store_pending_transition(transition_id);
+                                (dm.is_ready(), true, None)
+                            }
+                            Err(e) => {
+                                error!("DAVE process_commit: {}", e);
+                                let recovery = dm.reinit().map_err(|error| {
+                                error!(error = %error, "DAVE reinit failed after commit error");
+                                error
+                            }).ok();
+                                (false, false, recovery)
+                            }
                         }
-                        Err(e) => {
-                            error!("DAVE process_commit: {}", e);
-                            let recovery = dm.reinit().ok();
-                            (false, false, recovery)
-                        }
+                    } else {
+                        (false, false, None)
                     }
-                } else {
-                    (false, false, None)
-                }
-            };
+                };
             // Lock is dropped — safe to await
 
             if let Some(recovery) = recovery_action {
-                let mut op31 = vec![31u8];
-                op31.extend_from_slice(&recovery.transition_id.to_be_bytes());
-                let _ = ws_cmd_tx.send(WsCommand::SendBinary(op31)).await;
-                let mut op26 = vec![26u8];
-                op26.extend_from_slice(&recovery.key_package);
-                let _ = ws_cmd_tx.send(WsCommand::SendBinary(op26)).await;
-                warn!("DAVE: recovery from failed commit, sent OP31 + OP26");
+                send_recovery_action(ws_cmd_tx, recovery, "failed commit").await;
             }
 
             // Match discord.js behavior: for non-zero transitions, confirm readiness with OP23.
             if success && transition_id != 0 {
-                // OP23 = DaveTransitionReady (client → server)
-                let _ = ws_cmd_tx
-                    .send(WsCommand::SendJson(json!({
-                        "op": 23,
-                        "d": { "transition_id": transition_id }
-                    })))
-                    .await;
-                info!(
-                    "DAVE: sent OP23 transition ready for commit transition {}",
-                    transition_id
-                );
+                send_transition_ready(ws_cmd_tx, transition_id, "commit").await;
             }
 
             if ready {
@@ -1175,8 +1153,7 @@ async fn handle_binary_opcode(
                             (dm.is_ready(), true, None)
                         }
                         Err(e) => {
-                            let err_msg = format!("{:?}", e);
-                            if err_msg.contains("AlreadyInGroup") || err_msg.contains("already") {
+                            if is_already_in_group_error(&e) {
                                 // AlreadyInGroup is only benign when we already processed
                                 // the corresponding OP29 for this transition id.
                                 if dm.has_pending_transition_id(transition_id) {
@@ -1195,7 +1172,10 @@ async fn handle_binary_opcode(
                                 }
                             } else {
                                 error!("DAVE process_welcome failed: {}", e);
-                                let recovery = dm.reinit().ok();
+                                let recovery = dm.reinit().map_err(|error| {
+                                    error!(error = %error, "DAVE reinit failed after welcome error");
+                                    error
+                                }).ok();
                                 (false, false, recovery)
                             }
                         }
@@ -1207,28 +1187,12 @@ async fn handle_binary_opcode(
             // Lock is dropped — safe to await
 
             if let Some(recovery) = recovery_action {
-                let mut op31 = vec![31u8];
-                op31.extend_from_slice(&recovery.transition_id.to_be_bytes());
-                let _ = ws_cmd_tx.send(WsCommand::SendBinary(op31)).await;
-                let mut op26 = vec![26u8];
-                op26.extend_from_slice(&recovery.key_package);
-                let _ = ws_cmd_tx.send(WsCommand::SendBinary(op26)).await;
-                warn!("DAVE: recovery from failed welcome, sent OP31 + OP26");
+                send_recovery_action(ws_cmd_tx, recovery, "failed welcome").await;
             }
 
             // Match discord.js behavior: for non-zero transitions, confirm readiness with OP23.
             if success && transition_id != 0 {
-                // OP23 = DaveTransitionReady (client → server)
-                let _ = ws_cmd_tx
-                    .send(WsCommand::SendJson(json!({
-                        "op": 23,
-                        "d": { "transition_id": transition_id }
-                    })))
-                    .await;
-                info!(
-                    "DAVE: sent OP23 transition ready for welcome transition {}",
-                    transition_id
-                );
+                send_transition_ready(ws_cmd_tx, transition_id, "welcome").await;
             }
 
             if ready {
@@ -1250,6 +1214,60 @@ async fn handle_binary_opcode(
             );
         }
     }
+}
+
+async fn send_transition_ready(
+    ws_cmd_tx: &mpsc::Sender<WsCommand>,
+    transition_id: u16,
+    reason: &str,
+) {
+    let _ = ws_cmd_tx
+        .send(WsCommand::SendJson(json!({
+            "op": 23,
+            "d": { "transition_id": transition_id }
+        })))
+        .await;
+    info!(
+        "DAVE: sent OP23 transition ready for {} transition {}",
+        reason, transition_id
+    );
+}
+
+async fn send_recovery_action(
+    ws_cmd_tx: &mpsc::Sender<WsCommand>,
+    recovery: crate::dave::RecoveryAction,
+    reason: &str,
+) {
+    let mut op31 = vec![31u8];
+    op31.extend_from_slice(&recovery.transition_id.to_be_bytes());
+    let _ = ws_cmd_tx.send(WsCommand::SendBinary(op31)).await;
+
+    let mut op26 = vec![26u8];
+    op26.extend_from_slice(&recovery.key_package);
+    let _ = ws_cmd_tx.send(WsCommand::SendBinary(op26)).await;
+
+    warn!("DAVE: recovery from {}, sent OP31 + OP26", reason);
+}
+
+fn try_reinit_dave(
+    dave: &Arc<Mutex<Option<DaveManager>>>,
+    reason: &str,
+) -> Option<crate::dave::RecoveryAction> {
+    let mut guard = dave.lock();
+    let dm = guard.as_mut()?;
+
+    match dm.reinit() {
+        Ok(recovery) => Some(recovery),
+        Err(error) => {
+            error!(reason, error = %error, "DAVE reinit failed");
+            None
+        }
+    }
+}
+
+fn is_already_in_group_error(error: &anyhow::Error) -> bool {
+    let message = format!("{error:?}");
+    message.contains("AlreadyInGroup") || message.contains("already")
 }
 
 async fn ws_write_loop(
@@ -1487,19 +1505,13 @@ async fn udp_recv_loop(
             None => {
                 // DAVE decrypt failed — trigger recovery if threshold exceeded
                 if needs_recovery {
-                    let recovery = {
-                        let mut guard = dave.lock();
-                        guard.as_mut().and_then(|dm| dm.reinit().ok())
-                    };
+                    let recovery = try_reinit_dave(&dave, "udp decrypt failures");
                     if let Some(recovery) = recovery {
-                        let mut op31 = vec![31u8];
-                        op31.extend_from_slice(&recovery.transition_id.to_be_bytes());
-                        let _ = ws_cmd_tx.send(WsCommand::SendBinary(op31)).await;
-                        let mut op26 = vec![26u8];
-                        op26.extend_from_slice(&recovery.key_package);
-                        let _ = ws_cmd_tx.send(WsCommand::SendBinary(op26)).await;
-                        warn!("DAVE: recovery initiated from UDP recv ({} failures), sent OP31 + OP26",
-                            crate::dave::FAILURE_TOLERANCE);
+                        send_recovery_action(&ws_cmd_tx, recovery, "udp decrypt failures").await;
+                        warn!(
+                            "DAVE: recovery initiated from UDP recv after {} failures",
+                            crate::dave::FAILURE_TOLERANCE
+                        );
                     }
                 }
                 continue;
