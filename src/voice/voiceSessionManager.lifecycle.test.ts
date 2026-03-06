@@ -2272,7 +2272,7 @@ test("maybeRunVoiceThoughtLoop speaks approved thought candidates", async () => 
   });
 
   const scheduledDelays = [];
-  manager.scheduleVoiceThoughtLoop = ({ delayMs }) => {
+  manager.thoughtEngine.scheduleVoiceThoughtLoop = ({ delayMs }) => {
     scheduledDelays.push(delayMs);
   };
   manager.generateVoiceThoughtCandidate = async () => "did you know octopuses have three hearts";
@@ -2327,7 +2327,7 @@ test("maybeRunVoiceThoughtLoop skips generation when eagerness probability roll 
     settingsSnapshot: settings
   });
 
-  manager.scheduleVoiceThoughtLoop = () => {};
+  manager.thoughtEngine.scheduleVoiceThoughtLoop = () => {};
   manager.generateVoiceThoughtCandidate = async () => {
     throw new Error("thought generation should not run when probability gate fails");
   };

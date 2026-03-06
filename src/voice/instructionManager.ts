@@ -9,6 +9,7 @@ import {
   loadConversationContinuityContext,
   type ConversationContinuityPayload
 } from "../bot/conversationContinuity.ts";
+import type { GreetingManager } from "./greetingManager.ts";
 import {
   REALTIME_CONTEXT_MEMBER_LIMIT,
   REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS,
@@ -119,10 +120,6 @@ interface MusicPromptContext {
   lastQuery: string | null;
 }
 
-interface JoinGreetingOpportunityLike {
-  fireAt?: number | null;
-}
-
 interface QueueRealtimeTurnContextRefreshArgs {
   session: VoiceSession;
   settings?: InstructionSettings;
@@ -217,11 +214,7 @@ export interface InstructionManagerHost {
     session: VoiceSession
   ) => MusicDisambiguationPromptContext | null;
   getMusicPromptContext: (session: VoiceSession) => MusicPromptContext | null;
-  getJoinGreetingOpportunity: (session: VoiceSession) => JoinGreetingOpportunityLike | null;
-  scheduleJoinGreetingOpportunity: (
-    session: VoiceSession,
-    args: { delayMs: number; reason?: string }
-  ) => void;
+  greetingManager: Pick<GreetingManager, "getJoinGreetingOpportunity" | "scheduleJoinGreetingOpportunity">;
 }
 
 export class InstructionManager {
@@ -543,10 +536,10 @@ export class InstructionManager {
         }
       });
 
-      const joinGreetingOpportunity = this.host.getJoinGreetingOpportunity(session);
+      const joinGreetingOpportunity = this.host.greetingManager.getJoinGreetingOpportunity(session);
       if (joinGreetingOpportunity && session.playbackArmed && !session.lastAssistantReplyAt) {
         const delayMs = Math.max(0, Number(joinGreetingOpportunity.fireAt || 0) - Date.now());
-        this.host.scheduleJoinGreetingOpportunity(session, {
+        this.host.greetingManager.scheduleJoinGreetingOpportunity(session, {
           delayMs,
           reason: "join_greeting_grace"
         });

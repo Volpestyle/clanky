@@ -25,17 +25,17 @@ import {
   VOICE_MAX_DURATION_WARNING_SECONDS
 } from "./voiceSessionManager.constants.ts";
 import type { BargeInController } from "./bargeInController.ts";
+import type { DeferredActionQueue } from "./deferredActionQueue.ts";
+import type { GreetingManager } from "./greetingManager.ts";
 import type { InstructionManager } from "./instructionManager.ts";
 import type { ReplyManager } from "./replyManager.ts";
+import type { ThoughtEngine } from "./thoughtEngine.ts";
 import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 import { musicPhaseShouldAllowDucking, type VoiceSession } from "./voiceSessionTypes.ts";
 import { providerSupports } from "./voiceModes.ts";
 
 type SessionLifecycleHost = Pick<
   VoiceSessionManager,
-  | "armJoinGreetingOpportunity"
-  | "clearAllDeferredVoiceActions"
-  | "clearJoinGreetingOpportunity"
   | "clearVoiceThoughtLoopTimer"
   | "client"
   | "endSession"
@@ -54,7 +54,6 @@ type SessionLifecycleHost = Pick<
   | "recordVoiceTurn"
   | "refreshRealtimeTools"
   | "resolveSpeakingEndFinalizeDelayMs"
-  | "scheduleVoiceThoughtLoop"
   | "sessions"
   | "setMusicPhase"
   | "startInboundCapture"
@@ -63,6 +62,8 @@ type SessionLifecycleHost = Pick<
 > & {
   bargeInController: Pick<BargeInController, "isBargeInOutputSuppressed">;
   instructionManager: Pick<InstructionManager, "scheduleRealtimeInstructionRefresh">;
+  deferredActionQueue: Pick<DeferredActionQueue, "clearAllDeferredVoiceActions">;
+  greetingManager: Pick<GreetingManager, "armJoinGreetingOpportunity" | "clearJoinGreetingOpportunity">;
   replyManager: Pick<
     ReplyManager,
     | "armResponseSilenceWatchdog"
@@ -75,14 +76,60 @@ type SessionLifecycleHost = Pick<
     | "resetBotAudioPlayback"
     | "syncAssistantOutputState"
   >;
+  thoughtEngine: Pick<ThoughtEngine, "scheduleVoiceThoughtLoop">;
 };
 
 type SessionLifecycleSettings = VoiceSession["settingsSnapshot"];
 type RefreshRealtimeToolsArgs = NonNullable<Parameters<SessionLifecycleHost["refreshRealtimeTools"]>[0]>;
 type RefreshRealtimeToolsSession = RefreshRealtimeToolsArgs["session"];
+type EndSessionArgs = Parameters<SessionLifecycleHost["endSession"]>[0];
 
 export class SessionLifecycle {
   constructor(private readonly host: SessionLifecycleHost) {}
+
+  private logAsyncFailure({
+    session,
+    content,
+    error,
+    metadata = {},
+    userId = this.host.client.user?.id || null
+  }: {
+    session: VoiceSession;
+    content: string;
+    error: unknown;
+    metadata?: Record<string, unknown>;
+    userId?: string | null;
+  }) {
+    this.host.store.logAction({
+      kind: "voice_error",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: `${content}: ${String((error as Error)?.message || error)}`,
+      metadata: {
+        sessionId: session.id,
+        ...metadata
+      }
+    });
+  }
+
+  private fireAndForgetEndSession(
+    session: VoiceSession,
+    args: EndSessionArgs,
+    source: string
+  ) {
+    void this.host.endSession(args).catch((error) => {
+      this.logAsyncFailure({
+        session,
+        content: "voice_end_session_dispatch_failed",
+        error,
+        metadata: {
+          source,
+          reason: String(args?.reason || "unknown")
+        }
+      });
+    });
+  }
 
   async reconcileSettings(settings: SessionLifecycleSettings) {
     const voiceEnabled = Boolean(getVoiceSettings(settings).enabled);
@@ -141,12 +188,12 @@ export class SessionLifecycle {
 
     session.maxEndsAt = Date.now() + maxDurationMs;
     session.maxTimer = setTimeout(() => {
-      this.host.endSession({
+      this.fireAndForgetEndSession(session, {
         guildId: session.guildId,
         reason: "max_duration",
         announcement: `max session time (${maxSessionMinutes}m) reached, leaving vc.`,
         settings
-      }).catch(() => undefined);
+      }, "max_duration_timer");
     }, maxDurationMs);
 
     this.host.touchActivity(session.guildId, settings);
@@ -194,6 +241,17 @@ export class SessionLifecycle {
         session,
         settings: resolvedSettings,
         userId: initialSpeakerUserId
+      }).catch((error) => {
+        this.logAsyncFailure({
+          session,
+          content: "voice_asr_session_connect_failed",
+          error,
+          metadata: {
+            source: "session_start",
+            speakerUserId: initialSpeakerUserId
+          },
+          userId: initialSpeakerUserId
+        });
       });
     }
   }
@@ -230,7 +288,7 @@ export class SessionLifecycle {
 
   clearSessionRuntimeState(session: VoiceSession | null | undefined) {
     if (!session) return;
-    this.host.clearJoinGreetingOpportunity(session);
+    this.host.greetingManager.clearJoinGreetingOpportunity(session);
     this.host.clearVoiceThoughtLoopTimer(session);
     session.thoughtLoopBusy = false;
     session.pendingResponse = null;
@@ -238,7 +296,7 @@ export class SessionLifecycle {
     session.pendingSttTurnsQueue = [];
     session.pendingSttTurns = 0;
     session.pendingRealtimeTurns = [];
-    this.host.clearAllDeferredVoiceActions(session);
+    this.host.deferredActionQueue.clearAllDeferredVoiceActions(session);
     session.awaitingToolOutputs = false;
     session.openAiPendingToolCalls = new Map();
     session.openAiToolCallExecutions = new Map();
@@ -284,15 +342,15 @@ export class SessionLifecycle {
 
     session.inactivityEndsAt = Date.now() + inactivitySeconds * 1000;
     session.inactivityTimer = setTimeout(() => {
-      this.host.endSession({
+      this.fireAndForgetEndSession(session, {
         guildId: session.guildId,
         reason: "inactivity_timeout",
         announcement: `no one talked for ${inactivitySeconds}s, leaving vc.`,
         settings: resolvedSettings
-      }).catch(() => undefined);
+      }, "inactivity_timer");
     }, inactivitySeconds * 1000);
 
-    this.host.scheduleVoiceThoughtLoop({
+    this.host.thoughtEngine.scheduleVoiceThoughtLoop({
       session,
       settings: resolvedSettings
     });
@@ -367,7 +425,7 @@ export class SessionLifecycle {
       session.playbackArmedAt = Date.now();
       this.host.replyManager.syncAssistantOutputState(session, "vox_playback_armed");
       if (reason !== "connection_ready") return;
-      this.host.armJoinGreetingOpportunity(session, {
+      this.host.greetingManager.armJoinGreetingOpportunity(session, {
         trigger: "connection_ready"
       });
     };
@@ -499,7 +557,16 @@ export class SessionLifecycle {
         this.host.engageBotSpeechMusicDuck(
           session,
           session.settingsSnapshot || this.host.store.getSettings()
-        ).catch(() => undefined);
+        ).catch((error) => {
+          this.logAsyncFailure({
+            session,
+            content: "voice_music_duck_failed",
+            error,
+            metadata: {
+              source: "audio_delta"
+            }
+          });
+        });
       }
 
       if (!session.voxClient?.isAlive) return;
@@ -589,7 +656,17 @@ export class SessionLifecycle {
               source: `realtime_output_transcript_${directiveIndex}`
             });
           }
-        })().catch(() => undefined);
+        })().catch((error) => {
+          this.logAsyncFailure({
+            session,
+            content: "voice_soundboard_directive_failed",
+            error,
+            metadata: {
+              transcriptEventType: transcriptEventType || null,
+              requestedSoundboardRefs
+            }
+          });
+        });
       }
     };
 
@@ -646,12 +723,12 @@ export class SessionLifecycle {
         return;
       }
 
-      this.host.endSession({
+      this.fireAndForgetEndSession(session, {
         guildId: session.guildId,
         reason: "realtime_runtime_error",
         announcement: "voice runtime hit an error, leaving vc.",
         settings
-      }).catch(() => undefined);
+      }, "realtime_error_event");
     };
 
     const onSocketClosed = (closeInfo) => {
@@ -671,12 +748,12 @@ export class SessionLifecycle {
         }
       });
 
-      this.host.endSession({
+      this.fireAndForgetEndSession(session, {
         guildId: session.guildId,
         reason: "realtime_socket_closed",
         announcement: "lost realtime voice runtime, leaving vc.",
         settings
-      }).catch(() => undefined);
+      }, "realtime_socket_closed");
     };
 
     const onSocketError = (socketError) => {
@@ -749,12 +826,12 @@ export class SessionLifecycle {
     const onConnectionState = (status) => {
       if (session.ending) return;
       if (status === "destroyed" || status === "disconnected") {
-        this.host.endSession({
+        this.fireAndForgetEndSession(session, {
           guildId: session.guildId,
           reason: "connection_lost",
           announcement: "voice connection dropped, i'm out.",
           settings
-        }).catch(() => undefined);
+        }, "voice_connection_state");
       }
     };
 
@@ -763,12 +840,12 @@ export class SessionLifecycle {
       console.error(
         `[voiceSessionManager] subprocess crashed code=${code} signal=${signal} guild=${session.guildId}`
       );
-      this.host.endSession({
+      this.fireAndForgetEndSession(session, {
         guildId: session.guildId,
         reason: "subprocess_crashed",
         announcement: "voice subprocess crashed, i'm out.",
         settings
-      }).catch(() => undefined);
+      }, "vox_subprocess_crashed");
     };
 
     if (session.voxClient) {

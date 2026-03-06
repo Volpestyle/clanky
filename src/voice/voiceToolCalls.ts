@@ -1043,7 +1043,20 @@ export async function executeVoiceMusicQueueAddTool(
   const shouldAutoPlay = wasEmpty && !manager.isMusicPlaybackActive(session) && !queueState.isPaused;
   if (shouldAutoPlay && settings) {
     const playIndex = queueState.nowPlayingIndex ?? 0;
-    manager.playVoiceQueueTrackByIndex({ session, settings, index: playIndex }).catch(() => undefined);
+    manager.playVoiceQueueTrackByIndex({ session, settings, index: playIndex }).catch((error) => {
+      manager.store.logAction({
+        kind: "voice_error",
+        guildId: String(session?.guildId || "").trim() || null,
+        channelId: String(session?.textChannelId || "").trim() || null,
+        userId: manager.client.user?.id || null,
+        content: `voice_music_queue_autoplay_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: String(session?.id || "").trim() || null,
+          playIndex,
+          queueLength: queueState.tracks.length
+        }
+      });
+    });
   }
 
   return {

@@ -217,7 +217,6 @@ import { ensureSessionToolRuntimeState, getVoiceMcpServerStatuses, resolveVoiceR
 import type {
   DeferredQueuedUserTurn,
   DeferredVoiceAction,
-  DeferredVoiceActionType,
   OutputChannelState
 } from "./voiceSessionTypes.ts";
 import {
@@ -750,7 +749,7 @@ export class VoiceSessionManager {
       const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
       const modelTurns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
       const transcriptTurns = Array.isArray(session.transcriptTurns) ? session.transcriptTurns : [];
-      const deferredQueue = this.getDeferredQueuedUserTurns(session);
+      const deferredQueue = this.deferredActionQueue.getDeferredQueuedUserTurns(session);
       const generationSummary =
         session.modelContextSummary && typeof session.modelContextSummary === "object"
           ? session.modelContextSummary.generation || null
@@ -854,7 +853,7 @@ export class VoiceSessionManager {
             active: joinWindowActive,
             ageMs: Math.round(joinWindowAgeMs),
             windowMs: JOIN_GREETING_LLM_WINDOW_MS,
-            greetingPending: Boolean(this.getJoinGreetingOpportunity(session)),
+            greetingPending: Boolean(this.greetingManager.getJoinGreetingOpportunity(session)),
           },
           thoughtEngine: {
             busy: Boolean(session.thoughtLoopBusy),
@@ -2330,70 +2329,12 @@ export class VoiceSessionManager {
     return this.sessionLifecycle.touchActivity(guildId, settings);
   }
 
-  getJoinGreetingOpportunity(session) {
-    return this.greetingManager.getJoinGreetingOpportunity(session);
-  }
-
-  clearJoinGreetingTimer(session) {
-    return this.greetingManager.clearJoinGreetingTimer(session);
-  }
-
-  clearJoinGreetingOpportunity(session) {
-    return this.greetingManager.clearJoinGreetingOpportunity(session);
-  }
-
-  armJoinGreetingOpportunity(session, {
-    trigger = "connection_ready"
-  }: {
-    trigger?: string | null;
-  } = {}) {
-    return this.greetingManager.armJoinGreetingOpportunity(session, { trigger });
-  }
-
-  scheduleJoinGreetingOpportunity(session, {
-    delayMs = 0,
-    reason = "scheduled_recheck"
-  }: {
-    delayMs?: number;
-    reason?: string;
-  } = {}) {
-    return this.greetingManager.scheduleJoinGreetingOpportunity(session, { delayMs, reason });
-  }
-
   getDeferredOutputChannelBlockReason(session): OutputChannelState["deferredBlockReason"] {
     return this.deferredActionQueue.getDeferredOutputChannelBlockReason(session);
   }
 
-  setDeferredVoiceAction(session, payload = {}) {
-    return this.deferredActionQueue.setDeferredVoiceAction(session, payload);
-  }
-
   getDeferredQueuedUserTurns(session): DeferredQueuedUserTurn[] {
     return this.deferredActionQueue.getDeferredQueuedUserTurns(session);
-  }
-
-  clearDeferredVoiceAction(session, type) {
-    return this.deferredActionQueue.clearDeferredVoiceAction(session, type);
-  }
-
-  clearAllDeferredVoiceActions(session) {
-    return this.deferredActionQueue.clearAllDeferredVoiceActions(session);
-  }
-
-  scheduleDeferredVoiceActionRecheck(session, {
-    type,
-    delayMs = 0,
-    reason = "scheduled_recheck"
-  }: {
-    type: DeferredVoiceActionType;
-    delayMs?: number;
-    reason?: string;
-  }) {
-    return this.deferredActionQueue.scheduleDeferredVoiceActionRecheck(session, {
-      type,
-      delayMs,
-      reason
-    });
   }
 
   /**
@@ -2405,33 +2346,6 @@ export class VoiceSessionManager {
    */
   canFireDeferredAction(session, action: DeferredVoiceAction | null): string | null {
     return this.deferredActionQueue.canFireDeferredAction(session, action);
-  }
-
-  recheckDeferredVoiceActions({
-    session,
-    reason = "manual",
-    preferredTypes = null,
-    context = null
-  }: {
-    session;
-    reason?: string;
-    preferredTypes?: DeferredVoiceActionType[] | null;
-    context?;
-  }) {
-    return this.deferredActionQueue.recheckDeferredVoiceActions({
-      session,
-      reason,
-      preferredTypes,
-      context
-    });
-  }
-
-  maybeFireJoinGreetingOpportunity(session, reason = "manual") {
-    return this.greetingManager.maybeFireJoinGreetingOpportunity(session, reason);
-  }
-
-  canFireJoinGreetingOpportunity(session, opportunity = null): string | null {
-    return this.greetingManager.canFireJoinGreetingOpportunity(session, opportunity);
   }
 
   normalizeReplyInterruptionPolicy(rawPolicy = null) {
@@ -2838,7 +2752,19 @@ export class VoiceSessionManager {
 
     // Unduck music immediately on barge-in so the user hears it while speaking.
     const resolvedSettings = session.settingsSnapshot || this.store.getSettings();
-    this.releaseBotSpeechMusicDuck(session, resolvedSettings, { force: true }).catch(() => undefined);
+    this.releaseBotSpeechMusicDuck(session, resolvedSettings, { force: true }).catch((error) => {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: `voice_music_unduck_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          source: "barge_in_interrupt"
+        }
+      });
+    });
 
     if (session.pendingResponse && typeof session.pendingResponse === "object") {
       session.lastAudioDeltaAt = Math.max(Number(session.lastAudioDeltaAt || 0), command.now);
@@ -2852,7 +2778,7 @@ export class VoiceSessionManager {
     const responseWasActuallyCancelled = Boolean(cancelTelemetry.responseCancelSucceeded);
 
     if (isRealtimeMode(session.mode) && command.retryUtteranceText && responseWasActuallyCancelled) {
-      this.setDeferredVoiceAction(session, {
+      this.deferredActionQueue.setDeferredVoiceAction(session, {
         type: "interrupted_reply",
         goal: "complete_interrupted_reply",
         freshnessPolicy: "retry_then_regenerate",
@@ -2869,7 +2795,7 @@ export class VoiceSessionManager {
         }
       });
     } else {
-      this.clearDeferredVoiceAction(session, "interrupted_reply");
+      this.deferredActionQueue.clearDeferredVoiceAction(session, "interrupted_reply");
     }
 
     session.bargeInSuppressionUntil = responseWasActuallyCancelled
@@ -3110,18 +3036,6 @@ export class VoiceSessionManager {
       session.thoughtLoopTimer = null;
     }
     session.nextThoughtAt = 0;
-  }
-
-  scheduleVoiceThoughtLoop({
-    session,
-    settings = null,
-    delayMs = null
-  }) {
-    return this.thoughtEngine.scheduleVoiceThoughtLoop({
-      session,
-      settings,
-      delayMs
-    });
   }
 
   evaluateVoiceThoughtLoopGate({
@@ -3560,7 +3474,20 @@ export class VoiceSessionManager {
           userId,
           query,
           source
-        }).catch(() => undefined);
+        }).catch((error) => {
+          this.store.logAction({
+            kind: "voice_error",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId: userId || this.client.user?.id || null,
+            content: `voice_web_lookup_busy_announce_failed: ${String(error?.message || error)}`,
+            metadata: {
+              sessionId: session.id,
+              source: String(source || "voice_web_lookup"),
+              query: String(query || "").trim().slice(0, 220) || null
+            }
+          });
+        });
       }, VOICE_LOOKUP_BUSY_ANNOUNCE_DELAY_MS);
       this.store.logAction({
         kind: "voice_runtime",
@@ -4534,7 +4461,7 @@ export class VoiceSessionManager {
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
-    return this.recheckDeferredVoiceActions({
+    return this.deferredActionQueue.recheckDeferredVoiceActions({
       session,
       reason: "barge_in_capture_resolved",
       preferredTypes: ["interrupted_reply"],
@@ -4578,11 +4505,11 @@ export class VoiceSessionManager {
           asrResultAvailable: Boolean(asrResult)
         }
       });
-      this.recheckDeferredVoiceActions({
+      this.deferredActionQueue.recheckDeferredVoiceActions({
         session,
         reason: "empty_asr_bridge_drop"
       });
-      this.maybeFireJoinGreetingOpportunity(session, "empty_asr_bridge_drop");
+      this.greetingManager.maybeFireJoinGreetingOpportunity(session, "empty_asr_bridge_drop");
       return false;
     }
 
@@ -4818,7 +4745,7 @@ export class VoiceSessionManager {
     const normalizedFlushDelayMs = Number.isFinite(Number(flushDelayMs))
       ? Math.max(20, Math.round(Number(flushDelayMs)))
       : BOT_TURN_DEFERRED_FLUSH_DELAY_MS;
-    const pendingQueue = this.getDeferredQueuedUserTurns(session).slice();
+    const pendingQueue = this.deferredActionQueue.getDeferredQueuedUserTurns(session).slice();
     if (pendingQueue.length >= BOT_TURN_DEFERRED_QUEUE_MAX) {
       pendingQueue.shift();
     }
@@ -4834,7 +4761,7 @@ export class VoiceSessionManager {
       queuedAt: Date.now()
     });
     const nextFlushAt = Date.now() + normalizedFlushDelayMs;
-    this.setDeferredVoiceAction(session, {
+    this.deferredActionQueue.setDeferredVoiceAction(session, {
       type: "queued_user_turns",
       goal: "respond_to_deferred_user_turns",
       freshnessPolicy: "regenerate_from_goal",
@@ -4884,14 +4811,14 @@ export class VoiceSessionManager {
     reason = "bot_turn_open_deferred"
   }) {
     if (!session || session.ending) return;
-    const pendingQueue = this.getDeferredQueuedUserTurns(session);
+    const pendingQueue = this.deferredActionQueue.getDeferredQueuedUserTurns(session);
     if (!pendingQueue.length) {
-      this.clearDeferredVoiceAction(session, "queued_user_turns");
+      this.deferredActionQueue.clearDeferredVoiceAction(session, "queued_user_turns");
       return;
     }
     const normalizedDelayMs = Math.max(20, Number(delayMs) || BOT_TURN_DEFERRED_FLUSH_DELAY_MS);
     const nextFlushAt = Date.now() + normalizedDelayMs;
-    this.setDeferredVoiceAction(session, {
+    this.deferredActionQueue.setDeferredVoiceAction(session, {
       type: "queued_user_turns",
       goal: "respond_to_deferred_user_turns",
       freshnessPolicy: "regenerate_from_goal",
@@ -4904,7 +4831,7 @@ export class VoiceSessionManager {
         nextFlushAt
       }
     });
-    this.scheduleDeferredVoiceActionRecheck(session, {
+    this.deferredActionQueue.scheduleDeferredVoiceActionRecheck(session, {
       type: "queued_user_turns",
       delayMs: normalizedDelayMs,
       reason
@@ -4917,7 +4844,9 @@ export class VoiceSessionManager {
     reason = "bot_turn_open_deferred_flush"
   }) {
     if (!session || session.ending) return;
-    const pendingQueue = Array.isArray(deferredTurns) ? deferredTurns : this.getDeferredQueuedUserTurns(session).slice();
+    const pendingQueue = Array.isArray(deferredTurns)
+      ? deferredTurns
+      : this.deferredActionQueue.getDeferredQueuedUserTurns(session).slice();
     if (!pendingQueue.length) return;
     if (!Array.isArray(deferredTurns)) {
       const outputChannelState = this.getOutputChannelState(session);
@@ -4927,7 +4856,7 @@ export class VoiceSessionManager {
       }
     }
     if (!Array.isArray(deferredTurns)) {
-      this.clearDeferredVoiceAction(session, "queued_user_turns");
+      this.deferredActionQueue.clearDeferredVoiceAction(session, "queued_user_turns");
     }
     const deferredTurnsToFlush = pendingQueue;
     const coalescedTurns = deferredTurnsToFlush.slice(-BOT_TURN_DEFERRED_COALESCE_MAX);
@@ -7293,7 +7222,20 @@ export class VoiceSessionManager {
             reason: "bot_disconnected",
             announcement: "i got disconnected from vc.",
             settings: liveSession.settingsSnapshot
-          }).catch(() => undefined);
+          }).catch((error) => {
+            this.store.logAction({
+              kind: "voice_error",
+              guildId,
+              channelId: liveSession.textChannelId,
+              userId: this.client.user?.id || null,
+              content: `voice_end_session_dispatch_failed: ${String(error?.message || error)}`,
+              metadata: {
+                sessionId: liveSession.id,
+                source: "bot_disconnect_grace",
+                reason: "bot_disconnected"
+              }
+            });
+          });
         }, BOT_DISCONNECT_GRACE_MS);
       }
       return;

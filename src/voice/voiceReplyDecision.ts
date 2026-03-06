@@ -29,7 +29,11 @@ import type {
   VoiceConversationContext,
   VoiceReplyDecision,
   VoiceAddressingState,
-  VoiceAddressingAnnotation
+  VoiceAddressingAnnotation,
+  VoiceCommandState,
+  VoiceSession,
+  OutputChannelState,
+  MusicPlaybackPhase
 } from "./voiceSessionTypes.ts";
 import {
   musicPhaseShouldForceCommandOnly
@@ -49,14 +53,86 @@ const CLASSIFIER_HISTORY_MAX_CHARS = 900;
 const VOICE_CLASSIFIER_DEBUG_PROMPT_MAX_CHARS = 12_000;
 const VOICE_CLASSIFIER_DEBUG_OUTPUT_MAX_CHARS = 1_200;
 
-function resolveRealtimeAdmissionMode(settings: any): "hard_classifier" | "generation_only" {
+type ReplyDecisionSettings = Record<string, unknown> | null;
+type ReplyDecisionSessionLike = Partial<VoiceSession>;
+
+type ReplyDecisionStoreLike = {
+  getSettings: () => ReplyDecisionSettings;
+  logAction: (entry: {
+    kind?: string;
+    guildId?: string | null;
+    channelId?: string | null;
+    userId?: string | null;
+    content: string;
+    metadata?: Record<string, unknown>;
+  }) => void;
+};
+
+type ReplyDecisionGenerateResult = {
+  text?: string | null;
+};
+
+type ReplyDecisionGenerateArgs = {
+  settings: ReplyDecisionSettings;
+  systemPrompt: string;
+  userPrompt: string;
+  contextMessages: unknown[];
+  trace?: {
+    guildId?: string | null;
+    channelId?: string | null;
+    userId?: string | null;
+    source?: string | null;
+  };
+};
+
+export interface ReplyDecisionHost {
+  store: ReplyDecisionStoreLike;
+  llm?: {
+    generate?: (args: ReplyDecisionGenerateArgs) => Promise<ReplyDecisionGenerateResult>;
+  } | null;
+  ensureVoiceCommandState?: (
+    session: ReplyDecisionSessionLike | null | undefined
+  ) => VoiceCommandState | null;
+  getVoiceChannelParticipants: (
+    session: ReplyDecisionSessionLike | null | undefined
+  ) => Array<{ userId: string; displayName: string }>;
+  resolveVoiceSpeakerName: (
+    session: ReplyDecisionSessionLike | null | undefined,
+    userId?: string | null
+  ) => string;
+  getOutputChannelState: (
+    session: ReplyDecisionSessionLike | null | undefined
+  ) => Pick<OutputChannelState, "locked" | "lockReason">;
+  isMusicDisambiguationResolutionTurn?: (
+    session: ReplyDecisionSessionLike | null | undefined,
+    userId?: string | null,
+    transcript?: string
+  ) => boolean;
+  isMusicPlaybackActive?: (session: ReplyDecisionSessionLike | null | undefined) => boolean;
+  isCommandOnlyActive: (
+    session: ReplyDecisionSessionLike | null | undefined,
+    settings?: ReplyDecisionSettings
+  ) => boolean;
+  resolveRealtimeReplyStrategy?: (args: {
+    session: ReplyDecisionSessionLike | null | undefined;
+    settings?: ReplyDecisionSettings;
+  }) => string | null;
+  formatVoiceDecisionHistory?: (
+    session: ReplyDecisionSessionLike | null | undefined,
+    maxTurns?: number,
+    maxTotalChars?: number
+  ) => string;
+  getMusicPhase?: (session: ReplyDecisionSessionLike | null | undefined) => MusicPlaybackPhase;
+}
+
+function resolveRealtimeAdmissionMode(settings: ReplyDecisionSettings): "hard_classifier" | "generation_only" {
   const raw = String(getVoiceAdmissionSettings(settings).mode || "")
     .trim()
     .toLowerCase();
   return raw === "generation_decides" ? "generation_only" : DEFAULT_REALTIME_ADMISSION_MODE;
 }
 
-function resolveMusicWakeLatchSeconds(settings: any): number {
+function resolveMusicWakeLatchSeconds(settings: ReplyDecisionSettings): number {
   return clamp(
     Number(getVoiceAdmissionSettings(settings).musicWakeLatchSeconds) || DEFAULT_MUSIC_WAKE_LATCH_SECONDS,
     5,
@@ -64,13 +140,16 @@ function resolveMusicWakeLatchSeconds(settings: any): number {
   );
 }
 
-function clearMusicWakeLatch(session: any) {
+function clearMusicWakeLatch(session: ReplyDecisionSessionLike | null | undefined) {
   if (!session || typeof session !== "object") return;
   session.musicWakeLatchedUntil = 0;
   session.musicWakeLatchedByUserId = null;
 }
 
-function getMusicWakeLatchState(session: any, now = Date.now()) {
+function getMusicWakeLatchState(
+  session: ReplyDecisionSessionLike | null | undefined,
+  now = Date.now()
+) {
   const latchedUntil = Number(session?.musicWakeLatchedUntil || 0);
   if (!Number.isFinite(latchedUntil) || latchedUntil <= now) {
     if (latchedUntil > 0) clearMusicWakeLatch(session);
@@ -87,7 +166,12 @@ function getMusicWakeLatchState(session: any, now = Date.now()) {
   };
 }
 
-function touchMusicWakeLatch(session: any, settings: any, userId: string, now = Date.now()) {
+function touchMusicWakeLatch(
+  session: ReplyDecisionSessionLike | null | undefined,
+  settings: ReplyDecisionSettings,
+  userId: string,
+  now = Date.now()
+) {
   if (!session || typeof session !== "object") return 0;
   const latchWindowMs = Math.round(resolveMusicWakeLatchSeconds(settings) * 1000);
   const nextLatchedUntil = now + latchWindowMs;
@@ -108,7 +192,13 @@ function parseClassifierDecision(rawText: string): "allow" | "deny" | null {
 }
 
 
-export function hasBotNameCueForTranscript(manager: any, { transcript = "", settings = null } = {}) {
+export function hasBotNameCueForTranscript(
+  manager: ReplyDecisionHost,
+  { transcript = "", settings = null }: {
+    transcript?: string;
+    settings?: ReplyDecisionSettings;
+  } = {}
+) {
   const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
   if (!normalizedTranscript) return false;
 
@@ -139,7 +229,7 @@ export function hasBotNameCueForTranscript(manager: any, { transcript = "", sett
   return false;
 }
 
-export function buildVoiceConversationContext(manager: any, {
+export function buildVoiceConversationContext(manager: ReplyDecisionHost, {
   session = null,
   userId = null,
   directAddressed = false,
@@ -166,9 +256,15 @@ export function buildVoiceConversationContext(manager: any, {
   const recentDirectAddress =
     Number.isFinite(msSinceDirectAddress) &&
     msSinceDirectAddress <= RECENT_ENGAGEMENT_WINDOW_MS;
+  const activeVoiceCommandState = manager.ensureVoiceCommandState?.(session) || null;
+  const sameAsVoiceCommandUser =
+    Boolean(normalizedUserId) &&
+    Boolean(activeVoiceCommandState?.userId) &&
+    normalizedUserId === activeVoiceCommandState.userId;
 
   const engagedWithCurrentSpeaker =
     Boolean(directAddressed) ||
+    sameAsVoiceCommandUser ||
     (recentAssistantReply && sameAsRecentDirectAddress) ||
     (recentDirectAddress && sameAsRecentDirectAddress);
   const engaged =
@@ -176,18 +272,24 @@ export function buildVoiceConversationContext(manager: any, {
     engagedWithCurrentSpeaker;
 
   return {
-    engagementState: engaged ? "engaged" : "wake_word_biased",
+    engagementState: engaged ? "engaged" : activeVoiceCommandState ? "command_only_engaged" : "wake_word_biased",
     engaged,
     engagedWithCurrentSpeaker,
     recentAssistantReply,
     recentDirectAddress,
     sameAsRecentDirectAddress,
     msSinceAssistantReply: Number.isFinite(msSinceAssistantReply) ? msSinceAssistantReply : null,
-    msSinceDirectAddress: Number.isFinite(msSinceDirectAddress) ? msSinceDirectAddress : null
+    msSinceDirectAddress: Number.isFinite(msSinceDirectAddress) ? msSinceDirectAddress : null,
+    activeCommandSpeaker: activeVoiceCommandState?.userId || null,
+    activeCommandDomain: activeVoiceCommandState?.domain || null,
+    activeCommandIntent: activeVoiceCommandState?.intent || null,
+    msUntilCommandSessionExpiry: activeVoiceCommandState
+      ? Math.max(0, activeVoiceCommandState.expiresAt - now)
+      : null
   };
 }
 
-export function buildVoiceAddressingState(manager: any, {
+export function buildVoiceAddressingState(manager: ReplyDecisionHost, {
   session = null,
   userId = null,
   now = Date.now(),
@@ -201,7 +303,7 @@ export function buildVoiceAddressingState(manager: any, {
   const annotatedRows = sourceTurns
     .filter((row) => row && typeof row === "object" && (row.role === "user" || row.role === "assistant"))
     .map((row) => {
-      const normalized = manager.normalizeVoiceAddressingAnnotation({
+      const normalized = normalizeVoiceAddressingAnnotation(manager, {
         rawAddressing: row?.addressing
       });
       if (!normalized) return null;
@@ -257,7 +359,7 @@ export function buildVoiceAddressingState(manager: any, {
   };
 }
 
-export function normalizeVoiceAddressingAnnotation(manager: any, {
+export function normalizeVoiceAddressingAnnotation(_manager: ReplyDecisionHost, {
   rawAddressing = null,
   directAddressed = false,
   directedConfidence = Number.NaN,
@@ -303,7 +405,7 @@ export function normalizeVoiceAddressingAnnotation(manager: any, {
   };
 }
 
-export async function evaluateVoiceReplyDecision(manager: any, {
+export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   session,
   settings,
   userId,
@@ -328,7 +430,7 @@ export async function evaluateVoiceReplyDecision(manager: any, {
   });
   const now = Date.now();
   if (!normalizedTranscript) {
-    const emptyConversationContext = manager.buildVoiceConversationContext({
+    const emptyConversationContext = buildVoiceConversationContext(manager, {
       session,
       userId: normalizedUserId,
       directAddressed: false,
@@ -408,19 +510,19 @@ export async function evaluateVoiceReplyDecision(manager: any, {
   let musicWakeLatchState = getMusicWakeLatchState(session, now);
   let musicWakeLatched = musicWakeLatchState.active;
   let msUntilMusicWakeLatchExpiry = musicWakeLatchState.msUntilExpiry;
-  const baseConversationContext = manager.buildVoiceConversationContext({
+  const baseConversationContext = buildVoiceConversationContext(manager, {
     session,
     userId: normalizedUserId,
     directAddressed,
     addressedToOtherParticipant,
     now
   });
-  const voiceAddressingState = manager.buildVoiceAddressingState({
+  const voiceAddressingState = buildVoiceAddressingState(manager, {
     session,
     userId: normalizedUserId,
     now
   });
-  const currentTurnAddressing = manager.normalizeVoiceAddressingAnnotation({
+  const currentTurnAddressing = normalizeVoiceAddressingAnnotation(manager, {
     directAddressed,
     directedConfidence: directAddressConfidence,
     source: "decision",
@@ -674,7 +776,7 @@ export async function evaluateVoiceReplyDecision(manager: any, {
   };
 }
 
-export async function runVoiceReplyClassifier(manager: any, {
+export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   session,
   settings,
   userId,
@@ -692,8 +794,8 @@ export async function runVoiceReplyClassifier(manager: any, {
   currentSpeakerDirectedConfidence = 0,
   currentSpeakerTarget = null
 }: {
-  session: any;
-  settings: any;
+  session: ReplyDecisionSessionLike;
+  settings: ReplyDecisionSettings;
   userId: string;
   transcript: string;
   speakerName: string;
@@ -985,8 +1087,14 @@ export async function runVoiceReplyClassifier(manager: any, {
   }
 }
 
-export function isCommandOnlyActive(manager: any, session, settings = null) {
+export function isCommandOnlyActive(
+  manager: ReplyDecisionHost,
+  session: ReplyDecisionSessionLike | null | undefined,
+  settings: ReplyDecisionSettings = null
+) {
   const resolved = settings || session?.settingsSnapshot || manager.store.getSettings();
   if (getVoiceConversationPolicy(resolved).commandOnlyMode) return true;
-  return musicPhaseShouldForceCommandOnly(manager.getMusicPhase(session));
+  return typeof manager.getMusicPhase === "function"
+    ? musicPhaseShouldForceCommandOnly(manager.getMusicPhase(session))
+    : false;
 }

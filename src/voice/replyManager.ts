@@ -38,7 +38,6 @@ import {
   resolveRealtimeProvider
 } from "./voiceSessionHelpers.ts";
 import type {
-  DeferredVoiceActionType,
   MusicPlaybackPhase,
   VoiceSession
 } from "./voiceSessionTypes.ts";
@@ -47,6 +46,8 @@ import {
   musicPhaseShouldLockOutput
 } from "./voiceSessionTypes.ts";
 import type { BargeInController } from "./bargeInController.ts";
+import type { DeferredActionQueue } from "./deferredActionQueue.ts";
+import type { GreetingManager } from "./greetingManager.ts";
 
 type ReplyManagerSettings = Record<string, unknown> | null;
 
@@ -82,24 +83,14 @@ export interface ReplyManagerHost {
   normalizeReplyInterruptionPolicy: (rawPolicy?: unknown) => unknown;
   setActiveReplyInterruptionPolicy: (session: VoiceSession, policy?: unknown) => void;
   maybeClearActiveReplyInterruptionPolicy: (session: VoiceSession) => void;
-  getDeferredQueuedUserTurns: (session: VoiceSession) => unknown[];
-  scheduleDeferredVoiceActionRecheck: (
-    session: VoiceSession,
-    args: {
-      type: DeferredVoiceActionType;
-      delayMs?: number;
-      reason?: string;
-    }
-  ) => void;
-  recheckDeferredVoiceActions: (args: {
-    session: VoiceSession;
-    reason?: string;
-    preferredTypes?: DeferredVoiceActionType[] | null;
-    context?: unknown;
-  }) => boolean;
-  maybeFireJoinGreetingOpportunity: (session: VoiceSession, reason?: string) => boolean;
-  clearAllDeferredVoiceActions: (session: VoiceSession) => void;
-  clearJoinGreetingOpportunity: (session: VoiceSession) => void;
+  deferredActionQueue: Pick<
+    DeferredActionQueue,
+    | "getDeferredQueuedUserTurns"
+    | "scheduleDeferredVoiceActionRecheck"
+    | "recheckDeferredVoiceActions"
+    | "clearAllDeferredVoiceActions"
+  >;
+  greetingManager: Pick<GreetingManager, "maybeFireJoinGreetingOpportunity" | "clearJoinGreetingOpportunity">;
   hasReplayBlockingActiveCapture: (session: VoiceSession) => boolean;
   endSession: (args: {
     guildId: string;
@@ -337,9 +328,9 @@ export class ReplyManager {
     if (
       previousPhase !== "idle" &&
       nextState.phase === "idle" &&
-      this.host.getDeferredQueuedUserTurns(session).length > 0
+      this.host.deferredActionQueue.getDeferredQueuedUserTurns(session).length > 0
     ) {
-      this.host.scheduleDeferredVoiceActionRecheck(session, {
+      this.host.deferredActionQueue.scheduleDeferredVoiceActionRecheck(session, {
         type: "queued_user_turns",
         delayMs: 0,
         reason: "assistant_output_idle"
@@ -532,11 +523,11 @@ export class ReplyManager {
     session.pendingResponse = null;
     this.syncAssistantOutputState(session, "pending_response_cleared");
     this.host.maybeClearActiveReplyInterruptionPolicy(session);
-    this.host.recheckDeferredVoiceActions({
+    this.host.deferredActionQueue.recheckDeferredVoiceActions({
       session,
       reason: "pending_response_cleared"
     });
-    this.host.maybeFireJoinGreetingOpportunity(session, "pending_response_cleared");
+    this.host.greetingManager.maybeFireJoinGreetingOpportunity(session, "pending_response_cleared");
   }
 
   isRealtimeResponseActive(session: VoiceSession) {
@@ -613,8 +604,8 @@ export class ReplyManager {
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
-    this.host.clearAllDeferredVoiceActions(session);
-    this.host.clearJoinGreetingOpportunity(session);
+    this.host.deferredActionQueue.clearAllDeferredVoiceActions(session);
+    this.host.greetingManager.clearJoinGreetingOpportunity(session);
     if (emitCreateEvent && this.isRealtimeResponseActive(session)) {
       this.host.store.logAction({
         kind: "voice_runtime",

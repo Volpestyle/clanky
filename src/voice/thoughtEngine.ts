@@ -1,6 +1,7 @@
 import { clamp } from "../utils.ts";
 import { VOICE_THOUGHT_LOOP_BUSY_RETRY_MS, VOICE_THOUGHT_MAX_CHARS } from "./voiceSessionManager.constants.ts";
 import { normalizeVoiceText } from "./voiceSessionHelpers.ts";
+import type { DeferredActionQueue } from "./deferredActionQueue.ts";
 import type { TurnProcessor } from "./turnProcessor.ts";
 import type {
   MusicPlaybackPhase,
@@ -56,7 +57,6 @@ export interface ThoughtEngineHost {
   };
   store: ThoughtStoreLike;
   resolveVoiceThoughtEngineConfig: (settings: ThoughtSettings) => ThoughtConfigLike;
-  clearVoiceThoughtLoopTimer: (session: VoiceSession) => void;
   isCommandOnlyActive: (session: VoiceSession, settings?: ThoughtSettings) => boolean;
   getMusicPhase: (session: VoiceSession) => MusicPlaybackPhase;
   getOutputChannelState: (session: VoiceSession) => {
@@ -65,18 +65,8 @@ export interface ThoughtEngineHost {
   };
   hasReplayBlockingActiveCapture: (session: VoiceSession) => boolean;
   turnProcessor: Pick<TurnProcessor, "getRealtimeTurnBacklogSize">;
-  getDeferredQueuedUserTurns: (session: VoiceSession) => unknown[];
+  deferredActionQueue: Pick<DeferredActionQueue, "getDeferredQueuedUserTurns">;
   countHumanVoiceParticipants: (session: VoiceSession) => number;
-  scheduleVoiceThoughtLoop: (args: {
-    session: VoiceSession;
-    settings?: ThoughtSettings;
-    delayMs?: number | null;
-  }) => void;
-  maybeRunVoiceThoughtLoop: (args: {
-    session: VoiceSession;
-    settings?: ThoughtSettings;
-    trigger?: string;
-  }) => Promise<boolean>;
   generateVoiceThoughtCandidate: (args: {
     session: VoiceSession;
     settings: ThoughtSettings;
@@ -111,6 +101,15 @@ export interface ThoughtEngineHost {
 export class ThoughtEngine {
   constructor(private readonly host: ThoughtEngineHost) {}
 
+  clearVoiceThoughtLoopTimer(session: VoiceSession) {
+    if (!session) return;
+    if (session.thoughtLoopTimer) {
+      clearTimeout(session.thoughtLoopTimer);
+      session.thoughtLoopTimer = null;
+    }
+    session.nextThoughtAt = 0;
+  }
+
   scheduleVoiceThoughtLoop({
     session,
     settings = null,
@@ -123,7 +122,7 @@ export class ThoughtEngine {
     if (!session || session.ending) return;
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
     const thoughtConfig = this.host.resolveVoiceThoughtEngineConfig(resolvedSettings);
-    this.host.clearVoiceThoughtLoopTimer(session);
+    this.clearVoiceThoughtLoopTimer(session);
     if (!thoughtConfig.enabled) return;
 
     const defaultDelayMs = thoughtConfig.minSilenceSeconds * 1000;
@@ -136,7 +135,7 @@ export class ThoughtEngine {
     session.thoughtLoopTimer = setTimeout(() => {
       session.thoughtLoopTimer = null;
       session.nextThoughtAt = 0;
-      void this.host.maybeRunVoiceThoughtLoop({
+      void this.maybeRunVoiceThoughtLoop({
         session,
         settings: session.settingsSnapshot || this.store.getSettings(),
         trigger: "timer"
@@ -252,7 +251,7 @@ export class ThoughtEngine {
         retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
       };
     }
-    if (this.host.getDeferredQueuedUserTurns(session).length > 0) {
+    if (this.host.deferredActionQueue.getDeferredQueuedUserTurns(session).length > 0) {
       return {
         allow: false,
         reason: "pending_deferred_turns",
@@ -287,7 +286,7 @@ export class ThoughtEngine {
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
     const thoughtConfig = this.host.resolveVoiceThoughtEngineConfig(resolvedSettings);
     if (!thoughtConfig.enabled) {
-      this.host.clearVoiceThoughtLoopTimer(session);
+      this.clearVoiceThoughtLoopTimer(session);
       return false;
     }
 
@@ -297,7 +296,7 @@ export class ThoughtEngine {
       config: thoughtConfig
     });
     if (!gate.allow) {
-      this.host.scheduleVoiceThoughtLoop({
+      this.scheduleVoiceThoughtLoop({
         session,
         settings: resolvedSettings,
         delayMs: gate.retryAfterMs
@@ -309,7 +308,7 @@ export class ThoughtEngine {
     const now = Date.now();
     session.lastThoughtAttemptAt = now;
     if (thoughtChance <= 0) {
-      this.host.scheduleVoiceThoughtLoop({
+      this.scheduleVoiceThoughtLoop({
         session,
         settings: resolvedSettings,
         delayMs: thoughtConfig.minSecondsBetweenThoughts * 1000
@@ -333,7 +332,7 @@ export class ThoughtEngine {
           roll: Number(roll.toFixed(5))
         }
       });
-      this.host.scheduleVoiceThoughtLoop({
+      this.scheduleVoiceThoughtLoop({
         session,
         settings: resolvedSettings,
         delayMs: thoughtConfig.minSecondsBetweenThoughts * 1000
@@ -441,7 +440,7 @@ export class ThoughtEngine {
       return false;
     } finally {
       session.thoughtLoopBusy = false;
-      this.host.scheduleVoiceThoughtLoop({
+      this.scheduleVoiceThoughtLoop({
         session,
         settings: resolvedSettings,
         delayMs: thoughtConfig.minSecondsBetweenThoughts * 1000

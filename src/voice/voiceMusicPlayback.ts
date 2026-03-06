@@ -3,6 +3,12 @@ import { normalizeInlineText, STT_TRANSCRIPT_MAX_CHARS, isVoiceTurnAddressedToBo
 import { getVoiceConversationPolicy, getVoiceRuntimeConfig } from "../settings/agentStack.ts";
 
 import { clamp } from "lodash";
+import type { BargeInController } from "./bargeInController.ts";
+import type { DeferredActionQueue } from "./deferredActionQueue.ts";
+import type { MusicPlaybackProvider } from "./musicPlayback.ts";
+import type { DiscordMusicPlayer } from "./musicPlayer.ts";
+import type { MusicSearchProvider } from "./musicSearch.ts";
+import type { ReplyManager } from "./replyManager.ts";
 
 // English-only fallback/fast-path heuristics for obvious music control turns.
 // These are convenience shortcuts, not the primary music-command decision logic.
@@ -18,6 +24,7 @@ export const EN_MUSIC_QUERY_EMPTY_RE = /^(?:something|anything|some|a|the|please
 export const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
 export const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
 export const VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK = 5;
+const VOICE_COMMAND_SESSION_TTL_MS = 20 * 1000;
 
 import type {
   MusicSelectionResult,
@@ -25,7 +32,9 @@ import type {
   MusicTextRequestPayload,
   MusicTextCommandMessage,
   MusicPlaybackPhase,
-  MusicPauseReason
+  MusicPauseReason,
+  VoiceSession,
+  VoiceSessionMusicState
 } from "./voiceSessionTypes.ts";
 import {
   musicPhaseIsActive,
@@ -34,7 +43,184 @@ import {
   musicPhaseShouldAllowDucking,
   musicPhaseShouldForceCommandOnly
 } from "./voiceSessionTypes.ts";
-export function ensureSessionMusicState(manager: any, session) {
+
+type MusicPlaybackSettings = Record<string, unknown> | null;
+
+type MusicPlaybackStoreLike = {
+  getSettings: () => MusicPlaybackSettings;
+  logAction: (entry: {
+    kind: string;
+    guildId?: string | null;
+    channelId?: string | null;
+    userId?: string | null;
+    content: string;
+    metadata?: Record<string, unknown>;
+  }) => void;
+};
+
+type MusicRuntimeSessionLike = {
+  ending?: boolean;
+  id?: string;
+  guildId?: string;
+  textChannelId?: string | null;
+  voiceChannelId?: string | null;
+  settingsSnapshot?: MusicPlaybackSettings;
+  lastOpenAiToolCallerUserId?: string | null;
+  botSpeechMusicUnduckTimer?: ReturnType<typeof setTimeout> | null;
+  voiceCommandState?: {
+    userId: string | null;
+    domain: string | null;
+    intent: string | null;
+    startedAt: number;
+    expiresAt: number;
+  } | null;
+  music?: VoiceSessionMusicState | null;
+  musicQueueState?: Record<string, unknown> | null;
+  [key: string]: unknown;
+};
+
+type MusicPlaybackLogArgs = Parameters<MusicPlaybackStoreLike["logAction"]>[0];
+
+export interface MusicPlaybackHost {
+  client: {
+    user?: {
+      id?: string | null;
+    } | null;
+    guilds: {
+      cache: {
+        get: (guildId: string) => unknown;
+      };
+    };
+  };
+  sessions: Map<string, VoiceSession>;
+  store: MusicPlaybackStoreLike;
+  llm?: {
+    transcribeAudio?: unknown;
+  } | null;
+  replyManager: Pick<ReplyManager, "clearPendingResponse" | "hasBufferedTtsPlayback">;
+  bargeInController: Pick<BargeInController, "clearBargeInOutputSuppression">;
+  deferredActionQueue: Pick<DeferredActionQueue, "clearAllDeferredVoiceActions">;
+  musicPlayer?: Pick<DiscordMusicPlayer, "duck" | "unduck" | "play" | "stop" | "pause" | "resume"> | null;
+  musicPlayback?: Pick<MusicPlaybackProvider, "provider" | "isConfigured" | "startPlayback" | "stopPlayback"> | null;
+  musicSearch?: Pick<MusicSearchProvider, "isConfigured" | "search"> | null;
+  maybeClearActiveReplyInterruptionPolicy: (session: MusicRuntimeSessionLike | null | undefined) => void;
+  abortActiveInboundCaptures: (args: {
+    session: VoiceSession;
+    reason?: string;
+  }) => void;
+  sendOperationalMessage: (args: {
+    channel?: unknown;
+    settings?: MusicPlaybackSettings;
+    guildId?: string | null;
+    channelId?: string | null;
+    userId?: string | null;
+    messageId?: string | null;
+    event?: string;
+    reason?: string | null;
+    details?: Record<string, unknown>;
+    mustNotify?: boolean;
+  }) => Promise<unknown>;
+  transcribePcmTurn: (args: {
+    session: VoiceSession;
+    userId: string;
+    pcmBuffer: Buffer;
+    model: string;
+    sampleRateHz?: number;
+    captureReason?: string;
+    traceSource?: string;
+    errorPrefix?: string;
+    emptyTranscriptRuntimeEvent?: string;
+    emptyTranscriptErrorStreakThreshold?: number;
+    suppressEmptyTranscriptLogs?: boolean;
+    asrLanguage?: string;
+    asrPrompt?: string;
+  }) => Promise<string>;
+  hasBotNameCueForTranscript: (args?: {
+    transcript?: string;
+    settings?: MusicPlaybackSettings;
+  }) => boolean;
+  isMusicDisambiguationResolutionTurn: (
+    session: MusicRuntimeSessionLike,
+    userId?: string | null,
+    transcript?: string
+  ) => boolean;
+  maybeHandlePendingMusicDisambiguationTurn: (args: {
+    session?: MusicRuntimeSessionLike | null;
+    settings?: MusicPlaybackSettings;
+    userId?: string | null;
+    transcript?: string;
+    reason?: string;
+    source?: string;
+    channel?: unknown;
+    channelId?: string | null;
+    messageId?: string | null;
+    mustNotify?: boolean;
+  }) => Promise<boolean>;
+  playVoiceQueueTrackByIndex: (args: {
+    session: MusicRuntimeSessionLike | null | undefined;
+    settings?: MusicPlaybackSettings;
+    index: number;
+  }) => Promise<unknown>;
+}
+
+function logMusicAction(
+  manager: MusicPlaybackHost,
+  entry: MusicPlaybackLogArgs
+) {
+  manager.store.logAction(entry);
+}
+
+function beginVoiceCommandSession(
+  session: VoiceSession | null | undefined,
+  {
+    userId = null,
+    domain = "voice",
+    intent = "followup",
+    ttlMs = VOICE_COMMAND_SESSION_TTL_MS
+  }: {
+    userId?: string | null;
+    domain?: string | null;
+    intent?: string | null;
+    ttlMs?: number | null;
+  } = {}
+) {
+  if (!session || session.ending) return null;
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) return null;
+  const now = Date.now();
+  const durationMs = clamp(Math.round(Number(ttlMs) || VOICE_COMMAND_SESSION_TTL_MS), 3_000, 120_000);
+  const next = {
+    userId: normalizedUserId,
+    domain: normalizeInlineText(domain, 40) || "voice",
+    intent: normalizeInlineText(intent, 80) || "followup",
+    startedAt: now,
+    expiresAt: now + durationMs
+  };
+  session.voiceCommandState = next;
+  return next;
+}
+
+function clearVoiceCommandSession(session: VoiceSession | null | undefined) {
+  if (!session || typeof session !== "object") return;
+  session.voiceCommandState = null;
+}
+
+function clearToolMusicQueueState(
+  manager: MusicPlaybackHost,
+  session: MusicRuntimeSessionLike | null | undefined
+) {
+  const queueState = ensureToolMusicQueueState(manager, session);
+  if (!queueState) return null;
+  queueState.tracks = [];
+  queueState.nowPlayingIndex = null;
+  queueState.isPaused = false;
+  return queueState;
+}
+
+export function ensureSessionMusicState(
+  manager: MusicPlaybackHost,
+  session: MusicRuntimeSessionLike | null | undefined
+) {
   void manager;
   if (!session || typeof session !== "object") return null;
   if (session.music && typeof session.music === "object") {
@@ -74,7 +260,10 @@ export function ensureSessionMusicState(manager: any, session) {
   return session.music;
 }
 
-export function snapshotMusicRuntimeState(manager: any, session) {
+export function snapshotMusicRuntimeState(
+  manager: MusicPlaybackHost,
+  session: MusicRuntimeSessionLike | null | undefined
+) {
   const music = ensureSessionMusicState(manager, session);
   const queueState = ensureToolMusicQueueState(manager, session);
   if (!music) return null;
@@ -117,7 +306,10 @@ export function snapshotMusicRuntimeState(manager: any, session) {
 }
 
 /** Get the current music playback phase (single source of truth). */
-export function getMusicPhase(manager: any, session): MusicPlaybackPhase {
+export function getMusicPhase(
+  manager: MusicPlaybackHost,
+  session: MusicRuntimeSessionLike | null | undefined
+): MusicPlaybackPhase {
   const music = ensureSessionMusicState(manager, session);
   return music?.phase ?? "idle";
 }
@@ -127,8 +319,8 @@ export function getMusicPhase(manager: any, session): MusicPlaybackPhase {
  * ALL music state transitions MUST go through this function.
  */
 export function setMusicPhase(
-  manager: any,
-  session,
+  manager: MusicPlaybackHost,
+  session: MusicRuntimeSessionLike | null | undefined,
   phase: MusicPlaybackPhase,
   pauseReason: MusicPauseReason = null
 ): void {
@@ -140,21 +332,41 @@ export function setMusicPhase(
   music.active = musicPhaseIsActive(phase);
 }
 
-export function isMusicPlaybackActive(manager: any, session) {
+export function isMusicPlaybackActive(
+  manager: MusicPlaybackHost,
+  session: MusicRuntimeSessionLike | null | undefined
+) {
   return musicPhaseIsActive(getMusicPhase(manager, session));
 }
 
-export function isCommandOnlyActive(manager: any, session, settings = null) {
+export function isCommandOnlyActive(
+  manager: MusicPlaybackHost,
+  session: MusicRuntimeSessionLike | null | undefined,
+  settings: MusicPlaybackSettings = null
+) {
   const resolved = settings || session?.settingsSnapshot || manager.store.getSettings();
   if (getVoiceConversationPolicy(resolved).commandOnlyMode) return true;
   return musicPhaseShouldForceCommandOnly(getMusicPhase(manager, session));
 }
 
-export function resolveMusicDuckingConfig(manager: any, settings = null) {
+export function resolveMusicDuckingConfig(
+  manager: MusicPlaybackHost,
+  settings: MusicPlaybackSettings = null
+) {
   void manager;
   const resolved = settings || manager.store.getSettings();
-  const targetGainRaw = Number(resolved?.voice?.musicDucking?.targetGain);
-  const fadeMsRaw = Number(resolved?.voice?.musicDucking?.fadeMs);
+  const voiceSettings =
+    resolved && typeof resolved === "object" && "voice" in resolved && typeof resolved.voice === "object"
+      ? (resolved.voice as Record<string, unknown>)
+      : null;
+  const musicDuckingSettings =
+    voiceSettings &&
+    "musicDucking" in voiceSettings &&
+    typeof voiceSettings.musicDucking === "object"
+      ? (voiceSettings.musicDucking as Record<string, unknown>)
+      : null;
+  const targetGainRaw = Number(musicDuckingSettings?.targetGain);
+  const fadeMsRaw = Number(musicDuckingSettings?.fadeMs);
   return {
     targetGain: clamp(
       Number.isFinite(targetGainRaw) ? targetGainRaw : 0.15,
@@ -169,7 +381,10 @@ export function resolveMusicDuckingConfig(manager: any, settings = null) {
   };
 }
 
-export function clearBotSpeechMusicUnduckTimer(manager: any, session) {
+export function clearBotSpeechMusicUnduckTimer(
+  manager: MusicPlaybackHost,
+  session: MusicRuntimeSessionLike | null | undefined
+) {
   void manager;
   if (!session) return;
   if (session.botSpeechMusicUnduckTimer) {
@@ -179,9 +394,9 @@ export function clearBotSpeechMusicUnduckTimer(manager: any, session) {
 }
 
 export async function engageBotSpeechMusicDuck(
-  manager: any,
-  session,
-  settings = null,
+  manager: MusicPlaybackHost,
+  session: VoiceSession | null | undefined,
+  settings: MusicPlaybackSettings = null,
   { awaitFade = false } = {}
 ) {
   if (!session || session.ending) return false;
@@ -208,7 +423,12 @@ export async function engageBotSpeechMusicDuck(
   return true;
 }
 
-export function scheduleBotSpeechMusicUnduck(manager: any, session, settings = null, delayMs = 0) {
+export function scheduleBotSpeechMusicUnduck(
+  manager: MusicPlaybackHost,
+  session: VoiceSession | null | undefined,
+  settings: MusicPlaybackSettings = null,
+  delayMs = 0
+) {
   if (!session || session.ending) return;
   const music = ensureSessionMusicState(manager, session);
   if (!session.botSpeechMusicDucked && !music?.ducked) return;
@@ -220,14 +440,26 @@ export function scheduleBotSpeechMusicUnduck(manager: any, session, settings = n
       scheduleBotSpeechMusicUnduck(manager, session, settings, Math.min(200, normalizedDelayMs || 200));
       return;
     }
-    releaseBotSpeechMusicDuck(manager, session, settings).catch(() => undefined);
+    releaseBotSpeechMusicDuck(manager, session, settings).catch((error) => {
+      logMusicAction(manager, {
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: manager.client.user?.id || null,
+        content: `voice_music_unduck_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          source: "bot_speech_unduck_timer"
+        }
+      });
+    });
   }, normalizedDelayMs);
 }
 
 export async function releaseBotSpeechMusicDuck(
-  manager: any,
-  session,
-  settings = null,
+  manager: MusicPlaybackHost,
+  session: VoiceSession | null | undefined,
+  settings: MusicPlaybackSettings = null,
   { force = false } = {}
 ) {
   if (!session) return false;
@@ -250,7 +482,11 @@ export async function releaseBotSpeechMusicDuck(
   return true;
 }
 
-export function normalizeMusicPlatformToken(manager: any, value: unknown = "", fallback: "youtube" | "soundcloud" | "discord" | "auto" | null = null) {
+export function normalizeMusicPlatformToken(
+  manager: MusicPlaybackHost,
+  value: unknown = "",
+  fallback: "youtube" | "soundcloud" | "discord" | "auto" | null = null
+) {
   const token = String(value || "")
     .trim()
     .toLowerCase();
@@ -260,7 +496,10 @@ export function normalizeMusicPlatformToken(manager: any, value: unknown = "", f
   return fallback;
 }
 
-export function normalizeMusicSelectionResult(manager: any, rawResult: Record<string, unknown> | null = null): MusicSelectionResult | null {
+export function normalizeMusicSelectionResult(
+  manager: MusicPlaybackHost,
+  rawResult: Record<string, unknown> | null = null
+): MusicSelectionResult | null {
   if (!rawResult || typeof rawResult !== "object") return null;
   const id = normalizeInlineText(rawResult.id, 180);
   const title = normalizeInlineText(rawResult.title, 220);
@@ -280,7 +519,10 @@ export function normalizeMusicSelectionResult(manager: any, rawResult: Record<st
   };
 }
 
-export function isMusicDisambiguationActive(manager: any, musicState = null) {
+export function isMusicDisambiguationActive(
+  manager: MusicPlaybackHost,
+  musicState: VoiceSessionMusicState | null = null
+) {
   const music = musicState && typeof musicState === "object" ? musicState : null;
   if (!music) return false;
   const pendingAt = Math.max(0, Number(music.pendingRequestedAt || 0));
@@ -290,7 +532,10 @@ export function isMusicDisambiguationActive(manager: any, musicState = null) {
   return Array.isArray(music.pendingResults) && music.pendingResults.length > 0;
 }
 
-export function clearMusicDisambiguationState(manager: any, session) {
+export function clearMusicDisambiguationState(
+  manager: MusicPlaybackHost,
+  session: MusicRuntimeSessionLike | null | undefined
+) {
   const music = ensureSessionMusicState(manager, session);
   if (!music) return;
   music.pendingQuery = null;
@@ -301,7 +546,7 @@ export function clearMusicDisambiguationState(manager: any, session) {
   music.pendingRequestedAt = 0;
 }
 
-export function setMusicDisambiguationState(manager: any, {
+export function setMusicDisambiguationState(manager: MusicPlaybackHost, {
   session,
   query = "",
   platform = "auto",
@@ -331,7 +576,11 @@ export function setMusicDisambiguationState(manager: any, {
   return music.pendingResults;
 }
 
-export function findPendingMusicSelectionById(manager: any, session, selectedResultId = "") {
+export function findPendingMusicSelectionById(
+  manager: MusicPlaybackHost,
+  session: MusicRuntimeSessionLike | null | undefined,
+  selectedResultId = ""
+) {
   const music = ensureSessionMusicState(manager, session);
   if (!music || !isMusicDisambiguationActive(manager, music)) return null;
   const targetId = normalizeInlineText(selectedResultId, 180);
@@ -347,7 +596,10 @@ export function findPendingMusicSelectionById(manager: any, session, selectedRes
   );
 }
 
-export function getMusicDisambiguationPromptContext(manager: any, session): {
+export function getMusicDisambiguationPromptContext(
+  manager: MusicPlaybackHost,
+  session: MusicRuntimeSessionLike | null | undefined
+): {
   active: true;
   query: string | null;
   platform: "youtube" | "soundcloud" | "discord" | "auto";
@@ -373,9 +625,12 @@ export function getMusicDisambiguationPromptContext(manager: any, session): {
   };
 }
 
-export function ensureToolMusicQueueState(manager: any, session) {
+export function ensureToolMusicQueueState(
+  manager: MusicPlaybackHost,
+  session: MusicRuntimeSessionLike | null | undefined
+) {
   if (!session || typeof session !== "object") return null;
-  const current =
+  const current: Record<string, unknown> =
     session.musicQueueState && typeof session.musicQueueState === "object"
       ? session.musicQueueState
       : {};
@@ -426,7 +681,13 @@ export function ensureToolMusicQueueState(manager: any, session) {
   return next;
 }
 
-export function isLikelyMusicStopPhrase(manager: any, { transcript = "", settings = null } = {}) {
+export function isLikelyMusicStopPhrase(
+  manager: MusicPlaybackHost,
+  { transcript = "", settings = null }: {
+    transcript?: string;
+    settings?: MusicPlaybackSettings;
+  } = {}
+) {
   const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
   if (!normalizedTranscript) return false;
   if (!EN_MUSIC_STOP_VERB_RE.test(normalizedTranscript)) return false;
@@ -436,7 +697,13 @@ export function isLikelyMusicStopPhrase(manager: any, { transcript = "", setting
   return tokenCount <= 3;
 }
 
-export function isLikelyMusicPlayPhrase(manager: any, { transcript = "", settings = null } = {}) {
+export function isLikelyMusicPlayPhrase(
+  manager: MusicPlaybackHost,
+  { transcript = "", settings = null }: {
+    transcript?: string;
+    settings?: MusicPlaybackSettings;
+  } = {}
+) {
   const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
   if (!normalizedTranscript) return false;
   if (!EN_MUSIC_PLAY_VERB_RE.test(normalizedTranscript)) return false;
@@ -444,7 +711,10 @@ export function isLikelyMusicPlayPhrase(manager: any, { transcript = "", setting
   return manager.hasBotNameCueForTranscript({ transcript: normalizedTranscript, settings });
 }
 
-export function extractMusicPlayQuery(manager: any, transcript = "") {
+export function extractMusicPlayQuery(
+  manager: MusicPlaybackHost,
+  transcript = ""
+) {
   const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
   if (!normalizedTranscript) return "";
 
@@ -469,7 +739,11 @@ export function extractMusicPlayQuery(manager: any, transcript = "") {
   return cleaned.slice(0, 120);
 }
 
-export function haltSessionOutputForMusicPlayback(manager: any, session, reason = "music_playback_started") {
+export function haltSessionOutputForMusicPlayback(
+  manager: MusicPlaybackHost,
+  session: VoiceSession | null | undefined,
+  reason = "music_playback_started"
+) {
   if (!session || session.ending) return;
   manager.replyManager.clearPendingResponse(session);
   // Clear main-process reply state WITHOUT sending stop_playback IPC —
@@ -485,14 +759,14 @@ export function haltSessionOutputForMusicPlayback(manager: any, session, reason 
   session.botTurnOpen = false;
   session.lastRequestedRealtimeUtterance = null;
   session.activeReplyInterruptionPolicy = null;
-  manager.clearAllDeferredVoiceActions(session);
+  manager.deferredActionQueue.clearAllDeferredVoiceActions(session);
 
   manager.abortActiveInboundCaptures({
     session,
     reason: "music_playback_active"
   });
 
-  manager.store.logAction({
+  logMusicAction(manager, {
     kind: "voice_runtime",
     guildId: session.guildId,
     channelId: session.textChannelId,
@@ -505,7 +779,7 @@ export function haltSessionOutputForMusicPlayback(manager: any, session, reason 
   });
 }
 
-export async function requestPlayMusic(manager: any, {
+export async function requestPlayMusic(manager: MusicPlaybackHost, {
   message = null,
   guildId = null,
   channel = null,
@@ -558,13 +832,13 @@ export async function requestPlayMusic(manager: any, {
   const music = ensureSessionMusicState(manager, session);
   const playbackProviderConfigured = Boolean(manager.musicPlayback?.isConfigured?.());
   const resolvedPlatform = normalizeMusicPlatformToken(manager, platform, "auto");
-  const resolvedQuery = normalizeInlineText(query || manager.extractMusicPlayQuery(message?.content || ""), 120) || "";
+  const resolvedQuery = normalizeInlineText(query || extractMusicPlayQuery(manager, message?.content || ""), 120) || "";
   const resolvedTrackId = normalizeInlineText(trackId, 180) || null;
   const normalizedProvidedResults = (Array.isArray(searchResults) ? searchResults : [])
     .map((entry) => normalizeMusicSelectionResult(manager, entry))
     .filter(Boolean)
     .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS);
-  const disambiguationFromPrompt = manager.getMusicDisambiguationPromptContext(session);
+  const disambiguationFromPrompt = getMusicDisambiguationPromptContext(manager, session);
   const requestStartedAt = Date.now();
 
   const requestDisambiguation = async (candidateResults = []) => {
@@ -583,8 +857,7 @@ export async function requestPlayMusic(manager: any, {
       requestedByUserId: resolvedUserId
     });
     if (resolvedUserId) {
-      manager.beginVoiceCommandSession({
-        session,
+      beginVoiceCommandSession(session, {
         userId: resolvedUserId,
         domain: "music",
         intent:
@@ -594,7 +867,7 @@ export async function requestPlayMusic(manager: any, {
       });
     }
 
-    manager.store.logAction({
+    logMusicAction(manager, {
       kind: "voice_runtime",
       guildId: session.guildId,
       channelId: session.textChannelId,
@@ -650,9 +923,13 @@ export async function requestPlayMusic(manager: any, {
   }
 
   if (!resolvedTrackId && !selectedResult && resolvedQuery && manager.musicSearch?.isConfigured?.()) {
+    const resolvedSearchPlatform =
+      resolvedPlatform === "youtube" || resolvedPlatform === "soundcloud"
+        ? resolvedPlatform
+        : "auto";
     const searchStartedAt = Date.now();
     const searchResponse = await manager.musicSearch.search(resolvedQuery, {
-      platform: resolvedPlatform || "auto",
+      platform: resolvedSearchPlatform,
       limit: MUSIC_DISAMBIGUATION_MAX_RESULTS
     });
     const normalizedSearchResults = (Array.isArray(searchResponse?.results) ? searchResponse.results : [])
@@ -727,9 +1004,9 @@ export async function requestPlayMusic(manager: any, {
   let playbackResult: { ok: boolean; provider: string; reason: string; message: string; status: number; track: { id: string; title: string; artistNames: string[]; externalUrl: string | null } | null; query: string | null } | null = null;
 
   if (useDiscordStreaming) {
-    const discordResult = await manager.playMusicViaDiscord(session, selectedResult);
+    const discordResult = await playMusicViaDiscord(manager, session, selectedResult);
     if (!discordResult.ok) {
-      manager.store.logAction({
+      logMusicAction(manager, {
         kind: "voice_error",
         guildId: session.guildId,
         channelId: session.textChannelId,
@@ -783,13 +1060,26 @@ export async function requestPlayMusic(manager: any, {
       query: playbackQuery
     };
   } else {
-    playbackResult = await manager.musicPlayback.startPlayback({
-      query: playbackQuery,
-      trackId: playbackTrackId
-    });
+    const playbackProvider = manager.musicPlayback;
+    if (!playbackProvider?.startPlayback) {
+      playbackResult = {
+        ok: false,
+        provider: manager.musicPlayback?.provider || "none",
+        reason: "music_provider_unconfigured",
+        message: "music playback provider not configured",
+        status: 0,
+        track: null,
+        query: playbackQuery || null
+      };
+    } else {
+      playbackResult = await playbackProvider.startPlayback({
+        query: playbackQuery,
+        trackId: playbackTrackId
+      });
+    }
   }
   if (!playbackResult.ok) {
-    manager.store.logAction({
+    logMusicAction(manager, {
       kind: "voice_error",
       guildId: session.guildId,
       channelId: session.textChannelId,
@@ -850,11 +1140,11 @@ export async function requestPlayMusic(manager: any, {
     music.lastCommandAt = Date.now();
     music.lastCommandReason = String(reason || "nl_play_music");
     clearMusicDisambiguationState(manager, session);
-    manager.clearVoiceCommandSession(session);
+    clearVoiceCommandSession(session);
   }
 
-  manager.haltSessionOutputForMusicPlayback(session, "music_playback_started");
-  manager.store.logAction({
+  haltSessionOutputForMusicPlayback(manager, session, "music_playback_started");
+  logMusicAction(manager, {
     kind: "voice_runtime",
     guildId: session.guildId,
     channelId: session.textChannelId,
@@ -903,7 +1193,11 @@ export async function requestPlayMusic(manager: any, {
   return true;
 }
 
-export async function playMusicViaDiscord(manager: any, session: any, track: { id: string; title: string; artist: string; platform: string; externalUrl: string | null }) {
+export async function playMusicViaDiscord(
+  manager: MusicPlaybackHost,
+  session: VoiceSession,
+  track: { id: string; title: string; artist: string; platform: string; externalUrl: string | null }
+) {
   if (!session?.guildId) {
     return { ok: false, error: "no session" };
   }
@@ -916,23 +1210,29 @@ export async function playMusicViaDiscord(manager: any, session: any, track: { i
   if (!session.voxClient?.isAlive) {
     return { ok: false, error: "not connected to voice" };
   }
+  const musicPlayer = manager.musicPlayer;
+  if (!musicPlayer?.play) {
+    return { ok: false, error: "music player unavailable" };
+  }
 
+  const searchPlatform: "youtube" | "soundcloud" =
+    track.platform === "soundcloud" ? "soundcloud" : "youtube";
   const searchResult = {
     id: track.id,
     title: track.title,
     artist: track.artist,
-    platform: track.platform as "youtube" | "soundcloud",
+    platform: searchPlatform,
     streamUrl: null,
     durationSeconds: null,
     thumbnailUrl: null,
     externalUrl: track.externalUrl || ""
   };
 
-  const result = await manager.musicPlayer.play(searchResult);
+  const result = await musicPlayer.play(searchResult);
   return { ok: result.ok, error: result.error };
 }
 
-export async function requestStopMusic(manager: any, {
+export async function requestStopMusic(manager: MusicPlaybackHost, {
   message = null,
   guildId = null,
   channel = null,
@@ -1027,12 +1327,12 @@ export async function requestStopMusic(manager: any, {
     clearMusicDisambiguationState(manager, session);
   }
   if (clearQueue) {
-    manager.resetToolMusicQueueState(session);
+    clearToolMusicQueueState(manager, session);
   }
 
   // No-op: subprocess manages its own audio pipeline after music stop.
 
-  manager.store.logAction({
+  logMusicAction(manager, {
     kind: stopSucceeded ? "voice_runtime" : "voice_error",
     guildId: session.guildId,
     channelId: session.textChannelId,
@@ -1085,7 +1385,7 @@ export async function requestStopMusic(manager: any, {
   return true;
 }
 
-export async function requestPauseMusic(manager: any, {
+export async function requestPauseMusic(manager: MusicPlaybackHost, {
   message = null,
   guildId = null,
   channel = null,
@@ -1149,7 +1449,7 @@ export async function requestPauseMusic(manager: any, {
   }
   const canPause = musicPhaseCanPause(currentPhase) || currentPhase === "paused" || currentPhase === "paused_wake_word";
   if (!canPause) {
-    return await manager.requestStopMusic({
+    return await requestStopMusic(manager, {
       message,
       guildId: resolvedGuildId,
       channel: resolvedChannel,
@@ -1177,7 +1477,7 @@ export async function requestPauseMusic(manager: any, {
     music.lastCommandReason = String(reason || "nl_pause_music");
   }
 
-  manager.store.logAction({
+  logMusicAction(manager, {
     kind: "voice_runtime",
     guildId: session.guildId,
     channelId: session.textChannelId,
@@ -1211,7 +1511,7 @@ export async function requestPauseMusic(manager: any, {
   return true;
 }
 
-export async function maybeHandleMusicTextSelectionRequest(manager: any, {
+export async function maybeHandleMusicTextSelectionRequest(manager: MusicPlaybackHost, {
   message = null,
   settings = null
 }: MusicTextRequestPayload = {}) {
@@ -1221,7 +1521,7 @@ export async function maybeHandleMusicTextSelectionRequest(manager: any, {
   const session = manager.sessions.get(guildId);
   if (!session) return false;
 
-  const disambiguation = manager.getMusicDisambiguationPromptContext(session);
+  const disambiguation = getMusicDisambiguationPromptContext(manager, session);
   if (!disambiguation?.active || !Array.isArray(disambiguation.options) || !disambiguation.options.length) {
     return false;
   }
@@ -1243,7 +1543,7 @@ export async function maybeHandleMusicTextSelectionRequest(manager: any, {
   });
 }
 
-export async function maybeHandleMusicTextStopRequest(manager: any, {
+export async function maybeHandleMusicTextStopRequest(manager: MusicPlaybackHost, {
   message = null,
   settings = null
 }: MusicTextRequestPayload = {}) {
@@ -1251,13 +1551,13 @@ export async function maybeHandleMusicTextStopRequest(manager: any, {
   const guildId = String(message.guild.id || message.guildId || "").trim();
   if (!guildId) return false;
   const session = manager.sessions.get(guildId);
-  if (!session || !manager.isMusicPlaybackActive(session)) return false;
+  if (!session || !isMusicPlaybackActive(manager, session)) return false;
 
   const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
   const text = normalizeInlineText(message?.content || "", STT_TRANSCRIPT_MAX_CHARS);
   if (!text) return false;
 
-  const hasMusicStopCue = manager.isLikelyMusicStopPhrase({
+  const hasMusicStopCue = isLikelyMusicStopPhrase(manager, {
     transcript: text,
     settings: resolvedSettings
   });
@@ -1276,7 +1576,7 @@ export async function maybeHandleMusicTextStopRequest(manager: any, {
 }
 
 
-export async function maybeHandleMusicPlaybackTurn(manager: any, {
+export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
   session,
   settings,
   userId,
@@ -1286,7 +1586,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
   transcript: preTranscript = undefined as string | undefined
 }) {
   if (!session || session.ending) return false;
-  if (!manager.isMusicPlaybackActive(session)) return false;
+  if (!isMusicPlaybackActive(manager, session)) return false;
   if (!pcmBuffer?.length && !preTranscript) return true;
 
   const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
@@ -1298,7 +1598,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
   } else {
     // Fallback: transcribe raw PCM via Whisper (stt_pipeline path or no bridge).
     if (!manager.llm?.transcribeAudio) {
-      manager.store.logAction({
+      logMusicAction(manager, {
         kind: "voice_runtime",
         guildId: session.guildId,
         channelId: session.textChannelId,
@@ -1358,7 +1658,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
     normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
   }
   if (!normalizedTranscript) {
-    manager.store.logAction({
+    logMusicAction(manager, {
       kind: "voice_runtime",
       guildId: session.guildId,
       channelId: session.textChannelId,
@@ -1395,11 +1695,11 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
   // Heuristic-only stop detection — no LLM round-trip.
   // NOTE: isLikelyMusicStopPhrase uses English-only regex patterns (EN_MUSIC_STOP_VERB_RE,
   // EN_MUSIC_CUE_RE). Supporting other languages requires a dedicated locale-aware filter function.
-  const shouldStop = manager.isLikelyMusicStopPhrase({
+  const shouldStop = isLikelyMusicStopPhrase(manager, {
     transcript: normalizedTranscript,
     settings: resolvedSettings
   });
-  manager.store.logAction({
+  logMusicAction(manager, {
     kind: "voice_runtime",
     guildId: session.guildId,
     channelId: session.textChannelId,
@@ -1428,7 +1728,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
       if (directAddressedToBot) {
         setMusicPhase(manager, session, "paused_wake_word", "wake_word");
         manager.musicPlayer?.pause?.();
-        manager.store.logAction({
+        logMusicAction(manager, {
           kind: "voice_runtime",
           guildId: session.guildId,
           channelId: session.textChannelId,
@@ -1446,7 +1746,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
     return true;
   }
 
-  await manager.requestStopMusic({
+  await requestStopMusic(manager, {
     guildId: session.guildId,
     channelId: session.textChannelId,
     requestedByUserId: userId,
@@ -1460,7 +1760,11 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
   return true;
 }
 
-export async function handleMusicSlashCommand(manager: any, interaction: ChatInputCommandInteraction, settings: Record<string, unknown> | null) {
+export async function handleMusicSlashCommand(
+  manager: MusicPlaybackHost,
+  interaction: ChatInputCommandInteraction,
+  settings: Record<string, unknown> | null
+) {
   const command = interaction.commandName;
   const guild = interaction.guild;
   const user = interaction.user;
@@ -1476,7 +1780,7 @@ export async function handleMusicSlashCommand(manager: any, interaction: ChatInp
   if (command === "play") {
     const query = interaction.options.getString("query", true);
     await interaction.deferReply();
-    await manager.requestPlayMusic({
+    await requestPlayMusic(manager, {
       guildId,
       channel: interaction.channel,
       channelId: interaction.channelId,
@@ -1490,7 +1794,7 @@ export async function handleMusicSlashCommand(manager: any, interaction: ChatInp
 
     const updatedSession = manager.sessions.get(guildId);
     if (updatedSession) {
-      const disambiguation = manager.getMusicDisambiguationPromptContext(updatedSession);
+      const disambiguation = getMusicDisambiguationPromptContext(manager, updatedSession);
       if (disambiguation?.active && disambiguation.options?.length > 0) {
         const optionsList = disambiguation.options
           .map((opt, i) => `${i + 1}. **${opt.title}** - ${opt.artist || "Unknown"}`)
@@ -1510,12 +1814,12 @@ export async function handleMusicSlashCommand(manager: any, interaction: ChatInp
 
     await interaction.editReply("Could not start music playback.");
   } else if (command === "stop") {
-    if (!session || !manager.isMusicPlaybackActive(session)) {
+    if (!session || !isMusicPlaybackActive(manager, session)) {
       await interaction.reply({ content: "No music is currently playing.", ephemeral: true });
       return;
     }
     await interaction.deferReply();
-    await manager.requestStopMusic({
+    await requestStopMusic(manager, {
       guildId,
       channel: interaction.channel,
       channelId: interaction.channelId,
@@ -1534,7 +1838,7 @@ export async function handleMusicSlashCommand(manager: any, interaction: ChatInp
       return;
     }
     await interaction.deferReply();
-    await manager.requestPauseMusic({
+    await requestPauseMusic(manager, {
       guildId,
       channel: interaction.channel,
       channelId: interaction.channelId,
@@ -1553,7 +1857,7 @@ export async function handleMusicSlashCommand(manager: any, interaction: ChatInp
     }
     manager.musicPlayer?.resume();
     setMusicPhase(manager, session, "playing");
-    manager.haltSessionOutputForMusicPlayback(session, "music_resumed_slash_command");
+    haltSessionOutputForMusicPlayback(manager, session, "music_resumed_slash_command");
     await interaction.reply("Music resumed.");
   } else if (command === "skip") {
     if (!session || !musicPhaseIsActive(getMusicPhase(manager, session))) {
@@ -1563,7 +1867,7 @@ export async function handleMusicSlashCommand(manager: any, interaction: ChatInp
     await interaction.deferReply();
     const queueState = ensureToolMusicQueueState(manager, session);
     if (!queueState || queueState.nowPlayingIndex == null) {
-      await manager.requestStopMusic({
+      await requestStopMusic(manager, {
         guildId,
         channelId: interaction.channelId,
         requestedByUserId: user.id,
@@ -1576,7 +1880,7 @@ export async function handleMusicSlashCommand(manager: any, interaction: ChatInp
       return;
     }
     const nextIndex = queueState.nowPlayingIndex + 1;
-    await manager.requestStopMusic({
+    await requestStopMusic(manager, {
       guildId,
       channelId: interaction.channelId,
       requestedByUserId: user.id,

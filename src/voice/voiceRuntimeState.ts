@@ -79,7 +79,7 @@ export function buildRuntimeStateSnapshot({
         const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
         const modelTurns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
         const transcriptTurns = Array.isArray(session.transcriptTurns) ? session.transcriptTurns : [];
-        const deferredQueue = manager.getDeferredQueuedUserTurns(session);
+        const deferredQueue = manager.deferredActionQueue.getDeferredQueuedUserTurns(session);
         const generationSummary =
             session.modelContextSummary && typeof session.modelContextSummary === "object"
                 ? session.modelContextSummary.generation || null
@@ -170,7 +170,7 @@ export function buildRuntimeStateSnapshot({
                     active: joinWindowActive,
                     ageMs: Math.round(joinWindowAgeMs),
                     windowMs: JOIN_GREETING_LLM_WINDOW_MS,
-                    greetingPending: Boolean(manager.getJoinGreetingOpportunity(session)),
+                    greetingPending: Boolean(manager.greetingManager.getJoinGreetingOpportunity(session)),
                 },
                 thoughtEngine: {
                     busy: Boolean(session.thoughtLoopBusy),
