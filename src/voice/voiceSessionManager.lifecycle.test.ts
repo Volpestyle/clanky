@@ -6,13 +6,22 @@ import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
   BARGE_IN_FULL_OVERRIDE_MIN_MS,
   BARGE_IN_MIN_SPEECH_MS,
-  BARGE_IN_STT_MIN_CAPTURE_AGE_MS
+  BARGE_IN_STT_MIN_CAPTURE_AGE_MS,
+  VOICE_SILENCE_GATE_MIN_CLIP_MS
 } from "./voiceSessionManager.constants.ts";
 import { trackSharedAsrCommittedItem, commitAsrUtterance } from "./voiceAsrBridge.ts";
 import type { AsrBridgeState } from "./voiceAsrBridge.ts";
 
 // Discord sends 48kHz stereo 16-bit PCM in 20ms frames = 3840 bytes
 const DISCORD_PCM_FRAME_BYTES = 3840;
+
+function makeMonoPcm16(sampleCount: number, amplitude: number) {
+  const pcm = Buffer.alloc(sampleCount * 2);
+  for (let i = 0; i < sampleCount; i += 1) {
+    pcm.writeInt16LE(amplitude, i * 2);
+  }
+  return pcm;
+}
 
 function createManager() {
   const messages = [];
@@ -632,6 +641,7 @@ test("isCaptureEligibleForActivityTouch requires both speech window and non-sile
   const minSpeechBytes = Math.max(2, Math.ceil((24_000 * 2 * ACTIVITY_TOUCH_MIN_SPEECH_MS) / 1000));
 
   const underWindowCapture = {
+    promotedAt: Date.now(),
     bytesSent: Math.max(2, minSpeechBytes - 2),
     signalSampleCount: 24_000,
     signalActiveSampleCount: 2_000,
@@ -646,6 +656,7 @@ test("isCaptureEligibleForActivityTouch requires both speech window and non-sile
   );
 
   const nearSilentCapture = {
+    promotedAt: Date.now(),
     bytesSent: minSpeechBytes + 2,
     signalSampleCount: 24_000,
     signalActiveSampleCount: 120,
@@ -660,6 +671,7 @@ test("isCaptureEligibleForActivityTouch requires both speech window and non-sile
   );
 
   const speechLikeCapture = {
+    promotedAt: Date.now(),
     bytesSent: minSpeechBytes + 2,
     signalSampleCount: 24_000,
     signalActiveSampleCount: 2_000,
@@ -702,7 +714,108 @@ test("bindSessionHandlers does not touch activity on speaking.start before speec
   assert.equal(touchCalls.length, 0);
 });
 
-test("bindSessionHandlers does not restart per-user OpenAI ASR on repeated speaking.start for same capture", () => {
+test("startInboundCapture drops provisional noise before ASR or activity promotion", () => {
+  const { manager, logs, touchCalls } = createManager();
+  manager.appConfig.openaiApiKey = "test-openai-key";
+  const beginCalls = [];
+  const appendCalls = [];
+  manager.beginOpenAiAsrUtterance = (payload) => {
+    beginCalls.push(payload);
+  };
+  manager.appendAudioToOpenAiAsr = (payload) => {
+    appendCalls.push(payload);
+  };
+  manager.shouldUsePerUserTranscription = () => true;
+  const voxClient = new EventEmitter();
+  voxClient.subscribeUser = () => {};
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000,
+    cleanupHandlers: [],
+    settingsSnapshot: {
+      botName: "clanker conk",
+      voice: {
+        enabled: true,
+        asrEnabled: true,
+        brainProvider: "anthropic"
+      }
+    },
+    voxClient
+  });
+
+  manager.startInboundCapture({
+    session,
+    userId: "speaker-1",
+    settings: session.settingsSnapshot
+  });
+
+  const noisePcm = makeMonoPcm16(Math.ceil((24_000 * VOICE_SILENCE_GATE_MIN_CLIP_MS) / 1000), 64);
+  voxClient.emit("userAudio", "speaker-1", noisePcm);
+
+  const capture = session.userCaptures.get("speaker-1");
+  assert.ok(capture);
+  capture.finalize("stream_end");
+
+  assert.equal(beginCalls.length, 0);
+  assert.equal(appendCalls.length, 0);
+  assert.equal(touchCalls.length, 0);
+  assert.equal(logs.some((entry) => entry?.content === "voice_activity_started"), false);
+  assert.equal(logs.some((entry) => entry?.content === "voice_turn_dropped_provisional_capture"), true);
+  assert.equal(session.userCaptures.has("speaker-1"), false);
+});
+
+test("startInboundCapture promotes assertive audio and replays buffered PCM into per-user ASR", () => {
+  const { manager, logs, touchCalls } = createManager();
+  manager.appConfig.openaiApiKey = "test-openai-key";
+  const beginCalls = [];
+  const appendCalls = [];
+  manager.beginOpenAiAsrUtterance = (payload) => {
+    beginCalls.push(payload);
+  };
+  manager.appendAudioToOpenAiAsr = (payload) => {
+    appendCalls.push(payload);
+  };
+  manager.shouldUsePerUserTranscription = () => true;
+  const voxClient = new EventEmitter();
+  voxClient.subscribeUser = () => {};
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000,
+    cleanupHandlers: [],
+    settingsSnapshot: {
+      botName: "clanker conk",
+      voice: {
+        enabled: true,
+        asrEnabled: true,
+        brainProvider: "anthropic"
+      }
+    },
+    voxClient
+  });
+
+  manager.startInboundCapture({
+    session,
+    userId: "speaker-1",
+    settings: session.settingsSnapshot
+  });
+
+  const speechPcm = makeMonoPcm16(Math.ceil((24_000 * (VOICE_SILENCE_GATE_MIN_CLIP_MS + 40)) / 1000), 3000);
+  voxClient.emit("userAudio", "speaker-1", speechPcm);
+
+  const capture = session.userCaptures.get("speaker-1");
+  assert.ok(capture);
+  assert.equal(beginCalls.length, 1);
+  assert.equal(beginCalls[0]?.userId, "speaker-1");
+  assert.equal(appendCalls.length, 1);
+  assert.deepEqual(appendCalls[0]?.pcmChunk, speechPcm);
+  assert.ok(Number(capture.promotedAt || 0) > 0);
+  assert.equal(touchCalls.length, 1);
+  const activityLog = logs.find((entry) => entry?.content === "voice_activity_started");
+  assert.ok(activityLog);
+  assert.equal(activityLog?.userId, "speaker-1");
+});
+
+test("bindSessionHandlers defers per-user OpenAI ASR start until speech is confirmed", () => {
   const { manager } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
   const voxClient = new EventEmitter();
@@ -736,8 +849,7 @@ test("bindSessionHandlers does not restart per-user OpenAI ASR on repeated speak
   voxClient.emit("speakingStart", "speaker-1");
   voxClient.emit("speakingStart", "speaker-1");
 
-  assert.equal(beginCalls.length, 1);
-  assert.equal(beginCalls[0]?.userId, "speaker-1");
+  assert.equal(beginCalls.length, 0);
 });
 
 test("commitOpenAiAsrUtterance marks per-user commit in-flight before awaiting connect", async () => {
@@ -810,16 +922,13 @@ test("commitOpenAiAsrUtterance marks per-user commit in-flight before awaiting c
   assert.equal(commitCalls, 1);
 });
 
-test("bindSessionHandlers starts shared OpenAI ASR only for the first concurrent speaker", () => {
+test("bindSessionHandlers defers shared OpenAI ASR start until speech is confirmed", () => {
   const { manager } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
   const voxClient = new EventEmitter();
   const beginCalls = [];
-  let activeAsrUserId = null;
   manager.beginOpenAiSharedAsrUtterance = (payload) => {
     beginCalls.push(payload);
-    if (activeAsrUserId && activeAsrUserId !== payload.userId) return false;
-    activeAsrUserId = payload.userId;
     return true;
   };
   manager.startInboundCapture = ({ session, userId }) => {
@@ -852,9 +961,7 @@ test("bindSessionHandlers starts shared OpenAI ASR only for the first concurrent
   voxClient.emit("speakingStart", "speaker-1");
   voxClient.emit("speakingStart", "speaker-2");
 
-  assert.equal(beginCalls.length, 2);
-  assert.equal(beginCalls[0]?.userId, "speaker-1");
-  assert.equal(beginCalls[1]?.userId, "speaker-2");
+  assert.equal(beginCalls.length, 0);
 });
 
 test("shared ASR hands off to waiting speaker after commit", () => {
@@ -890,6 +997,7 @@ test("shared ASR hands off to waiting speaker after commit", () => {
   const pcmB = Buffer.alloc(960, 2);
   session.userCaptures.set("speaker-2", {
     userId: "speaker-2",
+    promotedAt: Date.now(),
     bytesSent: pcmA.length + pcmB.length,
     sharedAsrBytesSent: 0,
     pcmChunks: [pcmA, pcmB],
@@ -945,6 +1053,47 @@ test("shared ASR handoff skipped when no waiting captures", () => {
   assert.equal(beginCalls.length, 0);
 });
 
+test("shared ASR handoff skips provisional captures that never promoted", () => {
+  const { manager } = createManager();
+  manager.appConfig.openaiApiKey = "test-openai-key";
+  const beginCalls = [];
+  manager.beginOpenAiSharedAsrUtterance = (payload) => {
+    beginCalls.push(payload);
+    return true;
+  };
+  manager.shouldUseSharedTranscription = () => true;
+
+  const session = createSession({
+    mode: "openai_realtime",
+    openAiSharedAsrState: {
+      phase: "ready",
+      userId: null,
+      client: null,
+      utterance: null,
+      idleTimer: null,
+      pendingAudioChunks: [],
+      pendingAudioBytes: 0
+    }
+  });
+
+  session.userCaptures.set("speaker-provisional", {
+    userId: "speaker-provisional",
+    promotedAt: 0,
+    bytesSent: 960,
+    sharedAsrBytesSent: 0,
+    pcmChunks: [Buffer.alloc(960, 7)],
+    speakingEndFinalizeTimer: null
+  });
+
+  const result = manager.tryHandoffSharedAsrToWaitingCapture({
+    session,
+    settings: session.settingsSnapshot
+  });
+
+  assert.equal(result, false);
+  assert.equal(beginCalls.length, 0);
+});
+
 test("shared ASR handoff skips captures that already had ASR audio", () => {
   const { manager } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
@@ -976,6 +1125,7 @@ test("shared ASR handoff skips captures that already had ASR audio", () => {
 
   session.userCaptures.set("speaker-already-had-asr", {
     userId: "speaker-already-had-asr",
+    promotedAt: Date.now(),
     bytesSent: 4800,
     sharedAsrBytesSent: 4800,
     pcmChunks: [Buffer.alloc(960, 3)],
@@ -984,6 +1134,7 @@ test("shared ASR handoff skips captures that already had ASR audio", () => {
   const freshPcm = Buffer.alloc(960, 4);
   session.userCaptures.set("speaker-fresh", {
     userId: "speaker-fresh",
+    promotedAt: Date.now(),
     bytesSent: freshPcm.length,
     sharedAsrBytesSent: 0,
     pcmChunks: [freshPcm],
@@ -1032,6 +1183,7 @@ test("shared ASR handoff skips zero-audio captures and selects buffered speaker"
 
   session.userCaptures.set("speaker-empty", {
     userId: "speaker-empty",
+    promotedAt: Date.now(),
     bytesSent: 0,
     sharedAsrBytesSent: 0,
     pcmChunks: [],
@@ -1040,6 +1192,7 @@ test("shared ASR handoff skips zero-audio captures and selects buffered speaker"
   const bufferedPcm = Buffer.alloc(960, 7);
   session.userCaptures.set("speaker-buffered", {
     userId: "speaker-buffered",
+    promotedAt: Date.now(),
     bytesSent: bufferedPcm.length,
     sharedAsrBytesSent: 0,
     pcmChunks: [bufferedPcm],
@@ -1746,6 +1899,7 @@ test("shared ASR bridge forwards recovered transcript after timeout instead of d
 
   const capture = session.userCaptures.get("speaker-1");
   const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 8, 0x10);
+  capture.promotedAt = Date.now();
   capture.pcmChunks.push(pcmBuffer);
   capture.bytesSent = pcmBuffer.length;
   capture.sharedAsrBytesSent = pcmBuffer.length;

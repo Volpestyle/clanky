@@ -1410,6 +1410,7 @@ export function tryHandoffSharedAsr(opts: {
 
   for (const [candidateUserId, captureState] of session.userCaptures) {
     if (!captureState || !candidateUserId) continue;
+    if (Math.max(0, Number(captureState.promotedAt || 0)) <= 0) continue;
     if (Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) > 0) continue;
     if (Math.max(0, Number(captureState.bytesSent || 0)) <= 0) continue;
 

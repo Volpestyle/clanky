@@ -2840,11 +2840,8 @@ export class VoiceSessionManager {
     if (notBeforeAt > now) return "not_before_at";
 
     // Output channel blockers
-    if (Number(session.userCaptures?.size || 0) > 0) {
-      const queuedUserTurnsAction = String(action?.type || "") === "queued_user_turns";
-      if (!queuedUserTurnsAction || this.hasReplayBlockingActiveCapture(session)) {
-        return "active_captures";
-      }
+    if (Number(session.userCaptures?.size || 0) > 0 && this.hasReplayBlockingActiveCapture(session)) {
+      return "active_captures";
     }
     if (session.pendingResponse) return "pending_response";
     if (this.isRealtimeResponseActive(session)) return "active_response";
@@ -3619,8 +3616,65 @@ export class VoiceSessionManager {
       peak >= BARGE_IN_BOT_SPEAKING_PEAK_MIN;
   }
 
+  getCaptureSignalMetrics(capture) {
+    if (!capture || typeof capture !== "object") {
+      return {
+        sampleCount: 0,
+        activeSampleRatio: 0,
+        peak: 0,
+        rms: 0
+      };
+    }
+    const sampleCount = Math.max(0, Number(capture.signalSampleCount || 0));
+    if (sampleCount <= 0) {
+      return {
+        sampleCount,
+        activeSampleRatio: 0,
+        peak: 0,
+        rms: 0
+      };
+    }
+    const activeSampleCount = Math.max(0, Number(capture.signalActiveSampleCount || 0));
+    const peakAbs = Math.max(0, Number(capture.signalPeakAbs || 0));
+    const sumSquares = Math.max(0, Number(capture.signalSumSquares || 0));
+    const activeSampleRatio = activeSampleCount / sampleCount;
+    const peak = peakAbs / 32768;
+    const rms = Math.sqrt(sumSquares / sampleCount) / 32768;
+    return {
+      sampleCount,
+      activeSampleRatio,
+      peak,
+      rms
+    };
+  }
+
+  hasCaptureBeenPromoted(capture) {
+    return Math.max(0, Number(capture?.promotedAt || 0)) > 0;
+  }
+
+  isCaptureEligibleForTurnPromotion({ session, capture }) {
+    if (!session || !capture || typeof capture !== "object") return false;
+    const sampleRateHz = isRealtimeMode(session.mode)
+      ? Number(session.realtimeInputSampleRateHz) || 24000
+      : 24000;
+    const minPromotionBytes = Math.max(
+      2,
+      Math.ceil((sampleRateHz * 2 * VOICE_SILENCE_GATE_MIN_CLIP_MS) / 1000)
+    );
+    if (Math.max(0, Number(capture.bytesSent || 0)) < minPromotionBytes) return false;
+    if (!this.isCaptureSignalAssertive(capture)) return false;
+    const signal = this.getCaptureSignalMetrics(capture);
+    if (signal.sampleCount <= 0) return false;
+    const noiseLike =
+      signal.rms <= VOICE_FALLBACK_NOISE_GATE_RMS_MAX &&
+      signal.peak <= VOICE_FALLBACK_NOISE_GATE_PEAK_MAX &&
+      signal.activeSampleRatio <= VOICE_FALLBACK_NOISE_GATE_ACTIVE_RATIO_MAX;
+    return !noiseLike;
+  }
+
   isCaptureEligibleForActivityTouch({ session, capture }) {
     if (!session || !capture || typeof capture !== "object") return false;
+    if (!this.hasCaptureBeenPromoted(capture)) return false;
     const sampleRateHz = isRealtimeMode(session.mode)
       ? Number(session.realtimeInputSampleRateHz) || 24000
       : 24000;
@@ -3639,6 +3693,7 @@ export class VoiceSessionManager {
     if (!capture.speakingEndFinalizeTimer && bytesSent <= 0 && signalSampleCount <= 0) {
       return true;
     }
+    if (!this.hasCaptureBeenPromoted(capture)) return false;
     return this.isCaptureEligibleForActivityTouch({ session, capture });
   }
 
@@ -4773,7 +4828,7 @@ export class VoiceSessionManager {
         retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
       };
     }
-    if (Number(session.userCaptures?.size || 0) > 0) {
+    if (this.hasReplayBlockingActiveCapture(session)) {
       return {
         allow: false,
         reason: "active_user_capture",
@@ -6038,7 +6093,7 @@ export class VoiceSessionManager {
     source = "voice_tts_line"
   }) {
     if (!session || session.ending) return false;
-    if (Number(session.userCaptures?.size || 0) > 0) return false;
+    if (this.hasReplayBlockingActiveCapture(session)) return false;
     const line = normalizeVoiceText(text, STT_REPLY_MAX_CHARS);
     if (!line) return false;
     if (!this.llm?.synthesizeSpeech) return false;
@@ -6384,20 +6439,6 @@ export class VoiceSessionManager {
         clearTimeout(activeCapture.speakingEndFinalizeTimer);
         activeCapture.speakingEndFinalizeTimer = null;
       }
-      if (useOpenAiPerUserAsr && !activeCapture) {
-        this.beginOpenAiAsrUtterance({
-          session,
-          settings,
-          userId: normalizedUserId
-        });
-      }
-      if (useOpenAiSharedAsr && !activeCapture) {
-        this.beginOpenAiSharedAsrUtterance({
-          session,
-          settings,
-          userId: normalizedUserId
-        });
-      }
       this.startInboundCapture({
         session,
         userId: normalizedUserId,
@@ -6469,10 +6510,13 @@ export class VoiceSessionManager {
     const captureState = {
       userId,
       startedAt: Date.now(),
+      promotedAt: 0,
+      promotionReason: null,
       bytesSent: 0,
       signalSampleCount: 0,
       signalActiveSampleCount: 0,
       signalPeakAbs: 0,
+      signalSumSquares: 0,
       pcmChunks: [],
       sharedAsrBytesSent: 0,
       lastActivityTouchAt: 0,
@@ -6485,17 +6529,6 @@ export class VoiceSessionManager {
     };
 
     session.userCaptures.set(userId, captureState);
-
-    this.store.logAction({
-      kind: "voice_turn_in",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId,
-      content: "voice_activity_started",
-      metadata: {
-        sessionId: session.id
-      }
-    });
 
     const cleanupCapture = () => {
       const current = session.userCaptures.get(userId);
@@ -6538,6 +6571,74 @@ export class VoiceSessionManager {
       }
     };
 
+    const appendBufferedCaptureToAsr = () => {
+      if (useOpenAiPerUserAsr) {
+        for (const chunk of captureState.pcmChunks) {
+          if (!Buffer.isBuffer(chunk) || !chunk.length) continue;
+          this.appendAudioToOpenAiAsr({
+            session,
+            settings,
+            userId,
+            pcmChunk: chunk
+          });
+        }
+        return;
+      }
+      if (!useOpenAiSharedAsr) return;
+      let appendedBytes = 0;
+      for (const chunk of captureState.pcmChunks) {
+        if (!Buffer.isBuffer(chunk) || !chunk.length) continue;
+        const appended = this.appendAudioToOpenAiSharedAsr({
+          session,
+          settings,
+          userId,
+          pcmChunk: chunk
+        });
+        if (appended) appendedBytes += chunk.length;
+      }
+      if (appendedBytes > 0) {
+        captureState.sharedAsrBytesSent =
+          Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) + appendedBytes;
+      }
+    };
+
+    const promoteCapture = (reason = "assertive_audio", now = Date.now()) => {
+      if (this.hasCaptureBeenPromoted(captureState)) return true;
+      if (!this.isCaptureEligibleForTurnPromotion({ session, capture: captureState })) return false;
+      captureState.promotedAt = now;
+      captureState.promotionReason = String(reason || "assertive_audio");
+      if (useOpenAiPerUserAsr) {
+        this.beginOpenAiAsrUtterance({
+          session,
+          settings,
+          userId
+        });
+      } else if (useOpenAiSharedAsr) {
+        this.beginOpenAiSharedAsrUtterance({
+          session,
+          settings,
+          userId
+        });
+      }
+      appendBufferedCaptureToAsr();
+      session.lastInboundAudioAt = now;
+      captureState.lastActivityTouchAt = now;
+      this.touchActivity(session.guildId, settings);
+      this.store.logAction({
+        kind: "voice_turn_in",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "voice_activity_started",
+        metadata: {
+          sessionId: session.id,
+          promotionReason: captureState.promotionReason,
+          promotionDelayMs: Math.max(0, now - Number(captureState.startedAt || now))
+        }
+      });
+      return true;
+    };
+
     const scheduleIdleFlush = () => {
       if (captureState.idleFlushTimer) {
         clearTimeout(captureState.idleFlushTimer);
@@ -6574,6 +6675,7 @@ export class VoiceSessionManager {
       if (sampleCount > 0) {
         let peakAbs = Math.max(0, Number(captureState.signalPeakAbs || 0));
         let activeSamples = 0;
+        let sumSquares = Math.max(0, Number(captureState.signalSumSquares || 0));
         for (let offset = 0; offset + 1 < normalizedPcm.length; offset += 2) {
           const sample = normalizedPcm.readInt16LE(offset);
           const absSample = Math.abs(sample);
@@ -6581,30 +6683,39 @@ export class VoiceSessionManager {
           if (absSample >= VOICE_SILENCE_GATE_ACTIVE_SAMPLE_MIN_ABS) {
             activeSamples += 1;
           }
+          sumSquares += sample * sample;
         }
         captureState.signalSampleCount = Math.max(0, Number(captureState.signalSampleCount || 0)) + sampleCount;
         captureState.signalActiveSampleCount =
           Math.max(0, Number(captureState.signalActiveSampleCount || 0)) + activeSamples;
         captureState.signalPeakAbs = peakAbs;
+        captureState.signalSumSquares = sumSquares;
       }
       captureState.pcmChunks.push(normalizedPcm);
-      if (useOpenAiPerUserAsr) {
-        this.appendAudioToOpenAiAsr({
-          session,
-          settings,
-          userId,
-          pcmChunk: normalizedPcm
-        });
-      } else if (useOpenAiSharedAsr) {
-        const appendedToSharedAsr = this.appendAudioToOpenAiSharedAsr({
-          session,
-          settings,
-          userId,
-          pcmChunk: normalizedPcm
-        });
-        if (appendedToSharedAsr) {
-          captureState.sharedAsrBytesSent =
-            Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) + normalizedPcm.length;
+      const wasPromoted = this.hasCaptureBeenPromoted(captureState);
+      if (!wasPromoted) {
+        promoteCapture("assertive_audio", now);
+      }
+      const isPromoted = this.hasCaptureBeenPromoted(captureState);
+      if (isPromoted && wasPromoted) {
+        if (useOpenAiPerUserAsr) {
+          this.appendAudioToOpenAiAsr({
+            session,
+            settings,
+            userId,
+            pcmChunk: normalizedPcm
+          });
+        } else if (useOpenAiSharedAsr) {
+          const appendedToSharedAsr = this.appendAudioToOpenAiSharedAsr({
+            session,
+            settings,
+            userId,
+            pcmChunk: normalizedPcm
+          });
+          if (appendedToSharedAsr) {
+            captureState.sharedAsrBytesSent =
+              Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) + normalizedPcm.length;
+          }
         }
       }
       if (captureState.speakingEndFinalizeTimer) {
@@ -6613,13 +6724,15 @@ export class VoiceSessionManager {
       }
       scheduleIdleFlush();
 
-      session.lastInboundAudioAt = now;
-      if (
-        this.isCaptureEligibleForActivityTouch({ session, capture: captureState }) &&
-        now - captureState.lastActivityTouchAt >= ACTIVITY_TOUCH_THROTTLE_MS
-      ) {
-        this.touchActivity(session.guildId, settings);
-        captureState.lastActivityTouchAt = now;
+      if (isPromoted) {
+        session.lastInboundAudioAt = now;
+        if (
+          this.isCaptureEligibleForActivityTouch({ session, capture: captureState }) &&
+          now - captureState.lastActivityTouchAt >= ACTIVITY_TOUCH_THROTTLE_MS
+        ) {
+          this.touchActivity(session.guildId, settings);
+          captureState.lastActivityTouchAt = now;
+        }
       }
 
       const bargeDecision = this.shouldBargeIn({ session, userId, captureState });
@@ -6655,6 +6768,41 @@ export class VoiceSessionManager {
       if (captureFinalized) return;
       captureFinalized = true;
       const finalizedAt = Date.now();
+      const captureDurationMs = Math.max(0, finalizedAt - captureState.startedAt);
+      const signal = this.getCaptureSignalMetrics(captureState);
+
+      if (!this.hasCaptureBeenPromoted(captureState) && Number(captureState.bytesSent || 0) > 0 && !session.ending) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: "voice_turn_dropped_provisional_capture",
+          metadata: {
+            sessionId: session.id,
+            reason: String(reason || "stream_end"),
+            bytesSent: Number(captureState.bytesSent || 0),
+            durationMs: captureDurationMs,
+            peak: signal.peak,
+            rms: signal.rms,
+            activeSampleRatio: signal.activeSampleRatio
+          }
+        });
+        cleanupCapture();
+        maybeTriggerDeferredActions();
+        if (useOpenAiPerUserAsr) {
+          this.scheduleOpenAiAsrSessionIdleClose({
+            session,
+            userId
+          });
+        } else if (useOpenAiSharedAsr) {
+          this.releaseOpenAiSharedAsrActiveUser(session, userId);
+          if (!this.tryHandoffSharedAsrToWaitingCapture({ session, settings })) {
+            this.scheduleOpenAiSharedAsrSessionIdleClose(session);
+          }
+        }
+        return;
+      }
 
       this.store.logAction({
         kind: "voice_runtime",
@@ -6666,7 +6814,7 @@ export class VoiceSessionManager {
           sessionId: session.id,
           reason: String(reason || "stream_end"),
           bytesSent: captureState.bytesSent,
-          durationMs: Math.max(0, finalizedAt - captureState.startedAt)
+          durationMs: captureDurationMs
         }
       });
 
@@ -6705,7 +6853,6 @@ export class VoiceSessionManager {
       // Silence gate: drop near-silent captures that slipped past the
       // in-flight near-silence abort (e.g., very short VAD false positives
       // or receiver buffer burst artifacts).
-      const captureDurationMs = Math.max(0, finalizedAt - captureState.startedAt);
       const sampleRateHz = isRealtimeMode(session.mode)
         ? Number(session.realtimeInputSampleRateHz) || 24000
         : 24000;
@@ -11258,7 +11405,7 @@ export class VoiceSessionManager {
 
     // Don't commit/request while users are still actively streaming audio chunks.
     // This avoids partial-turn commits that can return no-audio responses.
-    if (Number(session.userCaptures?.size || 0) > 0) {
+    if (this.hasReplayBlockingActiveCapture(session)) {
       this.scheduleResponseFromBufferedAudio({ session, userId });
       return;
     }
@@ -11532,7 +11679,7 @@ export class VoiceSessionManager {
     pending.handlingSilence = true;
     this.clearResponseSilenceTimers(session);
 
-    if (Number(session.userCaptures?.size || 0) > 0) {
+    if (this.hasReplayBlockingActiveCapture(session)) {
       pending.handlingSilence = false;
       this.armResponseSilenceWatchdog({
         session,
