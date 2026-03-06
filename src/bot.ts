@@ -34,47 +34,17 @@ import {
 } from "./bot/replyPipelineShared.ts";
 import type { ReplyPerformanceSeed } from "./bot/replyPipelineShared.ts";
 import {
-  buildSubAgentSessionsRuntime as buildSubAgentSessionsRuntimeForAgentTasks,
   runModelRequestedBrowserBrowse as runModelRequestedBrowserBrowseForAgentTasks,
-  runModelRequestedCodeTask as runModelRequestedCodeTaskForAgentTasks
 } from "./bot/agentTasks.ts";
 import {
   buildBrowserBrowseContext as buildBrowserBrowseContextForBudgetTracking,
-  buildImageLookupContext as buildImageLookupContextForBudgetTracking,
-  buildMemoryLookupContext as buildMemoryLookupContextForBudgetTracking,
-  buildVideoReplyContext as buildVideoReplyContextForBudgetTracking,
-  buildWebSearchContext as buildWebSearchContextForBudgetTracking,
-  getGifBudgetState as getGifBudgetStateForBudgetTracking,
-  getImageBudgetState as getImageBudgetStateForBudgetTracking,
-  getMediaGenerationCapabilities as getMediaGenerationCapabilitiesForBudgetTracking,
-  getVideoGenerationBudgetState as getVideoGenerationBudgetStateForBudgetTracking
 } from "./bot/budgetTracking.ts";
 import {
-  captionRecentHistoryImages as captionRecentHistoryImagesForImageAnalysis,
-  mergeImageInputs as mergeImageInputsForImageAnalysis,
-  runModelRequestedImageLookup as runModelRequestedImageLookupForImageAnalysis
-} from "./bot/imageAnalysis.ts";
-import {
-  maybeAttachGeneratedImage as maybeAttachGeneratedImageForMediaAttachment,
-  maybeAttachGeneratedVideo as maybeAttachGeneratedVideoForMediaAttachment,
-  maybeAttachReplyGif as maybeAttachReplyGifForMediaAttachment,
-  resolveMediaAttachment as resolveMediaAttachmentForMediaAttachment
-} from "./bot/mediaAttachment.ts";
-import {
   composeMessageContentForHistory as composeMessageContentForHistoryForMessageHistory,
-  getConversationHistoryForPrompt as getConversationHistoryForPromptForMessageHistory,
-  getImageInputs as getImageInputsForMessageHistory,
-  getRecentLookupContextForPrompt as getRecentLookupContextForPromptForMessageHistory,
   recordReactionHistoryEvent as recordReactionHistoryEventForMessageHistory,
-  rememberRecentLookupContext as rememberRecentLookupContextForMessageHistory,
   syncMessageSnapshot as syncMessageSnapshotForMessageHistory,
   syncMessageSnapshotFromReaction as syncMessageSnapshotFromReactionForMessageHistory
 } from "./bot/messageHistory.ts";
-import {
-  buildMediaMemoryFacts as buildMediaMemoryFactsForMemorySlice,
-  loadPromptMemorySlice as loadPromptMemorySliceForMemorySlice,
-  loadRelevantMemoryFacts as loadRelevantMemoryFactsForMemorySlice
-} from "./bot/memorySlice.ts";
 import {
   isChannelAllowed as isChannelAllowedForPermissions,
   isReplyChannel as isReplyChannelForPermissions,
@@ -82,7 +52,6 @@ import {
 } from "./bot/permissions.ts";
 import {
   getReplyAddressSignal as getReplyAddressSignalForReplyAdmission,
-  hasBotMessageInRecentWindow as hasBotMessageInRecentWindowForReplyAdmission,
   hasStartupFollowupAfterMessage as hasStartupFollowupAfterMessageForReplyAdmission,
   shouldAttemptReplyDecision as shouldAttemptReplyDecisionForReplyAdmission,
   shouldForceRespondForAddressSignal as shouldForceRespondForAddressSignalForReplyAdmission
@@ -93,7 +62,6 @@ import {
 } from "./bot/discoveryEngine.ts";
 import {
   getVoiceScreenShareCapability as getVoiceScreenShareCapabilityForScreenShare,
-  maybeHandleScreenShareOfferIntent as maybeHandleScreenShareOfferIntentForScreenShare,
   offerVoiceScreenShareLink as offerVoiceScreenShareLinkForScreenShare,
 } from "./bot/screenShare.ts";
 import type { ScreenShareSessionManagerLike } from "./bot/screenShare.ts";
@@ -132,6 +100,20 @@ import type {
   ReplyPipelineRuntime,
   VoiceReplyRuntime
 } from "./bot/botContext.ts";
+import {
+  buildAgentContext,
+  buildAutomationEngineRuntime,
+  buildBotContext,
+  buildBudgetContext,
+  buildDiscoveryEngineRuntime,
+  buildMediaAttachmentContext,
+  buildQueueGatewayRuntime,
+  buildReplyPipelineRuntime,
+  buildScreenShareRuntime,
+  buildTextThoughtLoopRuntime,
+  buildVoiceCoordinationRuntime,
+  buildVoiceReplyRuntime
+} from "./bot/botRuntimeFactories.ts";
 import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
 import type { BrowserManager } from "./services/BrowserManager.ts";
 import {
@@ -390,414 +372,54 @@ export class ClankerBot {
   }
 
   toBotContext(): BotContext {
-    return {
-      appConfig: this.appConfig,
-      store: this.store,
-      llm: this.llm,
-      memory: this.memory,
-      client: this.client,
-      botUserId: String(this.client.user?.id || "").trim() || null
-    };
+    return buildBotContext(this);
   }
 
   toAgentContext(): AgentContext {
-    return {
-      ...this.toBotContext(),
-      browserManager: this.browserManager,
-      activeBrowserTasks: this.activeBrowserTasks,
-      subAgentSessions: this.subAgentSessions
-    };
+    return buildAgentContext(this);
   }
 
   toBudgetContext(): BudgetContext {
-    return {
-      ...this.toBotContext(),
-      search: this.search,
-      video: this.video,
-      browserManager: this.browserManager,
-      imageCaptionCache: this.imageCaptionCache
-    };
+    return buildBudgetContext(this);
   }
 
   toMediaAttachmentContext(): MediaAttachmentContext {
-    return {
-      ...this.toBudgetContext(),
-      gifs: this.gifs
-    };
+    return buildMediaAttachmentContext(this);
   }
 
   toScreenShareRuntime() {
-    return {
-      ...this.toBotContext(),
-      screenShareSessionManager: this.screenShareSessionManager,
-      composeVoiceOperationalMessage: (payload) =>
-        composeVoiceOperationalMessageForVoiceCoordination(this.toVoiceCoordinationRuntime(), payload)
-    };
+    return buildScreenShareRuntime(this);
   }
 
   toVoiceCoordinationRuntime() {
-    return {
-      ...this.toBotContext(),
-      client: this.client,
-      voiceSessionManager: this.voiceSessionManager,
-      toVoiceReplyRuntime: () => this.toVoiceReplyRuntime()
-    };
+    return buildVoiceCoordinationRuntime(this);
   }
 
   toDiscoveryEngineRuntime() {
-    const botContext = this.toBotContext();
-    const budgetContext = this.toBudgetContext();
-    const mediaAttachmentContext = this.toMediaAttachmentContext();
-    const runtime = {
-      ...botContext,
-      client: this.client,
-      discovery: this.discovery,
-      canSendMessage: (maxPerHour) => this.canSendMessage(maxPerHour),
-      canTalkNow: (settings) => this.canTalkNow(settings),
-      hydrateRecentMessages: (channel, limit) => this.hydrateRecentMessages(channel, limit),
-      loadRelevantMemoryFacts: (payload) => loadRelevantMemoryFactsForMemorySlice(botContext, payload),
-      buildMediaMemoryFacts: (payload) => buildMediaMemoryFactsForMemorySlice(payload),
-      getImageBudgetState: (settings) => getImageBudgetStateForBudgetTracking(budgetContext, settings),
-      getVideoGenerationBudgetState: (settings) =>
-        getVideoGenerationBudgetStateForBudgetTracking(budgetContext, settings),
-      getMediaGenerationCapabilities: (settings) =>
-        getMediaGenerationCapabilitiesForBudgetTracking(budgetContext, settings),
-      getEmojiHints: (guild) => this.getEmojiHints(guild),
-      resolveMediaAttachment: (payload) =>
-        resolveMediaAttachmentForMediaAttachment(mediaAttachmentContext, payload),
-      composeMessageContentForHistory: (message, baseText) =>
-        composeMessageContentForHistoryForMessageHistory(message as Parameters<
-          typeof composeMessageContentForHistoryForMessageHistory
-        >[0], baseText),
-      markSpoke: () => {
-        this.lastBotMessageAt = Date.now();
-      },
-      getSimulatedTypingDelayMs: (minMs, jitterMs) => this.getSimulatedTypingDelayMs(minMs, jitterMs),
-      isChannelAllowed: (settings, channelId) =>
-        isChannelAllowedForPermissions(settings, String(channelId)),
-      discoveryPosting: this.discoveryPosting
-    };
-
-    Object.defineProperty(runtime, "discoveryPosting", {
-      get: () => this.discoveryPosting,
-      set: (value) => {
-        this.discoveryPosting = Boolean(value);
-      },
-      enumerable: true
-    });
-
-    return runtime;
+    return buildDiscoveryEngineRuntime(this);
   }
 
   toAutomationEngineRuntime() {
-    const botContext = this.toBotContext();
-    const budgetContext = this.toBudgetContext();
-    const mediaAttachmentContext = this.toMediaAttachmentContext();
-    const runtime = {
-      ...botContext,
-      client: this.client,
-      search: this.search,
-      isChannelAllowed: (settings, channelId) =>
-        isChannelAllowedForPermissions(settings, String(channelId)),
-      canSendMessage: (maxPerHour) => this.canSendMessage(maxPerHour),
-      canTalkNow: (settings) => this.canTalkNow(settings),
-      getSimulatedTypingDelayMs: (minMs, jitterMs) => this.getSimulatedTypingDelayMs(minMs, jitterMs),
-      markSpoke: () => {
-        this.lastBotMessageAt = Date.now();
-      },
-      composeMessageContentForHistory: (message, baseText) =>
-        composeMessageContentForHistoryForMessageHistory(message as Parameters<
-          typeof composeMessageContentForHistoryForMessageHistory
-        >[0], baseText),
-      loadPromptMemorySlice: (payload) => loadPromptMemorySliceForMemorySlice(botContext, payload),
-      buildMediaMemoryFacts: (payload) => buildMediaMemoryFactsForMemorySlice(payload),
-      buildMemoryLookupContext: (payload) => buildMemoryLookupContextForBudgetTracking(budgetContext, payload),
-      getImageBudgetState: (settings) => getImageBudgetStateForBudgetTracking(budgetContext, settings),
-      getVideoGenerationBudgetState: (settings) =>
-        getVideoGenerationBudgetStateForBudgetTracking(budgetContext, settings),
-      getGifBudgetState: (settings) => getGifBudgetStateForBudgetTracking(budgetContext, settings),
-      getMediaGenerationCapabilities: (settings) =>
-        getMediaGenerationCapabilitiesForBudgetTracking(budgetContext, settings),
-      resolveMediaAttachment: (payload) =>
-        resolveMediaAttachmentForMediaAttachment(mediaAttachmentContext, payload),
-      automationCycleRunning: this.automationCycleRunning
-    };
-
-    Object.defineProperty(runtime, "automationCycleRunning", {
-      get: () => this.automationCycleRunning,
-      set: (value) => {
-        this.automationCycleRunning = Boolean(value);
-      },
-      enumerable: true
-    });
-
-    return runtime;
+    return buildAutomationEngineRuntime(this);
   }
 
   toTextThoughtLoopRuntime() {
-    const runtime = {
-      ...this.toBotContext(),
-      client: this.client,
-      canSendMessage: (maxPerHour) => this.canSendMessage(maxPerHour),
-      canTalkNow: (settings) => this.canTalkNow(settings),
-      maybeReplyToMessage: (message, settings, options) => this.maybeReplyToMessage(message, settings, options),
-      isChannelAllowed: (settings, channelId) =>
-        isChannelAllowedForPermissions(settings, String(channelId)),
-      isNonPrivateReplyEligibleChannel: (channel) => this.isNonPrivateReplyEligibleChannel(channel),
-      hydrateRecentMessages: (channel, limit) => this.hydrateRecentMessages(channel, limit),
-      hasBotMessageInRecentWindow: (payload) =>
-        hasBotMessageInRecentWindowForReplyAdmission({
-          botUserId: this.client.user?.id,
-          ...payload
-        }),
-      textThoughtLoopRunning: this.textThoughtLoopRunning
-    };
-
-    Object.defineProperty(runtime, "textThoughtLoopRunning", {
-      get: () => this.textThoughtLoopRunning,
-      set: (value) => {
-        this.textThoughtLoopRunning = Boolean(value);
-      },
-      enumerable: true
-    });
-
-    return runtime;
+    return buildTextThoughtLoopRuntime(this);
   }
 
   toQueueGatewayRuntime(): QueueGatewayRuntime {
-    const botContext = this.toBotContext();
-    const runtime: QueueGatewayRuntime = {
-      ...botContext,
-      lastBotMessageAt: this.lastBotMessageAt,
-      canSendMessage: (maxPerHour) => this.canSendMessage(maxPerHour),
-      replyQueues: this.replyQueues,
-      replyQueueWorkers: this.replyQueueWorkers,
-      replyQueuedMessageIds: this.replyQueuedMessageIds,
-      isStopping: this.isStopping,
-      isChannelAllowed: (settings, channelId) =>
-        isChannelAllowedForPermissions(
-          settings as Parameters<typeof isChannelAllowedForPermissions>[0],
-          String(channelId)
-        ),
-      isUserBlocked: (settings, userId) =>
-        isUserBlockedForPermissions(
-          settings as Parameters<typeof isUserBlockedForPermissions>[0],
-          String(userId)
-        ),
-      getReplyAddressSignal: (settings, message, recentMessages = []) =>
-        getReplyAddressSignalForReplyAdmission(
-          {
-            botUserId: botContext.botUserId,
-            isDirectlyAddressed: (resolvedSettings, resolvedMessage) =>
-              this.isDirectlyAddressed(resolvedSettings, resolvedMessage)
-          },
-          settings as Parameters<typeof getReplyAddressSignalForReplyAdmission>[1],
-          message,
-          recentMessages
-        ),
-      maybeReplyToMessage: (message, settings, options = {}) =>
-        this.maybeReplyToMessage(message, settings, options),
-      reconnectInFlight: this.reconnectInFlight,
-      hasConnectedAtLeastOnce: this.hasConnectedAtLeastOnce,
-      lastGatewayEventAt: this.lastGatewayEventAt,
-      reconnectTimeout: this.reconnectTimeout,
-      markGatewayEvent: () => {
-        this.lastGatewayEventAt = Date.now();
-      },
-      reconnectAttempts: this.reconnectAttempts
-    };
-
-    Object.defineProperties(runtime, {
-      lastBotMessageAt: {
-        get: () => this.lastBotMessageAt,
-        set: (value) => {
-          this.lastBotMessageAt = Number(value) || 0;
-        },
-        enumerable: true
-      },
-      isStopping: {
-        get: () => this.isStopping,
-        set: (value) => {
-          this.isStopping = Boolean(value);
-        },
-        enumerable: true
-      },
-      reconnectInFlight: {
-        get: () => this.reconnectInFlight,
-        set: (value) => {
-          this.reconnectInFlight = Boolean(value);
-        },
-        enumerable: true
-      },
-      hasConnectedAtLeastOnce: {
-        get: () => this.hasConnectedAtLeastOnce,
-        set: (value) => {
-          this.hasConnectedAtLeastOnce = Boolean(value);
-        },
-        enumerable: true
-      },
-      lastGatewayEventAt: {
-        get: () => this.lastGatewayEventAt,
-        set: (value) => {
-          this.lastGatewayEventAt = Number(value) || Date.now();
-        },
-        enumerable: true
-      },
-      reconnectTimeout: {
-        get: () => this.reconnectTimeout,
-        set: (value) => {
-          this.reconnectTimeout = value;
-        },
-        enumerable: true
-      },
-      reconnectAttempts: {
-        get: () => this.reconnectAttempts,
-        set: (value) => {
-          this.reconnectAttempts = Number(value) || 0;
-        },
-        enumerable: true
-      }
-    });
-
-    return runtime;
+    return buildQueueGatewayRuntime(this);
   }
 
   toReplyPipelineRuntime(): ReplyPipelineRuntime {
-    const botContext = this.toBotContext();
-    const budgetContext = this.toBudgetContext();
-    const mediaAttachmentContext = this.toMediaAttachmentContext();
-    const agentContext = this.toAgentContext();
-    return {
-      ...botContext,
-      gifs: this.gifs,
-      search: this.search,
-      voiceSessionManager: this.voiceSessionManager,
-      getReplyAddressSignal: (settings, message, recentMessages = []) =>
-        getReplyAddressSignalForReplyAdmission(
-          {
-            botUserId: botContext.botUserId,
-            isDirectlyAddressed: (resolvedSettings, resolvedMessage) =>
-              this.isDirectlyAddressed(resolvedSettings, resolvedMessage)
-          },
-          settings as Parameters<typeof getReplyAddressSignalForReplyAdmission>[1],
-          message,
-          recentMessages
-        ),
-      isReplyChannel: (settings, channelId) =>
-        isReplyChannelForPermissions(
-          settings as Parameters<typeof isReplyChannelForPermissions>[0],
-          String(channelId)
-        ),
-      getReactionEmojiOptions: (guild) => this.getReactionEmojiOptions(guild),
-      shouldAttemptReplyDecision: (payload) =>
-        shouldAttemptReplyDecisionForReplyAdmission({
-          botUserId: this.client.user?.id,
-          ...payload,
-          windowSize: UNSOLICITED_REPLY_CONTEXT_WINDOW
-        } as Parameters<typeof shouldAttemptReplyDecisionForReplyAdmission>[0]),
-      loadPromptMemorySlice: (payload) => loadPromptMemorySliceForMemorySlice(botContext, payload),
-      getRecentLookupContextForPrompt: (payload) =>
-        getRecentLookupContextForPromptForMessageHistory(botContext, payload),
-      getConversationHistoryForPrompt: (payload) =>
-        getConversationHistoryForPromptForMessageHistory(botContext, payload),
-      buildMediaMemoryFacts: (payload) => buildMediaMemoryFactsForMemorySlice(payload),
-      getImageInputs: (message) =>
-        getImageInputsForMessageHistory(message as Parameters<typeof getImageInputsForMessageHistory>[0]),
-      getImageBudgetState: (settings) => getImageBudgetStateForBudgetTracking(budgetContext, settings),
-      getVideoGenerationBudgetState: (settings) =>
-        getVideoGenerationBudgetStateForBudgetTracking(budgetContext, settings),
-      getMediaGenerationCapabilities: (settings) =>
-        getMediaGenerationCapabilitiesForBudgetTracking(budgetContext, settings),
-      getGifBudgetState: (settings) => getGifBudgetStateForBudgetTracking(budgetContext, settings),
-      buildWebSearchContext: (settings, messageText) =>
-        buildWebSearchContextForBudgetTracking(budgetContext, settings, messageText),
-      buildBrowserBrowseContext: (settings) =>
-        buildBrowserBrowseContextForBudgetTracking(budgetContext, settings),
-      buildMemoryLookupContext: (payload) => buildMemoryLookupContextForBudgetTracking(budgetContext, payload),
-      buildVideoReplyContext: (payload) => buildVideoReplyContextForBudgetTracking(budgetContext, payload),
-      buildImageLookupContext: (payload) => buildImageLookupContextForBudgetTracking(budgetContext, payload),
-      captionRecentHistoryImages: (payload = {}) =>
-        captionRecentHistoryImagesForImageAnalysis(botContext, {
-          imageCaptionCache: this.imageCaptionCache,
-          captionTimestamps: this.captionTimestamps,
-          candidates: payload.candidates || [],
-          settings: payload.settings || null,
-          trace: payload.trace || null
-        }),
-      getVoiceScreenShareCapability: (payload) =>
-        getVoiceScreenShareCapabilityForScreenShare(this.toScreenShareRuntime(), payload),
-      getEmojiHints: (guild) => this.getEmojiHints(guild),
-      runModelRequestedBrowserBrowse: (payload) =>
-        runModelRequestedBrowserBrowseForAgentTasks(agentContext, payload),
-      runModelRequestedCodeTask: (payload) => runModelRequestedCodeTaskForAgentTasks(agentContext, payload),
-      buildSubAgentSessionsRuntime: () => buildSubAgentSessionsRuntimeForAgentTasks(agentContext),
-      runModelRequestedImageLookup: (payload) =>
-        runModelRequestedImageLookupForImageAnalysis({
-          imageLookup: payload.imageLookup || {},
-          query: payload.query || ""
-        }),
-      mergeImageInputs: (payload) => mergeImageInputsForImageAnalysis(payload),
-      maybeHandleStructuredVoiceIntent: (payload) => this.maybeHandleStructuredVoiceIntent(payload),
-      maybeHandleStructuredAutomationIntent: (payload) =>
-        this.maybeHandleStructuredAutomationIntent(payload),
-      rememberRecentLookupContext: (payload) =>
-        rememberRecentLookupContextForMessageHistory(botContext, payload),
-      maybeApplyReplyReaction: (payload) => this.maybeApplyReplyReaction(payload),
-      logSkippedReply: (payload) => this.logSkippedReply(payload),
-      maybeHandleScreenShareOfferIntent: (payload) =>
-        maybeHandleScreenShareOfferIntentForScreenShare(this.toScreenShareRuntime(), {
-          ...payload,
-          settings: this.store.getSettings()
-        }),
-      resolveMediaAttachment: (payload) =>
-        resolveMediaAttachmentForMediaAttachment(mediaAttachmentContext, payload),
-      maybeAttachReplyGif: (payload) => maybeAttachReplyGifForMediaAttachment(mediaAttachmentContext, payload),
-      maybeAttachGeneratedImage: (payload) =>
-        maybeAttachGeneratedImageForMediaAttachment(mediaAttachmentContext, payload),
-      maybeAttachGeneratedVideo: (payload) =>
-        maybeAttachGeneratedVideoForMediaAttachment(mediaAttachmentContext, payload),
-      getSimulatedTypingDelayMs: (minMs, jitterMs) => this.getSimulatedTypingDelayMs(minMs, jitterMs),
-      shouldSendAsReply: (payload) => this.shouldSendAsReply(payload),
-      markSpoke: () => {
-        this.lastBotMessageAt = Date.now();
-      },
-      composeMessageContentForHistory: (message, baseText) =>
-        composeMessageContentForHistoryForMessageHistory(message as Parameters<
-          typeof composeMessageContentForHistoryForMessageHistory
-        >[0], baseText),
-      canSendMessage: (maxPerHour) => this.canSendMessage(maxPerHour),
-      canTalkNow: (settings) => this.canTalkNow(settings)
-    };
+    return buildReplyPipelineRuntime(this, {
+      captionTimestamps: this.captionTimestamps,
+      unsolicitedReplyContextWindow: UNSOLICITED_REPLY_CONTEXT_WINDOW
+    });
   }
 
   toVoiceReplyRuntime(): VoiceReplyRuntime {
-    const botContext = this.toBotContext();
-    const budgetContext = this.toBudgetContext();
-    const agentContext = this.toAgentContext();
-    return {
-      ...botContext,
-      search: this.search,
-      loadRelevantMemoryFacts: (payload) => loadRelevantMemoryFactsForMemorySlice(botContext, payload),
-      buildMediaMemoryFacts: (payload) => buildMediaMemoryFactsForMemorySlice(payload),
-      loadPromptMemorySlice: (payload) => loadPromptMemorySliceForMemorySlice(botContext, payload),
-      buildWebSearchContext: (settings, messageText) =>
-        buildWebSearchContextForBudgetTracking(budgetContext, settings, messageText),
-      loadRecentConversationHistory: (payload) =>
-        getConversationHistoryForPromptForMessageHistory(botContext, payload),
-      loadRecentLookupContext: (payload) =>
-        getRecentLookupContextForPromptForMessageHistory(botContext, payload),
-      rememberRecentLookupContext: (payload) =>
-        rememberRecentLookupContextForMessageHistory(botContext, payload),
-      getVoiceScreenShareCapability: (payload) =>
-        getVoiceScreenShareCapabilityForScreenShare(this.toScreenShareRuntime(), payload),
-      offerVoiceScreenShareLink: (payload) =>
-        offerVoiceScreenShareLinkForScreenShare(this.toScreenShareRuntime(), payload),
-      runModelRequestedBrowserBrowse: (payload) =>
-        runModelRequestedBrowserBrowseForAgentTasks(agentContext, payload),
-      buildBrowserBrowseContext: (settings) =>
-        buildBrowserBrowseContextForBudgetTracking(budgetContext, settings),
-      runModelRequestedCodeTask: (payload) => runModelRequestedCodeTaskForAgentTasks(agentContext, payload)
-    };
+    return buildVoiceReplyRuntime(this);
   }
 
   registerEvents() {
