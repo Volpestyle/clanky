@@ -8,6 +8,12 @@ import {
   getResolvedOrchestratorBinding
 } from "./settings/agentStack.ts";
 import { ClankerBot } from "./bot.ts";
+import {
+  getVoiceScreenShareCapability,
+  offerVoiceScreenShareLink
+} from "./bot/screenShare.ts";
+import { getReplyAddressSignal as getReplyAddressSignalForReplyAdmission } from "./bot/replyAdmission.ts";
+import { isReplyChannel as isReplyChannelForPermissions } from "./bot/permissions.ts";
 import { Store } from "./store.ts";
 import { createTestSettingsPatch } from "./testSettings.ts";
 
@@ -467,7 +473,16 @@ test("smoke: text followup-window turn addressed to another user is llm-skipped"
     ];
 
     const settings = store.getSettings();
-    const addressSignal = await bot.getReplyAddressSignal(settings, incoming, recentMessages);
+    const addressSignal = await getReplyAddressSignalForReplyAdmission(
+      {
+        botUserId: String(bot.client.user?.id || "").trim(),
+        isDirectlyAddressed: (resolvedSettings, resolvedMessage) =>
+          bot.isDirectlyAddressed(resolvedSettings, resolvedMessage)
+      },
+      settings,
+      incoming,
+      recentMessages
+    );
     assert.equal(Boolean(addressSignal?.triggered), false);
     const sent = await bot.maybeReplyToMessage(incoming, settings, {
       source: "message_event",
@@ -700,8 +715,8 @@ test("empty reply channel list disables reply-channel behavior everywhere (expli
     bot.client.channels.cache.set(privateThread.id, privateThread);
 
     const settings = store.getSettings();
-    assert.equal(bot.isReplyChannel(settings, publicChannel.id), false);
-    assert.equal(bot.isReplyChannel(settings, privateThread.id), false);
+    assert.equal(isReplyChannelForPermissions(settings, publicChannel.id), false);
+    assert.equal(isReplyChannelForPermissions(settings, privateThread.id), false);
   });
 });
 
@@ -1386,20 +1401,24 @@ test("reply tool loop keeps remaining concurrent tool results when one concurren
       username: "clanker conk",
       tag: "clanker conk#0001"
     };
-    bot.runModelRequestedCodeTask = async () => ({
-      text: "repo status inspected",
-      isError: false,
-      costUsd: 0,
-      error: null
-    });
-    bot.buildSubAgentSessionsRuntime = () => ({
-      manager: bot.subAgentSessions,
-      createCodeSession() {
-        return null;
-      },
-      createBrowserSession() {
-        throw new Error("browser session init exploded");
-      }
+    const originalToReplyPipelineRuntime = bot.toReplyPipelineRuntime.bind(bot);
+    bot.toReplyPipelineRuntime = () => ({
+      ...originalToReplyPipelineRuntime(),
+      runModelRequestedCodeTask: async () => ({
+        text: "repo status inspected",
+        isError: false,
+        costUsd: 0,
+        error: null
+      }),
+      buildSubAgentSessionsRuntime: () => ({
+        manager: bot.subAgentSessions,
+        createCodeSession() {
+          return null;
+        },
+        createBrowserSession() {
+          throw new Error("browser session init exploded");
+        }
+      })
     });
 
     const guild = buildGuild();
@@ -2025,7 +2044,7 @@ test("getVoiceScreenShareCapability normalizes status and handles missing manage
       video: null
     });
 
-    const unavailable = bot.getVoiceScreenShareCapability();
+    const unavailable = getVoiceScreenShareCapability(bot.toScreenShareRuntime());
     assert.equal(unavailable.supported, false);
     assert.equal(unavailable.enabled, false);
     assert.equal(unavailable.available, false);
@@ -2042,7 +2061,7 @@ test("getVoiceScreenShareCapability normalizes status and handles missing manage
       }
     });
 
-    const ready = bot.getVoiceScreenShareCapability();
+    const ready = getVoiceScreenShareCapability(bot.toScreenShareRuntime());
     assert.equal(ready.supported, true);
     assert.equal(ready.enabled, true);
     assert.equal(ready.available, true);
@@ -2060,7 +2079,7 @@ test("getVoiceScreenShareCapability normalizes status and handles missing manage
       }
     });
 
-    const warming = bot.getVoiceScreenShareCapability();
+    const warming = getVoiceScreenShareCapability(bot.toScreenShareRuntime());
     assert.equal(warming.supported, true);
     assert.equal(warming.enabled, true);
     assert.equal(warming.available, false);
@@ -2130,10 +2149,11 @@ test("offerVoiceScreenShareLink sends generated offer to text channel when sessi
       }
     });
 
-    bot.composeScreenShareOfferMessage = async (payload) =>
-      `bet, open this and start sharing: ${String(payload?.linkUrl || "")}`;
-
-    const result = await bot.offerVoiceScreenShareLink({
+    const result = await offerVoiceScreenShareLink({
+      ...bot.toScreenShareRuntime(),
+      composeScreenShareOfferMessage: async (payload) =>
+        `bet, open this and start sharing: ${String(payload?.linkUrl || "")}`
+    }, {
       settings: store.getSettings(),
       guildId: guild.id,
       channelId,
@@ -2213,10 +2233,11 @@ test("offerVoiceScreenShareLink sends generated unavailable text when session cr
       }
     });
 
-    bot.composeScreenShareUnavailableMessage = async () =>
-      "can't share screen links right now, try again in a minute";
-
-    const result = await bot.offerVoiceScreenShareLink({
+    const result = await offerVoiceScreenShareLink({
+      ...bot.toScreenShareRuntime(),
+      composeScreenShareUnavailableMessage: async () =>
+        "can't share screen links right now, try again in a minute"
+    }, {
       settings: store.getSettings(),
       guildId: guild.id,
       channelId,

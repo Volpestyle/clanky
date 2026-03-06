@@ -12,74 +12,75 @@ import {
   runCodeAgent,
   isCodeAgentUserAllowed,
   resolveCodeAgentConfig,
-  getActiveCodeAgentTaskCount,
-  createCodeAgentSession as createCodeAgentSessionRuntime
+  getActiveCodeAgentTaskCount
 } from "./agents/codeAgent.ts";
 import { musicCommands } from "./voice/musicCommands.ts";
 import { ImageCaptionCache } from "./vision/imageCaptionCache.ts";
 import {
-  buildAutomationPrompt,
-  buildDiscoveryPrompt,
-  buildSystemPrompt
-} from "./prompts.ts";
-import { getMediaPromptCraftGuidance } from "./promptCore.ts";
-import {
-  MAX_BROWSER_BROWSE_QUERY_LEN,
-  MAX_GIF_QUERY_LEN,
-  MAX_IMAGE_LOOKUP_QUERY_LEN,
-  MAX_VIDEO_FALLBACK_MESSAGES,
-  MAX_VIDEO_TARGET_SCAN,
-  collectMemoryFactHints,
-  composeDiscoveryImagePrompt,
-  composeDiscoveryVideoPrompt,
-  composeReplyImagePrompt,
-  composeReplyVideoPrompt,
-  extractRecentVideoTargets,
-  extractUrlsFromText,
-  formatReactionSummary,
-  isWebSearchOptOutText,
-  looksLikeVideoFollowupMessage,
-  normalizeDirectiveText,
-  normalizeReactionEmojiToken,
-  normalizeSkipSentinel,
-  parseDiscoveryMediaDirective,
-  parseStructuredReplyOutput,
-  pickDiscoveryMediaDirective,
-  pickReplyMediaDirective,
-  REPLY_OUTPUT_JSON_SCHEMA,
-  resolveMaxMediaPromptLen,
-  splitDiscordMessage
+  normalizeReactionEmojiToken
 } from "./botHelpers.ts";
 import {
   resolveFollowingNextRunAt,
   resolveInitialNextRunAt
 } from "./automation.ts";
-import { normalizeDiscoveryUrl } from "./discovery.ts";
-import { chance, clamp, sanitizeBotText, sleep } from "./utils.ts";
+import { chance, clamp, sleep } from "./utils.ts";
 import {
   applyAutomationControlAction,
   composeAutomationControlReply
 } from "./bot/automationControl.ts";
 import {
-  resolveDeterministicMentions as resolveDeterministicMentionsForMentions
-} from "./bot/mentions.ts";
-import {
-  CONVERSATION_HISTORY_PROMPT_LIMIT,
-  CONVERSATION_HISTORY_PROMPT_MAX_AGE_HOURS,
-  CONVERSATION_HISTORY_PROMPT_WINDOW_AFTER,
-  CONVERSATION_HISTORY_PROMPT_WINDOW_BEFORE,
-  LOOKUP_CONTEXT_PROMPT_LIMIT,
-  LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS,
-  MAX_MODEL_IMAGE_INPUTS,
   finalizeReplyPerformanceSample,
   normalizeReplyPerformanceSeed
 } from "./bot/replyPipelineShared.ts";
 import type { ReplyPerformanceSeed } from "./bot/replyPipelineShared.ts";
 import {
-  buildReplyToolSet,
-  executeReplyTool
-} from "./tools/replyTools.ts";
-import type { ReplyToolRuntime, ReplyToolContext } from "./tools/replyTools.ts";
+  buildSubAgentSessionsRuntime as buildSubAgentSessionsRuntimeForAgentTasks,
+  runModelRequestedBrowserBrowse as runModelRequestedBrowserBrowseForAgentTasks,
+  runModelRequestedCodeTask as runModelRequestedCodeTaskForAgentTasks
+} from "./bot/agentTasks.ts";
+import {
+  buildBrowserBrowseContext as buildBrowserBrowseContextForBudgetTracking,
+  buildImageLookupContext as buildImageLookupContextForBudgetTracking,
+  buildMemoryLookupContext as buildMemoryLookupContextForBudgetTracking,
+  buildVideoReplyContext as buildVideoReplyContextForBudgetTracking,
+  buildWebSearchContext as buildWebSearchContextForBudgetTracking,
+  getGifBudgetState as getGifBudgetStateForBudgetTracking,
+  getImageBudgetState as getImageBudgetStateForBudgetTracking,
+  getMediaGenerationCapabilities as getMediaGenerationCapabilitiesForBudgetTracking,
+  getVideoGenerationBudgetState as getVideoGenerationBudgetStateForBudgetTracking
+} from "./bot/budgetTracking.ts";
+import {
+  captionRecentHistoryImages as captionRecentHistoryImagesForImageAnalysis,
+  getAutoIncludeImageInputs as getAutoIncludeImageInputsForImageAnalysis,
+  mergeImageInputs as mergeImageInputsForImageAnalysis,
+  runModelRequestedImageLookup as runModelRequestedImageLookupForImageAnalysis
+} from "./bot/imageAnalysis.ts";
+import {
+  maybeAttachGeneratedImage as maybeAttachGeneratedImageForMediaAttachment,
+  maybeAttachGeneratedVideo as maybeAttachGeneratedVideoForMediaAttachment,
+  maybeAttachReplyGif as maybeAttachReplyGifForMediaAttachment,
+  resolveMediaAttachment as resolveMediaAttachmentForMediaAttachment
+} from "./bot/mediaAttachment.ts";
+import {
+  composeMessageContentForHistory as composeMessageContentForHistoryForMessageHistory,
+  getConversationHistoryForPrompt as getConversationHistoryForPromptForMessageHistory,
+  getImageInputs as getImageInputsForMessageHistory,
+  getRecentLookupContextForPrompt as getRecentLookupContextForPromptForMessageHistory,
+  recordReactionHistoryEvent as recordReactionHistoryEventForMessageHistory,
+  rememberRecentLookupContext as rememberRecentLookupContextForMessageHistory,
+  syncMessageSnapshot as syncMessageSnapshotForMessageHistory,
+  syncMessageSnapshotFromReaction as syncMessageSnapshotFromReactionForMessageHistory
+} from "./bot/messageHistory.ts";
+import {
+  buildMediaMemoryFacts as buildMediaMemoryFactsForMemorySlice,
+  loadPromptMemorySlice as loadPromptMemorySliceForMemorySlice,
+  loadRelevantMemoryFacts as loadRelevantMemoryFactsForMemorySlice
+} from "./bot/memorySlice.ts";
+import {
+  isChannelAllowed as isChannelAllowedForPermissions,
+  isReplyChannel as isReplyChannelForPermissions,
+  isUserBlocked as isUserBlockedForPermissions
+} from "./bot/permissions.ts";
 import {
   getReplyAddressSignal as getReplyAddressSignalForReplyAdmission,
   hasBotMessageInRecentWindow as hasBotMessageInRecentWindowForReplyAdmission,
@@ -89,9 +90,25 @@ import {
 } from "./bot/replyAdmission.ts";
 import { runStartupCatchup as runStartupCatchupForStartupCatchup } from "./bot/startupCatchup.ts";
 import {
-  composeVoiceOperationalMessage,
-  generateVoiceTurnReply
-} from "./bot/voiceReplies.ts";
+  maybeRunDiscoveryCycle as maybeRunDiscoveryCycleForDiscoveryEngine
+} from "./bot/discoveryEngine.ts";
+import {
+  getVoiceScreenShareCapability as getVoiceScreenShareCapabilityForScreenShare,
+  maybeHandleScreenShareOfferIntent as maybeHandleScreenShareOfferIntentForScreenShare,
+  offerVoiceScreenShareLink as offerVoiceScreenShareLinkForScreenShare,
+} from "./bot/screenShare.ts";
+import type { ScreenShareSessionManagerLike } from "./bot/screenShare.ts";
+import {
+  composeVoiceOperationalMessage as composeVoiceOperationalMessageForVoiceCoordination,
+  generateVoiceTurnReply as generateVoiceTurnReplyForVoiceCoordination,
+  requestVoiceJoinFromDashboard as requestVoiceJoinFromDashboardForVoiceCoordination
+} from "./bot/voiceCoordination.ts";
+import {
+  maybeRunAutomationCycle as maybeRunAutomationCycleForAutomationEngine
+} from "./bot/automationEngine.ts";
+import {
+  maybeRunTextThoughtLoopCycle as maybeRunTextThoughtLoopCycleForTextThoughtLoop
+} from "./bot/textThoughtLoop.ts";
 import {
   dequeueReplyBurst,
   dequeueReplyJob,
@@ -114,65 +131,44 @@ import {
   getDiscoveryPostingIntervalMs,
   pickDiscoveryChannel
 } from "./bot/discoverySchedule.ts";
+import type {
+  AgentContext,
+  BotContext,
+  BudgetContext,
+  MediaAttachmentContext,
+  QueueGatewayRuntime,
+  ReplyPipelineRuntime,
+  VoiceReplyRuntime
+} from "./bot/botContext.ts";
 import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
 import type { BrowserManager } from "./services/BrowserManager.ts";
 import {
   BrowserTaskRegistry,
   buildBrowserTaskScopeKey,
-  isAbortError,
-  runBrowserBrowseTask
+  isAbortError
 } from "./tools/browserTaskRuntime.ts";
-import type { ActiveBrowserTask } from "./tools/browserTaskRuntime.ts";
-import { runOpenAiComputerUseTask } from "./tools/openAiComputerUseRuntime.ts";
-import {
-  resolveOperationalChannel,
-  sendToChannel
-} from "./voice/voiceOperationalMessaging.ts";
-import { loadPromptMemorySliceFromMemory } from "./memory/promptMemorySlice.ts";
 import { maybeReplyToMessagePipeline } from "./bot/replyPipeline.ts";
 import { SubAgentSessionManager } from "./agents/subAgentSession.ts";
-import { BrowserAgentSession } from "./agents/browseAgent.ts";
 import {
-  getAutomationsSettings,
+  getMemorySettings,
   getBotName,
   getDiscoverySettings,
-  getMemorySettings,
   getReplyPermissions,
-  getStartupSettings,
-  getTextInitiativeSettings,
-  getVideoContextSettings,
   getActivitySettings,
-  getBrowserRuntimeConfig,
-  getResearchRuntimeConfig,
-  getResolvedBrowserTaskConfig,
   getVoiceAdmissionSettings,
   isDevTaskEnabled
 } from "./settings/agentStack.ts";
 
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
-const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
-const MAX_IMAGE_INPUTS = 3;
 const STARTUP_TASK_DELAY_MS = 4500;
 const INITIATIVE_TICK_MS = 60_000;
 const AUTOMATION_TICK_MS = 30_000;
 const GATEWAY_WATCHDOG_TICK_MS = 30_000;
 const REFLECTION_TICK_MS = 60_000;
-const MAX_HISTORY_IMAGE_CANDIDATES = 24;
-const MAX_HISTORY_IMAGE_LOOKUP_RESULTS = 6;
-const MAX_IMAGE_LOOKUP_QUERY_TOKENS = 7;
 const UNSOLICITED_REPLY_CONTEXT_WINDOW = 5;
-const MAX_AUTOMATION_RUNS_PER_TICK = 4;
-const PROACTIVE_TEXT_CHANNEL_ACTIVE_WINDOW_MS = 24 * 60 * 60_000;
-const SCREEN_SHARE_MESSAGE_MAX_CHARS = 420;
-const SCREEN_SHARE_INTENT_THRESHOLD = 0.66;
-const LOOKUP_CONTEXT_TTL_HOURS = 48;
-const LOOKUP_CONTEXT_MAX_RESULTS = 5;
-const LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL = 120;
 const IS_TEST_PROCESS = /\.test\.[cm]?[jt]sx?$/i.test(String(process.argv?.[1] || "")) ||
   process.execArgv.includes("--test") ||
   process.argv.includes("--test");
-const SCREEN_SHARE_EXPLICIT_REQUEST_RE =
-  /\b(?:screen\s*share|share\s*(?:my|the)?\s*screen|watch\s*(?:my|the)?\s*screen|see\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*stream|watch\s*(?:my|the)?\s*stream)\b/i;
 export type ReplyAttemptOptions = {
   recentMessages?: Array<Record<string, unknown>>;
   addressSignal?: {
@@ -189,15 +185,6 @@ export type ReplyAttemptOptions = {
   forceDecisionLoop?: boolean;
   source?: string;
   performanceSeed?: ReplyPerformanceSeed | null;
-};
-
-type MemoryTrace = Record<string, unknown> & {
-  source?: string;
-};
-
-type DiscoveryLinkCandidate = {
-  url?: string;
-  source?: string;
 };
 
 type SentMessageLike = {
@@ -237,6 +224,7 @@ type GuildLike = {
   };
   channels?: {
     cache: {
+      get: (id: string) => CachedChannelLike | undefined;
       values: () => IterableIterator<CachedChannelLike>;
       filter: (predicate: (channel: CachedChannelLike) => boolean) => {
         first: (count: number) => CachedChannelLike[];
@@ -287,33 +275,6 @@ function isSendableChannel(
     typeof channel.send === "function" &&
     typeof channel.sendTyping === "function";
 }
-
-type ScreenShareLinkCapability = {
-  enabled?: boolean;
-  status?: string;
-  publicUrl?: string;
-  reason?: string | null;
-};
-
-type ScreenShareSessionResult = {
-  ok: boolean;
-  reason?: string;
-  shareUrl?: string;
-  expiresInMinutes?: number;
-  reused?: boolean;
-};
-
-type ScreenShareSessionManagerLike = {
-  getLinkCapability?: () => ScreenShareLinkCapability;
-  createSession: (payload: {
-    guildId: string;
-    channelId: string | null;
-    requesterUserId: string;
-    requesterDisplayName?: string;
-    targetUserId?: string | null;
-    source?: string;
-  }) => Promise<ScreenShareSessionResult>;
-};
 
 export class ClankerBot {
   appConfig;
@@ -419,10 +380,14 @@ export class ClankerBot {
       memory: this.memory,
       search: this.search,
       browserManager: this.browserManager,
-      composeOperationalMessage: (payload) => this.composeVoiceOperationalMessage(payload),
-      generateVoiceTurn: (payload) => this.generateVoiceTurnReply(payload),
-      getVoiceScreenShareCapability: (payload) => this.getVoiceScreenShareCapability(payload),
-      offerVoiceScreenShareLink: (payload) => this.offerVoiceScreenShareLink(payload)
+      composeOperationalMessage: (payload) =>
+        composeVoiceOperationalMessageForVoiceCoordination(this.toVoiceCoordinationRuntime(), payload),
+      generateVoiceTurn: (payload) =>
+        generateVoiceTurnReplyForVoiceCoordination(this.toVoiceCoordinationRuntime(), payload),
+      getVoiceScreenShareCapability: (payload) =>
+        getVoiceScreenShareCapabilityForScreenShare(this.toScreenShareRuntime(), payload),
+      offerVoiceScreenShareLink: (payload) =>
+        offerVoiceScreenShareLinkForScreenShare(this.toScreenShareRuntime(), payload)
     });
 
     this.registerEvents();
@@ -430,6 +395,410 @@ export class ClankerBot {
 
   attachScreenShareSessionManager(manager: ScreenShareSessionManagerLike | null) {
     this.screenShareSessionManager = manager || null;
+  }
+
+  toBotContext(): BotContext {
+    return {
+      appConfig: this.appConfig,
+      store: this.store,
+      llm: this.llm,
+      memory: this.memory,
+      client: this.client,
+      botUserId: String(this.client.user?.id || "").trim() || null
+    };
+  }
+
+  toAgentContext(): AgentContext {
+    return {
+      ...this.toBotContext(),
+      browserManager: this.browserManager,
+      activeBrowserTasks: this.activeBrowserTasks,
+      subAgentSessions: this.subAgentSessions
+    };
+  }
+
+  toBudgetContext(): BudgetContext {
+    return {
+      ...this.toBotContext(),
+      search: this.search,
+      video: this.video,
+      browserManager: this.browserManager,
+      imageCaptionCache: this.imageCaptionCache
+    };
+  }
+
+  toMediaAttachmentContext(): MediaAttachmentContext {
+    return {
+      ...this.toBudgetContext(),
+      gifs: this.gifs
+    };
+  }
+
+  toScreenShareRuntime() {
+    return {
+      ...this.toBotContext(),
+      screenShareSessionManager: this.screenShareSessionManager,
+      composeVoiceOperationalMessage: (payload) =>
+        composeVoiceOperationalMessageForVoiceCoordination(this.toVoiceCoordinationRuntime(), payload)
+    };
+  }
+
+  toVoiceCoordinationRuntime() {
+    return {
+      ...this.toBotContext(),
+      client: this.client,
+      voiceSessionManager: this.voiceSessionManager,
+      toVoiceReplyRuntime: () => this.toVoiceReplyRuntime()
+    };
+  }
+
+  toDiscoveryEngineRuntime() {
+    const botContext = this.toBotContext();
+    const budgetContext = this.toBudgetContext();
+    const mediaAttachmentContext = this.toMediaAttachmentContext();
+    const runtime = {
+      ...botContext,
+      client: this.client,
+      discovery: this.discovery,
+      canSendMessage: (maxPerHour) => this.canSendMessage(maxPerHour),
+      canTalkNow: (settings) => this.canTalkNow(settings),
+      hydrateRecentMessages: (channel, limit) => this.hydrateRecentMessages(channel, limit),
+      loadRelevantMemoryFacts: (payload) => loadRelevantMemoryFactsForMemorySlice(botContext, payload),
+      buildMediaMemoryFacts: (payload) => buildMediaMemoryFactsForMemorySlice(payload),
+      getImageBudgetState: (settings) => getImageBudgetStateForBudgetTracking(budgetContext, settings),
+      getVideoGenerationBudgetState: (settings) =>
+        getVideoGenerationBudgetStateForBudgetTracking(budgetContext, settings),
+      getMediaGenerationCapabilities: (settings) =>
+        getMediaGenerationCapabilitiesForBudgetTracking(budgetContext, settings),
+      getEmojiHints: (guild) => this.getEmojiHints(guild),
+      resolveMediaAttachment: (payload) =>
+        resolveMediaAttachmentForMediaAttachment(mediaAttachmentContext, payload),
+      composeMessageContentForHistory: (message, baseText) =>
+        composeMessageContentForHistoryForMessageHistory(message as Parameters<
+          typeof composeMessageContentForHistoryForMessageHistory
+        >[0], baseText),
+      markSpoke: () => this.markSpoke(),
+      getSimulatedTypingDelayMs: (minMs, jitterMs) => this.getSimulatedTypingDelayMs(minMs, jitterMs),
+      isChannelAllowed: (settings, channelId) =>
+        isChannelAllowedForPermissions(settings, String(channelId)),
+      discoveryPosting: this.discoveryPosting
+    };
+
+    Object.defineProperty(runtime, "discoveryPosting", {
+      get: () => this.discoveryPosting,
+      set: (value) => {
+        this.discoveryPosting = Boolean(value);
+      },
+      enumerable: true
+    });
+
+    return runtime;
+  }
+
+  toAutomationEngineRuntime() {
+    const botContext = this.toBotContext();
+    const budgetContext = this.toBudgetContext();
+    const mediaAttachmentContext = this.toMediaAttachmentContext();
+    const runtime = {
+      ...botContext,
+      client: this.client,
+      search: this.search,
+      isChannelAllowed: (settings, channelId) =>
+        isChannelAllowedForPermissions(settings, String(channelId)),
+      canSendMessage: (maxPerHour) => this.canSendMessage(maxPerHour),
+      canTalkNow: (settings) => this.canTalkNow(settings),
+      getSimulatedTypingDelayMs: (minMs, jitterMs) => this.getSimulatedTypingDelayMs(minMs, jitterMs),
+      markSpoke: () => this.markSpoke(),
+      composeMessageContentForHistory: (message, baseText) =>
+        composeMessageContentForHistoryForMessageHistory(message as Parameters<
+          typeof composeMessageContentForHistoryForMessageHistory
+        >[0], baseText),
+      loadPromptMemorySlice: (payload) => loadPromptMemorySliceForMemorySlice(botContext, payload),
+      buildMediaMemoryFacts: (payload) => buildMediaMemoryFactsForMemorySlice(payload),
+      buildMemoryLookupContext: (payload) => buildMemoryLookupContextForBudgetTracking(budgetContext, payload),
+      getImageBudgetState: (settings) => getImageBudgetStateForBudgetTracking(budgetContext, settings),
+      getVideoGenerationBudgetState: (settings) =>
+        getVideoGenerationBudgetStateForBudgetTracking(budgetContext, settings),
+      getGifBudgetState: (settings) => getGifBudgetStateForBudgetTracking(budgetContext, settings),
+      getMediaGenerationCapabilities: (settings) =>
+        getMediaGenerationCapabilitiesForBudgetTracking(budgetContext, settings),
+      resolveMediaAttachment: (payload) =>
+        resolveMediaAttachmentForMediaAttachment(mediaAttachmentContext, payload),
+      automationCycleRunning: this.automationCycleRunning
+    };
+
+    Object.defineProperty(runtime, "automationCycleRunning", {
+      get: () => this.automationCycleRunning,
+      set: (value) => {
+        this.automationCycleRunning = Boolean(value);
+      },
+      enumerable: true
+    });
+
+    return runtime;
+  }
+
+  toTextThoughtLoopRuntime() {
+    const runtime = {
+      ...this.toBotContext(),
+      client: this.client,
+      canSendMessage: (maxPerHour) => this.canSendMessage(maxPerHour),
+      canTalkNow: (settings) => this.canTalkNow(settings),
+      maybeReplyToMessage: (message, settings, options) => this.maybeReplyToMessage(message, settings, options),
+      isChannelAllowed: (settings, channelId) =>
+        isChannelAllowedForPermissions(settings, String(channelId)),
+      isNonPrivateReplyEligibleChannel: (channel) => this.isNonPrivateReplyEligibleChannel(channel),
+      hydrateRecentMessages: (channel, limit) => this.hydrateRecentMessages(channel, limit),
+      hasBotMessageInRecentWindow: (payload) =>
+        hasBotMessageInRecentWindowForReplyAdmission({
+          botUserId: this.client.user?.id,
+          ...payload
+        }),
+      textThoughtLoopRunning: this.textThoughtLoopRunning
+    };
+
+    Object.defineProperty(runtime, "textThoughtLoopRunning", {
+      get: () => this.textThoughtLoopRunning,
+      set: (value) => {
+        this.textThoughtLoopRunning = Boolean(value);
+      },
+      enumerable: true
+    });
+
+    return runtime;
+  }
+
+  toQueueGatewayRuntime(): QueueGatewayRuntime {
+    const botContext = this.toBotContext();
+    const runtime: QueueGatewayRuntime = {
+      ...botContext,
+      lastBotMessageAt: this.lastBotMessageAt,
+      canSendMessage: (maxPerHour) => this.canSendMessage(maxPerHour),
+      replyQueues: this.replyQueues,
+      replyQueueWorkers: this.replyQueueWorkers,
+      replyQueuedMessageIds: this.replyQueuedMessageIds,
+      isStopping: this.isStopping,
+      isChannelAllowed: (settings, channelId) =>
+        isChannelAllowedForPermissions(
+          settings as Parameters<typeof isChannelAllowedForPermissions>[0],
+          String(channelId)
+        ),
+      isUserBlocked: (settings, userId) =>
+        isUserBlockedForPermissions(
+          settings as Parameters<typeof isUserBlockedForPermissions>[0],
+          String(userId)
+        ),
+      getReplyAddressSignal: (settings, message, recentMessages = []) =>
+        getReplyAddressSignalForReplyAdmission(
+          {
+            botUserId: botContext.botUserId,
+            isDirectlyAddressed: (resolvedSettings, resolvedMessage) =>
+              this.isDirectlyAddressed(resolvedSettings, resolvedMessage)
+          },
+          settings as Parameters<typeof getReplyAddressSignalForReplyAdmission>[1],
+          message,
+          recentMessages
+        ),
+      maybeReplyToMessage: (message, settings, options = {}) =>
+        this.maybeReplyToMessage(message, settings, options),
+      reconnectInFlight: this.reconnectInFlight,
+      hasConnectedAtLeastOnce: this.hasConnectedAtLeastOnce,
+      lastGatewayEventAt: this.lastGatewayEventAt,
+      reconnectTimeout: this.reconnectTimeout,
+      markGatewayEvent: () => this.markGatewayEvent(),
+      reconnectAttempts: this.reconnectAttempts
+    };
+
+    Object.defineProperties(runtime, {
+      lastBotMessageAt: {
+        get: () => this.lastBotMessageAt,
+        set: (value) => {
+          this.lastBotMessageAt = Number(value) || 0;
+        },
+        enumerable: true
+      },
+      isStopping: {
+        get: () => this.isStopping,
+        set: (value) => {
+          this.isStopping = Boolean(value);
+        },
+        enumerable: true
+      },
+      reconnectInFlight: {
+        get: () => this.reconnectInFlight,
+        set: (value) => {
+          this.reconnectInFlight = Boolean(value);
+        },
+        enumerable: true
+      },
+      hasConnectedAtLeastOnce: {
+        get: () => this.hasConnectedAtLeastOnce,
+        set: (value) => {
+          this.hasConnectedAtLeastOnce = Boolean(value);
+        },
+        enumerable: true
+      },
+      lastGatewayEventAt: {
+        get: () => this.lastGatewayEventAt,
+        set: (value) => {
+          this.lastGatewayEventAt = Number(value) || Date.now();
+        },
+        enumerable: true
+      },
+      reconnectTimeout: {
+        get: () => this.reconnectTimeout,
+        set: (value) => {
+          this.reconnectTimeout = value;
+        },
+        enumerable: true
+      },
+      reconnectAttempts: {
+        get: () => this.reconnectAttempts,
+        set: (value) => {
+          this.reconnectAttempts = Number(value) || 0;
+        },
+        enumerable: true
+      }
+    });
+
+    return runtime;
+  }
+
+  toReplyPipelineRuntime(): ReplyPipelineRuntime {
+    const botContext = this.toBotContext();
+    const budgetContext = this.toBudgetContext();
+    const mediaAttachmentContext = this.toMediaAttachmentContext();
+    const agentContext = this.toAgentContext();
+    return {
+      ...botContext,
+      gifs: this.gifs,
+      search: this.search,
+      voiceSessionManager: this.voiceSessionManager,
+      getReplyAddressSignal: (settings, message, recentMessages = []) =>
+        getReplyAddressSignalForReplyAdmission(
+          {
+            botUserId: botContext.botUserId,
+            isDirectlyAddressed: (resolvedSettings, resolvedMessage) =>
+              this.isDirectlyAddressed(resolvedSettings, resolvedMessage)
+          },
+          settings as Parameters<typeof getReplyAddressSignalForReplyAdmission>[1],
+          message,
+          recentMessages
+        ),
+      isReplyChannel: (settings, channelId) =>
+        isReplyChannelForPermissions(
+          settings as Parameters<typeof isReplyChannelForPermissions>[0],
+          String(channelId)
+        ),
+      getReactionEmojiOptions: (guild) => this.getReactionEmojiOptions(guild),
+      shouldAttemptReplyDecision: (payload) =>
+        shouldAttemptReplyDecisionForReplyAdmission({
+          botUserId: this.client.user?.id,
+          ...payload,
+          windowSize: UNSOLICITED_REPLY_CONTEXT_WINDOW
+        } as Parameters<typeof shouldAttemptReplyDecisionForReplyAdmission>[0]),
+      loadPromptMemorySlice: (payload) => loadPromptMemorySliceForMemorySlice(botContext, payload),
+      getRecentLookupContextForPrompt: (payload) =>
+        getRecentLookupContextForPromptForMessageHistory(botContext, payload),
+      getConversationHistoryForPrompt: (payload) =>
+        getConversationHistoryForPromptForMessageHistory(botContext, payload),
+      buildMediaMemoryFacts: (payload) => buildMediaMemoryFactsForMemorySlice(payload),
+      getImageInputs: (message) =>
+        getImageInputsForMessageHistory(message as Parameters<typeof getImageInputsForMessageHistory>[0]),
+      getImageBudgetState: (settings) => getImageBudgetStateForBudgetTracking(budgetContext, settings),
+      getVideoGenerationBudgetState: (settings) =>
+        getVideoGenerationBudgetStateForBudgetTracking(budgetContext, settings),
+      getMediaGenerationCapabilities: (settings) =>
+        getMediaGenerationCapabilitiesForBudgetTracking(budgetContext, settings),
+      getGifBudgetState: (settings) => getGifBudgetStateForBudgetTracking(budgetContext, settings),
+      buildWebSearchContext: (settings, messageText) =>
+        buildWebSearchContextForBudgetTracking(budgetContext, settings, messageText),
+      buildBrowserBrowseContext: (settings) =>
+        buildBrowserBrowseContextForBudgetTracking(budgetContext, settings),
+      buildMemoryLookupContext: (payload) => buildMemoryLookupContextForBudgetTracking(budgetContext, payload),
+      buildVideoReplyContext: (payload) => buildVideoReplyContextForBudgetTracking(budgetContext, payload),
+      buildImageLookupContext: (payload) => buildImageLookupContextForBudgetTracking(budgetContext, payload),
+      getAutoIncludeImageInputs: (payload) => getAutoIncludeImageInputsForImageAnalysis(payload),
+      captionRecentHistoryImages: (payload = {}) =>
+        captionRecentHistoryImagesForImageAnalysis(botContext, {
+          imageCaptionCache: this.imageCaptionCache,
+          captionTimestamps: this.captionTimestamps,
+          candidates: payload.candidates || [],
+          settings: payload.settings || null,
+          trace: payload.trace || null
+        }),
+      getVoiceScreenShareCapability: (payload) =>
+        getVoiceScreenShareCapabilityForScreenShare(this.toScreenShareRuntime(), payload),
+      getEmojiHints: (guild) => this.getEmojiHints(guild),
+      runModelRequestedBrowserBrowse: (payload) =>
+        runModelRequestedBrowserBrowseForAgentTasks(agentContext, payload),
+      runModelRequestedCodeTask: (payload) => runModelRequestedCodeTaskForAgentTasks(agentContext, payload),
+      buildSubAgentSessionsRuntime: () => buildSubAgentSessionsRuntimeForAgentTasks(agentContext),
+      runModelRequestedImageLookup: (payload) =>
+        runModelRequestedImageLookupForImageAnalysis({
+          imageLookup: payload.imageLookup || {},
+          query: payload.query || ""
+        }),
+      mergeImageInputs: (payload) => mergeImageInputsForImageAnalysis(payload),
+      maybeHandleStructuredVoiceIntent: (payload) => this.maybeHandleStructuredVoiceIntent(payload),
+      maybeHandleStructuredAutomationIntent: (payload) =>
+        this.maybeHandleStructuredAutomationIntent(payload),
+      rememberRecentLookupContext: (payload) =>
+        rememberRecentLookupContextForMessageHistory(botContext, payload),
+      maybeApplyReplyReaction: (payload) => this.maybeApplyReplyReaction(payload),
+      logSkippedReply: (payload) => this.logSkippedReply(payload),
+      maybeHandleScreenShareOfferIntent: (payload) =>
+        maybeHandleScreenShareOfferIntentForScreenShare(this.toScreenShareRuntime(), {
+          ...payload,
+          settings: this.store.getSettings()
+        }),
+      resolveMediaAttachment: (payload) =>
+        resolveMediaAttachmentForMediaAttachment(mediaAttachmentContext, payload),
+      maybeAttachReplyGif: (payload) => maybeAttachReplyGifForMediaAttachment(mediaAttachmentContext, payload),
+      maybeAttachGeneratedImage: (payload) =>
+        maybeAttachGeneratedImageForMediaAttachment(mediaAttachmentContext, payload),
+      maybeAttachGeneratedVideo: (payload) =>
+        maybeAttachGeneratedVideoForMediaAttachment(mediaAttachmentContext, payload),
+      getSimulatedTypingDelayMs: (minMs, jitterMs) => this.getSimulatedTypingDelayMs(minMs, jitterMs),
+      shouldSendAsReply: (payload) => this.shouldSendAsReply(payload),
+      markSpoke: () => this.markSpoke(),
+      composeMessageContentForHistory: (message, baseText) =>
+        composeMessageContentForHistoryForMessageHistory(message as Parameters<
+          typeof composeMessageContentForHistoryForMessageHistory
+        >[0], baseText),
+      canSendMessage: (maxPerHour) => this.canSendMessage(maxPerHour),
+      canTalkNow: (settings) => this.canTalkNow(settings)
+    };
+  }
+
+  toVoiceReplyRuntime(): VoiceReplyRuntime {
+    const botContext = this.toBotContext();
+    const budgetContext = this.toBudgetContext();
+    const agentContext = this.toAgentContext();
+    return {
+      ...botContext,
+      search: this.search,
+      loadRelevantMemoryFacts: (payload) => loadRelevantMemoryFactsForMemorySlice(botContext, payload),
+      buildMediaMemoryFacts: (payload) => buildMediaMemoryFactsForMemorySlice(payload),
+      loadPromptMemorySlice: (payload) => loadPromptMemorySliceForMemorySlice(botContext, payload),
+      buildWebSearchContext: (settings, messageText) =>
+        buildWebSearchContextForBudgetTracking(budgetContext, settings, messageText),
+      loadRecentConversationHistory: (payload) =>
+        getConversationHistoryForPromptForMessageHistory(botContext, payload),
+      loadRecentLookupContext: (payload) =>
+        getRecentLookupContextForPromptForMessageHistory(botContext, payload),
+      rememberRecentLookupContext: (payload) =>
+        rememberRecentLookupContextForMessageHistory(botContext, payload),
+      getVoiceScreenShareCapability: (payload) =>
+        getVoiceScreenShareCapabilityForScreenShare(this.toScreenShareRuntime(), payload),
+      offerVoiceScreenShareLink: (payload) =>
+        offerVoiceScreenShareLinkForScreenShare(this.toScreenShareRuntime(), payload),
+      runModelRequestedBrowserBrowse: (payload) =>
+        runModelRequestedBrowserBrowseForAgentTasks(agentContext, payload),
+      buildBrowserBrowseContext: (settings) =>
+        buildBrowserBrowseContextForBudgetTracking(budgetContext, settings),
+      runModelRequestedCodeTask: (payload) => runModelRequestedCodeTaskForAgentTasks(agentContext, payload)
+    };
   }
 
   registerEvents() {
@@ -526,7 +895,10 @@ export class ClankerBot {
         const browseInstruction = interaction.options.getString("task", true);
         const settings = this.store.getSettings();
         try {
-          const browserContext = this.buildBrowserBrowseContext(settings);
+          const browserContext = buildBrowserBrowseContextForBudgetTracking(
+            this.toBudgetContext(),
+            settings
+          );
           if (!browserContext.configured) {
             await interaction.editReply("Browser runtime is currently unavailable on this server.");
             return;
@@ -536,7 +908,7 @@ export class ClankerBot {
             return;
           }
 
-          const result = await this.runModelRequestedBrowserBrowse({
+          const result = await runModelRequestedBrowserBrowseForAgentTasks(this.toAgentContext(), {
             settings,
             browserBrowse: browserContext,
             query: browseInstruction,
@@ -719,7 +1091,7 @@ export class ClankerBot {
     }, 5 * 60_000);
 
     this.discoveryTimer = setInterval(() => {
-      this.maybeRunDiscoveryCycle().catch((error) => {
+      maybeRunDiscoveryCycleForDiscoveryEngine(this.toDiscoveryEngineRuntime()).catch((error) => {
         this.store.logAction({
           kind: "bot_error",
           content: `discovery_cycle: ${String(error?.message || error)}`
@@ -727,7 +1099,7 @@ export class ClankerBot {
       });
     }, INITIATIVE_TICK_MS);
     this.textThoughtLoopTimer = setInterval(() => {
-      this.maybeRunTextThoughtLoopCycle().catch((error) => {
+      maybeRunTextThoughtLoopCycleForTextThoughtLoop(this.toTextThoughtLoopRuntime()).catch((error) => {
         this.store.logAction({
           kind: "bot_error",
           content: `text_thought_loop: ${String(error?.message || error)}`
@@ -735,7 +1107,7 @@ export class ClankerBot {
       });
     }, INITIATIVE_TICK_MS);
     this.automationTimer = setInterval(() => {
-      this.maybeRunAutomationCycle().catch((error) => {
+      maybeRunAutomationCycleForAutomationEngine(this.toAutomationEngineRuntime()).catch((error) => {
         this.store.logAction({
           kind: "bot_error",
           content: `automation_cycle: ${String(error?.message || error)}`
@@ -839,234 +1211,18 @@ export class ClankerBot {
     return results;
   }
 
-  resolveDashboardVoiceJoinRequester(guild, requesterUserId = "") {
-    if (!guild?.voiceStates?.cache) {
-      return {
-        member: null,
-        voiceChannel: null,
-        reason: "no_voice_members_found"
-      };
-    }
-
-    const normalizedRequesterUserId = String(requesterUserId || "").trim();
-    if (normalizedRequesterUserId) {
-      const explicitVoiceState = guild.voiceStates.cache.get(normalizedRequesterUserId) || null;
-      const explicitMember = explicitVoiceState?.member || guild.members?.cache?.get(normalizedRequesterUserId) || null;
-      const explicitVoiceChannel = explicitVoiceState?.channel || explicitMember?.voice?.channel || null;
-      if (explicitMember?.user?.bot) {
-        return {
-          member: null,
-          voiceChannel: null,
-          reason: "requester_is_bot"
-        };
-      }
-      if (explicitMember && explicitVoiceChannel) {
-        return {
-          member: explicitMember,
-          voiceChannel: explicitVoiceChannel,
-          reason: "ok"
-        };
-      }
-      return {
-        member: null,
-        voiceChannel: null,
-        reason: "requester_not_in_voice"
-      };
-    }
-
-    for (const voiceState of guild.voiceStates.cache.values()) {
-      const member = voiceState?.member || null;
-      if (!member || member.user?.bot) continue;
-      const voiceChannel = voiceState?.channel || member.voice?.channel || null;
-      if (!voiceChannel) continue;
-      return {
-        member,
-        voiceChannel,
-        reason: "ok"
-      };
-    }
-
-    return {
-      member: null,
-      voiceChannel: null,
-      reason: "no_voice_members_found"
-    };
-  }
-
-  resolveDashboardVoiceJoinTextChannel({ guild, textChannelId = "" }) {
-    if (!guild?.channels?.cache) return null;
-
-    const normalizedTextChannelId = String(textChannelId || "").trim();
-    const existingSession = this.voiceSessionManager.sessions.get(String(guild.id));
-    const botMember = guild.members?.me || guild.members?.cache?.get(this.client.user?.id || "");
-    const candidateIds = [
-      normalizedTextChannelId,
-      String(existingSession?.textChannelId || "").trim(),
-      String(guild.systemChannelId || "").trim()
-    ];
-    const seenIds = new Set();
-
-    const canSendInChannel = (channel) => {
-      if (!channel || typeof channel.send !== "function") return false;
-      if (typeof channel.isTextBased === "function" && !channel.isTextBased()) return false;
-      if (botMember && typeof channel.permissionsFor === "function") {
-        const permissions = channel.permissionsFor(botMember);
-        if (permissions && typeof permissions.has === "function" && !permissions.has("SendMessages")) {
-          return false;
-        }
-      }
-      return true;
-    };
-
-    for (const candidateId of candidateIds) {
-      if (!candidateId || seenIds.has(candidateId)) continue;
-      seenIds.add(candidateId);
-      const channel = guild.channels.cache.get(candidateId) || null;
-      if (canSendInChannel(channel)) return channel;
-    }
-
-    for (const channel of guild.channels.cache.values()) {
-      if (canSendInChannel(channel)) return channel;
-    }
-
-    return null;
-  }
-
   async requestVoiceJoinFromDashboard({
     guildId = null,
     requesterUserId = null,
     textChannelId = null,
     source = "dashboard_voice_tab"
   } = {}) {
-    const settings = this.store.getSettings();
-    const normalizedGuildId = String(guildId || "").trim();
-    const normalizedRequesterUserId = String(requesterUserId || "").trim();
-    const normalizedTextChannelId = String(textChannelId || "").trim();
-    const normalizedSource = String(source || "dashboard_voice_tab").trim() || "dashboard_voice_tab";
-
-    const guilds = [...this.client.guilds.cache.values()];
-    let targetGuild = null;
-    if (normalizedGuildId) {
-      targetGuild = this.client.guilds.cache.get(normalizedGuildId) || null;
-    } else {
-      for (const guild of guilds) {
-        const resolution = this.resolveDashboardVoiceJoinRequester(guild, normalizedRequesterUserId);
-        if (resolution.member && resolution.voiceChannel) {
-          targetGuild = guild;
-          break;
-        }
-      }
-      if (!targetGuild && guilds.length > 0) {
-        targetGuild = guilds[0];
-      }
-    }
-
-    if (!targetGuild) {
-      return {
-        ok: false,
-        reason: normalizedGuildId ? "guild_not_found" : "no_guild_available",
-        guildId: normalizedGuildId || null,
-        voiceChannelId: null,
-        textChannelId: null,
-        requesterUserId: normalizedRequesterUserId || null
-      };
-    }
-
-    const requesterResolution = this.resolveDashboardVoiceJoinRequester(targetGuild, normalizedRequesterUserId);
-    const targetMember = requesterResolution.member;
-    const targetVoiceChannel = requesterResolution.voiceChannel;
-    if (!targetMember || !targetVoiceChannel) {
-      return {
-        ok: false,
-        reason: requesterResolution.reason || "requester_not_in_voice",
-        guildId: targetGuild.id,
-        voiceChannelId: null,
-        textChannelId: null,
-        requesterUserId: normalizedRequesterUserId || null
-      };
-    }
-
-    const targetTextChannel = this.resolveDashboardVoiceJoinTextChannel({
-      guild: targetGuild,
-      textChannelId: normalizedTextChannelId
+    return await requestVoiceJoinFromDashboardForVoiceCoordination(this.toVoiceCoordinationRuntime(), {
+      guildId,
+      requesterUserId,
+      textChannelId,
+      source
     });
-    if (!targetTextChannel) {
-      return {
-        ok: false,
-        reason: "text_channel_unavailable",
-        guildId: targetGuild.id,
-        voiceChannelId: String(targetVoiceChannel.id || "") || null,
-        textChannelId: normalizedTextChannelId || null,
-        requesterUserId: String(targetMember.id || "") || null
-      };
-    }
-
-    const targetVoiceChannelId = String(targetVoiceChannel.id || "").trim();
-    const existingSession = this.voiceSessionManager.sessions.get(String(targetGuild.id));
-    const alreadyInTargetChannel =
-      Boolean(existingSession) &&
-      existingSession.ending !== true &&
-      String(existingSession.voiceChannelId || "") === targetVoiceChannelId;
-
-    const syntheticMessage = {
-      guild: targetGuild,
-      guildId: String(targetGuild.id || ""),
-      channel: targetTextChannel,
-      channelId: String(targetTextChannel.id || ""),
-      id: null,
-      author: {
-        id: String(targetMember.id || ""),
-        username: String(targetMember?.user?.username || targetMember?.displayName || targetMember?.id || "")
-      },
-      member: targetMember
-    };
-
-    const handled = await this.voiceSessionManager.requestJoin({
-      message: syntheticMessage,
-      settings,
-      intentConfidence: 1
-    });
-
-    const activeSession = this.voiceSessionManager.sessions.get(String(targetGuild.id));
-    const joinedTargetChannel =
-      Boolean(activeSession) &&
-      activeSession.ending !== true &&
-      String(activeSession.voiceChannelId || "") === targetVoiceChannelId;
-
-    const reason = !handled
-      ? "join_not_handled"
-      : joinedTargetChannel
-        ? alreadyInTargetChannel
-          ? "already_in_channel"
-          : "joined"
-        : "voice_join_unconfirmed";
-
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: targetGuild.id,
-      channelId: String(targetTextChannel.id || "") || null,
-      userId: String(targetMember.id || "") || null,
-      content: "dashboard_voice_join",
-      metadata: {
-        source: normalizedSource,
-        reason,
-        requestedGuildId: normalizedGuildId || null,
-        requestedRequesterUserId: normalizedRequesterUserId || null,
-        requestedTextChannelId: normalizedTextChannelId || null,
-        voiceChannelId: targetVoiceChannelId || null,
-        handled: Boolean(handled),
-        joinedTargetChannel: Boolean(joinedTargetChannel)
-      }
-    });
-
-    return {
-      ok: joinedTargetChannel,
-      reason,
-      guildId: targetGuild.id,
-      voiceChannelId: targetVoiceChannelId || null,
-      textChannelId: String(targetTextChannel.id || "") || null,
-      requesterUserId: String(targetMember.id || "") || null
-    };
   }
 
   async applyRuntimeSettings(nextSettings = null) {
@@ -1162,7 +1318,7 @@ export class ClankerBot {
   }
 
   getReplyQueueWaitMs(settings) {
-    return getReplyQueueWaitMs(this, settings);
+    return getReplyQueueWaitMs(this.toQueueGatewayRuntime(), settings);
   }
 
   getReplyCoalesceWindowMs(settings) {
@@ -1178,31 +1334,31 @@ export class ClankerBot {
   }
 
   dequeueReplyJob(channelId) {
-    return dequeueReplyJob(this, channelId);
+    return dequeueReplyJob(this.toQueueGatewayRuntime(), channelId);
   }
 
   dequeueReplyBurst(channelId, settings) {
-    return dequeueReplyBurst(this, channelId, settings);
+    return dequeueReplyBurst(this.toQueueGatewayRuntime(), channelId, settings);
   }
 
   requeueReplyJobs(channelId, jobs) {
-    return requeueReplyJobs(this, channelId, jobs);
+    return requeueReplyJobs(this.toQueueGatewayRuntime(), channelId, jobs);
   }
 
   async processReplyQueue(channelId) {
-    return await processReplyQueue(this, channelId);
+    return await processReplyQueue(this.toQueueGatewayRuntime(), channelId);
   }
 
   async ensureGatewayHealthy() {
-    return await ensureGatewayHealthy(this);
+    return await ensureGatewayHealthy(this.toQueueGatewayRuntime());
   }
 
   scheduleReconnect(reason, delayMs) {
-    return scheduleReconnect(this, reason, delayMs);
+    return scheduleReconnect(this.toQueueGatewayRuntime(), reason, delayMs);
   }
 
   async reconnectGateway(reason) {
-    return await reconnectGateway(this, reason);
+    return await reconnectGateway(this.toQueueGatewayRuntime(), reason);
   }
 
   async handleMessage(message) {
@@ -1211,7 +1367,10 @@ export class ClankerBot {
     const settings = this.store.getSettings();
 
     const text = String(message.content || "").trim();
-    const recordedContent = this.composeMessageContentForHistory(message, text);
+    const recordedContent = composeMessageContentForHistoryForMessageHistory(
+      message as Parameters<typeof composeMessageContentForHistoryForMessageHistory>[0],
+      text
+    );
     this.store.recordMessage({
       messageId: message.id,
       createdAt: message.createdTimestamp,
@@ -1225,8 +1384,8 @@ export class ClankerBot {
     });
 
     if (String(message.author.id) === String(this.client.user?.id || "")) return;
-    if (!this.isChannelAllowed(settings, message.channelId)) return;
-    if (this.isUserBlocked(settings, message.author.id)) return;
+    if (!isChannelAllowedForPermissions(settings, String(message.channelId))) return;
+    if (isUserBlockedForPermissions(settings, String(message.author.id))) return;
 
     const lowerText = text.toLowerCase().trim();
     if (lowerText === "stop" || lowerText === "cancel" || lowerText === "never mind" || lowerText === "nevermind") {
@@ -1281,13 +1440,24 @@ export class ClankerBot {
       message.channelId,
       memorySettings.promptSlice.maxRecentMessages
     );
-    const addressSignal = await this.getReplyAddressSignal(settings, message, recentMessages);
-    const shouldQueueReply = this.shouldAttemptReplyDecision({
+    const addressSignal = await getReplyAddressSignalForReplyAdmission(
+      {
+        botUserId: String(this.client.user?.id || "").trim(),
+        isDirectlyAddressed: (resolvedSettings, resolvedMessage) =>
+          this.isDirectlyAddressed(resolvedSettings, resolvedMessage)
+      },
+      settings,
+      message,
+      recentMessages
+    );
+    const shouldQueueReply = shouldAttemptReplyDecisionForReplyAdmission({
+      botUserId: this.client.user?.id,
       settings,
       recentMessages,
       addressSignal,
       forceRespond: false,
-      triggerMessageId: message.id
+      triggerMessageId: message.id,
+      windowSize: UNSOLICITED_REPLY_CONTEXT_WINDOW
     });
     if (!shouldQueueReply) return;
     this.enqueueReplyJob({
@@ -1295,114 +1465,6 @@ export class ClankerBot {
       message,
       forceRespond: shouldForceRespondForAddressSignalForReplyAdmission(addressSignal),
       addressSignal
-    });
-  }
-
-  async composeVoiceOperationalMessage({
-    settings,
-    guildId = null,
-    channelId = null,
-    userId = null,
-    messageId = null,
-    event = "voice_runtime",
-    reason = null,
-    details = {},
-    maxOutputChars = 180,
-    allowSkip = false
-  }) {
-    const runtime = {
-      llm: this.llm,
-      store: this.store,
-      memory: this.memory,
-      search: this.search,
-      client: this.client,
-      loadRelevantMemoryFacts: (payload) => this.loadRelevantMemoryFacts(payload),
-      buildMediaMemoryFacts: (payload) => this.buildMediaMemoryFacts(payload),
-      loadPromptMemorySlice: (payload) => this.loadPromptMemorySlice(payload),
-      buildWebSearchContext: (runtimeSettings, messageText) =>
-        this.buildWebSearchContext(runtimeSettings, messageText),
-      loadRecentConversationHistory: (payload) => this.getConversationHistoryForPrompt(payload),
-      loadRecentLookupContext: (payload) => this.getRecentLookupContextForPrompt(payload),
-      rememberRecentLookupContext: (payload) => this.rememberRecentLookupContext(payload),
-      getVoiceScreenShareCapability: (payload) => this.getVoiceScreenShareCapability(payload),
-      offerVoiceScreenShareLink: (payload) => this.offerVoiceScreenShareLink(payload)
-    };
-    return await composeVoiceOperationalMessage(runtime, {
-      settings,
-      guildId,
-      channelId,
-      userId,
-      messageId,
-      event,
-      reason,
-      details,
-      maxOutputChars,
-      allowSkip
-    });
-  }
-
-  async generateVoiceTurnReply({
-    settings,
-    guildId = null,
-    channelId = null,
-    userId = null,
-    transcript = "",
-    inputKind = "transcript",
-    contextMessages = [],
-    sessionId = null,
-    isEagerTurn = false,
-    sessionTiming = null,
-    joinWindowActive = false,
-    joinWindowAgeMs = null,
-    voiceEagerness = 0,
-    conversationContext = null,
-    participantRoster = [],
-    recentMembershipEvents = [],
-    soundboardCandidates = [],
-    onWebLookupStart = null,
-    onWebLookupComplete = null,
-    webSearchTimeoutMs = null,
-    voiceToolCallbacks = null
-  }) {
-    const runtime = {
-      llm: this.llm,
-      store: this.store,
-      memory: this.memory,
-      search: this.search,
-      client: this.client,
-      loadRelevantMemoryFacts: (payload) => this.loadRelevantMemoryFacts(payload),
-      buildMediaMemoryFacts: (payload) => this.buildMediaMemoryFacts(payload),
-      loadPromptMemorySlice: (payload) => this.loadPromptMemorySlice(payload),
-      buildWebSearchContext: (runtimeSettings, messageText) =>
-        this.buildWebSearchContext(runtimeSettings, messageText),
-      loadRecentConversationHistory: (payload) => this.getConversationHistoryForPrompt(payload),
-      loadRecentLookupContext: (payload) => this.getRecentLookupContextForPrompt(payload),
-      rememberRecentLookupContext: (payload) => this.rememberRecentLookupContext(payload),
-      getVoiceScreenShareCapability: (payload) => this.getVoiceScreenShareCapability(payload),
-      offerVoiceScreenShareLink: (payload) => this.offerVoiceScreenShareLink(payload)
-    };
-    return await generateVoiceTurnReply(runtime, {
-      settings,
-      guildId,
-      channelId,
-      userId,
-      transcript,
-      inputKind,
-      contextMessages,
-      sessionId,
-      isEagerTurn,
-      sessionTiming,
-      joinWindowActive,
-      joinWindowAgeMs,
-      voiceEagerness,
-      conversationContext,
-      participantRoster,
-      recentMembershipEvents,
-      soundboardCandidates,
-      onWebLookupStart,
-      onWebLookupComplete,
-      webSearchTimeoutMs,
-      voiceToolCallbacks
     });
   }
 
@@ -1426,231 +1488,7 @@ export class ClankerBot {
   }
 
   async maybeReplyToMessage(message, settings, options: ReplyAttemptOptions = {}) {
-    return await maybeReplyToMessagePipeline(this, message, settings, options);
-  }
-
-  getVoiceScreenShareCapability({
-    settings: _settings = null,
-    guildId: _guildId = null,
-    channelId: _channelId = null,
-    requesterUserId: _requesterUserId = null
-  } = {}) {
-    const manager = this.screenShareSessionManager;
-    if (!manager || typeof manager.getLinkCapability !== "function") {
-      return {
-        supported: false,
-        enabled: false,
-        available: false,
-        status: "disabled",
-        publicUrl: "",
-        reason: "screen_share_manager_unavailable"
-      };
-    }
-
-    const capability = manager.getLinkCapability();
-    const status = String(capability?.status || "disabled").trim().toLowerCase() || "disabled";
-    const enabled = Boolean(capability?.enabled);
-    const available = enabled && status === "ready";
-    const rawReason = String(capability?.reason || "").trim().toLowerCase();
-    return {
-      supported: true,
-      enabled,
-      available,
-      status,
-      publicUrl: String(capability?.publicUrl || "").trim(),
-      reason: available ? null : rawReason || status || "unavailable"
-    };
-  }
-
-  async offerVoiceScreenShareLink({
-    settings = null,
-    guildId = null,
-    channelId = null,
-    requesterUserId = null,
-    transcript = "",
-    source = "voice_turn_directive"
-  } = {}) {
-    const manager = this.screenShareSessionManager;
-    const normalizedGuildId = String(guildId || "").trim();
-    const normalizedChannelId = String(channelId || "").trim();
-    const normalizedRequesterUserId = String(requesterUserId || "").trim();
-    if (!normalizedGuildId || !normalizedChannelId || !normalizedRequesterUserId) {
-      return {
-        offered: false,
-        reason: "invalid_context"
-      };
-    }
-
-    const resolvedSettings = settings || this.store.getSettings();
-    const guild = this.client.guilds.cache.get(normalizedGuildId) || null;
-    const requesterDisplayName =
-      guild?.members?.cache?.get(normalizedRequesterUserId)?.displayName ||
-      guild?.members?.cache?.get(normalizedRequesterUserId)?.user?.username ||
-      this.client.users?.cache?.get(normalizedRequesterUserId)?.username ||
-      "unknown";
-    const syntheticMessage = {
-      guildId: normalizedGuildId,
-      channelId: normalizedChannelId,
-      id: null,
-      author: {
-        id: normalizedRequesterUserId,
-        username: requesterDisplayName
-      },
-      member: {
-        displayName: requesterDisplayName
-      }
-    };
-    const eventSource = String(source || "voice_turn_directive").trim().slice(0, 80) || "voice_turn_directive";
-
-    const channel = await this.resolveOperationalChannel(null, normalizedChannelId, {
-      guildId: normalizedGuildId,
-      userId: normalizedRequesterUserId,
-      messageId: null,
-      event: "voice_screen_share_offer",
-      reason: "voice_directive"
-    });
-    if (!channel) {
-      return {
-        offered: false,
-        reason: "channel_unavailable"
-      };
-    }
-
-    if (!manager || typeof manager.createSession !== "function") {
-      const unavailableMessage = await this.composeScreenShareUnavailableMessage({
-        message: syntheticMessage,
-        settings: resolvedSettings,
-        reason: "screen_share_manager_unavailable",
-        source: eventSource
-      });
-      if (unavailableMessage) {
-        await this.sendToChannel(channel, unavailableMessage, {
-          guildId: normalizedGuildId,
-          channelId: normalizedChannelId,
-          userId: normalizedRequesterUserId,
-          event: "voice_screen_share_offer",
-          reason: "screen_share_manager_unavailable"
-        });
-      }
-      return {
-        offered: false,
-        reason: "screen_share_manager_unavailable"
-      };
-    }
-
-    const created = await manager.createSession({
-      guildId: normalizedGuildId,
-      channelId: normalizedChannelId,
-      requesterUserId: normalizedRequesterUserId,
-      requesterDisplayName,
-      targetUserId: normalizedRequesterUserId,
-      source: eventSource
-    });
-    if (!created?.ok) {
-      const unavailableReason = String(created?.reason || "unknown");
-      const unavailableMessage = await this.composeScreenShareUnavailableMessage({
-        message: syntheticMessage,
-        settings: resolvedSettings,
-        reason: unavailableReason,
-        source: eventSource
-      });
-      if (unavailableMessage) {
-        await this.sendToChannel(channel, unavailableMessage, {
-          guildId: normalizedGuildId,
-          channelId: normalizedChannelId,
-          userId: normalizedRequesterUserId,
-          event: "voice_screen_share_offer",
-          reason: unavailableReason
-        });
-      }
-      return {
-        offered: false,
-        reason: unavailableReason
-      };
-    }
-
-    const linkUrl = String(created?.shareUrl || "").trim();
-    const expiresInMinutes = Number(created?.expiresInMinutes || 0);
-    if (!linkUrl) {
-      return {
-        offered: false,
-        reason: "missing_share_url"
-      };
-    }
-    if (created?.reused) {
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        userId: normalizedRequesterUserId,
-        content: "screen_share_offer_suppressed_existing_session",
-        metadata: {
-          source: eventSource,
-          transcript: String(transcript || "").slice(0, 220),
-          expiresInMinutes: Number.isFinite(expiresInMinutes) ? expiresInMinutes : null,
-          linkHost: safeUrlHost(linkUrl)
-        }
-      });
-      return {
-        offered: false,
-        reused: true,
-        reason: "already_active_session",
-        linkUrl,
-        expiresInMinutes
-      };
-    }
-
-    const offerMessage = await this.composeScreenShareOfferMessage({
-      message: syntheticMessage,
-      settings: resolvedSettings,
-      linkUrl,
-      expiresInMinutes,
-      explicitRequest: true,
-      intentRequested: true,
-      confidence: 1,
-      source: eventSource
-    });
-    if (!offerMessage) {
-      return {
-        offered: false,
-        reason: "offer_message_empty"
-      };
-    }
-
-    const sent = await this.sendToChannel(channel, offerMessage, {
-      guildId: normalizedGuildId,
-      channelId: normalizedChannelId,
-      userId: normalizedRequesterUserId,
-      event: "voice_screen_share_offer",
-      reason: "voice_directive"
-    });
-    if (!sent) {
-      return {
-        offered: false,
-        reason: "offer_message_send_failed"
-      };
-    }
-
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: normalizedGuildId,
-      channelId: normalizedChannelId,
-      userId: normalizedRequesterUserId,
-      content: "screen_share_offer_sent_from_voice",
-      metadata: {
-        source: eventSource,
-        transcript: String(transcript || "").slice(0, 220),
-        expiresInMinutes: Number.isFinite(expiresInMinutes) ? expiresInMinutes : null,
-        linkHost: safeUrlHost(linkUrl)
-      }
-    });
-
-    return {
-      offered: true,
-      reason: "offered",
-      linkUrl,
-      expiresInMinutes
-    };
+    return await maybeReplyToMessagePipeline(this.toReplyPipelineRuntime(), message, settings, options);
   }
 
   async maybeHandleStructuredVoiceIntent({ message, settings, replyDirective }) {
@@ -1797,8 +1635,8 @@ export class ClankerBot {
         store: this.store,
         client: this.client,
         isChannelAllowed: (runtimeSettings, channelId) =>
-          this.isChannelAllowed(runtimeSettings, channelId),
-        maybeRunAutomationCycle: () => this.maybeRunAutomationCycle()
+          isChannelAllowedForPermissions(runtimeSettings, String(channelId)),
+        maybeRunAutomationCycle: () => maybeRunAutomationCycleForAutomationEngine(this.toAutomationEngineRuntime())
       },
       {
         message,
@@ -1856,7 +1694,10 @@ export class ClankerBot {
       authorId: this.client.user.id,
       authorName: getBotName(settings),
       isBot: true,
-      content: this.composeMessageContentForHistory(sent, finalText),
+      content: composeMessageContentForHistoryForMessageHistory(
+        sent as Parameters<typeof composeMessageContentForHistoryForMessageHistory>[0],
+        finalText
+      ),
       referencedMessageId: message.id
     });
     this.store.logAction({
@@ -1871,7 +1712,7 @@ export class ClankerBot {
         triggerMessageIds,
         source,
         sendAsReply: true,
-        canStandalonePost: this.isReplyChannel(settings, message.channelId),
+        canStandalonePost: isReplyChannelForPermissions(settings, String(message.channelId)),
         addressing,
         replyPrompts,
         automationControl: resultMetadata || null,
@@ -1891,307 +1732,6 @@ export class ClankerBot {
     });
 
     return true;
-  }
-
-  async maybeHandleScreenShareOfferIntent({
-    message,
-    replyDirective,
-    source = "message_event"
-  }) {
-    const empty = {
-      offered: false,
-      appendText: "",
-      linkUrl: null,
-      explicitRequest: false,
-      intentRequested: false,
-      confidence: 0,
-      reason: null
-    };
-
-    const explicitRequest = SCREEN_SHARE_EXPLICIT_REQUEST_RE.test(String(message?.content || ""));
-    const manager = this.screenShareSessionManager;
-    const settings = this.store.getSettings();
-    if (!message?.guildId || !message?.channelId) return empty;
-    if (!manager) {
-      if (!explicitRequest) return empty;
-      const appendText = await this.composeScreenShareUnavailableMessage({
-        message,
-        settings,
-        reason: "screen_share_manager_unavailable",
-        source
-      });
-      return {
-        ...empty,
-        explicitRequest: true,
-        appendText
-      };
-    }
-
-    const intent = replyDirective?.screenShareIntent || {};
-    const intentRequested = intent?.action === "offer_link";
-    const confidence = Number(intent?.confidence || 0);
-    const intentAllowed = intentRequested && confidence >= SCREEN_SHARE_INTENT_THRESHOLD;
-    if (!explicitRequest && !intentAllowed) return empty;
-
-    const created = await manager.createSession({
-      guildId: message.guildId,
-      channelId: message.channelId,
-      requesterUserId: message.author?.id || null,
-      requesterDisplayName: message.member?.displayName || message.author?.username || "",
-      targetUserId: message.author?.id || null,
-      source
-    });
-
-    if (!created?.ok) {
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: message.guildId,
-        channelId: message.channelId,
-        messageId: message.id,
-        userId: message.author?.id || null,
-        content: "screen_share_offer_unavailable",
-        metadata: {
-          reason: created?.reason || "unknown",
-          explicitRequest,
-          intentRequested,
-          confidence,
-          source
-        }
-      });
-      if (!explicitRequest) {
-        return {
-          ...empty,
-          explicitRequest,
-          intentRequested,
-          confidence,
-          reason: created?.reason || "unknown"
-        };
-      }
-      const appendText = await this.composeScreenShareUnavailableMessage({
-        message,
-        settings,
-        reason: created?.reason || "unknown",
-        source
-      });
-      return {
-        ...empty,
-        explicitRequest,
-        intentRequested,
-        confidence,
-        reason: created?.reason || "unknown",
-        appendText
-      };
-    }
-
-    const linkUrl = String(created.shareUrl || "").trim();
-    const expiresInMinutes = Number(created.expiresInMinutes || 0);
-    if (!linkUrl) return empty;
-    if (created?.reused) {
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: message.guildId,
-        channelId: message.channelId,
-        messageId: message.id,
-        userId: message.author?.id || null,
-        content: "screen_share_offer_suppressed_existing_session",
-        metadata: {
-          explicitRequest,
-          intentRequested,
-          confidence,
-          expiresInMinutes,
-          linkHost: safeUrlHost(linkUrl),
-          source
-        }
-      });
-      return {
-        ...empty,
-        explicitRequest,
-        intentRequested,
-        confidence,
-        linkUrl,
-        reason: "already_active_session"
-      };
-    }
-
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: message.guildId,
-      channelId: message.channelId,
-      messageId: message.id,
-      userId: message.author?.id || null,
-      content: "screen_share_offer_prepared",
-      metadata: {
-        explicitRequest,
-        intentRequested,
-        confidence,
-        expiresInMinutes,
-        linkHost: safeUrlHost(linkUrl),
-        source
-      }
-    });
-
-    const appendText = await this.composeScreenShareOfferMessage({
-      message,
-      settings,
-      linkUrl,
-      expiresInMinutes,
-      explicitRequest,
-      intentRequested,
-      confidence,
-      source
-    });
-
-    return {
-      offered: true,
-      appendText,
-      linkUrl,
-      explicitRequest,
-      intentRequested,
-      confidence,
-      reason: "offered"
-    };
-  }
-
-  async composeScreenShareOfferMessage({
-    message,
-    settings,
-    linkUrl,
-    expiresInMinutes,
-    explicitRequest = false,
-    intentRequested = false,
-    confidence = 0,
-    source = "message_event"
-  }) {
-    const composed = await this.composeVoiceOperationalMessage({
-      settings,
-      guildId: message.guildId,
-      channelId: message.channelId,
-      userId: message.author?.id || null,
-      messageId: message.id,
-      event: "voice_screen_share_offer",
-      reason: explicitRequest ? "explicit_request" : "proactive_offer",
-      details: {
-        linkUrl,
-        expiresInMinutes,
-        explicitRequest: Boolean(explicitRequest),
-        intentRequested: Boolean(intentRequested),
-        confidence: Number(confidence || 0),
-        source: String(source || "message_event")
-      },
-      maxOutputChars: SCREEN_SHARE_MESSAGE_MAX_CHARS
-    });
-
-    const normalized = sanitizeBotText(
-      normalizeSkipSentinel(String(composed || "")),
-      SCREEN_SHARE_MESSAGE_MAX_CHARS
-    );
-    if (!normalized || normalized === "[SKIP]") {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: message.guildId,
-        channelId: message.channelId,
-        messageId: message.id,
-        userId: message.author?.id || null,
-        content: "screen_share_offer_message_empty",
-        metadata: {
-          explicitRequest: Boolean(explicitRequest),
-          intentRequested: Boolean(intentRequested),
-          confidence: Number(confidence || 0),
-          source: String(source || "message_event")
-        }
-      });
-      return "";
-    }
-    if (!String(normalized).includes(linkUrl)) {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: message.guildId,
-        channelId: message.channelId,
-        messageId: message.id,
-        userId: message.author?.id || null,
-        content: "screen_share_offer_message_missing_link",
-        metadata: {
-          explicitRequest: Boolean(explicitRequest),
-          intentRequested: Boolean(intentRequested),
-          confidence: Number(confidence || 0),
-          source: String(source || "message_event")
-        }
-      });
-      return "";
-    }
-    return normalized;
-  }
-
-  async composeScreenShareUnavailableMessage({
-    message,
-    settings,
-    reason = "unavailable",
-    source = "message_event"
-  }) {
-    const composed = await this.composeVoiceOperationalMessage({
-      settings,
-      guildId: message.guildId,
-      channelId: message.channelId,
-      userId: message.author?.id || null,
-      messageId: message.id,
-      event: "voice_screen_share_offer",
-      reason: String(reason || "unavailable"),
-      details: {
-        source: String(source || "message_event"),
-        unavailable: true
-      },
-      maxOutputChars: SCREEN_SHARE_MESSAGE_MAX_CHARS
-    });
-
-    const normalized = sanitizeBotText(
-      normalizeSkipSentinel(String(composed || "")),
-      SCREEN_SHARE_MESSAGE_MAX_CHARS
-    );
-    if (!normalized || normalized === "[SKIP]") {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: message.guildId,
-        channelId: message.channelId,
-        messageId: message.id,
-        userId: message.author?.id || null,
-        content: "screen_share_unavailable_message_empty",
-        metadata: {
-          reason: String(reason || "unavailable"),
-          source: String(source || "message_event")
-        }
-      });
-      return "";
-    }
-    return normalized;
-  }
-
-  async resolveOperationalChannel(
-    channel,
-    channelId,
-    { guildId = null, userId = null, messageId = null, event = null, reason = null } = {}
-  ) {
-    return await resolveOperationalChannel(this, channel, channelId, {
-      guildId,
-      userId,
-      messageId,
-      event,
-      reason
-    });
-  }
-
-  async sendToChannel(
-    channel,
-    text,
-    { guildId = null, channelId = null, userId = null, messageId = null, event = null, reason = null } = {}
-  ) {
-    return await sendToChannel(this, channel, text, {
-      guildId,
-      channelId,
-      userId,
-      messageId,
-      event,
-      reason
-    });
   }
 
   async maybeApplyReplyReaction({
@@ -2347,1468 +1887,6 @@ export class ClankerBot {
     return sentReplies + sentMessages + discoveryPosts < maxPerHour;
   }
 
-  getImageBudgetState(settings) {
-    const discovery = getDiscoverySettings(settings);
-    const maxPerDay = clamp(Number(discovery.maxImagesPerDay) || 0, 0, 200);
-    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const used = this.store.countActionsSince("image_call", since24h);
-    const remaining = Math.max(0, maxPerDay - used);
-
-    return {
-      maxPerDay,
-      used,
-      remaining,
-      canGenerate: maxPerDay > 0 && remaining > 0
-    };
-  }
-
-  getVideoGenerationBudgetState(settings) {
-    const discovery = getDiscoverySettings(settings);
-    const maxPerDay = clamp(Number(discovery.maxVideosPerDay) || 0, 0, 120);
-    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const used = this.store.countActionsSince("video_call", since24h);
-    const remaining = Math.max(0, maxPerDay - used);
-
-    return {
-      maxPerDay,
-      used,
-      remaining,
-      canGenerate: maxPerDay > 0 && remaining > 0
-    };
-  }
-
-  getGifBudgetState(settings) {
-    const discovery = getDiscoverySettings(settings);
-    const maxPerDay = clamp(Number(discovery.maxGifsPerDay) || 0, 0, 300);
-    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const used = this.store.countActionsSince("gif_call", since24h);
-    const remaining = Math.max(0, maxPerDay - used);
-
-    return {
-      maxPerDay,
-      used,
-      remaining,
-      canFetch: maxPerDay > 0 && remaining > 0
-    };
-  }
-
-  getMediaGenerationCapabilities(settings) {
-    if (!this.llm?.getMediaGenerationCapabilities) {
-      return {
-        simpleImageReady: false,
-        complexImageReady: false,
-        videoReady: false,
-        simpleImageModel: null,
-        complexImageModel: null,
-        videoModel: null
-      };
-    }
-
-    return this.llm.getMediaGenerationCapabilities(settings);
-  }
-
-  isImageGenerationReady(settings, variant = "any") {
-    return Boolean(this.llm?.isImageGenerationReady?.(settings, variant));
-  }
-
-  isVideoGenerationReady(settings) {
-    return Boolean(this.llm?.isVideoGenerationReady?.(settings));
-  }
-
-  getWebSearchBudgetState(settings) {
-    const research = getResearchRuntimeConfig(settings);
-    const maxPerHour = clamp(Number(research.maxSearchesPerHour) || 0, 0, 120);
-    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const successCount = this.store.countActionsSince("search_call", since1h);
-    const errorCount = this.store.countActionsSince("search_error", since1h);
-    const used = successCount + errorCount;
-    const remaining = Math.max(0, maxPerHour - used);
-
-    return {
-      maxPerHour,
-      used,
-      successCount,
-      errorCount,
-      remaining,
-      canSearch: maxPerHour > 0 && remaining > 0
-    };
-  }
-
-  getBrowserBudgetState(settings) {
-    const browser = getBrowserRuntimeConfig(settings);
-    const maxPerHour = clamp(Number(browser.localBrowserAgent?.maxBrowseCallsPerHour) || 0, 0, 60);
-    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const used = this.store.countActionsSince("browser_browse_call", since1h);
-    const remaining = Math.max(0, maxPerHour - used);
-
-    return {
-      maxPerHour,
-      used,
-      remaining,
-      canBrowse: maxPerHour > 0 && remaining > 0
-    };
-  }
-
-  getVideoContextBudgetState(settings) {
-    const videoContext = getVideoContextSettings(settings);
-    const maxPerHour = clamp(Number(videoContext.maxLookupsPerHour) || 0, 0, 120);
-    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const successCount = this.store.countActionsSince("video_context_call", since1h);
-    const errorCount = this.store.countActionsSince("video_context_error", since1h);
-    const used = successCount + errorCount;
-    const remaining = Math.max(0, maxPerHour - used);
-
-    return {
-      maxPerHour,
-      used,
-      successCount,
-      errorCount,
-      remaining,
-      canLookup: maxPerHour > 0 && remaining > 0
-    };
-  }
-
-  async buildVideoReplyContext({ settings, message, recentMessages = [], trace = {} }) {
-    const videoContextSettings = getVideoContextSettings(settings);
-    const messageText = String(message?.content || "");
-    const enabled = Boolean(videoContextSettings.enabled);
-    const budget = this.getVideoContextBudgetState(settings);
-    const maxVideosPerMessage = clamp(Number(videoContextSettings.maxVideosPerMessage) || 0, 0, 6);
-    const maxTranscriptChars = clamp(Number(videoContextSettings.maxTranscriptChars) || 1200, 200, 4000);
-    const keyframeIntervalSeconds = clamp(Number(videoContextSettings.keyframeIntervalSeconds) || 0, 0, 120);
-    const maxKeyframesPerVideo = clamp(Number(videoContextSettings.maxKeyframesPerVideo) || 0, 0, 8);
-    const allowAsrFallback = Boolean(videoContextSettings.allowAsrFallback);
-    const maxAsrSeconds = clamp(Number(videoContextSettings.maxAsrSeconds) || 120, 15, 600);
-
-    const base = {
-      requested: false,
-      enabled,
-      used: false,
-      blockedByBudget: false,
-      error: null,
-      errors: [],
-      detectedVideos: 0,
-      detectedFromRecentMessages: false,
-      videos: [],
-      frameImages: [],
-      budget
-    };
-
-    if (!this.video) {
-      return base;
-    }
-
-    const directTargets = this.video.extractMessageTargets(message, MAX_VIDEO_TARGET_SCAN);
-    const fallbackTargets =
-      !directTargets.length && looksLikeVideoFollowupMessage(messageText)
-        ? extractRecentVideoTargets({
-          videoService: this.video,
-          recentMessages,
-          maxMessages: MAX_VIDEO_FALLBACK_MESSAGES,
-          maxTargets: MAX_VIDEO_TARGET_SCAN
-        })
-        : [];
-    const detectedTargets = directTargets.length ? directTargets : fallbackTargets;
-    if (!detectedTargets.length) return base;
-    const detectedFromRecentMessages = directTargets.length === 0 && fallbackTargets.length > 0;
-
-    if (maxVideosPerMessage <= 0) {
-      return {
-        ...base,
-        requested: true,
-        detectedVideos: detectedTargets.length,
-        detectedFromRecentMessages
-      };
-    }
-
-    const targets = detectedTargets.slice(0, maxVideosPerMessage);
-    if (!targets.length) {
-      return {
-        ...base,
-        requested: true,
-        detectedVideos: detectedTargets.length,
-        detectedFromRecentMessages
-      };
-    }
-
-    if (!enabled) {
-      return {
-        ...base,
-        requested: true,
-        detectedVideos: detectedTargets.length,
-        detectedFromRecentMessages
-      };
-    }
-
-    if (!budget.canLookup) {
-      return {
-        ...base,
-        requested: true,
-        detectedVideos: detectedTargets.length,
-        detectedFromRecentMessages,
-        blockedByBudget: true
-      };
-    }
-
-    const allowedCount = Math.min(targets.length, budget.remaining);
-    if (allowedCount <= 0) {
-      return {
-        ...base,
-        requested: true,
-        detectedVideos: detectedTargets.length,
-        detectedFromRecentMessages,
-        blockedByBudget: true
-      };
-    }
-
-    const selectedTargets = targets.slice(0, allowedCount);
-    const blockedByBudget = selectedTargets.length < targets.length;
-
-    try {
-      const result = await this.video.fetchContexts({
-        targets: selectedTargets,
-        maxTranscriptChars,
-        keyframeIntervalSeconds,
-        maxKeyframesPerVideo,
-        allowAsrFallback,
-        maxAsrSeconds,
-        trace
-      });
-      const firstError = result.errors?.[0]?.error || null;
-      const videos = (result.videos || []).map((item) => {
-        const { frameImages: _frameImages, ...rest } = item || {};
-        return rest;
-      });
-      const frameImages = (result.videos || []).flatMap((item) => item?.frameImages || []);
-      return {
-        ...base,
-        requested: true,
-        used: Boolean(videos.length),
-        blockedByBudget,
-        error: firstError,
-        errors: result.errors || [],
-        detectedVideos: detectedTargets.length,
-        detectedFromRecentMessages,
-        videos,
-        frameImages
-      };
-    } catch (error) {
-      return {
-        ...base,
-        requested: true,
-        detectedVideos: detectedTargets.length,
-        detectedFromRecentMessages,
-        blockedByBudget,
-        error: String(error?.message || error),
-        errors: [
-          {
-            videoId: null,
-            url: null,
-            error: String(error?.message || error)
-          }
-        ]
-      };
-    }
-  }
-
-  /**
-   * @param {{
-   *   guildId?: string | null;
-   *   channelId?: string | null;
-   *   queryText?: string;
-   *   limit?: number;
-   *   maxAgeHours?: number;
-   * }} options
-   */
-  getRecentLookupContextForPrompt({
-    guildId = null,
-    channelId = null,
-    queryText = "",
-    limit = LOOKUP_CONTEXT_PROMPT_LIMIT,
-    maxAgeHours = LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS
-  } = {}) {
-    if (!this.store || typeof this.store.searchLookupContext !== "function") return [];
-    const normalizedGuildId = String(guildId || "").trim();
-    if (!normalizedGuildId) return [];
-    const normalizedChannelId = String(channelId || "").trim() || null;
-    const normalizedQuery = String(queryText || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 280);
-    try {
-      return this.store.searchLookupContext({
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        queryText: normalizedQuery,
-        limit,
-        maxAgeHours
-      });
-    } catch (error) {
-      this.store.logAction({
-        kind: "bot_error",
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        userId: this.client.user?.id || null,
-        content: `lookup_context_search: ${String(error?.message || error)}`
-      });
-      return [];
-    }
-  }
-
-  /**
-   * @param {{
-   *   guildId?: string | null;
-   *   channelId?: string | null;
-   *   queryText?: string;
-   *   limit?: number;
-   *   maxAgeHours?: number;
-   *   before?: number;
-   *   after?: number;
-   * }} options
-   */
-  getConversationHistoryForPrompt({
-    guildId = null,
-    channelId = null,
-    queryText = "",
-    limit = CONVERSATION_HISTORY_PROMPT_LIMIT,
-    maxAgeHours = CONVERSATION_HISTORY_PROMPT_MAX_AGE_HOURS,
-    before = CONVERSATION_HISTORY_PROMPT_WINDOW_BEFORE,
-    after = CONVERSATION_HISTORY_PROMPT_WINDOW_AFTER
-  } = {}) {
-    if (!this.store || typeof this.store.searchConversationWindows !== "function") return [];
-    const normalizedGuildId = String(guildId || "").trim();
-    if (!normalizedGuildId) return [];
-    const normalizedChannelId = String(channelId || "").trim() || null;
-    const normalizedQuery = String(queryText || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 320);
-    if (!normalizedQuery) return [];
-    try {
-      return this.store.searchConversationWindows({
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        queryText: normalizedQuery,
-        limit,
-        maxAgeHours,
-        before,
-        after
-      });
-    } catch (error) {
-      this.store.logAction({
-        kind: "bot_error",
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        userId: this.client.user?.id || null,
-        content: `conversation_history_search: ${String(error?.message || error)}`
-      });
-      return [];
-    }
-  }
-
-  /**
-   * @param {{
-   *   guildId?: string | null;
-   *   channelId?: string | null;
-   *   userId?: string | null;
-   *   source?: string;
-   *   query?: string;
-   *   provider?: string | null;
-   *   results?: unknown[];
-   * }} options
-   */
-  rememberRecentLookupContext({
-    guildId = null,
-    channelId = null,
-    userId = null,
-    source = "reply_web_lookup",
-    query = "",
-    provider = null,
-    results = []
-  } = {}) {
-    if (!this.store || typeof this.store.recordLookupContext !== "function") return false;
-    const normalizedGuildId = String(guildId || "").trim();
-    if (!normalizedGuildId) return false;
-    const normalizedChannelId = String(channelId || "").trim() || null;
-    const normalizedUserId = String(userId || "").trim() || null;
-    const normalizedSource = String(source || "reply_web_lookup")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 120);
-    const normalizedQuery = String(query || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 220);
-    if (!normalizedQuery) return false;
-    const normalizedResults = (Array.isArray(results) ? results : []).slice(0, LOOKUP_CONTEXT_MAX_RESULTS);
-    if (!normalizedResults.length) return false;
-    try {
-      return this.store.recordLookupContext({
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        userId: normalizedUserId,
-        source: normalizedSource,
-        query: normalizedQuery,
-        provider,
-        results: normalizedResults,
-        ttlHours: LOOKUP_CONTEXT_TTL_HOURS,
-        maxResults: LOOKUP_CONTEXT_MAX_RESULTS,
-        maxRowsPerChannel: LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL
-      });
-    } catch (error) {
-      this.store.logAction({
-        kind: "bot_error",
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        userId: this.client.user?.id || null,
-        content: `lookup_context_record: ${String(error?.message || error)}`
-      });
-      return false;
-    }
-  }
-
-  buildWebSearchContext(settings, messageText) {
-    const text = String(messageText || "");
-    const configured = Boolean(this.search?.isConfigured?.());
-    const enabled = Boolean(getResearchRuntimeConfig(settings).enabled);
-    const budget = this.getWebSearchBudgetState(settings);
-
-    return {
-      requested: false,
-      configured,
-      enabled,
-      used: false,
-      blockedByBudget: false,
-      optedOutByUser: isWebSearchOptOutText(text),
-      error: null,
-      query: "",
-      results: [],
-      fetchedPages: 0,
-      providerUsed: null,
-      providerFallbackUsed: false,
-      budget
-    };
-  }
-
-  buildBrowserBrowseContext(settings) {
-    const browserTaskConfig = getResolvedBrowserTaskConfig(settings);
-    const configured = Boolean(
-      this.browserManager &&
-      (browserTaskConfig.runtime !== "openai_computer_use" || this.llm?.openai)
-    );
-    const enabled = Boolean(getBrowserRuntimeConfig(settings).enabled);
-    const budget = this.getBrowserBudgetState(settings);
-
-    return {
-      requested: false,
-      configured,
-      enabled,
-      used: false,
-      blockedByBudget: false,
-      error: null,
-      query: "",
-      text: "",
-      steps: 0,
-      hitStepLimit: false,
-      budget
-    };
-  }
-
-  buildMemoryLookupContext({ settings }) {
-    const enabled = Boolean(getMemorySettings(settings).enabled && this.memory?.searchDurableFacts);
-    return {
-      enabled,
-      requested: false,
-      used: false,
-      query: "",
-      results: [],
-      error: null
-    };
-  }
-
-  buildImageLookupContext({ recentMessages = [], excludedUrls = [] } = {}) {
-    const excluded = new Set(
-      (Array.isArray(excludedUrls) ? excludedUrls : [])
-        .map((value) => String(value || "").trim())
-        .filter(Boolean)
-    );
-    const candidates = this.extractHistoryImageCandidates({
-      recentMessages,
-      excluded
-    });
-    return {
-      enabled: true,
-      requested: false,
-      used: false,
-      query: "",
-      candidates,
-      results: [],
-      selectedImageInputs: [],
-      error: null
-    };
-  }
-
-  /**
-   * Kick off async captioning for uncaptioned image candidates.
-   * Fire-and-forget — errors are silently swallowed.
-   */
-  captionRecentHistoryImages({ candidates = [], settings = null, trace = null } = {}) {
-    const list = Array.isArray(candidates) ? candidates : [];
-    const maxPerBatch = Math.min(list.length, 5);
-    let scheduled = 0;
-
-    // Enforce hourly caption budget
-    const maxPerHour = Number((settings as Record<string, any>)?.vision?.maxCaptionsPerHour);
-    const budgetCap = Number.isFinite(maxPerHour) ? maxPerHour : 60;
-    const now = Date.now();
-    const oneHourAgo = now - 60 * 60 * 1000;
-    this.captionTimestamps = this.captionTimestamps.filter((t) => t > oneHourAgo);
-    const remainingBudget = Math.max(0, budgetCap - this.captionTimestamps.length);
-    if (remainingBudget === 0) return;
-
-    for (const candidate of list) {
-      if (scheduled >= maxPerBatch) break;
-      if (scheduled >= remainingBudget) break;
-      if (!candidate?.url) continue;
-      if (this.imageCaptionCache.hasOrInflight(candidate.url)) continue;
-
-      scheduled++;
-      this.captionTimestamps.push(now);
-      this.imageCaptionCache
-        .getOrCaption({
-          url: candidate.url,
-          llm: this.llm,
-          settings,
-          mimeType: candidate.contentType || "",
-          trace: trace || {
-            guildId: null,
-            channelId: null,
-            userId: null,
-            source: "history_image_caption"
-          }
-        })
-        .catch(() => { });
-    }
-  }
-
-  /**
-   * Build auto-include image inputs from recent history candidates.
-   * Returns the top N candidates as direct vision inputs for the LLM.
-   */
-  getAutoIncludeImageInputs({ candidates = [], maxImages = 3 } = {}) {
-    const list = Array.isArray(candidates) ? candidates : [];
-    const cap = Math.max(0, Math.min(Number(maxImages) || 3, 6));
-    const inputs = [];
-
-    for (const candidate of list) {
-      if (inputs.length >= cap) break;
-      if (!candidate?.url) continue;
-      inputs.push({
-        url: candidate.url,
-        filename: candidate.filename || "(unnamed)",
-        contentType: candidate.contentType || ""
-      });
-    }
-
-    return inputs;
-  }
-
-  extractHistoryImageCandidates({ recentMessages = [], excluded = new Set() } = {}) {
-    const rows = Array.isArray(recentMessages) ? recentMessages : [];
-    const seen = excluded instanceof Set ? new Set(excluded) : new Set();
-    const candidates = [];
-
-    for (const row of rows) {
-      if (candidates.length >= MAX_HISTORY_IMAGE_CANDIDATES) break;
-      const content = String(row?.content || "");
-      if (!content) continue;
-
-      const urls = extractUrlsFromText(content);
-      if (!urls.length) continue;
-
-      for (const rawUrl of urls) {
-        if (candidates.length >= MAX_HISTORY_IMAGE_CANDIDATES) break;
-        const url = String(rawUrl || "").trim();
-        if (!url) continue;
-        if (!isLikelyImageUrl(url)) continue;
-        if (seen.has(url)) continue;
-        seen.add(url);
-
-        const parsed = parseHistoryImageReference(url);
-        const contentSansUrl = content.replace(url, " ").replace(/\s+/g, " ").trim();
-        // Enrich context with cached vision caption if available
-        const cachedCaption = this.imageCaptionCache?.get(url);
-        const captionText = cachedCaption?.caption || "";
-        const baseContext = contentSansUrl.slice(0, 180);
-        const enrichedContext = captionText
-          ? (baseContext ? `${baseContext} [caption: ${captionText}]` : `[caption: ${captionText}]`).slice(0, 360)
-          : baseContext;
-
-        candidates.push({
-          messageId: String(row?.message_id || "").trim() || null,
-          authorName: String(row?.author_name || "unknown").trim() || "unknown",
-          createdAt: String(row?.created_at || "").trim(),
-          url,
-          filename: parsed.filename || "(unnamed)",
-          contentType: parsed.contentType || "",
-          context: enrichedContext,
-          recencyRank: candidates.length,
-          hasCachedCaption: Boolean(cachedCaption)
-        });
-      }
-    }
-
-    return candidates;
-  }
-
-  rankImageLookupCandidates({ candidates = [], query = "" } = {}) {
-    const normalizedQuery = String(query || "")
-      .toLowerCase()
-      .replace(/\s+/g, " ")
-      .trim();
-    const queryTokens = [...new Set(normalizedQuery.match(/[a-z0-9]{3,}/g) || [])].slice(
-      0,
-      MAX_IMAGE_LOOKUP_QUERY_TOKENS
-    );
-    const wantsVisualRecall = /\b(?:image|photo|picture|pic|screenshot|meme|earlier|previous|that)\b/i.test(
-      normalizedQuery
-    );
-
-    const ranked = (Array.isArray(candidates) ? candidates : []).map((candidate, index) => {
-      const haystack = [
-        candidate?.context,
-        candidate?.filename,
-        candidate?.authorName
-      ]
-        .map((value) => String(value || "").toLowerCase())
-        .join(" ");
-      let score = Math.max(0, 4 - index * 0.3);
-      const reasons = [];
-
-      if (normalizedQuery && haystack.includes(normalizedQuery)) {
-        score += 9;
-        reasons.push("phrase match");
-      }
-
-      let tokenHits = 0;
-      for (const token of queryTokens) {
-        if (!token) continue;
-        if (haystack.includes(token)) {
-          score += 2;
-          tokenHits += 1;
-        }
-      }
-      if (tokenHits > 0) {
-        reasons.push(`${tokenHits} token hit${tokenHits === 1 ? "" : "s"}`);
-      }
-
-      if (wantsVisualRecall) {
-        score += 1;
-      }
-
-      return {
-        ...candidate,
-        score,
-        matchReason: reasons.join(", ") || "recency fallback"
-      };
-    });
-
-    ranked.sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return (a.recencyRank || 0) - (b.recencyRank || 0);
-    });
-
-    const matched = ranked.filter((item) => item.score >= 4);
-    return matched.length ? matched : ranked;
-  }
-
-  async runModelRequestedImageLookup({
-    imageLookup,
-    query
-  }) {
-    const normalizedQuery = normalizeDirectiveText(query, MAX_IMAGE_LOOKUP_QUERY_LEN);
-    const state = {
-      ...imageLookup,
-      requested: true,
-      used: false,
-      query: normalizedQuery,
-      results: [],
-      selectedImageInputs: [],
-      error: null
-    };
-
-    if (!state.enabled) {
-      return state;
-    }
-    if (!normalizedQuery) {
-      return {
-        ...state,
-        error: "Missing image lookup query."
-      };
-    }
-
-    const candidates = Array.isArray(state.candidates) ? state.candidates : [];
-    if (!candidates.length) {
-      return {
-        ...state,
-        error: "No recent history images are available for lookup."
-      };
-    }
-
-    const ranked = this.rankImageLookupCandidates({
-      candidates,
-      query: normalizedQuery
-    });
-    const selected = ranked.slice(0, Math.min(MAX_HISTORY_IMAGE_LOOKUP_RESULTS, MAX_MODEL_IMAGE_INPUTS));
-    if (!selected.length) {
-      return {
-        ...state,
-        error: "No matching history images were found."
-      };
-    }
-
-    return {
-      ...state,
-      used: true,
-      results: selected,
-      selectedImageInputs: selected.map((item) => ({
-        url: item.url,
-        filename: item.filename,
-        contentType: item.contentType
-      }))
-    };
-  }
-
-  async runModelRequestedBrowserBrowse({
-    settings,
-    browserBrowse,
-    query,
-    guildId,
-    channelId = null,
-    userId = null,
-    source = "reply_message"
-  }) {
-    const normalizedQuery = normalizeDirectiveText(query, MAX_BROWSER_BROWSE_QUERY_LEN);
-    const state = {
-      ...browserBrowse,
-      requested: true,
-      used: false,
-      blockedByBudget: false,
-      query: normalizedQuery,
-      text: "",
-      steps: 0,
-      hitStepLimit: false,
-      error: null
-    };
-
-    if (!state.enabled || !state.configured || !this.browserManager) {
-      return state;
-    }
-    if (!state.budget?.canBrowse) {
-      return {
-        ...state,
-        blockedByBudget: true
-      };
-    }
-    if (!normalizedQuery) {
-      return {
-        ...state,
-        error: "Missing browser browse query."
-      };
-    }
-    if (!this.llm) {
-      return {
-        ...state,
-        error: "llm_unavailable"
-      };
-    }
-
-    const browserTaskConfig = getResolvedBrowserTaskConfig(settings);
-    const maxSteps = clamp(Number(browserTaskConfig.maxStepsPerTask) || 15, 1, 30);
-    const stepTimeoutMs = clamp(Number(browserTaskConfig.stepTimeoutMs) || 30_000, 5_000, 120_000);
-    if (browserTaskConfig.runtime === "openai_computer_use" && !this.llm?.openai) {
-      return {
-        ...state,
-        error: "openai_computer_use_unavailable"
-      };
-    }
-
-    const scopeKey = buildBrowserTaskScopeKey({
-      guildId,
-      channelId
-    });
-    const activeBrowserTask = this.activeBrowserTasks.beginTask(scopeKey);
-
-    try {
-      const sessionKey = `reply:${activeBrowserTask.taskId}`;
-      const trace = {
-        guildId,
-        channelId,
-        userId,
-        source: `${source}_browser_browse`
-      };
-      const result =
-        browserTaskConfig.runtime === "openai_computer_use"
-          ? await runOpenAiComputerUseTask({
-              openai: this.llm?.openai,
-              browserManager: this.browserManager,
-              store: this.store,
-              sessionKey,
-              instruction: normalizedQuery,
-              model: browserTaskConfig.openaiComputerUse.model,
-              maxSteps,
-              stepTimeoutMs,
-              trace,
-              logSource: source,
-              signal: activeBrowserTask.abortController.signal
-            })
-          : await runBrowserBrowseTask({
-              llm: this.llm,
-              browserManager: this.browserManager,
-              store: this.store,
-              sessionKey,
-              instruction: normalizedQuery,
-              provider: browserTaskConfig.localAgent.provider,
-              model: browserTaskConfig.localAgent.model,
-              maxSteps,
-              stepTimeoutMs,
-              trace,
-              logSource: source,
-              signal: activeBrowserTask.abortController.signal
-            });
-
-      return {
-        ...state,
-        used: true,
-        text: result.text,
-        steps: result.steps,
-        hitStepLimit: result.hitStepLimit
-      };
-    } catch (error) {
-      if (isAbortError(error)) {
-        return {
-          ...state,
-          error: "Browser session cancelled by user."
-        };
-      }
-      return {
-        ...state,
-        error: String(error?.message || error)
-      };
-    } finally {
-      this.activeBrowserTasks.clear(activeBrowserTask);
-    }
-  }
-
-  async runModelRequestedCodeTask({
-    settings,
-    task,
-    cwd: cwdOverride,
-    guildId,
-    channelId = null,
-    userId = null,
-    source = "reply_message"
-  }) {
-    if (!isDevTaskEnabled(settings)) {
-      return { text: "", error: "code_agent_disabled" };
-    }
-    if (userId && !isCodeAgentUserAllowed(userId, settings)) {
-      return { text: "", blockedByPermission: true };
-    }
-
-    const codeAgentConfig = resolveCodeAgentConfig(settings, cwdOverride);
-    const maxParallel = codeAgentConfig.maxParallelTasks;
-    if (getActiveCodeAgentTaskCount() >= maxParallel) {
-      return { text: "", blockedByParallelLimit: true };
-    }
-
-    const maxPerHour = codeAgentConfig.maxTasksPerHour;
-    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const used = this.store.countActionsSince("code_agent_call", since1h);
-    if (used >= maxPerHour) {
-      return { text: "", blockedByBudget: true };
-    }
-
-    const {
-      cwd,
-      provider,
-      model,
-      codexModel,
-      maxTurns,
-      timeoutMs,
-      maxBufferBytes
-    } = codeAgentConfig;
-
-    try {
-      const result = await runCodeAgent({
-        instruction: task,
-        cwd,
-        provider,
-        maxTurns,
-        timeoutMs,
-        maxBufferBytes,
-        model,
-        codexModel,
-        openai: this.llm?.openai || null,
-        trace: {
-          guildId,
-          channelId,
-          userId,
-          source
-        },
-        store: this.store
-      });
-
-      return {
-        text: result.text,
-        isError: result.isError,
-        costUsd: result.costUsd,
-        error: result.isError ? result.errorMessage : null
-      };
-    } catch (error) {
-      return {
-        text: "",
-        error: String(error?.message || error)
-      };
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Sub-agent session factories for multi-turn interactive mode
-  // ---------------------------------------------------------------------------
-
-  createCodeAgentSession({
-    settings,
-    cwd: cwdOverride,
-    guildId,
-    channelId = null,
-    userId = null,
-    source = "reply_session"
-  }) {
-    if (!isDevTaskEnabled(settings)) return null;
-    if (userId && !isCodeAgentUserAllowed(userId, settings)) return null;
-
-    const codeAgentConfig = resolveCodeAgentConfig(settings, cwdOverride);
-    const maxParallel = codeAgentConfig.maxParallelTasks;
-    if (getActiveCodeAgentTaskCount() >= maxParallel) return null;
-
-    // Enforce hourly task budget (same check as tryRunCodeAgentTask)
-    const maxPerHour = codeAgentConfig.maxTasksPerHour;
-    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const used = this.store.countActionsSince("code_agent_call", since1h);
-    if (used >= maxPerHour) return null;
-
-    const {
-      cwd,
-      provider,
-      model,
-      codexModel,
-      maxTurns,
-      timeoutMs,
-      maxBufferBytes
-    } = codeAgentConfig;
-
-    const scopeKey = `${guildId || "dm"}:${channelId || "dm"}`;
-    try {
-      return createCodeAgentSessionRuntime({
-        scopeKey,
-        cwd,
-        provider,
-        model,
-        codexModel,
-        maxTurns,
-        timeoutMs,
-        maxBufferBytes,
-        trace: { guildId, channelId, userId, source },
-        store: this.store,
-        openai: this.llm?.openai || null
-      });
-    } catch {
-      return null;
-    }
-  }
-
-  createBrowserAgentSession({
-    settings,
-    guildId,
-    channelId = null,
-    userId = null,
-    source = "reply_session"
-  }) {
-    if (!this.browserManager) return null;
-    const browserTaskConfig = getResolvedBrowserTaskConfig(settings);
-    if (browserTaskConfig.runtime === "openai_computer_use") return null;
-    const maxSteps = clamp(Number(browserTaskConfig.maxStepsPerTask) || 15, 1, 30);
-    const stepTimeoutMs = clamp(Number(browserTaskConfig.stepTimeoutMs) || 30_000, 5_000, 120_000);
-
-    const scopeKey = `${guildId || "dm"}:${channelId || "dm"}`;
-    const sessionKey = `session:${scopeKey}:${Date.now()}`;
-    return new BrowserAgentSession({
-      scopeKey,
-      llm: this.llm,
-      browserManager: this.browserManager,
-      store: this.store,
-      sessionKey,
-      provider: browserTaskConfig.localAgent.provider,
-      model: browserTaskConfig.localAgent.model,
-      maxSteps,
-      stepTimeoutMs,
-      trace: { guildId, channelId, userId, source }
-    });
-  }
-
-  /** Build the subAgentSessions runtime adapter for the reply tool pipeline. */
-  buildSubAgentSessionsRuntime() {
-    return {
-      manager: this.subAgentSessions,
-      createCodeSession: (opts) => this.createCodeAgentSession(opts),
-      createBrowserSession: (opts) => this.createBrowserAgentSession(opts)
-    };
-  }
-
-  mergeImageInputs({ baseInputs = [], extraInputs = [], maxInputs = MAX_MODEL_IMAGE_INPUTS } = {}) {
-    const merged = [];
-    const seen = new Set();
-    const pushUnique = (input) => {
-      if (!input || typeof input !== "object") return;
-      const url = String(input?.url || "").trim();
-      const mediaType = String(input?.mediaType || input?.contentType || "").trim().toLowerCase();
-      const inlineData = String(input?.dataBase64 || "").trim();
-      const key = url
-        ? `url:${url}`
-        : inlineData
-          ? `inline:${mediaType}:${inlineData.slice(0, 80)}`
-          : "";
-      if (!key || seen.has(key)) return;
-      seen.add(key);
-      merged.push(input);
-    };
-
-    for (const input of Array.isArray(baseInputs) ? baseInputs : []) {
-      if (merged.length >= maxInputs) break;
-      pushUnique(input);
-    }
-    for (const input of Array.isArray(extraInputs) ? extraInputs : []) {
-      if (merged.length >= maxInputs) break;
-      pushUnique(input);
-    }
-
-    return merged.slice(0, maxInputs);
-  }
-
-  async loadPromptMemorySlice({
-    settings,
-    userId = null,
-    guildId,
-    channelId = null,
-    queryText = "",
-    trace = {},
-    source = "prompt_memory_slice"
-  }) {
-    return await loadPromptMemorySliceFromMemory({
-      settings,
-      memory: this.memory,
-      userId,
-      guildId,
-      channelId,
-      queryText,
-      trace,
-      source,
-      onError: ({ error, context }) => {
-        this.store.logAction({
-          kind: "bot_error",
-          guildId: context.guildId,
-          channelId: context.channelId,
-          userId: context.userId,
-          content: `${context.source}: ${String(error?.message || error)}`
-        });
-      }
-    });
-  }
-
-  buildMediaMemoryFacts({ userFacts = [], relevantFacts = [], maxItems = 5 } = {}) {
-    const merged = [
-      ...(Array.isArray(userFacts) ? userFacts : []),
-      ...(Array.isArray(relevantFacts) ? relevantFacts : [])
-    ];
-    const max = clamp(Math.floor(Number(maxItems) || 5), 1, 8);
-    return collectMemoryFactHints(merged, max);
-  }
-
-  getScopedFallbackFacts({ guildId, channelId = null, limit = 8 }) {
-    const normalizedGuildId = String(guildId || "").trim();
-    if (!normalizedGuildId || typeof this.store?.getFactsForScope !== "function") return [];
-
-    const boundedLimit = clamp(Math.floor(Number(limit) || 8), 1, 24);
-    const candidateLimit = clamp(boundedLimit * 4, boundedLimit, 120);
-    const rows = this.store.getFactsForScope({
-      guildId: normalizedGuildId,
-      limit: candidateLimit
-    });
-    if (!rows.length) return [];
-
-    const normalizedChannelId = String(channelId || "").trim();
-    if (!normalizedChannelId) return rows.slice(0, boundedLimit);
-
-    const sameChannel = [];
-    const noChannel = [];
-    const otherChannel = [];
-    for (const row of rows) {
-      const rowChannelId = String(row?.channel_id || "").trim();
-      if (rowChannelId && rowChannelId === normalizedChannelId) {
-        sameChannel.push(row);
-        continue;
-      }
-      if (!rowChannelId) {
-        noChannel.push(row);
-        continue;
-      }
-      otherChannel.push(row);
-    }
-
-    return [...sameChannel, ...noChannel, ...otherChannel].slice(0, boundedLimit);
-  }
-
-  async loadRelevantMemoryFacts({
-    settings,
-    guildId,
-    channelId = null,
-    queryText = "",
-    trace = {},
-    limit = 8,
-    fallbackWhenNoMatch = true
-  }: {
-    settings: {
-      memory?: {
-        enabled?: boolean;
-      };
-    } & Record<string, unknown>;
-    guildId: string;
-    channelId?: string | null;
-    queryText?: string;
-    trace?: MemoryTrace;
-    limit?: number;
-    fallbackWhenNoMatch?: boolean;
-  }) {
-    if (!settings?.memory?.enabled || !this.memory?.searchDurableFacts) return [];
-    const normalizedGuildId = String(guildId || "").trim();
-    if (!normalizedGuildId) return [];
-    const normalizedChannelId = String(channelId || "").trim() || null;
-    const boundedLimit = clamp(Math.floor(Number(limit) || 8), 1, 24);
-    const normalizedQuery = String(queryText || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 320);
-    if (!normalizedQuery) {
-      return this.getScopedFallbackFacts({
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        limit: boundedLimit
-      });
-    }
-
-    try {
-      const results = await this.memory.searchDurableFacts({
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        queryText: normalizedQuery,
-        settings,
-        trace: {
-          ...trace,
-          source: trace?.source || "memory_context"
-        },
-        limit: boundedLimit
-      });
-      if (results.length || !fallbackWhenNoMatch) return results;
-      return this.getScopedFallbackFacts({
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        limit: boundedLimit
-      });
-    } catch (error) {
-      this.store.logAction({
-        kind: "bot_error",
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        content: `memory_context: ${String(error?.message || error)}`,
-        metadata: {
-          queryText: normalizedQuery.slice(0, 120),
-          source: trace?.source || "memory_context"
-        }
-      });
-      return this.getScopedFallbackFacts({
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        limit: boundedLimit
-      });
-    }
-  }
-
-  async maybeAttachGeneratedImage({ settings, text, prompt, variant = "simple", trace }) {
-    const payload = { content: text };
-    const ready = this.isImageGenerationReady(settings, variant);
-    if (!ready) {
-      return {
-        payload,
-        imageUsed: false,
-        variant: null,
-        blockedByBudget: false,
-        blockedByCapability: true,
-        budget: this.getImageBudgetState(settings)
-      };
-    }
-
-    const budget = this.getImageBudgetState(settings);
-    if (!budget.canGenerate) {
-      return {
-        payload,
-        imageUsed: false,
-        variant: null,
-        blockedByBudget: true,
-        blockedByCapability: false,
-        budget
-      };
-    }
-
-    try {
-      const image = await this.llm.generateImage({
-        settings,
-        prompt,
-        variant,
-        trace
-      });
-      const withImage = this.buildMessagePayloadWithImage(text, image);
-      return {
-        payload: withImage.payload,
-        imageUsed: withImage.imageUsed,
-        variant: image.variant || variant,
-        blockedByBudget: false,
-        blockedByCapability: false,
-        budget
-      };
-    } catch {
-      return {
-        payload,
-        imageUsed: false,
-        variant: null,
-        blockedByBudget: false,
-        blockedByCapability: false,
-        budget
-      };
-    }
-  }
-
-  async maybeAttachGeneratedVideo({ settings, text, prompt, trace }) {
-    const payload = { content: text };
-    const ready = this.isVideoGenerationReady(settings);
-    if (!ready) {
-      return {
-        payload,
-        videoUsed: false,
-        blockedByBudget: false,
-        blockedByCapability: true,
-        budget: this.getVideoGenerationBudgetState(settings)
-      };
-    }
-
-    const budget = this.getVideoGenerationBudgetState(settings);
-    if (!budget.canGenerate) {
-      return {
-        payload,
-        videoUsed: false,
-        blockedByBudget: true,
-        blockedByCapability: false,
-        budget
-      };
-    }
-
-    try {
-      const video = await this.llm.generateVideo({
-        settings,
-        prompt,
-        trace
-      });
-      const withVideo = this.buildMessagePayloadWithVideo(text, video);
-      return {
-        payload: withVideo.payload,
-        videoUsed: withVideo.videoUsed,
-        blockedByBudget: false,
-        blockedByCapability: false,
-        budget
-      };
-    } catch {
-      return {
-        payload,
-        videoUsed: false,
-        blockedByBudget: false,
-        blockedByCapability: false,
-        budget
-      };
-    }
-  }
-
-  async maybeAttachReplyGif({ settings, text, query, trace }) {
-    const payload = { content: text };
-    const budget = this.getGifBudgetState(settings);
-    const normalizedQuery = normalizeDirectiveText(query, MAX_GIF_QUERY_LEN);
-    const discovery = getDiscoverySettings(settings);
-
-    if (!discovery.allowReplyGifs) {
-      return {
-        payload,
-        gifUsed: false,
-        blockedByBudget: false,
-        blockedByConfiguration: true,
-        budget
-      };
-    }
-
-    if (!normalizedQuery) {
-      return {
-        payload,
-        gifUsed: false,
-        blockedByBudget: false,
-        blockedByConfiguration: false,
-        budget
-      };
-    }
-
-    if (!this.gifs?.isConfigured?.()) {
-      return {
-        payload,
-        gifUsed: false,
-        blockedByBudget: false,
-        blockedByConfiguration: true,
-        budget
-      };
-    }
-
-    if (!budget.canFetch) {
-      return {
-        payload,
-        gifUsed: false,
-        blockedByBudget: true,
-        blockedByConfiguration: false,
-        budget
-      };
-    }
-
-    try {
-      const gif = await this.gifs.pickGif({
-        query: normalizedQuery,
-        trace
-      });
-      if (!gif?.url) {
-        return {
-          payload,
-          gifUsed: false,
-          blockedByBudget: false,
-          blockedByConfiguration: false,
-          budget
-        };
-      }
-
-      const withGif = this.buildMessagePayloadWithGif(text, gif.url);
-      return {
-        payload: withGif.payload,
-        gifUsed: withGif.gifUsed,
-        blockedByBudget: false,
-        blockedByConfiguration: false,
-        budget
-      };
-    } catch {
-      return {
-        payload,
-        gifUsed: false,
-        blockedByBudget: false,
-        blockedByConfiguration: false,
-        budget
-      };
-    }
-  }
-
-  buildMessagePayloadWithImage(text, image) {
-    if (image.imageBuffer) {
-      return {
-        payload: {
-          content: text,
-          files: [{ attachment: image.imageBuffer, name: `clanker-${Date.now()}.png` }]
-        },
-        imageUsed: true
-      };
-    }
-
-    if (image.imageUrl) {
-      const normalizedUrl = String(image.imageUrl || "").trim();
-      const trimmedText = String(text || "").trim();
-      const content = trimmedText ? `${trimmedText}\n${normalizedUrl}` : normalizedUrl;
-      return {
-        payload: { content },
-        imageUsed: true
-      };
-    }
-
-    return {
-      payload: { content: text },
-      imageUsed: false
-    };
-  }
-
-  buildMessagePayloadWithVideo(text, video) {
-    const videoUrl = String(video?.videoUrl || "").trim();
-    if (!videoUrl) {
-      return {
-        payload: { content: text },
-        videoUsed: false
-      };
-    }
-
-    const trimmedText = String(text || "").trim();
-    const content = trimmedText ? `${trimmedText}\n${videoUrl}` : videoUrl;
-    return {
-      payload: { content },
-      videoUsed: true
-    };
-  }
-
-  buildMessagePayloadWithGif(text, gifUrl) {
-    const normalizedUrl = String(gifUrl || "").trim();
-    if (!normalizedUrl) {
-      return {
-        payload: { content: text },
-        gifUsed: false
-      };
-    }
-
-    const trimmedText = String(text || "").trim();
-    const content = trimmedText ? `${trimmedText}\n${normalizedUrl}` : normalizedUrl;
-    return {
-      payload: { content },
-      gifUsed: true
-    };
-  }
-
-  isUserBlocked(settings, userId) {
-    const blockedUserIds = [...getReplyPermissions(settings).blockedUserIds].map((value) => String(value));
-    return blockedUserIds.includes(String(userId));
-  }
-
-  isChannelAllowed(settings, channelId) {
-    const id = String(channelId);
-    const permissions = getReplyPermissions(settings);
-    const blockedChannelIds = [...permissions.blockedChannelIds].map((value) => String(value));
-    const allowedChannelIds = [...permissions.allowedChannelIds].map((value) => String(value));
-
-    if (blockedChannelIds.includes(id)) {
-      return false;
-    }
-
-    const allowList = allowedChannelIds;
-    if (allowList.length === 0) return true;
-
-    return allowList.includes(id);
-  }
-
   isNonPrivateReplyEligibleChannel(channel) {
     if (!channel || typeof channel !== "object") return false;
     if (!channel.isTextBased?.() || typeof channel.send !== "function") return false;
@@ -3818,84 +1896,10 @@ export class ClankerBot {
     return true;
   }
 
-  isReplyChannel(settings, channelId) {
-    const id = String(channelId);
-    const replyChannelIds = [...getReplyPermissions(settings).replyChannelIds].map((value) => String(value));
-    if (!replyChannelIds.length) return false;
-    return replyChannelIds.includes(id);
-  }
-
-  isDiscoveryChannel(settings, channelId) {
-    const id = String(channelId);
-    const discoveryChannelIds = [...getDiscoverySettings(settings).channelIds].map((value) => String(value));
-    return discoveryChannelIds.includes(id);
-  }
-
   isDirectlyAddressed(_settings, message) {
     const mentioned = message.mentions?.users?.has(this.client.user.id);
     const isReplyToBot = message.mentions?.repliedUser?.id === this.client.user.id;
     return Boolean(mentioned || isReplyToBot);
-  }
-
-  hasBotMessageInRecentWindow({
-    recentMessages,
-    windowSize = UNSOLICITED_REPLY_CONTEXT_WINDOW,
-    triggerMessageId = null
-  }) {
-    return hasBotMessageInRecentWindowForReplyAdmission({
-      botUserId: this.client.user?.id,
-      recentMessages,
-      windowSize,
-      triggerMessageId
-    });
-  }
-
-  hasStartupFollowupAfterMessage({
-    messages,
-    messageIndex,
-    triggerMessageId,
-    windowSize = UNSOLICITED_REPLY_CONTEXT_WINDOW
-  }) {
-    return hasStartupFollowupAfterMessageForReplyAdmission({
-      botUserId: this.client.user?.id,
-      messages,
-      messageIndex,
-      triggerMessageId,
-      windowSize
-    });
-  }
-
-  shouldAttemptReplyDecision({
-    settings,
-    recentMessages,
-    addressSignal,
-    forceRespond = false,
-    forceDecisionLoop = false,
-    triggerMessageId = null
-  }) {
-    return shouldAttemptReplyDecisionForReplyAdmission({
-      botUserId: this.client.user?.id,
-      settings,
-      recentMessages,
-      addressSignal,
-      forceRespond,
-      forceDecisionLoop,
-      triggerMessageId,
-      windowSize: UNSOLICITED_REPLY_CONTEXT_WINDOW
-    });
-  }
-
-  async getReplyAddressSignal(settings, message, recentMessages = []) {
-    return await getReplyAddressSignalForReplyAdmission(
-      {
-        botUserId: String(this.client.user?.id || "").trim(),
-        isDirectlyAddressed: (runtimeSettings, runtimeMessage) =>
-          this.isDirectlyAddressed(runtimeSettings, runtimeMessage)
-      },
-      settings,
-      message,
-      recentMessages
-    );
   }
 
   async runStartupTasks() {
@@ -3910,17 +1914,31 @@ export class ClankerBot {
         store: this.store,
         getStartupScanChannels: (runtimeSettings) => this.getStartupScanChannels(runtimeSettings),
         hydrateRecentMessages: (channel, limit) => this.hydrateRecentMessages(channel, limit),
-        isChannelAllowed: (runtimeSettings, channelId) => this.isChannelAllowed(runtimeSettings, channelId),
-        isUserBlocked: (runtimeSettings, userId) => this.isUserBlocked(runtimeSettings, userId),
+        isChannelAllowed: (runtimeSettings, channelId) =>
+          isChannelAllowedForPermissions(runtimeSettings, String(channelId)),
+        isUserBlocked: (runtimeSettings, userId) => isUserBlockedForPermissions(runtimeSettings, String(userId)),
         getReplyAddressSignal: (runtimeSettings, message, recentMessages) =>
-          this.getReplyAddressSignal(runtimeSettings, message, recentMessages),
-        hasStartupFollowupAfterMessage: (payload) => this.hasStartupFollowupAfterMessage(payload),
+          getReplyAddressSignalForReplyAdmission(
+            {
+              botUserId: this.toBotContext().botUserId,
+              isDirectlyAddressed: (resolvedSettings, resolvedMessage) =>
+                this.isDirectlyAddressed(resolvedSettings, resolvedMessage)
+            },
+            runtimeSettings,
+            message,
+            recentMessages
+          ),
+        hasStartupFollowupAfterMessage: (payload) =>
+          hasStartupFollowupAfterMessageForReplyAdmission({
+            botUserId: this.client.user?.id,
+            ...payload
+          }),
         enqueueReplyJob: (payload) => this.enqueueReplyJob(payload)
       },
       settings
     );
-    await this.maybeRunDiscoveryCycle({ startup: true });
-    await this.maybeRunAutomationCycle();
+    await maybeRunDiscoveryCycleForDiscoveryEngine(this.toDiscoveryEngineRuntime(), { startup: true });
+    await maybeRunAutomationCycleForAutomationEngine(this.toAutomationEngineRuntime());
 
     // Catch up on any missed reflections from past days
     const startupSettings = this.store.getSettings();
@@ -3956,470 +1974,6 @@ export class ClankerBot {
     }
   }
 
-  async maybeRunAutomationCycle() {
-    const settings = this.store.getSettings();
-    if (!getAutomationsSettings(settings).enabled) return;
-    if (this.automationCycleRunning) return;
-    this.automationCycleRunning = true;
-
-    try {
-      const dueRows = this.store.claimDueAutomations({
-        now: new Date().toISOString(),
-        limit: MAX_AUTOMATION_RUNS_PER_TICK
-      });
-      if (!dueRows.length) return;
-
-      for (const row of dueRows) {
-        await this.runAutomationJob(row);
-      }
-    } finally {
-      this.automationCycleRunning = false;
-    }
-  }
-
-  async runAutomationJob(automation) {
-    const startedAt = new Date().toISOString();
-    const guildId = String(automation?.guild_id || "").trim();
-    const channelId = String(automation?.channel_id || "").trim();
-    const automationId = Number(automation?.id || 0);
-    if (!guildId || !channelId || !Number.isInteger(automationId) || automationId <= 0) return;
-
-    const settings = this.store.getSettings();
-    const permissions = getReplyPermissions(settings);
-    const botName = getBotName(settings);
-    let status = "active";
-    let nextRunAt = null;
-    let runStatus = "ok";
-    let summary = "";
-    let errorText = "";
-    let sentMessageId = null;
-    let retrySoon = false;
-
-    try {
-      if (!this.isChannelAllowed(settings, channelId)) {
-        runStatus = "error";
-        errorText = "channel blocked by current settings";
-      } else if (!this.canSendMessage(permissions.maxMessagesPerHour)) {
-        runStatus = "skipped";
-        summary = "hourly message cap hit; retrying soon";
-        retrySoon = true;
-      } else if (!this.canTalkNow(settings)) {
-        runStatus = "skipped";
-        summary = "message cooldown active; retrying soon";
-        retrySoon = true;
-      } else {
-        const channel = this.client.channels.cache.get(channelId);
-        if (!isSendableChannel(channel)) {
-          runStatus = "error";
-          errorText = "channel unavailable";
-        } else {
-          const generationResult = await this.generateAutomationPayload({
-            automation,
-            settings,
-            channel
-          });
-
-          if (generationResult.skip) {
-            runStatus = "skipped";
-            summary = generationResult.summary || "model skipped this run";
-          } else {
-            await channel.sendTyping();
-            await sleep(this.getSimulatedTypingDelayMs(350, 1100));
-            const autoChunks = splitDiscordMessage(generationResult.payload.content);
-            const autoFirstPayload = { ...generationResult.payload, content: autoChunks[0] };
-            const sent = await channel.send(autoFirstPayload);
-            for (let i = 1; i < autoChunks.length; i++) {
-              await channel.send({ content: autoChunks[i] });
-            }
-            sentMessageId = sent.id;
-            summary = generationResult.summary || "posted";
-            this.markSpoke();
-            this.store.recordMessage({
-              messageId: sent.id,
-              createdAt: sent.createdTimestamp,
-              guildId: sent.guildId,
-              channelId: sent.channelId,
-              authorId: this.client.user.id,
-              authorName: botName,
-              isBot: true,
-              content: this.composeMessageContentForHistory(sent, generationResult.text),
-              referencedMessageId: null
-            });
-            this.store.logAction({
-              kind: "automation_post",
-              guildId: sent.guildId,
-              channelId: sent.channelId,
-              messageId: sent.id,
-              userId: this.client.user.id,
-              content: generationResult.text,
-              metadata: {
-                automationId,
-                media: generationResult.media || null,
-                llm: generationResult.llm || null
-              }
-            });
-          }
-        }
-      }
-    } catch (error) {
-      runStatus = "error";
-      errorText = String(error?.message || error);
-    }
-
-    if (runStatus === "error") {
-      status = "paused";
-      nextRunAt = null;
-    } else if (retrySoon) {
-      nextRunAt = new Date(Date.now() + 5 * 60_000).toISOString();
-    } else {
-      nextRunAt = resolveFollowingNextRunAt({
-        schedule: automation.schedule,
-        previousNextRunAt: automation.next_run_at,
-        runFinishedMs: Date.now()
-      });
-      if (!nextRunAt) {
-        status = "paused";
-      }
-    }
-
-    const finishedAt = new Date().toISOString();
-    const finalized = this.store.finalizeAutomationRun({
-      automationId,
-      guildId,
-      status,
-      nextRunAt,
-      lastRunAt: finishedAt,
-      lastError: errorText || null,
-      lastResult: summary || (runStatus === "error" ? "error" : runStatus)
-    });
-    this.store.recordAutomationRun({
-      automationId,
-      startedAt,
-      finishedAt,
-      status: runStatus,
-      summary: summary || null,
-      error: errorText || null,
-      messageId: sentMessageId,
-      metadata: {
-        nextRunAt,
-        statusAfterRun: finalized?.status || status
-      }
-    });
-
-    this.store.logAction({
-      kind: runStatus === "error" ? "automation_error" : "automation_run",
-      guildId,
-      channelId,
-      messageId: sentMessageId,
-      userId: this.client.user?.id || null,
-      content:
-        runStatus === "error"
-          ? `automation #${automationId}: ${errorText || "run failed"}`
-          : `automation #${automationId}: ${summary || runStatus}`,
-      metadata: {
-        automationId,
-        runStatus,
-        statusAfterRun: finalized?.status || status,
-        nextRunAt
-      }
-    });
-  }
-
-  async generateAutomationPayload({ automation, settings, channel }) {
-    const memory = getMemorySettings(settings);
-    const discovery = getDiscoverySettings(settings);
-    if (!this.llm?.generate) {
-      const fallback = sanitizeBotText(String(automation?.instruction || "scheduled task"), 1200);
-      return {
-        skip: false,
-        summary: fallback.slice(0, 220),
-        text: fallback,
-        payload: { content: fallback },
-        media: null,
-        llm: null
-      };
-    }
-
-    const recentMessages = this.store.getRecentMessages(channel.id, memory.promptSlice.maxRecentMessages);
-    const automationOwnerId = String(automation?.created_by_user_id || "").trim() || null;
-    const automationQuery = `${String(automation?.title || "")} ${String(automation?.instruction || "")}`
-      .replace(/\s+/g, " ")
-      .trim();
-    const memorySlice = await this.loadPromptMemorySlice({
-      settings,
-      userId: automationOwnerId,
-      guildId: automation.guild_id,
-      channelId: automation.channel_id,
-      queryText: automationQuery,
-      trace: {
-        guildId: automation.guild_id,
-        channelId: automation.channel_id,
-        userId: automationOwnerId
-      },
-      source: "automation_run"
-    });
-
-    const imageBudget = this.getImageBudgetState(settings);
-    const videoBudget = this.getVideoGenerationBudgetState(settings);
-    const gifBudget = this.getGifBudgetState(settings);
-    const mediaCapabilities = this.getMediaGenerationCapabilities(settings);
-    const mediaPromptLimit = resolveMaxMediaPromptLen(settings);
-    const automationMediaMemoryFacts = this.buildMediaMemoryFacts({
-      userFacts: memorySlice.userFacts,
-      relevantFacts: memorySlice.relevantFacts
-    });
-    const memoryLookup = this.buildMemoryLookupContext({ settings });
-    const promptBase = {
-      instruction: automation.instruction,
-      channelName: channel.name || "channel",
-      recentMessages,
-      relevantMessages: memorySlice.relevantMessages,
-      userFacts: memorySlice.userFacts,
-      relevantFacts: memorySlice.relevantFacts,
-      allowSimpleImagePosts:
-        discovery.allowImagePosts && mediaCapabilities.simpleImageReady && imageBudget.canGenerate,
-      allowComplexImagePosts:
-        discovery.allowImagePosts && mediaCapabilities.complexImageReady && imageBudget.canGenerate,
-      allowVideoPosts:
-        discovery.allowVideoPosts && mediaCapabilities.videoReady && videoBudget.canGenerate,
-      allowGifs: discovery.allowReplyGifs && this.gifs?.isConfigured?.() && gifBudget.canFetch,
-      remainingImages: imageBudget.remaining,
-      remainingVideos: videoBudget.remaining,
-      remainingGifs: gifBudget.remaining,
-      maxMediaPromptChars: mediaPromptLimit,
-      mediaPromptCraftGuidance: getMediaPromptCraftGuidance(settings)
-    };
-    const userPrompt = buildAutomationPrompt({
-      ...promptBase,
-      memoryLookup,
-      allowMemoryLookupDirective: false
-    });
-    const automationSystemPrompt = buildSystemPrompt(settings);
-
-    const automationTrace = {
-      guildId: automation.guild_id,
-      channelId: automation.channel_id,
-      userId: this.client.user?.id || null,
-      source: "automation_run",
-      event: `automation:${automation.id}`
-    };
-    const automationReplyTools = buildReplyToolSet(settings, {
-      webSearchAvailable: false,
-      webScrapeAvailable: false,
-      browserBrowseAvailable: false,
-      memoryAvailable: memory.enabled,
-      adaptiveDirectivesAvailable: false,
-      imageLookupAvailable: false,
-      openArticleAvailable: false
-    });
-    const automationToolRuntime: ReplyToolRuntime = {
-      search: this.search,
-      memory: this.memory,
-      store: this.store
-    };
-    const automationToolContext: ReplyToolContext = {
-      settings,
-      guildId: automation.guild_id,
-      channelId: automation.channel_id,
-      userId: this.client.user?.id || "",
-      sourceMessageId: `automation:${automation.id}`,
-      sourceText: String(automation.instruction || ""),
-      botUserId: this.client.user?.id || undefined,
-      trace: automationTrace
-    };
-
-    let automationContextMessages: Array<{ role: string; content: unknown }> = [];
-    let generation = await this.llm.generate({
-      settings,
-      systemPrompt: automationSystemPrompt,
-      userPrompt,
-      contextMessages: automationContextMessages,
-      jsonSchema: automationReplyTools.length ? "" : REPLY_OUTPUT_JSON_SCHEMA,
-      tools: automationReplyTools,
-      trace: automationTrace
-    });
-
-    const AUTOMATION_TOOL_LOOP_MAX_STEPS = 2;
-    const AUTOMATION_TOOL_LOOP_MAX_CALLS = 3;
-    let automationToolLoopSteps = 0;
-    let automationTotalToolCalls = 0;
-
-    while (
-      generation.toolCalls?.length > 0 &&
-      automationToolLoopSteps < AUTOMATION_TOOL_LOOP_MAX_STEPS &&
-      automationTotalToolCalls < AUTOMATION_TOOL_LOOP_MAX_CALLS
-    ) {
-      const assistantContent = generation.rawContent || [
-        { type: "text", text: generation.text || "" }
-      ];
-      automationContextMessages = [
-        ...automationContextMessages,
-        { role: "user", content: userPrompt },
-        { role: "assistant", content: assistantContent }
-      ];
-
-      const toolResultMessages: Array<{ type: string; tool_use_id: string; content: string }> = [];
-      for (const toolCall of generation.toolCalls) {
-        if (automationTotalToolCalls >= AUTOMATION_TOOL_LOOP_MAX_CALLS) break;
-        automationTotalToolCalls += 1;
-
-        const result = await executeReplyTool(
-          toolCall.name,
-          toolCall.input as Record<string, unknown>,
-          automationToolRuntime,
-          automationToolContext
-        );
-
-        toolResultMessages.push({
-          type: "tool_result",
-          tool_use_id: toolCall.id,
-          content: result.content
-        });
-      }
-
-      automationContextMessages = [
-        ...automationContextMessages,
-        { role: "user", content: toolResultMessages }
-      ];
-
-      generation = await this.llm.generate({
-        settings,
-        systemPrompt: automationSystemPrompt,
-        userPrompt: "",
-        contextMessages: automationContextMessages,
-        jsonSchema: "",
-        tools: automationReplyTools,
-        trace: {
-          ...automationTrace,
-          event: `automation:${automation.id}:tool_loop:${automationToolLoopSteps + 1}`
-        }
-      });
-      automationToolLoopSteps += 1;
-    }
-
-    const directive = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
-
-    let finalText = sanitizeBotText(normalizeSkipSentinel(directive.text || ""), 1200);
-    if (!finalText) {
-      finalText = sanitizeBotText(String(automation.instruction || "scheduled task"), 1200);
-    }
-
-    if (finalText === "[SKIP]") {
-      return {
-        skip: true,
-        summary: "model skipped run",
-        text: "",
-        payload: null,
-        media: null,
-        llm: {
-          provider: generation.provider,
-          model: generation.model,
-          usage: generation.usage,
-          costUsd: generation.costUsd
-        }
-      };
-    }
-
-    const mediaDirective = pickReplyMediaDirective(directive);
-    let payload = { content: finalText };
-    let media = null;
-
-    if (mediaDirective?.type === "gif" && directive.gifQuery) {
-      const gifResult = await this.maybeAttachReplyGif({
-        settings,
-        text: finalText,
-        query: directive.gifQuery,
-        trace: {
-          guildId: automation.guild_id,
-          channelId: automation.channel_id,
-          userId: this.client.user?.id || null,
-          source: "automation_run"
-        }
-      });
-      payload = gifResult.payload;
-      if (gifResult.gifUsed) media = { type: "gif" };
-    }
-
-    if (mediaDirective?.type === "image_simple" && directive.imagePrompt) {
-      const imageResult = await this.maybeAttachGeneratedImage({
-        settings,
-        text: finalText,
-        prompt: composeReplyImagePrompt(
-          directive.imagePrompt,
-          finalText,
-          mediaPromptLimit,
-          automationMediaMemoryFacts
-        ),
-        variant: "simple",
-        trace: {
-          guildId: automation.guild_id,
-          channelId: automation.channel_id,
-          userId: this.client.user?.id || null,
-          source: "automation_run"
-        }
-      });
-      payload = imageResult.payload;
-      if (imageResult.imageUsed) media = { type: "image_simple" };
-    }
-
-    if (mediaDirective?.type === "image_complex" && directive.complexImagePrompt) {
-      const imageResult = await this.maybeAttachGeneratedImage({
-        settings,
-        text: finalText,
-        prompt: composeReplyImagePrompt(
-          directive.complexImagePrompt,
-          finalText,
-          mediaPromptLimit,
-          automationMediaMemoryFacts
-        ),
-        variant: "complex",
-        trace: {
-          guildId: automation.guild_id,
-          channelId: automation.channel_id,
-          userId: this.client.user?.id || null,
-          source: "automation_run"
-        }
-      });
-      payload = imageResult.payload;
-      if (imageResult.imageUsed) media = { type: "image_complex" };
-    }
-
-    if (mediaDirective?.type === "video" && directive.videoPrompt) {
-      const videoResult = await this.maybeAttachGeneratedVideo({
-        settings,
-        text: finalText,
-        prompt: composeReplyVideoPrompt(
-          directive.videoPrompt,
-          finalText,
-          mediaPromptLimit,
-          automationMediaMemoryFacts
-        ),
-        trace: {
-          guildId: automation.guild_id,
-          channelId: automation.channel_id,
-          userId: this.client.user?.id || null,
-          source: "automation_run"
-        }
-      });
-      payload = videoResult.payload;
-      if (videoResult.videoUsed) media = { type: "video" };
-    }
-
-    return {
-      skip: false,
-      summary: finalText.slice(0, 220),
-      text: finalText,
-      payload,
-      media,
-      llm: {
-        provider: generation.provider,
-        model: generation.model,
-        usage: generation.usage,
-        costUsd: generation.costUsd
-      }
-    };
-  }
-
   getStartupScanChannels(settings) {
     const permissions = getReplyPermissions(settings);
     const discovery = getDiscoverySettings(settings);
@@ -4449,7 +2003,7 @@ export class ClankerBot {
 
       for (const channel of guildChannels) {
         if (seen.has(channel.id)) continue;
-        if (!this.isChannelAllowed(settings, channel.id)) continue;
+        if (!isChannelAllowedForPermissions(settings, String(channel.id))) continue;
         seen.add(channel.id);
         channels.push(channel);
       }
@@ -4472,7 +2026,10 @@ export class ClankerBot {
           authorId: message.author?.id || "unknown",
           authorName: message.member?.displayName || message.author?.username || "unknown",
           isBot: Boolean(message.author?.bot),
-          content: this.composeMessageContentForHistory(message, String(message.content || "").trim()),
+          content: composeMessageContentForHistoryForMessageHistory(
+            message as Parameters<typeof composeMessageContentForHistoryForMessageHistory>[0],
+            String(message.content || "").trim()
+          ),
           referencedMessageId: message.reference?.messageId
         });
       }
@@ -4481,647 +2038,6 @@ export class ClankerBot {
     } catch {
       return [];
     }
-  }
-
-  async maybeRunTextThoughtLoopCycle() {
-    if (this.textThoughtLoopRunning) return;
-    this.textThoughtLoopRunning = true;
-
-    try {
-      const settings = this.store.getSettings();
-      const textThoughtLoop = getTextInitiativeSettings(settings);
-      const permissions = getReplyPermissions(settings);
-      if (!textThoughtLoop.enabled) return;
-      if (textThoughtLoop.maxThoughtsPerDay <= 0) return;
-      if (!this.canSendMessage(permissions.maxMessagesPerHour)) return;
-      if (!this.canTalkNow(settings)) return;
-
-      const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      const thoughts24h = this.store.countActionsSince("text_thought_loop_post", since24h);
-      if (thoughts24h >= textThoughtLoop.maxThoughtsPerDay) return;
-
-      const lastThoughtAt = this.store.getLastActionTime("text_thought_loop_post");
-      const lastThoughtTs = lastThoughtAt ? new Date(lastThoughtAt).getTime() : 0;
-      const minGapMs = Math.max(
-        1,
-        Number(textThoughtLoop.minMinutesBetweenThoughts || 0) * 60_000
-      );
-      if (lastThoughtTs && Date.now() - lastThoughtTs < minGapMs) return;
-
-      const candidate = await this.pickTextThoughtLoopCandidate(settings);
-      if (!candidate) return;
-
-      const sent = await this.maybeReplyToMessage(candidate.message, settings, {
-        source: "text_thought_loop",
-        recentMessages: candidate.recentMessages,
-        addressSignal: {
-          direct: false,
-          inferred: false,
-          triggered: false,
-          reason: "llm_decides",
-          confidence: 0,
-          threshold: 0.62,
-          confidenceSource: "fallback"
-        },
-        forceDecisionLoop: true
-      });
-      if (!sent) return;
-
-      this.store.logAction({
-        kind: "text_thought_loop_post",
-        guildId: candidate.message.guildId,
-        channelId: candidate.message.channelId,
-        messageId: candidate.message.id,
-        userId: this.client.user?.id || null,
-        content: candidate.message.content,
-        metadata: {
-          lookbackMessages: textThoughtLoop.lookbackMessages,
-          source: "text_thought_loop"
-        }
-      });
-    } finally {
-      this.textThoughtLoopRunning = false;
-    }
-  }
-
-  async pickTextThoughtLoopCandidate(settings) {
-    const permissions = getReplyPermissions(settings);
-    const textThoughtLoop = getTextInitiativeSettings(settings);
-    const candidateIds = [...new Set(
-      permissions.replyChannelIds
-        .map((value) => String(value || "").trim())
-        .filter(Boolean)
-    )];
-    if (!candidateIds.length) return null;
-
-    const shuffled = candidateIds
-      .map((id) => ({ id, sortKey: Math.random() }))
-      .sort((a, b) => a.sortKey - b.sortKey)
-      .map((entry) => entry.id);
-
-    const lookback = clamp(Number(textThoughtLoop.lookbackMessages) || 0, 4, 80);
-    for (const channelId of shuffled) {
-      if (!this.isChannelAllowed(settings, channelId)) continue;
-      const channel = this.client.channels.cache.get(channelId);
-      if (!this.isNonPrivateReplyEligibleChannel(channel)) continue;
-
-      await this.hydrateRecentMessages(channel, lookback);
-      const recentMessages = this.store.getRecentMessages(channel.id, lookback);
-      if (!recentMessages.length) continue;
-      if (this.hasBotMessageInRecentWindow({ recentMessages, windowSize: UNSOLICITED_REPLY_CONTEXT_WINDOW })) {
-        continue;
-      }
-
-      const latestHuman = this.getLatestRecentHumanMessage(recentMessages);
-      if (!latestHuman) continue;
-      if (!this.isRecentHumanActivity(latestHuman)) {
-        continue;
-      }
-
-      return {
-        channel,
-        recentMessages,
-        message: this.buildStoredMessageRuntime(channel, latestHuman)
-      };
-    }
-
-    return null;
-  }
-
-  buildStoredMessageRuntime(channel, row) {
-    const guild = channel.guild;
-    const guildId = String(row?.guild_id || channel.guildId || guild?.id || "").trim();
-    const channelId = String(row?.channel_id || channel.id || "").trim();
-    const messageId = String(row?.message_id || "").trim() || `stored-${Date.now()}`;
-    const authorId = String(row?.author_id || "unknown").trim();
-    const authorName = String(row?.author_name || "unknown").trim() || "unknown";
-    const content = String(row?.content || "").trim();
-    const createdAtMs = Date.parse(String(row?.created_at || ""));
-
-    return {
-      id: messageId,
-      createdTimestamp: Number.isFinite(createdAtMs) ? createdAtMs : Date.now(),
-      guildId,
-      channelId,
-      guild,
-      channel,
-      author: {
-        id: authorId,
-        username: authorName,
-        bot: Boolean(row?.is_bot)
-      },
-      member: {
-        displayName: authorName
-      },
-      content,
-      mentions: {
-        users: {
-          has() {
-            return false;
-          }
-        },
-        repliedUser: null
-      },
-      reference: null,
-      attachments: new Map(),
-      embeds: [],
-      reactions: {
-        cache: new Map()
-      },
-      async react() {
-        return undefined;
-      },
-      async reply(payload) {
-        return await channel.send({
-          ...payload,
-          allowedMentions: { repliedUser: false }
-        });
-      }
-    };
-  }
-
-  getLatestRecentHumanMessage(rows = []) {
-    return (Array.isArray(rows) ? rows : []).find((row) => !row?.is_bot) || null;
-  }
-
-  isRecentHumanActivity(row, { maxAgeMs = PROACTIVE_TEXT_CHANNEL_ACTIVE_WINDOW_MS } = {}) {
-    if (!row || row.is_bot) return false;
-    const createdAtMs = Date.parse(String(row.created_at || ""));
-    if (!Number.isFinite(createdAtMs)) return false;
-    return Date.now() - createdAtMs <= Math.max(60_000, Number(maxAgeMs) || PROACTIVE_TEXT_CHANNEL_ACTIVE_WINDOW_MS);
-  }
-
-  async maybeRunDiscoveryCycle({ startup = false } = {}) {
-    if (this.discoveryPosting) return;
-    this.discoveryPosting = true;
-
-    try {
-      const settings = this.store.getSettings();
-      const discovery = getDiscoverySettings(settings);
-      const memory = getMemorySettings(settings);
-      const permissions = getReplyPermissions(settings);
-      const botName = getBotName(settings);
-      if (!discovery.enabled) return;
-      if (!discovery.channelIds.length) return;
-      if (discovery.maxPostsPerDay <= 0) return;
-      if (!this.canSendMessage(permissions.maxMessagesPerHour)) return;
-      if (!this.canTalkNow(settings)) return;
-
-      const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      const posts24h = this.store.countActionsSince("discovery_post", since24h);
-      if (posts24h >= discovery.maxPostsPerDay) return;
-
-      const lastPostAt = this.store.getLastActionTime("discovery_post");
-      const lastPostTs = lastPostAt ? new Date(lastPostAt).getTime() : 0;
-      const nowTs = Date.now();
-      const elapsedMs = lastPostTs ? nowTs - lastPostTs : null;
-      const scheduleDecision = this.evaluateDiscoverySchedule({
-        settings,
-        startup,
-        lastPostTs,
-        elapsedMs,
-        posts24h
-      });
-      if (!scheduleDecision.shouldPost) return;
-
-      const channel = this.pickDiscoveryChannel(settings);
-      if (!channel) return;
-
-      const recent = await this.hydrateRecentMessages(channel, memory.promptSlice.maxRecentMessages);
-      const recentMessages = recent.length
-        ? recent
-          .slice()
-          .reverse()
-          .slice(0, memory.promptSlice.maxRecentMessages)
-          .map((msg) => ({
-            author_name: msg.member?.displayName || msg.author?.username || "unknown",
-            content: String(msg.content || "").trim(),
-            created_at: new Date(msg.createdTimestamp).toISOString(),
-            is_bot: Boolean(msg.author?.bot)
-          }))
-        : this.store.getRecentMessages(channel.id, memory.promptSlice.maxRecentMessages);
-      const discoveryMemoryQuery = recentMessages
-        .slice(0, 6)
-        .map((row) => String(row?.content || "").trim())
-        .filter(Boolean)
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 320);
-      const discoveryRelevantFacts = await this.loadRelevantMemoryFacts({
-        settings,
-        guildId: channel.guildId,
-        channelId: channel.id,
-        queryText: discoveryMemoryQuery,
-        trace: {
-          guildId: channel.guildId,
-          channelId: channel.id,
-          userId: this.client.user.id,
-          source: "discovery_prompt"
-        },
-        limit: 8
-      });
-      const discoveryMediaMemoryFacts = this.buildMediaMemoryFacts({
-        userFacts: [],
-        relevantFacts: discoveryRelevantFacts
-      });
-
-      const discoveryResult = await this.collectDiscoveryForPost({
-        settings,
-        channel,
-        recentMessages
-      });
-      const requireDiscoveryLink =
-        discoveryResult.enabled &&
-        discoveryResult.candidates.length > 0 &&
-        chance((discovery.linkChancePercent || 0) / 100);
-      const discoveryImageBudget = this.getImageBudgetState(settings);
-      const discoveryVideoBudget = this.getVideoGenerationBudgetState(settings);
-      const discoveryMediaCapabilities = this.getMediaGenerationCapabilities(settings);
-      const discoverySimpleImageCapabilityReady = discoveryMediaCapabilities.simpleImageReady;
-      const discoveryComplexImageCapabilityReady = discoveryMediaCapabilities.complexImageReady;
-      const discoveryImageCapabilityReady =
-        discoverySimpleImageCapabilityReady || discoveryComplexImageCapabilityReady;
-      const discoveryVideoCapabilityReady = discoveryMediaCapabilities.videoReady;
-
-      const systemPrompt = buildSystemPrompt(settings);
-      const userPrompt = buildDiscoveryPrompt({
-        channelName: channel.name || "channel",
-        recentMessages,
-        relevantFacts: discoveryRelevantFacts,
-        emojiHints: this.getEmojiHints(channel.guild),
-        allowSimpleImagePosts:
-          discovery.allowImagePosts &&
-          discoverySimpleImageCapabilityReady &&
-          discoveryImageBudget.canGenerate,
-        allowComplexImagePosts:
-          discovery.allowImagePosts &&
-          discoveryComplexImageCapabilityReady &&
-          discoveryImageBudget.canGenerate,
-        remainingDiscoveryImages: discoveryImageBudget.remaining,
-        allowVideoPosts:
-          discovery.allowVideoPosts &&
-          discoveryVideoCapabilityReady &&
-          discoveryVideoBudget.canGenerate,
-        remainingDiscoveryVideos: discoveryVideoBudget.remaining,
-        discoveryFindings: discoveryResult.candidates,
-        maxLinksPerPost: discovery.maxLinksPerPost || 2,
-        requireDiscoveryLink,
-        maxMediaPromptChars: resolveMaxMediaPromptLen(settings),
-        mediaPromptCraftGuidance: getMediaPromptCraftGuidance(settings)
-      });
-
-      const generation = await this.llm.generate({
-        settings,
-        systemPrompt,
-        userPrompt,
-        trace: {
-          guildId: channel.guildId,
-          channelId: channel.id,
-          userId: this.client.user.id
-        }
-      });
-
-      const discoveryMediaPromptLimit = resolveMaxMediaPromptLen(settings);
-      const discoveryDirective = parseDiscoveryMediaDirective(generation.text, discoveryMediaPromptLimit);
-      const imagePrompt = discoveryDirective.imagePrompt;
-      const complexImagePrompt = discoveryDirective.complexImagePrompt;
-      const videoPrompt = discoveryDirective.videoPrompt;
-      const mediaDirective = pickDiscoveryMediaDirective(discoveryDirective);
-      let finalText = sanitizeBotText(discoveryDirective.text || (mediaDirective ? "" : generation.text));
-      finalText = normalizeSkipSentinel(finalText);
-      const allowMediaOnlyDiscovery = !finalText && Boolean(mediaDirective);
-      if (finalText === "[SKIP]") return;
-      if (!finalText && !allowMediaOnlyDiscovery) {
-        this.store.logAction({
-          kind: "bot_error",
-          guildId: channel.guildId,
-          channelId: channel.id,
-          userId: this.client.user?.id || null,
-          content: "discovery_model_output_empty",
-          metadata: {
-            source: startup ? "discovery_startup" : "discovery_scheduler"
-          }
-        });
-        return;
-      }
-      const linkPolicy = this.applyDiscoveryLinkPolicy({
-        text: finalText,
-        candidates: discoveryResult.candidates,
-        selected: discoveryResult.selected,
-        requireDiscoveryLink
-      });
-      finalText = normalizeSkipSentinel(linkPolicy.text);
-      const allowMediaOnlyAfterLinkPolicy = !finalText && Boolean(mediaDirective);
-      if (finalText === "[SKIP]") return;
-      if (!finalText && !allowMediaOnlyAfterLinkPolicy) {
-        this.store.logAction({
-          kind: "bot_error",
-          guildId: channel.guildId,
-          channelId: channel.id,
-          userId: this.client.user?.id || null,
-          content: "discovery_model_output_empty_after_link_policy",
-          metadata: {
-            source: startup ? "discovery_startup" : "discovery_scheduler",
-            forcedLink: Boolean(linkPolicy.forcedLink)
-          }
-        });
-        return;
-      }
-      const mentionResolution = await resolveDeterministicMentionsForMentions(
-        { store: this.store },
-        {
-          text: finalText,
-          guild: channel.guild,
-          guildId: channel.guildId
-        }
-      );
-      finalText = mentionResolution.text;
-
-      let payload = { content: finalText };
-      let imageUsed = false;
-      let imageBudgetBlocked = false;
-      let imageCapabilityBlocked = false;
-      let imageVariantUsed = null;
-      let videoUsed = false;
-      let videoBudgetBlocked = false;
-      let videoCapabilityBlocked = false;
-      if (mediaDirective?.type === "image_simple" && discovery.allowImagePosts && imagePrompt) {
-        const imageResult = await this.maybeAttachGeneratedImage({
-          settings,
-          text: finalText,
-          prompt: composeDiscoveryImagePrompt(
-            imagePrompt,
-            finalText,
-            discoveryMediaPromptLimit,
-            discoveryMediaMemoryFacts
-          ),
-          variant: "simple",
-          trace: {
-            guildId: channel.guildId,
-            channelId: channel.id,
-            userId: this.client.user.id,
-            source: "discovery_post"
-          }
-        });
-        payload = imageResult.payload;
-        imageUsed = imageResult.imageUsed;
-        imageBudgetBlocked = imageResult.blockedByBudget;
-        imageCapabilityBlocked = imageResult.blockedByCapability;
-        imageVariantUsed = imageResult.variant || "simple";
-      }
-
-      if (
-        mediaDirective?.type === "image_complex" &&
-        discovery.allowImagePosts &&
-        complexImagePrompt
-      ) {
-        const imageResult = await this.maybeAttachGeneratedImage({
-          settings,
-          text: finalText,
-          prompt: composeDiscoveryImagePrompt(
-            complexImagePrompt,
-            finalText,
-            discoveryMediaPromptLimit,
-            discoveryMediaMemoryFacts
-          ),
-          variant: "complex",
-          trace: {
-            guildId: channel.guildId,
-            channelId: channel.id,
-            userId: this.client.user.id,
-            source: "discovery_post"
-          }
-        });
-        payload = imageResult.payload;
-        imageUsed = imageResult.imageUsed;
-        imageBudgetBlocked = imageResult.blockedByBudget;
-        imageCapabilityBlocked = imageResult.blockedByCapability;
-        imageVariantUsed = imageResult.variant || "complex";
-      }
-
-      if (mediaDirective?.type === "video" && discovery.allowVideoPosts && videoPrompt) {
-        const videoResult = await this.maybeAttachGeneratedVideo({
-          settings,
-          text: finalText,
-          prompt: composeDiscoveryVideoPrompt(
-            videoPrompt,
-            finalText,
-            discoveryMediaPromptLimit,
-            discoveryMediaMemoryFacts
-          ),
-          trace: {
-            guildId: channel.guildId,
-            channelId: channel.id,
-            userId: this.client.user.id,
-            source: "discovery_post"
-          }
-        });
-        payload = videoResult.payload;
-        videoUsed = videoResult.videoUsed;
-        videoBudgetBlocked = videoResult.blockedByBudget;
-        videoCapabilityBlocked = videoResult.blockedByCapability;
-      }
-
-      if (!finalText && !imageUsed && !videoUsed) {
-        this.store.logAction({
-          kind: "bot_error",
-          guildId: channel.guildId,
-          channelId: channel.id,
-          userId: this.client.user?.id || null,
-          content: "discovery_model_output_empty_after_media",
-          metadata: {
-            source: startup ? "discovery_startup" : "discovery_scheduler"
-          }
-        });
-        return;
-      }
-
-      await channel.sendTyping();
-      await sleep(this.getSimulatedTypingDelayMs(500, 1200));
-
-      const discoveryChunks = splitDiscordMessage(payload.content);
-      const discoveryFirstPayload = { ...payload, content: discoveryChunks[0] };
-      const sent = await channel.send(discoveryFirstPayload);
-      for (let i = 1; i < discoveryChunks.length; i++) {
-        await channel.send({ content: discoveryChunks[i] });
-      }
-
-      this.markSpoke();
-      this.store.recordMessage({
-        messageId: sent.id,
-        createdAt: sent.createdTimestamp,
-        guildId: sent.guildId,
-        channelId: sent.channelId,
-        authorId: this.client.user.id,
-        authorName: botName,
-        isBot: true,
-        content: this.composeMessageContentForHistory(sent, finalText),
-        referencedMessageId: null
-      });
-      for (const sharedLink of linkPolicy.usedLinks) {
-        this.store.recordSharedLink({
-          url: sharedLink.url,
-          source: sharedLink.source
-        });
-      }
-
-      this.store.logAction({
-        kind: "discovery_post",
-        guildId: sent.guildId,
-        channelId: sent.channelId,
-        messageId: sent.id,
-        userId: this.client.user.id,
-        content: finalText,
-        metadata: {
-          source: startup ? "discovery_startup" : "discovery_scheduler",
-          pacing: {
-            mode: scheduleDecision.mode,
-            trigger: scheduleDecision.trigger,
-            chance: "chance" in scheduleDecision ? scheduleDecision.chance ?? null : null,
-            roll: "roll" in scheduleDecision ? scheduleDecision.roll ?? null : null,
-            elapsedMs: scheduleDecision.elapsedMs ?? null,
-            requiredIntervalMs: scheduleDecision.requiredIntervalMs ?? null
-          },
-          discovery: {
-            enabled: discoveryResult.enabled,
-            requiredLink: requireDiscoveryLink,
-            topics: discoveryResult.topics,
-            candidateCount: discoveryResult.candidates.length,
-            selectedCount: discoveryResult.selected.length,
-            usedLinks: linkPolicy.usedLinks,
-            forcedLink: linkPolicy.forcedLink,
-            reports: discoveryResult.reports,
-            errors: discoveryResult.errors
-          },
-          mentions: mentionResolution,
-          imageRequestedByModel: Boolean(imagePrompt || complexImagePrompt),
-          imageRequestedSimpleByModel: Boolean(imagePrompt),
-          imageRequestedComplexByModel: Boolean(complexImagePrompt),
-          imageUsed,
-          imageVariantUsed,
-          imageBudgetBlocked,
-          imageCapabilityBlocked,
-          imageSimpleCapabilityReadyAtPromptTime: discoverySimpleImageCapabilityReady,
-          imageComplexCapabilityReadyAtPromptTime: discoveryComplexImageCapabilityReady,
-          imageCapabilityReadyAtPromptTime: discoveryImageCapabilityReady,
-          videoRequestedByModel: Boolean(videoPrompt),
-          videoUsed,
-          videoBudgetBlocked,
-          videoCapabilityBlocked,
-          videoCapabilityReadyAtPromptTime: discoveryVideoCapabilityReady,
-          llm: {
-            provider: generation.provider,
-            model: generation.model,
-            usage: generation.usage,
-            costUsd: generation.costUsd
-          }
-        }
-      });
-    } finally {
-      this.discoveryPosting = false;
-    }
-  }
-
-  async collectDiscoveryForPost({ settings, channel, recentMessages }) {
-    if (!this.discovery) {
-      return {
-        enabled: false,
-        topics: [],
-        candidates: [],
-        selected: [],
-        reports: [],
-        errors: []
-      };
-    }
-
-    try {
-      return await this.discovery.collect({
-        settings,
-        guildId: channel.guildId,
-        channelId: channel.id,
-        channelName: channel.name || "channel",
-        recentMessages
-      });
-    } catch (error) {
-      this.store.logAction({
-        kind: "bot_error",
-        guildId: channel.guildId,
-        channelId: channel.id,
-        userId: this.client.user?.id || null,
-        content: `discovery_collect: ${String(error?.message || error)}`
-      });
-
-      return {
-        enabled: true,
-        topics: [],
-        candidates: [],
-        selected: [],
-        reports: [],
-        errors: [String(error?.message || error)]
-      };
-    }
-  }
-
-  applyDiscoveryLinkPolicy({
-    text,
-    candidates,
-    selected,
-    requireDiscoveryLink
-  }: {
-    text: string;
-    candidates?: DiscoveryLinkCandidate[];
-    selected?: DiscoveryLinkCandidate[];
-    requireDiscoveryLink?: boolean;
-  }) {
-    const cleanText = sanitizeBotText(text);
-    const candidateEntries: Array<[string, DiscoveryLinkCandidate]> = [];
-    for (const item of candidates || []) {
-      const normalizedUrl = normalizeDiscoveryUrl(item.url);
-      if (!normalizedUrl) continue;
-      candidateEntries.push([normalizedUrl, item]);
-    }
-    const candidateMap = new Map<string, DiscoveryLinkCandidate>(candidateEntries);
-    const mentionedUrls = extractUrlsFromText(cleanText);
-    const matchedLinks = mentionedUrls
-      .map((url) => normalizeDiscoveryUrl(url))
-      .filter(Boolean)
-      .filter((url, index, arr) => arr.indexOf(url) === index)
-      .map((url) => ({
-        url,
-        source: candidateMap.get(url)?.source || "discovery"
-      }));
-
-    if (matchedLinks.length || !requireDiscoveryLink) {
-      return {
-        text: cleanText,
-        usedLinks: matchedLinks,
-        forcedLink: false
-      };
-    }
-
-    const fallbackPool = [...(selected || []), ...(candidates || [])];
-    const fallback = fallbackPool.find((item) => normalizeDiscoveryUrl(item.url));
-    if (!fallback) {
-      return {
-        text: "[SKIP]",
-        usedLinks: [],
-        forcedLink: false
-      };
-    }
-
-    const fallbackUrl = normalizeDiscoveryUrl(fallback.url);
-    const withForcedLink = sanitizeBotText(`${cleanText}\n${fallbackUrl}`);
-    return {
-      text: withForcedLink,
-      usedLinks: [
-        {
-          url: fallbackUrl,
-          source: fallback.source || "discovery"
-        }
-      ],
-      forcedLink: true
-    };
   }
 
   getDiscoveryPostingIntervalMs(settings) {
@@ -5164,7 +2080,8 @@ export class ClankerBot {
     return pickDiscoveryChannel({
       settings,
       client: this.client,
-      isChannelAllowed: (resolvedSettings, channelId) => this.isChannelAllowed(resolvedSettings, channelId)
+      isChannelAllowed: (resolvedSettings, channelId) =>
+        isChannelAllowedForPermissions(resolvedSettings, String(channelId))
     });
   }
 
@@ -5180,249 +2097,16 @@ export class ClankerBot {
     return guild.emojis.cache.map((emoji) => emoji.identifier).slice(0, 24);
   }
 
-  getImageInputs(message) {
-    const images = [];
-
-    for (const attachment of message.attachments.values()) {
-      if (images.length >= MAX_IMAGE_INPUTS) break;
-
-      const url = String(attachment.url || attachment.proxyURL || "").trim();
-      if (!url) continue;
-
-      const filename = String(attachment.name || "").trim();
-      const contentType = String(attachment.contentType || "").toLowerCase();
-      const urlPath = url.split("?")[0];
-      const isImage = contentType.startsWith("image/") || IMAGE_EXT_RE.test(filename) || IMAGE_EXT_RE.test(urlPath);
-      if (!isImage) continue;
-
-      images.push({ url, filename, contentType });
-    }
-
-    return images;
-  }
-
   async syncMessageSnapshotFromReaction(reaction) {
-    if (!reaction) return;
-
-    let resolved = reaction;
-    if (resolved.partial && typeof resolved.fetch === "function") {
-      try {
-        resolved = await resolved.fetch();
-      } catch {
-        return;
-      }
-    }
-
-    await this.syncMessageSnapshot(resolved?.message);
+    await syncMessageSnapshotFromReactionForMessageHistory(this.toBotContext(), reaction);
   }
 
   async recordReactionHistoryEvent(reaction, user) {
-    if (!reaction || !user) return;
-
-    let resolvedReaction = reaction;
-    if (resolvedReaction.partial && typeof resolvedReaction.fetch === "function") {
-      try {
-        resolvedReaction = await resolvedReaction.fetch();
-      } catch {
-        return;
-      }
-    }
-
-    let targetMessage = resolvedReaction?.message;
-    if (targetMessage?.partial && typeof targetMessage.fetch === "function") {
-      try {
-        targetMessage = await targetMessage.fetch();
-      } catch {
-        return;
-      }
-    }
-
-    const botUserId = String(this.client.user?.id || "").trim();
-    const targetAuthorId = String(targetMessage?.author?.id || "").trim();
-    if (!botUserId || targetAuthorId !== botUserId) return;
-
-    const reactingUserId = String(user.id || "").trim();
-    if (!reactingUserId || reactingUserId === botUserId) return;
-
-    const channelId = String(targetMessage?.channelId || "").trim();
-    const guildId = String(targetMessage?.guildId || "").trim();
-    const targetMessageId = String(targetMessage?.id || "").trim();
-    if (!channelId || !guildId || !targetMessageId) return;
-
-    const reactionLabel = describeReactionForHistory(resolvedReaction?.emoji);
-    if (!reactionLabel) return;
-
-    const reactingMember = targetMessage?.guild?.members?.cache?.get?.(reactingUserId);
-    const reactingName = String(
-      reactingMember?.displayName || user.globalName || user.username || reactingUserId
-    ).trim();
-    const targetAuthorName = String(
-      targetMessage?.member?.displayName || targetMessage?.author?.username || getBotName(this.store.getSettings())
-    ).trim();
-    const targetSnippet = summarizeReactionTargetText(String(targetMessage?.content || ""));
-    const content = [
-      `${reactingName} reacted with ${reactionLabel} to ${targetAuthorName}'s message`,
-      targetSnippet ? `"${targetSnippet}"` : ""
-    ].filter(Boolean).join(": ");
-
-    this.store.recordMessage({
-      messageId: buildReactionEventMessageId({
-        targetMessageId,
-        reactingUserId,
-        emoji: reactionLabel,
-        createdAt: Date.now()
-      }),
-      createdAt: Date.now(),
-      guildId,
-      channelId,
-      authorId: reactingUserId,
-      authorName: reactingName,
-      isBot: false,
-      content,
-      referencedMessageId: targetMessageId
-    });
+    await recordReactionHistoryEventForMessageHistory(this.toBotContext(), reaction, user);
   }
 
   async syncMessageSnapshot(message) {
-    if (!message) return;
-
-    let resolved = message;
-    if (resolved.partial && typeof resolved.fetch === "function") {
-      try {
-        resolved = await resolved.fetch();
-      } catch {
-        return;
-      }
-    }
-
-    if (!resolved?.guildId || !resolved?.channelId || !resolved?.id || !resolved?.author?.id) return;
-
-    this.store.recordMessage({
-      messageId: resolved.id,
-      createdAt: resolved.createdTimestamp,
-      guildId: resolved.guildId,
-      channelId: resolved.channelId,
-      authorId: resolved.author.id,
-      authorName: resolved.member?.displayName || resolved.author.username || "unknown",
-      isBot: Boolean(resolved.author.bot),
-      content: this.composeMessageContentForHistory(resolved, String(resolved.content || "").trim()),
-      referencedMessageId: resolved.reference?.messageId
-    });
+    await syncMessageSnapshotForMessageHistory(this.toBotContext(), message);
   }
 
-  composeMessageContentForHistory(message, baseText = "") {
-    const parts = [];
-    const text = String(baseText || "").trim();
-    if (text) parts.push(text);
-
-    if (message?.attachments?.size) {
-      for (const attachment of message.attachments.values()) {
-        const url = String(attachment.url || attachment.proxyURL || "").trim();
-        if (!url) continue;
-        parts.push(url);
-      }
-    }
-
-    if (Array.isArray(message?.embeds) && message.embeds.length) {
-      for (const embed of message.embeds) {
-        const videoUrl = String(embed?.video?.url || embed?.video?.proxyURL || "").trim();
-        const embedUrl = String(embed?.url || "").trim();
-        if (videoUrl) parts.push(videoUrl);
-        if (embedUrl) parts.push(embedUrl);
-      }
-    }
-
-    const reactionSummary = formatReactionSummary(message);
-    if (reactionSummary) {
-      parts.push(`[reactions: ${reactionSummary}]`);
-    }
-
-    return parts.join(" ").replace(/\s+/g, " ").trim();
-  }
-}
-
-function safeUrlHost(rawUrl) {
-  const text = String(rawUrl || "").trim();
-  if (!text) return "";
-  try {
-    return String(new URL(text).host || "").trim().slice(0, 160);
-  } catch {
-    return "";
-  }
-}
-
-function describeReactionForHistory(emoji) {
-  const id = String(emoji?.id || "").trim();
-  const name = String(emoji?.name || "").trim();
-  if (id && name) return `:${name}:`;
-  if (name) return name;
-  return "";
-}
-
-function summarizeReactionTargetText(text, maxLen = 80) {
-  const normalized = String(text || "").replace(/\s+/g, " ").trim();
-  if (!normalized) return "";
-  if (normalized.length <= maxLen) return normalized;
-  return `${normalized.slice(0, Math.max(1, maxLen - 3)).trimEnd()}...`;
-}
-
-function buildReactionEventMessageId({ targetMessageId, reactingUserId, emoji, createdAt }) {
-  const safeEmoji = String(emoji || "")
-    .trim()
-    .replace(/\s+/g, "_")
-    .slice(0, 32);
-  return `reaction:${targetMessageId}:${reactingUserId}:${safeEmoji}:${Number(createdAt) || Date.now()}`;
-}
-
-function isLikelyImageUrl(rawUrl) {
-  const text = String(rawUrl || "").trim();
-  if (!text) return false;
-  try {
-    const parsed = new URL(text);
-    const pathname = String(parsed.pathname || "").toLowerCase();
-    if (IMAGE_EXT_RE.test(pathname) || pathname.endsWith(".avif")) return true;
-    const formatParam = String(parsed.searchParams.get("format") || "").trim().toLowerCase();
-    if (formatParam && /^(png|jpe?g|gif|webp|bmp|heic|heif|avif)$/.test(formatParam)) return true;
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-function parseHistoryImageReference(rawUrl) {
-  const text = String(rawUrl || "").trim();
-  if (!text) return { filename: "(unnamed)", contentType: "" };
-  try {
-    const parsed = new URL(text);
-    const pathname = String(parsed.pathname || "");
-    const segment = pathname.split("/").pop() || "";
-    const decoded = decodeURIComponent(segment || "");
-    const fallback = decoded || segment || "(unnamed)";
-    const ext = fallback.includes(".") ? fallback.split(".").pop() : "";
-    let contentType = normalizeImageContentTypeFromExt(ext);
-    if (!contentType) {
-      const formatParam = String(parsed.searchParams.get("format") || "").trim().toLowerCase();
-      contentType = normalizeImageContentTypeFromExt(formatParam);
-    }
-    return {
-      filename: fallback,
-      contentType
-    };
-  } catch {
-    return { filename: "(unnamed)", contentType: "" };
-  }
-}
-
-function normalizeImageContentTypeFromExt(rawExt) {
-  const ext = String(rawExt || "").trim().toLowerCase().replace(/^\./, "");
-  if (!ext) return "";
-  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
-  if (ext === "png") return "image/png";
-  if (ext === "gif") return "image/gif";
-  if (ext === "webp") return "image/webp";
-  if (ext === "bmp") return "image/bmp";
-  if (ext === "heic") return "image/heic";
-  if (ext === "heif") return "image/heif";
-  if (ext === "avif") return "image/avif";
-  return "";
 }

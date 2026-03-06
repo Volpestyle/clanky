@@ -2,7 +2,7 @@ import { clamp } from "lodash";
 import { sanitizeBotText, sleep } from "../utils.ts";
 import { buildReplyPrompt, buildSystemPrompt } from "../prompts.ts";
 import { getMediaPromptCraftGuidance } from "../promptCore.ts";
-import type { ClankerBot, ReplyAttemptOptions } from "../bot.ts";
+import type { ReplyAttemptOptions } from "../bot.ts";
 import {
   REPLY_OUTPUT_JSON_SCHEMA,
   composeReplyImagePrompt,
@@ -47,6 +47,7 @@ import {
   isDevTaskEnabled
 } from "../settings/agentStack.ts";
 import type { Settings } from "../settings/settingsSchema.ts";
+import type { ReplyPipelineRuntime } from "./botContext.ts";
 
 type ReplyPipelineAttachment = {
   url?: string;
@@ -143,7 +144,7 @@ type ReplyPipelineMessage = ReplyPipelineSentMessage & {
 
 type ReplyAddressSignal =
   | ReplyAttemptOptions["addressSignal"]
-  | Awaited<ReturnType<ClankerBot["getReplyAddressSignal"]>>;
+  | Awaited<ReturnType<ReplyPipelineRuntime["getReplyAddressSignal"]>>;
 type ReplyRecentMessage = Record<string, unknown>;
 type ReplyImageInput = Record<string, unknown> & {
   url?: string;
@@ -174,14 +175,18 @@ type ReplyTrace = {
   guildId: string;
   channelId: string;
   userId: string;
+  source: string | null;
+  event: string | null;
+  reason: string | null;
+  messageId: string | null;
 };
 type ReplyDirective = ReturnType<typeof parseStructuredReplyOutput>;
 type ReplyMediaDirective = ReturnType<typeof pickReplyMediaDirective>;
 type ReplyMentionResolution = Awaited<ReturnType<typeof resolveDeterministicMentionsForMentions>>;
-type ReplyReactionResult = Awaited<ReturnType<ClankerBot["maybeApplyReplyReaction"]>>;
-type ReplyScreenShareOffer = Awaited<ReturnType<ClankerBot["maybeHandleScreenShareOfferIntent"]>>;
+type ReplyReactionResult = Awaited<ReturnType<ReplyPipelineRuntime["maybeApplyReplyReaction"]>>;
+type ReplyScreenShareOffer = Awaited<ReturnType<ReplyPipelineRuntime["maybeHandleScreenShareOfferIntent"]>>;
 type ReplyFollowupGenerationSettings = ReturnType<typeof resolveReplyFollowupGenerationSettingsForReplyFollowup>;
-type ReplyWebSearchState = ReturnType<ClankerBot["buildWebSearchContext"]> & {
+type ReplyWebSearchState = ReturnType<ReplyPipelineRuntime["buildWebSearchContext"]> & {
   summaryText?: string | null;
 };
 
@@ -198,32 +203,32 @@ type ReplyPipelineContext = {
   source: string;
   performance: ReplyPerformance;
   memorySlice: ReplyContinuityContext["memorySlice"];
-  replyMediaMemoryFacts: ReturnType<ClankerBot["buildMediaMemoryFacts"]>;
+  replyMediaMemoryFacts: ReturnType<ReplyPipelineRuntime["buildMediaMemoryFacts"]>;
   attachmentImageInputs: ReplyImageInput[];
-  imageBudget: ReturnType<ClankerBot["getImageBudgetState"]>;
-  videoBudget: ReturnType<ClankerBot["getVideoGenerationBudgetState"]>;
-  mediaCapabilities: ReturnType<ClankerBot["getMediaGenerationCapabilities"]>;
+  imageBudget: ReturnType<ReplyPipelineRuntime["getImageBudgetState"]>;
+  videoBudget: ReturnType<ReplyPipelineRuntime["getVideoGenerationBudgetState"]>;
+  mediaCapabilities: ReturnType<ReplyPipelineRuntime["getMediaGenerationCapabilities"]>;
   simpleImageCapabilityReady: boolean;
   complexImageCapabilityReady: boolean;
   imageCapabilityReady: boolean;
   videoCapabilityReady: boolean;
-  gifBudget: ReturnType<ClankerBot["getGifBudgetState"]>;
+  gifBudget: ReturnType<ReplyPipelineRuntime["getGifBudgetState"]>;
   gifsConfigured: boolean;
   webSearch: ReplyWebSearchState;
-  browserBrowse: ReturnType<ClankerBot["buildBrowserBrowseContext"]>;
+  browserBrowse: ReturnType<ReplyPipelineRuntime["buildBrowserBrowseContext"]>;
   recentConversationHistory: ReplyContinuityContext["recentConversationHistory"];
   recentWebLookups: ReplyContinuityContext["recentWebLookups"];
-  memoryLookup: ReturnType<ClankerBot["buildMemoryLookupContext"]>;
-  videoContext: Awaited<ReturnType<ClankerBot["buildVideoReplyContext"]>>;
+  memoryLookup: ReturnType<ReplyPipelineRuntime["buildMemoryLookupContext"]>;
+  videoContext: Awaited<ReturnType<ReplyPipelineRuntime["buildVideoReplyContext"]>>;
   modelImageInputs: ReplyImageInput[];
-  imageLookup: ReturnType<ClankerBot["buildImageLookupContext"]>;
+  imageLookup: ReturnType<ReplyPipelineRuntime["buildImageLookupContext"]>;
   replyTrace: ReplyTrace;
-  screenShareCapability: ReturnType<ClankerBot["getVoiceScreenShareCapability"]>;
-  activeVoiceSession: ReturnType<ClankerBot["voiceSessionManager"]["getSession"]> | null;
+  screenShareCapability: ReturnType<ReplyPipelineRuntime["getVoiceScreenShareCapability"]>;
+  activeVoiceSession: ReturnType<ReplyPipelineRuntime["voiceSessionManager"]["getSession"]> | null;
   inVoiceChannelNow: boolean;
   activeVoiceParticipantRoster: string[];
-  musicState: ReturnType<ClankerBot["voiceSessionManager"]["getMusicPromptContext"]> | null;
-  musicDisambiguation: ReturnType<ClankerBot["voiceSessionManager"]["getMusicDisambiguationPromptContext"]> | null;
+  musicState: ReturnType<ReplyPipelineRuntime["voiceSessionManager"]["getMusicPromptContext"]> | null;
+  musicDisambiguation: ReturnType<ReplyPipelineRuntime["voiceSessionManager"]["getMusicDisambiguationPromptContext"]> | null;
   systemPrompt: string;
   replyPromptBase: ReplyPromptBase;
   initialUserPrompt: string;
@@ -246,9 +251,9 @@ type ReplyActionableLlmResult = {
   mediaPromptLimit: number;
   replyDirective: ReplyDirective;
   webSearch: ReplyWebSearchState;
-  browserBrowse: ReturnType<ClankerBot["buildBrowserBrowseContext"]>;
-  memoryLookup: ReturnType<ClankerBot["buildMemoryLookupContext"]>;
-  imageLookup: ReturnType<ClankerBot["buildImageLookupContext"]>;
+  browserBrowse: ReturnType<ReplyPipelineRuntime["buildBrowserBrowseContext"]>;
+  memoryLookup: ReturnType<ReplyPipelineRuntime["buildMemoryLookupContext"]>;
+  imageLookup: ReturnType<ReplyPipelineRuntime["buildImageLookupContext"]>;
   modelImageInputs: ReplyImageInput[];
   replyPrompts: ReplyPrompts;
 };
@@ -303,7 +308,7 @@ function isReplySendableActionResult(result: ReplyActionResult): result is Reply
 
 
 export async function buildReplyContext(
-  bot: ClankerBot,
+  bot: ReplyPipelineRuntime,
   message: ReplyPipelineMessage,
   settings: Settings,
   options: ReplyAttemptOptions
@@ -462,7 +467,11 @@ export async function buildReplyContext(
   const replyTrace = {
     guildId: message.guildId,
     channelId: message.channelId,
-    userId: message.author.id
+    userId: message.author.id,
+    source,
+    event: null,
+    reason: null,
+    messageId: message.id
   };
   const screenShareCapability = bot.getVoiceScreenShareCapability({
     settings,
@@ -591,7 +600,7 @@ export async function buildReplyContext(
 
 
 export async function executeReplyLlm(
-  bot: ClankerBot,
+  bot: ReplyPipelineRuntime,
   message: ReplyPipelineMessage,
   settings: Settings,
   _options: ReplyAttemptOptions,
@@ -1031,7 +1040,7 @@ export async function executeReplyLlm(
 
 
 export async function dispatchReplyActions(
-  bot: ClankerBot,
+  bot: ReplyPipelineRuntime,
   message: ReplyPipelineMessage,
   settings: Settings,
   _options: ReplyAttemptOptions,
@@ -1187,97 +1196,58 @@ export async function dispatchReplyActions(
   const complexImagePrompt = replyDirective.complexImagePrompt;
   const videoPrompt = replyDirective.videoPrompt;
   const gifQuery = replyDirective.gifQuery;
-
-  if (mediaDirective?.type === "gif" && gifQuery) {
-    const gifResult = await bot.maybeAttachReplyGif({
-      settings,
-      text: finalText,
-      query: gifQuery,
-      trace: {
-        guildId: message.guildId,
-        channelId: message.channelId,
-        userId: message.author.id,
-        source: "reply_message"
-      }
-    });
-    payload = gifResult.payload;
-    gifUsed = gifResult.gifUsed;
-    gifBudgetBlocked = gifResult.blockedByBudget;
-    gifConfigBlocked = gifResult.blockedByConfiguration;
-  }
-
-  if (mediaDirective?.type === "image_simple" && discovery.allowReplyImages && imagePrompt) {
-    const imageResult = await bot.maybeAttachGeneratedImage({
-      settings,
-      text: finalText,
-      prompt: composeReplyImagePrompt(
-        imagePrompt,
-        finalText,
-        mediaPromptLimit,
-        replyMediaMemoryFacts
-      ),
-      variant: "simple",
-      trace: {
-        guildId: message.guildId,
-        channelId: message.channelId,
-        userId: message.author.id,
-        source: "reply_message"
-      }
-    });
-    payload = imageResult.payload;
-    imageUsed = imageResult.imageUsed;
-    imageBudgetBlocked = imageResult.blockedByBudget;
-    imageCapabilityBlocked = imageResult.blockedByCapability;
-    imageVariantUsed = imageResult.variant || "simple";
-  }
-
-  if (mediaDirective?.type === "image_complex" && discovery.allowReplyImages && complexImagePrompt) {
-    const imageResult = await bot.maybeAttachGeneratedImage({
-      settings,
-      text: finalText,
-      prompt: composeReplyImagePrompt(
-        complexImagePrompt,
-        finalText,
-        mediaPromptLimit,
-        replyMediaMemoryFacts
-      ),
-      variant: "complex",
-      trace: {
-        guildId: message.guildId,
-        channelId: message.channelId,
-        userId: message.author.id,
-        source: "reply_message"
-      }
-    });
-    payload = imageResult.payload;
-    imageUsed = imageResult.imageUsed;
-    imageBudgetBlocked = imageResult.blockedByBudget;
-    imageCapabilityBlocked = imageResult.blockedByCapability;
-    imageVariantUsed = imageResult.variant || "complex";
-  }
-
-  if (mediaDirective?.type === "video" && discovery.allowReplyVideos && videoPrompt) {
-    const videoResult = await bot.maybeAttachGeneratedVideo({
-      settings,
-      text: finalText,
-      prompt: composeReplyVideoPrompt(
-        videoPrompt,
-        finalText,
-        mediaPromptLimit,
-        replyMediaMemoryFacts
-      ),
-      trace: {
-        guildId: message.guildId,
-        channelId: message.channelId,
-        userId: message.author.id,
-        source: "reply_message"
-      }
-    });
-    payload = videoResult.payload;
-    videoUsed = videoResult.videoUsed;
-    videoBudgetBlocked = videoResult.blockedByBudget;
-    videoCapabilityBlocked = videoResult.blockedByCapability;
-  }
+  const mediaAttachment = await bot.resolveMediaAttachment({
+    settings,
+    text: finalText,
+    directive: {
+      type: mediaDirective?.type ?? null,
+      gifQuery,
+      imagePrompt:
+        mediaDirective?.type === "image_simple" && discovery.allowReplyImages && imagePrompt
+          ? composeReplyImagePrompt(
+            imagePrompt,
+            finalText,
+            mediaPromptLimit,
+            replyMediaMemoryFacts
+          )
+          : null,
+      complexImagePrompt:
+        mediaDirective?.type === "image_complex" && discovery.allowReplyImages && complexImagePrompt
+          ? composeReplyImagePrompt(
+            complexImagePrompt,
+            finalText,
+            mediaPromptLimit,
+            replyMediaMemoryFacts
+          )
+          : null,
+      videoPrompt:
+        mediaDirective?.type === "video" && discovery.allowReplyVideos && videoPrompt
+          ? composeReplyVideoPrompt(
+            videoPrompt,
+            finalText,
+            mediaPromptLimit,
+            replyMediaMemoryFacts
+          )
+          : null
+    },
+    trace: {
+      guildId: message.guildId,
+      channelId: message.channelId,
+      userId: message.author.id,
+      source: "reply_message"
+    }
+  });
+  payload = mediaAttachment.payload;
+  imageUsed = mediaAttachment.imageUsed;
+  imageBudgetBlocked = mediaAttachment.imageBudgetBlocked;
+  imageCapabilityBlocked = mediaAttachment.imageCapabilityBlocked;
+  imageVariantUsed = mediaAttachment.imageVariantUsed;
+  videoUsed = mediaAttachment.videoUsed;
+  videoBudgetBlocked = mediaAttachment.videoBudgetBlocked;
+  videoCapabilityBlocked = mediaAttachment.videoCapabilityBlocked;
+  gifUsed = mediaAttachment.gifUsed;
+  gifBudgetBlocked = mediaAttachment.gifBudgetBlocked;
+  gifConfigBlocked = mediaAttachment.gifConfigBlocked;
 
   if (!finalText && !imageUsed && !videoUsed && !gifUsed) {
     bot.store.logAction({
@@ -1322,7 +1292,7 @@ export async function dispatchReplyActions(
 
 
 export async function sendReplyMessage(
-  bot: ClankerBot,
+  bot: ReplyPipelineRuntime,
   message: ReplyPipelineMessage,
   settings: Settings,
   options: ReplyAttemptOptions,
@@ -1526,7 +1496,7 @@ export async function sendReplyMessage(
 
 
 export async function maybeReplyToMessagePipeline(
-  bot: ClankerBot,
+  bot: ReplyPipelineRuntime,
   message: ReplyPipelineMessage,
   settings: Settings,
   options: ReplyAttemptOptions = {}

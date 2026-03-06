@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { ClankerBot } from "./bot.ts";
+import { pickTextThoughtLoopCandidate } from "./bot/textThoughtLoop.ts";
 import { Store } from "./store.ts";
 import { createTestSettingsPatch } from "./testSettings.ts";
 
@@ -434,7 +435,7 @@ test("text thought loop selects from explicit reply channel list", async () => {
     });
 
     try {
-      const candidate = await bot.pickTextThoughtLoopCandidate(store.getSettings());
+      const candidate = await pickTextThoughtLoopCandidate(bot.toTextThoughtLoopRuntime(), store.getSettings());
       assert.equal(candidate?.channel?.id, channelId);
       assert.equal(candidate?.message?.content, "anyone trying the new patch");
     } finally {

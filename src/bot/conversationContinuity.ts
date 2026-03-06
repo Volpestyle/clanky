@@ -12,12 +12,25 @@ import {
 
 export type ConversationContinuityPayload = {
   settings: Record<string, unknown>;
-  guildId?: string | null;
+  guildId: string;
   channelId?: string | null;
   userId?: string | null;
   queryText?: string;
   source?: string;
   trace?: Record<string, unknown>;
+};
+
+type ConversationLookupPayload = {
+  guildId: string;
+  channelId?: string | null;
+  queryText: string;
+  limit: number;
+  maxAgeHours: number;
+};
+
+type AdaptiveDirectiveLookupPayload = {
+  guildId: string;
+  queryText: string;
 };
 
 type ContinuityLoaderArgs = {
@@ -31,9 +44,9 @@ type ContinuityLoaderArgs = {
   recentMessages?: Array<Record<string, unknown>>;
   memoryTimeoutMs?: number;
   loadPromptMemorySlice?: ((payload: ConversationContinuityPayload) => Promise<unknown>) | null;
-  loadRecentLookupContext?: ((payload: Record<string, unknown>) => unknown) | null;
-  loadRecentConversationHistory?: ((payload: Record<string, unknown>) => unknown) | null;
-  loadAdaptiveDirectives?: ((payload: Record<string, unknown>) => unknown) | null;
+  loadRecentLookupContext?: ((payload: ConversationLookupPayload) => unknown) | null;
+  loadRecentConversationHistory?: ((payload: ConversationLookupPayload) => unknown) | null;
+  loadAdaptiveDirectives?: ((payload: AdaptiveDirectiveLookupPayload) => unknown) | null;
 };
 
 function normalizeQueryText(value: unknown, maxChars = 420) {

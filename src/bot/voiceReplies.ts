@@ -30,6 +30,7 @@ import {
   getReplyGenerationSettings,
   getVoiceSoundboardSettings
 } from "../settings/agentStack.ts";
+import type { VoiceReplyRuntime } from "./botContext.ts";
 
 const MAX_SOUNDBOARD_LEAK_TOKEN_SCAN = 24;
 const SOUNDBOARD_CANDIDATE_PARSE_LIMIT = 40;
@@ -95,7 +96,7 @@ function runAsyncCallback(callback: unknown, payload: Record<string, unknown>) {
   }
 }
 
-export async function composeVoiceOperationalMessage(runtime, {
+export async function composeVoiceOperationalMessage(runtime: VoiceReplyRuntime, {
   settings,
   guildId = null,
   channelId = null,
@@ -276,7 +277,7 @@ export async function composeVoiceOperationalMessage(runtime, {
   }
 }
 
-export async function generateVoiceTurnReply(runtime, {
+export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   settings,
   guildId = null,
   channelId = null,
@@ -452,6 +453,11 @@ export async function generateVoiceTurnReply(runtime, {
       providerUsed: null,
       providerFallbackUsed: false,
       budget: {
+        maxPerHour: 0,
+        used: 0,
+        successCount: 0,
+        errorCount: 0,
+        remaining: 0,
         canSearch: false
       }
     };
@@ -476,6 +482,9 @@ export async function generateVoiceTurnReply(runtime, {
       steps: 0,
       hitStepLimit: false,
       budget: {
+        maxPerHour: 0,
+        used: 0,
+        remaining: 0,
         canBrowse: false
       }
     };
@@ -601,7 +610,9 @@ export async function generateVoiceTurnReply(runtime, {
       channelId,
       userId,
       source: "voice_stt_pipeline_generation",
-      event: sessionId ? "voice_session" : "voice_turn"
+      event: sessionId ? "voice_session" : "voice_turn",
+      reason: null,
+      messageId: null
     };
 
     const codeAgentRuntimeAvailable = typeof runtime.runModelRequestedCodeTask === "function";
@@ -617,7 +628,23 @@ export async function generateVoiceTurnReply(runtime, {
     });
 
     const voiceToolRuntime: ReplyToolRuntime = {
-      search: runtime.search,
+      search: {
+        searchAndRead: async ({ settings: toolSettings, query, trace }) =>
+          await runtime.search.searchAndRead({
+            settings: toolSettings,
+            query,
+            trace: {
+              guildId: trace.guildId ?? null,
+              channelId: trace.channelId ?? null,
+              userId: trace.userId ?? null,
+              source: trace.source ?? null
+            }
+          }),
+        readPageSummary:
+          typeof runtime.search.readPageSummary === "function"
+            ? async (url, maxChars) => await runtime.search.readPageSummary(url, maxChars)
+            : undefined
+      },
       browser: {
         browse: async ({ settings: toolSettings, query, guildId, channelId, userId, source }) =>
           await runtime.runModelRequestedBrowserBrowse({
