@@ -14,6 +14,7 @@ import {
   isRealtimeMode,
   normalizeVoiceAddressingTargetToken
 } from "./voiceSessionHelpers.ts";
+import { parseBooleanFlag } from "../normalization/valueParsers.ts";
 import {
   VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS,
   RECENT_ENGAGEMENT_WINDOW_MS,
@@ -31,14 +32,15 @@ import type {
   VoiceAddressingAnnotation
 } from "./voiceSessionTypes.ts";
 import {
-  musicPhaseShouldForceCommandOnly,
-  musicPhaseShouldLockOutput
+  musicPhaseShouldForceCommandOnly
 } from "./voiceSessionTypes.ts";
 
 const DEFAULT_REALTIME_ADMISSION_MODE = "hard_classifier";
 const DEFAULT_MUSIC_WAKE_LATCH_SECONDS = 15;
 const CLASSIFIER_HISTORY_MAX_TURNS = 6;
 const CLASSIFIER_HISTORY_MAX_CHARS = 900;
+const VOICE_CLASSIFIER_DEBUG_PROMPT_MAX_CHARS = 12_000;
+const VOICE_CLASSIFIER_DEBUG_OUTPUT_MAX_CHARS = 1_200;
 
 function resolveRealtimeAdmissionMode(settings: any): "hard_classifier" | "generation_only" {
   const raw = String(settings?.voice?.replyDecisionLlm?.realtimeAdmissionMode || "")
@@ -139,6 +141,8 @@ export function buildVoiceConversationContext(manager: any, {
 } = {}): VoiceConversationContext {
   const normalizedUserId = String(userId || "").trim();
 
+  // Engagement uses the last observed assistant audio delta as a recency hint.
+  // It is intentionally not the authoritative "bot is still speaking" signal.
   const lastAudioDeltaAt = Number(session?.lastAudioDeltaAt || 0);
   const msSinceAssistantReply = lastAudioDeltaAt > 0 ? Math.max(0, now - lastAudioDeltaAt) : null;
   const recentAssistantReply =
@@ -429,28 +433,10 @@ export async function evaluateVoiceReplyDecision(manager: any, {
   });
   let conversationContext = buildConversationContext();
 
-  // Pending command followup (e.g., music disambiguation "2" / "the second one")
-  // remains a deterministic fast-path before any other admission gate.
-  if (sameSpeakerPendingCommandFollowup) {
-    return {
-      allow: true,
-      reason: "pending_command_followup",
-      participantCount,
-      directAddressed,
-      directAddressConfidence,
-      directAddressThreshold,
-      transcript: normalizedTranscript,
-      conversationContext
-    };
-  }
-
   const replyOutputLockState = manager.getReplyOutputLockState(session);
   const lockedByMusicOnly =
     Boolean(replyOutputLockState.locked) &&
-    Boolean(replyOutputLockState.musicActive) &&
-    !Boolean(replyOutputLockState.botTurnOpen) &&
-    !Boolean(replyOutputLockState.pendingResponse) &&
-    !Boolean(replyOutputLockState.openAiActiveResponse);
+    replyOutputLockState.reason === "music_playback_active";
   if (replyOutputLockState.locked && !lockedByMusicOnly) {
     return {
       allow: false,
@@ -463,6 +449,21 @@ export async function evaluateVoiceReplyDecision(manager: any, {
       conversationContext,
       retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS,
       outputLockReason: replyOutputLockState.reason
+    };
+  }
+
+  // Pending command followup (e.g., music disambiguation "2" / "the second one")
+  // remains a deterministic fast-path before any other admission gate.
+  if (sameSpeakerPendingCommandFollowup) {
+    return {
+      allow: true,
+      reason: "pending_command_followup",
+      participantCount,
+      directAddressed,
+      directAddressConfidence,
+      directAddressThreshold,
+      transcript: normalizedTranscript,
+      conversationContext
     };
   }
 
@@ -708,7 +709,94 @@ export async function runVoiceReplyClassifier(manager: any, {
   const llmModel = String(replyDecisionLlm?.model || defaultVoiceReplyDecisionModel(llmProvider))
     .trim()
     .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
+  const classifierDebugEnabled = parseBooleanFlag(process.env.VOICE_CLASSIFIER_DEBUG, false);
   const botName = getPromptBotName(settings);
+  const normalizedUserId = String(userId || "").trim() || null;
+  const logClassifierDebug = ({
+    stage = "result",
+    promptSnapshot = null,
+    rawOutput = null,
+    parsedDecision = null,
+    allow = null,
+    reason = null,
+    error = null,
+    latencyMs = null
+  }: {
+    stage?: "prompt" | "result" | "error";
+    promptSnapshot?: string | null;
+    rawOutput?: string | null;
+    parsedDecision?: "allow" | "deny" | null;
+    allow?: boolean | null;
+    reason?: string | null;
+    error?: string | null;
+    latencyMs?: number | null;
+  }) => {
+    if (!classifierDebugEnabled) return;
+    if (!manager?.store || typeof manager.store.logAction !== "function") return;
+
+    manager.store.logAction({
+      kind: "voice_runtime",
+      guildId: session?.guildId || null,
+      channelId: session?.textChannelId || null,
+      userId: normalizedUserId,
+      content: "voice_reply_classifier_debug",
+      metadata: {
+        sessionId: session?.id || null,
+        stage,
+        provider: llmProvider,
+        model: llmModel,
+        speakerName: String(speakerName || "").trim() || "someone",
+        transcript: String(transcript || "").trim() || null,
+        participantCount: Math.max(0, Number(participantCount) || 0),
+        participantList: Array.isArray(participantList)
+          ? participantList
+            .map((name) => String(name || "").trim())
+            .filter(Boolean)
+            .slice(0, 12)
+          : [],
+        replyEagerness: Number.isFinite(Number(replyEagerness))
+          ? clamp(Number(replyEagerness), 0, 100)
+          : null,
+        addressedToOtherSignal: Boolean(addressedToOtherSignal),
+        pendingCommandFollowupSignal: Boolean(pendingCommandFollowupSignal),
+        musicActive: Boolean(musicActive),
+        musicWakeLatched: Boolean(musicWakeLatched),
+        msUntilMusicWakeLatchExpiry: Number.isFinite(Number(msUntilMusicWakeLatchExpiry))
+          ? Math.max(0, Math.round(Number(msUntilMusicWakeLatchExpiry)))
+          : null,
+        conversationContext: conversationContext && typeof conversationContext === "object"
+          ? {
+            engagementState: String(conversationContext.engagementState || "").trim() || null,
+            engaged: Boolean(conversationContext.engaged),
+            engagedWithCurrentSpeaker: Boolean(conversationContext.engagedWithCurrentSpeaker),
+            recentAssistantReply: Boolean(conversationContext.recentAssistantReply),
+            recentDirectAddress: Boolean(conversationContext.recentDirectAddress),
+            sameAsRecentDirectAddress: Boolean(conversationContext.sameAsRecentDirectAddress),
+            msSinceAssistantReply: Number.isFinite(Number(conversationContext.msSinceAssistantReply))
+              ? Math.max(0, Math.round(Number(conversationContext.msSinceAssistantReply)))
+              : null,
+            msSinceDirectAddress: Number.isFinite(Number(conversationContext.msSinceDirectAddress))
+              ? Math.max(0, Math.round(Number(conversationContext.msSinceDirectAddress)))
+              : null,
+            addressedToOtherSignal: Boolean(conversationContext.addressedToOtherSignal),
+            pendingCommandFollowupSignal: Boolean(conversationContext.pendingCommandFollowupSignal),
+            musicActive: Boolean(conversationContext.musicActive),
+            musicWakeLatched: Boolean(conversationContext.musicWakeLatched),
+            msUntilMusicWakeLatchExpiry: Number.isFinite(Number(conversationContext.msUntilMusicWakeLatchExpiry))
+              ? Math.max(0, Math.round(Number(conversationContext.msUntilMusicWakeLatchExpiry)))
+              : null
+          }
+          : null,
+        promptSnapshot: String(promptSnapshot || "").slice(0, VOICE_CLASSIFIER_DEBUG_PROMPT_MAX_CHARS) || null,
+        rawOutput: String(rawOutput || "").slice(0, VOICE_CLASSIFIER_DEBUG_OUTPUT_MAX_CHARS) || null,
+        parsedDecision,
+        allow: typeof allow === "boolean" ? allow : null,
+        reason: String(reason || "").trim() || null,
+        error: String(error || "").trim() || null,
+        latencyMs: Number.isFinite(Number(latencyMs)) ? Math.max(0, Math.round(Number(latencyMs))) : null
+      }
+    });
+  };
 
   if (!manager.llm?.generate) {
     return {
@@ -766,6 +854,11 @@ export async function runVoiceReplyClassifier(manager: any, {
   if (recentHistory) {
     promptParts.push(`Recent attributed voice turns:\n${recentHistory}`);
   }
+  const promptSnapshot = promptParts.join("\n");
+  logClassifierDebug({
+    stage: "prompt",
+    promptSnapshot
+  });
 
   const startMs = Date.now();
   try {
@@ -795,6 +888,15 @@ export async function runVoiceReplyClassifier(manager: any, {
     const rawText = String(result?.text || "");
     const decision = parseClassifierDecision(rawText);
     if (decision === "allow") {
+      logClassifierDebug({
+        stage: "result",
+        promptSnapshot,
+        rawOutput: rawText,
+        parsedDecision: decision,
+        allow: true,
+        reason: "model_yes",
+        latencyMs
+      });
       return {
         allow: true,
         decision,
@@ -806,6 +908,15 @@ export async function runVoiceReplyClassifier(manager: any, {
       };
     }
     if (decision === "deny") {
+      logClassifierDebug({
+        stage: "result",
+        promptSnapshot,
+        rawOutput: rawText,
+        parsedDecision: decision,
+        allow: false,
+        reason: "model_no",
+        latencyMs
+      });
       return {
         allow: false,
         decision,
@@ -816,6 +927,16 @@ export async function runVoiceReplyClassifier(manager: any, {
         error: null
       };
     }
+    logClassifierDebug({
+      stage: "error",
+      promptSnapshot,
+      rawOutput: rawText,
+      parsedDecision: null,
+      allow: false,
+      reason: "unparseable_classifier_output",
+      error: `unparseable_classifier_output:${rawText.slice(0, 60)}`,
+      latencyMs
+    });
     return {
       allow: false,
       decision: null,
@@ -826,6 +947,15 @@ export async function runVoiceReplyClassifier(manager: any, {
       error: `unparseable_classifier_output:${rawText.slice(0, 60)}`
     };
   } catch (error) {
+    logClassifierDebug({
+      stage: "error",
+      promptSnapshot,
+      parsedDecision: "deny",
+      allow: false,
+      reason: "classifier_runtime_error",
+      error: String(error?.message || error || "unknown_error"),
+      latencyMs: Date.now() - startMs
+    });
     return {
       allow: false,
       decision: "deny",
@@ -842,50 +972,4 @@ export function isCommandOnlyActive(manager: any, session, settings = null) {
   const resolved = settings || session?.settingsSnapshot || manager.store.getSettings();
   if (resolved?.voice?.commandOnlyMode) return true;
   return musicPhaseShouldForceCommandOnly(manager.getMusicPhase(session));
-}
-
-export function getReplyOutputLockState(manager: any, session) {
-  if (!session || session.ending) {
-    return {
-      locked: true,
-      reason: "session_inactive",
-      musicActive: false,
-      botTurnOpen: false,
-      pendingResponse: false,
-      openAiActiveResponse: false,
-      streamBufferedBytes: 0
-    };
-  }
-
-  const streamBufferedBytes = 0; // Subprocess manages its own stream buffer
-  const musicActive = musicPhaseShouldLockOutput(manager.getMusicPhase(session));
-  const botTurnOpen = Boolean(session.botTurnOpen);
-  const pendingResponse = Boolean(session.pendingResponse && typeof session.pendingResponse === "object");
-  const openAiActiveResponse = manager.isRealtimeResponseActive(session);
-  const locked =
-    musicActive ||
-    botTurnOpen ||
-    pendingResponse ||
-    openAiActiveResponse;
-
-  let reason = "idle";
-  if (musicActive) {
-    reason = "music_playback_active";
-  } else if (pendingResponse) {
-    reason = "pending_response";
-  } else if (openAiActiveResponse) {
-    reason = "openai_active_response";
-  } else if (botTurnOpen) {
-    reason = "bot_turn_open";
-  }
-
-  return {
-    locked,
-    reason,
-    musicActive,
-    botTurnOpen,
-    pendingResponse,
-    openAiActiveResponse,
-    streamBufferedBytes
-  };
 }
