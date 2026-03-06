@@ -141,7 +141,7 @@ function buildSettingsFormView(settings) {
   const voiceSoundboard = getVoiceSoundboardSettings(source);
   const startup = getStartupSettings(source);
   const discovery = getDiscoverySettings(source);
-  const codingWorkers = Array.isArray(resolvedStack.codingWorkers) ? resolvedStack.codingWorkers : [];
+  const codingWorkers = Array.isArray(resolvedStack.devTeam?.codingWorkers) ? resolvedStack.devTeam.codingWorkers : [];
   const codeAgentProvider =
     codingWorkers.length === 1
       ? codingWorkers[0] === "codex"

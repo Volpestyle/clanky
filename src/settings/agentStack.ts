@@ -6,13 +6,90 @@ type ModelBinding = {
   model?: string;
 };
 
-type CapabilityExecutionPolicy = {
+export type AgentSessionToolPolicy = "none" | "fast_only" | "full";
+
+export type AgentSessionPolicy = {
+  persistent: boolean;
+  toolPolicy: {
+    voice: AgentSessionToolPolicy;
+    text: AgentSessionToolPolicy;
+  };
+};
+
+export type CapabilityExecutionPolicy = {
   mode?: string;
   model?: ModelBinding;
   temperature?: number;
   maxOutputTokens?: number;
   reasoningEffort?: string;
 };
+
+type DevTeamRoles = {
+  design: CapabilityExecutionPolicy;
+  implementation: CapabilityExecutionPolicy;
+  review: CapabilityExecutionPolicy;
+  research?: CapabilityExecutionPolicy;
+};
+
+type PresetDefaults = {
+  harness: string;
+  orchestrator: Required<ModelBinding>;
+  researchRuntime: string;
+  browserRuntime: string;
+  voiceRuntime: string;
+  voiceAdmissionPolicy: {
+    mode: string;
+  };
+  voiceAdmissionClassifier?: Required<ModelBinding>;
+  sessionPolicy?: AgentSessionPolicy;
+  devTeam: {
+    orchestrator: Required<ModelBinding>;
+    roles: DevTeamRoles;
+    codingWorkers: string[];
+  };
+};
+
+export type ResolvedAgentStack = {
+  preset: string;
+  harness: string;
+  sessionPolicy?: AgentSessionPolicy;
+  orchestrator: Required<ModelBinding>;
+  researchRuntime: string;
+  browserRuntime: string;
+  voiceRuntime: string;
+  voiceAdmissionPolicy: {
+    mode: string;
+    classifierProvider?: string;
+    classifierModel?: string;
+    musicWakeLatchSeconds?: number;
+  };
+  devTeam: {
+    orchestrator: Required<ModelBinding>;
+    roles: {
+      design: ReturnType<typeof resolveExecutionPolicy>;
+      implementation: ReturnType<typeof resolveExecutionPolicy>;
+      review: ReturnType<typeof resolveExecutionPolicy>;
+      research?: ReturnType<typeof resolveExecutionPolicy>;
+    };
+    codingWorkers: string[];
+  };
+};
+
+function dedicatedModel(provider: string, model: string): CapabilityExecutionPolicy {
+  return {
+    mode: "dedicated_model",
+    model: {
+      provider,
+      model
+    }
+  };
+}
+
+function inheritOrchestrator(): CapabilityExecutionPolicy {
+  return {
+    mode: "inherit_orchestrator"
+  };
+}
 
 const PRESET_DEFAULTS = {
   openai_native: {
@@ -27,11 +104,23 @@ const PRESET_DEFAULTS = {
     voiceAdmissionPolicy: {
       mode: "adaptive"
     },
-    devOrchestrator: {
+    voiceAdmissionClassifier: {
       provider: "openai",
-      model: "gpt-5"
+      model: "gpt-5-mini"
     },
-    codingWorkers: ["codex", "claude_code"]
+    devTeam: {
+      orchestrator: {
+        provider: "openai",
+        model: "gpt-5"
+      },
+      roles: {
+        design: dedicatedModel("claude-code", "sonnet"),
+        implementation: dedicatedModel("codex", "gpt-5-codex"),
+        review: dedicatedModel("claude-code", "sonnet"),
+        research: inheritOrchestrator()
+      },
+      codingWorkers: ["codex", "claude_code"]
+    }
   },
   anthropic_brain_openai_tools: {
     harness: "internal",
@@ -45,11 +134,60 @@ const PRESET_DEFAULTS = {
     voiceAdmissionPolicy: {
       mode: "adaptive"
     },
-    devOrchestrator: {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6"
+    voiceAdmissionClassifier: {
+      provider: "openai",
+      model: "gpt-5-mini"
     },
-    codingWorkers: ["codex", "claude_code"]
+    devTeam: {
+      orchestrator: {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6"
+      },
+      roles: {
+        design: dedicatedModel("claude-code", "sonnet"),
+        implementation: dedicatedModel("claude-code", "sonnet"),
+        review: dedicatedModel("claude-code", "sonnet"),
+        research: inheritOrchestrator()
+      },
+      codingWorkers: ["claude_code", "codex"]
+    }
+  },
+  claude_code_max: {
+    harness: "claude_code_session",
+    orchestrator: {
+      provider: "claude_code_session",
+      model: "max"
+    },
+    researchRuntime: "local_external_search",
+    browserRuntime: "local_browser_agent",
+    voiceRuntime: "openai_realtime",
+    voiceAdmissionPolicy: {
+      mode: "adaptive"
+    },
+    voiceAdmissionClassifier: {
+      provider: "claude_code_session",
+      model: "max"
+    },
+    sessionPolicy: {
+      persistent: true,
+      toolPolicy: {
+        voice: "fast_only",
+        text: "full"
+      }
+    },
+    devTeam: {
+      orchestrator: {
+        provider: "claude_code_session",
+        model: "max"
+      },
+      roles: {
+        design: dedicatedModel("claude_code_session", "max"),
+        implementation: dedicatedModel("claude_code_session", "max"),
+        review: dedicatedModel("claude_code_session", "max"),
+        research: dedicatedModel("claude_code_session", "max")
+      },
+      codingWorkers: ["claude_code", "codex"]
+    }
   },
   multi_provider_legacy: {
     harness: "internal",
@@ -63,11 +201,23 @@ const PRESET_DEFAULTS = {
     voiceAdmissionPolicy: {
       mode: "classifier_gate"
     },
-    devOrchestrator: {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6"
+    voiceAdmissionClassifier: {
+      provider: "openai",
+      model: "gpt-5-mini"
     },
-    codingWorkers: ["claude_code", "codex"]
+    devTeam: {
+      orchestrator: {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6"
+      },
+      roles: {
+        design: dedicatedModel("claude-code", "sonnet"),
+        implementation: dedicatedModel("claude-code", "sonnet"),
+        review: dedicatedModel("claude-code", "sonnet"),
+        research: inheritOrchestrator()
+      },
+      codingWorkers: ["claude_code", "codex"]
+    }
   },
   custom: {
     harness: "internal",
@@ -81,13 +231,25 @@ const PRESET_DEFAULTS = {
     voiceAdmissionPolicy: {
       mode: "adaptive"
     },
-    devOrchestrator: {
+    voiceAdmissionClassifier: {
       provider: "openai",
-      model: "gpt-5"
+      model: "gpt-5-mini"
     },
-    codingWorkers: ["codex"]
+    devTeam: {
+      orchestrator: {
+        provider: "openai",
+        model: "gpt-5"
+      },
+      roles: {
+        design: dedicatedModel("claude-code", "sonnet"),
+        implementation: dedicatedModel("codex", "gpt-5-codex"),
+        review: dedicatedModel("claude-code", "sonnet"),
+        research: inheritOrchestrator()
+      },
+      codingWorkers: ["codex", "claude_code"]
+    }
   }
-} as const;
+} as const satisfies Record<string, PresetDefaults>;
 
 function mergeWithDefaults<T>(defaults: T, value: unknown): T {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -290,15 +452,27 @@ export function getVoiceRuntimeConfig(settings: unknown) {
   return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig.voice, getRuntimeConfig(settings).voice);
 }
 
+export function getClaudeCodeSessionRuntimeConfig(settings: unknown) {
+  return mergeWithDefaults(
+    DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession,
+    getRuntimeConfig(settings).claudeCodeSession
+  );
+}
+
 export function getDevTeamRuntimeConfig(settings: unknown) {
   return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam, getRuntimeConfig(settings).devTeam);
+}
+
+function getPresetDefaults(settings: unknown): PresetDefaults {
+  const agentStack: any = getAgentStackSettings(settings);
+  const presetName = String(agentStack.preset || DEFAULT_SETTINGS.agentStack.preset) as keyof typeof PRESET_DEFAULTS;
+  return PRESET_DEFAULTS[presetName] || PRESET_DEFAULTS.openai_native;
 }
 
 export function getResolvedOrchestratorBinding(settings: unknown) {
   const interaction = getReplyGenerationSettings(settings);
   const agentStack: any = getAgentStackSettings(settings);
-  const presetName = String(agentStack.preset || DEFAULT_SETTINGS.agentStack.preset) as keyof typeof PRESET_DEFAULTS;
-  const presetDefaults = PRESET_DEFAULTS[presetName] || PRESET_DEFAULTS.openai_native;
+  const presetDefaults = getPresetDefaults(settings);
   const overrideBinding = agentStack?.overrides?.orchestrator;
   const binding = resolveModelBinding(overrideBinding, presetDefaults.orchestrator);
   return {
@@ -378,10 +552,8 @@ export function getResolvedVoiceInitiativeBinding(settings: unknown) {
 export function getResolvedVoiceAdmissionClassifierBinding(settings: unknown) {
   const voiceAdmission = getVoiceAdmissionSettings(settings);
   const agentStack: any = getAgentStackSettings(settings);
-  const fallback = {
-    provider: "openai",
-    model: "gpt-5-mini"
-  };
+  const presetDefaults = getPresetDefaults(settings);
+  const fallback = presetDefaults.voiceAdmissionClassifier || presetDefaults.orchestrator;
   const overridePolicy = resolveExecutionPolicy(
     agentStack?.overrides?.voiceAdmissionClassifier,
     fallback
@@ -489,11 +661,12 @@ export function applyOrchestratorOverrideSettings(
 export function resolveAgentStack(settings: unknown) {
   const agentStack: any = getAgentStackSettings(settings);
   const presetName = String(agentStack.preset || DEFAULT_SETTINGS.agentStack.preset) as keyof typeof PRESET_DEFAULTS;
-  const presetDefaults = PRESET_DEFAULTS[presetName] || PRESET_DEFAULTS.openai_native;
+  const presetDefaults = getPresetDefaults(settings);
   const overrides: any = agentStack?.overrides && typeof agentStack.overrides === "object" && !Array.isArray(agentStack.overrides)
     ? agentStack.overrides
     : {};
   const voiceAdmission = getVoiceAdmissionSettings(settings);
+  const claudeCodeSession = getClaudeCodeSessionRuntimeConfig(settings);
   const devTeamRuntime = getDevTeamRuntimeConfig(settings);
   const enabledWorkers = [
     Boolean(devTeamRuntime?.codex?.enabled) ? "codex" : null,
@@ -502,11 +675,28 @@ export function resolveAgentStack(settings: unknown) {
   const overrideWorkers = Array.isArray(overrides?.devTeam?.codingWorkers)
     ? overrides.devTeam.codingWorkers.map((value: unknown) => String(value || "").trim()).filter(Boolean)
     : [];
-  const codingWorkers = (overrideWorkers.length ? overrideWorkers : presetDefaults.codingWorkers)
+  const codingWorkers = (overrideWorkers.length ? overrideWorkers : presetDefaults.devTeam.codingWorkers)
     .filter((worker) => enabledWorkers.includes(worker));
+  const harness = String(overrides?.harness || presetDefaults.harness);
+  const devTeamOrchestrator = resolveModelBinding(
+    overrides?.devTeam?.orchestrator,
+    presetDefaults.devTeam.orchestrator
+  );
+  const sessionPolicy =
+    harness === "claude_code_session"
+      ? {
+          persistent: true,
+          toolPolicy: {
+            voice: String(claudeCodeSession.voiceToolPolicy || presetDefaults.sessionPolicy?.toolPolicy.voice || "fast_only") as AgentSessionToolPolicy,
+            text: String(claudeCodeSession.textToolPolicy || presetDefaults.sessionPolicy?.toolPolicy.text || "full") as AgentSessionToolPolicy
+          }
+        }
+      : presetDefaults.sessionPolicy;
+
   return {
     preset: presetName,
-    harness: String(overrides?.harness || presetDefaults.harness),
+    harness,
+    sessionPolicy,
     orchestrator: resolveModelBinding(overrides?.orchestrator, presetDefaults.orchestrator),
     researchRuntime: String(overrides?.researchRuntime || presetDefaults.researchRuntime),
     browserRuntime: String(overrides?.browserRuntime || presetDefaults.browserRuntime),
@@ -517,16 +707,33 @@ export function resolveAgentStack(settings: unknown) {
       classifierModel: getResolvedVoiceAdmissionClassifierBinding(settings)?.model,
       musicWakeLatchSeconds: Number(voiceAdmission.musicWakeLatchSeconds)
     },
-    devOrchestratorProvider: resolveModelBinding(
-      overrides?.devTeam?.orchestrator,
-      devTeamRuntime?.orchestrator || presetDefaults.devOrchestrator
-    ).provider,
-    devOrchestratorModel: resolveModelBinding(
-      overrides?.devTeam?.orchestrator,
-      devTeamRuntime?.orchestrator || presetDefaults.devOrchestrator
-    ).model,
-    codingWorkers
-  };
+    devTeam: {
+      orchestrator: devTeamOrchestrator,
+      roles: {
+        design: resolveExecutionPolicy(
+          presetDefaults.devTeam.roles.design,
+          devTeamOrchestrator
+        ),
+        implementation: resolveExecutionPolicy(
+          presetDefaults.devTeam.roles.implementation,
+          devTeamOrchestrator
+        ),
+        review: resolveExecutionPolicy(
+          presetDefaults.devTeam.roles.review,
+          devTeamOrchestrator
+        ),
+        ...(presetDefaults.devTeam.roles.research
+          ? {
+              research: resolveExecutionPolicy(
+                presetDefaults.devTeam.roles.research,
+                devTeamOrchestrator
+              )
+            }
+          : {})
+      },
+      codingWorkers
+    }
+  } satisfies ResolvedAgentStack;
 }
 
 export function isResearchEnabled(settings: unknown): boolean {

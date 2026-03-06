@@ -193,6 +193,30 @@ function normalizeReflectionStrategy(value: unknown, fallback: string) {
   return fallback;
 }
 
+function normalizeClaudeCodeSessionScope(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 32).toLowerCase();
+  if (normalized === "guild") return "guild";
+  if (normalized === "channel") return "channel";
+  if (normalized === "voice_session") return "voice_session";
+  return fallback;
+}
+
+function normalizeClaudeCodeContextPruningStrategy(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 32).toLowerCase();
+  if (normalized === "summarize") return "summarize";
+  if (normalized === "evict_oldest") return "evict_oldest";
+  if (normalized === "sliding_window") return "sliding_window";
+  return fallback;
+}
+
+function normalizeAgentSessionToolPolicy(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 16).toLowerCase();
+  if (normalized === "none") return "none";
+  if (normalized === "fast_only") return "fast_only";
+  if (normalized === "full") return "full";
+  return fallback;
+}
+
 function normalizeExecutionPolicy(
   policy: unknown,
   fallbackProvider: string,
@@ -485,10 +509,6 @@ function migrateLegacySettings(raw: Record<string, unknown>) {
           }
         },
         devTeam: {
-          orchestrator: {
-            provider: llm.provider,
-            model: llm.model
-          },
           codex: {
             enabled:
               String(codeAgent.provider || "").trim().toLowerCase() === "codex" ||
@@ -664,15 +684,26 @@ export function normalizeSettings(raw: unknown) {
   const preset = (
     presetRaw === "openai_native" ||
     presetRaw === "anthropic_brain_openai_tools" ||
+    presetRaw === "claude_code_max" ||
     presetRaw === "multi_provider_legacy" ||
     presetRaw === "custom"
   )
     ? presetRaw
     : DEFAULT_SETTINGS.agentStack.preset;
+  const presetOrchestratorFallback =
+    preset === "anthropic_brain_openai_tools" || preset === "multi_provider_legacy"
+      ? { provider: "anthropic", model: "claude-sonnet-4-6" }
+      : preset === "claude_code_max"
+        ? { provider: "claude_code_session", model: "max" }
+        : { provider: "openai", model: "gpt-5" };
+  const presetVoiceAdmissionClassifierFallback =
+    preset === "claude_code_max"
+      ? { provider: "claude_code_session", model: "max" }
+      : { provider: "openai", model: "gpt-5-mini" };
   const orchestratorOverride = normalizeModelBinding(
     (agentStack.overrides as any)?.orchestrator,
-    "openai",
-    "gpt-5"
+    presetOrchestratorFallback.provider,
+    presetOrchestratorFallback.model
   );
 
   const normalized = {
@@ -932,8 +963,8 @@ export function normalizeSettings(raw: unknown) {
                 ...(agentStack.overrides as any).devTeam,
                 orchestrator: normalizeModelBinding(
                   (agentStack.overrides as any)?.devTeam?.orchestrator,
-                  "openai",
-                  "gpt-5"
+                  presetOrchestratorFallback.provider,
+                  presetOrchestratorFallback.model
                 ),
                 codingWorkers: normalizeStringList(
                   (agentStack.overrides as any)?.devTeam?.codingWorkers,
@@ -945,8 +976,8 @@ export function normalizeSettings(raw: unknown) {
           : {}),
         voiceAdmissionClassifier: normalizeExecutionPolicy(
           (agentStack.overrides as any)?.voiceAdmissionClassifier,
-          "openai",
-          "gpt-5-mini",
+          presetVoiceAdmissionClassifierFallback.provider,
+          presetVoiceAdmissionClassifierFallback.model,
           { fallbackMode: "dedicated_model" }
         )
       },
@@ -1211,12 +1242,37 @@ export function normalizeSettings(raw: unknown) {
             )
           }
         },
-        devTeam: {
-          orchestrator: normalizeModelBinding(
-            (agentStack.runtimeConfig as any)?.devTeam?.orchestrator,
-            "openai",
-            "gpt-5"
+        claudeCodeSession: {
+          sessionScope: normalizeClaudeCodeSessionScope(
+            (agentStack.runtimeConfig as any)?.claudeCodeSession?.sessionScope,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.sessionScope
           ),
+          inactivityTimeoutMs: normalizeInt(
+            (agentStack.runtimeConfig as any)?.claudeCodeSession?.inactivityTimeoutMs,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.inactivityTimeoutMs,
+            10_000,
+            12 * 60 * 60 * 1000
+          ),
+          contextPruningStrategy: normalizeClaudeCodeContextPruningStrategy(
+            (agentStack.runtimeConfig as any)?.claudeCodeSession?.contextPruningStrategy,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.contextPruningStrategy
+          ),
+          maxPinnedStateChars: normalizeInt(
+            (agentStack.runtimeConfig as any)?.claudeCodeSession?.maxPinnedStateChars,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.maxPinnedStateChars,
+            0,
+            200_000
+          ),
+          voiceToolPolicy: normalizeAgentSessionToolPolicy(
+            (agentStack.runtimeConfig as any)?.claudeCodeSession?.voiceToolPolicy,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.voiceToolPolicy
+          ),
+          textToolPolicy: normalizeAgentSessionToolPolicy(
+            (agentStack.runtimeConfig as any)?.claudeCodeSession?.textToolPolicy,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.textToolPolicy
+          )
+        },
+        devTeam: {
           codex: {
             enabled: normalizeBoolean(
               (agentStack.runtimeConfig as any)?.devTeam?.codex?.enabled,

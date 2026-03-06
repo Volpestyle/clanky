@@ -6,6 +6,7 @@ interface LlmProviderOption {
 const LLM_PROVIDER_OPTIONS: LlmProviderOption[] = [
   { value: "openai", label: "openai" },
   { value: "anthropic", label: "anthropic" },
+  { value: "claude_code_session", label: "claude code session" },
   { value: "xai", label: "xai (grok)" },
   { value: "claude-code", label: "claude code (local)" }
 ];

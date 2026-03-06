@@ -1,6 +1,7 @@
 export const PROVIDER_MODEL_FALLBACKS = {
   openai: ["gpt-5-mini", "gpt-5", "gpt-4.1-mini"],
   anthropic: ["claude-haiku-4-5", "claude-sonnet-4-6"],
+  claude_code_session: ["max"],
   xai: ["grok-3-mini-latest"],
   "claude-code": ["sonnet"],
   codex: ["gpt-5-codex"]
@@ -9,17 +10,19 @@ export const PROVIDER_MODEL_FALLBACKS = {
 export const AGENT_STACK_PRESETS = [
   "openai_native",
   "anthropic_brain_openai_tools",
+  "claude_code_max",
   "multi_provider_legacy",
   "custom"
 ] as const;
 
-export const AGENT_HARNESS_KINDS = ["internal", "openai_agents"] as const;
+export const AGENT_HARNESS_KINDS = ["internal", "openai_agents", "claude_code_session"] as const;
 
 export const MODEL_PROVIDER_KINDS = [
   "openai",
   "anthropic",
   "ai_sdk_anthropic",
   "litellm",
+  "claude_code_session",
   "xai",
   "claude-code",
   "codex"
@@ -286,11 +289,15 @@ export const DEFAULT_SETTINGS = {
           }
         }
       },
+      claudeCodeSession: {
+        sessionScope: "guild",
+        inactivityTimeoutMs: 1_800_000,
+        contextPruningStrategy: "summarize",
+        maxPinnedStateChars: 12_000,
+        voiceToolPolicy: "fast_only",
+        textToolPolicy: "full"
+      },
       devTeam: {
-        orchestrator: {
-          provider: "openai",
-          model: "gpt-5"
-        },
         codex: {
           enabled: true,
           model: "gpt-5-codex",

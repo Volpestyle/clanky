@@ -209,12 +209,6 @@ export function createAsrBridgeState(): AsrBridgeState {
     speechActive: false,
     speechDetectedUtteranceId: 0,
     speechStoppedUtteranceId: 0
-    _lastFlushLogAt: 0,
-    speechDetectedAt: 0,
-    speechStoppedAt: 0,
-    speechActive: false,
-    speechDetectedUtteranceId: 0,
-    speechStoppedUtteranceId: 0
   };
 }
 

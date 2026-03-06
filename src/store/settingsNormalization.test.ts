@@ -340,6 +340,39 @@ test("normalizeSettings migrates legacy code agent provider fields into dev-team
   assert.equal(codex.agentStack.runtimeConfig.devTeam.claudeCode.enabled, false);
 });
 
+test("normalizeSettings preserves claude_code_max session config", () => {
+  const normalized = normalizeSettings({
+    agentStack: {
+      preset: "claude_code_max",
+      runtimeConfig: {
+        claudeCodeSession: {
+          sessionScope: "channel",
+          inactivityTimeoutMs: 45_000,
+          contextPruningStrategy: "sliding_window",
+          maxPinnedStateChars: 18_000,
+          voiceToolPolicy: "fast_only",
+          textToolPolicy: "full"
+        }
+      }
+    }
+  });
+
+  assert.equal(normalized.agentStack.preset, "claude_code_max");
+  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.sessionScope, "channel");
+  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.inactivityTimeoutMs, 45_000);
+  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.contextPruningStrategy, "sliding_window");
+  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.maxPinnedStateChars, 18_000);
+  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.voiceToolPolicy, "fast_only");
+  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.textToolPolicy, "full");
+  assert.deepEqual(normalized.agentStack.overrides.voiceAdmissionClassifier, {
+    mode: "dedicated_model",
+    model: {
+      provider: "claude_code_session",
+      model: "max"
+    }
+  });
+});
+
 test("normalizeSettings preserves canonical command-only, directive, and automation toggles", () => {
   const normalized = normalizeLegacyView({
     voice: {

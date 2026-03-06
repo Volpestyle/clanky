@@ -401,6 +401,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     tools: replyTools,
     trace: replyTrace
   });
+  const followupGenerationSettings = resolveReplyFollowupGenerationSettingsForReplyFollowup(settings);
   performance.llm1Ms = Math.max(0, Date.now() - llm1StartedAtMs);
   let usedWebSearchFollowup = false;
   let usedBrowserBrowseFollowup = false;
@@ -545,7 +546,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     ];
 
     generation = await bot.llm.generate({
-      settings,
+      settings: followupGenerationSettings,
       systemPrompt,
       userPrompt: "",
       imageInputs: modelImageInputs,
@@ -560,7 +561,6 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     replyToolLoopSteps += 1;
   }
 
-  const followupGenerationSettings = resolveReplyFollowupGenerationSettingsForReplyFollowup(settings);
   const mediaPromptLimit = resolveMaxMediaPromptLen(settings);
   let replyDirective = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
   let voiceIntentHandled = await bot.maybeHandleStructuredVoiceIntent({

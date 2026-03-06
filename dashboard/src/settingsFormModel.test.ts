@@ -335,6 +335,21 @@ test("settingsFormModel round-trips code agent provider fields", () => {
   assert.equal(patch.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
 });
 
+test("settingsFormModel supports the claude_code_max preset", () => {
+  const form = settingsToForm(normalizeSettings({
+    agentStack: {
+      preset: "claude_code_max"
+    }
+  }));
+
+  assert.equal(form.stackPreset, "claude_code_max");
+  assert.equal(form.provider, "claude_code_session");
+  assert.equal(form.model, "max");
+
+  const patch = formToSettingsPatch(form);
+  assert.equal(patch.agentStack.preset, "claude_code_max");
+});
+
 test("settingsFormModel round-trips elevenlabs realtime settings", () => {
   const form = settingsToForm(normalizeSettings({
     voice: {

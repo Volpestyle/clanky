@@ -1027,15 +1027,28 @@ test("reply follow-up regeneration can use dedicated provider/model override", a
   await withTempStore(async (store) => {
     const channelId = "chan-1";
     applyBaselineSettings(store, channelId);
-    patchTestSettings(store, {
-      llm: {
-        provider: "openai",
-        model: "claude-haiku-4-5"
+    store.patchSettings({
+      agentStack: {
+        preset: "openai_native",
+        advancedOverridesEnabled: true,
+        overrides: {
+          orchestrator: {
+            provider: "openai",
+            model: "claude-haiku-4-5"
+          }
+        }
       },
-      replyFollowupLlm: {
-        enabled: true,
-        provider: "anthropic",
-        model: "claude-haiku-4-5"
+      interaction: {
+        followup: {
+          enabled: true,
+          execution: {
+            mode: "dedicated_model",
+            model: {
+              provider: "anthropic",
+              model: "claude-haiku-4-5"
+            }
+          }
+        }
       }
     });
 
@@ -1150,6 +1163,8 @@ test("reply follow-up regeneration can use dedicated provider/model override", a
     assert.equal(llmCalls.length, 2);
     assert.equal(getResolvedOrchestratorBinding(llmCalls[0]?.settings).provider, "openai");
     assert.equal(getResolvedOrchestratorBinding(llmCalls[0]?.settings).model, "claude-haiku-4-5");
+    assert.equal(getResolvedOrchestratorBinding(llmCalls[1]?.settings).provider, "anthropic");
+    assert.equal(getResolvedOrchestratorBinding(llmCalls[1]?.settings).model, "claude-haiku-4-5");
   });
 });
 

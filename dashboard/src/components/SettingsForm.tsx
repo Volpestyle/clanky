@@ -34,6 +34,18 @@ import { ChannelsPermissionsSettingsSection } from "./settingsSections/ChannelsP
 import { SubAgentOrchestrationSettingsSection } from "./settingsSections/SubAgentOrchestrationSettingsSection";
 import { resolveAgentStack } from "../../../src/settings/agentStack.ts";
 
+function formatCapabilityPolicy(policy) {
+  if (!policy || policy.mode !== "dedicated_model") {
+    return "inherit_orchestrator";
+  }
+  return `${policy.model?.provider || "unknown"}:${policy.model?.model || "default"}`;
+}
+
+function formatSessionPolicy(sessionPolicy) {
+  if (!sessionPolicy) return "transient";
+  return `${sessionPolicy.persistent ? "persistent" : "ephemeral"} (voice=${sessionPolicy.toolPolicy?.voice || "full"}, text=${sessionPolicy.toolPolicy?.text || "full"})`;
+}
+
 export default function SettingsForm({
   settings,
   modelCatalog,
@@ -355,6 +367,7 @@ export default function SettingsForm({
             <select id="stack-preset" value={form.stackPreset} onChange={set("stackPreset")}>
               <option value="openai_native">OpenAI Native</option>
               <option value="anthropic_brain_openai_tools">Anthropic Brain + OpenAI Tools</option>
+              <option value="claude_code_max">Claude Code Max</option>
               <option value="multi_provider_legacy">Multi-Provider Legacy</option>
               <option value="custom">Custom</option>
             </select>
@@ -413,8 +426,13 @@ export default function SettingsForm({
               <textarea
                 readOnly
                 value={[
-                  `orchestrator: ${resolvedStack.devOrchestratorProvider}:${resolvedStack.devOrchestratorModel}`,
-                  `workers: ${resolvedStack.codingWorkers.join(", ") || "none"}`
+                  `session: ${formatSessionPolicy(resolvedStack.sessionPolicy)}`,
+                  `orchestrator: ${resolvedStack.devTeam.orchestrator.provider}:${resolvedStack.devTeam.orchestrator.model}`,
+                  `design: ${formatCapabilityPolicy(resolvedStack.devTeam.roles.design)}`,
+                  `implementation: ${formatCapabilityPolicy(resolvedStack.devTeam.roles.implementation)}`,
+                  `review: ${formatCapabilityPolicy(resolvedStack.devTeam.roles.review)}`,
+                  `research: ${formatCapabilityPolicy(resolvedStack.devTeam.roles.research)}`,
+                  `workers: ${resolvedStack.devTeam.codingWorkers.join(", ") || "none"}`
                 ].join("\n")}
               />
             </div>

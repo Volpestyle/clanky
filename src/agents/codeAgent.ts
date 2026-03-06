@@ -110,7 +110,13 @@ export interface CodeAgentConfig {
 export function resolveCodeAgentConfig(settings: Record<string, unknown>, cwdOverride?: string): CodeAgentConfig {
   const resolvedStack = resolveAgentStack(settings);
   const devRuntime = getDevTeamRuntimeConfig(settings);
-  const preferredWorker = resolvedStack.codingWorkers[0] || "claude_code";
+  const implementationProvider = String(resolvedStack.devTeam.roles.implementation.model?.provider || "").trim().toLowerCase();
+  const preferredWorker =
+    implementationProvider === "codex"
+      ? "codex"
+      : implementationProvider === "claude-code"
+        ? "claude_code"
+        : resolvedStack.devTeam.codingWorkers[0] || "claude_code";
   const primaryWorkerConfig =
     preferredWorker === "codex"
       ? devRuntime.codex
