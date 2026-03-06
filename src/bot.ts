@@ -36,7 +36,6 @@ import {
   composeReplyVideoPrompt,
   extractRecentVideoTargets,
   extractUrlsFromText,
-  formatReactionSummary,
   isWebSearchOptOutText,
   looksLikeVideoFollowupMessage,
   normalizeDirectiveText,
@@ -75,6 +74,18 @@ import {
   normalizeReplyPerformanceSeed
 } from "./bot/replyPipelineShared.ts";
 import type { ReplyPerformanceSeed } from "./bot/replyPipelineShared.ts";
+import {
+  composeMessageContentForHistory as composeMessageContentForHistoryForMessageHistory,
+  getConversationHistoryForPrompt as getConversationHistoryForPromptForMessageHistory,
+  getImageInputs as getImageInputsForMessageHistory,
+  getRecentLookupContextForPrompt as getRecentLookupContextForPromptForMessageHistory,
+  isLikelyImageUrl,
+  parseHistoryImageReference,
+  recordReactionHistoryEvent as recordReactionHistoryEventForMessageHistory,
+  rememberRecentLookupContext as rememberRecentLookupContextForMessageHistory,
+  syncMessageSnapshot as syncMessageSnapshotForMessageHistory,
+  syncMessageSnapshotFromReaction as syncMessageSnapshotFromReactionForMessageHistory
+} from "./bot/messageHistory.ts";
 import {
   isChannelAllowed as isChannelAllowedForPermissions,
   isDiscoveryChannel as isDiscoveryChannelForPermissions,
@@ -160,8 +171,6 @@ import {
 } from "./settings/agentStack.ts";
 
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
-const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
-const MAX_IMAGE_INPUTS = 3;
 const STARTUP_TASK_DELAY_MS = 4500;
 const INITIATIVE_TICK_MS = 60_000;
 const AUTOMATION_TICK_MS = 30_000;
@@ -175,9 +184,6 @@ const MAX_AUTOMATION_RUNS_PER_TICK = 4;
 const PROACTIVE_TEXT_CHANNEL_ACTIVE_WINDOW_MS = 24 * 60 * 60_000;
 const SCREEN_SHARE_MESSAGE_MAX_CHARS = 420;
 const SCREEN_SHARE_INTENT_THRESHOLD = 0.66;
-const LOOKUP_CONTEXT_TTL_HOURS = 48;
-const LOOKUP_CONTEXT_MAX_RESULTS = 5;
-const LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL = 120;
 const IS_TEST_PROCESS = /\.test\.[cm]?[jt]sx?$/i.test(String(process.argv?.[1] || "")) ||
   process.execArgv.includes("--test") ||
   process.argv.includes("--test");
@@ -2765,32 +2771,13 @@ export class ClankerBot {
     limit = LOOKUP_CONTEXT_PROMPT_LIMIT,
     maxAgeHours = LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS
   } = {}) {
-    if (!this.store || typeof this.store.searchLookupContext !== "function") return [];
-    const normalizedGuildId = String(guildId || "").trim();
-    if (!normalizedGuildId) return [];
-    const normalizedChannelId = String(channelId || "").trim() || null;
-    const normalizedQuery = String(queryText || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 280);
-    try {
-      return this.store.searchLookupContext({
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        queryText: normalizedQuery,
-        limit,
-        maxAgeHours
-      });
-    } catch (error) {
-      this.store.logAction({
-        kind: "bot_error",
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        userId: this.client.user?.id || null,
-        content: `lookup_context_search: ${String(error?.message || error)}`
-      });
-      return [];
-    }
+    return getRecentLookupContextForPromptForMessageHistory(this.toBotContext(), {
+      guildId,
+      channelId,
+      queryText,
+      limit,
+      maxAgeHours
+    });
   }
 
   /**
@@ -2813,35 +2800,15 @@ export class ClankerBot {
     before = CONVERSATION_HISTORY_PROMPT_WINDOW_BEFORE,
     after = CONVERSATION_HISTORY_PROMPT_WINDOW_AFTER
   } = {}) {
-    if (!this.store || typeof this.store.searchConversationWindows !== "function") return [];
-    const normalizedGuildId = String(guildId || "").trim();
-    if (!normalizedGuildId) return [];
-    const normalizedChannelId = String(channelId || "").trim() || null;
-    const normalizedQuery = String(queryText || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 320);
-    if (!normalizedQuery) return [];
-    try {
-      return this.store.searchConversationWindows({
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        queryText: normalizedQuery,
-        limit,
-        maxAgeHours,
-        before,
-        after
-      });
-    } catch (error) {
-      this.store.logAction({
-        kind: "bot_error",
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        userId: this.client.user?.id || null,
-        content: `conversation_history_search: ${String(error?.message || error)}`
-      });
-      return [];
-    }
+    return getConversationHistoryForPromptForMessageHistory(this.toBotContext(), {
+      guildId,
+      channelId,
+      queryText,
+      limit,
+      maxAgeHours,
+      before,
+      after
+    });
   }
 
   /**
@@ -2864,45 +2831,15 @@ export class ClankerBot {
     provider = null,
     results = []
   } = {}) {
-    if (!this.store || typeof this.store.recordLookupContext !== "function") return false;
-    const normalizedGuildId = String(guildId || "").trim();
-    if (!normalizedGuildId) return false;
-    const normalizedChannelId = String(channelId || "").trim() || null;
-    const normalizedUserId = String(userId || "").trim() || null;
-    const normalizedSource = String(source || "reply_web_lookup")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 120);
-    const normalizedQuery = String(query || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 220);
-    if (!normalizedQuery) return false;
-    const normalizedResults = (Array.isArray(results) ? results : []).slice(0, LOOKUP_CONTEXT_MAX_RESULTS);
-    if (!normalizedResults.length) return false;
-    try {
-      return this.store.recordLookupContext({
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        userId: normalizedUserId,
-        source: normalizedSource,
-        query: normalizedQuery,
-        provider,
-        results: normalizedResults,
-        ttlHours: LOOKUP_CONTEXT_TTL_HOURS,
-        maxResults: LOOKUP_CONTEXT_MAX_RESULTS,
-        maxRowsPerChannel: LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL
-      });
-    } catch (error) {
-      this.store.logAction({
-        kind: "bot_error",
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        userId: this.client.user?.id || null,
-        content: `lookup_context_record: ${String(error?.message || error)}`
-      });
-      return false;
-    }
+    return rememberRecentLookupContextForMessageHistory(this.toBotContext(), {
+      guildId,
+      channelId,
+      userId,
+      source,
+      query,
+      provider,
+      results
+    });
   }
 
   buildWebSearchContext(settings, messageText) {
@@ -5301,163 +5238,23 @@ export class ClankerBot {
   }
 
   getImageInputs(message) {
-    const images = [];
-
-    for (const attachment of message.attachments.values()) {
-      if (images.length >= MAX_IMAGE_INPUTS) break;
-
-      const url = String(attachment.url || attachment.proxyURL || "").trim();
-      if (!url) continue;
-
-      const filename = String(attachment.name || "").trim();
-      const contentType = String(attachment.contentType || "").toLowerCase();
-      const urlPath = url.split("?")[0];
-      const isImage = contentType.startsWith("image/") || IMAGE_EXT_RE.test(filename) || IMAGE_EXT_RE.test(urlPath);
-      if (!isImage) continue;
-
-      images.push({ url, filename, contentType });
-    }
-
-    return images;
+    return getImageInputsForMessageHistory(message);
   }
 
   async syncMessageSnapshotFromReaction(reaction) {
-    if (!reaction) return;
-
-    let resolved = reaction;
-    if (resolved.partial && typeof resolved.fetch === "function") {
-      try {
-        resolved = await resolved.fetch();
-      } catch {
-        return;
-      }
-    }
-
-    await this.syncMessageSnapshot(resolved?.message);
+    await syncMessageSnapshotFromReactionForMessageHistory(this.toBotContext(), reaction);
   }
 
   async recordReactionHistoryEvent(reaction, user) {
-    if (!reaction || !user) return;
-
-    let resolvedReaction = reaction;
-    if (resolvedReaction.partial && typeof resolvedReaction.fetch === "function") {
-      try {
-        resolvedReaction = await resolvedReaction.fetch();
-      } catch {
-        return;
-      }
-    }
-
-    let targetMessage = resolvedReaction?.message;
-    if (targetMessage?.partial && typeof targetMessage.fetch === "function") {
-      try {
-        targetMessage = await targetMessage.fetch();
-      } catch {
-        return;
-      }
-    }
-
-    const botUserId = String(this.client.user?.id || "").trim();
-    const targetAuthorId = String(targetMessage?.author?.id || "").trim();
-    if (!botUserId || targetAuthorId !== botUserId) return;
-
-    const reactingUserId = String(user.id || "").trim();
-    if (!reactingUserId || reactingUserId === botUserId) return;
-
-    const channelId = String(targetMessage?.channelId || "").trim();
-    const guildId = String(targetMessage?.guildId || "").trim();
-    const targetMessageId = String(targetMessage?.id || "").trim();
-    if (!channelId || !guildId || !targetMessageId) return;
-
-    const reactionLabel = describeReactionForHistory(resolvedReaction?.emoji);
-    if (!reactionLabel) return;
-
-    const reactingMember = targetMessage?.guild?.members?.cache?.get?.(reactingUserId);
-    const reactingName = String(
-      reactingMember?.displayName || user.globalName || user.username || reactingUserId
-    ).trim();
-    const targetAuthorName = String(
-      targetMessage?.member?.displayName || targetMessage?.author?.username || getBotName(this.store.getSettings())
-    ).trim();
-    const targetSnippet = summarizeReactionTargetText(String(targetMessage?.content || ""));
-    const content = [
-      `${reactingName} reacted with ${reactionLabel} to ${targetAuthorName}'s message`,
-      targetSnippet ? `"${targetSnippet}"` : ""
-    ].filter(Boolean).join(": ");
-
-    this.store.recordMessage({
-      messageId: buildReactionEventMessageId({
-        targetMessageId,
-        reactingUserId,
-        emoji: reactionLabel,
-        createdAt: Date.now()
-      }),
-      createdAt: Date.now(),
-      guildId,
-      channelId,
-      authorId: reactingUserId,
-      authorName: reactingName,
-      isBot: false,
-      content,
-      referencedMessageId: targetMessageId
-    });
+    await recordReactionHistoryEventForMessageHistory(this.toBotContext(), reaction, user);
   }
 
   async syncMessageSnapshot(message) {
-    if (!message) return;
-
-    let resolved = message;
-    if (resolved.partial && typeof resolved.fetch === "function") {
-      try {
-        resolved = await resolved.fetch();
-      } catch {
-        return;
-      }
-    }
-
-    if (!resolved?.guildId || !resolved?.channelId || !resolved?.id || !resolved?.author?.id) return;
-
-    this.store.recordMessage({
-      messageId: resolved.id,
-      createdAt: resolved.createdTimestamp,
-      guildId: resolved.guildId,
-      channelId: resolved.channelId,
-      authorId: resolved.author.id,
-      authorName: resolved.member?.displayName || resolved.author.username || "unknown",
-      isBot: Boolean(resolved.author.bot),
-      content: this.composeMessageContentForHistory(resolved, String(resolved.content || "").trim()),
-      referencedMessageId: resolved.reference?.messageId
-    });
+    await syncMessageSnapshotForMessageHistory(this.toBotContext(), message);
   }
 
   composeMessageContentForHistory(message, baseText = "") {
-    const parts = [];
-    const text = String(baseText || "").trim();
-    if (text) parts.push(text);
-
-    if (message?.attachments?.size) {
-      for (const attachment of message.attachments.values()) {
-        const url = String(attachment.url || attachment.proxyURL || "").trim();
-        if (!url) continue;
-        parts.push(url);
-      }
-    }
-
-    if (Array.isArray(message?.embeds) && message.embeds.length) {
-      for (const embed of message.embeds) {
-        const videoUrl = String(embed?.video?.url || embed?.video?.proxyURL || "").trim();
-        const embedUrl = String(embed?.url || "").trim();
-        if (videoUrl) parts.push(videoUrl);
-        if (embedUrl) parts.push(embedUrl);
-      }
-    }
-
-    const reactionSummary = formatReactionSummary(message);
-    if (reactionSummary) {
-      parts.push(`[reactions: ${reactionSummary}]`);
-    }
-
-    return parts.join(" ").replace(/\s+/g, " ").trim();
+    return composeMessageContentForHistoryForMessageHistory(message, baseText);
   }
 }
 
@@ -5469,80 +5266,4 @@ function safeUrlHost(rawUrl) {
   } catch {
     return "";
   }
-}
-
-function describeReactionForHistory(emoji) {
-  const id = String(emoji?.id || "").trim();
-  const name = String(emoji?.name || "").trim();
-  if (id && name) return `:${name}:`;
-  if (name) return name;
-  return "";
-}
-
-function summarizeReactionTargetText(text, maxLen = 80) {
-  const normalized = String(text || "").replace(/\s+/g, " ").trim();
-  if (!normalized) return "";
-  if (normalized.length <= maxLen) return normalized;
-  return `${normalized.slice(0, Math.max(1, maxLen - 3)).trimEnd()}...`;
-}
-
-function buildReactionEventMessageId({ targetMessageId, reactingUserId, emoji, createdAt }) {
-  const safeEmoji = String(emoji || "")
-    .trim()
-    .replace(/\s+/g, "_")
-    .slice(0, 32);
-  return `reaction:${targetMessageId}:${reactingUserId}:${safeEmoji}:${Number(createdAt) || Date.now()}`;
-}
-
-function isLikelyImageUrl(rawUrl) {
-  const text = String(rawUrl || "").trim();
-  if (!text) return false;
-  try {
-    const parsed = new URL(text);
-    const pathname = String(parsed.pathname || "").toLowerCase();
-    if (IMAGE_EXT_RE.test(pathname) || pathname.endsWith(".avif")) return true;
-    const formatParam = String(parsed.searchParams.get("format") || "").trim().toLowerCase();
-    if (formatParam && /^(png|jpe?g|gif|webp|bmp|heic|heif|avif)$/.test(formatParam)) return true;
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-function parseHistoryImageReference(rawUrl) {
-  const text = String(rawUrl || "").trim();
-  if (!text) return { filename: "(unnamed)", contentType: "" };
-  try {
-    const parsed = new URL(text);
-    const pathname = String(parsed.pathname || "");
-    const segment = pathname.split("/").pop() || "";
-    const decoded = decodeURIComponent(segment || "");
-    const fallback = decoded || segment || "(unnamed)";
-    const ext = fallback.includes(".") ? fallback.split(".").pop() : "";
-    let contentType = normalizeImageContentTypeFromExt(ext);
-    if (!contentType) {
-      const formatParam = String(parsed.searchParams.get("format") || "").trim().toLowerCase();
-      contentType = normalizeImageContentTypeFromExt(formatParam);
-    }
-    return {
-      filename: fallback,
-      contentType
-    };
-  } catch {
-    return { filename: "(unnamed)", contentType: "" };
-  }
-}
-
-function normalizeImageContentTypeFromExt(rawExt) {
-  const ext = String(rawExt || "").trim().toLowerCase().replace(/^\./, "");
-  if (!ext) return "";
-  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
-  if (ext === "png") return "image/png";
-  if (ext === "gif") return "image/gif";
-  if (ext === "webp") return "image/webp";
-  if (ext === "bmp") return "image/bmp";
-  if (ext === "heic") return "image/heic";
-  if (ext === "heif") return "image/heif";
-  if (ext === "avif") return "image/avif";
-  return "";
 }
