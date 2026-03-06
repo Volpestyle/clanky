@@ -2486,6 +2486,69 @@ test("runRealtimeTurn queues non-direct bot-turn-open turns for deferred flush",
   assert.equal(Boolean(deferredTurns[0]?.directAddressed), false);
 });
 
+test("runRealtimeTurn logs buffered output-lock telemetry when deferring a turn", async () => {
+  const runtimeLogs = [];
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: false,
+    reason: "bot_turn_open",
+    outputLockReason: "bot_audio_buffered",
+    participantCount: 2,
+    directAddressed: false,
+    transcript: "yo what's good"
+  });
+
+  const session = {
+    id: "session-defer-buffered-debug",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    voxClient: {
+      getTtsBufferDepthSamples() {
+        return 48_000;
+      },
+      getTtsPlaybackState() {
+        return "buffered";
+      },
+      getTtsTelemetryUpdatedAt() {
+        return Date.now() - 120;
+      }
+    },
+    realtimeClient: {
+      appendInputAudioPcm() {}
+    },
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([21, 22, 23, 24]),
+    captureReason: "stream_end"
+  });
+
+  const addressingLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
+  );
+  assert.equal(addressingLog?.metadata?.outputLockReason, "bot_audio_buffered");
+  assert.equal(addressingLog?.metadata?.outputLockTtsPlaybackState, "buffered");
+  assert.equal(addressingLog?.metadata?.outputLockTtsBufferedSamples, 48_000);
+  assert.equal(typeof addressingLog?.metadata?.outputLockTtsTelemetryAgeMs, "number");
+  assert.equal(addressingLog?.metadata?.outputLockTtsTelemetryFresh, true);
+
+  const deferredLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_deferred_bot_turn_open"
+  );
+  assert.equal(deferredLog?.metadata?.outputLockReason, "bot_audio_buffered");
+  assert.equal(deferredLog?.metadata?.outputLockTtsPlaybackState, "buffered");
+  assert.equal(deferredLog?.metadata?.outputLockTtsBufferedSamples, 48_000);
+});
+
 test("runRealtimeTurn drops classifier_deny turns without deferral", async () => {
   const runtimeLogs = [];
   const deferredTurns = [];

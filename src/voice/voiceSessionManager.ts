@@ -3361,6 +3361,25 @@ export class VoiceSessionManager {
     return normalizeTtsPlaybackState(fallbackState?.ttsPlaybackState);
   }
 
+  getClankvoxReportedTtsPlaybackState(session) {
+    if (!session || session.ending) return null;
+    const playbackState = session.voxClient?.getTtsPlaybackState?.();
+    if (typeof playbackState !== "string") return null;
+    return normalizeTtsPlaybackState(playbackState);
+  }
+
+  getClankvoxReportedTtsBufferedSamples(session) {
+    if (!session || session.ending) return null;
+    const voxClient = session.voxClient;
+    if (!voxClient || typeof voxClient !== "object") return null;
+    const rawBufferedSamples =
+      typeof voxClient.getTtsBufferDepthSamples === "function"
+        ? Number(voxClient.getTtsBufferDepthSamples())
+        : Number(voxClient.ttsBufferDepthSamples || 0);
+    if (!Number.isFinite(rawBufferedSamples)) return null;
+    return Math.max(0, Math.round(rawBufferedSamples));
+  }
+
   getClankvoxTtsTelemetryAgeMs(session) {
     if (!session || session.ending) return null;
     const updatedAt = Number(session.voxClient?.getTtsTelemetryUpdatedAt?.() || 0);
@@ -3372,6 +3391,27 @@ export class VoiceSessionManager {
     const telemetryAgeMs = this.getClankvoxTtsTelemetryAgeMs(session);
     if (telemetryAgeMs == null) return true;
     return telemetryAgeMs <= CLANKVOX_TTS_TELEMETRY_STALE_MS;
+  }
+
+  getOutputLockDebugMetadata(session, outputLockReason = null) {
+    if (!session || session.ending) return {};
+    if (String(outputLockReason || "").trim() !== "bot_audio_buffered") return {};
+    const assistantOutput = this.ensureAssistantOutputState(session);
+    const reportedTtsPlaybackState =
+      this.getClankvoxReportedTtsPlaybackState(session) ||
+      assistantOutput?.ttsPlaybackState ||
+      null;
+    const reportedTtsBufferedSamples = this.getClankvoxReportedTtsBufferedSamples(session);
+    const telemetryAgeMs = this.getClankvoxTtsTelemetryAgeMs(session);
+    return {
+      outputLockPhase: assistantOutput?.phase || null,
+      outputLockAssistantReason: assistantOutput?.reason || null,
+      outputLockAssistantLastTrigger: assistantOutput?.lastTrigger || null,
+      outputLockTtsPlaybackState: reportedTtsPlaybackState,
+      outputLockTtsBufferedSamples: reportedTtsBufferedSamples,
+      outputLockTtsTelemetryAgeMs: telemetryAgeMs == null ? null : Math.round(telemetryAgeMs),
+      outputLockTtsTelemetryFresh: this.isClankvoxTtsTelemetryFresh(session)
+    };
   }
 
   maybeClearStaleRealtimeResponseState(session, { liveAudioStreaming = false, bufferedBotSpeech = false } = {}) {
@@ -7805,6 +7845,10 @@ export class VoiceSessionManager {
       session,
       userId
     });
+    const outputLockDebugMetadata = this.getOutputLockDebugMetadata(
+      session,
+      decision.outputLockReason || null
+    );
 
     this.store.logAction({
       kind: "voice_runtime",
@@ -7874,7 +7918,8 @@ export class VoiceSessionManager {
         musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
           ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()
           : null,
-        error: decision.error || null
+        error: decision.error || null,
+        ...outputLockDebugMetadata
       }
     });
 
@@ -8002,6 +8047,11 @@ export class VoiceSessionManager {
         nextFlushAt
       }
     });
+    const replyOutputLockState = this.getReplyOutputLockState(session);
+    const deferredOutputLockDebugMetadata = this.getOutputLockDebugMetadata(
+      session,
+      replyOutputLockState.reason
+    );
     this.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
@@ -8014,9 +8064,11 @@ export class VoiceSessionManager {
         mode: session.mode,
         captureReason: String(captureReason || "stream_end"),
         deferReason: normalizedDeferReason,
+        outputLockReason: replyOutputLockState.reason,
         directAddressed: Boolean(directAddressed),
         flushDelayMs: normalizedFlushDelayMs,
-        deferredQueueSize: pendingQueue.length
+        deferredQueueSize: pendingQueue.length,
+        ...deferredOutputLockDebugMetadata
       }
     });
     this.scheduleDeferredBotTurnOpenFlush({
@@ -8134,6 +8186,10 @@ export class VoiceSessionManager {
       session,
       userId: latestTurn?.userId || null
     });
+    const deferredOutputLockDebugMetadata = this.getOutputLockDebugMetadata(
+      session,
+      decision.outputLockReason || null
+    );
 
     this.store.logAction({
       kind: "voice_runtime",
@@ -8198,7 +8254,8 @@ export class VoiceSessionManager {
         musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
           ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()
           : null,
-        error: decision.error || null
+        error: decision.error || null,
+        ...deferredOutputLockDebugMetadata
       }
     });
     if (!decision.allow) {
@@ -10239,6 +10296,10 @@ export class VoiceSessionManager {
       session,
       userId
     });
+    const turnOutputLockDebugMetadata = this.getOutputLockDebugMetadata(
+      session,
+      turnDecision.outputLockReason || null
+    );
 
     this.store.logAction({
       kind: "voice_runtime",
@@ -10307,7 +10368,8 @@ export class VoiceSessionManager {
         musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
           ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()
           : null,
-        error: turnDecision.error || null
+        error: turnDecision.error || null,
+        ...turnOutputLockDebugMetadata
       }
     });
     if (!turnDecision.allow) {

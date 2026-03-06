@@ -5,7 +5,7 @@
   "type": "module",
   "main": "src/app.ts",
   "scripts": {
-    "prestart": "bun run build:ui",
+    "prestart": "bun run build:ui && bun run build:voice",
     "start": "bun src/app.ts",
     "predev": "bun run build:ui",
     "dev": "bun --watch src/app.ts",
