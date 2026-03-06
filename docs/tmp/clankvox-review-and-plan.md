@@ -161,8 +161,10 @@ src/
 ### Low Priority
 
 4. **No reconnect support.** Voice WebSocket closure requires full process restart via
-   the TS parent. This is a deliberate simplicity trade-off and works reliably in
-   production.
+   the TS parent, losing all in-flight state (ASR sessions, music position, DAVE epoch,
+   per-SSRC decoders, audio buffers). Users hear a gap during respawn. Rare enough in
+   production that it hasn't been prioritized, but it's an architectural limitation,
+   not a deliberate design choice.
 
 5. **Linear interpolation resampling** (`capture.rs`). Adequate for speech but not
    ideal for music. A polyphase or sinc resampler would produce better results if music
