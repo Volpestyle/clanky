@@ -263,6 +263,96 @@ test("callOpenAI uses Responses API with max_output_tokens and multimodal input"
   assert.equal(seenPayload.input?.[1]?.content?.[1]?.type, "input_image");
 });
 
+test("callOpenAI omits empty text multimodal blocks", async () => {
+  const service = createService({
+    openaiApiKey: "test-openai-key"
+  });
+  let seenPayload = null;
+  service.openai = {
+    responses: {
+      async create(payload) {
+        seenPayload = payload;
+        return {
+          output_text: "ok",
+          usage: {
+            input_tokens: 5,
+            output_tokens: 1,
+            input_tokens_details: {
+              cached_tokens: 0
+            }
+          }
+        };
+      }
+    }
+  };
+
+  await service.callOpenAI({
+    model: "claude-haiku-4-5",
+    systemPrompt: "system prompt",
+    userPrompt: "   ",
+    imageInputs: [
+      {
+        mediaType: "image/png",
+        dataBase64: "Zm9v"
+      }
+    ],
+    contextMessages: [],
+    temperature: 0.5,
+    maxOutputTokens: 123
+  });
+
+  assert.equal(Array.isArray(seenPayload.input?.[0]?.content), true);
+  assert.equal(seenPayload.input?.[0]?.content?.length, 1);
+  assert.equal(seenPayload.input?.[0]?.content?.[0]?.type, "input_image");
+});
+
+test("callAnthropic omits empty text multimodal blocks", async () => {
+  const service = createService({ anthropicApiKey: "test-anthropic-key" });
+  let seenPayload = null;
+  service.anthropic = {
+    messages: {
+      async create(payload) {
+        seenPayload = payload;
+        return {
+          content: [{ type: "text", text: "ok" }],
+          stop_reason: "end_turn",
+          usage: {
+            input_tokens: 5,
+            output_tokens: 1,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0
+          }
+        };
+      }
+    }
+  };
+
+  await service.callAnthropic({
+    model: "claude-haiku-4-5",
+    systemPrompt: "system prompt",
+    userPrompt: "   ",
+    imageInputs: [
+      {
+        mediaType: "image/png",
+        dataBase64: "Zm9v"
+      }
+    ],
+    contextMessages: [],
+    temperature: 0.2,
+    maxOutputTokens: 64
+  });
+
+  assert.equal(Array.isArray(seenPayload.messages?.[0]?.content), true);
+  assert.equal(
+    seenPayload.messages?.[0]?.content?.some((item) => item?.type === "image"),
+    true
+  );
+  assert.equal(
+    seenPayload.messages?.[0]?.content?.some((item) => item?.type === "text" && !String(item?.text || "").trim()),
+    false
+  );
+});
+
 test("callOpenAiMemoryExtraction uses Responses JSON schema format", async () => {
   const service = createService({
     openaiApiKey: "test-openai-key"

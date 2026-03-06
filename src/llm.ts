@@ -82,6 +82,11 @@ type XaiJsonRecord = {
   [key: string]: XaiJsonValue;
 };
 
+function buildMultimodalUserContentParts<T>(textPart: T | null, mediaParts: T[] = []): T[] {
+  const parts = Array.isArray(mediaParts) ? mediaParts.filter(Boolean) : [];
+  return textPart ? [textPart, ...parts] : parts;
+}
+
 export type ToolLoopTextBlock = {
   type: "text";
   text: string;
@@ -1752,13 +1757,16 @@ export class LLMService {
         };
       })
       .filter(Boolean);
-    const userContent = [
-      {
-        type: "input_text",
-        text: userPrompt
-      },
-      ...imageParts
-    ];
+    const normalizedUserPrompt = String(userPrompt || "");
+    const userContent = buildMultimodalUserContentParts(
+      normalizedUserPrompt.trim()
+        ? {
+          type: "input_text",
+          text: normalizedUserPrompt
+        }
+        : null,
+      imageParts
+    );
 
     const normalizedTools = Array.isArray(tools) ? tools : [];
     const openAiTools = normalizedTools.length
@@ -1828,12 +1836,15 @@ export class LLMService {
         };
       })
       .filter(Boolean);
+    const normalizedUserPrompt = String(userPrompt || "");
     const userContent = imageParts.length
-      ? [
-        { type: "text", text: userPrompt },
-        ...imageParts
-      ]
-      : userPrompt;
+      ? buildMultimodalUserContentParts(
+        normalizedUserPrompt.trim()
+          ? { type: "text", text: normalizedUserPrompt }
+          : null,
+        imageParts
+      )
+      : normalizedUserPrompt;
 
     const messages = [
       { role: "system", content: systemPrompt },
@@ -1895,12 +1906,13 @@ export class LLMService {
     tools = []
   }) {
     const imageParts = buildAnthropicImageParts(imageInputs);
+    const normalizedUserPrompt = String(userPrompt || "");
     const userContent = imageParts.length
       ? [
-        { type: "text", text: userPrompt },
+        ...(normalizedUserPrompt.trim() ? [{ type: "text", text: normalizedUserPrompt }] : []),
         ...imageParts
       ]
-      : userPrompt;
+      : normalizedUserPrompt;
 
     const messages = [
       ...(contextMessages || []).map((msg) => ({
