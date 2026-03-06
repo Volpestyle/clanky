@@ -1,6 +1,8 @@
 import { clamp } from "../utils.ts";
 import { getBotName, getBotNameAliases } from "../settings/agentStack.ts";
+import { getReplyPermissions } from "../settings/agentStack.ts";
 import { isBotNameAddressed } from "../voice/voiceSessionHelpers.ts";
+import type { Settings } from "../settings/settingsSchema.ts";
 import {
   DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD
 } from "../directAddressConfidence.ts";
@@ -15,9 +17,46 @@ export type ReplyAddressSignal = {
   confidenceSource: "llm" | "fallback" | "direct" | "exact_name";
 };
 
+type ReplyAdmissionRecentMessage = Record<string, unknown> & {
+  message_id?: string;
+  author_id?: string;
+};
+
+type ReplyAdmissionAuthor = {
+  id?: string;
+};
+
+type ReplyAdmissionReference = {
+  messageId?: string;
+  resolved?: {
+    author?: ReplyAdmissionAuthor | null;
+  } | null;
+  resolvedMessage?: {
+    author?: ReplyAdmissionAuthor | null;
+  } | null;
+};
+
+type ReplyAdmissionMentionUsers = {
+  has: (id: string | undefined) => boolean;
+};
+
+type ReplyAdmissionMessage = {
+  content?: string;
+  mentions?: {
+    users?: ReplyAdmissionMentionUsers | null;
+    repliedUser?: ReplyAdmissionAuthor | null;
+  } | null;
+  reference?: ReplyAdmissionReference | null;
+  referencedMessage?: {
+    author?: ReplyAdmissionAuthor | null;
+    id?: string;
+  } | null;
+  author?: ReplyAdmissionAuthor | null;
+};
+
 type ReplyAddressRuntime = {
-  botUserId?: string;
-  isDirectlyAddressed: (settings, message) => boolean;
+  botUserId?: string | null;
+  isDirectlyAddressed: (settings: Settings, message: ReplyAdmissionMessage) => boolean;
 };
 
 export function hasBotMessageInRecentWindow({
@@ -25,6 +64,11 @@ export function hasBotMessageInRecentWindow({
   recentMessages,
   windowSize = 5,
   triggerMessageId = null
+}: {
+  botUserId?: string | null;
+  recentMessages?: ReplyAdmissionRecentMessage[];
+  windowSize?: number;
+  triggerMessageId?: string | null;
 }) {
   const normalizedBotUserId = String(botUserId || "").trim();
   if (!normalizedBotUserId) return false;
@@ -47,6 +91,12 @@ export function hasStartupFollowupAfterMessage({
   messageIndex,
   triggerMessageId,
   windowSize = 5
+}: {
+  botUserId?: string | null;
+  messages?: ReplyAdmissionMessage[];
+  messageIndex: number;
+  triggerMessageId?: string | null;
+  windowSize?: number;
 }) {
   const normalizedBotUserId = String(botUserId || "").trim();
   if (!normalizedBotUserId) return false;
@@ -90,6 +140,15 @@ export function shouldAttemptReplyDecision({
   forceDecisionLoop = false,
   triggerMessageId = null,
   windowSize = 5
+}: {
+  botUserId?: string | null;
+  settings: Settings;
+  recentMessages?: ReplyAdmissionRecentMessage[];
+  addressSignal?: Partial<ReplyAddressSignal> | null;
+  forceRespond?: boolean;
+  forceDecisionLoop?: boolean;
+  triggerMessageId?: string | null;
+  windowSize?: number;
 }) {
   if (forceRespond || forceDecisionLoop || isHardAddressSignal(addressSignal)) return true;
   if (!getReplyPermissions(settings).allowUnsolicitedReplies) return false;
@@ -112,9 +171,9 @@ export function shouldForceRespondForAddressSignal(addressSignal: Partial<ReplyA
 
 export async function getReplyAddressSignal(
   runtime: ReplyAddressRuntime,
-  settings,
-  message,
-  recentMessages = []
+  settings: Settings,
+  message: ReplyAdmissionMessage,
+  recentMessages: ReplyAdmissionRecentMessage[] = []
 ): Promise<ReplyAddressSignal> {
   const referencedAuthorId = resolveReferencedAuthorId(message, recentMessages);
   const directByPlatform =
@@ -151,7 +210,10 @@ export async function getReplyAddressSignal(
   };
 }
 
-function resolveReferencedAuthorId(message, recentMessages = []) {
+function resolveReferencedAuthorId(
+  message: ReplyAdmissionMessage,
+  recentMessages: ReplyAdmissionRecentMessage[] = []
+) {
   const referenceId = String(message.reference?.messageId || "").trim();
   if (!referenceId) return null;
 
@@ -166,7 +228,7 @@ function resolveReferencedAuthorId(message, recentMessages = []) {
   return fromResolved ? String(fromResolved) : null;
 }
 
-function resolveExactNameReason(settings, message) {
+function resolveExactNameReason(settings: Settings, message: ReplyAdmissionMessage) {
   const transcript = String(message?.content || "");
   const botName = getBotName(settings).trim();
   if (botName && isBotNameAddressed({ transcript, botName })) {
@@ -194,4 +256,3 @@ function isHardAddressSignal(addressSignal: Partial<ReplyAddressSignal> | null =
     .toLowerCase();
   return reason === "direct" || reason === "name_exact" || reason === "name_alias";
 }
-import { getReplyPermissions } from "../settings/agentStack.ts";

@@ -1,5 +1,9 @@
 import { clamp, sleep } from "../utils.ts";
-import { shouldForceRespondForAddressSignal } from "./replyAdmission.ts";
+import {
+  shouldForceRespondForAddressSignal,
+  type ReplyAddressSignal
+} from "./replyAdmission.ts";
+import type { QueueGatewayRuntime } from "./botContext.ts";
 import {
   getActivitySettings,
   getMemorySettings,
@@ -20,7 +24,48 @@ type ReplyCoalesceWaitOptions = {
   edgeGraceMs?: number;
 };
 
-export function getReplyQueueWaitMs(bot, settings) {
+type ReplyQueueMessage = {
+  id?: string;
+  guildId?: string;
+  channelId?: string;
+  guild?: unknown;
+  channel?: unknown;
+  createdTimestamp?: number;
+  author?: {
+    id?: string;
+  } | null;
+};
+
+type ReplyQueueAddressSignal = {
+  direct: boolean;
+  inferred: boolean;
+  triggered: boolean;
+  reason: string;
+  confidence: number;
+  threshold: number;
+  confidenceSource: ReplyAddressSignal["confidenceSource"];
+};
+
+type ReplyQueueJob = {
+  message?: ReplyQueueMessage;
+  addressSignal?: Partial<ReplyQueueAddressSignal> | null;
+  forceRespond?: boolean;
+  attempts?: number;
+  source?: string;
+  performanceSeed?: Record<string, unknown> | null;
+};
+
+type ReplyQueueRateLimitRuntime = Pick<QueueGatewayRuntime, "lastBotMessageAt" | "canSendMessage">;
+
+type ReplyQueueStorageRuntime = {
+  replyQueues: Map<string, ReplyQueueJob[]>;
+  replyQueuedMessageIds: Set<string>;
+};
+
+export function getReplyQueueWaitMs(
+  bot: ReplyQueueRateLimitRuntime,
+  settings: Record<string, unknown>
+) {
   const activity = getActivitySettings(settings);
   const permissions = getReplyPermissions(settings);
   const cooldownMs = activity.minSecondsBetweenMessages * 1000;
@@ -33,18 +78,22 @@ export function getReplyQueueWaitMs(bot, settings) {
   return 0;
 }
 
-export function getReplyCoalesceWindowMs(settings) {
+export function getReplyCoalesceWindowMs(settings: Record<string, unknown>) {
   const activity = getActivitySettings(settings);
   const seconds = clamp(Number(activity.replyCoalesceWindowSeconds) || 0, 0, 20);
   return Math.floor(seconds * 1000);
 }
 
-export function getReplyCoalesceMaxMessages(settings) {
+export function getReplyCoalesceMaxMessages(settings: Record<string, unknown>) {
   const activity = getActivitySettings(settings);
   return clamp(Number(activity.replyCoalesceMaxMessages) || 1, 1, 20);
 }
 
-export function getReplyCoalesceWaitMs(settings, message, options: ReplyCoalesceWaitOptions = {}) {
+export function getReplyCoalesceWaitMs(
+  settings: Record<string, unknown>,
+  message: ReplyQueueMessage | null | undefined,
+  options: ReplyCoalesceWaitOptions = {}
+) {
   const windowMs = getReplyCoalesceWindowMs(settings);
   if (windowMs <= 0) return 0;
   const nowMs = Number(options?.nowMs);
@@ -69,7 +118,7 @@ export function getReplyCoalesceWaitMs(settings, message, options: ReplyCoalesce
   return Math.max(0, edgeGraceMs - overrunMs);
 }
 
-export function dequeueReplyJob(bot, channelId) {
+export function dequeueReplyJob(bot: ReplyQueueStorageRuntime, channelId: string) {
   const queue = bot.replyQueues.get(channelId);
   if (!queue?.length) return null;
 
@@ -85,7 +134,11 @@ export function dequeueReplyJob(bot, channelId) {
   return job;
 }
 
-export function dequeueReplyBurst(bot, channelId, settings) {
+export function dequeueReplyBurst(
+  bot: ReplyQueueStorageRuntime,
+  channelId: string,
+  settings: Record<string, unknown>
+) {
   const firstJob = dequeueReplyJob(bot, channelId);
   if (!firstJob) return [];
 
@@ -126,7 +179,11 @@ export function dequeueReplyBurst(bot, channelId, settings) {
   return burst;
 }
 
-export function requeueReplyJobs(bot, channelId, jobs) {
+export function requeueReplyJobs(
+  bot: ReplyQueueStorageRuntime,
+  channelId: string,
+  jobs: ReplyQueueJob[]
+) {
   const validJobs = (jobs || []).filter((job) => job?.message?.id);
   if (!validJobs.length) return;
 
@@ -138,7 +195,19 @@ export function requeueReplyJobs(bot, channelId, jobs) {
   }
 }
 
-export async function processReplyQueue(bot, channelId) {
+function normalizeConfidenceSource(
+  value: unknown
+): ReplyAddressSignal["confidenceSource"] {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "llm" || normalized === "direct" || normalized === "exact_name") {
+    return normalized;
+  }
+  return "fallback";
+}
+
+export async function processReplyQueue(bot: QueueGatewayRuntime, channelId: string) {
   if (bot.replyQueueWorkers.has(channelId)) return;
   bot.replyQueueWorkers.add(channelId);
 
@@ -220,16 +289,17 @@ export async function processReplyQueue(bot, channelId) {
         message.channelId,
         memory.promptSlice.maxRecentMessages
       );
-      const addressSignal = {
-        ...(latestJob.addressSignal || await bot.getReplyAddressSignal(settings, message, recentMessages))
+      const latestAddressSignal =
+        latestJob.addressSignal || await bot.getReplyAddressSignal(settings, message, recentMessages);
+      const addressSignal: ReplyQueueAddressSignal = {
+        direct: Boolean(latestAddressSignal?.direct),
+        inferred: Boolean(latestAddressSignal?.inferred),
+        triggered: Boolean(latestAddressSignal?.triggered),
+        reason: String(latestAddressSignal?.reason || "llm_decides"),
+        confidence: Math.max(0, Math.min(1, Number(latestAddressSignal?.confidence) || 0)),
+        threshold: Math.max(0.4, Math.min(0.95, Number(latestAddressSignal?.threshold) || 0.62)),
+        confidenceSource: normalizeConfidenceSource(latestAddressSignal?.confidenceSource)
       };
-      addressSignal.direct = Boolean(addressSignal.direct);
-      addressSignal.inferred = Boolean(addressSignal.inferred);
-      addressSignal.triggered = Boolean(addressSignal.triggered);
-      addressSignal.reason = String(addressSignal.reason || "llm_decides");
-      addressSignal.confidence = Math.max(0, Math.min(1, Number(addressSignal.confidence) || 0));
-      addressSignal.threshold = Math.max(0.4, Math.min(0.95, Number(addressSignal.threshold) || 0.62));
-      addressSignal.confidenceSource = String(addressSignal.confidenceSource || "fallback");
 
       for (const burstJob of burstJobs) {
         const burstMessage = burstJob?.message;
@@ -241,7 +311,9 @@ export async function processReplyQueue(bot, channelId) {
         if ((Number(signal.confidence) || 0) > addressSignal.confidence) {
           addressSignal.confidence = Math.max(0, Math.min(1, Number(signal.confidence) || 0));
           addressSignal.threshold = Math.max(0.4, Math.min(0.95, Number(signal.threshold) || addressSignal.threshold));
-          addressSignal.confidenceSource = String(signal.confidenceSource || addressSignal.confidenceSource || "fallback");
+          addressSignal.confidenceSource = normalizeConfidenceSource(
+            signal.confidenceSource || addressSignal.confidenceSource || "fallback"
+          );
         }
         if (signal.triggered && !addressSignal.triggered) {
           addressSignal.triggered = true;
@@ -279,8 +351,9 @@ export async function processReplyQueue(bot, channelId) {
 
         if (!sent && forceRespond && !bot.isStopping && !bot.store.hasTriggeredResponse(message.id)) {
           const latestSettings = bot.store.getSettings();
+          const latestPermissions = getReplyPermissions(latestSettings);
           if (
-            latestSettings.permissions.allowReplies &&
+            latestPermissions.allowReplies &&
             bot.isChannelAllowed(latestSettings, message.channelId) &&
             !bot.isUserBlocked(latestSettings, message.author.id)
           ) {
@@ -330,7 +403,7 @@ export async function processReplyQueue(bot, channelId) {
   }
 }
 
-export async function ensureGatewayHealthy(bot) {
+export async function ensureGatewayHealthy(bot: QueueGatewayRuntime) {
   if (bot.isStopping) return;
   if (bot.reconnectInFlight) return;
   if (!bot.hasConnectedAtLeastOnce) return;
@@ -346,7 +419,7 @@ export async function ensureGatewayHealthy(bot) {
   await reconnectGateway(bot, `stale_gateway_${elapsed}ms`);
 }
 
-export function scheduleReconnect(bot, reason, delayMs) {
+export function scheduleReconnect(bot: QueueGatewayRuntime, reason: string, delayMs: number) {
   if (bot.isStopping) return;
   if (bot.reconnectTimeout) return;
 
@@ -362,7 +435,7 @@ export function scheduleReconnect(bot, reason, delayMs) {
   }, delayMs);
 }
 
-export async function reconnectGateway(bot, reason) {
+export async function reconnectGateway(bot: QueueGatewayRuntime, reason: string) {
   if (bot.isStopping) return;
   if (bot.reconnectInFlight) return;
   bot.reconnectInFlight = true;

@@ -76,6 +76,12 @@ import {
 } from "./bot/replyPipelineShared.ts";
 import type { ReplyPerformanceSeed } from "./bot/replyPipelineShared.ts";
 import {
+  isChannelAllowed as isChannelAllowedForPermissions,
+  isDiscoveryChannel as isDiscoveryChannelForPermissions,
+  isReplyChannel as isReplyChannelForPermissions,
+  isUserBlocked as isUserBlockedForPermissions
+} from "./bot/permissions.ts";
+import {
   buildReplyToolSet,
   executeReplyTool
 } from "./tools/replyTools.ts";
@@ -114,6 +120,12 @@ import {
   getDiscoveryPostingIntervalMs,
   pickDiscoveryChannel
 } from "./bot/discoverySchedule.ts";
+import type {
+  BotContext,
+  QueueGatewayRuntime,
+  ReplyPipelineRuntime,
+  VoiceReplyRuntime
+} from "./bot/botContext.ts";
 import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
 import type { BrowserManager } from "./services/BrowserManager.ts";
 import {
@@ -122,7 +134,6 @@ import {
   isAbortError,
   runBrowserBrowseTask
 } from "./tools/browserTaskRuntime.ts";
-import type { ActiveBrowserTask } from "./tools/browserTaskRuntime.ts";
 import { runOpenAiComputerUseTask } from "./tools/openAiComputerUseRuntime.ts";
 import {
   resolveOperationalChannel,
@@ -138,7 +149,6 @@ import {
   getDiscoverySettings,
   getMemorySettings,
   getReplyPermissions,
-  getStartupSettings,
   getTextInitiativeSettings,
   getVideoContextSettings,
   getActivitySettings,
@@ -430,6 +440,168 @@ export class ClankerBot {
 
   attachScreenShareSessionManager(manager: ScreenShareSessionManagerLike | null) {
     this.screenShareSessionManager = manager || null;
+  }
+
+  toBotContext(): BotContext {
+    return {
+      appConfig: this.appConfig,
+      store: this.store,
+      llm: this.llm,
+      memory: this.memory,
+      client: this.client,
+      botUserId: String(this.client.user?.id || "").trim() || null
+    };
+  }
+
+  toQueueGatewayRuntime(): QueueGatewayRuntime {
+    const runtime: QueueGatewayRuntime = {
+      ...this.toBotContext(),
+      lastBotMessageAt: this.lastBotMessageAt,
+      canSendMessage: (maxPerHour) => this.canSendMessage(maxPerHour),
+      replyQueues: this.replyQueues,
+      replyQueueWorkers: this.replyQueueWorkers,
+      replyQueuedMessageIds: this.replyQueuedMessageIds,
+      isStopping: this.isStopping,
+      isChannelAllowed: (settings, channelId) => this.isChannelAllowed(settings, channelId),
+      isUserBlocked: (settings, userId) => this.isUserBlocked(settings, userId),
+      getReplyAddressSignal: (settings, message, recentMessages = []) =>
+        this.getReplyAddressSignal(settings, message, recentMessages),
+      maybeReplyToMessage: (message, settings, options = {}) =>
+        this.maybeReplyToMessage(message, settings, options),
+      reconnectInFlight: this.reconnectInFlight,
+      hasConnectedAtLeastOnce: this.hasConnectedAtLeastOnce,
+      lastGatewayEventAt: this.lastGatewayEventAt,
+      reconnectTimeout: this.reconnectTimeout,
+      markGatewayEvent: () => this.markGatewayEvent(),
+      reconnectAttempts: this.reconnectAttempts
+    };
+
+    Object.defineProperties(runtime, {
+      lastBotMessageAt: {
+        get: () => this.lastBotMessageAt,
+        set: (value) => {
+          this.lastBotMessageAt = Number(value) || 0;
+        },
+        enumerable: true
+      },
+      isStopping: {
+        get: () => this.isStopping,
+        set: (value) => {
+          this.isStopping = Boolean(value);
+        },
+        enumerable: true
+      },
+      reconnectInFlight: {
+        get: () => this.reconnectInFlight,
+        set: (value) => {
+          this.reconnectInFlight = Boolean(value);
+        },
+        enumerable: true
+      },
+      hasConnectedAtLeastOnce: {
+        get: () => this.hasConnectedAtLeastOnce,
+        set: (value) => {
+          this.hasConnectedAtLeastOnce = Boolean(value);
+        },
+        enumerable: true
+      },
+      lastGatewayEventAt: {
+        get: () => this.lastGatewayEventAt,
+        set: (value) => {
+          this.lastGatewayEventAt = Number(value) || Date.now();
+        },
+        enumerable: true
+      },
+      reconnectTimeout: {
+        get: () => this.reconnectTimeout,
+        set: (value) => {
+          this.reconnectTimeout = value;
+        },
+        enumerable: true
+      },
+      reconnectAttempts: {
+        get: () => this.reconnectAttempts,
+        set: (value) => {
+          this.reconnectAttempts = Number(value) || 0;
+        },
+        enumerable: true
+      }
+    });
+
+    return runtime;
+  }
+
+  toReplyPipelineRuntime(): ReplyPipelineRuntime {
+    return {
+      ...this.toBotContext(),
+      gifs: this.gifs,
+      search: this.search,
+      voiceSessionManager: this.voiceSessionManager,
+      getReplyAddressSignal: (settings, message, recentMessages = []) =>
+        this.getReplyAddressSignal(settings, message, recentMessages),
+      isReplyChannel: (settings, channelId) => this.isReplyChannel(settings, channelId),
+      getReactionEmojiOptions: (guild) => this.getReactionEmojiOptions(guild),
+      shouldAttemptReplyDecision: (payload) => this.shouldAttemptReplyDecision(payload),
+      loadPromptMemorySlice: (payload) => this.loadPromptMemorySlice(payload),
+      getRecentLookupContextForPrompt: (payload) => this.getRecentLookupContextForPrompt(payload),
+      getConversationHistoryForPrompt: (payload) => this.getConversationHistoryForPrompt(payload),
+      buildMediaMemoryFacts: (payload) => this.buildMediaMemoryFacts(payload),
+      getImageInputs: (message) => this.getImageInputs(message),
+      getImageBudgetState: (settings) => this.getImageBudgetState(settings),
+      getVideoGenerationBudgetState: (settings) => this.getVideoGenerationBudgetState(settings),
+      getMediaGenerationCapabilities: (settings) => this.getMediaGenerationCapabilities(settings),
+      getGifBudgetState: (settings) => this.getGifBudgetState(settings),
+      buildWebSearchContext: (settings, messageText) => this.buildWebSearchContext(settings, messageText),
+      buildBrowserBrowseContext: (settings) => this.buildBrowserBrowseContext(settings),
+      buildMemoryLookupContext: (payload) => this.buildMemoryLookupContext(payload),
+      buildVideoReplyContext: (payload) => this.buildVideoReplyContext(payload),
+      buildImageLookupContext: (payload) => this.buildImageLookupContext(payload),
+      getAutoIncludeImageInputs: (payload) => this.getAutoIncludeImageInputs(payload),
+      captionRecentHistoryImages: (payload) => this.captionRecentHistoryImages(payload),
+      getVoiceScreenShareCapability: (payload) => this.getVoiceScreenShareCapability(payload),
+      getEmojiHints: (guild) => this.getEmojiHints(guild),
+      runModelRequestedBrowserBrowse: (payload) => this.runModelRequestedBrowserBrowse(payload),
+      runModelRequestedCodeTask: (payload) => this.runModelRequestedCodeTask(payload),
+      buildSubAgentSessionsRuntime: () => this.buildSubAgentSessionsRuntime(),
+      runModelRequestedImageLookup: (payload) => this.runModelRequestedImageLookup(payload),
+      mergeImageInputs: (payload) => this.mergeImageInputs(payload),
+      maybeHandleStructuredVoiceIntent: (payload) => this.maybeHandleStructuredVoiceIntent(payload),
+      maybeHandleStructuredAutomationIntent: (payload) =>
+        this.maybeHandleStructuredAutomationIntent(payload),
+      rememberRecentLookupContext: (payload) => this.rememberRecentLookupContext(payload),
+      maybeApplyReplyReaction: (payload) => this.maybeApplyReplyReaction(payload),
+      logSkippedReply: (payload) => this.logSkippedReply(payload),
+      maybeHandleScreenShareOfferIntent: (payload) => this.maybeHandleScreenShareOfferIntent(payload),
+      maybeAttachReplyGif: (payload) => this.maybeAttachReplyGif(payload),
+      maybeAttachGeneratedImage: (payload) => this.maybeAttachGeneratedImage(payload),
+      maybeAttachGeneratedVideo: (payload) => this.maybeAttachGeneratedVideo(payload),
+      getSimulatedTypingDelayMs: (minMs, jitterMs) => this.getSimulatedTypingDelayMs(minMs, jitterMs),
+      shouldSendAsReply: (payload) => this.shouldSendAsReply(payload),
+      markSpoke: () => this.markSpoke(),
+      composeMessageContentForHistory: (message, baseText) =>
+        this.composeMessageContentForHistory(message, baseText),
+      canSendMessage: (maxPerHour) => this.canSendMessage(maxPerHour),
+      canTalkNow: (settings) => this.canTalkNow(settings)
+    };
+  }
+
+  toVoiceReplyRuntime(): VoiceReplyRuntime {
+    return {
+      ...this.toBotContext(),
+      search: this.search,
+      loadRelevantMemoryFacts: (payload) => this.loadRelevantMemoryFacts(payload),
+      buildMediaMemoryFacts: (payload) => this.buildMediaMemoryFacts(payload),
+      loadPromptMemorySlice: (payload) => this.loadPromptMemorySlice(payload),
+      buildWebSearchContext: (settings, messageText) => this.buildWebSearchContext(settings, messageText),
+      loadRecentConversationHistory: (payload) => this.getConversationHistoryForPrompt(payload),
+      loadRecentLookupContext: (payload) => this.getRecentLookupContextForPrompt(payload),
+      rememberRecentLookupContext: (payload) => this.rememberRecentLookupContext(payload),
+      getVoiceScreenShareCapability: (payload) => this.getVoiceScreenShareCapability(payload),
+      offerVoiceScreenShareLink: (payload) => this.offerVoiceScreenShareLink(payload),
+      runModelRequestedBrowserBrowse: (payload) => this.runModelRequestedBrowserBrowse(payload),
+      buildBrowserBrowseContext: (settings) => this.buildBrowserBrowseContext(settings),
+      runModelRequestedCodeTask: (payload) => this.runModelRequestedCodeTask(payload)
+    };
   }
 
   registerEvents() {
@@ -1162,7 +1334,7 @@ export class ClankerBot {
   }
 
   getReplyQueueWaitMs(settings) {
-    return getReplyQueueWaitMs(this, settings);
+    return getReplyQueueWaitMs(this.toQueueGatewayRuntime(), settings);
   }
 
   getReplyCoalesceWindowMs(settings) {
@@ -1178,31 +1350,31 @@ export class ClankerBot {
   }
 
   dequeueReplyJob(channelId) {
-    return dequeueReplyJob(this, channelId);
+    return dequeueReplyJob(this.toQueueGatewayRuntime(), channelId);
   }
 
   dequeueReplyBurst(channelId, settings) {
-    return dequeueReplyBurst(this, channelId, settings);
+    return dequeueReplyBurst(this.toQueueGatewayRuntime(), channelId, settings);
   }
 
   requeueReplyJobs(channelId, jobs) {
-    return requeueReplyJobs(this, channelId, jobs);
+    return requeueReplyJobs(this.toQueueGatewayRuntime(), channelId, jobs);
   }
 
   async processReplyQueue(channelId) {
-    return await processReplyQueue(this, channelId);
+    return await processReplyQueue(this.toQueueGatewayRuntime(), channelId);
   }
 
   async ensureGatewayHealthy() {
-    return await ensureGatewayHealthy(this);
+    return await ensureGatewayHealthy(this.toQueueGatewayRuntime());
   }
 
   scheduleReconnect(reason, delayMs) {
-    return scheduleReconnect(this, reason, delayMs);
+    return scheduleReconnect(this.toQueueGatewayRuntime(), reason, delayMs);
   }
 
   async reconnectGateway(reason) {
-    return await reconnectGateway(this, reason);
+    return await reconnectGateway(this.toQueueGatewayRuntime(), reason);
   }
 
   async handleMessage(message) {
@@ -1310,24 +1482,7 @@ export class ClankerBot {
     maxOutputChars = 180,
     allowSkip = false
   }) {
-    const runtime = {
-      llm: this.llm,
-      store: this.store,
-      memory: this.memory,
-      search: this.search,
-      client: this.client,
-      loadRelevantMemoryFacts: (payload) => this.loadRelevantMemoryFacts(payload),
-      buildMediaMemoryFacts: (payload) => this.buildMediaMemoryFacts(payload),
-      loadPromptMemorySlice: (payload) => this.loadPromptMemorySlice(payload),
-      buildWebSearchContext: (runtimeSettings, messageText) =>
-        this.buildWebSearchContext(runtimeSettings, messageText),
-      loadRecentConversationHistory: (payload) => this.getConversationHistoryForPrompt(payload),
-      loadRecentLookupContext: (payload) => this.getRecentLookupContextForPrompt(payload),
-      rememberRecentLookupContext: (payload) => this.rememberRecentLookupContext(payload),
-      getVoiceScreenShareCapability: (payload) => this.getVoiceScreenShareCapability(payload),
-      offerVoiceScreenShareLink: (payload) => this.offerVoiceScreenShareLink(payload)
-    };
-    return await composeVoiceOperationalMessage(runtime, {
+    return await composeVoiceOperationalMessage(this.toVoiceReplyRuntime(), {
       settings,
       guildId,
       channelId,
@@ -1364,24 +1519,7 @@ export class ClankerBot {
     webSearchTimeoutMs = null,
     voiceToolCallbacks = null
   }) {
-    const runtime = {
-      llm: this.llm,
-      store: this.store,
-      memory: this.memory,
-      search: this.search,
-      client: this.client,
-      loadRelevantMemoryFacts: (payload) => this.loadRelevantMemoryFacts(payload),
-      buildMediaMemoryFacts: (payload) => this.buildMediaMemoryFacts(payload),
-      loadPromptMemorySlice: (payload) => this.loadPromptMemorySlice(payload),
-      buildWebSearchContext: (runtimeSettings, messageText) =>
-        this.buildWebSearchContext(runtimeSettings, messageText),
-      loadRecentConversationHistory: (payload) => this.getConversationHistoryForPrompt(payload),
-      loadRecentLookupContext: (payload) => this.getRecentLookupContextForPrompt(payload),
-      rememberRecentLookupContext: (payload) => this.rememberRecentLookupContext(payload),
-      getVoiceScreenShareCapability: (payload) => this.getVoiceScreenShareCapability(payload),
-      offerVoiceScreenShareLink: (payload) => this.offerVoiceScreenShareLink(payload)
-    };
-    return await generateVoiceTurnReply(runtime, {
+    return await generateVoiceTurnReply(this.toVoiceReplyRuntime(), {
       settings,
       guildId,
       channelId,
@@ -1426,7 +1564,7 @@ export class ClankerBot {
   }
 
   async maybeReplyToMessage(message, settings, options: ReplyAttemptOptions = {}) {
-    return await maybeReplyToMessagePipeline(this, message, settings, options);
+    return await maybeReplyToMessagePipeline(this.toReplyPipelineRuntime(), message, settings, options);
   }
 
   getVoiceScreenShareCapability({
@@ -3789,24 +3927,11 @@ export class ClankerBot {
   }
 
   isUserBlocked(settings, userId) {
-    const blockedUserIds = [...getReplyPermissions(settings).blockedUserIds].map((value) => String(value));
-    return blockedUserIds.includes(String(userId));
+    return isUserBlockedForPermissions(settings, String(userId));
   }
 
   isChannelAllowed(settings, channelId) {
-    const id = String(channelId);
-    const permissions = getReplyPermissions(settings);
-    const blockedChannelIds = [...permissions.blockedChannelIds].map((value) => String(value));
-    const allowedChannelIds = [...permissions.allowedChannelIds].map((value) => String(value));
-
-    if (blockedChannelIds.includes(id)) {
-      return false;
-    }
-
-    const allowList = allowedChannelIds;
-    if (allowList.length === 0) return true;
-
-    return allowList.includes(id);
+    return isChannelAllowedForPermissions(settings, String(channelId));
   }
 
   isNonPrivateReplyEligibleChannel(channel) {
@@ -3819,16 +3944,11 @@ export class ClankerBot {
   }
 
   isReplyChannel(settings, channelId) {
-    const id = String(channelId);
-    const replyChannelIds = [...getReplyPermissions(settings).replyChannelIds].map((value) => String(value));
-    if (!replyChannelIds.length) return false;
-    return replyChannelIds.includes(id);
+    return isReplyChannelForPermissions(settings, String(channelId));
   }
 
   isDiscoveryChannel(settings, channelId) {
-    const id = String(channelId);
-    const discoveryChannelIds = [...getDiscoverySettings(settings).channelIds].map((value) => String(value));
-    return discoveryChannelIds.includes(id);
+    return isDiscoveryChannelForPermissions(settings, String(channelId));
   }
 
   isDirectlyAddressed(_settings, message) {
