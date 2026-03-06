@@ -78,17 +78,24 @@ type DeepPartial<T> =
   T;
 
 export type SettingsModelBinding = {
-  provider?: string;
-  model?: string;
+  provider: string;
+  model: string;
 };
 
-export type SettingsExecutionPolicy = {
-  mode?: string;
-  model?: SettingsModelBinding;
+type SettingsExecutionTuning = {
   temperature?: number;
   maxOutputTokens?: number;
   reasoningEffort?: string;
 };
+
+export type SettingsExecutionPolicy =
+  | ({
+      mode: "inherit_orchestrator";
+    } & SettingsExecutionTuning)
+  | ({
+      mode: "dedicated_model";
+      model: SettingsModelBinding;
+    } & SettingsExecutionTuning);
 
 export const DEFAULT_SETTINGS = {
   identity: {
@@ -574,26 +581,74 @@ export const DEFAULT_SETTINGS = {
 
 type SettingsFromDefaults = DeepWiden<typeof DEFAULT_SETTINGS>;
 
-export type Settings = Omit<SettingsFromDefaults, "interaction" | "agentStack"> & {
-  interaction: Omit<SettingsFromDefaults["interaction"], "replyGeneration"> & {
-    replyGeneration: Omit<SettingsFromDefaults["interaction"]["replyGeneration"], "pricing"> & {
-      pricing: Record<string, unknown>;
+type SettingsInteraction = Omit<SettingsFromDefaults["interaction"], "replyGeneration" | "followup"> & {
+  replyGeneration: Omit<SettingsFromDefaults["interaction"]["replyGeneration"], "pricing"> & {
+    pricing: Record<string, unknown>;
+  };
+  followup: Omit<SettingsFromDefaults["interaction"]["followup"], "execution"> & {
+    execution: SettingsExecutionPolicy;
+  };
+};
+
+type SettingsAgentStack = Omit<SettingsFromDefaults["agentStack"], "overrides" | "runtimeConfig"> & {
+  overrides: {
+    orchestrator?: SettingsModelBinding;
+    harness?: string;
+    researchRuntime?: string;
+    browserRuntime?: string;
+    voiceRuntime?: string;
+    voiceAdmissionClassifier?: SettingsExecutionPolicy;
+    devTeam?: {
+      orchestrator?: SettingsModelBinding;
+      codingWorkers?: readonly string[];
     };
   };
-  agentStack: Omit<SettingsFromDefaults["agentStack"], "overrides"> & {
-    overrides: {
-      orchestrator?: SettingsModelBinding;
-      harness?: string;
-      researchRuntime?: string;
-      browserRuntime?: string;
-      voiceRuntime?: string;
-      voiceAdmissionClassifier?: SettingsExecutionPolicy;
-      devTeam?: {
-        orchestrator?: SettingsModelBinding;
-        codingWorkers?: readonly string[];
+  runtimeConfig: Omit<SettingsFromDefaults["agentStack"]["runtimeConfig"], "browser" | "voice"> & {
+    browser: Omit<SettingsFromDefaults["agentStack"]["runtimeConfig"]["browser"], "localBrowserAgent"> & {
+      localBrowserAgent: Omit<
+        SettingsFromDefaults["agentStack"]["runtimeConfig"]["browser"]["localBrowserAgent"],
+        "execution"
+      > & {
+        execution: SettingsExecutionPolicy;
       };
     };
+    voice: Omit<SettingsFromDefaults["agentStack"]["runtimeConfig"]["voice"], "generation"> & {
+      generation: SettingsExecutionPolicy;
+    };
   };
+};
+
+type SettingsMemory = Omit<SettingsFromDefaults["memory"], "execution"> & {
+  execution: SettingsExecutionPolicy;
+};
+
+type SettingsInitiative = Omit<SettingsFromDefaults["initiative"], "text" | "voice"> & {
+  text: Omit<SettingsFromDefaults["initiative"]["text"], "execution"> & {
+    execution: SettingsExecutionPolicy;
+  };
+  voice: Omit<SettingsFromDefaults["initiative"]["voice"], "execution"> & {
+    execution: SettingsExecutionPolicy;
+  };
+};
+
+type SettingsMedia = Omit<SettingsFromDefaults["media"], "vision" | "videoContext"> & {
+  vision: Omit<SettingsFromDefaults["media"]["vision"], "execution"> & {
+    execution: SettingsExecutionPolicy;
+  };
+  videoContext: Omit<SettingsFromDefaults["media"]["videoContext"], "execution"> & {
+    execution: SettingsExecutionPolicy;
+  };
+};
+
+export type Settings = Omit<
+  SettingsFromDefaults,
+  "interaction" | "agentStack" | "memory" | "initiative" | "media"
+> & {
+  interaction: SettingsInteraction;
+  agentStack: SettingsAgentStack;
+  memory: SettingsMemory;
+  initiative: SettingsInitiative;
+  media: SettingsMedia;
 };
 
 export type SettingsInput = DeepPartial<Settings>;

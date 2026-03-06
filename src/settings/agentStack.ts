@@ -745,8 +745,8 @@ export function resolveAgentStack(settings: unknown) {
   const claudeCodeSession = getClaudeCodeSessionRuntimeConfig(settings);
   const devTeamRuntime = getDevTeamRuntimeConfig(settings);
   const enabledWorkers = [
-    Boolean(devTeamRuntime?.codex?.enabled) ? "codex" : null,
-    Boolean(devTeamRuntime?.claudeCode?.enabled) ? "claude_code" : null
+    devTeamRuntime?.codex?.enabled ? "codex" : null,
+    devTeamRuntime?.claudeCode?.enabled ? "claude_code" : null
   ].filter(Boolean);
   const overrideWorkers = Array.isArray(overrides?.devTeam?.codingWorkers)
     ? overrides.devTeam.codingWorkers.map((value: unknown) => String(value || "").trim()).filter(Boolean)

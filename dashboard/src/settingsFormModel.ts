@@ -1,4 +1,8 @@
-import { DEFAULT_SETTINGS, PROVIDER_MODEL_FALLBACKS } from "../../src/settings/settingsSchema.ts";
+import {
+  DEFAULT_SETTINGS,
+  PROVIDER_MODEL_FALLBACKS,
+  type SettingsInput
+} from "../../src/settings/settingsSchema.ts";
 import { normalizeLlmProvider } from "../../src/llm/llmHelpers.ts";
 import {
   formatCommaList,
@@ -98,7 +102,7 @@ export const BROWSER_PROVIDER_MODEL_FALLBACKS = Object.freeze({
   openai: ["gpt-5-mini"]
 });
 
-function buildSettingsFormView(settings) {
+function buildSettingsFormView(settings: unknown) {
   const source = settings || DEFAULT_SETTINGS;
   const agentStack = getAgentStackSettings(source);
   const prompting = getPromptingSettings(source);
@@ -295,9 +299,9 @@ function buildSettingsFormView(settings) {
 
 const DEFAULT_SETTINGS_LEGACY_VIEW = buildSettingsFormView(DEFAULT_SETTINGS);
 
-export function settingsToForm(settings): any {
-  const defaults: any = DEFAULT_SETTINGS_LEGACY_VIEW;
-  const resolved: any = buildSettingsFormView(settings || DEFAULT_SETTINGS);
+export function settingsToForm(settings: unknown) {
+  const defaults = DEFAULT_SETTINGS_LEGACY_VIEW;
+  const resolved = buildSettingsFormView(settings || DEFAULT_SETTINGS);
   const defaultPrompt = defaults.prompt;
   const defaultActivity = defaults.activity;
   const defaultPermissions = defaults.permissions;
@@ -319,110 +323,109 @@ export function settingsToForm(settings): any {
   const defaultStartup = defaults.startup;
   const defaultTextThoughtLoop = defaults.textThoughtLoop;
   const defaultDiscovery = defaults.discovery;
-  const activity: any = resolved?.activity ?? {};
-  const selectedVoiceProvider = resolved?.voice?.voiceProvider ?? defaultVoice.voiceProvider;
+  const activity = resolved.activity;
+  const selectedVoiceProvider = resolved.voice.voiceProvider;
   return {
-    stackPreset: resolved?.agentStack?.preset ?? DEFAULT_SETTINGS.agentStack.preset,
+    stackPreset: resolved.agentStack.preset ?? DEFAULT_SETTINGS.agentStack.preset,
     stackAdvancedOverridesEnabled:
-      resolved?.agentStack?.advancedOverridesEnabled ?? DEFAULT_SETTINGS.agentStack.advancedOverridesEnabled,
-    botName: resolved?.botName ?? defaults.botName,
-    botNameAliases: formatCommaList(resolved?.botNameAliases ?? defaults.botNameAliases),
-    personaFlavor: resolved?.persona?.flavor ?? defaults.persona.flavor,
-    personaHardLimits: formatLineList(resolved?.persona?.hardLimits),
-    promptCapabilityHonestyLine: resolved?.prompt?.capabilityHonestyLine ?? defaultPrompt.capabilityHonestyLine,
+      resolved.agentStack.advancedOverridesEnabled ?? DEFAULT_SETTINGS.agentStack.advancedOverridesEnabled,
+    botName: resolved.botName ?? defaults.botName,
+    botNameAliases: formatCommaList(resolved.botNameAliases ?? defaults.botNameAliases),
+    personaFlavor: resolved.persona.flavor ?? defaults.persona.flavor,
+    personaHardLimits: formatLineList(resolved.persona.hardLimits),
+    promptCapabilityHonestyLine: resolved.prompt.capabilityHonestyLine ?? defaultPrompt.capabilityHonestyLine,
     promptImpossibleActionLine:
-      resolved?.prompt?.impossibleActionLine ?? defaultPrompt.impossibleActionLine,
+      resolved.prompt.impossibleActionLine ?? defaultPrompt.impossibleActionLine,
     promptMemoryEnabledLine:
-      resolved?.prompt?.memoryEnabledLine ?? defaultPrompt.memoryEnabledLine,
+      resolved.prompt.memoryEnabledLine ?? defaultPrompt.memoryEnabledLine,
     promptMemoryDisabledLine:
-      resolved?.prompt?.memoryDisabledLine ?? defaultPrompt.memoryDisabledLine,
-    promptSkipLine: resolved?.prompt?.skipLine ?? defaultPrompt.skipLine,
-    promptTextGuidance: formatLineList(resolved?.prompt?.textGuidance ?? defaultPrompt.textGuidance),
-    promptVoiceGuidance: formatLineList(resolved?.prompt?.voiceGuidance ?? defaultPrompt.voiceGuidance),
+      resolved.prompt.memoryDisabledLine ?? defaultPrompt.memoryDisabledLine,
+    promptSkipLine: resolved.prompt.skipLine ?? defaultPrompt.skipLine,
+    promptTextGuidance: formatLineList(resolved.prompt.textGuidance ?? defaultPrompt.textGuidance),
+    promptVoiceGuidance: formatLineList(resolved.prompt.voiceGuidance ?? defaultPrompt.voiceGuidance),
     promptVoiceOperationalGuidance:
-      formatLineList(resolved?.prompt?.voiceOperationalGuidance ?? defaultPrompt.voiceOperationalGuidance),
+      formatLineList(resolved.prompt.voiceOperationalGuidance ?? defaultPrompt.voiceOperationalGuidance),
     promptVoiceLookupBusySystemPrompt:
-      resolved?.prompt?.voiceLookupBusySystemPrompt ?? defaultPrompt.voiceLookupBusySystemPrompt,
-    promptMediaPromptCraftGuidance: resolved?.prompt?.mediaPromptCraftGuidance ?? defaultPrompt.mediaPromptCraftGuidance,
-    replyEagerness:
-      activity.replyEagerness ?? activity.replyLevelReplyChannels ?? defaultActivity.replyEagerness,
+      resolved.prompt.voiceLookupBusySystemPrompt ?? defaultPrompt.voiceLookupBusySystemPrompt,
+    promptMediaPromptCraftGuidance: resolved.prompt.mediaPromptCraftGuidance ?? defaultPrompt.mediaPromptCraftGuidance,
+    replyEagerness: activity.replyEagerness ?? defaultActivity.replyEagerness,
     reactionLevel: activity.reactionLevel ?? defaultActivity.reactionLevel,
     minGap: activity.minSecondsBetweenMessages ?? defaultActivity.minSecondsBetweenMessages,
-    allowReplies: resolved?.permissions?.allowReplies ?? defaultPermissions.allowReplies,
+    allowReplies: resolved.permissions.allowReplies ?? defaultPermissions.allowReplies,
     allowUnsolicitedReplies:
-      resolved?.permissions?.allowUnsolicitedReplies ?? defaultPermissions.allowUnsolicitedReplies,
-    allowReactions: resolved?.permissions?.allowReactions ?? defaultPermissions.allowReactions,
+      resolved.permissions.allowUnsolicitedReplies ?? defaultPermissions.allowUnsolicitedReplies,
+    allowReactions: resolved.permissions.allowReactions ?? defaultPermissions.allowReactions,
     textThoughtLoopEnabled:
-      resolved?.textThoughtLoop?.enabled ?? defaultTextThoughtLoop.enabled,
+      resolved.textThoughtLoop.enabled ?? defaultTextThoughtLoop.enabled,
     textThoughtLoopEagerness:
-      resolved?.textThoughtLoop?.eagerness ?? defaultTextThoughtLoop.eagerness,
+      resolved.textThoughtLoop.eagerness ?? defaultTextThoughtLoop.eagerness,
     textThoughtLoopMinMinutesBetweenThoughts:
-      resolved?.textThoughtLoop?.minMinutesBetweenThoughts ??
+      resolved.textThoughtLoop.minMinutesBetweenThoughts ??
       defaultTextThoughtLoop.minMinutesBetweenThoughts,
     textThoughtLoopMaxThoughtsPerDay:
-      resolved?.textThoughtLoop?.maxThoughtsPerDay ?? defaultTextThoughtLoop.maxThoughtsPerDay,
+      resolved.textThoughtLoop.maxThoughtsPerDay ?? defaultTextThoughtLoop.maxThoughtsPerDay,
     textThoughtLoopLookbackMessages:
-      resolved?.textThoughtLoop?.lookbackMessages ?? defaultTextThoughtLoop.lookbackMessages,
-    memoryEnabled: resolved?.memory?.enabled ?? defaults.memory.enabled,
+      resolved.textThoughtLoop.lookbackMessages ?? defaultTextThoughtLoop.lookbackMessages,
+    memoryEnabled: resolved.memory.enabled ?? defaults.memory.enabled,
     adaptiveDirectivesEnabled:
-      resolved?.adaptiveDirectives?.enabled ?? defaults.adaptiveDirectives.enabled,
+      resolved.adaptiveDirectives.enabled ?? defaults.adaptiveDirectives.enabled,
     automationsEnabled:
-      resolved?.automations?.enabled ?? defaults.automations.enabled,
+      resolved.automations.enabled ?? defaults.automations.enabled,
     subAgentSessionIdleTimeoutMs:
-      resolved?.subAgentOrchestration?.sessionIdleTimeoutMs ?? defaults.subAgentOrchestration.sessionIdleTimeoutMs,
+      resolved.subAgentOrchestration.sessionIdleTimeoutMs ?? defaults.subAgentOrchestration.sessionIdleTimeoutMs,
     subAgentMaxConcurrentSessions:
-      resolved?.subAgentOrchestration?.maxConcurrentSessions ?? defaults.subAgentOrchestration.maxConcurrentSessions,
+      resolved.subAgentOrchestration.maxConcurrentSessions ?? defaults.subAgentOrchestration.maxConcurrentSessions,
     memoryReflectionStrategy:
-      resolved?.memory?.reflection?.strategy ?? defaults.memory.reflection.strategy,
-    provider: resolved?.llm?.provider ?? defaultLlm.provider,
-    model: resolved?.llm?.model ?? defaultLlm.model,
-    replyFollowupLlmEnabled: resolved?.replyFollowupLlm?.enabled ?? defaultReplyFollowupLlm.enabled,
-    replyFollowupLlmProvider: resolved?.replyFollowupLlm?.provider ?? defaultReplyFollowupLlm.provider,
-    replyFollowupLlmModel: resolved?.replyFollowupLlm?.model ?? defaultReplyFollowupLlm.model,
-    replyFollowupMaxToolSteps: resolved?.replyFollowupLlm?.maxToolSteps ?? defaultReplyFollowupLlm.maxToolSteps,
+      resolved.memory.reflection.strategy ?? defaults.memory.reflection.strategy,
+    provider: resolved.llm.provider ?? defaultLlm.provider,
+    model: resolved.llm.model ?? defaultLlm.model,
+    replyFollowupLlmEnabled: resolved.replyFollowupLlm.enabled ?? defaultReplyFollowupLlm.enabled,
+    replyFollowupLlmProvider: resolved.replyFollowupLlm.provider ?? defaultReplyFollowupLlm.provider,
+    replyFollowupLlmModel: resolved.replyFollowupLlm.model ?? defaultReplyFollowupLlm.model,
+    replyFollowupMaxToolSteps: resolved.replyFollowupLlm.maxToolSteps ?? defaultReplyFollowupLlm.maxToolSteps,
     replyFollowupMaxTotalToolCalls:
-      resolved?.replyFollowupLlm?.maxTotalToolCalls ?? defaultReplyFollowupLlm.maxTotalToolCalls,
+      resolved.replyFollowupLlm.maxTotalToolCalls ?? defaultReplyFollowupLlm.maxTotalToolCalls,
     replyFollowupMaxWebSearchCalls:
-      resolved?.replyFollowupLlm?.maxWebSearchCalls ?? defaultReplyFollowupLlm.maxWebSearchCalls,
+      resolved.replyFollowupLlm.maxWebSearchCalls ?? defaultReplyFollowupLlm.maxWebSearchCalls,
     replyFollowupMaxMemoryLookupCalls:
-      resolved?.replyFollowupLlm?.maxMemoryLookupCalls ?? defaultReplyFollowupLlm.maxMemoryLookupCalls,
+      resolved.replyFollowupLlm.maxMemoryLookupCalls ?? defaultReplyFollowupLlm.maxMemoryLookupCalls,
     replyFollowupMaxImageLookupCalls:
-      resolved?.replyFollowupLlm?.maxImageLookupCalls ?? defaultReplyFollowupLlm.maxImageLookupCalls,
+      resolved.replyFollowupLlm.maxImageLookupCalls ?? defaultReplyFollowupLlm.maxImageLookupCalls,
     replyFollowupToolTimeoutMs:
-      resolved?.replyFollowupLlm?.toolTimeoutMs ?? defaultReplyFollowupLlm.toolTimeoutMs,
-    memoryLlmProvider: resolved?.memoryLlm?.provider ?? defaultMemoryLlm.provider,
-    memoryLlmModel: resolved?.memoryLlm?.model ?? defaultMemoryLlm.model,
-    temperature: resolved?.llm?.temperature ?? defaultLlm.temperature,
-    maxTokens: resolved?.llm?.maxOutputTokens ?? defaultLlm.maxOutputTokens,
-    browserEnabled: resolved?.browser?.enabled ?? defaults.browser.enabled,
-    stackResolvedResearchRuntime: resolved?.webSearch?.runtime ?? defaultWebSearch.runtime,
-    stackResolvedBrowserRuntime: resolved?.browser?.runtime ?? defaults.browser.runtime,
+      resolved.replyFollowupLlm.toolTimeoutMs ?? defaultReplyFollowupLlm.toolTimeoutMs,
+    memoryLlmProvider: resolved.memoryLlm.provider ?? defaultMemoryLlm.provider,
+    memoryLlmModel: resolved.memoryLlm.model ?? defaultMemoryLlm.model,
+    temperature: resolved.llm.temperature ?? defaultLlm.temperature,
+    maxTokens: resolved.llm.maxOutputTokens ?? defaultLlm.maxOutputTokens,
+    browserEnabled: resolved.browser.enabled ?? defaults.browser.enabled,
+    stackResolvedResearchRuntime: resolved.webSearch.runtime ?? defaultWebSearch.runtime,
+    stackResolvedBrowserRuntime: resolved.browser.runtime ?? defaults.browser.runtime,
     browserOpenAiComputerUseModel:
-      resolved?.browser?.openAiComputerUseModel ?? defaults.browser.openAiComputerUseModel,
-    browserMaxPerHour: resolved?.browser?.maxBrowseCallsPerHour ?? defaults.browser.maxBrowseCallsPerHour,
-    browserLlmProvider: resolved?.browser?.llm?.provider ?? defaults.browser.llm.provider,
-    browserLlmModel: resolved?.browser?.llm?.model ?? defaults.browser.llm.model,
-    browserMaxSteps: resolved?.browser?.maxStepsPerTask ?? defaults.browser.maxStepsPerTask,
-    browserStepTimeoutMs: resolved?.browser?.stepTimeoutMs ?? defaults.browser.stepTimeoutMs,
-    browserSessionTimeoutMs: resolved?.browser?.sessionTimeoutMs ?? defaults.browser.sessionTimeoutMs,
-    codeAgentEnabled: resolved?.codeAgent?.enabled ?? defaults.codeAgent.enabled,
-    codeAgentProvider: resolved?.codeAgent?.provider ?? defaults.codeAgent.provider,
-    codeAgentModel: resolved?.codeAgent?.model ?? defaults.codeAgent.model,
-    codeAgentCodexModel: resolved?.codeAgent?.codexModel ?? defaults.codeAgent.codexModel,
-    codeAgentMaxTurns: resolved?.codeAgent?.maxTurns ?? defaults.codeAgent.maxTurns,
-    codeAgentTimeoutMs: resolved?.codeAgent?.timeoutMs ?? defaults.codeAgent.timeoutMs,
-    codeAgentMaxBufferBytes: resolved?.codeAgent?.maxBufferBytes ?? defaults.codeAgent.maxBufferBytes,
-    codeAgentDefaultCwd: resolved?.codeAgent?.defaultCwd ?? defaults.codeAgent.defaultCwd,
-    codeAgentMaxTasksPerHour: resolved?.codeAgent?.maxTasksPerHour ?? defaults.codeAgent.maxTasksPerHour,
-    codeAgentMaxParallelTasks: resolved?.codeAgent?.maxParallelTasks ?? defaults.codeAgent.maxParallelTasks,
-    codeAgentAllowedUserIds: formatLineList(resolved?.codeAgent?.allowedUserIds ?? defaults.codeAgent.allowedUserIds),
-    visionCaptionEnabled: resolved?.vision?.captionEnabled ?? defaultVision.captionEnabled,
-    visionProvider: resolved?.vision?.provider ?? defaultVision.provider,
-    visionModel: resolved?.vision?.model ?? defaultVision.model,
-    visionMaxAutoIncludeImages: resolved?.vision?.maxAutoIncludeImages ?? defaultVision.maxAutoIncludeImages,
-    visionMaxCaptionsPerHour: resolved?.vision?.maxCaptionsPerHour ?? defaultVision.maxCaptionsPerHour,
-    webSearchEnabled: resolved?.webSearch?.enabled ?? defaultWebSearch.enabled,
-    webSearchOpenAiUserLocation: resolved?.webSearch?.nativeUserLocation ?? defaultWebSearch.nativeUserLocation,
+      resolved.browser.openAiComputerUseModel ?? defaults.browser.openAiComputerUseModel,
+    browserMaxPerHour: resolved.browser.maxBrowseCallsPerHour ?? defaults.browser.maxBrowseCallsPerHour,
+    browserLlmProvider: resolved.browser.llm.provider ?? defaults.browser.llm.provider,
+    browserLlmModel: resolved.browser.llm.model ?? defaults.browser.llm.model,
+    browserMaxSteps: resolved.browser.maxStepsPerTask ?? defaults.browser.maxStepsPerTask,
+    browserStepTimeoutMs: resolved.browser.stepTimeoutMs ?? defaults.browser.stepTimeoutMs,
+    browserSessionTimeoutMs: resolved.browser.sessionTimeoutMs ?? defaults.browser.sessionTimeoutMs,
+    codeAgentEnabled: resolved.codeAgent.enabled ?? defaults.codeAgent.enabled,
+    codeAgentProvider: resolved.codeAgent.provider ?? defaults.codeAgent.provider,
+    codeAgentModel: resolved.codeAgent.model ?? defaults.codeAgent.model,
+    codeAgentCodexModel: resolved.codeAgent.codexModel ?? defaults.codeAgent.codexModel,
+    codeAgentMaxTurns: resolved.codeAgent.maxTurns ?? defaults.codeAgent.maxTurns,
+    codeAgentTimeoutMs: resolved.codeAgent.timeoutMs ?? defaults.codeAgent.timeoutMs,
+    codeAgentMaxBufferBytes: resolved.codeAgent.maxBufferBytes ?? defaults.codeAgent.maxBufferBytes,
+    codeAgentDefaultCwd: resolved.codeAgent.defaultCwd ?? defaults.codeAgent.defaultCwd,
+    codeAgentMaxTasksPerHour: resolved.codeAgent.maxTasksPerHour ?? defaults.codeAgent.maxTasksPerHour,
+    codeAgentMaxParallelTasks: resolved.codeAgent.maxParallelTasks ?? defaults.codeAgent.maxParallelTasks,
+    codeAgentAllowedUserIds: formatLineList(resolved.codeAgent.allowedUserIds ?? defaults.codeAgent.allowedUserIds),
+    visionCaptionEnabled: resolved.vision.captionEnabled ?? defaultVision.captionEnabled,
+    visionProvider: resolved.vision.provider ?? defaultVision.provider,
+    visionModel: resolved.vision.model ?? defaultVision.model,
+    visionMaxAutoIncludeImages: resolved.vision.maxAutoIncludeImages ?? defaultVision.maxAutoIncludeImages,
+    visionMaxCaptionsPerHour: resolved.vision.maxCaptionsPerHour ?? defaultVision.maxCaptionsPerHour,
+    webSearchEnabled: resolved.webSearch.enabled ?? defaultWebSearch.enabled,
+    webSearchOpenAiUserLocation: resolved.webSearch.nativeUserLocation ?? defaultWebSearch.nativeUserLocation,
     webSearchOpenAiAllowedDomains:
       formatLineList(resolved?.webSearch?.nativeAllowedDomains ?? defaultWebSearch.nativeAllowedDomains),
     webSearchSafeMode: resolved?.webSearch?.safeSearch ?? defaultWebSearch.safeSearch,
@@ -645,7 +648,9 @@ export function settingsToForm(settings): any {
   };
 }
 
-export function formToSettingsPatch(form) {
+export type SettingsForm = ReturnType<typeof settingsToForm>;
+
+export function formToSettingsPatch(form: SettingsForm): SettingsInput {
   const discoveryExternalEnabled = Boolean(form.discoveryExternalEnabled);
   const advancedOverridesEnabled = Boolean(form.stackAdvancedOverridesEnabled);
   return {
@@ -811,7 +816,7 @@ export function formToSettingsPatch(form) {
             inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
             usePerUserAsrBridge: Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge)
           },
-          generation: Boolean(form.voiceGenerationLlmUseTextModel)
+          generation: form.voiceGenerationLlmUseTextModel
             ? { mode: "inherit_orchestrator" }
             : {
                 mode: "dedicated_model",
@@ -1042,7 +1047,7 @@ export function formToSettingsPatch(form) {
   };
 }
 
-export function sanitizeAliasListInput(value) {
+export function sanitizeAliasListInput(value: unknown) {
   return formatCommaList(parseUniqueList(value));
 }
 
@@ -1071,7 +1076,10 @@ const LIST_FORM_KEYS: ReadonlySet<string> = new Set([
   "blockedUsers"
 ]);
 
-export function settingsToFormPreserving(settings, currentForm) {
+export function settingsToFormPreserving(
+  settings: unknown,
+  currentForm: SettingsForm | null | undefined
+) {
   const next = settingsToForm(settings);
   if (!currentForm) return next;
   const result = { ...next };
@@ -1088,14 +1096,17 @@ export function settingsToFormPreserving(settings, currentForm) {
   return result;
 }
 
-export function resolveProviderModelOptions(modelCatalog, provider) {
+export function resolveProviderModelOptions(modelCatalog: Record<string, unknown> | null | undefined, provider: unknown) {
   const key = normalizeLlmProvider(provider);
   const fromCatalog = Array.isArray(modelCatalog?.[key]) ? modelCatalog[key] : [];
   const fallback = PROVIDER_MODEL_FALLBACKS[key] || [];
   return normalizeBoundedStringList([...fromCatalog, ...fallback], { maxItems: 80, maxLen: 120 });
 }
 
-export function resolveBrowserProviderModelOptions(modelCatalog, provider) {
+export function resolveBrowserProviderModelOptions(
+  modelCatalog: Record<string, unknown> | null | undefined,
+  provider: unknown
+) {
   const key = normalizeLlmProvider(provider);
   const fromCatalog = Array.isArray(modelCatalog?.[key]) ? modelCatalog[key] : [];
   const fallback = Array.isArray(BROWSER_PROVIDER_MODEL_FALLBACKS[key])
@@ -1104,8 +1115,8 @@ export function resolveBrowserProviderModelOptions(modelCatalog, provider) {
   return normalizeBoundedStringList([...fromCatalog, ...fallback], { maxItems: 80, maxLen: 120 });
 }
 
-export function resolveModelOptions(...sources) {
-  const combined = [];
+export function resolveModelOptions(...sources: unknown[]) {
+  const combined: unknown[] = [];
   for (const source of sources) {
     if (Array.isArray(source)) {
       combined.push(...source);
@@ -1116,11 +1127,19 @@ export function resolveModelOptions(...sources) {
   return normalizeBoundedStringList(combined, { maxItems: 80, maxLen: 140 });
 }
 
-export function resolveModelOptionsFromText(value, ...sources) {
+export function resolveModelOptionsFromText(value: unknown, ...sources: unknown[]) {
   return resolveModelOptions(parseUniqueLineList(value), ...sources);
 }
 
-export function resolvePresetModelSelection({ modelCatalog, provider, model }) {
+export function resolvePresetModelSelection({
+  modelCatalog,
+  provider,
+  model
+}: {
+  modelCatalog: Record<string, unknown> | null | undefined;
+  provider: unknown;
+  model: unknown;
+}) {
   const options = resolveProviderModelOptions(modelCatalog, provider);
   const normalizedModel = String(model || "").trim();
   const selectedPresetModel = options.includes(normalizedModel)

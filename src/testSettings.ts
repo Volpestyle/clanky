@@ -111,7 +111,7 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
     },
     interaction: {
       activity: {
-        replyEagerness: activity.replyEagerness ?? activity.replyLevelReplyChannels,
+        replyEagerness: activity.replyEagerness,
         reactionLevel: activity.reactionLevel,
         minSecondsBetweenMessages: activity.minSecondsBetweenMessages,
         replyCoalesceWindowSeconds: activity.replyCoalesceWindowSeconds,
@@ -222,7 +222,7 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
           elevenLabsRealtime: voice.elevenLabsRealtime,
           geminiRealtime: voice.geminiRealtime,
           sttPipeline: voice.sttPipeline,
-          generation: Boolean(voiceGenerationLlm.useTextModel)
+          generation: voiceGenerationLlm.useTextModel
             ? { mode: "inherit_orchestrator" }
             : {
                 mode: "dedicated_model",

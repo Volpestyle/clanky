@@ -12,6 +12,23 @@ import {
 } from "./settingsFormModel.ts";
 import { normalizeSettings } from "../../src/store/settingsNormalization.ts";
 
+function assertDedicatedExecutionModel(
+  execution: {
+    mode?: "inherit_orchestrator" | "dedicated_model";
+    model?: {
+      provider?: string;
+      model?: string;
+    };
+  },
+  provider: string,
+  model: string
+) {
+  assert.equal(execution.mode, "dedicated_model");
+  if (execution.mode !== "dedicated_model") return;
+  assert.equal(execution.model?.provider, provider);
+  assert.equal(execution.model?.model, model);
+}
+
 test("settingsFormModel converts settings to form defaults and back to normalized patch", () => {
   const form = settingsToForm(normalizeSettings({
     identity: {
@@ -133,12 +150,9 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.interaction.followup.toolBudget.maxMemoryLookupCalls, 3);
   assert.equal(patch.interaction.followup.toolBudget.maxImageLookupCalls, 1);
   assert.equal(patch.interaction.followup.toolBudget.toolTimeoutMs, 16000);
-  assert.equal(
-    patch.agentStack.runtimeConfig.browser.localBrowserAgent.execution.model.provider,
-    "anthropic"
-  );
-  assert.equal(
-    patch.agentStack.runtimeConfig.browser.localBrowserAgent.execution.model.model,
+  assertDedicatedExecutionModel(
+    patch.agentStack.runtimeConfig.browser.localBrowserAgent.execution,
+    "anthropic",
     "claude-sonnet-4-5-20250929"
   );
   assert.equal(patch.memory.reflection.strategy, "one_pass_main");
@@ -160,8 +174,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.deepEqual(patch.agentStack.overrides.devTeam.codingWorkers, ["codex"]);
   assert.equal(patch.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
   assert.equal(patch.initiative.voice.enabled, false);
-  assert.equal(patch.initiative.voice.execution.model.provider, "anthropic");
-  assert.equal(patch.initiative.voice.execution.model.model, "claude-sonnet-4-6");
+  assertDedicatedExecutionModel(patch.initiative.voice.execution, "anthropic", "claude-sonnet-4-6");
   assert.equal(patch.initiative.voice.execution.temperature, 1);
   assert.equal(patch.initiative.voice.eagerness, 50);
 });
@@ -330,12 +343,9 @@ test("settingsFormModel round-trips browser llm provider and model", () => {
   assert.equal(form.browserLlmModel, "gpt-5-mini");
 
   const patch = formToSettingsPatch(form);
-  assert.equal(
-    patch.agentStack.runtimeConfig.browser.localBrowserAgent.execution.model.provider,
-    "openai"
-  );
-  assert.equal(
-    patch.agentStack.runtimeConfig.browser.localBrowserAgent.execution.model.model,
+  assertDedicatedExecutionModel(
+    patch.agentStack.runtimeConfig.browser.localBrowserAgent.execution,
+    "openai",
     "gpt-5-mini"
   );
 });

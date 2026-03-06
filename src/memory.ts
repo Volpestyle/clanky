@@ -3,6 +3,8 @@ import path from "node:path";
 import { clamp01, clampInt } from "./normalization/numbers.ts";
 import { sleepMs } from "./normalization/time.ts";
 import {
+  LORE_SUBJECT,
+  SELF_SUBJECT,
   buildFactEmbeddingPayload,
   buildHighlightsSection,
   cleanDailyEntryContent,
@@ -28,8 +30,6 @@ import {
 import { runDailyReflection, rerunDailyReflectionForDateGuild } from "./memory/dailyReflection.ts";
 
 const DAILY_FILE_PATTERN = /^\d{4}-\d{2}-\d{2}\.md$/;
-const LORE_SUBJECT = "__lore__";
-const SELF_SUBJECT = "__self__";
 const HYBRID_FACT_LIMIT = 10;
 const HYBRID_CANDIDATE_MULTIPLIER = 6;
 const HYBRID_MAX_CANDIDATES = 90;
@@ -38,8 +38,6 @@ const QUERY_EMBEDDING_CACHE_TTL_MS = 60 * 1000;
 const QUERY_EMBEDDING_CACHE_MAX_ENTRIES = 256;
 const FACT_RETENTION_DEFAULT = 80;
 const FACT_RETENTION_SELF_LORE = 120;
-const SUBJECT_LORE = LORE_SUBJECT;
-const SUBJECT_SELF = SELF_SUBJECT;
 export class MemoryManager {
   store;
   llm;
@@ -220,7 +218,7 @@ export class MemoryManager {
   resolveSubjectRetentionLimit(subject) {
     const normalizedSubject = String(subject || "").trim();
     if (!normalizedSubject) return FACT_RETENTION_DEFAULT;
-    if (normalizedSubject === SUBJECT_SELF || normalizedSubject === SUBJECT_LORE) {
+    if (normalizedSubject === SELF_SUBJECT || normalizedSubject === LORE_SUBJECT) {
       return FACT_RETENTION_SELF_LORE;
     }
     return FACT_RETENTION_DEFAULT;
@@ -254,7 +252,7 @@ export class MemoryManager {
       limit: 8
     });
     const relevantFacts = await this.selectHybridFacts({
-      subjects: [userId, SUBJECT_SELF, SUBJECT_LORE],
+      subjects: [userId, SELF_SUBJECT, LORE_SUBJECT],
       guildId: scopeGuildId,
       channelId,
       queryText,

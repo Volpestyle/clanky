@@ -1,8 +1,8 @@
 import { clamp01 } from "../normalization/numbers.ts";
 import { normalizeWhitespaceText } from "../normalization/text.ts";
 
-const LORE_SUBJECT = "__lore__";
-const SELF_SUBJECT = "__self__";
+export const LORE_SUBJECT = "__lore__";
+export const SELF_SUBJECT = "__self__";
 type DirectiveScope = "lore" | "self" | "user";
 
 type DirectiveScopeConfig = {
