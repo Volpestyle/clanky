@@ -36,6 +36,7 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
     const channelId = "chan-1";
     const botUserId = "bot-1";
     const incomingMessageId = "msg-100";
+    const botReplyMessageId = "bot-msg-0";
 
     store.patchSettings(createTestSettingsPatch({
       activity: {
@@ -188,6 +189,55 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
       referencedMessageId: null
     });
 
+    const botReplyMessage = {
+      id: botReplyMessageId,
+      createdTimestamp: Date.now() - 100,
+      guildId,
+      channelId,
+      guild,
+      channel,
+      author: {
+        id: botUserId,
+        username: "clanker conk",
+        bot: true
+      },
+      member: {
+        displayName: "clanker conk"
+      },
+      content: "bet",
+      reference: {
+        messageId: incomingMessageId
+      },
+      attachments: new Map(),
+      embeds: [],
+      reactions: {
+        cache: new Map([
+          [
+            "fire",
+            {
+              count: 1,
+              emoji: {
+                id: null,
+                name: "🔥"
+              }
+            }
+          ]
+        ])
+      }
+    };
+
+    store.recordMessage({
+      messageId: botReplyMessageId,
+      createdAt: botReplyMessage.createdTimestamp,
+      guildId,
+      channelId,
+      authorId: botUserId,
+      authorName: "clanker conk",
+      isBot: true,
+      content: "bet",
+      referencedMessageId: incomingMessageId
+    });
+
     const incomingMessage = {
       id: incomingMessageId,
       createdTimestamp: Date.now(),
@@ -248,14 +298,26 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
 
     const reactionEvent = {
       partial: false,
-      message: incomingMessage
+      message: botReplyMessage,
+      emoji: {
+        id: null,
+        name: "🔥"
+      }
+    };
+
+    const reactingUser = {
+      id: "user-1",
+      username: "alice",
+      globalName: null,
+      bot: false
     };
 
     try {
-      bot.client.emit("messageReactionAdd", reactionEvent);
+      bot.client.emit("messageReactionAdd", reactionEvent, reactingUser);
       await waitForCondition(() => {
-        const row = store.getRecentMessages(channelId, 20).find((item) => item.message_id === incomingMessageId);
-        return Boolean(row?.content?.includes("[reactions:"));
+        const rows = store.getRecentMessages(channelId, 20);
+        const reactionRow = rows.find((item) => String(item.message_id).startsWith("reaction:"));
+        return Boolean(reactionRow?.content?.includes("alice reacted with 🔥 to clanker conk's message"));
       });
 
       bot.client.emit("messageCreate", incomingMessage);
@@ -263,6 +325,7 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
 
       assert.equal(memoryIngestCalls.length, 1);
       assert.equal(memoryIngestCalls[0].messageId, incomingMessageId);
+      assert.match(String(llmCalls[0]?.userPrompt || ""), /alice reacted with 🔥 to clanker conk's message: "bet"/);
       assert.equal(reactionCalls.length, 1);
       assert.equal(reactionCalls[0], "🔥");
       assert.equal(replyPayloads.length + channelSendPayloads.length, 1);

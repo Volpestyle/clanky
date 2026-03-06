@@ -531,8 +531,9 @@ export class ClankerBot {
       }
     });
 
-    this.client.on("messageReactionAdd", async (reaction) => {
+    this.client.on("messageReactionAdd", async (reaction, user) => {
       try {
+        await this.recordReactionHistoryEvent(reaction, user);
         await this.syncMessageSnapshotFromReaction(reaction);
       } catch (error) {
         this.store.logAction({
@@ -5096,6 +5097,73 @@ export class ClankerBot {
     await this.syncMessageSnapshot(resolved?.message);
   }
 
+  async recordReactionHistoryEvent(reaction, user) {
+    if (!reaction || !user) return;
+
+    let resolvedReaction = reaction;
+    if (resolvedReaction.partial && typeof resolvedReaction.fetch === "function") {
+      try {
+        resolvedReaction = await resolvedReaction.fetch();
+      } catch {
+        return;
+      }
+    }
+
+    let targetMessage = resolvedReaction?.message;
+    if (targetMessage?.partial && typeof targetMessage.fetch === "function") {
+      try {
+        targetMessage = await targetMessage.fetch();
+      } catch {
+        return;
+      }
+    }
+
+    const botUserId = String(this.client.user?.id || "").trim();
+    const targetAuthorId = String(targetMessage?.author?.id || "").trim();
+    if (!botUserId || targetAuthorId !== botUserId) return;
+
+    const reactingUserId = String(user.id || "").trim();
+    if (!reactingUserId || reactingUserId === botUserId) return;
+
+    const channelId = String(targetMessage?.channelId || "").trim();
+    const guildId = String(targetMessage?.guildId || "").trim();
+    const targetMessageId = String(targetMessage?.id || "").trim();
+    if (!channelId || !guildId || !targetMessageId) return;
+
+    const reactionLabel = describeReactionForHistory(resolvedReaction?.emoji);
+    if (!reactionLabel) return;
+
+    const reactingMember = targetMessage?.guild?.members?.cache?.get?.(reactingUserId);
+    const reactingName = String(
+      reactingMember?.displayName || user.globalName || user.username || reactingUserId
+    ).trim();
+    const targetAuthorName = String(
+      targetMessage?.member?.displayName || targetMessage?.author?.username || getBotName(this.store.getSettings())
+    ).trim();
+    const targetSnippet = summarizeReactionTargetText(String(targetMessage?.content || ""));
+    const content = [
+      `${reactingName} reacted with ${reactionLabel} to ${targetAuthorName}'s message`,
+      targetSnippet ? `"${targetSnippet}"` : ""
+    ].filter(Boolean).join(": ");
+
+    this.store.recordMessage({
+      messageId: buildReactionEventMessageId({
+        targetMessageId,
+        reactingUserId,
+        emoji: reactionLabel,
+        createdAt: Date.now()
+      }),
+      createdAt: Date.now(),
+      guildId,
+      channelId,
+      authorId: reactingUserId,
+      authorName: reactingName,
+      isBot: false,
+      content,
+      referencedMessageId: targetMessageId
+    });
+  }
+
   async syncMessageSnapshot(message) {
     if (!message) return;
 
@@ -5162,6 +5230,29 @@ function safeUrlHost(rawUrl) {
   } catch {
     return "";
   }
+}
+
+function describeReactionForHistory(emoji) {
+  const id = String(emoji?.id || "").trim();
+  const name = String(emoji?.name || "").trim();
+  if (id && name) return `:${name}:`;
+  if (name) return name;
+  return "";
+}
+
+function summarizeReactionTargetText(text, maxLen = 80) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  if (normalized.length <= maxLen) return normalized;
+  return `${normalized.slice(0, Math.max(1, maxLen - 3)).trimEnd()}...`;
+}
+
+function buildReactionEventMessageId({ targetMessageId, reactingUserId, emoji, createdAt }) {
+  const safeEmoji = String(emoji || "")
+    .trim()
+    .replace(/\s+/g, "_")
+    .slice(0, 32);
+  return `reaction:${targetMessageId}:${reactingUserId}:${safeEmoji}:${Number(createdAt) || Date.now()}`;
 }
 
 function isLikelyImageUrl(rawUrl) {
