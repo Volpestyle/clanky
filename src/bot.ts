@@ -26,7 +26,6 @@ import { getMediaPromptCraftGuidance } from "./promptCore.ts";
 import {
   MAX_BROWSER_BROWSE_QUERY_LEN,
   MAX_GIF_QUERY_LEN,
-  MAX_IMAGE_LOOKUP_QUERY_LEN,
   MAX_VIDEO_FALLBACK_MESSAGES,
   MAX_VIDEO_TARGET_SCAN,
   composeDiscoveryImagePrompt,
@@ -74,12 +73,18 @@ import {
 } from "./bot/replyPipelineShared.ts";
 import type { ReplyPerformanceSeed } from "./bot/replyPipelineShared.ts";
 import {
+  captionRecentHistoryImages as captionRecentHistoryImagesForImageAnalysis,
+  extractHistoryImageCandidates as extractHistoryImageCandidatesForImageAnalysis,
+  getAutoIncludeImageInputs as getAutoIncludeImageInputsForImageAnalysis,
+  mergeImageInputs as mergeImageInputsForImageAnalysis,
+  rankImageLookupCandidates as rankImageLookupCandidatesForImageAnalysis,
+  runModelRequestedImageLookup as runModelRequestedImageLookupForImageAnalysis
+} from "./bot/imageAnalysis.ts";
+import {
   composeMessageContentForHistory as composeMessageContentForHistoryForMessageHistory,
   getConversationHistoryForPrompt as getConversationHistoryForPromptForMessageHistory,
   getImageInputs as getImageInputsForMessageHistory,
   getRecentLookupContextForPrompt as getRecentLookupContextForPromptForMessageHistory,
-  isLikelyImageUrl,
-  parseHistoryImageReference,
   recordReactionHistoryEvent as recordReactionHistoryEventForMessageHistory,
   rememberRecentLookupContext as rememberRecentLookupContextForMessageHistory,
   syncMessageSnapshot as syncMessageSnapshotForMessageHistory,
@@ -180,9 +185,6 @@ const INITIATIVE_TICK_MS = 60_000;
 const AUTOMATION_TICK_MS = 30_000;
 const GATEWAY_WATCHDOG_TICK_MS = 30_000;
 const REFLECTION_TICK_MS = 60_000;
-const MAX_HISTORY_IMAGE_CANDIDATES = 24;
-const MAX_HISTORY_IMAGE_LOOKUP_RESULTS = 6;
-const MAX_IMAGE_LOOKUP_QUERY_TOKENS = 7;
 const UNSOLICITED_REPLY_CONTEXT_WINDOW = 5;
 const MAX_AUTOMATION_RUNS_PER_TICK = 4;
 const PROACTIVE_TEXT_CHANNEL_ACTIVE_WINDOW_MS = 24 * 60 * 60_000;
@@ -2902,14 +2904,15 @@ export class ClankerBot {
   }
 
   buildImageLookupContext({ recentMessages = [], excludedUrls = [] } = {}) {
-    const excluded = new Set(
+    const excluded = new Set<string>(
       (Array.isArray(excludedUrls) ? excludedUrls : [])
         .map((value) => String(value || "").trim())
         .filter(Boolean)
     );
-    const candidates = this.extractHistoryImageCandidates({
+    const candidates = extractHistoryImageCandidatesForImageAnalysis({
       recentMessages,
-      excluded
+      excluded,
+      imageCaptionCache: this.imageCaptionCache
     });
     return {
       enabled: true,
@@ -2928,42 +2931,13 @@ export class ClankerBot {
    * Fire-and-forget — errors are silently swallowed.
    */
   captionRecentHistoryImages({ candidates = [], settings = null, trace = null } = {}) {
-    const list = Array.isArray(candidates) ? candidates : [];
-    const maxPerBatch = Math.min(list.length, 5);
-    let scheduled = 0;
-
-    // Enforce hourly caption budget
-    const maxPerHour = Number((settings as Record<string, any>)?.vision?.maxCaptionsPerHour);
-    const budgetCap = Number.isFinite(maxPerHour) ? maxPerHour : 60;
-    const now = Date.now();
-    const oneHourAgo = now - 60 * 60 * 1000;
-    this.captionTimestamps = this.captionTimestamps.filter((t) => t > oneHourAgo);
-    const remainingBudget = Math.max(0, budgetCap - this.captionTimestamps.length);
-    if (remainingBudget === 0) return;
-
-    for (const candidate of list) {
-      if (scheduled >= maxPerBatch) break;
-      if (scheduled >= remainingBudget) break;
-      if (!candidate?.url) continue;
-      if (this.imageCaptionCache.hasOrInflight(candidate.url)) continue;
-
-      scheduled++;
-      this.captionTimestamps.push(now);
-      this.imageCaptionCache
-        .getOrCaption({
-          url: candidate.url,
-          llm: this.llm,
-          settings,
-          mimeType: candidate.contentType || "",
-          trace: trace || {
-            guildId: null,
-            channelId: null,
-            userId: null,
-            source: "history_image_caption"
-          }
-        })
-        .catch(() => { });
-    }
+    captionRecentHistoryImagesForImageAnalysis(this.toBotContext(), {
+      imageCaptionCache: this.imageCaptionCache,
+      captionTimestamps: this.captionTimestamps,
+      candidates,
+      settings,
+      trace
+    });
   }
 
   /**
@@ -2971,187 +2945,35 @@ export class ClankerBot {
    * Returns the top N candidates as direct vision inputs for the LLM.
    */
   getAutoIncludeImageInputs({ candidates = [], maxImages = 3 } = {}) {
-    const list = Array.isArray(candidates) ? candidates : [];
-    const cap = Math.max(0, Math.min(Number(maxImages) || 3, 6));
-    const inputs = [];
-
-    for (const candidate of list) {
-      if (inputs.length >= cap) break;
-      if (!candidate?.url) continue;
-      inputs.push({
-        url: candidate.url,
-        filename: candidate.filename || "(unnamed)",
-        contentType: candidate.contentType || ""
-      });
-    }
-
-    return inputs;
+    return getAutoIncludeImageInputsForImageAnalysis({
+      candidates,
+      maxImages
+    });
   }
 
-  extractHistoryImageCandidates({ recentMessages = [], excluded = new Set() } = {}) {
-    const rows = Array.isArray(recentMessages) ? recentMessages : [];
-    const seen = excluded instanceof Set ? new Set(excluded) : new Set();
-    const candidates = [];
-
-    for (const row of rows) {
-      if (candidates.length >= MAX_HISTORY_IMAGE_CANDIDATES) break;
-      const content = String(row?.content || "");
-      if (!content) continue;
-
-      const urls = extractUrlsFromText(content);
-      if (!urls.length) continue;
-
-      for (const rawUrl of urls) {
-        if (candidates.length >= MAX_HISTORY_IMAGE_CANDIDATES) break;
-        const url = String(rawUrl || "").trim();
-        if (!url) continue;
-        if (!isLikelyImageUrl(url)) continue;
-        if (seen.has(url)) continue;
-        seen.add(url);
-
-        const parsed = parseHistoryImageReference(url);
-        const contentSansUrl = content.replace(url, " ").replace(/\s+/g, " ").trim();
-        // Enrich context with cached vision caption if available
-        const cachedCaption = this.imageCaptionCache?.get(url);
-        const captionText = cachedCaption?.caption || "";
-        const baseContext = contentSansUrl.slice(0, 180);
-        const enrichedContext = captionText
-          ? (baseContext ? `${baseContext} [caption: ${captionText}]` : `[caption: ${captionText}]`).slice(0, 360)
-          : baseContext;
-
-        candidates.push({
-          messageId: String(row?.message_id || "").trim() || null,
-          authorName: String(row?.author_name || "unknown").trim() || "unknown",
-          createdAt: String(row?.created_at || "").trim(),
-          url,
-          filename: parsed.filename || "(unnamed)",
-          contentType: parsed.contentType || "",
-          context: enrichedContext,
-          recencyRank: candidates.length,
-          hasCachedCaption: Boolean(cachedCaption)
-        });
-      }
-    }
-
-    return candidates;
+  extractHistoryImageCandidates({ recentMessages = [], excluded = new Set<string>() } = {}) {
+    return extractHistoryImageCandidatesForImageAnalysis({
+      recentMessages,
+      excluded,
+      imageCaptionCache: this.imageCaptionCache
+    });
   }
 
   rankImageLookupCandidates({ candidates = [], query = "" } = {}) {
-    const normalizedQuery = String(query || "")
-      .toLowerCase()
-      .replace(/\s+/g, " ")
-      .trim();
-    const queryTokens = [...new Set(normalizedQuery.match(/[a-z0-9]{3,}/g) || [])].slice(
-      0,
-      MAX_IMAGE_LOOKUP_QUERY_TOKENS
-    );
-    const wantsVisualRecall = /\b(?:image|photo|picture|pic|screenshot|meme|earlier|previous|that)\b/i.test(
-      normalizedQuery
-    );
-
-    const ranked = (Array.isArray(candidates) ? candidates : []).map((candidate, index) => {
-      const haystack = [
-        candidate?.context,
-        candidate?.filename,
-        candidate?.authorName
-      ]
-        .map((value) => String(value || "").toLowerCase())
-        .join(" ");
-      let score = Math.max(0, 4 - index * 0.3);
-      const reasons = [];
-
-      if (normalizedQuery && haystack.includes(normalizedQuery)) {
-        score += 9;
-        reasons.push("phrase match");
-      }
-
-      let tokenHits = 0;
-      for (const token of queryTokens) {
-        if (!token) continue;
-        if (haystack.includes(token)) {
-          score += 2;
-          tokenHits += 1;
-        }
-      }
-      if (tokenHits > 0) {
-        reasons.push(`${tokenHits} token hit${tokenHits === 1 ? "" : "s"}`);
-      }
-
-      if (wantsVisualRecall) {
-        score += 1;
-      }
-
-      return {
-        ...candidate,
-        score,
-        matchReason: reasons.join(", ") || "recency fallback"
-      };
+    return rankImageLookupCandidatesForImageAnalysis({
+      candidates,
+      query
     });
-
-    ranked.sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return (a.recencyRank || 0) - (b.recencyRank || 0);
-    });
-
-    const matched = ranked.filter((item) => item.score >= 4);
-    return matched.length ? matched : ranked;
   }
 
   async runModelRequestedImageLookup({
     imageLookup,
     query
   }) {
-    const normalizedQuery = normalizeDirectiveText(query, MAX_IMAGE_LOOKUP_QUERY_LEN);
-    const state = {
-      ...imageLookup,
-      requested: true,
-      used: false,
-      query: normalizedQuery,
-      results: [],
-      selectedImageInputs: [],
-      error: null
-    };
-
-    if (!state.enabled) {
-      return state;
-    }
-    if (!normalizedQuery) {
-      return {
-        ...state,
-        error: "Missing image lookup query."
-      };
-    }
-
-    const candidates = Array.isArray(state.candidates) ? state.candidates : [];
-    if (!candidates.length) {
-      return {
-        ...state,
-        error: "No recent history images are available for lookup."
-      };
-    }
-
-    const ranked = this.rankImageLookupCandidates({
-      candidates,
-      query: normalizedQuery
+    return await runModelRequestedImageLookupForImageAnalysis({
+      imageLookup,
+      query
     });
-    const selected = ranked.slice(0, Math.min(MAX_HISTORY_IMAGE_LOOKUP_RESULTS, MAX_MODEL_IMAGE_INPUTS));
-    if (!selected.length) {
-      return {
-        ...state,
-        error: "No matching history images were found."
-      };
-    }
-
-    return {
-      ...state,
-      used: true,
-      results: selected,
-      selectedImageInputs: selected.map((item) => ({
-        url: item.url,
-        filename: item.filename,
-        contentType: item.contentType
-      }))
-    };
   }
 
   async runModelRequestedBrowserBrowse({
@@ -3442,33 +3264,11 @@ export class ClankerBot {
   }
 
   mergeImageInputs({ baseInputs = [], extraInputs = [], maxInputs = MAX_MODEL_IMAGE_INPUTS } = {}) {
-    const merged = [];
-    const seen = new Set();
-    const pushUnique = (input) => {
-      if (!input || typeof input !== "object") return;
-      const url = String(input?.url || "").trim();
-      const mediaType = String(input?.mediaType || input?.contentType || "").trim().toLowerCase();
-      const inlineData = String(input?.dataBase64 || "").trim();
-      const key = url
-        ? `url:${url}`
-        : inlineData
-          ? `inline:${mediaType}:${inlineData.slice(0, 80)}`
-          : "";
-      if (!key || seen.has(key)) return;
-      seen.add(key);
-      merged.push(input);
-    };
-
-    for (const input of Array.isArray(baseInputs) ? baseInputs : []) {
-      if (merged.length >= maxInputs) break;
-      pushUnique(input);
-    }
-    for (const input of Array.isArray(extraInputs) ? extraInputs : []) {
-      if (merged.length >= maxInputs) break;
-      pushUnique(input);
-    }
-
-    return merged.slice(0, maxInputs);
+    return mergeImageInputsForImageAnalysis({
+      baseInputs,
+      extraInputs,
+      maxInputs
+    });
   }
 
   async loadPromptMemorySlice({
