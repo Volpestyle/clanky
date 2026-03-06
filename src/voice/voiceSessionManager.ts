@@ -3768,7 +3768,7 @@ export class VoiceSessionManager {
     return this.resolveCaptureTurnPromotionReason({ session, capture }) !== null;
   }
 
-  isCaptureEligibleForActivityTouch({ session, capture }) {
+  isCaptureConfirmedLiveSpeech({ session, capture }) {
     if (!session || !capture || typeof capture !== "object") return false;
     if (!this.hasCaptureBeenPromoted(capture)) return false;
     const sampleRateHz = isRealtimeMode(session.mode)
@@ -3790,7 +3790,7 @@ export class VoiceSessionManager {
       return true;
     }
     if (!this.hasCaptureBeenPromoted(capture)) return false;
-    return this.isCaptureEligibleForActivityTouch({ session, capture });
+    return this.isCaptureConfirmedLiveSpeech({ session, capture });
   }
 
   hasReplayBlockingActiveCapture(session) {
@@ -3824,7 +3824,7 @@ export class VoiceSessionManager {
 
     for (const capture of session.userCaptures.values()) {
       if (!this.hasCaptureBeenPromoted(capture)) continue;
-      if (!this.isCaptureEligibleForActivityTouch({ session, capture })) continue;
+      if (!this.isCaptureConfirmedLiveSpeech({ session, capture })) continue;
       const promotedAt = Math.max(0, Number(capture?.promotedAt || capture?.startedAt || 0));
       if (promotedAfter > 0 && promotedAt > 0 && promotedAt <= promotedAfter) {
         continue;
@@ -6963,7 +6963,7 @@ export class VoiceSessionManager {
       if (isPromoted) {
         session.lastInboundAudioAt = now;
         if (
-          this.isCaptureEligibleForActivityTouch({ session, capture: captureState }) &&
+          this.isCaptureConfirmedLiveSpeech({ session, capture: captureState }) &&
           now - captureState.lastActivityTouchAt >= ACTIVITY_TOUCH_THROTTLE_MS
         ) {
           this.touchActivity(session.guildId, settings);

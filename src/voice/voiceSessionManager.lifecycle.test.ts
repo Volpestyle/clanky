@@ -672,7 +672,7 @@ test("interruptBotSpeechForBargeIn truncates OpenAI assistant audio to played du
   assert.equal(interruptLog?.metadata?.truncateSucceeded, true);
 });
 
-test("isCaptureEligibleForActivityTouch requires both speech window and non-silent signal", () => {
+test("isCaptureConfirmedLiveSpeech requires both speech window and non-silent signal", () => {
   const { manager } = createManager();
   const session = createSession({
     mode: "openai_realtime",
@@ -688,7 +688,7 @@ test("isCaptureEligibleForActivityTouch requires both speech window and non-sile
     signalPeakAbs: 6_000
   };
   assert.equal(
-    manager.isCaptureEligibleForActivityTouch({
+    manager.isCaptureConfirmedLiveSpeech({
       session,
       capture: underWindowCapture
     }),
@@ -703,7 +703,7 @@ test("isCaptureEligibleForActivityTouch requires both speech window and non-sile
     signalPeakAbs: 150
   };
   assert.equal(
-    manager.isCaptureEligibleForActivityTouch({
+    manager.isCaptureConfirmedLiveSpeech({
       session,
       capture: nearSilentCapture
     }),
@@ -718,7 +718,7 @@ test("isCaptureEligibleForActivityTouch requires both speech window and non-sile
     signalPeakAbs: 6_000
   };
   assert.equal(
-    manager.isCaptureEligibleForActivityTouch({
+    manager.isCaptureConfirmedLiveSpeech({
       session,
       capture: speechLikeCapture
     }),
