@@ -1,10 +1,72 @@
 // Extracted Store Methods
+import type { Database } from "bun:sqlite";
+
 import { clamp, nowIso } from "../utils.ts";
 import { ACTION_LOG_RETENTION_DAYS_MIN, ACTION_LOG_RETENTION_DAYS_MAX, ACTION_LOG_MAX_ROWS_RUNTIME_MIN, ACTION_LOG_MAX_ROWS_MAX } from "./store.ts";
 import { safeJsonParse } from "../normalization/valueParsers.ts";
 import { shouldTrackResponseTriggerKind, normalizeResponseTriggerMessageIds } from "./responseTriggers.ts";
 
-export function maybePruneActionLog(store: any, { now = nowIso() } = {}) {
+interface ActionLogEntry {
+  kind: string;
+  guildId?: string | null;
+  channelId?: string | null;
+  messageId?: string | null;
+  userId?: string | null;
+  content?: string | null;
+  metadata?: unknown;
+  usdCost?: number | null;
+}
+
+interface ActionLogStore {
+  db: Database;
+  actionWritesSincePrune: number;
+  actionLogPruneEveryWrites: number;
+  actionLogRetentionDays: number;
+  actionLogMaxRows: number;
+  onActionLogged?: ((action: ActionLogEntry & { createdAt: string }) => void) | null;
+  pruneActionLog(args?: { now?: string; maxAgeDays?: number; maxRows?: number }): {
+    deletedActions: number;
+    deletedResponseTriggers: number;
+  };
+  maybePruneActionLog(args?: { now?: string }): void;
+  indexResponseTriggersForAction(args: {
+    actionId: number;
+    kind: string;
+    metadata?: unknown;
+    createdAt?: string;
+  }): void;
+}
+
+interface ActionIdRow {
+  id: number;
+}
+
+interface ActionCountRow {
+  count: number;
+}
+
+interface ActionTimeRow {
+  created_at: string;
+}
+
+interface ActionPresenceRow {
+  found: number;
+}
+
+interface ActionLogRow {
+  id: number;
+  created_at: string;
+  guild_id: string | null;
+  channel_id: string | null;
+  message_id: string | null;
+  user_id: string | null;
+  kind: string;
+  content: string | null;
+  metadata: string | null;
+  usd_cost: number;
+}
+
+export function maybePruneActionLog(store: ActionLogStore, { now = nowIso() } = {}) {
   store.actionWritesSincePrune += 1;
   if (store.actionWritesSincePrune < store.actionLogPruneEveryWrites) return;
   store.actionWritesSincePrune = 0;
@@ -13,7 +75,7 @@ export function maybePruneActionLog(store: any, { now = nowIso() } = {}) {
   });
 }
 
-export function pruneActionLog(store: any, {
+export function pruneActionLog(store: ActionLogStore, {
   now = nowIso(),
   maxAgeDays = store.actionLogRetentionDays,
   maxRows = store.actionLogMaxRows
@@ -43,7 +105,7 @@ export function pruneActionLog(store: any, {
   );
 
   const oldestKeptRow = store.db
-    .prepare(
+    .prepare<ActionIdRow, [number]>(
       `SELECT id
          FROM actions
          ORDER BY id DESC
@@ -82,7 +144,7 @@ export function pruneActionLog(store: any, {
   };
 }
 
-export function logAction(store: any, action) {
+export function logAction(store: ActionLogStore, action: ActionLogEntry) {
   const metadata = action.metadata ? JSON.stringify(action.metadata) : null;
   const createdAt = nowIso();
   const actionKind = String(action.kind);
@@ -138,16 +200,16 @@ export function logAction(store: any, action) {
   }
 }
 
-export function countActionsSince(store: any, kind, sinceIso) {
+export function countActionsSince(store: ActionLogStore, kind, sinceIso) {
   const row = store.db
-    .prepare("SELECT COUNT(*) AS count FROM actions WHERE kind = ? AND created_at >= ?")
+    .prepare<ActionCountRow, [string, string]>("SELECT COUNT(*) AS count FROM actions WHERE kind = ? AND created_at >= ?")
     .get(String(kind), String(sinceIso));
   return Number(row?.count ?? 0);
 }
 
-export function getLastActionTime(store: any, kind) {
+export function getLastActionTime(store: ActionLogStore, kind) {
   const row = store.db
-    .prepare(
+    .prepare<ActionTimeRow, [string]>(
       `SELECT created_at
          FROM actions
          WHERE kind = ?
@@ -159,9 +221,9 @@ export function getLastActionTime(store: any, kind) {
   return row?.created_at ?? null;
 }
 
-export function countDiscoveryPostsSince(store: any, sinceIso) {
+export function countDiscoveryPostsSince(store: ActionLogStore, sinceIso) {
   const row = store.db
-    .prepare(
+    .prepare<ActionCountRow, [string]>(
       `SELECT COUNT(*) AS count
          FROM actions
          WHERE kind = 'discovery_post' AND created_at >= ?`
@@ -171,7 +233,7 @@ export function countDiscoveryPostsSince(store: any, sinceIso) {
 }
 
 export function getRecentActions(
-  store: any,
+  store: ActionLogStore,
   limit = 200,
   opts: { kinds?: string[]; sinceIso?: string | null } = {}
 ) {
@@ -197,7 +259,7 @@ export function getRecentActions(
 
   const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const rows = store.db
-    .prepare(
+    .prepare<ActionLogRow, Array<string | number>>(
       `SELECT id, created_at, guild_id, channel_id, message_id, user_id, kind, content, metadata, usd_cost
          FROM actions
          ${whereClause}
@@ -212,11 +274,11 @@ export function getRecentActions(
   }));
 }
 
-export function getRecentMemoryReflections(store: any, limit = 20) {
+export function getRecentMemoryReflections(store: ActionLogStore, limit = 20) {
   const parsedLimit = Number(limit);
   const boundedLimit = clamp(Number.isFinite(parsedLimit) ? Math.floor(parsedLimit) : 20, 1, 100);
   const rows = store.db
-    .prepare(
+    .prepare<ActionLogRow, [number]>(
       `SELECT id, created_at, guild_id, channel_id, message_id, user_id, kind, content, metadata, usd_cost
          FROM actions
          WHERE kind IN ('memory_reflection_start', 'memory_reflection_complete', 'memory_reflection_error')
@@ -345,7 +407,7 @@ export function getRecentMemoryReflections(store: any, limit = 20) {
   return sorted.slice(0, boundedLimit);
 }
 
-export function indexResponseTriggersForAction(store: any, {
+export function indexResponseTriggersForAction(store: ActionLogStore, {
   actionId,
   kind,
   metadata,
@@ -358,7 +420,7 @@ export function indexResponseTriggersForAction(store: any, {
   const triggerMessageIds = normalizeResponseTriggerMessageIds(metadata);
   if (!triggerMessageIds.length) return;
 
-  const insertTrigger = store.db.prepare(
+  const insertTrigger = store.db.prepare<never, [string, number, string]>(
     `INSERT OR IGNORE INTO response_triggers(trigger_message_id, action_id, created_at)
        VALUES (?, ?, ?)`
   );
@@ -370,10 +432,10 @@ export function indexResponseTriggersForAction(store: any, {
   insertTx(triggerMessageIds, normalizedActionId, String(createdAt || nowIso()));
 }
 
-export function hasReflectionBeenCompleted(store: any, dateKey: string, guildId: string): boolean {
+export function hasReflectionBeenCompleted(store: ActionLogStore, dateKey: string, guildId: string): boolean {
   const row = store.db
-    .prepare(
-      `SELECT 1
+    .prepare<ActionPresenceRow, [string, string]>(
+      `SELECT 1 AS found
          FROM actions
          WHERE kind = 'memory_reflection_complete'
            AND guild_id = ?
@@ -384,7 +446,7 @@ export function hasReflectionBeenCompleted(store: any, dateKey: string, guildId:
   return Boolean(row);
 }
 
-export function getRecentBrowserSessions(store: any, limit = 50, opts: { sinceIso?: string | null } = {}) {
+export function getRecentBrowserSessions(store: ActionLogStore, limit = 50, opts: { sinceIso?: string | null } = {}) {
   const parsedLimit = clamp(Math.floor(Number(limit) || 50), 1, 200);
   const sinceIso = String(opts?.sinceIso || "").trim();
 
@@ -400,7 +462,7 @@ export function getRecentBrowserSessions(store: any, limit = 50, opts: { sinceIs
 
   const whereClause = conditions.join(" AND ");
   const rows = store.db
-    .prepare(
+    .prepare<ActionLogRow, Array<string | number>>(
       `SELECT id, created_at, guild_id, channel_id, message_id, user_id, kind, content, metadata, usd_cost
          FROM actions
          WHERE ${whereClause}
@@ -521,13 +583,13 @@ export function getRecentBrowserSessions(store: any, limit = 50, opts: { sinceIs
   return sorted.slice(0, parsedLimit);
 }
 
-export function hasTriggeredResponse(store: any, triggerMessageId) {
+export function hasTriggeredResponse(store: ActionLogStore, triggerMessageId) {
   const id = String(triggerMessageId).trim();
   if (!id) return false;
 
   const row = store.db
-    .prepare(
-      `SELECT 1
+    .prepare<ActionPresenceRow, [string]>(
+      `SELECT 1 AS found
          FROM response_triggers
          WHERE trigger_message_id = ?
          LIMIT 1`

@@ -1,15 +1,66 @@
 // Extracted Store Methods
+import type { Database } from "bun:sqlite";
+
 import { clamp } from "../utils.ts";
 import { safeJsonParse } from "../normalization/valueParsers.ts";
 import { pushPerformanceMetric, summarizeLatencyMetric } from "./storePerformance.ts";
 
-export function getReplyPerformanceStats(store: any, { windowHours = 24, maxSamples = 4000 } = {}) {
+type LatencyMetricSummary = ReturnType<typeof summarizeLatencyMetric>;
+
+interface StatsStore {
+  db: Database;
+  getReplyPerformanceStats(args?: {
+    windowHours?: number;
+    maxSamples?: number;
+  }): {
+    windowHours: number;
+    sampleLimit: number;
+    sampleCount: number;
+    byKind: {
+      sent_reply: number;
+      sent_message: number;
+      reply_skipped: number;
+    };
+    totalMs: LatencyMetricSummary;
+    processingMs: LatencyMetricSummary;
+    phases: {
+      queueMs: LatencyMetricSummary;
+      ingestMs: LatencyMetricSummary;
+      memorySliceMs: LatencyMetricSummary;
+      llm1Ms: LatencyMetricSummary;
+      followupMs: LatencyMetricSummary;
+      typingDelayMs: LatencyMetricSummary;
+      sendMs: LatencyMetricSummary;
+    };
+  };
+}
+
+interface ActionMetadataRow {
+  kind: string;
+  metadata: string | null;
+}
+
+interface ActionKindCountRow {
+  kind: string;
+  count: number;
+}
+
+interface TotalCostRow {
+  total: number;
+}
+
+interface DayCostRow {
+  day: string;
+  usd: number;
+}
+
+export function getReplyPerformanceStats(store: StatsStore, { windowHours = 24, maxSamples = 4000 } = {}) {
 const boundedHours = clamp(Math.floor(Number(windowHours) || 24), 1, 168);
 const boundedSamples = clamp(Math.floor(Number(maxSamples) || 4000), 100, 20000);
 const sinceIso = new Date(Date.now() - boundedHours * 60 * 60 * 1000).toISOString();
 
 const rows = store.db
-  .prepare(
+  .prepare<ActionMetadataRow, [string, number]>(
     `SELECT kind, metadata
          FROM actions
          WHERE created_at >= ?
@@ -72,11 +123,11 @@ return {
 };
 }
 
-export function getStats(store: any) {
+export function getStats(store: StatsStore) {
 const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
 const rows = store.db
-  .prepare(
+  .prepare<ActionKindCountRow, [string]>(
     `SELECT kind, COUNT(*) AS count
          FROM actions
          WHERE created_at >= ?
@@ -85,14 +136,14 @@ const rows = store.db
   .all(since24h);
 
 const totalCostRow = store.db
-  .prepare(
+  .prepare<TotalCostRow, []>(
     `SELECT COALESCE(SUM(usd_cost), 0) AS total
          FROM actions`
   )
   .get();
 
 const dayCostRows = store.db
-  .prepare(
+  .prepare<DayCostRow, [string]>(
     `SELECT substr(created_at, 1, 10) AS day, COALESCE(SUM(usd_cost), 0) AS usd
          FROM actions
          WHERE created_at >= ?

@@ -1,4 +1,6 @@
 // Extracted Store Methods
+import type { Database } from "bun:sqlite";
+
 import { clamp } from "../utils.ts";
 import { normalizeMessageCreatedAt } from "./storeHelpers.ts";
 
@@ -41,7 +43,51 @@ const EN_CONVERSATION_SEARCH_STOPWORDS = new Set([
   "your"
 ]);
 
-export function recordMessage(store: any, message) {
+interface MessageStore {
+  db: Database;
+}
+
+interface MessageSqlRow {
+  message_id: string;
+  created_at: string;
+  guild_id?: string | null;
+  channel_id: string;
+  author_id: string;
+  author_name: string;
+  is_bot: number;
+  content: string;
+  referenced_message_id?: string | null;
+}
+
+interface StoredMessageRow extends Record<string, unknown> {
+  message_id: string;
+  created_at: string;
+  guild_id?: string | null;
+  channel_id: string;
+  author_id: string;
+  author_name: string;
+  is_bot: boolean;
+  content: string;
+  referenced_message_id?: string | null;
+}
+
+interface ConversationMessageRow extends MessageSqlRow {
+  guild_id: string | null;
+}
+
+interface ActiveChannelRow {
+  channel_id: string;
+  message_count: number;
+}
+
+function mapStoredMessageRow(row: MessageSqlRow): StoredMessageRow {
+  return {
+    ...row,
+    is_bot: row.is_bot === 1
+  };
+}
+
+export function recordMessage(store: MessageStore, message) {
 const createdAt = normalizeMessageCreatedAt(
   message?.createdAt ?? message?.created_at ?? message?.createdTimestamp
 );
@@ -80,58 +126,62 @@ store.db
   );
 }
 
-export function getRecentMessages(store: any, channelId, limit = 40) {
+export function getRecentMessages(store: MessageStore, channelId, limit = 40) {
 return store.db
-.prepare(
+.prepare<MessageSqlRow, [string, number]>(
 `SELECT message_id, created_at, channel_id, author_id, author_name, is_bot, content
          FROM messages
          WHERE channel_id = ?
          ORDER BY created_at DESC
          LIMIT ?`
 )
-.all(String(channelId), clamp(Math.floor(limit), 1, 200));
+.all(String(channelId), clamp(Math.floor(limit), 1, 200))
+.map(mapStoredMessageRow);
 }
 
-export function getRecentMessagesAcrossGuild(store: any, guildId, limit = 120) {
+export function getRecentMessagesAcrossGuild(store: MessageStore, guildId, limit = 120) {
 return store.db
-.prepare(
+.prepare<MessageSqlRow, [string, number]>(
 `SELECT message_id, created_at, channel_id, author_id, author_name, is_bot, content
          FROM messages
          WHERE guild_id = ?
          ORDER BY created_at DESC
          LIMIT ?`
 )
-.all(String(guildId), clamp(Math.floor(limit), 1, 300));
+.all(String(guildId), clamp(Math.floor(limit), 1, 300))
+.map(mapStoredMessageRow);
 }
 
-export function searchRelevantMessages(store: any, channelId, queryText, limit = 8) {
+export function searchRelevantMessages(store: MessageStore, channelId, queryText, limit = 8) {
 const raw = String(queryText ?? "").toLowerCase();
 const tokens = [...new Set(raw.match(/[a-z0-9]{4,}/g) ?? [])].slice(0, 5);
 
 if (!tokens.length) {
   return store.db
-    .prepare(
+    .prepare<MessageSqlRow, [string, number]>(
       `SELECT message_id, created_at, channel_id, author_id, author_name, is_bot, content
            FROM messages
            WHERE channel_id = ? AND is_bot = 0
            ORDER BY created_at DESC
            LIMIT ?`
     )
-    .all(String(channelId), clamp(limit, 1, 24));
+    .all(String(channelId), clamp(limit, 1, 24))
+    .map(mapStoredMessageRow);
 }
 
 const clauses = tokens.map(() => "content LIKE ?").join(" OR ");
 const args = [String(channelId), ...tokens.map((t) => `%${t}%`), clamp(limit, 1, 24)];
 
 return store.db
-  .prepare(
+  .prepare<MessageSqlRow, Array<string | number>>(
     `SELECT message_id, created_at, channel_id, author_id, author_name, is_bot, content
          FROM messages
          WHERE channel_id = ? AND is_bot = 0 AND (${clauses})
          ORDER BY created_at DESC
          LIMIT ?`
   )
-  .all(...args);
+  .all(...args)
+  .map(mapStoredMessageRow);
 }
 
 function normalizeConversationSearchTokens(queryText) {
@@ -195,7 +245,12 @@ return {
 };
 }
 
-function fetchConversationWindowRows(store: any, anchorRow, before = 1, after = 1) {
+function fetchConversationWindowRows(
+  store: MessageStore,
+  anchorRow: Pick<ConversationMessageRow, "message_id" | "channel_id" | "created_at">,
+  before = 1,
+  after = 1
+) {
 if (!anchorRow?.message_id || !anchorRow?.channel_id || !anchorRow?.created_at) return [];
 
 const boundedBefore = clamp(Math.floor(Number(before) || 1), 0, 4);
@@ -206,7 +261,7 @@ const messageId = String(anchorRow.message_id);
 
 const beforeRows = boundedBefore > 0
   ? store.db
-      .prepare(
+      .prepare<ConversationMessageRow, [string, string, number]>(
         `SELECT message_id, created_at, guild_id, channel_id, author_id, author_name, is_bot, content
              FROM messages
              WHERE channel_id = ?
@@ -219,7 +274,7 @@ const beforeRows = boundedBefore > 0
   : [];
 
 const anchorRows = store.db
-  .prepare(
+  .prepare<ConversationMessageRow, [string]>(
     `SELECT message_id, created_at, guild_id, channel_id, author_id, author_name, is_bot, content
          FROM messages
          WHERE message_id = ?
@@ -229,7 +284,7 @@ const anchorRows = store.db
 
 const afterRows = boundedAfter > 0
   ? store.db
-      .prepare(
+      .prepare<ConversationMessageRow, [string, string, number]>(
         `SELECT message_id, created_at, guild_id, channel_id, author_id, author_name, is_bot, content
              FROM messages
              WHERE channel_id = ?
@@ -243,7 +298,7 @@ const afterRows = boundedAfter > 0
 return [...beforeRows, ...anchorRows, ...afterRows];
 }
 
-export function searchConversationWindows(store: any, {
+export function searchConversationWindows(store: MessageStore, {
     guildId,
     channelId = null,
     queryText = "",
@@ -278,7 +333,7 @@ if (tokenClauses.length) {
 args.push(candidateLimit);
 
 const rows = store.db
-  .prepare(
+  .prepare<ConversationMessageRow, Array<string | number>>(
     `SELECT message_id, created_at, guild_id, channel_id, author_id, author_name, is_bot, content
          FROM messages
          WHERE guild_id = ?
@@ -342,7 +397,7 @@ for (const row of rankedRows) {
       channel_id: String(entry?.channel_id || "").trim() || null,
       author_id: String(entry?.author_id || "").trim() || null,
       author_name: String(entry?.author_name || "").trim() || "unknown",
-      is_bot: entry?.is_bot === 1 || entry?.is_bot === true ? 1 : 0,
+      is_bot: Number(entry?.is_bot) === 1 ? 1 : 0,
       content: String(entry?.content || "").trim()
     }))
   });
@@ -351,11 +406,11 @@ for (const row of rankedRows) {
 return windows;
 }
 
-export function getActiveChannels(store: any, guildId, hours = 24, limit = 10) {
+export function getActiveChannels(store: MessageStore, guildId, hours = 24, limit = 10) {
 const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
 
 return store.db
-  .prepare(
+  .prepare<ActiveChannelRow, [string, string, number]>(
     `SELECT channel_id, COUNT(*) AS message_count
          FROM messages
          WHERE guild_id = ? AND is_bot = 0 AND created_at >= ?

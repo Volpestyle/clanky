@@ -1,9 +1,52 @@
 // Extracted Store Methods
+import type { Database } from "bun:sqlite";
+
 import { clamp, nowIso } from "../utils.ts";
 import { load as loadSqliteVec } from "sqlite-vec";
 import { normalizeEmbeddingVector, vectorToBlob, parseEmbeddingBlob } from "./storeHelpers.ts";
 
-export function addMemoryFact(store: any, fact) {
+interface MemoryStore {
+  db: Database;
+  sqliteVecReady: boolean | null;
+  sqliteVecError: string;
+  ensureSqliteVecReady(): boolean;
+}
+
+interface MemoryFactRow {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  guild_id: string;
+  channel_id: string | null;
+  subject: string;
+  fact: string;
+  fact_type: string;
+  evidence_text: string | null;
+  source_message_id: string | null;
+  confidence: number;
+}
+
+interface MemoryFactIdRow {
+  id: number;
+}
+
+interface MemoryFactVectorBlobRow {
+  embedding_blob: Uint8Array;
+}
+
+interface MemoryFactVectorScoreRow {
+  fact_id: number;
+  score: number;
+}
+
+interface MemorySubjectRow {
+  guild_id: string;
+  subject: string;
+  last_seen_at: string;
+  fact_count: number;
+}
+
+export function addMemoryFact(store: MemoryStore, fact) {
 const guildId = String(fact.guildId || "").trim();
 if (!guildId) return false;
 
@@ -50,16 +93,16 @@ const result = store.db
 return result.changes > 0;
 }
 
-export function getFactsForSubjectScoped(store: any, subject, limit = 12, scope = null) {
+export function getFactsForSubjectScoped(store: MemoryStore, subject, limit = 12, scope = null) {
 const where = ["subject = ?", "is_active = 1"];
-const args = [String(subject)];
+const args: string[] = [String(subject)];
 if (scope?.guildId) {
   where.push("guild_id = ?");
   args.push(String(scope.guildId));
 }
 
 return store.db
-  .prepare(
+  .prepare<MemoryFactRow, Array<string | number>>(
     `SELECT id, created_at, updated_at, guild_id, channel_id, subject, fact, fact_type, evidence_text, source_message_id, confidence
          FROM memory_facts
          WHERE ${where.join(" AND ")}
@@ -69,20 +112,22 @@ return store.db
   .all(...args, clamp(limit, 1, 100));
 }
 
-export function getFactsForSubjects(store: any, subjects, limit = 80, scope = null) {
-const normalizedSubjects = [...new Set((subjects || []).map((value) => String(value || "").trim()).filter(Boolean))];
+export function getFactsForSubjects(store: MemoryStore, subjects, limit = 80, scope = null) {
+const normalizedSubjects: string[] = [
+  ...new Set((Array.isArray(subjects) ? subjects : []).map((value) => String(value || "").trim()).filter(Boolean))
+];
 if (!normalizedSubjects.length) return [];
 
 const placeholders = normalizedSubjects.map(() => "?").join(", ");
 const where = [`subject IN (${placeholders})`, "is_active = 1"];
-const args = [...normalizedSubjects];
+const args: string[] = [...normalizedSubjects];
 if (scope?.guildId) {
   where.push("guild_id = ?");
   args.push(String(scope.guildId));
 }
 
 return store.db
-  .prepare(
+  .prepare<MemoryFactRow, Array<string | number>>(
     `SELECT id, created_at, updated_at, guild_id, channel_id, subject, fact, fact_type, evidence_text, source_message_id, confidence
          FROM memory_facts
          WHERE ${where.join(" AND ")}
@@ -92,15 +137,15 @@ return store.db
   .all(...args, clamp(limit, 1, 500));
 }
 
-export function getFactsForScope(store: any, { guildId, limit = 120, subjectIds = null }) {
+export function getFactsForScope(store: MemoryStore, { guildId, limit = 120, subjectIds = null }) {
 const normalizedGuildId = String(guildId || "").trim();
 if (!normalizedGuildId) return [];
 
 const where = ["guild_id = ?", "is_active = 1"];
-const args = [normalizedGuildId];
+const args: string[] = [normalizedGuildId];
 
 if (Array.isArray(subjectIds) && subjectIds.length) {
-  const normalizedSubjects = [...new Set(subjectIds.map((value) => String(value || "").trim()).filter(Boolean))];
+  const normalizedSubjects: string[] = [...new Set(subjectIds.map((value) => String(value || "").trim()).filter(Boolean))];
   if (normalizedSubjects.length) {
     where.push(`subject IN (${normalizedSubjects.map(() => "?").join(", ")})`);
     args.push(...normalizedSubjects);
@@ -108,7 +153,7 @@ if (Array.isArray(subjectIds) && subjectIds.length) {
 }
 
 return store.db
-  .prepare(
+  .prepare<MemoryFactRow, Array<string | number>>(
     `SELECT id, created_at, updated_at, guild_id, channel_id, subject, fact, fact_type, evidence_text, source_message_id, confidence
          FROM memory_facts
          WHERE ${where.join(" AND ")}
@@ -118,7 +163,7 @@ return store.db
   .all(...args, clamp(limit, 1, 1000));
 }
 
-export function getFactsForSubjectsScoped(store: any, {
+export function getFactsForSubjectsScoped(store: MemoryStore, {
     guildId = null,
     subjectIds = [],
     perSubjectLimit = 6,
@@ -127,7 +172,7 @@ export function getFactsForSubjectsScoped(store: any, {
 const normalizedGuildId = String(guildId || "").trim();
 if (!normalizedGuildId) return [];
 
-const normalizedSubjects = [
+const normalizedSubjects: string[] = [
   ...new Set((subjectIds || []).map((value) => String(value || "").trim()).filter(Boolean))
 ];
 if (!normalizedSubjects.length) return [];
@@ -141,7 +186,7 @@ const boundedTotalLimit = clamp(
 const subjectPlaceholders = normalizedSubjects.map(() => "?").join(", ");
 
 return store.db
-  .prepare(
+  .prepare<MemoryFactRow, Array<string | number>>(
     `SELECT
            id,
            created_at,
@@ -185,13 +230,13 @@ return store.db
   );
 }
 
-export function getMemoryFactBySubjectAndFact(store: any, guildId, subject, fact) {
+export function getMemoryFactBySubjectAndFact(store: MemoryStore, guildId, subject, fact) {
 const normalizedGuildId = String(guildId || "").trim();
 if (!normalizedGuildId) return null;
 
 return (
   store.db
-    .prepare(
+    .prepare<MemoryFactRow, [string, string, string]>(
       `SELECT id, created_at, updated_at, guild_id, channel_id, subject, fact, fact_type, evidence_text, source_message_id, confidence
            FROM memory_facts
            WHERE guild_id = ? AND subject = ? AND fact = ? AND is_active = 1
@@ -201,7 +246,7 @@ return (
 );
 }
 
-export function ensureSqliteVecReady(store: any) {
+export function ensureSqliteVecReady(store: MemoryStore) {
 if (store.sqliteVecReady !== null) {
   return store.sqliteVecReady;
 }
@@ -218,7 +263,7 @@ try {
 return store.sqliteVecReady;
 }
 
-export function upsertMemoryFactVectorNative(store: any, { factId, model, embedding, updatedAt = nowIso() }) {
+export function upsertMemoryFactVectorNative(store: MemoryStore, { factId, model, embedding, updatedAt = nowIso() }) {
 const factIdInt = Number(factId);
 const normalizedModel = String(model || "").slice(0, 120);
 const vector = normalizeEmbeddingVector(embedding);
@@ -245,14 +290,14 @@ const result = store.db
 return Number(result?.changes || 0) > 0;
 }
 
-export function getMemoryFactVectorNative(store: any, factId, model) {
+export function getMemoryFactVectorNative(store: MemoryStore, factId, model) {
 const factIdInt = Number(factId);
 const normalizedModel = String(model || "").trim();
 if (!Number.isInteger(factIdInt) || factIdInt <= 0) return null;
 if (!normalizedModel) return null;
 
 const row = store.db
-  .prepare(
+  .prepare<MemoryFactVectorBlobRow, [number, string]>(
     `SELECT embedding_blob
          FROM memory_fact_vectors_native
          WHERE fact_id = ? AND model = ?
@@ -263,10 +308,12 @@ const vector = parseEmbeddingBlob(row?.embedding_blob);
 return vector.length ? vector : null;
 }
 
-export function getMemoryFactVectorNativeScores(store: any, { factIds, model, queryEmbedding }) {
+export function getMemoryFactVectorNativeScores(store: MemoryStore, { factIds, model, queryEmbedding }) {
 if (!store.ensureSqliteVecReady()) return [];
 
-const ids = [...new Set((factIds || []).map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0))];
+const ids: number[] = [
+  ...new Set((Array.isArray(factIds) ? factIds : []).map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0))
+];
 const normalizedModel = String(model || "").trim();
 const normalizedQueryEmbedding = normalizeEmbeddingVector(queryEmbedding);
 if (!ids.length || !normalizedModel || !normalizedQueryEmbedding.length) return [];
@@ -274,7 +321,7 @@ if (!ids.length || !normalizedModel || !normalizedQueryEmbedding.length) return 
 const placeholders = ids.map(() => "?").join(", ");
 try {
   return store.db
-    .prepare(
+    .prepare<MemoryFactVectorScoreRow, Array<string | number | Buffer>>(
       `SELECT fact_id, (1 - vec_distance_cosine(embedding_blob, ?)) AS score
            FROM memory_fact_vectors_native
            WHERE model = ? AND dims = ? AND fact_id IN (${placeholders})`
@@ -297,16 +344,16 @@ try {
 }
 }
 
-export function getMemorySubjects(store: any, limit = 80, scope = null) {
+export function getMemorySubjects(store: MemoryStore, limit = 80, scope = null) {
 const where = ["is_active = 1"];
-const args = [];
+const args: string[] = [];
 if (scope?.guildId) {
   where.push("guild_id = ?");
   args.push(String(scope.guildId));
 }
 
 return store.db
-  .prepare(
+  .prepare<MemorySubjectRow, Array<string | number>>(
     `SELECT guild_id, subject, MAX(updated_at) AS last_seen_at, COUNT(*) AS fact_count
          FROM memory_facts
          WHERE ${where.join(" AND ")}
@@ -317,21 +364,21 @@ return store.db
   .all(...args, clamp(limit, 1, 500));
 }
 
-export function archiveOldFactsForSubject(store: any, { guildId, subject, factType = null, keep = 60 }) {
+export function archiveOldFactsForSubject(store: MemoryStore, { guildId, subject, factType = null, keep = 60 }) {
 const normalizedGuildId = String(guildId || "").trim();
 const normalizedSubject = String(subject || "").trim();
 if (!normalizedGuildId || !normalizedSubject) return 0;
 
 const boundedKeep = clamp(Math.floor(Number(keep) || 60), 1, 400);
 const where = ["guild_id = ?", "subject = ?", "is_active = 1"];
-const args = [normalizedGuildId, normalizedSubject];
+const args: string[] = [normalizedGuildId, normalizedSubject];
 if (factType) {
   where.push("fact_type = ?");
   args.push(String(factType));
 }
 
 const rows = store.db
-  .prepare(
+  .prepare<MemoryFactIdRow, string[]>(
     `SELECT id
          FROM memory_facts
          WHERE ${where.join(" AND ")}
