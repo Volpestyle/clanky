@@ -28,6 +28,9 @@ export type MemoryExtractionDeps = {
   callClaudeCodeMemoryExtraction: (
     request: MemoryExtractionRequest
   ) => Promise<MemoryExtractionResponse>;
+  callCodexCliMemoryExtraction: (
+    request: MemoryExtractionRequest
+  ) => Promise<MemoryExtractionResponse>;
 };
 
 function clampInt(value: unknown, min: number, max: number) {
@@ -43,6 +46,9 @@ export async function callMemoryExtractionModel(
 ) {
   if (provider === "claude-code") {
     return deps.callClaudeCodeMemoryExtraction(payload);
+  }
+  if (provider === "codex-cli" || provider === "codex_cli_session") {
+    return deps.callCodexCliMemoryExtraction(payload);
   }
   if (provider === "anthropic") {
     return callAnthropicMemoryExtraction(deps, payload);

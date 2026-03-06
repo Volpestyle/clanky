@@ -158,9 +158,11 @@ export function normalizeLlmProvider(value, fallback = "openai") {
   if (normalized === "ai_sdk_anthropic") return "ai_sdk_anthropic";
   if (normalized === "litellm") return "litellm";
   if (normalized === "claude_code_session") return "claude_code_session";
+  if (normalized === "codex_cli_session") return "codex_cli_session";
   if (normalized === "xai") return "xai";
   if (normalized === "claude-code") return "claude-code";
   if (normalized === "codex") return "codex";
+  if (normalized === "codex-cli") return "codex-cli";
 
   const fallbackProvider = String(fallback || "")
     .trim()
@@ -170,9 +172,11 @@ export function normalizeLlmProvider(value, fallback = "openai") {
   if (fallbackProvider === "ai_sdk_anthropic") return "ai_sdk_anthropic";
   if (fallbackProvider === "litellm") return "litellm";
   if (fallbackProvider === "claude_code_session") return "claude_code_session";
+  if (fallbackProvider === "codex_cli_session") return "codex_cli_session";
   if (fallbackProvider === "xai") return "xai";
   if (fallbackProvider === "claude-code") return "claude-code";
   if (fallbackProvider === "codex") return "codex";
+  if (fallbackProvider === "codex-cli") return "codex-cli";
   return "openai";
 }
 
@@ -192,9 +196,11 @@ export function defaultModelForLlmProvider(provider) {
   if (provider === "ai_sdk_anthropic") return "claude-haiku-4-5";
   if (provider === "litellm") return "claude-haiku-4-5";
   if (provider === "claude_code_session") return "max";
+  if (provider === "codex_cli_session") return "gpt-5.4";
   if (provider === "xai") return "grok-3-mini-latest";
   if (provider === "claude-code") return "sonnet";
   if (provider === "codex") return "gpt-5-codex";
+  if (provider === "codex-cli") return "gpt-5.4";
   return "claude-haiku-4-5";
 }
 
@@ -202,7 +208,11 @@ export function resolveProviderFallbackOrder(provider) {
   if (provider === "claude_code_session") {
     return ["claude_code_session", "claude-code", "anthropic", "openai", "xai", "codex"];
   }
+  if (provider === "codex_cli_session") {
+    return ["codex_cli_session", "codex-cli", "codex", "openai", "anthropic", "claude-code", "xai", "claude_code_session"];
+  }
   if (provider === "claude-code") return ["claude-code", "anthropic", "openai", "xai"];
+  if (provider === "codex-cli") return ["codex-cli", "codex", "openai", "anthropic", "claude-code", "xai"];
   if (provider === "codex") return ["codex", "openai", "anthropic", "claude-code", "xai", "claude_code_session"];
   if (provider === "ai_sdk_anthropic") return ["ai_sdk_anthropic", "anthropic", "openai", "xai", "claude-code"];
   if (provider === "litellm") return ["litellm", "openai", "anthropic", "xai", "claude-code"];

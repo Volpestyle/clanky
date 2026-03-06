@@ -252,6 +252,7 @@ export async function runModelRequestedCodeTask(
     provider,
     model,
     codexModel,
+    codexCliModel,
     maxTurns,
     timeoutMs,
     maxBufferBytes
@@ -267,6 +268,7 @@ export async function runModelRequestedCodeTask(
       maxBufferBytes,
       model,
       codexModel,
+      codexCliModel,
       openai: ctx.llm?.openai || null,
       trace: buildTrace({
         guildId,
@@ -318,6 +320,7 @@ export function createCodeAgentSession(
     provider,
     model,
     codexModel,
+    codexCliModel,
     maxTurns,
     timeoutMs,
     maxBufferBytes
@@ -334,6 +337,7 @@ export function createCodeAgentSession(
       provider,
       model,
       codexModel,
+      codexCliModel,
       maxTurns,
       timeoutMs,
       maxBufferBytes,

@@ -31,6 +31,7 @@ export const appConfig = {
   defaultAnthropicModel: process.env.DEFAULT_MODEL_ANTHROPIC ?? "claude-haiku-4-5",
   defaultXaiModel: process.env.DEFAULT_MODEL_XAI ?? "grok-3-mini-latest",
   defaultClaudeCodeModel: process.env.DEFAULT_MODEL_CLAUDE_CODE ?? "sonnet",
+  defaultCodexCliModel: process.env.DEFAULT_MODEL_CODEX_CLI ?? "gpt-5.4",
   defaultMemoryEmbeddingModel: process.env.DEFAULT_MEMORY_EMBEDDING_MODEL ?? "text-embedding-3-small",
   voiceMcpServers: parseVoiceMcpServers(process.env.VOICE_MCP_SERVERS_JSON),
   runtimeStructuredLogsEnabled: parseBooleanFlag(process.env.RUNTIME_STRUCTURED_LOGS_ENABLED, true),

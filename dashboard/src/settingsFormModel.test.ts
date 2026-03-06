@@ -82,6 +82,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.codeAgentProvider, "auto");
   assert.equal(form.codeAgentModel, "sonnet");
   assert.equal(form.codeAgentCodexModel, "codex-mini-latest");
+  assert.equal(form.codeAgentCodexCliModel, "gpt-5.4");
   assert.equal(form.memoryReflectionStrategy, "two_pass_extract_then_main");
   assert.equal(form.adaptiveDirectivesEnabled, true);
   assert.equal(form.automationsEnabled, true);
@@ -382,6 +383,34 @@ test("settingsFormModel round-trips code agent provider fields", () => {
   assert.deepEqual(patch.agentStack.overrides.devTeam.codingWorkers, ["codex"]);
   assert.equal(patch.agentStack.runtimeConfig.devTeam.claudeCode.model, "sonnet");
   assert.equal(patch.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
+});
+
+test("settingsFormModel round-trips codex cli code agent fields", () => {
+  const form = settingsToForm(normalizeSettings({
+    agentStack: {
+      advancedOverridesEnabled: true,
+      overrides: {
+        devTeam: {
+          codingWorkers: ["codex_cli"]
+        }
+      },
+      runtimeConfig: {
+        devTeam: {
+          codexCli: {
+            enabled: true,
+            model: "gpt-5.4"
+          }
+        }
+      }
+    }
+  }));
+
+  assert.equal(form.codeAgentProvider, "codex-cli");
+  assert.equal(form.codeAgentCodexCliModel, "gpt-5.4");
+
+  const patch = formToSettingsPatch(form);
+  assert.deepEqual(patch.agentStack.overrides.devTeam.codingWorkers, ["codex_cli"]);
+  assert.equal(patch.agentStack.runtimeConfig.devTeam.codexCli.model, "gpt-5.4");
 });
 
 test("settingsFormModel supports the claude_code_max preset", () => {

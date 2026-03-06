@@ -179,6 +179,10 @@ const DEFAULT_PRICING = {
     haiku: { inputPer1M: 0, outputPer1M: 0 },
     opus: { inputPer1M: 0, outputPer1M: 0 }
   },
+  "codex-cli": {
+    "gpt-5.4": { inputPer1M: 0, outputPer1M: 0 },
+    "gpt-5-codex": { inputPer1M: 0, outputPer1M: 0 }
+  },
   xaiImages: {
     "grok-2-image-latest": { default: 0.07 },
     "grok-2-image-1212": { default: 0.07 },
@@ -211,7 +215,7 @@ const MODEL_ALIASES = {
     "gpt 5.4": "gpt-5.4",
     "grok vision beta": "grok-vision-beta"
   };
-const LLM_PROVIDER_KEYS = ["openai", "anthropic", "xai", "claude-code"];
+const LLM_PROVIDER_KEYS = ["openai", "anthropic", "xai", "claude-code", "codex-cli"];
 const NON_TEXT_MODEL_PATTERNS = [
   /embedding/i,
   /image/i,
@@ -272,7 +276,8 @@ export function getLlmModelCatalog(customPricing = {}) {
     openai: listLlmModelsForProvider(merged.openai, "openai"),
     anthropic: listLlmModelsForProvider(merged.anthropic, "anthropic"),
     xai: listLlmModelsForProvider(merged.xai, "xai"),
-    "claude-code": listLlmModelsForProvider(merged["claude-code"], "claude-code")
+    "claude-code": listLlmModelsForProvider(merged["claude-code"], "claude-code"),
+    "codex-cli": listLlmModelsForProvider(merged["codex-cli"], "codex-cli")
   };
 }
 
@@ -302,6 +307,10 @@ function mergePricing(customPricing) {
     "claude-code": {
       ...DEFAULT_PRICING["claude-code"],
       ...(custom["claude-code"] && typeof custom["claude-code"] === "object" ? custom["claude-code"] : {})
+    },
+    "codex-cli": {
+      ...DEFAULT_PRICING["codex-cli"],
+      ...(custom["codex-cli"] && typeof custom["codex-cli"] === "object" ? custom["codex-cli"] : {})
     }
   };
 }

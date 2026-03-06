@@ -110,6 +110,7 @@ export type LLMAppConfig = {
   defaultAnthropicModel?: string | null;
   defaultXaiModel?: string | null;
   defaultClaudeCodeModel?: string | null;
+  defaultCodexCliModel?: string | null;
   defaultMemoryEmbeddingModel?: string | null;
 };
 

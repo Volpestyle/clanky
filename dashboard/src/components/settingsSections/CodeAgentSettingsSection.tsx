@@ -5,6 +5,7 @@ export function CodeAgentSettingsSection({ id, form, set }) {
   const provider = String(form.codeAgentProvider || "claude-code").trim().toLowerCase();
   const showClaudeModel = provider === "claude-code" || provider === "auto";
   const showCodexModel = provider === "codex" || provider === "auto";
+  const showCodexCliModel = provider === "codex-cli" || provider === "auto";
 
   return (
     <SettingsSection id={id} title="Code Agent" active={form.codeAgentEnabled}>
@@ -41,6 +42,7 @@ export function CodeAgentSettingsSection({ id, form, set }) {
                 onChange={set("codeAgentProvider")}
               >
                 <option value="claude-code">Claude Code (local)</option>
+                <option value="codex-cli">Codex CLI (local)</option>
                 <option value="codex">Codex (OpenAI)</option>
                 <option value="auto">Auto (currently Claude Code)</option>
               </select>
@@ -80,6 +82,19 @@ export function CodeAgentSettingsSection({ id, form, set }) {
                 value={form.codeAgentCodexModel}
                 onChange={set("codeAgentCodexModel")}
                 placeholder="codex-mini-latest"
+              />
+            </div>
+          )}
+
+          {showCodexCliModel && (
+            <div className="field">
+              <label htmlFor="code-agent-codex-cli-model">Codex CLI model</label>
+              <input
+                id="code-agent-codex-cli-model"
+                type="text"
+                value={form.codeAgentCodexCliModel}
+                onChange={set("codeAgentCodexCliModel")}
+                placeholder="gpt-5.4"
               />
             </div>
           )}

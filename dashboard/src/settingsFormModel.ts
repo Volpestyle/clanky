@@ -150,6 +150,8 @@ function buildSettingsFormView(settings: unknown) {
     codingWorkers.length === 1
       ? codingWorkers[0] === "codex"
         ? "codex"
+        : codingWorkers[0] === "codex_cli"
+          ? "codex-cli"
         : "claude-code"
       : "auto";
 
@@ -201,23 +203,27 @@ function buildSettingsFormView(settings: unknown) {
       sessionTimeoutMs: browser.localBrowserAgent.sessionTimeoutMs
     },
     codeAgent: {
-      enabled: devPermissions.allowedUserIds.length > 0 && Boolean(devTeam.codex?.enabled || devTeam.claudeCode?.enabled),
+      enabled: devPermissions.allowedUserIds.length > 0 && Boolean(devTeam.codex?.enabled || devTeam.codexCli?.enabled || devTeam.claudeCode?.enabled),
       provider: codeAgentProvider,
       model: String(devTeam.claudeCode?.model || ""),
       codexModel: String(devTeam.codex?.model || ""),
-      maxTurns: Math.max(Number(devTeam.codex?.maxTurns || 0), Number(devTeam.claudeCode?.maxTurns || 0)),
-      timeoutMs: Math.max(Number(devTeam.codex?.timeoutMs || 0), Number(devTeam.claudeCode?.timeoutMs || 0)),
+      codexCliModel: String(devTeam.codexCli?.model || ""),
+      maxTurns: Math.max(Number(devTeam.codex?.maxTurns || 0), Number(devTeam.codexCli?.maxTurns || 0), Number(devTeam.claudeCode?.maxTurns || 0)),
+      timeoutMs: Math.max(Number(devTeam.codex?.timeoutMs || 0), Number(devTeam.codexCli?.timeoutMs || 0), Number(devTeam.claudeCode?.timeoutMs || 0)),
       maxBufferBytes: Math.max(
         Number(devTeam.codex?.maxBufferBytes || 0),
+        Number(devTeam.codexCli?.maxBufferBytes || 0),
         Number(devTeam.claudeCode?.maxBufferBytes || 0)
       ),
-      defaultCwd: String(devTeam.codex?.defaultCwd || devTeam.claudeCode?.defaultCwd || ""),
+      defaultCwd: String(devTeam.codex?.defaultCwd || devTeam.codexCli?.defaultCwd || devTeam.claudeCode?.defaultCwd || ""),
       maxTasksPerHour: Math.max(
         Number(devTeam.codex?.maxTasksPerHour || 0),
+        Number(devTeam.codexCli?.maxTasksPerHour || 0),
         Number(devTeam.claudeCode?.maxTasksPerHour || 0)
       ),
       maxParallelTasks: Math.max(
         Number(devTeam.codex?.maxParallelTasks || 0),
+        Number(devTeam.codexCli?.maxParallelTasks || 0),
         Number(devTeam.claudeCode?.maxParallelTasks || 0)
       ),
       allowedUserIds: devPermissions.allowedUserIds
@@ -411,6 +417,7 @@ export function settingsToForm(settings: unknown) {
     codeAgentProvider: resolved.codeAgent.provider ?? defaults.codeAgent.provider,
     codeAgentModel: resolved.codeAgent.model ?? defaults.codeAgent.model,
     codeAgentCodexModel: resolved.codeAgent.codexModel ?? defaults.codeAgent.codexModel,
+    codeAgentCodexCliModel: resolved.codeAgent.codexCliModel ?? defaults.codeAgent.codexCliModel,
     codeAgentMaxTurns: resolved.codeAgent.maxTurns ?? defaults.codeAgent.maxTurns,
     codeAgentTimeoutMs: resolved.codeAgent.timeoutMs ?? defaults.codeAgent.timeoutMs,
     codeAgentMaxBufferBytes: resolved.codeAgent.maxBufferBytes ?? defaults.codeAgent.maxBufferBytes,
@@ -747,9 +754,11 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
           codingWorkers:
             String(form.codeAgentProvider || "auto").trim().toLowerCase() === "codex"
               ? ["codex"]
+              : String(form.codeAgentProvider || "auto").trim().toLowerCase() === "codex-cli"
+                ? ["codex_cli"]
               : String(form.codeAgentProvider || "auto").trim().toLowerCase() === "claude-code"
                 ? ["claude_code"]
-                : ["codex", "claude_code"]
+                : ["codex", "codex_cli", "claude_code"]
         },
         voiceAdmissionClassifier: {
           mode: "dedicated_model",
@@ -854,6 +863,16 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
           codex: {
             enabled: Boolean(form.codeAgentEnabled),
             model: String(form.codeAgentCodexModel || "gpt-5-codex").trim(),
+            maxTurns: Number(form.codeAgentMaxTurns),
+            timeoutMs: Number(form.codeAgentTimeoutMs),
+            maxBufferBytes: Number(form.codeAgentMaxBufferBytes),
+            defaultCwd: String(form.codeAgentDefaultCwd || "").trim(),
+            maxTasksPerHour: Number(form.codeAgentMaxTasksPerHour),
+            maxParallelTasks: Number(form.codeAgentMaxParallelTasks)
+          },
+          codexCli: {
+            enabled: Boolean(form.codeAgentEnabled),
+            model: String(form.codeAgentCodexCliModel || "gpt-5.4").trim(),
             maxTurns: Number(form.codeAgentMaxTurns),
             timeoutMs: Number(form.codeAgentTimeoutMs),
             maxBufferBytes: Number(form.codeAgentMaxBufferBytes),

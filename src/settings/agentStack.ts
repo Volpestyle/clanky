@@ -123,7 +123,7 @@ const PRESET_DEFAULTS = {
         review: dedicatedModel("claude-code", "sonnet"),
         research: inheritOrchestrator()
       },
-      codingWorkers: ["codex", "claude_code"]
+      codingWorkers: ["codex", "codex_cli", "claude_code"]
     }
   },
   anthropic_brain_openai_tools: {
@@ -153,7 +153,7 @@ const PRESET_DEFAULTS = {
         review: dedicatedModel("claude-code", "sonnet"),
         research: inheritOrchestrator()
       },
-      codingWorkers: ["claude_code", "codex"]
+      codingWorkers: ["claude_code", "codex_cli", "codex"]
     }
   },
   claude_code_max: {
@@ -190,7 +190,7 @@ const PRESET_DEFAULTS = {
         review: dedicatedModel("claude_code_session", "max"),
         research: dedicatedModel("claude_code_session", "max")
       },
-      codingWorkers: ["claude_code", "codex"]
+      codingWorkers: ["claude_code", "codex_cli", "codex"]
     }
   },
   custom: {
@@ -220,7 +220,7 @@ const PRESET_DEFAULTS = {
         review: dedicatedModel("claude-code", "sonnet"),
         research: inheritOrchestrator()
       },
-      codingWorkers: ["codex", "claude_code"]
+      codingWorkers: ["codex", "codex_cli", "claude_code"]
     }
   }
 } as const satisfies Record<string, PresetDefaults>;
@@ -746,6 +746,7 @@ export function resolveAgentStack(settings: unknown) {
   const devTeamRuntime = getDevTeamRuntimeConfig(settings);
   const enabledWorkers = [
     devTeamRuntime?.codex?.enabled ? "codex" : null,
+    devTeamRuntime?.codexCli?.enabled ? "codex_cli" : null,
     devTeamRuntime?.claudeCode?.enabled ? "claude_code" : null
   ].filter(Boolean);
   const overrideWorkers = Array.isArray(overrides?.devTeam?.codingWorkers)
@@ -823,6 +824,6 @@ export function isBrowserEnabled(settings: unknown): boolean {
 export function isDevTaskEnabled(settings: unknown): boolean {
   const permissions = getDevTaskPermissions(settings);
   const runtime = getDevTeamRuntimeConfig(settings);
-  const hasWorkers = Boolean(runtime?.codex?.enabled || runtime?.claudeCode?.enabled);
+  const hasWorkers = Boolean(runtime?.codex?.enabled || runtime?.codexCli?.enabled || runtime?.claudeCode?.enabled);
   return hasWorkers && Array.isArray(permissions.allowedUserIds) && permissions.allowedUserIds.length > 0;
 }

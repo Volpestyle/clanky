@@ -2,9 +2,11 @@ export const PROVIDER_MODEL_FALLBACKS = {
   openai: ["gpt-5-mini", "gpt-5", "gpt-4.1-mini"],
   anthropic: ["claude-haiku-4-5", "claude-sonnet-4-6"],
   claude_code_session: ["max"],
+  codex_cli_session: ["gpt-5.4"],
   xai: ["grok-3-mini-latest"],
   "claude-code": ["sonnet"],
-  codex: ["gpt-5-codex"]
+  codex: ["gpt-5-codex"],
+  "codex-cli": ["gpt-5.4", "gpt-5-codex"]
 } as const;
 
 export const AGENT_STACK_PRESETS = [
@@ -22,9 +24,11 @@ export const MODEL_PROVIDER_KINDS = [
   "ai_sdk_anthropic",
   "litellm",
   "claude_code_session",
+  "codex_cli_session",
   "xai",
   "claude-code",
-  "codex"
+  "codex",
+  "codex-cli"
 ] as const;
 
 export const RESEARCH_RUNTIME_KINDS = [
@@ -54,6 +58,7 @@ export const VOICE_ADMISSION_MODES = [
 
 export const CODING_WORKER_RUNTIME_KINDS = [
   "codex",
+  "codex_cli",
   "claude_code"
 ] as const;
 
@@ -248,7 +253,7 @@ export const DEFAULT_SETTINGS = {
         model: "claude-sonnet-4-6"
       },
       devTeam: {
-        codingWorkers: ["codex", "claude_code"],
+        codingWorkers: ["codex", "codex_cli", "claude_code"],
         orchestrator: {
           provider: "anthropic",
           model: "claude-sonnet-4-6"
@@ -352,10 +357,26 @@ export const DEFAULT_SETTINGS = {
         voiceToolPolicy: "fast_only",
         textToolPolicy: "full"
       },
+      codexCliSession: {
+        sessionScope: "guild",
+        inactivityTimeoutMs: 1_800_000,
+        contextPruningStrategy: "summarize",
+        maxPinnedStateChars: 12_000
+      },
       devTeam: {
         codex: {
           enabled: false,
           model: "codex-mini-latest",
+          maxTurns: 30,
+          timeoutMs: 300_000,
+          maxBufferBytes: 2 * 1024 * 1024,
+          defaultCwd: "",
+          maxTasksPerHour: 10,
+          maxParallelTasks: 2
+        },
+        codexCli: {
+          enabled: false,
+          model: "gpt-5.4",
           maxTurns: 30,
           timeoutMs: 300_000,
           maxBufferBytes: 2 * 1024 * 1024,

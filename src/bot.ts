@@ -985,6 +985,7 @@ export class ClankerBot {
             provider,
             model,
             codexModel,
+            codexCliModel,
             maxTurns,
             timeoutMs,
             maxBufferBytes
@@ -999,6 +1000,7 @@ export class ClankerBot {
             maxBufferBytes,
             model,
             codexModel,
+            codexCliModel,
             openai: this.llm?.openai || null,
             trace: {
               guildId: interaction.guildId,

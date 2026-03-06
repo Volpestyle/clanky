@@ -17,6 +17,7 @@ function createService(appConfig = {}, { logs = null } = {}) {
       defaultAnthropicModel: "claude-haiku-4-5",
       defaultXaiModel: "grok-3-mini-latest",
       defaultClaudeCodeModel: "sonnet",
+      defaultCodexCliModel: "gpt-5.4",
       ...appConfig
     },
     store: {
@@ -43,6 +44,24 @@ test("resolveProviderAndModel keeps claude-code provider when CLI is available",
 
   const resolved = service.resolveProviderAndModel({ provider: "claude-code", model: "opus" });
   assert.deepEqual(resolved, { provider: "claude-code", model: "opus" });
+});
+
+test("resolveProviderAndModel throws when codex-cli is selected but CLI is unavailable", () => {
+  const service = createService({ anthropicApiKey: "test-anthropic-key" });
+  service.codexCliAvailable = false;
+
+  assert.throws(
+    () => service.resolveProviderAndModel({ provider: "codex-cli", model: "gpt-5.4" }),
+    /codex-cli.*not available on PATH/i
+  );
+});
+
+test("resolveProviderAndModel keeps codex_cli_session provider when CLI is available", () => {
+  const service = createService({ anthropicApiKey: "test-anthropic-key" });
+  service.codexCliAvailable = true;
+
+  const resolved = service.resolveProviderAndModel({ provider: "codex_cli_session", model: "" });
+  assert.deepEqual(resolved, { provider: "codex_cli_session", model: "gpt-5.4" });
 });
 
 test("resolveProviderAndModel rejects unsupported claude-code model IDs", () => {

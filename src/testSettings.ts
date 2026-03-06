@@ -169,6 +169,8 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
           codingWorkers:
             String(codeAgent.provider || "").trim().toLowerCase() === "codex"
               ? ["codex"]
+              : String(codeAgent.provider || "").trim().toLowerCase() === "codex-cli"
+                ? ["codex_cli"]
               : String(codeAgent.provider || "").trim().toLowerCase() === "claude-code"
                 ? ["claude_code"]
                 : undefined
@@ -245,9 +247,21 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
             maxTasksPerHour: codeAgent.maxTasksPerHour,
             maxParallelTasks: codeAgent.maxParallelTasks
           },
+          codexCli: {
+            enabled:
+              String(codeAgent.provider || "").trim().toLowerCase() === "codex-cli" ||
+              String(codeAgent.provider || "").trim().toLowerCase() === "auto",
+            model: codeAgent.codexCliModel,
+            maxTurns: codeAgent.maxTurns,
+            timeoutMs: codeAgent.timeoutMs,
+            maxBufferBytes: codeAgent.maxBufferBytes,
+            defaultCwd: codeAgent.defaultCwd,
+            maxTasksPerHour: codeAgent.maxTasksPerHour,
+            maxParallelTasks: codeAgent.maxParallelTasks
+          },
           claudeCode: {
             enabled:
-              String(codeAgent.provider || "").trim().toLowerCase() !== "codex",
+              !["codex", "codex-cli"].includes(String(codeAgent.provider || "").trim().toLowerCase()),
             model: codeAgent.model,
             maxTurns: codeAgent.maxTurns,
             timeoutMs: codeAgent.timeoutMs,

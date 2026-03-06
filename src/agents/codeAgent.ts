@@ -8,11 +8,18 @@ import {
   normalizeClaudeCodeCliError,
   createClaudeCliStreamSession
 } from "../llm/llmClaudeCode.ts";
+import {
+  buildCodexCliCodeAgentArgs,
+  normalizeCodexCliError,
+  parseCodexCliJsonlOutput,
+  runCodexCli
+} from "../llm/llmCodexCli.ts";
 import { runCodexTask } from "../llm/llmCodex.ts";
 import type { ClaudeCliStreamSessionLike } from "../llm/llmClaudeCode.ts";
 import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
 import { generateSessionId } from "./subAgentSession.ts";
 import { CodexAgentSession, getActiveCodexAgentTaskCount } from "./codexAgent.ts";
+import { CodexCliAgentSession, getActiveCodexCliAgentTaskCount } from "./codexCliAgent.ts";
 import { clamp } from "../utils.ts";
 import path from "node:path";
 import {
@@ -28,9 +35,9 @@ interface CodeAgentTrace {
   source?: string | null;
 }
 
-export type CodeAgentProvider = "claude-code" | "codex" | "auto";
+export type CodeAgentProvider = "claude-code" | "codex" | "codex-cli" | "auto";
 
-const CODE_AGENT_PROVIDER_VALUES = new Set<CodeAgentProvider>(["claude-code", "codex", "auto"]);
+const CODE_AGENT_PROVIDER_VALUES = new Set<CodeAgentProvider>(["claude-code", "codex", "codex-cli", "auto"]);
 
 function normalizeCodeAgentProvider(value: unknown, fallback: CodeAgentProvider = "claude-code"): CodeAgentProvider {
   const normalized = String(value || "")
@@ -41,7 +48,9 @@ function normalizeCodeAgentProvider(value: unknown, fallback: CodeAgentProvider 
 }
 
 function resolveEffectiveCodeAgentProvider(provider: CodeAgentProvider): Exclude<CodeAgentProvider, "auto"> {
-  return provider === "codex" ? "codex" : "claude-code";
+  if (provider === "codex") return "codex";
+  if (provider === "codex-cli") return "codex-cli";
+  return "claude-code";
 }
 
 interface CodeAgentOptions {
@@ -53,6 +62,7 @@ interface CodeAgentOptions {
   maxBufferBytes: number;
   model: string;
   codexModel: string;
+  codexCliModel: string;
   openai?: OpenAI | null;
   trace: CodeAgentTrace;
   store: {
@@ -76,13 +86,13 @@ interface CodeAgentResult {
 const activeTaskCount = { current: 0 };
 
 export function getActiveCodeAgentTaskCount(): number {
-  return activeTaskCount.current + getActiveCodexAgentTaskCount();
+  return activeTaskCount.current + getActiveCodexAgentTaskCount() + getActiveCodexCliAgentTaskCount();
 }
 
 export function isCodeAgentUserAllowed(userId: string, settings: Record<string, unknown>): boolean {
   const devPermissions = getDevTaskPermissions(settings);
   const devRuntime = getDevTeamRuntimeConfig(settings);
-  if (!devRuntime.codex?.enabled && !devRuntime.claudeCode?.enabled) return false;
+  if (!devRuntime.codex?.enabled && !devRuntime.codexCli?.enabled && !devRuntime.claudeCode?.enabled) return false;
   const allowedUserIds = devPermissions.allowedUserIds;
   if (!Array.isArray(allowedUserIds) || allowedUserIds.length === 0) return false;
   return allowedUserIds.includes(String(userId || ""));
@@ -100,6 +110,7 @@ export interface CodeAgentConfig {
   provider: CodeAgentProvider;
   model: string;
   codexModel: string;
+  codexCliModel: string;
   maxTurns: number;
   timeoutMs: number;
   maxBufferBytes: number;
@@ -114,29 +125,34 @@ export function resolveCodeAgentConfig(settings: Record<string, unknown>, cwdOve
   const preferredWorker =
     implementationProvider === "codex"
       ? "codex"
+      : implementationProvider === "codex-cli"
+        ? "codex_cli"
       : implementationProvider === "claude-code"
         ? "claude_code"
         : resolvedStack.devTeam.codingWorkers[0] || "claude_code";
   const primaryWorkerConfig =
     preferredWorker === "codex"
       ? devRuntime.codex
+      : preferredWorker === "codex_cli"
+        ? devRuntime.codexCli
       : devRuntime.claudeCode;
   const cwd = cwdOverride || resolveCodeAgentCwd(
     String(primaryWorkerConfig?.defaultCwd || ""),
     process.cwd()
   );
   const provider = normalizeCodeAgentProvider(
-    preferredWorker === "codex" ? "codex" : "claude-code",
+    preferredWorker === "codex" ? "codex" : preferredWorker === "codex_cli" ? "codex-cli" : "claude-code",
     "claude-code"
   );
   const model = String(devRuntime.claudeCode?.model || "sonnet").trim();
   const codexModel = String(devRuntime.codex?.model || "codex-mini-latest").trim() || "codex-mini-latest";
+  const codexCliModel = String(devRuntime.codexCli?.model || "gpt-5.4").trim() || "gpt-5.4";
   const maxTurns = clamp(Number(primaryWorkerConfig?.maxTurns) || 30, 1, 200);
   const timeoutMs = clamp(Number(primaryWorkerConfig?.timeoutMs) || 300_000, 10_000, 1_800_000);
   const maxBufferBytes = clamp(Number(primaryWorkerConfig?.maxBufferBytes) || 2 * 1024 * 1024, 4096, 10 * 1024 * 1024);
   const maxTasksPerHour = clamp(Number(primaryWorkerConfig?.maxTasksPerHour) || 10, 1, 500);
   const maxParallelTasks = clamp(Number(primaryWorkerConfig?.maxParallelTasks) || 2, 1, 32);
-  return { cwd, provider, model, codexModel, maxTurns, timeoutMs, maxBufferBytes, maxTasksPerHour, maxParallelTasks };
+  return { cwd, provider, model, codexModel, codexCliModel, maxTurns, timeoutMs, maxBufferBytes, maxTasksPerHour, maxParallelTasks };
 }
 
 export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgentResult> {
@@ -149,6 +165,7 @@ export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgent
     maxBufferBytes,
     model,
     codexModel,
+    codexCliModel,
     openai = null,
     trace,
     store
@@ -193,6 +210,58 @@ export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgent
           cwd,
           status: response.status,
           responseId: response.responseId || null,
+          isError: agentResult.isError,
+          usage: agentResult.usage,
+          source: trace.source,
+          durationMs: Date.now() - startMs
+        },
+        usdCost: agentResult.costUsd
+      });
+
+      return agentResult;
+    }
+
+    if (resolvedProvider === "codex-cli") {
+      const args = buildCodexCliCodeAgentArgs({
+        model: codexCliModel,
+        cwd,
+        instruction
+      });
+      const result = await runCodexCli({
+        args,
+        input: "",
+        timeoutMs,
+        maxBufferBytes
+      });
+      const parsed = parseCodexCliJsonlOutput(result.stdout);
+      const agentResult: CodeAgentResult = parsed
+        ? {
+            text: parsed.text,
+            costUsd: parsed.costUsd,
+            isError: parsed.isError,
+            errorMessage: parsed.isError ? parsed.errorMessage : "",
+            usage: parsed.usage
+          }
+        : {
+            text: result.stdout.slice(0, 2000) || "Code agent completed with no parseable output.",
+            costUsd: 0,
+            isError: false,
+            errorMessage: "",
+            usage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 }
+          };
+
+      store.logAction({
+        kind: "code_agent_call",
+        guildId: trace.guildId || null,
+        channelId: trace.channelId || null,
+        userId: trace.userId || null,
+        content: instruction.slice(0, 200),
+        metadata: {
+          provider: "codex-cli",
+          configuredProvider: provider,
+          model: codexCliModel,
+          maxTurns,
+          cwd,
           isError: agentResult.isError,
           usage: agentResult.usage,
           source: trace.source,
@@ -260,7 +329,12 @@ export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgent
           timeoutPrefix: "Code agent timed out",
           timeoutMs
         })
-      : {
+      : resolvedProvider === "codex-cli"
+        ? normalizeCodexCliError(error, {
+            timeoutPrefix: "Code agent timed out",
+            timeoutMs
+          })
+        : {
           isTimeout: /\btimed out\b/i.test(String((error as Error)?.message || "")),
           message: String((error as Error)?.message || "Code agent failed.")
         };
@@ -274,7 +348,7 @@ export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgent
       metadata: {
         provider: resolvedProvider,
         configuredProvider: provider,
-        model: resolvedProvider === "codex" ? codexModel : model,
+        model: resolvedProvider === "codex" ? codexModel : resolvedProvider === "codex-cli" ? codexCliModel : model,
         maxTurns,
         cwd,
         isTimeout: normalized.isTimeout,
@@ -466,6 +540,7 @@ export interface CreateCodeAgentSessionOptions {
   provider: CodeAgentProvider;
   model: string;
   codexModel: string;
+  codexCliModel: string;
   maxTurns: number;
   timeoutMs: number;
   maxBufferBytes: number;
@@ -483,6 +558,7 @@ export function createCodeAgentSession(options: CreateCodeAgentSessionOptions): 
     provider,
     model,
     codexModel,
+    codexCliModel,
     maxTurns,
     timeoutMs,
     maxBufferBytes,
@@ -503,6 +579,18 @@ export function createCodeAgentSession(options: CreateCodeAgentSessionOptions): 
       trace,
       store,
       openai
+    });
+  }
+
+  if (resolvedProvider === "codex-cli") {
+    return new CodexCliAgentSession({
+      scopeKey,
+      cwd,
+      model: codexCliModel,
+      timeoutMs,
+      maxBufferBytes,
+      trace,
+      store
     });
   }
 

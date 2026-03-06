@@ -25,6 +25,13 @@ import {
   type ClaudeCodeServiceDeps
 } from "./llm/claudeCodeService.ts";
 import {
+  callCodexCli as callCodexCliRequest,
+  callCodexCliMemoryExtraction as callCodexCliMemoryExtractionRequest,
+  closeCodexCliSession,
+  runCodexCliBrainStream as runCodexCliBrainStreamRequest,
+  type CodexCliServiceDeps
+} from "./llm/codexCliService.ts";
+import {
   embedText as embedTextRequest,
   isEmbeddingReady as isEmbeddingReadyRequest,
   resolveEmbeddingModel as resolveEmbeddingModelRequest,
@@ -78,6 +85,7 @@ import {
   getResolvedOrchestratorBinding
 } from "./settings/agentStack.ts";
 import type { ClaudeCliStreamSessionLike } from "./llm/llmClaudeCode.ts";
+import type { CodexCliStreamSessionLike } from "./llm/llmCodexCli.ts";
 
 export {
   buildOpenAiJsonSchemaTextFormat,
@@ -98,6 +106,9 @@ export class LLMService {
   claudeCodeAvailable: boolean;
   claudeCodeBrainSession: ClaudeCliStreamSessionLike | null;
   claudeCodeBrainModel: string;
+  codexCliAvailable: boolean;
+  codexCliBrainSession: CodexCliStreamSessionLike | null;
+  codexCliBrainModel: string;
 
   constructor({ appConfig, store }: { appConfig: LLMAppConfig; store: LlmActionStore }) {
     this.appConfig = appConfig;
@@ -125,6 +136,17 @@ export class LLMService {
 
     this.claudeCodeBrainSession = null;
     this.claudeCodeBrainModel = "";
+
+    this.codexCliAvailable = false;
+    try {
+      const result = spawnSync("codex", ["--version"], { encoding: "utf8", timeout: 5000 });
+      const versionOutput = String(result?.stdout || result?.stderr || "").trim();
+      this.codexCliAvailable = result?.status === 0 && Boolean(versionOutput);
+    } catch {
+      this.codexCliAvailable = false;
+    }
+    this.codexCliBrainSession = null;
+    this.codexCliBrainModel = "";
   }
 
   private chatDeps(): ChatGenerationDeps {
@@ -173,6 +195,20 @@ export class LLMService {
     };
   }
 
+  private codexCliDeps(): CodexCliServiceDeps {
+    return {
+      codexCliAvailable: this.codexCliAvailable,
+      getBrainSession: () => this.codexCliBrainSession,
+      setBrainSession: (session) => {
+        this.codexCliBrainSession = session;
+      },
+      getBrainModel: () => this.codexCliBrainModel,
+      setBrainModel: (model) => {
+        this.codexCliBrainModel = model;
+      }
+    };
+  }
+
   private memoryExtractionDeps(): MemoryExtractionDeps {
     return {
       openai: this.openai,
@@ -181,7 +217,9 @@ export class LLMService {
       store: this.store,
       resolveProviderAndModel: (llmSettings) => this.resolveProviderAndModel(llmSettings),
       callClaudeCodeMemoryExtraction: (request) =>
-        callClaudeCodeMemoryExtractionRequest(this.claudeCodeDeps(), request)
+        callClaudeCodeMemoryExtractionRequest(this.claudeCodeDeps(), request),
+      callCodexCliMemoryExtraction: (request) =>
+        callCodexCliMemoryExtractionRequest(this.codexCliDeps(), request)
     };
   }
 
@@ -245,7 +283,7 @@ export class LLMService {
       messageId: trace.messageId == null ? null : String(trace.messageId)
     };
     const effectiveSystemPrompt =
-      normalizedJsonSchema && provider !== "claude-code" && provider !== "openai"
+      normalizedJsonSchema && provider !== "claude-code" && provider !== "codex-cli" && provider !== "codex_cli_session" && provider !== "openai"
         ? appendJsonSchemaInstruction(systemPrompt, normalizedJsonSchema)
         : systemPrompt;
 
@@ -328,6 +366,9 @@ export class LLMService {
     if (provider === "claude-code") {
       return callClaudeCodeRequest(this.claudeCodeDeps(), payload);
     }
+    if (provider === "codex-cli" || provider === "codex_cli_session") {
+      return callCodexCliRequest(this.codexCliDeps(), payload);
+    }
     if (provider === "anthropic") {
       return callAnthropicRequest(this.chatDeps(), payload);
     }
@@ -370,8 +411,16 @@ export class LLMService {
     return callClaudeCodeRequest(this.claudeCodeDeps(), payload);
   }
 
+  async callCodexCli(payload: ChatModelRequest & { trace?: LlmTrace }) {
+    return callCodexCliRequest(this.codexCliDeps(), payload);
+  }
+
   async callClaudeCodeMemoryExtraction(payload: MemoryExtractionRequest): Promise<MemoryExtractionResponse> {
     return callClaudeCodeMemoryExtractionRequest(this.claudeCodeDeps(), payload);
+  }
+
+  async callCodexCliMemoryExtraction(payload: MemoryExtractionRequest): Promise<MemoryExtractionResponse> {
+    return callCodexCliMemoryExtractionRequest(this.codexCliDeps(), payload);
   }
 
   async runClaudeCodeBrainStream(args: {
@@ -383,8 +432,18 @@ export class LLMService {
     return runClaudeCodeBrainStreamRequest(this.claudeCodeDeps(), args);
   }
 
+  async runCodexCliBrainStream(args: {
+    model: string;
+    input: string;
+    timeoutMs: number;
+    maxBufferBytes: number;
+  }) {
+    return runCodexCliBrainStreamRequest(this.codexCliDeps(), args);
+  }
+
   close() {
     closeClaudeCodeSession(this.claudeCodeDeps());
+    closeCodexCliSession(this.codexCliDeps());
   }
 
   isEmbeddingReady() {
@@ -477,6 +536,11 @@ export class LLMService {
         "LLM provider is set to claude-code, but the `claude` CLI is not available on PATH for this process. Ensure `which claude` works in the same shell/service environment that starts the bot, then restart."
       );
     }
+    if ((desiredProvider === "codex-cli" || desiredProvider === "codex_cli_session") && !this.isProviderConfigured(desiredProvider)) {
+      throw new Error(
+        "LLM provider is set to codex-cli, but the `codex` CLI is not available on PATH for this process. Ensure `which codex` works in the same shell/service environment that starts the bot, then restart."
+      );
+    }
 
     const fallbackProviders = resolveProviderFallbackOrder(desiredProvider);
 
@@ -503,6 +567,8 @@ export class LLMService {
 
   isProviderConfigured(provider: string) {
     if (provider === "claude-code") return Boolean(this.claudeCodeAvailable);
+    if (provider === "codex-cli") return Boolean(this.codexCliAvailable);
+    if (provider === "codex_cli_session") return Boolean(this.codexCliAvailable);
     if (provider === "anthropic") return Boolean(this.anthropic);
     if (provider === "xai") return Boolean(this.xai);
     return Boolean(this.openai);
@@ -511,6 +577,9 @@ export class LLMService {
   resolveDefaultModel(provider: string) {
     if (provider === "claude-code") {
       return normalizeDefaultModel(this.appConfig?.defaultClaudeCodeModel, "sonnet");
+    }
+    if (provider === "codex-cli" || provider === "codex_cli_session") {
+      return normalizeDefaultModel(this.appConfig?.defaultCodexCliModel, "gpt-5.4");
     }
     if (provider === "anthropic") {
       return normalizeDefaultModel(this.appConfig?.defaultAnthropicModel, "claude-haiku-4-5");
@@ -557,3 +626,12 @@ export {
   parseClaudeCodeJsonOutput,
   parseClaudeCodeStreamOutput
 } from "./llm/llmClaudeCode.ts";
+
+export {
+  buildCodexCliBrainArgs,
+  buildCodexCliCodeAgentArgs,
+  buildCodexCliResumeArgs,
+  buildCodexCliTextArgs,
+  createCodexCliStreamSession,
+  parseCodexCliJsonlOutput
+} from "./llm/llmCodexCli.ts";

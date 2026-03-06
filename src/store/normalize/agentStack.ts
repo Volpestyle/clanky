@@ -43,6 +43,7 @@ export function normalizeAgentStackSection(
   const browser = runtimeConfig.browser;
   const voice = runtimeConfig.voice;
   const claudeCodeSession = runtimeConfig.claudeCodeSession;
+  const codexCliSession = runtimeConfig.codexCliSession;
   const devTeam = runtimeConfig.devTeam;
   const rawDevTeamOverride = isRecord(rawOverrides.devTeam) ? rawOverrides.devTeam : null;
 
@@ -364,8 +365,30 @@ export function normalizeAgentStackSection(
           DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.textToolPolicy
         )
       },
+      codexCliSession: {
+        sessionScope: normalizeClaudeCodeSessionScope(
+          codexCliSession.sessionScope,
+          DEFAULT_SETTINGS.agentStack.runtimeConfig.codexCliSession.sessionScope
+        ),
+        inactivityTimeoutMs: normalizeInt(
+          codexCliSession.inactivityTimeoutMs,
+          DEFAULT_SETTINGS.agentStack.runtimeConfig.codexCliSession.inactivityTimeoutMs,
+          10_000,
+          12 * 60 * 60 * 1000
+        ),
+        contextPruningStrategy: normalizeClaudeCodeContextPruningStrategy(
+          codexCliSession.contextPruningStrategy,
+          DEFAULT_SETTINGS.agentStack.runtimeConfig.codexCliSession.contextPruningStrategy
+        ),
+        maxPinnedStateChars: normalizeInt(
+          codexCliSession.maxPinnedStateChars,
+          DEFAULT_SETTINGS.agentStack.runtimeConfig.codexCliSession.maxPinnedStateChars,
+          0,
+          200_000
+        )
+      },
       devTeam: {
-        codex: {
+          codex: {
           enabled: normalizeBoolean(
             devTeam.codex.enabled,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.enabled
@@ -405,14 +428,61 @@ export function normalizeAgentStackSection(
             0,
             200
           ),
-          maxParallelTasks: normalizeInt(
-            devTeam.codex.maxParallelTasks,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.maxParallelTasks,
-            1,
-            20
-          )
-        },
-        claudeCode: {
+            maxParallelTasks: normalizeInt(
+              devTeam.codex.maxParallelTasks,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.maxParallelTasks,
+              1,
+              20
+            )
+          },
+          codexCli: {
+            enabled: normalizeBoolean(
+              devTeam.codexCli.enabled,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.enabled
+            ),
+            model:
+              normalizeString(
+                devTeam.codexCli.model,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.model,
+                120
+              ) || DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.model,
+            maxTurns: normalizeInt(
+              devTeam.codexCli.maxTurns,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.maxTurns,
+              1,
+              200
+            ),
+            timeoutMs: normalizeInt(
+              devTeam.codexCli.timeoutMs,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.timeoutMs,
+              10_000,
+              1_800_000
+            ),
+            maxBufferBytes: normalizeInt(
+              devTeam.codexCli.maxBufferBytes,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.maxBufferBytes,
+              4_096,
+              10 * 1024 * 1024
+            ),
+            defaultCwd: normalizeString(
+              devTeam.codexCli.defaultCwd,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.defaultCwd,
+              400
+            ),
+            maxTasksPerHour: normalizeInt(
+              devTeam.codexCli.maxTasksPerHour,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.maxTasksPerHour,
+              0,
+              200
+            ),
+            maxParallelTasks: normalizeInt(
+              devTeam.codexCli.maxParallelTasks,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.maxParallelTasks,
+              1,
+              20
+            )
+          },
+          claudeCode: {
           enabled: normalizeBoolean(
             devTeam.claudeCode.enabled,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.enabled
