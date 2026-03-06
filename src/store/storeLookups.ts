@@ -1,4 +1,6 @@
 // Extracted Store Methods
+import type { Database } from "bun:sqlite";
+
 import { clamp, nowIso } from "../utils.ts";
 import { LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL_DEFAULT, LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT } from "./store.ts";
 import { safeJsonParse } from "../normalization/valueParsers.ts";
@@ -15,13 +17,40 @@ import {
   LOOKUP_CONTEXT_MAX_SEARCH_LIMIT
 } from "./storeHelpers.ts";
 
-export function wasLinkSharedSince(store: any, url, sinceIso) {
+interface LookupStore {
+  db: Database;
+  pruneLookupContext(args?: {
+    now?: string;
+    guildId?: string | null;
+    channelId?: string | null;
+    maxRowsPerChannel?: number;
+  }): void;
+}
+
+interface SharedLinkPresenceRow {
+  found: number;
+}
+
+interface LookupContextRow {
+  id: number;
+  created_at: string;
+  guild_id: string;
+  channel_id: string | null;
+  user_id: string | null;
+  source: string | null;
+  query: string;
+  provider: string | null;
+  results_json: string;
+  match_text: string;
+}
+
+export function wasLinkSharedSince(store: LookupStore, url, sinceIso) {
 const normalizedUrl = String(url || "").trim();
 if (!normalizedUrl) return false;
 
 const row = store.db
-  .prepare(
-    `SELECT 1
+  .prepare<SharedLinkPresenceRow, [string, string]>(
+    `SELECT 1 AS found
          FROM shared_links
          WHERE url = ? AND last_shared_at >= ?
          LIMIT 1`
@@ -31,7 +60,7 @@ const row = store.db
 return Boolean(row);
 }
 
-export function recordSharedLink(store: any, { url, source = null }) {
+export function recordSharedLink(store: LookupStore, { url, source = null }) {
 const normalizedUrl = String(url || "").trim();
 if (!normalizedUrl) return;
 
@@ -48,7 +77,7 @@ store.db
   .run(normalizedUrl, now, now, source ? String(source).slice(0, 120) : null);
 }
 
-export function pruneLookupContext(store: any, {
+export function pruneLookupContext(store: LookupStore, {
     now = nowIso(),
     guildId = null,
     channelId = null,
@@ -100,7 +129,7 @@ store.db
   .run(normalizedGuildId, boundedMaxRowsPerChannel);
 }
 
-export function recordLookupContext(store: any, {
+export function recordLookupContext(store: LookupStore, {
     guildId,
     channelId = null,
     userId = null,
@@ -166,7 +195,7 @@ store.pruneLookupContext({
 return Number(result?.changes || 0) > 0;
 }
 
-export function searchLookupContext(store: any, {
+export function searchLookupContext(store: LookupStore, {
     guildId,
     channelId = null,
     queryText = "",
@@ -189,7 +218,7 @@ const normalizedChannelId = String(channelId || "").trim();
 
 const rows = normalizedChannelId
   ? store.db
-      .prepare(
+      .prepare<LookupContextRow, [string, string, string, string, number]>(
         `SELECT id, created_at, guild_id, channel_id, user_id, source, query, provider, results_json, match_text
              FROM lookup_context
              WHERE guild_id = ?
@@ -201,7 +230,7 @@ const rows = normalizedChannelId
       )
       .all(normalizedGuildId, normalizedChannelId, sinceIso, now, candidateLimit)
   : store.db
-      .prepare(
+      .prepare<LookupContextRow, [string, string, string, number]>(
         `SELECT id, created_at, guild_id, channel_id, user_id, source, query, provider, results_json, match_text
              FROM lookup_context
              WHERE guild_id = ?

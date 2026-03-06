@@ -1,4 +1,6 @@
 // Extracted Store Methods
+import type { Database } from "bun:sqlite";
+
 import { clamp, nowIso } from "../utils.ts";
 import { safeJsonParse } from "../normalization/valueParsers.ts";
 import { normalizeAutomationTitle, normalizeAutomationInstruction, buildAutomationMatchText } from "../bot/automation.ts";
@@ -9,7 +11,67 @@ import {
   normalizeAutomationRunStatus
 } from "./storeHelpers.ts";
 
-export function createAutomation(store: any, {
+type AutomationRecord = NonNullable<ReturnType<typeof mapAutomationRow>>;
+
+interface AutomationStore {
+  db: Database;
+  getAutomationById(automationId: number, guildId?: string | null): AutomationRecord | null;
+  listAutomations(args: {
+    guildId: string;
+    channelId?: string | null;
+    statuses?: string[];
+    query?: string;
+    limit?: number;
+  }): AutomationRecord[];
+}
+
+interface AutomationRow {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  guild_id: string;
+  channel_id: string;
+  created_by_user_id: string;
+  created_by_name: string | null;
+  title: string;
+  instruction: string;
+  schedule_json: string;
+  next_run_at: string | null;
+  status: string;
+  is_running: number;
+  running_started_at: string | null;
+  last_run_at: string | null;
+  last_error: string | null;
+  last_result: string | null;
+  match_text: string;
+}
+
+interface AutomationRunRow {
+  id: number;
+  automation_id: number;
+  created_at: string;
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  summary: string | null;
+  error: string | null;
+  message_id: string | null;
+  metadata: string | null;
+}
+
+interface AutomationCountRow {
+  count: number;
+}
+
+interface AutomationIdRow {
+  id: number;
+}
+
+function isAutomationRecord(value: ReturnType<typeof mapAutomationRow>): value is AutomationRecord {
+  return value !== null;
+}
+
+export function createAutomation(store: AutomationStore, {
     guildId,
     channelId,
     createdByUserId,
@@ -78,24 +140,24 @@ if (!id) return null;
 return store.getAutomationById(id, normalizedGuildId);
 }
 
-export function getAutomationById(store: any, automationId, guildId = null) {
+export function getAutomationById(store: AutomationStore, automationId, guildId = null) {
 const id = Number(automationId);
 if (!Number.isInteger(id) || id <= 0) return null;
 
-if (guildId) {
-  const row = store.db
-    .prepare("SELECT * FROM automations WHERE id = ? AND guild_id = ? LIMIT 1")
+  if (guildId) {
+    const row = store.db
+    .prepare<AutomationRow, [number, string]>("SELECT * FROM automations WHERE id = ? AND guild_id = ? LIMIT 1")
     .get(id, String(guildId));
   return mapAutomationRow(row);
 }
 
 const row = store.db
-  .prepare("SELECT * FROM automations WHERE id = ? LIMIT 1")
+  .prepare<AutomationRow, [number]>("SELECT * FROM automations WHERE id = ? LIMIT 1")
   .get(id);
 return mapAutomationRow(row);
 }
 
-export function countAutomations(store: any, { guildId, statuses = ["active", "paused"] }) {
+export function countAutomations(store: AutomationStore, { guildId, statuses = ["active", "paused"] }) {
 const normalizedGuildId = String(guildId || "").trim();
 if (!normalizedGuildId) return 0;
 
@@ -104,7 +166,7 @@ if (!normalizedStatuses.length) return 0;
 
 const placeholders = normalizedStatuses.map(() => "?").join(", ");
 const row = store.db
-  .prepare(
+  .prepare<AutomationCountRow, Array<string>>(
     `SELECT COUNT(*) AS count
          FROM automations
          WHERE guild_id = ? AND status IN (${placeholders})`
@@ -113,7 +175,7 @@ const row = store.db
 return Number(row?.count || 0);
 }
 
-export function listAutomations(store: any, {
+export function listAutomations(store: AutomationStore, {
     guildId,
     channelId = null,
     statuses = ["active", "paused"],
@@ -127,7 +189,7 @@ const normalizedStatuses = normalizeAutomationStatusFilter(statuses);
 if (!normalizedStatuses.length) return [];
 
 const where = ["guild_id = ?"];
-const args = [normalizedGuildId];
+const args: string[] = [normalizedGuildId];
 
 if (channelId) {
   where.push("channel_id = ?");
@@ -147,7 +209,7 @@ if (normalizedQuery) {
 }
 
 const rows = store.db
-  .prepare(
+  .prepare<AutomationRow, Array<string | number>>(
     `SELECT *
          FROM automations
          WHERE ${where.join(" AND ")}
@@ -156,10 +218,10 @@ const rows = store.db
   )
   .all(...args, clamp(Math.floor(Number(limit) || 20), 1, 120));
 
-return rows.map((row) => mapAutomationRow(row)).filter(Boolean);
+ return rows.map((row) => mapAutomationRow(row)).filter(isAutomationRecord);
 }
 
-export function getMostRecentAutomations(store: any, {
+export function getMostRecentAutomations(store: AutomationStore, {
     guildId,
     channelId = null,
     statuses = ["active", "paused"],
@@ -174,7 +236,7 @@ return store.listAutomations({
 });
 }
 
-export function findAutomationsByQuery(store: any, {
+export function findAutomationsByQuery(store: AutomationStore, {
     guildId,
     channelId = null,
     query = "",
@@ -190,7 +252,7 @@ return store.listAutomations({
 });
 }
 
-export function setAutomationStatus(store: any, {
+export function setAutomationStatus(store: AutomationStore, {
     automationId,
     guildId,
     status,
@@ -229,10 +291,10 @@ store.db
 return store.getAutomationById(id, normalizedGuildId);
 }
 
-export function claimDueAutomations(store: any, { now = nowIso(), limit = 4 }: { now?: string; limit?: number } = {}) {
+export function claimDueAutomations(store: AutomationStore, { now = nowIso(), limit = 4 }: { now?: string; limit?: number } = {}) {
 const normalizedNow = String(now || nowIso());
 const boundedLimit = clamp(Math.floor(Number(limit) || 4), 1, 40);
-const selectDueIds = store.db.prepare(
+const selectDueIds = store.db.prepare<AutomationIdRow, [string, number]>(
   `SELECT id
        FROM automations
        WHERE status = 'active'
@@ -242,7 +304,7 @@ const selectDueIds = store.db.prepare(
        ORDER BY next_run_at ASC, id ASC
        LIMIT ?`
 );
-const claimOne = store.db.prepare(
+const claimOne = store.db.prepare<never, [string, string, number, string]>(
   `UPDATE automations
        SET
          is_running = 1,
@@ -254,15 +316,15 @@ const claimOne = store.db.prepare(
          AND next_run_at IS NOT NULL
          AND next_run_at <= ?`
 );
-const fetchOne = store.db.prepare("SELECT * FROM automations WHERE id = ? LIMIT 1");
+const fetchOne = store.db.prepare<AutomationRow, [number]>("SELECT * FROM automations WHERE id = ? LIMIT 1");
 const claimTx = store.db.transaction((referenceNow, requestLimit) => {
   const dueIds = selectDueIds
     .all(referenceNow, requestLimit)
-    .map((row) => Number(row?.id))
+    .map((row) => Number(row.id))
     .filter((id) => Number.isInteger(id) && id > 0);
   if (!dueIds.length) return [];
 
-  const claimedRows = [];
+  const claimedRows: AutomationRow[] = [];
   for (const id of dueIds) {
     const claim = claimOne.run(referenceNow, referenceNow, id, referenceNow);
     if (Number(claim?.changes || 0) !== 1) continue;
@@ -273,10 +335,10 @@ const claimTx = store.db.transaction((referenceNow, requestLimit) => {
 });
 
 const rows = claimTx(normalizedNow, boundedLimit);
-return rows.map((row) => mapAutomationRow(row)).filter(Boolean);
+return rows.map((row) => mapAutomationRow(row)).filter(isAutomationRecord);
 }
 
-export function finalizeAutomationRun(store: any, {
+export function finalizeAutomationRun(store: AutomationStore, {
     automationId,
     guildId,
     status = "active",
@@ -326,7 +388,7 @@ store.db
 return store.getAutomationById(id, normalizedGuildId);
 }
 
-export function recordAutomationRun(store: any, {
+export function recordAutomationRun(store: AutomationStore, {
     automationId,
     startedAt = null,
     finishedAt = null,
@@ -367,7 +429,7 @@ store.db
   );
 }
 
-export function getAutomationRuns(store: any, {
+export function getAutomationRuns(store: AutomationStore, {
     automationId,
     guildId,
     limit = 20
@@ -381,7 +443,7 @@ const normalizedGuildId = String(guildId || "").trim();
 if (!Number.isInteger(id) || id <= 0 || !normalizedGuildId) return [];
 
 const rows = store.db
-  .prepare(
+  .prepare<AutomationRunRow, [number, string, number]>(
     `SELECT runs.*
          FROM automation_runs AS runs
          JOIN automations AS jobs

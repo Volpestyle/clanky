@@ -1,9 +1,37 @@
 // Extracted Store Methods
+import type { Database } from "bun:sqlite";
+
 import { clamp } from "../utils.ts";
 import { safeJsonParse } from "../normalization/valueParsers.ts";
 
+interface VoiceStore {
+  db: Database;
+}
+
+interface VoiceSessionRow {
+  id: number;
+  created_at: string;
+  guild_id: string | null;
+  kind: string;
+  content: string | null;
+  metadata: string | null;
+}
+
+interface VoiceSessionEventRow {
+  id: number;
+  created_at: string;
+  guild_id: string | null;
+  channel_id: string | null;
+  message_id: string | null;
+  user_id: string | null;
+  kind: string;
+  content: string | null;
+  metadata: string | null;
+  usd_cost: number;
+}
+
 export function getRecentVoiceSessions(
-  store: any,
+  store: VoiceStore,
   limit = 3,
   opts: { sinceIso?: string | null } = {}
 ) {
@@ -12,14 +40,23 @@ const normalizedSinceIso = String(opts?.sinceIso || "").trim();
 const whereClause = normalizedSinceIso
   ? `WHERE kind IN ('voice_session_start', 'voice_session_end') AND created_at >= ?`
   : `WHERE kind IN ('voice_session_start', 'voice_session_end')`;
-const rows = store.db
-  .prepare(
-    `SELECT id, created_at, guild_id, kind, content, metadata
-         FROM actions
-         ${whereClause}
-         ORDER BY created_at DESC`
-  )
-  .all(...(normalizedSinceIso ? [normalizedSinceIso] : []));
+const rows = normalizedSinceIso
+  ? store.db
+    .prepare<VoiceSessionRow, [string]>(
+      `SELECT id, created_at, guild_id, kind, content, metadata
+           FROM actions
+           ${whereClause}
+           ORDER BY created_at DESC`
+    )
+    .all(normalizedSinceIso)
+  : store.db
+    .prepare<VoiceSessionRow, []>(
+      `SELECT id, created_at, guild_id, kind, content, metadata
+           FROM actions
+           ${whereClause}
+           ORDER BY created_at DESC`
+    )
+    .all();
 
 const starts = new Map<string, { guildId: string; mode: string; startedAt: string }>();
 const ends = new Map<string, { endedAt: string; durationSeconds: number; endReason: string }>();
@@ -64,13 +101,13 @@ sessions.sort((a, b) => (b.endedAt > a.endedAt ? 1 : -1));
 return sessions.slice(0, boundedLimit);
 }
 
-export function getVoiceSessionEvents(store: any, sessionId: string, limit = 500) {
+export function getVoiceSessionEvents(store: VoiceStore, sessionId: string, limit = 500) {
 const sanitized = String(sessionId || "").replace(/[%_\\]/g, "");
 if (!sanitized) return [];
 const boundedLimit = clamp(Math.floor(Number(limit) || 500), 1, 2000);
 
 const rows = store.db
-  .prepare(
+  .prepare<VoiceSessionEventRow, [string, number]>(
     `SELECT id, created_at, guild_id, channel_id, message_id, user_id, kind, content, metadata, usd_cost
          FROM actions
          WHERE kind LIKE 'voice\\_%' ESCAPE '\\'
