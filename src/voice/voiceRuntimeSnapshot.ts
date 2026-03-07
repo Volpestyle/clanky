@@ -38,10 +38,6 @@ type RuntimeSnapshotReplyManagerLike = {
   } | null;
 };
 
-type RuntimeSnapshotGreetingManagerLike = {
-  getJoinGreetingOpportunity: (session: VoiceSession) => unknown;
-};
-
 type RuntimeSnapshotDeferredActionQueueLike = {
   getDeferredQueuedUserTurns: (session: VoiceSession) => unknown[];
 };
@@ -57,7 +53,7 @@ type StreamWatchBrainContextLike = {
 export interface VoiceRuntimeSnapshotDeps {
   client?: RuntimeSnapshotClientLike;
   replyManager: RuntimeSnapshotReplyManagerLike;
-  greetingManager: RuntimeSnapshotGreetingManagerLike;
+  hasPendingJoinGreetingEvent: (session: VoiceSession) => boolean;
   deferredActionQueue: RuntimeSnapshotDeferredActionQueueLike;
   getVoiceChannelParticipants: (
     session: VoiceSession
@@ -411,7 +407,7 @@ export function buildVoiceRuntimeSnapshot(
           active: joinWindowActive,
           ageMs: Math.round(joinWindowAgeMs),
           windowMs: JOIN_GREETING_LLM_WINDOW_MS,
-          greetingPending: Boolean(deps.greetingManager.getJoinGreetingOpportunity(session))
+          greetingPending: Boolean(deps.hasPendingJoinGreetingEvent(session))
         },
         thoughtEngine: {
           busy: Boolean(session.thoughtLoopBusy),

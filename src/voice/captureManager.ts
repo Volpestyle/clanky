@@ -26,7 +26,6 @@ import {
 import { isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
 import type { BargeInController } from "./bargeInController.ts";
 import type { DeferredActionQueue } from "./deferredActionQueue.ts";
-import type { GreetingManager } from "./greetingManager.ts";
 import type { TurnProcessor } from "./turnProcessor.ts";
 import type { CaptureState, VoiceSession } from "./voiceSessionTypes.ts";
 
@@ -70,7 +69,7 @@ export interface CaptureManagerHost {
   buildAsrBridgeDeps: (session: VoiceSession) => AsrBridgeDeps;
   hasReplayBlockingActiveCapture: (session: VoiceSession) => boolean;
   deferredActionQueue: Pick<DeferredActionQueue, "recheckDeferredVoiceActions">;
-  greetingManager: Pick<GreetingManager, "maybeFireJoinGreetingOpportunity">;
+  maybeFireJoinGreetingOpportunity: (session: VoiceSession, reason?: string) => void;
   hasCaptureBeenPromoted: (capture: CaptureState) => boolean;
   resolveCaptureTurnPromotionReason: (args: {
     session: VoiceSession;
@@ -223,7 +222,7 @@ export class CaptureManager {
     const maybeTriggerDeferredActions = () => {
       if (!this.host.hasReplayBlockingActiveCapture(session)) {
         this.host.deferredActionQueue.recheckDeferredVoiceActions({ session, reason: "capture_resolved" });
-        this.host.greetingManager.maybeFireJoinGreetingOpportunity(session, "capture_resolved");
+        this.host.maybeFireJoinGreetingOpportunity(session, "capture_resolved");
       }
     };
 

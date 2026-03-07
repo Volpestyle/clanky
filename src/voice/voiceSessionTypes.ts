@@ -818,8 +818,6 @@ export interface VoiceSession {
     nextThoughtAt: number;
     lastThoughtAttemptAt: number;
     lastThoughtSpokenAt: number;
-    joinGreetingOpportunity: JoinGreetingOpportunityState | null;
-    joinGreetingTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     userCaptures: Map<string, CaptureState>;
     streamWatch: VoiceSessionStreamWatchState;
     music: VoiceSessionMusicState;

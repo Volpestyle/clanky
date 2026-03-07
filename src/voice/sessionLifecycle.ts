@@ -27,7 +27,6 @@ import {
 import type { BargeInController } from "./bargeInController.ts";
 import type { CaptureManager } from "./captureManager.ts";
 import type { DeferredActionQueue } from "./deferredActionQueue.ts";
-import type { GreetingManager } from "./greetingManager.ts";
 import type { InstructionManager } from "./instructionManager.ts";
 import type { ReplyManager } from "./replyManager.ts";
 import type { ThoughtEngine } from "./thoughtEngine.ts";
@@ -65,7 +64,11 @@ type SessionLifecycleHost = VoiceToolCallManager & Pick<
   captureManager: Pick<CaptureManager, "startInboundCapture">;
   instructionManager: Pick<InstructionManager, "scheduleRealtimeInstructionRefresh">;
   deferredActionQueue: Pick<DeferredActionQueue, "clearAllDeferredVoiceActions">;
-  greetingManager: Pick<GreetingManager, "armJoinGreetingOpportunity" | "clearJoinGreetingOpportunity">;
+  armJoinGreetingOpportunity: (
+    session: VoiceSession,
+    args?: { trigger?: string | null; userId?: string | null; displayName?: string | null }
+  ) => unknown;
+  clearJoinGreetingOpportunity: (session: VoiceSession) => void;
   replyManager: Pick<
     ReplyManager,
     | "armResponseSilenceWatchdog"
@@ -291,7 +294,7 @@ export class SessionLifecycle {
 
   clearSessionRuntimeState(session: VoiceSession | null | undefined) {
     if (!session) return;
-    this.host.greetingManager.clearJoinGreetingOpportunity(session);
+    this.host.clearJoinGreetingOpportunity(session);
     this.host.clearVoiceThoughtLoopTimer(session);
     session.thoughtLoopBusy = false;
     session.pendingResponse = null;
@@ -428,7 +431,7 @@ export class SessionLifecycle {
       session.playbackArmedAt = Date.now();
       this.host.replyManager.syncAssistantOutputState(session, "vox_playback_armed");
       if (reason !== "connection_ready") return;
-      this.host.greetingManager.armJoinGreetingOpportunity(session, {
+      this.host.armJoinGreetingOpportunity(session, {
         trigger: "connection_ready"
       });
     };

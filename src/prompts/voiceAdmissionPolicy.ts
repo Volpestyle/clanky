@@ -1,12 +1,9 @@
-type VoiceAdmissionPolicyMode = "generation" | "classifier";
-
 type VoiceAdmissionPolicyContext = {
   engaged?: boolean;
   engagedWithCurrentSpeaker?: boolean;
 };
 
 type VoiceAdmissionPolicyOptions = {
-  mode?: VoiceAdmissionPolicyMode;
   directAddressed?: boolean;
   isEagerTurn?: boolean;
   replyEagerness?: number;
@@ -18,7 +15,7 @@ type VoiceAdmissionPolicyOptions = {
   musicWakeLatched?: boolean;
 };
 
-function getEagernessClassifierTier(eagerness: number): string {
+export function getEagernessClassifierTier(eagerness: number): string {
   if (eagerness <= 0) {
     return "You are extremely conservative. Only say YES for direct address, clear follow-ups to your active conversation, or explicit questions to the bot. Default to NO.";
   }
@@ -51,7 +48,6 @@ function getEagernessGenerationTier(eagerness: number): string {
 }
 
 export function buildVoiceAdmissionPolicyLines({
-  mode = "generation",
   directAddressed = false,
   isEagerTurn = false,
   replyEagerness = 0,
@@ -63,7 +59,6 @@ export function buildVoiceAdmissionPolicyLines({
   musicWakeLatched = false
 }: VoiceAdmissionPolicyOptions = {}) {
   const lines: string[] = [];
-  const normalizedMode: VoiceAdmissionPolicyMode = mode === "classifier" ? "classifier" : "generation";
   const normalizedDirectAddressed = Boolean(directAddressed);
   const normalizedIsEagerTurn = Boolean(isEagerTurn);
   const normalizedParticipantCount = Math.max(0, Math.floor(Number(participantCount) || 0));
@@ -72,11 +67,7 @@ export function buildVoiceAdmissionPolicyLines({
   const engaged = Boolean(conversationContext?.engaged);
 
   lines.push(`Voice reply eagerness: ${normalizedEagerness}/100.`);
-  lines.push(
-    normalizedMode === "classifier"
-      ? getEagernessClassifierTier(normalizedEagerness)
-      : getEagernessGenerationTier(normalizedEagerness)
-  );
+  lines.push(getEagernessGenerationTier(normalizedEagerness));
 
   if (normalizedParticipantCount <= 1 && !addressedToOtherSignal) {
     lines.push("Single-human voice-room prior: default toward engagement unless the turn is clearly non-speech, self-talk, or low-value filler.");
@@ -91,23 +82,6 @@ export function buildVoiceAdmissionPolicyLines({
     } else {
       lines.push("Music wake latch is not active; non-wake chatter during music should be denied.");
     }
-  }
-
-  // addressedToOtherSignal and pendingCommandFollowupSignal lines removed for
-  // classifier mode — the classifier LLM can infer these from the transcript
-  // and participant list directly, and our heuristic signals were redundant
-  // noise that sometimes contradicted the LLM's better judgment.
-
-  if (normalizedMode === "classifier") {
-    if (normalizedDirectAddressed) {
-      lines.push("The turn appears directly addressed to the bot. Prefer YES unless content is unusable.");
-    } else if (normalizedIsEagerTurn || engaged || engagedWithCurrentSpeaker) {
-      lines.push("The bot may chime in if useful. Prefer YES when the turn is a clear continuation, direct question, or socially natural check-in.");
-    } else {
-      lines.push("The bot should stay selective. Prefer NO when this appears to be side chatter, filler, or not meant for the bot.");
-    }
-    lines.push("If the turn is only laughter/backchannel noise with no clear ask, prefer NO.");
-    return lines;
   }
 
   if (pendingCommandFollowupSignal) {

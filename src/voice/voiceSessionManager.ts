@@ -234,6 +234,7 @@ import {
 import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
 import { executeLocalVoiceToolCall } from "./voiceToolCallDispatch.ts";
 import type {
+  JoinGreetingOpportunityState,
   OutputChannelState,
   VoiceSession
 } from "./voiceSessionTypes.ts";
@@ -244,7 +245,6 @@ import {
 import { BargeInController } from "./bargeInController.ts";
 import { CaptureManager } from "./captureManager.ts";
 import { DeferredActionQueue } from "./deferredActionQueue.ts";
-import { GreetingManager } from "./greetingManager.ts";
 import { InstructionManager } from "./instructionManager.ts";
 import { ReplyManager } from "./replyManager.ts";
 import { SessionLifecycle } from "./sessionLifecycle.ts";
@@ -545,7 +545,7 @@ export class VoiceSessionManager {
   bargeInController;
   captureManager;
   deferredActionQueue;
-  greetingManager;
+  pendingJoinGreetingEvents;
   instructionManager;
   replyManager;
   sessionLifecycle;
@@ -595,7 +595,7 @@ export class VoiceSessionManager {
     this.bargeInController = new BargeInController(this);
     this.captureManager = new CaptureManager(this);
     this.deferredActionQueue = new DeferredActionQueue(this);
-    this.greetingManager = new GreetingManager(this);
+    this.pendingJoinGreetingEvents = new WeakMap();
     this.instructionManager = new InstructionManager(this);
     this.replyManager = new ReplyManager(this);
     this.sessionLifecycle = new SessionLifecycle(this);
@@ -700,11 +700,186 @@ export class VoiceSessionManager {
     return Boolean(this.getSession(guildId));
   }
 
+  getJoinGreetingOpportunity(session) {
+    return this.pendingJoinGreetingEvents.get(session)?.opportunity || null;
+  }
+
+  hasPendingJoinGreetingEvent(session) {
+    return Boolean(this.getJoinGreetingOpportunity(session));
+  }
+
+  clearJoinGreetingTimer(session) {
+    const pending = this.pendingJoinGreetingEvents.get(session) || null;
+    if (!pending?.timer) return;
+    clearTimeout(pending.timer);
+    pending.timer = null;
+  }
+
+  clearJoinGreetingOpportunity(session) {
+    if (!session) return;
+    this.clearJoinGreetingTimer(session);
+    this.pendingJoinGreetingEvents.delete(session);
+  }
+
+  armJoinGreetingOpportunity(session, { trigger = "connection_ready", userId = null, displayName = null } = {}) {
+    if (!session || session.ending) return null;
+    if (!isRealtimeMode(session.mode)) return null;
+    const now = Date.now();
+    const expiresAt = Math.max(0, Number(session.startedAt || 0)) + JOIN_GREETING_LLM_WINDOW_MS;
+    if (expiresAt > 0 && now >= expiresAt) {
+      this.clearJoinGreetingOpportunity(session);
+      return null;
+    }
+    const opportunity = {
+      trigger: String(trigger || "connection_ready").trim() || "connection_ready",
+      armedAt: now,
+      fireAt: now + 2500,
+      expiresAt,
+      userId: String(userId || "").trim() || null,
+      displayName: String(displayName || "").trim() || null
+    };
+    this.clearJoinGreetingOpportunity(session);
+    this.pendingJoinGreetingEvents.set(session, { opportunity, timer: null });
+    if (session.lastOpenAiRealtimeInstructions) {
+      this.scheduleJoinGreetingOpportunity(session, {
+        delayMs: Math.max(0, opportunity.fireAt - now),
+        reason: "join_greeting_grace"
+      });
+    }
+    return opportunity;
+  }
+
+  scheduleJoinGreetingOpportunity(session, { delayMs = 0, reason = "scheduled_recheck" } = {}) {
+    if (!session || session.ending) return;
+    const pending = this.pendingJoinGreetingEvents.get(session) || null;
+    if (!pending) return;
+    this.clearJoinGreetingTimer(session);
+    pending.timer = setTimeout(() => {
+      pending.timer = null;
+      this.maybeFireJoinGreetingOpportunity(session, reason);
+    }, Math.max(0, Number(delayMs) || 0));
+  }
+
+  canFireJoinGreetingOpportunity(session, opportunity = null) {
+    if (!session || session.ending) return "session_inactive";
+    if (!isRealtimeMode(session.mode)) return "wrong_mode";
+    const pendingOpportunity = opportunity || this.getJoinGreetingOpportunity(session);
+    if (!pendingOpportunity) return "no_opportunity";
+    const now = Date.now();
+    const expiresAt = Math.max(0, Number(pendingOpportunity.expiresAt || 0));
+    if (expiresAt > 0 && now >= expiresAt) return "expired";
+    if (!session.playbackArmed) return "playback_not_armed";
+    if (!session.lastOpenAiRealtimeInstructions) return "instructions_not_ready";
+    const fireAt = Math.max(0, Number(pendingOpportunity.fireAt || 0));
+    if (fireAt > now) return "not_before_at";
+    return this.getOutputChannelState(session).deferredBlockReason;
+  }
+
+  async processVoiceRuntimeEvent({
+    session,
+    settings,
+    userId = null,
+    transcript = "",
+    inputKind = "event",
+    source = SYSTEM_SPEECH_SOURCE.JOIN_GREETING,
+    eventAt = Date.now(),
+    forceFresh = false
+  }) {
+    if (!session || session.ending) return false;
+    if (forceFresh) {
+      const newerInboundAudio = Number(session.lastInboundAudioAt || 0);
+      if (newerInboundAudio > Number(eventAt || 0)) return false;
+    }
+    const decision = await this.evaluateVoiceReplyDecision({
+      session,
+      settings,
+      userId,
+      transcript,
+      inputKind,
+      source
+    });
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: "voice_runtime_event_decision",
+      metadata: {
+        sessionId: session.id,
+        mode: session.mode,
+        inputKind,
+        source,
+        transcript: decision.transcript || transcript || null,
+        allow: Boolean(decision.allow),
+        reason: decision.reason,
+        participantCount: Number(decision.participantCount || 0)
+      }
+    });
+    if (!decision.allow) return false;
+    return await this.runRealtimeBrainReply({
+      session,
+      settings,
+      userId,
+      transcript,
+      inputKind,
+      directAddressed: Boolean(decision.directAddressed),
+      directAddressConfidence: Number(decision.directAddressConfidence),
+      conversationContext: decision.conversationContext || null,
+      source
+    });
+  }
+
+  async maybeFireJoinGreetingOpportunity(session, reason = "manual") {
+    const opportunity = this.getJoinGreetingOpportunity(session);
+    const blockReason = this.canFireJoinGreetingOpportunity(session, opportunity);
+    if (blockReason === "not_before_at") {
+      const delayMs = Math.max(0, Number(opportunity?.fireAt || 0) - Date.now());
+      this.scheduleJoinGreetingOpportunity(session, { delayMs, reason });
+      return false;
+    }
+    if (blockReason === "instructions_not_ready") return false;
+    if (blockReason) {
+      this.clearJoinGreetingOpportunity(session);
+      return false;
+    }
+    if (!opportunity) return false;
+    const transcript = opportunity.displayName
+      ? `[${opportunity.displayName} joined the voice channel]`
+      : "[YOU joined the voice channel]";
+    const allow = await this.processVoiceRuntimeEvent({
+      session,
+      settings: session.settingsSnapshot || this.store.getSettings(),
+      userId: opportunity.userId,
+      transcript,
+      inputKind: "event",
+      source: SYSTEM_SPEECH_SOURCE.JOIN_GREETING,
+      eventAt: Number(opportunity.armedAt || Date.now()),
+      forceFresh: true
+    });
+    this.clearJoinGreetingOpportunity(session);
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.client.user?.id || null,
+      content: "voice_join_greeting_evaluated",
+      metadata: {
+        sessionId: session.id,
+        mode: session.mode,
+        trigger: String(opportunity.trigger || "join_greeting"),
+        fireReason: String(reason || "manual"),
+        transcript,
+        allow
+      }
+    });
+    return allow;
+  }
+
   getRuntimeState() {
     return buildVoiceRuntimeSnapshot(this.sessions, {
       client: this.client,
       replyManager: this.replyManager,
-      greetingManager: this.greetingManager,
+      hasPendingJoinGreetingEvent: (session) => this.hasPendingJoinGreetingEvent(session),
       deferredActionQueue: this.deferredActionQueue,
       getVoiceChannelParticipants: (session) => this.getVoiceChannelParticipants(session),
       getRecentVoiceMembershipEvents: (session, args) => this.getRecentVoiceMembershipEvents(session, args),
@@ -3086,7 +3261,7 @@ export class VoiceSessionManager {
         session,
         reason: "empty_asr_bridge_drop"
       });
-      this.greetingManager.maybeFireJoinGreetingOpportunity(session, "empty_asr_bridge_drop");
+      this.maybeFireJoinGreetingOpportunity(session, "empty_asr_bridge_drop");
       return false;
     }
 
@@ -3711,6 +3886,7 @@ export class VoiceSessionManager {
     settings,
     userId,
     transcript,
+    inputKind = "transcript",
     source = "stt_pipeline",
     transcriptionContext = null
   }): Promise<VoiceReplyDecision> {
@@ -3719,6 +3895,7 @@ export class VoiceSessionManager {
       settings,
       userId,
       transcript,
+      inputKind,
       source,
       transcriptionContext
     });
@@ -3728,6 +3905,7 @@ export class VoiceSessionManager {
     const turns = Array.isArray(session?.recentVoiceTurns) ? session.recentVoiceTurns : [];
     const membershipEvents = Array.isArray(session?.membershipEvents) ? session.membershipEvents : [];
     const voiceChannelEffects = Array.isArray(session?.voiceChannelEffects) ? session.voiceChannelEffects : [];
+    const botUserId = String(this.client.user?.id || "").trim();
 
     if (!turns.length && !membershipEvents.length && !voiceChannelEffects.length) return "";
 
@@ -3740,7 +3918,7 @@ export class VoiceSessionManager {
         if (!text) return null;
         const speaker =
           role === "assistant"
-            ? getPromptBotName(session?.settingsSnapshot || this.store.getSettings())
+            ? "YOU"
             : String(turn?.speakerName || "someone").trim() || "someone";
         const addressing =
           turn?.addressing && typeof turn.addressing === "object" ? turn.addressing : null;
@@ -3767,7 +3945,10 @@ export class VoiceSessionManager {
     const membershipEntries = membershipEvents
       .slice(-Math.max(1, Number(maxTurns) || 6))
       .map((event) => {
-        const name = String(event?.displayName || "someone").trim();
+        const eventUserId = String(event?.userId || "").trim();
+        const name = eventUserId && botUserId && eventUserId === botUserId
+          ? "YOU"
+          : String(event?.displayName || "someone").trim();
         const type = String(event?.eventType || "").trim();
         if (type !== "join" && type !== "leave") return null;
         return {
@@ -4887,6 +5068,13 @@ export class VoiceSessionManager {
           displayName: stateMember?.displayName || stateMember?.user?.globalName || stateMember?.user?.username || ""
         });
         if (recordedEvent) {
+          if (recordedEvent.eventType === "join") {
+            this.armJoinGreetingOpportunity(session, {
+              trigger: "participant_join",
+              userId: recordedEvent.userId,
+              displayName: recordedEvent.displayName
+            });
+          }
           this.store.logAction({
             kind: "voice_runtime",
             guildId,

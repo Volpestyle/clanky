@@ -279,8 +279,6 @@ function createSession(overrides = {}) {
     activeReplyInterruptionPolicy: null,
     deferredVoiceActions: {},
     deferredVoiceActionTimers: {},
-    joinGreetingOpportunity: null,
-    joinGreetingTimer: null,
     lastRequestedRealtimeUtterance: null,
     settingsSnapshot: createTestSettings({
       botName: "clanker conk",
@@ -1716,7 +1714,7 @@ test("queueRealtimeTurnFromAsrBridge refires pending join greeting through brain
   const { manager, logs } = createManager();
   const queuedTurns = [];
   const createdResponses = [];
-  const brainReplies = [];
+  const runtimeEvents = [];
   manager.turnProcessor.queueRealtimeTurn = (payload) => {
     queuedTurns.push(payload);
   };
@@ -1724,8 +1722,8 @@ test("queueRealtimeTurnFromAsrBridge refires pending join greeting through brain
     createdResponses.push(payload);
     return true;
   };
-  manager.runRealtimeBrainReply = async (payload) => {
-    brainReplies.push(payload);
+  manager.processVoiceRuntimeEvent = async (payload) => {
+    runtimeEvents.push(payload);
     return true;
   };
   const session = createSession({
@@ -1739,16 +1737,18 @@ test("queueRealtimeTurnFromAsrBridge refires pending join greeting through brain
         replyPath: "brain"
       }
     },
-    joinGreetingOpportunity: {
-      trigger: "capture_resolved",
-      armedAt: Date.now() - 1_000,
-      fireAt: Date.now() - 500,
-      expiresAt: Date.now() + 5_000
-    },
     lastOpenAiRealtimeInstructions: "ready",
     lastAssistantReplyAt: 0,
     userCaptures: new Map()
   });
+  manager.armJoinGreetingOpportunity(session, {
+    trigger: "capture_resolved",
+    displayName: "bob"
+  });
+  const joinGreeting = manager.getJoinGreetingOpportunity(session);
+  if (joinGreeting) {
+    joinGreeting.fireAt = Date.now() - 500;
+  }
   const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 6);
 
   const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
@@ -1766,27 +1766,18 @@ test("queueRealtimeTurnFromAsrBridge refires pending join greeting through brain
   assert.equal(usedTranscript, false);
   assert.equal(queuedTurns.length, 0);
   assert.equal(createdResponses.length, 0);
-  assert.equal(brainReplies.length, 1);
-  assert.equal(brainReplies[0]?.source, SYSTEM_SPEECH_SOURCE.JOIN_GREETING);
-  assert.equal(
-    String(brainReplies[0]?.transcript || "").includes("Join greeting opportunity."),
-    true
-  );
-  assert.equal(String(brainReplies[0]?.transcript || "").includes("[SKIP]"), false);
-  assert.equal(brainReplies[0]?.inputKind, "event");
-  assert.equal(brainReplies[0]?.forceSpokenOutput, true);
-  assert.equal(session.joinGreetingOpportunity, null);
+  assert.equal(runtimeEvents.length, 1);
+  assert.equal(runtimeEvents[0]?.source, SYSTEM_SPEECH_SOURCE.JOIN_GREETING);
+  assert.equal(String(runtimeEvents[0]?.transcript || ""), "[bob joined the voice channel]");
+  assert.equal(runtimeEvents[0]?.inputKind, "event");
   assert.equal(Number(session.lastAssistantReplyAt || 0), 0);
-  assert.equal(logs.some((entry) => entry?.content === "voice_join_greeting_fired"), true);
-  const firedLog = logs.find((entry) => entry?.content === "voice_join_greeting_fired");
-  assert.equal(firedLog?.metadata?.strategy, "brain");
 });
 
 test("queueRealtimeTurnFromAsrBridge refires pending join greeting through native strategy after empty ASR drop", () => {
   const { manager, logs } = createManager();
   const queuedTurns = [];
   const createdResponses = [];
-  const brainReplies = [];
+  const runtimeEvents = [];
   manager.turnProcessor.queueRealtimeTurn = (payload) => {
     queuedTurns.push(payload);
   };
@@ -1794,8 +1785,8 @@ test("queueRealtimeTurnFromAsrBridge refires pending join greeting through nativ
     createdResponses.push(payload);
     return true;
   };
-  manager.runRealtimeBrainReply = async (payload) => {
-    brainReplies.push(payload);
+  manager.processVoiceRuntimeEvent = async (payload) => {
+    runtimeEvents.push(payload);
     return true;
   };
   const session = createSession({
@@ -1809,16 +1800,18 @@ test("queueRealtimeTurnFromAsrBridge refires pending join greeting through nativ
         replyPath: "native"
       }
     },
-    joinGreetingOpportunity: {
-      trigger: "capture_resolved",
-      armedAt: Date.now() - 1_000,
-      fireAt: Date.now() - 500,
-      expiresAt: Date.now() + 5_000
-    },
     lastOpenAiRealtimeInstructions: "ready",
     lastAssistantReplyAt: 0,
     userCaptures: new Map()
   });
+  manager.armJoinGreetingOpportunity(session, {
+    trigger: "capture_resolved",
+    displayName: "bob"
+  });
+  const joinGreeting = manager.getJoinGreetingOpportunity(session);
+  if (joinGreeting) {
+    joinGreeting.fireAt = Date.now() - 500;
+  }
   const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 6);
 
   const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
@@ -1835,26 +1828,21 @@ test("queueRealtimeTurnFromAsrBridge refires pending join greeting through nativ
 
   assert.equal(usedTranscript, false);
   assert.equal(queuedTurns.length, 0);
-  assert.equal(createdResponses.length, 1);
-  assert.equal(createdResponses[0]?.source, SYSTEM_SPEECH_SOURCE.JOIN_GREETING);
-  assert.equal(brainReplies.length, 0);
-  assert.equal(session.joinGreetingOpportunity, null);
+  assert.equal(createdResponses.length, 0);
+  assert.equal(runtimeEvents.length, 1);
+  assert.equal(runtimeEvents[0]?.inputKind, "event");
+  assert.equal(String(runtimeEvents[0]?.transcript || ""), "[bob joined the voice channel]");
   assert.equal(Number(session.lastAssistantReplyAt || 0), 0);
-  assert.equal(logs.some((entry) => entry?.content === "voice_join_greeting_fired"), true);
-  const firedLog = logs.find((entry) => entry?.content === "voice_join_greeting_fired");
-  assert.equal(firedLog?.metadata?.strategy, "native");
 });
 
 test("createTrackedAudioResponse clears join greeting opportunity when newer bot speech starts", () => {
   const { manager } = createManager();
   const session = createSession({
-    mode: "openai_realtime",
-    joinGreetingOpportunity: {
-      trigger: "capture_resolved",
-      armedAt: Date.now() - 1_000,
-      fireAt: Date.now() - 500,
-      expiresAt: Date.now() + 5_000
-    }
+    mode: "openai_realtime"
+  });
+  manager.armJoinGreetingOpportunity(session, {
+    trigger: "capture_resolved",
+    displayName: "bob"
   });
 
   const created = manager.replyManager.createTrackedAudioResponse({
@@ -1864,7 +1852,7 @@ test("createTrackedAudioResponse clears join greeting opportunity when newer bot
   });
 
   assert.equal(created, true);
-  assert.equal(session.joinGreetingOpportunity, null);
+  assert.equal(manager.getJoinGreetingOpportunity(session), null);
   manager.replyManager.clearPendingResponse(session);
 });
 
@@ -1984,13 +1972,11 @@ test("buildRealtimeInstructions does not inject join greeting prompt even when o
   const { manager } = createManager();
   const session = createSession({
     mode: "openai_realtime",
-    startedAt: Date.now() - 2_000,
-    joinGreetingOpportunity: {
-      trigger: "capture_resolved",
-      armedAt: Date.now() - 1_500,
-      fireAt: Date.now() - 500,
-      expiresAt: Date.now() + 5_000
-    }
+    startedAt: Date.now() - 2_000
+  });
+  manager.armJoinGreetingOpportunity(session, {
+    trigger: "capture_resolved",
+    displayName: "bob"
   });
 
   const instructions = manager.instructionManager.buildRealtimeInstructions({

@@ -719,7 +719,7 @@ test("formatVoiceDecisionHistory interleaves membership events with voice turns 
   const history = manager.formatVoiceDecisionHistory(session, 6, 900);
   const lines = history.split("\n").filter(Boolean);
   assert.equal(lines.length, 3);
-  assert.equal(lines[0], "[clanker conk joined the voice channel]");
+  assert.equal(lines[0], "[YOU joined the voice channel]");
   assert.equal(lines[1], "[vuhlp joined the voice channel]");
   assert.equal(lines[2], 'vuhlp: "Yo"');
 });
@@ -743,7 +743,7 @@ test("formatVoiceDecisionHistory shows membership events even with no voice turn
   const history = manager.formatVoiceDecisionHistory(session, 6, 900);
   const lines = history.split("\n").filter(Boolean);
   assert.equal(lines.length, 2);
-  assert.equal(lines[0], "[clanker conk joined the voice channel]");
+  assert.equal(lines[0], "[YOU joined the voice channel]");
   assert.equal(lines[1], "[vuhlp joined the voice channel]");
 });
 
@@ -1551,7 +1551,48 @@ test("reply classifier prompt includes attributed history and current turn field
   assert.equal(classifierPrompt.includes('Transcript: "yo what\'s up"'), true);
   assert.equal(classifierPrompt.includes("Voice reply eagerness: 60/100"), true);
   assert.equal(classifierPrompt.includes("Recent voice timeline:"), true);
+  assert.equal(classifierPrompt.includes('YOU: "yo what\'s good"'), true);
   assert.equal(classifierPrompt.includes('vuhlp: "i\'m working on a project"'), true);
+});
+
+test("reply classifier prompt labels room events distinctly from spoken transcripts", async () => {
+  let classifierPrompt = "";
+  const manager = createManager({
+    generate: async ({ userPrompt }) => {
+      classifierPrompt = String(userPrompt || "");
+      return { text: "YES" };
+    }
+  });
+
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+      recentVoiceTurns: [],
+      membershipEvents: [{ userId: "speaker-1", displayName: "vuhlp", eventType: "join", at: Date.now() - 500 }]
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          realtimeAdmissionMode: "hard_classifier"
+        }
+      }
+    }),
+    transcript: "[vuhlp joined the voice channel]",
+    inputKind: "event"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(classifierPrompt.includes("Current input is a voice room event, not spoken audio."), true);
+  assert.equal(classifierPrompt.includes('Runtime event: "[vuhlp joined the voice channel]"'), true);
+  assert.equal(classifierPrompt.includes("Triggering member: speaker 1"), true);
 });
 
 test("reply decider denies music turns when wake latch is inactive", async () => {
@@ -5812,7 +5853,7 @@ test("voice decision history deduplicates consecutive identical turns", () => {
   assert.equal(session.recentVoiceTurns.length, 2);
   const formatted = manager.formatVoiceDecisionHistory(session, 6);
   assert.equal(formatted.includes("user-a"), true);
-  assert.equal(formatted.includes("clanker conk"), true);
+  assert.equal(formatted.includes("YOU"), true);
 });
 
 test("refreshRealtimeTools registers local and MCP tool definitions", async () => {

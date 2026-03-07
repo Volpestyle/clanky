@@ -294,10 +294,8 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and stt session state", (
           };
         }
       },
-      greetingManager: {
-        getJoinGreetingOpportunity(session) {
-          return session.id === "session-1" ? { pending: true } : null;
-        }
+      hasPendingJoinGreetingEvent(session) {
+        return session.id === "session-1";
       },
       deferredActionQueue: {
         getDeferredQueuedUserTurns(session) {

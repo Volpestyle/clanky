@@ -694,8 +694,6 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         nextThoughtAt: 0,
         lastThoughtAttemptAt: 0,
         lastThoughtSpokenAt: 0,
-        joinGreetingOpportunity: null,
-        joinGreetingTimer: null,
         userCaptures: new Map(),
         streamWatch: {
           active: false,

@@ -3,7 +3,7 @@ import {
   getPromptBotName
 } from "../prompts/promptCore.ts";
 import {
-  buildVoiceAdmissionPolicyLines
+  getEagernessClassifierTier
 } from "../prompts/voiceAdmissionPolicy.ts";
 import {
   normalizeInlineText,
@@ -504,10 +504,12 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   settings,
   userId,
   transcript,
+  inputKind = "transcript",
   source: _source = "stt_pipeline",
   transcriptionContext: _transcriptionContext = null
 }): Promise<VoiceReplyDecision> {
   const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
+  const normalizedInputKind = inputKind === "event" ? "event" : "transcript";
   const normalizedUserId = String(userId || "").trim();
   const voiceChannelParticipants = manager.getVoiceChannelParticipants(session);
   const participantCount = voiceChannelParticipants.length;
@@ -516,7 +518,9 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     .map((entry) => entry.displayName)
     .filter(Boolean)
     .slice(0, 10);
-  const addressedToOtherParticipant = isLikelyVocativeAddressToOtherParticipant({
+  const addressedToOtherParticipant = normalizedInputKind === "event"
+    ? false
+    : isLikelyVocativeAddressToOtherParticipant({
     transcript: normalizedTranscript,
     participantDisplayNames: participantList,
     botName: getPromptBotName(settings),
@@ -543,7 +547,9 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
       conversationContext: emptyConversationContext
     };
   }
-  const directAddressedByWakePhrase = normalizedTranscript
+  const directAddressedByWakePhrase = normalizedInputKind === "event"
+    ? false
+    : normalizedTranscript
     ? isVoiceTurnAddressedToBot(normalizedTranscript, settings)
     : false;
   const normalizeWakeTokens = (value = ""): string[] =>
@@ -596,6 +602,9 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   const directAddressed = directAddressConfidence >= directAddressThreshold;
   const replyEagerness = clamp(Number(getVoiceConversationPolicy(settings).replyEagerness) || 0, 0, 100);
   const sameSpeakerPendingCommandFollowup =
+    normalizedInputKind === "event"
+      ? false
+      :
     typeof manager.isMusicDisambiguationResolutionTurn === "function" &&
     manager.isMusicDisambiguationResolutionTurn(session, normalizedUserId, normalizedTranscript);
   const musicActive = typeof manager.isMusicPlaybackActive === "function" && manager.isMusicPlaybackActive(session);
@@ -854,6 +863,7 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     settings,
     userId: normalizedUserId,
     transcript: normalizedTranscript,
+    inputKind: normalizedInputKind,
     speakerName,
     participantCount,
     participantList,
@@ -888,11 +898,117 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   };
 }
 
+export type ClassifierPromptInput = {
+  botName: string;
+  inputKind?: "transcript" | "event";
+  replyEagerness: number;
+  participantCount: number;
+  participantList: string[];
+  speakerName: string;
+  transcript: string;
+  addressedToOtherSignal?: boolean;
+  musicActive?: boolean;
+  musicWakeLatched?: boolean;
+  msUntilMusicWakeLatchExpiry?: number | null;
+  conversationContext: {
+    recentAssistantReply?: boolean;
+    msSinceAssistantReply?: number | null;
+    msSinceDirectAddress?: number | null;
+  };
+  recentHistory?: string;
+};
+
+export function buildClassifierPrompt(input: ClassifierPromptInput): {
+  systemPrompt: string;
+  userPrompt: string;
+} {
+  const normalizedEagerness = Math.max(0, Math.min(100, Number(input.replyEagerness) || 0));
+  const normalizedInputKind = input.inputKind === "event" ? "event" : "transcript";
+
+  const systemPrompt = `You are a realtime voice admission classifier for a bot named "${input.botName}". The bot is agentic — it can play music, search the web, run commands, and perform actions when asked. Requests or commands directed at the bot are strong YES signals. Return exactly one token: YES or NO.`;
+
+  const parts = [
+    getEagernessClassifierTier(normalizedEagerness),
+    ``,
+    `Overall guidelines when unsure:`,
+    `Say YES when:`,
+    `- the speaker is clearly addressing the bot`,
+    `- this is a direct follow-up to the bot's recent reply`,
+    `- the bot is already engaged with this speaker and replying now is natural`,
+    ``,
+    `Say NO when:`,
+    `- the turn is aimed at another participant`,
+    `- the turn is filler, laughter, backchannel, self-talk, or non-speech with no conversational intent`,
+    `- replying would likely interrupt side conversation`,
+    ``,
+  ];
+
+  // Room prior
+  if (input.participantCount <= 1 && !input.addressedToOtherSignal) {
+    parts.push("There is only one other person here. Any speech from them is directed at the bot unless it is clearly self-talk or non-speech — prefer YES.");
+  } else if (input.participantCount > 1) {
+    parts.push("Multi-person room: avoid barging in if not greeting or without clear conversational value.");
+  }
+  if (normalizedInputKind === "event") {
+    parts.push("Current input is a voice room event, not spoken audio.");
+    parts.push("Say YES only if a brief spoken acknowledgement is socially natural and useful right now.");
+  }
+
+  // Music lines — only when active
+  if (input.musicActive) {
+    parts.push(`Music active: true`);
+    parts.push(`Music wake latched: ${input.musicWakeLatched ? "true" : "false"}`);
+    if (input.musicWakeLatched && Number.isFinite(Number(input.msUntilMusicWakeLatchExpiry))) {
+      parts.push(`Music wake latch expires in ms: ${Math.max(0, Math.round(Number(input.msUntilMusicWakeLatchExpiry)))}`);
+    }
+  }
+
+  // Context block
+  parts.push(``);
+  parts.push(`Participant count: ${input.participantCount}`);
+  parts.push(`Participants: ${input.participantList.join(", ") || "none"}`);
+  if (normalizedInputKind === "event") {
+    parts.push(`Triggering member: ${input.speakerName}`);
+    parts.push(`Runtime event: "${input.transcript}"`);
+  } else {
+    parts.push(`Speaker: ${input.speakerName}`);
+    parts.push(`Transcript: "${input.transcript}"`);
+  }
+  parts.push(`Voice reply eagerness: ${normalizedEagerness}/100`);
+
+  // Conversation recency
+  if (input.conversationContext.recentAssistantReply) {
+    const secsSinceReply = Math.round(Number(input.conversationContext.msSinceAssistantReply || 0) / 1000);
+    parts.push(`Bot last spoke ${secsSinceReply}s ago — active conversation.`);
+    if (input.conversationContext.msSinceDirectAddress != null) {
+      parts.push(`Last addressed by name ${Math.round(input.conversationContext.msSinceDirectAddress / 1000)}s ago.`);
+    }
+  } else {
+    parts.push(`Bot has not spoken recently.`);
+    if (input.conversationContext.msSinceDirectAddress != null) {
+      parts.push(`Last addressed ${Math.round(input.conversationContext.msSinceDirectAddress / 1000)}s ago.`);
+    } else {
+      parts.push(`Never directly addressed.`);
+    }
+  }
+
+  // History and decision
+  if (input.recentHistory) {
+    parts.push(``);
+    parts.push(`Recent voice timeline:\n${input.recentHistory}`);
+  }
+  parts.push(``);
+  parts.push(`Decision: should the bot respond right now?`);
+
+  return { systemPrompt, userPrompt: parts.join("\n") };
+}
+
 export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   session,
   settings,
   userId,
   transcript,
+  inputKind = "transcript",
   speakerName,
   participantCount,
   participantList,
@@ -910,6 +1026,7 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   settings: ReplyDecisionSettings;
   userId: string;
   transcript: string;
+  inputKind?: "transcript" | "event";
   speakerName: string;
   participantCount: number;
   participantList: string[];
@@ -1043,69 +1160,23 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   const recentHistory = typeof manager.formatVoiceDecisionHistory === "function"
     ? manager.formatVoiceDecisionHistory(session, CLASSIFIER_HISTORY_MAX_TURNS, CLASSIFIER_HISTORY_MAX_CHARS)
     : "";
-  const policyLines = buildVoiceAdmissionPolicyLines({
-    mode: "classifier",
-    directAddressed: false,
-    isEagerTurn: !conversationContext?.engaged,
+
+  const { systemPrompt: classifierSystemPrompt, userPrompt: classifierUserPrompt } = buildClassifierPrompt({
+    botName,
+    inputKind,
     replyEagerness,
     participantCount,
-    conversationContext,
+    participantList,
+    speakerName,
+    transcript,
     addressedToOtherSignal,
-    pendingCommandFollowupSignal,
     musicActive,
-    musicWakeLatched
+    musicWakeLatched,
+    msUntilMusicWakeLatchExpiry,
+    conversationContext,
+    recentHistory
   });
-
-  // Build the classifier prompt — only include fields that carry actual signal.
-  // Fields like directed-confidence and soundalike notes are omitted because
-  // high-confidence direct-address is already handled by the fast-path before
-  // the classifier runs, so the classifier only ever sees confidence=0.
-  const promptParts = [
-    `You are a realtime voice admission classifier for a bot named "${botName}".`,
-    `Output exactly one token: YES or NO.`,
-    `Do not output anything else.`,
-    `Participant count: ${participantCount}`,
-    `Participants: ${participantList.join(", ") || "none"}`,
-    `Speaker: ${speakerName}`,
-    `Transcript: "${transcript}"`
-  ];
-
-  // Conditional context — only include when non-default.
-  // addressedToOtherSignal and pendingCommandFollowupSignal are omitted: both
-  // are derived from transcript parsing that the classifier LLM can do better
-  // itself given the raw transcript and participant list.
-  if (musicActive) {
-    promptParts.push(`Music active: true`);
-    promptParts.push(`Music wake latched: ${musicWakeLatched ? "true" : "false"}`);
-    if (musicWakeLatched && Number.isFinite(Number(msUntilMusicWakeLatchExpiry))) {
-      promptParts.push(`Music wake latch expires in ms: ${Math.max(0, Math.round(Number(msUntilMusicWakeLatchExpiry)))}`);
-    }
-  }
-
-  // Conversation recency — avoid contradictory signals. When the bot recently
-  // spoke, "Never directly addressed" is misleading in a 1:1 room; instead
-  // surface the recency as a cohesive engagement signal.
-  if (conversationContext.recentAssistantReply) {
-    const secsSinceReply = Math.round(Number(conversationContext.msSinceAssistantReply || 0) / 1000);
-    promptParts.push(`Bot last spoke ${secsSinceReply}s ago — active conversation.`);
-    if (conversationContext.msSinceDirectAddress != null) {
-      promptParts.push(`Last addressed by name ${Math.round(conversationContext.msSinceDirectAddress / 1000)}s ago.`);
-    }
-  } else {
-    promptParts.push(`Bot has not spoken recently.`);
-    if (conversationContext.msSinceDirectAddress != null) {
-      promptParts.push(`Last addressed ${Math.round(conversationContext.msSinceDirectAddress / 1000)}s ago.`);
-    } else {
-      promptParts.push(`Never directly addressed.`);
-    }
-  }
-
-  promptParts.push(...policyLines);
-  promptParts.push(`Decision: should the bot respond to this speaker turn right now?`);
-  if (recentHistory) {
-    promptParts.push(`Recent attributed voice turns:\n${recentHistory}`);
-  }
-  const promptSnapshot = promptParts.join("\n");
+  const promptSnapshot = classifierUserPrompt;
   logClassifierDebug({
     stage: "prompt",
     promptSnapshot
@@ -1121,8 +1192,8 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
         maxOutputTokens: 4,
         reasoningEffort: "minimal"
       }),
-      systemPrompt: "",
-      userPrompt: promptParts.join("\n"),
+      systemPrompt: classifierSystemPrompt,
+      userPrompt: classifierUserPrompt,
       contextMessages: [],
       trace: {
         guildId: session.guildId,
