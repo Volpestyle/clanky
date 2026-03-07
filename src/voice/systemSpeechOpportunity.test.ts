@@ -4,7 +4,6 @@ import {
   SYSTEM_SPEECH_CLASS,
   SYSTEM_SPEECH_OPPORTUNITY,
   SYSTEM_SPEECH_SOURCE,
-  isJoinGreetingOpportunitySource,
   isSystemSpeechOpportunitySource,
   resolveSystemSpeechClass,
   resolveSystemSpeechOpportunityType,
@@ -17,10 +16,6 @@ import {
 
 test("resolveSystemSpeechOpportunityType identifies canonical system speech sources", () => {
   assert.equal(
-    resolveSystemSpeechOpportunityType(`${SYSTEM_SPEECH_SOURCE.JOIN_GREETING}:speech_1`),
-    SYSTEM_SPEECH_OPPORTUNITY.JOIN_GREETING
-  );
-  assert.equal(
     resolveSystemSpeechOpportunityType(SYSTEM_SPEECH_SOURCE.THOUGHT),
     SYSTEM_SPEECH_OPPORTUNITY.THOUGHT
   );
@@ -32,33 +27,21 @@ test("resolveSystemSpeechOpportunityType identifies canonical system speech sour
 });
 
 test("system speech source helpers only match system initiated reply sources", () => {
-  assert.equal(isSystemSpeechOpportunitySource(SYSTEM_SPEECH_SOURCE.JOIN_GREETING), true);
   assert.equal(isSystemSpeechOpportunitySource(SYSTEM_SPEECH_SOURCE.THOUGHT), true);
   assert.equal(isSystemSpeechOpportunitySource("stt_pipeline_reply"), false);
-  assert.equal(isJoinGreetingOpportunitySource(`${SYSTEM_SPEECH_SOURCE.JOIN_GREETING}:speech_1`), true);
-  assert.equal(isJoinGreetingOpportunitySource(SYSTEM_SPEECH_SOURCE.THOUGHT), false);
 });
 
 test("system speech sources yield to promoted user speech before audio begins", () => {
-  assert.equal(
-    shouldCancelSystemSpeechBeforeAudioOnPromotedUserSpeech(SYSTEM_SPEECH_SOURCE.JOIN_GREETING),
-    true
-  );
   assert.equal(
     shouldCancelSystemSpeechBeforeAudioOnPromotedUserSpeech(SYSTEM_SPEECH_SOURCE.THOUGHT),
     true
   );
   assert.equal(shouldCancelSystemSpeechBeforeAudioOnPromotedUserSpeech("realtime"), false);
-  assert.equal(shouldSupersedeSystemSpeechBeforePlayback(SYSTEM_SPEECH_SOURCE.JOIN_GREETING), true);
   assert.equal(shouldSupersedeSystemSpeechBeforePlayback(SYSTEM_SPEECH_SOURCE.THOUGHT), true);
   assert.equal(shouldSupersedeSystemSpeechBeforePlayback("realtime"), false);
 });
 
 test("system speech reply accounting is explicit for request and local playback phases", () => {
-  assert.equal(
-    resolveSystemSpeechReplyAccountingOnRequest(SYSTEM_SPEECH_SOURCE.JOIN_GREETING),
-    "requested"
-  );
   assert.equal(
     resolveSystemSpeechReplyAccountingOnRequest(SYSTEM_SPEECH_SOURCE.THOUGHT),
     "requested"
@@ -73,14 +56,9 @@ test("system speech reply accounting is explicit for request and local playback 
 
 test("system speech definitions expose speech class and skip policy", () => {
   assert.equal(
-    resolveSystemSpeechClass(SYSTEM_SPEECH_SOURCE.JOIN_GREETING),
-    SYSTEM_SPEECH_CLASS.SYSTEM_OPTIONAL
-  );
-  assert.equal(
     resolveSystemSpeechClass(SYSTEM_SPEECH_SOURCE.THOUGHT_TTS),
     SYSTEM_SPEECH_CLASS.SYSTEM_OPTIONAL
   );
-  assert.equal(shouldAllowSystemSpeechSkipAfterFire(SYSTEM_SPEECH_SOURCE.JOIN_GREETING), false);
   assert.equal(shouldAllowSystemSpeechSkipAfterFire(SYSTEM_SPEECH_SOURCE.THOUGHT), true);
   assert.equal(shouldAllowSystemSpeechSkipAfterFire("stt_pipeline_reply"), true);
 });

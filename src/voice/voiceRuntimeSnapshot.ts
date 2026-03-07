@@ -1,6 +1,5 @@
 import { clamp } from "../utils.ts";
 import {
-  JOIN_GREETING_OPPORTUNITY_WINDOW_MS,
   OPENAI_ASR_SESSION_IDLE_TTL_MS,
   OPENAI_TOOL_CALL_EVENT_MAX,
   RECENT_ENGAGEMENT_WINDOW_MS,
@@ -53,7 +52,6 @@ type StreamWatchBrainContextLike = {
 export interface VoiceRuntimeSnapshotDeps {
   client?: RuntimeSnapshotClientLike;
   replyManager: RuntimeSnapshotReplyManagerLike;
-  hasPendingJoinGreetingEvent: (session: VoiceSession) => boolean;
   deferredActionQueue: RuntimeSnapshotDeferredActionQueueLike;
   getVoiceChannelParticipants: (
     session: VoiceSession
@@ -305,10 +303,6 @@ export function buildVoiceRuntimeSnapshot(
       session,
       now
     });
-    const joinGreetingOpportunityAgeMs = Math.max(0, now - Number(session.startedAt || 0));
-    const joinGreetingOpportunityActive =
-      Boolean(session.startedAt) &&
-      joinGreetingOpportunityAgeMs <= JOIN_GREETING_OPPORTUNITY_WINDOW_MS;
     const modelTurns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
     const transcriptTurns = Array.isArray(session.transcriptTurns) ? session.transcriptTurns : [];
     const deferredQueue = deps.deferredActionQueue.getDeferredQueuedUserTurns(session);
@@ -404,12 +398,6 @@ export function buildVoiceRuntimeSnapshot(
             ? Math.round(wakeContext.msSinceDirectAddress)
             : null,
           windowMs: RECENT_ENGAGEMENT_WINDOW_MS
-        },
-        joinGreetingOpportunity: {
-          active: joinGreetingOpportunityActive,
-          ageMs: Math.round(joinGreetingOpportunityAgeMs),
-          windowMs: JOIN_GREETING_OPPORTUNITY_WINDOW_MS,
-          greetingPending: Boolean(deps.hasPendingJoinGreetingEvent(session))
         },
         thoughtEngine: {
           busy: Boolean(session.thoughtLoopBusy),

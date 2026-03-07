@@ -69,7 +69,6 @@ export interface CaptureManagerHost {
   buildAsrBridgeDeps: (session: VoiceSession) => AsrBridgeDeps;
   hasReplayBlockingActiveCapture: (session: VoiceSession) => boolean;
   deferredActionQueue: Pick<DeferredActionQueue, "recheckDeferredVoiceActions">;
-  maybeFireJoinGreetingOpportunity: (session: VoiceSession, reason?: string) => void;
   hasCaptureBeenPromoted: (capture: CaptureState) => boolean;
   resolveCaptureTurnPromotionReason: (args: {
     session: VoiceSession;
@@ -222,7 +221,6 @@ export class CaptureManager {
     const maybeTriggerDeferredActions = () => {
       if (!this.host.hasReplayBlockingActiveCapture(session)) {
         this.host.deferredActionQueue.recheckDeferredVoiceActions({ session, reason: "capture_resolved" });
-        this.host.maybeFireJoinGreetingOpportunity(session, "capture_resolved");
       }
     };
 

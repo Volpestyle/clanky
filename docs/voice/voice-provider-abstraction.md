@@ -279,14 +279,13 @@ Bot turn tracking relies on the canonical `assistantOutput` state machine (see `
 
 System-initiated speech uses a separate opportunity lifecycle:
 
-- join greetings and thought-engine utterances can be cancelled before `bot_audio_started` if promoted user speech takes the floor first
-- once a join greeting actually fires, the brain path must produce one short spoken line rather than silently returning `[SKIP]`
+- thought-engine utterances can be cancelled before `bot_audio_started` if promoted user speech takes the floor first
 
 ---
 
 ## 5. Thought Engine
 
-The thought engine generates ambient thoughts during silence — a parallel pipeline that feeds into voice output. It uses the same system-speech opportunity lifecycle as join greetings, but remains skippable after fire.
+The thought engine generates ambient thoughts during silence — a parallel pipeline that feeds into voice output. It uses a system-speech opportunity lifecycle, and remains skippable after fire.
 
 ### Flow
 

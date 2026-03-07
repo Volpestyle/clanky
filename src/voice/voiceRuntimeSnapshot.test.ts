@@ -294,9 +294,6 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and stt session state", (
           };
         }
       },
-      hasPendingJoinGreetingEvent(session) {
-        return session.id === "session-1";
-      },
       deferredActionQueue: {
         getDeferredQueuedUserTurns(session) {
           return session.id === "session-1" ? [{ id: "queued-1" }, { id: "queued-2" }] : [];
@@ -404,8 +401,6 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and stt session state", (
     ]);
     assert.equal(realtime?.assistantOutput.phase, "speaking");
     assert.equal(realtime?.assistantOutput.requestId, 8);
-    assert.equal(realtime?.conversation.joinGreetingOpportunity.active, true);
-    assert.equal(realtime?.conversation.joinGreetingOpportunity.greetingPending, true);
     assert.equal(realtime?.conversation.wake.windowMs, 35_000);
     assert.equal(realtime?.pendingDeferredTurns, 2);
     assert.equal(realtime?.recentTurns[0]?.addressing?.directedConfidence, 1);
@@ -492,7 +487,6 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and stt session state", (
 
     const stt = snapshot.sessions.find((entry) => entry.sessionId === "session-2");
     assert.ok(stt);
-    assert.equal(stt?.conversation.joinGreetingOpportunity.active, false);
     assert.deepEqual(stt?.stt, {
       pendingTurns: 3,
       contextMessages: 0

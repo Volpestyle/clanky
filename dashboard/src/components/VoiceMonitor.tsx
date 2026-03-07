@@ -76,7 +76,6 @@ const STATE_LABELS: Record<string, string> = {
 };
 
 const WAKE_WINDOW_FALLBACK_MS = 35_000;
-const JOIN_GREETING_OPPORTUNITY_FALLBACK_MS = 25_000;
 const DEFAULT_JOIN_TEXT_CHANNEL_ID = "1475944808198574205";
 
 function parseIsoMs(iso?: string | null): number | null {
@@ -86,14 +85,6 @@ function parseIsoMs(iso?: string | null): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function formatDurationMs(ms: number | null): string {
-  if (!Number.isFinite(ms)) return "unknown";
-  const normalized = Math.max(0, Math.round(Number(ms)));
-  const seconds = Math.ceil(normalized / 1000);
-  const minutes = Math.floor(seconds / 60);
-  if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
-  return `${seconds}s`;
-}
 
 function formatApproxBytes(bytes: number | null | undefined): string {
   const normalized = Math.max(0, Number(bytes) || 0);
@@ -127,38 +118,6 @@ function resolveWakeIndicator(session: VoiceSession): {
   return {
     active,
     stateLabel: active ? "Awake" : "Listening"
-  };
-}
-
-function resolveJoinGreetingOpportunityIndicator(session: VoiceSession): {
-  active: boolean;
-  remainingMs: number | null;
-} {
-  const joinGreetingOpportunity = session.conversation?.joinGreetingOpportunity || null;
-  if (joinGreetingOpportunity && typeof joinGreetingOpportunity === "object") {
-    const windowMs = Number.isFinite(joinGreetingOpportunity.windowMs)
-      ? Math.max(0, Math.round(joinGreetingOpportunity.windowMs))
-      : JOIN_GREETING_OPPORTUNITY_FALLBACK_MS;
-    const ageMs = Number.isFinite(joinGreetingOpportunity.ageMs)
-      ? Math.max(0, Math.round(joinGreetingOpportunity.ageMs))
-      : null;
-    return {
-      active: Boolean(joinGreetingOpportunity.active),
-      remainingMs: ageMs == null ? null : Math.max(0, windowMs - ageMs)
-    };
-  }
-
-  const startedAtMs = parseIsoMs(session.startedAt);
-  if (startedAtMs == null) {
-    return {
-      active: false,
-      remainingMs: null
-    };
-  }
-  const ageMs = Math.max(0, Date.now() - startedAtMs);
-  return {
-    active: ageMs <= JOIN_GREETING_OPPORTUNITY_FALLBACK_MS,
-    remainingMs: Math.max(0, JOIN_GREETING_OPPORTUNITY_FALLBACK_MS - ageMs)
   };
 }
 
@@ -1301,12 +1260,6 @@ function SessionCard({ session }: { session: VoiceSession }) {
   const pendingTurns = (session.stt?.pendingTurns || 0) + (session.realtime?.pendingTurns || 0);
   const totalPending = pendingTurns + session.pendingDeferredTurns;
   const wakeIndicator = resolveWakeIndicator(session);
-  const joinGreetingOpportunityIndicator = resolveJoinGreetingOpportunityIndicator(session);
-  const joinGreetingOpportunityPill = joinGreetingOpportunityIndicator.active
-    ? joinGreetingOpportunityIndicator.remainingMs != null
-      ? `${formatDurationMs(joinGreetingOpportunityIndicator.remainingMs)} left`
-      : "Active"
-    : "Closed";
   const activeCaptures = Array.isArray(session.activeCaptures) ? session.activeCaptures : [];
   const transcribingSummary = activeCaptures.length > 0
     ? activeCaptures
@@ -1359,13 +1312,6 @@ function SessionCard({ session }: { session: VoiceSession }) {
           }`}
         >
           Wake: {wakeIndicator.stateLabel}
-        </span>
-        <span
-          className={`vm-ts-pill ${
-            joinGreetingOpportunityIndicator.active ? "vm-ts-join-active" : "vm-ts-join-inactive"
-          }`}
-        >
-          Join Greet: {joinGreetingOpportunityPill}
         </span>
         {session.playbackArm != null && (
           <span className={`vm-ts-pill ${session.playbackArm.armed ? "vm-ts-dave-armed" : "vm-ts-dave-pending"}`}>

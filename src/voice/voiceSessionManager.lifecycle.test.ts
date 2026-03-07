@@ -872,7 +872,7 @@ test("startInboundCapture drops provisional noise before activity promotion whil
     },
     voxClient
   });
-  const { asrState, appendedChunks } = seedReadyPerUserAsr(manager, session, "speaker-1");
+  const { appendedChunks } = seedReadyPerUserAsr(manager, session, "speaker-1");
 
   manager.captureManager.startInboundCapture({
     session,
@@ -1007,7 +1007,7 @@ test("startInboundCapture keeps sparse spike noise provisional even while stream
     },
     voxClient
   });
-  const { asrState, appendedChunks } = seedReadyPerUserAsr(manager, session, "speaker-1");
+  const { appendedChunks } = seedReadyPerUserAsr(manager, session, "speaker-1");
 
   manager.captureManager.startInboundCapture({
     session,
@@ -1710,208 +1710,6 @@ test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript instead of queue
   assert.equal(droppedLog?.metadata?.pcmBytes, pcmBuffer.length);
 });
 
-test("queueRealtimeTurnFromAsrBridge refires pending join greeting through brain strategy after empty ASR drop", () => {
-  const { manager, logs } = createManager();
-  const queuedTurns = [];
-  const createdResponses = [];
-  const runtimeEvents = [];
-  manager.turnProcessor.queueRealtimeTurn = (payload) => {
-    queuedTurns.push(payload);
-  };
-  manager.replyManager.createTrackedAudioResponse = (payload) => {
-    createdResponses.push(payload);
-    return true;
-  };
-  manager.processVoiceRuntimeEvent = async (payload) => {
-    runtimeEvents.push(payload);
-    return true;
-  };
-  const session = createSession({
-    mode: "openai_realtime",
-    playbackArmed: true,
-    startedAt: Date.now() - 2_000,
-    settingsSnapshot: {
-      botName: "clanker conk",
-      voice: {
-        enabled: true,
-        replyPath: "brain"
-      }
-    },
-    lastOpenAiRealtimeInstructions: "ready",
-    lastAssistantReplyAt: 0,
-    userCaptures: new Map()
-  });
-  manager.armJoinGreetingOpportunity(session, {
-    trigger: "capture_resolved",
-    displayName: "bob"
-  });
-  const joinGreeting = manager.getJoinGreetingOpportunity(session);
-  if (joinGreeting) {
-    joinGreeting.fireAt = Date.now() - 500;
-  }
-  const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 6);
-
-  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
-    session,
-    userId: "speaker-1",
-    pcmBuffer,
-    captureReason: "stream_end",
-    finalizedAt: Date.now(),
-    asrResult: {
-      transcript: ""
-    },
-    source: "per_user"
-  });
-
-  assert.equal(usedTranscript, false);
-  assert.equal(queuedTurns.length, 0);
-  assert.equal(createdResponses.length, 0);
-  assert.equal(runtimeEvents.length, 1);
-  assert.equal(runtimeEvents[0]?.source, SYSTEM_SPEECH_SOURCE.JOIN_GREETING);
-  assert.equal(String(runtimeEvents[0]?.transcript || ""), "[bob joined the voice channel]");
-  assert.equal(runtimeEvents[0]?.inputKind, "event");
-  assert.equal(Number(session.lastAssistantReplyAt || 0), 0);
-});
-
-test("queueRealtimeTurnFromAsrBridge refires pending join greeting through native strategy after empty ASR drop", () => {
-  const { manager, logs } = createManager();
-  const queuedTurns = [];
-  const createdResponses = [];
-  const runtimeEvents = [];
-  manager.turnProcessor.queueRealtimeTurn = (payload) => {
-    queuedTurns.push(payload);
-  };
-  manager.replyManager.createTrackedAudioResponse = (payload) => {
-    createdResponses.push(payload);
-    return true;
-  };
-  manager.processVoiceRuntimeEvent = async (payload) => {
-    runtimeEvents.push(payload);
-    return true;
-  };
-  const session = createSession({
-    mode: "openai_realtime",
-    playbackArmed: true,
-    startedAt: Date.now() - 2_000,
-    settingsSnapshot: {
-      botName: "clanker conk",
-      voice: {
-        enabled: true,
-        replyPath: "native"
-      }
-    },
-    lastOpenAiRealtimeInstructions: "ready",
-    lastAssistantReplyAt: 0,
-    userCaptures: new Map()
-  });
-  manager.armJoinGreetingOpportunity(session, {
-    trigger: "capture_resolved",
-    displayName: "bob"
-  });
-  const joinGreeting = manager.getJoinGreetingOpportunity(session);
-  if (joinGreeting) {
-    joinGreeting.fireAt = Date.now() - 500;
-  }
-  const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 6);
-
-  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
-    session,
-    userId: "speaker-1",
-    pcmBuffer,
-    captureReason: "stream_end",
-    finalizedAt: Date.now(),
-    asrResult: {
-      transcript: ""
-    },
-    source: "per_user"
-  });
-
-  assert.equal(usedTranscript, false);
-  assert.equal(queuedTurns.length, 0);
-  assert.equal(createdResponses.length, 0);
-  assert.equal(runtimeEvents.length, 1);
-  assert.equal(runtimeEvents[0]?.inputKind, "event");
-  assert.equal(String(runtimeEvents[0]?.transcript || ""), "[bob joined the voice channel]");
-  assert.equal(Number(session.lastAssistantReplyAt || 0), 0);
-});
-
-test("createTrackedAudioResponse clears join greeting opportunity when newer bot speech starts", () => {
-  const { manager } = createManager();
-  const session = createSession({
-    mode: "openai_realtime"
-  });
-  manager.armJoinGreetingOpportunity(session, {
-    trigger: "capture_resolved",
-    displayName: "bob"
-  });
-
-  const created = manager.replyManager.createTrackedAudioResponse({
-    session,
-    source: "openai_realtime_text_turn",
-    emitCreateEvent: false
-  });
-
-  assert.equal(created, true);
-  assert.equal(manager.getJoinGreetingOpportunity(session), null);
-  manager.replyManager.clearPendingResponse(session);
-});
-
-test("cancelPendingSystemSpeechForUserSpeech clears pre-audio join greeting response", () => {
-  const { manager, logs } = createManager();
-  const cancelCalls = [];
-  const session = createSession({
-    mode: "openai_realtime",
-    realtimeClient: {
-      cancelActiveResponse() {
-        cancelCalls.push(true);
-        return true;
-      }
-    },
-    lastAudioDeltaAt: 0,
-    pendingResponse: {
-      requestId: 7,
-      requestedAt: Date.now() + 5_000,
-      source: `${SYSTEM_SPEECH_SOURCE.JOIN_GREETING}:speech_1`,
-      handlingSilence: false,
-      audioReceivedAt: 0,
-      interruptionPolicy: null,
-      utteranceText: "yo",
-      latencyContext: null,
-      userId: null,
-      retryCount: 0,
-      hardRecoveryAttempted: false
-    }
-  });
-  const promotedAt = Date.now();
-  const capture = {
-    userId: "speaker-1",
-    startedAt: promotedAt - 420,
-    promotedAt,
-    bytesSent: 24_000,
-    signalSampleCount: 12_000,
-    signalActiveSampleCount: 6_000,
-    signalPeakAbs: 12_000,
-    signalSumSquares: 12_000 * 12_000 * 12_000
-  };
-
-  const cancelled = manager.cancelPendingSystemSpeechForUserSpeech({
-    session,
-    userId: "speaker-1",
-    captureState: capture,
-    source: "capture_promoted",
-    now: promotedAt
-  });
-
-  assert.equal(cancelled, true);
-  assert.equal(session.pendingResponse, null);
-  assert.equal(cancelCalls.length, 1);
-  const cancelLog = logs.find((entry) => entry?.content === "voice_system_speech_cancelled_for_user_speech");
-  assert.ok(cancelLog);
-  assert.equal(cancelLog?.metadata?.pendingSource, `${SYSTEM_SPEECH_SOURCE.JOIN_GREETING}:speech_1`);
-  assert.equal(cancelLog?.metadata?.opportunityType, SYSTEM_SPEECH_OPPORTUNITY.JOIN_GREETING);
-  assert.equal(Boolean(cancelLog?.metadata?.responseCancelAttempted), true);
-});
-
 test("cancelPendingSystemSpeechForUserSpeech clears pre-audio thought response", () => {
   const { manager, logs } = createManager();
   const cancelCalls = [];
@@ -1966,29 +1764,6 @@ test("cancelPendingSystemSpeechForUserSpeech clears pre-audio thought response",
   assert.equal(cancelLog?.metadata?.pendingSource, SYSTEM_SPEECH_SOURCE.THOUGHT);
   assert.equal(cancelLog?.metadata?.opportunityType, SYSTEM_SPEECH_OPPORTUNITY.THOUGHT);
   assert.equal(Boolean(cancelLog?.metadata?.responseCancelAttempted), true);
-});
-
-test("buildRealtimeInstructions does not inject join greeting prompt even when opportunity is armed", () => {
-  const { manager } = createManager();
-  const session = createSession({
-    mode: "openai_realtime",
-    startedAt: Date.now() - 2_000
-  });
-  manager.armJoinGreetingOpportunity(session, {
-    trigger: "capture_resolved",
-    displayName: "bob"
-  });
-
-  const instructions = manager.instructionManager.buildRealtimeInstructions({
-    session,
-    settings: session.settingsSnapshot,
-    speakerUserId: null,
-    transcript: "",
-    memorySlice: null
-  });
-
-  assert.equal(instructions.includes("Re-evaluate whether a brief casual greeting still fits right now."), false);
-  assert.equal(instructions.includes("You just joined this voice channel."), false);
 });
 
 test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript for all capture reasons", () => {
@@ -2571,7 +2346,7 @@ test("getReplyOutputLockState clears stale active realtime response once playbac
 });
 
 test("clearStaleRealtimeResponse skips clear when a fresh response replaced the stale one", () => {
-  const { manager, logs } = createManager();
+  const { manager } = createManager();
   let activeResponseId: string | null = "stale_resp_1";
   const session = createSession({
     mode: "openai_realtime",

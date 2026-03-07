@@ -211,12 +211,6 @@ export type VoiceSession = {
       msSinceDirectAddress: number | null;
       windowMs: number;
     };
-    joinGreetingOpportunity: {
-      active: boolean;
-      ageMs: number;
-      windowMs: number;
-      greetingPending?: boolean;
-    };
     thoughtEngine: {
       busy: boolean;
       nextAttemptAt: string | null;

@@ -561,13 +561,6 @@ export type DeferredVoiceAction =
     | DeferredInterruptedReplyAction
     | DeferredQueuedUserTurnsAction;
 
-export interface JoinGreetingOpportunityState {
-    trigger: string | null;
-    armedAt: number;
-    fireAt: number;
-    expiresAt: number;
-}
-
 export interface VoiceCommandState {
     userId: string | null;
     domain: string | null;

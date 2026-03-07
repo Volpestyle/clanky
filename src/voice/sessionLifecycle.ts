@@ -64,11 +64,6 @@ type SessionLifecycleHost = VoiceToolCallManager & Pick<
   captureManager: Pick<CaptureManager, "startInboundCapture">;
   instructionManager: Pick<InstructionManager, "scheduleRealtimeInstructionRefresh">;
   deferredActionQueue: Pick<DeferredActionQueue, "clearAllDeferredVoiceActions">;
-  armJoinGreetingOpportunity: (
-    session: VoiceSession,
-    args?: { trigger?: string | null; userId?: string | null; displayName?: string | null }
-  ) => unknown;
-  clearJoinGreetingOpportunity: (session: VoiceSession) => void;
   replyManager: Pick<
     ReplyManager,
     | "armResponseSilenceWatchdog"
@@ -294,7 +289,6 @@ export class SessionLifecycle {
 
   clearSessionRuntimeState(session: VoiceSession | null | undefined) {
     if (!session) return;
-    this.host.clearJoinGreetingOpportunity(session);
     this.host.clearVoiceThoughtLoopTimer(session);
     session.thoughtLoopBusy = false;
     session.pendingResponse = null;
@@ -430,10 +424,6 @@ export class SessionLifecycle {
       session.playbackArmedReason = reason;
       session.playbackArmedAt = Date.now();
       this.host.replyManager.syncAssistantOutputState(session, "vox_playback_armed");
-      if (reason !== "connection_ready") return;
-      this.host.armJoinGreetingOpportunity(session, {
-        trigger: "connection_ready"
-      });
     };
 
     const onMusicIdle = () => {

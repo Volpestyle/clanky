@@ -105,8 +105,6 @@ export interface ReplyManagerHost {
     | "recheckDeferredVoiceActions"
     | "clearAllDeferredVoiceActions"
   >;
-  maybeFireJoinGreetingOpportunity: (session: VoiceSession, reason?: string) => void;
-  clearJoinGreetingOpportunity: (session: VoiceSession) => void;
   hasReplayBlockingActiveCapture: (session: VoiceSession) => boolean;
   endSession: (args: {
     guildId: string;
@@ -615,7 +613,6 @@ export class ReplyManager {
       session,
       reason: "pending_response_cleared"
     });
-    this.host.maybeFireJoinGreetingOpportunity(session, "pending_response_cleared");
   }
 
   isRealtimeResponseActive(session: VoiceSession) {
@@ -739,7 +736,6 @@ export class ReplyManager {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
     this.host.deferredActionQueue.clearAllDeferredVoiceActions(session);
-    this.host.clearJoinGreetingOpportunity(session);
     if (emitCreateEvent && this.isRealtimeResponseActive(session)) {
       this.host.store.logAction({
         kind: "voice_runtime",

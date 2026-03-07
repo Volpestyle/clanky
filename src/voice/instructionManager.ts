@@ -207,11 +207,6 @@ export type InstructionManagerHost = VoiceToolCallManager & {
     session: VoiceSession
   ) => MusicDisambiguationPromptContext | null;
   getMusicPromptContext: (session: VoiceSession) => MusicPromptContext | null;
-  getJoinGreetingOpportunity: (session: VoiceSession) => unknown;
-  scheduleJoinGreetingOpportunity: (
-    session: VoiceSession,
-    args?: { delayMs?: number; reason?: string }
-  ) => void;
 };
 
 export class InstructionManager {
@@ -562,15 +557,6 @@ export class InstructionManager {
           instructionsChars: instructions.length
         }
       });
-
-      const joinGreetingOpportunity = this.host.getJoinGreetingOpportunity(session) as { fireAt?: number } | null;
-      if (joinGreetingOpportunity && session.playbackArmed) {
-        const delayMs = Math.max(0, Number(joinGreetingOpportunity.fireAt || 0) - Date.now());
-        this.host.scheduleJoinGreetingOpportunity(session, {
-          delayMs,
-          reason: "join_greeting_grace"
-        });
-      }
     } catch (error) {
       this.store.logAction({
         kind: "voice_error",

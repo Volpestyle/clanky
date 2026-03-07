@@ -155,4 +155,4 @@ Ambient-noise triage:
 - repeated `voice_activity_started` followed by `voice_realtime_transcription_empty` or `openai_realtime_asr_bridge_empty_dropped` usually means local promotion is still too permissive for the room
 - repeated `voice_turn_dropped_provisional_capture` means the new provisional gate is working and the noise is being rejected before it becomes a turn
 - if `openai_realtime_asr_speech_started` never appears for a promoted turn and `promotionReason=strong_local_audio`, the fallback path promoted without server VAD confirmation
-- if a join greeting fires but no greeting is heard, check `realtime_reply_skipped` for `source=voice_join_greeting`; a fired join greeting now retries once, but a persistent `empty_reply_text` still means the brain path produced no spoken output
+- if promoted turns keep interrupting ambient bot speech, check `voice_system_speech_cancelled_for_user_speech` together with `realtime_reply_skipped` to confirm the thought path was preempted before audio

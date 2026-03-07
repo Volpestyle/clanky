@@ -3,13 +3,9 @@ import { resolveMemoryToolNamespaceScope } from "../memory/memoryToolRuntime.ts"
 import {
   applyOrchestratorOverrideSettings,
   getBotNameAliases,
-  getFollowupSettings,
   getReplyGenerationSettings,
   getResolvedOrchestratorBinding,
-  getResolvedVoiceAdmissionClassifierBinding,
-  getResolvedVoiceInitiativeBinding,
   getVoiceConversationPolicy,
-  getVoiceInitiativeSettings,
   getVoiceRuntimeConfig,
 } from "../settings/agentStack.ts";
 import {
@@ -18,16 +14,9 @@ import {
   interpolatePromptTemplate
 } from "../prompts/promptCore.ts";
 import { clamp } from "../utils.ts";
-import type { ActiveReplyRegistry } from "../tools/activeReplyRegistry.ts";
 import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
 import { hasBotNameCue } from "../bot/directAddressConfidence.ts";
 import { SoundboardDirector } from "./soundboardDirector.ts";
-import {
-  defaultVoiceReplyDecisionModel,
-  normalizeVoiceReplyDecisionProvider,
-  parseVoiceThoughtDecisionContract
-} from "./voiceDecisionRuntime.ts";
-import { defaultModelForLlmProvider, normalizeLlmProvider } from "../llm/llmHelpers.ts";
 import { createMusicPlaybackProvider } from "./musicPlayback.ts";
 import { createMusicSearchProvider } from "./musicSearch.ts";
 import { createDiscordMusicPlayer } from "./musicPlayer.ts";
@@ -89,18 +78,14 @@ import {
   getOrCreatePerUserAsrState
 } from "./voiceAsrBridge.ts";
 import {
-  SOUNDBOARD_MAX_CANDIDATES,
   buildRealtimeTextUtterancePrompt,
   encodePcm16MonoAsWav,
-  extractSoundboardDirective,
   formatVoiceChannelEffectSummary,
-  formatRealtimeMemoryFacts,
   isRealtimeMode,
   normalizeInlineText,
   normalizeVoiceAddressingTargetToken,
   normalizeVoiceText,
   parseSoundboardDirectiveSequence,
-  resolveRealtimeProvider,
   shortError
 } from "./voiceSessionHelpers.ts";
 import {
@@ -146,10 +131,7 @@ import {
 } from "./voiceThoughtGeneration.ts";
 import { buildVoiceRuntimeSnapshot } from "./voiceRuntimeSnapshot.ts";
 import {
-  SYSTEM_SPEECH_SOURCE,
   resolveSystemSpeechOpportunityType,
-  resolveSystemSpeechReplyAccountingOnLocalPlayback,
-  resolveSystemSpeechReplyAccountingOnRequest,
   shouldCancelSystemSpeechBeforeAudioOnPromotedUserSpeech,
   shouldSupersedeSystemSpeechBeforePlayback
 } from "./systemSpeechOpportunity.ts";
@@ -174,8 +156,6 @@ import {
   LEAVE_DIRECTIVE_PLAYBACK_NO_SIGNAL_GRACE_MS,
   LEAVE_DIRECTIVE_PLAYBACK_POLL_MS,
   LEAVE_DIRECTIVE_REALTIME_AUDIO_START_WAIT_MS,
-  JOIN_GREETING_OPPORTUNITY_WINDOW_MS,
-  REALTIME_CONTEXT_MEMBER_LIMIT,
   OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS,
   OPENAI_TOOL_RESPONSE_DEBOUNCE_MS,
   SPEAKING_END_ADAPTIVE_BUSY_BACKLOG,
@@ -190,7 +170,6 @@ import {
   SPEAKING_END_FINALIZE_SHORT_MS,
   SPEAKING_END_MICRO_CAPTURE_MS,
   SPEAKING_END_SHORT_CAPTURE_MS,
-  STT_CONTEXT_MAX_MESSAGES,
   STT_REPLY_MAX_CHARS,
   STT_TRANSCRIPT_MAX_CHARS,
   VOICE_CHANNEL_EFFECT_EVENT_FRESH_MS,
@@ -204,9 +183,6 @@ import {
   VOICE_THOUGHT_LOOP_MAX_SILENCE_SECONDS,
   VOICE_THOUGHT_LOOP_MIN_INTERVAL_SECONDS,
   VOICE_THOUGHT_LOOP_MIN_SILENCE_SECONDS,
-  VOICE_THOUGHT_MAX_CHARS,
-  VOICE_THOUGHT_MEMORY_SEARCH_LIMIT,
-  VOICE_THOUGHT_DECISION_MAX_OUTPUT_TOKENS,
   VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS,
   VOICE_DECIDER_HISTORY_MAX_TURNS,
   VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS,
@@ -217,11 +193,6 @@ import {
   VOICE_TURN_PROMOTION_STRONG_LOCAL_ACTIVE_RATIO_MIN,
   VOICE_TURN_PROMOTION_STRONG_LOCAL_PEAK_MIN,
   VOICE_TURN_PROMOTION_STRONG_LOCAL_RMS_MIN,
-  VOICE_SILENCE_GATE_ACTIVE_RATIO_MAX,
-  VOICE_SILENCE_GATE_ACTIVE_SAMPLE_MIN_ABS,
-  VOICE_SILENCE_GATE_MIN_CLIP_MS,
-  VOICE_SILENCE_GATE_PEAK_MAX,
-  VOICE_SILENCE_GATE_RMS_MAX,
   VOICE_LOOKUP_BUSY_MAX_CHARS,
   VOICE_TURN_MIN_ASR_CLIP_MS
 } from "./voiceSessionManager.constants.ts";
@@ -236,7 +207,6 @@ import {
 import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
 import { executeLocalVoiceToolCall } from "./voiceToolCallDispatch.ts";
 import type {
-  JoinGreetingOpportunityState,
   OutputChannelState,
   VoiceSession
 } from "./voiceSessionTypes.ts";
@@ -547,7 +517,6 @@ export class VoiceSessionManager {
   bargeInController;
   captureManager;
   deferredActionQueue;
-  pendingJoinGreetingEvents;
   instructionManager;
   replyManager;
   sessionLifecycle;
@@ -599,7 +568,6 @@ export class VoiceSessionManager {
     this.bargeInController = new BargeInController(this);
     this.captureManager = new CaptureManager(this);
     this.deferredActionQueue = new DeferredActionQueue(this);
-    this.pendingJoinGreetingEvents = new WeakMap();
     this.instructionManager = new InstructionManager(this);
     this.replyManager = new ReplyManager(this);
     this.sessionLifecycle = new SessionLifecycle(this);
@@ -704,186 +672,10 @@ export class VoiceSessionManager {
     return Boolean(this.getSession(guildId));
   }
 
-  getJoinGreetingOpportunity(session) {
-    return this.pendingJoinGreetingEvents.get(session)?.opportunity || null;
-  }
-
-  hasPendingJoinGreetingEvent(session) {
-    return Boolean(this.getJoinGreetingOpportunity(session));
-  }
-
-  clearJoinGreetingTimer(session) {
-    const pending = this.pendingJoinGreetingEvents.get(session) || null;
-    if (!pending?.timer) return;
-    clearTimeout(pending.timer);
-    pending.timer = null;
-  }
-
-  clearJoinGreetingOpportunity(session) {
-    if (!session) return;
-    this.clearJoinGreetingTimer(session);
-    this.pendingJoinGreetingEvents.delete(session);
-  }
-
-  armJoinGreetingOpportunity(session, { trigger = "connection_ready", userId = null, displayName = null } = {}) {
-    if (!session || session.ending) return null;
-    if (!isRealtimeMode(session.mode)) return null;
-    const now = Date.now();
-    const expiresAt = Math.max(0, Number(session.startedAt || 0)) + JOIN_GREETING_OPPORTUNITY_WINDOW_MS;
-    if (expiresAt > 0 && now >= expiresAt) {
-      this.clearJoinGreetingOpportunity(session);
-      return null;
-    }
-    const opportunity = {
-      trigger: String(trigger || "connection_ready").trim() || "connection_ready",
-      armedAt: now,
-      fireAt: now,
-      expiresAt,
-      userId: String(userId || "").trim() || null,
-      displayName: String(displayName || "").trim() || null
-    };
-    this.clearJoinGreetingOpportunity(session);
-    this.pendingJoinGreetingEvents.set(session, { opportunity, timer: null });
-    if (session.lastOpenAiRealtimeInstructions) {
-      this.scheduleJoinGreetingOpportunity(session, {
-        delayMs: 0,
-        reason: "join_greeting_armed"
-      });
-    }
-    return opportunity;
-  }
-
-  scheduleJoinGreetingOpportunity(session, { delayMs = 0, reason = "scheduled_recheck" } = {}) {
-    if (!session || session.ending) return;
-    const pending = this.pendingJoinGreetingEvents.get(session) || null;
-    if (!pending) return;
-    this.clearJoinGreetingTimer(session);
-    pending.timer = setTimeout(() => {
-      pending.timer = null;
-      this.maybeFireJoinGreetingOpportunity(session, reason);
-    }, Math.max(0, Number(delayMs) || 0));
-  }
-
-  canFireJoinGreetingOpportunity(session, opportunity = null) {
-    if (!session || session.ending) return "session_inactive";
-    if (!isRealtimeMode(session.mode)) return "wrong_mode";
-    const pendingOpportunity = opportunity || this.getJoinGreetingOpportunity(session);
-    if (!pendingOpportunity) return "no_opportunity";
-    const now = Date.now();
-    const expiresAt = Math.max(0, Number(pendingOpportunity.expiresAt || 0));
-    if (expiresAt > 0 && now >= expiresAt) return "expired";
-    if (!session.playbackArmed) return "playback_not_armed";
-    if (!session.lastOpenAiRealtimeInstructions) return "instructions_not_ready";
-    const fireAt = Math.max(0, Number(pendingOpportunity.fireAt || 0));
-    if (fireAt > now) return "not_before_at";
-    return this.getOutputChannelState(session).deferredBlockReason;
-  }
-
-  async processVoiceRuntimeEvent({
-    session,
-    settings,
-    userId = null,
-    transcript = "",
-    inputKind = "event",
-    source = SYSTEM_SPEECH_SOURCE.JOIN_GREETING,
-    eventAt = Date.now(),
-    forceFresh = false
-  }) {
-    if (!session || session.ending) return false;
-    if (forceFresh) {
-      const newerInboundAudio = Number(session.lastInboundAudioAt || 0);
-      if (newerInboundAudio > Number(eventAt || 0)) return false;
-    }
-    const decision = await this.evaluateVoiceReplyDecision({
-      session,
-      settings,
-      userId,
-      transcript,
-      inputKind,
-      source
-    });
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId,
-      content: "voice_runtime_event_decision",
-      metadata: {
-        sessionId: session.id,
-        mode: session.mode,
-        inputKind,
-        source,
-        transcript: decision.transcript || transcript || null,
-        allow: Boolean(decision.allow),
-        reason: decision.reason,
-        participantCount: Number(decision.participantCount || 0)
-      }
-    });
-    if (!decision.allow) return false;
-    return await this.runRealtimeBrainReply({
-      session,
-      settings,
-      userId,
-      transcript,
-      inputKind,
-      directAddressed: Boolean(decision.directAddressed),
-      directAddressConfidence: Number(decision.directAddressConfidence),
-      conversationContext: decision.conversationContext || null,
-      source
-    });
-  }
-
-  async maybeFireJoinGreetingOpportunity(session, reason = "manual") {
-    const opportunity = this.getJoinGreetingOpportunity(session);
-    const blockReason = this.canFireJoinGreetingOpportunity(session, opportunity);
-    if (blockReason === "not_before_at") {
-      const delayMs = Math.max(0, Number(opportunity?.fireAt || 0) - Date.now());
-      this.scheduleJoinGreetingOpportunity(session, { delayMs, reason });
-      return false;
-    }
-    if (blockReason === "instructions_not_ready") return false;
-    if (blockReason) {
-      this.clearJoinGreetingOpportunity(session);
-      return false;
-    }
-    if (!opportunity) return false;
-    const transcript = opportunity.displayName
-      ? `[${opportunity.displayName} joined the voice channel]`
-      : "[YOU joined the voice channel]";
-    const allow = await this.processVoiceRuntimeEvent({
-      session,
-      settings: session.settingsSnapshot || this.store.getSettings(),
-      userId: opportunity.userId,
-      transcript,
-      inputKind: "event",
-      source: SYSTEM_SPEECH_SOURCE.JOIN_GREETING,
-      eventAt: Number(opportunity.armedAt || Date.now()),
-      forceFresh: true
-    });
-    this.clearJoinGreetingOpportunity(session);
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: this.client.user?.id || null,
-      content: "voice_join_greeting_evaluated",
-      metadata: {
-        sessionId: session.id,
-        mode: session.mode,
-        trigger: String(opportunity.trigger || "join_greeting"),
-        fireReason: String(reason || "manual"),
-        transcript,
-        allow
-      }
-    });
-    return allow;
-  }
-
   getRuntimeState() {
     return buildVoiceRuntimeSnapshot(this.sessions, {
       client: this.client,
       replyManager: this.replyManager,
-      hasPendingJoinGreetingEvent: (session) => this.hasPendingJoinGreetingEvent(session),
       deferredActionQueue: this.deferredActionQueue,
       getVoiceChannelParticipants: (session) => this.getVoiceChannelParticipants(session),
       getRecentVoiceMembershipEvents: (session, args) => this.getRecentVoiceMembershipEvents(session, args),
@@ -1932,7 +1724,7 @@ export class VoiceSessionManager {
         sessionId: session.id,
         opportunityType: pendingOpportunityType,
         source: String(source || "capture_promoted"),
-        pendingSource: String(pending.source || SYSTEM_SPEECH_SOURCE.JOIN_GREETING),
+        pendingSource: String(pending.source || "unknown"),
         pendingRequestId: Number(pending.requestId || 0) || null,
         captureStartedAt: Math.max(0, Number(captureState?.startedAt || 0)) || null,
         capturePromotedAt: Math.max(0, Number(captureState?.promotedAt || now)) || null,
@@ -3265,7 +3057,6 @@ export class VoiceSessionManager {
         session,
         reason: "empty_asr_bridge_drop"
       });
-      this.maybeFireJoinGreetingOpportunity(session, "empty_asr_bridge_drop");
       return false;
     }
 
@@ -5090,13 +4881,6 @@ export class VoiceSessionManager {
           displayName: stateMember?.displayName || stateMember?.user?.globalName || stateMember?.user?.username || ""
         });
         if (recordedEvent) {
-          if (recordedEvent.eventType === "join") {
-            this.armJoinGreetingOpportunity(session, {
-              trigger: "participant_join",
-              userId: recordedEvent.userId,
-              displayName: recordedEvent.displayName
-            });
-          }
           this.store.logAction({
             kind: "voice_runtime",
             guildId,

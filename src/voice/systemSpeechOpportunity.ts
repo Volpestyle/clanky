@@ -1,5 +1,4 @@
 export const SYSTEM_SPEECH_OPPORTUNITY = {
-  JOIN_GREETING: "join_greeting",
   THOUGHT: "thought"
 } as const;
 
@@ -7,7 +6,6 @@ export type SystemSpeechOpportunityType =
   typeof SYSTEM_SPEECH_OPPORTUNITY[keyof typeof SYSTEM_SPEECH_OPPORTUNITY];
 
 export const SYSTEM_SPEECH_SOURCE = {
-  JOIN_GREETING: "voice_join_greeting",
   THOUGHT: "voice_thought_engine",
   THOUGHT_TTS: "voice_thought_engine_tts"
 } as const;
@@ -35,16 +33,6 @@ type SystemSpeechOpportunityDefinition = {
 };
 
 const SYSTEM_SPEECH_OPPORTUNITY_DEFINITIONS: readonly SystemSpeechOpportunityDefinition[] = [
-  {
-    type: SYSTEM_SPEECH_OPPORTUNITY.JOIN_GREETING,
-    sourcePrefixes: [SYSTEM_SPEECH_SOURCE.JOIN_GREETING],
-    speechClass: SYSTEM_SPEECH_CLASS.SYSTEM_OPTIONAL,
-    cancelOnPromotedUserSpeechBeforePlayback: true,
-    liveCaptureSupersedeBeforePlayback: true,
-    allowSkipAfterFire: false,
-    replyAccountingOnRequest: "requested",
-    replyAccountingOnLocalPlayback: "spoken"
-  },
   {
     type: SYSTEM_SPEECH_OPPORTUNITY.THOUGHT,
     sourcePrefixes: [SYSTEM_SPEECH_SOURCE.THOUGHT, SYSTEM_SPEECH_SOURCE.THOUGHT_TTS],
@@ -85,12 +73,6 @@ export function isSystemSpeechOpportunitySource(
   source: string | null | undefined
 ): boolean {
   return resolveSystemSpeechOpportunityDefinition(source) !== null;
-}
-
-export function isJoinGreetingOpportunitySource(
-  source: string | null | undefined
-): boolean {
-  return resolveSystemSpeechOpportunityType(source) === SYSTEM_SPEECH_OPPORTUNITY.JOIN_GREETING;
 }
 
 export function shouldCancelSystemSpeechBeforeAudioOnPromotedUserSpeech(
