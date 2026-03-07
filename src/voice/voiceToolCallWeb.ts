@@ -1,17 +1,19 @@
 import { deepMerge, clamp } from "../utils.ts";
 import { getResearchRuntimeConfig } from "../settings/agentStack.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
-import type { VoiceRealtimeToolSettings, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
+import type { VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 
+type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
+
 type VoiceWebToolOptions = {
-  session?: VoiceToolRuntimeSessionLike | null;
+  session?: ToolRuntimeSession | null;
   settings?: VoiceRealtimeToolSettings | null;
   args?: VoiceToolCallArgs;
 };
 
 type VoiceWebScrapeToolOptions = {
-  session?: VoiceToolRuntimeSessionLike | null;
+  session?: ToolRuntimeSession | null;
   args?: VoiceToolCallArgs;
 };
 

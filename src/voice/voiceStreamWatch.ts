@@ -7,6 +7,7 @@ import {
   getVoiceStreamWatchSettings
 } from "../settings/agentStack.ts";
 import { buildRealtimeTextUtterancePrompt, isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
+import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
 import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 
 type StreamWatchManager = Pick<
@@ -15,11 +16,11 @@ type StreamWatchManager = Pick<
   | "llm"
   | "memory"
   | "resolveVoiceSpeakerName"
-  | "sendOperationalMessage"
   | "sessions"
   | "store"
   | "touchActivity"
 > & {
+  composeOperationalMessage?: VoiceSessionManager["composeOperationalMessage"];
   replyManager: Pick<VoiceSessionManager["replyManager"], "createTrackedAudioResponse">;
 };
 
@@ -195,7 +196,7 @@ function isStreamWatchPlaybackBusy(session) {
 }
 
 async function sendStreamWatchOfflineMessage(manager: StreamWatchManager, { message, settings, guildId, requesterId }) {
-  await manager.sendOperationalMessage({
+  await sendOperationalMessage(manager, {
     channel: message.channel,
     settings,
     guildId,
@@ -239,7 +240,7 @@ export async function requestWatchStream(manager: StreamWatchManager, { message,
   const { guildId, session, requesterId } = context;
 
   if (String(message.member?.voice?.channelId || "") !== String(session.voiceChannelId || "")) {
-    await manager.sendOperationalMessage({
+    await sendOperationalMessage(manager, {
       channel: message.channel,
       settings,
       guildId,
@@ -257,7 +258,7 @@ export async function requestWatchStream(manager: StreamWatchManager, { message,
 
   const streamWatchSettings = settings?.voice?.streamWatch || {};
   if (!streamWatchSettings.enabled) {
-    await manager.sendOperationalMessage({
+    await sendOperationalMessage(manager, {
       channel: message.channel,
       settings,
       guildId,
@@ -272,7 +273,7 @@ export async function requestWatchStream(manager: StreamWatchManager, { message,
   }
 
   if (!supportsStreamWatchCommentary(manager, session, settings)) {
-    await manager.sendOperationalMessage({
+    await sendOperationalMessage(manager, {
       channel: message.channel,
       settings,
       guildId,
@@ -295,7 +296,7 @@ export async function requestWatchStream(manager: StreamWatchManager, { message,
     targetUserId: String(targetUserId || requesterId || "").trim() || null
   });
 
-  await manager.sendOperationalMessage({
+  await sendOperationalMessage(manager, {
     channel: message.channel,
     settings,
     guildId,
@@ -926,7 +927,7 @@ export async function requestStopWatchingStream(manager: StreamWatchManager, { m
   const { guildId, session, requesterId } = context;
 
   if (!session.streamWatch?.active) {
-    await manager.sendOperationalMessage({
+    await sendOperationalMessage(manager, {
       channel: message.channel,
       settings,
       guildId,
@@ -949,7 +950,7 @@ export async function requestStopWatchingStream(manager: StreamWatchManager, { m
     persistMemory: true
   });
 
-  await manager.sendOperationalMessage({
+  await sendOperationalMessage(manager, {
     channel: message.channel,
     settings,
     guildId,
@@ -1042,7 +1043,7 @@ export async function requestStreamWatchStatus(manager: StreamWatchManager, { me
     ? Math.max(0, Math.floor((Date.now() - Number(streamWatch.lastBrainContextAt || 0)) / 1000))
     : null;
 
-  await manager.sendOperationalMessage({
+  await sendOperationalMessage(manager, {
     channel: message.channel,
     settings,
     guildId,

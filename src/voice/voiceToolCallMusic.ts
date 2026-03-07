@@ -1,9 +1,13 @@
 import { clamp } from "../utils.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
-import type { MusicSelectionResult, VoiceRealtimeToolSettings, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
+import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
+import type { MusicSelectionResult, VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
+
+type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
+
 type VoiceMusicToolOptions = {
-  session?: VoiceToolRuntimeSessionLike | null;
+  session?: ToolRuntimeSession | null;
   settings?: VoiceRealtimeToolSettings | null;
   args?: VoiceToolCallArgs;
 };
@@ -61,7 +65,7 @@ export async function executeVoiceMusicSearchTool(
   if (!query) return { ok: false, tracks: [], error: "query_required" };
   const maxResults = clamp(Math.floor(Number(args?.max_results || 5)), 1, 10);
   const searchResponse = await manager.musicSearch.search(query, { platform: "auto", limit: maxResults });
-  const runtimeSession = manager.ensureSessionToolRuntimeState(session);
+  const runtimeSession = ensureSessionToolRuntimeState(manager, session);
   const catalog = runtimeSession?.toolMusicTrackCatalog instanceof Map
     ? runtimeSession.toolMusicTrackCatalog
     : new Map<string, unknown>();
@@ -102,7 +106,7 @@ export async function executeVoiceMusicQueueAddTool(
   { session, settings, args }: VoiceMusicToolOptions
 ) {
   const queueState = manager.ensureToolMusicQueueState(session);
-  const runtimeSession = manager.ensureSessionToolRuntimeState(session);
+  const runtimeSession = ensureSessionToolRuntimeState(manager, session);
   if (!queueState || !runtimeSession) return { ok: false, queue_length: 0, added: [], error: "queue_unavailable" };
   const requestedTrackIds = Array.isArray(args?.tracks)
     ? args.tracks.map((entry) => normalizeInlineText(entry, 180)).filter(Boolean).slice(0, 12)
@@ -163,7 +167,7 @@ export async function executeVoiceMusicQueueNextTool(
   { session, settings, args }: VoiceMusicToolOptions
 ) {
   const queueState = manager.ensureToolMusicQueueState(session);
-  const runtimeSession = manager.ensureSessionToolRuntimeState(session);
+  const runtimeSession = ensureSessionToolRuntimeState(manager, session);
   if (!queueState || !runtimeSession) return { ok: false, queue_length: 0, added: [], error: "queue_unavailable" };
   const requestedTrackIds = Array.isArray(args?.tracks)
     ? args.tracks.map((entry) => normalizeInlineText(entry, 180)).filter(Boolean).slice(0, 12)
@@ -201,7 +205,7 @@ export async function executeVoiceMusicPlayNowTool(
   { session, settings, args }: VoiceMusicToolOptions
 ) {
   const queueState = manager.ensureToolMusicQueueState(session);
-  const runtimeSession = manager.ensureSessionToolRuntimeState(session);
+  const runtimeSession = ensureSessionToolRuntimeState(manager, session);
   const trackId = normalizeInlineText(args?.track_id, 180);
   if (!queueState || !runtimeSession) return { ok: false, error: "queue_unavailable" };
   if (!trackId) return { ok: false, error: "track_id_required" };

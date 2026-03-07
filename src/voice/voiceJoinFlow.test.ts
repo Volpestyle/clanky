@@ -47,7 +47,10 @@ function createMessage({ userId = "user-1", voiceChannelId = "voice-1", ...overr
       }
     },
     channel: {
-      id: "text-1"
+      id: "text-1",
+      async send() {
+        return true;
+      }
     },
     channelId: "text-1",
     author: userId
@@ -92,8 +95,9 @@ function createManager(overrides = {}) {
     async withJoinLock(_guildId, fn) {
       return await fn();
     },
-    async sendOperationalMessage(payload) {
+    async composeOperationalMessage(payload) {
       operationalMessages.push(payload);
+      return "ok";
     },
     touchActivityCalls: 0,
     touchActivity() {
@@ -252,7 +256,7 @@ test("requestJoin reports already_in_channel for existing same-channel session",
   assert.equal(result, true);
   assert.equal(manager.touchActivityCalls, 1);
   assert.equal(operationalMessages.at(-1)?.reason, "already_in_channel");
-  assert.equal(operationalMessages.at(-1)?.mustNotify, false);
+  assert.equal(operationalMessages.at(-1)?.allowSkip, true);
 });
 
 test("requestJoin requires API keys for realtime runtime modes", async () => {

@@ -32,32 +32,33 @@ import type { InstructionManager } from "./instructionManager.ts";
 import type { ReplyManager } from "./replyManager.ts";
 import type { ThoughtEngine } from "./thoughtEngine.ts";
 import type { VoiceSessionManager } from "./voiceSessionManager.ts";
+import { ensureAsrSessionConnected } from "./voiceAsrBridge.ts";
+import {
+  maybeTriggerAssistantDirectedSoundboard,
+  normalizeSoundboardRefs
+} from "./voiceSoundboard.ts";
+import { refreshRealtimeTools } from "./voiceToolCallInfra.ts";
+import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
+import type { VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 import { musicPhaseShouldAllowDucking, type VoiceSession } from "./voiceSessionTypes.ts";
 import { providerSupports } from "./voiceModes.ts";
 
-type SessionLifecycleHost = Pick<
+type SessionLifecycleHost = VoiceToolCallManager & Pick<
   VoiceSessionManager,
+  | "buildAsrBridgeDeps"
   | "clearVoiceThoughtLoopTimer"
-  | "client"
-  | "endSession"
   | "engageBotSpeechMusicDuck"
-  | "ensureOpenAiAsrSessionConnected"
-  | "ensureSessionMusicState"
-  | "ensureSessionToolRuntimeState"
   | "estimatePcm16MonoDurationMs"
   | "getMusicPhase"
   | "handleOpenAiRealtimeFunctionCallEvent"
   | "isAsrActive"
   | "isInboundCaptureSuppressed"
-  | "maybeTriggerAssistantDirectedSoundboard"
   | "musicPlayer"
-  | "normalizeSoundboardRefs"
   | "recordVoiceTurn"
-  | "refreshRealtimeTools"
   | "resolveSpeakingEndFinalizeDelayMs"
   | "sessions"
-  | "setMusicPhase"
-  | "store"
+  | "shouldUsePerUserTranscription"
+  | "soundboardDirector"
   | "touchActivity"
 > & {
   bargeInController: Pick<BargeInController, "isBargeInOutputSuppressed">;
@@ -81,7 +82,7 @@ type SessionLifecycleHost = Pick<
 };
 
 type SessionLifecycleSettings = VoiceSession["settingsSnapshot"];
-type RefreshRealtimeToolsArgs = NonNullable<Parameters<SessionLifecycleHost["refreshRealtimeTools"]>[0]>;
+type RefreshRealtimeToolsArgs = NonNullable<Parameters<typeof refreshRealtimeTools>[1]>;
 type RefreshRealtimeToolsSession = RefreshRealtimeToolsArgs["session"];
 type EndSessionArgs = Parameters<SessionLifecycleHost["endSession"]>[0];
 
@@ -218,7 +219,7 @@ export class SessionLifecycle {
       this.bindRealtimeHandlers(session, resolvedSettings);
     }
     if (providerSupports(session.mode || "", "updateTools")) {
-      await this.host.refreshRealtimeTools({
+      await refreshRealtimeTools(this.host, {
         session: session as RefreshRealtimeToolsSession,
         settings: resolvedSettings,
         reason: "session_start"
@@ -235,14 +236,15 @@ export class SessionLifecycle {
 
     if (
       session.perUserAsrEnabled &&
-      typeof this.host.ensureOpenAiAsrSessionConnected === "function" &&
+      this.host.shouldUsePerUserTranscription({ session, settings: resolvedSettings }) &&
       initialSpeakerUserId
     ) {
-      void this.host.ensureOpenAiAsrSessionConnected({
-        session,
-        settings: resolvedSettings,
-        userId: initialSpeakerUserId
-      }).catch((error) => {
+      void ensureAsrSessionConnected(
+        "per_user",
+        this.host.buildAsrBridgeDeps(session),
+        resolvedSettings,
+        initialSpeakerUserId
+      ).catch((error) => {
         this.logAsyncFailure({
           session,
           content: "voice_asr_session_connect_failed",
@@ -521,7 +523,7 @@ export class SessionLifecycle {
 
   bindRealtimeHandlers(session: VoiceSession, settings: SessionLifecycleSettings = session.settingsSnapshot) {
     if (!session?.realtimeClient) return;
-    this.host.ensureSessionToolRuntimeState(session);
+    ensureSessionToolRuntimeState(this.host, session);
     const runtimeLabel = getRealtimeRuntimeLabel(session.mode);
 
     const onAudioDelta = (audioBase64) => {
@@ -609,7 +611,7 @@ export class SessionLifecycle {
               references: []
             };
       const transcriptForLogs = String(parsedDirective?.text || transcript).trim();
-      const requestedSoundboardRefs = this.host.normalizeSoundboardRefs(parsedDirective?.references || []);
+      const requestedSoundboardRefs = normalizeSoundboardRefs(parsedDirective?.references || []);
       if (finalTranscriptEvent) {
         this.host.store.logAction({
           kind: "voice_runtime",
@@ -648,7 +650,7 @@ export class SessionLifecycle {
           let directiveIndex = 0;
           for (const requestedRef of requestedSoundboardRefs) {
             directiveIndex += 1;
-            await this.host.maybeTriggerAssistantDirectedSoundboard({
+            await maybeTriggerAssistantDirectedSoundboard(this.host, {
               session,
               settings: resolvedSettings,
               userId: this.host.client.user?.id || null,

@@ -102,7 +102,6 @@ function buildMusicPlayNowManager({
 
   const manager = {
     ensureToolMusicQueueState: () => queueState,
-    ensureSessionToolRuntimeState: () => ({ toolMusicTrackCatalog: catalog }),
     buildVoiceQueueStatePayload: () => ({ guildId: "guild-1", tracks: [], nowPlayingIndex: 0, isPaused: false }),
     requestPlayMusic: requestPlayMusicImpl
       ? (...args: unknown[]) => { calls.push({ method: "requestPlayMusic", args }); return requestPlayMusicImpl(); }
@@ -114,7 +113,8 @@ function buildMusicPlayNowManager({
     id: "voice-session-1",
     guildId: "guild-1",
     textChannelId: "channel-1",
-    lastOpenAiToolCallerUserId: "user-1"
+    lastOpenAiToolCallerUserId: "user-1",
+    toolMusicTrackCatalog: catalog
   };
 
   return { manager, session, calls, track };
@@ -207,14 +207,19 @@ test("music_play_now updates queue state synchronously before returning", async 
 
   const manager = {
     ensureToolMusicQueueState: () => queueState,
-    ensureSessionToolRuntimeState: () => ({ toolMusicTrackCatalog: catalog }),
     buildVoiceQueueStatePayload: () => null,
     requestPlayMusic: () => new Promise<void>(() => {}), // never resolves
     requestRealtimePromptUtterance: () => true
   };
 
   await executeVoiceMusicPlayNowTool(manager, {
-    session: { id: "s1", guildId: "g1", textChannelId: "tc1", lastOpenAiToolCallerUserId: null },
+    session: {
+      id: "s1",
+      guildId: "g1",
+      textChannelId: "tc1",
+      lastOpenAiToolCallerUserId: null,
+      toolMusicTrackCatalog: catalog
+    },
     settings: createTestSettings({}),
     args: { track_id: "track-abc" }
   });

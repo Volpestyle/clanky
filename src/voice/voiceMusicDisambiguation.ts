@@ -1,8 +1,12 @@
 import { normalizeInlineText, STT_TRANSCRIPT_MAX_CHARS } from "./voiceSessionHelpers.ts";
+import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
+import { executeVoiceMusicQueueAddTool, executeVoiceMusicQueueNextTool } from "./voiceToolCallMusic.ts";
+import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
 import type {
   MusicSelectionResult,
   VoiceToolRuntimeSessionLike
 } from "./voiceSessionTypes.ts";
+import type { VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 
 type VoiceMusicSettings = Record<string, unknown> | null;
 
@@ -33,7 +37,7 @@ type MusicRuntimeSnapshot = {
   } | null;
 } | null;
 
-export interface VoiceMusicDisambiguationHost {
+export type VoiceMusicDisambiguationHost = VoiceToolCallManager & {
   snapshotMusicRuntimeState: (
     session: VoiceToolRuntimeSessionLike | null | undefined
   ) => MusicRuntimeSnapshot;
@@ -45,46 +49,13 @@ export interface VoiceMusicDisambiguationHost {
     userId: string,
     args?: { domain?: string | null }
   ) => boolean;
-  requestPlayMusic: (args: {
-    guildId?: string | null;
-    channel?: unknown;
-    channelId?: string | null;
-    requestedByUserId?: string | null;
-    settings?: VoiceMusicSettings;
-    query?: string;
-    platform?: "youtube" | "soundcloud" | "discord" | "auto";
-    trackId?: string | null;
-    searchResults?: MusicSelectionResult[] | null;
-    reason?: string;
-    source?: string;
-    mustNotify?: boolean;
-  }) => Promise<unknown>;
-  ensureSessionToolRuntimeState: (
-    session: VoiceToolRuntimeSessionLike | null | undefined
-  ) => VoiceToolRuntimeSessionLike | null;
   clearMusicDisambiguationState: (
     session: VoiceToolRuntimeSessionLike | null | undefined
   ) => unknown;
-  executeVoiceMusicQueueNextTool: (args: {
-    session?: VoiceToolRuntimeSessionLike | null;
-    settings?: VoiceMusicSettings;
-    args: {
-      tracks: string[];
-    };
-  }) => Promise<unknown>;
-  executeVoiceMusicQueueAddTool: (args: {
-    session?: VoiceToolRuntimeSessionLike | null;
-    settings?: VoiceMusicSettings;
-    args: {
-      tracks: string[];
-      position: "end";
-    };
-  }) => Promise<unknown>;
   clearVoiceCommandSession: (
     session: VoiceToolRuntimeSessionLike | null | undefined
   ) => void;
-  sendOperationalMessage: (args: {
-    channel?: unknown;
+  composeOperationalMessage?: (args: {
     settings?: VoiceMusicSettings;
     guildId?: string | null;
     channelId?: string | null;
@@ -93,9 +64,9 @@ export interface VoiceMusicDisambiguationHost {
     event?: string;
     reason?: string | null;
     details?: Record<string, unknown>;
-    mustNotify?: boolean;
-  }) => Promise<unknown>;
-}
+    allowSkip?: boolean;
+  }) => Promise<unknown> | unknown;
+};
 
 export function describeMusicPromptAction(reason: unknown): MusicPromptAction {
   const normalizedReason = String(reason || "")
@@ -314,7 +285,7 @@ export async function completePendingMusicDisambiguationSelection(
     return true;
   }
 
-  const runtimeSession = host.ensureSessionToolRuntimeState(session);
+  const runtimeSession = ensureSessionToolRuntimeState(host, session);
   const catalog = runtimeSession?.toolMusicTrackCatalog instanceof Map
     ? runtimeSession.toolMusicTrackCatalog
     : new Map<string, MusicSelectionResult>();
@@ -324,7 +295,7 @@ export async function completePendingMusicDisambiguationSelection(
   catalog.set(selected.id, selected);
   host.clearMusicDisambiguationState(session);
   if (action === "queue_next") {
-    await host.executeVoiceMusicQueueNextTool({
+    await executeVoiceMusicQueueNextTool(host, {
       session,
       settings: resolvedSettings,
       args: {
@@ -332,7 +303,7 @@ export async function completePendingMusicDisambiguationSelection(
       }
     });
   } else {
-    await host.executeVoiceMusicQueueAddTool({
+    await executeVoiceMusicQueueAddTool(host, {
       session,
       settings: resolvedSettings,
       args: {
@@ -342,7 +313,7 @@ export async function completePendingMusicDisambiguationSelection(
     });
   }
   host.clearVoiceCommandSession(session);
-  await host.sendOperationalMessage({
+  await sendOperationalMessage(host, {
     channel,
     settings: resolvedSettings,
     guildId: session.guildId,
@@ -406,7 +377,7 @@ export async function maybeHandlePendingMusicDisambiguationTurn(
   if (/^(?:cancel|nevermind|never mind|nvm|forget it)$/i.test(text)) {
     host.clearMusicDisambiguationState(session);
     host.clearVoiceCommandSession(session);
-    await host.sendOperationalMessage({
+    await sendOperationalMessage(host, {
       channel,
       settings: settings || session.settingsSnapshot || null,
       guildId: session.guildId,

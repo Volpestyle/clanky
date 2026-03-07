@@ -8,6 +8,9 @@ import {
 } from "./voiceSessionManager.ts";
 import { STT_TURN_QUEUE_MAX, VOICE_TURN_MIN_ASR_CLIP_MS } from "./voiceSessionManager.constants.ts";
 import { SYSTEM_SPEECH_SOURCE } from "./systemSpeechOpportunity.ts";
+import { refreshRealtimeTools } from "./voiceToolCallInfra.ts";
+import { executeVoiceMemoryWriteTool } from "./voiceToolCallMemory.ts";
+import { buildRealtimeFunctionTools } from "./voiceToolCallToolRegistry.ts";
 
 function createManager({
   participantCount = 2,
@@ -3649,9 +3652,6 @@ test("runRealtimeBrainReply ends VC when model requests leave directive", async 
 test("runRealtimeBrainReply plays inline and trailing soundboard directives in order", async () => {
   const manager = createManager();
   const eventOrder = [];
-  manager.resolveSoundboardCandidates = async () => ({
-    candidates: []
-  });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
   manager.instructionManager.prepareRealtimeTurnContext = async () => {};
   manager.generateVoiceTurn = async () => ({
@@ -3665,8 +3665,9 @@ test("runRealtimeBrainReply plays inline and trailing soundboard directives in o
   manager.waitForLeaveDirectivePlayback = async () => {
     eventOrder.push("wait");
   };
-  manager.maybeTriggerAssistantDirectedSoundboard = async ({ requestedRef }) => {
-    eventOrder.push(`sound:${String(requestedRef)}`);
+  manager.soundboardDirector.play = async ({ soundId, sourceGuildId }) => {
+    eventOrder.push(`sound:${sourceGuildId ? `${soundId}@${sourceGuildId}` : soundId}`);
+    return { ok: true };
   };
 
   const session = {
@@ -3681,7 +3682,14 @@ test("runRealtimeBrainReply plays inline and trailing soundboard directives in o
     realtimeClient: {},
     recentVoiceTurns: [],
     membershipEvents: [],
-    settingsSnapshot: baseSettings()
+    settingsSnapshot: baseSettings({
+      voice: {
+        soundboard: {
+          enabled: true,
+          preferredSoundIds: ["airhorn@123", "rimshot@456"]
+        }
+      }
+    })
   };
 
   const result = await manager.runRealtimeBrainReply({
@@ -4519,17 +4527,6 @@ test("runSttPipelineReply triggers soundboard even when generated speech is empt
   const soundboardCalls = [];
   const spokenLines = [];
   manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
-  manager.resolveSoundboardCandidates = async () => ({
-    source: "preferred",
-    candidates: [
-      {
-        reference: "airhorn@123",
-        soundId: "airhorn",
-        sourceGuildId: "123",
-        name: "airhorn"
-      }
-    ]
-  });
   manager.generateVoiceTurn = async () => ({
     text: "",
     soundboardRefs: ["airhorn@123"]
@@ -4538,8 +4535,11 @@ test("runSttPipelineReply triggers soundboard even when generated speech is empt
     spokenLines.push(payload);
     return true;
   };
-  manager.maybeTriggerAssistantDirectedSoundboard = async (payload) => {
-    soundboardCalls.push(payload);
+  manager.soundboardDirector.play = async ({ soundId, sourceGuildId }) => {
+    soundboardCalls.push({
+      requestedRef: sourceGuildId ? `${soundId}@${sourceGuildId}` : soundId
+    });
+    return { ok: true };
   };
 
   const session = {
@@ -4553,7 +4553,8 @@ test("runSttPipelineReply triggers soundboard even when generated speech is empt
       voice: {
         replyEagerness: 60,
         soundboard: {
-          enabled: true
+          enabled: true,
+          preferredSoundIds: ["airhorn@123"]
         }
       }
     })
@@ -4679,10 +4680,6 @@ test("runSttPipelineReply plays inline soundboard directives in spoken order", a
   const spokenLines = [];
   const soundboardCalls = [];
   manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
-  manager.resolveSoundboardCandidates = async () => ({
-    source: "preferred",
-    candidates: []
-  });
   manager.generateVoiceTurn = async () => ({
     text: "yo [[SOUNDBOARD:airhorn@123]] hold up [[SOUNDBOARD:rimshot@456]] done"
   });
@@ -4691,8 +4688,9 @@ test("runSttPipelineReply plays inline soundboard directives in spoken order", a
     return true;
   };
   manager.waitForLeaveDirectivePlayback = async () => {};
-  manager.maybeTriggerAssistantDirectedSoundboard = async ({ requestedRef }) => {
-    soundboardCalls.push(String(requestedRef));
+  manager.soundboardDirector.play = async ({ soundId, sourceGuildId }) => {
+    soundboardCalls.push(sourceGuildId ? `${soundId}@${sourceGuildId}` : soundId);
+    return { ok: true };
   };
 
   const session = {
@@ -4702,7 +4700,14 @@ test("runSttPipelineReply plays inline soundboard directives in spoken order", a
     mode: "stt_pipeline",
     ending: false,
     recentVoiceTurns: [],
-    settingsSnapshot: baseSettings()
+    settingsSnapshot: baseSettings({
+      voice: {
+        soundboard: {
+          enabled: true,
+          preferredSoundIds: ["airhorn@123", "rimshot@456"]
+        }
+      }
+    })
   };
 
   await manager.runSttPipelineReply({
@@ -5586,7 +5591,7 @@ test("refreshRealtimeTools registers local and MCP tool definitions", async () =
       }
     }
   };
-  await manager.refreshRealtimeTools({
+  await refreshRealtimeTools(manager, {
     session,
     settings: baseSettings({
       memory: {
@@ -5682,7 +5687,7 @@ test("handleOpenAiRealtimeFunctionCallEvent executes music_now_playing and sends
     }
   };
 
-  session.openAiToolDefinitions = manager.buildRealtimeFunctionTools({
+  session.openAiToolDefinitions = buildRealtimeFunctionTools(manager, {
     session,
     settings: baseSettings({
       webSearch: {
@@ -5761,7 +5766,7 @@ test("handleOpenAiRealtimeFunctionCallEvent executes offer_screen_share_link and
     }
   };
 
-  session.openAiToolDefinitions = manager.buildRealtimeFunctionTools({
+  session.openAiToolDefinitions = buildRealtimeFunctionTools(manager, {
     session,
     settings: baseSettings()
   });
@@ -5812,7 +5817,7 @@ test("handleOpenAiRealtimeFunctionCallEvent ignores duplicate completed call ids
     }
   };
 
-  session.openAiToolDefinitions = manager.buildRealtimeFunctionTools({
+  session.openAiToolDefinitions = buildRealtimeFunctionTools(manager, {
     session,
     settings: baseSettings()
   });
@@ -5872,7 +5877,7 @@ test("executeVoiceMemoryWriteTool enforces write limit per fact across calls", a
     memoryWriteWindow: [now - 5_000, now - 4_000, now - 3_000, now - 2_000]
   };
 
-  const firstResult = await manager.executeVoiceMemoryWriteTool({
+  const firstResult = await executeVoiceMemoryWriteTool(manager, {
     session,
     settings: baseSettings({
       memory: {
@@ -5895,7 +5900,7 @@ test("executeVoiceMemoryWriteTool enforces write limit per fact across calls", a
   assert.equal(Array.isArray(session.memoryWriteWindow), true);
   assert.equal(session.memoryWriteWindow.length, 5);
 
-  const secondResult = await manager.executeVoiceMemoryWriteTool({
+  const secondResult = await executeVoiceMemoryWriteTool(manager, {
     session,
     settings: baseSettings({
       memory: {
@@ -5938,7 +5943,7 @@ test("executeVoiceMemoryWriteTool rejects abusive future-behavior memory request
     memoryWriteWindow: []
   };
 
-  const result = await manager.executeVoiceMemoryWriteTool({
+  const result = await executeVoiceMemoryWriteTool(manager, {
     session,
     settings: baseSettings({
       memory: {

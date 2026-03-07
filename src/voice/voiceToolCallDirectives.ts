@@ -2,11 +2,13 @@ import {
   executeSharedAdaptiveDirectiveAdd,
   executeSharedAdaptiveDirectiveRemove
 } from "../adaptiveDirectives/adaptiveDirectiveToolRuntime.ts";
-import type { VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
+import type { VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 
+type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
+
 type VoiceDirectiveToolOptions = {
-  session?: VoiceToolRuntimeSessionLike | null;
+  session?: ToolRuntimeSession | null;
   args?: VoiceToolCallArgs;
 };
 

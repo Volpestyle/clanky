@@ -98,17 +98,12 @@ function createManager({
   guildVoiceMembers = ["user-1"]
 } = {}) {
   const actions = [];
-  const operationalMessages = [];
   const touchCalls = [];
   const createdResponses = [];
   const memoryIngests = [];
   const memoryWrites = [];
   const manager = {
     sessions: new Map(),
-    sendOperationalMessage: async (payload) => {
-      operationalMessages.push(payload);
-      return true;
-    },
     store: {
       getSettings() {
         return settings;
@@ -187,7 +182,6 @@ function createManager({
   return {
     manager,
     actions,
-    operationalMessages,
     touchCalls,
     createdResponses,
     memoryIngests,

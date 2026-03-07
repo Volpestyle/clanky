@@ -14,6 +14,9 @@ import {
   resolveVoiceRuntimeMode,
   shortError
 } from "./voiceSessionHelpers.ts";
+import { buildVoiceInstructions } from "./voiceConfigResolver.ts";
+import { resolveSoundboardCandidates } from "./voiceSoundboard.ts";
+import { buildRealtimeFunctionTools, getVoiceMcpServerStatuses } from "./voiceToolCallToolRegistry.ts";
 import { providerSupports } from "./voiceModes.ts";
 import type { VoiceSession } from "./voiceSessionTypes.ts";
 import { createAssistantOutputState } from "./assistantOutputState.ts";
@@ -23,6 +26,7 @@ import {
   getVoiceSessionLimits,
   getVoiceSettings
 } from "../settings/agentStack.ts";
+import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
 
 const MIN_MAX_SESSION_MINUTES = 1;
 const MAX_MAX_SESSION_MINUTES = 120;
@@ -88,7 +92,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
 
   return await manager.withJoinLock(guildId, async () => {
     if (!voiceSettings.enabled) {
-      await manager.sendOperationalMessage({
+      await sendOperationalMessage(manager, {
         channel: message.channel,
         settings,
         guildId,
@@ -107,7 +111,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
 
     const blockedUsers = [...(voiceChannelPolicy.blockedUserIds || [])].map((value) => String(value));
     if (blockedUsers.includes(userId)) {
-      await manager.sendOperationalMessage({
+      await sendOperationalMessage(manager, {
         channel: message.channel,
         settings,
         guildId,
@@ -126,7 +130,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
 
     const memberVoiceChannel = message.member.voice?.channel;
     if (!memberVoiceChannel) {
-      await manager.sendOperationalMessage({
+      await sendOperationalMessage(manager, {
         channel: message.channel,
         settings,
         guildId,
@@ -146,7 +150,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
     const allowedChannels = [...(voiceChannelPolicy.allowedChannelIds || [])].map((value) => String(value));
 
     if (blockedChannels.includes(targetVoiceChannelId)) {
-      await manager.sendOperationalMessage({
+      await sendOperationalMessage(manager, {
         channel: message.channel,
         settings,
         guildId,
@@ -164,7 +168,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
     }
 
     if (allowedChannels.length > 0 && !allowedChannels.includes(targetVoiceChannelId)) {
-      await manager.sendOperationalMessage({
+      await sendOperationalMessage(manager, {
         channel: message.channel,
         settings,
         guildId,
@@ -187,7 +191,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const startedLastDay = manager.store.countActionsSince("voice_session_start", since24h);
       if (startedLastDay >= maxSessionsPerDay) {
-        await manager.sendOperationalMessage({
+        await sendOperationalMessage(manager, {
           channel: message.channel,
           settings,
           guildId,
@@ -210,7 +214,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
     if (existing) {
       if (existing.voiceChannelId === targetVoiceChannelId) {
         manager.touchActivity(guildId, settings);
-        await manager.sendOperationalMessage({
+        await sendOperationalMessage(manager, {
           channel: message.channel,
           settings,
           guildId,
@@ -240,7 +244,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
 
     const runtimeMode = resolveVoiceRuntimeMode(settings);
     if (runtimeMode === "voice_agent" && !manager.appConfig?.xaiApiKey) {
-      await manager.sendOperationalMessage({
+      await sendOperationalMessage(manager, {
         channel: message.channel,
         settings,
         guildId,
@@ -257,7 +261,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       return true;
     }
     if (runtimeMode === "openai_realtime" && !manager.appConfig?.openaiApiKey) {
-      await manager.sendOperationalMessage({
+      await sendOperationalMessage(manager, {
         channel: message.channel,
         settings,
         guildId,
@@ -274,7 +278,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       return true;
     }
     if (runtimeMode === "gemini_realtime" && !manager.appConfig?.geminiApiKey) {
-      await manager.sendOperationalMessage({
+      await sendOperationalMessage(manager, {
         channel: message.channel,
         settings,
         guildId,
@@ -291,7 +295,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       return true;
     }
     if (runtimeMode === "elevenlabs_realtime" && !manager.appConfig?.elevenLabsApiKey) {
-      await manager.sendOperationalMessage({
+      await sendOperationalMessage(manager, {
         channel: message.channel,
         settings,
         guildId,
@@ -311,7 +315,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       const elevenLabsSettings = voiceRuntime.elevenLabsRealtime;
       const elevenLabsAgentId = String(elevenLabsSettings?.agentId || "").trim();
       if (!elevenLabsAgentId) {
-        await manager.sendOperationalMessage({
+        await sendOperationalMessage(manager, {
           channel: message.channel,
           settings,
           guildId,
@@ -330,7 +334,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
     }
     if (runtimeMode === "stt_pipeline") {
       if (!manager.llm?.isAsrReady?.()) {
-        await manager.sendOperationalMessage({
+        await sendOperationalMessage(manager, {
           channel: message.channel,
           settings,
           guildId,
@@ -347,7 +351,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         return true;
       }
       if (!manager.llm?.isSpeechSynthesisReady?.()) {
-        await manager.sendOperationalMessage({
+        await sendOperationalMessage(manager, {
           channel: message.channel,
           settings,
           guildId,
@@ -364,7 +368,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         return true;
       }
       if (typeof manager.generateVoiceTurn !== "function") {
-        await manager.sendOperationalMessage({
+        await sendOperationalMessage(manager, {
           channel: message.channel,
           settings,
           guildId,
@@ -387,7 +391,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       voiceChannel: memberVoiceChannel
     });
     if (missingPermissionInfo) {
-      await manager.sendOperationalMessage({
+      await sendOperationalMessage(manager, {
         channel: message.channel,
         settings,
         guildId,
@@ -430,7 +434,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       if (!existing) {
         const activeOrPendingSessions = manager.sessions.size + manager.pendingSessionGuildIds.size;
         if (activeOrPendingSessions >= maxConcurrentSessions) {
-          await manager.sendOperationalMessage({
+          await sendOperationalMessage(manager, {
             channel: message.channel,
             settings,
             guildId,
@@ -461,14 +465,14 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       );
 
       // --- Pre-warm: connect realtime API while subprocess boots ---
-      const initialSoundboardCandidateInfo = await manager.resolveSoundboardCandidates({
+      const initialSoundboardCandidateInfo = await resolveSoundboardCandidates(manager, {
         settings,
         guild: message.guild
       });
       const initialSoundboardCandidates = Array.isArray(initialSoundboardCandidateInfo?.candidates)
         ? initialSoundboardCandidateInfo.candidates
         : [];
-      const baseVoiceInstructions = manager.buildVoiceInstructions(settings, {
+      const baseVoiceInstructions = buildVoiceInstructions(settings, {
         soundboardCandidates: initialSoundboardCandidates
       });
       const realtimeRuntimeLogger = createRealtimeRuntimeLogger(manager, {
@@ -520,7 +524,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
             ),
           inputTranscriptionLanguage: voiceAsrGuidance.language,
           inputTranscriptionPrompt: voiceAsrGuidance.prompt,
-          tools: manager.buildRealtimeFunctionTools({
+          tools: buildRealtimeFunctionTools(manager, {
             session: null,
             settings
           }),
@@ -671,7 +675,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         lastOpenAiToolCallerUserId: null,
         awaitingToolOutputs: false,
         toolCallEvents: [],
-        mcpStatus: manager.getVoiceMcpServerStatuses(),
+        mcpStatus: getVoiceMcpServerStatuses(manager),
         toolMusicTrackCatalog: new Map(),
         memoryWriteWindow: [],
         voiceCommandState: null,
@@ -851,7 +855,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         }
       }
 
-      await manager.sendOperationalMessage({
+      await sendOperationalMessage(manager, {
         channel: message.channel,
         settings,
         guildId,

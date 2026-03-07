@@ -36,9 +36,12 @@ import type {
   VoiceRealtimeToolDescriptor,
   VoiceRealtimeToolSettings,
   VoiceToolCallEvent,
+  VoiceSession,
   VoiceToolRuntimeSessionLike
 } from "./voiceSessionTypes.ts";
 import type { RealtimeFunctionTool, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
+
+type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
 
 const BASE_REALTIME_TOOL_SCHEMAS = [
   MEMORY_SEARCH_SCHEMA,
@@ -81,7 +84,7 @@ function shouldIncludeLocalRealtimeTool(name: string, options: {
 
 export function ensureSessionToolRuntimeState(
   manager: VoiceToolCallManager,
-  session: VoiceToolRuntimeSessionLike | null | undefined
+  session: ToolRuntimeSession | null | undefined
 ) {
   if (!session || typeof session !== "object") return null;
   if (!Array.isArray(session.toolCallEvents)) session.toolCallEvents = [];
@@ -91,7 +94,7 @@ export function ensureSessionToolRuntimeState(
   if (!(session.toolMusicTrackCatalog instanceof Map)) session.toolMusicTrackCatalog = new Map();
   if (!Array.isArray(session.memoryWriteWindow)) session.memoryWriteWindow = [];
   if (!session.mcpStatus || !Array.isArray(session.mcpStatus)) {
-    session.mcpStatus = manager.getVoiceMcpServerStatuses().map((entry) => ({ ...entry }));
+    session.mcpStatus = getVoiceMcpServerStatuses(manager).map((entry) => ({ ...entry }));
   }
   return session;
 }
@@ -150,7 +153,7 @@ export function getVoiceMcpServerStatuses(manager: VoiceToolCallManager) {
 
 export function resolveVoiceRealtimeToolDescriptors(
   manager: VoiceToolCallManager,
-  { session, settings }: { session?: VoiceToolRuntimeSessionLike | null; settings?: VoiceRealtimeToolSettings | null } = {}
+  { session, settings }: { session?: ToolRuntimeSession | null; settings?: VoiceRealtimeToolSettings | null } = {}
 ) {
   const localTools = BASE_REALTIME_TOOL_SCHEMAS.map((schema) => toRealtimeTool(schema));
   const screenShareCapability =
@@ -176,7 +179,7 @@ export function resolveVoiceRealtimeToolDescriptors(
     });
   }
 
-  const sessionState = manager.ensureSessionToolRuntimeState(session);
+  const sessionState = ensureSessionToolRuntimeState(manager, session);
   const mcpTools = (Array.isArray(sessionState?.mcpStatus) ? sessionState.mcpStatus : []).flatMap((server) => {
     const serverName = normalizeInlineText(server?.serverName, 80);
     if (!serverName) return [];
@@ -227,9 +230,9 @@ export function resolveVoiceRealtimeToolDescriptors(
 
 export function buildRealtimeFunctionTools(
   manager: VoiceToolCallManager,
-  { session, settings }: { session?: VoiceToolRuntimeSessionLike | null; settings?: VoiceRealtimeToolSettings | null } = {}
+  { session, settings }: { session?: ToolRuntimeSession | null; settings?: VoiceRealtimeToolSettings | null } = {}
 ): RealtimeFunctionTool[] {
-  return manager.resolveVoiceRealtimeToolDescriptors({ session, settings }).map((entry) => ({
+  return resolveVoiceRealtimeToolDescriptors(manager, { session, settings }).map((entry) => ({
     type: "function",
     name: entry.name,
     description: entry.description,
@@ -241,10 +244,10 @@ export function buildRealtimeFunctionTools(
 
 export function recordVoiceToolCallEvent(
   manager: VoiceToolCallManager,
-  { session, event }: { session?: VoiceToolRuntimeSessionLike | null; event?: VoiceToolCallEvent | null } = {}
+  { session, event }: { session?: ToolRuntimeSession | null; event?: VoiceToolCallEvent | null } = {}
 ) {
   if (!session || !event) return;
-  manager.ensureSessionToolRuntimeState(session);
+  ensureSessionToolRuntimeState(manager, session);
   const events = Array.isArray(session.toolCallEvents) ? session.toolCallEvents : [];
   events.push(event);
   session.toolCallEvents = events.length > OPENAI_TOOL_CALL_EVENT_MAX ? events.slice(-OPENAI_TOOL_CALL_EVENT_MAX) : events;
@@ -264,14 +267,14 @@ export function parseOpenAiRealtimeToolArguments(manager: VoiceToolCallManager, 
 
 export function resolveOpenAiRealtimeToolDescriptor(
   manager: VoiceToolCallManager,
-  session: VoiceToolRuntimeSessionLike | null | undefined,
+  session: ToolRuntimeSession | null | undefined,
   toolName = ""
 ) {
   const normalizedToolName = normalizeInlineText(toolName, 120);
   if (!normalizedToolName) return null;
   const configuredTools = Array.isArray(session?.openAiToolDefinitions)
     ? session.openAiToolDefinitions
-    : manager.buildRealtimeFunctionTools({
+    : buildRealtimeFunctionTools(manager, {
         session,
         settings: session?.settingsSnapshot || manager.store.getSettings()
       });

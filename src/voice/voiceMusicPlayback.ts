@@ -1,6 +1,7 @@
 import { ChatInputCommandInteraction } from "discord.js";
 import { normalizeInlineText, STT_TRANSCRIPT_MAX_CHARS, isVoiceTurnAddressedToBot, resolveVoiceAsrLanguageGuidance } from "./voiceSessionHelpers.ts";
 import { getVoiceConversationPolicy, getVoiceRuntimeConfig } from "../settings/agentStack.ts";
+import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
 
 import { clamp } from "lodash";
 import type { BargeInController } from "./bargeInController.ts";
@@ -86,6 +87,9 @@ export interface MusicPlaybackHost {
     user?: {
       id?: string | null;
     } | null;
+    channels: {
+      fetch: (channelId: string) => Promise<unknown>;
+    };
     guilds: {
       cache: {
         get: (guildId: string) => unknown;
@@ -108,8 +112,7 @@ export interface MusicPlaybackHost {
     session: VoiceSession;
     reason?: string;
   }) => void;
-  sendOperationalMessage: (args: {
-    channel?: unknown;
+  composeOperationalMessage?: (args: {
     settings?: MusicPlaybackSettings;
     guildId?: string | null;
     channelId?: string | null;
@@ -118,8 +121,8 @@ export interface MusicPlaybackHost {
     event?: string;
     reason?: string | null;
     details?: Record<string, unknown>;
-    mustNotify?: boolean;
-  }) => Promise<unknown>;
+    allowSkip?: boolean;
+  }) => Promise<unknown> | unknown;
   transcribePcmTurn: (args: {
     session: VoiceSession;
     userId: string;
@@ -824,7 +827,7 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
   const requestText = normalizeInlineText(message?.content || "", 220) || null;
 
   if (!session) {
-    await manager.sendOperationalMessage({
+    await sendOperationalMessage(manager, {
       channel: resolvedChannel,
       settings: resolvedSettings,
       guildId: resolvedGuildId,
@@ -896,7 +899,7 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
       }
     });
 
-    await manager.sendOperationalMessage({
+    await sendOperationalMessage(manager, {
       channel: resolvedChannel,
       settings: resolvedSettings,
       guildId: resolvedGuildId,
@@ -971,7 +974,7 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
   }
 
   if (!selectedResult && !playbackProviderConfigured) {
-    await manager.sendOperationalMessage({
+    await sendOperationalMessage(manager, {
       channel: resolvedChannel,
       settings: resolvedSettings,
       guildId: resolvedGuildId,
@@ -1037,7 +1040,7 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
           error: discordResult.error || null
         }
       });
-      await manager.sendOperationalMessage({
+      await sendOperationalMessage(manager, {
         channel: resolvedChannel,
         settings: resolvedSettings,
         guildId: resolvedGuildId,
@@ -1111,7 +1114,7 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
         message: playbackResult.message || null
       }
     });
-    await manager.sendOperationalMessage({
+    await sendOperationalMessage(manager, {
       channel: resolvedChannel,
       settings: resolvedSettings,
       guildId: resolvedGuildId,
@@ -1178,7 +1181,7 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
       trackUrl: playbackResult.track?.externalUrl || null
     }
   });
-  await manager.sendOperationalMessage({
+  await sendOperationalMessage(manager, {
     channel: resolvedChannel,
     settings: resolvedSettings,
     guildId: resolvedGuildId,
@@ -1274,7 +1277,7 @@ export async function requestStopMusic(manager: MusicPlaybackHost, {
   const normalizedRequestText = normalizeInlineText(requestText || message?.content || "", 220) || null;
 
   if (!session) {
-    await manager.sendOperationalMessage({
+    await sendOperationalMessage(manager, {
       channel: resolvedChannel,
       settings: resolvedSettings,
       guildId: resolvedGuildId,
@@ -1373,7 +1376,7 @@ export async function requestStopMusic(manager: MusicPlaybackHost, {
     !wasActive && String(source || "") === "voice_tool_call";
 
   if (!suppressOperationalMessage) {
-    await manager.sendOperationalMessage({
+    await sendOperationalMessage(manager, {
       channel: resolvedChannel,
       settings: resolvedSettings,
       guildId: resolvedGuildId,
@@ -1437,7 +1440,7 @@ export async function requestPauseMusic(manager: MusicPlaybackHost, {
   const normalizedRequestText = normalizeInlineText(requestText || message?.content || "", 220) || null;
 
   if (!session) {
-    await manager.sendOperationalMessage({
+    await sendOperationalMessage(manager, {
       channel: resolvedChannel,
       settings: resolvedSettings,
       guildId: resolvedGuildId,
@@ -1505,7 +1508,7 @@ export async function requestPauseMusic(manager: MusicPlaybackHost, {
     }
   });
 
-  await manager.sendOperationalMessage({
+  await sendOperationalMessage(manager, {
     channel: resolvedChannel,
     settings: resolvedSettings,
     guildId: resolvedGuildId,

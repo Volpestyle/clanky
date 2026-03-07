@@ -22,13 +22,15 @@ import {
   formatRealtimeMemoryFacts,
   normalizeVoiceText
 } from "./voiceSessionHelpers.ts";
+import { buildVoiceInstructions } from "./voiceConfigResolver.ts";
 import type {
   RealtimeInstructionMemorySlice,
   RealtimeTurnContextRefreshState,
   VoiceRealtimeToolSettings,
-  VoiceToolRuntimeSessionLike,
   VoiceSession
 } from "./voiceSessionTypes.ts";
+import { refreshRealtimeTools } from "./voiceToolCallInfra.ts";
+import type { VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 import { providerSupports } from "./voiceModes.ts";
 
 type InstructionSettings = VoiceRealtimeToolSettings | null;
@@ -160,39 +162,8 @@ interface BuildRealtimeMemorySliceArgs {
   transcript?: string;
 }
 
-export interface InstructionManagerHost {
-  client: {
-    user?: {
-      id?: string | null;
-    } | null;
-    guilds: {
-      cache: Map<
-        string,
-        {
-          name?: string | null;
-          channels?: {
-            cache?: Map<
-              string,
-              {
-                name?: string | null;
-              }
-            >;
-          };
-        }
-      >;
-    };
-  };
+export type InstructionManagerHost = VoiceToolCallManager & {
   store: InstructionStoreLike;
-  memory?: unknown;
-  refreshRealtimeTools: (args: {
-    session?: VoiceSession | VoiceToolRuntimeSessionLike | null;
-    settings?: InstructionSettings;
-    reason?: string;
-  }) => Promise<void>;
-  buildVoiceInstructions: (
-    settings?: InstructionSettings,
-    options?: { soundboardCandidates?: unknown[] }
-  ) => string;
   resolveVoiceSpeakerName: (session: VoiceSession, userId?: string | null) => string;
   getStreamWatchBrainContextForPrompt: (
     session: VoiceSession,
@@ -215,7 +186,7 @@ export interface InstructionManagerHost {
   ) => MusicDisambiguationPromptContext | null;
   getMusicPromptContext: (session: VoiceSession) => MusicPromptContext | null;
   greetingManager: Pick<GreetingManager, "getJoinGreetingOpportunity" | "scheduleJoinGreetingOpportunity">;
-}
+};
 
 export class InstructionManager {
   constructor(private readonly host: InstructionManagerHost) {}
@@ -525,7 +496,7 @@ export class InstructionManager {
     if (!updateInstructions) return;
 
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    await this.host.refreshRealtimeTools({
+    await refreshRealtimeTools(this.host, {
       session,
       settings: resolvedSettings,
       reason
@@ -596,7 +567,7 @@ export class InstructionManager {
     transcript = "",
     memorySlice = null
   }: BuildRealtimeInstructionsArgs) {
-    const baseInstructions = String(session?.baseVoiceInstructions || this.host.buildVoiceInstructions(settings)).trim();
+    const baseInstructions = String(session?.baseVoiceInstructions || buildVoiceInstructions(settings)).trim();
     const speakerName = this.host.resolveVoiceSpeakerName(session, speakerUserId);
     const normalizedTranscript = normalizeVoiceText(transcript, REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS);
     const streamWatchBrainContext = this.host.getStreamWatchBrainContextForPrompt(session, settings);

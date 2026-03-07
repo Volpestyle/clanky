@@ -79,28 +79,12 @@ import {
   supportsStreamWatchBrainContext,
   supportsVisionFallbackStreamWatchCommentary
 } from "./voiceStreamWatch.ts";
-import {
-  resolveOperationalChannel,
-  sendOperationalMessage,
-  sendToChannel
-} from "./voiceOperationalMessaging.ts";
+import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
 import {
   type AsrBridgeDeps,
-  type AsrBridgeState,
-  asrPhaseIsClosing,
-  ensureAsrSessionConnected,
-  beginAsrUtterance,
-  appendAudioToAsr,
-  commitAsrUtterance,
-  discardAsrUtterance,
-  scheduleAsrIdleClose,
   closeAllPerUserAsrSessions,
   closeSharedAsrSession,
-  closePerUserAsrSession,
-  releaseSharedAsrActiveUser,
-  tryHandoffSharedAsr,
-  getOrCreatePerUserAsrState,
-  getOrCreateSharedAsrState
+  getOrCreatePerUserAsrState
 } from "./voiceAsrBridge.ts";
 import {
   SOUNDBOARD_MAX_CANDIDATES,
@@ -118,16 +102,11 @@ import {
   shortError
 } from "./voiceSessionHelpers.ts";
 import {
-  analyzeMonoPcmSignal as analyzeMonoPcmSignalModule,
   estimateDiscordPcmPlaybackDurationMs as estimateDiscordPcmPlaybackDurationMsModule,
   estimatePcm16MonoDurationMs as estimatePcm16MonoDurationMsModule,
   evaluatePcmSilenceGate as evaluatePcmSilenceGateModule
 } from "./voiceAudioAnalysis.ts";
-import {
-  buildVoiceLatencyStageMetrics as buildVoiceLatencyStageMetricsModule,
-  computeLatencyMs as computeLatencyMsModule,
-  logVoiceLatencyStage as logVoiceLatencyStageModule
-} from "./voiceLatencyTracker.ts";
+import { logVoiceLatencyStage as logVoiceLatencyStageModule } from "./voiceLatencyTracker.ts";
 import {
   annotateLatestVoiceTurnAddressing as annotateLatestVoiceTurnAddressingModule,
   buildVoiceAddressingState as buildVoiceAddressingStateModule,
@@ -136,7 +115,6 @@ import {
   normalizeVoiceAddressingAnnotation as normalizeVoiceAddressingAnnotationModule
 } from "./voiceAddressing.ts";
 import {
-  buildVoiceInstructions as buildVoiceInstructionsModule,
   isAsrActive as isAsrActiveModule,
   resolveRealtimeReplyStrategy as resolveRealtimeReplyStrategyModule,
   shouldUseNativeRealtimeReply as shouldUseNativeRealtimeReplyModule,
@@ -145,7 +123,6 @@ import {
   shouldUseSharedTranscription as shouldUseSharedTranscriptionModule
 } from "./voiceConfigResolver.ts";
 import {
-  fetchGuildSoundboardCandidates as fetchGuildSoundboardCandidatesModule,
   maybeTriggerAssistantDirectedSoundboard as maybeTriggerAssistantDirectedSoundboardModule,
   normalizeSoundboardRefs as normalizeSoundboardRefsModule,
   resolveSoundboardCandidates as resolveSoundboardCandidatesModule
@@ -243,7 +220,15 @@ import {
   VOICE_TURN_MIN_ASR_CLIP_MS
 } from "./voiceSessionManager.constants.ts";
 import { providerSupports } from "./voiceModes.ts";
-import { ensureSessionToolRuntimeState, getVoiceMcpServerStatuses, resolveVoiceRealtimeToolDescriptors, buildRealtimeFunctionTools, recordVoiceToolCallEvent, parseOpenAiRealtimeToolArguments, resolveOpenAiRealtimeToolDescriptor, summarizeVoiceToolOutput, executeOpenAiRealtimeFunctionCall, refreshRealtimeTools, executeVoiceMemorySearchTool, executeVoiceMemoryWriteTool, executeVoiceAdaptiveStyleAddTool, executeVoiceAdaptiveStyleRemoveTool, executeVoiceConversationSearchTool, executeVoiceMusicSearchTool, executeVoiceMusicQueueAddTool, executeVoiceMusicQueueNextTool, executeVoiceMusicPlayNowTool, executeVoiceWebSearchTool, executeLocalVoiceToolCall, executeMcpVoiceToolCall } from "./voiceToolCalls.ts";
+import { executeOpenAiRealtimeFunctionCall } from "./voiceToolCallInfra.ts";
+import {
+  executeVoiceMusicPlayNowTool,
+  executeVoiceMusicQueueAddTool,
+  executeVoiceMusicQueueNextTool,
+  executeVoiceMusicSearchTool
+} from "./voiceToolCallMusic.ts";
+import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
+import { executeLocalVoiceToolCall } from "./voiceToolCallDispatch.ts";
 import type {
   OutputChannelState,
   VoiceSession
@@ -722,7 +707,7 @@ export class VoiceSessionManager {
 
     const guildId = String(message.guild.id);
     if (!this.sessions.has(guildId)) {
-      await this.sendOperationalMessage({
+      await sendOperationalMessage(this, {
         channel: message.channel,
         settings,
         guildId,
@@ -761,7 +746,7 @@ export class VoiceSessionManager {
       .slice(0, 220);
 
     if (!session) {
-      await this.sendOperationalMessage({
+      await sendOperationalMessage(this, {
         channel: message.channel,
         settings,
         guildId,
@@ -784,7 +769,7 @@ export class VoiceSessionManager {
       ? Math.max(0, Math.ceil((session.inactivityEndsAt - Date.now()) / 1000))
       : null;
 
-    await this.sendOperationalMessage({
+    await sendOperationalMessage(this, {
       channel: message.channel,
       settings: settings || session.settingsSnapshot,
       guildId,
@@ -1420,39 +1405,6 @@ export class VoiceSessionManager {
     });
   }
 
-  async maybeTriggerAssistantDirectedSoundboard({
-    session,
-    settings,
-    userId = null,
-    transcript = "",
-    requestedRef = "",
-    source = "voice_transcript"
-  }) {
-    return await maybeTriggerAssistantDirectedSoundboardModule(this, {
-      session,
-      settings: settings || session?.settingsSnapshot || this.store.getSettings(),
-      userId,
-      transcript,
-      requestedRef,
-      source
-    });
-  }
-
-  async resolveSoundboardCandidates({ session = null, settings, guild = null }) {
-    return await resolveSoundboardCandidatesModule(this, {
-      session,
-      settings,
-      guild
-    });
-  }
-
-  async fetchGuildSoundboardCandidates({ session = null, guild = null }) {
-    return await fetchGuildSoundboardCandidatesModule(this, {
-      session,
-      guild
-    });
-  }
-
   async stopAll(reason = "shutdown") {
     const guildIds = [...this.sessions.keys()];
     for (const guildId of guildIds) {
@@ -1624,10 +1576,7 @@ export class VoiceSessionManager {
     const normalizedUserId = String(capture.userId || "").trim();
     const utteranceId = Math.max(0, Number(capture.asrUtteranceId || 0));
     if (!normalizedUserId || !utteranceId) return false;
-    const asrState = this.getOrCreateOpenAiAsrSessionState({
-      session,
-      userId: normalizedUserId
-    });
+    const asrState = getOrCreatePerUserAsrState(session, normalizedUserId);
     if (!asrState || typeof asrState !== "object") return false;
     return (
       Math.max(0, Number(asrState.speechDetectedUtteranceId || 0)) === utteranceId &&
@@ -1858,7 +1807,7 @@ export class VoiceSessionManager {
         truncateItemId = latestItemId;
         truncateContentIndex = Math.max(0, Number(session.lastOpenAiAssistantAudioItemContentIndex || 0));
         const estimatedReceivedMs = Math.max(0, Number(session.lastOpenAiAssistantAudioItemReceivedMs || 0));
-        const estimatedUnplayedMs = this.estimateDiscordPcmPlaybackDurationMs(0);
+        const estimatedUnplayedMs = estimateDiscordPcmPlaybackDurationMsModule(0);
         truncateAudioEndMs = Math.max(0, Math.round(estimatedReceivedMs - estimatedUnplayedMs));
         try {
           truncateSucceeded = Boolean(
@@ -2519,10 +2468,6 @@ export class VoiceSessionManager {
     });
   }
 
-  normalizeSoundboardRefs(soundboardRefs = []) {
-    return normalizeSoundboardRefsModule(soundboardRefs);
-  }
-
   buildVoiceReplyPlaybackPlan({
     replyText = "",
     trailingSoundboardRefs = []
@@ -2562,7 +2507,7 @@ export class VoiceSessionManager {
       }
     }
 
-    for (const reference of this.normalizeSoundboardRefs(trailingSoundboardRefs)) {
+    for (const reference of normalizeSoundboardRefsModule(trailingSoundboardRefs)) {
       steps.push({
         type: "soundboard",
         reference
@@ -2831,7 +2776,7 @@ export class VoiceSessionManager {
           .slice(0, 180);
         if (!requestedRef) continue;
         soundboardStep += 1;
-        await this.maybeTriggerAssistantDirectedSoundboard({
+        await maybeTriggerAssistantDirectedSoundboardModule(this, {
           session,
           settings,
           userId: this.client.user?.id || null,
@@ -3064,121 +3009,6 @@ export class VoiceSessionManager {
     };
   }
 
-  getOpenAiSharedAsrState(session) {
-    return getOrCreateSharedAsrState(session);
-  }
-
-  getOpenAiAsrSessionMap(session) {
-    if (!session || session.ending) return null;
-    if (!(session.openAiAsrSessions instanceof Map)) {
-      session.openAiAsrSessions = new Map();
-    }
-    return session.openAiAsrSessions;
-  }
-
-  getOrCreateOpenAiAsrSessionState({ session, userId }) {
-    return getOrCreatePerUserAsrState(session, userId);
-  }
-
-  async ensureOpenAiAsrSessionConnected({ session, settings = null, userId }) {
-    if (!session || session.ending) return null;
-    if (!this.shouldUsePerUserTranscription({ session, settings })) return null;
-    return await ensureAsrSessionConnected(
-      "per_user",
-      this.buildAsrBridgeDeps(session),
-      settings,
-      userId
-    );
-  }
-
-  beginOpenAiAsrUtterance({ session, settings = null, userId }) {
-    if (!session || session.ending) return;
-    if (!this.shouldUsePerUserTranscription({ session, settings })) return;
-    beginAsrUtterance("per_user", session, this.buildAsrBridgeDeps(session), settings, userId);
-  }
-
-  appendAudioToOpenAiAsr({ session, settings = null, userId, pcmChunk }) {
-    if (!session || session.ending) return;
-    if (!this.shouldUsePerUserTranscription({ session, settings })) return;
-    appendAudioToAsr("per_user", session, this.buildAsrBridgeDeps(session), settings, userId, pcmChunk);
-  }
-
-  async commitOpenAiAsrUtterance({ session, settings = null, userId, captureReason = "stream_end" }) {
-    if (!session || session.ending) return null;
-    if (!this.shouldUsePerUserTranscription({ session, settings })) return null;
-    return commitAsrUtterance("per_user", this.buildAsrBridgeDeps(session), settings, userId, captureReason);
-  }
-
-  discardOpenAiAsrUtterance({ session, userId }) {
-    if (!session || session.ending) return false;
-    return discardAsrUtterance("per_user", session, userId);
-  }
-
-  scheduleOpenAiAsrSessionIdleClose({ session, userId }) {
-    scheduleAsrIdleClose("per_user", session, this.buildAsrBridgeDeps(session), userId);
-  }
-
-  async closeOpenAiAsrSession({ session, userId, reason = "manual" }) {
-    await closePerUserAsrSession(session, this.buildAsrBridgeDeps(session), userId, reason);
-  }
-
-  async closeAllOpenAiAsrSessions(session, reason = "session_end") {
-    await closeAllPerUserAsrSessions(session, this.buildAsrBridgeDeps(session), reason);
-  }
-
-  beginOpenAiSharedAsrUtterance({ session, settings = null, userId }) {
-    if (!session || session.ending) return false;
-    if (!this.shouldUseSharedTranscription({ session, settings })) return false;
-    return beginAsrUtterance("shared", session, this.buildAsrBridgeDeps(session), settings, userId);
-  }
-
-  appendAudioToOpenAiSharedAsr({ session, settings = null, userId, pcmChunk }) {
-    if (!session || session.ending) return false;
-    if (!this.shouldUseSharedTranscription({ session, settings })) return false;
-    return appendAudioToAsr("shared", session, this.buildAsrBridgeDeps(session), settings, userId, pcmChunk);
-  }
-
-  async commitOpenAiSharedAsrUtterance({ session, settings = null, userId, captureReason = "stream_end" }) {
-    if (!session || session.ending) return null;
-    if (!this.shouldUseSharedTranscription({ session, settings })) return null;
-    return commitAsrUtterance("shared", this.buildAsrBridgeDeps(session), settings, userId, captureReason);
-  }
-
-  discardOpenAiSharedAsrUtterance({ session, userId }) {
-    if (!session || session.ending) return false;
-    return discardAsrUtterance("shared", session, userId);
-  }
-
-  scheduleOpenAiSharedAsrSessionIdleClose(session) {
-    scheduleAsrIdleClose("shared", session, this.buildAsrBridgeDeps(session), "");
-  }
-
-  releaseOpenAiSharedAsrActiveUser(session, userId = null) {
-    releaseSharedAsrActiveUser(session, userId);
-  }
-
-  tryHandoffSharedAsrToWaitingCapture({ session, settings = null }) {
-    if (!session || session.ending) return false;
-    if (!this.shouldUseSharedTranscription({ session, settings })) return false;
-    const asrState = this.getOpenAiSharedAsrState(session) as AsrBridgeState | null;
-    if (!asrState || asrPhaseIsClosing(asrState.phase)) return false;
-    if (asrState.userId) return false;
-    const deps = this.buildAsrBridgeDeps(session);
-    return tryHandoffSharedAsr({
-      session,
-      asrState,
-      deps,
-      settings,
-      beginUtterance: (uid) => this.beginOpenAiSharedAsrUtterance({ session, settings, userId: uid }),
-      appendAudio: (uid, pcmChunk) => this.appendAudioToOpenAiSharedAsr({ session, settings, userId: uid, pcmChunk }),
-      releaseUser: (uid) => this.releaseOpenAiSharedAsrActiveUser(session, uid)
-    });
-  }
-
-  async closeOpenAiSharedAsrSession(session, reason = "manual") {
-    await closeSharedAsrSession(session, this.buildAsrBridgeDeps(session), reason);
-  }
-
   maybeHandleInterruptedReplyRecovery({
     session,
     userId = null,
@@ -3268,40 +3098,10 @@ export class VoiceSessionManager {
     return estimatePcm16MonoDurationMsModule(pcmByteLength, sampleRateHz);
   }
 
-  estimateDiscordPcmPlaybackDurationMs(pcmByteLength) {
-    return estimateDiscordPcmPlaybackDurationMsModule(pcmByteLength);
-  }
-
-  analyzeMonoPcmSignal(pcmBuffer) {
-    return analyzeMonoPcmSignalModule(pcmBuffer);
-  }
-
   evaluatePcmSilenceGate({ pcmBuffer, sampleRateHz = 24000 }) {
     return evaluatePcmSilenceGateModule({
       pcmBuffer,
       sampleRateHz
-    });
-  }
-
-  computeLatencyMs(startMs = 0, endMs = 0) {
-    return computeLatencyMsModule(startMs, endMs);
-  }
-
-  buildVoiceLatencyStageMetrics({
-    finalizedAtMs = 0,
-    asrStartedAtMs = 0,
-    asrCompletedAtMs = 0,
-    generationStartedAtMs = 0,
-    replyRequestedAtMs = 0,
-    audioStartedAtMs = 0
-  } = {}) {
-    return buildVoiceLatencyStageMetricsModule({
-      finalizedAtMs,
-      asrStartedAtMs,
-      asrCompletedAtMs,
-      generationStartedAtMs,
-      replyRequestedAtMs,
-      audioStartedAtMs
     });
   }
 
@@ -3678,7 +3478,7 @@ export class VoiceSessionManager {
     }
 
     const normalizedUserId = String(userId || "").trim() || null;
-    this.ensureSessionToolRuntimeState(session);
+    ensureSessionToolRuntimeState(this, session);
     if (normalizedUserId) {
       session.lastOpenAiToolCallerUserId = normalizedUserId;
     }
@@ -4241,7 +4041,7 @@ export class VoiceSessionManager {
     session,
     userId = null
   }: {
-    session?: VoiceToolRuntimeSessionLike | null;
+    session?: VoiceSession | VoiceToolRuntimeSessionLike | null;
     userId?: string | null;
   } = {}) {
     if (!session || session.ending) return;
@@ -4286,7 +4086,7 @@ export class VoiceSessionManager {
     if (!providerSupports(session.mode || "", "updateTools")) return;
     const envelope = this.extractOpenAiFunctionCallEnvelope(event);
     if (!envelope) return;
-    const runtimeSession = this.ensureSessionToolRuntimeState(session);
+    const runtimeSession = ensureSessionToolRuntimeState(this, session);
     if (!runtimeSession) return;
 
     const pendingCalls = runtimeSession.openAiPendingToolCalls;
@@ -4353,7 +4153,7 @@ export class VoiceSessionManager {
     session.awaitingToolOutputs = true;
     this.replyManager.syncAssistantOutputState(session, "tool_call_in_progress");
 
-    await this.executeOpenAiRealtimeFunctionCall({
+    await executeOpenAiRealtimeFunctionCall(this, {
       session,
       settings,
       pendingCall
@@ -4453,7 +4253,7 @@ export class VoiceSessionManager {
 
   updateVoiceMcpStatus(session, serverName, updates = {}) {
     if (!session || !serverName) return;
-    this.ensureSessionToolRuntimeState(session);
+    ensureSessionToolRuntimeState(this, session);
     const rows = Array.isArray(session.mcpStatus) ? session.mcpStatus : [];
     const index = rows.findIndex((row) => String(row?.serverName || "") === String(serverName));
     if (index < 0) return;
@@ -4635,7 +4435,7 @@ export class VoiceSessionManager {
       transcriptChars: normalizedTranscript.length,
       directAddressed: Boolean(directAddressed)
     });
-    const soundboardCandidateInfo = await this.resolveSoundboardCandidates({
+    const soundboardCandidateInfo = await resolveSoundboardCandidatesModule(this, {
       session,
       settings
     });
@@ -4745,7 +4545,7 @@ export class VoiceSessionManager {
         };
       }
       replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
-      requestedSoundboardRefs = this.normalizeSoundboardRefs(generatedPayload?.soundboardRefs);
+      requestedSoundboardRefs = normalizeSoundboardRefsModule(generatedPayload?.soundboardRefs);
       usedWebSearchFollowup = Boolean(generatedPayload?.usedWebSearchFollowup);
       usedOpenArticleFollowup = Boolean(generatedPayload?.usedOpenArticleFollowup);
       usedScreenShareOffer = Boolean(generatedPayload?.usedScreenShareOffer);
@@ -4965,7 +4765,7 @@ export class VoiceSessionManager {
       transcriptChars: normalizedTranscript.length,
       directAddressed: Boolean(directAddressed)
     });
-    const soundboardCandidateInfo = await this.resolveSoundboardCandidates({
+    const soundboardCandidateInfo = await resolveSoundboardCandidatesModule(this, {
       session,
       settings
     });
@@ -5120,7 +4920,7 @@ export class VoiceSessionManager {
     }
 
     const replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
-    const requestedSoundboardRefs = this.normalizeSoundboardRefs(generatedPayload?.soundboardRefs);
+    const requestedSoundboardRefs = normalizeSoundboardRefsModule(generatedPayload?.soundboardRefs);
     const usedWebSearchFollowup = Boolean(generatedPayload?.usedWebSearchFollowup);
     const usedOpenArticleFollowup = Boolean(generatedPayload?.usedOpenArticleFollowup);
     const usedScreenShareOffer = Boolean(generatedPayload?.usedScreenShareOffer);
@@ -5499,8 +5299,9 @@ export class VoiceSessionManager {
 
     this.sessionLifecycle.clearSessionRuntimeTimers(session);
     this.sessionLifecycle.clearSessionRuntimeState(session);
-    await this.closeAllOpenAiAsrSessions(session, "session_end");
-    await this.closeOpenAiSharedAsrSession(session, "session_end");
+    const asrDeps = this.buildAsrBridgeDeps(session);
+    await closeAllPerUserAsrSessions(session, asrDeps, "session_end");
+    await closeSharedAsrSession(session, asrDeps, "session_end");
     this.sessionLifecycle.runSessionCleanupHandlers(session);
 
     try {
@@ -5545,7 +5346,7 @@ export class VoiceSessionManager {
         durationSeconds,
         announcementHint: announcementHint || null
       };
-      await this.sendOperationalMessage({
+      await sendOperationalMessage(this, {
         channel,
         settings: settings || session.settingsSnapshot,
         guildId: session.guildId,
@@ -5712,67 +5513,6 @@ export class VoiceSessionManager {
     }
   }
 
-  buildVoiceInstructions(settings, { soundboardCandidates = [] } = {}) {
-    return buildVoiceInstructionsModule(settings, {
-      soundboardCandidates
-    });
-  }
-
-  async sendOperationalMessage({
-    channel,
-    settings = null,
-    guildId = null,
-    channelId = null,
-    userId = null,
-    messageId = null,
-    event = "voice_runtime",
-    reason = null,
-    details = {},
-    mustNotify = false
-  }) {
-    return await sendOperationalMessage(this, {
-      channel,
-      settings,
-      guildId,
-      channelId,
-      userId,
-      messageId,
-      event,
-      reason,
-      details,
-      mustNotify
-    });
-  }
-
-  async resolveOperationalChannel(
-    channel,
-    channelId,
-    { guildId = null, userId = null, messageId = null, event = null, reason = null } = {}
-  ) {
-    return await resolveOperationalChannel(this, channel, channelId, {
-      guildId,
-      userId,
-      messageId,
-      event,
-      reason
-    });
-  }
-
-  async sendToChannel(
-    channel,
-    text,
-    { guildId = null, channelId = null, userId = null, messageId = null, event = null, reason = null } = {}
-  ) {
-    return await sendToChannel(this, channel, text, {
-      guildId,
-      channelId,
-      userId,
-      messageId,
-      event,
-      reason
-    });
-  }
-
   getMissingJoinPermissionInfo({ guild, voiceChannel }) {
     const me = guild?.members?.me;
     if (!me) {
@@ -5893,161 +5633,28 @@ export class VoiceSessionManager {
     });
   }
 
-  ensureSessionToolRuntimeState(session) {
-    return ensureSessionToolRuntimeState(this, session);
-  }
-
-  getVoiceMcpServerStatuses() {
-    return getVoiceMcpServerStatuses(this);
-  }
-
-  resolveVoiceRealtimeToolDescriptors(opts: {
-    session?: VoiceToolRuntimeSessionLike | null;
-    settings?: VoiceRealtimeToolSettings | null;
-  } = {}) {
-    return resolveVoiceRealtimeToolDescriptors(this, opts);
-  }
-
-  buildRealtimeFunctionTools(opts: {
-    session?: VoiceToolRuntimeSessionLike | null;
-    settings?: VoiceRealtimeToolSettings | null;
-  } = {}) {
-    return buildRealtimeFunctionTools(this, opts);
-  }
-
-  recordVoiceToolCallEvent(opts: {
-    session?: VoiceToolRuntimeSessionLike | null;
-    event?: VoiceToolCallEvent | null;
-  } = {}) {
-    return recordVoiceToolCallEvent(this, opts);
-  }
-
-  parseOpenAiRealtimeToolArguments(argumentsText = "") {
-    return parseOpenAiRealtimeToolArguments(this, argumentsText);
-  }
-
-  resolveOpenAiRealtimeToolDescriptor(session, toolName = "") {
-    return resolveOpenAiRealtimeToolDescriptor(this, session, toolName);
-  }
-
-  summarizeVoiceToolOutput(output: unknown = null) {
-    return summarizeVoiceToolOutput(this, output);
-  }
-
-  async executeOpenAiRealtimeFunctionCall(opts: {
-    session;
-    settings;
-    pendingCall;
-  }) {
-    return executeOpenAiRealtimeFunctionCall(this, opts);
-  }
-
-  async refreshRealtimeTools(opts: {
-    session?: VoiceToolRuntimeSessionLike | null;
-    settings?: VoiceRealtimeToolSettings | null;
-    reason?: string;
-  } = {}) {
-    return refreshRealtimeTools(this, opts);
-  }
-
-  async executeVoiceMemorySearchTool(opts: {
-    session;
-    settings;
-    args;
-  }) {
-    return executeVoiceMemorySearchTool(this, opts);
-  }
-
-  async executeVoiceMemoryWriteTool(opts: {
-    session;
-    settings;
-    args;
-  }) {
-    return executeVoiceMemoryWriteTool(this, opts);
-  }
-
-  async executeVoiceAdaptiveStyleAddTool(opts: {
-    session;
-    args;
-  }) {
-    return executeVoiceAdaptiveStyleAddTool(this, opts);
-  }
-
-  async executeVoiceAdaptiveStyleRemoveTool(opts: {
-    session;
-    args;
-  }) {
-    return executeVoiceAdaptiveStyleRemoveTool(this, opts);
-  }
-
-  async executeVoiceConversationSearchTool(opts: {
-    session;
-    args;
-  }) {
-    return executeVoiceConversationSearchTool(this, opts);
-  }
-
-  async executeVoiceMusicSearchTool(opts: { session; args }) {
-    return executeVoiceMusicSearchTool(this, opts);
-  }
-
-  async executeVoiceMusicQueueAddTool(opts: { session; settings; args }) {
-    return executeVoiceMusicQueueAddTool(this, opts);
-  }
-
-  async executeVoiceMusicQueueNextTool(opts: { session; settings; args }) {
-    return executeVoiceMusicQueueNextTool(this, opts);
-  }
-
-  async executeVoiceMusicPlayNowTool(opts: { session; settings; args }) {
-    return executeVoiceMusicPlayNowTool(this, opts);
-  }
-
-  async executeVoiceWebSearchTool(opts: { session; settings; args }) {
-    return executeVoiceWebSearchTool(this, opts);
-  }
-
-  async executeLocalVoiceToolCall(opts: {
-    session;
-    settings;
-    toolName;
-    args;
-    signal?: AbortSignal;
-  }) {
-    return executeLocalVoiceToolCall(this, opts);
-  }
-
-  async executeMcpVoiceToolCall(opts: {
-    session;
-    settings;
-    toolDescriptor;
-    args;
-  }) {
-    return executeMcpVoiceToolCall(this, opts);
-  }
-
   buildVoiceToolCallbacks({ session, settings }) {
     return {
       musicSearch: (query: string, limit: number) =>
-        this.executeVoiceMusicSearchTool({ session, args: { query, max_results: limit } }),
+        executeVoiceMusicSearchTool(this, { session, args: { query, max_results: limit } }),
       musicQueueAdd: (trackIds: string[], position?: number | "end") =>
-        this.executeVoiceMusicQueueAddTool({ session, settings, args: { tracks: trackIds, position } }),
+        executeVoiceMusicQueueAddTool(this, { session, settings, args: { tracks: trackIds, position } }),
       musicPlayNow: (trackId: string) =>
-        this.executeVoiceMusicPlayNowTool({ session, settings, args: { track_id: trackId } }),
+        executeVoiceMusicPlayNowTool(this, { session, settings, args: { track_id: trackId } }),
       musicQueueNext: (trackIds: string[]) =>
-        this.executeVoiceMusicQueueNextTool({ session, settings, args: { tracks: trackIds } }),
+        executeVoiceMusicQueueNextTool(this, { session, settings, args: { tracks: trackIds } }),
       musicStop: () =>
-        this.executeLocalVoiceToolCall({ session, settings, toolName: "music_stop", args: {} }),
+        executeLocalVoiceToolCall(this, { session, settings, toolName: "music_stop", args: {} }),
       musicPause: () =>
-        this.executeLocalVoiceToolCall({ session, settings, toolName: "music_pause", args: {} }),
+        executeLocalVoiceToolCall(this, { session, settings, toolName: "music_pause", args: {} }),
       musicResume: () =>
-        this.executeLocalVoiceToolCall({ session, settings, toolName: "music_resume", args: {} }),
+        executeLocalVoiceToolCall(this, { session, settings, toolName: "music_resume", args: {} }),
       musicSkip: () =>
-        this.executeLocalVoiceToolCall({ session, settings, toolName: "music_skip", args: {} }),
+        executeLocalVoiceToolCall(this, { session, settings, toolName: "music_skip", args: {} }),
       musicNowPlaying: () =>
-        this.executeLocalVoiceToolCall({ session, settings, toolName: "music_now_playing", args: {} }),
+        executeLocalVoiceToolCall(this, { session, settings, toolName: "music_now_playing", args: {} }),
       leaveVoiceChannel: () =>
-        this.executeLocalVoiceToolCall({ session, settings, toolName: "leave_voice_channel", args: {} })
+        executeLocalVoiceToolCall(this, { session, settings, toolName: "leave_voice_channel", args: {} })
     };
   }
 }

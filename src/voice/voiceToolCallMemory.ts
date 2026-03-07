@@ -5,17 +5,20 @@ import {
 import { clamp } from "../utils.ts";
 import { MEMORY_SENSITIVE_PATTERN_RE, VOICE_MEMORY_WRITE_MAX_PER_MINUTE } from "./voiceSessionManager.constants.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
-import type { VoiceRealtimeToolSettings, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
+import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
+import type { VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 
+type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
+
 type VoiceMemoryToolOptions = {
-  session?: VoiceToolRuntimeSessionLike | null;
+  session?: ToolRuntimeSession | null;
   settings?: VoiceRealtimeToolSettings | null;
   args?: VoiceToolCallArgs;
 };
 
 type VoiceConversationSearchToolOptions = {
-  session?: VoiceToolRuntimeSessionLike | null;
+  session?: ToolRuntimeSession | null;
   args?: VoiceToolCallArgs;
 };
 
@@ -91,7 +94,7 @@ export async function executeVoiceMemoryWriteTool(
     return { ok: false, written: [], skipped: [], error: "memory_unavailable" };
   }
 
-  const runtimeSession = manager.ensureSessionToolRuntimeState(session);
+  const runtimeSession = ensureSessionToolRuntimeState(manager, session);
   if (!runtimeSession) {
     return { ok: false, written: [], skipped: [], error: "session_unavailable" };
   }

@@ -1,23 +1,36 @@
 import { clamp } from "../utils.ts";
 import { executeVoiceBrowserBrowseTool, executeVoiceCodeTaskTool } from "./voiceToolCallAgents.ts";
+import { executeVoiceAdaptiveStyleAddTool, executeVoiceAdaptiveStyleRemoveTool } from "./voiceToolCallDirectives.ts";
 import {
+  executeVoiceConversationSearchTool,
+  executeVoiceMemorySearchTool,
+  executeVoiceMemoryWriteTool
+} from "./voiceToolCallMemory.ts";
+import {
+  executeVoiceMusicPlayNowTool,
+  executeVoiceMusicQueueAddTool,
+  executeVoiceMusicQueueNextTool,
   executeVoiceMusicNowPlayingTool,
   executeVoiceMusicPauseTool,
+  executeVoiceMusicSearchTool,
   executeVoiceMusicResumeTool,
   executeVoiceMusicSkipTool,
   executeVoiceMusicStopTool
 } from "./voiceToolCallMusic.ts";
-import { executeVoiceWebScrapeTool } from "./voiceToolCallWeb.ts";
+import { executeVoiceWebScrapeTool, executeVoiceWebSearchTool } from "./voiceToolCallWeb.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
 import type {
   VoiceRealtimeToolDescriptor,
   VoiceRealtimeToolSettings,
+  VoiceSession,
   VoiceToolRuntimeSessionLike
 } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 
+type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
+
 type LocalVoiceToolCallOptions = {
-  session?: VoiceToolRuntimeSessionLike | null;
+  session?: ToolRuntimeSession | null;
   settings?: VoiceRealtimeToolSettings | null;
   toolName: string;
   args?: VoiceToolCallArgs;
@@ -25,7 +38,7 @@ type LocalVoiceToolCallOptions = {
 };
 
 type McpVoiceToolCallOptions = {
-  session?: VoiceToolRuntimeSessionLike | null;
+  session?: ToolRuntimeSession | null;
   settings?: VoiceRealtimeToolSettings | null;
   toolDescriptor: VoiceRealtimeToolDescriptor | null | undefined;
   args?: VoiceToolCallArgs;
@@ -33,7 +46,7 @@ type McpVoiceToolCallOptions = {
 
 async function executeOfferScreenShareLinkTool(
   manager: VoiceToolCallManager,
-  { session, settings }: { session?: VoiceToolRuntimeSessionLike | null; settings?: VoiceRealtimeToolSettings | null }
+  { session, settings }: { session?: ToolRuntimeSession | null; settings?: VoiceRealtimeToolSettings | null }
 ) {
   const requesterUserId = normalizeInlineText(session?.lastOpenAiToolCallerUserId, 80) || null;
   if (!requesterUserId || !session?.guildId || !session?.textChannelId) {
@@ -72,7 +85,7 @@ async function executeOfferScreenShareLinkTool(
 
 function scheduleLeaveVoiceChannel(
   manager: VoiceToolCallManager,
-  { session, settings }: { session?: VoiceToolRuntimeSessionLike | null; settings?: VoiceRealtimeToolSettings | null }
+  { session, settings }: { session?: ToolRuntimeSession | null; settings?: VoiceRealtimeToolSettings | null }
 ) {
   setTimeout(async () => {
     if (!session || session.ending) return;
@@ -99,23 +112,23 @@ export async function executeLocalVoiceToolCall(manager: VoiceToolCallManager, o
 
   switch (normalizedToolName) {
     case "memory_search":
-      return manager.executeVoiceMemorySearchTool({ session: opts.session, settings: opts.settings, args: opts.args });
+      return executeVoiceMemorySearchTool(manager, { session: opts.session, settings: opts.settings, args: opts.args });
     case "memory_write":
-      return manager.executeVoiceMemoryWriteTool({ session: opts.session, settings: opts.settings, args: opts.args });
+      return executeVoiceMemoryWriteTool(manager, { session: opts.session, settings: opts.settings, args: opts.args });
     case "adaptive_directive_add":
-      return manager.executeVoiceAdaptiveStyleAddTool({ session: opts.session, args: opts.args });
+      return executeVoiceAdaptiveStyleAddTool(manager, { session: opts.session, args: opts.args });
     case "adaptive_directive_remove":
-      return manager.executeVoiceAdaptiveStyleRemoveTool({ session: opts.session, args: opts.args });
+      return executeVoiceAdaptiveStyleRemoveTool(manager, { session: opts.session, args: opts.args });
     case "conversation_search":
-      return manager.executeVoiceConversationSearchTool({ session: opts.session, args: opts.args });
+      return executeVoiceConversationSearchTool(manager, { session: opts.session, args: opts.args });
     case "music_search":
-      return manager.executeVoiceMusicSearchTool({ session: opts.session, args: opts.args });
+      return executeVoiceMusicSearchTool(manager, { session: opts.session, args: opts.args });
     case "music_queue_add":
-      return manager.executeVoiceMusicQueueAddTool({ session: opts.session, settings: opts.settings, args: opts.args });
+      return executeVoiceMusicQueueAddTool(manager, { session: opts.session, settings: opts.settings, args: opts.args });
     case "music_queue_next":
-      return manager.executeVoiceMusicQueueNextTool({ session: opts.session, settings: opts.settings, args: opts.args });
+      return executeVoiceMusicQueueNextTool(manager, { session: opts.session, settings: opts.settings, args: opts.args });
     case "music_play_now":
-      return manager.executeVoiceMusicPlayNowTool({ session: opts.session, settings: opts.settings, args: opts.args });
+      return executeVoiceMusicPlayNowTool(manager, { session: opts.session, settings: opts.settings, args: opts.args });
     case "music_stop":
       return executeVoiceMusicStopTool(manager, { session: opts.session, settings: opts.settings });
     case "music_pause":
@@ -129,7 +142,7 @@ export async function executeLocalVoiceToolCall(manager: VoiceToolCallManager, o
     case "offer_screen_share_link":
       return executeOfferScreenShareLinkTool(manager, { session: opts.session, settings: opts.settings });
     case "web_search":
-      return manager.executeVoiceWebSearchTool({ session: opts.session, settings: opts.settings, args: opts.args });
+      return executeVoiceWebSearchTool(manager, { session: opts.session, settings: opts.settings, args: opts.args });
     case "web_scrape":
       return executeVoiceWebScrapeTool(manager, { session: opts.session, args: opts.args });
     case "browser_browse":

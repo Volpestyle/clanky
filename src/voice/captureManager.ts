@@ -1,4 +1,16 @@
-import type { AsrCommitResult } from "./voiceAsrBridge.ts";
+import {
+  appendAudioToAsr,
+  beginAsrUtterance,
+  commitAsrUtterance,
+  discardAsrUtterance,
+  getOrCreatePerUserAsrState,
+  getOrCreateSharedAsrState,
+  releaseSharedAsrActiveUser,
+  scheduleAsrIdleClose,
+  tryHandoffSharedAsr,
+  type AsrBridgeDeps,
+  type AsrCommitResult
+} from "./voiceAsrBridge.ts";
 import {
   ACTIVITY_TOUCH_THROTTLE_MS,
   CAPTURE_IDLE_FLUSH_MS,
@@ -32,18 +44,6 @@ interface PcmSilenceGateResult extends CaptureSignalMetrics {
   drop: boolean;
 }
 
-interface AsrUtteranceLike {
-  id?: number;
-  finalSegments?: string[] | null;
-}
-
-interface AsrSessionLike {
-  utterance?: AsrUtteranceLike | null;
-  phase?: string | null;
-  speechDetectedUtteranceId?: number;
-  speechDetectedAt?: number;
-}
-
 type CaptureManagerStoreLike = {
   logAction: (entry: {
     kind: string;
@@ -67,59 +67,7 @@ export interface CaptureManagerHost {
     session: VoiceSession;
     settings?: CaptureManagerSettings;
   }) => boolean;
-  getOrCreateOpenAiAsrSessionState: (args: {
-    session: VoiceSession;
-    userId: string;
-  }) => AsrSessionLike | null;
-  getOpenAiSharedAsrState: (session: VoiceSession) => AsrSessionLike | null;
-  beginOpenAiAsrUtterance: (args: {
-    session: VoiceSession;
-    settings?: CaptureManagerSettings;
-    userId: string;
-  }) => void;
-  beginOpenAiSharedAsrUtterance: (args: {
-    session: VoiceSession;
-    settings?: CaptureManagerSettings;
-    userId: string;
-  }) => void;
-  appendAudioToOpenAiAsr: (args: {
-    session: VoiceSession;
-    settings?: CaptureManagerSettings;
-    userId: string;
-    pcmChunk: Buffer;
-  }) => void;
-  appendAudioToOpenAiSharedAsr: (args: {
-    session: VoiceSession;
-    settings?: CaptureManagerSettings;
-    userId: string;
-    pcmChunk: Buffer;
-  }) => boolean;
-  discardOpenAiAsrUtterance: (args: {
-    session: VoiceSession;
-    userId: string;
-  }) => void;
-  scheduleOpenAiAsrSessionIdleClose: (args: {
-    session: VoiceSession;
-    userId: string;
-  }) => void;
-  releaseOpenAiSharedAsrActiveUser: (session: VoiceSession, userId: string) => void;
-  tryHandoffSharedAsrToWaitingCapture: (args: {
-    session: VoiceSession;
-    settings?: CaptureManagerSettings;
-  }) => boolean;
-  scheduleOpenAiSharedAsrSessionIdleClose: (session: VoiceSession) => void;
-  commitOpenAiAsrUtterance: (args: {
-    session: VoiceSession;
-    settings?: CaptureManagerSettings;
-    userId: string;
-    captureReason?: string;
-  }) => Promise<AsrCommitResult | null>;
-  commitOpenAiSharedAsrUtterance: (args: {
-    session: VoiceSession;
-    settings?: CaptureManagerSettings;
-    userId: string;
-    captureReason?: string;
-  }) => Promise<AsrCommitResult | null>;
+  buildAsrBridgeDeps: (session: VoiceSession) => AsrBridgeDeps;
   hasReplayBlockingActiveCapture: (session: VoiceSession) => boolean;
   deferredActionQueue: Pick<DeferredActionQueue, "recheckDeferredVoiceActions">;
   greetingManager: Pick<GreetingManager, "maybeFireJoinGreetingOpportunity">;
@@ -221,14 +169,33 @@ export class CaptureManager {
     };
 
     session.userCaptures.set(userId, captureState);
+    const asrDeps = this.host.buildAsrBridgeDeps(session);
+    const beginSharedAsrUtterance = (targetUserId: string) =>
+      beginAsrUtterance("shared", session, asrDeps, settings || null, targetUserId);
+    const appendToSharedAsr = (targetUserId: string, pcmChunk: Buffer) =>
+      appendAudioToAsr("shared", session, asrDeps, settings || null, targetUserId, pcmChunk);
+    const scheduleSharedAsrIdleClose = () => {
+      scheduleAsrIdleClose("shared", session, asrDeps, "");
+    };
+    const releaseSharedAsrUser = (targetUserId: string | null = userId) => {
+      releaseSharedAsrActiveUser(session, targetUserId);
+    };
+    const tryHandoffSharedAsrToWaitingCapture = () => {
+      const asrState = getOrCreateSharedAsrState(session);
+      return tryHandoffSharedAsr({
+        session,
+        asrState,
+        deps: asrDeps,
+        settings: settings || null,
+        beginUtterance: beginSharedAsrUtterance,
+        appendAudio: appendToSharedAsr,
+        releaseUser: (targetUserId) => releaseSharedAsrUser(targetUserId)
+      });
+    };
 
     if (useOpenAiPerUserAsr) {
-      this.host.beginOpenAiAsrUtterance({
-        session,
-        settings,
-        userId
-      });
-      const asrState = this.host.getOrCreateOpenAiAsrSessionState({ session, userId });
+      beginAsrUtterance("per_user", session, asrDeps, settings || null, userId);
+      const asrState = getOrCreatePerUserAsrState(session, userId);
       captureState.asrUtteranceId = Math.max(0, Number(asrState?.utterance?.id || 0));
     }
 
@@ -265,12 +232,7 @@ export class CaptureManager {
       let appendedBytes = 0;
       for (const chunk of captureState.pcmChunks) {
         if (!Buffer.isBuffer(chunk) || !chunk.length) continue;
-        const appended = this.host.appendAudioToOpenAiSharedAsr({
-          session,
-          settings,
-          userId,
-          pcmChunk: chunk
-        });
+        const appended = appendToSharedAsr(userId, chunk);
         if (appended) appendedBytes += chunk.length;
       }
       if (appendedBytes > 0) {
@@ -297,11 +259,7 @@ export class CaptureManager {
         now
       });
       if (useOpenAiSharedAsr) {
-        this.host.beginOpenAiSharedAsrUtterance({
-          session,
-          settings,
-          userId
-        });
+        beginSharedAsrUtterance(userId);
       }
       appendBufferedCaptureToAsr();
       session.lastInboundAudioAt = now;
@@ -358,18 +316,12 @@ export class CaptureManager {
         cleanupCapture();
         maybeTriggerDeferredActions();
         if (useOpenAiPerUserAsr) {
-          this.host.discardOpenAiAsrUtterance({
-            session,
-            userId
-          });
-          this.host.scheduleOpenAiAsrSessionIdleClose({
-            session,
-            userId
-          });
+          discardAsrUtterance("per_user", session, userId);
+          scheduleAsrIdleClose("per_user", session, asrDeps, userId);
         } else if (useOpenAiSharedAsr) {
-          this.host.releaseOpenAiSharedAsrActiveUser(session, userId);
-          if (!this.host.tryHandoffSharedAsrToWaitingCapture({ session, settings })) {
-            this.host.scheduleOpenAiSharedAsrSessionIdleClose(session);
+          releaseSharedAsrUser();
+          if (!tryHandoffSharedAsrToWaitingCapture()) {
+            scheduleSharedAsrIdleClose();
           }
         }
         return;
@@ -406,18 +358,12 @@ export class CaptureManager {
         cleanupCapture();
         maybeTriggerDeferredActions();
         if (useOpenAiPerUserAsr) {
-          this.host.discardOpenAiAsrUtterance({
-            session,
-            userId
-          });
-          this.host.scheduleOpenAiAsrSessionIdleClose({
-            session,
-            userId
-          });
+          discardAsrUtterance("per_user", session, userId);
+          scheduleAsrIdleClose("per_user", session, asrDeps, userId);
         } else if (useOpenAiSharedAsr) {
-          this.host.releaseOpenAiSharedAsrActiveUser(session, userId);
-          if (!this.host.tryHandoffSharedAsrToWaitingCapture({ session, settings })) {
-            this.host.scheduleOpenAiSharedAsrSessionIdleClose(session);
+          releaseSharedAsrUser();
+          if (!tryHandoffSharedAsrToWaitingCapture()) {
+            scheduleSharedAsrIdleClose();
           }
         }
         return;
@@ -454,14 +400,11 @@ export class CaptureManager {
         cleanupCapture();
         maybeTriggerDeferredActions();
         if (useOpenAiPerUserAsr) {
-          this.host.discardOpenAiAsrUtterance({
-            session,
-            userId
-          });
-          this.host.scheduleOpenAiAsrSessionIdleClose({ session, userId });
+          discardAsrUtterance("per_user", session, userId);
+          scheduleAsrIdleClose("per_user", session, asrDeps, userId);
         } else if (useOpenAiSharedAsr) {
-          this.host.releaseOpenAiSharedAsrActiveUser(session, userId);
-          this.host.scheduleOpenAiSharedAsrSessionIdleClose(session);
+          releaseSharedAsrUser();
+          scheduleSharedAsrIdleClose();
         }
         return;
       }
@@ -581,12 +524,7 @@ export class CaptureManager {
       }
       captureState.pcmChunks.push(normalizedPcm);
       if (useOpenAiPerUserAsr) {
-        this.host.appendAudioToOpenAiAsr({
-          session,
-          settings,
-          userId,
-          pcmChunk: normalizedPcm
-        });
+        appendAudioToAsr("per_user", session, asrDeps, settings || null, userId, normalizedPcm);
       }
       const wasPromoted = this.host.hasCaptureBeenPromoted(captureState);
       if (!wasPromoted) {
@@ -594,12 +532,7 @@ export class CaptureManager {
       }
       const isPromoted = this.host.hasCaptureBeenPromoted(captureState);
       if (isPromoted && wasPromoted && useOpenAiSharedAsr) {
-        const appendedToSharedAsr = this.host.appendAudioToOpenAiSharedAsr({
-          session,
-          settings,
-          userId,
-          pcmChunk: normalizedPcm
-        });
+        const appendedToSharedAsr = appendToSharedAsr(userId, normalizedPcm);
         if (appendedToSharedAsr) {
           captureState.sharedAsrBytesSent =
             Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) + normalizedPcm.length;
@@ -668,14 +601,11 @@ export class CaptureManager {
       cleanupCapture();
       maybeTriggerDeferredActions();
       if (useOpenAiPerUserAsr) {
-        this.host.scheduleOpenAiAsrSessionIdleClose({
-          session,
-          userId
-        });
+        scheduleAsrIdleClose("per_user", session, asrDeps, userId);
       } else if (useOpenAiSharedAsr) {
-        this.host.releaseOpenAiSharedAsrActiveUser(session, userId);
-        if (!this.host.tryHandoffSharedAsrToWaitingCapture({ session, settings })) {
-          this.host.scheduleOpenAiSharedAsrSessionIdleClose(session);
+        releaseSharedAsrUser();
+        if (!tryHandoffSharedAsrToWaitingCapture()) {
+          scheduleSharedAsrIdleClose();
         }
       }
     };
@@ -729,6 +659,7 @@ export class CaptureManager {
   }) {
     const asrMode = useOpenAiPerUserAsr ? "per_user" : "shared";
     const asrSource = useOpenAiPerUserAsr ? "per_user" : "shared";
+    const asrDeps = this.host.buildAsrBridgeDeps(session);
 
     if (useOpenAiSharedAsr) {
       const hasSharedAsrAudio = Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) > 0;
@@ -742,7 +673,7 @@ export class CaptureManager {
         });
         return;
       }
-      const sharedAsrState = this.host.getOpenAiSharedAsrState(session);
+      const sharedAsrState = getOrCreateSharedAsrState(session);
       if (sharedAsrState) {
         sharedAsrState.phase = "committing";
       }
@@ -784,8 +715,8 @@ export class CaptureManager {
 
     try {
       const asrResult = asrMode === "per_user"
-        ? await this.host.commitOpenAiAsrUtterance({ session, settings, userId, captureReason })
-        : await this.host.commitOpenAiSharedAsrUtterance({ session, settings, userId, captureReason });
+        ? await commitAsrUtterance("per_user", asrDeps, settings || null, userId, captureReason)
+        : await commitAsrUtterance("shared", asrDeps, settings || null, userId, captureReason);
       clearTimeout(fallbackTimer);
       const commitTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
 
@@ -796,8 +727,8 @@ export class CaptureManager {
 
       if (!bridgeForwarded && !session.ending) {
         const lateAsrState = asrMode === "per_user"
-          ? this.host.getOrCreateOpenAiAsrSessionState({ session, userId })
-          : this.host.getOpenAiSharedAsrState(session);
+          ? getOrCreatePerUserAsrState(session, userId)
+          : getOrCreateSharedAsrState(session);
         const trackedUtterance = lateAsrState?.utterance;
         if (trackedUtterance) {
           const lateDeadlineMs = Date.now() + 1500;

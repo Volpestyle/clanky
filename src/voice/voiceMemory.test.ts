@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
 import { normalizeVoiceText } from "./voiceSessionHelpers.ts";
+import { resolveVoiceRealtimeToolDescriptors } from "./voiceToolCallToolRegistry.ts";
 import { createTestSettings } from "../testSettings.ts";
 
 function createManager({ memory = null }: { memory?: unknown } = {}) {
@@ -50,7 +51,7 @@ function createManager({ memory = null }: { memory?: unknown } = {}) {
 
 test("memory tools excluded when settings.memory.enabled is false", () => {
   const { manager } = createManager();
-  const tools = manager.resolveVoiceRealtimeToolDescriptors({
+  const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
     settings: createTestSettings({ memory: { enabled: false }, webSearch: { enabled: true } })
   });
@@ -62,7 +63,7 @@ test("memory tools excluded when settings.memory.enabled is false", () => {
 
 test("memory tools included when settings.memory.enabled is true", () => {
   const { manager } = createManager();
-  const tools = manager.resolveVoiceRealtimeToolDescriptors({
+  const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
     settings: createTestSettings({
       memory: { enabled: true },
@@ -80,7 +81,7 @@ test("memory tools included when settings.memory.enabled is true", () => {
 
 test("adaptive directive tools can stay enabled when durable memory is disabled", () => {
   const { manager } = createManager();
-  const tools = manager.resolveVoiceRealtimeToolDescriptors({
+  const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
     settings: createTestSettings({
       memory: { enabled: false },
@@ -98,7 +99,7 @@ test("adaptive directive tools can stay enabled when durable memory is disabled"
 
 test("adaptive directive tools can be disabled independently of durable memory", () => {
   const { manager } = createManager();
-  const tools = manager.resolveVoiceRealtimeToolDescriptors({
+  const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
     settings: createTestSettings({
       memory: { enabled: true },
@@ -116,7 +117,7 @@ test("adaptive directive tools can be disabled independently of durable memory",
 
 test("memory tools fall back to canonical defaults when settings is null", () => {
   const { manager } = createManager();
-  const tools = manager.resolveVoiceRealtimeToolDescriptors({
+  const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
     settings: null
   });
@@ -132,7 +133,7 @@ test("memory tools fall back to canonical defaults when settings is null", () =>
 
 test("web_search excluded when settings.webSearch.enabled is false", () => {
   const { manager } = createManager();
-  const tools = manager.resolveVoiceRealtimeToolDescriptors({
+  const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
     settings: createTestSettings({ memory: { enabled: true }, webSearch: { enabled: false } })
   });
@@ -144,7 +145,7 @@ test("web_search excluded when settings.webSearch.enabled is false", () => {
 
 test("web_search included when settings.webSearch.enabled is true", () => {
   const { manager } = createManager();
-  const tools = manager.resolveVoiceRealtimeToolDescriptors({
+  const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
     settings: createTestSettings({ memory: { enabled: false }, webSearch: { enabled: true } })
   });
@@ -155,7 +156,7 @@ test("web_search included when settings.webSearch.enabled is true", () => {
 
 test("code_task excluded when code agent is enabled but runtime hooks are unavailable", () => {
   const { manager } = createManager();
-  const tools = manager.resolveVoiceRealtimeToolDescriptors({
+  const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
     settings: createTestSettings({
       codeAgent: { provider: "claude-code" }
@@ -169,7 +170,7 @@ test("code_task excluded when code agent is enabled but runtime hooks are unavai
 test("code_task included when code agent is enabled and one-shot runtime hook is available", () => {
   const { manager } = createManager();
   manager.runModelRequestedCodeTask = async () => ({ text: "ok" });
-  const tools = manager.resolveVoiceRealtimeToolDescriptors({
+  const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
     settings: createTestSettings({
       codeAgent: { provider: "claude-code", allowedUserIds: ["user-1"] }

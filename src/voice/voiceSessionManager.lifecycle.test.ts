@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import type { CaptureManager } from "./captureManager.ts";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
 import { createTestSettings } from "../testSettings.ts";
 import {
@@ -14,8 +15,16 @@ import {
   VOICE_SILENCE_GATE_MIN_CLIP_MS,
   VOICE_TURN_PROMOTION_MIN_CLIP_MS
 } from "./voiceSessionManager.constants.ts";
-import { trackSharedAsrCommittedItem, commitAsrUtterance } from "./voiceAsrBridge.ts";
+import {
+  beginAsrUtterance,
+  commitAsrUtterance,
+  getOrCreatePerUserAsrState,
+  getOrCreateSharedAsrState,
+  trackSharedAsrCommittedItem,
+  tryHandoffSharedAsr
+} from "./voiceAsrBridge.ts";
 import type { AsrBridgeState } from "./voiceAsrBridge.ts";
+import type { CaptureState, VoiceSession } from "./voiceSessionTypes.ts";
 
 // Discord sends 48kHz stereo 16-bit PCM in 20ms frames = 3840 bytes
 const DISCORD_PCM_FRAME_BYTES = 3840;
@@ -38,6 +47,58 @@ function makeSparseMonoPcm16(sampleCount: number, amplitude: number, activeEvery
   return pcm;
 }
 
+async function flushMicrotasks() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+function seedReadyPerUserAsr(
+  manager: VoiceSessionManager,
+  session: ReturnType<typeof createSession>,
+  userId: string
+) {
+  const appendedChunks: Buffer[] = [];
+  const asrState = getOrCreatePerUserAsrState(session, userId);
+  assert.ok(asrState);
+  asrState.phase = "ready";
+  asrState.client = {
+    ws: { readyState: 1 },
+    clearInputAudioBuffer() {},
+    appendInputAudioPcm(chunk: Buffer) {
+      appendedChunks.push(chunk);
+    },
+    commitInputAudioBuffer() {}
+  };
+  return {
+    asrState,
+    appendedChunks,
+    deps: manager.buildAsrBridgeDeps(session)
+  };
+}
+
+function runSharedAsrHandoff(
+  manager: VoiceSessionManager,
+  session: ReturnType<typeof createSession>,
+  beginCalls: Array<{ userId: string }>,
+  appendCalls: Array<{ userId: string; pcmChunk: Buffer }>
+) {
+  return tryHandoffSharedAsr({
+    session,
+    asrState: session.openAiSharedAsrState as AsrBridgeState | null,
+    deps: manager.buildAsrBridgeDeps(session),
+    settings: session.settingsSnapshot,
+    beginUtterance: (userId) => {
+      beginCalls.push({ userId });
+      return true;
+    },
+    appendAudio: (userId, pcmChunk) => {
+      appendCalls.push({ userId, pcmChunk });
+      return true;
+    },
+    releaseUser: () => {}
+  });
+}
+
 function createManager() {
   const messages = [];
   const endCalls = [];
@@ -49,6 +110,16 @@ function createManager() {
     on() {},
     off(eventName) {
       offCalls.push(eventName);
+    },
+    channels: {
+      async fetch(channelId) {
+        return {
+          id: channelId,
+          async send() {
+            return true;
+          }
+        };
+      }
     },
     guilds: { cache: new Map() },
     users: { cache: new Map() },
@@ -89,8 +160,9 @@ function createManager() {
     memory: null
   });
 
-  manager.sendOperationalMessage = async (payload) => {
+  manager.composeOperationalMessage = async (payload) => {
     messages.push(payload);
+    return "ok";
   };
   manager.endSession = async (payload) => {
     endCalls.push(payload);
@@ -115,7 +187,10 @@ function createMessage(overrides = {}) {
       id: "guild-1"
     },
     channel: {
-      id: "text-1"
+      id: "text-1",
+      async send() {
+        return true;
+      }
     },
     channelId: "text-1",
     author: {
@@ -768,17 +843,9 @@ test("bindSessionHandlers does not touch activity on speaking.start before speec
   assert.equal(touchCalls.length, 0);
 });
 
-test("startInboundCapture drops provisional noise before activity promotion while streaming provisional ASR audio", () => {
+test("startInboundCapture drops provisional noise before activity promotion while streaming provisional ASR audio", async () => {
   const { manager, logs, touchCalls } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
-  const beginCalls = [];
-  const appendCalls = [];
-  manager.beginOpenAiAsrUtterance = (payload) => {
-    beginCalls.push(payload);
-  };
-  manager.appendAudioToOpenAiAsr = (payload) => {
-    appendCalls.push(payload);
-  };
   manager.shouldUsePerUserTranscription = () => true;
   const voxClient = new EventEmitter();
   voxClient.subscribeUser = () => {};
@@ -796,6 +863,7 @@ test("startInboundCapture drops provisional noise before activity promotion whil
     },
     voxClient
   });
+  const { asrState, appendedChunks } = seedReadyPerUserAsr(manager, session, "speaker-1");
 
   manager.captureManager.startInboundCapture({
     session,
@@ -805,32 +873,24 @@ test("startInboundCapture drops provisional noise before activity promotion whil
 
   const noisePcm = makeMonoPcm16(Math.ceil((24_000 * VOICE_SILENCE_GATE_MIN_CLIP_MS) / 1000), 64);
   voxClient.emit("userAudio", "speaker-1", noisePcm);
+  await flushMicrotasks();
 
   const capture = session.userCaptures.get("speaker-1");
   assert.ok(capture);
   capture.finalize("stream_end");
 
-  assert.equal(beginCalls.length, 1);
-  assert.equal(beginCalls[0]?.userId, "speaker-1");
-  assert.equal(appendCalls.length, 1);
-  assert.deepEqual(appendCalls[0]?.pcmChunk, noisePcm);
+  assert.ok(Number(capture.asrUtteranceId || 0) > 0);
+  assert.equal(appendedChunks.length, 1);
+  assert.deepEqual(appendedChunks[0], noisePcm);
   assert.equal(touchCalls.length, 0);
   assert.equal(logs.some((entry) => entry?.content === "voice_activity_started"), false);
   assert.equal(logs.some((entry) => entry?.content === "voice_turn_dropped_provisional_capture"), true);
   assert.equal(session.userCaptures.has("speaker-1"), false);
 });
 
-test("startInboundCapture promotes strong local speech while streaming per-user ASR audio", () => {
+test("startInboundCapture promotes strong local speech while streaming per-user ASR audio", async () => {
   const { manager, logs, touchCalls } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
-  const beginCalls = [];
-  const appendCalls = [];
-  manager.beginOpenAiAsrUtterance = (payload) => {
-    beginCalls.push(payload);
-  };
-  manager.appendAudioToOpenAiAsr = (payload) => {
-    appendCalls.push(payload);
-  };
   manager.shouldUsePerUserTranscription = () => true;
   const voxClient = new EventEmitter();
   voxClient.subscribeUser = () => {};
@@ -848,6 +908,7 @@ test("startInboundCapture promotes strong local speech while streaming per-user 
     },
     voxClient
   });
+  const { asrState, appendedChunks } = seedReadyPerUserAsr(manager, session, "speaker-1");
 
   manager.captureManager.startInboundCapture({
     session,
@@ -857,13 +918,13 @@ test("startInboundCapture promotes strong local speech while streaming per-user 
 
   const speechPcm = makeMonoPcm16(Math.ceil((24_000 * (VOICE_TURN_PROMOTION_MIN_CLIP_MS + 40)) / 1000), 3000);
   voxClient.emit("userAudio", "speaker-1", speechPcm);
+  await flushMicrotasks();
 
   const capture = session.userCaptures.get("speaker-1");
   assert.ok(capture);
-  assert.equal(beginCalls.length, 1);
-  assert.equal(beginCalls[0]?.userId, "speaker-1");
-  assert.equal(appendCalls.length, 1);
-  assert.deepEqual(appendCalls[0]?.pcmChunk, speechPcm);
+  assert.equal(capture.asrUtteranceId, asrState.utterance.id);
+  assert.equal(appendedChunks.length, 1);
+  assert.deepEqual(appendedChunks[0], speechPcm);
   assert.ok(Number(capture.promotedAt || 0) > 0);
   assert.equal(capture.promotionReason, "strong_local_audio");
   assert.equal(touchCalls.length, 1);
@@ -872,17 +933,9 @@ test("startInboundCapture promotes strong local speech while streaming per-user 
   assert.equal(activityLog?.userId, "speaker-1");
 });
 
-test("startInboundCapture promotes modest speech once server VAD confirms the provisional capture", () => {
+test("startInboundCapture promotes modest speech once server VAD confirms the provisional capture", async () => {
   const { manager, logs, touchCalls } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
-  const beginCalls = [];
-  const appendCalls = [];
-  manager.beginOpenAiAsrUtterance = (payload) => {
-    beginCalls.push(payload);
-  };
-  manager.appendAudioToOpenAiAsr = (payload) => {
-    appendCalls.push(payload);
-  };
   manager.hasCaptureServerVadSpeech = () => true;
   manager.shouldUsePerUserTranscription = () => true;
   const voxClient = new EventEmitter();
@@ -901,6 +954,7 @@ test("startInboundCapture promotes modest speech once server VAD confirms the pr
     },
     voxClient
   });
+  const { asrState, appendedChunks } = seedReadyPerUserAsr(manager, session, "speaker-1");
 
   manager.captureManager.startInboundCapture({
     session,
@@ -910,11 +964,12 @@ test("startInboundCapture promotes modest speech once server VAD confirms the pr
 
   const speechPcm = makeMonoPcm16(Math.ceil((24_000 * (VOICE_TURN_PROMOTION_MIN_CLIP_MS + 40)) / 1000), 700);
   voxClient.emit("userAudio", "speaker-1", speechPcm);
+  await flushMicrotasks();
 
   const capture = session.userCaptures.get("speaker-1");
   assert.ok(capture);
-  assert.equal(beginCalls.length, 1);
-  assert.equal(appendCalls.length, 1);
+  assert.equal(capture.asrUtteranceId, asrState.utterance.id);
+  assert.equal(appendedChunks.length, 1);
   assert.ok(Number(capture.promotedAt || 0) > 0);
   assert.equal(capture.promotionReason, "server_vad_confirmed");
   assert.equal(touchCalls.length, 1);
@@ -923,17 +978,9 @@ test("startInboundCapture promotes modest speech once server VAD confirms the pr
   assert.equal(activityLog?.metadata?.promotionServerVadConfirmed, true);
 });
 
-test("startInboundCapture keeps sparse spike noise provisional even while streaming provisional ASR audio", () => {
+test("startInboundCapture keeps sparse spike noise provisional even while streaming provisional ASR audio", async () => {
   const { manager, logs, touchCalls } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
-  const beginCalls = [];
-  const appendCalls = [];
-  manager.beginOpenAiAsrUtterance = (payload) => {
-    beginCalls.push(payload);
-  };
-  manager.appendAudioToOpenAiAsr = (payload) => {
-    appendCalls.push(payload);
-  };
   manager.shouldUsePerUserTranscription = () => true;
   const voxClient = new EventEmitter();
   voxClient.subscribeUser = () => {};
@@ -951,6 +998,7 @@ test("startInboundCapture keeps sparse spike noise provisional even while stream
     },
     voxClient
   });
+  const { asrState, appendedChunks } = seedReadyPerUserAsr(manager, session, "speaker-1");
 
   manager.captureManager.startInboundCapture({
     session,
@@ -964,16 +1012,16 @@ test("startInboundCapture keeps sparse spike noise provisional even while stream
     60
   );
   voxClient.emit("userAudio", "speaker-1", noisyPcm);
+  await flushMicrotasks();
 
   const capture = session.userCaptures.get("speaker-1");
   assert.ok(capture);
   assert.equal(Number(capture.promotedAt || 0), 0);
   capture.finalize("stream_end");
 
-  assert.equal(beginCalls.length, 1);
-  assert.equal(beginCalls[0]?.userId, "speaker-1");
-  assert.equal(appendCalls.length, 1);
-  assert.deepEqual(appendCalls[0]?.pcmChunk, noisyPcm);
+  assert.ok(Number(capture.asrUtteranceId || 0) > 0);
+  assert.equal(appendedChunks.length, 1);
+  assert.deepEqual(appendedChunks[0], noisyPcm);
   assert.equal(touchCalls.length, 0);
   assert.equal(logs.some((entry) => entry?.content === "voice_activity_started"), false);
   assert.equal(logs.some((entry) => entry?.content === "voice_turn_dropped_provisional_capture"), true);
@@ -983,10 +1031,6 @@ test("bindSessionHandlers does not duplicate provisional capture creation for re
   const { manager } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
   const voxClient = new EventEmitter();
-  const beginCalls = [];
-  manager.beginOpenAiAsrUtterance = (payload) => {
-    beginCalls.push(payload);
-  };
   manager.captureManager.startInboundCapture = ({ session, userId }) => {
     if (!session.userCaptures.has(userId)) {
       session.userCaptures.set(userId, {
@@ -1013,24 +1057,22 @@ test("bindSessionHandlers does not duplicate provisional capture creation for re
   voxClient.emit("speakingStart", "speaker-1");
   voxClient.emit("speakingStart", "speaker-1");
 
-  assert.equal(beginCalls.length, 0);
+  assert.equal(session.userCaptures.size, 1);
 });
 
-test("commitOpenAiAsrUtterance marks per-user commit in-flight before awaiting connect", async () => {
+test("commitAsrUtterance marks per-user commit in-flight before awaiting connect", async () => {
   const { manager } = createManager();
-  manager.shouldUsePerUserTranscription = () => true;
-
   const session = createSession({
-    mode: "openai_realtime"
+    mode: "openai_realtime",
+    openAiAsrTranscriptStableMs: 1,
+    openAiAsrTranscriptWaitMaxMs: 1
   });
   const userId = "speaker-1";
-  const asrState = manager.getOrCreateOpenAiAsrSessionState({
-    session,
-    userId
-  });
+  const asrState = getOrCreatePerUserAsrState(session, userId);
+  assert.ok(asrState);
   let clearCalls = 0;
   let commitCalls = 0;
-  asrState.client = {
+  const client = {
     ws: { readyState: 1 },
     clearInputAudioBuffer() {
       clearCalls += 1;
@@ -1058,29 +1100,23 @@ test("commitOpenAiAsrUtterance marks per-user commit in-flight before awaiting c
       resolve(undefined);
     };
   });
-  manager.ensureOpenAiAsrSessionConnected = async () => {
-    await connectGate;
-    return asrState;
-  };
-  manager.waitForOpenAiAsrTranscriptSettle = async () => "";
+  asrState.connectPromise = connectGate;
 
-  const commitPromise = manager.commitOpenAiAsrUtterance({
-    session,
-    settings: session.settingsSnapshot,
+  const commitPromise = commitAsrUtterance(
+    "per_user",
+    manager.buildAsrBridgeDeps(session),
+    session.settingsSnapshot,
     userId,
-    captureReason: "speaking_end"
-  });
+    "speaking_end"
+  );
 
   assert.equal(asrState.phase, "committing");
   assert.equal(asrState.committingUtteranceId, 1);
 
-  manager.beginOpenAiAsrUtterance({
-    session,
-    settings: session.settingsSnapshot,
-    userId
-  });
+  beginAsrUtterance("per_user", session, manager.buildAsrBridgeDeps(session), session.settingsSnapshot, userId);
   assert.equal(clearCalls, 0);
 
+  asrState.client = client;
   resolveConnect?.();
   await commitPromise;
   assert.equal(commitCalls, 1);
@@ -1090,11 +1126,6 @@ test("bindSessionHandlers defers shared OpenAI ASR start until speech is confirm
   const { manager } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
   const voxClient = new EventEmitter();
-  const beginCalls = [];
-  manager.beginOpenAiSharedAsrUtterance = (payload) => {
-    beginCalls.push(payload);
-    return true;
-  };
   manager.captureManager.startInboundCapture = ({ session, userId }) => {
     if (!session.userCaptures.has(userId)) {
       session.userCaptures.set(userId, {
@@ -1125,24 +1156,15 @@ test("bindSessionHandlers defers shared OpenAI ASR start until speech is confirm
   voxClient.emit("speakingStart", "speaker-1");
   voxClient.emit("speakingStart", "speaker-2");
 
-  assert.equal(beginCalls.length, 0);
+  assert.equal(session.openAiSharedAsrState == null, true);
+  assert.equal(session.userCaptures.size, 2);
 });
 
 test("shared ASR hands off to waiting speaker after commit", () => {
   const { manager, logs } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
-  const beginCalls = [];
-  const appendCalls = [];
-  manager.beginOpenAiSharedAsrUtterance = (payload) => {
-    beginCalls.push(payload);
-    return true;
-  };
-  manager.appendAudioToOpenAiSharedAsr = (payload) => {
-    appendCalls.push(payload);
-    return true;
-  };
-  manager.scheduleOpenAiSharedAsrSessionIdleClose = () => {};
-  manager.shouldUseSharedTranscription = () => true;
+  const beginCalls: Array<{ userId: string }> = [];
+  const appendCalls: Array<{ userId: string; pcmChunk: Buffer }> = [];
 
   const session = createSession({
     mode: "openai_realtime",
@@ -1168,10 +1190,7 @@ test("shared ASR hands off to waiting speaker after commit", () => {
     speakingEndFinalizeTimer: null
   });
 
-  const result = manager.tryHandoffSharedAsrToWaitingCapture({
-    session,
-    settings: session.settingsSnapshot
-  });
+  const result = runSharedAsrHandoff(manager, session, beginCalls, appendCalls);
 
   assert.equal(result, true);
   assert.equal(beginCalls.length, 1);
@@ -1188,12 +1207,8 @@ test("shared ASR hands off to waiting speaker after commit", () => {
 test("shared ASR handoff skipped when no waiting captures", () => {
   const { manager } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
-  const beginCalls = [];
-  manager.beginOpenAiSharedAsrUtterance = (payload) => {
-    beginCalls.push(payload);
-    return true;
-  };
-  manager.shouldUseSharedTranscription = () => true;
+  const beginCalls: Array<{ userId: string }> = [];
+  const appendCalls: Array<{ userId: string; pcmChunk: Buffer }> = [];
 
   const session = createSession({
     mode: "openai_realtime",
@@ -1208,24 +1223,18 @@ test("shared ASR handoff skipped when no waiting captures", () => {
     }
   });
 
-  const result = manager.tryHandoffSharedAsrToWaitingCapture({
-    session,
-    settings: session.settingsSnapshot
-  });
+  const result = runSharedAsrHandoff(manager, session, beginCalls, appendCalls);
 
   assert.equal(result, false);
   assert.equal(beginCalls.length, 0);
+  assert.equal(appendCalls.length, 0);
 });
 
 test("shared ASR handoff skips provisional captures that never promoted", () => {
   const { manager } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
-  const beginCalls = [];
-  manager.beginOpenAiSharedAsrUtterance = (payload) => {
-    beginCalls.push(payload);
-    return true;
-  };
-  manager.shouldUseSharedTranscription = () => true;
+  const beginCalls: Array<{ userId: string }> = [];
+  const appendCalls: Array<{ userId: string; pcmChunk: Buffer }> = [];
 
   const session = createSession({
     mode: "openai_realtime",
@@ -1249,30 +1258,18 @@ test("shared ASR handoff skips provisional captures that never promoted", () => 
     speakingEndFinalizeTimer: null
   });
 
-  const result = manager.tryHandoffSharedAsrToWaitingCapture({
-    session,
-    settings: session.settingsSnapshot
-  });
+  const result = runSharedAsrHandoff(manager, session, beginCalls, appendCalls);
 
   assert.equal(result, false);
   assert.equal(beginCalls.length, 0);
+  assert.equal(appendCalls.length, 0);
 });
 
 test("shared ASR handoff skips captures that already had ASR audio", () => {
   const { manager } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
-  const beginCalls = [];
-  const appendCalls = [];
-  manager.beginOpenAiSharedAsrUtterance = (payload) => {
-    beginCalls.push(payload);
-    return true;
-  };
-  manager.appendAudioToOpenAiSharedAsr = (payload) => {
-    appendCalls.push(payload);
-    return true;
-  };
-  manager.scheduleOpenAiSharedAsrSessionIdleClose = () => {};
-  manager.shouldUseSharedTranscription = () => true;
+  const beginCalls: Array<{ userId: string }> = [];
+  const appendCalls: Array<{ userId: string; pcmChunk: Buffer }> = [];
 
   const session = createSession({
     mode: "openai_realtime",
@@ -1305,10 +1302,7 @@ test("shared ASR handoff skips captures that already had ASR audio", () => {
     speakingEndFinalizeTimer: null
   });
 
-  const result = manager.tryHandoffSharedAsrToWaitingCapture({
-    session,
-    settings: session.settingsSnapshot
-  });
+  const result = runSharedAsrHandoff(manager, session, beginCalls, appendCalls);
 
   assert.equal(result, true);
   assert.equal(beginCalls.length, 1);
@@ -1320,17 +1314,8 @@ test("shared ASR handoff skips captures that already had ASR audio", () => {
 test("shared ASR handoff skips zero-audio captures and selects buffered speaker", () => {
   const { manager, logs } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
-  const beginCalls = [];
-  const appendCalls = [];
-  manager.beginOpenAiSharedAsrUtterance = (payload) => {
-    beginCalls.push(payload);
-    return true;
-  };
-  manager.appendAudioToOpenAiSharedAsr = (payload) => {
-    appendCalls.push(payload);
-    return true;
-  };
-  manager.shouldUseSharedTranscription = () => true;
+  const beginCalls: Array<{ userId: string }> = [];
+  const appendCalls: Array<{ userId: string; pcmChunk: Buffer }> = [];
 
   const session = createSession({
     mode: "openai_realtime",
@@ -1363,10 +1348,7 @@ test("shared ASR handoff skips zero-audio captures and selects buffered speaker"
     speakingEndFinalizeTimer: null
   });
 
-  const result = manager.tryHandoffSharedAsrToWaitingCapture({
-    session,
-    settings: session.settingsSnapshot
-  });
+  const result = runSharedAsrHandoff(manager, session, beginCalls, appendCalls);
 
   assert.equal(result, true);
   assert.equal(beginCalls.length, 1);
@@ -2107,6 +2089,7 @@ test("queueRealtimeTurnFromAsrBridge forwards transcript metadata when ASR trans
 test("shared ASR bridge forwards recovered transcript after timeout instead of discarding it", async () => {
   const { manager, logs } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
+  manager.shouldUseSharedTranscription = () => true;
   manager.evaluatePcmSilenceGate = () => ({
     drop: false,
     clipDurationMs: 480,
@@ -2120,12 +2103,6 @@ test("shared ASR bridge forwards recovered transcript after timeout instead of d
   manager.queueRealtimeTurnFromAsrBridge = (payload) => {
     bridgedTurns.push(payload);
     return true;
-  };
-  manager.commitOpenAiSharedAsrUtterance = async () => {
-    await new Promise((resolve) => setTimeout(resolve, 750));
-    return {
-      transcript: "can i show you my screen?"
-    };
   };
 
   const settings = createTestSettings({
@@ -2141,27 +2118,71 @@ test("shared ASR bridge forwards recovered transcript after timeout instead of d
       }
     }
   });
+  const voxClient = new EventEmitter();
+  voxClient.subscribeUser = () => {};
   const session = createSession({
     mode: "openai_realtime",
     realtimeInputSampleRateHz: 24_000,
-    settingsSnapshot: settings
+    cleanupHandlers: [],
+    settingsSnapshot: settings,
+    voxClient
   });
 
+  const pcmBuffer = makeMonoPcm16(
+    Math.ceil((24_000 * (VOICE_TURN_PROMOTION_MIN_CLIP_MS + 80)) / 1000),
+    3000
+  );
   manager.captureManager.startInboundCapture({
     session,
     userId: "speaker-1",
     settings
   });
 
-  const capture = session.userCaptures.get("speaker-1");
-  const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 8, 0x10);
-  capture.promotedAt = Date.now();
-  capture.pcmChunks.push(pcmBuffer);
-  capture.bytesSent = pcmBuffer.length;
-  capture.sharedAsrBytesSent = pcmBuffer.length;
+  const sharedAsrState = getOrCreateSharedAsrState(session);
+  assert.ok(sharedAsrState);
+  sharedAsrState.phase = "ready";
+  sharedAsrState.client = {
+    ws: { readyState: 1 },
+    clearInputAudioBuffer() {},
+    appendInputAudioPcm() {},
+    commitInputAudioBuffer() {
+      setTimeout(() => {
+        sharedAsrState.utterance.finalSegments = ["can i show you my screen?"];
+        sharedAsrState.utterance.lastUpdateAt = Date.now();
+      }, 750);
+    }
+  };
+  voxClient.emit("userAudio", "speaker-1", pcmBuffer);
+  await flushMicrotasks();
 
-  capture.finalize("stream_end");
-  await new Promise((resolve) => setTimeout(resolve, 900));
+  const capture = session.userCaptures.get("speaker-1");
+  assert.ok(capture);
+  assert.ok(Number(capture.promotedAt || 0) > 0);
+  assert.ok(Number(capture.sharedAsrBytesSent || 0) > 0);
+  const captureManager = manager.captureManager as CaptureManager & {
+    runAsrBridgeCommit(args: {
+      session: VoiceSession;
+      userId: string;
+      settings?: Record<string, unknown> | null;
+      captureState: CaptureState;
+      pcmBuffer: Buffer;
+      captureReason: string;
+      finalizedAt: number;
+      useOpenAiPerUserAsr: boolean;
+      useOpenAiSharedAsr: boolean;
+    }): Promise<void>;
+  };
+  await captureManager.runAsrBridgeCommit({
+    session,
+    userId: "speaker-1",
+    settings,
+    captureState: capture,
+    pcmBuffer,
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    useOpenAiPerUserAsr: false,
+    useOpenAiSharedAsr: true
+  });
 
   assert.equal(bridgedTurns.length, 1);
   assert.equal(bridgedTurns[0]?.source, "shared");

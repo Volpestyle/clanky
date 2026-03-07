@@ -3,11 +3,13 @@ import { getResolvedBrowserTaskConfig } from "../settings/agentStack.ts";
 import { isAbortError, runBrowserBrowseTask } from "../tools/browserTaskRuntime.ts";
 import { runOpenAiComputerUseTask } from "../tools/openAiComputerUseRuntime.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
-import type { VoiceRealtimeToolSettings, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
+import type { VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 
+type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
+
 type VoiceAgentToolOptions = {
-  session?: VoiceToolRuntimeSessionLike | null;
+  session?: ToolRuntimeSession | null;
   settings?: VoiceRealtimeToolSettings | null;
   args?: VoiceToolCallArgs;
 };

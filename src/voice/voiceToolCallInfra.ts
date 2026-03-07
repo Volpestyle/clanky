@@ -1,6 +1,18 @@
 import { providerSupports } from "./voiceModes.ts";
-import type { VoiceMcpServerStatus, VoiceRealtimeToolSettings, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
+import type { VoiceMcpServerStatus, VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallManager } from "./voiceToolCallTypes.ts";
+import {
+  buildRealtimeFunctionTools,
+  ensureSessionToolRuntimeState,
+  getVoiceMcpServerStatuses,
+  parseOpenAiRealtimeToolArguments,
+  recordVoiceToolCallEvent,
+  resolveOpenAiRealtimeToolDescriptor,
+  summarizeVoiceToolOutput
+} from "./voiceToolCallToolRegistry.ts";
+import { executeLocalVoiceToolCall, executeMcpVoiceToolCall } from "./voiceToolCallDispatch.ts";
+
+type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
 
 export {
   buildRealtimeFunctionTools,
@@ -13,18 +25,18 @@ export {
   summarizeVoiceToolOutput
 } from "./voiceToolCallToolRegistry.ts";
 
-type RealtimeFunctionOutputClient = NonNullable<VoiceToolRuntimeSessionLike["realtimeClient"]> & {
+type RealtimeFunctionOutputClient = NonNullable<VoiceSession["realtimeClient"]> & {
   sendFunctionCallOutput?: (payload: { callId: string; output: string }) => void;
 };
 
-type ToolExecutionSession = VoiceToolRuntimeSessionLike & {
+type ToolExecutionSession = ToolRuntimeSession & {
   openAiPendingToolAbortControllers?: Map<string, AbortController>;
   realtimeClient?: RealtimeFunctionOutputClient | null;
 };
 
 export async function executeOpenAiRealtimeFunctionCall(
   manager: VoiceToolCallManager,
-  { session, settings, pendingCall }: { session?: VoiceToolRuntimeSessionLike | null; settings?: VoiceRealtimeToolSettings | null; pendingCall: any }
+  { session, settings, pendingCall }: { session?: ToolRuntimeSession | null; settings?: VoiceRealtimeToolSettings | null; pendingCall: any }
 ) {
   if (!session || session.ending) return;
   const runtimeSession = session as ToolExecutionSession;
@@ -34,8 +46,8 @@ export async function executeOpenAiRealtimeFunctionCall(
 
   const startedAtMs = Date.now();
   const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
-  const callArgs = manager.parseOpenAiRealtimeToolArguments(pendingCall?.argumentsText || "");
-  const toolDescriptor = manager.resolveOpenAiRealtimeToolDescriptor(session, toolName);
+  const callArgs = parseOpenAiRealtimeToolArguments(manager, pendingCall?.argumentsText || "");
+  const toolDescriptor = resolveOpenAiRealtimeToolDescriptor(manager, session, toolName);
   const toolType = toolDescriptor?.toolType === "mcp" ? "mcp" : "function";
 
   const abortController = new AbortController();
@@ -65,8 +77,8 @@ export async function executeOpenAiRealtimeFunctionCall(
   try {
     if (!toolDescriptor) throw new Error(`unknown_tool:${toolName || "unnamed"}`);
     output = toolDescriptor.toolType === "mcp"
-      ? await manager.executeMcpVoiceToolCall({ session, settings: resolvedSettings, toolDescriptor, args: callArgs })
-      : await manager.executeLocalVoiceToolCall({
+      ? await executeMcpVoiceToolCall(manager, { session, settings: resolvedSettings, toolDescriptor, args: callArgs })
+      : await executeLocalVoiceToolCall(manager, {
           session,
           settings: resolvedSettings,
           toolName: toolDescriptor.name,
@@ -82,8 +94,8 @@ export async function executeOpenAiRealtimeFunctionCall(
   }
 
   const runtimeMs = Math.max(0, Date.now() - startedAtMs);
-  const outputSummary = manager.summarizeVoiceToolOutput(output);
-  manager.recordVoiceToolCallEvent({
+  const outputSummary = summarizeVoiceToolOutput(manager, output);
+  recordVoiceToolCallEvent(manager, {
     session,
     event: {
       callId,
@@ -165,20 +177,24 @@ export async function refreshRealtimeTools(
     session,
     settings,
     reason = "voice_context_refresh"
-  }: { session?: VoiceToolRuntimeSessionLike | null; settings?: VoiceRealtimeToolSettings | null; reason?: string } = {}
+  }: { session?: ToolRuntimeSession | null; settings?: VoiceRealtimeToolSettings | null; reason?: string } = {}
 ) {
   if (!session || session.ending) return;
   if (!providerSupports(session.mode || "", "updateTools")) return;
   const realtimeClient = session.realtimeClient;
-  if (!realtimeClient || typeof realtimeClient.updateTools !== "function") return;
+  const updateTools =
+    realtimeClient && "updateTools" in realtimeClient && typeof realtimeClient.updateTools === "function"
+      ? realtimeClient.updateTools.bind(realtimeClient)
+      : null;
+  if (!updateTools) return;
 
-  manager.ensureSessionToolRuntimeState(session);
+  ensureSessionToolRuntimeState(manager, session);
   const previousMcpStatuses = new Map<string, VoiceMcpServerStatus>();
   for (const entry of Array.isArray(session.mcpStatus) ? session.mcpStatus : []) {
     const serverName = String(entry?.serverName || "");
     if (serverName) previousMcpStatuses.set(serverName, entry);
   }
-  session.mcpStatus = manager.getVoiceMcpServerStatuses().map((entry) => {
+  session.mcpStatus = getVoiceMcpServerStatuses(manager).map((entry) => {
     const previous = previousMcpStatuses.get(String(entry.serverName || ""));
     return {
       ...entry,
@@ -189,7 +205,7 @@ export async function refreshRealtimeTools(
   });
 
   const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
-  const tools = manager.buildRealtimeFunctionTools({ session, settings: resolvedSettings });
+  const tools = buildRealtimeFunctionTools(manager, { session, settings: resolvedSettings });
   const nextToolHash = JSON.stringify(
     tools.map((tool) => ({
       name: tool.name,
@@ -202,7 +218,7 @@ export async function refreshRealtimeTools(
   if (String(session.lastOpenAiRealtimeToolHash || "") === nextToolHash) return;
 
   try {
-    realtimeClient.updateTools({
+    updateTools({
       tools: tools.map((tool) => ({
         type: "function",
         name: tool.name,
