@@ -104,16 +104,14 @@ async def get_ephemeral_token():
 ```
 
 ```javascriptWithoutSDK
-// Example ephemeral token endpoint with Express
+// Example ephemeral token endpoint with Hono
 
-import express from 'express';
+import { Hono } from "hono";
 
-const app = express();
+const app = new Hono();
 const SESSION_REQUEST_URL = "https://api.x.ai/v1/realtime/client_secrets";
 
-app.use(express.json());
-
-app.post("/session", async (req, res) => {
+app.post("/session", async (c) => {
   const r = await fetch(SESSION_REQUEST_URL, {
     method: "POST",
     headers: {
@@ -126,10 +124,15 @@ app.post("/session", async (req, res) => {
   });
   
   const data = await r.json();
-  res.json(data);
+  return c.json(data);
 });
 
-app.listen(8081);
+Bun.serve({
+  port: 8081,
+  fetch(request, server) {
+    return app.fetch(request, { server });
+  }
+});
 ```
 
 The ephemeral token can be used in the same fashion as an API key:

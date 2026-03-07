@@ -149,17 +149,17 @@ export function attachVoiceRoutes(app: any, deps: any) {
 
 ### Target pattern:
 ```typescript
-import type { Express } from "express";
+import type { DashboardApp, DashboardSseClient } from "./shared.ts";
 
 export interface VoiceRouteDeps {
   store: Store;
   bot: ClankerBot;
   memory: MemoryManager;
   screenShareSessionManager: ScreenShareSessionManager | null;
-  voiceSseClients: Map<string, Response>;
+  voiceSseClients: Set<DashboardSseClient>;
 }
 
-export function attachVoiceRoutes(app: Express, deps: VoiceRouteDeps) {
+export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
   const { store, bot, memory, screenShareSessionManager, voiceSseClients } = deps;
 ```
 
@@ -167,7 +167,7 @@ export function attachVoiceRoutes(app: Express, deps: VoiceRouteDeps) {
 | File | `deps` shape |
 |------|-------------|
 | `src/dashboard/routesSettings.ts` | `{ store: Store, bot: ClankerBot, appConfig: AppConfig }` |
-| `src/dashboard/routesMetrics.ts` | `{ store: Store, publicHttpsEntrypoint: PublicHttpsEntrypoint \| null, getStatsPayload: () => object, activitySseClients: Map<string, Response>, writeSseEvent: (...) => void }` |
+| `src/dashboard/routesMetrics.ts` | `{ store: Store, publicHttpsEntrypoint: PublicHttpsEntrypoint \| null, getStatsPayload: () => object, activitySseClients: Set<DashboardSseClient>, writeSseEvent: (...) => Promise<void> }` |
 | `src/dashboard/routesVoice.ts` | `{ store: Store, bot: ClankerBot, memory: MemoryManager, screenShareSessionManager: ScreenShareSessionManager \| null, voiceSseClients: Map<string, Response> }` |
 
 ### Also type `dashboard.ts`:

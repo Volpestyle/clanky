@@ -140,7 +140,6 @@ export async function withDashboardServer<T>(
     : null;
 
   let dashboard = null;
-  let closed = false;
   try {
     dashboard = createDashboardServer({
       appConfig,
@@ -150,21 +149,6 @@ export async function withDashboardServer<T>(
       publicHttpsEntrypoint,
       screenShareSessionManager
     });
-
-    if (!dashboard.server.listening) {
-      await new Promise<void>((resolve, reject) => {
-        const onListening = () => {
-          dashboard.server.off("error", onError);
-          resolve();
-        };
-        const onError = (error: unknown) => {
-          dashboard.server.off("listening", onListening);
-          reject(error);
-        };
-        dashboard.server.once("listening", onListening);
-        dashboard.server.once("error", onError);
-      });
-    }
 
     const address = dashboard.server.address();
     const port = typeof address === "object" && address ? address.port : null;
@@ -186,10 +170,9 @@ export async function withDashboardServer<T>(
     }
     throw error;
   } finally {
-    if (dashboard?.server && !closed) {
+    if (dashboard?.server) {
       await new Promise<void>((resolve) => {
         dashboard.server.close(() => {
-          closed = true;
           resolve();
         });
       });
