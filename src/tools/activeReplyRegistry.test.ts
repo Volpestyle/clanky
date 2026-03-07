@@ -48,8 +48,18 @@ test("ActiveReplyRegistry isolates voice scopes from text scopes", () => {
 test("isCancelIntent matches the shared deterministic cancellation phrases", () => {
   assert.equal(isCancelIntent("stop"), true);
   assert.equal(isCancelIntent(" never mind "), true);
+  assert.equal(isCancelIntent("actually nevermind"), true);
+  assert.equal(isCancelIntent("ok stop"), true);
+  assert.equal(isCancelIntent("just cancel it"), true);
+  assert.equal(isCancelIntent("please stop"), true);
+  assert.equal(isCancelIntent("yeah forget it"), true);
+  assert.equal(isCancelIntent("stop that"), true);
+  assert.equal(isCancelIntent("cancel please"), true);
   assert.equal(isCancelIntent("nvm"), true);
   assert.equal(isCancelIntent("quit"), true);
   assert.equal(isCancelIntent("stop that please"), false);
+  assert.equal(isCancelIntent("don't stop the music"), false);
+  assert.equal(isCancelIntent("stop worrying about it"), false);
+  assert.equal(isCancelIntent("can you cancel my subscription"), false);
   assert.equal(isCancelIntent("continue"), false);
 });
