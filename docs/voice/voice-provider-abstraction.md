@@ -1,7 +1,7 @@
 # Voice Pipeline — Provider Abstraction and Stage Reference
 
 > **Scope:** Voice pipeline architecture — what stages audio passes through, which providers are active, and what settings configure each stage.
-> Operator-facing activity paths and setting map: [`clanker-activity.md`](clanker-activity.md)
+> Operator-facing activity paths and setting map: [`clanker-activity.md`](../clanker-activity.md)
 > Barge-in and noise rejection: [`voice-interruption-policy.md`](voice-interruption-policy.md)
 > Assistant reply/output lifecycle: [`voice-output-state-machine.md`](voice-output-state-machine.md)
 
@@ -32,7 +32,7 @@ Runtime modes (`src/voice/voiceModes.ts`): `openai_realtime`, `voice_agent`, `ge
 
 ## 2. The Pipeline
 
-![Voice Pipeline Stages](diagrams/voice-pipeline-stages.png)
+![Voice Pipeline Stages](../diagrams/voice-pipeline-stages.png)
 
 ### Stage Visibility Matrix
 
@@ -137,7 +137,7 @@ OpenAI realtime transcription returns per-token logprobs on `completed` events. 
 
 Before a capture becomes a real voice turn, it must first promote out of provisional state. After promotion, sequential rejection gates can still drop the turn before it consumes brain resources. Each gate fires independently — a turn is dropped at the first gate that rejects it.
 
-Applied in `runRealtimeTurn()` in `voiceSessionManager.ts`:
+Applied in `runRealtimeTurn()` in `src/voice/turnProcessor.ts`:
 
 Promotion signals:
 
@@ -156,13 +156,11 @@ The hybrid design is deliberate:
 |---|---|---|---|---|
 | 1 | Silence gate | `voice_turn_dropped_silence_gate` | `VOICE_SILENCE_GATE_MIN_CLIP_MS=280`, `RMS_MAX=0.003`, `PEAK_MAX=0.012`, `ACTIVE_RATIO_MAX=0.01` | all captures |
 | 2 | Short clip filter | `realtime_turn_transcription_skipped_short_clip` | `VOICE_TURN_MIN_ASR_CLIP_MS=100` | `speaking_end` captures |
-| 3 | Low signal fallback | `voice_turn_dropped_low_signal_fallback` | `FALLBACK_NOISE_GATE_MAX_CLIP_MS=1800`, `RMS_MAX=0.0065`, `PEAK_MAX=0.02`, `ACTIVE_RATIO_MAX=0.03` | fallback model turns |
-| 4 | ASR logprob confidence | `voice_turn_dropped_asr_low_confidence` | `VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD=-1.0` (mean logprob, log-base-e; -1.0 ≈ 37% per-token) | bridge path only (`hasTranscriptOverride`) |
-| 5 | Bridge fallback hallucination | `voice_turn_dropped_asr_bridge_fallback_hallucination` | same as low signal fallback | bridge active but returned empty |
-| 6 | Idle hallucination guard | `voice_turn_dropped_idle_hallucination` | same as low signal fallback | `idle_timeout` / `near_silence_early_abort` captures |
+| 3 | ASR logprob confidence | `voice_turn_dropped_asr_low_confidence` | `VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD=-1.0` (mean logprob, log-base-e; -1.0 ≈ 37% per-token) | bridge path only (`hasTranscriptOverride`) |
+| 4 | Bridge fallback hallucination | `voice_turn_dropped_asr_bridge_fallback_hallucination` | same as low signal fallback | bridge active but returned empty |
 
-Code: `evaluatePcmSilenceGate()`, `shouldDropFallbackLowSignalTurn()` in `voiceSessionManager.ts`
-Confidence: `computeAsrTranscriptConfidence()` in `voiceDecisionRuntime.ts`
+Code: `evaluatePcmSilenceGate()` in `src/voice/voiceSessionManager.ts`
+Confidence: `computeAsrTranscriptConfidence()` in `src/voice/voiceDecisionRuntime.ts`
 
 ---
 
@@ -277,7 +275,7 @@ When music playback starts, `haltSessionOutputForMusicPlayback()` clears pending
 
 #### Output Lock & Barge-in
 
-Bot turn tracking via `botTurnOpen` / `activeResponseId`. When a human speaks during bot output, `interruptBotSpeechForBargeIn()` cancels the active response, clears queued audio, and stores a retry candidate for brief interruptions. See `docs/voice-interruption-policy.md`.
+Bot turn tracking relies on the canonical `assistantOutput` state machine (see `docs/voice/voice-output-state-machine.md`). When a human speaks during bot output, `interruptBotSpeechForBargeIn()` cancels the active response, clears queued audio, and stores a retry candidate for brief interruptions. See `docs/voice/voice-interruption-policy.md`.
 
 System-initiated speech uses a separate opportunity lifecycle:
 

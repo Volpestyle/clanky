@@ -1,7 +1,7 @@
 # Voice Interruption Policy
 
 > **Scope:** Voice barge-in rules and noise rejection gates — can this user interrupt right now, and should this audio reach the brain.
-> Operator-facing activity paths and setting map: [`clanker-activity.md`](clanker-activity.md)
+> Operator-facing activity paths and setting map: [`clanker-activity.md`](../clanker-activity.md)
 > Voice pipeline stages, providers, and per-stage settings: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
 
 Controls whether users can barge-in (interrupt) the bot while it is speaking.
@@ -22,7 +22,7 @@ Passed as `interruptionPolicy` to `requestRealtimePromptUtterance()` or set on a
 
 ## Decision Logic
 
-`isUserAllowedToInterruptReply({ policy, userId })` in `voiceSessionManager.ts:3202`:
+`isUserAllowedToInterruptReply({ policy, userId })` in `src/voice/bargeInController.ts`:
 
 1. Policy is `null` or `assertive` is falsy → **anyone can interrupt** (default).
 2. `scope === "none"` → **nobody can interrupt**.
@@ -30,8 +30,7 @@ Passed as `interruptionPolicy` to `requestRealtimePromptUtterance()` or set on a
 
 ## Normalization
 
-`normalizeReplyInterruptionPolicy()` (`voiceSessionManager.ts:3127`) sanitizes the raw policy:
-- Accepts legacy `scope: "all"` and normalizes it to `"none"`.
+`normalizeReplyInterruptionPolicy()` (`src/voice/bargeInController.ts`) sanitizes the raw policy:
 - If `assertive` is not explicitly set, it defaults to `true` when `scope === "none"` or `allowedUserId` is present.
 - If `assertive` resolves to `false`, returns `null` (no policy).
 - If `scope === "speaker"` with no `allowedUserId`, returns `null`.
@@ -79,6 +78,31 @@ manager.requestRealtimePromptUtterance({
 });
 ```
 
+## `endSession(... announcement)` Note
+
+There is a second, separate use of the word `announcement` in the voice codebase:
+
+```ts
+await manager.endSession({
+  guildId: session.guildId,
+  reason: "assistant_leave_directive",
+  announcement: "wrapping up vc."
+});
+```
+
+This is **not** a realtime spoken announcement object and it is **not** posted to Discord literally.
+
+- `announcement: null` suppresses the session-end operational post entirely.
+- Any other string becomes an `announcementHint` detail on the `voice_session_end` event.
+- The text-channel message is then composed by the LLM from the event, reason, and details payload.
+- Result: `"wrapping up vc."` means "generate a brief leaving-VC style message," not "send these exact words."
+
+Relevant code paths:
+
+- `src/voice/voiceSessionManager.ts` - forwards `announcementHint` to `sendOperationalMessage()` for `voice_session_end`
+- `src/voice/voiceOperationalMessaging.ts` - applies operational-message verbosity/suppression rules
+- `src/bot/voiceReplies.ts` - asks the LLM to generate the final user-facing text
+
 ## Why We Handle Barge-In Ourselves
 
 OpenAI's Realtime API has built-in interruption handling — when VAD detects user speech during a response, it cancels the response and auto-truncates unplayed audio. But this only works when audio flows directly through OpenAI's channels:
@@ -99,7 +123,7 @@ So we implement barge-in manually via `shouldBargeIn()` → `interruptBotSpeechF
 
 The system separates two questions:
 
-1. **"Is the output channel busy?"** — `getReplyOutputLockState()` / `isBargeInInterruptTargetActive()`. Checks whether the bot is occupying the audio channel (pending response, active generation, subprocess playing). This is the precondition.
+1. **"Is the output channel busy?"** — `isBargeInInterruptTargetActive()` in `bargeInController.ts`. Checks whether the bot is occupying the audio channel (pending response, active generation, subprocess playing). This is the precondition. It relies on the canonical `assistantOutput.phase` defined in `docs/voice/voice-output-state-machine.md`.
 
 2. **"Should we interrupt right now?"** — `shouldBargeIn()`. The output lock being held doesn't mean the user is interrupting. The bot might not have started speaking, might be draining cached frames from a completed response, or the user might have been talking before the response was created. These gates narrow the decision to match the actual intent: **the user is intentionally talking over active bot speech**.
 
@@ -162,7 +186,7 @@ User audio arrives during output lock
 1. Sends `response.cancel` to the Realtime API to stop generation.
 2. Sends `conversation.item.truncate` so the API's conversation history only contains what was actually spoken.
 3. Calls `resetBotAudioPlayback()` to stop the subprocess audio player.
-4. Sets `botTurnOpen = false` to release the output lock.
+4. The canonical `assistantOutput.phase` will eventually transition to `idle` once the subprocess acknowledges the stop and telemetry drains.
 5. Unducks music volume if it was reduced for bot speech.
 6. **Post-cancel guard**: Checks `responseCancelSucceeded`. If the cancel failed (response already completed server-side due to event loop race), the interrupt only stops subprocess playback — it does NOT queue a retry utterance or set full suppression. This prevents phantom retries and audio suppression when the response was already done.
 7. If cancel succeeded: queues a deferred `interrupted_reply` action and sets full barge-in suppression (`BARGE_IN_SUPPRESSION_MAX_MS`, 12s).
@@ -176,7 +200,7 @@ The `response_done` WebSocket event and user audio IPC data are separate async e
 
 ## Noise Rejection Pipeline
 
-Before a transcribed turn reaches the brain, it passes through a layered rejection pipeline in `runRealtimeTurn()`. Each gate targets a different failure mode and operates on a specific code path. They are **not** redundant — removing any one gate leaves a class of bad input unfiltered.
+Before a transcribed turn reaches the brain, it passes through a layered rejection pipeline in `runRealtimeTurn()` within `src/voice/turnProcessor.ts`. Each gate targets a different failure mode and operates on a specific code path. They are **not** redundant — removing any one gate leaves a class of bad input unfiltered.
 
 ### Gate Ordering (in execution order)
 
@@ -200,24 +224,12 @@ PCM audio arrives
 │    Path: local transcription (!hasTranscriptOverride)   │
 │    Signal: PCM byte length < VOICE_TURN_MIN_ASR_CLIP_MS │
 │    Drops: micro speaking_end clips that hallucinate     │
-│    Log: voice_turn_skipped_short_clip_asr               │
+│    Log: realtime_turn_transcription_skipped_short_clip  │
 └─────────────────────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────────────────────┐
-│ 3. Low-Signal Fallback Filter                           │
-│    Path: local transcription (!hasTranscriptOverride)   │
-│    Signal: isLowSignalVoiceFragment() on transcript     │
-│           text + fallback model usage + silence metrics  │
-│    Drops: trivial/short transcripts from the fallback   │
-│           whisper model ("uh", "hmm") that are real but │
-│           not worth responding to                       │
-│    Log: voice_turn_dropped_low_signal_fallback          │
-└─────────────────────────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────────────────────────┐
-│ 4. ASR Logprobs Confidence Gate                         │
+│ 3. ASR Logprobs Confidence Gate                         │
 │    Path: ASR bridge (hasTranscriptOverride = true)      │
 │    Signal: mean logprob from OpenAI transcription       │
 │    Threshold: VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD    │
@@ -231,7 +243,7 @@ PCM audio arrives
     │
     ▼
 ┌─────────────────────────────────────────────────────────┐
-│ 5. ASR Bridge Fallback Hallucination Guard              │
+│ 4. ASR Bridge Fallback Hallucination Guard              │
 │    Path: local transcription when ASR bridge was active │
 │           but returned empty (!hasTranscriptOverride    │
 │           && asrBridgeWasActive)                        │
@@ -252,15 +264,5 @@ PCM audio arrives
 |------|-----------|-----------------|--------------------------|
 | Silence gate | All | No-audio PCM blips | Runs before ASR — prevents wasting ASR calls |
 | Short clip skip | Local ASR | Micro speaking_end clips | Content-agnostic; pure duration check |
-| Low-signal filter | Local ASR | Confident but trivial transcripts ("hmm") | Logprobs gate doesn't apply (no bridge); content is real but not worth responding to |
-| Logprobs confidence | ASR bridge | Hallucinated text with low model confidence | Low-signal filter doesn't run on bridge path; silence gate already passed |
+| Logprobs confidence | ASR bridge | Hallucinated text with low model confidence | Silence gate already passed |
 | Bridge fallback guard | Local ASR (bridge was active) | Hallucinations from bridge→local fallback race | Only fires when bridge returned empty and local ASR filled in |
-
-### Key Distinction
-
-**Logprobs gate** and **low-signal filter** are the two most commonly confused gates. They are not interchangeable:
-
-- **Logprobs gate** asks: *"Is this transcription accurate?"* — model was uncertain → likely hallucination from noise
-- **Low-signal filter** asks: *"Is this content worth responding to?"* — model was confident it heard "hmm" but we don't need to respond
-
-They also guard **different code paths**: logprobs only exists on the ASR bridge path (`hasTranscriptOverride = true`), while low-signal only fires on the local transcription fallback path (`hasTranscriptOverride = false`).

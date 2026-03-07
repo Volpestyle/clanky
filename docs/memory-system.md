@@ -24,10 +24,10 @@ This is only the durable-fact memory system. Two adjacent persistence layers now
 
 ## Key Files
 
-- `src/memory.ts`: ingestion queue, daily journaling, daily reflection job, directive writes (`rememberDirectiveLine`), hybrid retrieval/ranking, markdown refresh.
+- `src/memory/memoryManager.ts`: ingestion queue, daily journaling, daily reflection job, directive writes (`rememberDirectiveLine`), hybrid retrieval/ranking, markdown refresh.
 - `src/memory/memoryHelpers.ts`: fact normalization, grounding checks, scoring helpers, directive scope config.
 - `src/memory/dailyReflection.ts`: end-of-day reflection logic — reads daily journal, runs LLM distillation, writes durable facts.
-- `src/store.ts`: `memory_facts` and `memory_fact_vectors_native` schema + query/update methods.
+- `src/store/store.ts`: `memory_facts` and `memory_fact_vectors_native` schema + query/update methods.
 - `src/store/storeAdaptiveDirectives.ts`: adaptive directive storage, prompt-time retrieval, and audit-log helpers.
 - `src/llm.ts`: embedding API calls, reflection LLM calls.
 - `src/tools/replyTools.ts`: `memory_write` and `memory_search` tool definitions + execution handlers (used by text chat brain).
@@ -40,7 +40,7 @@ This is only the durable-fact memory system. Two adjacent persistence layers now
 
 ### `memory_facts` (durable facts)
 
-Created in `Store.init()` (`src/store.ts`) with key fields:
+Created in `Store.init()` (`src/store/store.ts`) with key fields:
 
 - `guild_id` (required): primary scope boundary.
 - `channel_id` (optional): retrieval bias, not hard partitioning.
@@ -293,4 +293,4 @@ Action log kinds used by memory pipeline:
 - Durable memory is always guild-scoped. Facts never cross guild boundaries.
 - Channel scope is a ranking hint, not a hard filter.
 - Archiving is soft (`is_active = 0`), not hard delete.
-- The canonical source for runtime memory behavior is `src/memory.ts` + `src/store.ts`; docs should be updated if those files change.
+- The canonical source for runtime memory behavior is `src/memory/memoryManager.ts` + `src/store/store.ts`; docs should be updated if those files change.

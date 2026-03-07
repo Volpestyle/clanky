@@ -17,8 +17,8 @@ Core runtime files:
 - `src/agents/codeAgent.ts`
 - `src/agents/codexAgent.ts`
 - `src/agents/subAgentSession.ts`
-- `src/llmClaudeCode.ts`
-- `src/llmCodex.ts`
+- `src/llm/llmClaudeCode.ts`
+- `src/llm/llmCodex.ts`
 
 ## Access Control
 

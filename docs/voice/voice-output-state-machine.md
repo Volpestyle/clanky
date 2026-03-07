@@ -3,14 +3,14 @@
 > Scope: assistant reply/output lifecycle after a voice turn has already been admitted.
 > Voice pipeline stages: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
 > Barge-in and echo policy: [`voice-interruption-policy.md`](voice-interruption-policy.md)
-> Runtime log workflow: [`logs.md`](logs.md)
+> Runtime log workflow: [`logs.md`](../logs.md)
 
 This document defines the canonical assistant output state machine for voice sessions.
 The goal is to prevent stale "bot is still speaking" locks when OpenAI realtime,
 the Bun session manager, and `clankvox` disagree about whether playback has actually
 finished.
 
-![Voice Assistant Output State](diagrams/voice-assistant-output-state.png)
+![Voice Assistant Output State](../diagrams/voice-assistant-output-state.png)
 
 <!-- source: docs/diagrams/voice-assistant-output-state.mmd -->
 

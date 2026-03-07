@@ -1,8 +1,8 @@
 # Clanker Activity Model
 
 > **Scope:** All activity paths (text + voice) — which path fired and which slider controls it.
-> Barge-in and noise rejection: [`voice-interruption-policy.md`](voice-interruption-policy.md)
-> Voice pipeline stages, providers, and per-stage settings: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
+> Barge-in and noise rejection: [`voice-interruption-policy.md`](voice/voice-interruption-policy.md)
+> Voice pipeline stages, providers, and per-stage settings: [`voice-provider-abstraction.md`](voice/voice-provider-abstraction.md)
 
 This document explains how Clanker decides when to speak in text channels and voice sessions, which settings control each path, how tool calling fits into the runtime, and where to look in code and the dashboard when behavior needs to change.
 
@@ -41,7 +41,7 @@ A separate proactive posting system that can post standalone discovery/shitpost 
 
 These are related, but they are not the same system and they are not controlled by the same settings.
 
-The closest existing overview before this was the short architecture summary in `docs/technical-architecture.md` and the voice-runtime overview in `docs/voice-provider-abstraction.md`. This file exists because the runtime now has enough separate paths and sliders that the activity model needs its own dedicated reference.
+The closest existing overview before this was the short architecture summary in `docs/technical-architecture.md` and the voice-runtime overview in `docs/voice/voice-provider-abstraction.md`. This file exists because the runtime now has enough separate paths and sliders that the activity model needs its own dedicated reference.
 
 ## Operator Checklist
 
@@ -124,14 +124,14 @@ Important distinction:
 
 - the loop checks every 60 seconds
 - that does **not** mean it posts every 60 seconds
-- actual posting is limited by `textThoughtLoop.minMinutesBetweenThoughts` and `textThoughtLoop.maxThoughtsPerDay`
+- actual posting is limited by `initiative.text.minMinutesBetweenThoughts` and `initiative.text.maxThoughtsPerDay`
 
 If the bot process is offline, the thought loop does not run. Missed checks are not replayed later.
 
 Important setting boundary:
 
 - `permissions.allowUnsolicitedReplies` does not disable the thought loop
-- `textThoughtLoop.enabled` is the switch for this path
+- `initiative.text.enabled` is the switch for this path
 - this is intentional, because lurking/chiming in on a timer is treated as a separate proactive system
 
 Relevant code:
@@ -184,9 +184,9 @@ Behavior:
 Relevant code:
 
 - `evaluateVoiceReplyDecision(...)` in `src/voice/voiceReplyDecision.ts`
-- `buildVoiceConversationContext(...)` in `src/voice/voiceSessionManager.ts`
-- `buildVoiceAddressingState(...)` in `src/voice/voiceSessionManager.ts`
-- `voice_turn_addressing` action logging in `src/voice/voiceSessionManager.ts`
+- `buildVoiceConversationContext(...)` in `src/voice/voiceReplyDecision.ts`
+- `buildVoiceAddressingState(...)` in `src/voice/voiceAddressing.ts`
+- `voice_turn_addressing` action logging in `src/voice/turnProcessor.ts`
 
 ### 6. Voice Reply Classifier Gate (Bridge Mode)
 
@@ -200,8 +200,8 @@ Decision flow:
 - Addressed-to-other signal → classifier context (strong deny prior, not hard deterministic block)
 - STT pipeline mode → `generation_decides` (the text LLM handles skip via `[SKIP]`)
 - Bridge mode with music playing and no wake latch → `music_playing_not_awake`
-- Bridge mode `realtimeAdmissionMode=hard_classifier` → classifier YES/NO → `classifier_allow` / `classifier_deny`
-- Bridge mode `realtimeAdmissionMode=generation_only` → `generation_decides`
+- Bridge mode `voice.admission.mode=classifier_gate` → classifier YES/NO → `classifier_allow` / `classifier_deny`
+- Bridge mode `voice.admission.mode=generation_decides` → `generation_decides`
 - Classifier prompt context includes attributed recent history (`speaker: "text"`) up to 6 turns / 900 chars plus current turn fields
 
 This replaces the earlier heuristic gates (`wakeModeActive`, `botRecentReplyFollowup`, `shouldDelayNonDirectRealtimeReply`) with actual language understanding.
@@ -210,9 +210,8 @@ Relevant code:
 
 - `evaluateVoiceReplyDecision(...)` in `src/voice/voiceReplyDecision.ts`
 - `runVoiceReplyClassifier(...)` in `src/voice/voiceReplyDecision.ts`
-- `buildVoiceConversationContext(...)` in `src/voice/voiceReplyDecision.ts`
-- `buildVoiceAddressingState(...)` in `src/voice/voiceReplyDecision.ts`
-- `runRealtimeTurn(...)` and `runSttPipelineTurn(...)` in `src/voice/voiceSessionManager.ts`
+- `buildVoiceAddressingState(...)` in `src/voice/voiceAddressing.ts`
+- `runRealtimeTurn(...)` and `runSttPipelineTurn(...)` in `src/voice/turnProcessor.ts`
 
 ### 7. Voice Thought Engine
 
@@ -222,7 +221,7 @@ Behavior:
 
 - only runs while an active voice session exists
 - scheduled by silence and cooldown, not by a fixed global cron
-- uses `voice.thoughtEngine.*` settings
+- uses `initiative.voice.*` settings
 - is separate from direct-address handling
 
 Important distinction:
@@ -246,9 +245,9 @@ There are three voice runtime styles to keep in mind:
 
 - `brain / bridge`
   - transcript text is pushed through the shared continuity + tool-calling brain path
-  - non-direct-address turns are admitted by `voice.replyDecisionLlm.realtimeAdmissionMode`:
-    - `hard_classifier`: YES/NO classifier gate
-    - `generation_only`: generation decides reply vs skip
+  - non-direct-address turns are admitted by `voice.admission.mode`:
+    - `classifier_gate`: YES/NO classifier gate
+    - `generation_decides`: generation decides reply vs skip
 
 - `stt_pipeline`
   - transcription, text generation, and TTS are separate stages
@@ -366,20 +365,20 @@ Relevant code:
 
 ### Thought Loop Controls
 
-- `textThoughtLoop.enabled`
+- `initiative.text.enabled`
   - enables/disables the cold-channel conversational lurking loop
   - this is separate from `permissions.allowUnsolicitedReplies`
 
-- `textThoughtLoop.eagerness`
+- `initiative.text.eagerness`
   - controls how willing Clanker is to chime in during thought-loop checks
 
-- `textThoughtLoop.minMinutesBetweenThoughts`
+- `initiative.text.minMinutesBetweenThoughts`
   - cooldown between thought-loop posts
 
-- `textThoughtLoop.maxThoughtsPerDay`
+- `initiative.text.maxThoughtsPerDay`
   - daily cap for thought-loop posts
 
-- `textThoughtLoop.lookbackMessages`
+- `initiative.text.lookbackMessages`
   - how much recent context the thought loop inspects when evaluating a channel
 
 ### Discovery Controls
@@ -404,36 +403,36 @@ These affect discovery posts only, not normal conversation replies.
 - `voice.commandOnlyMode`
   - narrows voice behavior toward commands/control instead of open-ended chatting
 
-- `voice.thoughtEngine.enabled`
+- `initiative.voice.enabled`
   - master switch for timer/silence-driven unsolicited VC thoughts
 
-- `voice.thoughtEngine.eagerness`
+- `initiative.voice.eagerness`
   - how willing Clanker is to speak up on its own in an active VC
 
-- `voice.thoughtEngine.minSilenceSeconds`
+- `initiative.voice.minSilenceSeconds`
   - required silence before a voice thought can be scheduled
 
-- `voice.thoughtEngine.minSecondsBetweenThoughts`
+- `initiative.voice.minSecondsBetweenThoughts`
   - minimum spacing between voice thought-engine replies
 
 - `voice.replyPath`
   - `native`, `bridge`, or `brain`
   - changes how replies are transported, not the operator-facing continuity model
 
-- `voice.replyDecisionLlm.realtimeAdmissionMode`
-  - `hard_classifier` or `generation_only` for realtime bridge admission
+- `voice.admission.mode`
+  - `classifier_gate` or `generation_decides` for realtime bridge admission
 
-- `voice.replyDecisionLlm.musicWakeLatchSeconds`
+- `voice.admission.musicWakeLatchSeconds`
   - sliding latch window (default 15s) that allows follow-up turns during active music after a wake/direct-address
 
-- `voice.replyDecisionLlm.provider` / `voice.replyDecisionLlm.model`
-  - model used for the realtime admission classifier in `hard_classifier` mode
+- `agentStack.overrides.voiceAdmissionClassifier`
+  - model used for the realtime admission classifier in `classifier_gate` mode
 
 - classifier context window
   - attributed recent transcript history (`speaker: "text"`) up to 6 turns / 900 chars, plus current turn fields
 
-- `voice.generationLlm.*`
-  - model used for voice-turn generation in non-native generation paths and `generation_only` admission behavior
+- `agentStack.runtimeConfig.voice.generation.*`
+  - model used for voice-turn generation in non-native generation paths and `generation_decides` admission behavior
 
 - `voice.openaiRealtime.*`, `voice.geminiRealtime.*`, `voice.elevenLabsRealtime.*`, `voice.sttPipeline.*`
   - provider- and transport-specific controls
@@ -606,7 +605,7 @@ This prevents the thought loop from piling on while Clanker is already active in
 ### Example C: two users are chatting in `#general`, Clanker has not spoken yet
 
 - thought loop decides whether to jump in
-- `textThoughtLoop.*` is the main control
+- `initiative.text.*` is the main control
 
 ### Example D: `replyChannelIds` is blank
 
@@ -619,7 +618,7 @@ This prevents the thought loop from piling on while Clanker is already active in
 - discovery posting is disabled everywhere
 - this does not affect direct replies or the text thought loop
 
-### Example F: `allowUnsolicitedReplies` is off, but `textThoughtLoop.enabled` is on
+### Example F: `allowUnsolicitedReplies` is off, but `initiative.text.enabled` is on
 
 - recent-window follow-up replies will stop
 - direct mentions still work
@@ -628,7 +627,7 @@ This prevents the thought loop from piling on while Clanker is already active in
 ### Example G: in VC, someone addresses Clanker once and then asks a short follow-up
 
 - voice conversation continuity can still treat the follow-up as aimed at the bot
-- realtime admission mode (`voice.replyDecisionLlm.realtimeAdmissionMode`) and session engagement context matter more than text-channel eagerness sliders
+- realtime admission mode (`voice.admission.mode`) and session engagement context matter more than text-channel eagerness sliders
 
 ### Example H: user asks "what did we say about Nvidia earlier?"
 

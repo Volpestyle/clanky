@@ -76,7 +76,7 @@ Filter examples:
 When a voice turn is transcribed correctly but the bot does not answer, use the
 assistant output state machine doc first:
 
-- [`voice-output-state-machine.md`](voice-output-state-machine.md)
+- [`voice-output-state-machine.md`](voice/voice-output-state-machine.md)
 
 Start with these events:
 
@@ -87,7 +87,7 @@ Start with these events:
 
 Important interpretation rule:
 
-- top-level `reason="bot_turn_open"` is a coarse public deny label
+- top-level `reason="output_locked"` is a coarse public deny label
 - `outputLockReason` is the authoritative blocker for reply/output lock incidents
 
 Suggested query:

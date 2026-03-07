@@ -16,18 +16,18 @@ Core runtime:
 - `src/settings/settingsSchema.ts`: canonical persisted settings schema.
 - `src/settings/agentStack.ts`: preset resolution + capability/runtime accessors (`research`, `browser`, `voice`, `devTeam`, orchestrator bindings).
 - `src/llm.ts`: model provider abstraction (OpenAI, Anthropic, xAI/Grok, or Claude Code), usage + cost logging, embeddings, image/video generation, ASR, and TTS.
-- `src/llmClaudeCode.ts`: Claude Code CLI invocation/parsing helpers used by `LLMService`.
-- `src/llmCodex.ts`: OpenAI Responses/Codex integration used by the code-agent runtime.
+- `src/llm/llmClaudeCode.ts`: Claude Code CLI invocation/parsing helpers used by `LLMService`.
+- `src/llm/llmCodex.ts`: OpenAI Responses/Codex integration used by the code-agent runtime.
 - `docs/claude-code-brain-session-mode.md`: Claude Code persistent-brain behavior and how it differs from stateless API providers.
-- `src/memory.ts`: append-only daily journaling + LLM-based fact extraction + hybrid memory retrieval (lexical + vector).
-- `src/discovery.ts`: external link discovery for discovery posts.
-- `src/store.ts`: SQLite persistence orchestration.
+- `src/memory/memoryManager.ts`: append-only daily journaling + LLM-based fact extraction + hybrid memory retrieval (lexical + vector).
+- `src/services/discovery.ts`: external link discovery for discovery posts.
+- `src/store/store.ts`: SQLite persistence orchestration.
 - `src/store/*`: settings normalization and store helper utilities.
 - `src/voice/voiceSessionManager.ts`: voice orchestration and session lifecycle.
 - `src/voice/voiceJoinFlow.ts`, `src/voice/voiceStreamWatch.ts`, `src/voice/voiceOperationalMessaging.ts`, `src/voice/voiceDecisionRuntime.ts`: extracted voice domains.
-- `docs/voice-output-state-machine.md`: canonical assistant reply/output phase model and incident workflow.
-- `src/publicHttpsEntrypoint.ts`: optional Cloudflare Quick Tunnel runtime for exposing local dashboard/API over public HTTPS.
-- `src/screenShareSessionManager.ts`: tokenized browser screen-share session lifecycle and frame relay into voice stream-watch ingest.
+- `docs/voice/voice-output-state-machine.md`: canonical assistant reply/output phase model and incident workflow.
+- `src/services/publicHttpsEntrypoint.ts`: optional Cloudflare Quick Tunnel runtime for exposing local dashboard/API over public HTTPS.
+- `src/services/screenShareSessionManager.ts`: tokenized browser screen-share session lifecycle and frame relay into voice stream-watch ingest.
 
 Agents:
 - `src/agents/browseAgent.ts`: headless browser agent — LLM + browser tool loop for navigating websites and extracting information.
@@ -136,17 +136,19 @@ No step here is hardcoded. The brain chose which tools to use and in what order 
 
 ## 4. Data Model (SQLite)
 
-Main tables created in `src/store.ts`:
+Main tables created in `src/store/store.ts`:
 - `settings`: single `runtime_settings` JSON blob.
 - `messages`: normalized message history across text chat, persisted user voice transcripts, and persisted assistant spoken turns.
 - `actions`: event log (replies, reactions, discovery posts, llm/image calls, errors) with `usd_cost`.
 - `memory_facts`: LLM-extracted durable facts with type/confidence/evidence.
 - `memory_fact_vectors_native`: sqlite-vec-compatible embeddings per fact/model for semantic recall.
+- `shared_links`: external links already posted (for dedupe windows).
+- `lookup_context`: cached snippets/pages from background knowledge fetches (e.g., wiki pages).
 - `adaptive_style_notes`: active persistent adaptive directives, including `directive_kind` (`guidance` or `behavior`), audit metadata, and soft-delete fields.
 - `adaptive_style_note_events`: append-only audit log of directive adds/edits/reactivations/removals.
-- `shared_links`: external links already posted (for dedupe windows).
 - `automations`: natural-language schedule definitions and next-run state.
 - `automation_runs`: per-run execution history for each automation.
+- `response_triggers`: lookup index of discord message IDs the bot has successfully acted on (to avoid duplicate text processing on restart).
 
 Table relationship diagram (logical relationships):
 
@@ -272,7 +274,7 @@ Common `actions.kind` values in current runtime:
 - Memory pipeline: `memory_fact`, `memory_extract_call`, `memory_extract_error`, `memory_embedding_call`, `memory_embedding_error`
 - Adaptive directives: `adaptive_style_note` (current internal action-log kind for directive lifecycle events)
 - Search + video context: `search_call`, `search_error`, `video_context_call`, `video_context_error`
-- Agent tools: `browser_browse_call`, `browser_tool_step`
+- Agent tools: `browser_browse_call`, `browser_tool_step`, `browser_agent_session_turn`
 - Code agent: `code_agent_call`, `code_agent_error`
 - Voice runtime: `voice_session_start`, `voice_session_end`, `voice_turn_in`, `voice_turn_out`, `voice_runtime`, `voice_intent_detected`, `voice_error`
 - Speech services: `asr_call`, `asr_error`, `tts_call`, `tts_error`
