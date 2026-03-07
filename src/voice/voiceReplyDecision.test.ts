@@ -61,7 +61,6 @@ function buildClassifierArgs() {
       msSinceDirectAddress: null
     },
     replyEagerness: 50,
-    addressedToOtherSignal: false,
     pendingCommandFollowupSignal: false,
     musicActive: false,
     musicWakeLatched: false,

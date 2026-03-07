@@ -548,7 +548,6 @@ export function buildVoiceTurnPrompt({
       replyEagerness: voiceEagerness,
       participantCount: normalizedParticipantRoster.length,
       conversationContext: normalizedConversationContext,
-      addressedToOtherSignal: Boolean(normalizedConversationContext?.addressedToOtherSignal),
       pendingCommandFollowupSignal: Boolean(normalizedConversationContext?.pendingCommandFollowupSignal),
       musicActive: Boolean(normalizedConversationContext?.musicActive),
       musicWakeLatched: Boolean(normalizedConversationContext?.musicWakeLatched)

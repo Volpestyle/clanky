@@ -12,15 +12,15 @@
  * Env:
  *   LIVE_REPLY_FILTER=text|voice|label-substring
  *   LIVE_REPLY_DEBUG=1
- *   TEXT_LLM_PROVIDER=openai|anthropic|xai|claude-code|codex-cli
+ *   TEXT_LLM_PROVIDER=openai|anthropic|claude-oauth|xai|codex-cli
  *   TEXT_LLM_MODEL=...
- *   VOICE_LLM_PROVIDER=openai|anthropic|xai|claude-code|codex-cli
+ *   VOICE_LLM_PROVIDER=openai|anthropic|claude-oauth|xai|codex-cli
  *   VOICE_LLM_MODEL=...
  *
  * Examples:
  *   bun test tests/live/replyGeneration.live.test.ts
  *   TEXT_LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-... bun test tests/live/replyGeneration.live.test.ts
- *   TEXT_LLM_PROVIDER=openai TEXT_LLM_MODEL=gpt-5-mini VOICE_LLM_PROVIDER=anthropic VOICE_LLM_MODEL=claude-haiku-4-5 bun test tests/live/replyGeneration.live.test.ts
+ *   TEXT_LLM_PROVIDER=claude-oauth VOICE_LLM_PROVIDER=claude-oauth VOICE_LLM_MODEL=claude-sonnet-4-6 bun test tests/live/replyGeneration.live.test.ts
  */
 import { afterAll, beforeAll, describe, test } from "bun:test";
 import assert from "node:assert/strict";
@@ -35,9 +35,9 @@ import {
   getResolvedOrchestratorBinding,
   getResolvedVoiceGenerationBinding
 } from "../../src/settings/agentStack.ts";
+import { isClaudeOAuthConfigured } from "../../src/llm/claudeOAuth.ts";
 import { createTestSettings } from "../../src/testSettings.ts";
 import {
-  isLikelyVocativeAddressToOtherParticipant,
   isVoiceTurnAddressedToBot
 } from "../../src/voice/voiceSessionHelpers.ts";
 import {
@@ -66,23 +66,23 @@ type LiveScenario = {
 const SUPPORTED_PROVIDERS = new Set([
   "openai",
   "anthropic",
+  "claude-oauth",
   "xai",
-  "claude-code",
   "codex-cli"
 ]);
 
 const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
   openai: "gpt-5-mini",
   anthropic: "claude-haiku-4-5",
+  "claude-oauth": "claude-sonnet-4-6",
   xai: "grok-3-mini-latest",
-  "claude-code": "sonnet",
   "codex-cli": "gpt-5.4"
 };
 
 const LIVE_REPLY_FILTER = String(process.env.LIVE_REPLY_FILTER || "").trim().toLowerCase();
 const LIVE_REPLY_DEBUG = parseBooleanFlag(process.env.LIVE_REPLY_DEBUG, false);
-const TEXT_BINDING = resolveLiveBinding("TEXT", "claude-code");
-const VOICE_BINDING = resolveLiveBinding("VOICE", "claude-code");
+const TEXT_BINDING = resolveLiveBinding("TEXT", "claude-oauth");
+const VOICE_BINDING = resolveLiveBinding("VOICE", "claude-oauth");
 const LOGS: Array<Record<string, unknown>> = [];
 
 let llm: LLMService | null = null;
@@ -347,12 +347,6 @@ function buildVoicePrompt(sc: VoiceLiveScenario): PromptEnvelope {
     msSinceDirectAddress: sc.msSinceDirectAddress ?? null,
     engaged,
     engagedWithCurrentSpeaker: engaged,
-    addressedToOtherSignal: isLikelyVocativeAddressToOtherParticipant({
-      transcript: sc.transcript,
-      participantDisplayNames: participantRoster,
-      botName: sc.botName || "clanker conk",
-      speakerName
-    }),
     pendingCommandFollowupSignal: Boolean(sc.musicActive && sc.recentAssistantReply),
     musicActive: Boolean(sc.musicActive),
     musicWakeLatched: Boolean(sc.musicWakeLatched)
@@ -626,7 +620,7 @@ const textScenarios: LiveScenario[] = [
         },
         channelMode: "reply_channel"
       })
-  }
+  })
 ];
 
 function validateProviderReadiness(binding: LiveBinding, kind: "TEXT" | "VOICE") {
@@ -635,6 +629,9 @@ function validateProviderReadiness(binding: LiveBinding, kind: "TEXT" | "VOICE")
   }
   if (binding.provider === "anthropic" && !process.env.ANTHROPIC_API_KEY) {
     throw new Error(`ANTHROPIC_API_KEY is required when ${kind}_LLM_PROVIDER=anthropic`);
+  }
+  if (binding.provider === "claude-oauth" && !isClaudeOAuthConfigured(process.env.CLAUDE_OAUTH_REFRESH_TOKEN || "")) {
+    throw new Error(`CLAUDE_OAUTH_REFRESH_TOKEN or data/claude-oauth-tokens.json is required when ${kind}_LLM_PROVIDER=claude-oauth`);
   }
   if (binding.provider === "xai" && !process.env.XAI_API_KEY) {
     throw new Error(`XAI_API_KEY is required when ${kind}_LLM_PROVIDER=xai`);
@@ -649,6 +646,7 @@ beforeAll(() => {
     appConfig: {
       openaiApiKey: process.env.OPENAI_API_KEY || "",
       anthropicApiKey: process.env.ANTHROPIC_API_KEY || "",
+      claudeOAuthRefreshToken: process.env.CLAUDE_OAUTH_REFRESH_TOKEN || "",
       xaiApiKey: process.env.XAI_API_KEY || "",
       xaiBaseUrl: process.env.XAI_BASE_URL || ""
     },
@@ -659,9 +657,6 @@ beforeAll(() => {
     }
   });
 
-  if ((TEXT_BINDING.provider === "claude-code" || VOICE_BINDING.provider === "claude-code") && !llm.claudeCodeAvailable) {
-    throw new Error("claude-code provider requires the 'claude' CLI to be installed.");
-  }
   if ((TEXT_BINDING.provider === "codex-cli" || VOICE_BINDING.provider === "codex-cli") && !llm.codexCliAvailable) {
     throw new Error("codex-cli provider requires the 'codex' CLI to be installed.");
   }
@@ -672,8 +667,8 @@ afterAll(() => {
   llm = null;
 });
 
-const textTimeoutMs = TEXT_BINDING.provider === "claude-code" || TEXT_BINDING.provider === "codex-cli" ? 30_000 : 15_000;
-const voiceTimeoutMs = VOICE_BINDING.provider === "claude-code" || VOICE_BINDING.provider === "codex-cli" ? 30_000 : 15_000;
+const textTimeoutMs = TEXT_BINDING.provider === "codex-cli" ? 30_000 : 15_000;
+const voiceTimeoutMs = VOICE_BINDING.provider === "codex-cli" ? 30_000 : 15_000;
 
 describe("text reply live tests", () => {
   for (const scenario of textScenarios.filter((entry) => matchesFilter(entry.label))) {

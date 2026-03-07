@@ -1796,7 +1796,7 @@ test("reply decider clears expired music wake latch and denies until new wake", 
   assert.equal(session.musicWakeLatchedByUserId, null);
 });
 
-test("reply decider passes addressed-to-other signal into classifier and allows model deny", async () => {
+test("classifier sees participant list so it can infer addressing from transcript context", async () => {
   let callCount = 0;
   let classifierPrompt = "";
   const manager = createManager({
@@ -1834,11 +1834,9 @@ test("reply decider passes addressed-to-other signal into classifier and allows 
 
   assert.equal(decision.allow, false);
   assert.equal(decision.reason, "classifier_deny");
-  assert.equal(decision.classifierTarget, "OTHER");
   assert.equal(callCount, 1);
-  // The classifier prompt no longer includes a literal "Addressed-to-other signal" line —
-  // the LLM infers addressing from the transcript and participant list directly.
-  // Verify it still sees the participant list so it can make that inference.
+  // The classifier LLM infers addressing from the transcript and participant list directly.
+  // Verify it sees the participant list so it can make that inference.
   assert.equal(classifierPrompt.includes("smelly"), true);
 });
 

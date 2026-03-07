@@ -59,7 +59,6 @@ export type VoiceConversationContext = {
     msUntilCommandSessionExpiry?: number | null;
     voiceAddressingState?: VoiceAddressingState | null;
     currentTurnAddressing?: VoiceAddressingAnnotation | null;
-    addressedToOtherSignal?: boolean;
     pendingCommandFollowupSignal?: boolean;
     musicActive?: boolean;
     musicWakeLatched?: boolean;

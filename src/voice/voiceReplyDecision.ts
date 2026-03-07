@@ -7,7 +7,6 @@ import {
   normalizeVoiceText,
   STT_TRANSCRIPT_MAX_CHARS,
   isVoiceTurnAddressedToBot,
-  isLikelyVocativeAddressToOtherParticipant,
   isRealtimeMode,
   normalizeVoiceAddressingTargetToken
 } from "./voiceSessionHelpers.ts";
@@ -306,7 +305,6 @@ export function buildVoiceConversationContext(manager: ReplyDecisionHost, {
   session = null,
   userId = null,
   directAddressed = false,
-  addressedToOtherParticipant = false,
   participantCount = null,
   now = Date.now()
 } = {}): VoiceConversationContext {
@@ -348,9 +346,7 @@ export function buildVoiceConversationContext(manager: ReplyDecisionHost, {
     sameAsVoiceCommandUser ||
     (recentAssistantReply && sameAsRecentDirectAddress) ||
     (recentDirectAddress && sameAsRecentDirectAddress);
-  const engaged =
-    !addressedToOtherParticipant &&
-    engagedWithCurrentSpeaker;
+  const engaged = engagedWithCurrentSpeaker;
 
   return {
     engagementState: engaged ? "engaged" : activeVoiceCommandState ? "command_only_engaged" : "wake_word_biased",
@@ -506,21 +502,12 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     .map((entry) => entry.displayName)
     .filter(Boolean)
     .slice(0, 10);
-  const addressedToOtherParticipant = normalizedInputKind === "event"
-    ? false
-    : isLikelyVocativeAddressToOtherParticipant({
-      transcript: normalizedTranscript,
-      participantDisplayNames: participantList,
-      botName: getPromptBotName(settings),
-      speakerName
-    });
   const now = Date.now();
   if (!normalizedTranscript) {
     const emptyConversationContext = buildVoiceConversationContext(manager, {
       session,
       userId: normalizedUserId,
       directAddressed: false,
-      addressedToOtherParticipant,
       participantCount,
       now
     });
@@ -606,7 +593,6 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     session,
     userId: normalizedUserId,
     directAddressed,
-    addressedToOtherParticipant,
     participantCount,
     now
   });
@@ -625,7 +611,6 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     ...baseConversationContext,
     voiceAddressingState,
     currentTurnAddressing,
-    addressedToOtherSignal: Boolean(addressedToOtherParticipant),
     pendingCommandFollowupSignal: Boolean(sameSpeakerPendingCommandFollowup),
     musicActive: Boolean(musicActive),
     musicWakeLatched: Boolean(musicWakeLatched),
@@ -831,7 +816,6 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     participantList,
     conversationContext,
     replyEagerness,
-    addressedToOtherSignal: addressedToOtherParticipant,
     pendingCommandFollowupSignal: sameSpeakerPendingCommandFollowup,
     directAddressed,
     nameCueDetected,
@@ -870,7 +854,6 @@ export type ClassifierPromptInput = {
   participantList: string[];
   speakerName: string;
   transcript: string;
-  addressedToOtherSignal?: boolean;
   directAddressed?: boolean;
   nameCueDetected?: boolean;
   musicActive?: boolean;
@@ -941,7 +924,7 @@ export function buildClassifierPrompt(input: ClassifierPromptInput): {
   parts.push(``);
 
   // Room prior
-  if (normalizedInputKind !== "event" && input.participantCount <= 1 && !input.addressedToOtherSignal) {
+  if (normalizedInputKind !== "event" && input.participantCount <= 1) {
     parts.push("One-on-one room — speech is likely directed at you. Prefer YES unless clearly self-talk or non-speech.");
   }
 
@@ -991,7 +974,6 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   participantList,
   conversationContext,
   replyEagerness,
-  addressedToOtherSignal = false,
   pendingCommandFollowupSignal = false,
   directAddressed = false,
   nameCueDetected = false,
@@ -1011,7 +993,6 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   participantList: string[];
   conversationContext: VoiceConversationContext;
   replyEagerness: number;
-  addressedToOtherSignal?: boolean;
   pendingCommandFollowupSignal?: boolean;
   directAddressed?: boolean;
   nameCueDetected?: boolean;
@@ -1086,7 +1067,6 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
         replyEagerness: Number.isFinite(Number(replyEagerness))
           ? clamp(Number(replyEagerness), 0, 100)
           : null,
-        addressedToOtherSignal: Boolean(addressedToOtherSignal),
         pendingCommandFollowupSignal: Boolean(pendingCommandFollowupSignal),
         musicActive: Boolean(musicActive),
         musicWakeLatched: Boolean(musicWakeLatched),
@@ -1107,7 +1087,6 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
             msSinceDirectAddress: Number.isFinite(Number(conversationContext.msSinceDirectAddress))
               ? Math.max(0, Math.round(Number(conversationContext.msSinceDirectAddress)))
               : null,
-            addressedToOtherSignal: Boolean(conversationContext.addressedToOtherSignal),
             pendingCommandFollowupSignal: Boolean(conversationContext.pendingCommandFollowupSignal),
             musicActive: Boolean(conversationContext.musicActive),
             musicWakeLatched: Boolean(conversationContext.musicWakeLatched),
@@ -1133,7 +1112,7 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
       decision: "deny",
       latencyMs: 0,
       confidence: null,
-      target: addressedToOtherSignal ? "OTHER" : "UNKNOWN",
+      target: "UNKNOWN",
       reason: "llm_unavailable",
       error: "llm_generate_unavailable"
     };
@@ -1150,7 +1129,6 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
     participantList,
     speakerName,
     transcript,
-    addressedToOtherSignal,
     directAddressed,
     nameCueDetected,
     musicActive,
@@ -1203,7 +1181,7 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
         decision,
         latencyMs,
         confidence: null,
-        target: addressedToOtherSignal ? "OTHER" : "UNKNOWN",
+        target: "UNKNOWN",
         reason: "model_yes",
         error: null
       };
@@ -1223,7 +1201,7 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
         decision,
         latencyMs,
         confidence: null,
-        target: addressedToOtherSignal ? "OTHER" : "UNKNOWN",
+        target: "UNKNOWN",
         reason: "model_no",
         error: null
       };
@@ -1243,7 +1221,7 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
       decision: null,
       latencyMs,
       confidence: null,
-      target: addressedToOtherSignal ? "OTHER" : "UNKNOWN",
+      target: "UNKNOWN",
       reason: "unparseable_classifier_output",
       error: `unparseable_classifier_output:${rawText.slice(0, 60)}`
     };
@@ -1262,7 +1240,7 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
       decision: "deny",
       latencyMs: Date.now() - startMs,
       confidence: null,
-      target: addressedToOtherSignal ? "OTHER" : "UNKNOWN",
+      target: "UNKNOWN",
       reason: "classifier_runtime_error",
       error: String(error?.message || error || "unknown_error")
     };

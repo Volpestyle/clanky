@@ -12,7 +12,6 @@ type VoiceAdmissionPolicyOptions = {
   replyEagerness?: number;
   participantCount?: number;
   conversationContext?: VoiceAdmissionPolicyContext | null;
-  addressedToOtherSignal?: boolean;
   pendingCommandFollowupSignal?: boolean;
   musicActive?: boolean;
   musicWakeLatched?: boolean;
@@ -44,7 +43,6 @@ export function buildVoiceAdmissionPolicyLines({
   replyEagerness = 0,
   participantCount = 0,
   conversationContext = null,
-  addressedToOtherSignal = false,
   pendingCommandFollowupSignal = false,
   musicActive = false,
   musicWakeLatched = false
@@ -65,7 +63,7 @@ export function buildVoiceAdmissionPolicyLines({
   lines.push(`Voice reply eagerness: ${normalizedEagerness}/100.`);
   lines.push(getEagernessGenerationTier(normalizedEagerness));
 
-  if (normalizedParticipantCount <= 1 && !addressedToOtherSignal) {
+  if (normalizedParticipantCount <= 1) {
     lines.push("Single-human voice-room prior: default toward engagement unless the turn is clearly non-speech, self-talk, or low-value filler.");
   } else if (normalizedParticipantCount > 1) {
     lines.push("Multi-human room: avoid barging in without clear conversational value.");
@@ -95,10 +93,6 @@ export function buildVoiceAdmissionPolicyLines({
 
   if (pendingCommandFollowupSignal) {
     lines.push("Signal: this may be a same-speaker command follow-up. Treat as a strong positive context signal and prefer YES unless the transcript is unusable.");
-  }
-
-  if (addressedToOtherSignal) {
-    lines.push("Signal: this may be directed to another participant. Treat as a strong negative context signal; in ambiguous cases, prefer NO.");
   }
 
   if (normalizedIsEagerTurn) {

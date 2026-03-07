@@ -48,15 +48,7 @@ const ASR_LANGUAGE_BIAS_PROMPT_MAX_LEN = 280;
 const PRIMARY_WAKE_TOKEN_MIN_LEN = 4;
 // English-token wake/vocative fallbacks. These help with cheap fast-path detection only.
 const EN_WAKE_PRIMARY_GENERIC_TOKENS = new Set(["bot", "ai", "assistant"]);
-const EN_VOCATIVE_GREETING_TOKENS = new Set([
-  "hey",
-  "hi",
-  "yo",
-  "sup",
-  "hello",
-  "hola"
-]);
-export const EN_VOCATIVE_IGNORE_TOKENS = new Set(["guys", "everyone", "all", "chat", "yall", "yaall"]);
+
 export const VOICE_ASR_LANGUAGE_MODES = new Set(["auto", "fixed"]);
 export const STT_TRANSCRIPT_MAX_CHARS = 2000;
 
@@ -488,47 +480,6 @@ export function isVoiceTurnAddressedToBot(transcript, settings) {
     if (alias && isBotNameAddressed({ transcript, botName: String(alias) })) return true;
   }
   return false;
-}
-
-export function isLikelyVocativeAddressToOtherParticipant({
-  transcript = "",
-  participantDisplayNames = [],
-  botName = "",
-  speakerName = ""
-} = {}) {
-  const tokens = tokenizeWakeTokens(transcript);
-  if (tokens.length < 2) return false;
-
-  const botTokens = new Set(tokenizeWakeTokens(botName));
-  const speakerTokens = new Set(tokenizeWakeTokens(speakerName));
-  const participantTokens = new Set();
-  const names = Array.isArray(participantDisplayNames) ? participantDisplayNames : [];
-
-  for (const displayName of names) {
-    const nameTokens = tokenizeWakeTokens(displayName);
-    for (const token of nameTokens) {
-      if (token.length < 3) continue;
-      if (EN_VOCATIVE_IGNORE_TOKENS.has(token)) continue;
-      if (botTokens.has(token)) continue;
-      if (speakerTokens.has(token)) continue;
-      participantTokens.add(token);
-    }
-  }
-  if (!participantTokens.size) return false;
-
-  const firstToken = tokens[0];
-  const secondToken = tokens[1];
-  if (EN_VOCATIVE_GREETING_TOKENS.has(firstToken) && participantTokens.has(secondToken)) {
-    return true;
-  }
-
-  const rawTranscript = String(transcript || "").trim();
-  const leadingVocativeMatch = rawTranscript.match(/^([\p{L}\p{N}]{2,})[,:]/u);
-  if (!leadingVocativeMatch) return false;
-  const leadingToken = normalizeWakeText(String(leadingVocativeMatch[1] || ""));
-  if (!leadingToken) return false;
-  if (botTokens.has(leadingToken)) return false;
-  return participantTokens.has(leadingToken);
 }
 
 function tokenizeWakeTokens(value = "") {

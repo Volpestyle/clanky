@@ -388,7 +388,6 @@ type VoiceConversationContext = {
   msUntilCommandSessionExpiry?: number | null;
   voiceAddressingState?: VoiceAddressingState | null;
   currentTurnAddressing?: VoiceAddressingAnnotation | null;
-  addressedToOtherSignal?: boolean;
   pendingCommandFollowupSignal?: boolean;
   musicActive?: boolean;
   musicWakeLatched?: boolean;
@@ -3883,7 +3882,6 @@ export class VoiceSessionManager {
     session = null,
     userId = null,
     directAddressed = false,
-    addressedToOtherParticipant = false,
     participantCount = null,
     now = Date.now()
   } = {}): VoiceConversationContext {
@@ -3891,7 +3889,6 @@ export class VoiceSessionManager {
       session,
       userId,
       directAddressed,
-      addressedToOtherParticipant,
       participantCount,
       now
     });
