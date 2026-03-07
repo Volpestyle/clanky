@@ -289,6 +289,12 @@ export interface TurnProcessorHost {
   forwardRealtimeTextTurnToBrain: (
     args: ForwardRealtimeTextTurnToBrainArgs
   ) => Promise<boolean>;
+  requestRealtimePromptUtterance: (args: {
+    session: VoiceSession;
+    prompt: string;
+    userId?: string | null;
+    source?: string;
+  }) => boolean;
   runRealtimeBrainReply: (args: RunRealtimeBrainReplyArgs) => Promise<boolean>;
   touchActivity: (guildId: string, settings?: TurnProcessorSettings) => void;
   runSttPipelineReply: (args: RunSttPipelineReplyArgs) => Promise<void>;
@@ -313,6 +319,7 @@ export class TurnProcessor {
   }) {
     if (!session || session.ending) return;
     let responseCancelSucceeded = false;
+    let cancelAcknowledgementQueued = false;
     const cancelActiveResponse = session.realtimeClient?.cancelActiveResponse;
     if (typeof cancelActiveResponse === "function") {
       try {
@@ -322,6 +329,16 @@ export class TurnProcessor {
       }
     }
     this.host.replyManager.clearPendingResponse(session);
+    cancelAcknowledgementQueued = this.host.requestRealtimePromptUtterance({
+      session,
+      userId: userId || session.lastOpenAiToolCallerUserId || null,
+      source: "voice_turn_cancel_acknowledgement",
+      prompt: [
+        "The user just asked you to stop or cancel what you were doing.",
+        "Acknowledge briefly in one short spoken sentence.",
+        "Do not continue the cancelled task."
+      ].join(" ")
+    });
     this.host.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
@@ -333,7 +350,8 @@ export class TurnProcessor {
         source,
         captureReason,
         transcript: normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS) || null,
-        responseCancelSucceeded
+        responseCancelSucceeded,
+        cancelAcknowledgementQueued
       }
     });
   }

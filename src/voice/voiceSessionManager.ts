@@ -578,7 +578,7 @@ export class VoiceSessionManager {
     this.memory = memory || null;
     this.search = search || null;
     this.browserManager = browserManager || null;
-    this.activeReplies = activeReplies as ActiveReplyRegistry | null;
+    this.activeReplies = activeReplies || null;
     this.composeOperationalMessage =
       typeof composeOperationalMessage === "function" ? composeOperationalMessage : null;
     this.generateVoiceTurn = typeof generateVoiceTurn === "function" ? generateVoiceTurn : null;

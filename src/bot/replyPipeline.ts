@@ -1554,6 +1554,8 @@ export async function maybeReplyToMessagePipeline(
     );
   } catch (error) {
     if (isAbortError(error) || signal.aborted) {
+      // Return true ("reply handled") so the caller does not retry or fall back
+      // to another reply path after the user explicitly cancelled this turn.
       return true;
     }
     throw error;

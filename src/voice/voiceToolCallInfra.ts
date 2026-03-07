@@ -12,6 +12,7 @@ import {
 } from "./voiceToolCallToolRegistry.ts";
 import { executeLocalVoiceToolCall, executeMcpVoiceToolCall } from "./voiceToolCallDispatch.ts";
 import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
+import { isAbortError } from "../tools/browserTaskRuntime.ts";
 
 type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
 
@@ -102,8 +103,17 @@ export async function executeOpenAiRealtimeFunctionCall(
         });
     success = true;
   } catch (error) {
-    errorMessage = String(error?.message || error);
-    output = { ok: false, error: { message: errorMessage } };
+    if (isAbortError(error) || toolSignal.aborted) {
+      errorMessage = "cancelled_by_user";
+      output = {
+        ok: false,
+        cancelled: true,
+        error: { message: "Tool call cancelled by user." }
+      };
+    } else {
+      errorMessage = String(error?.message || error);
+      output = { ok: false, error: { message: errorMessage } };
+    }
   } finally {
     runtimeSession.openAiPendingToolAbortControllers?.delete(callId);
     manager.activeReplies?.clear(activeReply);

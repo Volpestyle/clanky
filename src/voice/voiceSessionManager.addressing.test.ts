@@ -11,6 +11,7 @@ import { SYSTEM_SPEECH_SOURCE } from "./systemSpeechOpportunity.ts";
 import { refreshRealtimeTools } from "./voiceToolCallInfra.ts";
 import { executeVoiceMemoryWriteTool } from "./voiceToolCallMemory.ts";
 import { buildRealtimeFunctionTools } from "./voiceToolCallToolRegistry.ts";
+import { createAbortError } from "../tools/browserTaskRuntime.ts";
 
 function createManager({
   participantCount = 2,
@@ -2953,6 +2954,57 @@ test("runRealtimeTurn drops classifier_deny turns without deferral", async () =>
   );
   assert.equal(Boolean(addressingLog), true);
   assert.equal(addressingLog?.metadata?.reason, "classifier_deny");
+});
+
+test("runRealtimeTurn acknowledges voice cancel intent after clearing pending work", async () => {
+  const runtimeLogs = [];
+  const clearedSessions = [];
+  const cancelAckRequests = [];
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.replyManager.clearPendingResponse = (session) => {
+    clearedSessions.push(session?.id || null);
+  };
+  manager.requestRealtimePromptUtterance = (payload) => {
+    cancelAckRequests.push(payload);
+    return true;
+  };
+
+  let cancelActiveResponseCalls = 0;
+  const session = {
+    id: "session-cancel-intent-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeClient: {
+      cancelActiveResponse() {
+        cancelActiveResponseCalls += 1;
+        return true;
+      }
+    },
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.turnProcessor.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    transcriptOverride: "never mind"
+  });
+
+  assert.equal(cancelActiveResponseCalls, 1);
+  assert.deepEqual(clearedSessions, ["session-cancel-intent-1"]);
+  assert.equal(cancelAckRequests.length, 1);
+  assert.equal(cancelAckRequests[0]?.source, "voice_turn_cancel_acknowledgement");
+  assert.equal(cancelAckRequests[0]?.userId, "speaker-1");
+  assert.match(String(cancelAckRequests[0]?.prompt || ""), /Acknowledge briefly/i);
+  const cancelLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_cancel_intent"
+  );
+  assert.equal(cancelLog?.metadata?.responseCancelSucceeded, true);
+  assert.equal(cancelLog?.metadata?.cancelAcknowledgementQueued, true);
 });
 
 test("queueRealtimeTurn keeps only one merged pending turn while realtime drain is active", () => {
@@ -6130,6 +6182,83 @@ test("handleOpenAiRealtimeFunctionCallEvent executes offer_screen_share_link and
   assert.equal(outputPayload?.ok, true);
   assert.equal(outputPayload?.offered, true);
   assert.equal(outputPayload?.linkUrl, "https://screen.example/session/abc");
+});
+
+test("handleOpenAiRealtimeFunctionCallEvent sends cancelled tool output when a voice tool is aborted", async () => {
+  const manager = createManager();
+  manager.scheduleOpenAiRealtimeToolFollowupResponse = () => {};
+
+  let resolveSearchStarted: (() => void) | null = null;
+  const searchStarted = new Promise<void>((resolve) => {
+    resolveSearchStarted = resolve;
+  });
+  manager.search = {
+    async searchAndRead({ signal }) {
+      resolveSearchStarted?.();
+      return await new Promise((_, reject) => {
+        const rejectAbort = () => reject(createAbortError(signal?.reason || "cancelled_by_user"));
+        if (signal?.aborted) {
+          rejectAbort();
+          return;
+        }
+        signal?.addEventListener("abort", rejectAbort, { once: true });
+      });
+    }
+  };
+
+  const sentFunctionOutputs = [];
+  const session = {
+    id: "session-openai-tool-call-cancel-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeClient: {
+      sendFunctionCallOutput(payload) {
+        sentFunctionOutputs.push(payload);
+      }
+    }
+  };
+
+  session.openAiToolDefinitions = buildRealtimeFunctionTools(manager, {
+    session,
+    settings: baseSettings({
+      webSearch: {
+        enabled: true
+      }
+    })
+  });
+
+  const toolRun = manager.handleOpenAiRealtimeFunctionCallEvent({
+    session,
+    settings: baseSettings({
+      webSearch: {
+        enabled: true
+      }
+    }),
+    event: {
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        call_id: "call_web_cancel_1",
+        name: "web_search",
+        arguments: JSON.stringify({
+          query: "latest rust news"
+        })
+      }
+    }
+  });
+
+  await searchStarted;
+  session.openAiPendingToolAbortControllers?.get("call_web_cancel_1")?.abort("user_cancelled");
+  await toolRun;
+
+  assert.equal(sentFunctionOutputs.length, 1);
+  const outputPayload = JSON.parse(String(sentFunctionOutputs[0]?.output || "{}"));
+  assert.equal(outputPayload?.ok, false);
+  assert.equal(outputPayload?.cancelled, true);
+  assert.equal(outputPayload?.error?.message, "Tool call cancelled by user.");
 });
 
 test("handleOpenAiRealtimeFunctionCallEvent ignores duplicate completed call ids", async () => {
