@@ -37,13 +37,6 @@ type ClankvoxSpawnOptions = {
   selfMute?: boolean;
   timeoutMs?: number;
 };
-type ConnectAsrOptions = {
-  userId: string;
-  apiKey: string;
-  model: string;
-  language?: string | null;
-  prompt?: string | null;
-};
 export type ClankvoxIpcErrorCode =
   | "invalid_request"
   | "invalid_json"
@@ -79,17 +72,6 @@ type ClankvoxCommand =
   | { type: "music_pause" }
   | { type: "music_resume" }
   | { type: "music_set_gain"; target: number; fadeMs: number }
-  | {
-      type: "connect_asr";
-      userId: string;
-      apiKey: string;
-      model: string;
-      language: string | null;
-      prompt: string | null;
-    }
-  | { type: "disconnect_asr"; userId: string }
-  | { type: "commit_asr"; userId: string }
-  | { type: "clear_asr"; userId: string }
   | { type: "destroy" };
 
 const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
@@ -470,22 +452,6 @@ export class ClankvoxClient extends EventEmitter {
         }
         break;
       }
-      case "asr_transcript": {
-        const userId = asString(msg.userId);
-        const text = asString(msg.text);
-        if (userId && text !== null) {
-          this.emit("asrTranscript", userId, text, msg.isFinal === true);
-        }
-        break;
-      }
-      case "asr_disconnected": {
-        const userId = asString(msg.userId);
-        const reason = asString(msg.reason);
-        if (userId && reason !== null) {
-          this.emit("asrDisconnected", userId, reason);
-        }
-        break;
-      }
       case "client_disconnect": {
         const userId = asString(msg.userId);
         if (userId) {
@@ -684,29 +650,6 @@ export class ClankvoxClient extends EventEmitter {
 
   musicSetGain(target: number, fadeMs: number) {
     this._send({ type: "music_set_gain", target, fadeMs });
-  }
-
-  connectAsr({ userId, apiKey, model, language, prompt }: ConnectAsrOptions) {
-    this._send({
-      type: "connect_asr",
-      userId,
-      apiKey,
-      model,
-      language: language || null,
-      prompt: prompt || null
-    });
-  }
-
-  disconnectAsr(userId: string) {
-    this._send({ type: "disconnect_asr", userId });
-  }
-
-  commitAsr(userId: string) {
-    this._send({ type: "commit_asr", userId });
-  }
-
-  clearAsr(userId: string) {
-    this._send({ type: "clear_asr", userId });
   }
 
   async destroy(): Promise<void> {
