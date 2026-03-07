@@ -112,6 +112,7 @@ test("reply decider blocks turns when transcript is missing", async () => {
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
+      mode: "openai_realtime",
       botTurnOpen: false,
     },
     userId: "speaker-1",
@@ -208,6 +209,7 @@ test("reply decider lets generation decide same-speaker followup after recent bo
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
+      mode: "openai_realtime",
       botTurnOpen: false,
       mode: "stt_pipeline",
       lastDirectAddressUserId: "speaker-1",
@@ -251,7 +253,7 @@ test("reply decider lets generation decide low-signal fragments for recently add
   assert.equal(callCount, 0);
 });
 
-test("reply decider allows direct wake-word pings via direct-address fast path", async () => {
+test("reply decider allows direct wake-word pings via classifier with directAddressed hint", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -264,6 +266,7 @@ test("reply decider allows direct wake-word pings via direct-address fast path",
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
+      mode: "openai_realtime",
       botTurnOpen: false,
     },
     userId: "speaker-1",
@@ -272,9 +275,9 @@ test("reply decider allows direct wake-word pings via direct-address fast path",
   });
 
   assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "direct_address_fast_path");
+  assert.equal(decision.reason, "classifier_allow");
   assert.equal(decision.directAddressed, true);
-  assert.equal(callCount, 0);
+  assert.equal(callCount, 1);
 });
 
 test("reply decider allows short clanker wake ping", async () => {
@@ -290,6 +293,7 @@ test("reply decider allows short clanker wake ping", async () => {
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
+      mode: "openai_realtime",
       botTurnOpen: false,
     },
     userId: "speaker-1",
@@ -298,9 +302,9 @@ test("reply decider allows short clanker wake ping", async () => {
   });
 
   assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "direct_address_fast_path");
+  assert.equal(decision.reason, "classifier_allow");
   assert.equal(decision.directAddressed, true);
-  assert.equal(callCount, 0);
+  assert.equal(callCount, 1);
 });
 
 test("shouldPersistUserTranscriptTimelineTurn persists any non-empty transcript", () => {
@@ -470,6 +474,7 @@ test("reply decider flows eagerness-0 unaddressed turns to classifier/generation
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
+      mode: "openai_realtime",
       botTurnOpen: false,
     },
     userId: "speaker-1",
@@ -485,10 +490,10 @@ test("reply decider flows eagerness-0 unaddressed turns to classifier/generation
     transcript: "what do you think about this"
   });
 
+  // Eagerness 0 no longer hard-rejects — it flows through to the classifier.
+  // The default mock returns NO, so the classifier denies, but it was NOT a hard reject.
   assert.equal(decision.allow, false);
-  // Eagerness 0 no longer hard-rejects — it flows through to classifier/generation.
-  // This mock has no brain session, so it reaches no_brain_session instead.
-  assert.equal(decision.reason, "no_brain_session");
+  assert.equal(decision.reason, "classifier_deny");
 });
 
 test("reply decider blocks unaddressed turns in command-only mode", async () => {
@@ -607,7 +612,7 @@ test("reply decider lets generation decide unaddressed turns in stt_pipeline mod
   assert.equal(decision.directAddressed, false);
 });
 
-test("reply decider routes wake-like variants through brain decides or direct-address fast path", async () => {
+test("reply decider routes wake-like variants through brain decides or classifier with directAddressed hint", async () => {
   const cases = [
     { text: "Yo, what's up, Clink?", expected: true },
     { text: "yo plink", expected: true },
@@ -663,11 +668,11 @@ test("reply decider routes wake-like variants through brain decides or direct-ad
     assert.equal(decision.allow, row.expected, row.text);
     const reason = String(decision.reason || "");
     assert.equal(
-      ["direct_address_fast_path", "generation_decides"].includes(reason),
+      ["classifier_allow", "generation_decides"].includes(reason),
       true,
       row.text
     );
-    if (reason === "direct_address_fast_path") {
+    if (reason === "classifier_allow") {
       assert.equal(decision.directAddressed, true, row.text);
     }
   }
@@ -850,7 +855,7 @@ test("reply decider skips memory retrieval for unaddressed turns", async () => {
   assert.equal(memoryCallCount, 0);
 });
 
-test("reply decider uses direct-address fast path without memory lookup", async () => {
+test("reply decider uses classifier with directAddressed hint without memory lookup", async () => {
   let memoryCallCount = 0;
   const manager = createManager({
     generate: async () => ({ text: "YES" }),
@@ -869,6 +874,7 @@ test("reply decider uses direct-address fast path without memory lookup", async 
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
+      mode: "openai_realtime",
       botTurnOpen: false,
     },
     userId: "speaker-1",
@@ -882,7 +888,7 @@ test("reply decider uses direct-address fast path without memory lookup", async 
 
   assert.equal(decision.allow, true);
   assert.equal(decision.directAddressed, true);
-  assert.equal(decision.reason, "direct_address_fast_path");
+  assert.equal(decision.reason, "classifier_allow");
   assert.equal(memoryCallCount, 0);
 });
 
@@ -1134,9 +1140,7 @@ test("reply decider bypasses classifier in generation_only realtime admission mo
   assert.equal(callCount, 0);
 });
 
-test("reply decider fast-paths single-human assistant followups in hard-classifier realtime mode", async () => {
-  const previous = process.env.VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH;
-  process.env.VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH = "true";
+test("reply decider routes single-human assistant followups through classifier", async () => {
   let callCount = 0;
   const now = Date.now();
   try {
@@ -1144,7 +1148,7 @@ test("reply decider fast-paths single-human assistant followups in hard-classifi
       participantCount: 1,
       generate: async () => {
         callCount += 1;
-        return { text: "NO" };
+        return { text: "YES" };
       }
     });
     const decision = await manager.evaluateVoiceReplyDecision({
@@ -1187,17 +1191,13 @@ test("reply decider fast-paths single-human assistant followups in hard-classifi
     });
 
     assert.equal(decision.allow, true);
-    assert.equal(decision.reason, "single_participant_assistant_followup");
+    assert.equal(decision.reason, "classifier_allow");
     assert.equal(decision.conversationContext.engaged, true);
     assert.equal(decision.conversationContext.engagedWithCurrentSpeaker, true);
     assert.equal(decision.conversationContext.singleParticipantAssistantFollowup, true);
-    assert.equal(callCount, 0);
+    assert.equal(callCount, 1);
   } finally {
-    if (previous == null) {
-      delete process.env.VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH;
-    } else {
-      process.env.VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH = previous;
-    }
+    delete process.env.VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH;
   }
 });
 
@@ -1387,9 +1387,9 @@ test("reply decider fast-paths merged bot-name tokens as direct address", async 
   });
 
   assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "direct_address_fast_path");
+  assert.equal(decision.reason, "classifier_allow");
   assert.equal(decision.directAddressed, true);
-  assert.equal(callCount, 0);
+  assert.equal(callCount, 1);
 });
 
 test("reply decider keeps bot awake across speakers after a recent direct address", async () => {
@@ -1548,9 +1548,9 @@ test("reply classifier prompt includes attributed history and current turn field
 
   assert.equal(decision.allow, true);
   assert.equal(decision.reason, "classifier_allow");
+  assert.equal(classifierPrompt.includes("Participants: speaker 1, speaker 2"), true);
   assert.equal(classifierPrompt.includes('Speaker: speaker 1'), true);
   assert.equal(classifierPrompt.includes('Transcript: "yo what\'s up"'), true);
-  assert.equal(classifierPrompt.includes("Voice reply eagerness: 60/100"), true);
   assert.equal(classifierPrompt.includes("Recent voice timeline:"), true);
   assert.equal(classifierPrompt.includes('YOU: "yo what\'s good"'), true);
   assert.equal(classifierPrompt.includes('vuhlp: "i\'m working on a project"'), true);
@@ -1591,9 +1591,54 @@ test("reply classifier prompt labels room events distinctly from spoken transcri
   });
 
   assert.equal(decision.allow, true);
-  assert.equal(classifierPrompt.includes("Current input is a voice room event, not spoken audio."), true);
-  assert.equal(classifierPrompt.includes('Runtime event: "[vuhlp joined the voice channel]"'), true);
+  assert.equal(classifierPrompt.includes("Participants: speaker 1, speaker 2"), true);
+  assert.equal(classifierPrompt.includes('Event: "[vuhlp joined the voice channel]"'), true);
   assert.equal(classifierPrompt.includes("Triggering member: speaker 1"), true);
+  assert.equal(classifierPrompt.includes("Someone joined or left. Consider greeting them if it feels natural."), true);
+});
+
+test("reply decider routes garbled bot-name requests through runtime admission", async () => {
+  let callCount = 0;
+  let classifierPrompt = "";
+  const manager = createManager({
+    generate: async ({ userPrompt }) => {
+      callCount += 1;
+      classifierPrompt = String(userPrompt || "");
+      return { text: "YES" };
+    }
+  });
+
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+      lastInboundAudioAt: Date.now() - 240
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          realtimeAdmissionMode: "hard_classifier"
+        }
+      }
+    }),
+    transcript: "Yo, can you play me some Migos planka?"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "classifier_allow");
+  assert.equal(decision.directAddressed, false);
+  assert.equal(callCount, 1);
+  assert.equal(
+    classifierPrompt.includes('Transcript: "Yo, can you play me some Migos planka?"'),
+    true
+  );
 });
 
 test("reply decider denies music turns when wake latch is inactive", async () => {
@@ -1828,17 +1873,17 @@ test("reply decider blocks ambiguous realtime native turns without brain path", 
     transcript: "what should we do next?"
   });
 
-  assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "no_brain_session");
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "native_realtime");
   assert.equal(callCount, 0);
 });
 
-test("reply decider bypasses LLM for direct-addressed turns", async () => {
+test("reply decider routes direct-addressed turns through classifier", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
       callCount += 1;
-      return { text: "NO", provider: "anthropic", model: "claude-haiku-4-5" };
+      return { text: "YES", provider: "anthropic", model: "claude-haiku-4-5" };
     }
   });
   const decision = await manager.evaluateVoiceReplyDecision({
@@ -1846,6 +1891,7 @@ test("reply decider bypasses LLM for direct-addressed turns", async () => {
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
+      mode: "openai_realtime",
       botTurnOpen: false,
     },
     userId: "speaker-1",
@@ -1863,17 +1909,17 @@ test("reply decider bypasses LLM for direct-addressed turns", async () => {
   });
 
   assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "direct_address_fast_path");
+  assert.equal(decision.reason, "classifier_allow");
   assert.equal(decision.directAddressed, true);
-  assert.equal(callCount, 0);
+  assert.equal(callCount, 1);
 });
 
-test("reply decider keeps direct-address fast-path in native realtime mode", async () => {
+test("reply decider allows through native realtime mode (model decides)", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
       callCount += 1;
-      return { text: "NO", provider: "anthropic", model: "claude-haiku-4-5" };
+      return { text: "YES", provider: "anthropic", model: "claude-haiku-4-5" };
     }
   });
   const decision = await manager.evaluateVoiceReplyDecision({
@@ -1900,17 +1946,16 @@ test("reply decider keeps direct-address fast-path in native realtime mode", asy
   });
 
   assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "direct_address_fast_path");
-  assert.equal(decision.directAddressed, true);
+  assert.equal(decision.reason, "native_realtime");
   assert.equal(callCount, 0);
 });
 
-test("reply decider keeps merged bot-name token turns on the direct-address fast path", async () => {
+test("reply decider keeps merged bot-name token turns on the classifier with directAddressed hint", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
       callCount += 1;
-      return { text: "NO", provider: "anthropic", model: "claude-haiku-4-5" };
+      return { text: "YES", provider: "anthropic", model: "claude-haiku-4-5" };
     }
   });
   const decision = await manager.evaluateVoiceReplyDecision({
@@ -1936,7 +1981,7 @@ test("reply decider keeps merged bot-name token turns on the direct-address fast
   });
 
   assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "direct_address_fast_path");
+  assert.equal(decision.reason, "generation_decides");
   assert.equal(decision.directAddressed, true);
   assert.equal(callCount, 0);
 });
@@ -1996,7 +2041,7 @@ test("reply decider does not gate unaddressed turns behind cooldown", async () =
   assert.equal(decision.directAddressed, false);
 });
 
-test("direct address stays fast-path when decider LLM is unavailable", async () => {
+test("direct address denied when classifier LLM is unavailable", async () => {
   const fakeClient = {
     on() {},
     off() {},
@@ -2023,6 +2068,7 @@ test("direct address stays fast-path when decider LLM is unavailable", async () 
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
+      mode: "openai_realtime",
       botTurnOpen: false,
     },
     userId: "speaker-1",
@@ -2030,8 +2076,8 @@ test("direct address stays fast-path when decider LLM is unavailable", async () 
     transcript: "clanker can you explain that"
   });
 
-  assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "direct_address_fast_path");
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "classifier_deny");
   assert.equal(decision.directAddressed, true);
 });
 
@@ -2043,6 +2089,7 @@ test("reply decider allows same-speaker pending command followup before command-
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
+      mode: "openai_realtime",
       botTurnOpen: false,
       voiceCommandState: {
         userId: "speaker-1",
@@ -2104,6 +2151,7 @@ test("reply decider allows active music command followup before eagerness reject
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
+      mode: "openai_realtime",
       botTurnOpen: false,
       voiceCommandState: {
         userId: "speaker-1",
@@ -2163,6 +2211,7 @@ test("reply decider keeps unrelated chatter blocked during pending music followu
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
+      mode: "openai_realtime",
       botTurnOpen: false,
       voiceCommandState: {
         userId: "speaker-1",
@@ -2227,6 +2276,7 @@ test("reply decider ignores other speakers during pending command followup in co
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
+      mode: "openai_realtime",
       botTurnOpen: false,
       music: {
         phase: "playing",
@@ -2279,6 +2329,7 @@ test("reply decider drops expired command followup sessions", async () => {
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
+      mode: "openai_realtime",
       botTurnOpen: false,
       voiceCommandState: {
         userId: "speaker-1",
@@ -2364,8 +2415,8 @@ test("runRealtimeTurn in voice_agent retries full ASR model after empty mini tra
     return "fallback transcript";
   };
   manager.evaluateVoiceReplyDecision = async ({ transcript }) => ({
-    allow: false,
-    reason: "no_brain_session",
+    allow: true,
+    reason: "native_realtime",
     participantCount: 2,
     directAddressed: false,
     transcript
@@ -2416,8 +2467,8 @@ test("runRealtimeTurn skips ASR on very short speaking_end clips", async () => {
     return "should-not-happen";
   };
   manager.evaluateVoiceReplyDecision = async ({ transcript }) => ({
-    allow: false,
-    reason: transcript ? "no_brain_session" : "missing_transcript",
+    allow: transcript ? true : false,
+    reason: transcript ? "native_realtime" : "missing_transcript",
     participantCount: 2,
     directAddressed: false,
     transcript
@@ -2472,8 +2523,8 @@ test("runRealtimeTurn transcribes speaking_end clips above minimum duration thre
     return "yo";
   };
   manager.evaluateVoiceReplyDecision = async ({ transcript }) => ({
-    allow: false,
-    reason: transcript ? "no_brain_session" : "missing_transcript",
+    allow: transcript ? true : false,
+    reason: transcript ? "native_realtime" : "missing_transcript",
     participantCount: 2,
     directAddressed: false,
     transcript
@@ -2599,8 +2650,8 @@ test("runRealtimeTurn drops near-silent clips before ASR", async () => {
   manager.evaluateVoiceReplyDecision = async () => {
     decisionCalls += 1;
     return {
-      allow: false,
-      reason: "no_brain_session",
+      allow: true,
+      reason: "native_realtime",
       participantCount: 2,
       directAddressed: false,
       transcript: "hello"
@@ -2707,7 +2758,7 @@ test("runRealtimeTurn does not forward audio when reply decision denies turn", a
   manager.transcribePcmTurn = async () => "side chatter";
   manager.evaluateVoiceReplyDecision = async () => ({
     allow: false,
-    reason: "no_brain_session",
+    reason: "classifier_deny",
     participantCount: 2,
     directAddressed: false,
     transcript: "side chatter"
@@ -2751,7 +2802,7 @@ test("runRealtimeTurn does not forward audio when reply decision denies turn", a
   );
   assert.equal(Boolean(addressingLog), true);
   assert.equal(Boolean(addressingLog?.metadata?.allow), false);
-  assert.equal(addressingLog?.metadata?.reason, "no_brain_session");
+  assert.equal(addressingLog?.metadata?.reason, "classifier_deny");
   assert.equal(memoryIngestCalls, 1);
 });
 
@@ -4844,7 +4895,7 @@ test("runSttPipelineTurn exits before generation when turn admission denies spea
   manager.transcribePcmTurn = async () => "any update?";
   manager.evaluateVoiceReplyDecision = async () => ({
     allow: false,
-    reason: "no_brain_session",
+    reason: "classifier_deny",
     participantCount: 2,
     directAddressed: false,
     transcript: "any update?"
@@ -4888,7 +4939,7 @@ test("runSttPipelineTurn exits before generation when turn admission denies spea
   );
   assert.equal(Boolean(addressingLog), true);
   assert.equal(Boolean(addressingLog?.metadata?.allow), false);
-  assert.equal(addressingLog?.metadata?.reason, "no_brain_session");
+  assert.equal(addressingLog?.metadata?.reason, "classifier_deny");
 });
 
 test("runSttPipelineReply triggers soundboard even when generated speech is empty", async () => {
@@ -5198,8 +5249,8 @@ test("runSttPipelineTurn retries full ASR model after empty mini transcript", as
     return "fallback stt transcript";
   };
   manager.evaluateVoiceReplyDecision = async ({ transcript }) => ({
-    allow: false,
-    reason: "no_brain_session",
+    allow: true,
+    reason: "native_realtime",
     participantCount: 2,
     directAddressed: false,
     transcript
@@ -5250,8 +5301,8 @@ test("runSttPipelineTurn drops near-silent clips before ASR", async () => {
   manager.evaluateVoiceReplyDecision = async () => {
     decisionCalls += 1;
     return {
-      allow: false,
-      reason: "no_brain_session",
+      allow: true,
+      reason: "native_realtime",
       participantCount: 2,
       directAddressed: false,
       transcript: "hello"
@@ -5576,8 +5627,8 @@ test("flushDeferredBotTurnOpenTurns waits for silence before admission", async (
   manager.evaluateVoiceReplyDecision = async () => {
     decisionCalls += 1;
     return {
-      allow: false,
-      reason: "no_brain_session",
+      allow: true,
+      reason: "native_realtime",
       participantCount: 2,
       directAddressed: false,
       transcript: "ignored"
