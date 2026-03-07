@@ -3,9 +3,6 @@ import {
   getPromptBotName
 } from "../prompts/promptCore.ts";
 import {
-  getEagernessClassifierTier
-} from "../prompts/voiceAdmissionPolicy.ts";
-import {
   normalizeInlineText,
   normalizeVoiceText,
   STT_TRANSCRIPT_MAX_CHARS,
@@ -52,9 +49,6 @@ const CLASSIFIER_HISTORY_MAX_TURNS = 6;
 const CLASSIFIER_HISTORY_MAX_CHARS = 900;
 const VOICE_CLASSIFIER_DEBUG_PROMPT_MAX_CHARS = 12_000;
 const VOICE_CLASSIFIER_DEBUG_OUTPUT_MAX_CHARS = 1_200;
-const VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH_ENV =
-  "VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH";
-
 type ReplyDecisionSettings = Record<string, unknown> | null;
 type ReplyDecisionSessionLike = Partial<VoiceSession>;
 
@@ -147,12 +141,6 @@ function resolveMusicWakeLatchSeconds(settings: ReplyDecisionSettings): number {
   );
 }
 
-function isSingleParticipantAssistantFollowupFastPathEnabled(): boolean {
-  return parseBooleanFlag(
-    process.env[VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH_ENV],
-    true
-  );
-}
 
 function clearMusicWakeLatch(session: ReplyDecisionSessionLike | null | undefined) {
   if (!session || typeof session !== "object") return;
@@ -521,11 +509,11 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   const addressedToOtherParticipant = normalizedInputKind === "event"
     ? false
     : isLikelyVocativeAddressToOtherParticipant({
-    transcript: normalizedTranscript,
-    participantDisplayNames: participantList,
-    botName: getPromptBotName(settings),
-    speakerName
-  });
+      transcript: normalizedTranscript,
+      participantDisplayNames: participantList,
+      botName: getPromptBotName(settings),
+      speakerName
+    });
   const now = Date.now();
   if (!normalizedTranscript) {
     const emptyConversationContext = buildVoiceConversationContext(manager, {
@@ -550,8 +538,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   const directAddressedByWakePhrase = normalizedInputKind === "event"
     ? false
     : normalizedTranscript
-    ? isVoiceTurnAddressedToBot(normalizedTranscript, settings)
-    : false;
+      ? isVoiceTurnAddressedToBot(normalizedTranscript, settings)
+      : false;
   const normalizeWakeTokens = (value = ""): string[] =>
     (String(value || "")
       .trim()
@@ -605,8 +593,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     normalizedInputKind === "event"
       ? false
       :
-    typeof manager.isMusicDisambiguationResolutionTurn === "function" &&
-    manager.isMusicDisambiguationResolutionTurn(session, normalizedUserId, normalizedTranscript);
+      typeof manager.isMusicDisambiguationResolutionTurn === "function" &&
+      manager.isMusicDisambiguationResolutionTurn(session, normalizedUserId, normalizedTranscript);
   const musicActive = typeof manager.isMusicPlaybackActive === "function" && manager.isMusicPlaybackActive(session);
   if (!musicActive) {
     clearMusicWakeLatch(session);
@@ -734,24 +722,14 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     }
   }
 
-  if (directAddressed) {
-    if (musicActive) {
-      touchMusicWakeLatch(session, settings, normalizedUserId, now);
-      musicWakeLatchState = getMusicWakeLatchState(session, now);
-      musicWakeLatched = musicWakeLatchState.active;
-      msUntilMusicWakeLatchExpiry = musicWakeLatchState.msUntilExpiry;
-      conversationContext = buildConversationContext();
-    }
-    return {
-      allow: true,
-      reason: "direct_address_fast_path",
-      participantCount,
-      directAddressed,
-      directAddressConfidence,
-      directAddressThreshold,
-      transcript: normalizedTranscript,
-      conversationContext
-    };
+  // Direct address arms the music wake latch but no longer fast-paths —
+  // the classifier decides with directAddressed as a strong hint.
+  if (directAddressed && musicActive) {
+    touchMusicWakeLatch(session, settings, normalizedUserId, now);
+    musicWakeLatchState = getMusicWakeLatchState(session, now);
+    musicWakeLatched = musicWakeLatchState.active;
+    msUntilMusicWakeLatchExpiry = musicWakeLatchState.msUntilExpiry;
+    conversationContext = buildConversationContext();
   }
 
   // Eagerness 0 no longer hard-rejects — it flows to classifier/generation
@@ -778,11 +756,11 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     };
   }
 
-  // No brain session (native realtime without brain path)
+  // Native realtime without brain path — the realtime model decides what to respond to
   if (!mergedWithGeneration) {
     return {
-      allow: false,
-      reason: "no_brain_session",
+      allow: true,
+      reason: "native_realtime",
       participantCount,
       directAddressed,
       directAddressConfidence,
@@ -833,22 +811,6 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     };
   }
 
-  if (
-    isSingleParticipantAssistantFollowupFastPathEnabled() &&
-    conversationContext.singleParticipantAssistantFollowup
-  ) {
-    return {
-      allow: true,
-      reason: "single_participant_assistant_followup",
-      participantCount,
-      directAddressed,
-      directAddressConfidence,
-      directAddressThreshold,
-      transcript: normalizedTranscript,
-      conversationContext
-    };
-  }
-
   // Bridge mode: hard classifier gate
   const commonFields = {
     participantCount,
@@ -871,6 +833,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     replyEagerness,
     addressedToOtherSignal: addressedToOtherParticipant,
     pendingCommandFollowupSignal: sameSpeakerPendingCommandFollowup,
+    directAddressed,
+    nameCueDetected,
     musicActive,
     musicWakeLatched,
     msUntilMusicWakeLatchExpiry,
@@ -907,6 +871,8 @@ export type ClassifierPromptInput = {
   speakerName: string;
   transcript: string;
   addressedToOtherSignal?: boolean;
+  directAddressed?: boolean;
+  nameCueDetected?: boolean;
   musicActive?: boolean;
   musicWakeLatched?: boolean;
   msUntilMusicWakeLatchExpiry?: number | null;
@@ -925,80 +891,91 @@ export function buildClassifierPrompt(input: ClassifierPromptInput): {
   const normalizedEagerness = Math.max(0, Math.min(100, Number(input.replyEagerness) || 0));
   const normalizedInputKind = input.inputKind === "event" ? "event" : "transcript";
 
-  const systemPrompt = `You are a realtime voice admission classifier for a bot named "${input.botName}". The bot is agentic — it can play music, search the web, run commands, and perform actions when asked. Requests or commands directed at the bot are strong YES signals. Return exactly one token: YES or NO.`;
+  const systemPrompt = `You are "${input.botName}" (anything phonetically similar to "${input.botName}" is also you), an agentic discord voice channel member. You can play music, search the web, and handle commands. Decide whether to speak right now. Return exactly one token: YES or NO.`;
 
-  const parts = [
-    getEagernessClassifierTier(normalizedEagerness),
-    ``,
-    `Overall guidelines when unsure:`,
-    `Say YES when:`,
-    `- the speaker is clearly addressing the bot`,
-    `- this is a direct follow-up to the bot's recent reply`,
-    `- the bot is already engaged with this speaker and replying now is natural`,
-    ``,
-    `Say NO when:`,
-    `- the turn is aimed at another participant`,
-    `- the turn is filler, laughter, backchannel, self-talk, or non-speech with no conversational intent`,
-    `- replying would likely interrupt side conversation`,
-    ``,
-  ];
+  // --- Build context block first ---
+  const parts: string[] = [];
 
-  // Room prior
-  if (input.participantCount <= 1 && !input.addressedToOtherSignal) {
-    parts.push("There is only one other person here. Any speech from them is directed at the bot unless it is clearly self-talk or non-speech — prefer YES.");
-  } else if (input.participantCount > 1) {
-    parts.push("Multi-person room: avoid barging in if not greeting or without clear conversational value.");
-  }
-  if (normalizedInputKind === "event") {
-    parts.push("Current input is a voice room event, not spoken audio.");
-    parts.push("Say YES only if a brief spoken acknowledgement is socially natural and useful right now.");
-  }
-
-  // Music lines — only when active
-  if (input.musicActive) {
-    parts.push(`Music active: true`);
-    parts.push(`Music wake latched: ${input.musicWakeLatched ? "true" : "false"}`);
-    if (input.musicWakeLatched && Number.isFinite(Number(input.msUntilMusicWakeLatchExpiry))) {
-      parts.push(`Music wake latch expires in ms: ${Math.max(0, Math.round(Number(input.msUntilMusicWakeLatchExpiry)))}`);
-    }
-  }
-
-  // Context block
-  parts.push(``);
-  parts.push(`Participant count: ${input.participantCount}`);
   parts.push(`Participants: ${input.participantList.join(", ") || "none"}`);
   if (normalizedInputKind === "event") {
     parts.push(`Triggering member: ${input.speakerName}`);
-    parts.push(`Runtime event: "${input.transcript}"`);
+    parts.push(`Event: "${input.transcript}"`);
   } else {
     parts.push(`Speaker: ${input.speakerName}`);
     parts.push(`Transcript: "${input.transcript}"`);
   }
-  parts.push(`Voice reply eagerness: ${normalizedEagerness}/100`);
 
-  // Conversation recency
+  // Conversation recency — signal strength scales with eagerness + recency
   if (input.conversationContext.recentAssistantReply) {
-    const secsSinceReply = Math.round(Number(input.conversationContext.msSinceAssistantReply || 0) / 1000);
-    parts.push(`Bot last spoke ${secsSinceReply}s ago — active conversation.`);
+    const msSince = Number(input.conversationContext.msSinceAssistantReply || 0);
+    const secsSinceReply = Math.round(msSince / 1000);
+    if (msSince <= 15_000 && normalizedEagerness >= 25) {
+      parts.push(`You spoke ${secsSinceReply}s ago — active conversation, this is very likely directed at you.`);
+    } else {
+      parts.push(`You spoke ${secsSinceReply}s ago.`);
+    }
     if (input.conversationContext.msSinceDirectAddress != null) {
       parts.push(`Last addressed by name ${Math.round(input.conversationContext.msSinceDirectAddress / 1000)}s ago.`);
     }
-  } else {
-    parts.push(`Bot has not spoken recently.`);
-    if (input.conversationContext.msSinceDirectAddress != null) {
-      parts.push(`Last addressed ${Math.round(input.conversationContext.msSinceDirectAddress / 1000)}s ago.`);
-    } else {
-      parts.push(`Never directly addressed.`);
-    }
   }
 
-  // History and decision
+  // History
   if (input.recentHistory) {
     parts.push(``);
     parts.push(`Recent voice timeline:\n${input.recentHistory}`);
   }
+
+  // Music state
+  if (input.musicActive) {
+    parts.push(``);
+    parts.push(`Music playing.`);
+    if (input.musicWakeLatched) {
+      parts.push(`Wake latch active — you are listening for music commands (skip, volume, queue, etc). Prefer YES for short control commands.`);
+      if (Number.isFinite(Number(input.msUntilMusicWakeLatchExpiry))) {
+        parts.push(`Latch expires in ${Math.max(0, Math.round(Number(input.msUntilMusicWakeLatchExpiry) / 1000))}s.`);
+      }
+    }
+  }
+
+  // --- Guidelines (after context, so model reads situation first) ---
   parts.push(``);
-  parts.push(`Decision: should the bot respond right now?`);
+
+  // Room prior
+  if (normalizedInputKind !== "event" && input.participantCount <= 1 && !input.addressedToOtherSignal) {
+    parts.push("One-on-one room — speech is likely directed at you. Prefer YES unless clearly self-talk or non-speech.");
+  }
+
+  // Event-specific guidance
+  if (normalizedInputKind === "event") {
+    if (input.speakerName === "YOU") {
+      parts.push(`You just joined — say YES to greet unless there is a strong reason not to.`);
+    } else {
+      parts.push(`Someone joined or left. Consider greeting them if it feels natural.`);
+    }
+  }
+
+  // Name detection hints from upstream
+  if (input.directAddressed) {
+    parts.push("The speaker said your name. This is a strong YES signal unless the context clearly shows they are talking ABOUT you, not TO you.");
+  } else if (input.nameCueDetected) {
+    parts.push("The speaker may have said your name (fuzzy match). Lean toward YES.");
+  }
+
+  // Eagerness tier — YES-first framing to avoid NO anchoring
+  if (normalizedEagerness <= 10) {
+    parts.push("Say YES when directly addressed by name or given a direct command. Say NO for everything else.");
+  } else if (normalizedEagerness <= 25) {
+    parts.push("Say YES when directly addressed by name, given a direct command, or responding to a clear follow-up in your active conversation. Say NO for ambient chatter, questions not directed at you, or talk aimed at other participants.");
+  } else if (normalizedEagerness <= 50) {
+    parts.push("Say YES when you can contribute — questions, commands, follow-ups, greetings, or anything where you can add value. Say NO for filler noise or conversations clearly between others.");
+  } else if (normalizedEagerness <= 75) {
+    parts.push("Say YES when the conversation interests you or you can add value. Say NO for filler/laughter, conversations clearly between other participants, or stale topics that have moved on without you.");
+  } else {
+    parts.push("Say YES freely. Only say NO for clear non-speech or someone explicitly addressing another person by name.");
+  }
+
+  parts.push(``);
+  parts.push(`Should you speak? YES or NO:`);
 
   return { systemPrompt, userPrompt: parts.join("\n") };
 }
@@ -1016,6 +993,8 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   replyEagerness,
   addressedToOtherSignal = false,
   pendingCommandFollowupSignal = false,
+  directAddressed = false,
+  nameCueDetected = false,
   musicActive = false,
   musicWakeLatched = false,
   msUntilMusicWakeLatchExpiry = null,
@@ -1034,6 +1013,8 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   replyEagerness: number;
   addressedToOtherSignal?: boolean;
   pendingCommandFollowupSignal?: boolean;
+  directAddressed?: boolean;
+  nameCueDetected?: boolean;
   musicActive?: boolean;
   musicWakeLatched?: boolean;
   msUntilMusicWakeLatchExpiry?: number | null;
@@ -1170,6 +1151,8 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
     speakerName,
     transcript,
     addressedToOtherSignal,
+    directAddressed,
+    nameCueDetected,
     musicActive,
     musicWakeLatched,
     msUntilMusicWakeLatchExpiry,

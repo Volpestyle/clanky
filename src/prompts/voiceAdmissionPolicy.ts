@@ -15,21 +15,6 @@ type VoiceAdmissionPolicyOptions = {
   musicWakeLatched?: boolean;
 };
 
-export function getEagernessClassifierTier(eagerness: number): string {
-  if (eagerness <= 0) {
-    return "You are extremely conservative. Only say YES for direct address, clear follow-ups to your active conversation, or explicit questions to the bot. Default to NO.";
-  }
-  if (eagerness <= 25) {
-    return "You are very selective. Reply to direct address, follow-ups, and clear questions. Default to NO for ambient chatter.";
-  }
-  if (eagerness <= 50) {
-    return "You are a good listener. You may say YES when you genuinely have something to contribute, but don't force yourself into conversations.";
-  }
-  if (eagerness <= 75) {
-    return "You are chatty and social. You enjoy participating. Say YES when the conversation interests you or you can add value.";
-  }
-  return "You are a full conversationalist who loves to engage. Say YES freely — you riff, monologue, and actively drive conversation. Only say NO for clear non-speech or someone explicitly talking to another person.";
-}
 
 function getEagernessGenerationTier(eagerness: number): string {
   if (eagerness <= 0) {
