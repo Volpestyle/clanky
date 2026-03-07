@@ -302,6 +302,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   conversationContext = null,
   participantRoster = [],
   recentMembershipEvents = [],
+  recentVoiceEffectEvents = [],
   soundboardCandidates = [],
   onWebLookupStart = null,
   onWebLookupComplete = null,
@@ -387,6 +388,28 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       return {
         eventType,
         displayName,
+        ageMs
+      };
+    })
+    .filter(Boolean)
+    .slice(-6);
+  const normalizedVoiceEffectEvents = (Array.isArray(recentVoiceEffectEvents) ? recentVoiceEffectEvents : [])
+    .map((entry) => {
+      const displayName = String(entry?.displayName || "").trim().slice(0, 80);
+      const effectType = String(entry?.effectType || "").trim().toLowerCase();
+      const soundName = String(entry?.soundName || "").trim().slice(0, 80) || null;
+      const emoji = String(entry?.emoji || "").trim().slice(0, 80) || null;
+      const ageMsRaw = Number(entry?.ageMs);
+      const ageMs = Number.isFinite(ageMsRaw) ? Math.max(0, Math.round(ageMsRaw)) : null;
+      if (!displayName) return null;
+      if (effectType !== "soundboard" && effectType !== "emoji" && effectType !== "unknown") {
+        return null;
+      }
+      return {
+        displayName,
+        effectType,
+        soundName,
+        emoji,
         ageMs
       };
     })
@@ -562,6 +585,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       botName: getPromptBotName(settings),
       participantRoster: normalizedParticipantRoster,
       recentMembershipEvents: normalizedMembershipEvents,
+      recentVoiceEffectEvents: normalizedVoiceEffectEvents,
       soundboardCandidates: normalizedSoundboardCandidates,
       webSearch: webSearchContext,
       recentConversationHistory,
@@ -587,6 +611,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     conversationContext: conversationContext || null,
     participantRoster: normalizedParticipantRoster,
     membershipEvents: normalizedMembershipEvents,
+    effectEvents: normalizedVoiceEffectEvents,
     memoryFacts: {
       userFacts: promptMemorySlice.userFacts,
       relevantFacts: promptMemorySlice.relevantFacts

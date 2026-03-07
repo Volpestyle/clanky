@@ -15,9 +15,11 @@ import {
   REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS,
   REALTIME_INSTRUCTION_REFRESH_DEBOUNCE_MS,
   STT_TRANSCRIPT_MAX_CHARS,
+  VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT,
   VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
 } from "./voiceSessionManager.constants.ts";
 import {
+  formatVoiceChannelEffectSummary,
   REALTIME_MEMORY_FACT_LIMIT,
   formatRealtimeMemoryFacts,
   normalizeVoiceText
@@ -91,6 +93,23 @@ interface VoiceMembershipPromptEntry {
   eventType: string;
   at: number;
   ageMs: number;
+}
+
+interface VoiceChannelEffectPromptEntry {
+  userId: string;
+  displayName: string;
+  channelId: string;
+  guildId: string;
+  effectType: string;
+  soundId: string | null;
+  soundName: string | null;
+  soundVolume: number | null;
+  emoji: string | null;
+  animationType: number | null;
+  animationId: number | null;
+  at: number;
+  ageMs: number;
+  summary: string;
 }
 
 interface VoiceCommandStateLike {
@@ -180,6 +199,10 @@ export type InstructionManagerHost = VoiceToolCallManager & {
     session: VoiceSession,
     args?: { now?: number; maxItems?: number }
   ) => VoiceMembershipPromptEntry[];
+  getRecentVoiceChannelEffectEvents: (
+    session: VoiceSession,
+    args?: { now?: number; maxItems?: number }
+  ) => VoiceChannelEffectPromptEntry[];
   ensureVoiceCommandState: (session: VoiceSession) => VoiceCommandStateLike | null;
   getMusicDisambiguationPromptContext: (
     session: VoiceSession
@@ -585,6 +608,9 @@ export class InstructionManager {
     const recentMembershipEvents = this.host.getRecentVoiceMembershipEvents(session, {
       maxItems: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
     });
+    const recentVoiceChannelEffects = this.host.getRecentVoiceChannelEffectEvents(session, {
+      maxItems: VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT
+    });
     const guild = this.host.client.guilds.cache.get(String(session?.guildId || "")) || null;
     const voiceChannel = guild?.channels?.cache?.get(String(session?.voiceChannelId || "")) || null;
     const roster =
@@ -600,6 +626,11 @@ export class InstructionManager {
           const action = entry.eventType === "join" ? "joined" : "left";
           return `${entry.displayName} ${action} (${Math.max(0, Math.round(entry.ageMs))}ms ago)`;
         })
+        .join(" | ")
+      : "none";
+    const effectSummary = recentVoiceChannelEffects.length
+      ? recentVoiceChannelEffects
+        .map((entry) => formatVoiceChannelEffectSummary(entry, { includeTiming: true }))
         .join(" | ")
       : "none";
     const userFacts = formatRealtimeMemoryFacts(memorySlice?.userFacts, REALTIME_MEMORY_FACT_LIMIT);
@@ -618,6 +649,7 @@ export class InstructionManager {
         `- Voice channel: ${String(voiceChannel?.name || "unknown").trim() || "unknown"}`,
         `- Humans currently in channel: ${roster}`,
         `- Recent membership changes: ${membershipSummary}`,
+        `- Recent voice effects: ${effectSummary}`,
         "- If someone recently joined, a quick natural greeting is usually good.",
         "- If someone recently left, a brief natural goodbye/acknowledgement is usually good."
       ].join("\n")

@@ -14,6 +14,7 @@ import {
   resolveVoiceRuntimeMode,
   shortError
 } from "./voiceSessionHelpers.ts";
+import { getPromptBotName } from "../prompts/promptCore.ts";
 import { buildVoiceInstructions } from "./voiceConfigResolver.ts";
 import { resolveSoundboardCandidates } from "./voiceSoundboard.ts";
 import { buildRealtimeFunctionTools, getVoiceMcpServerStatuses } from "./voiceToolCallToolRegistry.ts";
@@ -760,6 +761,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         },
         latencyStages: [],
         membershipEvents: [],
+        voiceChannelEffects: [],
         voiceLookupBusyCount: 0,
         lastSuppressedCaptureLogAt: 0,
         baseVoiceInstructions,
@@ -775,6 +777,17 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       };
 
       manager.sessions.set(guildId, session);
+
+      // Record the bot's own join as a membership event so the classifier
+      // history shows "[botName] joined" as the first event.
+      const botName = getPromptBotName(settings);
+      manager.recordVoiceMembershipEvent({
+        session,
+        userId: manager.client.user?.id || "",
+        eventType: "join",
+        displayName: botName
+      });
+
       await manager.sessionLifecycle.attachSessionRuntime({
         session,
         settings,

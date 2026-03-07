@@ -10,6 +10,7 @@ import {
   formatOpenArticleCandidates,
   formatMemoryFacts
 } from "./promptFormatters.ts";
+import { formatVoiceChannelEffectSummary } from "../voice/voiceSessionHelpers.ts";
 import {
   buildVoiceAdmissionPolicyLines
 } from "./voiceAdmissionPolicy.ts";
@@ -30,6 +31,7 @@ export function buildVoiceTurnPrompt({
   botName = "the bot",
   participantRoster = [],
   recentMembershipEvents = [],
+  recentVoiceEffectEvents = [],
   soundboardCandidates = [],
   webSearch = null,
   recentConversationHistory = [],
@@ -103,6 +105,16 @@ export function buildVoiceTurnPrompt({
         eventType,
         displayName,
         ageMs
+      };
+    })
+    .filter(Boolean)
+    .slice(-6);
+  const normalizedVoiceEffectEvents = (Array.isArray(recentVoiceEffectEvents) ? recentVoiceEffectEvents : [])
+    .map((entry) => {
+      const summary = formatVoiceChannelEffectSummary(entry, { includeTiming: true });
+      if (!summary) return null;
+      return {
+        summary
       };
     })
     .filter(Boolean)
@@ -252,6 +264,16 @@ export function buildVoiceTurnPrompt({
     parts.push(
       "When it fits naturally, prefer a quick greeting for recent joiners and a brief goodbye/acknowledgement for recent leavers."
     );
+  }
+
+  if (normalizedVoiceEffectEvents.length) {
+    parts.push("Recent voice effects:");
+    parts.push(
+      normalizedVoiceEffectEvents
+        .map((entry) => `- ${entry.summary}.`)
+        .join("\n")
+    );
+    parts.push("Treat soundboard and emoji effects as room context signals, not spoken words.");
   }
 
   if (normalizedConversationContext) {
@@ -518,7 +540,6 @@ export function buildVoiceTurnPrompt({
 
   parts.push(
     ...buildVoiceAdmissionPolicyLines({
-      mode: "generation",
       directAddressed: normalizedDirectAddressed,
       isEagerTurn,
       replyEagerness: voiceEagerness,

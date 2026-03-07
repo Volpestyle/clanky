@@ -417,6 +417,33 @@ export function formatSoundboardCandidateLine(entry) {
   return name ? `- ${reference} | ${name}` : `- ${reference}`;
 }
 
+export function formatVoiceChannelEffectSummary(entry, { includeTiming = false } = {}) {
+  const effectType = String(entry?.effectType || "")
+    .trim()
+    .toLowerCase();
+  const displayName = normalizeVoiceText(entry?.displayName || "someone", 80) || "someone";
+  const soundName = normalizeVoiceText(entry?.soundName || "", 80);
+  const emoji = normalizeVoiceText(entry?.emoji || "", 80);
+  let summary = "";
+
+  if (effectType === "soundboard") {
+    summary = soundName
+      ? `${displayName} played soundboard \"${soundName}\"`
+      : `${displayName} played a soundboard effect`;
+  } else if (effectType === "emoji") {
+    summary = emoji
+      ? `${displayName} sent voice effect ${emoji}`
+      : `${displayName} sent a voice effect`;
+  } else {
+    summary = `${displayName} sent a voice effect`;
+  }
+
+  if (!includeTiming) return summary;
+  const ageMs = Number(entry?.ageMs);
+  if (!Number.isFinite(ageMs)) return summary;
+  return `${summary} (${Math.max(0, Math.round(ageMs))}ms ago)`;
+}
+
 function normalizeSoundboardReferenceToken(value) {
   return String(value || "")
     .trim()

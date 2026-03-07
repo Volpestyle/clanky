@@ -698,6 +698,92 @@ test("formatVoiceDecisionHistory keeps newest turns within total char budget", (
   assert.equal(history.split("\n").filter(Boolean).length <= 6, true);
 });
 
+test("formatVoiceDecisionHistory interleaves membership events with voice turns in chronological order", () => {
+  const manager = createManager();
+  const now = Date.now();
+  const session = {
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    botTurnOpen: false,
+    settingsSnapshot: baseSettings(),
+    recentVoiceTurns: [
+      { role: "user", userId: "u1", speakerName: "vuhlp", text: "Yo", at: now - 1000 }
+    ],
+    membershipEvents: [
+      { userId: "bot-user", displayName: "clanker conk", eventType: "join", at: now - 3000 },
+      { userId: "u1", displayName: "vuhlp", eventType: "join", at: now - 2000 }
+    ]
+  };
+
+  const history = manager.formatVoiceDecisionHistory(session, 6, 900);
+  const lines = history.split("\n").filter(Boolean);
+  assert.equal(lines.length, 3);
+  assert.equal(lines[0], "[clanker conk joined the voice channel]");
+  assert.equal(lines[1], "[vuhlp joined the voice channel]");
+  assert.equal(lines[2], 'vuhlp: "Yo"');
+});
+
+test("formatVoiceDecisionHistory shows membership events even with no voice turns", () => {
+  const manager = createManager();
+  const now = Date.now();
+  const session = {
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    botTurnOpen: false,
+    settingsSnapshot: baseSettings(),
+    recentVoiceTurns: [],
+    membershipEvents: [
+      { userId: "bot-user", displayName: "clanker conk", eventType: "join", at: now - 2000 },
+      { userId: "u1", displayName: "vuhlp", eventType: "join", at: now - 1000 }
+    ]
+  };
+
+  const history = manager.formatVoiceDecisionHistory(session, 6, 900);
+  const lines = history.split("\n").filter(Boolean);
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0], "[clanker conk joined the voice channel]");
+  assert.equal(lines[1], "[vuhlp joined the voice channel]");
+});
+
+test("formatVoiceDecisionHistory includes recent voice channel effects", () => {
+  const manager = createManager();
+  const now = Date.now();
+  const session = {
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    botTurnOpen: false,
+    settingsSnapshot: baseSettings(),
+    recentVoiceTurns: [
+      { role: "user", userId: "u1", speakerName: "vuhlp", text: "did you hear that", at: now - 1000 }
+    ],
+    membershipEvents: [],
+    voiceChannelEffects: [
+      {
+        userId: "u2",
+        displayName: "bob",
+        channelId: "voice-1",
+        guildId: "guild-1",
+        effectType: "soundboard",
+        soundId: "123",
+        soundName: "airhorn",
+        soundVolume: 0.8,
+        emoji: null,
+        animationType: null,
+        animationId: null,
+        at: now - 1500
+      }
+    ]
+  };
+
+  const history = manager.formatVoiceDecisionHistory(session, 6, 900);
+  const lines = history.split("\n").filter(Boolean);
+  assert.equal(lines[0], '[bob played soundboard "airhorn"]');
+  assert.equal(lines[1], 'vuhlp: "did you hear that"');
+});
+
 test("resolveVoiceThoughtTopicalityBias starts anchored and drifts with silence age", () => {
   const anchored = resolveVoiceThoughtTopicalityBias({
     silenceMs: 10_000,
@@ -1048,60 +1134,70 @@ test("reply decider bypasses classifier in generation_only realtime admission mo
 });
 
 test("reply decider fast-paths single-human assistant followups in hard-classifier realtime mode", async () => {
+  const previous = process.env.VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH;
+  process.env.VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH = "true";
   let callCount = 0;
   const now = Date.now();
-  const manager = createManager({
-    participantCount: 1,
-    generate: async () => {
-      callCount += 1;
-      return { text: "NO" };
-    }
-  });
-  const decision = await manager.evaluateVoiceReplyDecision({
-    session: {
-      guildId: "guild-1",
-      textChannelId: "chan-1",
-      voiceChannelId: "voice-1",
-      mode: "openai_realtime",
-      botTurnOpen: false,
-      lastAudioDeltaAt: now - 4_000,
-      recentVoiceTurns: [
-        {
-          role: "assistant",
-          userId: null,
-          text: "yo, what's up?",
-          speakerName: "clanker conk",
-          at: now - 4_000
-        },
-        {
-          role: "user",
-          userId: "speaker-1",
-          text: "yo, what's up, man?",
-          speakerName: "speaker 1",
-          at: now
-        }
-      ]
-    },
-    userId: "speaker-1",
-    settings: baseSettings({
-      voice: {
-        replyEagerness: 50,
-        replyDecisionLlm: {
-          realtimeAdmissionMode: "hard_classifier",
-          provider: "anthropic",
-          model: "claude-haiku-4-5"
-        }
+  try {
+    const manager = createManager({
+      participantCount: 1,
+      generate: async () => {
+        callCount += 1;
+        return { text: "NO" };
       }
-    }),
-    transcript: "yo, what's up, man?"
-  });
+    });
+    const decision = await manager.evaluateVoiceReplyDecision({
+      session: {
+        guildId: "guild-1",
+        textChannelId: "chan-1",
+        voiceChannelId: "voice-1",
+        mode: "openai_realtime",
+        botTurnOpen: false,
+        lastAudioDeltaAt: now - 4_000,
+        recentVoiceTurns: [
+          {
+            role: "assistant",
+            userId: null,
+            text: "yo, what's up?",
+            speakerName: "clanker conk",
+            at: now - 4_000
+          },
+          {
+            role: "user",
+            userId: "speaker-1",
+            text: "yo, what's up, man?",
+            speakerName: "speaker 1",
+            at: now
+          }
+        ]
+      },
+      userId: "speaker-1",
+      settings: baseSettings({
+        voice: {
+          replyEagerness: 50,
+          replyDecisionLlm: {
+            realtimeAdmissionMode: "hard_classifier",
+            provider: "anthropic",
+            model: "claude-haiku-4-5"
+          }
+        }
+      }),
+      transcript: "yo, what's up, man?"
+    });
 
-  assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "single_participant_assistant_followup");
-  assert.equal(decision.conversationContext.engaged, true);
-  assert.equal(decision.conversationContext.engagedWithCurrentSpeaker, true);
-  assert.equal(decision.conversationContext.singleParticipantAssistantFollowup, true);
-  assert.equal(callCount, 0);
+    assert.equal(decision.allow, true);
+    assert.equal(decision.reason, "single_participant_assistant_followup");
+    assert.equal(decision.conversationContext.engaged, true);
+    assert.equal(decision.conversationContext.engagedWithCurrentSpeaker, true);
+    assert.equal(decision.conversationContext.singleParticipantAssistantFollowup, true);
+    assert.equal(callCount, 0);
+  } finally {
+    if (previous == null) {
+      delete process.env.VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH;
+    } else {
+      process.env.VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH = previous;
+    }
+  }
 });
 
 test("reply decider still runs classifier when single-human assistant followup window is stale", async () => {
@@ -1453,8 +1549,8 @@ test("reply classifier prompt includes attributed history and current turn field
   assert.equal(decision.reason, "classifier_allow");
   assert.equal(classifierPrompt.includes('Speaker: speaker 1'), true);
   assert.equal(classifierPrompt.includes('Transcript: "yo what\'s up"'), true);
-  assert.equal(classifierPrompt.includes("Voice reply eagerness: 60/100."), true);
-  assert.equal(classifierPrompt.includes("Recent attributed voice turns:"), true);
+  assert.equal(classifierPrompt.includes("Voice reply eagerness: 60/100"), true);
+  assert.equal(classifierPrompt.includes("Recent voice timeline:"), true);
   assert.equal(classifierPrompt.includes('vuhlp: "i\'m working on a project"'), true);
 });
 
@@ -5817,7 +5913,23 @@ test("buildRealtimeInstructions forbids claiming screen vision before frame cont
       voiceChannelId: "voice-1",
       mode: "openai_realtime",
       startedAt: Date.now() - 5_000,
-      membershipEvents: []
+      membershipEvents: [],
+      voiceChannelEffects: [
+        {
+          userId: "speaker-2",
+          displayName: "bob",
+          channelId: "voice-1",
+          guildId: "guild-1",
+          effectType: "soundboard",
+          soundId: "123",
+          soundName: "rimshot",
+          soundVolume: 0.9,
+          emoji: null,
+          animationType: null,
+          animationId: null,
+          at: Date.now() - 1_000
+        }
+      ]
     },
     settings: baseSettings(),
     speakerUserId: "speaker-1",
@@ -5827,6 +5939,7 @@ test("buildRealtimeInstructions forbids claiming screen vision before frame cont
   assert.equal(instructions.includes("You do not currently see the user's screen."), true);
   assert.equal(instructions.includes("Do not claim to see, watch, or react to on-screen content until actual frame context is provided."), true);
   assert.equal(instructions.includes("call offer_screen_share_link"), true);
+  assert.equal(instructions.includes("Recent voice effects: bob played soundboard \"rimshot\""), true);
 });
 
 test("handleOpenAiRealtimeFunctionCallEvent executes music_now_playing and sends function output", async () => {

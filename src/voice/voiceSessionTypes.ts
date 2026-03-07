@@ -335,6 +335,26 @@ export interface VoiceMembershipPromptEntry extends VoiceMembershipEvent {
     ageMs: number;
 }
 
+export interface VoiceChannelEffectEvent {
+    userId: string;
+    displayName: string;
+    channelId: string;
+    guildId: string;
+    effectType: "soundboard" | "emoji" | "unknown";
+    soundId: string | null;
+    soundName: string | null;
+    soundVolume: number | null;
+    emoji: string | null;
+    animationType: number | null;
+    animationId: number | null;
+    at: number;
+}
+
+export interface VoiceChannelEffectPromptEntry extends VoiceChannelEffectEvent {
+    ageMs: number;
+    summary: string;
+}
+
 export interface VoiceSessionTimingContext {
     timeoutWarningActive: boolean;
     timeoutWarningReason: "none" | "max_duration" | "inactivity";
@@ -376,6 +396,7 @@ export interface VoiceGenerationContextSnapshot {
     relevantFacts?: unknown[];
     participantRoster?: string[];
     membershipEvents?: VoiceMembershipPromptEntry[];
+    effectEvents?: VoiceChannelEffectPromptEntry[];
     memoryFacts?: VoiceGenerationMemoryFacts;
     recentConversationHistory?: unknown[];
     recentWebLookups?: unknown[];
@@ -805,6 +826,7 @@ export interface VoiceSession {
     soundboard: VoiceSessionSoundboardState;
     latencyStages: VoiceLatencyStageEntry[];
     membershipEvents: VoiceMembershipEvent[];
+    voiceChannelEffects?: VoiceChannelEffectEvent[];
     voiceLookupBusyCount: number;
     lastSuppressedCaptureLogAt: number;
     baseVoiceInstructions: InstructionManagerState["baseVoiceInstructions"];

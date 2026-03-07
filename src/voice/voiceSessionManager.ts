@@ -1,4 +1,4 @@
-import { PermissionFlagsBits, type ChatInputCommandInteraction } from "discord.js";
+import { PermissionFlagsBits, type ChatInputCommandInteraction, type VoiceChannelEffect } from "discord.js";
 import { resolveMemoryToolNamespaceScope } from "../memory/memoryToolRuntime.ts";
 import {
   applyOrchestratorOverrideSettings,
@@ -91,6 +91,7 @@ import {
   buildRealtimeTextUtterancePrompt,
   encodePcm16MonoAsWav,
   extractSoundboardDirective,
+  formatVoiceChannelEffectSummary,
   formatRealtimeMemoryFacts,
   isRealtimeMode,
   normalizeInlineText,
@@ -190,6 +191,9 @@ import {
   STT_CONTEXT_MAX_MESSAGES,
   STT_REPLY_MAX_CHARS,
   STT_TRANSCRIPT_MAX_CHARS,
+  VOICE_CHANNEL_EFFECT_EVENT_FRESH_MS,
+  VOICE_CHANNEL_EFFECT_EVENT_MAX_TRACKED,
+  VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT,
   VOICE_DECIDER_HISTORY_MAX_CHARS,
   VOICE_MEMBERSHIP_EVENT_FRESH_MS,
   VOICE_MEMBERSHIP_EVENT_MAX_TRACKED,
@@ -548,6 +552,7 @@ export class VoiceSessionManager {
   thoughtEngine;
   turnProcessor;
   onVoiceStateUpdate;
+  onVoiceChannelEffectSend;
 
   constructor({
     client,
@@ -607,8 +612,20 @@ export class VoiceSessionManager {
         });
       });
     };
+    this.onVoiceChannelEffectSend = (voiceChannelEffect: VoiceChannelEffect) => {
+      this.handleVoiceChannelEffectSend(voiceChannelEffect).catch((error) => {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: voiceChannelEffect?.guild?.id || null,
+          channelId: voiceChannelEffect?.channelId || null,
+          userId: this.client.user?.id || null,
+          content: `voice_channel_effect_send: ${String((error as Error)?.message || error)}`
+        });
+      });
+    };
 
     this.client.on("voiceStateUpdate", this.onVoiceStateUpdate);
+    this.client.on("voiceChannelEffectSend", this.onVoiceChannelEffectSend);
   }
 
   getVoiceScreenShareCapability({
@@ -1416,6 +1433,10 @@ export class VoiceSessionManager {
     if (this.onVoiceStateUpdate) {
       this.client.off("voiceStateUpdate", this.onVoiceStateUpdate);
       this.onVoiceStateUpdate = null;
+    }
+    if (this.onVoiceChannelEffectSend) {
+      this.client.off("voiceChannelEffectSend", this.onVoiceChannelEffectSend);
+      this.onVoiceChannelEffectSend = null;
     }
 
     await this.stopAll(reason);
@@ -3705,13 +3726,18 @@ export class VoiceSessionManager {
 
   formatVoiceDecisionHistory(session, maxTurns = 6, maxTotalChars = VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS) {
     const turns = Array.isArray(session?.recentVoiceTurns) ? session.recentVoiceTurns : [];
-    if (!turns.length) return "";
-    const lines = turns
+    const membershipEvents = Array.isArray(session?.membershipEvents) ? session.membershipEvents : [];
+    const voiceChannelEffects = Array.isArray(session?.voiceChannelEffects) ? session.voiceChannelEffects : [];
+
+    if (!turns.length && !membershipEvents.length && !voiceChannelEffects.length) return "";
+
+    // Build timeline entries from voice turns
+    const turnEntries = turns
       .slice(-Math.max(1, Number(maxTurns) || 6))
       .map((turn) => {
         const role = turn?.role === "assistant" ? "assistant" : "user";
         const text = normalizeVoiceText(turn?.text || "", VOICE_DECIDER_HISTORY_MAX_CHARS);
-        if (!text) return "";
+        if (!text) return null;
         const speaker =
           role === "assistant"
             ? getPromptBotName(session?.settingsSnapshot || this.store.getSettings())
@@ -3730,21 +3756,55 @@ export class VoiceSessionManager {
         const addressingSuffix = talkingTo
           ? ` [to ${talkingTo}; confidence ${directedConfidence.toFixed(2)}]`
           : "";
-        return `${speaker}: "${text}"${addressingSuffix}`;
+        return {
+          at: Number(turn?.at || 0),
+          line: `${speaker}: "${text}"${addressingSuffix}`
+        };
       })
-      .filter(Boolean);
+      .filter((entry): entry is { at: number; line: string } => entry !== null);
+
+    // Build timeline entries from membership events (join/leave)
+    const membershipEntries = membershipEvents
+      .slice(-Math.max(1, Number(maxTurns) || 6))
+      .map((event) => {
+        const name = String(event?.displayName || "someone").trim();
+        const type = String(event?.eventType || "").trim();
+        if (type !== "join" && type !== "leave") return null;
+        return {
+          at: Number(event?.at || 0),
+          line: `[${name} ${type === "join" ? "joined" : "left"} the voice channel]`
+        };
+      })
+      .filter((entry): entry is { at: number; line: string } => entry !== null);
+
+    const effectEntries = voiceChannelEffects
+      .slice(-Math.max(1, Number(maxTurns) || 6))
+      .map((event) => {
+        const summary = formatVoiceChannelEffectSummary(event);
+        if (!summary) return null;
+        return {
+          at: Number(event?.at || 0),
+          line: `[${summary}]`
+        };
+      })
+      .filter((entry): entry is { at: number; line: string } => entry !== null);
+
+    // Merge and sort by timestamp
+    const allEntries = [...turnEntries, ...membershipEntries, ...effectEntries]
+      .sort((a, b) => a.at - b.at)
+      .slice(-Math.max(1, Number(maxTurns) || 6));
 
     const boundedLines = [];
     let totalChars = 0;
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-      const line = lines[index];
-      if (!line) continue;
+    for (let index = allEntries.length - 1; index >= 0; index -= 1) {
+      const entry = allEntries[index];
+      if (!entry?.line) continue;
       const delimiterChars = boundedLines.length > 0 ? 1 : 0;
-      const projectedChars = totalChars + delimiterChars + line.length;
+      const projectedChars = totalChars + delimiterChars + entry.line.length;
       if (projectedChars > Math.max(120, Number(maxTotalChars) || VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS)) {
         break;
       }
-      boundedLines.push(line);
+      boundedLines.push(entry.line);
       totalChars = projectedChars;
     }
 
@@ -4284,6 +4344,206 @@ export class VoiceSessionManager {
       })
       .filter((entry) => entry && entry.ageMs <= VOICE_MEMBERSHIP_EVENT_FRESH_MS)
       .slice(-boundedMax);
+  }
+
+  getRecentVoiceChannelEffectEvents(
+    session,
+    { now = Date.now(), maxItems = VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT } = {}
+  ) {
+    const events = Array.isArray(session?.voiceChannelEffects) ? session.voiceChannelEffects : [];
+    const normalizedNow = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+    const boundedMax = clamp(
+      Math.floor(Number(maxItems) || VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT),
+      1,
+      VOICE_CHANNEL_EFFECT_EVENT_MAX_TRACKED
+    );
+
+    return events
+      .map((entry) => {
+        const at = Number(entry?.at || 0);
+        if (!Number.isFinite(at) || at <= 0) return null;
+        const displayName = String(entry?.displayName || "")
+          .trim()
+          .slice(0, 80) || "unknown";
+        const effectType = String(entry?.effectType || "")
+          .trim()
+          .toLowerCase();
+        const soundId = String(entry?.soundId || "").trim() || null;
+        const soundName = String(entry?.soundName || "").trim().slice(0, 80) || null;
+        const emoji = String(entry?.emoji || "").trim().slice(0, 80) || null;
+        const soundVolumeRaw = Number(entry?.soundVolume);
+        const animationTypeRaw = Number(entry?.animationType);
+        const animationIdRaw = Number(entry?.animationId);
+        const normalizedEntry = {
+          userId: String(entry?.userId || "").trim(),
+          displayName,
+          channelId: String(entry?.channelId || "").trim(),
+          guildId: String(entry?.guildId || "").trim(),
+          effectType:
+            effectType === "soundboard" || effectType === "emoji"
+              ? effectType
+              : "unknown",
+          soundId,
+          soundName,
+          soundVolume: Number.isFinite(soundVolumeRaw) ? soundVolumeRaw : null,
+          emoji,
+          animationType: Number.isFinite(animationTypeRaw) ? animationTypeRaw : null,
+          animationId: Number.isFinite(animationIdRaw) ? animationIdRaw : null,
+          at,
+          ageMs: Math.max(0, normalizedNow - at),
+          summary: ""
+        };
+        normalizedEntry.summary = formatVoiceChannelEffectSummary(normalizedEntry, {
+          includeTiming: false
+        });
+        return normalizedEntry;
+      })
+      .filter((entry) => entry && entry.ageMs <= VOICE_CHANNEL_EFFECT_EVENT_FRESH_MS)
+      .slice(-boundedMax);
+  }
+
+  recordVoiceChannelEffectEvent(
+    session,
+    {
+      userId,
+      displayName = "",
+      channelId = "",
+      guildId = "",
+      effectType = "unknown",
+      soundId = null,
+      soundName = null,
+      soundVolume = null,
+      emoji = null,
+      animationType = null,
+      animationId = null,
+      at = Date.now()
+    }: {
+      userId?: string | null;
+      displayName?: string;
+      channelId?: string;
+      guildId?: string;
+      effectType?: string;
+      soundId?: string | null;
+      soundName?: string | null;
+      soundVolume?: number | null;
+      emoji?: string | null;
+      animationType?: number | null;
+      animationId?: number | null;
+      at?: number;
+    } = {}
+  ) {
+    if (!session || session.ending) return null;
+    const normalizedUserId = String(userId || "").trim();
+    if (!normalizedUserId) return null;
+
+    const voiceChannelEffects = Array.isArray(session.voiceChannelEffects) ? session.voiceChannelEffects : [];
+    if (!Array.isArray(session.voiceChannelEffects)) {
+      session.voiceChannelEffects = voiceChannelEffects;
+    }
+
+    const eventAt = Number.isFinite(Number(at)) ? Math.max(0, Number(at)) : Date.now();
+    const normalizedDisplayName =
+      String(displayName || "").trim() || this.resolveVoiceSpeakerName(session, normalizedUserId) || "unknown";
+    const normalizedEffectType = String(effectType || "")
+      .trim()
+      .toLowerCase();
+    const resolvedEffectType =
+      normalizedEffectType === "soundboard" || normalizedEffectType === "emoji"
+        ? normalizedEffectType
+        : "unknown";
+    const normalizedSoundId = String(soundId || "").trim() || null;
+    const normalizedSoundName = String(soundName || "").trim().slice(0, 80) || null;
+    const normalizedEmoji = String(emoji || "").trim().slice(0, 80) || null;
+    const normalizedChannelId = String(channelId || session.voiceChannelId || "").trim();
+    const normalizedGuildId = String(guildId || session.guildId || "").trim();
+    const previous = voiceChannelEffects[voiceChannelEffects.length - 1];
+    const duplicate =
+      previous &&
+      String(previous.userId || "").trim() === normalizedUserId &&
+      String(previous.effectType || "").trim().toLowerCase() === resolvedEffectType &&
+      String(previous.soundId || "").trim() === String(normalizedSoundId || "") &&
+      String(previous.emoji || "").trim() === String(normalizedEmoji || "") &&
+      eventAt - Number(previous.at || 0) <= 1500;
+    if (duplicate) {
+      return null;
+    }
+
+    const eventRow = {
+      userId: normalizedUserId,
+      displayName: normalizedDisplayName.slice(0, 80),
+      channelId: normalizedChannelId,
+      guildId: normalizedGuildId,
+      effectType: resolvedEffectType,
+      soundId: normalizedSoundId,
+      soundName: normalizedSoundName,
+      soundVolume: Number.isFinite(Number(soundVolume)) ? Number(soundVolume) : null,
+      emoji: normalizedEmoji,
+      animationType: Number.isFinite(Number(animationType)) ? Number(animationType) : null,
+      animationId: Number.isFinite(Number(animationId)) ? Number(animationId) : null,
+      at: eventAt
+    };
+    voiceChannelEffects.push(eventRow);
+    if (voiceChannelEffects.length > VOICE_CHANNEL_EFFECT_EVENT_MAX_TRACKED) {
+      session.voiceChannelEffects = voiceChannelEffects.slice(-VOICE_CHANNEL_EFFECT_EVENT_MAX_TRACKED);
+    } else {
+      session.voiceChannelEffects = voiceChannelEffects;
+    }
+    return eventRow;
+  }
+
+  async handleVoiceChannelEffectSend(voiceChannelEffect: VoiceChannelEffect) {
+    const guildId = String(voiceChannelEffect?.guild?.id || "").trim();
+    if (!guildId) return;
+    const session = this.getSession(guildId);
+    if (!session || session.ending) return;
+    if (String(voiceChannelEffect?.channelId || "") !== String(session.voiceChannelId || "")) return;
+
+    const effectType = voiceChannelEffect?.soundId ? "soundboard" : voiceChannelEffect?.emoji ? "emoji" : "unknown";
+    const soundName = String(voiceChannelEffect?.soundboardSound?.name || "").trim() || null;
+    const emoji = voiceChannelEffect?.emoji
+      ? typeof voiceChannelEffect.emoji.toString === "function"
+        ? String(voiceChannelEffect.emoji.toString()).trim()
+        : String(voiceChannelEffect.emoji.name || "").trim() || null
+      : null;
+    const displayName =
+      String(session?.guildId || "") && voiceChannelEffect?.guild?.members?.cache?.get(String(voiceChannelEffect.userId || ""))
+        ?.displayName || this.resolveVoiceSpeakerName(session, String(voiceChannelEffect.userId || "")) || "unknown";
+    const eventRow = this.recordVoiceChannelEffectEvent(session, {
+      userId: String(voiceChannelEffect.userId || "").trim(),
+      displayName,
+      channelId: String(voiceChannelEffect.channelId || "").trim(),
+      guildId,
+      effectType,
+      soundId: voiceChannelEffect.soundId == null ? null : String(voiceChannelEffect.soundId),
+      soundName,
+      soundVolume: voiceChannelEffect.soundVolume,
+      emoji,
+      animationType: voiceChannelEffect.animationType == null ? null : Number(voiceChannelEffect.animationType),
+      animationId: voiceChannelEffect.animationId == null ? null : Number(voiceChannelEffect.animationId),
+      at: Date.now()
+    });
+    if (!eventRow) return;
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId,
+      channelId: session.textChannelId,
+      userId: String(voiceChannelEffect.userId || "").trim() || null,
+      content: "voice_channel_effect_send",
+      metadata: {
+        sessionId: session.id,
+        mode: session.mode,
+        voiceChannelId: session.voiceChannelId,
+        effectType: eventRow.effectType,
+        summary: formatVoiceChannelEffectSummary(eventRow),
+        soundId: eventRow.soundId,
+        soundName: eventRow.soundName,
+        soundVolume: eventRow.soundVolume,
+        emoji: eventRow.emoji,
+        animationType: eventRow.animationType,
+        animationId: eventRow.animationId
+      }
+    });
   }
 
   recordVoiceMembershipEvent({ session, userId, eventType, displayName = "", at = Date.now() }) {

@@ -7,11 +7,13 @@ import {
   STT_CONTEXT_MAX_MESSAGES,
   STT_REPLY_MAX_CHARS,
   STT_TRANSCRIPT_MAX_CHARS,
+  VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT,
   VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
 } from "./voiceSessionManager.constants.ts";
 import {
   SOUNDBOARD_MAX_CANDIDATES,
   formatSoundboardCandidateLine,
+  formatVoiceChannelEffectSummary,
   isRealtimeMode,
   normalizeVoiceText
 } from "./voiceSessionHelpers.ts";
@@ -72,6 +74,7 @@ export type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
   | "buildVoiceToolCallbacks"
   | "endSession"
   | "generateVoiceTurn"
+  | "getRecentVoiceChannelEffectEvents"
   | "getRecentVoiceMembershipEvents"
   | "getStreamWatchBrainContextForPrompt"
   | "getVoiceChannelParticipants"
@@ -109,27 +112,45 @@ function toGeneratedPayload(value: unknown): GeneratedPayload {
 
 function buildContextMessages(session: VoiceSession, normalizedTranscript: string) {
   const contextTranscript = normalizeVoiceText(normalizedTranscript, STT_REPLY_MAX_CHARS);
-  const contextTurns = Array.isArray(session.recentVoiceTurns)
+  const contextTurnRows = Array.isArray(session.recentVoiceTurns)
     ? session.recentVoiceTurns
       .filter((row) => row && typeof row === "object")
       .slice(-STT_CONTEXT_MAX_MESSAGES)
     : [];
-  if (contextTurns.length > 0 && contextTranscript) {
-    const lastTurn = contextTurns[contextTurns.length - 1];
+  if (contextTurnRows.length > 0 && contextTranscript) {
+    const lastTurn = contextTurnRows[contextTurnRows.length - 1];
     const lastRole = lastTurn?.role === "assistant" ? "assistant" : "user";
     const lastContent = normalizeVoiceText(lastTurn?.text, STT_REPLY_MAX_CHARS);
     if (lastRole === "user" && lastContent && lastContent === contextTranscript) {
-      contextTurns.pop();
+      contextTurnRows.pop();
     }
   }
-  const contextMessages: ContextMessage[] = contextTurns
+  const contextEffectRows = (Array.isArray(session.voiceChannelEffects) ? session.voiceChannelEffects : [])
+    .slice(-VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT)
+    .map((row) => ({
+      role: "user" as const,
+      content: normalizeVoiceText(
+        `[Voice effect] ${formatVoiceChannelEffectSummary(row)}`,
+        STT_REPLY_MAX_CHARS
+      ),
+      at: Number(row?.at || 0)
+    }))
+    .filter((row) => Boolean(row.content));
+  const contextTurns = contextTurnRows.map((row) => ({
+    role: row.role === "assistant" ? "assistant" : "user" as const,
+    content: normalizeVoiceText(row.text, STT_REPLY_MAX_CHARS),
+    at: Number(row?.at || 0)
+  }));
+  const contextMessages: ContextMessage[] = [...contextTurns, ...contextEffectRows]
+    .sort((a, b) => a.at - b.at)
+    .slice(-STT_CONTEXT_MAX_MESSAGES)
     .map((row) => ({
       role: row.role === "assistant" ? "assistant" : "user",
-      content: normalizeVoiceText(row.text, STT_REPLY_MAX_CHARS)
+      content: row.content
     }))
     .filter((row): row is ContextMessage => Boolean(row.content));
   const contextMessageChars = contextMessages.reduce((total, row) => total + row.content.length, 0);
-  return { contextMessages, contextMessageChars, contextTurns };
+  return { contextMessages, contextMessageChars, contextTurns: [...contextTurns, ...contextEffectRows] };
 }
 
 function logReplySkipped({
@@ -269,6 +290,9 @@ export async function runVoiceReplyPipeline(
   const recentMembershipEvents = host.getRecentVoiceMembershipEvents(session, {
     maxItems: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
   });
+  const recentVoiceEffectEvents = host.getRecentVoiceChannelEffectEvents(session, {
+    maxItems: VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT
+  });
   const contextNow = Date.now();
   const joinWindowAgeMs = Math.max(0, contextNow - Number(session.startedAt || 0));
   const joinWindowActive = Boolean(session.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
@@ -328,6 +352,7 @@ export async function runVoiceReplyPipeline(
       sessionTiming,
       participantRoster,
       recentMembershipEvents,
+      recentVoiceEffectEvents,
       soundboardCandidates: soundboardCandidateLines,
       onWebLookupStart: async ({ query }: { query: string }) => {
         if (typeof releaseLookupBusy === "function") return;

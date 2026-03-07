@@ -605,6 +605,41 @@ test("generateVoiceTurnReply injects recent conversation history into the prompt
   );
 });
 
+test("generateVoiceTurnReply injects recent voice effects into the prompt", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "yeah that was loud"
+    })
+  });
+
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "did you hear that one",
+    recentVoiceEffectEvents: [
+      {
+        displayName: "bob",
+        effectType: "soundboard",
+        soundName: "airhorn",
+        emoji: null,
+        ageMs: 850
+      }
+    ]
+  });
+
+  assert.equal(generationPayloads.length > 0, true);
+  assert.equal(
+    String(generationPayloads[0]?.userPrompt || "").includes("Recent voice effects:"),
+    true
+  );
+  assert.equal(
+    String(generationPayloads[0]?.userPrompt || "").includes("bob played soundboard \"airhorn\" (850ms ago)"),
+    true
+  );
+});
+
 test("generateVoiceTurnReply drops soundboard refs when soundboard is disabled", async () => {
   const { bot } = createVoiceBot({
     generationText: structuredVoiceOutput({
