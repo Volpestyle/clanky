@@ -1,6 +1,13 @@
 /**
- * Live voice admission tests — exercises the full evaluateVoiceReplyDecision
- * pipeline (name detection, fast-paths, and classifier) against a real LLM.
+ * Live voice admission tests — CLASSIFIER + FAST-PATHS ONLY, no generation.
+ *
+ * Exercises the full evaluateVoiceReplyDecision pipeline (name detection
+ * fast-paths + YES/NO LLM classifier) against a real LLM. The generation
+ * LLM (buildVoiceTurnPrompt / llm.generate) is never called here.
+ *
+ * The classifier returns YES/NO. The admission pipeline wraps that into
+ * allow/deny (deterministic fast-paths can also allow/deny before the
+ * classifier runs). Each scenario asserts on the final allow/deny outcome.
  *
  * Run:
  *   bun test tests/live/voiceAdmission.live.test.ts
