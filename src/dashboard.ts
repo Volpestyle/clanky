@@ -68,6 +68,18 @@ export interface DashboardBot {
 export interface DashboardMemory {
   readMemoryMarkdown(): Promise<string>;
   refreshMemoryMarkdown(): Promise<unknown>;
+  loadUserFactProfile?(payload: {
+    userId?: string | null;
+    guildId?: string | null;
+  }): {
+    userFacts?: unknown[];
+  };
+  loadGuildFactProfile?(payload: {
+    guildId?: string | null;
+  }): {
+    selfFacts?: unknown[];
+    loreFacts?: unknown[];
+  };
   searchDurableFacts(payload: {
     guildId: string;
     queryText: string;

@@ -202,6 +202,62 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and stt session state", (
           lastCallAt: "2026-03-06T17:59:51.000Z"
         }
       ],
+      factProfiles: new Map([
+        [
+          "user-1",
+          {
+            loadedAt: now - 1_200,
+            userFacts: [
+              {
+                id: 11,
+                created_at: "2026-03-05T12:00:00.000Z",
+                updated_at: "2026-03-06T17:59:58.800Z",
+                guild_id: "guild-1",
+                channel_id: "text-1",
+                subject: "user-1",
+                fact: "Likes ramen.",
+                fact_type: "preference",
+                evidence_text: "I love ramen",
+                source_message_id: "msg-1",
+                confidence: 0.92
+              }
+            ]
+          }
+        ]
+      ]),
+      guildFactProfile: {
+        loadedAt: now - 1_000,
+        selfFacts: [
+          {
+            id: 21,
+            created_at: "2026-03-01T12:00:00.000Z",
+            updated_at: "2026-03-06T17:59:59.000Z",
+            guild_id: "guild-1",
+            channel_id: null,
+            subject: "__self__",
+            fact: "Bot likes concise replies.",
+            fact_type: "profile",
+            evidence_text: "Keep it tight",
+            source_message_id: "msg-self",
+            confidence: 0.88
+          }
+        ],
+        loreFacts: [
+          {
+            id: 22,
+            created_at: "2026-03-02T12:00:00.000Z",
+            updated_at: "2026-03-06T17:59:59.100Z",
+            guild_id: "guild-1",
+            channel_id: null,
+            subject: "__lore__",
+            fact: "Guild runs Friday game night.",
+            fact_type: "relationship",
+            evidence_text: "We do game night Fridays",
+            source_message_id: "msg-lore",
+            confidence: 0.81
+          }
+        ]
+      },
       realtimeProvider: "openai",
       realtimeInputSampleRateHz: 16_000,
       realtimeOutputSampleRateHz: 24_000,
@@ -464,6 +520,63 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and stt session state", (
     assert.equal(realtime?.toolCalls?.[0]?.runtimeMs, 101);
     assert.equal(realtime?.mcpStatus?.[0]?.serverName, "web");
     assert.equal(realtime?.music?.active, true);
+    assert.deepEqual(realtime?.memory, {
+      factProfiles: [
+        {
+          userId: "user-1",
+          displayName: "Alice",
+          loadedAt: "2026-03-06T17:59:58.800Z",
+          userFacts: [
+            {
+              id: 11,
+              createdAt: "2026-03-05T12:00:00.000Z",
+              updatedAt: "2026-03-06T17:59:58.800Z",
+              guildId: "guild-1",
+              channelId: "text-1",
+              subject: "user-1",
+              fact: "Likes ramen.",
+              factType: "preference",
+              evidenceText: "I love ramen",
+              sourceMessageId: "msg-1",
+              confidence: 0.92
+            }
+          ]
+        }
+      ],
+      guildFactProfile: {
+        loadedAt: "2026-03-06T17:59:59.000Z",
+        selfFacts: [
+          {
+            id: 21,
+            createdAt: "2026-03-01T12:00:00.000Z",
+            updatedAt: "2026-03-06T17:59:59.000Z",
+            guildId: "guild-1",
+            channelId: null,
+            subject: "__self__",
+            fact: "Bot likes concise replies.",
+            factType: "profile",
+            evidenceText: "Keep it tight",
+            sourceMessageId: "msg-self",
+            confidence: 0.88
+          }
+        ],
+        loreFacts: [
+          {
+            id: 22,
+            createdAt: "2026-03-02T12:00:00.000Z",
+            updatedAt: "2026-03-06T17:59:59.100Z",
+            guildId: "guild-1",
+            channelId: null,
+            subject: "__lore__",
+            fact: "Guild runs Friday game night.",
+            factType: "relationship",
+            evidenceText: "We do game night Fridays",
+            sourceMessageId: "msg-lore",
+            confidence: 0.81
+          }
+        ]
+      }
+    });
     assert.deepEqual(realtime?.realtime, {
       provider: "openai",
       inputSampleRateHz: 16_000,

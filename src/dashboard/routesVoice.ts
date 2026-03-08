@@ -13,6 +13,122 @@ export interface VoiceRouteDeps {
   voiceSseClients: Set<DashboardSseClient>;
 }
 
+function mapDashboardFactRow(row: unknown) {
+  const record = toRecord(row);
+  const fact = String(record.fact || "").trim();
+  if (!fact) return null;
+  const confidence = Number(record.confidence);
+  return {
+    id: Number.isInteger(Number(record.id)) ? Number(record.id) : null,
+    subject: String(record.subject || "").trim() || null,
+    factType: String(record.factType || record.fact_type || "").trim() || null,
+    fact,
+    confidence: Number.isFinite(confidence) ? Number(confidence) : null,
+    metadata: {
+      createdAt: record.createdAt ? String(record.createdAt) : record.created_at ? String(record.created_at) : null,
+      updatedAt: record.updatedAt ? String(record.updatedAt) : record.updated_at ? String(record.updated_at) : null,
+      guildId: record.guildId ? String(record.guildId) : record.guild_id ? String(record.guild_id) : null,
+      channelId: record.channelId ? String(record.channelId) : record.channel_id ? String(record.channel_id) : null,
+      evidenceText:
+        record.evidenceText ? String(record.evidenceText) : record.evidence_text ? String(record.evidence_text) : null,
+      sourceMessageId:
+        record.sourceMessageId
+          ? String(record.sourceMessageId)
+          : record.source_message_id
+            ? String(record.source_message_id)
+            : null
+    }
+  };
+}
+
+function normalizeDashboardFactRows(rows: unknown) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => mapDashboardFactRow(row))
+    .filter((row) => row !== null);
+}
+
+function mapRelevantMessageRow(row: unknown) {
+  const record = toRecord(row);
+  const content = String(record.content || "").trim();
+  if (!content) return null;
+  return {
+    messageId: String(record.message_id || record.messageId || "").trim() || null,
+    timestamp: record.created_at ? String(record.created_at) : record.createdAt ? String(record.createdAt) : null,
+    author: record.author_name ? String(record.author_name) : record.authorName ? String(record.authorName) : null,
+    content
+  };
+}
+
+function getActiveVoiceSessionFactProfileSnapshot(
+  bot: DashboardBot,
+  {
+    guildId,
+    userId = null
+  }: {
+    guildId: string;
+    userId?: string | null;
+  }
+) {
+  const voiceState = bot.getRuntimeState()?.voice || { sessions: [] };
+  const sessions = Array.isArray(voiceState?.sessions) ? voiceState.sessions : [];
+  const session = sessions.find((entry) => String(toRecord(entry).guildId || "").trim() === guildId) || null;
+  if (!session) return null;
+
+  const normalizedUserId = String(userId || "").trim();
+  const sessionRecord = toRecord(session);
+  const memoryRecord = toRecord(sessionRecord.memory);
+  const factProfiles = (Array.isArray(memoryRecord.factProfiles) ? memoryRecord.factProfiles : [])
+    .map((entry) => {
+      const profileRecord = toRecord(entry);
+      const cachedUserId = String(profileRecord.userId || "").trim();
+      if (!cachedUserId) return null;
+      const userFacts = normalizeDashboardFactRows(profileRecord.userFacts);
+      return {
+        userId: cachedUserId,
+        displayName: profileRecord.displayName ? String(profileRecord.displayName) : null,
+        loadedAt: profileRecord.loadedAt ? String(profileRecord.loadedAt) : null,
+        factCount: userFacts.length,
+        userFacts
+      };
+    })
+    .filter((entry) => entry !== null);
+  const selectedFactProfile =
+    normalizedUserId
+      ? factProfiles.find((entry) => String(entry?.userId || "") === normalizedUserId) || null
+      : null;
+  const guildFactProfileRecord = toRecord(memoryRecord.guildFactProfile);
+
+  return {
+    sessionId: String(sessionRecord.sessionId || "").trim() || null,
+    voiceChannelId: sessionRecord.voiceChannelId ? String(sessionRecord.voiceChannelId) : null,
+    textChannelId: sessionRecord.textChannelId ? String(sessionRecord.textChannelId) : null,
+    participantCount: Number.isFinite(Number(sessionRecord.participantCount))
+      ? Math.max(0, Math.round(Number(sessionRecord.participantCount)))
+      : 0,
+    participants: (Array.isArray(sessionRecord.participants) ? sessionRecord.participants : []).map((participant) => {
+      const participantRecord = toRecord(participant);
+      return {
+        userId: String(participantRecord.userId || "").trim() || null,
+        displayName: participantRecord.displayName ? String(participantRecord.displayName) : null
+      };
+    }),
+    cachedUsers: factProfiles.map((entry) => ({
+      userId: entry?.userId || null,
+      displayName: entry?.displayName || null,
+      loadedAt: entry?.loadedAt || null,
+      factCount: Number(entry?.factCount || 0)
+    })),
+    userFactProfile: selectedFactProfile,
+    guildFactProfile: memoryRecord.guildFactProfile
+      ? {
+          loadedAt: guildFactProfileRecord.loadedAt ? String(guildFactProfileRecord.loadedAt) : null,
+          selfFacts: normalizeDashboardFactRows(guildFactProfileRecord.selfFacts),
+          loreFacts: normalizeDashboardFactRows(guildFactProfileRecord.loreFacts)
+        }
+      : null
+  };
+}
+
 export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
   const { store, bot, memory, screenShareSessionManager, voiceSseClients } = deps;
 
@@ -445,6 +561,70 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
       channelId,
       limit,
       results
+    });
+  });
+
+  app.get("/api/memory/fact-profile", (c) => {
+    const guildId = String(c.req.query("guildId") || "").trim();
+    const userId = String(c.req.query("userId") || "").trim() || null;
+    const channelId = String(c.req.query("channelId") || "").trim() || null;
+    const queryText = String(c.req.query("queryText") || "").trim();
+
+    if (!guildId) {
+      return c.json({
+        guildId,
+        userId,
+        channelId,
+        queryText,
+        durableProfile: {
+          userFacts: [],
+          selfFacts: [],
+          loreFacts: []
+        },
+        promptContext: {
+          relevantMessages: []
+        },
+        activeVoiceSession: null
+      });
+    }
+
+    const userProfile =
+      typeof memory.loadUserFactProfile === "function"
+        ? memory.loadUserFactProfile({
+            userId,
+            guildId
+          })
+        : { userFacts: [] };
+    const guildProfile =
+      typeof memory.loadGuildFactProfile === "function"
+        ? memory.loadGuildFactProfile({
+            guildId
+          })
+        : { selfFacts: [], loreFacts: [] };
+    const relevantMessages =
+      channelId && queryText && typeof store.searchRelevantMessages === "function"
+        ? (store.searchRelevantMessages(channelId, queryText, 8) || [])
+            .map((row) => mapRelevantMessageRow(row))
+            .filter((row) => row !== null)
+        : [];
+
+    return c.json({
+      guildId,
+      userId,
+      channelId,
+      queryText,
+      durableProfile: {
+        userFacts: normalizeDashboardFactRows(userProfile?.userFacts),
+        selfFacts: normalizeDashboardFactRows(guildProfile?.selfFacts),
+        loreFacts: normalizeDashboardFactRows(guildProfile?.loreFacts)
+      },
+      promptContext: {
+        relevantMessages
+      },
+      activeVoiceSession: getActiveVoiceSessionFactProfileSnapshot(bot, {
+        guildId,
+        userId
+      })
     });
   });
 

@@ -28,6 +28,148 @@ test("dashboard memory search handles missing params and valid lookups", async (
   }
 });
 
+test("dashboard fact profile route returns durable and active voice cache views", async () => {
+  const result = await withDashboardServer(
+    {
+      botOverrides: {
+        getRuntimeState() {
+          return {
+            voice: {
+              activeCount: 1,
+              sessions: [
+                {
+                  sessionId: "session-1",
+                  guildId: "guild-1",
+                  voiceChannelId: "voice-1",
+                  textChannelId: "chan-2",
+                  participantCount: 2,
+                  participants: [
+                    { userId: "user-1", displayName: "Alice" },
+                    { userId: "user-2", displayName: "Bob" }
+                  ],
+                  memory: {
+                    factProfiles: [
+                      {
+                        userId: "user-1",
+                        displayName: "Alice",
+                        loadedAt: "2026-03-08T12:00:00.000Z",
+                        userFacts: [
+                          {
+                            id: 21,
+                            subject: "user-1",
+                            fact: "Likes ramen.",
+                            factType: "preference",
+                            confidence: 0.91,
+                            updatedAt: "2026-03-08T11:59:00.000Z"
+                          }
+                        ]
+                      }
+                    ],
+                    guildFactProfile: {
+                      loadedAt: "2026-03-08T12:01:00.000Z",
+                      selfFacts: [
+                        {
+                          id: 31,
+                          subject: "__self__",
+                          fact: "Bot keeps replies concise.",
+                          factType: "profile",
+                          confidence: 0.88
+                        }
+                      ],
+                      loreFacts: [
+                        {
+                          id: 32,
+                          subject: "__lore__",
+                          fact: "Guild hosts Friday game night.",
+                          factType: "relationship",
+                          confidence: 0.82
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          };
+        }
+      },
+      memoryOverrides: {
+        loadUserFactProfile() {
+          return {
+            userFacts: [
+              {
+                id: 1,
+                subject: "user-1",
+                fact: "Likes tea.",
+                fact_type: "preference",
+                confidence: 0.75,
+                updated_at: "2026-03-08T11:00:00.000Z"
+              }
+            ]
+          };
+        },
+        loadGuildFactProfile() {
+          return {
+            selfFacts: [
+              {
+                id: 2,
+                subject: "__self__",
+                fact: "Bot likes short answers.",
+                fact_type: "profile",
+                confidence: 0.8
+              }
+            ],
+            loreFacts: [
+              {
+                id: 3,
+                subject: "__lore__",
+                fact: "Guild prefers late-night sessions.",
+                fact_type: "relationship",
+                confidence: 0.7
+              }
+            ]
+          };
+        }
+      }
+    },
+    async ({ baseUrl, store }) => {
+      store.recordMessage({
+        messageId: "msg-1",
+        guildId: "guild-1",
+        channelId: "chan-2",
+        authorId: "user-1",
+        authorName: "Alice",
+        isBot: false,
+        content: "We talked about ramen bowls yesterday."
+      });
+
+      const response = await fetch(
+        `${baseUrl}/api/memory/fact-profile?guildId=guild-1&userId=user-1&channelId=chan-2&queryText=ramen`
+      );
+      assert.equal(response.status, 200);
+      const json = await response.json();
+
+      assert.equal(json.guildId, "guild-1");
+      assert.equal(json.userId, "user-1");
+      assert.equal(json.durableProfile.userFacts.length, 1);
+      assert.equal(json.durableProfile.userFacts[0]?.fact, "Likes tea.");
+      assert.equal(json.durableProfile.selfFacts[0]?.fact, "Bot likes short answers.");
+      assert.equal(json.durableProfile.loreFacts[0]?.fact, "Guild prefers late-night sessions.");
+      assert.equal(json.promptContext.relevantMessages.length, 1);
+      assert.equal(json.promptContext.relevantMessages[0]?.content, "We talked about ramen bowls yesterday.");
+      assert.equal(json.activeVoiceSession.sessionId, "session-1");
+      assert.equal(json.activeVoiceSession.cachedUsers.length, 1);
+      assert.equal(json.activeVoiceSession.userFactProfile.userFacts[0]?.fact, "Likes ramen.");
+      assert.equal(json.activeVoiceSession.guildFactProfile.selfFacts[0]?.fact, "Bot keeps replies concise.");
+      assert.equal(json.activeVoiceSession.guildFactProfile.loreFacts[0]?.fact, "Guild hosts Friday game night.");
+    }
+  );
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
 test("dashboard shell finalizes HEAD requests for non-API routes", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl }) => {
     const response = await fetch(baseUrl, { method: "HEAD" });

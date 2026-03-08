@@ -110,6 +110,17 @@ export async function withDashboardServer<T>(
     async refreshMemoryMarkdown() {
       return true;
     },
+    loadUserFactProfile() {
+      return {
+        userFacts: []
+      };
+    },
+    loadGuildFactProfile() {
+      return {
+        selfFacts: [],
+        loreFacts: []
+      };
+    },
     async searchDurableFacts(payload) {
       memoryCalls.push(payload);
       return [{ fact: "remember this" }];

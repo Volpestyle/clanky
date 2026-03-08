@@ -3,13 +3,13 @@ import { api } from "../api";
 import { FilterPills } from "./ui";
 import MemorySnapshot from "./memoryTab/MemorySnapshot";
 import MemorySearch from "./memoryTab/MemorySearch";
-import MemorySimulator from "./memoryTab/MemorySimulator";
+import MemoryFactProfiles from "./memoryTab/MemoryFactProfiles";
 import MemoryReflections from "./memoryTab/MemoryReflections";
 import MemoryAdaptiveDirectives from "./memoryTab/MemoryAdaptiveDirectives";
 import MemoryInspector from "./memoryTab/MemoryInspector";
 
-type SubTab = "snapshot" | "inspector" | "directives" | "reflections" | "search" | "simulator";
-const MEMORY_SUB_TABS = ["snapshot", "inspector", "directives", "reflections", "search", "simulator"] as const;
+type SubTab = "snapshot" | "inspector" | "profiles" | "directives" | "reflections" | "search";
+const MEMORY_SUB_TABS = ["snapshot", "inspector", "profiles", "directives", "reflections", "search"] as const;
 
 interface Guild {
   id: string;
@@ -63,8 +63,8 @@ export default function MemoryTab({ markdown, onRefresh, notify }: Props) {
       <div style={{ display: subTab === "search" ? undefined : "none" }}>
         <MemorySearch guilds={guilds} notify={notify} />
       </div>
-      <div style={{ display: subTab === "simulator" ? undefined : "none" }}>
-        <MemorySimulator guilds={guilds} notify={notify} />
+      <div style={{ display: subTab === "profiles" ? undefined : "none" }}>
+        <MemoryFactProfiles guilds={guilds} notify={notify} />
       </div>
     </section>
   );

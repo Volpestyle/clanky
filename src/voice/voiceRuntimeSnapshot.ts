@@ -94,6 +94,39 @@ function buildRecentTurnAddressing(row: VoiceSession["transcriptTurns"][number])
     : null;
 }
 
+function buildMemoryFactSnapshot(row: unknown) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+  const record = row as {
+    id?: unknown;
+    created_at?: unknown;
+    updated_at?: unknown;
+    guild_id?: unknown;
+    channel_id?: unknown;
+    subject?: unknown;
+    fact?: unknown;
+    fact_type?: unknown;
+    evidence_text?: unknown;
+    source_message_id?: unknown;
+    confidence?: unknown;
+  };
+  const fact = String(record.fact || "").trim();
+  if (!fact) return null;
+  const confidence = Number(record.confidence);
+  return {
+    id: Number.isInteger(Number(record.id)) ? Number(record.id) : null,
+    createdAt: record.created_at ? String(record.created_at) : null,
+    updatedAt: record.updated_at ? String(record.updated_at) : null,
+    guildId: record.guild_id ? String(record.guild_id) : null,
+    channelId: record.channel_id ? String(record.channel_id) : null,
+    subject: String(record.subject || "").trim() || null,
+    fact,
+    factType: String(record.fact_type || "").trim() || null,
+    evidenceText: record.evidence_text ? String(record.evidence_text) : null,
+    sourceMessageId: record.source_message_id ? String(record.source_message_id) : null,
+    confidence: Number.isFinite(confidence) ? Number(clamp(confidence, 0, 1).toFixed(3)) : null
+  };
+}
+
 function buildLatencySnapshot(session: VoiceSession) {
   const stages = Array.isArray(session.latencyStages) ? session.latencyStages : [];
   if (stages.length === 0) return null;
@@ -295,6 +328,62 @@ export function buildVoiceRuntimeSnapshot(
         };
       })
       .filter((entry) => entry !== null);
+    const sessionFactProfiles = session.factProfiles instanceof Map
+      ? [...session.factProfiles.entries()]
+      : [];
+    const memoryFactProfiles = sessionFactProfiles
+      .map(([rawUserId, rawProfile]) => {
+        const userId = String(rawUserId || "").trim();
+        if (!userId) return null;
+        const profile = rawProfile && typeof rawProfile === "object" ? rawProfile : null;
+        const participantDisplayName = String(participantDisplayByUserId.get(userId) || "").trim();
+        const membershipDisplayName = String(
+          membershipEvents
+            .slice()
+            .reverse()
+            .find((entry) => String(entry?.userId || "") === userId)
+            ?.displayName || ""
+        ).trim();
+        const cachedUser = deps.client?.users?.cache?.get?.(userId) || null;
+        const cachedDisplayName = String(
+          cachedUser?.displayName ||
+          cachedUser?.globalName ||
+          cachedUser?.username ||
+          ""
+        ).trim();
+        const displayName = participantDisplayName || membershipDisplayName || cachedDisplayName || null;
+        const loadedAtMs = Number(profile && "loadedAt" in profile ? profile.loadedAt : 0);
+        return {
+          userId,
+          displayName,
+          loadedAt: Number.isFinite(loadedAtMs) && loadedAtMs > 0
+            ? new Date(loadedAtMs).toISOString()
+            : null,
+          userFacts: Array.isArray(profile && "userFacts" in profile ? profile.userFacts : null)
+            ? (profile.userFacts as unknown[])
+              .map((row) => buildMemoryFactSnapshot(row))
+              .filter((row) => row !== null)
+            : []
+        };
+      })
+      .filter((entry) => entry !== null);
+    const guildFactProfile = session.guildFactProfile && typeof session.guildFactProfile === "object"
+      ? {
+          loadedAt: Number(session.guildFactProfile.loadedAt || 0) > 0
+            ? new Date(Number(session.guildFactProfile.loadedAt)).toISOString()
+            : null,
+          selfFacts: Array.isArray(session.guildFactProfile.selfFacts)
+            ? session.guildFactProfile.selfFacts
+              .map((row) => buildMemoryFactSnapshot(row))
+              .filter((row) => row !== null)
+            : [],
+          loreFacts: Array.isArray(session.guildFactProfile.loreFacts)
+            ? session.guildFactProfile.loreFacts
+              .map((row) => buildMemoryFactSnapshot(row))
+              .filter((row) => row !== null)
+            : []
+        }
+      : null;
     const wakeContext = deps.buildVoiceConversationContext({
       session,
       now
@@ -419,6 +508,10 @@ export function buildVoiceRuntimeSnapshot(
         displayName: participant.displayName
       })),
       participantCount: participants.length,
+      memory: {
+        factProfiles: memoryFactProfiles,
+        guildFactProfile
+      },
       membershipEvents: membershipEvents.map((entry) => ({
         userId: entry.userId,
         displayName: entry.displayName,
