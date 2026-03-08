@@ -3987,17 +3987,45 @@ export class VoiceSessionManager {
     const botUserId = String(this.client.user?.id || "").trim();
     if (!normalizedText || !normalizedChannelId || !botUserId) return;
 
+    const messageId = `voice-assistant-${String(session.id || "session")}-${String(createdAtMs)}`;
+    const botName = getPromptBotName(session.settingsSnapshot || this.store.getSettings());
+
     this.store.recordMessage({
-      messageId: `voice-assistant-${String(session.id || "session")}-${String(createdAtMs)}`,
+      messageId,
       createdAt: createdAtMs,
       guildId: String(session.guildId || "").trim() || null,
       channelId: normalizedChannelId,
       authorId: botUserId,
-      authorName: getPromptBotName(session.settingsSnapshot || this.store.getSettings()),
+      authorName: botName,
       isBot: true,
       content: normalizedText,
       referencedMessageId: null
     });
+
+    if (this.memory && typeof this.memory.ingestMessage === "function") {
+      this.memory.ingestMessage({
+        messageId,
+        authorId: botUserId,
+        authorName: botName,
+        content: normalizedText,
+        settings: session.settingsSnapshot || this.store.getSettings(),
+        trace: {
+          guildId: String(session.guildId || "").trim() || null,
+          channelId: normalizedChannelId,
+          userId: botUserId,
+          source: "voice_assistant_timeline_ingest"
+        }
+      }).catch((error) => {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: botUserId || null,
+          content: `voice_assistant_memory_ingest_failed: ${String(error?.message || error)}`,
+          metadata: { sessionId: session.id }
+        });
+      });
+    }
   }
 
   recordVoiceTurn(session, { role = "user", userId = null, text = "", addressing = null } = {}) {

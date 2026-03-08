@@ -121,8 +121,8 @@ function toGeneratedPayload(value: unknown): GeneratedPayload {
 
 function buildContextMessages(session: VoiceSession, normalizedTranscript: string) {
   const contextTranscript = normalizeVoiceText(normalizedTranscript, STT_REPLY_MAX_CHARS);
-  const contextTurnRows = Array.isArray(session.recentVoiceTurns)
-    ? session.recentVoiceTurns
+  const contextTurnRows = Array.isArray(session.transcriptTurns)
+    ? session.transcriptTurns
       .filter((row) => row && typeof row === "object")
       .slice(-STT_CONTEXT_MAX_MESSAGES)
     : [];

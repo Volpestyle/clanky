@@ -414,26 +414,10 @@ export async function runDailyReflection({
     if (!mdFiles.length) return;
 
     const todayDateKey = new Date().toISOString().split("T")[0];
-    const dailyLogRetentionDays = getMemorySettings(settings).dailyLogRetentionDays || 30;
-    const pruneDate = new Date();
-    pruneDate.setDate(pruneDate.getDate() - dailyLogRetentionDays);
-    const pruneDateKey = pruneDate.toISOString().split("T")[0];
 
     for (const file of mdFiles) {
       const dateKey = file.replace(".md", "");
       const fullPath = path.join(memoryDirPath, file);
-
-      if (dateKey < pruneDateKey) {
-        try {
-          await fs.rm(fullPath, { force: true });
-        } catch (error) {
-          store.logAction({
-            kind: "memory_reflection_error",
-            content: `Failed to prune old journal ${file}: ${error instanceof Error ? error.message : String(error)}`
-          });
-        }
-        continue;
-      }
 
       if (dateKey >= todayDateKey) continue;
 
@@ -591,8 +575,7 @@ async function reflectGuildJournal({
 
     const journalText = guildEntries
       .map((entry) => `- ${entry.author}: ${entry.content}`)
-      .join("\n")
-      .slice(0, 100_000);
+      .join("\n");
 
     maxFacts = clampInt(memorySettings.reflection?.maxFactsPerReflection || 20, 1, 100);
     const normalizedBotName = normalizeInlineText(getBotName(settings) || "the bot", 80) || "the bot";

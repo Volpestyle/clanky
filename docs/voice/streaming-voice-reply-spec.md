@@ -415,7 +415,94 @@ LLM request mid-generation, saving tokens and API cost.
 
 ---
 
-### Phase 4: Text Reply Pipeline (Future)
+### Phase 4: Durable Session Context
+
+**Goal:** The generation model sees 100 turns of conversation history, but
+important context from earlier in the session should never be lost just
+because old turns scroll off. The model emits "pinned" context notes
+as it goes, creating a persistent knowledge layer above the rolling
+conversation window.
+
+This generalizes the existing `brainContextEntries` / `durableScreenNotes`
+pattern from stream watch to all voice conversations.
+
+#### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  System prompt                                                   │
+│                                                                  │
+│  📌 DURABLE SESSION CONTEXT (pinned, survives turn truncation)   │
+│  - "James's favorite game is Smash Bros Melee"                   │
+│  - "Group is planning a camping trip next weekend"               │
+│  - "Alice just got a new job at Google"                          │
+│                                                                  │
+│  💬 CONVERSATION HISTORY (rolling window, last ~100 turns)       │
+│  - [turn 1] ... [turn 2] ... [turn 100]                         │
+│  - older turns silently drop off                                 │
+│                                                                  │
+│  🎤 CURRENT TURN                                                 │
+│  - transcript + context                                          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### New tool: `note_context`
+
+```typescript
+{
+  name: "note_context",
+  description: "Pin an important fact or context from this conversation that should be remembered for the rest of the session. Use when you notice something worth keeping even after older turns scroll out of the conversation window. Do not duplicate things already pinned.",
+  parameters: {
+    type: "object",
+    properties: {
+      text: { type: "string", description: "The fact or context to pin." },
+      category: {
+        type: "string",
+        enum: ["fact", "plan", "preference", "relationship"],
+        description: "What kind of context this is."
+      }
+    },
+    required: ["text"],
+    additionalProperties: false
+  }
+}
+```
+
+#### Storage: `session.durableContext`
+
+- Array of `{ text, category, at }` entries on the session object
+- Rolling window of ~50 entries, deduped by text similarity (same
+  pattern as `appendStreamWatchBrainContextEntry` which dedupes by
+  exact lowercase match)
+- Injected into the system prompt as a "Session context" section
+- Dies with the session — this is ephemeral, not permanent memory
+
+#### Token budget
+
+- ~50 entries × ~100 chars = ~5K chars (~1.5K tokens)
+- Negligible compared to 100 turns of conversation history
+
+#### Why not just save to memory?
+
+- `memory_write` is for **permanent** durable facts across sessions
+- `note_context` is for **session-scoped** context: things that matter
+  right now but may not be worth permanent storage
+- No write pressure, no rate limits, no embedding cost
+- The daily reflection pipeline handles permanent extraction later —
+  it reads the full journal (which now includes bot replies) and decides
+  what's truly worth keeping
+
+#### Relationship to daily reflection
+
+The daily journal files already capture the full conversation (user
+turns + bot replies, after the journal ingest fix). Daily reflection
+reads those journals and extracts permanent facts. `note_context` fills
+a different role: keeping the model sharp **during** a long conversation,
+not after.
+
+---
+
+### Phase 5: Text Reply Pipeline (Future)
 
 Lower priority — text replies don't have the same latency sensitivity.
 But the Phase 0 tools-only migration benefits text replies too:
@@ -438,7 +525,10 @@ But the Phase 0 tools-only migration benefits text replies too:
 3. **Phase 2 + 3** together — sentence accumulator + pipeline wiring.
    Gate behind the same feature flag. A/B test latency in real sessions.
 
-4. **Phase 4** later — text pipeline migration, independent timeline.
+4. **Phase 4** after streaming is stable — durable session context layer.
+   Independent of streaming but improves quality for long sessions.
+
+5. **Phase 5** later — text pipeline migration, independent timeline.
 
 ## Settings
 
