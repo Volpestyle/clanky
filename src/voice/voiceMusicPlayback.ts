@@ -13,7 +13,9 @@ import type { ReplyManager } from "./replyManager.ts";
 
 // English-only fallback/fast-path heuristics for obvious music control turns.
 // These are convenience shortcuts, not the primary music-command decision logic.
-export const EN_MUSIC_STOP_VERB_RE = /\b(?:stop|pause|halt|end|quit|shut\s*off)\b/i;
+export const EN_MUSIC_STOP_VERB_RE = /\b(?:stop|halt|end|quit|shut\s*off)\b/i;
+export const EN_MUSIC_PAUSE_VERB_RE = /\b(?:pause)\b/i;
+export const EN_MUSIC_SKIP_VERB_RE = /\b(?:skip|next)\b/i;
 export const EN_MUSIC_CUE_RE = /\b(?:music|song|songs|track|tracks|playback|playing)\b/i;
 export const EN_MUSIC_PLAY_VERB_RE = /\b(?:play|start|queue|put\s+on|spin)\b/i;
 export const EN_MUSIC_PLAY_QUERY_RE =
@@ -697,20 +699,42 @@ export function ensureToolMusicQueueState(
   return next;
 }
 
+// All three music heuristics (stop, pause, skip) require verb + music cue word.
+// Bot-name commands ("Clanker, stop") go through the directAddressedToBot → LLM path instead.
 export function isLikelyMusicStopPhrase(
-  manager: MusicPlaybackHost,
-  { transcript = "", settings = null }: {
+  _manager: MusicPlaybackHost,
+  { transcript = "" }: {
     transcript?: string;
     settings?: MusicPlaybackSettings;
   } = {}
 ) {
   const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
   if (!normalizedTranscript) return false;
-  if (!EN_MUSIC_STOP_VERB_RE.test(normalizedTranscript)) return false;
-  if (EN_MUSIC_CUE_RE.test(normalizedTranscript)) return true;
-  if (manager.hasBotNameCueForTranscript({ transcript: normalizedTranscript, settings })) return true;
-  const tokenCount = normalizedTranscript.split(/\s+/).filter(Boolean).length;
-  return tokenCount <= 3;
+  return EN_MUSIC_STOP_VERB_RE.test(normalizedTranscript) && EN_MUSIC_CUE_RE.test(normalizedTranscript);
+}
+
+export function isLikelyMusicPausePhrase(
+  _manager: MusicPlaybackHost,
+  { transcript = "" }: {
+    transcript?: string;
+    settings?: MusicPlaybackSettings;
+  } = {}
+) {
+  const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+  if (!normalizedTranscript) return false;
+  return EN_MUSIC_PAUSE_VERB_RE.test(normalizedTranscript) && EN_MUSIC_CUE_RE.test(normalizedTranscript);
+}
+
+export function isLikelyMusicSkipPhrase(
+  _manager: MusicPlaybackHost,
+  { transcript = "" }: {
+    transcript?: string;
+    settings?: MusicPlaybackSettings;
+  } = {}
+) {
+  const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+  if (!normalizedTranscript) return false;
+  return EN_MUSIC_SKIP_VERB_RE.test(normalizedTranscript) && EN_MUSIC_CUE_RE.test(normalizedTranscript);
 }
 
 export function isLikelyMusicPlayPhrase(
@@ -1708,13 +1732,13 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
     return true;
   }
 
-  // Heuristic-only stop detection — no LLM round-trip.
-  // NOTE: isLikelyMusicStopPhrase uses English-only regex patterns (EN_MUSIC_STOP_VERB_RE,
-  // EN_MUSIC_CUE_RE). Supporting other languages requires a dedicated locale-aware filter function.
-  const shouldStop = isLikelyMusicStopPhrase(manager, {
-    transcript: normalizedTranscript,
-    settings: resolvedSettings
-  });
+  // Heuristic-only stop/pause/skip detection — no LLM round-trip.
+  // Each requires verb + music cue word (e.g. "stop music", "pause the song",
+  // "skip track"). Bot-name commands ("Clanker, stop") go through the
+  // directAddressedToBot → LLM path instead.
+  const shouldPause = isLikelyMusicPausePhrase(manager, { transcript: normalizedTranscript });
+  const shouldStop = !shouldPause && isLikelyMusicStopPhrase(manager, { transcript: normalizedTranscript });
+  const shouldSkip = !shouldPause && !shouldStop && isLikelyMusicSkipPhrase(manager, { transcript: normalizedTranscript });
   logMusicAction(manager, {
     kind: "voice_runtime",
     guildId: session.guildId,
@@ -1727,52 +1751,108 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
       captureReason: String(captureReason || "stream_end"),
       transcript: normalizedTranscript,
       shouldStop,
+      shouldPause,
+      shouldSkip,
       directAddressedToBot,
-      decisionReason: shouldStop
-        ? "heuristic_stop"
-        : directAddressedToBot
-          ? "direct_address"
-          : disambiguationResolutionTurn
-            ? "disambiguation"
-            : "swallowed"
+      decisionReason: shouldPause
+        ? "heuristic_pause"
+        : shouldStop
+          ? "heuristic_stop"
+          : shouldSkip
+            ? "heuristic_skip"
+            : directAddressedToBot
+              ? "direct_address"
+              : disambiguationResolutionTurn
+                ? "disambiguation"
+                : "swallowed"
     }
   });
 
-  if (!shouldStop) {
-    if (directAddressedToBot || disambiguationResolutionTurn) {
-      // Pause music so the output lock releases and the bot can respond.
-      if (directAddressedToBot) {
-        setMusicPhase(manager, session, "paused_wake_word", "wake_word");
-        manager.musicPlayer?.pause?.();
-        logMusicAction(manager, {
-          kind: "voice_runtime",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId,
-          content: "voice_music_paused_for_wake_word",
-          metadata: {
-            sessionId: session.id,
-            transcript: normalizedTranscript,
-            source: String(source || "voice_turn")
-          }
-        });
+  if (shouldPause) {
+    await requestPauseMusic(manager, {
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      requestedByUserId: userId,
+      settings: resolvedSettings,
+      reason: "voice_music_pause_phrase",
+      source: `voice_${String(source || "voice_turn")}`,
+      requestText: normalizedTranscript,
+      mustNotify: false
+    });
+    return true;
+  }
+
+  if (shouldStop) {
+    await requestStopMusic(manager, {
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      requestedByUserId: userId,
+      settings: resolvedSettings,
+      reason: "voice_music_stop_phrase",
+      source: `voice_${String(source || "voice_turn")}`,
+      requestText: normalizedTranscript,
+      clearQueue: true,
+      mustNotify: false
+    });
+    return true;
+  }
+
+  if (shouldSkip) {
+    const queueState = ensureToolMusicQueueState(manager, session);
+    if (!queueState || queueState.nowPlayingIndex == null) {
+      await requestStopMusic(manager, {
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        requestedByUserId: userId,
+        settings: resolvedSettings,
+        reason: "voice_music_skip_phrase_no_queue",
+        source: `voice_${String(source || "voice_turn")}`,
+        requestText: normalizedTranscript,
+        mustNotify: false
+      });
+    } else {
+      const nextIndex = queueState.nowPlayingIndex + 1;
+      await requestStopMusic(manager, {
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        requestedByUserId: userId,
+        settings: resolvedSettings,
+        reason: "voice_music_skip_phrase",
+        source: `voice_${String(source || "voice_turn")}`,
+        requestText: normalizedTranscript,
+        mustNotify: false
+      });
+      if (nextIndex < queueState.tracks.length) {
+        await manager.playVoiceQueueTrackByIndex({ session, settings: resolvedSettings, index: nextIndex });
+      } else {
+        queueState.nowPlayingIndex = null;
+        queueState.isPaused = false;
       }
-      return false;
     }
     return true;
   }
 
-  await requestStopMusic(manager, {
-    guildId: session.guildId,
-    channelId: session.textChannelId,
-    requestedByUserId: userId,
-    settings: resolvedSettings,
-    reason: "voice_music_stop_phrase",
-    source: `voice_${String(source || "voice_turn")}`,
-    requestText: normalizedTranscript,
-    clearQueue: true,
-    mustNotify: false
-  });
+  if (directAddressedToBot || disambiguationResolutionTurn) {
+    // Pause music so the output lock releases and the bot can respond.
+    if (directAddressedToBot) {
+      setMusicPhase(manager, session, "paused_wake_word", "wake_word");
+      manager.musicPlayer?.pause?.();
+      logMusicAction(manager, {
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "voice_music_paused_for_wake_word",
+        metadata: {
+          sessionId: session.id,
+          transcript: normalizedTranscript,
+          source: String(source || "voice_turn")
+        }
+      });
+    }
+    return false;
+  }
+
   return true;
 }
 
