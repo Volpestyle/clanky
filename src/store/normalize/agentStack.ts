@@ -172,7 +172,7 @@ export function normalizeAgentStackSection(
           )
         },
         localBrowserAgent: {
-          execution: normalizeBrowserExecutionPolicy(browser.localBrowserAgent.execution),
+          execution: normalizeBrowserExecutionPolicy(browser.localBrowserAgent.execution, presetConfig.presetBrowserFallback),
           maxBrowseCallsPerHour: normalizeInt(
             browser.localBrowserAgent.maxBrowseCallsPerHour,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.localBrowserAgent.maxBrowseCallsPerHour,

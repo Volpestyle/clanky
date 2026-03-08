@@ -101,6 +101,7 @@ export const XAI_VOICE_OPTIONS = Object.freeze([
 
 export const BROWSER_PROVIDER_MODEL_FALLBACKS = Object.freeze({
   anthropic: ["claude-sonnet-4-5-20250929"],
+  "claude-oauth": [...PROVIDER_MODEL_FALLBACKS["claude-oauth"]],
   openai: ["gpt-5-mini"]
 });
 
@@ -691,6 +692,16 @@ export function applyStackPreset(form: SettingsForm, preset: string): SettingsFo
     voiceGenerationLlmProvider: presetForm.voiceGenerationLlmProvider,
     voiceGenerationLlmModel: presetForm.voiceGenerationLlmModel
   };
+}
+
+export function getCodeAgentValidationError(form: SettingsForm): string {
+  if (!form.stackAdvancedOverridesEnabled || !form.codeAgentEnabled) {
+    return "";
+  }
+  const patch = formToSettingsPatch(form);
+  return patch.permissions.devTasks.allowedUserIds.length > 0
+    ? ""
+    : "Add at least one allowed user ID before enabling the code agent.";
 }
 
 export function formToSettingsPatch(form: SettingsForm): SettingsInput {

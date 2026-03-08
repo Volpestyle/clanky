@@ -19,6 +19,8 @@ const BOLD = "\x1b[1m";
 const DIM = "\x1b[2m";
 const YELLOW = "\x1b[33m";
 const WHITE = "\x1b[37m";
+const BRIGHT_CYAN = "\x1b[96m";
+const BRIGHT_GREEN = "\x1b[92m";
 const BG_RED = "\x1b[41m";
 const BG_GREEN = "\x1b[42m";
 const BG_CYAN = "\x1b[46m";
@@ -42,6 +44,53 @@ function formatAgentBadge(agent) {
   return `${style.bg}${style.fg}${BOLD}${label}${RESET}`;
 }
 
+function isTranscriptMetadataKey(key) {
+  const normalizedKey = String(key || "").trim();
+  return normalizedKey === "transcript" || normalizedKey === "replyText" || normalizedKey === "incomingTranscript";
+}
+
+function normalizeInlineSpeechValue(value, maxLength = 220) {
+  const text = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  return truncateString(text, maxLength);
+}
+
+function resolveSpeechStyle(key, metadata) {
+  const normalizedKey = String(key || "").trim();
+  const transcriptSource = isPlainObject(metadata)
+    ? String(metadata.transcriptSource || "").trim().toLowerCase()
+    : "";
+
+  if (normalizedKey === "replyText" || transcriptSource === "output") {
+    return {
+      label: "said",
+      color: BRIGHT_GREEN
+    };
+  }
+
+  return {
+    label: "heard",
+    color: BRIGHT_CYAN
+  };
+}
+
+function formatSpeechInline(metadata) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return "";
+  const parts = [];
+  for (const [key, value] of Object.entries(metadata)) {
+    if (!isTranscriptMetadataKey(key)) continue;
+    const text = normalizeInlineSpeechValue(value);
+    if (!text) continue;
+    const style = resolveSpeechStyle(key, metadata);
+    parts.push(
+      `${DIM}${style.label}${RESET}${DIM}=${RESET}${style.color}${BOLD}"${text}"${RESET}`
+    );
+  }
+  return parts.length > 0 ? `  ${parts.join("  ")}` : "";
+}
+
 function formatMetadataInline(metadata) {
   if (!metadata || typeof metadata !== "object") return "";
   const entries = Object.entries(metadata);
@@ -49,6 +98,7 @@ function formatMetadataInline(metadata) {
   const parts = [];
   for (const [k, v] of entries) {
     if (v === null || v === undefined) continue;
+    if (isTranscriptMetadataKey(k)) continue;
     const val = typeof v === "object" ? JSON.stringify(v) : String(v);
     if (val.length > 80) continue; // skip bulky values
     parts.push(`${DIM}${k}${RESET}${DIM}=${RESET}${val}`);
@@ -56,7 +106,7 @@ function formatMetadataInline(metadata) {
   return parts.length > 0 ? `  ${parts.join("  ")}` : "";
 }
 
-function formatPrettyLine(payload) {
+export function formatPrettyLine(payload) {
   const time = (payload.ts || "").slice(11, 19); // HH:MM:SS
   const isError = payload.level === "error";
 
@@ -66,13 +116,14 @@ function formatPrettyLine(payload) {
   const eventPart = isError
     ? `${BG_RED}${WHITE}${BOLD} ${eventText} ${RESET}`
     : `${BOLD}${WHITE}${eventText}${RESET}`;
+  const speechPart = formatSpeechInline(payload.metadata);
   const metaPart = formatMetadataInline(payload.metadata);
   const costPart =
     payload.usd_cost > 0
       ? `  ${YELLOW}$${payload.usd_cost.toFixed(4)}${RESET}`
       : "";
 
-  return `${timePart} ${agentPart} ${eventPart}${metaPart}${costPart}\n`;
+  return `${timePart} ${agentPart} ${eventPart}${speechPart}${metaPart}${costPart}\n`;
 }
 
 function truncateString(value, maxLength = MAX_STRING_LENGTH) {

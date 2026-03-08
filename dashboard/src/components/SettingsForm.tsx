@@ -8,6 +8,7 @@ import {
   XAI_VOICE_OPTIONS,
   applyStackPreset,
   formToSettingsPatch,
+  getCodeAgentValidationError,
   resolveBrowserProviderModelOptions,
   resolveModelOptions,
   resolveModelOptionsFromText,
@@ -103,6 +104,7 @@ export default function SettingsForm({
   }, [form]);
 
   const resolvedStack = useMemo(() => resolveAgentStack(formToSettingsPatch(effectiveForm)), [effectiveForm]);
+  const codeAgentValidationError = useMemo(() => getCodeAgentValidationError(effectiveForm), [effectiveForm]);
 
   function resolvePresetSelection(providerField, modelField) {
     return resolvePresetModelSelection({
@@ -325,6 +327,10 @@ export default function SettingsForm({
 
   function submit(e) {
     e.preventDefault();
+    if (codeAgentValidationError) {
+      scrollTo("sec-code-agent");
+      return;
+    }
     onSave(formToSettingsPatch(form));
   }
 
@@ -482,7 +488,12 @@ export default function SettingsForm({
                 browserLlmModelOptions={browserLlmModelOptions}
                 selectedBrowserLlmPresetModel={selectedBrowserLlmPresetModel}
               />
-              <CodeAgentSettingsSection id="sec-code-agent" form={form} set={set} />
+              <CodeAgentSettingsSection
+                id="sec-code-agent"
+                form={form}
+                set={set}
+                validationError={codeAgentValidationError}
+              />
               <SubAgentOrchestrationSettingsSection id="sec-orchestration" form={form} set={set} />
             </>
           )}

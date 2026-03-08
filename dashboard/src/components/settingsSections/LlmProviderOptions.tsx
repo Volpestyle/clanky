@@ -28,7 +28,7 @@ export const VISION_LLM_PROVIDER_OPTIONS: LlmProviderOption[] = GENERAL_LLM_PROV
 );
 
 export const BROWSER_LLM_PROVIDER_OPTIONS: LlmProviderOption[] = GENERAL_LLM_PROVIDER_OPTIONS.filter(
-  (option) => ["openai", "anthropic"].includes(option.value)
+  (option) => ["openai", "anthropic", "claude-oauth"].includes(option.value)
 );
 
 export function LlmProviderOptions({ options = GENERAL_LLM_PROVIDER_OPTIONS }: { options?: readonly LlmProviderOption[] }) {

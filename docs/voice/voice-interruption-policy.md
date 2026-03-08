@@ -43,6 +43,46 @@ Passed as `interruptionPolicy` to `requestRealtimePromptUtterance()` or set on a
 | `"speaker"` | Only `allowedUserId` can interrupt | Reply directed at a specific user |
 | `"none"` | Nobody can interrupt | Short announcements (errors, system alerts) |
 
+## How Replies Become Speaker-Locked
+
+Most replies do **not** create an assertive interruption policy. If `buildReplyInterruptionPolicy()` returns `null`, the reply is treated as normal conversational speech and **anyone can interrupt**.
+
+`"speaker"` lock is only created when the reply is treated as assertively tied to the current speaker. In `src/voice/voiceSessionManager.ts`, that means:
+
+- `directAddressed === true`
+- `conversationContext.engagedWithCurrentSpeaker === true`
+- generated voice addressing targets `ALL` (special case: becomes `"none"`, so nobody can interrupt)
+
+### What `engagedWithCurrentSpeaker` Means
+
+`engagedWithCurrentSpeaker` is computed in `buildVoiceConversationContext()` in `src/voice/voiceReplyDecision.ts`. It is a deterministic session-level follow-up signal, not a model guess.
+
+It becomes `true` when any of these are true:
+
+- The current turn is directly addressed to the bot.
+- There is a single-participant assistant follow-up active.
+- The speaker matches the active voice-command user.
+- The speaker is the same user who most recently direct-addressed the bot, and the bot replied recently.
+- The speaker is the same user who most recently direct-addressed the bot within the recent-engagement window.
+
+### Recent-Engagement Window
+
+The recency window is `RECENT_ENGAGEMENT_WINDOW_MS = 35_000`.
+
+Operationally, that means a conversation like this stays speaker-locked for a short period even without repeating the wake word every turn:
+
+1. User says `clanker, play something`.
+2. Bot replies.
+3. The same user immediately follows up with `actually queue it instead`.
+
+That follow-up can still count as `engagedWithCurrentSpeaker`, so the reply may use `"speaker"` interruption policy even though the second turn did not repeat the bot name.
+
+### What This Does Not Mean
+
+- It does **not** mean the bot is still actively speaking. Barge-in still requires active bot output plus assertive incoming speech.
+- It does **not** mean unaddressed replies are uninterruptible. With no assertive policy, interruption falls back to `null`, which means anyone can interrupt.
+- It does **not** come from a tool call. The signal is derived from direct-address state, recent assistant reply timing, command ownership, and participant context.
+
 ## Announcement Pattern
 
 For short system announcements that must not be cut off by chatter:

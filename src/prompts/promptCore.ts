@@ -73,40 +73,45 @@ export function getPromptStyle(settings, fallback = DEFAULT_PROMPT_STYLE) {
 }
 
 export function getPromptCapabilityHonestyLine(settings, fallback = PROMPT_CAPABILITY_HONESTY_LINE) {
-  const configured = String(getPromptingSettings(settings).global.capabilityHonestyLine || "").trim();
-  const resolved = configured || String(fallback || PROMPT_CAPABILITY_HONESTY_LINE);
+  const raw = getPromptingSettings(settings).global.capabilityHonestyLine;
+  if (typeof raw === "string" && raw.trim() === "") return "";
+  const resolved = String(raw || "").trim() || String(fallback || PROMPT_CAPABILITY_HONESTY_LINE);
   return interpolatePromptTemplate(resolved, {
     botName: getPromptBotName(settings)
   });
 }
 
 export function getPromptImpossibleActionLine(settings, fallback = DEFAULT_PROMPT_IMPOSSIBLE_ACTION_LINE) {
-  const configured = String(getPromptingSettings(settings).global.impossibleActionLine || "").trim();
-  const resolved = configured || String(fallback || DEFAULT_PROMPT_IMPOSSIBLE_ACTION_LINE);
+  const raw = getPromptingSettings(settings).global.impossibleActionLine;
+  if (typeof raw === "string" && raw.trim() === "") return "";
+  const resolved = String(raw || "").trim() || String(fallback || DEFAULT_PROMPT_IMPOSSIBLE_ACTION_LINE);
   return interpolatePromptTemplate(resolved, {
     botName: getPromptBotName(settings)
   });
 }
 
 export function getPromptMemoryEnabledLine(settings, fallback = DEFAULT_MEMORY_ENABLED_LINE) {
-  const configured = String(getPromptingSettings(settings).global.memoryEnabledLine || "").trim();
-  const resolved = configured || String(fallback || DEFAULT_MEMORY_ENABLED_LINE);
+  const raw = getPromptingSettings(settings).global.memoryEnabledLine;
+  if (typeof raw === "string" && raw.trim() === "") return "";
+  const resolved = String(raw || "").trim() || String(fallback || DEFAULT_MEMORY_ENABLED_LINE);
   return interpolatePromptTemplate(resolved, {
     botName: getPromptBotName(settings)
   });
 }
 
 export function getPromptMemoryDisabledLine(settings, fallback = DEFAULT_MEMORY_DISABLED_LINE) {
-  const configured = String(getPromptingSettings(settings).global.memoryDisabledLine || "").trim();
-  const resolved = configured || String(fallback || DEFAULT_MEMORY_DISABLED_LINE);
+  const raw = getPromptingSettings(settings).global.memoryDisabledLine;
+  if (typeof raw === "string" && raw.trim() === "") return "";
+  const resolved = String(raw || "").trim() || String(fallback || DEFAULT_MEMORY_DISABLED_LINE);
   return interpolatePromptTemplate(resolved, {
     botName: getPromptBotName(settings)
   });
 }
 
 export function getPromptSkipLine(settings, fallback = DEFAULT_SKIP_LINE) {
-  const configured = String(getPromptingSettings(settings).global.skipLine || "").trim();
-  const resolved = configured || String(fallback || DEFAULT_SKIP_LINE);
+  const raw = getPromptingSettings(settings).global.skipLine;
+  if (typeof raw === "string" && raw.trim() === "") return "";
+  const resolved = String(raw || "").trim() || String(fallback || DEFAULT_SKIP_LINE);
   return interpolatePromptTemplate(resolved, {
     botName: getPromptBotName(settings)
   });

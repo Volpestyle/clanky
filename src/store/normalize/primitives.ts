@@ -63,11 +63,13 @@ export function normalizePromptLineList(value: unknown, fallback: readonly strin
 }
 
 export function normalizePromptLine(value: unknown, fallback: string, maxLen = 400) {
-  return normalizeString(value, fallback, maxLen) || fallback;
+  if (value == null || value === undefined) return fallback;
+  return normalizeString(value, "", maxLen);
 }
 
 export function normalizePromptBlock(value: unknown, fallback: string, maxLen = 8_000) {
-  return normalizeString(value, fallback, maxLen) || fallback;
+  if (value == null || value === undefined) return fallback;
+  return normalizeString(value, "", maxLen);
 }
 
 export function normalizeOptionalString(value: unknown, maxLen = 120) {

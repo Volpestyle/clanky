@@ -315,6 +315,25 @@ test("normalizeSettings restricts browser model providers to supported browser r
   });
 });
 
+test("normalizeSettings preserves claude oauth browser model providers", () => {
+  const normalized = normalizeLegacyView({
+    browser: {
+      llm: {
+        provider: "claude-oauth",
+        model: "claude-haiku-4-5"
+      }
+    }
+  });
+
+  const browserExecution = normalized.agentStack.runtimeConfig.browser.localBrowserAgent.execution as {
+    model?: { provider: string; model: string };
+  };
+  assert.deepEqual(browserExecution.model, {
+    provider: "claude-oauth",
+    model: "claude-haiku-4-5"
+  });
+});
+
 test("normalizeSettings migrates legacy code agent provider fields into dev-team runtime settings", () => {
   const fallback = normalizeLegacyView({
     codeAgent: {
@@ -522,7 +541,7 @@ test("normalizeSettings preserves supported reflection strategies and defaults i
       }
     }
   });
-  assert.equal(invalid.memory.reflection.strategy, "two_pass_extract_then_main");
+  assert.equal(invalid.memory.reflection.strategy, "one_pass_main");
 });
 
 test("normalizeSettings drops removed replyDecisionLlm prompts and migrates enabled false to generation_decides", () => {

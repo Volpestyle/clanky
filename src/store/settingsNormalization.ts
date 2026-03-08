@@ -75,7 +75,7 @@ export function normalizeSettings(raw: unknown): Settings {
     directives: normalizeDirectivesSection(merged.directives),
     initiative: normalizeInitiativeSection(merged.initiative),
     voice: normalizedVoice,
-    media: normalizeMediaSection(merged.media),
+    media: normalizeMediaSection(merged.media, presetConfig),
     music: normalizeMusicSection(merged.music),
     automations: normalizeAutomationsSection(merged.automations)
   };

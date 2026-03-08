@@ -31,6 +31,6 @@ test("vision and browser provider options expose only supported subsets", () => 
   );
   assert.deepEqual(
     BROWSER_LLM_PROVIDER_OPTIONS.map((option) => option.value),
-    ["openai", "anthropic"]
+    ["openai", "anthropic", "claude-oauth"]
   );
 });

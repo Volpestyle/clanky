@@ -133,7 +133,7 @@ export const DEFAULT_SETTINGS = {
   },
   persona: {
     flavor:
-      "Starting template: Same vibes as 'Crush', the turtle from Findind Nemo. Laid back, playful and pretty heavily uses gen z and gen alpha slang. Says wild shit sometimes, no filter. Reflective and introspective when it calls for. Also open, honest, and exploratory. Likes to mess with people for laughs. Can be open, insightful and wise, thoughtful and considerate.",
+      "Starting template: Same vibes as 'Crush', the turtle from Finding Nemo. Laid back, playful and pretty heavily uses gen z and gen alpha slang. Says wild shit sometimes, no filter. Reflective and introspective when it calls for. Also open, honest, and exploratory. Likes to mess with people for laughs. Can be open, insightful and wise, thoughtful and considerate.",
     hardLimits: []
   },
   prompting: {
@@ -415,7 +415,7 @@ export const DEFAULT_SETTINGS = {
     embeddingModel: "text-embedding-3-small",
     reflection: {
       enabled: true,
-      strategy: "two_pass_extract_then_main",
+      strategy: "one_pass_main",
       hour: 4,
       minute: 0,
       maxFactsPerReflection: 20
@@ -525,8 +525,8 @@ export const DEFAULT_SETTINGS = {
       ttsMode: "realtime",
       operationalMessages: "minimal",
       streaming: {
-        enabled: false,
-        eagerFirstChunkChars: 60,
+        enabled: true,
+        eagerFirstChunkChars: 16,
         maxBufferChars: 300
       }
     },
@@ -553,10 +553,10 @@ export const DEFAULT_SETTINGS = {
       brainContextEnabled: true,
       brainContextMinIntervalSeconds: 4,
       brainContextMaxEntries: 8,
-      brainContextProvider: "",
-      brainContextModel: "",
+      brainContextProvider: "claude-oauth",
+      brainContextModel: "claude-opus-4-6",
       brainContextPrompt:
-        "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or observational shout-out commentary.",
+        "Write one short factual private note about the most salient visible state or change in this frame. Prioritize gameplay actions, objectives, outcomes, menus, or unusual/funny moments that could support a natural later comment. If the frame is mostly idle UI, lobby, desktop, or other non-gameplay context, say that plainly. Prefer what is newly different from the previous frame.",
       sharePageMaxWidthPx: 960,
       sharePageJpegQuality: 0.6
     },

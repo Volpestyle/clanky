@@ -3,18 +3,22 @@ import {
   normalizeBoolean,
   normalizeInt
 } from "./primitives.ts";
-import { normalizeExecutionPolicy } from "./shared.ts";
+import { normalizeExecutionPolicy, type AgentStackPresetConfig } from "./shared.ts";
 
-export function normalizeMediaSection(section: Settings["media"]): Settings["media"] {
+export function normalizeMediaSection(section: Settings["media"], presetConfig?: AgentStackPresetConfig): Settings["media"] {
   const vision = section.vision;
   const videoContext = section.videoContext;
+  const visionFallback = presetConfig?.presetVisionFallback;
 
   return {
     vision: {
       enabled: normalizeBoolean(vision.enabled, DEFAULT_SETTINGS.media.vision.enabled),
-      execution: normalizeExecutionPolicy(vision.execution, "anthropic", "claude-haiku-4-5", {
-        fallbackMode: "dedicated_model"
-      }),
+      execution: normalizeExecutionPolicy(
+        vision.execution,
+        visionFallback?.provider || "anthropic",
+        visionFallback?.model || "claude-haiku-4-5",
+        { fallbackMode: "dedicated_model" }
+      ),
       maxCaptionsPerHour: normalizeInt(
         vision.maxCaptionsPerHour,
         DEFAULT_SETTINGS.media.vision.maxCaptionsPerHour,

@@ -1293,7 +1293,7 @@ describe("text reply live tests", () => {
 
 describe("text tool selection live tests", () => {
   if (!supportsToolCalling(TEXT_BINDING)) {
-    test.skip(`tool calling unsupported for ${TEXT_BINDING.provider}`, () => {});
+    console.log(`Skipping text tool selection scenarios for unsupported provider: ${TEXT_BINDING.provider}`);
     return;
   }
 
@@ -1344,7 +1344,7 @@ describe("text structured output live tests", () => {
 
 describe("text vision live tests", () => {
   if (!supportsVision(TEXT_BINDING)) {
-    test.skip(`vision unsupported for ${TEXT_BINDING.provider}`, () => {});
+    console.log(`Skipping text vision scenarios for unsupported provider: ${TEXT_BINDING.provider}`);
     return;
   }
 

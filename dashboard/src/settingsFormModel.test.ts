@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   applyStackPreset,
   formToSettingsPatch,
+  getCodeAgentValidationError,
   resolveBrowserProviderModelOptions,
   resolveModelOptionsFromText,
   resolvePresetModelSelection,
@@ -117,7 +118,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.voiceOpenAiRealtimeUsePerUserAsrBridge, true);
   assert.equal(
     form.voiceStreamWatchBrainContextPrompt,
-    "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or observational shout-out commentary."
+    "Write one short factual private note about the most salient visible state or change in this frame. Prioritize gameplay actions, objectives, outcomes, menus, or unusual/funny moments that could support a natural later comment. If the frame is mostly idle UI, lobby, desktop, or other non-gameplay context, say that plainly. Prefer what is newly different from the previous frame."
   );
   assert.equal(form.replyChannels, "1\n2");
   assert.equal(form.allowedChannels, "2\n3");
@@ -291,6 +292,14 @@ test("resolveBrowserProviderModelOptions merges catalog values with browser defa
     "anthropic"
   );
   assert.deepEqual(anthropic, ["claude-sonnet-4-5-20250929"]);
+
+  const claudeOAuth = resolveBrowserProviderModelOptions(
+    {
+      "claude-oauth": ["claude-haiku-4-5", "claude-haiku-4-5"]
+    },
+    "claude-oauth"
+  );
+  assert.deepEqual(claudeOAuth, ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6"]);
 });
 
 test("resolvePresetModelSelection always resolves to a real dropdown option", () => {
@@ -368,6 +377,51 @@ test("settingsFormModel round-trips browser llm provider and model", () => {
     "openai",
     "gpt-5-mini"
   );
+});
+
+test("settingsFormModel round-trips claude oauth browser llm provider and model", () => {
+  const form = settingsToForm(normalizeSettings({
+    agentStack: {
+      runtimeConfig: {
+        browser: {
+          localBrowserAgent: {
+            execution: {
+              mode: "dedicated_model",
+              model: {
+                provider: "claude-oauth",
+                model: "claude-sonnet-4-6"
+              }
+            }
+          }
+        }
+      }
+    }
+  }));
+
+  assert.equal(form.browserLlmProvider, "claude-oauth");
+  assert.equal(form.browserLlmModel, "claude-sonnet-4-6");
+
+  const patch = formToSettingsPatch(form);
+  assertDedicatedExecutionModel(
+    patch.agentStack.runtimeConfig.browser.localBrowserAgent.execution,
+    "claude-oauth",
+    "claude-sonnet-4-6"
+  );
+});
+
+test("getCodeAgentValidationError requires allowed users when code agent is enabled", () => {
+  const form = settingsToForm(normalizeSettings({}));
+  form.stackAdvancedOverridesEnabled = true;
+  form.codeAgentEnabled = true;
+  form.codeAgentAllowedUserIds = "";
+
+  assert.equal(
+    getCodeAgentValidationError(form),
+    "Add at least one allowed user ID before enabling the code agent."
+  );
+
+  form.codeAgentAllowedUserIds = "123456789";
+  assert.equal(getCodeAgentValidationError(form), "");
 });
 
 test("settingsFormModel round-trips code agent provider fields", () => {

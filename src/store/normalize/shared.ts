@@ -47,7 +47,7 @@ export function normalizeModelBinding(
 
 function normalizeBrowserProvider(value: unknown, fallback = "anthropic") {
   const provider = normalizeLlmProvider(value, fallback);
-  return provider === "openai" || provider === "anthropic" ? provider : fallback;
+  return provider === "openai" || provider === "anthropic" || provider === "claude-oauth" ? provider : fallback;
 }
 
 export function normalizeExecutionPolicy(
@@ -97,20 +97,24 @@ export function normalizeExecutionPolicy(
   return normalized;
 }
 
-export function normalizeBrowserExecutionPolicy(policy: unknown) {
+export function normalizeBrowserExecutionPolicy(policy: unknown, presetFallback?: SettingsModelBinding) {
+  const defaultProvider = presetFallback?.provider || "anthropic";
+  const defaultModel = presetFallback?.model || "claude-sonnet-4-5-20250929";
   const normalized = normalizeExecutionPolicy(
     policy,
-    "anthropic",
-    "claude-sonnet-4-5-20250929"
+    defaultProvider,
+    defaultModel
   );
   if (normalized.mode !== "dedicated_model") {
     return normalized;
   }
-  const rawProvider = normalizeLlmProvider(normalized.model.provider, "anthropic");
-  const provider = normalizeBrowserProvider(rawProvider, "anthropic");
+  const rawProvider = normalizeLlmProvider(normalized.model.provider, defaultProvider);
+  const provider = normalizeBrowserProvider(rawProvider, defaultProvider);
   const fallbackModel =
     provider === "openai"
       ? "gpt-5-mini"
+      : provider === "claude-oauth"
+        ? (presetFallback?.model || "claude-opus-4-6")
       : "claude-sonnet-4-5-20250929";
   return {
     ...normalized,
@@ -215,6 +219,8 @@ export type AgentStackPresetConfig = {
   presetVoiceAdmissionClassifierFallback?: SettingsModelBinding;
   presetVoiceGenerationFallback?: SettingsModelBinding;
   presetVoiceAdmissionMode?: string;
+  presetBrowserFallback?: SettingsModelBinding;
+  presetVisionFallback?: SettingsModelBinding;
 };
 
 export function resolveAgentStackPresetConfig(
@@ -256,6 +262,14 @@ export function resolveAgentStackPresetConfig(
         ? { provider: "claude-oauth", model: "claude-sonnet-4-6" }
         : undefined,
     presetVoiceAdmissionMode:
-      isClaudeOAuth ? "generation_decides" : undefined
+      isClaudeOAuth ? "generation_decides" : undefined,
+    presetBrowserFallback:
+      isClaudeOAuth
+        ? { provider: "claude-oauth", model: "claude-opus-4-6" }
+        : undefined,
+    presetVisionFallback:
+      isClaudeOAuth
+        ? { provider: "claude-oauth", model: "claude-opus-4-6" }
+        : undefined
   };
 }

@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { RuntimeActionLogger, normalizeRuntimeActionEvent } from "./runtimeActionLogger.ts";
+import { RuntimeActionLogger, formatPrettyLine, normalizeRuntimeActionEvent } from "./runtimeActionLogger.ts";
 
 test("normalizeRuntimeActionEvent redacts secrets but keeps operational keys", () => {
   const event = normalizeRuntimeActionEvent({
@@ -66,4 +66,47 @@ test("RuntimeActionLogger.attachToStore preserves prior listener and emits JSON 
   assert.equal(parsed.agent, "main");
 
   logger.close();
+});
+
+test("formatPrettyLine highlights heard transcripts before generic metadata", () => {
+  const line = formatPrettyLine({
+    ts: "2026-03-01T10:11:12.000Z",
+    level: "info",
+    kind: "voice_runtime",
+    event: "voice_turn_addressing",
+    agent: "voice",
+    usd_cost: 0,
+    metadata: {
+      sessionId: "sess-123",
+      transcript: "can you look that up for me",
+      directedConfidence: 0.95
+    }
+  });
+
+  assert.match(line, /voice_turn_addressing/);
+  assert.match(line, /heard/);
+  assert.match(line, /can you look that up for me/);
+  assert.equal(line.includes("transcript\x1b[2m="), false);
+  assert.ok(line.indexOf("heard") < line.indexOf("sessionId"));
+});
+
+test("formatPrettyLine highlights spoken transcripts for output events", () => {
+  const line = formatPrettyLine({
+    ts: "2026-03-01T10:11:12.000Z",
+    level: "info",
+    kind: "voice_runtime",
+    event: "openai_realtime_transcript",
+    agent: "voice",
+    usd_cost: 0,
+    metadata: {
+      sessionId: "sess-123",
+      transcript: "yeah for sure, what do you want me to look up?",
+      transcriptSource: "output"
+    }
+  });
+
+  assert.match(line, /openai_realtime_transcript/);
+  assert.match(line, /said/);
+  assert.match(line, /yeah for sure, what do you want me to look up\?/);
+  assert.equal(line.includes("transcript\x1b[2m="), false);
 });

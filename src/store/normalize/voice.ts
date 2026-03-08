@@ -115,7 +115,7 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
         eagerFirstChunkChars: normalizeInt(
           conversationPolicy.streaming?.eagerFirstChunkChars,
           DEFAULT_SETTINGS.voice.conversationPolicy.streaming.eagerFirstChunkChars,
-          20,
+          8,
           220
         ),
         maxBufferChars: normalizeInt(

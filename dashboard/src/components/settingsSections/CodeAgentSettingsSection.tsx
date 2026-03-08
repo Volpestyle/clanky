@@ -1,7 +1,7 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
 
-export function CodeAgentSettingsSection({ id, form, set }) {
+export function CodeAgentSettingsSection({ id, form, set, validationError = "" }) {
   const provider = String(form.codeAgentProvider || "claude-code").trim().toLowerCase();
   const showClaudeModel = provider === "claude-code" || provider === "auto";
   const showCodexModel = provider === "codex" || provider === "auto";
@@ -31,6 +31,11 @@ export function CodeAgentSettingsSection({ id, form, set }) {
               onChange={set("codeAgentAllowedUserIds")}
               placeholder="Discord user IDs that can trigger code_task"
             />
+            {validationError && (
+              <p className="status-msg error" role="status">
+                {validationError}
+              </p>
+            )}
           </div>
 
           <div className="split">

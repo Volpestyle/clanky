@@ -136,19 +136,15 @@ export function VoiceModeSettingsSection({
     .toLowerCase();
   const voiceGenerationProvider = String(form.voiceGenerationLlmProvider || form.provider || "").trim();
   const voiceGenerationModel = String(form.voiceGenerationLlmModel || "").trim();
-  const streamWatchOverrideProvider = String(form.voiceStreamWatchBrainContextProvider || "").trim();
-  const streamWatchOverrideModel = String(
+  const streamWatchProvider = String(form.voiceStreamWatchBrainContextProvider || "").trim();
+  const streamWatchModel = String(
     form.voiceStreamWatchBrainContextModel || selectedStreamWatchVisionPresetModel || ""
   ).trim();
   const genericVisionProvider = String(form.visionProvider || "").trim();
   const genericVisionModel = String(form.visionModel || "").trim();
   const directFrameToBrainSupported = voiceGenerationProvider === "claude-oauth";
-  const directFrameToBrainActive = directFrameToBrainSupported && !streamWatchOverrideProvider;
-  const streamWatchNotesBindingLabel = streamWatchOverrideProvider
-    ? formatProviderModelLabel(streamWatchOverrideProvider, streamWatchOverrideModel, "Custom override")
-    : streamWatchCommentaryPath === "anthropic_keyframes"
-      ? "Auto (resolver limited to Claude/Anthropic-capable helpers)"
-      : "Auto (resolver picks a configured vision-capable helper)";
+  const directFrameToBrainActive = directFrameToBrainSupported && !streamWatchProvider;
+  const streamWatchNotesBindingLabel = formatProviderModelLabel(streamWatchProvider, streamWatchModel, "Not set");
 
   /* Pipeline stages for indicator */
   const pipelineStages: PipelineStage[] = isNativePath
@@ -1228,18 +1224,24 @@ export function VoiceModeSettingsSection({
             <div className="vps-runtime-summary">
               <div className="vps-runtime-summary-title">Effective screen-share path</div>
               <div className="vps-runtime-summary-row">
-                <span className="vps-runtime-summary-label">Direct frame input to voice brain</span>
+                <span className="vps-runtime-summary-label">Frame scanner (runs on every frame, produces private notes)</span>
+                <span className="vps-runtime-summary-value">{streamWatchNotesBindingLabel}</span>
+              </div>
+              <div className="vps-runtime-summary-row">
+                <span className="vps-runtime-summary-label">Spoken commentary</span>
                 <span className="vps-runtime-summary-value">
                   {directFrameToBrainActive
-                    ? `On (${formatProviderModelLabel(voiceGenerationProvider, voiceGenerationModel, "voice brain")})`
+                    ? `Voice brain sees frame directly (${formatProviderModelLabel(voiceGenerationProvider, voiceGenerationModel, "voice brain")}), triggered by scanner on scene change or silence`
                     : directFrameToBrainSupported
-                      ? "Off (background keyframe override forces the two-model path)"
-                      : "Not supported by the current voice brain"}
+                      ? `Scanner generates spoken line (overridden to two-model path)`
+                      : `Scanner generates spoken line (voice brain doesn't support direct vision)`}
                 </span>
               </div>
               <div className="vps-runtime-summary-row">
-                <span className="vps-runtime-summary-label">Background keyframe notes + fallback commentary</span>
-                <span className="vps-runtime-summary-value">{streamWatchNotesBindingLabel}</span>
+                <span className="vps-runtime-summary-label">Session recap (once, when screen share ends)</span>
+                <span className="vps-runtime-summary-value">
+                  {formatProviderModelLabel(String(form.provider || ""), String(form.model || ""), "Default text model")}
+                </span>
               </div>
               <div className="vps-runtime-summary-row">
                 <span className="vps-runtime-summary-label">Generic Media &gt; Vision setting</span>
@@ -1248,8 +1250,12 @@ export function VoiceModeSettingsSection({
                 </span>
               </div>
               <p className="vps-runtime-summary-note">
-                The `Media &gt; Vision` section controls generic image captioning. Live screen-share stream watch uses
-                the path above instead.
+                Every ingested frame is analyzed by the frame scanner to build rolling keyframe notes.
+                {directFrameToBrainActive
+                  ? " When the scanner detects a scene change or 10s+ silence, the voice brain receives the frame directly and speaks."
+                  : " The scanner also generates short spoken commentary lines when it flags something worth commenting on."}
+                {" "}When the share session ends, the default text model summarizes the notes into a one-line memory recap.
+                {" "}The generic Media &gt; Vision setting is separate and only used for image captioning outside screen share.
               </p>
             </div>
           )}
@@ -1262,7 +1268,7 @@ export function VoiceModeSettingsSection({
                   checked={Boolean(form.voiceStreamWatchAutonomousCommentaryEnabled)}
                   onChange={set("voiceStreamWatchAutonomousCommentaryEnabled")}
                 />
-                Auto-speak stream commentary turns
+                Allow spontaneous screen-share commentary
               </label>
               <label>
                 <input
@@ -1276,8 +1282,6 @@ export function VoiceModeSettingsSection({
           )}
 
           {form.voiceStreamWatchEnabled && form.voiceStreamWatchBrainContextEnabled && (() => {
-            const isDirectVision = directFrameToBrainSupported;
-            const hasOverride = Boolean(streamWatchOverrideProvider);
             return (
               <>
                 <div className="split">
@@ -1288,35 +1292,24 @@ export function VoiceModeSettingsSection({
                       value={form.voiceStreamWatchBrainContextProvider}
                       onChange={setStreamWatchVisionProvider}
                     >
-                      <option value="">
-                        {isDirectVision
-                          ? "Auto (keep direct frame-to-brain; helper auto-selects)"
-                          : "Auto (stream-watch resolver)"}
-                      </option>
                       <LlmProviderOptions options={VISION_LLM_PROVIDER_OPTIONS} />
                     </select>
                   </div>
-                  {hasOverride && (
-                    <div>
-                      <label htmlFor="stream-watch-vision-model">Background keyframe notes model</label>
-                      <select
-                        id="stream-watch-vision-model"
-                        value={selectedStreamWatchVisionPresetModel}
-                        onChange={selectStreamWatchVisionPresetModel}
-                      >
-                        {streamWatchVisionModelOptions.map((modelId) => (
-                          <option key={modelId} value={modelId}>
-                            {modelId}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
+                  <div>
+                    <label htmlFor="stream-watch-vision-model">Background keyframe notes model</label>
+                    <select
+                      id="stream-watch-vision-model"
+                      value={selectedStreamWatchVisionPresetModel}
+                      onChange={selectStreamWatchVisionPresetModel}
+                    >
+                      {streamWatchVisionModelOptions.map((modelId) => (
+                        <option key={modelId} value={modelId}>
+                          {modelId}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-                <p className="vps-runtime-summary-note">
-                  Set an override only if you want screen-share keyframe notes and fallback commentary to use a
-                  specific model. Leaving this blank does not inherit `Media &gt; Vision`.
-                </p>
               </>
             );
           })()}
