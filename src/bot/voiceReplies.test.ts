@@ -542,183 +542,247 @@ test("generateVoiceTurnReply preserves spoken text across tool-loop turns", asyn
   assert.equal(reply.text, "let me check that.\nit shipped in 2004.");
 });
 
-test("generateVoiceTurnReply stores durable session context from note_context tool calls", async () => {
-  const session = {
-    id: "voice-session-1",
-    durableContext: [
-      {
-        text: "Existing plan",
-        category: "plan",
-        at: 1
-      }
-    ]
-  };
-  const { bot } = createVoiceBot({
-    generationSequence: [
-      {
-        text: "",
-        toolCalls: [
-          {
-            id: "tc_1",
-            name: "note_context",
-            input: {
-              text: "Alice prefers concise answers",
-              category: "preference"
-            }
-          },
-          {
-            id: "tc_2",
-            name: "note_context",
-            input: {
-              text: "alice prefers concise answers",
-              category: "fact"
-            }
-          }
-        ],
-        rawContent: [
-          { type: "tool_use", id: "tc_1", name: "note_context", input: { text: "Alice prefers concise answers", category: "preference" } },
-          { type: "tool_use", id: "tc_2", name: "note_context", input: { text: "alice prefers concise answers", category: "fact" } }
-        ]
-      },
-      {
-        text: "noted"
-      }
-    ]
-  });
-  bot.voiceSessionManager = {
-    getSessionById(sessionId: string) {
-      return sessionId === "voice-session-1" ? session : null;
-    }
-  };
-
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings(),
-    sessionId: "voice-session-1",
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "keep it short later too",
-    voiceToolCallbacks: {}
-  });
-
-  assert.equal(reply.text, "noted");
-  assert.equal(session.durableContext.length, 2);
-  assert.deepEqual(session.durableContext[0], {
-    text: "Existing plan",
-    category: "plan",
-    at: 1
-  });
-  assert.equal(session.durableContext[1]?.text, "alice prefers concise answers");
-  assert.equal(session.durableContext[1]?.category, "fact");
-});
-
-test("generateVoiceTurnReply does not continue after note_context when spoken text already exists", async () => {
-  const session = {
-    id: "voice-session-2",
-    durableContext: []
-  };
-  const { bot, getGenerationCalls } = createVoiceBot({
-    generationSequence: [
-      {
-        text: "noted",
-        toolCalls: [
-          {
-            id: "tc_1",
-            name: "note_context",
-            input: {
-              text: "Alice prefers concise answers",
-              category: "preference"
-            }
-          }
-        ],
-        rawContent: [
-          { type: "text", text: "noted" },
-          {
-            type: "tool_use",
-            id: "tc_1",
-            name: "note_context",
-            input: { text: "Alice prefers concise answers", category: "preference" }
-          }
-        ]
-      }
-    ]
-  });
-  bot.voiceSessionManager = {
-    getSessionById(sessionId: string) {
-      return sessionId === "voice-session-2" ? session : null;
-    }
-  };
-
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings(),
-    sessionId: "voice-session-2",
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "remember this",
-    voiceToolCallbacks: {}
-  });
-
-  assert.equal(reply.text, "noted");
-  assert.equal(session.durableContext.length, 1);
-  assert.equal(session.durableContext[0]?.text, "Alice prefers concise answers");
-  assert.equal(getGenerationCalls(), 1);
-});
-
-test("generateVoiceTurnReply captures soundboard tool-call results", async () => {
-  const { bot } = createVoiceBot({
-    generationSequence: [
-      {
-        text: "bet",
-        toolCalls: [
-          {
-            id: "tc_1",
-            name: "play_soundboard",
-            input: { refs: ["airhorn@123"] }
-          }
-        ],
-        rawContent: [
-          { type: "text", text: "bet" },
-          { type: "tool_use", id: "tc_1", name: "play_soundboard", input: { refs: ["airhorn@123"] } }
-        ]
-      },
-      {
-        text: ""
-      }
-    ]
-  });
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings({
-      memory: {
-        enabled: true
-      },
-      voice: {
-        soundboard: {
-          enabled: true
+test("generateVoiceTurnReply handles note_context continuation based on whether spoken text already exists", async () => {
+  const cases = [
+    {
+      name: "continues_without_spoken_text",
+      sessionId: "voice-session-1",
+      initialContext: [
+        {
+          text: "Existing plan",
+          category: "plan",
+          at: 1
         }
-      }
-    }),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "drop the update",
-    contextMessages: [
-      {
-        role: "user",
-        content: "what happened?"
-      }
-    ],
-    soundboardCandidates: ["airhorn@123"],
-    voiceToolCallbacks: {
-      playSoundboard: async (refs) => ({ ok: true, played: refs }),
-      setScreenNote: async (note) => ({ ok: true, note }),
-      setScreenMoment: async (moment) => ({ ok: true, moment }),
-      leaveVoiceChannel: async () => ({ ok: true })
+      ],
+      generationSequence: [
+        {
+          text: "",
+          toolCalls: [
+            {
+              id: "tc_1",
+              name: "note_context",
+              input: {
+                text: "Alice prefers concise answers",
+                category: "preference"
+              }
+            },
+            {
+              id: "tc_2",
+              name: "note_context",
+              input: {
+                text: "alice prefers concise answers",
+                category: "fact"
+              }
+            }
+          ],
+          rawContent: [
+            { type: "tool_use", id: "tc_1", name: "note_context", input: { text: "Alice prefers concise answers", category: "preference" } },
+            { type: "tool_use", id: "tc_2", name: "note_context", input: { text: "alice prefers concise answers", category: "fact" } }
+          ]
+        },
+        {
+          text: "noted"
+        }
+      ],
+      transcript: "keep it short later too",
+      expectedGenerationCalls: 2,
+      expectedText: "noted",
+      expectedContextText: "alice prefers concise answers",
+      expectedContextLength: 2
+    },
+    {
+      name: "stops_after_first_pass_when_spoken_text_exists",
+      sessionId: "voice-session-2",
+      initialContext: [],
+      generationSequence: [
+        {
+          text: "noted",
+          toolCalls: [
+            {
+              id: "tc_1",
+              name: "note_context",
+              input: {
+                text: "Alice prefers concise answers",
+                category: "preference"
+              }
+            }
+          ],
+          rawContent: [
+            { type: "text", text: "noted" },
+            {
+              type: "tool_use",
+              id: "tc_1",
+              name: "note_context",
+              input: { text: "Alice prefers concise answers", category: "preference" }
+            }
+          ]
+        }
+      ],
+      transcript: "remember this",
+      expectedGenerationCalls: 1,
+      expectedText: "noted",
+      expectedContextText: "Alice prefers concise answers",
+      expectedContextLength: 1
     }
-  });
+  ];
 
-  assert.equal(reply.text, "bet");
-  assert.deepEqual(reply.playedSoundboardRefs, ["airhorn@123"]);
+  for (const row of cases) {
+    const session = {
+      id: row.sessionId,
+      durableContext: [...row.initialContext]
+    };
+    const { bot, getGenerationCalls } = createVoiceBot({
+      generationSequence: row.generationSequence
+    });
+    bot.voiceSessionManager = {
+      getSessionById(sessionId: string) {
+        return sessionId === row.sessionId ? session : null;
+      }
+    };
+
+    const reply = await generateVoiceTurnReply(bot, {
+      settings: baseSettings(),
+      sessionId: row.sessionId,
+      guildId: "guild-1",
+      channelId: "text-1",
+      userId: "user-1",
+      transcript: row.transcript,
+      voiceToolCallbacks: {}
+    });
+
+    assert.equal(reply.text, row.expectedText, row.name);
+    assert.equal(getGenerationCalls(), row.expectedGenerationCalls, row.name);
+    assert.equal(session.durableContext.length, row.expectedContextLength, row.name);
+    assert.equal(session.durableContext.at(-1)?.text, row.expectedContextText, row.name);
+  }
+});
+
+test("generateVoiceTurnReply handles representative soundboard permutations", async () => {
+  const cases = [
+    {
+      name: "disabled",
+      buildBot: () =>
+        createVoiceBot({
+          generationText: structuredVoiceOutput({
+            text: "copy that"
+          })
+        }),
+      settings: baseSettings({
+        voice: {
+          soundboard: {
+            enabled: false
+          }
+        }
+      }),
+      transcript: "say something",
+      soundboardCandidates: ["airhorn@123"],
+      expectedText: "copy that",
+      expectedPlayedRefs: [],
+      assertTools(generationPayloads) {
+        const toolNames = (Array.isArray(generationPayloads[0]?.tools) ? generationPayloads[0].tools : [])
+          .map((entry) => String(entry?.name || ""));
+        assert.equal(toolNames.includes("play_soundboard"), false);
+      }
+    },
+    {
+      name: "speech_plus_soundboard",
+      buildBot: () =>
+        createVoiceBot({
+          generationSequence: [
+            {
+              text: "playing it now",
+              toolCalls: [
+                {
+                  id: "tc_1",
+                  name: "play_soundboard",
+                  input: { refs: ["airhorn@123", "rimshot@456"] }
+                }
+              ],
+              rawContent: [
+                { type: "text", text: "playing it now" },
+                {
+                  type: "tool_use",
+                  id: "tc_1",
+                  name: "play_soundboard",
+                  input: { refs: ["airhorn@123", "rimshot@456"] }
+                }
+              ]
+            },
+            {
+              text: ""
+            }
+          ]
+        }),
+      settings: baseSettings({
+        voice: {
+          soundboard: {
+            enabled: true
+          }
+        }
+      }),
+      transcript: "drop both",
+      soundboardCandidates: ["airhorn@123", "rimshot@456"],
+      expectedText: "playing it now",
+      expectedPlayedRefs: ["airhorn@123", "rimshot@456"]
+    },
+    {
+      name: "soundboard_only",
+      buildBot: () =>
+        createVoiceBot({
+          generationSequence: [
+            {
+              text: "",
+              toolCalls: [
+                {
+                  id: "tc_1",
+                  name: "play_soundboard",
+                  input: { refs: ["airhorn@123"] }
+                }
+              ],
+              rawContent: [
+                { type: "tool_use", id: "tc_1", name: "play_soundboard", input: { refs: ["airhorn@123"] } }
+              ]
+            },
+            {
+              text: ""
+            }
+          ]
+        }),
+      settings: baseSettings({
+        voice: {
+          soundboard: {
+            enabled: true
+          }
+        }
+      }),
+      transcript: "drop a sound",
+      soundboardCandidates: ["airhorn@123 | airhorn"],
+      expectedText: "",
+      expectedPlayedRefs: ["airhorn@123"]
+    }
+  ];
+
+  for (const row of cases) {
+    const { bot, generationPayloads } = row.buildBot();
+    const reply = await generateVoiceTurnReply(bot, {
+      settings: row.settings,
+      guildId: "guild-1",
+      channelId: "text-1",
+      userId: "user-1",
+      transcript: row.transcript,
+      soundboardCandidates: row.soundboardCandidates,
+      voiceToolCallbacks: {
+        playSoundboard: async (refs) => ({ ok: true, played: refs }),
+        setScreenNote: async (note) => ({ ok: true, note }),
+        setScreenMoment: async (moment) => ({ ok: true, moment }),
+        leaveVoiceChannel: async () => ({ ok: true })
+      }
+    });
+
+    assert.equal(reply.text, row.expectedText, row.name);
+    assert.deepEqual(reply.playedSoundboardRefs || [], row.expectedPlayedRefs, row.name);
+    row.assertTools?.(generationPayloads);
+  }
 });
 
 test("generateVoiceTurnReply returns direct-address fallback voice addressing without a tool", async () => {
@@ -745,165 +809,154 @@ test("generateVoiceTurnReply returns direct-address fallback voice addressing wi
   assert.equal(getGenerationCalls(), 1);
 });
 
-test("generateVoiceTurnReply does not continue after streamed speech plus screen_note when generation.text is empty", async () => {
-  const streamed: string[] = [];
-  const { bot, getGenerationCalls } = createVoiceBot({
-    generationSequence: [
-      {
-        text: "",
-        textDeltas: ["yo vuhlp, what's good "],
-        toolCalls: [
-          {
-            id: "tc_1",
-            name: "screen_note",
-            input: {
-              note: "health bar flashing red"
+test("generateVoiceTurnReply screen_note continuation depends on whether the first pass already yielded spoken output", async () => {
+  const cases = [
+    {
+      name: "accepted_streamed_speech_stops_continuation",
+      generationSequence: [
+        {
+          text: "",
+          textDeltas: ["yo vuhlp, what's good "],
+          toolCalls: [
+            {
+              id: "tc_1",
+              name: "screen_note",
+              input: {
+                note: "health bar flashing red"
+              }
             }
-          }
-        ],
-        rawContent: [
-          {
-            type: "tool_use",
-            id: "tc_1",
-            name: "screen_note",
-            input: { note: "health bar flashing red" }
-          }
-        ]
-      }
-    ]
-  });
-
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings({
-      voice: {
-        streamingEnabled: true,
-        streamingEagerFirstChunkChars: 16,
-        streamingMaxBufferChars: 120
-      }
-    }),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "quick check",
-    onSpokenSentence: ({ text }) => {
-      streamed.push(text);
+          ],
+          rawContent: [
+            {
+              type: "tool_use",
+              id: "tc_1",
+              name: "screen_note",
+              input: { note: "health bar flashing red" }
+            }
+          ]
+        }
+      ],
+      settings: baseSettings({
+        voice: {
+          streamingEnabled: true,
+          streamingEagerFirstChunkChars: 16,
+          streamingMaxBufferChars: 120
+        }
+      }),
+      onSpokenSentence: ({ text }) => text,
+      expectedText: "yo vuhlp, what's good",
+      expectedGenerationCalls: 1
     },
-    voiceToolCallbacks: {
-      playSoundboard: async (refs) => ({ ok: true, played: refs }),
-      setScreenNote: async (note) => ({ ok: true, note }),
-      setScreenMoment: async (moment) => ({ ok: true, moment }),
-      leaveVoiceChannel: async () => ({ ok: true })
-    }
-  });
-
-  assert.deepEqual(streamed, ["yo vuhlp, what's good"]);
-  assert.equal(reply.text, "yo vuhlp, what's good");
-  assert.equal(reply.screenNote, "health bar flashing red");
-  assert.equal(getGenerationCalls(), 1);
-});
-
-test("generateVoiceTurnReply continues when streamed speech is rejected and generation.text is empty", async () => {
-  const { bot, getGenerationCalls } = createVoiceBot({
-    generationSequence: [
-      {
-        text: "",
-        textDeltas: ["yo vuhlp, what's good "],
-        toolCalls: [
-          {
-            id: "tc_1",
-            name: "screen_note",
-            input: {
-              note: "health bar flashing red"
+    {
+      name: "rejected_streamed_speech_continues",
+      generationSequence: [
+        {
+          text: "",
+          textDeltas: ["yo vuhlp, what's good "],
+          toolCalls: [
+            {
+              id: "tc_1",
+              name: "screen_note",
+              input: {
+                note: "health bar flashing red"
+              }
             }
-          }
-        ],
-        rawContent: [
-          {
-            type: "tool_use",
-            id: "tc_1",
-            name: "screen_note",
-            input: { note: "health bar flashing red" }
-          }
-        ]
-      },
-      {
-        text: "yo"
-      }
-    ]
-  });
-
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings({
-      voice: {
-        streamingEnabled: true,
-        streamingEagerFirstChunkChars: 16,
-        streamingMaxBufferChars: 120
-      }
-    }),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "quick check",
-    onSpokenSentence: () => false,
-    voiceToolCallbacks: {
-      playSoundboard: async (refs) => ({ ok: true, played: refs }),
-      setScreenNote: async (note) => ({ ok: true, note }),
-      setScreenMoment: async (moment) => ({ ok: true, moment }),
-      leaveVoiceChannel: async () => ({ ok: true })
-    }
-  });
-
-  assert.equal(reply.text, "yo");
-  assert.equal(reply.screenNote, "health bar flashing red");
-  assert.equal(getGenerationCalls(), 2);
-});
-
-test("generateVoiceTurnReply still continues after screen_note when the first pass has no spoken text", async () => {
-  const { bot, getGenerationCalls } = createVoiceBot({
-    generationSequence: [
-      {
-        text: "",
-        toolCalls: [
-          {
-            id: "tc_1",
-            name: "screen_note",
-            input: {
-              note: "health bar flashing red"
+          ],
+          rawContent: [
+            {
+              type: "tool_use",
+              id: "tc_1",
+              name: "screen_note",
+              input: { note: "health bar flashing red" }
             }
-          }
-        ],
-        rawContent: [
-          {
-            type: "tool_use",
-            id: "tc_1",
-            name: "screen_note",
-            input: { note: "health bar flashing red" }
-          }
-        ]
-      },
-      {
-        text: "yo"
-      }
-    ]
-  });
-
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings(),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "quick check",
-    voiceToolCallbacks: {
-      playSoundboard: async (refs) => ({ ok: true, played: refs }),
-      setScreenNote: async (note) => ({ ok: true, note }),
-      setScreenMoment: async (moment) => ({ ok: true, moment }),
-      leaveVoiceChannel: async () => ({ ok: true })
+          ]
+        },
+        {
+          text: "yo"
+        }
+      ],
+      settings: baseSettings({
+        voice: {
+          streamingEnabled: true,
+          streamingEagerFirstChunkChars: 16,
+          streamingMaxBufferChars: 120
+        }
+      }),
+      onSpokenSentence: () => false,
+      expectedText: "yo",
+      expectedGenerationCalls: 2
+    },
+    {
+      name: "no_first_pass_speech_continues",
+      generationSequence: [
+        {
+          text: "",
+          toolCalls: [
+            {
+              id: "tc_1",
+              name: "screen_note",
+              input: {
+                note: "health bar flashing red"
+              }
+            }
+          ],
+          rawContent: [
+            {
+              type: "tool_use",
+              id: "tc_1",
+              name: "screen_note",
+              input: { note: "health bar flashing red" }
+            }
+          ]
+        },
+        {
+          text: "yo"
+        }
+      ],
+      settings: baseSettings(),
+      onSpokenSentence: null,
+      expectedText: "yo",
+      expectedGenerationCalls: 2
     }
-  });
+  ];
 
-  assert.equal(reply.text, "yo");
-  assert.equal(reply.screenNote, "health bar flashing red");
-  assert.equal(getGenerationCalls(), 2);
+  for (const row of cases) {
+    const streamed: string[] = [];
+    const { bot, getGenerationCalls } = createVoiceBot({
+      generationSequence: row.generationSequence
+    });
+
+    const reply = await generateVoiceTurnReply(bot, {
+      settings: row.settings,
+      guildId: "guild-1",
+      channelId: "text-1",
+      userId: "user-1",
+      transcript: "quick check",
+      onSpokenSentence: row.onSpokenSentence
+        ? ({ text }) => {
+            const result = row.onSpokenSentence({ text });
+            if (result) {
+              streamed.push(String(text));
+              return true;
+            }
+            return false;
+          }
+        : undefined,
+      voiceToolCallbacks: {
+        playSoundboard: async (refs) => ({ ok: true, played: refs }),
+        setScreenNote: async (note) => ({ ok: true, note }),
+        setScreenMoment: async (moment) => ({ ok: true, moment }),
+        leaveVoiceChannel: async () => ({ ok: true })
+      }
+    });
+
+    assert.equal(reply.text, row.expectedText, row.name);
+    assert.equal(reply.screenNote, "health bar flashing red", row.name);
+    assert.equal(getGenerationCalls(), row.expectedGenerationCalls, row.name);
+    if (row.name === "accepted_streamed_speech_stops_continuation") {
+      assert.deepEqual(streamed, ["yo vuhlp, what's good"]);
+    }
+  }
 });
 
 test("generateVoiceTurnReply includes all tool results when a continuation-required tool is mixed with a side-effect tool", async () => {
@@ -1055,57 +1108,6 @@ test("generateVoiceTurnReply carries resolved streamed speech into the continuat
   ]);
 });
 
-test("generateVoiceTurnReply preserves ordered soundboard refs from tool-call payload", async () => {
-  const { bot } = createVoiceBot({
-    generationSequence: [
-      {
-        text: "bet",
-        toolCalls: [
-          {
-            id: "tc_1",
-            name: "play_soundboard",
-            input: { refs: ["airhorn@123", "rimshot@456"] }
-          }
-        ],
-        rawContent: [
-          { type: "text", text: "bet" },
-          {
-            type: "tool_use",
-            id: "tc_1",
-            name: "play_soundboard",
-            input: { refs: ["airhorn@123", "rimshot@456"] }
-          }
-        ]
-      },
-      {
-        text: ""
-      }
-    ]
-  });
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings({
-      voice: {
-        soundboard: {
-          enabled: true
-        }
-      }
-    }),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "drop both",
-    soundboardCandidates: ["airhorn@123", "rimshot@456"],
-    voiceToolCallbacks: {
-      playSoundboard: async (refs) => ({ ok: true, played: refs }),
-      setScreenNote: async (note) => ({ ok: true, note }),
-      setScreenMoment: async (moment) => ({ ok: true, moment }),
-      leaveVoiceChannel: async () => ({ ok: true })
-    }
-  });
-
-  assert.equal(reply.text, "bet");
-  assert.deepEqual(reply.playedSoundboardRefs, ["airhorn@123", "rimshot@456"]);
-});
 
 test("generateVoiceTurnReply injects recent conversation history into the prompt", async () => {
   const { bot, generationPayloads } = createVoiceBot({
@@ -1185,157 +1187,6 @@ test("generateVoiceTurnReply injects recent voice effects into the prompt", asyn
   );
 });
 
-test("generateVoiceTurnReply excludes play_soundboard when soundboard is disabled", async () => {
-  const { bot, generationPayloads } = createVoiceBot({
-    generationText: structuredVoiceOutput({
-      text: "copy that"
-    })
-  });
-  await generateVoiceTurnReply(bot, {
-    settings: baseSettings({
-      voice: {
-        soundboard: {
-          enabled: false
-        }
-      }
-    }),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "say something",
-    soundboardCandidates: ["airhorn@123"],
-    voiceToolCallbacks: {
-      playSoundboard: async (refs) => ({ ok: true, played: refs }),
-      setScreenNote: async (note) => ({ ok: true, note }),
-      setScreenMoment: async (moment) => ({ ok: true, moment }),
-      leaveVoiceChannel: async () => ({ ok: true })
-    }
-  });
-
-  const toolNames = (Array.isArray(generationPayloads[0]?.tools) ? generationPayloads[0].tools : [])
-    .map((entry) => String(entry?.name || ""));
-  assert.equal(toolNames.includes("play_soundboard"), false);
-});
-
-test("generateVoiceTurnReply keeps spoken text when soundboard is disabled", async () => {
-  const { bot } = createVoiceBot({
-    generationText: structuredVoiceOutput({
-      text: "copy that"
-    })
-  });
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings({
-      voice: {
-        soundboard: {
-          enabled: false
-        }
-      }
-    }),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "say something",
-    soundboardCandidates: ["airhorn@123"]
-  });
-
-  assert.equal(reply.text, "copy that");
-  assert.deepEqual(reply.playedSoundboardRefs || [], []);
-});
-
-test("generateVoiceTurnReply keeps spoken text alongside soundboard playback", async () => {
-  const { bot, getGenerationCalls } = createVoiceBot({
-    generationSequence: [
-      {
-        text: "playing it now",
-        toolCalls: [
-          {
-            id: "tc_1",
-            name: "play_soundboard",
-            input: { refs: ["airhorn@123"] }
-          }
-        ],
-        rawContent: [
-          { type: "text", text: "playing it now" },
-          { type: "tool_use", id: "tc_1", name: "play_soundboard", input: { refs: ["airhorn@123"] } }
-        ]
-      },
-      {
-        text: ""
-      }
-    ]
-  });
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings({
-      voice: {
-        soundboard: {
-          enabled: true
-        }
-      }
-    }),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "drop a sound",
-    soundboardCandidates: ["airhorn@123 | airhorn"],
-    voiceToolCallbacks: {
-      playSoundboard: async (refs) => ({ ok: true, played: refs }),
-      setScreenNote: async (note) => ({ ok: true, note }),
-      setScreenMoment: async (moment) => ({ ok: true, moment }),
-      leaveVoiceChannel: async () => ({ ok: true })
-    }
-  });
-
-  assert.equal(reply.text, "playing it now");
-  assert.deepEqual(reply.playedSoundboardRefs, ["airhorn@123"]);
-  assert.equal(getGenerationCalls(), 1);
-});
-
-test("generateVoiceTurnReply supports soundboard-only turns", async () => {
-  const { bot } = createVoiceBot({
-    generationSequence: [
-      {
-        text: "",
-        toolCalls: [
-          {
-            id: "tc_1",
-            name: "play_soundboard",
-            input: { refs: ["airhorn@123"] }
-          }
-        ],
-        rawContent: [
-          { type: "tool_use", id: "tc_1", name: "play_soundboard", input: { refs: ["airhorn@123"] } }
-        ]
-      },
-      {
-        text: ""
-      }
-    ]
-  });
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings({
-      voice: {
-        soundboard: {
-          enabled: true
-        }
-      }
-    }),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "drop a sound",
-    soundboardCandidates: ["airhorn@123 | airhorn"],
-    voiceToolCallbacks: {
-      playSoundboard: async (refs) => ({ ok: true, played: refs }),
-      setScreenNote: async (note) => ({ ok: true, note }),
-      setScreenMoment: async (moment) => ({ ok: true, moment }),
-      leaveVoiceChannel: async () => ({ ok: true })
-    }
-  });
-
-  assert.equal(reply.text, "");
-  assert.deepEqual(reply.playedSoundboardRefs, ["airhorn@123"]);
-});
-
 test("generateVoiceTurnReply logs voice errors when generation fails", async () => {
   const { bot, logs } = createVoiceBot({
     generationError: new Error("generation failed")
@@ -1411,102 +1262,95 @@ test("generateVoiceTurnReply uses text llm provider/model when voice generation 
   assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).model, "claude-sonnet-4-6");
 });
 
-test("generateVoiceTurnReply does not advertise code_task when runtime cannot execute code tasks", async () => {
-  const { bot, generationPayloads } = createVoiceBot({
-    generationText: structuredVoiceOutput({
-      text: "all good"
-    })
-  });
-
-  await generateVoiceTurnReply(bot, {
-    settings: baseSettings({
-      codeAgent: {
-        provider: "claude-code",
-        allowedUserIds: ["user-1"]
+test("generateVoiceTurnReply advertises tool runtimes only when the capability exists", async () => {
+  const cases = [
+    {
+      name: "missing_code_task_runtime",
+      transcript: "can you patch that file?",
+      settings: baseSettings({
+        codeAgent: {
+          provider: "claude-code",
+          allowedUserIds: ["user-1"]
+        }
+      }),
+      configure() {},
+      expectedToolName: "code_task",
+      expectedPresent: false
+    },
+    {
+      name: "present_code_task_runtime",
+      transcript: "can you patch that file?",
+      settings: baseSettings({
+        codeAgent: {
+          provider: "claude-code",
+          allowedUserIds: ["user-1"]
+        }
+      }),
+      configure(bot) {
+        bot.runModelRequestedCodeTask = async () => ({ text: "done", isError: false, costUsd: 0, error: null });
+      },
+      expectedToolName: "code_task",
+      expectedPresent: true
+    },
+    {
+      name: "present_browser_runtime",
+      transcript: "check that website",
+      settings: baseSettings(),
+      configure(bot) {
+        bot.buildBrowserBrowseContext = () => ({
+          requested: false,
+          configured: true,
+          enabled: true,
+          used: false,
+          blockedByBudget: false,
+          error: null,
+          query: "",
+          text: "",
+          steps: 0,
+          hitStepLimit: false,
+          budget: {
+            canBrowse: true
+          }
+        });
+        bot.runModelRequestedBrowserBrowse = async () => ({
+          used: true,
+          text: "done",
+          steps: 1,
+          hitStepLimit: false,
+          error: null,
+          blockedByBudget: false
+        });
+      },
+      expectedToolName: "browser_browse",
+      expectedPresent: true,
+      assertPrompt(prompt) {
+        assert.equal(prompt.includes("Interactive browser browsing is available."), true);
+        assert.equal(prompt.includes("If interactive browsing is needed, call browser_browse in the same response."), true);
       }
-    }),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "can you patch that file?"
-  });
-
-  const firstTools = Array.isArray(generationPayloads[0]?.tools) ? generationPayloads[0].tools : [];
-  const toolNames = firstTools.map((entry) => String(entry?.name || ""));
-  assert.ok(!toolNames.includes("code_task"), "code_task should be excluded when runtime hook is missing");
-});
-
-test("generateVoiceTurnReply advertises code_task when runtime can execute code tasks", async () => {
-  const { bot, generationPayloads } = createVoiceBot({
-    generationText: structuredVoiceOutput({
-      text: "all good"
-    })
-  });
-  bot.runModelRequestedCodeTask = async () => ({ text: "done", isError: false, costUsd: 0, error: null });
-
-  await generateVoiceTurnReply(bot, {
-    settings: baseSettings({
-      codeAgent: {
-        provider: "claude-code",
-        allowedUserIds: ["user-1"]
-      }
-    }),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "can you patch that file?"
-  });
-
-  const firstTools = Array.isArray(generationPayloads[0]?.tools) ? generationPayloads[0].tools : [];
-  const toolNames = firstTools.map((entry) => String(entry?.name || ""));
-  assert.ok(toolNames.includes("code_task"), "code_task should be included when runtime hook exists");
-});
-
-test("generateVoiceTurnReply advertises browser_browse when interactive browsing is available", async () => {
-  const { bot, generationPayloads } = createVoiceBot({
-    generationText: structuredVoiceOutput({
-      text: "all good"
-    })
-  });
-  bot.buildBrowserBrowseContext = () => ({
-    requested: false,
-    configured: true,
-    enabled: true,
-    used: false,
-    blockedByBudget: false,
-    error: null,
-    query: "",
-    text: "",
-    steps: 0,
-    hitStepLimit: false,
-    budget: {
-      canBrowse: true
     }
-  });
-  bot.runModelRequestedBrowserBrowse = async () => ({
-    used: true,
-    text: "done",
-    steps: 1,
-    hitStepLimit: false,
-    error: null,
-    blockedByBudget: false
-  });
+  ];
 
-  await generateVoiceTurnReply(bot, {
-    settings: baseSettings(),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "check that website"
-  });
+  for (const row of cases) {
+    const { bot, generationPayloads } = createVoiceBot({
+      generationText: structuredVoiceOutput({
+        text: "all good"
+      })
+    });
+    row.configure(bot);
 
-  const firstTools = Array.isArray(generationPayloads[0]?.tools) ? generationPayloads[0].tools : [];
-  const toolNames = firstTools.map((entry) => String(entry?.name || ""));
-  const firstPrompt = String(generationPayloads[0]?.userPrompt || "");
+    await generateVoiceTurnReply(bot, {
+      settings: row.settings,
+      guildId: "guild-1",
+      channelId: "text-1",
+      userId: "user-1",
+      transcript: row.transcript
+    });
 
-  assert.ok(toolNames.includes("browser_browse"), "browser_browse should be included when runtime hook exists");
-  assert.equal(firstPrompt.includes("Interactive browser browsing is available."), true);
-  assert.equal(firstPrompt.includes("If interactive browsing is needed, call browser_browse in the same response."), true);
+    const firstTools = Array.isArray(generationPayloads[0]?.tools) ? generationPayloads[0].tools : [];
+    const toolNames = firstTools.map((entry) => String(entry?.name || ""));
+    assert.equal(toolNames.includes(row.expectedToolName), row.expectedPresent, row.name);
+    row.assertPrompt?.(String(generationPayloads[0]?.userPrompt || ""));
+  }
 });
 
 test("generateVoiceTurnReply runs web lookup follow-up with start/complete callbacks via tool calls", async () => {
@@ -1560,55 +1404,6 @@ test("generateVoiceTurnReply runs web lookup follow-up with start/complete callb
   assert.equal(callbackEvents[1], "done");
   assert.equal(reply.text, "latest stable rust is 1.90");
   assert.equal(reply.usedWebSearchFollowup, true);
-});
-
-test("generateVoiceTurnReply fires web lookup callbacks via tool call loop", async () => {
-  const eventOrder: string[] = [];
-  const { bot } = createVoiceBot({
-    generationSequence: [
-      {
-        text: "",
-        toolCalls: [
-          {
-            id: "tc_1",
-            name: "web_search",
-            input: { query: "latest rust stable version" }
-          }
-        ],
-        rawContent: [
-          { type: "text", text: "" },
-          { type: "tool_use", id: "tc_1", name: "web_search", input: { query: "latest rust stable version" } }
-        ]
-      },
-      {
-        text: structuredVoiceOutput({
-          text: "latest stable rust is 1.90"
-        })
-      }
-    ]
-  });
-
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings({
-      webSearch: {
-        enabled: true
-      }
-    }),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "what's the latest rust stable?",
-    onWebLookupStart: async () => {
-      eventOrder.push("start");
-    },
-    onWebLookupComplete: async () => {
-      eventOrder.push("done");
-    }
-  });
-
-  assert.equal(reply.usedWebSearchFollowup, true);
-  assert.equal(eventOrder.includes("start"), true);
-  assert.equal(eventOrder.includes("done"), true);
 });
 
 test("generateVoiceTurnReply queries short-term lookup memory during generation", async () => {
