@@ -122,18 +122,18 @@ Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details 
 |-----|-------------|
 | `docs/technical-architecture.md` | System architecture, data model, runtime flows |
 | `docs/preset-driven-agent-stack-spec.md` | Target spec for the preset-driven agent stack architecture and its `openai_native` profile |
-| `docs/clanker-activity.md` | Text activity model: direct replies, reply/lurk channels, thought loop, discovery |
-| `docs/agent-code.md` | Claude Code orchestrator design and implementation |
-| `docs/agent-browser.md` | Browser agent spec |
-| `docs/realtime-voice-agent-spec.md` | Voice architecture and tool strategy |
+| `docs/clanker-activity.md` | Text + voice activity model: direct replies, reply/lurk channels, thought loop, discovery |
+| `docs/agent-code.md` | Code agent runtime (Claude Code + Codex) |
+| `docs/agent-browser.md` | Browser agent runtime |
+| `docs/voice/voice-provider-abstraction.md` | Voice pipeline stages, providers, and settings |
 | `docs/claude-code-brain-session-mode.md` | Claude Code as LLM brain provider |
+| `docs/claude-ai-oauth.md` | Claude AI OAuth provider (`claude-oauth`) |
 | `docs/memory-system.md` | Memory system design |
 | `docs/initiative-discovery-spec.md` | Discovery post content sourcing |
-| `docs/voice-provider-abstraction.md` | Voice provider swappability |
 | `docs/public-https-entrypoint-spec.md` | Public HTTPS tunnel |
 | `docs/screen-share-link-spec.md` | Screen share flow |
-| `docs/e2e-test-spec.md` | Test suites |
-| `docs/replay-test-suite.md` | Replay test harness |
+| `docs/e2e-test-spec.md` | E2E bot-to-bot + golden validation suites |
+| `docs/tests.md` | Test commands, live tests, and replay harnesses |
 | `docs/logs.md` | Structured logging and Loki setup |
 
 ## Notes
