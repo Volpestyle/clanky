@@ -174,10 +174,12 @@ const DEFAULT_PRICING = {
     "grok-beta": { inputPer1M: 5.0, outputPer1M: 15.0 },
     "grok-vision-beta": { inputPer1M: 5.0, outputPer1M: 15.0 }
   },
-  "claude-code": {
-    sonnet: { inputPer1M: 0, outputPer1M: 0 },
-    haiku: { inputPer1M: 0, outputPer1M: 0 },
-    opus: { inputPer1M: 0, outputPer1M: 0 }
+  "claude-oauth": {
+    "claude-sonnet-4-6": { inputPer1M: 0, outputPer1M: 0 },
+    "claude-sonnet-4-5": { inputPer1M: 0, outputPer1M: 0 },
+    "claude-haiku-4-5": { inputPer1M: 0, outputPer1M: 0 },
+    "claude-opus-4-6": { inputPer1M: 0, outputPer1M: 0 },
+    "claude-opus-4-5": { inputPer1M: 0, outputPer1M: 0 }
   },
   "codex-cli": {
     "gpt-5.4": { inputPer1M: 0, outputPer1M: 0 },
@@ -215,7 +217,7 @@ const MODEL_ALIASES = {
     "gpt 5.4": "gpt-5.4",
     "grok vision beta": "grok-vision-beta"
   };
-const LLM_PROVIDER_KEYS = ["openai", "anthropic", "xai", "claude-code", "codex-cli"];
+const LLM_PROVIDER_KEYS = ["openai", "anthropic", "xai", "claude-oauth", "codex-cli"];
 const NON_TEXT_MODEL_PATTERNS = [
   /embedding/i,
   /image/i,
@@ -276,7 +278,7 @@ export function getLlmModelCatalog(customPricing = {}) {
     openai: listLlmModelsForProvider(merged.openai, "openai"),
     anthropic: listLlmModelsForProvider(merged.anthropic, "anthropic"),
     xai: listLlmModelsForProvider(merged.xai, "xai"),
-    "claude-code": listLlmModelsForProvider(merged["claude-code"], "claude-code"),
+    "claude-oauth": listLlmModelsForProvider(merged["claude-oauth"], "claude-oauth"),
     "codex-cli": listLlmModelsForProvider(merged["codex-cli"], "codex-cli")
   };
 }
@@ -304,9 +306,9 @@ function mergePricing(customPricing) {
       ...DEFAULT_PRICING.xaiImages,
       ...(custom.xaiImages && typeof custom.xaiImages === "object" ? custom.xaiImages : {})
     },
-    "claude-code": {
-      ...DEFAULT_PRICING["claude-code"],
-      ...(custom["claude-code"] && typeof custom["claude-code"] === "object" ? custom["claude-code"] : {})
+    "claude-oauth": {
+      ...DEFAULT_PRICING["claude-oauth"],
+      ...(custom["claude-oauth"] && typeof custom["claude-oauth"] === "object" ? custom["claude-oauth"] : {})
     },
     "codex-cli": {
       ...DEFAULT_PRICING["codex-cli"],
@@ -371,7 +373,7 @@ function listLlmModelsForProvider(providerPricing, provider) {
   return Object.keys(providerPricing).filter((model) => isTextLlmModel(model, provider));
 }
 
-function isTextLlmModel(model, provider) {
+function isTextLlmModel(model, _provider) {
   const normalized = String(model || "").trim().toLowerCase();
   if (!normalized) return false;
   if (NON_TEXT_MODEL_PATTERNS.some((pattern) => pattern.test(normalized))) return false;

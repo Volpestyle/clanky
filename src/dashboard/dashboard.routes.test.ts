@@ -28,6 +28,18 @@ test("dashboard memory search handles missing params and valid lookups", async (
   }
 });
 
+test("dashboard shell finalizes HEAD requests for non-API routes", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl }) => {
+    const response = await fetch(baseUrl, { method: "HEAD" });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "text/html; charset=UTF-8");
+  });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
 test("dashboard adaptive directive routes add, edit, remove, and expose audit history", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl }) => {
     const emptyNotes = await fetch(`${baseUrl}/api/memory/adaptive-directives?guildId=guild-1`);

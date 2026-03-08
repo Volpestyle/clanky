@@ -212,32 +212,49 @@ export function normalizeVoiceAdmissionMode(value: unknown, fallback: string) {
 export type AgentStackPresetConfig = {
   preset: string;
   presetOrchestratorFallback: SettingsModelBinding;
-  presetVoiceAdmissionClassifierFallback: SettingsModelBinding;
+  presetVoiceAdmissionClassifierFallback?: SettingsModelBinding;
+  presetVoiceGenerationFallback?: SettingsModelBinding;
+  presetVoiceAdmissionMode?: string;
 };
 
 export function resolveAgentStackPresetConfig(
   rawAgentStack: Record<string, unknown>
 ): AgentStackPresetConfig {
   const presetRaw = normalizeString(rawAgentStack.preset, DEFAULT_SETTINGS.agentStack.preset, 48);
+  const migrated =
+    presetRaw === "anthropic_brain_openai_tools" ? "anthropic_api_openai_tools"
+    : presetRaw === "claude_oauth_max" ? "claude_oauth_openai_tools"
+    : presetRaw;
   const preset =
-    presetRaw === "openai_native" ||
-    presetRaw === "anthropic_brain_openai_tools" ||
-    presetRaw === "claude_code_max" ||
-    presetRaw === "custom"
-      ? presetRaw
+    migrated === "openai_native" ||
+    migrated === "anthropic_api_openai_tools" ||
+    migrated === "claude_oauth_openai_tools" ||
+    migrated === "custom"
+      ? migrated
       : DEFAULT_SETTINGS.agentStack.preset;
+
+  const isAnthropicBrain = preset === "anthropic_api_openai_tools";
+  const isClaudeOAuth = preset === "claude_oauth_openai_tools";
 
   return {
     preset,
     presetOrchestratorFallback:
-      preset === "anthropic_brain_openai_tools"
+      isAnthropicBrain
         ? { provider: "anthropic", model: "claude-sonnet-4-6" }
-        : preset === "claude_code_max"
-          ? { provider: "claude_code_session", model: "max" }
+        : isClaudeOAuth
+          ? { provider: "claude-oauth", model: "claude-opus-4-6" }
           : { provider: "openai", model: "gpt-5" },
     presetVoiceAdmissionClassifierFallback:
-      preset === "claude_code_max"
-        ? { provider: "claude_code_session", model: "max" }
-        : { provider: "openai", model: "gpt-5-mini" }
+      isClaudeOAuth
+        ? { provider: "claude-oauth", model: "claude-haiku-4-5" }
+        : isAnthropicBrain
+          ? { provider: "anthropic", model: "claude-haiku-4-5" }
+          : { provider: "openai", model: "gpt-5-mini" },
+    presetVoiceGenerationFallback:
+      isClaudeOAuth
+        ? { provider: "claude-oauth", model: "claude-sonnet-4-6" }
+        : undefined,
+    presetVoiceAdmissionMode:
+      isClaudeOAuth ? "generation_decides" : undefined
   };
 }

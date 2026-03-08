@@ -20,7 +20,7 @@ export function LlmConfigurationSettingsSection({
   selectedMemoryLlmPresetModel
 }) {
   return (
-    <SettingsSection id={id} title="LLM Configuration">
+    <SettingsSection id={id} title="Text LLM">
       <label htmlFor="provider">LLM provider</label>
       <select id="provider" value={form.provider} onChange={setProvider}>
         <LlmProviderOptions />

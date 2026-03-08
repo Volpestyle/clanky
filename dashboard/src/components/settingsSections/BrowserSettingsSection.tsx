@@ -1,5 +1,6 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
+import { BROWSER_LLM_PROVIDER_OPTIONS, LlmProviderOptions } from "./LlmProviderOptions";
 
 export function BrowserSettingsSection({
   id,
@@ -55,8 +56,7 @@ export function BrowserSettingsSection({
                   value={form.browserLlmProvider}
                   onChange={setBrowserLlmProvider}
                 >
-                  <option value="anthropic">anthropic</option>
-                  <option value="openai">openai</option>
+                  <LlmProviderOptions options={BROWSER_LLM_PROVIDER_OPTIONS} />
                 </select>
               </div>
               <div>

@@ -59,7 +59,7 @@ export function VoiceModeSettingsSection({
   id,
   form,
   set,
-  showVoiceAdvanced,
+  showVoiceSettings,
   isVoiceAgentMode,
   isOpenAiRealtimeMode,
   isGeminiRealtimeMode,
@@ -102,7 +102,9 @@ export function VoiceModeSettingsSection({
     asrModeConfigVisible &&
     Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge);
   const usesBrainGeneration = isRealtimeMode && isBrainPath;
-  const classifierVisible = isRealtimeMode && isBridgePath && !form.voiceCommandOnlyMode;
+  const classifierAlwaysOn = isRealtimeMode && isBridgePath;
+  const classifierToggleable = isRealtimeMode && isBrainPath && !form.voiceCommandOnlyMode;
+  const classifierVisible = classifierAlwaysOn || classifierToggleable;
   const realtimeAdmissionMode = String(
     form.voiceReplyDecisionRealtimeAdmissionMode || "hard_classifier"
   )
@@ -143,7 +145,7 @@ export function VoiceModeSettingsSection({
         </label>
       </div>
 
-      <Collapse open={showVoiceAdvanced}>
+      <Collapse open={showVoiceSettings}>
           {/* ── Top: Runtime + Reply Path ── */}
           <label htmlFor="voice-mode">Voice runtime mode</label>
           <select id="voice-mode" value={form.voiceProvider} onChange={set("voiceProvider")}>
@@ -471,69 +473,76 @@ export function VoiceModeSettingsSection({
             </StagePanel>
           )}
 
-          {/* ── Stage 2: Reply Classifier (bridge mode only) ── */}
+          {/* ── Stage 2: Reply Classifier ── */}
           {classifierVisible && (
-            <StagePanel number={2} label="Reply Classifier" pathTag="Bridge">
-              <p>
-                Admission mode for bridge turns. In hard-classifier mode, each non-direct-address turn is gated by a YES/NO classifier before forwarding to realtime generation.
-              </p>
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-realtime-admission-mode">Realtime admission mode</label>
-                  <select
-                    id="voice-realtime-admission-mode"
-                    value={form.voiceReplyDecisionRealtimeAdmissionMode}
-                    onChange={set("voiceReplyDecisionRealtimeAdmissionMode")}
-                  >
-                    <option value="hard_classifier">hard_classifier</option>
-                    <option value="generation_only">generation_only</option>
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="voice-music-wake-latch-seconds">Music wake latch seconds</label>
-                  <input
-                    id="voice-music-wake-latch-seconds"
-                    type="number"
-                    min="5"
-                    max="60"
-                    step="1"
-                    value={form.voiceReplyDecisionMusicWakeLatchSeconds}
-                    onChange={set("voiceReplyDecisionMusicWakeLatchSeconds")}
-                  />
-                </div>
-              </div>
-              {hardClassifierMode && (
-                <div className="split">
-                  <div>
-                    <label htmlFor="voice-reply-decision-provider">Provider</label>
-                    <select
-                      id="voice-reply-decision-provider"
-                      value={form.voiceReplyDecisionLlmProvider}
-                      onChange={setVoiceReplyDecisionProvider}
-                    >
-                      <LlmProviderOptions />
-                    </select>
-                  </div>
-                  <div>
-                    <label htmlFor="voice-reply-decision-model-preset">Model ID</label>
-                    <select
-                      id="voice-reply-decision-model-preset"
-                      value={selectedVoiceReplyDecisionPresetModel}
-                      onChange={selectVoiceReplyDecisionPresetModel}
-                    >
-                      {voiceReplyDecisionModelOptions.map((modelId) => (
-                        <option key={modelId} value={modelId}>
-                          {modelId}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              )}
-              {!hardClassifierMode && (
+            <StagePanel number={2} label="Reply Classifier" pathTag={classifierAlwaysOn ? "Bridge" : "Brain"}>
+              {classifierAlwaysOn ? (
                 <p>
-                  Generation-only mode bypasses the classifier and lets bridge generation decide whether to reply.
+                  Each non-direct-address turn is gated by a YES/NO classifier before forwarding to generation.
                 </p>
+              ) : (
+                <>
+                  <p>
+                    In brain mode the generation LLM decides whether to reply. Enable the classifier to add an extra admission gate before generation.
+                  </p>
+                  <div className="split">
+                    <div>
+                      <label htmlFor="voice-realtime-admission-mode">Admission gate</label>
+                      <select
+                        id="voice-realtime-admission-mode"
+                        value={form.voiceReplyDecisionRealtimeAdmissionMode}
+                        onChange={set("voiceReplyDecisionRealtimeAdmissionMode")}
+                      >
+                        <option value="generation_only">Off (generation decides)</option>
+                        <option value="hard_classifier">On (classifier gate)</option>
+                      </select>
+                    </div>
+                  </div>
+                </>
+              )}
+              {(classifierAlwaysOn || hardClassifierMode) && (
+                <>
+                  <div className="split">
+                    <div>
+                      <label htmlFor="voice-music-wake-latch-seconds">Music wake latch seconds</label>
+                      <input
+                        id="voice-music-wake-latch-seconds"
+                        type="number"
+                        min="5"
+                        max="60"
+                        step="1"
+                        value={form.voiceReplyDecisionMusicWakeLatchSeconds}
+                        onChange={set("voiceReplyDecisionMusicWakeLatchSeconds")}
+                      />
+                    </div>
+                  </div>
+                  <div className="split">
+                    <div>
+                      <label htmlFor="voice-reply-decision-provider">Provider</label>
+                      <select
+                        id="voice-reply-decision-provider"
+                        value={form.voiceReplyDecisionLlmProvider}
+                        onChange={setVoiceReplyDecisionProvider}
+                      >
+                        <LlmProviderOptions />
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="voice-reply-decision-model-preset">Model ID</label>
+                      <select
+                        id="voice-reply-decision-model-preset"
+                        value={selectedVoiceReplyDecisionPresetModel}
+                        onChange={selectVoiceReplyDecisionPresetModel}
+                      >
+                        {voiceReplyDecisionModelOptions.map((modelId) => (
+                          <option key={modelId} value={modelId}>
+                            {modelId}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </>
               )}
             </StagePanel>
           )}

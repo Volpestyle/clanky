@@ -9,7 +9,7 @@ import {
   createClaudeCliStreamSession,
   parseClaudeCodeStreamOutput,
   parseClaudeCodeJsonOutput
-} from "../llm.ts";
+} from "./llmClaudeCode.ts";
 
 test("buildClaudeCodeStreamInput emits only context and user events (no stream system event)", () => {
   const input = buildClaudeCodeStreamInput({

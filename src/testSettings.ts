@@ -23,7 +23,7 @@ function inferLegacyPreset(raw: Record<string, unknown>) {
   if (llmProvider === "openai" && legacyVoiceProvider === "openai") {
     return "openai_native";
   }
-  return "anthropic_brain_openai_tools";
+  return "anthropic_api_openai_tools";
 }
 
 export function normalizeTestSettingsInput(overrides: unknown): Record<string, unknown> {

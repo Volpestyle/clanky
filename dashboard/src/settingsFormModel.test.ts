@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
+  applyStackPreset,
   formToSettingsPatch,
   resolveBrowserProviderModelOptions,
   resolveModelOptionsFromText,
@@ -284,14 +285,14 @@ test("resolvePresetModelSelection always resolves to a real dropdown option", ()
   });
   assert.equal(nonClaude.selectedPresetModel, "claude-haiku-4-5");
 
-  const claudeCode = resolvePresetModelSelection({
+  const claudeOAuth = resolvePresetModelSelection({
     modelCatalog: {
-      "claude-code": ["opus", "sonnet"]
+      "claude-oauth": ["claude-sonnet-4-6", "claude-haiku-4-5"]
     },
-    provider: "claude-code",
+    provider: "claude-oauth",
     model: "nonexistent"
   });
-  assert.equal(claudeCode.selectedPresetModel, "opus");
+  assert.equal(claudeOAuth.selectedPresetModel, "claude-sonnet-4-6");
 });
 
 test("resolveModelOptionsFromText normalizes model lists for dropdown options", () => {
@@ -413,19 +414,45 @@ test("settingsFormModel round-trips codex cli code agent fields", () => {
   assert.equal(patch.agentStack.runtimeConfig.devTeam.codexCli.model, "gpt-5.4");
 });
 
-test("settingsFormModel supports the claude_code_max preset", () => {
+test("settingsFormModel supports the claude_oauth_openai_tools preset", () => {
   const form = settingsToForm(normalizeSettings({
     agentStack: {
-      preset: "claude_code_max"
+      preset: "claude_oauth_openai_tools"
     }
   }));
 
-  assert.equal(form.stackPreset, "claude_code_max");
-  assert.equal(form.provider, "claude_code_session");
-  assert.equal(form.model, "max");
+  assert.equal(form.stackPreset, "claude_oauth_openai_tools");
+  assert.equal(form.provider, "claude-oauth");
+  assert.equal(form.model, "claude-opus-4-6");
+  assert.equal(form.voiceReplyDecisionRealtimeAdmissionMode, "generation_decides");
+  assert.equal(form.voiceReplyDecisionLlmProvider, "claude-oauth");
+  assert.equal(form.voiceReplyDecisionLlmModel, "claude-haiku-4-5");
+  assert.equal(form.voiceGenerationLlmUseTextModel, false);
+  assert.equal(form.voiceGenerationLlmProvider, "claude-oauth");
+  assert.equal(form.voiceGenerationLlmModel, "claude-sonnet-4-6");
 
   const patch = formToSettingsPatch(form);
-  assert.equal(patch.agentStack.preset, "claude_code_max");
+  assert.equal(patch.agentStack.preset, "claude_oauth_openai_tools");
+});
+
+test("applyStackPreset syncs claude oauth orchestrator and voice defaults", () => {
+  const base = settingsToForm(normalizeSettings({
+    agentStack: {
+      preset: "openai_native"
+    }
+  }));
+
+  const patched = applyStackPreset(base, "claude_oauth_openai_tools");
+
+  assert.equal(patched.stackPreset, "claude_oauth_openai_tools");
+  assert.equal(patched.provider, "claude-oauth");
+  assert.equal(patched.model, "claude-opus-4-6");
+  assert.equal(patched.voiceReplyDecisionRealtimeAdmissionMode, "generation_decides");
+  assert.equal(patched.voiceReplyDecisionLlmProvider, "claude-oauth");
+  assert.equal(patched.voiceReplyDecisionLlmModel, "claude-haiku-4-5");
+  assert.equal(patched.voiceGenerationLlmUseTextModel, false);
+  assert.equal(patched.voiceGenerationLlmProvider, "claude-oauth");
+  assert.equal(patched.voiceGenerationLlmModel, "claude-sonnet-4-6");
 });
 
 test("settingsFormModel round-trips elevenlabs realtime settings", () => {

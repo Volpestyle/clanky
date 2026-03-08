@@ -18,19 +18,17 @@ import {
   type ChatGenerationDeps
 } from "./llm/chatGeneration.ts";
 import {
-  callClaudeCode as callClaudeCodeRequest,
-  callClaudeCodeMemoryExtraction as callClaudeCodeMemoryExtractionRequest,
-  closeClaudeCodeSession,
-  runClaudeCodeBrainStream as runClaudeCodeBrainStreamRequest,
-  type ClaudeCodeServiceDeps
-} from "./llm/claudeCodeService.ts";
-import {
   callCodexCli as callCodexCliRequest,
   callCodexCliMemoryExtraction as callCodexCliMemoryExtractionRequest,
   closeCodexCliSession,
   runCodexCliBrainStream as runCodexCliBrainStreamRequest,
   type CodexCliServiceDeps
 } from "./llm/codexCliService.ts";
+import {
+  isClaudeOAuthConfigured,
+  createClaudeOAuthClient,
+  type ClaudeOAuthState
+} from "./llm/claudeOAuth.ts";
 import {
   embedText as embedTextRequest,
   isEmbeddingReady as isEmbeddingReadyRequest,
@@ -74,7 +72,6 @@ import {
   type ToolLoopChatDeps
 } from "./llm/toolLoopChat.ts";
 import {
-  normalizeClaudeCodeModel,
   normalizeDefaultModel,
   normalizeLlmProvider,
   normalizeXaiBaseUrl,
@@ -84,7 +81,6 @@ import {
   getReplyGenerationSettings,
   getResolvedOrchestratorBinding
 } from "./settings/agentStack.ts";
-import type { ClaudeCliStreamSessionLike } from "./llm/llmClaudeCode.ts";
 import type { CodexCliStreamSessionLike } from "./llm/llmCodexCli.ts";
 
 export {
@@ -103,9 +99,7 @@ export class LLMService {
   openai: OpenAI | null;
   xai: OpenAI | null;
   anthropic: Anthropic | null;
-  claudeCodeAvailable: boolean;
-  claudeCodeBrainSession: ClaudeCliStreamSessionLike | null;
-  claudeCodeBrainModel: string;
+  claudeOAuth: ClaudeOAuthState | null;
   codexCliAvailable: boolean;
   codexCliBrainSession: CodexCliStreamSessionLike | null;
   codexCliBrainModel: string;
@@ -125,17 +119,14 @@ export class LLMService {
       ? new Anthropic({ apiKey: appConfig.anthropicApiKey })
       : null;
 
-    this.claudeCodeAvailable = false;
-    try {
-      const result = spawnSync("claude", ["--version"], { encoding: "utf8", timeout: 5000 });
-      const versionOutput = String(result?.stdout || result?.stderr || "").trim();
-      this.claudeCodeAvailable = result?.status === 0 && Boolean(versionOutput);
-    } catch {
-      this.claudeCodeAvailable = false;
+    this.claudeOAuth = null;
+    if (isClaudeOAuthConfigured(appConfig.claudeOAuthRefreshToken || "")) {
+      try {
+        this.claudeOAuth = createClaudeOAuthClient(appConfig.claudeOAuthRefreshToken || "");
+      } catch (error) {
+        console.error("[claude-oauth] Failed to initialize:", error);
+      }
     }
-
-    this.claudeCodeBrainSession = null;
-    this.claudeCodeBrainModel = "";
 
     this.codexCliAvailable = false;
     try {
@@ -149,11 +140,13 @@ export class LLMService {
     this.codexCliBrainModel = "";
   }
 
-  private chatDeps(): ChatGenerationDeps {
+  private chatDeps(provider?: string): ChatGenerationDeps {
     return {
       openai: this.openai,
       xai: this.xai,
-      anthropic: this.anthropic
+      anthropic: provider === "claude-oauth" && this.claudeOAuth
+        ? this.claudeOAuth.client
+        : this.anthropic
     };
   }
 
@@ -181,20 +174,6 @@ export class LLMService {
     };
   }
 
-  private claudeCodeDeps(): ClaudeCodeServiceDeps {
-    return {
-      claudeCodeAvailable: this.claudeCodeAvailable,
-      getBrainSession: () => this.claudeCodeBrainSession,
-      setBrainSession: (session) => {
-        this.claudeCodeBrainSession = session;
-      },
-      getBrainModel: () => this.claudeCodeBrainModel,
-      setBrainModel: (model) => {
-        this.claudeCodeBrainModel = model;
-      }
-    };
-  }
-
   private codexCliDeps(): CodexCliServiceDeps {
     return {
       codexCliAvailable: this.codexCliAvailable,
@@ -214,10 +193,9 @@ export class LLMService {
       openai: this.openai,
       xai: this.xai,
       anthropic: this.anthropic,
+      claudeOAuthClient: this.claudeOAuth?.client ?? null,
       store: this.store,
       resolveProviderAndModel: (llmSettings) => this.resolveProviderAndModel(llmSettings),
-      callClaudeCodeMemoryExtraction: (request) =>
-        callClaudeCodeMemoryExtractionRequest(this.claudeCodeDeps(), request),
       callCodexCliMemoryExtraction: (request) =>
         callCodexCliMemoryExtractionRequest(this.codexCliDeps(), request)
     };
@@ -227,6 +205,7 @@ export class LLMService {
     return {
       openai: this.openai,
       anthropic: this.anthropic,
+      claudeOAuthClient: this.claudeOAuth?.client ?? null,
       store: this.store
     };
   }
@@ -285,7 +264,7 @@ export class LLMService {
       messageId: trace.messageId == null ? null : String(trace.messageId)
     };
     const effectiveSystemPrompt =
-      normalizedJsonSchema && provider !== "claude-code" && provider !== "codex-cli" && provider !== "codex_cli_session" && provider !== "openai"
+      normalizedJsonSchema && provider !== "codex-cli" && provider !== "codex_cli_session" && provider !== "openai"
         ? appendJsonSchemaInstruction(systemPrompt, normalizedJsonSchema)
         : systemPrompt;
 
@@ -366,8 +345,8 @@ export class LLMService {
     provider: string,
     payload: ChatModelRequest & { trace?: LlmTrace }
   ) {
-    if (provider === "claude-code") {
-      return callClaudeCodeRequest(this.claudeCodeDeps(), payload);
+    if (provider === "claude-oauth") {
+      return callAnthropicRequest(this.chatDeps("claude-oauth"), payload);
     }
     if (provider === "codex-cli" || provider === "codex_cli_session") {
       return callCodexCliRequest(this.codexCliDeps(), payload);
@@ -410,29 +389,12 @@ export class LLMService {
     return callAnthropicMemoryExtractionRequest(this.memoryExtractionDeps(), payload);
   }
 
-  async callClaudeCode(payload: ChatModelRequest & { trace?: LlmTrace }) {
-    return callClaudeCodeRequest(this.claudeCodeDeps(), payload);
-  }
-
   async callCodexCli(payload: ChatModelRequest & { trace?: LlmTrace }) {
     return callCodexCliRequest(this.codexCliDeps(), payload);
   }
 
-  async callClaudeCodeMemoryExtraction(payload: MemoryExtractionRequest): Promise<MemoryExtractionResponse> {
-    return callClaudeCodeMemoryExtractionRequest(this.claudeCodeDeps(), payload);
-  }
-
   async callCodexCliMemoryExtraction(payload: MemoryExtractionRequest): Promise<MemoryExtractionResponse> {
     return callCodexCliMemoryExtractionRequest(this.codexCliDeps(), payload);
-  }
-
-  async runClaudeCodeBrainStream(args: {
-    model: string;
-    input: string;
-    timeoutMs: number;
-    maxBufferBytes: number;
-  }) {
-    return runClaudeCodeBrainStreamRequest(this.claudeCodeDeps(), args);
   }
 
   async runCodexCliBrainStream(args: {
@@ -445,7 +407,6 @@ export class LLMService {
   }
 
   close() {
-    closeClaudeCodeSession(this.claudeCodeDeps());
     closeCodexCliSession(this.codexCliDeps());
   }
 
@@ -534,9 +495,9 @@ export class LLMService {
       .trim()
       .slice(0, 120);
 
-    if (desiredProvider === "claude-code" && !this.isProviderConfigured("claude-code")) {
+    if (desiredProvider === "claude-oauth" && !this.isProviderConfigured("claude-oauth")) {
       throw new Error(
-        "LLM provider is set to claude-code, but the `claude` CLI is not available on PATH for this process. Ensure `which claude` works in the same shell/service environment that starts the bot, then restart."
+        "LLM provider is set to claude-oauth, but no OAuth tokens are configured. Set CLAUDE_OAUTH_REFRESH_TOKEN or create data/claude-oauth-tokens.json."
       );
     }
     if ((desiredProvider === "codex-cli" || desiredProvider === "codex_cli_session") && !this.isProviderConfigured(desiredProvider)) {
@@ -549,27 +510,18 @@ export class LLMService {
 
     for (const provider of fallbackProviders) {
       if (!this.isProviderConfigured(provider)) continue;
-      let model = provider === desiredProvider && desiredModel ? desiredModel : this.resolveDefaultModel(provider);
-      if (provider === "claude-code") {
-        const normalizedClaudeCodeModel = normalizeClaudeCodeModel(model);
-        if (!normalizedClaudeCodeModel) {
-          throw new Error(
-            `Invalid claude-code model '${model}'. Use one of: sonnet, opus, haiku.`
-          );
-        }
-        model = normalizedClaudeCodeModel;
-      }
+      const model = provider === desiredProvider && desiredModel ? desiredModel : this.resolveDefaultModel(provider);
       return {
         provider,
         model
       };
     }
 
-    throw new Error("No LLM provider available. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, XAI_API_KEY, or install the claude CLI.");
+    throw new Error("No LLM provider available. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, XAI_API_KEY, or CLAUDE_OAUTH_REFRESH_TOKEN.");
   }
 
   isProviderConfigured(provider: string) {
-    if (provider === "claude-code") return Boolean(this.claudeCodeAvailable);
+    if (provider === "claude-oauth") return Boolean(this.claudeOAuth);
     if (provider === "codex-cli") return Boolean(this.codexCliAvailable);
     if (provider === "codex_cli_session") return Boolean(this.codexCliAvailable);
     if (provider === "anthropic") return Boolean(this.anthropic);
@@ -578,8 +530,8 @@ export class LLMService {
   }
 
   resolveDefaultModel(provider: string) {
-    if (provider === "claude-code") {
-      return normalizeDefaultModel(this.appConfig?.defaultClaudeCodeModel, "sonnet");
+    if (provider === "claude-oauth") {
+      return normalizeDefaultModel(this.appConfig?.defaultClaudeOAuthModel, "claude-sonnet-4-6");
     }
     if (provider === "codex-cli" || provider === "codex_cli_session") {
       return normalizeDefaultModel(this.appConfig?.defaultCodexCliModel, "gpt-5.4");
@@ -619,16 +571,11 @@ export class LLMService {
 }
 
 export {
-  buildClaudeCodeCliArgs,
-  buildClaudeCodeFallbackPrompt,
-  buildClaudeCodeJsonCliArgs,
-  buildClaudeCodeStreamInput,
-  buildClaudeCodeSystemPrompt,
-  buildClaudeCodeTextCliArgs,
-  createClaudeCliStreamSession,
-  parseClaudeCodeJsonOutput,
-  parseClaudeCodeStreamOutput
-} from "./llm/llmClaudeCode.ts";
+  isClaudeOAuthConfigured,
+  createClaudeOAuthClient,
+  buildAuthorizeUrl as buildClaudeOAuthAuthorizeUrl,
+  exchangeCodeForTokens as exchangeClaudeOAuthCode
+} from "./llm/claudeOAuth.ts";
 
 export {
   buildCodexCliBrainArgs,

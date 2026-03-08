@@ -5,15 +5,12 @@ export function useActiveSection(ids: readonly string[]) {
   const isClickScrolling = useRef(false);
   const scrollTimeout = useRef<number | null>(null);
   const rafId = useRef(0);
-  const scheduleUpdateRef = useRef<() => void>(() => {});
+  const scheduleUpdateRef = useRef<() => void>(() => { });
 
   useEffect(() => {
     function update() {
       if (isClickScrolling.current) return;
 
-      // Pick the last section whose top has scrolled above 30% of the viewport.
-      // This gives a natural "you're now reading this section" feel.
-      const line = window.innerHeight * 0.3;
       let best = ids[0] || "";
       let foundVisibleSection = false;
 
@@ -23,8 +20,14 @@ export function useActiveSection(ids: readonly string[]) {
         const rect = el.getBoundingClientRect();
         if (rect.height <= 0) continue;
         foundVisibleSection = true;
-        if (rect.top <= line) {
+
+        // An element is "active" if it is the first section from the top
+        // that is still substantially visible. The threshold scales with height
+        // to flawlessly handle very small sections without being prematurely overridden.
+        const threshold = Math.min(100, Math.max(10, rect.height * 0.3));
+        if (rect.bottom > threshold) {
           best = id;
+          break;
         }
       }
 

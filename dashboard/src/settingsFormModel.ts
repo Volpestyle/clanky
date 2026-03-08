@@ -3,6 +3,7 @@ import {
   PROVIDER_MODEL_FALLBACKS,
   type SettingsInput
 } from "../../src/settings/settingsSchema.ts";
+import { normalizeSettings } from "../../src/store/settingsNormalization.ts";
 import { normalizeLlmProvider } from "../../src/llm/llmHelpers.ts";
 import {
   formatCommaList,
@@ -53,6 +54,7 @@ import {
   getVoiceTranscriptionSettings,
   resolveAgentStack
 } from "../../src/settings/agentStack.ts";
+import { resolveAgentStackPresetConfig } from "../../src/store/normalize/shared.ts";
 
 export const OPENAI_REALTIME_MODEL_OPTIONS = Object.freeze([
   "gpt-realtime",
@@ -141,6 +143,10 @@ function buildSettingsFormView(settings: unknown) {
   const voiceRuntime = getVoiceRuntimeConfig(source);
   const voiceGenerationBinding = getResolvedVoiceGenerationBinding(source);
   const voiceClassifierBinding = getResolvedVoiceAdmissionClassifierBinding(source);
+  const presetConfig = resolveAgentStackPresetConfig(agentStack as Record<string, unknown>);
+  const voiceClassifierFallback = voiceClassifierBinding
+    || presetConfig.presetVoiceAdmissionClassifierFallback
+    || orchestrator;
   const voiceStreamWatch = getVoiceStreamWatchSettings(source);
   const voiceSoundboard = getVoiceSoundboardSettings(source);
   const startup = getStartupSettings(source);
@@ -275,8 +281,8 @@ function buildSettingsFormView(settings: unknown) {
       replyDecisionLlm: {
         realtimeAdmissionMode: voiceAdmission.mode,
         musicWakeLatchSeconds: voiceAdmission.musicWakeLatchSeconds,
-        provider: voiceClassifierBinding?.provider || orchestrator.provider,
-        model: voiceClassifierBinding?.model || orchestrator.model
+        provider: voiceClassifierFallback.provider,
+        model: voiceClassifierFallback.model
       },
       generationLlm: {
         useTextModel: voiceRuntime.generation?.mode !== "dedicated_model",
@@ -654,6 +660,26 @@ export function settingsToForm(settings: unknown) {
 }
 
 export type SettingsForm = ReturnType<typeof settingsToForm>;
+
+export function applyStackPreset(form: SettingsForm, preset: string): SettingsForm {
+  const presetForm = settingsToForm(normalizeSettings({
+    agentStack: {
+      preset
+    }
+  }));
+  return {
+    ...form,
+    stackPreset: presetForm.stackPreset,
+    provider: presetForm.provider,
+    model: presetForm.model,
+    voiceReplyDecisionRealtimeAdmissionMode: presetForm.voiceReplyDecisionRealtimeAdmissionMode,
+    voiceReplyDecisionLlmProvider: presetForm.voiceReplyDecisionLlmProvider,
+    voiceReplyDecisionLlmModel: presetForm.voiceReplyDecisionLlmModel,
+    voiceGenerationLlmUseTextModel: presetForm.voiceGenerationLlmUseTextModel,
+    voiceGenerationLlmProvider: presetForm.voiceGenerationLlmProvider,
+    voiceGenerationLlmModel: presetForm.voiceGenerationLlmModel
+  };
+}
 
 export function formToSettingsPatch(form: SettingsForm): SettingsInput {
   const discoveryExternalEnabled = Boolean(form.discoveryExternalEnabled);

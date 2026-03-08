@@ -23,11 +23,9 @@ export type MemoryExtractionDeps = {
   openai: OpenAI | null;
   xai: OpenAI | null;
   anthropic: Anthropic | null;
+  claudeOAuthClient: Anthropic | null;
   store: LlmActionStore;
   resolveProviderAndModel: (llmSettings: unknown) => { provider: string; model: string };
-  callClaudeCodeMemoryExtraction: (
-    request: MemoryExtractionRequest
-  ) => Promise<MemoryExtractionResponse>;
   callCodexCliMemoryExtraction: (
     request: MemoryExtractionRequest
   ) => Promise<MemoryExtractionResponse>;
@@ -44,8 +42,11 @@ export async function callMemoryExtractionModel(
   provider: string,
   payload: MemoryExtractionRequest
 ) {
-  if (provider === "claude-code") {
-    return deps.callClaudeCodeMemoryExtraction(payload);
+  if (provider === "claude-oauth") {
+    return callAnthropicMemoryExtraction(
+      { ...deps, anthropic: deps.claudeOAuthClient },
+      payload
+    );
   }
   if (provider === "codex-cli" || provider === "codex_cli_session") {
     return deps.callCodexCliMemoryExtraction(payload);

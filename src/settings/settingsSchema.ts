@@ -1,32 +1,30 @@
 export const PROVIDER_MODEL_FALLBACKS = {
   openai: ["gpt-5-mini", "gpt-5", "gpt-4.1-mini"],
   anthropic: ["claude-haiku-4-5", "claude-sonnet-4-6"],
-  claude_code_session: ["max"],
+  "claude-oauth": ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-6"],
   codex_cli_session: ["gpt-5.4"],
   xai: ["grok-3-mini-latest"],
-  "claude-code": ["sonnet"],
   codex: ["gpt-5-codex"],
   "codex-cli": ["gpt-5.4", "gpt-5-codex"]
 } as const;
 
 export const AGENT_STACK_PRESETS = [
   "openai_native",
-  "anthropic_brain_openai_tools",
-  "claude_code_max",
+  "anthropic_api_openai_tools",
+  "claude_oauth_openai_tools",
   "custom"
 ] as const;
 
-export const AGENT_HARNESS_KINDS = ["internal", "openai_agents", "claude_code_session"] as const;
+export const AGENT_HARNESS_KINDS = ["internal", "openai_agents"] as const;
 
 export const MODEL_PROVIDER_KINDS = [
   "openai",
   "anthropic",
   "ai_sdk_anthropic",
   "litellm",
-  "claude_code_session",
+  "claude-oauth",
   "codex_cli_session",
   "xai",
-  "claude-code",
   "codex",
   "codex-cli"
 ] as const;
@@ -58,8 +56,7 @@ export const VOICE_ADMISSION_MODES = [
 
 export const CODING_WORKER_RUNTIME_KINDS = [
   "codex",
-  "codex_cli",
-  "claude_code"
+  "codex_cli"
 ] as const;
 
 type Primitive = string | number | boolean | bigint | symbol | null | undefined;
@@ -146,7 +143,7 @@ export const DEFAULT_SETTINGS = {
         "You have persistent memory across conversations via saved durable facts and logs. Do not claim each conversation starts from zero.",
       memoryDisabledLine:
         "Persistent memory is disabled right now. Do not claim long-term memory across separate conversations.",
-      skipLine: "If you should not send a message, output exactly [SKIP]."
+      skipLine: "If you should not or don't want to send a message, output exactly [SKIP]."
     },
     text: {
       guidance: [
@@ -160,9 +157,7 @@ export const DEFAULT_SETTINGS = {
         "Talk like a person hanging out, not like an assistant.",
         "Be open, direct, and helpful whenever it makes sense.",
         "Ask questions when you're curious or when it keeps the conversation moving.",
-        "If the frame appears to be gameplay, react like live play-by-play with specific on-screen details.",
-        "If the frame is not gameplay, give observational commentary about what the streamer is watching.",
-        "Only describe what is visible right now; if uncertain, say that plainly."
+        "Give exciting, humorous and silly  reactions to screen shares when it feels right."
       ],
       operationalGuidance: [
         "Keep it clear and simple. No overexplaining.",
@@ -171,7 +166,7 @@ export const DEFAULT_SETTINGS = {
         "Avoid dramatic wording, blame, apology spirals, and long postmortems."
       ],
       lookupBusySystemPrompt:
-        "Output one short spoken line only (4-12 words).\nLine must clearly indicate you're checking something on the web right now.\nKeep it natural and direct. No markdown, no tags, no directives."
+        "Output one short spoken line only (4-12 words).\nIndicate you're looking up something.\nKeep it natural."
     },
     media: {
       promptCraftGuidance:
@@ -253,7 +248,7 @@ export const DEFAULT_SETTINGS = {
         model: "claude-sonnet-4-6"
       },
       devTeam: {
-        codingWorkers: ["codex", "codex_cli", "claude_code"],
+        codingWorkers: ["codex", "codex_cli"],
         orchestrator: {
           provider: "anthropic",
           model: "claude-sonnet-4-6"
@@ -349,7 +344,7 @@ export const DEFAULT_SETTINGS = {
           }
         }
       },
-      claudeCodeSession: {
+      claudeOAuthSession: {
         sessionScope: "guild",
         inactivityTimeoutMs: 1_800_000,
         contextPruningStrategy: "summarize",

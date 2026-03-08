@@ -38,12 +38,25 @@ export function normalizeSettings(raw: unknown): Settings {
 
   const rawAgentStack = isRecord(canonicalInput.agentStack) ? canonicalInput.agentStack : {};
   const rawOverrides = isRecord(rawAgentStack.overrides) ? rawAgentStack.overrides : {};
+  const rawVoice = isRecord(canonicalInput.voice) ? canonicalInput.voice : {};
+  const rawVoiceAdmission = isRecord(rawVoice.admission) ? rawVoice.admission : {};
   const presetConfig = resolveAgentStackPresetConfig(rawAgentStack);
   const orchestratorOverride = normalizeModelBinding(
     rawOverrides.orchestrator,
     presetConfig.presetOrchestratorFallback.provider,
     presetConfig.presetOrchestratorFallback.model
   );
+  const normalizedVoiceBase = normalizeVoiceSection(merged.voice);
+  const normalizedVoice =
+    rawVoiceAdmission.mode === undefined && presetConfig.presetVoiceAdmissionMode
+      ? {
+          ...normalizedVoiceBase,
+          admission: {
+            ...normalizedVoiceBase.admission,
+            mode: presetConfig.presetVoiceAdmissionMode
+          }
+        }
+      : normalizedVoiceBase;
 
   return {
     identity: normalizeIdentitySection(merged.identity),
@@ -61,7 +74,7 @@ export function normalizeSettings(raw: unknown): Settings {
     memory: normalizeMemorySection(merged.memory),
     directives: normalizeDirectivesSection(merged.directives),
     initiative: normalizeInitiativeSection(merged.initiative),
-    voice: normalizeVoiceSection(merged.voice),
+    voice: normalizedVoice,
     media: normalizeMediaSection(merged.media),
     music: normalizeMusicSection(merged.music),
     automations: normalizeAutomationsSection(merged.automations)

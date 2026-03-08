@@ -42,20 +42,33 @@ export function normalizeAgentStackSection(
   const research = runtimeConfig.research;
   const browser = runtimeConfig.browser;
   const voice = runtimeConfig.voice;
-  const claudeCodeSession = runtimeConfig.claudeCodeSession;
+  const claudeOAuthSession = runtimeConfig.claudeOAuthSession;
   const codexCliSession = runtimeConfig.codexCliSession;
   const devTeam = runtimeConfig.devTeam;
   const rawDevTeamOverride = isRecord(rawOverrides.devTeam) ? rawOverrides.devTeam : null;
+  const rawRuntimeConfig = isRecord(rawAgentStack.runtimeConfig) ? rawAgentStack.runtimeConfig : {};
+  const rawVoiceRuntime = isRecord(rawRuntimeConfig.voice) ? rawRuntimeConfig.voice : {};
+  const rawVoiceGeneration = rawVoiceRuntime.generation;
+  const rawVoiceAdmissionOverride = rawOverrides.voiceAdmissionClassifier;
 
   const overrides: Settings["agentStack"]["overrides"] = {
-    orchestrator: orchestratorOverride,
-    voiceAdmissionClassifier: normalizeExecutionPolicy(
-      rawOverrides.voiceAdmissionClassifier,
-      presetConfig.presetVoiceAdmissionClassifierFallback.provider,
-      presetConfig.presetVoiceAdmissionClassifierFallback.model,
-      { fallbackMode: "dedicated_model" }
-    )
+    orchestrator: orchestratorOverride
   };
+
+  if (rawVoiceAdmissionOverride !== undefined || presetConfig.presetVoiceAdmissionClassifierFallback) {
+    const fallback = presetConfig.presetVoiceAdmissionClassifierFallback
+      || presetConfig.presetOrchestratorFallback;
+    const shouldSeedClassifierOverride =
+      rawVoiceAdmissionOverride !== undefined || presetConfig.presetVoiceAdmissionMode !== "generation_decides";
+    if (shouldSeedClassifierOverride) {
+      overrides.voiceAdmissionClassifier = normalizeExecutionPolicy(
+        rawVoiceAdmissionOverride,
+        fallback.provider,
+        fallback.model,
+        { fallbackMode: "dedicated_model" }
+      );
+    }
+  }
 
   const harness = normalizeOptionalString(rawOverrides.harness, 64);
   if (harness) overrides.harness = harness;
@@ -333,36 +346,45 @@ export function normalizeAgentStackSection(
             4
           )
         },
-        generation: normalizeExecutionPolicy(voice.generation, "anthropic", "claude-sonnet-4-6")
+        generation:
+          rawVoiceGeneration === undefined && presetConfig.presetVoiceGenerationFallback
+            ? {
+                mode: "dedicated_model",
+                model: {
+                  provider: presetConfig.presetVoiceGenerationFallback.provider,
+                  model: presetConfig.presetVoiceGenerationFallback.model
+                }
+              }
+            : normalizeExecutionPolicy(voice.generation, "anthropic", "claude-sonnet-4-6")
       },
-      claudeCodeSession: {
+      claudeOAuthSession: {
         sessionScope: normalizeClaudeCodeSessionScope(
-          claudeCodeSession.sessionScope,
-          DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.sessionScope
+          claudeOAuthSession.sessionScope,
+          DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeOAuthSession.sessionScope
         ),
         inactivityTimeoutMs: normalizeInt(
-          claudeCodeSession.inactivityTimeoutMs,
-          DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.inactivityTimeoutMs,
+          claudeOAuthSession.inactivityTimeoutMs,
+          DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeOAuthSession.inactivityTimeoutMs,
           10_000,
           12 * 60 * 60 * 1000
         ),
         contextPruningStrategy: normalizeClaudeCodeContextPruningStrategy(
-          claudeCodeSession.contextPruningStrategy,
-          DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.contextPruningStrategy
+          claudeOAuthSession.contextPruningStrategy,
+          DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeOAuthSession.contextPruningStrategy
         ),
         maxPinnedStateChars: normalizeInt(
-          claudeCodeSession.maxPinnedStateChars,
-          DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.maxPinnedStateChars,
+          claudeOAuthSession.maxPinnedStateChars,
+          DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeOAuthSession.maxPinnedStateChars,
           0,
           200_000
         ),
         voiceToolPolicy: normalizeAgentSessionToolPolicy(
-          claudeCodeSession.voiceToolPolicy,
-          DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.voiceToolPolicy
+          claudeOAuthSession.voiceToolPolicy,
+          DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeOAuthSession.voiceToolPolicy
         ),
         textToolPolicy: normalizeAgentSessionToolPolicy(
-          claudeCodeSession.textToolPolicy,
-          DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession.textToolPolicy
+          claudeOAuthSession.textToolPolicy,
+          DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeOAuthSession.textToolPolicy
         )
       },
       codexCliSession: {

@@ -1,12 +1,11 @@
 import type OpenAI from "openai";
 import {
-  runClaudeCli,
-  buildCodeAgentCliArgs,
   buildCodeAgentSessionCliArgs,
   buildCodeAgentSessionTurnInput,
   parseClaudeCodeStreamOutput,
   normalizeClaudeCodeCliError,
-  createClaudeCliStreamSession
+  createClaudeCliStreamSession,
+  type ClaudeCliStreamSessionLike
 } from "../llm/llmClaudeCode.ts";
 import {
   buildCodexCliCodeAgentArgs,
@@ -15,7 +14,6 @@ import {
   runCodexCli
 } from "../llm/llmCodexCli.ts";
 import { runCodexTask } from "../llm/llmCodex.ts";
-import type { ClaudeCliStreamSessionLike } from "../llm/llmClaudeCode.ts";
 import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
 import { generateSessionId } from "./subAgentSession.ts";
 import { CodexAgentSession, getActiveCodexAgentTaskCount } from "./codexAgent.ts";
@@ -36,11 +34,11 @@ interface CodeAgentTrace {
   source?: string | null;
 }
 
-export type CodeAgentProvider = "claude-code" | "codex" | "codex-cli" | "auto";
+export type CodeAgentProvider = "codex" | "codex-cli" | "auto";
 
-const CODE_AGENT_PROVIDER_VALUES = new Set<CodeAgentProvider>(["claude-code", "codex", "codex-cli", "auto"]);
+const CODE_AGENT_PROVIDER_VALUES = new Set<CodeAgentProvider>(["codex", "codex-cli", "auto"]);
 
-function normalizeCodeAgentProvider(value: unknown, fallback: CodeAgentProvider = "claude-code"): CodeAgentProvider {
+function normalizeCodeAgentProvider(value: unknown, fallback: CodeAgentProvider = "codex-cli"): CodeAgentProvider {
   const normalized = String(value || "")
     .trim()
     .toLowerCase() as CodeAgentProvider;
@@ -50,8 +48,7 @@ function normalizeCodeAgentProvider(value: unknown, fallback: CodeAgentProvider 
 
 function resolveEffectiveCodeAgentProvider(provider: CodeAgentProvider): Exclude<CodeAgentProvider, "auto"> {
   if (provider === "codex") return "codex";
-  if (provider === "codex-cli") return "codex-cli";
-  return "claude-code";
+  return "codex-cli";
 }
 
 interface CodeAgentOptions {
@@ -94,7 +91,7 @@ export function getActiveCodeAgentTaskCount(): number {
 export function isCodeAgentUserAllowed(userId: string, settings: Record<string, unknown>): boolean {
   const devPermissions = getDevTaskPermissions(settings);
   const devRuntime = getDevTeamRuntimeConfig(settings);
-  if (!devRuntime.codex?.enabled && !devRuntime.codexCli?.enabled && !devRuntime.claudeCode?.enabled) return false;
+  if (!devRuntime.codex?.enabled && !devRuntime.codexCli?.enabled) return false;
   const allowedUserIds = devPermissions.allowedUserIds;
   if (!Array.isArray(allowedUserIds) || allowedUserIds.length === 0) return false;
   return allowedUserIds.includes(String(userId || ""));
@@ -127,26 +124,20 @@ export function resolveCodeAgentConfig(settings: Record<string, unknown>, cwdOve
   const preferredWorker =
     implementationProvider === "codex"
       ? "codex"
-      : implementationProvider === "codex-cli"
-        ? "codex_cli"
-      : implementationProvider === "claude-code"
-        ? "claude_code"
-        : resolvedStack.devTeam.codingWorkers[0] || "claude_code";
+      : resolvedStack.devTeam.codingWorkers[0] || "codex_cli";
   const primaryWorkerConfig =
     preferredWorker === "codex"
       ? devRuntime.codex
-      : preferredWorker === "codex_cli"
-        ? devRuntime.codexCli
-      : devRuntime.claudeCode;
+      : devRuntime.codexCli;
   const cwd = cwdOverride || resolveCodeAgentCwd(
     String(primaryWorkerConfig?.defaultCwd || ""),
     process.cwd()
   );
   const provider = normalizeCodeAgentProvider(
-    preferredWorker === "codex" ? "codex" : preferredWorker === "codex_cli" ? "codex-cli" : "claude-code",
-    "claude-code"
+    preferredWorker === "codex" ? "codex" : "codex-cli",
+    "codex-cli"
   );
-  const model = String(devRuntime.claudeCode?.model || "sonnet").trim();
+  const model = String(devRuntime.codexCli?.model || "gpt-5.4").trim();
   const codexModel = String(devRuntime.codex?.model || "codex-mini-latest").trim() || "codex-mini-latest";
   const codexCliModel = String(devRuntime.codexCli?.model || "gpt-5.4").trim() || "gpt-5.4";
   const maxTurns = clamp(Number(primaryWorkerConfig?.maxTurns) || 30, 1, 200);
@@ -279,72 +270,17 @@ export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgent
       return agentResult;
     }
 
-    const args = buildCodeAgentCliArgs({
-      model,
-      maxTurns,
-      instruction
-    });
-    const result = await runClaudeCli({
-      args,
-      input: "",
-      timeoutMs,
-      maxBufferBytes,
-      cwd,
-      signal
-    });
-    const parsed = parseClaudeCodeStreamOutput(result.stdout);
-    const agentResult: CodeAgentResult = parsed
-      ? {
-          text: parsed.text,
-          costUsd: parsed.costUsd,
-          isError: parsed.isError,
-          errorMessage: parsed.isError ? parsed.errorMessage : "",
-          usage: parsed.usage
-        }
-      : {
-          text: result.stdout.slice(0, 2000) || "Code agent completed with no parseable output.",
-          costUsd: 0,
-          isError: false,
-          errorMessage: "",
-          usage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 }
-        };
-
-    store.logAction({
-      kind: "code_agent_call",
-      guildId: trace.guildId || null,
-      channelId: trace.channelId || null,
-      userId: trace.userId || null,
-      content: instruction.slice(0, 200),
-      metadata: {
-        provider: "claude-code",
-        configuredProvider: provider,
-        model,
-        maxTurns,
-        cwd,
-        isError: agentResult.isError,
-        usage: agentResult.usage,
-        source: trace.source,
-        durationMs: Date.now() - startMs
-      },
-      usdCost: agentResult.costUsd
-    });
-
-    return agentResult;
+    throw new Error(`Unsupported code agent provider: ${resolvedProvider}`);
   } catch (error) {
     if (isAbortError(error) || signal?.aborted) {
       throw createAbortError(signal?.reason || error);
     }
-    const normalized = resolvedProvider === "claude-code"
-      ? normalizeClaudeCodeCliError(error, {
+    const normalized = resolvedProvider === "codex-cli"
+      ? normalizeCodexCliError(error, {
           timeoutPrefix: "Code agent timed out",
           timeoutMs
         })
-      : resolvedProvider === "codex-cli"
-        ? normalizeCodexCliError(error, {
-            timeoutPrefix: "Code agent timed out",
-            timeoutMs
-          })
-        : {
+      : {
           isTimeout: /\btimed out\b/i.test(String((error as Error)?.message || "")),
           message: String((error as Error)?.message || "Code agent failed.")
         };

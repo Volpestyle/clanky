@@ -45,6 +45,7 @@ type PresetDefaults = {
     mode: string;
   };
   voiceAdmissionClassifier?: Required<ModelBinding>;
+  voiceGeneration?: Required<ModelBinding>;
   sessionPolicy?: AgentSessionPolicy;
   devTeam: {
     orchestrator: Required<ModelBinding>;
@@ -118,15 +119,15 @@ const PRESET_DEFAULTS = {
         model: "gpt-5"
       },
       roles: {
-        design: dedicatedModel("claude-code", "sonnet"),
+        design: dedicatedModel("anthropic", "claude-sonnet-4-6"),
         implementation: dedicatedModel("codex", "gpt-5-codex"),
-        review: dedicatedModel("claude-code", "sonnet"),
+        review: dedicatedModel("anthropic", "claude-sonnet-4-6"),
         research: inheritOrchestrator()
       },
-      codingWorkers: ["codex", "codex_cli", "claude_code"]
+      codingWorkers: ["codex", "codex_cli"]
     }
   },
-  anthropic_brain_openai_tools: {
+  anthropic_api_openai_tools: {
     harness: "internal",
     orchestrator: {
       provider: "anthropic",
@@ -148,49 +149,46 @@ const PRESET_DEFAULTS = {
         model: "claude-sonnet-4-6"
       },
       roles: {
-        design: dedicatedModel("claude-code", "sonnet"),
-        implementation: dedicatedModel("claude-code", "sonnet"),
-        review: dedicatedModel("claude-code", "sonnet"),
+        design: dedicatedModel("anthropic", "claude-sonnet-4-6"),
+        implementation: dedicatedModel("anthropic", "claude-sonnet-4-6"),
+        review: dedicatedModel("anthropic", "claude-sonnet-4-6"),
         research: inheritOrchestrator()
       },
-      codingWorkers: ["claude_code", "codex_cli", "codex"]
+      codingWorkers: ["codex_cli", "codex"]
     }
   },
-  claude_code_max: {
-    harness: "claude_code_session",
+  claude_oauth_openai_tools: {
+    harness: "internal",
     orchestrator: {
-      provider: "claude_code_session",
-      model: "max"
+      provider: "claude-oauth",
+      model: "claude-opus-4-6"
     },
     researchRuntime: "local_external_search",
     browserRuntime: "local_browser_agent",
     voiceRuntime: "openai_realtime",
     voiceAdmissionPolicy: {
-      mode: "adaptive"
+      mode: "generation_decides"
     },
     voiceAdmissionClassifier: {
-      provider: "claude_code_session",
-      model: "max"
+      provider: "claude-oauth",
+      model: "claude-haiku-4-5"
     },
-    sessionPolicy: {
-      persistent: true,
-      toolPolicy: {
-        voice: "fast_only",
-        text: "full"
-      }
+    voiceGeneration: {
+      provider: "claude-oauth",
+      model: "claude-sonnet-4-6"
     },
     devTeam: {
       orchestrator: {
-        provider: "claude_code_session",
-        model: "max"
+        provider: "claude-oauth",
+        model: "claude-sonnet-4-6"
       },
       roles: {
-        design: dedicatedModel("claude_code_session", "max"),
-        implementation: dedicatedModel("claude_code_session", "max"),
-        review: dedicatedModel("claude_code_session", "max"),
-        research: dedicatedModel("claude_code_session", "max")
+        design: dedicatedModel("claude-oauth", "claude-sonnet-4-6"),
+        implementation: dedicatedModel("claude-oauth", "claude-sonnet-4-6"),
+        review: dedicatedModel("claude-oauth", "claude-sonnet-4-6"),
+        research: dedicatedModel("claude-oauth", "claude-sonnet-4-6")
       },
-      codingWorkers: ["claude_code", "codex_cli", "codex"]
+      codingWorkers: ["codex_cli", "codex"]
     }
   },
   custom: {
@@ -215,12 +213,12 @@ const PRESET_DEFAULTS = {
         model: "gpt-5"
       },
       roles: {
-        design: dedicatedModel("claude-code", "sonnet"),
+        design: dedicatedModel("anthropic", "claude-sonnet-4-6"),
         implementation: dedicatedModel("codex", "gpt-5-codex"),
-        review: dedicatedModel("claude-code", "sonnet"),
+        review: dedicatedModel("anthropic", "claude-sonnet-4-6"),
         research: inheritOrchestrator()
       },
-      codingWorkers: ["codex", "codex_cli", "claude_code"]
+      codingWorkers: ["codex", "codex_cli"]
     }
   }
 } as const satisfies Record<string, PresetDefaults>;
@@ -512,12 +510,12 @@ export function getVoiceRuntimeConfig(settings: unknown): Settings["agentStack"]
   return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig.voice, getRuntimeConfig(settings).voice);
 }
 
-export function getClaudeCodeSessionRuntimeConfig(
+export function getClaudeOAuthSessionRuntimeConfig(
   settings: unknown
-): Settings["agentStack"]["runtimeConfig"]["claudeCodeSession"] {
+): Settings["agentStack"]["runtimeConfig"]["claudeOAuthSession"] {
   return mergeWithDefaults(
-    DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession,
-    getRuntimeConfig(settings).claudeCodeSession
+    DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeOAuthSession,
+    getRuntimeConfig(settings).claudeOAuthSession
   );
 }
 
@@ -742,12 +740,11 @@ export function resolveAgentStack(settings: unknown) {
   const presetDefaults = getPresetDefaults(settings);
   const overrides = agentStack.overrides || {};
   const voiceAdmission = getVoiceAdmissionSettings(settings);
-  const claudeCodeSession = getClaudeCodeSessionRuntimeConfig(settings);
+
   const devTeamRuntime = getDevTeamRuntimeConfig(settings);
   const enabledWorkers = [
     devTeamRuntime?.codex?.enabled ? "codex" : null,
-    devTeamRuntime?.codexCli?.enabled ? "codex_cli" : null,
-    devTeamRuntime?.claudeCode?.enabled ? "claude_code" : null
+    devTeamRuntime?.codexCli?.enabled ? "codex_cli" : null
   ].filter(Boolean);
   const overrideWorkers = Array.isArray(overrides?.devTeam?.codingWorkers)
     ? overrides.devTeam.codingWorkers.map((value: unknown) => String(value || "").trim()).filter(Boolean)
@@ -759,16 +756,7 @@ export function resolveAgentStack(settings: unknown) {
     overrides?.devTeam?.orchestrator,
     presetDefaults.devTeam.orchestrator
   );
-  const sessionPolicy =
-    harness === "claude_code_session"
-      ? {
-          persistent: true,
-          toolPolicy: {
-            voice: String(claudeCodeSession.voiceToolPolicy || presetDefaults.sessionPolicy?.toolPolicy.voice || "fast_only") as AgentSessionToolPolicy,
-            text: String(claudeCodeSession.textToolPolicy || presetDefaults.sessionPolicy?.toolPolicy.text || "full") as AgentSessionToolPolicy
-          }
-        }
-      : presetDefaults.sessionPolicy;
+  const sessionPolicy = presetDefaults.sessionPolicy;
 
   return {
     preset: presetName,

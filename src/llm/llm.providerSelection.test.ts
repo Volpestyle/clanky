@@ -16,7 +16,7 @@ function createService(appConfig = {}, { logs = null } = {}) {
       defaultOpenAiModel: "claude-haiku-4-5",
       defaultAnthropicModel: "claude-haiku-4-5",
       defaultXaiModel: "grok-3-mini-latest",
-      defaultClaudeCodeModel: "sonnet",
+      defaultClaudeOAuthModel: "claude-sonnet-4-6",
       defaultCodexCliModel: "gpt-5.4",
       ...appConfig
     },
@@ -28,22 +28,22 @@ function createService(appConfig = {}, { logs = null } = {}) {
   });
 }
 
-test("resolveProviderAndModel throws when claude-code is selected but CLI is unavailable", () => {
+test("resolveProviderAndModel throws when claude-oauth is selected but tokens are not configured", () => {
   const service = createService({ anthropicApiKey: "test-anthropic-key" });
-  service.claudeCodeAvailable = false;
+  service.claudeOAuth = null;
 
   assert.throws(
-    () => service.resolveProviderAndModel({ provider: "claude-code", model: "opus" }),
-    /claude-code.*not available on PATH/i
+    () => service.resolveProviderAndModel({ provider: "claude-oauth", model: "claude-sonnet-4-6" }),
+    /claude-oauth.*no OAuth tokens/i
   );
 });
 
-test("resolveProviderAndModel keeps claude-code provider when CLI is available", () => {
+test("resolveProviderAndModel keeps claude-oauth provider when configured", () => {
   const service = createService({ anthropicApiKey: "test-anthropic-key" });
-  service.claudeCodeAvailable = true;
+  service.claudeOAuth = { tokens: { refreshToken: "test", accessToken: "", expiresAt: 0 }, client: {} } as never;
 
-  const resolved = service.resolveProviderAndModel({ provider: "claude-code", model: "opus" });
-  assert.deepEqual(resolved, { provider: "claude-code", model: "opus" });
+  const resolved = service.resolveProviderAndModel({ provider: "claude-oauth", model: "claude-sonnet-4-6" });
+  assert.deepEqual(resolved, { provider: "claude-oauth", model: "claude-sonnet-4-6" });
 });
 
 test("resolveProviderAndModel throws when codex-cli is selected but CLI is unavailable", () => {
@@ -64,14 +64,12 @@ test("resolveProviderAndModel keeps codex_cli_session provider when CLI is avail
   assert.deepEqual(resolved, { provider: "codex_cli_session", model: "gpt-5.4" });
 });
 
-test("resolveProviderAndModel rejects unsupported claude-code model IDs", () => {
+test("resolveProviderAndModel accepts standard model IDs for claude-oauth", () => {
   const service = createService({ anthropicApiKey: "test-anthropic-key" });
-  service.claudeCodeAvailable = true;
+  service.claudeOAuth = { tokens: { refreshToken: "test", accessToken: "", expiresAt: 0 }, client: {} } as never;
 
-  assert.throws(
-    () => service.resolveProviderAndModel({ provider: "claude-code", model: "claude-3-5-haiku-latest" }),
-    /invalid claude-code model/i
-  );
+  const resolved = service.resolveProviderAndModel({ provider: "claude-oauth", model: "claude-haiku-4-5" });
+  assert.deepEqual(resolved, { provider: "claude-oauth", model: "claude-haiku-4-5" });
 });
 
 test("resolveDefaultModel uses claude-haiku-4-5 for anthropic fallback", () => {

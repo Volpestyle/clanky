@@ -17,6 +17,7 @@ import {
 export type ToolLoopChatDeps = {
   openai: OpenAI | null;
   anthropic: Anthropic | null;
+  claudeOAuthClient: Anthropic | null;
   store: LlmActionStore;
 };
 
@@ -70,9 +71,14 @@ export async function chatWithTools(
     cacheReadTokens: 0
   };
 
-  if (resolvedProvider === "anthropic") {
-    if (!deps.anthropic) {
-      throw new Error("chatWithTools requires ANTHROPIC_API_KEY.");
+  if (resolvedProvider === "anthropic" || resolvedProvider === "claude-oauth") {
+    const anthropicClient = resolvedProvider === "claude-oauth" ? deps.claudeOAuthClient : deps.anthropic;
+    if (!anthropicClient) {
+      throw new Error(
+        resolvedProvider === "claude-oauth"
+          ? "chatWithTools requires CLAUDE_OAUTH_REFRESH_TOKEN."
+          : "chatWithTools requires ANTHROPIC_API_KEY."
+      );
     }
 
     const requestBody = {
@@ -82,8 +88,8 @@ export async function chatWithTools(
       max_tokens: maxOutputTokens,
       messages: buildAnthropicToolLoopMessages(messages),
       tools
-    } as Parameters<typeof deps.anthropic.messages.create>[0];
-    const response = await deps.anthropic.messages.create(requestBody as never, { signal }) as {
+    } as Parameters<typeof anthropicClient.messages.create>[0];
+    const response = await anthropicClient.messages.create(requestBody as never, { signal }) as {
       content: Array<{
         type: string;
         text?: string;

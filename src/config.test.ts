@@ -32,7 +32,7 @@ const CONFIG_ENV_KEYS = [
   "DEFAULT_MODEL_OPENAI",
   "DEFAULT_MODEL_ANTHROPIC",
   "DEFAULT_MODEL_XAI",
-  "DEFAULT_MODEL_CLAUDE_CODE",
+  "DEFAULT_MODEL_CLAUDE_OAUTH",
   "DEFAULT_MODEL_CODEX_CLI",
   "DEFAULT_MEMORY_EMBEDDING_MODEL"
 ];
@@ -75,11 +75,11 @@ test("config parses explicit env values", async () => {
       DASHBOARD_HOST: "0.0.0.0",
       PUBLIC_HTTPS_ENABLED: "YES",
       PUBLIC_SHARE_SESSION_TTL_MINUTES: "25",
-      DEFAULT_PROVIDER: "claude-code",
+      DEFAULT_PROVIDER: "claude-oauth",
       DEFAULT_MODEL_OPENAI: "claude-haiku-4-5",
       DEFAULT_MODEL_ANTHROPIC: "claude-sonnet-4-5",
       DEFAULT_MODEL_XAI: "grok-4-latest",
-      DEFAULT_MODEL_CLAUDE_CODE: "opus",
+      DEFAULT_MODEL_CLAUDE_OAUTH: "claude-opus-4-6",
       DEFAULT_MODEL_CODEX_CLI: "gpt-5.4",
       GIPHY_RATING: "PG",
       XAI_BASE_URL: "https://x.ai/custom",
@@ -93,11 +93,11 @@ test("config parses explicit env values", async () => {
       assert.equal(appConfig.dashboardHost, "0.0.0.0");
       assert.equal(appConfig.publicHttpsEnabled, true);
       assert.equal(appConfig.publicShareSessionTtlMinutes, 25);
-      assert.equal(appConfig.defaultProvider, "claude-code");
+      assert.equal(appConfig.defaultProvider, "claude-oauth");
       assert.equal(appConfig.defaultOpenAiModel, "claude-haiku-4-5");
       assert.equal(appConfig.defaultAnthropicModel, "claude-sonnet-4-5");
       assert.equal(appConfig.defaultXaiModel, "grok-4-latest");
-      assert.equal(appConfig.defaultClaudeCodeModel, "opus");
+      assert.equal(appConfig.defaultClaudeOAuthModel, "claude-opus-4-6");
       assert.equal(appConfig.defaultCodexCliModel, "gpt-5.4");
       assert.equal(appConfig.giphyRating, "PG");
       assert.equal(appConfig.xaiBaseUrl, "https://x.ai/custom");

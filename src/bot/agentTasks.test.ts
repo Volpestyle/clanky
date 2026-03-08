@@ -80,6 +80,7 @@ test("runModelRequestedBrowserBrowse reports openai computer use unavailable wit
     },
     async (ctx) => {
       // Null out the OpenAI client so the guard fires
+      // eslint-disable-next-line no-restricted-syntax
       (ctx.llm as any).openai = null;
 
       const settings = createTestSettings({
@@ -127,7 +128,7 @@ test("runModelRequestedCodeTask blocks users outside the dev-task allowlist", as
   await withTempAgentContext(async (ctx) => {
     const settings = createTestSettings({
       codeAgent: {
-        provider: "claude-code",
+        provider: "codex-cli",
         allowedUserIds: ["allowed-1"]
       }
     });
@@ -149,7 +150,7 @@ test("createCodeAgentSession returns a code session when dev tasks are enabled",
   await withTempAgentContext(async (ctx) => {
     const settings = createTestSettings({
       codeAgent: {
-        provider: "claude-code",
+        provider: "codex-cli",
         allowedUserIds: ["user-1"],
         maxParallelTasks: 2,
         maxTasksPerHour: 5

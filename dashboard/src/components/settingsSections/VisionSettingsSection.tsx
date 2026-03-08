@@ -1,5 +1,6 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
+import { LlmProviderOptions, VISION_LLM_PROVIDER_OPTIONS } from "./LlmProviderOptions";
 
 export function VisionSettingsSection({
   id,
@@ -33,9 +34,7 @@ export function VisionSettingsSection({
                 value={form.visionProvider}
                 onChange={setVisionProvider}
               >
-                <option value="anthropic">anthropic</option>
-                <option value="xai">xai</option>
-                <option value="claude-code">claude-code</option>
+                <LlmProviderOptions options={VISION_LLM_PROVIDER_OPTIONS} />
               </select>
             </div>
             <div>

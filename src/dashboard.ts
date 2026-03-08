@@ -405,23 +405,22 @@ export function createDashboardServer({
     });
   });
 
-  app.use("*", async (c, next) => {
-    if (isApiPath(c.req.path) || c.req.path.startsWith("/share/")) {
-      await next();
-      return;
-    }
-    if (c.req.method !== "GET" && c.req.method !== "HEAD") {
-      await next();
-      return;
-    }
-    await serveDashboardStatic(c, next);
-  });
+  app.use("/assets/*", serveDashboardStatic);
 
   app.get("*", (c) => {
     if (isApiPath(c.req.path) || c.req.path.startsWith("/share/")) {
       return c.text("Not found.", 404);
     }
     return c.html(indexHtml);
+  });
+
+  app.on("HEAD", "*", (c) => {
+    if (isApiPath(c.req.path) || c.req.path.startsWith("/share/")) {
+      return c.body(null, 404);
+    }
+    return c.body(null, 200, {
+      "content-type": "text/html; charset=UTF-8"
+    });
   });
 
   const dashboardHost = normalizeDashboardHost(appConfig.dashboardHost);

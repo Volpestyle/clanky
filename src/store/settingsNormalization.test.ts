@@ -226,8 +226,8 @@ test("normalizeSettings migrates and clamps complex legacy settings into the can
   assert.deepEqual(normalized.agentStack.overrides.voiceAdmissionClassifier, {
     mode: "dedicated_model",
     model: {
-      provider: "claude-code",
-      model: "sonnet"
+      provider: "anthropic",
+      model: "claude-haiku-4-5"
     }
   });
   assert.equal(normalized.agentStack.runtimeConfig.voice.openaiRealtime.inputAudioFormat, "pcm16");
@@ -342,12 +342,12 @@ test("normalizeSettings migrates legacy code agent provider fields into dev-team
   assert.equal(codex.agentStack.runtimeConfig.devTeam.claudeCode.enabled, false);
 });
 
-test("normalizeSettings preserves claude_code_max session config", () => {
+test("normalizeSettings preserves claude_oauth_openai_tools session config", () => {
   const normalized = normalizeSettings({
     agentStack: {
-      preset: "claude_code_max",
+      preset: "claude_oauth_openai_tools",
       runtimeConfig: {
-        claudeCodeSession: {
+        claudeOAuthSession: {
           sessionScope: "channel",
           inactivityTimeoutMs: 45_000,
           contextPruningStrategy: "sliding_window",
@@ -359,18 +359,20 @@ test("normalizeSettings preserves claude_code_max session config", () => {
     }
   });
 
-  assert.equal(normalized.agentStack.preset, "claude_code_max");
-  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.sessionScope, "channel");
-  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.inactivityTimeoutMs, 45_000);
-  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.contextPruningStrategy, "sliding_window");
-  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.maxPinnedStateChars, 18_000);
-  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.voiceToolPolicy, "fast_only");
-  assert.equal(normalized.agentStack.runtimeConfig.claudeCodeSession.textToolPolicy, "full");
-  assert.deepEqual(normalized.agentStack.overrides.voiceAdmissionClassifier, {
+  assert.equal(normalized.agentStack.preset, "claude_oauth_openai_tools");
+  assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.sessionScope, "channel");
+  assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.inactivityTimeoutMs, 45_000);
+  assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.contextPruningStrategy, "sliding_window");
+  assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.maxPinnedStateChars, 18_000);
+  assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.voiceToolPolicy, "fast_only");
+  assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.textToolPolicy, "full");
+  assert.equal(normalized.voice.admission.mode, "generation_decides");
+  assert.equal(normalized.agentStack.overrides.voiceAdmissionClassifier, undefined);
+  assert.deepEqual(normalized.agentStack.runtimeConfig.voice.generation, {
     mode: "dedicated_model",
     model: {
-      provider: "claude_code_session",
-      model: "max"
+      provider: "claude-oauth",
+      model: "claude-sonnet-4-6"
     }
   });
 });

@@ -6,6 +6,7 @@ import {
   OPENAI_REALTIME_VOICE_OPTIONS,
   OPENAI_TRANSCRIPTION_MODEL_OPTIONS,
   XAI_VOICE_OPTIONS,
+  applyStackPreset,
   formToSettingsPatch,
   resolveBrowserProviderModelOptions,
   resolveModelOptions,
@@ -73,12 +74,12 @@ export default function SettingsForm({
       { id: "sec-core", label: "Identity" },
       { id: "sec-prompts", label: "Prompting" },
       { id: "sec-stack", label: "Stack Preset" },
+      { id: "sec-vision", label: "Vision" },
+      { id: "sec-video", label: "Video Context" },
       { id: "sec-voice", label: "Voice" },
       { id: "sec-rate", label: "Rate Limits" },
       { id: "sec-startup", label: "Startup" },
       { id: "sec-discovery", label: "Discovery" },
-      { id: "sec-vision", label: "Vision" },
-      { id: "sec-video", label: "Video Context" },
       { id: "sec-channels", label: "Channels" }
     ];
     if (effectiveForm.stackAdvancedOverridesEnabled) {
@@ -186,7 +187,7 @@ export default function SettingsForm({
   const isOpenAiRealtimeMode = effectiveForm.voiceProvider === "openai";
   const isGeminiRealtimeMode = effectiveForm.voiceProvider === "gemini";
   const isElevenLabsRealtimeMode = effectiveForm.voiceProvider === "elevenlabs";
-  const showVoiceAdvanced = effectiveForm.voiceEnabled && effectiveForm.stackAdvancedOverridesEnabled;
+  const showVoiceSettings = effectiveForm.voiceEnabled;
   const showDiscoveryAdvanced = effectiveForm.discoveryEnabled;
   const showDiscoveryImageControls = effectiveForm.discoveryImageEnabled || effectiveForm.replyImageEnabled;
   const showDiscoveryVideoControls = effectiveForm.discoveryVideoEnabled || effectiveForm.replyVideoEnabled;
@@ -223,13 +224,20 @@ export default function SettingsForm({
     selectedBrowserLlmPresetModel,
     selectedVoiceGenerationPresetModel,
     selectedVoiceThoughtEnginePresetModel,
+    selectedVoiceReplyDecisionPresetModel,
     selectedVisionPresetModel
   ]);
 
   if (!form) return null;
 
   function set(key) {
-    return (e) => setForm((f) => ({ ...f, [key]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
+    return (e) => setForm((current) => {
+      const value = e.target.type === "checkbox" ? e.target.checked : e.target.value;
+      if (key === "stackPreset") {
+        return applyStackPreset(current || defaultForm, String(value || "").trim());
+      }
+      return { ...current, [key]: value };
+    });
   }
 
   function sanitizeBotNameAliases() {
@@ -348,7 +356,7 @@ export default function SettingsForm({
           ))}
         </nav>
 
-        <div className="settings-content">
+        <div className="settings-content" style={{ paddingBottom: "60vh" }}>
           <CoreBehaviorSettingsSection
             id="sec-core"
             form={form}
@@ -366,9 +374,8 @@ export default function SettingsForm({
             <label htmlFor="stack-preset">Preset</label>
             <select id="stack-preset" value={form.stackPreset} onChange={set("stackPreset")}>
               <option value="openai_native">OpenAI Native</option>
-              <option value="anthropic_brain_openai_tools">Anthropic Brain + OpenAI Tools</option>
-              <option value="claude_code_max">Claude Code Max</option>
-              <option value="multi_provider_legacy">Multi-Provider Legacy</option>
+              <option value="anthropic_api_openai_tools">Anthropic API + OpenAI Tools</option>
+              <option value="claude_oauth_openai_tools">Claude OAuth + OpenAI Tools</option>
               <option value="custom">Custom</option>
             </select>
 
@@ -394,7 +401,7 @@ export default function SettingsForm({
                 <input value={resolvedStack.harness} readOnly />
               </div>
               <div>
-                <label>Orchestrator</label>
+                <label>Text / Orchestrator</label>
                 <input value={`${resolvedStack.orchestrator.provider}:${resolvedStack.orchestrator.model}`} readOnly />
               </div>
             </div>
@@ -487,7 +494,7 @@ export default function SettingsForm({
             id="sec-voice"
             form={form}
             set={set}
-            showVoiceAdvanced={showVoiceAdvanced}
+            showVoiceSettings={showVoiceSettings}
             isVoiceAgentMode={isVoiceAgentMode}
             isOpenAiRealtimeMode={isOpenAiRealtimeMode}
             isGeminiRealtimeMode={isGeminiRealtimeMode}

@@ -102,14 +102,14 @@ test("voice reply decision llm settings normalize provider and model", async () 
     const patched = store.patchSettings(createTestSettingsPatch({
       voice: {
         replyDecisionLlm: {
-          provider: "CLAUDE-CODE",
-          model: " opus "
+          provider: "CLAUDE-OAUTH",
+          model: " claude-opus-4-6 "
         }
       }
     }));
 
     const binding = getResolvedVoiceAdmissionClassifierBinding(patched);
-    assert.equal(binding?.provider, "claude-code");
-    assert.equal(binding?.model, "opus");
+    assert.equal(binding?.provider, "claude-oauth");
+    assert.equal(binding?.model, "claude-opus-4-6");
   });
 });

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useMemo } from "react";
 import { CopyButton, Section } from "./ui";
 
 // ---- Types ----

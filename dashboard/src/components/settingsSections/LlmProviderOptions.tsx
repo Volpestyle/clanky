@@ -1,22 +1,39 @@
+import { MODEL_PROVIDER_KINDS } from "../../../../src/settings/settingsSchema.ts";
+
 interface LlmProviderOption {
   value: string;
   label: string;
 }
 
-const LLM_PROVIDER_OPTIONS: LlmProviderOption[] = [
-  { value: "openai", label: "openai" },
-  { value: "anthropic", label: "anthropic" },
-  { value: "claude_code_session", label: "claude code session" },
-  { value: "codex_cli_session", label: "codex cli session" },
-  { value: "xai", label: "xai (grok)" },
-  { value: "claude-code", label: "claude code (local)" },
-  { value: "codex-cli", label: "codex cli (local)" }
-];
+const LLM_PROVIDER_LABELS: Record<string, string> = {
+  openai: "openai",
+  anthropic: "anthropic",
+  ai_sdk_anthropic: "ai sdk anthropic",
+  litellm: "liteLLM",
+  "claude-oauth": "claude oauth",
+  codex_cli_session: "codex cli session",
+  xai: "xai (grok)",
+  codex: "codex",
+  "codex-cli": "codex cli (local)"
+};
 
-export function LlmProviderOptions() {
+export const GENERAL_LLM_PROVIDER_OPTIONS: LlmProviderOption[] = MODEL_PROVIDER_KINDS.map((value) => ({
+  value,
+  label: LLM_PROVIDER_LABELS[value] || value
+}));
+
+export const VISION_LLM_PROVIDER_OPTIONS: LlmProviderOption[] = GENERAL_LLM_PROVIDER_OPTIONS.filter(
+  (option) => ["openai", "anthropic", "ai_sdk_anthropic", "litellm", "claude-oauth", "xai"].includes(option.value)
+);
+
+export const BROWSER_LLM_PROVIDER_OPTIONS: LlmProviderOption[] = GENERAL_LLM_PROVIDER_OPTIONS.filter(
+  (option) => ["openai", "anthropic"].includes(option.value)
+);
+
+export function LlmProviderOptions({ options = GENERAL_LLM_PROVIDER_OPTIONS }: { options?: readonly LlmProviderOption[] }) {
   return (
     <>
-      {LLM_PROVIDER_OPTIONS.map((provider) => (
+      {options.map((provider) => (
         <option key={provider.value} value={provider.value}>
           {provider.label}
         </option>
