@@ -1,6 +1,10 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { computeAsrTranscriptConfidence, parseVoiceThoughtDecisionContract } from "./voiceDecisionRuntime.ts";
+import {
+  computeAsrTranscriptConfidence,
+  parseVoiceThoughtDecisionContract,
+  resolveRealtimeTurnTranscriptionPlan
+} from "./voiceDecisionRuntime.ts";
 
 test("parseVoiceThoughtDecisionContract parses strict JSON payloads", () => {
   const parsed = parseVoiceThoughtDecisionContract(
@@ -97,4 +101,30 @@ test("computeAsrTranscriptConfidence hallucination scenario: very low logprobs",
   const result = computeAsrTranscriptConfidence(logprobs);
   assert.ok(result);
   assert.equal(result.meanLogprob < -1.0, true);
+});
+
+test("resolveRealtimeTurnTranscriptionPlan upgrades short realtime mini clips without fallback", () => {
+  const plan = resolveRealtimeTurnTranscriptionPlan({
+    mode: "openai_realtime",
+    configuredModel: "gpt-4o-mini-transcribe",
+    pcmByteLength: 22080,
+    sampleRateHz: 24000
+  });
+
+  assert.equal(plan.primaryModel, "gpt-4o-mini-transcribe");
+  assert.equal(plan.fallbackModel, null);
+  assert.equal(plan.reason, "short_clip_prefers_full_model");
+});
+
+test("resolveRealtimeTurnTranscriptionPlan keeps mini with a full-model fallback on longer clips", () => {
+  const plan = resolveRealtimeTurnTranscriptionPlan({
+    mode: "openai_realtime",
+    configuredModel: "gpt-4o-mini-transcribe",
+    pcmByteLength: 160000,
+    sampleRateHz: 24000
+  });
+
+  assert.equal(plan.primaryModel, "gpt-4o-mini-transcribe");
+  assert.equal(plan.fallbackModel, "whisper-1");
+  assert.equal(plan.reason, "mini_with_full_fallback");
 });

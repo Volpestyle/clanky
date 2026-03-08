@@ -203,6 +203,29 @@ function createOutputState(overrides: Partial<OutputChannelState> = {}): OutputC
   };
 }
 
+function createInterruptedReplyAction(overrides = {}) {
+  return {
+    type: "interrupted_reply",
+    goal: "complete_interrupted_reply",
+    freshnessPolicy: "retry_then_regenerate",
+    status: "scheduled",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    notBeforeAt: 0,
+    expiresAt: Date.now() + 30_000,
+    reason: "test",
+    revision: 1,
+    payload: {
+      utteranceText: null,
+      interruptedByUserId: null,
+      interruptedAt: Date.now(),
+      source: "voice_reply",
+      interruptionPolicy: null
+    },
+    ...overrides
+  };
+}
+
 function createQueueHost(outputState = createOutputState()) {
   const logs: Array<Record<string, unknown>> = [];
   const flushCalls: Array<Record<string, unknown>> = [];
@@ -303,7 +326,7 @@ test("recheckDeferredVoiceActions defers queued replay while active promoted cap
   assert.equal(queue.getDeferredQueuedUserTurns(session).length, 1);
 });
 
-test("recheckDeferredVoiceActions treats silence-only capture state as replay-safe once output is idle", () => {
+test("recheckDeferredVoiceActions flushes queued turns when output is idle despite stale silence-only capture state", () => {
   const { queue, flushCalls } = createQueueHost();
   const session = createSession({
     userCaptures: new Map([[
@@ -427,4 +450,163 @@ test("recheckDeferredVoiceActions gives interrupted replies priority over queued
   assert.equal(flushCalls.length, 0);
   assert.equal(queue.getDeferredVoiceAction(session, "interrupted_reply"), null);
   assert.equal(queue.getDeferredQueuedUserTurns(session).length, 1);
+});
+
+test("canFireDeferredAction returns null (can fire) when session is valid and output channel is clear", () => {
+  const { queue } = createQueueHost();
+  const session = createSession({ mode: "openai_realtime" });
+  const action = createInterruptedReplyAction();
+  const result = queue.canFireDeferredAction(session, action);
+  assert.equal(result, null);
+});
+
+test("canFireDeferredAction returns 'session_inactive' when session is null", () => {
+  const { queue } = createQueueHost();
+  const result = queue.canFireDeferredAction(null, createInterruptedReplyAction());
+  assert.equal(result, "session_inactive");
+});
+
+test("canFireDeferredAction returns 'session_inactive' when session.ending is true", () => {
+  const { queue } = createQueueHost();
+  const session = createSession({ ending: true });
+  const action = createInterruptedReplyAction();
+  const result = queue.canFireDeferredAction(session, action);
+  assert.equal(result, "session_inactive");
+});
+
+test("canFireDeferredAction returns 'no_action' when action is null", () => {
+  const { queue } = createQueueHost();
+  const session = createSession();
+  const result = queue.canFireDeferredAction(session, null);
+  assert.equal(result, "no_action");
+});
+
+test("canFireDeferredAction returns 'expired' when expiresAt is in the past", () => {
+  const { queue } = createQueueHost();
+  const session = createSession();
+  const action = createInterruptedReplyAction({
+    createdAt: Date.now() - 60_000,
+    updatedAt: Date.now() - 60_000,
+    expiresAt: Date.now() - 1_000
+  });
+  const result = queue.canFireDeferredAction(session, action);
+  assert.equal(result, "expired");
+});
+
+test("canFireDeferredAction returns 'not_before_at' when notBeforeAt is in the future", () => {
+  const { queue } = createQueueHost();
+  const session = createSession();
+  const action = createInterruptedReplyAction({
+    notBeforeAt: Date.now() + 5_000
+  });
+  const result = queue.canFireDeferredAction(session, action);
+  assert.equal(result, "not_before_at");
+});
+
+test("canFireDeferredAction returns 'active_captures' when output channel state reports a capture blocker", () => {
+  const { queue, setOutputState } = createQueueHost();
+  setOutputState(createOutputState({ deferredBlockReason: "active_captures", captureBlocking: true }));
+  const session = createSession();
+  const action = createInterruptedReplyAction();
+  const result = queue.canFireDeferredAction(session, action);
+  assert.equal(result, "active_captures");
+});
+
+test("canFireDeferredAction allows queued turns when output state is clear despite stale silence-only capture data", () => {
+  const { queue } = createQueueHost();
+  const session = createSession({
+    mode: "openai_realtime"
+  });
+  session.userCaptures.set("user-1", {
+    userId: "user-1",
+    startedAt: Date.now() - 1_000,
+    bytesSent: 48_000,
+    signalSampleCount: 24_000,
+    signalActiveSampleCount: 0,
+    signalPeakAbs: 0
+  });
+  const action = {
+    type: "queued_user_turns",
+    status: "scheduled",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    notBeforeAt: 0,
+    expiresAt: Date.now() + 30_000,
+    reason: "test",
+    revision: 1,
+    payload: {
+      turns: [],
+      nextFlushAt: Date.now()
+    }
+  };
+
+  const result = queue.canFireDeferredAction(session, action);
+  assert.equal(result, null);
+});
+
+test("canFireDeferredAction returns 'pending_response' when output channel state reports a pending response", () => {
+  const { queue, setOutputState } = createQueueHost();
+  setOutputState(createOutputState({ deferredBlockReason: "pending_response", pendingResponse: true }));
+  const session = createSession();
+  const action = createInterruptedReplyAction();
+  const result = queue.canFireDeferredAction(session, action);
+  assert.equal(result, "pending_response");
+});
+
+test("canFireDeferredAction returns 'active_response' when realtime response is active", () => {
+  const { queue, setOutputState } = createQueueHost();
+  setOutputState(createOutputState({ deferredBlockReason: "active_response", openAiActiveResponse: true }));
+  const session = createSession({ mode: "openai_realtime" });
+  const action = createInterruptedReplyAction();
+  const result = queue.canFireDeferredAction(session, action);
+  assert.equal(result, "active_response");
+});
+
+test("canFireDeferredAction returns 'awaiting_tool_outputs' when output channel state reports pending tool outputs", () => {
+  const { queue, setOutputState } = createQueueHost();
+  setOutputState(createOutputState({ deferredBlockReason: "awaiting_tool_outputs", awaitingToolOutputs: true }));
+  const session = createSession();
+  const action = createInterruptedReplyAction();
+  const result = queue.canFireDeferredAction(session, action);
+  assert.equal(result, "awaiting_tool_outputs");
+});
+
+test("canFireDeferredAction returns 'tool_calls_running' when output channel state reports active tool executions", () => {
+  const { queue, setOutputState } = createQueueHost();
+  setOutputState(
+    createOutputState({
+      deferredBlockReason: "tool_calls_running",
+      toolCallsRunning: true,
+      awaitingToolOutputs: true
+    })
+  );
+  const session = createSession();
+  const action = createInterruptedReplyAction();
+  const result = queue.canFireDeferredAction(session, action);
+  assert.equal(result, "tool_calls_running");
+});
+
+test("canFireDeferredAction treats expiresAt=0 as no expiry", () => {
+  const { queue } = createQueueHost();
+  const session = createSession();
+  const action = createInterruptedReplyAction({
+    expiresAt: 0
+  });
+  const result = queue.canFireDeferredAction(session, action);
+  assert.equal(result, null);
+});
+
+test("canFireDeferredAction respects upstream blocker priority resolution from output channel state", () => {
+  const { queue, setOutputState } = createQueueHost();
+  setOutputState(
+    createOutputState({
+      deferredBlockReason: "active_captures",
+      captureBlocking: true,
+      pendingResponse: true
+    })
+  );
+  const session = createSession();
+  const action = createInterruptedReplyAction();
+  const result = queue.canFireDeferredAction(session, action);
+  assert.equal(result, "active_captures");
 });
