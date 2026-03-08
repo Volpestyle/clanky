@@ -209,6 +209,53 @@ test("OpenAiRealtimeClient stream-watch commentary requires a buffered frame", (
   );
 });
 
+test("OpenAiRealtimeClient requestTextUtterance sends an out-of-band tool-free audio response", () => {
+  const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
+  const outbound = [];
+  client.send = (payload) => {
+    outbound.push(payload);
+  };
+  client.sessionConfig = {
+    model: "gpt-realtime",
+    voice: "alloy",
+    instructions: "Use tools when needed.",
+    inputAudioFormat: "pcm16",
+    outputAudioFormat: "pcm16",
+    inputTranscriptionModel: "gpt-4o-mini-transcribe",
+    tools: [
+      {
+        type: "function",
+        name: "memory_search",
+        description: "Search memory",
+        parameters: {
+          type: "object",
+          properties: {
+            query: {
+              type: "string"
+            }
+          },
+          required: ["query"]
+        }
+      }
+    ],
+    toolChoice: "auto"
+  };
+
+  client.requestTextUtterance("Speak this exact line.");
+
+  assert.equal(outbound.length, 1);
+  assert.equal(outbound[0]?.type, "response.create");
+  assert.equal(outbound[0]?.response?.conversation, "none");
+  assert.deepEqual(outbound[0]?.response?.output_modalities, ["audio"]);
+  assert.equal(outbound[0]?.response?.tool_choice, "none");
+  assert.deepEqual(outbound[0]?.response?.tools, []);
+  assert.equal(outbound[0]?.response?.input?.[0]?.type, "message");
+  assert.equal(outbound[0]?.response?.input?.[0]?.role, "user");
+  assert.equal(outbound[0]?.response?.input?.[0]?.content?.[0]?.type, "input_text");
+  assert.equal(outbound[0]?.response?.input?.[0]?.content?.[0]?.text, "Speak this exact line.");
+  assert.equal(client.isResponseInProgress(), true);
+});
+
 test("OpenAiRealtimeClient sendSessionUpdate includes function tools and manual turn detection", () => {
   const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
   let outbound = null;

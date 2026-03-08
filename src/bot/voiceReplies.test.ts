@@ -8,6 +8,7 @@ import {
   generateVoiceTurnReply
 } from "./voiceReplies.ts";
 import { createTestSettings } from "../testSettings.ts";
+import { createAbortError } from "../tools/browserTaskRuntime.ts";
 
 function baseSettings(overrides = {}) {
   const base = {
@@ -1203,6 +1204,23 @@ test("generateVoiceTurnReply logs voice errors when generation fails", async () 
   assert.equal(logs.length, 1);
   assert.equal(logs[0]?.kind, "voice_error");
   assert.equal(String(logs[0]?.content || "").includes("voice_stt_generation_failed"), true);
+});
+
+test("generateVoiceTurnReply treats aborted generation as a supersede, not a voice error", async () => {
+  const { bot, logs } = createVoiceBot({
+    generationError: createAbortError("Pending response cleared")
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "hello there"
+  });
+
+  assert.deepEqual(reply, { text: "", generationContextSnapshot: null });
+  assert.equal(logs.length, 0);
 });
 
 test("generateVoiceTurnReply uses voice generation llm provider/model instead of text llm provider/model", async () => {

@@ -17,6 +17,7 @@ import {
   executeReplyTool
 } from "../tools/replyTools.ts";
 import type { ReplyToolRuntime, ReplyToolContext } from "../tools/replyTools.ts";
+import { isAbortError } from "../tools/browserTaskRuntime.ts";
 import { shouldRequestVoiceToolFollowup } from "../tools/sharedToolSchemas.ts";
 import { clamp, sanitizeBotText } from "../utils.ts";
 import { loadConversationContinuityContext } from "./conversationContinuity.ts";
@@ -1137,6 +1138,9 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     }
     return response;
   } catch (error) {
+    if (isAbortError(error) || signal?.aborted) {
+      return { text: "", generationContextSnapshot: null };
+    }
     runtime.store.logAction({
       kind: "voice_error",
       guildId,
