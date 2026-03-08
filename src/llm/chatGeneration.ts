@@ -7,8 +7,10 @@ import {
   extractOpenAiToolCalls
 } from "./llmHelpers.ts";
 import {
+  buildContextContentBlocks,
   buildOpenAiJsonSchemaTextFormat,
   buildOpenAiReasoningParam,
+  buildOpenAiToolLoopInput,
   buildOpenAiTemperatureParam,
   type ChatModelStreamCallbacks,
   type ChatModelRequest
@@ -118,6 +120,153 @@ function buildAnthropicResponse(
   };
 }
 
+type OpenAiResponsesOutputItem = {
+  id?: string;
+  type?: string;
+  role?: string;
+  name?: string;
+  call_id?: string;
+  arguments?: string;
+  content?: Array<{
+    type?: string;
+    text?: string;
+    refusal?: string;
+    annotations?: unknown[];
+  }>;
+};
+
+type OpenAiResponsesResponseLike = {
+  output_text?: string;
+  output?: OpenAiResponsesOutputItem[];
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    input_tokens_details?: {
+      cached_tokens?: number;
+    };
+  };
+};
+
+type OpenAiResponsesStreamEvent = {
+  type: string;
+  delta?: string;
+  item_id?: string;
+  output_index?: number;
+  item?: OpenAiResponsesOutputItem;
+  response?: OpenAiResponsesResponseLike;
+  error?: { message?: string } | string | null;
+};
+
+function buildOpenAiImageParts(imageInputs: ChatModelRequest["imageInputs"] = []) {
+  return imageInputs
+    .map((image) => {
+      const mediaType = String(image?.mediaType || image?.contentType || "").trim().toLowerCase();
+      const base64 = String(image?.dataBase64 || "").trim();
+      const url = String(image?.url || "").trim();
+      const imageUrl = base64 && /^image\/[a-z0-9.+-]+$/i.test(mediaType) ? `data:${mediaType};base64,${base64}` : url;
+      if (!imageUrl) return null;
+      return {
+        type: "input_image" as const,
+        image_url: imageUrl,
+        detail: "auto" as const
+      };
+    })
+    .filter((image): image is { type: "input_image"; image_url: string; detail: "auto" } => image !== null);
+}
+
+function buildOpenAiUserContent({
+  userPrompt,
+  imageInputs = []
+}: Pick<ChatModelRequest, "userPrompt" | "imageInputs">) {
+  const normalizedUserPrompt = String(userPrompt || "");
+  const userContent: Array<Record<string, unknown>> = [];
+  if (normalizedUserPrompt.trim()) {
+    userContent.push({
+      type: "input_text",
+      text: normalizedUserPrompt
+    });
+  }
+  userContent.push(...buildOpenAiImageParts(imageInputs));
+  return userContent;
+}
+
+function buildOpenAiResponsesInput({
+  contextMessages = [],
+  userPrompt,
+  imageInputs = []
+}: Pick<ChatModelRequest, "contextMessages" | "userPrompt" | "imageInputs">) {
+  const normalizedContextMessages = Array.isArray(contextMessages) ? contextMessages : [];
+  const hasStructuredContext = normalizedContextMessages.some((msg) => Array.isArray(msg?.content));
+  const contextInput = hasStructuredContext
+    ? buildOpenAiToolLoopInput(
+      normalizedContextMessages.map((msg) => ({
+        role: msg.role === "assistant" ? "assistant" : "user",
+        content: msg.content ?? ""
+      }))
+    )
+    : normalizedContextMessages.map((msg) => ({
+      role: msg.role === "assistant" ? "assistant" : "user",
+      content: String(msg.content || "")
+    }));
+  const userContent = buildOpenAiUserContent({ userPrompt, imageInputs });
+
+  return userContent.length
+    ? [
+      ...contextInput,
+      {
+        role: "user",
+        content: userContent
+      }
+    ]
+    : contextInput;
+}
+
+function buildOpenAiResponsesRequestBody({
+  model,
+  systemPrompt,
+  userPrompt,
+  imageInputs = [],
+  contextMessages = [],
+  temperature,
+  maxOutputTokens,
+  reasoningEffort,
+  jsonSchema = "",
+  tools = []
+}: ChatModelRequest) {
+  const normalizedTools = Array.isArray(tools) ? tools : [];
+  const openAiTools = normalizedTools.length
+    ? normalizedTools.map((tool) => ({
+      type: "function" as const,
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.input_schema,
+      strict: false
+    }))
+    : [];
+  const responseFormat = !openAiTools.length ? buildOpenAiJsonSchemaTextFormat(jsonSchema) : null;
+
+  return {
+    model,
+    instructions: systemPrompt,
+    ...buildOpenAiTemperatureParam(model, temperature),
+    ...buildOpenAiReasoningParam(model, reasoningEffort),
+    max_output_tokens: maxOutputTokens,
+    ...(responseFormat ? { text: responseFormat } : {}),
+    ...(openAiTools.length ? { tools: openAiTools } : {}),
+    input: buildOpenAiResponsesInput({
+      contextMessages,
+      userPrompt,
+      imageInputs
+    })
+  };
+}
+
+function getOpenAiStreamEventErrorMessage(error: OpenAiResponsesStreamEvent["error"]) {
+  if (!error) return "";
+  if (typeof error === "string") return error;
+  return String(error.message || "").trim();
+}
+
 export async function callOpenAI(deps: ChatGenerationDeps, request: ChatModelRequest) {
   if (!deps.openai) {
     throw new Error("OpenAI LLM calls require OPENAI_API_KEY.");
@@ -154,62 +303,20 @@ export async function callOpenAiResponses(
     throw new Error("OpenAI LLM calls require OPENAI_API_KEY.");
   }
 
-  const imageParts = imageInputs
-    .map((image) => {
-      const mediaType = String(image?.mediaType || image?.contentType || "").trim().toLowerCase();
-      const base64 = String(image?.dataBase64 || "").trim();
-      const url = String(image?.url || "").trim();
-      const imageUrl = base64 && /^image\/[a-z0-9.+-]+$/i.test(mediaType) ? `data:${mediaType};base64,${base64}` : url;
-      if (!imageUrl) return null;
-        return {
-          type: "input_image",
-          image_url: imageUrl,
-          detail: "auto"
-        };
-      })
-      .filter(Boolean);
-  const normalizedUserPrompt = String(userPrompt || "");
-  const userContent: Array<Record<string, unknown>> = [];
-  if (normalizedUserPrompt.trim()) {
-    userContent.push({
-      type: "input_text",
-      text: normalizedUserPrompt
-    });
-  }
-  userContent.push(...imageParts);
-
-  const normalizedTools = Array.isArray(tools) ? tools : [];
-  const openAiTools = normalizedTools.length
-    ? normalizedTools.map((tool) => ({
-        type: "function" as const,
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.input_schema,
-        strict: false
-      }))
-    : [];
-  const responseFormat = !openAiTools.length ? buildOpenAiJsonSchemaTextFormat(jsonSchema) : null;
-  const requestBody = {
+  const requestBody = buildOpenAiResponsesRequestBody({
     model,
-    instructions: systemPrompt,
-    ...buildOpenAiTemperatureParam(model, temperature),
-    ...buildOpenAiReasoningParam(model, reasoningEffort),
-    max_output_tokens: maxOutputTokens,
-    ...(responseFormat ? { text: responseFormat } : {}),
-    ...(openAiTools.length ? { tools: openAiTools } : {}),
-    input: [
-      ...contextMessages.map((msg) => ({
-        role: msg.role === "assistant" ? "assistant" : "user",
-        content: String(msg.content || "")
-      })),
-      {
-        role: "user",
-        content: userContent
-      }
-    ]
-  } as Parameters<typeof deps.openai.responses.create>[0];
+    systemPrompt,
+    userPrompt,
+    imageInputs,
+    contextMessages,
+    temperature,
+    maxOutputTokens,
+    reasoningEffort,
+    jsonSchema,
+    tools
+  }) as Parameters<typeof deps.openai.responses.create>[0];
   const response = await deps.openai.responses.create(requestBody as never, signal ? { signal } : undefined);
-  const responseWithOutput = response as { output?: unknown };
+  const responseWithOutput = response as OpenAiResponsesResponseLike;
 
   const text = extractOpenAiResponseText(response);
   const toolCalls = extractOpenAiToolCalls(response);
@@ -217,9 +324,69 @@ export async function callOpenAiResponses(
   return {
     text,
     toolCalls,
-    rawContent: toolCalls.length ? responseWithOutput.output : null,
+    rawContent: responseWithOutput.output || null,
     usage: extractOpenAiResponseUsage(response)
   };
+}
+
+export async function callOpenAiResponsesStreaming(
+  deps: Pick<ChatGenerationDeps, "openai">,
+  request: ChatModelRequest,
+  callbacks: ChatModelStreamCallbacks
+) {
+  if (!deps.openai) {
+    throw new Error("OpenAI LLM calls require OPENAI_API_KEY.");
+  }
+
+  const abortSignal = callbacks.signal || request.signal;
+  const requestBody = {
+    ...buildOpenAiResponsesRequestBody(request),
+    stream: true as const
+  } as Parameters<typeof deps.openai.responses.create>[0];
+  const stream = await deps.openai.responses.create(
+    requestBody as never,
+    abortSignal ? { signal: abortSignal } : undefined
+  ) as AsyncIterable<OpenAiResponsesStreamEvent>;
+  let finalResponse: OpenAiResponsesResponseLike | null = null;
+  let streamErrorMessage = "";
+
+  for await (const event of stream) {
+    if (event.type === "response.output_text.delta") {
+      callbacks.onTextDelta(String(event.delta || ""));
+      continue;
+    }
+    if (event.type === "response.function_call_arguments.delta") {
+      continue;
+    }
+    if (event.type === "response.completed") {
+      finalResponse = event.response || null;
+      continue;
+    }
+    if (event.type === "error") {
+      streamErrorMessage = getOpenAiStreamEventErrorMessage(event.error);
+    }
+  }
+
+  if (!finalResponse) {
+    throw new Error(streamErrorMessage || "OpenAI response stream ended without a completed response.");
+  }
+
+  const normalized = {
+    text: extractOpenAiResponseText(finalResponse),
+    toolCalls: extractOpenAiToolCalls(finalResponse),
+    rawContent: finalResponse.output || null,
+    usage: extractOpenAiResponseUsage(finalResponse)
+  };
+  if (typeof callbacks.onContentBlockComplete === "function") {
+    const completedBlocks = buildContextContentBlocks(finalResponse.output || null, normalized.text);
+    for (const block of completedBlocks) {
+      if (block.type === "text" || block.type === "tool_use") {
+        callbacks.onContentBlockComplete(block);
+      }
+    }
+  }
+  callbacks.onComplete?.(normalized);
+  return normalized;
 }
 
 export async function callXaiChatCompletions(

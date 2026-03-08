@@ -613,6 +613,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         realtimeOutputSampleRateHz,
         recentVoiceTurns: [],
         transcriptTurns: [],
+        durableContext: [],
         modelContextSummary: {
           generation: null,
           decider: null

@@ -248,6 +248,14 @@ export interface StreamWatchBrainContextEntry {
     speakerName: string | null;
 }
 
+export type VoiceSessionDurableContextCategory = "fact" | "plan" | "preference" | "relationship";
+
+export interface VoiceSessionDurableContextEntry {
+    text: string;
+    category: VoiceSessionDurableContextCategory;
+    at: number;
+}
+
 export interface SoundboardCandidate {
     soundId: string;
     sourceGuildId: string | null;
@@ -748,6 +756,7 @@ export interface VoiceSession {
     realtimeOutputSampleRateHz: number;
     recentVoiceTurns: VoiceTimelineTurn[];
     transcriptTurns: VoiceTimelineTurn[];
+    durableContext?: VoiceSessionDurableContextEntry[];
     modelContextSummary: {
         generation: VoiceModelContextSummary | null;
         decider: VoiceModelContextSummary | null;

@@ -458,26 +458,117 @@ test("callAnthropicStreaming forwards streamed text deltas and returns the final
   assert.equal(result.stopReason, "end_turn");
 });
 
-test("generateStreaming falls back to batch generation for non-streaming providers", async () => {
+test("callChatModelStreaming supports OpenAI Responses streaming", async () => {
   const service = createService({ openaiApiKey: "test-openai-key" });
-  service.generate = async () => ({
+  let seenPayload = null;
+  service.openai = {
+    responses: {
+      async create(payload) {
+        seenPayload = payload;
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "response.output_text.delta", delta: "hello " };
+            yield { type: "response.function_call_arguments.delta", delta: "{\"text\":\"remember this\"}" };
+            yield {
+              type: "response.completed",
+              response: {
+                output_text: "hello world",
+                output: [
+                  {
+                    id: "msg_1",
+                    type: "message",
+                    role: "assistant",
+                    content: [
+                      {
+                        type: "output_text",
+                        text: "hello world",
+                        annotations: []
+                      }
+                    ]
+                  },
+                  {
+                    id: "fc_1",
+                    type: "function_call",
+                    call_id: "fc_1",
+                    name: "note_context",
+                    arguments: "{\"text\":\"remember this\"}"
+                  }
+                ],
+                usage: {
+                  input_tokens: 11,
+                  output_tokens: 4,
+                  input_tokens_details: {
+                    cached_tokens: 1
+                  }
+                }
+              }
+            };
+          }
+        };
+      }
+    }
+  };
+
+  const deltas: string[] = [];
+  const blocks: Array<Record<string, unknown>> = [];
+  const result = await service.callChatModelStreaming("openai", {
+    model: "gpt-5-mini",
+    systemPrompt: "system",
+    userPrompt: "user",
+    contextMessages: [],
+    temperature: 0.2,
+    maxOutputTokens: 64
+  }, {
+    onTextDelta(delta) {
+      deltas.push(delta);
+    },
+    onContentBlockComplete(block) {
+      blocks.push(block);
+    }
+  });
+
+  assert.equal(seenPayload.stream, true);
+  assert.deepEqual(deltas, ["hello "]);
+  assert.equal(result.text, "hello world");
+  assert.deepEqual(result.toolCalls, [
+    {
+      id: "fc_1",
+      name: "note_context",
+      input: {
+        text: "remember this"
+      }
+    }
+  ]);
+  assert.deepEqual(blocks, [
+    { type: "text", text: "hello world" },
+    {
+      type: "tool_use",
+      id: "fc_1",
+      name: "note_context",
+      input: {
+        text: "remember this"
+      }
+    }
+  ]);
+});
+
+test("generateStreaming falls back to batch generation for non-streaming providers", async () => {
+  const service = createService({ xaiApiKey: "test-xai-key" });
+  service.callChatModel = async () => ({
     text: "fallback batch reply",
     toolCalls: [],
     rawContent: null,
-    provider: "openai",
-    model: "claude-haiku-4-5",
     usage: {
       inputTokens: 1,
       outputTokens: 1,
       cacheWriteTokens: 0,
       cacheReadTokens: 0
-    },
-    costUsd: 0
+    }
   });
 
   const deltas: string[] = [];
   const result = await service.generateStreaming({
-    settings: { llm: { provider: "openai", model: "claude-haiku-4-5" } },
+    settings: { llm: { provider: "xai", model: "grok-3-mini-latest" } },
     systemPrompt: "system",
     userPrompt: "user",
     contextMessages: [],

@@ -14,6 +14,7 @@ import {
   callAnthropicStreaming as callAnthropicStreamingRequest,
   callOpenAI as callOpenAIRequest,
   callOpenAiResponses as callOpenAiResponsesRequest,
+  callOpenAiResponsesStreaming as callOpenAiResponsesStreamingRequest,
   callXai as callXaiRequest,
   callXaiChatCompletions as callXaiChatCompletionsRequest,
   type ChatGenerationDeps
@@ -273,98 +274,18 @@ export class LLMService {
     tools?: ChatModelRequest["tools"];
     signal?: AbortSignal;
   }) {
-    const orchestrator = getResolvedOrchestratorBinding(settings);
-    const replyGeneration = getReplyGenerationSettings(settings);
-    const { provider, model } = this.resolveProviderAndModel(orchestrator);
-    const temperature = Number(orchestrator.temperature) || 0.9;
-    const maxOutputTokens = Number(orchestrator.maxOutputTokens) || 800;
-    const normalizedJsonSchema = String(jsonSchema || "").trim();
-    const normalizedTools = Array.isArray(tools) ? tools : [];
-    const normalizedTrace: LlmTrace = {
-      guildId: trace.guildId == null ? null : String(trace.guildId),
-      channelId: trace.channelId == null ? null : String(trace.channelId),
-      userId: trace.userId == null ? null : String(trace.userId),
-      source: trace.source == null ? null : String(trace.source),
-      event: trace.event == null ? null : String(trace.event),
-      reason: trace.reason == null ? null : String(trace.reason),
-      messageId: trace.messageId == null ? null : String(trace.messageId)
-    };
-    const effectiveSystemPrompt =
-      normalizedJsonSchema && provider !== "codex-cli" && provider !== "codex_cli_session" && provider !== "openai"
-        ? appendJsonSchemaInstruction(systemPrompt, normalizedJsonSchema)
-        : systemPrompt;
-
-    try {
-      const response = await this.callChatModel(provider, {
-        model,
-        systemPrompt: effectiveSystemPrompt,
-        userPrompt,
-        imageInputs,
-        contextMessages,
-        temperature,
-        maxOutputTokens,
-        reasoningEffort: orchestrator.reasoningEffort,
-        jsonSchema: normalizedJsonSchema,
-        trace: normalizedTrace,
-        tools: normalizedTools,
-        signal
-      });
-      const toolCalls = "toolCalls" in response && Array.isArray(response.toolCalls) ? response.toolCalls : [];
-      const rawContent = "rawContent" in response ? response.rawContent || null : null;
-
-      const costUsd = estimateUsdCost({
-        provider,
-        model,
-        inputTokens: response.usage.inputTokens,
-        outputTokens: response.usage.outputTokens,
-        cacheWriteTokens: Number(response.usage.cacheWriteTokens || 0),
-        cacheReadTokens: Number(response.usage.cacheReadTokens || 0),
-        customPricing: replyGeneration.pricing
-      });
-
-      this.store.logAction({
-        kind: "llm_call",
-        guildId: normalizedTrace.guildId,
-        channelId: normalizedTrace.channelId,
-        userId: normalizedTrace.userId,
-        content: `${provider}:${model}`,
-        metadata: {
-          provider,
-          model,
-          usage: response.usage,
-          inputImages: imageInputs.length,
-          toolCallCount: toolCalls.length,
-          source: normalizedTrace.source || null,
-          event: normalizedTrace.event || null,
-          reason: normalizedTrace.reason || null,
-          messageId: normalizedTrace.messageId || null
-        },
-        usdCost: costUsd
-      });
-
-      return {
-        text: response.text,
-        toolCalls,
-        rawContent,
-        provider,
-        model,
-        usage: response.usage,
-        costUsd
-      };
-    } catch (error) {
-      this.store.logAction({
-        kind: "llm_error",
-        guildId: normalizedTrace.guildId,
-        channelId: normalizedTrace.channelId,
-        userId: normalizedTrace.userId,
-        content: String(error?.message || error),
-        metadata: {
-          provider,
-          model
-        }
-      });
-      throw error;
-    }
+    return await this.generateStreaming({
+      settings,
+      systemPrompt,
+      userPrompt,
+      imageInputs,
+      contextMessages,
+      trace,
+      jsonSchema,
+      tools,
+      signal,
+      onTextDelta() {}
+    });
   }
 
   async generateStreaming({
@@ -422,46 +343,56 @@ export class LLMService {
       reason: trace.reason == null ? null : String(trace.reason),
       messageId: trace.messageId == null ? null : String(trace.messageId)
     };
-
-    if (
-      normalizedJsonSchema ||
-      (provider !== "anthropic" && provider !== "claude-oauth")
-    ) {
-      return await this.generate({
-        settings,
-        systemPrompt,
-        userPrompt,
-        imageInputs,
-        contextMessages,
-        trace: normalizedTrace,
-        jsonSchema: normalizedJsonSchema,
-        tools: normalizedTools,
-        signal
-      }).then((response) => {
-        if (response.text) {
-          onTextDelta(response.text);
-        }
-        return response;
-      });
-    }
+    const effectiveSystemPrompt =
+      normalizedJsonSchema && provider !== "codex-cli" && provider !== "codex_cli_session" && provider !== "openai" && provider !== "codex-oauth"
+        ? appendJsonSchemaInstruction(systemPrompt, normalizedJsonSchema)
+        : systemPrompt;
+    const streamingTransportSupported =
+      provider === "anthropic" ||
+      provider === "claude-oauth" ||
+      provider === "openai" ||
+      provider === "codex-oauth";
+    const streamingTransportAllowed =
+      streamingTransportSupported &&
+      (!normalizedJsonSchema || provider === "openai" || provider === "codex-oauth");
+    let usedStreamingTransport = false;
     try {
-      const response = await this.callChatModelStreaming(provider, {
-        model,
-        systemPrompt,
-        userPrompt,
-        imageInputs,
-        contextMessages,
-        temperature,
-        maxOutputTokens,
-        reasoningEffort: orchestrator.reasoningEffort,
-        jsonSchema: normalizedJsonSchema,
-        trace: normalizedTrace,
-        tools: normalizedTools,
-        signal
-      }, {
-        onTextDelta,
-        signal
-      });
+      const response = streamingTransportAllowed
+        ? await this.callChatModelStreaming(provider, {
+          model,
+          systemPrompt: effectiveSystemPrompt,
+          userPrompt,
+          imageInputs,
+          contextMessages,
+          temperature,
+          maxOutputTokens,
+          reasoningEffort: orchestrator.reasoningEffort,
+          jsonSchema: normalizedJsonSchema,
+          trace: normalizedTrace,
+          tools: normalizedTools,
+          signal
+        }, {
+          onTextDelta,
+          signal
+        })
+        : await this.callChatModel(provider, {
+          model,
+          systemPrompt: effectiveSystemPrompt,
+          userPrompt,
+          imageInputs,
+          contextMessages,
+          temperature,
+          maxOutputTokens,
+          reasoningEffort: orchestrator.reasoningEffort,
+          jsonSchema: normalizedJsonSchema,
+          trace: normalizedTrace,
+          tools: normalizedTools,
+          signal
+        });
+      usedStreamingTransport = streamingTransportAllowed;
+      if (!streamingTransportAllowed && response.text) {
+        onTextDelta(response.text);
+      }
       const toolCalls = Array.isArray(response.toolCalls) ? response.toolCalls : [];
       const rawContent = response.rawContent || null;
 
@@ -491,7 +422,7 @@ export class LLMService {
           event: normalizedTrace.event || null,
           reason: normalizedTrace.reason || null,
           messageId: normalizedTrace.messageId || null,
-          streaming: true
+          streaming: usedStreamingTransport
         },
         usdCost: costUsd
       });
@@ -515,7 +446,7 @@ export class LLMService {
         metadata: {
           provider,
           model,
-          streaming: true
+          streaming: usedStreamingTransport
         }
       });
       throw error;
@@ -557,6 +488,12 @@ export class LLMService {
     }
     if (provider === "anthropic") {
       return callAnthropicStreamingRequest(this.chatDeps(), payload, callbacks);
+    }
+    if (provider === "codex-oauth") {
+      return callOpenAiResponsesStreamingRequest(this.chatDeps("codex-oauth"), payload, callbacks);
+    }
+    if (provider === "openai") {
+      return callOpenAiResponsesStreamingRequest(this.chatDeps(), payload, callbacks);
     }
     throw new Error(`Streaming is not supported for LLM provider '${provider}'.`);
   }

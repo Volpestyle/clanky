@@ -1,4 +1,4 @@
-import { clamp, sanitizeBotText, sleep } from "../utils.ts";
+import { clamp, sanitizeBotText } from "../utils.ts";
 import { buildReplyPrompt, buildSystemPrompt } from "../prompts/index.ts";
 import { getMediaPromptCraftGuidance } from "../prompts/promptCore.ts";
 import type { ReplyAttemptOptions } from "../bot.ts";
@@ -255,6 +255,7 @@ type ReplyIntentHandledResult = {
 type ReplyActionableLlmResult = {
   handledByIntent: false;
   generation: ReplyGeneration;
+  typingDelayMs: number;
   usedWebSearchFollowup: boolean;
   usedBrowserBrowseFollowup: boolean;
   usedMemoryLookupFollowup: boolean;
@@ -684,6 +685,9 @@ export async function executeReplyLlm(
   let replyContextMessages: ContextMessage[] = [];
 
   throwIfAborted(signal, "Reply cancelled");
+  const typingStartedAtMs = Date.now();
+  await message.channel.sendTyping();
+  const typingDelayMs = Math.max(0, Date.now() - typingStartedAtMs);
   const llm1StartedAtMs = Date.now();
   let generation: ReplyGeneration = await bot.llm.generate({
     settings,
@@ -1045,7 +1049,7 @@ export async function executeReplyLlm(
 
   return {
     handledByIntent: false,
-    generation, usedWebSearchFollowup, usedBrowserBrowseFollowup, usedMemoryLookupFollowup, usedImageLookupFollowup,
+    generation, typingDelayMs, usedWebSearchFollowup, usedBrowserBrowseFollowup, usedMemoryLookupFollowup, usedImageLookupFollowup,
     followupGenerationSettings, mediaPromptLimit, replyDirective,
     webSearch, browserBrowse, memoryLookup, imageLookup, modelImageInputs, replyPrompts
   };
@@ -1323,7 +1327,7 @@ export async function sendReplyMessage(
     videoContext
   } = ctx;
   const {
-    generation, usedWebSearchFollowup, usedMemoryLookupFollowup, usedImageLookupFollowup,
+    generation, typingDelayMs, usedWebSearchFollowup, usedMemoryLookupFollowup, usedImageLookupFollowup,
     webSearch, imageLookup, memoryLookup, replyPrompts
   } = llmResult;
   const {
@@ -1332,11 +1336,6 @@ export async function sendReplyMessage(
     imageVariantUsed, videoUsed, videoBudgetBlocked, videoCapabilityBlocked, gifUsed,
     gifBudgetBlocked, gifConfigBlocked, imagePrompt, complexImagePrompt, videoPrompt, gifQuery
   } = actionResult;
-
-  const typingStartedAtMs = Date.now();
-  await message.channel.sendTyping();
-  await sleep(bot.getSimulatedTypingDelayMs(600, 1800));
-  const typingDelayMs = Math.max(0, Date.now() - typingStartedAtMs);
 
   const shouldThreadReply = addressed || options.forceRespond;
   const canStandalonePost = isReplyChannel || !shouldThreadReply;

@@ -9,6 +9,7 @@ import {
 } from "./voiceSessionManager.constants.ts";
 import { isRealtimeMode, resolveRealtimeProvider } from "./voiceSessionHelpers.ts";
 import type {
+  VoiceSessionDurableContextEntry,
   StreamWatchBrainContextEntry,
   VoiceAddressingState,
   VoiceConversationContext,
@@ -425,6 +426,26 @@ export function buildVoiceRuntimeSnapshot(
       session,
       session.settingsSnapshot || null
     );
+    const durableContext: VoiceSessionDurableContextEntry[] = (Array.isArray(session.durableContext) ? session.durableContext : [])
+      .map((entry) => {
+        const text = String(entry?.text || "").replace(/\s+/g, " ").trim();
+        if (!text) return null;
+        const rawCategory = String(entry?.category || "").trim().toLowerCase();
+        const category =
+          rawCategory === "plan" ||
+          rawCategory === "preference" ||
+          rawCategory === "relationship"
+            ? rawCategory
+            : "fact";
+        const atMs = Number(entry?.at || 0);
+        return {
+          text: text.slice(0, 240),
+          category,
+          at: Number.isFinite(atMs) && atMs > 0 ? new Date(atMs).toISOString() : null
+        };
+      })
+      .filter((entry): entry is { text: string; category: string; at: string | null } => entry !== null)
+      .slice(-50);
     const streamWatchLatestFrameDataBase64 = String(session.streamWatch?.latestFrameDataBase64 || "").trim();
     const streamWatchLatestFrameApproxBytes = streamWatchLatestFrameDataBase64
       ? Math.max(0, Math.floor((streamWatchLatestFrameDataBase64.length * 3) / 4))
@@ -528,6 +549,7 @@ export function buildVoiceRuntimeSnapshot(
         at: turn.at ? new Date(turn.at).toISOString() : null,
         addressing: buildRecentTurnAddressing(turn)
       })),
+      durableContext,
       lastGenerationContext: session.lastGenerationContext || null,
       streamWatch: {
         active: Boolean(session.streamWatch?.active),

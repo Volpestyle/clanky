@@ -290,7 +290,7 @@ test("maybeReplyToMessagePipeline treats an aborted in-flight reply as handled a
     assert.equal(handled, true);
     assert.equal(activeReplies.has(replyScopeKey), false);
     assert.equal(activeReplies.clearCalls, 1);
-    assert.equal(typingCallsRef.count, 0);
+    assert.equal(typingCallsRef.count, 1);
     assert.equal(channelSendPayloads.length, 0);
     assert.equal(replyPayloads.length, 0);
   });

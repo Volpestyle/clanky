@@ -41,6 +41,9 @@ import { SentenceAccumulator } from "../voice/sentenceAccumulator.ts";
 const OPEN_ARTICLE_MAX_CANDIDATES = 12;
 const OPEN_ARTICLE_ROW_LIMIT = 4;
 const OPEN_ARTICLE_RESULTS_PER_ROW = 5;
+const SESSION_DURABLE_CONTEXT_MAX_ENTRIES = 50;
+
+type SessionDurableContextCategory = "fact" | "plan" | "preference" | "relationship";
 
 function runAsyncCallback(callback: unknown, payload: Record<string, unknown>, callbackName: string) {
   if (typeof callback !== "function") return;
@@ -75,6 +78,55 @@ function mergeSpokenReplyText(parts: string[]) {
     .filter(Boolean)
     .join("\n")
     .trim();
+}
+
+function normalizeSessionDurableContextCategory(value: unknown): SessionDurableContextCategory {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "plan") return "plan";
+  if (normalized === "preference") return "preference";
+  if (normalized === "relationship") return "relationship";
+  return "fact";
+}
+
+function appendSessionDurableContextEntry({
+  session,
+  text,
+  category,
+  at
+}: {
+  session: Record<string, unknown> | null;
+  text: unknown;
+  category: unknown;
+  at: unknown;
+}) {
+  if (!session || typeof session !== "object") return null;
+
+  const normalizedText = String(text || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+  if (!normalizedText) return null;
+
+  const normalizedCategory = normalizeSessionDurableContextCategory(category);
+  const normalizedAt = Number.isFinite(Number(at)) ? Math.max(0, Math.round(Number(at))) : Date.now();
+  const current = Array.isArray(session.durableContext) ? session.durableContext : [];
+  const matchKey = normalizedText.toLowerCase();
+  const duplicate = current.some((entry) => String(entry?.text || "").trim().toLowerCase() === matchKey);
+  const nextEntries = [
+    ...current.filter((entry) => String(entry?.text || "").trim().toLowerCase() !== matchKey),
+    {
+      text: normalizedText,
+      category: normalizedCategory,
+      at: normalizedAt
+    }
+  ].slice(-SESSION_DURABLE_CONTEXT_MAX_ENTRIES);
+
+  session.durableContext = nextEntries;
+  return {
+    entry: nextEntries[nextEntries.length - 1] || null,
+    duplicate,
+    total: nextEntries.length
+  };
 }
 
 export async function composeVoiceOperationalMessage(runtime: VoiceReplyRuntime, {
@@ -593,7 +645,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       allowVoiceToolCalls: Boolean(voiceToolCallbacks),
       musicContext,
       hasDirectVisionFrame: Boolean(streamWatchLatestFrame?.dataBase64),
-      durableScreenNotes: streamWatchDurableScreenNotes
+      durableScreenNotes: streamWatchDurableScreenNotes,
+      durableContext: Array.isArray(activeVoiceSession?.durableContext) ? activeVoiceSession.durableContext : []
     });
 
   const generationContextSnapshot = {
@@ -612,6 +665,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       relevantFacts: promptMemorySlice.relevantFacts
     },
     recentConversationHistory,
+    durableContext: Array.isArray(activeVoiceSession?.durableContext) ? activeVoiceSession.durableContext : [],
     sessionTiming: sessionTiming || null,
     tools: {
       soundboard: allowSoundboardToolCall,
@@ -856,12 +910,40 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
           }, "onWebLookupStart");
         }
 
-        const result = await executeReplyTool(
-          toolCall.name,
-          toolCall.input as Record<string, unknown>,
-          voiceToolRuntime,
-          voiceToolContext
-        );
+        const toolInput = toolCall.input as Record<string, unknown>;
+        const result = toolCall.name === "note_context"
+          ? (() => {
+            const stored = appendSessionDurableContextEntry({
+              session: activeVoiceSession,
+              text: toolInput?.text,
+              category: toolInput?.category,
+              at: Date.now()
+            });
+            if (!stored?.entry) {
+              return {
+                content: JSON.stringify({
+                  ok: false,
+                  error: "Session durable context is unavailable."
+                }),
+                isError: true
+              };
+            }
+            return {
+              content: JSON.stringify({
+                ok: true,
+                duplicate: stored.duplicate,
+                total: stored.total,
+                text: stored.entry.text,
+                category: stored.entry.category
+              })
+            };
+          })()
+          : await executeReplyTool(
+            toolCall.name,
+            toolInput,
+            voiceToolRuntime,
+            voiceToolContext
+          );
 
         if (toolCall.name === "web_search" && !result.isError) {
           usedWebSearchFollowup = true;

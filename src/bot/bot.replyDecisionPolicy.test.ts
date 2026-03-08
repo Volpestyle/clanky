@@ -494,7 +494,7 @@ test("smoke: text followup-window turn addressed to another user is llm-skipped"
     assert.equal(llmCalls.length, 1);
     assert.equal(replyPayloads.length, 0);
     assert.equal(channelSendPayloads.length, 0);
-    assert.equal(typingCallsRef.count, 0);
+    assert.equal(typingCallsRef.count, 1);
   });
 });
 
@@ -1667,7 +1667,7 @@ test("voice intent handoff routes join requests to voice session manager instead
     assert.equal(joinCall?.intentConfidence, 0.92);
     assert.equal(replyPayloads.length, 0);
     assert.equal(channelSendPayloads.length, 0);
-    assert.equal(typingCallsRef.count, 0);
+    assert.equal(typingCallsRef.count, 1);
 
     const intentEvent = store
       .getRecentActions(20)

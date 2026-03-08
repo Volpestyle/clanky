@@ -95,6 +95,20 @@ test("buildReplyToolSet includes code_task when dev task runtime and permissions
   assert.equal(toolNames.includes("code_task"), true);
 });
 
+test("buildReplyToolSet includes note_context when voice tools are available", () => {
+  const toolNames = buildReplyToolSet({
+    browser: { enabled: false },
+    webSearch: { enabled: false },
+    memory: { enabled: false },
+    adaptiveDirectives: { enabled: false }
+  }, {
+    voiceToolsAvailable: true,
+    conversationSearchAvailable: false
+  }).map((tool) => tool.name);
+
+  assert.equal(toolNames.includes("note_context"), true);
+});
+
 test("executeReplyTool delegates web_scrape to readPageSummary", async () => {
   const calls: Array<{ url: string; maxChars: number }> = [];
 

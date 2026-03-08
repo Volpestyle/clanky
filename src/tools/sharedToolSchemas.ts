@@ -397,6 +397,27 @@ export const SCREEN_MOMENT_SCHEMA: SharedToolSchema = {
   }
 };
 
+export const NOTE_CONTEXT_SCHEMA: SharedToolSchema = {
+  name: "note_context",
+  description: "Pin important session-scoped context that should stay available later in this conversation even after older turns scroll out. Do not duplicate notes already pinned.",
+  parameters: {
+    type: "object",
+    properties: {
+      text: {
+        type: "string",
+        description: "The important fact or context to pin for the rest of this session."
+      },
+      category: {
+        type: "string",
+        enum: ["fact", "plan", "preference", "relationship"],
+        description: "What kind of session context this note represents."
+      }
+    },
+    required: ["text"],
+    additionalProperties: false
+  }
+};
+
 export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
   MUSIC_SEARCH_SCHEMA,
   MUSIC_QUEUE_ADD_SCHEMA,
@@ -411,6 +432,7 @@ export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
   SET_ADDRESSING_SCHEMA,
   SCREEN_NOTE_SCHEMA,
   SCREEN_MOMENT_SCHEMA,
+  NOTE_CONTEXT_SCHEMA,
   LEAVE_VOICE_CHANNEL_SCHEMA
 ];
 

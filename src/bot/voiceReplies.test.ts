@@ -509,6 +509,76 @@ test("generateVoiceTurnReply preserves spoken text across tool-loop turns", asyn
   assert.equal(reply.text, "let me check that.\nit shipped in 2004.");
 });
 
+test("generateVoiceTurnReply stores durable session context from note_context tool calls", async () => {
+  const session = {
+    id: "voice-session-1",
+    durableContext: [
+      {
+        text: "Existing plan",
+        category: "plan",
+        at: 1
+      }
+    ]
+  };
+  const { bot } = createVoiceBot({
+    generationSequence: [
+      {
+        text: "",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "note_context",
+            input: {
+              text: "Alice prefers concise answers",
+              category: "preference"
+            }
+          },
+          {
+            id: "tc_2",
+            name: "note_context",
+            input: {
+              text: "alice prefers concise answers",
+              category: "fact"
+            }
+          }
+        ],
+        rawContent: [
+          { type: "tool_use", id: "tc_1", name: "note_context", input: { text: "Alice prefers concise answers", category: "preference" } },
+          { type: "tool_use", id: "tc_2", name: "note_context", input: { text: "alice prefers concise answers", category: "fact" } }
+        ]
+      },
+      {
+        text: "noted"
+      }
+    ]
+  });
+  bot.voiceSessionManager = {
+    getSessionById(sessionId: string) {
+      return sessionId === "voice-session-1" ? session : null;
+    }
+  };
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    sessionId: "voice-session-1",
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "keep it short later too",
+    voiceToolCallbacks: {}
+  });
+
+  assert.equal(reply.text, "noted");
+  assert.equal(session.durableContext.length, 2);
+  assert.deepEqual(session.durableContext[0], {
+    text: "Existing plan",
+    category: "plan",
+    at: 1
+  });
+  assert.equal(session.durableContext[1]?.text, "alice prefers concise answers");
+  assert.equal(session.durableContext[1]?.category, "fact");
+});
+
 test("generateVoiceTurnReply captures soundboard tool-call results", async () => {
   const { bot } = createVoiceBot({
     generationSequence: [

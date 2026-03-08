@@ -16,6 +16,7 @@ import {
   buildVoiceAdmissionPolicyLines
 } from "./voiceAdmissionPolicy.ts";
 import { VOICE_TOOL_SCHEMAS } from "../tools/sharedToolSchemas.ts";
+import type { VoiceSessionDurableContextEntry } from "../voice/voiceSessionTypes.ts";
 
 type VoiceMusicPromptContext = {
   playbackState: "playing" | "paused" | "stopped" | "idle";
@@ -103,7 +104,8 @@ export function buildVoiceTurnPrompt({
   allowVoiceToolCalls = false,
   musicContext = null,
   hasDirectVisionFrame = false,
-  durableScreenNotes = []
+  durableScreenNotes = [],
+  durableContext = []
 }) {
   const parts = [];
   const voiceToneGuardrails = buildVoiceToneGuardrails();
@@ -494,6 +496,28 @@ export function buildVoiceTurnPrompt({
     .map((note) => String(note || "").replace(/\s+/g, " ").trim().slice(0, 240))
     .filter(Boolean)
     .slice(-20);
+  const normalizedDurableContext: VoiceSessionDurableContextEntry[] = (Array.isArray(durableContext) ? durableContext : [])
+    .map((entry) => {
+      const text = String(entry?.text || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 240);
+      if (!text) return null;
+      const rawCategory = String(entry?.category || "").trim().toLowerCase();
+      const category =
+        rawCategory === "plan" ||
+        rawCategory === "preference" ||
+        rawCategory === "relationship"
+          ? rawCategory
+          : "fact";
+      return {
+        text,
+        category,
+        at: Number(entry?.at || 0)
+      } satisfies VoiceSessionDurableContextEntry;
+    })
+    .filter((entry): entry is VoiceSessionDurableContextEntry => entry !== null)
+    .slice(-50);
   if (hasDirectVisionFrame) {
     const screenContextParts = [
       "Live screen share: You can see the user's screen directly in the attached image.",
@@ -589,6 +613,15 @@ export function buildVoiceTurnPrompt({
     parts.push("Do not mention internal refs in spoken text.");
   } else {
     parts.push("Soundboard tool call is unavailable this turn. Do not imply you played a sound effect.");
+  }
+
+  if (normalizedDurableContext.length) {
+    parts.push("Session context:");
+    parts.push(
+      normalizedDurableContext
+        .map((entry) => `- [${entry.category}] ${entry.text}`)
+        .join("\n")
+    );
   }
 
   if (recentConversationHistory?.length) {
@@ -703,6 +736,7 @@ export function buildVoiceTurnPrompt({
     parts.push("- Use music_search when the speaker wants you to find candidate tracks first instead of starting playback immediately.");
     parts.push("- Do not emulate play-now by chaining music_queue_add and music_skip.");
     parts.push("- Do not use music_skip as a substitute for music_stop.");
+    parts.push("- Use note_context to pin important session-scoped facts, plans, preferences, or relationships that should stay available later in this conversation. Do not duplicate something already pinned.");
     parts.push("- Call set_addressing once per turn with your best guess for who the current speaker was talking to: talkingTo should be \"ME\" when they were likely addressing you, otherwise a participant name when reasonably clear, otherwise null. Set confidence to 0..1.");
   } else {
     parts.push("Voice/session control tools are unavailable this turn. Do not claim you changed music playback or left VC via a tool.");

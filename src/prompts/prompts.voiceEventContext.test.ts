@@ -163,3 +163,35 @@ test("buildVoiceTurnPrompt prefers tool calls over stale helper fields", () => {
   assert.equal(prompt.includes("set openArticleRef"), false);
   assert.equal(prompt.includes("Set memoryLine"), false);
 });
+
+test("buildVoiceTurnPrompt renders durable session context above conversation history", () => {
+  const prompt = buildVoiceTurnPrompt({
+    speakerName: "alice",
+    transcript: "what were we saying earlier?",
+    allowVoiceToolCalls: true,
+    durableContext: [
+      {
+        text: "Alice prefers concise answers in this session",
+        category: "preference",
+        at: Date.now()
+      }
+    ],
+    recentConversationHistory: [
+      {
+        ageMinutes: 3,
+        messages: [
+          {
+            author_name: "alice",
+            content: "keep it short",
+            is_bot: 0
+          }
+        ]
+      }
+    ]
+  });
+
+  assert.equal(prompt.includes("Session context:"), true);
+  assert.equal(prompt.includes("- [preference] Alice prefers concise answers in this session"), true);
+  assert.equal(prompt.indexOf("Session context:") < prompt.indexOf("Relevant past conversation windows from shared text/voice history:"), true);
+  assert.equal(prompt.includes("Use note_context to pin important session-scoped facts, plans, preferences, or relationships"), true);
+});

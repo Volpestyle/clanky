@@ -23,7 +23,7 @@ import {
   resolveFollowingNextRunAt,
   resolveInitialNextRunAt
 } from "./bot/automation.ts";
-import { chance, clamp, sleep } from "./utils.ts";
+import { chance, clamp } from "./utils.ts";
 import {
   applyAutomationControlAction,
   composeAutomationControlReply
@@ -1330,7 +1330,6 @@ export class ClankerBot {
 
     const typingStartedAtMs = Date.now();
     await message.channel.sendTyping();
-    await sleep(this.getSimulatedTypingDelayMs(350, 800));
     const typingDelayMs = Math.max(0, Date.now() - typingStartedAtMs);
     const sendStartedAtMs = Date.now();
     const sent = await message.reply({

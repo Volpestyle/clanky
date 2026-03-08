@@ -71,6 +71,13 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and stt session state", (
           at: now - 1_000
         }
       ],
+      durableContext: [
+        {
+          text: "Alice likes concise answers",
+          category: "preference",
+          at: now - 500
+        }
+      ],
       modelContextSummary: {
         generation: {
           summary: "generation summary"
@@ -460,6 +467,13 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and stt session state", (
     assert.equal(realtime?.conversation.wake.windowMs, 35_000);
     assert.equal(realtime?.pendingDeferredTurns, 2);
     assert.equal(realtime?.recentTurns[0]?.addressing?.directedConfidence, 1);
+    assert.deepEqual(realtime?.durableContext, [
+      {
+        text: "Alice likes concise answers",
+        category: "preference",
+        at: "2026-03-06T17:59:59.500Z"
+      }
+    ]);
     assert.equal(realtime?.streamWatch.latestFrameApproxBytes, 6);
     assert.deepEqual(realtime?.streamWatch.brainContextPayload, {
       prompt: "watch the left side",
