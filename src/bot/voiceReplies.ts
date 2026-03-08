@@ -264,6 +264,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   recentMembershipEvents = [],
   recentVoiceEffectEvents = [],
   soundboardCandidates = [],
+  streamWatchLatestFrame = null,
+  streamWatchDurableScreenNotes = [],
   onWebLookupStart = null,
   onWebLookupComplete = null,
   webSearchTimeoutMs: _webSearchTimeoutMs = null,
@@ -320,6 +322,14 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     channelId &&
     userId
   );
+  const activeVoiceSession =
+    sessionId && typeof runtime.voiceSessionManager?.getSessionById === "function"
+      ? runtime.voiceSessionManager.getSessionById(sessionId)
+      : null;
+  const musicContext =
+    activeVoiceSession && typeof runtime.voiceSessionManager?.getMusicPromptContext === "function"
+      ? runtime.voiceSessionManager.getMusicPromptContext(activeVoiceSession)
+      : null;
 
   const guild = runtime.client.guilds.cache.get(String(guildId || ""));
   const speakerName =
@@ -390,18 +400,20 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     },
     source: "voice_stt_pipeline_generation",
     loadFactProfile:
-      sessionId && typeof runtime.voiceSessionManager?.getSessionFactProfileSlice === "function"
-        ? (payload) => {
-          const session = runtime.voiceSessionManager?.getSessionById?.(sessionId);
-          if (!session) return { userFacts: [], relevantFacts: [] };
-          return runtime.voiceSessionManager?.getSessionFactProfileSlice?.({
-            session,
-            userId: String(payload.userId || "").trim() || null
-          }) || { userFacts: [], relevantFacts: [] };
+      (payload) => {
+        if (activeVoiceSession && typeof runtime.voiceSessionManager?.getSessionFactProfileSlice === "function") {
+          if (activeVoiceSession) {
+            return runtime.voiceSessionManager.getSessionFactProfileSlice({
+              session: activeVoiceSession,
+              userId: String(payload.userId || "").trim() || null
+            });
+          }
         }
-        : typeof runtime.loadFactProfile === "function"
-          ? (payload) => runtime.loadFactProfile(payload)
-        : null,
+        if (typeof runtime.loadFactProfile === "function") {
+          return runtime.loadFactProfile(payload);
+        }
+        return { userFacts: [], relevantFacts: [] };
+      },
     loadRecentLookupContext:
       typeof runtime.loadRecentLookupContext === "function"
         ? (payload) => runtime.loadRecentLookupContext(payload)
@@ -502,6 +514,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   const openedArticle = null;
   let usedWebSearchFollowup = false;
   let usedOpenArticleFollowup = false;
+  let usedScreenShareOffer = false;
+  let leaveVoiceChannelRequested = false;
 
   const voiceToneGuardrails = buildVoiceToneGuardrails();
   const systemPrompt = [
@@ -516,7 +530,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       : isEagerTurn
         ? "If responding would be an interruption or you have nothing to add, set skip=true and text to [SKIP]. Otherwise set skip=false and use natural spoken text."
         : "You are not directly addressed. Reply only if you can add clear value; otherwise set skip=true and text to [SKIP].",
-    "Goodbyes do not force exit. You can say goodbye and stay in VC; set leaveVoiceChannel=true only when you intentionally choose to end your own VC session now.",
+    "Goodbyes do not force exit. You can say goodbye and stay in VC; call leave_voice_channel only when you intentionally choose to end your own VC session now.",
     allowSoundboardToolCall ? "Never mention soundboard control refs in normal speech." : null
   ]
     .filter(Boolean)
@@ -545,17 +559,23 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       recentVoiceEffectEvents: normalizedVoiceEffectEvents,
       soundboardCandidates: normalizedSoundboardCandidates,
       webSearch: webSearchContext,
+      browserBrowse,
       recentConversationHistory,
       recentWebLookups,
       openArticleCandidates: openArticleCandidatesContext,
       openedArticle: openedArticleContext,
       allowWebSearchToolCall: allowWebSearch,
+      allowBrowserBrowseToolCall,
       allowOpenArticleToolCall: allowOpenArticle,
       screenShare,
       allowScreenShareToolCall,
       allowMemoryToolCalls,
       allowAdaptiveDirectiveToolCalls,
-      allowSoundboardToolCall
+      allowSoundboardToolCall,
+      allowVoiceToolCalls: Boolean(voiceToolCallbacks),
+      musicContext,
+      hasDirectVisionFrame: Boolean(streamWatchLatestFrame?.dataBase64),
+      durableScreenNotes: streamWatchDurableScreenNotes
     });
 
   const generationContextSnapshot = {
@@ -612,6 +632,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       adaptiveDirectivesAvailable: allowAdaptiveDirectiveToolCalls,
       imageLookupAvailable: false,
       openArticleAvailable: allowOpenArticleToolCall && openArticleCandidates.length > 0,
+      screenShareAvailable: allowScreenShareToolCall,
       codeAgentAvailable: codeAgentRuntimeAvailable,
       voiceToolsAvailable: Boolean(voiceToolCallbacks)
     });
@@ -646,6 +667,23 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
             source
           })
       },
+      screenShare:
+        typeof runtime.offerVoiceScreenShareLink === "function"
+          ? {
+              offerLink: async ({ settings: toolSettings, guildId, channelId, requesterUserId, transcript, source }) =>
+                await runtime.offerVoiceScreenShareLink({
+                  settings: toolSettings,
+                  guildId,
+                  channelId,
+                  requesterUserId,
+                  transcript,
+                  source
+                })
+            }
+          : undefined,
+      voiceSessionControl: {
+        requestLeaveVoiceChannel: async () => ({ ok: true })
+      },
       codeAgent: runtime.runModelRequestedCodeTask ? {
         runTask: async ({ settings: toolSettings, task, cwd, guildId, channelId, userId, source }) =>
           await runtime.runModelRequestedCodeTask({
@@ -678,10 +716,21 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       ...normalizedContextMessages
     ];
 
+    const voiceImageInputs =
+      streamWatchLatestFrame?.dataBase64
+        ? [
+            {
+              mediaType: String(streamWatchLatestFrame.mimeType || "image/jpeg"),
+              dataBase64: String(streamWatchLatestFrame.dataBase64)
+            }
+          ]
+        : [];
+
     let generation = await runtime.llm.generate({
       settings: tunedSettings,
       systemPrompt,
       userPrompt: initialUserPrompt,
+      imageInputs: voiceImageInputs,
       contextMessages: voiceContextMessages,
       jsonSchema: voiceReplyTools.length ? "" : REPLY_OUTPUT_JSON_SCHEMA,
       tools: voiceReplyTools,
@@ -735,6 +784,14 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         if (toolCall.name === "open_article" && !result.isError) {
           usedOpenArticleFollowup = true;
         }
+        if (toolCall.name === "offer_screen_share_link" && !result.isError) {
+          const toolPayload = parseReplyToolResultPayload(result.content);
+          usedScreenShareOffer = usedScreenShareOffer || Boolean(toolPayload?.offered);
+        }
+        if (toolCall.name === "leave_voice_channel" && !result.isError) {
+          const toolPayload = parseReplyToolResultPayload(result.content);
+          leaveVoiceChannelRequested = leaveVoiceChannelRequested || Boolean(toolPayload?.ok);
+        }
 
         toolResultMessages.push({
           type: "tool_result",
@@ -775,36 +832,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
 
     const parsed = parseStructuredReplyOutput(generation.text);
 
-    let usedScreenShareOffer = false;
-    if (
-      allowScreenShareToolCall &&
-      parsed.screenShareIntent?.action === "offer_link" &&
-      typeof runtime.offerVoiceScreenShareLink === "function"
-    ) {
-      try {
-        const offered = await runtime.offerVoiceScreenShareLink({
-          settings,
-          guildId,
-          channelId,
-          requesterUserId: String(userId),
-          transcript: incomingTranscript,
-          source: sessionId ? "voice_session_tool_call" : "voice_turn_tool_call"
-        });
-        usedScreenShareOffer = Boolean(offered?.offered);
-      } catch (error) {
-        runtime.store?.logAction?.({
-          kind: "voice_error",
-          guildId,
-          channelId,
-          userId,
-          content: `voice_screen_share_offer_failed: ${String(error?.message || error)}`,
-          metadata: {
-            sessionId
-          }
-        });
-      }
-    }
-
     const soundboardRefs = allowSoundboardToolCall
       ? (Array.isArray(parsed.soundboardRefs) ? parsed.soundboardRefs : [])
         .map((entry) =>
@@ -815,7 +842,12 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         .filter(Boolean)
         .slice(0, MAX_VOICE_SOUNDBOARD_REFS)
       : [];
-    const leaveVoiceChannelRequested = Boolean(parsed.leaveVoiceChannel);
+    const screenNote = typeof parsed.screenNote === "string"
+      ? String(parsed.screenNote || "").replace(/\s+/g, " ").trim().slice(0, 220) || null
+      : null;
+    const screenMoment = typeof parsed.screenMoment === "string"
+      ? String(parsed.screenMoment || "").replace(/\s+/g, " ").trim().slice(0, 220) || null
+      : null;
     const voiceAddressing = normalizeGeneratedVoiceAddressing(parsed.voiceAddressing, {
       directAddressed: Boolean(directAddressed)
     });
@@ -834,6 +866,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         usedOpenArticleFollowup,
         usedScreenShareOffer,
         voiceAddressing,
+        screenNote,
+        screenMoment,
         generationContextSnapshot
       };
     }
@@ -845,6 +879,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         usedOpenArticleFollowup,
         usedScreenShareOffer,
         voiceAddressing,
+        screenNote,
+        screenMoment,
         generationContextSnapshot
       };
       if (leaveVoiceChannelRequested) {
@@ -863,6 +899,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       usedOpenArticleFollowup,
       usedScreenShareOffer,
       voiceAddressing,
+      screenNote,
       generationContextSnapshot
     };
     if (leaveVoiceChannelRequested) {
@@ -910,6 +947,17 @@ function normalizeGeneratedVoiceAddressing(rawAddressing, { directAddressed = fa
     talkingTo,
     directedConfidence
   };
+}
+
+function parseReplyToolResultPayload(content: unknown) {
+  const text = String(content || "").trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
 }
 
 function resolveVoiceScreenShareCapability(runtime, { settings, guildId, channelId, userId }) {

@@ -319,6 +319,12 @@ export const LEAVE_VOICE_CHANNEL_SCHEMA: SharedToolSchema = {
   parameters: { type: "object", properties: {}, required: [], additionalProperties: false }
 };
 
+export const OFFER_SCREEN_SHARE_LINK_SCHEMA: SharedToolSchema = {
+  name: "offer_screen_share_link",
+  description: "Send the active speaker a temporary screen-share link in the text channel so they can start sharing their screen.",
+  parameters: { type: "object", properties: {}, required: [], additionalProperties: false }
+};
+
 export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
   MUSIC_SEARCH_SCHEMA,
   MUSIC_QUEUE_ADD_SCHEMA,

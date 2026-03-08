@@ -15,6 +15,60 @@ import { formatVoiceChannelEffectSummary } from "../voice/voiceSessionHelpers.ts
 import {
   buildVoiceAdmissionPolicyLines
 } from "./voiceAdmissionPolicy.ts";
+import { VOICE_TOOL_SCHEMAS } from "../tools/sharedToolSchemas.ts";
+
+type VoiceMusicPromptContext = {
+  playbackState: "playing" | "paused" | "stopped" | "idle";
+  currentTrack: { title: string; artists: string[] } | null;
+  lastTrack: { title: string; artists: string[] } | null;
+  queueLength: number;
+  upcomingTracks: Array<{ title: string; artist: string | null }>;
+  lastAction: "play_now" | "stop" | "pause" | "resume" | "skip" | null;
+  lastQuery: string | null;
+};
+
+const VOICE_CONTROL_TOOL_NAMES = VOICE_TOOL_SCHEMAS.map((schema) => schema.name);
+
+function collectAvailableVoiceToolNames({
+  webSearchAvailable,
+  browserBrowseAvailable,
+  memoryAvailable,
+  adaptiveDirectivesAvailable,
+  openArticleAvailable,
+  screenShareAvailable,
+  voiceToolsAvailable
+}: {
+  webSearchAvailable: boolean;
+  browserBrowseAvailable: boolean;
+  memoryAvailable: boolean;
+  adaptiveDirectivesAvailable: boolean;
+  openArticleAvailable: boolean;
+  screenShareAvailable: boolean;
+  voiceToolsAvailable: boolean;
+}): string[] {
+  const names = new Set<string>(["conversation_search"]);
+
+  if (webSearchAvailable) {
+    names.add("web_search");
+    names.add("web_scrape");
+  }
+  if (browserBrowseAvailable) names.add("browser_browse");
+  if (memoryAvailable) {
+    names.add("memory_search");
+    names.add("memory_write");
+  }
+  if (adaptiveDirectivesAvailable) {
+    names.add("adaptive_directive_add");
+    names.add("adaptive_directive_remove");
+  }
+  if (openArticleAvailable) names.add("open_article");
+  if (screenShareAvailable) names.add("offer_screen_share_link");
+  if (voiceToolsAvailable) {
+    for (const name of VOICE_CONTROL_TOOL_NAMES) names.add(name);
+  }
+
+  return Array.from(names);
+}
 
 export function buildVoiceTurnPrompt({
   speakerName = "unknown",
@@ -33,17 +87,23 @@ export function buildVoiceTurnPrompt({
   recentVoiceEffectEvents = [],
   soundboardCandidates = [],
   webSearch = null,
+  browserBrowse = null,
   recentConversationHistory = [],
   recentWebLookups = [],
   openArticleCandidates = [],
   openedArticle = null,
   allowWebSearchToolCall = false,
+  allowBrowserBrowseToolCall = false,
   allowOpenArticleToolCall = false,
   screenShare = null,
   allowScreenShareToolCall = false,
   allowMemoryToolCalls = false,
   allowAdaptiveDirectiveToolCalls = false,
-  allowSoundboardToolCall = false
+  allowSoundboardToolCall = false,
+  allowVoiceToolCalls = false,
+  musicContext = null,
+  hasDirectVisionFrame = false,
+  durableScreenNotes = []
 }) {
   const parts = [];
   const voiceToneGuardrails = buildVoiceToneGuardrails();
@@ -135,6 +195,74 @@ export function buildVoiceTurnPrompt({
     }))
     .filter((entry) => entry.ref && entry.url)
     .slice(0, 12);
+  const normalizedMusicContext: VoiceMusicPromptContext | null =
+    musicContext && typeof musicContext === "object"
+      ? {
+          playbackState:
+            String(musicContext?.playbackState || "").trim().toLowerCase() === "playing"
+              ? "playing"
+              : String(musicContext?.playbackState || "").trim().toLowerCase() === "paused"
+                ? "paused"
+                : String(musicContext?.playbackState || "").trim().toLowerCase() === "stopped"
+                  ? "stopped"
+                  : "idle",
+          currentTrack:
+            musicContext?.currentTrack && typeof musicContext.currentTrack === "object"
+              ? {
+                  title: String(musicContext.currentTrack.title || "").trim().slice(0, 140),
+                  artists: (
+                    Array.isArray(musicContext.currentTrack.artists)
+                      ? musicContext.currentTrack.artists
+                      : []
+                  )
+                    .map((artist) => String(artist || "").trim().slice(0, 80))
+                    .filter(Boolean)
+                    .slice(0, 6)
+                }
+              : null,
+          lastTrack:
+            musicContext?.lastTrack && typeof musicContext.lastTrack === "object"
+              ? {
+                  title: String(musicContext.lastTrack.title || "").trim().slice(0, 140),
+                  artists: (
+                    Array.isArray(musicContext.lastTrack.artists)
+                      ? musicContext.lastTrack.artists
+                      : []
+                  )
+                    .map((artist) => String(artist || "").trim().slice(0, 80))
+                    .filter(Boolean)
+                    .slice(0, 6)
+                }
+              : null,
+          queueLength: Number.isFinite(Number(musicContext?.queueLength))
+            ? Math.max(0, Math.round(Number(musicContext.queueLength)))
+            : 0,
+          upcomingTracks: (
+            Array.isArray(musicContext?.upcomingTracks)
+              ? musicContext.upcomingTracks
+              : []
+          )
+            .map((entry) => ({
+              title: String(entry?.title || "").trim().slice(0, 140),
+              artist: String(entry?.artist || "").trim().slice(0, 80) || null
+            }))
+            .filter((entry) => entry.title)
+            .slice(0, 3),
+          lastAction:
+            String(musicContext?.lastAction || "").trim().toLowerCase() === "play_now"
+              ? "play_now"
+              : String(musicContext?.lastAction || "").trim().toLowerCase() === "stop"
+                ? "stop"
+                : String(musicContext?.lastAction || "").trim().toLowerCase() === "pause"
+                  ? "pause"
+                  : String(musicContext?.lastAction || "").trim().toLowerCase() === "resume"
+                    ? "resume"
+                    : String(musicContext?.lastAction || "").trim().toLowerCase() === "skip"
+                      ? "skip"
+                      : null,
+          lastQuery: String(musicContext?.lastQuery || "").trim().slice(0, 180) || null
+        }
+      : null;
   const normalizedStreamWatchBrainContext =
     normalizedConversationContext?.streamWatchBrainContext &&
     typeof normalizedConversationContext.streamWatchBrainContext === "object"
@@ -223,6 +351,31 @@ export function buildVoiceTurnPrompt({
             .slice(-6)
         }
       : null;
+  const webSearchToolAvailable = Boolean(
+    allowWebSearchToolCall &&
+    webSearch?.enabled &&
+    webSearch?.configured &&
+    !webSearch?.optedOutByUser &&
+    !webSearch?.blockedByBudget &&
+    webSearch?.budget?.canSearch !== false
+  );
+  const browserBrowseToolAvailable = Boolean(
+    allowBrowserBrowseToolCall &&
+    browserBrowse?.enabled &&
+    browserBrowse?.configured &&
+    !browserBrowse?.blockedByBudget &&
+    browserBrowse?.budget?.canBrowse !== false
+  );
+  const openArticleToolAvailable = Boolean(allowOpenArticleToolCall && normalizedOpenArticleCandidates.length > 0);
+  const availableToolNames = collectAvailableVoiceToolNames({
+    webSearchAvailable: webSearchToolAvailable,
+    browserBrowseAvailable: browserBrowseToolAvailable,
+    memoryAvailable: allowMemoryToolCalls,
+    adaptiveDirectivesAvailable: allowAdaptiveDirectiveToolCalls,
+    openArticleAvailable: openArticleToolAvailable,
+    screenShareAvailable: allowScreenShareToolCall,
+    voiceToolsAvailable: allowVoiceToolCalls
+  });
 
   if (normalizedInputKind === "event") {
     parts.push(`Voice runtime event cue: ${text || "(empty)"}`);
@@ -337,7 +490,30 @@ export function buildVoiceTurnPrompt({
     );
   }
 
-  if (normalizedStreamWatchBrainContext?.notes?.length) {
+  const normalizedDurableScreenNotes = (Array.isArray(durableScreenNotes) ? durableScreenNotes : [])
+    .map((note) => String(note || "").replace(/\s+/g, " ").trim().slice(0, 240))
+    .filter(Boolean)
+    .slice(-20);
+  if (hasDirectVisionFrame) {
+    const screenContextParts = [
+      "Live screen share: You can see the user's screen directly in the attached image.",
+      "Comment on what you see whenever it feels natural. React to interesting moments, changes, or anything worth noting.",
+      "Set screenNote to a brief factual description of what you see (max 20 words). This is a private note, not spoken aloud.",
+      "Set screenMoment to a brief description only when something genuinely noteworthy happens that is not already in the key moments list below. Otherwise null.",
+      normalizedStreamWatchBrainContext?.prompt
+        ? `- Guidance: ${normalizedStreamWatchBrainContext.prompt}`
+        : null
+    ];
+    if (normalizedStreamWatchBrainContext?.notes?.length) {
+      screenContextParts.push("Recent screen observations:");
+      screenContextParts.push(...normalizedStreamWatchBrainContext.notes.map((note) => `- ${note}`));
+    }
+    if (normalizedDurableScreenNotes.length) {
+      screenContextParts.push("Key moments this session:");
+      screenContextParts.push(...normalizedDurableScreenNotes.map((note) => `- ${note}`));
+    }
+    parts.push(screenContextParts.filter(Boolean).join("\n"));
+  } else if (normalizedStreamWatchBrainContext?.notes?.length) {
     parts.push(
       [
         "Live stream-watch keyframe context:",
@@ -371,7 +547,7 @@ export function buildVoiceTurnPrompt({
     );
     if (normalizedSessionTiming.timeoutWarningActive) {
       parts.push(
-        "If this feels naturally wrapped up, you may set leaveVoiceChannel=true to end your VC session after this turn."
+        "If this feels naturally wrapped up, you may call leave_voice_channel to end your VC session after this turn."
       );
     }
   }
@@ -386,16 +562,24 @@ export function buildVoiceTurnPrompt({
     parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: false, maxItems: 8 }));
   }
 
+  parts.push("Tooling policy:");
+  parts.push(`- Available tool calls this turn: ${availableToolNames.join(", ")}.`);
+  parts.push("- Use tools whenever they materially improve factuality or execute a requested action. Always call the tool in the same response; never only say you will.");
+  parts.push("- Use the exact tool name. Do not encode tool intent in JSON helper fields, helper refs, or placeholder control fields.");
+  parts.push("- Ground your spoken reply in the tool result. Do not claim a tool succeeded, opened something, searched something, or sent something before the tool actually returns.");
+  parts.push("- When available, prefer the lightest sufficient tool: conversation_search for prior exchanges, web_search for general current info, web_scrape for a known URL, browser_browse only for JS rendering or interaction.");
+  parts.push("- If the speaker asks you to look something up, find current facts, check prices, verify something online, open a found article, share a screen link, control music, or leave VC, call the relevant tool immediately instead of narrating intent.");
+  parts.push("- If a tool fails or is unavailable, say that briefly and continue naturally without pretending it worked.");
+
   if (allowMemoryToolCalls) {
-    parts.push("Optional memory tool calls:");
-    parts.push("- Set memoryLine to a durable fact from the speaker turn when genuinely stable and useful.");
-    parts.push("- Set selfMemoryLine to a durable fact about your own stable identity/preference/commitment in your reply when genuinely stable and useful.");
+    parts.push("Durable memory tools are available.");
+    parts.push("- Use memory_write with namespace=speaker to save a durable fact from the speaker turn when genuinely stable and useful.");
+    parts.push("- Use memory_write with namespace=self only for a durable fact about your own stable identity/preference/commitment in your reply.");
+    parts.push("- Use memory_search only when you need to query durable memory beyond the supplied context.");
     parts.push("- Do not save requests, insults, jokes, toxic phrasing, or rules about how you should talk/behave later.");
-    parts.push("- Persistent style/tone requests, standing operating guidance, and recurring trigger/action behaviors belong in adaptive_directive_add / adaptive_directive_remove, not memoryLine or selfMemoryLine.");
-    parts.push("- Use your own judgment: if it is not a genuine durable memory, leave memoryLine and selfMemoryLine null.");
-    parts.push("If not needed, set memoryLine and selfMemoryLine to null.");
+    parts.push("- Persistent style/tone requests, standing operating guidance, and recurring trigger/action behaviors belong in adaptive_directive_add / adaptive_directive_remove, not memory_write.");
   } else {
-    parts.push("Memory tool calls are unavailable this turn. Set memoryLine and selfMemoryLine to null.");
+    parts.push("Durable memory tools are unavailable this turn. Do not imply you can save or query durable memory right now.");
   }
 
   if (allowSoundboardToolCall && normalizedSoundboardCandidates.length) {
@@ -420,6 +604,32 @@ export function buildVoiceTurnPrompt({
     parts.push("Use this only as lightweight context. For fresh facts, request a new web lookup.");
   }
 
+  if (normalizedMusicContext && normalizedMusicContext.playbackState !== "idle") {
+    const musicLines = ["Music playback:"];
+    musicLines.push(`- Status: ${normalizedMusicContext.playbackState}`);
+    if (normalizedMusicContext.currentTrack?.title) {
+      const artists = normalizedMusicContext.currentTrack.artists.length
+        ? normalizedMusicContext.currentTrack.artists.join(", ")
+        : "unknown artist";
+      musicLines.push(`- Now playing: ${normalizedMusicContext.currentTrack.title} by ${artists}`);
+    } else if (normalizedMusicContext.lastTrack?.title && normalizedMusicContext.playbackState === "stopped") {
+      const artists = normalizedMusicContext.lastTrack.artists.length
+        ? normalizedMusicContext.lastTrack.artists.join(", ")
+        : "unknown artist";
+      musicLines.push(`- Last played: ${normalizedMusicContext.lastTrack.title} by ${artists}`);
+    }
+    if (normalizedMusicContext.queueLength > 0) {
+      musicLines.push(`- Queue: ${normalizedMusicContext.queueLength} track(s)`);
+    }
+    if (normalizedMusicContext.lastAction) {
+      musicLines.push(`- Last action: ${normalizedMusicContext.lastAction}`);
+    }
+    if (normalizedMusicContext.lastQuery) {
+      musicLines.push(`- Last music query: ${normalizedMusicContext.lastQuery}`);
+    }
+    parts.push(musicLines.join("\n"));
+  }
+
   parts.push("Conversation-history lookup is available.");
   parts.push("If the speaker asks what was said earlier, what you talked about before, or asks you to remember a past exchange, use conversation_search.");
   if (allowAdaptiveDirectiveToolCalls) {
@@ -431,38 +641,70 @@ export function buildVoiceTurnPrompt({
   if (allowOpenArticleToolCall) {
     if (normalizedOpenArticleCandidates.length) {
       parts.push("Opening cached articles is available for this turn.");
-      parts.push("If the speaker asks to open/read/click a previously found article, set openArticleRef.");
+      parts.push("If the speaker asks to open/read/click a previously found article, call open_article with one ref from this list.");
       parts.push("Valid cached article refs:");
       parts.push(formatOpenArticleCandidates(normalizedOpenArticleCandidates));
-      parts.push("Use one ref exactly as listed (or set openArticleRef to first for the top cached article).");
+      parts.push("Use one ref exactly as listed (or call open_article with ref=first for the top cached article).");
     } else {
       parts.push("No cached article refs are available right now.");
-      parts.push("Set openArticleRef to null.");
+      parts.push("Do not claim you opened a cached article.");
     }
   } else {
-    parts.push("Open-article tool call is unavailable this turn. Set openArticleRef to null.");
+    parts.push("Open-article tool call is unavailable this turn. Do not claim you opened a cached article.");
   }
 
   if (allowWebSearchToolCall) {
     if (webSearch?.optedOutByUser) {
       parts.push("The user asked not to use web search.");
-      parts.push("Set webSearchQuery to null.");
+      parts.push("Do not call web_search.");
     } else if (!webSearch?.enabled) {
       parts.push("Live web lookup capability exists but is currently unavailable (disabled in settings).");
-      parts.push("Set webSearchQuery to null.");
+      parts.push("Do not call web_search.");
     } else if (!webSearch?.configured) {
       parts.push("Live web lookup capability exists but is currently unavailable (provider not configured).");
-      parts.push("Set webSearchQuery to null.");
+      parts.push("Do not call web_search.");
     } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
       parts.push("Live web lookup capability exists but is currently unavailable (budget exhausted).");
-      parts.push("Set webSearchQuery to null.");
+      parts.push("Do not call web_search.");
     } else {
       parts.push("Live web lookup is available.");
-      parts.push("If your spoken response needs fresh web info for accuracy, set webSearchQuery to a concise query.");
-      parts.push("Only request one web lookup when needed.");
+      parts.push("If your spoken response needs fresh web info for accuracy, call web_search in the same response.");
+      parts.push("Only call one web_search when needed.");
     }
   } else {
-    parts.push("Web-search tool call is unavailable this turn. Set webSearchQuery to null.");
+    parts.push("Web-search tool call is unavailable this turn. Do not call web_search.");
+  }
+
+  if (allowBrowserBrowseToolCall) {
+    if (!browserBrowse?.enabled) {
+      parts.push("Interactive browser capability exists but is currently unavailable (disabled in settings).");
+      parts.push("Do not claim you can browse sites interactively right now.");
+    } else if (!browserBrowse?.configured) {
+      parts.push("Interactive browser capability exists but is currently unavailable (browser runtime is not configured).");
+      parts.push("Do not claim you can browse sites interactively right now.");
+    } else if (browserBrowse?.blockedByBudget || !browserBrowse?.budget?.canBrowse) {
+      parts.push("Interactive browser capability exists but is currently unavailable (hourly browser budget exhausted).");
+      parts.push("Do not claim you browsed the site.");
+    } else {
+      parts.push("Interactive browser browsing is available.");
+      parts.push("Prefer web_search for general fresh facts and web_scrape for reading a known URL.");
+      parts.push(
+        "Use browser_browse only when you need actual site navigation or interaction, such as JS-rendered pages, clicking, typing, scrolling, dragging, or moving through a live page flow."
+      );
+      parts.push("If interactive browsing is needed, call browser_browse in the same response.");
+    }
+  } else {
+    parts.push("Interactive browser tool call is unavailable this turn. Do not claim you can browse sites interactively right now.");
+  }
+
+  if (allowVoiceToolCalls) {
+    parts.push("Voice/session control tools are available.");
+    parts.push("- For music controls, use music_play_now for immediate playback, music_queue_next to place a track after the current one, music_queue_add to append, music_stop to stop playback, music_pause to pause, music_resume to resume, music_skip to skip, and music_now_playing to inspect status.");
+    parts.push("- Use music_search when the speaker wants you to find candidate tracks first instead of starting playback immediately.");
+    parts.push("- Do not emulate play-now by chaining music_queue_add and music_skip.");
+    parts.push("- Do not use music_skip as a substitute for music_stop.");
+  } else {
+    parts.push("Voice/session control tools are unavailable this turn. Do not claim you changed music playback or left VC via a tool.");
   }
 
   const screenShareStatus = String(screenShare?.status || "disabled").trim().toLowerCase() || "disabled";
@@ -481,21 +723,21 @@ export function buildVoiceTurnPrompt({
 
   if (allowScreenShareToolCall) {
     parts.push("VC screen-share link offers are available.");
-    parts.push("If the speaker asks you to see/watch their screen or stream, set screenShareIntent.action=offer_link.");
-    parts.push("Only use one screen-share tool call when it is clearly useful.");
+    parts.push("If the speaker asks you to see/watch their screen or stream, call offer_screen_share_link in the same response.");
+    parts.push("Only call offer_screen_share_link once when it is clearly useful.");
   } else if (screenShareSupported && !screenShareAvailable) {
     parts.push(`VC screen-share link capability exists but is currently unavailable (reason: ${screenShareReason}).`);
     parts.push("If asked, acknowledge the capability exists but is unavailable right now.");
-    parts.push("Set screenShareIntent.action=none.");
+    parts.push("Do not claim you sent a screen-share link.");
   } else {
-    parts.push("Screen-share tool call is unavailable this turn. Set screenShareIntent.action=none.");
+    parts.push("Screen-share tool call is unavailable this turn. Do not claim you sent a screen-share link.");
   }
 
   parts.push(
-    "If you intentionally want to leave VC after this turn, set leaveVoiceChannel=true."
+    "If you intentionally want to leave VC after this turn, call leave_voice_channel."
   );
   parts.push(
-    "Another person's goodbye does not require you to leave. You may say goodbye and stay; set leaveVoiceChannel=true only when you intentionally choose to end your own VC session."
+    "Another person's goodbye does not require you to leave. You may say goodbye and stay; call leave_voice_channel only when you intentionally choose to end your own VC session."
   );
 
   if (webSearch?.requested && !webSearch?.used) {
@@ -570,9 +812,10 @@ export function buildVoiceTurnPrompt({
   parts.push("Return strict JSON only.");
   parts.push("JSON format:");
   parts.push(
-    "{\"text\":\"spoken response or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"openArticleRef\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null},\"voiceAddressing\":{\"talkingTo\":null,\"directedConfidence\":0}}"
+    "{\"text\":\"spoken response or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"soundboardRefs\":[],\"screenNote\":null,\"voiceAddressing\":{\"talkingTo\":null,\"directedConfidence\":0}}"
     );
-  parts.push("Keep reactionEmoji null, media null, memoryLookupQuery null, and imageLookupQuery null for voice-turn generation.");
+  parts.push("Do not use webSearchQuery, memoryLookupQuery, imageLookupQuery, openArticleRef, memoryLine, selfMemoryLine, automationAction, screenShareIntent, or leaveVoiceChannel in this voice JSON contract. Use tools instead when available.");
+  parts.push("Keep reactionEmoji null and media null for voice-turn generation.");
   parts.push("Always include voiceAddressing with both fields.");
   parts.push("If you are skipping, set skip=true and text to [SKIP]. Otherwise set skip=false and provide natural spoken text.");
   parts.push("Never output markdown, tags, or directive syntax like [[...]].");

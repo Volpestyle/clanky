@@ -14,6 +14,7 @@ import {
   CODE_TASK_SCHEMA,
   CONVERSATION_SEARCH_SCHEMA,
   LEAVE_VOICE_CHANNEL_SCHEMA,
+  OFFER_SCREEN_SHARE_LINK_SCHEMA,
   MEMORY_SEARCH_SCHEMA,
   MEMORY_WRITE_SCHEMA,
   MUSIC_NOW_PLAYING_SCHEMA,
@@ -171,12 +172,7 @@ export function resolveVoiceRealtimeToolDescriptors(
     session?.guildId &&
     session?.textChannelId
   ) {
-    localTools.push({
-      toolType: "function",
-      name: "offer_screen_share_link",
-      description: "Send the active speaker a temporary screen-share link in the text channel so they can start sharing their screen.",
-      parameters: { type: "object", additionalProperties: false }
-    });
+    localTools.push(toRealtimeTool(OFFER_SCREEN_SHARE_LINK_SCHEMA));
   }
 
   const sessionState = ensureSessionToolRuntimeState(manager, session);

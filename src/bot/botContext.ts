@@ -241,6 +241,15 @@ export interface VoiceReplyRuntime extends BotContext {
       relevantFacts: Array<Record<string, unknown>>;
       relevantMessages?: Array<Record<string, unknown>>;
     };
+    getMusicPromptContext?: (session: unknown) => {
+      playbackState: "playing" | "paused" | "stopped" | "idle";
+      currentTrack: { title: string; artists: string[] } | null;
+      lastTrack: { title: string; artists: string[] } | null;
+      queueLength: number;
+      upcomingTracks: Array<{ title: string; artist: string | null }>;
+      lastAction: "play_now" | "stop" | "pause" | "resume" | "skip" | null;
+      lastQuery: string | null;
+    } | null;
   } | null;
   loadRelevantMemoryFacts: StripFirstArg<LoadRelevantMemoryFactsFn>;
   buildMediaMemoryFacts: BuildMediaMemoryFactsFn;

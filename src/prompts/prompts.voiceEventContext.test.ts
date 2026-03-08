@@ -60,3 +60,104 @@ test("buildVoiceTurnPrompt treats fuzzy bot-name cues as a positive signal", () 
     true
   );
 });
+
+test("buildVoiceTurnPrompt explains browser tool usage when interactive browsing is available", () => {
+  const prompt = buildVoiceTurnPrompt({
+    speakerName: "alice",
+    transcript: "can you check that website for me",
+    allowBrowserBrowseToolCall: true,
+    browserBrowse: {
+      enabled: true,
+      configured: true,
+      blockedByBudget: false,
+      budget: {
+        canBrowse: true
+      }
+    }
+  });
+
+  assert.equal(prompt.includes("Interactive browser browsing is available."), true);
+  assert.equal(
+    prompt.includes(
+      "Use browser_browse only when you need actual site navigation or interaction, such as JS-rendered pages, clicking, typing, scrolling, dragging, or moving through a live page flow."
+    ),
+    true
+  );
+  assert.equal(prompt.includes("If interactive browsing is needed, call browser_browse in the same response."), true);
+});
+
+test("buildVoiceTurnPrompt explains screen-share tool usage when link offers are available", () => {
+  const prompt = buildVoiceTurnPrompt({
+    speakerName: "alice",
+    transcript: "can you watch my screen",
+    allowScreenShareToolCall: true,
+    screenShare: {
+      enabled: true,
+      available: true,
+      status: "ready",
+      reason: null
+    }
+  });
+
+  assert.equal(prompt.includes("VC screen-share link offers are available."), true);
+  assert.equal(
+    prompt.includes("If the speaker asks you to see/watch their screen or stream, call offer_screen_share_link in the same response."),
+    true
+  );
+  assert.equal(prompt.includes("Do not use webSearchQuery, memoryLookupQuery, imageLookupQuery, openArticleRef, memoryLine, selfMemoryLine, automationAction, screenShareIntent, or leaveVoiceChannel in this voice JSON contract."), true);
+});
+
+test("buildVoiceTurnPrompt prefers tool calls over stale helper fields", () => {
+  const prompt = buildVoiceTurnPrompt({
+    speakerName: "alice",
+    transcript: "can you open that article and search the web",
+    allowMemoryToolCalls: true,
+    allowWebSearchToolCall: true,
+    allowOpenArticleToolCall: true,
+    allowVoiceToolCalls: true,
+    openArticleCandidates: [
+      {
+        ref: "r1:1",
+        title: "Example",
+        url: "https://example.com/article",
+        domain: "example.com",
+        query: "example"
+      }
+    ],
+    webSearch: {
+      enabled: true,
+      configured: true,
+      blockedByBudget: false,
+      budget: {
+        canSearch: true
+      }
+    },
+    musicContext: {
+      playbackState: "playing",
+      currentTrack: {
+        title: "Example Song",
+        artists: ["Example Artist"]
+      },
+      lastTrack: null,
+      queueLength: 2,
+      upcomingTracks: [
+        { title: "Next Song", artist: "Next Artist" }
+      ],
+      lastAction: "play_now",
+      lastQuery: "example song"
+    }
+  });
+
+  assert.equal(prompt.includes("Available tool calls this turn:"), true);
+  assert.equal(prompt.includes("Always call the tool in the same response; never only say you will."), true);
+  assert.equal(prompt.includes("call web_search in the same response."), true);
+  assert.equal(prompt.includes("call open_article with one ref from this list."), true);
+  assert.equal(prompt.includes("Use memory_write with namespace=speaker"), true);
+  assert.equal(prompt.includes("Voice/session control tools are available."), true);
+  assert.equal(prompt.includes("music_play_now"), true);
+  assert.equal(prompt.includes("Music playback:"), true);
+  assert.equal(prompt.includes("Do not emulate play-now by chaining music_queue_add and music_skip."), true);
+  assert.equal(prompt.includes("set webSearchQuery"), false);
+  assert.equal(prompt.includes("set openArticleRef"), false);
+  assert.equal(prompt.includes("Set memoryLine"), false);
+});

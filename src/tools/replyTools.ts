@@ -21,6 +21,7 @@ import {
   ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA,
   CONVERSATION_SEARCH_SCHEMA,
   CODE_TASK_SCHEMA,
+  OFFER_SCREEN_SHARE_LINK_SCHEMA,
   VOICE_TOOL_SCHEMAS,
   toAnthropicTool
 } from "./sharedToolSchemas.ts";
@@ -96,6 +97,26 @@ type ReplyToolRuntime = {
       error?: string | null;
       blockedByBudget?: boolean;
     }>;
+  };
+  screenShare?: {
+    offerLink: (opts: {
+      settings: Record<string, unknown>;
+      guildId: string;
+      channelId: string | null;
+      requesterUserId: string;
+      transcript: string;
+      source: string;
+      signal?: AbortSignal;
+    }) => Promise<{
+      offered?: boolean;
+      reused?: boolean;
+      reason?: string | null;
+      linkUrl?: string | null;
+      expiresInMinutes?: number | null;
+    }>;
+  };
+  voiceSessionControl?: {
+    requestLeaveVoiceChannel?: () => Promise<{ ok: boolean }>;
   };
   codeAgent?: {
     runTask: (opts: {
@@ -245,6 +266,7 @@ const ADAPTIVE_STYLE_ADD_TOOL: ReplyToolDefinition = toAnthropicTool(ADAPTIVE_DI
 const ADAPTIVE_STYLE_REMOVE_TOOL: ReplyToolDefinition = toAnthropicTool(ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA);
 const CONVERSATION_SEARCH_TOOL: ReplyToolDefinition = toAnthropicTool(CONVERSATION_SEARCH_SCHEMA);
 const CODE_TASK_TOOL: ReplyToolDefinition = toAnthropicTool(CODE_TASK_SCHEMA);
+const OFFER_SCREEN_SHARE_LINK_TOOL: ReplyToolDefinition = toAnthropicTool(OFFER_SCREEN_SHARE_LINK_SCHEMA);
 
 const IMAGE_LOOKUP_TOOL: ReplyToolDefinition = {
   name: "image_lookup",
@@ -297,6 +319,7 @@ const ALL_REPLY_TOOLS: ReplyToolDefinition[] = [
   CONVERSATION_SEARCH_TOOL,
   IMAGE_LOOKUP_TOOL,
   OPEN_ARTICLE_TOOL,
+  OFFER_SCREEN_SHARE_LINK_TOOL,
   CODE_TASK_TOOL
 ];
 
@@ -333,6 +356,7 @@ export function buildReplyToolSet(
     conversationSearchAvailable?: boolean;
     imageLookupAvailable?: boolean;
     openArticleAvailable?: boolean;
+    screenShareAvailable?: boolean;
     codeAgentAvailable?: boolean;
     voiceToolsAvailable?: boolean;
   } = {}
@@ -384,6 +408,10 @@ export function buildReplyToolSet(
     tools.push(OPEN_ARTICLE_TOOL);
   }
 
+  if (capabilities.screenShareAvailable) {
+    tools.push(OFFER_SCREEN_SHARE_LINK_TOOL);
+  }
+
   if (
     capabilities.codeAgentAvailable !== false &&
     isCodeAgentEnabled(settings)
@@ -430,6 +458,10 @@ export async function executeReplyTool(
       return executeImageLookup(input, context);
     case "open_article":
       return executeOpenArticle(input, runtime, context);
+    case "offer_screen_share_link":
+      return executeOfferScreenShareLink(runtime, context);
+    case "leave_voice_channel":
+      return executeLeaveVoiceChannel(runtime, context.signal);
     case "code_task":
       return executeCodeTask(input, runtime, context);
     case "music_search":
@@ -441,7 +473,6 @@ export async function executeReplyTool(
     case "music_resume":
     case "music_skip":
     case "music_now_playing":
-    case "leave_voice_channel":
       return executeVoiceTool(toolName, input, runtime, context.signal);
     default:
       return { content: `Unknown tool: ${toolName}`, isError: true };
@@ -941,6 +972,71 @@ async function executeOpenArticle(
   };
 }
 
+async function executeOfferScreenShareLink(
+  runtime: ReplyToolRuntime,
+  context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
+  if (!runtime.screenShare?.offerLink) {
+    return { content: "Screen-share link offers are not available.", isError: true };
+  }
+  if (!context.guildId || !context.channelId || !context.userId) {
+    return { content: "Screen-share context is incomplete.", isError: true };
+  }
+
+  try {
+    const result = await runtime.screenShare.offerLink({
+      settings: context.settings,
+      guildId: context.guildId,
+      channelId: context.channelId,
+      requesterUserId: context.userId,
+      transcript: context.sourceText,
+      source: String(context.trace?.source || "reply_tool_offer_screen_share_link"),
+      signal: context.signal
+    });
+    return {
+      content: JSON.stringify({
+        ok: Boolean(result?.offered || result?.reused),
+        offered: Boolean(result?.offered),
+        reused: Boolean(result?.reused),
+        reason: result?.reason ? String(result.reason) : null,
+        linkUrl: result?.linkUrl ? String(result.linkUrl) : null,
+        expiresInMinutes: Number.isFinite(Number(result?.expiresInMinutes))
+          ? Math.max(0, Math.round(Number(result.expiresInMinutes)))
+          : null
+      })
+    };
+  } catch (error) {
+    return {
+      content: `Screen-share link offer failed: ${String((error as Error)?.message || error)}`,
+      isError: true
+    };
+  }
+}
+
+async function executeLeaveVoiceChannel(
+  runtime: ReplyToolRuntime,
+  signal?: AbortSignal
+): Promise<ReplyToolResult> {
+  throwIfAborted(signal, "Reply tool cancelled");
+  try {
+    if (typeof runtime.voiceSessionControl?.requestLeaveVoiceChannel === "function") {
+      const result = await runtime.voiceSessionControl.requestLeaveVoiceChannel();
+      return { content: JSON.stringify(result) };
+    }
+    if (runtime.voiceSession?.leaveVoiceChannel) {
+      const result = await runtime.voiceSession.leaveVoiceChannel();
+      return { content: JSON.stringify(result) };
+    }
+    return { content: "Voice session leave is not available.", isError: true };
+  } catch (error) {
+    return {
+      content: `Voice tool leave_voice_channel failed: ${String((error as Error)?.message || error)}`,
+      isError: true
+    };
+  }
+}
+
 async function executeCodeTask(
   input: ReplyToolCallInput,
   runtime: ReplyToolRuntime,
@@ -1155,6 +1251,7 @@ export {
   MEMORY_WRITE_TOOL,
   IMAGE_LOOKUP_TOOL,
   OPEN_ARTICLE_TOOL,
+  OFFER_SCREEN_SHARE_LINK_TOOL,
   CODE_TASK_TOOL
 };
 

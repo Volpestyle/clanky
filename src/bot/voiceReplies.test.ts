@@ -891,6 +891,53 @@ test("generateVoiceTurnReply advertises code_task when runtime can execute code 
   assert.ok(toolNames.includes("code_task"), "code_task should be included when runtime hook exists");
 });
 
+test("generateVoiceTurnReply advertises browser_browse when interactive browsing is available", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "all good"
+    })
+  });
+  bot.buildBrowserBrowseContext = () => ({
+    requested: false,
+    configured: true,
+    enabled: true,
+    used: false,
+    blockedByBudget: false,
+    error: null,
+    query: "",
+    text: "",
+    steps: 0,
+    hitStepLimit: false,
+    budget: {
+      canBrowse: true
+    }
+  });
+  bot.runModelRequestedBrowserBrowse = async () => ({
+    used: true,
+    text: "done",
+    steps: 1,
+    hitStepLimit: false,
+    error: null,
+    blockedByBudget: false
+  });
+
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "check that website"
+  });
+
+  const firstTools = Array.isArray(generationPayloads[0]?.tools) ? generationPayloads[0].tools : [];
+  const toolNames = firstTools.map((entry) => String(entry?.name || ""));
+  const firstPrompt = String(generationPayloads[0]?.userPrompt || "");
+
+  assert.ok(toolNames.includes("browser_browse"), "browser_browse should be included when runtime hook exists");
+  assert.equal(firstPrompt.includes("Interactive browser browsing is available."), true);
+  assert.equal(firstPrompt.includes("If interactive browsing is needed, call browser_browse in the same response."), true);
+});
+
 test("generateVoiceTurnReply runs web lookup follow-up with start/complete callbacks via tool calls", async () => {
   const { bot, webSearchCalls, getGenerationCalls } = createVoiceBot({
     generationSequence: [
@@ -1162,15 +1209,28 @@ test("generateVoiceTurnReply fetches fresh memory context each turn", async () =
 });
 
 test("generateVoiceTurnReply triggers voice screen-share link offer from tool-call field", async () => {
-  const { bot, screenShareCalls } = createVoiceBot({
-    generationText: structuredVoiceOutput({
-      text: "i can check it",
-      screenShareIntent: {
-        action: "offer_link",
-        confidence: 0.93,
-        reason: "needs visual context"
+  const { bot, generationPayloads, screenShareCalls } = createVoiceBot({
+    generationSequence: [
+      {
+        text: "",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "offer_screen_share_link",
+            input: {}
+          }
+        ],
+        rawContent: [
+          { type: "text", text: "" },
+          { type: "tool_use", id: "tc_1", name: "offer_screen_share_link", input: {} }
+        ]
+      },
+      {
+        text: structuredVoiceOutput({
+          text: "i can check it"
+        })
       }
-    }),
+    ],
     screenShareCapability: {
       enabled: true,
       available: true,
@@ -1190,6 +1250,9 @@ test("generateVoiceTurnReply triggers voice screen-share link offer from tool-ca
 
   assert.equal(reply.text, "i can check it");
   assert.equal(reply.usedScreenShareOffer, true);
+  const firstTools = Array.isArray(generationPayloads[0]?.tools) ? generationPayloads[0].tools : [];
+  const toolNames = firstTools.map((entry) => String(entry?.name || ""));
+  assert.ok(toolNames.includes("offer_screen_share_link"));
   assert.equal(screenShareCalls.length, 1);
   assert.equal(screenShareCalls[0]?.guildId, "guild-1");
   assert.equal(screenShareCalls[0]?.channelId, "text-1");
@@ -1226,15 +1289,34 @@ test("generateVoiceTurnReply describes supported-but-unavailable screen-share ca
     userPrompt.includes("VC screen-share link capability exists but is currently unavailable (reason: public_https_starting)."),
     true
   );
-  assert.equal(userPrompt.includes("Set screenShareIntent.action=none."), true);
+  assert.equal(userPrompt.includes("Do not claim you sent a screen-share link."), true);
+  assert.equal(userPrompt.includes("screenShareIntent.action"), false);
 });
 
-test("generateVoiceTurnReply returns leave request when model sets leaveVoiceChannel", async () => {
+test("generateVoiceTurnReply returns leave request when model calls leave_voice_channel", async () => {
+  let leaveCalls = 0;
   const { bot } = createVoiceBot({
-    generationText: structuredVoiceOutput({
-      text: "aight i'ma bounce",
-      leaveVoiceChannel: true
-    })
+    generationSequence: [
+      {
+        text: "",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "leave_voice_channel",
+            input: {}
+          }
+        ],
+        rawContent: [
+          { type: "text", text: "" },
+          { type: "tool_use", id: "tc_1", name: "leave_voice_channel", input: {} }
+        ]
+      },
+      {
+        text: structuredVoiceOutput({
+          text: "aight i'ma bounce"
+        })
+      }
+    ]
   });
 
   const reply = await generateVoiceTurnReply(bot, {
@@ -1242,9 +1324,16 @@ test("generateVoiceTurnReply returns leave request when model sets leaveVoiceCha
     guildId: "guild-1",
     channelId: "text-1",
     userId: "user-1",
-    transcript: "you good to keep chilling?"
+    transcript: "you good to keep chilling?",
+    voiceToolCallbacks: {
+      leaveVoiceChannel: async () => {
+        leaveCalls += 1;
+        return { ok: true };
+      }
+    }
   });
 
   assert.equal(reply.text, "aight i'ma bounce");
   assert.equal(reply.leaveVoiceChannelRequested, true);
+  assert.equal(leaveCalls, 0);
 });
