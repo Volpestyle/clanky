@@ -120,6 +120,7 @@ export interface ReplyManagerHost {
   getMusicPhase: (session: VoiceSession) => MusicPlaybackPhase;
   setMusicPhase: (session: VoiceSession, phase: MusicPlaybackPhase) => void;
   haltSessionOutputForMusicPlayback: (session: VoiceSession, reason?: string) => void;
+  drainPendingRealtimeAssistantUtterances: (session: VoiceSession, reason?: string) => boolean;
 }
 
 export class ReplyManager {
@@ -574,6 +575,22 @@ export class ReplyManager {
     return Number(session.lastAudioDeltaAt || 0) >= requestedAt;
   }
 
+  private shouldPreserveActiveRepliesForCompletedPendingResponse(
+    session: VoiceSession,
+    pendingResponse: VoiceSession["pendingResponse"]
+  ) {
+    if (!session || !pendingResponse || !this.host.activeReplies) return false;
+    let hasActiveVoiceGeneration = false;
+    try {
+      hasActiveVoiceGeneration = this.host.activeReplies.has(buildVoiceReplyScopeKey(session.id));
+    } catch {
+      hasActiveVoiceGeneration = false;
+    }
+    if (!hasActiveVoiceGeneration) return false;
+    const normalizedSource = String(pendingResponse.source || "").trim().toLowerCase();
+    return normalizedSource.endsWith(":busy_utterance") || /(^|:)stream_chunk_\d+$/.test(normalizedSource);
+  }
+
   clearResponseSilenceTimers(session: VoiceSession) {
     if (!session) return;
     if (session.responseWatchdogTimer) {
@@ -591,13 +608,15 @@ export class ReplyManager {
     abortActiveReplies = false,
     abortPendingToolCalls = false,
     trigger = "pending_response_cleared",
-    recheckDeferredActions = false
+    recheckDeferredActions = false,
+    clearActiveReplyInterruptionPolicy = true
   }: {
     session: VoiceSession;
     abortActiveReplies?: boolean;
     abortPendingToolCalls?: boolean;
     trigger?: string;
     recheckDeferredActions?: boolean;
+    clearActiveReplyInterruptionPolicy?: boolean;
   }) {
     if (!session) return;
     this.clearResponseSilenceTimers(session);
@@ -619,7 +638,9 @@ export class ReplyManager {
 
     session.pendingResponse = null;
     this.syncAssistantOutputState(session, trigger);
-    this.host.maybeClearActiveReplyInterruptionPolicy(session);
+    if (clearActiveReplyInterruptionPolicy) {
+      this.host.maybeClearActiveReplyInterruptionPolicy(session);
+    }
     if (recheckDeferredActions) {
       this.host.deferredActionQueue.recheckDeferredVoiceActions({
         session,
@@ -638,13 +659,22 @@ export class ReplyManager {
     });
   }
 
-  settlePendingResponse(session: VoiceSession, trigger = "pending_response_settled") {
+  settlePendingResponse(
+    session: VoiceSession,
+    trigger = "pending_response_settled",
+    {
+      clearActiveReplyInterruptionPolicy = true
+    }: {
+      clearActiveReplyInterruptionPolicy?: boolean;
+    } = {}
+  ) {
     this.resetPendingResponse({
       session,
       abortActiveReplies: false,
       abortPendingToolCalls: false,
       trigger,
-      recheckDeferredActions: false
+      recheckDeferredActions: false,
+      clearActiveReplyInterruptionPolicy
     });
   }
 
@@ -1118,11 +1148,13 @@ export class ReplyManager {
 
     if (!pending) {
       this.syncAssistantOutputState(session, "response_done_without_pending");
+      this.host.drainPendingRealtimeAssistantUtterances(session, "response_done_without_pending");
       return;
     }
 
     if (hadAudio) {
       this.host.scheduleBotSpeechMusicUnduck(session, resolvedSettings, BOT_TURN_SILENCE_RESET_MS);
+      const preserveActiveReplies = this.shouldPreserveActiveRepliesForCompletedPendingResponse(session, pending);
 
       const musicPhase = this.host.getMusicPhase(session);
       if (musicPhase === "paused_wake_word") {
@@ -1134,8 +1166,15 @@ export class ReplyManager {
         }, BOT_TURN_SILENCE_RESET_MS);
       }
 
-      this.clearPendingResponse(session);
+      if (preserveActiveReplies) {
+        this.settlePendingResponse(session, "response_done_busy_utterance_completed", {
+          clearActiveReplyInterruptionPolicy: false
+        });
+      } else {
+        this.clearPendingResponse(session);
+      }
       this.syncAssistantOutputState(session, "response_done_had_audio");
+      this.host.drainPendingRealtimeAssistantUtterances(session, "response_done_had_audio");
       return;
     }
 

@@ -325,6 +325,8 @@ export class SessionLifecycle {
     session.pendingSttTurnsQueue = [];
     session.pendingSttTurns = 0;
     session.pendingRealtimeTurns = [];
+    session.activeRealtimeTurn = null;
+    session.pendingRealtimeAssistantUtterances = [];
     this.host.deferredActionQueue.clearAllDeferredVoiceActions(session);
     session.awaitingToolOutputs = false;
     session.openAiPendingToolCalls = new Map();

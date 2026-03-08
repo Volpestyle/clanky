@@ -2466,7 +2466,77 @@ export class VoiceSessionManager {
     }
   }
 
-  requestRealtimePromptUtterance({
+  getPendingRealtimeAssistantUtterances(session) {
+    if (!session || session.ending) return [];
+    if (Array.isArray(session.pendingRealtimeAssistantUtterances)) {
+      return session.pendingRealtimeAssistantUtterances;
+    }
+    session.pendingRealtimeAssistantUtterances = [];
+    return session.pendingRealtimeAssistantUtterances;
+  }
+
+  clearPendingRealtimeAssistantUtterances(session, reason = "cleared") {
+    if (!session) return 0;
+    const queue = this.getPendingRealtimeAssistantUtterances(session);
+    const clearedCount = queue.length;
+    if (!clearedCount) return 0;
+    session.pendingRealtimeAssistantUtterances = [];
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.client.user?.id || null,
+      content: "realtime_assistant_utterance_queue_cleared",
+      metadata: {
+        sessionId: session.id,
+        reason: String(reason || "cleared"),
+        clearedCount
+      }
+    });
+    return clearedCount;
+  }
+
+  drainPendingRealtimeAssistantUtterances(session, reason = "response_done") {
+    if (!session || session.ending) return false;
+    if (!isRealtimeMode(session.mode)) return false;
+    if (this.replyManager.isRealtimeResponseActive(session)) return false;
+    if (session.pendingResponse && typeof session.pendingResponse === "object") return false;
+
+    const queue = this.getPendingRealtimeAssistantUtterances(session);
+    const next = queue.shift();
+    if (!next) return false;
+
+    const requested = this.sendRealtimePromptUtterance({
+      session,
+      prompt: next.prompt,
+      userId: next.userId,
+      source: next.source,
+      interruptionPolicy: next.interruptionPolicy,
+      latencyContext: next.latencyContext,
+      utteranceText: next.utteranceText
+    });
+    if (!requested) {
+      queue.unshift(next);
+      return false;
+    }
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.client.user?.id || null,
+      content: "realtime_assistant_utterance_queue_drained",
+      metadata: {
+        sessionId: session.id,
+        reason: String(reason || "response_done"),
+        source: next.source,
+        remainingQueueDepth: queue.length
+      }
+    });
+    return true;
+  }
+
+  sendRealtimePromptUtterance({
     session,
     prompt,
     userId = null,
@@ -2480,12 +2550,6 @@ export class VoiceSessionManager {
     const realtimeClient = session.realtimeClient;
     if (!realtimeClient || typeof realtimeClient.requestTextUtterance !== "function") return false;
 
-    const utterancePrompt = String(prompt || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, STT_REPLY_MAX_CHARS + 420);
-    if (!utterancePrompt) return false;
-
     const normalizedInterruptionPolicy = this.normalizeReplyInterruptionPolicy(interruptionPolicy);
     const normalizedUtteranceText =
       utteranceText === null
@@ -2493,7 +2557,7 @@ export class VoiceSessionManager {
         : normalizeVoiceText(String(utteranceText || ""), STT_REPLY_MAX_CHARS) || null;
 
     try {
-      realtimeClient.requestTextUtterance(utterancePrompt);
+      realtimeClient.requestTextUtterance(prompt);
       this.replyManager.createTrackedAudioResponse({
         session,
         userId: userId || this.client.user?.id || null,
@@ -2525,6 +2589,89 @@ export class VoiceSessionManager {
       });
       return false;
     }
+  }
+
+  requestRealtimePromptUtterance({
+    session,
+    prompt,
+    userId = null,
+    source = "voice_prompt_utterance",
+    interruptionPolicy = null,
+    latencyContext = null,
+    utteranceText = null
+  }) {
+    if (!session || session.ending) return false;
+    if (!isRealtimeMode(session.mode)) return false;
+    const realtimeClient = session.realtimeClient;
+    if (!realtimeClient || typeof realtimeClient.requestTextUtterance !== "function") return false;
+
+    const utterancePrompt = String(prompt || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, STT_REPLY_MAX_CHARS + 420);
+    if (!utterancePrompt) return false;
+    const normalizedUtteranceText =
+      utteranceText === null
+        ? null
+        : normalizeVoiceText(String(utteranceText || ""), STT_REPLY_MAX_CHARS) || null;
+
+    if (
+      this.replyManager.isRealtimeResponseActive(session) ||
+      (session.pendingResponse && typeof session.pendingResponse === "object")
+    ) {
+      const queue = this.getPendingRealtimeAssistantUtterances(session);
+      const normalizedInterruptionPolicy = this.normalizeReplyInterruptionPolicy(interruptionPolicy);
+      queue.push({
+        prompt: utterancePrompt,
+        utteranceText: normalizedUtteranceText,
+        userId: userId || this.client.user?.id || null,
+        source: String(source || "voice_prompt_utterance"),
+        queuedAt: Date.now(),
+        interruptionPolicy: normalizedInterruptionPolicy,
+        latencyContext:
+          latencyContext && typeof latencyContext === "object"
+            ? {
+              finalizedAtMs: Math.max(0, Number(latencyContext.finalizedAtMs || 0)),
+              asrStartedAtMs: Math.max(0, Number(latencyContext.asrStartedAtMs || 0)),
+              asrCompletedAtMs: Math.max(0, Number(latencyContext.asrCompletedAtMs || 0)),
+              generationStartedAtMs: Math.max(0, Number(latencyContext.generationStartedAtMs || 0)),
+              replyRequestedAtMs: Math.max(0, Number(latencyContext.replyRequestedAtMs || 0)),
+              audioStartedAtMs: Math.max(0, Number(latencyContext.audioStartedAtMs || 0)),
+              source: String(latencyContext.source || source || "voice_prompt_utterance"),
+              captureReason: String(latencyContext.captureReason || "").trim() || null,
+              queueWaitMs: Number.isFinite(Number(latencyContext.queueWaitMs))
+                ? Math.max(0, Math.round(Number(latencyContext.queueWaitMs)))
+                : null,
+              pendingQueueDepth: Number.isFinite(Number(latencyContext.pendingQueueDepth))
+                ? Math.max(0, Math.round(Number(latencyContext.pendingQueueDepth)))
+                : null
+            }
+            : null
+      });
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "realtime_assistant_utterance_queued",
+        metadata: {
+          sessionId: session.id,
+          source: String(source || "voice_prompt_utterance"),
+          queueDepth: queue.length
+        }
+      });
+      return true;
+    }
+
+    return this.sendRealtimePromptUtterance({
+      session,
+      prompt: utterancePrompt,
+      userId,
+      source,
+      interruptionPolicy,
+      latencyContext,
+      utteranceText: normalizedUtteranceText
+    });
   }
 
   requestRealtimeTextUtterance({
@@ -3117,6 +3264,7 @@ export class VoiceSessionManager {
     pcmBuffer = null,
     captureReason = "stream_end",
     finalizedAt = 0,
+    bridgeUtteranceId = null,
     asrResult = null,
     source = "unknown"
   }) {
@@ -3159,6 +3307,7 @@ export class VoiceSessionManager {
       userId,
       captureReason,
       finalizedAt,
+      bridgeUtteranceId: Math.max(0, Number(bridgeUtteranceId || 0)) || null,
       transcriptOverride: transcript,
       clipDurationMsOverride: clipDurationMs,
       asrStartedAtMsOverride: Math.max(0, Number(asrResult?.asrStartedAtMs || 0)),
@@ -3584,6 +3733,7 @@ export class VoiceSessionManager {
 
     // Cancel any in-flight response so the model sees all user messages and
     // generates a single contextual reply instead of queuing separate responses.
+    this.clearPendingRealtimeAssistantUtterances(session, "new_user_turn");
     if (this.replyManager.isRealtimeResponseActive(session)) {
       try {
         const cancel = session.realtimeClient?.cancelActiveResponse;
@@ -4064,6 +4214,15 @@ export class VoiceSessionManager {
     }
   }
 
+  appendTranscriptTimelineEntry(session, entry: VoiceTranscriptTimelineEntry | null = null) {
+    if (!session || session.ending || !entry) return;
+    const transcriptTurns = Array.isArray(session.transcriptTurns) ? session.transcriptTurns : [];
+    session.transcriptTurns = [
+      ...transcriptTurns,
+      entry
+    ].slice(-VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS);
+  }
+
   recordVoiceTurn(session, { role = "user", userId = null, text = "", addressing = null } = {}) {
     if (!session || session.ending) return;
     const normalizedContextText = normalizeVoiceText(text, VOICE_DECIDER_HISTORY_MAX_CHARS);
@@ -4073,7 +4232,6 @@ export class VoiceSessionManager {
     const normalizedRole = role === "assistant" ? "assistant" : "user";
     const normalizedUserId = String(userId || "").trim() || null;
     const turns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
-    const transcriptTurns = Array.isArray(session.transcriptTurns) ? session.transcriptTurns : [];
     const speakerName =
       normalizedRole === "assistant"
         ? getPromptBotName(session.settingsSnapshot || this.store.getSettings())
@@ -4094,6 +4252,7 @@ export class VoiceSessionManager {
       rawAddressing: addressing
     });
     const modelTurnEntry: VoiceTimelineTurn = {
+      kind: "speech",
       role: normalizedRole,
       userId: normalizedUserId,
       speakerName: normalizedSpeakerName,
@@ -4104,6 +4263,7 @@ export class VoiceSessionManager {
       modelTurnEntry.addressing = normalizedAddressing;
     }
     const transcriptTurnEntry: VoiceTimelineTurn = {
+      kind: "speech",
       role: normalizedRole,
       userId: normalizedUserId,
       speakerName: normalizedSpeakerName,
@@ -4117,22 +4277,10 @@ export class VoiceSessionManager {
       ...turns,
       modelTurnEntry
     ].slice(-VOICE_DECIDER_HISTORY_MAX_TURNS);
-    session.transcriptTurns = [
-      ...transcriptTurns,
-      transcriptTurnEntry
-    ].slice(-VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS);
+    this.appendTranscriptTimelineEntry(session, transcriptTurnEntry);
     if (normalizedRole === "assistant") {
       this.persistAssistantVoiceTimelineTurn(session, normalizedTranscriptText, nextAt);
     }
-  }
-
-  appendTranscriptTimelineEntry(session, entry: VoiceTranscriptTimelineEntry | null = null) {
-    if (!session || session.ending || !entry) return;
-    const transcriptTurns = Array.isArray(session.transcriptTurns) ? session.transcriptTurns : [];
-    session.transcriptTurns = [
-      ...transcriptTurns,
-      entry
-    ].slice(-VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS);
   }
 
   updateModelContextSummary(session, section, summary = null) {
@@ -4223,17 +4371,50 @@ export class VoiceSessionManager {
     };
   }
 
+  resolveOpenAiRealtimeResponseId(session, event) {
+    if (!session || !event || typeof event !== "object") return null;
+    const response =
+      event.response && typeof event.response === "object" ? event.response : null;
+    const eventItem =
+      event.item && typeof event.item === "object" ? event.item : null;
+    const outputItem =
+      event.output_item && typeof event.output_item === "object"
+        ? event.output_item
+        : null;
+    const directId = normalizeInlineText(
+      event.response_id || event.responseId || response?.id || eventItem?.response_id || outputItem?.response_id,
+      180
+    );
+    if (directId) return directId;
+    const realtimeClient = session.realtimeClient;
+    if (!realtimeClient || typeof realtimeClient !== "object" || !("activeResponseId" in realtimeClient)) return null;
+    return normalizeInlineText(realtimeClient.activeResponseId, 180) || null;
+  }
+
+  hasOpenAiRealtimeAssistantOutputForResponse(session, responseId = "") {
+    const normalizedResponseId = normalizeInlineText(responseId, 180);
+    if (!session || !normalizedResponseId) return false;
+    const responseOutputState = session.openAiResponsesWithAssistantOutput;
+    if (!(responseOutputState instanceof Map)) return false;
+    return responseOutputState.has(normalizedResponseId);
+  }
+
   scheduleOpenAiRealtimeToolFollowupResponse({
     session,
     userId = null,
-    startedAtMs = 0
+    startedAtMs = 0,
+    requestFollowup = false
   }: {
     session?: VoiceSession | VoiceToolRuntimeSessionLike | null;
     userId?: string | null;
     startedAtMs?: number;
+    requestFollowup?: boolean;
   } = {}) {
     if (!session || session.ending) return;
     if (!providerSupports(session.mode || "", "updateTools")) return;
+    if (requestFollowup) {
+      session.openAiToolFollowupNeeded = true;
+    }
     if (session.openAiToolResponseDebounceTimer) {
       clearTimeout(session.openAiToolResponseDebounceTimer);
       session.openAiToolResponseDebounceTimer = null;
@@ -4246,12 +4427,28 @@ export class VoiceSessionManager {
         this.activeReplies?.isStale(buildVoiceReplyScopeKey(session.id), startedAtMs)
       ) {
         session.awaitingToolOutputs = false;
+        session.openAiToolFollowupNeeded = false;
         this.replyManager.syncAssistantOutputState(session, "tool_outputs_cancelled");
         return;
       }
       if (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0) return;
       session.awaitingToolOutputs = false;
       this.replyManager.syncAssistantOutputState(session, "tool_outputs_ready");
+      const followupNeeded = Boolean(session.openAiToolFollowupNeeded);
+      session.openAiToolFollowupNeeded = false;
+      if (!followupNeeded) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          content: "openai_realtime_tool_followup_not_required",
+          metadata: {
+            sessionId: session.id
+          }
+        });
+        return;
+      }
 
       const created = this.replyManager.createTrackedAudioResponse({
         session,
@@ -4287,6 +4484,7 @@ export class VoiceSessionManager {
     const pendingCalls = runtimeSession.openAiPendingToolCalls;
     const completedCalls = runtimeSession.openAiCompletedToolCallIds;
     const executions = runtimeSession.openAiToolCallExecutions;
+    const responseId = this.resolveOpenAiRealtimeResponseId(session, event);
     const normalizedCallId = normalizeInlineText(envelope.callId, 180);
     const normalizedName = normalizeInlineText(envelope.name, 120);
     if (!normalizedCallId) return;
@@ -4314,12 +4512,16 @@ export class VoiceSessionManager {
         callId: normalizedCallId,
         name: normalizedName || "",
         argumentsText: "",
+        responseId,
         done: false,
         startedAtMs: Date.now(),
         sourceEventType: envelope.eventType
       };
     if (normalizedName && !pendingCall.name) {
       pendingCall.name = normalizedName;
+    }
+    if (responseId) {
+      pendingCall.responseId = responseId;
     }
 
     const fragment = String(envelope.argumentsFragment || "");
@@ -4663,6 +4865,28 @@ export class VoiceSessionManager {
     } else {
       session.voiceChannelEffects = voiceChannelEffects;
     }
+    const summary = formatVoiceChannelEffectSummary(eventRow);
+    const timelineText = summary
+      ? normalizeVoiceText(
+        `[Voice effect] ${summary}`,
+        STT_TRANSCRIPT_MAX_CHARS
+      )
+      : "";
+    if (timelineText) {
+      this.appendTranscriptTimelineEntry(session, {
+        kind: "effect",
+        role: "user",
+        userId: normalizedUserId,
+        speakerName: normalizedDisplayName.slice(0, 80),
+        text: timelineText,
+        at: eventAt,
+        effectType: resolvedEffectType,
+        summary,
+        soundId: normalizedSoundId,
+        soundName: normalizedSoundName,
+        emoji: normalizedEmoji
+      });
+    }
     return eventRow;
   }
 
@@ -4759,6 +4983,21 @@ export class VoiceSessionManager {
       session.membershipEvents = membershipEvents.slice(-VOICE_MEMBERSHIP_EVENT_MAX_TRACKED);
     } else {
       session.membershipEvents = membershipEvents;
+    }
+    const timelineText = normalizeVoiceText(
+      `[${eventRow.displayName} ${normalizedEventType === "join" ? "joined" : "left"} the voice channel]`,
+      STT_TRANSCRIPT_MAX_CHARS
+    );
+    if (timelineText) {
+      this.appendTranscriptTimelineEntry(session, {
+        kind: "membership",
+        role: "user",
+        userId: normalizedUserId,
+        speakerName: eventRow.displayName,
+        text: timelineText,
+        at: eventAt,
+        eventType: normalizedEventType
+      });
     }
     return eventRow;
   }
@@ -5363,17 +5602,6 @@ export class VoiceSessionManager {
           played: normalizedRefs
         };
       },
-      setAddressing: async ({ talkingTo, confidence }: { talkingTo: string | null; confidence: number }) => ({
-        ok: true,
-        talkingTo:
-          talkingTo == null
-            ? null
-            : String(talkingTo || "")
-              .replace(/\s+/g, " ")
-              .trim()
-              .slice(0, 80) || null,
-        directedConfidence: clamp(Number(confidence) || 0, 0, 1)
-      }),
       setScreenNote: async (note: string) => ({
         ok: true,
         note: String(note || "").replace(/\s+/g, " ").trim().slice(0, 220)

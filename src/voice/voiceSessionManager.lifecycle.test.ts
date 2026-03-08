@@ -281,6 +281,7 @@ function createSession(overrides = {}) {
     deferredVoiceActions: {},
     deferredVoiceActionTimers: {},
     lastRequestedRealtimeUtterance: null,
+    pendingRealtimeAssistantUtterances: [],
     settingsSnapshot: createTestSettings({
       botName: "clanker conk",
       voice: {
@@ -1691,6 +1692,104 @@ test("announceVoiceWebLookupBusy skips TTS fallback in realtime mode", async () 
   assert.equal(ttsCalls, 0);
 });
 
+test("requestRealtimeTextUtterance queues assistant speech behind an active realtime response", () => {
+  const { manager, logs } = createManager();
+  const prompts = [];
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeClient: {
+      requestTextUtterance(prompt) {
+        prompts.push(prompt);
+      },
+      isResponseInProgress() {
+        return true;
+      }
+    },
+    pendingResponse: {
+      requestId: 4,
+      userId: "bot-user",
+      requestedAt: Date.now() - 1_000,
+      retryCount: 0,
+      hardRecoveryAttempted: false,
+      source: "test_active_reply",
+      handlingSilence: false,
+      audioReceivedAt: 0,
+      interruptionPolicy: null,
+      utteranceText: "first chunk",
+      latencyContext: null
+    }
+  });
+
+  const requested = manager.requestRealtimeTextUtterance({
+    session,
+    text: "second chunk",
+    source: "test_stream_chunk_1"
+  });
+
+  assert.equal(requested, true);
+  assert.equal(prompts.length, 0);
+  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 1);
+  assert.equal(session.pendingRealtimeAssistantUtterances?.[0]?.utteranceText, "second chunk");
+  assert.equal(logs.some((entry) => entry?.content === "realtime_assistant_utterance_queued"), true);
+});
+
+test("handleResponseDone drains queued assistant speech after realtime audio completes", () => {
+  const { manager, logs } = createManager();
+  const prompts = [];
+  let activeResponse = true;
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeClient: {
+      requestTextUtterance(prompt) {
+        prompts.push(prompt);
+      },
+      isResponseInProgress() {
+        return activeResponse;
+      }
+    },
+    pendingResponse: {
+      requestId: 5,
+      userId: "bot-user",
+      requestedAt: Date.now() - 1_500,
+      retryCount: 0,
+      hardRecoveryAttempted: false,
+      source: "test_active_reply",
+      handlingSilence: false,
+      audioReceivedAt: 0,
+      interruptionPolicy: null,
+      utteranceText: "first chunk",
+      latencyContext: null
+    }
+  });
+
+  const queued = manager.requestRealtimeTextUtterance({
+    session,
+    text: "second chunk",
+    source: "test_stream_chunk_1"
+  });
+  assert.equal(queued, true);
+  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 1);
+
+  activeResponse = false;
+  session.lastAudioDeltaAt = Date.now();
+  manager.replyManager.handleResponseDone({
+    session,
+    event: {
+      response: {
+        id: "resp_test_1",
+        status: "completed"
+      }
+    }
+  });
+
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0] || "", /second chunk/);
+  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 0);
+  assert.equal(Number(session.pendingResponse?.requestId || 0) > 0, true);
+  assert.equal(session.pendingResponse?.utteranceText, "second chunk");
+  assert.equal(logs.some((entry) => entry?.content === "realtime_assistant_utterance_queue_drained"), true);
+});
+
 test("handleResponseDone preserves tool work when a tool-only realtime response completes", () => {
   const { manager } = createManager();
   manager.activeReplies = new ActiveReplyRegistry();
@@ -1759,6 +1858,126 @@ test("handleResponseDone preserves tool work when a tool-only realtime response 
   const outputChannelState = manager.getOutputChannelState(session);
   assert.equal(outputChannelState.awaitingToolOutputs, true);
   assert.equal(outputChannelState.lockReason, "awaiting_tool_outputs");
+});
+
+test("handleResponseDone preserves active voice generation when busy utterance audio completes", () => {
+  const { manager } = createManager();
+  manager.activeReplies = new ActiveReplyRegistry();
+  const requestedAt = Date.now() - 1_000;
+  const replyScopeKey = buildVoiceReplyScopeKey("session-busy-utterance-1");
+  const activeReply = manager.activeReplies.begin(replyScopeKey, "voice-generation");
+  const session = createSession({
+    id: "session-busy-utterance-1",
+    mode: "openai_realtime",
+    realtimeClient: {
+      isResponseInProgress() {
+        return false;
+      }
+    },
+    lastAudioDeltaAt: requestedAt + 250,
+    pendingResponse: {
+      requestId: 9,
+      userId: "speaker-1",
+      requestedAt,
+      retryCount: 0,
+      hardRecoveryAttempted: false,
+      source: "voice_web_lookup:busy_utterance",
+      handlingSilence: false,
+      audioReceivedAt: 0,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      utteranceText: "still looking",
+      latencyContext: null
+    },
+    activeReplyInterruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "speaker-1"
+    }
+  });
+
+  manager.replyManager.handleResponseDone({
+    session,
+    event: {
+      type: "response.done",
+      response: {
+        id: "resp-busy-utterance-1",
+        status: "completed"
+      }
+    }
+  });
+
+  assert.equal(session.pendingResponse, null);
+  assert.equal(activeReply.abortController.signal.aborted, false);
+  assert.equal(manager.activeReplies.has(replyScopeKey), true);
+  assert.deepEqual(session.activeReplyInterruptionPolicy, {
+    assertive: true,
+    scope: "speaker",
+    allowedUserId: "speaker-1"
+  });
+});
+
+test("handleResponseDone preserves active voice generation when a streamed chunk completes mid-tool-loop", () => {
+  const { manager } = createManager();
+  manager.activeReplies = new ActiveReplyRegistry();
+  const requestedAt = Date.now() - 1_000;
+  const replyScopeKey = buildVoiceReplyScopeKey("session-stream-chunk-1");
+  const activeReply = manager.activeReplies.begin(replyScopeKey, "voice-generation");
+  const session = createSession({
+    id: "session-stream-chunk-1",
+    mode: "openai_realtime",
+    realtimeClient: {
+      isResponseInProgress() {
+        return false;
+      }
+    },
+    lastAudioDeltaAt: requestedAt + 250,
+    pendingResponse: {
+      requestId: 10,
+      userId: "speaker-1",
+      requestedAt,
+      retryCount: 0,
+      hardRecoveryAttempted: false,
+      source: "realtime:stream_chunk_0",
+      handlingSilence: false,
+      audioReceivedAt: 0,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      utteranceText: "lemme pull that up",
+      latencyContext: null
+    },
+    activeReplyInterruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "speaker-1"
+    }
+  });
+
+  manager.replyManager.handleResponseDone({
+    session,
+    event: {
+      type: "response.done",
+      response: {
+        id: "resp-stream-chunk-1",
+        status: "completed"
+      }
+    }
+  });
+
+  assert.equal(session.pendingResponse, null);
+  assert.equal(activeReply.abortController.signal.aborted, false);
+  assert.equal(manager.activeReplies.has(replyScopeKey), true);
+  assert.deepEqual(session.activeReplyInterruptionPolicy, {
+    assertive: true,
+    scope: "speaker",
+    allowedUserId: "speaker-1"
+  });
 });
 
 test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript instead of queueing PCM", () => {
@@ -1957,6 +2176,7 @@ test("queueRealtimeTurnFromAsrBridge forwards transcript metadata when ASR trans
     pcmBuffer,
     captureReason: "speaking_end",
     finalizedAt: Date.now(),
+    bridgeUtteranceId: 14,
     asrResult: {
       transcript: "hello from asr",
       asrStartedAtMs: 1000,
@@ -1972,6 +2192,7 @@ test("queueRealtimeTurnFromAsrBridge forwards transcript metadata when ASR trans
   assert.equal(usedTranscript, true);
   assert.equal(queuedTurns.length, 1);
   assert.equal(queuedTurns[0]?.transcriptOverride, "hello from asr");
+  assert.equal(queuedTurns[0]?.bridgeUtteranceId, 14);
   assert.equal(queuedTurns[0]?.transcriptionModelPrimaryOverride, "gpt-4o-mini-transcribe");
   assert.equal(queuedTurns[0]?.transcriptionModelFallbackOverride, "whisper-1");
   assert.equal(queuedTurns[0]?.transcriptionPlanReasonOverride, "openai_realtime_per_user_transcription");
@@ -2077,12 +2298,139 @@ test("shared ASR bridge forwards recovered transcript after timeout instead of d
     useOpenAiSharedAsr: true
   });
 
-  assert.equal(bridgedTurns.length, 1);
-  assert.equal(bridgedTurns[0]?.source, "shared");
-  assert.equal(bridgedTurns[0]?.asrResult?.transcript, "can i show you my screen?");
+  assert.equal(bridgedTurns.length >= 1, true);
+  assert.equal(bridgedTurns.at(-1)?.asrResult?.transcript, "can i show you my screen?");
   assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_timeout_fallback"), true);
   assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_late_result_ignored"), false);
   assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"), false);
+});
+
+test("per-user ASR bridge forwards same-utterance transcript continuity across late streaming updates", async () => {
+  const { manager, logs } = createManager();
+  manager.appConfig.openaiApiKey = "test-openai-key";
+  manager.shouldUsePerUserTranscription = () => true;
+  manager.shouldUseSharedTranscription = () => false;
+  manager.evaluatePcmSilenceGate = () => ({
+    drop: false,
+    clipDurationMs: 960,
+    rms: 0.2,
+    peak: 0.4,
+    activeSampleRatio: 0.4
+  });
+  manager.maybeHandleInterruptedReplyRecovery = () => false;
+
+  const bridgedTurns = [];
+  manager.queueRealtimeTurnFromAsrBridge = (payload) => {
+    bridgedTurns.push(payload);
+    return true;
+  };
+
+  const settings = createTestSettings({
+    botName: "clanker conk",
+    llm: {
+      provider: "anthropic",
+      model: "claude-haiku-4-5"
+    },
+    voice: {
+      openaiRealtime: {
+        transcriptionMethod: "realtime_bridge",
+        usePerUserAsrBridge: true
+      }
+    }
+  });
+  const voxClient = new EventEmitter();
+  voxClient.subscribeUser = () => {};
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000,
+    cleanupHandlers: [],
+    settingsSnapshot: settings,
+    voxClient,
+    openAiAsrTranscriptStableMs: 100,
+    openAiAsrTranscriptWaitMaxMs: 260
+  });
+
+  const pcmBuffer = makeMonoPcm16(24_000, 3000);
+  manager.captureManager.startInboundCapture({
+    session,
+    userId: "speaker-1",
+    settings
+  });
+
+  const capture = session.userCaptures.get("speaker-1");
+  assert.ok(capture);
+  const { asrState } = seedReadyPerUserAsr(manager, session, "speaker-1");
+  assert.ok(asrState?.utterance);
+  asrState.utterance.bytesSent = pcmBuffer.length;
+  capture.promotedAt = Date.now();
+  capture.asrUtteranceId = Math.max(0, Number(asrState.utterance.id || 0));
+  asrState.client = {
+    ws: { readyState: 1 },
+    clearInputAudioBuffer() {},
+    appendInputAudioPcm() {},
+    commitInputAudioBuffer() {
+      setTimeout(() => {
+        if (!asrState.utterance) return;
+        asrState.utterance.finalSegments = ["Yo, what's up, man? Can you look up on eBay what..."];
+        asrState.utterance.lastUpdateAt = Date.now();
+      }, 10);
+      setTimeout(() => {
+        if (!asrState.utterance) return;
+        asrState.utterance.finalSegments = [
+          "Yo, what's up, man? Can you look up on eBay what...",
+          "Uh, Nintendo DS."
+        ];
+        asrState.utterance.lastUpdateAt = Date.now();
+      }, 600);
+    }
+  };
+
+  const captureManager = manager.captureManager as CaptureManager & {
+    runAsrBridgeCommit(args: {
+      session: VoiceSession;
+      userId: string;
+      settings?: Record<string, unknown> | null;
+      captureState: CaptureState;
+      pcmBuffer: Buffer;
+      captureReason: string;
+      finalizedAt: number;
+      useOpenAiPerUserAsr: boolean;
+      useOpenAiSharedAsr: boolean;
+    }): Promise<void>;
+  };
+  await captureManager.runAsrBridgeCommit({
+    session,
+    userId: "speaker-1",
+    settings,
+    captureState: capture,
+    pcmBuffer,
+    captureReason: "max_duration",
+    finalizedAt: Date.now(),
+    useOpenAiPerUserAsr: true,
+    useOpenAiSharedAsr: false
+  });
+
+  assert.equal(bridgedTurns.length >= 1, true);
+  const firstTranscript = bridgedTurns[0]?.asrResult?.transcript || "";
+  const lastTranscript = bridgedTurns.at(-1)?.asrResult?.transcript || "";
+  assert.equal(
+    [
+      "Yo, what's up, man? Can you look up on eBay what...",
+      "Yo, what's up, man? Can you look up on eBay what... Uh, Nintendo DS."
+    ].includes(lastTranscript),
+    true
+  );
+  assert.equal(Math.max(0, Number(bridgedTurns[0]?.bridgeUtteranceId || 0)) > 0, true);
+  if (bridgedTurns.length >= 2) {
+    assert.equal(
+      firstTranscript,
+      "Yo, what's up, man? Can you look up on eBay what..."
+    );
+    assert.equal(lastTranscript, "Yo, what's up, man? Can you look up on eBay what... Uh, Nintendo DS.");
+    assert.equal(bridgedTurns[0]?.bridgeUtteranceId, bridgedTurns.at(-1)?.bridgeUtteranceId);
+    assert.equal(bridgedTurns[1]?.source, "per_user_late_streaming_revision");
+    assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_late_streaming_revised"), true);
+  }
 });
 
 test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown", () => {

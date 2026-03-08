@@ -80,10 +80,14 @@ interface QueueRealtimeTurnArgs {
   transcriptionPlanReasonOverride?: string;
   usedFallbackModelForTranscriptOverride?: boolean;
   transcriptLogprobsOverride?: VoiceTranscriptLogprob[] | null;
+  bridgeUtteranceId?: number | null;
 }
 
 interface RunRealtimeTurnArgs extends QueueRealtimeTurnArgs {
   queuedAt?: number;
+  bridgeRevision?: number;
+  mergedTurnCount?: number;
+  droppedHeadBytes?: number;
 }
 
 interface QueueSttPipelineTurnArgs {
@@ -357,12 +361,203 @@ export class TurnProcessor {
     });
   }
 
+  private resolveMergedRealtimeTranscript(existingTranscript = "", incomingTranscript = "") {
+    const existing = normalizeVoiceText(existingTranscript, STT_TRANSCRIPT_MAX_CHARS);
+    const incoming = normalizeVoiceText(incomingTranscript, STT_TRANSCRIPT_MAX_CHARS);
+    if (!existing) return incoming;
+    if (!incoming) return existing;
+    if (existing === incoming) return existing;
+    if (incoming.startsWith(existing) || incoming.includes(existing)) return incoming;
+    if (existing.startsWith(incoming) || existing.includes(incoming)) return existing;
+    return normalizeVoiceText(`${existing} ${incoming}`, STT_TRANSCRIPT_MAX_CHARS);
+  }
+
+  private buildQueuedRealtimeTurn({
+    session,
+    userId,
+    pcmBuffer = null,
+    captureReason = "stream_end",
+    finalizedAt = 0,
+    transcriptOverride = "",
+    clipDurationMsOverride = Number.NaN,
+    asrStartedAtMsOverride = 0,
+    asrCompletedAtMsOverride = 0,
+    transcriptionModelPrimaryOverride = "",
+    transcriptionModelFallbackOverride = null,
+    transcriptionPlanReasonOverride = "",
+    usedFallbackModelForTranscriptOverride = false,
+    transcriptLogprobsOverride = null,
+    bridgeUtteranceId = null
+  }: QueueRealtimeTurnArgs): RealtimeQueuedTurn | null {
+    if (!session || session.ending) return null;
+    const normalizedPcmBuffer = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
+    const normalizedTranscriptOverride = normalizeVoiceText(transcriptOverride || "", STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedPcmBuffer.length && !normalizedTranscriptOverride) return null;
+    const queuedAt = Date.now();
+    const normalizedFinalizedAt = Math.max(0, Number(finalizedAt || 0)) || queuedAt;
+    return {
+      session,
+      userId,
+      pcmBuffer: normalizedPcmBuffer.length ? normalizedPcmBuffer : Buffer.alloc(0),
+      captureReason,
+      queuedAt,
+      finalizedAt: normalizedFinalizedAt,
+      transcriptOverride: normalizedTranscriptOverride || null,
+      clipDurationMsOverride: Number.isFinite(Number(clipDurationMsOverride))
+        ? Math.max(0, Math.round(Number(clipDurationMsOverride)))
+        : null,
+      asrStartedAtMsOverride: Math.max(0, Number(asrStartedAtMsOverride || 0)),
+      asrCompletedAtMsOverride: Math.max(0, Number(asrCompletedAtMsOverride || 0)),
+      transcriptionModelPrimaryOverride: String(transcriptionModelPrimaryOverride || "").trim() || null,
+      transcriptionModelFallbackOverride:
+        String(transcriptionModelFallbackOverride || "").trim() || null,
+      transcriptionPlanReasonOverride: String(transcriptionPlanReasonOverride || "").trim() || null,
+      usedFallbackModelForTranscriptOverride: Boolean(usedFallbackModelForTranscriptOverride),
+      transcriptLogprobsOverride: Array.isArray(transcriptLogprobsOverride)
+        ? transcriptLogprobsOverride
+        : null,
+      bridgeUtteranceId: Math.max(0, Number(bridgeUtteranceId || 0)) || null,
+      bridgeRevision: 1,
+      mergedTurnCount: 1,
+      droppedHeadBytes: 0
+    };
+  }
+
+  private buildRevisedRealtimeTurn(
+    existingTurn: RealtimeQueuedTurn,
+    incomingTurn: RealtimeQueuedTurn
+  ): RealtimeQueuedTurn {
+    const mergedTranscript = this.resolveMergedRealtimeTranscript(
+      existingTurn.transcriptOverride || "",
+      incomingTurn.transcriptOverride || ""
+    );
+    const existingLogprobs = Array.isArray(existingTurn.transcriptLogprobsOverride)
+      ? existingTurn.transcriptLogprobsOverride
+      : [];
+    const incomingLogprobs = Array.isArray(incomingTurn.transcriptLogprobsOverride)
+      ? incomingTurn.transcriptLogprobsOverride
+      : [];
+    const mergedLogprobs =
+      existingLogprobs.length > 0 || incomingLogprobs.length > 0
+        ? [...existingLogprobs, ...incomingLogprobs]
+        : null;
+    return {
+      ...existingTurn,
+      ...incomingTurn,
+      pcmBuffer: incomingTurn.pcmBuffer.length > 0 ? incomingTurn.pcmBuffer : existingTurn.pcmBuffer,
+      transcriptOverride: mergedTranscript || null,
+      transcriptLogprobsOverride: mergedLogprobs,
+      queuedAt: Math.max(0, Number(existingTurn.queuedAt || 0), Number(incomingTurn.queuedAt || 0)),
+      finalizedAt: Math.max(0, Number(existingTurn.finalizedAt || 0), Number(incomingTurn.finalizedAt || 0)),
+      bridgeUtteranceId:
+        Math.max(0, Number(incomingTurn.bridgeUtteranceId || existingTurn.bridgeUtteranceId || 0)) || null,
+      bridgeRevision: Math.max(1, Number(existingTurn.bridgeRevision || 1)) + 1
+    };
+  }
+
+  private hasRealtimeOutputStarted(session: VoiceSession) {
+    if (!session || session.ending) return false;
+    const pending = session.pendingResponse;
+    const pendingRequestedAt = Math.max(0, Number(pending?.requestedAt || 0));
+    return (
+      Boolean(session.botTurnOpen) ||
+      (pendingRequestedAt > 0 && Number(session.lastAudioDeltaAt || 0) >= pendingRequestedAt)
+    );
+  }
+
+  private queueRevisedRealtimeTurn(session: VoiceSession, revisedTurn: RealtimeQueuedTurn) {
+    const pendingQueue = this.ensurePendingRealtimeTurnQueue(session);
+    const pendingIndex = this.findPendingRealtimeTurnIndexByUtteranceId(
+      pendingQueue,
+      revisedTurn.bridgeUtteranceId
+    );
+    if (pendingIndex >= 0) {
+      pendingQueue.splice(pendingIndex, 1, revisedTurn);
+      return;
+    }
+    pendingQueue.unshift(revisedTurn);
+  }
+
+  private markRealtimeTurnSuperseded(session: VoiceSession, revisedTurn: RealtimeQueuedTurn) {
+    if (!session || session.ending) return false;
+    if (this.hasRealtimeOutputStarted(session)) {
+      return false;
+    }
+
+    const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
+    let responseCancelSucceeded = false;
+    const cancelActiveResponse = session.realtimeClient?.cancelActiveResponse;
+    if (typeof cancelActiveResponse === "function") {
+      try {
+        responseCancelSucceeded = Boolean(cancelActiveResponse.call(session.realtimeClient));
+      } catch {
+        responseCancelSucceeded = false;
+      }
+    }
+    let activeReplyAbortCount = 0;
+    if (session.pendingResponse && typeof session.pendingResponse === "object") {
+      this.host.replyManager.clearPendingResponse(session);
+    } else {
+      activeReplyAbortCount = this.host.activeReplies?.abortAll(
+        voiceReplyScopeKey,
+        "Superseded by revised ASR transcript"
+      ) || 0;
+    }
+    session.activeRealtimeTurn = revisedTurn;
+    this.queueRevisedRealtimeTurn(session, revisedTurn);
+    this.host.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: revisedTurn.userId,
+      content: "realtime_turn_revised_pre_audio",
+      metadata: {
+        sessionId: session.id,
+        captureReason: String(revisedTurn.captureReason || "stream_end"),
+        bridgeUtteranceId: revisedTurn.bridgeUtteranceId,
+        bridgeRevision: revisedTurn.bridgeRevision,
+        responseCancelSucceeded,
+        activeReplyAbortCount,
+        queueDepth: this.ensurePendingRealtimeTurnQueue(session).length
+      }
+    });
+    return true;
+  }
+
+  private isRealtimeTurnSuperseded(
+    session: VoiceSession,
+    bridgeUtteranceId: number | null,
+    bridgeRevision: number
+  ) {
+    const normalizedBridgeUtteranceId = Math.max(0, Number(bridgeUtteranceId || 0)) || null;
+    if (!normalizedBridgeUtteranceId) return false;
+    const activeTurn = session.activeRealtimeTurn && typeof session.activeRealtimeTurn === "object"
+      ? session.activeRealtimeTurn
+      : null;
+    if (!activeTurn) return false;
+    return (
+      Number(activeTurn.bridgeUtteranceId || 0) === normalizedBridgeUtteranceId &&
+      Number(activeTurn.bridgeRevision || 0) > Math.max(0, Number(bridgeRevision || 0))
+    );
+  }
+
   getRealtimeTurnBacklogSize(session: VoiceSession | null | undefined) {
     if (!session) return 0;
     const pendingQueueDepth = Array.isArray(session.pendingRealtimeTurns)
       ? session.pendingRealtimeTurns.length
       : 0;
     return Math.max(0, (session.realtimeTurnDrainActive ? 1 : 0) + pendingQueueDepth);
+  }
+
+  private findPendingRealtimeTurnIndexByUtteranceId(
+    pendingQueue: RealtimeQueuedTurn[],
+    bridgeUtteranceId: number | null
+  ) {
+    const normalizedBridgeUtteranceId = Math.max(0, Number(bridgeUtteranceId || 0)) || null;
+    if (!normalizedBridgeUtteranceId) return -1;
+    return pendingQueue.findIndex(
+      (turn) => Math.max(0, Number(turn?.bridgeUtteranceId || 0)) === normalizedBridgeUtteranceId
+    );
   }
 
   mergeRealtimeQueuedTurn(
@@ -374,12 +569,12 @@ export class TurnProcessor {
 
     const existingBuffer = Buffer.isBuffer(existingTurn.pcmBuffer) ? existingTurn.pcmBuffer : Buffer.alloc(0);
     const incomingBuffer = Buffer.isBuffer(incomingTurn.pcmBuffer) ? incomingTurn.pcmBuffer : Buffer.alloc(0);
-    const existingTranscript = normalizeVoiceText(existingTurn.transcriptOverride || "", STT_TRANSCRIPT_MAX_CHARS);
-    const incomingTranscript = normalizeVoiceText(incomingTurn.transcriptOverride || "", STT_TRANSCRIPT_MAX_CHARS);
-    const mergedTranscript = normalizeVoiceText(
-      [existingTranscript, incomingTranscript].filter(Boolean).join(" "),
-      STT_TRANSCRIPT_MAX_CHARS
+    const mergedTranscript = this.resolveMergedRealtimeTranscript(
+      existingTurn.transcriptOverride || "",
+      incomingTurn.transcriptOverride || ""
     );
+
+    const incomingTranscript = normalizeVoiceText(incomingTurn.transcriptOverride || "", STT_TRANSCRIPT_MAX_CHARS);
 
     if (!incomingBuffer.length && !incomingTranscript) return existingTurn;
 
@@ -417,6 +612,21 @@ export class TurnProcessor {
       existingLogprobs.length > 0 || incomingLogprobs.length > 0
         ? [...existingLogprobs, ...incomingLogprobs]
         : null;
+    const existingBridgeUtteranceId = Math.max(0, Number(existingTurn.bridgeUtteranceId || 0)) || null;
+    const incomingBridgeUtteranceId = Math.max(0, Number(incomingTurn.bridgeUtteranceId || 0)) || null;
+    const mergedBridgeUtteranceId =
+      existingBridgeUtteranceId &&
+      incomingBridgeUtteranceId &&
+      existingBridgeUtteranceId === incomingBridgeUtteranceId
+        ? existingBridgeUtteranceId
+        : null;
+    const mergedBridgeRevision = mergedBridgeUtteranceId
+      ? Math.max(
+        1,
+        Number(existingTurn.bridgeRevision || 1),
+        Number(incomingTurn.bridgeRevision || 1)
+      )
+      : 1;
 
     return {
       ...existingTurn,
@@ -426,6 +636,8 @@ export class TurnProcessor {
       transcriptLogprobsOverride: mergedLogprobs,
       queuedAt: Number(incomingTurn.queuedAt || Date.now()),
       finalizedAt: mergedFinalizedAt || 0,
+      bridgeUtteranceId: mergedBridgeUtteranceId,
+      bridgeRevision: mergedBridgeRevision,
       mergedTurnCount: Math.max(1, Number(existingTurn.mergedTurnCount || 1)) + 1,
       droppedHeadBytes
     };
@@ -445,41 +657,83 @@ export class TurnProcessor {
     transcriptionModelFallbackOverride = null,
     transcriptionPlanReasonOverride = "",
     usedFallbackModelForTranscriptOverride = false,
-    transcriptLogprobsOverride = null
+    transcriptLogprobsOverride = null,
+    bridgeUtteranceId = null
   }: QueueRealtimeTurnArgs) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
-    const normalizedPcmBuffer = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
-    const normalizedTranscriptOverride = normalizeVoiceText(transcriptOverride || "", STT_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedPcmBuffer.length && !normalizedTranscriptOverride) return;
     const pendingQueue = this.ensurePendingRealtimeTurnQueue(session);
-    const queuedAt = Date.now();
-    const normalizedFinalizedAt = Math.max(0, Number(finalizedAt || 0)) || queuedAt;
-
-    const queuedTurn: RealtimeQueuedTurn = {
+    const queuedTurn = this.buildQueuedRealtimeTurn({
       session,
       userId,
-      pcmBuffer: normalizedPcmBuffer.length ? normalizedPcmBuffer : Buffer.alloc(0),
+      pcmBuffer,
       captureReason,
-      queuedAt,
-      finalizedAt: normalizedFinalizedAt,
-      transcriptOverride: normalizedTranscriptOverride || null,
-      clipDurationMsOverride: Number.isFinite(Number(clipDurationMsOverride))
-        ? Math.max(0, Math.round(Number(clipDurationMsOverride)))
-        : null,
-      asrStartedAtMsOverride: Math.max(0, Number(asrStartedAtMsOverride || 0)),
-      asrCompletedAtMsOverride: Math.max(0, Number(asrCompletedAtMsOverride || 0)),
-      transcriptionModelPrimaryOverride: String(transcriptionModelPrimaryOverride || "").trim() || null,
-      transcriptionModelFallbackOverride:
-        String(transcriptionModelFallbackOverride || "").trim() || null,
-      transcriptionPlanReasonOverride: String(transcriptionPlanReasonOverride || "").trim() || null,
-      usedFallbackModelForTranscriptOverride: Boolean(usedFallbackModelForTranscriptOverride),
-      transcriptLogprobsOverride: Array.isArray(transcriptLogprobsOverride)
-        ? transcriptLogprobsOverride
-        : null,
-      mergedTurnCount: 1,
-      droppedHeadBytes: 0
-    };
+      finalizedAt,
+      transcriptOverride,
+      clipDurationMsOverride,
+      asrStartedAtMsOverride,
+      asrCompletedAtMsOverride,
+      transcriptionModelPrimaryOverride,
+      transcriptionModelFallbackOverride,
+      transcriptionPlanReasonOverride,
+      usedFallbackModelForTranscriptOverride,
+      transcriptLogprobsOverride,
+      bridgeUtteranceId
+    });
+    if (!queuedTurn) return;
+
+    const activeTurn = session.activeRealtimeTurn && typeof session.activeRealtimeTurn === "object"
+      ? session.activeRealtimeTurn
+      : null;
+    if (
+      activeTurn &&
+      queuedTurn.bridgeUtteranceId &&
+      Math.max(0, Number(activeTurn.bridgeUtteranceId || 0)) === queuedTurn.bridgeUtteranceId
+    ) {
+      const revisedTurn = this.buildRevisedRealtimeTurn(activeTurn, queuedTurn);
+      const superseded = this.markRealtimeTurnSuperseded(session, revisedTurn);
+      if (!superseded && this.hasRealtimeOutputStarted(session)) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: "realtime_turn_revision_ignored_after_output_start",
+          metadata: {
+            sessionId: session.id,
+            captureReason: String(captureReason || "stream_end"),
+            bridgeUtteranceId: revisedTurn.bridgeUtteranceId,
+            bridgeRevision: revisedTurn.bridgeRevision
+          }
+        });
+      }
+      return;
+    }
+
+    const pendingIndex = this.findPendingRealtimeTurnIndexByUtteranceId(
+      pendingQueue,
+      queuedTurn.bridgeUtteranceId
+    );
+    if (pendingIndex >= 0) {
+      const existingPendingTurn = pendingQueue[pendingIndex];
+      const revisedPendingTurn = this.buildRevisedRealtimeTurn(existingPendingTurn, queuedTurn);
+      pendingQueue.splice(pendingIndex, 1, revisedPendingTurn);
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "realtime_turn_revised_pending",
+        metadata: {
+          sessionId: session.id,
+          captureReason: String(captureReason || "stream_end"),
+          bridgeUtteranceId: revisedPendingTurn.bridgeUtteranceId,
+          bridgeRevision: revisedPendingTurn.bridgeRevision,
+          queueDepth: pendingQueue.length
+        }
+      });
+      return;
+    }
 
     if (session.realtimeTurnDrainActive) {
       const firstPending = pendingQueue.shift() || null;
@@ -642,7 +896,11 @@ export class TurnProcessor {
     transcriptionModelFallbackOverride = null,
     transcriptionPlanReasonOverride = "",
     usedFallbackModelForTranscriptOverride = false,
-    transcriptLogprobsOverride = null
+    transcriptLogprobsOverride = null,
+    bridgeUtteranceId = null,
+    bridgeRevision = 1,
+    mergedTurnCount = 1,
+    droppedHeadBytes = 0
   }: RunRealtimeTurnArgs) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
@@ -651,469 +909,552 @@ export class TurnProcessor {
     const normalizedTranscriptOverride = normalizeVoiceText(transcriptOverride, STT_TRANSCRIPT_MAX_CHARS);
     const hasTranscriptOverride = Boolean(normalizedTranscriptOverride);
     if (!normalizedPcmBuffer?.length && !hasTranscriptOverride) return;
+    const normalizedBridgeUtteranceId = Math.max(0, Number(bridgeUtteranceId || 0)) || null;
+    const normalizedBridgeRevision = Math.max(1, Number(bridgeRevision || 1));
+    const currentTurn: RealtimeQueuedTurn = {
+      session,
+      userId,
+      pcmBuffer: normalizedPcmBuffer.length ? normalizedPcmBuffer : Buffer.alloc(0),
+      captureReason,
+      queuedAt: Math.max(0, Number(queuedAt || Date.now())) || Date.now(),
+      finalizedAt: Math.max(0, Number(finalizedAt || 0)) || Math.max(0, Number(queuedAt || Date.now())) || Date.now(),
+      transcriptOverride: normalizedTranscriptOverride || null,
+      clipDurationMsOverride: Number.isFinite(Number(clipDurationMsOverride))
+        ? Math.max(0, Math.round(Number(clipDurationMsOverride)))
+        : null,
+      asrStartedAtMsOverride: Math.max(0, Number(asrStartedAtMsOverride || 0)),
+      asrCompletedAtMsOverride: Math.max(0, Number(asrCompletedAtMsOverride || 0)),
+      transcriptionModelPrimaryOverride: String(transcriptionModelPrimaryOverride || "").trim() || null,
+      transcriptionModelFallbackOverride:
+        String(transcriptionModelFallbackOverride || "").trim() || null,
+      transcriptionPlanReasonOverride: String(transcriptionPlanReasonOverride || "").trim() || null,
+      usedFallbackModelForTranscriptOverride: Boolean(usedFallbackModelForTranscriptOverride),
+      transcriptLogprobsOverride: Array.isArray(transcriptLogprobsOverride)
+        ? transcriptLogprobsOverride
+        : null,
+      bridgeUtteranceId: normalizedBridgeUtteranceId,
+      bridgeRevision: normalizedBridgeRevision,
+      mergedTurnCount: Math.max(1, Number(mergedTurnCount || 1)),
+      droppedHeadBytes: Math.max(0, Number(droppedHeadBytes || 0))
+    };
+    const isSuperseded = (stage: string) => {
+      const superseded = this.isRealtimeTurnSuperseded(
+        session,
+        normalizedBridgeUtteranceId,
+        normalizedBridgeRevision
+      );
+      if (!superseded) return false;
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "realtime_turn_superseded",
+        metadata: {
+          sessionId: session.id,
+          captureReason: String(captureReason || "stream_end"),
+          bridgeUtteranceId: normalizedBridgeUtteranceId,
+          bridgeRevision: normalizedBridgeRevision,
+          stage
+        }
+      });
+      return true;
+    };
+    session.activeRealtimeTurn = currentTurn;
     const queueWaitMs = queuedAt ? Math.max(0, Date.now() - Number(queuedAt || Date.now())) : 0;
     const finalizedAtMs = Math.max(0, Number(finalizedAt || 0)) || Math.max(0, Number(queuedAt || 0));
-    if (this.host.activeReplies?.isStale(voiceReplyScopeKey, finalizedAtMs || Date.now())) {
-      this.host.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: "realtime_turn_skipped_cancelled",
-        metadata: {
-          sessionId: session.id,
-          captureReason: String(captureReason || "stream_end"),
-          finalizedAtMs
-        }
-      });
-      return;
-    }
-    if (hasTranscriptOverride && isCancelIntent(normalizedTranscriptOverride)) {
-      this.cancelRealtimeSessionWork({
-        session,
-        userId,
-        transcript: normalizedTranscriptOverride,
-        source: "realtime",
-        captureReason
-      });
-      return;
-    }
-    const pendingQueueDepth = Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns.length : 0;
-    if (
-      pendingQueueDepth > 0 &&
-      queueWaitMs >= REALTIME_TURN_STALE_SKIP_MS &&
-      String(captureReason || "") !== "bot_turn_open_deferred_flush"
-    ) {
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: "realtime_turn_skipped_stale",
-        metadata: {
-          sessionId: session.id,
-          captureReason: String(captureReason || "stream_end"),
-          queueWaitMs,
-          pendingQueueDepth,
-          pcmBytes: normalizedPcmBuffer.length
-        }
-      });
-      return;
-    }
 
-    const settings = session.settingsSnapshot || this.store.getSettings();
-    const consumedByMusicMode = await this.host.maybeHandleMusicPlaybackTurn({
-      session,
-      settings,
-      userId,
-      pcmBuffer: normalizedPcmBuffer,
-      captureReason,
-      source: "realtime",
-      transcript: normalizedTranscriptOverride || undefined
-    });
-    if (consumedByMusicMode) return;
-
-    const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
-    const voiceRuntime = getVoiceRuntimeConfig(settings);
-    const preferredModel =
-      isRealtimeMode(session.mode)
-        ? voiceRuntime.openaiRealtime?.inputTranscriptionModel
-        : voiceRuntime.sttPipeline?.transcriptionModel;
-    const transcriptionModel = String(preferredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
-    const sampleRateHz = Number(session.realtimeInputSampleRateHz) || 24000;
-    const transcriptionPlan = hasTranscriptOverride
-      ? {
-        primaryModel:
-          String(transcriptionModelPrimaryOverride || transcriptionModel).trim() || transcriptionModel,
-        fallbackModel:
-          String(transcriptionModelFallbackOverride || "").trim() || null,
-        reason:
-          String(transcriptionPlanReasonOverride || "openai_realtime_per_user_transcription").trim() ||
-          "openai_realtime_per_user_transcription"
+    try {
+      if (this.host.activeReplies?.isStale(voiceReplyScopeKey, finalizedAtMs || Date.now())) {
+        this.host.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: "realtime_turn_skipped_cancelled",
+          metadata: {
+            sessionId: session.id,
+            captureReason: String(captureReason || "stream_end"),
+            finalizedAtMs
+          }
+        });
+        return;
       }
-      : resolveRealtimeTurnTranscriptionPlan({
-        mode: session.mode,
-        configuredModel: transcriptionModel,
-        pcmByteLength: normalizedPcmBuffer.length,
-        sampleRateHz
-      });
-    const silenceGate = hasTranscriptOverride
-      ? {
-        clipDurationMs: Number.isFinite(Number(clipDurationMsOverride))
-          ? Math.max(0, Math.round(Number(clipDurationMsOverride)))
-          : 0,
-        sampleCount: 0,
-        rms: 0,
-        peak: 0,
-        activeSampleRatio: 0,
-        drop: false
-      }
-      : this.host.evaluatePcmSilenceGate({
-        pcmBuffer: normalizedPcmBuffer,
-        sampleRateHz
-      });
-    const clipDurationMs = silenceGate.clipDurationMs;
-    if (!hasTranscriptOverride && silenceGate.drop) {
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: "voice_turn_dropped_silence_gate",
-        metadata: {
-          sessionId: session.id,
-          source: "realtime",
-          captureReason: String(captureReason || "stream_end"),
-          pcmBytes: normalizedPcmBuffer.length,
-          clipDurationMs,
-          rms: Number(silenceGate.rms.toFixed(6)),
-          peak: Number(silenceGate.peak.toFixed(6)),
-          activeSampleRatio: Number(silenceGate.activeSampleRatio.toFixed(6)),
-          queueWaitMs,
-          pendingQueueDepth
-        }
-      });
-      return;
-    }
-    const minAsrClipBytes = Math.max(
-      2,
-      Math.ceil(((VOICE_TURN_MIN_ASR_CLIP_MS / 1000) * sampleRateHz * 2))
-    );
-    const isShortSpeakingEndClip =
-      String(captureReason || "stream_end") === "speaking_end" &&
-      normalizedPcmBuffer.length < minAsrClipBytes;
-    const skipShortClipAsr = Boolean(!hasTranscriptOverride && isShortSpeakingEndClip);
-    let turnTranscript = hasTranscriptOverride ? normalizedTranscriptOverride : "";
-    let asrStartedAtMs = hasTranscriptOverride ? Math.max(0, Number(asrStartedAtMsOverride || 0)) : 0;
-    let asrCompletedAtMs = hasTranscriptOverride ? Math.max(0, Number(asrCompletedAtMsOverride || 0)) : 0;
-    let resolvedFallbackModel = transcriptionPlan.fallbackModel || null;
-    let resolvedTranscriptionPlanReason = transcriptionPlan.reason;
-    let usedFallbackModelForTranscript = hasTranscriptOverride
-      ? Boolean(usedFallbackModelForTranscriptOverride)
-      : false;
-    if (skipShortClipAsr) {
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: "realtime_turn_transcription_skipped_short_clip",
-        metadata: {
-          sessionId: session.id,
-          captureReason: String(captureReason || "stream_end"),
-          pcmBytes: normalizedPcmBuffer.length,
-          clipDurationMs,
-          minAsrClipMs: VOICE_TURN_MIN_ASR_CLIP_MS,
-          minAsrClipBytes
-        }
-      });
-    } else if (!hasTranscriptOverride && this.llm?.isAsrReady?.() && this.llm?.transcribeAudio) {
-      asrStartedAtMs = Date.now();
-      turnTranscript = await this.host.transcribePcmTurn({
-        session,
-        userId,
-        pcmBuffer: normalizedPcmBuffer,
-        model: transcriptionPlan.primaryModel,
-        sampleRateHz,
-        captureReason,
-        traceSource: "voice_realtime_turn_decider",
-        errorPrefix: "voice_realtime_transcription_failed",
-        emptyTranscriptRuntimeEvent: "voice_realtime_transcription_empty",
-        emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
-        asrLanguage: asrLanguageGuidance.language,
-        asrPrompt: asrLanguageGuidance.prompt
-      });
-
-      if (
-        !turnTranscript &&
-        !resolvedFallbackModel &&
-        session.mode === "voice_agent" &&
-        transcriptionPlan.primaryModel === "gpt-4o-mini-transcribe"
-      ) {
-        resolvedFallbackModel = "whisper-1";
-        resolvedTranscriptionPlanReason = "mini_with_full_fallback_runtime";
-      }
-
-      if (
-        !turnTranscript &&
-        resolvedFallbackModel &&
-        resolvedFallbackModel !== transcriptionPlan.primaryModel
-      ) {
-        turnTranscript = await this.host.transcribePcmTurn({
+      if (hasTranscriptOverride && isCancelIntent(normalizedTranscriptOverride)) {
+        this.cancelRealtimeSessionWork({
           session,
           userId,
-          pcmBuffer: normalizedPcmBuffer,
-          model: resolvedFallbackModel,
-          sampleRateHz,
-          captureReason,
-          traceSource: "voice_realtime_turn_decider_fallback",
-          errorPrefix: "voice_realtime_transcription_fallback_failed",
-          emptyTranscriptRuntimeEvent: "voice_realtime_transcription_empty",
-          emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
-          suppressEmptyTranscriptLogs: true,
-          asrLanguage: asrLanguageGuidance.language,
-          asrPrompt: asrLanguageGuidance.prompt
+          transcript: normalizedTranscriptOverride,
+          source: "realtime",
+          captureReason
         });
-        if (turnTranscript) {
-          usedFallbackModelForTranscript = true;
-        }
+        return;
       }
-      asrCompletedAtMs = Date.now();
-    }
-
-    if (turnTranscript && isCancelIntent(turnTranscript)) {
-      this.cancelRealtimeSessionWork({
-        session,
-        userId,
-        transcript: turnTranscript,
-        source: "realtime",
-        captureReason
-      });
-      return;
-    }
-
-    if (
-      hasTranscriptOverride &&
-      turnTranscript &&
-      Array.isArray(transcriptLogprobsOverride) &&
-      transcriptLogprobsOverride.length > 0
-    ) {
-      const confidence = computeAsrTranscriptConfidence(transcriptLogprobsOverride);
-      if (confidence && confidence.meanLogprob < VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD) {
+      const pendingQueueDepth = Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns.length : 0;
+      if (
+        pendingQueueDepth > 0 &&
+        queueWaitMs >= REALTIME_TURN_STALE_SKIP_MS &&
+        String(captureReason || "") !== "bot_turn_open_deferred_flush"
+      ) {
         this.store.logAction({
           kind: "voice_runtime",
           guildId: session.guildId,
           channelId: session.textChannelId,
           userId,
-          content: "voice_turn_dropped_asr_low_confidence",
+          content: "realtime_turn_skipped_stale",
+          metadata: {
+            sessionId: session.id,
+            captureReason: String(captureReason || "stream_end"),
+            queueWaitMs,
+            pendingQueueDepth,
+            pcmBytes: normalizedPcmBuffer.length
+          }
+        });
+        return;
+      }
+
+      const settings = session.settingsSnapshot || this.store.getSettings();
+      const consumedByMusicMode = await this.host.maybeHandleMusicPlaybackTurn({
+        session,
+        settings,
+        userId,
+        pcmBuffer: normalizedPcmBuffer,
+        captureReason,
+        source: "realtime",
+        transcript: normalizedTranscriptOverride || undefined
+      });
+      if (consumedByMusicMode) return;
+
+      const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
+      const voiceRuntime = getVoiceRuntimeConfig(settings);
+      const preferredModel =
+        isRealtimeMode(session.mode)
+          ? voiceRuntime.openaiRealtime?.inputTranscriptionModel
+          : voiceRuntime.sttPipeline?.transcriptionModel;
+      const transcriptionModel = String(preferredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
+      const sampleRateHz = Number(session.realtimeInputSampleRateHz) || 24000;
+      const transcriptionPlan = hasTranscriptOverride
+        ? {
+          primaryModel:
+            String(transcriptionModelPrimaryOverride || transcriptionModel).trim() || transcriptionModel,
+          fallbackModel:
+            String(transcriptionModelFallbackOverride || "").trim() || null,
+          reason:
+            String(transcriptionPlanReasonOverride || "openai_realtime_per_user_transcription").trim() ||
+            "openai_realtime_per_user_transcription"
+        }
+        : resolveRealtimeTurnTranscriptionPlan({
+          mode: session.mode,
+          configuredModel: transcriptionModel,
+          pcmByteLength: normalizedPcmBuffer.length,
+          sampleRateHz
+        });
+      const silenceGate = hasTranscriptOverride
+        ? {
+          clipDurationMs: Number.isFinite(Number(clipDurationMsOverride))
+            ? Math.max(0, Math.round(Number(clipDurationMsOverride)))
+            : 0,
+          sampleCount: 0,
+          rms: 0,
+          peak: 0,
+          activeSampleRatio: 0,
+          drop: false
+        }
+        : this.host.evaluatePcmSilenceGate({
+          pcmBuffer: normalizedPcmBuffer,
+          sampleRateHz
+        });
+      const clipDurationMs = silenceGate.clipDurationMs;
+      if (!hasTranscriptOverride && silenceGate.drop) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: "voice_turn_dropped_silence_gate",
+          metadata: {
+            sessionId: session.id,
+            source: "realtime",
+            captureReason: String(captureReason || "stream_end"),
+            pcmBytes: normalizedPcmBuffer.length,
+            clipDurationMs,
+            rms: Number(silenceGate.rms.toFixed(6)),
+            peak: Number(silenceGate.peak.toFixed(6)),
+            activeSampleRatio: Number(silenceGate.activeSampleRatio.toFixed(6)),
+            queueWaitMs,
+            pendingQueueDepth
+          }
+        });
+        return;
+      }
+      const minAsrClipBytes = Math.max(
+        2,
+        Math.ceil(((VOICE_TURN_MIN_ASR_CLIP_MS / 1000) * sampleRateHz * 2))
+      );
+      const isShortSpeakingEndClip =
+        String(captureReason || "stream_end") === "speaking_end" &&
+        normalizedPcmBuffer.length < minAsrClipBytes;
+      const skipShortClipAsr = Boolean(!hasTranscriptOverride && isShortSpeakingEndClip);
+      let turnTranscript = hasTranscriptOverride ? normalizedTranscriptOverride : "";
+      let asrStartedAtMs = hasTranscriptOverride ? Math.max(0, Number(asrStartedAtMsOverride || 0)) : 0;
+      let asrCompletedAtMs = hasTranscriptOverride ? Math.max(0, Number(asrCompletedAtMsOverride || 0)) : 0;
+      let resolvedFallbackModel = transcriptionPlan.fallbackModel || null;
+      let resolvedTranscriptionPlanReason = transcriptionPlan.reason;
+      let usedFallbackModelForTranscript = hasTranscriptOverride
+        ? Boolean(usedFallbackModelForTranscriptOverride)
+        : false;
+      if (skipShortClipAsr) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: "realtime_turn_transcription_skipped_short_clip",
+          metadata: {
+            sessionId: session.id,
+            captureReason: String(captureReason || "stream_end"),
+            pcmBytes: normalizedPcmBuffer.length,
+            clipDurationMs,
+            minAsrClipMs: VOICE_TURN_MIN_ASR_CLIP_MS,
+            minAsrClipBytes
+          }
+        });
+      } else if (!hasTranscriptOverride && this.llm?.isAsrReady?.() && this.llm?.transcribeAudio) {
+        asrStartedAtMs = Date.now();
+        turnTranscript = await this.host.transcribePcmTurn({
+          session,
+          userId,
+          pcmBuffer: normalizedPcmBuffer,
+          model: transcriptionPlan.primaryModel,
+          sampleRateHz,
+          captureReason,
+          traceSource: "voice_realtime_turn_decider",
+          errorPrefix: "voice_realtime_transcription_failed",
+          emptyTranscriptRuntimeEvent: "voice_realtime_transcription_empty",
+          emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
+          asrLanguage: asrLanguageGuidance.language,
+          asrPrompt: asrLanguageGuidance.prompt
+        });
+
+        if (
+          !turnTranscript &&
+          !resolvedFallbackModel &&
+          session.mode === "voice_agent" &&
+          transcriptionPlan.primaryModel === "gpt-4o-mini-transcribe"
+        ) {
+          resolvedFallbackModel = "whisper-1";
+          resolvedTranscriptionPlanReason = "mini_with_full_fallback_runtime";
+        }
+
+        if (
+          !turnTranscript &&
+          resolvedFallbackModel &&
+          resolvedFallbackModel !== transcriptionPlan.primaryModel
+        ) {
+          turnTranscript = await this.host.transcribePcmTurn({
+            session,
+            userId,
+            pcmBuffer: normalizedPcmBuffer,
+            model: resolvedFallbackModel,
+            sampleRateHz,
+            captureReason,
+            traceSource: "voice_realtime_turn_decider_fallback",
+            errorPrefix: "voice_realtime_transcription_fallback_failed",
+            emptyTranscriptRuntimeEvent: "voice_realtime_transcription_empty",
+            emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
+            suppressEmptyTranscriptLogs: true,
+            asrLanguage: asrLanguageGuidance.language,
+            asrPrompt: asrLanguageGuidance.prompt
+          });
+          if (turnTranscript) {
+            usedFallbackModelForTranscript = true;
+          }
+        }
+        asrCompletedAtMs = Date.now();
+      }
+
+      if (isSuperseded("post_transcription")) return;
+
+      if (turnTranscript && isCancelIntent(turnTranscript)) {
+        this.cancelRealtimeSessionWork({
+          session,
+          userId,
+          transcript: turnTranscript,
+          source: "realtime",
+          captureReason
+        });
+        return;
+      }
+
+      if (
+        hasTranscriptOverride &&
+        turnTranscript &&
+        Array.isArray(transcriptLogprobsOverride) &&
+        transcriptLogprobsOverride.length > 0
+      ) {
+        const confidence = computeAsrTranscriptConfidence(transcriptLogprobsOverride);
+        if (confidence && confidence.meanLogprob < VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD) {
+          this.store.logAction({
+            kind: "voice_runtime",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId,
+            content: "voice_turn_dropped_asr_low_confidence",
+            metadata: {
+              sessionId: session.id,
+              source: "realtime",
+              captureReason: String(captureReason || "stream_end"),
+              transcript: turnTranscript,
+              meanLogprob: Number(confidence.meanLogprob.toFixed(4)),
+              minLogprob: Number(confidence.minLogprob.toFixed(4)),
+              tokenCount: confidence.tokenCount,
+              threshold: VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD,
+              clipDurationMs
+            }
+          });
+          return;
+        }
+      }
+
+      const isNonSpeechCapture =
+        String(captureReason || "") === "idle_timeout" ||
+        String(captureReason || "") === "near_silence_early_abort";
+      const idleSignalIsNoise =
+        !hasTranscriptOverride &&
+        silenceGate.rms <= VOICE_FALLBACK_NOISE_GATE_RMS_MAX &&
+        silenceGate.peak <= VOICE_FALLBACK_NOISE_GATE_PEAK_MAX &&
+        silenceGate.activeSampleRatio <= VOICE_FALLBACK_NOISE_GATE_ACTIVE_RATIO_MAX;
+      if (
+        turnTranscript &&
+        isNonSpeechCapture &&
+        idleSignalIsNoise
+      ) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: "voice_turn_dropped_idle_hallucination",
           metadata: {
             sessionId: session.id,
             source: "realtime",
             captureReason: String(captureReason || "stream_end"),
             transcript: turnTranscript,
-            meanLogprob: Number(confidence.meanLogprob.toFixed(4)),
-            minLogprob: Number(confidence.minLogprob.toFixed(4)),
-            tokenCount: confidence.tokenCount,
-            threshold: VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD,
-            clipDurationMs
+            clipDurationMs,
+            rms: Number(silenceGate.rms.toFixed(6)),
+            peak: Number(silenceGate.peak.toFixed(6)),
+            activeSampleRatio: Number(silenceGate.activeSampleRatio.toFixed(6)),
+            transcriptionModelPrimary: transcriptionPlan.primaryModel,
+            hasTranscriptOverride
           }
         });
         return;
       }
-    }
 
-    const isNonSpeechCapture =
-      String(captureReason || "") === "idle_timeout" ||
-      String(captureReason || "") === "near_silence_early_abort";
-    const idleSignalIsNoise =
-      !hasTranscriptOverride &&
-      silenceGate.rms <= VOICE_FALLBACK_NOISE_GATE_RMS_MAX &&
-      silenceGate.peak <= VOICE_FALLBACK_NOISE_GATE_PEAK_MAX &&
-      silenceGate.activeSampleRatio <= VOICE_FALLBACK_NOISE_GATE_ACTIVE_RATIO_MAX;
-    if (
-      turnTranscript &&
-      isNonSpeechCapture &&
-      idleSignalIsNoise
-    ) {
+      if (isSuperseded("pre_persist")) return;
+
+      const persistRealtimeTranscriptTurn = this.host.shouldPersistUserTranscriptTimelineTurn({
+        session,
+        settings,
+        transcript: turnTranscript
+      });
+      if (turnTranscript && persistRealtimeTranscriptTurn) {
+        this.host.recordVoiceTurn(session, {
+          role: "user",
+          userId,
+          text: turnTranscript
+        });
+        this.host.queueVoiceMemoryIngest({
+          session,
+          settings,
+          userId,
+          transcript: turnTranscript,
+          source: "voice_realtime_ingest",
+          captureReason,
+          errorPrefix: "voice_realtime_memory_ingest_failed"
+        });
+      }
+
+      const decision = await this.host.evaluateVoiceReplyDecision({
+        session,
+        settings,
+        userId,
+        transcript: turnTranscript,
+        source: "realtime",
+        transcriptionContext: {
+          usedFallbackModel: usedFallbackModelForTranscript,
+          captureReason: String(captureReason || "stream_end"),
+          clipDurationMs
+        }
+      });
+      if (isSuperseded("post_decision")) return;
+      if (decision.directAddressed && session && !session.ending) {
+        session.lastDirectAddressAt = Date.now();
+        session.lastDirectAddressUserId = userId;
+      }
+      const decisionVoiceAddressing = this.host.normalizeVoiceAddressingAnnotation({
+        rawAddressing: decision?.voiceAddressing,
+        directAddressed: Boolean(decision.directAddressed),
+        directedConfidence: Number(decision.directAddressConfidence),
+        source: "decision",
+        reason: decision.reason
+      });
+      this.host.annotateLatestVoiceTurnAddressing({
+        session,
+        role: "user",
+        userId,
+        text: decision.transcript || turnTranscript,
+        addressing: decisionVoiceAddressing
+      });
+      const decisionAddressingState = this.host.buildVoiceAddressingState({
+        session,
+        userId
+      });
+      const outputLockDebugMetadata = this.host.replyManager.getOutputLockDebugMetadata(
+        session,
+        decision.outputLockReason || null
+      );
+
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId,
-        content: "voice_turn_dropped_idle_hallucination",
+        content: "voice_turn_addressing",
         metadata: {
           sessionId: session.id,
+          mode: session.mode,
           source: "realtime",
           captureReason: String(captureReason || "stream_end"),
-          transcript: turnTranscript,
-          clipDurationMs,
-          rms: Number(silenceGate.rms.toFixed(6)),
-          peak: Number(silenceGate.peak.toFixed(6)),
-          activeSampleRatio: Number(silenceGate.activeSampleRatio.toFixed(6)),
+          queueWaitMs,
+          allow: Boolean(decision.allow),
+          reason: decision.reason,
+          participantCount: Number(decision.participantCount || 0),
+          directAddressed: Boolean(decision.directAddressed),
+          talkingTo: decisionVoiceAddressing?.talkingTo || null,
+          directedConfidence: Number.isFinite(Number(decisionVoiceAddressing?.directedConfidence))
+            ? Number(clamp(Number(decisionVoiceAddressing.directedConfidence), 0, 1).toFixed(3))
+            : 0,
+          addressingSource: decisionVoiceAddressing?.source || null,
+          addressingReason: decisionVoiceAddressing?.reason || null,
+          currentSpeakerTarget: decisionAddressingState?.currentSpeakerTarget || null,
+          currentSpeakerDirectedConfidence: Number.isFinite(
+            Number(decisionAddressingState?.currentSpeakerDirectedConfidence)
+          )
+            ? Number(clamp(Number(decisionAddressingState.currentSpeakerDirectedConfidence), 0, 1).toFixed(3))
+            : 0,
+          transcript: decision.transcript || turnTranscript || null,
           transcriptionModelPrimary: transcriptionPlan.primaryModel,
-          hasTranscriptOverride
+          transcriptionModelFallback: resolvedFallbackModel || null,
+          transcriptionUsedFallbackModel: usedFallbackModelForTranscript,
+          transcriptionPlanReason: resolvedTranscriptionPlanReason,
+          clipDurationMs,
+          asrSkippedShortClip: skipShortClipAsr,
+          conversationState: decision.conversationContext?.engagementState || null,
+          conversationEngaged: Boolean(decision.conversationContext?.engaged),
+          engagedWithCurrentSpeaker: Boolean(decision.conversationContext?.engagedWithCurrentSpeaker),
+          recentAssistantReply: Boolean(decision.conversationContext?.recentAssistantReply),
+          msSinceAssistantReply: Number.isFinite(decision.conversationContext?.msSinceAssistantReply)
+            ? Math.round(decision.conversationContext.msSinceAssistantReply)
+            : null,
+          msSinceDirectAddress: Number.isFinite(decision.conversationContext?.msSinceDirectAddress)
+            ? Math.round(decision.conversationContext.msSinceDirectAddress)
+            : null,
+          msSinceInboundAudio: Number.isFinite(decision.msSinceInboundAudio)
+            ? Math.round(decision.msSinceInboundAudio)
+            : null,
+          requiredSilenceMs: Number.isFinite(decision.requiredSilenceMs)
+            ? Math.round(decision.requiredSilenceMs)
+            : null,
+          retryAfterMs: Number.isFinite(decision.retryAfterMs)
+            ? Math.round(decision.retryAfterMs)
+            : null,
+          outputLockReason: decision.outputLockReason || null,
+          classifierLatencyMs: Number.isFinite(decision.classifierLatencyMs)
+            ? Math.round(decision.classifierLatencyMs)
+            : null,
+          classifierDecision: decision.classifierDecision || null,
+          classifierConfidence: Number.isFinite(decision.classifierConfidence)
+            ? Number(clamp(Number(decision.classifierConfidence), 0, 1).toFixed(3))
+            : null,
+          classifierTarget: decision.classifierTarget || null,
+          classifierReason: decision.classifierReason || null,
+          musicWakeLatched: Boolean(decision.conversationContext?.musicWakeLatched),
+          musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
+            ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()
+            : null,
+          error: decision.error || null,
+          ...outputLockDebugMetadata
         }
       });
-      return;
-    }
 
-    const persistRealtimeTranscriptTurn = this.host.shouldPersistUserTranscriptTimelineTurn({
-      session,
-      settings,
-      transcript: turnTranscript
-    });
-    if (turnTranscript && persistRealtimeTranscriptTurn) {
-      this.host.recordVoiceTurn(session, {
-        role: "user",
-        userId,
-        text: turnTranscript
-      });
-      this.host.queueVoiceMemoryIngest({
-        session,
-        settings,
-        userId,
-        transcript: turnTranscript,
-        source: "voice_realtime_ingest",
-        captureReason,
-        errorPrefix: "voice_realtime_memory_ingest_failed"
-      });
-    }
-
-    const decision = await this.host.evaluateVoiceReplyDecision({
-      session,
-      settings,
-      userId,
-      transcript: turnTranscript,
-      source: "realtime",
-      transcriptionContext: {
-        usedFallbackModel: usedFallbackModelForTranscript,
-        captureReason: String(captureReason || "stream_end"),
-        clipDurationMs
-      }
-    });
-    if (decision.directAddressed && session && !session.ending) {
-      session.lastDirectAddressAt = Date.now();
-      session.lastDirectAddressUserId = userId;
-    }
-    const decisionVoiceAddressing = this.host.normalizeVoiceAddressingAnnotation({
-      rawAddressing: decision?.voiceAddressing,
-      directAddressed: Boolean(decision.directAddressed),
-      directedConfidence: Number(decision.directAddressConfidence),
-      source: "decision",
-      reason: decision.reason
-    });
-    this.host.annotateLatestVoiceTurnAddressing({
-      session,
-      role: "user",
-      userId,
-      text: decision.transcript || turnTranscript,
-      addressing: decisionVoiceAddressing
-    });
-    const decisionAddressingState = this.host.buildVoiceAddressingState({
-      session,
-      userId
-    });
-    const outputLockDebugMetadata = this.host.replyManager.getOutputLockDebugMetadata(
-      session,
-      decision.outputLockReason || null
-    );
-
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId,
-      content: "voice_turn_addressing",
-      metadata: {
-        sessionId: session.id,
-        mode: session.mode,
-        source: "realtime",
-        captureReason: String(captureReason || "stream_end"),
-        queueWaitMs,
-        allow: Boolean(decision.allow),
-        reason: decision.reason,
-        participantCount: Number(decision.participantCount || 0),
-        directAddressed: Boolean(decision.directAddressed),
-        talkingTo: decisionVoiceAddressing?.talkingTo || null,
-        directedConfidence: Number.isFinite(Number(decisionVoiceAddressing?.directedConfidence))
-          ? Number(clamp(Number(decisionVoiceAddressing.directedConfidence), 0, 1).toFixed(3))
-          : 0,
-        addressingSource: decisionVoiceAddressing?.source || null,
-        addressingReason: decisionVoiceAddressing?.reason || null,
-        currentSpeakerTarget: decisionAddressingState?.currentSpeakerTarget || null,
-        currentSpeakerDirectedConfidence: Number.isFinite(
-          Number(decisionAddressingState?.currentSpeakerDirectedConfidence)
-        )
-          ? Number(clamp(Number(decisionAddressingState.currentSpeakerDirectedConfidence), 0, 1).toFixed(3))
-          : 0,
-        transcript: decision.transcript || turnTranscript || null,
-        transcriptionModelPrimary: transcriptionPlan.primaryModel,
-        transcriptionModelFallback: resolvedFallbackModel || null,
-        transcriptionUsedFallbackModel: usedFallbackModelForTranscript,
-        transcriptionPlanReason: resolvedTranscriptionPlanReason,
-        clipDurationMs,
-        asrSkippedShortClip: skipShortClipAsr,
-        conversationState: decision.conversationContext?.engagementState || null,
-        conversationEngaged: Boolean(decision.conversationContext?.engaged),
-        engagedWithCurrentSpeaker: Boolean(decision.conversationContext?.engagedWithCurrentSpeaker),
-        recentAssistantReply: Boolean(decision.conversationContext?.recentAssistantReply),
-        msSinceAssistantReply: Number.isFinite(decision.conversationContext?.msSinceAssistantReply)
-          ? Math.round(decision.conversationContext.msSinceAssistantReply)
-          : null,
-        msSinceDirectAddress: Number.isFinite(decision.conversationContext?.msSinceDirectAddress)
-          ? Math.round(decision.conversationContext.msSinceDirectAddress)
-          : null,
-        msSinceInboundAudio: Number.isFinite(decision.msSinceInboundAudio)
-          ? Math.round(decision.msSinceInboundAudio)
-          : null,
-        requiredSilenceMs: Number.isFinite(decision.requiredSilenceMs)
-          ? Math.round(decision.requiredSilenceMs)
-          : null,
-        retryAfterMs: Number.isFinite(decision.retryAfterMs)
-          ? Math.round(decision.retryAfterMs)
-          : null,
-        outputLockReason: decision.outputLockReason || null,
-        classifierLatencyMs: Number.isFinite(decision.classifierLatencyMs)
-          ? Math.round(decision.classifierLatencyMs)
-          : null,
-        classifierDecision: decision.classifierDecision || null,
-        classifierConfidence: Number.isFinite(decision.classifierConfidence)
-          ? Number(clamp(Number(decision.classifierConfidence), 0, 1).toFixed(3))
-          : null,
-        classifierTarget: decision.classifierTarget || null,
-        classifierReason: decision.classifierReason || null,
-        musicWakeLatched: Boolean(decision.conversationContext?.musicWakeLatched),
-        musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
-          ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()
-          : null,
-        error: decision.error || null,
-        ...outputLockDebugMetadata
-      }
-    });
-
-    const useNativeRealtimeReply = this.host.shouldUseNativeRealtimeReply({ session, settings });
-    if (!decision.allow) {
-      if (decision.reason === "bot_turn_open") {
-        this.host.queueDeferredBotTurnOpenTurn({
-          session,
-          userId,
-          transcript: decision.transcript || turnTranscript,
-          pcmBuffer: normalizedPcmBuffer.length ? normalizedPcmBuffer : null,
-          captureReason,
-          source: "realtime",
-          directAddressed: Boolean(decision.directAddressed),
-          deferReason: decision.reason,
-          flushDelayMs: decision.retryAfterMs
-        });
-      }
-      return;
-    }
-
-    if (useNativeRealtimeReply) {
-      if (!normalizedPcmBuffer?.length) {
+      const useNativeRealtimeReply = this.host.shouldUseNativeRealtimeReply({ session, settings });
+      if (!decision.allow) {
+        if (decision.reason === "bot_turn_open") {
+          this.host.queueDeferredBotTurnOpenTurn({
+            session,
+            userId,
+            transcript: decision.transcript || turnTranscript,
+            pcmBuffer: normalizedPcmBuffer.length ? normalizedPcmBuffer : null,
+            captureReason,
+            source: "realtime",
+            directAddressed: Boolean(decision.directAddressed),
+            deferReason: decision.reason,
+            flushDelayMs: decision.retryAfterMs
+          });
+        }
         return;
       }
-      await this.host.forwardRealtimeTurnAudio({
-        session,
-        settings,
-        userId,
-        transcript: turnTranscript,
-        pcmBuffer: normalizedPcmBuffer,
-        captureReason
-      });
-      return;
-    }
 
-    if (this.host.shouldUseRealtimeTranscriptBridge({ session, settings })) {
-      await this.host.forwardRealtimeTextTurnToBrain({
+      if (useNativeRealtimeReply) {
+        if (!normalizedPcmBuffer?.length) {
+          return;
+        }
+        if (isSuperseded("pre_native_reply")) return;
+        await this.host.forwardRealtimeTurnAudio({
+          session,
+          settings,
+          userId,
+          transcript: turnTranscript,
+          pcmBuffer: normalizedPcmBuffer,
+          captureReason
+        });
+        return;
+      }
+
+      if (this.host.shouldUseRealtimeTranscriptBridge({ session, settings })) {
+        if (isSuperseded("pre_brain_forward")) return;
+        await this.host.forwardRealtimeTextTurnToBrain({
+          session,
+          settings,
+          userId,
+          transcript: turnTranscript,
+          captureReason,
+          source: "realtime_transcript_turn",
+          directAddressed: Boolean(decision.directAddressed),
+          conversationContext: decision.conversationContext || null,
+          latencyContext: {
+            finalizedAtMs,
+            asrStartedAtMs,
+            asrCompletedAtMs,
+            queueWaitMs,
+            pendingQueueDepth,
+            captureReason: String(captureReason || "stream_end")
+          }
+        });
+        return;
+      }
+
+      if (isSuperseded("pre_brain_reply")) return;
+      await this.host.runRealtimeBrainReply({
         session,
         settings,
         userId,
         transcript: turnTranscript,
-        captureReason,
-        source: "realtime_transcript_turn",
         directAddressed: Boolean(decision.directAddressed),
+        directAddressConfidence: Number(decision.directAddressConfidence),
         conversationContext: decision.conversationContext || null,
+        source: "realtime",
         latencyContext: {
           finalizedAtMs,
           asrStartedAtMs,
@@ -1123,27 +1464,11 @@ export class TurnProcessor {
           captureReason: String(captureReason || "stream_end")
         }
       });
-      return;
-    }
-
-    await this.host.runRealtimeBrainReply({
-      session,
-      settings,
-      userId,
-      transcript: turnTranscript,
-      directAddressed: Boolean(decision.directAddressed),
-      directAddressConfidence: Number(decision.directAddressConfidence),
-      conversationContext: decision.conversationContext || null,
-      source: "realtime",
-      latencyContext: {
-        finalizedAtMs,
-        asrStartedAtMs,
-        asrCompletedAtMs,
-        queueWaitMs,
-        pendingQueueDepth,
-        captureReason: String(captureReason || "stream_end")
+    } finally {
+      if (session.activeRealtimeTurn === currentTurn) {
+        session.activeRealtimeTurn = null;
       }
-    });
+    }
   }
 
   getPendingSttTurnQueue(session: VoiceSession | null | undefined) {

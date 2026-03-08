@@ -113,6 +113,7 @@ export interface CaptureManagerHost {
     pcmBuffer?: Buffer | null;
     captureReason?: string;
     finalizedAt?: number;
+    bridgeUtteranceId?: number | null;
     asrResult?: AsrCommitResult | null;
     source?: string;
   }) => boolean;
@@ -678,18 +679,31 @@ export class CaptureManager {
 
     const asrBridgeMaxWaitMs = Math.max(120, Number(OPENAI_ASR_BRIDGE_MAX_WAIT_MS) || 700);
     let bridgeForwarded = false;
-    const forwardAsrBridgeTurn = (asrResult: AsrCommitResult | null, source: string) => {
-      if (bridgeForwarded || session.ending) return false;
+    let latestForwardedTranscript = "";
+    const forwardAsrBridgeTurn = (
+      asrResult: AsrCommitResult | null,
+      source: string,
+      allowRevision = false
+    ) => {
+      if (session.ending) return false;
+      const nextTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
+      if (!nextTranscript) return false;
+      if (bridgeForwarded && !allowRevision) return false;
+      if (bridgeForwarded && nextTranscript === latestForwardedTranscript) return false;
       const queued = this.host.queueRealtimeTurnFromAsrBridge({
         session,
         userId,
         pcmBuffer,
         captureReason,
         finalizedAt,
+        bridgeUtteranceId: Math.max(0, Number(captureState.asrUtteranceId || 0)) || null,
         asrResult,
         source
       });
-      if (queued) bridgeForwarded = true;
+      if (queued) {
+        bridgeForwarded = true;
+        latestForwardedTranscript = nextTranscript;
+      }
       return queued;
     };
 
@@ -718,18 +732,17 @@ export class CaptureManager {
       const commitTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
 
       if (commitTranscript) {
-        const forwarded = forwardAsrBridgeTurn(asrResult, asrSource);
-        if (forwarded) return;
+        forwardAsrBridgeTurn(asrResult, asrSource);
       }
 
-      if (!bridgeForwarded && !session.ending) {
+      if (!session.ending) {
         const lateAsrState = asrMode === "per_user"
           ? getOrCreatePerUserAsrState(session, userId)
           : getOrCreateSharedAsrState(session);
         const trackedUtterance = lateAsrState?.utterance;
         if (trackedUtterance) {
           const lateDeadlineMs = Date.now() + 1500;
-          while (Date.now() < lateDeadlineMs && !bridgeForwarded && !session.ending) {
+          while (Date.now() < lateDeadlineMs && !session.ending) {
             await new Promise((resolve) => setTimeout(resolve, 80));
             if (lateAsrState?.utterance !== trackedUtterance) break;
             const lateFinal = normalizeVoiceText(
@@ -738,7 +751,9 @@ export class CaptureManager {
                 : "",
               STT_TRANSCRIPT_MAX_CHARS
             );
-            if (lateFinal) {
+            if (lateFinal && lateFinal !== latestForwardedTranscript) {
+              const hadForwardedTranscript = Boolean(latestForwardedTranscript);
+              const priorTranscriptChars = latestForwardedTranscript.length;
               const lateForwarded = forwardAsrBridgeTurn(
                 {
                   ...(asrResult || {
@@ -754,7 +769,10 @@ export class CaptureManager {
                   }),
                   transcript: lateFinal
                 },
-                `${asrSource}_late_streaming`
+                hadForwardedTranscript
+                  ? `${asrSource}_late_streaming_revision`
+                  : `${asrSource}_late_streaming`,
+                true
               );
               if (lateForwarded) {
                 this.host.store.logAction({
@@ -762,17 +780,19 @@ export class CaptureManager {
                   guildId: session.guildId,
                   channelId: session.textChannelId,
                   userId,
-                  content: "openai_realtime_asr_bridge_late_streaming_recovered",
+                  content: hadForwardedTranscript
+                    ? "openai_realtime_asr_bridge_late_streaming_revised"
+                    : "openai_realtime_asr_bridge_late_streaming_recovered",
                   metadata: {
                     sessionId: session.id,
                     captureReason: String(captureReason || "stream_end"),
                     source: asrSource,
                     transcriptChars: lateFinal.length,
+                    priorTranscriptChars,
                     lateWaitMs: Date.now() - (lateDeadlineMs - 1500)
                   }
                 });
               }
-              return;
             }
           }
         }
@@ -782,7 +802,7 @@ export class CaptureManager {
         forwardAsrBridgeTurn(asrResult, asrSource);
       }
       const lateTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
-      if (!lateTranscript) return;
+      if (!lateTranscript || lateTranscript === latestForwardedTranscript) return;
       this.host.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,

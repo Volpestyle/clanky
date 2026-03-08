@@ -334,6 +334,16 @@ export interface VoiceLastRequestedRealtimeUtterance {
     interruptionPolicy: ReplyInterruptionPolicy | null;
 }
 
+export interface VoiceQueuedRealtimeAssistantUtterance {
+    prompt: string;
+    utteranceText: string | null;
+    userId: string | null;
+    source: string;
+    queuedAt: number;
+    interruptionPolicy: ReplyInterruptionPolicy | null;
+    latencyContext: VoicePendingResponseLatencyContext | null;
+}
+
 export interface VoiceMusicQueueTrack {
     id: string;
     title: string;
@@ -691,6 +701,8 @@ export interface RealtimeQueuedTurn {
     transcriptionPlanReasonOverride: string | null;
     usedFallbackModelForTranscriptOverride: boolean;
     transcriptLogprobsOverride: VoiceTranscriptLogprob[] | null;
+    bridgeUtteranceId: number | null;
+    bridgeRevision: number;
     mergedTurnCount: number;
     droppedHeadBytes: number;
 }
@@ -831,11 +843,13 @@ export interface VoiceSession {
     pendingResponse: VoicePendingResponse | null;
     activeReplyInterruptionPolicy: ReplyInterruptionPolicy | null;
     lastRequestedRealtimeUtterance: VoiceLastRequestedRealtimeUtterance | null;
+    pendingRealtimeAssistantUtterances?: VoiceQueuedRealtimeAssistantUtterance[];
     pendingSttTurns: TurnProcessorState["pendingSttTurns"];
     sttTurnDrainActive: TurnProcessorState["sttTurnDrainActive"];
     pendingSttTurnsQueue: TurnProcessorState["pendingSttTurnsQueue"];
     realtimeTurnDrainActive: TurnProcessorState["realtimeTurnDrainActive"];
     pendingRealtimeTurns: TurnProcessorState["pendingRealtimeTurns"];
+    activeRealtimeTurn?: RealtimeQueuedTurn | null;
     openAiAsrSessions: Map<string, AsrBridgeState>;
     perUserAsrEnabled: boolean;
     sharedAsrEnabled: boolean;
