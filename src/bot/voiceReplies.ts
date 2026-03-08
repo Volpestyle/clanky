@@ -960,15 +960,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
               : [];
           appendUniqueStrings(playedSoundboardRefs, playedRefs);
         }
-        if (toolCall.name === "set_addressing" && !result.isError) {
-          const toolPayload = parseReplyToolResultPayload(result.content);
-          voiceAddressing = normalizeGeneratedVoiceAddressing({
-            talkingTo: toolPayload?.talkingTo,
-            directedConfidence: toolPayload?.directedConfidence
-          }, {
-            directAddressed: Boolean(directAddressed)
-          });
-        }
         if (toolCall.name === "screen_note" && !result.isError) {
           const toolPayload = parseReplyToolResultPayload(result.content);
           const note = String(toolPayload?.note || "").replace(/\s+/g, " ").trim().slice(0, 220);

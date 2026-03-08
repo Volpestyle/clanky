@@ -151,12 +151,21 @@ test("buildVoiceTurnPrompt prefers tool calls over stale helper fields", () => {
   });
 
   assert.equal(prompt.includes("Available tool calls this turn:"), true);
-  assert.equal(prompt.includes("Always call the tool in the same response; never only say you will."), true);
+  assert.equal(
+    prompt.includes("Default to speaking first on casual voice turns. Greetings, acknowledgements, banter, reactions, and simple conversational turns usually do not need a tool."),
+    true
+  );
+  assert.equal(
+    prompt.includes("Do not promise future action without either calling the tool or declining. A brief natural lead-in before a tool call is allowed."),
+    true
+  );
   assert.equal(prompt.includes("call web_search in the same response."), true);
   assert.equal(prompt.includes("call open_article with one ref from this list."), true);
   assert.equal(prompt.includes("Use memory_write with namespace=speaker"), true);
   assert.equal(prompt.includes("Voice/session control tools are available."), true);
   assert.equal(prompt.includes("music_play_now"), true);
+  assert.equal(prompt.includes("set_addressing"), false);
+  assert.equal(prompt.includes("Use tool calls for actions, lookup, voice addressing"), false);
   assert.equal(prompt.includes("Music playback:"), true);
   assert.equal(prompt.includes("Do not emulate play-now by chaining music_queue_add and music_skip."), true);
   assert.equal(prompt.includes("set webSearchQuery"), false);

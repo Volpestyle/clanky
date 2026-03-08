@@ -3141,6 +3141,117 @@ test("queueRealtimeTurn coalesces queued turns even when speaker or reason chang
   assert.equal(session.pendingRealtimeTurns[0]?.captureReason, "idle_timeout");
 });
 
+test("queueRealtimeTurn dedupes repeated transcript revisions for the same ASR utterance", () => {
+  const manager = createManager();
+  const session = {
+    id: "session-queue-revision-dedupe-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeTurnDrainActive: true,
+    pendingRealtimeTurns: []
+  };
+
+  manager.turnProcessor.queueRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    captureReason: "speaking_end",
+    transcriptOverride: "Can you look up lawn mowers?",
+    bridgeUtteranceId: 7
+  });
+  manager.turnProcessor.queueRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    captureReason: "speaking_end",
+    transcriptOverride: "Can you look up lawn mowers?",
+    bridgeUtteranceId: 7
+  });
+
+  assert.equal(session.pendingRealtimeTurns.length, 1);
+  assert.equal(session.pendingRealtimeTurns[0]?.transcriptOverride, "Can you look up lawn mowers?");
+  assert.equal(session.pendingRealtimeTurns[0]?.bridgeRevision, 2);
+});
+
+test("queueRealtimeTurn revises an active ASR utterance before audio starts", async () => {
+  const runtimeLogs = [];
+  let releaseTranscription = () => {};
+  const transcriptionGate = new Promise<void>((resolve) => {
+    releaseTranscription = resolve;
+  });
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.transcribePcmTurn = async () => {
+    await transcriptionGate;
+    return "Um, can you look up...";
+  };
+  manager.evaluateVoiceReplyDecision = async () => {
+    throw new Error("superseded turn should not reach decision");
+  };
+  manager.runRealtimeBrainReply = async () => true;
+
+  const session = {
+    id: "session-active-revision-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeClient: {
+      cancelActiveResponse() {
+        return true;
+      }
+    },
+    pendingResponse: null,
+    botTurnOpen: false,
+    lastAudioDeltaAt: 0,
+    realtimeTurnDrainActive: true,
+    pendingRealtimeTurns: [],
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings(),
+    activeRealtimeTurn: null
+  };
+
+  const turnRun = manager.turnProcessor.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([1, 2, 3, 4]),
+    captureReason: "max_duration",
+    queuedAt: Date.now() - 50,
+    bridgeUtteranceId: 21,
+    bridgeRevision: 1
+  });
+  await Promise.resolve();
+
+  manager.turnProcessor.queueRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    captureReason: "max_duration",
+    transcriptOverride: "Um, can you look up... lawn mowers in Charlotte.",
+    bridgeUtteranceId: 21
+  });
+
+  releaseTranscription();
+  await turnRun;
+
+  assert.equal(session.pendingRealtimeTurns.length, 1);
+  assert.equal(
+    session.pendingRealtimeTurns[0]?.transcriptOverride,
+    "Um, can you look up... lawn mowers in Charlotte."
+  );
+  assert.equal(session.pendingRealtimeTurns[0]?.bridgeRevision, 2);
+  assert.equal(
+    runtimeLogs.some((row) => row?.kind === "voice_runtime" && row?.content === "realtime_turn_revised_pre_audio"),
+    true
+  );
+  assert.equal(
+    runtimeLogs.some((row) => row?.kind === "voice_runtime" && row?.content === "realtime_turn_superseded"),
+    true
+  );
+});
+
 test("runRealtimeTurn skips stale queued turns when newer backlog exists", async () => {
   let transcribeCalls = 0;
   let decisionCalls = 0;
@@ -3409,6 +3520,67 @@ test("smoke: runRealtimeBrainReply passes membership context into generation wit
     true
   );
   assert.equal(generationPayloads[0]?.conversationContext?.streamWatchBrainContext?.notes?.length, 1);
+});
+
+test("runRealtimeBrainReply keeps older join events in transcript timeline context after fresh membership prompts expire", async () => {
+  const generationPayloads = [];
+  const manager = createManager();
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [
+    { userId: "speaker-1", displayName: "alice" }
+  ];
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = () => true;
+  manager.generateVoiceTurn = async (payload) => {
+    generationPayloads.push(payload);
+    return {
+      text: "yo what's good"
+    };
+  };
+
+  const settingsSnapshot = baseSettings();
+  const session = {
+    id: "session-older-join-context-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 180_000,
+    realtimeClient: {},
+    recentVoiceTurns: [],
+    transcriptTurns: [],
+    membershipEvents: [],
+    settingsSnapshot
+  };
+
+  manager.recordVoiceMembershipEvent({
+    session,
+    userId: "speaker-1",
+    eventType: "join",
+    displayName: "alice",
+    at: Date.now() - 120_000
+  });
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "yo, what's up?",
+    directAddressed: false,
+    source: "realtime"
+  });
+
+  assert.equal(result, true);
+  assert.equal(generationPayloads.length, 1);
+  assert.equal(generationPayloads[0]?.recentMembershipEvents?.length || 0, 0);
+  assert.equal(
+    generationPayloads[0]?.contextMessages?.some(
+      (row) => row?.content === "[alice joined the voice channel]"
+    ),
+    true
+  );
 });
 
 test("runRealtimeBrainReply supersedes stale reply when newer realtime input is queued", async () => {

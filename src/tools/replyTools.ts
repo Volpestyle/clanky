@@ -25,7 +25,6 @@ import {
   PLAY_SOUNDBOARD_SCHEMA,
   SCREEN_MOMENT_SCHEMA,
   SCREEN_NOTE_SCHEMA,
-  SET_ADDRESSING_SCHEMA,
   VOICE_TOOL_SCHEMAS,
   toAnthropicTool
 } from "./sharedToolSchemas.ts";
@@ -242,11 +241,6 @@ type ReplyToolRuntime = {
     musicSkip: () => Promise<{ ok: boolean; nextTrack?: Record<string, unknown> }>;
     musicNowPlaying: () => Promise<{ ok: boolean; now_playing: Record<string, unknown> | null; queue_state: Record<string, unknown> }>;
     playSoundboard: (refs: string[], transcript: string) => Promise<{ ok: boolean; played: string[]; rejected?: string[] }>;
-    setAddressing: (payload: { talkingTo: string | null; confidence: number }) => Promise<{
-      ok: boolean;
-      talkingTo: string | null;
-      directedConfidence: number;
-    }>;
     setScreenNote: (note: string) => Promise<{ ok: boolean; note: string }>;
     setScreenMoment: (moment: string) => Promise<{ ok: boolean; moment: string }>;
     leaveVoiceChannel: () => Promise<{ ok: boolean }>;
@@ -280,7 +274,6 @@ const CONVERSATION_SEARCH_TOOL: ReplyToolDefinition = toAnthropicTool(CONVERSATI
 const CODE_TASK_TOOL: ReplyToolDefinition = toAnthropicTool(CODE_TASK_SCHEMA);
 const OFFER_SCREEN_SHARE_LINK_TOOL: ReplyToolDefinition = toAnthropicTool(OFFER_SCREEN_SHARE_LINK_SCHEMA);
 const PLAY_SOUNDBOARD_TOOL: ReplyToolDefinition = toAnthropicTool(PLAY_SOUNDBOARD_SCHEMA);
-const SET_ADDRESSING_TOOL: ReplyToolDefinition = toAnthropicTool(SET_ADDRESSING_SCHEMA);
 const SCREEN_NOTE_TOOL: ReplyToolDefinition = toAnthropicTool(SCREEN_NOTE_SCHEMA);
 const SCREEN_MOMENT_TOOL: ReplyToolDefinition = toAnthropicTool(SCREEN_MOMENT_SCHEMA);
 
@@ -482,8 +475,6 @@ export async function executeReplyTool(
       return executeOfferScreenShareLink(runtime, context);
     case "play_soundboard":
       return executePlaySoundboard(input, runtime, context);
-    case "set_addressing":
-      return executeSetAddressing(input, runtime, context);
     case "screen_note":
       return executeScreenNote(input, runtime, context);
     case "screen_moment":
@@ -1080,52 +1071,6 @@ async function executePlaySoundboard(
   }
 }
 
-async function executeSetAddressing(
-  input: ReplyToolCallInput,
-  runtime: ReplyToolRuntime,
-  context: ReplyToolContext
-): Promise<ReplyToolResult> {
-  throwIfAborted(context.signal, "Reply tool cancelled");
-  if (!runtime.voiceSession?.setAddressing) {
-    return { content: "Voice addressing updates are not available.", isError: true };
-  }
-
-  const rawTalkingTo = input?.talkingTo;
-  const talkingTo =
-    rawTalkingTo == null
-      ? null
-      : String(rawTalkingTo || "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 80) || null;
-  const confidenceRaw = Number(input?.confidence);
-  const confidence = Number.isFinite(confidenceRaw)
-    ? Math.max(0, Math.min(1, confidenceRaw))
-    : 0;
-
-  try {
-    const result = await runtime.voiceSession.setAddressing({
-      talkingTo,
-      confidence
-    });
-    return {
-      content: JSON.stringify({
-        ok: Boolean(result?.ok),
-        talkingTo: result?.talkingTo ?? talkingTo,
-        directedConfidence: Number.isFinite(Number(result?.directedConfidence))
-          ? Math.max(0, Math.min(1, Number(result.directedConfidence)))
-          : confidence
-      }),
-      isError: result?.ok === false
-    };
-  } catch (error) {
-    return {
-      content: `Voice addressing update failed: ${String((error as Error)?.message || error)}`,
-      isError: true
-    };
-  }
-}
-
 async function executeScreenNote(
   input: ReplyToolCallInput,
   runtime: ReplyToolRuntime,
@@ -1429,7 +1374,6 @@ export {
   OPEN_ARTICLE_TOOL,
   OFFER_SCREEN_SHARE_LINK_TOOL,
   PLAY_SOUNDBOARD_TOOL,
-  SET_ADDRESSING_TOOL,
   SCREEN_NOTE_TOOL,
   SCREEN_MOMENT_TOOL,
   CODE_TASK_TOOL

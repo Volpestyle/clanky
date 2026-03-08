@@ -389,6 +389,7 @@ type VoiceReplyDecision = {
 };
 
 type VoiceTimelineTurn = {
+  kind?: "speech";
   role: "assistant" | "user";
   userId: string | null;
   speakerName: string;
@@ -396,6 +397,37 @@ type VoiceTimelineTurn = {
   at: number;
   addressing?: VoiceAddressingAnnotation;
 };
+
+type VoiceTranscriptTimelineMembershipEntry = {
+  kind: "membership";
+  role: "user";
+  userId: string | null;
+  speakerName: string;
+  text: string;
+  at: number;
+  eventType: "join" | "leave";
+  addressing?: VoiceAddressingAnnotation;
+};
+
+type VoiceTranscriptTimelineEffectEntry = {
+  kind: "effect";
+  role: "user";
+  userId: string | null;
+  speakerName: string;
+  text: string;
+  at: number;
+  effectType: "soundboard" | "emoji" | "unknown";
+  summary: string;
+  soundId: string | null;
+  soundName: string | null;
+  emoji: string | null;
+  addressing?: VoiceAddressingAnnotation;
+};
+
+type VoiceTranscriptTimelineEntry =
+  | VoiceTimelineTurn
+  | VoiceTranscriptTimelineMembershipEntry
+  | VoiceTranscriptTimelineEffectEntry;
 
 type VoiceRealtimeToolDescriptor = {
   toolType: "function" | "mcp";
@@ -4088,6 +4120,15 @@ export class VoiceSessionManager {
     if (normalizedRole === "assistant") {
       this.persistAssistantVoiceTimelineTurn(session, normalizedTranscriptText, nextAt);
     }
+  }
+
+  appendTranscriptTimelineEntry(session, entry: VoiceTranscriptTimelineEntry | null = null) {
+    if (!session || session.ending || !entry) return;
+    const transcriptTurns = Array.isArray(session.transcriptTurns) ? session.transcriptTurns : [];
+    session.transcriptTurns = [
+      ...transcriptTurns,
+      entry
+    ].slice(-VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS);
   }
 
   updateModelContextSummary(session, section, summary = null) {

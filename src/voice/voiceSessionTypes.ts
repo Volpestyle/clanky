@@ -89,6 +89,7 @@ export type VoiceReplyDecision = {
 };
 
 export type VoiceTimelineTurn = {
+    kind?: "speech";
     role: "assistant" | "user";
     userId: string | null;
     speakerName: string;
@@ -96,6 +97,37 @@ export type VoiceTimelineTurn = {
     at: number;
     addressing?: VoiceAddressingAnnotation;
 };
+
+export type VoiceTimelineMembershipEntry = {
+    kind: "membership";
+    role: "user";
+    userId: string | null;
+    speakerName: string;
+    text: string;
+    at: number;
+    eventType: "join" | "leave";
+    addressing?: VoiceAddressingAnnotation;
+};
+
+export type VoiceTimelineEffectEntry = {
+    kind: "effect";
+    role: "user";
+    userId: string | null;
+    speakerName: string;
+    text: string;
+    at: number;
+    effectType: "soundboard" | "emoji" | "unknown";
+    summary: string;
+    soundId: string | null;
+    soundName: string | null;
+    emoji: string | null;
+    addressing?: VoiceAddressingAnnotation;
+};
+
+export type VoiceTranscriptTimelineEntry =
+    | VoiceTimelineTurn
+    | VoiceTimelineMembershipEntry
+    | VoiceTimelineEffectEntry;
 
 export type VoiceRealtimeToolDescriptor = {
     toolType: "function" | "mcp";
@@ -755,7 +787,7 @@ export interface VoiceSession {
     realtimeInputSampleRateHz: number;
     realtimeOutputSampleRateHz: number;
     recentVoiceTurns: VoiceTimelineTurn[];
-    transcriptTurns: VoiceTimelineTurn[];
+    transcriptTurns: VoiceTranscriptTimelineEntry[];
     durableContext?: VoiceSessionDurableContextEntry[];
     modelContextSummary: {
         generation: VoiceModelContextSummary | null;

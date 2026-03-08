@@ -543,6 +543,7 @@ export function buildVoiceRuntimeSnapshot(
       voiceLookupBusyCount: Number(session.voiceLookupBusyCount || 0),
       pendingDeferredTurns: deferredQueue.length,
       recentTurns: transcriptTurns.slice(-VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS).map((turn) => ({
+        kind: turn.kind || "speech",
         role: turn.role,
         speakerName: turn.speakerName || "",
         text: String(turn.text || ""),

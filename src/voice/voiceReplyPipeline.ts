@@ -14,7 +14,6 @@ import {
 import {
   SOUNDBOARD_MAX_CANDIDATES,
   formatSoundboardCandidateLine,
-  formatVoiceChannelEffectSummary,
   isRealtimeMode,
   normalizeVoiceText
 } from "./voiceSessionHelpers.ts";
@@ -127,30 +126,25 @@ function buildContextMessages(session: VoiceSession, normalizedTranscript: strin
       .slice(-STT_CONTEXT_MAX_MESSAGES)
     : [];
   if (contextTurnRows.length > 0 && contextTranscript) {
-    const lastTurn = contextTurnRows[contextTurnRows.length - 1];
-    const lastRole = lastTurn?.role === "assistant" ? "assistant" : "user";
-    const lastContent = normalizeVoiceText(lastTurn?.text, STT_REPLY_MAX_CHARS);
-    if (lastRole === "user" && lastContent && lastContent === contextTranscript) {
-      contextTurnRows.pop();
+    for (let index = contextTurnRows.length - 1; index >= 0; index -= 1) {
+      const row = contextTurnRows[index];
+      if (!row || typeof row !== "object" || row.kind === "membership" || row.kind === "effect") {
+        continue;
+      }
+      const lastRole = row?.role === "assistant" ? "assistant" : "user";
+      const lastContent = normalizeVoiceText(row?.text, STT_REPLY_MAX_CHARS);
+      if (lastRole === "user" && lastContent && lastContent === contextTranscript) {
+        contextTurnRows.splice(index, 1);
+      }
+      break;
     }
   }
-  const contextEffectRows = (Array.isArray(session.voiceChannelEffects) ? session.voiceChannelEffects : [])
-    .slice(-VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT)
-    .map((row) => ({
-      role: "user" as const,
-      content: normalizeVoiceText(
-        `[Voice effect] ${formatVoiceChannelEffectSummary(row)}`,
-        STT_REPLY_MAX_CHARS
-      ),
-      at: Number(row?.at || 0)
-    }))
-    .filter((row) => Boolean(row.content));
   const contextTurns = contextTurnRows.map((row) => ({
     role: row.role === "assistant" ? "assistant" : "user" as const,
     content: normalizeVoiceText(row.text, STT_REPLY_MAX_CHARS),
     at: Number(row?.at || 0)
   }));
-  const contextMessages: ContextMessage[] = [...contextTurns, ...contextEffectRows]
+  const contextMessages: ContextMessage[] = contextTurns
     .sort((a, b) => a.at - b.at)
     .slice(-STT_CONTEXT_MAX_MESSAGES)
     .map((row) => ({
@@ -159,7 +153,7 @@ function buildContextMessages(session: VoiceSession, normalizedTranscript: strin
     }))
     .filter((row): row is ContextMessage => Boolean(row.content));
   const contextMessageChars = contextMessages.reduce((total, row) => total + row.content.length, 0);
-  return { contextMessages, contextMessageChars, contextTurns: [...contextTurns, ...contextEffectRows] };
+  return { contextMessages, contextMessageChars, contextTurns };
 }
 
 function logReplySkipped({

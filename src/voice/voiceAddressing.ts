@@ -10,15 +10,17 @@ import {
 import type {
   VoiceAddressingAnnotation,
   VoiceAddressingState,
-  VoiceTimelineTurn
+  VoiceTimelineTurn,
+  VoiceTranscriptTimelineEntry
 } from "./voiceSessionTypes.ts";
+import { isVoiceSpeechTimelineEntry } from "./voiceTimeline.ts";
 
-type VoiceTimelineTurnLike = Partial<VoiceTimelineTurn> | null | undefined;
+type VoiceTimelineTurnLike = Partial<VoiceTranscriptTimelineEntry> | null | undefined;
 
 type VoiceAddressingSessionLike = {
   ending?: boolean;
   recentVoiceTurns?: VoiceTimelineTurn[] | null;
-  transcriptTurns?: VoiceTimelineTurn[] | null;
+  transcriptTurns?: VoiceTranscriptTimelineEntry[] | null;
 };
 
 type BuildVoiceAddressingStateRow = {
@@ -31,7 +33,7 @@ type BuildVoiceAddressingStateRow = {
 };
 
 function isVoiceTimelineTurn(row: VoiceTimelineTurnLike): row is Partial<VoiceTimelineTurn> {
-  return Boolean(row && typeof row === "object");
+  return isVoiceSpeechTimelineEntry(row);
 }
 
 export function normalizeVoiceAddressingAnnotation({
@@ -217,9 +219,7 @@ export function buildVoiceAddressingState({
   const normalizedUserId = String(userId || "").trim();
   const normalizedMaxItems = Math.max(1, Math.min(12, Math.floor(Number(maxItems) || 6)));
   const annotatedRows: BuildVoiceAddressingStateRow[] = sourceTurns
-    .filter((row): row is VoiceTimelineTurn => Boolean(
-      row && typeof row === "object" && (row.role === "user" || row.role === "assistant")
-    ))
+    .filter((row): row is VoiceTimelineTurn => isVoiceSpeechTimelineEntry(row))
     .map((row) => {
       const normalized = normalizeVoiceAddressingAnnotation({
         rawAddressing: row.addressing

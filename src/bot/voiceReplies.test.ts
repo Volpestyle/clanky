@@ -625,7 +625,6 @@ test("generateVoiceTurnReply captures soundboard tool-call results", async () =>
     soundboardCandidates: ["airhorn@123"],
     voiceToolCallbacks: {
       playSoundboard: async (refs) => ({ ok: true, played: refs }),
-      setAddressing: async ({ talkingTo, confidence }) => ({ ok: true, talkingTo, directedConfidence: confidence }),
       setScreenNote: async (note) => ({ ok: true, note }),
       setScreenMoment: async (moment) => ({ ok: true, moment }),
       leaveVoiceChannel: async () => ({ ok: true })
@@ -636,33 +635,11 @@ test("generateVoiceTurnReply captures soundboard tool-call results", async () =>
   assert.deepEqual(reply.playedSoundboardRefs, ["airhorn@123"]);
 });
 
-test("generateVoiceTurnReply returns voice addressing annotation from tool output", async () => {
-  const { bot } = createVoiceBot({
+test("generateVoiceTurnReply returns direct-address fallback voice addressing without a tool", async () => {
+  const { bot, getGenerationCalls } = createVoiceBot({
     generationSequence: [
       {
-        text: "yo",
-        toolCalls: [
-          {
-            id: "tc_1",
-            name: "set_addressing",
-            input: {
-              talkingTo: "assistant",
-              confidence: 0.91
-            }
-          }
-        ],
-        rawContent: [
-          { type: "text", text: "yo" },
-          {
-            type: "tool_use",
-            id: "tc_1",
-            name: "set_addressing",
-            input: { talkingTo: "assistant", confidence: 0.91 }
-          }
-        ]
-      },
-      {
-        text: ""
+        text: "yo"
       }
     ]
   });
@@ -673,18 +650,13 @@ test("generateVoiceTurnReply returns voice addressing annotation from tool outpu
     channelId: "text-1",
     userId: "user-1",
     transcript: "quick check",
-    voiceToolCallbacks: {
-      playSoundboard: async (refs) => ({ ok: true, played: refs }),
-      setAddressing: async ({ talkingTo, confidence }) => ({ ok: true, talkingTo, directedConfidence: confidence }),
-      setScreenNote: async (note) => ({ ok: true, note }),
-      setScreenMoment: async (moment) => ({ ok: true, moment }),
-      leaveVoiceChannel: async () => ({ ok: true })
-    }
+    directAddressed: true
   });
 
   assert.equal(reply.text, "yo");
-  assert.equal(reply.voiceAddressing?.talkingTo, "assistant");
-  assert.equal(reply.voiceAddressing?.directedConfidence, 0.91);
+  assert.equal(reply.voiceAddressing?.talkingTo, "ME");
+  assert.equal(reply.voiceAddressing?.directedConfidence, 0.72);
+  assert.equal(getGenerationCalls(), 1);
 });
 
 test("generateVoiceTurnReply preserves ordered soundboard refs from tool-call payload", async () => {
@@ -729,7 +701,6 @@ test("generateVoiceTurnReply preserves ordered soundboard refs from tool-call pa
     soundboardCandidates: ["airhorn@123", "rimshot@456"],
     voiceToolCallbacks: {
       playSoundboard: async (refs) => ({ ok: true, played: refs }),
-      setAddressing: async ({ talkingTo, confidence }) => ({ ok: true, talkingTo, directedConfidence: confidence }),
       setScreenNote: async (note) => ({ ok: true, note }),
       setScreenMoment: async (moment) => ({ ok: true, moment }),
       leaveVoiceChannel: async () => ({ ok: true })
@@ -839,7 +810,6 @@ test("generateVoiceTurnReply excludes play_soundboard when soundboard is disable
     soundboardCandidates: ["airhorn@123"],
     voiceToolCallbacks: {
       playSoundboard: async (refs) => ({ ok: true, played: refs }),
-      setAddressing: async ({ talkingTo, confidence }) => ({ ok: true, talkingTo, directedConfidence: confidence }),
       setScreenNote: async (note) => ({ ok: true, note }),
       setScreenMoment: async (moment) => ({ ok: true, moment }),
       leaveVoiceChannel: async () => ({ ok: true })
@@ -913,7 +883,6 @@ test("generateVoiceTurnReply keeps spoken text alongside soundboard playback", a
     soundboardCandidates: ["airhorn@123 | airhorn"],
     voiceToolCallbacks: {
       playSoundboard: async (refs) => ({ ok: true, played: refs }),
-      setAddressing: async ({ talkingTo, confidence }) => ({ ok: true, talkingTo, directedConfidence: confidence }),
       setScreenNote: async (note) => ({ ok: true, note }),
       setScreenMoment: async (moment) => ({ ok: true, moment }),
       leaveVoiceChannel: async () => ({ ok: true })
@@ -960,7 +929,6 @@ test("generateVoiceTurnReply supports soundboard-only turns", async () => {
     soundboardCandidates: ["airhorn@123 | airhorn"],
     voiceToolCallbacks: {
       playSoundboard: async (refs) => ({ ok: true, played: refs }),
-      setAddressing: async ({ talkingTo, confidence }) => ({ ok: true, talkingTo, directedConfidence: confidence }),
       setScreenNote: async (note) => ({ ok: true, note }),
       setScreenMoment: async (moment) => ({ ok: true, moment }),
       leaveVoiceChannel: async () => ({ ok: true })

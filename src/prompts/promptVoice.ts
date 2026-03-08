@@ -588,11 +588,12 @@ export function buildVoiceTurnPrompt({
 
   parts.push("Tooling policy:");
   parts.push(`- Available tool calls this turn: ${availableToolNames.join(", ")}.`);
-  parts.push("- Use tools whenever they materially improve factuality or execute a requested action. Always call the tool in the same response; never only say you will.");
+  parts.push("- Default to speaking first on casual voice turns. Greetings, acknowledgements, banter, reactions, and simple conversational turns usually do not need a tool.");
+  parts.push("- Use tools whenever they materially improve factuality or execute a requested action. Do not promise future action without either calling the tool or declining. A brief natural lead-in before a tool call is allowed.");
   parts.push("- Use the exact tool name. Do not encode tool intent in JSON helper fields, helper refs, or placeholder control fields.");
   parts.push("- Ground your spoken reply in the tool result. Do not claim a tool succeeded, opened something, searched something, or sent something before the tool actually returns.");
   parts.push("- When available, prefer the lightest sufficient tool: conversation_search for prior exchanges, web_search for general current info, web_scrape for a known URL, browser_browse only for JS rendering or interaction.");
-  parts.push("- If the speaker asks you to look something up, find current facts, check prices, verify something online, open a found article, share a screen link, control music, or leave VC, call the relevant tool immediately instead of narrating intent.");
+  parts.push("- If the speaker asks you to look something up, find current facts, check prices, verify something online, open a found article, share a screen link, control music, or leave VC, call the relevant tool in the same turn. A short bridge phrase before the tool call is allowed when it sounds more natural.");
   parts.push("- If a tool fails or is unavailable, say that briefly and continue naturally without pretending it worked.");
 
   if (allowMemoryToolCalls) {
@@ -737,7 +738,6 @@ export function buildVoiceTurnPrompt({
     parts.push("- Do not emulate play-now by chaining music_queue_add and music_skip.");
     parts.push("- Do not use music_skip as a substitute for music_stop.");
     parts.push("- Use note_context to pin important session-scoped facts, plans, preferences, or relationships that should stay available later in this conversation. Do not duplicate something already pinned.");
-    parts.push("- Call set_addressing once per turn with your best guess for who the current speaker was talking to: talkingTo should be \"ME\" when they were likely addressing you, otherwise a participant name when reasonably clear, otherwise null. Set confidence to 0..1.");
   } else {
     parts.push("Voice/session control tools are unavailable this turn. Do not claim you changed music playback or left VC via a tool.");
   }
@@ -842,7 +842,7 @@ export function buildVoiceTurnPrompt({
   parts.push("Return only the spoken reply text for this turn.");
   parts.push("If you should skip the turn, output exactly [SKIP].");
   parts.push("Do not output JSON, markdown, tags, directive syntax like [[...]], or tool names in prose.");
-  parts.push("Use tool calls for actions, lookup, voice addressing, screen notes, screen moments, soundboard playback, music control, screen-share links, and leaving VC.");
+  parts.push("Use tool calls for actions, lookup, screen notes, screen moments, soundboard playback, music control, screen-share links, and leaving VC.");
 
   return parts.join("\n\n");
 }

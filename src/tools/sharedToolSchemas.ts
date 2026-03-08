@@ -343,26 +343,6 @@ export const PLAY_SOUNDBOARD_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const SET_ADDRESSING_SCHEMA: SharedToolSchema = {
-  name: "set_addressing",
-  description: "Record your best guess for who the current speaker was talking to.",
-  parameters: {
-    type: "object",
-    properties: {
-      talkingTo: {
-        type: ["string", "null"]
-      },
-      confidence: {
-        type: "number",
-        minimum: 0,
-        maximum: 1
-      }
-    },
-    required: ["talkingTo", "confidence"],
-    additionalProperties: false
-  }
-};
-
 export const SCREEN_NOTE_SCHEMA: SharedToolSchema = {
   name: "screen_note",
   description: "Save a brief private factual note about the current visible screen state.",
@@ -429,7 +409,6 @@ export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
   MUSIC_SKIP_SCHEMA,
   MUSIC_NOW_PLAYING_SCHEMA,
   PLAY_SOUNDBOARD_SCHEMA,
-  SET_ADDRESSING_SCHEMA,
   SCREEN_NOTE_SCHEMA,
   SCREEN_MOMENT_SCHEMA,
   NOTE_CONTEXT_SCHEMA,

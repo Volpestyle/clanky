@@ -41,6 +41,7 @@ import {
   getVoiceAdmissionSettings,
   getVoiceConversationPolicy
 } from "../settings/agentStack.ts";
+import { isVoiceSpeechTimelineEntry } from "./voiceTimeline.ts";
 
 const DEFAULT_REALTIME_ADMISSION_MODE = "hard_classifier";
 const DEFAULT_MUSIC_WAKE_LATCH_SECONDS = 15;
@@ -386,7 +387,7 @@ export function buildVoiceAddressingState(manager: ReplyDecisionHost, {
   const normalizedUserId = String(userId || "").trim();
   const normalizedMaxItems = Math.max(1, Math.min(12, Math.floor(Number(maxItems) || 6)));
   const annotatedRows = sourceTurns
-    .filter((row) => row && typeof row === "object" && (row.role === "user" || row.role === "assistant"))
+    .filter((row) => isVoiceSpeechTimelineEntry(row))
     .map((row) => {
       const normalized = normalizeVoiceAddressingAnnotation(manager, {
         rawAddressing: row?.addressing
