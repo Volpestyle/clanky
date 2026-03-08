@@ -337,7 +337,7 @@ export async function runVoiceReplyPipeline(
   const voiceReplyScopeKey = params.mode === "bridge" ? buildVoiceReplyScopeKey(session.id) : null;
   const activeReply =
     params.mode === "bridge" && host.activeReplies && voiceReplyScopeKey
-      ? host.activeReplies.begin(voiceReplyScopeKey, "text-reply", ["voice_generation"])
+      ? host.activeReplies.begin(voiceReplyScopeKey, "voice-generation", ["voice_generation"])
       : null;
   const generationSignal = activeReply?.abortController.signal;
   let releaseLookupBusy: (() => void) | null = null;

@@ -1,4 +1,4 @@
-export type ReplyKind = "text-reply" | "voice-tool" | "sub-agent";
+export type ReplyKind = "text-reply" | "voice-generation" | "voice-tool" | "sub-agent";
 
 export interface ActiveReply {
   id: string;

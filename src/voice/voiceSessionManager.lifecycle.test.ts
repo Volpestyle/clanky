@@ -1776,7 +1776,7 @@ test("cancelPendingPrePlaybackReplyForUserSpeech aborts active voice generation 
     pendingResponse: null
   });
   const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
-  const activeReply = manager.activeReplies.begin(voiceReplyScopeKey, "text-reply", ["voice_generation"]);
+  const activeReply = manager.activeReplies.begin(voiceReplyScopeKey, "voice-generation", ["voice_generation"]);
   const promotedAt = Date.now();
   const capture = {
     userId: "speaker-1",
