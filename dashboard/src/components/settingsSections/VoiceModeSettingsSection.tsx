@@ -9,6 +9,21 @@ import { OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS } from "../../settingsForm
 
 type PipelineStage = { label: string; active: boolean };
 
+function formatProviderModelLabel(
+  provider: string,
+  model: string,
+  fallback = "Auto"
+) {
+  const normalizedProvider = String(provider || "").trim();
+  const normalizedModel = String(model || "").trim();
+  if (normalizedProvider && normalizedModel) {
+    return `${normalizedProvider} / ${normalizedModel}`;
+  }
+  if (normalizedProvider) return normalizedProvider;
+  if (normalizedModel) return normalizedModel;
+  return fallback;
+}
+
 function PipelineFlowIndicator({ stages }: { stages: PipelineStage[] }) {
   return (
     <div className="vps-pipeline-flow">
@@ -116,6 +131,24 @@ export function VoiceModeSettingsSection({
     .trim()
     .toLowerCase();
   const hardClassifierMode = realtimeAdmissionMode !== "generation_only";
+  const streamWatchCommentaryPath = String(form.voiceStreamWatchCommentaryPath || "auto")
+    .trim()
+    .toLowerCase();
+  const voiceGenerationProvider = String(form.voiceGenerationLlmProvider || form.provider || "").trim();
+  const voiceGenerationModel = String(form.voiceGenerationLlmModel || "").trim();
+  const streamWatchOverrideProvider = String(form.voiceStreamWatchBrainContextProvider || "").trim();
+  const streamWatchOverrideModel = String(
+    form.voiceStreamWatchBrainContextModel || selectedStreamWatchVisionPresetModel || ""
+  ).trim();
+  const genericVisionProvider = String(form.visionProvider || "").trim();
+  const genericVisionModel = String(form.visionModel || "").trim();
+  const directFrameToBrainSupported = voiceGenerationProvider === "claude-oauth";
+  const directFrameToBrainActive = directFrameToBrainSupported && !streamWatchOverrideProvider;
+  const streamWatchNotesBindingLabel = streamWatchOverrideProvider
+    ? formatProviderModelLabel(streamWatchOverrideProvider, streamWatchOverrideModel, "Custom override")
+    : streamWatchCommentaryPath === "anthropic_keyframes"
+      ? "Auto (resolver limited to Claude/Anthropic-capable helpers)"
+      : "Auto (resolver picks a configured vision-capable helper)";
 
   /* Pipeline stages for indicator */
   const pipelineStages: PipelineStage[] = isNativePath
@@ -1170,17 +1203,54 @@ export function VoiceModeSettingsSection({
           {form.voiceStreamWatchEnabled && (
             <div className="split">
               <div>
-                <label htmlFor="voice-stream-watch-commentary-path">Screen-watch vision path</label>
+                <label htmlFor="voice-stream-watch-commentary-path">Screen-share commentary path</label>
                 <select
                   id="voice-stream-watch-commentary-path"
                   value={form.voiceStreamWatchCommentaryPath}
                   onChange={set("voiceStreamWatchCommentaryPath")}
                 >
-                  <option value="auto">Auto (native video when available)</option>
-                  <option value="anthropic_keyframes">Anthropic keyframes (forced fallback)</option>
+                  <option value="auto">Auto (use the normal direct/native/helper routing)</option>
+                  <option value="anthropic_keyframes">Prefer Claude/Anthropic helper fallback for commentary</option>
                 </select>
               </div>
               <div />
+            </div>
+          )}
+
+          {form.voiceStreamWatchEnabled && (
+            <p className="vps-runtime-summary-note">
+              This selector changes how spoken screen-share commentary is routed. It does not disable Claude OAuth
+              direct frame-to-brain turns by itself.
+            </p>
+          )}
+
+          {form.voiceStreamWatchEnabled && (
+            <div className="vps-runtime-summary">
+              <div className="vps-runtime-summary-title">Effective screen-share path</div>
+              <div className="vps-runtime-summary-row">
+                <span className="vps-runtime-summary-label">Direct frame input to voice brain</span>
+                <span className="vps-runtime-summary-value">
+                  {directFrameToBrainActive
+                    ? `On (${formatProviderModelLabel(voiceGenerationProvider, voiceGenerationModel, "voice brain")})`
+                    : directFrameToBrainSupported
+                      ? "Off (background keyframe override forces the two-model path)"
+                      : "Not supported by the current voice brain"}
+                </span>
+              </div>
+              <div className="vps-runtime-summary-row">
+                <span className="vps-runtime-summary-label">Background keyframe notes + fallback commentary</span>
+                <span className="vps-runtime-summary-value">{streamWatchNotesBindingLabel}</span>
+              </div>
+              <div className="vps-runtime-summary-row">
+                <span className="vps-runtime-summary-label">Generic Media &gt; Vision setting</span>
+                <span className="vps-runtime-summary-value">
+                  {formatProviderModelLabel(genericVisionProvider, genericVisionModel, "Disabled")}
+                </span>
+              </div>
+              <p className="vps-runtime-summary-note">
+                The `Media &gt; Vision` section controls generic image captioning. Live screen-share stream watch uses
+                the path above instead.
+              </p>
             </div>
           )}
 
@@ -1200,34 +1270,35 @@ export function VoiceModeSettingsSection({
                   checked={Boolean(form.voiceStreamWatchBrainContextEnabled)}
                   onChange={set("voiceStreamWatchBrainContextEnabled")}
                 />
-                Feed keyframe context into Brain prompt
+                Keep rolling keyframe notes in the brain prompt
               </label>
             </div>
           )}
 
           {form.voiceStreamWatchEnabled && form.voiceStreamWatchBrainContextEnabled && (() => {
-            const voiceProvider = String(form.voiceGenerationLlmProvider || form.provider || "").trim();
-            const isDirectVision = voiceProvider === "claude-oauth";
-            const hasOverride = Boolean(String(form.voiceStreamWatchBrainContextProvider || "").trim());
+            const isDirectVision = directFrameToBrainSupported;
+            const hasOverride = Boolean(streamWatchOverrideProvider);
             return (
               <>
                 <div className="split">
                   <div>
-                    <label htmlFor="stream-watch-vision-provider">Vision provider</label>
+                    <label htmlFor="stream-watch-vision-provider">Background keyframe notes provider</label>
                     <select
                       id="stream-watch-vision-provider"
                       value={form.voiceStreamWatchBrainContextProvider}
                       onChange={setStreamWatchVisionProvider}
                     >
                       <option value="">
-                        {isDirectVision ? "Voice brain (sees frames directly)" : "Auto (first configured)"}
+                        {isDirectVision
+                          ? "Auto (keep direct frame-to-brain; helper auto-selects)"
+                          : "Auto (stream-watch resolver)"}
                       </option>
                       <LlmProviderOptions options={VISION_LLM_PROVIDER_OPTIONS} />
                     </select>
                   </div>
                   {hasOverride && (
                     <div>
-                      <label htmlFor="stream-watch-vision-model">Vision model</label>
+                      <label htmlFor="stream-watch-vision-model">Background keyframe notes model</label>
                       <select
                         id="stream-watch-vision-model"
                         value={selectedStreamWatchVisionPresetModel}
@@ -1242,6 +1313,10 @@ export function VoiceModeSettingsSection({
                     </div>
                   )}
                 </div>
+                <p className="vps-runtime-summary-note">
+                  Set an override only if you want screen-share keyframe notes and fallback commentary to use a
+                  specific model. Leaving this blank does not inherit `Media &gt; Vision`.
+                </p>
               </>
             );
           })()}
@@ -1277,7 +1352,7 @@ export function VoiceModeSettingsSection({
 
           {form.voiceStreamWatchEnabled && form.voiceStreamWatchBrainContextEnabled && (
             <>
-              <label htmlFor="voice-stream-watch-brain-context-prompt">Brain keyframe context instruction</label>
+              <label htmlFor="voice-stream-watch-brain-context-prompt">Background keyframe notes instruction</label>
               <textarea
                 id="voice-stream-watch-brain-context-prompt"
                 rows={3}

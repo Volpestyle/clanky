@@ -222,19 +222,20 @@ export function resolveAgentStackPresetConfig(
 ): AgentStackPresetConfig {
   const presetRaw = normalizeString(rawAgentStack.preset, DEFAULT_SETTINGS.agentStack.preset, 48);
   const migrated =
-    presetRaw === "anthropic_brain_openai_tools" ? "anthropic_api_openai_tools"
-    : presetRaw === "claude_oauth_max" ? "claude_oauth_openai_tools"
+    presetRaw === "anthropic_api_openai_tools" ? "anthropic_brain_openai_tools"
+    : presetRaw === "claude_oauth_openai_tools" || presetRaw === "claude_oauth_max"
+      ? "claude_oauth_local_tools"
     : presetRaw;
   const preset =
     migrated === "openai_native" ||
-    migrated === "anthropic_api_openai_tools" ||
-    migrated === "claude_oauth_openai_tools" ||
+    migrated === "anthropic_brain_openai_tools" ||
+    migrated === "claude_oauth_local_tools" ||
     migrated === "custom"
       ? migrated
       : DEFAULT_SETTINGS.agentStack.preset;
 
-  const isAnthropicBrain = preset === "anthropic_api_openai_tools";
-  const isClaudeOAuth = preset === "claude_oauth_openai_tools";
+  const isAnthropicBrain = preset === "anthropic_brain_openai_tools";
+  const isClaudeOAuth = preset === "claude_oauth_local_tools";
 
   return {
     preset,

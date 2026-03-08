@@ -83,10 +83,10 @@ Note: `processIngestMessage` does **not** perform automatic fact extraction. Dur
 
 Voice paths also feed durable memory using synthetic message IDs:
 
-- `src/bot/voiceReplies.ts`: STT transcript ingest for voice turn generation.
-- `src/voice/voiceSessionManager.ts`: realtime transcript ingest for realtime instruction context.
+- **User speech**: `src/voice/voiceSessionManager.ts` calls `memory.ingestMessage(...)` via `queueVoiceMemoryIngest()` for user transcripts (both realtime and STT pipeline).
+- **Bot replies**: `src/voice/voiceSessionManager.ts` calls `memory.ingestMessage(...)` in `persistAssistantVoiceTimelineTurn()` so bot-spoken replies also appear in the daily journal.
 
-Both call `memory.ingestMessage(...)` with `trace.source` indicating voice pipeline origin.
+Both sides of voice conversations are now captured in the daily journal, giving daily reflection the full conversation context.
 
 ### Daily reflection
 
@@ -99,7 +99,7 @@ The reflection job is the bridge between raw journal logs and durable memory. It
 3. Sends the full journal to an LLM with a reflection prompt: "Review this day's conversations. Extract durable facts worth remembering — things about people, ongoing projects, important events, preferences, and recurring topics. Ignore throwaway chatter, greetings, and ephemeral requests."
 4. LLM returns structured facts with scope (user/lore/self) and subject attribution.
 5. Each fact is written through the same `rememberDirectiveLine` path as `memory_write` tool calls — same grounding checks, same dedup, same archiving.
-6. Reflected journals are marked as processed. Journals older than `memory.dailyLogRetentionDays` are pruned.
+6. Reflected journals are marked as processed. Journal files are retained indefinitely.
 
 **Why reflection exists alongside `memory_write`:**
 
@@ -116,7 +116,6 @@ Both paths produce the same kind of durable facts in `memory_facts`. Reflection 
 - `memory.reflection.enabled` (default `true`): master switch.
 - `memory.reflection.hour` / `memory.reflection.minute`: daily reflection schedule time.
 - `memory.reflection.maxFactsPerReflection`: cap on facts produced per run (default `20`).
-- `memory.dailyLogRetentionDays` (default `30`): prune journals older than this after reflection.
 - `adaptiveDirectives.enabled` (default `true`): independently enables/disables adaptive directive retrieval and conversational directive save/remove behavior.
 - `automations.enabled` (default `true`): independently enables/disables recurring automation control plus scheduled execution.
 
@@ -294,7 +293,7 @@ That retrieval split is what keeps behavior directives useful without bloating e
 - Append-only journal lines: timestamp, author, and scoped message text.
 - Header is initialized once per day/file.
 - Consumed by the daily reflection job to produce durable facts.
-- Pruned after `memory.dailyLogRetentionDays` (default 30 days) once reflection has processed them.
+- Retained indefinitely (no automatic pruning).
 
 ### Snapshot: `memory/MEMORY.md`
 
@@ -319,7 +318,6 @@ From defaults + normalization:
 - `memory.reflection.enabled` (default `true`): enable/disable daily reflection.
 - `memory.reflection.hour` / `memory.reflection.minute`: daily reflection schedule time.
 - `memory.reflection.maxFactsPerReflection` (default `20`): cap on facts per reflection run.
-- `memory.dailyLogRetentionDays` (default `30`): prune reflected journals older than this.
 - `adaptiveDirectives.enabled` (default `true`): toggle adaptive directive retrieval/write behavior separately from durable memory.
 - `automations.enabled` (default `true`): toggle recurring automation control and scheduler execution separately from durable memory.
 - `memoryLlm` provider/model config controls the model used for reflection and tool-triggered operations.

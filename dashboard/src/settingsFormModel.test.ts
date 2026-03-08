@@ -432,14 +432,14 @@ test("settingsFormModel round-trips codex cli code agent fields", () => {
   assert.equal(patch.agentStack.runtimeConfig.devTeam.codexCli.model, "gpt-5.4");
 });
 
-test("settingsFormModel supports the claude_oauth_openai_tools preset", () => {
+test("settingsFormModel supports the claude_oauth_local_tools preset", () => {
   const form = settingsToForm(normalizeSettings({
     agentStack: {
-      preset: "claude_oauth_openai_tools"
+      preset: "claude_oauth_local_tools"
     }
   }));
 
-  assert.equal(form.stackPreset, "claude_oauth_openai_tools");
+  assert.equal(form.stackPreset, "claude_oauth_local_tools");
   assert.equal(form.provider, "claude-oauth");
   assert.equal(form.model, "claude-opus-4-6");
   assert.equal(form.voiceReplyDecisionRealtimeAdmissionMode, "generation_decides");
@@ -450,7 +450,7 @@ test("settingsFormModel supports the claude_oauth_openai_tools preset", () => {
   assert.equal(form.voiceGenerationLlmModel, "claude-sonnet-4-6");
 
   const patch = formToSettingsPatch(form);
-  assert.equal(patch.agentStack.preset, "claude_oauth_openai_tools");
+  assert.equal(patch.agentStack.preset, "claude_oauth_local_tools");
 });
 
 test("applyStackPreset syncs claude oauth orchestrator and voice defaults", () => {
@@ -460,9 +460,9 @@ test("applyStackPreset syncs claude oauth orchestrator and voice defaults", () =
     }
   }));
 
-  const patched = applyStackPreset(base, "claude_oauth_openai_tools");
+  const patched = applyStackPreset(base, "claude_oauth_local_tools");
 
-  assert.equal(patched.stackPreset, "claude_oauth_openai_tools");
+  assert.equal(patched.stackPreset, "claude_oauth_local_tools");
   assert.equal(patched.provider, "claude-oauth");
   assert.equal(patched.model, "claude-opus-4-6");
   assert.equal(patched.voiceReplyDecisionRealtimeAdmissionMode, "generation_decides");

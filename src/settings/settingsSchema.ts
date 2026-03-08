@@ -11,12 +11,12 @@ export const PROVIDER_MODEL_FALLBACKS = {
 
 export const AGENT_STACK_PRESETS = [
   "openai_native",
-  "anthropic_api_openai_tools",
-  "claude_oauth_openai_tools",
+  "anthropic_brain_openai_tools",
+  "claude_oauth_local_tools",
   "custom"
 ] as const;
 
-export const AGENT_HARNESS_KINDS = ["internal", "openai_agents"] as const;
+export const AGENT_HARNESS_KINDS = ["internal", "responses_native"] as const;
 
 export const MODEL_PROVIDER_KINDS = [
   "openai",

@@ -98,7 +98,7 @@ function inheritOrchestrator(): CapabilityExecutionPolicy {
 
 const PRESET_DEFAULTS = {
   openai_native: {
-    harness: "openai_agents",
+    harness: "responses_native",
     orchestrator: {
       provider: "openai",
       model: "gpt-5"
@@ -127,7 +127,7 @@ const PRESET_DEFAULTS = {
       codingWorkers: ["codex", "codex_cli"]
     }
   },
-  anthropic_api_openai_tools: {
+  anthropic_brain_openai_tools: {
     harness: "internal",
     orchestrator: {
       provider: "anthropic",
@@ -157,7 +157,7 @@ const PRESET_DEFAULTS = {
       codingWorkers: ["codex_cli", "codex"]
     }
   },
-  claude_oauth_openai_tools: {
+  claude_oauth_local_tools: {
     harness: "internal",
     orchestrator: {
       provider: "claude-oauth",

@@ -342,10 +342,10 @@ test("normalizeSettings migrates legacy code agent provider fields into dev-team
   assert.equal(codex.agentStack.runtimeConfig.devTeam.claudeCode.enabled, false);
 });
 
-test("normalizeSettings preserves claude_oauth_openai_tools session config", () => {
+test("normalizeSettings preserves claude_oauth_local_tools session config", () => {
   const normalized = normalizeSettings({
     agentStack: {
-      preset: "claude_oauth_openai_tools",
+      preset: "claude_oauth_local_tools",
       runtimeConfig: {
         claudeOAuthSession: {
           sessionScope: "channel",
@@ -359,7 +359,7 @@ test("normalizeSettings preserves claude_oauth_openai_tools session config", () 
     }
   });
 
-  assert.equal(normalized.agentStack.preset, "claude_oauth_openai_tools");
+  assert.equal(normalized.agentStack.preset, "claude_oauth_local_tools");
   assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.sessionScope, "channel");
   assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.inactivityTimeoutMs, 45_000);
   assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.contextPruningStrategy, "sliding_window");

@@ -381,8 +381,8 @@ export default function SettingsForm({
             <label htmlFor="stack-preset">Preset</label>
             <select id="stack-preset" value={form.stackPreset} onChange={set("stackPreset")}>
               <option value="openai_native">OpenAI Native</option>
-              <option value="anthropic_api_openai_tools">Anthropic API + OpenAI Tools</option>
-              <option value="claude_oauth_openai_tools">Claude OAuth + OpenAI Tools</option>
+              <option value="anthropic_brain_openai_tools">Anthropic Brain + OpenAI Hosted Tools</option>
+              <option value="claude_oauth_local_tools">Claude OAuth + Local Tools</option>
               <option value="custom">Custom</option>
             </select>
 
