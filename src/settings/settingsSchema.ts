@@ -1,7 +1,7 @@
 export const PROVIDER_MODEL_FALLBACKS = {
   openai: ["gpt-5-mini", "gpt-5", "gpt-4.1-mini"],
   anthropic: ["claude-haiku-4-5", "claude-sonnet-4-6"],
-  "claude-oauth": ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-6"],
+  "claude-oauth": ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
   "codex-oauth": ["gpt-5.4", "gpt-5.2", "gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.1-codex"],
   codex_cli_session: ["gpt-5.4"],
   xai: ["grok-3-mini-latest"],
@@ -112,6 +112,7 @@ export const DEFAULT_SETTINGS = {
       "clunk",
       "clunka",
       "clink",
+      "clinker",
       "clinka",
       "clenk",
       "clenka",
@@ -128,7 +129,8 @@ export const DEFAULT_SETTINGS = {
       "clayton",
       "plonka",
       "planker",
-      "plinker"
+      "plinker",
+      "hank"
     ]
   },
   persona: {
@@ -242,28 +244,9 @@ export const DEFAULT_SETTINGS = {
     }
   },
   agentStack: {
-    preset: "openai_native",
-    advancedOverridesEnabled: true,
-    overrides: {
-      orchestrator: {
-        provider: "anthropic",
-        model: "claude-sonnet-4-6"
-      },
-      devTeam: {
-        codingWorkers: ["codex", "codex_cli"],
-        orchestrator: {
-          provider: "anthropic",
-          model: "claude-sonnet-4-6"
-        }
-      },
-      voiceAdmissionClassifier: {
-        mode: "dedicated_model",
-        model: {
-          provider: "anthropic",
-          model: "claude-haiku-4-5"
-        }
-      }
-    },
+    preset: "claude_oauth_local_tools",
+    advancedOverridesEnabled: false,
+    overrides: {},
     runtimeConfig: {
       research: {
         enabled: true,
@@ -433,16 +416,16 @@ export const DEFAULT_SETTINGS = {
       },
       eagerness: 20,
       minMinutesBetweenThoughts: 60,
-      maxThoughtsPerDay: 2,
+      maxThoughtsPerDay: 1,
       lookbackMessages: 20
     },
     voice: {
-      enabled: false,
+      enabled: true,
       execution: {
         mode: "dedicated_model",
         model: {
-          provider: "anthropic",
-          model: "claude-sonnet-4-6"
+          provider: "claude-oauth",
+          model: "claude-opus-4-6"
         },
         temperature: 1
       },
@@ -526,7 +509,7 @@ export const DEFAULT_SETTINGS = {
       operationalMessages: "minimal",
       streaming: {
         enabled: true,
-        eagerFirstChunkChars: 16,
+        eagerFirstChunkChars: 30,
         maxBufferChars: 300
       }
     },
@@ -572,8 +555,8 @@ export const DEFAULT_SETTINGS = {
       execution: {
         mode: "dedicated_model",
         model: {
-          provider: "anthropic",
-          model: "claude-haiku-4-5"
+          provider: "claude-oauth",
+          model: "claude-opus-4-6"
         }
       },
       maxCaptionsPerHour: 60

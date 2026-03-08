@@ -15,6 +15,10 @@ import type { ReplyManager } from "./replyManager.ts";
 // These are convenience shortcuts, not the primary music-command decision logic.
 export const EN_MUSIC_STOP_VERB_RE = /\b(?:stop|halt|end|quit|shut\s*off)\b/i;
 export const EN_MUSIC_PAUSE_VERB_RE = /\b(?:pause)\b/i;
+export const EN_MUSIC_RESUME_VERB_RE = /\b(?:resume|unpause|continue)\b/i;
+export const EN_MUSIC_RESUME_PRONOUN_RE = /\b(?:resume|unpause|continue)\s+it\b/i;
+export const EN_MUSIC_RESUME_PLAY_CURRENT_RE =
+  /\bplay\s+(?:it|this(?:\s+(?:song|track|music|playback))?|the\s+(?:song|track|music|playback))(?:\s+(?:again|back(?:\s+up)?))?(?:\s+(?:please|plz|now))?\s*$/i;
 export const EN_MUSIC_SKIP_VERB_RE = /\b(?:skip|next)\b/i;
 export const EN_MUSIC_CUE_RE = /\b(?:music|song|songs|track|tracks|playback|playing)\b/i;
 export const EN_MUSIC_PLAY_VERB_RE = /\b(?:play|start|queue|put\s+on|spin)\b/i;
@@ -735,6 +739,29 @@ export function isLikelyMusicSkipPhrase(
   const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
   if (!normalizedTranscript) return false;
   return EN_MUSIC_SKIP_VERB_RE.test(normalizedTranscript) && EN_MUSIC_CUE_RE.test(normalizedTranscript);
+}
+
+// Only checked when music is paused. Keep this conservative: explicit resume
+// verbs are fine, and "play" only counts for current-track phrasings like
+// "play it again" or "play this song".
+export function isLikelyMusicResumePhrase(
+  _manager: MusicPlaybackHost,
+  { transcript = "" }: {
+    transcript?: string;
+    settings?: MusicPlaybackSettings;
+  } = {}
+) {
+  const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+  if (!normalizedTranscript) return false;
+  const normalizedResumeTranscript = normalizedTranscript
+    .toLowerCase()
+    .replace(/[^\w\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalizedResumeTranscript) return false;
+  if (EN_MUSIC_RESUME_PLAY_CURRENT_RE.test(normalizedResumeTranscript)) return true;
+  if (!EN_MUSIC_RESUME_VERB_RE.test(normalizedResumeTranscript)) return false;
+  return EN_MUSIC_CUE_RE.test(normalizedResumeTranscript) || EN_MUSIC_RESUME_PRONOUN_RE.test(normalizedResumeTranscript);
 }
 
 export function isLikelyMusicPlayPhrase(
@@ -1732,13 +1759,17 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
     return true;
   }
 
-  // Heuristic-only stop/pause/skip detection — no LLM round-trip.
+  // Heuristic-only stop/pause/resume/skip detection — no LLM round-trip.
   // Each requires verb + music cue word (e.g. "stop music", "pause the song",
-  // "skip track"). Bot-name commands ("Clanker, stop") go through the
-  // directAddressedToBot → LLM path instead.
+  // "play the song", "skip track"). Bot-name commands ("Clanker, stop") go
+  // through the directAddressedToBot → LLM path instead.
+  const currentPhase = getMusicPhase(manager, session);
   const shouldPause = isLikelyMusicPausePhrase(manager, { transcript: normalizedTranscript });
   const shouldStop = !shouldPause && isLikelyMusicStopPhrase(manager, { transcript: normalizedTranscript });
-  const shouldSkip = !shouldPause && !shouldStop && isLikelyMusicSkipPhrase(manager, { transcript: normalizedTranscript });
+  const shouldResume = !shouldPause && !shouldStop
+    && musicPhaseCanResume(currentPhase)
+    && isLikelyMusicResumePhrase(manager, { transcript: normalizedTranscript });
+  const shouldSkip = !shouldPause && !shouldStop && !shouldResume && isLikelyMusicSkipPhrase(manager, { transcript: normalizedTranscript });
   logMusicAction(manager, {
     kind: "voice_runtime",
     guildId: session.guildId,
@@ -1752,19 +1783,22 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
       transcript: normalizedTranscript,
       shouldStop,
       shouldPause,
+      shouldResume,
       shouldSkip,
       directAddressedToBot,
       decisionReason: shouldPause
         ? "heuristic_pause"
         : shouldStop
           ? "heuristic_stop"
-          : shouldSkip
-            ? "heuristic_skip"
-            : directAddressedToBot
-              ? "direct_address"
-              : disambiguationResolutionTurn
-                ? "disambiguation"
-                : "swallowed"
+          : shouldResume
+            ? "heuristic_resume"
+            : shouldSkip
+              ? "heuristic_skip"
+              : directAddressedToBot
+                ? "direct_address"
+                : disambiguationResolutionTurn
+                  ? "disambiguation"
+                  : "swallowed"
     }
   });
 
@@ -1793,6 +1827,28 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
       requestText: normalizedTranscript,
       clearQueue: true,
       mustNotify: false
+    });
+    return true;
+  }
+
+  if (shouldResume) {
+    manager.musicPlayer?.resume?.();
+    setMusicPhase(manager, session, "playing");
+    haltSessionOutputForMusicPlayback(manager, session, "music_resumed_voice_heuristic");
+    const queueState = ensureToolMusicQueueState(manager, session);
+    if (queueState) queueState.isPaused = false;
+    logMusicAction(manager, {
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: "voice_music_resumed",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "voice_turn"),
+        reason: "voice_music_resume_phrase",
+        requestText: normalizedTranscript
+      }
     });
     return true;
   }
