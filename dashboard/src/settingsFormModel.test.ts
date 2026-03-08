@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
+  applyStackPresetDefaults,
   formToSettingsPatch,
   getCodeAgentValidationError,
   resolveBrowserProviderModelOptions,
@@ -535,8 +536,33 @@ test("settingsFormModel supports the claude_oauth_local_tools preset", () => {
   assert.equal(patch.agentStack.preset, "claude_oauth_local_tools");
 });
 
-// applyStackPreset is now async (calls server endpoint) — tested via integration tests
-test.skip("applyStackPreset syncs claude oauth orchestrator and voice defaults", () => {});
+test("applyStackPresetDefaults merges server-returned defaults into form", () => {
+  const base = settingsToForm(withResolved(normalizeSettings({
+    agentStack: { preset: "openai_native" }
+  })));
+
+  const patched = applyStackPresetDefaults(base, {
+    stackPreset: "claude_oauth_local_tools",
+    provider: "claude-oauth",
+    model: "claude-opus-4-6",
+    voiceReplyDecisionRealtimeAdmissionMode: "generation_decides",
+    voiceReplyDecisionLlmProvider: "claude-oauth",
+    voiceReplyDecisionLlmModel: "claude-haiku-4-5",
+    voiceGenerationLlmUseTextModel: false,
+    voiceGenerationLlmProvider: "claude-oauth",
+    voiceGenerationLlmModel: "claude-sonnet-4-6"
+  });
+
+  assert.equal(patched.stackPreset, "claude_oauth_local_tools");
+  assert.equal(patched.provider, "claude-oauth");
+  assert.equal(patched.model, "claude-opus-4-6");
+  assert.equal(patched.voiceReplyDecisionRealtimeAdmissionMode, "generation_decides");
+  assert.equal(patched.voiceReplyDecisionLlmProvider, "claude-oauth");
+  assert.equal(patched.voiceReplyDecisionLlmModel, "claude-haiku-4-5");
+  assert.equal(patched.voiceGenerationLlmUseTextModel, false);
+  assert.equal(patched.voiceGenerationLlmProvider, "claude-oauth");
+  assert.equal(patched.voiceGenerationLlmModel, "claude-sonnet-4-6");
+});
 
 test("settingsFormModel round-trips elevenlabs realtime settings", () => {
   const form = settingsToForm(withResolved(normalizeSettings({

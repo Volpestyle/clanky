@@ -16,7 +16,8 @@ import {
   resolveProviderModelOptions,
   sanitizeAliasListInput,
   settingsToForm,
-  settingsToFormPreserving
+  settingsToFormPreserving,
+  type ResolvedBindings
 } from "../settingsFormModel";
 import { useActiveSection } from "../hooks/useActiveSection";
 import { SettingsSection } from "./SettingsSection";
@@ -102,23 +103,10 @@ export default function SettingsForm({
     return JSON.stringify(form) !== savedFormRef.current;
   }, [form]);
 
-  type ResolvedStack = {
-    harness: string;
-    orchestrator: { provider: string; model: string };
-    researchRuntime: string;
-    browserRuntime: string;
-    voiceRuntime: string;
-    voiceAdmissionPolicy: { mode: string };
-    sessionPolicy: unknown;
-    devTeam: {
-      orchestrator: { provider: string; model: string };
-      roles: Record<string, unknown>;
-      codingWorkers: string[];
-    };
-  };
-  const resolvedStack = useMemo((): ResolvedStack => {
-    const r = (settings as Record<string, unknown>)?._resolved as Record<string, unknown> | undefined;
-    return (r?.agentStack || {
+  const resolvedStack = useMemo((): ResolvedBindings["agentStack"] => {
+    const r = (settings as Record<string, unknown>)?._resolved as ResolvedBindings | undefined;
+    return r?.agentStack || {
+      preset: "",
       harness: "",
       orchestrator: { provider: effectiveForm.provider, model: effectiveForm.model },
       researchRuntime: "",
@@ -127,7 +115,7 @@ export default function SettingsForm({
       voiceAdmissionPolicy: { mode: "" },
       sessionPolicy: null,
       devTeam: { orchestrator: { provider: "", model: "" }, roles: {}, codingWorkers: [] }
-    }) as ResolvedStack;
+    };
   }, [settings, effectiveForm.provider, effectiveForm.model]);
   const codeAgentValidationError = useMemo(() => getCodeAgentValidationError(effectiveForm), [effectiveForm]);
 
@@ -273,6 +261,8 @@ export default function SettingsForm({
           body: { preset }
         }).then((defaults) => {
           setForm((current) => applyStackPresetDefaults(current || defaultForm, defaults));
+        }).catch((err) => {
+          console.error("Failed to load preset defaults:", err);
         });
         return;
       }

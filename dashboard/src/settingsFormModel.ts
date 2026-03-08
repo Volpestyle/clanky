@@ -12,7 +12,7 @@ import {
   parseUniqueLineList,
   parseUniqueList
 } from "../../src/settings/listNormalization.ts";
-type ResolvedBindings = {
+export type ResolvedBindings = {
   agentStack: {
     preset: string;
     harness: string;
@@ -104,7 +104,7 @@ export const BROWSER_PROVIDER_MODEL_FALLBACKS = Object.freeze({
   openai: ["gpt-5-mini"]
 });
 
-function section<T>(value: T | undefined, fallback: T): T {
+function valueOr<T>(value: T | undefined, fallback: T): T {
   return value !== undefined && value !== null ? value : fallback;
 }
 
@@ -112,49 +112,49 @@ function buildSettingsFormView(settings: unknown) {
   const d = DEFAULT_SETTINGS;
   const s = (settings || d) as Partial<Settings> & { _resolved?: ResolvedBindings };
   const resolved = s._resolved;
-  const agentStack = section(s.agentStack, d.agentStack);
-  const prompting = section(s.prompting, d.prompting);
-  const activity = section(s.interaction?.activity, d.interaction.activity);
-  const permissions = section(s.permissions?.replies, d.permissions.replies);
-  const textThoughtLoop = section(s.initiative?.text, d.initiative.text);
-  const memory = section(s.memory, d.memory);
-  const directives = section(s.directives, d.directives);
-  const automations = section(s.automations, d.automations);
-  const sessions = section(s.interaction?.sessions, d.interaction.sessions);
-  const followup = section(s.interaction?.followup, d.interaction.followup);
+  const agentStack = valueOr(s.agentStack, d.agentStack);
+  const prompting = valueOr(s.prompting, d.prompting);
+  const activity = valueOr(s.interaction?.activity, d.interaction.activity);
+  const permissions = valueOr(s.permissions?.replies, d.permissions.replies);
+  const textThoughtLoop = valueOr(s.initiative?.text, d.initiative.text);
+  const memory = valueOr(s.memory, d.memory);
+  const directives = valueOr(s.directives, d.directives);
+  const automations = valueOr(s.automations, d.automations);
+  const sessions = valueOr(s.interaction?.sessions, d.interaction.sessions);
+  const followup = valueOr(s.interaction?.followup, d.interaction.followup);
   const orchestrator = resolved?.orchestrator || { provider: agentStack.overrides?.orchestrator?.provider || "openai", model: agentStack.overrides?.orchestrator?.model || "gpt-5" };
   const followupBinding = resolved?.followupBinding || orchestrator;
   const memoryBinding = resolved?.memoryBinding || orchestrator;
-  const research = section(agentStack.runtimeConfig?.research, d.agentStack.runtimeConfig.research);
-  const browser = section(agentStack.runtimeConfig?.browser, d.agentStack.runtimeConfig.browser);
+  const research = valueOr(agentStack.runtimeConfig?.research, d.agentStack.runtimeConfig.research);
+  const browser = valueOr(agentStack.runtimeConfig?.browser, d.agentStack.runtimeConfig.browser);
   const browserExecution = browser.localBrowserAgent?.execution;
   const browserBinding =
     browserExecution?.mode === "dedicated_model" && browserExecution.model
       ? browserExecution.model
       : orchestrator;
-  const devPermissions = section(s.permissions?.devTasks, d.permissions.devTasks);
-  const devTeam = section(agentStack.runtimeConfig?.devTeam, d.agentStack.runtimeConfig.devTeam);
+  const devPermissions = valueOr(s.permissions?.devTasks, d.permissions.devTasks);
+  const devTeam = valueOr(agentStack.runtimeConfig?.devTeam, d.agentStack.runtimeConfig.devTeam);
   const resolvedStack = resolved?.agentStack;
-  const vision = section(s.media?.vision, d.media.vision);
+  const vision = valueOr(s.media?.vision, d.media.vision);
   const visionBinding = resolved?.visionBinding || orchestrator;
-  const videoContext = section(s.media?.videoContext, d.media.videoContext);
-  const voiceSettings = section(s.voice, d.voice);
-  const transcription = section(s.voice?.transcription, d.voice.transcription);
-  const voiceChannelPolicy = section(s.voice?.channelPolicy, d.voice.channelPolicy);
-  const voiceSessionLimits = section(s.voice?.sessionLimits, d.voice.sessionLimits);
-  const voiceConversation = section(s.voice?.conversationPolicy, d.voice.conversationPolicy);
-  const voiceAdmission = section(s.voice?.admission, d.voice.admission);
-  const voiceInitiative = section(s.initiative?.voice, d.initiative.voice);
+  const videoContext = valueOr(s.media?.videoContext, d.media.videoContext);
+  const voiceSettings = valueOr(s.voice, d.voice);
+  const transcription = valueOr(s.voice?.transcription, d.voice.transcription);
+  const voiceChannelPolicy = valueOr(s.voice?.channelPolicy, d.voice.channelPolicy);
+  const voiceSessionLimits = valueOr(s.voice?.sessionLimits, d.voice.sessionLimits);
+  const voiceConversation = valueOr(s.voice?.conversationPolicy, d.voice.conversationPolicy);
+  const voiceAdmission = valueOr(s.voice?.admission, d.voice.admission);
+  const voiceInitiative = valueOr(s.initiative?.voice, d.initiative.voice);
   const voiceInitiativeBinding = resolved?.voiceInitiativeBinding || orchestrator;
-  const voiceRuntime = section(agentStack.runtimeConfig?.voice, d.agentStack.runtimeConfig.voice);
+  const voiceRuntime = valueOr(agentStack.runtimeConfig?.voice, d.agentStack.runtimeConfig.voice);
   const voiceGenerationBinding = resolved?.voiceGenerationBinding || orchestrator;
   const voiceClassifierBinding = resolved?.voiceAdmissionClassifierBinding;
   const presetClassifierFallback = getPresetClassifierFallback(agentStack.preset);
   const voiceClassifierFallback = voiceClassifierBinding || presetClassifierFallback || orchestrator;
-  const voiceStreamWatch = section(s.voice?.streamWatch, d.voice.streamWatch);
-  const voiceSoundboard = section(s.voice?.soundboard, d.voice.soundboard);
-  const startup = section(s.interaction?.startup, d.interaction.startup);
-  const discovery = section(s.initiative?.discovery, d.initiative.discovery);
+  const voiceStreamWatch = valueOr(s.voice?.streamWatch, d.voice.streamWatch);
+  const voiceSoundboard = valueOr(s.voice?.soundboard, d.voice.soundboard);
+  const startup = valueOr(s.interaction?.startup, d.interaction.startup);
+  const discovery = valueOr(s.initiative?.discovery, d.initiative.discovery);
   const codingWorkers = resolvedStack?.devTeam?.codingWorkers || [];
   const codeAgentProvider =
     codingWorkers.length === 1
@@ -165,11 +165,7 @@ function buildSettingsFormView(settings: unknown) {
         : "claude-code"
       : "auto";
 
-  const voiceProviderStr = resolved?.voiceProvider
-    || (String(voiceRuntime.runtimeMode || "").includes("xai") || String(voiceRuntime.runtimeMode || "").includes("voice_agent") ? "xai"
-      : String(voiceRuntime.runtimeMode || "").includes("gemini") ? "gemini"
-      : String(voiceRuntime.runtimeMode || "").includes("elevenlabs") ? "elevenlabs"
-      : "openai");
+  const voiceProviderStr = resolved?.voiceProvider || "openai";
 
   return {
     agentStack,
@@ -177,7 +173,7 @@ function buildSettingsFormView(settings: unknown) {
     botNameAliases: Array.isArray(s.identity?.botNameAliases)
       ? s.identity.botNameAliases.map((v) => String(v || "").trim()).filter(Boolean)
       : [...d.identity.botNameAliases],
-    persona: section(s.persona, d.persona),
+    persona: valueOr(s.persona, d.persona),
     prompt: {
       capabilityHonestyLine: prompting.global.capabilityHonestyLine,
       impossibleActionLine: prompting.global.impossibleActionLine,
