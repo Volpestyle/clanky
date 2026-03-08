@@ -2356,21 +2356,6 @@ export class VoiceSessionManager {
     source = "voice_web_lookup"
   }) {
     if (!session || session.ending) return;
-    if (isRealtimeMode(session.mode)) {
-      const realtimePrompt = this.buildVoiceLookupBusyRealtimePrompt({
-        settings,
-        query
-      });
-      const requested = this.requestRealtimePromptUtterance({
-        session,
-        prompt: realtimePrompt,
-        userId,
-        source: `${String(source || "voice_web_lookup")}:busy_utterance`,
-        utteranceText: null
-      });
-      if (requested) return;
-    }
-
     const line = await this.generateVoiceLookupBusyLine({
       session,
       settings,
@@ -2443,23 +2428,6 @@ export class VoiceSessionManager {
     } catch {
       return "";
     }
-  }
-
-  buildVoiceLookupBusyRealtimePrompt({
-    settings,
-    query = ""
-  }) {
-    const normalizedQuery = normalizeVoiceText(query, 80);
-    const systemPrompt = interpolatePromptTemplate(getPromptVoiceLookupBusySystemPrompt(settings), {
-      botName: getPromptBotName(settings)
-    });
-    return [
-      systemPrompt,
-      normalizedQuery ? `Lookup query: ${normalizedQuery}` : "Lookup query: (not specified)",
-      "Respond with one short spoken line only."
-    ]
-      .filter(Boolean)
-      .join("\n");
   }
 
   requestRealtimePromptUtterance({

@@ -586,16 +586,27 @@ export class ReplyManager {
     }
   }
 
-  clearPendingResponse(session: VoiceSession) {
+  private resetPendingResponse({
+    session,
+    abortActiveReplies = false,
+    abortPendingToolCalls = false,
+    trigger = "pending_response_cleared",
+    recheckDeferredActions = false
+  }: {
+    session: VoiceSession;
+    abortActiveReplies?: boolean;
+    abortPendingToolCalls?: boolean;
+    trigger?: string;
+    recheckDeferredActions?: boolean;
+  }) {
     if (!session) return;
     this.clearResponseSilenceTimers(session);
-    const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
-
-    if (this.host.activeReplies) {
+    if (abortActiveReplies && this.host.activeReplies) {
+      const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
       this.host.activeReplies.abortAll(voiceReplyScopeKey, "Pending response cleared");
     }
 
-    if (session.openAiPendingToolAbortControllers) {
+    if (abortPendingToolCalls && session.openAiPendingToolAbortControllers) {
       for (const controller of session.openAiPendingToolAbortControllers.values()) {
         try {
           controller.abort("Pending response cleared");
@@ -607,11 +618,33 @@ export class ReplyManager {
     }
 
     session.pendingResponse = null;
-    this.syncAssistantOutputState(session, "pending_response_cleared");
+    this.syncAssistantOutputState(session, trigger);
     this.host.maybeClearActiveReplyInterruptionPolicy(session);
-    this.host.deferredActionQueue.recheckDeferredVoiceActions({
+    if (recheckDeferredActions) {
+      this.host.deferredActionQueue.recheckDeferredVoiceActions({
+        session,
+        reason: "pending_response_cleared"
+      });
+    }
+  }
+
+  clearPendingResponse(session: VoiceSession) {
+    this.resetPendingResponse({
       session,
-      reason: "pending_response_cleared"
+      abortActiveReplies: true,
+      abortPendingToolCalls: true,
+      trigger: "pending_response_cleared",
+      recheckDeferredActions: true
+    });
+  }
+
+  settlePendingResponse(session: VoiceSession, trigger = "pending_response_settled") {
+    this.resetPendingResponse({
+      session,
+      abortActiveReplies: false,
+      abortPendingToolCalls: false,
+      trigger,
+      recheckDeferredActions: false
     });
   }
 
@@ -1107,8 +1140,7 @@ export class ReplyManager {
     }
 
     if (hasInFlightToolCalls) {
-      this.clearPendingResponse(session);
-      this.syncAssistantOutputState(session, "response_done_tool_calls_in_flight");
+      this.settlePendingResponse(session, "response_done_tool_calls_in_flight");
       return;
     }
 

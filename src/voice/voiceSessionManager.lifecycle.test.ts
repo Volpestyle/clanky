@@ -1660,10 +1660,19 @@ test("announceVoiceWebLookupBusy skips TTS fallback in realtime mode", async () 
   const session = createSession({
     mode: "openai_realtime"
   });
+  let promptUtteranceCalls = 0;
+  let textUtteranceCalls = 0;
   let ttsCalls = 0;
 
-  manager.requestRealtimePromptUtterance = () => false;
-  manager.requestRealtimeTextUtterance = () => false;
+  manager.requestRealtimePromptUtterance = () => {
+    promptUtteranceCalls += 1;
+    return false;
+  };
+  manager.requestRealtimeTextUtterance = ({ text }) => {
+    textUtteranceCalls += 1;
+    assert.equal(text, "still looking");
+    return false;
+  };
   manager.generateVoiceLookupBusyLine = async () => "still looking";
   manager.speakVoiceLineWithTts = async () => {
     ttsCalls += 1;
@@ -1677,7 +1686,79 @@ test("announceVoiceWebLookupBusy skips TTS fallback in realtime mode", async () 
     query: "what happened"
   });
 
+  assert.equal(promptUtteranceCalls, 0);
+  assert.equal(textUtteranceCalls, 1);
   assert.equal(ttsCalls, 0);
+});
+
+test("handleResponseDone preserves tool work when a tool-only realtime response completes", () => {
+  const { manager } = createManager();
+  manager.activeReplies = new ActiveReplyRegistry();
+  const toolAbortController = new AbortController();
+  const replyScopeKey = buildVoiceReplyScopeKey("session-tool-followup-1");
+  const activeReply = manager.activeReplies.begin(replyScopeKey, "voice-generation");
+  const session = createSession({
+    id: "session-tool-followup-1",
+    mode: "openai_realtime",
+    realtimeClient: {
+      isResponseInProgress() {
+        return false;
+      }
+    },
+    pendingResponse: {
+      requestId: 7,
+      userId: "speaker-1",
+      requestedAt: Date.now() - 1_000,
+      retryCount: 0,
+      hardRecoveryAttempted: false,
+      source: "voice_web_lookup:busy_utterance",
+      handlingSilence: false,
+      audioReceivedAt: 0,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      utteranceText: "still looking",
+      latencyContext: null
+    },
+    awaitingToolOutputs: true,
+    activeReplyInterruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "speaker-1"
+    },
+    openAiToolCallExecutions: new Map([
+      ["call-1", { startedAtMs: Date.now() - 200, toolName: "web_search" }]
+    ]),
+    openAiPendingToolAbortControllers: new Map([
+      ["call-1", toolAbortController]
+    ])
+  });
+
+  manager.replyManager.handleResponseDone({
+    session,
+    event: {
+      type: "response.done",
+      response: {
+        id: "resp-tool-followup-1",
+        status: "completed"
+      }
+    }
+  });
+
+  assert.equal(session.pendingResponse, null);
+  assert.equal(toolAbortController.signal.aborted, false);
+  assert.equal(activeReply.abortController.signal.aborted, false);
+  assert.equal(session.awaitingToolOutputs, true);
+  assert.deepEqual(session.activeReplyInterruptionPolicy, {
+    assertive: true,
+    scope: "speaker",
+    allowedUserId: "speaker-1"
+  });
+  const outputChannelState = manager.getOutputChannelState(session);
+  assert.equal(outputChannelState.awaitingToolOutputs, true);
+  assert.equal(outputChannelState.lockReason, "awaiting_tool_outputs");
 });
 
 test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript instead of queueing PCM", () => {
