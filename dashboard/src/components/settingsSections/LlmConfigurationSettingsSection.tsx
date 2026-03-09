@@ -10,6 +10,10 @@ export function LlmConfigurationSettingsSection({
   selectPresetModel,
   providerModelOptions,
   selectedPresetModel,
+  setTextInitiativeProvider,
+  selectTextInitiativePresetModel,
+  textInitiativeModelOptions,
+  selectedTextInitiativePresetModel,
   setReplyFollowupProvider,
   selectReplyFollowupPresetModel,
   replyFollowupModelOptions,
@@ -58,6 +62,47 @@ export function LlmConfigurationSettingsSection({
             value={form.maxTokens}
             onChange={set("maxTokens")}
           />
+        </div>
+      </div>
+
+      <h4>Text Initiative LLM</h4>
+      <p>Optional override for the standalone initiative cycle. Leave this on inherit unless you want proactive posts to use a different model.</p>
+      <div className="toggles">
+        <label>
+          <input
+            type="checkbox"
+            checked={form.textInitiativeUseTextModel}
+            onChange={set("textInitiativeUseTextModel")}
+          />
+          Inherit the main text model
+        </label>
+      </div>
+      <div className="split">
+        <div>
+          <label htmlFor="text-initiative-llm-provider">Provider</label>
+          <select
+            id="text-initiative-llm-provider"
+            value={form.textInitiativeLlmProvider}
+            onChange={setTextInitiativeProvider}
+            disabled={form.textInitiativeUseTextModel}
+          >
+            <LlmProviderOptions />
+          </select>
+        </div>
+        <div>
+          <label htmlFor="text-initiative-llm-model-preset">Model ID</label>
+          <select
+            id="text-initiative-llm-model-preset"
+            value={selectedTextInitiativePresetModel}
+            onChange={selectTextInitiativePresetModel}
+            disabled={form.textInitiativeUseTextModel}
+          >
+            {textInitiativeModelOptions.map((modelId) => (
+              <option key={modelId} value={modelId}>
+                {modelId}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 

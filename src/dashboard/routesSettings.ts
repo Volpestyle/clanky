@@ -8,10 +8,12 @@ import {
   getResolvedOrchestratorBinding,
   getResolvedFollowupBinding,
   getResolvedMemoryBinding,
+  getResolvedTextInitiativeBinding,
   getResolvedVisionBinding,
   getResolvedVoiceInitiativeBinding,
   getResolvedVoiceAdmissionClassifierBinding,
   getResolvedVoiceGenerationBinding,
+  getVoiceConversationPolicy,
   getVoiceRuntimeConfig,
   resolveAgentStack
 } from "../settings/agentStack.ts";
@@ -48,16 +50,20 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
 
   app.post("/api/settings/preset-defaults", async (c) => {
     const body = await readDashboardBody(c);
-    const preset = String(body.preset || "openai_native").trim();
+    const preset = String(body.preset || "claude_oauth").trim();
     const settings = normalizeSettings({ agentStack: { preset } });
     const resolved = resolveSettingsBindings(settings);
     const voiceRuntime = getVoiceRuntimeConfig(settings);
+    const voiceConversation = getVoiceConversationPolicy(settings);
     const classifierFallback = resolved.voiceAdmissionClassifierBinding || resolved.orchestrator;
     const generationBinding = resolved.voiceGenerationBinding;
     return c.json({
       stackPreset: preset,
       provider: resolved.orchestrator.provider,
       model: resolved.orchestrator.model,
+      voiceProvider: resolveVoiceRuntimeSelectionFromMode(voiceRuntime.runtimeMode),
+      voiceReplyPath: voiceConversation.replyPath,
+      voiceTtsMode: voiceConversation.ttsMode,
       voiceReplyDecisionRealtimeAdmissionMode: normalizeVoiceAdmissionModeForDashboard(
         resolved.agentStack.voiceAdmissionPolicy.mode
       ),
@@ -213,6 +219,7 @@ function resolveSettingsBindings(settings: unknown) {
     orchestrator: getResolvedOrchestratorBinding(settings),
     followupBinding: getResolvedFollowupBinding(settings),
     memoryBinding: getResolvedMemoryBinding(settings),
+    textInitiativeBinding: getResolvedTextInitiativeBinding(settings),
     visionBinding: getResolvedVisionBinding(settings),
     voiceProvider: resolveVoiceRuntimeSelectionFromMode(getVoiceRuntimeConfig(settings).runtimeMode),
     voiceInitiativeBinding: getResolvedVoiceInitiativeBinding(settings),

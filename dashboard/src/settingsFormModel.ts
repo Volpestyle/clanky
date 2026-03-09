@@ -36,6 +36,13 @@ export type ResolvedBindings = {
   orchestrator: { provider: string; model: string; temperature?: number; maxOutputTokens?: number; reasoningEffort?: string };
   followupBinding: { provider: string; model: string };
   memoryBinding: { provider: string; model: string };
+  textInitiativeBinding: {
+    provider: string;
+    model: string;
+    temperature?: number;
+    maxOutputTokens?: number;
+    reasoningEffort?: string;
+  };
   visionBinding: { provider: string; model: string };
   voiceProvider: string;
   voiceInitiativeBinding: { provider: string; model: string; temperature?: number };
@@ -54,9 +61,11 @@ function normalizeLlmProvider(value: unknown, fallback = "openai"): string {
 }
 
 function getPresetClassifierFallback(preset: string): { provider: string; model: string } | undefined {
-  if (preset === "claude_oauth_local_tools") return { provider: "claude-oauth", model: "claude-haiku-4-5" };
-  if (preset === "anthropic_brain_openai_tools") return { provider: "anthropic", model: "claude-haiku-4-5" };
-  if (preset === "openai_native") return { provider: "openai", model: "gpt-5-mini" };
+  if (preset === "claude_oauth") return { provider: "claude-oauth", model: "claude-haiku-4-5" };
+  if (preset === "claude_api") return { provider: "anthropic", model: "claude-haiku-4-5" };
+  if (preset === "openai_native_realtime" || preset === "openai_api") return { provider: "openai", model: "gpt-5-mini" };
+  if (preset === "openai_oauth") return { provider: "codex-oauth", model: "gpt-5.4" };
+  if (preset === "grok_native_agent") return { provider: "xai", model: "grok-3-mini-latest" };
   return undefined;
 }
 
@@ -121,7 +130,7 @@ function buildSettingsFormView(settings: unknown) {
   const prompting = valueOr(s.prompting, d.prompting);
   const activity = valueOr(s.interaction?.activity, d.interaction.activity);
   const permissions = valueOr(s.permissions?.replies, d.permissions.replies);
-  const textThoughtLoop = valueOr(s.initiative?.text, d.initiative.text);
+  const textInitiative = valueOr(s.initiative?.text, d.initiative.text);
   const memory = valueOr(s.memory, d.memory);
   const directives = valueOr(s.directives, d.directives);
   const automations = valueOr(s.automations, d.automations);
@@ -152,6 +161,7 @@ function buildSettingsFormView(settings: unknown) {
   const voiceAdmission = valueOr(s.voice?.admission, d.voice.admission);
   const voiceInitiative = valueOr(s.initiative?.voice, d.initiative.voice);
   const voiceInitiativeBinding = resolved?.voiceInitiativeBinding || orchestrator;
+  const textInitiativeBinding = resolved?.textInitiativeBinding || orchestrator;
   const voiceRuntime = valueOr(agentStack.runtimeConfig?.voice, d.agentStack.runtimeConfig.voice);
   const voiceGenerationBinding = resolved?.voiceGenerationBinding || orchestrator;
   const voiceClassifierBinding = resolved?.voiceAdmissionClassifierBinding;
@@ -195,7 +205,12 @@ function buildSettingsFormView(settings: unknown) {
     },
     activity,
     permissions,
-    textThoughtLoop,
+    textInitiative: {
+      ...textInitiative,
+      useTextModel: textInitiative.execution?.mode !== "dedicated_model",
+      provider: textInitiativeBinding.provider,
+      model: textInitiativeBinding.model
+    },
     memory,
     adaptiveDirectives: directives,
     automations,
@@ -353,7 +368,7 @@ export function settingsToForm(settings: unknown) {
   const defaultVoiceStreamWatch = defaults.voice.streamWatch;
   const defaultVoiceSoundboard = defaults.voice.soundboard;
   const defaultStartup = defaults.startup;
-  const defaultTextThoughtLoop = defaults.textThoughtLoop;
+  const defaultTextInitiative = defaults.textInitiative;
   const defaultDiscovery = defaults.discovery;
   const activity = resolved.activity;
   const selectedVoiceProvider = resolved.voice.voiceProvider;
@@ -385,17 +400,29 @@ export function settingsToForm(settings: unknown) {
     allowUnsolicitedReplies:
       resolved.permissions.allowUnsolicitedReplies ?? defaultPermissions.allowUnsolicitedReplies,
     allowReactions: resolved.permissions.allowReactions ?? defaultPermissions.allowReactions,
-    textThoughtLoopEnabled:
-      resolved.textThoughtLoop.enabled ?? defaultTextThoughtLoop.enabled,
-    textThoughtLoopEagerness:
-      resolved.textThoughtLoop.eagerness ?? defaultTextThoughtLoop.eagerness,
-    textThoughtLoopMinMinutesBetweenThoughts:
-      resolved.textThoughtLoop.minMinutesBetweenThoughts ??
-      defaultTextThoughtLoop.minMinutesBetweenThoughts,
-    textThoughtLoopMaxThoughtsPerDay:
-      resolved.textThoughtLoop.maxThoughtsPerDay ?? defaultTextThoughtLoop.maxThoughtsPerDay,
-    textThoughtLoopLookbackMessages:
-      resolved.textThoughtLoop.lookbackMessages ?? defaultTextThoughtLoop.lookbackMessages,
+    textInitiativeEnabled:
+      resolved.textInitiative.enabled ?? defaultTextInitiative.enabled,
+    textInitiativeEagerness:
+      resolved.textInitiative.eagerness ?? defaultTextInitiative.eagerness,
+    textInitiativeMinMinutesBetweenPosts:
+      resolved.textInitiative.minMinutesBetweenPosts ??
+      defaultTextInitiative.minMinutesBetweenPosts,
+    textInitiativeMaxPostsPerDay:
+      resolved.textInitiative.maxPostsPerDay ?? defaultTextInitiative.maxPostsPerDay,
+    textInitiativeLookbackMessages:
+      resolved.textInitiative.lookbackMessages ?? defaultTextInitiative.lookbackMessages,
+    textInitiativeAllowActiveCuriosity:
+      resolved.textInitiative.allowActiveCuriosity ?? defaultTextInitiative.allowActiveCuriosity,
+    textInitiativeMaxToolSteps:
+      resolved.textInitiative.maxToolSteps ?? defaultTextInitiative.maxToolSteps,
+    textInitiativeMaxToolCalls:
+      resolved.textInitiative.maxToolCalls ?? defaultTextInitiative.maxToolCalls,
+    textInitiativeUseTextModel:
+      resolved.textInitiative.useTextModel ?? defaultTextInitiative.useTextModel,
+    textInitiativeLlmProvider:
+      resolved.textInitiative.provider ?? defaultTextInitiative.provider,
+    textInitiativeLlmModel:
+      resolved.textInitiative.model ?? defaultTextInitiative.model,
     memoryEnabled: resolved.memory.enabled ?? defaults.memory.enabled,
     adaptiveDirectivesEnabled:
       resolved.adaptiveDirectives.enabled ?? defaults.adaptiveDirectives.enabled,
@@ -482,7 +509,7 @@ export function settingsToForm(settings: unknown) {
     voiceAsrLanguageHint: resolved?.voice?.asrLanguageHint ?? defaultVoice.asrLanguageHint,
     voiceAllowNsfwHumor: resolved?.voice?.allowNsfwHumor ?? defaultVoice.allowNsfwHumor,
     voiceDefaultInterruptionMode:
-      resolved?.voice?.defaultInterruptionMode ?? defaultVoice.defaultInterruptionMode ?? "anyone",
+      resolved?.voice?.defaultInterruptionMode ?? defaultVoice.defaultInterruptionMode ?? "speaker",
     voiceMaxSessionMinutes: resolved?.voice?.maxSessionMinutes ?? defaultVoice.maxSessionMinutes,
     voiceInactivityLeaveSeconds: resolved?.voice?.inactivityLeaveSeconds ?? defaultVoice.inactivityLeaveSeconds,
     voiceMaxSessionsPerDay: resolved?.voice?.maxSessionsPerDay ?? defaultVoice.maxSessionsPerDay,
@@ -555,8 +582,6 @@ export function settingsToForm(settings: unknown) {
       resolved?.voice?.streamWatch?.minCommentaryIntervalSeconds ?? defaultVoiceStreamWatch.minCommentaryIntervalSeconds,
     voiceStreamWatchMaxFramesPerMinute: resolved?.voice?.streamWatch?.maxFramesPerMinute ?? defaultVoiceStreamWatch.maxFramesPerMinute,
     voiceStreamWatchMaxFrameBytes: resolved?.voice?.streamWatch?.maxFrameBytes ?? defaultVoiceStreamWatch.maxFrameBytes,
-    voiceStreamWatchCommentaryPath:
-      resolved?.voice?.streamWatch?.commentaryPath ?? defaultVoiceStreamWatch.commentaryPath,
     voiceStreamWatchKeyframeIntervalMs:
       resolved?.voice?.streamWatch?.keyframeIntervalMs ?? defaultVoiceStreamWatch.keyframeIntervalMs,
     voiceStreamWatchAutonomousCommentaryEnabled:
@@ -596,17 +621,6 @@ export function settingsToForm(settings: unknown) {
     catchupLookbackHours: resolved?.startup?.catchupLookbackHours ?? defaultStartup.catchupLookbackHours,
     catchupMaxMessages: resolved?.startup?.catchupMaxMessagesPerChannel ?? defaultStartup.catchupMaxMessagesPerChannel,
     catchupMaxReplies: resolved?.startup?.maxCatchupRepliesPerChannel ?? defaultStartup.maxCatchupRepliesPerChannel,
-    discoveryEnabled: resolved?.discovery?.enabled ?? defaultDiscovery.enabled,
-    discoveryPostsPerDay:
-      resolved?.discovery?.maxPostsPerDay ?? defaultDiscovery.maxPostsPerDay,
-    discoveryMinMinutes:
-      resolved?.discovery?.minMinutesBetweenPosts ?? defaultDiscovery.minMinutesBetweenPosts,
-    discoveryPacingMode:
-      String(resolved?.discovery?.pacingMode || defaultDiscovery.pacingMode) === "spontaneous" ? "spontaneous" : "even",
-    discoverySpontaneity:
-      resolved?.discovery?.spontaneity ?? defaultDiscovery.spontaneity,
-    discoveryStartupPost:
-      resolved?.discovery?.postOnStartup ?? defaultDiscovery.postOnStartup,
     discoveryImageEnabled:
       resolved?.discovery?.allowImagePosts ?? defaultDiscovery.allowImagePosts,
     discoveryVideoEnabled:
@@ -617,6 +631,13 @@ export function settingsToForm(settings: unknown) {
       resolved?.discovery?.allowReplyVideos ?? defaultDiscovery.allowReplyVideos,
     replyGifEnabled:
       resolved?.discovery?.allowReplyGifs ?? defaultDiscovery.allowReplyGifs,
+    discoveryFeedEnabled: Boolean(
+      resolved?.discovery?.sources?.reddit ||
+      resolved?.discovery?.sources?.hackerNews ||
+      resolved?.discovery?.sources?.youtube ||
+      resolved?.discovery?.sources?.rss ||
+      resolved?.discovery?.sources?.x
+    ),
     maxImagesPerDay: resolved?.discovery?.maxImagesPerDay ?? defaultDiscovery.maxImagesPerDay,
     maxVideosPerDay: resolved?.discovery?.maxVideosPerDay ?? defaultDiscovery.maxVideosPerDay,
     maxGifsPerDay: resolved?.discovery?.maxGifsPerDay ?? defaultDiscovery.maxGifsPerDay,
@@ -630,20 +651,12 @@ export function settingsToForm(settings: unknown) {
       formatLineList(resolved?.discovery?.allowedImageModels ?? []),
     discoveryAllowedVideoModels:
       formatLineList(resolved?.discovery?.allowedVideoModels ?? []),
-    discoveryExternalEnabled: Boolean(
-      Number(resolved?.discovery?.linkChancePercent) > 0 ||
-      resolved?.discovery?.sources?.reddit ||
-      resolved?.discovery?.sources?.hackerNews ||
-      resolved?.discovery?.sources?.youtube ||
-      resolved?.discovery?.sources?.rss ||
-      resolved?.discovery?.sources?.x
-    ),
-    discoveryLinkChance:
-      resolved?.discovery?.linkChancePercent ?? defaultDiscovery.linkChancePercent,
     discoveryMaxLinks:
       resolved?.discovery?.maxLinksPerPost ?? defaultDiscovery.maxLinksPerPost,
     discoveryMaxCandidates:
       resolved?.discovery?.maxCandidatesForPrompt ?? defaultDiscovery.maxCandidatesForPrompt,
+    discoveryMaxMediaPromptChars:
+      resolved?.discovery?.maxMediaPromptChars ?? defaultDiscovery.maxMediaPromptChars,
     discoveryFreshnessHours:
       resolved?.discovery?.freshnessHours ?? defaultDiscovery.freshnessHours,
     discoveryDedupeHours:
@@ -654,6 +667,10 @@ export function settingsToForm(settings: unknown) {
       resolved?.discovery?.sourceFetchLimit ?? defaultDiscovery.sourceFetchLimit,
     discoveryAllowNsfw:
       resolved?.discovery?.allowNsfw ?? defaultDiscovery.allowNsfw,
+    discoveryAllowSelfCuration:
+      resolved?.discovery?.allowSelfCuration ?? defaultDiscovery.allowSelfCuration,
+    discoveryMaxSourcesPerType:
+      resolved?.discovery?.maxSourcesPerType ?? defaultDiscovery.maxSourcesPerType,
     discoverySourceReddit:
       resolved?.discovery?.sources?.reddit ?? defaultDiscovery.sources.reddit,
     discoverySourceHackerNews:
@@ -664,8 +681,6 @@ export function settingsToForm(settings: unknown) {
       resolved?.discovery?.sources?.rss ?? defaultDiscovery.sources.rss,
     discoverySourceX:
       resolved?.discovery?.sources?.x ?? defaultDiscovery.sources.x,
-    discoveryPreferredTopics:
-      formatLineList(resolved?.discovery?.preferredTopics),
     discoveryRedditSubs:
       formatLineList(resolved?.discovery?.redditSubreddits),
     discoveryYoutubeChannels:
@@ -677,7 +692,6 @@ export function settingsToForm(settings: unknown) {
     discoveryXNitterBase:
       resolved?.discovery?.xNitterBaseUrl ?? defaultDiscovery.xNitterBaseUrl,
     replyChannels: formatLineList(resolved?.permissions?.replyChannelIds),
-    discoveryChannels: formatLineList(resolved?.discovery?.channelIds),
     allowedChannels: formatLineList(resolved?.permissions?.allowedChannelIds),
     blockedChannels: formatLineList(resolved?.permissions?.blockedChannelIds),
     blockedUsers: formatLineList(resolved?.permissions?.blockedUserIds)
@@ -692,6 +706,11 @@ export function applyStackPresetDefaults(form: SettingsForm, defaults: Record<st
     stackPreset: String(defaults.stackPreset || form.stackPreset),
     provider: String(defaults.provider || form.provider),
     model: String(defaults.model || form.model),
+    voiceProvider: resolveVoiceRuntimeSelectionFromMode(
+      resolveVoiceRuntimeModeFromSelection(String(defaults.voiceProvider || form.voiceProvider))
+    ),
+    voiceReplyPath: String(defaults.voiceReplyPath || form.voiceReplyPath),
+    voiceTtsMode: String(defaults.voiceTtsMode || form.voiceTtsMode),
     voiceReplyDecisionRealtimeAdmissionMode: normalizeVoiceAdmissionModeForDashboard(
       defaults.voiceReplyDecisionRealtimeAdmissionMode || form.voiceReplyDecisionRealtimeAdmissionMode
     ),
@@ -714,7 +733,7 @@ export function getCodeAgentValidationError(form: SettingsForm): string {
 }
 
 export function formToSettingsPatch(form: SettingsForm): SettingsInput {
-  const discoveryExternalEnabled = Boolean(form.discoveryExternalEnabled);
+  const discoveryFeedEnabled = Boolean(form.discoveryFeedEnabled);
   const advancedOverridesEnabled = Boolean(form.stackAdvancedOverridesEnabled);
   const normalizedVoiceReplyPath = String(form.voiceReplyPath || "brain").trim().toLowerCase();
   const normalizedVoiceTtsMode = normalizedVoiceReplyPath === "brain" &&
@@ -805,7 +824,7 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
       }
     },
     agentStack: {
-      preset: String(form.stackPreset || "openai_native").trim(),
+      preset: String(form.stackPreset || "claude_oauth").trim(),
       advancedOverridesEnabled,
       overrides: advancedOverridesEnabled ? {
         orchestrator: {
@@ -968,14 +987,25 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
     },
     initiative: {
       text: {
-        enabled: Boolean(form.textThoughtLoopEnabled),
-        execution: {
-          mode: "inherit_orchestrator"
-        },
-        eagerness: Number(form.textThoughtLoopEagerness),
-        minMinutesBetweenThoughts: Number(form.textThoughtLoopMinMinutesBetweenThoughts),
-        maxThoughtsPerDay: Number(form.textThoughtLoopMaxThoughtsPerDay),
-        lookbackMessages: Number(form.textThoughtLoopLookbackMessages)
+        enabled: Boolean(form.textInitiativeEnabled),
+        execution: form.textInitiativeUseTextModel
+          ? {
+              mode: "inherit_orchestrator"
+            }
+          : {
+              mode: "dedicated_model",
+              model: {
+                provider: String(form.textInitiativeLlmProvider || "").trim(),
+                model: String(form.textInitiativeLlmModel || "").trim()
+              }
+            },
+        eagerness: Number(form.textInitiativeEagerness),
+        minMinutesBetweenPosts: Number(form.textInitiativeMinMinutesBetweenPosts),
+        maxPostsPerDay: Number(form.textInitiativeMaxPostsPerDay),
+        lookbackMessages: Number(form.textInitiativeLookbackMessages),
+        allowActiveCuriosity: Boolean(form.textInitiativeAllowActiveCuriosity),
+        maxToolSteps: Number(form.textInitiativeMaxToolSteps),
+        maxToolCalls: Number(form.textInitiativeMaxToolCalls)
       },
       voice: {
         enabled: Boolean(form.voiceThoughtEngineEnabled),
@@ -984,13 +1014,6 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
         minSecondsBetweenThoughts: Number(form.voiceThoughtEngineMinSecondsBetweenThoughts)
       },
       discovery: {
-        enabled: form.discoveryEnabled,
-        channelIds: parseUniqueList(form.discoveryChannels),
-        maxPostsPerDay: Number(form.discoveryPostsPerDay),
-        minMinutesBetweenPosts: Number(form.discoveryMinMinutes),
-        pacingMode: form.discoveryPacingMode,
-        spontaneity: Number(form.discoverySpontaneity),
-        postOnStartup: form.discoveryStartupPost,
         allowImagePosts: form.discoveryImageEnabled,
         allowVideoPosts: form.discoveryVideoEnabled,
         allowReplyImages: form.replyImageEnabled,
@@ -1004,26 +1027,27 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
         videoModel: form.discoveryVideoModel.trim(),
         allowedImageModels: parseUniqueList(form.discoveryAllowedImageModels),
         allowedVideoModels: parseUniqueList(form.discoveryAllowedVideoModels),
-        linkChancePercent: discoveryExternalEnabled ? Number(form.discoveryLinkChance) : 0,
+        maxMediaPromptChars: Number(form.discoveryMaxMediaPromptChars),
         maxLinksPerPost: Number(form.discoveryMaxLinks),
         maxCandidatesForPrompt: Number(form.discoveryMaxCandidates),
         freshnessHours: Number(form.discoveryFreshnessHours),
         dedupeHours: Number(form.discoveryDedupeHours),
         randomness: Number(form.discoveryRandomness),
         sourceFetchLimit: Number(form.discoveryFetchLimit),
-        allowNsfw: discoveryExternalEnabled ? form.discoveryAllowNsfw : false,
-        preferredTopics: parseUniqueList(form.discoveryPreferredTopics),
+        allowNsfw: discoveryFeedEnabled ? form.discoveryAllowNsfw : false,
+        allowSelfCuration: Boolean(form.discoveryAllowSelfCuration),
+        maxSourcesPerType: Number(form.discoveryMaxSourcesPerType),
         redditSubreddits: parseUniqueList(form.discoveryRedditSubs),
         youtubeChannelIds: parseUniqueList(form.discoveryYoutubeChannels),
         rssFeeds: parseUniqueList(form.discoveryRssFeeds),
         xHandles: parseUniqueList(form.discoveryXHandles),
         xNitterBaseUrl: form.discoveryXNitterBase.trim(),
         sources: {
-          reddit: discoveryExternalEnabled ? form.discoverySourceReddit : false,
-          hackerNews: discoveryExternalEnabled ? form.discoverySourceHackerNews : false,
-          youtube: discoveryExternalEnabled ? form.discoverySourceYoutube : false,
-          rss: discoveryExternalEnabled ? form.discoverySourceRss : false,
-          x: discoveryExternalEnabled ? form.discoverySourceX : false
+          reddit: discoveryFeedEnabled ? form.discoverySourceReddit : false,
+          hackerNews: discoveryFeedEnabled ? form.discoverySourceHackerNews : false,
+          youtube: discoveryFeedEnabled ? form.discoverySourceYoutube : false,
+          rss: discoveryFeedEnabled ? form.discoverySourceRss : false,
+          x: discoveryFeedEnabled ? form.discoverySourceX : false
         }
       }
     },
@@ -1055,7 +1079,7 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
         commandOnlyMode: Boolean(form.voiceCommandOnlyMode),
         allowNsfwHumor: form.voiceAllowNsfwHumor,
         textOnlyMode: Boolean(form.voiceTextOnlyMode),
-        defaultInterruptionMode: String(form.voiceDefaultInterruptionMode || "anyone").trim().toLowerCase(),
+        defaultInterruptionMode: String(form.voiceDefaultInterruptionMode || "speaker").trim().toLowerCase(),
         replyPath: normalizedVoiceReplyPath,
         ttsMode: normalizedVoiceTtsMode,
         operationalMessages: String(form.voiceOperationalMessages || "minimal").trim().toLowerCase()
@@ -1071,7 +1095,6 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
         minCommentaryIntervalSeconds: Number(form.voiceStreamWatchMinCommentaryIntervalSeconds),
         maxFramesPerMinute: Number(form.voiceStreamWatchMaxFramesPerMinute),
         maxFrameBytes: Number(form.voiceStreamWatchMaxFrameBytes),
-        commentaryPath: String(form.voiceStreamWatchCommentaryPath || "").trim(),
         keyframeIntervalMs: Number(form.voiceStreamWatchKeyframeIntervalMs),
         autonomousCommentaryEnabled: Boolean(form.voiceStreamWatchAutonomousCommentaryEnabled),
         brainContextEnabled: Boolean(form.voiceStreamWatchBrainContextEnabled),
@@ -1134,14 +1157,12 @@ const LIST_FORM_KEYS: ReadonlySet<string> = new Set([
   "voiceSoundboardPreferredSoundIds",
   "discoveryAllowedImageModels",
   "discoveryAllowedVideoModels",
-  "discoveryPreferredTopics",
   "discoveryRedditSubs",
   "discoveryYoutubeChannels",
   "discoveryRssFeeds",
   "discoveryXHandles",
   "codeAgentAllowedUserIds",
   "replyChannels",
-  "discoveryChannels",
   "allowedChannels",
   "blockedChannels",
   "blockedUsers"

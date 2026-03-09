@@ -738,7 +738,7 @@ test("dashboard preset defaults preserve the claude oauth voice admission mode",
         "content-type": "application/json"
       },
       body: JSON.stringify({
-        preset: "claude_oauth_local_tools"
+        preset: "claude_oauth"
       })
     });
 

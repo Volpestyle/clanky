@@ -6,18 +6,10 @@ export function ChannelsPermissionsSettingsSection({ id, form, set }) {
   return (
     <SettingsSection id={id} title="Channels & Permissions">
       <ChannelChecklist
-        label="Reply channels (text)"
-        hint="Channels where unsolicited replies are allowed. Leave empty to disable unsolicited replies everywhere."
+        label="Initiative + unsolicited reply channels (text)"
+        hint="This is the shared eligible pool for standalone initiative posts and unsolicited replies. Leave empty to disable bot-initiated text activity everywhere."
         value={form.replyChannels}
         onChange={set("replyChannels")}
-        channelType="text"
-      />
-
-      <ChannelChecklist
-        label="Discovery post channels (text)"
-        hint="Channels where discovery posts are allowed. Leave empty to disable discovery posting."
-        value={form.discoveryChannels}
-        onChange={set("discoveryChannels")}
         channelType="text"
       />
 

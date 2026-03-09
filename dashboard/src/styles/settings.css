@@ -368,44 +368,103 @@
   padding: 10px 12px;
 }
 
-.vps-runtime-summary {
+/* -- screen share settings -- */
+
+.ssm-card {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: rgba(4, 12, 10, 0.32);
-  padding: 12px 14px;
+  padding: 14px 16px;
   margin: 8px 0 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
 
-.vps-runtime-summary-title {
+.ssm-title {
   font-size: 0.72rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--accent);
+  margin-bottom: 10px;
 }
 
-.vps-runtime-summary-row {
+.ssm-list {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.vps-runtime-summary-label {
-  font-size: 0.74rem;
+.ssm-row {
+  display: grid;
+  grid-template-columns: 128px 18px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.ssm-label {
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-1);
+}
+
+.ssm-arrow {
+  color: var(--accent);
+  opacity: 0.7;
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
+.ssm-detail {
+  font-size: 0.7rem;
+  line-height: 1.45;
   color: var(--ink-2);
 }
 
-.vps-runtime-summary-value {
-  font-size: 0.74rem;
-  color: var(--ink-0);
-  font-family: "IBM Plex Mono", monospace;
+.vps-advanced-card {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+  overflow: hidden;
 }
 
+.vps-advanced-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.vps-advanced-summary::-webkit-details-marker {
+  display: none;
+}
+
+.vps-advanced-arrow {
+  font-size: 0.68rem;
+  color: var(--ink-3);
+  opacity: 0.7;
+  transition: transform var(--transition);
+}
+
+.vps-advanced-card[open] .vps-advanced-arrow {
+  transform: rotate(90deg);
+}
+
+.vps-advanced-summary-copy {
+  margin-left: auto;
+  font-size: 0.68rem;
+  color: var(--ink-3);
+}
+
+.vps-advanced-body {
+  padding: 0 12px 12px;
+}
+
+/* legacy class kept for other uses */
 .vps-runtime-summary-note {
   margin: 0;
   font-size: 0.72rem;
@@ -435,6 +494,19 @@
   }
   .settings-nav-item.active {
     border-color: var(--accent);
+  }
+  .ssm-row {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+  .ssm-arrow {
+    display: none;
+  }
+  .vps-advanced-summary {
+    flex-wrap: wrap;
+  }
+  .vps-advanced-summary-copy {
+    margin-left: 0;
   }
 }
 

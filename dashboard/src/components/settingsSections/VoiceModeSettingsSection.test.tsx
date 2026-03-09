@@ -43,7 +43,6 @@ function buildProps(mode: unknown, formOverrides: Record<string, unknown> = {}) 
       voiceThoughtEngineEnabled: false,
       voiceStreamWatchEnabled: false,
       voiceSoundboardEnabled: false,
-      voiceStreamWatchCommentaryPath: "auto",
       voiceStreamWatchBrainContextProvider: "",
       voiceStreamWatchBrainContextModel: "",
       provider: "claude-oauth",
@@ -136,4 +135,23 @@ test("full brain path keeps TTS mode controls visible", () => {
 
   assert.equal(markup.includes("TTS Mode"), true);
   assert.equal(markup.includes("TTS API"), true);
+});
+
+test("stream watch renders a compact mental model and hides advanced tuning behind disclosure copy", () => {
+  const markup = renderToStaticMarkup(
+    React.createElement(
+      VoiceModeSettingsSection,
+      buildProps("generation_decides", {
+        voiceStreamWatchEnabled: true,
+        voiceStreamWatchAutonomousCommentaryEnabled: true,
+        voiceStreamWatchBrainContextEnabled: true,
+        voiceStreamWatchBrainContextProvider: "claude-oauth",
+        voiceStreamWatchBrainContextModel: "claude-opus-4-6"
+      })
+    )
+  );
+
+  assert.equal(markup.includes("How screen share works"), true);
+  assert.equal(markup.includes("Advanced stream watch settings"), true);
+  assert.equal(markup.includes("Screen share pipeline"), false);
 });

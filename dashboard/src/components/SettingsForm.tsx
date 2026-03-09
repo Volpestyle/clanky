@@ -80,7 +80,7 @@ export default function SettingsForm({
       { id: "sec-voice", label: "Voice" },
       { id: "sec-rate", label: "Rate Limits" },
       { id: "sec-startup", label: "Startup" },
-      { id: "sec-discovery", label: "Discovery" },
+      { id: "sec-discovery", label: "Feed & Media" },
       { id: "sec-channels", label: "Channels" }
     ];
     if (effectiveForm.stackAdvancedOverridesEnabled) {
@@ -131,6 +131,10 @@ export default function SettingsForm({
     options: providerModelOptions,
     selectedPresetModel
   } = resolvePresetSelection("provider", "model");
+  const {
+    options: textInitiativeModelOptions,
+    selectedPresetModel: selectedTextInitiativePresetModel
+  } = resolvePresetSelection("textInitiativeLlmProvider", "textInitiativeLlmModel");
   const {
     options: replyFollowupModelOptions,
     selectedPresetModel: selectedReplyFollowupPresetModel
@@ -203,7 +207,7 @@ export default function SettingsForm({
   const isGeminiRealtimeMode = effectiveForm.voiceProvider === "gemini";
   const isElevenLabsRealtimeMode = effectiveForm.voiceProvider === "elevenlabs";
   const showVoiceSettings = effectiveForm.voiceEnabled;
-  const showDiscoveryAdvanced = effectiveForm.discoveryEnabled;
+  const showDiscoveryFeedControls = effectiveForm.discoveryFeedEnabled;
   const showDiscoveryImageControls = effectiveForm.discoveryImageEnabled || effectiveForm.replyImageEnabled;
   const showDiscoveryVideoControls = effectiveForm.discoveryVideoEnabled || effectiveForm.replyVideoEnabled;
 
@@ -219,6 +223,7 @@ export default function SettingsForm({
         changed = true;
       };
       syncModel("model", selectedPresetModel);
+      syncModel("textInitiativeLlmModel", selectedTextInitiativePresetModel);
       syncModel("replyFollowupLlmModel", selectedReplyFollowupPresetModel);
       syncModel("memoryLlmModel", selectedMemoryLlmPresetModel);
       syncModel("browserLlmModel", selectedBrowserLlmPresetModel);
@@ -230,10 +235,15 @@ export default function SettingsForm({
         syncModel("voiceGenerationLlmProvider", next.provider);
         syncModel("voiceGenerationLlmModel", selectedPresetModel);
       }
+      if (next.textInitiativeUseTextModel) {
+        syncModel("textInitiativeLlmProvider", next.provider);
+        syncModel("textInitiativeLlmModel", selectedPresetModel);
+      }
       return changed ? next : current;
     });
   }, [
     selectedPresetModel,
+    selectedTextInitiativePresetModel,
     selectedReplyFollowupPresetModel,
     selectedMemoryLlmPresetModel,
     selectedBrowserLlmPresetModel,
@@ -297,6 +307,7 @@ export default function SettingsForm({
   }
 
   const setProvider = createProviderSetter("provider", "model");
+  const setTextInitiativeProvider = createProviderSetter("textInitiativeLlmProvider", "textInitiativeLlmModel");
   const setMemoryLlmProvider = createProviderSetter("memoryLlmProvider", "memoryLlmModel");
   const setReplyFollowupProvider = createProviderSetter("replyFollowupLlmProvider", "replyFollowupLlmModel");
   const setBrowserLlmProvider = createProviderSetter("browserLlmProvider", "browserLlmModel");
@@ -316,6 +327,7 @@ export default function SettingsForm({
   }
 
   const selectPresetModel = createPresetSelector("model");
+  const selectTextInitiativePresetModel = createPresetSelector("textInitiativeLlmModel");
   const selectReplyFollowupPresetModel = createPresetSelector("replyFollowupLlmModel");
   const selectMemoryLlmPresetModel = createPresetSelector("memoryLlmModel");
   const selectBrowserLlmPresetModel = createPresetSelector("browserLlmModel");
@@ -399,13 +411,42 @@ export default function SettingsForm({
 
           <SettingsSection id="sec-stack" title="Stack Preset">
             <label htmlFor="stack-preset">Preset</label>
-            <select id="stack-preset" value={form.stackPreset} onChange={set("stackPreset")}>
-              <option value="openai_native">OpenAI Native</option>
-              <option value="anthropic_brain_openai_tools">Anthropic Brain + OpenAI Hosted Tools</option>
-              <option value="claude_oauth_local_tools">Claude OAuth + Local Tools</option>
-              <option value="custom">Custom</option>
-            </select>
-
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <select id="stack-preset" value={form.stackPreset} onChange={set("stackPreset")} style={{ flex: 1 }}>
+                <option value="claude_oauth">Claude OAuth</option>
+                <option value="claude_api">Claude API</option>
+                <option value="openai_native_realtime">OpenAI Native Realtime</option>
+                <option value="openai_api">OpenAI API</option>
+                <option value="openai_oauth">OpenAI OAuth</option>
+                <option value="grok_native_agent">Grok Native Agent</option>
+              </select>
+              <button
+                type="button"
+                style={{
+                  flex: "0 0 auto",
+                  padding: "6px 10px",
+                  whiteSpace: "nowrap",
+                  fontSize: "0.76rem",
+                  fontWeight: 600,
+                  background: "transparent",
+                  color: "var(--text-muted)",
+                  border: "1px solid var(--border)"
+                }}
+                onClick={() => {
+                  api<Record<string, unknown>>("/api/settings/preset-defaults", {
+                    method: "POST",
+                    body: { preset: form.stackPreset }
+                  }).then((defaults) => {
+                    setForm((current) => applyStackPresetDefaults(current || defaultForm, defaults));
+                  }).catch((err) => {
+                    console.error("Failed to reset preset defaults:", err);
+                  });
+                }}
+                title="Reset stack settings to this preset's defaults"
+              >
+                Reset to preset defaults
+              </button>
+            </div>
           </SettingsSection>
 
           <LlmConfigurationSettingsSection
@@ -416,6 +457,10 @@ export default function SettingsForm({
             selectPresetModel={selectPresetModel}
             providerModelOptions={providerModelOptions}
             selectedPresetModel={selectedPresetModel}
+            setTextInitiativeProvider={setTextInitiativeProvider}
+            selectTextInitiativePresetModel={selectTextInitiativePresetModel}
+            textInitiativeModelOptions={textInitiativeModelOptions}
+            selectedTextInitiativePresetModel={selectedTextInitiativePresetModel}
             setReplyFollowupProvider={setReplyFollowupProvider}
             selectReplyFollowupPresetModel={selectReplyFollowupPresetModel}
             replyFollowupModelOptions={replyFollowupModelOptions}
@@ -488,7 +533,7 @@ export default function SettingsForm({
             id="sec-discovery"
             form={form}
             set={set}
-            showDiscoveryAdvanced={showDiscoveryAdvanced}
+            showDiscoveryFeedControls={showDiscoveryFeedControls}
             showDiscoveryImageControls={showDiscoveryImageControls}
             showDiscoveryVideoControls={showDiscoveryVideoControls}
             discoveryImageModelOptions={discoveryImageModelOptions}
@@ -531,28 +576,6 @@ export default function SettingsForm({
               <path d="M3.51 9a9 9 0 0 1 14.13-3.36L23 10M1 14l5.36 4.36A9 9 0 0 0 20.49 15" />
             </svg>
             <span>{refreshRuntimeBusy ? "Syncing" : "Live"}</span>
-          </button>
-          <button
-            type="button"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              flex: "0 0 auto",
-              marginTop: 0,
-              padding: "6px 10px",
-              whiteSpace: "nowrap",
-              fontSize: "0.76rem",
-              fontWeight: 600,
-              background: "transparent",
-              color: "var(--text-muted)",
-              border: "1px solid var(--border)"
-            }}
-            onClick={resetAllSettings}
-            title="Reset all settings to defaults"
-            aria-label="Reset all settings to defaults"
-          >
-            Reset defaults
           </button>
         </div>
         {toast.text && (

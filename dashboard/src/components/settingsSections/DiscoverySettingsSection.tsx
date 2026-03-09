@@ -7,53 +7,47 @@ export function DiscoverySettingsSection({
   id,
   form,
   set,
-  showDiscoveryAdvanced,
+  showDiscoveryFeedControls,
   showDiscoveryImageControls,
   showDiscoveryVideoControls,
   discoveryImageModelOptions,
   discoveryVideoModelOptions
 }) {
+  const sectionActive =
+    form.discoveryFeedEnabled ||
+    form.discoveryImageEnabled ||
+    form.discoveryVideoEnabled ||
+    form.replyImageEnabled ||
+    form.replyVideoEnabled ||
+    form.replyGifEnabled;
+
   return (
-    <SettingsSection id={id} title="Discovery Posts & Media" active={form.discoveryEnabled}>
+    <SettingsSection id={id} title="Initiative Feed & Media" active={sectionActive}>
       <div className="toggles">
         <label>
           <input
             type="checkbox"
-            checked={form.discoveryEnabled}
-            onChange={set("discoveryEnabled")}
+            checked={form.discoveryFeedEnabled}
+            onChange={set("discoveryFeedEnabled")}
           />
-          Enable discovery posting
+          Enable passive discovery feed inputs
         </label>
-        {showDiscoveryAdvanced && (
-          <label>
-            <input
-              type="checkbox"
-              checked={form.discoveryStartupPost}
-              onChange={set("discoveryStartupPost")}
-            />
-            Post on startup when due
-          </label>
-        )}
-        {showDiscoveryAdvanced && (
-          <label>
-            <input
-              type="checkbox"
-              checked={form.discoveryImageEnabled}
-              onChange={set("discoveryImageEnabled")}
-            />
-            Allow discovery image posts
-          </label>
-        )}
-        {showDiscoveryAdvanced && (
-          <label>
-            <input
-              type="checkbox"
-              checked={form.discoveryVideoEnabled}
-              onChange={set("discoveryVideoEnabled")}
-            />
-            Allow discovery video posts
-          </label>
-        )}
+        <label>
+          <input
+            type="checkbox"
+            checked={form.discoveryImageEnabled}
+            onChange={set("discoveryImageEnabled")}
+          />
+          Allow initiative image posts
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.discoveryVideoEnabled}
+            onChange={set("discoveryVideoEnabled")}
+          />
+          Allow initiative video posts
+        </label>
         <label>
           <input
             type="checkbox"
@@ -80,63 +74,8 @@ export function DiscoverySettingsSection({
         </label>
       </div>
 
-      <Collapse open={showDiscoveryAdvanced}>
-        <div className="split">
-          <div>
-            <label htmlFor="discovery-posts-per-day">Max discovery posts/day</label>
-            <input
-              id="discovery-posts-per-day"
-              type="number"
-              min="0"
-              max="100"
-              value={form.discoveryPostsPerDay}
-              onChange={set("discoveryPostsPerDay")}
-            />
-          </div>
-          <div>
-            <label htmlFor="discovery-min-minutes">Min minutes between discovery posts</label>
-            <input
-              id="discovery-min-minutes"
-              type="number"
-              min="5"
-              max="1440"
-              value={form.discoveryMinMinutes}
-              onChange={set("discoveryMinMinutes")}
-            />
-          </div>
-        </div>
-
-        <div className="split">
-          <div>
-            <label htmlFor="discovery-pacing-mode">Discovery pacing mode</label>
-            <select
-              id="discovery-pacing-mode"
-              value={form.discoveryPacingMode}
-              onChange={set("discoveryPacingMode")}
-            >
-              <option value="even">Even pacing (strict)</option>
-              <option value="spontaneous">Spontaneous (randomized)</option>
-            </select>
-          </div>
-          <div>
-            <label htmlFor="discovery-spontaneity">
-              Spontaneity: <strong>{form.discoverySpontaneity}%</strong>
-            </label>
-            <input
-              id="discovery-spontaneity"
-              type="range"
-              min="0"
-              max="100"
-              step="1"
-              value={form.discoverySpontaneity}
-              onChange={set("discoverySpontaneity")}
-              style={rangeStyle(form.discoverySpontaneity)}
-            />
-          </div>
-        </div>
-      </Collapse>
-
       <Collapse open={showDiscoveryImageControls}>
+        <h4>Image Generation</h4>
         <div className="split">
           <div>
             <label htmlFor="max-images-per-day">Max generated images/24h</label>
@@ -193,6 +132,7 @@ export function DiscoverySettingsSection({
       </Collapse>
 
       <Collapse open={showDiscoveryVideoControls}>
+        <h4>Video Generation</h4>
         <div className="split">
           <div>
             <label htmlFor="max-videos-per-day">Max generated videos/24h</label>
@@ -247,226 +187,229 @@ export function DiscoverySettingsSection({
         </div>
       )}
 
-      <Collapse open={showDiscoveryAdvanced}>
-        <h4>External Discovery</h4>
+      <Collapse open={showDiscoveryFeedControls}>
+        <h4>Passive Feed Inputs</h4>
+        <p>These sources seed the initiative prompt. The agent decides whether to use them, where they fit, or whether to ignore them.</p>
+
         <div className="toggles">
           <label>
             <input
               type="checkbox"
-              checked={form.discoveryExternalEnabled}
-              onChange={set("discoveryExternalEnabled")}
+              checked={form.discoveryAllowNsfw}
+              onChange={set("discoveryAllowNsfw")}
             />
-            Enable external discovery inputs
+            Allow NSFW discovery items
           </label>
-          {form.discoveryExternalEnabled && (
-            <label>
-              <input
-                type="checkbox"
-                checked={form.discoveryAllowNsfw}
-                onChange={set("discoveryAllowNsfw")}
-              />
-              Allow NSFW discovery items
-            </label>
-          )}
+          <label>
+            <input
+              type="checkbox"
+              checked={form.discoveryAllowSelfCuration}
+              onChange={set("discoveryAllowSelfCuration")}
+            />
+            Allow bot self-curation of sources
+          </label>
         </div>
 
-        {form.discoveryExternalEnabled && (
-          <>
-            <div className="split">
-              <div>
-                <label htmlFor="discovery-link-chance">Posts with links (%)</label>
-                <input
-                  id="discovery-link-chance"
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={form.discoveryLinkChance}
-                  onChange={set("discoveryLinkChance")}
-                />
-              </div>
-              <div>
-                <label htmlFor="discovery-max-links">Max links per post</label>
-                <input
-                  id="discovery-max-links"
-                  type="number"
-                  min="1"
-                  max="4"
-                  value={form.discoveryMaxLinks}
-                  onChange={set("discoveryMaxLinks")}
-                />
-              </div>
-            </div>
-
-            <div className="split">
-              <div>
-                <label htmlFor="discovery-max-candidates">Candidates for prompt</label>
-                <input
-                  id="discovery-max-candidates"
-                  type="number"
-                  min="1"
-                  max="12"
-                  value={form.discoveryMaxCandidates}
-                  onChange={set("discoveryMaxCandidates")}
-                />
-              </div>
-              <div>
-                <label htmlFor="discovery-fetch-limit">Fetch limit per source</label>
-                <input
-                  id="discovery-fetch-limit"
-                  type="number"
-                  min="2"
-                  max="30"
-                  value={form.discoveryFetchLimit}
-                  onChange={set("discoveryFetchLimit")}
-                />
-              </div>
-            </div>
-
-            <div className="split">
-              <div>
-                <label htmlFor="discovery-freshness">Freshness window (hours)</label>
-                <input
-                  id="discovery-freshness"
-                  type="number"
-                  min="1"
-                  max="336"
-                  value={form.discoveryFreshnessHours}
-                  onChange={set("discoveryFreshnessHours")}
-                />
-              </div>
-              <div>
-                <label htmlFor="discovery-dedupe">Avoid repost window (hours)</label>
-                <input
-                  id="discovery-dedupe"
-                  type="number"
-                  min="1"
-                  max="1080"
-                  value={form.discoveryDedupeHours}
-                  onChange={set("discoveryDedupeHours")}
-                />
-              </div>
-            </div>
-
-            <label htmlFor="discovery-randomness">
-              Discovery randomness: <strong>{form.discoveryRandomness}%</strong>
-            </label>
+        <div className="split">
+          <div>
+            <label htmlFor="discovery-max-links">Max links per initiative post</label>
             <input
-              id="discovery-randomness"
-              type="range"
+              id="discovery-max-links"
+              type="number"
               min="0"
-              max="100"
-              step="1"
-              value={form.discoveryRandomness}
-              onChange={set("discoveryRandomness")}
-              style={rangeStyle(form.discoveryRandomness)}
+              max="5"
+              value={form.discoveryMaxLinks}
+              onChange={set("discoveryMaxLinks")}
             />
+          </div>
+          <div>
+            <label htmlFor="discovery-max-candidates">Feed candidates in prompt</label>
+            <input
+              id="discovery-max-candidates"
+              type="number"
+              min="1"
+              max="20"
+              value={form.discoveryMaxCandidates}
+              onChange={set("discoveryMaxCandidates")}
+            />
+          </div>
+        </div>
 
-            <div className="toggles">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={form.discoverySourceReddit}
-                  onChange={set("discoverySourceReddit")}
-                />
-                Reddit
-              </label>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={form.discoverySourceHackerNews}
-                  onChange={set("discoverySourceHackerNews")}
-                />
-                Hacker News
-              </label>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={form.discoverySourceYoutube}
-                  onChange={set("discoverySourceYoutube")}
-                />
-                YouTube RSS
-              </label>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={form.discoverySourceRss}
-                  onChange={set("discoverySourceRss")}
-                />
-                RSS feeds
-              </label>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={form.discoverySourceX}
-                  onChange={set("discoverySourceX")}
-                />
-                X via Nitter RSS
-              </label>
-            </div>
+        <div className="split">
+          <div>
+            <label htmlFor="discovery-max-media-prompt-chars">Max media prompt chars</label>
+            <input
+              id="discovery-max-media-prompt-chars"
+              type="number"
+              min="100"
+              max="2000"
+              value={form.discoveryMaxMediaPromptChars}
+              onChange={set("discoveryMaxMediaPromptChars")}
+            />
+          </div>
+          <div>
+            <label htmlFor="discovery-max-sources-per-type">Max sources per type</label>
+            <input
+              id="discovery-max-sources-per-type"
+              type="number"
+              min="1"
+              max="50"
+              value={form.discoveryMaxSourcesPerType}
+              onChange={set("discoveryMaxSourcesPerType")}
+            />
+          </div>
+        </div>
 
-            <label htmlFor="discovery-topics">Preferred topics (comma/newline)</label>
+        <div className="split">
+          <div>
+            <label htmlFor="discovery-fetch-limit">Fetch limit per source</label>
+            <input
+              id="discovery-fetch-limit"
+              type="number"
+              min="1"
+              max="50"
+              value={form.discoveryFetchLimit}
+              onChange={set("discoveryFetchLimit")}
+            />
+          </div>
+          <div>
+            <label htmlFor="discovery-freshness">Freshness window (hours)</label>
+            <input
+              id="discovery-freshness"
+              type="number"
+              min="1"
+              max="720"
+              value={form.discoveryFreshnessHours}
+              onChange={set("discoveryFreshnessHours")}
+            />
+          </div>
+        </div>
+
+        <div className="split">
+          <div>
+            <label htmlFor="discovery-dedupe">Avoid repost window (hours)</label>
+            <input
+              id="discovery-dedupe"
+              type="number"
+              min="1"
+              max="2160"
+              value={form.discoveryDedupeHours}
+              onChange={set("discoveryDedupeHours")}
+            />
+          </div>
+          <div />
+        </div>
+
+        <label htmlFor="discovery-randomness">
+          Feed randomness: <strong>{form.discoveryRandomness}%</strong>
+        </label>
+        <input
+          id="discovery-randomness"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={form.discoveryRandomness}
+          onChange={set("discoveryRandomness")}
+          style={rangeStyle(form.discoveryRandomness)}
+        />
+
+        <div className="toggles">
+          <label>
+            <input
+              type="checkbox"
+              checked={form.discoverySourceReddit}
+              onChange={set("discoverySourceReddit")}
+            />
+            Reddit
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={form.discoverySourceHackerNews}
+              onChange={set("discoverySourceHackerNews")}
+            />
+            Hacker News
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={form.discoverySourceYoutube}
+              onChange={set("discoverySourceYoutube")}
+            />
+            YouTube RSS
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={form.discoverySourceRss}
+              onChange={set("discoverySourceRss")}
+            />
+            RSS feeds
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={form.discoverySourceX}
+              onChange={set("discoverySourceX")}
+            />
+            X via Nitter RSS
+          </label>
+        </div>
+
+        {form.discoverySourceReddit && (
+          <>
+            <label htmlFor="discovery-reddit">Reddit subreddits</label>
             <textarea
-              id="discovery-topics"
+              id="discovery-reddit"
               rows={2}
-              value={form.discoveryPreferredTopics}
-              onChange={set("discoveryPreferredTopics")}
+              value={form.discoveryRedditSubs}
+              onChange={set("discoveryRedditSubs")}
+            />
+          </>
+        )}
+
+        {form.discoverySourceYoutube && (
+          <>
+            <label htmlFor="discovery-youtube">YouTube channel IDs</label>
+            <textarea
+              id="discovery-youtube"
+              rows={2}
+              value={form.discoveryYoutubeChannels}
+              onChange={set("discoveryYoutubeChannels")}
+            />
+          </>
+        )}
+
+        {form.discoverySourceRss && (
+          <>
+            <label htmlFor="discovery-rss">RSS feed URLs</label>
+            <textarea
+              id="discovery-rss"
+              rows={3}
+              value={form.discoveryRssFeeds}
+              onChange={set("discoveryRssFeeds")}
+            />
+          </>
+        )}
+
+        {form.discoverySourceX && (
+          <>
+            <label htmlFor="discovery-x-handles">X handles</label>
+            <textarea
+              id="discovery-x-handles"
+              rows={2}
+              value={form.discoveryXHandles}
+              onChange={set("discoveryXHandles")}
             />
 
-            {form.discoverySourceReddit && (
-              <>
-                <label htmlFor="discovery-reddit">Reddit subreddits</label>
-                <textarea
-                  id="discovery-reddit"
-                  rows={2}
-                  value={form.discoveryRedditSubs}
-                  onChange={set("discoveryRedditSubs")}
-                />
-              </>
-            )}
-
-            {form.discoverySourceYoutube && (
-              <>
-                <label htmlFor="discovery-youtube">YouTube channel IDs</label>
-                <textarea
-                  id="discovery-youtube"
-                  rows={2}
-                  value={form.discoveryYoutubeChannels}
-                  onChange={set("discoveryYoutubeChannels")}
-                />
-              </>
-            )}
-
-            {form.discoverySourceRss && (
-              <>
-                <label htmlFor="discovery-rss">RSS feed URLs</label>
-                <textarea
-                  id="discovery-rss"
-                  rows={3}
-                  value={form.discoveryRssFeeds}
-                  onChange={set("discoveryRssFeeds")}
-                />
-              </>
-            )}
-
-            {form.discoverySourceX && (
-              <>
-                <label htmlFor="discovery-x-handles">X handles</label>
-                <textarea
-                  id="discovery-x-handles"
-                  rows={2}
-                  value={form.discoveryXHandles}
-                  onChange={set("discoveryXHandles")}
-                />
-
-                <label htmlFor="discovery-nitter">Nitter base URL (for X RSS)</label>
-                <input
-                  id="discovery-nitter"
-                  type="text"
-                  value={form.discoveryXNitterBase}
-                  onChange={set("discoveryXNitterBase")}
-                />
-              </>
-            )}
+            <label htmlFor="discovery-nitter">Nitter base URL (for X RSS)</label>
+            <input
+              id="discovery-nitter"
+              type="text"
+              value={form.discoveryXNitterBase}
+              onChange={set("discoveryXNitterBase")}
+            />
           </>
         )}
       </Collapse>
