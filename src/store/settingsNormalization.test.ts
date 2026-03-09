@@ -302,6 +302,18 @@ test("normalizeSettings preserves explicit file_wav transcription mode", () => {
   assert.equal(normalized.agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod, "file_wav");
 });
 
+test("normalizeSettings forces bridge replies onto realtime output", () => {
+  const normalized = normalizeLegacyView({
+    voice: {
+      replyPath: "bridge",
+      ttsMode: "api"
+    }
+  });
+
+  assert.equal(normalized.voice.conversationPolicy.replyPath, "bridge");
+  assert.equal(normalized.voice.conversationPolicy.ttsMode, "realtime");
+});
+
 test("normalizeSettings restricts browser model providers to supported browser runtimes", () => {
   const normalized = normalizeLegacyView({
     browser: {
@@ -405,7 +417,8 @@ test("normalizeSettings preserves claude_oauth_local_tools session config", () =
 test("normalizeSettings preserves canonical command-only, directive, and automation toggles", () => {
   const normalized = normalizeLegacyView({
     voice: {
-      commandOnlyMode: true
+      commandOnlyMode: true,
+      defaultInterruptionMode: "uninterruptible"
     },
     adaptiveDirectives: {
       enabled: false
@@ -416,6 +429,7 @@ test("normalizeSettings preserves canonical command-only, directive, and automat
   });
 
   assert.equal(normalized.voice.conversationPolicy.commandOnlyMode, true);
+  assert.equal(normalized.voice.conversationPolicy.defaultInterruptionMode, "none");
   assert.equal(normalized.directives.enabled, false);
   assert.equal(normalized.automations.enabled, false);
 });

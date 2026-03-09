@@ -64,6 +64,9 @@ function createReplyManagerHarness() {
     normalizeReplyInterruptionPolicy(rawPolicy) {
       return rawPolicy || null;
     },
+    resolveReplyInterruptionPolicy({ policy } = {}) {
+      return policy || null;
+    },
     setActiveReplyInterruptionPolicy() {},
     maybeClearActiveReplyInterruptionPolicy() {},
     deferredActionQueue: {

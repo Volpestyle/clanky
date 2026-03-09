@@ -146,6 +146,14 @@ export function normalizeOperationalMessages(value: unknown, fallback: string) {
   return fallback;
 }
 
+export function normalizeVoiceDefaultInterruptionMode(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 40).toLowerCase();
+  if (normalized === "speaker" || normalized === "requester_only") return "speaker";
+  if (normalized === "none" || normalized === "off" || normalized === "uninterruptible") return "none";
+  if (normalized === "anyone" || normalized === "all") return "anyone";
+  return fallback;
+}
+
 export function normalizeStreamWatchCommentaryPath(value: unknown, fallback: string) {
   const normalized = normalizeString(value, fallback, 40).toLowerCase();
   if (normalized === "anthropic_keyframes") return "anthropic_keyframes";
@@ -262,7 +270,7 @@ export function resolveAgentStackPresetConfig(
         ? { provider: "claude-oauth", model: "claude-sonnet-4-6" }
         : undefined,
     presetVoiceAdmissionMode:
-      isClaudeOAuth ? "generation_decides" : undefined,
+      isClaudeOAuth ? "generation_decides" : "classifier_gate",
     presetBrowserFallback:
       isClaudeOAuth
         ? { provider: "claude-oauth", model: "claude-opus-4-6" }

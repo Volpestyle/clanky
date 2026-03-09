@@ -19,23 +19,22 @@ test("SentenceAccumulator emits the first chunk eagerly after punctuation once t
   assert.equal(emitted[0], "Let me check that out for you.");
 });
 
-test("SentenceAccumulator emits the first chunk at a trailing word boundary without punctuation", () => {
+test("SentenceAccumulator keeps the first chunk intact until sentence punctuation arrives", () => {
   const emitted: string[] = [];
   const accumulator = new SentenceAccumulator({
     eagerFirstChunk: true,
-    eagerMinChars: 16,
+    eagerMinChars: 30,
     maxBufferChars: 120,
     onSentence(text) {
       emitted.push(text);
     }
   });
 
-  accumulator.push("yo vuhlp, what's good ");
-  assert.deepEqual(emitted, ["yo vuhlp, what's good"]);
+  accumulator.push("Yo donky, what's good my guy, we back in the ");
+  assert.deepEqual(emitted, []);
 
-  accumulator.push("right now");
-  accumulator.flush();
-  assert.deepEqual(emitted, ["yo vuhlp, what's good", "right now"]);
+  accumulator.push("vc!");
+  assert.deepEqual(emitted, ["Yo donky, what's good my guy, we back in the vc!"]);
 });
 
 test("SentenceAccumulator waits for a sentence break after the first emitted chunk", () => {

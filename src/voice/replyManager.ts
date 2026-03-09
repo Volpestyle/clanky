@@ -93,6 +93,12 @@ export interface ReplyManagerHost {
   normalizeReplyInterruptionPolicy: (
     rawPolicy?: ReplyInterruptionPolicy | Record<string, unknown> | null
   ) => ReplyInterruptionPolicy | null;
+  resolveReplyInterruptionPolicy: (args: {
+    session: VoiceSession;
+    userId?: string | null;
+    policy?: ReplyInterruptionPolicy | Record<string, unknown> | null;
+    source?: string | null;
+  }) => ReplyInterruptionPolicy | null;
   setActiveReplyInterruptionPolicy: (
     session: VoiceSession,
     policy?: ReplyInterruptionPolicy | Record<string, unknown> | null
@@ -826,11 +832,18 @@ export class ReplyManager {
     const requestId = Number(session.nextResponseRequestId || 0) + 1;
     session.nextResponseRequestId = requestId;
     const previous = session.pendingResponse;
+    const shouldApplyFallbackInterruptionPolicy = interruptionPolicy === undefined;
     const interruptionPolicySeed =
-      interruptionPolicy === undefined
+      shouldApplyFallbackInterruptionPolicy
         ? previous?.interruptionPolicy || session.activeReplyInterruptionPolicy
         : interruptionPolicy;
-    const normalizedInterruptionPolicy = this.host.normalizeReplyInterruptionPolicy(interruptionPolicySeed);
+    const normalizedInterruptionPolicy = shouldApplyFallbackInterruptionPolicy
+      ? this.host.resolveReplyInterruptionPolicy({
+          session,
+          userId: userId || previous?.userId || null,
+          policy: interruptionPolicySeed,
+        })
+      : this.host.normalizeReplyInterruptionPolicy(interruptionPolicySeed);
     const utteranceTextSeed = utteranceText === undefined ? previous?.utteranceText || "" : utteranceText || "";
     const normalizedUtteranceText =
       normalizeVoiceText(utteranceTextSeed, STT_REPLY_MAX_CHARS) || null;

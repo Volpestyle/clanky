@@ -6,6 +6,20 @@
 
 Controls whether users can barge-in (interrupt) the bot while it is speaking.
 
+## Dashboard Setting
+
+The **single authority** for interruption policy is `voice.conversationPolicy.defaultInterruptionMode`:
+
+| Mode | Effect |
+|------|--------|
+| `"anyone"` | Anyone can interrupt the bot (default) |
+| `"speaker"` | Only the person the bot is talking to can interrupt |
+| `"none"` | Nobody can interrupt the bot |
+
+There are no per-reply overrides. The dashboard setting applies uniformly to all replies.
+
+**Exception:** Callers of `requestRealtimePromptUtterance()` can pass an explicit `interruptionPolicy` object for specific utterances (e.g. music error announcements that must not be cut off). This is a per-utterance parameter, not an automatic override.
+
 ## Policy Object
 
 ```ts
@@ -13,135 +27,26 @@ Controls whether users can barge-in (interrupt) the bot while it is speaking.
   assertive: boolean;   // true = policy is active (false/null = anyone can interrupt)
   scope: "none" | "speaker";
   allowedUserId?: string; // only used when scope = "speaker"
-  reason?: string;        // descriptive label for logging
-  source?: string;        // originating system (e.g. "music_now_playing")
 }
 ```
 
-Passed as `interruptionPolicy` to `requestRealtimePromptUtterance()` or set on a tracked audio response.
-
 ## Decision Logic
 
-`isUserAllowedToInterruptReply({ policy, userId })` in `src/voice/bargeInController.ts`:
+`isUserAllowedToInterruptReply({ policy, userId })` in `src/voice/voiceSessionManager.ts`:
 
-1. Policy is `null` or `assertive` is falsy → **anyone can interrupt** (default).
+1. Policy is `null` or `assertive` is falsy → **anyone can interrupt**.
 2. `scope === "none"` → **nobody can interrupt**.
 3. `scope === "speaker"` → only `allowedUserId` can interrupt; everyone else is blocked.
 
-## Normalization
+## Policy Resolution
 
-`normalizeReplyInterruptionPolicy()` (`src/voice/bargeInController.ts`) sanitizes the raw policy:
-- If `assertive` is not explicitly set, it defaults to `true` when `scope === "none"` or `allowedUserId` is present.
-- If `assertive` resolves to `false`, returns `null` (no policy).
-- If `scope === "speaker"` with no `allowedUserId`, returns `null`.
+`resolveReplyInterruptionPolicy()` resolves the effective policy for a reply:
 
-## Scopes
-
-| Scope | Effect | Use Case |
-|-------|--------|----------|
-| `null` (no policy) | Anyone can interrupt | Normal conversation replies |
-| `"speaker"` | Only `allowedUserId` can interrupt | Reply directed at a specific user |
-| `"none"` | Nobody can interrupt | Short announcements (errors, system alerts) |
-
-## How Replies Become Speaker-Locked
-
-Most replies do **not** create an assertive interruption policy. If `buildReplyInterruptionPolicy()` returns `null`, the reply is treated as normal conversational speech and **anyone can interrupt**.
-
-`"speaker"` lock is only created when the reply is treated as assertively tied to the current speaker. In `src/voice/voiceSessionManager.ts`, that means:
-
-- `directAddressed === true`
-- `conversationContext.engagedWithCurrentSpeaker === true`
-- generated voice addressing targets `ALL` (special case: becomes `"none"`, so nobody can interrupt)
-
-### What `engagedWithCurrentSpeaker` Means
-
-`engagedWithCurrentSpeaker` is computed in `buildVoiceConversationContext()` in `src/voice/voiceReplyDecision.ts`. It is a deterministic session-level follow-up signal, not a model guess.
-
-It becomes `true` when any of these are true:
-
-- The current turn is directly addressed to the bot.
-- There is a single-participant assistant follow-up active.
-- The speaker matches the active voice-command user.
-- The speaker is the same user who most recently direct-addressed the bot, and the bot replied recently.
-- The speaker is the same user who most recently direct-addressed the bot within the recent-engagement window.
-
-### Recent-Engagement Window
-
-The recency window is `RECENT_ENGAGEMENT_WINDOW_MS = 35_000`.
-
-Operationally, that means a conversation like this stays speaker-locked for a short period even without repeating the wake word every turn:
-
-1. User says `clanker, play something`.
-2. Bot replies.
-3. The same user immediately follows up with `actually queue it instead`.
-
-That follow-up can still count as `engagedWithCurrentSpeaker`, so the reply may use `"speaker"` interruption policy even though the second turn did not repeat the bot name.
-
-### What This Does Not Mean
-
-- It does **not** mean the bot is still actively speaking. Barge-in still requires active bot output plus assertive incoming speech.
-- It does **not** mean unaddressed replies are uninterruptible. With no assertive policy, interruption falls back to `null`, which means anyone can interrupt.
-- It does **not** come from a tool call. The signal is derived from direct-address state, recent assistant reply timing, command ownership, and participant context.
-
-## Announcement Pattern
-
-For short system announcements that must not be cut off by chatter:
-
-```ts
-manager.requestRealtimePromptUtterance({
-  session,
-  prompt: `(system: failed to load "Song Title" — error message)`,
-  source: "music_play_failed",
-  interruptionPolicy: {
-    assertive: true,
-    scope: "none",
-    reason: "announcement",
-    source: "music_play_failed"
-  }
-});
-```
-
-For announcements where the requester should be able to interrupt (e.g. to change their mind):
-
-```ts
-manager.requestRealtimePromptUtterance({
-  session,
-  prompt: `(system: "Song Title" by Artist is now playing)`,
-  source: "music_now_playing",
-  interruptionPolicy: {
-    assertive: true,
-    scope: "speaker",
-    allowedUserId: session.lastOpenAiToolCallerUserId || null,
-    reason: "announcement",
-    source: "music_now_playing"
-  }
-});
-```
-
-## `endSession(... announcement)` Note
-
-There is a second, separate use of the word `announcement` in the voice codebase:
-
-```ts
-await manager.endSession({
-  guildId: session.guildId,
-  reason: "assistant_leave_directive",
-  announcement: "wrapping up vc."
-});
-```
-
-This is **not** a realtime spoken announcement object and it is **not** posted to Discord literally.
-
-- `announcement: null` suppresses the session-end operational post entirely.
-- Any other string becomes an `announcementHint` detail on the `voice_session_end` event.
-- The text-channel message is then composed by the LLM from the event, reason, and details payload.
-- Result: `"wrapping up vc."` means "generate a brief leaving-VC style message," not "send these exact words."
-
-Relevant code paths:
-
-- `src/voice/voiceSessionManager.ts` - forwards `announcementHint` to `sendOperationalMessage()` for `voice_session_end`
-- `src/voice/voiceOperationalMessaging.ts` - applies operational-message verbosity/suppression rules
-- `src/bot/voiceReplies.ts` - asks the LLM to generate the final user-facing text
+1. If an explicit policy is provided (e.g. from `requestRealtimePromptUtterance`), use it.
+2. Otherwise, read the dashboard setting:
+   - `"anyone"` → return `null` (no restriction)
+   - `"speaker"` → return `{ assertive: true, scope: "speaker", allowedUserId }` using the current speaker's ID
+   - `"none"` → return `{ assertive: true, scope: "none", allowedUserId: null }`
 
 ## Why We Handle Barge-In Ourselves
 
@@ -215,7 +120,7 @@ User audio arrives during output lock
 ┌─────────────────────────────────────────────────────────────┐
 │ 5. Interruption policy check                                 │
 │    isUserAllowedToInterruptReply({ policy, userId })         │
-│    See "Policy Object" section above.                        │
+│    See "Decision Logic" section above.                       │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼  ALLOWED → interruptBotSpeechForBargeIn()
@@ -235,6 +140,33 @@ User audio arrives during output lock
 ### Why the Event Loop Race Exists
 
 The `response_done` WebSocket event and user audio IPC data are separate async event sources on the same event loop. If a user audio chunk arrives before the `response_done` handler clears `pendingResponse`, the output lock is still held and barge-in can fire on an already-completed response. The active flow guard (gate 2) catches most of these, and the post-cancel guard (step 6) handles any that slip through.
+
+---
+
+## `endSession(... announcement)` Note
+
+There is a second, separate use of the word `announcement` in the voice codebase:
+
+```ts
+await manager.endSession({
+  guildId: session.guildId,
+  reason: "assistant_leave_directive",
+  announcement: "wrapping up vc."
+});
+```
+
+This is **not** a realtime spoken announcement object and it is **not** posted to Discord literally.
+
+- `announcement: null` suppresses the session-end operational post entirely.
+- Any other string becomes an `announcementHint` detail on the `voice_session_end` event.
+- The text-channel message is then composed by the LLM from the event, reason, and details payload.
+- Result: `"wrapping up vc."` means "generate a brief leaving-VC style message," not "send these exact words."
+
+Relevant code paths:
+
+- `src/voice/voiceSessionManager.ts` - forwards `announcementHint` to `sendOperationalMessage()` for `voice_session_end`
+- `src/voice/voiceOperationalMessaging.ts` - applies operational-message verbosity/suppression rules
+- `src/bot/voiceReplies.ts` - asks the LLM to generate the final user-facing text
 
 ---
 

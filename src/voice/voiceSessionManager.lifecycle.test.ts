@@ -218,7 +218,7 @@ function createSession(overrides = {}) {
       playCount: 0,
       lastPlayedAt: 0
     },
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     streamWatch: {
       active: false,
       targetUserId: null,
@@ -269,7 +269,7 @@ function createSession(overrides = {}) {
     awaitingToolOutputs: false,
     openAiToolCallExecutions: new Map(),
     voxClient: null,
-    pendingSttTurns: 0,
+    pendingFileAsrTurns: 0,
     recentVoiceTurns: [],
     membershipEvents: [],
     cleanupHandlers: [],
@@ -295,7 +295,7 @@ function createSession(overrides = {}) {
   return session;
 }
 
-test("getRuntimeState summarizes STT and realtime sessions", () => {
+test("getRuntimeState summarizes file ASR backlog alongside realtime sessions", () => {
   const { manager } = createManager();
   const now = Date.now();
   manager.client.users.cache.set("user-a", {
@@ -307,8 +307,9 @@ test("getRuntimeState summarizes STT and realtime sessions", () => {
     "guild-1",
     createSession({
       id: "stt-session",
-      mode: "stt_pipeline",
-      pendingSttTurns: 2,
+      mode: "openai_realtime",
+      realtimeProvider: "openai",
+      pendingFileAsrTurns: 2,
       recentVoiceTurns: [{ role: "user", text: "hello" }],
       userCaptures: new Map([["user-a", {}]])
     })
@@ -365,8 +366,8 @@ test("getRuntimeState summarizes STT and realtime sessions", () => {
   assert.equal(runtime.activeCount, 2);
 
   const stt = runtime.sessions.find((row) => row.sessionId === "stt-session");
-  assert.equal(stt?.stt?.pendingTurns, 2);
-  assert.equal(stt?.realtime, null);
+  assert.equal(stt?.batchAsr?.pendingTurns, 2);
+  assert.equal(stt?.realtime?.provider, "openai");
   assert.equal(stt?.activeCaptures?.length, 1);
   assert.equal(stt?.activeCaptures?.[0]?.userId, "user-a");
   assert.equal(stt?.activeCaptures?.[0]?.displayName, "alice");
@@ -391,7 +392,7 @@ test("resolveSpeakingEndFinalizeDelayMs preserves baseline delays in low-load ro
   const { manager } = createManager();
   const session = createSession({
     userCaptures: new Map([["speaker-1", {}]]),
-    pendingSttTurns: 0
+    pendingFileAsrTurns: 0
   });
 
   assert.equal(
@@ -438,9 +439,9 @@ test("resolveSpeakingEndFinalizeDelayMs adapts delays when room load increases",
   );
 
   const heavySttSession = createSession({
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     userCaptures: new Map([["speaker-1", {}]]),
-    pendingSttTurns: 4
+    pendingFileAsrTurns: 4
   });
   assert.equal(
     manager.resolveSpeakingEndFinalizeDelayMs({
@@ -469,7 +470,7 @@ test("shouldBargeIn requires sustained capture bytes", () => {
     signalPeakAbs: 5_400
   };
   const session = createSession({
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     botTurnOpen: true,
     userCaptures: new Map([["user-1", captureState]])
   });
@@ -546,6 +547,58 @@ test("normalizeReplyInterruptionPolicy rejects legacy all scope without speaker 
   assert.equal(result, null);
 });
 
+test("resolveReplyInterruptionPolicy applies speaker fallback for normal replies when configured", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    settingsSnapshot: createTestSettings({
+      botName: "clanker conk",
+      voice: {
+        replyPath: "brain",
+        defaultInterruptionMode: "speaker"
+      }
+    })
+  });
+
+  const result = manager.resolveReplyInterruptionPolicy({
+    session,
+    userId: "user-1",
+  });
+
+  assert.deepEqual(result, {
+    assertive: true,
+    scope: "speaker",
+    allowedUserId: "user-1",
+  });
+});
+
+test("createTrackedAudioResponse applies uninterruptible fallback for normal replies when configured", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    mode: "openai_realtime",
+    settingsSnapshot: createTestSettings({
+      botName: "clanker conk",
+      voice: {
+        replyPath: "brain",
+        defaultInterruptionMode: "none"
+      }
+    })
+  });
+
+  const created = manager.replyManager.createTrackedAudioResponse({
+    session,
+    userId: "user-1",
+    source: "test_default_uninterruptible",
+    emitCreateEvent: false
+  });
+
+  assert.equal(created, true);
+  assert.deepEqual(session.pendingResponse?.interruptionPolicy, {
+    assertive: true,
+    scope: "none",
+    allowedUserId: null,
+  });
+});
+
 test("shouldBargeIn allows barge-in after assertive speech", () => {
   const { manager } = createManager();
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
@@ -558,7 +611,7 @@ test("shouldBargeIn allows barge-in after assertive speech", () => {
     speakingEndFinalizeTimer: null
   };
   const session = createSession({
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     botTurnOpen: true,
     pendingResponse: {
       requestId: 9,
@@ -655,7 +708,7 @@ test("shouldBargeIn ignores buffered subprocess playback after live deltas stop"
     speakingEndFinalizeTimer: null
   };
   const session = createSession({
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     botTurnOpen: false,
     lastAudioDeltaAt: Date.now() - 2_000,
     pendingResponse: {
@@ -677,7 +730,7 @@ test("shouldBargeIn ignores buffered subprocess playback after live deltas stop"
   assert.equal(result.allowed, false);
 });
 
-test("shouldBargeIn requires minimum capture age for STT pipeline", () => {
+test("shouldBargeIn requires minimum capture age for non-realtime playback", () => {
   const { manager } = createManager();
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
   const captureState = {
@@ -689,7 +742,7 @@ test("shouldBargeIn requires minimum capture age for STT pipeline", () => {
     speakingEndFinalizeTimer: null
   };
   const session = createSession({
-    mode: "stt_pipeline",
+    mode: "offline",
     botTurnOpen: true,
     pendingResponse: {
       requestId: 30,
@@ -1633,42 +1686,6 @@ test("deliverVoiceThoughtCandidate does not fallback to TTS in realtime mode", a
   assert.equal(ttsCalls, 0);
 });
 
-test("announceVoiceWebLookupBusy skips TTS fallback in realtime mode", async () => {
-  const { manager } = createManager();
-  const session = createSession({
-    mode: "openai_realtime"
-  });
-  let promptUtteranceCalls = 0;
-  let textUtteranceCalls = 0;
-  let ttsCalls = 0;
-
-  manager.requestRealtimePromptUtterance = () => {
-    promptUtteranceCalls += 1;
-    return false;
-  };
-  manager.requestRealtimeTextUtterance = ({ text }) => {
-    textUtteranceCalls += 1;
-    assert.equal(text, "still looking");
-    return false;
-  };
-  manager.generateVoiceLookupBusyLine = async () => "still looking";
-  manager.speakVoiceLineWithTts = async () => {
-    ttsCalls += 1;
-    return true;
-  };
-
-  await manager.announceVoiceWebLookupBusy({
-    session,
-    settings: session.settingsSnapshot,
-    userId: "user-1",
-    query: "what happened"
-  });
-
-  assert.equal(promptUtteranceCalls, 0);
-  assert.equal(textUtteranceCalls, 1);
-  assert.equal(ttsCalls, 0);
-});
-
 test("requestRealtimeTextUtterance queues assistant speech behind an active realtime response", () => {
   const { manager, logs } = createManager();
   const prompts = [];
@@ -2167,6 +2184,56 @@ test("cancelPendingPrePlaybackReplyForUserSpeech requeues safe in-flight accepte
   assert.equal(cancelLog?.metadata?.requeued, true);
 });
 
+test("cancelPendingPrePlaybackReplyForUserSpeech does NOT requeue bot-initiated events like bot_join_greeting", () => {
+  const { manager, logs } = createManager();
+  manager.activeReplies = new ActiveReplyRegistry();
+  const session = createSession({
+    mode: "openai_realtime",
+    lastAudioDeltaAt: 0,
+    pendingResponse: null
+  });
+  const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
+  const activeReply = manager.activeReplies.begin(voiceReplyScopeKey, "voice-generation", ["voice_generation"]);
+  const promotedAt = Date.now();
+  session.inFlightAcceptedBrainTurn = {
+    transcript: "[YOU joined the voice channel]",
+    userId: "bot-user-id",
+    pcmBuffer: null,
+    source: "bot_join_greeting",
+    acceptedAt: promotedAt - 500,
+    phase: "generation_only",
+    captureReason: "bot_join_greeting",
+    directAddressed: false
+  };
+  const capture = {
+    userId: "speaker-1",
+    startedAt: promotedAt - 420,
+    promotedAt,
+    bytesSent: 24_000,
+    signalSampleCount: 12_000,
+    signalActiveSampleCount: 6_000,
+    signalPeakAbs: 12_000,
+    signalSumSquares: 12_000 * 12_000 * 12_000
+  };
+
+  const cancelled = manager.cancelPendingPrePlaybackReplyForUserSpeech({
+    session,
+    userId: "speaker-1",
+    captureState: capture,
+    source: "capture_promoted",
+    now: promotedAt
+  });
+
+  assert.equal(cancelled, true);
+  assert.equal(activeReply.abortController.signal.aborted, true);
+  // Bot-initiated events should NOT be requeued — user speech supersedes them
+  const queuedTurns = manager.deferredActionQueue.getDeferredQueuedUserTurns(session);
+  assert.equal(queuedTurns.length, 0);
+  const cancelLog = logs.find((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech");
+  assert.ok(cancelLog);
+  assert.equal(cancelLog?.metadata?.requeued, false);
+});
+
 test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript for all capture reasons", () => {
   const { manager, logs } = createManager();
   const queuedTurns = [];
@@ -2589,7 +2656,7 @@ test("maybeRunVoiceThoughtLoop speaks approved thought candidates", async () => 
     }
   });
   const session = createSession({
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     lastActivityAt: now - 25_000,
     settingsSnapshot: settings
   });
@@ -2645,7 +2712,7 @@ test("maybeRunVoiceThoughtLoop skips generation when eagerness probability roll 
     }
   });
   const session = createSession({
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     lastActivityAt: Date.now() - 25_000,
     settingsSnapshot: settings
   });
@@ -2740,7 +2807,7 @@ test("getOutputChannelState mirrors lock state for music playback", () => {
 test("getOutputChannelState surfaces deferred blockers and turn backlog", () => {
   const { manager } = createManager();
   const session = createSession({
-    pendingSttTurns: 2,
+    pendingFileAsrTurns: 2,
     awaitingToolOutputs: true,
     openAiToolCallExecutions: new Map([["call-1", Promise.resolve()]]),
     userCaptures: new Map([[

@@ -1,6 +1,5 @@
 const SENTENCE_BREAK_RE = /(?:[.!?](?:["')\]]+)?\s+|[.!?](?:["')\]]+)?$|\n+)/gu;
 const CLAUSE_BREAK_RE = /(?:[;:](?:\s+|$))/gu;
-const TRAILING_WHITESPACE_RE = /\s$/u;
 
 function normalizeChunkText(value: string) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -38,11 +37,9 @@ function findForcedBreakIndex(buffer: string, maxBufferChars: number) {
 }
 
 function findEagerFirstChunkBoundaryIndex(buffer: string) {
-  const sentenceOrClauseBoundaryIndex = findLastBoundaryIndex(buffer, true);
-  if (sentenceOrClauseBoundaryIndex >= 0) {
-    return sentenceOrClauseBoundaryIndex;
-  }
-  return TRAILING_WHITESPACE_RE.test(buffer) ? buffer.length : -1;
+  // Keep the first streamed chunk coherent. Whitespace-only cuts create
+  // tiny trailing fragments like "vc!" that sound like a new sentence.
+  return findLastBoundaryIndex(buffer, false);
 }
 
 export interface SentenceAccumulatorOptions {

@@ -6,7 +6,7 @@ import {
   resolveVoiceThoughtTopicalityBias
 } from "./voiceSessionManager.ts";
 import {
-  STT_TURN_QUEUE_MAX,
+  FILE_ASR_TURN_QUEUE_MAX,
   VOICE_TURN_MIN_ASR_CLIP_MS
 } from "./voiceSessionManager.constants.ts";
 import {
@@ -39,6 +39,14 @@ test("reply decider keeps representative low-signal turns on the generation path
       throw new Error("classifier should stay out of these low-signal cases");
     }
   });
+  const settings = baseSettings({
+    voice: {
+      admission: {
+        mode: "generation_decides"
+      }
+    }
+  });
+  settings.voice.admission.mode = "generation_decides";
 
   const cases = [
     {
@@ -47,7 +55,7 @@ test("reply decider keeps representative low-signal turns on the generation path
         guildId: "guild-1",
         textChannelId: "chan-1",
         voiceChannelId: "voice-1",
-        mode: "stt_pipeline",
+        mode: "openai_realtime",
         botTurnOpen: false
       }
     },
@@ -57,7 +65,7 @@ test("reply decider keeps representative low-signal turns on the generation path
         guildId: "guild-1",
         textChannelId: "chan-1",
         voiceChannelId: "voice-1",
-        mode: "stt_pipeline",
+        mode: "openai_realtime",
         botTurnOpen: false
       }
     },
@@ -67,7 +75,7 @@ test("reply decider keeps representative low-signal turns on the generation path
         guildId: "guild-1",
         textChannelId: "chan-1",
         voiceChannelId: "voice-1",
-        mode: "stt_pipeline",
+        mode: "openai_realtime",
         botTurnOpen: false
       }
     }
@@ -77,7 +85,7 @@ test("reply decider keeps representative low-signal turns on the generation path
     const decision = await manager.evaluateVoiceReplyDecision({
       session: row.session,
       userId: "speaker-1",
-      settings: baseSettings(),
+      settings,
       transcript: row.transcript
     });
 
@@ -92,6 +100,14 @@ test("reply decider keeps greeting-like turns on the generation path across fres
       throw new Error("classifier should stay out of greeting soft-admission cases");
     }
   });
+  const settings = baseSettings({
+    voice: {
+      admission: {
+        mode: "generation_decides"
+      }
+    }
+  });
+  settings.voice.admission.mode = "generation_decides";
 
   const cases = [
     {
@@ -114,12 +130,12 @@ test("reply decider keeps greeting-like turns on the generation path across fres
         guildId: "guild-1",
         textChannelId: "chan-1",
         voiceChannelId: "voice-1",
-        mode: "stt_pipeline",
+        mode: "openai_realtime",
         botTurnOpen: false,
         startedAt: row.startedAt
       },
       userId: "speaker-1",
-      settings: baseSettings(),
+      settings,
       transcript: row.transcript
     });
 
@@ -136,6 +152,14 @@ test("reply decider keeps recent-context soft followups on generation_decides", 
       throw new Error("classifier should stay out of recent-context soft followups");
     }
   });
+  const settings = baseSettings({
+    voice: {
+      admission: {
+        mode: "generation_decides"
+      }
+    }
+  });
+  settings.voice.admission.mode = "generation_decides";
 
   const cases = [
     {
@@ -144,7 +168,7 @@ test("reply decider keeps recent-context soft followups on generation_decides", 
         guildId: "guild-1",
         textChannelId: "chan-1",
         voiceChannelId: "voice-1",
-        mode: "stt_pipeline",
+        mode: "openai_realtime",
         botTurnOpen: false,
         lastDirectAddressUserId: "speaker-1",
         lastDirectAddressAt: Date.now() - 4_000,
@@ -157,7 +181,7 @@ test("reply decider keeps recent-context soft followups on generation_decides", 
         guildId: "guild-1",
         textChannelId: "chan-1",
         voiceChannelId: "voice-1",
-        mode: "stt_pipeline",
+        mode: "openai_realtime",
         botTurnOpen: false,
         lastDirectAddressUserId: "speaker-1",
         lastDirectAddressAt: Date.now()
@@ -169,7 +193,7 @@ test("reply decider keeps recent-context soft followups on generation_decides", 
         guildId: "guild-1",
         textChannelId: "chan-1",
         voiceChannelId: "voice-1",
-        mode: "stt_pipeline",
+        mode: "openai_realtime",
         botTurnOpen: false
       }
     }
@@ -179,7 +203,7 @@ test("reply decider keeps recent-context soft followups on generation_decides", 
     const decision = await manager.evaluateVoiceReplyDecision({
       session: row.session,
       userId: "speaker-1",
-      settings: baseSettings(),
+      settings,
       transcript: row.transcript
     });
 
@@ -431,18 +455,26 @@ test("reply decider denies unaddressed turns while music is playing and wake lat
   assert.equal(decision.reason, "music_playing_not_awake");
 });
 
-test("reply decider lets generation decide unaddressed turns in stt_pipeline mode", async () => {
+test("reply decider lets generation decide unaddressed turns in realtime brain mode", async () => {
   const manager = createManager();
+  const settings = baseSettings({
+    voice: {
+      admission: {
+        mode: "generation_decides"
+      }
+    }
+  });
+  settings.voice.admission.mode = "generation_decides";
   const decision = await manager.evaluateVoiceReplyDecision({
     session: {
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
-      mode: "stt_pipeline",
+      mode: "openai_realtime",
       botTurnOpen: false,
     },
     userId: "speaker-1",
-    settings: baseSettings(),
+    settings,
     transcript: "that reminds me of yesterday, what happened again?"
   });
 
@@ -465,6 +497,14 @@ test("reply decider routes wake-like variants through brain decides or classifie
       return { text: "NO" };
     }
   });
+  const settings = baseSettings({
+    voice: {
+      admission: {
+        mode: "generation_decides"
+      }
+    }
+  });
+  settings.voice.admission.mode = "generation_decides";
 
   for (const row of cases) {
     const decision = await manager.evaluateVoiceReplyDecision({
@@ -472,11 +512,11 @@ test("reply decider routes wake-like variants through brain decides or classifie
         guildId: "guild-1",
         textChannelId: "chan-1",
         voiceChannelId: "voice-1",
-        mode: "stt_pipeline",
+        mode: "openai_realtime",
         botTurnOpen: false,
       },
       userId: "speaker-1",
-      settings: baseSettings(),
+      settings,
       transcript: row.text
     });
 
@@ -653,7 +693,7 @@ test("reply decider skips memory retrieval for unaddressed turns", async () => {
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
-      mode: "stt_pipeline",
+      mode: "openai_realtime",
       botTurnOpen: false,
     },
     userId: "speaker-1",
@@ -713,17 +753,19 @@ test("reply decider keeps generation_decides when the classifier provider fails"
       throw new Error("classifier provider error");
     }
   });
+  const settings = baseSettings();
+  settings.voice.admission.mode = "generation_decides";
 
   const decision = await manager.evaluateVoiceReplyDecision({
     session: {
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
-      mode: "stt_pipeline",
+      mode: "openai_realtime",
       botTurnOpen: false
     },
     userId: "speaker-1",
-    settings: baseSettings(),
+    settings,
     transcript: "what's up with this queue?"
   });
 
@@ -732,13 +774,16 @@ test("reply decider keeps generation_decides when the classifier provider fails"
   assert.equal(decision.directAddressed, false);
 });
 
-test("reply decider keeps representative stt-pipeline classifier-skip settings on generation_decides", async () => {
+test("reply decider keeps representative full-brain classifier-skip settings on generation_decides", async () => {
   const cases = [
     {
       name: "anthropic_decider",
       generate: async () => ({ text: '{"decision":"YES"}', provider: "anthropic", model: "claude-haiku-4-5" }),
       settings: baseSettings({
         voice: {
+          admission: {
+            mode: "generation_decides"
+          },
           replyDecisionLlm: {
             provider: "anthropic",
             model: "claude-haiku-4-5"
@@ -756,6 +801,9 @@ test("reply decider keeps representative stt-pipeline classifier-skip settings o
           model: "claude-sonnet-4-5"
         },
         voice: {
+          admission: {
+            mode: "generation_decides"
+          },
           replyDecisionLlm: {
             provider: "openai",
             model: "gpt-5-mini"
@@ -765,6 +813,9 @@ test("reply decider keeps representative stt-pipeline classifier-skip settings o
       transcript: "what should we do next?"
     }
   ];
+  for (const row of cases) {
+    row.settings.voice.admission.mode = "generation_decides";
+  }
 
   for (const row of cases) {
     const manager = createManager({
@@ -775,7 +826,7 @@ test("reply decider keeps representative stt-pipeline classifier-skip settings o
         guildId: "guild-1",
         textChannelId: "chan-1",
         voiceChannelId: "voice-1",
-        mode: "stt_pipeline",
+        mode: "openai_realtime",
         botTurnOpen: false
       },
       userId: "speaker-1",
@@ -1172,6 +1223,9 @@ test("reply decider hard-denies malformed classifier output", async () => {
     settings: baseSettings({
       voice: {
         replyEagerness: 60,
+        admission: {
+          mode: "generation_decides"
+        },
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5",
@@ -1506,6 +1560,9 @@ test("classifier sees participant list so it can infer addressing from transcrip
     settings: baseSettings({
       voice: {
         replyEagerness: 60,
+        admission: {
+          mode: "generation_decides"
+        },
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -1639,25 +1696,27 @@ test("reply decider keeps merged bot-name token turns on the classifier with dir
       return { text: "YES", provider: "anthropic", model: "claude-haiku-4-5" };
     }
   });
+  const settings = baseSettings({
+    voice: {
+      replyEagerness: 60,
+      replyDecisionLlm: {
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+
+      }
+    }
+  });
+  settings.voice.admission.mode = "generation_decides";
   const decision = await manager.evaluateVoiceReplyDecision({
     session: {
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
-      mode: "stt_pipeline",
+      mode: "openai_realtime",
       botTurnOpen: false,
     },
     userId: "speaker-1",
-    settings: baseSettings({
-      voice: {
-        replyEagerness: 60,
-        replyDecisionLlm: {
-          provider: "anthropic",
-          model: "claude-haiku-4-5",
-
-        }
-      }
-    }),
+    settings,
     transcript: "clanker conk can you help with this"
   });
 
@@ -1675,24 +1734,26 @@ test("reply decider lets generation decide turns that previously triggered contr
       return { text: "maybe later" };
     }
   });
+  const settings = baseSettings({
+    voice: {
+      replyEagerness: 60,
+      replyDecisionLlm: {
+        provider: "anthropic",
+        model: "claude-haiku-4-5"
+      }
+    }
+  });
+  settings.voice.admission.mode = "generation_decides";
   const decision = await manager.evaluateVoiceReplyDecision({
     session: {
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
-      mode: "stt_pipeline",
+      mode: "openai_realtime",
       botTurnOpen: false,
     },
     userId: "speaker-1",
-    settings: baseSettings({
-      voice: {
-        replyEagerness: 60,
-        replyDecisionLlm: {
-          provider: "anthropic",
-          model: "claude-haiku-4-5"
-        }
-      }
-    }),
+    settings,
     transcript: "maybe later maybe not"
   });
 
@@ -1704,16 +1765,18 @@ test("reply decider lets generation decide turns that previously triggered contr
 
 test("reply decider does not gate unaddressed turns behind cooldown", async () => {
   const manager = createManager();
+  const settings = baseSettings();
+  settings.voice.admission.mode = "generation_decides";
   const decision = await manager.evaluateVoiceReplyDecision({
     session: {
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
-      mode: "stt_pipeline",
+      mode: "openai_realtime",
       botTurnOpen: false,
     },
     userId: "speaker-1",
-    settings: baseSettings(),
+    settings,
     transcript: "can you jump in on this"
   });
 
@@ -1882,6 +1945,84 @@ test("reply decider allows active music command followup before eagerness reject
 
   assert.equal(decision.allow, true);
   assert.equal(decision.reason, "pending_command_followup");
+});
+
+test("reply decider allows the command owner through an active tool followup lease before classifier", async () => {
+  const manager = createManager({
+    generate: async () => {
+      throw new Error("classifier should stay out of owned tool followup turns");
+    }
+  });
+  const now = Date.now();
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+      voiceCommandState: {
+        userId: "speaker-1",
+        domain: "tool",
+        intent: "tool_followup",
+        startedAt: now - 1_000,
+        expiresAt: now + 10_000
+      }
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyPath: "bridge",
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "yeah do that"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "owned_tool_followup");
+});
+
+test("reply decider blocks other speakers during an active tool followup lease before classifier", async () => {
+  const manager = createManager({
+    generate: async () => {
+      throw new Error("classifier should stay out of other-speaker owned tool followup turns");
+    }
+  });
+  const now = Date.now();
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+      voiceCommandState: {
+        userId: "speaker-1",
+        domain: "tool",
+        intent: "tool_followup",
+        startedAt: now - 1_000,
+        expiresAt: now + 10_000
+      }
+    },
+    userId: "speaker-2",
+    settings: baseSettings({
+      voice: {
+        replyPath: "bridge",
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "wait what"
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "owned_tool_followup_other_speaker_blocked");
 });
 
 test("reply decider keeps unrelated chatter blocked during pending music followup", async () => {
@@ -3909,7 +4050,7 @@ test("runRealtimeTurn forwards shared ASR transcript turns into OpenAI room-brai
   assert.equal(audioForwardPayloads.length, 0);
 });
 
-test("runSttPipelineTurn exits before generation when turn admission denies speaking", async () => {
+test("runFileAsrTurn exits before generation when turn admission denies speaking", async () => {
   const runtimeLogs = [];
   let generateVoiceTurnCalls = 0;
   let releaseMemoryIngest = () => undefined;
@@ -3947,7 +4088,7 @@ test("runSttPipelineTurn exits before generation when turn admission denies spea
     id: "session-3",
     guildId: "guild-1",
     textChannelId: "chan-1",
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     ending: false,
     settingsSnapshot: baseSettings({
       memory: {
@@ -3956,7 +4097,7 @@ test("runSttPipelineTurn exits before generation when turn admission denies spea
     })
   };
 
-  const turnRun = manager.turnProcessor.runSttPipelineTurn({
+  const turnRun = manager.turnProcessor.runFileAsrTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([4, 5, 6, 7]),
@@ -3979,256 +4120,10 @@ test("runSttPipelineTurn exits before generation when turn admission denies spea
   assert.equal(addressingLog?.metadata?.reason, "classifier_deny");
 });
 
-test("runSttPipelineReply treats already-played soundboard-only turns as handled", async () => {
-  const manager = createManager();
-  const soundboardCalls = [];
-  const spokenLines = [];
-  manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
-  manager.generateVoiceTurn = async () => ({
-    text: "",
-    playedSoundboardRefs: ["airhorn@123"]
-  });
-  manager.speakVoiceLineWithTts = async (payload) => {
-    spokenLines.push(payload);
-    return true;
-  };
-  manager.soundboardDirector.play = async ({ soundId, sourceGuildId }) => {
-    soundboardCalls.push({
-      requestedRef: sourceGuildId ? `${soundId}@${sourceGuildId}` : soundId
-    });
-    return { ok: true };
-  };
 
-  const session = {
-    id: "session-stt-soundboard-only-1",
-    guildId: "guild-1",
-    textChannelId: "chan-1",
-    mode: "stt_pipeline",
-    ending: false,
-    recentVoiceTurns: [],
-    settingsSnapshot: baseSettings({
-      voice: {
-        replyEagerness: 60,
-        soundboard: {
-          enabled: true,
-          preferredSoundIds: ["airhorn@123"]
-        }
-      }
-    })
-  };
-
-  await manager.runSttPipelineReply({
-    session,
-    settings: session.settingsSnapshot,
-    userId: "speaker-1",
-    transcript: "drop a sound",
-    directAddressed: true
-  });
-
-  assert.equal(spokenLines.length, 0);
-  assert.equal(soundboardCalls.length, 0);
-});
-
-test("runSttPipelineReply passes addressing state into generation and persists model addressing guess", async () => {
-  const manager = createManager();
-  const generationPayloads = [];
-  manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
-  manager.resolveSoundboardCandidates = async () => ({
-    source: "preferred",
-    candidates: []
-  });
-  manager.generateVoiceTurn = async (payload) => {
-    generationPayloads.push(payload);
-    return {
-      text: "yup",
-      voiceAddressing: {
-        talkingTo: "ME",
-        directedConfidence: 0.88
-      }
-    };
-  };
-  manager.speakVoiceLineWithTts = async () => true;
-
-  const now = Date.now();
-  const session = {
-    id: "session-stt-addressing-state-1",
-    guildId: "guild-1",
-    textChannelId: "chan-1",
-    mode: "stt_pipeline",
-    ending: false,
-    recentVoiceTurns: [
-      {
-        role: "user",
-        userId: "speaker-1",
-        speakerName: "alice",
-        text: "earlier note",
-        at: now - 9_000,
-        addressing: { talkingTo: "bob", directedConfidence: 0.61 }
-      },
-      {
-        role: "user",
-        userId: "speaker-2",
-        speakerName: "bob",
-        text: "clanker can you jump in",
-        at: now - 6_000,
-        addressing: { talkingTo: "ME", directedConfidence: 0.9 }
-      },
-      {
-        role: "user",
-        userId: "speaker-1",
-        speakerName: "alice",
-        text: "what do you think",
-        at: now - 1_200
-      }
-    ],
-    transcriptTurns: [
-      {
-        role: "user",
-        userId: "speaker-1",
-        speakerName: "alice",
-        text: "earlier note",
-        at: now - 9_000,
-        addressing: { talkingTo: "bob", directedConfidence: 0.61 }
-      },
-      {
-        role: "user",
-        userId: "speaker-2",
-        speakerName: "bob",
-        text: "clanker can you jump in",
-        at: now - 6_000,
-        addressing: { talkingTo: "ME", directedConfidence: 0.9 }
-      },
-      {
-        role: "user",
-        userId: "speaker-1",
-        speakerName: "alice",
-        text: "what do you think",
-        at: now - 1_200
-      }
-    ],
-    settingsSnapshot: baseSettings()
-  };
-
-  await manager.runSttPipelineReply({
-    session,
-    settings: session.settingsSnapshot,
-    userId: "speaker-1",
-    transcript: "what do you think",
-    directAddressed: false
-  });
-
-  assert.equal(generationPayloads.length, 1);
-  assert.equal(generationPayloads[0]?.voiceEagerness, 60);
-  assert.equal(generationPayloads[0]?.conversationContext?.voiceAddressingState?.currentSpeakerTarget, "bob");
-  assert.equal(
-    generationPayloads[0]?.conversationContext?.voiceAddressingState?.recentAddressingGuesses?.length >= 2,
-    true
-  );
-  const updatedTurn = session.transcriptTurns.find(
-    (row) => row?.role === "user" && row?.userId === "speaker-1" && row?.text === "what do you think"
-  );
-  assert.equal(updatedTurn?.addressing?.talkingTo, "ME");
-  assert.equal(updatedTurn?.addressing?.directedConfidence, 0.88);
-});
-
-test("runSttPipelineReply plays inline soundboard directives in spoken order", async () => {
-  const manager = createManager();
-  const spokenLines = [];
-  const soundboardCalls = [];
-  manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
-  manager.generateVoiceTurn = async () => ({
-    text: "yo [[SOUNDBOARD:airhorn@123]] hold up [[SOUNDBOARD:rimshot@456]] done"
-  });
-  manager.speakVoiceLineWithTts = async ({ text }) => {
-    spokenLines.push(String(text));
-    return true;
-  };
-  manager.waitForLeaveDirectivePlayback = async () => {};
-  manager.soundboardDirector.play = async ({ soundId, sourceGuildId }) => {
-    soundboardCalls.push(sourceGuildId ? `${soundId}@${sourceGuildId}` : soundId);
-    return { ok: true };
-  };
-
-  const session = {
-    id: "session-stt-inline-order-1",
-    guildId: "guild-1",
-    textChannelId: "chan-1",
-    mode: "stt_pipeline",
-    ending: false,
-    recentVoiceTurns: [],
-    settingsSnapshot: baseSettings({
-      voice: {
-        soundboard: {
-          enabled: true,
-          preferredSoundIds: ["airhorn@123", "rimshot@456"]
-        }
-      }
-    })
-  };
-
-  await manager.runSttPipelineReply({
-    session,
-    settings: session.settingsSnapshot,
-    userId: "speaker-1",
-    transcript: "sequence this",
-    directAddressed: true
-  });
-
-  assert.deepEqual(spokenLines, ["yo", "hold up", "done"]);
-  assert.deepEqual(soundboardCalls, ["airhorn@123", "rimshot@456"]);
-});
-
-test("runSttPipelineReply ends VC when model requests leave directive", async () => {
-  const manager = createManager();
-  const endCalls = [];
-  const waitCalls = [];
-  manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
-  manager.resolveSoundboardCandidates = async () => ({
-    source: "preferred",
-    candidates: []
-  });
-  manager.generateVoiceTurn = async () => ({
-    text: "aight i'm heading out",
-    leaveVoiceChannelRequested: true
-  });
-  manager.speakVoiceLineWithTts = async () => true;
-  manager.waitForLeaveDirectivePlayback = async (payload) => {
-    waitCalls.push(payload);
-  };
-  manager.endSession = async (payload) => {
-    endCalls.push(payload);
-    return true;
-  };
-
-  const session = {
-    id: "session-stt-leave-1",
-    guildId: "guild-1",
-    textChannelId: "chan-1",
-    mode: "stt_pipeline",
-    ending: false,
-    maxEndsAt: Date.now() + 80_000,
-    inactivityEndsAt: Date.now() + 30_000,
-    recentVoiceTurns: [],
-    settingsSnapshot: baseSettings()
-  };
-
-  await manager.runSttPipelineReply({
-    session,
-    settings: session.settingsSnapshot,
-    userId: "speaker-1",
-    transcript: "anything else before we stop?",
-    directAddressed: true
-  });
-
-  assert.equal(waitCalls.length, 1);
-  assert.equal(waitCalls[0]?.expectRealtimeAudio, false);
-  assert.equal(endCalls.length, 1);
-  assert.equal(endCalls[0]?.reason, "assistant_leave_directive");
-});
-
-test("runSttPipelineTurn queues bot-turn-open transcripts for deferred flush", async () => {
+test("runFileAsrTurn queues bot-turn-open transcripts for deferred flush", async () => {
   const queuedTurns = [];
-  let runSttPipelineReplyCalls = 0;
+  let runRealtimeBrainReplyCalls = 0;
   const manager = createManager();
   manager.llm.transcribeAudio = async () => ({ text: "clanker wait for this point" });
   manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
@@ -4243,8 +4138,8 @@ test("runSttPipelineTurn queues bot-turn-open transcripts for deferred flush", a
   manager.queueDeferredBotTurnOpenTurn = (payload) => {
     queuedTurns.push(payload);
   };
-  manager.runSttPipelineReply = async () => {
-    runSttPipelineReplyCalls += 1;
+  manager.runRealtimeBrainReply = async () => {
+    runRealtimeBrainReplyCalls += 1;
   };
   manager.touchActivity = () => {};
 
@@ -4252,25 +4147,25 @@ test("runSttPipelineTurn queues bot-turn-open transcripts for deferred flush", a
     id: "session-stt-defer-1",
     guildId: "guild-1",
     textChannelId: "chan-1",
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     ending: false,
     settingsSnapshot: baseSettings()
   };
 
-  await manager.turnProcessor.runSttPipelineTurn({
+  await manager.turnProcessor.runFileAsrTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([4, 5, 6, 7]),
     captureReason: "stream_end"
   });
 
-  assert.equal(runSttPipelineReplyCalls, 0);
+  assert.equal(runRealtimeBrainReplyCalls, 0);
   assert.equal(queuedTurns.length, 1);
-  assert.equal(queuedTurns[0]?.source, "stt_pipeline");
+  assert.equal(queuedTurns[0]?.source, "file_asr");
   assert.equal(queuedTurns[0]?.transcript, "clanker wait for this point");
 });
 
-test("runSttPipelineTurn retries full ASR model after empty mini transcript", async () => {
+test("runFileAsrTurn retries full ASR model after empty mini transcript", async () => {
   const runtimeLogs = [];
   const attemptedModels = [];
   const manager = createManager();
@@ -4296,13 +4191,13 @@ test("runSttPipelineTurn retries full ASR model after empty mini transcript", as
     id: "session-stt-fallback-1",
     guildId: "guild-1",
     textChannelId: "chan-1",
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     ending: false,
     recentVoiceTurns: [],
     settingsSnapshot: baseSettings()
   };
 
-  await manager.turnProcessor.runSttPipelineTurn({
+  await manager.turnProcessor.runFileAsrTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.alloc(96_000, 1),
@@ -4314,13 +4209,13 @@ test("runSttPipelineTurn retries full ASR model after empty mini transcript", as
     (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
   );
   assert.equal(Boolean(addressingLog), true);
-  assert.equal(addressingLog?.metadata?.mode, "stt_pipeline");
+  assert.equal(addressingLog?.metadata?.mode, "openai_realtime");
   assert.equal(addressingLog?.metadata?.transcriptionModelFallback, "whisper-1");
   assert.equal(addressingLog?.metadata?.transcriptionPlanReason, "mini_with_full_fallback_runtime");
   assert.equal(addressingLog?.metadata?.transcript, "fallback stt transcript");
 });
 
-test("runSttPipelineTurn drops near-silent clips before ASR", async () => {
+test("runFileAsrTurn drops near-silent clips before ASR", async () => {
   const runtimeLogs = [];
   let transcribeCalls = 0;
   let decisionCalls = 0;
@@ -4349,13 +4244,13 @@ test("runSttPipelineTurn drops near-silent clips before ASR", async () => {
     id: "session-silence-gate-stt-1",
     guildId: "guild-1",
     textChannelId: "chan-1",
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     ending: false,
     recentVoiceTurns: [],
     settingsSnapshot: baseSettings()
   };
 
-  await manager.turnProcessor.runSttPipelineTurn({
+  await manager.turnProcessor.runFileAsrTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.alloc(96_000, 0),
@@ -4368,10 +4263,10 @@ test("runSttPipelineTurn drops near-silent clips before ASR", async () => {
     (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_dropped_silence_gate"
   );
   assert.equal(Boolean(silenceDrop), true);
-  assert.equal(silenceDrop?.metadata?.source, "stt_pipeline");
+  assert.equal(silenceDrop?.metadata?.source, "file_asr");
 });
 
-test("runSttPipelineTurn empty transcripts escalate after streak threshold", async () => {
+test("runFileAsrTurn empty transcripts escalate after streak threshold", async () => {
   const runtimeLogs = [];
   const errorLogs = [];
   const manager = createManager();
@@ -4388,14 +4283,14 @@ test("runSttPipelineTurn empty transcripts escalate after streak threshold", asy
     id: "session-stt-empty-streak-1",
     guildId: "guild-1",
     textChannelId: "chan-1",
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     ending: false,
     recentVoiceTurns: [],
     settingsSnapshot: baseSettings()
   };
 
   for (let index = 0; index < 3; index += 1) {
-    await manager.turnProcessor.runSttPipelineTurn({
+    await manager.turnProcessor.runFileAsrTurn({
       session,
       userId: "speaker-1",
       pcmBuffer: Buffer.alloc(48_000, 1),
@@ -4408,13 +4303,13 @@ test("runSttPipelineTurn empty transcripts escalate after streak threshold", asy
     2
   );
   const escalated = errorLogs.filter((row) =>
-    String(row?.content || "").startsWith("stt_pipeline_transcription_failed:")
+    String(row?.content || "").startsWith("file_asr_transcription_failed:")
   );
   assert.equal(escalated.length, 1);
   assert.equal(escalated[0]?.metadata?.emptyTranscriptStreak, 3);
 });
 
-test("queueSttPipelineTurn keeps a bounded FIFO backlog while a turn is running", async () => {
+test("queueFileAsrTurn keeps a bounded FIFO backlog while a turn is running", async () => {
   const runtimeLogs = [];
   const seenCaptureReasons = [];
   let releaseFirstTurn = () => undefined;
@@ -4423,7 +4318,7 @@ test("queueSttPipelineTurn keeps a bounded FIFO backlog while a turn is running"
   manager.store.logAction = (row) => {
     runtimeLogs.push(row);
   };
-  manager.turnProcessor.runSttPipelineTurn = async ({ captureReason }) => {
+  manager.turnProcessor.runFileAsrTurn = async ({ captureReason }) => {
     seenCaptureReasons.push(captureReason);
     if (!firstTurnStarted) {
       firstTurnStarted = true;
@@ -4437,14 +4332,14 @@ test("queueSttPipelineTurn keeps a bounded FIFO backlog while a turn is running"
     id: "session-stt-queue-1",
     guildId: "guild-1",
     textChannelId: "chan-1",
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     ending: false,
-    pendingSttTurns: 0,
-    sttTurnDrainActive: false,
-    pendingSttTurnsQueue: []
+    pendingFileAsrTurns: 0,
+    fileAsrTurnDrainActive: false,
+    pendingFileAsrTurnsQueue: []
   };
 
-  manager.turnProcessor.queueSttPipelineTurn({
+  manager.turnProcessor.queueFileAsrTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([1, 2, 3]),
@@ -4452,9 +4347,9 @@ test("queueSttPipelineTurn keeps a bounded FIFO backlog while a turn is running"
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  const queuedCount = STT_TURN_QUEUE_MAX + 2;
+  const queuedCount = FILE_ASR_TURN_QUEUE_MAX + 2;
   for (let index = 0; index < queuedCount; index += 1) {
-    manager.turnProcessor.queueSttPipelineTurn({
+    manager.turnProcessor.queueFileAsrTurn({
       session,
       userId: "speaker-1",
       pcmBuffer: Buffer.from([4 + index, 5 + index, 6 + index]),
@@ -4462,31 +4357,31 @@ test("queueSttPipelineTurn keeps a bounded FIFO backlog while a turn is running"
     });
   }
   const expectedQueuedReasons = Array.from({ length: queuedCount }, (_row, index) => `queued-${index + 1}`).slice(
-    -STT_TURN_QUEUE_MAX
+    -FILE_ASR_TURN_QUEUE_MAX
   );
 
   assert.deepEqual(
-    session.pendingSttTurnsQueue.map((turn) => turn.captureReason),
+    session.pendingFileAsrTurnsQueue.map((turn) => turn.captureReason),
     expectedQueuedReasons
   );
-  assert.equal(session.pendingSttTurns, 1 + STT_TURN_QUEUE_MAX);
-  const supersededLogs = runtimeLogs.filter((row) => row?.content === "stt_pipeline_turn_superseded");
+  assert.equal(session.pendingFileAsrTurns, 1 + FILE_ASR_TURN_QUEUE_MAX);
+  const supersededLogs = runtimeLogs.filter((row) => row?.content === "file_asr_turn_superseded");
   assert.equal(
     supersededLogs.length,
     2
   );
   assert.equal(supersededLogs[0]?.metadata?.replacedCaptureReason, "queued-1");
   assert.equal(supersededLogs[1]?.metadata?.replacedCaptureReason, "queued-2");
-  assert.equal(supersededLogs[0]?.metadata?.maxQueueDepth, STT_TURN_QUEUE_MAX);
+  assert.equal(supersededLogs[0]?.metadata?.maxQueueDepth, FILE_ASR_TURN_QUEUE_MAX);
 
   releaseFirstTurn();
   await new Promise((resolve) => setTimeout(resolve, 25));
 
   assert.deepEqual(seenCaptureReasons, ["first", ...expectedQueuedReasons]);
-  assert.equal(session.pendingSttTurns, 0);
+  assert.equal(session.pendingFileAsrTurns, 0);
 });
 
-test("queueSttPipelineTurn coalesces adjacent queued STT turns from the same speaker", () => {
+test("queueFileAsrTurn coalesces adjacent queued turns from the same speaker", () => {
   const runtimeLogs = [];
   const manager = createManager();
   manager.store.logAction = (row) => {
@@ -4498,11 +4393,11 @@ test("queueSttPipelineTurn coalesces adjacent queued STT turns from the same spe
     id: "session-stt-coalesce-1",
     guildId: "guild-1",
     textChannelId: "chan-1",
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     ending: false,
-    pendingSttTurns: 2,
-    sttTurnDrainActive: true,
-    pendingSttTurnsQueue: [
+    pendingFileAsrTurns: 2,
+    fileAsrTurnDrainActive: true,
+    pendingFileAsrTurnsQueue: [
       {
         session: null,
         userId: "speaker-1",
@@ -4512,27 +4407,27 @@ test("queueSttPipelineTurn coalesces adjacent queued STT turns from the same spe
       }
     ]
   };
-  session.pendingSttTurnsQueue[0].session = session;
+  session.pendingFileAsrTurnsQueue[0].session = session;
 
-  manager.turnProcessor.queueSttPipelineTurn({
+  manager.turnProcessor.queueFileAsrTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([4, 5, 6, 7]),
     captureReason: "speaking_end"
   });
 
-  assert.equal(session.pendingSttTurnsQueue.length, 1);
+  assert.equal(session.pendingFileAsrTurnsQueue.length, 1);
   assert.equal(
-    session.pendingSttTurnsQueue[0]?.pcmBuffer.equals(Buffer.from([1, 2, 3, 4, 5, 6, 7])),
+    session.pendingFileAsrTurnsQueue[0]?.pcmBuffer.equals(Buffer.from([1, 2, 3, 4, 5, 6, 7])),
     true
   );
   assert.equal(
-    runtimeLogs.some((row) => row?.kind === "voice_runtime" && row?.content === "stt_pipeline_turn_coalesced"),
+    runtimeLogs.some((row) => row?.kind === "voice_runtime" && row?.content === "file_asr_turn_coalesced"),
     true
   );
 });
 
-test("runSttPipelineTurn drops stale queued turns before ASR when backlog exists", async () => {
+test("runFileAsrTurn drops stale queued turns before ASR when backlog exists", async () => {
   const runtimeLogs = [];
   let transcribeCalls = 0;
   let decisionCalls = 0;
@@ -4557,7 +4452,7 @@ test("runSttPipelineTurn drops stale queued turns before ASR when backlog exists
       transcript: "old turn"
     };
   };
-  manager.runSttPipelineReply = async () => {
+  manager.runRealtimeBrainReply = async () => {
     runReplyCalls += 1;
   };
 
@@ -4565,17 +4460,17 @@ test("runSttPipelineTurn drops stale queued turns before ASR when backlog exists
     id: "session-stt-stale-backlog-1",
     guildId: "guild-1",
     textChannelId: "chan-1",
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     ending: false,
     recentVoiceTurns: [],
-    pendingSttTurnsQueue: [
+    pendingFileAsrTurnsQueue: [
       { userId: "speaker-2", pcmBuffer: Buffer.from([9]), captureReason: "speaking_end" },
       { userId: "speaker-3", pcmBuffer: Buffer.from([10]), captureReason: "speaking_end" }
     ],
     settingsSnapshot: baseSettings()
   };
 
-  await manager.turnProcessor.runSttPipelineTurn({
+  await manager.turnProcessor.runFileAsrTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([1, 2, 3, 4]),
@@ -4588,13 +4483,13 @@ test("runSttPipelineTurn drops stale queued turns before ASR when backlog exists
   assert.equal(runReplyCalls, 0);
   assert.equal(session.recentVoiceTurns.length, 0);
   const staleLog = runtimeLogs.find(
-    (row) => row?.kind === "voice_runtime" && row?.content === "stt_pipeline_turn_skipped_stale"
+    (row) => row?.kind === "voice_runtime" && row?.content === "file_asr_turn_skipped_stale"
   );
   assert.equal(Boolean(staleLog), true);
   assert.equal(staleLog?.metadata?.droppedBeforeAsr, true);
 });
 
-test("runSttPipelineTurn transcribes stale queued turns for context but skips reply generation", async () => {
+test("runFileAsrTurn transcribes stale queued turns for context but skips reply generation", async () => {
   const runtimeLogs = [];
   let transcribeCalls = 0;
   let decisionCalls = 0;
@@ -4619,7 +4514,7 @@ test("runSttPipelineTurn transcribes stale queued turns for context but skips re
       transcript: "stale context turn"
     };
   };
-  manager.runSttPipelineReply = async () => {
+  manager.runRealtimeBrainReply = async () => {
     runReplyCalls += 1;
   };
 
@@ -4627,13 +4522,13 @@ test("runSttPipelineTurn transcribes stale queued turns for context but skips re
     id: "session-stt-stale-1",
     guildId: "guild-1",
     textChannelId: "chan-1",
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     ending: false,
     recentVoiceTurns: [],
     settingsSnapshot: baseSettings()
   };
 
-  await manager.turnProcessor.runSttPipelineTurn({
+  await manager.turnProcessor.runFileAsrTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([1, 2, 3, 4]),
@@ -4648,7 +4543,7 @@ test("runSttPipelineTurn transcribes stale queued turns for context but skips re
   assert.equal(session.recentVoiceTurns[0]?.role, "user");
   assert.equal(session.recentVoiceTurns[0]?.text, "stale context turn");
   assert.equal(
-    runtimeLogs.some((row) => row?.kind === "voice_runtime" && row?.content === "stt_pipeline_turn_skipped_stale"),
+    runtimeLogs.some((row) => row?.kind === "voice_runtime" && row?.content === "file_asr_turn_skipped_stale"),
     true
   );
 });
@@ -4674,7 +4569,7 @@ test("flushDeferredBotTurnOpenTurns waits for silence before admission", async (
     id: "session-stt-defer-2",
     guildId: "guild-1",
     textChannelId: "chan-1",
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     ending: false,
     botTurnOpen: false,
     userCaptures: new Map([["speaker-1", {}]]),
@@ -4697,7 +4592,7 @@ test("flushDeferredBotTurnOpenTurns waits for silence before admission", async (
               transcript: "clanker what about this",
               pcmBuffer: null,
               captureReason: "speaking_end",
-              source: "stt_pipeline",
+              source: "file_asr",
               directAddressed: true,
               queuedAt: Date.now()
             }
@@ -4730,14 +4625,14 @@ test("flushDeferredBotTurnOpenTurns coalesces deferred transcripts into one admi
       transcript: payload.transcript
     };
   };
-  manager.runSttPipelineReply = async (payload) => {
+  manager.runRealtimeBrainReply = async (payload) => {
     replyPayloads.push(payload);
   };
   const session = {
     id: "session-stt-defer-3",
     guildId: "guild-1",
     textChannelId: "chan-1",
-    mode: "stt_pipeline",
+    mode: "openai_realtime",
     ending: false,
     botTurnOpen: false,
     userCaptures: new Map(),
@@ -4761,7 +4656,7 @@ test("flushDeferredBotTurnOpenTurns coalesces deferred transcripts into one admi
               transcript: "clanker hold on",
               pcmBuffer: null,
               captureReason: "speaking_end",
-              source: "stt_pipeline",
+              source: "file_asr",
               directAddressed: true,
               queuedAt: Date.now() - 20
             },
@@ -4770,7 +4665,7 @@ test("flushDeferredBotTurnOpenTurns coalesces deferred transcripts into one admi
               transcript: "what about the rust panic trace",
               pcmBuffer: null,
               captureReason: "speaking_end",
-              source: "stt_pipeline",
+              source: "file_asr",
               directAddressed: false,
               queuedAt: Date.now()
             }
@@ -5041,4 +4936,37 @@ test("buildRealtimeInstructions forbids claiming screen vision before frame cont
   assert.equal(instructions.includes("Do not claim to see, watch, or react to on-screen content until actual frame context is provided."), true);
   assert.equal(instructions.includes("call offer_screen_share_link"), true);
   assert.equal(instructions.includes("Recent voice effects: bob played soundboard \"rimshot\""), true);
+});
+
+test("buildRealtimeInstructions omits native tooling policy for transport-only sessions", () => {
+  const manager = createManager();
+
+  const instructions = manager.instructionManager.buildRealtimeInstructions({
+    session: {
+      id: "session-transport-tools-1",
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      realtimeToolOwnership: "transport_only",
+      startedAt: Date.now() - 5_000,
+      membershipEvents: [],
+      openAiToolDefinitions: [
+        {
+          name: "memory_search",
+          toolType: "function",
+          description: "Search memory"
+        }
+      ]
+    },
+    settings: baseSettings({
+      voice: {
+        mode: "openai_realtime",
+        replyPath: "brain"
+      }
+    })
+  });
+
+  assert.equal(instructions.includes("Tooling policy:"), false);
+  assert.equal(instructions.includes("Local tools:"), false);
 });

@@ -28,7 +28,7 @@ test("resolveSystemSpeechOpportunityType identifies canonical system speech sour
 
 test("system speech source helpers only match system initiated reply sources", () => {
   assert.equal(isSystemSpeechOpportunitySource(SYSTEM_SPEECH_SOURCE.THOUGHT), true);
-  assert.equal(isSystemSpeechOpportunitySource("stt_pipeline_reply"), false);
+  assert.equal(isSystemSpeechOpportunitySource("file_asr_reply"), false);
 });
 
 test("system speech sources yield to promoted user speech before audio begins", () => {
@@ -50,8 +50,8 @@ test("system speech reply accounting is explicit for request and local playback 
     resolveSystemSpeechReplyAccountingOnLocalPlayback(SYSTEM_SPEECH_SOURCE.THOUGHT_TTS),
     "spoken"
   );
-  assert.equal(resolveSystemSpeechReplyAccountingOnRequest("stt_pipeline_reply"), null);
-  assert.equal(resolveSystemSpeechReplyAccountingOnLocalPlayback("stt_pipeline_reply"), null);
+  assert.equal(resolveSystemSpeechReplyAccountingOnRequest("file_asr_reply"), null);
+  assert.equal(resolveSystemSpeechReplyAccountingOnLocalPlayback("file_asr_reply"), null);
 });
 
 test("system speech definitions expose speech class and skip policy", () => {
@@ -60,5 +60,5 @@ test("system speech definitions expose speech class and skip policy", () => {
     SYSTEM_SPEECH_CLASS.SYSTEM_OPTIONAL
   );
   assert.equal(shouldAllowSystemSpeechSkipAfterFire(SYSTEM_SPEECH_SOURCE.THOUGHT), true);
-  assert.equal(shouldAllowSystemSpeechSkipAfterFire("stt_pipeline_reply"), true);
+  assert.equal(shouldAllowSystemSpeechSkipAfterFire("file_asr_reply"), true);
 });

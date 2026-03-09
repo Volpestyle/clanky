@@ -478,7 +478,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       channelId,
       userId
     },
-    source: "voice_stt_pipeline_generation",
+    source: "voice_realtime_generation",
     loadFactProfile:
       (payload) => {
         if (activeVoiceSession && typeof runtime.voiceSessionManager?.getSessionFactProfileSlice === "function") {
@@ -523,10 +523,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   const tunedSettings = applyOrchestratorOverrideSettings(settings, {
     provider: voiceGenerationBinding.provider,
     model: voiceGenerationBinding.model,
-    temperature: clamp(Number(replyGeneration.temperature) || 0.8, 0, 1.2),
-    // Voice-turn JSON with actionable voiceIntent fields needs more headroom
-    // than plain spoken-text replies to avoid truncating the closing schema.
-    maxOutputTokens: clamp(Number(replyGeneration.maxOutputTokens) || 320, 40, 420)
+    temperature: Number(replyGeneration.temperature) || 1.0,
+    maxOutputTokens: Number(replyGeneration.maxOutputTokens) || 2500
   });
   const tunedBinding = getResolvedOrchestratorBinding(tunedSettings);
 
@@ -706,7 +704,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       guildId,
       channelId,
       userId,
-      source: "voice_stt_pipeline_generation",
+      source: "voice_realtime_generation",
       event: sessionId ? "voice_session" : "voice_turn",
       reason: null,
       messageId: null
