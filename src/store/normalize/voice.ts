@@ -11,7 +11,6 @@ import {
 import {
   normalizeOperationalMessages,
   normalizeReplyPath,
-  normalizeStreamWatchCommentaryPath,
   normalizeVoiceDefaultInterruptionMode,
   normalizeVoiceAdmissionMode
 } from "./shared.ts";
@@ -168,15 +167,11 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
         50_000,
         4_000_000
       ),
-      commentaryPath: normalizeStreamWatchCommentaryPath(
-        streamWatch.commentaryPath,
-        DEFAULT_SETTINGS.voice.streamWatch.commentaryPath
-      ),
       keyframeIntervalMs: normalizeInt(
         streamWatch.keyframeIntervalMs,
         DEFAULT_SETTINGS.voice.streamWatch.keyframeIntervalMs,
-        250,
-        10_000
+        500,
+        2_000
       ),
       autonomousCommentaryEnabled: normalizeBoolean(
         streamWatch.autonomousCommentaryEnabled,
@@ -216,14 +211,14 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
       sharePageMaxWidthPx: normalizeInt(
         streamWatch.sharePageMaxWidthPx,
         DEFAULT_SETTINGS.voice.streamWatch.sharePageMaxWidthPx,
-        320,
+        640,
         1_920
       ),
       sharePageJpegQuality: normalizeNumber(
         streamWatch.sharePageJpegQuality,
         DEFAULT_SETTINGS.voice.streamWatch.sharePageJpegQuality,
-        0.1,
-        1
+        0.5,
+        0.75
       )
     },
     soundboard: {

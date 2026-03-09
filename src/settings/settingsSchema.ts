@@ -10,10 +10,12 @@ export const PROVIDER_MODEL_FALLBACKS = {
 } as const;
 
 export const AGENT_STACK_PRESETS = [
-  "openai_native",
-  "anthropic_brain_openai_tools",
-  "claude_oauth_local_tools",
-  "custom"
+  "claude_oauth",
+  "claude_api",
+  "openai_native_realtime",
+  "openai_api",
+  "openai_oauth",
+  "grok_native_agent"
 ] as const;
 
 export const AGENT_HARNESS_KINDS = ["internal", "responses_native"] as const;
@@ -243,7 +245,7 @@ export const DEFAULT_SETTINGS = {
     }
   },
   agentStack: {
-    preset: "claude_oauth_local_tools",
+    preset: "claude_oauth",
     advancedOverridesEnabled: false,
     overrides: {},
     runtimeConfig: {
@@ -273,8 +275,8 @@ export const DEFAULT_SETTINGS = {
           execution: {
             mode: "dedicated_model",
             model: {
-              provider: "anthropic",
-              model: "claude-sonnet-4-5-20250929"
+              provider: "claude-oauth",
+              model: "claude-opus-4-6"
             }
           },
           maxBrowseCallsPerHour: 10,
@@ -413,9 +415,12 @@ export const DEFAULT_SETTINGS = {
         mode: "inherit_orchestrator"
       },
       eagerness: 20,
-      minMinutesBetweenThoughts: 60,
-      maxThoughtsPerDay: 1,
-      lookbackMessages: 20
+      minMinutesBetweenPosts: 60,
+      maxPostsPerDay: 3,
+      lookbackMessages: 20,
+      allowActiveCuriosity: true,
+      maxToolSteps: 3,
+      maxToolCalls: 4
     },
     voice: {
       enabled: true,
@@ -432,13 +437,6 @@ export const DEFAULT_SETTINGS = {
       minSecondsBetweenThoughts: 60
     },
     discovery: {
-      enabled: true,
-      channelIds: ["1475944808198574205"],
-      maxPostsPerDay: 1,
-      minMinutesBetweenPosts: 120,
-      pacingMode: "even",
-      spontaneity: 65,
-      postOnStartup: false,
       allowImagePosts: true,
       allowVideoPosts: true,
       allowReplyImages: true,
@@ -453,7 +451,6 @@ export const DEFAULT_SETTINGS = {
       allowedImageModels: ["gpt-image-1.5", "grok-imagine-image", "grok-2-image-1212"],
       allowedVideoModels: ["grok-imagine-video", "grok-2-video"],
       maxMediaPromptChars: 900,
-      linkChancePercent: 80,
       maxLinksPerPost: 2,
       maxCandidatesForPrompt: 6,
       freshnessHours: 96,
@@ -461,7 +458,8 @@ export const DEFAULT_SETTINGS = {
       randomness: 55,
       sourceFetchLimit: 10,
       allowNsfw: false,
-      preferredTopics: [],
+      allowSelfCuration: true,
+      maxSourcesPerType: 10,
       redditSubreddits: ["technology", "programming", "games", "memes"],
       youtubeChannelIds: [],
       rssFeeds: [
@@ -502,7 +500,7 @@ export const DEFAULT_SETTINGS = {
       commandOnlyMode: false,
       allowNsfwHumor: true,
       textOnlyMode: false,
-      defaultInterruptionMode: "none",
+      defaultInterruptionMode: "speaker",
       replyPath: "brain",
       ttsMode: "realtime",
       operationalMessages: "minimal",
@@ -528,7 +526,6 @@ export const DEFAULT_SETTINGS = {
       minCommentaryIntervalSeconds: 8,
       maxFramesPerMinute: 180,
       maxFrameBytes: 350000,
-      commentaryPath: "auto",
       keyframeIntervalMs: 1200,
       autonomousCommentaryEnabled: true,
       brainContextEnabled: true,

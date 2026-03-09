@@ -80,6 +80,12 @@ interface ActiveChannelRow {
   message_count: number;
 }
 
+interface ReferencedMessageStatsRow {
+  referenced_message_id: string;
+  reaction_count: number;
+  reply_count: number;
+}
+
 function mapStoredMessageRow(row: MessageSqlRow): StoredMessageRow {
   return {
     ...row,
@@ -419,4 +425,59 @@ return store.db
          LIMIT ?`
   )
   .all(String(guildId), since, clamp(limit, 1, 50));
+}
+
+export function getReferencedMessageStats(
+  store: MessageStore,
+  {
+    messageIds,
+    guildId = null,
+    sinceIso = null
+  }: {
+    messageIds: string[];
+    guildId?: string | null;
+    sinceIso?: string | null;
+  }
+) {
+  const normalizedMessageIds = [...new Set(
+    (Array.isArray(messageIds) ? messageIds : [])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  )];
+  if (!normalizedMessageIds.length) return [];
+
+  const params: Array<string | number> = [];
+  const conditions = [
+    `referenced_message_id IN (${normalizedMessageIds.map(() => "?").join(", ")})`,
+    "is_bot = 0"
+  ];
+  params.push(...normalizedMessageIds);
+
+  const normalizedGuildId = String(guildId || "").trim();
+  if (normalizedGuildId) {
+    conditions.push("guild_id = ?");
+    params.push(normalizedGuildId);
+  }
+
+  const normalizedSinceIso = String(sinceIso || "").trim();
+  if (normalizedSinceIso) {
+    conditions.push("created_at >= ?");
+    params.push(normalizedSinceIso);
+  }
+
+  return store.db
+    .prepare<ReferencedMessageStatsRow, Array<string | number>>(
+      `SELECT referenced_message_id,
+              SUM(CASE WHEN message_id LIKE 'reaction:%' THEN 1 ELSE 0 END) AS reaction_count,
+              SUM(CASE WHEN message_id LIKE 'reaction:%' THEN 0 ELSE 1 END) AS reply_count
+         FROM messages
+         WHERE ${conditions.join(" AND ")}
+         GROUP BY referenced_message_id`
+    )
+    .all(...params)
+    .map((row) => ({
+      referenced_message_id: String(row?.referenced_message_id || "").trim(),
+      reaction_count: Number(row?.reaction_count || 0),
+      reply_count: Number(row?.reply_count || 0)
+    }));
 }

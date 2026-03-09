@@ -154,13 +154,6 @@ export function normalizeVoiceDefaultInterruptionMode(value: unknown, fallback: 
   return fallback;
 }
 
-export function normalizeStreamWatchCommentaryPath(value: unknown, fallback: string) {
-  const normalized = normalizeString(value, fallback, 40).toLowerCase();
-  if (normalized === "anthropic_keyframes") return "anthropic_keyframes";
-  if (normalized === "auto") return "auto";
-  return fallback;
-}
-
 export function normalizeReflectionStrategy(value: unknown, fallback: string) {
   const normalized = normalizeString(value, fallback, 64).toLowerCase();
   if (normalized === "one_pass_main") return "one_pass_main";
@@ -227,6 +220,9 @@ export type AgentStackPresetConfig = {
   presetVoiceAdmissionClassifierFallback?: SettingsModelBinding;
   presetVoiceGenerationFallback?: SettingsModelBinding;
   presetVoiceAdmissionMode?: string;
+  presetVoiceReplyPath?: string;
+  presetVoiceTtsMode?: string;
+  presetVoiceRuntimeMode?: string;
   presetBrowserFallback?: SettingsModelBinding;
   presetVisionFallback?: SettingsModelBinding;
 };
@@ -235,49 +231,76 @@ export function resolveAgentStackPresetConfig(
   rawAgentStack: Record<string, unknown>
 ): AgentStackPresetConfig {
   const presetRaw = normalizeString(rawAgentStack.preset, DEFAULT_SETTINGS.agentStack.preset, 48);
+  // Migrate old preset names to new names
   const migrated =
-    presetRaw === "anthropic_api_openai_tools" ? "anthropic_brain_openai_tools"
-    : presetRaw === "claude_oauth_openai_tools" || presetRaw === "claude_oauth_max"
-      ? "claude_oauth_local_tools"
+    presetRaw === "claude_oauth_local_tools" || presetRaw === "claude_oauth_openai_tools" || presetRaw === "claude_oauth_max"
+      ? "claude_oauth"
+    : presetRaw === "anthropic_brain_openai_tools" || presetRaw === "anthropic_api_openai_tools"
+      ? "claude_api"
+    : presetRaw === "openai_native"
+      ? "openai_native_realtime"
+    : presetRaw === "custom"
+      ? "openai_api"
     : presetRaw;
   const preset =
-    migrated === "openai_native" ||
-    migrated === "anthropic_brain_openai_tools" ||
-    migrated === "claude_oauth_local_tools" ||
-    migrated === "custom"
+    migrated === "claude_oauth" ||
+    migrated === "claude_api" ||
+    migrated === "openai_native_realtime" ||
+    migrated === "openai_api" ||
+    migrated === "openai_oauth" ||
+    migrated === "grok_native_agent"
       ? migrated
       : DEFAULT_SETTINGS.agentStack.preset;
 
-  const isAnthropicBrain = preset === "anthropic_brain_openai_tools";
-  const isClaudeOAuth = preset === "claude_oauth_local_tools";
+  const isClaudeOAuth = preset === "claude_oauth";
+  const isClaudeApi = preset === "claude_api";
+  const isOpenAiNativeRealtime = preset === "openai_native_realtime";
+  const isOpenAiApi = preset === "openai_api";
+  const isOpenAiOAuth = preset === "openai_oauth";
+  const isGrokNativeAgent = preset === "grok_native_agent";
+
+  const presetOrchestratorFallback: SettingsModelBinding =
+    isClaudeOAuth ? { provider: "claude-oauth", model: "claude-opus-4-6" }
+    : isClaudeApi ? { provider: "anthropic", model: "claude-sonnet-4-6" }
+    : isOpenAiOAuth ? { provider: "codex-oauth", model: "gpt-5.4" }
+    : isGrokNativeAgent ? { provider: "xai", model: "grok-3-mini-latest" }
+    : { provider: "openai", model: "gpt-5" };
+
+  const presetVoiceAdmissionClassifierFallback: SettingsModelBinding =
+    isClaudeOAuth ? { provider: "claude-oauth", model: "claude-haiku-4-5" }
+    : isClaudeApi ? { provider: "anthropic", model: "claude-haiku-4-5" }
+    : isOpenAiOAuth ? { provider: "codex-oauth", model: "gpt-5.4" }
+    : isGrokNativeAgent ? { provider: "xai", model: "grok-3-mini-latest" }
+    : { provider: "openai", model: "gpt-5-mini" };
+
+  const presetVoiceGenerationFallback: SettingsModelBinding | undefined =
+    isClaudeOAuth ? { provider: "claude-oauth", model: "claude-sonnet-4-6" }
+    : isClaudeApi ? { provider: "anthropic", model: "claude-haiku-4-5" }
+    : isOpenAiApi ? { provider: "openai", model: "gpt-5-mini" }
+    : isOpenAiOAuth ? { provider: "codex-oauth", model: "gpt-5.4" }
+    : undefined;
+
+  const usesGenerationDecides = isClaudeOAuth || isClaudeApi || isOpenAiApi || isOpenAiOAuth;
 
   return {
     preset,
-    presetOrchestratorFallback:
-      isAnthropicBrain
-        ? { provider: "anthropic", model: "claude-sonnet-4-6" }
-        : isClaudeOAuth
-          ? { provider: "claude-oauth", model: "claude-opus-4-6" }
-          : { provider: "openai", model: "gpt-5" },
-    presetVoiceAdmissionClassifierFallback:
-      isClaudeOAuth
-        ? { provider: "claude-oauth", model: "claude-haiku-4-5" }
-        : isAnthropicBrain
-          ? { provider: "anthropic", model: "claude-haiku-4-5" }
-          : { provider: "openai", model: "gpt-5-mini" },
-    presetVoiceGenerationFallback:
-      isClaudeOAuth
-        ? { provider: "claude-oauth", model: "claude-sonnet-4-6" }
-        : undefined,
-    presetVoiceAdmissionMode:
-      isClaudeOAuth ? "generation_decides" : "classifier_gate",
+    presetOrchestratorFallback,
+    presetVoiceAdmissionClassifierFallback,
+    presetVoiceGenerationFallback,
+    presetVoiceAdmissionMode: usesGenerationDecides ? "generation_decides" : "adaptive",
+    presetVoiceReplyPath:
+      isGrokNativeAgent ? "native"
+      : isOpenAiNativeRealtime ? "bridge"
+      : "brain",
+    presetVoiceTtsMode: "realtime",
+    presetVoiceRuntimeMode:
+      isGrokNativeAgent ? "voice_agent" : "openai_realtime",
     presetBrowserFallback:
-      isClaudeOAuth
-        ? { provider: "claude-oauth", model: "claude-opus-4-6" }
-        : undefined,
+      isClaudeOAuth ? { provider: "claude-oauth", model: "claude-opus-4-6" }
+      : undefined,
     presetVisionFallback:
-      isClaudeOAuth
-        ? { provider: "claude-oauth", model: "claude-opus-4-6" }
-        : undefined
+      isClaudeOAuth ? { provider: "claude-oauth", model: "claude-opus-4-6" }
+      : isOpenAiOAuth ? { provider: "codex-oauth", model: "gpt-5.4" }
+      : undefined
   };
 }

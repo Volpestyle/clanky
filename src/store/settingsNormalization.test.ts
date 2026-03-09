@@ -101,7 +101,6 @@ test("normalizeSettings migrates and clamps complex legacy settings into the can
         minCommentaryIntervalSeconds: 1,
         maxFramesPerMinute: 9999,
         maxFrameBytes: 10,
-        commentaryPath: "not-real",
         keyframeIntervalMs: 20,
         autonomousCommentaryEnabled: 0,
         brainContextEnabled: "yes",
@@ -241,8 +240,7 @@ test("normalizeSettings migrates and clamps complex legacy settings into the can
   assert.equal(normalized.voice.streamWatch.minCommentaryIntervalSeconds, 3);
   assert.equal(normalized.voice.streamWatch.maxFramesPerMinute, 600);
   assert.equal(normalized.voice.streamWatch.maxFrameBytes, 50_000);
-  assert.equal(normalized.voice.streamWatch.commentaryPath, "auto");
-  assert.equal(normalized.voice.streamWatch.keyframeIntervalMs, 250);
+  assert.equal(normalized.voice.streamWatch.keyframeIntervalMs, 500);
   assert.equal(normalized.voice.streamWatch.autonomousCommentaryEnabled, false);
   assert.equal(normalized.voice.streamWatch.brainContextEnabled, true);
   assert.equal(normalized.voice.streamWatch.brainContextMinIntervalSeconds, 1);
@@ -379,7 +377,7 @@ test("normalizeSettings migrates legacy code agent provider fields into dev-team
   assert.equal(codex.agentStack.runtimeConfig.devTeam.claudeCode.enabled, false);
 });
 
-test("normalizeSettings preserves claude_oauth_local_tools session config", () => {
+test("normalizeSettings migrates claude_oauth_local_tools to claude_oauth and preserves session config", () => {
   const normalized = normalizeSettings({
     agentStack: {
       preset: "claude_oauth_local_tools",
@@ -396,7 +394,7 @@ test("normalizeSettings preserves claude_oauth_local_tools session config", () =
     }
   });
 
-  assert.equal(normalized.agentStack.preset, "claude_oauth_local_tools");
+  assert.equal(normalized.agentStack.preset, "claude_oauth");
   assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.sessionScope, "channel");
   assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.inactivityTimeoutMs, 45_000);
   assert.equal(normalized.agentStack.runtimeConfig.claudeOAuthSession.contextPruningStrategy, "sliding_window");
@@ -637,4 +635,44 @@ test("normalizeSettings supports auto and fixed ASR language guidance in the can
   });
   assert.equal(invalid.voice.transcription.languageMode, "auto");
   assert.equal(invalid.voice.transcription.languageHint, "en");
+});
+
+test("normalizeSettings migrates legacy split initiative pacing and channels into the unified initiative model", () => {
+  const normalized = normalizeSettings({
+    permissions: {
+      replies: {
+        replyChannelIds: ["reply-1"]
+      }
+    },
+    initiative: {
+      text: {
+        minMinutesBetweenThoughts: 15,
+        maxThoughtsPerDay: 2
+      },
+      discovery: {
+        channelIds: ["disc-1"],
+        minMinutesBetweenPosts: 45,
+        maxPostsPerDay: 5,
+        enabled: false,
+        sources: {
+          reddit: true,
+          hackerNews: true,
+          youtube: true,
+          rss: true,
+          x: true
+        }
+      }
+    }
+  });
+
+  assert.deepEqual(normalized.permissions.replies.replyChannelIds, ["reply-1", "disc-1"]);
+  assert.equal(normalized.initiative.text.minMinutesBetweenPosts, 45);
+  assert.equal(normalized.initiative.text.maxPostsPerDay, 5);
+  assert.deepEqual(normalized.initiative.discovery.sources, {
+    reddit: false,
+    hackerNews: false,
+    youtube: false,
+    rss: false,
+    x: false
+  });
 });

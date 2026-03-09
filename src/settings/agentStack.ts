@@ -41,6 +41,8 @@ type PresetDefaults = {
   researchRuntime: string;
   browserRuntime: string;
   voiceRuntime: string;
+  voiceReplyPath: "native" | "bridge" | "brain";
+  voiceTtsMode: "realtime" | "api";
   voiceAdmissionPolicy: {
     mode: string;
   };
@@ -97,67 +99,7 @@ function inheritOrchestrator(): CapabilityExecutionPolicy {
 }
 
 const PRESET_DEFAULTS = {
-  openai_native: {
-    harness: "responses_native",
-    orchestrator: {
-      provider: "openai",
-      model: "gpt-5"
-    },
-    researchRuntime: "openai_native_web_search",
-    browserRuntime: "openai_computer_use",
-    voiceRuntime: "openai_realtime",
-    voiceAdmissionPolicy: {
-      mode: "adaptive"
-    },
-    voiceAdmissionClassifier: {
-      provider: "openai",
-      model: "gpt-5-mini"
-    },
-    devTeam: {
-      orchestrator: {
-        provider: "openai",
-        model: "gpt-5"
-      },
-      roles: {
-        design: dedicatedModel("anthropic", "claude-sonnet-4-6"),
-        implementation: dedicatedModel("codex", "gpt-5-codex"),
-        review: dedicatedModel("anthropic", "claude-sonnet-4-6"),
-        research: inheritOrchestrator()
-      },
-      codingWorkers: ["codex", "codex_cli"]
-    }
-  },
-  anthropic_brain_openai_tools: {
-    harness: "internal",
-    orchestrator: {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6"
-    },
-    researchRuntime: "openai_native_web_search",
-    browserRuntime: "openai_computer_use",
-    voiceRuntime: "openai_realtime",
-    voiceAdmissionPolicy: {
-      mode: "adaptive"
-    },
-    voiceAdmissionClassifier: {
-      provider: "openai",
-      model: "gpt-5-mini"
-    },
-    devTeam: {
-      orchestrator: {
-        provider: "anthropic",
-        model: "claude-sonnet-4-6"
-      },
-      roles: {
-        design: dedicatedModel("anthropic", "claude-sonnet-4-6"),
-        implementation: dedicatedModel("anthropic", "claude-sonnet-4-6"),
-        review: dedicatedModel("anthropic", "claude-sonnet-4-6"),
-        research: inheritOrchestrator()
-      },
-      codingWorkers: ["codex_cli", "codex"]
-    }
-  },
-  claude_oauth_local_tools: {
+  claude_oauth: {
     harness: "internal",
     orchestrator: {
       provider: "claude-oauth",
@@ -166,6 +108,8 @@ const PRESET_DEFAULTS = {
     researchRuntime: "local_external_search",
     browserRuntime: "local_browser_agent",
     voiceRuntime: "openai_realtime",
+    voiceReplyPath: "brain",
+    voiceTtsMode: "realtime",
     voiceAdmissionPolicy: {
       mode: "generation_decides"
     },
@@ -191,15 +135,53 @@ const PRESET_DEFAULTS = {
       codingWorkers: ["codex_cli", "codex"]
     }
   },
-  custom: {
+  claude_api: {
     harness: "internal",
     orchestrator: {
-      provider: "openai",
-      model: "gpt-5"
+      provider: "anthropic",
+      model: "claude-sonnet-4-6"
     },
     researchRuntime: "local_external_search",
     browserRuntime: "local_browser_agent",
     voiceRuntime: "openai_realtime",
+    voiceReplyPath: "brain",
+    voiceTtsMode: "realtime",
+    voiceAdmissionPolicy: {
+      mode: "generation_decides"
+    },
+    voiceAdmissionClassifier: {
+      provider: "anthropic",
+      model: "claude-haiku-4-5"
+    },
+    voiceGeneration: {
+      provider: "anthropic",
+      model: "claude-haiku-4-5"
+    },
+    devTeam: {
+      orchestrator: {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6"
+      },
+      roles: {
+        design: dedicatedModel("anthropic", "claude-sonnet-4-6"),
+        implementation: dedicatedModel("anthropic", "claude-sonnet-4-6"),
+        review: dedicatedModel("anthropic", "claude-sonnet-4-6"),
+        research: inheritOrchestrator()
+      },
+      codingWorkers: ["codex_cli", "codex"]
+    }
+  },
+  openai_native_realtime: {
+    harness: "responses_native",
+    orchestrator: {
+      provider: "openai",
+      model: "gpt-5"
+    },
+    researchRuntime: "openai_native_web_search",
+    browserRuntime: "openai_computer_use",
+    voiceRuntime: "openai_realtime",
+    voiceReplyPath: "bridge",
+    voiceTtsMode: "realtime",
     voiceAdmissionPolicy: {
       mode: "adaptive"
     },
@@ -219,6 +201,110 @@ const PRESET_DEFAULTS = {
         research: inheritOrchestrator()
       },
       codingWorkers: ["codex", "codex_cli"]
+    }
+  },
+  openai_api: {
+    harness: "internal",
+    orchestrator: {
+      provider: "openai",
+      model: "gpt-5"
+    },
+    researchRuntime: "local_external_search",
+    browserRuntime: "local_browser_agent",
+    voiceRuntime: "openai_realtime",
+    voiceReplyPath: "brain",
+    voiceTtsMode: "realtime",
+    voiceAdmissionPolicy: {
+      mode: "generation_decides"
+    },
+    voiceAdmissionClassifier: {
+      provider: "openai",
+      model: "gpt-5-mini"
+    },
+    voiceGeneration: {
+      provider: "openai",
+      model: "gpt-5-mini"
+    },
+    devTeam: {
+      orchestrator: {
+        provider: "openai",
+        model: "gpt-5"
+      },
+      roles: {
+        design: dedicatedModel("anthropic", "claude-sonnet-4-6"),
+        implementation: dedicatedModel("codex", "gpt-5-codex"),
+        review: dedicatedModel("anthropic", "claude-sonnet-4-6"),
+        research: inheritOrchestrator()
+      },
+      codingWorkers: ["codex", "codex_cli"]
+    }
+  },
+  openai_oauth: {
+    harness: "internal",
+    orchestrator: {
+      provider: "codex-oauth",
+      model: "gpt-5.4"
+    },
+    researchRuntime: "local_external_search",
+    browserRuntime: "local_browser_agent",
+    voiceRuntime: "openai_realtime",
+    voiceReplyPath: "brain",
+    voiceTtsMode: "realtime",
+    voiceAdmissionPolicy: {
+      mode: "generation_decides"
+    },
+    voiceAdmissionClassifier: {
+      provider: "codex-oauth",
+      model: "gpt-5.4"
+    },
+    voiceGeneration: {
+      provider: "codex-oauth",
+      model: "gpt-5.4"
+    },
+    devTeam: {
+      orchestrator: {
+        provider: "codex-oauth",
+        model: "gpt-5.4"
+      },
+      roles: {
+        design: dedicatedModel("codex-oauth", "gpt-5.4"),
+        implementation: dedicatedModel("codex-oauth", "gpt-5.4"),
+        review: dedicatedModel("codex-oauth", "gpt-5.4"),
+        research: inheritOrchestrator()
+      },
+      codingWorkers: ["codex_cli", "codex"]
+    }
+  },
+  grok_native_agent: {
+    harness: "internal",
+    orchestrator: {
+      provider: "xai",
+      model: "grok-3-mini-latest"
+    },
+    researchRuntime: "local_external_search",
+    browserRuntime: "local_browser_agent",
+    voiceRuntime: "voice_agent",
+    voiceReplyPath: "native",
+    voiceTtsMode: "realtime",
+    voiceAdmissionPolicy: {
+      mode: "adaptive"
+    },
+    voiceAdmissionClassifier: {
+      provider: "xai",
+      model: "grok-3-mini-latest"
+    },
+    devTeam: {
+      orchestrator: {
+        provider: "xai",
+        model: "grok-3-mini-latest"
+      },
+      roles: {
+        design: inheritOrchestrator(),
+        implementation: inheritOrchestrator(),
+        review: inheritOrchestrator(),
+        research: inheritOrchestrator()
+      },
+      codingWorkers: ["codex_cli", "codex"]
     }
   }
 } as const satisfies Record<string, PresetDefaults>;
@@ -526,7 +612,7 @@ export function getDevTeamRuntimeConfig(settings: unknown): Settings["agentStack
 function getPresetDefaults(settings: unknown): PresetDefaults {
   const agentStack = getAgentStackSettings(settings);
   const presetName = String(agentStack.preset || DEFAULT_SETTINGS.agentStack.preset) as keyof typeof PRESET_DEFAULTS;
-  return PRESET_DEFAULTS[presetName] || PRESET_DEFAULTS.openai_native;
+  return PRESET_DEFAULTS[presetName] || PRESET_DEFAULTS.claude_oauth;
 }
 
 function normalizeResolvedVoiceRuntime(value: unknown, fallback: string) {
@@ -601,6 +687,28 @@ export function getResolvedVisionBinding(settings: unknown) {
   return {
     provider: String(binding?.provider || fallback.provider),
     model: String(binding?.model || fallback.model)
+  };
+}
+
+export function getResolvedTextInitiativeBinding(settings: unknown) {
+  const textInitiative = getTextInitiativeSettings(settings);
+  const fallback = getResolvedOrchestratorBinding(settings);
+  const policy = resolveExecutionPolicy(
+    textInitiative.execution,
+    fallback,
+    fallback.temperature,
+    fallback.maxOutputTokens,
+    fallback.reasoningEffort
+  );
+  const binding = policy.mode === "dedicated_model"
+    ? policy.model
+    : fallback;
+  return {
+    provider: String(binding?.provider || fallback.provider),
+    model: String(binding?.model || fallback.model),
+    temperature: policy.temperature ?? fallback.temperature,
+    maxOutputTokens: policy.maxOutputTokens ?? fallback.maxOutputTokens,
+    reasoningEffort: policy.reasoningEffort ?? fallback.reasoningEffort
   };
 }
 

@@ -21,9 +21,9 @@ function inferLegacyPreset(raw: Record<string, unknown>) {
     "openai"
   );
   if (llmProvider === "openai" && legacyVoiceProvider === "openai") {
-    return "openai_native";
+    return "openai_native_realtime";
   }
-  return "anthropic_brain_openai_tools";
+  return "claude_api";
 }
 
 export function normalizeTestSettingsInput(overrides: unknown): Record<string, unknown> {
@@ -310,9 +310,12 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
           mode: "inherit_orchestrator"
         },
         eagerness: textThoughtLoop.eagerness,
-        minMinutesBetweenThoughts: textThoughtLoop.minMinutesBetweenThoughts,
-        maxThoughtsPerDay: textThoughtLoop.maxThoughtsPerDay,
-        lookbackMessages: textThoughtLoop.lookbackMessages
+        minMinutesBetweenPosts: textThoughtLoop.minMinutesBetweenThoughts ?? textThoughtLoop.minMinutesBetweenPosts,
+        maxPostsPerDay: textThoughtLoop.maxThoughtsPerDay ?? textThoughtLoop.maxPostsPerDay,
+        lookbackMessages: textThoughtLoop.lookbackMessages,
+        allowActiveCuriosity: textThoughtLoop.allowActiveCuriosity,
+        maxToolSteps: textThoughtLoop.maxToolSteps,
+        maxToolCalls: textThoughtLoop.maxToolCalls
       },
       voice: {
         enabled: voiceThoughtEngine.enabled,
@@ -328,7 +331,39 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
         minSilenceSeconds: voiceThoughtEngine.minSilenceSeconds,
         minSecondsBetweenThoughts: voiceThoughtEngine.minSecondsBetweenThoughts
       },
-      discovery
+      discovery: isRecord(discovery)
+        ? {
+            allowImagePosts: discovery.allowImagePosts,
+            allowVideoPosts: discovery.allowVideoPosts,
+            allowReplyImages: discovery.allowReplyImages,
+            allowReplyVideos: discovery.allowReplyVideos,
+            allowReplyGifs: discovery.allowReplyGifs,
+            maxImagesPerDay: discovery.maxImagesPerDay,
+            maxVideosPerDay: discovery.maxVideosPerDay,
+            maxGifsPerDay: discovery.maxGifsPerDay,
+            simpleImageModel: discovery.simpleImageModel,
+            complexImageModel: discovery.complexImageModel,
+            videoModel: discovery.videoModel,
+            allowedImageModels: discovery.allowedImageModels,
+            allowedVideoModels: discovery.allowedVideoModels,
+            maxMediaPromptChars: discovery.maxMediaPromptChars,
+            maxLinksPerPost: discovery.maxLinksPerPost,
+            maxCandidatesForPrompt: discovery.maxCandidatesForPrompt,
+            freshnessHours: discovery.freshnessHours,
+            dedupeHours: discovery.dedupeHours,
+            randomness: discovery.randomness,
+            sourceFetchLimit: discovery.sourceFetchLimit,
+            allowNsfw: discovery.allowNsfw,
+            allowSelfCuration: discovery.allowSelfCuration,
+            maxSourcesPerType: discovery.maxSourcesPerType,
+            redditSubreddits: discovery.redditSubreddits,
+            youtubeChannelIds: discovery.youtubeChannelIds,
+            rssFeeds: discovery.rssFeeds,
+            xHandles: discovery.xHandles,
+            xNitterBaseUrl: discovery.xNitterBaseUrl,
+            sources: discovery.sources
+          }
+        : discovery
     },
     voice: {
       enabled: voice.enabled,

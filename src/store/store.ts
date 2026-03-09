@@ -13,9 +13,10 @@ import {
   getRecentMessagesAcrossGuild,
   searchRelevantMessages,
   searchConversationWindows,
-  getActiveChannels
+  getActiveChannels,
+  getReferencedMessageStats
 } from "./storeMessages.ts";
-import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, countDiscoveryPostsSince, getRecentActions, getRecentMemoryReflections, getRecentBrowserSessions, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./storeActionLog.ts";
+import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, getRecentActions, getRecentMemoryReflections, getRecentBrowserSessions, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./storeActionLog.ts";
 import { wasLinkSharedSince, recordSharedLink, pruneLookupContext, recordLookupContext, searchLookupContext } from "./storeLookups.ts";
 import { getRecentVoiceSessions, getVoiceSessionEvents } from "./storeVoice.ts";
 import { getReplyPerformanceStats, getStats } from "./storeStats.ts";
@@ -361,6 +362,22 @@ export class Store {
     return getActiveChannels(this, guildId, hours, limit);
   }
 
+  getReferencedMessageStats({
+    messageIds,
+    guildId = null,
+    sinceIso = null
+  }: {
+    messageIds: string[];
+    guildId?: string | null;
+    sinceIso?: string | null;
+  }) {
+    return getReferencedMessageStats(this, {
+      messageIds,
+      guildId,
+      sinceIso
+    });
+  }
+
   maybePruneActionLog(opts: { now?: string } = {}) {
     return maybePruneActionLog(this, opts);
   }
@@ -379,10 +396,6 @@ export class Store {
 
   getLastActionTime(kind) {
     return getLastActionTime(this, kind);
-  }
-
-  countDiscoveryPostsSince(sinceIso) {
-    return countDiscoveryPostsSince(this, sinceIso);
   }
 
   getRecentActions(limit = 200, opts: { kinds?: string[]; sinceIso?: string | null; guildId?: string | null } = {}) {

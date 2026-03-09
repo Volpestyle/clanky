@@ -1,5 +1,4 @@
 import {
-  getDiscoverySettings,
   getReplyPermissions
 } from "../settings/agentStack.ts";
 import type { Settings } from "../settings/settingsSchema.ts";
@@ -35,10 +34,4 @@ export function isReplyChannel(settings: Settings, channelId: string) {
   const replyChannelIds = normalizeIds(getReplyPermissions(settings).replyChannelIds);
   if (!replyChannelIds.length) return false;
   return replyChannelIds.includes(id);
-}
-
-export function isDiscoveryChannel(settings: Settings, channelId: string) {
-  const id = String(channelId);
-  const discoveryChannelIds = normalizeIds(getDiscoverySettings(settings).channelIds);
-  return discoveryChannelIds.includes(id);
 }

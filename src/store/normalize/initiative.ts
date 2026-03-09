@@ -24,15 +24,15 @@ export function normalizeInitiativeSection(section: Settings["initiative"]): Set
       enabled: normalizeBoolean(text.enabled, DEFAULT_SETTINGS.initiative.text.enabled),
       execution: normalizeExecutionPolicy(text.execution, "openai", "gpt-5"),
       eagerness: normalizeInt(text.eagerness, DEFAULT_SETTINGS.initiative.text.eagerness, 0, 100),
-      minMinutesBetweenThoughts: normalizeInt(
-        text.minMinutesBetweenThoughts,
-        DEFAULT_SETTINGS.initiative.text.minMinutesBetweenThoughts,
+      minMinutesBetweenPosts: normalizeInt(
+        text.minMinutesBetweenPosts,
+        DEFAULT_SETTINGS.initiative.text.minMinutesBetweenPosts,
         5,
         24 * 60
       ),
-      maxThoughtsPerDay: normalizeInt(
-        text.maxThoughtsPerDay,
-        DEFAULT_SETTINGS.initiative.text.maxThoughtsPerDay,
+      maxPostsPerDay: normalizeInt(
+        text.maxPostsPerDay,
+        DEFAULT_SETTINGS.initiative.text.maxPostsPerDay,
         0,
         100
       ),
@@ -41,6 +41,22 @@ export function normalizeInitiativeSection(section: Settings["initiative"]): Set
         DEFAULT_SETTINGS.initiative.text.lookbackMessages,
         4,
         80
+      ),
+      allowActiveCuriosity: normalizeBoolean(
+        text.allowActiveCuriosity,
+        DEFAULT_SETTINGS.initiative.text.allowActiveCuriosity
+      ),
+      maxToolSteps: normalizeInt(
+        text.maxToolSteps,
+        DEFAULT_SETTINGS.initiative.text.maxToolSteps,
+        0,
+        8
+      ),
+      maxToolCalls: normalizeInt(
+        text.maxToolCalls,
+        DEFAULT_SETTINGS.initiative.text.maxToolCalls,
+        0,
+        12
       )
     },
     voice: {
@@ -64,38 +80,6 @@ export function normalizeInitiativeSection(section: Settings["initiative"]): Set
       )
     },
     discovery: {
-      enabled: normalizeBoolean(discovery.enabled, DEFAULT_SETTINGS.initiative.discovery.enabled),
-      channelIds: normalizeStringList(discovery.channelIds, 200, 60),
-      maxPostsPerDay: normalizeInt(
-        discovery.maxPostsPerDay,
-        DEFAULT_SETTINGS.initiative.discovery.maxPostsPerDay,
-        0,
-        50
-      ),
-      minMinutesBetweenPosts: normalizeInt(
-        discovery.minMinutesBetweenPosts,
-        DEFAULT_SETTINGS.initiative.discovery.minMinutesBetweenPosts,
-        1,
-        24 * 60
-      ),
-      pacingMode:
-        normalizeString(
-          discovery.pacingMode,
-          DEFAULT_SETTINGS.initiative.discovery.pacingMode,
-          40
-        ).toLowerCase() === "spontaneous"
-          ? "spontaneous"
-          : "even",
-      spontaneity: normalizeInt(
-        discovery.spontaneity,
-        DEFAULT_SETTINGS.initiative.discovery.spontaneity,
-        0,
-        100
-      ),
-      postOnStartup: normalizeBoolean(
-        discovery.postOnStartup,
-        DEFAULT_SETTINGS.initiative.discovery.postOnStartup
-      ),
       allowImagePosts: normalizeBoolean(
         discovery.allowImagePosts,
         DEFAULT_SETTINGS.initiative.discovery.allowImagePosts
@@ -167,12 +151,6 @@ export function normalizeInitiativeSection(section: Settings["initiative"]): Set
         100,
         2_000
       ),
-      linkChancePercent: normalizeInt(
-        discovery.linkChancePercent,
-        DEFAULT_SETTINGS.initiative.discovery.linkChancePercent,
-        0,
-        100
-      ),
       maxLinksPerPost: normalizeInt(
         discovery.maxLinksPerPost,
         DEFAULT_SETTINGS.initiative.discovery.maxLinksPerPost,
@@ -210,7 +188,16 @@ export function normalizeInitiativeSection(section: Settings["initiative"]): Set
         50
       ),
       allowNsfw: normalizeBoolean(discovery.allowNsfw, DEFAULT_SETTINGS.initiative.discovery.allowNsfw),
-      preferredTopics: normalizeStringList(discovery.preferredTopics, 50, 120),
+      allowSelfCuration: normalizeBoolean(
+        discovery.allowSelfCuration,
+        DEFAULT_SETTINGS.initiative.discovery.allowSelfCuration
+      ),
+      maxSourcesPerType: normalizeInt(
+        discovery.maxSourcesPerType,
+        DEFAULT_SETTINGS.initiative.discovery.maxSourcesPerType,
+        1,
+        50
+      ),
       redditSubreddits: normalizeSubreddits(
         discovery.redditSubreddits,
         DEFAULT_SETTINGS.initiative.discovery.redditSubreddits

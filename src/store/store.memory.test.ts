@@ -190,7 +190,8 @@ test("voice reply decision llm settings normalize provider and model", async () 
       voice: {
         replyDecisionLlm: {
           provider: "CLAUDE-OAUTH",
-          model: " claude-opus-4-6 "
+          model: " claude-opus-4-6 ",
+          realtimeAdmissionMode: "classifier_gate"
         }
       }
     }));

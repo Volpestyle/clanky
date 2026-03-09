@@ -201,7 +201,9 @@ export function normalizeAgentStackSection(
       },
       voice: {
         runtimeMode: normalizeVoiceRuntimeMode(
-          voice.runtimeMode,
+          rawVoiceRuntime.runtimeMode !== undefined
+            ? voice.runtimeMode
+            : (presetConfig.presetVoiceRuntimeMode || voice.runtimeMode),
           DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.runtimeMode
         ),
         openaiRealtime: {
