@@ -1904,7 +1904,6 @@ export async function handleMusicSlashCommand(
   interaction: ChatInputCommandInteraction,
   settings: Record<string, unknown> | null
 ) {
-  const command = interaction.commandName;
   const guild = interaction.guild;
   const user = interaction.user;
 
@@ -1913,48 +1912,354 @@ export async function handleMusicSlashCommand(
     return;
   }
 
-  const guildId = guild.id;
-  const session = manager.sessions.get(guildId);
+  type MusicSlashAction = "play_now" | "queue_add" | "queue_next";
 
-  if (command === "play") {
-    const query = interaction.options.getString("query", true);
-    await interaction.deferReply();
-    await requestPlayMusic(manager, {
-      guildId,
-      channel: interaction.channel,
-      channelId: interaction.channelId,
-      requestedByUserId: user.id,
-      settings,
-      query,
-      reason: "slash_command_play",
-      source: "slash_command",
-      mustNotify: false
-    });
+  const formatTrackLabel = (track: { title?: string | null; artist?: string | null } | null | undefined) => {
+    const title = String(track?.title || "").trim() || "Unknown track";
+    const artist = String(track?.artist || "").trim();
+    return artist ? `${title} - ${artist}` : title;
+  };
 
-    const updatedSession = manager.sessions.get(guildId);
-    if (updatedSession) {
-      const disambiguation = getMusicDisambiguationPromptContext(manager, updatedSession);
-      if (disambiguation?.active && disambiguation.options?.length > 0) {
-        const optionsList = disambiguation.options
-          .map((opt, i) => `${i + 1}. **${opt.title}** - ${opt.artist || "Unknown"}`)
-          .join("\n");
-        await interaction.editReply(
-          `Multiple results found for "${disambiguation.query}". Reply with the number to select:\n${optionsList}`
-        );
-        return;
-      }
-      const music = ensureSessionMusicState(manager, updatedSession);
-      if (musicPhaseIsActive(music?.phase ?? "idle")) {
-        const nowPlaying = String(music.lastTrackTitle || "").trim() || query;
-        await interaction.editReply(`Playing: ${nowPlaying}`);
-        return;
-      }
+  const formatDisambiguationReply = ({
+    query,
+    action,
+    options
+  }: {
+    query: string;
+    action: MusicSlashAction;
+    options: MusicSelectionResult[];
+  }) => {
+    const actionLabel =
+      action === "queue_next"
+        ? "queue next"
+        : action === "queue_add"
+          ? "add to the queue"
+          : "play";
+    const optionsList = options
+      .map((option, index) => `${index + 1}. ${formatTrackLabel(option)}`)
+      .join("\n");
+    return `Multiple results found for "${query}". Reply with the number to ${actionLabel}:\n${optionsList}`;
+  };
+
+  const formatQueueReply = (session: MusicRuntimeSessionLike) => {
+    const queueState = ensureToolMusicQueueState(manager, session);
+    const musicState = ensureSessionMusicState(manager, session);
+    if (!queueState || queueState.tracks.length === 0) {
+      const lastTrack = musicState?.lastTrackTitle
+        ? formatTrackLabel({
+            title: musicState.lastTrackTitle,
+            artist: Array.isArray(musicState.lastTrackArtists) ? musicState.lastTrackArtists.join(", ") : null
+          })
+        : null;
+      return lastTrack ? `Queue is empty. Most recent track: ${lastTrack}` : "Queue is empty.";
     }
 
-    await interaction.editReply("Could not start music playback.");
-  } else if (command === "stop") {
-    if (!session || !isMusicPlaybackActive(manager, session)) {
-      await interaction.reply({ content: "No music is currently playing.", ephemeral: true });
+    const visibleTracks = queueState.tracks.slice(0, 10);
+    const lines = visibleTracks.map((track, index) => {
+      const prefix = index === queueState.nowPlayingIndex ? "[Now]" : `${index + 1}.`;
+      return `${prefix} ${formatTrackLabel(track)}`;
+    });
+    const hiddenCount = Math.max(0, queueState.tracks.length - visibleTracks.length);
+    const phase = getMusicPhase(manager, session);
+    const stateLabel =
+      phase === "paused" || phase === "paused_wake_word"
+        ? "paused"
+        : musicPhaseIsActive(phase)
+          ? "playing"
+          : "idle";
+    const extraLine = hiddenCount > 0 ? `...and ${hiddenCount} more track${hiddenCount === 1 ? "" : "s"}.` : null;
+    return [
+      `Playback: ${stateLabel}`,
+      `Queue (${queueState.tracks.length} track${queueState.tracks.length === 1 ? "" : "s"}):`,
+      ...lines,
+      extraLine
+    ]
+      .filter(Boolean)
+      .join("\n");
+  };
+
+  const formatNowPlayingReply = (session: MusicRuntimeSessionLike) => {
+    const queueState = ensureToolMusicQueueState(manager, session);
+    const nowTrack =
+      queueState && queueState.nowPlayingIndex != null
+        ? queueState.tracks[queueState.nowPlayingIndex] || null
+        : null;
+    const musicState = ensureSessionMusicState(manager, session);
+    const phase = getMusicPhase(manager, session);
+    const stateLabel =
+      phase === "paused" || phase === "paused_wake_word"
+        ? "Paused"
+        : musicPhaseIsActive(phase)
+          ? "Playing"
+          : "Idle";
+    if (nowTrack) {
+      const queuedAfter = Math.max(0, queueState.tracks.length - (queueState.nowPlayingIndex ?? 0) - 1);
+      return `${stateLabel}: ${formatTrackLabel(nowTrack)}${queuedAfter > 0 ? `\nUp next: ${queuedAfter} queued track${queuedAfter === 1 ? "" : "s"}.` : ""}`;
+    }
+    if (musicState?.lastTrackTitle) {
+      return `${stateLabel}. Most recent track: ${formatTrackLabel({
+        title: musicState.lastTrackTitle,
+        artist: Array.isArray(musicState.lastTrackArtists) ? musicState.lastTrackArtists.join(", ") : null
+      })}`;
+    }
+    return "Nothing is playing right now.";
+  };
+
+  const queueTrackForAction = async ({
+    session,
+    query,
+    selectedTrack,
+    action
+  }: {
+    session: VoiceSession;
+    query: string;
+    selectedTrack: MusicSelectionResult;
+    action: MusicSlashAction;
+  }) => {
+    const queueState = ensureToolMusicQueueState(manager, session);
+    if (!queueState) {
+      return { ok: false, reply: "Music queue is unavailable for this voice session." };
+    }
+
+    const normalizedPlatform = normalizeMusicPlatformToken(manager, selectedTrack.platform, "youtube") || "youtube";
+    const queuedTrack = {
+      id: selectedTrack.id,
+      title: selectedTrack.title,
+      artist: selectedTrack.artist || null,
+      durationMs: Number.isFinite(Number(selectedTrack.durationSeconds))
+        ? Math.max(0, Math.round(Number(selectedTrack.durationSeconds) * 1000))
+        : null,
+      source: normalizedPlatform === "soundcloud" ? "sc" : "yt",
+      streamUrl: selectedTrack.externalUrl || null,
+      platform: normalizedPlatform,
+      externalUrl: selectedTrack.externalUrl || null
+    };
+    const requestedByUserId = user.id;
+    const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
+
+    if (action === "play_now") {
+      const trailingTracks = queueState.nowPlayingIndex == null
+        ? []
+        : queueState.tracks.slice(Math.max(0, queueState.nowPlayingIndex + 1));
+      queueState.tracks = [queuedTrack, ...trailingTracks];
+      queueState.nowPlayingIndex = 0;
+      queueState.isPaused = false;
+
+      await requestPlayMusic(manager, {
+        guildId,
+        channel: interaction.channel,
+        channelId: interaction.channelId,
+        requestedByUserId,
+        settings: resolvedSettings,
+        query,
+        trackId: selectedTrack.id,
+        searchResults: [selectedTrack],
+        reason: "slash_command_music_play",
+        source: "slash_command",
+        mustNotify: false
+      });
+      return {
+        ok: true,
+        reply: `Playing: ${formatTrackLabel(selectedTrack)}`
+      };
+    }
+
+    const wasEmpty = queueState.tracks.length === 0;
+    const insertAt =
+      action === "queue_next"
+        ? queueState.nowPlayingIndex == null
+          ? queueState.tracks.length
+          : clamp(queueState.nowPlayingIndex + 1, 0, queueState.tracks.length)
+        : queueState.tracks.length;
+    queueState.tracks.splice(insertAt, 0, queuedTrack);
+    if (queueState.nowPlayingIndex == null && queueState.tracks.length > 0) {
+      queueState.nowPlayingIndex = 0;
+    }
+
+    const shouldAutoPlay =
+      action === "queue_next"
+        ? !isMusicPlaybackActive(manager, session) && !queueState.isPaused
+        : wasEmpty && !isMusicPlaybackActive(manager, session) && !queueState.isPaused;
+
+    if (shouldAutoPlay) {
+      const playIndex =
+        action === "queue_next"
+          ? queueState.nowPlayingIndex ?? 0
+          : queueState.nowPlayingIndex ?? 0;
+      await manager.playVoiceQueueTrackByIndex({
+        session,
+        settings: resolvedSettings,
+        index: playIndex
+      });
+      return {
+        ok: true,
+        reply: `Queue was idle. Now playing: ${formatTrackLabel(selectedTrack)}`
+      };
+    }
+
+    return {
+      ok: true,
+      reply:
+        action === "queue_next"
+          ? `Queued next: ${formatTrackLabel(selectedTrack)}`
+          : `Added to queue: ${formatTrackLabel(selectedTrack)}`
+    };
+  };
+
+  const runQueryAction = async ({
+    session,
+    query,
+    action
+  }: {
+    session: VoiceSession;
+    query: string;
+    action: MusicSlashAction;
+  }) => {
+    const resolvedQuery = normalizeInlineText(query, 180);
+    if (!resolvedQuery) {
+      return { ok: false, reply: "A song name or URL is required." };
+    }
+
+    const canSearch = Boolean(manager.musicSearch?.isConfigured?.()) && typeof manager.musicSearch?.search === "function";
+    if (!canSearch) {
+      if (action !== "play_now") {
+        return {
+          ok: false,
+          reply: "Music search is not configured, so queue add/next needs to stay disabled for now."
+        };
+      }
+
+      await requestPlayMusic(manager, {
+        guildId,
+        channel: interaction.channel,
+        channelId: interaction.channelId,
+        requestedByUserId: user.id,
+        settings,
+        query: resolvedQuery,
+        reason: "slash_command_music_play",
+        source: "slash_command",
+        mustNotify: false
+      });
+
+      const updatedSession = manager.sessions.get(guildId);
+      const disambiguation = updatedSession
+        ? getMusicDisambiguationPromptContext(manager, updatedSession)
+        : null;
+      if (disambiguation?.active && disambiguation.options?.length > 0) {
+        return {
+          ok: true,
+          reply: formatDisambiguationReply({
+            query: disambiguation.query || resolvedQuery,
+            action,
+            options: disambiguation.options
+          })
+        };
+      }
+
+      return {
+        ok: true,
+        reply: `Playing: ${resolvedQuery}`
+      };
+    }
+
+    const searchResponse = await manager.musicSearch.search(resolvedQuery, {
+      platform: "auto",
+      limit: MUSIC_DISAMBIGUATION_MAX_RESULTS
+    });
+    const results = (Array.isArray(searchResponse?.results) ? searchResponse.results : [])
+      .map((row) =>
+        normalizeMusicSelectionResult(manager, {
+          id: row.id,
+          title: row.title,
+          artist: row.artist,
+          platform: row.platform,
+          externalUrl: row.externalUrl,
+          durationSeconds: row.durationSeconds
+        })
+      )
+      .filter((result): result is MusicSelectionResult => Boolean(result))
+      .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS);
+
+    if (!results.length) {
+      return {
+        ok: false,
+        reply: `No results found for "${resolvedQuery}".`
+      };
+    }
+
+    if (results.length > 1) {
+      setMusicDisambiguationState(manager, {
+        session,
+        query: resolvedQuery,
+        platform: "auto",
+        action,
+        results,
+        requestedByUserId: user.id
+      });
+      beginVoiceCommandSession(session, {
+        userId: user.id,
+        domain: "music",
+        intent: action === "play_now" ? "music_disambiguation" : `${action}_disambiguation`
+      });
+      return {
+        ok: true,
+        reply: formatDisambiguationReply({
+          query: resolvedQuery,
+          action,
+          options: results
+        })
+      };
+    }
+
+    clearMusicDisambiguationState(manager, session);
+    clearVoiceCommandSession(session);
+    return await queueTrackForAction({
+      session,
+      query: resolvedQuery,
+      selectedTrack: results[0],
+      action
+    });
+  };
+
+  const guildId = guild.id;
+  const session = manager.sessions.get(guildId);
+  const subcommand = interaction.options.getSubcommand(true);
+
+  if (!session) {
+    await interaction.reply({ content: "No active voice session in this server.", ephemeral: true });
+    return;
+  }
+
+  if (subcommand === "queue") {
+    await interaction.reply(formatQueueReply(session));
+    return;
+  }
+
+  if (subcommand === "now") {
+    await interaction.reply(formatNowPlayingReply(session));
+    return;
+  }
+
+  if (subcommand === "play" || subcommand === "add" || subcommand === "next") {
+    const query = interaction.options.getString("query", true);
+    await interaction.deferReply();
+    const result = await runQueryAction({
+      session,
+      query,
+      action:
+        subcommand === "add"
+          ? "queue_add"
+          : subcommand === "next"
+            ? "queue_next"
+            : "play_now"
+    });
+    await interaction.editReply(result.reply);
+    return;
+  }
+
+  if (subcommand === "stop") {
+    if (!isMusicPlaybackActive(manager, session) && ensureToolMusicQueueState(manager, session)?.tracks.length === 0) {
+      await interaction.reply({ content: "Nothing is playing and the queue is empty.", ephemeral: true });
       return;
     }
     await interaction.deferReply();
@@ -1969,10 +2274,13 @@ export async function handleMusicSlashCommand(
       clearQueue: true,
       mustNotify: false
     });
-    await interaction.editReply("Music stopped.");
-  } else if (command === "pause") {
+    await interaction.editReply("Music stopped and the queue was cleared.");
+    return;
+  }
+
+  if (subcommand === "pause") {
     const phase = getMusicPhase(manager, session);
-    if (!session || !musicPhaseCanPause(phase)) {
+    if (!musicPhaseCanPause(phase)) {
       await interaction.reply({ content: "No music is currently playing.", ephemeral: true });
       return;
     }
@@ -1988,36 +2296,29 @@ export async function handleMusicSlashCommand(
       mustNotify: false
     });
     await interaction.editReply("Music paused.");
-  } else if (command === "resume") {
+    return;
+  }
+
+  if (subcommand === "resume") {
     const phase = getMusicPhase(manager, session);
-    if (!session || !musicPhaseCanResume(phase)) {
-      await interaction.reply({ content: "No music is currently playing or paused.", ephemeral: true });
+    if (!musicPhaseCanResume(phase)) {
+      await interaction.reply({ content: "No music is currently paused.", ephemeral: true });
       return;
     }
     manager.musicPlayer?.resume();
     setMusicPhase(manager, session, "playing");
     haltSessionOutputForMusicPlayback(manager, session, "music_resumed_slash_command");
     await interaction.reply("Music resumed.");
-  } else if (command === "skip") {
-    if (!session || !musicPhaseIsActive(getMusicPhase(manager, session))) {
-      await interaction.reply({ content: "No music is currently playing.", ephemeral: true });
+    return;
+  }
+
+  if (subcommand === "skip") {
+    const queueState = ensureToolMusicQueueState(manager, session);
+    if (!queueState || queueState.nowPlayingIndex == null) {
+      await interaction.reply({ content: "No queued track is available to skip.", ephemeral: true });
       return;
     }
     await interaction.deferReply();
-    const queueState = ensureToolMusicQueueState(manager, session);
-    if (!queueState || queueState.nowPlayingIndex == null) {
-      await requestStopMusic(manager, {
-        guildId,
-        channelId: interaction.channelId,
-        requestedByUserId: user.id,
-        settings,
-        reason: "slash_command_skip_without_queue",
-        source: "slash_command",
-        mustNotify: false
-      });
-      await interaction.editReply("Skipped. No more tracks in queue.");
-      return;
-    }
     const nextIndex = queueState.nowPlayingIndex + 1;
     await requestStopMusic(manager, {
       guildId,
@@ -2031,8 +2332,7 @@ export async function handleMusicSlashCommand(
     if (nextIndex < queueState.tracks.length) {
       await manager.playVoiceQueueTrackByIndex({ session, settings, index: nextIndex });
       const nextTrack = queueState.tracks[nextIndex];
-      const title = nextTrack?.title || "next track";
-      await interaction.editReply(`Skipped. Now playing: ${title}`);
+      await interaction.editReply(`Skipped. Now playing: ${formatTrackLabel(nextTrack)}`);
     } else {
       queueState.nowPlayingIndex = null;
       queueState.isPaused = false;

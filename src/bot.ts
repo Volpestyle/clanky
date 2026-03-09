@@ -488,7 +488,7 @@ export class ClankerBot {
     this.client.on("interactionCreate", async (interaction) => {
       if (!interaction.isChatInputCommand()) return;
       const { commandName } = interaction;
-      if (["play", "stop", "pause", "resume", "skip"].includes(commandName)) {
+      if (commandName === "music") {
         try {
           await this.voiceSessionManager.handleMusicSlashCommand(interaction, this.store.getSettings());
         } catch (error) {
