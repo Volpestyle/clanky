@@ -4,8 +4,11 @@
 > Operator-facing activity paths and setting map: [`clanker-activity.md`](../clanker-activity.md)
 > Barge-in and noise rejection: [`barge-in.md`](barge-in.md)
 > Assistant reply/output lifecycle: [`voice-output-state-machine.md`](voice-output-state-machine.md)
+> Streaming reply behavior: [`voice-streaming-reply.md`](voice-streaming-reply.md)
 
 This document describes the voice chat pipeline as a linear sequence of stages, from audio input to voice output. Each stage is independently configurable, and the active set of stages depends on which **reply path** is selected.
+
+The pipeline gives the agent full context at each stage — tools are presented as available capabilities (never forced), conversation history flows through unfiltered, and the agent decides what to do via its generation output or `[SKIP]`. Provider swapping changes the transport, not the agent's autonomy. See `AGENTS.md` — Agent Autonomy section.
 
 ---
 
@@ -93,6 +96,11 @@ Per-speaker ASR transcribes each user independently, producing labeled text. The
 ### Brain
 
 Shared ASR transcribes mixed audio. A text LLM (`generationLlm`) generates the response. The realtime provider speaks the generated text via utterance requests.
+
+When `voice.conversationPolicy.streaming.enabled` is active and Brain is using
+Realtime TTS, the generated text can be spoken incrementally before the full
+LLM response finishes. The live chunking behavior is documented in
+[`voice-streaming-reply.md`](voice-streaming-reply.md).
 
 - **Latency**: high (ASR + text LLM + realtime utterance)
 - **ASR**: shared/file transcription inside the realtime session when `voice.openaiRealtime.transcriptionMethod="file_wav"`
@@ -192,26 +200,27 @@ Evaluated in order by `evaluateVoiceReplyDecision()` in `voiceReplyDecision.ts`:
 | 1 | Missing transcript | `missing_transcript` | deny |
 | 2 | Pending command followup | `pending_command_followup` | allow |
 | 3 | Output lock (assistant output phase, non-music) | `bot_turn_open` (coarse) / `outputLockReason` (authoritative) | deny (retry after 1400ms) |
-| 4 | Command-only + direct address | `command_only_direct_address` | allow |
-| 5 | Command-only + not addressed | `command_only_not_addressed` | deny |
-| 6 | Music playing + not awake | `music_playing_not_awake` | deny |
-| 7 | Direct address fast path | `direct_address_fast_path` | allow |
-| 8 | Eagerness disabled + no direct address | `eagerness_disabled_without_direct_address` | deny |
-| 9 | Full-brain admission path (generation decides) | `generation_decides` | allow |
-| 10 | No brain session | `no_brain_session` | deny |
-| 11 | Music playing + not awake (bridge) | `music_playing_not_awake` | deny |
-| 12 | Generation-only admission mode | `generation_decides` | allow |
+| 4 | Owned tool followup by same speaker | `owned_tool_followup` / `owned_tool_followup_cancel` | allow |
+| 5 | Other-speaker cross-talk during owned tool followup | `owned_tool_followup_other_speaker_blocked` | deny |
+| 6 | Command-only + direct address | `command_only_direct_address` | allow |
+| 7 | Command-only + not addressed outside latch window | `command_only_not_addressed` | deny |
+| 8 | Music playing + wake latch inactive | `music_playing_not_awake` | deny |
+| 9 | Native realtime path | `native_realtime` | allow |
+| 10 | Generation-decides mode | `generation_decides` | allow |
+| 11 | Classifier mode | `classifier_allow` / `classifier_deny` | YES/NO LLM gate |
 
 #### LLM Classifier (bridge path)
 
-When `realtimeAdmissionMode == "hard_classifier"` and the turn survived deterministic gates, `runVoiceReplyClassifier()` makes a YES/NO call.
+When the canonical admission mode is `classifier_gate` (runtime internal value: `hard_classifier`) and the turn survived deterministic gates, `runVoiceReplyClassifier()` makes a YES/NO call.
+
+Direct address and eagerness still shape the decision, but no longer as hard deterministic gates for normal bridge turns. Direct address is classifier/generation context and can arm the short music wake latch when music is active. Eagerness `0` now flows through the same decision stack instead of forcing an immediate deny.
 
 | Setting | Key Path | Default |
 |---|---|---|
 | Provider | `voice.replyDecisionLlm.provider` | `"anthropic"` |
 | Model | `voice.replyDecisionLlm.model` | `"claude-haiku-4-5"` |
 | Reasoning effort | `voice.replyDecisionLlm.reasoningEffort` | `"minimal"` |
-| Admission mode | `voice.replyDecisionLlm.realtimeAdmissionMode` | `"hard_classifier"` |
+| Admission mode | `voice.admission.mode` | `"classifier_gate"` |
 | Music wake latch | `voice.replyDecisionLlm.musicWakeLatchSeconds` | `15` |
 
 Classifier config: `temperature: 0`, `maxOutputTokens: 4`, history window: `CLASSIFIER_HISTORY_MAX_TURNS=6` / `CLASSIFIER_HISTORY_MAX_CHARS=900`
@@ -404,7 +413,7 @@ Guards use `providerSupports(mode, capability)` for capability routing.
 | Provider | `voice.replyDecisionLlm.provider` | `"anthropic"` |
 | Model | `voice.replyDecisionLlm.model` | `"claude-haiku-4-5"` |
 | Reasoning effort | `voice.replyDecisionLlm.reasoningEffort` | `"minimal"` |
-| Admission mode | `voice.replyDecisionLlm.realtimeAdmissionMode` | `"hard_classifier"` |
+| Admission mode | `voice.admission.mode` | `"classifier_gate"` |
 | Music wake latch | `voice.replyDecisionLlm.musicWakeLatchSeconds` | `15` |
 
 ### Thought Engine

@@ -2,7 +2,7 @@
 
 > Scope: assistant reply/output lifecycle after a voice turn has already been admitted.
 > Voice pipeline stages: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
-> Barge-in and echo policy: [`voice-interruption-policy.md`](voice-interruption-policy.md)
+> Barge-in and echo policy: [`barge-in.md`](barge-in.md)
 > Runtime log workflow: [`logs.md`](../logs.md)
 
 This document defines the canonical assistant output state machine for voice sessions.
@@ -105,7 +105,7 @@ Interpretation:
 Deferred replay rule:
 
 - queued user turns should wait for assertive live speech, not merely for the existence of a capture object
-- silence-gated or near-silent captures should not keep deferred replay blocked once they are the only remaining captures
+- silence-gated or near-silent captures should not keep deferred turn flushing blocked once they are the only remaining captures
 
 ## 6. Regression Tests
 

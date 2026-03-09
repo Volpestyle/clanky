@@ -11,12 +11,12 @@ flowchart TD
         NoImmediate["No immediate unsolicited reply\nmessage is stored for future continuity"]
     end
 
-    subgraph ThoughtLoop["Text thought loop"]
+    subgraph ThoughtLoop["Text initiative"]
         Tick["60s in-process timer"]
-        ThoughtEnabled{"textThoughtLoop.enabled\nand under caps/cooldown?"}
+        ThoughtEnabled{"initiative.text.enabled\nand under caps/cooldown?"}
         ReplyScope["Reply/lurk scope\nreplyChannelIds are explicit-only\nblank => no thought-loop candidates"]
         CandidateRules["Candidate channel must:\n- be allowed\n- have recent human activity < 24h\n- not already contain bot in recent window"]
-        ThoughtDecision["LLM decides whether to chime in\ntextThoughtLoop.eagerness shapes this"]
+        ThoughtDecision["LLM decides whether to chime in\ninitiative.text.eagerness shapes this"]
     end
 
     subgraph Discovery["Discovery posting"]

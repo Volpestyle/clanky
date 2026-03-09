@@ -2,8 +2,9 @@
 
 This document explains how the bot is wired, how data moves through the system, and the key runtime flows.
 
-The live settings/runtime layer is preset-driven. For target-state roadmap material, including longer-term stack options, see:
-- `docs/roadmap/preset-driven-agent-stack-spec.md`
+The live settings/runtime layer is preset-driven. Canonical stack and initiative references:
+- `docs/preset-system-spec.md`
+- `docs/initiative-unified-spec.md`
 
 ## 1. High-Level Components
 
@@ -12,7 +13,7 @@ Code entrypoint:
 
 Core runtime:
 - `src/bot.ts`: Discord event handling and orchestration.
-- `src/bot/*`: extracted bot domains (`agentTasks`, `automation`, `automationEngine`, `budgetTracking`, `conversationContinuity`, `directAddressConfidence`, `discoveryEngine`, `discoverySchedule`, `imageAnalysis`, `mediaAttachment`, `memorySlice`, `mentionLookup`, `mentions`, `messageHistory`, `permissions`, `replyAdmission`, `replyFollowup`, `replyPipeline`, `replyPipelineShared`, `screenShare`, `startupCatchup`, `textThoughtLoop`, `voiceCoordination`, `voiceReplies`).
+- `src/bot/*`: extracted bot domains (`agentTasks`, `automation`, `automationEngine`, `budgetTracking`, `conversationContinuity`, `directAddressConfidence`, `imageAnalysis`, `initiativeEngine`, `mediaAttachment`, `memorySlice`, `mentionLookup`, `mentions`, `messageHistory`, `permissions`, `replyAdmission`, `replyFollowup`, `replyPipeline`, `replyPipelineShared`, `screenShare`, `startupCatchup`, `voiceCoordination`, `voiceReplies`).
 - `src/settings/settingsSchema.ts`: canonical persisted settings schema.
 - `src/settings/agentStack.ts`: preset resolution + capability/runtime accessors (`research`, `browser`, `voice`, `devTeam`, orchestrator bindings).
 - `src/llm.ts`: model/runtime provider abstraction (OpenAI, Anthropic, Claude OAuth, Codex OAuth, xAI/Grok), plus usage + cost logging, embeddings, image/video generation, ASR, and TTS.
@@ -22,7 +23,7 @@ Core runtime:
 - `src/memory/dailyReflection.ts`: end-of-day journal reflection — reads daily logs, runs LLM distillation, writes durable facts.
 - `src/memory/memoryHelpers.ts`: fact normalization, grounding checks, scoring helpers, directive scope config.
 - `src/memory/memoryToolRuntime.ts`: shared execution logic for `memory_write` and `memory_search` tools.
-- `src/services/discovery.ts`: external link discovery for discovery posts.
+- `src/services/discovery.ts`: passive discovery-feed collection and candidate ranking for the unified initiative cycle.
 - `src/store/store.ts`: SQLite persistence orchestration.
 - `src/store/*`: settings normalization and store helper utilities.
 - `src/voice/voiceSessionManager.ts`: voice orchestration and session lifecycle.
@@ -197,7 +198,7 @@ Canonical top-level settings groups:
 - `automations`
 
 Preset-driven stack settings:
-- `agentStack.preset`: `openai_native`, `anthropic_brain_openai_tools`, `claude_oauth_local_tools`, or `custom`
+- `agentStack.preset`: `claude_oauth`, `claude_api`, `openai_native_realtime`, `openai_api`, `openai_oauth`, or `grok_native_agent`
 - `agentStack.advancedOverridesEnabled`: whether per-runtime overrides are exposed and persisted
 - `agentStack.overrides`: orchestrator / worker override bindings
 - `agentStack.runtimeConfig`: capability-runtime configuration for research, browser, voice, and dev-team workers
@@ -206,8 +207,8 @@ Normalization responsibilities:
 - clamping numeric ranges,
 - sanitizing list fields,
 - defaulting missing keys,
-- normalizing flat settings into the canonical preset-driven shape,
-- ensuring reply-channel, text-thought-loop, and discovery config is always valid.
+- normalizing legacy aliases into the canonical preset-driven shape,
+- ensuring reply-channel and initiative config is always valid.
 
 The bot reads settings at decision time (`store.getSettings()`), so updates apply without restart.
 
@@ -239,28 +240,21 @@ Validation signals:
 - `Store.getReplyPerformanceStats()` (`memorySliceMs`, `llm1Ms`, `followupMs`).
 - voice `voice_turn_addressing` runtime logs.
 
-## 8. Text Thought Loop + Discovery Post Flow
+## 8. Unified Initiative Flow
 
-Text-channel proactivity is now split in two:
-- `replyChannelIds` + `textThoughtLoop.*`: periodic conversational lurking.
-- `discovery.channelIds` + `discovery.*`: proactive standalone discovery posting with optional external links/media.
+Text-channel proactivity now runs through `src/bot/initiativeEngine.ts`.
 
-Canonical activity rules, sliders, and edge cases are documented in:
+The runtime splits responsibility like this:
+- `permissions.replies.replyChannelIds`: eligible text channels
+- `initiative.text.*`: consultation cadence, eagerness, and tool-loop budgets
+- `initiative.discovery.*`: passive feed collection, media budgets, and self-curation guardrails
+- `src/services/discovery.ts`: fetches and ranks optional discovery candidates for the initiative prompt
+
+The model decides whether to post, which eligible channel fits, whether to use tools, and whether to include links or media.
+
+Canonical initiative behavior, settings, and migration notes live in:
+- `docs/initiative-unified-spec.md`
 - `docs/clanker-activity.md`
-
-![Discovery Post Flow](diagrams/discovery-post-flow.png)
-<!-- source: docs/diagrams/discovery-post-flow.mmd -->
-
-Scheduling modes:
-- `even`: post only when elapsed time exceeds `max(minMinutesBetweenPosts, 24h/maxPostsPerDay)`.
-- `spontaneous`: after min gap, uses probabilistic ramps + force-due bound.
-
-## 9. Discovery Subsystem
-
-`DiscoveryService.collect()` builds topic seeds, fetches enabled sources in parallel, filters/ranks candidates, and provides a shortlist to discovery-post prompting.
-
-Canonical discovery behavior, controls, and rollout guidance live in:
-- `docs/initiative-discovery-spec.md`.
 
 ## 10. Dashboard Read/Write Patterns
 
@@ -287,7 +281,7 @@ Dashboard read APIs also include:
 ## 11. Action Log Kinds
 
 Common `actions.kind` values in current runtime:
-- Messaging/discovery: `sent_reply`, `sent_message`, `reply_skipped`, `discovery_post`, `text_thought_loop_post`, `automation_post`
+- Messaging/initiative: `sent_reply`, `sent_message`, `reply_skipped`, `initiative_post`, `text_thought_loop_post`, `automation_post`
 - Reactions: `reacted`, `voice_soundboard_play`
 - LLM + media generation: `llm_call`, `llm_error`, `image_call`, `image_error`, `video_call`, `video_error`, `gif_call`, `gif_error`
 - Memory pipeline: `memory_fact`, `memory_extract_call`, `memory_extract_error`, `memory_embedding_call`, `memory_embedding_error`

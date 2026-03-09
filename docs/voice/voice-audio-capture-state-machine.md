@@ -2,7 +2,7 @@
 
 > **Scope:** Per-user audio capture lifecycle — from Discord speaking event to finalized voice turn.
 > Voice pipeline stages: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
-> Barge-in and echo policy: [`voice-interruption-policy.md`](voice-interruption-policy.md)
+> Barge-in and echo policy: [`barge-in.md`](barge-in.md)
 > Assistant output lifecycle: [`voice-output-state-machine.md`](voice-output-state-machine.md)
 
 This document defines the per-user audio capture state machine. Each user who speaks in a voice session gets an independent `CaptureState` that tracks their audio from the first Discord speaking event through promotion, finalization, and handoff to the turn processor.

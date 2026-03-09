@@ -66,16 +66,16 @@ Test the `shouldBargeIn` gate sequence under the exact conditions that cause pro
 
 ### 2B. Deferred turn flush timing
 
-Test the interaction between output lock release and deferred turn replay:
+Test the interaction between output lock release and deferred turn flushing:
 
 | Test Case | What It Validates |
 |---|---|
 | Phase transitions to `idle` → deferred turns flush | The `syncAssistantOutputState` → `recheckDeferredVoiceActions` path works |
-| Active promoted capture blocks deferred replay | `hasReplayBlockingActiveCapture` prevents reply during active speech |
-| Silence-only capture does NOT block replay | Weak captures that never promoted shouldn't hold up deferred turns |
+| Active promoted capture blocks deferred turn flush | `hasDeferredTurnBlockingActiveCapture` prevents reply during active speech |
+| Silence-only capture does NOT block deferred flush | Weak captures that never promoted shouldn't hold up deferred turns |
 | Deferred turn re-runs admission gate on flush | Coalesced turn is re-evaluated, not blindly dispatched |
 | Deferred action expires before output frees | Stale actions are cleaned up, not fired |
-| Interrupted reply priority over queued turns | `"interrupted_reply"` fires before `"queued_user_turns"` |
+| Queued turns flush once output is genuinely clear | Deferred actions only exist for queued user turns now |
 
 **Test file:** `src/voice/deferredActionQueue.test.ts`
 **Dependencies:** Mock `VoiceSession` with output state, capture state, deferred actions.

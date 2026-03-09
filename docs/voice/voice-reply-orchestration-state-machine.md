@@ -1,12 +1,15 @@
 # Voice Reply Orchestration State Machine
 
-> **Scope:** Reply dispatch — from admitted user turn to pipeline execution, including deferred turn queuing, retry, and supersede logic.
+> **Scope:** Reply dispatch — from admitted user turn to pipeline execution, including deferred turn queuing, interruption-context handoff, and supersede logic.
 > Voice pipeline stages: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
+> Streaming reply behavior: [`voice-streaming-reply.md`](voice-streaming-reply.md)
 > Assistant output lifecycle: [`voice-output-state-machine.md`](voice-output-state-machine.md)
 > Audio capture lifecycle: [`voice-audio-capture-state-machine.md`](voice-audio-capture-state-machine.md)
 > Barge-in policy: [`barge-in.md`](barge-in.md)
 
-This document defines the reply orchestration subsystem — how admitted user turns are dispatched to the correct reply pipeline, how turns are deferred when the output channel is busy, and how interrupted replies are retried.
+This document defines the reply orchestration subsystem — how admitted user turns are dispatched to the correct reply pipeline, how turns are deferred when the output channel is busy, and how barge-in hands interruption context into the next normal turn.
+
+The orchestration layer handles infrastructure (queuing, output lock, deferred flush) — all conversational decisions (what to say, whether to speak, how to handle interrupted context) are owned by the generation model. See `AGENTS.md` — Agent Autonomy section.
 
 ## 1. Source of Truth
 
@@ -16,7 +19,7 @@ Reply orchestration state lives on the `VoiceSession`:
 - `session.realtimeTurnDrainActive: boolean` — whether the drain loop is running
 - `session.pendingFileAsrTurnsQueue: FileAsrQueuedTurn[]` — queue of file-ASR turns awaiting processing
 - `session.fileAsrTurnDrainActive: boolean` — whether the file-ASR drain loop is running
-- `session.deferredVoiceActions: Record<DeferredVoiceActionType, DeferredVoiceAction>` — deferred action queue (interrupted replies, queued user turns)
+- `session.deferredVoiceActions: Record<DeferredVoiceActionType, DeferredVoiceAction>` — deferred action queue (queued user turns only)
 
 The `TurnProcessor` owns turn queueing and drain logic. The `DeferredActionQueue` owns deferred action scheduling and dispatch. The `VoiceSessionManager` owns the reply pipeline caller methods.
 
@@ -63,17 +66,18 @@ Turn coalescing: multiple turns arriving within the coalesce window are merged i
 | 1 | Missing transcript | deny |
 | 2 | Pending command followup (music disambiguation) | allow |
 | 3 | Output locked (not music-only) | deny (`"bot_turn_open"`, retry after 1400ms) |
-| 4 | Command-only + direct address | allow |
-| 5 | Command-only + not addressed | deny |
-| 6 | Music playing + not awake | deny |
-| 7 | Direct address fast path | allow |
-| 8 | Eagerness disabled + no direct address | deny |
-| 9 | Full-brain admission path (generation decides) | allow |
-| 10 | No brain session | deny |
-| 11 | Music playing + not awake (bridge) | deny |
-| 12 | Generation-only admission mode | allow |
+| 4 | Owned tool followup by the same speaker | allow |
+| 5 | Other-speaker cross-talk during owned tool followup | deny |
+| 6 | Command-only + direct address | allow |
+| 7 | Command-only + not addressed outside the latch window | deny |
+| 8 | Music playing + wake latch inactive | deny |
+| 9 | Native realtime path | allow (`"native_realtime"`) |
+| 10 | Text/full-brain path with `generation_decides` | allow |
+| 11 | Text/full-brain path with `classifier_gate` | classifier YES/NO |
 
-For bridge path turns that survive deterministic gates, `runVoiceReplyClassifier()` makes a YES/NO LLM call when `realtimeAdmissionMode === "hard_classifier"`.
+Direct address still matters, but it no longer hard fast-paths normal bridge turns. It feeds classifier/generation context and arms the music wake latch when music is active. Eagerness `0` is also no longer a deterministic deny; conservative behavior comes from the admission prompt and classifier/generation outcome.
+
+For bridge path turns that survive deterministic gates, `runVoiceReplyClassifier()` makes a YES/NO LLM call when the canonical admission mode is `classifier_gate` (runtime internal value: `hard_classifier`).
 
 ## 4. Reply Dispatch (Three Mutually Exclusive Paths)
 
@@ -98,6 +102,10 @@ Labeled transcript `(speakerName): text` sent to realtime provider. Cancels any 
 The unified pipeline: generate text via LLM, build playback plan, play via realtime TTS or API TTS. See `voice-provider-abstraction.md` §3 for detailed stage description.
 
 In realtime sessions, this path can still deliver speech through the realtime client even when settings-level `voice.replyPath` is `"brain"`. Here `mode: "realtime_transport"` means "use realtime output transport for pre-generated text", not "use the transcript-to-realtime bridge path above". On OpenAI, these exact-line playback requests are sent out-of-band with tools disabled so pre-generated speech cannot start a second provider tool/reasoning loop.
+
+When Brain is paired with Realtime TTS and reply streaming is enabled, this
+path can request speech incrementally from streamed generation chunks instead of
+waiting for whole-reply playback. See [`voice-streaming-reply.md`](voice-streaming-reply.md).
 
 ## 5. Deferred Turn System
 
@@ -134,11 +142,11 @@ Deferred turns are flushed when the output channel becomes free:
 
 ### Capture Blocking
 
-Active promoted captures block deferred turn flushing. `hasReplayBlockingActiveCapture` checks `session.userCaptures` for promoted captures with confirmed live speech. This prevents the bot from replying to a deferred turn while someone is still speaking.
+Active promoted captures block deferred turn flushing. `hasDeferredTurnBlockingActiveCapture` checks `session.userCaptures` for promoted captures with confirmed live speech. This prevents the bot from replying to a deferred turn while someone is still speaking.
 
-Silence-only captures (very weak signal, never promoted) do NOT block deferred replay.
+Silence-only captures (very weak signal, never promoted) do NOT block deferred turn flushing.
 
-## 6. Interrupted Reply Retry (Barge-In Recovery)
+## 6. Barge-In Recovery (Prompt-Driven)
 
 When barge-in interrupts bot speech:
 
@@ -148,18 +156,26 @@ When barge-in interrupts bot speech:
 1. Cancel active realtime response
 2. Reset bot audio playback
 3. If cancel succeeded AND utterance text was in progress:
-   - Create deferred action `"interrupted_reply"` with: utterance text, interrupting user ID, interruption policy
-   - Set expiry: `BARGE_IN_RETRY_MAX_AGE_MS`
-4. Set barge-in suppression window
+   - Store interruption context on the session: interrupted utterance text, interrupting user ID, timestamp, source
+4. If cancel failed because the provider had already completed:
+   - Do not create recovery state
+   - Fall back to the short echo guard only
+5. Set barge-in suppression window
 
-### Phase 2: Recovery
+### Phase 2: Normal Turn Processing
 
-When the interrupting user's capture completes:
-1. `recheckDeferredVoiceActions` with `preferredTypes: ["interrupted_reply"]`
-2. `fireDeferredInterruptedReply` checks:
-   - Same user who interrupted?
-   - Barge-in duration >= `BARGE_IN_FULL_OVERRIDE_MIN_MS`? → skip retry (user's new speech supersedes)
-   - Otherwise: re-send interrupted utterance text via `requestRealtimeTextUtterance` with original interruption policy
+When the interrupting user's next turn reaches the normal voice pipeline:
+1. `buildVoiceConversationContext` attaches `interruptedAssistantReply` if:
+   - It is the same user who interrupted
+   - The interruption is still recent
+   - No newer assistant reply has happened since
+2. `buildVoiceTurnPrompt` includes:
+   - What the bot was saying when interrupted
+   - Who interrupted
+   - What they said now
+3. The generation model decides whether to resume, adapt, or drop the interrupted reply.
+
+Deferred actions are only for queued user turns waiting on output availability. There is no deferred `"interrupted_reply"` action or auto-retry path.
 
 ## 7. Generation Supersede Guard (3-Stage)
 
@@ -199,7 +215,7 @@ When user speech interrupts an in-flight generation that hasn't produced audio y
 
 Voice generation registers an active reply and passes an `AbortSignal` to the LLM call, enabling mid-generation cancellation when newer speech arrives.
 
-The plumbing exists but is not yet wired for voice:
+The plumbing exists and is ready to wire for voice:
 
 - `ActiveReplyRegistry.begin()` creates an `AbortController` per reply scope (`activeReplyRegistry.ts`)
 - `llm.generate()` accepts a `signal` parameter and threads it to the service layer
@@ -246,7 +262,7 @@ This is the final safety net for anything that slips through stages 1 and 2.
 | Subsystem | State Read | Purpose |
 |---|---|---|
 | **Assistant Output** | `assistantOutput.phase`, `buildReplyOutputLockState()` | Output lock check: is the channel busy? |
-| **Capture Manager** | `session.userCaptures`, `hasReplayBlockingActiveCapture()` | Are active captures blocking deferred replay? |
+| **Capture Manager** | `session.userCaptures`, `hasDeferredTurnBlockingActiveCapture()` | Are active captures blocking deferred turn flushing? |
 | **Music** | `getMusicPhase()`, `musicPhaseShouldLockOutput()`, `musicPhaseShouldForceCommandOnly()` | Music output lock, command-only mode during playback |
 | **ASR** | `transcriptOverride`, `transcriptLogprobs` | Pre-computed transcript from ASR bridge |
 | **Barge-In** | `isBargeInOutputSuppressed()` | Is outbound audio suppressed after barge-in? |
@@ -258,8 +274,7 @@ This is the final safety net for anything that slips through stages 1 and 2.
 
 When multiple deferred actions are pending, `recheckDeferredVoiceActions` processes them in priority order:
 
-1. `"interrupted_reply"` — highest priority (restore interrupted bot speech)
-2. `"queued_user_turns"` — lower priority (process backlogged user input)
+1. `"queued_user_turns"` — process backlogged user input once output is actually free
 
 Each action has a `notBeforeAt` timestamp and an `expiresAt` deadline. `canFireDeferredAction` checks:
 - Session active?
@@ -276,18 +291,19 @@ When a user turn is admitted but the bot doesn't reply:
 3. Check `pendingResponse` — was a tracked response created?
 4. Check for supersede — was the reply abandoned for newer input?
 
-When deferred turns never replay:
+When deferred turns never flush:
 
 1. Check `deferredVoiceActions` — is the action present?
 2. Check `getOutputChannelState().deferredBlockReason` — what's blocking? (`"output_locked"`, `"active_captures"`, `"barge_in_suppressed"`)
 3. Check `expiresAt` — did the action expire before the output channel freed up?
-4. Check `hasReplayBlockingActiveCapture` — is a weak/silent capture incorrectly blocking?
+4. Check `hasDeferredTurnBlockingActiveCapture` — is a weak/silent capture incorrectly blocking?
 
-When barge-in retry produces stale content:
+When post-barge-in recovery feels wrong:
 
-1. Check `BARGE_IN_RETRY_MAX_AGE_MS` — did the retry fire within the age limit?
-2. Check `BARGE_IN_FULL_OVERRIDE_MIN_MS` — was the barge-in long enough to qualify as full override?
-3. Check if the original utterance text is still relevant (supersede logic should catch this)
+1. Check `session.interruptedAssistantReply` — was context actually stored?
+2. Check whether cancel really succeeded — failed cancel intentionally skips recovery context
+3. Check whether a newer assistant reply cleared applicability (`lastAssistantReplyAt > interruptedAt`)
+4. Inspect the generated prompt — did it include the interruption recovery section from `buildVoiceTurnPrompt`?
 
 ## 11. Regression Tests
 
@@ -295,11 +311,12 @@ These cases should remain covered:
 
 - Denied turns with `"bot_turn_open"` reason are deferred, not dropped
 - Deferred turns flush when `assistantOutput.phase` transitions to `idle`
-- Active promoted captures block deferred replay
-- Silence-only captures do NOT block deferred replay
+- Active promoted captures block deferred turn flushing
+- Silence-only captures do NOT block deferred turn flushing
 - Coalesced deferred turns re-run the full admission gate
-- Barge-in creates `"interrupted_reply"` deferred action when cancel succeeds
-- Full override barge-in (long enough duration) skips retry
+- Barge-in stores interruption context when cancel succeeds
+- Prompt generation receives interruption recovery context on the interrupting user's next turn
+- There is no deferred interrupted-reply auto-retry path
 - Pre-generation gate skips generation when newer finalized turn exists
 - Pre-generation gate skips generation when live promoted capture exists
 - Aborted generation produces no playback and no conversation window entry

@@ -1,0 +1,34 @@
+flowchart TD
+    Delta["LLM text deltas"]
+    Acc["SentenceAccumulator"]
+    FirstGate{"First chunk emitted yet?"}
+    FirstRule["Wait for:
+>= eagerFirstChunkChars
+and a sentence boundary"]
+    LaterRule["Wait for:
+sentence boundary
+or clause boundary
+or maxBufferChars forced break"]
+    Chunk["Normalized spoken chunk"]
+    Active{"Realtime response active?"}
+    Send["Send requestRealtimeTextUtterance now"]
+    Queue["Queue in pendingRealtimeAssistantUtterances"]
+    Done["Stream ends"]
+    Flush["Flush trailing text"]
+    Skip["If any streamed chunk was accepted:
+skip whole-reply playback fallback"]
+
+    Delta --> Acc
+    Acc --> FirstGate
+    FirstGate -->|No| FirstRule
+    FirstGate -->|Yes| LaterRule
+    FirstRule --> Chunk
+    LaterRule --> Chunk
+    Chunk --> Active
+    Active -->|No| Send
+    Active -->|Yes| Queue
+    Delta --> Done
+    Done --> Flush
+    Flush --> Chunk
+    Send --> Skip
+    Queue --> Skip

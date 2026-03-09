@@ -132,20 +132,21 @@ Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details 
 |-----|-------------|
 | `docs/technical-architecture.md` | System architecture, data model, runtime flows |
 | `docs/clanker-activity.md` | Text + voice activity model: direct replies, reply/lurk channels, thought loop, discovery |
+| `docs/initiative-unified-spec.md` | Unified text initiative cycle and discovery feed |
+| `docs/preset-system-spec.md` | Preset-driven stack/runtime settings |
 | `docs/agent-code.md` | Code agent runtime (Claude Code, Codex CLI, Codex) |
 | `docs/agent-browser.md` | Browser agent runtime |
 | `docs/voice/voice-provider-abstraction.md` | Voice pipeline stages, providers, and settings |
+| `docs/voice/screen-share-system.md` | Screen share pipeline and frame reasoning flow |
 | `docs/claude-ai-oauth.md` | Claude AI OAuth provider (`claude-oauth`) |
 | `docs/codex-oauth.md` | Experimental ChatGPT-backed Codex/OpenAI OAuth provider (`codex-oauth`) |
 | `docs/memory-system.md` | Memory system design |
-| `docs/initiative-discovery-spec.md` | Discovery post content sourcing |
 | `docs/public-https-entrypoint-spec.md` | Public HTTPS tunnel |
-| `docs/screen-share-link-spec.md` | Screen share flow |
 | `docs/e2e-test-spec.md` | E2E bot-to-bot + golden validation suites |
 | `docs/tests.md` | Test commands, live tests, and replay harnesses |
 | `docs/logs.md` | Structured logging and Loki setup |
 
-Roadmap material now lives under `docs/roadmap/`. Historical implementation plans live under `docs/archive/`.
+Canonical specs live in `docs/` and `docs/voice/`. Historical implementation notes live under `docs/tmp/archive/`.
 
 ## Notes
 

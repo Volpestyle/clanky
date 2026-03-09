@@ -82,7 +82,7 @@ Each call uses `--session <sessionKey>` so the browser task operates in an isola
 
 ## Cancellation Model
 
-Recent work unified cancellation across text and voice.
+Cancellation is unified across text and voice.
 
 ### Shared principles
 

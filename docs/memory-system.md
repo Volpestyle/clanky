@@ -74,7 +74,7 @@ Text-side journaling now captures both the incoming user side and the bot-author
 2. **Outgoing bot text**:
    - `src/bot/replyPipeline.ts` journals normal text replies after the send succeeds.
    - `src/bot/automationEngine.ts` journals automation posts after publish.
-   - `src/bot/discoveryEngine.ts` journals discovery posts after publish.
+   - `src/bot/initiativeEngine.ts` journals unified initiative posts after publish.
 3. All of those calls queue a job keyed by `messageId`.
 4. Queue behavior:
    - Dedupes concurrent same-message jobs by returning one shared promise.

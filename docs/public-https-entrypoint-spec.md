@@ -1,7 +1,5 @@
 # Public HTTPS Entrypoint
 
-Updated: February 28, 2026
-
 ## Purpose
 
 The public HTTPS entrypoint exposes the local dashboard/API (`localhost:8787`) over public HTTPS via Cloudflare Quick Tunnel, enabling remote access to share links and stream-frame ingest endpoints.
@@ -11,12 +9,6 @@ The public HTTPS entrypoint exposes the local dashboard/API (`localhost:8787`) o
 - Expose tunnel state in API runtime responses.
 - Provide operational knobs through environment variables.
 - Keep frame ingest routes authenticated via either private admin token, public API token, or short-lived share-session token.
-
-## Non-Goals
-
-- Native Discord Go Live capture from bot APIs.
-- Building a custom reverse proxy/TLS terminator.
-- Replacing tunnel providers with a plugin system.
 
 ## Runtime Behavior
 

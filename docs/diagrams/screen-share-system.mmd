@@ -1,0 +1,19 @@
+flowchart TD
+    A["User asks to share screen"] --> B["Voice tool / reply pipeline<br/>offer_screen_share_link"]
+    B --> C["ScreenShareSessionManager.createSession()<br/>token + share URL"]
+    C --> D["Share page /share/:token<br/>capture loop every keyframeIntervalMs"]
+    D --> E["POST /api/voice/share-session/:token/frame"]
+
+    E --> F["Latest frame buffer"]
+    E --> G["Background scanner<br/>note + sceneChanged"]
+    G --> H["Rolling temporal notes"]
+
+    F --> I["Normal voice brain turn"]
+    H --> I
+    I --> J["Speak or [SKIP]"]
+
+    G --> K{"Autonomous commentary enabled?"}
+    K -->|first frame / scene change / silence| I
+
+    H --> L["Session recap on share end"]
+    L --> M["One-line memory fact"]

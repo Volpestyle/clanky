@@ -1,8 +1,6 @@
 # Code Agent Runtime
 
-Status as of March 8, 2026: **Implemented**.
-
-This document describes the shipped `code_task` capability as it exists in runtime today.
+This document describes the `code_task` capability.
 
 ## Overview
 

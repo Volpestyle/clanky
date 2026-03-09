@@ -1,10 +1,16 @@
 # Clanker Activity Model
 
 > **Scope:** All activity paths (text + voice) — which path fired and which slider controls it.
-> Barge-in and noise rejection: [`voice-interruption-policy.md`](voice/voice-interruption-policy.md)
+> Barge-in and noise rejection: [`barge-in.md`](voice/barge-in.md)
 > Voice pipeline stages, providers, and per-stage settings: [`voice-provider-abstraction.md`](voice/voice-provider-abstraction.md)
 
-This document explains how Clanker decides when to speak in text channels and voice sessions, which settings control each path, how tool calling fits into the runtime, and where to look in code and the dashboard when behavior needs to change.
+This document explains how the bot decides when to speak in text channels and voice sessions, which settings control each path, how tool calling fits into the runtime, and where to look in code and the dashboard when behavior needs to change.
+
+### Autonomy Principle
+
+Settings control the agent's environment, not its behavior. Eagerness adjusts how often the agent is consulted (via the admission cost gate), not what it says. Guidance text is prompt context the model reasons about, not rules it follows. The model can always choose silence via `[SKIP]`. See `AGENTS.md` — Agent Autonomy section.
+
+The admission gates in this document are **cost gates** — they decide whether it's worth calling the LLM, not whether the bot should respond. The LLM decides whether to respond. At high eagerness the gates widen and the model sees more messages; at low eagerness the gates narrow to save cost and match the operator's intent that the bot should be quiet.
 
 It is the source of truth for the current activity model:
 
@@ -152,8 +158,8 @@ Behavior:
 
 Relevant code:
 
-- `maybeRunDiscoveryCycle()` in `src/bot.ts`
-- `src/bot/discoverySchedule.ts`
+- `maybeRunInitiativeCycle()` in `src/bot.ts`
+- `src/bot/initiativeEngine.ts`
 
 ## Voice Activity Paths
 
@@ -189,27 +195,29 @@ Relevant code:
 
 ### 6. Voice Reply Classifier Gate
 
-A lightweight LLM classifier (haiku, yes/no) gates non-direct-address turns before they reach generation. The classifier sees transcript, speaker, participant list, eagerness, and engagement context, and decides whether the bot should respond.
+The classifier exists because bridge mode (OpenAI Realtime) has no `[SKIP]` — if you give it text, it always speaks. In a group voice channel, the bot would respond to every utterance without a gate. The classifier gives bridge mode the same "should I speak?" autonomy that brain mode has natively via `[SKIP]`.
+
+The classifier is an LLM (Sonnet) that receives the same social context the generation model would — transcript, speaker, participants, eagerness, engagement history — and reasons about whether the bot should speak. Its eagerness context is framed as social mode descriptions, not prescriptive rules, so it reasons about the room rather than following a decision tree.
 
 Mode defaults:
 
-- **Bridge:** classifier always on — it's the only gate before generation.
-- **Brain:** classifier off by default (generation LLM decides via `[SKIP]`), toggleable on via dashboard.
+- **Bridge:** classifier always on — it's the only gate before generation, providing the `[SKIP]` equivalent.
+- **Brain:** classifier off by default (generation LLM decides via `[SKIP]`), toggleable on via dashboard for cost savings.
 - **Native:** not applicable — audio flows directly to the realtime model.
 
 Decision flow:
 
-- Direct address (wake word) → fast-path allow, no classifier needed
+- Direct address (wake word) → stronger classifier/generation context; also arms the music wake latch when music is active
 - Command followup → fast-path allow
-- Eagerness disabled → block
+- Owned tool followup from the same speaker → fast-path allow
+- Cross-talk during an owned tool followup → block
+- Eagerness disabled no longer hard-blocks by itself
 - Addressed-to-other signal → classifier context (strong deny prior, not hard deterministic block)
 - Full-brain/file-ASR path → `generation_decides` (the text LLM handles skip via `[SKIP]`)
 - Music playing and no wake latch → `music_playing_not_awake`
 - `voice.admission.mode=classifier_gate` → classifier YES/NO → `classifier_allow` / `classifier_deny`
 - `voice.admission.mode=generation_decides` → `generation_decides`
 - Classifier prompt context includes attributed recent history (`speaker: "text"`) up to 6 turns / 900 chars plus current turn fields
-
-The classifier gate uses language understanding to evaluate turns.
 
 Relevant code:
 
@@ -330,16 +338,18 @@ Text reply-channel defaults do not affect voice session eligibility.
 
 ### Reply Eagerness Tiers
 
-The eagerness value (0–100) from `activity.replyEagerness` maps to graduated prompt tiers. The raw number is also exposed to the LLM so it has a continuous sense of the scale.
+The eagerness value (0–100) from `activity.replyEagerness` maps to graduated prompt context. The raw number is also exposed to the LLM so it has a continuous sense of the scale. These are descriptions of the bot's social mode, not behavioral rules — the model reasons about them and decides what fits.
 
-| Range | Label | Prompt behavior |
-|-------|-------|-----------------|
-| 0–15 | Lurker | Only speak when clearly talked to or something genuinely important to say |
-| 16–35 | Observer | Observe more than talk; chime in when genuinely engaging or clearly addressed |
-| 36–55 | Selective | Skip unless genuinely useful, interesting, or funny |
-| 56–75 | Engaged | Contribute when it fits the flow, but still pick moments |
-| 76–90 | Active | Jump in freely, lighter contributions fine if they fit naturally |
-| 91–100 | Very social | Riff freely, casual reactions and banter welcome |
+| Range | Label | Context provided to model |
+|-------|-------|--------------------------|
+| 0–15 | Lurker | The bot prefers to stay quiet unless someone clearly wants its attention |
+| 16–35 | Observer | The bot observes more than it talks; comfortable chiming in when genuinely engaging |
+| 36–55 | Selective | The bot is selective — skips unless it has something genuinely useful, interesting, or funny |
+| 56–75 | Engaged | The bot is engaged — contributes when it fits the flow, picks its moments |
+| 76–90 | Active | The bot is active — lighter contributions are fine if they fit naturally |
+| 91–100 | Very social | The bot treats the channel like a group hangout — riffing, casual reactions, banter |
+
+Eagerness also controls the **admission cost gate** — how many messages reach the LLM at all. At low eagerness, only clearly-addressed messages pass. At high eagerness, the gate is nearly transparent and the model decides via `[SKIP]` on most messages.
 
 ### Directed-At-Someone-Else Detection
 
@@ -692,7 +702,7 @@ The main behavior described here is implemented in:
 - `src/bot.ts`
 - `src/bot/replyAdmission.ts`
 - `src/bot/replyPipeline.ts`
-- `src/bot/discoverySchedule.ts`
+- `src/bot/initiativeEngine.ts`
 - `src/bot/voiceReplies.ts`
 - `src/voice/voiceSessionManager.ts`
 - `src/voice/voiceReplyDecision.ts`
