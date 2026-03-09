@@ -355,7 +355,7 @@ export class ReplyManager {
         : null;
     const awaitingToolOutputs =
       session.awaitingToolOutputs ||
-      (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0);
+      (session.realtimeToolCallExecutions instanceof Map && session.realtimeToolCallExecutions.size > 0);
     const bufferedSamples = this.getBufferedTtsSamples(session);
 
     let ttsPlaybackState = this.getSessionTtsPlaybackState(session, state);
@@ -496,7 +496,7 @@ export class ReplyManager {
     const openAiActiveResponse = this.isRealtimeResponseActive(session);
     const awaitingToolOutputs =
       session.awaitingToolOutputs ||
-      (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0);
+      (session.realtimeToolCallExecutions instanceof Map && session.realtimeToolCallExecutions.size > 0);
     return buildReplyOutputLockState({
       assistantOutput,
       musicActive,
@@ -631,15 +631,15 @@ export class ReplyManager {
       this.host.activeReplies.abortAll(voiceReplyScopeKey, "Pending response cleared");
     }
 
-    if (abortPendingToolCalls && session.openAiPendingToolAbortControllers) {
-      for (const controller of session.openAiPendingToolAbortControllers.values()) {
+    if (abortPendingToolCalls && session.realtimePendingToolAbortControllers) {
+      for (const controller of session.realtimePendingToolAbortControllers.values()) {
         try {
           controller.abort("Pending response cleared");
         } catch {
           // ignore
         }
       }
-      session.openAiPendingToolAbortControllers.clear();
+      session.realtimePendingToolAbortControllers.clear();
     }
 
     session.pendingResponse = null;
@@ -825,9 +825,9 @@ export class ReplyManager {
 
     const now = Date.now();
     if (isRealtimeMode(session.mode)) {
-      session.lastOpenAiAssistantAudioItemId = null;
-      session.lastOpenAiAssistantAudioItemContentIndex = 0;
-      session.lastOpenAiAssistantAudioItemReceivedMs = 0;
+      session.lastRealtimeAssistantAudioItemId = null;
+      session.lastRealtimeAssistantAudioItemContentIndex = 0;
+      session.lastRealtimeAssistantAudioItemReceivedMs = 0;
     }
     const requestId = Number(session.nextResponseRequestId || 0) + 1;
     session.nextResponseRequestId = requestId;
@@ -1134,7 +1134,7 @@ export class ReplyManager {
     const hadAudio = pending ? this.pendingResponseHasAudio(session, pending) : false;
     const hasInFlightToolCalls =
       session.awaitingToolOutputs ||
-      (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0);
+      (session.realtimeToolCallExecutions instanceof Map && session.realtimeToolCallExecutions.size > 0);
 
     this.host.store.logAction({
       kind: "voice_runtime",

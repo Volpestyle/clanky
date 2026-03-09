@@ -70,7 +70,7 @@ export interface BargeInInterruptCommand {
   pendingRequestId: number | null;
   minCaptureBytes: number;
   interruptionPolicy: ReplyInterruptionPolicy | null;
-  retryUtteranceText: string | null;
+  interruptedUtteranceText: string | null;
   captureBytesSent: number | null;
   captureSignalPeak: number | null;
   captureSignalActiveSampleRatio: number | null;
@@ -288,7 +288,7 @@ export class BargeInController {
     const interruptionPolicy = this.host.normalizeReplyInterruptionPolicy(
       pendingResponse?.interruptionPolicy || session.activeReplyInterruptionPolicy
     );
-    const retryUtteranceText =
+    const interruptedUtteranceText =
       normalizeVoiceText(
         pendingResponse?.utteranceText || session.lastRequestedRealtimeUtterance?.utteranceText || "",
         STT_REPLY_MAX_CHARS
@@ -303,7 +303,7 @@ export class BargeInController {
       pendingRequestId: Math.max(0, Number(pendingResponse?.requestId || 0)) || null,
       minCaptureBytes: Math.max(0, Number(minCaptureBytes || 0)),
       interruptionPolicy,
-      retryUtteranceText,
+      interruptedUtteranceText,
       captureBytesSent: captureState ? Math.max(0, Number(captureState.bytesSent || 0)) : null,
       captureSignalPeak: captureState ? signal.peak : null,
       captureSignalActiveSampleRatio: captureState ? signal.activeSampleRatio : null,

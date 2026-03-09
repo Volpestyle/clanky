@@ -4,7 +4,7 @@
 > Voice pipeline stages: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
 > Assistant output lifecycle: [`voice-output-state-machine.md`](voice-output-state-machine.md)
 > Audio capture lifecycle: [`voice-audio-capture-state-machine.md`](voice-audio-capture-state-machine.md)
-> Barge-in policy: [`voice-interruption-policy.md`](voice-interruption-policy.md)
+> Barge-in policy: [`barge-in.md`](barge-in.md)
 
 This document defines the reply orchestration subsystem — how admitted user turns are dispatched to the correct reply pipeline, how turns are deferred when the output channel is busy, and how interrupted replies are retried.
 
@@ -252,7 +252,7 @@ This is the final safety net for anything that slips through stages 1 and 2.
 | **Barge-In** | `isBargeInOutputSuppressed()` | Is outbound audio suppressed after barge-in? |
 | **Engagement** | `lastDirectAddressAt`, `lastDirectAddressUserId`, `voiceCommandState` | Addressing and engagement context for admission |
 | **Realtime Client** | `isResponseInProgress()`, `activeResponseId` | Stale response detection |
-| **Tool Execution** | `openAiToolCallExecutions.size` | Tool calls blocking output? |
+| **Tool Execution** | `realtimeToolCallExecutions.size` | Tool calls blocking output? |
 
 ## 9. Deferred Action Priority
 

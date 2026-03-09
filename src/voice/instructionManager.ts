@@ -273,13 +273,13 @@ export class InstructionManager {
       } finally {
         pendingRefreshState.inFlight = false;
         if (session.ending) {
-          if (session.openAiTurnContextRefreshState === pendingRefreshState) {
-            session.openAiTurnContextRefreshState = null;
+          if (session.realtimeTurnContextRefreshState === pendingRefreshState) {
+            session.realtimeTurnContextRefreshState = null;
           }
         } else if (pendingRefreshState.pending) {
           nextRefresh = pendingRefreshState.pending;
-        } else if (session.openAiTurnContextRefreshState === pendingRefreshState) {
-          session.openAiTurnContextRefreshState = null;
+        } else if (session.realtimeTurnContextRefreshState === pendingRefreshState) {
+          session.realtimeTurnContextRefreshState = null;
         }
       }
 
@@ -525,12 +525,12 @@ export class InstructionManager {
       memorySlice
     });
     if (!instructions) return;
-    if (instructions === session.lastOpenAiRealtimeInstructions) return;
+    if (instructions === session.lastRealtimeInstructions) return;
 
     try {
       updateInstructions(instructions);
-      session.lastOpenAiRealtimeInstructions = instructions;
-      session.lastOpenAiRealtimeInstructionsAt = Date.now();
+      session.lastRealtimeInstructions = instructions;
+      session.lastRealtimeInstructionsAt = Date.now();
 
       this.store.logAction({
         kind: "voice_runtime",
@@ -746,7 +746,7 @@ export class InstructionManager {
       sections.push(musicLines.join("\n"));
     }
 
-    const configuredTools = Array.isArray(session.openAiToolDefinitions) ? session.openAiToolDefinitions : [];
+    const configuredTools = Array.isArray(session.realtimeToolDefinitions) ? session.realtimeToolDefinitions : [];
     if (shouldHandleRealtimeFunctionCalls({ session, settings }) && configuredTools.length > 0) {
       const localToolNames = configuredTools
         .filter((tool) => tool?.toolType !== "mcp")
@@ -862,7 +862,7 @@ export class InstructionManager {
   private ensureTurnContextRefreshState(
     session: VoiceSession
   ): RealtimeTurnContextRefreshState {
-    const current = session.openAiTurnContextRefreshState;
+    const current = session.realtimeTurnContextRefreshState;
     if (current && typeof current === "object") {
       return current;
     }
@@ -870,7 +870,7 @@ export class InstructionManager {
       inFlight: false,
       pending: null
     };
-    session.openAiTurnContextRefreshState = nextState;
+    session.realtimeTurnContextRefreshState = nextState;
     return nextState;
   }
 

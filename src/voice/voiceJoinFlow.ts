@@ -254,6 +254,10 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       .trim()
       .toLowerCase();
     const usesFileTurnTranscription = replyPath !== "native" && transcriptionMethod === "file_wav";
+    const usesRealtimeBridgeAsr =
+      replyPath !== "native" &&
+      transcriptionMethod === "realtime_bridge" &&
+      !Boolean(voiceConversation.textOnlyMode);
     const usesApiTts = replyPath === "brain" && ttsMode === "api";
     const usesOpenAiAudioApi = usesFileTurnTranscription || usesApiTts;
     if (runtimeMode === "voice_agent" && !manager.appConfig?.xaiApiKey) {
@@ -359,6 +363,25 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           mode: runtimeMode,
           transcriptionMethod,
           ttsMode
+        },
+        mustNotify: true
+      });
+      return true;
+    }
+    if (usesRealtimeBridgeAsr && runtimeMode !== "openai_realtime" && !manager.appConfig?.openaiApiKey) {
+      await sendOperationalMessage(manager, {
+        channel: message.channel,
+        settings,
+        guildId,
+        channelId: message.channelId,
+        userId,
+        messageId: message.id,
+        event: "voice_join_request",
+        reason: "openai_audio_api_key_missing",
+        details: {
+          mode: runtimeMode,
+          transcriptionMethod,
+          replyPath
         },
         mustNotify: true
       });
@@ -535,7 +558,16 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           inputAudioFormat: xaiSettings?.audioFormat || "audio/pcm",
           outputAudioFormat: xaiSettings?.audioFormat || "audio/pcm",
           inputSampleRateHz: realtimeInputSampleRateHz,
-          outputSampleRateHz: realtimeOutputSampleRateHz
+          outputSampleRateHz: realtimeOutputSampleRateHz,
+          tools:
+            realtimeToolOwnership === "provider_native"
+              ? buildRealtimeFunctionTools(manager, {
+                session: null,
+                settings,
+                target: runtimeMode
+              })
+              : [],
+          toolChoice: "auto"
         });
       } else if (runtimeMode === "openai_realtime") {
         realtimeClient = new OpenAiRealtimeClient({
@@ -707,23 +739,23 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         openAiPerUserAsrModel,
         openAiPerUserAsrLanguage,
         openAiPerUserAsrPrompt,
-        lastOpenAiAssistantAudioItemId: null,
-        lastOpenAiAssistantAudioItemContentIndex: 0,
-        lastOpenAiAssistantAudioItemReceivedMs: 0,
-        lastOpenAiToolCallerUserId: null,
+        lastRealtimeAssistantAudioItemId: null,
+        lastRealtimeAssistantAudioItemContentIndex: 0,
+        lastRealtimeAssistantAudioItemReceivedMs: 0,
+        lastRealtimeToolCallerUserId: null,
         toolCallEvents: [],
         mcpStatus: getVoiceMcpServerStatuses(manager),
         toolMusicTrackCatalog: new Map(),
         memoryWriteWindow: [],
         ...(realtimeToolOwnership === "provider_native"
           ? {
-              openAiPendingToolCalls: new Map(),
-              openAiToolCallExecutions: new Map(),
-              openAiToolResponseDebounceTimer: null,
-              openAiCompletedToolCallIds: new Map(),
-              openAiToolDefinitions: [],
-              lastOpenAiRealtimeToolHash: "",
-              lastOpenAiRealtimeToolRefreshAt: 0,
+              realtimePendingToolCalls: new Map(),
+              realtimeToolCallExecutions: new Map(),
+              realtimeToolResponseDebounceTimer: null,
+              realtimeCompletedToolCallIds: new Map(),
+              realtimeToolDefinitions: [],
+              lastRealtimeToolHash: "",
+              lastRealtimeToolRefreshAt: 0,
               awaitingToolOutputs: false
             }
           : {}),
@@ -812,10 +844,10 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         membershipEvents: [],
         voiceChannelEffects: [],
         baseVoiceInstructions,
-        lastOpenAiRealtimeInstructions: "",
-        lastOpenAiRealtimeInstructionsAt: 0,
+        lastRealtimeInstructions: "",
+        lastRealtimeInstructionsAt: 0,
         realtimeInstructionRefreshTimer: null,
-        openAiTurnContextRefreshState: null,
+        realtimeTurnContextRefreshState: null,
         settingsSnapshot: settings,
         cleanupHandlers: [],
         ending: false,

@@ -10,12 +10,12 @@ export type {
 export {
   buildRealtimeFunctionTools,
   ensureSessionToolRuntimeState,
-  executeOpenAiRealtimeFunctionCall,
+  executeRealtimeFunctionCall,
   getVoiceMcpServerStatuses,
-  parseOpenAiRealtimeToolArguments,
+  parseRealtimeToolArguments,
   recordVoiceToolCallEvent,
   refreshRealtimeTools,
-  resolveOpenAiRealtimeToolDescriptor,
+  resolveRealtimeToolDescriptor,
   resolveVoiceRealtimeToolDescriptors,
   summarizeVoiceToolOutput
 } from "./voiceToolCallInfra.ts";

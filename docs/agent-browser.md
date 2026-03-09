@@ -36,7 +36,7 @@ browser_browse({ query: "go find ..." })
 That top-level tool exists in:
 
 - text replies via `src/tools/replyTools.ts`
-- OpenAI realtime voice tool definitions via `src/voice/voiceToolCalls.ts`
+- provider-native realtime voice tool definitions via `src/voice/voiceToolCallToolRegistry.ts`
 
 ### 2. Shared browser task runtime
 
@@ -111,7 +111,7 @@ This is implemented in:
 
 ### Voice path
 
-OpenAI realtime voice tool calls also create abort controllers per pending call:
+Provider-native realtime voice tool calls also create abort controllers per pending call:
 
 - pending tool-call controllers are stored on the voice session
 - when a pending response is cleared or torn down, those controllers are aborted

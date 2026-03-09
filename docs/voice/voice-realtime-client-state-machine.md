@@ -3,9 +3,9 @@
 > **Scope:** Realtime brain client lifecycle — WebSocket connection to the AI provider for audio generation, event handling, instruction/tool refresh.
 > Voice pipeline stages: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
 > Assistant output lifecycle: [`voice-output-state-machine.md`](voice-output-state-machine.md)
-> Barge-in policy: [`voice-interruption-policy.md`](voice-interruption-policy.md)
+> Barge-in policy: [`barge-in.md`](barge-in.md)
 
-This document defines the realtime client lifecycle — how the bot connects to the AI provider (OpenAI, xAI, Gemini, ElevenLabs) for voice generation, manages instructions and tools, and handles the event stream that drives the assistant output state machine.
+This document defines the realtime client lifecycle — how the bot connects to the AI provider (OpenAI, xAI, Gemini, ElevenLabs) for voice generation, manages instructions and tools, and handles the event stream that drives the assistant output state machine. Tool execution and context assembly stay shared across providers; the client adapter only translates provider protocol into the common runtime surface.
 
 ## 1. Source of Truth
 
@@ -34,11 +34,13 @@ Code:
 | Mode | Client Class | `textInput` | `updateInstructions` | `updateTools` | `cancelResponse` | `perUserAsr` | `sharedAsr` |
 |---|---|---|---|---|---|---|---|
 | `openai_realtime` | `OpenAiRealtimeClient` | yes | yes | yes | yes | yes | yes |
-| `voice_agent` | `XaiRealtimeClient` | yes | yes | yes | yes | — | yes |
+| `voice_agent` | `XaiRealtimeClient` | yes | yes | yes | yes | yes | yes |
 | `gemini_realtime` | `GeminiRealtimeClient` | yes | yes (local only) | — | — | — | yes |
 | `elevenlabs_realtime` | `ElevenLabsRealtimeClient` | yes | — | — | — | — | yes |
 
 Capability checks use `providerSupports(mode, capability)` in `src/voice/voiceModes.ts`.
+
+For text-mediated sessions (`bridge`, `brain`), the ASR bridge is still OpenAI-backed today even when the speaking/reasoning provider is xAI, Gemini, or ElevenLabs.
 
 ## 3. Lifecycle Phases
 
@@ -105,8 +107,9 @@ Refresh triggers: session start, music idle/error, voice membership changes, cha
 
 ### Tool Refresh (`voiceToolCallInfra.ts`)
 
-- `refreshRealtimeTools()` — rebuilds tool definitions, sends `session.update` if tool hash changed (provider must support `updateTools`)
+- `refreshRealtimeTools()` — rebuilds provider-safe tool definitions from the shared registry, then sends `session.update` if the tool hash changed (provider must support `updateTools`)
 - Called at session start and during instruction refresh
+- Runs only for `session.realtimeToolOwnership === "provider_native"` sessions. Full-brain transport sessions skip provider-native tool registration entirely.
 
 ## 6. Response Tracking
 
@@ -166,14 +169,14 @@ Agent-based model. Uses signed URL auth (`fetchSignedUrl`). Audio sent as `user_
 |---|---|---|
 | Capture → Client | Forward raw PCM (native path) | `realtimeClient.appendInputAudioPcm()` |
 | Capture → Client | Forward labeled transcript (bridge path) | `realtimeClient.requestTextUtterance()` |
-| Reply Pipeline → Client | Play pre-generated exact-line speech | `requestRealtimeTextUtterance()` → provider playback method (`requestPlaybackUtterance()` on OpenAI) |
+| Reply Pipeline → Client | Play pre-generated exact-line speech | `requestRealtimeTextUtterance()` → provider playback method (`requestPlaybackUtterance()`) |
 | Client → Output SM | Audio delta, response lifecycle events | `syncAssistantOutputState()` |
 | Client → Barge-In | Cancel active response | `realtimeClient.cancelActiveResponse()`, `realtimeClient.truncateConversationItem()` |
-| Client → Tool Dispatch | Function call events | `handleOpenAiRealtimeFunctionCallEvent()` |
+| Client → Tool Dispatch | Function call events | `handleRealtimeFunctionCallEvent()` |
 | Client → Subprocess | Audio for Discord playback | `voxClient.appendTtsAudio()` |
 | Instruction Mgr → Client | Updated instructions/tools | `realtimeClient.updateInstructions()`, `session.update` with tools |
 
-OpenAI intentionally separates these two text paths. Forwarded user transcripts use the normal conversation item + response flow so the realtime brain can reason over conversation state and call tools. Exact-line playback for already-generated bot speech uses an out-of-band audio response with tools disabled so playback does not re-enter the tool loop or duplicate upstream work.
+Providers expose the same two logical text paths even when the wire protocol differs. Forwarded user transcripts use the normal conversation flow so the realtime brain can reason over conversation state and call tools. Exact-line playback for already-generated bot speech goes through `requestPlaybackUtterance()` so playback does not re-enter tool planning or duplicate upstream work. OpenAI implements that as an out-of-band audio response with tools disabled; xAI currently uses a constrained text turn on the normal response lane.
 
 ## 9. Incident Debugging
 
@@ -187,8 +190,8 @@ When the bot connects but produces no audio:
 
 When instructions/tools are stale:
 
-1. Check `lastOpenAiRealtimeInstructionsAt` — when was the last instruction refresh?
-2. Check `lastOpenAiRealtimeToolHash` — did the tool hash change detection work?
+1. Check `lastRealtimeInstructionsAt` — when was the last instruction refresh?
+2. Check `lastRealtimeToolHash` — did the tool hash change detection work?
 3. Check provider capabilities — Gemini/ElevenLabs don't support mid-session instruction updates.
 
 ## 10. Regression Tests

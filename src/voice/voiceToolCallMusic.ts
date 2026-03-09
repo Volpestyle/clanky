@@ -168,7 +168,7 @@ function startVoiceMusicPlayRequest(
   manager.requestPlayMusic({
     guildId: session?.guildId,
     channelId: session?.textChannelId,
-    requestedByUserId: session?.lastOpenAiToolCallerUserId || null,
+    requestedByUserId: session?.lastRealtimeToolCallerUserId || null,
     settings,
     query: playbackQuery,
     trackId: selectedTrack.id,
@@ -364,7 +364,7 @@ export async function executeVoiceMusicPlayTool(
     manager.requestPlayMusic({
       guildId: session?.guildId,
       channelId: session?.textChannelId,
-      requestedByUserId: session?.lastOpenAiToolCallerUserId || null,
+      requestedByUserId: session?.lastRealtimeToolCallerUserId || null,
       settings,
       query,
       reason: "voice_tool_music_play",
@@ -413,7 +413,7 @@ export async function executeVoiceMusicPlayTool(
   }
 
   if (results.length > 1) {
-    const requestedByUserId = session?.lastOpenAiToolCallerUserId || null;
+    const requestedByUserId = session?.lastRealtimeToolCallerUserId || null;
     setMusicDisambiguationState(manager, {
       session,
       query,
@@ -458,7 +458,7 @@ export async function executeVoiceMusicStopTool(
   await manager.requestStopMusic({
     guildId: session?.guildId,
     channelId: session?.textChannelId,
-    requestedByUserId: session?.lastOpenAiToolCallerUserId || null,
+    requestedByUserId: session?.lastRealtimeToolCallerUserId || null,
     settings,
     reason: "voice_tool_music_stop",
     source: "voice_tool_call",
@@ -476,7 +476,7 @@ export async function executeVoiceMusicPauseTool(
   await manager.requestPauseMusic({
     guildId: session?.guildId,
     channelId: session?.textChannelId,
-    requestedByUserId: session?.lastOpenAiToolCallerUserId || null,
+    requestedByUserId: session?.lastRealtimeToolCallerUserId || null,
     settings,
     reason: "voice_tool_music_pause",
     source: "voice_tool_call",
@@ -510,7 +510,7 @@ export async function executeVoiceMusicSkipTool(
     await manager.requestStopMusic({
       guildId: session?.guildId,
       channelId: session?.textChannelId,
-      requestedByUserId: session?.lastOpenAiToolCallerUserId || null,
+      requestedByUserId: session?.lastRealtimeToolCallerUserId || null,
       settings,
       reason: "voice_tool_music_skip_without_queue",
       source: "voice_tool_call",
@@ -522,7 +522,7 @@ export async function executeVoiceMusicSkipTool(
   await manager.requestStopMusic({
     guildId: session?.guildId,
     channelId: session?.textChannelId,
-    requestedByUserId: session?.lastOpenAiToolCallerUserId || null,
+    requestedByUserId: session?.lastRealtimeToolCallerUserId || null,
     settings,
     reason: "voice_tool_music_skip",
     source: "voice_tool_call",

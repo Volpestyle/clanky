@@ -82,7 +82,7 @@ test("refreshRealtimeTools registers local and MCP tool definitions", async () =
   assert.equal(toolNames.includes("music_play"), true);
   assert.equal(toolNames.includes("offer_screen_share_link"), true);
   assert.equal(toolNames.includes("server_status"), true);
-  const descriptorRows = Array.isArray(session.openAiToolDefinitions) ? session.openAiToolDefinitions : [];
+  const descriptorRows = Array.isArray(session.realtimeToolDefinitions) ? session.realtimeToolDefinitions : [];
   const mcpDescriptor = descriptorRows.find((entry) => entry?.name === "server_status");
   assert.equal(mcpDescriptor?.toolType, "mcp");
   const musicPlayDescriptor = descriptorRows.find((entry) => entry?.name === "music_play");
@@ -92,7 +92,7 @@ test("refreshRealtimeTools registers local and MCP tool definitions", async () =
   assert.equal(Object.hasOwn(musicPlayDescriptor?.parameters || {}, "allOf"), false);
 });
 
-test("buildRealtimeFunctionTools rewrites music_play for OpenAI realtime compatibility", () => {
+test("buildRealtimeFunctionTools rewrites music_play for provider-native realtime compatibility", () => {
   const manager = createVoiceTestManager();
   const tools = buildRealtimeFunctionTools(manager, {
     session: {
@@ -194,9 +194,9 @@ test("refreshRealtimeTools registers provider-native tools for bridge sessions",
   assert.equal(toolNames.includes("web_search"), true);
 });
 
-test("handleOpenAiRealtimeFunctionCallEvent executes music_now_playing and sends function output", async () => {
+test("handleRealtimeFunctionCallEvent executes music_now_playing and sends function output", async () => {
   const manager = createVoiceTestManager();
-  manager.scheduleOpenAiRealtimeToolFollowupResponse = () => {};
+  manager.scheduleRealtimeToolFollowupResponse = () => {};
 
   const sentFunctionOutputs = [];
   const session = {
@@ -233,7 +233,7 @@ test("handleOpenAiRealtimeFunctionCallEvent executes music_now_playing and sends
     }
   };
 
-  session.openAiToolDefinitions = buildRealtimeFunctionTools(manager, {
+  session.realtimeToolDefinitions = buildRealtimeFunctionTools(manager, {
     session,
     settings: createVoiceTestSettings({
       webSearch: {
@@ -242,7 +242,7 @@ test("handleOpenAiRealtimeFunctionCallEvent executes music_now_playing and sends
     })
   });
 
-  await manager.handleOpenAiRealtimeFunctionCallEvent({
+  await manager.handleRealtimeFunctionCallEvent({
     session,
     settings: createVoiceTestSettings(),
     event: {
@@ -267,9 +267,9 @@ test("handleOpenAiRealtimeFunctionCallEvent executes music_now_playing and sends
   assert.equal(toolEvents[0]?.toolName, "music_now_playing");
 });
 
-test("handleOpenAiRealtimeFunctionCallEvent ignores provider function calls in brain sessions", async () => {
+test("handleRealtimeFunctionCallEvent ignores provider function calls in brain sessions", async () => {
   const manager = createVoiceTestManager();
-  manager.scheduleOpenAiRealtimeToolFollowupResponse = () => {};
+  manager.scheduleRealtimeToolFollowupResponse = () => {};
 
   const sentFunctionOutputs = [];
   const session = {
@@ -295,12 +295,12 @@ test("handleOpenAiRealtimeFunctionCallEvent ignores provider function calls in b
     }
   };
 
-  session.openAiToolDefinitions = buildRealtimeFunctionTools(manager, {
+  session.realtimeToolDefinitions = buildRealtimeFunctionTools(manager, {
     session,
     settings: createVoiceTestSettings()
   });
 
-  await manager.handleOpenAiRealtimeFunctionCallEvent({
+  await manager.handleRealtimeFunctionCallEvent({
     session,
     settings: createVoiceTestSettings({
       voice: {
@@ -322,9 +322,9 @@ test("handleOpenAiRealtimeFunctionCallEvent ignores provider function calls in b
   assert.equal(Array.isArray(session.toolCallEvents) ? session.toolCallEvents.length : 0, 0);
 });
 
-test("handleOpenAiRealtimeFunctionCallEvent executes offer_screen_share_link and sends function output", async () => {
+test("handleRealtimeFunctionCallEvent executes offer_screen_share_link and sends function output", async () => {
   const manager = createVoiceTestManager();
-  manager.scheduleOpenAiRealtimeToolFollowupResponse = () => {};
+  manager.scheduleRealtimeToolFollowupResponse = () => {};
   const offerCalls = [];
   manager.getVoiceScreenShareCapability = () => ({
     supported: true,
@@ -353,7 +353,7 @@ test("handleOpenAiRealtimeFunctionCallEvent executes offer_screen_share_link and
     mode: "openai_realtime",
     ending: false,
     realtimeToolOwnership: "provider_native",
-    lastOpenAiToolCallerUserId: "speaker-1",
+    lastRealtimeToolCallerUserId: "speaker-1",
     recentVoiceTurns: [
       {
         role: "user",
@@ -368,12 +368,12 @@ test("handleOpenAiRealtimeFunctionCallEvent executes offer_screen_share_link and
     }
   };
 
-  session.openAiToolDefinitions = buildRealtimeFunctionTools(manager, {
+  session.realtimeToolDefinitions = buildRealtimeFunctionTools(manager, {
     session,
     settings: createVoiceTestSettings()
   });
 
-  await manager.handleOpenAiRealtimeFunctionCallEvent({
+  await manager.handleRealtimeFunctionCallEvent({
     session,
     settings: createVoiceTestSettings(),
     event: {
@@ -400,9 +400,9 @@ test("handleOpenAiRealtimeFunctionCallEvent executes offer_screen_share_link and
   assert.equal(outputPayload?.linkUrl, "https://screen.example/session/abc");
 });
 
-test("handleOpenAiRealtimeFunctionCallEvent sends cancelled tool output when a voice tool is aborted", async () => {
+test("handleRealtimeFunctionCallEvent sends cancelled tool output when a voice tool is aborted", async () => {
   const manager = createVoiceTestManager();
-  manager.scheduleOpenAiRealtimeToolFollowupResponse = () => {};
+  manager.scheduleRealtimeToolFollowupResponse = () => {};
 
   let resolveSearchStarted = () => undefined;
   const searchStarted = new Promise<void>((resolve) => {
@@ -438,7 +438,7 @@ test("handleOpenAiRealtimeFunctionCallEvent sends cancelled tool output when a v
     }
   };
 
-  session.openAiToolDefinitions = buildRealtimeFunctionTools(manager, {
+  session.realtimeToolDefinitions = buildRealtimeFunctionTools(manager, {
     session,
     settings: createVoiceTestSettings({
       webSearch: {
@@ -447,7 +447,7 @@ test("handleOpenAiRealtimeFunctionCallEvent sends cancelled tool output when a v
     })
   });
 
-  const toolRun = manager.handleOpenAiRealtimeFunctionCallEvent({
+  const toolRun = manager.handleRealtimeFunctionCallEvent({
     session,
     settings: createVoiceTestSettings({
       webSearch: {
@@ -468,7 +468,7 @@ test("handleOpenAiRealtimeFunctionCallEvent sends cancelled tool output when a v
   });
 
   await searchStarted;
-  session.openAiPendingToolAbortControllers?.get("call_web_cancel_1")?.abort("user_cancelled");
+  session.realtimePendingToolAbortControllers?.get("call_web_cancel_1")?.abort("user_cancelled");
   await toolRun;
 
   assert.equal(sentFunctionOutputs.length, 1);
@@ -479,9 +479,9 @@ test("handleOpenAiRealtimeFunctionCallEvent sends cancelled tool output when a v
   assert.equal(outputPayload?.error?.message, "Tool call cancelled by user.");
 });
 
-test("handleOpenAiRealtimeFunctionCallEvent marks semantic tool failures with is_error", async () => {
+test("handleRealtimeFunctionCallEvent marks semantic tool failures with is_error", async () => {
   const manager = createVoiceTestManager();
-  manager.scheduleOpenAiRealtimeToolFollowupResponse = () => {};
+  manager.scheduleRealtimeToolFollowupResponse = () => {};
   manager.musicSearch = {
     isConfigured() {
       return true;
@@ -507,12 +507,12 @@ test("handleOpenAiRealtimeFunctionCallEvent marks semantic tool failures with is
     }
   };
 
-  session.openAiToolDefinitions = buildRealtimeFunctionTools(manager, {
+  session.realtimeToolDefinitions = buildRealtimeFunctionTools(manager, {
     session,
     settings: createVoiceTestSettings()
   });
 
-  await manager.handleOpenAiRealtimeFunctionCallEvent({
+  await manager.handleRealtimeFunctionCallEvent({
     session,
     settings: createVoiceTestSettings(),
     event: {
@@ -536,9 +536,9 @@ test("handleOpenAiRealtimeFunctionCallEvent marks semantic tool failures with is
   assert.equal(outputPayload?.error, "no_results");
 });
 
-test("handleOpenAiRealtimeFunctionCallEvent ignores duplicate completed call ids", async () => {
+test("handleRealtimeFunctionCallEvent ignores duplicate completed call ids", async () => {
   const manager = createVoiceTestManager();
-  manager.scheduleOpenAiRealtimeToolFollowupResponse = () => {};
+  manager.scheduleRealtimeToolFollowupResponse = () => {};
 
   const sentFunctionOutputs = [];
   const session = {
@@ -556,7 +556,7 @@ test("handleOpenAiRealtimeFunctionCallEvent ignores duplicate completed call ids
     }
   };
 
-  session.openAiToolDefinitions = buildRealtimeFunctionTools(manager, {
+  session.realtimeToolDefinitions = buildRealtimeFunctionTools(manager, {
     session,
     settings: createVoiceTestSettings()
   });
@@ -571,12 +571,12 @@ test("handleOpenAiRealtimeFunctionCallEvent ignores duplicate completed call ids
     }
   };
 
-  await manager.handleOpenAiRealtimeFunctionCallEvent({
+  await manager.handleRealtimeFunctionCallEvent({
     session,
     settings: createVoiceTestSettings(),
     event
   });
-  await manager.handleOpenAiRealtimeFunctionCallEvent({
+  await manager.handleRealtimeFunctionCallEvent({
     session,
     settings: createVoiceTestSettings(),
     event

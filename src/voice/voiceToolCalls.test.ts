@@ -42,7 +42,7 @@ test("executeLocalVoiceToolCall forwards browser abort signals to browser_browse
       id: "voice-session-1",
       guildId: "guild-1",
       textChannelId: "channel-1",
-      lastOpenAiToolCallerUserId: "user-1"
+      lastRealtimeToolCallerUserId: "user-1"
     },
     settings: createTestSettings({
       browser: {
@@ -90,7 +90,7 @@ test("executeLocalVoiceToolCall aborts non-browser tools before dispatch", async
         id: "voice-session-1",
         guildId: "guild-1",
         textChannelId: "channel-1",
-        lastOpenAiToolCallerUserId: "user-1"
+        lastRealtimeToolCallerUserId: "user-1"
       },
       settings: createTestSettings({}),
       toolName: "web_search",
@@ -177,7 +177,7 @@ function buildMusicPlayManager({
     id: "voice-session-1",
     guildId: "guild-1",
     textChannelId: "channel-1",
-    lastOpenAiToolCallerUserId: "user-1",
+    lastRealtimeToolCallerUserId: "user-1",
     toolMusicTrackCatalog: catalog
   };
 
@@ -320,7 +320,7 @@ test("music_play updates queue state synchronously before returning", async () =
       id: "s1",
       guildId: "g1",
       textChannelId: "tc1",
-      lastOpenAiToolCallerUserId: null,
+      lastRealtimeToolCallerUserId: null,
       toolMusicTrackCatalog: catalog
     },
     settings: createTestSettings({}),

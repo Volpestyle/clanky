@@ -267,7 +267,7 @@ function createSession(overrides = {}) {
     lastAudioDeltaAt: 0,
     pendingResponse: null,
     awaitingToolOutputs: false,
-    openAiToolCallExecutions: new Map(),
+    realtimeToolCallExecutions: new Map(),
     voxClient: null,
     pendingFileAsrTurns: 0,
     recentVoiceTurns: [],
@@ -770,9 +770,9 @@ test("interruptBotSpeechForBargeIn truncates OpenAI assistant audio to played du
       requestId: 12,
       utteranceText: "continuation"
     },
-    lastOpenAiAssistantAudioItemId: "item_abc",
-    lastOpenAiAssistantAudioItemContentIndex: 0,
-    lastOpenAiAssistantAudioItemReceivedMs: 2000,
+    lastRealtimeAssistantAudioItemId: "item_abc",
+    lastRealtimeAssistantAudioItemContentIndex: 0,
+    lastRealtimeAssistantAudioItemReceivedMs: 2000,
     realtimeClient: {
       cancelActiveResponse() {
         return true;
@@ -1851,10 +1851,10 @@ test("handleResponseDone preserves tool work when a tool-only realtime response 
       scope: "speaker",
       allowedUserId: "speaker-1"
     },
-    openAiToolCallExecutions: new Map([
+    realtimeToolCallExecutions: new Map([
       ["call-1", { startedAtMs: Date.now() - 200, toolName: "web_search" }]
     ]),
-    openAiPendingToolAbortControllers: new Map([
+    realtimePendingToolAbortControllers: new Map([
       ["call-1", toolAbortController]
     ])
   });
@@ -2809,7 +2809,7 @@ test("getOutputChannelState surfaces deferred blockers and turn backlog", () => 
   const session = createSession({
     pendingFileAsrTurns: 2,
     awaitingToolOutputs: true,
-    openAiToolCallExecutions: new Map([["call-1", Promise.resolve()]]),
+    realtimeToolCallExecutions: new Map([["call-1", Promise.resolve()]]),
     userCaptures: new Map([[
       "user-a",
       {

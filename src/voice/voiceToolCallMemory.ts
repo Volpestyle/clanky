@@ -46,13 +46,13 @@ export async function executeVoiceMemorySearchTool(
     settings,
     guildId: String(session?.guildId || "").trim(),
     channelId: session?.textChannelId || null,
-    actorUserId: session?.lastOpenAiToolCallerUserId || null,
+    actorUserId: session?.lastRealtimeToolCallerUserId || null,
     namespace: args?.namespace,
     queryText: normalizeInlineText(args?.query, 240),
     trace: {
       guildId: session?.guildId || null,
       channelId: session?.textChannelId || null,
-      userId: session?.lastOpenAiToolCallerUserId || null,
+      userId: session?.lastRealtimeToolCallerUserId || null,
       source: "voice_realtime_tool_memory_search"
     },
     limit: clamp(Math.floor(Number(args?.top_k || 6)), 1, 20),
@@ -124,13 +124,13 @@ export async function executeVoiceMemoryWriteTool(
     settings,
     guildId: String(session?.guildId || "").trim(),
     channelId: session?.textChannelId || null,
-    actorUserId: session?.lastOpenAiToolCallerUserId || null,
+    actorUserId: session?.lastRealtimeToolCallerUserId || null,
     namespace: args?.namespace,
     items: Array.isArray(args?.items) ? args.items : [],
     trace: {
       guildId: session?.guildId || null,
       channelId: session?.textChannelId || null,
-      userId: session?.lastOpenAiToolCallerUserId || null,
+      userId: session?.lastRealtimeToolCallerUserId || null,
       source: "voice_realtime_tool_memory_write"
     },
     sourceMessageIdPrefix: `voice-tool-${String(session?.id || "session")}`,

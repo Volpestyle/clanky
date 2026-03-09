@@ -51,7 +51,7 @@ type SessionLifecycleHost = VoiceToolCallManager & Pick<
   | "engageBotSpeechMusicDuck"
   | "estimatePcm16MonoDurationMs"
   | "getMusicPhase"
-  | "handleOpenAiRealtimeFunctionCallEvent"
+  | "handleRealtimeFunctionCallEvent"
   | "isAsrActive"
   | "musicPlayer"
   | "recordVoiceTurn"
@@ -297,7 +297,7 @@ export class SessionLifecycle {
     if (session.responseWatchdogTimer) clearTimeout(session.responseWatchdogTimer);
     if (session.responseDoneGraceTimer) clearTimeout(session.responseDoneGraceTimer);
     if (session.realtimeInstructionRefreshTimer) clearTimeout(session.realtimeInstructionRefreshTimer);
-    if (session.openAiToolResponseDebounceTimer) clearTimeout(session.openAiToolResponseDebounceTimer);
+    if (session.realtimeToolResponseDebounceTimer) clearTimeout(session.realtimeToolResponseDebounceTimer);
     if (session.realtimeTurnCoalesceTimer) {
       clearTimeout(session.realtimeTurnCoalesceTimer);
       session.realtimeTurnCoalesceTimer = null;
@@ -330,10 +330,10 @@ export class SessionLifecycle {
     this.host.deferredActionQueue.clearAllDeferredVoiceActions(session);
     if (session.realtimeToolOwnership === "provider_native") {
       session.awaitingToolOutputs = false;
-      session.openAiPendingToolCalls = new Map();
-      session.openAiToolCallExecutions = new Map();
+      session.realtimePendingToolCalls = new Map();
+      session.realtimeToolCallExecutions = new Map();
     }
-    session.openAiTurnContextRefreshState = null;
+    session.realtimeTurnContextRefreshState = null;
     session.lastRequestedRealtimeUtterance = null;
     session.activeReplyInterruptionPolicy = null;
     session.bargeInSuppressionUntil = 0;
@@ -519,7 +519,7 @@ export class SessionLifecycle {
     });
   }
 
-  trackOpenAiRealtimeAssistantAudioEvent(session: VoiceSession, event: Record<string, unknown> | null | undefined) {
+  trackRealtimeAssistantAudioEvent(session: VoiceSession, event: Record<string, unknown> | null | undefined) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
     if (!event || typeof event !== "object") return;
@@ -537,16 +537,16 @@ export class SessionLifecycle {
     const contentIndexRaw = Number(event.content_index ?? event.contentIndex ?? 0);
     const contentIndex =
       Number.isFinite(contentIndexRaw) && contentIndexRaw >= 0 ? Math.floor(contentIndexRaw) : 0;
-    const previousItemId = String(session.lastOpenAiAssistantAudioItemId || "");
-    const previousContentIndex = Math.max(0, Number(session.lastOpenAiAssistantAudioItemContentIndex || 0));
+    const previousItemId = String(session.lastRealtimeAssistantAudioItemId || "");
+    const previousContentIndex = Math.max(0, Number(session.lastRealtimeAssistantAudioItemContentIndex || 0));
     if (itemId !== previousItemId || contentIndex !== previousContentIndex) {
-      session.lastOpenAiAssistantAudioItemReceivedMs = 0;
+      session.lastRealtimeAssistantAudioItemReceivedMs = 0;
     }
-    session.lastOpenAiAssistantAudioItemId = itemId;
-    session.lastOpenAiAssistantAudioItemContentIndex = contentIndex;
+    session.lastRealtimeAssistantAudioItemId = itemId;
+    session.lastRealtimeAssistantAudioItemContentIndex = contentIndex;
   }
 
-  trackOpenAiRealtimeResponseOutputEvent(
+  trackRealtimeResponseOutputEvent(
     session: VoiceSession,
     event: Record<string, unknown> | null | undefined,
     settings: SessionLifecycleSettings = session.settingsSnapshot
@@ -572,10 +572,10 @@ export class SessionLifecycle {
 
     const responseId = parseRealtimeResponseId(session, event);
     if (!responseId) return;
-    const responseOutputState = session.openAiResponsesWithAssistantOutput instanceof Map
-      ? session.openAiResponsesWithAssistantOutput
+    const responseOutputState = session.realtimeResponsesWithAssistantOutput instanceof Map
+      ? session.realtimeResponsesWithAssistantOutput
       : new Map<string, number>();
-    session.openAiResponsesWithAssistantOutput = responseOutputState;
+    session.realtimeResponsesWithAssistantOutput = responseOutputState;
     const now = Date.now();
     responseOutputState.set(responseId, now);
     for (const [trackedResponseId, trackedAt] of responseOutputState.entries()) {
@@ -598,10 +598,10 @@ export class SessionLifecycle {
 
       const sampleRate = Number(session.realtimeOutputSampleRateHz) || 24000;
 
-      if (isRealtimeMode(session.mode) && session.lastOpenAiAssistantAudioItemId) {
-        session.lastOpenAiAssistantAudioItemReceivedMs = Math.max(
+      if (isRealtimeMode(session.mode) && session.lastRealtimeAssistantAudioItemId) {
+        session.lastRealtimeAssistantAudioItemReceivedMs = Math.max(
           0,
-          Number(session.lastOpenAiAssistantAudioItemReceivedMs || 0)
+          Number(session.lastRealtimeAssistantAudioItemReceivedMs || 0)
         ) + this.host.estimatePcm16MonoDurationMs(pcmByteLength, sampleRate);
       }
 
@@ -850,10 +850,10 @@ export class SessionLifecycle {
       if (!session || session.ending) return;
       if (!event || typeof event !== "object") return;
       if (!isRealtimeMode(session.mode)) return;
-      this.trackOpenAiRealtimeResponseOutputEvent(session, event, settings);
-      this.trackOpenAiRealtimeAssistantAudioEvent(session, event);
+      this.trackRealtimeResponseOutputEvent(session, event, settings);
+      this.trackRealtimeAssistantAudioEvent(session, event);
       if (shouldHandleRealtimeFunctionCallsModule({ session, settings })) {
-        this.host.handleOpenAiRealtimeFunctionCallEvent({
+        this.host.handleRealtimeFunctionCallEvent({
           session,
           settings,
           event
@@ -863,7 +863,7 @@ export class SessionLifecycle {
             guildId: session.guildId,
             channelId: session.textChannelId,
             userId: this.host.client.user?.id || null,
-            content: `openai_realtime_tool_event_failed: ${String(error?.message || error)}`,
+            content: `realtime_tool_event_failed: ${String(error?.message || error)}`,
             metadata: {
               sessionId: session.id
             }

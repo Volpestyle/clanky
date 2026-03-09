@@ -28,7 +28,7 @@ test("executeVoiceMemoryWriteTool enforces write limit per fact across calls", a
     textChannelId: "chan-1",
     mode: "openai_realtime",
     ending: false,
-    lastOpenAiToolCallerUserId: "speaker-1",
+    lastRealtimeToolCallerUserId: "speaker-1",
     memoryWriteWindow: [now - 5_000, now - 4_000, now - 3_000, now - 2_000]
   };
 
@@ -94,7 +94,7 @@ test("executeVoiceMemoryWriteTool rejects abusive future-behavior memory request
     textChannelId: "chan-1",
     mode: "openai_realtime",
     ending: false,
-    lastOpenAiToolCallerUserId: "speaker-1",
+    lastRealtimeToolCallerUserId: "speaker-1",
     memoryWriteWindow: []
   };
 

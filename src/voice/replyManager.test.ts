@@ -15,7 +15,7 @@ function createSession(overrides = {}) {
     lastResponseRequestAt: 0,
     pendingResponse: null,
     awaitingToolOutputs: false,
-    openAiToolCallExecutions: new Map(),
+    realtimeToolCallExecutions: new Map(),
     userCaptures: new Map(),
     assistantOutput: {
       phase: "idle",

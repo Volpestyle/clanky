@@ -9,7 +9,7 @@ Clanker has no general mechanism to cancel in-flight tool calls when a user says
 | Layer | Mechanism | Scope | Signal Threading |
 |-------|-----------|-------|------------------|
 | `BrowserTaskRegistry` | `Map<scopeKey, ActiveBrowserTask>` | guild:channel | Full (signal -> browseAgent) |
-| `openAiPendingToolAbortControllers` | `Map<callId, AbortController>` on session | per voice tool call | Partial (only `browser_browse` receives it) |
+| `realtimePendingToolAbortControllers` | `Map<callId, AbortController>` on session | per voice tool call | Partial (only `browser_browse` receives it) |
 | `clearPendingResponse` | Iterates + aborts all controllers | entire voice session | Triggers abort but no listeners on most tools |
 | Text `stop`/`cancel` keyword | `activeBrowserTasks.abort()` | guild:channel | Only browser tasks |
 | `SubAgentSessionManager` | `Map<id, SubAgentSession>` with `close()` | per session ID | None (no signal, no cancel) |
@@ -255,11 +255,11 @@ Add a cancel keyword check early in `runRealtimeTurn()` and `runFileAsrTurn()`, 
 if (isCancelIntent(transcript)) {
   // Abort all pending tool calls for this voice session
   const session = turn.session;
-  if (session.openAiPendingToolAbortControllers?.size) {
-    for (const controller of session.openAiPendingToolAbortControllers.values()) {
+  if (session.realtimePendingToolAbortControllers?.size) {
+    for (const controller of session.realtimePendingToolAbortControllers.values()) {
       try { controller.abort("User said cancel"); } catch {}
     }
-    session.openAiPendingToolAbortControllers.clear();
+    session.realtimePendingToolAbortControllers.clear();
   }
   // Cancel any active realtime response
   session.realtimeClient?.cancelActiveResponse?.();
@@ -384,7 +384,7 @@ Two options (pick the simpler one that fits the existing voice reply patterns):
 
 **What to do:**
 
-In the catch block of `executeOpenAiRealtimeFunctionCall` (~line 106), detect `isAbortError(error)` and return a cancellation-specific output:
+In the catch block of `executeRealtimeFunctionCall` (~line 106), detect `isAbortError(error)` and return a cancellation-specific output:
 
 ```typescript
 } catch (error) {

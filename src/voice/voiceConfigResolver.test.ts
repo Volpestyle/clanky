@@ -253,7 +253,7 @@ describe("shouldUsePerUserTranscription", () => {
     assert.equal(result, false);
   });
 
-  test("disables per-user transcription when the runtime lacks that capability", () => {
+  test("enables per-user transcription for xAI bridge sessions when OpenAI ASR is configured", () => {
     const settings = createVoiceSettings({
       mode: "voice_agent"
     });
@@ -264,7 +264,7 @@ describe("shouldUsePerUserTranscription", () => {
       hasOpenAiApiKey: true
     });
 
-    assert.equal(result, false);
+    assert.equal(result, true);
   });
 });
 

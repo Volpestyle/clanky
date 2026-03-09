@@ -72,7 +72,7 @@ type MusicRuntimeSessionLike = {
   textChannelId?: string | null;
   voiceChannelId?: string | null;
   settingsSnapshot?: MusicPlaybackSettings;
-  lastOpenAiToolCallerUserId?: string | null;
+  lastRealtimeToolCallerUserId?: string | null;
   botSpeechMusicUnduckTimer?: ReturnType<typeof setTimeout> | null;
   voiceCommandState?: {
     userId: string | null;

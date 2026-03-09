@@ -602,7 +602,7 @@ export function buildVoiceRuntimeSnapshot(
       }),
       brainTools: (() => {
         if (session.realtimeToolOwnership !== "provider_native") return null;
-        const tools = Array.isArray(session.openAiToolDefinitions) ? session.openAiToolDefinitions : [];
+        const tools = Array.isArray(session.realtimeToolDefinitions) ? session.realtimeToolDefinitions : [];
         if (!tools.length) return null;
         return tools.map((tool) => ({
           name: String(tool?.name || ""),

@@ -50,7 +50,7 @@ async function executeOfferScreenShareLinkTool(
   manager: VoiceToolCallManager,
   { session, settings }: { session?: ToolRuntimeSession | null; settings?: VoiceRealtimeToolSettings | null }
 ) {
-  const requesterUserId = normalizeInlineText(session?.lastOpenAiToolCallerUserId, 80) || null;
+  const requesterUserId = normalizeInlineText(session?.lastRealtimeToolCallerUserId, 80) || null;
   if (!requesterUserId || !session?.guildId || !session?.textChannelId) {
     return { ok: false, offered: false, error: "screen_share_context_unavailable" };
   }

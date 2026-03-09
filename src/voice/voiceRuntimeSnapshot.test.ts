@@ -172,7 +172,7 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
           bytesSent: 512
         }
       },
-      openAiToolDefinitions: [
+      realtimeToolDefinitions: [
         {
           name: "memory_search",
           toolType: "function",
@@ -641,7 +641,7 @@ test("buildVoiceRuntimeSnapshot hides native tool registry in transport-only ses
         lastActivityAt: Date.now() - 500,
         mode: "openai_realtime",
         realtimeToolOwnership: "transport_only",
-        openAiToolDefinitions: [
+        realtimeToolDefinitions: [
           {
             name: "memory_search",
             toolType: "function",

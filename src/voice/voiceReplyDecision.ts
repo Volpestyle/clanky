@@ -652,7 +652,7 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   // Resolve active command owner for classifier context.
   // When a tool call is running or the bot is mid-response for a specific user's command,
   // the classifier should know so it can deprioritize cross-talk from other users.
-  const toolCallOwnerUserId = String(session.lastOpenAiToolCallerUserId || "").trim() || null;
+  const toolCallOwnerUserId = String(session.lastRealtimeToolCallerUserId || "").trim() || null;
   const hasActiveCommandFlow = Boolean(
     outputChannelState.toolCallsRunning ||
     outputChannelState.awaitingToolOutputs ||

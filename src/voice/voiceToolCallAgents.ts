@@ -33,7 +33,7 @@ export async function executeVoiceBrowserBrowseTool(
     if (!existingSession) {
       return { ok: false, text: "", error: `Browser session '${sessionId}' not found or expired.` };
     }
-    if (existingSession.ownerUserId && existingSession.ownerUserId !== session?.lastOpenAiToolCallerUserId) {
+    if (existingSession.ownerUserId && existingSession.ownerUserId !== session?.lastRealtimeToolCallerUserId) {
       return { ok: false, text: "", error: `Not authorized to continue browser session '${sessionId}'.` };
     }
     try {
@@ -50,7 +50,7 @@ export async function executeVoiceBrowserBrowseTool(
       settings,
       guildId: session?.guildId || "",
       channelId: session?.textChannelId || "",
-      userId: session?.lastOpenAiToolCallerUserId || null,
+      userId: session?.lastRealtimeToolCallerUserId || null,
       source: "voice_realtime_tool_browser_browse"
     });
     if (newSession) {
@@ -82,7 +82,7 @@ export async function executeVoiceBrowserBrowseTool(
     const trace = {
       guildId: session?.guildId,
       channelId: session?.textChannelId,
-      userId: session?.lastOpenAiToolCallerUserId || null,
+      userId: session?.lastRealtimeToolCallerUserId || null,
       source: "voice_realtime_tool_browser_browse"
     };
     const result = browserTaskConfig.runtime === "openai_computer_use"
@@ -140,7 +140,7 @@ export async function executeVoiceCodeTaskTool(
     if (!existingSession) {
       return { ok: false, text: "", error: `Code session '${sessionId}' not found or expired.` };
     }
-    if (existingSession.ownerUserId && existingSession.ownerUserId !== session?.lastOpenAiToolCallerUserId) {
+    if (existingSession.ownerUserId && existingSession.ownerUserId !== session?.lastRealtimeToolCallerUserId) {
       return { ok: false, text: "", error: `Not authorized to continue code session '${sessionId}'.` };
     }
     try {
@@ -163,7 +163,7 @@ export async function executeVoiceCodeTaskTool(
       cwd: typeof args?.cwd === "string" ? String(args.cwd).trim() : undefined,
       guildId: session?.guildId || "",
       channelId: session?.textChannelId || "",
-      userId: session?.lastOpenAiToolCallerUserId || null,
+      userId: session?.lastRealtimeToolCallerUserId || null,
       source: "voice_realtime_tool_code_task"
     });
     if (newSession) {
@@ -196,7 +196,7 @@ export async function executeVoiceCodeTaskTool(
       cwd: typeof args?.cwd === "string" ? String(args.cwd).trim() : undefined,
       guildId: session?.guildId || "",
       channelId: session?.textChannelId || "",
-      userId: session?.lastOpenAiToolCallerUserId || null,
+      userId: session?.lastRealtimeToolCallerUserId || null,
       source: "voice_realtime_tool_code_task",
       signal
     });

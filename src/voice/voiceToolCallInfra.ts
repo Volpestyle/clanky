@@ -5,9 +5,9 @@ import {
   buildRealtimeFunctionTools,
   ensureSessionToolRuntimeState,
   getVoiceMcpServerStatuses,
-  parseOpenAiRealtimeToolArguments,
+  parseRealtimeToolArguments,
   recordVoiceToolCallEvent,
-  resolveOpenAiRealtimeToolDescriptor,
+  resolveRealtimeToolDescriptor,
   summarizeVoiceToolOutput
 } from "./voiceToolCallToolRegistry.ts";
 import { executeLocalVoiceToolCall, executeMcpVoiceToolCall } from "./voiceToolCallDispatch.ts";
@@ -21,9 +21,9 @@ export {
   buildRealtimeFunctionTools,
   ensureSessionToolRuntimeState,
   getVoiceMcpServerStatuses,
-  parseOpenAiRealtimeToolArguments,
+  parseRealtimeToolArguments,
   recordVoiceToolCallEvent,
-  resolveOpenAiRealtimeToolDescriptor,
+  resolveRealtimeToolDescriptor,
   resolveVoiceRealtimeToolDescriptors,
   summarizeVoiceToolOutput
 } from "./voiceToolCallToolRegistry.ts";
@@ -33,7 +33,7 @@ type RealtimeFunctionOutputClient = NonNullable<VoiceSession["realtimeClient"]> 
 };
 
 type ToolExecutionSession = ToolRuntimeSession & {
-  openAiPendingToolAbortControllers?: Map<string, AbortController>;
+  realtimePendingToolAbortControllers?: Map<string, AbortController>;
   realtimeClient?: RealtimeFunctionOutputClient | null;
 };
 
@@ -58,7 +58,7 @@ function normalizeRealtimeToolOutputForModel(output: unknown, success: boolean) 
   };
 }
 
-export async function executeOpenAiRealtimeFunctionCall(
+export async function executeRealtimeFunctionCall(
   manager: VoiceToolCallManager,
   { session, settings, pendingCall }: { session?: ToolRuntimeSession | null; settings?: VoiceRealtimeToolSettings | null; pendingCall: VoicePendingToolCallState }
 ) {
@@ -70,8 +70,8 @@ export async function executeOpenAiRealtimeFunctionCall(
 
   const startedAtMs = Date.now();
   const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
-  const callArgs = parseOpenAiRealtimeToolArguments(manager, pendingCall?.argumentsText || "");
-  const toolDescriptor = resolveOpenAiRealtimeToolDescriptor(manager, session, toolName);
+  const callArgs = parseRealtimeToolArguments(manager, pendingCall?.argumentsText || "");
+  const toolDescriptor = resolveRealtimeToolDescriptor(manager, session, toolName);
   const toolType = toolDescriptor?.toolType === "mcp" ? "mcp" : "function";
   const activeReply = manager.activeReplies?.begin(
     buildVoiceReplyScopeKey(session.id),
@@ -83,20 +83,20 @@ export async function executeOpenAiRealtimeFunctionCall(
   const toolSignal = activeReply
     ? AbortSignal.any([abortController.signal, activeReply.abortController.signal])
     : abortController.signal;
-  if (!(runtimeSession.openAiPendingToolAbortControllers instanceof Map)) {
-    runtimeSession.openAiPendingToolAbortControllers = new Map();
+  if (!(runtimeSession.realtimePendingToolAbortControllers instanceof Map)) {
+    runtimeSession.realtimePendingToolAbortControllers = new Map();
   }
-  runtimeSession.openAiPendingToolAbortControllers.set(callId, abortController);
+  runtimeSession.realtimePendingToolAbortControllers.set(callId, abortController);
 
-  manager.store.logAction({
-    kind: "voice_runtime",
-    guildId: session.guildId,
-    channelId: session.textChannelId,
-    userId: manager.client.user?.id || null,
-    content: "openai_realtime_tool_call_started",
-    metadata: {
-      sessionId: session.id,
-      callId,
+    manager.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: manager.client.user?.id || null,
+      content: "realtime_tool_call_started",
+      metadata: {
+        sessionId: session.id,
+        callId,
       toolName: toolName || null,
       toolType,
       arguments: callArgs
@@ -137,7 +137,7 @@ export async function executeOpenAiRealtimeFunctionCall(
       output = { ok: false, error: { message: errorMessage } };
     }
   } finally {
-    runtimeSession.openAiPendingToolAbortControllers?.delete(callId);
+    runtimeSession.realtimePendingToolAbortControllers?.delete(callId);
     manager.activeReplies?.clear(activeReply);
   }
 
@@ -145,9 +145,9 @@ export async function executeOpenAiRealtimeFunctionCall(
   const normalizedOutput = normalizeRealtimeToolOutputForModel(output, success);
   const outputSummary = summarizeVoiceToolOutput(manager, normalizedOutput);
   const responseHadAssistantOutput =
-    typeof manager.hasOpenAiRealtimeAssistantOutputForResponse === "function" &&
+    typeof manager.hasRealtimeAssistantOutputForResponse === "function" &&
     pendingCall.responseId
-      ? manager.hasOpenAiRealtimeAssistantOutputForResponse(session, pendingCall.responseId)
+      ? manager.hasRealtimeAssistantOutputForResponse(session, pendingCall.responseId)
       : false;
   const requestFollowup = shouldRequestVoiceToolFollowup(toolName || toolDescriptor?.name || "unknown_tool", {
     toolType,
@@ -190,7 +190,7 @@ export async function executeOpenAiRealtimeFunctionCall(
       guildId: session.guildId,
       channelId: session.textChannelId,
       userId: manager.client.user?.id || null,
-      content: `openai_realtime_tool_output_send_failed: ${String(sendError?.message || sendError)}`,
+      content: `realtime_tool_output_send_failed: ${String(sendError?.message || sendError)}`,
       metadata: { sessionId: session.id, callId, toolName: toolName || null }
     });
   }
@@ -200,7 +200,7 @@ export async function executeOpenAiRealtimeFunctionCall(
     guildId: session.guildId,
     channelId: session.textChannelId,
     userId: manager.client.user?.id || null,
-    content: success ? "openai_realtime_tool_call_completed" : "openai_realtime_tool_call_failed",
+    content: success ? "realtime_tool_call_completed" : "realtime_tool_call_failed",
     metadata: {
       sessionId: session.id,
       callId,
@@ -212,19 +212,19 @@ export async function executeOpenAiRealtimeFunctionCall(
     }
   });
 
-  if (session.openAiPendingToolCalls instanceof Map) session.openAiPendingToolCalls.delete(callId);
-  if (session.openAiCompletedToolCallIds instanceof Map) {
-    session.openAiCompletedToolCallIds.set(callId, Date.now());
-    const completedRows = [...session.openAiCompletedToolCallIds.entries()].sort((a, b) => a[1] - b[1]).slice(-256);
-    session.openAiCompletedToolCallIds = new Map(
+  if (session.realtimePendingToolCalls instanceof Map) session.realtimePendingToolCalls.delete(callId);
+  if (session.realtimeCompletedToolCallIds instanceof Map) {
+    session.realtimeCompletedToolCallIds.set(callId, Date.now());
+    const completedRows = [...session.realtimeCompletedToolCallIds.entries()].sort((a, b) => a[1] - b[1]).slice(-256);
+    session.realtimeCompletedToolCallIds = new Map(
       completedRows.filter(([, completedAtMs]) => Date.now() - completedAtMs <= 10 * 60 * 1000)
     );
   }
-  if (session.openAiToolCallExecutions instanceof Map) session.openAiToolCallExecutions.delete(callId);
-  if (!(session.openAiToolCallExecutions instanceof Map) || session.openAiToolCallExecutions.size <= 0) {
-    manager.scheduleOpenAiRealtimeToolFollowupResponse({
+  if (session.realtimeToolCallExecutions instanceof Map) session.realtimeToolCallExecutions.delete(callId);
+  if (!(session.realtimeToolCallExecutions instanceof Map) || session.realtimeToolCallExecutions.size <= 0) {
+    manager.scheduleRealtimeToolFollowupResponse({
       session,
-      userId: session.lastOpenAiToolCallerUserId || null,
+      userId: session.lastRealtimeToolCallerUserId || null,
       startedAtMs,
       requestFollowup,
       toolName: toolName || toolDescriptor?.name || null
@@ -276,7 +276,7 @@ export async function refreshRealtimeTools(
       parameters: tool.parameters
     }))
   );
-  if (String(session.lastOpenAiRealtimeToolHash || "") === nextToolHash) return;
+  if (String(session.lastRealtimeToolHash || "") === nextToolHash) return;
 
   try {
     updateTools({
@@ -288,15 +288,15 @@ export async function refreshRealtimeTools(
       })),
       toolChoice: "auto"
     });
-    session.openAiToolDefinitions = tools;
-    session.lastOpenAiRealtimeToolHash = nextToolHash;
-    session.lastOpenAiRealtimeToolRefreshAt = Date.now();
+    session.realtimeToolDefinitions = tools;
+    session.lastRealtimeToolHash = nextToolHash;
+    session.lastRealtimeToolRefreshAt = Date.now();
     manager.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
       channelId: session.textChannelId,
       userId: manager.client.user?.id || null,
-      content: "openai_realtime_tools_updated",
+      content: "realtime_tools_updated",
       metadata: {
         sessionId: session.id,
         reason: String(reason || "voice_context_refresh"),
@@ -311,7 +311,7 @@ export async function refreshRealtimeTools(
       guildId: session.guildId,
       channelId: session.textChannelId,
       userId: manager.client.user?.id || null,
-      content: `openai_realtime_tools_update_failed: ${String(error?.message || error)}`,
+      content: `realtime_tools_update_failed: ${String(error?.message || error)}`,
       metadata: { sessionId: session.id, reason: String(reason || "voice_context_refresh") }
     });
   }

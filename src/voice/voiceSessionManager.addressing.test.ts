@@ -4951,7 +4951,7 @@ test("buildRealtimeInstructions omits native tooling policy for transport-only s
       realtimeToolOwnership: "transport_only",
       startedAt: Date.now() - 5_000,
       membershipEvents: [],
-      openAiToolDefinitions: [
+      realtimeToolDefinitions: [
         {
           name: "memory_search",
           toolType: "function",

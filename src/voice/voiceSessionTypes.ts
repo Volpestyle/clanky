@@ -204,37 +204,27 @@ export type VoiceToolRuntimeSessionLike = {
     ending?: boolean;
     mode?: string;
     realtimeToolOwnership?: RealtimeToolOwnership | null;
-    realtimeClient?: {
-        updateTools?: (payload: {
-            tools: Array<{
-                type: string;
-                name: string;
-                description: string;
-                parameters: Record<string, unknown>;
-            }>;
-            toolChoice?: string;
-        }) => void;
-    } | null;
+    realtimeClient?: object | null;
     mcpStatus?: VoiceMcpServerStatus[];
     settingsSnapshot?: VoiceRealtimeToolSettings | null;
-    openAiToolDefinitions?: VoiceRealtimeToolDescriptor[];
-    lastOpenAiRealtimeToolHash?: string | null;
-    lastOpenAiRealtimeToolRefreshAt?: number | null;
+    realtimeToolDefinitions?: VoiceRealtimeToolDescriptor[];
+    lastRealtimeToolHash?: string | null;
+    lastRealtimeToolRefreshAt?: number | null;
     guildId?: string;
     textChannelId?: string;
     id?: string;
-    openAiToolResponseDebounceTimer?: ReturnType<typeof setTimeout> | null;
-    openAiToolCallExecutions?: Map<string, VoiceToolExecutionState>;
-    openAiPendingToolCalls?: Map<string, VoicePendingToolCallState>;
-    openAiCompletedToolCallIds?: Map<string, number>;
-    openAiPendingToolAbortControllers?: Map<string, AbortController>;
-    openAiResponsesWithAssistantOutput?: Map<string, number>;
-    openAiToolFollowupNeeded?: boolean;
+    realtimeToolResponseDebounceTimer?: ReturnType<typeof setTimeout> | null;
+    realtimeToolCallExecutions?: Map<string, VoiceToolExecutionState>;
+    realtimePendingToolCalls?: Map<string, VoicePendingToolCallState>;
+    realtimeCompletedToolCallIds?: Map<string, number>;
+    realtimePendingToolAbortControllers?: Map<string, AbortController>;
+    realtimeResponsesWithAssistantOutput?: Map<string, number>;
+    realtimeToolFollowupNeeded?: boolean;
     toolMusicTrackCatalog?: Map<string, unknown>;
     memoryWriteWindow?: number[];
     toolCallEvents?: VoiceToolCallEvent[];
     musicQueueState?: Record<string, unknown> | null;
-    lastOpenAiToolCallerUserId?: string | null;
+    lastRealtimeToolCallerUserId?: string | null;
     awaitingToolOutputs?: boolean;
     voiceCommandState?: {
         userId: string | null;
@@ -776,10 +766,10 @@ export interface RealtimeTurnContextRefreshState {
 
 export interface InstructionManagerState {
     baseVoiceInstructions: string;
-    lastOpenAiRealtimeInstructions: string;
-    lastOpenAiRealtimeInstructionsAt: number;
+    lastRealtimeInstructions: string;
+    lastRealtimeInstructionsAt: number;
     realtimeInstructionRefreshTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
-    openAiTurnContextRefreshState: RealtimeTurnContextRefreshState | null;
+    realtimeTurnContextRefreshState: RealtimeTurnContextRefreshState | null;
 }
 
 export type OutputChannelDeferredBlockReason =
@@ -874,20 +864,20 @@ export interface VoiceSession {
     openAiPerUserAsrModel: string;
     openAiPerUserAsrLanguage: string;
     openAiPerUserAsrPrompt: string;
-    openAiPendingToolCalls?: Map<string, VoicePendingToolCallState>;
-    openAiToolCallExecutions?: Map<string, VoiceToolExecutionState>;
-    openAiToolResponseDebounceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
-    openAiCompletedToolCallIds?: Map<string, number>;
-    openAiPendingToolAbortControllers?: Map<string, AbortController>;
-    openAiResponsesWithAssistantOutput?: Map<string, number>;
-    openAiToolFollowupNeeded?: boolean;
-    lastOpenAiAssistantAudioItemId: string | null;
-    lastOpenAiAssistantAudioItemContentIndex: number;
-    lastOpenAiAssistantAudioItemReceivedMs: number;
-    openAiToolDefinitions?: VoiceRealtimeToolDescriptor[];
-    lastOpenAiRealtimeToolHash?: string;
-    lastOpenAiRealtimeToolRefreshAt?: number;
-    lastOpenAiToolCallerUserId: string | null;
+    realtimePendingToolCalls?: Map<string, VoicePendingToolCallState>;
+    realtimeToolCallExecutions?: Map<string, VoiceToolExecutionState>;
+    realtimeToolResponseDebounceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
+    realtimeCompletedToolCallIds?: Map<string, number>;
+    realtimePendingToolAbortControllers?: Map<string, AbortController>;
+    realtimeResponsesWithAssistantOutput?: Map<string, number>;
+    realtimeToolFollowupNeeded?: boolean;
+    lastRealtimeAssistantAudioItemId: string | null;
+    lastRealtimeAssistantAudioItemContentIndex: number;
+    lastRealtimeAssistantAudioItemReceivedMs: number;
+    realtimeToolDefinitions?: VoiceRealtimeToolDescriptor[];
+    lastRealtimeToolHash?: string;
+    lastRealtimeToolRefreshAt?: number;
+    lastRealtimeToolCallerUserId: string | null;
     awaitingToolOutputs?: boolean;
     toolCallEvents: VoiceToolCallEvent[];
     mcpStatus: VoiceMcpServerStatus[];
@@ -911,10 +901,10 @@ export interface VoiceSession {
     membershipEvents: VoiceMembershipEvent[];
     voiceChannelEffects?: VoiceChannelEffectEvent[];
     baseVoiceInstructions: InstructionManagerState["baseVoiceInstructions"];
-    lastOpenAiRealtimeInstructions: InstructionManagerState["lastOpenAiRealtimeInstructions"];
-    lastOpenAiRealtimeInstructionsAt: InstructionManagerState["lastOpenAiRealtimeInstructionsAt"];
+    lastRealtimeInstructions: InstructionManagerState["lastRealtimeInstructions"];
+    lastRealtimeInstructionsAt: InstructionManagerState["lastRealtimeInstructionsAt"];
     realtimeInstructionRefreshTimer: InstructionManagerState["realtimeInstructionRefreshTimer"];
-    openAiTurnContextRefreshState: InstructionManagerState["openAiTurnContextRefreshState"];
+    realtimeTurnContextRefreshState: InstructionManagerState["realtimeTurnContextRefreshState"];
     settingsSnapshot: VoiceRealtimeToolSettings | null;
     cleanupHandlers: Array<() => void>;
     ending: boolean;

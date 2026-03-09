@@ -62,7 +62,7 @@ export async function executeVoiceWebSearchTool(
     trace: {
       guildId: session?.guildId,
       channelId: session?.textChannelId,
-      userId: session?.lastOpenAiToolCallerUserId || null,
+      userId: session?.lastRealtimeToolCallerUserId || null,
       source: "voice_realtime_tool_web_search"
     },
     signal

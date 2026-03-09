@@ -328,7 +328,7 @@ export class TurnProcessor {
     this.host.clearVoiceCommandSession(session);
     cancelAcknowledgementQueued = this.host.requestRealtimePromptUtterance({
       session,
-      userId: userId || session.lastOpenAiToolCallerUserId || null,
+      userId: userId || session.lastRealtimeToolCallerUserId || null,
       source: "voice_turn_cancel_acknowledgement",
       prompt: [
         "The user just asked you to stop or cancel what you were doing.",

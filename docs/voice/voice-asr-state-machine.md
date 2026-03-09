@@ -3,7 +3,7 @@
 > **Scope:** ASR session lifecycle — per-user and shared transcription client management, audio buffering, transcript resolution.
 > Voice pipeline stages: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
 > Audio capture lifecycle: [`voice-audio-capture-state-machine.md`](voice-audio-capture-state-machine.md)
-> Turn processing and noise rejection: [`voice-interruption-policy.md`](voice-interruption-policy.md)
+> Turn processing and noise rejection: [`barge-in.md`](barge-in.md)
 
 This document defines the ASR (Automatic Speech Recognition) bridge state machine. Each ASR bridge session (`AsrBridgeState`) manages a WebSocket connection to OpenAI's Realtime Transcription API, buffers audio during connection delays, and resolves transcripts for finalized captures.
 
@@ -90,7 +90,7 @@ Phase query helpers: `asrPhaseCanAcceptAudio` (connecting or ready), `asrPhaseIs
 
 ### Mode Selection (`voiceConfigResolver.ts`)
 
-Per-user requires ALL of: session active, provider supports `perUserAsr` (OpenAI only), OpenAI API key, not text-only mode, `transcriptionMethod === "realtime_bridge"`, reply path is text-mediated (`bridge` or `brain`), `usePerUserAsrBridge === true`.
+Per-user requires ALL of: session active, provider supports `perUserAsr`, OpenAI API key, not text-only mode, `transcriptionMethod === "realtime_bridge"`, reply path is text-mediated (`bridge` or `brain`), `usePerUserAsrBridge === true`.
 
 Shared requires ALL of: session active, provider supports `sharedAsr` (all providers), OpenAI API key, not text-only mode, `transcriptionMethod === "realtime_bridge"`, reply path is text-mediated (`bridge` or `brain`), per-user is NOT enabled.
 

@@ -105,7 +105,7 @@ export const REALTIME_PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities
     updateInstructions: true,
     updateTools: true,
     cancelResponse: true,
-    perUserAsr: false,
+    perUserAsr: true,
     sharedAsr: true,
   },
   gemini_realtime: {

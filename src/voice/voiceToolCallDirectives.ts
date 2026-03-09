@@ -31,8 +31,8 @@ export async function executeVoiceAdaptiveStyleAddTool(
   return executeSharedAdaptiveDirectiveAdd({
     runtime: { store: manager.store },
     guildId: String(session?.guildId || "").trim(),
-    actorUserId: session?.lastOpenAiToolCallerUserId || null,
-    actorName: manager.resolveVoiceSpeakerName(session, session?.lastOpenAiToolCallerUserId || null),
+    actorUserId: session?.lastRealtimeToolCallerUserId || null,
+    actorName: manager.resolveVoiceSpeakerName(session, session?.lastRealtimeToolCallerUserId || null),
     sourceMessageId: `voice-tool-${String(session?.id || "session")}`,
     sourceText: "",
     noteText: args?.note,
@@ -58,8 +58,8 @@ export async function executeVoiceAdaptiveStyleRemoveTool(
   return executeSharedAdaptiveDirectiveRemove({
     runtime: { store: manager.store },
     guildId: String(session?.guildId || "").trim(),
-    actorUserId: session?.lastOpenAiToolCallerUserId || null,
-    actorName: manager.resolveVoiceSpeakerName(session, session?.lastOpenAiToolCallerUserId || null),
+    actorUserId: session?.lastRealtimeToolCallerUserId || null,
+    actorName: manager.resolveVoiceSpeakerName(session, session?.lastRealtimeToolCallerUserId || null),
     sourceMessageId: `voice-tool-${String(session?.id || "session")}`,
     sourceText: "",
     noteRef: args?.note_ref,

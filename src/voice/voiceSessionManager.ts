@@ -193,7 +193,7 @@ import {
   PREPLAY_SUPERSEDE_REQUEUE_MAX_AGE_MS
 } from "./voiceSessionManager.constants.ts";
 import { providerSupports } from "./voiceModes.ts";
-import { executeOpenAiRealtimeFunctionCall } from "./voiceToolCallInfra.ts";
+import { executeRealtimeFunctionCall } from "./voiceToolCallInfra.ts";
 import {
   executeVoiceMusicPlayTool,
   executeVoiceMusicQueueAddTool,
@@ -278,7 +278,7 @@ const VOICE_COMMAND_SESSION_TTL_MS = 20 * 1000;
 const VOICE_TOOL_FOLLOWUP_SESSION_TTL_MS = 10 * 1000;
 const OPENAI_COMPLETED_TOOL_CALL_TTL_MS = 10 * 60 * 1000;
 const OPENAI_COMPLETED_TOOL_CALL_MAX = 256;
-const OPENAI_FUNCTION_CALL_ITEM_TYPES = new Set([
+const REALTIME_FUNCTION_CALL_ITEM_TYPES = new Set([
   "response.output_item.added",
   "response.output_item.done",
   "response.function_call_arguments.delta",
@@ -491,28 +491,18 @@ type VoiceToolRuntimeSessionLike = {
   ending?: boolean;
   mode?: string;
   realtimeToolOwnership?: RealtimeToolOwnership | null;
-  realtimeClient?: {
-    updateTools?: (payload: {
-      tools: Array<{
-        type: string;
-        name: string;
-        description: string;
-        parameters: Record<string, unknown>;
-      }>;
-      toolChoice?: string;
-    }) => void;
-  } | null;
+  realtimeClient?: object | null;
   mcpStatus?: VoiceMcpServerStatus[];
   settingsSnapshot?: VoiceRealtimeToolSettings | null;
-  openAiToolDefinitions?: VoiceRealtimeToolDescriptor[];
-  lastOpenAiRealtimeToolHash?: string | null;
-  lastOpenAiRealtimeToolRefreshAt?: number | null;
+  realtimeToolDefinitions?: VoiceRealtimeToolDescriptor[];
+  lastRealtimeToolHash?: string | null;
+  lastRealtimeToolRefreshAt?: number | null;
   guildId?: string;
   textChannelId?: string;
   id?: string;
-  openAiToolResponseDebounceTimer?: ReturnType<typeof setTimeout> | null;
-  openAiToolCallExecutions?: Map<string, { startedAtMs: number; toolName: string }>;
-  openAiPendingToolCalls?: Map<string, {
+  realtimeToolResponseDebounceTimer?: ReturnType<typeof setTimeout> | null;
+  realtimeToolCallExecutions?: Map<string, { startedAtMs: number; toolName: string }>;
+  realtimePendingToolCalls?: Map<string, {
     callId: string;
     name: string;
     argumentsText: string;
@@ -521,14 +511,14 @@ type VoiceToolRuntimeSessionLike = {
     startedAtMs: number;
     sourceEventType: string;
   }>;
-  openAiPendingToolAbortControllers?: Map<string, AbortController>;
-  openAiResponsesWithAssistantOutput?: Map<string, number>;
-  openAiToolFollowupNeeded?: boolean;
+  realtimePendingToolAbortControllers?: Map<string, AbortController>;
+  realtimeResponsesWithAssistantOutput?: Map<string, number>;
+  realtimeToolFollowupNeeded?: boolean;
   toolMusicTrackCatalog?: Map<string, unknown>;
   memoryWriteWindow?: number[];
   toolCallEvents?: VoiceToolCallEvent[];
   musicQueueState?: Record<string, unknown> | null;
-  lastOpenAiToolCallerUserId?: string | null;
+  lastRealtimeToolCallerUserId?: string | null;
   awaitingToolOutputs?: boolean;
   pendingMemoryIngest?: Promise<unknown> | null;
   [key: string]: unknown;
@@ -1960,12 +1950,12 @@ export class VoiceSessionManager {
 
     const truncateConversationItem = session.realtimeClient?.truncateConversationItem;
     if (isRealtimeMode(session.mode) && typeof truncateConversationItem === "function") {
-      const latestItemId = String(session.lastOpenAiAssistantAudioItemId || "").trim();
+      const latestItemId = String(session.lastRealtimeAssistantAudioItemId || "").trim();
       if (latestItemId) {
         truncateAttempted = true;
         truncateItemId = latestItemId;
-        truncateContentIndex = Math.max(0, Number(session.lastOpenAiAssistantAudioItemContentIndex || 0));
-        const estimatedReceivedMs = Math.max(0, Number(session.lastOpenAiAssistantAudioItemReceivedMs || 0));
+        truncateContentIndex = Math.max(0, Number(session.lastRealtimeAssistantAudioItemContentIndex || 0));
+        const estimatedReceivedMs = Math.max(0, Number(session.lastRealtimeAssistantAudioItemReceivedMs || 0));
         const estimatedUnplayedMs = estimateDiscordPcmPlaybackDurationMsModule(0);
         truncateAudioEndMs = Math.max(0, Math.round(estimatedReceivedMs - estimatedUnplayedMs));
         try {
@@ -2122,8 +2112,8 @@ export class VoiceSessionManager {
       this.hasReplayBlockingActiveCapture(session);
     const toolCallsRunning =
       !sessionInactive &&
-      session.openAiToolCallExecutions instanceof Map &&
-      session.openAiToolCallExecutions.size > 0;
+      session.realtimeToolCallExecutions instanceof Map &&
+      session.realtimeToolCallExecutions.size > 0;
     const awaitingToolOutputs =
       replyOutputLockState.awaitingToolOutputs || toolCallsRunning;
     const deferredBlockReason: OutputChannelState["deferredBlockReason"] = sessionInactive
@@ -3644,7 +3634,7 @@ export class VoiceSessionManager {
 
     const normalizedUserId = String(userId || "").trim() || null;
     if (normalizedUserId) {
-      session.lastOpenAiToolCallerUserId = normalizedUserId;
+      session.lastRealtimeToolCallerUserId = normalizedUserId;
     }
     const speakerName =
       this.resolveVoiceSpeakerName(session, normalizedUserId) || normalizedUserId || "someone";
@@ -4238,10 +4228,10 @@ export class VoiceSessionManager {
     return 1;
   }
 
-  extractOpenAiFunctionCallEnvelope(event) {
+  extractRealtimeFunctionCallEnvelope(event) {
     if (!event || typeof event !== "object") return null;
     const eventType = String(event.type || "").trim();
-    if (!OPENAI_FUNCTION_CALL_ITEM_TYPES.has(eventType)) return null;
+    if (!REALTIME_FUNCTION_CALL_ITEM_TYPES.has(eventType)) return null;
 
     const item =
       event.item && typeof event.item === "object"
@@ -4288,7 +4278,7 @@ export class VoiceSessionManager {
     };
   }
 
-  resolveOpenAiRealtimeResponseId(session, event) {
+  resolveRealtimeResponseId(session, event) {
     if (!session || !event || typeof event !== "object") return null;
     const response =
       event.response && typeof event.response === "object" ? event.response : null;
@@ -4308,15 +4298,15 @@ export class VoiceSessionManager {
     return normalizeInlineText(realtimeClient.activeResponseId, 180) || null;
   }
 
-  hasOpenAiRealtimeAssistantOutputForResponse(session, responseId = "") {
+  hasRealtimeAssistantOutputForResponse(session, responseId = "") {
     const normalizedResponseId = normalizeInlineText(responseId, 180);
     if (!session || !normalizedResponseId) return false;
-    const responseOutputState = session.openAiResponsesWithAssistantOutput;
+    const responseOutputState = session.realtimeResponsesWithAssistantOutput;
     if (!(responseOutputState instanceof Map)) return false;
     return responseOutputState.has(normalizedResponseId);
   }
 
-  scheduleOpenAiRealtimeToolFollowupResponse({
+  scheduleRealtimeToolFollowupResponse({
     session,
     userId = null,
     startedAtMs = 0,
@@ -4332,30 +4322,30 @@ export class VoiceSessionManager {
     if (!session || session.ending) return;
     if (!this.shouldHandleRealtimeFunctionCalls({ session })) return;
     if (requestFollowup) {
-      session.openAiToolFollowupNeeded = true;
+      session.realtimeToolFollowupNeeded = true;
     }
-    if (session.openAiToolResponseDebounceTimer) {
-      clearTimeout(session.openAiToolResponseDebounceTimer);
-      session.openAiToolResponseDebounceTimer = null;
+    if (session.realtimeToolResponseDebounceTimer) {
+      clearTimeout(session.realtimeToolResponseDebounceTimer);
+      session.realtimeToolResponseDebounceTimer = null;
     }
 
-    session.openAiToolResponseDebounceTimer = setTimeout(() => {
-      session.openAiToolResponseDebounceTimer = null;
+    session.realtimeToolResponseDebounceTimer = setTimeout(() => {
+      session.realtimeToolResponseDebounceTimer = null;
       if (!session || session.ending) return;
       if (
         this.activeReplies?.isStale(buildVoiceReplyScopeKey(session.id), startedAtMs)
       ) {
         session.awaitingToolOutputs = false;
-        session.openAiToolFollowupNeeded = false;
+        session.realtimeToolFollowupNeeded = false;
         this.replyManager.syncAssistantOutputState(session, "tool_outputs_cancelled");
         return;
       }
-      if (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0) return;
+      if (session.realtimeToolCallExecutions instanceof Map && session.realtimeToolCallExecutions.size > 0) return;
       session.awaitingToolOutputs = false;
       this.replyManager.syncAssistantOutputState(session, "tool_outputs_ready");
-      const followupNeeded = Boolean(session.openAiToolFollowupNeeded);
-      session.openAiToolFollowupNeeded = false;
-      const followupUserId = userId || session.lastOpenAiToolCallerUserId || null;
+      const followupNeeded = Boolean(session.realtimeToolFollowupNeeded);
+      session.realtimeToolFollowupNeeded = false;
+      const followupUserId = userId || session.lastRealtimeToolCallerUserId || null;
       const activeCommandState = this.ensureVoiceCommandState(session);
       if (!followupNeeded) {
         if (activeCommandState?.intent === "tool_followup") {
@@ -4366,7 +4356,7 @@ export class VoiceSessionManager {
           guildId: session.guildId,
           channelId: session.textChannelId,
           userId: this.client.user?.id || null,
-          content: "openai_realtime_tool_followup_not_required",
+          content: "realtime_tool_followup_not_required",
           metadata: {
             sessionId: session.id
           }
@@ -4376,7 +4366,7 @@ export class VoiceSessionManager {
 
       const created = this.replyManager.createTrackedAudioResponse({
         session,
-        userId: userId || session.lastOpenAiToolCallerUserId || null,
+        userId: userId || session.lastRealtimeToolCallerUserId || null,
         source: "tool_call_followup",
         resetRetryState: true,
         emitCreateEvent: true
@@ -4406,7 +4396,7 @@ export class VoiceSessionManager {
           guildId: session.guildId,
           channelId: session.textChannelId,
           userId: this.client.user?.id || null,
-          content: "openai_realtime_tool_followup_skipped",
+          content: "realtime_tool_followup_skipped",
           metadata: {
             sessionId: session.id
           }
@@ -4416,18 +4406,18 @@ export class VoiceSessionManager {
     }, OPENAI_TOOL_RESPONSE_DEBOUNCE_MS);
   }
 
-  async handleOpenAiRealtimeFunctionCallEvent({ session, settings, event }) {
+  async handleRealtimeFunctionCallEvent({ session, settings, event }) {
     if (!session || session.ending) return;
     if (!this.shouldHandleRealtimeFunctionCalls({ session, settings })) return;
-    const envelope = this.extractOpenAiFunctionCallEnvelope(event);
+    const envelope = this.extractRealtimeFunctionCallEnvelope(event);
     if (!envelope) return;
     const runtimeSession = ensureSessionToolRuntimeState(this, session);
     if (!runtimeSession) return;
 
-    const pendingCalls = runtimeSession.openAiPendingToolCalls;
-    const completedCalls = runtimeSession.openAiCompletedToolCallIds;
-    const executions = runtimeSession.openAiToolCallExecutions;
-    const responseId = this.resolveOpenAiRealtimeResponseId(session, event);
+    const pendingCalls = runtimeSession.realtimePendingToolCalls;
+    const completedCalls = runtimeSession.realtimeCompletedToolCallIds;
+    const executions = runtimeSession.realtimeToolCallExecutions;
+    const responseId = this.resolveRealtimeResponseId(session, event);
     const normalizedCallId = normalizeInlineText(envelope.callId, 180);
     const normalizedName = normalizeInlineText(envelope.name, 120);
     if (!normalizedCallId) return;
@@ -4444,7 +4434,7 @@ export class VoiceSessionManager {
         const prunedEntries = [...completedCalls.entries()]
           .sort((a, b) => a[1] - b[1])
           .slice(-OPENAI_COMPLETED_TOOL_CALL_MAX);
-        runtimeSession.openAiCompletedToolCallIds = new Map(prunedEntries);
+        runtimeSession.realtimeCompletedToolCallIds = new Map(prunedEntries);
       }
     }
 
@@ -4493,7 +4483,7 @@ export class VoiceSessionManager {
     session.awaitingToolOutputs = true;
     this.replyManager.syncAssistantOutputState(session, "tool_call_in_progress");
 
-    await executeOpenAiRealtimeFunctionCall(this, {
+    await executeRealtimeFunctionCall(this, {
       session,
       settings,
       pendingCall
@@ -4512,7 +4502,7 @@ export class VoiceSessionManager {
     void authorSpeakerId;
     return resolveMemoryToolNamespaceScope({
       guildId: String(session?.guildId || "").trim(),
-      actorUserId: session?.lastOpenAiToolCallerUserId || null,
+      actorUserId: session?.lastRealtimeToolCallerUserId || null,
       namespace
     });
   }
@@ -4551,7 +4541,7 @@ export class VoiceSessionManager {
     await this.requestPlayMusic({
       guildId: session.guildId,
       channelId: session.textChannelId,
-      requestedByUserId: session.lastOpenAiToolCallerUserId || null,
+      requestedByUserId: session.lastRealtimeToolCallerUserId || null,
       settings,
       query: normalizeInlineText(`${track.title} ${track.artist || ""}`, 120),
       trackId: track.id,

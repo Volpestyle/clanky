@@ -96,7 +96,7 @@ function resolveRealtimeToolExportTarget({
     .toLowerCase() || "generic";
 }
 
-function sanitizeOpenAiRealtimeParameters(parameters: unknown): Record<string, unknown> {
+function sanitizeProviderNativeRealtimeParameters(parameters: unknown): Record<string, unknown> {
   const source =
     parameters && typeof parameters === "object" && !Array.isArray(parameters)
       ? { ...(parameters as Record<string, unknown>) }
@@ -127,7 +127,7 @@ function adaptRealtimeToolParametersForTarget(
   target: RealtimeToolExportTarget
 ) {
   if (target === "openai_realtime" || target === "xai_realtime" || target === "voice_agent") {
-    return sanitizeOpenAiRealtimeParameters(parameters);
+    return sanitizeProviderNativeRealtimeParameters(parameters);
   }
   return parameters;
 }
@@ -154,13 +154,13 @@ export function ensureSessionToolRuntimeState(
     session.mcpStatus = getVoiceMcpServerStatuses(manager).map((entry) => ({ ...entry }));
   }
   if (session.realtimeToolOwnership === "provider_native") {
-    if (!(session.openAiPendingToolCalls instanceof Map)) session.openAiPendingToolCalls = new Map();
-    if (!(session.openAiCompletedToolCallIds instanceof Map)) session.openAiCompletedToolCallIds = new Map();
-    if (!(session.openAiToolCallExecutions instanceof Map)) session.openAiToolCallExecutions = new Map();
-    if (!(session.openAiResponsesWithAssistantOutput instanceof Map)) {
-      session.openAiResponsesWithAssistantOutput = new Map();
+    if (!(session.realtimePendingToolCalls instanceof Map)) session.realtimePendingToolCalls = new Map();
+    if (!(session.realtimeCompletedToolCallIds instanceof Map)) session.realtimeCompletedToolCallIds = new Map();
+    if (!(session.realtimeToolCallExecutions instanceof Map)) session.realtimeToolCallExecutions = new Map();
+    if (!(session.realtimeResponsesWithAssistantOutput instanceof Map)) {
+      session.realtimeResponsesWithAssistantOutput = new Map();
     }
-    if (typeof session.openAiToolFollowupNeeded !== "boolean") session.openAiToolFollowupNeeded = false;
+    if (typeof session.realtimeToolFollowupNeeded !== "boolean") session.realtimeToolFollowupNeeded = false;
   }
   return session;
 }
@@ -238,7 +238,7 @@ export function resolveVoiceRealtimeToolDescriptors(
           settings,
           guildId: session?.guildId || null,
           channelId: session?.textChannelId || null,
-          requesterUserId: session?.lastOpenAiToolCallerUserId || null
+          requesterUserId: session?.lastRealtimeToolCallerUserId || null
         })
       : null;
   if (
@@ -338,7 +338,7 @@ export function recordVoiceToolCallEvent(
   session.toolCallEvents = events.length > OPENAI_TOOL_CALL_EVENT_MAX ? events.slice(-OPENAI_TOOL_CALL_EVENT_MAX) : events;
 }
 
-export function parseOpenAiRealtimeToolArguments(manager: VoiceToolCallManager, argumentsText = "") {
+export function parseRealtimeToolArguments(manager: VoiceToolCallManager, argumentsText = "") {
   void manager;
   const normalizedText = String(argumentsText || "").trim().slice(0, OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS);
   if (!normalizedText) return {};
@@ -350,15 +350,15 @@ export function parseOpenAiRealtimeToolArguments(manager: VoiceToolCallManager, 
   }
 }
 
-export function resolveOpenAiRealtimeToolDescriptor(
+export function resolveRealtimeToolDescriptor(
   manager: VoiceToolCallManager,
   session: ToolRuntimeSession | null | undefined,
   toolName = ""
 ) {
   const normalizedToolName = normalizeInlineText(toolName, 120);
   if (!normalizedToolName) return null;
-  const configuredTools = Array.isArray(session?.openAiToolDefinitions)
-    ? session.openAiToolDefinitions
+  const configuredTools = Array.isArray(session?.realtimeToolDefinitions)
+    ? session.realtimeToolDefinitions
     : buildRealtimeFunctionTools(manager, {
         session,
         settings: session?.settingsSnapshot || manager.store.getSettings(),

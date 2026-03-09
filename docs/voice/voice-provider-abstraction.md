@@ -2,7 +2,7 @@
 
 > **Scope:** Voice pipeline architecture — what stages audio passes through, which providers are active, and what settings configure each stage.
 > Operator-facing activity paths and setting map: [`clanker-activity.md`](../clanker-activity.md)
-> Barge-in and noise rejection: [`voice-interruption-policy.md`](voice-interruption-policy.md)
+> Barge-in and noise rejection: [`barge-in.md`](barge-in.md)
 > Assistant reply/output lifecycle: [`voice-output-state-machine.md`](voice-output-state-machine.md)
 
 This document describes the voice chat pipeline as a linear sequence of stages, from audio input to voice output. Each stage is independently configurable, and the active set of stages depends on which **reply path** is selected.
@@ -27,6 +27,21 @@ runtimeMode      = resolveVoiceRuntimeMode(settings)       // maps provider → 
 ```
 
 Runtime modes (`src/voice/voiceModes.ts`): `openai_realtime`, `voice_agent`, `gemini_realtime`, `elevenlabs_realtime`
+
+### Architecture Principles
+
+The design goal is provider-swappable behavior without duplicate logic. The voice stack keeps three shared sources of truth and pushes provider differences to thin adapters:
+
+- **One context/instruction service**: `instructionManager.ts` builds persona, continuity, memory, speaker, channel, and tool-policy context for provider-native sessions. `voiceReplyPipeline.ts` builds the full-brain generation payload for orchestrator-owned sessions.
+- **One tool contract**: shared tool schemas live in `src/tools/sharedToolSchemas.ts`. `src/voice/voiceToolCallToolRegistry.ts` exports provider-safe realtime tool definitions from that shared contract instead of defining a second provider-specific tool set.
+- **One tool executor**: `src/voice/voiceToolCallDispatch.ts` and the downstream tool implementations remain the canonical execution path whether the planner is the full brain or a provider-native realtime model.
+- **Thin provider adapters**: `openaiRealtimeClient.ts`, `xaiRealtimeClient.ts`, `geminiRealtimeClient.ts`, and `elevenLabsRealtimeClient.ts` are responsible for protocol translation, not business logic.
+
+That separation is what allows the same product behavior to run in multiple shapes:
+
+- **Native**: provider owns ASR, response planning, and provider-native tool calls.
+- **Bridge**: local ASR produces labeled text, but the provider still owns response planning and provider-native tool calls.
+- **Brain**: the upstream orchestrator owns planning and tools; the realtime provider is only the speaking transport.
 
 ---
 
@@ -72,7 +87,7 @@ Per-speaker ASR transcribes each user independently, producing labeled text. The
 - **Latency**: moderate (ASR round-trip added)
 - **ASR**: per-speaker via `OpenAiRealtimeTranscriptionClient` — logprobs confidence gate available
 - **Tool support**: provider-native function calling where the runtime supports `updateTools`
-- **Provider requirement**: any provider with `textInput` capability
+- **Provider requirement**: any provider with `textInput` capability plus OpenAI-backed ASR for text-mediated voice today
 - **Code path**: `forwardRealtimeTextTurnToBrain()` in `voiceSessionManager.ts`
 
 ### Brain
@@ -221,11 +236,11 @@ Labeled transcript `(speakerName): text` is sent to the realtime provider via `r
 
 Code: `forwardRealtimeTextTurnToBrain()`, `refreshRealtimeInstructions()`, `prepareRealtimeTurnContext()` in `voiceSessionManager.ts`
 
-Context includes: participant/membership context, durable memory facts, recent conversation history (text + voice), web-search cache, adaptive directives (guidance + behavior).
+Context includes: participant/membership context, durable memory facts, recent conversation history (text + voice), web-search cache, adaptive directives (guidance + behavior), active speaker context, and current tool policy. This is the same product persona/continuity layer used for provider-native bridge sessions even though the bridge input itself is labeled text instead of raw provider ASR.
 
 #### Brain (Stage 5c — text LLM)
 
-Text LLM generates a text response, then TTS converts to speech.
+The orchestrator LLM generates the text response and owns the tool loop. A speech transport then renders the final line, either through a realtime voice client (`requestPlaybackUtterance()`) or an API TTS path.
 
 | Setting | Key Path | Default |
 |---|---|---|
@@ -237,12 +252,17 @@ Code: `runRealtimeBrainReply()` → `generateVoiceTurn()` in `voiceSessionManage
 
 #### Tool Calling
 
-Realtime brain (native + bridge) supports provider-native tool calling through the provider event loop:
-- Function-call deltas accumulated → `executeLocalVoiceToolCall()` or `executeMcpVoiceToolCall()` → result returned via `sendFunctionCallOutput()` → follow-up response via `scheduleOpenAiRealtimeToolFollowupResponse()`
+Realtime-native planning (native + bridge) supports provider-native tool calling through the provider event loop:
 
-Full-brain replies keep tool ownership in the upstream orchestrator loop. Realtime output transport is tool-disabled in that path so upstream-generated speech cannot start a second provider tool/reasoning pass.
+- provider emits function-call event
+- `handleRealtimeFunctionCallEvent()` accumulates arguments and latches runtime state
+- `executeLocalVoiceToolCall()` or `executeMcpVoiceToolCall()` performs the canonical tool execution
+- the result is returned via `sendFunctionCallOutput()`
+- `scheduleRealtimeToolFollowupResponse()` requests a follow-up provider response when the tool policy says one is needed
 
-Code: `bindRealtimeHandlers()` in `voiceSessionManager.ts`, dispatch in `src/voice/voiceToolCalls.ts`
+Full-brain replies keep tool ownership in the upstream orchestrator loop. Realtime output transport is tool-disabled or exact-line constrained in that path so upstream-generated speech cannot start a second provider tool/reasoning pass.
+
+Code: event binding in `src/voice/sessionLifecycle.ts`, tool export in `src/voice/voiceToolCallToolRegistry.ts`, execution in `src/voice/voiceToolCallDispatch.ts`, orchestration in `src/voice/voiceToolCallInfra.ts`
 
 **Local tools** (`resolveVoiceRealtimeToolDescriptors()` in `voiceToolCalls.ts`):
 
@@ -261,7 +281,12 @@ Code: `bindRealtimeHandlers()` in `voiceSessionManager.ts`, dispatch in `src/voi
 
 The realtime provider streams audio deltas. PCM 24kHz is upsampled to 48kHz, encoded to Opus, and sent to Discord.
 
-When realtime sessions use the full-brain path, the text LLM still generates the reply text, but delivery can stay on this realtime output transport. On OpenAI, exact-line playback is sent as an out-of-band audio response with tools disabled so upstream-generated speech does not trigger a second tool/reasoning pass.
+When realtime sessions use the full-brain path, the text LLM still generates the reply text, but delivery can stay on this realtime output transport. All providers expose a playback-oriented `requestPlaybackUtterance()` surface. The transport implementation is provider-specific:
+
+- OpenAI uses an out-of-band audio response with tools disabled.
+- xAI currently uses the normal text conversation path with an exact-line constraint.
+
+The product contract is the same in both cases: the upstream brain already decided the words, and the speech transport should render that line instead of replanning.
 
 #### TTS API Override (brain path)
 
@@ -279,7 +304,7 @@ When music playback starts, `haltSessionOutputForMusicPlayback()` clears pending
 
 #### Output Lock & Barge-in
 
-Bot turn tracking relies on the canonical `assistantOutput` state machine (see `docs/voice/voice-output-state-machine.md`). When a human speaks during bot output, `interruptBotSpeechForBargeIn()` cancels the active response, clears queued audio, and stores a retry candidate for brief interruptions. See `docs/voice/voice-interruption-policy.md`.
+Bot turn tracking relies on the canonical `assistantOutput` state machine (see `docs/voice/voice-output-state-machine.md`). When a human speaks during bot output, `interruptBotSpeechForBargeIn()` cancels the active response, clears queued audio, and stores interruption context for the next turn's prompt. See `docs/voice/barge-in.md`.
 
 System-initiated speech uses a separate opportunity lifecycle:
 
@@ -339,7 +364,7 @@ From `REALTIME_PROVIDER_CAPABILITIES` in `src/voice/voiceModes.ts`:
 | `updateInstructions` | yes | yes | yes | — |
 | `updateTools` | yes | yes | — | — |
 | `cancelResponse` | yes | yes | — | — |
-| `perUserAsr` | yes | — | — | — |
+| `perUserAsr` | yes | yes | — | — |
 | `sharedAsr` | yes | yes | yes | yes |
 
 Guards use `providerSupports(mode, capability)` for capability routing.
