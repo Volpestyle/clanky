@@ -210,11 +210,13 @@ export async function runModelRequestedBrowserBrowse(
     if (isAbortError(error)) {
       return {
         ...state,
+        cancelled: true,
         error: "Browser session cancelled by user."
       };
     }
     return {
       ...state,
+      cancelled: false,
       error: String(error?.message || error)
     };
   } finally {

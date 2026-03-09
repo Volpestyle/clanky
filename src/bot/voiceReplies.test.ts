@@ -538,6 +538,34 @@ test("generateVoiceTurnReply passes abort signal into llm generation", async () 
   assert.equal(generationPayloads[0]?.signal, controller.signal);
 });
 
+test("generateVoiceTurnReply forwards the latest screen-share frame into the model on normal turns", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "i can see the error banner"
+    })
+  });
+
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "what error is that",
+    streamWatchLatestFrame: {
+      mimeType: "image/png",
+      dataBase64: "AAAA"
+    }
+  });
+
+  assert.equal(generationPayloads.length, 1);
+  assert.deepEqual(generationPayloads[0]?.imageInputs, [
+    {
+      mediaType: "image/png",
+      dataBase64: "AAAA"
+    }
+  ]);
+});
+
 test("generateVoiceTurnReply streams sentence chunks when voice streaming is enabled", async () => {
   const streamed: string[] = [];
   const { bot } = createVoiceBot({

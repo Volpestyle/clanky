@@ -1040,7 +1040,7 @@ test("reply follow-up regeneration can use dedicated provider/model override", a
     applyBaselineSettings(store, channelId);
     store.patchSettings({
       agentStack: {
-        preset: "openai_native",
+        preset: "openai_native_realtime",
         advancedOverridesEnabled: true,
         overrides: {
           orchestrator: {

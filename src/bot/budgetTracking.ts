@@ -150,6 +150,7 @@ export type BrowserBrowseContextState = {
   configured: boolean;
   enabled: boolean;
   used: boolean;
+  cancelled?: boolean;
   blockedByBudget: boolean;
   error: string | null;
   query: string;

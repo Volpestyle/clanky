@@ -28,6 +28,9 @@ export const MAX_BROWSER_BROWSE_QUERY_LEN = 500;
 const MAX_OPEN_ARTICLE_REF_LEN = 260;
 const MAX_MEMORY_WRITE_LINE_LEN = 180;
 const MAX_REPLY_TEXT_LEN = 3600;
+const MAX_INITIATIVE_TEXT_LEN = 3600;
+const MAX_INITIATIVE_REASON_LEN = 240;
+const MAX_INITIATIVE_CHANNEL_ID_LEN = 80;
 const MAX_AUTOMATION_TITLE_LEN = 90;
 const MAX_AUTOMATION_INSTRUCTION_LEN = 360;
 const MAX_AUTOMATION_TARGET_QUERY_LEN = 180;
@@ -43,6 +46,7 @@ export function resolveMaxMediaPromptLen(settings) {
   return clamp(Math.floor(raw), MAX_MEDIA_PROMPT_FLOOR, MAX_MEDIA_PROMPT_CEILING);
 }
 const REPLY_MEDIA_TYPES = new Set(["image_simple", "image_complex", "video", "gif"]);
+const INITIATIVE_MEDIA_TYPES = new Set(["none", "image", "video", "gif"]);
 const REPLY_VOICE_INTENT_TYPES = new Set([
   "join",
   "leave",
@@ -293,6 +297,25 @@ export const REPLY_OUTPUT_SCHEMA = {
 };
 
 export const REPLY_OUTPUT_JSON_SCHEMA = JSON.stringify(REPLY_OUTPUT_SCHEMA);
+
+export const INITIATIVE_OUTPUT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    skip: { type: "boolean" },
+    channelId: { type: ["string", "null"] },
+    text: { type: "string" },
+    mediaDirective: {
+      type: "string",
+      enum: ["none", "image", "video", "gif"]
+    },
+    mediaPrompt: { type: ["string", "null"] },
+    reason: { type: "string" }
+  },
+  required: ["skip", "channelId", "text", "mediaDirective", "mediaPrompt", "reason"]
+};
+
+export const INITIATIVE_OUTPUT_JSON_SCHEMA = JSON.stringify(INITIATIVE_OUTPUT_SCHEMA);
 
 export function formatReactionSummary(message) {
   const cache = message?.reactions?.cache;
@@ -810,6 +833,48 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     voiceIntent,
     screenShareIntent,
     voiceAddressing,
+    parseState: "json" as ParseState
+  };
+}
+
+export function parseStructuredInitiativeOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
+  const fallbackText = String(rawText || "").trim();
+  const parsed = extractJsonObjectFromText(fallbackText);
+  if (!parsed) {
+    return {
+      skip: true,
+      channelId: null,
+      text: "",
+      mediaDirective: "none",
+      mediaPrompt: null,
+      reason: "",
+      parseState: "unstructured" as ParseState
+    };
+  }
+
+  const skip = parsed?.skip === true;
+  const channelId = skip
+    ? null
+    : normalizeDirectiveText(parsed?.channelId, MAX_INITIATIVE_CHANNEL_ID_LEN) || null;
+  const text = skip
+    ? ""
+    : normalizeDirectiveText(parsed?.text, MAX_INITIATIVE_TEXT_LEN) || "";
+  const rawMediaDirective = String(parsed?.mediaDirective || "none").trim().toLowerCase();
+  const mediaDirective = INITIATIVE_MEDIA_TYPES.has(rawMediaDirective)
+    ? rawMediaDirective
+    : "none";
+  const mediaPrompt = mediaDirective === "none"
+    ? null
+    : normalizeDirectiveText(parsed?.mediaPrompt, maxLen) || null;
+  const reason = normalizeDirectiveText(parsed?.reason, MAX_INITIATIVE_REASON_LEN) || "";
+
+  return {
+    skip: skip || !channelId || !text,
+    channelId: skip ? null : channelId,
+    text,
+    mediaDirective,
+    mediaPrompt,
+    reason,
     parseState: "json" as ParseState
   };
 }

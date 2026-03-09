@@ -142,6 +142,47 @@ test("reply admission unsolicited turns require followup window when not directl
   assert.equal(withWindow, true);
 });
 
+test("reply admission admits at high eagerness even without recent window", () => {
+  const highEagernessSettings = {
+    permissions: { allowUnsolicitedReplies: true },
+    interaction: { activity: { replyEagerness: 80 } }
+  };
+  const lowEagernessSettings = {
+    permissions: { allowUnsolicitedReplies: true },
+    interaction: { activity: { replyEagerness: 50 } }
+  };
+  const noAddress = {
+    direct: false,
+    inferred: false,
+    triggered: false,
+    reason: "llm_decides"
+  };
+
+  // High eagerness: admitted even without bot in recent window
+  assert.equal(
+    shouldAttemptReplyDecision({
+      botUserId: "bot-1",
+      settings: highEagernessSettings,
+      recentMessages: [],
+      addressSignal: noAddress,
+      triggerMessageId: "msg-1"
+    }),
+    true
+  );
+
+  // Low eagerness: blocked without recent window (model not consulted)
+  assert.equal(
+    shouldAttemptReplyDecision({
+      botUserId: "bot-1",
+      settings: lowEagernessSettings,
+      recentMessages: [],
+      addressSignal: noAddress,
+      triggerMessageId: "msg-1"
+    }),
+    false
+  );
+});
+
 test("reply admission only force-responds for non-fuzzy address signals", () => {
   assert.equal(
     shouldForceRespondForAddressSignal({

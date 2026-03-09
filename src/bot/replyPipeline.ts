@@ -933,6 +933,7 @@ export async function executeReplyLlm(
         source,
         event: "reply_followup"
       },
+      signal,
       mediaPromptLimit,
       imageInputs: modelImageInputs,
       forceRegenerate: false,
@@ -976,7 +977,7 @@ export async function executeReplyLlm(
             signal
           }
         ),
-      runModelRequestedBrowserBrowse: async ({ browserBrowse: currentBrowserBrowse, query }) =>
+      runModelRequestedBrowserBrowse: async ({ browserBrowse: currentBrowserBrowse, query, signal: followupSignal }) =>
         await bot.runModelRequestedBrowserBrowse({
           settings,
           browserBrowse: currentBrowserBrowse,
@@ -984,7 +985,8 @@ export async function executeReplyLlm(
           guildId: message.guildId,
           channelId: message.channelId,
           userId: message.author.id,
-          source
+          source,
+          signal: followupSignal
         }),
       runModelRequestedImageLookup: (payload) => bot.runModelRequestedImageLookup(payload),
       mergeImageInputs: (payload) => bot.mergeImageInputs(payload),

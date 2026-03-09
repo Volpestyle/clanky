@@ -6,6 +6,7 @@ import {
   normalizeDirectiveText,
   parseStructuredReplyOutput
 } from "./botHelpers.ts";
+import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import { getFollowupSettings, getResolvedFollowupBinding } from "../settings/agentStack.ts";
 import { deepMerge } from "../utils.ts";
 
@@ -50,6 +51,7 @@ type BrowserBrowseState = {
   requested?: boolean;
   query?: string;
   used?: boolean;
+  cancelled?: boolean;
   blockedByBudget?: boolean;
   text?: string;
   steps?: number;
@@ -428,6 +430,7 @@ export async function maybeRegenerateWithMemoryLookup<
   guildId,
   channelId = null,
   trace = {},
+  signal = undefined,
   mediaPromptLimit,
   imageInputs = null,
   forceRegenerate = false,
@@ -452,6 +455,7 @@ export async function maybeRegenerateWithMemoryLookup<
   guildId: string;
   channelId?: string | null;
   trace?: ReplyFollowupTrace;
+  signal?: AbortSignal;
   mediaPromptLimit: number;
   imageInputs?: Array<Record<string, unknown>> | null;
   forceRegenerate?: boolean;
@@ -465,6 +469,7 @@ export async function maybeRegenerateWithMemoryLookup<
     browserBrowse: TBrowserBrowse;
     query: string;
     step: number;
+    signal?: AbortSignal;
   }) => Promise<TBrowserBrowse>;
   runModelRequestedImageLookup?: (payload: {
     imageLookup: TImageLookup;
@@ -513,6 +518,7 @@ export async function maybeRegenerateWithMemoryLookup<
   const normalizedJsonSchema = String(jsonSchema || "").trim();
 
   while (followupRegenerations < limits.maxSteps && typeof buildUserPrompt === "function") {
+    throwIfAborted(signal, "Reply followup cancelled");
     const requestedWebQuery = normalizeLookupQuery(nextDirective?.webSearchQuery, MAX_WEB_QUERY_LEN);
     const requestedBrowserQuery = normalizeLookupQuery(nextDirective?.browserBrowseQuery, MAX_BROWSER_BROWSE_QUERY_LEN);
     const requestedMemoryQuery = normalizeLookupQuery(nextDirective?.memoryLookupQuery, MAX_MEMORY_LOOKUP_QUERY_LEN);
@@ -582,7 +588,8 @@ export async function maybeRegenerateWithMemoryLookup<
                 await runModelRequestedBrowserBrowse({
                   browserBrowse: nextBrowserBrowse,
                   query: requestedBrowserQuery,
-                  step: currentStep
+                  step: currentStep,
+                  signal
                 }),
               limits.toolTimeoutMs,
               () =>
@@ -723,6 +730,7 @@ export async function maybeRegenerateWithMemoryLookup<
         if (settled.status === "fulfilled") continue;
         console.error("[replyFollowup] lookup task failed:", settled.reason);
       }
+      throwIfAborted(signal, "Reply followup cancelled");
     }
     if (!shouldRegenerate) break;
 
@@ -766,11 +774,13 @@ export async function maybeRegenerateWithMemoryLookup<
       trace: ReplyFollowupTrace;
       imageInputs?: Array<Record<string, unknown>>;
       jsonSchema?: string;
+      signal?: AbortSignal;
     } = {
       settings: followupSettings || settings,
       systemPrompt,
       userPrompt: followupPrompt,
-      trace: followupTrace
+      trace: followupTrace,
+      signal
     };
     if (nextImageInputs.length) {
       generationPayload.imageInputs = nextImageInputs;

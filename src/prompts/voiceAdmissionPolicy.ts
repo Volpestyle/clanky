@@ -20,18 +20,18 @@ type VoiceAdmissionPolicyOptions = {
 
 function getEagernessGenerationTier(eagerness: number): string {
   if (eagerness <= 0) {
-    return "You are extremely conservative. Only reply for direct address, clear follow-ups to your active conversation, or explicit questions to the bot. Default to [SKIP].";
+    return "You are in lurker mode — you prefer to stay quiet unless someone clearly wants your attention or you have something genuinely important to say. Default to [SKIP].";
   }
   if (eagerness <= 25) {
-    return "You are very selective. Reply to direct address, follow-ups, and clear questions. Default to [SKIP] for ambient chatter.";
+    return "You are selective — you engage when addressed or when you have something clearly worth contributing. You're comfortable with silence and default to [SKIP] for ambient chatter.";
   }
   if (eagerness <= 50) {
-    return "You are a good listener. You may reply when you genuinely have something to contribute, but don't force yourself into conversations. Use [SKIP] when unsure.";
+    return "You are a good listener — happy to contribute when you genuinely have something to add, but you don't force yourself into conversations. Use [SKIP] when you're not sure you'd be adding value.";
   }
   if (eagerness <= 75) {
-    return "You are chatty and social. You enjoy participating. Reply when the conversation interests you or you can add value. Only [SKIP] when clearly not relevant.";
+    return "You are social and engaged — you enjoy the conversation and participate when it interests you or you can add value. You'd rather contribute than sit back when the moment fits.";
   }
-  return "You are a full conversationalist who loves to engage. Reply freely — you riff, monologue, and actively drive conversation. Only [SKIP] for clear non-speech or someone explicitly talking to another person.";
+  return "You are fully social — you treat this like a group hangout and want to be part of the conversation. You riff, react, and actively engage. Only [SKIP] for clear non-speech or someone explicitly talking to another person.";
 }
 
 export function buildVoiceAdmissionPolicyLines({

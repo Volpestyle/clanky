@@ -152,12 +152,21 @@ export function shouldAttemptReplyDecision({
 }) {
   if (forceRespond || forceDecisionLoop || isHardAddressSignal(addressSignal)) return true;
   if (!getReplyPermissions(settings).allowUnsolicitedReplies) return false;
-  return hasBotMessageInRecentWindow({
-    botUserId,
-    recentMessages,
-    windowSize,
-    triggerMessageId
-  });
+
+  // Bot already in the recent window — always admit for continuity.
+  if (hasBotMessageInRecentWindow({ botUserId, recentMessages, windowSize, triggerMessageId })) {
+    return true;
+  }
+
+  // Cost gate: at high eagerness, admit messages even without recent window
+  // presence so the model can decide via [SKIP]. At lower eagerness the gate
+  // stays narrow to save LLM calls — the model is told to be quiet anyway.
+  const eagerness = clamp(
+    Number(settings?.interaction?.activity?.replyEagerness ?? 0),
+    0,
+    100
+  );
+  return eagerness >= 75;
 }
 
 export function shouldForceRespondForAddressSignal(addressSignal: Partial<ReplyAddressSignal> | null = null) {
