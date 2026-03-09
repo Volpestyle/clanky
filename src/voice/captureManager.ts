@@ -71,7 +71,7 @@ export interface CaptureManagerHost {
     settings?: CaptureManagerSettings;
   }) => boolean;
   buildAsrBridgeDeps: (session: VoiceSession) => AsrBridgeDeps;
-  hasReplayBlockingActiveCapture: (session: VoiceSession) => boolean;
+  hasDeferredTurnBlockingActiveCapture: (session: VoiceSession) => boolean;
   deferredActionQueue: Pick<DeferredActionQueue, "recheckDeferredVoiceActions">;
   hasCaptureBeenPromoted: (capture: CaptureState) => boolean;
   resolveCaptureTurnPromotionReason: (args: {
@@ -105,12 +105,6 @@ export interface CaptureManagerHost {
     pcmBuffer: Buffer;
     sampleRateHz?: number;
   }) => PcmSilenceGateResult;
-  maybeHandleInterruptedReplyRecovery: (args: {
-    session: VoiceSession;
-    userId?: string | null;
-    pcmBuffer?: Buffer | null;
-    captureReason?: string;
-  }) => boolean;
   queueRealtimeTurnFromAsrBridge: (args: {
     session: VoiceSession;
     userId: string;
@@ -224,7 +218,7 @@ export class CaptureManager {
     };
 
     const maybeTriggerDeferredActions = () => {
-      if (!this.host.hasReplayBlockingActiveCapture(session)) {
+      if (!this.host.hasDeferredTurnBlockingActiveCapture(session)) {
         this.host.deferredActionQueue.recheckDeferredVoiceActions({ session, reason: "capture_resolved" });
       }
     };
@@ -439,13 +433,7 @@ export class CaptureManager {
         return;
       }
 
-      const handledInterruptedReply = this.host.maybeHandleInterruptedReplyRecovery({
-        session,
-        userId,
-        pcmBuffer,
-        captureReason: reason
-      });
-      if (!handledInterruptedReply && (useOpenAiPerUserAsr || useOpenAiSharedAsr)) {
+      if (useOpenAiPerUserAsr || useOpenAiSharedAsr) {
         void this.runAsrBridgeCommit({
           session,
           userId,
@@ -459,15 +447,13 @@ export class CaptureManager {
         });
         return;
       }
-      if (!handledInterruptedReply) {
-        this.host.turnProcessor.queueRealtimeTurn({
-          session,
-          userId,
-          pcmBuffer,
-          captureReason: reason,
-          finalizedAt
-        });
-      }
+      this.host.turnProcessor.queueRealtimeTurn({
+        session,
+        userId,
+        pcmBuffer,
+        captureReason: reason,
+        finalizedAt
+      });
     };
 
     const scheduleIdleFlush = () => {

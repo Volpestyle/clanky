@@ -14,6 +14,7 @@ import { parseBooleanFlag } from "../normalization/valueParsers.ts";
 import {
   VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS,
   RECENT_ENGAGEMENT_WINDOW_MS,
+  STT_REPLY_MAX_CHARS,
   VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
 } from "./voiceSessionManager.constants.ts";
 import {
@@ -104,7 +105,10 @@ export interface ReplyDecisionHost {
   ) => string;
   getOutputChannelState: (
     session: ReplyDecisionSessionLike | null | undefined
-  ) => Pick<OutputChannelState, "locked" | "lockReason">;
+  ) => Pick<
+    OutputChannelState,
+    "locked" | "lockReason" | "toolCallsRunning" | "awaitingToolOutputs" | "pendingResponse"
+  >;
   isMusicDisambiguationResolutionTurn?: (
     session: ReplyDecisionSessionLike | null | undefined,
     userId?: string | null,
@@ -310,6 +314,49 @@ function detectSingleParticipantAssistantFollowup(manager: ReplyDecisionHost, {
   };
 }
 
+function resolveInterruptedAssistantReplyContext(
+  manager: ReplyDecisionHost,
+  {
+    session = null,
+    userId = null,
+    now = Date.now()
+  }: {
+    session?: ReplyDecisionSessionLike | null;
+    userId?: string | null;
+    now?: number;
+  } = {}
+) {
+  const interrupted = session?.interruptedAssistantReply;
+  if (!interrupted || typeof interrupted !== "object") return null;
+
+  const normalizedUserId = String(userId || "").trim();
+  const interruptedByUserId = String(interrupted.interruptedByUserId || "").trim();
+  if (!normalizedUserId || !interruptedByUserId || normalizedUserId !== interruptedByUserId) {
+    return null;
+  }
+
+  const interruptedAt = Math.max(0, Number(interrupted.interruptedAt || 0));
+  if (!interruptedAt) return null;
+  if (now - interruptedAt > RECENT_ENGAGEMENT_WINDOW_MS) {
+    return null;
+  }
+  if (Math.max(0, Number(session?.lastAssistantReplyAt || 0)) > interruptedAt) {
+    return null;
+  }
+
+  const utteranceText = normalizeVoiceText(interrupted.utteranceText || "", STT_REPLY_MAX_CHARS);
+  if (!utteranceText) return null;
+
+  return {
+    utteranceText,
+    interruptedByUserId,
+    interruptedBySpeakerName: manager.resolveVoiceSpeakerName(session, interruptedByUserId),
+    interruptedAt,
+    ageMs: Math.max(0, now - interruptedAt),
+    source: String(interrupted.source || "").trim() || null
+  };
+}
+
 export function buildVoiceConversationContext(manager: ReplyDecisionHost, {
   session = null,
   userId = null,
@@ -343,6 +390,11 @@ export function buildVoiceConversationContext(manager: ReplyDecisionHost, {
     Boolean(normalizedUserId) &&
     Boolean(activeVoiceCommandState?.userId) &&
     normalizedUserId === activeVoiceCommandState.userId;
+  const interruptedAssistantReply = resolveInterruptedAssistantReplyContext(manager, {
+    session,
+    userId: normalizedUserId,
+    now
+  });
   const singleParticipantAssistantFollowup = detectSingleParticipantAssistantFollowup(manager, {
     session,
     userId: normalizedUserId,
@@ -373,7 +425,8 @@ export function buildVoiceConversationContext(manager: ReplyDecisionHost, {
     activeCommandIntent: activeVoiceCommandState?.intent || null,
     msUntilCommandSessionExpiry: activeVoiceCommandState
       ? Math.max(0, activeVoiceCommandState.expiresAt - now)
-      : null
+      : null,
+    interruptedAssistantReply
   };
 }
 
@@ -686,18 +739,19 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
 
   if (ownedToolFollowupActive) {
     if (isCancelIntent(normalizedTranscript)) {
-      return {
-        allow: true,
-        reason: "owned_tool_followup_cancel",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        conversationContext
-      };
-    }
-    if (activeCommandSpeaker === normalizedUserId) {
+      if (activeCommandSpeaker === normalizedUserId || directAddressed || directAddressedByWakePhrase) {
+        return {
+          allow: true,
+          reason: "owned_tool_followup_cancel",
+          participantCount,
+          directAddressed,
+          directAddressConfidence,
+          directAddressThreshold,
+          transcript: normalizedTranscript,
+          conversationContext
+        };
+      }
+    } else if (activeCommandSpeaker === normalizedUserId) {
       return {
         allow: true,
         reason: "owned_tool_followup",
@@ -709,16 +763,18 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
         conversationContext
       };
     }
-    return {
-      allow: false,
-      reason: "owned_tool_followup_other_speaker_blocked",
-      participantCount,
-      directAddressed,
-      directAddressConfidence,
-      directAddressThreshold,
-      transcript: normalizedTranscript,
-      conversationContext
-    };
+    if (!isCancelIntent(normalizedTranscript)) {
+      return {
+        allow: false,
+        reason: "owned_tool_followup_other_speaker_blocked",
+        participantCount,
+        directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
+        transcript: normalizedTranscript,
+        conversationContext
+      };
+    }
   }
 
   if (manager.isCommandOnlyActive(session, settings)) {
@@ -1014,17 +1070,18 @@ export function buildClassifierPrompt(input: ClassifierPromptInput): {
     parts.push("The speaker may have said your name (fuzzy match). Lean toward YES.");
   }
 
-  // Eagerness tier
+  // Eagerness tier — social mode context, not prescriptive rules.
+  // The classifier reasons about the room given this framing.
   if (normalizedEagerness <= 10) {
-    parts.push("Say YES only when you are clearly the intended recipient — your name is used, or a command/request is aimed at you specifically. Say NO when people are talking to each other.");
+    parts.push("You are in lurker mode — you prefer to stay quiet unless someone clearly wants your attention. You're here to listen, not to lead.");
   } else if (normalizedEagerness <= 25) {
-    parts.push("Say YES when you are the likely recipient — addressed by name, given a command, or in a back-and-forth conversation with the speaker. Say NO when people are having their own conversation.");
+    parts.push("You are selective — you engage when addressed or in active back-and-forth, but you're comfortable staying quiet when others are talking among themselves.");
   } else if (normalizedEagerness <= 50) {
-    parts.push("Say YES when you can contribute — questions, commands, follow-ups, greetings, or anything where you can add value. Say NO for filler noise or conversations clearly between others.");
+    parts.push("You are a good listener — happy to contribute when you have something worthwhile to add, but you don't force yourself into every exchange.");
   } else if (normalizedEagerness <= 75) {
-    parts.push("Say YES when the conversation interests you or you can add value. Be social and willing to engage. Only say NO for clear filler noise or someone explicitly talking to another person by name.");
+    parts.push("You are social and engaged — you enjoy the conversation and are willing to participate when it interests you or you can add value.");
   } else {
-    parts.push("Say YES to almost everything. You are in maximum engagement mode. Only say NO for literal non-speech sounds.");
+    parts.push("You are fully social — you treat this channel like a group hangout and want to be part of the conversation. You'd rather participate than sit back.");
   }
 
   parts.push(``);

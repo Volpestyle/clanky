@@ -23,7 +23,6 @@ function createSettings(overrides = {}) {
         minCommentaryIntervalSeconds: 8,
         maxFramesPerMinute: 180,
         maxFrameBytes: 350000,
-        commentaryPath: "auto",
         keyframeIntervalMs: 1200,
         autonomousCommentaryEnabled: true,
         brainContextEnabled: true,
@@ -102,6 +101,7 @@ function createManager({
   const actions = [];
   const touchCalls = [];
   const createdResponses = [];
+  const brainReplyCalls = [];
   const memoryIngests = [];
   const memoryWrites = [];
   const manager = {
@@ -161,6 +161,10 @@ function createManager({
         createdResponses.push(response);
         return response;
       }
+    },
+    async runRealtimeBrainReply(payload) {
+      brainReplyCalls.push(payload);
+      return true;
     }
   };
 
@@ -186,6 +190,7 @@ function createManager({
     actions,
     touchCalls,
     createdResponses,
+    brainReplyCalls,
     memoryIngests,
     memoryWrites
   };
@@ -454,69 +459,30 @@ test("ingestStreamFrame accepts fallback-buffered frame and updates runtime coun
   assert.equal(actions.some((entry) => entry.content === "stream_watch_frame_ingested"), true);
 });
 
-test("maybeTriggerStreamWatchCommentary requests native provider commentary when available", async () => {
+test("maybeTriggerStreamWatchCommentary fires a normal brain turn on the first frame", async () => {
   const session = createSession({
     mode: "openai_realtime",
-    realtimeClient: {
-      appendInputVideoFrame() {},
-      requestVideoCommentary() {}
-    }
-  });
-  session.streamWatch.lastCommentaryAt = 0;
-  const { manager, actions, createdResponses } = createManager({ session });
-
-  await maybeTriggerStreamWatchCommentary(manager, {
-    session,
-    settings: createSettings(),
-    streamerUserId: "user-1",
-    source: "unit_test"
-  });
-
-  assert.equal(createdResponses.length, 1);
-  assert.equal(session.streamWatch.lastCommentaryAt > 0, true);
-  const logged = actions.find((entry) => entry.content === "stream_watch_commentary_requested");
-  assert.equal(Boolean(logged), true);
-  assert.equal(logged?.metadata?.commentaryPath, "provider_native_video");
-});
-
-test("maybeTriggerStreamWatchCommentary supports vision-fallback text utterance path", async () => {
-  let utterance = "";
-  const session = createSession({
-    mode: "voice_agent",
-    realtimeClient: {
-      requestTextUtterance(prompt) {
-        utterance = String(prompt || "");
-      }
-    },
     streamWatch: {
       active: true,
       targetUserId: "user-1",
       requestedByUserId: "user-1",
       lastFrameAt: Date.now(),
       lastCommentaryAt: 0,
-      ingestedFrameCount: 0,
-      acceptedFrameCountInWindow: 0,
-      frameWindowStartedAt: 0,
+      lastCommentaryNote: null,
+      lastBrainContextAt: 0,
+      lastBrainContextProvider: null,
+      lastBrainContextModel: null,
+      brainContextEntries: [],
+      ingestedFrameCount: 1,
+      acceptedFrameCountInWindow: 1,
+      frameWindowStartedAt: Date.now(),
       latestFrameMimeType: "image/png",
       latestFrameDataBase64: "AAAA",
       latestFrameAt: Date.now()
     }
   });
-  const { manager, actions, createdResponses } = createManager({
-    session,
-    llm: {
-      isProviderConfigured(provider) {
-        return provider === "anthropic";
-      },
-      async generate() {
-        return {
-          text: "looks like a wild clutch moment",
-          provider: "anthropic",
-          model: "claude-haiku-4-5"
-        };
-      }
-    }
-  });
+  session.streamWatch.lastCommentaryAt = 0;
+  const { manager, actions, brainReplyCalls, createdResponses } = createManager({ session });
 
   await maybeTriggerStreamWatchCommentary(manager, {
     session,
@@ -525,39 +491,34 @@ test("maybeTriggerStreamWatchCommentary supports vision-fallback text utterance 
     source: "unit_test"
   });
 
-  assert.equal(utterance.length > 0, true);
-  assert.equal(createdResponses.length, 1);
+  assert.equal(brainReplyCalls.length, 1);
+  assert.equal(String(brainReplyCalls[0]?.source || ""), "stream_watch_brain_turn:share_start");
+  assert.equal(String(brainReplyCalls[0]?.frozenFrameSnapshot?.dataBase64 || ""), "AAAA");
+  assert.equal(session.streamWatch.lastCommentaryAt > 0, true);
+  assert.equal(createdResponses.length, 0);
   const logged = actions.find((entry) => entry.content === "stream_watch_commentary_requested");
   assert.equal(Boolean(logged), true);
-  assert.equal(logged?.metadata?.commentaryPath, "vision_fallback_text_utterance");
-  assert.equal(logged?.metadata?.visionProvider, "anthropic");
-  assert.equal(session.streamWatch.lastCommentaryNote, "looks like a wild clutch moment");
+  assert.equal(logged?.metadata?.commentaryMode, "brain_turn");
+  assert.equal(logged?.metadata?.triggerReason, "share_start");
 });
 
-test("maybeTriggerStreamWatchCommentary forces anthropic keyframe fallback when configured", async () => {
-  let requestVideoCommentaryCalls = 0;
-  let requestTextUtteranceCalls = 0;
+test("maybeTriggerStreamWatchCommentary keeps direct frame-to-brain active even with a scanner provider configured", async () => {
   const session = createSession({
-    mode: "openai_realtime",
-    botTurnOpen: false,
-    realtimeClient: {
-      appendInputVideoFrame() {},
-      requestVideoCommentary() {
-        requestVideoCommentaryCalls += 1;
-      },
-      requestTextUtterance() {
-        requestTextUtteranceCalls += 1;
-      }
-    },
+    mode: "voice_agent",
     streamWatch: {
       active: true,
       targetUserId: "user-1",
       requestedByUserId: "user-1",
       lastFrameAt: Date.now(),
       lastCommentaryAt: 0,
-      ingestedFrameCount: 0,
-      acceptedFrameCountInWindow: 0,
-      frameWindowStartedAt: 0,
+      lastCommentaryNote: null,
+      lastBrainContextAt: 0,
+      lastBrainContextProvider: null,
+      lastBrainContextModel: null,
+      brainContextEntries: [],
+      ingestedFrameCount: 2,
+      acceptedFrameCountInWindow: 2,
+      frameWindowStartedAt: Date.now(),
       latestFrameMimeType: "image/png",
       latestFrameDataBase64: "AAAA",
       latestFrameAt: Date.now()
@@ -566,11 +527,12 @@ test("maybeTriggerStreamWatchCommentary forces anthropic keyframe fallback when 
   const settings = createSettings({
     voice: {
       streamWatch: {
-        commentaryPath: "anthropic_keyframes"
+        brainContextProvider: "anthropic",
+        brainContextModel: "claude-haiku-4-5"
       }
     }
   });
-  const { manager, actions } = createManager({
+  const { manager, actions, brainReplyCalls, createdResponses } = createManager({
     session,
     settings,
     llm: {
@@ -579,7 +541,10 @@ test("maybeTriggerStreamWatchCommentary forces anthropic keyframe fallback when 
       },
       async generate() {
         return {
-          text: "looks like a close fight on screen",
+          text: JSON.stringify({
+            note: "scoreboard changed and the timer is low",
+            sceneChanged: true
+          }),
           provider: "anthropic",
           model: "claude-haiku-4-5"
         };
@@ -594,26 +559,21 @@ test("maybeTriggerStreamWatchCommentary forces anthropic keyframe fallback when 
     source: "unit_test"
   });
 
-  assert.equal(requestVideoCommentaryCalls, 0);
-  assert.equal(requestTextUtteranceCalls, 1);
+  assert.equal(brainReplyCalls.length, 1);
+  assert.equal(String(brainReplyCalls[0]?.source || ""), "stream_watch_brain_turn:scene_changed");
+  assert.equal(createdResponses.length, 0);
   const logged = actions.find((entry) => entry.content === "stream_watch_commentary_requested");
-  assert.equal(logged?.metadata?.configuredCommentaryPath, "anthropic_keyframes");
+  assert.equal(Boolean(logged), true);
+  assert.equal(logged?.metadata?.commentaryMode, "brain_turn");
+  assert.equal(logged?.metadata?.triggerReason, "scene_changed");
 });
 
 test("maybeTriggerStreamWatchCommentary can update brain context without speaking commentary", async () => {
-  let requestVideoCommentaryCalls = 0;
-  let requestTextUtteranceCalls = 0;
   const session = createSession({
     mode: "openai_realtime",
     botTurnOpen: false,
     realtimeClient: {
-      appendInputVideoFrame() {},
-      requestVideoCommentary() {
-        requestVideoCommentaryCalls += 1;
-      },
-      requestTextUtterance() {
-        requestTextUtteranceCalls += 1;
-      }
+      appendInputVideoFrame() {}
     },
     streamWatch: {
       active: true,
@@ -636,7 +596,6 @@ test("maybeTriggerStreamWatchCommentary can update brain context without speakin
   const settings = createSettings({
     voice: {
       streamWatch: {
-        commentaryPath: "anthropic_keyframes",
         autonomousCommentaryEnabled: false,
         brainContextEnabled: true,
         brainContextMinIntervalSeconds: 1,
@@ -645,7 +604,7 @@ test("maybeTriggerStreamWatchCommentary can update brain context without speakin
       }
     }
   });
-  const { manager, actions, createdResponses } = createManager({
+  const { manager, actions, brainReplyCalls, createdResponses } = createManager({
     session,
     settings,
     llm: {
@@ -669,9 +628,8 @@ test("maybeTriggerStreamWatchCommentary can update brain context without speakin
     source: "unit_test"
   });
 
-  assert.equal(requestVideoCommentaryCalls, 0);
-  assert.equal(requestTextUtteranceCalls, 0);
   assert.equal(createdResponses.length, 0);
+  assert.equal(brainReplyCalls.length, 0);
   assert.equal(Array.isArray(session.streamWatch.brainContextEntries), true);
   assert.equal(session.streamWatch.brainContextEntries.length, 1);
   assert.equal(
@@ -684,17 +642,13 @@ test("maybeTriggerStreamWatchCommentary can update brain context without speakin
   );
 });
 
-test("maybeTriggerStreamWatchCommentary respects structured analysis that says not to comment", async () => {
-  let requestVideoCommentaryCalls = 0;
+test("maybeTriggerStreamWatchCommentary does not let scanner shouldComment disable a brain turn", async () => {
   const now = Date.now();
   const session = createSession({
     mode: "openai_realtime",
     botTurnOpen: false,
     realtimeClient: {
-      appendInputVideoFrame() {},
-      requestVideoCommentary() {
-        requestVideoCommentaryCalls += 1;
-      }
+      appendInputVideoFrame() {}
     },
     streamWatch: {
       active: true,
@@ -707,15 +661,15 @@ test("maybeTriggerStreamWatchCommentary respects structured analysis that says n
       lastBrainContextProvider: null,
       lastBrainContextModel: null,
       brainContextEntries: [],
-      ingestedFrameCount: 0,
-      acceptedFrameCountInWindow: 0,
+      ingestedFrameCount: 2,
+      acceptedFrameCountInWindow: 2,
       frameWindowStartedAt: 0,
       latestFrameMimeType: "image/png",
       latestFrameDataBase64: "AAAA",
       latestFrameAt: now
     }
   });
-  const { manager, actions, createdResponses } = createManager({
+  const { manager, actions, brainReplyCalls, createdResponses } = createManager({
     session,
     llm: {
       isProviderConfigured(provider) {
@@ -749,26 +703,23 @@ test("maybeTriggerStreamWatchCommentary respects structured analysis that says n
     source: "unit_test"
   });
 
-  assert.equal(requestVideoCommentaryCalls, 0);
+  assert.equal(brainReplyCalls.length, 1);
+  assert.equal(String(brainReplyCalls[0]?.source || ""), "stream_watch_brain_turn:scene_changed");
   assert.equal(createdResponses.length, 0);
   assert.equal(
     actions.some((entry) => entry.content === "stream_watch_brain_context_updated"),
     true
   );
-  assert.equal(actions.some((entry) => entry.content === "stream_watch_commentary_requested"), false);
+  assert.equal(actions.some((entry) => entry.content === "stream_watch_commentary_requested"), true);
 });
 
-test("maybeTriggerStreamWatchCommentary skips autonomous commentary when the scene note is unchanged", async () => {
-  let requestVideoCommentaryCalls = 0;
+test("maybeTriggerStreamWatchCommentary skips autonomous commentary when no trigger is active", async () => {
   const now = Date.now();
   const session = createSession({
     mode: "openai_realtime",
     botTurnOpen: false,
     realtimeClient: {
-      appendInputVideoFrame() {},
-      requestVideoCommentary() {
-        requestVideoCommentaryCalls += 1;
-      }
+      appendInputVideoFrame() {}
     },
     streamWatch: {
       active: true,
@@ -789,15 +740,15 @@ test("maybeTriggerStreamWatchCommentary skips autonomous commentary when the sce
           speakerName: "alice"
         }
       ],
-      ingestedFrameCount: 0,
-      acceptedFrameCountInWindow: 0,
+      ingestedFrameCount: 3,
+      acceptedFrameCountInWindow: 3,
       frameWindowStartedAt: 0,
       latestFrameMimeType: "image/png",
       latestFrameDataBase64: "AAAA",
       latestFrameAt: now
     }
   });
-  const { manager, actions, createdResponses } = createManager({
+  const { manager, actions, brainReplyCalls, createdResponses } = createManager({
     session,
     llm: {
       isProviderConfigured(provider) {
@@ -820,7 +771,7 @@ test("maybeTriggerStreamWatchCommentary skips autonomous commentary when the sce
     source: "unit_test"
   });
 
-  assert.equal(requestVideoCommentaryCalls, 0);
+  assert.equal(brainReplyCalls.length, 0);
   assert.equal(createdResponses.length, 0);
   assert.equal(actions.some((entry) => entry.content === "stream_watch_commentary_requested"), false);
   assert.equal(
@@ -916,15 +867,9 @@ test("stopWatchStreamForUser persists a screen-share recap to memory and preserv
 });
 
 test("maybeTriggerStreamWatchCommentary skips while playback stream is busy", async () => {
-  let requestTextUtteranceCalls = 0;
   const session = createSession({
     mode: "voice_agent",
     botTurnOpen: true,
-    realtimeClient: {
-      requestTextUtterance() {
-        requestTextUtteranceCalls += 1;
-      }
-    },
     streamWatch: {
       active: true,
       targetUserId: "user-1",
@@ -945,7 +890,7 @@ test("maybeTriggerStreamWatchCommentary skips while playback stream is busy", as
       destroy() {}
     }
   });
-  const { manager, actions, createdResponses } = createManager({
+  const { manager, actions, brainReplyCalls, createdResponses } = createManager({
     session,
     llm: {
       isProviderConfigured(provider) {
@@ -961,7 +906,7 @@ test("maybeTriggerStreamWatchCommentary skips while playback stream is busy", as
     source: "unit_test"
   });
 
-  assert.equal(requestTextUtteranceCalls, 0);
+  assert.equal(brainReplyCalls.length, 0);
   assert.equal(createdResponses.length, 0);
   assert.equal(actions.some((entry) => entry.content === "stream_watch_commentary_requested"), false);
 });

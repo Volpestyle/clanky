@@ -335,6 +335,7 @@ export class SessionLifecycle {
     }
     session.realtimeTurnContextRefreshState = null;
     session.lastRequestedRealtimeUtterance = null;
+    session.interruptedAssistantReply = null;
     session.activeReplyInterruptionPolicy = null;
     session.bargeInSuppressionUntil = 0;
     session.bargeInSuppressedAudioChunks = 0;

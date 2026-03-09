@@ -204,3 +204,34 @@ test("buildVoiceTurnPrompt renders durable session context above conversation hi
   assert.equal(prompt.indexOf("Session context:") < prompt.indexOf("Relevant past conversation windows from shared text/voice history:"), true);
   assert.equal(prompt.includes("Use note_context to pin important session-scoped facts, plans, preferences, or relationships"), true);
 });
+
+test("buildVoiceTurnPrompt includes interruption recovery context for the next turn", () => {
+  const prompt = buildVoiceTurnPrompt({
+    speakerName: "alice",
+    transcript: "actually make it rock instead",
+    conversationContext: {
+      engagementState: "engaged",
+      engaged: true,
+      engagedWithCurrentSpeaker: true,
+      recentAssistantReply: true,
+      recentDirectAddress: true,
+      sameAsRecentDirectAddress: true,
+      msSinceAssistantReply: 800,
+      msSinceDirectAddress: 800,
+      interruptedAssistantReply: {
+        utteranceText: "let me explain the jazz playlist options",
+        interruptedByUserId: "user-1",
+        interruptedBySpeakerName: "alice",
+        interruptedAt: Date.now() - 1200,
+        ageMs: 1200,
+        source: "barge_in_interrupt"
+      }
+    }
+  });
+
+  assert.equal(prompt.includes("Interruption recovery context:"), true);
+  assert.equal(prompt.includes("alice interrupted you"), true);
+  assert.equal(prompt.includes("let me explain the jazz playlist options"), true);
+  assert.equal(prompt.includes('They then said: "actually make it rock instead"'), true);
+  assert.equal(prompt.includes("Do not mechanically continue the old answer if the new turn changes direction."), true);
+});

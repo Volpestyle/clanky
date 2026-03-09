@@ -50,7 +50,6 @@ import {
 import {
   enableWatchStreamForUser,
   getStreamWatchBrainContextForPrompt,
-  generateVisionFallbackStreamWatchCommentary,
   ingestStreamFrame,
   initializeStreamWatchState,
   isUserInSessionVoiceChannel,
@@ -61,8 +60,7 @@ import {
   resolveStreamWatchVisionProviderSettings,
   stopWatchStreamForUser,
   supportsStreamWatchCommentary,
-  supportsStreamWatchBrainContext,
-  supportsVisionFallbackStreamWatchCommentary
+  supportsStreamWatchBrainContext
 } from "./voiceStreamWatch.ts";
 import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
 import {
@@ -142,7 +140,6 @@ import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
   BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS,
   BARGE_IN_MIN_SPEECH_MS,
-  BARGE_IN_RETRY_MAX_AGE_MS,
   BARGE_IN_SUPPRESSION_MAX_MS,
   BOT_DISCONNECT_GRACE_MS,
   BOT_TURN_DEFERRED_COALESCE_MAX,
@@ -366,6 +363,14 @@ type VoiceConversationContext = {
   musicActive?: boolean;
   musicWakeLatched?: boolean;
   msUntilMusicWakeLatchExpiry?: number | null;
+  interruptedAssistantReply?: {
+    utteranceText: string;
+    interruptedByUserId: string | null;
+    interruptedBySpeakerName: string | null;
+    interruptedAt: number;
+    ageMs: number | null;
+    source: string | null;
+  } | null;
 };
 
 type VoiceReplyDecision = {
@@ -1373,10 +1378,6 @@ export class VoiceSessionManager {
     return supportsStreamWatchCommentary(this, session, settings);
   }
 
-  supportsVisionFallbackStreamWatchCommentary({ session = null, settings = null } = {}) {
-    return supportsVisionFallbackStreamWatchCommentary(this, { session, settings });
-  }
-
   supportsStreamWatchBrainContext({ session = null, settings = null } = {}) {
     return supportsStreamWatchBrainContext(this, { session, settings });
   }
@@ -1387,22 +1388,6 @@ export class VoiceSessionManager {
 
   getStreamWatchBrainContextForPrompt(session, settings = null) {
     return getStreamWatchBrainContextForPrompt(session, settings);
-  }
-
-  async generateVisionFallbackStreamWatchCommentary({
-    session,
-    settings,
-    streamerUserId = null,
-    frameMimeType = "image/jpeg",
-    frameDataBase64 = ""
-  }) {
-    return await generateVisionFallbackStreamWatchCommentary(this, {
-      session,
-      settings,
-      streamerUserId,
-      frameMimeType,
-      frameDataBase64
-    });
   }
 
   isUserInSessionVoiceChannel({ session, userId }) {
@@ -1705,7 +1690,7 @@ export class VoiceSessionManager {
     return this.bargeInController.isCaptureSignalAssertive(capture);
   }
 
-  isCaptureBlockingDeferredReplay({ session, capture }) {
+  isCaptureBlockingDeferredTurnFlush({ session, capture }) {
     if (!session || !capture || typeof capture !== "object") return false;
     const bytesSent = Math.max(0, Number(capture.bytesSent || 0));
     const signalSampleCount = Math.max(0, Number(capture.signalSampleCount || 0));
@@ -1716,12 +1701,12 @@ export class VoiceSessionManager {
     return this.isCaptureConfirmedLiveSpeech({ session, capture });
   }
 
-  hasReplayBlockingActiveCapture(session) {
+  hasDeferredTurnBlockingActiveCapture(session) {
     if (!session || !(session.userCaptures instanceof Map) || session.userCaptures.size <= 0) {
       return false;
     }
     for (const capture of session.userCaptures.values()) {
-      if (this.isCaptureBlockingDeferredReplay({ session, capture })) {
+      if (this.isCaptureBlockingDeferredTurnFlush({ session, capture })) {
         return true;
       }
     }
@@ -2037,32 +2022,18 @@ export class VoiceSessionManager {
       session.pendingResponse.audioReceivedAt = Number(session.lastAudioDeltaAt || command.now);
     }
 
-    // Only queue a retry and set full suppression if the response was
-    // actually cancelled. If the cancel failed, the response already
-    // completed — there's nothing to retry and we should not suppress
-    // the follow-up audio (which would be a new legitimate response).
     const responseWasActuallyCancelled = Boolean(cancelTelemetry.responseCancelSucceeded);
-
-    if (isRealtimeMode(session.mode) && command.retryUtteranceText && responseWasActuallyCancelled) {
-      this.deferredActionQueue.setDeferredVoiceAction(session, {
-        type: "interrupted_reply",
-        goal: "complete_interrupted_reply",
-        freshnessPolicy: "retry_then_regenerate",
-        status: "deferred",
-        reason: "barge_in_interrupt",
-        notBeforeAt: 0,
-        expiresAt: command.now + BARGE_IN_RETRY_MAX_AGE_MS,
-        payload: {
-          utteranceText: command.retryUtteranceText,
-          interruptedByUserId: command.userId,
-          interruptedAt: command.now,
-          source: command.source,
-          interruptionPolicy: command.interruptionPolicy
-        }
-      });
-    } else {
-      this.deferredActionQueue.clearDeferredVoiceAction(session, "interrupted_reply");
-    }
+    const storeInterruptedAssistantReply =
+      responseWasActuallyCancelled &&
+      Boolean(command.interruptedUtteranceText);
+    session.interruptedAssistantReply = storeInterruptedAssistantReply
+      ? {
+        utteranceText: String(command.interruptedUtteranceText || ""),
+        interruptedByUserId: command.userId,
+        interruptedAt: command.now,
+        source: command.source
+      }
+      : null;
 
     session.bargeInSuppressionUntil = responseWasActuallyCancelled
       ? command.now + BARGE_IN_SUPPRESSION_MAX_MS
@@ -2088,13 +2059,8 @@ export class VoiceSessionManager {
         captureBytesSent: command.captureBytesSent,
         botTurnOpen: command.botTurnWasOpen,
         botTurnAgeMs: command.botTurnAgeMs,
-        queuedRetryUtterance: Boolean(
-          isRealtimeMode(session.mode) &&
-          command.retryUtteranceText &&
-          responseWasActuallyCancelled
-        ),
-        retryInterruptionPolicyScope: command.interruptionPolicy?.scope || null,
-        retryInterruptionPolicyAllowedUserId: command.interruptionPolicy?.allowedUserId || null,
+        storedInterruptionContext: storeInterruptedAssistantReply,
+        interruptedUtteranceLength: command.interruptedUtteranceText?.length || 0,
         ...cancelTelemetry,
         truncateContentIndex: cancelTelemetry.truncateAttempted ? cancelTelemetry.truncateContentIndex : null,
         truncateAudioEndMs: cancelTelemetry.truncateAttempted ? cancelTelemetry.truncateAudioEndMs : null
@@ -2109,7 +2075,7 @@ export class VoiceSessionManager {
     const captureBlocking =
       !sessionInactive &&
       Number(session.userCaptures?.size || 0) > 0 &&
-      this.hasReplayBlockingActiveCapture(session);
+      this.hasDeferredTurnBlockingActiveCapture(session);
     const toolCallsRunning =
       !sessionInactive &&
       session.realtimeToolCallExecutions instanceof Map &&
@@ -2987,7 +2953,7 @@ export class VoiceSessionManager {
     source = "voice_tts_line"
   }) {
     if (!session || session.ending) return false;
-    if (this.hasReplayBlockingActiveCapture(session)) return false;
+    if (this.hasDeferredTurnBlockingActiveCapture(session)) return false;
     const line = normalizeVoiceText(text, STT_REPLY_MAX_CHARS);
     if (!line) return false;
     if (!this.llm?.synthesizeSpeech) return false;
@@ -3134,26 +3100,6 @@ export class VoiceSessionManager {
       botUserId: this.client.user?.id || null,
       resolveVoiceSpeakerName: (s, userId) => this.resolveVoiceSpeakerName(s, userId)
     };
-  }
-
-  maybeHandleInterruptedReplyRecovery({
-    session,
-    userId = null,
-    pcmBuffer = null,
-    captureReason = "stream_end"
-  }) {
-    if (!session || session.ending) return false;
-    if (!isRealtimeMode(session.mode)) return false;
-    return this.deferredActionQueue.recheckDeferredVoiceActions({
-      session,
-      reason: "barge_in_capture_resolved",
-      preferredTypes: ["interrupted_reply"],
-      context: {
-        userId,
-        pcmBuffer,
-        captureReason
-      }
-    });
   }
 
   queueRealtimeTurnFromAsrBridge({

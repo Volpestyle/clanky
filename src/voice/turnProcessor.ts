@@ -31,6 +31,7 @@ import {
 import {
   getRealtimeCommitMinimumBytes,
   isRealtimeMode,
+  isVoiceTurnAddressedToBot,
   normalizeVoiceText,
   resolveVoiceAsrLanguageGuidance
 } from "./voiceSessionHelpers.ts";
@@ -295,25 +296,136 @@ export interface TurnProcessorHost {
   runRealtimeBrainReply: (args: RunRealtimeBrainReplyArgs) => Promise<boolean>;
   touchActivity: (guildId: string, settings?: TurnProcessorSettings) => void;
   getOutputChannelState: (session: VoiceSession) => OutputChannelState;
+  countHumanVoiceParticipants: (session: VoiceSession) => number;
 }
 
 export class TurnProcessor {
   constructor(private readonly host: TurnProcessorHost) {}
+
+  private resolveActiveVoiceCommandState(session: VoiceSession) {
+    const state =
+      session?.voiceCommandState && typeof session.voiceCommandState === "object"
+        ? session.voiceCommandState
+        : null;
+    if (!state) return null;
+    const expiresAt = Number(state.expiresAt || 0);
+    if (Number.isFinite(expiresAt) && expiresAt > 0 && expiresAt < Date.now()) {
+      return null;
+    }
+    return state;
+  }
+
+  private buildVoiceCancelContext({
+    session,
+    userId = null,
+    transcript = "",
+    settings = null
+  }: {
+    session: VoiceSession;
+    userId?: string | null;
+    transcript?: string;
+    settings?: TurnProcessorSettings;
+  }) {
+    const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    const normalizedUserId = String(userId || "").trim() || null;
+    const pendingResponse =
+      session?.pendingResponse && typeof session.pendingResponse === "object"
+        ? session.pendingResponse
+        : null;
+    const activeCommandState = this.resolveActiveVoiceCommandState(session);
+    const outputChannelState = this.host.getOutputChannelState(session);
+    const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
+    const activeVoiceGeneration = Boolean(this.host.activeReplies?.has(voiceReplyScopeKey));
+    const participantCount = Math.max(0, Number(this.host.countHumanVoiceParticipants(session) || 0));
+    const pendingResponseOwnerUserId = String(pendingResponse?.userId || "").trim() || null;
+    const lastRealtimeToolCallerUserId = String(session?.lastRealtimeToolCallerUserId || "").trim() || null;
+    const commandOwnerUserId = String(activeCommandState?.userId || "").trim() || null;
+    const ownerMatched = Boolean(
+      normalizedUserId &&
+      [pendingResponseOwnerUserId, lastRealtimeToolCallerUserId, commandOwnerUserId]
+        .filter(Boolean)
+        .some((ownerUserId) => ownerUserId === normalizedUserId)
+    );
+    const directAddressed = normalizedTranscript
+      ? isVoiceTurnAddressedToBot(normalizedTranscript, settings)
+      : false;
+    const implicitSingleSpeakerStanding = participantCount > 0 && participantCount <= 1;
+    const hasCancelableWork = Boolean(
+      pendingResponse ||
+      outputChannelState.pendingResponse ||
+      outputChannelState.openAiActiveResponse ||
+      outputChannelState.awaitingToolOutputs ||
+      outputChannelState.toolCallsRunning ||
+      activeVoiceGeneration ||
+      activeCommandState
+    );
+
+    return {
+      normalizedTranscript,
+      pendingResponse,
+      activeCommandState,
+      outputChannelState,
+      participantCount,
+      pendingResponseOwnerUserId,
+      lastRealtimeToolCallerUserId,
+      commandOwnerUserId,
+      ownerMatched,
+      directAddressed,
+      implicitSingleSpeakerStanding,
+      speakerHasStanding: ownerMatched || directAddressed || implicitSingleSpeakerStanding,
+      hasCancelableWork,
+      activeVoiceGeneration
+    };
+  }
+
+  private buildVoiceCancelAcknowledgementPrompt({
+    transcript = "",
+    cancelContext
+  }: {
+    transcript?: string;
+    cancelContext: ReturnType<TurnProcessor["buildVoiceCancelContext"]>;
+  }) {
+    const pendingResponseSource = String(cancelContext.pendingResponse?.source || "").trim() || "none";
+    const pendingUtterance =
+      normalizeVoiceText(cancelContext.pendingResponse?.utteranceText || "", STT_TRANSCRIPT_MAX_CHARS) || "none";
+    const activeCommand =
+      cancelContext.activeCommandState
+        ? `${String(cancelContext.activeCommandState.domain || "").trim() || "unknown"}:${String(cancelContext.activeCommandState.intent || "").trim() || "unknown"}`
+        : "none";
+
+    return [
+      "A user just cancelled the work you were doing.",
+      `User said: "${cancelContext.normalizedTranscript || normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS) || "stop"}".`,
+      `Interrupted work: pending response source=${pendingResponseSource}; pending utterance=${pendingUtterance}; active response=${cancelContext.outputChannelState.openAiActiveResponse ? "yes" : "no"}; tool calls running=${cancelContext.outputChannelState.toolCallsRunning ? "yes" : "no"}; awaiting tool outputs=${cancelContext.outputChannelState.awaitingToolOutputs ? "yes" : "no"}; active command=${activeCommand}.`,
+      "Acknowledge briefly in one short spoken sentence.",
+      "Do not continue, restart, or summarize the cancelled task unless the user asks."
+    ].join(" ");
+  }
 
   private cancelRealtimeSessionWork({
     session,
     userId = null,
     transcript = "",
     source = "realtime",
-    captureReason = "stream_end"
+    captureReason = "stream_end",
+    cancelContext = null
   }: {
     session: VoiceSession;
     userId?: string | null;
     transcript?: string;
     source?: string;
     captureReason?: string;
+    cancelContext?: ReturnType<TurnProcessor["buildVoiceCancelContext"]> | null;
   }) {
     if (!session || session.ending) return;
+    const resolvedCancelContext =
+      cancelContext ||
+      this.buildVoiceCancelContext({
+        session,
+        userId,
+        transcript,
+        settings: session.settingsSnapshot || this.host.store.getSettings()
+      });
     let responseCancelSucceeded = false;
     let cancelAcknowledgementQueued = false;
     const cancelActiveResponse = session.realtimeClient?.cancelActiveResponse;
@@ -328,13 +440,17 @@ export class TurnProcessor {
     this.host.clearVoiceCommandSession(session);
     cancelAcknowledgementQueued = this.host.requestRealtimePromptUtterance({
       session,
-      userId: userId || session.lastRealtimeToolCallerUserId || null,
+      userId:
+        userId ||
+        resolvedCancelContext.pendingResponseOwnerUserId ||
+        resolvedCancelContext.lastRealtimeToolCallerUserId ||
+        resolvedCancelContext.commandOwnerUserId ||
+        null,
       source: "voice_turn_cancel_acknowledgement",
-      prompt: [
-        "The user just asked you to stop or cancel what you were doing.",
-        "Acknowledge briefly in one short spoken sentence.",
-        "Do not continue the cancelled task."
-      ].join(" ")
+      prompt: this.buildVoiceCancelAcknowledgementPrompt({
+        transcript,
+        cancelContext: resolvedCancelContext
+      })
     });
     this.host.store.logAction({
       kind: "voice_runtime",
@@ -347,10 +463,57 @@ export class TurnProcessor {
         source,
         captureReason,
         transcript: normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS) || null,
+        hasCancelableWork: resolvedCancelContext.hasCancelableWork,
+        speakerHasStanding: resolvedCancelContext.speakerHasStanding,
+        ownerMatched: resolvedCancelContext.ownerMatched,
+        directAddressed: resolvedCancelContext.directAddressed,
+        implicitSingleSpeakerStanding: resolvedCancelContext.implicitSingleSpeakerStanding,
+        participantCount: resolvedCancelContext.participantCount,
+        pendingResponseOwnerUserId: resolvedCancelContext.pendingResponseOwnerUserId,
+        lastRealtimeToolCallerUserId: resolvedCancelContext.lastRealtimeToolCallerUserId,
+        commandOwnerUserId: resolvedCancelContext.commandOwnerUserId,
         responseCancelSucceeded,
         cancelAcknowledgementQueued
       }
     });
+  }
+
+  private maybeHandleVoiceCancelIntent({
+    session,
+    userId = null,
+    transcript = "",
+    settings = null,
+    source = "realtime",
+    captureReason = "stream_end"
+  }: {
+    session: VoiceSession;
+    userId?: string | null;
+    transcript?: string;
+    settings?: TurnProcessorSettings;
+    source?: "realtime" | "file_asr";
+    captureReason?: string;
+  }) {
+    const cancelContext = this.buildVoiceCancelContext({
+      session,
+      userId,
+      transcript,
+      settings
+    });
+    if (!cancelContext.normalizedTranscript || !isCancelIntent(cancelContext.normalizedTranscript)) {
+      return false;
+    }
+    if (!cancelContext.hasCancelableWork || !cancelContext.speakerHasStanding) {
+      return false;
+    }
+    this.cancelRealtimeSessionWork({
+      session,
+      userId,
+      transcript: cancelContext.normalizedTranscript,
+      source,
+      captureReason,
+      cancelContext
+    });
+    return true;
   }
 
   private resolveMergedRealtimeTranscript(existingTranscript = "", incomingTranscript = "") {
@@ -972,16 +1135,6 @@ export class TurnProcessor {
         });
         return;
       }
-      if (hasTranscriptOverride && isCancelIntent(normalizedTranscriptOverride)) {
-        this.cancelRealtimeSessionWork({
-          session,
-          userId,
-          transcript: normalizedTranscriptOverride,
-          source: "realtime",
-          captureReason
-        });
-        return;
-      }
       const pendingQueueDepth = Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns.length : 0;
       if (
         pendingQueueDepth > 0 &&
@@ -1164,14 +1317,14 @@ export class TurnProcessor {
 
       if (isSuperseded("post_transcription")) return;
 
-      if (turnTranscript && isCancelIntent(turnTranscript)) {
-        this.cancelRealtimeSessionWork({
-          session,
-          userId,
-          transcript: turnTranscript,
-          source: "realtime",
-          captureReason
-        });
+      if (turnTranscript && this.maybeHandleVoiceCancelIntent({
+        session,
+        userId,
+        transcript: turnTranscript,
+        settings,
+        source: "realtime",
+        captureReason
+      })) {
         return;
       }
 
@@ -1792,14 +1945,14 @@ export class TurnProcessor {
       }
     }
     if (!transcript) return;
-    if (isCancelIntent(transcript)) {
-      this.cancelRealtimeSessionWork({
-        session,
-        userId,
-        transcript,
-        source: "file_asr",
-        captureReason
-      });
+    if (this.maybeHandleVoiceCancelIntent({
+      session,
+      userId,
+      transcript,
+      settings,
+      source: "file_asr",
+      captureReason
+    })) {
       return;
     }
     if (session.ending) return;

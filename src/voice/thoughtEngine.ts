@@ -63,7 +63,7 @@ export interface ThoughtEngineHost {
     locked: boolean;
     lockReason?: string | null;
   };
-  hasReplayBlockingActiveCapture: (session: VoiceSession) => boolean;
+  hasDeferredTurnBlockingActiveCapture: (session: VoiceSession) => boolean;
   turnProcessor: Pick<TurnProcessor, "getRealtimeTurnBacklogSize">;
   deferredActionQueue: Pick<DeferredActionQueue, "getDeferredQueuedUserTurns">;
   countHumanVoiceParticipants: (session: VoiceSession) => number;
@@ -259,7 +259,7 @@ export class ThoughtEngine {
         outputLockReason: outputChannelState.lockReason
       };
     }
-    if (this.host.hasReplayBlockingActiveCapture(session)) {
+    if (this.host.hasDeferredTurnBlockingActiveCapture(session)) {
       return {
         allow: false,
         reason: "active_user_capture",

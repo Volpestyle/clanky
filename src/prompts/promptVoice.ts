@@ -470,6 +470,42 @@ export function buildVoiceTurnPrompt({
     parts.push(recencyLines.join("\n"));
   }
 
+  const normalizedInterruptedAssistantReply =
+    normalizedConversationContext?.interruptedAssistantReply &&
+    typeof normalizedConversationContext.interruptedAssistantReply === "object"
+      ? {
+          utteranceText:
+            String(normalizedConversationContext.interruptedAssistantReply.utteranceText || "")
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(0, 240),
+          interruptedBySpeakerName:
+            String(normalizedConversationContext.interruptedAssistantReply.interruptedBySpeakerName || "")
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(0, 80) || speaker,
+          ageMs: Number.isFinite(Number(normalizedConversationContext.interruptedAssistantReply.ageMs))
+            ? Math.max(0, Math.round(Number(normalizedConversationContext.interruptedAssistantReply.ageMs)))
+            : null
+        }
+      : null;
+  if (normalizedInterruptedAssistantReply?.utteranceText) {
+    const interruptionAgeSeconds = Number.isFinite(normalizedInterruptedAssistantReply.ageMs)
+      ? Math.round(Number(normalizedInterruptedAssistantReply.ageMs) / 1000)
+      : null;
+    parts.push(
+      [
+        "Interruption recovery context:",
+        interruptionAgeSeconds != null
+          ? `- ${normalizedInterruptedAssistantReply.interruptedBySpeakerName} interrupted you ${interruptionAgeSeconds}s ago while you were saying: "${normalizedInterruptedAssistantReply.utteranceText}"`
+          : `- ${normalizedInterruptedAssistantReply.interruptedBySpeakerName} interrupted you while you were saying: "${normalizedInterruptedAssistantReply.utteranceText}"`,
+        `- They then said: "${text || "(empty)"}"`,
+        "- Decide conversationally whether to resume, adapt, or drop the interrupted reply based on what they said now.",
+        "- Do not mechanically continue the old answer if the new turn changes direction."
+      ].join("\n")
+    );
+  }
+
   if (normalizedVoiceAddressingState) {
     parts.push(
       [

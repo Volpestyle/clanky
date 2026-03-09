@@ -2025,6 +2025,48 @@ test("reply decider blocks other speakers during an active tool followup lease b
   assert.equal(decision.reason, "owned_tool_followup_other_speaker_blocked");
 });
 
+test("reply decider lets bare cancel phrasing from another speaker fall through normal admission during an active tool followup lease", async () => {
+  let classifierCalls = 0;
+  const manager = createManager({
+    generate: async () => {
+      classifierCalls += 1;
+      return { text: "NO" };
+    }
+  });
+  const now = Date.now();
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+      voiceCommandState: {
+        userId: "speaker-1",
+        domain: "tool",
+        intent: "tool_followup",
+        startedAt: now - 1_000,
+        expiresAt: now + 10_000
+      }
+    },
+    userId: "speaker-2",
+    settings: baseSettings({
+      voice: {
+        replyPath: "bridge",
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "stop"
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "classifier_deny");
+  assert.equal(classifierCalls, 1);
+});
+
 test("reply decider keeps unrelated chatter blocked during pending music followup", async () => {
   const manager = createManager();
   const now = Date.now();
@@ -2826,6 +2868,12 @@ test("runRealtimeTurn acknowledges voice cancel intent after clearing pending wo
     textChannelId: "chan-1",
     mode: "openai_realtime",
     ending: false,
+    pendingResponse: {
+      userId: "speaker-1",
+      source: "voice_generation",
+      utteranceText: "I was about to finish that search"
+    },
+    lastRealtimeToolCallerUserId: "speaker-1",
     realtimeClient: {
       cancelActiveResponse() {
         cancelActiveResponseCalls += 1;
@@ -2847,11 +2895,191 @@ test("runRealtimeTurn acknowledges voice cancel intent after clearing pending wo
   assert.equal(cancelAckRequests[0]?.source, "voice_turn_cancel_acknowledgement");
   assert.equal(cancelAckRequests[0]?.userId, "speaker-1");
   assert.match(String(cancelAckRequests[0]?.prompt || ""), /Acknowledge briefly/i);
+  assert.match(String(cancelAckRequests[0]?.prompt || ""), /I was about to finish that search/i);
+  assert.match(String(cancelAckRequests[0]?.prompt || ""), /never mind/i);
   const cancelLog = runtimeLogs.find(
     (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_cancel_intent"
   );
+  assert.equal(cancelLog?.metadata?.speakerHasStanding, true);
+  assert.equal(cancelLog?.metadata?.ownerMatched, true);
+  assert.equal(cancelLog?.metadata?.hasCancelableWork, true);
   assert.equal(cancelLog?.metadata?.responseCancelSucceeded, true);
   assert.equal(cancelLog?.metadata?.cancelAcknowledgementQueued, true);
+});
+
+test("runRealtimeTurn does not fast-cancel owned work for another speaker's bare stop", async () => {
+  const clearedSessions = [];
+  const cancelAckRequests = [];
+  const brainPayloads = [];
+  const manager = createManager();
+  manager.replyManager.clearPendingResponse = (session) => {
+    clearedSessions.push(session?.id || null);
+  };
+  manager.requestRealtimePromptUtterance = (payload) => {
+    cancelAckRequests.push(payload);
+    return true;
+  };
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: false,
+    reason: "classifier_deny",
+    participantCount: 2,
+    directAddressed: false,
+    transcript: "stop"
+  });
+  manager.runRealtimeBrainReply = async (payload) => {
+    brainPayloads.push(payload);
+    return true;
+  };
+
+  let cancelActiveResponseCalls = 0;
+  const session = {
+    id: "session-cancel-intent-other-speaker",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingResponse: {
+      userId: "speaker-1",
+      source: "voice_generation",
+      utteranceText: "answering the original user"
+    },
+    lastRealtimeToolCallerUserId: "speaker-1",
+    realtimeClient: {
+      cancelActiveResponse() {
+        cancelActiveResponseCalls += 1;
+        return true;
+      }
+    },
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.turnProcessor.runRealtimeTurn({
+    session,
+    userId: "speaker-2",
+    transcriptOverride: "stop"
+  });
+
+  assert.equal(cancelActiveResponseCalls, 0);
+  assert.deepEqual(clearedSessions, []);
+  assert.equal(cancelAckRequests.length, 0);
+  assert.equal(brainPayloads.length, 0);
+});
+
+test("runRealtimeTurn lets cancel phrasing pass through when nothing is active to cancel", async () => {
+  const clearedSessions = [];
+  const cancelAckRequests = [];
+  const brainPayloads = [];
+  const manager = createManager();
+  manager.replyManager.clearPendingResponse = (session) => {
+    clearedSessions.push(session?.id || null);
+  };
+  manager.requestRealtimePromptUtterance = (payload) => {
+    cancelAckRequests.push(payload);
+    return true;
+  };
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: true,
+    reason: "brain_decides",
+    participantCount: 2,
+    directAddressed: false,
+    transcript: "never mind"
+  });
+  manager.runRealtimeBrainReply = async (payload) => {
+    brainPayloads.push(payload);
+    return true;
+  };
+
+  let cancelActiveResponseCalls = 0;
+  const session = {
+    id: "session-cancel-intent-noop",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeClient: {
+      cancelActiveResponse() {
+        cancelActiveResponseCalls += 1;
+        return true;
+      }
+    },
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.turnProcessor.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    transcriptOverride: "never mind"
+  });
+
+  assert.equal(cancelActiveResponseCalls, 0);
+  assert.deepEqual(clearedSessions, []);
+  assert.equal(cancelAckRequests.length, 0);
+  assert.equal(brainPayloads.length, 1);
+  assert.equal(brainPayloads[0]?.transcript, "never mind");
+});
+
+test("runRealtimeTurn keeps bridge transcript music disambiguation cancel on the requester-only path", async () => {
+  const cancelAckRequests = [];
+  const manager = createManager();
+  manager.requestRealtimePromptUtterance = (payload) => {
+    cancelAckRequests.push(payload);
+    return true;
+  };
+
+  let cancelActiveResponseCalls = 0;
+  const now = Date.now();
+  const session = {
+    id: "session-disambiguation-cancel-bridge",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    ending: false,
+    music: {
+      active: true,
+      pendingQuery: "all caps",
+      pendingPlatform: "auto",
+      pendingAction: "play_now",
+      pendingRequestedByUserId: "speaker-1",
+      pendingRequestedAt: now,
+      pendingResults: [
+        {
+          id: "youtube:abc111",
+          title: "all caps",
+          artist: "mf doom",
+          platform: "youtube",
+          externalUrl: "https://youtube.com/watch?v=abc111",
+          durationSeconds: 140
+        }
+      ]
+    },
+    voiceCommandState: {
+      userId: "speaker-1",
+      domain: "music",
+      intent: "music_disambiguation",
+      startedAt: now - 1_000,
+      expiresAt: now + 10_000
+    },
+    realtimeClient: {
+      cancelActiveResponse() {
+        cancelActiveResponseCalls += 1;
+        return true;
+      }
+    },
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.turnProcessor.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    transcriptOverride: "never mind"
+  });
+
+  assert.equal(cancelActiveResponseCalls, 0);
+  assert.equal(cancelAckRequests.length, 0);
+  assert.equal(session.voiceCommandState, null);
+  assert.equal(session.music?.pendingRequestedByUserId || null, null);
+  assert.equal(Array.isArray(session.music?.pendingResults) ? session.music.pendingResults.length : 0, 0);
 });
 
 test("runRealtimeTurn uses brain reply generation when admission allows turn", async () => {
@@ -2917,7 +3145,6 @@ test("smoke: runRealtimeBrainReply passes membership context into generation wit
   settingsSnapshot.voice.conversationPolicy.replyEagerness = 60;
   settingsSnapshot.voice.streamWatch = {
     enabled: true,
-    commentaryPath: "anthropic_keyframes",
     brainContextEnabled: true,
     brainContextPrompt: "Use stream keyframes for continuity."
   };

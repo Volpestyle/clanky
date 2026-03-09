@@ -69,7 +69,8 @@ export function createVoiceTestSettings(overrides = {}) {
       replyPath: "brain",
       replyDecisionLlm: {
         provider: "anthropic",
-        model: "claude-haiku-4-5"
+        model: "claude-haiku-4-5",
+        realtimeAdmissionMode: "classifier_gate"
       }
     }
   };

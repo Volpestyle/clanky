@@ -111,7 +111,7 @@ export interface ReplyManagerHost {
     | "recheckDeferredVoiceActions"
     | "clearAllDeferredVoiceActions"
   >;
-  hasReplayBlockingActiveCapture: (session: VoiceSession) => boolean;
+  hasDeferredTurnBlockingActiveCapture: (session: VoiceSession) => boolean;
   endSession: (args: {
     guildId: string;
     reason?: string;
@@ -919,7 +919,7 @@ export class ReplyManager {
     pending.handlingSilence = true;
     this.clearResponseSilenceTimers(session);
 
-    if (this.host.hasReplayBlockingActiveCapture(session)) {
+    if (this.host.hasDeferredTurnBlockingActiveCapture(session)) {
       pending.handlingSilence = false;
       this.armResponseSilenceWatchdog({
         session,

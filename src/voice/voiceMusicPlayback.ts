@@ -245,18 +245,9 @@ export function ensureSessionMusicState(
 ) {
   void manager;
   if (!session || typeof session !== "object") return null;
-  if (session.music && typeof session.music === "object") {
-    // Ensure existing music state has the phase field (migration from pre-enum sessions).
-    if (!session.music.phase) {
-      session.music.phase = session.music.active ? "playing" : "idle";
-      session.music.ducked = session.music.ducked ?? false;
-      session.music.pauseReason = session.music.pauseReason ?? null;
-    }
-    return session.music;
-  }
+  if (session.music && typeof session.music === "object") return session.music;
   session.music = {
     phase: "idle" as const,
-    active: false,
     ducked: false,
     pauseReason: null,
     startedAt: 0,
@@ -337,7 +328,7 @@ export function getMusicPhase(
 }
 
 /**
- * Set the music playback phase and sync the deprecated `active` boolean.
+ * Set the music playback phase.
  * ALL music state transitions MUST go through this function.
  */
 export function setMusicPhase(
@@ -350,8 +341,6 @@ export function setMusicPhase(
   if (!music) return;
   music.phase = phase;
   music.pauseReason = pauseReason;
-  // Sync deprecated boolean for any stragglers during migration
-  music.active = musicPhaseIsActive(phase);
 }
 
 export function isMusicPlaybackActive(

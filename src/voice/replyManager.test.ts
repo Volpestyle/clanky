@@ -77,7 +77,7 @@ function createReplyManagerHarness() {
       recheckDeferredVoiceActions() {},
       clearAllDeferredVoiceActions() {}
     },
-    hasReplayBlockingActiveCapture() {
+    hasDeferredTurnBlockingActiveCapture() {
       return false;
     },
     endSession: async () => true,

@@ -725,6 +725,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         deferredVoiceActions: {},
         deferredVoiceActionTimers: {},
         lastRequestedRealtimeUtterance: null,
+        interruptedAssistantReply: null,
         pendingRealtimeAssistantUtterances: [],
         pendingFileAsrTurns: 0,
         fileAsrTurnDrainActive: false,
@@ -802,7 +803,6 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         },
         music: {
           phase: "idle",
-          active: false,
           ducked: false,
           pauseReason: null,
           startedAt: 0,

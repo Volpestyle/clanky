@@ -64,6 +64,14 @@ export type VoiceConversationContext = {
     musicActive?: boolean;
     musicWakeLatched?: boolean;
     msUntilMusicWakeLatchExpiry?: number | null;
+    interruptedAssistantReply?: {
+        utteranceText: string;
+        interruptedByUserId: string | null;
+        interruptedBySpeakerName: string | null;
+        interruptedAt: number;
+        ageMs: number | null;
+        source: string | null;
+    } | null;
 };
 
 export type VoiceReplyDecision = {
@@ -327,6 +335,13 @@ export interface VoiceLastRequestedRealtimeUtterance {
     interruptionPolicy: ReplyInterruptionPolicy | null;
 }
 
+export interface VoiceInterruptedAssistantReply {
+    utteranceText: string;
+    interruptedByUserId: string | null;
+    interruptedAt: number;
+    source: string | null;
+}
+
 export interface VoiceQueuedRealtimeAssistantUtterance {
     prompt: string;
     utteranceText: string | null;
@@ -523,8 +538,6 @@ export function musicPhaseShouldAllowDucking(phase: MusicPlaybackPhase): boolean
 export interface VoiceSessionMusicState {
     /** Single source of truth for music playback lifecycle. */
     phase: MusicPlaybackPhase;
-    /** @deprecated Use `phase` instead. Kept temporarily for backward compat during migration. */
-    active: boolean;
     ducked: boolean;
     pauseReason: MusicPauseReason;
     startedAt: number;
@@ -561,7 +574,7 @@ export interface InFlightAcceptedBrainTurn {
     directAddressed: boolean;
 }
 
-export type DeferredVoiceActionType = "interrupted_reply" | "queued_user_turns";
+export type DeferredVoiceActionType = "queued_user_turns";
 
 export type DeferredVoiceActionStatus = "scheduled" | "deferred";
 
@@ -581,19 +594,6 @@ export interface DeferredVoiceActionBase {
     expiresAt: number;
     reason: string;
     revision: number;
-}
-
-export interface DeferredInterruptedReplyAction extends DeferredVoiceActionBase {
-    type: "interrupted_reply";
-    goal: "complete_interrupted_reply";
-    freshnessPolicy: "retry_then_regenerate";
-    payload: {
-        utteranceText: string | null;
-        interruptedByUserId: string | null;
-        interruptedAt: number;
-        source: string | null;
-        interruptionPolicy: ReplyInterruptionPolicy | null;
-    };
 }
 
 export interface DeferredQueuedUserTurn {
@@ -618,9 +618,7 @@ export interface DeferredQueuedUserTurnsAction extends DeferredVoiceActionBase {
     };
 }
 
-export type DeferredVoiceAction =
-    | DeferredInterruptedReplyAction
-    | DeferredQueuedUserTurnsAction;
+export type DeferredVoiceAction = DeferredQueuedUserTurnsAction;
 
 export interface VoiceCommandState {
     userId: string | null;
@@ -850,6 +848,7 @@ export interface VoiceSession {
     pendingResponse: VoicePendingResponse | null;
     activeReplyInterruptionPolicy: ReplyInterruptionPolicy | null;
     lastRequestedRealtimeUtterance: VoiceLastRequestedRealtimeUtterance | null;
+    interruptedAssistantReply?: VoiceInterruptedAssistantReply | null;
     pendingRealtimeAssistantUtterances?: VoiceQueuedRealtimeAssistantUtterance[];
     pendingFileAsrTurns: TurnProcessorState["pendingFileAsrTurns"];
     fileAsrTurnDrainActive: TurnProcessorState["fileAsrTurnDrainActive"];

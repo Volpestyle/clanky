@@ -11,8 +11,9 @@ import {
 } from "./systemSpeechOpportunity.ts";
 import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
-  BARGE_IN_FULL_OVERRIDE_MIN_MS,
+  BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS,
   BARGE_IN_MIN_SPEECH_MS,
+  BARGE_IN_SUPPRESSION_MAX_MS,
   VOICE_SILENCE_GATE_MIN_CLIP_MS,
   VOICE_TURN_PROMOTION_MIN_CLIP_MS
 } from "./voiceSessionManager.constants.ts";
@@ -571,6 +572,29 @@ test("resolveReplyInterruptionPolicy applies speaker fallback for normal replies
   });
 });
 
+test("resolveReplyInterruptionPolicy uses the repo default speaker mode when unset", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    settingsSnapshot: createTestSettings({
+      botName: "clanker conk",
+      voice: {
+        replyPath: "brain"
+      }
+    })
+  });
+
+  const result = manager.resolveReplyInterruptionPolicy({
+    session,
+    userId: "user-1",
+  });
+
+  assert.deepEqual(result, {
+    assertive: true,
+    scope: "speaker",
+    allowedUserId: "user-1",
+  });
+});
+
 test("createTrackedAudioResponse applies uninterruptible fallback for normal replies when configured", () => {
   const { manager } = createManager();
   const session = createSession({
@@ -763,6 +787,7 @@ test("shouldBargeIn requires minimum capture age for non-realtime playback", () 
 test("interruptBotSpeechForBargeIn truncates OpenAI assistant audio to played duration", () => {
   const { manager, logs } = createManager();
   const truncateCalls = [];
+  const startedAt = Date.now();
   const session = createSession({
     mode: "openai_realtime",
     botTurnOpen: true,
@@ -800,6 +825,56 @@ test("interruptBotSpeechForBargeIn truncates OpenAI assistant audio to played du
   assert.equal(Boolean(interruptLog), true);
   assert.equal(interruptLog?.metadata?.truncateAttempted, true);
   assert.equal(interruptLog?.metadata?.truncateSucceeded, true);
+  assert.equal(interruptLog?.metadata?.storedInterruptionContext, true);
+  assert.equal(session.interruptedAssistantReply?.utteranceText, "continuation");
+  assert.equal(session.interruptedAssistantReply?.interruptedByUserId, "user-1");
+  assert.equal(session.interruptedAssistantReply?.source, "truncate_test");
+  assert.ok(Number(session.interruptedAssistantReply?.interruptedAt || 0) >= startedAt);
+  const suppressionMs = Number(session.bargeInSuppressionUntil || 0) - startedAt;
+  assert.ok(suppressionMs >= 0);
+  assert.ok(suppressionMs <= BARGE_IN_SUPPRESSION_MAX_MS + 50);
+
+  const conversationContext = manager.buildVoiceConversationContext({
+    session,
+    userId: "user-1",
+    directAddressed: true
+  });
+  assert.equal(conversationContext.interruptedAssistantReply?.utteranceText, "continuation");
+});
+
+test("interruptBotSpeechForBargeIn falls back to short echo guard when cancel fails", () => {
+  const { manager, logs } = createManager();
+  const startedAt = Date.now();
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: true,
+    pendingResponse: {
+      requestId: 14,
+      utteranceText: "still speaking"
+    },
+    realtimeClient: {
+      cancelActiveResponse() {
+        return false;
+      },
+      truncateConversationItem() {
+        return true;
+      }
+    }
+  });
+
+  const interrupted = manager.interruptBotSpeechForBargeIn({
+    session,
+    userId: "user-1",
+    source: "cancel_failed_test"
+  });
+
+  assert.equal(interrupted, true);
+  assert.equal(session.interruptedAssistantReply, null);
+  const suppressionMs = Number(session.bargeInSuppressionUntil || 0) - startedAt;
+  assert.ok(suppressionMs >= 0);
+  assert.ok(suppressionMs <= BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS + 50);
+  const interruptLog = logs.find((entry) => entry?.content === "voice_barge_in_interrupt");
+  assert.equal(interruptLog?.metadata?.storedInterruptionContext, false);
 });
 
 test("isCaptureConfirmedLiveSpeech requires both speech window and non-silent signal", () => {
@@ -1522,114 +1597,6 @@ test("commitAsrUtterance (shared) preserves already-received final segments when
   assert.equal(logs.some((entry) => entry?.content === "voice_realtime_transcription_empty"), false);
 });
 
-test("maybeHandleInterruptedReplyRecovery retries short barge-ins with the prior utterance", () => {
-  const { manager, logs } = createManager();
-  const retryCalls = [];
-  manager.requestRealtimeTextUtterance = (payload) => {
-    retryCalls.push(payload);
-    return true;
-  };
-
-  const session = createSession({
-    mode: "openai_realtime",
-    realtimeInputSampleRateHz: 24_000,
-    deferredVoiceActions: {
-      interrupted_reply: {
-        type: "interrupted_reply",
-        goal: "complete_interrupted_reply",
-        freshnessPolicy: "retry_then_regenerate",
-        status: "deferred",
-        createdAt: Date.now() - 400,
-        updatedAt: Date.now() - 400,
-        notBeforeAt: 0,
-        expiresAt: Date.now() + 5_000,
-        reason: "barge_in_interrupt",
-        revision: 1,
-        payload: {
-          utteranceText: "let me finish this thought",
-          interruptedByUserId: "user-1",
-          interruptedAt: Date.now() - 400,
-          source: "test",
-          interruptionPolicy: {
-            assertive: true,
-            scope: "speaker",
-            allowedUserId: "user-1"
-          }
-        }
-      }
-    }
-  });
-
-  const shortBargePcm = Buffer.alloc(24_000 * 2, 0);
-  const handled = manager.maybeHandleInterruptedReplyRecovery({
-    session,
-    userId: "user-1",
-    pcmBuffer: shortBargePcm,
-    captureReason: "stream_end"
-  });
-
-  assert.equal(handled, true);
-  assert.equal(retryCalls.length, 1);
-  assert.equal(retryCalls[0]?.text, "let me finish this thought");
-  assert.equal(retryCalls[0]?.source, "barge_in_retry");
-  assert.equal(Boolean(session.deferredVoiceActions?.interrupted_reply), false);
-  const retryLog = logs.find((entry) => entry?.content === "voice_barge_in_retry_requested");
-  assert.equal(Boolean(retryLog), true);
-});
-
-test("maybeHandleInterruptedReplyRecovery treats long barge-ins as full override and reconsiders transcript", () => {
-  const { manager, logs } = createManager();
-  const retryCalls = [];
-  manager.requestRealtimeTextUtterance = (payload) => {
-    retryCalls.push(payload);
-    return true;
-  };
-
-  const session = createSession({
-    mode: "openai_realtime",
-    realtimeInputSampleRateHz: 24_000,
-    deferredVoiceActions: {
-      interrupted_reply: {
-        type: "interrupted_reply",
-        goal: "complete_interrupted_reply",
-        freshnessPolicy: "retry_then_regenerate",
-        status: "deferred",
-        createdAt: Date.now() - 400,
-        updatedAt: Date.now() - 400,
-        notBeforeAt: 0,
-        expiresAt: Date.now() + 5_000,
-        reason: "barge_in_interrupt",
-        revision: 1,
-        payload: {
-          utteranceText: "do not replay when fully barged in",
-          interruptedByUserId: "user-1",
-          interruptedAt: Date.now() - 400,
-          source: "test",
-          interruptionPolicy: {
-            assertive: true,
-            scope: "speaker",
-            allowedUserId: "user-1"
-          }
-        }
-      }
-    }
-  });
-
-  const longBargePcm = Buffer.alloc(Math.ceil((24_000 * 2 * (BARGE_IN_FULL_OVERRIDE_MIN_MS + 250)) / 1000), 0);
-  const handled = manager.maybeHandleInterruptedReplyRecovery({
-    session,
-    userId: "user-1",
-    pcmBuffer: longBargePcm,
-    captureReason: "stream_end"
-  });
-
-  assert.equal(handled, false);
-  assert.equal(retryCalls.length, 0);
-  assert.equal(Boolean(session.deferredVoiceActions?.interrupted_reply), false);
-  const skipLog = logs.find((entry) => entry?.content === "voice_barge_in_retry_skipped_full_override");
-  assert.equal(Boolean(skipLog), true);
-});
-
 test("playVoiceReplyInOrder does not fallback to TTS when realtime utterance fails", async () => {
   const { manager } = createManager();
   const session = createSession({
@@ -2339,7 +2306,6 @@ test("shared ASR bridge forwards recovered transcript after timeout instead of d
     peak: 0.4,
     activeSampleRatio: 0.4
   });
-  manager.maybeHandleInterruptedReplyRecovery = () => false;
 
   const bridgedTurns = [];
   manager.queueRealtimeTurnFromAsrBridge = (payload) => {
@@ -2445,7 +2411,6 @@ test("per-user ASR bridge forwards same-utterance transcript continuity across l
     peak: 0.4,
     activeSampleRatio: 0.4
   });
-  manager.maybeHandleInterruptedReplyRecovery = () => false;
 
   const bridgedTurns = [];
   manager.queueRealtimeTurnFromAsrBridge = (payload) => {
