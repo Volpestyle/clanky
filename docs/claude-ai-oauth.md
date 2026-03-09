@@ -102,6 +102,12 @@ LLMService
 
 The provider reuses the exact same `callAnthropic` code path as the regular `anthropic` provider. The only difference is the Anthropic SDK client is configured with a custom fetch that handles OAuth auth.
 
+## Structured Output Handling
+
+JSON compliance for reply generation is requested via a text instruction appended to the system prompt (`"Return strict JSON only."` + the schema). API-level enforcement via `output_config.format` is not used because `REPLY_OUTPUT_SCHEMA` exceeds Claude's union type limit (29 `type: ["string", "null"]` / `anyOf` parameters).
+
+When the model returns plain prose instead of JSON (e.g. short simple requests like "call me X"), the reply pipeline recovers the raw text as the reply content (`structured_output_recovered_as_prose` warning) instead of silently dropping it. Only truly empty model output is skipped.
+
 ## Reverse-Engineered From
 
 This approach is based on the `opencode-anthropic-auth` plugin (npm `opencode-anthropic-auth@0.0.13`), which implements the same OAuth flow used by the Claude Code CLI. Key constants:

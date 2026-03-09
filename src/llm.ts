@@ -352,9 +352,7 @@ export class LLMService {
       provider === "claude-oauth" ||
       provider === "openai" ||
       provider === "codex-oauth";
-    const streamingTransportAllowed =
-      streamingTransportSupported &&
-      (!normalizedJsonSchema || provider === "openai" || provider === "codex-oauth");
+    const streamingTransportAllowed = streamingTransportSupported;
     let usedStreamingTransport = false;
     try {
       const response = streamingTransportAllowed

@@ -247,6 +247,31 @@ export async function runAutomationJob(
             content: runtime.composeMessageContentForHistory(sent, generationResult.text),
             referencedMessageId: null
           });
+          if (settings?.memory?.enabled && typeof runtime.memory?.ingestMessage === "function") {
+            void runtime.memory.ingestMessage({
+              messageId: sent.id,
+              authorId: runtime.client.user?.id || "unknown",
+              authorName: botName,
+              content: generationResult.text,
+              isBot: true,
+              settings,
+              trace: {
+                guildId: sent.guildId,
+                channelId: sent.channelId,
+                userId: runtime.client.user?.id || null,
+                source: "automation_post_memory_ingest"
+              }
+            }).catch((error) => {
+              runtime.store.logAction({
+                kind: "bot_error",
+                guildId: sent.guildId,
+                channelId: sent.channelId,
+                messageId: sent.id,
+                userId: runtime.client.user?.id || null,
+                content: `memory_automation_ingest: ${String(error?.message || error)}`
+              });
+            });
+          }
           runtime.store.logAction({
             kind: "automation_post",
             guildId: sent.guildId,
@@ -513,6 +538,22 @@ export async function generateAutomationPayload(
   }
 
   const directive = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
+
+  if (directive.parseState === "unstructured") {
+    return {
+      skip: true,
+      summary: "invalid structured output; skipped run",
+      text: "",
+      payload: null,
+      media: null,
+      llm: {
+        provider: generation.provider,
+        model: generation.model,
+        usage: generation.usage,
+        costUsd: generation.costUsd
+      }
+    };
+  }
 
   let finalText = sanitizeBotText(normalizeSkipSentinel(directive.text || ""), 1200);
   if (!finalText) {

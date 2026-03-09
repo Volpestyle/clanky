@@ -240,6 +240,27 @@ export async function maybeRunDiscoveryCycle(
       channel,
       recentMessages
     });
+
+    // Surface discovery source results — metadata object is hidden by logger's 80-char limit
+    for (const report of discoveryResult.reports) {
+      runtime.store.logAction({
+        kind: "discovery_source_fetch",
+        guildId: channel.guildId,
+        channelId: channel.id,
+        userId: runtime.client.user?.id || null,
+        content: `${report.source}: fetched=${report.fetched} accepted=${report.accepted}${report.error ? ` error=${report.error}` : ""}`
+      });
+    }
+    if (discoveryResult.errors.length) {
+      runtime.store.logAction({
+        kind: "discovery_source_errors",
+        guildId: channel.guildId,
+        channelId: channel.id,
+        userId: runtime.client.user?.id || null,
+        content: discoveryResult.errors.join(" | ")
+      });
+    }
+
     const requireDiscoveryLink =
       discoveryResult.enabled &&
       discoveryResult.candidates.length > 0 &&
@@ -450,6 +471,31 @@ export async function maybeRunDiscoveryCycle(
       content: runtime.composeMessageContentForHistory(sent, finalText),
       referencedMessageId: null
     });
+    if (settings?.memory?.enabled && typeof runtime.memory?.ingestMessage === "function") {
+      void runtime.memory.ingestMessage({
+        messageId: sent.id,
+        authorId: runtime.client.user?.id || "unknown",
+        authorName: botName,
+        content: finalText,
+        isBot: true,
+        settings,
+        trace: {
+          guildId: sent.guildId,
+          channelId: sent.channelId,
+          userId: runtime.client.user?.id || null,
+          source: startup ? "discovery_startup_memory_ingest" : "discovery_scheduler_memory_ingest"
+        }
+      }).catch((error) => {
+        runtime.store.logAction({
+          kind: "bot_error",
+          guildId: sent.guildId,
+          channelId: sent.channelId,
+          messageId: sent.id,
+          userId: runtime.client.user?.id || null,
+          content: `memory_discovery_ingest: ${String(error?.message || error)}`
+        });
+      });
+    }
     for (const sharedLink of linkPolicy.usedLinks) {
       runtime.store.recordSharedLink({
         url: sharedLink.url,

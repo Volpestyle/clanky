@@ -121,6 +121,43 @@ test("voice transcript ingest writes synthetic message rows for prompt history c
   assert.equal(await ingestPromise, true);
 });
 
+test("voice transcript ingest preserves bot-authored message rows", async () => {
+  const recorded = [];
+  const memory = createMemoryForIngestTests({
+    recordMessage(row) {
+      recorded.push(row);
+    }
+  });
+  memory.ingestWorkerActive = true;
+  memory.processIngestMessage = async () => undefined;
+
+  const ingestPromise = memory.ingestMessage({
+    messageId: "voice-guild-1-bot-123456",
+    authorId: "bot-1",
+    authorName: "  clanker conk  ",
+    content: "  bet say less  ",
+    isBot: true,
+    settings: {},
+    trace: {
+      guildId: "guild-1",
+      channelId: "chan-1",
+      userId: "bot-1",
+      source: "voice_assistant_timeline"
+    }
+  });
+
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0]?.messageId, "voice-guild-1-bot-123456");
+  assert.equal(recorded[0]?.authorId, "bot-1");
+  assert.equal(recorded[0]?.authorName, "clanker conk");
+  assert.equal(recorded[0]?.isBot, true);
+  assert.equal(recorded[0]?.content, "bet say less");
+
+  memory.ingestWorkerActive = false;
+  await memory.runIngestWorker();
+  assert.equal(await ingestPromise, true);
+});
+
 test("appendDailyLogEntry dedupes repeated message ids", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-memory-log-"));
   try {

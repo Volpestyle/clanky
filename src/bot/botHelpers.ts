@@ -12,6 +12,8 @@ const VIDEO_PROMPT_DIRECTIVE_RE = /\[\[VIDEO_PROMPT:\s*([^\]]*?)\s*\]\]\s*$/i;
 const STRUCTURED_REPLY_CODE_FENCE_OPEN_RE = /^```(?:json)?\s*/i;
 const STRUCTURED_REPLY_TEXT_FIELD_RE = /"text"\s*:\s*"((?:\\.|[^"\\])*)"/s;
 const STRUCTURED_REPLY_SKIP_TRUE_RE = /"skip"\s*:\s*true\b/i;
+
+type ParseState = "json" | "recovered_json" | "unstructured";
 // English-only fallback for explicit user opt-outs; normal prompt/tool policy remains the source of truth.
 const EN_WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
 const DEFAULT_MAX_MEDIA_PROMPT_LEN = 900;
@@ -705,8 +707,34 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
   const parsed = extractJsonObjectFromText(fallbackText);
   if (!parsed) {
     const recoveredText = recoverStructuredReplyText(fallbackText);
+    if (recoveredText !== null) {
+      return {
+        text: recoveredText,
+        imagePrompt: null,
+        complexImagePrompt: null,
+        videoPrompt: null,
+        gifQuery: null,
+        mediaDirective: null,
+        reactionEmoji: null,
+        webSearchQuery: null,
+        browserBrowseQuery: null,
+        memoryLookupQuery: null,
+        imageLookupQuery: null,
+        openArticleRef: null,
+        memoryLine: null,
+        selfMemoryLine: null,
+        soundboardRefs: [],
+        leaveVoiceChannel: false,
+        automationAction: emptyStructuredAutomationAction(),
+        voiceIntent: emptyStructuredVoiceIntent(),
+        screenShareIntent: emptyStructuredScreenShareIntent(),
+        voiceAddressing: emptyStructuredVoiceAddressing(),
+        parseState: "recovered_json" as ParseState
+      };
+    }
+
     return {
-      text: recoveredText || fallbackText,
+      text: "",
       imagePrompt: null,
       complexImagePrompt: null,
       videoPrompt: null,
@@ -725,7 +753,8 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
       automationAction: emptyStructuredAutomationAction(),
       voiceIntent: emptyStructuredVoiceIntent(),
       screenShareIntent: emptyStructuredScreenShareIntent(),
-      voiceAddressing: emptyStructuredVoiceAddressing()
+      voiceAddressing: emptyStructuredVoiceAddressing(),
+      parseState: "unstructured" as ParseState
     };
   }
 
@@ -763,13 +792,18 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     automationAction,
     voiceIntent,
     screenShareIntent,
-    voiceAddressing
+    voiceAddressing,
+    parseState: "json" as ParseState
   };
 }
 
 function recoverStructuredReplyText(rawText) {
   const candidate = stripStructuredReplyCodeFence(rawText);
   if (!candidate) return null;
+  // Only attempt recovery if the text was structurally trying to be JSON
+  // (starts with '{'), not arbitrary prose that happens to contain "text": "..."
+  const trimmed = candidate.trimStart();
+  if (!trimmed.startsWith("{")) return null;
   if (STRUCTURED_REPLY_SKIP_TRUE_RE.test(candidate)) return "[SKIP]";
   const textMatch = candidate.match(STRUCTURED_REPLY_TEXT_FIELD_RE);
   if (!textMatch) return null;

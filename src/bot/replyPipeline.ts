@@ -718,11 +718,19 @@ export async function executeReplyLlm(
   ) {
     throwIfAborted(signal, "Reply cancelled");
     const assistantContent = buildContextContentBlocks(generation.rawContent, generation.text);
-    replyContextMessages = [
-      ...replyContextMessages,
-      { role: "user", content: initialUserPrompt },
-      { role: "assistant", content: assistantContent }
-    ];
+    // On the first iteration, seed the context with the original user prompt.
+    // On subsequent iterations the prompt is already in the history — don't duplicate it.
+    if (replyContextMessages.length === 0) {
+      replyContextMessages = [
+        { role: "user", content: initialUserPrompt },
+        { role: "assistant", content: assistantContent }
+      ];
+    } else {
+      replyContextMessages = [
+        ...replyContextMessages,
+        { role: "assistant", content: assistantContent }
+      ];
+    }
 
     const toolResultMessages: ContentBlock[] = [];
 
@@ -1061,6 +1069,39 @@ export async function dispatchReplyActions(
     generation, usedWebSearchFollowup, mediaPromptLimit, replyDirective,
     webSearch, replyPrompts
   } = llmResult;
+  if (replyDirective.parseState === "unstructured") {
+    const recoveredText = sanitizeBotText(String(generation.text || ""));
+    if (recoveredText) {
+      replyDirective.text = recoveredText;
+      bot.store.logAction({
+        kind: "bot_warning",
+        guildId: message.guildId,
+        channelId: message.channelId,
+        messageId: message.id,
+        userId: bot.client.user?.id || null,
+        content: "structured_output_recovered_as_prose",
+        metadata: { source, parseState: replyDirective.parseState }
+      });
+    } else {
+      bot.logSkippedReply({
+        message,
+        source,
+        triggerMessageIds,
+        addressSignal,
+        generation,
+        usedWebSearchFollowup,
+        reason: "invalid_structured_output",
+        reaction: null,
+        screenShareOffer: null,
+        performance,
+        prompts: replyPrompts,
+        extraMetadata: {
+          rawTextPreview: sanitizeBotText(String(generation.text || ""), 280) || null
+        }
+      });
+      return { skipped: true };
+    }
+  }
 
   const reaction = await bot.maybeApplyReplyReaction({
     message,
@@ -1346,6 +1387,7 @@ export async function sendReplyMessage(
   const sendMs = Math.max(0, Date.now() - sendStartedAtMs);
   const actionKind = sendAsReply ? "sent_reply" : "sent_message";
   const referencedMessageId = sendAsReply ? message.id : null;
+  const memorySettings = getMemorySettings(settings);
 
   bot.markSpoke();
   bot.store.recordMessage({
@@ -1359,6 +1401,31 @@ export async function sendReplyMessage(
     content: bot.composeMessageContentForHistory(sent, finalText),
     referencedMessageId
   });
+  if (memorySettings.enabled && typeof bot.memory?.ingestMessage === "function") {
+    void bot.memory.ingestMessage({
+      messageId: sent.id,
+      authorId: bot.client.user.id,
+      authorName: botName,
+      content: finalText,
+      isBot: true,
+      settings,
+      trace: {
+        guildId: sent.guildId,
+        channelId: sent.channelId,
+        userId: bot.client.user.id,
+        source: "text_reply_memory_ingest"
+      }
+    }).catch((error) => {
+      bot.store.logAction({
+        kind: "bot_error",
+        guildId: sent.guildId,
+        channelId: sent.channelId,
+        messageId: sent.id,
+        userId: bot.client.user.id,
+        content: `memory_text_reply_ingest: ${String(error?.message || error)}`
+      });
+    });
+  }
   bot.store.logAction({
     kind: actionKind,
     guildId: sent.guildId,

@@ -43,13 +43,16 @@ function buildAnthropicMessagesRequest({
       ]
     : normalizedUserPrompt;
 
-  const messages = [
-    ...contextMessages.map((msg) => ({
-      role: msg.role === "assistant" ? "assistant" : "user",
-      content: msg.content
-    })),
-    { role: "user", content: userContent }
-  ];
+  const contextMapped = contextMessages.map((msg) => ({
+    role: msg.role === "assistant" ? "assistant" : "user",
+    content: msg.content
+  }));
+  // When userPrompt is empty and there are no images, skip the trailing user
+  // message — avoids consecutive user turns in tool-loop re-prompts.
+  const hasUserContent = typeof userContent === "string" ? userContent.trim().length > 0 : userContent.length > 0;
+  const messages = hasUserContent
+    ? [...contextMapped, { role: "user", content: userContent }]
+    : contextMapped;
 
   const resolvedTemperature = Math.max(0, Math.min(Number(temperature) || 0, 1));
   const normalizedTools = Array.isArray(tools) ? tools : [];
@@ -58,7 +61,8 @@ function buildAnthropicMessagesRequest({
         tools: normalizedTools.map((tool) => ({
           name: tool.name,
           description: tool.description,
-          input_schema: tool.input_schema
+          input_schema: tool.input_schema,
+          ...(tool.strict ? { strict: true } : {})
         }))
       }
     : {};

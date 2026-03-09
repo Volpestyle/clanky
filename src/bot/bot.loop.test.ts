@@ -324,8 +324,13 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
       bot.client.emit("messageCreate", incomingMessage);
       await waitForCondition(() => (replyPayloads.length + channelSendPayloads.length) === 1 && bot.getReplyQueuePendingCount() === 0);
 
-      assert.equal(memoryIngestCalls.length, 1);
-      assert.equal(memoryIngestCalls[0].messageId, incomingMessageId);
+      assert.equal(memoryIngestCalls.length, 2);
+      const userIngest = memoryIngestCalls.find((entry) => entry?.messageId === incomingMessageId);
+      const botIngest = memoryIngestCalls.find((entry) => entry?.isBot === true);
+      assert.equal(userIngest?.messageId, incomingMessageId);
+      assert.equal(botIngest?.authorId, botUserId);
+      assert.equal(botIngest?.isBot, true);
+      assert.equal(botIngest?.trace?.source, "text_reply_memory_ingest");
       assert.match(String(llmCalls[0]?.userPrompt || ""), /alice reacted with 🔥 to clanker conk's message: "bet"/);
       assert.equal(reactionCalls.length, 1);
       assert.equal(reactionCalls[0], "🔥");

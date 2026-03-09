@@ -46,6 +46,7 @@ export type ChatTool = {
   name: string;
   description: string;
   input_schema: Anthropic.Tool.InputSchema;
+  strict?: boolean;
 };
 
 export type LlmToolCall = {

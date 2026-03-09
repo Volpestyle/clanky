@@ -1213,6 +1213,7 @@ export class ClankerBot {
       allowedMentions: { repliedUser: false }
     });
     const sendMs = Math.max(0, Date.now() - sendStartedAtMs);
+    const memorySettings = getMemorySettings(settings);
 
     this.lastBotMessageAt = Date.now();
     this.store.recordMessage({
@@ -1229,6 +1230,31 @@ export class ClankerBot {
       ),
       referencedMessageId: message.id
     });
+    if (memorySettings.enabled && typeof this.memory?.ingestMessage === "function") {
+      void this.memory.ingestMessage({
+        messageId: sent.id,
+        authorId: this.client.user.id,
+        authorName: getBotName(settings),
+        content: finalText,
+        isBot: true,
+        settings,
+        trace: {
+          guildId: sent.guildId,
+          channelId: sent.channelId,
+          userId: this.client.user.id,
+          source: "text_reply_memory_ingest"
+        }
+      }).catch((error) => {
+        this.store.logAction({
+          kind: "bot_error",
+          guildId: sent.guildId,
+          channelId: sent.channelId,
+          messageId: sent.id,
+          userId: this.client.user.id,
+          content: `memory_text_reply_ingest: ${String(error?.message || error)}`
+        });
+      });
+    }
     this.store.logAction({
       kind: "sent_reply",
       guildId: sent.guildId,

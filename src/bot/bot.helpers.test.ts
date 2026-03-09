@@ -33,10 +33,10 @@ test("parseStructuredReplyOutput reads structured reply JSON", () => {
   assert.equal(parsed.voiceIntent.reason, "explicit join request");
 });
 
-test("parseStructuredReplyOutput falls back to plain text when output is not JSON", () => {
+test("parseStructuredReplyOutput rejects unstructured plain text", () => {
   const parsed = parseStructuredReplyOutput("just reply text");
 
-  assert.equal(parsed.text, "just reply text");
+  assert.equal(parsed.text, "");
   assert.equal(parsed.mediaDirective, null);
   assert.equal(parsed.automationAction.operation, null);
   assert.equal(parsed.voiceIntent.intent, null);
@@ -44,6 +44,7 @@ test("parseStructuredReplyOutput falls back to plain text when output is not JSO
   assert.equal(parsed.voiceIntent.reason, null);
   assert.equal(parsed.voiceAddressing.talkingTo, null);
   assert.equal(parsed.voiceAddressing.directedConfidence, 0);
+  assert.equal(parsed.parseState, "unstructured");
 });
 
 test("compose media prompts fall back to contextual defaults when no prompt is provided", () => {
@@ -74,6 +75,7 @@ test("parseStructuredReplyOutput recovers text from truncated fenced JSON", () =
     parsed.text,
     "nah corbexx you're actually unhinged and i respect it lmaooo. 'penjamin' mode activated. can't be grinding your brain 24/7"
   );
+  assert.equal(parsed.parseState, "recovered_json");
 });
 
 test("parseStructuredReplyOutput recovers skip from truncated fenced JSON", () => {
@@ -85,6 +87,21 @@ test("parseStructuredReplyOutput recovers skip from truncated fenced JSON", () =
 `);
 
   assert.equal(parsed.text, "[SKIP]");
+  assert.equal(parsed.parseState, "recovered_json");
+});
+
+test("parseStructuredReplyOutput rejects reasoning text containing JSON-like field patterns", () => {
+  const reasoning = `I need to consider the "text": "something" field in the response before deciding.`;
+  const parsed = parseStructuredReplyOutput(reasoning);
+  assert.equal(parsed.text, "");
+  assert.equal(parsed.parseState, "unstructured");
+});
+
+test("parseStructuredReplyOutput rejects prose with embedded skip pattern", () => {
+  const reasoning = `Let me think about whether "skip": true is appropriate here.`;
+  const parsed = parseStructuredReplyOutput(reasoning);
+  assert.equal(parsed.text, "");
+  assert.equal(parsed.parseState, "unstructured");
 });
 
 test("parseStructuredReplyOutput honors skip flag", () => {
@@ -354,6 +371,7 @@ test("parseStructuredReplyOutput parses voice tool-call fields", () => {
 
 test("parseStructuredReplyOutput normalizes missing voice tool-call fields to safe defaults", () => {
   const parsed = parseStructuredReplyOutput("just plain text");
+  assert.equal(parsed.parseState, "unstructured");
   assert.deepEqual(parsed.soundboardRefs, []);
   assert.equal(parsed.leaveVoiceChannel, false);
   assert.equal(parsed.voiceIntent.query, null);

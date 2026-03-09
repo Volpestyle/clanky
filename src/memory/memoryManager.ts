@@ -75,6 +75,7 @@ export class MemoryManager {
     authorId,
     authorName,
     content,
+    isBot = false,
     settings,
     trace = { guildId: null, channelId: null, userId: null, source: null }
   }) {
@@ -91,6 +92,7 @@ export class MemoryManager {
       authorId,
       authorName,
       content,
+      isBot,
       trace
     });
 
@@ -117,6 +119,7 @@ export class MemoryManager {
       authorId: String(authorId || "").trim(),
       authorName: String(authorName || "unknown"),
       content,
+      isBot: Boolean(isBot),
       settings,
       trace,
       resolve: resolveJob,
@@ -133,6 +136,7 @@ export class MemoryManager {
     authorId,
     authorName,
     content,
+    isBot = false,
     trace = { guildId: null, channelId: null, userId: null, source: null }
   }) {
     if (!String(messageId || "").startsWith("voice-")) return;
@@ -152,7 +156,7 @@ export class MemoryManager {
         authorName: String(authorName || "unknown")
           .replace(/\s+/g, " ")
           .trim() || "unknown",
-        isBot: false,
+        isBot: Boolean(isBot),
         content: cleanedContent
       });
     } catch (error) {

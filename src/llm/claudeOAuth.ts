@@ -10,7 +10,7 @@ const CLAUDE_OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
 const CLAUDE_OAUTH_AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const CLAUDE_OAUTH_SCOPES = "org:create_api_key user:profile user:inference";
 const CLAUDE_CLI_USER_AGENT = "claude-cli/2.1.2 (external, cli)";
-const TOOL_PREFIX = "mcp_";
+const TOOL_PREFIX = "";
 const REQUIRED_BETA_HEADERS = ["oauth-2025-04-20", "interleaved-thinking-2025-05-14"];
 
 const TOKEN_FILE_PATH = join("data", "claude-oauth-tokens.json");
@@ -89,6 +89,7 @@ async function refreshAccessToken(tokens: ClaudeOAuthTokens): Promise<ClaudeOAut
 }
 
 function prefixToolNames(body: string): string {
+  if (!TOOL_PREFIX) return body;
   try {
     const parsed = JSON.parse(body);
 
@@ -120,6 +121,7 @@ function prefixToolNames(body: string): string {
 }
 
 function stripToolPrefix(text: string): string {
+  if (!TOOL_PREFIX) return text;
   return text.replace(/"name"\s*:\s*"mcp_([^"]+)"/g, '"name": "$1"');
 }
 

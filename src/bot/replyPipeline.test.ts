@@ -295,3 +295,96 @@ test("maybeReplyToMessagePipeline treats an aborted in-flight reply as handled a
     assert.equal(replyPayloads.length, 0);
   });
 });
+
+test("maybeReplyToMessagePipeline recovers unstructured model output as prose reply", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+
+    const replyPayloads: Array<Record<string, unknown>> = [];
+    const channelSendPayloads: Array<Record<string, unknown>> = [];
+    const typingCallsRef = { count: 0 };
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate() {
+          return {
+            text: "I need to consider the context here before I answer.",
+            toolCalls: [],
+            rawContent: null,
+            provider: "claude-oauth",
+            model: "claude-opus-4-6",
+            usage: {
+              inputTokens: 10,
+              outputTokens: 8,
+              cacheWriteTokens: 0,
+              cacheReadTokens: 0
+            },
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+
+    const guild = buildGuild();
+    const channel = buildChannel({
+      guild,
+      channelId,
+      channelSendPayloads,
+      typingCallsRef
+    });
+    const message = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-1",
+      content: "play daft punk",
+      replyPayloads
+    });
+    const settings = store.getSettings();
+    const runtime = buildReplyPipelineRuntime(bot, {
+      captionTimestamps: [],
+      unsolicitedReplyContextWindow: 2
+    });
+
+    const handled = await maybeReplyToMessagePipeline(runtime, message, settings, {
+      source: "text_thought_loop",
+      forceDecisionLoop: true,
+      recentMessages: [],
+      triggerMessageIds: [message.id],
+      addressSignal: {
+        direct: false,
+        inferred: false,
+        triggered: false,
+        reason: "llm_decides",
+        confidence: 0,
+        threshold: 0.62,
+        confidenceSource: "fallback"
+      }
+    });
+
+    assert.equal(handled, true);
+    assert.equal(typingCallsRef.count, 1);
+    const sentPayload = channelSendPayloads[0] || replyPayloads[0];
+    assert.ok(sentPayload, "expected a sent message (via channel.send or message.reply)");
+    assert.equal(
+      sentPayload?.content,
+      "I need to consider the context here before I answer."
+    );
+
+    const warning = store.getRecentActions(10).find((entry) => entry.kind === "bot_warning");
+    assert.equal(warning?.content, "structured_output_recovered_as_prose");
+  });
+});
