@@ -51,6 +51,9 @@ export class XaiRealtimeClient extends EventEmitter {
   lastOutboundEventAt;
   lastOutboundEvent;
   recentOutboundEvents;
+  sessionConfig;
+  activeResponseId;
+  activeResponseStatus;
   audioBase64Buffer: Buffer | null;
 
   constructor({ apiKey, logger = null }) {
@@ -68,6 +71,9 @@ export class XaiRealtimeClient extends EventEmitter {
     this.lastOutboundEventAt = 0;
     this.lastOutboundEvent = null;
     this.recentOutboundEvents = [];
+    this.sessionConfig = null;
+    this.activeResponseId = null;
+    this.activeResponseStatus = null;
     this.audioBase64Buffer = null;
   }
 
@@ -78,7 +84,9 @@ export class XaiRealtimeClient extends EventEmitter {
     inputAudioFormat = "audio/pcm",
     outputAudioFormat = "audio/pcm",
     inputSampleRateHz = 24000,
-    outputSampleRateHz = 24000
+    outputSampleRateHz = 24000,
+    tools = [],
+    toolChoice = "auto"
   } = {}) {
     if (!this.apiKey) {
       throw new Error("Missing XAI_API_KEY for realtime voice runtime.");
@@ -108,32 +116,32 @@ export class XaiRealtimeClient extends EventEmitter {
       });
     });
 
-    this.send({
-      type: "session.update",
-      session: compactObject({
-        voice,
-        instructions,
-        audio: {
-          input: {
-            format: {
-              type: inputAudioFormat,
-              rate: Number(inputSampleRateHz) || 24000
-            }
-          },
-          output: {
-            format: {
-              type: outputAudioFormat,
-              rate: Number(outputSampleRateHz) || 24000
-            }
+    this.sessionConfig = {
+      voice: String(voice || "Rex").trim() || "Rex",
+      instructions: String(instructions || ""),
+      region: String(region || "us-east-1").trim() || "us-east-1",
+      audio: {
+        input: {
+          format: {
+            type: String(inputAudioFormat || "audio/pcm").trim() || "audio/pcm",
+            rate: Number(inputSampleRateHz) || 24000
           }
         },
-        turn_detection: {
-          type: null
-        },
-        region,
-        modalities: ["audio", "text"]
-      })
-    });
+        output: {
+          format: {
+            type: String(outputAudioFormat || "audio/pcm").trim() || "audio/pcm",
+            rate: Number(outputSampleRateHz) || 24000
+          }
+        }
+      },
+      turn_detection: {
+        type: null
+      },
+      modalities: ["audio", "text"],
+      tools: normalizeXaiRealtimeTools(tools),
+      toolChoice: normalizeXaiRealtimeToolChoice(toolChoice)
+    };
+    this.sendSessionUpdate();
 
     return this.getState();
   }
@@ -172,7 +180,16 @@ export class XaiRealtimeClient extends EventEmitter {
     }
 
     if (event.type === "response.created") {
-      this._responseInProgress = true;
+      const responseId =
+        event.response?.id ||
+        event.response_id ||
+        event.id ||
+        null;
+      const responseStatus =
+        event.response?.status ||
+        event.status ||
+        "in_progress";
+      this.setActiveResponse(responseId, responseStatus);
     }
 
     if (event.type === "error") {
@@ -230,7 +247,16 @@ export class XaiRealtimeClient extends EventEmitter {
     }
 
     if (event.type === "response.done") {
-      this._responseInProgress = false;
+      const responseId =
+        event.response?.id ||
+        event.response_id ||
+        event.id ||
+        null;
+      const responseStatus =
+        event.response?.status ||
+        event.status ||
+        "completed";
+      this.finishActiveResponse(responseId, responseStatus);
       this.emit("response_done", event);
     }
   }
@@ -272,6 +298,7 @@ export class XaiRealtimeClient extends EventEmitter {
     // immediately, closing the TOCTOU window between the send and the async
     // response.created event from the server.
     this._responseInProgress = true;
+    this.activeResponseStatus = "in_progress";
     this.send({
       type: "response.create",
       response: {
@@ -285,6 +312,7 @@ export class XaiRealtimeClient extends EventEmitter {
       this.send({
         type: "response.cancel"
       });
+      this.clearActiveResponse("cancelled");
       return true;
     } catch (error) {
       this.log("warn", "xai_realtime_response_cancel_failed", {
@@ -297,33 +325,73 @@ export class XaiRealtimeClient extends EventEmitter {
   requestTextUtterance(promptText) {
     const prompt = String(promptText || "").trim();
     if (!prompt) return;
-    this.send({
-      type: "conversation.item.create",
-      item: {
-        type: "message",
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: prompt
-          }
-        ]
-      }
-    });
+    this.sendTextConversationItem(prompt);
+    this.createAudioResponse();
+  }
+
+  requestPlaybackUtterance(promptText) {
+    const prompt = String(promptText || "").trim();
+    if (!prompt) return;
+    this.sendTextConversationItem(prompt);
     this.createAudioResponse();
   }
 
   updateInstructions(instructions: string) {
-    this.send({
-      type: "session.update",
-      session: { instructions }
-    });
+    if (!this.sessionConfig || typeof this.sessionConfig !== "object") {
+      throw new Error("xAI realtime session config is not initialized.");
+    }
+    this.sessionConfig = {
+      ...this.sessionConfig,
+      instructions: String(instructions || "")
+    };
+    this.sendSessionUpdate();
   }
 
-  updateTools(tools: Array<{ type: string; name: string; description: string; parameters: object }>) {
+  updateTools({
+    tools = [],
+    toolChoice = "auto"
+  }: {
+    tools?: Array<{ type: string; name: string; description: string; parameters: object }>;
+    toolChoice?: string;
+  } = {}) {
+    if (!this.sessionConfig || typeof this.sessionConfig !== "object") {
+      throw new Error("xAI realtime session config is not initialized.");
+    }
+    this.sessionConfig = {
+      ...this.sessionConfig,
+      tools: normalizeXaiRealtimeTools(tools),
+      toolChoice: normalizeXaiRealtimeToolChoice(toolChoice)
+    };
+    this.sendSessionUpdate();
+  }
+
+  sendFunctionCallOutput({
+    callId = "",
+    output = ""
+  } = {}) {
+    const normalizedCallId = String(callId || "").trim();
+    if (!normalizedCallId) {
+      throw new Error("xAI realtime function_call_output requires a callId.");
+    }
+
+    let normalizedOutput = "";
+    if (typeof output === "string") {
+      normalizedOutput = output;
+    } else {
+      try {
+        normalizedOutput = JSON.stringify(output ?? null);
+      } catch {
+        normalizedOutput = String(output ?? "");
+      }
+    }
+
     this.send({
-      type: "session.update",
-      session: { tools }
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: normalizedCallId,
+        output: normalizedOutput
+      }
     });
   }
 
@@ -353,16 +421,117 @@ export class XaiRealtimeClient extends EventEmitter {
 
     this.ws = null;
     this.audioBase64Buffer = null;
+    this.clearActiveResponse();
   }
 
   getState() {
-    return buildCommonRealtimeState(this);
+    return {
+      ...buildCommonRealtimeState(this),
+      activeResponseId: this.activeResponseId || null,
+      activeResponseStatus: this.activeResponseStatus || null
+    };
   }
 
   log(level, event, metadata = null) {
     if (!this.logger) return;
     this.logger({ level, event, metadata });
   }
+
+  sendSessionUpdate() {
+    if (!this.sessionConfig || typeof this.sessionConfig !== "object") {
+      throw new Error("xAI realtime session config is not initialized.");
+    }
+    this.send({
+      type: "session.update",
+      session: compactObject({
+        voice: this.sessionConfig.voice,
+        instructions: this.sessionConfig.instructions,
+        audio: this.sessionConfig.audio,
+        turn_detection: this.sessionConfig.turn_detection,
+        region: this.sessionConfig.region,
+        modalities: this.sessionConfig.modalities,
+        tools: this.sessionConfig.tools
+      })
+    });
+  }
+
+  sendTextConversationItem(prompt) {
+    this.send({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: prompt
+          }
+        ]
+      }
+    });
+  }
+
+  setActiveResponse(responseId, status = "in_progress") {
+    const normalizedId = responseId ? String(responseId).trim() : "";
+    const normalizedStatus = String(status || "in_progress").trim() || "in_progress";
+    this._responseInProgress = true;
+    if (normalizedId) {
+      this.activeResponseId = normalizedId;
+    }
+    this.activeResponseStatus = normalizedStatus;
+  }
+
+  finishActiveResponse(responseId = null, status = "completed") {
+    const normalizedStatus = String(status || "completed")
+      .trim()
+      .toLowerCase();
+    const normalizedId = responseId ? String(responseId).trim() : "";
+    if (!normalizedId || !this.activeResponseId || normalizedId === this.activeResponseId) {
+      this.clearActiveResponse(normalizedStatus || "completed");
+      return;
+    }
+    if (TERMINAL_RESPONSE_STATUSES.has(normalizedStatus)) {
+      this.clearActiveResponse(normalizedStatus);
+    }
+  }
+
+  clearActiveResponse(status = null) {
+    this._responseInProgress = false;
+    this.activeResponseId = null;
+    this.activeResponseStatus = status ? String(status).trim() || null : null;
+  }
+}
+
+const TERMINAL_RESPONSE_STATUSES = new Set([
+  "completed",
+  "cancelled",
+  "failed",
+  "incomplete"
+]);
+
+function normalizeXaiRealtimeTools(tools) {
+  return (Array.isArray(tools) ? tools : [])
+    .map((tool) => {
+      if (!tool || typeof tool !== "object") return null;
+      const type = String(tool.type || "").trim();
+      const name = String(tool.name || "").trim();
+      if (!type || !name) return null;
+      return {
+        type,
+        name,
+        description: String(tool.description || "").trim(),
+        parameters:
+          tool.parameters && typeof tool.parameters === "object" && !Array.isArray(tool.parameters)
+            ? tool.parameters
+            : { type: "object", properties: {}, additionalProperties: true }
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeXaiRealtimeToolChoice(toolChoice) {
+  const normalized = String(toolChoice || "auto").trim().toLowerCase();
+  return normalized === "none" ? "none" : "auto";
 }
 
 function summarizeOutboundPayload(payload) {
@@ -404,7 +573,8 @@ function summarizeOutboundPayload(payload) {
         session?.turn_detection && typeof session.turn_detection === "object"
           ? String(session.turn_detection.type || "")
           : null,
-      instructionsChars: session.instructions ? String(session.instructions).length : 0
+      instructionsChars: session.instructions ? String(session.instructions).length : 0,
+      toolsCount: Array.isArray(session.tools) ? session.tools.length : 0
     });
   }
 

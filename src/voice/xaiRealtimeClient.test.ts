@@ -21,6 +21,21 @@ test("XaiRealtimeClient requestTextUtterance sends text item then audio response
   assert.deepEqual(outbound[1]?.response?.modalities, ["audio", "text"]);
 });
 
+test("XaiRealtimeClient requestPlaybackUtterance sends exact-line prompt through the same playback lane", () => {
+  const client = new XaiRealtimeClient({ apiKey: "test-key" });
+  const outbound = [];
+  client.send = (payload) => {
+    outbound.push(payload);
+  };
+
+  client.requestPlaybackUtterance("say this exactly");
+
+  assert.equal(outbound.length, 2);
+  assert.equal(outbound[0]?.type, "conversation.item.create");
+  assert.equal(outbound[0]?.item?.content?.[0]?.text, "say this exactly");
+  assert.equal(outbound[1]?.type, "response.create");
+});
+
 test("XaiRealtimeClient appendInputAudioPcm encodes and sends audio chunk", () => {
   const client = new XaiRealtimeClient({ apiKey: "test-key" });
   const outbound = [];
@@ -40,12 +55,73 @@ test("XaiRealtimeClient cancelActiveResponse sends response.cancel", () => {
   client.send = (payload) => {
     outbound.push(payload);
   };
+  client.setActiveResponse("resp-1");
 
   const cancelled = client.cancelActiveResponse();
 
   assert.equal(cancelled, true);
   assert.equal(outbound.length, 1);
   assert.equal(outbound[0]?.type, "response.cancel");
+  assert.equal(client.isResponseInProgress(), false);
+  assert.equal(client.getState().activeResponseId, null);
+  assert.equal(client.getState().activeResponseStatus, "cancelled");
+});
+
+test("XaiRealtimeClient updateTools sends provider-native tools via session.update", () => {
+  const client = new XaiRealtimeClient({ apiKey: "test-key" });
+  const outbound = [];
+  client.send = (payload) => {
+    outbound.push(payload);
+  };
+  client.sessionConfig = {
+    voice: "Rex",
+    instructions: "brief",
+    region: "us-east-1",
+    audio: {
+      input: { format: { type: "audio/pcm", rate: 24000 } },
+      output: { format: { type: "audio/pcm", rate: 24000 } }
+    },
+    turn_detection: { type: null },
+    modalities: ["audio", "text"],
+    tools: [],
+    toolChoice: "auto"
+  };
+
+  client.updateTools({
+    tools: [
+      {
+        type: "function",
+        name: "lookup_docs",
+        description: "Lookup docs",
+        parameters: { type: "object", properties: {} }
+      }
+    ],
+    toolChoice: "auto"
+  });
+
+  assert.equal(outbound.length, 1);
+  assert.equal(outbound[0]?.type, "session.update");
+  assert.equal(Array.isArray(outbound[0]?.session?.tools), true);
+  assert.equal(outbound[0]?.session?.tools?.[0]?.name, "lookup_docs");
+});
+
+test("XaiRealtimeClient sendFunctionCallOutput emits function_call_output item", () => {
+  const client = new XaiRealtimeClient({ apiKey: "test-key" });
+  const outbound = [];
+  client.send = (payload) => {
+    outbound.push(payload);
+  };
+
+  client.sendFunctionCallOutput({
+    callId: "call-1",
+    output: { ok: true }
+  });
+
+  assert.equal(outbound.length, 1);
+  assert.equal(outbound[0]?.type, "conversation.item.create");
+  assert.equal(outbound[0]?.item?.type, "function_call_output");
+  assert.equal(outbound[0]?.item?.call_id, "call-1");
+  assert.equal(outbound[0]?.item?.output, JSON.stringify({ ok: true }));
 });
 
 test("XaiRealtimeClient handleIncoming emits audio, transcript, response_done, and error metadata", () => {
@@ -60,6 +136,15 @@ test("XaiRealtimeClient handleIncoming emits audio, transcript, response_done, a
   client.on("response_done", (event) => done.push(event));
   client.on("error_event", (event) => errors.push(event));
 
+  client.handleIncoming(
+    JSON.stringify({
+      type: "response.created",
+      response: {
+        id: "resp-created-1",
+        status: "in_progress"
+      }
+    })
+  );
   client.handleIncoming(
     JSON.stringify({
       type: "response.audio.delta",
@@ -87,6 +172,8 @@ test("XaiRealtimeClient handleIncoming emits audio, transcript, response_done, a
   assert.equal(transcripts[0]?.text, "spoken text");
   assert.equal(done.length, 1);
   assert.equal(done[0]?.response?.id, "resp-1");
+  assert.equal(client.getState().activeResponseId, null);
+  assert.equal(client.getState().activeResponseStatus, "completed");
 
   client.lastOutboundEventType = "session.update";
   client.lastOutboundEvent = { type: "session.update" };
