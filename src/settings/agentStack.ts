@@ -535,7 +535,6 @@ function normalizeResolvedVoiceRuntime(value: unknown, fallback: string) {
   if (normalized === "voice_agent") return "voice_agent";
   if (normalized === "gemini_realtime") return "gemini_realtime";
   if (normalized === "elevenlabs_realtime") return "elevenlabs_realtime";
-  if (normalized === "stt_pipeline") return "stt_pipeline";
   return fallback;
 }
 

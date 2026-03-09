@@ -571,7 +571,7 @@ test("generateVoiceTurnReply streams sentence chunks when voice streaming is ena
   assert.equal(reply.streamedSentenceCount, 2);
 });
 
-test("generateVoiceTurnReply streams an unpunctuated first chunk once it reaches a clean word boundary", async () => {
+test("generateVoiceTurnReply keeps the first streamed chunk intact until punctuation arrives", async () => {
   const streamed: string[] = [];
   const { bot } = createVoiceBot({
     generationSequence: [
@@ -599,9 +599,9 @@ test("generateVoiceTurnReply streams an unpunctuated first chunk once it reaches
     }
   });
 
-  assert.deepEqual(streamed, ["yo vuhlp, what's good", "right now"]);
+  assert.deepEqual(streamed, ["yo vuhlp, what's good right now"]);
   assert.equal(reply.text, "yo vuhlp, what's good right now");
-  assert.equal(reply.streamedSentenceCount, 2);
+  assert.equal(reply.streamedSentenceCount, 1);
 });
 
 test("generateVoiceTurnReply preserves spoken text across tool-loop turns", async () => {

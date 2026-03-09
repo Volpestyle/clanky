@@ -1,5 +1,6 @@
 # Repository Instructions
 
+- Include a 'Product language' conclusion in your messages and commit messages when it seems like it makes sense.
 - Refer to docs/openai/openai-realtime-transcription.md when working with openai realtime transcripton or ASR.
 - Refer to docs/openai/openai-realtime-speech.md when working with openai realtime speech.
 - Runtime/package manager standard: use Bun (`bun`, `bun run`, `bunx`) over Node/NPM (`node`, `npm`, `npx`) unless explicitly requested.

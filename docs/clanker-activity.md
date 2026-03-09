@@ -204,7 +204,7 @@ Decision flow:
 - Command followup → fast-path allow
 - Eagerness disabled → block
 - Addressed-to-other signal → classifier context (strong deny prior, not hard deterministic block)
-- STT pipeline mode → `generation_decides` (the text LLM handles skip via `[SKIP]`)
+- Full-brain/file-ASR path → `generation_decides` (the text LLM handles skip via `[SKIP]`)
 - Music playing and no wake latch → `music_playing_not_awake`
 - `voice.admission.mode=classifier_gate` → classifier YES/NO → `classifier_allow` / `classifier_deny`
 - `voice.admission.mode=generation_decides` → `generation_decides`
@@ -217,7 +217,7 @@ Relevant code:
 - `evaluateVoiceReplyDecision(...)` in `src/voice/voiceReplyDecision.ts`
 - `runVoiceReplyClassifier(...)` in `src/voice/voiceReplyDecision.ts`
 - `buildVoiceAddressingState(...)` in `src/voice/voiceAddressing.ts`
-- `runRealtimeTurn(...)` and `runSttPipelineTurn(...)` in `src/voice/turnProcessor.ts`
+- `runRealtimeTurn(...)` and `runFileAsrTurn(...)` in `src/voice/turnProcessor.ts`
 
 ### 7. Voice Thought Engine
 
@@ -255,7 +255,7 @@ There are three voice runtime styles to keep in mind:
     - `classifier_gate`: YES/NO classifier gate
     - `generation_decides`: generation decides reply vs skip
 
-- `stt_pipeline`
+- `brain` with `voice.openaiRealtime.transcriptionMethod="file_wav"` and/or `voice.ttsMode="api"`
   - transcription, text generation, and TTS are separate stages
   - the text LLM decides whether to reply or `[SKIP]` (reason: `generation_decides`)
 
@@ -440,7 +440,7 @@ These affect discovery posts only, not normal conversation replies.
 - `agentStack.runtimeConfig.voice.generation.*`
   - model used for voice-turn generation in non-native generation paths and `generation_decides` admission behavior
 
-- `voice.openaiRealtime.*`, `voice.geminiRealtime.*`, `voice.elevenLabsRealtime.*`, `voice.sttPipeline.*`
+- `voice.openaiRealtime.*`, `voice.geminiRealtime.*`, `voice.elevenLabsRealtime.*`, `voice.openaiAudioApi.*`
   - provider- and transport-specific controls
 
 ## Tool Calling Model
@@ -490,7 +490,7 @@ Realtime voice has its own transport, but the same conceptual tool model:
 Important operator expectation:
 
 - the tool surface is mostly shared
-- the transport differs between text replies, STT pipeline, and realtime function calls
+- the transport differs between native realtime, bridge, and full-brain/API-override replies
 - some tools remain modality-specific when they only make sense in voice
 
 Relevant code:

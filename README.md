@@ -74,7 +74,7 @@ For optional local code-agent runtimes, ensure `claude` and/or `codex` CLI is on
 ### Provider Notes
 
 - `XAI_API_KEY` — Grok text models, `voice_agent` mode, Grok Imagine media generation
-- `OPENAI_API_KEY` — `openai_realtime` voice mode, STT pipeline mode
+- `OPENAI_API_KEY` — `openai_realtime` voice mode and OpenAI file-ASR/API-TTS voice overrides
 - `CODEX_OAUTH_REFRESH_TOKEN` — experimental ChatGPT-backed Codex/OpenAI provider (`codex-oauth`)
 - `GOOGLE_API_KEY` — `gemini_realtime` voice mode
 - `ELEVENLABS_API_KEY` — `elevenlabs_realtime` voice mode

@@ -624,7 +624,16 @@ test("generateStreaming falls back to batch generation for non-streaming provide
 
   const deltas: string[] = [];
   const result = await service.generateStreaming({
-    settings: { llm: { provider: "xai", model: "grok-3-mini-latest" } },
+    settings: {
+      agentStack: {
+        overrides: {
+          orchestrator: {
+            provider: "xai",
+            model: "grok-3-mini-latest"
+          }
+        }
+      }
+    },
     systemPrompt: "system",
     userPrompt: "user",
     contextMessages: [],

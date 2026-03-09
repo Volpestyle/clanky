@@ -30,7 +30,7 @@ By default judge scoring is enabled in both simulated and live runs. Use `--no-j
 ```sh
 bun scripts/voiceGoldenHarness.ts \
   --mode live \
-  --modes stt_pipeline,voice_agent,openai_realtime,gemini_realtime,elevenlabs_realtime \
+  --modes voice_agent,openai_realtime,gemini_realtime,elevenlabs_realtime \
   --iterations 1 \
   --judge-provider claude-oauth \
   --judge-model claude-haiku-4-5 \
@@ -554,7 +554,7 @@ For deeper validation beyond byte counting:
 // Capture raw audio
 const audioBuffer = driver.getReceivedAudioBuffer();
 
-// Transcribe it (reuse existing STT pipeline)
+// Transcribe it (reuse the existing speech-transcription helper)
 const transcript = await transcribeWithStt(audioBuffer);
 
 // Judge quality (reuse existing judge infrastructure)

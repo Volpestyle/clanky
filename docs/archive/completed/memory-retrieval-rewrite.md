@@ -102,7 +102,7 @@ Replace the `loadPromptMemorySlice` callback parameter with `loadFactProfile`:
 
 The return shape stays the same: `{ memorySlice, recentWebLookups, recentConversationHistory, adaptiveDirectives }`.
 
-### 3b. Update voice STT pipeline caller
+### 3b. Update legacy voice file-ASR caller
 
 **File:** `src/bot/voiceReplies.ts`
 

@@ -9,14 +9,16 @@ import {
   getResolvedFollowupBinding,
   getResolvedMemoryBinding,
   getResolvedVisionBinding,
-  getResolvedVoiceProvider,
   getResolvedVoiceInitiativeBinding,
   getResolvedVoiceAdmissionClassifierBinding,
   getResolvedVoiceGenerationBinding,
-  getVoiceAdmissionSettings,
   getVoiceRuntimeConfig,
   resolveAgentStack
 } from "../settings/agentStack.ts";
+import {
+  normalizeVoiceAdmissionModeForDashboard,
+  resolveVoiceRuntimeSelectionFromMode
+} from "../settings/voiceDashboardMappings.ts";
 import { normalizeSettings } from "../store/settingsNormalization.ts";
 import { readDashboardBody, toRecord } from "./shared.ts";
 
@@ -49,7 +51,6 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
     const preset = String(body.preset || "openai_native").trim();
     const settings = normalizeSettings({ agentStack: { preset } });
     const resolved = resolveSettingsBindings(settings);
-    const voiceAdmission = getVoiceAdmissionSettings(settings);
     const voiceRuntime = getVoiceRuntimeConfig(settings);
     const classifierFallback = resolved.voiceAdmissionClassifierBinding || resolved.orchestrator;
     const generationBinding = resolved.voiceGenerationBinding;
@@ -57,7 +58,9 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
       stackPreset: preset,
       provider: resolved.orchestrator.provider,
       model: resolved.orchestrator.model,
-      voiceReplyDecisionRealtimeAdmissionMode: String(voiceAdmission.mode || "adaptive"),
+      voiceReplyDecisionRealtimeAdmissionMode: normalizeVoiceAdmissionModeForDashboard(
+        resolved.agentStack.voiceAdmissionPolicy.mode
+      ),
       voiceReplyDecisionLlmProvider: classifierFallback.provider,
       voiceReplyDecisionLlmModel: classifierFallback.model,
       voiceGenerationLlmUseTextModel: voiceRuntime.generation?.mode !== "dedicated_model",
@@ -211,7 +214,7 @@ function resolveSettingsBindings(settings: unknown) {
     followupBinding: getResolvedFollowupBinding(settings),
     memoryBinding: getResolvedMemoryBinding(settings),
     visionBinding: getResolvedVisionBinding(settings),
-    voiceProvider: getResolvedVoiceProvider(settings),
+    voiceProvider: resolveVoiceRuntimeSelectionFromMode(getVoiceRuntimeConfig(settings).runtimeMode),
     voiceInitiativeBinding: getResolvedVoiceInitiativeBinding(settings),
     voiceAdmissionClassifierBinding: getResolvedVoiceAdmissionClassifierBinding(settings),
     voiceGenerationBinding: getResolvedVoiceGenerationBinding(settings)

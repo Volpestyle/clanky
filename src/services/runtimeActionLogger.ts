@@ -145,16 +145,16 @@ function formatSkipBadge(skipKind) {
 }
 
 function formatSkipReason(payload, skipKind) {
-  const meta = payload.metadata;
-  if (!meta || typeof meta !== "object") return "";
+  const rawMeta = payload.metadata;
+  if (!rawMeta || typeof rawMeta !== "object") return "";
   if (skipKind === "deny") {
-    const reason = meta.reason || meta.classifierReason || "";
-    const classifier = meta.classifierDecision || "";
-    const confidence = Number.isFinite(meta.classifierConfidence)
-      ? ` conf=${Number(meta.classifierConfidence).toFixed(2)}`
+    const reason = rawMeta.reason || rawMeta.classifierReason || "";
+    const classifier = rawMeta.classifierDecision || "";
+    const confidence = Number.isFinite(rawMeta.classifierConfidence)
+      ? ` conf=${Number(rawMeta.classifierConfidence).toFixed(2)}`
       : "";
-    const latency = Number.isFinite(meta.classifierLatencyMs)
-      ? ` ${meta.classifierLatencyMs}ms`
+    const latency = Number.isFinite(rawMeta.classifierLatencyMs)
+      ? ` ${rawMeta.classifierLatencyMs}ms`
       : "";
     const parts = [];
     if (reason) parts.push(`${BRIGHT_RED}${reason}${RESET}`);
@@ -167,12 +167,17 @@ function formatSkipReason(payload, skipKind) {
     const content = String(payload.content || "").trim();
     return content ? `  ${BRIGHT_RED}${content}${RESET}` : "";
   }
-  // "drop" — show the drop reason from event name
+  // "drop" — show the drop reason from event name or metadata
+  const meta = isPlainObject(payload.metadata) ? payload.metadata : {};
+  const skipCause = String(meta.skipCause || "").trim();
+  if (skipCause) {
+    return `  ${BRIGHT_YELLOW}${skipCause}${RESET}`;
+  }
   const event = String(payload.event || "");
   const shortReason = event
     .replace(/^voice_turn_dropped_/, "")
     .replace(/^realtime_turn_/, "")
-    .replace(/^stt_pipeline_turn_/, "");
+    .replace(/^file_asr_turn_/, "");
   return shortReason !== event ? `  ${DIM}${shortReason}${RESET}` : "";
 }
 
