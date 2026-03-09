@@ -78,7 +78,13 @@ export class DiscoveryService {
     recentMessages
   }) {
     const config = normalizeDiscoveryConfig(getDiscoverySettings(settings));
-    if (!config.enabled) {
+    const sourceTasksEnabled =
+      config.sources.reddit && config.redditSubreddits.length ||
+      config.sources.hackerNews ||
+      config.sources.youtube && config.youtubeChannelIds.length ||
+      config.sources.rss && config.rssFeeds.length ||
+      config.sources.x && config.xHandles.length;
+    if (!sourceTasksEnabled) {
       return {
         enabled: false,
         topics: [],
@@ -91,7 +97,6 @@ export class DiscoveryService {
     }
 
     const topics = buildTopicSeeds({
-      preferredTopics: config.preferredTopics,
       recentMessages,
       channelName
     });
@@ -444,8 +449,6 @@ function normalizeDiscoveryConfig(rawConfig) {
   const sources = cfg.sources && typeof cfg.sources === "object" ? cfg.sources : {};
 
   return {
-    enabled: cfg.enabled !== undefined ? Boolean(cfg.enabled) : true,
-    linkChancePercent: clamp(Number(cfg.linkChancePercent) || 80, 0, 100),
     maxLinksPerPost: clamp(Number(cfg.maxLinksPerPost) || 2, 1, 4),
     maxCandidatesForPrompt: clamp(Number(cfg.maxCandidatesForPrompt) || 6, 1, 12),
     freshnessHours: clamp(Number(cfg.freshnessHours) || 96, 1, 24 * 14),
@@ -453,7 +456,8 @@ function normalizeDiscoveryConfig(rawConfig) {
     randomness: clamp(Number(cfg.randomness) || 55, 0, 100),
     sourceFetchLimit: clamp(Number(cfg.sourceFetchLimit) || 10, 2, 30),
     allowNsfw: Boolean(cfg.allowNsfw),
-    preferredTopics: stringList(cfg.preferredTopics, 16, 80),
+    allowSelfCuration: cfg.allowSelfCuration !== undefined ? Boolean(cfg.allowSelfCuration) : true,
+    maxSourcesPerType: clamp(Number(cfg.maxSourcesPerType) || 10, 1, 50),
     redditSubreddits: stringList(cfg.redditSubreddits, 20, 40)
       .map((entry) => entry.replace(/^r\//i, ""))
       .filter(Boolean),
@@ -498,8 +502,8 @@ function stringList(input, maxItems, maxLen) {
     .map((item) => item.slice(0, maxLen));
 }
 
-function buildTopicSeeds({ preferredTopics, recentMessages, channelName }) {
-  const topics = stringList(preferredTopics, 16, 40);
+function buildTopicSeeds({ recentMessages, channelName }) {
+  const topics = [];
   const counts = new Map();
 
   const words = [

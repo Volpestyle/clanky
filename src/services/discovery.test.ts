@@ -25,7 +25,7 @@ test("normalizeDiscoveryUrl strips trackers, hash, and default ports", () => {
   assert.equal(normalizeDiscoveryUrl(""), null);
 });
 
-test("DiscoveryService.collect returns disabled payload when discovery is off", async () => {
+test("DiscoveryService.collect returns disabled payload when all feed sources are off", async () => {
   const service = new DiscoveryService({
     store: {
       wasLinkSharedSince() {
@@ -38,7 +38,6 @@ test("DiscoveryService.collect returns disabled payload when discovery is off", 
     settings: normalizeSettings({
       initiative: {
         discovery: {
-          enabled: false,
           sources: {
             reddit: false,
             hackerNews: false,
@@ -160,17 +159,16 @@ test("DiscoveryService.collect dedupes, filters, and aggregates source errors", 
     const result = await service.collect({
       settings: normalizeSettings({
         initiative: {
-          discovery: {
-            maxLinksPerPost: 2,
-            maxCandidatesForPrompt: 6,
-            freshnessHours: 48,
-            dedupeHours: 24,
-            randomness: 0,
-            allowNsfw: false,
-            preferredTopics: ["space"],
-            redditSubreddits: ["r/space"],
-            rssFeeds: ["https://feeds.example.org/rss"],
-            sources: {
+        discovery: {
+          maxLinksPerPost: 2,
+          maxCandidatesForPrompt: 6,
+          freshnessHours: 48,
+          dedupeHours: 24,
+          randomness: 0,
+          allowNsfw: false,
+          redditSubreddits: ["r/space"],
+          rssFeeds: ["https://feeds.example.org/rss"],
+          sources: {
               reddit: true,
               hackerNews: true,
               youtube: false,
@@ -196,7 +194,7 @@ test("DiscoveryService.collect dedupes, filters, and aggregates source errors", 
     assert.equal(result.reportBySource.reddit.source, "reddit");
     assert.equal(result.reportBySource.rss.source, "rss");
     assert.equal(result.reportBySource.unknown.source, "unknown");
-    assert.equal(result.topics.some((topic) => String(topic).toLowerCase() === "space"), true);
+    assert.equal(result.topics.some((topic) => String(topic).toLowerCase() === "space-lounge"), true);
     assert.equal(result.topics.some((topic) => String(topic).toLowerCase() === "rockets"), true);
   });
 });

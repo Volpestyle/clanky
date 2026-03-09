@@ -261,6 +261,108 @@ export function formatOpenArticleCandidates(candidates) {
     .join("\n");
 }
 
+function formatPromptRelativeAge(rawValue) {
+  const createdAtMs = Date.parse(String(rawValue || ""));
+  if (!Number.isFinite(createdAtMs)) return "unknown";
+  const deltaMinutes = Math.max(0, Math.round((Date.now() - createdAtMs) / 60000));
+  if (deltaMinutes < 1) return "just now";
+  if (deltaMinutes < 60) return `${deltaMinutes}m ago`;
+  const deltaHours = Math.round(deltaMinutes / 60);
+  if (deltaHours < 24) return `${deltaHours}h ago`;
+  const deltaDays = Math.round(deltaHours / 24);
+  return `${deltaDays}d ago`;
+}
+
+export function formatInitiativeChannelSummaries(channels) {
+  const rows = Array.isArray(channels) ? channels : [];
+  if (!rows.length) return "(no eligible channels)";
+
+  return rows
+    .map((channel) => {
+      const channelName = String(channel?.channelName || channel?.name || "channel").trim() || "channel";
+      const lastHumanSnippet = String(channel?.lastHumanSnippet || "").trim();
+      const lastHumanAt = String(channel?.lastHumanAt || "").trim();
+      const lastHumanLine = lastHumanSnippet && lastHumanAt
+        ? `Last human message: ${formatPromptRelativeAge(lastHumanAt)} - "${lastHumanSnippet}"`
+        : "Last human message: quiet";
+      const lastBotAt = String(channel?.lastBotAt || "").trim();
+      const botLine = lastBotAt
+        ? `Your last message: ${formatPromptRelativeAge(lastBotAt)}`
+        : "Your last message: never";
+      const recentActivity = Number(channel?.recentHumanMessageCount || 0);
+      const activityLine = `Recent human activity: ${recentActivity} message${recentActivity === 1 ? "" : "s"} in the last hour`;
+      const recentMessages = Array.isArray(channel?.recentMessages) ? channel.recentMessages : [];
+      const messageLines = recentMessages.length
+        ? recentMessages
+          .slice(-5)
+          .map((message) => {
+            const author = String(message?.author_name || message?.authorName || "unknown").trim() || "unknown";
+            const text = stripEmojiForPrompt(String(message?.content || ""))
+              .replace(/\s+/g, " ")
+              .trim() || "(empty)";
+            return `  - ${author}: ${text}`;
+          })
+          .join("\n")
+        : "  - (no recent messages captured)";
+      return [
+        `#${channelName} [channelId=${String(channel?.channelId || "").trim()}]`,
+        `  ${lastHumanLine}`,
+        `  ${botLine}`,
+        `  ${activityLine}`,
+        "  Recent context:",
+        messageLines
+      ].join("\n");
+    })
+    .join("\n\n");
+}
+
+export function formatInitiativeFeedCandidates(candidates) {
+  const rows = Array.isArray(candidates) ? candidates : [];
+  if (!rows.length) return "Nothing new in your feed right now.";
+
+  return rows
+    .slice(0, 8)
+    .map((item, index) => {
+      const title = String(item?.title || "untitled").trim() || "untitled";
+      const source = String(item?.sourceLabel || item?.source || "web").trim() || "web";
+      const publishedAt = String(item?.publishedAt || "").trim();
+      const ageLabel = publishedAt ? formatPromptRelativeAge(publishedAt) : "recent";
+      const excerpt = String(item?.excerpt || "").trim();
+      const excerptLine = excerpt ? `\n   Note: ${excerpt}` : "";
+      const url = String(item?.url || "").trim();
+      return `${index + 1}. "${title}"\n   Source: ${source} · ${ageLabel}\n   Link: ${url}${excerptLine}`;
+    })
+    .join("\n\n");
+}
+
+export function formatInitiativeSourcePerformance(sources) {
+  const rows = Array.isArray(sources) ? sources : [];
+  if (!rows.length) return "No source performance data yet.";
+
+  return rows
+    .map((entry) => {
+      const label = String(entry?.label || entry?.source || "source").trim() || "source";
+      const shared = Math.max(0, Number(entry?.sharedCount || 0));
+      const fetched = Math.max(0, Number(entry?.fetchedCount || 0));
+      const engagement = Math.max(0, Number(entry?.engagementCount || 0));
+      const lastUsedAt = String(entry?.lastUsedAt || "").trim();
+      const lastUsedLabel = lastUsedAt ? formatPromptRelativeAge(lastUsedAt) : "never";
+      return `- ${label} - ${shared}/${fetched} candidates shared, ${engagement} engagement signal(s), last used ${lastUsedLabel}`;
+    })
+    .join("\n");
+}
+
+export function formatInitiativeInterestFacts(facts) {
+  const rows = Array.isArray(facts) ? facts : [];
+  if (!rows.length) return "You're still getting to know this community.";
+
+  return rows
+    .slice(0, 8)
+    .map((fact) => `- ${String(fact || "").replace(/\s+/g, " ").trim()}`)
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function formatVideoFindings(videoContext) {
   if (!videoContext?.videos?.length) return "(no video context available)";
 

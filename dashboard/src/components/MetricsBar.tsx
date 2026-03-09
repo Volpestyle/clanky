@@ -38,7 +38,7 @@ export default function MetricsBar({ stats }) {
 
   const tiles: MetricTile[] = [
     { label: "Replies", value: String(s?.last24h?.sent_reply || 0), category: "text" },
-    { label: "Drop-ins", value: String(Number(s?.last24h?.sent_message || 0) + Number(s?.last24h?.discovery_post || 0)), category: "text" },
+    { label: "Drop-ins", value: String(Number(s?.last24h?.sent_message || 0) + Number(s?.last24h?.initiative_post || 0)), category: "text" },
     { label: "Reactions", value: String(s?.last24h?.reacted || 0), category: "text" },
     { label: "Searches", value: String(s?.last24h?.search_call || 0), category: "text" },
     { label: "Memory", value: String(s?.last24h?.memory_extract_call || 0), category: "text" },

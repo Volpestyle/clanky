@@ -203,6 +203,59 @@ export const CODE_TASK_SCHEMA: SharedToolSchema = {
   }
 };
 
+export const DISCOVERY_SOURCE_LIST_SCHEMA: SharedToolSchema = {
+  name: "discovery_source_list",
+  description: "List current discovery feed subscriptions and source-type capacity.",
+  voiceContinuationPolicy: "always",
+  parameters: {
+    type: "object",
+    properties: {},
+    additionalProperties: false
+  }
+};
+
+export const DISCOVERY_SOURCE_ADD_SCHEMA: SharedToolSchema = {
+  name: "discovery_source_add",
+  description: "Subscribe the passive discovery feed to a new source such as a subreddit, RSS feed, YouTube channel ID, or X handle.",
+  voiceContinuationPolicy: "always",
+  parameters: {
+    type: "object",
+    properties: {
+      sourceType: {
+        type: "string",
+        enum: ["reddit", "rss", "youtube", "x"]
+      },
+      value: {
+        type: "string",
+        description: "Subreddit name, RSS feed URL, YouTube channel ID, or X handle."
+      }
+    },
+    required: ["sourceType", "value"],
+    additionalProperties: false
+  }
+};
+
+export const DISCOVERY_SOURCE_REMOVE_SCHEMA: SharedToolSchema = {
+  name: "discovery_source_remove",
+  description: "Remove a current passive discovery source subscription.",
+  voiceContinuationPolicy: "always",
+  parameters: {
+    type: "object",
+    properties: {
+      sourceType: {
+        type: "string",
+        enum: ["reddit", "rss", "youtube", "x"]
+      },
+      value: {
+        type: "string",
+        description: "Subreddit name, RSS feed URL, YouTube channel ID, or X handle."
+      }
+    },
+    required: ["sourceType", "value"],
+    additionalProperties: false
+  }
+};
+
 export const SHARED_TOOL_SCHEMAS: SharedToolSchema[] = [
   WEB_SEARCH_SCHEMA,
   WEB_SCRAPE_SCHEMA,

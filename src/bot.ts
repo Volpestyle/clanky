@@ -45,6 +45,7 @@ import {
   syncMessageSnapshot as syncMessageSnapshotForMessageHistory,
   syncMessageSnapshotFromReaction as syncMessageSnapshotFromReactionForMessageHistory
 } from "./bot/messageHistory.ts";
+import { generateTextCancelAcknowledgement } from "./bot/textCancelAcknowledgement.ts";
 import {
   isChannelAllowed as isChannelAllowedForPermissions,
   isReplyChannel as isReplyChannelForPermissions,
@@ -58,8 +59,8 @@ import {
 } from "./bot/replyAdmission.ts";
 import { runStartupCatchup as runStartupCatchupForStartupCatchup } from "./bot/startupCatchup.ts";
 import {
-  maybeRunDiscoveryCycle as maybeRunDiscoveryCycleForDiscoveryEngine
-} from "./bot/discoveryEngine.ts";
+  maybeRunInitiativeCycle as maybeRunInitiativeCycleForInitiativeEngine
+} from "./bot/initiativeEngine.ts";
 import {
   getVoiceScreenShareCapability as getVoiceScreenShareCapabilityForScreenShare,
   offerVoiceScreenShareLink as offerVoiceScreenShareLinkForScreenShare,
@@ -74,9 +75,6 @@ import {
   maybeRunAutomationCycle as maybeRunAutomationCycleForAutomationEngine
 } from "./bot/automationEngine.ts";
 import {
-  maybeRunTextThoughtLoopCycle as maybeRunTextThoughtLoopCycleForTextThoughtLoop
-} from "./bot/textThoughtLoop.ts";
-import {
   dequeueReplyBurst,
   dequeueReplyJob,
   ensureGatewayHealthy,
@@ -86,11 +84,6 @@ import {
   requeueReplyJobs,
   scheduleReconnect
 } from "./bot/queueGateway.ts";
-import {
-  evaluateDiscoverySchedule,
-  evaluateSpontaneousDiscoverySchedule,
-  pickDiscoveryChannel
-} from "./bot/discoverySchedule.ts";
 import type {
   AgentContext,
   BotContext,
@@ -105,12 +98,11 @@ import {
   buildAutomationEngineRuntime,
   buildBotContext,
   buildBudgetContext,
-  buildDiscoveryEngineRuntime,
+  buildInitiativeRuntime,
   buildMediaAttachmentContext,
   buildQueueGatewayRuntime,
   buildReplyPipelineRuntime,
   buildScreenShareRuntime,
-  buildTextThoughtLoopRuntime,
   buildVoiceCoordinationRuntime,
   buildVoiceReplyRuntime
 } from "./bot/botRuntimeFactories.ts";
@@ -131,13 +123,13 @@ import { SubAgentSessionManager } from "./agents/subAgentSession.ts";
 import {
   getMemorySettings,
   getBotName,
-  getDiscoverySettings,
   getReplyPermissions,
   getActivitySettings,
   isDevTaskEnabled
 } from "./settings/agentStack.ts";
 
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
+const TEXT_CANCEL_FALLBACK_REACTION = "🛑";
 const STARTUP_TASK_DELAY_MS = 4500;
 const INITIATIVE_TICK_MS = 60_000;
 const AUTOMATION_TICK_MS = 30_000;
@@ -265,15 +257,13 @@ export class ClankerBot {
   video;
   lastBotMessageAt;
   memoryTimer;
-  discoveryTimer;
-  textThoughtLoopTimer;
+  initiativeTimer;
   automationTimer;
   gatewayWatchdogTimer;
   reconnectTimeout;
   startupTasksRan;
   startupTimeout;
-  discoveryPosting;
-  textThoughtLoopRunning;
+  initiativeCycleRunning;
   automationCycleRunning;
   reconnectInFlight;
   isStopping;
@@ -308,15 +298,13 @@ export class ClankerBot {
 
     this.lastBotMessageAt = 0;
     this.memoryTimer = null;
-    this.discoveryTimer = null;
-    this.textThoughtLoopTimer = null;
+    this.initiativeTimer = null;
     this.automationTimer = null;
     this.gatewayWatchdogTimer = null;
     this.reconnectTimeout = null;
     this.startupTasksRan = false;
     this.startupTimeout = null;
-    this.discoveryPosting = false;
-    this.textThoughtLoopRunning = false;
+    this.initiativeCycleRunning = false;
     this.automationCycleRunning = false;
     this.reconnectInFlight = false;
     this.isStopping = false;
@@ -402,16 +390,12 @@ export class ClankerBot {
     return buildVoiceCoordinationRuntime(this);
   }
 
-  toDiscoveryEngineRuntime() {
-    return buildDiscoveryEngineRuntime(this);
+  toInitiativeRuntime() {
+    return buildInitiativeRuntime(this);
   }
 
   toAutomationEngineRuntime() {
     return buildAutomationEngineRuntime(this);
-  }
-
-  toTextThoughtLoopRuntime() {
-    return buildTextThoughtLoopRuntime(this);
   }
 
   toQueueGatewayRuntime(): QueueGatewayRuntime {
@@ -737,19 +721,11 @@ export class ClankerBot {
       });
     }, 5 * 60_000);
 
-    this.discoveryTimer = setInterval(() => {
-      maybeRunDiscoveryCycleForDiscoveryEngine(this.toDiscoveryEngineRuntime()).catch((error) => {
+    this.initiativeTimer = setInterval(() => {
+      maybeRunInitiativeCycleForInitiativeEngine(this.toInitiativeRuntime()).catch((error) => {
         this.store.logAction({
           kind: "bot_error",
-          content: `discovery_cycle: ${String(error?.message || error)}`
-        });
-      });
-    }, INITIATIVE_TICK_MS);
-    this.textThoughtLoopTimer = setInterval(() => {
-      maybeRunTextThoughtLoopCycleForTextThoughtLoop(this.toTextThoughtLoopRuntime()).catch((error) => {
-        this.store.logAction({
-          kind: "bot_error",
-          content: `text_thought_loop: ${String(error?.message || error)}`
+          content: `initiative_cycle: ${String(error?.message || error)}`
         });
       });
     }, INITIATIVE_TICK_MS);
@@ -794,12 +770,12 @@ export class ClankerBot {
     this.isStopping = true;
     if (this.startupTimeout) clearTimeout(this.startupTimeout);
     if (this.memoryTimer) clearInterval(this.memoryTimer);
-    if (this.discoveryTimer) clearInterval(this.discoveryTimer);
-    if (this.textThoughtLoopTimer) clearInterval(this.textThoughtLoopTimer);
+    if (this.initiativeTimer) clearInterval(this.initiativeTimer);
     if (this.automationTimer) clearInterval(this.automationTimer);
     if (this.gatewayWatchdogTimer) clearInterval(this.gatewayWatchdogTimer);
     if (this.reflectionTimer) clearInterval(this.reflectionTimer);
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
+    this.initiativeTimer = null;
     this.gatewayWatchdogTimer = null;
     this.reflectionTimer = null;
     this.automationTimer = null;
@@ -1000,6 +976,82 @@ export class ClankerBot {
     return await reconnectGateway(this.toQueueGatewayRuntime(), reason);
   }
 
+  clearQueuedReplies(channelId) {
+    const normalizedChannelId = String(channelId || "").trim();
+    if (!normalizedChannelId) return 0;
+    const queue = this.replyQueues.get(normalizedChannelId);
+    if (!Array.isArray(queue) || queue.length <= 0) return 0;
+    for (const job of queue) {
+      const queuedMessageId = String(job?.message?.id || "").trim();
+      if (queuedMessageId) {
+        this.replyQueuedMessageIds.delete(queuedMessageId);
+      }
+    }
+    this.replyQueues.delete(normalizedChannelId);
+    return queue.length;
+  }
+
+  async acknowledgeTextCancellation({
+    message,
+    settings,
+    cancelText,
+    cancelledReplyCount = 0,
+    cancelledQueuedReplyCount = 0,
+    browserCancelled = false
+  }) {
+    const acknowledgement = await generateTextCancelAcknowledgement({
+      llm: this.llm,
+      settings,
+      guildId: message.guildId || null,
+      channelId: message.channelId || null,
+      userId: message.author?.id || null,
+      messageId: message.id || null,
+      authorName: message.member?.displayName || message.author?.username || "someone",
+      cancelText,
+      cancelledReplyCount,
+      cancelledQueuedReplyCount,
+      browserCancelled
+    });
+
+    if (acknowledgement) {
+      try {
+        const sent = await message.reply({
+          content: acknowledgement,
+          allowedMentions: { repliedUser: false }
+        });
+        this.lastBotMessageAt = Date.now();
+        const botUserId = String(this.client.user?.id || "").trim();
+        if (botUserId && sent?.id) {
+          this.store.recordMessage({
+            messageId: sent.id,
+            createdAt: sent.createdTimestamp,
+            guildId: sent.guildId,
+            channelId: sent.channelId,
+            authorId: botUserId,
+            authorName: getBotName(settings),
+            isBot: true,
+            content: composeMessageContentForHistoryForMessageHistory(
+              sent as Parameters<typeof composeMessageContentForHistoryForMessageHistory>[0],
+              acknowledgement
+            ),
+            referencedMessageId: message.id
+          });
+        }
+        return true;
+      } catch (error) {
+        console.warn("[textCommands] Failed to send cancellation acknowledgement:", error);
+      }
+    }
+
+    try {
+      await message.react(TEXT_CANCEL_FALLBACK_REACTION);
+      return true;
+    } catch (error) {
+      console.warn("[textCommands] Failed to react to cancelled text command:", error);
+      return false;
+    }
+  }
+
   async handleMessage(message) {
     if (!message.guild || !message.channel || !message.author) return;
 
@@ -1043,12 +1095,16 @@ export class ClankerBot {
         browserScopeKey,
         "User requested cancellation via text"
       );
-      if (cancelledReplyCount > 0 || browserCancelled) {
-        try {
-          await message.reply("Cancelled.");
-        } catch (replyError) {
-          console.warn("[textCommands] Failed to send cancellation reply:", replyError);
-        }
+      const cancelledQueuedReplyCount = this.clearQueuedReplies(message.channelId);
+      if (cancelledReplyCount > 0 || cancelledQueuedReplyCount > 0 || browserCancelled) {
+        await this.acknowledgeTextCancellation({
+          message,
+          settings,
+          cancelText: text,
+          cancelledReplyCount,
+          cancelledQueuedReplyCount,
+          browserCancelled
+        });
         return;
       }
     }
@@ -1434,8 +1490,8 @@ export class ClankerBot {
     const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const sentReplies = this.store.countActionsSince("sent_reply", since);
     const sentMessages = this.store.countActionsSince("sent_message", since);
-    const discoveryPosts = this.store.countActionsSince("discovery_post", since);
-    return sentReplies + sentMessages + discoveryPosts < maxPerHour;
+    const initiativePosts = this.store.countActionsSince("initiative_post", since);
+    return sentReplies + sentMessages + initiativePosts < maxPerHour;
   }
 
   isNonPrivateReplyEligibleChannel(channel) {
@@ -1488,7 +1544,6 @@ export class ClankerBot {
       },
       settings
     );
-    await maybeRunDiscoveryCycleForDiscoveryEngine(this.toDiscoveryEngineRuntime(), { startup: true });
     await maybeRunAutomationCycleForAutomationEngine(this.toAutomationEngineRuntime());
 
     // Catch up on any missed reflections from past days
@@ -1527,13 +1582,11 @@ export class ClankerBot {
 
   getStartupScanChannels(settings) {
     const permissions = getReplyPermissions(settings);
-    const discovery = getDiscoverySettings(settings);
     const channels = [];
     const seen = new Set();
 
     const explicit = [
       ...permissions.replyChannelIds,
-      ...discovery.channelIds,
       ...permissions.allowedChannelIds
     ];
 
@@ -1589,35 +1642,6 @@ export class ClankerBot {
     } catch {
       return [];
     }
-  }
-
-  evaluateDiscoverySchedule({ settings, startup, lastPostTs, elapsedMs, posts24h }) {
-    return evaluateDiscoverySchedule({
-      settings,
-      startup,
-      lastPostTs,
-      elapsedMs,
-      posts24h
-    });
-  }
-
-  evaluateSpontaneousDiscoverySchedule({ settings, lastPostTs, elapsedMs, posts24h, minGapMs }) {
-    return evaluateSpontaneousDiscoverySchedule({
-      settings,
-      lastPostTs,
-      elapsedMs,
-      posts24h,
-      minGapMs
-    });
-  }
-
-  pickDiscoveryChannel(settings) {
-    return pickDiscoveryChannel({
-      settings,
-      client: this.client,
-      isChannelAllowed: (resolvedSettings, channelId) =>
-        isChannelAllowedForPermissions(resolvedSettings, String(channelId))
-    });
   }
 
   getEmojiHints(guild) {

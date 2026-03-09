@@ -5,6 +5,11 @@ import {
 } from "./promptCore.ts";
 
 import {
+  formatAdaptiveDirectives,
+  formatInitiativeChannelSummaries,
+  formatInitiativeFeedCandidates,
+  formatInitiativeInterestFacts,
+  formatInitiativeSourcePerformance,
   formatRecentChat,
   formatConversationWindows,
   formatEmojiChoices,
@@ -37,6 +42,26 @@ function formatPromptUpcomingTracks(tracks) {
     })
     .filter(Boolean)
     .join(" | ");
+}
+
+function describeInitiativeEagerness(eagerness) {
+  const normalized = Math.max(0, Math.min(100, Number(eagerness) || 0));
+  if (normalized <= 15) {
+    return "Very quiet. Only post when something clearly feels worth it.";
+  }
+  if (normalized <= 35) {
+    return "Low-key. Stay selective and skip often unless something genuinely catches your eye.";
+  }
+  if (normalized <= 55) {
+    return "Balanced. Post when there is a natural fit, otherwise keep lurking.";
+  }
+  if (normalized <= 75) {
+    return "Engaged. You can start conversations or share finds when they fit the room.";
+  }
+  if (normalized <= 90) {
+    return "Highly social. Lighter contributions are fine when they feel timely.";
+  }
+  return "Very proactive. Jump in freely when something seems fun, useful, or worth sharing.";
 }
 
 export function buildReplyPrompt({
@@ -825,6 +850,100 @@ export function buildDiscoveryPrompt({
   parts.push("Task: write one standalone Discord message that feels timely and human.");
   parts.push("Keep it open, honest, non-spammy, and slightly surprising.");
   parts.push("If there is genuinely nothing good to post, output exactly [SKIP].");
+
+  return parts.join("\n\n");
+}
+
+export function buildInitiativePrompt({
+  botName,
+  initiativeEagerness = 20,
+  channelSummaries = [],
+  discoveryCandidates = [],
+  sourcePerformance = [],
+  communityInterestFacts = [],
+  relevantFacts = [],
+  adaptiveDirectives = [],
+  allowActiveCuriosity = false,
+  allowSelfCuration = false,
+  allowImagePosts = false,
+  allowVideoPosts = false,
+  allowGifPosts = false,
+  remainingImages = 0,
+  remainingVideos = 0,
+  remainingGifs = 0,
+  maxMediaPromptChars = 900,
+  mediaPromptCraftGuidance = null
+}) {
+  const parts = [];
+  const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance(null);
+
+  parts.push("=== INITIATIVE MODE ===");
+  parts.push(`You are ${String(botName || "the bot").trim() || "the bot"}. You have a moment to look around your Discord channels and decide whether you want to post something.`);
+  parts.push(`Social mode: ${describeInitiativeEagerness(initiativeEagerness)} (initiative eagerness ${Math.max(0, Math.min(100, Number(initiativeEagerness) || 0))}/100)`);
+
+  parts.push("=== CHANNELS ===");
+  parts.push(formatInitiativeChannelSummaries(channelSummaries));
+
+  parts.push("=== YOUR FEED ===");
+  parts.push(formatInitiativeFeedCandidates(discoveryCandidates));
+
+  parts.push("=== FEED SOURCES ===");
+  parts.push(formatInitiativeSourcePerformance(sourcePerformance));
+
+  parts.push("=== WHAT THIS COMMUNITY IS INTO ===");
+  parts.push(formatInitiativeInterestFacts(communityInterestFacts));
+
+  if (relevantFacts?.length) {
+    parts.push("=== MEMORY ===");
+    parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: true, maxItems: 10 }));
+  }
+
+  parts.push("=== ADAPTIVE DIRECTIVES ===");
+  parts.push(
+    adaptiveDirectives?.length
+      ? formatAdaptiveDirectives(adaptiveDirectives, 8)
+      : "(no adaptive directives)"
+  );
+
+  parts.push("=== CAPABILITIES ===");
+  if (allowActiveCuriosity) {
+    parts.push("You can call web_search to look something up quickly, browser_browse to dig into something interactively, and memory_search to recall durable community context.");
+  } else {
+    parts.push("Active curiosity tools are unavailable right now. Reason from the feed, memory, and channel context only.");
+  }
+  if (allowSelfCuration) {
+    parts.push("You can manage your own feed with discovery_source_list, discovery_source_add, and discovery_source_remove when a source pattern is clear.");
+  } else {
+    parts.push("Feed self-curation is disabled right now. Do not attempt to change feed subscriptions.");
+  }
+
+  const boundedImages = Math.max(0, Math.floor(Number(remainingImages) || 0));
+  const boundedVideos = Math.max(0, Math.floor(Number(remainingVideos) || 0));
+  const boundedGifs = Math.max(0, Math.floor(Number(remainingGifs) || 0));
+  const mediaOptions = [
+    allowImagePosts && boundedImages > 0 ? `image (${boundedImages} left)` : "",
+    allowVideoPosts && boundedVideos > 0 ? `video (${boundedVideos} left)` : "",
+    allowGifPosts && boundedGifs > 0 ? `gif (${boundedGifs} left)` : ""
+  ].filter(Boolean);
+  if (mediaOptions.length) {
+    parts.push(`Media is available if it genuinely fits the moment: ${mediaOptions.join(", ")}.`);
+    parts.push(`If you request media, keep mediaPrompt under ${maxMediaPromptChars} chars.`);
+    parts.push("Media prompt hard constraints: no visible text, letters, numbers, logos, captions, subtitles, UI, or watermarks.");
+    parts.push(mediaGuidance);
+  } else {
+    parts.push("Media generation is unavailable for this initiative cycle. Use mediaDirective=\"none\".");
+  }
+
+  parts.push("=== TASK ===");
+  parts.push("Look around. If something catches your eye, pick the best channel and post. That can be reacting to a live conversation, sharing something from your feed, or following your own curiosity.");
+  parts.push("If nothing feels worth posting, skip.");
+  parts.push("Choose the channel that best fits what you want to say. Do not pick a channel at random.");
+  parts.push("Use exact channelId values from the CHANNELS section.");
+  parts.push("Keep the text natural, non-spammy, and like a real community member.");
+  parts.push("If you mention a feed item or web result, include the link only if it feels natural. Never force a link.");
+  parts.push("Return strict JSON only with shape: {\"skip\":boolean,\"channelId\":string|null,\"text\":string,\"mediaDirective\":\"none\"|\"image\"|\"video\"|\"gif\",\"mediaPrompt\":string|null,\"reason\":string}.");
+  parts.push("If skip=true, set channelId to null, text to an empty string, mediaDirective to \"none\", and mediaPrompt to null.");
+  parts.push("If mediaDirective is \"none\", set mediaPrompt to null.");
 
   return parts.join("\n\n");
 }

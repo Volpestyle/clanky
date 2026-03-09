@@ -221,17 +221,6 @@ export function getLastActionTime(store: ActionLogStore, kind) {
   return row?.created_at ?? null;
 }
 
-export function countDiscoveryPostsSince(store: ActionLogStore, sinceIso) {
-  const row = store.db
-    .prepare<ActionCountRow, [string]>(
-      `SELECT COUNT(*) AS count
-         FROM actions
-         WHERE kind = 'discovery_post' AND created_at >= ?`
-    )
-    .get(String(sinceIso));
-  return Number(row?.count ?? 0);
-}
-
 export function getRecentActions(
   store: ActionLogStore,
   limit = 200,

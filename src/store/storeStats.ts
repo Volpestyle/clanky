@@ -153,11 +153,11 @@ const dayCostRows = store.db
   )
   .all(new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString());
 
-const out = {
+  const out = {
   last24h: {
     sent_reply: 0,
     sent_message: 0,
-    discovery_post: 0,
+    initiative_post: 0,
     reacted: 0,
     llm_call: 0,
     image_call: 0,

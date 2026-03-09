@@ -25,6 +25,7 @@ import type {
   VoiceReplyRuntime
 } from "./botContext.ts";
 import type { AutomationEngineRuntime } from "./automationEngine.ts";
+import type { InitiativeRuntime } from "./initiativeEngine.ts";
 import {
   captionRecentHistoryImages as captionRecentHistoryImagesForImageAnalysis,
   mergeImageInputs as mergeImageInputsForImageAnalysis,
@@ -55,17 +56,14 @@ import {
 } from "./permissions.ts";
 import {
   getReplyAddressSignal as getReplyAddressSignalForReplyAdmission,
-  hasBotMessageInRecentWindow as hasBotMessageInRecentWindowForReplyAdmission,
   shouldAttemptReplyDecision as shouldAttemptReplyDecisionForReplyAdmission
 } from "./replyAdmission.ts";
-import type { DiscoveryEngineRuntime } from "./discoveryEngine.ts";
 import {
   getVoiceScreenShareCapability as getVoiceScreenShareCapabilityForScreenShare,
   maybeHandleScreenShareOfferIntent as maybeHandleScreenShareOfferIntentForScreenShare,
   offerVoiceScreenShareLink as offerVoiceScreenShareLinkForScreenShare,
 } from "./screenShare.ts";
 import type { ScreenShareRuntime } from "./screenShare.ts";
-import type { TextThoughtLoopRuntime } from "./textThoughtLoop.ts";
 import type { VoiceCoordinationRuntime } from "./voiceCoordination.ts";
 import {
   composeVoiceOperationalMessage as composeVoiceOperationalMessageForVoiceCoordination
@@ -163,17 +161,31 @@ export function buildVoiceCoordinationRuntime(bot: ClankerBot): VoiceCoordinatio
   };
 }
 
-export function buildDiscoveryEngineRuntime(bot: ClankerBot): DiscoveryEngineRuntime {
+export function buildInitiativeRuntime(bot: ClankerBot): InitiativeRuntime {
   const botContext = createBotContext(bot);
   const budgetContext = createBudgetContext(bot, botContext);
   const mediaAttachmentContext = createMediaAttachmentContext(bot, budgetContext);
-  const runtime: DiscoveryEngineRuntime = {
+
+  const runtime: InitiativeRuntime = {
     ...botContext,
     client: bot.client,
     discovery: bot.discovery,
+    search: bot.search,
     canSendMessage: (maxPerHour) => bot.canSendMessage(maxPerHour),
     canTalkNow: (settings) => bot.canTalkNow(settings),
     hydrateRecentMessages: (channel, limit) => bot.hydrateRecentMessages(channel, limit),
+    isChannelAllowed: (settings, channelId) =>
+      isChannelAllowedForPermissions(
+        settings as Parameters<typeof isChannelAllowedForPermissions>[0],
+        String(channelId)
+      ),
+    isNonPrivateReplyEligibleChannel: (channel) => bot.isNonPrivateReplyEligibleChannel(channel),
+    getSimulatedTypingDelayMs: (minMs, jitterMs) => bot.getSimulatedTypingDelayMs(minMs, jitterMs),
+    markSpoke: () => {
+      markSpoke(bot);
+    },
+    composeMessageContentForHistory: (message, baseText) =>
+      composeHistoryMessageContent(message, baseText),
     loadRelevantMemoryFacts: (payload) =>
       loadRelevantMemoryFactsForMemorySlice(
         botContext,
@@ -190,35 +202,38 @@ export function buildDiscoveryEngineRuntime(bot: ClankerBot): DiscoveryEngineRun
         budgetContext,
         settings as Parameters<typeof getVideoGenerationBudgetStateForBudgetTracking>[1]
       ),
+    getGifBudgetState: (settings) =>
+      getGifBudgetStateForBudgetTracking(
+        budgetContext,
+        settings as Parameters<typeof getGifBudgetStateForBudgetTracking>[1]
+      ),
     getMediaGenerationCapabilities: (settings) =>
       getMediaGenerationCapabilitiesForBudgetTracking(
         budgetContext,
         settings as Parameters<typeof getMediaGenerationCapabilitiesForBudgetTracking>[1]
       ),
-    getEmojiHints: (guild) => bot.getEmojiHints(guild),
     resolveMediaAttachment: (payload) =>
       resolveMediaAttachmentForMediaAttachment(
         mediaAttachmentContext,
         payload as Parameters<typeof resolveMediaAttachmentForMediaAttachment>[1]
       ),
-    composeMessageContentForHistory: (message, baseText) =>
-      composeHistoryMessageContent(message, baseText),
-    markSpoke: () => {
-      markSpoke(bot);
-    },
-    getSimulatedTypingDelayMs: (minMs, jitterMs) => bot.getSimulatedTypingDelayMs(minMs, jitterMs),
-    isChannelAllowed: (settings, channelId) =>
-      isChannelAllowedForPermissions(
-        settings as Parameters<typeof isChannelAllowedForPermissions>[0],
-        String(channelId)
+    buildBrowserBrowseContext: (settings) =>
+      buildBrowserBrowseContextForBudgetTracking(
+        budgetContext,
+        settings as Parameters<typeof buildBrowserBrowseContextForBudgetTracking>[1]
       ),
-    discoveryPosting: bot.discoveryPosting
+    runModelRequestedBrowserBrowse: (payload) =>
+      runModelRequestedBrowserBrowseForAgentTasks(
+        createAgentContext(bot, botContext),
+        payload as Parameters<typeof runModelRequestedBrowserBrowseForAgentTasks>[1]
+      ),
+    initiativeCycleRunning: bot.initiativeCycleRunning
   };
 
-  Object.defineProperty(runtime, "discoveryPosting", {
-    get: () => bot.discoveryPosting,
+  Object.defineProperty(runtime, "initiativeCycleRunning", {
+    get: () => bot.initiativeCycleRunning,
     set: (value) => {
-      bot.discoveryPosting = Boolean(value);
+      bot.initiativeCycleRunning = Boolean(value);
     },
     enumerable: true
   });
@@ -286,39 +301,6 @@ export function buildAutomationEngineRuntime(bot: ClankerBot): AutomationEngineR
     get: () => bot.automationCycleRunning,
     set: (value) => {
       bot.automationCycleRunning = Boolean(value);
-    },
-    enumerable: true
-  });
-
-  return runtime;
-}
-
-export function buildTextThoughtLoopRuntime(bot: ClankerBot): TextThoughtLoopRuntime {
-  const runtime: TextThoughtLoopRuntime = {
-    ...createBotContext(bot),
-    client: bot.client,
-    canSendMessage: (maxPerHour) => bot.canSendMessage(maxPerHour),
-    canTalkNow: (settings) => bot.canTalkNow(settings),
-    maybeReplyToMessage: (message, settings, options) => bot.maybeReplyToMessage(message, settings, options),
-    isChannelAllowed: (settings, channelId) =>
-      isChannelAllowedForPermissions(
-        settings as Parameters<typeof isChannelAllowedForPermissions>[0],
-        String(channelId)
-      ),
-    isNonPrivateReplyEligibleChannel: (channel) => bot.isNonPrivateReplyEligibleChannel(channel),
-    hydrateRecentMessages: (channel, limit) => bot.hydrateRecentMessages(channel, limit),
-    hasBotMessageInRecentWindow: (payload) =>
-      hasBotMessageInRecentWindowForReplyAdmission({
-        botUserId: bot.client.user?.id,
-        ...payload
-      }),
-    textThoughtLoopRunning: bot.textThoughtLoopRunning
-  };
-
-  Object.defineProperty(runtime, "textThoughtLoopRunning", {
-    get: () => bot.textThoughtLoopRunning,
-    set: (value) => {
-      bot.textThoughtLoopRunning = Boolean(value);
     },
     enumerable: true
   });

@@ -65,7 +65,7 @@ interface ReplyToolResult {
   isError?: boolean;
 }
 
-type ReplyToolRuntime = {
+export type ReplyToolRuntime = {
   search?: {
     searchAndRead: (opts: {
       settings: Record<string, unknown>;
@@ -253,7 +253,7 @@ type ReplyToolRuntime = {
   };
 };
 
-type ReplyToolContext = {
+export type ReplyToolContext = {
   settings: Record<string, unknown>;
   guildId: string;
   channelId: string | null;
@@ -1378,7 +1378,5 @@ export {
 export type {
   ReplyToolDefinition,
   ReplyToolCallInput,
-  ReplyToolResult,
-  ReplyToolRuntime,
-  ReplyToolContext
+  ReplyToolResult
 };
