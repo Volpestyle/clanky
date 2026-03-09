@@ -22,7 +22,11 @@ import {
   formatRealtimeMemoryFacts,
   normalizeVoiceText
 } from "./voiceSessionHelpers.ts";
-import { buildVoiceInstructions } from "./voiceConfigResolver.ts";
+import {
+  buildVoiceInstructions,
+  shouldHandleRealtimeFunctionCalls,
+  shouldRegisterRealtimeTools
+} from "./voiceConfigResolver.ts";
 import type {
   RealtimeInstructionMemorySlice,
   RealtimeTurnContextRefreshState,
@@ -506,11 +510,13 @@ export class InstructionManager {
     if (!updateInstructions) return;
 
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    await refreshRealtimeTools(this.host, {
-      session,
-      settings: resolvedSettings,
-      reason
-    });
+    if (shouldRegisterRealtimeTools({ session, settings: resolvedSettings })) {
+      await refreshRealtimeTools(this.host, {
+        session,
+        settings: resolvedSettings,
+        reason
+      });
+    }
     const instructions = this.buildRealtimeInstructions({
       session,
       settings: resolvedSettings,
@@ -741,7 +747,7 @@ export class InstructionManager {
     }
 
     const configuredTools = Array.isArray(session.openAiToolDefinitions) ? session.openAiToolDefinitions : [];
-    if (configuredTools.length > 0) {
+    if (shouldHandleRealtimeFunctionCalls({ session, settings }) && configuredTools.length > 0) {
       const localToolNames = configuredTools
         .filter((tool) => tool?.toolType !== "mcp")
         .map((tool) => String(tool?.name || "").trim())
@@ -768,7 +774,7 @@ export class InstructionManager {
           "- For music controls, use music_play to start or replace playback now. It searches internally and may return disambiguation options.",
           "- If music_play returns choices, ask which one they want and then call music_play again with selection_id.",
           "- Use music_search only for explicit browsing requests or when you need candidate IDs for queue operations.",
-          "- When calling music_play or music_search for a fresh request, always include the query text from the transcript. Never send either tool with empty arguments.",
+          "- For a fresh play request, pass query to music_play or music_search. For a followup choice after disambiguation, call music_play with selection_id.",
           "- Use music_queue_next to place a track after the current one, music_queue_add to append, and music_stop to stop playback.",
           "- Do not emulate play-now by chaining music_queue_add and music_skip.",
           "- Do not use music_skip as a substitute for music_stop.",

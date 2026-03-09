@@ -111,13 +111,13 @@ test("buildReplyToolSet includes note_context when voice tools are available", (
   assert.equal(toolNames.includes("set_addressing"), false);
 });
 
-test("music_play schema allows either a fresh query or a prior selection_id", () => {
-  assert.equal(Array.isArray(MUSIC_PLAY_SCHEMA.parameters.anyOf), true);
-  assert.deepEqual(MUSIC_PLAY_SCHEMA.parameters.anyOf, [
-    { required: ["query"] },
-    { required: ["selection_id"] }
-  ]);
-  assert.equal(Array.isArray(MUSIC_PLAY_SCHEMA.parameters.required), false);
+test("music_play schema has no top-level anyOf and requires query (provider-safe)", () => {
+  assert.equal(Object.hasOwn(MUSIC_PLAY_SCHEMA.parameters, "anyOf"), false);
+  assert.equal(Object.hasOwn(MUSIC_PLAY_SCHEMA.parameters, "oneOf"), false);
+  assert.equal(MUSIC_PLAY_SCHEMA.parameters.type, "object");
+  assert.equal(Object.hasOwn(MUSIC_PLAY_SCHEMA.parameters.properties, "query"), true);
+  assert.equal(Object.hasOwn(MUSIC_PLAY_SCHEMA.parameters.properties, "selection_id"), true);
+  assert.deepEqual(MUSIC_PLAY_SCHEMA.parameters.required, ["query"]);
 });
 
 test("executeReplyTool delegates web_scrape to readPageSummary", async () => {
@@ -276,60 +276,25 @@ test("executeReplyTool delegates browser_browse to runtime", async () => {
   }]);
 });
 
-test("executeReplyTool recovers missing music_play query from the voice transcript", async () => {
-  const calls: Array<Record<string, unknown>> = [];
-  const logEvents: Array<Record<string, unknown>> = [];
-
+test("executeReplyTool fails music_play with empty query", async () => {
   const result = await executeReplyTool(
     "music_play",
     {},
     {
       voiceSession: {
-        async musicSearch() {
-          throw new Error("not used");
-        },
-        async musicPlay(query, selectionId, platform) {
-          calls.push({ query, selectionId, platform });
-          return { ok: true, status: "loading", query };
-        },
-        async musicQueueAdd() {
-          throw new Error("not used");
-        },
-        async musicQueueNext() {
-          throw new Error("not used");
-        },
-        async musicStop() {
-          throw new Error("not used");
-        },
-        async musicPause() {
-          throw new Error("not used");
-        },
-        async musicResume() {
-          throw new Error("not used");
-        },
-        async musicSkip() {
-          throw new Error("not used");
-        },
-        async musicNowPlaying() {
-          throw new Error("not used");
-        },
-        async playSoundboard() {
-          throw new Error("not used");
-        },
-        async setScreenNote() {
-          throw new Error("not used");
-        },
-        async setScreenMoment() {
-          throw new Error("not used");
-        },
-        async leaveVoiceChannel() {
-          throw new Error("not used");
-        }
-      },
-      store: {
-        logAction(event: Record<string, unknown>) {
-          logEvents.push(event);
-        }
+        async musicSearch() { throw new Error("not used"); },
+        async musicPlay() { throw new Error("should not be called"); },
+        async musicQueueAdd() { throw new Error("not used"); },
+        async musicQueueNext() { throw new Error("not used"); },
+        async musicStop() { throw new Error("not used"); },
+        async musicPause() { throw new Error("not used"); },
+        async musicResume() { throw new Error("not used"); },
+        async musicSkip() { throw new Error("not used"); },
+        async musicNowPlaying() { throw new Error("not used"); },
+        async playSoundboard() { throw new Error("not used"); },
+        async setScreenNote() { throw new Error("not used"); },
+        async setScreenMoment() { throw new Error("not used"); },
+        async leaveVoiceChannel() { throw new Error("not used"); }
       }
     },
     {
@@ -343,63 +308,29 @@ test("executeReplyTool recovers missing music_play query from the voice transcri
     }
   );
 
-  assert.equal(result.isError, undefined);
-  assert.deepEqual(calls, [{
-    query: "Some yeet",
-    selectionId: null,
-    platform: null
-  }]);
-  assert.equal(logEvents.some((entry) => entry.content === "voice_music_tool_query_recovered"), true);
+  assert.equal(result.isError, true);
+  assert.match(result.content, /query was empty/);
 });
 
-test("executeReplyTool recovers missing music_search query from the voice transcript", async () => {
-  const calls: Array<Record<string, unknown>> = [];
-
+test("executeReplyTool fails music_search with empty query", async () => {
   const result = await executeReplyTool(
     "music_search",
     {},
     {
       voiceSession: {
-        async musicSearch(query, limit) {
-          calls.push({ query, limit });
-          return { ok: true, query, tracks: [] };
-        },
-        async musicPlay() {
-          throw new Error("not used");
-        },
-        async musicQueueAdd() {
-          throw new Error("not used");
-        },
-        async musicQueueNext() {
-          throw new Error("not used");
-        },
-        async musicStop() {
-          throw new Error("not used");
-        },
-        async musicPause() {
-          throw new Error("not used");
-        },
-        async musicResume() {
-          throw new Error("not used");
-        },
-        async musicSkip() {
-          throw new Error("not used");
-        },
-        async musicNowPlaying() {
-          throw new Error("not used");
-        },
-        async playSoundboard() {
-          throw new Error("not used");
-        },
-        async setScreenNote() {
-          throw new Error("not used");
-        },
-        async setScreenMoment() {
-          throw new Error("not used");
-        },
-        async leaveVoiceChannel() {
-          throw new Error("not used");
-        }
+        async musicSearch() { throw new Error("should not be called"); },
+        async musicPlay() { throw new Error("not used"); },
+        async musicQueueAdd() { throw new Error("not used"); },
+        async musicQueueNext() { throw new Error("not used"); },
+        async musicStop() { throw new Error("not used"); },
+        async musicPause() { throw new Error("not used"); },
+        async musicResume() { throw new Error("not used"); },
+        async musicSkip() { throw new Error("not used"); },
+        async musicNowPlaying() { throw new Error("not used"); },
+        async playSoundboard() { throw new Error("not used"); },
+        async setScreenNote() { throw new Error("not used"); },
+        async setScreenMoment() { throw new Error("not used"); },
+        async leaveVoiceChannel() { throw new Error("not used"); }
       }
     },
     {
@@ -413,71 +344,6 @@ test("executeReplyTool recovers missing music_search query from the voice transc
     }
   );
 
-  assert.equal(result.isError, undefined);
-  assert.deepEqual(calls, [{
-    query: "Yeat",
-    limit: 5
-  }]);
-});
-
-test("executeReplyTool does not turn selection-only transcripts into music queries", async () => {
-  const result = await executeReplyTool(
-    "music_play",
-    {},
-    {
-      voiceSession: {
-        async musicSearch() {
-          throw new Error("not used");
-        },
-        async musicPlay() {
-          throw new Error("not used");
-        },
-        async musicQueueAdd() {
-          throw new Error("not used");
-        },
-        async musicQueueNext() {
-          throw new Error("not used");
-        },
-        async musicStop() {
-          throw new Error("not used");
-        },
-        async musicPause() {
-          throw new Error("not used");
-        },
-        async musicResume() {
-          throw new Error("not used");
-        },
-        async musicSkip() {
-          throw new Error("not used");
-        },
-        async musicNowPlaying() {
-          throw new Error("not used");
-        },
-        async playSoundboard() {
-          throw new Error("not used");
-        },
-        async setScreenNote() {
-          throw new Error("not used");
-        },
-        async setScreenMoment() {
-          throw new Error("not used");
-        },
-        async leaveVoiceChannel() {
-          throw new Error("not used");
-        }
-      }
-    },
-    {
-      settings: {},
-      guildId: "guild-1",
-      channelId: "channel-1",
-      userId: "user-1",
-      sourceMessageId: "msg-1",
-      sourceText: "2",
-      trace: { source: "voice_turn" }
-    }
-  );
-
   assert.equal(result.isError, true);
-  assert.match(result.content, /Missing query or selection_id/);
+  assert.match(result.content, /query was empty/);
 });

@@ -1,4 +1,4 @@
-import { providerSupports } from "./voiceModes.ts";
+import { shouldRegisterRealtimeTools } from "./voiceConfigResolver.ts";
 import type { VoiceMcpServerStatus, VoicePendingToolCallState, VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 import {
@@ -36,6 +36,27 @@ type ToolExecutionSession = ToolRuntimeSession & {
   openAiPendingToolAbortControllers?: Map<string, AbortController>;
   realtimeClient?: RealtimeFunctionOutputClient | null;
 };
+
+function isToolOutputRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeRealtimeToolOutputForModel(output: unknown, success: boolean) {
+  const isSemanticError = isToolOutputRecord(output) && output.ok === false;
+  if (!isSemanticError && success) return output;
+  if (isToolOutputRecord(output)) {
+    if (output.is_error === true) return output;
+    return {
+      ...output,
+      is_error: true
+    };
+  }
+  return {
+    ok: false,
+    is_error: true,
+    result: output == null ? null : String(output)
+  };
+}
 
 export async function executeOpenAiRealtimeFunctionCall(
   manager: VoiceToolCallManager,
@@ -121,7 +142,8 @@ export async function executeOpenAiRealtimeFunctionCall(
   }
 
   const runtimeMs = Math.max(0, Date.now() - startedAtMs);
-  const outputSummary = summarizeVoiceToolOutput(manager, output);
+  const normalizedOutput = normalizeRealtimeToolOutputForModel(output, success);
+  const outputSummary = summarizeVoiceToolOutput(manager, normalizedOutput);
   const responseHadAssistantOutput =
     typeof manager.hasOpenAiRealtimeAssistantOutputForResponse === "function" &&
     pendingCall.responseId
@@ -151,13 +173,13 @@ export async function executeOpenAiRealtimeFunctionCall(
   try {
     if (typeof runtimeSession.realtimeClient?.sendFunctionCallOutput === "function") {
       let serializedOutput = "";
-      if (typeof output === "string") {
-        serializedOutput = output;
+      if (typeof normalizedOutput === "string") {
+        serializedOutput = normalizedOutput;
       } else {
         try {
-          serializedOutput = JSON.stringify(output ?? null);
+          serializedOutput = JSON.stringify(normalizedOutput ?? null);
         } catch {
-          serializedOutput = String(output ?? "");
+          serializedOutput = String(normalizedOutput ?? "");
         }
       }
       runtimeSession.realtimeClient.sendFunctionCallOutput({ callId, output: serializedOutput });
@@ -204,7 +226,8 @@ export async function executeOpenAiRealtimeFunctionCall(
       session,
       userId: session.lastOpenAiToolCallerUserId || null,
       startedAtMs,
-      requestFollowup
+      requestFollowup,
+      toolName: toolName || toolDescriptor?.name || null
     });
   }
 }
@@ -218,7 +241,7 @@ export async function refreshRealtimeTools(
   }: { session?: ToolRuntimeSession | null; settings?: VoiceRealtimeToolSettings | null; reason?: string } = {}
 ) {
   if (!session || session.ending) return;
-  if (!providerSupports(session.mode || "", "updateTools")) return;
+  if (!shouldRegisterRealtimeTools({ session, settings })) return;
   const realtimeClient = session.realtimeClient;
   const updateTools =
     realtimeClient && "updateTools" in realtimeClient && typeof realtimeClient.updateTools === "function"

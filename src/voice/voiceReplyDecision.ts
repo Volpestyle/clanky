@@ -41,6 +41,7 @@ import {
   getVoiceAdmissionSettings,
   getVoiceConversationPolicy
 } from "../settings/agentStack.ts";
+import { isCancelIntent } from "../tools/cancelDetection.ts";
 import { isVoiceSpeechTimelineEntry } from "./voiceTimeline.ts";
 
 const DEFAULT_REALTIME_ADMISSION_MODE = "hard_classifier";
@@ -114,10 +115,10 @@ export interface ReplyDecisionHost {
     session: ReplyDecisionSessionLike | null | undefined,
     settings?: ReplyDecisionSettings
   ) => boolean;
-  resolveRealtimeReplyStrategy?: (args: {
+  shouldUseTextMediatedRealtimeReply?: (args: {
     session: ReplyDecisionSessionLike | null | undefined;
     settings?: ReplyDecisionSettings;
-  }) => string | null;
+  }) => boolean;
   formatVoiceDecisionHistory?: (
     session: ReplyDecisionSessionLike | null | undefined,
     maxTurns?: number,
@@ -337,6 +338,7 @@ export function buildVoiceConversationContext(manager: ReplyDecisionHost, {
     Number.isFinite(msSinceDirectAddress) &&
     msSinceDirectAddress <= RECENT_ENGAGEMENT_WINDOW_MS;
   const activeVoiceCommandState = manager.ensureVoiceCommandState?.(session) || null;
+  const activeVoiceCommandCountsAsEngagement = activeVoiceCommandState?.intent !== "tool_followup";
   const sameAsVoiceCommandUser =
     Boolean(normalizedUserId) &&
     Boolean(activeVoiceCommandState?.userId) &&
@@ -351,7 +353,7 @@ export function buildVoiceConversationContext(manager: ReplyDecisionHost, {
   const engagedWithCurrentSpeaker =
     Boolean(directAddressed) ||
     singleParticipantAssistantFollowup.active ||
-    sameAsVoiceCommandUser ||
+    (activeVoiceCommandCountsAsEngagement && sameAsVoiceCommandUser) ||
     (recentAssistantReply && sameAsRecentDirectAddress) ||
     (recentDirectAddress && sameAsRecentDirectAddress);
   const engaged = engagedWithCurrentSpeaker;
@@ -497,7 +499,7 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   userId,
   transcript,
   inputKind = "transcript",
-  source: _source = "stt_pipeline",
+  source: _source = "realtime",
   transcriptionContext: _transcriptionContext = null
 }): Promise<VoiceReplyDecision> {
   const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
@@ -647,12 +649,69 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     };
   }
 
+  // Resolve active command owner for classifier context.
+  // When a tool call is running or the bot is mid-response for a specific user's command,
+  // the classifier should know so it can deprioritize cross-talk from other users.
+  const toolCallOwnerUserId = String(session.lastOpenAiToolCallerUserId || "").trim() || null;
+  const hasActiveCommandFlow = Boolean(
+    outputChannelState.toolCallsRunning ||
+    outputChannelState.awaitingToolOutputs ||
+    outputChannelState.pendingResponse
+  );
+  const activeCommandOwner =
+    hasActiveCommandFlow && toolCallOwnerUserId && toolCallOwnerUserId !== normalizedUserId
+      ? manager.resolveVoiceSpeakerName(session, toolCallOwnerUserId) || null
+      : null;
+  const activeCommandSpeaker = String(baseConversationContext.activeCommandSpeaker || "").trim() || null;
+  const activeCommandIntent = String(baseConversationContext.activeCommandIntent || "").trim() || null;
+  const ownedToolFollowupActive =
+    normalizedInputKind !== "event" &&
+    activeCommandIntent === "tool_followup" &&
+    Boolean(activeCommandSpeaker);
+
   // Pending command followup (e.g., music disambiguation "2" / "the second one")
   // remains a deterministic fast-path before any other admission gate.
   if (sameSpeakerPendingCommandFollowup) {
     return {
       allow: true,
       reason: "pending_command_followup",
+      participantCount,
+      directAddressed,
+      directAddressConfidence,
+      directAddressThreshold,
+      transcript: normalizedTranscript,
+      conversationContext
+    };
+  }
+
+  if (ownedToolFollowupActive) {
+    if (isCancelIntent(normalizedTranscript)) {
+      return {
+        allow: true,
+        reason: "owned_tool_followup_cancel",
+        participantCount,
+        directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
+        transcript: normalizedTranscript,
+        conversationContext
+      };
+    }
+    if (activeCommandSpeaker === normalizedUserId) {
+      return {
+        allow: true,
+        reason: "owned_tool_followup",
+        participantCount,
+        directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
+        transcript: normalizedTranscript,
+        conversationContext
+      };
+    }
+    return {
+      allow: false,
+      reason: "owned_tool_followup_other_speaker_blocked",
       participantCount,
       directAddressed,
       directAddressConfidence,
@@ -730,26 +789,11 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
 
   const sessionMode = String(session?.mode || "").trim().toLowerCase();
   const mergedWithGeneration =
-    sessionMode === "stt_pipeline" ||
-    (isRealtimeMode(sessionMode) &&
-      typeof manager.resolveRealtimeReplyStrategy === "function" &&
-      manager.resolveRealtimeReplyStrategy({ session, settings }) === "brain");
+    isRealtimeMode(sessionMode) &&
+    typeof manager.shouldUseTextMediatedRealtimeReply === "function" &&
+    manager.shouldUseTextMediatedRealtimeReply({ session, settings });
 
-  // STT pipeline: the full text LLM genuinely decides via [SKIP], so just allow through
-  if (sessionMode === "stt_pipeline" && mergedWithGeneration) {
-    return {
-      allow: true,
-      reason: "generation_decides",
-      participantCount,
-      directAddressed,
-      directAddressConfidence,
-      directAddressThreshold,
-      transcript: normalizedTranscript,
-      conversationContext
-    };
-  }
-
-  // Native realtime without brain path — the realtime model decides what to respond to
+  // Native realtime without text mediation — the realtime model decides what to respond to
   if (!mergedWithGeneration) {
     return {
       allow: true,
@@ -830,6 +874,7 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     musicActive,
     musicWakeLatched,
     msUntilMusicWakeLatchExpiry,
+    activeCommandOwner,
     currentSpeakerDirectedConfidence: Number(voiceAddressingState?.currentSpeakerDirectedConfidence || 0),
     currentSpeakerTarget: String(voiceAddressingState?.currentSpeakerTarget || "").trim() || null
   });
@@ -867,6 +912,7 @@ export type ClassifierPromptInput = {
   musicActive?: boolean;
   musicWakeLatched?: boolean;
   msUntilMusicWakeLatchExpiry?: number | null;
+  activeCommandOwner?: string | null;
   conversationContext: {
     recentAssistantReply?: boolean;
     msSinceAssistantReply?: number | null;
@@ -928,6 +974,12 @@ export function buildClassifierPrompt(input: ClassifierPromptInput): {
         parts.push(`Latch expires in ${Math.max(0, Math.round(Number(input.msUntilMusicWakeLatchExpiry) / 1000))}s.`);
       }
     }
+  }
+
+  // Active command context
+  if (input.activeCommandOwner && input.activeCommandOwner !== input.speakerName) {
+    parts.push(``);
+    parts.push(`You are currently processing a command for ${input.activeCommandOwner}. Say NO unless ${input.speakerName} is directly addressing you by name.`);
   }
 
   // --- Guidelines (after context, so model reads situation first) ---
@@ -998,6 +1050,7 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   musicActive = false,
   musicWakeLatched = false,
   msUntilMusicWakeLatchExpiry = null,
+  activeCommandOwner = null,
   currentSpeakerDirectedConfidence = 0,
   currentSpeakerTarget = null
 }: {
@@ -1017,6 +1070,7 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   musicActive?: boolean;
   musicWakeLatched?: boolean;
   msUntilMusicWakeLatchExpiry?: number | null;
+  activeCommandOwner?: string | null;
   currentSpeakerDirectedConfidence?: number;
   currentSpeakerTarget?: string | null;
 }): Promise<{
@@ -1152,6 +1206,7 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
     musicActive,
     musicWakeLatched,
     msUntilMusicWakeLatchExpiry,
+    activeCommandOwner,
     conversationContext,
     recentHistory
   });

@@ -5,6 +5,7 @@ export type VoiceToolContinuationPolicy = "always" | "if_no_spoken_text" | "neve
 export interface SharedToolSchema {
   name: string;
   description: string;
+  strict?: boolean;
   parameters: {
     type: "object";
     properties: Record<string, unknown>;
@@ -24,13 +25,14 @@ export interface SharedToolSchema {
 export const WEB_SEARCH_SCHEMA: SharedToolSchema = {
   name: "web_search",
   description: "Run live web search and return condensed results.",
+  strict: true,
   voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {
-      query: { type: "string" },
-      recency_days: { type: "integer", minimum: 1, maximum: 3650 },
-      max_results: { type: "integer", minimum: 1, maximum: 8 }
+      query: { type: "string", description: "Search query. Pull from the transcript or conversation context." },
+      recency_days: { type: "integer", description: "Limit results to the last N days." },
+      max_results: { type: "integer", description: "Maximum number of results to return (1-8)." }
     },
     required: ["query"],
     additionalProperties: false
@@ -95,7 +97,7 @@ export const MEMORY_SEARCH_SCHEMA: SharedToolSchema = {
 
 export const MEMORY_WRITE_SCHEMA: SharedToolSchema = {
   name: "memory_write",
-  description: "Store durable memory facts with dedupe and safety limits. Use `namespace` = `speaker`, `self`, or `guild`. Save only genuine long-lived facts, never insults, requests, or future-behavior rules.",
+  description: "Store durable memory facts with dedupe and safety limits. Use `namespace` = `speaker`, `self`, or `guild`. Save only genuine long-lived facts, never insults, requests, or future-behavior rules. Set `type` when you know whether the fact is a preference, profile, relationship, project, or other durable fact.",
   voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
@@ -106,7 +108,11 @@ export const MEMORY_WRITE_SCHEMA: SharedToolSchema = {
         items: {
           type: "object",
           properties: {
-            text: { type: "string" }
+            text: { type: "string" },
+            type: {
+              type: "string",
+              enum: ["preference", "profile", "relationship", "project", "other"]
+            }
           },
           required: ["text"],
           additionalProperties: false
@@ -213,13 +219,17 @@ export const SHARED_TOOL_SCHEMAS: SharedToolSchema[] = [
 
 export const MUSIC_SEARCH_SCHEMA: SharedToolSchema = {
   name: "music_search",
-  description: "Search for candidate tracks without starting playback. Use this for explicit browsing requests or when you need candidate IDs for queue operations.",
+  description: "Search for candidate tracks without starting playback. Use this when the user wants options or when you need track IDs for queue operations. Do not use it when the user simply asked to play something now.",
+  strict: true,
   voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {
-      query: { type: "string" },
-      max_results: { type: "integer", minimum: 1, maximum: 10 }
+      query: {
+        type: "string",
+        description: "Song, artist, or phrase to search for. Pull from the transcript or conversation context. Required."
+      },
+      max_results: { type: "integer" }
     },
     required: ["query"],
     additionalProperties: false
@@ -228,7 +238,7 @@ export const MUSIC_SEARCH_SCHEMA: SharedToolSchema = {
 
 export const MUSIC_QUEUE_ADD_SCHEMA: SharedToolSchema = {
   name: "music_queue_add",
-  description: "Add one or more track IDs to the voice music queue.",
+  description: "Add one or more exact track IDs to the voice music queue. Use IDs returned by music_search or music_play disambiguation results, not a freeform query.",
   voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
@@ -251,41 +261,33 @@ export const MUSIC_QUEUE_ADD_SCHEMA: SharedToolSchema = {
 
 export const MUSIC_PLAY_SCHEMA: SharedToolSchema = {
   name: "music_play",
-  description: "Start playing music immediately from a query or a prior disambiguation selection. Searches internally and returns clarification options when needed.",
+  description: "Start playing music immediately from a natural-language query or a prior disambiguation selection. If the result is ambiguous, this tool returns clarification options for the same user to choose from.",
+  strict: true,
   voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {
       query: {
         type: "string",
-        description: "Song, artist, or phrase to play right now."
+        description: "Song, artist, or phrase to play. Pull from the transcript or conversation context."
       },
       selection_id: {
         type: "string",
-        description: "Exact selection id returned from a previous music_play or music_search result."
+        description: "Exact selection id returned from a previous music_play or music_search result. Pass empty string when not selecting a prior result."
       },
       platform: {
         type: "string",
         enum: ["youtube", "soundcloud", "auto"]
-      },
-      max_results: {
-        type: "integer",
-        minimum: 1,
-        maximum: 10,
-        description: "Maximum disambiguation options to consider when searching."
       }
     },
-    anyOf: [
-      { required: ["query"] },
-      { required: ["selection_id"] }
-    ],
+    required: ["query"],
     additionalProperties: false
   }
 };
 
 export const MUSIC_QUEUE_NEXT_SCHEMA: SharedToolSchema = {
   name: "music_queue_next",
-  description: "Insert one or more track IDs immediately after the current track.",
+  description: "Insert one or more exact track IDs immediately after the current track. Use IDs returned by music_search or music_play disambiguation results, not a freeform query.",
   voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
@@ -528,11 +530,13 @@ export function shouldRequestVoiceToolFollowup(
 export function toAnthropicTool(schema: SharedToolSchema): {
   name: string;
   description: string;
+  strict?: boolean;
   input_schema: { type: "object"; properties: Record<string, unknown>; required?: string[]; additionalProperties?: boolean };
 } {
   return {
     name: schema.name,
     description: schema.description,
+    ...(schema.strict ? { strict: true } : {}),
     input_schema: schema.parameters
   };
 }

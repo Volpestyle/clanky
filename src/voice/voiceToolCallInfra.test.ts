@@ -51,6 +51,7 @@ test("refreshRealtimeTools registers local and MCP tool definitions", async () =
     textChannelId: "chan-1",
     mode: "openai_realtime",
     ending: false,
+    realtimeToolOwnership: "provider_native",
     realtimeClient: {
       updateTools(payload) {
         updatedToolsPayload = payload;
@@ -84,6 +85,113 @@ test("refreshRealtimeTools registers local and MCP tool definitions", async () =
   const descriptorRows = Array.isArray(session.openAiToolDefinitions) ? session.openAiToolDefinitions : [];
   const mcpDescriptor = descriptorRows.find((entry) => entry?.name === "server_status");
   assert.equal(mcpDescriptor?.toolType, "mcp");
+  const musicPlayDescriptor = descriptorRows.find((entry) => entry?.name === "music_play");
+  assert.equal(musicPlayDescriptor?.parameters?.type, "object");
+  assert.equal(Object.hasOwn(musicPlayDescriptor?.parameters || {}, "anyOf"), false);
+  assert.equal(Object.hasOwn(musicPlayDescriptor?.parameters || {}, "oneOf"), false);
+  assert.equal(Object.hasOwn(musicPlayDescriptor?.parameters || {}, "allOf"), false);
+});
+
+test("buildRealtimeFunctionTools rewrites music_play for OpenAI realtime compatibility", () => {
+  const manager = createVoiceTestManager();
+  const tools = buildRealtimeFunctionTools(manager, {
+    session: {
+      id: "session-openai-native-export",
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      mode: "openai_realtime",
+      ending: false,
+      realtimeToolOwnership: "provider_native"
+    },
+    settings: createVoiceTestSettings({
+      voice: {
+        replyPath: "native"
+      }
+    }),
+    target: "openai_realtime"
+  });
+
+  const musicPlay = tools.find((entry) => entry.name === "music_play");
+  assert.ok(musicPlay);
+  assert.equal(musicPlay?.parameters?.type, "object");
+  assert.equal(Object.hasOwn(musicPlay?.parameters || {}, "anyOf"), false);
+  assert.equal(Object.hasOwn(musicPlay?.parameters || {}, "oneOf"), false);
+  assert.equal(Object.hasOwn(musicPlay?.parameters || {}, "allOf"), false);
+  assert.equal(Object.hasOwn(musicPlay?.parameters || {}, "not"), false);
+  assert.equal(Object.hasOwn(musicPlay?.parameters || {}, "enum"), false);
+  assert.equal(
+    Object.hasOwn((musicPlay?.parameters?.properties as Record<string, unknown>) || {}, "query"),
+    true
+  );
+  assert.equal(
+    Object.hasOwn((musicPlay?.parameters?.properties as Record<string, unknown>) || {}, "selection_id"),
+    true
+  );
+});
+
+test("refreshRealtimeTools skips registration for brain sessions", async () => {
+  const manager = createVoiceTestManager();
+  let updateCount = 0;
+  const session = {
+    id: "session-openai-tools-brain",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeToolOwnership: "transport_only",
+    realtimeClient: {
+      updateTools() {
+        updateCount += 1;
+      }
+    }
+  };
+
+  await refreshRealtimeTools(manager, {
+    session,
+    settings: createVoiceTestSettings({
+      voice: {
+        replyPath: "brain"
+      }
+    }),
+    reason: "test"
+  });
+
+  assert.equal(updateCount, 0);
+});
+
+test("refreshRealtimeTools registers provider-native tools for bridge sessions", async () => {
+  const manager = createVoiceTestManager();
+  let updatedToolsPayload = null;
+  const session = {
+    id: "session-openai-tools-bridge",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeToolOwnership: "provider_native",
+    realtimeClient: {
+      updateTools(payload) {
+        updatedToolsPayload = payload;
+      }
+    }
+  };
+
+  await refreshRealtimeTools(manager, {
+    session,
+    settings: createVoiceTestSettings({
+      voice: {
+        replyPath: "bridge"
+      }
+    }),
+    reason: "test"
+  });
+
+  assert.ok(updatedToolsPayload);
+  const toolNames = Array.isArray(updatedToolsPayload?.tools)
+    ? updatedToolsPayload.tools.map((entry) => entry?.name)
+    : [];
+  assert.equal(toolNames.includes("music_search"), true);
+  assert.equal(toolNames.includes("web_search"), true);
 });
 
 test("handleOpenAiRealtimeFunctionCallEvent executes music_now_playing and sends function output", async () => {
@@ -98,6 +206,7 @@ test("handleOpenAiRealtimeFunctionCallEvent executes music_now_playing and sends
     voiceChannelId: "voice-1",
     mode: "openai_realtime",
     ending: false,
+    realtimeToolOwnership: "provider_native",
     musicQueueState: {
       guildId: "guild-1",
       voiceChannelId: "voice-1",
@@ -158,6 +267,61 @@ test("handleOpenAiRealtimeFunctionCallEvent executes music_now_playing and sends
   assert.equal(toolEvents[0]?.toolName, "music_now_playing");
 });
 
+test("handleOpenAiRealtimeFunctionCallEvent ignores provider function calls in brain sessions", async () => {
+  const manager = createVoiceTestManager();
+  manager.scheduleOpenAiRealtimeToolFollowupResponse = () => {};
+
+  const sentFunctionOutputs = [];
+  const session = {
+    id: "session-openai-tool-call-brain-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeToolOwnership: "transport_only",
+    musicQueueState: {
+      guildId: "guild-1",
+      voiceChannelId: "voice-1",
+      tracks: [],
+      nowPlayingIndex: null,
+      isPaused: false,
+      volume: 1
+    },
+    realtimeClient: {
+      sendFunctionCallOutput(payload) {
+        sentFunctionOutputs.push(payload);
+      }
+    }
+  };
+
+  session.openAiToolDefinitions = buildRealtimeFunctionTools(manager, {
+    session,
+    settings: createVoiceTestSettings()
+  });
+
+  await manager.handleOpenAiRealtimeFunctionCallEvent({
+    session,
+    settings: createVoiceTestSettings({
+      voice: {
+        replyPath: "brain"
+      }
+    }),
+    event: {
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        call_id: "call_music_ignore_1",
+        name: "music_now_playing",
+        arguments: "{}"
+      }
+    }
+  });
+
+  assert.equal(sentFunctionOutputs.length, 0);
+  assert.equal(Array.isArray(session.toolCallEvents) ? session.toolCallEvents.length : 0, 0);
+});
+
 test("handleOpenAiRealtimeFunctionCallEvent executes offer_screen_share_link and sends function output", async () => {
   const manager = createVoiceTestManager();
   manager.scheduleOpenAiRealtimeToolFollowupResponse = () => {};
@@ -188,6 +352,7 @@ test("handleOpenAiRealtimeFunctionCallEvent executes offer_screen_share_link and
     voiceChannelId: "voice-1",
     mode: "openai_realtime",
     ending: false,
+    realtimeToolOwnership: "provider_native",
     lastOpenAiToolCallerUserId: "speaker-1",
     recentVoiceTurns: [
       {
@@ -265,6 +430,7 @@ test("handleOpenAiRealtimeFunctionCallEvent sends cancelled tool output when a v
     voiceChannelId: "voice-1",
     mode: "openai_realtime",
     ending: false,
+    realtimeToolOwnership: "provider_native",
     realtimeClient: {
       sendFunctionCallOutput(payload) {
         sentFunctionOutputs.push(payload);
@@ -308,8 +474,66 @@ test("handleOpenAiRealtimeFunctionCallEvent sends cancelled tool output when a v
   assert.equal(sentFunctionOutputs.length, 1);
   const outputPayload = JSON.parse(String(sentFunctionOutputs[0]?.output || "{}"));
   assert.equal(outputPayload?.ok, false);
+  assert.equal(outputPayload?.is_error, true);
   assert.equal(outputPayload?.cancelled, true);
   assert.equal(outputPayload?.error?.message, "Tool call cancelled by user.");
+});
+
+test("handleOpenAiRealtimeFunctionCallEvent marks semantic tool failures with is_error", async () => {
+  const manager = createVoiceTestManager();
+  manager.scheduleOpenAiRealtimeToolFollowupResponse = () => {};
+  manager.musicSearch = {
+    isConfigured() {
+      return true;
+    },
+    async search() {
+      return { results: [] };
+    }
+  };
+
+  const sentFunctionOutputs = [];
+  const session = {
+    id: "session-openai-tool-call-semantic-error-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeToolOwnership: "provider_native",
+    realtimeClient: {
+      sendFunctionCallOutput(payload) {
+        sentFunctionOutputs.push(payload);
+      }
+    }
+  };
+
+  session.openAiToolDefinitions = buildRealtimeFunctionTools(manager, {
+    session,
+    settings: createVoiceTestSettings()
+  });
+
+  await manager.handleOpenAiRealtimeFunctionCallEvent({
+    session,
+    settings: createVoiceTestSettings(),
+    event: {
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        call_id: "call_music_not_found_1",
+        name: "music_play",
+        arguments: JSON.stringify({
+          query: "a totally missing song"
+        })
+      }
+    }
+  });
+
+  assert.equal(sentFunctionOutputs.length, 1);
+  const outputPayload = JSON.parse(String(sentFunctionOutputs[0]?.output || "{}"));
+  assert.equal(outputPayload?.ok, false);
+  assert.equal(outputPayload?.is_error, true);
+  assert.equal(outputPayload?.status, "not_found");
+  assert.equal(outputPayload?.error, "no_results");
 });
 
 test("handleOpenAiRealtimeFunctionCallEvent ignores duplicate completed call ids", async () => {
@@ -324,6 +548,7 @@ test("handleOpenAiRealtimeFunctionCallEvent ignores duplicate completed call ids
     voiceChannelId: "voice-1",
     mode: "openai_realtime",
     ending: false,
+    realtimeToolOwnership: "provider_native",
     realtimeClient: {
       sendFunctionCallOutput(payload) {
         sentFunctionOutputs.push(payload);

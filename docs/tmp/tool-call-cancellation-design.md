@@ -248,7 +248,7 @@ Individual tool implementations need to accept and respect the signal -- at mini
 
 ### 6. Voice Cancel Detection -- `src/voice/turnProcessor.ts`
 
-Add a cancel keyword check early in `runRealtimeTurn()` and `runSttPipelineTurn()`, after transcript is available but before the music check:
+Add a cancel keyword check early in `runRealtimeTurn()` and `runFileAsrTurn()`, after transcript is available but before the music check:
 
 ```typescript
 // In runRealtimeTurn(), after transcript is available (~line 613):
