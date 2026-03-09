@@ -57,9 +57,11 @@ Only one helper should translate these phases into reply output lock decisions:
 | `realtimeClient.isResponseInProgress()` | signal | contributes to `response_pending`; can be stale and may need recovery |
 | `clankvox tts_playback_state` | signal | authoritative subprocess playback hint while telemetry is fresh |
 | `clankvox buffer_depth` | signal | authoritative buffered speech hint while telemetry is fresh |
-| `botTurnOpen` | heuristic/guard | short echo and barge-in guard only; not the source of truth for output locks |
-| `lastAudioDeltaAt` | heuristic | recency/latency hint only; not the source of truth for output locks |
-| `playbackArmed` | bootstrap hint | subprocess readiness/join-greeting bootstrap; not part of the output phase model |
+| `botTurnOpen` | heuristic/guard | short echo and barge-in guard only |
+| `lastAudioDeltaAt` | heuristic | recency/latency hint only |
+| `playbackArmed` | bootstrap hint | subprocess readiness/join-greeting bootstrap |
+
+Ground truth for output locks is `assistantOutput.phase` and `bot_audio_buffered`. The heuristic signals above are secondary guards.
 
 Freshness rule:
 

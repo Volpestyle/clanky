@@ -126,13 +126,12 @@ Important distinction:
 - that does **not** mean it posts every 60 seconds
 - actual posting is limited by `initiative.text.minMinutesBetweenThoughts` and `initiative.text.maxThoughtsPerDay`
 
-If the bot process is offline, the thought loop does not run. Missed checks are not replayed later.
+The thought loop runs only while the bot process is online, with no replay catchup.
 
-Important setting boundary:
+Setting boundary:
 
-- `permissions.allowUnsolicitedReplies` does not disable the thought loop
 - `initiative.text.enabled` is the switch for this path
-- this is intentional, because lurking/chiming in on a timer is treated as a separate proactive system
+- `permissions.allowUnsolicitedReplies` controls reply admission, not the thought loop — lurking/chiming in on a timer is a separate proactive system
 
 Relevant code:
 
@@ -238,9 +237,9 @@ Important distinction:
 
 Relevant code:
 
-- `resolveVoiceThoughtEngineConfig(...)` in `src/voice/voiceSessionManager.ts`
-- `scheduleVoiceThoughtLoop(...)` in `src/voice/voiceSessionManager.ts`
-- `maybeRunVoiceThoughtLoop(...)` in `src/voice/voiceSessionManager.ts`
+- `resolveVoiceThoughtEngineConfig(...)` in `src/voice/thoughtEngine.ts`
+- `scheduleVoiceThoughtLoop(...)` in `src/voice/thoughtEngine.ts`
+- `maybeRunVoiceThoughtLoop(...)` in `src/voice/thoughtEngine.ts`
 
 ### 8. Voice Runtime Modes Matter
 
@@ -320,8 +319,7 @@ Text reply-channel defaults do not affect voice session eligibility.
 
 - `permissions.allowUnsolicitedReplies`
   - controls whether non-direct, non-forced reply attempts can happen once admitted by the normal unsolicited path
-  - does not disable direct-address replies
-  - does not disable the text thought loop
+  - scope: unsolicited reply admission only (direct-address replies and the text thought loop are independent systems)
 
 - `activity.replyEagerness`
   - eagerness for admitted unsolicited replies (0–100)

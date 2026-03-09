@@ -31,7 +31,9 @@ This is only the durable-fact memory system. Two adjacent persistence layers now
 - `src/store/storeAdaptiveDirectives.ts`: adaptive directive storage, prompt-time retrieval, and audit-log helpers.
 - `src/llm.ts`: embedding API calls, reflection LLM calls.
 - `src/tools/replyTools.ts`: `memory_write` and `memory_search` tool definitions + execution handlers (used by text chat brain).
-- `src/voice/voiceToolCalls.ts`: `memory_search`, `memory_write`, and adaptive-directive voice tool definitions + execution handlers (used by OpenAI Realtime brain).
+- `src/voice/voiceToolCallMemory.ts`: `memory_search` and `memory_write` voice tool execution handlers.
+- `src/voice/voiceToolCallDirectives.ts`: adaptive-directive voice tool execution handlers.
+- `src/voice/voiceToolCalls.ts`: re-export facade for the above modules.
 - `src/bot.ts`: message ingest trigger, reflection job scheduling.
 - `src/bot/voiceReplies.ts` and `src/voice/voiceSessionManager.ts`: voice transcript ingestion + session-level fact profile caching.
 - `src/dashboard.ts`: `/api/memory`, `/api/memory/refresh`, `/api/memory/search`.
@@ -121,8 +123,7 @@ Both paths produce the same kind of durable facts in `memory_facts`. Reflection 
 - `memory.reflection.enabled` (default `true`): master switch.
 - `memory.reflection.hour` / `memory.reflection.minute`: daily reflection schedule time.
 - `memory.reflection.maxFactsPerReflection`: cap on facts produced per run (default `20`).
-- `adaptiveDirectives.enabled` (default `true`): independently enables/disables adaptive directive retrieval and conversational directive save/remove behavior.
-- `automations.enabled` (default `true`): independently enables/disables recurring automation control plus scheduled execution.
+- `directives.enabled` (default `true`): independently enables/disables adaptive directive retrieval and conversational directive save/remove behavior.
 
 ### Fact creation via `memory_write` tool
 
@@ -321,14 +322,13 @@ Used for dashboard/operator inspection, not direct model context.
 From defaults + normalization:
 
 - `memory.enabled` (default `true`)
-- `memory.maxRecentMessages` (default `35`, clamped `10..120`)
+- `memory.promptSlice.maxRecentMessages` (default `35`, clamped `4..120`)
   Note: this controls short-term chat context windows, not durable fact count.
 - `memory.embeddingModel` (default `"text-embedding-3-small"`)
 - `memory.reflection.enabled` (default `true`): enable/disable daily reflection.
 - `memory.reflection.hour` / `memory.reflection.minute`: daily reflection schedule time.
 - `memory.reflection.maxFactsPerReflection` (default `20`): cap on facts per reflection run.
-- `adaptiveDirectives.enabled` (default `true`): toggle adaptive directive retrieval/write behavior separately from durable memory.
-- `automations.enabled` (default `true`): toggle recurring automation control and scheduler execution separately from durable memory.
+- `directives.enabled` (default `true`): toggle adaptive directive retrieval/write behavior separately from durable memory.
 - `memoryLlm` provider/model config controls the model used for reflection and tool-triggered operations.
 
 ## APIs and Observability
@@ -338,11 +338,17 @@ Dashboard API:
 - `GET /api/memory`: returns snapshot markdown content.
 - `POST /api/memory/refresh`: regenerates and returns snapshot.
 - `GET /api/memory/search?q=...&guildId=...&channelId=...&limit=...`: hybrid durable fact search (uses `searchDurableFacts` with full semantic ranking).
+- `GET /api/memory/fact-profile`: structured fact profile for a guild/user.
+- `GET /api/memory/facts`: list/filter raw facts.
+- `GET /api/memory/subjects`: list subjects with fact counts.
+- `GET /api/memory/reflections`: list reflection run history.
+- `GET /api/memory/adaptive-directives`: list active adaptive directives for a guild.
+- `GET /api/memory/adaptive-directives/audit`: list directive audit events for a guild.
 
 Action log kinds used by memory pipeline:
 
 - `memory_fact`
-- `memory_reflection_call`, `memory_reflection_error`
+- `memory_reflection_start`, `memory_reflection_complete`, `memory_reflection_error`
 - `memory_embedding_call`, `memory_embedding_error`
 - `memory_log_prune`
 - plus `bot_error`/`voice_error` entries for pipeline failures.

@@ -21,7 +21,7 @@ The OAuth endpoint requires requests to look like they come from the Claude CLI.
 - `Authorization: Bearer <access_token>` instead of `x-api-key`
 - `anthropic-beta: oauth-2025-04-20,interleaved-thinking-2025-05-14` header
 - `user-agent: claude-cli/2.1.2 (external, cli)` spoofing
-- Tool name prefixing: all tool names get `mcp_` prefix outbound, stripped on response
+- Tool name prefixing: `prefixToolNames()` / `stripToolPrefix()` plumbing exists but is currently disabled (`TOOL_PREFIX = ""`)
 - `?beta=true` query param appended to `/v1/messages`
 
 ### Token Lifecycle
@@ -96,7 +96,7 @@ LLMService
                     ├── token refresh (console.anthropic.com/v1/oauth/token)
                     ├── Bearer auth header
                     ├── beta headers + user-agent
-                    ├── mcp_ tool name prefixing
+                    ├── tool name prefix plumbing (currently disabled)
                     └── ?beta=true query param
 ```
 

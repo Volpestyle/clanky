@@ -99,7 +99,7 @@ Environment variables:
 - `DASHBOARD_TOKEN` (required for private/admin APIs when `PUBLIC_HTTPS_ENABLED=true`)
 
 ## Security Model
-- Public HTTPS entrypoint does not bypass API auth.
+- Public HTTPS entrypoint requires full API auth.
 - Stream ingest endpoint requires either private admin auth (`DASHBOARD_TOKEN`) or public ingress auth (`PUBLIC_API_TOKEN`).
 - The tunnel URL should be treated as an untrusted public entrypoint; tokens must be kept secret.
 

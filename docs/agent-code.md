@@ -86,7 +86,7 @@ Session manager:
 - otherwise the enabled worker's `defaultCwd`
 - otherwise fallback: `../web` relative to app root
 
-`claude-code` and `codex-cli` execute locally in that directory. `codex` runs through OpenAI Responses and does not use local CLI execution.
+`claude-code` and `codex-cli` execute locally in that directory. `codex` runs through OpenAI's API-driven Responses execution path.
 
 ## Logging
 

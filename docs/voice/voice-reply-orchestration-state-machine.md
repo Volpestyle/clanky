@@ -312,4 +312,4 @@ These cases should remain covered:
 Current coverage:
 
 - `src/voice/voiceSessionManager.lifecycle.test.ts` (integration scenarios)
-- `src/voice/voiceReplyPipeline.test.ts` (pipeline execution — if exists)
+- `src/voice/voiceToolCallMemory.test.ts` (memory tool execution)

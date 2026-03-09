@@ -37,12 +37,12 @@ That separation allows a simple preset such as `openai_native` while still suppo
 - Reduce current settings sprawl by replacing low-level provider toggles with opinionated presets plus advanced overrides.
 - Avoid legacy compatibility paths after each migration phase stabilizes.
 
-## 2. Non-Goals
+## 2. Scope Boundaries
 
-- This spec does not replace Discord transport, storage, memory, or music subsystems.
-- This spec does not require rewriting low-level Discord voice transport around the OpenAI Agents SDK.
-- This spec does not require every provider to support every OpenAI-native feature.
-- This spec does not preserve the full current multi-provider matrix indefinitely.
+- Discord transport, storage, memory, and music subsystems remain unchanged.
+- Low-level Discord voice transport is independent of the OpenAI Agents SDK.
+- Providers implement the capabilities they support; full feature parity across providers is not a goal.
+- The current multi-provider matrix may be narrowed as presets mature.
 
 ## 3. Problem Statement
 
@@ -363,7 +363,7 @@ The orchestrator is the top-level reasoning agent that receives Discord context 
 - delegate a dev task
 - control music or automations
 
-The orchestrator should not directly own filesystem editing responsibilities.
+The orchestrator delegates filesystem editing to the capability runtime layer.
 
 ### 8.4 Capability Runtimes
 
@@ -907,7 +907,7 @@ LiteLLM is not required for this architecture. It is an adapter option, not a co
 
 ### 16.1 Three Shapes, Not One
 
-The settings UI should not directly edit `ResolvedAgentStack`.
+The settings UI edits `PresetAgentStack`, which is then resolved to `ResolvedAgentStack`.
 
 There are three different shapes in this architecture:
 

@@ -12,18 +12,35 @@ Code entrypoint:
 
 Core runtime:
 - `src/bot.ts`: Discord event handling and orchestration.
-- `src/bot/*`: extracted bot domains (`automationControl`, `discoverySchedule`, `queueGateway`, `replyAdmission`, `replyFollowup`, `startupCatchup`, `voiceReplies`).
+- `src/bot/*`: extracted bot domains (`agentTasks`, `automation`, `automationEngine`, `budgetTracking`, `conversationContinuity`, `directAddressConfidence`, `discoveryEngine`, `discoverySchedule`, `imageAnalysis`, `mediaAttachment`, `memorySlice`, `mentionLookup`, `mentions`, `messageHistory`, `permissions`, `replyAdmission`, `replyFollowup`, `replyPipeline`, `replyPipelineShared`, `screenShare`, `startupCatchup`, `textThoughtLoop`, `voiceCoordination`, `voiceReplies`).
 - `src/settings/settingsSchema.ts`: canonical persisted settings schema.
 - `src/settings/agentStack.ts`: preset resolution + capability/runtime accessors (`research`, `browser`, `voice`, `devTeam`, orchestrator bindings).
 - `src/llm.ts`: model/runtime provider abstraction (OpenAI, Anthropic, Claude OAuth, Codex OAuth, xAI/Grok), plus usage + cost logging, embeddings, image/video generation, ASR, and TTS.
 - `src/llm/llmClaudeCode.ts`: Claude Code CLI invocation/parsing helpers used by `LLMService`.
 - `src/llm/llmCodex.ts`: OpenAI Responses/Codex integration used by the code-agent runtime.
 - `src/memory/memoryManager.ts`: append-only daily journaling + LLM-based fact extraction + hybrid memory retrieval (lexical + vector).
+- `src/memory/dailyReflection.ts`: end-of-day journal reflection — reads daily logs, runs LLM distillation, writes durable facts.
+- `src/memory/memoryHelpers.ts`: fact normalization, grounding checks, scoring helpers, directive scope config.
+- `src/memory/memoryToolRuntime.ts`: shared execution logic for `memory_write` and `memory_search` tools.
 - `src/services/discovery.ts`: external link discovery for discovery posts.
 - `src/store/store.ts`: SQLite persistence orchestration.
 - `src/store/*`: settings normalization and store helper utilities.
 - `src/voice/voiceSessionManager.ts`: voice orchestration and session lifecycle.
 - `src/voice/voiceJoinFlow.ts`, `src/voice/voiceStreamWatch.ts`, `src/voice/voiceOperationalMessaging.ts`, `src/voice/voiceDecisionRuntime.ts`: extracted voice domains.
+- `src/voice/turnProcessor.ts`: turn queueing, drain loops, realtime and file-ASR turn processing.
+- `src/voice/thoughtEngine.ts`: voice thought engine (silence/cooldown-driven proactive speech).
+- `src/voice/replyManager.ts`: response tracking, output state sync, deferred trigger.
+- `src/voice/sessionLifecycle.ts`: session setup and teardown orchestration.
+- `src/voice/bargeInController.ts`: barge-in decision logic and interrupt execution.
+- `src/voice/captureManager.ts`: per-user audio capture lifecycle and promotion.
+- `src/voice/deferredActionQueue.ts`: deferred action scheduling and dispatch.
+- `src/voice/voiceAsrBridge.ts`: ASR bridge state machine (per-user and shared modes).
+- `src/voice/voiceToolCallInfra.ts`: voice tool call infrastructure and dispatch.
+- `src/voice/voiceToolCallMemory.ts`, `voiceToolCallMusic.ts`, `voiceToolCallWeb.ts`, `voiceToolCallAgents.ts`, `voiceToolCallDirectives.ts`: modular voice tool execution handlers.
+- `src/voice/musicPlayer.ts`, `musicCommands.ts`, `musicSearch.ts`, `musicPlayback.ts`: music subsystem.
+- `src/voice/openaiRealtimeClient.ts`, `xaiRealtimeClient.ts`, `geminiRealtimeClient.ts`, `elevenLabsRealtimeClient.ts`: provider-specific realtime clients.
+- `src/voice/openaiRealtimeTranscriptionClient.ts`: dedicated ASR transcription client.
+- `src/voice/instructionManager.ts`: realtime instruction refresh with debounced timer.
 - `docs/voice/voice-output-state-machine.md`: canonical assistant reply/output phase model and incident workflow.
 - `src/services/publicHttpsEntrypoint.ts`: optional Cloudflare Quick Tunnel runtime for exposing local dashboard/API over public HTTPS.
 - `src/services/screenShareSessionManager.ts`: tokenized browser screen-share session lifecycle and frame relay into voice stream-watch ingest.
@@ -38,7 +55,7 @@ Tool definitions:
 - `src/tools/browserTools.ts`: browser tool schemas + execution wrappers for the browse agent.
 - `src/tools/openAiComputerUseRuntime.ts`: OpenAI computer-use sub-runtime that drives the browser manager when the resolved browser runtime is `openai_computer_use`.
 - `src/tools/replyTools.ts`: tool schemas available to the text chat brain (`conversation_search`, web search, memory, image lookup, open-article lookup, etc.).
-- `src/voice/voiceToolCalls.ts`: voice tool definitions + execution handlers for all tools available in voice sessions, including shared conversation-history recall.
+- `src/voice/voiceToolCalls.ts`: voice tool re-export facade. Actual execution is split across `voiceToolCallMemory.ts`, `voiceToolCallMusic.ts`, `voiceToolCallWeb.ts`, `voiceToolCallAgents.ts`, `voiceToolCallDirectives.ts`, dispatched via `voiceToolCallDispatch.ts`.
 
 Control plane:
 - `src/dashboard.ts`: REST API and static dashboard hosting, including tunnel-host public/private route gating.
@@ -98,7 +115,7 @@ Unlike durable memory facts, adaptive directives are injected into prompts direc
 
 **Text chat path:** The brain calls `llm.chatWithTools()` with the text reply tool set. The LLM returns `tool_use` blocks, the bot executes them, appends results, and loops until the LLM returns a text-only response. Implemented in `replyTools.ts` (inline tools) and dedicated agents like `browseAgent.ts` (agent loops).
 
-**Voice path:** Tools are registered as OpenAI Realtime function definitions. The Realtime brain emits `response.function_call_arguments.done` events, the bot executes the tool via `voiceToolCalls.ts` handlers, and sends results back with `conversation.item.create`. The brain continues the conversation with the result.
+**Voice path:** Tools are registered as OpenAI Realtime function definitions. The Realtime brain emits `response.function_call_arguments.done` events, the bot dispatches the tool via `voiceToolCallDispatch.ts` to the appropriate handler module, and sends results back with `conversation.item.create`. The brain continues the conversation with the result.
 
 **Agent tools:** Some tools themselves contain an inner agent loop. When the brain calls `browser_browse`, it spawns a `browseAgent` that runs its own multi-step LLM + browser tool cycle. The brain gets back a final result — it doesn't manage the inner loop directly.
 
@@ -116,10 +133,10 @@ Unlike durable memory facts, adaptive directives are injected into prompts direc
 
 Execution is routed through `src/agents/codeAgent.ts` and gated by settings:
 
-- `codeAgent.enabled`
-- `codeAgent.allowedUserIds` (allowlist)
-- `codeAgent.maxTasksPerHour`
-- `codeAgent.maxParallelTasks`
+- `agentStack.runtimeConfig.devTeam.*` (per-worker `enabled`, `maxTasksPerHour`, `maxParallelTasks`)
+- `permissions.devTasks.allowedUserIds` (allowlist)
+
+The dashboard flattens these into `codeAgent.*` form fields for backward compatibility, but the persisted source of truth is the preset-driven `agentStack` plus `permissions.devTasks`.
 
 ### Tool Composition Example
 
@@ -262,7 +279,10 @@ Dashboard read APIs also include:
 - `GET /api/automations/runs`: list run history for one automation.
 - `GET /api/memory/adaptive-directives`: list active adaptive directives for one guild.
 - `GET /api/memory/adaptive-directives/audit`: list adaptive directive audit events for one guild.
-- `POST /api/memory/simulate-slice`: simulate retrieval slices for memory prompt tuning.
+- `GET /api/memory/fact-profile`: structured fact profile for a guild/user.
+- `GET /api/memory/facts`: list/filter raw facts.
+- `GET /api/memory/subjects`: list subjects with fact counts.
+- `GET /api/memory/reflections`: list reflection run history.
 
 ## 11. Action Log Kinds
 
