@@ -246,6 +246,7 @@ function createOAuthFetch(
 export type ClaudeOAuthState = {
   tokens: ClaudeOAuthTokens;
   client: Anthropic;
+  warmup: () => Promise<void>;
 };
 
 export function isClaudeOAuthConfigured(envRefreshToken: string): boolean {
@@ -286,7 +287,12 @@ export function createClaudeOAuthClient(envRefreshToken: string): ClaudeOAuthSta
     get tokens() {
       return currentTokens;
     },
-    client
+    client,
+    async warmup() {
+      if (!currentTokens.accessToken || currentTokens.expiresAt < Date.now()) {
+        currentTokens = await refreshAccessToken(currentTokens);
+      }
+    }
   };
 }
 

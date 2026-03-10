@@ -469,6 +469,151 @@ test("callAnthropicStreaming forwards streamed text deltas and returns the final
   assert.equal(result.stopReason, "end_turn");
 });
 
+test("callAnthropic retries a transient overload once before succeeding", async () => {
+  const service = createService({ anthropicApiKey: "test-anthropic-key" });
+  let attempts = 0;
+  service.anthropic = {
+    messages: {
+      async create() {
+        attempts += 1;
+        if (attempts === 1) {
+          throw Object.assign(new Error("{\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}"), {
+            status: 529
+          });
+        }
+        return {
+          content: [{ type: "text", text: "recovered" }],
+          stop_reason: "end_turn",
+          usage: {
+            input_tokens: 7,
+            output_tokens: 2,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0
+          }
+        };
+      }
+    }
+  };
+
+  const result = await service.callAnthropic({
+    model: "claude-haiku-4-5",
+    systemPrompt: "system prompt",
+    userPrompt: "say hello",
+    contextMessages: [],
+    temperature: 0.2,
+    maxOutputTokens: 64
+  });
+
+  assert.equal(attempts, 2);
+  assert.equal(result.text, "recovered");
+});
+
+test("callAnthropicStreaming retries a transient overload before any text delta", async () => {
+  const service = createService({ anthropicApiKey: "test-anthropic-key" });
+  let attempts = 0;
+  service.anthropic = {
+    messages: {
+      stream() {
+        attempts += 1;
+        let onText = null;
+        return {
+          on(event, handler) {
+            if (event === "text") {
+              onText = handler;
+            }
+            return this;
+          },
+          abort() {},
+          async finalMessage() {
+            if (attempts === 1) {
+              throw Object.assign(new Error("{\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}"), {
+                status: 529
+              });
+            }
+            onText?.("recovered");
+            return {
+              content: [{ type: "text", text: "recovered" }],
+              stop_reason: "end_turn",
+              usage: {
+                input_tokens: 7,
+                output_tokens: 2,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0
+              }
+            };
+          }
+        };
+      }
+    }
+  };
+
+  const deltas: string[] = [];
+  const result = await service.callAnthropicStreaming({
+    model: "claude-haiku-4-5",
+    systemPrompt: "system prompt",
+    userPrompt: "say hello",
+    contextMessages: [],
+    temperature: 0.2,
+    maxOutputTokens: 64
+  }, {
+    onTextDelta(delta) {
+      deltas.push(delta);
+    }
+  });
+
+  assert.equal(attempts, 2);
+  assert.deepEqual(deltas, ["recovered"]);
+  assert.equal(result.text, "recovered");
+});
+
+test("callAnthropicStreaming does not retry after streamed text has already started", async () => {
+  const service = createService({ anthropicApiKey: "test-anthropic-key" });
+  let attempts = 0;
+  service.anthropic = {
+    messages: {
+      stream() {
+        attempts += 1;
+        let onText = null;
+        return {
+          on(event, handler) {
+            if (event === "text") {
+              onText = handler;
+            }
+            return this;
+          },
+          abort() {},
+          async finalMessage() {
+            onText?.("partial");
+            throw Object.assign(new Error("{\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}"), {
+              status: 529
+            });
+          }
+        };
+      }
+    }
+  };
+
+  const deltas: string[] = [];
+  await assert.rejects(
+    service.callAnthropicStreaming({
+      model: "claude-haiku-4-5",
+      systemPrompt: "system prompt",
+      userPrompt: "say hello",
+      contextMessages: [],
+      temperature: 0.2,
+      maxOutputTokens: 64
+    }, {
+      onTextDelta(delta) {
+        deltas.push(delta);
+      }
+    }),
+    /overloaded/i
+  );
+
+  assert.equal(attempts, 1);
+  assert.deepEqual(deltas, ["partial"]);
+});
+
 test("chatWithTools caches Anthropic system prefix and latest tool result follow-up context", async () => {
   const logs = [];
   const service = createService(

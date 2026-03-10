@@ -2,6 +2,12 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type OpenAI from "openai";
 import { buildAnthropicImageParts, safeJsonParse } from "./llmClaudeCode.ts";
 import {
+  getRetryDelayMs,
+  isRetryableFetchError,
+  shouldRetryHttpStatus,
+  withAttemptCount
+} from "../retry.ts";
+import {
   extractOpenAiResponseText,
   extractOpenAiResponseUsage,
   extractOpenAiToolCalls
@@ -20,12 +26,64 @@ import {
   type ToolLoopContentBlock,
   type ToolLoopMessage
 } from "./serviceShared.ts";
+import { sleep } from "../utils.ts";
 
 export type ChatGenerationDeps = {
   openai: OpenAI | null;
   xai: OpenAI | null;
   anthropic: Anthropic | null;
 };
+
+const ANTHROPIC_TRANSIENT_MAX_ATTEMPTS = 2;
+
+type AnthropicErrorLike = {
+  status?: unknown;
+  message?: unknown;
+  error?: {
+    type?: unknown;
+    message?: unknown;
+  } | null;
+};
+
+function resolveAbortError(signal?: AbortSignal) {
+  if (!signal?.aborted) return null;
+  const reason = signal.reason;
+  if (reason instanceof Error) return reason;
+  const normalizedReason = String(reason || "").trim();
+  return new Error(normalizedReason || "Anthropic request aborted.");
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  const error = resolveAbortError(signal);
+  if (error) throw error;
+}
+
+function isRetryableAnthropicError(error: unknown) {
+  const normalized = error && typeof error === "object"
+    ? error as AnthropicErrorLike
+    : null;
+  const status = Number(normalized?.status);
+  if (status === 529 || shouldRetryHttpStatus(status)) return true;
+  if (isRetryableFetchError(error)) return true;
+
+  const errorType = String(normalized?.error?.type || "").trim().toLowerCase();
+  if (errorType === "overloaded_error" || errorType === "rate_limit_error" || errorType === "timeout_error") {
+    return true;
+  }
+
+  const normalizedMessage = String(normalized?.message || normalized?.error?.message || "").trim().toLowerCase();
+  return normalizedMessage.includes("overloaded") ||
+    normalizedMessage.includes("rate limit") ||
+    normalizedMessage.includes("rate_limit") ||
+    normalizedMessage.includes("timed out") ||
+    normalizedMessage.includes("timeout");
+}
+
+async function sleepForAnthropicRetry(attempt: number, signal?: AbortSignal) {
+  throwIfAborted(signal);
+  await sleep(getRetryDelayMs(attempt));
+  throwIfAborted(signal);
+}
 
 function buildAnthropicMessagesRequest({
   model,
@@ -560,27 +618,43 @@ export async function callAnthropic(
   }
 
   const requestBody = buildAnthropicMessagesRequest(request);
-  const response = await deps.anthropic.messages.create(
-    requestBody as never,
-    request.signal ? { signal: request.signal } : undefined
-  ) as {
-    content: Array<{
-      type: string;
-      text?: string;
-      id?: string;
-      name?: string;
-      input?: Record<string, unknown>;
-    }>;
-    stop_reason?: string | null;
-    usage?: {
-      input_tokens?: number;
-      output_tokens?: number;
-      cache_creation_input_tokens?: number;
-      cache_read_input_tokens?: number;
-    };
-  };
+  for (let attempt = 1; attempt <= ANTHROPIC_TRANSIENT_MAX_ATTEMPTS; attempt += 1) {
+    throwIfAborted(request.signal);
+    try {
+      const response = await deps.anthropic.messages.create(
+        requestBody as never,
+        request.signal ? { signal: request.signal } : undefined
+      ) as {
+        content: Array<{
+          type: string;
+          text?: string;
+          id?: string;
+          name?: string;
+          input?: Record<string, unknown>;
+        }>;
+        stop_reason?: string | null;
+        usage?: {
+          input_tokens?: number;
+          output_tokens?: number;
+          cache_creation_input_tokens?: number;
+          cache_read_input_tokens?: number;
+        };
+      };
 
-  return buildAnthropicResponse(response);
+      return buildAnthropicResponse(response);
+    } catch (error) {
+      const shouldRetry =
+        !request.signal?.aborted &&
+        attempt < ANTHROPIC_TRANSIENT_MAX_ATTEMPTS &&
+        isRetryableAnthropicError(error);
+      if (!shouldRetry) {
+        throw withAttemptCount(error, attempt);
+      }
+      await sleepForAnthropicRetry(attempt, request.signal);
+    }
+  }
+
+  throw withAttemptCount(new Error("Anthropic request failed after retries."), ANTHROPIC_TRANSIENT_MAX_ATTEMPTS);
 }
 
 export async function callAnthropicStreaming(
@@ -593,74 +667,94 @@ export async function callAnthropicStreaming(
   }
 
   const requestBody = buildAnthropicMessagesRequest(request);
-  const stream = deps.anthropic.messages.stream(requestBody as never);
   const abortSignal = callbacks.signal || request.signal;
-  let removeAbortListener: (() => void) | null = null;
+  for (let attempt = 1; attempt <= ANTHROPIC_TRANSIENT_MAX_ATTEMPTS; attempt += 1) {
+    throwIfAborted(abortSignal);
+    let removeAbortListener: (() => void) | null = null;
+    let observedTextDelta = false;
+    let stream: ReturnType<Anthropic["messages"]["stream"]> | null = null;
+    try {
+      stream = deps.anthropic.messages.stream(requestBody as never);
 
-  // Claude streams can emit abort/error events when the caller clears a pending
-  // reply before finalMessage() settles. Attach listeners up front so those
-  // supersede aborts stay on the normal promise path instead of surfacing as an
-  // unhandled stream-level rejection.
-  stream.on("abort", () => {});
-  stream.on("error", () => {});
+      // Claude streams can emit abort/error events when the caller clears a pending
+      // reply before finalMessage() settles. Attach listeners up front so those
+      // supersede aborts stay on the normal promise path instead of surfacing as an
+      // unhandled stream-level rejection.
+      stream.on("abort", () => {});
+      stream.on("error", () => {});
 
-  if (abortSignal) {
-    if (abortSignal.aborted) {
-      stream.abort();
-      throw abortSignal.reason ?? new Error("Anthropic stream aborted before start.");
-    }
-    const abortListener = () => {
-      stream.abort();
-    };
-    abortSignal.addEventListener("abort", abortListener, { once: true });
-    removeAbortListener = () => {
-      abortSignal.removeEventListener("abort", abortListener);
-    };
-  }
-
-  stream.on("text", (delta) => {
-    callbacks.onTextDelta(String(delta || ""));
-  });
-
-  const finalMessagePromise = stream.finalMessage() as Promise<{
-    content: Array<{
-      type: string;
-      text?: string;
-      id?: string;
-      name?: string;
-      input?: Record<string, unknown>;
-    }>;
-    stop_reason?: string | null;
-    usage?: {
-      input_tokens?: number;
-      output_tokens?: number;
-      cache_creation_input_tokens?: number;
-      cache_read_input_tokens?: number;
-    };
-  }>;
-
-  try {
-    const response = await finalMessagePromise;
-    const normalized = buildAnthropicResponse(response);
-    if (typeof callbacks.onContentBlockComplete === "function") {
-      for (const block of response.content) {
-        if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
-          callbacks.onContentBlockComplete({ type: "text", text: block.text });
-          continue;
+      if (abortSignal) {
+        if (abortSignal.aborted) {
+          stream.abort();
+          throw resolveAbortError(abortSignal) ?? new Error("Anthropic stream aborted before start.");
         }
-        if (block.type === "tool_use" && block.id && block.name) {
-          callbacks.onContentBlockComplete({
-            type: "tool_use",
-            id: block.id,
-            name: block.name,
-            input: block.input || {}
-          });
+        const abortListener = () => {
+          stream?.abort();
+        };
+        abortSignal.addEventListener("abort", abortListener, { once: true });
+        removeAbortListener = () => {
+          abortSignal.removeEventListener("abort", abortListener);
+        };
+      }
+
+      stream.on("text", (delta) => {
+        const normalizedDelta = String(delta || "");
+        if (normalizedDelta) observedTextDelta = true;
+        callbacks.onTextDelta(normalizedDelta);
+      });
+
+      const response = await stream.finalMessage() as {
+        content: Array<{
+          type: string;
+          text?: string;
+          id?: string;
+          name?: string;
+          input?: Record<string, unknown>;
+        }>;
+        stop_reason?: string | null;
+        usage?: {
+          input_tokens?: number;
+          output_tokens?: number;
+          cache_creation_input_tokens?: number;
+          cache_read_input_tokens?: number;
+        };
+      };
+      const normalized = buildAnthropicResponse(response);
+      if (typeof callbacks.onContentBlockComplete === "function") {
+        for (const block of response.content) {
+          if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
+            callbacks.onContentBlockComplete({ type: "text", text: block.text });
+            continue;
+          }
+          if (block.type === "tool_use" && block.id && block.name) {
+            callbacks.onContentBlockComplete({
+              type: "tool_use",
+              id: block.id,
+              name: block.name,
+              input: block.input || {}
+            });
+          }
         }
       }
+      callbacks.onComplete?.(normalized);
+      return normalized;
+    } catch (error) {
+      const shouldRetry =
+        !abortSignal?.aborted &&
+        !observedTextDelta &&
+        attempt < ANTHROPIC_TRANSIENT_MAX_ATTEMPTS &&
+        isRetryableAnthropicError(error);
+      if (!shouldRetry) {
+        throw withAttemptCount(error, attempt);
+      }
+      try {
+        stream?.abort();
+      } catch {}
+      await sleepForAnthropicRetry(attempt, abortSignal);
+    } finally {
+      removeAbortListener?.();
     }
-    callbacks.onComplete?.(normalized);
-    return normalized;
-  } finally {
-    removeAbortListener?.();
   }
+
+  throw withAttemptCount(new Error("Anthropic stream failed after retries."), ANTHROPIC_TRANSIENT_MAX_ATTEMPTS);
 }

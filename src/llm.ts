@@ -148,6 +148,18 @@ export class LLMService {
     this.codexCliBrainModel = "";
   }
 
+  async warmup(): Promise<void> {
+    if (this.claudeOAuth) {
+      const startedAt = Date.now();
+      try {
+        await this.claudeOAuth.warmup();
+        console.log(`[claude-oauth] Token warmup completed in ${Date.now() - startedAt}ms`);
+      } catch (error) {
+        console.error(`[claude-oauth] Token warmup failed after ${Date.now() - startedAt}ms:`, error);
+      }
+    }
+  }
+
   private chatDeps(provider?: string): ChatGenerationDeps {
     return {
       openai: provider === "openai-oauth"
@@ -328,7 +340,7 @@ export class LLMService {
       provider === "openai" ||
       provider === "openai-oauth";
     const streamingTransportAllowed = streamingTransportSupported;
-    let usedStreamingTransport = false;
+    let usedStreamingTransport = streamingTransportAllowed;
     try {
       const response = streamingTransportAllowed
         ? await this.callChatModelStreaming(provider, {
@@ -362,7 +374,6 @@ export class LLMService {
           tools: normalizedTools,
           signal
         });
-      usedStreamingTransport = streamingTransportAllowed;
       if (!streamingTransportAllowed && response.text) {
         onTextDelta(response.text);
       }

@@ -48,7 +48,10 @@ export async function main() {
   const search = new WebSearchService({ appConfig, store });
   const video = new VideoContextService({ store, llm });
   const memory = new MemoryManager({ store, llm, memoryFilePath });
-  await memory.refreshMemoryMarkdown();
+  await Promise.all([
+    memory.refreshMemoryMarkdown(),
+    llm.warmup()
+  ]);
   const browserManager = new BrowserManager({ maxConcurrentSessions: 2, sessionTimeoutMs: 300_000 });
 
   const bot = new ClankerBot({ appConfig, store, llm, memory, discovery, search, gifs, video, browserManager });

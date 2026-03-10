@@ -106,6 +106,7 @@ The shared Anthropic request path now emits SDK-typed prompt-caching breakpoints
 
 - Stable system prompt text is sent as a cacheable Anthropic text block, so persona, long-form behavior instructions, and tool definitions can be reused instead of re-prefilled every turn.
 - Anthropic tool-loop follow-ups mark the newest `tool_result` block as cacheable, so immediate continuation calls can reuse large fetched context such as search or article results.
+- The shared Anthropic request path retries one transient overload/rate-limit/network failure before surfacing an error. Streaming retries only happen before any text delta has been emitted, so live voice output does not duplicate partial speech.
 
 This is prompt-prefix reuse, not hidden server-side conversation memory. The Messages API remains stateless and still only knows the context the app resends on each call.
 
