@@ -1,5 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { normalizeDirectiveText } from "../bot/botHelpers.ts";
+import type { ImageInput } from "../llm/serviceShared.ts";
 import { throwIfAborted } from "./browserTaskRuntime.ts";
 import {
   executeSharedMemoryToolSearch,
@@ -46,6 +47,16 @@ const MAX_CODE_TASK_LEN = 2000;
 const MAX_OPEN_ARTICLE_REF_LEN = 260;
 const MAX_VOICE_MUSIC_QUERY_LEN = 180;
 
+function appendBrowserScreenshotNote(content: string, imageInputs: ImageInput[] | undefined) {
+  const imageCount = Array.isArray(imageInputs) ? imageInputs.length : 0;
+  if (imageCount <= 0) return content;
+  const note = imageCount === 1
+    ? "Browser screenshot attached for visual inspection."
+    : `${imageCount} browser screenshots attached for visual inspection.`;
+  const normalizedContent = String(content || "").trim();
+  return normalizedContent ? `${normalizedContent}\n\n${note}` : note;
+}
+
 interface ReplyToolDefinition {
   name: string;
   description: string;
@@ -59,6 +70,7 @@ interface ReplyToolCallInput {
 
 interface ReplyToolResult {
   content: string;
+  imageInputs?: ImageInput[];
   isError?: boolean;
 }
 
@@ -95,6 +107,7 @@ export type ReplyToolRuntime = {
     }) => Promise<{
       used?: boolean;
       text?: string;
+      imageInputs?: ImageInput[];
       steps?: number;
       hitStepLimit?: boolean;
       error?: string | null;
@@ -641,7 +654,13 @@ async function executeBrowserBrowse(
       if (turnResult.isError) {
         return { content: `Browser browse failed: ${turnResult.errorMessage}${sessionNote}`, isError: true };
       }
-      return { content: (turnResult.text.trim() || "Browser browse completed.") + sessionNote };
+      return {
+        content: appendBrowserScreenshotNote(
+          (turnResult.text.trim() || "Browser browse completed.") + sessionNote,
+          turnResult.imageInputs
+        ),
+        imageInputs: turnResult.imageInputs
+      };
     } catch (error) {
       return { content: `Browser browse session failed: ${String((error as Error)?.message || error)}`, isError: true };
     }
@@ -665,7 +684,13 @@ async function executeBrowserBrowse(
         if (turnResult.isError) {
           return { content: `Browser browse failed: ${turnResult.errorMessage}${sessionNote}`, isError: true };
         }
-        return { content: (turnResult.text.trim() || "Browser browse completed.") + sessionNote };
+        return {
+          content: appendBrowserScreenshotNote(
+            (turnResult.text.trim() || "Browser browse completed.") + sessionNote,
+            turnResult.imageInputs
+          ),
+          imageInputs: turnResult.imageInputs
+        };
       } catch (error) {
         return { content: `Browser browse failed: ${String((error as Error)?.message || error)}`, isError: true };
       }
@@ -713,7 +738,11 @@ async function executeBrowserBrowse(
       .join(" ");
 
     return {
-      content: suffix ? `${summary}\n\n${suffix}` : summary || "Browser browse completed with no text result."
+      content: appendBrowserScreenshotNote(
+        suffix ? `${summary}\n\n${suffix}` : summary || "Browser browse completed with no text result.",
+        result.imageInputs
+      ),
+      imageInputs: result.imageInputs
     };
   } catch (error) {
     return {

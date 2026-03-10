@@ -86,6 +86,8 @@ type SelectedImageInput = {
   url?: string;
   filename?: string;
   contentType?: string;
+  mediaType?: string;
+  dataBase64?: string;
 };
 
 type VideoReplyMessageLike = {
@@ -155,6 +157,7 @@ export type BrowserBrowseContextState = {
   error: string | null;
   query: string;
   text: string;
+  imageInputs?: SelectedImageInput[];
   steps: number;
   hitStepLimit: boolean;
   budget: BrowserBudgetState;
@@ -541,6 +544,7 @@ export function buildBrowserBrowseContext(
     error: null,
     query: "",
     text: "",
+    imageInputs: [],
     steps: 0,
     hitStepLimit: false,
     budget

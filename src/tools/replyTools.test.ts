@@ -279,6 +279,12 @@ test("executeReplyTool delegates browser_browse to runtime", async () => {
           calls.push(opts);
           return {
             text: "Found the latest post.",
+            imageInputs: [
+              {
+                mediaType: "image/png",
+                dataBase64: "Zm9v"
+              }
+            ],
             steps: 3,
             hitStepLimit: false
           };
@@ -300,7 +306,14 @@ test("executeReplyTool delegates browser_browse to runtime", async () => {
 
   assert.equal(result.isError, undefined);
   assert.match(result.content, /Found the latest post\./);
+  assert.match(result.content, /Browser screenshot attached for visual inspection\./);
   assert.match(result.content, /Steps: 3/);
+  assert.deepEqual(result.imageInputs, [
+    {
+      mediaType: "image/png",
+      dataBase64: "Zm9v"
+    }
+  ]);
   assert.deepEqual(calls, [{
     settings: {},
     query: "check the latest post",

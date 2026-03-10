@@ -13,6 +13,10 @@ The browser agent is a headless browsing capability built on `agent-browser`:
 
 At the top level, the main brain does not directly drive `browser_open` / `browser_click`. It calls the higher-level `browser_browse` tool, and that tool launches the inner browse agent.
 
+The shared `browser_browse` schema description stays short on purpose. The schema names the capability and contrasts it with `web_scrape`; the fuller routing guidance lives in prompts and this runtime doc.
+
+Tool selection is by fit, not a fixed ladder. `web_scrape` is best for quickly reading page text from a known URL. `browser_browse` is the right tool when the user explicitly asks for browser use, asks for a screenshot, asks what a page looks like, when page appearance/layout matters, or when navigation/interaction/JS rendering is needed.
+
 ## Where It Is Available
 
 `browser_browse` is available in:
@@ -64,6 +68,8 @@ That loop:
 - executes tool calls through `BrowserManager`
 - appends tool results back into the loop
 - stops when the model returns plain text
+
+When the inner browse agent captures a screenshot, that image is preserved as a structured image input instead of being stranded as raw base64 text. The parent brain receives the screenshot on the next continuation turn alongside the browser tool result text, so it can inspect the page visually. A request like "take a screenshot of eBay and tell me what's on the page" should route through `browser_browse`, not `web_scrape`.
 
 ### 4. Low-level browser execution
 
@@ -159,6 +165,8 @@ Browser-agent activity is visible via action-log kinds:
 - `browser_tool_step`
 
 The dashboard text history also surfaces richer tool-result detail for browser-adjacent tool usage alongside other tool calls.
+
+`browser_browse_call` and `browser_agent_session_turn` metadata include `imageInputCount` when screenshots were captured and handed back to the parent brain.
 
 ## Testing
 

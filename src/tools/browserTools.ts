@@ -1,4 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import type { ImageInput } from "../llm/serviceShared.ts";
 import type { BrowserManager } from "../services/BrowserManager.ts";
 
 interface BrowserOpenParams { url: string }
@@ -16,6 +17,34 @@ type BrowserToolParams =
   | BrowserScrollParams
   | BrowserExtractParams
   | Record<string, never>;
+
+export type BrowserToolResult = {
+  text: string;
+  imageInputs?: ImageInput[];
+  isError?: boolean;
+};
+
+function buildBrowserTextResult(text: string): BrowserToolResult {
+  const normalizedText = String(text || "");
+  return {
+    text: normalizedText,
+    isError: normalizedText.toLowerCase().startsWith("error:")
+  };
+}
+
+function parseBrowserScreenshotDataUrl(dataUrl: string): ImageInput | null {
+  const normalized = String(dataUrl || "").trim();
+  const match = normalized.match(/^data:(image\/[a-z0-9.+-]+);base64,([\s\S]+)$/i);
+  if (!match) return null;
+
+  const mediaType = String(match[1] || "").trim().toLowerCase();
+  const dataBase64 = String(match[2] || "").trim();
+  if (!mediaType || !dataBase64) return null;
+  return {
+    mediaType,
+    dataBase64
+  };
+}
 
 export const BROWSER_AGENT_TOOL_DEFINITIONS: Array<{
   name: string;
@@ -94,7 +123,7 @@ export const BROWSER_AGENT_TOOL_DEFINITIONS: Array<{
     },
     {
       name: "browser_screenshot",
-      description: "Captures a screenshot of the current page and returns it as a base64 data URL.",
+      description: "Captures a screenshot of the current page and attaches it for visual inspection.",
       input_schema: {
         type: "object",
         properties: {}
@@ -117,40 +146,70 @@ export async function executeBrowserTool(
   params: BrowserToolParams,
   stepTimeoutMs?: number,
   signal?: AbortSignal
-): Promise<string> {
+): Promise<BrowserToolResult> {
   try {
     switch (toolName) {
       case "browser_open":
-        return await browserManager.open(sessionKey, (params as BrowserOpenParams).url, stepTimeoutMs, signal);
+        return buildBrowserTextResult(
+          await browserManager.open(sessionKey, (params as BrowserOpenParams).url, stepTimeoutMs, signal)
+        );
       case "browser_snapshot":
-        return await browserManager.snapshot(
-          sessionKey,
-          (params as BrowserSnapshotParams).interactive_only !== false,
-          stepTimeoutMs,
-          signal
+        return buildBrowserTextResult(
+          await browserManager.snapshot(
+            sessionKey,
+            (params as BrowserSnapshotParams).interactive_only !== false,
+            stepTimeoutMs,
+            signal
+          )
         );
       case "browser_click":
-        return await browserManager.click(sessionKey, (params as BrowserClickParams).ref, stepTimeoutMs, signal);
+        return buildBrowserTextResult(
+          await browserManager.click(sessionKey, (params as BrowserClickParams).ref, stepTimeoutMs, signal)
+        );
       case "browser_type": {
         const p = params as BrowserTypeParams;
-        return await browserManager.type(sessionKey, p.ref, p.text, p.pressEnter !== false, stepTimeoutMs, signal);
+        return buildBrowserTextResult(
+          await browserManager.type(sessionKey, p.ref, p.text, p.pressEnter !== false, stepTimeoutMs, signal)
+        );
       }
       case "browser_scroll": {
         const p = params as BrowserScrollParams;
-        return await browserManager.scroll(sessionKey, p.direction, p.pixels, stepTimeoutMs, signal);
+        return buildBrowserTextResult(
+          await browserManager.scroll(sessionKey, p.direction, p.pixels, stepTimeoutMs, signal)
+        );
       }
       case "browser_extract":
-        return await browserManager.extract(sessionKey, (params as BrowserExtractParams).ref, stepTimeoutMs, signal);
-      case "browser_screenshot":
-        return await browserManager.screenshot(sessionKey, stepTimeoutMs, signal);
+        return buildBrowserTextResult(
+          await browserManager.extract(sessionKey, (params as BrowserExtractParams).ref, stepTimeoutMs, signal)
+        );
+      case "browser_screenshot": {
+        const screenshot = await browserManager.screenshot(sessionKey, stepTimeoutMs, signal);
+        if (String(screenshot || "").toLowerCase().startsWith("error:")) {
+          return buildBrowserTextResult(String(screenshot || ""));
+        }
+        const imageInput = parseBrowserScreenshotDataUrl(String(screenshot || ""));
+        if (!imageInput) {
+          return {
+            text: "Error executing browser_screenshot: invalid screenshot payload",
+            isError: true
+          };
+        }
+        return {
+          text: "Browser screenshot captured and attached for visual inspection.",
+          imageInputs: [imageInput]
+        };
+      }
       case "browser_close":
         await browserManager.close(sessionKey);
-        return "Browser closed successfully.";
+        return { text: "Browser closed successfully." };
       default:
         throw new Error(`Unknown browser tool: ${toolName}`);
     }
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    return `Error executing ${toolName}: ${message}`;
+    return {
+      text: `Error executing ${toolName}: ${message}`,
+      isError: true
+    };
   }
 }

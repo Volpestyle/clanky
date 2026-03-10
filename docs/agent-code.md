@@ -80,6 +80,8 @@ In product terms:
 
 The same shared schema is used across text and voice tool registration (`src/tools/sharedToolSchemas.ts`).
 
+That shared schema stays intentionally concise. The tool description names the capability and its main options, while access control, worker routing, and session behavior are documented here instead of being packed into schema prose.
+
 When `role` is omitted, the generic `code_task` path routes through the implementation role.
 
 ## Session Model

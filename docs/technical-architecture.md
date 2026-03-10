@@ -47,6 +47,8 @@ At a high level:
 
 The orchestrator is still tool-using and LLM-driven. The preset system resolves which external runtimes back those capabilities.
 
+Shared tool schemas in `src/tools/sharedToolSchemas.ts` are concise capability contracts. Tool descriptions state what the tool does and the key contrast with nearby tools; longer routing policy and conversational guidance live in prompts and runtime docs.
+
 Shared conversational tools:
 
 - `conversation_search`

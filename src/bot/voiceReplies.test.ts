@@ -619,6 +619,43 @@ test("generateVoiceTurnReply keeps the first streamed chunk intact until punctua
   assert.equal(reply.streamedSentenceCount, 1);
 });
 
+test("generateVoiceTurnReply strips inline soundboard directives from streamed speech output", async () => {
+  const streamed: string[] = [];
+  const { bot } = createVoiceBot({
+    generationSequence: [
+      {
+        text: "yo [[SOUNDBOARD:airhorn@123]] done",
+        textDeltas: ["yo [[SOUNDBOARD:airhorn@123]] done"]
+      }
+    ]
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      voice: {
+        streamingEnabled: true,
+        streamingEagerFirstChunkChars: 10,
+        streamingMaxBufferChars: 120,
+        soundboard: {
+          enabled: true
+        }
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "hit the airhorn",
+    soundboardCandidates: ["airhorn@123"],
+    onSpokenSentence: ({ text }) => {
+      streamed.push(text);
+    }
+  });
+
+  assert.deepEqual(streamed, ["yo done"]);
+  assert.equal(reply.text, "yo done");
+  assert.equal(reply.streamedSentenceCount, 1);
+});
+
 test("generateVoiceTurnReply preserves spoken text across tool-loop turns", async () => {
   const { bot } = createVoiceBot({
     generationSequence: [
@@ -1151,6 +1188,86 @@ test("generateVoiceTurnReply includes all tool results when a continuation-requi
   );
 });
 
+test("generateVoiceTurnReply forwards browser screenshots from tool results into the continuation model call", async () => {
+  const { bot, generationPayloads, getGenerationCalls } = createVoiceBot({
+    generationSequence: [
+      {
+        text: "let me look at it.",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "browser_browse",
+            input: {
+              query: "inspect the page visually"
+            }
+          }
+        ],
+        rawContent: [
+          { type: "text", text: "let me look at it." },
+          {
+            type: "tool_use",
+            id: "tc_1",
+            name: "browser_browse",
+            input: { query: "inspect the page visually" }
+          }
+        ]
+      },
+      {
+        text: "yeah the banner says sold out."
+      }
+    ]
+  });
+
+  bot.buildBrowserBrowseContext = () => ({
+    requested: false,
+    configured: true,
+    enabled: true,
+    used: false,
+    blockedByBudget: false,
+    error: null,
+    query: "",
+    text: "",
+    imageInputs: [],
+    steps: 0,
+    hitStepLimit: false,
+    budget: {
+      canBrowse: true
+    }
+  });
+  bot.runModelRequestedBrowserBrowse = async () => ({
+    used: true,
+    text: "I checked the page.",
+    imageInputs: [
+      {
+        mediaType: "image/png",
+        dataBase64: "Zm9v"
+      }
+    ],
+    steps: 2,
+    hitStepLimit: false,
+    error: null,
+    blockedByBudget: false
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "what does the page look like"
+  });
+
+  assert.equal(reply.text, "let me look at it.\nyeah the banner says sold out.");
+  assert.equal(getGenerationCalls(), 2);
+  assert.equal(generationPayloads[1]?.userPrompt, "Attached are images returned by the previous tool call. Use them if they help.");
+  assert.deepEqual(generationPayloads[1]?.imageInputs, [
+    {
+      mediaType: "image/png",
+      dataBase64: "Zm9v"
+    }
+  ]);
+});
+
 test("generateVoiceTurnReply carries resolved streamed speech into the continuation context when generation.text is empty", async () => {
   const { bot, generationPayloads, getGenerationCalls } = createVoiceBot({
     generationSequence: [
@@ -1478,7 +1595,11 @@ test("generateVoiceTurnReply advertises tool runtimes only when the capability e
       assertPrompt(prompt) {
         assert.equal(prompt.includes("Interactive browser browsing is available."), true);
         assert.equal(
-          prompt.includes("If the task genuinely requires interactive browsing, call browser_browse in the same response."),
+          prompt.includes("If the speaker explicitly asks you to use a browser, asks for a screenshot of a webpage, asks what a page looks like, or the task genuinely requires interactive browsing, call browser_browse in the same response."),
+          true
+        );
+        assert.equal(
+          prompt.includes("Do not say you cannot take or inspect webpage screenshots when browser_browse is available. Use the browser tool instead."),
           true
         );
       }

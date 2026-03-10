@@ -1,3 +1,5 @@
+import type { ImageInput } from "../llm/serviceShared.ts";
+
 /**
  * Unified SubAgentSession framework
  *
@@ -14,6 +16,7 @@
 export interface SubAgentTurnResult {
   text: string;
   costUsd: number;
+  imageInputs?: ImageInput[];
   isError: boolean;
   errorMessage: string;
   usage: {

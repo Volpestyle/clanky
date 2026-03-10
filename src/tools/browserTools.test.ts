@@ -20,6 +20,12 @@ test("executeBrowserTool delegates browser_screenshot with the step timeout", as
     9_999
   );
 
-  assert.equal(result, "data:image/png;base64,Zm9v");
+  assert.equal(result.text, "Browser screenshot captured and attached for visual inspection.");
+  assert.deepEqual(result.imageInputs, [
+    {
+      mediaType: "image/png",
+      dataBase64: "Zm9v"
+    }
+  ]);
   assert.deepEqual(calls, [{ sessionKey: "session-1", timeoutMs: 9_999 }]);
 });

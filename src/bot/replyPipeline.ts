@@ -769,6 +769,7 @@ export async function executeReplyLlm(
     }
 
     const toolResultMessages: ContentBlock[] = [];
+    let toolResultImageInputsAdded = false;
 
     // Separate sub-agent tools (can run concurrently) from sequential tools
     const CONCURRENT_TOOL_NAMES = new Set(["code_task", "browser_browse"]);
@@ -788,6 +789,18 @@ export async function executeReplyLlm(
         throwIfAborted(signal, "Reply cancelled");
         const toolInput = toolCall.input;
         const result = await executeReplyTool(toolCall.name, toolInput, replyToolRuntime, replyToolContext);
+        if (
+          Array.isArray(result?.imageInputs) &&
+          result.imageInputs.length &&
+          typeof bot.mergeImageInputs === "function"
+        ) {
+          modelImageInputs = bot.mergeImageInputs({
+            baseInputs: modelImageInputs,
+            extraInputs: result.imageInputs,
+            maxInputs: MAX_MODEL_IMAGE_INPUTS
+          });
+          toolResultImageInputsAdded = true;
+        }
         concurrentResults.set(toolCall.id, result);
       }));
       settledCalls.forEach((settled, index) => {
@@ -876,6 +889,19 @@ export async function executeReplyLlm(
         );
       }
 
+      if (
+        Array.isArray(result?.imageInputs) &&
+        result.imageInputs.length &&
+        typeof bot.mergeImageInputs === "function"
+      ) {
+        modelImageInputs = bot.mergeImageInputs({
+          baseInputs: modelImageInputs,
+          extraInputs: result.imageInputs,
+          maxInputs: MAX_MODEL_IMAGE_INPUTS
+        });
+        toolResultImageInputsAdded = true;
+      }
+
       if (toolCall.name === "memory_search" && !result.isError) {
         usedMemoryLookupFollowup = true;
       } else if (toolCall.name === "image_lookup" && !result.isError) {
@@ -919,7 +945,9 @@ export async function executeReplyLlm(
     generation = await bot.llm.generate({
       settings: followupGenerationSettings,
       systemPrompt,
-      userPrompt: "",
+      userPrompt: toolResultImageInputsAdded
+        ? "Attached are images returned by the previous tool call. Use them if they help."
+        : "",
       imageInputs: modelImageInputs,
       contextMessages: replyContextMessages,
       jsonSchema: REPLY_OUTPUT_JSON_SCHEMA,

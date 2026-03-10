@@ -1,6 +1,7 @@
 import type OpenAI from "openai";
 import { estimateUsdCost } from "../llm/pricing.ts";
 import { extractOpenAiResponseText, extractOpenAiResponseUsage } from "../llm/llmHelpers.ts";
+import type { ImageInput } from "../llm/serviceShared.ts";
 import type { BrowserManager } from "../services/BrowserManager.ts";
 import { createAbortError, isAbortError, throwIfAborted } from "./browserTaskRuntime.ts";
 
@@ -169,6 +170,7 @@ export type OpenAiComputerUseResult = {
   steps: number;
   totalCostUsd: number;
   hitStepLimit: boolean;
+  imageInputs?: ImageInput[];
 };
 
 function resolveInitialUrl(instruction: string) {

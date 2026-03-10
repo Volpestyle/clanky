@@ -854,15 +854,35 @@ export class InstructionManager {
     }
 
     const musicContext = this.host.getMusicPromptContext(session);
-    if (musicContext && musicContext.playbackState !== "idle") {
+    if (
+      musicContext && (
+        musicContext.currentTrack?.title ||
+        musicContext.lastTrack?.title ||
+        musicContext.queueLength > 0 ||
+        musicContext.lastAction ||
+        musicContext.lastQuery
+      )
+    ) {
+      const musicDisplayState =
+        musicContext.playbackState === "idle" &&
+        (musicContext.currentTrack?.title || musicContext.lastTrack?.title)
+          ? "stopped"
+          : musicContext.playbackState;
       const musicLines = ["Music playback:"];
-      musicLines.push(`- Status: ${musicContext.playbackState}`);
+      musicLines.push(`- Status: ${musicDisplayState}`);
       if (musicContext.currentTrack) {
         const artists = musicContext.currentTrack.artists.length
           ? musicContext.currentTrack.artists.join(", ")
           : "unknown artist";
-        musicLines.push(`- Now playing: ${musicContext.currentTrack.title} by ${artists}`);
-      } else if (musicContext.lastTrack && musicContext.playbackState === "stopped") {
+        musicLines.push(`- Current song: ${musicContext.currentTrack.title} by ${artists} (${musicDisplayState})`);
+      }
+      if (
+        musicContext.lastTrack && (
+          !musicContext.currentTrack ||
+          musicContext.currentTrack.title !== musicContext.lastTrack.title ||
+          musicContext.currentTrack.artists.join(" | ") !== musicContext.lastTrack.artists.join(" | ")
+        )
+      ) {
         const artists = musicContext.lastTrack.artists.length
           ? musicContext.lastTrack.artists.join(", ")
           : "unknown artist";
@@ -870,6 +890,15 @@ export class InstructionManager {
       }
       if (musicContext.queueLength > 0) {
         musicLines.push(`- Queue: ${musicContext.queueLength} track(s)`);
+        for (const [index, track] of musicContext.upcomingTracks.entries()) {
+          musicLines.push(`- Queue item ${index + 1}: ${track.title}${track.artist ? ` - ${track.artist}` : ""}`);
+        }
+      }
+      if (musicContext.lastAction) {
+        musicLines.push(`- Last action: ${musicContext.lastAction}`);
+      }
+      if (musicContext.lastQuery) {
+        musicLines.push(`- Last music query: ${musicContext.lastQuery}`);
       }
       sections.push(musicLines.join("\n"));
     }
@@ -892,7 +921,8 @@ export class InstructionManager {
           localToolNames.length > 0 ? `- Local tools: ${localToolNames.join(", ")}` : null,
           mcpToolNames.length > 0 ? `- MCP tools: ${mcpToolNames.join(", ")}` : null,
           "- Use tools when they improve factuality or action execution. Always call the tool — never just say you will.",
-          "- Choose the web tool that best fits the task. Prefer the lightest sufficient tool, but do not follow a fixed order: use web_search for fresh discovery or current facts, web_scrape for a specific known URL, and browser_browse when you need JS rendering or page interaction (clicking, scrolling).",
+          "- Choose the web tool that best fits the task. Prefer the lightest sufficient tool, but do not follow a fixed order: use web_search for fresh discovery or current facts, web_scrape when you mainly need page text from a known URL, and browser_browse when the user explicitly wants browser use, asks for a screenshot, asks what the page looks like, when visual layout matters, or when you need JS rendering or page interaction (clicking, scrolling).",
+          "- browser_browse can capture browser screenshots and return them for visual inspection on the follow-up turn. Do not say webpage screenshots are impossible when browser_browse is available.",
           "- When users ask you to look something up, search for something, find prices, or need current/factual information, call web_search immediately in the same response. Do not respond with only audio saying you will search — include the tool call.",
           "- Use conversation_search when the speaker asks what was said earlier or asks you to remember a prior exchange.",
           "- For memory writes, only store concise durable facts and avoid secrets.",

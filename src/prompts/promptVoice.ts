@@ -34,6 +34,42 @@ const VOICE_CONTROL_TOOL_NAMES = VOICE_TOOL_SCHEMAS.map((schema) => schema.name)
 const SESSION_CONTEXT_PROMPT_MAX_ENTRIES = 12;
 const SESSION_CONTEXT_PROMPT_MAX_TOTAL_CHARS = 1_200;
 
+function formatMusicPromptArtists(artists: string[] = []) {
+  return artists.length ? artists.join(", ") : "unknown artist";
+}
+
+function areMusicPromptTracksEqual(
+  left: VoiceMusicPromptContext["currentTrack"] | VoiceMusicPromptContext["lastTrack"],
+  right: VoiceMusicPromptContext["currentTrack"] | VoiceMusicPromptContext["lastTrack"]
+) {
+  if (!left?.title || !right?.title) return false;
+  const leftArtists = Array.isArray(left.artists) ? left.artists.join(" | ") : "";
+  const rightArtists = Array.isArray(right.artists) ? right.artists.join(" | ") : "";
+  return left.title === right.title && leftArtists === rightArtists;
+}
+
+function shouldRenderMusicPromptContext(musicContext: VoiceMusicPromptContext | null) {
+  if (!musicContext) return false;
+  return Boolean(
+    musicContext.currentTrack?.title ||
+    musicContext.lastTrack?.title ||
+    musicContext.queueLength > 0 ||
+    musicContext.lastAction ||
+    musicContext.lastQuery
+  );
+}
+
+function resolveMusicPromptDisplayState(musicContext: VoiceMusicPromptContext | null) {
+  if (!musicContext) return "idle";
+  if (
+    musicContext.playbackState === "idle" &&
+    (musicContext.currentTrack?.title || musicContext.lastTrack?.title)
+  ) {
+    return "stopped";
+  }
+  return musicContext.playbackState;
+}
+
 function collectAvailableVoiceToolNames({
   webSearchAvailable,
   browserBrowseAvailable,
@@ -140,6 +176,7 @@ export function buildVoiceTurnPrompt({
   allowScreenShareToolCall = false,
   allowMemoryToolCalls = false,
   allowSoundboardToolCall = false,
+  allowInlineSoundboardDirectives = false,
   allowVoiceToolCalls = false,
   musicContext = null,
   hasDirectVisionFrame = false,
@@ -658,7 +695,7 @@ export function buildVoiceTurnPrompt({
   parts.push("- Use tools whenever they materially improve factuality or execute a requested action. Do not promise future action without either calling the tool or declining. A brief natural lead-in before a tool call is allowed.");
   parts.push("- Use the exact tool name. Do not encode tool intent in JSON helper fields, helper refs, or placeholder control fields.");
   parts.push("- Ground your spoken reply in the tool result. Do not claim a tool succeeded, opened something, searched something, or sent something before the tool actually returns.");
-  parts.push("- Choose the tool that best fits the task. Prefer the lightest sufficient tool, but do not follow a fixed order: conversation_search for prior exchanges, web_search for fresh discovery or current facts, web_scrape when you already have a URL, and browser_browse when you need JS rendering or interaction.");
+  parts.push("- Choose the tool that best fits the task. Prefer the lightest sufficient tool, but do not follow a fixed order: conversation_search for prior exchanges, web_search for fresh discovery or current facts, web_scrape when you mainly need page text from a known URL, and browser_browse when the speaker explicitly wants browser use, asks for a screenshot, asks what the page looks like, when visual layout matters, or when you need JS rendering or interaction.");
   parts.push("- If the speaker asks you to look something up, find current facts, check prices, verify something online, open a found article, share a screen link, control music, or leave VC, call the relevant tool in the same turn. A short bridge phrase before the tool call is allowed when it sounds more natural.");
   parts.push("- If a tool fails or is unavailable, say that briefly and continue naturally without pretending it worked.");
 
@@ -682,10 +719,19 @@ export function buildVoiceTurnPrompt({
 
   if (allowSoundboardToolCall && normalizedSoundboardCandidates.length) {
     const soundboardGuidance = buildVoiceSoundboardGuidanceLines(soundboardEagerness);
-    parts.push("Discord soundboard tool call is available.");
+    parts.push("Discord soundboard playback is available this turn.");
     parts.push(...soundboardGuidance.lines);
-    parts.push("If a sound effect would genuinely improve the moment, especially as a humorous reaction beat or punctuation, call play_soundboard with refs from this list in the order they should fire:");
-    parts.push(normalizedSoundboardCandidates.join("\n"));
+    if (allowInlineSoundboardDirectives) {
+      parts.push("For precise timing relative to speech, insert [[SOUNDBOARD:<sound_ref>]] exactly where the effect should fire using refs from this list:");
+      parts.push(normalizedSoundboardCandidates.join("\n"));
+      parts.push("The [[SOUNDBOARD:...]] directive is control markup only and will not be spoken aloud.");
+      parts.push("Use play_soundboard only for a standalone sound effect when you do not need precise placement inside spoken text.");
+      parts.push("Do not both insert [[SOUNDBOARD:...]] and call play_soundboard for the same beat.");
+    } else {
+      parts.push("Streaming speech is active this turn. If a sound effect would genuinely improve the moment, use play_soundboard with refs from this list:");
+      parts.push(normalizedSoundboardCandidates.join("\n"));
+      parts.push("Do not output [[SOUNDBOARD:...]] markup when streaming speech is active.");
+    }
     parts.push("Do not mention internal refs in spoken text.");
   } else {
     parts.push("Discord soundboard tool call is unavailable this turn. Do not imply you played a sound effect.");
@@ -713,22 +759,30 @@ export function buildVoiceTurnPrompt({
     parts.push("Use this only as lightweight context. For fresh facts, request a new web lookup.");
   }
 
-  if (normalizedMusicContext && normalizedMusicContext.playbackState !== "idle") {
+  if (shouldRenderMusicPromptContext(normalizedMusicContext)) {
+    const musicDisplayState = resolveMusicPromptDisplayState(normalizedMusicContext);
     const musicLines = ["Music playback:"];
-    musicLines.push(`- Status: ${normalizedMusicContext.playbackState}`);
+    musicLines.push(`- Status: ${musicDisplayState}`);
     if (normalizedMusicContext.currentTrack?.title) {
-      const artists = normalizedMusicContext.currentTrack.artists.length
-        ? normalizedMusicContext.currentTrack.artists.join(", ")
-        : "unknown artist";
-      musicLines.push(`- Now playing: ${normalizedMusicContext.currentTrack.title} by ${artists}`);
-    } else if (normalizedMusicContext.lastTrack?.title && normalizedMusicContext.playbackState === "stopped") {
-      const artists = normalizedMusicContext.lastTrack.artists.length
-        ? normalizedMusicContext.lastTrack.artists.join(", ")
-        : "unknown artist";
-      musicLines.push(`- Last played: ${normalizedMusicContext.lastTrack.title} by ${artists}`);
+      musicLines.push(
+        `- Current song: ${normalizedMusicContext.currentTrack.title} by ${formatMusicPromptArtists(normalizedMusicContext.currentTrack.artists)} (${musicDisplayState})`
+      );
+    }
+    if (
+      normalizedMusicContext.lastTrack?.title &&
+      !areMusicPromptTracksEqual(normalizedMusicContext.currentTrack, normalizedMusicContext.lastTrack)
+    ) {
+      musicLines.push(
+        `- Last played: ${normalizedMusicContext.lastTrack.title} by ${formatMusicPromptArtists(normalizedMusicContext.lastTrack.artists)}`
+      );
     }
     if (normalizedMusicContext.queueLength > 0) {
       musicLines.push(`- Queue: ${normalizedMusicContext.queueLength} track(s)`);
+      for (const [index, track] of normalizedMusicContext.upcomingTracks.entries()) {
+        musicLines.push(
+          `- Queue item ${index + 1}: ${track.title}${track.artist ? ` - ${track.artist}` : ""}`
+        );
+      }
     }
     if (normalizedMusicContext.lastAction) {
       musicLines.push(`- Last action: ${normalizedMusicContext.lastAction}`);
@@ -791,11 +845,13 @@ export function buildVoiceTurnPrompt({
       parts.push("Do not claim you browsed the site.");
     } else {
       parts.push("Interactive browser browsing is available.");
-      parts.push("Choose browser_browse when the task genuinely needs interactive browsing or JS rendering; otherwise use the lighter web tool that best fits the task.");
+      parts.push("Choose browser_browse when the speaker explicitly wants browser use or to visit/open a site, asks for a screenshot, asks what the page looks like, when visual layout matters, or when the task genuinely needs interactive browsing or JS rendering; otherwise use the lighter web tool that best fits the task.");
       parts.push(
-        "Use browser_browse only when you need actual site navigation or interaction, such as JS-rendered pages, clicking, typing, scrolling, dragging, or moving through a live page flow."
+        "Use browser_browse when you need actual site navigation or interaction, when the user asks you to open something in a browser, asks for a screenshot, asks what the page looks like, or when page appearance/layout matters, such as JS-rendered pages, clicking, typing, scrolling, dragging, or moving through a live page flow."
       );
-      parts.push("If the task genuinely requires interactive browsing, call browser_browse in the same response.");
+      parts.push("browser_browse can capture browser screenshots and return them for visual inspection on the follow-up turn.");
+      parts.push("If the speaker explicitly asks you to use a browser, asks for a screenshot of a webpage, asks what a page looks like, or the task genuinely requires interactive browsing, call browser_browse in the same response.");
+      parts.push("Do not say you cannot take or inspect webpage screenshots when browser_browse is available. Use the browser tool instead.");
     }
   } else {
     parts.push("Interactive browser tool call is unavailable this turn. Do not claim you can browse sites interactively right now.");
@@ -913,7 +969,11 @@ export function buildVoiceTurnPrompt({
 
   parts.push("Return only the spoken reply text for this turn.");
   parts.push("If you should skip the turn, output exactly [SKIP].");
-  parts.push("Do not output JSON, markdown, tags, directive syntax like [[...]], or tool names in prose.");
+  if (allowInlineSoundboardDirectives) {
+    parts.push("Do not output JSON, markdown, tags, or tool names in prose. The only control markup you may emit is [[SOUNDBOARD:<sound_ref>]] with an exact available sound ref.");
+  } else {
+    parts.push("Do not output JSON, markdown, tags, directive syntax like [[...]], or tool names in prose.");
+  }
   parts.push("Use tool calls for actions, lookup, screen notes, screen moments, soundboard playback, music control, screen-share links, and leaving VC.");
 
   return parts.join("\n\n");

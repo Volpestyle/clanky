@@ -1,3 +1,4 @@
+import type { ImageInput } from "../llm/serviceShared.ts";
 import { runBrowseAgent } from "../agents/browseAgent.ts";
 import type { LLMService } from "../llm.ts";
 import type { BrowserManager } from "../services/BrowserManager.ts";
@@ -43,6 +44,7 @@ export type BrowserBrowseTaskResult = {
   steps: number;
   totalCostUsd: number;
   hitStepLimit: boolean;
+  imageInputs?: ImageInput[];
 };
 
 export type ActiveBrowserTask = {
@@ -187,6 +189,7 @@ export async function runBrowserBrowseTask({
       metadata: {
         steps: result.steps,
         hitStepLimit: result.hitStepLimit,
+        imageInputCount: Array.isArray(result.imageInputs) ? result.imageInputs.length : 0,
         totalCostUsd: result.totalCostUsd,
         source: logSource ?? trace.source ?? null
       },

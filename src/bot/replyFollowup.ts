@@ -54,6 +54,7 @@ type BrowserBrowseState = {
   cancelled?: boolean;
   blockedByBudget?: boolean;
   text?: string;
+  imageInputs?: Array<Record<string, unknown>>;
   steps?: number;
   hitStepLimit?: boolean;
   error?: string | null;
@@ -604,6 +605,17 @@ export async function maybeRegenerateWithMemoryLookup<
             );
             nextBrowserBrowse = nextState as TBrowserBrowse;
             usedBrowserBrowse = true;
+            if (
+              Array.isArray(nextBrowserBrowse?.imageInputs) &&
+              nextBrowserBrowse.imageInputs.length &&
+              typeof mergeImageInputs === "function"
+            ) {
+              nextImageInputs = mergeImageInputs({
+                baseInputs: nextImageInputs,
+                extraInputs: nextBrowserBrowse.imageInputs,
+                maxInputs: maxModelImageInputs
+              });
+            }
           })()
         );
         seenBrowserQueries.add(requestedBrowserQuery);

@@ -1,4 +1,5 @@
 import type { LLMService, ToolLoopContentBlock, ToolLoopMessage } from "../llm.ts";
+import type { ImageInput } from "../llm/serviceShared.ts";
 import type { BrowserManager } from "../services/BrowserManager.ts";
 import { BROWSER_AGENT_TOOL_DEFINITIONS, executeBrowserTool } from "../tools/browserTools.ts";
 import { isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
@@ -11,6 +12,7 @@ Your goal is to complete the user's instruction by navigating the web, interacti
 ALWAYS use the 'browser_open' tool first to start your session.
 After opening or interacting with a page, you will receive a snapshot of the accessibility tree with references like @e1, @e2.
 Use these references to click or type into elements.
+When the task depends on visual appearance, layout, or non-text UI details, use 'browser_screenshot'. Screenshots are forwarded back to the parent brain for visual inspection.
 
 When you have found the answer or completed the objective, communicate it clearly in your final response.
 Do NOT use tools indefinitely. If you are stuck or have the answer, stop using tools and explain what you found.`;
@@ -51,6 +53,28 @@ interface BrowseAgentResult {
   steps: number;
   totalCostUsd: number;
   hitStepLimit: boolean;
+  imageInputs?: ImageInput[];
+}
+
+function appendUniqueImageInputs(target: ImageInput[], extra: ImageInput[] | undefined) {
+  const seen = new Set(
+    target.map((input) => {
+      const url = String(input?.url || "").trim();
+      const mediaType = String(input?.mediaType || input?.contentType || "").trim().toLowerCase();
+      const dataBase64 = String(input?.dataBase64 || "").trim();
+      return url ? `url:${url}` : dataBase64 ? `inline:${mediaType}:${dataBase64.slice(0, 80)}` : "";
+    })
+  );
+
+  for (const image of Array.isArray(extra) ? extra : []) {
+    const url = String(image?.url || "").trim();
+    const mediaType = String(image?.mediaType || image?.contentType || "").trim().toLowerCase();
+    const dataBase64 = String(image?.dataBase64 || "").trim();
+    const key = url ? `url:${url}` : dataBase64 ? `inline:${mediaType}:${dataBase64.slice(0, 80)}` : "";
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    target.push(image);
+  }
 }
 
 export async function runBrowseAgent(options: BrowseAgentOptions): Promise<BrowseAgentResult> {
@@ -76,6 +100,7 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
   let totalCostUsd = 0;
   let finalText = "";
   let hitStepLimit = false;
+  const capturedImageInputs: ImageInput[] = [];
 
   try {
     while (step < maxSteps) {
@@ -134,11 +159,13 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
           signal
         );
 
+        appendUniqueImageInputs(capturedImageInputs, result.imageInputs);
+
         toolResults.push({
           type: "tool_result",
           toolCallId: toolCall.id,
-          content: result,
-          isError: result.toLowerCase().startsWith("error:")
+          content: result.text,
+          isError: Boolean(result.isError)
         });
       }
 
@@ -162,7 +189,8 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
     text: finalText,
     steps: step,
     totalCostUsd,
-    hitStepLimit
+    hitStepLimit,
+    imageInputs: capturedImageInputs
   };
 }
 
@@ -283,6 +311,7 @@ export class BrowserAgentSession implements SubAgentSession {
     let turnCostUsd = 0;
     const turnStartMs = Date.now();
     const turnUsage = { ...EMPTY_USAGE };
+    const turnImageInputs: ImageInput[] = [];
 
     try {
       // Run the tool loop until we get text without tool calls (yield point)
@@ -333,6 +362,7 @@ export class BrowserAgentSession implements SubAgentSession {
               sessionId: this.id,
               steps: this.stepCount,
               turnCostUsd,
+              imageInputCount: turnImageInputs.length,
               source: this.trace.source,
               durationMs: Date.now() - turnStartMs
             },
@@ -342,6 +372,7 @@ export class BrowserAgentSession implements SubAgentSession {
           return {
             text,
             costUsd: turnCostUsd,
+            imageInputs: turnImageInputs,
             isError: false,
             errorMessage: "",
             usage: turnUsage
@@ -374,11 +405,13 @@ export class BrowserAgentSession implements SubAgentSession {
             turnSignal
           );
 
+          appendUniqueImageInputs(turnImageInputs, result.imageInputs);
+
           toolResults.push({
             type: "tool_result",
             toolCallId: toolCall.id,
-            content: result,
-            isError: result.toLowerCase().startsWith("error:")
+            content: result.text,
+            isError: Boolean(result.isError)
           });
         }
 
@@ -392,6 +425,7 @@ export class BrowserAgentSession implements SubAgentSession {
       return {
         text: "Agent reached the maximum number of steps without finishing.",
         costUsd: turnCostUsd,
+        imageInputs: turnImageInputs,
         isError: false,
         errorMessage: "",
         usage: turnUsage

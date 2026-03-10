@@ -120,6 +120,7 @@ export async function runModelRequestedBrowserBrowse(
     blockedByBudget: false,
     query: normalizedQuery,
     text: "",
+    imageInputs: [],
     steps: 0,
     hitStepLimit: false,
     error: null
@@ -208,6 +209,7 @@ export async function runModelRequestedBrowserBrowse(
       ...state,
       used: true,
       text: result.text,
+      imageInputs: Array.isArray(result.imageInputs) ? result.imageInputs : [],
       steps: result.steps,
       hitStepLimit: result.hitStepLimit
     };

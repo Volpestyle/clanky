@@ -76,7 +76,7 @@ test("buildInitiativePrompt includes the unified initiative spec structure and w
   assert.equal(prompt.includes("=== BEHAVIOR GUIDANCE ==="), true);
   assert.equal(prompt.includes("=== RELEVANT BEHAVIORAL MEMORY ==="), true);
   assert.equal(
-    prompt.includes("You can use web_search to look something up, or browser_browse to read a page in depth"),
+    prompt.includes("You can use web_search to look something up, or browser_browse to actually visit a site, inspect how a page looks, capture browser screenshots for visual inspection, or move through it interactively"),
     true
   );
   assert.equal(prompt.includes("You can request media (image, video, GIF) if the moment calls for it."), true);

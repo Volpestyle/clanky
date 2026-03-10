@@ -38,11 +38,14 @@ import {
 } from "../llm/serviceShared.ts";
 import type { VoiceReplyRuntime } from "./botContext.ts";
 import { SentenceAccumulator } from "../voice/sentenceAccumulator.ts";
+import { parseSoundboardDirectiveSequence } from "../voice/voiceSessionHelpers.ts";
 import {
   invalidateSessionBehavioralMemoryCache,
   loadSessionBehavioralMemoryFacts,
   loadSessionConversationHistory
 } from "../voice/voiceSessionMemoryCache.ts";
+import { mergeImageInputs } from "./imageAnalysis.ts";
+import { MAX_MODEL_IMAGE_INPUTS } from "./replyPipelineShared.ts";
 
 const OPEN_ARTICLE_MAX_CANDIDATES = 12;
 const OPEN_ARTICLE_ROW_LIMIT = 4;
@@ -86,6 +89,34 @@ function mergeSpokenReplyText(parts: string[]) {
     .filter(Boolean)
     .join("\n")
     .trim();
+}
+
+function hasInlineSoundboardDirective(text: string) {
+  return /\[\[\s*SOUNDBOARD:/i.test(text);
+}
+
+function stripInlineSoundboardDirectives(text: unknown, maxLen = 520) {
+  const normalized = sanitizeBotText(normalizeSkipSentinel(String(text || "")), maxLen);
+  if (!normalized || normalized === "[SKIP]") return normalized;
+  if (!hasInlineSoundboardDirective(normalized)) return normalized;
+  return sanitizeBotText(parseSoundboardDirectiveSequence(normalized).text, maxLen);
+}
+
+function normalizeVoiceReplyText(
+  text: unknown,
+  {
+    maxLen = 520,
+    preserveInlineSoundboardDirectives = false
+  }: {
+    maxLen?: number;
+    preserveInlineSoundboardDirectives?: boolean;
+  } = {}
+) {
+  const normalized = sanitizeBotText(normalizeSkipSentinel(String(text || "")), maxLen);
+  if (!normalized || normalized === "[SKIP]") return normalized;
+  if (preserveInlineSoundboardDirectives) return normalized;
+  if (!hasInlineSoundboardDirective(normalized)) return normalized;
+  return sanitizeBotText(parseSoundboardDirectiveSequence(normalized).text, maxLen);
 }
 
 function ensureAssistantContentIncludesResolvedText(content: ContentBlock[], fallbackText: unknown): ContentBlock[] {
@@ -766,6 +797,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       allowScreenShareToolCall,
       allowMemoryToolCalls,
       allowSoundboardToolCall,
+      allowInlineSoundboardDirectives: allowSoundboardToolCall && !streamingEnabled,
       allowVoiceToolCalls: allowVoiceTools,
       musicContext,
       hasDirectVisionFrame: Boolean(streamWatchLatestFrame?.dataBase64),
@@ -914,7 +946,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       ...normalizedContextMessages
     ];
 
-    const voiceImageInputs =
+    let voiceImageInputs =
       streamWatchLatestFrame?.dataBase64
         ? [
             {
@@ -932,9 +964,13 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     let voiceAddressing = normalizeGeneratedVoiceAddressing(null, {
       directAddressed: Boolean(directAddressed)
     });
+    const preserveInlineSoundboardDirectives = allowSoundboardToolCall && !streamingEnabled;
 
     const captureGenerationText = (rawText: unknown) => {
-      const normalized = sanitizeBotText(normalizeSkipSentinel(String(rawText || "")), 520);
+      const normalized = normalizeVoiceReplyText(rawText, {
+        maxLen: 520,
+        preserveInlineSoundboardDirectives
+      });
       if (!normalized || normalized === "[SKIP]") return;
       spokenTextParts.push(normalized);
     };
@@ -961,10 +997,10 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
           trace,
           signal
         });
-        const resolvedSpokenText = sanitizeBotText(
-          normalizeSkipSentinel(String(generation.text || "")),
-          520
-        );
+        const resolvedSpokenText = normalizeVoiceReplyText(generation.text, {
+          maxLen: 520,
+          preserveInlineSoundboardDirectives
+        });
         return {
           ...generation,
           streamedTextAccepted,
@@ -977,7 +1013,10 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         eagerMinChars: Number(voiceConversationPolicy.streaming?.eagerFirstChunkChars),
         maxBufferChars: Number(voiceConversationPolicy.streaming?.maxBufferChars),
         onSentence(text) {
-          const normalized = sanitizeBotText(normalizeSkipSentinel(text), 520);
+          const normalized = normalizeVoiceReplyText(text, {
+            maxLen: 520,
+            preserveInlineSoundboardDirectives
+          });
           if (!normalized || normalized === "[SKIP]" || signal?.aborted) return;
           const accepted = onSpokenSentence({
             text: normalized,
@@ -1005,10 +1044,13 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         }
       });
       accumulator.flush();
-      const resolvedSpokenText = sanitizeBotText(
-        normalizeSkipSentinel(String(generation.text || "")),
-        520
-      ) || sanitizeBotText(mergeSpokenReplyText(streamedTextParts), 520);
+      const resolvedSpokenText = normalizeVoiceReplyText(generation.text, {
+        maxLen: 520,
+        preserveInlineSoundboardDirectives
+      }) || normalizeVoiceReplyText(mergeSpokenReplyText(streamedTextParts), {
+        maxLen: 520,
+        preserveInlineSoundboardDirectives
+      });
       return {
         ...generation,
         streamedTextAccepted,
@@ -1033,7 +1075,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       voiceToolLoopSteps < VOICE_TOOL_LOOP_MAX_STEPS &&
       voiceTotalToolCalls < VOICE_TOOL_LOOP_MAX_CALLS
     ) {
-      const generationHasSpokenText = Boolean(generation.resolvedSpokenText);
+      const generationHasSpokenText = Boolean(stripInlineSoundboardDirectives(generation.resolvedSpokenText, 520));
       const assistantContent = ensureAssistantContentIncludesResolvedText(
         buildContextContentBlocks(generation.rawContent, generation.resolvedSpokenText),
         generation.resolvedSpokenText
@@ -1045,6 +1087,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       ];
 
       const toolResultMessages: ContentBlock[] = [];
+      let toolResultImageInputsAdded = false;
       let continuationRequested = false;
       if (activeVoiceSession?.inFlightAcceptedBrainTurn?.phase === "generation_only") {
         activeVoiceSession.inFlightAcceptedBrainTurn.phase = "tool_call_started";
@@ -1069,6 +1112,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
                   ok: false,
                   error: "Session durable context is unavailable."
                 }),
+                imageInputs: undefined,
                 isError: true
               };
             }
@@ -1079,7 +1123,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
                 total: stored.total,
                 text: stored.entry.text,
                 category: stored.entry.category
-              })
+              }),
+              imageInputs: undefined
             };
           })()
           : await executeReplyTool(
@@ -1103,9 +1148,19 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
             toolInput: toolCall.input,
             toolCallIndex: voiceTotalToolCalls,
             durationMs: toolDurationMs,
+            imageInputCount: Array.isArray(result.imageInputs) ? result.imageInputs.length : 0,
             isError: result.isError || false
           }
         });
+
+        if (Array.isArray(result.imageInputs) && result.imageInputs.length) {
+          voiceImageInputs = mergeImageInputs({
+            baseInputs: voiceImageInputs,
+            extraInputs: result.imageInputs,
+            maxInputs: MAX_MODEL_IMAGE_INPUTS
+          });
+          toolResultImageInputsAdded = true;
+        }
 
         if (toolCall.name === "web_search" && !result.isError) {
           usedWebSearchFollowup = true;
@@ -1185,7 +1240,9 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       ];
 
       generation = await runVoiceGeneration({
-        userPrompt: "",
+        userPrompt: toolResultImageInputsAdded
+          ? "Attached are images returned by the previous tool call. Use them if they help."
+          : "",
         contextMessages: voiceContextMessages,
         trace: {
           ...voiceTrace,
@@ -1196,7 +1253,10 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       voiceToolLoopSteps += 1;
     }
 
-    const finalText = sanitizeBotText(mergeSpokenReplyText(spokenTextParts), 520);
+    const finalText = normalizeVoiceReplyText(mergeSpokenReplyText(spokenTextParts), {
+      maxLen: 520,
+      preserveInlineSoundboardDirectives
+    });
     if (!finalText && playedSoundboardRefs.length === 0 && !leaveVoiceChannelRequested) {
       return {
         text: "",

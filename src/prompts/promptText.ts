@@ -828,7 +828,7 @@ export function buildInitiativePrompt({
 
   parts.push("=== CAPABILITIES ===");
   if (allowActiveCuriosity) {
-    parts.push("You can use web_search to look something up, or browser_browse to read a page in depth — if you're curious about something or want to check if a feed item is actually worth sharing.");
+    parts.push("You can use web_search to look something up, or browser_browse to actually visit a site, inspect how a page looks, capture browser screenshots for visual inspection, or move through it interactively — if you're curious about something or want to check if a feed item is actually worth sharing.");
   } else {
     parts.push("web_search and browser_browse are unavailable right now. Reason from the feed, memory, and channel context unless another tool is listed below.");
   }

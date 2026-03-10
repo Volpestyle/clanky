@@ -79,18 +79,26 @@ test("buildVoiceTurnPrompt explains browser tool usage when interactive browsing
   assert.equal(prompt.includes("Interactive browser browsing is available."), true);
   assert.equal(
     prompt.includes(
-      "Use browser_browse only when you need actual site navigation or interaction, such as JS-rendered pages, clicking, typing, scrolling, dragging, or moving through a live page flow."
+      "Use browser_browse when you need actual site navigation or interaction, when the user asks you to open something in a browser, asks for a screenshot, asks what the page looks like, or when page appearance/layout matters, such as JS-rendered pages, clicking, typing, scrolling, dragging, or moving through a live page flow."
     ),
     true
   );
   assert.equal(
     prompt.includes(
-      "Choose browser_browse when the task genuinely needs interactive browsing or JS rendering; otherwise use the lighter web tool that best fits the task."
+      "Choose browser_browse when the speaker explicitly wants browser use or to visit/open a site, asks for a screenshot, asks what the page looks like, when visual layout matters, or when the task genuinely needs interactive browsing or JS rendering; otherwise use the lighter web tool that best fits the task."
     ),
     true
   );
   assert.equal(
-    prompt.includes("If the task genuinely requires interactive browsing, call browser_browse in the same response."),
+    prompt.includes("browser_browse can capture browser screenshots and return them for visual inspection on the follow-up turn."),
+    true
+  );
+  assert.equal(
+    prompt.includes("If the speaker explicitly asks you to use a browser, asks for a screenshot of a webpage, asks what a page looks like, or the task genuinely requires interactive browsing, call browser_browse in the same response."),
+    true
+  );
+  assert.equal(
+    prompt.includes("Do not say you cannot take or inspect webpage screenshots when browser_browse is available. Use the browser tool instead."),
     true
   );
 });
@@ -178,6 +186,8 @@ test("buildVoiceTurnPrompt prefers tool calls over stale helper fields", () => {
   assert.equal(prompt.includes("set_addressing"), false);
   assert.equal(prompt.includes("Use tool calls for actions, lookup, voice addressing"), false);
   assert.equal(prompt.includes("Music playback:"), true);
+  assert.equal(prompt.includes("Current song: Example Song by Example Artist (playing)"), true);
+  assert.equal(prompt.includes("Queue item 1: Next Song - Next Artist"), true);
   assert.equal(prompt.includes("Do not emulate play-now by chaining music_queue_add and music_skip."), true);
   assert.equal(prompt.includes("set webSearchQuery"), false);
   assert.equal(prompt.includes("set openArticleRef"), false);
@@ -268,17 +278,33 @@ test("buildVoiceTurnPrompt includes interruption recovery context for the next t
   assert.equal(prompt.includes("Do not mechanically continue the old answer if the new turn changes direction."), true);
 });
 
-test("buildVoiceTurnPrompt includes soundboard tendency guidance when soundboard control is available", () => {
+test("buildVoiceTurnPrompt teaches inline soundboard directives when buffered playback can sequence them", () => {
   const prompt = buildVoiceTurnPrompt({
     speakerName: "alice",
     transcript: "that was brutal",
+    allowSoundboardToolCall: true,
+    allowInlineSoundboardDirectives: true,
+    soundboardCandidates: ["rimshot@123"],
+    soundboardEagerness: 82
+  });
+
+  assert.equal(prompt.includes("Discord soundboard playback is available this turn."), true);
+  assert.equal(prompt.includes("Discord soundboard tendency: 82/100."), true);
+  assert.equal(prompt.includes("playful soundboard bits and comedic punctuation"), true);
+  assert.equal(prompt.includes("[[SOUNDBOARD:<sound_ref>]]"), true);
+  assert.equal(prompt.includes("Do not both insert [[SOUNDBOARD:...]] and call play_soundboard for the same beat."), true);
+});
+
+test("buildVoiceTurnPrompt keeps streamed replies on the play_soundboard tool path", () => {
+  const prompt = buildVoiceTurnPrompt({
+    speakerName: "alice",
+    transcript: "hit the rimshot",
     allowSoundboardToolCall: true,
     soundboardCandidates: ["rimshot@123"],
     soundboardEagerness: 82
   });
 
-  assert.equal(prompt.includes("Discord soundboard tool call is available."), true);
-  assert.equal(prompt.includes("Discord soundboard tendency: 82/100."), true);
-  assert.equal(prompt.includes("playful soundboard bits and comedic punctuation"), true);
-  assert.equal(prompt.includes("call play_soundboard"), true);
+  assert.equal(prompt.includes("Streaming speech is active this turn."), true);
+  assert.equal(prompt.includes("use play_soundboard"), true);
+  assert.equal(prompt.includes("Do not output [[SOUNDBOARD:...]] markup when streaming speech is active."), true);
 });
