@@ -98,12 +98,12 @@ type SettingsExecutionTuning = {
 
 export type SettingsExecutionPolicy =
   | ({
-      mode: "inherit_orchestrator";
-    } & SettingsExecutionTuning)
+    mode: "inherit_orchestrator";
+  } & SettingsExecutionTuning)
   | ({
-      mode: "dedicated_model";
-      model: SettingsModelBinding;
-    } & SettingsExecutionTuning);
+    mode: "dedicated_model";
+    model: SettingsModelBinding;
+  } & SettingsExecutionTuning);
 
 export const DEFAULT_SETTINGS = {
   identity: {
@@ -137,7 +137,12 @@ export const DEFAULT_SETTINGS = {
       "planker",
       "plinker",
       "hank",
-      "flanker"
+      "flanker",
+      "crank",
+      "cranker",
+      "clankerconk",
+      "clickink",
+      "click",
     ]
   },
   persona: {
@@ -186,14 +191,7 @@ export const DEFAULT_SETTINGS = {
       allowReplies: true,
       allowUnsolicitedReplies: true,
       allowReactions: true,
-      replyChannelIds: [
-        "1475944808198574205",
-        "1233219199070113882",
-        "1052402898140667906",
-        "1442040880017051769",
-        "1214966391057162270",
-        "1299162736583770166"
-      ],
+      replyChannelIds: [],
       allowedChannelIds: [],
       blockedChannelIds: [],
       blockedUserIds: [],

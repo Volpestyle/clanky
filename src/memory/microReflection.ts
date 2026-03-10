@@ -55,6 +55,7 @@ type MicroReflectionMemory = {
     factType?: string | null;
     confidence?: number | null;
     validationMode?: string;
+    evidenceText?: string | null;
   }): Promise<{
     ok: boolean;
     reason?: string;
@@ -358,7 +359,8 @@ export async function runMicroReflection({
       subjectOverride,
       factType: fact.type,
       confidence: fact.confidence,
-      validationMode: "strict"
+      validationMode: "minimal",
+      evidenceText: fact.evidence || null
     });
     if (saveResult?.ok) {
       savedCount += 1;

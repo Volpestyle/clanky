@@ -1,16 +1,45 @@
 const SENTENCE_BREAK_RE = /(?:[.!?](?:["')\]]+)?\s+|[.!?](?:["')\]]+)?$|\n+)/gu;
 const CLAUSE_BREAK_RE = /(?:[;:](?:\s+|$))/gu;
+const INLINE_SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*[\s\S]*?\s*\]\]/gi;
+
+type ProtectedSpan = {
+  start: number;
+  end: number;
+};
 
 function normalizeChunkText(value: string) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function collectProtectedSpans(buffer: string): ProtectedSpan[] {
+  const spans: ProtectedSpan[] = [];
+  INLINE_SOUNDBOARD_DIRECTIVE_RE.lastIndex = 0;
+  let match: RegExpExecArray | null = null;
+  while ((match = INLINE_SOUNDBOARD_DIRECTIVE_RE.exec(buffer))) {
+    const matchText = String(match[0] || "");
+    if (!matchText) continue;
+    const start = Number(match.index || 0);
+    spans.push({
+      start,
+      end: start + matchText.length
+    });
+  }
+  INLINE_SOUNDBOARD_DIRECTIVE_RE.lastIndex = 0;
+  return spans;
+}
+
+function findProtectedSpanAt(index: number, spans: ProtectedSpan[]) {
+  return spans.find((span) => index >= span.start && index < span.end) || null;
+}
+
 function findLastBoundaryIndex(buffer: string, allowClauseBreaks: boolean) {
   let lastBoundaryIndex = -1;
+  const protectedSpans = collectProtectedSpans(buffer);
 
   for (const match of buffer.matchAll(SENTENCE_BREAK_RE)) {
     const start = Number(match.index || 0);
     const matchedText = String(match[0] || "");
+    if (findProtectedSpanAt(start, protectedSpans)) continue;
     lastBoundaryIndex = start + matchedText.length;
   }
 
@@ -21,6 +50,7 @@ function findLastBoundaryIndex(buffer: string, allowClauseBreaks: boolean) {
   for (const match of buffer.matchAll(CLAUSE_BREAK_RE)) {
     const start = Number(match.index || 0);
     const matchedText = String(match[0] || "");
+    if (findProtectedSpanAt(start, protectedSpans)) continue;
     lastBoundaryIndex = start + matchedText.length;
   }
 
@@ -29,9 +59,15 @@ function findLastBoundaryIndex(buffer: string, allowClauseBreaks: boolean) {
 
 function findForcedBreakIndex(buffer: string, maxBufferChars: number) {
   if (buffer.length < maxBufferChars) return -1;
-  const whitespaceIndex = buffer.lastIndexOf(" ", maxBufferChars);
-  if (whitespaceIndex > 0) {
-    return whitespaceIndex + 1;
+  const protectedSpans = collectProtectedSpans(buffer);
+  for (let index = Math.min(maxBufferChars, buffer.length - 1); index > 0; index -= 1) {
+    if (buffer[index] !== " ") continue;
+    if (findProtectedSpanAt(index, protectedSpans)) continue;
+    return index + 1;
+  }
+  const protectedSpan = findProtectedSpanAt(Math.min(maxBufferChars, buffer.length - 1), protectedSpans);
+  if (protectedSpan && protectedSpan.end < buffer.length) {
+    return protectedSpan.end;
   }
   return maxBufferChars;
 }

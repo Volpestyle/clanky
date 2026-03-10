@@ -9,7 +9,8 @@ import {
   scheduleAsrIdleClose,
   tryHandoffSharedAsr,
   type AsrBridgeDeps,
-  type AsrCommitResult
+  type AsrCommitResult,
+  type AsrUtteranceState
 } from "./voiceAsrBridge.ts";
 import {
   ACTIVITY_TOUCH_THROTTLE_MS,
@@ -648,6 +649,10 @@ export class CaptureManager {
     const asrMode = useOpenAiPerUserAsr ? "per_user" : "shared";
     const asrSource = useOpenAiPerUserAsr ? "per_user" : "shared";
     const asrDeps = this.host.buildAsrBridgeDeps(session);
+    const committedPerUserUtterance: AsrUtteranceState | null =
+      useOpenAiPerUserAsr
+        ? getOrCreatePerUserAsrState(session, userId)?.utterance || null
+        : null;
 
     if (useOpenAiSharedAsr) {
       const hasSharedAsrAudio = Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) > 0;
@@ -729,12 +734,18 @@ export class CaptureManager {
         const lateAsrState = asrMode === "per_user"
           ? getOrCreatePerUserAsrState(session, userId)
           : getOrCreateSharedAsrState(session);
-        const trackedUtterance = lateAsrState?.utterance;
+        // Per-user ASR can roll into a new live utterance before the previous
+        // committed utterance finishes delivering late final segments. Keep
+        // watching the committed utterance object so we don't lose the real
+        // transcript just because a fresh provisional capture started.
+        const trackedUtterance = asrMode === "per_user"
+          ? committedPerUserUtterance
+          : lateAsrState?.utterance || null;
         if (trackedUtterance) {
           const lateDeadlineMs = Date.now() + 1500;
           while (Date.now() < lateDeadlineMs && !session.ending) {
             await new Promise((resolve) => setTimeout(resolve, 80));
-            if (lateAsrState?.utterance !== trackedUtterance) break;
+            if (asrMode !== "per_user" && lateAsrState?.utterance !== trackedUtterance) break;
             const lateFinal = normalizeVoiceText(
               Array.isArray(trackedUtterance.finalSegments)
                 ? trackedUtterance.finalSegments.join(" ")

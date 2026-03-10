@@ -280,6 +280,9 @@ export class MemoryManager {
     const scopeGuildId = String(trace?.guildId || "").trim();
     const scopeChannelId = String(trace?.channelId || "").trim();
 
+    const source = String(trace?.source || "").trim();
+    const isVoice = source.startsWith("voice");
+
     try {
       await this.appendDailyLogEntry({
         messageId,
@@ -287,7 +290,8 @@ export class MemoryManager {
         authorName,
         guildId: scopeGuildId,
         channelId: scopeChannelId,
-        content: cleanedContent
+        content: cleanedContent,
+        isVoice
       });
       this.queueMemoryRefresh();
       void this.ensureConversationMessageVector({
@@ -1403,7 +1407,8 @@ export class MemoryManager {
     subjectOverride = null,
     factType = null,
     confidence = null,
-    validationMode = "strict"
+    validationMode = "strict",
+    evidenceText = null
   }) {
     const scopeGuildId = String(guildId || "").trim();
     if (!scopeGuildId) {
@@ -1434,31 +1439,25 @@ export class MemoryManager {
       String(validationMode || "").trim().toLowerCase() === "minimal" ? "minimal" : "strict";
     const allowsBehavioralInstruction =
       normalizedFactType === GUIDANCE_FACT_TYPE || normalizedFactType === BEHAVIORAL_FACT_TYPE;
-    if (normalizedValidationMode === "strict" && isUnsafeMemoryFactText(cleaned)) {
-      return {
-        ok: false,
-        reason: "unsafe_instruction"
-      };
-    }
-    if (
-      normalizedValidationMode === "strict" &&
-      !allowsBehavioralInstruction &&
-      (isBehavioralDirectiveLikeFactText(cleaned) || isInstructionLikeFactText(cleaned))
-    ) {
-      return {
-        ok: false,
-        reason: "instruction_like"
-      };
-    }
-    if (normalizedValidationMode === "strict" && !isTextGroundedInSource(cleaned, sourceText)) {
-      return {
-        ok: false,
-        reason: "not_grounded_in_source"
-      };
+    if (normalizedValidationMode === "strict") {
+      if (isUnsafeMemoryFactText(cleaned)) {
+        return { ok: false, reason: "unsafe_instruction" };
+      }
+      if (
+        !allowsBehavioralInstruction &&
+        (isBehavioralDirectiveLikeFactText(cleaned) || isInstructionLikeFactText(cleaned))
+      ) {
+        return { ok: false, reason: "instruction_like" };
+      }
+      if (!isTextGroundedInSource(cleaned, sourceText)) {
+        return { ok: false, reason: "not_grounded_in_source" };
+      }
     }
 
     const factText = normalizeStoredFactText(cleaned);
-    const normalizedEvidenceText = normalizeEvidenceText(sourceText, sourceText);
+    const normalizedEvidenceText = evidenceText
+      ? sanitizeInline(evidenceText, 220)
+      : normalizeEvidenceText(sourceText, sourceText);
     const normalizedConfidence = clamp01(
       Number.isFinite(Number(confidence)) ? Number(confidence) : 0.72,
       0.72
@@ -1541,7 +1540,7 @@ export class MemoryManager {
     return Boolean(result?.ok);
   }
 
-  async appendDailyLogEntry({ messageId = "", authorId, authorName, guildId = "", channelId = "", content }) {
+  async appendDailyLogEntry({ messageId = "", authorId, authorName, guildId = "", channelId = "", content, isVoice = false }) {
     const now = new Date();
     const dateKey = formatDateLocal(now);
     const dailyFilePath = path.join(this.memoryDirPath, `${dateKey}.md`);
@@ -1553,7 +1552,8 @@ export class MemoryManager {
     const scopeFragment = [
       safeGuildId ? `guild:${safeGuildId}` : "",
       safeChannelId ? `channel:${safeChannelId}` : "",
-      safeMessageId ? `message:${safeMessageId}` : ""
+      safeMessageId ? `message:${safeMessageId}` : "",
+      isVoice ? "voice" : ""
     ]
       .filter(Boolean)
       .join(" ");

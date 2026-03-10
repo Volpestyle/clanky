@@ -302,10 +302,12 @@ test("normalizeSettings keeps up to 100 bot aliases", () => {
   assert.deepEqual(normalized.identity.botNameAliases, aliases.slice(0, BOT_NAME_ALIAS_MAX_ITEMS));
 });
 
-test("normalizeSettings includes link in default bot aliases", () => {
+test("normalizeSettings includes the canonical default bot aliases", () => {
   const normalized = normalizeLegacyView({});
 
   assert.equal(normalized.identity.botNameAliases.includes("link"), true);
+  assert.equal(normalized.identity.botNameAliases.includes("crank"), true);
+  assert.equal(normalized.identity.botNameAliases.includes("cranker"), true);
 });
 
 test("normalizeSettings preserves explicit file_wav transcription mode", () => {

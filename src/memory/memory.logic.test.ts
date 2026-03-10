@@ -399,3 +399,93 @@ test("rememberDirectiveLineDetailed stores reflection-provided confidence", asyn
   assert.equal(result.ok, true);
   assert.equal(insertedFact?.confidence, 0.91);
 });
+
+test("reflection minimal validation saves paraphrased facts that strict grounding would reject", async () => {
+  let insertedFact: Record<string, unknown> | null = null;
+
+  const memory = new MemoryManager({
+    store: {
+      addMemoryFact(fact) {
+        insertedFact = fact;
+        return true;
+      },
+      getMemoryFactBySubjectAndFact() {
+        return {
+          id: 8,
+          confidence: Number(insertedFact?.confidence || 0),
+          subject: "user-1",
+          fact: String(insertedFact?.fact || ""),
+          fact_type: "profile",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          guild_id: "guild-1",
+          channel_id: null,
+          evidence_text: String(insertedFact?.evidenceText || ""),
+          source_message_id: "reflection_2026-03-10_guild-1"
+        };
+      },
+      logAction() {
+        return undefined;
+      },
+      archiveOldFactsForSubject() {
+        return 0;
+      }
+    },
+    llm: {},
+    memoryFilePath: "memory/MEMORY.md"
+  });
+  memory.queueMemoryRefresh = () => undefined;
+  memory.ensureFactVector = async () => null;
+
+  // This paraphrased fact would fail strict grounding (sleeps≠slept, sometimes not in source)
+  // but reflection uses minimal validation — model decides, that's it.
+  const result = await memory.rememberDirectiveLineDetailed({
+    line: "Has a girlfriend who sometimes sleeps over",
+    sourceMessageId: "reflection_2026-03-10_guild-1",
+    userId: "user-1",
+    guildId: "guild-1",
+    channelId: null,
+    sourceText: "Today, uh, my girlfriend was over, we were hanging out, uh, she slept over.",
+    scope: "user",
+    subjectOverride: "user-1",
+    factType: "profile",
+    confidence: 0.85,
+    validationMode: "minimal",
+    evidenceText: "my girlfriend was over, she slept over"
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(insertedFact?.evidenceText, "my girlfriend was over, she slept over");
+});
+
+test("strict validation still rejects ungrounded facts from non-reflection paths", async () => {
+  const memory = new MemoryManager({
+    store: {
+      addMemoryFact() { return true; },
+      getMemoryFactBySubjectAndFact() { return null; },
+      logAction() { return undefined; },
+      archiveOldFactsForSubject() { return 0; }
+    },
+    llm: {},
+    memoryFilePath: "memory/MEMORY.md"
+  });
+  memory.queueMemoryRefresh = () => undefined;
+  memory.ensureFactVector = async () => null;
+
+  const result = await memory.rememberDirectiveLineDetailed({
+    line: "Has a girlfriend who sometimes sleeps over",
+    sourceMessageId: "msg-1",
+    userId: "user-1",
+    guildId: "guild-1",
+    channelId: null,
+    sourceText: "Today, uh, my girlfriend was over, we were hanging out, uh, she slept over.",
+    scope: "user",
+    subjectOverride: "user-1",
+    factType: "profile",
+    confidence: 0.85,
+    validationMode: "strict"
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "not_grounded_in_source");
+});

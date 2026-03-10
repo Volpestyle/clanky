@@ -5,6 +5,7 @@ import { estimateUsdCost } from "../llm/pricing.ts";
 import {
   getBotName,
   getMemorySettings,
+  getPersonaSettings,
   getResolvedMemoryBinding,
   getResolvedOrchestratorBinding,
   getReplyGenerationSettings
@@ -19,6 +20,7 @@ type ParsedEntry = {
   guildId: string | null;
   channelId: string | null;
   messageId: string | null;
+  isVoice: boolean;
   content: string;
 };
 
@@ -120,6 +122,7 @@ type ReflectionMemory = {
     factType?: string | null;
     confidence?: number | null;
     validationMode?: string;
+    evidenceText?: string | null;
   }): Promise<{
     ok: boolean;
     reason?: string;
@@ -220,29 +223,48 @@ function buildReflectionOnePassPrompts({
   maxFacts,
   authorNames,
   normalizedBotName,
+  persona,
   journalText
 }: {
   dateKey: string;
   maxFacts: number;
   authorNames: string;
   normalizedBotName: string;
+  persona: string;
   journalText: string;
 }) {
   const systemPrompt = [
-    `You are performing daily reflection for ${dateKey}.`,
-    "Read the day's conversation journal and decide which facts should actually be saved into durable memory.",
-    "Be selective. Prefer fewer high-signal memories over many weak ones.",
-    "Only keep facts that are clearly durable, specific, and worth remembering later.",
-    "Drop facts that are ambiguous, ephemeral, redundant, or weakly supported.",
-    "If you notice multiple facts that say the same thing in different words (e.g. 'likes Rust' and 'enjoys Rust programming'), keep only the best-worded version.",
-    "Every fact must be grounded directly in the journal text.",
-    "Classify each fact subject as one of: author, bot, lore.",
-    `Use subject=author for facts about a specific user. Include subjectName with the author's exact display name from the journal. Authors in this journal: ${authorNames}.`,
-    `Use subject=bot only for explicit durable facts about ${normalizedBotName} that were USER-ASSIGNED (e.g. nicknames, personality traits the user told it to adopt, or identity changes). Do NOT extract facts describing the bot's built-in capabilities or default behavior (responding to requests, playing music, answering questions, etc.) — those are inherent, not durable memories.`,
-    "Use subject=lore for stable shared context not tied to a single person.",
-    `Return strict JSON only: {"facts":[{"subject":"author|bot|lore","subjectName":"<author display name if subject=author, empty otherwise>","fact":"...","type":"preference|profile|relationship|project|other","confidence":0.0-1.0,"evidence":"exact short quote"}]}.`,
-    "If nothing should be saved, return {\"facts\":[]}."
-  ].join("\n");
+    `You are ${normalizedBotName}. It's the end of ${dateKey} and you're looking back at today's conversations.`,
+    persona ? `Your persona: ${persona}` : "",
+    "",
+    "Think about what happened today like a real friend would. What stuck with you? What would you want to remember next time you talk to these people?",
+    "",
+    "The things worth remembering:",
+    "- Something someone revealed about their life — a relationship, a struggle, a win, a change in their situation",
+    "- A preference or opinion they feel strongly about (not just mentioned in passing)",
+    "- An inside joke, a shared moment, a callback that would make a future conversation better",
+    "- When someone's vibe shifted — they opened up, got real, or showed a side of themselves you hadn't seen",
+    "- Something they asked you to remember or a way they want you to be",
+    "",
+    "Don't bother saving:",
+    "- Mundane back-and-forth that won't matter tomorrow",
+    "- Things you already know (check the existing facts below if provided)",
+    "- Stuff that's basically the same fact worded differently — just keep the best version",
+    "- Anything about your own built-in capabilities — you already know what you can do",
+    "",
+    "For each fact, note who it's about:",
+    `- subject=author for facts about a specific person. Set subjectName to their exact display name. Authors today: ${authorNames}.`,
+    `- subject=bot only when a user explicitly told ${normalizedBotName} something about itself (a nickname, a personality trait to adopt, an identity thing). Not your default behavior.`,
+    "- subject=lore for shared context that isn't about one person (server lore, group dynamics, recurring bits).",
+    "",
+    "Lines marked `vc` are voice transcripts — speech-to-text can mishear words, drop context, or mangle names. If a fact from voice feels off or doesn't quite make sense, trust your gut and skip it or lower the confidence.",
+    "",
+    "Use confidence to signal how sure you are: 0.9+ for stuff they clearly said or typed, lower for things you're inferring or that came from noisy voice transcripts.",
+    "Evidence should be a short quote from the journal that backs up the fact.",
+    "",
+    `Return strict JSON only: {"facts":[{"subject":"author|bot|lore","subjectName":"<display name if author, empty otherwise>","fact":"...","type":"preference|profile|relationship|project|other","confidence":0.0-1.0,"evidence":"exact short quote"}]}.`,
+    "If nothing worth remembering happened today, return {\"facts\":[]}. That's fine — not every day is memorable."
+  ].filter(Boolean).join("\n");
 
   const userPrompt = [`Date: ${dateKey}`, `Max facts: ${maxFacts}`, `Journal:\n${journalText}`].join("\n");
   return { systemPrompt, userPrompt };
@@ -419,7 +441,12 @@ async function reflectGuildJournal({
     }
 
     const journalText = guildEntries
-      .map((entry) => `- ${entry.author}: ${entry.content}`)
+      .map((entry) => {
+        const time = entry.timestampIso ? entry.timestampIso.split("T")[1]?.replace("Z", "") || "" : "";
+        const channel = entry.channelId ? ` #${entry.channelId}` : "";
+        const medium = entry.isVoice ? " vc" : "";
+        return `- [${time}${channel}${medium}] ${entry.author}: ${entry.content}`;
+      })
       .join("\n");
 
     maxFacts = clampInt(memorySettings.reflection?.maxFactsPerReflection || 20, 1, 100);
@@ -462,12 +489,16 @@ async function reflectGuildJournal({
     let selectedFacts: ReflectionFact[] = [];
     let rawResponseText = "";
 
+    const personaSettings = getPersonaSettings(settings);
+    const persona = String(personaSettings?.flavor || "").trim();
+
     const journalTextWithExisting = journalText + existingFactsSummary;
     const { systemPrompt, userPrompt } = buildReflectionOnePassPrompts({
       dateKey,
       maxFacts,
       authorNames,
       normalizedBotName,
+      persona,
       journalText: journalTextWithExisting
     });
     const directPass = await runReflectionPass({
@@ -529,7 +560,8 @@ async function reflectGuildJournal({
         subjectOverride,
         factType: item.type,
         confidence: item.confidence,
-        validationMode: "strict"
+        validationMode: "minimal",
+        evidenceText: item.evidence || null
       });
 
       if (saveResult?.ok) {

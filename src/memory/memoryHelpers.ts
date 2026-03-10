@@ -214,7 +214,7 @@ export function parseDailyEntryLine(line) {
   };
 }
 
-const SCOPE_FRAGMENT_RE = /\[guild:(\S+)\s+channel:(\S+)\s+message:(\S+)\]/;
+const SCOPE_FRAGMENT_RE = /\[guild:(\S+)\s+channel:(\S+)\s+message:(\S+)(?:\s+(voice))?\]/;
 const AUTHOR_ID_RE = /\((\d+)\)$/;
 
 export function parseDailyEntryLineWithScope(line) {
@@ -236,6 +236,7 @@ export function parseDailyEntryLineWithScope(line) {
   const guildId = scopeMatch ? scopeMatch[1] : null;
   const channelId = scopeMatch ? scopeMatch[2] : null;
   const messageId = scopeMatch ? scopeMatch[3] : null;
+  const isVoice = scopeMatch ? scopeMatch[4] === "voice" : false;
   const content = scopeMatch ? rawText.slice(scopeMatch.index + scopeMatch[0].length).trim() : rawText;
 
   return {
@@ -246,6 +247,7 @@ export function parseDailyEntryLineWithScope(line) {
     guildId,
     channelId,
     messageId,
+    isVoice,
     content
   };
 }

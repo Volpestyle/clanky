@@ -105,3 +105,40 @@ test("SentenceAccumulator forces a chunk when the buffer grows too large", () =>
   assert.equal(emitted[0].length <= 30, true);
   assert.equal(emitted.join(" ").includes("this sentence has no punctuation"), true);
 });
+
+test("SentenceAccumulator does not split on the colon inside an inline soundboard directive", () => {
+  const emitted: string[] = [];
+  const accumulator = new SentenceAccumulator({
+    eagerFirstChunk: true,
+    eagerMinChars: 10,
+    maxBufferChars: 120,
+    onSentence(text) {
+      emitted.push(text);
+    }
+  });
+
+  accumulator.push("First sentence. ");
+  assert.deepEqual(emitted, ["First sentence."]);
+
+  accumulator.push("[[SOUNDBOARD:airhorn@123]] hold that thought.");
+  assert.deepEqual(emitted, ["First sentence.", "[[SOUNDBOARD:airhorn@123]] hold that thought."]);
+});
+
+test("SentenceAccumulator does not force-break inside an inline soundboard directive", () => {
+  const emitted: string[] = [];
+  const accumulator = new SentenceAccumulator({
+    eagerFirstChunk: false,
+    maxBufferChars: 24,
+    onSentence(text) {
+      emitted.push(text);
+    }
+  });
+
+  accumulator.push("lead [[SOUNDBOARD:airhorn@123]] tail");
+  accumulator.flush();
+
+  assert.equal(
+    emitted.some((chunk) => chunk.includes("[[SOUNDBOARD:") && !chunk.includes("]]")),
+    false
+  );
+});

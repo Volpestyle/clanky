@@ -2775,6 +2775,110 @@ test("shared ASR bridge forwards recovered transcript after timeout instead of d
   assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"), false);
 });
 
+test("per-user ASR bridge keeps watching the committed utterance across rollover and recovers the late transcript", async () => {
+  const { manager, logs } = createManager();
+  manager.appConfig.openaiApiKey = "test-openai-key";
+  manager.shouldUsePerUserTranscription = () => true;
+  manager.shouldUseSharedTranscription = () => false;
+  manager.evaluatePcmSilenceGate = () => ({
+    drop: false,
+    clipDurationMs: 960,
+    rms: 0.2,
+    peak: 0.4,
+    activeSampleRatio: 0.4
+  });
+
+  const bridgedTurns = [];
+  manager.queueRealtimeTurnFromAsrBridge = (payload) => {
+    bridgedTurns.push(payload);
+    return true;
+  };
+
+  const settings = createTestSettings({
+    botName: "clanker conk",
+    llm: {
+      provider: "anthropic",
+      model: "claude-haiku-4-5"
+    },
+    voice: {
+      openaiRealtime: {
+        transcriptionMethod: "realtime_bridge",
+        usePerUserAsrBridge: true
+      }
+    }
+  });
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000,
+    cleanupHandlers: [],
+    settingsSnapshot: settings,
+    openAiAsrTranscriptStableMs: 100,
+    openAiAsrTranscriptWaitMaxMs: 260
+  });
+
+  const pcmBuffer = makeMonoPcm16(24_000, 3000);
+  manager.captureManager.startInboundCapture({
+    session,
+    userId: "speaker-1",
+    settings
+  });
+
+  const capture = session.userCaptures.get("speaker-1");
+  assert.ok(capture);
+  const { asrState } = seedReadyPerUserAsr(manager, session, "speaker-1");
+  assert.ok(asrState?.utterance);
+  asrState.utterance.bytesSent = pcmBuffer.length;
+  capture.promotedAt = Date.now();
+  capture.asrUtteranceId = Math.max(0, Number(asrState.utterance.id || 0));
+
+  asrState.client = {
+    ws: { readyState: 1 },
+    clearInputAudioBuffer() {},
+    appendInputAudioPcm() {},
+    commitInputAudioBuffer() {
+      const committedUtterance = asrState.utterance;
+      setTimeout(() => {
+        beginAsrUtterance("per_user", session, manager.buildAsrBridgeDeps(session), settings, "speaker-1");
+      }, 320);
+      setTimeout(() => {
+        committedUtterance.finalSegments = ["uh, money so big."];
+        committedUtterance.lastUpdateAt = Date.now();
+      }, 520);
+    }
+  };
+
+  const captureManager = manager.captureManager as CaptureManager & {
+    runAsrBridgeCommit(args: {
+      session: VoiceSession;
+      userId: string;
+      settings?: Record<string, unknown> | null;
+      captureState: CaptureState;
+      pcmBuffer: Buffer;
+      captureReason: string;
+      finalizedAt: number;
+      useOpenAiPerUserAsr: boolean;
+      useOpenAiSharedAsr: boolean;
+    }): Promise<void>;
+  };
+  await captureManager.runAsrBridgeCommit({
+    session,
+    userId: "speaker-1",
+    settings,
+    captureState: capture,
+    pcmBuffer,
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    useOpenAiPerUserAsr: true,
+    useOpenAiSharedAsr: false
+  });
+
+  assert.equal(bridgedTurns.length >= 1, true);
+  assert.equal(bridgedTurns.at(-1)?.asrResult?.transcript, "uh, money so big.");
+  assert.equal(bridgedTurns.at(-1)?.source, "per_user_late_streaming");
+  assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_late_streaming_recovered"), true);
+  assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"), false);
+});
+
 test("per-user ASR bridge forwards same-utterance transcript continuity across late streaming updates", async () => {
   const { manager, logs } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
