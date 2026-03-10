@@ -440,6 +440,20 @@ export function hasReflectionBeenCompleted(store: ActionLogStore, dateKey: strin
   return Boolean(row);
 }
 
+export function deleteReflectionRun(store: ActionLogStore, runId: string): { deleted: number } {
+  const normalizedRunId = String(runId || "").trim();
+  if (!normalizedRunId) return { deleted: 0 };
+
+  const result = store.db
+    .prepare<never, [string]>(
+      `DELETE FROM actions
+         WHERE kind IN ('memory_reflection_start', 'memory_reflection_complete', 'memory_reflection_error')
+           AND json_extract(metadata, '$.runId') = ?`
+    )
+    .run(normalizedRunId);
+  return { deleted: result.changes };
+}
+
 export function getRecentBrowserSessions(store: ActionLogStore, limit = 50, opts: { sinceIso?: string | null } = {}) {
   const parsedLimit = clamp(Math.floor(Number(limit) || 50), 1, 200);
   const sinceIso = String(opts?.sinceIso || "").trim();

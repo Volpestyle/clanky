@@ -6,6 +6,19 @@ import type { LlmActionStore, LlmTrace } from "./serviceShared.ts";
 
 const DEFAULT_MEMORY_EMBEDDING_MODEL = "text-embedding-3-small";
 
+function buildEmbeddingTraceMetadata(trace: LlmTrace | null | undefined) {
+  const traceSource = normalizeInlineText(trace?.source, 120);
+  const traceEvent = normalizeInlineText(trace?.event, 120);
+  const traceReason = normalizeInlineText(trace?.reason, 120);
+  const traceMessageId = normalizeInlineText(trace?.messageId, 160);
+  return {
+    traceSource: traceSource || null,
+    traceEvent: traceEvent || null,
+    traceReason: traceReason || null,
+    traceMessageId: traceMessageId || null
+  };
+}
+
 export type EmbeddingServiceDeps = {
   openai: OpenAI | null;
   store: LlmActionStore;
@@ -88,7 +101,8 @@ export async function embedText(
         model,
         inputChars: input.length,
         vectorDims: embedding.length,
-        usage: { inputTokens, outputTokens: 0 }
+        usage: { inputTokens, outputTokens: 0 },
+        ...buildEmbeddingTraceMetadata(trace)
       },
       usdCost: costUsd
     });
@@ -107,7 +121,8 @@ export async function embedText(
       userId: trace.userId,
       content: String(error?.message || error),
       metadata: {
-        model
+        model,
+        ...buildEmbeddingTraceMetadata(trace)
       }
     });
     throw error;

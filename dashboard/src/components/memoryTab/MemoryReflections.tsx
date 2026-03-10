@@ -94,6 +94,7 @@ export default function MemoryReflections({ guilds }: { guilds: Guild[] }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [limit, setLimit] = useState(20);
+  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
 
   const loadRuns = useCallback(async (nextLimit = limit) => {
     setLoading(true);
@@ -107,6 +108,20 @@ export default function MemoryReflections({ guilds }: { guilds: Guild[] }) {
       setLoading(false);
     }
   }, [limit]);
+
+  const deleteRun = useCallback(async (runId: string) => {
+    if (!runId) return;
+    setDeletingRunId(runId);
+    setError("");
+    try {
+      await api(`/api/memory/reflections/${encodeURIComponent(runId)}`, { method: "DELETE" });
+      setRuns((prev) => (prev ? prev.filter((r) => r.runId !== runId) : prev));
+    } catch (deleteError: unknown) {
+      setError(deleteError instanceof Error ? deleteError.message : String(deleteError));
+    } finally {
+      setDeletingRunId(null);
+    }
+  }, []);
 
   useEffect(() => {
     void loadRuns();
@@ -180,6 +195,20 @@ export default function MemoryReflections({ guilds }: { guilds: Guild[] }) {
                     <span className="memory-reflection-chip">Saved {run.factsSaved ?? run.factsAdded ?? 0}</span>
                     <span className="memory-reflection-chip">Skipped {run.factsSkipped || 0}</span>
                     <span className="memory-reflection-chip">{formatUsd(run.usdCost)}</span>
+                    {run.runId ? (
+                      <button
+                        type="button"
+                        className="memory-reflection-chip memory-reflection-delete-btn"
+                        disabled={deletingRunId === run.runId}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void deleteRun(run.runId as string);
+                        }}
+                      >
+                        {deletingRunId === run.runId ? "Deleting..." : "Delete"}
+                      </button>
+                    ) : null}
                   </div>
                 </summary>
 

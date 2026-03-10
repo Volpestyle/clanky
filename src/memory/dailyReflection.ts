@@ -163,7 +163,7 @@ const REFLECTION_FACTS_JSON_SCHEMA = JSON.stringify({
           confidence: { type: "number", minimum: 0, maximum: 1 },
           evidence: { type: "string", minLength: 1, maxLength: 220 }
         },
-        required: ["subject", "fact", "type", "confidence", "evidence"]
+        required: ["subject", "subjectName", "fact", "type", "confidence", "evidence"]
       }
     }
   },
@@ -237,7 +237,7 @@ function buildReflectionOnePassPrompts({
     "Every fact must be grounded directly in the journal text.",
     "Classify each fact subject as one of: author, bot, lore.",
     `Use subject=author for facts about a specific user. Include subjectName with the author's exact display name from the journal. Authors in this journal: ${authorNames}.`,
-    `Use subject=bot only for explicit durable facts about ${normalizedBotName}.`,
+    `Use subject=bot only for explicit durable facts about ${normalizedBotName} that were USER-ASSIGNED (e.g. nicknames, personality traits the user told it to adopt, or identity changes). Do NOT extract facts describing the bot's built-in capabilities or default behavior (responding to requests, playing music, answering questions, etc.) — those are inherent, not durable memories.`,
     "Use subject=lore for stable shared context not tied to a single person.",
     `Return strict JSON only: {"facts":[{"subject":"author|bot|lore","subjectName":"<author display name if subject=author, empty otherwise>","fact":"...","type":"preference|profile|relationship|project|other","confidence":0.0-1.0,"evidence":"exact short quote"}]}.`,
     "If nothing should be saved, return {\"facts\":[]}."

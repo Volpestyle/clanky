@@ -689,6 +689,15 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
     });
   });
 
+  app.delete("/api/memory/reflections/:runId", (c) => {
+    const runId = String(c.req.param("runId") || "").trim();
+    if (!runId) {
+      return c.json({ ok: false, error: "runId required" }, 400);
+    }
+    const result = store.deleteReflectionRun(runId);
+    return c.json({ ok: true, deleted: result.deleted });
+  });
+
   app.get("/api/memory/subjects", (c) => {
     const guildId = String(c.req.query("guildId") || "").trim();
     const limit = parseBoundedInt(c.req.query("limit"), 200, 1, 500);

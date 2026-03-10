@@ -1342,6 +1342,22 @@ button.sm {
   font-variant-numeric: tabular-nums;
 }
 
+.memory-reflection-delete-btn {
+  cursor: pointer;
+  background: rgba(220, 60, 60, 0.15);
+  border-color: rgba(220, 60, 60, 0.4);
+  color: #e06060;
+  transition: background 0.15s, border-color 0.15s;
+}
+.memory-reflection-delete-btn:hover:not(:disabled) {
+  background: rgba(220, 60, 60, 0.3);
+  border-color: rgba(220, 60, 60, 0.6);
+}
+.memory-reflection-delete-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .memory-reflection-grid {
   display: grid;
   grid-template-columns: 1.4fr 1fr;
