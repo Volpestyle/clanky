@@ -255,7 +255,7 @@ Turns enter the system via two queues and are drained serially:
 ```
 captureManager.finalizeUserTurn()
   → turnProcessor.queueRealtimeTurn()
-    → coalesce within REALTIME_TURN_COALESCE_WINDOW_MS
+    → drain immediately unless another realtime turn is already pending/in flight
     → drainRealtimeTurnQueue() (serial, one at a time)
       → runRealtimeTurn()
 ```

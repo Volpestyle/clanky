@@ -11,7 +11,6 @@ import {
   MIN_RESPONSE_REQUEST_GAP_MS,
   OPENAI_ACTIVE_RESPONSE_RETRY_MS,
   REALTIME_TURN_COALESCE_MAX_BYTES,
-  REALTIME_TURN_COALESCE_WINDOW_MS,
   REALTIME_TURN_PENDING_MERGE_MAX_BYTES,
   REALTIME_TURN_QUEUE_MAX,
   REALTIME_TURN_STALE_SKIP_MS,
@@ -946,22 +945,29 @@ export class TurnProcessor {
       pcmBytes >= REALTIME_TURN_COALESCE_MAX_BYTES ||
       session.ending;
 
-    if (!skipCoalesce && REALTIME_TURN_COALESCE_WINDOW_MS > 0) {
-      pendingQueue.push(queuedTurn);
-      session.realtimeTurnCoalesceTimer = setTimeout(() => {
-        session.realtimeTurnCoalesceTimer = null;
-        if (session.ending) return;
-        let turn = pendingQueue.shift() || null;
-        while (pendingQueue.length > 0) {
-          const next = pendingQueue.shift();
-          if (!next) continue;
-          turn = turn ? this.mergeRealtimeQueuedTurn(turn, next) : next;
-        }
-        if (turn) {
-          this.spawnRealtimeTurnDrain(turn, "coalesce_window_flush");
-        }
-      }, REALTIME_TURN_COALESCE_WINDOW_MS);
-      return;
+    // Disabled to reduce end-of-turn latency. Keep the old hold path nearby so
+    // we can restore it quickly if immediate draining proves too eager.
+    // if (!skipCoalesce && REALTIME_TURN_COALESCE_WINDOW_MS > 0) {
+    //   pendingQueue.push(queuedTurn);
+    //   session.realtimeTurnCoalesceTimer = setTimeout(() => {
+    //     session.realtimeTurnCoalesceTimer = null;
+    //     if (session.ending) return;
+    //     let turn = pendingQueue.shift() || null;
+    //     while (pendingQueue.length > 0) {
+    //       const next = pendingQueue.shift();
+    //       if (!next) continue;
+    //       turn = turn ? this.mergeRealtimeQueuedTurn(turn, next) : next;
+    //     }
+    //     if (turn) {
+    //       this.spawnRealtimeTurnDrain(turn, "coalesce_window_flush");
+    //     }
+    //   }, REALTIME_TURN_COALESCE_WINDOW_MS);
+    //   return;
+    // }
+
+    if (skipCoalesce && session.realtimeTurnCoalesceTimer) {
+      clearTimeout(session.realtimeTurnCoalesceTimer);
+      session.realtimeTurnCoalesceTimer = null;
     }
 
     this.spawnRealtimeTurnDrain(queuedTurn, "direct_queue_start");
