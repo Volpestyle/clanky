@@ -1,13 +1,30 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
-import { BrowserManager, buildAgentBrowserArgs } from "./BrowserManager.ts";
+import { BrowserManager, buildAgentBrowserArgs, buildAgentBrowserSessionName } from "./BrowserManager.ts";
 
-test("buildAgentBrowserArgs prefixes the agent-browser session flag", () => {
+test("buildAgentBrowserArgs prefixes the agent-browser session flag with a short deterministic session name", () => {
   assert.deepEqual(
     buildAgentBrowserArgs("session-1", ["open", "https://example.com"]),
-    ["--session", "session-1", "open", "https://example.com"]
+    ["--session", buildAgentBrowserSessionName("session-1"), "open", "https://example.com"]
   );
+});
+
+test("buildAgentBrowserArgs forwards headed mode for visible browser sessions", () => {
+  assert.deepEqual(
+    buildAgentBrowserArgs("session-1", ["open", "https://example.com"], { headed: true }),
+    ["--session", buildAgentBrowserSessionName("session-1"), "--headed", "open", "https://example.com"]
+  );
+});
+
+test("buildAgentBrowserSessionName shortens long logical session keys for agent-browser socket limits", () => {
+  const logicalSessionKey = "reply:browser:866430493889134672:866430493889134675:1773135046681:1";
+  const normalized = buildAgentBrowserSessionName(logicalSessionKey);
+
+  assert.notEqual(normalized, logicalSessionKey);
+  assert.ok(normalized.length <= 32);
+  assert.match(normalized, /^ab-[a-f0-9]{16}(?:-[a-z0-9-]+)?$/);
+  assert.equal(buildAgentBrowserSessionName(logicalSessionKey), normalized);
 });
 
 test("BrowserManager uses CLI commands that match agent-browser and forwards timeout", async () => {
@@ -77,6 +94,46 @@ test("BrowserManager mouseDrag uses mouse down, move, and up", async () => {
     { sessionKey: "session-1", args: ["mouse", "move", "50", "60"], timeoutMs: 7_654 },
     { sessionKey: "session-1", args: ["mouse", "up", "left"], timeoutMs: 7_654 }
   ]);
+
+  clearInterval(Reflect.get(manager, "staleTimer") as ReturnType<typeof setInterval>);
+});
+
+test("BrowserManager applies configured per-session timeouts during stale cleanup", async () => {
+  const manager = new BrowserManager({ sessionTimeoutMs: 60_000 });
+  const calls: Array<{ sessionKey: string; args: string[] }> = [];
+
+  Reflect.set(
+    manager,
+    "runAgentBrowser",
+    async (sessionKey: string, args: string[]) => {
+      calls.push({ sessionKey, args });
+      return { stdout: "ok", stderr: "" };
+    }
+  );
+
+  manager.configureSession("session-1", { sessionTimeoutMs: 5_000, headed: true });
+  await manager.open("session-1", "https://example.com", 2_500);
+
+  const sessions = Reflect.get(manager, "sessions") as Map<
+    string,
+    { lastActiveAt: number }
+  >;
+  const session = sessions.get("session-1");
+  if (!session) {
+    throw new Error("expected browser session to exist");
+  }
+  session.lastActiveAt = Date.now() - 10_000;
+
+  const cleanupStaleSessions = Reflect.get(manager, "cleanupStaleSessions") as () => void;
+  cleanupStaleSessions.call(manager);
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(calls, [
+    { sessionKey: "session-1", args: ["open", "https://example.com"] },
+    { sessionKey: "session-1", args: ["close"] }
+  ]);
+  assert.equal(sessions.has("session-1"), false);
 
   clearInterval(Reflect.get(manager, "staleTimer") as ReturnType<typeof setInterval>);
 });

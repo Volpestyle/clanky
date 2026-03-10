@@ -23,12 +23,23 @@ export function BrowserSettingsSection({
           />
           Enable browser agent
         </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.browserHeaded}
+            onChange={set("browserHeaded")}
+          />
+          Show browser window on this machine
+        </label>
       </div>
 
       {form.browserEnabled && (
         <>
           <p className="status-msg info" style={{ marginTop: 0 }}>
             Resolved runtime: {form.stackResolvedBrowserRuntime}
+          </p>
+          <p className="status-msg info">
+            Visible mode uses local headed browser sessions for debugging. Leave it off for the default headless runtime.
           </p>
 
           {nativeRuntime ? (

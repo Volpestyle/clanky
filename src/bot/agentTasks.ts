@@ -184,8 +184,10 @@ export async function runModelRequestedBrowserBrowse(
             sessionKey,
             instruction: normalizedQuery,
             model: browserTaskConfig.openaiComputerUse.model,
+            headed: browserTaskConfig.headed,
             maxSteps,
             stepTimeoutMs,
+            sessionTimeoutMs: browserTaskConfig.sessionTimeoutMs,
             trace,
             logSource: source,
             signal: taskSignal
@@ -198,8 +200,10 @@ export async function runModelRequestedBrowserBrowse(
             instruction: normalizedQuery,
             provider: browserTaskConfig.localAgent.provider,
             model: browserTaskConfig.localAgent.model,
+            headed: browserTaskConfig.headed,
             maxSteps,
             stepTimeoutMs,
+            sessionTimeoutMs: browserTaskConfig.sessionTimeoutMs,
             trace,
             logSource: source,
             signal: taskSignal
@@ -413,8 +417,10 @@ export function createBrowserAgentSession(
     sessionKey,
     provider: browserTaskConfig.localAgent.provider,
     model: browserTaskConfig.localAgent.model,
+    headed: browserTaskConfig.headed,
     maxSteps,
     stepTimeoutMs,
+    sessionTimeoutMs: browserTaskConfig.sessionTimeoutMs,
     trace: buildTrace({
       guildId,
       channelId,

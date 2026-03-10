@@ -7,6 +7,7 @@ import { runBrowseAgent } from "./browseAgent.ts";
 test("runBrowseAgent forwards step timeout to browser tools and preserves multi-block final text", async () => {
   const browserCalls: Array<{ sessionKey: string; url: string; timeoutMs: number }> = [];
   const closeCalls: string[] = [];
+  const configureCalls: Array<Record<string, unknown>> = [];
   const llmCalls: Array<{ provider: string; model: string }> = [];
   let llmCallCount = 0;
 
@@ -42,6 +43,9 @@ test("runBrowseAgent forwards step timeout to browser tools and preserves multi-
   } as LLMService;
 
   const browserManager = {
+    configureSession(sessionKey: string, options?: Record<string, unknown>) {
+      configureCalls.push({ sessionKey, options });
+    },
     async open(sessionKey: string, url: string, timeoutMs = 0) {
       browserCalls.push({ sessionKey, url, timeoutMs });
       return "opened";
@@ -65,8 +69,10 @@ test("runBrowseAgent forwards step timeout to browser tools and preserves multi-
     instruction: "open example.com",
     provider: "anthropic",
     model: "claude-sonnet-4-5-20250929",
+    headed: true,
     maxSteps: 3,
     stepTimeoutMs: 6_789,
+    sessionTimeoutMs: 54_321,
     trace: {
       guildId: "guild-1",
       channelId: "channel-1",
@@ -78,6 +84,13 @@ test("runBrowseAgent forwards step timeout to browser tools and preserves multi-
   assert.deepEqual(browserCalls, [
     { sessionKey: "guild-1", url: "https://example.com", timeoutMs: 6_789 }
   ]);
+  assert.deepEqual(configureCalls, [{
+    sessionKey: "guild-1",
+    options: {
+      headed: true,
+      sessionTimeoutMs: 54_321
+    }
+  }]);
   assert.deepEqual(llmCalls, [
     { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
     { provider: "anthropic", model: "claude-sonnet-4-5-20250929" }
@@ -90,6 +103,7 @@ test("runBrowseAgent forwards step timeout to browser tools and preserves multi-
 
 test("runBrowseAgent throws AbortError when signal is aborted before or during loop", async () => {
   const browserManager = {
+    configureSession() { return undefined; },
     async open() { return "opened"; },
     async close() { }
   // eslint-disable-next-line no-restricted-syntax
@@ -145,6 +159,9 @@ test("runBrowseAgent propagates AbortError when a browser tool is cancelled in f
   } as unknown as LLMService;
 
   const browserManager = {
+    configureSession() {
+      return undefined;
+    },
     async open(_sessionKey: string, _url: string, _timeoutMs = 0, signal?: AbortSignal) {
       return await new Promise<string>((_resolve, reject) => {
         signal?.addEventListener("abort", () => {

@@ -4,7 +4,7 @@ This document describes the shipped browser-agent system: how `browser_browse` w
 
 ## Overview
 
-The browser agent is a headless browsing capability built on `agent-browser`:
+The browser agent is a local browsing capability built on `agent-browser`. It runs headless by default and can optionally show a visible browser window from the dashboard Browser Runtime section:
 
 - `src/services/BrowserManager.ts`: wraps `agent-browser` CLI commands and logical session lifecycle.
 - `src/tools/browserTools.ts`: low-level browser tool schemas and execution wrappers (`browser_open`, `browser_click`, `browser_extract`, etc.).
@@ -84,7 +84,9 @@ When the inner browse agent captures a screenshot, that image is preserved as a 
 - `screenshot`
 - `close`
 
-Each call uses `--session <sessionKey>` so the browser task operates in an isolated logical session.
+Each call uses a short deterministic `--session` value derived from the logical session key so the browser task operates in an isolated logical session without tripping Unix socket path-length limits inside `agent-browser`.
+
+When `agentStack.runtimeConfig.browser.headed` is enabled, the local browser manager launches those sessions with `agent-browser --headed`, so you can watch the task on the same machine that is running the bot. The default remains headless.
 
 ## Cancellation Model
 
@@ -135,6 +137,7 @@ Browser-agent settings live under `settings.agentStack.runtimeConfig.browser`, w
 Important fields:
 
 - `agentStack.runtimeConfig.browser.enabled`
+- `agentStack.runtimeConfig.browser.headed`
 - `agentStack.overrides.browserRuntime`
 - `agentStack.runtimeConfig.browser.localBrowserAgent.maxStepsPerTask`
 - `agentStack.runtimeConfig.browser.localBrowserAgent.stepTimeoutMs`
@@ -156,6 +159,7 @@ Current guardrails include:
 - browser usage budget checks before `browser_browse` runs
 - public-URL enforcement in `BrowserManager`
 - concurrent browser session cap in `BrowserManager`
+- deterministic shortening of CLI-facing browser session names to stay below `agent-browser` socket limits on macOS/Linux
 
 ## Observability
 

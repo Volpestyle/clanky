@@ -42,8 +42,10 @@ interface BrowseAgentOptions {
   instruction: string;
   provider: string;
   model: string;
+  headed?: boolean;
   maxSteps: number;
   stepTimeoutMs: number;
+  sessionTimeoutMs?: number;
   trace: BrowseAgentTrace;
   signal?: AbortSignal;
 }
@@ -86,11 +88,18 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
     instruction,
     provider,
     model,
+    headed,
     maxSteps,
     stepTimeoutMs,
+    sessionTimeoutMs,
     trace,
     signal
   } = options;
+
+  browserManager.configureSession(sessionKey, {
+    headed,
+    sessionTimeoutMs
+  });
 
   const messages: ToolLoopMessage[] = [
     { role: "user", content: instruction }
@@ -216,8 +225,10 @@ export interface BrowserAgentSessionOptions {
   sessionKey: string;
   provider: string;
   model: string;
+  headed?: boolean;
   maxSteps: number;
   stepTimeoutMs: number;
+  sessionTimeoutMs?: number;
   trace: BrowseAgentTrace;
   signal?: AbortSignal;
 }
@@ -273,6 +284,11 @@ export class BrowserAgentSession implements SubAgentSession {
     this.stepTimeoutMs = options.stepTimeoutMs;
     this.trace = options.trace;
     this.baseSignal = options.signal;
+
+    this.browserManager.configureSession(this.sessionKey, {
+      headed: options.headed,
+      sessionTimeoutMs: options.sessionTimeoutMs
+    });
 
     this.messages = [];
     this.stepCount = 0;

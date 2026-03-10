@@ -94,8 +94,10 @@ export async function executeVoiceBrowserBrowseTool(
           sessionKey,
           instruction,
           model: browserTaskConfig.openaiComputerUse.model,
+          headed: browserTaskConfig.headed,
           maxSteps,
           stepTimeoutMs,
+          sessionTimeoutMs: browserTaskConfig.sessionTimeoutMs,
           trace,
           logSource: "voice_realtime_tool_browser_browse",
           signal
@@ -108,8 +110,10 @@ export async function executeVoiceBrowserBrowseTool(
           instruction,
           provider: browserTaskConfig.localAgent.provider,
           model: browserTaskConfig.localAgent.model,
+          headed: browserTaskConfig.headed,
           maxSteps,
           stepTimeoutMs,
+          sessionTimeoutMs: browserTaskConfig.sessionTimeoutMs,
           trace,
           logSource: "voice_realtime_tool_browser_browse",
           signal

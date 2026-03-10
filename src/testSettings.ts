@@ -200,6 +200,7 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
         },
         browser: {
           enabled: browser.enabled,
+          headed: browser.headed,
           localBrowserAgent: {
             execution: {
               mode: "dedicated_model",

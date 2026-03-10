@@ -120,6 +120,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.replyFollowupMaxImageLookupCalls, 2);
   assert.equal(form.replyFollowupToolTimeoutMs, 10000);
   assert.equal(form.browserOpenAiComputerUseModel, "gpt-5.4");
+  assert.equal(form.browserHeaded, false);
   assert.equal(form.browserLlmProvider, "claude-oauth");
   assert.equal(form.browserLlmModel, "claude-opus-4-6");
   assert.equal(form.codeAgentProvider, "auto");
@@ -176,6 +177,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.replyFollowupMaxImageLookupCalls = 1;
   form.replyFollowupToolTimeoutMs = 16000;
   form.automationsEnabled = false;
+  form.browserHeaded = true;
   form.voiceGenerationLlmUseTextModel = true;
   form.voiceStreamWatchKeyframeIntervalMs = 1750;
   form.voiceStreamWatchAutonomousCommentaryEnabled = false;
@@ -228,6 +230,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
     "claude-oauth",
     "claude-opus-4-6"
   );
+  assert.equal(patch.agentStack.runtimeConfig.browser.headed, true);
   assert.equal(patch.automations.enabled, false);
   assertDedicatedExecutionModel(
     patch.initiative.text.execution,
@@ -519,6 +522,23 @@ test("settingsFormModel round-trips claude oauth browser llm provider and model"
     "claude-oauth",
     "claude-sonnet-4-6"
   );
+});
+
+test("settingsFormModel round-trips browser headed mode", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({
+    agentStack: {
+      runtimeConfig: {
+        browser: {
+          headed: true
+        }
+      }
+    }
+  })));
+
+  assert.equal(form.browserHeaded, true);
+
+  const patch = formToSettingsPatch(form);
+  assert.equal(patch.agentStack.runtimeConfig.browser.headed, true);
 });
 
 test("getCodeAgentValidationError requires allowed users when code agent is enabled", () => {

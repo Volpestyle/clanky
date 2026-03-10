@@ -271,6 +271,7 @@ export const DEFAULT_SETTINGS = {
       },
       browser: {
         enabled: true,
+        headed: false,
         openaiComputerUse: {
           model: "gpt-5.4"
         },

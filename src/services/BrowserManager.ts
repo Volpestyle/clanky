@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,26 +12,60 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_STEP_TIMEOUT_MS = 30_000;
 const DEFAULT_SESSION_TIMEOUT_MS = 300_000;
 const STALE_CHECK_INTERVAL_MS = 60_000;
+const AGENT_BROWSER_SESSION_HASH_LEN = 16;
+const AGENT_BROWSER_SESSION_TAIL_LEN = 8;
 
-export function buildAgentBrowserArgs(sessionKey: string, args: string[]): string[] {
-  return ["--session", sessionKey, ...args];
+type BrowserSessionConfig = {
+  headed?: boolean;
+  sessionTimeoutMs?: number;
+};
+
+export function buildAgentBrowserSessionName(sessionKey: string): string {
+  const normalizedSessionKey = String(sessionKey || "").trim() || "default";
+  const digest = createHash("sha256")
+    .update(normalizedSessionKey)
+    .digest("hex")
+    .slice(0, AGENT_BROWSER_SESSION_HASH_LEN);
+  const readableTail = normalizedSessionKey
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(-AGENT_BROWSER_SESSION_TAIL_LEN);
+
+  return readableTail ? `ab-${digest}-${readableTail}` : `ab-${digest}`;
+}
+
+export function buildAgentBrowserArgs(
+  sessionKey: string,
+  args: string[],
+  options?: Pick<BrowserSessionConfig, "headed">
+): string[] {
+  return [
+    "--session",
+    buildAgentBrowserSessionName(sessionKey),
+    ...(options?.headed ? ["--headed"] : []),
+    ...args
+  ];
 }
 
 interface BrowserSession {
   sessionKey: string;
   createdAt: number;
   lastActiveAt: number;
+  headed: boolean;
+  sessionTimeoutMs: number;
 }
 
 export class BrowserManager {
   private sessions: Map<string, BrowserSession> = new Map();
   private readonly maxConcurrentSessions: number;
-  private readonly sessionTimeoutMs: number;
+  private readonly defaultSessionTimeoutMs: number;
+  private readonly pendingSessionConfigs = new Map<string, BrowserSessionConfig>();
   private staleTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options?: { maxConcurrentSessions?: number; sessionTimeoutMs?: number }) {
     this.maxConcurrentSessions = options?.maxConcurrentSessions || 2;
-    this.sessionTimeoutMs = options?.sessionTimeoutMs || DEFAULT_SESSION_TIMEOUT_MS;
+    this.defaultSessionTimeoutMs = options?.sessionTimeoutMs || DEFAULT_SESSION_TIMEOUT_MS;
 
     this.staleTimer = setInterval(() => {
       this.cleanupStaleSessions();
@@ -41,8 +76,56 @@ export class BrowserManager {
     console.warn(`[BrowserManager] ${context}:`, error);
   }
 
+  private normalizeSessionKey(sessionKey: string): string {
+    return String(sessionKey || "").trim();
+  }
+
+  private normalizeSessionConfig(options?: BrowserSessionConfig): BrowserSessionConfig {
+    const sessionTimeoutMs = Number(options?.sessionTimeoutMs);
+    return {
+      ...(options?.headed !== undefined ? { headed: Boolean(options.headed) } : {}),
+      ...(Number.isFinite(sessionTimeoutMs) && sessionTimeoutMs > 0
+        ? { sessionTimeoutMs: sessionTimeoutMs }
+        : {})
+    };
+  }
+
+  private getSessionConfig(sessionKey: string): BrowserSessionConfig {
+    const normalizedSessionKey = this.normalizeSessionKey(sessionKey);
+    const session = normalizedSessionKey ? this.sessions.get(normalizedSessionKey) : undefined;
+    if (session) {
+      return {
+        headed: session.headed,
+        sessionTimeoutMs: session.sessionTimeoutMs
+      };
+    }
+    return this.pendingSessionConfigs.get(normalizedSessionKey) || {};
+  }
+
+  configureSession(sessionKey: string, options?: BrowserSessionConfig): void {
+    const normalizedSessionKey = this.normalizeSessionKey(sessionKey);
+    if (!normalizedSessionKey) return;
+
+    const normalizedConfig = this.normalizeSessionConfig(options);
+    const existingPending = this.pendingSessionConfigs.get(normalizedSessionKey) || {};
+    this.pendingSessionConfigs.set(normalizedSessionKey, {
+      ...existingPending,
+      ...normalizedConfig
+    });
+
+    const existingSession = this.sessions.get(normalizedSessionKey);
+    if (!existingSession) return;
+    if (normalizedConfig.headed !== undefined) {
+      existingSession.headed = normalizedConfig.headed;
+    }
+    if (normalizedConfig.sessionTimeoutMs !== undefined) {
+      existingSession.sessionTimeoutMs = normalizedConfig.sessionTimeoutMs;
+    }
+  }
+
   private getOrCreateSession(sessionKey: string): BrowserSession {
-    const existing = this.sessions.get(sessionKey);
+    const normalizedSessionKey = this.normalizeSessionKey(sessionKey);
+    const existing = this.sessions.get(normalizedSessionKey);
     if (existing) {
       existing.lastActiveAt = Date.now();
       return existing;
@@ -50,17 +133,23 @@ export class BrowserManager {
     if (this.sessions.size >= this.maxConcurrentSessions) {
       throw new Error(`Maximum concurrent browser sessions (${this.maxConcurrentSessions}) exceeded.`);
     }
+    const config = this.getSessionConfig(normalizedSessionKey);
     const session: BrowserSession = {
-      sessionKey,
+      sessionKey: normalizedSessionKey,
       createdAt: Date.now(),
-      lastActiveAt: Date.now()
+      lastActiveAt: Date.now(),
+      headed: Boolean(config.headed),
+      sessionTimeoutMs:
+        Number.isFinite(config.sessionTimeoutMs) && Number(config.sessionTimeoutMs) > 0
+          ? Number(config.sessionTimeoutMs)
+          : this.defaultSessionTimeoutMs
     };
-    this.sessions.set(sessionKey, session);
+    this.sessions.set(normalizedSessionKey, session);
     return session;
   }
 
   private touchSession(sessionKey: string): void {
-    const session = this.sessions.get(sessionKey);
+    const session = this.sessions.get(this.normalizeSessionKey(sessionKey));
     if (session) session.lastActiveAt = Date.now();
   }
 
@@ -71,7 +160,7 @@ export class BrowserManager {
     signal?: AbortSignal
   ): Promise<{ stdout: string; stderr: string }> {
     throwIfAborted(signal, "Browser command cancelled");
-    return execFileAsync("agent-browser", buildAgentBrowserArgs(sessionKey, args), { timeout: timeoutMs, signal }).then(
+    return execFileAsync("agent-browser", buildAgentBrowserArgs(sessionKey, args, this.getSessionConfig(sessionKey)), { timeout: timeoutMs, signal }).then(
       ({ stdout, stderr }) => ({ stdout: stdout.trim(), stderr: stderr.trim() }),
       (error: unknown) => {
         if (isAbortError(error) || signal?.aborted) {
@@ -258,12 +347,14 @@ export class BrowserManager {
   }
 
   async close(sessionKey: string): Promise<void> {
+    const normalizedSessionKey = this.normalizeSessionKey(sessionKey);
     try {
-      await this.runAgentBrowser(sessionKey, ["close"]);
+      await this.runAgentBrowser(normalizedSessionKey, ["close"]);
     } catch {
       // ignore close errors
     } finally {
-      this.sessions.delete(sessionKey);
+      this.sessions.delete(normalizedSessionKey);
+      this.pendingSessionConfigs.delete(normalizedSessionKey);
     }
   }
 
@@ -276,12 +367,13 @@ export class BrowserManager {
       clearInterval(this.staleTimer);
       this.staleTimer = null;
     }
+    this.pendingSessionConfigs.clear();
   }
 
   private cleanupStaleSessions(): void {
     const now = Date.now();
     for (const [key, session] of this.sessions) {
-      if (now - session.lastActiveAt > this.sessionTimeoutMs) {
+      if (now - session.lastActiveAt > session.sessionTimeoutMs) {
         void this.close(key);
       }
     }

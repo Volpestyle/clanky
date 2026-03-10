@@ -46,6 +46,7 @@ test("normalizeSettings migrates and clamps complex legacy settings into the can
     },
     browser: {
       enabled: true,
+      headed: true,
       llm: {
         provider: "OPENAI",
         model: ""
@@ -189,6 +190,7 @@ test("normalizeSettings migrates and clamps complex legacy settings into the can
   );
 
   assert.equal(normalized.agentStack.runtimeConfig.browser.enabled, true);
+  assert.equal(normalized.agentStack.runtimeConfig.browser.headed, true);
   assert.equal(browserExecution.mode, "dedicated_model");
   assert.deepEqual(browserExecution.model, {
     provider: "openai",

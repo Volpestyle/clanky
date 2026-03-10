@@ -7,6 +7,7 @@ import { runOpenAiComputerUseTask } from "./openAiComputerUseRuntime.ts";
 test("runOpenAiComputerUseTask uses the GA computer tool and executes batched actions", async () => {
   const requests: Array<Record<string, unknown>> = [];
   const browserCalls: string[] = [];
+  const configureCalls: Array<Record<string, unknown>> = [];
   const logs: Array<Record<string, unknown>> = [];
 
   const openai = {
@@ -53,6 +54,9 @@ test("runOpenAiComputerUseTask uses the GA computer tool and executes batched ac
   } as OpenAI;
 
   const browserManager = {
+    configureSession(sessionKey: string, options?: Record<string, unknown>) {
+      configureCalls.push({ sessionKey, options });
+    },
     async open(_sessionKey: string, url: string) {
       browserCalls.push(`open:${url}`);
       return "ok";
@@ -113,7 +117,9 @@ test("runOpenAiComputerUseTask uses the GA computer tool and executes batched ac
     sessionKey: "session-1",
     instruction: "Go inspect https://example.com and tell me what changed.",
     maxSteps: 3,
+    headed: true,
     stepTimeoutMs: 5_000,
+    sessionTimeoutMs: 45_000,
     trace: {
       guildId: "guild-1",
       channelId: "channel-1",
@@ -127,6 +133,13 @@ test("runOpenAiComputerUseTask uses the GA computer tool and executes batched ac
   assert.equal(result.hitStepLimit, false);
 
   assert.equal(requests.length, 2);
+  assert.deepEqual(configureCalls, [{
+    sessionKey: "session-1",
+    options: {
+      headed: true,
+      sessionTimeoutMs: 45_000
+    }
+  }]);
   assert.equal(requests[0]?.model, "gpt-5.4");
   assert.deepEqual(requests[0]?.tools, [{
     type: "computer",
@@ -186,6 +199,9 @@ test("runOpenAiComputerUseTask surfaces pending safety checks", async () => {
 
   let closed = false;
   const browserManager = {
+    configureSession() {
+      return undefined;
+    },
     async open() {
       return "ok";
     },

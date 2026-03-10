@@ -36,8 +36,10 @@ type ComputerUseOptions = {
   sessionKey: string;
   instruction: string;
   model?: string;
+  headed?: boolean;
   maxSteps: number;
   stepTimeoutMs: number;
+  sessionTimeoutMs?: number;
   trace: ComputerUseTrace;
   logSource?: string | null;
   signal?: AbortSignal;
@@ -316,13 +318,19 @@ export async function runOpenAiComputerUseTask({
   sessionKey,
   instruction,
   model = COMPUTER_USE_DEFAULT_MODEL,
+  headed,
   maxSteps,
   stepTimeoutMs,
+  sessionTimeoutMs,
   trace,
   logSource,
   signal
 }: ComputerUseOptions): Promise<OpenAiComputerUseResult> {
   throwIfAborted(signal, "Computer use task cancelled");
+  browserManager.configureSession(sessionKey, {
+    headed,
+    sessionTimeoutMs
+  });
 
   const startedAt = Date.now();
   const initialUrl = resolveInitialUrl(instruction);
