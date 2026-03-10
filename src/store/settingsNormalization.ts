@@ -130,6 +130,7 @@ export function normalizeSettings(raw: unknown): Settings {
   const rawOverrides = isRecord(rawAgentStack.overrides) ? rawAgentStack.overrides : {};
   const rawVoice = isRecord(canonicalInput.voice) ? canonicalInput.voice : {};
   const rawVoiceAdmission = isRecord(rawVoice.admission) ? rawVoice.admission : {};
+  const rawMemoryLlm = canonicalInput.memoryLlm;
   const presetConfig = resolveAgentStackPresetConfig(rawAgentStack);
   const orchestratorOverride = normalizeModelBinding(
     rawOverrides.orchestrator,
@@ -182,7 +183,7 @@ export function normalizeSettings(raw: unknown): Settings {
     ),
     memory: normalizeMemorySection(merged.memory),
     memoryLlm: normalizeOptionalModelBinding(
-      merged.memoryLlm,
+      rawMemoryLlm,
       orchestratorOverride.provider,
       orchestratorOverride.model
     ),

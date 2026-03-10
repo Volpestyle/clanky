@@ -783,6 +783,245 @@ export function getCodeAgentValidationError(form: SettingsForm): string {
     : "Add at least one allowed user ID before enabling the code agent.";
 }
 
+export type SettingsFormValidationError = {
+  sectionId: string;
+  message: string;
+};
+
+function isBlankNumericInput(value: unknown) {
+  return value === null || value === undefined || (typeof value === "string" && value.trim() === "");
+}
+
+function validateNumericField({
+  enabled = true,
+  sectionId,
+  label,
+  value,
+  min,
+  max,
+  integer = true
+}: {
+  enabled?: boolean;
+  sectionId: string;
+  label: string;
+  value: unknown;
+  min: number;
+  max: number;
+  integer?: boolean;
+}): SettingsFormValidationError | null {
+  if (!enabled) return null;
+  if (isBlankNumericInput(value)) {
+    return {
+      sectionId,
+      message: `${label} is required.`
+    };
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return {
+      sectionId,
+      message: `${label} must be a valid number.`
+    };
+  }
+  if (integer && !Number.isInteger(parsed)) {
+    return {
+      sectionId,
+      message: `${label} must be a whole number.`
+    };
+  }
+  if (parsed < min || parsed > max) {
+    return {
+      sectionId,
+      message: `${label} must be between ${min} and ${max}.`
+    };
+  }
+
+  return null;
+}
+
+export function getSettingsValidationError(form: SettingsForm): SettingsFormValidationError | null {
+  const codeAgentValidationError = getCodeAgentValidationError(form);
+  if (codeAgentValidationError) {
+    return {
+      sectionId: "sec-code-agent",
+      message: codeAgentValidationError
+    };
+  }
+
+  const validations: SettingsFormValidationError[] = [
+    validateNumericField({
+      sectionId: "sec-llm",
+      label: "Temperature",
+      value: form.temperature,
+      min: 0,
+      max: 2,
+      integer: false
+    }),
+    validateNumericField({
+      sectionId: "sec-llm",
+      label: "Max output tokens",
+      value: form.maxTokens,
+      min: 32,
+      max: 16_384
+    }),
+    validateNumericField({
+      enabled: Boolean(form.replyFollowupLlmEnabled),
+      sectionId: "sec-llm",
+      label: "Follow-up tool timeout (ms)",
+      value: form.replyFollowupToolTimeoutMs,
+      min: 1_000,
+      max: 120_000
+    }),
+    validateNumericField({
+      sectionId: "sec-rate",
+      label: "Reply eagerness",
+      value: form.replyEagerness,
+      min: 0,
+      max: 100
+    }),
+    validateNumericField({
+      sectionId: "sec-rate",
+      label: "Reaction level",
+      value: form.reactionLevel,
+      min: 0,
+      max: 100
+    }),
+    validateNumericField({
+      sectionId: "sec-rate",
+      label: "Minimum seconds between messages",
+      value: form.minGap,
+      min: 5,
+      max: 300
+    }),
+    validateNumericField({
+      sectionId: "sec-rate",
+      label: "Max messages per hour",
+      value: form.maxMessages,
+      min: 0,
+      max: 500
+    }),
+    validateNumericField({
+      sectionId: "sec-rate",
+      label: "Max reactions per hour",
+      value: form.maxReactions,
+      min: 0,
+      max: 500
+    }),
+    validateNumericField({
+      sectionId: "sec-startup",
+      label: "Catch-up lookback hours",
+      value: form.catchupLookbackHours,
+      min: 1,
+      max: 168
+    }),
+    validateNumericField({
+      sectionId: "sec-startup",
+      label: "Catch-up max messages per channel",
+      value: form.catchupMaxMessages,
+      min: 1,
+      max: 200
+    }),
+    validateNumericField({
+      sectionId: "sec-startup",
+      label: "Catch-up max replies per channel",
+      value: form.catchupMaxReplies,
+      min: 0,
+      max: 20
+    }),
+    validateNumericField({
+      enabled: Boolean(form.stackAdvancedOverridesEnabled),
+      sectionId: "sec-orchestration",
+      label: "Session idle timeout (ms)",
+      value: form.subAgentSessionIdleTimeoutMs,
+      min: 10_000,
+      max: 1_800_000
+    }),
+    validateNumericField({
+      enabled: Boolean(form.stackAdvancedOverridesEnabled),
+      sectionId: "sec-orchestration",
+      label: "Max concurrent sessions",
+      value: form.subAgentMaxConcurrentSessions,
+      min: 1,
+      max: 100
+    }),
+    validateNumericField({
+      enabled: Boolean(form.stackAdvancedOverridesEnabled && form.browserEnabled),
+      sectionId: "sec-browser",
+      label: "Max browse calls per hour",
+      value: form.browserMaxPerHour,
+      min: 1,
+      max: 60
+    }),
+    validateNumericField({
+      enabled: Boolean(form.stackAdvancedOverridesEnabled && form.browserEnabled),
+      sectionId: "sec-browser",
+      label: "Max steps per task",
+      value: form.browserMaxSteps,
+      min: 1,
+      max: 30
+    }),
+    validateNumericField({
+      enabled: Boolean(form.stackAdvancedOverridesEnabled && form.browserEnabled),
+      sectionId: "sec-browser",
+      label: "Browser step timeout (ms)",
+      value: form.browserStepTimeoutMs,
+      min: 5_000,
+      max: 120_000
+    }),
+    validateNumericField({
+      enabled: Boolean(form.stackAdvancedOverridesEnabled && form.browserEnabled),
+      sectionId: "sec-browser",
+      label: "Browser session timeout (ms)",
+      value: form.browserSessionTimeoutMs,
+      min: 10_000,
+      max: 1_800_000
+    }),
+    validateNumericField({
+      enabled: Boolean(form.stackAdvancedOverridesEnabled && form.codeAgentEnabled),
+      sectionId: "sec-code-agent",
+      label: "Max parallel tasks",
+      value: form.codeAgentMaxParallelTasks,
+      min: 1,
+      max: 20
+    }),
+    validateNumericField({
+      enabled: Boolean(form.stackAdvancedOverridesEnabled && form.codeAgentEnabled),
+      sectionId: "sec-code-agent",
+      label: "Max tasks per hour",
+      value: form.codeAgentMaxTasksPerHour,
+      min: 0,
+      max: 200
+    }),
+    validateNumericField({
+      enabled: Boolean(form.stackAdvancedOverridesEnabled && form.codeAgentEnabled),
+      sectionId: "sec-code-agent",
+      label: "Max turns per task",
+      value: form.codeAgentMaxTurns,
+      min: 1,
+      max: 200
+    }),
+    validateNumericField({
+      enabled: Boolean(form.stackAdvancedOverridesEnabled && form.codeAgentEnabled),
+      sectionId: "sec-code-agent",
+      label: "Code agent timeout (ms)",
+      value: form.codeAgentTimeoutMs,
+      min: 10_000,
+      max: 1_800_000
+    }),
+    validateNumericField({
+      enabled: Boolean(form.stackAdvancedOverridesEnabled && form.codeAgentEnabled),
+      sectionId: "sec-code-agent",
+      label: "Max buffer bytes",
+      value: form.codeAgentMaxBufferBytes,
+      min: 4_096,
+      max: 10 * 1024 * 1024
+    })
+  ].filter((entry): entry is SettingsFormValidationError => entry !== null);
+
+  return validations[0] || null;
+}
+
 export function formToSettingsPatch(form: SettingsForm): SettingsInput {
   const discoveryFeedEnabled = Boolean(form.discoveryFeedEnabled);
   const advancedOverridesEnabled = Boolean(form.stackAdvancedOverridesEnabled);

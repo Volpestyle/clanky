@@ -84,6 +84,13 @@ There is no separate directive tool handler in the live architecture.
 
 Settings are written through the dashboard API, normalized in `normalizeSettings()`, and then read lazily at decision time.
 
+Control-plane guarantees:
+
+- admin routes accept `x-dashboard-token` headers only
+- non-loopback dashboard binds require `DASHBOARD_TOKEN`
+- dashboard saves use compare-and-swap on `settings.updated_at`
+- persistence and live-session application are separate outcomes: a save can succeed even when active voice sessions still need a manual refresh
+
 Canonical top-level settings groups:
 
 - `identity`
@@ -124,6 +131,14 @@ Normalization responsibilities:
 - sanitize lists and strings
 - normalize incoming settings into canonical nested fields
 - apply preset defaults when canonical fields are absent
+
+Dashboard save semantics:
+
+- `PUT /api/settings` requires `_meta.expectedUpdatedAt`
+- version mismatches return `409` with the latest saved settings snapshot
+- successful saves return the new `updatedAt`
+- runtime application status is reported separately through `_meta.saveAppliedToRuntime` and `_meta.saveApplyError`
+- `POST /api/settings/refresh` reapplies the last saved settings to active voice sessions; it does not apply unsaved dashboard draft state
 
 ![Settings Flow](diagrams/settings-flow.png)
 <!-- source: docs/diagrams/settings-flow.mmd -->

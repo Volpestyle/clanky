@@ -33,7 +33,16 @@ export function normalizeString(value: unknown, fallback = "", maxLen = 500) {
 }
 
 export function normalizeBoolean(value: unknown, fallback: boolean) {
-  return value === undefined ? fallback : Boolean(value);
+  if (value === undefined) return fallback;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return fallback;
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "off"].includes(normalized)) return false;
+  }
+  return Boolean(value);
 }
 
 export function normalizeNumber(value: unknown, fallback: number, min: number, max: number) {

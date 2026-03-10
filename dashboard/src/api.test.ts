@@ -106,3 +106,38 @@ test("dashboard api throws structured error on non-ok responses", async () => {
     );
   });
 });
+
+test("dashboard api preserves JSON error bodies for callers that handle conflicts", async () => {
+  await withApiModule({}, async (apiModule) => {
+    await withMockFetch(
+      async () => ({
+        ok: false,
+        status: 409,
+        headers: {
+          get(name) {
+            return name.toLowerCase() === "content-type" ? "application/json" : null;
+          }
+        },
+        async text() {
+          return JSON.stringify({
+            error: "settings_conflict",
+            detail: "Reload the latest settings."
+          });
+        }
+      }),
+      async () => {
+        try {
+          await apiModule.api("/api/settings");
+          assert.fail("expected api() to throw");
+        } catch (error) {
+          assert.equal(error instanceof apiModule.ApiError, true);
+          assert.equal(error.status, 409);
+          assert.deepEqual(error.body, {
+            error: "settings_conflict",
+            detail: "Reload the latest settings."
+          });
+        }
+      }
+    );
+  });
+});

@@ -71,10 +71,34 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
       );
     }
 
-    const nextSettings = store.patchSettings(body);
-    const next = store.getSettingsRecord();
-    await bot.applyRuntimeSettings(nextSettings);
-    return c.json(buildSettingsResponse(next.settings, appConfig, next.updatedAt));
+    const saved = store.patchSettingsWithVersion(body, expectedUpdatedAt);
+    if (!saved.ok) {
+      return c.json(
+        {
+          error: "settings_conflict",
+          detail: "Settings changed while this save was being applied. Reload the latest settings and try again.",
+          ...buildSettingsResponse(saved.settings, appConfig, saved.updatedAt)
+        },
+        409
+      );
+    }
+
+    let saveAppliedToRuntime = true;
+    let saveApplyError = "";
+    try {
+      await bot.applyRuntimeSettings(saved.settings);
+    } catch (error) {
+      saveAppliedToRuntime = false;
+      saveApplyError = error instanceof Error ? error.message : String(error);
+      console.error("Saved settings, but failed to apply them to the live runtime:", error);
+    }
+
+    return c.json(
+      buildSettingsResponse(saved.settings, appConfig, saved.updatedAt, {
+        saveAppliedToRuntime,
+        ...(saveApplyError ? { saveApplyError } : {})
+      })
+    );
   });
 
   app.post("/api/settings/preset-defaults", async (c) => {
@@ -244,14 +268,16 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
 function buildSettingsResponse(
   settings: unknown,
   appConfig: DashboardAppConfig,
-  updatedAt: string
+  updatedAt: string,
+  extraMeta: Record<string, unknown> = {}
 ) {
   const settingsRecord = toRecord(settings);
   return {
     ...settingsRecord,
     _resolved: resolveSettingsBindings(settings, appConfig),
     _meta: {
-      updatedAt: String(updatedAt || "")
+      updatedAt: String(updatedAt || ""),
+      ...extraMeta
     }
   };
 }

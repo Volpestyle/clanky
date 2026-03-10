@@ -29,6 +29,16 @@ const PUBLIC_FRAME_REQUEST_MAX_PER_WINDOW = 1200;
 const PUBLIC_FRAME_DECLARED_BYTES_MAX = 6_000_000;
 const PUBLIC_SHARE_FRAME_PATH_RE = /^\/api\/voice\/share-session\/[a-z0-9_-]{16,}\/frame\/?$/i;
 
+function isLocalDashboardHost(value: string) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return (
+    normalized === "127.0.0.1" ||
+    normalized === "localhost" ||
+    normalized === "::1" ||
+    normalized === "[::1]"
+  );
+}
+
 export { STREAM_INGEST_API_PATH } from "./dashboard/shared.ts";
 export type { DashboardApp, DashboardServerHandle, DashboardSseClient } from "./dashboard/shared.ts";
 
@@ -163,6 +173,12 @@ export function createDashboardServer({
   app: DashboardApp;
   server: DashboardServerHandle;
 } {
+  const dashboardHost = normalizeDashboardHost(appConfig.dashboardHost);
+  const dashboardToken = String(appConfig.dashboardToken || "").trim();
+  if (!dashboardToken && !isLocalDashboardHost(dashboardHost)) {
+    throw new Error("DASHBOARD_TOKEN is required when DASHBOARD_HOST is not loopback-only.");
+  }
+
   const app = new Hono<DashboardEnv>();
   const publicFrameIngressRateLimit = new Map<string, FixedWindowBucket>();
   const getStatsPayload = () => {
@@ -262,7 +278,7 @@ export function createDashboardServer({
     const isPublicApiRoute = isAllowedPublicApiPath(apiPath);
     const dashboardToken = String(appConfig.dashboardToken || "").trim();
     const publicApiToken = String(appConfig.publicApiToken || "").trim();
-    const presentedDashboardToken = c.req.header("x-dashboard-token") || c.req.query("token") || "";
+    const presentedDashboardToken = c.req.header("x-dashboard-token") || "";
     const presentedPublicToken = c.req.header("x-public-api-token") || "";
     const isDashboardAuthorized = Boolean(dashboardToken) && presentedDashboardToken === dashboardToken;
     const isPublicApiAuthorized = Boolean(publicApiToken) && presentedPublicToken === publicApiToken;
@@ -434,7 +450,6 @@ export function createDashboardServer({
     });
   });
 
-  const dashboardHost = normalizeDashboardHost(appConfig.dashboardHost);
   const bunServer = Bun.serve({
     hostname: dashboardHost,
     port: appConfig.dashboardPort,

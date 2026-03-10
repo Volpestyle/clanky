@@ -4,6 +4,7 @@ import {
   applyStackPresetDefaults,
   formToSettingsPatch,
   getCodeAgentValidationError,
+  getSettingsValidationError,
   resolveBrowserProviderModelOptions,
   resolveModelOptionsFromText,
   resolvePresetModelSelection,
@@ -554,6 +555,18 @@ test("getCodeAgentValidationError requires allowed users when code agent is enab
 
   form.codeAgentAllowedUserIds = "123456789";
   assert.equal(getCodeAgentValidationError(form), "");
+});
+
+test("getSettingsValidationError blocks blank advanced numeric inputs", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({})));
+  form.stackAdvancedOverridesEnabled = true;
+  form.browserEnabled = true;
+  (form as Record<string, unknown>).browserMaxPerHour = "";
+
+  assert.deepEqual(getSettingsValidationError(form), {
+    sectionId: "sec-browser",
+    message: "Max browse calls per hour is required."
+  });
 });
 
 test("settingsFormModel round-trips code agent provider fields", () => {

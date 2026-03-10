@@ -11,6 +11,7 @@ import {
   getSettingsRecord,
   setSettings,
   patchSettings,
+  patchSettingsWithVersion,
   resetSettings
 } from "./storeSettings.ts";
 import {
@@ -287,6 +288,10 @@ export class Store {
 
   patchSettings(patch) {
     return patchSettings(this, patch);
+  }
+
+  patchSettingsWithVersion(patch, expectedUpdatedAt) {
+    return patchSettingsWithVersion(this, patch, expectedUpdatedAt);
   }
 
   resetSettings() {

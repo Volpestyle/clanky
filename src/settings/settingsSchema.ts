@@ -388,7 +388,10 @@ export const DEFAULT_SETTINGS = {
       maxFactsPerReflection: 20
     }
   },
-  memoryLlm: {},
+  memoryLlm: {
+    provider: "claude-oauth",
+    model: "claude-opus-4-6"
+  },
   initiative: {
     text: {
       enabled: true,
@@ -630,11 +633,12 @@ type SettingsMedia = Omit<SettingsFromDefaults["media"], "vision" | "videoContex
 
 export type Settings = Omit<
   SettingsFromDefaults,
-  "interaction" | "agentStack" | "memory" | "initiative" | "media"
+  "interaction" | "agentStack" | "memory" | "memoryLlm" | "initiative" | "media"
 > & {
   interaction: SettingsInteraction;
   agentStack: SettingsAgentStack;
   memory: SettingsMemory;
+  memoryLlm: Partial<SettingsModelBinding>;
   initiative: SettingsInitiative;
   media: SettingsMedia;
 };

@@ -12,6 +12,22 @@ function normalizeLegacyView(input: unknown): ReturnType<typeof normalizeSetting
   return normalizeSettings(normalizeTestSettingsInput(input));
 }
 
+test("normalizeSettings interprets string booleans from form-style payloads correctly", () => {
+  const normalized = normalizeSettings({
+    permissions: {
+      replies: {
+        allowReplies: "false",
+        allowUnsolicitedReplies: "0",
+        allowReactions: "true"
+      }
+    }
+  });
+
+  assert.equal(normalized.permissions.replies.allowReplies, false);
+  assert.equal(normalized.permissions.replies.allowUnsolicitedReplies, false);
+  assert.equal(normalized.permissions.replies.allowReactions, true);
+});
+
 test("normalizeSettings migrates and clamps complex legacy settings into the canonical schema", () => {
   const normalized = normalizeLegacyView({
     botName: "x".repeat(120),

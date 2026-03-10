@@ -1,5 +1,5 @@
-import { useState, useCallback, useMemo, lazy, Suspense, type ReactNode } from "react";
-import { api } from "./api";
+import { useState, useCallback, useEffect, useMemo, useRef, lazy, Suspense, type ReactNode } from "react";
+import { api, ApiError } from "./api";
 import { usePolling } from "./hooks/usePolling";
 import { useActivitySSE } from "./hooks/useActivitySSE";
 import Header from "./components/Header";
@@ -8,6 +8,7 @@ import ActionStream from "./components/ActionStream";
 import DailyCost from "./components/DailyCost";
 import PerformancePanel from "./components/PerformancePanel";
 import StaleIndicator from "./components/StaleIndicator";
+import { loadStoredTab, saveStoredTab } from "./tabState";
 
 const SettingsForm = lazy(() => import("./components/SettingsForm"));
 const MemoryTab = lazy(() => import("./components/MemoryTab"));
@@ -15,7 +16,10 @@ const VoiceMonitor = lazy(() => import("./components/VoiceMonitor"));
 const TextTab = lazy(() => import("./components/TextTab"));
 const AgentsTab = lazy(() => import("./components/AgentsTab"));
 
-type MainTab = "activity" | "text" | "agents" | "memory" | "voice" | "settings";
+const MAIN_TAB_IDS = ["activity", "text", "agents", "memory", "voice", "settings"] as const;
+const MAIN_TAB_STORAGE_KEY = "dashboard_main_tab";
+
+type MainTab = (typeof MAIN_TAB_IDS)[number];
 
 interface MainTabDefinition {
   id: MainTab;
@@ -88,12 +92,28 @@ const MAIN_TABS: MainTabDefinition[] = [
 ];
 
 export default function App() {
-  const [toast, setToast] = useState({ text: "", type: "" });
-  const [tab, setTab] = useState<MainTab>("activity");
-  const [settingsRefreshBusy, setSettingsRefreshBusy] = useState(false);
-  const [settingsMounted, setSettingsMounted] = useState(false);
+  const initialTabRef = useRef<MainTab | null>(null);
+  if (initialTabRef.current === null) {
+    initialTabRef.current = loadStoredTab(MAIN_TAB_STORAGE_KEY, MAIN_TAB_IDS, "activity");
+  }
 
-  if (tab === "settings" && !settingsMounted) setSettingsMounted(true);
+  const [toast, setToast] = useState({ text: "", type: "" });
+  const [tab, setTab] = useState<MainTab>(initialTabRef.current ?? "activity");
+  const [settingsSaveBusy, setSettingsSaveBusy] = useState(false);
+  const [settingsRefreshBusy, setSettingsRefreshBusy] = useState(false);
+  const [settingsReloadBusy, setSettingsReloadBusy] = useState(false);
+  const [settingsConflict, setSettingsConflict] = useState("");
+  const [settingsMounted, setSettingsMounted] = useState((initialTabRef.current ?? "activity") === "settings");
+
+  useEffect(() => {
+    saveStoredTab(MAIN_TAB_STORAGE_KEY, tab);
+  }, [tab]);
+
+  useEffect(() => {
+    if (tab === "settings" && !settingsMounted) {
+      setSettingsMounted(true);
+    }
+  }, [settingsMounted, tab]);
 
   const notify = useCallback((text, type = "ok") => {
     setToast({ text, type });
@@ -113,6 +133,7 @@ export default function App() {
   const settingsUpdatedAt = String(settings.data?._meta?.updatedAt || "").trim();
 
   const handleSettingsSave = useCallback(async (patch) => {
+    setSettingsSaveBusy(true);
     try {
       const requestBody = settingsUpdatedAt
         ? {
@@ -122,18 +143,57 @@ export default function App() {
             }
           }
         : patch;
-      await api("/api/settings", { method: "PUT", body: requestBody });
+      const result = await api<{
+        _meta?: {
+          saveAppliedToRuntime?: boolean;
+          saveApplyError?: string;
+        };
+      }>("/api/settings", { method: "PUT", body: requestBody });
       await reloadSettings();
-      notify("Settings saved");
+      setSettingsConflict("");
+      if (result?._meta?.saveAppliedToRuntime === false) {
+        const applyError = String(result?._meta?.saveApplyError || "").trim();
+        notify(
+          applyError
+            ? `Settings saved, but active sessions were not synced: ${applyError}`
+            : "Settings saved, but active sessions were not synced.",
+          "error"
+        );
+      } else {
+        notify("Settings saved");
+      }
     } catch (err) {
-      if (String(err?.message || "").includes("API 409:")) {
-        await reloadSettings();
-        notify("Settings changed elsewhere. Reloaded the latest values.", "error");
+      if (err instanceof ApiError && err.status === 409) {
+        const errorBody =
+          typeof err.body === "object" && err.body !== null
+            ? err.body as Record<string, unknown>
+            : null;
+        const detail = String(
+          (errorBody?.detail || "") ||
+          "Settings changed elsewhere. Reload the latest values before saving again."
+        ).trim();
+        setSettingsConflict(detail);
+        notify(detail, "error");
         return;
       }
       notify(err.message, "error");
+    } finally {
+      setSettingsSaveBusy(false);
     }
   }, [notify, reloadSettings, settingsUpdatedAt]);
+
+  const handleSettingsConflictReload = useCallback(async () => {
+    setSettingsReloadBusy(true);
+    try {
+      await reloadSettings();
+      setSettingsConflict("");
+      notify("Reloaded the latest saved settings");
+    } catch (err) {
+      notify(err.message, "error");
+    } finally {
+      setSettingsReloadBusy(false);
+    }
+  }, [notify, reloadSettings]);
 
   const handleMemoryRefresh = useCallback(async () => {
     try {
@@ -252,6 +312,10 @@ export default function App() {
               modelCatalog={llmModels.data}
               onSave={handleSettingsSave}
               onRefreshRuntime={handleSettingsRefresh}
+              onReloadServerSettings={handleSettingsConflictReload}
+              saveBusy={settingsSaveBusy}
+              saveConflictText={settingsConflict}
+              reloadServerSettingsBusy={settingsReloadBusy}
               refreshRuntimeBusy={settingsRefreshBusy}
               toast={toast}
             />

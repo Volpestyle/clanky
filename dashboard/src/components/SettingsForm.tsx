@@ -8,6 +8,7 @@ import {
   XAI_VOICE_OPTIONS,
   formToSettingsPatch,
   getCodeAgentValidationError,
+  getSettingsValidationError,
   resolveBrowserProviderModelOptions,
   resolveModelOptions,
   resolveModelOptionsFromText,
@@ -39,12 +40,20 @@ export default function SettingsForm({
   modelCatalog,
   onSave,
   onRefreshRuntime,
+  onReloadServerSettings,
+  saveBusy = false,
+  saveConflictText = "",
+  reloadServerSettingsBusy = false,
   refreshRuntimeBusy = false,
   toast
 }) {
   const [form, setForm] = useState(() => (settings ? settingsToForm(settings) : null));
+  const [presetLoadBusy, setPresetLoadBusy] = useState(false);
+  const [presetLoadConfirmationRequired, setPresetLoadConfirmationRequired] = useState(false);
+  const [presetStatus, setPresetStatus] = useState({ text: "", type: "" });
   const savedFormRef = useRef<string>("");
   const presetRequestIdRef = useRef(0);
+  const formRevisionRef = useRef(0);
   const defaultForm = useMemo(() => settingsToForm({}), []);
   const effectiveForm = form ?? defaultForm;
   const formRef = useRef(form);
@@ -56,9 +65,17 @@ export default function SettingsForm({
         typeof updater === "function"
           ? updater(current)
           : updater;
+      if (next !== current) {
+        formRevisionRef.current += 1;
+      }
       formRef.current = next;
       return next;
     });
+  }
+
+  function clearPresetLoadPrompt() {
+    setPresetLoadConfirmationRequired(false);
+    setPresetStatus((current) => (current.type === "warning" ? { text: "", type: "" } : current));
   }
 
   useEffect(() => {
@@ -67,6 +84,9 @@ export default function SettingsForm({
     formRef.current = next;
     setForm(next);
     savedFormRef.current = JSON.stringify(next);
+    formRevisionRef.current += 1;
+    setPresetLoadConfirmationRequired(false);
+    setPresetStatus({ text: "", type: "" });
   }, [settings]);
 
   const sections = useMemo(() => {
@@ -102,9 +122,16 @@ export default function SettingsForm({
     return JSON.stringify(form) !== savedFormRef.current;
   }, [form]);
   const codeAgentValidationError = useMemo(() => getCodeAgentValidationError(effectiveForm), [effectiveForm]);
+  const validationError = useMemo(() => getSettingsValidationError(effectiveForm), [effectiveForm]);
+  const saveDisabled = saveBusy || presetLoadBusy || Boolean(saveConflictText) || Boolean(validationError);
+  const applySavedDisabled =
+    refreshRuntimeBusy || saveBusy || presetLoadBusy || reloadServerSettingsBusy || isDirty || Boolean(saveConflictText);
 
   async function loadPresetDefaults(preset: string) {
     const requestId = ++presetRequestIdRef.current;
+    const startRevision = formRevisionRef.current;
+    setPresetLoadBusy(true);
+    setPresetStatus({ text: "Loading preset defaults into the draft…", type: "" });
     try {
       const settings = await api<Record<string, unknown>>("/api/settings/preset-defaults", {
         method: "POST",
@@ -113,12 +140,44 @@ export default function SettingsForm({
       if (presetRequestIdRef.current !== requestId) {
         return;
       }
+      if (formRevisionRef.current !== startRevision) {
+        setPresetStatus({
+          text: "Preset defaults loaded, but the draft changed before they could be applied. Review the current draft and try again if you still want a full reset.",
+          type: "warning"
+        });
+        return;
+      }
       const next = settingsToForm(settings);
       formRef.current = next;
       setForm(next);
+      formRevisionRef.current += 1;
+      setPresetLoadConfirmationRequired(false);
+      setPresetStatus({
+        text: "Preset defaults loaded into the draft. Save settings to apply them to the bot.",
+        type: "ok"
+      });
     } catch (err) {
       console.error("Failed to load preset defaults:", err);
+      setPresetStatus({
+        text: String(err?.message || "Failed to load preset defaults."),
+        type: "error"
+      });
+    } finally {
+      setPresetLoadBusy(false);
     }
+  }
+
+  function handlePresetDefaultsClick() {
+    if (presetLoadBusy) return;
+    if (!presetLoadConfirmationRequired) {
+      setPresetLoadConfirmationRequired(true);
+      setPresetStatus({
+        text: "Loading preset defaults replaces the current draft across every section. Click again to confirm.",
+        type: "warning"
+      });
+      return;
+    }
+    void loadPresetDefaults(form.stackPreset);
   }
 
   function resolvePresetSelection(providerField, modelField) {
@@ -263,11 +322,15 @@ export default function SettingsForm({
 
   function set(key) {
     return (e) => {
+      clearPresetLoadPrompt();
       const value = e.target.type === "checkbox" ? e.target.checked : e.target.value;
       if (key === "stackPreset") {
         const preset = String(value || "").trim();
         updateForm((current) => ({ ...(current || defaultForm), stackPreset: preset }));
-        void loadPresetDefaults(preset);
+        setPresetStatus({
+          text: "Preset selection changed. Load preset defaults into the draft if you want a full reset.",
+          type: ""
+        });
         return;
       }
       if (key === "memoryLlmInheritTextModel") {
@@ -287,6 +350,7 @@ export default function SettingsForm({
   }
 
   function sanitizeBotNameAliases() {
+    clearPresetLoadPrompt();
     updateForm((current) => {
       if (!current) return current;
       const normalized = sanitizeAliasListInput(current.botNameAliases);
@@ -349,6 +413,7 @@ export default function SettingsForm({
   const selectStreamWatchVisionPresetModel = createPresetSelector("voiceStreamWatchBrainContextModel");
 
   function resetPromptGuidanceFields() {
+    clearPresetLoadPrompt();
     updateForm((current) => ({
       ...current,
       promptCapabilityHonestyLine: defaultForm.promptCapabilityHonestyLine,
@@ -365,8 +430,8 @@ export default function SettingsForm({
 
   function submit(e) {
     e.preventDefault();
-    if (codeAgentValidationError) {
-      scrollTo("sec-code-agent");
+    if (validationError) {
+      scrollTo(validationError.sectionId);
       return;
     }
     const currentForm = formRef.current ?? form ?? defaultForm;
@@ -432,15 +497,35 @@ export default function SettingsForm({
                   color: "var(--text-muted)",
                   border: "1px solid var(--border)"
                 }}
-                onClick={() => void loadPresetDefaults(form.stackPreset)}
-                title="Load preset defaults into the form and save to apply them"
+                onClick={handlePresetDefaultsClick}
+                disabled={presetLoadBusy}
+                title="Load preset defaults into the draft and save to apply them"
               >
-                Reset to preset defaults
+                {presetLoadBusy
+                  ? "Loading preset…"
+                  : presetLoadConfirmationRequired
+                    ? "Confirm preset reset"
+                    : "Load preset defaults into draft"}
               </button>
             </div>
+            <div className="toggles" style={{ marginTop: 10 }}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={form.stackAdvancedOverridesEnabled}
+                  onChange={set("stackAdvancedOverridesEnabled")}
+                />
+                Customize this preset with advanced stack controls
+              </label>
+            </div>
             <p className="status-msg" style={{ marginTop: 8 }}>
-              Preset changes update the form only. Save to apply them to the bot.
+              Preset changes update the draft only. Save settings to apply them to the bot.
             </p>
+            {presetStatus.text && (
+              <p className={`status-msg ${presetStatus.type}`} style={{ marginTop: 8 }}>
+                {presetStatus.text}
+              </p>
+            )}
           </SettingsSection>
 
           <LlmConfigurationSettingsSection
@@ -539,9 +624,34 @@ export default function SettingsForm({
       </div>
 
       <div className="save-bar">
+        {saveConflictText && (
+          <div style={{ marginBottom: 10 }}>
+            <p className="status-msg error" role="status">
+              {saveConflictText}
+            </p>
+            <button
+              type="button"
+              style={{
+                marginTop: 6,
+                padding: "6px 10px",
+                fontSize: "0.76rem",
+                fontWeight: 600
+              }}
+              onClick={onReloadServerSettings}
+              disabled={reloadServerSettingsBusy || saveBusy || presetLoadBusy}
+            >
+              {reloadServerSettingsBusy ? "Reloading latest settings…" : "Reload latest saved settings"}
+            </button>
+          </div>
+        )}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          <button type="submit" className="cta" style={{ marginTop: 0, width: "auto", flex: "1 1 auto", minWidth: 0 }}>
-            Save settings
+          <button
+            type="submit"
+            className="cta"
+            style={{ marginTop: 0, width: "auto", flex: "1 1 auto", minWidth: 0 }}
+            disabled={saveDisabled}
+          >
+            {saveBusy ? "Saving…" : "Save settings"}
             {isDirty && <span className="unsaved-dot" />}
           </button>
           <button
@@ -556,22 +666,31 @@ export default function SettingsForm({
               whiteSpace: "nowrap",
               fontSize: "0.76rem",
               fontWeight: 600,
-              opacity: refreshRuntimeBusy ? 0.65 : 1,
-              cursor: refreshRuntimeBusy ? "not-allowed" : "pointer"
+              opacity: applySavedDisabled ? 0.65 : 1,
+              cursor: applySavedDisabled ? "not-allowed" : "pointer"
             }}
             onClick={onRefreshRuntime}
-            disabled={refreshRuntimeBusy}
-            title="Apply current settings to active VC sessions"
-            aria-label="Refresh active VC sessions"
+            disabled={applySavedDisabled}
+            title={
+              isDirty
+                ? "Save settings before applying them to active VC sessions"
+                : "Apply the last saved settings to active VC sessions"
+            }
+            aria-label="Apply saved settings to active VC sessions"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <polyline points="23 4 23 10 17 10" />
               <polyline points="1 20 1 14 7 14" />
               <path d="M3.51 9a9 9 0 0 1 14.13-3.36L23 10M1 14l5.36 4.36A9 9 0 0 0 20.49 15" />
             </svg>
-            <span>{refreshRuntimeBusy ? "Syncing" : "Live"}</span>
+            <span>{refreshRuntimeBusy ? "Applying…" : "Apply Saved"}</span>
           </button>
         </div>
+        {validationError && !saveConflictText && (
+          <p className="status-msg error" role="status">
+            {validationError.message}
+          </p>
+        )}
         {toast.text && (
           <p className={`status-msg ${toast.type}`}>{toast.text}</p>
         )}

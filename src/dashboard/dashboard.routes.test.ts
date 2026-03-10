@@ -569,6 +569,39 @@ test("dashboard public ingest requires at least one dashboard/public token", asy
   }
 });
 
+test("dashboard admin routes do not accept dashboard tokens in the query string", async () => {
+  const result = await withDashboardServer(
+    {
+      dashboardToken: "dash-token"
+    },
+    async ({ baseUrl }) => {
+      const response = await fetch(`${baseUrl}/api/settings?token=dash-token`);
+      assert.equal(response.status, 401);
+      const json = await response.json();
+      assert.equal(json.error, "Unauthorized. Provide x-dashboard-token.");
+    }
+  );
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard requires a token before binding to a non-loopback host", async () => {
+  await assert.rejects(
+    () =>
+      withDashboardServer(
+        {
+          appConfigOverrides: {
+            dashboardHost: "0.0.0.0"
+          }
+        },
+        async () => {}
+      ),
+    /DASHBOARD_TOKEN is required when DASHBOARD_HOST is not loopback-only/
+  );
+});
+
 test("dashboard voice join returns unavailable when bot does not expose join helper", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl }) => {
     const response = await fetch(`${baseUrl}/api/voice/join`, {
@@ -729,6 +762,50 @@ test("dashboard settings save clears the memory LLM override when inherit is sel
     assert.equal(json._resolved?.memoryBinding?.provider, json._resolved?.orchestrator?.provider);
     assert.equal(json._resolved?.memoryBinding?.model, json._resolved?.orchestrator?.model);
   });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard settings save reports runtime apply failure without rolling back the saved config", async () => {
+  const result = await withDashboardServer(
+    {
+      botOverrides: {
+        async applyRuntimeSettings() {
+          throw new Error("voice reconcile failed");
+        }
+      }
+    },
+    async ({ baseUrl, store }) => {
+      const beforeResponse = await fetch(`${baseUrl}/api/settings`);
+      assert.equal(beforeResponse.status, 200);
+      const beforeJson = await beforeResponse.json();
+      const expectedUpdatedAt = String(beforeJson._meta?.updatedAt || "");
+
+      const response = await fetch(`${baseUrl}/api/settings`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          _meta: {
+            expectedUpdatedAt
+          },
+          identity: {
+            botName: "patched bot"
+          }
+        })
+      });
+
+      assert.equal(response.status, 200);
+      const json = await response.json();
+      assert.equal(json.identity?.botName, "patched bot");
+      assert.equal(json._meta?.saveAppliedToRuntime, false);
+      assert.equal(json._meta?.saveApplyError, "voice reconcile failed");
+      assert.equal(store.getSettings().identity.botName, "patched bot");
+    }
+  );
 
   if (result?.skipped) {
     return;
