@@ -163,7 +163,7 @@ OpenAI cannot see Discord playback position or control Discord output. So we imp
 
 ## 9. Default Interruption Policy
 
-**Default: `"speaker"`** — the person the bot is responding to can interrupt. Others cannot.
+**Default: `"speaker"`** — the person the bot is responding to can interrupt. Others cannot. If the reply is not tied to a specific user, interruption stays disabled.
 
 | Mode | Effect |
 |------|--------|
@@ -181,11 +181,13 @@ Callers of `requestRealtimePromptUtterance()` can pass an explicit `interruption
 
 ```ts
 {
-  assertive: boolean;    // true = policy is active (false/null = anyone can interrupt)
-  scope: "none" | "speaker";
+  assertive: boolean;    // true = policy is active
+  scope: "none" | "speaker" | "anyone";
   allowedUserId?: string;  // only relevant when scope = "speaker"
 }
 ```
+
+If no interruption policy resolves for an utterance, barge-in is disabled.
 
 ### Agent-Influenced Policy
 

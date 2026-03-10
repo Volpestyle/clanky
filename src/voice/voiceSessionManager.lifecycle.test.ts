@@ -598,6 +598,41 @@ test("resolveReplyInterruptionPolicy uses the repo default speaker mode when uns
   });
 });
 
+test("resolveReplyInterruptionPolicy keeps explicit anyone mode interruptible", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    settingsSnapshot: createTestSettings({
+      botName: "clanker conk",
+      voice: {
+        replyPath: "brain",
+        defaultInterruptionMode: "anyone"
+      }
+    })
+  });
+
+  const result = manager.resolveReplyInterruptionPolicy({
+    session,
+    userId: null,
+  });
+
+  assert.deepEqual(result, {
+    assertive: true,
+    scope: "anyone",
+    allowedUserId: null,
+  });
+});
+
+test("isUserAllowedToInterruptReply blocks when no interruption policy resolves", () => {
+  const { manager } = createManager();
+
+  const result = manager.isUserAllowedToInterruptReply({
+    policy: null,
+    userId: "user-1"
+  });
+
+  assert.equal(result, false);
+});
+
 test("createTrackedAudioResponse applies uninterruptible fallback for normal replies when configured", () => {
   const { manager } = createManager();
   const session = createSession({
@@ -647,7 +682,12 @@ test("shouldBargeIn allows barge-in after assertive speech", () => {
       hardRecoveryAttempted: false,
       source: "turn_flush",
       handlingSilence: false,
-      audioReceivedAt: 0
+      audioReceivedAt: 0,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "user-1"
+      }
     },
     userCaptures: new Map([["user-1", captureState]])
   });

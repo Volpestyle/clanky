@@ -221,7 +221,8 @@ function createController() {
       return rawPolicy ? rawPolicy as ReplyInterruptionPolicy : null;
     },
     isUserAllowedToInterruptReply({ policy, userId } = {}) {
-      if (!policy) return true;
+      if (!policy) return false;
+      if (policy.scope === "anyone") return true;
       if (policy.scope === "speaker") return String(policy.allowedUserId || "") === String(userId || "");
       if (policy.scope === "none") return false;
       return true;

@@ -44,7 +44,7 @@ type PendingResponseLike = {
 
 export interface ReplyInterruptionPolicy {
   assertive: boolean;
-  scope: "none" | "speaker";
+  scope: "none" | "speaker" | "anyone";
   allowedUserId: string | null;
 }
 

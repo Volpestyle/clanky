@@ -1570,11 +1570,16 @@ export class VoiceSessionManager {
     const scopeRaw = String(policy.scope || "")
       .trim()
       .toLowerCase();
-    const scope: "none" | "speaker" = scopeRaw === "none" ? "none" : "speaker";
+    const scope: "none" | "speaker" | "anyone" =
+      scopeRaw === "none"
+        ? "none"
+        : scopeRaw === "anyone"
+          ? "anyone"
+          : "speaker";
     const allowedUserId = String(policy.allowedUserId || "").trim() || null;
     const assertive =
       policy.assertive === undefined
-        ? scope === "none" || Boolean(allowedUserId)
+        ? scope !== "speaker" || Boolean(allowedUserId)
         : Boolean(policy.assertive);
     if (!assertive) return null;
     if (scope === "speaker" && !allowedUserId) return null;
@@ -1582,7 +1587,7 @@ export class VoiceSessionManager {
     return {
       assertive: true as const,
       scope,
-      allowedUserId: scope === "none" ? null : allowedUserId,
+      allowedUserId: scope === "speaker" ? allowedUserId : null,
     };
   }
 
@@ -1609,10 +1614,10 @@ export class VoiceSessionManager {
     if (!session || session.ending) return null;
 
     const defaultMode = this.getDefaultReplyInterruptionMode(session.settingsSnapshot || this.store.getSettings());
-    if (defaultMode === "anyone") return null;
-
     const normalizedUserId = String(userId || "").trim() || null;
     const normalizedBotUserId = String(this.client.user?.id || "").trim() || null;
+    // "speaker" only becomes interruptible when the reply is actually tied to a
+    // specific non-bot user. Untargeted replies intentionally stay closed.
     if (
       defaultMode === "speaker" &&
       (!normalizedUserId || (normalizedBotUserId && normalizedUserId === normalizedBotUserId))
@@ -1632,8 +1637,10 @@ export class VoiceSessionManager {
     userId = null
   } = {}) {
     const normalizedPolicy = this.normalizeReplyInterruptionPolicy(policy);
-    if (!normalizedPolicy?.assertive) return true;
+    // Closed by default: a missing/invalid policy does not imply open barge-in.
+    if (!normalizedPolicy?.assertive) return false;
     if (normalizedPolicy.scope === "none") return false;
+    if (normalizedPolicy.scope === "anyone") return true;
     const normalizedUserId = String(userId || "").trim();
     if (!normalizedUserId) return false;
     return normalizedUserId === String(normalizedPolicy.allowedUserId || "");
