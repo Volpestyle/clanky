@@ -83,7 +83,16 @@ test("buildVoiceTurnPrompt explains browser tool usage when interactive browsing
     ),
     true
   );
-  assert.equal(prompt.includes("If interactive browsing is needed, call browser_browse in the same response."), true);
+  assert.equal(
+    prompt.includes(
+      "Choose browser_browse when the task genuinely needs interactive browsing or JS rendering; otherwise use the lighter web tool that best fits the task."
+    ),
+    true
+  );
+  assert.equal(
+    prompt.includes("If the task genuinely requires interactive browsing, call browser_browse in the same response."),
+    true
+  );
 });
 
 test("buildVoiceTurnPrompt explains screen-share tool usage when link offers are available", () => {
@@ -205,6 +214,27 @@ test("buildVoiceTurnPrompt renders durable session context above conversation hi
   assert.equal(prompt.includes("- [preference] Alice prefers concise answers in this session"), true);
   assert.equal(prompt.indexOf("Session context:") < prompt.indexOf("Relevant past conversation windows from shared text/voice history:"), true);
   assert.equal(prompt.includes("Use note_context to pin important session-scoped facts, plans, preferences, or relationships"), true);
+});
+
+test("buildVoiceTurnPrompt trims session context to the most recent prompt-safe entries", () => {
+  const durableContext = Array.from({ length: 16 }, (_, index) => ({
+    text: `Context item ${String(index + 1).padStart(2, "0")}`,
+    category: index % 2 === 0 ? "fact" : "plan",
+    at: index + 1
+  }));
+
+  const prompt = buildVoiceTurnPrompt({
+    speakerName: "alice",
+    transcript: "keep going",
+    allowVoiceToolCalls: true,
+    durableContext
+  });
+
+  assert.equal(prompt.includes("Session context:"), true);
+  assert.equal(prompt.includes("Context item 01"), false);
+  assert.equal(prompt.includes("Context item 04"), false);
+  assert.equal(prompt.includes("Context item 05"), true);
+  assert.equal(prompt.includes("Context item 16"), true);
 });
 
 test("buildVoiceTurnPrompt includes interruption recovery context for the next turn", () => {

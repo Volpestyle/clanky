@@ -1477,7 +1477,10 @@ test("generateVoiceTurnReply advertises tool runtimes only when the capability e
       expectedPresent: true,
       assertPrompt(prompt) {
         assert.equal(prompt.includes("Interactive browser browsing is available."), true);
-        assert.equal(prompt.includes("If interactive browsing is needed, call browser_browse in the same response."), true);
+        assert.equal(
+          prompt.includes("If the task genuinely requires interactive browsing, call browser_browse in the same response."),
+          true
+        );
       }
     }
   ];

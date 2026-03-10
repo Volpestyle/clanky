@@ -31,6 +31,8 @@ type VoiceMusicPromptContext = {
 };
 
 const VOICE_CONTROL_TOOL_NAMES = VOICE_TOOL_SCHEMAS.map((schema) => schema.name);
+const SESSION_CONTEXT_PROMPT_MAX_ENTRIES = 12;
+const SESSION_CONTEXT_PROMPT_MAX_TOTAL_CHARS = 1_200;
 
 function collectAvailableVoiceToolNames({
   webSearchAvailable,
@@ -64,6 +66,43 @@ function collectAvailableVoiceToolNames({
   }
 
   return Array.from(names);
+}
+
+function selectPromptDurableContextEntries(durableContext: unknown): VoiceSessionDurableContextEntry[] {
+  const normalizedEntries: VoiceSessionDurableContextEntry[] = (Array.isArray(durableContext) ? durableContext : [])
+    .map((entry) => {
+      const text = String(entry?.text || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 240);
+      if (!text) return null;
+      const rawCategory = String(entry?.category || "").trim().toLowerCase();
+      const category =
+        rawCategory === "plan" ||
+        rawCategory === "preference" ||
+        rawCategory === "relationship"
+          ? rawCategory
+          : "fact";
+      return {
+        text,
+        category,
+        at: Number.isFinite(Number(entry?.at)) ? Math.round(Number(entry.at)) : Date.now()
+      } satisfies VoiceSessionDurableContextEntry;
+    })
+    .filter((entry): entry is VoiceSessionDurableContextEntry => entry !== null)
+    .sort((left, right) => Number(left.at || 0) - Number(right.at || 0));
+
+  let totalChars = 0;
+  const selected: VoiceSessionDurableContextEntry[] = [];
+  for (let index = normalizedEntries.length - 1; index >= 0; index -= 1) {
+    const entry = normalizedEntries[index];
+    const nextChars = totalChars + entry.text.length + String(entry.category || "").length + 8;
+    if (selected.length >= SESSION_CONTEXT_PROMPT_MAX_ENTRIES) break;
+    if (selected.length > 0 && nextChars > SESSION_CONTEXT_PROMPT_MAX_TOTAL_CHARS) break;
+    selected.push(entry);
+    totalChars = nextChars;
+  }
+  return selected.reverse();
 }
 
 export function buildVoiceTurnPrompt({
@@ -531,28 +570,7 @@ export function buildVoiceTurnPrompt({
     .map((note) => String(note || "").replace(/\s+/g, " ").trim().slice(0, 240))
     .filter(Boolean)
     .slice(-20);
-  const normalizedDurableContext: VoiceSessionDurableContextEntry[] = (Array.isArray(durableContext) ? durableContext : [])
-    .map((entry) => {
-      const text = String(entry?.text || "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 240);
-      if (!text) return null;
-      const rawCategory = String(entry?.category || "").trim().toLowerCase();
-      const category =
-        rawCategory === "plan" ||
-        rawCategory === "preference" ||
-        rawCategory === "relationship"
-          ? rawCategory
-          : "fact";
-      return {
-        text,
-        category,
-        at: Number(entry?.at || 0)
-      } satisfies VoiceSessionDurableContextEntry;
-    })
-    .filter((entry): entry is VoiceSessionDurableContextEntry => entry !== null)
-    .slice(-50);
+  const normalizedDurableContext = selectPromptDurableContextEntries(durableContext);
   if (hasDirectVisionFrame) {
     const screenContextParts = [
       "Live screen share: You can see the user's screen directly in the attached image.",
@@ -640,7 +658,7 @@ export function buildVoiceTurnPrompt({
   parts.push("- Use tools whenever they materially improve factuality or execute a requested action. Do not promise future action without either calling the tool or declining. A brief natural lead-in before a tool call is allowed.");
   parts.push("- Use the exact tool name. Do not encode tool intent in JSON helper fields, helper refs, or placeholder control fields.");
   parts.push("- Ground your spoken reply in the tool result. Do not claim a tool succeeded, opened something, searched something, or sent something before the tool actually returns.");
-  parts.push("- When available, prefer the lightest sufficient tool: conversation_search for prior exchanges, web_search for general current info, web_scrape for a known URL, browser_browse only for JS rendering or interaction.");
+  parts.push("- Choose the tool that best fits the task. Prefer the lightest sufficient tool, but do not follow a fixed order: conversation_search for prior exchanges, web_search for fresh discovery or current facts, web_scrape when you already have a URL, and browser_browse when you need JS rendering or interaction.");
   parts.push("- If the speaker asks you to look something up, find current facts, check prices, verify something online, open a found article, share a screen link, control music, or leave VC, call the relevant tool in the same turn. A short bridge phrase before the tool call is allowed when it sounds more natural.");
   parts.push("- If a tool fails or is unavailable, say that briefly and continue naturally without pretending it worked.");
 
@@ -773,11 +791,11 @@ export function buildVoiceTurnPrompt({
       parts.push("Do not claim you browsed the site.");
     } else {
       parts.push("Interactive browser browsing is available.");
-      parts.push("Prefer web_search for general fresh facts and web_scrape for reading a known URL.");
+      parts.push("Choose browser_browse when the task genuinely needs interactive browsing or JS rendering; otherwise use the lighter web tool that best fits the task.");
       parts.push(
         "Use browser_browse only when you need actual site navigation or interaction, such as JS-rendered pages, clicking, typing, scrolling, dragging, or moving through a live page flow."
       );
-      parts.push("If interactive browsing is needed, call browser_browse in the same response.");
+      parts.push("If the task genuinely requires interactive browsing, call browser_browse in the same response.");
     }
   } else {
     parts.push("Interactive browser tool call is unavailable this turn. Do not claim you can browse sites interactively right now.");

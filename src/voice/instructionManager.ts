@@ -892,7 +892,7 @@ export class InstructionManager {
           localToolNames.length > 0 ? `- Local tools: ${localToolNames.join(", ")}` : null,
           mcpToolNames.length > 0 ? `- MCP tools: ${mcpToolNames.join(", ")}` : null,
           "- Use tools when they improve factuality or action execution. Always call the tool — never just say you will.",
-          "- Lookup chain: web_search → web_scrape → browser_browse. Start with web_search for general queries. Use web_scrape to read a specific URL. Use browser_browse only when you need JS rendering or page interaction (clicking, scrolling).",
+          "- Choose the web tool that best fits the task. Prefer the lightest sufficient tool, but do not follow a fixed order: use web_search for fresh discovery or current facts, web_scrape for a specific known URL, and browser_browse when you need JS rendering or page interaction (clicking, scrolling).",
           "- When users ask you to look something up, search for something, find prices, or need current/factual information, call web_search immediately in the same response. Do not respond with only audio saying you will search — include the tool call.",
           "- Use conversation_search when the speaker asks what was said earlier or asks you to remember a prior exchange.",
           "- For memory writes, only store concise durable facts and avoid secrets.",

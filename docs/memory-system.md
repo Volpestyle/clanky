@@ -95,7 +95,7 @@ Fact profiles are loaded for **all participants**, not just the current speaker.
 - Lore (`__lore__`) and self-facts (`__self__`) are loaded at session start and refreshed on `memory_write`.
 - Behavioral facts are cached as a session-scoped fact pool keyed by the active participant set. Spoken generation reranks that pool with the normal hybrid semantic+lexical scoring path, reusing cached fact vectors instead of refetching the pool every turn, and `memory_write` invalidates the pool.
 - Conversation-history retrieval keeps short per-session caches per retrieval mode. Same-topic follow-ups reuse recent results, and low-signal backchannels reuse the freshest cached history or skip retrieval entirely instead of re-querying memory.
-- Voice also has a session-scoped scratchpad via `note_context`. This keeps short-term plans/preferences/relationships live without promoting them to durable memory mid-conversation.
+- Voice also has a session-scoped scratchpad via `note_context`. This keeps short-term plans/preferences/relationships live without promoting them to durable memory mid-conversation. The runtime may keep more notes than the prompt shows; prompts include a recent prompt-safe subset rather than dumping the full scratchpad every turn.
 
 **Text:**
 - Fact profiles are loaded for everyone who appears in the recent message window, not just the message author.
@@ -224,6 +224,13 @@ Used for semantic ranking in `memory_search`, conversation retrieval, and dashbo
 - Fact embeddings generated at write time. Conversation window embeddings generated at storage time.
 
 ### Hybrid score formula (for `searchDurableFacts`)
+
+Candidate generation happens in three lanes before ranking:
+- Semantic lane: vector search over stored fact embeddings within the scoped subject/type filter.
+- Lexical lane: token/phrase match search over fact text and evidence.
+- Recent fallback lane: a small recent scoped slice so continuity still works when embeddings are unavailable or the query is too weak.
+
+The merged candidate set is then reranked with the hybrid score below.
 
 Per candidate:
 - `lexicalScore`: token overlap / substring match.
