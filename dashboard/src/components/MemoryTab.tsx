@@ -5,11 +5,10 @@ import MemorySnapshot from "./memoryTab/MemorySnapshot";
 import MemorySearch from "./memoryTab/MemorySearch";
 import MemoryFactProfiles from "./memoryTab/MemoryFactProfiles";
 import MemoryReflections from "./memoryTab/MemoryReflections";
-import MemoryAdaptiveDirectives from "./memoryTab/MemoryAdaptiveDirectives";
 import MemoryInspector from "./memoryTab/MemoryInspector";
 
-type SubTab = "snapshot" | "inspector" | "profiles" | "directives" | "reflections" | "search";
-const MEMORY_SUB_TABS = ["snapshot", "inspector", "profiles", "directives", "reflections", "search"] as const;
+type SubTab = "snapshot" | "inspector" | "profiles" | "reflections" | "search";
+const MEMORY_SUB_TABS = ["snapshot", "inspector", "profiles", "reflections", "search"] as const;
 
 interface Guild {
   id: string;
@@ -53,9 +52,6 @@ export default function MemoryTab({ markdown, onRefresh, notify }: Props) {
       </div>
       <div style={{ display: subTab === "inspector" ? undefined : "none" }}>
         <MemoryInspector guilds={guilds} />
-      </div>
-      <div style={{ display: subTab === "directives" ? undefined : "none" }}>
-        <MemoryAdaptiveDirectives guilds={guilds} />
       </div>
       <div style={{ display: subTab === "reflections" ? undefined : "none" }}>
         <MemoryReflections guilds={guilds} />

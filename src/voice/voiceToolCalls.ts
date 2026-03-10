@@ -20,7 +20,6 @@ export {
   summarizeVoiceToolOutput
 } from "./voiceToolCallInfra.ts";
 export { executeVoiceBrowserBrowseTool, executeVoiceCodeTaskTool } from "./voiceToolCallAgents.ts";
-export { executeVoiceAdaptiveStyleAddTool, executeVoiceAdaptiveStyleRemoveTool } from "./voiceToolCallDirectives.ts";
 export { executeLocalVoiceToolCall, executeMcpVoiceToolCall } from "./voiceToolCallDispatch.ts";
 
 export {

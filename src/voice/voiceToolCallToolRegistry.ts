@@ -1,6 +1,5 @@
 import { clamp } from "../utils.ts";
 import {
-  getDirectiveSettings,
   getMemorySettings,
   getResolvedBrowserTaskConfig,
   isBrowserEnabled,
@@ -8,8 +7,6 @@ import {
   isResearchEnabled
 } from "../settings/agentStack.ts";
 import {
-  ADAPTIVE_DIRECTIVE_ADD_SCHEMA,
-  ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA,
   BROWSER_BROWSE_SCHEMA,
   CODE_TASK_SCHEMA,
   CONVERSATION_SEARCH_SCHEMA,
@@ -48,8 +45,6 @@ type RealtimeToolExportTarget = string;
 const BASE_REALTIME_TOOL_SCHEMAS = [
   MEMORY_SEARCH_SCHEMA,
   MEMORY_WRITE_SCHEMA,
-  ADAPTIVE_DIRECTIVE_ADD_SCHEMA,
-  ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA,
   CONVERSATION_SEARCH_SCHEMA,
   MUSIC_SEARCH_SCHEMA,
   MUSIC_PLAY_SCHEMA,
@@ -68,7 +63,6 @@ const BASE_REALTIME_TOOL_SCHEMAS = [
 ];
 
 function shouldIncludeLocalRealtimeTool(name: string, options: {
-  includeAdaptiveDirectives: boolean;
   includeBrowser: boolean;
   includeCodeAgent: boolean;
   includeMemory: boolean;
@@ -76,9 +70,6 @@ function shouldIncludeLocalRealtimeTool(name: string, options: {
 }) {
   if ((name === "web_search" || name === "web_scrape") && !options.includeWebSearch) return false;
   if ((name === "memory_search" || name === "memory_write") && !options.includeMemory) return false;
-  if ((name === "adaptive_directive_add" || name === "adaptive_directive_remove") && !options.includeAdaptiveDirectives) {
-    return false;
-  }
   if (name === "browser_browse" && !options.includeBrowser) return false;
   if (name === "code_task" && !options.includeCodeAgent) return false;
   return true;
@@ -280,7 +271,6 @@ export function resolveVoiceRealtimeToolDescriptors(
 
   const includeWebSearch = isResearchEnabled(settings);
   const includeMemory = Boolean(getMemorySettings(settings).enabled);
-  const includeAdaptiveDirectives = Boolean(getDirectiveSettings(settings).enabled);
   const browserTaskConfig = getResolvedBrowserTaskConfig(settings);
   const includeBrowser = Boolean(
     isBrowserEnabled(settings) &&
@@ -293,7 +283,6 @@ export function resolveVoiceRealtimeToolDescriptors(
   return [
     ...localTools.filter((entry) =>
       shouldIncludeLocalRealtimeTool(entry.name, {
-        includeAdaptiveDirectives,
         includeBrowser,
         includeCodeAgent,
         includeMemory,

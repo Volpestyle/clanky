@@ -1,6 +1,5 @@
 import { clamp } from "../utils.ts";
 import { executeVoiceBrowserBrowseTool, executeVoiceCodeTaskTool } from "./voiceToolCallAgents.ts";
-import { executeVoiceAdaptiveStyleAddTool, executeVoiceAdaptiveStyleRemoveTool } from "./voiceToolCallDirectives.ts";
 import {
   executeVoiceConversationSearchTool,
   executeVoiceMemorySearchTool,
@@ -129,10 +128,6 @@ export async function executeLocalVoiceToolCall(manager: VoiceToolCallManager, o
       return executeVoiceMemorySearchTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
     case "memory_write":
       return executeVoiceMemoryWriteTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
-    case "adaptive_directive_add":
-      return executeVoiceAdaptiveStyleAddTool(manager, { session: opts.session, args: opts.args, signal: opts.signal });
-    case "adaptive_directive_remove":
-      return executeVoiceAdaptiveStyleRemoveTool(manager, { session: opts.session, args: opts.args, signal: opts.signal });
     case "conversation_search":
       return executeVoiceConversationSearchTool(manager, { session: opts.session, args: opts.args, signal: opts.signal });
     case "music_search":
