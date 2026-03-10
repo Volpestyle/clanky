@@ -18,6 +18,7 @@ Voice configuration is split across these live surfaces:
 - `voice.transcription.*`: ASR enablement and language hinting
 - `voice.channelPolicy.*`: channel/user access control
 - `voice.sessionLimits.*`: session duration and concurrency limits
+- `voice.soundboard.*`: Discord soundboard behavior and prompt tendency
 - `initiative.voice.*`: proactive voice-thought cadence
 
 Preset resolution also matters:
@@ -205,6 +206,19 @@ Relevant modules:
 - `src/voice/thoughtEngine.ts`
 - `src/voice/voiceThoughtGeneration.ts`
 
+### Stage 7: Soundboard Behavior
+
+Canonical soundboard settings:
+
+- `voice.soundboard.enabled`
+- `voice.soundboard.eagerness`
+- `voice.soundboard.allowExternalSounds`
+- `voice.soundboard.preferredSoundIds`
+
+Implementation note:
+
+- `voice.soundboard.eagerness` is prompt context, not a hard gate. Lower values push the bot toward restraint; higher values let it use Discord sound effects more playfully when the joke lands.
+
 ## 6. Settings Reference
 
 ### Conversation Policy
@@ -219,6 +233,15 @@ Relevant modules:
 | `voice.conversationPolicy.replyPath` | `"brain"` | `native`, `bridge`, or `brain` |
 | `voice.conversationPolicy.ttsMode` | `"realtime"` | `realtime` or `api` output |
 | `voice.conversationPolicy.streaming.enabled` | `true` | Enables streamed speech chunks on brain path |
+
+### Soundboard Policy
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `voice.soundboard.enabled` | `true` | Enable Discord soundboard playback in live voice sessions |
+| `voice.soundboard.eagerness` | `35` | Prompt tendency for opportunistic or humorous soundboard use |
+| `voice.soundboard.allowExternalSounds` | `false` | Allow refs that target sounds from another guild |
+| `voice.soundboard.preferredSoundIds` | `[]` | Preferred refs to expose before falling back to the live guild catalog |
 
 ### Admission
 

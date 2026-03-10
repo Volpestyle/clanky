@@ -237,3 +237,18 @@ test("buildVoiceTurnPrompt includes interruption recovery context for the next t
   assert.equal(prompt.includes('They then said: "actually make it rock instead"'), true);
   assert.equal(prompt.includes("Do not mechanically continue the old answer if the new turn changes direction."), true);
 });
+
+test("buildVoiceTurnPrompt includes soundboard tendency guidance when soundboard control is available", () => {
+  const prompt = buildVoiceTurnPrompt({
+    speakerName: "alice",
+    transcript: "that was brutal",
+    allowSoundboardToolCall: true,
+    soundboardCandidates: ["rimshot@123"],
+    soundboardEagerness: 82
+  });
+
+  assert.equal(prompt.includes("Discord soundboard tool call is available."), true);
+  assert.equal(prompt.includes("Discord soundboard tendency: 82/100."), true);
+  assert.equal(prompt.includes("playful soundboard bits and comedic punctuation"), true);
+  assert.equal(prompt.includes("call play_soundboard"), true);
+});

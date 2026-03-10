@@ -520,6 +520,7 @@ export const DEFAULT_SETTINGS = {
     },
     soundboard: {
       enabled: true,
+      eagerness: 35,
       allowExternalSounds: false,
       preferredSoundIds: []
     }

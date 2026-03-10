@@ -43,6 +43,9 @@ function buildProps(mode: unknown, formOverrides: Record<string, unknown> = {}) 
       voiceThoughtEngineEnabled: false,
       voiceStreamWatchEnabled: false,
       voiceSoundboardEnabled: false,
+      voiceSoundboardEagerness: 35,
+      voiceSoundboardAllowExternalSounds: false,
+      voiceSoundboardPreferredSoundIds: "",
       voiceStreamWatchBrainContextProvider: "",
       voiceStreamWatchBrainContextModel: "",
       provider: "claude-oauth",
@@ -154,4 +157,21 @@ test("stream watch renders a compact mental model and hides advanced tuning behi
   assert.equal(markup.includes("How screen share works"), true);
   assert.equal(markup.includes("Advanced stream watch settings"), true);
   assert.equal(markup.includes("Screen share pipeline"), false);
+});
+
+test("soundboard settings render a Discord soundboard tendency slider when enabled", () => {
+  const markup = renderToStaticMarkup(
+    React.createElement(
+      VoiceModeSettingsSection,
+      buildProps("generation_decides", {
+        voiceSoundboardEnabled: true,
+        voiceSoundboardEagerness: 82
+      })
+    )
+  );
+
+  assert.equal(markup.includes("Enable Discord soundboard reactions"), true);
+  assert.equal(markup.includes("Discord soundboard tendency"), true);
+  assert.equal(markup.includes("82%"), true);
+  assert.equal(markup.includes("Lets the bot lean into playful soundboard bits"), true);
 });

@@ -1,5 +1,6 @@
 import { normalizeBoundedStringList } from "../settings/listNormalization.ts";
 import { getBotName, getPersonaSettings, getPromptingSettings } from "../settings/agentStack.ts";
+import { clamp } from "../utils.ts";
 
 const DEFAULT_BOT_NAME = "clanker conk";
 const PROMPT_TEMPLATE_TOKEN_RE = /\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g;
@@ -212,6 +213,38 @@ export function buildVoiceToneGuardrails() {
     "Avoid assistant-like preambles, disclaimers, and over-explaining.",
     "Avoid bullet lists and rigid formatting unless someone explicitly asks for structured steps."
   ];
+}
+
+export function buildVoiceSoundboardGuidanceLines(eagerness: unknown) {
+  const normalizedEagerness = Math.round(clamp(Number(eagerness) || 0, 0, 100));
+  const lines = [`Discord soundboard tendency: ${normalizedEagerness}/100.`];
+
+  if (normalizedEagerness <= 10) {
+    lines.push(
+      "Stay extremely restrained with Discord sound effects. Prefer spoken reactions unless someone directly asks for a sound or a single obvious sting is too perfect to ignore."
+    );
+  } else if (normalizedEagerness <= 35) {
+    lines.push(
+      "Stay conservative with Discord sound effects. Use them only when a quick reaction sting is an especially clean fit."
+    );
+  } else if (normalizedEagerness <= 70) {
+    lines.push(
+      "You can occasionally use Discord sound effects as humorous punctuation or reaction beats when the timing is clean."
+    );
+  } else if (normalizedEagerness <= 90) {
+    lines.push(
+      "You can lean into playful soundboard bits and comedic punctuation when they genuinely make the moment funnier, but keep it intentional."
+    );
+  } else {
+    lines.push(
+      "You can be very willing to use Discord sound effects as part of the bit when the timing is sharp, while still avoiding spam or random noise."
+    );
+  }
+
+  return {
+    eagerness: normalizedEagerness,
+    lines
+  };
 }
 
 function normalizePromptLineList(source, fallback = []) {

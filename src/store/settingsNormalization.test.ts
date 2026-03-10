@@ -109,6 +109,7 @@ test("normalizeSettings migrates and clamps complex legacy settings into the can
         brainContextPrompt: `${"x".repeat(520)}   `
       },
       soundboard: {
+        eagerness: 999,
         preferredSoundIds: ["first", "first", "second"]
       },
       musicDucking: {
@@ -246,6 +247,7 @@ test("normalizeSettings migrates and clamps complex legacy settings into the can
   assert.equal(normalized.voice.streamWatch.brainContextMinIntervalSeconds, 1);
   assert.equal(normalized.voice.streamWatch.brainContextMaxEntries, 24);
   assert.equal(normalized.voice.streamWatch.brainContextPrompt.length, 420);
+  assert.equal(normalized.voice.soundboard.eagerness, 100);
   assert.deepEqual(normalized.voice.soundboard.preferredSoundIds, ["first", "second"]);
   assert.equal(normalized.music.ducking.targetGain, 0);
   assert.equal(normalized.music.ducking.fadeMs, 10_000);

@@ -178,6 +178,15 @@ export function VoiceModeSettingsSection({
   );
   const hardClassifierMode = realtimeAdmissionMode === "classifier_gate";
   const voiceGenerationProvider = String(form.voiceGenerationLlmProvider || form.provider || "").trim();
+  const soundboardEagerness = Number(form.voiceSoundboardEagerness) || 0;
+  const soundboardTendencyHint =
+    soundboardEagerness <= 10
+      ? "Almost never use Discord sound effects unless someone clearly asks for one or the joke is painfully obvious."
+      : soundboardEagerness <= 35
+        ? "Keeps soundboard use conservative. The bot should mostly speak normally and save effects for clean, rare beats."
+        : soundboardEagerness <= 70
+          ? "Allows occasional humorous Discord sound effects when they work as reaction punctuation."
+          : "Lets the bot lean into playful soundboard bits when the timing is right, while still avoiding spam.";
   const voiceGenerationModel = String(form.voiceGenerationLlmModel || "").trim();
   const streamWatchProvider = String(form.voiceStreamWatchBrainContextProvider || "").trim();
   const streamWatchModel = String(
@@ -1381,7 +1390,7 @@ export function VoiceModeSettingsSection({
                 checked={form.voiceSoundboardEnabled}
                 onChange={set("voiceSoundboardEnabled")}
               />
-              Enable voice soundboard director
+              Enable Discord soundboard reactions
             </label>
             {form.voiceSoundboardEnabled && (
               <label>
@@ -1397,6 +1406,21 @@ export function VoiceModeSettingsSection({
 
           {form.voiceSoundboardEnabled && (
             <>
+              <label htmlFor="voice-soundboard-eagerness">
+                Discord soundboard tendency: <strong>{form.voiceSoundboardEagerness}%</strong>
+              </label>
+              <input
+                id="voice-soundboard-eagerness"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value={form.voiceSoundboardEagerness}
+                onChange={set("voiceSoundboardEagerness")}
+                style={rangeStyle(form.voiceSoundboardEagerness)}
+              />
+              <p>{soundboardTendencyHint}</p>
+
               <label htmlFor="voice-sb-preferred">
                 Sound refs (`sound_id` or `sound_id@source_guild_id`, one per line). Leave empty to auto-use guild sounds.
               </label>

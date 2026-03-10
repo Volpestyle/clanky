@@ -1,5 +1,6 @@
 import {
   buildVoiceSelfContextLines,
+  buildVoiceSoundboardGuidanceLines,
   buildVoiceToneGuardrails,
 } from "./promptCore.ts";
 
@@ -86,6 +87,7 @@ export function buildVoiceTurnPrompt({
   recentMembershipEvents = [],
   recentVoiceEffectEvents = [],
   soundboardCandidates = [],
+  soundboardEagerness = 0,
   webSearch = null,
   browserBrowse = null,
   recentConversationHistory = [],
@@ -661,12 +663,14 @@ export function buildVoiceTurnPrompt({
   }
 
   if (allowSoundboardToolCall && normalizedSoundboardCandidates.length) {
-    parts.push("Soundboard tool call is available.");
-    parts.push("If a sound effect would genuinely improve the moment, call play_soundboard with refs from this list in the order they should fire:");
+    const soundboardGuidance = buildVoiceSoundboardGuidanceLines(soundboardEagerness);
+    parts.push("Discord soundboard tool call is available.");
+    parts.push(...soundboardGuidance.lines);
+    parts.push("If a sound effect would genuinely improve the moment, especially as a humorous reaction beat or punctuation, call play_soundboard with refs from this list in the order they should fire:");
     parts.push(normalizedSoundboardCandidates.join("\n"));
     parts.push("Do not mention internal refs in spoken text.");
   } else {
-    parts.push("Soundboard tool call is unavailable this turn. Do not imply you played a sound effect.");
+    parts.push("Discord soundboard tool call is unavailable this turn. Do not imply you played a sound effect.");
   }
 
   if (normalizedDurableContext.length) {

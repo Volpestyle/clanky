@@ -640,6 +640,7 @@ export function settingsToForm(settings: unknown) {
     voiceStreamWatchSharePageJpegQuality:
       resolved?.voice?.streamWatch?.sharePageJpegQuality ?? defaultVoiceStreamWatch.sharePageJpegQuality,
     voiceSoundboardEnabled: resolved?.voice?.soundboard?.enabled ?? defaultVoiceSoundboard.enabled,
+    voiceSoundboardEagerness: resolved?.voice?.soundboard?.eagerness ?? defaultVoiceSoundboard.eagerness,
     voiceSoundboardAllowExternalSounds: resolved?.voice?.soundboard?.allowExternalSounds ?? defaultVoiceSoundboard.allowExternalSounds,
     voiceSoundboardPreferredSoundIds: formatLineList(resolved?.voice?.soundboard?.preferredSoundIds),
     voiceApiTtsModel:
@@ -1164,6 +1165,7 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
       },
       soundboard: {
         enabled: form.voiceSoundboardEnabled,
+        eagerness: Number(form.voiceSoundboardEagerness),
         allowExternalSounds: form.voiceSoundboardAllowExternalSounds,
         preferredSoundIds: parseUniqueList(form.voiceSoundboardPreferredSoundIds)
       }

@@ -223,6 +223,12 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
     },
     soundboard: {
       enabled: normalizeBoolean(soundboard.enabled, DEFAULT_SETTINGS.voice.soundboard.enabled),
+      eagerness: normalizeInt(
+        soundboard.eagerness,
+        DEFAULT_SETTINGS.voice.soundboard.eagerness,
+        0,
+        100
+      ),
       allowExternalSounds: normalizeBoolean(
         soundboard.allowExternalSounds,
         DEFAULT_SETTINGS.voice.soundboard.allowExternalSounds

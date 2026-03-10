@@ -2,6 +2,7 @@ import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
 import { createTestSettings } from "../testSettings.ts";
 import {
+  buildVoiceInstructions,
   isAsrActive,
   resolveRealtimeToolOwnership,
   shouldHandleRealtimeFunctionCalls,
@@ -90,6 +91,35 @@ describe("shouldUseTextMediatedRealtimeReply", () => {
     });
 
     assert.equal(result, false);
+  });
+});
+
+describe("buildVoiceInstructions", () => {
+  test("includes soundboard tendency guidance when soundboard refs are available", () => {
+    const settings = createTestSettings({
+      voice: {
+        soundboard: {
+          enabled: true,
+          eagerness: 88
+        }
+      }
+    });
+
+    const instructions = buildVoiceInstructions(settings, {
+      soundboardCandidates: [
+        {
+          soundId: "rimshot",
+          sourceGuildId: "123",
+          reference: "rimshot@123",
+          name: "Rimshot"
+        }
+      ]
+    });
+
+    assert.equal(instructions.includes("Discord soundboard control is enabled."), true);
+    assert.equal(instructions.includes("Discord soundboard tendency: 88/100."), true);
+    assert.equal(instructions.includes("playful soundboard bits and comedic punctuation"), true);
+    assert.equal(instructions.includes("[[SOUNDBOARD:<sound_ref>]]"), true);
   });
 });
 

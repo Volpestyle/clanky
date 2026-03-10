@@ -6,8 +6,9 @@ import {
   getVoiceTranscriptionSettings
 } from "../settings/agentStack.ts";
 import {
-  buildVoiceToneGuardrails,
   buildHardLimitsSection,
+  buildVoiceSoundboardGuidanceLines,
+  buildVoiceToneGuardrails,
   DEFAULT_PROMPT_VOICE_GUIDANCE,
   getPromptBotName,
   getPromptCapabilityHonestyLine,
@@ -301,7 +302,9 @@ export function buildVoiceInstructions(
   ];
 
   if (soundboardEnabled && soundboardCandidateLines.length) {
-    lines.push("Soundboard control is enabled.");
+    lines.push("Discord soundboard control is enabled.");
+    lines.push(...buildVoiceSoundboardGuidanceLines(getVoiceSoundboardSettings(settings).eagerness).lines);
+    lines.push("You can use Discord soundboard effects as humorous punctuation or reaction beats when they fit the room.");
     lines.push("Available sound refs:");
     lines.push(soundboardCandidateLines.join("\n"));
     lines.push(

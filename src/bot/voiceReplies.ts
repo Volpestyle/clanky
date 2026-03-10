@@ -383,6 +383,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     .map((line) => String(line || "").trim())
     .filter(Boolean)
     .slice(0, 40);
+  const soundboardEagerness = Number(getVoiceSoundboardSettings(settings).eagerness) || 0;
   const allowSoundboardToolCall = Boolean(
     getVoiceSoundboardSettings(settings).enabled && normalizedSoundboardCandidates.length
   );
@@ -751,6 +752,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       recentMembershipEvents: normalizedMembershipEvents,
       recentVoiceEffectEvents: normalizedVoiceEffectEvents,
       soundboardCandidates: normalizedSoundboardCandidates,
+      soundboardEagerness,
       webSearch: webSearchContext,
       browserBrowse,
       recentConversationHistory,
@@ -800,6 +802,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       memory: allowMemoryToolCalls
     },
     soundboardCandidateCount: normalizedSoundboardCandidates.length,
+    soundboardEagerness,
     llmConfig: {
       provider: tunedBinding.provider,
       model: tunedBinding.model,
