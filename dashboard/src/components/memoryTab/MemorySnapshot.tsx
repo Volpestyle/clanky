@@ -16,9 +16,9 @@ export default function MemorySnapshot({ markdown, onRefresh }: Props) {
 
   return (
     <div>
-      <PanelHead title="Memory Snapshot">
+      <PanelHead title="Operator Summary">
         <button type="button" className="sm" onClick={onRefresh}>
-          Refresh memory.md
+          Refresh summary
         </button>
       </PanelHead>
       {markdown === undefined || markdown === null ? (

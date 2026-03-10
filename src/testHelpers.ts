@@ -110,6 +110,16 @@ export async function withDashboardServer<T>(
     async refreshMemoryMarkdown() {
       return true;
     },
+    loadFactProfile() {
+      return {
+        participantProfiles: [],
+        selfFacts: [],
+        loreFacts: [],
+        userFacts: [],
+        relevantFacts: [],
+        guidanceFacts: []
+      };
+    },
     loadUserFactProfile() {
       return {
         userFacts: []
@@ -120,6 +130,9 @@ export async function withDashboardServer<T>(
         selfFacts: [],
         loreFacts: []
       };
+    },
+    async loadBehavioralFactsForPrompt() {
+      return [];
     },
     async searchDurableFacts(payload) {
       memoryCalls.push(payload);

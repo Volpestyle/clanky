@@ -173,6 +173,210 @@ test("dashboard fact profile route returns durable and active voice cache views"
   }
 });
 
+test("dashboard runtime snapshot route returns the real turn-scoped memory slice", async () => {
+  const factProfileCalls: unknown[] = [];
+  const behavioralCalls: unknown[] = [];
+
+  const result = await withDashboardServer(
+    {
+      botOverrides: {
+        getRuntimeState() {
+          return {
+            voice: {
+              activeCount: 1,
+              sessions: [
+                {
+                  sessionId: "session-9",
+                  guildId: "guild-1",
+                  voiceChannelId: "voice-9",
+                  textChannelId: "chan-9",
+                  participantCount: 2,
+                  participants: [
+                    { userId: "user-1", displayName: "Alice" },
+                    { userId: "user-2", displayName: "Bob" }
+                  ]
+                }
+              ]
+            }
+          };
+        }
+      },
+      memoryOverrides: {
+        loadFactProfile(payload) {
+          factProfileCalls.push(payload);
+          return {
+            participantProfiles: [
+              {
+                userId: "user-1",
+                displayName: "Alice",
+                isPrimary: true,
+                facts: [
+                  {
+                    id: 11,
+                    subject: "user-1",
+                    fact: "Likes ramen.",
+                    fact_type: "preference",
+                    confidence: 0.94,
+                    updated_at: "2026-03-08T11:00:00.000Z"
+                  }
+                ]
+              },
+              {
+                userId: "user-2",
+                displayName: "Bob",
+                isPrimary: false,
+                facts: [
+                  {
+                    id: 12,
+                    subject: "user-2",
+                    fact: "Knows the best ramen spot.",
+                    fact_type: "relationship",
+                    confidence: 0.78
+                  }
+                ]
+              }
+            ],
+            userFacts: [
+              {
+                id: 21,
+                subject: "user-1",
+                fact: "Likes ramen.",
+                fact_type: "preference",
+                confidence: 0.94
+              }
+            ],
+            relevantFacts: [
+              {
+                id: 22,
+                subject: "user-2",
+                fact: "Knows the best ramen spot.",
+                fact_type: "relationship",
+                confidence: 0.78
+              }
+            ],
+            selfFacts: [
+              {
+                id: 23,
+                subject: "__self__",
+                fact: "Bot keeps replies concise.",
+                fact_type: "profile",
+                confidence: 0.81
+              }
+            ],
+            loreFacts: [
+              {
+                id: 24,
+                subject: "__lore__",
+                fact: "Guild loves late-night food talk.",
+                fact_type: "other",
+                confidence: 0.69
+              }
+            ],
+            guidanceFacts: [
+              {
+                id: 25,
+                subject: "__lore__",
+                fact: "Keep food recommendations practical.",
+                fact_type: "guidance",
+                confidence: 0.88
+              }
+            ]
+          };
+        },
+        async loadBehavioralFactsForPrompt(payload) {
+          behavioralCalls.push(payload);
+          return [
+            {
+              id: 31,
+              subject: "__lore__",
+              fact: "Suggest ramen spots when people ask for food recommendations.",
+              fact_type: "behavioral",
+              confidence: 0.84
+            }
+          ];
+        },
+        async searchConversationHistory() {
+          return [
+            {
+              anchorMessageId: "msg-7",
+              createdAt: "2026-03-08T12:00:00.000Z",
+              score: 0.92,
+              semanticScore: 0.88,
+              ageMinutes: 35,
+              messages: [
+                {
+                  message_id: "msg-7",
+                  created_at: "2026-03-08T12:00:00.000Z",
+                  author_name: "Alice",
+                  content: "We were comparing ramen spots downtown."
+                }
+              ]
+            }
+          ];
+        }
+      }
+    },
+    async ({ baseUrl, store }) => {
+      store.recordLookupContext({
+        guildId: "guild-1",
+        channelId: "chan-9",
+        userId: "user-1",
+        source: "web_search",
+        query: "best ramen downtown",
+        provider: "brave",
+        results: [
+          {
+            title: "Ramen Index",
+            url: "https://ramen.example.com",
+            domain: "ramen.example.com"
+          }
+        ]
+      });
+
+      const response = await fetch(`${baseUrl}/api/memory/runtime-snapshot`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          guildId: "guild-1",
+          channelId: "chan-9",
+          userId: "user-1",
+          queryText: "best ramen downtown",
+          mode: "voice"
+        })
+      });
+      assert.equal(response.status, 200);
+      const json = await response.json();
+
+      assert.equal(json.mode, "voice");
+      assert.equal(json.participants.length, 2);
+      assert.equal(json.participants[0]?.userId, "user-1");
+      assert.equal(json.participants[1]?.userId, "user-2");
+      assert.equal(json.slice.participantProfiles.length, 2);
+      assert.equal(json.slice.userFacts[0]?.fact, "Likes ramen.");
+      assert.equal(json.slice.relevantFacts[0]?.fact, "Knows the best ramen spot.");
+      assert.equal(json.slice.guidanceFacts[0]?.fact, "Keep food recommendations practical.");
+      assert.equal(
+        json.slice.behavioralFacts[0]?.fact,
+        "Suggest ramen spots when people ask for food recommendations."
+      );
+      assert.equal(
+        json.promptContext.recentConversationHistory[0]?.messages?.[0]?.content,
+        "We were comparing ramen spots downtown."
+      );
+      assert.equal(json.promptContext.recentWebLookups[0]?.query, "best ramen downtown");
+      assert.equal(json.activeVoiceSession.sessionId, "session-9");
+      assert.deepEqual(factProfileCalls[0]?.participantIds, ["user-1", "user-2"]);
+      assert.deepEqual(behavioralCalls[0]?.participantIds, ["user-1", "user-2"]);
+    }
+  );
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
 test("dashboard memory fact inspector routes list subjects and facts", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
     store.addMemoryFact({

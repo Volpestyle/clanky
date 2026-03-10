@@ -99,6 +99,87 @@ function mapConversationWindowRow(row: unknown) {
   };
 }
 
+function mapLookupResultRow(row: unknown) {
+  const record = toRecord(row);
+  const title = String(record.title || "").trim();
+  const url = String(record.url || "").trim();
+  if (!title && !url) return null;
+  return {
+    title: title || null,
+    url: url || null,
+    domain: String(record.domain || "").trim() || null,
+    snippet: String(record.snippet || "").trim() || null,
+    pageSummary: String(record.pageSummary || "").trim() || null
+  };
+}
+
+function mapRecentLookupRow(row: unknown) {
+  const record = toRecord(row);
+  const query = String(record.query || "").trim();
+  const results = (Array.isArray(record.results) ? record.results : [])
+    .map((entry) => mapLookupResultRow(entry))
+    .filter((entry) => entry !== null);
+  if (!query && !results.length) return null;
+  const ageMinutes = Number(record.ageMinutes);
+  return {
+    id: Number.isInteger(Number(record.id)) ? Number(record.id) : null,
+    createdAt: String(record.createdAt || record.created_at || "").trim() || null,
+    channelId: String(record.channelId || record.channel_id || "").trim() || null,
+    userId: String(record.userId || record.user_id || "").trim() || null,
+    source: String(record.source || "").trim() || null,
+    query: query || null,
+    provider: String(record.provider || "").trim() || null,
+    ageMinutes: Number.isFinite(ageMinutes) ? ageMinutes : null,
+    results
+  };
+}
+
+function normalizeDashboardLookupRows(rows: unknown) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => mapRecentLookupRow(row))
+    .filter((row) => row !== null);
+}
+
+function getActiveVoiceSessionRecord(bot: DashboardBot, guildId: string) {
+  const normalizedGuildId = String(guildId || "").trim();
+  if (!normalizedGuildId) return null;
+  const voiceState = bot.getRuntimeState()?.voice || { sessions: [] };
+  const sessions = Array.isArray(voiceState?.sessions) ? voiceState.sessions : [];
+  return sessions.find((entry) => String(toRecord(entry).guildId || "").trim() === normalizedGuildId) || null;
+}
+
+function normalizeParticipantIds(value: unknown) {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))];
+  }
+  if (typeof value === "string") {
+    return [...new Set(
+      value
+        .split(/[\s,]+/u)
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )];
+  }
+  return [];
+}
+
+function normalizeRuntimeSnapshotRecentMessages(value: unknown) {
+  return (Array.isArray(value) ? value : [])
+    .map((row) => {
+      const record = toRecord(row);
+      const content = String(record.content || "").trim();
+      const authorId = String(record.authorId || record.author_id || "").trim();
+      if (!content || !authorId) return null;
+      return {
+        messageId: String(record.messageId || record.message_id || "").trim() || null,
+        authorId,
+        authorName: String(record.authorName || record.author_name || "").trim() || authorId,
+        content
+      };
+    })
+    .filter((row) => row !== null);
+}
+
 function getActiveVoiceSessionFactProfileSnapshot(
   bot: DashboardBot,
   {
@@ -109,9 +190,7 @@ function getActiveVoiceSessionFactProfileSnapshot(
     userId?: string | null;
   }
 ) {
-  const voiceState = bot.getRuntimeState()?.voice || { sessions: [] };
-  const sessions = Array.isArray(voiceState?.sessions) ? voiceState.sessions : [];
-  const session = sessions.find((entry) => String(toRecord(entry).guildId || "").trim() === guildId) || null;
+  const session = getActiveVoiceSessionRecord(bot, guildId);
   if (!session) return null;
 
   const normalizedUserId = String(userId || "").trim();
@@ -572,6 +651,196 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
     await memory.refreshMemoryMarkdown();
     const markdown = await memory.readMemoryMarkdown();
     return c.json({ ok: true, markdown });
+  });
+
+  app.post("/api/memory/runtime-snapshot", async (c) => {
+    const body = await readDashboardBody(c);
+    const guildId = String(body.guildId || "").trim();
+    const channelId = String(body.channelId || "").trim() || null;
+    const userId = String(body.userId || "").trim() || null;
+    const queryText = String(body.queryText || "").replace(/\s+/g, " ").trim().slice(0, 420);
+    const mode = String(body.mode || "text").trim().toLowerCase() === "voice" ? "voice" : "text";
+    const recentMessages = normalizeRuntimeSnapshotRecentMessages(body.recentMessages);
+    const participantIds = normalizeParticipantIds(body.participantIds);
+
+    if (!guildId) {
+      return c.json(
+        {
+          ok: false,
+          error: "guildId required"
+        },
+        400
+      );
+    }
+
+    const activeVoiceSessionRecord = getActiveVoiceSessionRecord(bot, guildId);
+    const activeVoiceSession = getActiveVoiceSessionFactProfileSnapshot(bot, {
+      guildId,
+      userId
+    });
+    const participantNameMap: Record<string, string> = {};
+    const derivedParticipantIds: string[] = [];
+    const pushParticipant = (participantId: string, displayName: string | null, source: string) => {
+      const normalizedParticipantId = String(participantId || "").trim();
+      if (!normalizedParticipantId) return;
+      if (!derivedParticipantIds.includes(normalizedParticipantId)) {
+        derivedParticipantIds.push(normalizedParticipantId);
+      }
+      const normalizedDisplayName = String(displayName || "").trim() || normalizedParticipantId;
+      if (!participantNameMap[normalizedParticipantId]) {
+        participantNameMap[normalizedParticipantId] = normalizedDisplayName;
+      }
+      return {
+        userId: normalizedParticipantId,
+        displayName: normalizedDisplayName,
+        source
+      };
+    };
+
+    const participants: Array<{ userId: string; displayName: string; source: string }> = [];
+    for (const participantId of participantIds) {
+      const participant = pushParticipant(participantId, participantId, "request");
+      if (participant) participants.push(participant);
+    }
+    for (const message of recentMessages) {
+      const participant = pushParticipant(message.authorId, message.authorName, "recent_message");
+      if (participant && !participants.some((entry) => entry.userId === participant.userId)) {
+        participants.push(participant);
+      }
+    }
+    if (mode === "voice" && activeVoiceSessionRecord) {
+      const sessionRecord = toRecord(activeVoiceSessionRecord);
+      for (const participant of Array.isArray(sessionRecord.participants) ? sessionRecord.participants : []) {
+        const participantRecord = toRecord(participant);
+        const participantId = String(participantRecord.userId || "").trim();
+        if (!participantId) continue;
+        const pushed = pushParticipant(
+          participantId,
+          String(participantRecord.displayName || "").trim() || participantId,
+          "active_voice_session"
+        );
+        if (pushed && !participants.some((entry) => entry.userId === pushed.userId)) {
+          participants.push(pushed);
+        }
+      }
+    }
+    if (userId) {
+      const participant = pushParticipant(userId, participantNameMap[userId] || userId, "primary_user");
+      if (participant) {
+        const existingIndex = participants.findIndex((entry) => entry.userId === participant.userId);
+        if (existingIndex >= 0) {
+          participants[existingIndex] = participant;
+        } else {
+          participants.unshift(participant);
+        }
+      }
+    }
+
+    const settings = store.getSettings();
+    const factProfile =
+      typeof memory.loadFactProfile === "function"
+        ? toRecord(memory.loadFactProfile({
+            userId,
+            guildId,
+            participantIds: derivedParticipantIds,
+            participantNames: participantNameMap
+          }))
+        : {};
+
+    const behavioralFacts =
+      typeof memory.loadBehavioralFactsForPrompt === "function" && queryText
+        ? await memory.loadBehavioralFactsForPrompt({
+            guildId,
+            channelId,
+            queryText,
+            participantIds: derivedParticipantIds,
+            settings,
+            trace: {
+              guildId,
+              channelId,
+              userId,
+              source: "dashboard_runtime_snapshot_behavioral"
+            },
+            limit: 8
+          })
+        : [];
+
+    const recentConversationHistory =
+      typeof memory.searchConversationHistory === "function" && channelId && queryText
+        ? await memory.searchConversationHistory({
+            guildId,
+            channelId,
+            queryText,
+            settings,
+            trace: {
+              guildId,
+              channelId,
+              userId,
+              source: "dashboard_runtime_snapshot_conversation_history"
+            },
+            limit: 3,
+            maxAgeHours: 24 * 14,
+            before: 1,
+            after: 1
+          })
+        : [];
+
+    const recentWebLookups =
+      queryText && typeof store.searchLookupContext === "function"
+        ? store.searchLookupContext({
+            guildId,
+            channelId,
+            queryText,
+            limit: 4,
+            maxAgeHours: 72
+          })
+        : [];
+
+    return c.json({
+      guildId,
+      channelId,
+      userId,
+      queryText,
+      mode,
+      participants,
+      counts: {
+        participantCount: participants.length,
+        participantProfileCount: Array.isArray(factProfile.participantProfiles) ? factProfile.participantProfiles.length : 0,
+        userFactCount: Array.isArray(factProfile.userFacts) ? factProfile.userFacts.length : 0,
+        relevantFactCount: Array.isArray(factProfile.relevantFacts) ? factProfile.relevantFacts.length : 0,
+        selfFactCount: Array.isArray(factProfile.selfFacts) ? factProfile.selfFacts.length : 0,
+        loreFactCount: Array.isArray(factProfile.loreFacts) ? factProfile.loreFacts.length : 0,
+        guidanceFactCount: Array.isArray(factProfile.guidanceFacts) ? factProfile.guidanceFacts.length : 0,
+        behavioralFactCount: Array.isArray(behavioralFacts) ? behavioralFacts.length : 0,
+        conversationWindowCount: Array.isArray(recentConversationHistory) ? recentConversationHistory.length : 0,
+        recentLookupCount: Array.isArray(recentWebLookups) ? recentWebLookups.length : 0
+      },
+      slice: {
+        participantProfiles: (Array.isArray(factProfile.participantProfiles) ? factProfile.participantProfiles : [])
+          .map((entry) => {
+            const profileRecord = toRecord(entry);
+            return {
+              userId: String(profileRecord.userId || "").trim() || null,
+              displayName: String(profileRecord.displayName || "").trim() || null,
+              isPrimary: Boolean(profileRecord.isPrimary),
+              facts: normalizeDashboardFactRows(profileRecord.facts)
+            };
+          }),
+        userFacts: normalizeDashboardFactRows(factProfile.userFacts),
+        relevantFacts: normalizeDashboardFactRows(factProfile.relevantFacts),
+        selfFacts: normalizeDashboardFactRows(factProfile.selfFacts),
+        loreFacts: normalizeDashboardFactRows(factProfile.loreFacts),
+        guidanceFacts: normalizeDashboardFactRows(factProfile.guidanceFacts),
+        behavioralFacts: normalizeDashboardFactRows(behavioralFacts)
+      },
+      promptContext: {
+        recentConversationHistory: (Array.isArray(recentConversationHistory) ? recentConversationHistory : [])
+          .map((row) => mapConversationWindowRow(row))
+          .filter((row): row is NonNullable<ReturnType<typeof mapConversationWindowRow>> => row !== null),
+        recentWebLookups: normalizeDashboardLookupRows(recentWebLookups)
+      },
+      activeVoiceSession
+    });
   });
 
   app.get("/api/memory/search", async (c) => {

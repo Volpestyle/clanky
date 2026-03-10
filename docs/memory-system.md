@@ -24,6 +24,7 @@ The memory system has two persistence layers:
 Supporting infrastructure:
 - **Daily journals** (`memory/YYYY-MM-DD.md`): append-only logs of all ingested text and transcripts. Raw material consumed by reflection.
 - **Snapshot** (`memory/MEMORY.md`): periodically regenerated markdown for operator/dashboard inspection — not consumed by the model.
+- **Runtime snapshot** (dashboard API): previews the actual turn-scoped memory slice the model would receive for a given guild/channel/user/query combination.
 
 ## Flow Diagram
 
@@ -303,6 +304,7 @@ Dashboard API:
 
 - `GET /api/memory` — snapshot markdown.
 - `POST /api/memory/refresh` — regenerate snapshot.
+- `POST /api/memory/runtime-snapshot` — preview the real runtime memory slice for a prospective turn, including participant profiles, guidance, behavioral facts, conversation recall, and recent lookup cache.
 - `GET /api/memory/search?q=&guildId=&channelId=&limit=` — hybrid durable fact search.
 - `GET /api/memory/fact-profile` — structured fact profile for guild/user.
 - `GET /api/memory/facts` — list/filter raw facts.

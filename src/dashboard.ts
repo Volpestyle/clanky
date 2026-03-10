@@ -82,6 +82,19 @@ export interface DashboardBot {
 export interface DashboardMemory {
   readMemoryMarkdown(): Promise<string>;
   refreshMemoryMarkdown(): Promise<unknown>;
+  loadFactProfile?(payload: {
+    userId?: string | null;
+    guildId?: string | null;
+    participantIds?: string[];
+    participantNames?: Record<string, string>;
+  }): {
+    participantProfiles?: unknown[];
+    selfFacts?: unknown[];
+    loreFacts?: unknown[];
+    userFacts?: unknown[];
+    relevantFacts?: unknown[];
+    guidanceFacts?: unknown[];
+  };
   loadUserFactProfile?(payload: {
     userId?: string | null;
     guildId?: string | null;
@@ -94,6 +107,15 @@ export interface DashboardMemory {
     selfFacts?: unknown[];
     loreFacts?: unknown[];
   };
+  loadBehavioralFactsForPrompt?(payload: {
+    guildId: string;
+    channelId?: string | null;
+    queryText: string;
+    participantIds?: string[];
+    settings?: unknown;
+    trace?: Record<string, unknown>;
+    limit?: number;
+  }): Promise<unknown[]>;
   searchDurableFacts(payload: {
     guildId: string;
     queryText: string;
