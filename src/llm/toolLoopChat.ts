@@ -3,6 +3,8 @@ import type OpenAI from "openai";
 import { estimateUsdCost } from "./pricing.ts";
 import { extractOpenAiResponseUsage, normalizeLlmProvider } from "./llmHelpers.ts";
 import {
+  addAnthropicCacheBreakpointToLastItem,
+  buildAnthropicCachedSystemPrompt,
   buildAnthropicToolLoopMessages,
   buildOpenAiReasoningParam,
   buildOpenAiTemperatureParam,
@@ -82,13 +84,14 @@ export async function chatWithTools(
       );
     }
 
+    const cachedSystemPrompt = buildAnthropicCachedSystemPrompt(systemPrompt);
     const requestBody = {
       model: resolvedModel,
-      system: systemPrompt,
+      ...(cachedSystemPrompt ? { system: cachedSystemPrompt } : {}),
       temperature: resolvedTemperature,
       max_tokens: maxOutputTokens,
       messages: buildAnthropicToolLoopMessages(messages),
-      tools
+      tools: addAnthropicCacheBreakpointToLastItem(tools, !cachedSystemPrompt)
     } as Parameters<typeof anthropicClient.messages.create>[0];
     const response = await anthropicClient.messages.create(requestBody as never, { signal }) as {
       content: Array<{

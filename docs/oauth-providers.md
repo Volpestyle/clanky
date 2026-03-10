@@ -100,6 +100,15 @@ LLMService
 
 The provider reuses the exact same `callAnthropic` code path as the regular `anthropic` provider. The only difference is the Anthropic SDK client is configured with a custom fetch that handles OAuth auth.
 
+### Prompt Caching
+
+The shared Anthropic request path now emits SDK-typed prompt-caching breakpoints for both the API-key `anthropic` lane and the subscription-backed `claude-oauth` lane.
+
+- Stable system prompt text is sent as a cacheable Anthropic text block, so persona, long-form behavior instructions, and tool definitions can be reused instead of re-prefilled every turn.
+- Anthropic tool-loop follow-ups mark the newest `tool_result` block as cacheable, so immediate continuation calls can reuse large fetched context such as search or article results.
+
+This is prompt-prefix reuse, not hidden server-side conversation memory. The Messages API remains stateless and still only knows the context the app resends on each call.
+
 ### Structured Output Handling
 
 JSON compliance for reply generation is requested via a text instruction appended to the system prompt (`"Return strict JSON only."` + the schema). API-level enforcement via `output_config.format` is not used because `REPLY_OUTPUT_SCHEMA` exceeds Claude's union type limit (29 `type: ["string", "null"]` / `anyOf` parameters).

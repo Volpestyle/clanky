@@ -49,6 +49,10 @@ export type ChatTool = {
   strict?: boolean;
 };
 
+type AnthropicCacheable = {
+  cache_control?: Anthropic.CacheControlEphemeral | null;
+};
+
 export type LlmToolCall = {
   id: string;
   name: string;
@@ -379,8 +383,57 @@ function normalizeToolLoopResultBlocks(content: string | ToolLoopContentBlock[])
   return content.filter((block): block is ToolLoopToolResult => block?.type === "tool_result");
 }
 
+export function buildAnthropicEphemeralCacheControl(): Anthropic.CacheControlEphemeral {
+  return { type: "ephemeral" };
+}
+
+export function buildAnthropicCachedSystemPrompt(systemPrompt: string): Anthropic.TextBlockParam[] | undefined {
+  const normalizedSystemPrompt = String(systemPrompt || "");
+  if (!normalizedSystemPrompt.trim()) return undefined;
+  return [
+    {
+      type: "text",
+      text: normalizedSystemPrompt,
+      cache_control: buildAnthropicEphemeralCacheControl()
+    }
+  ];
+}
+
+export function addAnthropicCacheBreakpointToLastItem<T extends Record<string, unknown>>(
+  items: T[],
+  enabled = true
+): Array<T & AnthropicCacheable> {
+  const rows = Array.isArray(items) ? items : [];
+  if (!rows.length) return [];
+  if (!enabled) {
+    return rows.map((item) => ({ ...item }));
+  }
+  return rows.map((item, index) => (
+    index === rows.length - 1
+      ? {
+          ...item,
+          cache_control: buildAnthropicEphemeralCacheControl()
+        }
+      : { ...item }
+  ));
+}
+
+function findLatestAnthropicToolResultBreakpoint(messages: ToolLoopMessage[]) {
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const message = messages[messageIndex];
+    if (!Array.isArray(message?.content)) continue;
+    for (let blockIndex = message.content.length - 1; blockIndex >= 0; blockIndex -= 1) {
+      if (message.content[blockIndex]?.type !== "tool_result") continue;
+      return { messageIndex, blockIndex };
+    }
+  }
+  return null;
+}
+
 export function buildAnthropicToolLoopMessages(messages: ToolLoopMessage[]): Anthropic.MessageParam[] {
-  return messages.map((message) => {
+  const latestToolResultBreakpoint = findLatestAnthropicToolResultBreakpoint(messages);
+
+  return messages.map((message, messageIndex) => {
     if (typeof message.content === "string") {
       return {
         role: message.role,
@@ -389,7 +442,8 @@ export function buildAnthropicToolLoopMessages(messages: ToolLoopMessage[]): Ant
     }
 
     const content: Anthropic.ContentBlockParam[] = [];
-    for (const block of message.content) {
+    for (let blockIndex = 0; blockIndex < message.content.length; blockIndex += 1) {
+      const block = message.content[blockIndex];
       if (block.type === "text") {
         content.push({
           type: "text",
@@ -410,7 +464,11 @@ export function buildAnthropicToolLoopMessages(messages: ToolLoopMessage[]): Ant
         type: "tool_result",
         tool_use_id: block.toolCallId,
         content: block.content,
-        is_error: Boolean(block.isError)
+        is_error: Boolean(block.isError),
+        ...(latestToolResultBreakpoint?.messageIndex === messageIndex &&
+          latestToolResultBreakpoint?.blockIndex === blockIndex
+          ? { cache_control: buildAnthropicEphemeralCacheControl() }
+          : {})
       });
     }
 

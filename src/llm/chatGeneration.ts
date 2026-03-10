@@ -7,6 +7,8 @@ import {
   extractOpenAiToolCalls
 } from "./llmHelpers.ts";
 import {
+  addAnthropicCacheBreakpointToLastItem,
+  buildAnthropicCachedSystemPrompt,
   buildContextContentBlocks,
   buildOpenAiJsonSchemaTextFormat,
   buildOpenAiReasoningParam,
@@ -59,12 +61,14 @@ function buildAnthropicMessagesRequest({
 
   const resolvedTemperature = Math.max(0, Math.min(Number(temperature) || 0, 1));
   const normalizedTools = Array.isArray(tools) ? tools : [];
+  const cachedSystemPrompt = buildAnthropicCachedSystemPrompt(systemPrompt);
   const toolsParam = normalizedTools.length
     ? {
-        tools: normalizedTools.map((tool) => ({
+        tools: addAnthropicCacheBreakpointToLastItem(normalizedTools, !cachedSystemPrompt).map((tool) => ({
           name: tool.name,
           description: tool.description,
           input_schema: tool.input_schema,
+          ...(tool.cache_control ? { cache_control: tool.cache_control } : {}),
           ...(tool.strict ? { strict: true } : {})
         }))
       }
@@ -72,7 +76,7 @@ function buildAnthropicMessagesRequest({
 
   return {
     model,
-    system: systemPrompt,
+    ...(cachedSystemPrompt ? { system: cachedSystemPrompt } : {}),
     temperature: resolvedTemperature,
     max_tokens: maxOutputTokens,
     messages,

@@ -394,6 +394,12 @@ test("callAnthropic omits empty text multimodal blocks", async () => {
   });
 
   assert.equal(Array.isArray(seenPayload.messages?.[0]?.content), true);
+  assert.equal(Array.isArray(seenPayload.system), true);
+  assert.deepEqual(seenPayload.system?.[0], {
+    type: "text",
+    text: "system prompt",
+    cache_control: { type: "ephemeral" }
+  });
   assert.equal(
     seenPayload.messages?.[0]?.content?.some((item) => item?.type === "image"),
     true
@@ -453,9 +459,127 @@ test("callAnthropicStreaming forwards streamed text deltas and returns the final
   });
 
   assert.equal(seenPayload.model, "claude-haiku-4-5");
+  assert.deepEqual(seenPayload.system?.[0], {
+    type: "text",
+    text: "system prompt",
+    cache_control: { type: "ephemeral" }
+  });
   assert.deepEqual(deltas, ["hello ", "world"]);
   assert.equal(result.text, "hello world");
   assert.equal(result.stopReason, "end_turn");
+});
+
+test("chatWithTools caches Anthropic system prefix and latest tool result follow-up context", async () => {
+  const logs = [];
+  const service = createService(
+    {
+      anthropicApiKey: "test-anthropic-key"
+    },
+    { logs }
+  );
+  let seenPayload = null;
+  service.anthropic = {
+    messages: {
+      async create(payload) {
+        seenPayload = payload;
+        return {
+          content: [
+            { type: "text", text: "Looking now." },
+            {
+              type: "tool_use",
+              id: "call_browser_open",
+              name: "browser_open",
+              input: { url: "https://example.com" }
+            }
+          ],
+          stop_reason: "tool_use",
+          usage: {
+            input_tokens: 14,
+            output_tokens: 6,
+            cache_creation_input_tokens: 7,
+            cache_read_input_tokens: 3
+          }
+        };
+      }
+    }
+  };
+
+  const result = await service.chatWithTools({
+    provider: "anthropic",
+    model: "claude-haiku-4-5",
+    systemPrompt: "browse the web",
+    messages: [
+      { role: "user", content: "Find example.com" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_call",
+            id: "call_browser_open",
+            name: "browser_open",
+            input: { url: "https://example.com" }
+          }
+        ]
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            toolCallId: "call_browser_open",
+            content: "Opened page."
+          }
+        ]
+      }
+    ],
+    tools: [
+      {
+        name: "browser_open",
+        description: "Open a URL",
+        input_schema: {
+          type: "object",
+          properties: {
+            url: { type: "string" }
+          },
+          required: ["url"]
+        }
+      }
+    ]
+  });
+
+  assert.deepEqual(result.content, [
+    { type: "text", text: "Looking now." },
+    {
+      type: "tool_call",
+      id: "call_browser_open",
+      name: "browser_open",
+      input: { url: "https://example.com" }
+    }
+  ]);
+  assert.deepEqual(result.usage, {
+    inputTokens: 14,
+    outputTokens: 6,
+    cacheWriteTokens: 7,
+    cacheReadTokens: 3
+  });
+  assert.deepEqual(seenPayload.system?.[0], {
+    type: "text",
+    text: "browse the web",
+    cache_control: { type: "ephemeral" }
+  });
+  assert.equal(seenPayload.tools?.[0]?.cache_control, undefined);
+  assert.equal(seenPayload.messages?.[2]?.content?.[0]?.type, "tool_result");
+  assert.deepEqual(seenPayload.messages?.[2]?.content?.[0]?.cache_control, {
+    type: "ephemeral"
+  });
+  assert.equal(
+    logs.some((entry) =>
+      entry.kind === "llm_tool_call" &&
+      entry.metadata?.usage?.cacheWriteTokens === 7 &&
+      entry.metadata?.usage?.cacheReadTokens === 3
+    ),
+    true
+  );
 });
 
 test("callAnthropicStreaming handles user-aborted Claude streams without leaking stream aborts", async () => {
