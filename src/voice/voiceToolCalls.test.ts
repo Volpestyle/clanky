@@ -333,3 +333,77 @@ test("music_play updates queue state synchronously before returning", async () =
   assert.equal(queueState.tracks[1].id, "old-2");
   assert.equal(queueState.tracks.length, 2);
 });
+
+test("music_play resolves selection_id from saved last-track state when the catalog is empty", async () => {
+  const queueState = {
+    guildId: "guild-1",
+    voiceChannelId: "vc-1",
+    tracks: [],
+    nowPlayingIndex: null,
+    isPaused: false
+  };
+  const calls: { method: string; args: unknown }[] = [];
+
+  const manager = {
+    client: {
+      user: {
+        id: "bot-user"
+      }
+    },
+    ensureToolMusicQueueState: () => queueState,
+    ensureSessionMusicState: () => ({
+      lastTrackId: "track-last",
+      lastTrackTitle: "Midnight City",
+      lastTrackArtists: ["M83"],
+      lastTrackUrl: "https://example.com/midnight-city",
+      provider: "discord"
+    }),
+    buildVoiceQueueStatePayload: () => null,
+    musicSearch: {
+      isConfigured: () => true,
+      search: async () => ({ results: [] })
+    },
+    normalizeMusicSelectionResult: (row: Record<string, unknown>) => ({
+      id: String(row.id || ""),
+      title: String(row.title || ""),
+      artist: String(row.artist || ""),
+      platform: String(row.platform || "youtube"),
+      externalUrl: String(row.externalUrl || ""),
+      durationSeconds: row.durationSeconds == null ? null : Number(row.durationSeconds || 0)
+    }),
+    beginVoiceCommandSession() {
+      return undefined;
+    },
+    requestPlayMusic: (...args: unknown[]) => {
+      calls.push({ method: "requestPlayMusic", args });
+      return Promise.resolve();
+    },
+    requestRealtimePromptUtterance: () => true,
+    store: {
+      logAction() {
+        return undefined;
+      }
+    }
+  };
+
+  const result = await executeVoiceMusicPlayTool(manager, {
+    session: {
+      id: "s-last",
+      guildId: "g1",
+      textChannelId: "tc1",
+      lastRealtimeToolCallerUserId: "user-1",
+      toolMusicTrackCatalog: new Map()
+    },
+    settings: createTestSettings({}),
+    args: {
+      query: "midnight city m83",
+      selection_id: "track-last"
+    }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "loading");
+  assert.equal(result.track.id, "track-last");
+  assert.equal(result.track.title, "Midnight City");
+  assert.equal(calls.length, 1);
+});

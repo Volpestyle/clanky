@@ -160,16 +160,17 @@ test("getMusicPromptContext derives current playback, last action, and upcoming 
   const { host } = createDisambiguationHost({
     snapshot: {
       active: true,
+      lastTrackId: "track-1",
       lastTrackTitle: "Midnight City",
       lastTrackArtists: ["M83"],
       lastCommandReason: "voice_tool_music_play",
       lastQuery: "midnight city",
       queueState: {
         tracks: [
-          { title: "Midnight City", artist: "M83" },
-          { title: "Genesis", artist: "Grimes" },
-          { title: "Windowlicker", artist: "Aphex Twin" },
-          { title: "Hyperballad", artist: "Bjork" }
+          { id: "track-1", title: "Midnight City", artist: "M83" },
+          { id: "track-2", title: "Genesis", artist: "Grimes" },
+          { id: "track-3", title: "Windowlicker", artist: "Aphex Twin" },
+          { id: "track-4", title: "Hyperballad", artist: "Bjork" }
         ],
         nowPlayingIndex: 0,
         isPaused: false
@@ -182,20 +183,60 @@ test("getMusicPromptContext derives current playback, last action, and upcoming 
   assert.deepEqual(context, {
     playbackState: "playing",
     currentTrack: {
+      id: "track-1",
       title: "Midnight City",
       artists: ["M83"]
     },
     lastTrack: {
+      id: "track-1",
       title: "Midnight City",
       artists: ["M83"]
     },
     queueLength: 4,
     upcomingTracks: [
-      { title: "Genesis", artist: "Grimes" },
-      { title: "Windowlicker", artist: "Aphex Twin" },
-      { title: "Hyperballad", artist: "Bjork" }
+      { id: "track-2", title: "Genesis", artist: "Grimes" },
+      { id: "track-3", title: "Windowlicker", artist: "Aphex Twin" },
+      { id: "track-4", title: "Hyperballad", artist: "Bjork" }
     ],
     lastAction: "play_now",
+    lastQuery: "midnight city"
+  });
+});
+
+test("getMusicPromptContext keeps the last known track visible while playback is idle", () => {
+  const { host } = createDisambiguationHost({
+    snapshot: {
+      active: false,
+      lastTrackId: "track-1",
+      lastTrackTitle: "Midnight City",
+      lastTrackArtists: ["M83"],
+      lastCommandReason: null,
+      lastQuery: "midnight city",
+      queueState: {
+        tracks: [],
+        nowPlayingIndex: null,
+        isPaused: false
+      }
+    }
+  });
+
+  const context = getMusicPromptContext(host, createSession());
+
+  assert.deepEqual(context, {
+    playbackState: "idle",
+    currentTrack: {
+      id: "track-1",
+      title: "Midnight City",
+      artists: ["M83"]
+    },
+    lastTrack: {
+      id: "track-1",
+      title: "Midnight City",
+      artists: ["M83"]
+    },
+    queueLength: 0,
+    upcomingTracks: [],
+    lastAction: null,
     lastQuery: "midnight city"
   });
 });

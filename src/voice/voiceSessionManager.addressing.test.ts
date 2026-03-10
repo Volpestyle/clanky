@@ -5265,3 +5265,52 @@ test("buildRealtimeInstructions omits native tooling policy for transport-only s
   assert.equal(instructions.includes("Tooling policy:"), false);
   assert.equal(instructions.includes("Local tools:"), false);
 });
+
+test("buildRealtimeInstructions includes idle music history and queued tracks", () => {
+  const manager = createManager();
+  const session = {
+    id: "session-idle-music-context-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    startedAt: Date.now() - 5_000,
+    membershipEvents: [],
+    musicQueueState: {
+      guildId: "guild-1",
+      voiceChannelId: "voice-1",
+      tracks: [
+        {
+          id: "track-2",
+          title: "Genesis",
+          artist: "Grimes",
+          source: "yt",
+          platform: "youtube"
+        }
+      ],
+      nowPlayingIndex: null,
+      isPaused: false,
+      volume: 1
+    }
+  };
+  const music = manager.ensureSessionMusicState(session);
+  music.lastTrackId = "track-midnight";
+  music.lastTrackTitle = "Midnight City";
+  music.lastTrackArtists = ["M83"];
+  music.lastQuery = "midnight city";
+
+  const instructions = manager.instructionManager.buildRealtimeInstructions({
+    session,
+    settings: baseSettings(),
+    speakerUserId: "speaker-1",
+    transcript: "clank can you replay"
+  });
+
+  assert.equal(instructions.includes("Music playback:"), true);
+  assert.equal(instructions.includes("Current song: Midnight City by M83 (stopped)"), true);
+  assert.equal(instructions.includes("selection_id: track-midnight"), true);
+  assert.equal(instructions.includes("Queue: 1 track(s)"), true);
+  assert.equal(instructions.includes("Queue item 1: Genesis - Grimes"), true);
+  assert.equal(instructions.includes("selection_id: track-2"), true);
+  assert.equal(instructions.includes("Last music query: midnight city"), true);
+});

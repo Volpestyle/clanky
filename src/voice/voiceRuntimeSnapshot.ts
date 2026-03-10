@@ -98,11 +98,30 @@ function normalizeLoggedPromptBundle(value: unknown) {
     initialUserPrompt?: unknown;
     followupUserPrompts?: unknown;
     followupSteps?: unknown;
+    tools?: unknown;
   };
   const followupUserPrompts = Array.isArray(bundle.followupUserPrompts)
     ? bundle.followupUserPrompts.map((entry) => String(entry || ""))
     : [];
   const followupSteps = Number(bundle.followupSteps);
+  const tools = Array.isArray(bundle.tools)
+    ? bundle.tools
+      .map((t) => {
+        if (!t || typeof t !== "object") return null;
+        const tool = t as { name?: unknown; description?: unknown; parameters?: unknown };
+        const name = String(tool.name || "").trim();
+        return name
+          ? {
+            name,
+            description: String(tool.description || ""),
+            parameters: tool.parameters && typeof tool.parameters === "object"
+              ? tool.parameters as Record<string, unknown>
+              : null
+          }
+          : null;
+      })
+      .filter((t): t is { name: string; description: string; parameters: Record<string, unknown> | null } => t !== null)
+    : [];
 
   return {
     hiddenByDefault: bundle.hiddenByDefault !== false,
@@ -111,7 +130,8 @@ function normalizeLoggedPromptBundle(value: unknown) {
     followupUserPrompts,
     followupSteps: Number.isFinite(followupSteps)
       ? Math.max(0, Math.floor(followupSteps))
-      : followupUserPrompts.length
+      : followupUserPrompts.length,
+    tools
   };
 }
 

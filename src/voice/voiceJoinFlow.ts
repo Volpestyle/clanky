@@ -902,19 +902,13 @@ export async function requestJoin(manager, { message, settings, intentConfidence
 
       // Fire the bot's own join through the classifier → generation pipeline
       // so the bot can greet if eagerness allows it.
-      const joinSession = session;
-      const joinSettings = settings;
-      const botUserId = manager.client.user?.id || "";
-      setTimeout(() => {
-        if (joinSession.ending) return;
-        void manager.fireVoiceRuntimeEvent({
-          session: joinSession,
-          settings: joinSettings,
-          userId: botUserId,
-          transcript: "[YOU joined the voice channel]",
-          source: "bot_join_greeting"
-        });
-      }, 1500);
+      void manager.fireVoiceRuntimeEvent({
+        session,
+        settings,
+        userId: manager.client.user?.id || "",
+        transcript: "[YOU joined the voice channel]",
+        source: "bot_join_greeting"
+      });
 
       return true;
     } catch (error) {

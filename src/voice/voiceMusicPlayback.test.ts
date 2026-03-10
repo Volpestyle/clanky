@@ -6,7 +6,9 @@ import {
   ensureSessionMusicState,
   getMusicDisambiguationPromptContext,
   handleMusicSlashCommand,
+  isLikelyMusicPausePhrase,
   isLikelyMusicResumePhrase,
+  isLikelyMusicStopPhrase,
   maybeHandleMusicPlaybackTurn,
   setMusicPhase
 } from "./voiceMusicPlayback.ts";
@@ -104,6 +106,15 @@ function createPausedSession(manager: MusicPlaybackHost) {
   setMusicPhase(manager, session, "paused", "user_pause");
   return session;
 }
+
+test("music cue regex matches German 'Musik' spelling from ASR", () => {
+  const { manager } = createPlaybackHost();
+
+  assert.equal(isLikelyMusicPausePhrase(manager, { transcript: "Pause Musik." }), true);
+  assert.equal(isLikelyMusicPausePhrase(manager, { transcript: "Okay, pause. Pause Musik." }), true);
+  assert.equal(isLikelyMusicStopPhrase(manager, { transcript: "Stop Musik" }), true);
+  assert.equal(isLikelyMusicPausePhrase(manager, { transcript: "pause music" }), true);
+});
 
 test("isLikelyMusicResumePhrase matches paused current-track phrases without matching new-play requests", () => {
   const { manager } = createPlaybackHost();

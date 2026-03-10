@@ -135,7 +135,38 @@ function resolveMusicPlaySelection(
   const pendingSelection = findPendingMusicSelectionById(manager, session, selectionId);
   if (pendingSelection) return pendingSelection;
   const catalogSelection = catalog.get(selectionId);
-  return isMusicSelectionResult(catalogSelection) ? catalogSelection : null;
+  if (isMusicSelectionResult(catalogSelection)) return catalogSelection;
+
+  const queueState = manager.ensureToolMusicQueueState(session);
+  const queuedTrack = Array.isArray(queueState?.tracks)
+    ? queueState.tracks.find((track) => String(track?.id || "").trim() === selectionId) || null
+    : null;
+  if (queuedTrack?.id && queuedTrack.title) {
+    return manager.normalizeMusicSelectionResult({
+      id: queuedTrack.id,
+      title: queuedTrack.title,
+      artist: queuedTrack.artist || "",
+      platform: queuedTrack.platform || "youtube",
+      externalUrl: queuedTrack.externalUrl || null,
+      durationSeconds: Number.isFinite(Number(queuedTrack.durationMs))
+        ? Math.max(0, Math.round(Number(queuedTrack.durationMs) / 1000))
+        : null
+    });
+  }
+
+  const musicState = manager.ensureSessionMusicState(session);
+  if (musicState?.lastTrackId === selectionId && musicState.lastTrackTitle) {
+    return manager.normalizeMusicSelectionResult({
+      id: musicState.lastTrackId,
+      title: musicState.lastTrackTitle,
+      artist: Array.isArray(musicState.lastTrackArtists) ? musicState.lastTrackArtists.join(", ") : "",
+      platform: String(musicState.provider || "").trim().toLowerCase() === "soundcloud" ? "soundcloud" : "youtube",
+      externalUrl: musicState.lastTrackUrl || null,
+      durationSeconds: null
+    });
+  }
+
+  return null;
 }
 
 function startVoiceMusicPlayRequest(

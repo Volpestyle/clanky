@@ -20,13 +20,13 @@ export const EN_MUSIC_RESUME_PRONOUN_RE = /\b(?:resume|unpause|continue)\s+it\b/
 export const EN_MUSIC_RESUME_PLAY_CURRENT_RE =
   /\bplay\s+(?:it|this(?:\s+(?:song|track|music|playback))?|the\s+(?:song|track|music|playback))(?:\s+(?:again|back(?:\s+up)?))?(?:\s+(?:please|plz|now))?\s*$/i;
 export const EN_MUSIC_SKIP_VERB_RE = /\b(?:skip|next)\b/i;
-export const EN_MUSIC_CUE_RE = /\b(?:music|song|songs|track|tracks|playback|playing)\b/i;
+export const EN_MUSIC_CUE_RE = /\b(?:music|musik|song|songs|track|tracks|playback|playing)\b/i;
 export const EN_MUSIC_PLAY_VERB_RE = /\b(?:play|start|queue|put\s+on|spin)\b/i;
 export const EN_MUSIC_PLAY_QUERY_RE =
   /\b(?:play|start|queue|put\s+on|spin)\s+(.+?)\b(?:in\s+vc|in\s+the\s+vc|in\s+voice|in\s+discord|right\s+now|rn|please|plz)?$/i;
 export const EN_MUSIC_QUERY_TRAILING_NOISE_RE =
   /\b(?:in\s+vc|in\s+the\s+vc|in\s+voice|in\s+discord|right\s+now|rn|please|plz|for\s+me|for\s+us|for\s+everyone|for\s+everybody|for\s+the\s+chat|thanks?)\b/gi;
-export const EN_MUSIC_QUERY_MEDIA_WORD_RE = /\b(?:music|song|songs|track|tracks)\b/gi;
+export const EN_MUSIC_QUERY_MEDIA_WORD_RE = /\b(?:music|musik|song|songs|track|tracks)\b/gi;
 export const EN_MUSIC_QUERY_EMPTY_RE = /^(?:something|anything|some|a|the|please|plz)$/i;
 export const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
 export const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
@@ -671,7 +671,8 @@ export function ensureToolMusicQueueState(
       };
     })
     .filter(Boolean);
-  const normalizedNowPlayingIndexRaw = Number(current.nowPlayingIndex);
+  const normalizedNowPlayingIndexRaw =
+    typeof current.nowPlayingIndex === "number" ? current.nowPlayingIndex : null;
   const normalizedNowPlayingIndex =
     Number.isInteger(normalizedNowPlayingIndexRaw) &&
       normalizedNowPlayingIndexRaw >= 0 &&

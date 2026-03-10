@@ -24,12 +24,14 @@ type MusicDisambiguationPromptContext = {
 
 type MusicRuntimeSnapshot = {
   active?: boolean;
+  lastTrackId?: string | null;
   lastTrackTitle?: string | null;
   lastTrackArtists?: string[] | null;
   lastCommandReason?: unknown;
   lastQuery?: string | null;
   queueState?: {
     tracks?: Array<{
+      id?: string | null;
       title?: string | null;
       artist?: string | null;
     }>;
@@ -87,10 +89,10 @@ export function getMusicPromptContext(
   session: VoiceToolRuntimeSessionLike | null | undefined
 ): {
   playbackState: "playing" | "paused" | "stopped" | "idle";
-  currentTrack: { title: string; artists: string[] } | null;
-  lastTrack: { title: string; artists: string[] } | null;
+  currentTrack: { id: string | null; title: string; artists: string[] } | null;
+  lastTrack: { id: string | null; title: string; artists: string[] } | null;
   queueLength: number;
-  upcomingTracks: Array<{ title: string; artist: string | null }>;
+  upcomingTracks: Array<{ id: string | null; title: string; artist: string | null }>;
   lastAction: MusicPromptAction;
   lastQuery: string | null;
 } | null {
@@ -106,17 +108,20 @@ export function getMusicPromptContext(
       : null;
   const currentTrack = currentQueueTrack?.title
     ? {
+      id: currentQueueTrack.id ? String(currentQueueTrack.id).trim() : null,
       title: currentQueueTrack.title,
       artists: currentQueueTrack.artist ? [currentQueueTrack.artist] : []
     }
-    : snapshot.active && snapshot.lastTrackTitle
+    : snapshot.lastTrackTitle
       ? {
+        id: snapshot.lastTrackId ? String(snapshot.lastTrackId).trim() : null,
         title: snapshot.lastTrackTitle,
         artists: Array.isArray(snapshot.lastTrackArtists) ? snapshot.lastTrackArtists : []
       }
       : null;
   const lastTrack = snapshot.lastTrackTitle
     ? {
+      id: snapshot.lastTrackId ? String(snapshot.lastTrackId).trim() : null,
       title: snapshot.lastTrackTitle,
       artists: Array.isArray(snapshot.lastTrackArtists) ? snapshot.lastTrackArtists : []
     }
@@ -140,6 +145,7 @@ export function getMusicPromptContext(
     queueLength: queueTracks.length,
     upcomingTracks: upcomingTracks
       .map((track) => ({
+        id: track?.id ? String(track.id).trim() : null,
         title: String(track?.title || "").trim(),
         artist: track?.artist ? String(track.artist).trim() : null
       }))
