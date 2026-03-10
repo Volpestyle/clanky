@@ -106,6 +106,7 @@ export interface CaptureManagerHost {
     pcmBuffer: Buffer;
     sampleRateHz?: number;
   }) => PcmSilenceGateResult;
+  estimatePcm16MonoDurationMs: (pcmByteLength: number, sampleRateHz?: number) => number;
   queueRealtimeTurnFromAsrBridge: (args: {
     session: VoiceSession;
     userId: string;
@@ -800,7 +801,30 @@ export class CaptureManager {
       }
 
       if (!bridgeForwarded) {
-        forwardAsrBridgeTurn(asrResult, asrSource);
+        const forwarded = forwardAsrBridgeTurn(asrResult, asrSource);
+        if (!forwarded) {
+          const clipDurationMs = this.host.estimatePcm16MonoDurationMs(
+            pcmBuffer.length,
+            Number(session.realtimeInputSampleRateHz) || 24000
+          );
+          this.host.store.logAction({
+            kind: "voice_runtime",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId,
+            content: "openai_realtime_asr_bridge_empty_dropped",
+            metadata: {
+              sessionId: session.id,
+              captureReason: String(captureReason || "stream_end"),
+              source: asrSource,
+              waitMs: asrBridgeMaxWaitMs,
+              pcmBytes: pcmBuffer.length,
+              clipDurationMs,
+              asrResultAvailable: Boolean(asrResult)
+            }
+          });
+          return;
+        }
       }
       const lateTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
       if (!lateTranscript || lateTranscript === latestForwardedTranscript) return;

@@ -17,6 +17,8 @@ The shared `browser_browse` schema description stays short on purpose. The schem
 
 Tool selection is by fit, not a fixed ladder. `web_scrape` is best for quickly reading page text from a known URL. `browser_browse` is the right tool when the user explicitly asks for browser use, asks for a screenshot, asks what a page looks like, when page appearance/layout matters, or when navigation/interaction/JS rendering is needed.
 
+When interactive browser sessions are enabled, `session_id` is the continuation signal. If a `browser_browse` turn returns a `session_id`, the parent brain can continue that session on a later turn. If the inner browser agent explicitly ends the session with `browser_close`, the tool result omits `session_id`. The parent brain does not need a second lifecycle flag to know whether continuation is possible.
+
 ## Where It Is Available
 
 `browser_browse` is available in:
@@ -70,6 +72,8 @@ That loop:
 - stops when the model returns plain text
 
 When the inner browse agent captures a screenshot, that image is preserved as a structured image input instead of being stranded as raw base64 text. The parent brain receives the screenshot on the next continuation turn alongside the browser tool result text, so it can inspect the page visually. A request like "take a screenshot of eBay and tell me what's on the page" should route through `browser_browse`, not `web_scrape`.
+
+`browser_close` is terminal for persistent browser sessions. It is not just a low-level cleanup action. When the inner agent uses it, the browser session is treated as completed, future continuation on that `session_id` is rejected, and the wrapper omits `session_id` from the returned tool result.
 
 ### 4. Low-level browser execution
 

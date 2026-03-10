@@ -26,6 +26,8 @@ test("buildInitiativePrompt matches the unified initiative tool and task contrac
   });
 
   assert.equal(prompt.includes("Persona: laid back, playful, and curious"), true);
+  assert.equal(prompt.includes("This initiative action is always a normal text-channel post"), true);
+  assert.equal(prompt.includes("Some recent lines may be marked [vc]"), true);
   assert.equal(prompt.includes("web_search and browser_browse are unavailable right now."), true);
   assert.equal(prompt.includes("You can use memory_search to recall durable community context"), true);
   assert.equal(prompt.includes("- discovery_source_add: subscribe to a new subreddit, RSS feed, YouTube channel, or X handle"), true);

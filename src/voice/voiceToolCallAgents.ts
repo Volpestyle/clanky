@@ -19,6 +19,15 @@ type VoiceBrowserToolOptions = VoiceAgentToolOptions & {
   signal?: AbortSignal;
 };
 
+function maybeRemoveCompletedVoiceSession(
+  manager: VoiceToolCallManager["subAgentSessions"],
+  sessionId: string,
+  sessionCompleted?: boolean
+) {
+  if (!sessionCompleted) return;
+  manager?.remove?.(sessionId);
+}
+
 export async function executeVoiceBrowserBrowseTool(
   manager: VoiceToolCallManager,
   { session, settings, args, signal }: VoiceBrowserToolOptions
@@ -39,8 +48,11 @@ export async function executeVoiceBrowserBrowseTool(
     }
     try {
       const turnResult = await existingSession.runTurn(instruction, { signal });
+      maybeRemoveCompletedVoiceSession(manager.subAgentSessions, existingSession.id, turnResult.sessionCompleted);
       if (turnResult.isError) return { ok: false, text: "", error: turnResult.errorMessage };
-      return { ok: true, text: turnResult.text.trim() || "Browser browse completed.", session_id: existingSession.id };
+      return turnResult.sessionCompleted
+        ? { ok: true, text: turnResult.text.trim() || "Browser browse completed." }
+        : { ok: true, text: turnResult.text.trim() || "Browser browse completed.", session_id: existingSession.id };
     } catch (error: unknown) {
       return { ok: false, text: "", error: error instanceof Error ? error.message : String(error) };
     }
@@ -58,10 +70,15 @@ export async function executeVoiceBrowserBrowseTool(
       manager.subAgentSessions.register(newSession);
       try {
         const turnResult = await newSession.runTurn(instruction, { signal });
+        maybeRemoveCompletedVoiceSession(manager.subAgentSessions, newSession.id, turnResult.sessionCompleted);
         if (turnResult.isError) {
-          return { ok: false, text: "", error: turnResult.errorMessage, session_id: newSession.id };
+          return turnResult.sessionCompleted
+            ? { ok: false, text: "", error: turnResult.errorMessage }
+            : { ok: false, text: "", error: turnResult.errorMessage, session_id: newSession.id };
         }
-        return { ok: true, text: turnResult.text.trim() || "Browser browse completed.", session_id: newSession.id };
+        return turnResult.sessionCompleted
+          ? { ok: true, text: turnResult.text.trim() || "Browser browse completed." }
+          : { ok: true, text: turnResult.text.trim() || "Browser browse completed.", session_id: newSession.id };
       } catch (error: unknown) {
         return { ok: false, text: "", error: error instanceof Error ? error.message : String(error) };
       }

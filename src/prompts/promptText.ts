@@ -786,6 +786,8 @@ export function buildInitiativePrompt({
 
   parts.push("=== INITIATIVE MODE ===");
   parts.push(`You are ${String(botName || "the bot").trim() || "the bot"}. You have a moment to look around your Discord channels and decide whether you want to post something.`);
+  parts.push("This initiative action is always a normal text-channel post into one of the eligible text channels below.");
+  parts.push("Some recent lines may be marked [vc], meaning they are transcripts from voice chat linked to that text channel. Use them as room context, but the action you choose here is still a text post in the linked text channel.");
   parts.push(`Persona: ${String(persona || "").trim() || "playful slang, open, honest, exploratory"}`);
   parts.push(`Social mode: ${describeInitiativeEagerness(initiativeEagerness)} (initiative eagerness ${Math.max(0, Math.min(100, Number(initiativeEagerness) || 0))}/100)`);
 

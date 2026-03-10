@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { executeLocalVoiceToolCall, executeVoiceMusicPlayTool } from "./voiceToolCalls.ts";
+import { executeLocalVoiceToolCall, executeVoiceBrowserBrowseTool, executeVoiceMusicPlayTool } from "./voiceToolCalls.ts";
 import { createTestSettings } from "../testSettings.ts";
 
 test("executeLocalVoiceToolCall forwards browser abort signals to browser_browse", async () => {
@@ -102,6 +102,64 @@ test("executeLocalVoiceToolCall aborts non-browser tools before dispatch", async
     /AbortError/i
   );
   assert.equal(searchCalled, false);
+});
+
+test("executeVoiceBrowserBrowseTool omits session_id when the browser session completes", async () => {
+  const sessions = new Map<string, {
+    id: string;
+    ownerUserId?: string | null;
+    runTurn: () => Promise<{
+      text: string;
+      isError?: boolean;
+      errorMessage?: string | null;
+      sessionCompleted?: boolean;
+    }>;
+  }>();
+
+  const manager = {
+    subAgentSessions: {
+      get(sessionId: string) {
+        return sessions.get(sessionId);
+      },
+      register(session: { id: string; ownerUserId?: string | null; runTurn: () => Promise<{ text: string; sessionCompleted?: boolean }> }) {
+        sessions.set(session.id, session);
+      },
+      remove(sessionId: string) {
+        return sessions.delete(sessionId);
+      }
+    },
+    createBrowserAgentSession() {
+      return {
+        id: "browser-session-1",
+        ownerUserId: "user-1",
+        async runTurn() {
+          return {
+            text: "Finished browsing.",
+            sessionCompleted: true
+          };
+        }
+      };
+    }
+  };
+
+  const result = await executeVoiceBrowserBrowseTool(manager, {
+    session: {
+      id: "voice-session-1",
+      guildId: "guild-1",
+      textChannelId: "channel-1",
+      lastRealtimeToolCallerUserId: "user-1"
+    },
+    settings: createTestSettings({}),
+    args: {
+      query: "finish and close"
+    }
+  });
+
+  assert.deepEqual(result, {
+    ok: true,
+    text: "Finished browsing."
+  });
+  assert.equal(sessions.size, 0);
 });
 
 // ---------------------------------------------------------------------------

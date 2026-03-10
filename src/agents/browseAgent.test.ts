@@ -2,7 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { LLMService } from "../llm.ts";
 import type { BrowserManager } from "../services/BrowserManager.ts";
-import { runBrowseAgent } from "./browseAgent.ts";
+import { BrowserAgentSession, runBrowseAgent } from "./browseAgent.ts";
 
 test("runBrowseAgent forwards step timeout to browser tools and preserves multi-block final text", async () => {
   const browserCalls: Array<{ sessionKey: string; url: string; timeoutMs: number }> = [];
@@ -194,4 +194,212 @@ test("runBrowseAgent propagates AbortError when a browser tool is cancelled in f
 
   await assert.rejects(agentPromise, /AbortError/);
   assert.deepEqual(closeCalls, ["session-3"]);
+});
+
+test("BrowserAgentSession marks the session completed after browser_close and rejects follow-ups", async () => {
+  const closeCalls: string[] = [];
+  let llmCallCount = 0;
+
+  const llm = {
+    async chatWithTools() {
+      llmCallCount += 1;
+      if (llmCallCount === 1) {
+        return {
+          content: [{ type: "tool_call", id: "t1", name: "browser_open", input: { url: "https://example.com" } }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 1, outputTokens: 1, cacheWriteTokens: 0, cacheReadTokens: 0 },
+          costUsd: 0.01
+        };
+      }
+      if (llmCallCount === 2) {
+        return {
+          content: [{ type: "tool_call", id: "t2", name: "browser_close", input: {} }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 1, outputTokens: 1, cacheWriteTokens: 0, cacheReadTokens: 0 },
+          costUsd: 0.01
+        };
+      }
+      return {
+        content: [{ type: "text", text: "Finished browsing." }],
+        stopReason: "end_turn",
+        usage: { inputTokens: 1, outputTokens: 1, cacheWriteTokens: 0, cacheReadTokens: 0 },
+        costUsd: 0.01
+      };
+    }
+  } as LLMService;
+
+  const browserManager = {
+    configureSession() {
+      return undefined;
+    },
+    async open() {
+      return "opened";
+    },
+    async close(sessionKey: string) {
+      closeCalls.push(sessionKey);
+    }
+  } as BrowserManager;
+
+  const session = new BrowserAgentSession({
+    scopeKey: "guild-1:channel-1",
+    llm,
+    browserManager,
+    store: { logAction() { return undefined; } },
+    sessionKey: "browser-session-1",
+    provider: "anthropic",
+    model: "claude-sonnet-4-5-20250929",
+    maxSteps: 5,
+    stepTimeoutMs: 5_000,
+    trace: {
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      source: "test"
+    }
+  });
+
+  const result = await session.runTurn("inspect example.com");
+  assert.equal(result.isError, false);
+  assert.equal(result.sessionCompleted, true);
+  assert.equal(session.status, "completed");
+  assert.equal(result.text, "Finished browsing.");
+  assert.deepEqual(closeCalls, ["browser-session-1"]);
+
+  const followUp = await session.runTurn("continue");
+  assert.equal(followUp.isError, true);
+  assert.equal(followUp.sessionCompleted, true);
+  assert.equal(followUp.errorMessage, "Session completed");
+
+  session.close();
+  assert.equal(session.status, "completed");
+  assert.deepEqual(closeCalls, ["browser-session-1"]);
+});
+
+test("BrowserAgentSession allows a final text turn after browser_close even when maxSteps is reached", async () => {
+  const closeCalls: string[] = [];
+  let llmCallCount = 0;
+
+  const llm = {
+    async chatWithTools() {
+      llmCallCount += 1;
+      if (llmCallCount === 1) {
+        return {
+          content: [{ type: "tool_call", id: "t1", name: "browser_close", input: {} }],
+          stopReason: "tool_use",
+          usage: { inputTokens: 1, outputTokens: 1, cacheWriteTokens: 0, cacheReadTokens: 0 },
+          costUsd: 0.01
+        };
+      }
+      return {
+        content: [{ type: "text", text: "All done." }],
+        stopReason: "end_turn",
+        usage: { inputTokens: 1, outputTokens: 1, cacheWriteTokens: 0, cacheReadTokens: 0 },
+        costUsd: 0.01
+      };
+    }
+  } as LLMService;
+
+  const browserManager = {
+    configureSession() {
+      return undefined;
+    },
+    async close(sessionKey: string) {
+      closeCalls.push(sessionKey);
+    }
+  } as BrowserManager;
+
+  const session = new BrowserAgentSession({
+    scopeKey: "guild-1:channel-1",
+    llm,
+    browserManager,
+    store: { logAction() { return undefined; } },
+    sessionKey: "browser-session-2",
+    provider: "anthropic",
+    model: "claude-sonnet-4-5-20250929",
+    maxSteps: 1,
+    stepTimeoutMs: 5_000,
+    trace: {
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      source: "test"
+    }
+  });
+
+  const result = await session.runTurn("finish up");
+  assert.equal(result.isError, false);
+  assert.equal(result.sessionCompleted, true);
+  assert.equal(result.text, "All done.");
+  assert.equal(session.status, "completed");
+  assert.deepEqual(closeCalls, ["browser-session-2"]);
+});
+
+test("BrowserAgentSession stops dispatching later tool calls after browser_close in the same response", async () => {
+  const executedTools: string[] = [];
+  let llmCallCount = 0;
+
+  const llm = {
+    async chatWithTools() {
+      llmCallCount += 1;
+      if (llmCallCount === 1) {
+        return {
+          content: [
+            { type: "tool_call", id: "t1", name: "browser_open", input: { url: "https://example.com" } },
+            { type: "tool_call", id: "t2", name: "browser_close", input: {} },
+            { type: "tool_call", id: "t3", name: "browser_screenshot", input: {} }
+          ],
+          stopReason: "tool_use",
+          usage: { inputTokens: 1, outputTokens: 1, cacheWriteTokens: 0, cacheReadTokens: 0 },
+          costUsd: 0.01
+        };
+      }
+      return {
+        content: [{ type: "text", text: "Finished browsing." }],
+        stopReason: "end_turn",
+        usage: { inputTokens: 1, outputTokens: 1, cacheWriteTokens: 0, cacheReadTokens: 0 },
+        costUsd: 0.01
+      };
+    }
+  } as LLMService;
+
+  const browserManager = {
+    configureSession() {
+      return undefined;
+    },
+    async open() {
+      executedTools.push("browser_open");
+      return "opened";
+    },
+    async close() {
+      executedTools.push("browser_close");
+    },
+    async screenshot() {
+      executedTools.push("browser_screenshot");
+      return "";
+    }
+  } as BrowserManager;
+
+  const session = new BrowserAgentSession({
+    scopeKey: "guild-1:channel-1",
+    llm,
+    browserManager,
+    store: { logAction() { return undefined; } },
+    sessionKey: "browser-session-3",
+    provider: "anthropic",
+    model: "claude-sonnet-4-5-20250929",
+    maxSteps: 4,
+    stepTimeoutMs: 5_000,
+    trace: {
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      source: "test"
+    }
+  });
+
+  const result = await session.runTurn("finish up");
+  assert.equal(result.isError, false);
+  assert.equal(result.sessionCompleted, true);
+  assert.equal(result.text, "Finished browsing.");
+  assert.deepEqual(executedTools, ["browser_open", "browser_close"]);
 });

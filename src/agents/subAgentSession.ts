@@ -19,6 +19,8 @@ export interface SubAgentTurnResult {
   imageInputs?: ImageInput[];
   isError: boolean;
   errorMessage: string;
+  /** True when the sub-agent intentionally ended the session during this turn. */
+  sessionCompleted?: boolean;
   usage: {
     inputTokens: number;
     outputTokens: number;

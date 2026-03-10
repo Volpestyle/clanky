@@ -252,6 +252,8 @@ export type VoiceToolRuntimeSessionLike = {
     conversationHistoryCaches?: Partial<Record<VoiceConversationHistoryCacheStrategy, VoiceConversationHistoryCacheEntry | null>> | null;
     toolCallEvents?: VoiceToolCallEvent[];
     musicQueueState?: Record<string, unknown> | null;
+    soundboard?: VoiceSessionSoundboardState | null;
+    recentVoiceTurns?: Array<Record<string, unknown>>;
     lastRealtimeToolCallerUserId?: string | null;
     awaitingToolOutputs?: boolean;
     voiceCommandState?: {

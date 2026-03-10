@@ -262,6 +262,7 @@ type InitiativeChannelSummary = {
   recentMessages: StoredMessageRow[];
   recentHumanMessageCount: number;
   lastHumanAt: string | null;
+  lastHumanMessageId: string | null;
   lastHumanAuthorName: string | null;
   lastHumanSnippet: string | null;
   lastBotAt: string | null;
@@ -343,6 +344,7 @@ function buildEligibleChannels(runtime: InitiativeRuntime, settings: Record<stri
       .reverse();
     const lastHourCutoff = Date.now() - 60 * 60_000;
     let lastHumanAt: string | null = null;
+    let lastHumanMessageId: string | null = null;
     let lastHumanAuthorName: string | null = null;
     let lastHumanSnippet: string | null = null;
     let lastBotAt: string | null = null;
@@ -358,6 +360,7 @@ function buildEligibleChannels(runtime: InitiativeRuntime, settings: Record<stri
       }
       if (!isBot && !lastHumanAt && createdAtText) {
         lastHumanAt = createdAtText;
+        lastHumanMessageId = String(row?.message_id || "").trim() || null;
         lastHumanAuthorName = String(row?.author_name || "").trim() || null;
         lastHumanSnippet = content.slice(0, 180) || null;
       }
@@ -374,6 +377,7 @@ function buildEligibleChannels(runtime: InitiativeRuntime, settings: Record<stri
       recentMessages,
       recentHumanMessageCount,
       lastHumanAt,
+      lastHumanMessageId,
       lastHumanAuthorName,
       lastHumanSnippet,
       lastBotAt

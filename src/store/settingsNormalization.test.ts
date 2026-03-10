@@ -308,6 +308,8 @@ test("normalizeSettings includes the canonical default bot aliases", () => {
   assert.equal(normalized.identity.botNameAliases.includes("link"), true);
   assert.equal(normalized.identity.botNameAliases.includes("crank"), true);
   assert.equal(normalized.identity.botNameAliases.includes("cranker"), true);
+  assert.equal(normalized.identity.botNameAliases.includes("blankie"), true);
+  assert.equal(normalized.identity.botNameAliases.includes("plank"), true);
 });
 
 test("normalizeSettings preserves explicit file_wav transcription mode", () => {

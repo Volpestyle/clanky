@@ -308,6 +308,7 @@ function formatPromptRelativeAge(rawValue) {
 }
 
 type InitiativePromptMessage = {
+  message_id?: string;
   author_name?: string;
   authorName?: string;
   content?: string;
@@ -318,12 +319,21 @@ type InitiativePromptChannel = {
   channelName?: string;
   name?: string;
   lastHumanAt?: string | null;
+  lastHumanMessageId?: string | null;
   lastHumanAuthorName?: string | null;
   lastHumanSnippet?: string | null;
   lastBotAt?: string | null;
   recentHumanMessageCount?: number;
   recentMessages?: InitiativePromptMessage[];
 };
+
+function getInitiativeHistorySourceTag(messageId: unknown) {
+  const normalizedMessageId = String(messageId || "").trim();
+  if (normalizedMessageId.startsWith("voice-") || normalizedMessageId.startsWith("voice-assistant-")) {
+    return "vc";
+  }
+  return "text";
+}
 
 export function formatInitiativeChannelSummaries(channels) {
   const rows = (Array.isArray(channels) ? channels : []) as InitiativePromptChannel[];
@@ -334,10 +344,12 @@ export function formatInitiativeChannelSummaries(channels) {
       const channelName = String(channel?.channelName || channel?.name || "channel").trim() || "channel";
       const lastHumanSnippet = String(channel?.lastHumanSnippet || "").trim();
       const lastHumanAt = String(channel?.lastHumanAt || "").trim();
+      const lastHumanSourceTag = getInitiativeHistorySourceTag(channel?.lastHumanMessageId);
+      const lastHumanSourceLabel = lastHumanSourceTag === "vc" ? " [vc transcript]" : "";
       const lastHumanAuthorName = String(channel?.lastHumanAuthorName || "").trim();
       const lastHumanWho = lastHumanAuthorName ? ` (user: ${lastHumanAuthorName})` : "";
       const lastHumanLine = lastHumanSnippet && lastHumanAt
-        ? `Last human message: ${formatPromptRelativeAge(lastHumanAt)} — "${lastHumanSnippet}"${lastHumanWho}`
+        ? `Last human message: ${formatPromptRelativeAge(lastHumanAt)}${lastHumanSourceLabel} — "${lastHumanSnippet}"${lastHumanWho}`
         : "Last human message: quiet";
       const lastBotAt = String(channel?.lastBotAt || "").trim();
       const botLine = lastBotAt
@@ -355,11 +367,12 @@ export function formatInitiativeChannelSummaries(channels) {
         ? recentMessages
           .slice(-5)
           .map((message) => {
+            const sourceTag = getInitiativeHistorySourceTag(message?.message_id);
             const author = String(message?.author_name || message?.authorName || "unknown").trim() || "unknown";
             const text = stripEmojiForPrompt(String(message?.content || ""))
               .replace(/\s+/g, " ")
               .trim() || "(empty)";
-            return `  - ${author}: ${text}`;
+            return `  - [${sourceTag}] ${author}: ${text}`;
           })
           .join("\n")
         : "  - (no recent messages captured)";
@@ -369,7 +382,7 @@ export function formatInitiativeChannelSummaries(channels) {
         `  ${lastHumanLine}`,
         `  ${botLine}`,
         `  ${activityLine}`,
-        "  Recent messages:",
+        "  Recent messages ([text]=typed in channel, [vc]=transcript from linked voice chat):",
         messageLines
       ].join("\n");
     })

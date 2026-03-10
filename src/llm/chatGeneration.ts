@@ -205,6 +205,7 @@ type OpenAiResponsesOutputItem = {
 };
 
 type OpenAiResponsesResponseLike = {
+  status?: string;
   output_text?: string;
   output?: OpenAiResponsesOutputItem[];
   usage?: {
@@ -430,6 +431,7 @@ export async function callOpenAiResponses(
     text,
     toolCalls,
     rawContent: responseWithOutput.output || null,
+    stopReason: String(responseWithOutput.status || "").trim() || undefined,
     usage: extractOpenAiResponseUsage(response)
   };
 }
@@ -484,6 +486,7 @@ export async function callOpenAiResponsesStreaming(
     text: extractOpenAiResponseText(finalResponse),
     toolCalls: extractOpenAiToolCalls(finalResponse),
     rawContent: finalResponse.output || null,
+    stopReason: String(finalResponse.status || "").trim() || undefined,
     usage: extractOpenAiResponseUsage(finalResponse)
   };
   if (typeof callbacks.onContentBlockComplete === "function") {
@@ -571,6 +574,7 @@ export async function callXaiChatCompletions(
   } as Parameters<typeof deps.xai.chat.completions.create>[0];
   const response = await deps.xai.chat.completions.create(requestBody as never, signal ? { signal } : undefined) as {
     choices?: Array<{
+      finish_reason?: string | null;
       message?: {
         content?: string;
         tool_calls?: Array<{
@@ -600,6 +604,7 @@ export async function callXaiChatCompletions(
     text,
     toolCalls,
     rawContent: toolCalls.length ? choice?.message : null,
+    stopReason: String(choice?.finish_reason || "").trim() || undefined,
     usage: {
       inputTokens: Number(response.usage?.prompt_tokens || 0),
       outputTokens: Number(response.usage?.completion_tokens || 0),

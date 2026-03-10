@@ -15,6 +15,7 @@ Use these references to click or type into elements.
 When the task depends on visual appearance, layout, or non-text UI details, use 'browser_screenshot'. Screenshots are forwarded back to the parent brain for visual inspection.
 
 When you have found the answer or completed the objective, communicate it clearly in your final response.
+Use 'browser_close' only when you are fully done browsing and want to end this browser session.
 Do NOT use tools indefinitely. If you are stuck or have the answer, stop using tools and explain what you found.`;
 
 interface BrowseAgentTrace {
@@ -265,6 +266,7 @@ export class BrowserAgentSession implements SubAgentSession {
   private stepCount: number;
   private totalCostUsd: number;
   private browserClosed: boolean;
+  private completedByAgent: boolean;
   private activeAbortController: AbortController | null;
 
   constructor(options: BrowserAgentSessionOptions) {
@@ -294,6 +296,7 @@ export class BrowserAgentSession implements SubAgentSession {
     this.stepCount = 0;
     this.totalCostUsd = 0;
     this.browserClosed = false;
+    this.completedByAgent = false;
     this.activeAbortController = null;
   }
 
@@ -306,12 +309,13 @@ export class BrowserAgentSession implements SubAgentSession {
   }
 
   async runTurn(input: string, options: { signal?: AbortSignal } = {}): Promise<SubAgentTurnResult> {
-    if (this.status === "cancelled" || this.status === "error") {
+    if (this.status === "cancelled" || this.status === "error" || this.status === "completed") {
       return {
         text: `Session is ${this.status} and cannot accept new turns.`,
         costUsd: 0,
         isError: true,
         errorMessage: `Session ${this.status}`,
+        sessionCompleted: this.status === "completed",
         usage: { ...EMPTY_USAGE }
       };
     }
@@ -328,12 +332,17 @@ export class BrowserAgentSession implements SubAgentSession {
     const turnStartMs = Date.now();
     const turnUsage = { ...EMPTY_USAGE };
     const turnImageInputs: ImageInput[] = [];
+    let allowPostCloseFinalizationTurn = false;
 
     try {
       // Run the tool loop until we get text without tool calls (yield point)
-      while (this.stepCount < this.maxSteps) {
+      while (this.stepCount < this.maxSteps || allowPostCloseFinalizationTurn) {
         throwIfAborted(turnSignal, "Browse agent session cancelled");
-        this.stepCount++;
+        if (allowPostCloseFinalizationTurn) {
+          allowPostCloseFinalizationTurn = false;
+        } else {
+          this.stepCount++;
+        }
 
         const response = await this.llm.chatWithTools({
           provider: this.provider,
@@ -365,7 +374,9 @@ export class BrowserAgentSession implements SubAgentSession {
             .filter(Boolean)
             .join("\n\n") || "The agent paused without returning text.";
 
-          this.status = "idle";
+          const sessionCompleted = this.browserClosed;
+          this.completedByAgent = sessionCompleted;
+          this.status = sessionCompleted ? "completed" : "idle";
           this.lastUsedAt = Date.now();
 
           this.store.logAction({
@@ -391,12 +402,33 @@ export class BrowserAgentSession implements SubAgentSession {
             imageInputs: turnImageInputs,
             isError: false,
             errorMessage: "",
+            sessionCompleted,
+            usage: turnUsage
+          };
+        }
+
+        if (this.browserClosed) {
+          const textBlocks = response.content.filter((block) => block.type === "text");
+          const text = textBlocks
+            .map((block) => block.text.trim())
+            .filter(Boolean)
+            .join("\n\n");
+          this.status = "idle";
+          this.lastUsedAt = Date.now();
+          return {
+            text: text || "Browser session closed before the agent produced a final answer.",
+            costUsd: turnCostUsd,
+            imageInputs: turnImageInputs,
+            isError: !text,
+            errorMessage: text ? "" : "Browser session closed before final answer",
+            sessionCompleted: false,
             usage: turnUsage
           };
         }
 
         // Execute tool calls
         const toolResults: ToolLoopContentBlock[] = [];
+        let browserClosedThisResponse = false;
         for (const toolCall of toolCalls) {
           this.store.logAction({
             kind: "browser_tool_step",
@@ -421,6 +453,11 @@ export class BrowserAgentSession implements SubAgentSession {
             turnSignal
           );
 
+          if (toolCall.name === "browser_close" && !result.isError) {
+            this.browserClosed = true;
+            browserClosedThisResponse = true;
+          }
+
           appendUniqueImageInputs(turnImageInputs, result.imageInputs);
 
           toolResults.push({
@@ -429,9 +466,14 @@ export class BrowserAgentSession implements SubAgentSession {
             content: result.text,
             isError: Boolean(result.isError)
           });
+
+          if (browserClosedThisResponse) break;
         }
 
         this.messages.push({ role: "user", content: toolResults });
+        if (browserClosedThisResponse) {
+          allowPostCloseFinalizationTurn = true;
+        }
       }
 
       // Hit step limit
@@ -444,6 +486,7 @@ export class BrowserAgentSession implements SubAgentSession {
         imageInputs: turnImageInputs,
         isError: false,
         errorMessage: "",
+        sessionCompleted: false,
         usage: turnUsage
       };
     } catch (error) {
@@ -461,6 +504,7 @@ export class BrowserAgentSession implements SubAgentSession {
         costUsd: turnCostUsd,
         isError: true,
         errorMessage: message,
+        sessionCompleted: false,
         usage: turnUsage
       };
     } finally {
@@ -480,7 +524,7 @@ export class BrowserAgentSession implements SubAgentSession {
   }
 
   close(): void {
-    if (this.status !== "cancelled") {
+    if (this.status === "idle" || this.status === "running") {
       this.status = "cancelled";
     }
     if (!this.browserClosed) {

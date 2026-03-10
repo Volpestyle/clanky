@@ -75,6 +75,7 @@ When the gates pass, the runtime builds a prompt from:
 - behavior guidance and relevant behavioral memory
 
 Channel summaries are built from recent stored messages, recent human activity, and time since the bot last posted.
+Stored channel history can include linked voice-transcript rows alongside normal typed chat. The prompt labels those lines as `[vc]` so the model can use them as room context while still understanding that initiative delivery is a normal text-channel post.
 
 Discovery context is fetched from `src/services/discovery.ts` and exposed as optional feed material. The model may ignore all of it.
 
@@ -157,6 +158,8 @@ The shipped initiative prompt in `src/prompts/promptText.ts` is structured like 
 ```
 
 Behavior guidance comes from memory-backed `guidance` and `behavioral` facts.
+
+The prompt explicitly frames initiative as a text-channel action. Voice-derived transcript lines may still appear in channel summaries when they were persisted into the linked text channel, but they are context only, not a separate voice-delivery path.
 
 ## Settings Reference
 

@@ -131,7 +131,7 @@ export const BROWSER_AGENT_TOOL_DEFINITIONS: Array<{
     },
     {
       name: "browser_close",
-      description: "Force closes the browser session.",
+      description: "Ends the current browser session. Use this only when you are fully done browsing for this task.",
       input_schema: {
         type: "object",
         properties: {}

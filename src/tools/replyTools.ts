@@ -57,6 +57,16 @@ function appendBrowserScreenshotNote(content: string, imageInputs: ImageInput[] 
   return normalizedContent ? `${normalizedContent}\n\n${note}` : note;
 }
 
+function buildSessionNote(sessionId: string, sessionCompleted?: boolean) {
+  if (!sessionId || sessionCompleted) return "";
+  return `\n\n[session_id: ${sessionId}]`;
+}
+
+function maybeRemoveCompletedSession(manager: Pick<SubAgentSessionManager, "remove">, sessionId: string, sessionCompleted?: boolean) {
+  if (!sessionCompleted) return;
+  manager.remove(sessionId);
+}
+
 interface ReplyToolDefinition {
   name: string;
   description: string;
@@ -650,7 +660,8 @@ async function executeBrowserBrowse(
     }
     try {
       const turnResult = await session.runTurn(query, { signal: context.signal });
-      const sessionNote = `\n\n[session_id: ${session.id}]`;
+      maybeRemoveCompletedSession(runtime.subAgentSessions.manager, session.id, turnResult.sessionCompleted);
+      const sessionNote = buildSessionNote(session.id, turnResult.sessionCompleted);
       if (turnResult.isError) {
         return { content: `Browser browse failed: ${turnResult.errorMessage}${sessionNote}`, isError: true };
       }
@@ -680,7 +691,8 @@ async function executeBrowserBrowse(
       runtime.subAgentSessions.manager.register(session);
       try {
         const turnResult = await session.runTurn(query, { signal: context.signal });
-        const sessionNote = `\n\n[session_id: ${session.id}]`;
+        maybeRemoveCompletedSession(runtime.subAgentSessions.manager, session.id, turnResult.sessionCompleted);
+        const sessionNote = buildSessionNote(session.id, turnResult.sessionCompleted);
         if (turnResult.isError) {
           return { content: `Browser browse failed: ${turnResult.errorMessage}${sessionNote}`, isError: true };
         }

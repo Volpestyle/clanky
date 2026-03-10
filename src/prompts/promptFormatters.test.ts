@@ -49,6 +49,7 @@ test("formatInitiativeChannelSummaries matches the unified initiative channel su
       recentHumanMessageCount: 3,
       recentMessages: [
         {
+          message_id: "discord-1",
           author_name: "james",
           content: "anyone want to play tonight?"
         }
@@ -70,6 +71,39 @@ test("formatInitiativeChannelSummaries matches the unified initiative channel su
   assert.equal(rendered.includes("#tech (text)"), true);
   assert.equal(rendered.includes("Last human message: quiet"), true);
   assert.equal(rendered.includes("Recent activity: idle"), true);
+  assert.equal(
+    rendered.includes("Recent messages ([text]=typed in channel, [vc]=transcript from linked voice chat):"),
+    true
+  );
+  assert.equal(rendered.includes("  - [text] james: anyone want to play tonight?"), true);
+});
+
+test("formatInitiativeChannelSummaries labels linked voice transcript context", () => {
+  const now = Date.now();
+  const rendered = formatInitiativeChannelSummaries([
+    {
+      channelId: "general-1",
+      channelName: "general",
+      lastHumanAt: new Date(now - 3 * 60_000).toISOString(),
+      lastHumanMessageId: "voice-guild-1-abc123",
+      lastHumanAuthorName: "vuhlp",
+      lastHumanSnippet: "which sound effect you want though?",
+      recentHumanMessageCount: 2,
+      recentMessages: [
+        {
+          message_id: "voice-guild-1-abc123",
+          author_name: "vuhlp",
+          content: "which sound effect you want though?"
+        }
+      ]
+    }
+  ]);
+
+  assert.equal(
+    rendered.includes('Last human message: 3m ago [vc transcript] — "which sound effect you want though?" (user: vuhlp)'),
+    true
+  );
+  assert.equal(rendered.includes("  - [vc] vuhlp: which sound effect you want though?"), true);
 });
 
 test("formatInitiativeSourcePerformance includes the spec wording for source stats", () => {

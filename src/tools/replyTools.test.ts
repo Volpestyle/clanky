@@ -1,5 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { SubAgentSessionManager } from "../agents/subAgentSession.ts";
 import { buildReplyToolSet, executeReplyTool } from "./replyTools.ts";
 import { MUSIC_PLAY_SCHEMA } from "./sharedToolSchemas.ts";
 
@@ -323,6 +324,72 @@ test("executeReplyTool delegates browser_browse to runtime", async () => {
     source: "reply_message",
     signal: undefined
   }]);
+});
+
+test("executeReplyTool omits session_id when a browser session completes itself", async () => {
+  const manager = new SubAgentSessionManager();
+  const completedSession = {
+    id: "browser:completed:1",
+    type: "browser" as const,
+    createdAt: Date.now(),
+    ownerUserId: "user-1",
+    lastUsedAt: Date.now(),
+    status: "idle" as const,
+    async runTurn() {
+      this.status = "completed";
+      return {
+        text: "Finished browsing.",
+        costUsd: 0,
+        isError: false,
+        errorMessage: "",
+        sessionCompleted: true,
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 0
+        }
+      };
+    },
+    cancel() {
+      this.status = "cancelled";
+    },
+    close() {
+      if (this.status === "idle" || this.status === "running") {
+        this.status = "cancelled";
+      }
+    }
+  };
+
+  const result = await executeReplyTool(
+    "browser_browse",
+    { query: "finish and close" },
+    {
+      subAgentSessions: {
+        manager,
+        createCodeSession() {
+          return null;
+        },
+        createBrowserSession() {
+          return completedSession;
+        }
+      }
+    },
+    {
+      settings: {},
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      sourceMessageId: "msg-1",
+      sourceText: "finish this",
+      trace: { source: "reply_message" }
+    }
+  );
+
+  assert.equal(result.isError, undefined);
+  assert.equal(result.content.includes("[session_id:"), false);
+  assert.match(result.content, /Finished browsing\./);
+  assert.equal(manager.has(completedSession.id), false);
 });
 
 test("executeReplyTool fails music_play with empty query", async () => {

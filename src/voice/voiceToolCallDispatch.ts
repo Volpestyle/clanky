@@ -22,12 +22,73 @@ import type {
   VoiceRealtimeToolDescriptor,
   VoiceRealtimeToolSettings,
   VoiceSession,
+  VoiceSessionSoundboardState,
   VoiceToolRuntimeSessionLike
 } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
 
 type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
+
+function hasSoundboardSessionContext(
+  session: ToolRuntimeSession | null | undefined
+): session is ToolRuntimeSession & {
+  ending: boolean;
+  mode: string;
+  guildId: string;
+  textChannelId: string;
+  id: string;
+} {
+  return Boolean(
+    session &&
+      typeof session.ending === "boolean" &&
+      typeof session.mode === "string" &&
+      typeof session.guildId === "string" &&
+      typeof session.textChannelId === "string" &&
+      typeof session.id === "string"
+  );
+}
+
+function ensureSoundboardState(session: ToolRuntimeSession): VoiceSessionSoundboardState {
+  const existing = session.soundboard;
+  if (existing) return existing;
+  const nextState: VoiceSessionSoundboardState = {
+    playCount: 0,
+    lastPlayedAt: 0,
+    catalogCandidates: [],
+    catalogFetchedAt: 0,
+    lastDirectiveKey: "",
+    lastDirectiveAt: 0
+  };
+  session.soundboard = nextState;
+  return nextState;
+}
+
+function resolveSoundboardDirectiveSession(
+  session: ToolRuntimeSession | null | undefined,
+  settings: VoiceRealtimeToolSettings | null | undefined
+): (ToolRuntimeSession & {
+  ending: boolean;
+  mode: string;
+  guildId: string;
+  textChannelId: string;
+  id: string;
+  settingsSnapshot: VoiceRealtimeToolSettings | null;
+  soundboard: VoiceSessionSoundboardState;
+}) | null {
+  if (!hasSoundboardSessionContext(session)) {
+    return null;
+  }
+
+  const settingsSnapshot = session.settingsSnapshot ?? settings ?? null;
+  const soundboard = ensureSoundboardState(session);
+  session.settingsSnapshot = settingsSnapshot;
+
+  return Object.assign(session, {
+    settingsSnapshot,
+    soundboard
+  });
+}
 
 type LocalVoiceToolCallOptions = {
   session?: ToolRuntimeSession | null;
@@ -129,7 +190,8 @@ async function executeVoicePlaySoundboardTool(
     args?: VoiceToolCallArgs;
   }
 ) {
-  if (!session || session.ending) {
+  const soundboardSession = resolveSoundboardDirectiveSession(session, settings);
+  if (!soundboardSession || soundboardSession.ending) {
     return { ok: false, played: [], error: "soundboard_session_unavailable" };
   }
 
@@ -143,16 +205,16 @@ async function executeVoicePlaySoundboardTool(
 
   const played: string[] = [];
   for (const requestedRef of normalizedRefs) {
-    const previousPlayCount = Math.max(0, Number(session.soundboard?.playCount || 0));
+    const previousPlayCount = Math.max(0, Number(soundboardSession.soundboard.playCount || 0));
     await maybeTriggerAssistantDirectedSoundboard(manager, {
-      session,
+      session: soundboardSession,
       settings,
       userId: manager.client.user?.id || null,
       transcript: "",
       requestedRef,
       source: "voice_realtime_tool_play_soundboard"
     });
-    const nextPlayCount = Math.max(0, Number(session.soundboard?.playCount || 0));
+    const nextPlayCount = Math.max(0, Number(soundboardSession.soundboard.playCount || 0));
     if (nextPlayCount > previousPlayCount) {
       played.push(requestedRef);
     }

@@ -242,6 +242,8 @@ export interface VoiceReplyRuntime extends BotContext {
   readonly search: WebSearchService;
   readonly voiceSessionManager?: {
     getSessionById?: (sessionId: string | null | undefined) => {
+      mode?: string | null;
+      realtimeToolOwnership?: "transport_only" | "provider_native" | null;
       durableContext?: VoiceSessionDurableContextEntry[];
       inFlightAcceptedBrainTurn?: InFlightAcceptedBrainTurn | null;
     } | null;
