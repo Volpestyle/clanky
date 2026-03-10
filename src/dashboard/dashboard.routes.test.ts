@@ -649,8 +649,7 @@ test("dashboard preset defaults preview settings without mutating saved state", 
     assert.equal(bot.appliedSettings.length, 0);
     assert.equal(json._resolved.agentStack.voiceAdmissionPolicy.mode, "generation_decides");
     assert.equal(json.agentStack.preset, "claude_oauth");
-    assert.equal(json._resolved.voiceAdmissionClassifierBinding.provider, "claude-oauth");
-    assert.equal(json._resolved.voiceAdmissionClassifierBinding.model, "claude-sonnet-4-6");
+    assert.equal(json._resolved.voiceAdmissionClassifierBinding, null);
     assert.equal(json._resolved.voiceGenerationBinding.provider, "claude-oauth");
     assert.equal(json._resolved.voiceGenerationBinding.model, "claude-sonnet-4-6");
 
@@ -682,8 +681,7 @@ test("dashboard fresh settings default claude_oauth brain to claude sonnet", asy
     assert.equal(response.status, 200);
     const json = await response.json();
     assert.equal(json.agentStack.preset, "claude_oauth");
-    assert.equal(json._resolved.voiceAdmissionClassifierBinding.provider, "claude-oauth");
-    assert.equal(json._resolved.voiceAdmissionClassifierBinding.model, "claude-sonnet-4-6");
+    assert.equal(json._resolved.voiceAdmissionClassifierBinding, null);
     assert.equal(json._resolved.voiceGenerationBinding.provider, "claude-oauth");
     assert.equal(json._resolved.voiceGenerationBinding.model, "claude-sonnet-4-6");
     assert.equal(json.agentStack.runtimeConfig.voice.generation.mode, "dedicated_model");
@@ -705,12 +703,21 @@ test("dashboard settings save clears the memory LLM override when inherit is sel
       }
     });
 
+    const beforeResponse = await fetch(`${baseUrl}/api/settings`);
+    assert.equal(beforeResponse.status, 200);
+    const beforeJson = await beforeResponse.json();
+    const expectedUpdatedAt = String(beforeJson._meta?.updatedAt || "");
+    assert.equal(Boolean(expectedUpdatedAt), true);
+
     const response = await fetch(`${baseUrl}/api/settings`, {
       method: "PUT",
       headers: {
         "content-type": "application/json"
       },
       body: JSON.stringify({
+        _meta: {
+          expectedUpdatedAt
+        },
         memoryLlm: {}
       })
     });
@@ -721,6 +728,152 @@ test("dashboard settings save clears the memory LLM override when inherit is sel
     assert.deepEqual(json.memoryLlm, {});
     assert.equal(json._resolved?.memoryBinding?.provider, json._resolved?.orchestrator?.provider);
     assert.equal(json._resolved?.memoryBinding?.model, json._resolved?.orchestrator?.model);
+  });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard settings save rejects requests from outdated clients that omit settings version metadata", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
+    store.patchSettings({
+      agentStack: {
+        overrides: {
+          voiceAdmissionClassifier: {
+            mode: "dedicated_model",
+            model: {
+              provider: "claude-oauth",
+              model: "claude-sonnet-4-5"
+            }
+          }
+        }
+      },
+      voice: {
+        admission: {
+          mode: "adaptive"
+        },
+        conversationPolicy: {
+          replyPath: "bridge"
+        }
+      }
+    });
+
+    const response = await fetch(`${baseUrl}/api/settings`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        agentStack: {
+          overrides: {
+            voiceAdmissionClassifier: {
+              mode: "dedicated_model",
+              model: {
+                provider: "claude-oauth",
+                model: "claude-sonnet-4-6"
+              }
+            }
+          }
+        }
+      })
+    });
+
+    assert.equal(response.status, 409);
+    const json = await response.json();
+    assert.equal(json.error, "settings_version_required");
+    assert.equal(json._resolved.voiceAdmissionClassifierBinding.model, "claude-sonnet-4-5");
+    assert.equal(
+      store.getSettings().agentStack.overrides?.voiceAdmissionClassifier?.model?.model,
+      "claude-sonnet-4-5"
+    );
+  });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard settings save rejects stale form snapshots instead of overwriting newer values", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
+    store.patchSettings({
+      voice: {
+        admission: {
+          mode: "adaptive"
+        },
+        conversationPolicy: {
+          replyPath: "bridge"
+        }
+      }
+    });
+
+    const initialResponse = await fetch(`${baseUrl}/api/settings`);
+    assert.equal(initialResponse.status, 200);
+    const initialJson = await initialResponse.json();
+    const initialUpdatedAt = String(initialJson._meta?.updatedAt || "");
+    assert.equal(Boolean(initialUpdatedAt), true);
+
+    const firstSaveResponse = await fetch(`${baseUrl}/api/settings`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        _meta: {
+          expectedUpdatedAt: initialUpdatedAt
+        },
+        agentStack: {
+          overrides: {
+            voiceAdmissionClassifier: {
+              mode: "dedicated_model",
+              model: {
+                provider: "claude-oauth",
+                model: "claude-sonnet-4-5"
+              }
+            }
+          }
+        }
+      })
+    });
+
+    assert.equal(firstSaveResponse.status, 200);
+    const firstSaveJson = await firstSaveResponse.json();
+    assert.equal(firstSaveJson._resolved.voiceAdmissionClassifierBinding.model, "claude-sonnet-4-5");
+    const firstSaveUpdatedAt = String(firstSaveJson._meta?.updatedAt || "");
+    assert.equal(Boolean(firstSaveUpdatedAt), true);
+    assert.notEqual(firstSaveUpdatedAt, initialUpdatedAt);
+
+    const staleSaveResponse = await fetch(`${baseUrl}/api/settings`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        _meta: {
+          expectedUpdatedAt: initialUpdatedAt
+        },
+        agentStack: {
+          overrides: {
+            voiceAdmissionClassifier: {
+              mode: "dedicated_model",
+              model: {
+                provider: "claude-oauth",
+                model: "claude-sonnet-4-6"
+              }
+            }
+          }
+        }
+      })
+    });
+
+    assert.equal(staleSaveResponse.status, 409);
+    const staleSaveJson = await staleSaveResponse.json();
+    assert.equal(staleSaveJson.error, "settings_conflict");
+    assert.equal(staleSaveJson._resolved.voiceAdmissionClassifierBinding.model, "claude-sonnet-4-5");
+    assert.equal(
+      store.getSettings().agentStack.overrides?.voiceAdmissionClassifier?.model?.model,
+      "claude-sonnet-4-5"
+    );
   });
 
   if (result?.skipped) {

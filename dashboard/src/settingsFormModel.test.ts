@@ -642,6 +642,89 @@ test("settingsFormModel supports the claude_oauth preset (migrated from claude_o
   assert.equal(patch.agentStack.preset, "claude_oauth");
 });
 
+test("settingsFormModel preserves adaptive admission defaults for openai_native_realtime", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({
+    agentStack: {
+      preset: "openai_native_realtime"
+    }
+  })));
+
+  assert.equal(form.stackPreset, "openai_native_realtime");
+  assert.equal(form.voiceReplyPath, "bridge");
+  assert.equal(form.voiceReplyDecisionRealtimeAdmissionMode, "adaptive");
+  assert.equal(form.voiceReplyDecisionLlmProvider, "openai");
+  assert.equal(form.voiceReplyDecisionLlmModel, "gpt-5-mini");
+
+  const patch = formToSettingsPatch(form);
+  assert.equal(patch.voice.admission.mode, "adaptive");
+});
+
+test("settingsFormModel persists voice classifier overrides even when advanced overrides are off", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({
+    agentStack: {
+      preset: "claude_oauth"
+    },
+    voice: {
+      admission: {
+        mode: "classifier_gate"
+      }
+    }
+  })));
+
+  form.stackAdvancedOverridesEnabled = false;
+  form.voiceReplyDecisionLlmProvider = "anthropic";
+  form.voiceReplyDecisionLlmModel = "claude-haiku-4-5";
+
+  const patch = formToSettingsPatch(form);
+  assert.equal(patch.voice.admission.mode, "classifier_gate");
+  assert.deepEqual(patch.agentStack.overrides.voiceAdmissionClassifier, {
+    mode: "dedicated_model",
+    model: {
+      provider: "anthropic",
+      model: "claude-haiku-4-5"
+    }
+  });
+});
+
+test("settingsFormModel persists classifier selections even when they match the preset fallback", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({
+    agentStack: {
+      preset: "claude_oauth",
+      overrides: {
+        voiceAdmissionClassifier: {
+          mode: "dedicated_model",
+          model: {
+            provider: "claude-oauth",
+            model: "claude-sonnet-4-5"
+          }
+        }
+      }
+    },
+    voice: {
+      admission: {
+        mode: "adaptive"
+      },
+      conversationPolicy: {
+        replyPath: "bridge"
+      }
+    }
+  })));
+
+  form.stackAdvancedOverridesEnabled = false;
+  form.voiceReplyDecisionLlmProvider = "claude-oauth";
+  form.voiceReplyDecisionLlmModel = "claude-sonnet-4-6";
+
+  const patch = formToSettingsPatch(form);
+  assert.equal(patch.voice.admission.mode, "adaptive");
+  assert.deepEqual(patch.agentStack.overrides.voiceAdmissionClassifier, {
+    mode: "dedicated_model",
+    model: {
+      provider: "claude-oauth",
+      model: "claude-sonnet-4-6"
+    }
+  });
+});
+
 test("settingsFormModel uses canonical voice fallbacks when legacy form fields are blank", () => {
   const form = settingsToForm(withResolved(normalizeSettings({})));
   form.voiceReplyPath = "";
@@ -675,7 +758,7 @@ test("settingsFormModel forces bridge replies onto realtime output", () => {
   assert.equal(patch.voice.conversationPolicy.ttsMode, "realtime");
 });
 
-test("settingsFormModel canonicalizes legacy voice admission aliases for the dashboard", () => {
+test("settingsFormModel preserves adaptive voice admission and canonicalizes legacy aliases", () => {
   const form = settingsToForm(withResolved(normalizeSettings({
     voice: {
       admission: {
@@ -684,7 +767,7 @@ test("settingsFormModel canonicalizes legacy voice admission aliases for the das
     }
   })));
 
-  assert.equal(form.voiceReplyDecisionRealtimeAdmissionMode, "generation_decides");
+  assert.equal(form.voiceReplyDecisionRealtimeAdmissionMode, "adaptive");
 
   const patch = formToSettingsPatch(form);
   assert.equal(patch.voice.admission.mode, "generation_decides");

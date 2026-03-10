@@ -17,6 +17,12 @@ interface SettingsStore {
 
 interface SettingsValueRow {
   value: string;
+  updated_at?: string;
+}
+
+export interface RuntimeSettingsRecord {
+  settings: RuntimeSettings;
+  updatedAt: string;
 }
 
 const CANONICAL_DEFAULT_SETTINGS = normalizeSettings({});
@@ -46,6 +52,17 @@ export function getSettings(store: SettingsStore) {
 const row = store.db.prepare<SettingsValueRow, [string]>("SELECT value FROM settings WHERE key = ?").get(SETTINGS_KEY);
 const parsed = safeJsonParse(row?.value, DEFAULT_SETTINGS);
 return normalizeSettings(parsed);
+}
+
+export function getSettingsRecord(store: SettingsStore): RuntimeSettingsRecord {
+const row = store.db
+  .prepare<SettingsValueRow, [string]>("SELECT value, updated_at FROM settings WHERE key = ?")
+  .get(SETTINGS_KEY);
+const parsed = safeJsonParse(row?.value, DEFAULT_SETTINGS);
+return {
+  settings: normalizeSettings(parsed),
+  updatedAt: String(row?.updated_at || "")
+};
 }
 
 export function setSettings(store: SettingsStore, next) {

@@ -110,16 +110,30 @@ export default function App() {
   const llmModels = usePolling(() => api("/api/llm/models"), 0);
   const reloadMemory = memory.reload;
   const reloadSettings = settings.reload;
+  const settingsUpdatedAt = String(settings.data?._meta?.updatedAt || "").trim();
 
   const handleSettingsSave = useCallback(async (patch) => {
     try {
-      await api("/api/settings", { method: "PUT", body: patch });
-      reloadSettings();
+      const requestBody = settingsUpdatedAt
+        ? {
+            ...patch,
+            _meta: {
+              expectedUpdatedAt: settingsUpdatedAt
+            }
+          }
+        : patch;
+      await api("/api/settings", { method: "PUT", body: requestBody });
+      await reloadSettings();
       notify("Settings saved");
     } catch (err) {
+      if (String(err?.message || "").includes("API 409:")) {
+        await reloadSettings();
+        notify("Settings changed elsewhere. Reloaded the latest values.", "error");
+        return;
+      }
       notify(err.message, "error");
     }
-  }, [reloadSettings, notify]);
+  }, [notify, reloadSettings, settingsUpdatedAt]);
 
   const handleMemoryRefresh = useCallback(async () => {
     try {

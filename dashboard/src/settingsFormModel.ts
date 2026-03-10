@@ -759,6 +759,18 @@ export function applyStackPresetDefaults(form: SettingsForm, defaults: Record<st
   };
 }
 
+function normalizeVoiceAdmissionModeForSettings(
+  value: unknown,
+  replyPath: unknown
+): "generation_decides" | "classifier_gate" | "adaptive" {
+  const normalizedReplyPath = String(replyPath || "brain").trim().toLowerCase();
+  if (normalizedReplyPath === "bridge") {
+    return "adaptive";
+  }
+  const normalizedMode = normalizeVoiceAdmissionModeForDashboard(value);
+  return normalizedMode === "adaptive" ? "generation_decides" : normalizedMode;
+}
+
 export function getCodeAgentValidationError(form: SettingsForm): string {
   if (!form.stackAdvancedOverridesEnabled || !form.codeAgentEnabled) {
     return "";
@@ -800,6 +812,29 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
     String(form.voiceTtsMode || "realtime").trim().toLowerCase() === "api"
       ? "api"
       : "realtime";
+  const normalizedVoiceAdmissionMode = normalizeVoiceAdmissionModeForSettings(
+    form.voiceReplyDecisionRealtimeAdmissionMode || "generation_decides",
+    normalizedVoiceReplyPath
+  );
+  const presetClassifierFallback =
+    getPresetClassifierFallback(String(form.stackPreset || "claude_oauth").trim()) || {
+      provider: String(form.provider || "").trim(),
+      model: String(form.model || "").trim()
+    };
+  const normalizedVoiceReplyDecisionProvider =
+    String(form.voiceReplyDecisionLlmProvider || presetClassifierFallback.provider || "").trim();
+  const normalizedVoiceReplyDecisionModel =
+    String(form.voiceReplyDecisionLlmModel || presetClassifierFallback.model || "").trim();
+  const voiceAdmissionClassifierOverride =
+    normalizedVoiceAdmissionMode !== "generation_decides"
+      ? {
+          mode: "dedicated_model" as const,
+          model: {
+            provider: normalizedVoiceReplyDecisionProvider,
+            model: normalizedVoiceReplyDecisionModel
+          }
+        }
+      : undefined;
   return {
     identity: {
       botName: form.botName.trim(),
@@ -886,35 +921,33 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
     agentStack: {
       preset: String(form.stackPreset || "claude_oauth").trim(),
       advancedOverridesEnabled,
-      overrides: advancedOverridesEnabled ? {
-        orchestrator: {
-          provider: form.provider,
-          model: form.model.trim()
-        },
-        devTeam: {
-          roles: {
-            design: selectedCodeAgentRoles[0],
-            implementation: selectedCodeAgentRoles[1],
-            review: selectedCodeAgentRoles[2],
-            research: selectedCodeAgentRoles[3]
-          },
-          codingWorkers:
-            normalizedCodeAgentProvider === "codex"
-              ? ["codex"]
-              : normalizedCodeAgentProvider === "codex-cli"
-                ? ["codex_cli"]
-                : normalizedCodeAgentProvider === "claude-code"
-                ? ["claude_code"]
-                : undefined
-        },
-        voiceAdmissionClassifier: {
-          mode: "dedicated_model",
-          model: {
-            provider: String(form.voiceReplyDecisionLlmProvider || "").trim(),
-            model: String(form.voiceReplyDecisionLlmModel || "").trim()
-          }
-        }
-      } : {},
+      overrides: {
+        ...(advancedOverridesEnabled
+          ? {
+              orchestrator: {
+                provider: form.provider,
+                model: form.model.trim()
+              },
+              devTeam: {
+                roles: {
+                  design: selectedCodeAgentRoles[0],
+                  implementation: selectedCodeAgentRoles[1],
+                  review: selectedCodeAgentRoles[2],
+                  research: selectedCodeAgentRoles[3]
+                },
+                codingWorkers:
+                  normalizedCodeAgentProvider === "codex"
+                    ? ["codex"]
+                    : normalizedCodeAgentProvider === "codex-cli"
+                      ? ["codex_cli"]
+                      : normalizedCodeAgentProvider === "claude-code"
+                        ? ["claude_code"]
+                        : undefined
+              }
+            }
+          : {}),
+        voiceAdmissionClassifier: voiceAdmissionClassifierOverride
+      },
       runtimeConfig: {
         research: {
           enabled: form.webSearchEnabled,
@@ -1142,9 +1175,7 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
         operationalMessages: String(form.voiceOperationalMessages || "minimal").trim().toLowerCase()
       },
       admission: {
-        mode: normalizeVoiceAdmissionModeForDashboard(
-          form.voiceReplyDecisionRealtimeAdmissionMode || "generation_decides"
-        ),
+        mode: normalizedVoiceAdmissionMode,
         musicWakeLatchSeconds: Number(form.voiceReplyDecisionMusicWakeLatchSeconds)
       },
       streamWatch: {

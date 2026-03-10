@@ -44,10 +44,13 @@ export function resolveVoiceRuntimeModeFromSelection(
 
 export function normalizeVoiceAdmissionModeForDashboard(
   value: unknown
-): "generation_decides" | "classifier_gate" {
+): "generation_decides" | "classifier_gate" | "adaptive" {
   const normalized = String(value || "")
     .trim()
     .toLowerCase();
+  if (normalized === "adaptive") {
+    return "adaptive";
+  }
   if (normalized === "classifier_gate" || normalized === "hard_classifier") {
     return "classifier_gate";
   }

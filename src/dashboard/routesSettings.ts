@@ -38,14 +38,43 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
   });
 
   app.get("/api/settings", (c) => {
-    const settings = store.getSettings();
-    return c.json({ ...settings, _resolved: resolveSettingsBindings(settings, appConfig) });
+    const current = store.getSettingsRecord();
+    return c.json(buildSettingsResponse(current.settings, appConfig, current.updatedAt));
   });
 
   app.put("/api/settings", async (c) => {
-    const nextSettings = store.patchSettings(await readDashboardBody(c));
+    const body = await readDashboardBody(c);
+    const meta = toRecord(body._meta);
+    const expectedUpdatedAt = String(meta.expectedUpdatedAt || "").trim();
+    delete body._meta;
+
+    const current = store.getSettingsRecord();
+    if (!expectedUpdatedAt) {
+      return c.json(
+        {
+          error: "settings_version_required",
+          detail: "Refresh the dashboard before saving. This tab is using an outdated settings form.",
+          ...buildSettingsResponse(current.settings, appConfig, current.updatedAt)
+        },
+        409
+      );
+    }
+
+    if (current.updatedAt && expectedUpdatedAt !== current.updatedAt) {
+      return c.json(
+        {
+          error: "settings_conflict",
+          detail: "Settings changed since this form was loaded. Reload the latest settings and try again.",
+          ...buildSettingsResponse(current.settings, appConfig, current.updatedAt)
+        },
+        409
+      );
+    }
+
+    const nextSettings = store.patchSettings(body);
+    const next = store.getSettingsRecord();
     await bot.applyRuntimeSettings(nextSettings);
-    return c.json({ ...nextSettings, _resolved: resolveSettingsBindings(nextSettings, appConfig) });
+    return c.json(buildSettingsResponse(next.settings, appConfig, next.updatedAt));
   });
 
   app.post("/api/settings/preset-defaults", async (c) => {
@@ -210,6 +239,21 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
       return c.json([]);
     }
   });
+}
+
+function buildSettingsResponse(
+  settings: unknown,
+  appConfig: DashboardAppConfig,
+  updatedAt: string
+) {
+  const settingsRecord = toRecord(settings);
+  return {
+    ...settingsRecord,
+    _resolved: resolveSettingsBindings(settings, appConfig),
+    _meta: {
+      updatedAt: String(updatedAt || "")
+    }
+  };
 }
 
 function resolveSettingsBindings(settings: unknown, appConfig: DashboardAppConfig) {

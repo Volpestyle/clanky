@@ -5,7 +5,14 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 import { clamp, nowIso } from "../utils.ts";
 import { normalizeSettings } from "./settingsNormalization.ts";
-import { rewriteRuntimeSettingsRow, getSettings, setSettings, patchSettings, resetSettings } from "./storeSettings.ts";
+import {
+  rewriteRuntimeSettingsRow,
+  getSettings,
+  getSettingsRecord,
+  setSettings,
+  patchSettings,
+  resetSettings
+} from "./storeSettings.ts";
 import {
   recordMessage,
   getRecentMessages,
@@ -268,6 +275,10 @@ export class Store {
 
   getSettings() {
     return getSettings(this);
+  }
+
+  getSettingsRecord() {
+    return getSettingsRecord(this);
   }
 
   setSettings(next) {

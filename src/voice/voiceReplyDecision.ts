@@ -19,7 +19,8 @@ import {
 } from "./voiceSessionManager.constants.ts";
 import {
   normalizeVoiceReplyDecisionProvider,
-  defaultVoiceReplyDecisionModel
+  defaultVoiceReplyDecisionModel,
+  resolveVoiceReplyDecisionMaxOutputTokens
 } from "./voiceDecisionRuntime.ts";
 import { hasBotNameCue, DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD } from "../bot/directAddressConfidence.ts";
 import type {
@@ -1146,6 +1147,7 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   const llmModel = String(classifierBinding?.model || defaultVoiceReplyDecisionModel(llmProvider))
     .trim()
     .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
+  const classifierMaxOutputTokens = resolveVoiceReplyDecisionMaxOutputTokens(llmProvider, llmModel);
   const classifierDebugEnabled = parseBooleanFlag(process.env.VOICE_CLASSIFIER_DEBUG, false);
   const botName = getPromptBotName(settings);
   const _normalizedDirectedConfidence = Math.max(0, Math.min(1, Number(currentSpeakerDirectedConfidence) || 0));
@@ -1280,7 +1282,7 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
         provider: llmProvider,
         model: llmModel,
         temperature: 0,
-        maxOutputTokens: 4,
+        maxOutputTokens: classifierMaxOutputTokens,
         reasoningEffort: "minimal"
       }),
       systemPrompt: classifierSystemPrompt,

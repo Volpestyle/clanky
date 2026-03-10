@@ -87,7 +87,7 @@ function buildProps(mode: unknown, formOverrides: Record<string, unknown> = {}) 
 test("normalizeVoiceAdmissionModeForDashboard maps legacy aliases to canonical values", () => {
   assert.equal(normalizeVoiceAdmissionModeForDashboard("generation_only"), "generation_decides");
   assert.equal(normalizeVoiceAdmissionModeForDashboard("generation_decides"), "generation_decides");
-  assert.equal(normalizeVoiceAdmissionModeForDashboard("adaptive"), "generation_decides");
+  assert.equal(normalizeVoiceAdmissionModeForDashboard("adaptive"), "adaptive");
   assert.equal(normalizeVoiceAdmissionModeForDashboard("hard_classifier"), "classifier_gate");
   assert.equal(normalizeVoiceAdmissionModeForDashboard("classifier_gate"), "classifier_gate");
 });

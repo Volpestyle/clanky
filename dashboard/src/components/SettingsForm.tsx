@@ -50,9 +50,21 @@ export default function SettingsForm({
   const formRef = useRef(form);
   formRef.current = form;
 
+  function updateForm(updater) {
+    setForm((current) => {
+      const next =
+        typeof updater === "function"
+          ? updater(current)
+          : updater;
+      formRef.current = next;
+      return next;
+    });
+  }
+
   useEffect(() => {
     if (!settings) return;
     const next = settingsToFormPreserving(settings, formRef.current);
+    formRef.current = next;
     setForm(next);
     savedFormRef.current = JSON.stringify(next);
   }, [settings]);
@@ -101,7 +113,9 @@ export default function SettingsForm({
       if (presetRequestIdRef.current !== requestId) {
         return;
       }
-      setForm(settingsToForm(settings));
+      const next = settingsToForm(settings);
+      formRef.current = next;
+      setForm(next);
     } catch (err) {
       console.error("Failed to load preset defaults:", err);
     }
@@ -200,7 +214,7 @@ export default function SettingsForm({
   const showDiscoveryVideoControls = effectiveForm.discoveryVideoEnabled || effectiveForm.replyVideoEnabled;
 
   useEffect(() => {
-    setForm((current) => {
+    updateForm((current) => {
       if (!current) return current;
       let changed = false;
       const next = { ...current };
@@ -252,12 +266,12 @@ export default function SettingsForm({
       const value = e.target.type === "checkbox" ? e.target.checked : e.target.value;
       if (key === "stackPreset") {
         const preset = String(value || "").trim();
-        setForm((current) => ({ ...(current || defaultForm), stackPreset: preset }));
+        updateForm((current) => ({ ...(current || defaultForm), stackPreset: preset }));
         void loadPresetDefaults(preset);
         return;
       }
       if (key === "memoryLlmInheritTextModel") {
-        setForm((current) => {
+        updateForm((current) => {
           if (!current) return current;
           const next = { ...current, memoryLlmInheritTextModel: Boolean(value) };
           if (next.memoryLlmInheritTextModel) {
@@ -268,12 +282,12 @@ export default function SettingsForm({
         });
         return;
       }
-      setForm((current) => ({ ...current, [key]: value }));
+      updateForm((current) => ({ ...current, [key]: value }));
     };
   }
 
   function sanitizeBotNameAliases() {
-    setForm((current) => {
+    updateForm((current) => {
       if (!current) return current;
       const normalized = sanitizeAliasListInput(current.botNameAliases);
       if (normalized === String(current.botNameAliases || "").trim()) return current;
@@ -285,7 +299,7 @@ export default function SettingsForm({
   }
 
   function setProviderWithPresetFallback(providerField, modelField, provider) {
-    setForm((current) => {
+    updateForm((current) => {
       const next = { ...current, [providerField]: provider };
       const options =
         providerField === "browserLlmProvider"
@@ -315,7 +329,7 @@ export default function SettingsForm({
   const setStreamWatchVisionProvider = createProviderSetter("voiceStreamWatchBrainContextProvider", "voiceStreamWatchBrainContextModel");
 
   function selectModelFieldPreset(modelField, selected) {
-    setForm((current) => ({ ...current, [modelField]: selected }));
+    updateForm((current) => ({ ...current, [modelField]: selected }));
   }
 
   function createPresetSelector(modelField) {
@@ -335,7 +349,7 @@ export default function SettingsForm({
   const selectStreamWatchVisionPresetModel = createPresetSelector("voiceStreamWatchBrainContextModel");
 
   function resetPromptGuidanceFields() {
-    setForm((current) => ({
+    updateForm((current) => ({
       ...current,
       promptCapabilityHonestyLine: defaultForm.promptCapabilityHonestyLine,
       promptImpossibleActionLine: defaultForm.promptImpossibleActionLine,
@@ -355,7 +369,8 @@ export default function SettingsForm({
       scrollTo("sec-code-agent");
       return;
     }
-    onSave(formToSettingsPatch(form));
+    const currentForm = formRef.current ?? form ?? defaultForm;
+    onSave(formToSettingsPatch(currentForm));
   }
 
   function scrollTo(id: string) {

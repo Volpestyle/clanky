@@ -16,8 +16,11 @@ export function resolveVoiceReplyDecisionMaxOutputTokens(provider, model) {
   const normalizedModel = String(model || "")
     .trim()
     .toLowerCase();
-  if (normalizedProvider === "openai" && /^gpt-5(?:$|[-_])/u.test(normalizedModel)) {
-    return 64;
+  if (normalizedProvider === "openai" || normalizedProvider === "openai-oauth") {
+    if (/^gpt-5(?:$|[-_.])/u.test(normalizedModel)) {
+      return 64;
+    }
+    return 16;
   }
   return 2;
 }

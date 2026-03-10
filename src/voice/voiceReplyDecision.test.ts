@@ -9,8 +9,10 @@ type LogEntry = {
 
 function createClassifierTestContext(rawOutput = "NO") {
   const logs: LogEntry[] = [];
+  const generateCalls: Array<Record<string, unknown>> = [];
   return {
     logs,
+    generateCalls,
     manager: {
       store: {
         logAction(entry: LogEntry) {
@@ -18,7 +20,8 @@ function createClassifierTestContext(rawOutput = "NO") {
         }
       },
       llm: {
-        async generate() {
+        async generate(args: Record<string, unknown>) {
+          generateCalls.push(args);
           return { text: rawOutput };
         }
       },
@@ -112,4 +115,28 @@ test("runVoiceReplyClassifier does not emit debug logs when VOICE_CLASSIFIER_DEB
       process.env.VOICE_CLASSIFIER_DEBUG = previous;
     }
   }
+});
+
+test("runVoiceReplyClassifier uses an OpenAI-safe token floor for native realtime presets", async () => {
+  const { manager, generateCalls } = createClassifierTestContext("YES");
+  const result = await runVoiceReplyClassifier(manager, {
+    ...buildClassifierArgs(),
+    settings: {
+      agentStack: {
+        preset: "openai_native_realtime"
+      },
+      voice: {
+        admission: {
+          mode: "adaptive"
+        }
+      }
+    }
+  });
+
+  assert.equal(result.allow, true);
+  assert.equal(generateCalls.length, 1);
+  assert.equal(
+    (generateCalls[0]?.settings as Record<string, unknown>)?.interaction?.replyGeneration?.maxOutputTokens,
+    64
+  );
 });
