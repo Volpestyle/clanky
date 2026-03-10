@@ -648,15 +648,36 @@ export class VoiceSessionManager {
 
   getSessionFactProfileSlice({ session, userId = null }) {
     const normalizedUserId = String(userId || "").trim();
-    const userProfile = normalizedUserId ? session?.factProfiles?.get?.(normalizedUserId) || null : null;
     const guildProfile = session?.guildFactProfile || null;
+    const participants = this.getVoiceChannelParticipants(session);
+    const participantProfiles = participants.map((participant) => {
+      const participantUserId = String(participant?.userId || "").trim();
+      const profile = participantUserId ? session?.factProfiles?.get?.(participantUserId) || null : null;
+      return {
+        userId: participantUserId,
+        displayName: String(participant?.displayName || participantUserId).trim() || participantUserId,
+        isPrimary: participantUserId === normalizedUserId,
+        facts: Array.isArray(profile?.userFacts) ? profile.userFacts : [],
+        guidanceFacts: Array.isArray(profile?.guidanceFacts) ? profile.guidanceFacts : []
+      };
+    });
+    const primaryProfile = participantProfiles.find((entry) => entry.isPrimary) || participantProfiles[0] || null;
+    const selfFacts = Array.isArray(guildProfile?.selfFacts) ? guildProfile.selfFacts : [];
+    const loreFacts = Array.isArray(guildProfile?.loreFacts) ? guildProfile.loreFacts : [];
+    const guidanceFacts = [
+      ...(Array.isArray(guildProfile?.guidanceFacts) ? guildProfile.guidanceFacts : []),
+      ...participantProfiles.flatMap((entry) => Array.isArray(entry.guidanceFacts) ? entry.guidanceFacts : [])
+    ];
+    const secondaryFacts = participantProfiles
+      .filter((entry) => !entry.isPrimary)
+      .flatMap((entry) => entry.facts.slice(0, 3));
     return {
-      userFacts: Array.isArray(userProfile?.userFacts) ? userProfile.userFacts : [],
-      relevantFacts: [
-        ...(Array.isArray(guildProfile?.selfFacts) ? guildProfile.selfFacts : []),
-        ...(Array.isArray(guildProfile?.loreFacts) ? guildProfile.loreFacts : [])
-      ],
-      relevantMessages: []
+      participantProfiles,
+      selfFacts,
+      loreFacts,
+      userFacts: Array.isArray(primaryProfile?.facts) ? primaryProfile.facts : [],
+      relevantFacts: [...secondaryFacts, ...selfFacts, ...loreFacts],
+      guidanceFacts
     };
   }
 
@@ -679,6 +700,7 @@ export class VoiceSessionManager {
     });
     session.factProfiles.set(normalizedUserId, {
       userFacts: Array.isArray(profile?.userFacts) ? profile.userFacts : [],
+      guidanceFacts: Array.isArray(profile?.guidanceFacts) ? profile.guidanceFacts : [],
       loadedAt: Date.now()
     });
   }
@@ -689,6 +711,7 @@ export class VoiceSessionManager {
     session.guildFactProfile = {
       selfFacts: Array.isArray(profile?.selfFacts) ? profile.selfFacts : [],
       loreFacts: Array.isArray(profile?.loreFacts) ? profile.loreFacts : [],
+      guidanceFacts: Array.isArray(profile?.guidanceFacts) ? profile.guidanceFacts : [],
       loadedAt: Date.now()
     };
   }
@@ -5104,6 +5127,29 @@ export class VoiceSessionManager {
         requestedByUserId
       }
     });
+
+    if (this.memory && typeof this.memory.runVoiceSessionMicroReflection === "function") {
+      void this.memory.runVoiceSessionMicroReflection({
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        sessionId: session.id,
+        settings: settings || session.settingsSnapshot,
+        startedAtMs: session.startedAt,
+        transcriptTurns: Array.isArray(session.transcriptTurns) ? session.transcriptTurns : [],
+        pendingMemoryIngest: session.pendingMemoryIngest || null
+      }).catch((error) => {
+        this.store.logAction({
+          kind: "bot_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          content: `memory_voice_micro_reflection: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id,
+            reason
+          }
+        });
+      });
+    }
 
     const channel = announceChannel || this.client.channels.cache.get(session.textChannelId);
     if (announcement !== null) {

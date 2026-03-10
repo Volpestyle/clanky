@@ -386,7 +386,7 @@ const DIRECT_VISION_PROVIDERS = new Set([
   "openai",
   "anthropic",
   "claude-oauth",
-  "codex-oauth",
+  "openai-oauth",
   "codex-cli",
   "codex_cli_session",
   "xai"

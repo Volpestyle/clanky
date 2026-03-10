@@ -1,6 +1,14 @@
 import { createTestSettings } from "../testSettings.ts";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
 
+type VoiceTestSettingsOverrides = {
+  memory?: Record<string, unknown>;
+  llm?: Record<string, unknown>;
+  voice?: Record<string, unknown> & {
+    replyDecisionLlm?: Record<string, unknown>;
+  };
+} & Record<string, unknown>;
+
 export function createVoiceTestManager({
   participantCount = 2,
   generate = async () => ({ text: "NO" }),
@@ -53,7 +61,7 @@ export function createVoiceTestManager({
   return manager;
 }
 
-export function createVoiceTestSettings(overrides = {}) {
+export function createVoiceTestSettings(overrides: VoiceTestSettingsOverrides = {}) {
   const base = {
     botName: "clanker conk",
     botNameAliases: ["clankerconk"],

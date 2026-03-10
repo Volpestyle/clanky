@@ -30,8 +30,7 @@ function createManager({ memory = null }: { memory?: unknown } = {}) {
         return createTestSettings({
           botName: "clanker conk",
           memory: { enabled: false },
-          webSearch: { enabled: false },
-          adaptiveDirectives: { enabled: false }
+          webSearch: { enabled: false }
         });
       }
     },
@@ -67,7 +66,6 @@ test("memory tools included when settings.memory.enabled is true", () => {
     session: null,
     settings: createTestSettings({
       memory: { enabled: true },
-      adaptiveDirectives: { enabled: true },
       webSearch: { enabled: true }
     })
   });
@@ -75,17 +73,14 @@ test("memory tools included when settings.memory.enabled is true", () => {
   const names = tools.map((t: { name: string }) => t.name);
   assert.ok(names.includes("memory_search"), "memory_search should be included");
   assert.ok(names.includes("memory_write"), "memory_write should be included");
-  assert.ok(names.includes("adaptive_directive_add"), "adaptive_directive_add should be included");
-  assert.ok(names.includes("adaptive_directive_remove"), "adaptive_directive_remove should be included");
 });
 
-test("adaptive directive tools can stay enabled when durable memory is disabled", () => {
+test("memory tools stay disabled when durable memory is disabled", () => {
   const { manager } = createManager();
   const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
     settings: createTestSettings({
       memory: { enabled: false },
-      adaptiveDirectives: { enabled: true },
       webSearch: { enabled: true }
     })
   });
@@ -93,17 +88,14 @@ test("adaptive directive tools can stay enabled when durable memory is disabled"
   const names = tools.map((t: { name: string }) => t.name);
   assert.ok(!names.includes("memory_search"), "memory_search should be excluded");
   assert.ok(!names.includes("memory_write"), "memory_write should be excluded");
-  assert.ok(names.includes("adaptive_directive_add"), "adaptive_directive_add should be included");
-  assert.ok(names.includes("adaptive_directive_remove"), "adaptive_directive_remove should be included");
 });
 
-test("adaptive directive tools can be disabled independently of durable memory", () => {
+test("memory tools remain available when memory is enabled", () => {
   const { manager } = createManager();
   const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
     settings: createTestSettings({
       memory: { enabled: true },
-      adaptiveDirectives: { enabled: false },
       webSearch: { enabled: true }
     })
   });
@@ -111,8 +103,6 @@ test("adaptive directive tools can be disabled independently of durable memory",
   const names = tools.map((t: { name: string }) => t.name);
   assert.ok(names.includes("memory_search"), "memory_search should be included");
   assert.ok(names.includes("memory_write"), "memory_write should be included");
-  assert.ok(!names.includes("adaptive_directive_add"), "adaptive_directive_add should be excluded");
-  assert.ok(!names.includes("adaptive_directive_remove"), "adaptive_directive_remove should be excluded");
 });
 
 test("memory tools fall back to canonical defaults when settings is null", () => {
@@ -125,8 +115,6 @@ test("memory tools fall back to canonical defaults when settings is null", () =>
   const names = tools.map((t: { name: string }) => t.name);
   assert.ok(names.includes("memory_search"), "memory_search should be included");
   assert.ok(names.includes("memory_write"), "memory_write should be included");
-  assert.ok(names.includes("adaptive_directive_add"), "adaptive_directive_add should be included");
-  assert.ok(names.includes("adaptive_directive_remove"), "adaptive_directive_remove should be included");
 });
 
 // --- Fix 1 regression: web_search still gated ---

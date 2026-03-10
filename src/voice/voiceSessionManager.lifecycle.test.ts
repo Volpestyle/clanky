@@ -2729,6 +2729,7 @@ test("requestStatus reports offline and online states", async () => {
       },
       music: {
         active: true,
+        phase: "playing",
         provider: "youtube",
         lastTrackTitle: "lone star",
         lastTrackArtists: ["artist a"]
@@ -2963,7 +2964,8 @@ test("maybeHandleMusicTextStopRequest routes stop phrase from text chat", async 
     "guild-1",
     createSession({
       music: {
-        active: true
+        active: true,
+        phase: "playing"
       }
     })
   );

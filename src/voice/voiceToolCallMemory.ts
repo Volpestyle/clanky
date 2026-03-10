@@ -67,7 +67,10 @@ export async function executeVoiceConversationSearchTool(
   { session, args, signal }: VoiceConversationSearchToolOptions
 ) {
   throwIfAborted(signal, "Voice conversation search cancelled");
-  if (!manager.store || typeof manager.store.searchConversationWindows !== "function") {
+  if (
+    (!manager.store || typeof manager.store.searchConversationWindows !== "function") &&
+    typeof manager.memory?.searchConversationHistory !== "function"
+  ) {
     return { ok: false, matches: [], error: "conversation_history_unavailable" };
   }
   const query = normalizeInlineText(args?.query, 220);
@@ -76,15 +79,32 @@ export async function executeVoiceConversationSearchTool(
   }
 
   const scope = String(args?.scope || "channel").trim().toLowerCase();
-  const matches = manager.store.searchConversationWindows({
-    guildId: String(session?.guildId || "").trim(),
-    channelId: scope === "guild" ? null : session?.textChannelId || null,
-    queryText: query,
-    limit: clamp(Math.floor(Number(args?.top_k || 3)), 1, 4),
-    maxAgeHours: clamp(Math.floor(Number(args?.max_age_hours || 24 * 7)), 1, 24 * 30),
-    before: 1,
-    after: 1
-  });
+  const matches = typeof manager.memory?.searchConversationHistory === "function"
+    ? await manager.memory.searchConversationHistory({
+      guildId: String(session?.guildId || "").trim(),
+      channelId: scope === "guild" ? null : session?.textChannelId || null,
+      queryText: query,
+      settings: session?.settingsSnapshot || manager.store.getSettings?.() || {},
+      trace: {
+        guildId: session?.guildId || null,
+        channelId: scope === "guild" ? null : session?.textChannelId || null,
+        userId: session?.lastRealtimeToolCallerUserId || null,
+        source: "voice_realtime_tool_conversation_search"
+      },
+      limit: clamp(Math.floor(Number(args?.top_k || 3)), 1, 4),
+      maxAgeHours: clamp(Math.floor(Number(args?.max_age_hours || 24 * 7)), 1, 24 * 30),
+      before: 1,
+      after: 1
+    })
+    : manager.store.searchConversationWindows({
+      guildId: String(session?.guildId || "").trim(),
+      channelId: scope === "guild" ? null : session?.textChannelId || null,
+      queryText: query,
+      limit: clamp(Math.floor(Number(args?.top_k || 3)), 1, 4),
+      maxAgeHours: clamp(Math.floor(Number(args?.max_age_hours || 24 * 7)), 1, 24 * 30),
+      before: 1,
+      after: 1
+    });
 
   return { ok: true, matches: Array.isArray(matches) ? matches : [] };
 }

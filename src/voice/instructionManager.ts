@@ -1,6 +1,6 @@
-import { getDirectiveSettings } from "../settings/agentStack.ts";
 import {
-  formatAdaptiveDirectives,
+  formatBehaviorMemoryFacts,
+  formatConversationParticipantMemory,
   formatConversationWindows,
   formatRecentLookupContext
 } from "../prompts/promptFormatters.ts";
@@ -49,11 +49,6 @@ interface InstructionStoreLike {
     content: string;
     metadata?: Record<string, unknown>;
   }) => void;
-  searchAdaptiveStyleNotesForPrompt?: (payload: {
-    guildId: string;
-    queryText: string;
-    limit: number;
-  }) => Promise<unknown[]> | unknown[];
   searchLookupContext?: (payload: {
     guildId: string;
     channelId: string | null;
@@ -76,6 +71,15 @@ interface StreamWatchPromptContext {
   prompt?: string;
   notes?: string[];
   active?: boolean;
+}
+
+function toPromptRecordRows(rows: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(rows)) return [];
+  return rows.filter((entry): entry is Record<string, unknown> => (
+    Boolean(entry) &&
+    typeof entry === "object" &&
+    !Array.isArray(entry)
+  ));
 }
 
 interface ScreenShareCapabilityLike {
@@ -214,9 +218,12 @@ export type InstructionManagerHost = VoiceToolCallManager & {
     session: VoiceSession;
     userId?: string | null;
   }) => {
+    participantProfiles?: unknown[];
+    selfFacts?: unknown[];
+    loreFacts?: unknown[];
     userFacts: unknown[];
     relevantFacts: unknown[];
-    relevantMessages?: unknown[];
+    guidanceFacts?: unknown[];
   };
 };
 
@@ -334,22 +341,23 @@ export class InstructionManager {
   }: BuildRealtimeMemorySliceArgs): Promise<RealtimeInstructionMemorySlice> {
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedTranscript) {
-      const adaptiveDirectives =
-        Boolean(getDirectiveSettings(settings).enabled) &&
-          this.store.searchAdaptiveStyleNotesForPrompt
-          ? await this.store.searchAdaptiveStyleNotesForPrompt({
-            guildId: String(session?.guildId || "").trim(),
-            queryText: "",
-            limit: 8
-          })
-          : [];
+      const factProfile =
+        typeof this.host.getSessionFactProfileSlice === "function"
+          ? this.host.getSessionFactProfileSlice({
+              session,
+              userId: String(userId || "").trim() || null
+            })
+          : null;
       return {
-        userFacts: [],
-        relevantFacts: [],
-        relevantMessages: [],
+        participantProfiles: Array.isArray(factProfile?.participantProfiles) ? factProfile.participantProfiles : [],
+        selfFacts: Array.isArray(factProfile?.selfFacts) ? factProfile.selfFacts : [],
+        loreFacts: Array.isArray(factProfile?.loreFacts) ? factProfile.loreFacts : [],
+        userFacts: Array.isArray(factProfile?.userFacts) ? factProfile.userFacts : [],
+        relevantFacts: Array.isArray(factProfile?.relevantFacts) ? factProfile.relevantFacts : [],
+        guidanceFacts: Array.isArray(factProfile?.guidanceFacts) ? factProfile.guidanceFacts : [],
+        behavioralFacts: [],
         recentConversationHistory: [],
-        recentWebLookups: [],
-        adaptiveDirectives: Array.isArray(adaptiveDirectives) ? adaptiveDirectives : []
+        recentWebLookups: []
       };
     }
 
@@ -406,29 +414,47 @@ export class InstructionManager {
               before: 1,
               after: 1
             }) || [])
-          : null,
-      loadAdaptiveDirectives:
-        Boolean(getDirectiveSettings(settings).enabled) &&
-          this.store.searchAdaptiveStyleNotesForPrompt
-          ? (payload) =>
-            (this.store.searchAdaptiveStyleNotesForPrompt?.({
-              guildId: String(payload.guildId || "").trim(),
-              queryText: String(payload.queryText || ""),
-              limit: 8
-            }) || [])
           : null
     });
+    const guidanceFacts = Array.isArray(continuity.memorySlice?.guidanceFacts)
+      ? continuity.memorySlice.guidanceFacts
+      : [];
+    const participantIds = Array.isArray(continuity.memorySlice?.participantProfiles)
+      ? continuity.memorySlice.participantProfiles
+          .map((entry) => String((entry as Record<string, unknown>)?.userId || "").trim())
+          .filter(Boolean)
+      : [];
+    const behavioralFacts =
+      typeof this.host.memory?.loadBehavioralFactsForPrompt === "function"
+        ? await this.host.memory.loadBehavioralFactsForPrompt({
+            guildId: String(session.guildId || "").trim(),
+            channelId: String(session.textChannelId || "").trim() || null,
+            queryText: normalizedTranscript,
+            participantIds,
+            settings,
+            trace: {
+              guildId: session.guildId,
+              channelId: session.textChannelId,
+              userId: normalizedUserId,
+              source: "voice_realtime_behavioral_memory"
+            },
+            limit: 8
+          })
+        : [];
     return {
+      participantProfiles: Array.isArray(continuity.memorySlice?.participantProfiles)
+        ? continuity.memorySlice.participantProfiles
+        : [],
+      selfFacts: Array.isArray(continuity.memorySlice?.selfFacts) ? continuity.memorySlice.selfFacts : [],
+      loreFacts: Array.isArray(continuity.memorySlice?.loreFacts) ? continuity.memorySlice.loreFacts : [],
       userFacts: Array.isArray(continuity.memorySlice?.userFacts) ? continuity.memorySlice.userFacts : [],
       relevantFacts: Array.isArray(continuity.memorySlice?.relevantFacts) ? continuity.memorySlice.relevantFacts : [],
-      relevantMessages: Array.isArray(continuity.memorySlice?.relevantMessages)
-        ? continuity.memorySlice.relevantMessages
-        : [],
+      guidanceFacts,
+      behavioralFacts: Array.isArray(behavioralFacts) ? behavioralFacts : [],
       recentConversationHistory: Array.isArray(continuity.recentConversationHistory)
         ? continuity.recentConversationHistory
         : [],
-      recentWebLookups: Array.isArray(continuity.recentWebLookups) ? continuity.recentWebLookups : [],
-      adaptiveDirectives: Array.isArray(continuity.adaptiveDirectives) ? continuity.adaptiveDirectives : []
+      recentWebLookups: Array.isArray(continuity.recentWebLookups) ? continuity.recentWebLookups : []
     };
   }
 
@@ -617,11 +643,15 @@ export class InstructionManager {
         .map((entry) => formatVoiceChannelEffectSummary(entry, { includeTiming: true }))
         .join(" | ")
       : "none";
-    const userFacts = formatRealtimeMemoryFacts(memorySlice?.userFacts, REALTIME_MEMORY_FACT_LIMIT);
-    const relevantFacts = formatRealtimeMemoryFacts(memorySlice?.relevantFacts, REALTIME_MEMORY_FACT_LIMIT);
+    const participantMemory = formatConversationParticipantMemory({
+      participantProfiles: toPromptRecordRows(memorySlice?.participantProfiles),
+      selfFacts: toPromptRecordRows(memorySlice?.selfFacts),
+      loreFacts: toPromptRecordRows(memorySlice?.loreFacts)
+    });
     const recentConversationHistory = formatConversationWindows(memorySlice?.recentConversationHistory);
     const recentWebLookups = formatRecentLookupContext(memorySlice?.recentWebLookups);
-    const adaptiveDirectives = formatAdaptiveDirectives(memorySlice?.adaptiveDirectives, 8);
+    const guidanceFacts = formatBehaviorMemoryFacts(memorySlice?.guidanceFacts, 8);
+    const behavioralFacts = formatBehaviorMemoryFacts(memorySlice?.behavioralFacts, 8);
     const activeVoiceCommandState = this.host.ensureVoiceCommandState(session);
     const musicDisambiguation = this.host.getMusicDisambiguationPromptContext(session);
 
@@ -651,15 +681,28 @@ export class InstructionManager {
       );
     }
 
-    if (userFacts || relevantFacts) {
+    if (
+      Array.isArray(memorySlice?.participantProfiles) && memorySlice.participantProfiles.length > 0 ||
+      Array.isArray(memorySlice?.selfFacts) && memorySlice.selfFacts.length > 0 ||
+      Array.isArray(memorySlice?.loreFacts) && memorySlice.loreFacts.length > 0
+    ) {
       sections.push(
         [
-          "Durable memory context:",
-          userFacts ? `- Known facts about active speaker: ${userFacts}` : null,
-          relevantFacts ? `- Other relevant memory: ${relevantFacts}` : null
+          "People in this conversation:",
+          participantMemory
         ]
           .filter(Boolean)
           .join("\n")
+      );
+    }
+
+    if (Array.isArray(memorySlice?.guidanceFacts) && memorySlice.guidanceFacts.length > 0) {
+      sections.push(
+        [
+          "Behavior guidance:",
+          "- These are standing guidance facts that should shape how you act in this conversation.",
+          guidanceFacts
+        ].join("\n")
       );
     }
 
@@ -683,12 +726,12 @@ export class InstructionManager {
       );
     }
 
-    if (Array.isArray(memorySlice?.adaptiveDirectives) && memorySlice.adaptiveDirectives.length > 0) {
+    if (Array.isArray(memorySlice?.behavioralFacts) && memorySlice.behavioralFacts.length > 0) {
       sections.push(
         [
-          "Adaptive directives:",
-          "- Guidance directives shape tone/persona. Behavior directives define recurring trigger/action behavior when the current turn matches.",
-          adaptiveDirectives
+          "Relevant behavioral memory:",
+          "- These behavior memories were retrieved because they match the current turn. Follow them when relevant.",
+          behavioralFacts
         ].join("\n")
       );
     }
@@ -768,9 +811,6 @@ export class InstructionManager {
           "- When users ask you to look something up, search for something, find prices, or need current/factual information, call web_search immediately in the same response. Do not respond with only audio saying you will search — include the tool call.",
           "- Use conversation_search when the speaker asks what was said earlier or asks you to remember a prior exchange.",
           "- For memory writes, only store concise durable facts and avoid secrets.",
-          getDirectiveSettings(settings).enabled
-            ? "- If someone explicitly asks you to change how you talk, follow a standing instruction, or perform a recurring trigger/action behavior in future conversations, use adaptive_directive_add or adaptive_directive_remove instead of memory_write."
-            : "- Adaptive directives are disabled right now. Do not imply you can save standing behavior changes for later.",
           "- For music controls, use music_play to start or replace playback now. It searches internally and may return disambiguation options.",
           "- If music_play returns choices, ask which one they want and then call music_play again with selection_id.",
           "- Use music_search only for explicit browsing requests or when you need candidate IDs for queue operations.",

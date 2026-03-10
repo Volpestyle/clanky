@@ -9,12 +9,12 @@ import {
 } from "./voiceSessionManager.constants.ts";
 import { isRealtimeMode, resolveRealtimeProvider } from "./voiceSessionHelpers.ts";
 import type {
-  VoiceSessionDurableContextEntry,
   StreamWatchBrainContextEntry,
   VoiceAddressingState,
   VoiceConversationContext,
   VoiceMembershipPromptEntry,
-  VoiceSession
+  VoiceSession,
+  VoiceSessionDurableContextCategory
 } from "./voiceSessionTypes.ts";
 
 type RuntimeSnapshotClientLike = {
@@ -49,6 +49,12 @@ type StreamWatchBrainContextLike = {
   provider?: string | null;
   model?: string | null;
 } | null;
+
+type VoiceRuntimeSnapshotDurableContextEntry = {
+  text: string;
+  category: VoiceSessionDurableContextCategory;
+  at: string | null;
+};
 
 export interface VoiceRuntimeSnapshotDeps {
   client?: RuntimeSnapshotClientLike;
@@ -426,12 +432,12 @@ export function buildVoiceRuntimeSnapshot(
       session,
       session.settingsSnapshot || null
     );
-    const durableContext: VoiceSessionDurableContextEntry[] = (Array.isArray(session.durableContext) ? session.durableContext : [])
+    const durableContext: VoiceRuntimeSnapshotDurableContextEntry[] = (Array.isArray(session.durableContext) ? session.durableContext : [])
       .map((entry) => {
         const text = String(entry?.text || "").replace(/\s+/g, " ").trim();
         if (!text) return null;
         const rawCategory = String(entry?.category || "").trim().toLowerCase();
-        const category =
+        const category: VoiceSessionDurableContextCategory =
           rawCategory === "plan" ||
           rawCategory === "preference" ||
           rawCategory === "relationship"
@@ -444,7 +450,7 @@ export function buildVoiceRuntimeSnapshot(
           at: Number.isFinite(atMs) && atMs > 0 ? new Date(atMs).toISOString() : null
         };
       })
-      .filter((entry): entry is { text: string; category: string; at: string | null } => entry !== null)
+      .filter((entry): entry is VoiceRuntimeSnapshotDurableContextEntry => entry !== null)
       .slice(-50);
     const streamWatchLatestFrameDataBase64 = String(session.streamWatch?.latestFrameDataBase64 || "").trim();
     const streamWatchLatestFrameApproxBytes = streamWatchLatestFrameDataBase64

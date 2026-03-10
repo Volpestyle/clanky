@@ -731,22 +731,27 @@ export interface TurnProcessorState {
 }
 
 export interface RealtimeInstructionMemorySlice {
+    participantProfiles: unknown[];
+    selfFacts: unknown[];
+    loreFacts: unknown[];
     userFacts: unknown[];
     relevantFacts: unknown[];
-    relevantMessages: unknown[];
+    guidanceFacts: unknown[];
+    behavioralFacts: unknown[];
     recentConversationHistory: unknown[];
     recentWebLookups: unknown[];
-    adaptiveDirectives: unknown[];
 }
 
 export interface VoiceUserFactProfile {
     userFacts: MemoryFactRow[];
+    guidanceFacts: MemoryFactRow[];
     loadedAt: number;
 }
 
 export interface VoiceGuildFactProfile {
     selfFacts: MemoryFactRow[];
     loreFacts: MemoryFactRow[];
+    guidanceFacts: MemoryFactRow[];
     loadedAt: number;
 }
 

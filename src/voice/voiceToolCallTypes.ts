@@ -1,23 +1,33 @@
 import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 import type { VoiceRealtimeToolSettings } from "./voiceSessionTypes.ts";
+import type { CodeAgentRole } from "../agents/codeAgent.ts";
 
 export type VoiceToolCallManager = Pick<
   VoiceSessionManager,
   | "appConfig"
   | "activeReplies"
+  | "abortActiveInboundCaptures"
+  | "bargeInController"
   | "beginVoiceCommandSession"
   | "browserManager"
   | "buildVoiceQueueStatePayload"
   | "client"
+  | "composeOperationalMessage"
+  | "deferredActionQueue"
   | "endSession"
   | "ensureSessionMusicState"
   | "ensureToolMusicQueueState"
   | "getVoiceScreenShareCapability"
   | "hasRealtimeAssistantOutputForResponse"
+  | "hasBotNameCueForTranscript"
   | "haltSessionOutputForMusicPlayback"
+  | "isMusicDisambiguationResolutionTurn"
   | "isMusicPlaybackActive"
   | "llm"
   | "memory"
+  | "maybeClearActiveReplyInterruptionPolicy"
+  | "maybeHandlePendingMusicDisambiguationTurn"
+  | "musicPlayback"
   | "musicPlayer"
   | "musicSearch"
   | "normalizeMusicSelectionResult"
@@ -29,11 +39,14 @@ export type VoiceToolCallManager = Pick<
   | "requestStopMusic"
   | "refreshSessionGuildFactProfile"
   | "refreshSessionUserFactProfile"
+  | "replyManager"
   | "resolveVoiceSpeakerName"
   | "scheduleRealtimeToolFollowupResponse"
   | "search"
+  | "sessions"
   | "setMusicPhase"
   | "store"
+  | "transcribePcmTurn"
   | "updateVoiceMcpStatus"
   | "waitForLeaveDirectivePlayback"
 > & {
@@ -46,6 +59,7 @@ export type VoiceToolCallManager = Pick<
   }) => SubAgentInteractiveSession | null | undefined) | null;
   createCodeAgentSession?: ((args: {
     settings?: VoiceRealtimeToolSettings | null;
+    role?: CodeAgentRole;
     cwd?: string;
     guildId: string;
     channelId: string;
@@ -55,6 +69,7 @@ export type VoiceToolCallManager = Pick<
   runModelRequestedCodeTask?: ((args: {
     settings?: VoiceRealtimeToolSettings | null;
     task: string;
+    role?: CodeAgentRole;
     cwd?: string;
     guildId: string;
     channelId: string;

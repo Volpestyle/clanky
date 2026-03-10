@@ -91,7 +91,6 @@ type ThoughtStoreLike = {
     content: string;
     metadata?: Record<string, unknown>;
   }) => void;
-  getActiveAdaptiveStyleNotes?: (guildId: string, limit?: number) => Array<{ noteText?: string; directiveKind?: string }>;
 };
 
 export interface VoiceThoughtGenerationHost {
@@ -153,10 +152,22 @@ export interface VoiceThoughtGenerationHost {
   }) => void;
 }
 
-function loadAdaptiveDirectives(host: VoiceThoughtGenerationHost, session: VoiceSession) {
-  const guildId = String(session?.guildId || "").trim();
-  if (!guildId || typeof host.store.getActiveAdaptiveStyleNotes !== "function") return [];
-  return host.store.getActiveAdaptiveStyleNotes(guildId, 24) || [];
+function collectSessionGuidanceFacts(session: VoiceSession) {
+  const guildGuidance = Array.isArray(session?.guildFactProfile?.guidanceFacts)
+    ? session.guildFactProfile.guidanceFacts
+    : [];
+  const participantGuidance = session?.factProfiles instanceof Map
+    ? [...session.factProfiles.values()].flatMap((profile) =>
+        Array.isArray(profile?.guidanceFacts) ? profile.guidanceFacts : []
+      )
+    : [];
+  const seenFacts = new Set<string>();
+  return [...guildGuidance, ...participantGuidance].filter((row) => {
+    const factText = normalizeVoiceText(row?.fact || "", 180).toLowerCase();
+    if (!factText || seenFacts.has(factText)) return false;
+    seenFacts.add(factText);
+    return true;
+  });
 }
 
 export function resolveVoiceThoughtEngineConfig(settings: ThoughtSettings = null): VoiceThoughtEngineConfig {
@@ -216,9 +227,9 @@ export async function generateVoiceThoughtCandidate(
     minSilenceSeconds: thoughtConfig.minSilenceSeconds,
     minSecondsBetweenThoughts: thoughtConfig.minSecondsBetweenThoughts
   });
-  const adaptiveDirectives = loadAdaptiveDirectives(host, session);
+  const guidanceFacts = collectSessionGuidanceFacts(session);
   const systemPrompt = [
-    buildSystemPrompt(settings, { adaptiveDirectives }),
+    buildSystemPrompt(settings),
     "You are speaking in live Discord voice chat.",
     ...buildVoiceToneGuardrails(),
     "=== AUTONOMOUS THOUGHT MODE ===",
@@ -241,6 +252,10 @@ export async function generateVoiceThoughtCandidate(
   ];
   if (recentHistory) {
     userPromptParts.push(`Recent voice turns:\n${recentHistory}`);
+  }
+  const behaviorGuidance = formatRealtimeMemoryFacts(guidanceFacts, 8);
+  if (behaviorGuidance) {
+    userPromptParts.push(`Behavior guidance: ${behaviorGuidance}`);
   }
   const userPrompt = userPromptParts.join("\n");
   const generationSettings = applyOrchestratorOverrideSettings(settings, {
@@ -395,10 +410,11 @@ export async function evaluateVoiceThoughtDecision(
   const thoughtEagerness = clamp(Number(resolvedThoughtConfig.eagerness) || 0, 0, 100);
   const ambientMemoryFacts = Array.isArray(memoryFacts) ? memoryFacts : [];
   const ambientMemory = formatRealtimeMemoryFacts(ambientMemoryFacts, VOICE_THOUGHT_MEMORY_SEARCH_LIMIT);
-  const adaptiveDirectives = loadAdaptiveDirectives(host, session);
+  const guidanceFacts = collectSessionGuidanceFacts(session);
+  const behaviorGuidance = formatRealtimeMemoryFacts(guidanceFacts, 8);
 
   const systemPrompt = [
-    buildSystemPrompt(settings, { adaptiveDirectives }),
+    buildSystemPrompt(settings),
     "You are speaking in live Discord voice chat.",
     ...buildVoiceToneGuardrails(),
     "=== THOUGHT REFINEMENT MODE ===",
@@ -427,6 +443,9 @@ export async function evaluateVoiceThoughtDecision(
   }
   if (recentHistory) {
     userPromptParts.push(`Recent voice turns:\n${recentHistory}`);
+  }
+  if (behaviorGuidance) {
+    userPromptParts.push(`Behavior guidance: ${behaviorGuidance}`);
   }
   if (ambientMemory) {
     userPromptParts.push(`Ambient durable memory (optional): ${ambientMemory}`);

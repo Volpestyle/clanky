@@ -1,5 +1,6 @@
 import { clamp } from "../utils.ts";
 import { getResolvedBrowserTaskConfig } from "../settings/agentStack.ts";
+import { normalizeCodeAgentRole } from "../agents/codeAgent.ts";
 import { isAbortError, runBrowserBrowseTask } from "../tools/browserTaskRuntime.ts";
 import { runOpenAiComputerUseTask } from "../tools/openAiComputerUseRuntime.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
@@ -130,6 +131,7 @@ export async function executeVoiceCodeTaskTool(
   { session, settings, args, signal }: VoiceBrowserToolOptions
 ) {
   const task = normalizeInlineText(args?.task, 2000);
+  const role = normalizeCodeAgentRole(args?.role, "implementation");
   if (!task) {
     return { ok: false, text: "", error: "task_required" };
   }
@@ -160,6 +162,7 @@ export async function executeVoiceCodeTaskTool(
   if (manager.createCodeAgentSession && manager.subAgentSessions) {
     const newSession = manager.createCodeAgentSession({
       settings,
+      role,
       cwd: typeof args?.cwd === "string" ? String(args.cwd).trim() : undefined,
       guildId: session?.guildId || "",
       channelId: session?.textChannelId || "",
@@ -193,6 +196,7 @@ export async function executeVoiceCodeTaskTool(
     const result = await manager.runModelRequestedCodeTask({
       settings,
       task,
+      role,
       cwd: typeof args?.cwd === "string" ? String(args.cwd).trim() : undefined,
       guildId: session?.guildId || "",
       channelId: session?.textChannelId || "",
