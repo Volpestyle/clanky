@@ -50,6 +50,7 @@ Current preset intent:
 
 - `openai_oauth`, `openai_api`, and `openai_native_realtime` use `codex-cli` as the default implementation worker, with `claude-code` also available as a local worker
 - `claude_oauth` and `claude_api` use `claude-code` as the default implementation worker, with `codex-cli` also available as a local worker
+- `claude_oauth` keeps the voice reply classifier on `claude-haiku-4-5`, but the brain-path voice generation model defaults to `claude-sonnet-4-6`
 - remote `codex` is a manual opt-in worker, not part of the preset-default local worker ordering
 
 ## Modularity
@@ -73,7 +74,7 @@ The preview is local-only. The dirty indicator stays on until the user clicks Sa
 
 ### Reset to Preset Defaults
 
-A "Reset to preset defaults" button next to the preset dropdown loads a full normalized default form for the selected preset. It starts from `DEFAULT_SETTINGS`, applies the preset, and preserves only server-specific channel permissions and voice channel policy. Save is still required before those defaults affect the live bot.
+A "Reset to preset defaults" button next to the preset dropdown loads a full normalized default form for the selected preset. It resolves the selected preset through canonical normalization and preserves only server-specific channel permissions and voice channel policy. Save is still required before those defaults affect the live bot.
 
 ### Advanced Overrides
 

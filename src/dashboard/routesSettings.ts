@@ -22,7 +22,6 @@ import {
   resolveVoiceRuntimeSelectionFromMode
 } from "../settings/voiceDashboardMappings.ts";
 import { normalizeSettings } from "../store/settingsNormalization.ts";
-import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
 import { readDashboardBody, toRecord } from "./shared.ts";
 
 export interface SettingsRouteDeps {
@@ -52,18 +51,16 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
   app.post("/api/settings/preset-defaults", async (c) => {
     const body = await readDashboardBody(c);
     const preset = String(body.preset || "claude_oauth").trim();
-    // Full reset: DEFAULT_SETTINGS with the selected preset applied on top.
-    // This gives a known-good state — every field at its global default,
-    // with preset-specific overrides (provider, model, voice config) applied.
-    // Channel permissions and user IDs are preserved from current settings —
-    // these are server-specific configuration the operator set up, not behavior tuning.
+    // Full reset for the selected preset.
+    // Resolve from canonical normalization so preset-specific defaults
+    // (like brain-path voice generation bindings) come from the preset itself,
+    // not from whichever preset happens to back the raw schema defaults.
+    // Preserve only server-specific routing configuration the operator set up.
     const current = store.getSettings();
     const settings = normalizeSettings({
-      ...DEFAULT_SETTINGS,
-      agentStack: { ...DEFAULT_SETTINGS.agentStack, preset },
+      agentStack: { preset },
       permissions: current.permissions,
       voice: {
-        ...DEFAULT_SETTINGS.voice,
         channelPolicy: current.voice?.channelPolicy
       }
     });
@@ -98,10 +95,8 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
   app.post("/api/settings/reset", async (c) => {
     const current = store.getSettings();
     const settings = normalizeSettings({
-      ...DEFAULT_SETTINGS,
       permissions: current.permissions,
       voice: {
-        ...DEFAULT_SETTINGS.voice,
         channelPolicy: current.voice?.channelPolicy
       }
     });

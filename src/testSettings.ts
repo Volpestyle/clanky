@@ -1,6 +1,5 @@
 import { normalizeSettings } from "./store/settingsNormalization.ts";
 import { deepMerge } from "./utils.ts";
-import { DEFAULT_SETTINGS } from "./settings/settingsSchema.ts";
 import { normalizeLlmProvider } from "./llm/llmHelpers.ts";
 import { normalizeVoiceProvider } from "./voice/voiceModes.ts";
 
@@ -486,7 +485,7 @@ function buildSettingsPatch(base: unknown, next: unknown): unknown {
 }
 
 export function createTestSettingsPatch(overrides: unknown = {}) {
-  const base = normalizeSettings(DEFAULT_SETTINGS);
+  const base = normalizeSettings({});
   const next = createTestSettings(overrides);
   return (buildSettingsPatch(base, next) || {}) as Record<string, unknown>;
 }

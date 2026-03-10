@@ -568,6 +568,74 @@ test("dashboard preset defaults preview settings without mutating saved state", 
     assert.equal(bot.appliedSettings.length, 0);
     assert.equal(json._resolved.agentStack.voiceAdmissionPolicy.mode, "generation_decides");
     assert.equal(json.agentStack.preset, "claude_oauth");
+    assert.equal(json._resolved.voiceGenerationBinding.provider, "claude-oauth");
+    assert.equal(json._resolved.voiceGenerationBinding.model, "claude-sonnet-4-6");
+
+    const openAiApiResponse = await fetch(`${baseUrl}/api/settings/preset-defaults`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        preset: "openai_api"
+      })
+    });
+
+    assert.equal(openAiApiResponse.status, 200);
+    const openAiApiJson = await openAiApiResponse.json();
+    assert.equal(openAiApiJson.agentStack.preset, "openai_api");
+    assert.equal(openAiApiJson._resolved.voiceGenerationBinding.provider, "openai");
+    assert.equal(openAiApiJson._resolved.voiceGenerationBinding.model, "gpt-5-mini");
+  });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard fresh settings default claude_oauth brain to claude sonnet", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl }) => {
+    const response = await fetch(`${baseUrl}/api/settings`);
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.agentStack.preset, "claude_oauth");
+    assert.equal(json._resolved.voiceGenerationBinding.provider, "claude-oauth");
+    assert.equal(json._resolved.voiceGenerationBinding.model, "claude-sonnet-4-6");
+    assert.equal(json.agentStack.runtimeConfig.voice.generation.mode, "dedicated_model");
+    assert.equal(json.agentStack.runtimeConfig.voice.generation.model.provider, "claude-oauth");
+    assert.equal(json.agentStack.runtimeConfig.voice.generation.model.model, "claude-sonnet-4-6");
+  });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard settings save clears the memory LLM override when inherit is selected", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
+    store.patchSettings({
+      memoryLlm: {
+        provider: "anthropic",
+        model: "claude-haiku-4-5"
+      }
+    });
+
+    const response = await fetch(`${baseUrl}/api/settings`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        memoryLlm: {}
+      })
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.deepEqual(store.getSettings().memoryLlm, {});
+    assert.deepEqual(json.memoryLlm, {});
+    assert.equal(json._resolved?.memoryBinding?.provider, json._resolved?.orchestrator?.provider);
+    assert.equal(json._resolved?.memoryBinding?.model, json._resolved?.orchestrator?.model);
   });
 
   if (result?.skipped) {

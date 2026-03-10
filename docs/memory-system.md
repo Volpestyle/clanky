@@ -70,7 +70,7 @@ An LLM reviews the full day's journal and distills it into durable facts. The br
 1. Job triggers at the configured time (default: end of day).
 2. Reads `memory/YYYY-MM-DD.md`.
 3. Reflection prompt: "Review this day's conversations. Extract durable facts — things about people, ongoing projects, important events, preferences, recurring topics. Ignore throwaway chatter."
-4. LLM returns structured facts with scope and subject attribution.
+4. LLM returns structured facts with scope and subject attribution. Reflection output uses strict JSON schema validation; every declared field is required, and non-author facts use `subjectName: ""` rather than omitting the field.
 5. Written through the same memory fact write path — same grounding checks, dedup, archiving.
 6. Journals marked as processed. Retained indefinitely.
 
@@ -281,7 +281,7 @@ Both sides captured via synthetic message IDs:
 | `memory.reflection.enabled` | `true` | Daily reflection toggle |
 | `memory.reflection.hour` / `minute` | end of day | Daily reflection schedule |
 | `memory.reflection.maxFactsPerReflection` | `20` | Cap on facts per reflection run |
-| `memoryLlm` | inherit | Optional override for reflection and memory-adjacent background work. Empty means inherit the main text/orchestrator model. |
+| `memoryLlm` | inherit | Optional override for reflection and memory-adjacent background work. The dashboard defaults this to inherit/on, and an empty object clears any explicit override back to the main text/orchestrator model. |
 
 ## APIs and Observability
 
