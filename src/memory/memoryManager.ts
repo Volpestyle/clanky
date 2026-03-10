@@ -47,6 +47,8 @@ const TEXT_MICRO_REFLECTION_SILENCE_MS = 10 * 60 * 1000;
 const TEXT_MICRO_REFLECTION_LOOKBACK_MS = 30 * 60 * 1000;
 const GUIDANCE_FACT_TYPE = "guidance";
 const BEHAVIORAL_FACT_TYPE = "behavioral";
+const FULL_MEMORY_DUMP_LIMIT = 200;
+const HYBRID_RECENT_CANDIDATE_LIMIT = 24;
 
 function sortProfileFacts<T extends MemoryFactRow>(rows: T[]) {
   return [...(Array.isArray(rows) ? rows : [])].sort((left, right) => {
@@ -90,6 +92,18 @@ function dedupePromptFactRows(rows: Array<MemoryFactRow & { subjectLabel?: strin
     deduped.push(row);
   }
   return deduped;
+}
+
+function mergeUniqueFactCandidates(...groups: Array<Array<MemoryFactRow> | null | undefined>) {
+  const merged = new Map<number, MemoryFactRow>();
+  for (const group of groups) {
+    for (const row of Array.isArray(group) ? group : []) {
+      const rowId = Number(row?.id);
+      if (!Number.isInteger(rowId) || rowId <= 0 || merged.has(rowId)) continue;
+      merged.set(rowId, row);
+    }
+  }
+  return [...merged.values()];
 }
 
 export class MemoryManager {
@@ -843,23 +857,24 @@ export class MemoryManager {
   }) {
     const scopeGuildId = String(guildId || "").trim();
     if (!scopeGuildId) return [];
+    const normalizedTrace =
+      trace && typeof trace === "object"
+        ? trace as Record<string, unknown>
+        : {};
 
     const isFullMemoryQuery = queryText === "__ALL__";
-    const boundedLimit = isFullMemoryQuery ? clampInt(limit, 1, 100) : clampInt(limit, 1, 24);
-    const candidateLimit = Math.min(
-      HYBRID_MAX_CANDIDATES * 2,
-      Math.max(boundedLimit * HYBRID_CANDIDATE_MULTIPLIER * 2, boundedLimit)
-    );
-    const candidates = this.store.getFactsForScope({
-      guildId: scopeGuildId,
-      subjectIds,
-      factTypes,
-      limit: candidateLimit
-    });
-    if (!candidates.length) return [];
+    const boundedLimit = isFullMemoryQuery
+      ? clampInt(limit, 1, FULL_MEMORY_DUMP_LIMIT)
+      : clampInt(limit, 1, 24);
 
     if (isFullMemoryQuery) {
-      return candidates.slice(0, boundedLimit).map((row) => ({
+      const rows = this.store.getFactsForScope?.({
+        guildId: scopeGuildId,
+        subjectIds,
+        factTypes,
+        limit: boundedLimit
+      }) || [];
+      return rows.map((row) => ({
         id: row.id,
         created_at: row.created_at,
         guild_id: row.guild_id,
@@ -876,11 +891,71 @@ export class MemoryManager {
       }));
     }
 
+    const query = String(queryText || "").trim();
+    const candidateLimit = Math.min(
+      HYBRID_MAX_CANDIDATES,
+      Math.max(boundedLimit * HYBRID_CANDIDATE_MULTIPLIER, boundedLimit)
+    );
+    const recentCandidateLimit = Math.min(
+      HYBRID_RECENT_CANDIDATE_LIMIT,
+      Math.max(boundedLimit * 2, boundedLimit)
+    );
+    const queryTokens = extractStableTokens(query, 8);
+
+    const recentCandidates = this.store.getFactsForScope?.({
+      guildId: scopeGuildId,
+      subjectIds,
+      factTypes,
+      limit: recentCandidateLimit
+    }) || [];
+
+    const lexicalCandidates = this.store.searchMemoryFactsLexical?.({
+      guildId: scopeGuildId,
+      subjectIds,
+      factTypes,
+      queryText: query,
+      queryTokens,
+      limit: candidateLimit
+    }) || [];
+
+    let semanticCandidates: MemoryFactRow[] = [];
+    if (typeof this.store.searchMemoryFactsByEmbedding === "function") {
+      try {
+        const queryEmbedding = await this.getQueryEmbeddingForRetrieval({
+          queryText: query,
+          settings,
+          trace: {
+            ...normalizedTrace,
+            source: String(normalizedTrace.source || "memory_semantic_candidates")
+          }
+        });
+        if (queryEmbedding?.embedding?.length && queryEmbedding?.model) {
+          semanticCandidates = this.store.searchMemoryFactsByEmbedding({
+            guildId: scopeGuildId,
+            subjectIds,
+            factTypes,
+            model: queryEmbedding.model,
+            queryEmbedding: queryEmbedding.embedding,
+            limit: candidateLimit
+          });
+        }
+      } catch {
+        semanticCandidates = [];
+      }
+    }
+
+    const candidates = mergeUniqueFactCandidates(
+      semanticCandidates,
+      lexicalCandidates,
+      recentCandidates
+    );
+    if (!candidates.length) return [];
+
     const ranked = await this.rankHybridCandidates({
       candidates,
       queryText,
       settings,
-      trace,
+      trace: normalizedTrace,
       channelId,
       requireRelevanceGate: true
     });
@@ -1327,6 +1402,7 @@ export class MemoryManager {
     scope = "lore",
     subjectOverride = null,
     factType = null,
+    confidence = null,
     validationMode = "strict"
   }) {
     const scopeGuildId = String(guildId || "").trim();
@@ -1383,6 +1459,10 @@ export class MemoryManager {
 
     const factText = normalizeStoredFactText(cleaned);
     const normalizedEvidenceText = normalizeEvidenceText(sourceText, sourceText);
+    const normalizedConfidence = clamp01(
+      Number.isFinite(Number(confidence)) ? Number(confidence) : 0.72,
+      0.72
+    );
     const existingFact = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, subject, factText);
     const inserted = this.store.addMemoryFact({
       guildId: scopeGuildId,
@@ -1392,7 +1472,7 @@ export class MemoryManager {
       factType: normalizedFactType,
       evidenceText: normalizedEvidenceText,
       sourceMessageId,
-      confidence: 0.72
+      confidence: normalizedConfidence
     });
 
     if (!inserted) {
@@ -1419,7 +1499,7 @@ export class MemoryManager {
         subject,
         fact: factText,
         factType: normalizedFactType,
-        confidence: Number(factRow?.confidence ?? existingFact?.confidence ?? 0.72),
+        confidence: Number(factRow?.confidence ?? existingFact?.confidence ?? normalizedConfidence),
         evidenceText: normalizedEvidenceText,
         source: scopeConfig.traceSource,
         reason: existingFact ? "updated_existing" : "added_new",

@@ -281,3 +281,121 @@ test("query embedding calls are deduped while in flight", async () => {
   assert.equal(firstResult.length, 1);
   assert.equal(secondResult.length, 1);
 });
+
+test("searchDurableFacts can retrieve semantic candidates outside the recent fallback slice", async () => {
+  const now = new Date().toISOString();
+  const oldSemanticFact = {
+    id: 42,
+    created_at: now,
+    updated_at: now,
+    guild_id: "guild-1",
+    channel_id: "chan-9",
+    subject: "user-9",
+    fact: "User has been deep into Rust lately.",
+    fact_type: "preference",
+    evidence_text: "deep into Rust lately",
+    source_message_id: "msg-42",
+    confidence: 0.88
+  };
+
+  const memory = new MemoryManager({
+    store: {
+      getFactsForScope() {
+        return [];
+      },
+      searchMemoryFactsLexical() {
+        return [];
+      },
+      searchMemoryFactsByEmbedding() {
+        return [oldSemanticFact];
+      },
+      getMemoryFactVectorNativeScores({ factIds }) {
+        return factIds.map((factId) => ({
+          fact_id: factId,
+          score: Number(factId) === 42 ? 0.94 : 0.05
+        }));
+      }
+    },
+    llm: {
+      isEmbeddingReady() {
+        return true;
+      },
+      resolveEmbeddingModel() {
+        return "text-embedding-3-small";
+      },
+      async embedText() {
+        return {
+          embedding: [0.2, 0.4, 0.1],
+          model: "text-embedding-3-small"
+        };
+      }
+    },
+    memoryFilePath: "memory/MEMORY.md"
+  });
+
+  const results = await memory.searchDurableFacts({
+    guildId: "guild-1",
+    channelId: "chan-1",
+    queryText: "what languages is this user into",
+    settings: {},
+    limit: 5
+  });
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0]?.id, 42);
+});
+
+test("rememberDirectiveLineDetailed stores reflection-provided confidence", async () => {
+  let insertedFact: Record<string, unknown> | null = null;
+
+  const memory = new MemoryManager({
+    store: {
+      addMemoryFact(fact) {
+        insertedFact = fact;
+        return true;
+      },
+      getMemoryFactBySubjectAndFact() {
+        return {
+          id: 7,
+          confidence: Number(insertedFact?.confidence || 0),
+          subject: "user-1",
+          fact: "User likes Rust.",
+          fact_type: "preference",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          guild_id: "guild-1",
+          channel_id: "chan-1",
+          evidence_text: "likes Rust",
+          source_message_id: "msg-1"
+        };
+      },
+      logAction() {
+        return undefined;
+      },
+      archiveOldFactsForSubject() {
+        return 0;
+      }
+    },
+    llm: {},
+    memoryFilePath: "memory/MEMORY.md"
+  });
+  memory.queueMemoryRefresh = () => undefined;
+  memory.ensureFactVector = async () => null;
+
+  const result = await memory.rememberDirectiveLineDetailed({
+    line: "User likes Rust",
+    sourceMessageId: "msg-1",
+    userId: "user-1",
+    guildId: "guild-1",
+    channelId: "chan-1",
+    sourceText: "User likes Rust",
+    scope: "user",
+    subjectOverride: "user-1",
+    factType: "preference",
+    confidence: 0.91,
+    validationMode: "strict"
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(insertedFact?.confidence, 0.91);
+});

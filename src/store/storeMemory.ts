@@ -44,6 +44,14 @@ interface MemoryFactVectorScoreRow {
   score: number;
 }
 
+interface MemoryFactLexicalSearchRow extends MemoryFactRow {
+  lexical_score: number;
+}
+
+interface MemoryFactSemanticSearchRow extends MemoryFactRow {
+  semantic_score: number;
+}
+
 interface MemorySubjectRow {
   guild_id: string;
   subject: string;
@@ -53,6 +61,50 @@ interface MemorySubjectRow {
 
 function escapeSqlLikePattern(value: string) {
   return String(value || "").replace(/[\\%_]/g, "\\$&");
+}
+
+function buildScopedFactWhereClause({
+  guildId,
+  subjectIds = null,
+  factTypes = null,
+  tableAlias = ""
+}: {
+  guildId: string;
+  subjectIds?: string[] | null;
+  factTypes?: string[] | null;
+  tableAlias?: string;
+}) {
+  const normalizedGuildId = String(guildId || "").trim();
+  if (!normalizedGuildId) return null;
+
+  const prefix = tableAlias ? `${tableAlias}.` : "";
+  const where = [`${prefix}guild_id = ?`, `${prefix}is_active = 1`];
+  const args: string[] = [normalizedGuildId];
+
+  if (Array.isArray(subjectIds) && subjectIds.length) {
+    const normalizedSubjects: string[] = [
+      ...new Set(subjectIds.map((value) => String(value || "").trim()).filter(Boolean))
+    ];
+    if (normalizedSubjects.length) {
+      where.push(`${prefix}subject IN (${normalizedSubjects.map(() => "?").join(", ")})`);
+      args.push(...normalizedSubjects);
+    }
+  }
+
+  if (Array.isArray(factTypes) && factTypes.length) {
+    const normalizedFactTypes: string[] = [
+      ...new Set(factTypes.map((value) => String(value || "").trim()).filter(Boolean))
+    ];
+    if (normalizedFactTypes.length) {
+      where.push(`${prefix}fact_type IN (${normalizedFactTypes.map(() => "?").join(", ")})`);
+      args.push(...normalizedFactTypes);
+    }
+  }
+
+  return {
+    where,
+    args
+  };
 }
 
 export function addMemoryFact(store: MemoryStore, fact) {
@@ -183,27 +235,14 @@ export function getFactsForScope(store: MemoryStore, {
   factTypes = null,
   queryText = ""
 }) {
-const normalizedGuildId = String(guildId || "").trim();
-if (!normalizedGuildId) return [];
+const scoped = buildScopedFactWhereClause({
+  guildId,
+  subjectIds,
+  factTypes
+});
+if (!scoped) return [];
 
-const where = ["guild_id = ?", "is_active = 1"];
-const args: string[] = [normalizedGuildId];
-
-  if (Array.isArray(subjectIds) && subjectIds.length) {
-    const normalizedSubjects: string[] = [...new Set(subjectIds.map((value) => String(value || "").trim()).filter(Boolean))];
-    if (normalizedSubjects.length) {
-      where.push(`subject IN (${normalizedSubjects.map(() => "?").join(", ")})`);
-      args.push(...normalizedSubjects);
-    }
-  }
-
-if (Array.isArray(factTypes) && factTypes.length) {
-  const normalizedFactTypes: string[] = [...new Set(factTypes.map((value) => String(value || "").trim()).filter(Boolean))];
-  if (normalizedFactTypes.length) {
-    where.push(`fact_type IN (${normalizedFactTypes.map(() => "?").join(", ")})`);
-    args.push(...normalizedFactTypes);
-  }
-}
+const { where, args } = scoped;
 
 const normalizedQueryText = String(queryText || "").trim();
 if (normalizedQueryText) {
@@ -230,6 +269,188 @@ return store.db
          LIMIT ?`
   )
   .all(...args, clamp(limit, 1, 1000));
+}
+
+export function searchMemoryFactsLexical(store: MemoryStore, {
+  guildId,
+  subjectIds = null,
+  factTypes = null,
+  queryText = "",
+  queryTokens = [],
+  limit = 60
+}: {
+  guildId: string;
+  subjectIds?: string[] | null;
+  factTypes?: string[] | null;
+  queryText?: string;
+  queryTokens?: string[];
+  limit?: number;
+}) {
+  const scoped = buildScopedFactWhereClause({
+    guildId,
+    subjectIds,
+    factTypes
+  });
+  if (!scoped) return [];
+
+  const normalizedQueryText = String(queryText || "").trim();
+  const normalizedTokens = [
+    ...new Set((Array.isArray(queryTokens) ? queryTokens : []).map((value) => String(value || "").trim()).filter(Boolean))
+  ].slice(0, 8);
+  if (!normalizedQueryText && !normalizedTokens.length) return [];
+
+  const scoreParts: string[] = [];
+  const scoreArgs: string[] = [];
+  if (normalizedQueryText) {
+    const likePattern = `%${escapeSqlLikePattern(normalizedQueryText)}%`;
+    scoreParts.push("CASE WHEN fact LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 6 ELSE 0 END");
+    scoreParts.push("CASE WHEN COALESCE(evidence_text, '') LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 4 ELSE 0 END");
+    scoreArgs.push(likePattern, likePattern);
+  }
+
+  for (const token of normalizedTokens) {
+    const likePattern = `%${escapeSqlLikePattern(token)}%`;
+    scoreParts.push("CASE WHEN fact LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 3 ELSE 0 END");
+    scoreParts.push("CASE WHEN COALESCE(evidence_text, '') LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 2 ELSE 0 END");
+    scoreParts.push("CASE WHEN subject LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 1 ELSE 0 END");
+    scoreParts.push("CASE WHEN fact_type LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 1 ELSE 0 END");
+    scoreArgs.push(likePattern, likePattern, likePattern, likePattern);
+  }
+
+  const boundedLimit = clamp(Math.floor(Number(limit) || 60), 1, 240);
+  const rows = store.db
+    .prepare<MemoryFactLexicalSearchRow, Array<string | number>>(
+      `SELECT
+           id,
+           created_at,
+           updated_at,
+           guild_id,
+           channel_id,
+           subject,
+           fact,
+           fact_type,
+           evidence_text,
+           source_message_id,
+           confidence,
+           lexical_score
+         FROM (
+           SELECT
+             id,
+             created_at,
+             updated_at,
+             guild_id,
+             channel_id,
+             subject,
+             fact,
+             fact_type,
+             evidence_text,
+             source_message_id,
+             confidence,
+             (${scoreParts.join(" + ")}) AS lexical_score
+           FROM memory_facts
+           WHERE ${scoped.where.join(" AND ")}
+         ) AS ranked
+         WHERE lexical_score > 0
+         ORDER BY lexical_score DESC, updated_at DESC
+         LIMIT ?`
+    )
+    .all(...scoreArgs, ...scoped.args, boundedLimit);
+
+  return rows.map((row) => ({
+    id: Number(row.id),
+    created_at: String(row.created_at || ""),
+    updated_at: String(row.updated_at || ""),
+    guild_id: String(row.guild_id || ""),
+    channel_id: String(row.channel_id || "").trim() || null,
+    subject: String(row.subject || ""),
+    fact: String(row.fact || ""),
+    fact_type: String(row.fact_type || ""),
+    evidence_text: String(row.evidence_text || "").trim() || null,
+    source_message_id: String(row.source_message_id || "").trim() || null,
+    confidence: Number(row.confidence || 0)
+  }));
+}
+
+export function searchMemoryFactsByEmbedding(store: MemoryStore, {
+  guildId,
+  subjectIds = null,
+  factTypes = null,
+  model,
+  queryEmbedding,
+  limit = 60
+}: {
+  guildId: string;
+  subjectIds?: string[] | null;
+  factTypes?: string[] | null;
+  model: string;
+  queryEmbedding: number[];
+  limit?: number;
+}) {
+  if (!store.ensureSqliteVecReady()) return [];
+
+  const scoped = buildScopedFactWhereClause({
+    guildId,
+    subjectIds,
+    factTypes,
+    tableAlias: "m"
+  });
+  if (!scoped) return [];
+
+  const normalizedModel = String(model || "").trim();
+  const normalizedQueryEmbedding = normalizeEmbeddingVector(queryEmbedding);
+  if (!normalizedModel || !normalizedQueryEmbedding.length) return [];
+
+  try {
+    return store.db
+      .prepare<MemoryFactSemanticSearchRow, Array<string | number | Buffer>>(
+        `SELECT
+             m.id,
+             m.created_at,
+             m.updated_at,
+             m.guild_id,
+             m.channel_id,
+             m.subject,
+             m.fact,
+             m.fact_type,
+             m.evidence_text,
+             m.source_message_id,
+             m.confidence,
+             (1 - vec_distance_cosine(v.embedding_blob, ?)) AS semantic_score
+           FROM memory_facts AS m
+           JOIN memory_fact_vectors_native AS v
+             ON v.fact_id = m.id
+          WHERE ${scoped.where.join(" AND ")}
+            AND v.model = ?
+            AND v.dims = ?
+          ORDER BY semantic_score DESC, m.updated_at DESC
+          LIMIT ?`
+      )
+      .all(
+        vectorToBlob(normalizedQueryEmbedding),
+        ...scoped.args,
+        normalizedModel,
+        normalizedQueryEmbedding.length,
+        clamp(Math.floor(Number(limit) || 60), 1, 240)
+      )
+      .filter((row) => Number.isFinite(Number(row?.semantic_score)) && Number(row.semantic_score) > 0)
+      .map((row) => ({
+        id: Number(row.id),
+        created_at: String(row.created_at || ""),
+        updated_at: String(row.updated_at || ""),
+        guild_id: String(row.guild_id || ""),
+        channel_id: String(row.channel_id || "").trim() || null,
+        subject: String(row.subject || ""),
+        fact: String(row.fact || ""),
+        fact_type: String(row.fact_type || ""),
+        evidence_text: String(row.evidence_text || "").trim() || null,
+        source_message_id: String(row.source_message_id || "").trim() || null,
+        confidence: Number(row.confidence || 0)
+      }));
+  } catch (error) {
+    store.sqliteVecReady = false;
+    store.sqliteVecError = String(error?.message || error);
+    return [];
+  }
 }
 
 export function getFactsForSubjectsScoped(store: MemoryStore, {

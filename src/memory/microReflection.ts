@@ -53,6 +53,7 @@ type MicroReflectionMemory = {
     scope?: string;
     subjectOverride?: string | null;
     factType?: string | null;
+    confidence?: number | null;
     validationMode?: string;
   }): Promise<{
     ok: boolean;
@@ -356,6 +357,7 @@ export async function runMicroReflection({
       scope,
       subjectOverride,
       factType: fact.type,
+      confidence: fact.confidence,
       validationMode: "strict"
     });
     if (saveResult?.ok) {

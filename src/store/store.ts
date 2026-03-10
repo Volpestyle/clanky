@@ -23,7 +23,7 @@ import { wasLinkSharedSince, recordSharedLink, pruneLookupContext, recordLookupC
 import { getRecentVoiceSessions, getVoiceSessionEvents } from "./storeVoice.ts";
 import { getReplyPerformanceStats, getStats } from "./storeStats.ts";
 import { createAutomation, getAutomationById, countAutomations, listAutomations, getMostRecentAutomations, findAutomationsByQuery, setAutomationStatus, claimDueAutomations, finalizeAutomationRun, recordAutomationRun, getAutomationRuns } from "./storeAutomation.ts";
-import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactBySubjectAndFact, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject } from "./storeMemory.ts";
+import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactBySubjectAndFact, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject, searchMemoryFactsLexical, searchMemoryFactsByEmbedding } from "./storeMemory.ts";
 
 export const SETTINGS_KEY = "runtime_settings";
 export const ACTION_LOG_RETENTION_DAYS_DEFAULT = 14;
@@ -589,6 +589,28 @@ export class Store {
 
   getFactsForScope(opts: { guildId; limit?; subjectIds?; factTypes?; queryText? }) {
     return getFactsForScope(this, opts);
+  }
+
+  searchMemoryFactsLexical(opts: {
+    guildId;
+    subjectIds?;
+    factTypes?;
+    queryText?;
+    queryTokens?;
+    limit?;
+  }) {
+    return searchMemoryFactsLexical(this, opts);
+  }
+
+  searchMemoryFactsByEmbedding(opts: {
+    guildId;
+    subjectIds?;
+    factTypes?;
+    model;
+    queryEmbedding;
+    limit?;
+  }) {
+    return searchMemoryFactsByEmbedding(this, opts);
   }
 
   getFactsForSubjectsScoped(opts: {
