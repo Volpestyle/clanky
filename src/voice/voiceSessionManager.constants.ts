@@ -53,6 +53,10 @@ export const MIN_RESPONSE_REQUEST_GAP_MS = 700;
 export const RESPONSE_SILENCE_RETRY_DELAY_MS = 5200;
 export const MAX_RESPONSE_SILENCE_RETRIES = 2;
 export const RESPONSE_DONE_SILENCE_GRACE_MS = 1400;
+// Keep realtime TTS responsive by pausing queued streamed utterances before
+// the local Discord playback backlog reaches runaway latency.
+export const REALTIME_ASSISTANT_TTS_BACKPRESSURE_PAUSE_SAMPLES = 48_000 * 3;
+export const REALTIME_ASSISTANT_TTS_BACKPRESSURE_RESUME_SAMPLES = 48_000 + 24_000;
 // Keep ASR sessions warm longer to avoid reconnect penalties between turns.
 export const OPENAI_ASR_SESSION_IDLE_TTL_MS = 60_000;
 // Return ASR text sooner once transcript updates settle.

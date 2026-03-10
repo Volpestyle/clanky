@@ -153,6 +153,8 @@ import {
   LEAVE_DIRECTIVE_REALTIME_AUDIO_START_WAIT_MS,
   OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS,
   OPENAI_TOOL_RESPONSE_DEBOUNCE_MS,
+  REALTIME_ASSISTANT_TTS_BACKPRESSURE_PAUSE_SAMPLES,
+  REALTIME_ASSISTANT_TTS_BACKPRESSURE_RESUME_SAMPLES,
   SPEAKING_END_ADAPTIVE_BUSY_BACKLOG,
   SPEAKING_END_ADAPTIVE_BUSY_CAPTURE_COUNT,
   SPEAKING_END_ADAPTIVE_BUSY_SCALE,
@@ -992,10 +994,10 @@ export class VoiceSessionManager {
 
   getMusicPromptContext(session): {
     playbackState: "playing" | "paused" | "stopped" | "idle";
-    currentTrack: { title: string; artists: string[] } | null;
-    lastTrack: { title: string; artists: string[] } | null;
+    currentTrack: { id: string | null; title: string; artists: string[] } | null;
+    lastTrack: { id: string | null; title: string; artists: string[] } | null;
     queueLength: number;
-    upcomingTracks: Array<{ title: string; artist: string | null }>;
+    upcomingTracks: Array<{ id: string | null; title: string; artist: string | null }>;
     lastAction: "play_now" | "stop" | "pause" | "resume" | "skip" | null;
     lastQuery: string | null;
   } | null {
@@ -2327,12 +2329,81 @@ export class VoiceSessionManager {
     return session.pendingRealtimeAssistantUtterances;
   }
 
+  syncRealtimeAssistantUtteranceBackpressure(
+    session,
+    {
+      queueDepth = null,
+      source = null,
+      trigger = "realtime_assistant_utterance_backpressure"
+    } = {}
+  ) {
+    const pauseSamples = REALTIME_ASSISTANT_TTS_BACKPRESSURE_PAUSE_SAMPLES;
+    const resumeSamples = REALTIME_ASSISTANT_TTS_BACKPRESSURE_RESUME_SAMPLES;
+    if (!session || session.ending || !isRealtimeMode(session.mode)) {
+      return {
+        active: false,
+        bufferedSamples: 0,
+        queueDepth: 0,
+        pauseSamples,
+        resumeSamples
+      };
+    }
+
+    const normalizedQueueDepth = Number.isFinite(Number(queueDepth))
+      ? Math.max(0, Math.round(Number(queueDepth)))
+      : this.getPendingRealtimeAssistantUtterances(session).length;
+    const bufferedSamples = Math.max(0, Number(this.replyManager.getBufferedTtsSamples(session) || 0));
+    const wasActive = Boolean(session.realtimeAssistantUtteranceBackpressureActive);
+    const nextActive =
+      normalizedQueueDepth <= 0
+        ? false
+        : wasActive
+          ? bufferedSamples > resumeSamples
+          : bufferedSamples >= pauseSamples;
+
+    session.realtimeAssistantUtteranceBackpressureActive = nextActive;
+
+    if (wasActive !== nextActive) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: nextActive
+          ? "realtime_assistant_utterance_backpressure_on"
+          : "realtime_assistant_utterance_backpressure_off",
+        metadata: {
+          sessionId: session.id,
+          trigger: String(trigger || "realtime_assistant_utterance_backpressure"),
+          source: String(source || "").trim() || null,
+          queueDepth: normalizedQueueDepth,
+          ttsBufferedSamples: bufferedSamples,
+          ttsBufferedMs: Math.round(bufferedSamples / 48),
+          pauseThresholdMs: Math.round(pauseSamples / 48),
+          resumeThresholdMs: Math.round(resumeSamples / 48)
+        }
+      });
+    }
+
+    return {
+      active: nextActive,
+      bufferedSamples,
+      queueDepth: normalizedQueueDepth,
+      pauseSamples,
+      resumeSamples
+    };
+  }
+
   clearPendingRealtimeAssistantUtterances(session, reason = "cleared") {
     if (!session) return 0;
     const queue = this.getPendingRealtimeAssistantUtterances(session);
     const clearedCount = queue.length;
     if (!clearedCount) return 0;
     session.pendingRealtimeAssistantUtterances = [];
+    this.syncRealtimeAssistantUtteranceBackpressure(session, {
+      queueDepth: 0,
+      trigger: `queue_cleared:${String(reason || "cleared")}`
+    });
     this.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
@@ -2355,8 +2426,16 @@ export class VoiceSessionManager {
     if (session.pendingResponse && typeof session.pendingResponse === "object") return false;
 
     const queue = this.getPendingRealtimeAssistantUtterances(session);
-    const next = queue.shift();
+    const next = queue[0];
     if (!next) return false;
+    const backpressure = this.syncRealtimeAssistantUtteranceBackpressure(session, {
+      queueDepth: queue.length,
+      source: next.source,
+      trigger: reason
+    });
+    if (backpressure.active) return false;
+
+    queue.shift();
 
     const requested = this.sendRealtimePromptUtterance({
       session,
@@ -2480,48 +2559,55 @@ export class VoiceSessionManager {
       .trim()
       .slice(0, STT_REPLY_MAX_CHARS + 420);
     if (!utterancePrompt) return false;
+    const normalizedInterruptionPolicy = this.resolveReplyInterruptionPolicy({
+      session,
+      userId,
+      policy: interruptionPolicy,
+    });
     const normalizedUtteranceText =
       utteranceText === null
         ? null
         : normalizeVoiceText(String(utteranceText || ""), STT_REPLY_MAX_CHARS) || null;
-
-    if (
+    const queue = this.getPendingRealtimeAssistantUtterances(session);
+    const queuedUtterance = {
+      prompt: utterancePrompt,
+      utteranceText: normalizedUtteranceText,
+      userId: userId || this.client.user?.id || null,
+      source: String(source || "voice_prompt_utterance"),
+      queuedAt: Date.now(),
+      interruptionPolicy: normalizedInterruptionPolicy,
+      latencyContext:
+        latencyContext && typeof latencyContext === "object"
+          ? {
+            finalizedAtMs: Math.max(0, Number(latencyContext.finalizedAtMs || 0)),
+            asrStartedAtMs: Math.max(0, Number(latencyContext.asrStartedAtMs || 0)),
+            asrCompletedAtMs: Math.max(0, Number(latencyContext.asrCompletedAtMs || 0)),
+            generationStartedAtMs: Math.max(0, Number(latencyContext.generationStartedAtMs || 0)),
+            replyRequestedAtMs: Math.max(0, Number(latencyContext.replyRequestedAtMs || 0)),
+            audioStartedAtMs: Math.max(0, Number(latencyContext.audioStartedAtMs || 0)),
+            source: String(latencyContext.source || source || "voice_prompt_utterance"),
+            captureReason: String(latencyContext.captureReason || "").trim() || null,
+            queueWaitMs: Number.isFinite(Number(latencyContext.queueWaitMs))
+              ? Math.max(0, Math.round(Number(latencyContext.queueWaitMs)))
+              : null,
+            pendingQueueDepth: Number.isFinite(Number(latencyContext.pendingQueueDepth))
+              ? Math.max(0, Math.round(Number(latencyContext.pendingQueueDepth)))
+              : null
+          }
+          : null
+    };
+    const shouldQueueBecauseOutstandingReply =
+      queue.length > 0 ||
       this.replyManager.isRealtimeResponseActive(session) ||
-      (session.pendingResponse && typeof session.pendingResponse === "object")
-    ) {
-      const queue = this.getPendingRealtimeAssistantUtterances(session);
-      const normalizedInterruptionPolicy = this.resolveReplyInterruptionPolicy({
-        session,
-        userId,
-        policy: interruptionPolicy,
-      });
-      queue.push({
-        prompt: utterancePrompt,
-        utteranceText: normalizedUtteranceText,
-        userId: userId || this.client.user?.id || null,
-        source: String(source || "voice_prompt_utterance"),
-        queuedAt: Date.now(),
-        interruptionPolicy: normalizedInterruptionPolicy,
-        latencyContext:
-          latencyContext && typeof latencyContext === "object"
-            ? {
-              finalizedAtMs: Math.max(0, Number(latencyContext.finalizedAtMs || 0)),
-              asrStartedAtMs: Math.max(0, Number(latencyContext.asrStartedAtMs || 0)),
-              asrCompletedAtMs: Math.max(0, Number(latencyContext.asrCompletedAtMs || 0)),
-              generationStartedAtMs: Math.max(0, Number(latencyContext.generationStartedAtMs || 0)),
-              replyRequestedAtMs: Math.max(0, Number(latencyContext.replyRequestedAtMs || 0)),
-              audioStartedAtMs: Math.max(0, Number(latencyContext.audioStartedAtMs || 0)),
-              source: String(latencyContext.source || source || "voice_prompt_utterance"),
-              captureReason: String(latencyContext.captureReason || "").trim() || null,
-              queueWaitMs: Number.isFinite(Number(latencyContext.queueWaitMs))
-                ? Math.max(0, Math.round(Number(latencyContext.queueWaitMs)))
-                : null,
-              pendingQueueDepth: Number.isFinite(Number(latencyContext.pendingQueueDepth))
-                ? Math.max(0, Math.round(Number(latencyContext.pendingQueueDepth)))
-                : null
-            }
-            : null
-      });
+      (session.pendingResponse && typeof session.pendingResponse === "object");
+    const backpressure = this.syncRealtimeAssistantUtteranceBackpressure(session, {
+      queueDepth: queue.length + 1,
+      source: queuedUtterance.source,
+      trigger: shouldQueueBecauseOutstandingReply ? "request_queued" : "request_immediate"
+    });
+
+    if (shouldQueueBecauseOutstandingReply || backpressure.active) {
+      queue.push(queuedUtterance);
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
@@ -2531,7 +2617,9 @@ export class VoiceSessionManager {
         metadata: {
           sessionId: session.id,
           source: String(source || "voice_prompt_utterance"),
-          queueDepth: queue.length
+          queueDepth: queue.length,
+          backpressureActive: backpressure.active,
+          ttsBufferedSamples: backpressure.bufferedSamples
         }
       });
       return true;
@@ -2580,7 +2668,7 @@ export class VoiceSessionManager {
     const steps = [];
     const appendSpeech = (rawText) => {
       const normalized = normalizeVoiceText(rawText, STT_REPLY_MAX_CHARS);
-      if (!normalized) return;
+      if (!normalized || !/\w/.test(normalized)) return;
       const last = steps[steps.length - 1];
       if (last?.type === "speech") {
         last.text = normalizeVoiceText(`${last.text} ${normalized}`, STT_REPLY_MAX_CHARS);

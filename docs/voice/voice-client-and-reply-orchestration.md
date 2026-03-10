@@ -91,7 +91,7 @@ On socket close or fatal error, `endSession()` is called. Only specific recovera
 | Event | Handler | Purpose | Output State Machine Effect |
 |---|---|---|---|
 | `audio_delta` | `onAudioDelta` | Forward base64 audio to clankvox for Discord playback. Handle barge-in suppression and music ducking. | `syncAssistantOutputState("audio_delta")` |
-| `transcript` | `onTranscript` | Log transcripts, record voice turns, trigger soundboard from output transcripts. | — |
+| `transcript` | `onTranscript` | Log transcripts, record voice turns, parse inline soundboard directives out of assistant output transcripts, and capture requested refs without leaving control markup in stored speech text. | — |
 | `error_event` | `onErrorEvent` | Check if error is recoverable. End session if not. | — |
 | `socket_closed` | `onSocketClosed` | End session with reason `"realtime_socket_closed"`. | Session ends |
 | `socket_error` | `onSocketError` | Log error only (does NOT end session by itself). | — |
@@ -110,6 +110,8 @@ All listeners are tracked in `session.cleanupHandlers` and removed during teardo
 - `queueRealtimeTurnContextRefresh()` — serialized async queue preventing concurrent refreshes
 
 Refresh triggers: session start, music idle/error, voice membership changes, channel changes, turn context updates.
+
+Music prompt context stays available while playback is idle when the session still has meaningful music state. Realtime instructions include the current/last known track, exact reusable `selection_id` values for current/last/queued tracks, queued tracks, last action, and last query so the model can reason about replay and queue followups directly from prompt context.
 
 ### Tool Refresh (`voiceToolCallInfra.ts`)
 
@@ -321,7 +323,16 @@ In realtime sessions, this path can still deliver speech through the realtime cl
 
 When Brain is paired with Realtime TTS and reply streaming is enabled, this
 path can request speech incrementally from streamed generation chunks instead of
-waiting for whole-reply playback. See [`voice-provider-abstraction.md`](voice-provider-abstraction.md).
+waiting for whole-reply playback. Streamed chunks still pass through the ordered
+voice playback planner, so inline `[[SOUNDBOARD:<sound_ref>]]` directives can
+land as `speech -> soundboard -> speech` beats without a second model turn.
+Queued streamed utterances also respect local `clankvox` playback backlog
+before they are handed to realtime TTS. The session keeps a higher-level text
+queue for streamed chunks, pauses that queue once buffered TTS crosses roughly
+3 seconds, and resumes draining once backlog falls back to roughly 1.5 seconds.
+This keeps streaming responsive without letting raw PCM backlog grow until the
+Rust subprocess has to drop old audio.
+See [`voice-provider-abstraction.md`](voice-provider-abstraction.md).
 
 ## 15. Deferred Turn System
 

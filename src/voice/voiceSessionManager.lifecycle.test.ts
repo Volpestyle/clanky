@@ -14,6 +14,8 @@ import {
   BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS,
   BARGE_IN_MIN_SPEECH_MS,
   BARGE_IN_SUPPRESSION_MAX_MS,
+  REALTIME_ASSISTANT_TTS_BACKPRESSURE_PAUSE_SAMPLES,
+  REALTIME_ASSISTANT_TTS_BACKPRESSURE_RESUME_SAMPLES,
   VOICE_SILENCE_GATE_MIN_CLIP_MS,
   VOICE_TURN_PROMOTION_MIN_CLIP_MS
 } from "./voiceSessionManager.constants.ts";
@@ -283,6 +285,7 @@ function createSession(overrides = {}) {
     deferredVoiceActionTimers: {},
     lastRequestedRealtimeUtterance: null,
     pendingRealtimeAssistantUtterances: [],
+    realtimeAssistantUtteranceBackpressureActive: false,
     settingsSnapshot: createTestSettings({
       botName: "clanker conk",
       voice: {
@@ -1630,6 +1633,55 @@ test("playVoiceReplyInOrder does not fallback to TTS when realtime utterance fai
   assert.equal(ttsCalls, 0);
 });
 
+test("playVoiceReplyInOrder preserves inline soundboard sequencing on buffered playback", async () => {
+  const { manager } = createManager();
+  const session = createSession({
+    settingsSnapshot: createTestSettings({
+      botName: "clanker conk",
+      voice: {
+        soundboard: {
+          enabled: true,
+          preferredSoundIds: ["airhorn@123", "rimshot@456"]
+        }
+      }
+    })
+  });
+  const eventOrder: string[] = [];
+  manager.speakVoiceLineWithTts = async ({ text }) => {
+    eventOrder.push(`speech:${String(text)}`);
+    return true;
+  };
+  manager.waitForLeaveDirectivePlayback = async () => {};
+  manager.soundboardDirector.play = async ({ soundId, sourceGuildId }) => {
+    eventOrder.push(`sound:${sourceGuildId ? `${soundId}@${sourceGuildId}` : soundId}`);
+    return { ok: true };
+  };
+
+  const playbackPlan = manager.buildVoiceReplyPlaybackPlan({
+    replyText: "yo [[SOUNDBOARD:airhorn@123]] hold up [[SOUNDBOARD:rimshot@456]] done"
+  });
+  const result = await manager.playVoiceReplyInOrder({
+    session,
+    settings: session.settingsSnapshot,
+    spokenText: playbackPlan.spokenText,
+    playbackSteps: playbackPlan.steps,
+    source: "test_reply",
+    preferRealtimeUtterance: false
+  });
+
+  assert.equal(result.completed, true);
+  assert.equal(result.spokeLine, true);
+  assert.equal(result.requestedRealtimeUtterance, false);
+  assert.equal(result.playedSoundboardCount, 2);
+  assert.deepEqual(eventOrder, [
+    "speech:yo",
+    "sound:airhorn@123",
+    "speech:hold up",
+    "sound:rimshot@456",
+    "speech:done"
+  ]);
+});
+
 test("deliverVoiceThoughtCandidate does not fallback to TTS in realtime mode", async () => {
   const { manager } = createManager();
   const session = createSession({
@@ -1778,6 +1830,131 @@ test("handleResponseDone drains queued assistant speech after realtime audio com
   assert.equal(session.pendingRealtimeAssistantUtterances?.length, 0);
   assert.equal(Number(session.pendingResponse?.requestId || 0) > 0, true);
   assert.equal(session.pendingResponse?.utteranceText, "second chunk");
+  assert.equal(logs.some((entry) => entry?.content === "realtime_assistant_utterance_queue_drained"), true);
+});
+
+test("requestRealtimeTextUtterance queues assistant speech when clankvox playback backlog is already high", () => {
+  const { manager, logs } = createManager();
+  const prompts = [];
+  const voxClient = {
+    ttsBufferDepthSamples: REALTIME_ASSISTANT_TTS_BACKPRESSURE_PAUSE_SAMPLES,
+    getTtsBufferDepthSamples() {
+      return this.ttsBufferDepthSamples;
+    },
+    getTtsTelemetryUpdatedAt() {
+      return Date.now();
+    }
+  };
+  const session = createSession({
+    mode: "openai_realtime",
+    voxClient,
+    realtimeClient: {
+      requestTextUtterance(prompt) {
+        prompts.push(prompt);
+      },
+      isResponseInProgress() {
+        return false;
+      }
+    }
+  });
+
+  const requested = manager.requestRealtimeTextUtterance({
+    session,
+    text: "third chunk",
+    source: "test_stream_chunk_2"
+  });
+
+  assert.equal(requested, true);
+  assert.equal(prompts.length, 0);
+  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 1);
+  assert.equal(session.realtimeAssistantUtteranceBackpressureActive, true);
+  assert.equal(
+    logs.some((entry) => entry?.content === "realtime_assistant_utterance_backpressure_on"),
+    true
+  );
+});
+
+test("buffer depth updates release queued assistant speech once clankvox playback backlog recovers", () => {
+  const { manager, logs } = createManager();
+  const prompts = [];
+  let activeResponse = true;
+  const voxClient = Object.assign(new EventEmitter(), {
+    ttsBufferDepthSamples: REALTIME_ASSISTANT_TTS_BACKPRESSURE_PAUSE_SAMPLES + 24_000,
+    getTtsBufferDepthSamples() {
+      return this.ttsBufferDepthSamples;
+    },
+    getTtsTelemetryUpdatedAt() {
+      return Date.now();
+    },
+    getTtsPlaybackState() {
+      return this.ttsBufferDepthSamples > 0 ? "buffered" : "idle";
+    },
+    getPlaybackArmedReason() {
+      return null;
+    }
+  });
+  const session = createSession({
+    mode: "openai_realtime",
+    voxClient,
+    realtimeClient: {
+      requestTextUtterance(prompt) {
+        prompts.push(prompt);
+      },
+      isResponseInProgress() {
+        return activeResponse;
+      }
+    },
+    pendingResponse: {
+      requestId: 5,
+      userId: "bot-user",
+      requestedAt: Date.now() - 1_500,
+      retryCount: 0,
+      hardRecoveryAttempted: false,
+      source: "test_active_reply",
+      handlingSilence: false,
+      audioReceivedAt: 0,
+      interruptionPolicy: null,
+      utteranceText: "first chunk",
+      latencyContext: null
+    }
+  });
+
+  manager.sessionLifecycle.bindVoxHandlers(session);
+
+  const queued = manager.requestRealtimeTextUtterance({
+    session,
+    text: "second chunk",
+    source: "test_stream_chunk_1"
+  });
+  assert.equal(queued, true);
+
+  activeResponse = false;
+  session.lastAudioDeltaAt = Date.now();
+  manager.replyManager.handleResponseDone({
+    session,
+    event: {
+      response: {
+        id: "resp_test_1",
+        status: "completed"
+      }
+    }
+  });
+
+  assert.equal(prompts.length, 0);
+  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 1);
+  assert.equal(session.realtimeAssistantUtteranceBackpressureActive, true);
+
+  voxClient.ttsBufferDepthSamples = REALTIME_ASSISTANT_TTS_BACKPRESSURE_RESUME_SAMPLES;
+  voxClient.emit("bufferDepth", voxClient.ttsBufferDepthSamples, 0);
+
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0] || "", /second chunk/);
+  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 0);
+  assert.equal(session.realtimeAssistantUtteranceBackpressureActive, false);
+  assert.equal(
+    logs.some((entry) => entry?.content === "realtime_assistant_utterance_backpressure_off"),
+    true
+  );
   assert.equal(logs.some((entry) => entry?.content === "realtime_assistant_utterance_queue_drained"), true);
 });
 

@@ -50,6 +50,7 @@ type SessionLifecycleHost = VoiceToolCallManager & Pick<
   | "clearVoiceThoughtLoopTimer"
   | "engageBotSpeechMusicDuck"
   | "estimatePcm16MonoDurationMs"
+  | "drainPendingRealtimeAssistantUtterances"
   | "getMusicPhase"
   | "handleRealtimeFunctionCallEvent"
   | "isAsrActive"
@@ -327,6 +328,7 @@ export class SessionLifecycle {
     session.pendingRealtimeTurns = [];
     session.activeRealtimeTurn = null;
     session.pendingRealtimeAssistantUtterances = [];
+    session.realtimeAssistantUtteranceBackpressureActive = false;
     this.host.deferredActionQueue.clearAllDeferredVoiceActions(session);
     if (session.realtimeToolOwnership === "provider_native") {
       session.awaitingToolOutputs = false;
@@ -488,6 +490,7 @@ export class SessionLifecycle {
 
     const onBufferDepth = (_ttsSamples) => {
       this.host.replyManager.syncAssistantOutputState(session, "vox_buffer_depth");
+      this.host.drainPendingRealtimeAssistantUtterances(session, "vox_buffer_depth");
     };
 
     const onTtsPlaybackState = (_status) => {

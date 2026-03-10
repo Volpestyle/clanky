@@ -878,6 +878,7 @@ export interface VoiceSession {
     lastRequestedRealtimeUtterance: VoiceLastRequestedRealtimeUtterance | null;
     interruptedAssistantReply?: VoiceInterruptedAssistantReply | null;
     pendingRealtimeAssistantUtterances?: VoiceQueuedRealtimeAssistantUtterance[];
+    realtimeAssistantUtteranceBackpressureActive?: boolean;
     pendingFileAsrTurns: TurnProcessorState["pendingFileAsrTurns"];
     fileAsrTurnDrainActive: TurnProcessorState["fileAsrTurnDrainActive"];
     pendingFileAsrTurnsQueue: TurnProcessorState["pendingFileAsrTurnsQueue"];

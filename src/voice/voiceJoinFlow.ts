@@ -727,6 +727,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         lastRequestedRealtimeUtterance: null,
         interruptedAssistantReply: null,
         pendingRealtimeAssistantUtterances: [],
+        realtimeAssistantUtteranceBackpressureActive: false,
         pendingFileAsrTurns: 0,
         fileAsrTurnDrainActive: false,
         pendingFileAsrTurnsQueue: [],
