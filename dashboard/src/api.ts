@@ -1,8 +1,20 @@
-let token = localStorage.getItem("dashboard_token") || "";
+try {
+  globalThis.localStorage?.removeItem("dashboard_token");
+} catch {
+  // ignore localStorage cleanup failures
+}
 
 type ApiOptions = {
   method?: string;
   body?: unknown;
+};
+
+export type DashboardAuthState = {
+  authenticated: boolean;
+  requiresToken: boolean;
+  publicHttpsEnabled: boolean;
+  authMethod: "none" | "open_local" | "header" | "session";
+  configurationError: string | null;
 };
 
 export class ApiError extends Error {
@@ -21,23 +33,11 @@ export class ApiError extends Error {
   }
 }
 
-export function setToken(t: string) {
-  token = t;
-  localStorage.setItem("dashboard_token", t);
-}
-
-export function getToken(): string {
-  return token;
-}
-
 export async function api<T = unknown>(url: string, options: ApiOptions = {}): Promise<T> {
-  const headers = {
-    ...(options.body ? { "Content-Type": "application/json" } : {}),
-    ...(token ? { "x-dashboard-token": token } : {})
-  };
-
+  const headers = options.body ? { "Content-Type": "application/json" } : undefined;
   const res = await fetch(url, {
     method: options.method || "GET",
+    credentials: "same-origin",
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined
   });
@@ -60,6 +60,25 @@ export async function api<T = unknown>(url: string, options: ApiOptions = {}): P
   }
 
   return res.json() as Promise<T>;
+}
+
+export async function getDashboardAuthState(): Promise<DashboardAuthState> {
+  return api("/api/auth/session");
+}
+
+export async function createDashboardSession(token: string): Promise<DashboardAuthState> {
+  return api("/api/auth/session", {
+    method: "POST",
+    body: {
+      token
+    }
+  });
+}
+
+export async function destroyDashboardSession(): Promise<DashboardAuthState> {
+  return api("/api/auth/session", {
+    method: "DELETE"
+  });
 }
 
 export async function resetSettings(): Promise<unknown> {

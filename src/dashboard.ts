@@ -6,6 +6,7 @@ import { serveStatic } from "hono/bun";
 import type { Store } from "./store/store.ts";
 import { normalizeDashboardHost } from "./config.ts";
 import { classifyApiAccessPath, isAllowedPublicApiPath, isPublicTunnelRequestHost } from "./services/publicIngressAccess.ts";
+import { attachAuthRoutes, hasValidDashboardSessionCookie, isDashboardAuthSessionApiPath } from "./dashboard/routesAuth.ts";
 import { attachSettingsRoutes } from "./dashboard/routesSettings.ts";
 import { attachMetricsRoutes } from "./dashboard/routesMetrics.ts";
 import { attachVoiceRoutes } from "./dashboard/routesVoice.ts";
@@ -296,13 +297,19 @@ export function createDashboardServer({
     }
 
     const apiPath = stripApiPrefix(c.req.path);
+    if (isDashboardAuthSessionApiPath(apiPath)) {
+      await next();
+      return;
+    }
     const apiAccessKind = classifyApiAccessPath(apiPath);
     const isPublicApiRoute = isAllowedPublicApiPath(apiPath);
     const dashboardToken = String(appConfig.dashboardToken || "").trim();
     const publicApiToken = String(appConfig.publicApiToken || "").trim();
     const presentedDashboardToken = c.req.header("x-dashboard-token") || "";
     const presentedPublicToken = c.req.header("x-public-api-token") || "";
-    const isDashboardAuthorized = Boolean(dashboardToken) && presentedDashboardToken === dashboardToken;
+    const isDashboardSessionAuthorized = await hasValidDashboardSessionCookie(c, dashboardToken);
+    const isDashboardAuthorized =
+      (Boolean(dashboardToken) && presentedDashboardToken === dashboardToken) || isDashboardSessionAuthorized;
     const isPublicApiAuthorized = Boolean(publicApiToken) && presentedPublicToken === publicApiToken;
     const isPublicTunnelRequest = isRequestFromPublicTunnel(c, publicHttpsEntrypoint);
     const publicHttpsEnabled = Boolean(publicHttpsEntrypoint?.getState?.()?.enabled);
@@ -387,6 +394,10 @@ export function createDashboardServer({
     }
   };
 
+  attachAuthRoutes(app, {
+    appConfig,
+    publicHttpsEntrypoint
+  });
   attachSettingsRoutes(app, { store, bot, appConfig });
   attachMetricsRoutes(app, {
     store,

@@ -791,6 +791,69 @@ test("dashboard admin routes do not accept dashboard tokens in the query string"
   }
 });
 
+test("dashboard auth session cookie grants local browser access without resending the admin token", async () => {
+  const result = await withDashboardServer(
+    {
+      dashboardToken: "dash-token"
+    },
+    async ({ baseUrl }) => {
+      const login = await fetch(`${baseUrl}/api/auth/session`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          token: "dash-token"
+        })
+      });
+      assert.equal(login.status, 200);
+
+      const cookieHeader = String(login.headers.get("set-cookie") || "").split(";")[0];
+      assert.equal(cookieHeader.startsWith("dashboard_session="), true);
+
+      const settings = await fetch(`${baseUrl}/api/settings`, {
+        headers: {
+          cookie: cookieHeader
+        }
+      });
+      assert.equal(settings.status, 200);
+    }
+  );
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard auth session login is not exposed on the public tunnel host", async () => {
+  const result = await withDashboardServer(
+    {
+      dashboardToken: "dash-token",
+      publicHttpsState: {
+        enabled: true,
+        publicUrl: "https://fancy-cat.trycloudflare.com"
+      }
+    },
+    async ({ baseUrl }) => {
+      const response = await fetch(`${baseUrl}/api/auth/session`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-forwarded-host": "fancy-cat.trycloudflare.com"
+        },
+        body: JSON.stringify({
+          token: "dash-token"
+        })
+      });
+      assert.equal(response.status, 404);
+    }
+  );
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
 test("dashboard requires a token before binding to a non-loopback host", async () => {
   await assert.rejects(
     () =>

@@ -86,7 +86,8 @@ Settings are written through the dashboard API, normalized in `normalizeSettings
 
 Control-plane guarantees:
 
-- admin routes accept `x-dashboard-token` headers only
+- browser dashboard sessions exchange `DASHBOARD_TOKEN` once at `POST /api/auth/session` and then use an HTTP-only signed session cookie
+- admin routes accept either the signed dashboard session cookie or `x-dashboard-token`
 - non-loopback dashboard binds require `DASHBOARD_TOKEN`
 - dashboard saves use compare-and-swap on `settings.updated_at`
 - persistence and live-session application are separate outcomes: a save can succeed even when active voice sessions still need a manual refresh

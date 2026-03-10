@@ -59,11 +59,14 @@ State shape:
   - `GET /share/:token`
 - Non-allowlisted API routes on tunnel host (without a valid token) return `404`.
 - Dashboard UI/static routes on tunnel host return `404` unless they are tokenized share pages.
+- Local dashboard browser login uses `POST /api/auth/session` to mint an HTTP-only signed session cookie.
+- Dashboard auth-session routes are not exposed on the tunnel host.
 - Public header-token routes (`/api/voice/stream-ingest/frame`) accept either:
   - `x-dashboard-token` matching `DASHBOARD_TOKEN`, or
   - `x-public-api-token` matching `PUBLIC_API_TOKEN`.
 - If neither token is configured, header-token routes return `503`.
-- Private/local admin routes require `x-dashboard-token` when public HTTPS is enabled.
+- Private/local admin routes require a dashboard session cookie or `x-dashboard-token` when public HTTPS is enabled.
+- Remote admin API access over the tunnel continues to use `x-dashboard-token` directly; the browser-login flow stays local-only.
 - Dashboard/API listener defaults to loopback host (`127.0.0.1`) unless explicitly overridden.
 - Frame ingress applies fixed-window rate limiting and declared payload-size checks on public paths.
 
@@ -92,6 +95,7 @@ Environment variables:
 
 ## Security Model
 - Public HTTPS entrypoint requires full API auth.
+- Browser dashboard auth uses an HTTP-only signed cookie so the admin token is not stored in browser localStorage or replayed on every request.
 - Stream ingest endpoint requires either private admin auth (`DASHBOARD_TOKEN`) or public ingress auth (`PUBLIC_API_TOKEN`).
 - The tunnel URL should be treated as an untrusted public entrypoint; tokens must be kept secret.
 

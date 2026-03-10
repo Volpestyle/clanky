@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { getToken } from "../api";
 
 export type VoiceState = {
   activeCount: number;
@@ -47,6 +46,7 @@ export type PromptLogBundle = {
   initialUserPrompt?: string;
   followupUserPrompts?: string[];
   followupSteps?: number;
+  tools?: { name: string; description: string; parameters?: Record<string, unknown> | null }[];
 } | null;
 
 export type PromptSnapshot = {
@@ -357,9 +357,7 @@ export function useVoiceSSE() {
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const connect = useCallback(() => {
-    const token = getToken();
-    const url = `/api/voice/events${token ? `?token=${encodeURIComponent(token)}` : ""}`;
-    const es = new EventSource(url);
+    const es = new EventSource("/api/voice/events");
     esRef.current = es;
     setStatus("connecting");
 

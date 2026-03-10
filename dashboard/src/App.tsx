@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef, lazy, Suspense, type ReactNode } from "react";
-import { api, ApiError } from "./api";
+import { api, ApiError, getDashboardAuthState, type DashboardAuthState } from "./api";
 import { usePolling } from "./hooks/usePolling";
 import { useActivitySSE } from "./hooks/useActivitySSE";
 import Header from "./components/Header";
@@ -92,6 +92,52 @@ const MAIN_TABS: MainTabDefinition[] = [
 ];
 
 export default function App() {
+  const auth = usePolling(() => getDashboardAuthState(), 0);
+  const authState = (auth.data as DashboardAuthState | null) || null;
+  const refreshAuth = useCallback(async () => {
+    await auth.reload();
+  }, [auth.reload]);
+
+  if (!authState) {
+    return (
+      <main className="shell">
+        <Header authState={null} onAuthChanged={refreshAuth} />
+        <section className="grid-secondary">
+          <p className="status-msg" role="status">
+            Checking dashboard session...
+          </p>
+        </section>
+      </main>
+    );
+  }
+
+  if (authState.requiresToken && !authState.authenticated) {
+    const lockMessage = authState.configurationError
+      ? `Dashboard auth is misconfigured: ${authState.configurationError}`
+      : "Enter the dashboard token in the header to unlock the control room.";
+
+    return (
+      <main className="shell">
+        <Header authState={authState} onAuthChanged={refreshAuth} />
+        <section className="grid-secondary">
+          <p className={`status-msg ${authState.configurationError ? "error" : ""}`} role="status">
+            {lockMessage}
+          </p>
+        </section>
+      </main>
+    );
+  }
+
+  return <AuthenticatedDashboard authState={authState} onAuthChanged={refreshAuth} />;
+}
+
+function AuthenticatedDashboard({
+  authState,
+  onAuthChanged
+}: {
+  authState: DashboardAuthState;
+  onAuthChanged: () => Promise<void>;
+}) {
   const initialTabRef = useRef<MainTab | null>(null);
   if (initialTabRef.current === null) {
     initialTabRef.current = loadStoredTab(MAIN_TAB_STORAGE_KEY, MAIN_TAB_IDS, "activity");
@@ -255,7 +301,7 @@ export default function App() {
 
   return (
     <main className="shell">
-      <Header isReady={isReady} />
+      <Header isReady={isReady} authState={authState} onAuthChanged={onAuthChanged} />
 
       <MetricsBar stats={activity.stats} />
       <StaleIndicator lastSuccess={activity.lastSuccess} />

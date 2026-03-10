@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getToken } from "../api";
 
 export type ActivitySSEStatus = "connecting" | "open" | "closed";
 
@@ -95,9 +94,7 @@ export function useActivitySSE() {
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
     }
-    const token = getToken();
-    const url = `/api/activity/events${token ? `?token=${encodeURIComponent(token)}` : ""}`;
-    const es = new EventSource(url);
+    const es = new EventSource("/api/activity/events");
     esRef.current = es;
     setStatus("connecting");
 
