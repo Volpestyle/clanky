@@ -37,6 +37,7 @@ export type AgentStackPresetDefaults = {
     mode: "generation_decides" | "classifier_gate";
   };
   voiceAdmissionClassifier?: ModelBinding;
+  voiceInterruptClassifier?: ModelBinding;
   voiceMusicBrain?: ModelBinding;
   voiceGeneration?: ModelBinding;
   sessionPolicy?: AgentSessionPolicy;
@@ -377,6 +378,13 @@ export function getAgentStackPresetDefaults(
           }
         }
       : {}),
+    ...(definition.voiceInterruptClassifier
+      ? {
+          voiceInterruptClassifier: {
+            ...definition.voiceInterruptClassifier
+          }
+        }
+      : {}),
     ...(definition.voiceMusicBrain
       ? {
           voiceMusicBrain: {
@@ -414,6 +422,18 @@ export function getPresetVoiceAdmissionClassifierFallback(
   preset: unknown
 ): ModelBinding | undefined {
   const definition = getAgentStackPresetDefinition(preset);
+  return definition.voiceAdmissionClassifier
+    ? { ...definition.voiceAdmissionClassifier }
+    : undefined;
+}
+
+export function getPresetVoiceInterruptClassifierFallback(
+  preset: unknown
+): ModelBinding | undefined {
+  const definition = getAgentStackPresetDefinition(preset);
+  if (definition.voiceInterruptClassifier) {
+    return { ...definition.voiceInterruptClassifier };
+  }
   return definition.voiceAdmissionClassifier
     ? { ...definition.voiceAdmissionClassifier }
     : undefined;

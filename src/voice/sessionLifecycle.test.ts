@@ -234,6 +234,111 @@ test("bindRealtimeHandlers persists only final realtime transcript events", () =
   assert.equal(session.pendingRealtimeInputBytes, 0);
 });
 
+test("bindRealtimeHandlers drops late audio and transcripts for interrupted realtime output items", () => {
+  const runtimeLogs = [];
+  const forwardedAudio: Array<{ audioBase64: string; sampleRate: number }> = [];
+  const manager = createVoiceTestManager();
+  const realtimeClient = new OpenAiRealtimeClient({ apiKey: "test-key" });
+  const audioDelta = "A".repeat(64);
+  let markBotTurnOutCount = 0;
+
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.getMusicPhase = () => "idle";
+  manager.replyManager.markBotTurnOut = () => {
+    markBotTurnOutCount += 1;
+  };
+  manager.replyManager.syncAssistantOutputState = () => {};
+  manager.replyManager.pendingResponseHasAudio = () => false;
+
+  const session = {
+    id: "session-realtime-interrupted-item-drop-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    recentVoiceTurns: [],
+    transcriptTurns: [],
+    pendingRealtimeInputBytes: 0,
+    pendingResponse: null,
+    responseDoneGraceTimer: null,
+    lastAudioDeltaAt: 0,
+    lastRealtimeAssistantAudioItemId: null,
+    lastRealtimeAssistantAudioItemContentIndex: 0,
+    lastRealtimeAssistantAudioItemReceivedMs: 0,
+    ignoredRealtimeAssistantOutputItemIds: new Map([["item_old", Date.now()]]),
+    realtimeOutputSampleRateHz: 24000,
+    settingsSnapshot: createVoiceTestSettings({
+      voice: {
+        ambientReplyEagerness: 60,
+        openaiRealtime: {
+          model: "gpt-realtime-mini"
+        }
+      }
+    }),
+    voxClient: {
+      isAlive: true,
+      sendAudio(audioBase64: string, sampleRate: number) {
+        forwardedAudio.push({ audioBase64, sampleRate });
+      }
+    },
+    realtimeClient,
+    cleanupHandlers: []
+  };
+
+  manager.sessionLifecycle.bindRealtimeHandlers(session, session.settingsSnapshot);
+
+  realtimeClient.handleIncoming(JSON.stringify({
+    type: "response.output_audio.delta",
+    item_id: "item_old",
+    content_index: 0,
+    delta: audioDelta
+  }));
+  realtimeClient.handleIncoming(JSON.stringify({
+    type: "response.output_audio_transcript.done",
+    item_id: "item_old",
+    transcript: "old tail should stay cut"
+  }));
+
+  assert.equal(forwardedAudio.length, 0);
+  assert.equal(markBotTurnOutCount, 0);
+  assert.equal(session.lastAudioDeltaAt, 0);
+  assert.equal(session.lastRealtimeAssistantAudioItemId, "item_old");
+  assert.equal(session.lastRealtimeAssistantAudioItemReceivedMs, 0);
+  assert.equal(session.transcriptTurns.length, 0);
+
+  realtimeClient.handleIncoming(JSON.stringify({
+    type: "response.output_audio.delta",
+    item_id: "item_new",
+    content_index: 0,
+    delta: audioDelta
+  }));
+  realtimeClient.handleIncoming(JSON.stringify({
+    type: "response.output_audio_transcript.done",
+    item_id: "item_new",
+    transcript: "fresh line"
+  }));
+
+  assert.equal(forwardedAudio.length, 1);
+  assert.deepEqual(forwardedAudio[0], {
+    audioBase64: audioDelta,
+    sampleRate: 24000
+  });
+  assert.equal(markBotTurnOutCount, 1);
+  assert.ok(session.lastAudioDeltaAt > 0);
+  assert.ok(session.lastRealtimeAssistantAudioItemReceivedMs > 0);
+  assert.equal(session.transcriptTurns.length, 1);
+  assert.equal(session.transcriptTurns[0]?.role, "assistant");
+  assert.equal(session.transcriptTurns[0]?.text, "fresh line");
+
+  const transcriptLogs = runtimeLogs.filter(
+    (row) => row?.kind === "voice_runtime" && row?.content === "openai_realtime_transcript"
+  );
+  assert.equal(transcriptLogs.length, 1);
+  assert.equal(transcriptLogs[0]?.metadata?.transcript, "fresh line");
+});
+
 test("bindRealtimeHandlers requests OpenAI reply addressing for provider-native assistant replies", () => {
   const manager = createVoiceTestManager();
   const realtimeClient = new OpenAiRealtimeClient({ apiKey: "test-key" });

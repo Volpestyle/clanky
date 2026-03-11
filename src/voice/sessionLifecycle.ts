@@ -17,6 +17,7 @@ import {
   transcriptSourceFromEventType
 } from "./voiceSessionHelpers.ts";
 import {
+  INTERRUPTED_REALTIME_OUTPUT_IGNORE_TTL_MS,
   MAX_INACTIVITY_SECONDS,
   MAX_MAX_SESSION_MINUTES,
   MIN_INACTIVITY_SECONDS,
@@ -171,6 +172,35 @@ function parseReplyAddressingClassifierToken(value: unknown) {
 function buildAssistantReplyTargetReason(talkingTo: string | null) {
   if (!talkingTo) return "assistant_target_missing";
   return talkingTo === "ALL" ? "assistant_target_all" : "assistant_target_speaker";
+}
+
+function pruneIgnoredRealtimeAssistantOutputItems(session: VoiceSession, now = Date.now()) {
+  const ignoredItems = session.ignoredRealtimeAssistantOutputItemIds;
+  if (!(ignoredItems instanceof Map) || ignoredItems.size === 0) {
+    return null;
+  }
+
+  for (const [itemId, ignoredAt] of ignoredItems.entries()) {
+    if (
+      !itemId ||
+      now - Math.max(0, Number(ignoredAt || 0)) > INTERRUPTED_REALTIME_OUTPUT_IGNORE_TTL_MS
+    ) {
+      ignoredItems.delete(itemId);
+    }
+  }
+
+  return ignoredItems.size > 0 ? ignoredItems : null;
+}
+
+function shouldIgnoreRealtimeAssistantOutputItem(
+  session: VoiceSession,
+  itemId: unknown,
+  now = Date.now()
+) {
+  const normalizedItemId = normalizeInlineText(itemId, 180);
+  if (!normalizedItemId) return false;
+  const ignoredItems = pruneIgnoredRealtimeAssistantOutputItems(session, now);
+  return Boolean(ignoredItems?.has(normalizedItemId));
 }
 
 export class SessionLifecycle {
@@ -657,6 +687,13 @@ export class SessionLifecycle {
       const padding = b64Str.endsWith("==") ? 2 : b64Str.endsWith("=") ? 1 : 0;
       const pcmByteLength = Math.floor((b64Str.length * 3) / 4) - padding;
       if (pcmByteLength <= 0) return;
+      const now = Date.now();
+      if (
+        isRealtimeMode(session.mode) &&
+        shouldIgnoreRealtimeAssistantOutputItem(session, session.lastRealtimeAssistantAudioItemId, now)
+      ) {
+        return;
+      }
 
       const sampleRate = Number(session.realtimeOutputSampleRateHz) || 24000;
 
@@ -668,18 +705,18 @@ export class SessionLifecycle {
       }
 
       if (this.host.bargeInController.isBargeInOutputSuppressed(session)) {
-        session.lastAudioDeltaAt = Date.now();
+        session.lastAudioDeltaAt = now;
         session.bargeInSuppressedAudioChunks = Math.max(0, Number(session.bargeInSuppressedAudioChunks || 0)) + 1;
         session.bargeInSuppressedAudioBytes = Math.max(0, Number(session.bargeInSuppressedAudioBytes || 0)) + pcmByteLength;
         const pending = session.pendingResponse;
         if (pending && typeof pending === "object") {
-          pending.audioReceivedAt = Number(session.lastAudioDeltaAt || Date.now());
+          pending.audioReceivedAt = Number(session.lastAudioDeltaAt || now);
         }
         this.host.replyManager.syncAssistantOutputState(session, "audio_delta_suppressed");
         return;
       }
 
-      session.lastAudioDeltaAt = Date.now();
+      session.lastAudioDeltaAt = now;
 
       if (musicPhaseShouldAllowDucking(this.host.getMusicPhase(session))) {
         this.host.engageBotSpeechMusicDuck(
@@ -727,6 +764,15 @@ export class SessionLifecycle {
       const transcript = String(transcriptText || "").trim();
       if (!transcript) return;
       const transcriptSource = transcriptSourceFromEventType(transcriptEventType);
+      const transcriptItemId =
+        payload && typeof payload === "object" ? normalizeInlineText(payload.itemId, 180) : null;
+      if (
+        transcriptSource === "output" &&
+        transcriptItemId &&
+        shouldIgnoreRealtimeAssistantOutputItem(session, transcriptItemId)
+      ) {
+        return;
+      }
       const finalTranscriptEvent = isFinalRealtimeTranscriptEventType(transcriptEventType, transcriptSource);
       const parsedDirective =
         transcriptSource === "output"

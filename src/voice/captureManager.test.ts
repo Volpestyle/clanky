@@ -309,7 +309,7 @@ test("resolveCaptureTurnPromotionReason allows strong local promotion without se
   assert.equal(manager.resolveCaptureTurnPromotionReason({ session, capture }), "strong_local_audio");
 });
 
-test("startInboundCapture keeps local-only promotion from interrupting live bot speech until server VAD confirms", async () => {
+test("startInboundCapture leaves live bot interruption to transcript bursts when realtime ASR bridge is active", async () => {
   const { manager } = createManager();
   manager.shouldUsePerUserTranscription = () => true;
   const interruptCalls: Array<Record<string, unknown>> = [];
@@ -383,7 +383,7 @@ test("startInboundCapture keeps local-only promotion from interrupting live bot 
   voxClient.emit("userAudio", "speaker-1", followupChunk);
   await flushMicrotasks();
 
-  assert.equal(interruptCalls.length, 1);
+  assert.equal(interruptCalls.length, 0);
 });
 
 test("startInboundCapture aborts near-silence captures once they age past the early-abort window", async () => {

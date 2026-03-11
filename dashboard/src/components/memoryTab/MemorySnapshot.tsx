@@ -183,7 +183,7 @@ export default function MemorySnapshot({ markdown, onRefresh }: Props) {
           }}
           disabled={!selectedGuild}
         >
-          Nuke guild memory
+          Delete guild memory
         </button>
       </div>
 
@@ -196,7 +196,7 @@ export default function MemorySnapshot({ markdown, onRefresh }: Props) {
             aria-labelledby="memory-danger-modal-title"
             onClick={(event) => event.stopPropagation()}
           >
-            <h4 id="memory-danger-modal-title">Nuke {selectedGuild.name} memory?</h4>
+            <h4 id="memory-danger-modal-title">Delete {selectedGuild.name} memory?</h4>
             <p>
               This deletes every saved memory artifact scoped to <strong>{selectedGuild.name}</strong>.
             </p>
@@ -232,7 +232,7 @@ export default function MemorySnapshot({ markdown, onRefresh }: Props) {
                 onClick={() => void handlePurgeGuildMemory()}
                 disabled={!confirmationMatches || purging}
               >
-                {purging ? "Purging..." : "Permanently nuke memory"}
+                {purging ? "Purging..." : "Permanently delete memory"}
               </button>
             </div>
           </div>

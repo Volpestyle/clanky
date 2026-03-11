@@ -140,6 +140,10 @@ export function VoiceModeSettingsSection({
   selectVoiceReplyDecisionPresetModel,
   voiceReplyDecisionModelOptions,
   selectedVoiceReplyDecisionPresetModel,
+  setVoiceInterruptProvider,
+  selectVoiceInterruptPresetModel,
+  voiceInterruptModelOptions,
+  selectedVoiceInterruptPresetModel,
   setVoiceMusicBrainProvider,
   selectVoiceMusicBrainPresetModel,
   voiceMusicBrainModelOptions,
@@ -207,6 +211,8 @@ export function VoiceModeSettingsSection({
           ? "Allows occasional humorous Discord sound effects when they work as reaction punctuation."
           : "Lets the bot lean into playful soundboard bits when the timing is right, while still avoiding spam.";
   const voiceGenerationModel = String(form.voiceGenerationLlmModel || "").trim();
+  const voiceInterruptProvider = String(form.voiceInterruptLlmProvider || "").trim();
+  const voiceInterruptModel = String(form.voiceInterruptLlmModel || "").trim();
   const streamWatchProvider = String(form.voiceStreamWatchBrainContextProvider || "").trim();
   const streamWatchModel = String(
     form.voiceStreamWatchBrainContextModel || selectedStreamWatchVisionPresetModel || ""
@@ -233,6 +239,7 @@ export function VoiceModeSettingsSection({
     ? [
         { label: "Audio In", active: true },
         { label: "ASR", active: true },
+        { label: "Interrupt", active: true },
         { label: "Admission Gate", active: true },
         { label: "Realtime Model", active: true },
         { label: "Audio Out", active: true }
@@ -240,6 +247,7 @@ export function VoiceModeSettingsSection({
     : [
         { label: "Audio In", active: true },
         { label: "ASR", active: true },
+        { label: "Interrupt", active: true },
         { label: "Admission Gate", active: true },
         { label: "Text Brain", active: true },
         { label: isApiTts ? "TTS API" : "Realtime TTS", active: true },
@@ -773,6 +781,38 @@ export function VoiceModeSettingsSection({
           </div>
           <p>
             Who can interrupt the bot mid-speech. Speaker mode lets the person the bot is responding to cut in naturally, like a real conversation.
+          </p>
+          <div className="split">
+            <div>
+              <label htmlFor="voice-interrupt-provider">Interrupt classifier provider</label>
+              <select
+                id="voice-interrupt-provider"
+                value={form.voiceInterruptLlmProvider}
+                onChange={setVoiceInterruptProvider}
+              >
+                <LlmProviderOptions />
+              </select>
+            </div>
+            <div>
+              <label htmlFor="voice-interrupt-model-preset">Interrupt classifier model ID</label>
+              <select
+                id="voice-interrupt-model-preset"
+                value={selectedVoiceInterruptPresetModel}
+                onChange={selectVoiceInterruptPresetModel}
+              >
+                {voiceInterruptModelOptions.map((modelId) => (
+                  <option key={modelId} value={modelId}>
+                    {modelId}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <p>
+            While the bot is already speaking, overlapping ASR snippets are grouped into short bursts and this model decides whether the room is actually taking the floor or just reacting.
+          </p>
+          <p className="vps-runtime-summary-note">
+            Current interrupt binding: {formatProviderModelLabel(voiceInterruptProvider, voiceInterruptModel, "auto")}
           </p>
 
           {/* ── Brain (brain path only) ── */}

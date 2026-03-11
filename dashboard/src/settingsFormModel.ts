@@ -13,10 +13,12 @@ import {
 } from "../../src/settings/listNormalization.ts";
 import {
   getResolvedMemoryBinding,
+  getResolvedVoiceInterruptClassifierBinding,
   getResolvedVoiceMusicBrainBinding
 } from "../../src/settings/agentStack.ts";
 import {
   getPresetVoiceAdmissionClassifierFallback,
+  getPresetVoiceInterruptClassifierFallback,
   getPresetVoiceMusicBrainFallback
 } from "../../src/settings/agentStackCatalog.ts";
 import { normalizeLlmProvider } from "../../src/llm/llmHelpers.ts";
@@ -60,6 +62,7 @@ export type ResolvedBindings = {
   voiceProvider: string;
   voiceInitiativeBinding: { provider: string; model: string; temperature?: number };
   voiceAdmissionClassifierBinding: { provider: string; model: string } | null;
+  voiceInterruptClassifierBinding: { provider: string; model: string };
   voiceMusicBrainBinding: { provider: string; model: string };
   voiceGenerationBinding: { provider: string; model: string };
   codeAgent: {
@@ -180,6 +183,8 @@ function buildSettingsFormView(settings: unknown) {
   const voiceRuntime = valueOr(agentStack.runtimeConfig?.voice, d.agentStack.runtimeConfig.voice);
   const voiceGenerationBinding = resolved?.voiceGenerationBinding || orchestrator;
   const voiceClassifierBinding = resolved?.voiceAdmissionClassifierBinding;
+  const voiceInterruptClassifierBinding =
+    resolved?.voiceInterruptClassifierBinding || getResolvedVoiceInterruptClassifierBinding(s);
   const voiceMusicBrainBinding = resolved?.voiceMusicBrainBinding || orchestrator;
   const voiceMusicBrainMode = String(voiceRuntime.musicBrain?.mode || d.agentStack.runtimeConfig.voice.musicBrain.mode || "disabled")
     .trim()
@@ -188,6 +193,9 @@ function buildSettingsFormView(settings: unknown) {
       : "dedicated_model";
   const presetClassifierFallback = getPresetVoiceAdmissionClassifierFallback(agentStack.preset);
   const voiceClassifierFallback = voiceClassifierBinding || presetClassifierFallback || orchestrator;
+  const presetInterruptClassifierFallback = getPresetVoiceInterruptClassifierFallback(agentStack.preset);
+  const voiceInterruptClassifierFallback =
+    voiceInterruptClassifierBinding || presetInterruptClassifierFallback || voiceClassifierFallback;
   const presetMusicBrainFallback = getPresetVoiceMusicBrainFallback(agentStack.preset);
   const voiceMusicBrainFallback = voiceMusicBrainBinding || presetMusicBrainFallback || orchestrator;
   const voiceStreamWatch = valueOr(s.voice?.streamWatch, d.voice.streamWatch);
@@ -354,6 +362,10 @@ function buildSettingsFormView(settings: unknown) {
         provider: voiceClassifierFallback.provider,
         model: voiceClassifierFallback.model
       },
+      interruptLlm: {
+        provider: voiceInterruptClassifierFallback.provider,
+        model: voiceInterruptClassifierFallback.model
+      },
       generationLlm: {
         useTextModel: voiceRuntime.generation?.mode !== "dedicated_model",
         provider: voiceGenerationBinding.provider,
@@ -401,6 +413,7 @@ export function settingsToForm(settings: unknown) {
   const defaultVoiceGeminiRealtime = defaults.voice.geminiRealtime;
   const defaultVoiceThoughtEngine = defaults.voice.thoughtEngine;
   const defaultVoiceGenerationLlm = defaults.voice.generationLlm;
+  const defaultVoiceInterruptLlm = defaults.voice.interruptLlm;
   const defaultVoiceMusicBrainMode = defaults.voiceMusicBrainMode || "disabled";
   const defaultVoiceStreaming = defaults.voice.streaming;
   const defaultVoiceStreamWatch = defaults.voice.streamWatch;
@@ -588,6 +601,10 @@ export function settingsToForm(settings: unknown) {
       resolved?.voice?.replyDecisionLlm?.provider ?? defaultVoice.replyDecisionLlm.provider,
     voiceReplyDecisionLlmModel:
       resolved?.voice?.replyDecisionLlm?.model ?? defaultVoice.replyDecisionLlm.model,
+    voiceInterruptLlmProvider:
+      resolved?.voice?.interruptLlm?.provider ?? defaultVoiceInterruptLlm.provider,
+    voiceInterruptLlmModel:
+      resolved?.voice?.interruptLlm?.model ?? defaultVoiceInterruptLlm.model,
     voiceMusicBrainMode:
       resolved.voiceMusicBrainMode ?? defaultVoiceMusicBrainMode,
     voiceMusicBrainLlmProvider:
@@ -1157,6 +1174,9 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
       provider: String(form.provider || "").trim(),
       model: String(form.model || "").trim()
     };
+  const presetInterruptClassifierFallback =
+    getPresetVoiceInterruptClassifierFallback(String(form.stackPreset || "claude_oauth").trim()) ||
+    presetClassifierFallback;
   const presetMusicBrainFallback =
     getPresetVoiceMusicBrainFallback(String(form.stackPreset || "claude_oauth").trim()) || {
       provider: String(form.provider || "").trim(),
@@ -1166,6 +1186,10 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
     String(form.voiceReplyDecisionLlmProvider || presetClassifierFallback.provider || "").trim();
   const normalizedVoiceReplyDecisionModel =
     String(form.voiceReplyDecisionLlmModel || presetClassifierFallback.model || "").trim();
+  const normalizedVoiceInterruptProvider =
+    String(form.voiceInterruptLlmProvider || presetInterruptClassifierFallback.provider || "").trim();
+  const normalizedVoiceInterruptModel =
+    String(form.voiceInterruptLlmModel || presetInterruptClassifierFallback.model || "").trim();
   const normalizedVoiceMusicBrainProvider =
     String(form.voiceMusicBrainLlmProvider || presetMusicBrainFallback.provider || "").trim();
   const normalizedVoiceMusicBrainModel =
@@ -1296,7 +1320,14 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
               }
             }
           : {}),
-        voiceAdmissionClassifier: voiceAdmissionClassifierOverride
+        voiceAdmissionClassifier: voiceAdmissionClassifierOverride,
+        voiceInterruptClassifier: {
+          mode: "dedicated_model",
+          model: {
+            provider: normalizedVoiceInterruptProvider,
+            model: normalizedVoiceInterruptModel
+          }
+        }
       },
       runtimeConfig: {
         research: {

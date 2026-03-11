@@ -533,6 +533,26 @@ export function getResolvedVoiceAdmissionClassifierBinding(settings: unknown) {
   };
 }
 
+export function getResolvedVoiceInterruptClassifierBinding(settings: unknown) {
+  const agentStack = getAgentStackSettings(settings);
+  const presetDefaults = getPresetDefaults(settings);
+  const fallback =
+    presetDefaults.voiceInterruptClassifier ||
+    presetDefaults.voiceAdmissionClassifier ||
+    presetDefaults.orchestrator;
+  const overridePolicy = resolveExecutionPolicy(
+    agentStack.overrides?.voiceInterruptClassifier,
+    fallback
+  );
+  const binding = overridePolicy.mode === "dedicated_model"
+    ? overridePolicy.model
+    : fallback;
+  return {
+    provider: String(binding?.provider || fallback.provider),
+    model: String(binding?.model || fallback.model)
+  };
+}
+
 export function getResolvedVoiceProvider(settings: unknown): string {
   const runtimeMode = String(getVoiceRuntimeConfig(settings).runtimeMode || resolveAgentStack(settings).voiceRuntime || "")
     .trim()
@@ -545,17 +565,19 @@ export function getResolvedVoiceProvider(settings: unknown): string {
 
 export function getResolvedVoiceGenerationBinding(settings: unknown) {
   const voiceRuntime = getVoiceRuntimeConfig(settings);
-  const fallback = getResolvedOrchestratorBinding(settings);
+  const presetDefaults = getPresetDefaults(settings);
+  const orchestrator = getResolvedOrchestratorBinding(settings);
+  const fallback = presetDefaults.voiceGeneration || orchestrator;
   const policy = resolveExecutionPolicy(
     voiceRuntime.generation,
     fallback
   );
   const binding = policy.mode === "dedicated_model"
     ? policy.model
-    : fallback;
+    : orchestrator;
   return {
-    provider: String(binding?.provider || fallback.provider),
-    model: String(binding?.model || fallback.model)
+    provider: String(binding?.provider || orchestrator.provider || fallback.provider),
+    model: String(binding?.model || orchestrator.model || fallback.model)
   };
 }
 

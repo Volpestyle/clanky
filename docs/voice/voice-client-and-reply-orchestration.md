@@ -434,9 +434,22 @@ Active promoted captures block deferred turn flushing. `hasDeferredTurnBlockingA
 
 Silence-only captures (very weak signal, never promoted) do NOT block deferred turn flushing.
 
-## 16. Barge-In Recovery (Prompt-Driven)
+## 16. Interruption Recovery (Prompt-Driven)
 
-When barge-in interrupts bot speech:
+In realtime `bridge` and `brain` sessions that use the ASR bridge, interruption is a three-step orchestration flow:
+
+### Phase 0: Transcript Burst Arbitration
+
+While assistant speech is active:
+1. Partial and final ASR transcripts from authorized speakers are coalesced into a short overlap burst.
+2. Obvious takeover phrases can resolve the burst immediately to `INTERRUPT`.
+3. Obvious laughter, backchannel, and other low-signal overlap can resolve the burst immediately to `IGNORE`.
+4. Ambiguous overlap is sent once to the interrupt classifier.
+5. Finalized ASR bridge turns are staged while the decision is pending.
+6. `INTERRUPT` flushes the staged turn into the normal pipeline after cutting current assistant output.
+7. `IGNORE` drops the staged turn entirely. The room reacted, but nobody actually took the floor.
+
+Low-signal overlap therefore never reaches the normal turn queue and never creates fake interruption context.
 
 ### Phase 1: Interrupt
 
@@ -448,7 +461,11 @@ When barge-in interrupts bot speech:
 4. If cancel failed because the provider had already completed:
    - Keep recovery state when truncate succeeded
    - Fall back to the short echo guard only
-5. Set barge-in suppression window
+5. If truncate identified a live assistant output item:
+   - Store that `item_id` in a short-lived ignored-output map on the session
+   - Drop any later audio deltas or final output transcripts for that exact item
+   - Allow newer assistant output items to play immediately
+6. Set barge-in suppression window
 
 ### Phase 2: Normal Turn Processing
 

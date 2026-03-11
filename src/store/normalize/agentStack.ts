@@ -66,6 +66,7 @@ export function normalizeAgentStackSection(
   const rawVoiceMusicBrain = rawVoiceRuntime.musicBrain;
   const rawVoiceGeneration = rawVoiceRuntime.generation;
   const rawVoiceAdmissionOverride = rawOverrides.voiceAdmissionClassifier;
+  const rawVoiceInterruptOverride = rawOverrides.voiceInterruptClassifier;
 
   const overrides: Settings["agentStack"]["overrides"] = {
     orchestrator: orchestratorOverride
@@ -84,6 +85,17 @@ export function normalizeAgentStackSection(
         { fallbackMode: "dedicated_model" }
       );
     }
+  }
+
+  if (rawVoiceInterruptOverride !== undefined) {
+    const fallback = presetConfig.presetVoiceAdmissionClassifierFallback
+      || presetConfig.presetOrchestratorFallback;
+    overrides.voiceInterruptClassifier = normalizeExecutionPolicy(
+      rawVoiceInterruptOverride,
+      fallback.provider,
+      fallback.model,
+      { fallbackMode: "dedicated_model" }
+    );
   }
 
   const harness = normalizeOptionalString(rawOverrides.harness, 64);

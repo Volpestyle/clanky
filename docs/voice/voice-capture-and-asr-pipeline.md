@@ -151,6 +151,12 @@ When a promoted capture finalizes, the concatenated PCM buffer is routed based o
 
 Per-user ASR keeps the provider's committed realtime `item_id` bound to the utterance object that issued the commit. Late final transcript events therefore stay attached to the correct committed turn even if a fresh provisional capture starts before the provider finishes streaming the transcript.
 
+If assistant speech is already active and transcript-overlap interrupts are enabled, `queueRealtimeTurnFromAsrBridge()` does not always forward the finalized turn immediately. Instead it may stage that ASR result behind an overlap burst decision:
+
+- `pending` burst decision: keep the finalized bridge turn in a per-utterance staging map
+- `interrupt`: cut assistant output, then flush the staged turn into the normal realtime queue
+- `ignore`: drop the staged turn entirely so laughter/backchannel does not become a user turn
+
 See [Part 2: ASR Bridge](#part-2-asr-bridge) for the full commit and transcript resolution flow.
 
 ### Realtime Mode (without ASR bridge)

@@ -3893,6 +3893,124 @@ test("queueRealtimeTurnFromAsrBridge forwards transcript metadata when ASR trans
   assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"), false);
 });
 
+test("queueRealtimeTurnFromAsrBridge stages overlap turns until the interrupt burst resolves", async () => {
+  const { manager } = createManager();
+  const queuedTurns = [];
+  manager.turnProcessor.queueRealtimeTurn = (payload) => {
+    queuedTurns.push(payload);
+  };
+  manager.shouldUseTranscriptOverlapInterrupts = () => true;
+  manager.hasInterruptibleAssistantOutput = () => true;
+  manager.llm.generate = async () => ({ text: "IGNORE" });
+  const session = createSession({
+    mode: "openai_realtime",
+    pendingResponse: {
+      requestId: 19,
+      requestedAt: Date.now() - 2_000,
+      source: "voice_reply",
+      handlingSilence: false,
+      audioReceivedAt: Date.now() - 1_000,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      utteranceText: "still talking",
+      latencyContext: null,
+      userId: "speaker-1",
+      retryCount: 0,
+      hardRecoveryAttempted: false
+    }
+  });
+  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 3),
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    bridgeUtteranceId: 71,
+    asrResult: {
+      transcript: "haha",
+      asrStartedAtMs: 1000,
+      asrCompletedAtMs: 1100
+    },
+    source: "per_user"
+  });
+
+  assert.equal(usedTranscript, false);
+  assert.equal(queuedTurns.length, 0);
+  assert.equal(session.pendingInterruptBridgeTurns?.size, 1);
+
+  await manager.resolveInterruptOverlapBurst(session, "test_ignore");
+
+  assert.equal(queuedTurns.length, 0);
+  assert.equal(session.pendingInterruptBridgeTurns?.size, 0);
+  assert.equal(session.interruptDecisionsByUtteranceId?.get(71)?.decision, "ignore");
+});
+
+test("queueRealtimeTurnFromAsrBridge flushes staged overlap turns after an interrupt decision", async () => {
+  const { manager } = createManager();
+  const queuedTurns = [];
+  const interruptCalls = [];
+  manager.turnProcessor.queueRealtimeTurn = (payload) => {
+    queuedTurns.push(payload);
+  };
+  manager.shouldUseTranscriptOverlapInterrupts = () => true;
+  manager.hasInterruptibleAssistantOutput = () => true;
+  manager.interruptBotSpeechForOutputLockTurn = (payload) => {
+    interruptCalls.push(payload);
+    return true;
+  };
+  manager.llm.generate = async () => ({ text: "INTERRUPT" });
+  const session = createSession({
+    mode: "openai_realtime",
+    pendingResponse: {
+      requestId: 21,
+      requestedAt: Date.now() - 2_000,
+      source: "voice_reply",
+      handlingSilence: false,
+      audioReceivedAt: Date.now() - 1_000,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      utteranceText: "still talking",
+      latencyContext: null,
+      userId: "speaker-1",
+      retryCount: 0,
+      hardRecoveryAttempted: false
+    }
+  });
+  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 5),
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    bridgeUtteranceId: 72,
+    asrResult: {
+      transcript: "wait hold on",
+      asrStartedAtMs: 1200,
+      asrCompletedAtMs: 1310
+    },
+    source: "per_user"
+  });
+
+  assert.equal(usedTranscript, false);
+  assert.equal(queuedTurns.length, 0);
+  assert.equal(session.pendingInterruptBridgeTurns?.size, 1);
+
+  await manager.resolveInterruptOverlapBurst(session, "test_interrupt");
+
+  assert.equal(interruptCalls.length, 1);
+  assert.equal(queuedTurns.length, 1);
+  assert.equal(queuedTurns[0]?.bridgeUtteranceId, 72);
+  assert.equal(queuedTurns[0]?.transcriptOverride, "wait hold on");
+  assert.equal(session.pendingInterruptBridgeTurns?.size, 0);
+  assert.equal(session.interruptDecisionsByUtteranceId?.get(72)?.decision, "interrupt");
+});
+
 test("shared ASR bridge forwards recovered transcript after timeout instead of discarding it", async () => {
   const { manager, logs } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";

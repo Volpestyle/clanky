@@ -172,6 +172,17 @@ export interface AsrBridgeDeps {
   };
   botUserId: string | null;
   resolveVoiceSpeakerName: (session: VoiceSession, userId: string | null) => string;
+  handleTranscriptOverlapSegment?: (args: {
+    session: VoiceSession;
+    userId: string | null;
+    speakerName: string;
+    transcript: string;
+    utteranceId: number;
+    isFinal: boolean;
+    eventType?: string | null;
+    itemId?: string | null;
+    previousItemId?: string | null;
+  }) => void;
 }
 
 // ── State creation ───────────────────────────────────────────────────
@@ -779,6 +790,34 @@ function wireClientEvents(
           eventType: eventType || null,
           itemId: itemId || null,
           previousItemId
+        }
+      });
+    }
+
+    try {
+      deps.handleTranscriptOverlapSegment?.({
+        session,
+        userId: transcriptSpeakerUserId,
+        speakerName,
+        transcript,
+        utteranceId: Math.max(0, Number(targetUtterance.id || 0)),
+        isFinal,
+        eventType: eventType || null,
+        itemId: itemId || null,
+        previousItemId
+      });
+    } catch (error) {
+      store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: transcriptSpeakerUserId ? String(transcriptSpeakerUserId).trim() : null,
+        content: `openai_realtime_asr_transcript_overlap_handler_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          utteranceId: Math.max(0, Number(targetUtterance.id || 0)),
+          isFinal,
+          eventType: eventType || null
         }
       });
     }

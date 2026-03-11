@@ -50,7 +50,6 @@ export default function SettingsForm({
 }) {
   const [form, setForm] = useState(() => (settings ? settingsToForm(settings) : null));
   const [presetLoadBusy, setPresetLoadBusy] = useState(false);
-  const [presetLoadConfirmationRequired, setPresetLoadConfirmationRequired] = useState(false);
   const [presetStatus, setPresetStatus] = useState({ text: "", type: "" });
   const savedFormRef = useRef<string>("");
   const presetRequestIdRef = useRef(0);
@@ -74,8 +73,7 @@ export default function SettingsForm({
     });
   }
 
-  function clearPresetLoadPrompt() {
-    setPresetLoadConfirmationRequired(false);
+  function clearPresetWarning() {
     setPresetStatus((current) => (current.type === "warning" ? { text: "", type: "" } : current));
   }
 
@@ -86,7 +84,6 @@ export default function SettingsForm({
     setForm(next);
     savedFormRef.current = JSON.stringify(next);
     formRevisionRef.current += 1;
-    setPresetLoadConfirmationRequired(false);
     setPresetStatus({ text: "", type: "" });
   }, [settings]);
 
@@ -154,7 +151,6 @@ export default function SettingsForm({
       formRef.current = next;
       setForm(next);
       formRevisionRef.current += 1;
-      setPresetLoadConfirmationRequired(false);
       setPresetStatus({
         text: "Preset defaults loaded into the draft. Save settings to apply them to the bot.",
         type: "ok"
@@ -172,14 +168,6 @@ export default function SettingsForm({
 
   function handlePresetDefaultsClick() {
     if (presetLoadBusy) return;
-    if (!presetLoadConfirmationRequired) {
-      setPresetLoadConfirmationRequired(true);
-      setPresetStatus({
-        text: "Loading preset defaults replaces the current draft across every section. Click again to confirm.",
-        type: "warning"
-      });
-      return;
-    }
     void loadPresetDefaults(form.stackPreset);
   }
 
@@ -237,6 +225,10 @@ export default function SettingsForm({
     options: voiceReplyDecisionModelOptions,
     selectedPresetModel: selectedVoiceReplyDecisionPresetModel
   } = resolvePresetSelection("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel");
+  const {
+    options: voiceInterruptModelOptions,
+    selectedPresetModel: selectedVoiceInterruptPresetModel
+  } = resolvePresetSelection("voiceInterruptLlmProvider", "voiceInterruptLlmModel");
   const {
     options: streamWatchVisionModelOptions,
     selectedPresetModel: selectedStreamWatchVisionPresetModel
@@ -298,6 +290,7 @@ export default function SettingsForm({
       syncModel("visionModel", selectedVisionPresetModel);
       syncModel("voiceGenerationLlmModel", selectedVoiceGenerationPresetModel);
       syncModel("voiceReplyDecisionLlmModel", selectedVoiceReplyDecisionPresetModel);
+      syncModel("voiceInterruptLlmModel", selectedVoiceInterruptPresetModel);
       syncModel("voiceMusicBrainLlmModel", selectedVoiceMusicBrainPresetModel);
       syncModel("voiceStreamWatchBrainContextModel", selectedStreamWatchVisionPresetModel);
       if (next.voiceGenerationLlmUseTextModel) {
@@ -322,6 +315,7 @@ export default function SettingsForm({
     selectedBrowserLlmPresetModel,
     selectedVoiceGenerationPresetModel,
     selectedVoiceReplyDecisionPresetModel,
+    selectedVoiceInterruptPresetModel,
     selectedVoiceMusicBrainPresetModel,
     selectedVisionPresetModel,
     selectedStreamWatchVisionPresetModel
@@ -331,7 +325,7 @@ export default function SettingsForm({
 
   function set(key) {
     return (e) => {
-      clearPresetLoadPrompt();
+      clearPresetWarning();
       const value = e.target.type === "checkbox" ? e.target.checked : e.target.value;
       if (key === "stackPreset") {
         const preset = String(value || "").trim();
@@ -359,7 +353,7 @@ export default function SettingsForm({
   }
 
   function sanitizeBotNameAliases() {
-    clearPresetLoadPrompt();
+    clearPresetWarning();
     updateForm((current) => {
       if (!current) return current;
       const normalized = sanitizeAliasListInput(current.botNameAliases);
@@ -398,6 +392,7 @@ export default function SettingsForm({
   const setBrowserLlmProvider = createProviderSetter("browserLlmProvider", "browserLlmModel");
   const setVoiceGenerationProvider = createProviderSetter("voiceGenerationLlmProvider", "voiceGenerationLlmModel");
   const setVoiceReplyDecisionProvider = createProviderSetter("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel");
+  const setVoiceInterruptProvider = createProviderSetter("voiceInterruptLlmProvider", "voiceInterruptLlmModel");
   const setVoiceMusicBrainProvider = createProviderSetter("voiceMusicBrainLlmProvider", "voiceMusicBrainLlmModel");
   const setVisionProvider = createProviderSetter("visionProvider", "visionModel");
   const setStreamWatchVisionProvider = createProviderSetter("voiceStreamWatchBrainContextProvider", "voiceStreamWatchBrainContextModel");
@@ -419,12 +414,13 @@ export default function SettingsForm({
   const selectBrowserLlmPresetModel = createPresetSelector("browserLlmModel");
   const selectVoiceGenerationPresetModel = createPresetSelector("voiceGenerationLlmModel");
   const selectVoiceReplyDecisionPresetModel = createPresetSelector("voiceReplyDecisionLlmModel");
+  const selectVoiceInterruptPresetModel = createPresetSelector("voiceInterruptLlmModel");
   const selectVoiceMusicBrainPresetModel = createPresetSelector("voiceMusicBrainLlmModel");
   const selectVisionPresetModel = createPresetSelector("visionModel");
   const selectStreamWatchVisionPresetModel = createPresetSelector("voiceStreamWatchBrainContextModel");
 
   function resetPromptGuidanceFields() {
-    clearPresetLoadPrompt();
+    clearPresetWarning();
     updateForm((current) => ({
       ...current,
       promptCapabilityHonestyLine: defaultForm.promptCapabilityHonestyLine,
@@ -511,11 +507,7 @@ export default function SettingsForm({
                 disabled={presetLoadBusy}
                 title="Load preset defaults into the draft and save to apply them"
               >
-                {presetLoadBusy
-                  ? "Loading preset…"
-                  : presetLoadConfirmationRequired
-                    ? "Confirm preset reset"
-                    : "Load preset defaults into draft"}
+                {presetLoadBusy ? "Loading preset…" : "Load preset defaults"}
               </button>
             </div>
             <div className="toggles" style={{ marginTop: 10 }}>
@@ -610,6 +602,10 @@ export default function SettingsForm({
             selectVoiceReplyDecisionPresetModel={selectVoiceReplyDecisionPresetModel}
             voiceReplyDecisionModelOptions={voiceReplyDecisionModelOptions}
             selectedVoiceReplyDecisionPresetModel={selectedVoiceReplyDecisionPresetModel}
+            setVoiceInterruptProvider={setVoiceInterruptProvider}
+            selectVoiceInterruptPresetModel={selectVoiceInterruptPresetModel}
+            voiceInterruptModelOptions={voiceInterruptModelOptions}
+            selectedVoiceInterruptPresetModel={selectedVoiceInterruptPresetModel}
             setVoiceMusicBrainProvider={setVoiceMusicBrainProvider}
             selectVoiceMusicBrainPresetModel={selectVoiceMusicBrainPresetModel}
             voiceMusicBrainModelOptions={voiceMusicBrainModelOptions}

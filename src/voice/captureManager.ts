@@ -72,6 +72,10 @@ export interface CaptureManagerHost {
     session: VoiceSession;
     settings?: CaptureManagerSettings;
   }) => boolean;
+  shouldUseTranscriptOverlapInterrupts: (args: {
+    session: VoiceSession;
+    settings?: CaptureManagerSettings;
+  }) => boolean;
   buildAsrBridgeDeps: (session: VoiceSession) => AsrBridgeDeps;
   hasDeferredTurnBlockingActiveCapture: (session: VoiceSession) => boolean;
   deferredActionQueue: Pick<DeferredActionQueue, "recheckDeferredVoiceActions">;
@@ -562,6 +566,10 @@ export class CaptureManager {
       }
 
       const bargeDecision = this.host.bargeInController.shouldBargeIn({ session, userId, captureState });
+      const transcriptOverlapInterruptsEnabled = this.host.shouldUseTranscriptOverlapInterrupts({
+        session,
+        settings: settings || null
+      });
       const serverVadConfirmed = this.host.hasCaptureServerVadSpeech({
         session,
         capture: captureState
@@ -569,7 +577,11 @@ export class CaptureManager {
       const localOnlyPromotionStillUnconfirmed =
         captureState.promotionReason === "strong_local_audio" &&
         !serverVadConfirmed;
-      if (bargeDecision.allowed && !localOnlyPromotionStillUnconfirmed) {
+      if (
+        !transcriptOverlapInterruptsEnabled &&
+        bargeDecision.allowed &&
+        !localOnlyPromotionStillUnconfirmed
+      ) {
         this.host.interruptBotSpeechForBargeIn({
           session,
           userId,

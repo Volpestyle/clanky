@@ -152,11 +152,11 @@ Current coverage:
 
 Barge-in sits at the intersection of two concerns:
 
-1. **Acoustic gating** — Is someone actually trying to talk over the bot, or is it echo/noise/breathing? This is deterministic. Humans don't reason about signal-to-noise ratios; neither should the model.
+1. **Floor-taking detection** — Is someone actually trying to take the floor, or is the room just reacting? In ASR-bridge sessions this is decided from short transcript bursts, not raw overlap PCM alone.
 
 2. **Post-interruption recovery** — What does the bot do after being interrupted? This is a *conversational* decision. The agent should reason about it, not a state machine.
 
-The system keeps acoustic detection fast and deterministic, but gives the agent ownership of what happens next.
+The system keeps infrastructure decisions deterministic, but gives the agent ownership of what happens next once a real interrupt exists.
 
 ## 8. Why We Handle Barge-In Ourselves
 
@@ -238,9 +238,29 @@ bot-name interruption remains a separate transcript-level override in
 Finer model-driven interruptibility preferences beyond reply targeting are
 still future work.
 
-## 10. Acoustic Gating
+### ASR-Bridge Transcript Bursts
 
-All acoustic gates are deterministic. The agent has no input here — this is signal processing, not conversation.
+When a realtime `bridge` or `brain` session is using the OpenAI ASR bridge, live overlap audio no longer hard-cuts playback by itself. The runtime first asks whether the room is actually taking the floor.
+
+Flow while assistant speech is active:
+
+1. A non-empty partial or final ASR transcript from an authorized speaker opens an overlap burst.
+2. Later transcript updates replace the latest text for that utterance while the burst stays open.
+3. The burst closes on either:
+   - a short quiet gap (`VOICE_INTERRUPT_BURST_QUIET_GAP_MS = 360ms`)
+   - the max burst window (`VOICE_INTERRUPT_BURST_MAX_MS = 1500ms`)
+4. Resolution order:
+   - obvious takeover text like `wait`, `hold on`, `stop`, or explicit cancel intent interrupts immediately
+   - obvious low-signal text like laughter, backchannel, and tiny acknowledgements is ignored immediately
+   - ambiguous short overlap is sent once to the dedicated interrupt classifier, which must answer `INTERRUPT` or `IGNORE`
+5. While the decision is pending, finalized ASR turns for that utterance are staged instead of being forwarded to the normal turn queue.
+6. If the burst resolves to `INTERRUPT`, the runtime executes the normal output-lock interrupt, stores interruption context if the reply was actually cut, and flushes the staged turn into the normal pipeline.
+7. If the burst resolves to `IGNORE`, the staged turn is dropped and no interrupt is recorded. Filler, laughter, and room noise do not become user turns.
+
+The interrupt classifier binding comes from `agentStack.overrides.voiceInterruptClassifier` and is exposed in the dashboard as the voice-mode "Interrupt classifier" provider/model controls. If no dedicated override exists, it falls back to the preset interrupt classifier, then the admission classifier, then the orchestrator.
+
+## 10. Acoustic Gating
+All acoustic gates are deterministic. The agent has no input here. In ASR-bridge sessions, these gates still control capture promotion, echo guards, and whether audio is worth transcribing, but transcript bursts own the actual floor-transfer decision. Raw acoustic barge-in remains the direct interrupt path for sessions that are not using transcript-overlap interrupts.
 
 ### Gate Sequence
 
@@ -324,7 +344,7 @@ Local-only promotion rule:
 
 ## 11. Interrupt Execution
 
-When all gates pass:
+When a realtime interrupt is committed, either from the direct acoustic path or from a transcript-overlap burst that resolved to `INTERRUPT`:
 
 1. **Cancel generation** — `response.cancel` to OpenAI Realtime API.
 2. **Truncate conversation** — `conversation.item.truncate` so API history only contains what was actually spoken.
@@ -337,10 +357,13 @@ When all gates pass:
    - **`conversation.item.truncate` succeeded but `response.cancel` did not:** Still store interruption context. The spoken reply was cut and is recoverable even if the provider reports the response as already finished server-side.
    - **Neither cancel nor truncate succeeded:** Do not create interruption recovery state.
 8. **Suppression guard** — Keep the long post-barge-in suppression window only when `response.cancel` succeeded. Truncate-only cuts still fall back to the short echo guard.
+9. **Interrupted item quarantine** — When `conversation.item.truncate` names a live output item, stash that `item_id` on the session. Any later audio deltas or final assistant transcripts for that exact item are dropped until the short quarantine TTL expires, so already-cancelled speech cannot leak back into local playback or transcript history.
 
 ### Event Loop Race
 
 `response_done` (WebSocket) and user audio (IPC) are separate async sources. A user audio chunk can arrive before `response_done` clears `pendingResponse`. The pre-audio and output-present guards catch the "nothing audible left" cases; the post-cancel guard handles the rest.
+
+Late provider chunks for the just-truncated output item are handled separately from barge-in suppression. The runtime drops those stale chunks by exact `item_id`, so the next legitimate reply can start immediately without replaying the cancelled tail.
 
 ## 12. Post-Interruption Recovery (LLM-Driven)
 
@@ -361,6 +384,8 @@ When all gates pass:
 
 If the interrupting capture later finalizes with an empty ASR result, the runtime does not synthesize a fake user turn. It directly replays the interrupted assistant line with `requestRealtimeTextUtterance(...)`. Empty post-barge-in audio is treated as nonverbal noise or abandonment, not as a new conversational input.
 
+Low-signal overlap that resolves to `IGNORE` never reaches this recovery path, because the runtime never commits a real interrupt in the first place.
+
 ### Suppression Window
 
 After a successful **acoustic barge-in**, barge-in is suppressed for **4 seconds**. This prevents:
@@ -379,6 +404,9 @@ Wake-word / bot-name output-lock interrupts do **not** use this suppression wind
 | `BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS` | 1500ms | Grace period after bot TTS starts |
 | `BARGE_IN_STT_MIN_CAPTURE_AGE_MS` | 500ms | Min capture age for non-realtime modes |
 | `BARGE_IN_SUPPRESSION_MAX_MS` | 4000ms | Post-interrupt suppression window |
+| `VOICE_INTERRUPT_BURST_QUIET_GAP_MS` | 360ms | Quiet-gap close for overlap bursts |
+| `VOICE_INTERRUPT_BURST_MAX_MS` | 1500ms | Max coalescing window for overlap bursts |
+| `VOICE_INTERRUPT_DECISION_TTL_MS` | 30000ms | TTL for recent overlap decisions and staged turn bookkeeping |
 | `BARGE_IN_BOT_SPEAKING_PEAK_MIN` | 0.05 | Stricter peak threshold during bot speech |
 | `BARGE_IN_BOT_SPEAKING_ACTIVE_RATIO_MIN` | 0.06 | Stricter active ratio during bot speech |
 | `VOICE_SILENCE_GATE_RMS_MAX` | 0.003 | Basic silence RMS threshold |
@@ -391,8 +419,9 @@ Wake-word / bot-name output-lock interrupts do **not** use this suppression wind
 |------|------|
 | `src/voice/bargeInController.ts` | Acoustic gate sequence, signal metrics, interrupt command builder |
 | `src/voice/voiceSessionManager.ts` | Policy resolution, interrupt execution, suppression management |
+| `src/voice/voiceInterruptClassifier.ts` | Transcript-burst heuristics and `INTERRUPT` / `IGNORE` classifier call |
 | `src/voice/replyManager.ts` | Output lock state, buffer depth checks |
-| `src/voice/captureManager.ts` | Audio capture, barge-in trigger on `userAudio` event |
+| `src/voice/captureManager.ts` | Audio capture, promotion, and live barge-in gating fallback on `userAudio` |
 | `src/voice/voiceSessionManager.constants.ts` | All timing constants |
 | `src/settings/settingsSchema.ts` | `voice.conversationPolicy.defaultInterruptionMode` |
 

@@ -21,6 +21,7 @@ import {
   getResolvedVisionBinding,
   getResolvedVoiceInitiativeBinding,
   getResolvedVoiceAdmissionClassifierBinding,
+  getResolvedVoiceInterruptClassifierBinding,
   getResolvedVoiceMusicBrainBinding,
   getResolvedVoiceGenerationBinding,
   resolveAgentStack
@@ -41,6 +42,7 @@ function withResolved(settings: unknown) {
       voiceProvider: resolveVoiceRuntimeSelectionFromMode(resolveAgentStack(s).voiceRuntime),
       voiceInitiativeBinding: getResolvedVoiceInitiativeBinding(s),
       voiceAdmissionClassifierBinding: getResolvedVoiceAdmissionClassifierBinding(s),
+      voiceInterruptClassifierBinding: getResolvedVoiceInterruptClassifierBinding(s),
       voiceMusicBrainBinding: getResolvedVoiceMusicBrainBinding(s),
       voiceGenerationBinding: getResolvedVoiceGenerationBinding(s)
     }

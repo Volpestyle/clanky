@@ -319,17 +319,35 @@ export class OpenAiRealtimeClient extends EventEmitter {
         return;
       }
       this.emit("event", event);
+      const eventItem =
+        event.item && typeof event.item === "object" ? (event.item as Record<string, unknown>) : null;
+      const outputItem =
+        event.output_item && typeof event.output_item === "object"
+          ? (event.output_item as Record<string, unknown>)
+          : null;
       const transcript =
         event.transcript ||
         event.text ||
         event.delta ||
         event?.item?.content?.[0]?.transcript ||
         null;
+      const itemId =
+        normalizeInlineText(event.item_id || eventItem?.id || outputItem?.id, 180) || null;
+      const previousItemId =
+        normalizeInlineText(
+          event.previous_item_id ||
+          event.previousItemId ||
+          eventItem?.previous_item_id ||
+          outputItem?.previous_item_id,
+          180
+        ) || null;
 
       if (transcript) {
         this.emit("transcript", {
           text: String(transcript),
-          eventType: String(event.type || "")
+          eventType: String(event.type || ""),
+          itemId,
+          previousItemId
         });
       }
       return;

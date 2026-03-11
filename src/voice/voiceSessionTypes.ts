@@ -4,7 +4,7 @@ import type { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
 import type { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
 import type { ElevenLabsRealtimeClient } from "./elevenLabsRealtimeClient.ts";
 import type { ReplyInterruptionPolicy } from "./bargeInController.ts";
-import type { AsrBridgeState } from "./voiceAsrBridge.ts";
+import type { AsrBridgeState, AsrCommitResult } from "./voiceAsrBridge.ts";
 import type {
     AssistantOutputLockReason,
     AssistantOutputPhase,
@@ -752,6 +752,50 @@ export interface VoiceTranscriptLogprob {
     bytes: number[] | null;
 }
 
+export type VoiceInterruptOverlapDecision = "pending" | "ignore" | "interrupt";
+
+export interface VoiceInterruptOverlapBurstEntry {
+    userId: string | null;
+    speakerName: string;
+    transcript: string;
+    utteranceId: number;
+    isFinal: boolean;
+    receivedAt: number;
+    eventType: string | null;
+    itemId: string | null;
+    previousItemId: string | null;
+}
+
+export interface VoiceInterruptOverlapBurstState {
+    id: number;
+    openedAt: number;
+    lastTranscriptAt: number;
+    quietTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
+    maxTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
+    evaluating: boolean;
+    entries: VoiceInterruptOverlapBurstEntry[];
+    utteranceIds: number[];
+}
+
+export interface VoiceInterruptOverlapUtteranceState {
+    transcript: string;
+    decision: VoiceInterruptOverlapDecision;
+    decidedAt: number;
+    source: string;
+    burstId: number;
+}
+
+export interface VoicePendingInterruptBridgeTurn {
+    userId: string;
+    pcmBuffer: Buffer;
+    captureReason: string;
+    finalizedAt: number;
+    musicWakeFollowupEligibleAtCapture: boolean;
+    bridgeUtteranceId: number | null;
+    asrResult: AsrCommitResult | null;
+    source: string;
+}
+
 export interface RealtimeQueuedTurn {
     session: VoiceSession;
     userId: string;
@@ -947,6 +991,10 @@ export interface VoiceSession {
     realtimeTurnDrainActive: TurnProcessorState["realtimeTurnDrainActive"];
     pendingRealtimeTurns: TurnProcessorState["pendingRealtimeTurns"];
     activeRealtimeTurn?: RealtimeQueuedTurn | null;
+    interruptOverlapBurst?: VoiceInterruptOverlapBurstState | null;
+    interruptDecisionsByUtteranceId?: Map<number, VoiceInterruptOverlapUtteranceState>;
+    pendingInterruptBridgeTurns?: Map<number, VoicePendingInterruptBridgeTurn>;
+    nextInterruptBurstId?: number;
     openAiAsrSessions: Map<string, AsrBridgeState>;
     perUserAsrEnabled: boolean;
     sharedAsrEnabled: boolean;

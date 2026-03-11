@@ -606,6 +606,7 @@ type SettingsAgentStack = Omit<SettingsFromDefaults["agentStack"], "overrides" |
     browserRuntime?: string;
     voiceRuntime?: string;
     voiceAdmissionClassifier?: SettingsExecutionPolicy;
+    voiceInterruptClassifier?: SettingsExecutionPolicy;
     devTeam?: {
       orchestrator?: SettingsModelBinding;
       codingWorkers?: readonly SettingsCodingWorkerName[];

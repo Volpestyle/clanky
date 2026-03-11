@@ -14,6 +14,7 @@ import {
   getResolvedVisionBinding,
   getResolvedVoiceInitiativeBinding,
   getResolvedVoiceAdmissionClassifierBinding,
+  getResolvedVoiceInterruptClassifierBinding,
   getResolvedVoiceMusicBrainBinding,
   getResolvedVoiceGenerationBinding,
   getVoiceRuntimeConfig,
@@ -294,6 +295,7 @@ function resolveSettingsBindings(settings: unknown, appConfig: DashboardAppConfi
     voiceProvider: resolveVoiceRuntimeSelectionFromMode(getVoiceRuntimeConfig(settings).runtimeMode),
     voiceInitiativeBinding: getResolvedVoiceInitiativeBinding(settings),
     voiceAdmissionClassifierBinding: getResolvedVoiceAdmissionClassifierBinding(settings),
+    voiceInterruptClassifierBinding: getResolvedVoiceInterruptClassifierBinding(settings),
     voiceMusicBrainBinding: getResolvedVoiceMusicBrainBinding(settings),
     voiceGenerationBinding: getResolvedVoiceGenerationBinding(settings),
     providerAuth: {
