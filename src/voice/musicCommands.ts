@@ -1,7 +1,7 @@
-import { SlashCommandBuilder } from "discord.js";
+import { SlashCommandSubcommandGroupBuilder } from "discord.js";
 
-export const musicCommands = [
-  new SlashCommandBuilder()
+export function addMusicSubcommandGroup(group: SlashCommandSubcommandGroupBuilder) {
+  return group
     .setName("music")
     .setDescription("Control VC music playback and queue")
     .addSubcommand((subcommand) =>
@@ -66,5 +66,5 @@ export const musicCommands = [
       subcommand
         .setName("stop")
         .setDescription("Stop playback and clear the queue")
-    )
-];
+    );
+}

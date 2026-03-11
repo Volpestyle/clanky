@@ -273,6 +273,7 @@ Key server entrypoints:
 - `GET /api/stats`
 - `GET /api/actions`
 - memory and voice history endpoints
+- `DELETE /api/memory/guild` for confirmed guild-scoped memory purges
 
 ## 11. Latency-Critical Model Choices
 

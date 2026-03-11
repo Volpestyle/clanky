@@ -714,6 +714,52 @@ return {
 } as const;
 }
 
+export function deleteMemoryFactsForGuild(store: MemoryStore, guildId: string) {
+const normalizedGuildId = String(guildId || "").trim();
+if (!normalizedGuildId) {
+  return {
+    ok: false,
+    reason: "guild_required",
+    factsDeleted: 0,
+    vectorsDeleted: 0
+  } as const;
+}
+
+const deleteTx = store.db.transaction((targetGuildId: string) => {
+  const vectorsDeleted = Number(
+    store.db
+      .prepare(
+        `DELETE FROM memory_fact_vectors_native
+           WHERE fact_id IN (
+             SELECT id
+               FROM memory_facts
+              WHERE guild_id = ?
+           )`
+      )
+      .run(targetGuildId)?.changes || 0
+  );
+  const factsDeleted = Number(
+    store.db
+      .prepare(
+        `DELETE FROM memory_facts
+           WHERE guild_id = ?`
+      )
+      .run(targetGuildId)?.changes || 0
+  );
+  return {
+    factsDeleted,
+    vectorsDeleted
+  };
+});
+
+const result = deleteTx(normalizedGuildId);
+return {
+  ok: true,
+  reason: "deleted",
+  ...result
+} as const;
+}
+
 export function ensureSqliteVecReady(store: MemoryStore) {
 if (store.sqliteVecReady !== null) {
   return store.sqliteVecReady;

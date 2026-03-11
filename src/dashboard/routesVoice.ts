@@ -12,6 +12,18 @@ export interface VoiceRouteDeps {
   voiceSseClients: Set<DashboardSseClient>;
 }
 
+interface DashboardVoiceSessionRuntime {
+  factProfiles: Map<string, unknown>;
+  guildFactProfile: unknown;
+  behavioralFactCache?: unknown;
+  conversationHistoryCaches?: unknown;
+}
+
+interface DashboardVoiceManagerRuntime {
+  getSession(guildId: string): DashboardVoiceSessionRuntime | null;
+  primeSessionFactProfiles(session: DashboardVoiceSessionRuntime): void;
+}
+
 function mapDashboardFactRow(row: unknown) {
   const record = toRecord(row);
   const fact = String(record.fact || "").trim();
@@ -105,6 +117,33 @@ function getActiveVoiceSessionRecord(bot: DashboardBot, guildId: string) {
   const voiceState = bot.getRuntimeState()?.voice || { sessions: [] };
   const sessions = Array.isArray(voiceState?.sessions) ? voiceState.sessions : [];
   return sessions.find((entry) => String(toRecord(entry).guildId || "").trim() === normalizedGuildId) || null;
+}
+
+function getDashboardVoiceManager(bot: DashboardBot) {
+  const manager = (bot as DashboardBot & { voiceSessionManager?: DashboardVoiceManagerRuntime }).voiceSessionManager;
+  if (!manager) return null;
+  if (typeof manager.getSession !== "function") return null;
+  if (typeof manager.primeSessionFactProfiles !== "function") return null;
+  return manager;
+}
+
+function invalidateGuildMemoryRuntime(bot: DashboardBot, guildId: string) {
+  if (typeof bot.purgeGuildMemoryRuntime === "function") {
+    return Boolean(bot.purgeGuildMemoryRuntime(guildId));
+  }
+
+  const manager = getDashboardVoiceManager(bot);
+  if (!manager) return false;
+
+  const session = manager.getSession(String(guildId || "").trim());
+  if (!session) return false;
+
+  session.factProfiles = new Map();
+  session.guildFactProfile = null;
+  session.behavioralFactCache = null;
+  session.conversationHistoryCaches = null;
+  manager.primeSessionFactProfiles(session);
+  return true;
 }
 
 function normalizeParticipantIds(value: unknown) {
@@ -614,6 +653,67 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
     await memory.refreshMemoryMarkdown();
     const markdown = await memory.readMemoryMarkdown({ guildId });
     return c.json({ ok: true, guildId, markdown });
+  });
+
+  app.delete("/api/memory/guild", async (c) => {
+    const body = await readDashboardBody(c);
+    const guildId = String(body.guildId || "").trim();
+    const confirmGuildName = String(body.confirmGuildName || "").trim();
+
+    if (!guildId) {
+      return c.json({ ok: false, error: "guildId required" }, 400);
+    }
+
+    const guild = bot.getGuilds().find((entry) => String(entry?.id || "").trim() === guildId) || null;
+    if (!guild) {
+      return c.json({ ok: false, error: "guild_not_found" }, 404);
+    }
+
+    if (!confirmGuildName) {
+      return c.json({ ok: false, error: "confirmGuildName required" }, 400);
+    }
+
+    const expectedGuildName = String(guild.name || "").trim();
+    if (confirmGuildName !== expectedGuildName) {
+      return c.json(
+        {
+          ok: false,
+          error: "guild_name_confirmation_mismatch",
+          expectedGuildName
+        },
+        400
+      );
+    }
+
+    const result =
+      typeof memory.purgeGuildMemory === "function"
+        ? await memory.purgeGuildMemory({ guildId })
+        : { ok: false, reason: "purge_unavailable" };
+    if (!result?.ok) {
+      return c.json({ ok: false, error: result?.reason || "purge_failed" }, 400);
+    }
+
+    try {
+      invalidateGuildMemoryRuntime(bot, guildId);
+    } catch {
+      // The durable purge succeeded. Runtime caches can recover on their next refresh.
+    }
+
+    return c.json({
+      ok: true,
+      guildId,
+      guildName: expectedGuildName,
+      deleted: {
+        durableFacts: Number(result?.durableFactsDeleted || 0),
+        durableFactVectors: Number(result?.durableFactVectorsDeleted || 0),
+        conversationMessages: Number(result?.conversationMessagesDeleted || 0),
+        conversationVectors: Number(result?.conversationVectorsDeleted || 0),
+        reflectionEvents: Number(result?.reflectionEventsDeleted || 0),
+        journalEntries: Number(result?.journalEntriesDeleted || 0),
+        journalFilesTouched: Number(result?.journalFilesTouched || 0)
+      },
+      summaryRefreshed: Boolean(result?.summaryRefreshed)
+    });
   });
 
   app.post("/api/memory/runtime-snapshot", async (c) => {

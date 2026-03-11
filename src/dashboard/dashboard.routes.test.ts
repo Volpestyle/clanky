@@ -79,6 +79,90 @@ test("dashboard memory summary routes honor guild scope", async () => {
   }
 });
 
+test("dashboard guild memory purge requires exact guild-name confirmation", async () => {
+  const purgeCalls: string[] = [];
+  const runtimePurgeCalls: string[] = [];
+
+  const result = await withDashboardServer(
+    {
+      botOverrides: {
+        getGuilds() {
+          return [
+            { id: "guild-1", name: "Alpha Guild" },
+            { id: "guild-2", name: "Beta Guild" }
+          ];
+        },
+        purgeGuildMemoryRuntime(guildId) {
+          runtimePurgeCalls.push(String(guildId || ""));
+          return true;
+        }
+      },
+      memoryOverrides: {
+        async purgeGuildMemory({ guildId } = {}) {
+          purgeCalls.push(String(guildId || ""));
+          return {
+            ok: true,
+            reason: "deleted",
+            guildId: String(guildId || ""),
+            durableFactsDeleted: 4,
+            durableFactVectorsDeleted: 4,
+            conversationMessagesDeleted: 17,
+            conversationVectorsDeleted: 17,
+            reflectionEventsDeleted: 2,
+            journalEntriesDeleted: 9,
+            journalFilesTouched: 3,
+            summaryRefreshed: true
+          };
+        }
+      }
+    },
+    async ({ baseUrl }) => {
+      const mismatch = await fetch(`${baseUrl}/api/memory/guild`, {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          guildId: "guild-1",
+          confirmGuildName: "Wrong Guild"
+        })
+      });
+      assert.equal(mismatch.status, 400);
+      const mismatchJson = await mismatch.json();
+      assert.equal(mismatchJson.error, "guild_name_confirmation_mismatch");
+      assert.deepEqual(purgeCalls, []);
+
+      const response = await fetch(`${baseUrl}/api/memory/guild`, {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          guildId: "guild-1",
+          confirmGuildName: "Alpha Guild"
+        })
+      });
+      assert.equal(response.status, 200);
+      const json = await response.json();
+      assert.equal(json.ok, true);
+      assert.equal(json.guildId, "guild-1");
+      assert.equal(json.guildName, "Alpha Guild");
+      assert.equal(json.deleted.durableFacts, 4);
+      assert.equal(json.deleted.conversationMessages, 17);
+      assert.equal(json.deleted.reflectionEvents, 2);
+      assert.equal(json.deleted.journalEntries, 9);
+      assert.equal(json.deleted.journalFilesTouched, 3);
+      assert.equal(json.summaryRefreshed, true);
+      assert.deepEqual(purgeCalls, ["guild-1"]);
+      assert.deepEqual(runtimePurgeCalls, ["guild-1"]);
+    }
+  );
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
 test("dashboard fact profile route returns durable and active voice cache views", async () => {
   const result = await withDashboardServer(
     {
@@ -1228,7 +1312,7 @@ test("dashboard settings save rejects requests from outdated clients that omit s
       },
       voice: {
         admission: {
-          mode: "adaptive"
+          mode: "classifier_gate"
         },
         conversationPolicy: {
           replyPath: "bridge"
@@ -1276,7 +1360,7 @@ test("dashboard settings save rejects stale form snapshots instead of overwritin
     store.patchSettings({
       voice: {
         admission: {
-          mode: "adaptive"
+          mode: "classifier_gate"
         },
         conversationPolicy: {
           replyPath: "bridge"

@@ -22,14 +22,15 @@ import {
   searchConversationWindowsByEmbedding,
   getActiveChannels,
   getReferencedMessageStats,
-  upsertMessageVectorNative
+  upsertMessageVectorNative,
+  deleteMessagesForGuild
 } from "./storeMessages.ts";
-import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, getRecentActions, getRecentMemoryReflections, deleteReflectionRun, getRecentBrowserSessions, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./storeActionLog.ts";
+import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, getRecentActions, getRecentMemoryReflections, deleteReflectionRun, deleteMemoryReflectionRunsForGuild, getRecentBrowserSessions, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./storeActionLog.ts";
 import { wasLinkSharedSince, recordSharedLink } from "./storeLookups.ts";
 import { getRecentVoiceSessions, getVoiceSessionEvents } from "./storeVoice.ts";
 import { getReplyPerformanceStats, getStats } from "./storeStats.ts";
 import { createAutomation, getAutomationById, countAutomations, listAutomations, getMostRecentAutomations, findAutomationsByQuery, setAutomationStatus, claimDueAutomations, finalizeAutomationRun, recordAutomationRun, getAutomationRuns } from "./storeAutomation.ts";
-import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactById, getMemoryFactBySubjectAndFact, updateMemoryFact, deleteMemoryFact, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject, searchMemoryFactsLexical, searchMemoryFactsByEmbedding } from "./storeMemory.ts";
+import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactById, getMemoryFactBySubjectAndFact, updateMemoryFact, deleteMemoryFact, deleteMemoryFactsForGuild, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject, searchMemoryFactsLexical, searchMemoryFactsByEmbedding } from "./storeMemory.ts";
 
 export const SETTINGS_KEY = "runtime_settings";
 export const ACTION_LOG_RETENTION_DAYS_DEFAULT = 14;
@@ -292,6 +293,10 @@ export class Store {
     return getRecentMessagesAcrossGuild(this, guildId, limit);
   }
 
+  deleteMessagesForGuild(guildId: string) {
+    return deleteMessagesForGuild(this, guildId);
+  }
+
   getMessagesInWindow(opts: {
     guildId: string;
     channelId?: string | null;
@@ -411,6 +416,10 @@ export class Store {
 
   deleteReflectionRun(runId: string): { deleted: number } {
     return deleteReflectionRun(this, runId);
+  }
+
+  deleteMemoryReflectionRunsForGuild(guildId: string) {
+    return deleteMemoryReflectionRunsForGuild(this, guildId);
   }
 
   wasLinkSharedSince(url, sinceIso) {
@@ -608,6 +617,10 @@ export class Store {
 
   deleteMemoryFact(opts: { guildId; factId }) {
     return deleteMemoryFact(this, opts);
+  }
+
+  deleteMemoryFactsForGuild(guildId: string) {
+    return deleteMemoryFactsForGuild(this, guildId);
   }
 
   ensureSqliteVecReady() {

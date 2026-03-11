@@ -11,7 +11,7 @@ import {
   releaseSharedAsrActiveUser,
   tryHandoffSharedAsr
 } from "./voiceAsrBridge.ts";
-import type { AsrBridgeDeps } from "./voiceAsrBridge.ts";
+import type { AsrBridgeDeps, AsrUtteranceState } from "./voiceAsrBridge.ts";
 import type { VoiceSession } from "./voiceSessionTypes.ts";
 
 function createSession(overrides: Partial<VoiceSession> = {}): VoiceSession {
@@ -376,6 +376,52 @@ test("commitAsrUtterance keeps per-user final transcripts attached to the commit
 
     assert.equal(result?.transcript, "Yo, give me some sound effects.");
     assert.equal(logs.some((entry) => entry.content === "voice_realtime_transcription_empty"), false);
+  });
+});
+
+test("per-user auto-committed item binds to the active utterance before explicit commit starts", async () => {
+  await withPatchedConnect(async () => {
+    const logs: Array<Record<string, unknown>> = [];
+    const session = createSession();
+    const deps = createDeps(session, logs);
+
+    assert.equal(beginAsrUtterance("per_user", session, deps, session.settingsSnapshot, "speaker-1"), true);
+    const asrState = await ensureAsrSessionConnected("per_user", deps, session.settingsSnapshot, "speaker-1");
+    assert.ok(asrState?.client);
+    assert.ok(asrState?.utterance);
+
+    const previousUtterance: AsrUtteranceState = {
+      id: 7,
+      startedAt: Date.now() - 1_000,
+      bytesSent: 48_000,
+      partialText: "",
+      finalSegments: ["previous turn"],
+      finalSegmentEntries: [],
+      lastUpdateAt: Date.now() - 500
+    };
+    asrState!.committedItemUtterances.set("item_prev", previousUtterance);
+
+    const currentUtterance = asrState!.utterance;
+    const client = asrState!.client!;
+    client.handleIncoming(JSON.stringify({
+      type: "input_audio_buffer.speech_stopped",
+      audio_end_ms: 22112,
+      item_id: "item_current"
+    }));
+    client.handleIncoming(JSON.stringify({
+      type: "input_audio_buffer.committed",
+      item_id: "item_current",
+      previous_item_id: "item_prev"
+    }));
+    client.handleIncoming(JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item_current",
+      transcript: "All right, stop music."
+    }));
+
+    assert.deepEqual(currentUtterance.finalSegments, ["All right, stop music."]);
+    assert.deepEqual(previousUtterance.finalSegments, ["previous turn"]);
+    assert.equal(logs.some((entry) => entry.content === "openai_realtime_asr_final_segment"), true);
   });
 });
 

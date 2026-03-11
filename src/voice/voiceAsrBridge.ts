@@ -500,7 +500,16 @@ export function trackPerUserAsrCommittedItem(
 ) {
   const normalizedItemId = normalizeInlineText(itemId, 180);
   if (!normalizedItemId) return;
-  const trackedUtterance = asrState.committingUtterance;
+  const trackedUtterance =
+    asrState.committingUtterance && typeof asrState.committingUtterance === "object"
+      ? asrState.committingUtterance
+      // Server VAD can auto-commit the active turn before capture finalization
+      // transitions this bridge into `committing`. In that case we still need
+      // the emitted item_id to bind to the active utterance so transcript
+      // events do not fall back through previousItemId onto an older turn.
+      : Number(asrState.speechStoppedAt || 0) > 0 && asrState.utterance && typeof asrState.utterance === "object"
+        ? asrState.utterance
+        : null;
   if (!trackedUtterance || typeof trackedUtterance !== "object") return;
   asrState.committedItemUtterances.set(normalizedItemId, trackedUtterance);
   pruneMap(asrState.committedItemUtterances);

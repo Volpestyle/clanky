@@ -371,6 +371,8 @@ Audio arrives via `appendAudioToAsr` on every `onUserAudio` chunk:
 
 If the commit times out empty but the same utterance produces a late final segment shortly after, the capture manager still watches that committed utterance object during the late-recovery window. A new provisional utterance for the same speaker does not cancel recovery of the older committed transcript.
 
+Per-user item association follows the committed `item_id` first. When OpenAI server VAD auto-commits a turn before local capture finalization enters `committing`, the bridge still binds that `item_id` to the current active utterance. This prevents a final transcript such as `"stop music"` from being misattached to an older turn through `previous_item_id`.
+
 ### Shared Commit Flow
 
 1. Validate user lock matches
@@ -458,3 +460,4 @@ Current coverage:
 
 - `src/voice/voiceConfigResolver.test.ts` (mode resolution)
 - `src/voice/voiceSessionManager.lifecycle.test.ts` (integration scenarios)
+- `src/voice/voiceAsrBridge.test.ts` (per-user/server-VAD item binding and bridge lifecycle)

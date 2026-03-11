@@ -23,7 +23,7 @@ When interactive browser sessions are enabled, `session_id` is the continuation 
 
 `browser_browse` is available in:
 
-- `/browse` slash command
+- `/clank browse` slash subcommand
 - text reply tool loop
 - voice tool loop
 

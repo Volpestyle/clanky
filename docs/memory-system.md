@@ -25,6 +25,7 @@ Supporting infrastructure:
 - **Daily journals** (`memory/YYYY-MM-DD.md`): append-only logs of all ingested text and transcripts. Raw material consumed by reflection.
 - **Snapshot** (`memory/MEMORY.md`): periodically regenerated global markdown for operator inspection. The dashboard can also request a guild-scoped summary view without changing the on-disk file. Runtime prompts never consume this markdown directly.
 - **Runtime snapshot** (dashboard API): previews the actual turn-scoped memory slice the model would receive for a given guild/channel/user/query combination.
+- **Guild purge control** (dashboard API): an operator can hard-reset one guild by typing the exact guild name. This deletes that guild's durable facts, conversation history, reflection runs, and journal entries, while leaving other guilds untouched. New future conversations can repopulate memory normally.
 
 ## Flow Diagram
 

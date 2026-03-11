@@ -1,4 +1,5 @@
 import {
+  ChatInputCommandInteraction,
   Client,
   GatewayIntentBits,
   Partials,
@@ -6,8 +7,6 @@ import {
   Routes
 } from "discord.js";
 import { clankCommand } from "./commands/clankCommand.ts";
-import { browseCommand } from "./commands/browseCommand.ts";
-import { codeCommand } from "./commands/codeCommand.ts";
 import {
   runCodeAgent,
   isCodeAgentUserAllowed,
@@ -15,7 +14,6 @@ import {
   resolveCodeAgentConfig,
   getActiveCodeAgentTaskCount
 } from "./agents/codeAgent.ts";
-import { musicCommands } from "./voice/musicCommands.ts";
 import { ImageCaptionCache } from "./vision/imageCaptionCache.ts";
 import {
   normalizeReactionEmojiToken
@@ -414,6 +412,182 @@ export class ClankerBot {
     return buildVoiceReplyRuntime(this);
   }
 
+  async handleClankSlashCommand(interaction: ChatInputCommandInteraction) {
+    const settings = this.store.getSettings();
+    const subcommandGroup = interaction.options.getSubcommandGroup(false);
+
+    if (subcommandGroup === "music") {
+      return await this.voiceSessionManager.handleClankSlashCommand(interaction, settings);
+    }
+
+    const subcommand = interaction.options.getSubcommand(true);
+    if (subcommand === "say") {
+      return await this.voiceSessionManager.handleClankSlashCommand(interaction, settings);
+    }
+    if (subcommand === "browse") {
+      return await this.handleClankBrowseSlashCommand(interaction, settings);
+    }
+    if (subcommand === "code") {
+      return await this.handleClankCodeSlashCommand(interaction, settings);
+    }
+
+    await interaction.reply({ content: "Unsupported /clank command.", ephemeral: true });
+  }
+
+  async handleClankBrowseSlashCommand(
+    interaction: ChatInputCommandInteraction,
+    settings: Record<string, unknown> | null
+  ) {
+    await interaction.deferReply();
+    const browseInstruction = interaction.options.getString("task", true);
+
+    try {
+      const browserContext = buildBrowserBrowseContextForBudgetTracking(
+        this.toBudgetContext(),
+        settings
+      );
+      if (!browserContext.configured) {
+        await interaction.editReply("Browser runtime is currently unavailable on this server.");
+        return;
+      }
+      if (!browserContext.enabled) {
+        await interaction.editReply("Browser runtime is disabled in settings on this server.");
+        return;
+      }
+
+      const result = await runModelRequestedBrowserBrowseForAgentTasks(this.toAgentContext(), {
+        settings,
+        browserBrowse: browserContext,
+        query: browseInstruction,
+        guildId: interaction.guildId,
+        channelId: interaction.channelId,
+        userId: interaction.user.id,
+        source: "slash_command_clank_browse"
+      });
+
+      let responseText = String(result.text || "").trim();
+      if (result.error) {
+        responseText = result.error;
+      }
+      if (result.hitStepLimit) {
+        responseText += "\n\n*(Note: I reached my maximum step limit before finishing the task completely.)*";
+      }
+      if (!responseText) {
+        responseText = "Browser task completed with no text result.";
+      }
+
+      if (responseText.length > 2000) {
+        await interaction.editReply(responseText.substring(0, 1997) + "...");
+      } else {
+        await interaction.editReply(responseText);
+      }
+    } catch (error) {
+      console.error("[slashCommands] Error handling /clank browse:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      if (isAbortError(error)) {
+        try {
+          await interaction.editReply("Browser session was cancelled.");
+        } catch (replyError) {
+          console.warn("[slashCommands] Failed to edit cancelled browse reply:", replyError);
+        }
+      } else {
+        try {
+          await interaction.editReply(`An error occurred while browsing: ${message}`);
+        } catch (replyError) {
+          console.warn("[slashCommands] Failed to edit browse error reply:", replyError);
+        }
+      }
+    }
+  }
+
+  async handleClankCodeSlashCommand(
+    interaction: ChatInputCommandInteraction,
+    settings: Record<string, unknown> | null
+  ) {
+    await interaction.deferReply();
+    const codeInstruction = interaction.options.getString("task", true);
+    const codeRole = normalizeCodeAgentRole(interaction.options.getString("role", false), "implementation");
+    const codeCwd = interaction.options.getString("cwd", false) || undefined;
+
+    if (!isDevTaskEnabled(settings)) {
+      await interaction.editReply("Code agent is disabled in settings.");
+      return;
+    }
+    if (!isCodeAgentUserAllowed(interaction.user.id, settings)) {
+      await interaction.editReply("This capability is restricted to allowed users.");
+      return;
+    }
+
+    const codeAgentConfig = resolveCodeAgentConfig(settings, codeCwd, codeRole);
+    const maxParallel = codeAgentConfig.maxParallelTasks;
+    if (getActiveCodeAgentTaskCount() >= maxParallel) {
+      await interaction.editReply("Too many code agent tasks are already running. Try again shortly.");
+      return;
+    }
+    const maxPerHour = codeAgentConfig.maxTasksPerHour;
+    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const usedThisHour = this.store.countActionsSince("code_agent_call", since1h);
+    if (usedThisHour >= maxPerHour) {
+      await interaction.editReply("Code agent is currently blocked by hourly limits. Try again shortly.");
+      return;
+    }
+
+    try {
+      const {
+        cwd,
+        provider,
+        model,
+        codexModel,
+        codexCliModel,
+        maxTurns,
+        timeoutMs,
+        maxBufferBytes
+      } = codeAgentConfig;
+      const codexCompatibleClient = this.llm?.getCodexCompatibleClient() || null;
+      const codexCostProvider = this.llm?.openai ? "openai" : this.llm?.codexOAuth ? "openai-oauth" : undefined;
+
+      const result = await runCodeAgent({
+        instruction: codeInstruction,
+        cwd,
+        provider,
+        maxTurns,
+        timeoutMs,
+        maxBufferBytes,
+        model,
+        codexModel,
+        codexCliModel,
+        openai: codexCompatibleClient,
+        codexCostProvider,
+        trace: {
+          guildId: interaction.guildId,
+          channelId: interaction.channelId,
+          userId: interaction.user.id,
+          source: "slash_command_clank_code",
+          role: codeRole
+        },
+        store: this.store
+      });
+
+      let responseText = result.text;
+      if (result.costUsd > 0) {
+        responseText += `\n\n*(Cost: $${result.costUsd.toFixed(4)})*`;
+      }
+      if (responseText.length > 2000) {
+        await interaction.editReply(responseText.substring(0, 1997) + "...");
+      } else {
+        await interaction.editReply(responseText || "Code task completed with no output.");
+      }
+    } catch (error) {
+      console.error("[slashCommands] Error handling /clank code:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      try {
+        await interaction.editReply(`An error occurred while running code task: ${message}`);
+      } catch (replyError) {
+        console.warn("[slashCommands] Failed to edit code error reply:", replyError);
+      }
+    }
+  }
+
   registerEvents() {
     this.client.on("clientReady", async () => {
       this.hasConnectedAtLeastOnce = true;
@@ -423,10 +597,10 @@ export class ClankerBot {
 
       try {
         const rest = new REST({ version: "10" }).setToken(this.appConfig.discordToken);
-        await rest.put(Routes.applicationCommands(this.client.user?.id || ""), { body: [...musicCommands, clankCommand, browseCommand, codeCommand] });
+        await rest.put(Routes.applicationCommands(this.client.user?.id || ""), { body: [clankCommand] });
         console.log("[slashCommands] Registered slash commands");
       } catch (error) {
-        console.error("[musicCommands] Failed to register slash commands:", error);
+        console.error("[slashCommands] Failed to register slash commands:", error);
       }
     });
 
@@ -489,164 +663,12 @@ export class ClankerBot {
     this.client.on("interactionCreate", async (interaction) => {
       if (!interaction.isChatInputCommand()) return;
       const { commandName } = interaction;
-      if (commandName === "music") {
+      if (commandName === "clank") {
         try {
-          await this.voiceSessionManager.handleMusicSlashCommand(interaction, this.store.getSettings());
-        } catch (error) {
-          console.error("[slashCommands] Error handling music command:", error);
-          await interaction.reply({ content: "An error occurred processing your command.", ephemeral: true });
-        }
-      } else if (commandName === "clank") {
-        try {
-          await this.voiceSessionManager.handleClankSlashCommand(interaction, this.store.getSettings());
+          await this.handleClankSlashCommand(interaction);
         } catch (error) {
           console.error("[slashCommands] Error handling clank command:", error);
           await interaction.reply({ content: "An error occurred processing your command.", ephemeral: true });
-        }
-      } else if (commandName === "browse") {
-        await interaction.deferReply();
-        const browseInstruction = interaction.options.getString("task", true);
-        const settings = this.store.getSettings();
-        try {
-          const browserContext = buildBrowserBrowseContextForBudgetTracking(
-            this.toBudgetContext(),
-            settings
-          );
-          if (!browserContext.configured) {
-            await interaction.editReply("Browser runtime is currently unavailable on this server.");
-            return;
-          }
-          if (!browserContext.enabled) {
-            await interaction.editReply("Browser runtime is disabled in settings on this server.");
-            return;
-          }
-
-          const result = await runModelRequestedBrowserBrowseForAgentTasks(this.toAgentContext(), {
-            settings,
-            browserBrowse: browserContext,
-            query: browseInstruction,
-            guildId: interaction.guildId,
-            channelId: interaction.channelId,
-            userId: interaction.user.id,
-            source: "slash_command_browse"
-          });
-
-          let responseText = String(result.text || "").trim();
-          if (result.error) {
-            responseText = result.error;
-          }
-          if (result.hitStepLimit) {
-            responseText += "\n\n*(Note: I reached my maximum step limit before finishing the task completely.)*";
-          }
-          if (!responseText) {
-            responseText = "Browser task completed with no text result.";
-          }
-
-          if (responseText.length > 2000) {
-            await interaction.editReply(responseText.substring(0, 1997) + "...");
-          } else {
-            await interaction.editReply(responseText);
-          }
-        } catch (error) {
-          console.error("[slashCommands] Error handling browse command:", error);
-          const message = error instanceof Error ? error.message : String(error);
-          if (isAbortError(error)) {
-            try {
-              await interaction.editReply("Browser session was cancelled.");
-            } catch (replyError) {
-              console.warn("[slashCommands] Failed to edit cancelled browse reply:", replyError);
-            }
-          } else {
-            try {
-              await interaction.editReply(`An error occurred while browsing: ${message}`);
-            } catch (replyError) {
-              console.warn("[slashCommands] Failed to edit browse error reply:", replyError);
-            }
-          }
-        }
-      } else if (commandName === "code") {
-        await interaction.deferReply();
-        const codeInstruction = interaction.options.getString("task", true);
-        const codeRole = normalizeCodeAgentRole(interaction.options.getString("role", false), "implementation");
-        const codeCwd = interaction.options.getString("cwd", false) || undefined;
-        const settings = this.store.getSettings();
-
-        if (!isDevTaskEnabled(settings)) {
-          await interaction.editReply("Code agent is disabled in settings.");
-          return;
-        }
-        if (!isCodeAgentUserAllowed(interaction.user.id, settings)) {
-          await interaction.editReply("This capability is restricted to allowed users.");
-          return;
-        }
-
-        const codeAgentConfig = resolveCodeAgentConfig(settings, codeCwd, codeRole);
-        const maxParallel = codeAgentConfig.maxParallelTasks;
-        if (getActiveCodeAgentTaskCount() >= maxParallel) {
-          await interaction.editReply("Too many code agent tasks are already running. Try again shortly.");
-          return;
-        }
-        const maxPerHour = codeAgentConfig.maxTasksPerHour;
-        const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-        const usedThisHour = this.store.countActionsSince("code_agent_call", since1h);
-        if (usedThisHour >= maxPerHour) {
-          await interaction.editReply("Code agent is currently blocked by hourly limits. Try again shortly.");
-          return;
-        }
-
-        try {
-          const {
-            cwd,
-            provider,
-            model,
-            codexModel,
-            codexCliModel,
-            maxTurns,
-            timeoutMs,
-            maxBufferBytes
-          } = codeAgentConfig;
-          const codexCompatibleClient = this.llm?.getCodexCompatibleClient() || null;
-          const codexCostProvider = this.llm?.openai ? "openai" : this.llm?.codexOAuth ? "openai-oauth" : undefined;
-
-          const result = await runCodeAgent({
-            instruction: codeInstruction,
-            cwd,
-            provider,
-            maxTurns,
-            timeoutMs,
-            maxBufferBytes,
-            model,
-            codexModel,
-            codexCliModel,
-            openai: codexCompatibleClient,
-            codexCostProvider,
-            trace: {
-              guildId: interaction.guildId,
-              channelId: interaction.channelId,
-              userId: interaction.user.id,
-              source: "slash_command_code",
-              role: codeRole
-            },
-            store: this.store
-          });
-
-          let responseText = result.text;
-          if (result.costUsd > 0) {
-            responseText += `\n\n*(Cost: $${result.costUsd.toFixed(4)})*`;
-          }
-          if (responseText.length > 2000) {
-            await interaction.editReply(responseText.substring(0, 1997) + "...");
-          } else {
-            await interaction.editReply(responseText || "Code task completed with no output.");
-          }
-        } catch (error) {
-          console.error("[slashCommands] Error handling code command:", error);
-          const message = error instanceof Error ? error.message : String(error);
-          try {
-            await interaction.editReply(`An error occurred while running code task: ${message}`);
-          } catch (replyError) {
-            console.warn("[slashCommands] Failed to edit code error reply:", replyError);
-          }
         }
       }
     });

@@ -14,7 +14,7 @@ type SubTab = (typeof MEMORY_SUB_TABS)[number];
 
 interface Props {
   markdown: string | null | undefined;
-  onRefresh: () => void;
+  onRefresh: () => void | Promise<void>;
   notify: (text: string, type?: string) => void;
 }
 

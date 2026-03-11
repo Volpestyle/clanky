@@ -65,6 +65,7 @@ export interface DashboardBot {
   };
   getGuilds(): Array<{ id: string; name: string }>;
   getGuildChannels(guildId: string): unknown;
+  purgeGuildMemoryRuntime?(guildId: string): Promise<unknown> | unknown;
   requestVoiceJoinFromDashboard?(payload: {
     guildId: string | null;
     requesterUserId: string | null;
@@ -85,6 +86,21 @@ export interface DashboardMemory {
     guildId?: string | null;
   }): Promise<string>;
   refreshMemoryMarkdown(): Promise<unknown>;
+  purgeGuildMemory?(opts?: {
+    guildId?: string | null;
+  }): Promise<{
+    ok: boolean;
+    reason?: string;
+    guildId?: string | null;
+    durableFactsDeleted?: number;
+    durableFactVectorsDeleted?: number;
+    conversationMessagesDeleted?: number;
+    conversationVectorsDeleted?: number;
+    reflectionEventsDeleted?: number;
+    journalEntriesDeleted?: number;
+    journalFilesTouched?: number;
+    summaryRefreshed?: boolean;
+  }>;
   loadFactProfile?(payload: {
     userId?: string | null;
     guildId?: string | null;

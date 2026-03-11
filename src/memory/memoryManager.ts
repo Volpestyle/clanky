@@ -1320,6 +1320,71 @@ export class MemoryManager {
     }
   }
 
+  async purgeGuildMemory({ guildId }: { guildId?: string | null } = {}) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) {
+      return {
+        ok: false,
+        reason: "guild_required",
+        guildId: null,
+        durableFactsDeleted: 0,
+        durableFactVectorsDeleted: 0,
+        conversationMessagesDeleted: 0,
+        conversationVectorsDeleted: 0,
+        reflectionEventsDeleted: 0,
+        journalEntriesDeleted: 0,
+        journalFilesTouched: 0,
+        summaryRefreshed: false
+      } as const;
+    }
+
+    this.clearScheduledTextMicroReflectionsForGuild(normalizedGuildId);
+
+    try {
+      await this.drainIngestQueue({ timeoutMs: 8_000 });
+    } catch {
+      // Best effort. The purge below is still the source of truth.
+    }
+
+    await this.waitForGuildMicroReflectionsToSettle(normalizedGuildId, 8_000);
+
+    const durableResult =
+      typeof this.store?.deleteMemoryFactsForGuild === "function"
+        ? this.store.deleteMemoryFactsForGuild(normalizedGuildId)
+        : { factsDeleted: 0, vectorsDeleted: 0 };
+    const messageResult =
+      typeof this.store?.deleteMessagesForGuild === "function"
+        ? this.store.deleteMessagesForGuild(normalizedGuildId)
+        : { messagesDeleted: 0, vectorsDeleted: 0 };
+    const reflectionResult =
+      typeof this.store?.deleteMemoryReflectionRunsForGuild === "function"
+        ? this.store.deleteMemoryReflectionRunsForGuild(normalizedGuildId)
+        : { deleted: 0 };
+    const journalResult = await this.purgeGuildEntriesFromDailyLogs(normalizedGuildId);
+
+    let summaryRefreshed = false;
+    try {
+      await this.refreshMemoryMarkdown();
+      summaryRefreshed = true;
+    } catch {
+      summaryRefreshed = false;
+    }
+
+    return {
+      ok: true,
+      reason: "deleted",
+      guildId: normalizedGuildId,
+      durableFactsDeleted: Number(durableResult?.factsDeleted || 0),
+      durableFactVectorsDeleted: Number(durableResult?.vectorsDeleted || 0),
+      conversationMessagesDeleted: Number(messageResult?.messagesDeleted || 0),
+      conversationVectorsDeleted: Number(messageResult?.vectorsDeleted || 0),
+      reflectionEventsDeleted: Number(reflectionResult?.deleted || 0),
+      journalEntriesDeleted: Number(journalResult?.entriesDeleted || 0),
+      journalFilesTouched: Number(journalResult?.filesTouched || 0),
+      summaryRefreshed
+    } as const;
+  }
+
   buildPeopleSection(guildId: string | null = null) {
     const normalizedGuildId = String(guildId || "").trim() || null;
     const subjects = this.store
@@ -1601,6 +1666,44 @@ export class MemoryManager {
     await fs.appendFile(dailyFilePath, `${line}\n`, "utf8");
   }
 
+  clearScheduledTextMicroReflectionsForGuild(guildId: string) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) return;
+
+    for (const [key, timer] of this.textMicroReflectionTimers.entries()) {
+      if (!String(key || "").startsWith(`${normalizedGuildId}:`)) continue;
+      clearTimeout(timer);
+      this.textMicroReflectionTimers.delete(key);
+    }
+
+    for (const key of this.textMicroReflectionState.keys()) {
+      if (String(key || "").startsWith(`${normalizedGuildId}:`)) {
+        this.textMicroReflectionState.delete(key);
+      }
+    }
+  }
+
+  async waitForGuildMicroReflectionsToSettle(guildId: string, timeoutMs = 8_000) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) return;
+
+    const deadline = Date.now() + Math.max(100, Number(timeoutMs) || 8_000);
+    while (Date.now() < deadline) {
+      let hasInFlight = false;
+      for (const key of this.microReflectionInFlight) {
+        if (
+          String(key || "").startsWith(`text:${normalizedGuildId}:`) ||
+          String(key || "").startsWith(`voice:${normalizedGuildId}:`)
+        ) {
+          hasInFlight = true;
+          break;
+        }
+      }
+      if (!hasInFlight) return;
+      await sleepMs(25);
+    }
+  }
+
   async getDailyLogMessageIds(dailyFilePath) {
     const cacheKey = String(dailyFilePath || "").trim();
     if (!cacheKey) return new Set();
@@ -1646,6 +1749,68 @@ export class MemoryManager {
     }
 
     this.initializedDailyFiles.add(dailyFilePath);
+  }
+
+  async purgeGuildEntriesFromDailyLogs(guildId: string) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) {
+      return {
+        entriesDeleted: 0,
+        filesTouched: 0
+      };
+    }
+
+    let dailyFileNames: string[] = [];
+    try {
+      dailyFileNames = (await fs.readdir(this.memoryDirPath))
+        .filter((name) => DAILY_FILE_PATTERN.test(name))
+        .sort();
+    } catch {
+      return {
+        entriesDeleted: 0,
+        filesTouched: 0
+      };
+    }
+
+    let entriesDeleted = 0;
+    let filesTouched = 0;
+    for (const fileName of dailyFileNames) {
+      const dailyFilePath = path.join(this.memoryDirPath, fileName);
+      let text = "";
+      try {
+        text = await fs.readFile(dailyFilePath, "utf8");
+      } catch {
+        continue;
+      }
+
+      const lines = text.split("\n");
+      const keptLines: string[] = [];
+      let fileRemovedCount = 0;
+      for (const line of lines) {
+        const parsed = parseDailyEntryLineWithScope(line);
+        if (parsed && String(parsed.guildId || "").trim() === normalizedGuildId) {
+          fileRemovedCount += 1;
+          continue;
+        }
+        keptLines.push(line);
+      }
+
+      if (!fileRemovedCount) continue;
+
+      while (keptLines.length > 0 && keptLines[keptLines.length - 1] === "") {
+        keptLines.pop();
+      }
+      await fs.writeFile(dailyFilePath, `${keptLines.join("\n")}\n`, "utf8");
+      this.dailyLogMessageIds.delete(dailyFilePath);
+      this.initializedDailyFiles.add(dailyFilePath);
+      entriesDeleted += fileRemovedCount;
+      filesTouched += 1;
+    }
+
+    return {
+      entriesDeleted,
+      filesTouched
+    };
   }
 
   async getRecentDailyFiles(limit = 5) {

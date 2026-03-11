@@ -179,6 +179,52 @@ export function upsertMessageVectorNative(
   return Number(result?.changes || 0) > 0;
 }
 
+export function deleteMessagesForGuild(store: MessageStore, guildId: string) {
+  const normalizedGuildId = String(guildId || "").trim();
+  if (!normalizedGuildId) {
+    return {
+      ok: false,
+      reason: "guild_required",
+      messagesDeleted: 0,
+      vectorsDeleted: 0
+    } as const;
+  }
+
+  const deleteTx = store.db.transaction((targetGuildId: string) => {
+    const vectorsDeleted = Number(
+      store.db
+        .prepare(
+          `DELETE FROM message_vectors_native
+             WHERE message_id IN (
+               SELECT message_id
+                 FROM messages
+                WHERE guild_id = ?
+             )`
+        )
+        .run(targetGuildId)?.changes || 0
+    );
+    const messagesDeleted = Number(
+      store.db
+        .prepare(
+          `DELETE FROM messages
+             WHERE guild_id = ?`
+        )
+        .run(targetGuildId)?.changes || 0
+    );
+    return {
+      messagesDeleted,
+      vectorsDeleted
+    };
+  });
+
+  const result = deleteTx(normalizedGuildId);
+  return {
+    ok: true,
+    reason: "deleted",
+    ...result
+  } as const;
+}
+
 export function getRecentMessages(store: MessageStore, channelId, limit = 40) {
 return store.db
 .prepare<MessageSqlRow, [string, number]>(

@@ -110,6 +110,21 @@ export async function withDashboardServer<T>(
     async refreshMemoryMarkdown() {
       return true;
     },
+    async purgeGuildMemory({ guildId } = {}) {
+      return {
+        ok: true,
+        reason: "deleted",
+        guildId: String(guildId || "").trim() || null,
+        durableFactsDeleted: 0,
+        durableFactVectorsDeleted: 0,
+        conversationMessagesDeleted: 0,
+        conversationVectorsDeleted: 0,
+        reflectionEventsDeleted: 0,
+        journalEntriesDeleted: 0,
+        journalFilesTouched: 0,
+        summaryRefreshed: true
+      };
+    },
     loadFactProfile() {
       return {
         participantProfiles: [],

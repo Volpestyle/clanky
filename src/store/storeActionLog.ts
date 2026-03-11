@@ -466,6 +466,31 @@ export function deleteReflectionRun(store: ActionLogStore, runId: string): { del
   return { deleted: result.changes };
 }
 
+export function deleteMemoryReflectionRunsForGuild(store: ActionLogStore, guildId: string) {
+  const normalizedGuildId = String(guildId || "").trim();
+  if (!normalizedGuildId) {
+    return {
+      ok: false,
+      reason: "guild_required",
+      deleted: 0
+    } as const;
+  }
+
+  const result = store.db
+    .prepare<never, [string]>(
+      `DELETE FROM actions
+         WHERE guild_id = ?
+           AND kind IN ('memory_reflection_start', 'memory_reflection_complete', 'memory_reflection_error')`
+    )
+    .run(normalizedGuildId);
+
+  return {
+    ok: true,
+    reason: "deleted",
+    deleted: Number(result?.changes || 0)
+  } as const;
+}
+
 export function getRecentBrowserSessions(
   store: ActionLogStore,
   limit = 50,

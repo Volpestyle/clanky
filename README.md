@@ -4,6 +4,8 @@ A Discord bot that lives in your server as a genuine participant, not a command-
 
 The core idea: give an LLM brain a growing set of capabilities (voice, browsing, memory, web search, media generation) and let it compose them naturally through conversation. You don't invoke features with slash commands (though you can). You talk to the bot in voice or text and it figures out which tools to chain together to do what you're asking.
 
+Slash-command entry points are intentionally compact: `/clank say`, `/clank browse`, `/clank code`, and `/clank music ...`.
+
 Ask it to check your GitHub issues? It can browse the page and summarize them. Ask it what song is playing in a stream it's watching? It can look at the screen, search the web, and queue it up. No rigid workflows, the brain orchestrates.
 
 ## Capabilities
