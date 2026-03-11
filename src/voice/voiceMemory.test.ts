@@ -28,9 +28,17 @@ function createManager({ memory = null }: { memory?: unknown } = {}) {
       },
       getSettings() {
         return createTestSettings({
-          botName: "clanker conk",
+          identity: {
+            botName: "clanker conk"
+          },
           memory: { enabled: false },
-          webSearch: { enabled: false }
+          agentStack: {
+            runtimeConfig: {
+              research: {
+                enabled: false
+              }
+            }
+          }
         });
       }
     },
@@ -52,7 +60,16 @@ test("voice durable memory write tool is excluded when settings.memory.enabled i
   const { manager } = createManager();
   const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
-    settings: createTestSettings({ memory: { enabled: false }, webSearch: { enabled: true } })
+    settings: createTestSettings({
+      memory: { enabled: false },
+      agentStack: {
+        runtimeConfig: {
+          research: {
+            enabled: true
+          }
+        }
+      }
+    })
   });
 
   const names = tools.map((t: { name: string }) => t.name);
@@ -65,7 +82,13 @@ test("voice durable memory write tool is included when settings.memory.enabled i
     session: null,
     settings: createTestSettings({
       memory: { enabled: true },
-      webSearch: { enabled: true }
+      agentStack: {
+        runtimeConfig: {
+          research: {
+            enabled: true
+          }
+        }
+      }
     })
   });
 
@@ -79,7 +102,13 @@ test("voice durable memory write stays disabled when durable memory is disabled"
     session: null,
     settings: createTestSettings({
       memory: { enabled: false },
-      webSearch: { enabled: true }
+      agentStack: {
+        runtimeConfig: {
+          research: {
+            enabled: true
+          }
+        }
+      }
     })
   });
 
@@ -93,7 +122,13 @@ test("voice durable memory write remains available when memory is enabled", () =
     session: null,
     settings: createTestSettings({
       memory: { enabled: true },
-      webSearch: { enabled: true }
+      agentStack: {
+        runtimeConfig: {
+          research: {
+            enabled: true
+          }
+        }
+      }
     })
   });
 
@@ -118,7 +153,16 @@ test("web_search excluded when settings.webSearch.enabled is false", () => {
   const { manager } = createManager();
   const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
-    settings: createTestSettings({ memory: { enabled: true }, webSearch: { enabled: false } })
+    settings: createTestSettings({
+      memory: { enabled: true },
+      agentStack: {
+        runtimeConfig: {
+          research: {
+            enabled: false
+          }
+        }
+      }
+    })
   });
 
   const names = tools.map((t: { name: string }) => t.name);
@@ -130,7 +174,16 @@ test("web_search included when settings.webSearch.enabled is true", () => {
   const { manager } = createManager();
   const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
-    settings: createTestSettings({ memory: { enabled: false }, webSearch: { enabled: true } })
+    settings: createTestSettings({
+      memory: { enabled: false },
+      agentStack: {
+        runtimeConfig: {
+          research: {
+            enabled: true
+          }
+        }
+      }
+    })
   });
 
   const names = tools.map((t: { name: string }) => t.name);
@@ -142,7 +195,15 @@ test("code_task excluded when code agent is enabled but runtime hooks are unavai
   const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
     settings: createTestSettings({
-      codeAgent: { provider: "claude-code" }
+      agentStack: {
+        runtimeConfig: {
+          devTeam: {
+            claudeCode: {
+              enabled: true
+            }
+          }
+        }
+      }
     })
   });
 
@@ -156,7 +217,20 @@ test("code_task included when code agent is enabled and one-shot runtime hook is
   const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
     settings: createTestSettings({
-      codeAgent: { provider: "claude-code", allowedUserIds: ["user-1"] }
+      permissions: {
+        devTasks: {
+          allowedUserIds: ["user-1"]
+        }
+      },
+      agentStack: {
+        runtimeConfig: {
+          devTeam: {
+            claudeCode: {
+              enabled: true
+            }
+          }
+        }
+      }
     })
   });
 
@@ -187,7 +261,11 @@ test("assistant voice turns are persisted into searchable message history", () =
     guildId: "guild-1",
     textChannelId: "text-1",
     ending: false,
-    settingsSnapshot: createTestSettings({ botName: "clanker conk" }),
+    settingsSnapshot: createTestSettings({
+      identity: {
+        botName: "clanker conk"
+      }
+    }),
     recentVoiceTurns: [],
     transcriptTurns: []
   };

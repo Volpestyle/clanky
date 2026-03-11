@@ -596,7 +596,7 @@ function buildHarnessSettings({
       enabled: true,
       mode: voiceMode,
       replyPath: "brain",
-      replyEagerness: 65,
+      ambientReplyEagerness: 65,
       generationLlm: {
         provider: actorProvider,
         model: actorModel

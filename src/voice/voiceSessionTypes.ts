@@ -95,6 +95,7 @@ export type VoiceReplyDecision = {
     classifierConfidence?: number | null;
     classifierTarget?: string | null;
     classifierReason?: string | null;
+    runtimeEventContext?: VoiceRuntimeEventContext | null;
     replyPrompts?: LoggedVoicePromptBundle | null;
 };
 
@@ -348,6 +349,7 @@ export interface VoicePendingResponse {
     interruptionPolicy: ReplyInterruptionPolicy | null;
     utteranceText: string | null;
     latencyContext: VoicePendingResponseLatencyContext | null;
+    musicWakeRefreshAfterSpeech?: boolean;
 }
 
 export interface VoiceLastRequestedRealtimeUtterance {
@@ -362,6 +364,7 @@ export interface VoiceInterruptedAssistantReply {
     interruptedByUserId: string | null;
     interruptedAt: number;
     source: string | null;
+    interruptionPolicy?: ReplyInterruptionPolicy | null;
 }
 
 export interface VoiceQueuedRealtimeAssistantUtterance {
@@ -372,6 +375,7 @@ export interface VoiceQueuedRealtimeAssistantUtterance {
     queuedAt: number;
     interruptionPolicy: ReplyInterruptionPolicy | null;
     latencyContext: VoicePendingResponseLatencyContext | null;
+    musicWakeRefreshAfterSpeech?: boolean;
 }
 
 export interface VoiceMusicQueueTrack {
@@ -417,6 +421,19 @@ export interface VoiceMembershipEvent {
 
 export interface VoiceMembershipPromptEntry extends VoiceMembershipEvent {
     ageMs: number;
+}
+
+export type VoiceRuntimeEventCategory = "membership" | "screen_share" | "generic";
+export type VoiceRuntimeEventActorRole = "self" | "other" | "unknown";
+export type VoiceRuntimeScreenShareEventType = "share_start" | "scene_changed" | "silence";
+
+export interface VoiceRuntimeEventContext {
+    category: VoiceRuntimeEventCategory;
+    eventType: VoiceMembershipEvent["eventType"] | VoiceRuntimeScreenShareEventType | string;
+    actorUserId: string | null;
+    actorDisplayName: string | null;
+    actorRole: VoiceRuntimeEventActorRole;
+    hasVisibleFrame?: boolean;
 }
 
 export interface VoiceChannelEffectEvent {
@@ -476,6 +493,7 @@ export interface VoiceGenerationContextSnapshot {
     isEagerTurn: boolean;
     contextMessages: VoiceGenerationContextMessage[];
     conversationContext: VoiceConversationContext | null;
+    runtimeEventContext?: VoiceRuntimeEventContext | null;
     userFacts?: unknown[];
     relevantFacts?: unknown[];
     participantRoster?: string[];
@@ -510,11 +528,12 @@ export type MusicPlaybackPhase =
     | "loading"           // track URL is being resolved / subprocess is buffering
     | "playing"           // audio is actively being sent to Discord
     | "paused"            // user-initiated pause — bot can converse, music can resume
-    | "paused_wake_word"  // auto-paused because user addressed the bot by wake word
+    | "paused_wake_word"  // auto-paused because the bot owns the floor inside a wake-word music handoff
     | "stopping";         // stop requested, waiting for subprocess acknowledgement
 
 /** Why music was paused — only meaningful when phase is "paused" or "paused_wake_word". */
 export type MusicPauseReason = "user_pause" | "wake_word" | "slash_command" | "tool_call" | null;
+export type MusicReplyHandoffMode = "duck" | "pause";
 
 // ── Derived query helpers ────────────────────────────────────────────
 // These are the ONLY way consuming code should ask questions about music
@@ -561,6 +580,10 @@ export interface VoiceSessionMusicState {
     phase: MusicPlaybackPhase;
     ducked: boolean;
     pauseReason: MusicPauseReason;
+    replyHandoffMode?: MusicReplyHandoffMode | null;
+    replyHandoffRequestedByUserId?: string | null;
+    replyHandoffSource?: string | null;
+    replyHandoffAt?: number;
     startedAt: number;
     stoppedAt: number;
     provider: string | null;
@@ -593,6 +616,24 @@ export interface InFlightAcceptedBrainTurn {
     phase: InFlightBrainTurnPhase;
     captureReason: string;
     directAddressed: boolean;
+    interruptionPolicy?: ReplyInterruptionPolicy | null;
+    toolPhaseRecoveryEligible?: boolean;
+    toolPhaseRecoveryReason?: string | null;
+    toolPhaseLastToolName?: string | null;
+}
+
+export interface SupersededPrePlaybackReply {
+    userId: string | null;
+    transcript: string;
+    pcmBuffer: Buffer | null;
+    source: string;
+    captureReason: string;
+    directAddressed: boolean;
+    queuedAt: number;
+    interruptionPolicy: ReplyInterruptionPolicy | null;
+    supersededAt: number;
+    supersededByUserId: string | null;
+    supersededBySource: string;
 }
 
 export type DeferredVoiceActionType = "queued_user_turns";
@@ -687,6 +728,7 @@ export interface CaptureState {
     startedAt: number;
     promotedAt: number;
     promotionReason: string | null;
+    musicWakeFollowupEligibleAtPromotion: boolean;
     asrUtteranceId: number;
     bytesSent: number;
     signalSampleCount: number;
@@ -717,6 +759,7 @@ export interface RealtimeQueuedTurn {
     captureReason: string;
     queuedAt: number;
     finalizedAt: number;
+    replyScopeStartedAt: number;
     transcriptOverride: string | null;
     clipDurationMsOverride: number | null;
     asrStartedAtMsOverride: number;
@@ -728,6 +771,7 @@ export interface RealtimeQueuedTurn {
     transcriptLogprobsOverride: VoiceTranscriptLogprob[] | null;
     bridgeUtteranceId: number | null;
     bridgeRevision: number;
+    musicWakeFollowupEligibleAtCapture: boolean;
     mergedTurnCount: number;
     droppedHeadBytes: number;
 }
@@ -920,6 +964,7 @@ export interface VoiceSession {
     lastRealtimeAssistantAudioItemId: string | null;
     lastRealtimeAssistantAudioItemContentIndex: number;
     lastRealtimeAssistantAudioItemReceivedMs: number;
+    ignoredRealtimeAssistantOutputItemIds?: Map<string, number>;
     realtimeToolDefinitions?: VoiceRealtimeToolDescriptor[];
     lastRealtimeToolHash?: string;
     lastRealtimeToolRefreshAt?: number;
@@ -967,6 +1012,7 @@ export interface VoiceSession {
     lastGenerationContext?: VoiceGenerationContextSnapshot | null;
     livePromptState?: VoiceLivePromptState | null;
     inFlightAcceptedBrainTurn?: InFlightAcceptedBrainTurn | null;
+    supersededPrePlaybackReply?: SupersededPrePlaybackReply | null;
     openAiAsrSessionIdleTtlMs?: number;
     realtimeTurnCoalesceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     [key: string]: unknown;

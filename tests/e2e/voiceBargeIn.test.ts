@@ -110,7 +110,7 @@ describe("E2E: Voice Barge-In", () => {
       "voice_barge_in_interrupt",
       "realtime_reply_requested"
     ]);
-    history.assertAnyEventMetadataIncludes(events, "voice_turn_addressing", "transcript", "two plus two");
+    history.assertAnyEventMetadataIncludes(events, "openai_realtime_asr_final_segment", "transcript", "two plus two");
     history.assertAnyEventMetadataIncludes(events, "realtime_reply_requested", "replyText", "4");
 
     await driver.summonSystemBot(45_000);

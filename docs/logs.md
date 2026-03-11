@@ -30,6 +30,7 @@ Pretty stdout rules:
 - output delivery stays labeled as `said` when `metadata.transcriptSource=output`
 - request-time `metadata.replyText` stays visible in pretty stdout, but it is not rendered with the same bold speech emphasis as delivered transcripts
 - `llm_call` runtime lines now summarize the returned model text the same way, plus `toolNames`, `toolCallCount`, `responseChars`, and `stopReason` when the provider reports one
+- normal-operation reply admission / bridge handoff logs now carry transcript character counts instead of duplicating full text; use ASR segment logs and final assistant transcript logs when you need exact wording
 
 Canonical prompt-log coverage:
 
@@ -173,6 +174,7 @@ assistant output state machine doc first:
 Start with these events:
 
 - `voice_turn_addressing`
+- `voice_direct_address_interrupt`
 - `bot_audio_started`
 - `openai_realtime_response_done`
 - `openai_realtime_active_response_cleared_stale`
@@ -205,6 +207,7 @@ Common blockers:
 Operator notes:
 
 - if `outputLockReason=bot_audio_buffered` persists for more than a couple seconds after `openai_realtime_response_done`, suspect stale `clankvox` playback telemetry rather than real remaining speech
+- if `voice_turn_addressing` shows `reason=bot_turn_open` but a same-moment `voice_direct_address_interrupt` follows, the turn cut through output lock because it was an allowed wake-word / bot-name interruption
 - if a deferred turn keeps rescheduling, inspect whether `voice_activity_started` is followed by `voice_turn_dropped_silence_gate`; silence-only captures should not be treated the same as real live speech
 
 ## Voice input / VAD workflow
@@ -230,6 +233,7 @@ Important interpretation rules:
 - `voice_realtime_transcription_empty` includes `trackedUtteranceId`, `activeUtteranceId`, `finalSegmentCount`, and `partialChars` so you can tell whether the commit went empty while a newer live utterance was already active
 - `file_asr_transcription_empty` means the local file-turn transcription path returned no transcript before admission/generation
 - `openai_realtime_asr_bridge_empty_dropped` means the bridge never forwarded any transcript into turn processing, so no downstream LLM generation happened for that utterance
+- `voice_turn_addressing` and `openai_realtime_text_turn_forwarded` now report transcript length metadata rather than the full utterance text; inspect `openai_realtime_asr_final_segment` for the exact user wording in realtime bridge sessions
 
 Suggested query:
 

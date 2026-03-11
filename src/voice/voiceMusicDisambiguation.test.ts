@@ -6,6 +6,7 @@ import {
   completePendingMusicDisambiguationSelection,
   getMusicPromptContext,
   isMusicDisambiguationResolutionTurn,
+  maybeHandlePendingMusicDisambiguationTurn,
   resolvePendingMusicDisambiguationSelection
 } from "./voiceMusicDisambiguation.ts";
 
@@ -62,7 +63,8 @@ function createDisambiguationHost({
     nowPlayingIndex: 0,
     isPaused: false
   },
-  isVoiceCommandSessionActive = true
+  isVoiceCommandSessionActive = true,
+  llmGenerate = null
 }: {
   promptContext?: Record<string, unknown> | null;
   snapshot?: Record<string, unknown> | null;
@@ -72,12 +74,14 @@ function createDisambiguationHost({
     isPaused: boolean;
   };
   isVoiceCommandSessionActive?: boolean;
+  llmGenerate?: ((args: Record<string, unknown>) => Promise<Record<string, unknown>> | Record<string, unknown>) | null;
 } = {}) {
   const requestPlayCalls: Array<Record<string, unknown>> = [];
   const composeCalls: Array<Record<string, unknown>> = [];
   const sentMessages: string[] = [];
   const clearMusicDisambiguationSessions: unknown[] = [];
   const clearVoiceCommandSessions: unknown[] = [];
+  const llmCalls: Array<Record<string, unknown>> = [];
 
   const host = {
     appConfig: {},
@@ -118,6 +122,14 @@ function createDisambiguationHost({
       requestPlayCalls.push(args);
       return { ok: true };
     },
+    llm: llmGenerate
+      ? {
+        async generate(args: Record<string, unknown>) {
+          llmCalls.push(args);
+          return await llmGenerate(args);
+        }
+      }
+      : null,
     ensureToolMusicQueueState() {
       return queueState;
     },
@@ -152,7 +164,8 @@ function createDisambiguationHost({
     composeCalls,
     sentMessages,
     clearMusicDisambiguationSessions,
-    clearVoiceCommandSessions
+    clearVoiceCommandSessions,
+    llmCalls
   };
 }
 
@@ -182,6 +195,7 @@ test("getMusicPromptContext derives current playback, last action, and upcoming 
 
   assert.deepEqual(context, {
     playbackState: "playing",
+    replyHandoffMode: null,
     currentTrack: {
       id: "track-1",
       title: "Midnight City",
@@ -224,6 +238,7 @@ test("getMusicPromptContext keeps the last known track visible while playback is
 
   assert.deepEqual(context, {
     playbackState: "idle",
+    replyHandoffMode: null,
     currentTrack: {
       id: "track-1",
       title: "Midnight City",
@@ -239,6 +254,31 @@ test("getMusicPromptContext keeps the last known track visible while playback is
     lastAction: null,
     lastQuery: "midnight city"
   });
+});
+
+test("getMusicPromptContext carries a pending reply handoff mode into prompt context", () => {
+  const { host } = createDisambiguationHost({
+    snapshot: {
+      active: true,
+      replyHandoffMode: "pause",
+      lastTrackId: "track-1",
+      lastTrackTitle: "Midnight City",
+      lastTrackArtists: ["M83"],
+      lastCommandReason: "voice_tool_music_play",
+      lastQuery: "midnight city",
+      queueState: {
+        tracks: [
+          { id: "track-1", title: "Midnight City", artist: "M83" }
+        ],
+        nowPlayingIndex: 0,
+        isPaused: true
+      }
+    }
+  });
+
+  const context = getMusicPromptContext(host, createSession());
+
+  assert.equal(context?.replyHandoffMode, "pause");
 });
 
 test("resolvePendingMusicDisambiguationSelection supports ordinal and title matching", () => {
@@ -391,4 +431,120 @@ test("completePendingMusicDisambiguationSelection queues the chosen track next a
     trackArtists: ["Grimes"]
   });
   assert.deepEqual(sentMessages, ["queued track-2"]);
+});
+
+test("maybeHandlePendingMusicDisambiguationTurn can use an LLM resolver for fuzzy followups", async () => {
+  const promptContext = {
+    active: true,
+    query: "minecraft music",
+    platform: "youtube",
+    action: "play_now",
+    requestedByUserId: "user-1",
+    options: [
+      {
+        id: "track-1",
+        title: "Minecraft Calm Music by C418",
+        artist: "CozyCraft",
+        platform: "youtube",
+        externalUrl: null,
+        durationSeconds: 600
+      },
+      {
+        id: "track-2",
+        title: "Minecraft Cliffside Waterfall Ambience",
+        artist: "CozyCraft",
+        platform: "youtube",
+        externalUrl: null,
+        durationSeconds: 600
+      }
+    ]
+  };
+  const settings = createTestSettings({
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          musicBrain: {
+            mode: "dedicated_model",
+            model: {
+              provider: "anthropic",
+              model: "claude-3-5-haiku-latest"
+            }
+          }
+        }
+      }
+    }
+  });
+  const { host, requestPlayCalls, llmCalls } = createDisambiguationHost({
+    promptContext,
+    llmGenerate: async () => ({
+      text: JSON.stringify({
+        selection_id: "track-2"
+      }),
+      provider: "anthropic",
+      model: "claude-3-5-haiku-latest"
+    })
+  });
+  const session = createSession({
+    settingsSnapshot: settings
+  });
+
+  const handled = await maybeHandlePendingMusicDisambiguationTurn(host, {
+    session,
+    settings,
+    userId: "user-1",
+    transcript: "the cliff side water fall one"
+  });
+
+  assert.equal(handled, true);
+  assert.equal(llmCalls.length, 1);
+  assert.equal(requestPlayCalls.length, 1);
+  assert.equal(requestPlayCalls[0]?.trackId, "track-2");
+});
+
+test("maybeHandlePendingMusicDisambiguationTurn rejects hallucinated LLM selection ids", async () => {
+  const promptContext = {
+    active: true,
+    query: "minecraft music",
+    platform: "youtube",
+    action: "play_now",
+    requestedByUserId: "user-1",
+    options: [
+      {
+        id: "track-1",
+        title: "Minecraft Calm Music by C418",
+        artist: "CozyCraft",
+        platform: "youtube",
+        externalUrl: null,
+        durationSeconds: 600
+      },
+      {
+        id: "track-2",
+        title: "Minecraft Cliffside Waterfall Ambience",
+        artist: "CozyCraft",
+        platform: "youtube",
+        externalUrl: null,
+        durationSeconds: 600
+      }
+    ]
+  };
+  const { host, requestPlayCalls } = createDisambiguationHost({
+    promptContext,
+    llmGenerate: async () => ({
+      text: JSON.stringify({
+        selection_id: "track-999"
+      }),
+      provider: "anthropic",
+      model: "claude-3-5-haiku-latest"
+    })
+  });
+
+  const handled = await maybeHandlePendingMusicDisambiguationTurn(host, {
+    session: createSession(),
+    settings: createTestSettings({}),
+    userId: "user-1",
+    transcript: "the cliff side water fall one"
+  });
+
+  assert.equal(handled, false);
+  assert.equal(requestPlayCalls.length, 0);
 });

@@ -18,7 +18,9 @@ function createManager() {
     },
     getSettings() {
       return createTestSettings({
-        botName: "clanker conk"
+        identity: {
+          botName: "clanker conk"
+        }
       });
     }
   };
@@ -59,7 +61,9 @@ function createRealtimeSession(overrides = {}) {
     pendingResponse: null,
     userCaptures: new Map(),
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk"
+      identity: {
+        botName: "clanker conk"
+      }
     }),
     realtimeClient: {
       createAudioResponse() {},
@@ -79,9 +83,13 @@ test("flushResponseFromBufferedAudio emits response.create for OpenAI native rep
   const session = createRealtimeSession({
     pendingRealtimeInputBytes: 5_000,
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      identity: {
+        botName: "clanker conk"
+      },
       voice: {
-        replyPath: "native"
+        conversationPolicy: {
+          replyPath: "native"
+        }
       }
     }),
     realtimeClient: {
@@ -114,10 +122,13 @@ test("flushResponseFromBufferedAudio skips response.create for OpenAI brain repl
   const session = createRealtimeSession({
     pendingRealtimeInputBytes: 5_000,
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      identity: {
+        botName: "clanker conk"
+      },
       voice: {
-        replyPath: "brain",
-        brainProvider: "anthropic"
+        conversationPolicy: {
+          replyPath: "brain"
+        }
       }
     }),
     realtimeClient: {

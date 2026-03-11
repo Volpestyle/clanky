@@ -14,8 +14,8 @@ import {
 } from "./voiceConfigResolver.ts";
 
 type VoiceSettingsOverrides = {
-  mode?: string;
-  asrEnabled?: boolean;
+  runtimeMode?: string;
+  transcriptionEnabled?: boolean;
   textOnlyMode?: boolean;
   replyPath?: string;
   ttsMode?: string;
@@ -26,20 +26,36 @@ type VoiceSettingsOverrides = {
 };
 
 function createVoiceSettings(overrides: VoiceSettingsOverrides = {}) {
-  const { openaiRealtime = {}, ...voiceOverrides } = overrides;
+  const {
+    runtimeMode = "openai_realtime",
+    transcriptionEnabled = true,
+    textOnlyMode = false,
+    replyPath = "brain",
+    ttsMode = "realtime",
+    openaiRealtime = {}
+  } = overrides;
   return createTestSettings({
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          runtimeMode,
+          openaiRealtime: {
+            transcriptionMethod: "realtime_bridge",
+            usePerUserAsrBridge: true,
+            ...openaiRealtime
+          }
+        }
+      }
+    },
     voice: {
-      mode: "openai_realtime",
-      asrEnabled: true,
-      textOnlyMode: false,
-      replyPath: "brain",
-      ttsMode: "realtime",
-      openaiRealtime: {
-        transcriptionMethod: "realtime_bridge",
-        usePerUserAsrBridge: true,
-        ...openaiRealtime
+      transcription: {
+        enabled: transcriptionEnabled
       },
-      ...voiceOverrides
+      conversationPolicy: {
+        textOnlyMode,
+        replyPath,
+        ttsMode
+      }
     }
   });
 }
@@ -82,7 +98,7 @@ describe("shouldUseTextMediatedRealtimeReply", () => {
 
   test("returns false outside realtime modes", () => {
     const settings = createVoiceSettings({
-      mode: "offline",
+      runtimeMode: "offline",
       replyPath: "native"
     });
 
@@ -99,8 +115,8 @@ describe("buildVoiceInstructions", () => {
     const settings = createTestSettings({
       voice: {
         soundboard: {
-          enabled: true,
-          eagerness: 88
+          eagerness: 88,
+          enabled: true
         }
       }
     });
@@ -117,7 +133,7 @@ describe("buildVoiceInstructions", () => {
     });
 
     assert.equal(instructions.includes("Discord soundboard control is enabled."), true);
-    assert.equal(instructions.includes("Discord soundboard tendency: 88/100."), true);
+    assert.equal(instructions.includes("Soundboard eagerness: 88/100."), true);
     assert.equal(instructions.includes("playful soundboard bits and comedic punctuation"), true);
     assert.equal(instructions.includes("play_soundboard"), true);
     assert.equal(instructions.includes("[[SOUNDBOARD:<sound_ref>]]"), false);
@@ -286,7 +302,7 @@ describe("shouldUsePerUserTranscription", () => {
 
   test("enables per-user transcription for xAI bridge sessions when OpenAI ASR is configured", () => {
     const settings = createVoiceSettings({
-      mode: "voice_agent"
+      runtimeMode: "voice_agent"
     });
 
     const result = shouldUsePerUserTranscription({
@@ -302,7 +318,7 @@ describe("shouldUsePerUserTranscription", () => {
 describe("shouldUseSharedTranscription", () => {
   test("enables shared transcription for supported runtimes when per-user ASR is off", () => {
     const settings = createVoiceSettings({
-      mode: "voice_agent",
+      runtimeMode: "voice_agent",
       openaiRealtime: {
         usePerUserAsrBridge: false
       }
@@ -331,7 +347,7 @@ describe("shouldUseSharedTranscription", () => {
 
   test("disables shared transcription in text-only mode", () => {
     const settings = createVoiceSettings({
-      mode: "voice_agent",
+      runtimeMode: "voice_agent",
       textOnlyMode: true,
       openaiRealtime: {
         usePerUserAsrBridge: false
@@ -379,7 +395,7 @@ describe("shouldUseRealtimeTranscriptBridge", () => {
 
   test("disables the transcript bridge outside realtime modes", () => {
     const settings = createVoiceSettings({
-      mode: "offline",
+      runtimeMode: "offline",
       replyPath: "bridge"
     });
 
@@ -406,7 +422,7 @@ describe("isAsrActive", () => {
 
   test("returns false when transcription is disabled", () => {
     const settings = createVoiceSettings({
-      asrEnabled: false
+      transcriptionEnabled: false
     });
 
     const result = isAsrActive({

@@ -294,7 +294,7 @@ describe("E2E: Voice Physical Layer", () => {
       });
       const events = await history.waitForSessionEvents(session.sessionId, { minEvents: 5, timeoutMs: 15_000 });
 
-      history.assertAnyEventMetadataIncludes(events, "voice_turn_addressing", "transcript", "one more thing");
+      history.assertAnyEventMetadataIncludes(events, "openai_realtime_asr_final_segment", "transcript", "one more thing");
       const supersedeEvent = history.findLastEventByContent(events, "realtime_reply_superseded_newer_input");
       assert.ok(supersedeEvent, "Expected history to show the stale reply was superseded by newer input");
 

@@ -243,6 +243,7 @@ export type ReplyToolRuntime = {
     musicStop: () => Promise<Record<string, unknown>>;
     musicPause: () => Promise<Record<string, unknown>>;
     musicResume: () => Promise<Record<string, unknown>>;
+    musicReplyHandoff: (mode: "pause" | "duck" | "none") => Promise<Record<string, unknown>>;
     musicSkip: () => Promise<Record<string, unknown>>;
     musicNowPlaying: () => Promise<Record<string, unknown>>;
     playSoundboard: (refs: string[], transcript: string) => Promise<Record<string, unknown>>;
@@ -469,6 +470,7 @@ export async function executeReplyTool(
     case "music_stop":
     case "music_pause":
     case "music_resume":
+    case "music_reply_handoff":
     case "music_skip":
     case "music_now_playing":
       return executeVoiceTool(toolName, input, runtime, context);
@@ -1308,6 +1310,19 @@ async function executeVoiceTool(
         throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicResume();
         break;
+      case "music_reply_handoff": {
+        const rawMode = String(input?.mode || "").trim().toLowerCase();
+        const mode =
+          rawMode === "pause" || rawMode === "duck" || rawMode === "none"
+            ? rawMode
+            : null;
+        if (!mode) {
+          return { content: "Invalid music reply handoff mode. Use pause, duck, or none.", isError: true };
+        }
+        throwIfAborted(context.signal, "Reply tool cancelled");
+        result = await runtime.voiceSession.musicReplyHandoff(mode);
+        break;
+      }
       case "music_skip":
         throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicSkip();

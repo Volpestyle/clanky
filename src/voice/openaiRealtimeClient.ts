@@ -20,8 +20,18 @@ import {
   normalizeOpenAiBaseUrl,
   normalizeOpenAiRealtimeTranscriptionModel
 } from "./realtimeProviderNormalization.ts";
+import { normalizeInlineText } from "./voiceSessionHelpers.ts";
 
 const COMMENTARY_RESPONSE_STALE_MS = 30_000;
+const REPLY_ADDRESSING_SOURCE = "reply_addressing";
+const PLAYBACK_RESPONSE_INSTRUCTIONS = [
+  "You are rendering prewritten speech audio.",
+  "Speak only the exact line requested by the user message.",
+  "Do not answer, explain, refuse, or roleplay about the request.",
+  "Do not add, remove, paraphrase, or substitute words.",
+  "Treat punctuation only as prosody guidance.",
+  "Return audio for the requested line and nothing else."
+].join("\n");
 
 const AUDIO_DELTA_TYPES = new Set([
   "response.output_audio.delta"
@@ -35,6 +45,18 @@ const TRANSCRIPT_TYPES = new Set([
   "response.output_text.delta",
   "response.output_text.done"
 ]);
+
+type PendingReplyAddressingRequest = {
+  correlationId: string;
+  assistantText: string;
+  speakerUserId: string | null;
+  currentSpeakerName: string;
+  requestId: number | null;
+  responseSource: string | null;
+  requestedAt: number;
+  textBuffer: string;
+  finalText: string;
+};
 
 export class OpenAiRealtimeClient extends EventEmitter {
   apiKey;
@@ -56,6 +78,8 @@ export class OpenAiRealtimeClient extends EventEmitter {
   activeResponseStatus;
   pendingCommentaryResponseId: string | null;
   pendingCommentaryRequestedAt: number;
+  pendingReplyAddressingRequestsByCorrelationId: Map<string, PendingReplyAddressingRequest>;
+  pendingReplyAddressingRequestsByResponseId: Map<string, PendingReplyAddressingRequest>;
   latestVideoFrame;
   audioBase64Buffer: Buffer | null;
 
@@ -80,6 +104,8 @@ export class OpenAiRealtimeClient extends EventEmitter {
     this.activeResponseStatus = null;
     this.pendingCommentaryResponseId = null;
     this.pendingCommentaryRequestedAt = 0;
+    this.pendingReplyAddressingRequestsByCorrelationId = new Map();
+    this.pendingReplyAddressingRequestsByResponseId = new Map();
     this.latestVideoFrame = null;
     this.audioBase64Buffer = null;
   }
@@ -151,6 +177,8 @@ export class OpenAiRealtimeClient extends EventEmitter {
           this.clearActiveResponse();
           this.pendingCommentaryResponseId = null;
           this.pendingCommentaryRequestedAt = 0;
+          this.pendingReplyAddressingRequestsByCorrelationId.clear();
+          this.pendingReplyAddressingRequestsByResponseId.clear();
         }
       });
     });
@@ -209,15 +237,15 @@ export class OpenAiRealtimeClient extends EventEmitter {
 
     if (!event || typeof event !== "object") return;
 
-    this.emit("event", event);
-
     if (event.type === "session.created" || event.type === "session.updated") {
+      this.emit("event", event);
       this.sessionId = event.session?.id || this.sessionId;
       this.log("info", "openai_realtime_session_updated", { sessionId: this.sessionId });
       return;
     }
 
     if (event.type === "error") {
+      this.emit("event", event);
       const errorPayload = event.error && typeof event.error === "object" ? event.error : {};
       const message =
         event.error?.message || event.error?.code || event.message || "Unknown OpenAI realtime error";
@@ -259,6 +287,15 @@ export class OpenAiRealtimeClient extends EventEmitter {
       const responseId = response?.id || event.response_id || null;
       const status = response?.status || event.status || "in_progress";
 
+      if (isReplyAddressingResponseMetadata(response?.metadata)) {
+        this.trackReplyAddressingResponseCreated({
+          responseId,
+          metadata: response?.metadata
+        });
+        return;
+      }
+
+      this.emit("event", event);
       if (response?.metadata?.source === "stream_watch_commentary") {
         this.pendingCommentaryResponseId = responseId || this.pendingCommentaryResponseId;
         return;
@@ -269,6 +306,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
     }
 
     if (AUDIO_DELTA_TYPES.has(event.type)) {
+      this.emit("event", event);
       const audioBase64 = extractAudioBase64(event);
       if (audioBase64) {
         this.emit("audio_delta", audioBase64);
@@ -277,6 +315,10 @@ export class OpenAiRealtimeClient extends EventEmitter {
     }
 
     if (TRANSCRIPT_TYPES.has(event.type)) {
+      if (this.consumeReplyAddressingTranscriptEvent(event)) {
+        return;
+      }
+      this.emit("event", event);
       const transcript =
         event.transcript ||
         event.text ||
@@ -298,6 +340,16 @@ export class OpenAiRealtimeClient extends EventEmitter {
       const responseId = response?.id || event.response_id || null;
       const status = response?.status || event.status || "completed";
 
+      if (isReplyAddressingResponseMetadata(response?.metadata)) {
+        this.finishReplyAddressingResponse({
+          responseId,
+          response,
+          metadata: response?.metadata
+        });
+        return;
+      }
+
+      this.emit("event", event);
       if (response?.metadata?.source === "stream_watch_commentary") {
         this.pendingCommentaryResponseId = null;
         this.pendingCommentaryRequestedAt = 0;
@@ -454,6 +506,92 @@ export class OpenAiRealtimeClient extends EventEmitter {
     });
   }
 
+  requestReplyAddressingClassification({
+    assistantText = "",
+    currentSpeakerName = "",
+    speakerUserId = null,
+    requestId = null,
+    responseSource = null,
+    participants = [],
+    botName = ""
+  } = {}) {
+    const normalizedAssistantText = String(assistantText || "").replace(/\s+/g, " ").trim().slice(0, 360);
+    if (!normalizedAssistantText) return false;
+    const normalizedSpeakerName = String(currentSpeakerName || "").replace(/\s+/g, " ").trim().slice(0, 80);
+    const participantList = Array.isArray(participants)
+      ? [...new Set(
+        participants
+          .map((entry) => String(entry || "").replace(/\s+/g, " ").trim().slice(0, 80))
+          .filter(Boolean)
+      )]
+      : [];
+    const correlationId = `reply_addressing_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    this.pendingReplyAddressingRequestsByCorrelationId.set(correlationId, {
+      correlationId,
+      assistantText: normalizedAssistantText,
+      speakerUserId: String(speakerUserId || "").trim() || null,
+      currentSpeakerName: normalizedSpeakerName,
+      requestId: Number.isFinite(Number(requestId)) ? Math.max(0, Math.floor(Number(requestId))) : null,
+      responseSource: String(responseSource || "").trim() || null,
+      requestedAt: Date.now(),
+      textBuffer: "",
+      finalText: ""
+    });
+
+    const normalizedBotName = String(botName || "").replace(/\s+/g, " ").trim().slice(0, 80);
+    const participantSummary = participantList.length ? participantList.join(" | ") : "none";
+    const classificationInput = [
+      normalizedBotName ? `Bot name: ${normalizedBotName}` : "",
+      `Current speaker: ${normalizedSpeakerName || "unknown"}`,
+      `Participants: ${participantSummary}`,
+      "",
+      "Just-finished assistant reply transcript:",
+      normalizedAssistantText
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    this.send({
+      type: "response.create",
+      response: compactObject({
+        conversation: "none",
+        metadata: {
+          source: REPLY_ADDRESSING_SOURCE,
+          correlationId
+        },
+        output_modalities: ["text"],
+        instructions: [
+          "Classify who the assistant is addressing in the just-finished spoken reply.",
+          "Return exactly one token and nothing else:",
+          "- SPEAKER",
+          "- ALL",
+          "- one exact participant display name from the provided list",
+          "- UNKNOWN",
+          "Use SPEAKER when the assistant is replying to the current speaker.",
+          "Use ALL only when the assistant is clearly addressing the whole room.",
+          "Use a participant display name only when the assistant is clearly addressing someone other than the current speaker.",
+          "Use UNKNOWN when the target is unclear or untargeted.",
+          "Do not return punctuation, JSON, or explanation."
+        ].join("\n"),
+        tools: [],
+        tool_choice: "none",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: classificationInput
+              }
+            ]
+          }
+        ]
+      })
+    });
+    return true;
+  }
+
   requestTextUtterance(promptText) {
     const prompt = String(promptText || "").trim();
     if (!prompt) return;
@@ -484,6 +622,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
       response: compactObject({
         conversation: "none",
         output_modalities: ["audio"],
+        instructions: PLAYBACK_RESPONSE_INSTRUCTIONS,
         // Exact-line utterances are already generated upstream; disable tools so
         // the speech model cannot reinterpret them as new tool work.
         tools: [],
@@ -587,6 +726,8 @@ export class OpenAiRealtimeClient extends EventEmitter {
     this.clearActiveResponse();
     this.pendingCommentaryResponseId = null;
     this.pendingCommentaryRequestedAt = 0;
+    this.pendingReplyAddressingRequestsByCorrelationId.clear();
+    this.pendingReplyAddressingRequestsByResponseId.clear();
   }
 
   getState() {
@@ -614,6 +755,93 @@ export class OpenAiRealtimeClient extends EventEmitter {
   log(level, event, metadata = null) {
     if (!this.logger) return;
     this.logger({ level, event, metadata });
+  }
+
+  trackReplyAddressingResponseCreated({
+    responseId = null,
+    metadata = null
+  }: {
+    responseId?: string | null;
+    metadata?: Record<string, unknown> | null;
+  } = {}) {
+    const normalizedResponseId = normalizeInlineText(responseId, 180) || null;
+    const correlationId = normalizeInlineText(metadata?.correlationId, 180) || null;
+    if (!normalizedResponseId || !correlationId) return false;
+    const pending = this.pendingReplyAddressingRequestsByCorrelationId.get(correlationId) || null;
+    if (!pending) return false;
+    this.pendingReplyAddressingRequestsByCorrelationId.delete(correlationId);
+    this.pendingReplyAddressingRequestsByResponseId.set(normalizedResponseId, pending);
+    return true;
+  }
+
+  consumeReplyAddressingTranscriptEvent(event) {
+    const eventType = String(event?.type || "").trim();
+    if (!eventType.startsWith("response.output_text")) return false;
+    const normalizedResponseId = extractRealtimeResponseId(event);
+    let pending = normalizedResponseId
+      ? this.pendingReplyAddressingRequestsByResponseId.get(normalizedResponseId) || null
+      : null;
+    if (!pending && !normalizedResponseId && this.pendingReplyAddressingRequestsByResponseId.size === 1) {
+      pending = [...this.pendingReplyAddressingRequestsByResponseId.values()][0] || null;
+    }
+    if (!pending && !normalizedResponseId && this.pendingReplyAddressingRequestsByCorrelationId.size === 1) {
+      pending = [...this.pendingReplyAddressingRequestsByCorrelationId.values()][0] || null;
+    }
+    if (!pending) return false;
+    if (eventType === "response.output_text.done") {
+      const finalText = String(event?.text || event?.transcript || "").trim();
+      if (finalText) {
+        pending.finalText = finalText.slice(0, 240);
+      }
+      return true;
+    }
+    const delta = typeof event?.delta === "string" ? event.delta : "";
+    if (delta) {
+      pending.textBuffer = `${String(pending.textBuffer || "")}${delta}`.slice(0, 240);
+    }
+    return true;
+  }
+
+  finishReplyAddressingResponse({
+    responseId = null,
+    response = null,
+    metadata = null
+  }: {
+    responseId?: string | null;
+    response?: Record<string, unknown> | null;
+    metadata?: Record<string, unknown> | null;
+  } = {}) {
+    const normalizedResponseId = normalizeInlineText(responseId, 180) || null;
+    const correlationId = normalizeInlineText(metadata?.correlationId, 180) || null;
+    let pending = normalizedResponseId
+      ? this.pendingReplyAddressingRequestsByResponseId.get(normalizedResponseId) || null
+      : null;
+    if (!pending && correlationId) {
+      pending = this.pendingReplyAddressingRequestsByCorrelationId.get(correlationId) || null;
+    }
+    if (!pending) return false;
+    if (normalizedResponseId) {
+      this.pendingReplyAddressingRequestsByResponseId.delete(normalizedResponseId);
+    }
+    if (correlationId) {
+      this.pendingReplyAddressingRequestsByCorrelationId.delete(correlationId);
+    }
+    const classifierText =
+      extractResponseOutputText(response) ||
+      String(pending.finalText || "").trim() ||
+      String(pending.textBuffer || "").trim() ||
+      "";
+    this.emit("reply_addressing_result", {
+      responseId: normalizedResponseId,
+      correlationId: pending.correlationId,
+      requestId: pending.requestId,
+      responseSource: pending.responseSource,
+      speakerUserId: pending.speakerUserId,
+      currentSpeakerName: pending.currentSpeakerName,
+      assistantText: pending.assistantText,
+      classifierText
+    });
+    return true;
   }
 
   sendSessionUpdate() {
@@ -935,4 +1163,50 @@ function summarizeOutboundPayload(payload) {
     type,
     preview
   });
+}
+
+function isReplyAddressingResponseMetadata(metadata: unknown) {
+  return String((metadata as Record<string, unknown> | null)?.source || "").trim() === REPLY_ADDRESSING_SOURCE;
+}
+
+function extractRealtimeResponseId(event: Record<string, unknown> | null | undefined) {
+  if (!event || typeof event !== "object") return null;
+  const response =
+    event.response && typeof event.response === "object" ? (event.response as Record<string, unknown>) : null;
+  const eventItem =
+    event.item && typeof event.item === "object" ? (event.item as Record<string, unknown>) : null;
+  const outputItem =
+    event.output_item && typeof event.output_item === "object"
+      ? (event.output_item as Record<string, unknown>)
+      : null;
+  return normalizeInlineText(
+    event.response_id || event.responseId || response?.id || eventItem?.response_id || outputItem?.response_id,
+    180
+  ) || null;
+}
+
+function extractResponseOutputText(response: Record<string, unknown> | null | undefined) {
+  if (!response || typeof response !== "object") return "";
+  const outputItems = Array.isArray(response.output) ? response.output : [];
+  const fragments: string[] = [];
+  for (const item of outputItems) {
+    if (!item || typeof item !== "object") continue;
+    if (
+      String((item as Record<string, unknown>).type || "").trim().toLowerCase() === "output_text" &&
+      typeof (item as Record<string, unknown>).text === "string"
+    ) {
+      fragments.push(String((item as Record<string, unknown>).text || ""));
+    }
+    const content = Array.isArray((item as Record<string, unknown>).content)
+      ? ((item as Record<string, unknown>).content as unknown[])
+      : [];
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      const normalizedType = String((part as Record<string, unknown>).type || "").trim().toLowerCase();
+      if ((normalizedType === "output_text" || normalizedType === "text") && typeof (part as Record<string, unknown>).text === "string") {
+        fragments.push(String((part as Record<string, unknown>).text || ""));
+      }
+    }
+  }
+  return fragments.join("").trim();
 }

@@ -11,6 +11,7 @@ import {
   executeVoiceMusicNowPlayingTool,
   executeVoiceMusicPauseTool,
   executeVoiceMusicSearchTool,
+  executeVoiceMusicReplyHandoffTool,
   executeVoiceMusicResumeTool,
   executeVoiceMusicSkipTool,
   executeVoiceMusicStopTool
@@ -250,6 +251,13 @@ export async function executeLocalVoiceToolCall(manager: VoiceToolCallManager, o
       return executeVoiceMusicStopTool(manager, { session: opts.session, settings: opts.settings, signal: opts.signal });
     case "music_pause":
       return executeVoiceMusicPauseTool(manager, { session: opts.session, settings: opts.settings, signal: opts.signal });
+    case "music_reply_handoff":
+      return executeVoiceMusicReplyHandoffTool(manager, {
+        session: opts.session,
+        settings: opts.settings,
+        args: opts.args,
+        signal: opts.signal
+      });
     case "music_resume":
       return executeVoiceMusicResumeTool(manager, { session: opts.session, signal: opts.signal });
     case "music_skip":

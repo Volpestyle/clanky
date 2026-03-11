@@ -48,12 +48,10 @@ export function normalizeVoiceAddressingAnnotation({
   reason = null
 } = {}): VoiceAddressingAnnotation | null {
   const input = rawAddressing && typeof rawAddressing === "object" ? rawAddressing : null;
-  const talkingToToken = normalizeVoiceAddressingTargetToken(input?.talkingTo ?? input?.target ?? "");
+  const talkingToToken = normalizeVoiceAddressingTargetToken(input?.talkingTo || "");
   let talkingTo = talkingToToken || null;
 
-  const confidenceRaw = Number(
-    input?.directedConfidence ?? input?.confidence ?? directedConfidence
-  );
+  const confidenceRaw = Number(input?.directedConfidence ?? directedConfidence);
   let normalizedDirectedConfidence = Number.isFinite(confidenceRaw)
     ? clamp(confidenceRaw, 0, 1)
     : 0;

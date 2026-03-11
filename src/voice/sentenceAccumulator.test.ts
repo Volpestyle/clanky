@@ -56,6 +56,28 @@ test("SentenceAccumulator waits for a sentence break after the first emitted chu
   assert.deepEqual(emitted, ["First sentence.", "Second sentence is still coming through now."]);
 });
 
+test("SentenceAccumulator merges tiny post-first chunks into the next chunk", () => {
+  const emitted: string[] = [];
+  const accumulator = new SentenceAccumulator({
+    eagerFirstChunk: true,
+    eagerMinChars: 10,
+    maxBufferChars: 120,
+    onSentence(text) {
+      emitted.push(text);
+    }
+  });
+
+  accumulator.push("First sentence. ");
+  accumulator.push("How you doin'? ");
+  assert.deepEqual(emitted, ["First sentence."]);
+
+  accumulator.push("Glad you made it through.");
+  assert.deepEqual(emitted, [
+    "First sentence.",
+    "How you doin'? Glad you made it through."
+  ]);
+});
+
 test("SentenceAccumulator does not split the first chunk on an internal word boundary without a clean ending", () => {
   const emitted: string[] = [];
   const accumulator = new SentenceAccumulator({
@@ -87,6 +109,25 @@ test("SentenceAccumulator flush emits trailing text without punctuation", () => 
   accumulator.flush();
 
   assert.deepEqual(emitted, ["still thinking about the ending"]);
+});
+
+test("SentenceAccumulator flush preserves a deferred tiny post-first chunk", () => {
+  const emitted: string[] = [];
+  const accumulator = new SentenceAccumulator({
+    eagerFirstChunk: true,
+    eagerMinChars: 10,
+    maxBufferChars: 120,
+    onSentence(text) {
+      emitted.push(text);
+    }
+  });
+
+  accumulator.push("First sentence. ");
+  accumulator.push("That's rare.");
+  assert.deepEqual(emitted, ["First sentence."]);
+
+  accumulator.flush();
+  assert.deepEqual(emitted, ["First sentence.", "That's rare."]);
 });
 
 test("SentenceAccumulator forces a chunk when the buffer grows too large", () => {

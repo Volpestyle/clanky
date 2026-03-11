@@ -512,6 +512,12 @@ test("maybeTriggerStreamWatchCommentary fires a normal brain turn on the first f
   assert.equal(brainReplyCalls.length, 1);
   assert.equal(String(brainReplyCalls[0]?.source || ""), "stream_watch_brain_turn:share_start");
   assert.equal(String(brainReplyCalls[0]?.frozenFrameSnapshot?.dataBase64 || ""), "AAAA");
+  assert.equal(brainReplyCalls[0]?.runtimeEventContext?.category, "screen_share");
+  assert.equal(brainReplyCalls[0]?.runtimeEventContext?.eventType, "share_start");
+  assert.equal(brainReplyCalls[0]?.runtimeEventContext?.actorUserId, "user-1");
+  assert.equal(brainReplyCalls[0]?.runtimeEventContext?.actorDisplayName, "alice");
+  assert.equal(brainReplyCalls[0]?.runtimeEventContext?.actorRole, "other");
+  assert.equal(brainReplyCalls[0]?.runtimeEventContext?.hasVisibleFrame, true);
   assert.equal(session.streamWatch.lastCommentaryAt > 0, true);
   assert.equal(createdResponses.length, 0);
   const logged = actions.find((entry) => entry.content === "stream_watch_commentary_requested");

@@ -266,6 +266,10 @@ test("OpenAiRealtimeClient requestPlaybackUtterance sends an out-of-band tool-fr
   assert.equal(outbound[0]?.type, "response.create");
   assert.equal(outbound[0]?.response?.conversation, "none");
   assert.deepEqual(outbound[0]?.response?.output_modalities, ["audio"]);
+  assert.match(
+    outbound[0]?.response?.instructions ?? "",
+    /Speak only the exact line requested by the user message\./
+  );
   assert.equal(outbound[0]?.response?.tool_choice, "none");
   assert.deepEqual(outbound[0]?.response?.tools, []);
   assert.equal(outbound[0]?.response?.input?.[0]?.type, "message");
@@ -339,4 +343,176 @@ test("OpenAiRealtimeClient sendFunctionCallOutput emits function_call_output ite
   assert.equal(outbound.item?.type, "function_call_output");
   assert.equal(outbound.item?.call_id, "call_123");
   assert.equal(outbound.item?.output, JSON.stringify({ ok: true, items: 2 }));
+});
+
+test("OpenAiRealtimeClient side-channel reply addressing stays off the normal transcript lane", () => {
+  const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
+  const outbound = [];
+  const replyAddressingResults = [];
+  const transcriptEvents = [];
+  const responseDoneEvents = [];
+  client.send = (payload) => {
+    outbound.push(payload);
+  };
+  client.on("reply_addressing_result", (payload) => {
+    replyAddressingResults.push(payload);
+  });
+  client.on("transcript", (payload) => {
+    transcriptEvents.push(payload);
+  });
+  client.on("response_done", (payload) => {
+    responseDoneEvents.push(payload);
+  });
+
+  const requested = client.requestReplyAddressingClassification({
+    assistantText: "what's up",
+    currentSpeakerName: "alice",
+    speakerUserId: "user-alice",
+    requestId: 7,
+    responseSource: "openai_realtime_text_turn",
+    participants: ["alice", "bob"],
+    botName: "clanker"
+  });
+
+  assert.equal(requested, true);
+  assert.equal(outbound.length, 1);
+  assert.equal(outbound[0]?.type, "response.create");
+  assert.equal(outbound[0]?.response?.conversation, "none");
+  assert.deepEqual(outbound[0]?.response?.output_modalities, ["text"]);
+  assert.equal(outbound[0]?.response?.metadata?.source, "reply_addressing");
+  const correlationId = String(outbound[0]?.response?.metadata?.correlationId || "");
+  assert.ok(correlationId.length > 0);
+
+  client.handleIncoming(
+    JSON.stringify({
+      type: "response.created",
+      response: {
+        id: "resp_addr_1",
+        status: "in_progress",
+        metadata: {
+          source: "reply_addressing",
+          correlationId
+        }
+      }
+    })
+  );
+  assert.equal(client.isResponseInProgress(), false);
+
+  client.handleIncoming(
+    JSON.stringify({
+      type: "response.output_text.delta",
+      response_id: "resp_addr_1",
+      delta: "SPE"
+    })
+  );
+  client.handleIncoming(
+    JSON.stringify({
+      type: "response.output_text.done",
+      response_id: "resp_addr_1",
+      text: "SPEAKER"
+    })
+  );
+  client.handleIncoming(
+    JSON.stringify({
+      type: "response.done",
+      response: {
+        id: "resp_addr_1",
+        status: "completed",
+        metadata: {
+          source: "reply_addressing",
+          correlationId
+        },
+        output: [
+          {
+            type: "message",
+            content: [
+              {
+                type: "output_text",
+                text: "SPEAKER"
+              }
+            ]
+          }
+        ]
+      }
+    })
+  );
+
+  assert.equal(transcriptEvents.length, 0);
+  assert.equal(responseDoneEvents.length, 0);
+  assert.equal(replyAddressingResults.length, 1);
+  assert.equal(replyAddressingResults[0]?.classifierText, "SPEAKER");
+  assert.equal(replyAddressingResults[0]?.assistantText, "what's up");
+  assert.equal(replyAddressingResults[0]?.requestId, 7);
+  assert.equal(replyAddressingResults[0]?.speakerUserId, "user-alice");
+});
+
+test("OpenAiRealtimeClient side-channel reply addressing falls back to output_text.done when response.done omits output", () => {
+  const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
+  const outbound = [];
+  const replyAddressingResults = [];
+  client.send = (payload) => {
+    outbound.push(payload);
+  };
+  client.on("reply_addressing_result", (payload) => {
+    replyAddressingResults.push(payload);
+  });
+
+  const requested = client.requestReplyAddressingClassification({
+    assistantText: "what's up",
+    currentSpeakerName: "alice",
+    speakerUserId: "user-alice",
+    requestId: 8,
+    responseSource: "openai_realtime_text_turn",
+    participants: ["alice", "bob"],
+    botName: "clanker"
+  });
+
+  assert.equal(requested, true);
+  const correlationId = String(outbound[0]?.response?.metadata?.correlationId || "");
+  assert.ok(correlationId.length > 0);
+
+  client.handleIncoming(
+    JSON.stringify({
+      type: "response.created",
+      response: {
+        id: "resp_addr_2",
+        status: "in_progress",
+        metadata: {
+          source: "reply_addressing",
+          correlationId
+        }
+      }
+    })
+  );
+  client.handleIncoming(
+    JSON.stringify({
+      type: "response.output_text.delta",
+      response_id: "resp_addr_2",
+      delta: "ALI"
+    })
+  );
+  client.handleIncoming(
+    JSON.stringify({
+      type: "response.output_text.done",
+      response_id: "resp_addr_2",
+      text: "alice"
+    })
+  );
+  client.handleIncoming(
+    JSON.stringify({
+      type: "response.done",
+      response: {
+        id: "resp_addr_2",
+        status: "completed",
+        metadata: {
+          source: "reply_addressing",
+          correlationId
+        }
+      }
+    })
+  );
+
+  assert.equal(replyAddressingResults.length, 1);
+  assert.equal(replyAddressingResults[0]?.classifierText, "alice");
+  assert.equal(replyAddressingResults[0]?.requestId, 8);
 });

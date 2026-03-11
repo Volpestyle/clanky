@@ -18,11 +18,27 @@ import {
 
 export type ToolLoopChatDeps = {
   openai: OpenAI | null;
+  xai: OpenAI | null;
   anthropic: Anthropic | null;
   claudeOAuthClient: Anthropic | null;
   codexOAuthClient: OpenAI | null;
   store: LlmActionStore;
 };
+
+function parseToolLoopJsonObject(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
 
 export async function chatWithTools(
   deps: ToolLoopChatDeps,
@@ -166,8 +182,124 @@ export async function chatWithTools(
 
     content = buildToolLoopContentFromOpenAiOutput(responseWithOutput.output);
     usage = extractOpenAiResponseUsage(response);
+  } else if (resolvedProvider === "xai") {
+    if (!deps.xai) {
+      throw new Error("chatWithTools requires XAI_API_KEY.");
+    }
+
+    type XaiChatRequest = Parameters<typeof deps.xai.chat.completions.create>[0];
+    type XaiChatMessage = NonNullable<XaiChatRequest["messages"]>[number];
+
+    const xaiMessages: XaiChatMessage[] = [
+      { role: "system", content: systemPrompt }
+    ];
+    for (const message of messages) {
+      if (typeof message.content === "string") {
+        xaiMessages.push({
+          role: message.role,
+          content: message.content
+        });
+        continue;
+      }
+      const textBlocks = message.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text.trim())
+        .filter(Boolean);
+      if (message.role === "assistant") {
+        const toolCalls = message.content
+          .filter((block) => block.type === "tool_call")
+          .map((block) => ({
+            id: block.id,
+            type: "function" as const,
+            function: {
+              name: block.name,
+              arguments: JSON.stringify(block.input || {})
+            }
+          }));
+        if (textBlocks.length > 0 || toolCalls.length > 0) {
+          xaiMessages.push({
+            role: "assistant",
+            content: textBlocks.join("\n\n"),
+            ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {})
+          });
+        }
+        continue;
+      }
+      if (textBlocks.length > 0) {
+        xaiMessages.push({
+          role: "user",
+          content: textBlocks.join("\n\n")
+        });
+      }
+      for (const block of message.content) {
+        if (block.type !== "tool_result") continue;
+        xaiMessages.push({
+          role: "tool",
+          tool_call_id: block.toolCallId,
+          content: block.content
+        });
+      }
+    }
+
+    const requestBody: XaiChatRequest = {
+      model: resolvedModel,
+      temperature: resolvedTemperature,
+      max_tokens: maxOutputTokens,
+      messages: xaiMessages,
+      tools: tools.map((tool) => ({
+        type: "function" as const,
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.input_schema
+        }
+      }))
+    };
+    const response = await deps.xai.chat.completions.create(requestBody as never, signal ? { signal } : undefined) as {
+      choices?: Array<{
+        finish_reason?: string | null;
+        message?: {
+          content?: string | null;
+          tool_calls?: Array<{
+            id?: string | null;
+            function?: {
+              name?: string | null;
+              arguments?: string | null;
+            } | null;
+          }> | null;
+        } | null;
+      }>;
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+      };
+    };
+    const choice = response.choices?.[0];
+    const nextContent: ToolLoopContentBlock[] = [];
+    const responseText = String(choice?.message?.content || "").trim();
+    if (responseText) {
+      nextContent.push({ type: "text", text: responseText });
+    }
+    for (const toolCall of choice?.message?.tool_calls || []) {
+      const name = String(toolCall?.function?.name || "").trim();
+      if (!name) continue;
+      nextContent.push({
+        type: "tool_call",
+        id: String(toolCall?.id || `xai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+        name,
+        input: parseToolLoopJsonObject(toolCall?.function?.arguments)
+      });
+    }
+    content = nextContent;
+    stopReason = String(choice?.finish_reason || "").trim() || "end_turn";
+    usage = {
+      inputTokens: Number(response.usage?.prompt_tokens || 0),
+      outputTokens: Number(response.usage?.completion_tokens || 0),
+      cacheWriteTokens: 0,
+      cacheReadTokens: 0
+    };
   } else {
-    throw new Error(`Browser agent tool loop does not support provider '${resolvedProvider}'.`);
+    throw new Error(`Tool loop does not support provider '${resolvedProvider}'.`);
   }
 
   const costUsd = estimateUsdCost({

@@ -173,6 +173,7 @@ Browser-agent activity is visible via action-log kinds:
 - `browser_tool_step`
 
 The dashboard text history also surfaces richer tool-result detail for browser-adjacent tool usage alongside other tool calls.
+The dashboard Agents tab follows the global header guild selector, so browser-session history stays isolated to the currently selected guild instead of mixing sessions from every server.
 
 `browser_browse_call` and `browser_agent_session_turn` metadata include `imageInputCount` when screenshots were captured and handed back to the parent brain.
 

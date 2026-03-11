@@ -881,7 +881,14 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         settings,
         userId: manager.client.user?.id || "",
         transcript: "[YOU joined the voice channel]",
-        source: "bot_join_greeting"
+        source: "bot_join_greeting",
+        runtimeEventContext: {
+          category: "membership",
+          eventType: "join",
+          actorUserId: manager.client.user?.id || "",
+          actorDisplayName: botName,
+          actorRole: "self"
+        }
       });
 
       return true;

@@ -221,6 +221,7 @@ export class LLMService {
   private toolLoopDeps(): ToolLoopChatDeps {
     return {
       openai: this.openai,
+      xai: this.xai,
       anthropic: this.anthropic,
       claudeOAuthClient: this.claudeOAuth?.client ?? null,
       codexOAuthClient: this.codexOAuth?.client ?? null,

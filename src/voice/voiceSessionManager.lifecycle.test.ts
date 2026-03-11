@@ -1,10 +1,12 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import type { ChatInputCommandInteraction } from "discord.js";
 import { ActiveReplyRegistry, buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
 import type { CaptureManager } from "./captureManager.ts";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
-import { createTestSettings } from "../testSettings.ts";
+import { createTestSettings as createCanonicalTestSettings, normalizeLegacyTestSettingsInput } from "../testSettings.ts";
+import { deepMerge } from "../utils.ts";
 import {
   SYSTEM_SPEECH_OPPORTUNITY,
   SYSTEM_SPEECH_SOURCE
@@ -32,6 +34,83 @@ import type { CaptureState, VoiceSession } from "./voiceSessionTypes.ts";
 
 // Discord sends 48kHz stereo 16-bit PCM in 20ms frames = 3840 bytes
 const DISCORD_PCM_FRAME_BYTES = 3840;
+const LEGACY_TOP_LEVEL_KEYS = ["botName", "botNameAliases", "llm"] as const;
+const LEGACY_VOICE_KEYS = [
+  "mode",
+  "voiceProvider",
+  "brainProvider",
+  "generationLlm",
+  "replyDecisionLlm",
+  "asrEnabled",
+  "asrLanguageMode",
+  "asrLanguageHint",
+  "allowedVoiceChannelIds",
+  "blockedVoiceChannelIds",
+  "blockedVoiceUserIds",
+  "maxSessionMinutes",
+  "inactivityLeaveSeconds",
+  "maxSessionsPerDay",
+  "maxConcurrentSessions",
+  "ambientReplyEagerness",
+  "commandOnlyMode",
+  "allowNsfwHumor",
+  "textOnlyMode",
+  "defaultInterruptionMode",
+  "replyPath",
+  "ttsMode",
+  "operationalMessages",
+  "streamingEnabled",
+  "streamingEagerFirstChunkChars",
+  "streamingMaxBufferChars",
+  "thoughtEngine",
+  "musicDucking",
+  "intentConfidenceThreshold",
+  "openaiRealtime",
+  "xai",
+  "elevenLabsRealtime",
+  "geminiRealtime",
+  "openaiAudioApi"
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function createTestSettings(overrides: Record<string, unknown> = {}) {
+  const canonicalOverrides: Record<string, unknown> = { ...overrides };
+  const legacyOverrides: Record<string, unknown> = {};
+
+  for (const key of LEGACY_TOP_LEVEL_KEYS) {
+    if (key in canonicalOverrides) {
+      legacyOverrides[key] = canonicalOverrides[key];
+      delete canonicalOverrides[key];
+    }
+  }
+
+  if (isRecord(canonicalOverrides.voice)) {
+    const canonicalVoice = { ...canonicalOverrides.voice };
+    const legacyVoice: Record<string, unknown> = {};
+    for (const key of LEGACY_VOICE_KEYS) {
+      if (key in canonicalVoice) {
+        legacyVoice[key] = canonicalVoice[key];
+        delete canonicalVoice[key];
+      }
+    }
+
+    if (Object.keys(legacyVoice).length > 0) {
+      legacyOverrides.voice = legacyVoice;
+    }
+    if (Object.keys(canonicalVoice).length > 0) {
+      canonicalOverrides.voice = canonicalVoice;
+    } else {
+      delete canonicalOverrides.voice;
+    }
+  }
+
+  const normalizedLegacy =
+    Object.keys(legacyOverrides).length > 0 ? normalizeLegacyTestSettingsInput(legacyOverrides) : {};
+  return createCanonicalTestSettings(deepMerge(normalizedLegacy, canonicalOverrides));
+}
 
 function makeMonoPcm16(sampleCount: number, amplitude: number) {
   const pcm = Buffer.alloc(sampleCount * 2);
@@ -297,6 +376,76 @@ function createSession(overrides = {}) {
   };
   session.settingsSnapshot = createTestSettings(session.settingsSnapshot || {});
   return session;
+}
+
+function createClankSlashInteraction({
+  subcommand = "say",
+  subcommandGroup = null,
+  message = "",
+  query = ""
+}: {
+  subcommand?: string;
+  subcommandGroup?: string | null;
+  message?: string;
+  query?: string;
+} = {}) {
+  const replies: string[] = [];
+  const edits: string[] = [];
+  let deferred = false;
+
+  const interaction = {
+    commandName: "clank",
+    guild: { id: "guild-1" },
+    channel: { id: "text-1" },
+    channelId: "text-1",
+    user: { id: "user-1" },
+    options: {
+      getSubcommandGroup(required?: boolean) {
+        if (subcommandGroup) return subcommandGroup;
+        if (required) throw new Error("missing subcommand group");
+        return null;
+      },
+      getSubcommand(required?: boolean) {
+        if (subcommand) return subcommand;
+        if (required) throw new Error("missing subcommand");
+        return null;
+      },
+      getString(name: string, required?: boolean) {
+        if (name === "message") {
+          if (message) return message;
+          if (required) throw new Error("missing message");
+          return null;
+        }
+        if (name === "query") {
+          if (query) return query;
+          if (required) throw new Error("missing query");
+          return null;
+        }
+        return null;
+      }
+    },
+    async reply(payload: string | { content?: string }) {
+      replies.push(typeof payload === "string" ? payload : String(payload.content || ""));
+      return null;
+    },
+    async deferReply() {
+      deferred = true;
+      return null;
+    },
+    async editReply(payload: string | { content?: string }) {
+      edits.push(typeof payload === "string" ? payload : String(payload.content || ""));
+      return null;
+    }
+  };
+
+  return {
+    interaction,
+    replies,
+    edits,
+    get deferred() {
+      return deferred;
+    }
+  };
 }
 
 test("getRuntimeState summarizes file ASR backlog alongside realtime sessions", () => {
@@ -622,6 +771,98 @@ test("resolveReplyInterruptionPolicy keeps explicit anyone mode interruptible", 
   });
 });
 
+test("resolveReplyInterruptionPolicy routes speaker mode to the named assistant target", () => {
+  const { manager } = createManager();
+  manager.getVoiceChannelParticipants = () => [
+    { userId: "speaker-1", displayName: "alice" },
+    { userId: "speaker-2", displayName: "bob" }
+  ];
+  const session = createSession({
+    settingsSnapshot: createTestSettings({
+      botName: "clanker conk",
+      voice: {
+        replyPath: "brain",
+        defaultInterruptionMode: "speaker"
+      }
+    })
+  });
+
+  const result = manager.resolveReplyInterruptionPolicy({
+    session,
+    userId: "speaker-1",
+    talkingTo: "bob",
+    source: "assistant_reply_target",
+    reason: "assistant_target_speaker"
+  });
+
+  assert.deepEqual(result, {
+    assertive: true,
+    scope: "speaker",
+    allowedUserId: "speaker-2",
+    talkingTo: "bob",
+    source: "assistant_reply_target",
+    reason: "assistant_target_speaker"
+  });
+});
+
+test("resolveReplyInterruptionPolicy closes ordinary talk-over for ALL-target speaker replies", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    settingsSnapshot: createTestSettings({
+      botName: "clanker conk",
+      voice: {
+        replyPath: "brain",
+        defaultInterruptionMode: "speaker"
+      }
+    })
+  });
+
+  const result = manager.resolveReplyInterruptionPolicy({
+    session,
+    userId: "speaker-1",
+    talkingTo: "ALL",
+    source: "assistant_reply_target",
+    reason: "assistant_target_all"
+  });
+
+  assert.deepEqual(result, {
+    assertive: true,
+    scope: "none",
+    allowedUserId: null,
+    talkingTo: "ALL",
+    source: "assistant_reply_target",
+    reason: "assistant_target_all"
+  });
+});
+
+test("resolveReplyInterruptionPolicy keeps speaker mode closed when an assistant reply target is missing", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    settingsSnapshot: createTestSettings({
+      botName: "clanker conk",
+      voice: {
+        replyPath: "brain",
+        defaultInterruptionMode: "speaker"
+      }
+    })
+  });
+
+  const result = manager.resolveReplyInterruptionPolicy({
+    session,
+    userId: "speaker-1",
+    source: "assistant_reply_target",
+    reason: "assistant_target_missing"
+  });
+
+  assert.deepEqual(result, {
+    assertive: true,
+    scope: "none",
+    allowedUserId: null,
+    source: "assistant_reply_target",
+    reason: "assistant_target_missing"
+  });
+});
+
 test("isUserAllowedToInterruptReply blocks when no interruption policy resolves", () => {
   const { manager } = createManager();
 
@@ -698,6 +939,46 @@ test("shouldBargeIn allows barge-in after assertive speech", () => {
   assert.ok(result.minCaptureBytes > 0);
 });
 
+test("shouldDirectAddressedTurnInterruptReply keeps wake-word override for speaker-mode ALL-target replies", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    settingsSnapshot: createTestSettings({
+      botName: "clanker conk",
+      voice: {
+        replyPath: "brain",
+        defaultInterruptionMode: "speaker"
+      }
+    }),
+    pendingResponse: {
+      requestId: 17,
+      userId: "speaker-1",
+      requestedAt: Date.now() - 200,
+      retryCount: 0,
+      hardRecoveryAttempted: false,
+      source: "voice_reply",
+      handlingSilence: false,
+      audioReceivedAt: 0,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "none",
+        allowedUserId: null,
+        talkingTo: "ALL",
+        source: "assistant_reply_target",
+        reason: "assistant_target_all"
+      },
+      utteranceText: "listen up everyone",
+      latencyContext: null
+    }
+  });
+
+  const result = manager.shouldDirectAddressedTurnInterruptReply({
+    session,
+    directAddressed: true
+  });
+
+  assert.equal(result, true);
+});
+
 test("shouldBargeIn ignores near-silent captures", () => {
   const { manager } = createManager();
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
@@ -763,7 +1044,7 @@ test("shouldBargeIn does not interrupt music-only playback lock", () => {
   assert.equal(result.allowed, false);
 });
 
-test("shouldBargeIn ignores buffered subprocess playback after live deltas stop", () => {
+test("shouldBargeIn allows buffered subprocess playback interruption for the reply target", () => {
   const { manager } = createManager();
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
   const captureState = {
@@ -785,7 +1066,12 @@ test("shouldBargeIn ignores buffered subprocess playback after live deltas stop"
       hardRecoveryAttempted: false,
       source: "turn_flush",
       handlingSilence: false,
-      audioReceivedAt: Date.now() - 200
+      audioReceivedAt: Date.now() - 200,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "user-1"
+      }
     },
     voxClient: {
       ttsBufferDepthSamples: 48_000
@@ -794,7 +1080,7 @@ test("shouldBargeIn ignores buffered subprocess playback after live deltas stop"
   });
 
   const result = manager.bargeInController.shouldBargeIn({ session, userId: "user-1", captureState });
-  assert.equal(result.allowed, false);
+  assert.equal(result.allowed, true);
 });
 
 test("shouldBargeIn requires minimum capture age for non-realtime playback", () => {
@@ -830,7 +1116,22 @@ test("shouldBargeIn requires minimum capture age for non-realtime playback", () 
 test("interruptBotSpeechForBargeIn truncates OpenAI assistant audio to played duration", () => {
   const { manager, logs } = createManager();
   const truncateCalls = [];
+  let stopPlaybackCalls = 0;
+  let clearTelemetryCalls = 0;
   const startedAt = Date.now();
+  const voxClient = {
+    ttsBufferDepthSamples: 24_000,
+    stopPlayback() {
+      stopPlaybackCalls += 1;
+    },
+    clearTtsPlaybackTelemetry() {
+      clearTelemetryCalls += 1;
+      voxClient.ttsBufferDepthSamples = 0;
+    },
+    getTtsPlaybackState() {
+      return voxClient.ttsBufferDepthSamples > 0 ? "buffered" : "idle";
+    }
+  };
   const session = createSession({
     mode: "openai_realtime",
     botTurnOpen: true,
@@ -838,6 +1139,17 @@ test("interruptBotSpeechForBargeIn truncates OpenAI assistant audio to played du
       requestId: 12,
       utteranceText: "continuation"
     },
+    pendingRealtimeAssistantUtterances: [
+      {
+        prompt: "chunk one",
+        utteranceText: "chunk one",
+        userId: "bot-user",
+        source: "realtime:stream_chunk_2",
+        queuedAt: Date.now(),
+        interruptionPolicy: null,
+        latencyContext: null
+      }
+    ],
     lastRealtimeAssistantAudioItemId: "item_abc",
     lastRealtimeAssistantAudioItemContentIndex: 0,
     lastRealtimeAssistantAudioItemReceivedMs: 2000,
@@ -849,7 +1161,8 @@ test("interruptBotSpeechForBargeIn truncates OpenAI assistant audio to played du
         truncateCalls.push(payload);
         return true;
       }
-    }
+    },
+    voxClient
   });
 
   const interrupted = manager.interruptBotSpeechForBargeIn({
@@ -872,10 +1185,18 @@ test("interruptBotSpeechForBargeIn truncates OpenAI assistant audio to played du
   assert.equal(session.interruptedAssistantReply?.utteranceText, "continuation");
   assert.equal(session.interruptedAssistantReply?.interruptedByUserId, "user-1");
   assert.equal(session.interruptedAssistantReply?.source, "truncate_test");
+  assert.equal(session.pendingRealtimeAssistantUtterances?.length || 0, 0);
+  assert.equal(stopPlaybackCalls, 1);
+  assert.equal(clearTelemetryCalls, 1);
+  assert.equal(voxClient.ttsBufferDepthSamples, 0);
   assert.ok(Number(session.interruptedAssistantReply?.interruptedAt || 0) >= startedAt);
   const suppressionMs = Number(session.bargeInSuppressionUntil || 0) - startedAt;
   assert.ok(suppressionMs >= 0);
   assert.ok(suppressionMs <= BARGE_IN_SUPPRESSION_MAX_MS + 50);
+  assert.equal(
+    logs.some((entry) => entry?.content === "realtime_assistant_utterance_queue_cleared"),
+    true
+  );
 
   const conversationContext = manager.buildVoiceConversationContext({
     session,
@@ -885,7 +1206,7 @@ test("interruptBotSpeechForBargeIn truncates OpenAI assistant audio to played du
   assert.equal(conversationContext.interruptedAssistantReply?.utteranceText, "continuation");
 });
 
-test("interruptBotSpeechForBargeIn falls back to short echo guard when cancel fails", () => {
+test("interruptBotSpeechForBargeIn stores recovery context when truncate succeeds but cancel fails", () => {
   const { manager, logs } = createManager();
   const startedAt = Date.now();
   const session = createSession({
@@ -895,6 +1216,9 @@ test("interruptBotSpeechForBargeIn falls back to short echo guard when cancel fa
       requestId: 14,
       utteranceText: "still speaking"
     },
+    lastRealtimeAssistantAudioItemId: "item_cancel_failed",
+    lastRealtimeAssistantAudioItemContentIndex: 0,
+    lastRealtimeAssistantAudioItemReceivedMs: 1600,
     realtimeClient: {
       cancelActiveResponse() {
         return false;
@@ -912,12 +1236,125 @@ test("interruptBotSpeechForBargeIn falls back to short echo guard when cancel fa
   });
 
   assert.equal(interrupted, true);
-  assert.equal(session.interruptedAssistantReply, null);
+  assert.equal(session.interruptedAssistantReply?.utteranceText, "still speaking");
+  assert.equal(session.interruptedAssistantReply?.interruptedByUserId, "user-1");
+  assert.equal(session.interruptedAssistantReply?.source, "cancel_failed_test");
   const suppressionMs = Number(session.bargeInSuppressionUntil || 0) - startedAt;
   assert.ok(suppressionMs >= 0);
   assert.ok(suppressionMs <= BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS + 50);
   const interruptLog = logs.find((entry) => entry?.content === "voice_barge_in_interrupt");
-  assert.equal(interruptLog?.metadata?.storedInterruptionContext, false);
+  assert.equal(interruptLog?.metadata?.storedInterruptionContext, true);
+});
+
+test("interruptBotSpeechForDirectAddressedTurn skips barge-in suppression while preserving interruption context", () => {
+  const { manager, logs } = createManager();
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: true,
+    pendingResponse: {
+      requestId: 15,
+      utteranceText: "still talking"
+    },
+    lastRealtimeAssistantAudioItemId: "item_direct_address",
+    lastRealtimeAssistantAudioItemContentIndex: 0,
+    lastRealtimeAssistantAudioItemReceivedMs: 1800,
+    realtimeClient: {
+      cancelActiveResponse() {
+        return true;
+      },
+      truncateConversationItem() {
+        return true;
+      }
+    }
+  });
+
+  const interrupted = manager.interruptBotSpeechForDirectAddressedTurn({
+    session,
+    userId: "user-2",
+    source: "direct_address_test"
+  });
+
+  assert.equal(interrupted, true);
+  assert.equal(session.bargeInSuppressionUntil, 0);
+  assert.equal(session.interruptedAssistantReply?.utteranceText, "still talking");
+  assert.equal(session.interruptedAssistantReply?.interruptedByUserId, "user-2");
+  const interruptLog = logs.find((entry) => entry?.content === "voice_direct_address_interrupt");
+  assert.equal(Boolean(interruptLog), true);
+  assert.equal(interruptLog?.metadata?.bargeInSuppressionApplied, false);
+  assert.equal(interruptLog?.metadata?.suppressionMs, 0);
+});
+
+test("interruptBotSpeechForOutputLockTurn skips barge-in suppression while preserving interruption context", () => {
+  const { manager, logs } = createManager();
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: true,
+    pendingResponse: {
+      requestId: 16,
+      utteranceText: "still talking"
+    },
+    lastRealtimeAssistantAudioItemId: "item_output_lock",
+    lastRealtimeAssistantAudioItemContentIndex: 0,
+    lastRealtimeAssistantAudioItemReceivedMs: 1900,
+    realtimeClient: {
+      cancelActiveResponse() {
+        return true;
+      },
+      truncateConversationItem() {
+        return true;
+      }
+    }
+  });
+
+  const interrupted = manager.interruptBotSpeechForOutputLockTurn({
+    session,
+    userId: "user-1",
+    source: "authorized_speaker_test"
+  });
+
+  assert.equal(interrupted, true);
+  assert.equal(session.bargeInSuppressionUntil, 0);
+  assert.equal(session.interruptedAssistantReply?.utteranceText, "still talking");
+  assert.equal(session.interruptedAssistantReply?.interruptedByUserId, "user-1");
+  const interruptLog = logs.find((entry) => entry?.content === "voice_output_lock_interrupt");
+  assert.equal(Boolean(interruptLog), true);
+  assert.equal(interruptLog?.metadata?.bargeInSuppressionApplied, false);
+  assert.equal(interruptLog?.metadata?.suppressionMs, 0);
+});
+
+test("shouldDirectAddressedTurnInterruptReply allows wake-word overrides in speaker mode but not none mode", () => {
+  const { manager } = createManager();
+  const speakerModeSession = createSession({
+    settingsSnapshot: createTestSettings({
+      botName: "clanker conk",
+      voice: {
+        defaultInterruptionMode: "speaker"
+      }
+    })
+  });
+  const noneModeSession = createSession({
+    settingsSnapshot: createTestSettings({
+      botName: "clanker conk",
+      voice: {
+        defaultInterruptionMode: "none"
+      }
+    })
+  });
+
+  assert.equal(
+    manager.shouldDirectAddressedTurnInterruptReply({
+      session: speakerModeSession,
+      directAddressed: true
+    }),
+    true
+  );
+  assert.equal(
+    manager.shouldDirectAddressedTurnInterruptReply({
+      session: noneModeSession,
+      directAddressed: true
+    }),
+    false
+  );
 });
 
 test("isCaptureConfirmedLiveSpeech requires both speech window and non-silent signal", () => {
@@ -1722,6 +2159,350 @@ test("playVoiceReplyInOrder preserves inline soundboard sequencing on buffered p
   ]);
 });
 
+test("playVoiceReplyInOrder waits for prior realtime playback before a soundboard-only ordered chunk", async () => {
+  const { manager } = createManager();
+  const eventOrder: string[] = [];
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: true,
+    lastAudioDeltaAt: Date.now() - 200,
+    pendingResponse: {
+      requestId: 4,
+      userId: "bot-user",
+      requestedAt: Date.now() - 200,
+      retryCount: 0,
+      hardRecoveryAttempted: false,
+      source: "realtime:stream_chunk_7",
+      handlingSilence: false,
+      audioReceivedAt: Date.now() - 150,
+      interruptionPolicy: null,
+      utteranceText: "earlier chunk",
+      latencyContext: null
+    },
+    settingsSnapshot: createTestSettings({
+      botName: "clanker conk",
+      voice: {
+        soundboard: {
+          enabled: true,
+          preferredSoundIds: ["airhorn@123"]
+        }
+      }
+    })
+  });
+  manager.replyManager.isRealtimeResponseActive = () => Boolean(session.pendingResponse);
+  manager.replyManager.hasBufferedTtsPlayback = () => Boolean(session.botTurnOpen);
+  manager.replyManager.getBufferedTtsSamples = () => (session.botTurnOpen ? 24_000 : 0);
+  manager.soundboardDirector.play = async ({ soundId, sourceGuildId }) => {
+    eventOrder.push(`sound:${sourceGuildId ? `${soundId}@${sourceGuildId}` : soundId}`);
+    return { ok: true };
+  };
+
+  setTimeout(() => {
+    eventOrder.push("earlier_done");
+    session.pendingResponse = null;
+    session.botTurnOpen = false;
+  }, 35);
+
+  const result = await manager.playVoiceReplyInOrder({
+    session,
+    settings: session.settingsSnapshot,
+    spokenText: "",
+    playbackSteps: [
+      {
+        type: "soundboard",
+        reference: "airhorn@123"
+      }
+    ],
+    source: "test_reply",
+    preferRealtimeUtterance: true
+  });
+
+  assert.equal(result.completed, true);
+  assert.equal(result.spokeLine, false);
+  assert.equal(result.playedSoundboardCount, 1);
+  assert.deepEqual(eventOrder, [
+    "earlier_done",
+    "sound:airhorn@123"
+  ]);
+});
+
+test("playVoiceReplyInOrder waits for the current realtime speech segment before the following soundboard", async () => {
+  const { manager } = createManager();
+  const eventOrder: string[] = [];
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeClient: {},
+    settingsSnapshot: createTestSettings({
+      botName: "clanker conk",
+      voice: {
+        soundboard: {
+          enabled: true,
+          preferredSoundIds: ["airhorn@123"]
+        }
+      }
+    })
+  });
+  manager.replyManager.isRealtimeResponseActive = () => Boolean(session.pendingResponse);
+  manager.replyManager.hasBufferedTtsPlayback = () => Boolean(session.botTurnOpen);
+  manager.replyManager.getBufferedTtsSamples = () => (session.botTurnOpen ? 24_000 : 0);
+  manager.requestRealtimeTextUtterance = ({ source }) => {
+    eventOrder.push(`request:${String(source)}`);
+    const requestedAt = Date.now();
+    session.pendingResponse = {
+      requestId: 9,
+      userId: "bot-user",
+      requestedAt,
+      retryCount: 0,
+      hardRecoveryAttempted: false,
+      source: String(source || "voice_reply"),
+      handlingSilence: false,
+      audioReceivedAt: 0,
+      interruptionPolicy: null,
+      utteranceText: "lead in",
+      latencyContext: null
+    };
+    session.lastResponseRequestAt = requestedAt;
+    setTimeout(() => {
+      eventOrder.push("speech_audio_started");
+      session.lastAudioDeltaAt = Date.now();
+      session.botTurnOpen = true;
+      setTimeout(() => {
+        eventOrder.push("speech_done");
+        session.pendingResponse = null;
+        session.botTurnOpen = false;
+      }, 20);
+    }, 10);
+    return true;
+  };
+  manager.soundboardDirector.play = async ({ soundId, sourceGuildId }) => {
+    eventOrder.push(`sound:${sourceGuildId ? `${soundId}@${sourceGuildId}` : soundId}`);
+    return { ok: true };
+  };
+
+  const result = await manager.playVoiceReplyInOrder({
+    session,
+    settings: session.settingsSnapshot,
+    spokenText: "lead in",
+    playbackSteps: [
+      {
+        type: "speech",
+        text: "lead in"
+      },
+      {
+        type: "soundboard",
+        reference: "airhorn@123"
+      }
+    ],
+    source: "test_reply",
+    preferRealtimeUtterance: true
+  });
+
+  assert.equal(result.completed, true);
+  assert.equal(result.spokeLine, true);
+  assert.equal(result.requestedRealtimeUtterance, true);
+  assert.equal(result.playedSoundboardCount, 1);
+  assert.deepEqual(eventOrder, [
+    "request:test_reply:speech_1",
+    "speech_audio_started",
+    "speech_done",
+    "sound:airhorn@123"
+  ]);
+});
+
+test("playVoiceReplyInOrder does not stall on bot turn tail flags after targeted realtime speech finishes", async () => {
+  const { manager } = createManager();
+  const eventOrder: string[] = [];
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeClient: {},
+    settingsSnapshot: createTestSettings({
+      botName: "clanker conk",
+      voice: {
+        soundboard: {
+          enabled: true,
+          preferredSoundIds: ["airhorn@123"]
+        }
+      }
+    })
+  });
+  manager.replyManager.isRealtimeResponseActive = () => Boolean(session.pendingResponse);
+  manager.replyManager.hasBufferedTtsPlayback = () => Boolean(session.botTurnOpen);
+  manager.replyManager.getBufferedTtsSamples = () => (session.botTurnOpen ? 24_000 : 0);
+  manager.replyManager.syncAssistantOutputState = () => session.assistantOutput;
+  manager.requestRealtimeTextUtterance = ({ source }) => {
+    eventOrder.push(`request:${String(source)}`);
+    const requestedAt = Date.now();
+    session.pendingResponse = {
+      requestId: 9,
+      userId: "bot-user",
+      requestedAt,
+      retryCount: 0,
+      hardRecoveryAttempted: false,
+      source: String(source || "voice_reply"),
+      handlingSilence: false,
+      audioReceivedAt: 0,
+      interruptionPolicy: null,
+      utteranceText: "lead in",
+      latencyContext: null
+    };
+    session.lastResponseRequestAt = requestedAt;
+    session.assistantOutput = {
+      ...session.assistantOutput,
+      phase: "response_pending",
+      reason: "pending_response",
+      requestId: 9,
+      lastSyncedAt: requestedAt
+    };
+    setTimeout(() => {
+      eventOrder.push("speech_audio_started");
+      session.lastAudioDeltaAt = Date.now();
+      session.botTurnOpen = true;
+      session.assistantOutput = {
+        ...session.assistantOutput,
+        phase: "speaking_live",
+        reason: "bot_audio_live",
+        requestId: 9,
+        lastSyncedAt: Date.now()
+      };
+      setTimeout(() => {
+        eventOrder.push("speech_done");
+        session.pendingResponse = null;
+        session.assistantOutput = {
+          ...session.assistantOutput,
+          phase: "idle",
+          reason: "idle",
+          requestId: null,
+          lastSyncedAt: Date.now()
+        };
+        setTimeout(() => {
+          eventOrder.push("tail_cleared");
+          session.botTurnOpen = false;
+        }, 80);
+      }, 20);
+    }, 10);
+    return true;
+  };
+  manager.soundboardDirector.play = async ({ soundId, sourceGuildId }) => {
+    eventOrder.push(`sound:${sourceGuildId ? `${soundId}@${sourceGuildId}` : soundId}`);
+    return { ok: true };
+  };
+
+  const result = await manager.playVoiceReplyInOrder({
+    session,
+    settings: session.settingsSnapshot,
+    spokenText: "lead in",
+    playbackSteps: [
+      {
+        type: "speech",
+        text: "lead in"
+      },
+      {
+        type: "soundboard",
+        reference: "airhorn@123"
+      }
+    ],
+    source: "test_reply",
+    preferRealtimeUtterance: true
+  });
+
+  assert.equal(result.completed, true);
+  assert.equal(result.spokeLine, true);
+  assert.equal(result.requestedRealtimeUtterance, true);
+  assert.equal(result.playedSoundboardCount, 1);
+  assert.deepEqual(eventOrder, [
+    "request:test_reply:speech_1",
+    "speech_audio_started",
+    "speech_done",
+    "sound:airhorn@123"
+  ]);
+});
+
+test("collapsePendingRealtimeAssistantStreamTail leaves ordered soundboard chunk speech steps untouched", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    mode: "openai_realtime",
+    pendingRealtimeAssistantUtterances: [
+      {
+        prompt: "say exactly: Check this out.",
+        utteranceText: "Check this out.",
+        userId: "bot-user",
+        source: "realtime:stream_chunk_2:speech_1",
+        queuedAt: Date.now() - 50,
+        interruptionPolicy: null,
+        musicWakeRefreshAfterSpeech: false,
+        latencyContext: null
+      },
+      {
+        prompt: "say exactly: That's the rizz right there.",
+        utteranceText: "That's the rizz right there.",
+        userId: "bot-user",
+        source: "realtime:stream_chunk_2:speech_2",
+        queuedAt: Date.now() - 25,
+        interruptionPolicy: null,
+        musicWakeRefreshAfterSpeech: false,
+        latencyContext: null
+      }
+    ]
+  });
+
+  const collapsedCount = manager.collapsePendingRealtimeAssistantStreamTail({
+    session,
+    source: "realtime"
+  });
+
+  assert.equal(collapsedCount, 0);
+  assert.deepEqual(
+    manager.getPendingRealtimeAssistantUtterances(session).map((entry) => entry.source),
+    [
+      "realtime:stream_chunk_2:speech_1",
+      "realtime:stream_chunk_2:speech_2"
+    ]
+  );
+});
+
+test("playVoiceReplyInOrder seeds assistant-targeted interruption policy for local TTS playback", async () => {
+  const { manager } = createManager();
+  manager.speakVoiceLineWithTts = async () => true;
+  const session = createSession({
+    mode: "file_wav",
+    activeReplyInterruptionPolicy: null
+  });
+
+  const result = await manager.playVoiceReplyInOrder({
+    session,
+    settings: session.settingsSnapshot,
+    spokenText: "nah bob, the other one",
+    playbackSteps: [
+      { type: "speech", text: "nah bob, the other one" }
+    ],
+    source: "voice_reply",
+    preferRealtimeUtterance: false,
+    interruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "speaker-2",
+      talkingTo: "bob",
+      source: "assistant_reply_target",
+      reason: "assistant_target_speaker"
+    }
+  });
+
+  assert.deepEqual(result, {
+    completed: true,
+    spokeLine: true,
+    requestedRealtimeUtterance: false,
+    playedSoundboardCount: 0
+  });
+  assert.deepEqual(session.activeReplyInterruptionPolicy, {
+    assertive: true,
+    scope: "speaker",
+    allowedUserId: "speaker-2",
+    talkingTo: "bob",
+    source: "assistant_reply_target",
+    reason: "assistant_target_speaker"
+  });
+});
+
 test("deliverVoiceThoughtCandidate does not fallback to TTS in realtime mode", async () => {
   const { manager } = createManager();
   const session = createSession({
@@ -1854,6 +2635,10 @@ test("forwardRealtimeTextTurnToBrain logs prompt details for bridge-style realti
   assert.deepEqual(requestedPrompts, ["(alice): where's lunch"]);
   const forwardedLog = logs.find((entry) => entry?.content === "openai_realtime_text_turn_forwarded");
   assert.equal(Boolean(forwardedLog), true);
+  assert.equal(forwardedLog?.metadata?.transcript, undefined);
+  assert.equal(forwardedLog?.metadata?.labeledTranscript, undefined);
+  assert.equal(forwardedLog?.metadata?.transcriptChars, "where's lunch".length);
+  assert.equal(forwardedLog?.metadata?.labeledTranscriptChars, "(alice): where's lunch".length);
   assert.equal(forwardedLog?.metadata?.replyPrompts?.hiddenByDefault, true);
   assert.equal(forwardedLog?.metadata?.replyPrompts?.systemPrompt, "You are in bridge mode. Reply naturally.");
   assert.equal(forwardedLog?.metadata?.replyPrompts?.initialUserPrompt, "(alice): where's lunch");
@@ -2330,6 +3115,220 @@ test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript instead of queue
   assert.equal(droppedLog?.metadata?.pcmBytes, pcmBuffer.length);
 });
 
+test("queueRealtimeTurnFromAsrBridge recovers stashed preplay reply on empty ASR transcript", () => {
+  const { manager, logs } = createManager();
+  const session = createSession({
+    mode: "openai_realtime",
+    supersededPrePlaybackReply: {
+      userId: "speaker-1",
+      transcript: "[YOU joined the voice channel]",
+      pcmBuffer: null,
+      source: "bot_join_greeting",
+      captureReason: "bot_join_greeting",
+      directAddressed: false,
+      queuedAt: Date.now() - 500,
+      interruptionPolicy: null,
+      supersededAt: Date.now() - 200,
+      supersededByUserId: "speaker-1",
+      supersededBySource: "capture_promoted"
+    }
+  });
+  const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 6);
+
+  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-1",
+    pcmBuffer,
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    asrResult: {
+      transcript: ""
+    },
+    source: "per_user"
+  });
+
+  assert.equal(usedTranscript, false);
+  assert.equal(session.supersededPrePlaybackReply, null);
+  const queuedTurns = manager.deferredActionQueue.getDeferredQueuedUserTurns(session);
+  assert.equal(queuedTurns.length, 1);
+  assert.equal(queuedTurns[0]?.transcript, "[YOU joined the voice channel]");
+  assert.equal(queuedTurns[0]?.source, "bot_join_greeting");
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_preplay_reply_recovered"),
+    true
+  );
+});
+
+test("queueRealtimeTurnFromAsrBridge replays interrupted assistant speech on empty ASR transcript", () => {
+  const { manager, logs } = createManager();
+  const prompts: string[] = [];
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeClient: {
+      requestTextUtterance(prompt) {
+        prompts.push(prompt);
+      },
+      isResponseInProgress() {
+        return false;
+      }
+    },
+    interruptedAssistantReply: {
+      utteranceText: "let me finish that thought",
+      interruptedByUserId: "speaker-1",
+      interruptedAt: Date.now() - 250,
+      source: "cancel_failed_test",
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      }
+    }
+  });
+  const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 6);
+
+  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-1",
+    pcmBuffer,
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    asrResult: {
+      transcript: ""
+    },
+    source: "per_user"
+  });
+
+  assert.equal(usedTranscript, false);
+  assert.deepEqual(prompts, [
+    "Speak this exact line verbatim and nothing else: let me finish that thought"
+  ]);
+  assert.equal(session.pendingResponse?.utteranceText, "let me finish that thought");
+  assert.deepEqual(session.pendingResponse?.interruptionPolicy, {
+    assertive: true,
+    scope: "speaker",
+    allowedUserId: "speaker-1"
+  });
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_interrupted_reply_recovered"),
+    true
+  );
+});
+
+test("queueRealtimeTurnFromAsrBridge recovers a live-capture-superseded turn when the newer ASR result is empty", async () => {
+  const { manager, logs } = createManager();
+  manager.activeReplies = new ActiveReplyRegistry();
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
+  manager.generateVoiceTurn = async () => ({
+    text: "should not be generated"
+  });
+  manager.isCaptureConfirmedLiveSpeech = () => true;
+
+  const finalizedAtMs = Date.now() - 1_000;
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000,
+    userCaptures: new Map([
+      [
+        "speaker-1",
+        {
+          userId: "speaker-1",
+          startedAt: finalizedAtMs + 100,
+          promotedAt: finalizedAtMs + 150,
+          bytesSent: 24_000,
+          signalSampleCount: 12_000,
+          signalActiveSampleCount: 6_000,
+          signalPeakAbs: 12_000,
+          signalSumSquares: 12_000 * 12_000 * 12_000
+        }
+      ]
+    ])
+  });
+
+  const generationResult = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "older transcript",
+    directAddressed: true,
+    source: "realtime",
+    latencyContext: {
+      finalizedAtMs,
+      asrStartedAtMs: finalizedAtMs - 100,
+      asrCompletedAtMs: finalizedAtMs - 50,
+      queueWaitMs: 0,
+      pendingQueueDepth: 0,
+      captureReason: "stream_end"
+    }
+  });
+
+  assert.equal(generationResult, false);
+  assert.equal(session.supersededPrePlaybackReply?.transcript, "older transcript");
+
+  const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 6);
+  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-1",
+    pcmBuffer,
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    asrResult: {
+      transcript: ""
+    },
+    source: "per_user"
+  });
+
+  assert.equal(usedTranscript, false);
+  assert.equal(session.supersededPrePlaybackReply, null);
+  const queuedTurns = manager.deferredActionQueue.getDeferredQueuedUserTurns(session);
+  assert.equal(queuedTurns.length, 1);
+  assert.equal(queuedTurns[0]?.transcript, "older transcript");
+  assert.equal(queuedTurns[0]?.source, "realtime");
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_preplay_reply_recovered"),
+    true
+  );
+});
+
+test("discardSupersededPrePlaybackReply clears stashed preplay reply", () => {
+  const { manager, logs } = createManager();
+  const session = createSession({
+    supersededPrePlaybackReply: {
+      userId: "speaker-1",
+      transcript: "play daft punk",
+      pcmBuffer: null,
+      source: "realtime",
+      captureReason: "stream_end",
+      directAddressed: true,
+      queuedAt: Date.now() - 1_000,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      supersededAt: Date.now() - 500,
+      supersededByUserId: "speaker-2",
+      supersededBySource: "capture_promoted"
+    }
+  });
+
+  const discarded = manager.discardSupersededPrePlaybackReply({
+    session,
+    reason: "turn_admitted",
+    userId: "speaker-2"
+  });
+
+  assert.equal(discarded, true);
+  assert.equal(session.supersededPrePlaybackReply, null);
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_preplay_reply_discarded"),
+    true
+  );
+});
+
 test("cancelPendingPrePlaybackReplyForUserSpeech clears pre-audio thought response", () => {
   const { manager, logs } = createManager();
   const cancelCalls = [];
@@ -2348,7 +3347,11 @@ test("cancelPendingPrePlaybackReplyForUserSpeech clears pre-audio thought respon
       source: SYSTEM_SPEECH_SOURCE.THOUGHT,
       handlingSilence: false,
       audioReceivedAt: 0,
-      interruptionPolicy: null,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
       utteranceText: "wild thought",
       latencyContext: null,
       userId: null,
@@ -2392,7 +3395,12 @@ test("cancelPendingPrePlaybackReplyForUserSpeech aborts active voice generation 
   const session = createSession({
     mode: "openai_realtime",
     lastAudioDeltaAt: 0,
-    pendingResponse: null
+    pendingResponse: null,
+    activeReplyInterruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "speaker-1"
+    }
   });
   const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
   const activeReply = manager.activeReplies.begin(voiceReplyScopeKey, "voice-generation", ["voice_generation"]);
@@ -2447,7 +3455,7 @@ test("cancelPendingPrePlaybackReplyForUserSpeech requeues safe in-flight accepte
     directAddressed: true
   };
   const capture = {
-    userId: "speaker-2",
+    userId: "speaker-1",
     startedAt: promotedAt - 420,
     promotedAt,
     bytesSent: 24_000,
@@ -2459,7 +3467,7 @@ test("cancelPendingPrePlaybackReplyForUserSpeech requeues safe in-flight accepte
 
   const cancelled = manager.cancelPendingPrePlaybackReplyForUserSpeech({
     session,
-    userId: "speaker-2",
+    userId: "speaker-1",
     captureState: capture,
     source: "capture_promoted",
     now: promotedAt
@@ -2468,18 +3476,73 @@ test("cancelPendingPrePlaybackReplyForUserSpeech requeues safe in-flight accepte
   assert.equal(cancelled, true);
   assert.equal(activeReply.abortController.signal.aborted, true);
   assert.equal(session.inFlightAcceptedBrainTurn, null);
-  const queuedTurns = manager.deferredActionQueue.getDeferredQueuedUserTurns(session);
-  assert.equal(queuedTurns.length, 1);
-  assert.equal(queuedTurns[0]?.transcript, "play daft punk");
-  assert.equal(queuedTurns[0]?.userId, "speaker-1");
-  assert.equal(queuedTurns[0]?.deferReason, "preplay_supersede_requeue");
+  assert.equal(session.supersededPrePlaybackReply?.transcript, "play daft punk");
+  assert.equal(session.supersededPrePlaybackReply?.userId, "speaker-1");
+  assert.equal(session.supersededPrePlaybackReply?.supersededByUserId, "speaker-1");
   const cancelLog = logs.find((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech");
   assert.ok(cancelLog);
   assert.equal(cancelLog?.metadata?.inFlightPhase, "generation_only");
-  assert.equal(cancelLog?.metadata?.requeued, true);
+  assert.equal(cancelLog?.metadata?.stashedForRecovery, true);
 });
 
-test("cancelPendingPrePlaybackReplyForUserSpeech does NOT requeue bot-initiated events like bot_join_greeting", () => {
+test("cancelPendingPrePlaybackReplyForUserSpeech requeues replay-safe tool-followup turns", () => {
+  const { manager, logs } = createManager();
+  manager.activeReplies = new ActiveReplyRegistry();
+  const session = createSession({
+    mode: "openai_realtime",
+    lastAudioDeltaAt: 0,
+    pendingResponse: null
+  });
+  const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
+  const activeReply = manager.activeReplies.begin(voiceReplyScopeKey, "voice-generation", ["voice_generation"]);
+  const promotedAt = Date.now();
+  session.inFlightAcceptedBrainTurn = {
+    transcript: "play some minecraft music",
+    userId: "speaker-1",
+    pcmBuffer: null,
+    source: "realtime",
+    acceptedAt: promotedAt - 500,
+    phase: "tool_call_started",
+    captureReason: "stream_end",
+    directAddressed: true,
+    toolPhaseRecoveryEligible: true,
+    toolPhaseRecoveryReason: "music_play_needs_disambiguation",
+    toolPhaseLastToolName: "music_play"
+  };
+  const capture = {
+    userId: "speaker-1",
+    startedAt: promotedAt - 420,
+    promotedAt,
+    bytesSent: 24_000,
+    signalSampleCount: 12_000,
+    signalActiveSampleCount: 6_000,
+    signalPeakAbs: 12_000,
+    signalSumSquares: 12_000 * 12_000 * 12_000
+  };
+
+  const cancelled = manager.cancelPendingPrePlaybackReplyForUserSpeech({
+    session,
+    userId: "speaker-1",
+    captureState: capture,
+    source: "capture_promoted",
+    now: promotedAt
+  });
+
+  assert.equal(cancelled, true);
+  assert.equal(activeReply.abortController.signal.aborted, true);
+  assert.equal(session.inFlightAcceptedBrainTurn, null);
+  assert.equal(session.supersededPrePlaybackReply?.transcript, "play some minecraft music");
+  assert.equal(session.supersededPrePlaybackReply?.userId, "speaker-1");
+  const cancelLog = logs.find((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech");
+  assert.ok(cancelLog);
+  assert.equal(cancelLog?.metadata?.inFlightPhase, "tool_call_started");
+  assert.equal(cancelLog?.metadata?.inFlightToolRecoveryEligible, true);
+  assert.equal(cancelLog?.metadata?.inFlightToolRecoveryReason, "music_play_needs_disambiguation");
+  assert.equal(cancelLog?.metadata?.inFlightToolLastToolName, "music_play");
+  assert.equal(cancelLog?.metadata?.stashedForRecovery, true);
+});
+
+test("cancelPendingPrePlaybackReplyForUserSpeech ignores unauthorized promoted capture before bot_join_greeting playback", () => {
   const { manager, logs } = createManager();
   manager.activeReplies = new ActiveReplyRegistry();
   const session = createSession({
@@ -2519,17 +3582,17 @@ test("cancelPendingPrePlaybackReplyForUserSpeech does NOT requeue bot-initiated 
     now: promotedAt
   });
 
-  assert.equal(cancelled, true);
-  assert.equal(activeReply.abortController.signal.aborted, true);
-  // Bot-initiated events should NOT be requeued — user speech supersedes them
+  assert.equal(cancelled, false);
+  assert.equal(activeReply.abortController.signal.aborted, false);
   const queuedTurns = manager.deferredActionQueue.getDeferredQueuedUserTurns(session);
   assert.equal(queuedTurns.length, 0);
-  const cancelLog = logs.find((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech");
-  assert.ok(cancelLog);
-  assert.equal(cancelLog?.metadata?.requeued, false);
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech"),
+    false
+  );
 });
 
-test("cancelPendingPrePlaybackReplyForUserSpeech does NOT requeue stream-watch commentary", () => {
+test("cancelPendingPrePlaybackReplyForUserSpeech requeues authorized stream-watch commentary", () => {
   const { manager, logs } = createManager();
   manager.activeReplies = new ActiveReplyRegistry();
   const session = createSession({
@@ -2551,6 +3614,61 @@ test("cancelPendingPrePlaybackReplyForUserSpeech does NOT requeue stream-watch c
     directAddressed: false
   };
   const capture = {
+    userId: "speaker-1",
+    startedAt: promotedAt - 420,
+    promotedAt,
+    bytesSent: 24_000,
+    signalSampleCount: 12_000,
+    signalActiveSampleCount: 6_000,
+    signalPeakAbs: 12_000,
+    signalSumSquares: 12_000 * 12_000 * 12_000
+  };
+
+  const cancelled = manager.cancelPendingPrePlaybackReplyForUserSpeech({
+    session,
+    userId: "speaker-1",
+    captureState: capture,
+    source: "capture_promoted",
+    now: promotedAt
+  });
+
+  assert.equal(cancelled, true);
+  assert.equal(activeReply.abortController.signal.aborted, true);
+  assert.equal(
+    session.supersededPrePlaybackReply?.source,
+    "stream_watch_brain_turn:scene_changed"
+  );
+  assert.equal(
+    session.supersededPrePlaybackReply?.supersededByUserId,
+    "speaker-1"
+  );
+  const cancelLog = logs.find((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech");
+  assert.ok(cancelLog);
+  assert.equal(cancelLog?.metadata?.stashedForRecovery, true);
+});
+
+test("cancelPendingPrePlaybackReplyForUserSpeech ignores unauthorized promoted capture before speaker-scoped preplay reply", () => {
+  const { manager } = createManager();
+  manager.activeReplies = new ActiveReplyRegistry();
+  const session = createSession({
+    mode: "openai_realtime",
+    lastAudioDeltaAt: 0,
+    pendingResponse: null
+  });
+  const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
+  const activeReply = manager.activeReplies.begin(voiceReplyScopeKey, "voice-generation", ["voice_generation"]);
+  const promotedAt = Date.now();
+  session.inFlightAcceptedBrainTurn = {
+    transcript: "play daft punk",
+    userId: "speaker-1",
+    pcmBuffer: null,
+    source: "realtime",
+    acceptedAt: promotedAt - 500,
+    phase: "generation_only",
+    captureReason: "stream_end",
+    directAddressed: true
+  };
+  const capture = {
     userId: "speaker-2",
     startedAt: promotedAt - 420,
     promotedAt,
@@ -2569,12 +3687,116 @@ test("cancelPendingPrePlaybackReplyForUserSpeech does NOT requeue stream-watch c
     now: promotedAt
   });
 
-  assert.equal(cancelled, true);
-  assert.equal(activeReply.abortController.signal.aborted, true);
+  assert.equal(cancelled, false);
+  assert.equal(activeReply.abortController.signal.aborted, false);
   assert.equal(manager.deferredActionQueue.getDeferredQueuedUserTurns(session).length, 0);
-  const cancelLog = logs.find((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech");
-  assert.ok(cancelLog);
-  assert.equal(cancelLog?.metadata?.requeued, false);
+});
+
+test("maybeSupersedeRealtimeReplyBeforePlayback ignores unauthorized promoted live capture", () => {
+  const { manager, logs } = createManager();
+  const session = createSession({
+    mode: "openai_realtime",
+    userCaptures: new Map([
+      [
+        "speaker-2",
+        {
+          userId: "speaker-2",
+          startedAt: Date.now() - 800,
+          promotedAt: Date.now() - 400,
+          promotionReason: "strong_local_audio",
+          bytesSent: 24_000,
+          signalSampleCount: 12_000,
+          signalActiveSampleCount: 6_000,
+          signalPeakAbs: 12_000,
+          signalSumSquares: 12_000 * 12_000 * 12_000,
+          speakingEndFinalizeTimer: null
+        }
+      ]
+    ])
+  });
+
+  const superseded = manager.maybeSupersedeRealtimeReplyBeforePlayback({
+    session,
+    source: "voice_reply:speech_1",
+    speechStep: 1,
+    includePromotedCaptureSupersede: true,
+    interruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "speaker-1"
+    }
+  });
+
+  assert.equal(superseded, false);
+  assert.equal(
+    logs.some((entry) => entry?.content === "realtime_reply_superseded_newer_input"),
+    false
+  );
+});
+
+test("maybeSupersedeRealtimeReplyBeforePlayback ignores local-only strong-audio capture until server VAD confirms", () => {
+  const { manager, logs } = createManager();
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000,
+    userCaptures: new Map([
+      [
+        "speaker-1",
+        {
+          userId: "speaker-1",
+          startedAt: Date.now() - 800,
+          promotedAt: Date.now() - 400,
+          promotionReason: "strong_local_audio",
+          asrUtteranceId: 17,
+          bytesSent: 24_000,
+          signalSampleCount: 12_000,
+          signalActiveSampleCount: 6_000,
+          signalPeakAbs: 12_000,
+          signalSumSquares: 12_000 * 12_000 * 12_000,
+          speakingEndFinalizeTimer: null
+        }
+      ]
+    ])
+  });
+  const { asrState } = seedReadyPerUserAsr(manager, session, "speaker-1");
+
+  const beforeVad = manager.maybeSupersedeRealtimeReplyBeforePlayback({
+    session,
+    source: "voice_reply:speech_1",
+    speechStep: 1,
+    includePromotedCaptureSupersede: true,
+    interruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "speaker-1"
+    }
+  });
+
+  assert.equal(beforeVad, false);
+  assert.equal(
+    logs.some((entry) => entry?.content === "realtime_reply_superseded_newer_input"),
+    false
+  );
+
+  asrState.speechDetectedUtteranceId = 17;
+  asrState.speechDetectedAt = Date.now();
+
+  const afterVad = manager.maybeSupersedeRealtimeReplyBeforePlayback({
+    session,
+    source: "voice_reply:speech_1",
+    speechStep: 1,
+    includePromotedCaptureSupersede: true,
+    interruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "speaker-1"
+    }
+  });
+
+  assert.equal(afterVad, true);
+  const supersededLog = logs.find((entry) => entry?.content === "realtime_reply_superseded_newer_input");
+  assert.ok(supersededLog);
+  assert.equal(supersededLog?.metadata?.supersedeReason, "newer_live_promoted_capture");
 });
 
 test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript for all capture reasons", () => {
@@ -3111,7 +4333,7 @@ test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown",
     session,
     settings: createTestSettings({
       voice: {
-        replyEagerness: 100,
+        ambientReplyEagerness: 100,
         thoughtEngine: {
           enabled: true,
           eagerness: 100,
@@ -3132,7 +4354,7 @@ test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown",
     },
     settings: createTestSettings({
       voice: {
-        replyEagerness: 100,
+        ambientReplyEagerness: 100,
         thoughtEngine: {
           enabled: true,
           eagerness: 100,
@@ -3182,7 +4404,7 @@ test("maybeRunVoiceThoughtLoop speaks approved thought candidates", async () => 
     botName: "clanker conk",
     voice: {
       enabled: true,
-      replyEagerness: 100,
+      ambientReplyEagerness: 100,
       thoughtEngine: {
         enabled: true,
         provider: "anthropic",
@@ -3238,7 +4460,7 @@ test("maybeRunVoiceThoughtLoop skips generation when eagerness probability roll 
     botName: "clanker conk",
     voice: {
       enabled: true,
-      replyEagerness: 10,
+      ambientReplyEagerness: 10,
       thoughtEngine: {
         enabled: true,
         provider: "anthropic",
@@ -3552,6 +4774,54 @@ test("maybeHandleMusicTextStopRequest routes stop phrase from text chat", async 
   assert.equal(handled, true);
   assert.equal(stopCalls.length, 1);
   assert.equal(stopCalls[0]?.reason, "text_music_stop_failsafe");
+});
+
+test("handleClankSlashCommand injects /clank say text into the active realtime session", async () => {
+  const { manager } = createManager();
+  const injectedTurns = [];
+  manager.injectTextTurn = async (payload) => {
+    injectedTurns.push(payload);
+  };
+  manager.sessions.set("guild-1", createSession());
+
+  const slash = createClankSlashInteraction({
+    subcommand: "say",
+    message: "check the queue"
+  });
+
+  await manager.handleClankSlashCommand(slash.interaction as ChatInputCommandInteraction, null);
+
+  assert.equal(slash.deferred, true);
+  assert.equal(injectedTurns.length, 1);
+  assert.equal(injectedTurns[0]?.text, "check the queue");
+  assert.equal(injectedTurns[0]?.source, "slash_command_clank_say");
+  assert.equal(slash.edits[0], "Processing: \"check the queue\"");
+});
+
+test("handleClankSlashCommand routes /clank music subcommands to the music slash handler", async () => {
+  const { manager } = createManager();
+  const musicCalls = [];
+  manager.handleMusicSlashCommand = async (interaction, settings) => {
+    musicCalls.push({ interaction, settings });
+  };
+
+  const settings = createTestSettings({
+    botName: "clanker conk"
+  });
+  const slash = createClankSlashInteraction({
+    subcommandGroup: "music",
+    subcommand: "play",
+    query: "all caps"
+  });
+
+  await manager.handleClankSlashCommand(slash.interaction as ChatInputCommandInteraction, settings);
+
+  assert.equal(musicCalls.length, 1);
+  assert.equal(musicCalls[0]?.interaction, slash.interaction);
+  assert.equal(musicCalls[0]?.settings, settings);
+  assert.equal(slash.deferred, false);
+  assert.equal(slash.replies.length, 0);
+  assert.equal(slash.edits.length, 0);
 });
 
 test("maybeHandleMusicTextSelectionRequest routes numeric disambiguation picks", async () => {

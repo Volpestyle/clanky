@@ -24,6 +24,7 @@ import {
   STT_TRANSCRIPT_MAX_CHARS,
   VOICE_SILENCE_GATE_ACTIVE_SAMPLE_MIN_ABS
 } from "./voiceSessionManager.constants.ts";
+import { getMusicWakeFollowupState } from "./musicWakeLatch.ts";
 import { isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
 import type { BargeInController } from "./bargeInController.ts";
 import type { DeferredActionQueue } from "./deferredActionQueue.ts";
@@ -113,9 +114,20 @@ export interface CaptureManagerHost {
     pcmBuffer?: Buffer | null;
     captureReason?: string;
     finalizedAt?: number;
+    musicWakeFollowupEligibleAtCapture?: boolean;
     bridgeUtteranceId?: number | null;
     asrResult?: AsrCommitResult | null;
     source?: string;
+  }) => boolean;
+  recoverSupersededPrePlaybackReply: (args: {
+    session: VoiceSession;
+    reason?: string;
+    userId?: string | null;
+  }) => boolean;
+  recoverInterruptedAssistantReply: (args: {
+    session: VoiceSession;
+    reason?: string;
+    userId?: string | null;
   }) => boolean;
 }
 
@@ -150,6 +162,7 @@ export class CaptureManager {
       startedAt: Date.now(),
       promotedAt: 0,
       promotionReason: null,
+      musicWakeFollowupEligibleAtPromotion: false,
       asrUtteranceId: 0,
       bytesSent: 0,
       signalSampleCount: 0,
@@ -249,6 +262,8 @@ export class CaptureManager {
       const signal = this.host.bargeInController.getCaptureSignalMetrics(captureState);
       captureState.promotedAt = now;
       captureState.promotionReason = String(promotionReason);
+      captureState.musicWakeFollowupEligibleAtPromotion =
+        getMusicWakeFollowupState(session, userId, now).passiveWakeFollowupAllowed;
       this.host.cancelPendingPrePlaybackReplyForUserSpeech({
         session,
         userId,
@@ -454,7 +469,8 @@ export class CaptureManager {
         userId,
         pcmBuffer,
         captureReason: reason,
-        finalizedAt
+        finalizedAt,
+        musicWakeFollowupEligibleAtCapture: captureState.musicWakeFollowupEligibleAtPromotion
       });
     };
 
@@ -546,7 +562,14 @@ export class CaptureManager {
       }
 
       const bargeDecision = this.host.bargeInController.shouldBargeIn({ session, userId, captureState });
-      if (bargeDecision.allowed) {
+      const serverVadConfirmed = this.host.hasCaptureServerVadSpeech({
+        session,
+        capture: captureState
+      });
+      const localOnlyPromotionStillUnconfirmed =
+        captureState.promotionReason === "strong_local_audio" &&
+        !serverVadConfirmed;
+      if (bargeDecision.allowed && !localOnlyPromotionStillUnconfirmed) {
         this.host.interruptBotSpeechForBargeIn({
           session,
           userId,
@@ -663,7 +686,8 @@ export class CaptureManager {
           userId,
           pcmBuffer,
           captureReason,
-          finalizedAt
+          finalizedAt,
+          musicWakeFollowupEligibleAtCapture: captureState.musicWakeFollowupEligibleAtPromotion
         });
         return;
       }
@@ -692,6 +716,7 @@ export class CaptureManager {
         pcmBuffer,
         captureReason,
         finalizedAt,
+        musicWakeFollowupEligibleAtCapture: captureState.musicWakeFollowupEligibleAtPromotion,
         bridgeUtteranceId: Math.max(0, Number(captureState.asrUtteranceId || 0)) || null,
         asrResult,
         source
@@ -822,6 +847,22 @@ export class CaptureManager {
               clipDurationMs,
               asrResultAvailable: Boolean(asrResult)
             }
+          });
+          const recoveredSupersededPrePlaybackReply = this.host.recoverSupersededPrePlaybackReply({
+            session,
+            reason: "empty_asr_bridge_drop",
+            userId
+          });
+          if (!recoveredSupersededPrePlaybackReply) {
+            this.host.recoverInterruptedAssistantReply({
+              session,
+              reason: "empty_asr_bridge_drop",
+              userId
+            });
+          }
+          this.host.deferredActionQueue.recheckDeferredVoiceActions({
+            session,
+            reason: "empty_asr_bridge_drop"
           });
           return;
         }

@@ -9,11 +9,11 @@ import {
 } from "./voiceAddressing.ts";
 
 describe("normalizeVoiceAddressingAnnotation", () => {
-  test("normalizes target aliases, clamps confidence, and cleans metadata", () => {
+  test("normalizes canonical targets, clamps confidence, and cleans metadata", () => {
     const result = normalizeVoiceAddressingAnnotation({
       rawAddressing: {
-        target: " everyone ",
-        confidence: 1.8
+        talkingTo: " everyone ",
+        directedConfidence: 1.8
       },
       source: "Model Output",
       reason: "  asked   the whole   room "
@@ -330,8 +330,8 @@ describe("buildVoiceAddressingState", () => {
             text: "second",
             at: 1700,
             addressing: {
-              target: "ME",
-              confidence: 0.3333
+              talkingTo: "ME",
+              directedConfidence: 0.3333
             }
           },
           {

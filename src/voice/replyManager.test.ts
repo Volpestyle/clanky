@@ -39,10 +39,11 @@ function createSession(overrides = {}) {
   };
 }
 
-function createReplyManagerHarness() {
+function createReplyManagerHarness({ hasActiveCapture = false } = {}) {
   const logs = [];
   const resumeCalls = [];
   const haltCalls = [];
+  let deferredTurnBlockingActiveCapture = Boolean(hasActiveCapture);
   const replyManager = new ReplyManager({
     client: { user: { id: "bot-user" } },
     store: {
@@ -84,7 +85,7 @@ function createReplyManagerHarness() {
       clearAllDeferredVoiceActions() {}
     },
     hasDeferredTurnBlockingActiveCapture() {
-      return false;
+      return deferredTurnBlockingActiveCapture;
     },
     endSession: async () => true,
     scheduleBotSpeechMusicUnduck() {},
@@ -104,7 +105,15 @@ function createReplyManagerHarness() {
     }
   });
 
-  return { replyManager, logs, resumeCalls, haltCalls };
+  return {
+    replyManager,
+    logs,
+    resumeCalls,
+    haltCalls,
+    setHasDeferredTurnBlockingActiveCapture(value) {
+      deferredTurnBlockingActiveCapture = Boolean(value);
+    }
+  };
 }
 
 test("getReplyOutputLockState locks output while music playback is active", () => {
@@ -247,9 +256,12 @@ test("clearStaleRealtimeResponse skips clear when a fresh response replaced the 
 test("handleResponseDone waits for buffered assistant playback before resuming wake-word-paused music", async () => {
   const { replyManager, resumeCalls, haltCalls } = createReplyManagerHarness();
   const requestedAt = Date.now() - 10;
+  const initialLatchUntil = Date.now() + 1_000;
   const session = createSession({
     botTurnOpen: true,
     lastAudioDeltaAt: requestedAt,
+    musicWakeLatchedUntil: initialLatchUntil,
+    musicWakeLatchedByUserId: "user-1",
     pendingResponse: {
       requestId: 7,
       requestedAt,
@@ -297,6 +309,240 @@ test("handleResponseDone waits for buffered assistant playback before resuming w
   session.voxClient.ttsBufferDepthSamples = 0;
 
   await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal(resumeCalls.length, 1);
+  assert.deepEqual(haltCalls, ["music_resumed_after_wake_word"]);
+  assert.equal(session.music.phase, "playing");
+  assert.equal(Number(session.musicWakeLatchedUntil || 0) > initialLatchUntil, true);
+  assert.equal(session.musicWakeLatchedByUserId, null);
+});
+
+test("markBotTurnOut refreshes passive music wake latch only after buffered reply playback settles", async () => {
+  const { replyManager, resumeCalls, haltCalls, logs } = createReplyManagerHarness();
+  const initialLatchUntil = Date.now() + 1_000;
+  const session = createSession({
+    botTurnOpen: true,
+    lastAudioDeltaAt: Date.now() - 10,
+    musicWakeLatchedUntil: initialLatchUntil,
+    musicWakeLatchedByUserId: "user-1",
+    pendingResponse: {
+      requestId: 11,
+      requestedAt: Date.now() - 10,
+      source: "realtime_transcript_turn",
+      userId: "user-1",
+      retryCount: 0,
+      musicWakeRefreshAfterSpeech: true
+    },
+    music: {
+      phase: "playing",
+      active: true,
+      ducked: false,
+      pauseReason: null
+    },
+    voxClient: {
+      ttsBufferDepthSamples: 24_000,
+      getTtsBufferDepthSamples() {
+        return this.ttsBufferDepthSamples;
+      },
+      getTtsPlaybackState() {
+        return this.ttsBufferDepthSamples > 0 ? "buffered" : "idle";
+      },
+      getTtsTelemetryUpdatedAt() {
+        return Date.now();
+      }
+    }
+  });
+
+  replyManager.markBotTurnOut(session);
+
+  await new Promise((resolve) => setTimeout(resolve, 1_250));
+  assert.equal(Number(session.musicWakeLatchedUntil || 0), initialLatchUntil);
+  assert.equal(resumeCalls.length, 0);
+  assert.equal(haltCalls.length, 0);
+
+  session.botTurnOpen = false;
+  session.pendingResponse = null;
+  session.voxClient.ttsBufferDepthSamples = 0;
+
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal(Number(session.musicWakeLatchedUntil || 0) > initialLatchUntil, true);
+  assert.equal(session.musicWakeLatchedByUserId, "user-1");
+  assert.equal(
+    logs.some((entry) => entry.content === "voice_music_wake_latch_refreshed_after_reply"),
+    true
+  );
+});
+
+test("handleResponseDone keeps wake-word-paused music paused while an interrupting capture is still active", async () => {
+  const {
+    replyManager,
+    resumeCalls,
+    haltCalls,
+    setHasDeferredTurnBlockingActiveCapture
+  } = createReplyManagerHarness({ hasActiveCapture: true });
+  const requestedAt = Date.now() - 10;
+  const session = createSession({
+    botTurnOpen: false,
+    lastAudioDeltaAt: requestedAt,
+    pendingResponse: {
+      requestId: 8,
+      requestedAt,
+      source: "realtime_transcript_turn",
+      userId: "user-1",
+      retryCount: 0
+    },
+    music: {
+      phase: "paused_wake_word",
+      active: true,
+      ducked: false,
+      pauseReason: "wake_word"
+    },
+    voxClient: {
+      ttsBufferDepthSamples: 0,
+      getTtsBufferDepthSamples() {
+        return this.ttsBufferDepthSamples;
+      },
+      getTtsPlaybackState() {
+        return "idle";
+      },
+      getTtsTelemetryUpdatedAt() {
+        return Date.now();
+      }
+    }
+  });
+
+  replyManager.handleResponseDone({
+    session,
+    event: {
+      type: "response.done",
+      response: {
+        id: "resp_456",
+        status: "completed"
+      }
+    }
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 1_250));
+  assert.equal(resumeCalls.length, 0);
+  assert.equal(haltCalls.length, 0);
+  assert.equal(session.music.phase, "paused_wake_word");
+
+  setHasDeferredTurnBlockingActiveCapture(false);
+
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(resumeCalls.length, 1);
+  assert.deepEqual(haltCalls, ["music_resumed_after_wake_word"]);
+  assert.equal(session.music.phase, "playing");
+});
+
+test("handleResponseDone keeps wake-word-paused music paused while a followup turn is still processing", async () => {
+  const { replyManager, resumeCalls, haltCalls } = createReplyManagerHarness();
+  const requestedAt = Date.now() - 10;
+  const session = createSession({
+    botTurnOpen: false,
+    lastAudioDeltaAt: requestedAt,
+    pendingResponse: {
+      requestId: 9,
+      requestedAt,
+      source: "realtime_transcript_turn",
+      userId: "user-1",
+      retryCount: 0
+    },
+    music: {
+      phase: "paused_wake_word",
+      active: true,
+      ducked: false,
+      pauseReason: "wake_word"
+    },
+    activeRealtimeTurn: {
+      userId: "user-1",
+      pcmBuffer: Buffer.alloc(24_000),
+      queuedAt: Date.now(),
+      captureReason: "stream_end",
+      finalizedAt: Date.now(),
+      processing: true
+    },
+    voxClient: {
+      ttsBufferDepthSamples: 0,
+      getTtsBufferDepthSamples() {
+        return this.ttsBufferDepthSamples;
+      },
+      getTtsPlaybackState() {
+        return "idle";
+      },
+      getTtsTelemetryUpdatedAt() {
+        return Date.now();
+      }
+    }
+  });
+
+  replyManager.handleResponseDone({
+    session,
+    event: {
+      type: "response.done",
+      response: {
+        id: "resp_789",
+        status: "completed"
+      }
+    }
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 1_250));
+  assert.equal(resumeCalls.length, 0);
+  assert.equal(haltCalls.length, 0);
+  assert.equal(session.music.phase, "paused_wake_word");
+
+  session.activeRealtimeTurn = null;
+
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(resumeCalls.length, 1);
+  assert.deepEqual(haltCalls, ["music_resumed_after_wake_word"]);
+  assert.equal(session.music.phase, "playing");
+});
+
+test("schedulePausedReplyMusicResume waits for an in-flight accepted brain turn to finish", async () => {
+  const { replyManager, resumeCalls, haltCalls } = createReplyManagerHarness();
+  const session = createSession({
+    botTurnOpen: false,
+    music: {
+      phase: "paused_wake_word",
+      active: true,
+      ducked: false,
+      pauseReason: "wake_word"
+    },
+    inFlightAcceptedBrainTurn: {
+      transcript: "say something",
+      userId: "user-1",
+      pcmBuffer: null,
+      source: "voice_reply_pipeline",
+      acceptedAt: Date.now(),
+      phase: "generation_only",
+      captureReason: "stream_end",
+      directAddressed: true
+    },
+    voxClient: {
+      ttsBufferDepthSamples: 0,
+      getTtsBufferDepthSamples() {
+        return this.ttsBufferDepthSamples;
+      },
+      getTtsPlaybackState() {
+        return "idle";
+      },
+      getTtsTelemetryUpdatedAt() {
+        return Date.now();
+      }
+    }
+  });
+
+  replyManager.schedulePausedReplyMusicResume(session, 25);
+
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(resumeCalls.length, 0);
+  assert.equal(haltCalls.length, 0);
+  assert.equal(session.music.phase, "paused_wake_word");
+
+  session.inFlightAcceptedBrainTurn = null;
+
+  await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(resumeCalls.length, 1);
   assert.deepEqual(haltCalls, ["music_resumed_after_wake_word"]);
   assert.equal(session.music.phase, "playing");

@@ -213,9 +213,12 @@ export function buildVoiceToneGuardrails() {
   ];
 }
 
-export function buildVoiceSoundboardGuidanceLines(eagerness: unknown) {
-  const normalizedEagerness = Math.round(clamp(Number(eagerness) || 0, 0, 100));
-  const lines = [`Discord soundboard tendency: ${normalizedEagerness}/100.`];
+export function buildVoiceSoundboardGuidanceLines(soundboardEagerness: unknown) {
+  const normalizedEagerness = Math.round(clamp(Number(soundboardEagerness) || 0, 0, 100));
+  const lines = [
+    `Soundboard eagerness: ${normalizedEagerness}/100.`,
+    "Use this to judge Discord soundboard bits and comedic punctuation."
+  ];
 
   if (normalizedEagerness <= 10) {
     lines.push(
@@ -271,13 +274,6 @@ export const REPLY_JSON_SCHEMA = `{
   "skip": false,
   "reactionEmoji": "emoji or null",
   "media": "media object or null",
-  "webSearchQuery": "string or null",
-  "browserBrowseQuery": "string or null",
-  "memoryLookupQuery": "string or null",
-  "imageLookupQuery": "string or null",
-  "openArticleRef": "string or null",
-  "soundboardRefs": [],
-  "leaveVoiceChannel": false,
   "automationAction": {
     "operation": "none|create|pause|resume|delete|list",
     "title": "string or null",

@@ -63,7 +63,8 @@ function buildClassifierArgs() {
       msSinceAssistantReply: 8000,
       msSinceDirectAddress: null
     },
-    replyEagerness: 50,
+    ambientReplyEagerness: 50,
+    responseWindowEagerness: 65,
     pendingCommandFollowupSignal: false,
     musicActive: false,
     musicWakeLatched: false,
@@ -80,8 +81,9 @@ test("runVoiceReplyClassifier emits debug prompt/result logs when VOICE_CLASSIFI
 
     assert.equal(result.allow, false);
     assert.equal(result.replyPrompts.hiddenByDefault, true);
-    assert.match(String(result.replyPrompts.systemPrompt || ""), /Return exactly one token: YES or NO/i);
+    assert.match(String(result.replyPrompts.systemPrompt || ""), /Return exactly YES or NO/i);
     assert.match(String(result.replyPrompts.initialUserPrompt || ""), /Transcript: "Yo\."/);
+    assert.match(String(result.replyPrompts.initialUserPrompt || ""), /Response-window eagerness: 65\/100\./);
     const debugLogs = logs.filter((entry) => entry.content === "voice_reply_classifier_debug");
     assert.equal(debugLogs.length, 2);
 
@@ -131,7 +133,7 @@ test("runVoiceReplyClassifier uses an OpenAI-safe token floor for native realtim
       },
       voice: {
         admission: {
-          mode: "adaptive"
+          mode: "classifier_gate"
         }
       }
     }

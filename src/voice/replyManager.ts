@@ -49,6 +49,7 @@ import {
 } from "./voiceSessionTypes.ts";
 import type { BargeInController, ReplyInterruptionPolicy } from "./bargeInController.ts";
 import type { DeferredActionQueue } from "./deferredActionQueue.ts";
+import { touchMusicWakeLatch } from "./musicWakeLatch.ts";
 
 type ReplyManagerSettings = Record<string, unknown> | null;
 
@@ -131,6 +132,7 @@ export interface ReplyManagerHost {
 
 export class ReplyManager {
   private readonly wakeWordMusicResumeTimers = new WeakMap<VoiceSession, ReturnType<typeof setTimeout>>();
+  private readonly passiveMusicWakeRefreshTimers = new WeakMap<VoiceSession, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly host: ReplyManagerHost) {}
 
@@ -142,7 +144,15 @@ export class ReplyManager {
     }
   }
 
-  private scheduleWakeWordMusicResumeAfterAssistantPlayback(
+  private clearPassiveMusicWakeRefreshTimer(session: VoiceSession) {
+    const existingTimer = this.passiveMusicWakeRefreshTimers.get(session);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      this.passiveMusicWakeRefreshTimers.delete(session);
+    }
+  }
+
+  schedulePausedReplyMusicResume(
     session: VoiceSession,
     delayMs = BOT_TURN_SILENCE_RESET_MS
   ) {
@@ -153,10 +163,23 @@ export class ReplyManager {
       this.wakeWordMusicResumeTimers.delete(session);
       if (session.ending) return;
       if (this.host.getMusicPhase(session) !== "paused_wake_word") return;
-      if (this.hasBufferedTtsPlayback(session) || Boolean(session.botTurnOpen)) {
+      if (
+        this.hasBufferedTtsPlayback(session) ||
+        Boolean(session.botTurnOpen) ||
+        this.hasPendingTurnProcessingWork(session) ||
+        this.host.hasDeferredTurnBlockingActiveCapture(session)
+      ) {
         const retryTimer = setTimeout(attemptResume, 200);
         this.wakeWordMusicResumeTimers.set(session, retryTimer);
         return;
+      }
+      const settings = session.settingsSnapshot || this.host.store.getSettings();
+      touchMusicWakeLatch(session, settings, null);
+      if (session.music && typeof session.music === "object") {
+        session.music.replyHandoffMode = null;
+        session.music.replyHandoffRequestedByUserId = null;
+        session.music.replyHandoffSource = null;
+        session.music.replyHandoffAt = 0;
       }
       this.host.setMusicPhase(session, "playing");
       this.host.musicPlayer?.resume?.();
@@ -165,6 +188,51 @@ export class ReplyManager {
 
     const timer = setTimeout(attemptResume, normalizedDelayMs);
     this.wakeWordMusicResumeTimers.set(session, timer);
+  }
+
+  schedulePassiveMusicWakeLatchRefresh(
+    session: VoiceSession,
+    settings = session?.settingsSnapshot || this.host.store.getSettings(),
+    userId: string | null = null,
+    delayMs = BOT_TURN_SILENCE_RESET_MS
+  ) {
+    if (!session || session.ending) return;
+    this.clearPassiveMusicWakeRefreshTimer(session);
+    const normalizedDelayMs = Math.max(0, Math.round(Number(delayMs) || 0));
+    const normalizedUserId = String(userId || "").trim() || null;
+
+    const attemptRefresh = () => {
+      this.passiveMusicWakeRefreshTimers.delete(session);
+      if (session.ending) return;
+      const musicPhase = this.host.getMusicPhase(session);
+      if (!musicPhaseIsActive(musicPhase) || musicPhase === "paused_wake_word") return;
+      if (
+        this.hasBufferedTtsPlayback(session) ||
+        Boolean(session.botTurnOpen) ||
+        this.hasPendingTurnProcessingWork(session) ||
+        this.host.hasDeferredTurnBlockingActiveCapture(session)
+      ) {
+        const retryTimer = setTimeout(attemptRefresh, 200);
+        this.passiveMusicWakeRefreshTimers.set(session, retryTimer);
+        return;
+      }
+      const latchedUntil = touchMusicWakeLatch(session, settings, normalizedUserId);
+      this.host.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: normalizedUserId,
+        content: "voice_music_wake_latch_refreshed_after_reply",
+        metadata: {
+          sessionId: session.id,
+          musicPhase,
+          latchedUntil: latchedUntil > 0 ? new Date(latchedUntil).toISOString() : null
+        }
+      });
+    };
+
+    const timer = setTimeout(attemptRefresh, normalizedDelayMs);
+    this.passiveMusicWakeRefreshTimers.set(session, timer);
   }
 
   ensureAssistantOutputState(session: VoiceSession): AssistantOutputState | null {
@@ -490,6 +558,20 @@ export class ReplyManager {
     );
   }
 
+  private hasPendingTurnProcessingWork(session: VoiceSession) {
+    if (!session || session.ending) return false;
+    if (session.activeRealtimeTurn && typeof session.activeRealtimeTurn === "object") return true;
+    if (session.inFlightAcceptedBrainTurn && typeof session.inFlightAcceptedBrainTurn === "object") return true;
+    if (Boolean(session.responseFlushTimer)) return true;
+    if (Boolean(session.pendingResponse && typeof session.pendingResponse === "object")) return true;
+    if (Boolean(session.realtimeTurnDrainActive)) return true;
+    if (Boolean(session.fileAsrTurnDrainActive)) return true;
+    if (Math.max(0, Number(session.pendingRealtimeInputBytes || 0)) > 0) return true;
+    if (Array.isArray(session.pendingRealtimeTurns) && session.pendingRealtimeTurns.length > 0) return true;
+    if (Array.isArray(session.pendingFileAsrTurnsQueue) && session.pendingFileAsrTurnsQueue.length > 0) return true;
+    return false;
+  }
+
   resetBotAudioPlayback(session: VoiceSession) {
     if (!session) return;
     if (musicPhaseIsActive(this.host.getMusicPhase(session))) {
@@ -579,6 +661,14 @@ export class ReplyManager {
           0,
         audioStartedAtMs: now
       });
+    }
+
+    if (Boolean(pendingResponse?.musicWakeRefreshAfterSpeech)) {
+      this.schedulePassiveMusicWakeLatchRefresh(
+        session,
+        settings,
+        pendingResponse?.userId || null
+      );
     }
 
     if (!session.botTurnOpen) {
@@ -678,6 +768,17 @@ export class ReplyManager {
     }
 
     session.pendingResponse = null;
+    if (
+      session.music?.replyHandoffMode === "duck" &&
+      !Boolean(session.botTurnOpen) &&
+      !Boolean(session.botSpeechMusicDucked) &&
+      !this.hasBufferedTtsPlayback(session)
+    ) {
+      session.music.replyHandoffMode = null;
+      session.music.replyHandoffRequestedByUserId = null;
+      session.music.replyHandoffSource = null;
+      session.music.replyHandoffAt = 0;
+    }
     this.syncAssistantOutputState(session, trigger);
     if (clearActiveReplyInterruptionPolicy) {
       this.host.maybeClearActiveReplyInterruptionPolicy(session);
@@ -826,7 +927,8 @@ export class ReplyManager {
     emitCreateEvent = true,
     interruptionPolicy = undefined,
     utteranceText = undefined,
-    latencyContext = undefined
+    latencyContext = undefined,
+    musicWakeRefreshAfterSpeech = false
   }: {
     session: VoiceSession;
     userId?: string | null;
@@ -836,6 +938,7 @@ export class ReplyManager {
     interruptionPolicy?: ReplyInterruptionPolicy | Record<string, unknown> | null;
     utteranceText?: string | null;
     latencyContext?: Record<string, unknown> | null;
+    musicWakeRefreshAfterSpeech?: boolean;
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
@@ -920,7 +1023,8 @@ export class ReplyManager {
       audioReceivedAt: 0,
       interruptionPolicy: normalizedInterruptionPolicy,
       utteranceText: normalizedUtteranceText,
-      latencyContext: normalizedLatencyContext
+      latencyContext: normalizedLatencyContext,
+      musicWakeRefreshAfterSpeech: Boolean(musicWakeRefreshAfterSpeech)
     };
     session.lastResponseRequestAt = now;
     this.host.setActiveReplyInterruptionPolicy(session, normalizedInterruptionPolicy);
@@ -1207,7 +1311,7 @@ export class ReplyManager {
 
       const musicPhase = this.host.getMusicPhase(session);
       if (musicPhase === "paused_wake_word") {
-        this.scheduleWakeWordMusicResumeAfterAssistantPlayback(session, BOT_TURN_SILENCE_RESET_MS);
+        this.schedulePausedReplyMusicResume(session, BOT_TURN_SILENCE_RESET_MS);
       }
 
       if (preserveInFlightToolWork || preserveActiveReplies) {

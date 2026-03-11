@@ -94,13 +94,20 @@ test("resolveVoiceThoughtEngineConfig uses orchestrator binding", () => {
 
 test("generateVoiceThoughtCandidate strips soundboard directives from LLM output", async () => {
   const settings = createTestSettings({
-    botName: "clanker conk",
-    voice: {
-      thoughtEngine: {
+    identity: {
+      botName: "clanker conk"
+    },
+    initiative: {
+      voice: {
         enabled: true,
-        provider: "openai",
-        model: "gpt-4o-mini",
-        temperature: 0.9
+        execution: {
+          mode: "dedicated_model",
+          model: {
+            provider: "openai",
+            model: "gpt-4o-mini"
+          },
+          temperature: 0.9
+        }
       }
     }
   });
@@ -128,9 +135,11 @@ test("generateVoiceThoughtCandidate strips soundboard directives from LLM output
 
 test("evaluateVoiceThoughtDecision returns an allowed decision when the classifier contract is valid", async () => {
   const settings = createTestSettings({
-    botName: "clanker conk",
-    voice: {
-      thoughtEngine: {
+    identity: {
+      botName: "clanker conk"
+    },
+    initiative: {
+      voice: {
         enabled: true
       }
     }

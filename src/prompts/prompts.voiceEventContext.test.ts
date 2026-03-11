@@ -6,7 +6,14 @@ test("buildVoiceTurnPrompt treats event cues as room context", () => {
   const prompt = buildVoiceTurnPrompt({
     speakerName: "alice",
     inputKind: "event",
-    transcript: "[alice joined the voice channel]"
+    transcript: "[alice joined the voice channel]",
+    runtimeEventContext: {
+      category: "membership",
+      eventType: "join",
+      actorUserId: "user-1",
+      actorDisplayName: "alice",
+      actorRole: "other"
+    }
   });
 
   assert.equal(
@@ -17,10 +24,56 @@ test("buildVoiceTurnPrompt treats event cues as room context", () => {
   );
   assert.equal(
     prompt.includes(
-      "If a brief acknowledgement of the join/leave would feel natural, you may reply briefly. Otherwise use [SKIP]."
+      "If a brief acknowledgement of the join would feel natural, you may reply briefly. Otherwise use [SKIP]."
     ),
     true
   );
+});
+
+test("buildVoiceTurnPrompt treats structured self-join events as the bot's own arrival", () => {
+  const prompt = buildVoiceTurnPrompt({
+    speakerName: "clanker conk",
+    inputKind: "event",
+    transcript: "[YOU joined the voice channel]",
+    runtimeEventContext: {
+      category: "membership",
+      eventType: "join",
+      actorUserId: "bot-1",
+      actorDisplayName: "clanker conk",
+      actorRole: "self"
+    }
+  });
+
+  assert.equal(prompt.includes("Voice runtime event cue: you joined the voice channel."), true);
+  assert.equal(prompt.includes("Structured event type: membership.join."), true);
+  assert.equal(
+    prompt.includes(
+      "If you just entered the channel and a quick hello would feel natural, you may reply briefly. Otherwise use [SKIP]."
+    ),
+    true
+  );
+});
+
+test("buildVoiceTurnPrompt uses structured screen-share event context instead of generic room-event guidance", () => {
+  const prompt = buildVoiceTurnPrompt({
+    speakerName: "alice",
+    inputKind: "event",
+    transcript: "[alice started screen sharing. You can see the latest frame.]",
+    runtimeEventContext: {
+      category: "screen_share",
+      eventType: "share_start",
+      actorUserId: "user-1",
+      actorDisplayName: "alice",
+      actorRole: "other",
+      hasVisibleFrame: true
+    }
+  });
+
+  assert.equal(prompt.includes("Voice runtime event cue: alice started screen sharing."), true);
+  assert.equal(prompt.includes("Structured event type: screen_share.share_start."), true);
+  assert.equal(prompt.includes("A visible screen frame is attached for this event."), true);
+  assert.equal(prompt.includes("This is a screen-share state cue, not a spoken request."), true);
+  assert.equal(prompt.includes("If a brief acknowledgement of the join/leave would feel natural"), false);
 });
 
 test("buildVoiceTurnPrompt biases low-information eager turns toward skip", () => {
@@ -28,7 +81,7 @@ test("buildVoiceTurnPrompt biases low-information eager turns toward skip", () =
     speakerName: "alice",
     transcript: "haha",
     isEagerTurn: true,
-    voiceEagerness: 50
+    voiceAmbientReplyEagerness: 50
   });
 
   assert.equal(
@@ -97,6 +150,41 @@ test("buildVoiceTurnPrompt explains screen-share tool usage when link offers are
   assert.equal(prompt.includes("offer_screen_share_link"), true);
   assert.equal(prompt.includes("watch their screen"), true);
   assert.equal(prompt.includes("voice JSON contract"), false);
+});
+
+test("buildVoiceTurnPrompt keeps active-music pass-through replies short by default", () => {
+  const prompt = buildVoiceTurnPrompt({
+    speakerName: "alice",
+    transcript: "yo do you like minecraft",
+    musicContext: {
+      playbackState: "playing",
+      replyHandoffMode: null,
+      currentTrack: {
+        id: "track-1",
+        title: "Subwoofer Lullaby",
+        artists: ["C418"]
+      },
+      lastTrack: null,
+      queueLength: 1,
+      upcomingTracks: [],
+      lastAction: "play_now",
+      lastQuery: "minecraft music"
+    },
+    allowVoiceToolCalls: true
+  });
+
+  assert.equal(
+    prompt.includes("If you answer without a pause/duck handoff, keep it brief by default: usually one or two short sentences."),
+    true
+  );
+  assert.equal(
+    prompt.includes("If you want to say more than a quick reaction while music is playing, call music_reply_handoff with mode=duck or mode=pause first."),
+    true
+  );
+  assert.equal(
+    prompt.includes("If music is currently playing and you have not claimed the floor with music_reply_handoff, keep spoken replies short by default."),
+    true
+  );
 });
 
 test("buildVoiceTurnPrompt prefers tool calls over stale helper fields", () => {
@@ -246,6 +334,45 @@ test("buildVoiceTurnPrompt includes interruption recovery context for the next t
   assert.equal(prompt.includes("Do not mechanically continue the old answer if the new turn changes direction."), true);
 });
 
+test("buildVoiceTurnPrompt keeps soft addressing guesses out of the prompt", () => {
+  const prompt = buildVoiceTurnPrompt({
+    speakerName: "alice",
+    transcript: "can you queue that up",
+    conversationContext: {
+      engagementState: "engaged",
+      engaged: true,
+      engagedWithCurrentSpeaker: true,
+      recentAssistantReply: true,
+      recentDirectAddress: true,
+      sameAsRecentDirectAddress: true,
+      msSinceAssistantReply: 900,
+      msSinceDirectAddress: 900,
+      voiceAddressingState: {
+        currentSpeakerTarget: "ME",
+        currentSpeakerDirectedConfidence: 0.91,
+        lastDirectedToMe: {
+          speakerName: "alice",
+          directedConfidence: 0.91,
+          ageMs: 900
+        },
+        recentAddressingGuesses: [
+          {
+            speakerName: "alice",
+            talkingTo: "ME",
+            directedConfidence: 0.91,
+            ageMs: 900
+          }
+        ]
+      }
+    }
+  });
+
+  assert.equal(prompt.includes("Conversational addressing state"), false);
+  assert.equal(prompt.includes("Current speaker likely talking to"), false);
+  assert.equal(prompt.includes("Recent addressing guesses"), false);
+  assert.equal(prompt.includes("Last turn directed to you"), false);
+});
+
 test("buildVoiceTurnPrompt teaches inline soundboard directives when ordered soundboard sequencing is available", () => {
   const prompt = buildVoiceTurnPrompt({
     speakerName: "alice",
@@ -256,8 +383,10 @@ test("buildVoiceTurnPrompt teaches inline soundboard directives when ordered sou
     soundboardEagerness: 82
   });
 
-  assert.equal(prompt.includes("Discord soundboard tendency: 82/100"), true);
+  assert.equal(prompt.includes("Soundboard eagerness: 82/100"), true);
   assert.equal(prompt.includes("playful soundboard bits and comedic punctuation"), true);
+  assert.equal(prompt.includes("[[TO:SPEAKER]]"), true);
+  assert.equal(prompt.includes("[[TO:ALL]]"), true);
   assert.equal(prompt.includes("[[SOUNDBOARD:<ref>]]"), true);
   assert.equal(prompt.includes("inline and tool-call the same sound"), true);
 });

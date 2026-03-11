@@ -1256,6 +1256,8 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
     STREAM_WATCH_BRAIN_CONTEXT_LINE_MAX_CHARS
   );
   const triggerReason = firstFrameTriggered ? "share_start" : sceneChanged ? "scene_changed" : "silence";
+  const normalizedStreamerUserId = String(streamerUserId || "").trim() || null;
+  const botUserId = String(manager.client.user?.id || "").trim() || null;
   const transcript =
     triggerReason === "share_start"
       ? `[${speakerName} started screen sharing. You can see the latest frame.]`
@@ -1274,7 +1276,20 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
     inputKind: "event",
     directAddressed: false,
     source: `stream_watch_brain_turn:${triggerReason}`,
-    frozenFrameSnapshot
+    frozenFrameSnapshot,
+    runtimeEventContext: {
+      category: "screen_share",
+      eventType: triggerReason,
+      actorUserId: normalizedStreamerUserId,
+      actorDisplayName: speakerName,
+      actorRole:
+        normalizedStreamerUserId && botUserId && normalizedStreamerUserId === botUserId
+          ? "self"
+          : normalizedStreamerUserId
+            ? "other"
+            : "unknown",
+      hasVisibleFrame: true
+    }
   }).catch((error: unknown) => {
     manager.store.logAction({
       kind: "voice_error",

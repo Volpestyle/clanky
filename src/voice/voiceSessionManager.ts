@@ -74,7 +74,9 @@ import {
   encodePcm16MonoAsWav,
   formatVoiceChannelEffectSummary,
   isRealtimeMode,
+  normalizeVoiceRuntimeEventContext,
   normalizeInlineText,
+  normalizeVoiceAddressingTargetToken,
   normalizeVoiceText,
   parseSoundboardDirectiveSequence,
   shortError
@@ -133,6 +135,7 @@ import {
 } from "./systemSpeechOpportunity.ts";
 import { runVoiceReplyPipeline } from "./voiceReplyPipeline.ts";
 import { requestJoin } from "./voiceJoinFlow.ts";
+import { ASSISTANT_OUTPUT_PHASE } from "./assistantOutputState.ts";
 import {
   buildVoiceConversationContext as buildVoiceConversationContextModule,
   evaluateVoiceReplyDecision as evaluateVoiceReplyDecisionModule
@@ -146,14 +149,17 @@ import {
   BOT_TURN_DEFERRED_FLUSH_DELAY_MS,
   BOT_TURN_DEFERRED_QUEUE_MAX,
   BOT_TURN_SILENCE_RESET_MS,
+  INTERRUPTED_REALTIME_OUTPUT_IGNORE_TTL_MS,
   LEAVE_DIRECTIVE_PLAYBACK_MAX_WAIT_MS,
   LEAVE_DIRECTIVE_PLAYBACK_NO_SIGNAL_GRACE_MS,
   LEAVE_DIRECTIVE_PLAYBACK_POLL_MS,
   LEAVE_DIRECTIVE_REALTIME_AUDIO_START_WAIT_MS,
+  ORDERED_REALTIME_PLAYBACK_BARRIER_MAX_WAIT_MS,
   OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS,
   OPENAI_TOOL_RESPONSE_DEBOUNCE_MS,
   REALTIME_ASSISTANT_TTS_BACKPRESSURE_PAUSE_SAMPLES,
   REALTIME_ASSISTANT_TTS_BACKPRESSURE_RESUME_SAMPLES,
+  RECENT_ENGAGEMENT_WINDOW_MS,
   SPEAKING_END_ADAPTIVE_BUSY_BACKLOG,
   SPEAKING_END_ADAPTIVE_BUSY_CAPTURE_COUNT,
   SPEAKING_END_ADAPTIVE_BUSY_SCALE,
@@ -205,6 +211,9 @@ import type {
   LoggedVoicePromptBundle,
   OutputChannelState,
   RealtimeToolOwnership,
+  SupersededPrePlaybackReply,
+  VoiceRuntimeEventContext,
+  VoiceQueuedRealtimeAssistantUtterance,
   VoiceSession
 } from "./voiceSessionTypes.ts";
 import {
@@ -399,6 +408,7 @@ type VoiceReplyDecision = {
   classifierConfidence?: number | null;
   classifierTarget?: string | null;
   classifierReason?: string | null;
+  runtimeEventContext?: VoiceRuntimeEventContext | null;
   replyPrompts?: LoggedVoicePromptBundle | null;
 };
 
@@ -995,6 +1005,7 @@ export class VoiceSessionManager {
 
   getMusicPromptContext(session): {
     playbackState: "playing" | "paused" | "stopped" | "idle";
+    replyHandoffMode: "duck" | "pause" | null;
     currentTrack: { id: string | null; title: string; artists: string[] } | null;
     lastTrack: { id: string | null; title: string; artists: string[] } | null;
     queueLength: number;
@@ -1037,6 +1048,18 @@ export class VoiceSessionManager {
 
   clearBotSpeechMusicUnduckTimer(session) {
     return clearBotSpeechMusicUnduckTimerRuntime(this, session);
+  }
+
+  schedulePassiveMusicWakeLatchRefresh({
+    session,
+    settings = null,
+    userId = null
+  }) {
+    this.replyManager.schedulePassiveMusicWakeLatchRefresh(
+      session,
+      settings || session?.settingsSnapshot || this.store.getSettings(),
+      userId
+    );
   }
 
   async engageBotSpeechMusicDuck(session, settings = null, { awaitFade = false } = {}) {
@@ -1356,6 +1379,7 @@ export class VoiceSessionManager {
     pcmBuffer,
     captureReason = "stream_end",
     source = "voice_turn",
+    musicWakeFollowupEligibleAtCapture = false,
     transcript = undefined as string | undefined
   }) {
     return await maybeHandleMusicPlaybackTurnRuntime(this, {
@@ -1365,6 +1389,7 @@ export class VoiceSessionManager {
       pcmBuffer,
       captureReason,
       source,
+      musicWakeFollowupEligibleAtCapture,
       transcript
     });
   }
@@ -1550,6 +1575,18 @@ export class VoiceSessionManager {
           ? "anyone"
           : "speaker";
     const allowedUserId = String(policy.allowedUserId || "").trim() || null;
+    const talkingTo = normalizeVoiceAddressingTargetToken(policy.talkingTo || "") || null;
+    const source =
+      String(policy.source || "")
+        .replace(/\s+/g, "_")
+        .trim()
+        .toLowerCase()
+        .slice(0, 48) || null;
+    const reason =
+      String(policy.reason || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 140) || null;
     const assertive =
       policy.assertive === undefined
         ? scope !== "speaker" || Boolean(allowedUserId)
@@ -1561,7 +1598,72 @@ export class VoiceSessionManager {
       assertive: true as const,
       scope,
       allowedUserId: scope === "speaker" ? allowedUserId : null,
+      ...(talkingTo ? { talkingTo } : {}),
+      ...(source ? { source } : {}),
+      ...(reason ? { reason } : {})
     };
+  }
+
+  normalizeVoiceParticipantLookupKey(value = "") {
+    return String(value || "")
+      .trim()
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/\p{M}+/gu, "")
+      .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120);
+  }
+
+  resolveReplyInterruptionTargetUserId({
+    session = null,
+    userId = null,
+    talkingTo = null
+  } = {}) {
+    if (!session || session.ending) return null;
+
+    const normalizedTarget = normalizeVoiceAddressingTargetToken(talkingTo || "");
+    if (!normalizedTarget || normalizedTarget === "ALL") return null;
+    const normalizedUserId = String(userId || "").trim() || null;
+    const normalizedBotUserId = String(this.client.user?.id || "").trim() || null;
+    if (
+      (normalizedTarget.toUpperCase() === "ME" || normalizedTarget.toUpperCase() === "SPEAKER") &&
+      normalizedUserId &&
+      (!normalizedBotUserId || normalizedUserId !== normalizedBotUserId)
+    ) {
+      return normalizedUserId;
+    }
+
+    const normalizedTargetLookup = this.normalizeVoiceParticipantLookupKey(normalizedTarget);
+    if (!normalizedTargetLookup) return null;
+    const speakerName = normalizedUserId ? this.resolveVoiceSpeakerName(session, normalizedUserId) : "";
+    if (
+      normalizedUserId &&
+      this.normalizeVoiceParticipantLookupKey(speakerName) === normalizedTargetLookup &&
+      (!normalizedBotUserId || normalizedUserId !== normalizedBotUserId)
+    ) {
+      return normalizedUserId;
+    }
+
+    const participants = this.getVoiceChannelParticipants(session)
+      .filter((participant) => {
+        const participantUserId = String(participant?.userId || "").trim();
+        if (!participantUserId) return false;
+        if (normalizedBotUserId && participantUserId === normalizedBotUserId) return false;
+        return this.normalizeVoiceParticipantLookupKey(participant?.displayName || "") === normalizedTargetLookup;
+      });
+    if (participants.length === 1) {
+      return String(participants[0]?.userId || "").trim() || null;
+    }
+    if (participants.length > 1 && normalizedUserId) {
+      const speakerMatch = participants.find((participant) => participant.userId === normalizedUserId);
+      if (speakerMatch) {
+        return String(speakerMatch.userId || "").trim() || null;
+      }
+    }
+
+    return null;
   }
 
   getDefaultReplyInterruptionMode(settings = null) {
@@ -1581,6 +1683,9 @@ export class VoiceSessionManager {
     session = null,
     userId = null,
     policy = null,
+    talkingTo = null,
+    source = null,
+    reason = null
   } = {}) {
     const normalizedPolicy = this.normalizeReplyInterruptionPolicy(policy);
     if (normalizedPolicy) return normalizedPolicy;
@@ -1589,10 +1694,86 @@ export class VoiceSessionManager {
     const defaultMode = this.getDefaultReplyInterruptionMode(session.settingsSnapshot || this.store.getSettings());
     const normalizedUserId = String(userId || "").trim() || null;
     const normalizedBotUserId = String(this.client.user?.id || "").trim() || null;
+    const normalizedTalkingTo = normalizeVoiceAddressingTargetToken(talkingTo || "") || null;
+    const effectiveTalkingTo =
+      normalizedTalkingTo &&
+      (normalizedTalkingTo.toUpperCase() === "ME" || normalizedTalkingTo.toUpperCase() === "SPEAKER")
+        ? this.resolveVoiceSpeakerName(session, normalizedUserId) || normalizedTalkingTo
+        : normalizedTalkingTo;
+
+    if (defaultMode === "none") {
+      return this.normalizeReplyInterruptionPolicy({
+        assertive: true,
+        scope: "none",
+        allowedUserId: null,
+        ...(effectiveTalkingTo ? { talkingTo: effectiveTalkingTo } : {}),
+        ...(source ? { source } : {}),
+        ...(reason ? { reason } : {})
+      });
+    }
+
+    if (defaultMode === "anyone") {
+      return this.normalizeReplyInterruptionPolicy({
+        assertive: true,
+        scope: "anyone",
+        allowedUserId: null,
+        ...(effectiveTalkingTo ? { talkingTo: effectiveTalkingTo } : {}),
+        ...(source ? { source } : {}),
+        ...(reason ? { reason } : {})
+      });
+    }
+
+    if (!effectiveTalkingTo && source === "assistant_reply_target") {
+      return this.normalizeReplyInterruptionPolicy({
+        assertive: true,
+        scope: "none",
+        allowedUserId: null,
+        source,
+        reason: reason || "assistant_target_missing"
+      });
+    }
+
+    if (effectiveTalkingTo === "ALL") {
+      return this.normalizeReplyInterruptionPolicy({
+        assertive: true,
+        scope: "none",
+        allowedUserId: null,
+        talkingTo: effectiveTalkingTo,
+        source,
+        reason: reason || "assistant_target_all"
+      });
+    }
+
+    if (effectiveTalkingTo) {
+      const resolvedTargetUserId = this.resolveReplyInterruptionTargetUserId({
+        session,
+        userId: normalizedUserId,
+        talkingTo: effectiveTalkingTo
+      });
+      if (!resolvedTargetUserId || (normalizedBotUserId && resolvedTargetUserId === normalizedBotUserId)) {
+        return this.normalizeReplyInterruptionPolicy({
+          assertive: true,
+          scope: "none",
+          allowedUserId: null,
+          talkingTo: effectiveTalkingTo,
+          source,
+          reason: reason || "assistant_target_unresolved"
+        });
+      }
+
+      return this.normalizeReplyInterruptionPolicy({
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: resolvedTargetUserId,
+        talkingTo: effectiveTalkingTo,
+        source,
+        reason: reason || "assistant_target_speaker"
+      });
+    }
+
     // "speaker" only becomes interruptible when the reply is actually tied to a
     // specific non-bot user. Untargeted replies intentionally stay closed.
     if (
-      defaultMode === "speaker" &&
       (!normalizedUserId || (normalizedBotUserId && normalizedUserId === normalizedBotUserId))
     ) {
       return null;
@@ -1600,8 +1781,10 @@ export class VoiceSessionManager {
 
     return this.normalizeReplyInterruptionPolicy({
       assertive: true,
-      scope: defaultMode,
-      allowedUserId: defaultMode === "speaker" ? normalizedUserId : null,
+      scope: "speaker",
+      allowedUserId: normalizedUserId,
+      ...(source ? { source } : {}),
+      ...(reason ? { reason } : {})
     });
   }
 
@@ -1617,6 +1800,33 @@ export class VoiceSessionManager {
     const normalizedUserId = String(userId || "").trim();
     if (!normalizedUserId) return false;
     return normalizedUserId === String(normalizedPolicy.allowedUserId || "");
+  }
+
+  shouldDirectAddressedTurnInterruptReply({
+    session = null,
+    directAddressed = false,
+    policy = null
+  } = {}) {
+    if (!session || session.ending || !directAddressed) return false;
+    const normalizedPolicy = this.normalizeReplyInterruptionPolicy(
+      policy ||
+      session.pendingResponse?.interruptionPolicy ||
+      session.activeReplyInterruptionPolicy ||
+      null
+    );
+    if (normalizedPolicy?.scope === "none") {
+      const defaultMode = this.getDefaultReplyInterruptionMode(session.settingsSnapshot || this.store.getSettings());
+      const normalizedReason = String(normalizedPolicy.reason || "").trim().toLowerCase();
+      const isSpeakerScopedTargetClosure =
+        defaultMode === "speaker" &&
+        (normalizedReason === "assistant_target_all" || normalizedReason === "assistant_target_unresolved");
+      if (!isSpeakerScopedTargetClosure) return false;
+    }
+    if (normalizedPolicy?.scope === "speaker" || normalizedPolicy?.scope === "anyone") {
+      return true;
+    }
+    const defaultMode = this.getDefaultReplyInterruptionMode(session.settingsSnapshot || this.store.getSettings());
+    return defaultMode === "speaker" || defaultMode === "anyone";
   }
 
   setActiveReplyInterruptionPolicy(session, policy = null) {
@@ -1700,6 +1910,19 @@ export class VoiceSessionManager {
     return this.bargeInController.isCaptureSignalAssertive(capture);
   }
 
+  isCaptureEligibleForPrePlaybackSupersede({ session, capture }) {
+    if (!session || !capture || typeof capture !== "object") return false;
+    if (!this.hasCaptureBeenPromoted(capture)) return false;
+    const promotionReason = String(capture.promotionReason || "").trim();
+    if (
+      promotionReason === "strong_local_audio" &&
+      !this.hasCaptureServerVadSpeech({ session, capture })
+    ) {
+      return false;
+    }
+    return true;
+  }
+
   isCaptureBlockingDeferredTurnFlush({ session, capture }) {
     if (!session || !capture || typeof capture !== "object") return false;
     const bytesSent = Math.max(0, Number(capture.bytesSent || 0));
@@ -1723,9 +1946,195 @@ export class VoiceSessionManager {
     return false;
   }
 
+  resolvePrePlaybackSupersedeInterruptionPolicy({
+    session = null,
+    pendingResponse = null,
+    inFlightTurn = null
+  } = {}) {
+    const pendingPolicy =
+      pendingResponse && typeof pendingResponse === "object"
+        ? pendingResponse.interruptionPolicy || null
+        : null;
+    const activePolicy = session?.activeReplyInterruptionPolicy || null;
+    if (pendingPolicy || activePolicy) {
+      return this.normalizeReplyInterruptionPolicy(pendingPolicy || activePolicy);
+    }
+    if (!session || session.ending || !inFlightTurn || typeof inFlightTurn !== "object") {
+      return null;
+    }
+    if (inFlightTurn.interruptionPolicy) {
+      return this.normalizeReplyInterruptionPolicy(inFlightTurn.interruptionPolicy);
+    }
+    return this.resolveReplyInterruptionPolicy({
+      session,
+      userId: inFlightTurn.userId || null,
+      source: String(inFlightTurn.source || "").trim() || null
+    });
+  }
+
+  stashSupersededPrePlaybackReply({
+    session = null,
+    inFlightTurn = null,
+    interruptionPolicy = null,
+    supersededAt = Date.now(),
+    supersededByUserId = null,
+    supersededBySource = "capture_promoted"
+  } = {}) {
+    if (!session || session.ending || !inFlightTurn || typeof inFlightTurn !== "object") return false;
+    const normalizedTranscript = normalizeVoiceText(inFlightTurn.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedTranscript) return false;
+    const stash: SupersededPrePlaybackReply = {
+      userId: String(inFlightTurn.userId || "").trim() || null,
+      transcript: normalizedTranscript,
+      pcmBuffer: inFlightTurn.pcmBuffer?.length ? inFlightTurn.pcmBuffer : null,
+      source: String(inFlightTurn.source || "preplay_supersede_recovery").trim() || "preplay_supersede_recovery",
+      captureReason: String(inFlightTurn.captureReason || "stream_end").trim() || "stream_end",
+      directAddressed: Boolean(inFlightTurn.directAddressed),
+      queuedAt: Math.max(0, Number(inFlightTurn.acceptedAt || supersededAt)) || supersededAt,
+      interruptionPolicy: this.normalizeReplyInterruptionPolicy(
+        interruptionPolicy || inFlightTurn.interruptionPolicy || null
+      ),
+      supersededAt: Math.max(0, Number(supersededAt || Date.now())) || Date.now(),
+      supersededByUserId: String(supersededByUserId || "").trim() || null,
+      supersededBySource: String(supersededBySource || "capture_promoted").trim() || "capture_promoted"
+    };
+    session.supersededPrePlaybackReply = stash;
+    return true;
+  }
+
+  recoverSupersededPrePlaybackReply({
+    session = null,
+    reason = "preplay_recovery",
+    userId = null
+  } = {}) {
+    if (!session || session.ending) return false;
+    const stashed =
+      session.supersededPrePlaybackReply && typeof session.supersededPrePlaybackReply === "object"
+        ? session.supersededPrePlaybackReply
+        : null;
+    if (!stashed) return false;
+
+    this.queueDeferredBotTurnOpenTurn({
+      session,
+      userId: stashed.userId,
+      transcript: stashed.transcript,
+      pcmBuffer: stashed.pcmBuffer,
+      captureReason: stashed.captureReason || "stream_end",
+      source: stashed.source || "preplay_supersede_recovery",
+      directAddressed: Boolean(stashed.directAddressed),
+      deferReason: "preplay_supersede_recover",
+      flushDelayMs: null
+    });
+    this.activeReplies?.clearAbortCutoff(buildVoiceReplyScopeKey(session.id));
+    session.supersededPrePlaybackReply = null;
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: userId || null,
+      content: "voice_preplay_reply_recovered",
+      metadata: {
+        sessionId: session.id,
+        reason: String(reason || "preplay_recovery"),
+        recoveredSource: stashed.source,
+        recoveredUserId: stashed.userId,
+        supersededAt: stashed.supersededAt,
+        supersededByUserId: stashed.supersededByUserId,
+        supersededBySource: stashed.supersededBySource
+      }
+    });
+    return true;
+  }
+
+  recoverInterruptedAssistantReply({
+    session = null,
+    reason = "interrupted_reply_recovery",
+    userId = null
+  } = {}) {
+    if (!session || session.ending) return false;
+    if (!isRealtimeMode(session.mode)) return false;
+    const interrupted =
+      session.interruptedAssistantReply && typeof session.interruptedAssistantReply === "object"
+        ? session.interruptedAssistantReply
+        : null;
+    if (!interrupted) return false;
+
+    const normalizedUserId = String(userId || "").trim() || null;
+    const interruptedByUserId = String(interrupted.interruptedByUserId || "").trim() || null;
+    if (!normalizedUserId || !interruptedByUserId || normalizedUserId !== interruptedByUserId) {
+      return false;
+    }
+
+    const interruptedAt = Math.max(0, Number(interrupted.interruptedAt || 0));
+    if (!interruptedAt) return false;
+    if (Date.now() - interruptedAt > RECENT_ENGAGEMENT_WINDOW_MS) return false;
+    if (Math.max(0, Number(session.lastAssistantReplyAt || 0)) > interruptedAt) return false;
+
+    const utteranceText = normalizeVoiceText(interrupted.utteranceText || "", STT_REPLY_MAX_CHARS);
+    if (!utteranceText) return false;
+
+    const requested = this.requestRealtimeTextUtterance({
+      session,
+      text: utteranceText,
+      userId: interruptedByUserId,
+      source: "interrupted_reply_recovery",
+      interruptionPolicy: interrupted.interruptionPolicy || null
+    });
+    if (!requested) return false;
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: normalizedUserId,
+      content: "voice_interrupted_reply_recovered",
+      metadata: {
+        sessionId: session.id,
+        reason: String(reason || "interrupted_reply_recovery"),
+        interruptedAt,
+        interruptedByUserId,
+        recoveredSource: String(interrupted.source || "").trim() || null,
+        utteranceLength: utteranceText.length
+      }
+    });
+    return true;
+  }
+
+  discardSupersededPrePlaybackReply({
+    session = null,
+    reason = "new_turn_accepted",
+    userId = null
+  } = {}) {
+    if (!session || session.ending) return false;
+    const stashed =
+      session.supersededPrePlaybackReply && typeof session.supersededPrePlaybackReply === "object"
+        ? session.supersededPrePlaybackReply
+        : null;
+    if (!stashed) return false;
+    session.supersededPrePlaybackReply = null;
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: userId || null,
+      content: "voice_preplay_reply_discarded",
+      metadata: {
+        sessionId: session.id,
+        reason: String(reason || "new_turn_accepted"),
+        discardedSource: stashed.source,
+        discardedUserId: stashed.userId,
+        supersededAt: stashed.supersededAt,
+        supersededByUserId: stashed.supersededByUserId,
+        supersededBySource: stashed.supersededBySource
+      }
+    });
+    return true;
+  }
+
   summarizeRealtimeInterruptingLiveCaptures({
     session = null,
-    promotedAfterMs = 0
+    promotedAfterMs = 0,
+    interruptionPolicy = null
   } = {}) {
     if (!session || !(session.userCaptures instanceof Map) || session.userCaptures.size <= 0) {
       return {
@@ -1736,13 +2145,24 @@ export class VoiceSessionManager {
     }
 
     const promotedAfter = Math.max(0, Number(promotedAfterMs || 0));
+    const normalizedInterruptionPolicy = this.normalizeReplyInterruptionPolicy(interruptionPolicy);
     let livePromotedCaptureCount = 0;
     let oldestPromotedAt = Number.POSITIVE_INFINITY;
     let newestPromotedAt = 0;
 
-    for (const capture of session.userCaptures.values()) {
-      if (!this.hasCaptureBeenPromoted(capture)) continue;
+    for (const [captureUserId, capture] of session.userCaptures.entries()) {
+      if (!this.isCaptureEligibleForPrePlaybackSupersede({ session, capture })) continue;
       if (!this.isCaptureConfirmedLiveSpeech({ session, capture })) continue;
+      const normalizedCaptureUserId = String(capture?.userId || captureUserId || "").trim();
+      if (
+        normalizedInterruptionPolicy &&
+        !this.isUserAllowedToInterruptReply({
+          policy: normalizedInterruptionPolicy,
+          userId: normalizedCaptureUserId
+        })
+      ) {
+        continue;
+      }
       const promotedAt = Math.max(0, Number(capture?.promotedAt || capture?.startedAt || 0));
       if (promotedAfter > 0 && promotedAt > 0 && promotedAt <= promotedAfter) {
         continue;
@@ -1787,8 +2207,25 @@ export class VoiceSessionManager {
       Boolean(session.botTurnOpen) ||
       this.replyManager.hasBufferedTtsPlayback(session);
     if ((!pending && !hadActiveReply) || outputAlreadyStarted) return false;
+    if (!this.isCaptureEligibleForPrePlaybackSupersede({ session, capture: captureState })) {
+      return false;
+    }
 
     const signal = this.bargeInController.getCaptureSignalMetrics(captureState);
+    const inFlight = session.inFlightAcceptedBrainTurn;
+    const prePlaybackInterruptionPolicy = this.resolvePrePlaybackSupersedeInterruptionPolicy({
+      session,
+      pendingResponse: pending,
+      inFlightTurn: inFlight
+    });
+    if (
+      !this.isUserAllowedToInterruptReply({
+        policy: prePlaybackInterruptionPolicy,
+        userId
+      })
+    ) {
+      return false;
+    }
     const cancelTelemetry = pending
       ? this.cancelRealtimeResponseForBargeIn(session)
       : {
@@ -1813,54 +2250,48 @@ export class VoiceSessionManager {
     }
     this.maybeClearActiveReplyInterruptionPolicy(session);
 
-    // Check if the aborted generation was still in a safe-to-requeue phase.
-    // Only requeue when no tool side effects have started (phase is
-    // generation_only). The stash is read synchronously before the pipeline's
-    // finally-block clears it on the next microtick.
-    const inFlight = session.inFlightAcceptedBrainTurn;
+    // Check if the aborted generation was still in a safe-to-recover phase.
+    // Generation-only turns are always safe. Tool-phase turns are only safe
+    // when the brain tool loop marked them replay-safe after observing a
+    // non-side-effecting tool result (for example read-only lookups or music
+    // disambiguation before playback starts). The stash is read synchronously
+    // before the pipeline's finally-block clears it on the next microtick.
     const inFlightPhase = inFlight?.phase || null;
     const inFlightAge = inFlight ? now - Math.max(0, Number(inFlight.acceptedAt || 0)) : 0;
-    // Don't re-requeue turns that already came from a deferred flush — they've
+    const inFlightToolRecoveryEligible = inFlight?.toolPhaseRecoveryEligible === true;
+    const inFlightToolRecoveryReason =
+      String(inFlight?.toolPhaseRecoveryReason || "").trim() || null;
+    const inFlightToolLastToolName =
+      String(inFlight?.toolPhaseLastToolName || "").trim() || null;
+    // Don't restash turns that already came from a deferred flush — they've
     // had their chance and the transcript is already in the conversation window.
-    // Requeuing them again creates zombie turns that race with new speech.
+    // Stashing them again creates zombie turns that race with new speech.
     const alreadyFromDeferredFlush =
       String(inFlight?.source || "").includes("deferred_flush");
-    // Don't requeue bot-initiated events (join greetings, etc.) — these are
-    // synthetic triggers, not real user speech. When the user speaks over a
-    // greeting, the greeting is stale and should be dropped, not replayed.
-    const BOT_EVENT_SOURCES = new Set(["bot_join_greeting", "member_join_greeting"]);
-    const normalizedInFlightSource = String(inFlight?.source || "").trim();
-    const isBotInitiatedEvent =
-      BOT_EVENT_SOURCES.has(normalizedInFlightSource) ||
-      isSystemSpeechOpportunitySource(normalizedInFlightSource);
-    const requeueEligible =
+    const inFlightRecoverable =
+      inFlightPhase === "generation_only" ||
+      (inFlightPhase === "tool_call_started" && inFlightToolRecoveryEligible);
+    const stashEligible =
       activeReplyAbortCount > 0 &&
       inFlight &&
-      inFlightPhase === "generation_only" &&
+      inFlightRecoverable &&
       inFlightAge < PREPLAY_SUPERSEDE_REQUEUE_MAX_AGE_MS &&
       Boolean(inFlight.transcript) &&
-      !alreadyFromDeferredFlush &&
-      !isBotInitiatedEvent;
-    let requeued = false;
-    if (requeueEligible && inFlight) {
-      this.queueDeferredBotTurnOpenTurn({
+      !alreadyFromDeferredFlush;
+    let stashedForRecovery = false;
+    if (stashEligible && inFlight) {
+      stashedForRecovery = this.stashSupersededPrePlaybackReply({
         session,
-        userId: inFlight.userId,
-        transcript: inFlight.transcript,
-        pcmBuffer: inFlight.pcmBuffer,
-        captureReason: inFlight.captureReason || "stream_end",
-        source: inFlight.source || "preplay_supersede_requeue",
-        directAddressed: Boolean(inFlight.directAddressed),
-        deferReason: "preplay_supersede_requeue",
-        flushDelayMs: null
+        inFlightTurn: inFlight,
+        interruptionPolicy: prePlaybackInterruptionPolicy,
+        supersededAt: now,
+        supersededByUserId: userId,
+        supersededBySource: source
       });
-      requeued = true;
-      // The abortAll above set a cutoff that would mark the requeued turn as
-      // stale (monotonic timestamp >= Date.now). Reset it so the new deferred
-      // turn is accepted by flushDeferredBotTurnOpenTurns.
-      this.activeReplies?.clearAbortCutoff(voiceReplyScopeKey);
-      // Eagerly clear the stash so the pipeline's finally-block is a no-op.
-      session.inFlightAcceptedBrainTurn = null;
+      if (stashedForRecovery) {
+        // Eagerly clear the stash so the pipeline's finally-block is a no-op.
+        session.inFlightAcceptedBrainTurn = null;
+      }
     }
 
     this.store.logAction({
@@ -1880,7 +2311,10 @@ export class VoiceSessionManager {
         activeReplyAbortCount,
         inFlightPhase,
         inFlightAgeMs: inFlightAge || null,
-        requeued,
+        inFlightToolRecoveryEligible,
+        inFlightToolRecoveryReason,
+        inFlightToolLastToolName,
+        stashedForRecovery,
         captureStartedAt: Math.max(0, Number(captureState?.startedAt || 0)) || null,
         capturePromotedAt: Math.max(0, Number(captureState?.promotedAt || now)) || null,
         captureBytes: Math.max(0, Number(captureState?.bytesSent || 0)),
@@ -2001,9 +2435,64 @@ export class VoiceSessionManager {
     return this.executeBargeInInterruptCommand({ session, command });
   }
 
+  interruptBotSpeechForDirectAddressedTurn({
+    session,
+    userId = null,
+    source = "direct_address_output_lock"
+  }) {
+    return this.interruptBotSpeechForOutputLockTurn({
+      session,
+      userId,
+      source,
+      logContent: "voice_direct_address_interrupt",
+      stateTrigger: "direct_address_interrupt"
+    });
+  }
+
+  interruptBotSpeechForOutputLockTurn({
+    session,
+    userId = null,
+    source = "output_lock_interrupt",
+    logContent = "voice_output_lock_interrupt",
+    stateTrigger = "output_lock_interrupt"
+  }) {
+    const command = this.bargeInController.buildInterruptBotSpeechForBargeInCommand({
+      session,
+      userId,
+      source,
+      minCaptureBytes: 0,
+      captureState: null
+    });
+    if (!command) return false;
+    return this.executeInterruptBotSpeechCommand({
+      session,
+      command,
+      logContent,
+      applyBargeInSuppression: false,
+      stateTrigger
+    });
+  }
+
   executeBargeInInterruptCommand({ session, command }) {
+    return this.executeInterruptBotSpeechCommand({
+      session,
+      command,
+      logContent: "voice_barge_in_interrupt",
+      applyBargeInSuppression: true,
+      stateTrigger: "barge_in_interrupt"
+    });
+  }
+
+  executeInterruptBotSpeechCommand({
+    session,
+    command,
+    logContent = "voice_barge_in_interrupt",
+    applyBargeInSuppression = true,
+    stateTrigger = "barge_in_interrupt"
+  }) {
     if (!session || session.ending || !command) return false;
     const cancelTelemetry = this.cancelRealtimeResponseForBargeIn(session);
+    this.clearPendingRealtimeAssistantUtterances(session, String(stateTrigger || "barge_in_interrupt"));
 
     this.replyManager.resetBotAudioPlayback(session);
     if (session.botTurnResetTimer) {
@@ -2012,9 +2501,9 @@ export class VoiceSessionManager {
     }
     session.botTurnOpen = false;
     session.botTurnOpenAt = 0;
-    this.replyManager.syncAssistantOutputState(session, "barge_in_interrupt");
+    this.replyManager.syncAssistantOutputState(session, String(stateTrigger || "barge_in_interrupt"));
 
-    // Unduck music immediately on barge-in so the user hears it while speaking.
+    // Unduck music immediately when speech is interrupted so the user hears the room state.
     const resolvedSettings = session.settingsSnapshot || this.store.getSettings();
     this.releaseBotSpeechMusicDuck(session, resolvedSettings, { force: true }).catch((error) => {
       this.store.logAction({
@@ -2025,7 +2514,7 @@ export class VoiceSessionManager {
         content: `voice_music_unduck_failed: ${String(error?.message || error)}`,
         metadata: {
           sessionId: session.id,
-          source: "barge_in_interrupt"
+          source: String(stateTrigger || "barge_in_interrupt")
         }
       });
     });
@@ -2036,21 +2525,47 @@ export class VoiceSessionManager {
     }
 
     const responseWasActuallyCancelled = Boolean(cancelTelemetry.responseCancelSucceeded);
+    const responseWasActuallyInterrupted =
+      responseWasActuallyCancelled ||
+      Boolean(cancelTelemetry.truncateSucceeded);
     const storeInterruptedAssistantReply =
-      responseWasActuallyCancelled &&
+      responseWasActuallyInterrupted &&
       Boolean(command.interruptedUtteranceText);
     session.interruptedAssistantReply = storeInterruptedAssistantReply
       ? {
         utteranceText: String(command.interruptedUtteranceText || ""),
         interruptedByUserId: command.userId,
         interruptedAt: command.now,
-        source: command.source
+        source: command.source,
+        interruptionPolicy: command.interruptionPolicy || null
       }
       : null;
+    const ignoredInterruptedOutputItemId =
+      cancelTelemetry.truncateSucceeded && cancelTelemetry.truncateItemId
+        ? String(cancelTelemetry.truncateItemId).trim()
+        : "";
+    if (ignoredInterruptedOutputItemId) {
+      const ignoredItems =
+        session.ignoredRealtimeAssistantOutputItemIds instanceof Map
+          ? session.ignoredRealtimeAssistantOutputItemIds
+          : new Map<string, number>();
+      session.ignoredRealtimeAssistantOutputItemIds = ignoredItems;
+      ignoredItems.set(ignoredInterruptedOutputItemId, command.now);
+      for (const [itemId, ignoredAt] of ignoredItems.entries()) {
+        if (
+          !itemId ||
+          command.now - Math.max(0, Number(ignoredAt || 0)) > INTERRUPTED_REALTIME_OUTPUT_IGNORE_TTL_MS
+        ) {
+          ignoredItems.delete(itemId);
+        }
+      }
+    }
 
-    session.bargeInSuppressionUntil = responseWasActuallyCancelled
-      ? command.now + BARGE_IN_SUPPRESSION_MAX_MS
-      : command.now + BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS;
+    session.bargeInSuppressionUntil = applyBargeInSuppression
+      ? responseWasActuallyCancelled
+        ? command.now + BARGE_IN_SUPPRESSION_MAX_MS
+        : command.now + BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS
+      : 0;
     session.bargeInSuppressedAudioChunks = 0;
     session.bargeInSuppressedAudioBytes = 0;
 
@@ -2059,19 +2574,25 @@ export class VoiceSessionManager {
       guildId: session.guildId,
       channelId: session.textChannelId,
       userId: command.userId,
-      content: "voice_barge_in_interrupt",
+      content: String(logContent || "voice_barge_in_interrupt"),
       metadata: {
         sessionId: session.id,
         source: command.source,
         streamBufferedBytesDropped: 0,
         pendingRequestId: command.pendingRequestId,
         minCaptureBytes: command.minCaptureBytes,
-        suppressionMs: responseWasActuallyCancelled ? BARGE_IN_SUPPRESSION_MAX_MS : BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS,
+        suppressionMs: applyBargeInSuppression
+          ? responseWasActuallyCancelled
+            ? BARGE_IN_SUPPRESSION_MAX_MS
+            : BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS
+          : 0,
+        bargeInSuppressionApplied: Boolean(applyBargeInSuppression),
         captureSignalPeak: command.captureSignalPeak,
         captureSignalActiveSampleRatio: command.captureSignalActiveSampleRatio,
         captureBytesSent: command.captureBytesSent,
         botTurnOpen: command.botTurnWasOpen,
         botTurnAgeMs: command.botTurnAgeMs,
+        ignoredInterruptedOutputItemId: ignoredInterruptedOutputItemId || null,
         storedInterruptionContext: storeInterruptedAssistantReply,
         interruptedUtteranceLength: command.interruptedUtteranceText?.length || 0,
         ...cancelTelemetry,
@@ -2313,6 +2834,66 @@ export class VoiceSessionManager {
     return session.pendingRealtimeAssistantUtterances;
   }
 
+  collapsePendingRealtimeAssistantStreamTail({
+    session,
+    source = "voice_reply"
+  }: {
+    session?: VoiceSession | null;
+    source?: string;
+  } = {}) {
+    if (!session || session.ending) return 0;
+    const normalizedSource = String(source || "").trim();
+    if (!normalizedSource) return 0;
+
+    const queue = this.getPendingRealtimeAssistantUtterances(session);
+    if (queue.length < 2) return 0;
+
+    const sourcePrefix = `${normalizedSource}:stream_chunk_`;
+    const lastEntry = queue[queue.length - 1];
+    if (!this.isCollapsibleQueuedStreamTailEntry(lastEntry, sourcePrefix)) {
+      return 0;
+    }
+
+    let tailStartIndex = queue.length - 1;
+    while (tailStartIndex > 0) {
+      const previousEntry = queue[tailStartIndex - 1];
+      const currentEntry = queue[tailStartIndex];
+      if (!this.canCollapseQueuedStreamTailEntries(previousEntry, currentEntry, sourcePrefix)) {
+        break;
+      }
+      tailStartIndex -= 1;
+    }
+
+    const tailEntries = queue.slice(tailStartIndex);
+    if (tailEntries.length < 2) return 0;
+
+    const mergedEntry = this.mergeQueuedRealtimeAssistantUtterances(tailEntries);
+    if (!mergedEntry) return 0;
+
+    queue.splice(tailStartIndex, tailEntries.length, mergedEntry);
+    this.syncRealtimeAssistantUtteranceBackpressure(session, {
+      queueDepth: queue.length,
+      source: mergedEntry.source,
+      trigger: "stream_completed_tail_collapse"
+    });
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.client.user?.id || null,
+      content: "realtime_assistant_utterance_tail_collapsed",
+      metadata: {
+        sessionId: session.id,
+        source: normalizedSource,
+        mergedTailCount: tailEntries.length,
+        collapsedChunkCount: tailEntries.length - 1,
+        queueDepth: queue.length,
+        utteranceChars: mergedEntry.utteranceText?.length || 0
+      }
+    });
+    return tailEntries.length - 1;
+  }
+
   syncRealtimeAssistantUtteranceBackpressure(
     session,
     {
@@ -2428,7 +3009,8 @@ export class VoiceSessionManager {
       source: next.source,
       interruptionPolicy: next.interruptionPolicy,
       latencyContext: next.latencyContext,
-      utteranceText: next.utteranceText
+      utteranceText: next.utteranceText,
+      musicWakeRefreshAfterSpeech: Boolean(next.musicWakeRefreshAfterSpeech)
     });
     if (!requested) {
       queue.unshift(next);
@@ -2451,6 +3033,61 @@ export class VoiceSessionManager {
     return true;
   }
 
+  async waitForOrderedRealtimePlaybackBarrier({
+    session,
+    source = "voice_reply"
+  }: {
+    session?: VoiceSession | null;
+    source?: string;
+  } = {}) {
+    if (!session || session.ending) return false;
+    if (!isRealtimeMode(session.mode)) return true;
+
+    const deadlineAt = Date.now() + ORDERED_REALTIME_PLAYBACK_BARRIER_MAX_WAIT_MS;
+    while (!session.ending) {
+      const queue = this.getPendingRealtimeAssistantUtterances(session);
+      const outputState = this.getOutputChannelState(session);
+      const backpressure = this.syncRealtimeAssistantUtteranceBackpressure(session, {
+        queueDepth: Math.max(1, queue.length + 1),
+        source,
+        trigger: "ordered_playback_barrier"
+      });
+      const ready =
+        queue.length === 0 &&
+        !outputState.pendingResponse &&
+        !outputState.openAiActiveResponse &&
+        !outputState.botTurnOpen &&
+        !outputState.bufferedBotSpeech &&
+        !backpressure.active;
+      if (ready) return true;
+
+      if (!outputState.pendingResponse && !outputState.openAiActiveResponse && queue.length > 0 && !backpressure.active) {
+        this.drainPendingRealtimeAssistantUtterances(session, "ordered_playback_barrier");
+      }
+
+      if (Date.now() >= deadlineAt) break;
+      await new Promise((resolve) => setTimeout(resolve, LEAVE_DIRECTIVE_PLAYBACK_POLL_MS));
+    }
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.client.user?.id || null,
+      content: "ordered_realtime_playback_barrier_timeout",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "voice_reply"),
+        queueDepth: this.getPendingRealtimeAssistantUtterances(session).length,
+        pendingResponse: Boolean(session.pendingResponse),
+        openAiActiveResponse: this.replyManager.isRealtimeResponseActive(session),
+        botTurnOpen: Boolean(session.botTurnOpen),
+        bufferedBotSpeech: this.replyManager.hasBufferedTtsPlayback(session)
+      }
+    });
+    return false;
+  }
+
   sendRealtimePromptUtterance({
     session,
     prompt,
@@ -2458,7 +3095,8 @@ export class VoiceSessionManager {
     source = "voice_prompt_utterance",
     interruptionPolicy = null,
     latencyContext = null,
-    utteranceText = null
+    utteranceText = null,
+    musicWakeRefreshAfterSpeech = false
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
@@ -2491,7 +3129,8 @@ export class VoiceSessionManager {
         emitCreateEvent: false,
         interruptionPolicy: normalizedInterruptionPolicy,
         utteranceText: normalizedUtteranceText,
-        latencyContext
+        latencyContext,
+        musicWakeRefreshAfterSpeech
       });
       session.lastRequestedRealtimeUtterance = {
         utteranceText: normalizedUtteranceText,
@@ -2523,7 +3162,8 @@ export class VoiceSessionManager {
     source = "voice_prompt_utterance",
     interruptionPolicy = null,
     latencyContext = null,
-    utteranceText = null
+    utteranceText = null,
+    musicWakeRefreshAfterSpeech = false
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
@@ -2560,6 +3200,7 @@ export class VoiceSessionManager {
       source: String(source || "voice_prompt_utterance"),
       queuedAt: Date.now(),
       interruptionPolicy: normalizedInterruptionPolicy,
+      musicWakeRefreshAfterSpeech: Boolean(musicWakeRefreshAfterSpeech),
       latencyContext:
         latencyContext && typeof latencyContext === "object"
           ? {
@@ -2616,7 +3257,8 @@ export class VoiceSessionManager {
       source,
       interruptionPolicy,
       latencyContext,
-      utteranceText: normalizedUtteranceText
+      utteranceText: normalizedUtteranceText,
+      musicWakeRefreshAfterSpeech
     });
   }
 
@@ -2626,7 +3268,8 @@ export class VoiceSessionManager {
     userId = null,
     source = "voice_text_utterance",
     interruptionPolicy = null,
-    latencyContext = null
+    latencyContext = null,
+    musicWakeRefreshAfterSpeech = false
   }) {
     const normalizedLine = normalizeVoiceText(text, STT_REPLY_MAX_CHARS);
     if (!normalizedLine) return false;
@@ -2639,8 +3282,80 @@ export class VoiceSessionManager {
       source,
       interruptionPolicy,
       latencyContext,
-      utteranceText: normalizedLine
+      utteranceText: normalizedLine,
+      musicWakeRefreshAfterSpeech
     });
+  }
+
+  private isCollapsibleQueuedStreamTailEntry(
+    entry: VoiceQueuedRealtimeAssistantUtterance | undefined,
+    sourcePrefix: string
+  ) {
+    if (!entry || typeof entry !== "object") return false;
+    const source = String(entry.source || "");
+    if (!source.startsWith(sourcePrefix)) return false;
+    const sourceSuffix = source.slice(sourcePrefix.length);
+    if (!/^\d+$/.test(sourceSuffix)) return false;
+    return Boolean(normalizeVoiceText(entry.utteranceText || "", STT_REPLY_MAX_CHARS));
+  }
+
+  private canCollapseQueuedStreamTailEntries(
+    earlierEntry: VoiceQueuedRealtimeAssistantUtterance | undefined,
+    laterEntry: VoiceQueuedRealtimeAssistantUtterance | undefined,
+    sourcePrefix: string
+  ) {
+    if (!this.isCollapsibleQueuedStreamTailEntry(earlierEntry, sourcePrefix)) return false;
+    if (!this.isCollapsibleQueuedStreamTailEntry(laterEntry, sourcePrefix)) return false;
+    return (
+      String(earlierEntry?.userId || "") === String(laterEntry?.userId || "") &&
+      Boolean(earlierEntry?.musicWakeRefreshAfterSpeech) === Boolean(laterEntry?.musicWakeRefreshAfterSpeech) &&
+      this.replyInterruptionPoliciesMatch(earlierEntry?.interruptionPolicy || null, laterEntry?.interruptionPolicy || null)
+    );
+  }
+
+  private mergeQueuedRealtimeAssistantUtterances(
+    entries: VoiceQueuedRealtimeAssistantUtterance[]
+  ): VoiceQueuedRealtimeAssistantUtterance | null {
+    if (!Array.isArray(entries) || entries.length === 0) return null;
+    const firstEntry = entries[0];
+    const queuedAtValues = entries
+      .map((entry) => Math.max(0, Number(entry?.queuedAt || 0)))
+      .filter((value) => value > 0);
+    const combinedText = normalizeVoiceText(
+      entries
+        .map((entry) => String(entry?.utteranceText || "").trim())
+        .filter(Boolean)
+        .join(" "),
+      STT_REPLY_MAX_CHARS
+    );
+    if (!combinedText) return null;
+
+    const prompt = buildRealtimeTextUtterancePrompt(combinedText, STT_REPLY_MAX_CHARS);
+    if (!prompt) return null;
+
+    return {
+      ...firstEntry,
+      prompt,
+      utteranceText: combinedText,
+      queuedAt: queuedAtValues.length ? Math.min(...queuedAtValues) : Math.max(0, Number(firstEntry?.queuedAt || 0)),
+      latencyContext: entries.find((entry) => entry?.latencyContext)?.latencyContext || null,
+      musicWakeRefreshAfterSpeech: entries.some((entry) => Boolean(entry?.musicWakeRefreshAfterSpeech))
+    };
+  }
+
+  private replyInterruptionPoliciesMatch(leftPolicy: unknown, rightPolicy: unknown) {
+    const left = this.normalizeReplyInterruptionPolicy(leftPolicy);
+    const right = this.normalizeReplyInterruptionPolicy(rightPolicy);
+    if (!left && !right) return true;
+    if (!left || !right) return false;
+    return (
+      left.assertive === right.assertive &&
+      left.scope === right.scope &&
+      left.allowedUserId === right.allowedUserId &&
+      (left.talkingTo || null) === (right.talkingTo || null) &&
+      (left.source || null) === (right.source || null) &&
+      (left.reason || null) === (right.reason || null)
+    );
   }
 
   buildVoiceReplyPlaybackPlan({
@@ -2772,10 +3487,12 @@ export class VoiceSessionManager {
     source = "voice_reply",
     speechStep = 0,
     generationStartedAtMs = 0,
-    includePromotedCaptureSupersede = false
+    includePromotedCaptureSupersede = false,
+    interruptionPolicy = null
   } = {}) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
+    const normalizedInterruptionPolicy = this.normalizeReplyInterruptionPolicy(interruptionPolicy);
     const generationStartedAt = Math.max(0, Number(generationStartedAtMs || 0));
     const pendingSummary = this.summarizeRealtimeInterruptingQueue({
       session,
@@ -2785,7 +3502,8 @@ export class VoiceSessionManager {
     const liveCaptureSummary = includePromotedCaptureSupersede
       ? this.summarizeRealtimeInterruptingLiveCaptures({
         session,
-        promotedAfterMs: generationStartedAt
+        promotedAfterMs: generationStartedAt,
+        interruptionPolicy: normalizedInterruptionPolicy
       })
       : {
         livePromotedCaptureCount: 0,
@@ -2798,6 +3516,38 @@ export class VoiceSessionManager {
     const supersedeReason = hasInterruptingNewerInput
       ? "newer_finalized_realtime_turn"
       : "newer_live_promoted_capture";
+    const inFlight = session.inFlightAcceptedBrainTurn;
+    const inFlightPhase = inFlight?.phase || null;
+    const inFlightAgeMs = inFlight
+      ? Math.max(0, Date.now() - Math.max(0, Number(inFlight.acceptedAt || 0)))
+      : null;
+    const alreadyFromDeferredFlush =
+      String(inFlight?.source || "").includes("deferred_flush");
+    const stashEligible =
+      !hasInterruptingNewerInput &&
+      hasInterruptingLiveCapture &&
+      inFlight &&
+      inFlightPhase === "generation_only" &&
+      Number(inFlightAgeMs || 0) < PREPLAY_SUPERSEDE_REQUEUE_MAX_AGE_MS &&
+      Boolean(inFlight.transcript) &&
+      !alreadyFromDeferredFlush;
+    let stashedForRecovery = false;
+    if (stashEligible && inFlight) {
+      const newestLivePromotedAt = Math.max(0, Number(liveCaptureSummary.newestPromotedAt || 0));
+      const supersededByUserId =
+        this.findAssertiveInboundCaptureUserId(session, normalizedInterruptionPolicy) || null;
+      stashedForRecovery = this.stashSupersededPrePlaybackReply({
+        session,
+        inFlightTurn: inFlight,
+        interruptionPolicy: normalizedInterruptionPolicy,
+        supersededAt: newestLivePromotedAt || Date.now(),
+        supersededByUserId,
+        supersededBySource: String(source || "voice_reply")
+      });
+      if (stashedForRecovery && session.inFlightAcceptedBrainTurn === inFlight) {
+        session.inFlightAcceptedBrainTurn = null;
+      }
+    }
 
     session.realtimeReplySupersededCount =
       Math.max(0, Number(session.realtimeReplySupersededCount || 0)) + 1;
@@ -2821,6 +3571,9 @@ export class VoiceSessionManager {
         livePromotedCaptureCount: liveCaptureSummary.livePromotedCaptureCount,
         oldestLivePromotedAt: liveCaptureSummary.oldestPromotedAt,
         newestLivePromotedAt: liveCaptureSummary.newestPromotedAt,
+        inFlightPhase,
+        inFlightAgeMs,
+        stashedForRecovery,
         speechStep: Math.max(0, Number(speechStep || 0)),
         supersededCount: Math.max(0, Number(session.realtimeReplySupersededCount || 0))
       }
@@ -2837,7 +3590,8 @@ export class VoiceSessionManager {
     source = "voice_reply",
     preferRealtimeUtterance = false,
     interruptionPolicy = null,
-    latencyContext = null
+    latencyContext = null,
+    musicWakeRefreshAfterSpeech = false
   }) {
     if (!session || session.ending) {
       return {
@@ -2858,13 +3612,30 @@ export class VoiceSessionManager {
     }
 
     const requiresOrderedPlayback = steps.some((entry) => entry?.type === "soundboard");
+    const normalizedInterruptionPolicy = this.normalizeReplyInterruptionPolicy(interruptionPolicy);
     let speechStep = 0;
     let soundboardStep = 0;
     let spokeLine = false;
     let requestedRealtimeUtterance = false;
     let playedSoundboardCount = 0;
     let completed = true;
+    let localSpeechPolicyActivated = false;
     const allowLiveCaptureSupersede = shouldSupersedeSystemSpeechBeforePlayback(source);
+
+    if (preferRealtimeUtterance && requiresOrderedPlayback) {
+      const barrierReady = await this.waitForOrderedRealtimePlaybackBarrier({
+        session,
+        source: String(source || "voice_reply")
+      });
+      if (!barrierReady) {
+        return {
+          completed: false,
+          spokeLine: false,
+          requestedRealtimeUtterance: false,
+          playedSoundboardCount: 0
+        };
+      }
+    }
 
     for (const step of steps) {
       if (session.ending) {
@@ -2884,7 +3655,8 @@ export class VoiceSessionManager {
               source: speechSource,
               speechStep,
               generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0),
-              includePromotedCaptureSupersede: allowLiveCaptureSupersede
+              includePromotedCaptureSupersede: allowLiveCaptureSupersede,
+              interruptionPolicy: normalizedInterruptionPolicy
             })
           ) {
             completed = false;
@@ -2896,16 +3668,19 @@ export class VoiceSessionManager {
             userId: this.client.user?.id || null,
             source: speechSource,
             interruptionPolicy,
-            latencyContext
+            latencyContext,
+            musicWakeRefreshAfterSpeech
           });
           if (requested) {
+            const targetRequestId = Number(session.pendingResponse?.requestId || 0) || null;
             spokeLine = true;
             requestedRealtimeUtterance = true;
             if (requiresOrderedPlayback) {
               await this.waitForLeaveDirectivePlayback({
                 session,
                 expectRealtimeAudio: true,
-                source: speechSource
+                source: speechSource,
+                targetRequestId
               });
             }
             continue;
@@ -2916,7 +3691,8 @@ export class VoiceSessionManager {
               source: speechSource,
               speechStep,
               generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0),
-              includePromotedCaptureSupersede: allowLiveCaptureSupersede
+              includePromotedCaptureSupersede: allowLiveCaptureSupersede,
+              interruptionPolicy: normalizedInterruptionPolicy
             })
           ) {
             completed = false;
@@ -2924,6 +3700,10 @@ export class VoiceSessionManager {
           }
           completed = false;
           break;
+        }
+        if (!localSpeechPolicyActivated) {
+          this.setActiveReplyInterruptionPolicy(session, normalizedInterruptionPolicy);
+          localSpeechPolicyActivated = true;
         }
         const spoke = await this.speakVoiceLineWithTts({
           session,
@@ -2963,6 +3743,10 @@ export class VoiceSessionManager {
       }
     }
 
+    if (localSpeechPolicyActivated && !spokeLine) {
+      this.maybeClearActiveReplyInterruptionPolicy(session);
+    }
+
     return {
       completed,
       spokeLine,
@@ -2974,7 +3758,8 @@ export class VoiceSessionManager {
   async waitForLeaveDirectivePlayback({
     session,
     expectRealtimeAudio = false,
-    source = "leave_directive"
+    source = "leave_directive",
+    targetRequestId = null
   }) {
     if (!session || session.ending) return;
     const hasPlaybackSignals =
@@ -2983,10 +3768,17 @@ export class VoiceSessionManager {
     if (!hasPlaybackSignals) return;
 
     const waitStartedAt = Date.now();
+    const normalizedTargetRequestId =
+      Number.isFinite(Number(targetRequestId)) && Number(targetRequestId) > 0
+        ? Math.round(Number(targetRequestId))
+        : null;
     let audioRequestedAt = Math.max(
       0,
-      Number(session.pendingResponse?.requestedAt || 0),
-      Number(session.lastResponseRequestAt || 0)
+      normalizedTargetRequestId && Number(session.pendingResponse?.requestId || 0) === normalizedTargetRequestId
+        ? Number(session.pendingResponse?.requestedAt || 0)
+        : 0,
+      normalizedTargetRequestId ? 0 : Number(session.pendingResponse?.requestedAt || 0),
+      normalizedTargetRequestId ? 0 : Number(session.lastResponseRequestAt || 0)
     );
     if (!audioRequestedAt) {
       audioRequestedAt = waitStartedAt;
@@ -2998,17 +3790,41 @@ export class VoiceSessionManager {
     while (!session.ending) {
       const now = Date.now();
       if (now >= deadlineAt) break;
+      const assistantOutput = this.replyManager.syncAssistantOutputState(session, "leave_directive_playback_wait");
       const botTurnOpen = Boolean(session.botTurnOpen);
       const bufferedBotSpeech = this.replyManager.hasBufferedTtsPlayback(session);
       const pending = session.pendingResponse;
-      const pendingHasAudio = pending ? this.replyManager.pendingResponseHasAudio(session, pending) : false;
+      const pendingRequestId = Number(pending?.requestId || 0) || null;
+      const targetPending =
+        normalizedTargetRequestId == null ? Boolean(pending) : pendingRequestId === normalizedTargetRequestId;
+      const targetOutputSpeaking =
+        normalizedTargetRequestId != null &&
+        Number(assistantOutput?.requestId || 0) === normalizedTargetRequestId &&
+        (
+          assistantOutput?.phase === ASSISTANT_OUTPUT_PHASE.SPEAKING_LIVE ||
+          assistantOutput?.phase === ASSISTANT_OUTPUT_PHASE.SPEAKING_BUFFERED
+        );
+      if (targetPending && Number(pending?.requestedAt || 0) > 0) {
+        audioRequestedAt = Math.max(audioRequestedAt, Number(pending?.requestedAt || 0));
+      }
+      const pendingHasAudio =
+        pending && targetPending ? this.replyManager.pendingResponseHasAudio(session, pending) : false;
       const hasPostRequestAudio = Number(session.lastAudioDeltaAt || 0) >= audioRequestedAt;
 
-      if (botTurnOpen || bufferedBotSpeech || pendingHasAudio || hasPostRequestAudio) {
+      const playbackObserved =
+        normalizedTargetRequestId == null
+          ? botTurnOpen || bufferedBotSpeech || pendingHasAudio || hasPostRequestAudio
+          : pendingHasAudio || hasPostRequestAudio || targetOutputSpeaking;
+      if (playbackObserved) {
         observedPlayback = true;
       }
 
-      if (observedPlayback && !botTurnOpen && !bufferedBotSpeech) {
+      const targetSettled = normalizedTargetRequestId == null
+        ? !botTurnOpen && !bufferedBotSpeech
+        : observedPlayback &&
+          !targetPending &&
+          !targetOutputSpeaking;
+      if (targetSettled) {
         break;
       }
 
@@ -3207,6 +4023,7 @@ export class VoiceSessionManager {
     pcmBuffer = null,
     captureReason = "stream_end",
     finalizedAt = 0,
+    musicWakeFollowupEligibleAtCapture = false,
     bridgeUtteranceId = null,
     asrResult = null,
     source = "unknown"
@@ -3234,6 +4051,18 @@ export class VoiceSessionManager {
           asrResultAvailable: Boolean(asrResult)
         }
       });
+      const recoveredSupersededPrePlaybackReply = this.recoverSupersededPrePlaybackReply({
+        session,
+        reason: "empty_asr_bridge_drop",
+        userId
+      });
+      if (!recoveredSupersededPrePlaybackReply) {
+        this.recoverInterruptedAssistantReply({
+          session,
+          reason: "empty_asr_bridge_drop",
+          userId
+        });
+      }
       this.deferredActionQueue.recheckDeferredVoiceActions({
         session,
         reason: "empty_asr_bridge_drop"
@@ -3250,6 +4079,7 @@ export class VoiceSessionManager {
       userId,
       captureReason,
       finalizedAt,
+      musicWakeFollowupEligibleAtCapture,
       bridgeUtteranceId: Math.max(0, Number(bridgeUtteranceId || 0)) || null,
       transcriptOverride: transcript,
       clipDurationMsOverride: clipDurationMs,
@@ -3551,8 +4381,8 @@ export class VoiceSessionManager {
           sessionId: session.id,
           source: String(source || "openai_realtime_text_turn"),
           captureReason: String(captureReason || "stream_end"),
-          transcript: normalizedTranscript,
-          labeledTranscript,
+          transcriptChars: normalizedTranscript.length,
+          labeledTranscriptChars: labeledTranscript.length,
           speakerName,
           replyPrompts: promptLog
         }
@@ -3695,7 +4525,8 @@ export class VoiceSessionManager {
     transcript,
     inputKind = "transcript",
     source = "realtime",
-    transcriptionContext = null
+    transcriptionContext = null,
+    runtimeEventContext = null
   }): Promise<VoiceReplyDecision> {
     return evaluateVoiceReplyDecisionModule(this, {
       session,
@@ -3704,7 +4535,8 @@ export class VoiceSessionManager {
       transcript,
       inputKind,
       source,
-      transcriptionContext
+      transcriptionContext,
+      runtimeEventContext
     });
   }
 
@@ -3713,10 +4545,12 @@ export class VoiceSessionManager {
     settings,
     userId = null,
     transcript = "",
-    source = "voice_runtime_event"
+    source = "voice_runtime_event",
+    runtimeEventContext = null
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
+    const normalizedRuntimeEventContext = normalizeVoiceRuntimeEventContext(runtimeEventContext);
 
     const decision = await this.evaluateVoiceReplyDecision({
       session,
@@ -3724,7 +4558,8 @@ export class VoiceSessionManager {
       userId,
       transcript,
       inputKind: "event",
-      source
+      source,
+      runtimeEventContext: normalizedRuntimeEventContext
     });
 
     this.store.logAction({
@@ -3739,6 +4574,7 @@ export class VoiceSessionManager {
         inputKind: "event",
         source,
         transcript: decision.transcript || transcript || null,
+        runtimeEventContext: decision.runtimeEventContext || normalizedRuntimeEventContext,
         allow: Boolean(decision.allow),
         reason: decision.reason,
         participantCount: Number(decision.participantCount || 0)
@@ -3756,7 +4592,8 @@ export class VoiceSessionManager {
       directAddressed: Boolean(decision.directAddressed),
       directAddressConfidence: Number(decision.directAddressConfidence),
       conversationContext: decision.conversationContext || null,
-      source
+      source,
+      runtimeEventContext: decision.runtimeEventContext || normalizedRuntimeEventContext
     });
 
     return true;
@@ -3793,7 +4630,9 @@ export class VoiceSessionManager {
           ? clamp(directedConfidenceRaw, 0, 1)
           : 0;
         const addressingSuffix = talkingTo
-          ? ` [to ${talkingTo}; confidence ${directedConfidence.toFixed(2)}]`
+          ? turn?.role === "assistant"
+            ? ` [to ${talkingTo}]`
+            : ` [to ${talkingTo}; confidence ${directedConfidence.toFixed(2)}]`
           : "";
         return {
           at: Number(turn?.at || 0),
@@ -4821,11 +5660,13 @@ export class VoiceSessionManager {
     directAddressed = false,
     directAddressConfidence = Number.NaN,
     conversationContext = null,
+    musicWakeFollowupEligibleAtCapture = false,
     source = "realtime",
     latencyContext = null,
     forceSpokenOutput = false,
     spokenOutputRetryCount = 0,
-    frozenFrameSnapshot = null
+    frozenFrameSnapshot = null,
+    runtimeEventContext = null
   }) {
     return await runVoiceReplyPipeline(this, {
       session,
@@ -4836,12 +5677,14 @@ export class VoiceSessionManager {
       directAddressed,
       directAddressConfidence,
       conversationContext,
+      musicWakeFollowupEligibleAtCapture,
       mode: "realtime_transport",
       source,
       latencyContext,
       forceSpokenOutput,
       spokenOutputRetryCount,
-      frozenFrameSnapshot
+      frozenFrameSnapshot,
+      runtimeEventContext
     });
   }
 
@@ -5120,7 +5963,14 @@ export class VoiceSessionManager {
               settings: session.settingsSnapshot || this.store.getSettings(),
               userId: stateUserId,
               transcript: `[${recordedEvent.displayName} joined the voice channel]`,
-              source: "member_join_greeting"
+              source: "member_join_greeting",
+              runtimeEventContext: {
+                category: "membership",
+                eventType: "join",
+                actorUserId: recordedEvent.userId,
+                actorDisplayName: recordedEvent.displayName,
+                actorRole: "other"
+              }
             });
           }
         }
@@ -5264,6 +6114,11 @@ export class VoiceSessionManager {
     interaction: ChatInputCommandInteraction,
     settings: Record<string, unknown> | null
   ) {
+    const subcommandGroup = interaction.options.getSubcommandGroup(false);
+    if (subcommandGroup === "music") {
+      return await this.handleMusicSlashCommand(interaction, settings);
+    }
+
     const guild = interaction.guild;
     const user = interaction.user;
     if (!guild) {
@@ -5277,7 +6132,13 @@ export class VoiceSessionManager {
       return;
     }
     if (!isRealtimeMode(session.mode)) {
-      await interaction.reply({ content: "The /clank command is only available in realtime voice sessions.", ephemeral: true });
+      await interaction.reply({ content: "The /clank say command is only available in realtime voice sessions.", ephemeral: true });
+      return;
+    }
+
+    const subcommand = interaction.options.getSubcommand(true);
+    if (subcommand !== "say") {
+      await interaction.reply({ content: "Unsupported /clank command.", ephemeral: true });
       return;
     }
 
@@ -5295,7 +6156,7 @@ export class VoiceSessionManager {
         settings: settings || session.settingsSnapshot || this.store.getSettings(),
         userId: user.id,
         text: normalizedMessage,
-        source: "slash_command_clank"
+        source: "slash_command_clank_say"
       });
       await interaction.editReply(`Processing: "${normalizedMessage}"`);
     } catch (error) {
@@ -5395,6 +6256,13 @@ export class VoiceSessionManager {
         executeLocalVoiceToolCall(this, { session, settings, toolName: "music_pause", args: {} }),
       musicResume: () =>
         executeLocalVoiceToolCall(this, { session, settings, toolName: "music_resume", args: {} }),
+      musicReplyHandoff: (mode: "pause" | "duck" | "none") =>
+        executeLocalVoiceToolCall(this, {
+          session,
+          settings,
+          toolName: "music_reply_handoff",
+          args: { mode }
+        }),
       musicSkip: () =>
         executeLocalVoiceToolCall(this, { session, settings, toolName: "music_skip", args: {} }),
       musicNowPlaying: () =>

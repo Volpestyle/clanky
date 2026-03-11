@@ -8,6 +8,7 @@ import {
   getVoiceTranscriptionSettings,
   resolveAgentStack
 } from "../settings/agentStack.ts";
+import type { VoiceRuntimeEventContext } from "./voiceSessionTypes.ts";
 
 export const VOICE_ADDRESSING_ALL_TOKENS = new Set([
   "ALL",
@@ -51,6 +52,52 @@ const EN_WAKE_PRIMARY_GENERIC_TOKENS = new Set(["bot", "ai", "assistant"]);
 
 export const VOICE_ASR_LANGUAGE_MODES = new Set(["auto", "fixed"]);
 export const STT_TRANSCRIPT_MAX_CHARS = 2000;
+
+export function normalizeVoiceRuntimeEventContext(value: unknown): VoiceRuntimeEventContext | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+  const raw = value as Record<string, unknown>;
+  const categoryRaw = String(raw.category || "").trim().toLowerCase();
+  const category =
+    categoryRaw === "membership"
+      ? "membership"
+      : categoryRaw === "screen_share"
+        ? "screen_share"
+        : categoryRaw === "generic"
+          ? "generic"
+          : "";
+  if (!category) return null;
+
+  const eventType = String(raw.eventType || raw.event || "").trim().toLowerCase();
+  if (!eventType) return null;
+
+  if (category === "membership" && eventType !== "join" && eventType !== "leave") {
+    return null;
+  }
+  if (category === "screen_share" && eventType !== "share_start" && eventType !== "scene_changed" && eventType !== "silence") {
+    return null;
+  }
+
+  const actorRoleRaw = String(raw.actorRole || "").trim().toLowerCase();
+  const actorRole =
+    actorRoleRaw === "self"
+      ? "self"
+      : actorRoleRaw === "other"
+        ? "other"
+        : "unknown";
+
+  const actorUserId = String(raw.actorUserId || "").trim() || null;
+  const actorDisplayName = String(raw.actorDisplayName || "").trim().slice(0, 80) || null;
+
+  return {
+    category,
+    eventType,
+    actorUserId,
+    actorDisplayName,
+    actorRole,
+    hasVisibleFrame: category === "screen_share" ? Boolean(raw.hasVisibleFrame) : undefined
+  };
+}
 
 export function parseRealtimeErrorPayload(payload) {
   if (!payload || typeof payload !== "object") {

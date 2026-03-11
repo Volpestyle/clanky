@@ -5,7 +5,8 @@ import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
 import { isCancelIntent } from "../tools/cancelDetection.ts";
 import {
   computeAsrTranscriptConfidence,
-  resolveRealtimeTurnTranscriptionPlan
+  resolveTurnTranscriptionPlan,
+  transcribePcmTurnWithPlan
 } from "./voiceDecisionRuntime.ts";
 import {
   BOT_TURN_DEFERRED_COALESCE_MAX,
@@ -36,6 +37,7 @@ import {
   resolveVoiceAsrLanguageGuidance
 } from "./voiceSessionHelpers.ts";
 import { setVoiceLivePromptSnapshot } from "./voicePromptState.ts";
+import type { ReplyInterruptionPolicy } from "./bargeInController.ts";
 import type { ReplyManager } from "./replyManager.ts";
 import type {
   DeferredQueuedUserTurn,
@@ -46,6 +48,7 @@ import type {
   VoiceAddressingState,
   VoiceConversationContext,
   VoiceReplyDecision,
+  VoiceRuntimeEventContext,
   VoiceSession,
   VoiceTranscriptLogprob
 } from "./voiceSessionTypes.ts";
@@ -75,6 +78,7 @@ interface QueueRealtimeTurnArgs {
   pcmBuffer?: Buffer | Uint8Array | null;
   captureReason?: string;
   finalizedAt?: number;
+  musicWakeFollowupEligibleAtCapture?: boolean;
   transcriptOverride?: string;
   clipDurationMsOverride?: number;
   asrStartedAtMsOverride?: number;
@@ -89,6 +93,7 @@ interface QueueRealtimeTurnArgs {
 
 interface RunRealtimeTurnArgs extends QueueRealtimeTurnArgs {
   queuedAt?: number;
+  replyScopeStartedAt?: number;
   bridgeRevision?: number;
   mergedTurnCount?: number;
   droppedHeadBytes?: number;
@@ -113,6 +118,7 @@ interface MaybeHandleMusicPlaybackTurnArgs {
   captureReason?: string;
   source: "realtime" | "file_asr";
   transcript?: string;
+  musicWakeFollowupEligibleAtCapture?: boolean;
 }
 
 interface TranscribePcmTurnArgs {
@@ -205,6 +211,7 @@ interface HandleResolvedVoiceTurnArgs {
   source: string;
   captureReason?: string;
   pcmBuffer?: Buffer | null;
+  musicWakeFollowupEligibleAtCapture?: boolean;
   transcriptionContext?: TurnDecisionTranscriptionContext;
   logContext?: VoiceTurnDecisionLogContext | null;
   bridgeSource?: string;
@@ -244,11 +251,13 @@ interface RunRealtimeBrainReplyArgs {
   directAddressed?: boolean;
   directAddressConfidence?: number;
   conversationContext?: VoiceConversationContext | null;
+  musicWakeFollowupEligibleAtCapture?: boolean;
   source?: string;
   latencyContext?: Record<string, unknown> | null;
   forceSpokenOutput?: boolean;
   spokenOutputRetryCount?: number;
   frozenFrameSnapshot?: { mimeType: string; dataBase64: string } | null;
+  runtimeEventContext?: VoiceRuntimeEventContext | null;
 }
 
 type TurnProcessorStoreLike = {
@@ -280,6 +289,18 @@ export interface TurnProcessorHost {
   maybeHandleMusicPlaybackTurn: (
     args: MaybeHandleMusicPlaybackTurnArgs
   ) => Promise<boolean> | boolean;
+  maybeHandlePendingMusicDisambiguationTurn: (args: {
+    session?: VoiceSession | null;
+    settings?: TurnProcessorSettings;
+    userId?: string | null;
+    transcript?: string;
+    reason?: string;
+    source?: string;
+    channel?: unknown;
+    channelId?: string | null;
+    messageId?: string | null;
+    mustNotify?: boolean;
+  }) => Promise<boolean> | boolean;
   evaluatePcmSilenceGate: (args: {
     pcmBuffer: Buffer;
     sampleRateHz?: number;
@@ -323,6 +344,35 @@ export interface TurnProcessorHost {
     reason?: string;
   }) => void;
   clearDeferredQueuedUserTurns: (session: VoiceSession) => void;
+  discardSupersededPrePlaybackReply: (args: {
+    session: VoiceSession;
+    reason?: string;
+    userId?: string | null;
+  }) => boolean;
+  recoverSupersededPrePlaybackReply: (args: {
+    session: VoiceSession;
+    reason?: string;
+    userId?: string | null;
+  }) => boolean;
+  shouldDirectAddressedTurnInterruptReply: (args: {
+    session: VoiceSession;
+    directAddressed?: boolean;
+    policy?: ReplyInterruptionPolicy | Record<string, unknown> | null;
+  }) => boolean;
+  isUserAllowedToInterruptReply: (args: {
+    policy?: ReplyInterruptionPolicy | Record<string, unknown> | null;
+    userId?: string | null;
+  }) => boolean;
+  interruptBotSpeechForDirectAddressedTurn: (args: {
+    session: VoiceSession;
+    userId?: string | null;
+    source?: string;
+  }) => boolean;
+  interruptBotSpeechForOutputLockTurn: (args: {
+    session: VoiceSession;
+    userId?: string | null;
+    source?: string;
+  }) => boolean;
   forwardRealtimeTurnAudio: (args: ForwardRealtimeTurnAudioArgs) => Promise<boolean>;
   shouldUseRealtimeTranscriptBridge: (args: {
     session: VoiceSession;
@@ -346,6 +396,10 @@ export interface TurnProcessorHost {
 
 export class TurnProcessor {
   constructor(private readonly host: TurnProcessorHost) {}
+
+  private reserveRealtimeTurnScopeStartedAt() {
+    return this.host.activeReplies?.reserveTimestamp?.() || Date.now();
+  }
 
   private roundUnitInterval(value: unknown, fallback: number | null = 0) {
     const numeric = Number(value);
@@ -394,7 +448,7 @@ export class TurnProcessor {
         decisionAddressingState?.currentSpeakerDirectedConfidence,
         0
       ),
-      transcript: transcript || null,
+      transcriptChars: transcript ? transcript.length : 0,
       transcriptionModelPrimary: logContext?.transcriptionModelPrimary || undefined,
       transcriptionModelFallback: logContext?.transcriptionModelFallback ?? undefined,
       transcriptionUsedFallbackModel:
@@ -465,6 +519,7 @@ export class TurnProcessor {
     bridgeSource = source,
     latencyContext = null,
     nativeCaptureReason = captureReason,
+    musicWakeFollowupEligibleAtCapture = false,
     allowReplyDispatch = true,
     shouldAbortStage = null
   }: HandleResolvedVoiceTurnArgs) {
@@ -531,7 +586,37 @@ export class TurnProcessor {
       })
     });
 
-    if (!decision.allow) {
+    const interruptionPolicy =
+      session.pendingResponse?.interruptionPolicy || session.activeReplyInterruptionPolicy || null;
+    const directAddressOutputInterrupted =
+      !decision.allow &&
+      decision.reason === "bot_turn_open" &&
+      Boolean(decision.directAddressed) &&
+      this.host.shouldDirectAddressedTurnInterruptReply({
+        session,
+        directAddressed: Boolean(decision.directAddressed),
+        policy: interruptionPolicy
+      }) &&
+      this.host.interruptBotSpeechForDirectAddressedTurn({
+        session,
+        userId,
+        source
+      });
+    const authorizedSpeakerOutputInterrupted =
+      !directAddressOutputInterrupted &&
+      !decision.allow &&
+      decision.reason === "bot_turn_open" &&
+      this.host.isUserAllowedToInterruptReply({
+        policy: interruptionPolicy,
+        userId
+      }) &&
+      this.host.interruptBotSpeechForOutputLockTurn({
+        session,
+        userId,
+        source
+      });
+
+    if (!decision.allow && !directAddressOutputInterrupted && !authorizedSpeakerOutputInterrupted) {
       if (decision.reason === "bot_turn_open") {
         this.host.queueDeferredBotTurnOpenTurn({
           session,
@@ -593,6 +678,7 @@ export class TurnProcessor {
       directAddressed: Boolean(decision.directAddressed),
       directAddressConfidence: Number(decision.directAddressConfidence),
       conversationContext: decision.conversationContext || null,
+      musicWakeFollowupEligibleAtCapture,
       source,
       latencyContext
     });
@@ -812,6 +898,32 @@ export class TurnProcessor {
     return true;
   }
 
+  private async maybeConsumePendingMusicDisambiguationTurn({
+    session,
+    settings = null,
+    userId = null,
+    transcript = "",
+    source = "realtime"
+  }: {
+    session: VoiceSession;
+    settings?: TurnProcessorSettings;
+    userId?: string | null;
+    transcript?: string;
+    source?: "realtime" | "file_asr";
+  }) {
+    const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedTranscript) return false;
+    return await this.host.maybeHandlePendingMusicDisambiguationTurn({
+      session,
+      settings,
+      userId,
+      transcript: normalizedTranscript,
+      source: `voice_${source}`,
+      channelId: session.textChannelId || null,
+      mustNotify: false
+    });
+  }
+
   private resolveMergedRealtimeTranscript(existingTranscript = "", incomingTranscript = "") {
     const existing = normalizeVoiceText(existingTranscript, STT_TRANSCRIPT_MAX_CHARS);
     const incoming = normalizeVoiceText(incomingTranscript, STT_TRANSCRIPT_MAX_CHARS);
@@ -829,6 +941,7 @@ export class TurnProcessor {
     pcmBuffer = null,
     captureReason = "stream_end",
     finalizedAt = 0,
+    musicWakeFollowupEligibleAtCapture = false,
     transcriptOverride = "",
     clipDurationMsOverride = Number.NaN,
     asrStartedAtMsOverride = 0,
@@ -853,6 +966,7 @@ export class TurnProcessor {
       captureReason,
       queuedAt,
       finalizedAt: normalizedFinalizedAt,
+      replyScopeStartedAt: this.reserveRealtimeTurnScopeStartedAt(),
       transcriptOverride: normalizedTranscriptOverride || null,
       clipDurationMsOverride: Number.isFinite(Number(clipDurationMsOverride))
         ? Math.max(0, Math.round(Number(clipDurationMsOverride)))
@@ -869,6 +983,7 @@ export class TurnProcessor {
         : null,
       bridgeUtteranceId: Math.max(0, Number(bridgeUtteranceId || 0)) || null,
       bridgeRevision: 1,
+      musicWakeFollowupEligibleAtCapture: Boolean(musicWakeFollowupEligibleAtCapture),
       mergedTurnCount: 1,
       droppedHeadBytes: 0
     };
@@ -900,6 +1015,11 @@ export class TurnProcessor {
       transcriptLogprobsOverride: mergedLogprobs,
       queuedAt: Math.max(0, Number(existingTurn.queuedAt || 0), Number(incomingTurn.queuedAt || 0)),
       finalizedAt: Math.max(0, Number(existingTurn.finalizedAt || 0), Number(incomingTurn.finalizedAt || 0)),
+      replyScopeStartedAt: Math.max(
+        0,
+        Number(existingTurn.replyScopeStartedAt || 0),
+        Number(incomingTurn.replyScopeStartedAt || 0)
+      ),
       bridgeUtteranceId:
         Math.max(0, Number(incomingTurn.bridgeUtteranceId || existingTurn.bridgeUtteranceId || 0)) || null,
       bridgeRevision: Math.max(1, Number(existingTurn.bridgeRevision || 1)) + 1
@@ -954,6 +1074,7 @@ export class TurnProcessor {
         "Superseded by revised ASR transcript"
       ) || 0;
     }
+    revisedTurn.replyScopeStartedAt = this.reserveRealtimeTurnScopeStartedAt();
     session.activeRealtimeTurn = revisedTurn;
     this.queueRevisedRealtimeTurn(session, revisedTurn);
     this.host.store.logAction({
@@ -1087,8 +1208,16 @@ export class TurnProcessor {
       transcriptLogprobsOverride: mergedLogprobs,
       queuedAt: Number(incomingTurn.queuedAt || Date.now()),
       finalizedAt: mergedFinalizedAt || 0,
+      replyScopeStartedAt: Math.max(
+        0,
+        Number(existingTurn.replyScopeStartedAt || 0),
+        Number(incomingTurn.replyScopeStartedAt || 0)
+      ),
       bridgeUtteranceId: mergedBridgeUtteranceId,
       bridgeRevision: mergedBridgeRevision,
+      musicWakeFollowupEligibleAtCapture:
+        Boolean(existingTurn.musicWakeFollowupEligibleAtCapture) ||
+        Boolean(incomingTurn.musicWakeFollowupEligibleAtCapture),
       mergedTurnCount: Math.max(1, Number(existingTurn.mergedTurnCount || 1)) + 1,
       droppedHeadBytes
     };
@@ -1100,6 +1229,7 @@ export class TurnProcessor {
     pcmBuffer = null,
     captureReason = "stream_end",
     finalizedAt = 0,
+    musicWakeFollowupEligibleAtCapture = false,
     transcriptOverride = "",
     clipDurationMsOverride = Number.NaN,
     asrStartedAtMsOverride = 0,
@@ -1346,6 +1476,8 @@ export class TurnProcessor {
     captureReason = "stream_end",
     queuedAt = 0,
     finalizedAt = 0,
+    replyScopeStartedAt = 0,
+    musicWakeFollowupEligibleAtCapture = false,
     transcriptOverride = "",
     clipDurationMsOverride = Number.NaN,
     asrStartedAtMsOverride = 0,
@@ -1376,6 +1508,10 @@ export class TurnProcessor {
       captureReason,
       queuedAt: Math.max(0, Number(queuedAt || Date.now())) || Date.now(),
       finalizedAt: Math.max(0, Number(finalizedAt || 0)) || Math.max(0, Number(queuedAt || Date.now())) || Date.now(),
+      replyScopeStartedAt: Math.max(
+        0,
+        Number(replyScopeStartedAt || 0)
+      ) || this.reserveRealtimeTurnScopeStartedAt(),
       transcriptOverride: normalizedTranscriptOverride || null,
       clipDurationMsOverride: Number.isFinite(Number(clipDurationMsOverride))
         ? Math.max(0, Math.round(Number(clipDurationMsOverride)))
@@ -1392,6 +1528,7 @@ export class TurnProcessor {
         : null,
       bridgeUtteranceId: normalizedBridgeUtteranceId,
       bridgeRevision: normalizedBridgeRevision,
+      musicWakeFollowupEligibleAtCapture: Boolean(musicWakeFollowupEligibleAtCapture),
       mergedTurnCount: Math.max(1, Number(mergedTurnCount || 1)),
       droppedHeadBytes: Math.max(0, Number(droppedHeadBytes || 0))
     };
@@ -1423,7 +1560,10 @@ export class TurnProcessor {
     const finalizedAtMs = Math.max(0, Number(finalizedAt || 0)) || Math.max(0, Number(queuedAt || 0));
 
     try {
-      if (this.host.activeReplies?.isStale(voiceReplyScopeKey, finalizedAtMs || Date.now())) {
+      if (this.host.activeReplies?.isStale(
+        voiceReplyScopeKey,
+        Math.max(0, Number(currentTurn.replyScopeStartedAt || queuedAt || finalizedAtMs || Date.now()))
+      )) {
         this.host.store.logAction({
           kind: "voice_runtime",
           guildId: session.guildId,
@@ -1469,9 +1609,17 @@ export class TurnProcessor {
         pcmBuffer: normalizedPcmBuffer,
         captureReason,
         source: "realtime",
-        transcript: normalizedTranscriptOverride || undefined
+        transcript: normalizedTranscriptOverride || undefined,
+        musicWakeFollowupEligibleAtCapture
       });
-      if (consumedByMusicMode) return;
+      if (consumedByMusicMode) {
+        this.host.discardSupersededPrePlaybackReply({
+          session,
+          reason: "music_turn_consumed",
+          userId
+        });
+        return;
+      }
 
       const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
       const voiceRuntime = getVoiceRuntimeConfig(settings);
@@ -1488,7 +1636,7 @@ export class TurnProcessor {
             String(transcriptionPlanReasonOverride || "openai_realtime_per_user_transcription").trim() ||
             "openai_realtime_per_user_transcription"
         }
-        : resolveRealtimeTurnTranscriptionPlan({
+        : resolveTurnTranscriptionPlan({
           mode: session.mode,
           configuredModel: transcriptionModel,
           pcmByteLength: normalizedPcmBuffer.length,
@@ -1530,6 +1678,11 @@ export class TurnProcessor {
             pendingQueueDepth
           }
         });
+        this.host.recoverSupersededPrePlaybackReply({
+          session,
+          reason: "turn_dropped_silence_gate",
+          userId
+        });
         return;
       }
       const minAsrClipBytes = Math.max(
@@ -1566,11 +1719,12 @@ export class TurnProcessor {
         });
       } else if (!hasTranscriptOverride && this.llm?.isAsrReady?.() && this.llm?.transcribeAudio) {
         asrStartedAtMs = Date.now();
-        turnTranscript = await this.host.transcribePcmTurn({
+        const transcriptionResult = await transcribePcmTurnWithPlan({
+          transcribe: (args) => this.host.transcribePcmTurn(args),
           session,
           userId,
           pcmBuffer: normalizedPcmBuffer,
-          model: transcriptionPlan.primaryModel,
+          plan: transcriptionPlan,
           sampleRateHz,
           captureReason,
           traceSource: "voice_realtime_turn_decider",
@@ -1580,45 +1734,32 @@ export class TurnProcessor {
           asrLanguage: asrLanguageGuidance.language,
           asrPrompt: asrLanguageGuidance.prompt
         });
-
-        if (
-          !turnTranscript &&
-          !resolvedFallbackModel &&
-          session.mode === "voice_agent" &&
-          transcriptionPlan.primaryModel === "gpt-4o-mini-transcribe"
-        ) {
-          resolvedFallbackModel = "whisper-1";
-          resolvedTranscriptionPlanReason = "mini_with_full_fallback_runtime";
-        }
-
-        if (
-          !turnTranscript &&
-          resolvedFallbackModel &&
-          resolvedFallbackModel !== transcriptionPlan.primaryModel
-        ) {
-          turnTranscript = await this.host.transcribePcmTurn({
-            session,
-            userId,
-            pcmBuffer: normalizedPcmBuffer,
-            model: resolvedFallbackModel,
-            sampleRateHz,
-            captureReason,
-            traceSource: "voice_realtime_turn_decider_fallback",
-            errorPrefix: "voice_realtime_transcription_fallback_failed",
-            emptyTranscriptRuntimeEvent: "voice_realtime_transcription_empty",
-            emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
-            suppressEmptyTranscriptLogs: true,
-            asrLanguage: asrLanguageGuidance.language,
-            asrPrompt: asrLanguageGuidance.prompt
-          });
-          if (turnTranscript) {
-            usedFallbackModelForTranscript = true;
-          }
-        }
+        turnTranscript = transcriptionResult.transcript;
+        resolvedFallbackModel = transcriptionResult.fallbackModel;
+        resolvedTranscriptionPlanReason = transcriptionResult.reason;
+        usedFallbackModelForTranscript = transcriptionResult.usedFallbackModel;
         asrCompletedAtMs = Date.now();
       }
 
       if (isSuperseded("post_transcription")) return;
+
+      if (
+        turnTranscript &&
+        await this.maybeConsumePendingMusicDisambiguationTurn({
+          session,
+          settings,
+          userId,
+          transcript: turnTranscript,
+          source: "realtime"
+        })
+      ) {
+        this.host.discardSupersededPrePlaybackReply({
+          session,
+          reason: "music_disambiguation_consumed",
+          userId
+        });
+        return;
+      }
 
       if (turnTranscript && this.maybeHandleVoiceCancelIntent({
         session,
@@ -1628,6 +1769,11 @@ export class TurnProcessor {
         source: "realtime",
         captureReason
       })) {
+        this.host.discardSupersededPrePlaybackReply({
+          session,
+          reason: "cancel_intent_consumed",
+          userId
+        });
         return;
       }
 
@@ -1656,6 +1802,11 @@ export class TurnProcessor {
               threshold: VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD,
               clipDurationMs
             }
+          });
+          this.host.recoverSupersededPrePlaybackReply({
+            session,
+            reason: "turn_dropped_low_confidence",
+            userId
           });
           return;
         }
@@ -1693,10 +1844,23 @@ export class TurnProcessor {
             hasTranscriptOverride
           }
         });
+        this.host.recoverSupersededPrePlaybackReply({
+          session,
+          reason: "turn_dropped_idle_hallucination",
+          userId
+        });
         return;
       }
 
       if (isSuperseded("pre_persist")) return;
+
+      if (turnTranscript) {
+        this.host.discardSupersededPrePlaybackReply({
+          session,
+          reason: "turn_admitted",
+          userId
+        });
+      }
 
       const persistRealtimeTranscriptTurn = this.host.shouldPersistUserTranscriptTimelineTurn({
         session,
@@ -1728,6 +1892,7 @@ export class TurnProcessor {
         source: "realtime",
         captureReason,
         pcmBuffer: normalizedPcmBuffer,
+        musicWakeFollowupEligibleAtCapture,
         transcriptionContext: {
           usedFallbackModel: usedFallbackModelForTranscript,
           captureReason: String(captureReason || "stream_end"),
@@ -2041,19 +2206,18 @@ export class TurnProcessor {
       });
       return;
     }
-    let transcriptionModelFallback = null;
-    let transcriptionPlanReason = "configured_model";
-    if (transcriptionModelPrimary === "gpt-4o-mini-transcribe") {
-      transcriptionModelFallback = "whisper-1";
-      transcriptionPlanReason = "mini_with_full_fallback_runtime";
-    }
-    let usedFallbackModelForTranscript = false;
-
-    let transcript = await this.host.transcribePcmTurn({
+    const transcriptionPlan = resolveTurnTranscriptionPlan({
+      mode: session.mode,
+      configuredModel: transcriptionModelPrimary,
+      pcmByteLength: pcmBuffer.length,
+      sampleRateHz
+    });
+    const transcriptionResult = await transcribePcmTurnWithPlan({
+      transcribe: (args) => this.host.transcribePcmTurn(args),
       session,
       userId,
       pcmBuffer,
-      model: transcriptionModelPrimary,
+      plan: transcriptionPlan,
       sampleRateHz,
       captureReason,
       traceSource: "voice_file_asr_turn",
@@ -2063,31 +2227,20 @@ export class TurnProcessor {
       asrLanguage: asrLanguageGuidance.language,
       asrPrompt: asrLanguageGuidance.prompt
     });
-    if (
-      !transcript &&
-      transcriptionModelFallback &&
-      transcriptionModelFallback !== transcriptionModelPrimary
-    ) {
-      transcript = await this.host.transcribePcmTurn({
-        session,
-        userId,
-        pcmBuffer,
-        model: transcriptionModelFallback,
-        sampleRateHz,
-        captureReason,
-        traceSource: "voice_file_asr_turn_fallback",
-        errorPrefix: "file_asr_transcription_fallback_failed",
-        emptyTranscriptRuntimeEvent: "file_asr_transcription_empty",
-        emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
-        suppressEmptyTranscriptLogs: true,
-        asrLanguage: asrLanguageGuidance.language,
-        asrPrompt: asrLanguageGuidance.prompt
-      });
-      if (transcript) {
-        usedFallbackModelForTranscript = true;
-      }
-    }
+    const transcript = transcriptionResult.transcript;
+    const transcriptionModelFallback = transcriptionResult.fallbackModel;
+    const transcriptionPlanReason = transcriptionResult.reason;
+    const usedFallbackModelForTranscript = transcriptionResult.usedFallbackModel;
     if (!transcript) return;
+    if (await this.maybeConsumePendingMusicDisambiguationTurn({
+      session,
+      settings,
+      userId,
+      transcript,
+      source: "file_asr"
+    })) {
+      return;
+    }
     if (this.maybeHandleVoiceCancelIntent({
       session,
       userId,

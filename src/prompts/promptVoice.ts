@@ -10,7 +10,10 @@ import {
   formatOpenArticleCandidates
 } from "./promptFormatters.ts";
 import { hasBotNameCue } from "../bot/directAddressConfidence.ts";
-import { formatVoiceChannelEffectSummary } from "../voice/voiceSessionHelpers.ts";
+import {
+  formatVoiceChannelEffectSummary,
+  normalizeVoiceRuntimeEventContext
+} from "../voice/voiceSessionHelpers.ts";
 import {
   buildVoiceAdmissionPolicyLines
 } from "./voiceAdmissionPolicy.ts";
@@ -19,6 +22,7 @@ import type { VoiceSessionDurableContextEntry } from "../voice/voiceSessionTypes
 
 type VoiceMusicPromptContext = {
   playbackState: "playing" | "paused" | "stopped" | "idle";
+  replyHandoffMode: "duck" | "pause" | null;
   currentTrack: { id: string | null; title: string; artists: string[] } | null;
   lastTrack: { id: string | null; title: string; artists: string[] } | null;
   queueLength: number;
@@ -65,6 +69,15 @@ function resolveMusicPromptDisplayState(musicContext: VoiceMusicPromptContext | 
     return "stopped";
   }
   return musicContext.playbackState;
+}
+
+function buildActiveMusicReplyGuidanceLines(musicContext: VoiceMusicPromptContext | null) {
+  if (!musicContext) return [];
+  if (musicContext.playbackState !== "playing" || musicContext.replyHandoffMode) return [];
+  return [
+    "- Music is live right now. If you answer without a pause/duck handoff, keep it brief by default: usually one or two short sentences.",
+    "- If you want to say more than a quick reaction while music is playing, call music_reply_handoff with mode=duck or mode=pause first."
+  ];
 }
 
 function collectAvailableVoiceToolNames({
@@ -151,8 +164,10 @@ export function buildVoiceTurnPrompt({
   guidanceFacts = [],
   behavioralFacts = [],
   isEagerTurn = false,
-  voiceEagerness = 0,
+  voiceAmbientReplyEagerness = 0,
+  responseWindowEagerness = 0,
   conversationContext = null,
+  runtimeEventContext = null,
   sessionTiming = null,
   botName = "the bot",
   participantRoster = [],
@@ -196,11 +211,13 @@ export function buildVoiceTurnPrompt({
   const normalizedDirectAddressed = Boolean(directAddressed);
   const normalizedNameCueDetected =
     !normalizedDirectAddressed &&
+    normalizedInputKind !== "event" &&
     Boolean(text) &&
     hasBotNameCue({
       transcript: text,
       botName: normalizedBotName
     });
+  const normalizedRuntimeEventContext = normalizeVoiceRuntimeEventContext(runtimeEventContext);
   const normalizedConversationContext =
     conversationContext && typeof conversationContext === "object" ? conversationContext : null;
   const normalizedSessionTiming =
@@ -279,6 +296,12 @@ export function buildVoiceTurnPrompt({
                 : String(musicContext?.playbackState || "").trim().toLowerCase() === "stopped"
                   ? "stopped"
                   : "idle",
+          replyHandoffMode:
+            String(musicContext?.replyHandoffMode || "").trim().toLowerCase() === "pause"
+              ? "pause"
+              : String(musicContext?.replyHandoffMode || "").trim().toLowerCase() === "duck"
+                ? "duck"
+                : null,
           currentTrack:
             musicContext?.currentTrack && typeof musicContext.currentTrack === "object"
               ? {
@@ -359,74 +382,6 @@ export function buildVoiceTurnPrompt({
             .slice(-12)
         }
       : null;
-  const normalizedVoiceAddressingState =
-    normalizedConversationContext?.voiceAddressingState &&
-    typeof normalizedConversationContext.voiceAddressingState === "object"
-      ? {
-          currentSpeakerTarget:
-            String(normalizedConversationContext.voiceAddressingState.currentSpeakerTarget || "")
-              .replace(/\s+/g, " ")
-              .trim()
-              .slice(0, 80) || null,
-          currentSpeakerDirectedConfidence: Number.isFinite(
-            Number(normalizedConversationContext.voiceAddressingState.currentSpeakerDirectedConfidence)
-          )
-            ? Math.max(
-                0,
-                Math.min(1, Number(normalizedConversationContext.voiceAddressingState.currentSpeakerDirectedConfidence))
-              )
-            : 0,
-          lastDirectedToMe:
-            normalizedConversationContext.voiceAddressingState.lastDirectedToMe &&
-            typeof normalizedConversationContext.voiceAddressingState.lastDirectedToMe === "object"
-              ? {
-                  speakerName:
-                    String(normalizedConversationContext.voiceAddressingState.lastDirectedToMe.speakerName || "")
-                      .replace(/\s+/g, " ")
-                      .trim()
-                      .slice(0, 80) || "someone",
-                  ageMs: Number.isFinite(
-                    Number(normalizedConversationContext.voiceAddressingState.lastDirectedToMe.ageMs)
-                  )
-                    ? Math.max(0, Math.round(Number(normalizedConversationContext.voiceAddressingState.lastDirectedToMe.ageMs)))
-                    : null,
-                  directedConfidence: Number.isFinite(
-                    Number(normalizedConversationContext.voiceAddressingState.lastDirectedToMe.directedConfidence)
-                  )
-                    ? Math.max(
-                        0,
-                        Math.min(
-                          1,
-                          Number(normalizedConversationContext.voiceAddressingState.lastDirectedToMe.directedConfidence)
-                        )
-                      )
-                    : 0
-                }
-              : null,
-          recentAddressingGuesses: (
-            Array.isArray(normalizedConversationContext.voiceAddressingState.recentAddressingGuesses)
-              ? normalizedConversationContext.voiceAddressingState.recentAddressingGuesses
-              : []
-          )
-            .map((entry) => ({
-              speakerName:
-                String(entry?.speakerName || "")
-                  .replace(/\s+/g, " ")
-                  .trim()
-                  .slice(0, 80) || "someone",
-              talkingTo:
-                String(entry?.talkingTo || "")
-                  .replace(/\s+/g, " ")
-                  .trim()
-                  .slice(0, 80) || null,
-              directedConfidence: Number.isFinite(Number(entry?.directedConfidence))
-                ? Math.max(0, Math.min(1, Number(entry.directedConfidence)))
-                : 0,
-              ageMs: Number.isFinite(Number(entry?.ageMs)) ? Math.max(0, Math.round(Number(entry.ageMs))) : null
-            }))
-            .slice(-6)
-        }
-      : null;
   const webSearchToolAvailable = Boolean(
     allowWebSearchToolCall &&
     webSearch?.enabled &&
@@ -453,7 +408,29 @@ export function buildVoiceTurnPrompt({
   });
 
   if (normalizedInputKind === "event") {
-    parts.push(`Voice runtime event cue: ${text || "(empty)"}`);
+    if (normalizedRuntimeEventContext?.category === "membership") {
+      const actorLabel = normalizedRuntimeEventContext.actorRole === "self"
+        ? "you"
+        : normalizedRuntimeEventContext.actorDisplayName || speaker;
+      const action = normalizedRuntimeEventContext.eventType === "leave" ? "left" : "joined";
+      parts.push(`Voice runtime event cue: ${actorLabel} ${action} the voice channel.`);
+      parts.push(`Structured event type: membership.${normalizedRuntimeEventContext.eventType}.`);
+    } else if (normalizedRuntimeEventContext?.category === "screen_share") {
+      const actorLabel = normalizedRuntimeEventContext.actorDisplayName || speaker;
+      if (normalizedRuntimeEventContext.eventType === "share_start") {
+        parts.push(`Voice runtime event cue: ${actorLabel} started screen sharing.`);
+      } else if (normalizedRuntimeEventContext.eventType === "scene_changed") {
+        parts.push(`Voice runtime event cue: ${actorLabel}'s screen-share scene changed.`);
+      } else {
+        parts.push(`Voice runtime event cue: ${actorLabel} is still screen sharing and the room is quiet.`);
+      }
+      parts.push(`Structured event type: screen_share.${normalizedRuntimeEventContext.eventType}.`);
+      if (normalizedRuntimeEventContext.hasVisibleFrame) {
+        parts.push("A visible screen frame is attached for this event.");
+      }
+    } else {
+      parts.push(`Voice runtime event cue: ${text || "(empty)"}`);
+    }
   } else {
     parts.push(`Incoming live voice transcript from ${speaker}: ${text || "(empty)"}`);
   }
@@ -569,28 +546,6 @@ export function buildVoiceTurnPrompt({
         `- They then said: "${text || "(empty)"}"`,
         "- Decide conversationally whether to resume, adapt, or drop the interrupted reply based on what they said now.",
         "- Do not mechanically continue the old answer if the new turn changes direction."
-      ].join("\n")
-    );
-  }
-
-  if (normalizedVoiceAddressingState) {
-    parts.push(
-      [
-        "Conversational addressing state (best-effort guesses from recent turns):",
-        `- Current speaker likely talking to: ${normalizedVoiceAddressingState.currentSpeakerTarget || "unknown"}`,
-        `- Current speaker directed-confidence: ${normalizedVoiceAddressingState.currentSpeakerDirectedConfidence.toFixed(2)}`,
-        normalizedVoiceAddressingState.lastDirectedToMe
-          ? `- Last turn directed to you: ${normalizedVoiceAddressingState.lastDirectedToMe.speakerName} (${normalizedVoiceAddressingState.lastDirectedToMe.ageMs ?? "unknown"}ms ago, confidence ${normalizedVoiceAddressingState.lastDirectedToMe.directedConfidence.toFixed(2)})`
-          : "- Last turn directed to you: none in recent context",
-        normalizedVoiceAddressingState.recentAddressingGuesses.length
-          ? "- Recent addressing guesses:\n" +
-            normalizedVoiceAddressingState.recentAddressingGuesses
-              .map(
-                (entry) =>
-                  `  - ${entry.speakerName} -> ${entry.talkingTo || "unknown"} (confidence ${entry.directedConfidence.toFixed(2)}, ${entry.ageMs ?? "unknown"}ms ago)`
-              )
-              .join("\n")
-          : "- Recent addressing guesses: none"
       ].join("\n")
     );
   }
@@ -732,6 +687,12 @@ export function buildVoiceTurnPrompt({
     }
     if (normalizedMusicContext.lastAction) musicLines.push(`- Last action: ${normalizedMusicContext.lastAction}`);
     if (normalizedMusicContext.lastQuery) musicLines.push(`- Last query: ${normalizedMusicContext.lastQuery}`);
+    if (normalizedMusicContext.replyHandoffMode === "pause") {
+      musicLines.push("- Your next spoken reply owns the floor: music is already paused and auto-resumes when you finish or stay silent.");
+    } else if (normalizedMusicContext.replyHandoffMode === "duck") {
+      musicLines.push("- Your next spoken reply owns the floor: music stays live, ducks under your voice, then unducks when you finish.");
+    }
+    musicLines.push(...buildActiveMusicReplyGuidanceLines(normalizedMusicContext));
     parts.push(musicLines.join("\n"));
   }
 
@@ -752,7 +713,10 @@ export function buildVoiceTurnPrompt({
   if (allowVoiceToolCalls) {
     parts.push([
       "Music: music_play starts/replaces playback (re-call with selection_id for disambiguation picks). music_search only to browse candidates. Always include query text.",
-      "Queue: music_queue_next (after current), music_queue_add (append), music_stop, music_pause, music_resume, music_skip, music_now_playing. Don't chain queue_add+skip to emulate play-now."
+      "Queue: music_queue_next (after current), music_queue_add (append), music_stop, music_pause, music_resume, music_skip, music_now_playing. Don't chain queue_add+skip to emulate play-now.",
+      "Floor control: if a music-active turn reaches you, decide for yourself whether to take the floor, talk naturally, or stay silent.",
+      "If music is currently playing and you have not claimed the floor with music_reply_handoff, keep spoken replies short by default. For anything longer than a quick reaction, call music_reply_handoff first.",
+      "Use music_reply_handoff with mode=pause or duck when music is active and you want this one spoken reply to own the floor temporarily. Runtime auto-restores after you finish. Use music_pause only when you want playback to stay paused."
     ].join("\n"));
   }
 
@@ -818,9 +782,11 @@ export function buildVoiceTurnPrompt({
       directAddressed: normalizedDirectAddressed,
       nameCueDetected: normalizedNameCueDetected,
       isEagerTurn,
-      replyEagerness: voiceEagerness,
+      ambientReplyEagerness: voiceAmbientReplyEagerness,
+      responseWindowEagerness,
       participantCount: normalizedParticipantRoster.length,
       conversationContext: normalizedConversationContext,
+      runtimeEventContext: normalizedRuntimeEventContext,
       pendingCommandFollowupSignal: Boolean(normalizedConversationContext?.pendingCommandFollowupSignal),
       musicActive: Boolean(normalizedConversationContext?.musicActive),
       musicWakeLatched: Boolean(normalizedConversationContext?.musicWakeLatched)
@@ -828,9 +794,13 @@ export function buildVoiceTurnPrompt({
   );
 
   parts.push(
+    "If you speak, begin with one hidden audience prefix: [[TO:SPEAKER]], [[TO:ALL]], or [[TO:<participant display name>]]. This prefix is metadata only and is not spoken aloud.",
+  );
+
+  parts.push(
     allowInlineSoundboardDirectives
-      ? "Reply with spoken text or [SKIP]. No JSON/markdown/tags. Only markup: [[SOUNDBOARD:<ref>]]."
-      : "Reply with spoken text or [SKIP]. No JSON/markdown/tags/[[...]] directives."
+      ? "Reply with [SKIP] or the hidden [[TO:...]] prefix followed by spoken text. No JSON/markdown/tags. Only other markup allowed after the prefix: [[SOUNDBOARD:<ref>]]."
+      : "Reply with [SKIP] or the hidden [[TO:...]] prefix followed by spoken text. No JSON/markdown/tags/[[...]] directives beyond that leading audience prefix."
   );
 
   return parts.join("\n\n");

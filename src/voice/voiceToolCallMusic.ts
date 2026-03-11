@@ -2,15 +2,33 @@ import { clamp } from "../utils.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
 import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
 import {
+  clearBotSpeechMusicUnduckTimer,
+  clearPendingMusicReplyHandoff,
   findPendingMusicSelectionById,
+  getMusicPhase,
   getMusicDisambiguationPromptContext,
+  releaseBotSpeechMusicDuck,
+  setMusicPhase,
+  setPendingMusicReplyHandoff,
   setMusicDisambiguationState
 } from "./voiceMusicPlayback.ts";
 import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
+import { musicPhaseCanResume } from "./voiceSessionTypes.ts";
 import type { MusicSelectionResult, VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 
 type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
+
+function hasFullVoiceSessionShape(session: ToolRuntimeSession | null | undefined): session is VoiceSession {
+  return Boolean(
+    session &&
+      typeof session === "object" &&
+      typeof session.id === "string" &&
+      typeof session.guildId === "string" &&
+      typeof session.voiceChannelId === "string" &&
+      typeof session.ending === "boolean"
+  );
+}
 
 type VoiceMusicToolOptions = {
   session?: ToolRuntimeSession | null;
@@ -196,6 +214,10 @@ function startVoiceMusicPlayRequest(
     normalizeInlineText(query || `${selectedTrack.title} ${selectedTrack.artist || ""}`, 120) ||
     normalizeInlineText(`${selectedTrack.title} ${selectedTrack.artist || ""}`, 120);
 
+  if (session) {
+    manager.setMusicPhase(session, "loading");
+  }
+
   manager.requestPlayMusic({
     guildId: session?.guildId,
     channelId: session?.textChannelId,
@@ -380,18 +402,36 @@ export async function executeVoiceMusicPlayTool(
   const { catalog } = getToolMusicCatalog(manager, session);
   if (selectionId) {
     const selectedTrack = resolveMusicPlaySelection(manager, session, selectionId, catalog);
-    if (!selectedTrack) return { ok: false, error: "unknown_selection_id" };
-    catalog.set(selectedTrack.id, selectedTrack);
-    return startVoiceMusicPlayRequest(manager, {
-      session,
-      settings,
-      query,
-      selectedTrack
+    if (selectedTrack) {
+      catalog.set(selectedTrack.id, selectedTrack);
+      return startVoiceMusicPlayRequest(manager, {
+        session,
+        settings,
+        query,
+        selectedTrack
+      });
+    }
+    if (!query) return { ok: false, error: "unknown_selection_id" };
+    manager.store.logAction({
+      kind: "voice_runtime",
+      guildId: String(session?.guildId || "").trim() || null,
+      channelId: String(session?.textChannelId || "").trim() || null,
+      userId: String(session?.lastRealtimeToolCallerUserId || "").trim() || null,
+      content: "voice_tool_music_play_selection_fallback",
+      metadata: {
+        sessionId: String(session?.id || "").trim() || null,
+        selectionId,
+        query,
+        reason: "unknown_selection_id"
+      }
     });
   }
 
   const canSearch = Boolean(manager.musicSearch?.isConfigured?.()) && typeof manager.musicSearch?.search === "function";
   if (!canSearch) {
+    if (session) {
+      manager.setMusicPhase(session, "loading");
+    }
     manager.requestPlayMusic({
       guildId: session?.guildId,
       channelId: session?.textChannelId,
@@ -529,6 +569,113 @@ export async function executeVoiceMusicResumeTool(
   const queueState = manager.ensureToolMusicQueueState(session);
   if (queueState) queueState.isPaused = false;
   return { ok: true, queue_state: manager.buildVoiceQueueStatePayload(session) };
+}
+
+export async function executeVoiceMusicReplyHandoffTool(
+  manager: VoiceToolCallManager,
+  { session, settings, args, signal }: VoiceMusicToolOptions
+) {
+  throwIfAborted(signal, "Voice music reply handoff cancelled");
+  if (!session) {
+    return { ok: false, error: "voice_session_unavailable" };
+  }
+  const modeToken = normalizeInlineText(args?.mode, 32)?.toLowerCase() || "";
+  const mode =
+    modeToken === "pause" || modeToken === "duck" || modeToken === "none"
+      ? modeToken
+      : null;
+  if (!mode) {
+    return { ok: false, error: "mode_required" };
+  }
+
+  const currentPhase = getMusicPhase(manager, session);
+  const requestedByUserId = session.lastRealtimeToolCallerUserId || null;
+
+  if (mode === "none") {
+    clearPendingMusicReplyHandoff(manager, session);
+    return {
+      ok: true,
+      mode,
+      applied: true,
+      phase: getMusicPhase(manager, session),
+      queue_state: manager.buildVoiceQueueStatePayload(session)
+    };
+  }
+
+  if (mode === "pause") {
+    const canApplyPause =
+      currentPhase === "playing" ||
+      currentPhase === "loading" ||
+      currentPhase === "paused_wake_word";
+    if (!canApplyPause) {
+      return {
+        ok: true,
+        mode,
+        applied: false,
+        reason: "music_not_audible",
+        phase: currentPhase,
+        queue_state: manager.buildVoiceQueueStatePayload(session)
+      };
+    }
+    if (currentPhase === "playing" || currentPhase === "loading") {
+      clearBotSpeechMusicUnduckTimer(manager, session);
+      if (hasFullVoiceSessionShape(session)) {
+        await releaseBotSpeechMusicDuck(manager, session, settings, { force: true });
+      }
+      manager.musicPlayer?.pause?.();
+      setMusicPhase(manager, session, "paused_wake_word", "wake_word");
+      const queueState = manager.ensureToolMusicQueueState(session);
+      if (queueState) queueState.isPaused = true;
+    }
+    setPendingMusicReplyHandoff(manager, session, {
+      mode: "pause",
+      requestedByUserId,
+      source: "voice_tool_music_reply_handoff"
+    });
+    manager.replyManager.schedulePausedReplyMusicResume(session, 200);
+    return {
+      ok: true,
+      mode,
+      applied: true,
+      autoRestore: "resume",
+      phase: getMusicPhase(manager, session),
+      queue_state: manager.buildVoiceQueueStatePayload(session)
+    };
+  }
+
+  const canApplyDuck =
+    currentPhase === "playing" ||
+    currentPhase === "loading" ||
+    currentPhase === "paused_wake_word";
+  if (!canApplyDuck) {
+    return {
+      ok: true,
+      mode,
+      applied: false,
+      reason: "music_not_audible",
+      phase: currentPhase,
+      queue_state: manager.buildVoiceQueueStatePayload(session)
+    };
+  }
+  if (currentPhase === "paused_wake_word" && musicPhaseCanResume(currentPhase)) {
+    manager.musicPlayer?.resume?.();
+    setMusicPhase(manager, session, "playing");
+    const queueState = manager.ensureToolMusicQueueState(session);
+    if (queueState) queueState.isPaused = false;
+  }
+  setPendingMusicReplyHandoff(manager, session, {
+    mode: "duck",
+    requestedByUserId,
+    source: "voice_tool_music_reply_handoff"
+  });
+  return {
+    ok: true,
+    mode,
+    applied: true,
+    autoRestore: "unduck",
+    phase: getMusicPhase(manager, session),
+    queue_state: manager.buildVoiceQueueStatePayload(session)
+  };
 }
 
 export async function executeVoiceMusicSkipTool(

@@ -261,11 +261,19 @@ test("shouldBargeIn blocks pre-audio pending responses before any assistant audi
   assert.deepEqual(result, { allowed: false });
 });
 
-test("shouldBargeIn blocks buffered subprocess drain after live audio stops", () => {
+test("shouldBargeIn allows buffered subprocess drain interruption for the active speaker", () => {
   const controller = createController();
   const session = createSession({
     botTurnOpen: false,
-    pendingResponse: { requestId: 4, audioReceivedAt: Date.now() - 250 },
+    pendingResponse: {
+      requestId: 4,
+      audioReceivedAt: Date.now() - 250,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "user-1"
+      }
+    },
     __testBufferedBotSpeech: true,
     __testOutputState: createOutputState({
       phase: "speaking_buffered",
@@ -282,7 +290,40 @@ test("shouldBargeIn blocks buffered subprocess drain after live audio stops", ()
     captureState: createAssertiveCapture()
   });
 
-  assert.deepEqual(result, { allowed: false });
+  assert.equal(result.allowed, true);
+  assert.equal(typeof result.minCaptureBytes, "number");
+  assert.ok((result.minCaptureBytes || 0) > 0);
+});
+
+test("shouldBargeIn allows buffered subprocess drain interruption after pending response settles", () => {
+  const controller = createController();
+  const session = createSession({
+    botTurnOpen: false,
+    pendingResponse: null,
+    activeReplyInterruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "user-1"
+    },
+    __testBufferedBotSpeech: true,
+    __testOutputState: createOutputState({
+      phase: "speaking_buffered",
+      lockReason: "bot_audio_buffered",
+      botTurnOpen: false,
+      bufferedBotSpeech: true,
+      pendingResponse: false
+    })
+  });
+
+  const result = controller.shouldBargeIn({
+    session,
+    userId: "user-1",
+    captureState: createAssertiveCapture()
+  });
+
+  assert.equal(result.allowed, true);
+  assert.equal(typeof result.minCaptureBytes, "number");
+  assert.ok((result.minCaptureBytes || 0) > 0);
 });
 
 test("shouldBargeIn blocks likely echo during the initial bot audio guard window", () => {

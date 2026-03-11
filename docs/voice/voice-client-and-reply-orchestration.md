@@ -61,6 +61,10 @@ The realtime client has a simpler lifecycle than the ASR bridge — there is **n
 
 The runtime mode determines which client class is instantiated. The subprocess (`ClankvoxClient`) is spawned **in parallel** with the API connect call for latency optimization.
 
+After a successful join, `voiceJoinFlow.ts` emits a synthetic `"[YOU joined the voice channel]"` runtime event through the same admission pipeline the bot uses for other room events. The classifier prompt treats that event as the bot's own arrival, so self-join greeting bias uses the explicit "you just joined" guidance instead of the generic "someone joined or left" branch.
+
+Non-speech runtime events carry structured event context (`membership.join`, `membership.leave`, `screen_share.share_start`, etc.) alongside the readable transcript string. Prompt builders and classifiers branch on that structured context first; the transcript remains the human-readable surface for logs and history, not the source of truth.
+
 ### Connection
 
 `client.connect()` calls `openRealtimeSocket()` which creates a WebSocket with a 10-second timeout, then `markRealtimeConnected()` sets connection metadata.
@@ -301,7 +305,9 @@ That shared path performs the admission decision, addressing normalization, clas
 | 10 | Text/full-brain path with `generation_decides` | allow |
 | 11 | Text/full-brain path with `classifier_gate` | classifier YES/NO |
 
-Direct address feeds classifier/generation context and arms the music wake latch when music is active. Eagerness `0` still flows through the admission prompt and classifier/generation outcome rather than acting as a standalone deny.
+Direct address feeds classifier/generation context and arms the music wake latch when music is active. Fresh wake-word turns pause active music immediately; while music is still `paused_wake_word`, ordinary follow-ups stay owned by that wake-word speaker. Once wake-word-paused music resumes after assistant playback drains, the renewed latch lets brief follow-ups continue without another wake word. For ordinary replies spoken over already-playing music, the passive latch refreshes after assistant speech actually settles so the follow-up window is not consumed while buffered reply audio is still draining. Post-resume latch-open follow-ups snapshot that eligibility when the capture promotes, so a turn that started inside the window is still admitted even if finalization lands just after expiry. Those wake-word and latch-open conversational turns now go straight to the main reply brain. If the dedicated music brain is enabled, it only sits in front of compact playback-control/disambiguation turns: exact single-word controls like `pause` or `skip` use an immediate fast path, and fuzzier control phrasing can still be consumed by the mini model with music tools. If the dedicated music brain is disabled, even those control/disambiguation turns go straight to the main reply brain, which can ignore them with `[SKIP]`, answer normally, or use `music_reply_handoff` for temporary pause/duck floor control. Canonical music semantics live in [`music.md`](music.md). Eagerness `0` still flows through the admission prompt and classifier/generation outcome rather than acting as a standalone deny.
+
+The live voice prompt now relies on deterministic direct-address and interruption context, not the older best-effort `"current speaker likely talking to"` hints derived from transcript history. Room-addressing guesses remain infrastructure metadata until reply-side addressing is produced explicitly.
 
 For bridge path turns that survive deterministic gates, `runVoiceReplyClassifier()` makes a YES/NO LLM call when the canonical admission mode is `classifier_gate`. The classifier token budget is provider-aware: OpenAI Responses bindings use at least `16` output tokens, and the GPT-5 family uses `64`, because smaller caps are rejected by the API.
 
@@ -333,7 +339,43 @@ When Brain is paired with Realtime TTS and reply streaming is enabled, this
 path can request speech incrementally from streamed generation chunks instead of
 waiting for whole-reply playback. Streamed chunks still pass through the ordered
 voice playback planner, so inline `[[SOUNDBOARD:<sound_ref>]]` directives can
-land as `speech -> soundboard -> speech` beats without a second model turn.
+land as `speech -> soundboard -> speech` beats without a second model turn. In
+realtime mode those soundboard-bearing chunks act as strict output barriers:
+earlier queued or buffered assistant audio must drain first, then the chunk's
+ordered speech/soundboard steps run in sequence. Once the chunk's own speech
+request has played, the follow-on soundboard beat is released by that request's
+playback state rather than global tail flags such as `botTurnOpen`.
+The chunker keeps the first streamed utterance sentence-coherent and avoids
+shipping tiny post-first fragments as standalone realtime playback turns.
+Short follow-on leftovers are merged with adjacent speech before playback, so
+the transport hears one continuous thought instead of a series of miniature
+inference requests. OpenAI exact-line playback requests also carry
+response-scoped verbatim speech instructions so session-level persona guidance
+does not reinterpret a tiny playback turn as a fresh conversation. Once stream
+generation ends, any still-queued streamed tail for that reply is collapsed
+into one final playback turn before it reaches the realtime transport. Ordered
+stream chunks that already expanded into `speech -> soundboard -> speech`
+substeps are not collapsed, because their soundboard beats live in the ordered
+playback plan rather than in the queued speech transport.
+Spoken brain replies also begin with a hidden leading audience directive,
+`[[TO:SPEAKER]]`, `[[TO:ALL]]`, or `[[TO:<participant display name>]]`, which
+the runtime strips before any speech is played. This lets the brain declare who
+it is addressing before the first audio chunk without wrapping the whole stream
+in JSON. That same target feeds assistant-turn metadata and the ordinary
+interruption target in `"speaker"` mode. If the brain omits the audience
+directive, the reply stays untargeted; the runtime does not backfill a target
+from user-turn direct-address heuristics.
+
+OpenAI provider-native realtime replies use a different transport. Because the
+provider owns the speech stream, the runtime does not try to hide a `[[TO:...]]`
+prefix inside native audio. Instead, once the final assistant audio transcript
+lands, the runtime fires a second out-of-band `response.create` on the same
+session with `conversation: "none"` and `output_modalities: ["text"]`. That
+side-channel returns one token: `SPEAKER`, `ALL`, an exact participant display
+name, or `UNKNOWN`. The result never becomes speech and never enters the
+default conversation; it patches the latest assistant turn's addressing and the
+live `"speaker"` interruption target slightly after speech begins. Native `bridge`
+and `native` reply paths use this side-channel. Full-brain replies do not.
 Queued streamed utterances also respect local `clankvox` playback backlog
 before they are handed to realtime TTS. The session keeps a higher-level text
 queue for streamed chunks, pauses that queue once buffered TTS crosses roughly
@@ -349,6 +391,12 @@ See [`voice-provider-abstraction.md`](voice-provider-abstraction.md).
 ## 15. Deferred Turn System
 
 When a turn is denied with reason `"bot_turn_open"` (output channel busy), it is **deferred** rather than dropped.
+
+Exception: a direct wake-word / bot-name turn can preempt the output lock instead of joining the deferred queue when the current interruption mode allows it. In practice:
+
+- `"speaker"` mode still lets the addressed speaker talk over the reply normally
+- that same mode also lets anyone interrupt with an explicit wake word / bot alias
+- `"none"` mode keeps both ordinary talk-over and wake-word interruption disabled
 
 ### Queueing
 
@@ -395,10 +443,10 @@ When barge-in interrupts bot speech:
 `executeBargeInInterruptCommand`:
 1. Cancel active realtime response
 2. Reset bot audio playback
-3. If cancel succeeded AND utterance text was in progress:
+3. If cancel succeeded OR truncate succeeded AND utterance text was in progress:
    - Store interruption context on the session: interrupted utterance text, interrupting user ID, timestamp, source
 4. If cancel failed because the provider had already completed:
-   - Do not create recovery state
+   - Keep recovery state when truncate succeeded
    - Fall back to the short echo guard only
 5. Set barge-in suppression window
 
@@ -436,20 +484,55 @@ pre-generation check:
 
 Reuses the same queue/live-capture inspection logic that stage 3 already uses, but runs it before paying for an LLM call. Log: `voice_generation_superseded_pre_generation`.
 
-### Pre-play Supersede Requeue
+If the supersede came from a newer promoted live capture rather than from a
+newer finalized queued turn, the accepted turn is stashed first. That lets the
+existing empty/noise recovery path revive it if the newer capture never becomes
+real work.
 
-When user speech interrupts an in-flight generation that hasn't produced audio yet (`phase === "generation_only"`), the system may **requeue** the interrupted turn so it can be retried after the user finishes speaking. This prevents dropping legitimate user turns that were just slow to generate.
+### Pre-play Supersede Stash
 
-**Requeue eligibility** (`cancelPendingPrePlaybackReplyForUserSpeech`):
+When user speech interrupts an in-flight generation that hasn't produced audio
+yet, the system may **stash** the interrupted turn so it can be retried after
+the user finishes speaking. This prevents dropping legitimate user turns that
+were just slow to generate.
 
+The runtime first stashes that interrupted turn above the normal deferred queue.
+Later, if the interrupting capture dies as empty/noise, the stashed turn is
+recovered into the deferred queue; if the new turn becomes real work, the stash
+is discarded instead.
+
+The same stash-and-recover rule also applies when a turn is superseded at the
+generation-preflight gate by a newer promoted live capture before the LLM call
+starts. Finalized queued turns do not use this recovery path because they are
+already durable newer work.
+
+During the brain tool loop, `tool_call_started` turns become recoverable only
+after the tool result proves the step is replay-safe. Read-only lookups and
+music disambiguation are recoverable; side-effecting tools such as playback
+starts, queue mutations, memory writes, soundboard playback, or leave requests
+are not.
+
+Async `music_play` starts that return `{ "status": "loading" }` are treated as
+an accepted side effect, not as replay-safe follow-up work. The brain loop
+does not keep spinning just to restate the start while playback is still
+booting in the background.
+
+**Stash eligibility** (`cancelPendingPrePlaybackReplyForUserSpeech`):
+
+- Promoted capture is already allowed by the same interruption policy that
+  would govern live barge-in
 - Active reply was aborted (`activeReplyAbortCount > 0`)
-- In-flight turn exists and is in `generation_only` phase (no tool side effects)
+- In-flight turn exists and is either:
+  `generation_only`, or
+  `tool_call_started` with `toolPhaseRecoveryEligible === true`
 - Turn age < `PREPLAY_SUPERSEDE_REQUEUE_MAX_AGE_MS`
 - Turn has a transcript
 - Turn did NOT originate from a deferred flush (prevents zombie loops)
-- Turn is NOT a bot-initiated event (`bot_join_greeting`, `member_join_greeting`)
 
-**Bot-initiated event exclusion:** Synthetic events like join greetings are not real user speech — they become stale the moment a user speaks over them. Requeuing them produces zombie turns that race with the user's actual input, causing the bot to greet after the user has already started a conversation. These are dropped, not requeued.
+Synthetic/system turns are no longer special-cased out of recovery once an
+authorized interruption actually happens. The stash is discarded as soon as the
+new user turn is admitted, but it can still recover if the interrupting capture
+dies as empty/noise before becoming a real turn.
 
 ### Stage 2: Abortable generation
 
@@ -460,6 +543,8 @@ The plumbing exists and is ready to wire for voice:
 - `ActiveReplyRegistry.begin()` creates an `AbortController` per reply scope (`activeReplyRegistry.ts`)
 - `llm.generate()` accepts a `signal` parameter and threads it to the service layer
 - Text replies already use this path (`replyPipeline.ts`)
+
+The active reply handle is created immediately after the generation-preflight supersede check and before the expensive prompt/context work begins. That closes the gap where a late same-utterance ASR revision could arrive after admission but before generation had anything abortable.
 
 **Wiring:**
 
@@ -476,6 +561,8 @@ const generation = await runtime.llm.generate({
 
 **Abort trigger:** When a new turn is queued via `queueRealtimeTurn()` and a voice generation is in-flight for the same session, abort the in-flight generation via `activeReply.abortController.abort()`.
 
+Same-utterance late ASR revisions are treated as replacements, not as brand-new stale work. When the turn processor aborts a pre-audio generation because a newer revision of the same bridge utterance arrived, the revised turn is replayed with a fresh reply-scope timestamp before it re-enters the queue. That keeps the stale-cutoff safety from cancelling the corrected replacement.
+
 **Cleanup on abort:** Catch `AbortError`, log `voice_generation_aborted_superseded`, skip playback, let the newer turn proceed through the queue drain.
 
 ### Stage 3: Pre-playback supersede (existing)
@@ -483,7 +570,8 @@ const generation = await runtime.llm.generate({
 `maybeSupersedeRealtimeReplyBeforePlayback` runs before each speech playback step:
 
 - Checks if newer finalized realtime turns are queued
-- Checks if newer promoted live captures exist (for system speech)
+- Checks if newer promoted live captures exist and are already allowed by the
+  current interruption policy
 - If either: abandon the stale reply (`completed: false`), let the newer content process
 
 This is the final safety net for anything that slips through stages 1 and 2.
@@ -541,9 +629,10 @@ When deferred turns never flush:
 When post-barge-in recovery feels wrong:
 
 1. Check `session.interruptedAssistantReply` — was context actually stored?
-2. Check whether cancel really succeeded — failed cancel intentionally skips recovery context
+2. Check whether either cancel or truncate actually cut the reply — truncate-only interruptions still keep recovery context
 3. Check whether a newer assistant reply cleared applicability (`lastAssistantReplyAt > interruptedAt`)
-4. Inspect the generated prompt — did it include the interruption recovery section from `buildVoiceTurnPrompt`?
+4. If the follow-up ASR was empty, inspect `voice_interrupted_reply_recovered` — the runtime should replay the cut line directly instead of generating a fake turn
+5. Inspect the generated prompt — did it include the interruption recovery section from `buildVoiceTurnPrompt`?
 
 ## 21. Regression Tests (Reply Orchestration)
 
@@ -554,14 +643,15 @@ These cases should remain covered:
 - Active promoted captures block deferred turn flushing
 - Silence-only captures do NOT block deferred turn flushing
 - Coalesced deferred turns re-run the full admission gate
-- Barge-in stores interruption context when cancel succeeds
+- Barge-in stores interruption context when cancel succeeds or truncate succeeds
 - Prompt generation receives interruption recovery context on the interrupting user's next turn
-- There is no deferred interrupted-reply auto-retry path
+- Empty ASR after barge-in replays the interrupted assistant line directly
 - Pre-generation gate skips generation when newer finalized turn exists
 - Pre-generation gate skips generation when live promoted capture exists
 - Aborted generation produces no playback and no conversation window entry
 - Abort cleanup does not corrupt session state
-- Bot-initiated events (`bot_join_greeting`, `member_join_greeting`) are NOT requeued when user speaks over them
+- Authorized preplay supersede stashes generation-only system speech too, so
+  empty/noise interruptions can recover cleanly
 - Pre-playback supersede (stage 3) abandons stale replies for newer input
 - Silent response recovery retries and then hard-recovers
 - Deferred action expiry clears stale actions

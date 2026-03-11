@@ -28,6 +28,7 @@ export {
 } from "./voiceToolCallMemory.ts";
 
 export {
+  executeVoiceMusicReplyHandoffTool,
   executeVoiceMusicPlayTool,
   executeVoiceMusicQueueAddTool,
   executeVoiceMusicQueueNextTool,

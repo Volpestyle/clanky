@@ -4,7 +4,8 @@ import { getPromptBotName } from "../prompts/promptCore.ts";
 import {
   normalizeVoiceText,
   isVoiceTurnAddressedToBot,
-  isRealtimeMode
+  isRealtimeMode,
+  normalizeVoiceRuntimeEventContext
 } from "./voiceSessionHelpers.ts";
 import {
   buildVoiceAddressingState as buildVoiceAddressingStateFromTranscript,
@@ -33,21 +34,28 @@ import type {
   LoggedVoicePromptBundle,
   VoiceSession,
   OutputChannelState,
-  MusicPlaybackPhase
+  MusicPlaybackPhase,
+  VoiceRuntimeEventContext
 } from "./voiceSessionTypes.ts";
 import {
   musicPhaseShouldForceCommandOnly
 } from "./voiceSessionTypes.ts";
 import {
   applyOrchestratorOverrideSettings,
+  getActivitySettings,
   getResolvedVoiceAdmissionClassifierBinding,
   getVoiceAdmissionSettings,
   getVoiceConversationPolicy
 } from "../settings/agentStack.ts";
 import { resolveRealtimeAdmissionModeForRuntime } from "../settings/voiceDashboardMappings.ts";
 import { isCancelIntent } from "../tools/cancelDetection.ts";
+import {
+  clearMusicWakeLatch,
+  getMusicWakeLatchState,
+  resolveMusicWakeLatchSeconds,
+  touchMusicWakeLatch
+} from "./musicWakeLatch.ts";
 
-const DEFAULT_MUSIC_WAKE_LATCH_SECONDS = 15;
 const CLASSIFIER_HISTORY_MAX_TURNS = 6;
 const CLASSIFIER_HISTORY_MAX_CHARS = 900;
 const VOICE_CLASSIFIER_DEBUG_PROMPT_MAX_CHARS = 12_000;
@@ -137,55 +145,6 @@ function resolveRealtimeAdmissionMode(settings: ReplyDecisionSettings): "hard_cl
     getVoiceAdmissionSettings(settings).mode,
     getVoiceConversationPolicy(settings).replyPath
   );
-}
-
-function resolveMusicWakeLatchSeconds(settings: ReplyDecisionSettings): number {
-  return clamp(
-    Number(getVoiceAdmissionSettings(settings).musicWakeLatchSeconds) || DEFAULT_MUSIC_WAKE_LATCH_SECONDS,
-    5,
-    60
-  );
-}
-
-
-function clearMusicWakeLatch(session: ReplyDecisionSessionLike | null | undefined) {
-  if (!session || typeof session !== "object") return;
-  session.musicWakeLatchedUntil = 0;
-  session.musicWakeLatchedByUserId = null;
-}
-
-function getMusicWakeLatchState(
-  session: ReplyDecisionSessionLike | null | undefined,
-  now = Date.now()
-) {
-  const latchedUntil = Number(session?.musicWakeLatchedUntil || 0);
-  if (!Number.isFinite(latchedUntil) || latchedUntil <= now) {
-    if (latchedUntil > 0) clearMusicWakeLatch(session);
-    return {
-      active: false,
-      latchedUntil: 0,
-      msUntilExpiry: null
-    };
-  }
-  return {
-    active: true,
-    latchedUntil,
-    msUntilExpiry: Math.max(0, Math.round(latchedUntil - now))
-  };
-}
-
-function touchMusicWakeLatch(
-  session: ReplyDecisionSessionLike | null | undefined,
-  settings: ReplyDecisionSettings,
-  userId: string,
-  now = Date.now()
-) {
-  if (!session || typeof session !== "object") return 0;
-  const latchWindowMs = Math.round(resolveMusicWakeLatchSeconds(settings) * 1000);
-  const nextLatchedUntil = now + latchWindowMs;
-  session.musicWakeLatchedUntil = nextLatchedUntil;
-  session.musicWakeLatchedByUserId = String(userId || "").trim() || null;
-  return nextLatchedUntil;
 }
 
 function parseClassifierDecision(rawText: string): "allow" | "deny" | null {
@@ -437,10 +396,12 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   transcript,
   inputKind = "transcript",
   source: _source = "realtime",
-  transcriptionContext: _transcriptionContext = null
+  transcriptionContext: _transcriptionContext = null,
+  runtimeEventContext = null
 }): Promise<VoiceReplyDecision> {
   const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
   const normalizedInputKind = inputKind === "event" ? "event" : "transcript";
+  const normalizedRuntimeEventContext = normalizeVoiceRuntimeEventContext(runtimeEventContext);
   const normalizedUserId = String(userId || "").trim();
   const voiceChannelParticipants = manager.getVoiceChannelParticipants(session);
   const participantCount = voiceChannelParticipants.length;
@@ -466,7 +427,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
       directAddressConfidence: 0,
       directAddressThreshold: DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
       transcript: "",
-      conversationContext: emptyConversationContext
+      conversationContext: emptyConversationContext,
+      runtimeEventContext: normalizedRuntimeEventContext
     };
   }
   const directAddressedByWakePhrase = normalizedInputKind === "event"
@@ -522,7 +484,16 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   const directAddressConfidence = Number(directAddressAssessment.confidence) || 0;
   const directAddressThreshold = Number(directAddressAssessment.threshold) || DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD;
   const directAddressed = directAddressConfidence >= directAddressThreshold;
-  const replyEagerness = clamp(Number(getVoiceConversationPolicy(settings).replyEagerness) || 0, 0, 100);
+  const ambientReplyEagerness = clamp(
+    Number(getVoiceConversationPolicy(settings).ambientReplyEagerness) || 0,
+    0,
+    100
+  );
+  const responseWindowEagerness = clamp(
+    Number(getActivitySettings(settings).responseWindowEagerness) || 0,
+    0,
+    100
+  );
   const sameSpeakerPendingCommandFollowup =
     normalizedInputKind === "event"
       ? false
@@ -581,6 +552,7 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
       directAddressThreshold,
       transcript: normalizedTranscript,
       conversationContext,
+      runtimeEventContext: normalizedRuntimeEventContext,
       retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS,
       outputLockReason: outputChannelState.lockReason
     };
@@ -617,7 +589,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
       directAddressConfidence,
       directAddressThreshold,
       transcript: normalizedTranscript,
-      conversationContext
+      conversationContext,
+      runtimeEventContext: normalizedRuntimeEventContext
     };
   }
 
@@ -632,7 +605,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
           directAddressConfidence,
           directAddressThreshold,
           transcript: normalizedTranscript,
-          conversationContext
+          conversationContext,
+          runtimeEventContext: normalizedRuntimeEventContext
         };
       }
     } else if (activeCommandSpeaker === normalizedUserId) {
@@ -644,7 +618,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
         directAddressConfidence,
         directAddressThreshold,
         transcript: normalizedTranscript,
-        conversationContext
+        conversationContext,
+        runtimeEventContext: normalizedRuntimeEventContext
       };
     }
     if (!isCancelIntent(normalizedTranscript)) {
@@ -656,7 +631,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
         directAddressConfidence,
         directAddressThreshold,
         transcript: normalizedTranscript,
-        conversationContext
+        conversationContext,
+        runtimeEventContext: normalizedRuntimeEventContext
       };
     }
   }
@@ -678,7 +654,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
         directAddressConfidence,
         directAddressThreshold,
         transcript: normalizedTranscript,
-        conversationContext
+        conversationContext,
+        runtimeEventContext: normalizedRuntimeEventContext
       };
     }
     if (!musicActive) {
@@ -696,7 +673,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
           directAddressConfidence,
           directAddressThreshold,
           transcript: normalizedTranscript,
-          conversationContext
+          conversationContext,
+          runtimeEventContext: normalizedRuntimeEventContext
         };
       }
     }
@@ -709,7 +687,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
         directAddressConfidence,
         directAddressThreshold,
         transcript: normalizedTranscript,
-        conversationContext
+        conversationContext,
+        runtimeEventContext: normalizedRuntimeEventContext
       };
     }
   }
@@ -743,15 +722,18 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
       directAddressConfidence,
       directAddressThreshold,
       transcript: normalizedTranscript,
-      conversationContext
+      conversationContext,
+      runtimeEventContext: normalizedRuntimeEventContext
     };
   }
 
   // Bridge mode: deterministic wake arms a short music follow-up latch.
-  const nameCueDetected = hasBotNameCueForTranscript(manager, {
-    transcript: normalizedTranscript,
-    settings
-  });
+  const nameCueDetected = normalizedInputKind === "event"
+    ? false
+    : hasBotNameCueForTranscript(manager, {
+      transcript: normalizedTranscript,
+      settings
+    });
   if (musicActive) {
     if (nameCueDetected || directAddressedByWakePhrase) {
       touchMusicWakeLatch(session, settings, normalizedUserId, now);
@@ -769,7 +751,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
         directAddressConfidence,
         directAddressThreshold,
         transcript: normalizedTranscript,
-        conversationContext
+        conversationContext,
+        runtimeEventContext: normalizedRuntimeEventContext
       };
     }
   }
@@ -784,7 +767,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
       directAddressConfidence,
       directAddressThreshold,
       transcript: normalizedTranscript,
-      conversationContext
+      conversationContext,
+      runtimeEventContext: normalizedRuntimeEventContext
     };
   }
 
@@ -795,7 +779,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     directAddressConfidence,
     directAddressThreshold,
     transcript: normalizedTranscript,
-    conversationContext
+    conversationContext,
+    runtimeEventContext: normalizedRuntimeEventContext
   };
   const classifierResult = await runVoiceReplyClassifier(manager, {
     session,
@@ -807,7 +792,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     participantCount,
     participantList,
     conversationContext,
-    replyEagerness,
+    ambientReplyEagerness,
+    responseWindowEagerness,
     pendingCommandFollowupSignal: sameSpeakerPendingCommandFollowup,
     directAddressed,
     nameCueDetected,
@@ -816,7 +802,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     msUntilMusicWakeLatchExpiry,
     activeCommandOwner,
     currentSpeakerDirectedConfidence: Number(voiceAddressingState?.currentSpeakerDirectedConfidence || 0),
-    currentSpeakerTarget: String(voiceAddressingState?.currentSpeakerTarget || "").trim() || null
+    currentSpeakerTarget: String(voiceAddressingState?.currentSpeakerTarget || "").trim() || null,
+    runtimeEventContext: normalizedRuntimeEventContext
   });
   if (classifierResult.allow && musicActive && musicWakeLatched) {
     touchMusicWakeLatch(session, settings, normalizedUserId, now);
@@ -843,7 +830,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
 export type ClassifierPromptInput = {
   botName: string;
   inputKind?: "transcript" | "event";
-  replyEagerness: number;
+  ambientReplyEagerness: number;
+  responseWindowEagerness: number;
   participantCount: number;
   participantList: string[];
   speakerName: string;
@@ -860,24 +848,60 @@ export type ClassifierPromptInput = {
     msSinceDirectAddress?: number | null;
   };
   recentHistory?: string;
+  runtimeEventContext?: VoiceRuntimeEventContext | null;
 };
 
 export function buildClassifierPrompt(input: ClassifierPromptInput): {
   systemPrompt: string;
   userPrompt: string;
 } {
-  const normalizedEagerness = Math.max(0, Math.min(100, Number(input.replyEagerness) || 0));
+  const normalizedAmbientEagerness = Math.max(
+    0,
+    Math.min(100, Number(input.ambientReplyEagerness) || 0)
+  );
+  const normalizedResponseWindowEagerness = Math.max(
+    0,
+    Math.min(100, Number(input.responseWindowEagerness) || 0)
+  );
   const normalizedInputKind = input.inputKind === "event" ? "event" : "transcript";
+  const normalizedRuntimeEventContext = normalizeVoiceRuntimeEventContext(input.runtimeEventContext);
+  const selfJoinEvent =
+    normalizedInputKind === "event" &&
+    normalizedRuntimeEventContext?.category === "membership" &&
+    normalizedRuntimeEventContext.eventType === "join" &&
+    normalizedRuntimeEventContext.actorRole === "self";
+  const membershipEvent =
+    normalizedInputKind === "event" && normalizedRuntimeEventContext?.category === "membership"
+      ? normalizedRuntimeEventContext
+      : null;
+  const screenShareEvent =
+    normalizedInputKind === "event" && normalizedRuntimeEventContext?.category === "screen_share"
+      ? normalizedRuntimeEventContext
+      : null;
 
-  const systemPrompt = `You are "${input.botName}" (anything phonetically similar to "${input.botName}" is also you), an agentic discord voice channel member. You can play music, search the web, and handle commands. Decide whether to speak right now. Return exactly one token: YES or NO.`;
+  const systemPrompt = `You are "${input.botName}" (anything phonetically similar to "${input.botName}" is also you) in a Discord voice channel. You handle music, web searches, browsing, and commands when asked. Return exactly YES or NO.`;
 
   // --- Build context block first ---
   const parts: string[] = [];
 
   parts.push(`Participants: ${input.participantList.join(", ") || "none"}`);
   if (normalizedInputKind === "event") {
-    parts.push(`Triggering member: ${input.speakerName}`);
+    const triggeringMember =
+      selfJoinEvent
+        ? "YOU"
+        : String(
+          normalizedRuntimeEventContext?.actorDisplayName ||
+          input.speakerName ||
+          "someone"
+        ).trim() || "someone";
+    parts.push(`Triggering member: ${triggeringMember}`);
     parts.push(`Event: "${input.transcript}"`);
+    if (normalizedRuntimeEventContext?.category && normalizedRuntimeEventContext?.eventType) {
+      parts.push(`Structured event type: ${normalizedRuntimeEventContext.category}.${normalizedRuntimeEventContext.eventType}`);
+    }
+    if (screenShareEvent?.hasVisibleFrame) {
+      parts.push("Visible frame attached: yes.");
+    }
   } else {
     parts.push(`Speaker: ${input.speakerName}`);
     parts.push(`Transcript: "${input.transcript}"`);
@@ -890,7 +914,13 @@ export function buildClassifierPrompt(input: ClassifierPromptInput): {
     const hasRecentDirectAddress = input.conversationContext.msSinceDirectAddress != null
       && input.conversationContext.msSinceDirectAddress <= 15_000;
     if (msSince <= 15_000 && hasRecentDirectAddress) {
-      parts.push(`You spoke ${secsSinceReply}s ago in an active back-and-forth — follow-ups are likely for you.`);
+      if (normalizedResponseWindowEagerness >= 70) {
+        parts.push(`You spoke ${secsSinceReply}s ago in an active back-and-forth — follow-ups are likely still for you.`);
+      } else if (normalizedResponseWindowEagerness >= 35) {
+        parts.push(`You spoke ${secsSinceReply}s ago in an active back-and-forth — treat that as a meaningful follow-up signal, not a guarantee.`);
+      } else {
+        parts.push(`You spoke ${secsSinceReply}s ago, but your follow-up bias is conservative. Only assume the thread is still yours if the next turn clearly reconnects to you.`);
+      }
     } else {
       parts.push(`You spoke ${secsSinceReply}s ago.`);
     }
@@ -933,18 +963,28 @@ export function buildClassifierPrompt(input: ClassifierPromptInput): {
 
   // Event-specific guidance
   if (normalizedInputKind === "event") {
-    if (input.speakerName === "YOU") {
-      if (normalizedEagerness >= 25 || input.participantCount <= 1) {
+    if (selfJoinEvent) {
+      if (normalizedAmbientEagerness >= 25 || input.participantCount <= 1) {
         parts.push(`You just joined — say YES to greet unless there is a strong reason not to.`);
       } else {
         parts.push(`You just joined a room where others are talking. Only greet if directly prompted.`);
       }
-    } else {
-      if (normalizedEagerness >= 50) {
+    } else if (membershipEvent?.eventType === "join") {
+      if (normalizedAmbientEagerness >= 50) {
         parts.push(`Someone joined or left. Consider greeting them if it feels natural.`);
       } else {
         parts.push(`Someone joined or left.`);
       }
+    } else if (membershipEvent?.eventType === "leave") {
+      parts.push("Someone left the voice channel. Only say YES if a quick acknowledgement would feel natural.");
+    } else if (screenShareEvent) {
+      parts.push("This is a screen-share state cue, not spoken text.");
+      if (screenShareEvent.hasVisibleFrame) {
+        parts.push("A visible frame is attached, so a short reaction can be appropriate.");
+      }
+      parts.push("Only say YES if you have a natural brief reaction to the on-screen moment.");
+    } else {
+      parts.push("A runtime event occurred. Only say YES if a brief acknowledgement would feel natural.");
     }
   }
 
@@ -955,18 +995,27 @@ export function buildClassifierPrompt(input: ClassifierPromptInput): {
     parts.push("The speaker may have said your name (fuzzy match). Lean toward YES.");
   }
 
-  // Eagerness tier — social mode context, not prescriptive rules.
-  // The classifier reasons about the room given this framing.
-  if (normalizedEagerness <= 10) {
+  parts.push(`Voice ambient-reply eagerness: ${normalizedAmbientEagerness}/100.`);
+  parts.push(`Response-window eagerness: ${normalizedResponseWindowEagerness}/100.`);
+
+  if (normalizedAmbientEagerness <= 10) {
     parts.push("You are in lurker mode — you prefer to stay quiet unless someone clearly wants your attention. You're here to listen, not to lead.");
-  } else if (normalizedEagerness <= 25) {
+  } else if (normalizedAmbientEagerness <= 25) {
     parts.push("You are selective — you engage when addressed or in active back-and-forth, but you're comfortable staying quiet when others are talking among themselves.");
-  } else if (normalizedEagerness <= 50) {
+  } else if (normalizedAmbientEagerness <= 50) {
     parts.push("You are a good listener — happy to contribute when you have something worthwhile to add, but you don't force yourself into every exchange.");
-  } else if (normalizedEagerness <= 75) {
+  } else if (normalizedAmbientEagerness <= 75) {
     parts.push("You are social and engaged — you enjoy the conversation and are willing to participate when it interests you or you can add value.");
   } else {
     parts.push("You are fully social — you treat this channel like a group hangout and want to be part of the conversation. You'd rather participate than sit back.");
+  }
+
+  if (normalizedResponseWindowEagerness <= 20) {
+    parts.push("Recent engagement only slightly increases the chance a follow-up is for you.");
+  } else if (normalizedResponseWindowEagerness <= 60) {
+    parts.push("Recent engagement is a useful follow-up signal, but not an automatic yes.");
+  } else {
+    parts.push("Recent engagement is a strong follow-up signal. Stay in the thread unless the room clearly pivots away.");
   }
 
   parts.push(``);
@@ -985,7 +1034,8 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   participantCount,
   participantList,
   conversationContext,
-  replyEagerness,
+  ambientReplyEagerness,
+  responseWindowEagerness,
   pendingCommandFollowupSignal = false,
   directAddressed = false,
   nameCueDetected = false,
@@ -994,7 +1044,8 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   msUntilMusicWakeLatchExpiry = null,
   activeCommandOwner = null,
   currentSpeakerDirectedConfidence = 0,
-  currentSpeakerTarget = null
+  currentSpeakerTarget = null,
+  runtimeEventContext = null
 }: {
   session: ReplyDecisionSessionLike;
   settings: ReplyDecisionSettings;
@@ -1005,7 +1056,8 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   participantCount: number;
   participantList: string[];
   conversationContext: VoiceConversationContext;
-  replyEagerness: number;
+  ambientReplyEagerness: number;
+  responseWindowEagerness: number;
   pendingCommandFollowupSignal?: boolean;
   directAddressed?: boolean;
   nameCueDetected?: boolean;
@@ -1015,6 +1067,7 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   activeCommandOwner?: string | null;
   currentSpeakerDirectedConfidence?: number;
   currentSpeakerTarget?: string | null;
+  runtimeEventContext?: VoiceRuntimeEventContext | null;
 }): Promise<{
   allow: boolean;
   decision: "allow" | "deny" | null;
@@ -1038,6 +1091,7 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   const _normalizedDirectedConfidence = Math.max(0, Math.min(1, Number(currentSpeakerDirectedConfidence) || 0));
   const _normalizedTarget = String(currentSpeakerTarget || "").trim() || null;
   const normalizedUserId = String(userId || "").trim() || null;
+  const normalizedRuntimeEventContext = normalizeVoiceRuntimeEventContext(runtimeEventContext);
   const logClassifierDebug = ({
     stage = "result",
     promptSnapshot = null,
@@ -1080,8 +1134,11 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
             .filter(Boolean)
             .slice(0, 12)
           : [],
-        replyEagerness: Number.isFinite(Number(replyEagerness))
-          ? clamp(Number(replyEagerness), 0, 100)
+        ambientReplyEagerness: Number.isFinite(Number(ambientReplyEagerness))
+          ? clamp(Number(ambientReplyEagerness), 0, 100)
+          : null,
+        responseWindowEagerness: Number.isFinite(Number(responseWindowEagerness))
+          ? clamp(Number(responseWindowEagerness), 0, 100)
           : null,
         pendingCommandFollowupSignal: Boolean(pendingCommandFollowupSignal),
         musicActive: Boolean(musicActive),
@@ -1111,6 +1168,7 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
               : null
           }
           : null,
+        runtimeEventContext: normalizedRuntimeEventContext,
         promptSnapshot: String(promptSnapshot || "").slice(0, VOICE_CLASSIFIER_DEBUG_PROMPT_MAX_CHARS) || null,
         rawOutput: String(rawOutput || "").slice(0, VOICE_CLASSIFIER_DEBUG_OUTPUT_MAX_CHARS) || null,
         parsedDecision,
@@ -1129,7 +1187,8 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   const { systemPrompt: classifierSystemPrompt, userPrompt: classifierUserPrompt } = buildClassifierPrompt({
     botName,
     inputKind,
-    replyEagerness,
+    ambientReplyEagerness,
+    responseWindowEagerness,
     participantCount,
     participantList,
     speakerName,
@@ -1141,7 +1200,8 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
     msUntilMusicWakeLatchExpiry,
     activeCommandOwner,
     conversationContext,
-    recentHistory
+    recentHistory,
+    runtimeEventContext: normalizedRuntimeEventContext
   });
   const replyPrompts = buildSingleTurnPromptLog({
     systemPrompt: classifierSystemPrompt,

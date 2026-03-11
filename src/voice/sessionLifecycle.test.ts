@@ -1,6 +1,79 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { createVoiceTestManager, createVoiceTestSettings } from "./voiceTestHarness.ts";
+import { createVoiceTestManager, createVoiceTestSettings as createCanonicalVoiceTestSettings } from "./voiceTestHarness.ts";
+import { normalizeLegacyTestSettingsInput } from "../testSettings.ts";
+import { deepMerge } from "../utils.ts";
+import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
+
+const LEGACY_VOICE_KEYS = [
+  "mode",
+  "voiceProvider",
+  "brainProvider",
+  "generationLlm",
+  "replyDecisionLlm",
+  "asrEnabled",
+  "asrLanguageMode",
+  "asrLanguageHint",
+  "allowedVoiceChannelIds",
+  "blockedVoiceChannelIds",
+  "blockedVoiceUserIds",
+  "maxSessionMinutes",
+  "inactivityLeaveSeconds",
+  "maxSessionsPerDay",
+  "maxConcurrentSessions",
+  "ambientReplyEagerness",
+  "commandOnlyMode",
+  "allowNsfwHumor",
+  "textOnlyMode",
+  "defaultInterruptionMode",
+  "replyPath",
+  "ttsMode",
+  "operationalMessages",
+  "streamingEnabled",
+  "streamingEagerFirstChunkChars",
+  "streamingMaxBufferChars",
+  "thoughtEngine",
+  "musicDucking",
+  "intentConfidenceThreshold",
+  "openaiRealtime",
+  "xai",
+  "elevenLabsRealtime",
+  "geminiRealtime",
+  "openaiAudioApi"
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function createVoiceTestSettings(overrides: Record<string, unknown> = {}) {
+  const canonicalOverrides: Record<string, unknown> = { ...overrides };
+  const legacyOverrides: Record<string, unknown> = {};
+
+  if (isRecord(canonicalOverrides.voice)) {
+    const canonicalVoice = { ...canonicalOverrides.voice };
+    const legacyVoice: Record<string, unknown> = {};
+    for (const key of LEGACY_VOICE_KEYS) {
+      if (key in canonicalVoice) {
+        legacyVoice[key] = canonicalVoice[key];
+        delete canonicalVoice[key];
+      }
+    }
+
+    if (Object.keys(legacyVoice).length > 0) {
+      legacyOverrides.voice = legacyVoice;
+    }
+    if (Object.keys(canonicalVoice).length > 0) {
+      canonicalOverrides.voice = canonicalVoice;
+    } else {
+      delete canonicalOverrides.voice;
+    }
+  }
+
+  const normalizedLegacy =
+    Object.keys(legacyOverrides).length > 0 ? normalizeLegacyTestSettingsInput(legacyOverrides) : {};
+  return createCanonicalVoiceTestSettings(deepMerge(normalizedLegacy, canonicalOverrides));
+}
 
 test("bindRealtimeHandlers logs OpenAI realtime response.done usage cost", () => {
   const runtimeLogs = [];
@@ -20,7 +93,7 @@ test("bindRealtimeHandlers logs OpenAI realtime response.done usage cost", () =>
     responseDoneGraceTimer: null,
     settingsSnapshot: createVoiceTestSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -109,7 +182,7 @@ test("bindRealtimeHandlers persists only final realtime transcript events", () =
     responseDoneGraceTimer: null,
     settingsSnapshot: createVoiceTestSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -159,4 +232,198 @@ test("bindRealtimeHandlers persists only final realtime transcript events", () =
   );
   assert.equal(transcriptLogs[0]?.metadata?.transcriptSource, "output");
   assert.equal(session.pendingRealtimeInputBytes, 0);
+});
+
+test("bindRealtimeHandlers requests OpenAI reply addressing for provider-native assistant replies", () => {
+  const manager = createVoiceTestManager();
+  const realtimeClient = new OpenAiRealtimeClient({ apiKey: "test-key" });
+  let requestedArgs = null;
+  realtimeClient.requestReplyAddressingClassification = (args) => {
+    requestedArgs = args;
+    return true;
+  };
+
+  const session = {
+    id: "session-realtime-addressing-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    ending: false,
+    recentVoiceTurns: [],
+    transcriptTurns: [],
+    pendingRealtimeInputBytes: 1024,
+    pendingResponse: {
+      requestId: 7,
+      userId: "speaker-1",
+      source: "openai_realtime_text_turn",
+      interruptionPolicy: null
+    },
+    responseDoneGraceTimer: null,
+    settingsSnapshot: createVoiceTestSettings({
+      voice: {
+        replyPath: "bridge",
+        ambientReplyEagerness: 60,
+        openaiRealtime: {
+          model: "gpt-realtime-mini"
+        }
+      }
+    }),
+    realtimeClient,
+    cleanupHandlers: []
+  };
+
+  manager.sessionLifecycle.bindRealtimeHandlers(session, session.settingsSnapshot);
+
+  realtimeClient.emit("transcript", {
+    text: "what's up",
+    eventType: "response.output_audio_transcript.done"
+  });
+
+  assert.ok(requestedArgs);
+  assert.equal(requestedArgs.assistantText, "what's up");
+  assert.equal(requestedArgs.currentSpeakerName, "speaker 1");
+  assert.equal(requestedArgs.speakerUserId, "speaker-1");
+  assert.equal(requestedArgs.requestId, 7);
+  assert.equal(requestedArgs.responseSource, "openai_realtime_text_turn");
+  assert.deepEqual(requestedArgs.participants, ["speaker 1", "speaker 2"]);
+});
+
+test("bindRealtimeHandlers patches assistant targeting and interruption policy from OpenAI reply addressing results", () => {
+  const manager = createVoiceTestManager();
+  const realtimeClient = new OpenAiRealtimeClient({ apiKey: "test-key" });
+  realtimeClient.requestReplyAddressingClassification = () => true;
+  manager.getOutputChannelState = () => ({
+    phase: "speaking_buffered",
+    locked: true,
+    lockReason: "bot_audio_buffered",
+    musicActive: false,
+    captureBlocking: false,
+    bargeInSuppressed: false,
+    turnBacklog: 0,
+    toolCallsRunning: false,
+    botTurnOpen: true,
+    bufferedBotSpeech: true,
+    pendingResponse: true,
+    openAiActiveResponse: false,
+    awaitingToolOutputs: false,
+    streamBufferedBytes: 0,
+    deferredBlockReason: null
+  });
+
+  const session = {
+    id: "session-realtime-addressing-2",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    ending: false,
+    recentVoiceTurns: [],
+    transcriptTurns: [],
+    pendingRealtimeInputBytes: 0,
+    pendingResponse: {
+      requestId: 11,
+      userId: "speaker-1",
+      source: "openai_realtime_text_turn",
+      interruptionPolicy: manager.resolveReplyInterruptionPolicy({
+        session: {
+          guildId: "guild-1",
+          voiceChannelId: "voice-1",
+          ending: false,
+          settingsSnapshot: createVoiceTestSettings({
+            voice: {
+              replyPath: "bridge"
+            }
+          })
+        },
+        userId: "speaker-1"
+      })
+    },
+    activeReplyInterruptionPolicy: null,
+    responseDoneGraceTimer: null,
+    settingsSnapshot: createVoiceTestSettings({
+      voice: {
+        replyPath: "bridge",
+        ambientReplyEagerness: 60,
+        openaiRealtime: {
+          model: "gpt-realtime-mini"
+        }
+      }
+    }),
+    realtimeClient,
+    cleanupHandlers: []
+  };
+  session.activeReplyInterruptionPolicy = session.pendingResponse.interruptionPolicy;
+
+  manager.sessionLifecycle.bindRealtimeHandlers(session, session.settingsSnapshot);
+
+  realtimeClient.emit("transcript", {
+    text: "what's up",
+    eventType: "response.output_audio_transcript.done"
+  });
+  realtimeClient.emit("reply_addressing_result", {
+    assistantText: "what's up",
+    classifierText: "ALL",
+    currentSpeakerName: "speaker 1",
+    speakerUserId: "speaker-1",
+    requestId: 11,
+    responseSource: "openai_realtime_text_turn"
+  });
+
+  assert.equal(session.transcriptTurns.at(-1)?.role, "assistant");
+  assert.equal(session.transcriptTurns.at(-1)?.text, "what's up");
+  assert.equal(session.transcriptTurns.at(-1)?.addressing?.talkingTo, "ALL");
+  assert.equal(session.pendingResponse?.interruptionPolicy?.scope, "none");
+  assert.equal(session.pendingResponse?.interruptionPolicy?.talkingTo, "ALL");
+  assert.equal(session.activeReplyInterruptionPolicy?.scope, "none");
+  assert.equal(session.activeReplyInterruptionPolicy?.talkingTo, "ALL");
+});
+
+test("bindRealtimeHandlers skips OpenAI reply addressing side-channel for pre-generated playback utterances", () => {
+  const manager = createVoiceTestManager();
+  const realtimeClient = new OpenAiRealtimeClient({ apiKey: "test-key" });
+  let requestCount = 0;
+  realtimeClient.requestReplyAddressingClassification = () => {
+    requestCount += 1;
+    return true;
+  };
+
+  const session = {
+    id: "session-realtime-addressing-3",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    ending: false,
+    recentVoiceTurns: [],
+    transcriptTurns: [],
+    pendingRealtimeInputBytes: 0,
+    pendingResponse: {
+      requestId: 12,
+      userId: "speaker-1",
+      source: "voice_prompt_utterance",
+      interruptionPolicy: null
+    },
+    responseDoneGraceTimer: null,
+    settingsSnapshot: createVoiceTestSettings({
+      voice: {
+        replyPath: "brain",
+        ambientReplyEagerness: 60,
+        openaiRealtime: {
+          model: "gpt-realtime-mini"
+        }
+      }
+    }),
+    realtimeClient,
+    cleanupHandlers: []
+  };
+
+  manager.sessionLifecycle.bindRealtimeHandlers(session, session.settingsSnapshot);
+
+  realtimeClient.emit("transcript", {
+    text: "already generated upstream",
+    eventType: "response.output_audio_transcript.done"
+  });
+
+  assert.equal(requestCount, 0);
 });

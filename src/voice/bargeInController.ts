@@ -46,6 +46,9 @@ export interface ReplyInterruptionPolicy {
   assertive: boolean;
   scope: "none" | "speaker" | "anyone";
   allowedUserId: string | null;
+  talkingTo?: string | null;
+  source?: string | null;
+  reason?: string | null;
 }
 
 export type BargeInDecision =
@@ -166,7 +169,7 @@ export class BargeInController {
     const liveAudioStreaming = this.host.replyManager.hasRecentAssistantAudioDelta(session);
     const bufferedBotSpeech = this.host.replyManager.hasBufferedTtsPlayback(session);
 
-    if (!session.botTurnOpen && botTurnOpenAt <= 0) {
+    if (!session.botTurnOpen && botTurnOpenAt <= 0 && !liveAudioStreaming && !bufferedBotSpeech) {
       const pendingResponse = this.getPendingResponse(session);
       const pendingEverProducedAudio = Math.max(0, Number(pendingResponse?.audioReceivedAt || 0)) > 0;
       if (!pendingEverProducedAudio) {
@@ -176,10 +179,7 @@ export class BargeInController {
       return { allowed: false };
     }
 
-    if (!liveAudioStreaming && bufferedBotSpeech) {
-      return { allowed: false };
-    }
-    if (!liveAudioStreaming && !session.botTurnOpen) {
+    if (!liveAudioStreaming && !session.botTurnOpen && !bufferedBotSpeech) {
       return { allowed: false };
     }
 

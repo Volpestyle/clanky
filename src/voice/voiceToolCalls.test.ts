@@ -45,12 +45,21 @@ test("executeLocalVoiceToolCall forwards browser abort signals to browser_browse
       lastRealtimeToolCallerUserId: "user-1"
     },
     settings: createTestSettings({
-      browser: {
-        maxStepsPerTask: 5,
-        stepTimeoutMs: 10_000,
-        llm: {
-          provider: "anthropic",
-          model: "claude-sonnet-4-5-20250929"
+      agentStack: {
+        runtimeConfig: {
+          browser: {
+            localBrowserAgent: {
+              maxStepsPerTask: 5,
+              stepTimeoutMs: 10_000,
+              execution: {
+                mode: "dedicated_model",
+                model: {
+                  provider: "anthropic",
+                  model: "claude-sonnet-4-5-20250929"
+                }
+              }
+            }
+          }
         }
       }
     }),
@@ -162,6 +171,92 @@ test("executeVoiceBrowserBrowseTool omits session_id when the browser session co
   assert.equal(sessions.size, 0);
 });
 
+test("executeLocalVoiceToolCall applies a temporary pause reply handoff for the main brain", async () => {
+  const scheduledResumeCalls: number[] = [];
+  const pauseCalls: number[] = [];
+  const queueState = {
+    guildId: "guild-1",
+    voiceChannelId: "voice-1",
+    tracks: [],
+    nowPlayingIndex: 0,
+    isPaused: false
+  };
+  const session = {
+    id: "voice-session-handoff-1",
+    guildId: "guild-1",
+    textChannelId: "channel-1",
+    voiceChannelId: "voice-1",
+    ending: false,
+    lastRealtimeToolCallerUserId: "user-1",
+    music: {
+      phase: "playing" as const,
+      ducked: false,
+      pauseReason: null,
+      replyHandoffMode: null,
+      replyHandoffRequestedByUserId: null,
+      replyHandoffSource: null,
+      replyHandoffAt: 0,
+      startedAt: 0,
+      stoppedAt: 0,
+      provider: null,
+      source: null,
+      lastTrackId: null,
+      lastTrackTitle: null,
+      lastTrackArtists: [],
+      lastTrackUrl: null,
+      lastQuery: null,
+      lastRequestedByUserId: null,
+      lastRequestText: null,
+      lastCommandAt: 0,
+      lastCommandReason: null,
+      pendingQuery: null,
+      pendingPlatform: "auto" as const,
+      pendingAction: "play_now" as const,
+      pendingResults: [],
+      pendingRequestedByUserId: null,
+      pendingRequestedAt: 0
+    }
+  };
+
+  const result = await executeLocalVoiceToolCall({
+    ensureToolMusicQueueState: () => queueState,
+    buildVoiceQueueStatePayload: () => queueState,
+    musicPlayer: {
+      pause() {
+        pauseCalls.push(1);
+      }
+    },
+    replyManager: {
+      schedulePausedReplyMusicResume(_session: unknown, delayMs?: number) {
+        scheduledResumeCalls.push(Number(delayMs || 0));
+      },
+      hasBufferedTtsPlayback: () => false
+    },
+    store: {
+      getSettings: () => createTestSettings({}),
+      logAction() {
+        return undefined;
+      }
+    }
+  }, {
+    session,
+    settings: createTestSettings({}),
+    toolName: "music_reply_handoff",
+    args: {
+      mode: "pause"
+    }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.applied, true);
+  assert.equal(result.mode, "pause");
+  assert.equal(session.music?.phase, "paused_wake_word");
+  assert.equal(session.music?.replyHandoffMode, "pause");
+  assert.equal(queueState.isPaused, true);
+  assert.equal(pauseCalls.length, 1);
+  assert.deepEqual(scheduledResumeCalls, [200]);
+});
+
 // ---------------------------------------------------------------------------
 // music_play non-blocking tests
 // ---------------------------------------------------------------------------
@@ -181,6 +276,7 @@ function buildMusicPlayManager({
   }>;
 } = {}) {
   const calls: { method: string; args: unknown }[] = [];
+  const sessionMusicState = { phase: "idle" };
 
   const queueState = {
     guildId: "guild-1",
@@ -201,6 +297,15 @@ function buildMusicPlayManager({
 
   const catalog = new Map([[track.id, track]]);
 
+  const session = {
+    id: "voice-session-1",
+    guildId: "guild-1",
+    textChannelId: "channel-1",
+    lastRealtimeToolCallerUserId: "user-1",
+    toolMusicTrackCatalog: catalog,
+    music: sessionMusicState
+  };
+
   const manager = {
     client: {
       user: {
@@ -208,6 +313,13 @@ function buildMusicPlayManager({
       }
     },
     ensureToolMusicQueueState: () => queueState,
+    ensureSessionMusicState: () => ({
+      lastTrackId: null,
+      lastTrackTitle: null,
+      lastTrackArtists: [],
+      lastTrackUrl: null,
+      provider: "youtube"
+    }),
     buildVoiceQueueStatePayload: () => ({ guildId: "guild-1", tracks: [], nowPlayingIndex: 0, isPaused: false }),
     musicSearch: {
       isConfigured: () => true,
@@ -222,6 +334,10 @@ function buildMusicPlayManager({
       durationSeconds: Number(row.durationSeconds || 0)
     }),
     beginVoiceCommandSession: (...args: unknown[]) => { calls.push({ method: "beginVoiceCommandSession", args }); },
+    setMusicPhase: (_session: unknown, phase: string) => {
+      sessionMusicState.phase = phase;
+      calls.push({ method: "setMusicPhase", args: [_session, phase] });
+    },
     requestPlayMusic: requestPlayMusicImpl
       ? (...args: unknown[]) => { calls.push({ method: "requestPlayMusic", args }); return requestPlayMusicImpl(); }
       : (...args: unknown[]) => { calls.push({ method: "requestPlayMusic", args }); return Promise.resolve(); },
@@ -231,15 +347,7 @@ function buildMusicPlayManager({
     }
   };
 
-  const session = {
-    id: "voice-session-1",
-    guildId: "guild-1",
-    textChannelId: "channel-1",
-    lastRealtimeToolCallerUserId: "user-1",
-    toolMusicTrackCatalog: catalog
-  };
-
-  return { manager, session, calls, track };
+  return { manager, session, calls, track, sessionMusicState };
 }
 
 test("music_play returns immediately with status loading for a direct match", async () => {
@@ -254,7 +362,7 @@ test("music_play returns immediately with status loading for a direct match", as
     externalUrl: "https://example.com/track"
   };
 
-  const { manager, session, calls } = buildMusicPlayManager({
+  const { manager, session, calls, sessionMusicState } = buildMusicPlayManager({
     requestPlayMusicImpl: () => playMusicPromise,
     searchResults: [directTrack]
   });
@@ -270,6 +378,7 @@ test("music_play returns immediately with status loading for a direct match", as
   assert.equal(result.track.title, "Bad and Boujee");
   assert.equal(result.track.artist, "Migos");
   assert.equal(calls.filter((c) => c.method === "requestPlayMusic").length, 1);
+  assert.equal(sessionMusicState.phase, "loading");
 
   const utteranceCalls = calls.filter((c) => c.method === "requestRealtimePromptUtterance");
   assert.equal(utteranceCalls.length, 0);
@@ -279,6 +388,48 @@ test("music_play returns immediately with status loading for a direct match", as
 
   const afterCalls = calls.filter((c) => c.method === "requestRealtimePromptUtterance");
   assert.equal(afterCalls.length, 0);
+});
+
+test("music_play falls back to query search when selection_id is unknown", async () => {
+  const directTrack = {
+    id: "track-abc",
+    title: "Bad and Boujee",
+    artist: "Migos",
+    durationSeconds: 240,
+    platform: "youtube",
+    externalUrl: "https://example.com/track"
+  };
+
+  const { manager, session, calls, sessionMusicState } = buildMusicPlayManager({
+    searchResults: [directTrack]
+  });
+
+  const result = await executeVoiceMusicPlayTool(manager, {
+    session,
+    settings: createTestSettings({}),
+    args: {
+      query: "bad and boujee",
+      selection_id: "</antml :parameter>\n"
+    }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "loading");
+  assert.equal(result.track.id, "track-abc");
+  assert.equal(result.track.title, "Bad and Boujee");
+  assert.equal(calls.filter((entry) => entry.method === "requestPlayMusic").length, 1);
+  assert.equal(sessionMusicState.phase, "loading");
+
+  const fallbackLog = calls.find((entry) => {
+    if (entry.method !== "logAction" || !Array.isArray(entry.args)) return false;
+    const payload = entry.args[0];
+    return Boolean(
+      payload &&
+      typeof payload === "object" &&
+      (payload as { content?: unknown }).content === "voice_tool_music_play_selection_fallback"
+    );
+  });
+  assert.equal(Boolean(fallbackLog), true);
 });
 
 test("music_play returns disambiguation options when search is ambiguous", async () => {
@@ -341,6 +492,19 @@ test("music_play updates queue state synchronously before returning", async () =
 
   const catalog = new Map([[track.id, track]]);
 
+  const session = {
+    id: "s1",
+    guildId: "g1",
+    textChannelId: "tc1",
+    lastRealtimeToolCallerUserId: null,
+    toolMusicTrackCatalog: catalog,
+    music: {
+      phase: "idle" as const,
+      ducked: false,
+      pauseReason: null
+    }
+  };
+
   const manager = {
     client: {
       user: {
@@ -364,6 +528,25 @@ test("music_play updates queue state synchronously before returning", async () =
     beginVoiceCommandSession() {
       return undefined;
     },
+    setMusicPhase(runtimeSession: unknown, phase: string) {
+      const targetSession = runtimeSession as {
+        music?: {
+          phase?: "loading" | "playing" | "paused" | "paused_wake_word" | "idle" | "stopping";
+          ducked?: boolean;
+          pauseReason?: null;
+        };
+      } | null;
+      if (targetSession?.music && typeof targetSession.music === "object") {
+        targetSession.music.phase = phase as typeof targetSession.music.phase;
+        return undefined;
+      }
+      targetSession!.music = {
+        phase: phase as "loading" | "playing" | "paused" | "paused_wake_word" | "idle" | "stopping",
+        ducked: false,
+        pauseReason: null
+      };
+      return undefined;
+    },
     requestPlayMusic: () => new Promise<void>(() => {}), // never resolves
     requestRealtimePromptUtterance: () => true,
     store: {
@@ -374,13 +557,7 @@ test("music_play updates queue state synchronously before returning", async () =
   };
 
   await executeVoiceMusicPlayTool(manager, {
-    session: {
-      id: "s1",
-      guildId: "g1",
-      textChannelId: "tc1",
-      lastRealtimeToolCallerUserId: null,
-      toolMusicTrackCatalog: catalog
-    },
+    session,
     settings: createTestSettings({}),
     args: { selection_id: "track-abc" }
   });
@@ -390,6 +567,7 @@ test("music_play updates queue state synchronously before returning", async () =
   assert.equal(queueState.tracks[0].title, "Bad and Boujee");
   assert.equal(queueState.tracks[1].id, "old-2");
   assert.equal(queueState.tracks.length, 2);
+  assert.equal(session.music?.phase, "loading");
 });
 
 test("music_play resolves selection_id from saved last-track state when the catalog is empty", async () => {
@@ -401,6 +579,18 @@ test("music_play resolves selection_id from saved last-track state when the cata
     isPaused: false
   };
   const calls: { method: string; args: unknown }[] = [];
+  const session = {
+    id: "s-last",
+    guildId: "g1",
+    textChannelId: "tc1",
+    lastRealtimeToolCallerUserId: "user-1",
+    toolMusicTrackCatalog: new Map(),
+    music: {
+      phase: "idle" as const,
+      ducked: false,
+      pauseReason: null
+    }
+  };
 
   const manager = {
     client: {
@@ -432,6 +622,20 @@ test("music_play resolves selection_id from saved last-track state when the cata
     beginVoiceCommandSession() {
       return undefined;
     },
+    setMusicPhase(runtimeSession: unknown, phase: string) {
+      const targetSession = runtimeSession as {
+        music?: {
+          phase?: "loading" | "playing" | "paused" | "paused_wake_word" | "idle" | "stopping";
+          ducked?: boolean;
+          pauseReason?: null;
+        };
+      } | null;
+      if (targetSession?.music && typeof targetSession.music === "object") {
+        targetSession.music.phase = phase as typeof targetSession.music.phase;
+        return undefined;
+      }
+      return undefined;
+    },
     requestPlayMusic: (...args: unknown[]) => {
       calls.push({ method: "requestPlayMusic", args });
       return Promise.resolve();
@@ -445,13 +649,7 @@ test("music_play resolves selection_id from saved last-track state when the cata
   };
 
   const result = await executeVoiceMusicPlayTool(manager, {
-    session: {
-      id: "s-last",
-      guildId: "g1",
-      textChannelId: "tc1",
-      lastRealtimeToolCallerUserId: "user-1",
-      toolMusicTrackCatalog: new Map()
-    },
+    session,
     settings: createTestSettings({}),
     args: {
       query: "midnight city m83",

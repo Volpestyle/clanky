@@ -1,3 +1,5 @@
+import { normalizeVoiceRuntimeEventContext } from "../voice/voiceSessionHelpers.ts";
+
 type VoiceAdmissionPolicyContext = {
   engaged?: boolean;
   engagedWithCurrentSpeaker?: boolean;
@@ -9,16 +11,18 @@ type VoiceAdmissionPolicyOptions = {
   directAddressed?: boolean;
   nameCueDetected?: boolean;
   isEagerTurn?: boolean;
-  replyEagerness?: number;
+  ambientReplyEagerness?: number;
+  responseWindowEagerness?: number;
   participantCount?: number;
   conversationContext?: VoiceAdmissionPolicyContext | null;
+  runtimeEventContext?: unknown;
   pendingCommandFollowupSignal?: boolean;
   musicActive?: boolean;
   musicWakeLatched?: boolean;
 };
 
 
-function getEagernessGenerationTier(eagerness: number): string {
+function getAmbientReplyTier(eagerness: number): string {
   if (eagerness <= 0) {
     return "You are in lurker mode — you prefer to stay quiet unless someone clearly wants your attention or you have something genuinely important to say. Default to [SKIP].";
   }
@@ -31,7 +35,20 @@ function getEagernessGenerationTier(eagerness: number): string {
   if (eagerness <= 75) {
     return "You are social and engaged — you enjoy the conversation and participate when it interests you or you can add value. You'd rather contribute than sit back when the moment fits.";
   }
-  return "You are fully social — you treat this like a group hangout and want to be part of the conversation. You riff, react, and actively engage. Only [SKIP] for clear non-speech or someone explicitly talking to another person.";
+  return "You are fully social — you treat this like a group hangout and want to be part of the conversation. You prefer participating over sitting back, while still skipping clear non-speech or turns meant for someone else.";
+}
+
+function getResponseWindowTier(eagerness: number): string {
+  if (eagerness <= 15) {
+    return "Your follow-up window is tight. A recent exchange is only a weak signal unless the speaker clearly re-engages you.";
+  }
+  if (eagerness <= 45) {
+    return "Your follow-up window is moderate. Recent engagement matters, but it does not obligate you to keep talking.";
+  }
+  if (eagerness <= 75) {
+    return "Your follow-up window is warm. If you were just engaged, plausible follow-ups are likely still for you.";
+  }
+  return "Your follow-up window is sticky. When you were just engaged, treat the thread as still active unless the room clearly moves on.";
 }
 
 export function buildVoiceAdmissionPolicyLines({
@@ -40,9 +57,11 @@ export function buildVoiceAdmissionPolicyLines({
   directAddressed = false,
   nameCueDetected = false,
   isEagerTurn = false,
-  replyEagerness = 0,
+  ambientReplyEagerness = 0,
+  responseWindowEagerness = 0,
   participantCount = 0,
   conversationContext = null,
+  runtimeEventContext = null,
   pendingCommandFollowupSignal = false,
   musicActive = false,
   musicWakeLatched = false
@@ -56,12 +75,19 @@ export function buildVoiceAdmissionPolicyLines({
   const normalizedNameCueDetected = Boolean(nameCueDetected);
   const normalizedIsEagerTurn = Boolean(isEagerTurn);
   const normalizedParticipantCount = Math.max(0, Math.floor(Number(participantCount) || 0));
-  const normalizedEagerness = Math.max(0, Math.min(100, Number(replyEagerness) || 0));
+  const normalizedAmbientEagerness = Math.max(0, Math.min(100, Number(ambientReplyEagerness) || 0));
+  const normalizedResponseWindowEagerness = Math.max(
+    0,
+    Math.min(100, Number(responseWindowEagerness) || 0)
+  );
+  const normalizedRuntimeEventContext = normalizeVoiceRuntimeEventContext(runtimeEventContext);
   const engagedWithCurrentSpeaker = Boolean(conversationContext?.engagedWithCurrentSpeaker);
   const _engaged = Boolean(conversationContext?.engaged);
 
-  lines.push(`Voice reply eagerness: ${normalizedEagerness}/100.`);
-  lines.push(getEagernessGenerationTier(normalizedEagerness));
+  lines.push(`Voice ambient-reply eagerness: ${normalizedAmbientEagerness}/100.`);
+  lines.push(getAmbientReplyTier(normalizedAmbientEagerness));
+  lines.push(`Response-window eagerness: ${normalizedResponseWindowEagerness}/100.`);
+  lines.push(getResponseWindowTier(normalizedResponseWindowEagerness));
 
   if (normalizedParticipantCount <= 1) {
     lines.push("Single-human voice-room prior: default toward engagement unless the turn is clearly non-speech, self-talk, or low-value filler.");
@@ -71,8 +97,28 @@ export function buildVoiceAdmissionPolicyLines({
 
   if (normalizedInputKind === "event") {
     lines.push("This is a voice-room event cue, not literal quoted speech.");
-    if (normalizedSpeakerName.toUpperCase() === "YOU") {
+    if (
+      normalizedRuntimeEventContext?.category === "membership" &&
+      normalizedRuntimeEventContext.eventType === "join" &&
+      normalizedRuntimeEventContext.actorRole === "self"
+    ) {
       lines.push("If you just entered the channel and a quick hello would feel natural, you may reply briefly. Otherwise use [SKIP].");
+    } else if (
+      normalizedRuntimeEventContext?.category === "membership" &&
+      normalizedRuntimeEventContext.eventType === "join"
+    ) {
+      lines.push("If a brief acknowledgement of the join would feel natural, you may reply briefly. Otherwise use [SKIP].");
+    } else if (
+      normalizedRuntimeEventContext?.category === "membership" &&
+      normalizedRuntimeEventContext.eventType === "leave"
+    ) {
+      lines.push("If a brief goodbye or acknowledgement of the leave would feel natural, you may reply briefly. Otherwise use [SKIP].");
+    } else if (normalizedRuntimeEventContext?.category === "screen_share") {
+      lines.push("This is a screen-share state cue, not a spoken request.");
+      if (normalizedRuntimeEventContext.hasVisibleFrame) {
+        lines.push("A visible screen frame is attached, so you may react to what is on-screen if there is a natural short comment.");
+      }
+      lines.push("If the screen-share moment gives you a real reaction or observation, reply briefly. Otherwise use [SKIP].");
     } else {
       lines.push("If a brief acknowledgement of the join/leave would feel natural, you may reply briefly. Otherwise use [SKIP].");
     }
@@ -98,7 +144,13 @@ export function buildVoiceAdmissionPolicyLines({
   if (normalizedIsEagerTurn) {
     lines.push("You were NOT directly addressed. You're considering whether to chime in.");
     if (engagedWithCurrentSpeaker) {
-      lines.push("You are actively in this speaker's thread. Lean toward a short helpful reply over [SKIP].");
+      if (normalizedResponseWindowEagerness <= 25) {
+        lines.push("You are actively in this speaker's thread, but do not force a reply unless the continuation is clearly for you.");
+      } else if (normalizedResponseWindowEagerness <= 70) {
+        lines.push("You are actively in this speaker's thread. Lean toward a short helpful reply over [SKIP] when the continuation plausibly connects to you.");
+      } else {
+        lines.push("You are actively in this speaker's thread. Treat likely continuations as a live back-and-forth and reply naturally when you can add something.");
+      }
     }
     lines.push(
       "If the turn is laughter, filler, backchannel noise (haha, lol, hmm, mm, uh-huh, yup), or self-talk/thinking out loud (for example 'where did I put my keys', 'hmm let me think', 'wait what was I doing'), strongly prefer [SKIP]. These are not directed at you even in a 1:1 room."

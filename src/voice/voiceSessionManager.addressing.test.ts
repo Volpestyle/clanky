@@ -11,8 +11,88 @@ import {
 } from "./voiceSessionManager.constants.ts";
 import {
   createVoiceTestManager as createManager,
-  createVoiceTestSettings as baseSettings
+  createVoiceTestSettings as createCanonicalVoiceTestSettings
 } from "./voiceTestHarness.ts";
+import { normalizeLegacyTestSettingsInput } from "../testSettings.ts";
+import { deepMerge } from "../utils.ts";
+
+const LEGACY_TOP_LEVEL_KEYS = ["botName", "botNameAliases", "llm"] as const;
+const LEGACY_VOICE_KEYS = [
+  "mode",
+  "voiceProvider",
+  "brainProvider",
+  "generationLlm",
+  "replyDecisionLlm",
+  "asrEnabled",
+  "asrLanguageMode",
+  "asrLanguageHint",
+  "allowedVoiceChannelIds",
+  "blockedVoiceChannelIds",
+  "blockedVoiceUserIds",
+  "maxSessionMinutes",
+  "inactivityLeaveSeconds",
+  "maxSessionsPerDay",
+  "maxConcurrentSessions",
+  "ambientReplyEagerness",
+  "commandOnlyMode",
+  "allowNsfwHumor",
+  "textOnlyMode",
+  "defaultInterruptionMode",
+  "replyPath",
+  "ttsMode",
+  "operationalMessages",
+  "streamingEnabled",
+  "streamingEagerFirstChunkChars",
+  "streamingMaxBufferChars",
+  "thoughtEngine",
+  "musicDucking",
+  "intentConfidenceThreshold",
+  "openaiRealtime",
+  "xai",
+  "elevenLabsRealtime",
+  "geminiRealtime",
+  "openaiAudioApi"
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function baseSettings(overrides: Record<string, unknown> = {}) {
+  const canonicalOverrides: Record<string, unknown> = { ...overrides };
+  const legacyOverrides: Record<string, unknown> = {};
+
+  for (const key of LEGACY_TOP_LEVEL_KEYS) {
+    if (key in canonicalOverrides) {
+      legacyOverrides[key] = canonicalOverrides[key];
+      delete canonicalOverrides[key];
+    }
+  }
+
+  if (isRecord(canonicalOverrides.voice)) {
+    const canonicalVoice = { ...canonicalOverrides.voice };
+    const legacyVoice: Record<string, unknown> = {};
+    for (const key of LEGACY_VOICE_KEYS) {
+      if (key in canonicalVoice) {
+        legacyVoice[key] = canonicalVoice[key];
+        delete canonicalVoice[key];
+      }
+    }
+
+    if (Object.keys(legacyVoice).length > 0) {
+      legacyOverrides.voice = legacyVoice;
+    }
+    if (Object.keys(canonicalVoice).length > 0) {
+      canonicalOverrides.voice = canonicalVoice;
+    } else {
+      delete canonicalOverrides.voice;
+    }
+  }
+
+  const normalizedLegacy =
+    Object.keys(legacyOverrides).length > 0 ? normalizeLegacyTestSettingsInput(legacyOverrides) : {};
+  return createCanonicalVoiceTestSettings(deepMerge(normalizedLegacy, canonicalOverrides));
+}
 
 test("reply decider blocks turns when transcript is missing", async () => {
   const manager = createManager();
@@ -310,7 +390,7 @@ test("reply decider in merged realtime mode allows short clips through classifie
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -343,7 +423,7 @@ test("reply decider flows eagerness-0 unaddressed turns to classifier/generation
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 0,
+        ambientReplyEagerness: 0,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -375,7 +455,7 @@ test("reply decider blocks unaddressed turns in command-only mode", async () => 
     settings: baseSettings({
       voice: {
         commandOnlyMode: true,
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -406,7 +486,7 @@ test("reply decider allows direct-addressed turns in command-only mode", async (
       botName: "clanker conk",
       voice: {
         commandOnlyMode: true,
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -441,7 +521,7 @@ test("reply decider denies unaddressed turns while music is playing and wake lat
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -858,7 +938,7 @@ test("reply decider bypasses classifier in generation_only realtime admission mo
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyDecisionLlm: {
           realtimeAdmissionMode: "generation_only",
           provider: "anthropic",
@@ -913,7 +993,7 @@ test("reply decider routes single-human assistant followups through classifier",
       userId: "speaker-1",
       settings: baseSettings({
         voice: {
-          replyEagerness: 50,
+          ambientReplyEagerness: 50,
           replyDecisionLlm: {
             realtimeAdmissionMode: "hard_classifier",
             provider: "anthropic",
@@ -973,7 +1053,7 @@ test("reply decider still runs classifier when single-human assistant followup w
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 50,
+        ambientReplyEagerness: 50,
         replyDecisionLlm: {
           realtimeAdmissionMode: "hard_classifier",
           provider: "anthropic",
@@ -1031,7 +1111,7 @@ test("reply decider can disable single-human assistant followup fast path via en
       userId: "speaker-1",
       settings: baseSettings({
         voice: {
-          replyEagerness: 50,
+          ambientReplyEagerness: 50,
           replyDecisionLlm: {
             realtimeAdmissionMode: "hard_classifier",
             provider: "anthropic",
@@ -1075,7 +1155,7 @@ test("reply decider runs classifier for non-direct multi-user realtime turns", a
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -1110,7 +1190,7 @@ test("reply decider fast-paths merged bot-name tokens as direct address", async 
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -1149,7 +1229,7 @@ test("reply decider keeps bot awake across speakers after a recent direct addres
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -1187,7 +1267,7 @@ test("reply decider runs classifier after wake context gets stale", async () => 
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -1222,9 +1302,9 @@ test("reply decider hard-denies malformed classifier output", async () => {
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         admission: {
-          mode: "generation_decides"
+          mode: "classifier_gate"
         },
         replyDecisionLlm: {
           provider: "anthropic",
@@ -1269,7 +1349,7 @@ test("reply classifier prompt includes attributed history and current turn field
     settings: (() => {
       const settings = baseSettings({
         voice: {
-          replyEagerness: 60,
+          ambientReplyEagerness: 60,
           replyDecisionLlm: {
             provider: "anthropic",
             model: "claude-haiku-4-5",
@@ -1277,7 +1357,7 @@ test("reply classifier prompt includes attributed history and current turn field
           }
         }
       });
-      settings.voice.conversationPolicy.replyEagerness = 60;
+      settings.voice.conversationPolicy.ambientReplyEagerness = 60;
       return settings;
     })(),
     transcript: "yo what's up"
@@ -1315,7 +1395,7 @@ test("reply classifier prompt labels room events distinctly from spoken transcri
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5",
@@ -1324,14 +1404,73 @@ test("reply classifier prompt labels room events distinctly from spoken transcri
       }
     }),
     transcript: "[vuhlp joined the voice channel]",
-    inputKind: "event"
+    inputKind: "event",
+    runtimeEventContext: {
+      category: "membership",
+      eventType: "join",
+      actorUserId: "speaker-1",
+      actorDisplayName: "speaker 1",
+      actorRole: "other"
+    }
   });
 
   assert.equal(decision.allow, true);
   assert.equal(classifierPrompt.includes("Participants: speaker 1, speaker 2"), true);
   assert.equal(classifierPrompt.includes('Event: "[vuhlp joined the voice channel]"'), true);
   assert.equal(classifierPrompt.includes("Triggering member: speaker 1"), true);
+  assert.equal(classifierPrompt.includes("Structured event type: membership.join"), true);
   assert.equal(classifierPrompt.includes("Someone joined or left. Consider greeting them if it feels natural."), true);
+});
+
+test("reply classifier prompt treats the bot self-join event as a self-arrival", async () => {
+  let classifierPrompt = "";
+  const manager = createManager({
+    participantCount: 1,
+    generate: async ({ userPrompt }) => {
+      classifierPrompt = String(userPrompt || "");
+      return { text: "YES" };
+    }
+  });
+
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+      recentVoiceTurns: [],
+      membershipEvents: [{ userId: "bot-user", displayName: "clanker conk", eventType: "join", at: Date.now() - 500 }]
+    },
+    userId: "bot-user",
+    settings: baseSettings({
+      voice: {
+        ambientReplyEagerness: 60,
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          realtimeAdmissionMode: "hard_classifier"
+        }
+      }
+    }),
+    transcript: "[YOU joined the voice channel]",
+    inputKind: "event",
+    runtimeEventContext: {
+      category: "membership",
+      eventType: "join",
+      actorUserId: "bot-user",
+      actorDisplayName: "clanker conk",
+      actorRole: "self"
+    }
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(classifierPrompt.includes('Triggering member: YOU'), true);
+  assert.equal(classifierPrompt.includes('Event: "[YOU joined the voice channel]"'), true);
+  assert.equal(classifierPrompt.includes("Structured event type: membership.join"), true);
+  assert.equal(classifierPrompt.includes("You just joined — say YES to greet unless there is a strong reason not to."), true);
+  assert.equal(classifierPrompt.includes("Someone joined or left. Consider greeting them if it feels natural."), false);
+  assert.equal(classifierPrompt.includes("The speaker may have said your name (fuzzy match). Lean toward YES."), false);
 });
 
 test("reply decider routes garbled bot-name requests through runtime admission", async () => {
@@ -1357,7 +1496,7 @@ test("reply decider routes garbled bot-name requests through runtime admission",
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5",
@@ -1399,7 +1538,7 @@ test("reply decider denies music turns when wake latch is inactive", async () =>
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60
+        ambientReplyEagerness: 60
       }
     }),
     transcript: "yo what's up"
@@ -1432,7 +1571,7 @@ test("reply decider opens music wake latch on deterministic wake", async () => {
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60
+        ambientReplyEagerness: 60
       }
     }),
     transcript: "clanker pause the music"
@@ -1474,7 +1613,7 @@ test("reply decider applies music wake latch across speakers and extends on admi
     userId: "speaker-2",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5",
@@ -1520,7 +1659,7 @@ test("reply decider clears expired music wake latch and denies until new wake", 
     userId: "speaker-2",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60
+        ambientReplyEagerness: 60
       }
     }),
     transcript: "can you queue something else"
@@ -1559,9 +1698,9 @@ test("classifier sees participant list so it can infer addressing from transcrip
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         admission: {
-          mode: "generation_decides"
+          mode: "classifier_gate"
         },
         replyDecisionLlm: {
           provider: "anthropic",
@@ -1600,7 +1739,7 @@ test("reply decider blocks ambiguous realtime native turns without brain path", 
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyPath: "native",
         replyDecisionLlm: {
           provider: "anthropic",
@@ -1635,7 +1774,7 @@ test("reply decider routes direct-addressed turns through classifier", async () 
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5",
@@ -1671,7 +1810,7 @@ test("reply decider allows through native realtime mode (model decides)", async 
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyPath: "native",
         replyDecisionLlm: {
           provider: "anthropic",
@@ -1698,7 +1837,7 @@ test("reply decider keeps merged bot-name token turns on the classifier with dir
   });
   const settings = baseSettings({
     voice: {
-      replyEagerness: 60,
+      ambientReplyEagerness: 60,
       replyDecisionLlm: {
         provider: "anthropic",
         model: "claude-haiku-4-5",
@@ -1736,7 +1875,7 @@ test("reply decider lets generation decide turns that previously triggered contr
   });
   const settings = baseSettings({
     voice: {
-      replyEagerness: 60,
+      ambientReplyEagerness: 60,
       replyDecisionLlm: {
         provider: "anthropic",
         model: "claude-haiku-4-5"
@@ -1872,7 +2011,7 @@ test("reply decider allows same-speaker pending command followup before command-
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 0,
+        ambientReplyEagerness: 0,
         commandOnlyMode: true,
         replyDecisionLlm: {
           provider: "anthropic",
@@ -1933,7 +2072,7 @@ test("reply decider allows active music command followup before eagerness reject
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 0,
+        ambientReplyEagerness: 0,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -2117,7 +2256,7 @@ test("reply decider keeps unrelated chatter blocked during pending music followu
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 0,
+        ambientReplyEagerness: 0,
         commandOnlyMode: true,
         replyDecisionLlm: {
           provider: "anthropic",
@@ -2167,7 +2306,7 @@ test("reply decider ignores other speakers during pending command followup in co
     userId: "speaker-2",
     settings: baseSettings({
       voice: {
-        replyEagerness: 0,
+        ambientReplyEagerness: 0,
         commandOnlyMode: true,
         replyDecisionLlm: {
           provider: "anthropic",
@@ -2223,7 +2362,7 @@ test("reply decider drops expired command followup sessions", async () => {
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
-        replyEagerness: 0,
+        ambientReplyEagerness: 0,
         commandOnlyMode: true,
         replyDecisionLlm: {
           provider: "anthropic",
@@ -2288,7 +2427,8 @@ test("runRealtimeTurn in voice_agent retries full ASR model after empty mini tra
   assert.equal(Boolean(addressingLog), true);
   assert.equal(addressingLog?.metadata?.transcriptionModelFallback, "whisper-1");
   assert.equal(addressingLog?.metadata?.transcriptionPlanReason, "mini_with_full_fallback_runtime");
-  assert.equal(addressingLog?.metadata?.transcript, "fallback transcript");
+  assert.equal(addressingLog?.metadata?.transcript, undefined);
+  assert.equal(addressingLog?.metadata?.transcriptChars, "fallback transcript".length);
 });
 
 test("runRealtimeTurn skips ASR on very short speaking_end clips", async () => {
@@ -2408,7 +2548,8 @@ test("runRealtimeTurn transcribes speaking_end clips above minimum duration thre
   );
   assert.equal(Boolean(addressingLog), true);
   assert.equal(addressingLog?.metadata?.asrSkippedShortClip, false);
-  assert.equal(addressingLog?.metadata?.transcript, "yo");
+  assert.equal(addressingLog?.metadata?.transcript, undefined);
+  assert.equal(addressingLog?.metadata?.transcriptChars, "yo".length);
 });
 
 test("runRealtimeTurn forwards short post-reply clips through merged realtime generation", async () => {
@@ -2446,7 +2587,7 @@ test("runRealtimeTurn forwards short post-reply clips through merged realtime ge
     },
     settingsSnapshot: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -2644,7 +2785,7 @@ test("runRealtimeTurn does not forward audio when reply decision denies turn", a
   assert.equal(memoryIngestCalls, 1);
 });
 
-test("runRealtimeTurn queues direct-addressed bot-turn-open turns for deferred flush", async () => {
+test("runRealtimeTurn queues direct-addressed bot-turn-open turns for deferred flush when interruption mode is none", async () => {
   const runtimeLogs = [];
   const deferredTurns = [];
   let appendedAudioCalls = 0;
@@ -2675,7 +2816,11 @@ test("runRealtimeTurn queues direct-addressed bot-turn-open turns for deferred f
         appendedAudioCalls += 1;
       }
     },
-    settingsSnapshot: baseSettings()
+    settingsSnapshot: baseSettings({
+      voice: {
+        defaultInterruptionMode: "none"
+      }
+    })
   };
 
   await manager.turnProcessor.runRealtimeTurn({
@@ -2696,6 +2841,176 @@ test("runRealtimeTurn queues direct-addressed bot-turn-open turns for deferred f
   assert.equal(Boolean(addressingLog?.metadata?.allow), false);
   assert.equal(addressingLog?.metadata?.reason, "bot_turn_open");
   assert.equal(Boolean(addressingLog?.metadata?.directAddressed), true);
+});
+
+test("runRealtimeTurn interrupts bot-turn-open for direct-addressed turns when wake-word override is allowed", async () => {
+  const deferredTurns = [];
+  const interruptCalls = [];
+  const brainReplyCalls = [];
+  const manager = createManager();
+  manager.queueDeferredBotTurnOpenTurn = (payload) => {
+    deferredTurns.push(payload);
+  };
+  manager.interruptBotSpeechForDirectAddressedTurn = (payload) => {
+    interruptCalls.push(payload);
+    return true;
+  };
+  manager.runRealtimeBrainReply = async (payload) => {
+    brainReplyCalls.push(payload);
+    return true;
+  };
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: false,
+    reason: "bot_turn_open",
+    participantCount: 2,
+    directAddressed: true,
+    directAddressConfidence: 0.92,
+    directAddressThreshold: 0.62,
+    transcript: "hey clanker stop"
+  });
+
+  const session = {
+    id: "session-direct-address-interrupt-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.turnProcessor.runRealtimeTurn({
+    session,
+    userId: "speaker-2",
+    pcmBuffer: Buffer.from([1, 2, 3, 4]),
+    transcriptOverride: "hey clanker stop",
+    captureReason: "stream_end"
+  });
+
+  assert.equal(deferredTurns.length, 0);
+  assert.equal(interruptCalls.length, 1);
+  assert.equal(brainReplyCalls.length, 1);
+  assert.equal(brainReplyCalls[0]?.transcript, "hey clanker stop");
+  assert.equal(brainReplyCalls[0]?.directAddressed, true);
+});
+
+test("runRealtimeTurn keeps direct-addressed bot-turn-open turns deferred when interruption mode is none", async () => {
+  const deferredTurns = [];
+  const interruptCalls = [];
+  const manager = createManager();
+  manager.queueDeferredBotTurnOpenTurn = (payload) => {
+    deferredTurns.push(payload);
+  };
+  manager.interruptBotSpeechForDirectAddressedTurn = (payload) => {
+    interruptCalls.push(payload);
+    return true;
+  };
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: false,
+    reason: "bot_turn_open",
+    participantCount: 2,
+    directAddressed: true,
+    directAddressConfidence: 0.92,
+    directAddressThreshold: 0.62,
+    transcript: "hey clanker stop"
+  });
+
+  const session = {
+    id: "session-direct-address-defer-none",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    settingsSnapshot: baseSettings({
+      voice: {
+        defaultInterruptionMode: "none"
+      }
+    })
+  };
+
+  await manager.turnProcessor.runRealtimeTurn({
+    session,
+    userId: "speaker-2",
+    pcmBuffer: Buffer.from([5, 6, 7, 8]),
+    transcriptOverride: "hey clanker stop",
+    captureReason: "stream_end"
+  });
+
+  assert.equal(interruptCalls.length, 0);
+  assert.equal(deferredTurns.length, 1);
+  assert.equal(Boolean(deferredTurns[0]?.directAddressed), true);
+});
+
+test("runRealtimeTurn interrupts bot-turn-open for non-direct turns from the allowed speaker", async () => {
+  const deferredTurns = [];
+  const directAddressInterruptCalls = [];
+  const outputLockInterruptCalls = [];
+  const brainReplyCalls = [];
+  const manager = createManager();
+  manager.queueDeferredBotTurnOpenTurn = (payload) => {
+    deferredTurns.push(payload);
+  };
+  manager.interruptBotSpeechForDirectAddressedTurn = (payload) => {
+    directAddressInterruptCalls.push(payload);
+    return true;
+  };
+  manager.interruptBotSpeechForOutputLockTurn = (payload) => {
+    outputLockInterruptCalls.push(payload);
+    return true;
+  };
+  manager.runRealtimeBrainReply = async (payload) => {
+    brainReplyCalls.push(payload);
+    return true;
+  };
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: false,
+    reason: "bot_turn_open",
+    participantCount: 2,
+    directAddressed: false,
+    transcript: "what about spider man though"
+  });
+
+  const session = {
+    id: "session-authorized-speaker-interrupt-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    settingsSnapshot: baseSettings(),
+    pendingResponse: {
+      requestId: 21,
+      requestedAt: Date.now() - 400,
+      retryCount: 0,
+      hardRecoveryAttempted: false,
+      source: "voice_reply",
+      handlingSilence: false,
+      audioReceivedAt: Date.now() - 250,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      utteranceText: "still talking",
+      userId: "speaker-1"
+    }
+  };
+
+  await manager.turnProcessor.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([8, 9, 10, 11]),
+    transcriptOverride: "what about spider man though",
+    captureReason: "stream_end"
+  });
+
+  assert.equal(deferredTurns.length, 0);
+  assert.equal(directAddressInterruptCalls.length, 0);
+  assert.equal(outputLockInterruptCalls.length, 1);
+  assert.equal(brainReplyCalls.length, 1);
+  assert.equal(brainReplyCalls[0]?.transcript, "what about spider man though");
+  assert.equal(brainReplyCalls[0]?.directAddressed, false);
 });
 
 test("runRealtimeTurn queues non-direct bot-turn-open turns for deferred flush", async () => {
@@ -3075,11 +3390,12 @@ test("runRealtimeTurn keeps bridge transcript music disambiguation cancel on the
     transcriptOverride: "never mind"
   });
 
-  // "never mind" is a cancel intent — the general cancel path fires,
-  // which calls cancelActiveResponse and queues an acknowledgement.
-  // Disambiguation state is also cleared as part of cancel cleanup.
-  assert.equal(cancelActiveResponseCalls, 1);
-  assert.equal(cancelAckRequests.length, 1);
+  // Pending music disambiguation owns this cancel locally. It clears the
+  // requester-scoped choice prompt without aborting unrelated session work
+  // or queueing a generic cancel acknowledgement.
+  assert.equal(cancelActiveResponseCalls, 0);
+  assert.equal(cancelAckRequests.length, 0);
+  assert.equal(manager.getMusicDisambiguationPromptContext(session), null);
   assert.equal(session.voiceCommandState, null);
 });
 
@@ -3143,7 +3459,7 @@ test("smoke: runRealtimeBrainReply passes membership context into generation wit
   };
 
   const settingsSnapshot = baseSettings();
-  settingsSnapshot.voice.conversationPolicy.replyEagerness = 60;
+  settingsSnapshot.voice.conversationPolicy.ambientReplyEagerness = 60;
   settingsSnapshot.voice.streamWatch = {
     enabled: true,
     brainContextEnabled: true,
@@ -3187,16 +3503,25 @@ test("smoke: runRealtimeBrainReply passes membership context into generation wit
   const result = await manager.runRealtimeBrainReply({
     session,
     settings: session.settingsSnapshot,
-    userId: "speaker-1",
-    transcript: "yo, what's up?",
+    userId: "speaker-2",
+    transcript: "[bob joined the voice channel]",
+    inputKind: "event",
     directAddressed: false,
-    source: "realtime"
+    source: "member_join_greeting",
+    runtimeEventContext: {
+      category: "membership",
+      eventType: "join",
+      actorUserId: "speaker-2",
+      actorDisplayName: "bob",
+      actorRole: "other"
+    }
   });
 
   assert.equal(result, true);
   assert.equal(generationPayloads.length, 1);
+  assert.equal(generationPayloads[0]?.inputKind, "event");
   assert.equal(Boolean(generationPayloads[0]?.isEagerTurn), true);
-  assert.equal(generationPayloads[0]?.voiceEagerness, 60);
+  assert.equal(generationPayloads[0]?.voiceAmbientReplyEagerness, 60);
   assert.deepEqual(
     generationPayloads[0]?.participantRoster?.map((entry) => entry?.displayName),
     ["alice", "bob"]
@@ -3204,6 +3529,9 @@ test("smoke: runRealtimeBrainReply passes membership context into generation wit
   assert.equal(generationPayloads[0]?.recentMembershipEvents?.length, 1);
   assert.equal(generationPayloads[0]?.recentMembershipEvents?.[0]?.eventType, "join");
   assert.equal(generationPayloads[0]?.recentMembershipEvents?.[0]?.displayName, "bob");
+  assert.equal(generationPayloads[0]?.runtimeEventContext?.category, "membership");
+  assert.equal(generationPayloads[0]?.runtimeEventContext?.eventType, "join");
+  assert.equal(generationPayloads[0]?.runtimeEventContext?.actorDisplayName, "bob");
   assert.equal(
     Array.isArray(generationPayloads[0]?.conversationContext?.streamWatchBrainContext?.notes),
     true
@@ -3389,9 +3717,10 @@ test("runRealtimeBrainReply ignores raw newer inbound timestamps without queued 
   assert.equal(session.realtimeReplySupersededCount, 0);
 });
 
-test("runRealtimeBrainReply keeps assertive direct-address reply when queued speaker is outside interruption policy", async () => {
+test("runRealtimeBrainReply keeps assistant replies closed in speaker mode when the brain omits a reply target", async () => {
   const runtimeLogs = [];
   let requestedRealtimeUtterances = 0;
+  const requestedPolicies = [];
   const manager = createManager();
   manager.store.logAction = (row) => {
     runtimeLogs.push(row);
@@ -3404,8 +3733,9 @@ test("runRealtimeBrainReply keeps assertive direct-address reply when queued spe
     { userId: "speaker-2", displayName: "bob" }
   ];
   manager.instructionManager.prepareRealtimeTurnContext = async () => {};
-  manager.requestRealtimeTextUtterance = () => {
+  manager.requestRealtimeTextUtterance = ({ interruptionPolicy }) => {
     requestedRealtimeUtterances += 1;
+    requestedPolicies.push(interruptionPolicy);
     return true;
   };
   manager.generateVoiceTurn = async () => ({
@@ -3457,11 +3787,19 @@ test("runRealtimeBrainReply keeps assertive direct-address reply when queued spe
   );
   assert.equal(Boolean(supersededLog), false);
   assert.equal(session.realtimeReplySupersededCount, 0);
+  assert.deepEqual(requestedPolicies[0], {
+    assertive: true,
+    scope: "none",
+    allowedUserId: null,
+    source: "assistant_reply_target",
+    reason: "assistant_target_missing"
+  });
 });
 
 test("runRealtimeBrainReply keeps ALL-target replies when queued speaker cannot interrupt", async () => {
   const runtimeLogs = [];
   let requestedRealtimeUtterances = 0;
+  const requestedPolicies = [];
   const manager = createManager();
   manager.store.logAction = (row) => {
     runtimeLogs.push(row);
@@ -3474,15 +3812,15 @@ test("runRealtimeBrainReply keeps ALL-target replies when queued speaker cannot 
     { userId: "speaker-2", displayName: "bob" }
   ];
   manager.instructionManager.prepareRealtimeTurnContext = async () => {};
-  manager.requestRealtimeTextUtterance = () => {
+  manager.requestRealtimeTextUtterance = ({ interruptionPolicy }) => {
     requestedRealtimeUtterances += 1;
+    requestedPolicies.push(interruptionPolicy);
     return true;
   };
   manager.generateVoiceTurn = async () => ({
     text: "quick callout to everyone",
     voiceAddressing: {
-      talkingTo: "ALL",
-      directedConfidence: 0.9
+      talkingTo: "ALL"
     }
   });
 
@@ -3531,6 +3869,163 @@ test("runRealtimeBrainReply keeps ALL-target replies when queued speaker cannot 
   );
   assert.equal(Boolean(supersededLog), false);
   assert.equal(session.realtimeReplySupersededCount, 0);
+  assert.deepEqual(requestedPolicies[0], {
+    assertive: true,
+    scope: "none",
+    allowedUserId: null,
+    talkingTo: "ALL",
+    source: "assistant_reply_target",
+    reason: "assistant_target_all"
+  });
+});
+
+test("runRealtimeBrainReply routes speaker-mode interruption to the named assistant target", async () => {
+  let requestedRealtimeUtterances = 0;
+  const requestedPolicies = [];
+  const manager = createManager();
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [
+    { userId: "speaker-1", displayName: "alice" },
+    { userId: "speaker-2", displayName: "bob" }
+  ];
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = ({ interruptionPolicy }) => {
+    requestedRealtimeUtterances += 1;
+    requestedPolicies.push(interruptionPolicy);
+    return true;
+  };
+  manager.generateVoiceTurn = async () => ({
+    text: "nah bob, the other one",
+    voiceAddressing: {
+      talkingTo: "bob"
+    }
+  });
+
+  const session = {
+    id: "session-realtime-targeted-speaker-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 8_000,
+    realtimeClient: {},
+    userCaptures: new Map(),
+    pendingRealtimeTurns: [],
+    realtimeReplySupersededCount: 0,
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "tell bob no",
+    directAddressed: true,
+    conversationContext: {
+      engagementState: "engaged",
+      engaged: true,
+      engagedWithCurrentSpeaker: true
+    },
+    source: "realtime"
+  });
+
+  assert.equal(result, true);
+  assert.equal(requestedRealtimeUtterances, 1);
+  assert.deepEqual(requestedPolicies[0], {
+    assertive: true,
+    scope: "speaker",
+    allowedUserId: "speaker-2",
+    talkingTo: "bob",
+    source: "assistant_reply_target",
+    reason: "assistant_target_speaker"
+  });
+});
+
+test("runRealtimeBrainReply resolves streamed reply-target interruption policy before first chunk playback", async () => {
+  let requestedRealtimeUtterances = 0;
+  const requestedPolicies = [];
+  const manager = createManager();
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [
+    { userId: "speaker-1", displayName: "alice" },
+    { userId: "speaker-2", displayName: "bob" }
+  ];
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = ({ interruptionPolicy }) => {
+    requestedRealtimeUtterances += 1;
+    requestedPolicies.push(interruptionPolicy);
+    return true;
+  };
+  manager.generateVoiceTurn = async ({ onSpokenSentence }) => {
+    await onSpokenSentence?.({
+      text: "nah bob, the other one",
+      index: 0,
+      voiceAddressing: {
+        talkingTo: "bob"
+      }
+    });
+    return {
+      text: "nah bob, the other one",
+      streamedSentenceCount: 1,
+      streamedRequestedRealtimeUtterance: true,
+      voiceAddressing: {
+        talkingTo: "bob"
+      }
+    };
+  };
+
+  const session = {
+    id: "session-realtime-stream-targeted-speaker-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 8_000,
+    realtimeClient: {},
+    userCaptures: new Map(),
+    pendingRealtimeTurns: [],
+    realtimeReplySupersededCount: 0,
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings({
+      voice: {
+        streamingEnabled: true,
+        streamingEagerFirstChunkChars: 12,
+        streamingMaxBufferChars: 120
+      }
+    })
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "tell bob no",
+    directAddressed: true,
+    conversationContext: {
+      engagementState: "engaged",
+      engaged: true,
+      engagedWithCurrentSpeaker: true
+    },
+    source: "realtime"
+  });
+
+  assert.equal(result, true);
+  assert.equal(requestedRealtimeUtterances, 1);
+  assert.deepEqual(requestedPolicies[0], {
+    assertive: true,
+    scope: "speaker",
+    allowedUserId: "speaker-2",
+    talkingTo: "bob",
+    source: "assistant_reply_target",
+    reason: "assistant_target_speaker"
+  });
 });
 
 test("runRealtimeBrainReply ignores near-silent queued turns for supersede checks", async () => {
@@ -3810,6 +4305,8 @@ test("runRealtimeBrainReply exits before generation when a newer promoted captur
   );
   assert.equal(Boolean(supersededLog), true);
   assert.equal(supersededLog?.metadata?.supersedeReason, "newer_live_promoted_capture");
+  assert.equal(supersededLog?.metadata?.stashedForRecovery, true);
+  assert.equal(session.supersededPrePlaybackReply?.transcript, "older transcript");
 });
 
 test("runRealtimeBrainReply ends VC when model requests leave directive", async () => {
@@ -3975,6 +4472,75 @@ test("runRealtimeBrainReply does not replay soundboard refs that were already ex
   ]);
 });
 
+test("runRealtimeBrainReply collapses the pending streamed tail once generation finishes", async () => {
+  const manager = createManager();
+  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
+  manager.generateVoiceTurn = async ({ onSpokenSentence }) => {
+    await onSpokenSentence?.({
+      text: "How you doin'?",
+      index: 0
+    });
+    await onSpokenSentence?.({
+      text: "Glad you made it through.",
+      index: 1
+    });
+    return {
+      text: "How you doin'? Glad you made it through.",
+      streamedSentenceCount: 2,
+      streamedRequestedRealtimeUtterance: true
+    };
+  };
+
+  const session = {
+    id: "session-stream-tail-collapse-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 4_000,
+    maxEndsAt: Date.now() + 90_000,
+    inactivityEndsAt: Date.now() + 25_000,
+    realtimeClient: {
+      isResponseInProgress() {
+        return true;
+      },
+      requestPlaybackUtterance() {
+        throw new Error("queued tail should not drain while another response is active");
+      }
+    },
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    pendingRealtimeAssistantUtterances: [],
+    settingsSnapshot: baseSettings({
+      voice: {
+        streamingEnabled: true,
+        ttsMode: "realtime"
+      }
+    })
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "say something",
+    directAddressed: true,
+    source: "realtime"
+  });
+
+  assert.equal(result, true);
+  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 1);
+  assert.equal(
+    session.pendingRealtimeAssistantUtterances?.[0]?.utteranceText,
+    "How you doin'? Glad you made it through."
+  );
+  assert.match(
+    session.pendingRealtimeAssistantUtterances?.[0]?.prompt || "",
+    /How you doin'\? Glad you made it through\./
+  );
+});
+
 test("runRealtimeBrainReply treats engaged thread turns as non-eager even without direct address", async () => {
   const generationPayloads = [];
   const manager = createManager();
@@ -4053,7 +4619,7 @@ test("runRealtimeTurn uses native realtime forwarding when strategy is native", 
     realtimeClient: {},
     settingsSnapshot: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyPath: "native",
         replyDecisionLlm: {
           provider: "anthropic",
@@ -4108,7 +4674,7 @@ test("runRealtimeTurn keeps native strategy when soundboard is enabled", async (
     realtimeClient: {},
     settingsSnapshot: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyPath: "native",
         soundboard: {
           enabled: true
@@ -4179,7 +4745,7 @@ test("runRealtimeTurn forwards per-user ASR transcript turns into OpenAI room-br
     realtimeClient: {},
     settingsSnapshot: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyPath: "bridge",
         replyDecisionLlm: {
           provider: "anthropic",
@@ -4248,7 +4814,7 @@ test("runRealtimeTurn forwards shared ASR transcript turns into OpenAI room-brai
     realtimeClient: {},
     settingsSnapshot: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyPath: "bridge",
         openaiRealtime: {
           usePerUserAsrBridge: false
@@ -4349,7 +4915,7 @@ test("runFileAsrTurn exits before generation when turn admission denies speaking
 });
 
 
-test("runFileAsrTurn queues bot-turn-open transcripts for deferred flush", async () => {
+test("runFileAsrTurn queues direct-addressed bot-turn-open transcripts for deferred flush when interruption mode is none", async () => {
   const queuedTurns = [];
   let runRealtimeBrainReplyCalls = 0;
   const manager = createManager();
@@ -4377,7 +4943,11 @@ test("runFileAsrTurn queues bot-turn-open transcripts for deferred flush", async
     textChannelId: "chan-1",
     mode: "openai_realtime",
     ending: false,
-    settingsSnapshot: baseSettings()
+    settingsSnapshot: baseSettings({
+      voice: {
+        defaultInterruptionMode: "none"
+      }
+    })
   };
 
   await manager.turnProcessor.runFileAsrTurn({
@@ -4439,8 +5009,9 @@ test("runFileAsrTurn retries full ASR model after empty mini transcript", async 
   assert.equal(Boolean(addressingLog), true);
   assert.equal(addressingLog?.metadata?.mode, "openai_realtime");
   assert.equal(addressingLog?.metadata?.transcriptionModelFallback, "whisper-1");
-  assert.equal(addressingLog?.metadata?.transcriptionPlanReason, "mini_with_full_fallback_runtime");
-  assert.equal(addressingLog?.metadata?.transcript, "fallback stt transcript");
+  assert.equal(addressingLog?.metadata?.transcriptionPlanReason, "mini_with_full_fallback");
+  assert.equal(addressingLog?.metadata?.transcript, undefined);
+  assert.equal(addressingLog?.metadata?.transcriptChars, "fallback stt transcript".length);
 });
 
 test("runFileAsrTurn drops near-silent clips before ASR", async () => {
@@ -5099,7 +5670,7 @@ test("flushDeferredBotTurnOpenTurns forwards native realtime audio after one adm
     userCaptures: new Map(),
     settingsSnapshot: baseSettings({
       voice: {
-        replyEagerness: 60,
+        ambientReplyEagerness: 60,
         replyPath: "native",
         replyDecisionLlm: {
           provider: "anthropic",
@@ -5313,4 +5884,62 @@ test("buildRealtimeInstructions includes idle music history and queued tracks", 
   assert.equal(instructions.includes("Queue item 1: Genesis - Grimes"), true);
   assert.equal(instructions.includes("selection_id: track-2"), true);
   assert.equal(instructions.includes("Last music query: midnight city"), true);
+});
+
+test("buildRealtimeInstructions keeps active-music pass-through replies brief by default", () => {
+  const manager = createManager();
+  const session = {
+    id: "session-playing-music-guidance-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    startedAt: Date.now() - 5_000,
+    membershipEvents: [],
+    musicQueueState: {
+      guildId: "guild-1",
+      voiceChannelId: "voice-1",
+      tracks: [
+        {
+          id: "track-1",
+          title: "Subwoofer Lullaby",
+          artist: "C418",
+          source: "yt",
+          platform: "youtube"
+        }
+      ],
+      nowPlayingIndex: 0,
+      isPaused: false,
+      volume: 1
+    },
+    realtimeToolDefinitions: [
+      {
+        name: "music_play",
+        toolType: "function",
+        description: "Play music"
+      },
+      {
+        name: "music_reply_handoff",
+        toolType: "function",
+        description: "Temporarily own the floor during music"
+      }
+    ]
+  };
+  manager.setMusicPhase(session, "playing");
+
+  const instructions = manager.instructionManager.buildRealtimeInstructions({
+    session,
+    settings: baseSettings(),
+    speakerUserId: "speaker-1",
+    transcript: "yo do you like minecraft"
+  });
+
+  assert.equal(
+    instructions.includes("If you answer without a pause/duck handoff, keep it brief by default: usually one or two short sentences."),
+    true
+  );
+  assert.equal(
+    instructions.includes("If you want to say more than a quick reaction while music is playing, call music_reply_handoff with mode=duck or mode=pause first."),
+    true
+  );
 });

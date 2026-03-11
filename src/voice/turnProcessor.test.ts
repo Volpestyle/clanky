@@ -1,10 +1,32 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { ActiveReplyRegistry, buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
 import { createVoiceTestManager, createVoiceTestSettings } from "./voiceTestHarness.ts";
+import type { MusicSelectionResult } from "./voiceSessionTypes.ts";
+
+const MUSIC_DISAMBIGUATION_OPTIONS: MusicSelectionResult[] = [
+  {
+    id: "youtube:track-1",
+    title: "Minecraft Calm Music by C418",
+    artist: "CozyCraft",
+    platform: "youtube",
+    externalUrl: null,
+    durationSeconds: 600
+  },
+  {
+    id: "youtube:track-2",
+    title: "Minecraft Cliffside Waterfall Ambience",
+    artist: "CozyCraft",
+    platform: "youtube",
+    externalUrl: null,
+    durationSeconds: 600
+  }
+];
 
 test("queueRealtimeTurn keeps only one merged pending turn while realtime drain is active", () => {
   const runtimeLogs = [];
   const manager = createVoiceTestManager();
+  manager.activeReplies = new ActiveReplyRegistry();
   manager.store.logAction = (row) => {
     runtimeLogs.push(row);
   };
@@ -252,6 +274,216 @@ test("runRealtimeTurn skips stale queued turns when newer backlog exists", async
   assert.equal(Boolean(staleSkipLog), true);
 });
 
+test("queueRealtimeTurn replays a same-utterance late revision after aborting the old generation", async () => {
+  const runtimeLogs = [];
+  const seenTranscripts: string[] = [];
+  const manager = createVoiceTestManager();
+  manager.activeReplies = new ActiveReplyRegistry();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.evaluateVoiceReplyDecision = async ({ transcript }) => ({
+    allow: true,
+    reason: "generation_decides",
+    participantCount: 1,
+    directAddressed: false,
+    transcript
+  });
+  manager.runRealtimeBrainReply = async ({ transcript }) => {
+    seenTranscripts.push(String(transcript || ""));
+    return true;
+  };
+
+  const session = {
+    id: "session-revised-replay-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeTurns: [],
+    settingsSnapshot: createVoiceTestSettings()
+  };
+  const replyScopeKey = buildVoiceReplyScopeKey(session.id);
+  const activeReply = manager.activeReplies.begin(replyScopeKey, "voice-generation", ["voice_generation"]);
+  const acceptedAt = Date.now() - 250;
+  session.activeRealtimeTurn = {
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.alloc(0),
+    captureReason: "stream_end",
+    queuedAt: acceptedAt,
+    finalizedAt: acceptedAt,
+    replyScopeStartedAt: activeReply.startedAt,
+    transcriptOverride: "Well, I kept asking who's the sexiest woman alive.",
+    clipDurationMsOverride: null,
+    asrStartedAtMsOverride: 0,
+    asrCompletedAtMsOverride: 0,
+    transcriptionModelPrimaryOverride: "gpt-4o-mini-transcribe",
+    transcriptionModelFallbackOverride: null,
+    transcriptionPlanReasonOverride: "openai_realtime_per_user_transcription",
+    usedFallbackModelForTranscriptOverride: false,
+    transcriptLogprobsOverride: null,
+    bridgeUtteranceId: 4,
+    bridgeRevision: 1,
+    musicWakeFollowupEligibleAtCapture: false,
+    mergedTurnCount: 1,
+    droppedHeadBytes: 0
+  };
+
+  manager.turnProcessor.queueRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    captureReason: "stream_end",
+    transcriptOverride:
+      "Well, I kept asking who's the sexiest woman alive. I don't think you heard me.",
+    bridgeUtteranceId: 4
+  });
+
+  assert.equal(session.pendingRealtimeTurns.length, 1);
+  const revisedTurn = session.pendingRealtimeTurns.shift();
+  assert.ok(revisedTurn);
+  await manager.turnProcessor.runRealtimeTurn(revisedTurn);
+
+  assert.deepEqual(seenTranscripts, [
+    "Well, I kept asking who's the sexiest woman alive. I don't think you heard me."
+  ]);
+  assert.equal(
+    runtimeLogs.some((row) => row?.kind === "voice_runtime" && row?.content === "realtime_turn_skipped_cancelled"),
+    false
+  );
+  assert.equal(
+    runtimeLogs.some((row) => row?.kind === "voice_runtime" && row?.content === "realtime_turn_revised_pre_audio"),
+    true
+  );
+});
+
+test("runRealtimeTurn resolves pending music disambiguation before reply planning when playback is idle", async () => {
+  const requestPlayCalls: Array<Record<string, unknown>> = [];
+  const manager = createVoiceTestManager();
+  manager.llm = {
+    ...manager.llm,
+    generate: async () => ({
+      text: JSON.stringify({
+        selection_id: "youtube:track-2"
+      }),
+      provider: "anthropic",
+      model: "claude-3-5-haiku-latest"
+    })
+  };
+  manager.requestPlayMusic = async (args) => {
+    requestPlayCalls.push(args);
+    return { ok: true };
+  };
+  manager.evaluateVoiceReplyDecision = async () => {
+    throw new Error("pending music disambiguation should bypass reply decision");
+  };
+  manager.runRealtimeBrainReply = async () => {
+    throw new Error("pending music disambiguation should bypass brain reply");
+  };
+  manager.forwardRealtimeTextTurnToBrain = async () => {
+    throw new Error("pending music disambiguation should bypass transcript bridge forwarding");
+  };
+
+  const settings = createVoiceTestSettings();
+  const session = {
+    id: "session-music-disambiguation-realtime-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeTurns: [],
+    settingsSnapshot: settings
+  };
+  manager.beginVoiceCommandSession({
+    session,
+    userId: "speaker-1",
+    domain: "music",
+    intent: "tool_followup"
+  });
+  manager.setMusicDisambiguationState({
+    session,
+    query: "minecraft music",
+    platform: "youtube",
+    results: MUSIC_DISAMBIGUATION_OPTIONS,
+    requestedByUserId: "speaker-1"
+  });
+
+  await manager.turnProcessor.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    transcriptOverride: "the cliff side water fall one",
+    captureReason: "stream_end"
+  });
+
+  assert.equal(requestPlayCalls.length, 1);
+  assert.equal(requestPlayCalls[0]?.requestedByUserId, "speaker-1");
+  assert.equal(requestPlayCalls[0]?.query, "minecraft music");
+  assert.equal(requestPlayCalls[0]?.trackId, "youtube:track-2");
+});
+
+test("runFileAsrTurn resolves pending music disambiguation before reply planning when playback is idle", async () => {
+  const requestPlayCalls: Array<Record<string, unknown>> = [];
+  const manager = createVoiceTestManager();
+  manager.llm = {
+    ...manager.llm,
+    transcribeAudio: async () => ({ text: "unused" }),
+    generate: async () => ({
+      text: JSON.stringify({
+        selection_id: "youtube:track-2"
+      }),
+      provider: "anthropic",
+      model: "claude-3-5-haiku-latest"
+    })
+  };
+  manager.transcribePcmTurn = async () => "the cliff side water fall one";
+  manager.requestPlayMusic = async (args) => {
+    requestPlayCalls.push(args);
+    return { ok: true };
+  };
+  manager.evaluateVoiceReplyDecision = async () => {
+    throw new Error("pending music disambiguation should bypass reply decision");
+  };
+  manager.runRealtimeBrainReply = async () => {
+    throw new Error("pending music disambiguation should bypass brain reply");
+  };
+
+  const settings = createVoiceTestSettings();
+  const session = {
+    id: "session-music-disambiguation-file-asr-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingFileAsrTurnsQueue: [],
+    settingsSnapshot: settings
+  };
+  manager.beginVoiceCommandSession({
+    session,
+    userId: "speaker-1",
+    domain: "music",
+    intent: "tool_followup"
+  });
+  manager.setMusicDisambiguationState({
+    session,
+    query: "minecraft music",
+    platform: "youtube",
+    results: MUSIC_DISAMBIGUATION_OPTIONS,
+    requestedByUserId: "speaker-1"
+  });
+
+  await manager.turnProcessor.runFileAsrTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([1, 2, 3, 4]),
+    captureReason: "stream_end"
+  });
+
+  assert.equal(requestPlayCalls.length, 1);
+  assert.equal(requestPlayCalls[0]?.requestedByUserId, "speaker-1");
+  assert.equal(requestPlayCalls[0]?.query, "minecraft music");
+  assert.equal(requestPlayCalls[0]?.trackId, "youtube:track-2");
+});
+
 test("forwardRealtimeTextTurnToBrain waits for turn-context refresh before sending the utterance", async () => {
   const requestCalls = [];
   let releaseContextRefresh = () => undefined;
@@ -346,34 +578,66 @@ test("shouldUsePerUserTranscription follows strategy and setting", () => {
 
   const bridgeDisabledSettings = createVoiceTestSettings({
     voice: {
-      replyPath: "brain",
-      openaiRealtime: {
-        usePerUserAsrBridge: false
+      conversationPolicy: {
+        replyPath: "brain"
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          openaiRealtime: {
+            usePerUserAsrBridge: false
+          }
+        }
       }
     }
   });
   const bridgeEnabledSettings = createVoiceTestSettings({
     voice: {
-      replyPath: "brain",
-      openaiRealtime: {
-        usePerUserAsrBridge: true
+      conversationPolicy: {
+        replyPath: "brain"
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          openaiRealtime: {
+            usePerUserAsrBridge: true
+          }
+        }
       }
     }
   });
   const nativeSettings = createVoiceTestSettings({
     voice: {
-      replyPath: "native",
-      openaiRealtime: {
-        usePerUserAsrBridge: true
+      conversationPolicy: {
+        replyPath: "native"
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          openaiRealtime: {
+            usePerUserAsrBridge: true
+          }
+        }
       }
     }
   });
   const fileWavSettings = createVoiceTestSettings({
     voice: {
-      replyPath: "brain",
-      openaiRealtime: {
-        transcriptionMethod: "file_wav",
-        usePerUserAsrBridge: true
+      conversationPolicy: {
+        replyPath: "brain"
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          openaiRealtime: {
+            transcriptionMethod: "file_wav",
+            usePerUserAsrBridge: true
+          }
+        }
       }
     }
   });
@@ -410,34 +674,66 @@ test("shouldUseSharedTranscription follows strategy and setting", () => {
 
   const bridgeDisabledSettings = createVoiceTestSettings({
     voice: {
-      replyPath: "brain",
-      openaiRealtime: {
-        usePerUserAsrBridge: false
+      conversationPolicy: {
+        replyPath: "brain"
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          openaiRealtime: {
+            usePerUserAsrBridge: false
+          }
+        }
       }
     }
   });
   const bridgeEnabledSettings = createVoiceTestSettings({
     voice: {
-      replyPath: "brain",
-      openaiRealtime: {
-        usePerUserAsrBridge: true
+      conversationPolicy: {
+        replyPath: "brain"
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          openaiRealtime: {
+            usePerUserAsrBridge: true
+          }
+        }
       }
     }
   });
   const nativeSettings = createVoiceTestSettings({
     voice: {
-      replyPath: "native",
-      openaiRealtime: {
-        usePerUserAsrBridge: false
+      conversationPolicy: {
+        replyPath: "native"
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          openaiRealtime: {
+            usePerUserAsrBridge: false
+          }
+        }
       }
     }
   });
   const fileWavSettings = createVoiceTestSettings({
     voice: {
-      replyPath: "brain",
-      openaiRealtime: {
-        transcriptionMethod: "file_wav",
-        usePerUserAsrBridge: false
+      conversationPolicy: {
+        replyPath: "brain"
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          openaiRealtime: {
+            transcriptionMethod: "file_wav",
+            usePerUserAsrBridge: false
+          }
+        }
       }
     }
   });
@@ -472,13 +768,34 @@ test("isAsrActive returns false when textOnlyMode is enabled", () => {
   const manager = createVoiceTestManager();
 
   const normalSettings = createVoiceTestSettings({
-    voice: { asrEnabled: true, textOnlyMode: false }
+    voice: {
+      transcription: {
+        enabled: true
+      },
+      conversationPolicy: {
+        textOnlyMode: false
+      }
+    }
   });
   const textOnlySettings = createVoiceTestSettings({
-    voice: { asrEnabled: true, textOnlyMode: true }
+    voice: {
+      transcription: {
+        enabled: true
+      },
+      conversationPolicy: {
+        textOnlyMode: true
+      }
+    }
   });
   const asrDisabledSettings = createVoiceTestSettings({
-    voice: { asrEnabled: false, textOnlyMode: false }
+    voice: {
+      transcription: {
+        enabled: false
+      },
+      conversationPolicy: {
+        textOnlyMode: false
+      }
+    }
   });
 
   const session = {
@@ -501,16 +818,32 @@ test("shouldUsePerUserTranscription returns false when textOnlyMode is enabled",
 
   const normalSettings = createVoiceTestSettings({
     voice: {
-      replyPath: "brain",
-      openaiRealtime: { usePerUserAsrBridge: true },
-      textOnlyMode: false
+      conversationPolicy: {
+        replyPath: "brain",
+        textOnlyMode: false
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          openaiRealtime: { usePerUserAsrBridge: true }
+        }
+      }
     }
   });
   const textOnlySettings = createVoiceTestSettings({
     voice: {
-      replyPath: "brain",
-      openaiRealtime: { usePerUserAsrBridge: true },
-      textOnlyMode: true
+      conversationPolicy: {
+        replyPath: "brain",
+        textOnlyMode: true
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          openaiRealtime: { usePerUserAsrBridge: true }
+        }
+      }
     }
   });
 
@@ -538,16 +871,32 @@ test("shouldUseSharedTranscription returns false when textOnlyMode is enabled", 
 
   const normalSettings = createVoiceTestSettings({
     voice: {
-      replyPath: "brain",
-      openaiRealtime: { usePerUserAsrBridge: false },
-      textOnlyMode: false
+      conversationPolicy: {
+        replyPath: "brain",
+        textOnlyMode: false
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          openaiRealtime: { usePerUserAsrBridge: false }
+        }
+      }
     }
   });
   const textOnlySettings = createVoiceTestSettings({
     voice: {
-      replyPath: "brain",
-      openaiRealtime: { usePerUserAsrBridge: false },
-      textOnlyMode: true
+      conversationPolicy: {
+        replyPath: "brain",
+        textOnlyMode: true
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          openaiRealtime: { usePerUserAsrBridge: false }
+        }
+      }
     }
   });
 
@@ -581,25 +930,49 @@ test("shouldUseRealtimeTranscriptBridge follows replyPath, not transcription met
 
   const bridgeRealtimeSettings = createVoiceTestSettings({
     voice: {
-      replyPath: "bridge",
-      openaiRealtime: {
-        transcriptionMethod: "realtime_bridge"
+      conversationPolicy: {
+        replyPath: "bridge"
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          openaiRealtime: {
+            transcriptionMethod: "realtime_bridge"
+          }
+        }
       }
     }
   });
   const bridgeFileWavSettings = createVoiceTestSettings({
     voice: {
-      replyPath: "bridge",
-      openaiRealtime: {
-        transcriptionMethod: "file_wav"
+      conversationPolicy: {
+        replyPath: "bridge"
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          openaiRealtime: {
+            transcriptionMethod: "file_wav"
+          }
+        }
       }
     }
   });
   const fullBrainSettings = createVoiceTestSettings({
     voice: {
-      replyPath: "brain",
-      openaiRealtime: {
-        transcriptionMethod: "realtime_bridge"
+      conversationPolicy: {
+        replyPath: "brain"
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        voice: {
+          openaiRealtime: {
+            transcriptionMethod: "realtime_bridge"
+          }
+        }
       }
     }
   });

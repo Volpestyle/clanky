@@ -360,6 +360,24 @@ export const MUSIC_RESUME_SCHEMA: SharedToolSchema = {
   }
 };
 
+export const MUSIC_REPLY_HANDOFF_SCHEMA: SharedToolSchema = {
+  name: "music_reply_handoff",
+  description: "Temporarily claim the floor for the current spoken reply by pausing or ducking active music. Runtime auto-restores playback when you finish. This is not a persistent playback command.",
+  voiceContinuationPolicy: "always",
+  parameters: {
+    type: "object",
+    properties: {
+      mode: {
+        type: "string",
+        enum: ["pause", "duck", "none"],
+        description: "\"pause\" fully pauses music for this reply, \"duck\" lowers music under this reply, \"none\" clears any pending temporary handoff."
+      }
+    },
+    required: ["mode"],
+    additionalProperties: false
+  }
+};
+
 export const MUSIC_SKIP_SCHEMA: SharedToolSchema = {
   name: "music_skip",
   description: "Skip current track and advance to next queued track.",
@@ -488,6 +506,7 @@ export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
   MUSIC_STOP_SCHEMA,
   MUSIC_PAUSE_SCHEMA,
   MUSIC_RESUME_SCHEMA,
+  MUSIC_REPLY_HANDOFF_SCHEMA,
   MUSIC_SKIP_SCHEMA,
   MUSIC_NOW_PLAYING_SCHEMA,
   PLAY_SOUNDBOARD_SCHEMA,

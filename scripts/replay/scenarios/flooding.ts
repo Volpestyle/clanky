@@ -298,8 +298,8 @@ async function runLiveActorDecision({
   message,
   recentMessages,
   addressed,
-  replyEagerness,
-  reactionEagerness
+  ambientReplyEagerness,
+  reactivity
 }: {
   llm: {
     generate: (input: {
@@ -328,8 +328,8 @@ async function runLiveActorDecision({
     content: string;
   }[];
   addressed: boolean;
-  replyEagerness: number;
-  reactionEagerness: number;
+  ambientReplyEagerness: number;
+  reactivity: number;
 }): Promise<ReplayDecision> {
   const systemPrompt = buildSystemPrompt(settings);
   const userPrompt = buildReplyPrompt({
@@ -351,8 +351,8 @@ async function runLiveActorDecision({
     remainingReplyImages: 0,
     remainingReplyVideos: 0,
     remainingReplyGifs: 0,
-    replyEagerness,
-    reactionEagerness,
+    ambientReplyEagerness,
+    reactivity,
     addressing: {
       directlyAddressed: addressed,
       responseRequired: addressed
@@ -902,31 +902,37 @@ const floodingScenario: ReplayScenarioDefinition<
         }
       }
     } else {
-      const replyEagerness = clamp(
+      const ambientReplyEagerness = clamp(
         stableNumber(
           channelMode === "initiative"
             ? (
                 runtimeSettings as {
-                  activity?: { replyLevelInitiative?: number };
+                  interaction?: {
+                    activity?: { ambientReplyEagerness?: number };
+                  };
                 }
-              )?.activity?.replyLevelInitiative
+              )?.interaction?.activity?.ambientReplyEagerness
             : (
                 runtimeSettings as {
-                  activity?: { replyLevelNonInitiative?: number };
+                  interaction?: {
+                    activity?: { ambientReplyEagerness?: number };
+                  };
                 }
-              )?.activity?.replyLevelNonInitiative,
+              )?.interaction?.activity?.ambientReplyEagerness,
           0
         ),
         0,
         100
       );
-      const reactionEagerness = clamp(
+      const reactivity = clamp(
         stableNumber(
           (
             runtimeSettings as {
-              activity?: { reactionLevel?: number };
+              interaction?: {
+                activity?: { reactivity?: number };
+              };
             }
-          )?.activity?.reactionLevel,
+          )?.interaction?.activity?.reactivity,
           20
         ),
         0,
@@ -941,8 +947,8 @@ const floodingScenario: ReplayScenarioDefinition<
           message,
           recentMessages,
           addressed,
-          replyEagerness,
-          reactionEagerness
+          ambientReplyEagerness,
+          reactivity
         });
         stats.llmCalls += 1;
         stats.llmCostUsd += decision.llmCostUsd;

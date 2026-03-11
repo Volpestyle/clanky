@@ -5,12 +5,20 @@ import { env } from "node:process";
 import { resolveE2EPipelineOverrides } from "./presets.ts";
 
 type E2ESettingsSnapshot = {
-  activity?: {
-    replyEagerness?: number;
+  interaction?: {
+    activity?: {
+      ambientReplyEagerness?: number;
+      responseWindowEagerness?: number;
+      reactivity?: number;
+    };
   };
   voice?: {
-    replyEagerness?: number;
-    thoughtEngine?: {
+    conversationPolicy?: {
+      ambientReplyEagerness?: number;
+    };
+  };
+  initiative?: {
+    voice?: {
       eagerness?: number;
     };
   };
@@ -140,12 +148,19 @@ export async function beginTemporaryE2ESettings(overrides: Record<string, unknow
 export async function beginTemporaryE2EEagerness(voiceEagerness: number, textEagerness?: number): Promise<void> {
   const text = textEagerness ?? voiceEagerness;
   return beginTemporaryE2ESettings({
-    activity: {
-      replyEagerness: text
+    interaction: {
+      activity: {
+        ambientReplyEagerness: text,
+        responseWindowEagerness: text
+      }
     },
     voice: {
-      replyEagerness: voiceEagerness,
-      thoughtEngine: {
+      conversationPolicy: {
+        ambientReplyEagerness: voiceEagerness
+      }
+    },
+    initiative: {
+      voice: {
         eagerness: voiceEagerness
       }
     }

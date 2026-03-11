@@ -1,8 +1,13 @@
-import { getFollowupSettings, getVoiceConversationPolicy } from "../settings/agentStack.ts";
+import {
+  getActivitySettings,
+  getFollowupSettings,
+  getVoiceConversationPolicy
+} from "../settings/agentStack.ts";
 import { clamp } from "../utils.ts";
 import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
 import { isAbortError } from "../tools/browserTaskRuntime.ts";
 import { shouldAllowSystemSpeechSkipAfterFire } from "./systemSpeechOpportunity.ts";
+import { getMusicWakeFollowupState } from "./musicWakeLatch.ts";
 import {
   REALTIME_CONTEXT_MEMBER_LIMIT,
   STT_CONTEXT_MAX_MESSAGES,
@@ -15,6 +20,7 @@ import {
   SOUNDBOARD_MAX_CANDIDATES,
   formatSoundboardCandidateLine,
   isRealtimeMode,
+  normalizeVoiceAddressingTargetToken,
   normalizeVoiceText
 } from "./voiceSessionHelpers.ts";
 import { providerSupports } from "./voiceModes.ts";
@@ -31,9 +37,11 @@ import type {
   VoiceGenerationContextSnapshot,
   LoggedVoicePromptBundle,
   VoicePendingResponseLatencyContext,
+  VoiceRuntimeEventContext,
   VoiceRealtimeToolSettings,
   VoiceSession
 } from "./voiceSessionTypes.ts";
+import { musicPhaseIsActive } from "./voiceSessionTypes.ts";
 import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 
 type GeneratedPayload = {
@@ -65,6 +73,7 @@ export interface VoiceReplyPipelineParams {
   directAddressed?: boolean;
   directAddressConfidence?: number;
   conversationContext?: VoiceConversationContext | null;
+  musicWakeFollowupEligibleAtCapture?: boolean;
   mode: "realtime_transport";
   source?: string;
   inputKind?: string;
@@ -72,14 +81,16 @@ export interface VoiceReplyPipelineParams {
   forceSpokenOutput?: boolean;
   spokenOutputRetryCount?: number;
   frozenFrameSnapshot?: { mimeType: string; dataBase64: string } | null;
+  runtimeEventContext?: VoiceRuntimeEventContext | null;
 }
 
 export type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
-  | "annotateLatestVoiceTurnAddressing"
   | "buildVoiceAddressingState"
   | "buildVoiceConversationContext"
   | "buildVoiceReplyPlaybackPlan"
   | "buildVoiceToolCallbacks"
+  | "collapsePendingRealtimeAssistantStreamTail"
+  | "discardSupersededPrePlaybackReply"
   | "endSession"
   | "generateVoiceTurn"
   | "getRecentVoiceChannelEffectEvents"
@@ -92,7 +103,11 @@ export type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
   | "normalizeVoiceAddressingAnnotation"
   | "playVoiceReplyInOrder"
   | "recordVoiceTurn"
+  | "recoverSupersededPrePlaybackReply"
+  | "resolveReplyInterruptionPolicy"
   | "requestRealtimeTextUtterance"
+  | "schedulePassiveMusicWakeLatchRefresh"
+  | "getMusicPhase"
   | "soundboardDirector"
   | "updateModelContextSummary"
   | "waitForLeaveDirectivePlayback"
@@ -117,6 +132,55 @@ function toGeneratedPayload(value: unknown): GeneratedPayload {
     usedScreenShareOffer: false,
     leaveVoiceChannelRequested: false,
     voiceAddressing: null
+  };
+}
+
+function normalizeAssistantReplyAddressing(
+  host: Pick<VoiceReplyPipelineHost, "normalizeVoiceAddressingAnnotation">,
+  rawAddressing: unknown
+) {
+  const normalizedRaw =
+    rawAddressing && typeof rawAddressing === "object" && !Array.isArray(rawAddressing)
+      ? rawAddressing as Record<string, unknown>
+      : null;
+  const talkingTo = normalizeVoiceAddressingTargetToken(String(normalizedRaw?.talkingTo || ""));
+  if (!talkingTo) return null;
+  return host.normalizeVoiceAddressingAnnotation({
+    rawAddressing: { talkingTo },
+    source: "generation",
+    reason: "assistant_reply_target"
+  });
+}
+
+function resolveAssistantReplyTargeting(
+  host: Pick<VoiceReplyPipelineHost, "normalizeVoiceAddressingAnnotation" | "resolveReplyInterruptionPolicy">,
+  {
+    session,
+    userId,
+    rawAddressing
+  }: {
+    session: VoiceSession;
+    userId: string | null;
+    rawAddressing: unknown;
+  }
+) {
+  const generatedVoiceAddressing = normalizeAssistantReplyAddressing(host, rawAddressing);
+  const replyInterruptionPolicy: ReplyInterruptionPolicy | null = host.resolveReplyInterruptionPolicy({
+    session,
+    userId,
+    talkingTo: generatedVoiceAddressing?.talkingTo || null,
+    source: "assistant_reply_target",
+    reason:
+      generatedVoiceAddressing?.talkingTo === "ALL"
+        ? "assistant_target_all"
+        : generatedVoiceAddressing?.talkingTo
+          ? "assistant_target_speaker"
+          : "assistant_target_missing"
+  });
+
+  return {
+    generatedVoiceAddressing,
+    replyInterruptionPolicy
   };
 }
 
@@ -250,6 +314,16 @@ export async function runVoiceReplyPipeline(
 
   const normalizedTranscript = normalizeVoiceText(params.transcript, STT_TRANSCRIPT_MAX_CHARS);
   if (!normalizedTranscript) return false;
+  const currentMusicPhase = host.getMusicPhase(session);
+  const musicWakeFollowupState = getMusicWakeFollowupState(session, params.userId || null);
+  const shouldRefreshMusicWakeAfterSpeech =
+    musicPhaseIsActive(currentMusicPhase) &&
+    currentMusicPhase !== "paused_wake_word" &&
+    (
+      Boolean(params.directAddressed) ||
+      Boolean(params.musicWakeFollowupEligibleAtCapture) ||
+      musicWakeFollowupState.passiveWakeFollowupAllowed
+    );
 
   const normalizedLatencyContext =
     params.latencyContext && typeof params.latencyContext === "object"
@@ -265,15 +339,55 @@ export async function runVoiceReplyPipeline(
     ? Math.max(0, Math.round(Number(normalizedLatencyContext?.pendingQueueDepth)))
     : null;
   const latencyCaptureReason = String(normalizedLatencyContext?.captureReason || "").trim() || null;
+  const prePlaybackInterruptionPolicy =
+    params.inputKind === "event"
+      ? null
+      : host.resolveReplyInterruptionPolicy({
+        session,
+        userId: params.userId,
+        source
+      });
+  const generationStartedAt = Date.now();
+  const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
+  const inFlightAcceptedBrainTurn: InFlightAcceptedBrainTurn = {
+    transcript: normalizedTranscript,
+    userId: params.userId || null,
+    pcmBuffer: null,
+    source,
+    acceptedAt: generationStartedAt,
+    phase: "generation_only",
+    captureReason: String(params.latencyContext?.captureReason || params.source || "stream_end"),
+    directAddressed: Boolean(params.directAddressed),
+    interruptionPolicy: prePlaybackInterruptionPolicy,
+    toolPhaseRecoveryEligible: false,
+    toolPhaseRecoveryReason: null,
+    toolPhaseLastToolName: null
+  };
+  session.inFlightAcceptedBrainTurn = inFlightAcceptedBrainTurn;
+  const clearInFlightAcceptedBrainTurn = () => {
+    if (session.inFlightAcceptedBrainTurn === inFlightAcceptedBrainTurn) {
+      session.inFlightAcceptedBrainTurn = null;
+    }
+  };
 
   if (host.maybeSupersedeRealtimeReplyBeforePlayback({
     session,
     source: `${source}:generation_preflight`,
-    generationStartedAtMs: latencyFinalizedAtMs || Date.now(),
-    includePromotedCaptureSupersede: true
+    generationStartedAtMs: latencyFinalizedAtMs || generationStartedAt,
+    includePromotedCaptureSupersede: true,
+    interruptionPolicy: prePlaybackInterruptionPolicy
   })) {
+    clearInFlightAcceptedBrainTurn();
     return false;
   }
+  const activeReply =
+    host.activeReplies && voiceReplyScopeKey
+      ? host.activeReplies.begin(voiceReplyScopeKey, "voice-generation", ["voice_generation"])
+      : null;
+  if (activeReply && session.inFlightAcceptedBrainTurn === inFlightAcceptedBrainTurn) {
+    session.inFlightAcceptedBrainTurn.acceptedAt = activeReply.startedAt;
+  }
+  const generationSignal = activeReply?.abortController.signal;
 
   const { contextMessages, contextMessageChars, contextTurns } = buildContextMessages(session, normalizedTranscript);
   host.updateModelContextSummary(session, "generation", {
@@ -343,37 +457,9 @@ export async function runVoiceReplyPipeline(
     voiceAddressingState
   };
 
-  const generationStartedAt = Date.now();
-  const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
-  const activeReply =
-    host.activeReplies && voiceReplyScopeKey
-      ? host.activeReplies.begin(voiceReplyScopeKey, "voice-generation", ["voice_generation"])
-      : null;
-  const generationSignal = activeReply?.abortController.signal;
-  const inFlightAcceptedBrainTurn: InFlightAcceptedBrainTurn | null =
-    activeReply
-      ? {
-          transcript: normalizedTranscript,
-          userId: params.userId || null,
-          pcmBuffer: null,
-          source,
-          acceptedAt: generationStartedAt,
-          phase: "generation_only",
-          captureReason: String(params.latencyContext?.captureReason || params.source || "stream_end"),
-          directAddressed: Boolean(params.directAddressed)
-        }
-      : null;
-  if (inFlightAcceptedBrainTurn) {
-    session.inFlightAcceptedBrainTurn = inFlightAcceptedBrainTurn;
-  }
   const markInFlightAcceptedBrainTurnPhase = (phase: "generation_only" | "tool_call_started" | "playback_requested") => {
-    if (inFlightAcceptedBrainTurn && session.inFlightAcceptedBrainTurn === inFlightAcceptedBrainTurn) {
+    if (session.inFlightAcceptedBrainTurn === inFlightAcceptedBrainTurn) {
       session.inFlightAcceptedBrainTurn.phase = phase;
-    }
-  };
-  const clearInFlightAcceptedBrainTurn = () => {
-    if (inFlightAcceptedBrainTurn && session.inFlightAcceptedBrainTurn === inFlightAcceptedBrainTurn) {
-      session.inFlightAcceptedBrainTurn = null;
     }
   };
   let generatedPayload: GeneratedPayload | null = null;
@@ -411,6 +497,7 @@ export async function runVoiceReplyPipeline(
     });
   }
   try {
+    const activity = getActivitySettings(params.settings);
     generatedPayload = toGeneratedPayload(await host.generateVoiceTurn({
       settings: params.settings,
       guildId: session.guildId,
@@ -422,8 +509,10 @@ export async function runVoiceReplyPipeline(
       contextMessages,
       sessionId: session.id,
       isEagerTurn: !params.directAddressed && !generationConversationContext?.engaged,
-      voiceEagerness: Number(voiceConversation.replyEagerness) || 0,
+      voiceAmbientReplyEagerness: Number(voiceConversation.ambientReplyEagerness) || 0,
+      responseWindowEagerness: Number(activity.responseWindowEagerness) || 0,
       conversationContext: generationConversationContext,
+      runtimeEventContext: params.runtimeEventContext || null,
       sessionTiming,
       participantRoster,
       recentMembershipEvents,
@@ -434,13 +523,26 @@ export async function runVoiceReplyPipeline(
       webSearchTimeoutMs: Number(followup.toolBudget?.toolTimeoutMs),
       voiceToolCallbacks: host.buildVoiceToolCallbacks({ session, settings: params.settings }),
       onSpokenSentence: streamingVoiceReplyEnabled
-        ? async ({ text, index }: { text: string; index: number }) => {
+        ? async ({
+          text,
+          index,
+          voiceAddressing
+        }: {
+          text: string;
+          index: number;
+          voiceAddressing?: { talkingTo: string | null } | null;
+        }) => {
           if (session.ending || generationSignal?.aborted) return false;
           const playbackPlan = host.buildVoiceReplyPlaybackPlan({
             replyText: String(text || ""),
             trailingSoundboardRefs: []
           });
           if (!playbackPlan.steps.length) return false;
+          const { replyInterruptionPolicy: streamedReplyInterruptionPolicy } = resolveAssistantReplyTargeting(host, {
+            session,
+            userId: params.userId,
+            rawAddressing: voiceAddressing || null
+          });
           const requestedAt = Date.now();
           const latencyContext =
             index === 0
@@ -466,7 +568,9 @@ export async function runVoiceReplyPipeline(
               text: normalizedText,
               userId: host.client.user?.id || null,
               source: playbackSource,
-              latencyContext
+              interruptionPolicy: streamedReplyInterruptionPolicy,
+              latencyContext,
+              musicWakeRefreshAfterSpeech: shouldRefreshMusicWakeAfterSpeech
             });
             if (requested && streamedReplyRequestedAt === 0) {
               streamedReplyRequestedAt = requestedAt;
@@ -486,8 +590,9 @@ export async function runVoiceReplyPipeline(
             playbackSteps: playbackPlan.steps,
             source: playbackSource,
             preferRealtimeUtterance: useRealtimeTts,
-            interruptionPolicy: null,
-            latencyContext
+            interruptionPolicy: streamedReplyInterruptionPolicy,
+            latencyContext,
+            musicWakeRefreshAfterSpeech: shouldRefreshMusicWakeAfterSpeech
           });
           const accepted = Boolean(playbackResult.completed) &&
             (Boolean(playbackResult.spokeLine) || Number(playbackResult.playedSoundboardCount || 0) > 0);
@@ -495,6 +600,18 @@ export async function runVoiceReplyPipeline(
             streamedReplyRequestedAt = requestedAt;
             session.lastAssistantReplyAt = requestedAt;
             markInFlightAcceptedBrainTurnPhase("playback_requested");
+          }
+          if (
+            accepted &&
+            shouldRefreshMusicWakeAfterSpeech &&
+            playbackResult.spokeLine &&
+            !playbackResult.requestedRealtimeUtterance
+          ) {
+            host.schedulePassiveMusicWakeLatchRefresh({
+              session,
+              settings: params.settings,
+              userId: params.userId || null
+            });
           }
           return {
             accepted,
@@ -548,6 +665,13 @@ export async function runVoiceReplyPipeline(
     return false;
   }
 
+  if (streamedReplyRequestedAt > 0) {
+    host.collapsePendingRealtimeAssistantStreamTail({
+      session,
+      source
+    });
+  }
+
   const replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
   const playedSoundboardRefs = normalizeSoundboardRefsModule(generatedPayload?.playedSoundboardRefs);
   const streamedSentenceCount = Math.max(0, Number(generatedPayload?.streamedSentenceCount || 0));
@@ -587,24 +711,14 @@ export async function runVoiceReplyPipeline(
     }
     session.streamWatch.durableScreenNotes.push(screenMoment);
   }
-  const generatedVoiceAddressing = host.normalizeVoiceAddressingAnnotation({
-    rawAddressing: generatedPayload?.voiceAddressing,
-    directAddressed: Boolean(params.directAddressed),
-    directedConfidence: Number(params.directAddressConfidence),
-    source: "generation",
-    reason: "voice_generation"
+  const {
+    generatedVoiceAddressing,
+    replyInterruptionPolicy
+  } = resolveAssistantReplyTargeting(host, {
+    session,
+    userId: params.userId,
+    rawAddressing: generatedPayload?.voiceAddressing
   });
-  if (generatedVoiceAddressing) {
-    host.annotateLatestVoiceTurnAddressing({
-      session,
-      role: "user",
-      userId: params.userId,
-      text: normalizedTranscript,
-      addressing: generatedVoiceAddressing
-    });
-  }
-
-  const replyInterruptionPolicy: ReplyInterruptionPolicy | null = null;
 
   const shouldRetryForcedSpeech =
     Boolean(params.forceSpokenOutput) &&
@@ -654,6 +768,11 @@ export async function runVoiceReplyPipeline(
       contextMessages,
       contextTurns,
       contextMessageChars
+    });
+    host.recoverSupersededPrePlaybackReply({
+      session,
+      reason: "brain_reply_skipped",
+      userId: params.userId
     });
     clearInFlightAcceptedBrainTurn();
     return true;
@@ -705,6 +824,11 @@ export async function runVoiceReplyPipeline(
   if (!streamedSpeechPlayed && playbackPlan.steps.length > 0) {
     markInFlightAcceptedBrainTurnPhase("playback_requested");
   }
+  host.discardSupersededPrePlaybackReply({
+    session,
+    reason: streamedSpeechPlayed ? "streamed_reply_output_started" : "reply_output_started",
+    userId: params.userId
+  });
   const playbackResult = await (async () => {
     try {
       return streamedSpeechPlayed
@@ -722,7 +846,8 @@ export async function runVoiceReplyPipeline(
           source: playbackSource,
           preferRealtimeUtterance: useRealtimeTts,
           interruptionPolicy: replyInterruptionPolicy,
-          latencyContext: replyLatencyContext
+          latencyContext: replyLatencyContext,
+          musicWakeRefreshAfterSpeech: shouldRefreshMusicWakeAfterSpeech
         });
     } finally {
       clearInFlightAcceptedBrainTurn();
@@ -733,7 +858,8 @@ export async function runVoiceReplyPipeline(
       host.recordVoiceTurn(session, {
         role: "assistant",
         userId: host.client.user?.id || null,
-        text: `[interrupted] ${playbackPlan.spokenText}`
+        text: `[interrupted] ${playbackPlan.spokenText}`,
+        addressing: generatedVoiceAddressing
       });
     }
     host.maybeClearActiveReplyInterruptionPolicy(session);
@@ -741,6 +867,17 @@ export async function runVoiceReplyPipeline(
   }
 
   const requestedRealtimeUtterance = Boolean(playbackResult.requestedRealtimeUtterance);
+  if (
+    shouldRefreshMusicWakeAfterSpeech &&
+    playbackResult.spokeLine &&
+    !requestedRealtimeUtterance
+  ) {
+    host.schedulePassiveMusicWakeLatchRefresh({
+      session,
+      settings: params.settings,
+      userId: params.userId || null
+    });
+  }
   try {
     const pendingRequestId = Number(session.pendingResponse?.requestId || 0) || null;
     host.logVoiceLatencyStage({
@@ -767,7 +904,8 @@ export async function runVoiceReplyPipeline(
       host.recordVoiceTurn(session, {
         role: "assistant",
         userId: host.client.user?.id || null,
-        text: playbackPlan.spokenText
+        text: playbackPlan.spokenText,
+        addressing: generatedVoiceAddressing
       });
     }
     host.store.logAction({

@@ -1,10 +1,88 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { requestJoin } from "./voiceJoinFlow.ts";
-import { createTestSettings } from "../testSettings.ts";
+import { createTestSettings as createCanonicalTestSettings, normalizeLegacyTestSettingsInput } from "../testSettings.ts";
+import { deepMerge } from "../utils.ts";
 import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
 import { ClankvoxClient } from "./clankvoxClient.ts";
+
+const LEGACY_VOICE_KEYS = [
+  "mode",
+  "voiceProvider",
+  "brainProvider",
+  "generationLlm",
+  "replyDecisionLlm",
+  "asrEnabled",
+  "asrLanguageMode",
+  "asrLanguageHint",
+  "allowedVoiceChannelIds",
+  "blockedVoiceChannelIds",
+  "blockedVoiceUserIds",
+  "maxSessionMinutes",
+  "inactivityLeaveSeconds",
+  "maxSessionsPerDay",
+  "maxConcurrentSessions",
+  "ambientReplyEagerness",
+  "commandOnlyMode",
+  "allowNsfwHumor",
+  "textOnlyMode",
+  "defaultInterruptionMode",
+  "replyPath",
+  "ttsMode",
+  "operationalMessages",
+  "streamingEnabled",
+  "streamingEagerFirstChunkChars",
+  "streamingMaxBufferChars",
+  "thoughtEngine",
+  "musicDucking",
+  "intentConfidenceThreshold",
+  "openaiRealtime",
+  "xai",
+  "elevenLabsRealtime",
+  "geminiRealtime",
+  "openaiAudioApi"
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function createTestSettings(overrides: Record<string, unknown> = {}) {
+  const canonicalOverrides: Record<string, unknown> = { ...overrides };
+  const legacyOverrides: Record<string, unknown> = {};
+
+  for (const key of ["botName", "botNameAliases"] as const) {
+    if (key in canonicalOverrides) {
+      legacyOverrides[key] = canonicalOverrides[key];
+      delete canonicalOverrides[key];
+    }
+  }
+
+  if (isRecord(canonicalOverrides.voice)) {
+    const canonicalVoice = { ...canonicalOverrides.voice };
+    const legacyVoice: Record<string, unknown> = {};
+    for (const key of LEGACY_VOICE_KEYS) {
+      if (key in canonicalVoice) {
+        legacyVoice[key] = canonicalVoice[key];
+        delete canonicalVoice[key];
+      }
+    }
+
+    if (Object.keys(legacyVoice).length > 0) {
+      legacyOverrides.voice = legacyVoice;
+    }
+    if (Object.keys(canonicalVoice).length > 0) {
+      canonicalOverrides.voice = canonicalVoice;
+    } else {
+      delete canonicalOverrides.voice;
+    }
+  }
+
+  const normalizedLegacy =
+    Object.keys(legacyOverrides).length > 0 ? normalizeLegacyTestSettingsInput(legacyOverrides) : {};
+  return createCanonicalTestSettings(deepMerge(normalizedLegacy, canonicalOverrides));
+}
 
 function baseSettings(overrides = {}) {
   const base = {
@@ -507,6 +585,58 @@ test("requestJoin omits provider-native realtime tools at connect for brain tran
     assert.equal(Array.isArray(session?.mcpStatus), true);
     assert.equal(session?.toolMusicTrackCatalog instanceof Map, true);
     assert.equal(Array.isArray(session?.memoryWriteWindow), true);
+  } finally {
+    ClankvoxClient.spawn = originalSpawn;
+    OpenAiRealtimeClient.prototype.connect = originalConnect;
+  }
+});
+
+test("requestJoin emits structured self-join runtime context for the bot arrival event", async () => {
+  const originalSpawn = ClankvoxClient.spawn;
+  const originalConnect = OpenAiRealtimeClient.prototype.connect;
+  const runtimeEventCalls = [];
+
+  ClankvoxClient.spawn = async () => ({
+    destroy() {},
+    on() {},
+    off() {}
+  }) as ClankvoxClient;
+  OpenAiRealtimeClient.prototype.connect = async function connectStub() {
+    return {};
+  };
+
+  try {
+    const { manager } = createManager({
+      appConfig: {
+        openaiApiKey: "openai-key"
+      },
+      async fireVoiceRuntimeEvent(payload) {
+        runtimeEventCalls.push(payload);
+        return true;
+      }
+    });
+
+    const result = await requestJoin(manager, {
+      message: createMessage(),
+      settings: baseSettings({
+        botName: "clanker conk",
+        voice: {
+          mode: "openai_realtime",
+          replyPath: "brain"
+        }
+      })
+    });
+
+    assert.equal(result, true);
+    assert.equal(runtimeEventCalls.length, 1);
+    assert.equal(runtimeEventCalls[0]?.transcript, "[YOU joined the voice channel]");
+    assert.deepEqual(runtimeEventCalls[0]?.runtimeEventContext, {
+      category: "membership",
+      eventType: "join",
+      actorUserId: "bot-1",
+      actorDisplayName: "clanker conk",
+      actorRole: "self"
+    });
   } finally {
     ClankvoxClient.spawn = originalSpawn;
     OpenAiRealtimeClient.prototype.connect = originalConnect;

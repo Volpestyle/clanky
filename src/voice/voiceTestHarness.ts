@@ -1,13 +1,8 @@
 import { createTestSettings } from "../testSettings.ts";
+import { deepMerge } from "../utils.ts";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
 
-type VoiceTestSettingsOverrides = {
-  memory?: Record<string, unknown>;
-  llm?: Record<string, unknown>;
-  voice?: Record<string, unknown> & {
-    replyDecisionLlm?: Record<string, unknown>;
-  };
-} & Record<string, unknown>;
+type VoiceTestSettingsOverrides = Parameters<typeof createTestSettings>[0];
 
 export function createVoiceTestManager({
   participantCount = 2,
@@ -25,10 +20,14 @@ export function createVoiceTestManager({
     logAction() {},
     getSettings() {
       return createVoiceTestSettings({
-        botName: "clanker conk",
-        botNameAliases: ["clankerconk"],
+        identity: {
+          botName: "clanker conk",
+          botNameAliases: ["clankerconk"]
+        },
         voice: {
-          replyPath: "brain"
+          conversationPolicy: {
+            replyPath: "brain"
+          }
         }
       });
     }
@@ -62,45 +61,39 @@ export function createVoiceTestManager({
 }
 
 export function createVoiceTestSettings(overrides: VoiceTestSettingsOverrides = {}) {
-  const base = {
-    botName: "clanker conk",
-    botNameAliases: ["clankerconk"],
+  const base: VoiceTestSettingsOverrides = {
+    identity: {
+      botName: "clanker conk",
+      botNameAliases: ["clankerconk"]
+    },
     memory: {
       enabled: false
     },
-    llm: {
-      provider: "openai",
-      model: "claude-haiku-4-5"
+    agentStack: {
+      overrides: {
+        orchestrator: {
+          provider: "openai",
+          model: "claude-haiku-4-5"
+        },
+        voiceAdmissionClassifier: {
+          mode: "dedicated_model",
+          model: {
+            provider: "anthropic",
+            model: "claude-haiku-4-5"
+          }
+        }
+      }
     },
     voice: {
-      replyEagerness: 60,
-      replyPath: "brain",
-      replyDecisionLlm: {
-        provider: "anthropic",
-        model: "claude-haiku-4-5",
-        realtimeAdmissionMode: "classifier_gate"
+      conversationPolicy: {
+        ambientReplyEagerness: 60,
+        replyPath: "brain"
+      },
+      admission: {
+        mode: "classifier_gate"
       }
     }
   };
 
-  return createTestSettings({
-    ...base,
-    ...overrides,
-    memory: {
-      ...base.memory,
-      ...(overrides.memory || {})
-    },
-    llm: {
-      ...base.llm,
-      ...(overrides.llm || {})
-    },
-    voice: {
-      ...base.voice,
-      ...(overrides.voice || {}),
-      replyDecisionLlm: {
-        ...base.voice.replyDecisionLlm,
-        ...(overrides.voice?.replyDecisionLlm || {})
-      }
-    }
-  });
+  return createTestSettings(deepMerge(base, overrides));
 }

@@ -78,6 +78,7 @@ export const LEAVE_DIRECTIVE_PLAYBACK_POLL_MS = 40;
 export const LEAVE_DIRECTIVE_PLAYBACK_NO_SIGNAL_GRACE_MS = 400;
 export const LEAVE_DIRECTIVE_REALTIME_AUDIO_START_WAIT_MS = 2200;
 export const LEAVE_DIRECTIVE_PLAYBACK_MAX_WAIT_MS = 5000;
+export const ORDERED_REALTIME_PLAYBACK_BARRIER_MAX_WAIT_MS = 30_000;
 // Disabled to reduce end-of-turn latency. Realtime turns still coalesce while
 // the drain is active and when deferred bot-turn-open turns flush together.
 // export const REALTIME_TURN_COALESCE_WINDOW_MS = 1100;
@@ -138,6 +139,7 @@ export const VOICE_CHANNEL_EFFECT_EVENT_MAX_TRACKED = 18;
 export const VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT = 6;
 export const VOICE_CHANNEL_EFFECT_EVENT_FRESH_MS = 60_000;
 export const RECENT_ENGAGEMENT_WINDOW_MS = 35_000;
+export const INTERRUPTED_REALTIME_OUTPUT_IGNORE_TTL_MS = 30_000;
 export const SOUNDBOARD_DECISION_TRANSCRIPT_MAX_CHARS = 280;
 export const SOUNDBOARD_CATALOG_REFRESH_MS = 60_000;
 // Mean logprob threshold for ASR transcript confidence gate.

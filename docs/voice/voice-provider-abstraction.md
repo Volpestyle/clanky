@@ -12,13 +12,14 @@ This document describes the voice stack as a preset-driven runtime plus nested v
 
 Voice configuration is split across these live surfaces:
 
+- `interaction.activity.*`: shared reactive text/voice behavior axes
 - `agentStack.runtimeConfig.voice.*`: runtime/provider transport config
 - `voice.conversationPolicy.*`: reply-path and conversation behavior
 - `voice.admission.*`: public reply-admission policy
 - `voice.transcription.*`: ASR enablement and language hinting
 - `voice.channelPolicy.*`: channel/user access control
 - `voice.sessionLimits.*`: session duration and concurrency limits
-- `voice.soundboard.*`: Discord soundboard behavior and prompt tendency
+- `voice.soundboard.*`: Discord soundboard capability and catalog selection
 - `initiative.voice.*`: proactive voice-thought cadence
 
 Preset resolution also matters:
@@ -149,6 +150,8 @@ The public admission surface is:
 - `voice.admission.mode`
 - `voice.admission.musicWakeLatchSeconds`
 
+Canonical music playback / wake-latch semantics live in [`music.md`](music.md).
+
 Classifier binding is resolved through:
 
 - preset defaults in `src/settings/agentStack.ts`
@@ -211,8 +214,8 @@ Relevant modules:
 
 Canonical soundboard settings:
 
-- `voice.soundboard.enabled`
 - `voice.soundboard.eagerness`
+- `voice.soundboard.enabled`
 - `voice.soundboard.allowExternalSounds`
 - `voice.soundboard.preferredSoundIds`
 
@@ -223,15 +226,24 @@ Implementation note:
 - The canonical precise timing mechanism on the `brain` path is inline `[[SOUNDBOARD:<sound_ref>]]` control markup in the model text. The runtime parses those directives into an ordered speech/soundboard sequence.
 - Buffered brain playback routes the whole reply through that ordered sequencer.
 - Streamed brain playback reuses the same ordered sequencer chunk-by-chunk. This supports `speech -> soundboard -> speech` timing inside streamed replies, but playback remains serialized rather than mixed.
+- In realtime streaming, any chunk that contains inline soundboard directives is treated as a strict output barrier. Earlier queued or buffered assistant speech must finish before that chunk continues, so the soundboard beat cannot jump ahead of the speech it belongs to.
+- When a streamed realtime speech step precedes an inline soundboard beat, the completion wait is request-scoped. Tail flags like `botTurnOpen` do not hold the beat after that specific utterance has already finished draining.
 - Parsing inline refs out of provider-native output transcripts remains a compatibility fallback, not the primary timing path.
 
 ## 6. Settings Reference
+
+### Shared Activity Axes
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `interaction.activity.responseWindowEagerness` | `55` | How strongly recent engagement keeps a voice follow-up window alive |
+| `interaction.activity.reactivity` | `40` | Shared tendency for emoji beats and other lightweight reactions |
 
 ### Conversation Policy
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `voice.conversationPolicy.replyEagerness` | `50` | Voice reply consultation/social mode |
+| `voice.conversationPolicy.ambientReplyEagerness` | `50` | Ambient voice reply willingness when not directly addressed |
 | `voice.conversationPolicy.commandOnlyMode` | `false` | Restrict replies toward command/wake interactions |
 | `voice.conversationPolicy.allowNsfwHumor` | `true` | Voice tone guardrail input |
 | `voice.conversationPolicy.textOnlyMode` | `false` | Disable voice output while still processing turns |
@@ -244,8 +256,8 @@ Implementation note:
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `voice.soundboard.eagerness` | `40` | How readily the bot should use Discord soundboard beats when they fit |
 | `voice.soundboard.enabled` | `true` | Enable Discord soundboard playback in live voice sessions |
-| `voice.soundboard.eagerness` | `35` | Prompt tendency for opportunistic or humorous soundboard use |
 | `voice.soundboard.allowExternalSounds` | `false` | Allow refs that target sounds from another guild |
 | `voice.soundboard.preferredSoundIds` | `[]` | Preferred refs to expose before falling back to the live guild catalog |
 
@@ -254,7 +266,7 @@ Implementation note:
 | Setting | Default | Meaning |
 |---|---|---|
 | `voice.admission.mode` | `"generation_decides"` | Public admission mode |
-| `voice.admission.musicWakeLatchSeconds` | `15` | Wake follow-up window during music playback |
+| `voice.admission.musicWakeLatchSeconds` | `30` | Wake follow-up window during music playback |
 
 Classifier provider/model are resolved from preset defaults or `agentStack.overrides.voiceAdmissionClassifier`.
 

@@ -405,6 +405,7 @@ test("executeReplyTool fails music_play with empty query", async () => {
         async musicStop() { throw new Error("not used"); },
         async musicPause() { throw new Error("not used"); },
         async musicResume() { throw new Error("not used"); },
+        async musicReplyHandoff() { throw new Error("not used"); },
         async musicSkip() { throw new Error("not used"); },
         async musicNowPlaying() { throw new Error("not used"); },
         async playSoundboard() { throw new Error("not used"); },
@@ -441,6 +442,7 @@ test("executeReplyTool fails music_search with empty query", async () => {
         async musicStop() { throw new Error("not used"); },
         async musicPause() { throw new Error("not used"); },
         async musicResume() { throw new Error("not used"); },
+        async musicReplyHandoff() { throw new Error("not used"); },
         async musicSkip() { throw new Error("not used"); },
         async musicNowPlaying() { throw new Error("not used"); },
         async playSoundboard() { throw new Error("not used"); },
@@ -462,4 +464,47 @@ test("executeReplyTool fails music_search with empty query", async () => {
 
   assert.equal(result.isError, true);
   assert.match(result.content, /query was empty/);
+});
+
+test("executeReplyTool delegates music_reply_handoff to the voice runtime", async () => {
+  const calls: string[] = [];
+
+  const result = await executeReplyTool(
+    "music_reply_handoff",
+    { mode: "duck" },
+    {
+      voiceSession: {
+        async musicSearch() { throw new Error("not used"); },
+        async musicPlay() { throw new Error("not used"); },
+        async musicQueueAdd() { throw new Error("not used"); },
+        async musicQueueNext() { throw new Error("not used"); },
+        async musicStop() { throw new Error("not used"); },
+        async musicPause() { throw new Error("not used"); },
+        async musicResume() { throw new Error("not used"); },
+        async musicReplyHandoff(mode) {
+          calls.push(mode);
+          return { ok: true, mode, applied: true };
+        },
+        async musicSkip() { throw new Error("not used"); },
+        async musicNowPlaying() { throw new Error("not used"); },
+        async playSoundboard() { throw new Error("not used"); },
+        async setScreenNote() { throw new Error("not used"); },
+        async setScreenMoment() { throw new Error("not used"); },
+        async leaveVoiceChannel() { throw new Error("not used"); }
+      }
+    },
+    {
+      settings: {},
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      sourceMessageId: "msg-1",
+      sourceText: "talk over the song for a second",
+      trace: { source: "voice_turn" }
+    }
+  );
+
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(calls, ["duck"]);
+  assert.match(result.content, /"mode":"duck"/);
 });

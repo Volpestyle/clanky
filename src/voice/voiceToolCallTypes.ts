@@ -13,6 +13,7 @@ export type VoiceToolCallManager = Pick<
   | "buildVoiceQueueStatePayload"
   | "client"
   | "composeOperationalMessage"
+  | "clearVoiceCommandSession"
   | "deferredActionQueue"
   | "endSession"
   | "ensureSessionMusicState"

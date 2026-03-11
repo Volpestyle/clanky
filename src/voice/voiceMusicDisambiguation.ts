@@ -3,6 +3,10 @@ import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
 import { executeVoiceMusicQueueAddTool, executeVoiceMusicQueueNextTool } from "./voiceToolCallMusic.ts";
 import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
 import { isCancelIntent } from "../tools/cancelDetection.ts";
+import {
+  applyOrchestratorOverrideSettings,
+  getResolvedVoiceMusicBrainBinding
+} from "../settings/agentStack.ts";
 import type {
   MusicSelectionResult,
   VoiceToolRuntimeSessionLike
@@ -24,6 +28,11 @@ type MusicDisambiguationPromptContext = {
 
 type MusicRuntimeSnapshot = {
   active?: boolean;
+  pauseReason?: string | null;
+  replyHandoffMode?: string | null;
+  replyHandoffRequestedByUserId?: string | null;
+  replyHandoffSource?: string | null;
+  replyHandoffAt?: string | null;
   lastTrackId?: string | null;
   lastTrackTitle?: string | null;
   lastTrackArtists?: string[] | null;
@@ -69,7 +78,98 @@ export type VoiceMusicDisambiguationHost = VoiceToolCallManager & {
     details?: Record<string, unknown>;
     allowSkip?: boolean;
   }) => Promise<unknown> | unknown;
+  llm?: {
+    generate?: (args: {
+      settings: VoiceMusicSettings;
+      systemPrompt: string;
+      userPrompt: string;
+      contextMessages?: unknown[];
+      jsonSchema?: string;
+      trace?: Record<string, unknown>;
+      signal?: AbortSignal;
+    }) => Promise<{
+      text?: string | null;
+      provider?: string | null;
+      model?: string | null;
+    }>;
+  } | null;
 };
+
+const MUSIC_DISAMBIGUATION_RESOLVER_MAX_OUTPUT_TOKENS = 80;
+const MUSIC_DISAMBIGUATION_RESOLVER_TRACE_SOURCE = "voice_music_disambiguation_resolver";
+
+function buildMusicDisambiguationResolverJsonSchema(validSelectionIds: string[]) {
+  return JSON.stringify({
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      selection_id: {
+        type: "string",
+        enum: [...validSelectionIds, ""]
+      },
+      reasoning: {
+        type: "string"
+      }
+    },
+    required: ["selection_id"]
+  });
+}
+
+function buildMusicDisambiguationResolverSystemPrompt() {
+  return [
+    "You resolve a user's follow-up against a fixed list of music options that were already offered.",
+    "Choose the existing selection_id the user most likely meant.",
+    "Handle ordinal references, partial title or artist mentions, paraphrase, and small ASR mistakes.",
+    "Only choose a selection_id when the user is clearly referring to one listed option.",
+    "If the user is unclear or not selecting one listed option, return an empty selection_id.",
+    "Never invent a selection_id.",
+    "Return JSON only."
+  ].join(" ");
+}
+
+function buildMusicDisambiguationResolverUserPrompt({
+  query,
+  transcript,
+  options
+}: {
+  query?: string | null;
+  transcript: string;
+  options: MusicSelectionResult[];
+}) {
+  const optionLines = options
+    .map((option, index) => {
+      const title = String(option?.title || "").trim();
+      const artist = String(option?.artist || "").trim();
+      const id = String(option?.id || "").trim();
+      return `${index + 1}. selection_id=${id}; title=${title || "unknown"}; artist=${artist || "unknown"}`;
+    })
+    .join("\n");
+  return [
+    `Original music query: ${String(query || "").trim() || "unknown"}`,
+    `User follow-up: ${transcript}`,
+    "Options:",
+    optionLines
+  ].join("\n");
+}
+
+function parseMusicDisambiguationResolverResult(rawText: unknown, validSelectionIds: Set<string>) {
+  const normalized = String(rawText || "").trim();
+  if (!normalized) return null;
+  const unwrapped = normalized.replace(/^```(?:[a-z]+)?\s*/i, "").replace(/```$/i, "").trim();
+  try {
+    const parsed = JSON.parse(unwrapped);
+    const selectionId = normalizeInlineText(
+      parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed.selection_id ?? parsed.selectionId ?? ""
+        : "",
+      180
+    );
+    if (!selectionId) return "";
+    return validSelectionIds.has(selectionId) ? selectionId : null;
+  } catch {
+    return null;
+  }
+}
 
 export function describeMusicPromptAction(reason: unknown): MusicPromptAction {
   const normalizedReason = String(reason || "")
@@ -89,6 +189,7 @@ export function getMusicPromptContext(
   session: VoiceToolRuntimeSessionLike | null | undefined
 ): {
   playbackState: "playing" | "paused" | "stopped" | "idle";
+  replyHandoffMode: "duck" | "pause" | null;
   currentTrack: { id: string | null; title: string; artists: string[] } | null;
   lastTrack: { id: string | null; title: string; artists: string[] } | null;
   queueLength: number;
@@ -140,6 +241,10 @@ export function getMusicPromptContext(
   }
   return {
     playbackState,
+    replyHandoffMode:
+      snapshot.replyHandoffMode === "duck" || snapshot.replyHandoffMode === "pause"
+        ? snapshot.replyHandoffMode
+        : null,
     currentTrack,
     lastTrack,
     queueLength: queueTracks.length,
@@ -219,6 +324,61 @@ export function resolvePendingMusicDisambiguationSelection(
     if (cleanedSelectionText && titleToken && cleanedSelectionText.includes(titleToken)) return true;
     return false;
   }) || null;
+}
+
+async function resolvePendingMusicDisambiguationSelectionWithLlm(
+  host: VoiceMusicDisambiguationHost,
+  session: VoiceToolRuntimeSessionLike | null | undefined,
+  transcript = "",
+  settings: VoiceMusicSettings = null
+) {
+  const disambiguation = host.getMusicDisambiguationPromptContext(session);
+  if (!session || !disambiguation?.active || !Array.isArray(disambiguation.options) || !disambiguation.options.length) {
+    return null;
+  }
+  const llm = host.llm;
+  if (!llm?.generate) return null;
+  const text = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+  if (!text) return null;
+
+  const validSelectionIds = disambiguation.options
+    .map((option) => normalizeInlineText(option?.id, 180))
+    .filter((id): id is string => Boolean(id));
+  if (!validSelectionIds.length) return null;
+
+  const resolvedSettings =
+    settings ||
+    session.settingsSnapshot ||
+    host.store.getSettings() ||
+    null;
+  const binding = getResolvedVoiceMusicBrainBinding(resolvedSettings);
+  const llmSettings = applyOrchestratorOverrideSettings(resolvedSettings, {
+    provider: binding.provider,
+    model: binding.model,
+    temperature: 0,
+    maxOutputTokens: MUSIC_DISAMBIGUATION_RESOLVER_MAX_OUTPUT_TOKENS
+  });
+  const generation = await llm.generate({
+    settings: llmSettings,
+    systemPrompt: buildMusicDisambiguationResolverSystemPrompt(),
+    userPrompt: buildMusicDisambiguationResolverUserPrompt({
+      query: disambiguation.query || "",
+      transcript: text,
+      options: disambiguation.options
+    }),
+    contextMessages: [],
+    jsonSchema: buildMusicDisambiguationResolverJsonSchema(validSelectionIds),
+    trace: {
+      guildId: session.guildId,
+      channelId: session.textChannelId || null,
+      userId: disambiguation.requestedByUserId || null,
+      source: MUSIC_DISAMBIGUATION_RESOLVER_TRACE_SOURCE,
+      reason: "pending_selection_resolution"
+    }
+  });
+  const selectedId = parseMusicDisambiguationResolverResult(generation?.text, new Set(validSelectionIds));
+  if (!selectedId) return null;
+  return disambiguation.options.find((option) => String(option?.id || "").trim() === selectedId) || null;
 }
 
 export function isMusicDisambiguationResolutionTurn(
@@ -402,7 +562,14 @@ export async function maybeHandlePendingMusicDisambiguationTurn(
     return true;
   }
 
-  const selected = resolvePendingMusicDisambiguationSelection(host, session, text);
+  const selected =
+    resolvePendingMusicDisambiguationSelection(host, session, text) ||
+    await resolvePendingMusicDisambiguationSelectionWithLlm(
+      host,
+      session,
+      text,
+      settings || session.settingsSnapshot || null
+    );
   if (!selected) return false;
   return await completePendingMusicDisambiguationSelection(host, {
     session,

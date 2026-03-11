@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
 import { createTestSettings } from "../testSettings.ts";
 import {
+  BARGE_IN_MIN_SPEECH_MS,
   CAPTURE_MAX_DURATION_MS,
   CAPTURE_NEAR_SILENCE_ABORT_MIN_AGE_MS,
   VOICE_TURN_PROMOTION_MIN_CLIP_MS
@@ -43,8 +44,15 @@ function createManager() {
       },
       getSettings() {
         return createTestSettings({
-          botName: "clanker conk",
-          voice: { enabled: true, replyPath: "brain" }
+          identity: {
+            botName: "clanker conk"
+          },
+          voice: {
+            enabled: true,
+            conversationPolicy: {
+              replyPath: "brain"
+            }
+          }
         });
       }
     },
@@ -223,8 +231,18 @@ function createSession(overrides: Partial<VoiceSession> = {}): VoiceSession {
     realtimeInstructionRefreshTimer: null,
     realtimeTurnContextRefreshState: { pending: false, lastStartedAt: 0, lastCompletedAt: 0, lastSkippedReason: null },
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
-      voice: { enabled: true, asrEnabled: true, brainProvider: "anthropic", replyPath: "brain" }
+      identity: {
+        botName: "clanker conk"
+      },
+      voice: {
+        enabled: true,
+        transcription: {
+          enabled: true
+        },
+        conversationPolicy: {
+          replyPath: "brain"
+        }
+      }
     }),
     cleanupHandlers: [],
     ending: false,
@@ -289,6 +307,83 @@ test("resolveCaptureTurnPromotionReason allows strong local promotion without se
   };
 
   assert.equal(manager.resolveCaptureTurnPromotionReason({ session, capture }), "strong_local_audio");
+});
+
+test("startInboundCapture keeps local-only promotion from interrupting live bot speech until server VAD confirms", async () => {
+  const { manager } = createManager();
+  manager.shouldUsePerUserTranscription = () => true;
+  const interruptCalls: Array<Record<string, unknown>> = [];
+  manager.interruptBotSpeechForBargeIn = (args) => {
+    interruptCalls.push(args);
+    return true;
+  };
+
+  const voxClient = new EventEmitter();
+  voxClient.subscribeUser = () => {};
+  const now = Date.now();
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000,
+    botTurnOpen: true,
+    botTurnOpenAt: now - 2_500,
+    assistantOutput: {
+      phase: "speaking_live",
+      reason: "bot_audio_live",
+      phaseEnteredAt: now - 1_000,
+      lastSyncedAt: now - 1_000,
+      requestId: 12,
+      ttsPlaybackState: "playing",
+      ttsBufferedSamples: 24_000,
+      lastTrigger: "test_seed"
+    },
+    pendingResponse: {
+      requestId: 12,
+      requestedAt: now - 3_000,
+      source: "voice_reply",
+      handlingSilence: false,
+      audioReceivedAt: now - 2_000,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      utteranceText: "still talking",
+      latencyContext: null,
+      userId: "speaker-1",
+      retryCount: 0,
+      hardRecoveryAttempted: false
+    },
+    voxClient
+  });
+  const asrState = seedReadyPerUserAsr(manager, session, "speaker-1");
+
+  manager.captureManager.startInboundCapture({
+    session,
+    userId: "speaker-1",
+    settings: session.settingsSnapshot
+  });
+
+  const firstChunk = makeMonoPcm16(
+    Math.ceil((24_000 * (BARGE_IN_MIN_SPEECH_MS + 50)) / 1000),
+    3000
+  );
+  voxClient.emit("userAudio", "speaker-1", firstChunk);
+  await flushMicrotasks();
+
+  const capture = session.userCaptures.get("speaker-1");
+  assert.ok(capture);
+  assert.equal(capture.asrUtteranceId, asrState.utterance.id);
+  assert.equal(capture.promotionReason, "strong_local_audio");
+  assert.equal(interruptCalls.length, 0);
+
+  asrState.speechDetectedUtteranceId = capture.asrUtteranceId;
+  asrState.speechDetectedAt = Date.now();
+
+  const followupChunk = makeMonoPcm16(Math.ceil((24_000 * 120) / 1000), 3000);
+  voxClient.emit("userAudio", "speaker-1", followupChunk);
+  await flushMicrotasks();
+
+  assert.equal(interruptCalls.length, 1);
 });
 
 test("startInboundCapture aborts near-silence captures once they age past the early-abort window", async () => {
@@ -368,9 +463,124 @@ test("startInboundCapture max duration timer finalizes long captures", async () 
   }
 });
 
-test("promoting a capture cancels pending pre-audio normal reply", async () => {
+test("startInboundCapture recovers stashed preplay reply when per-user ASR ends empty", async () => {
   const { manager, logs } = createManager();
-  manager.shouldUsePerUserTranscription = () => false;
+  manager.shouldUsePerUserTranscription = () => true;
+  const voxClient = new EventEmitter();
+  voxClient.subscribeUser = () => {};
+  const session = createSession({
+    voxClient,
+    supersededPrePlaybackReply: {
+      userId: "speaker-1",
+      transcript: "That was crazy, man.",
+      pcmBuffer: null,
+      source: "realtime",
+      captureReason: "stream_end",
+      directAddressed: false,
+      queuedAt: Date.now() - 200,
+      interruptionPolicy: null,
+      supersededAt: Date.now() - 100,
+      supersededByUserId: "speaker-1",
+      supersededBySource: "realtime:generation_preflight"
+    }
+  });
+  seedReadyPerUserAsr(manager, session, "speaker-1");
+
+  manager.captureManager.startInboundCapture({
+    session,
+    userId: "speaker-1",
+    settings: session.settingsSnapshot
+  });
+
+  const strongPcm = makeMonoPcm16(
+    Math.ceil((24_000 * (VOICE_TURN_PROMOTION_MIN_CLIP_MS + 40)) / 1000),
+    3000
+  );
+  voxClient.emit("userAudio", "speaker-1", strongPcm);
+  await flushMicrotasks();
+  voxClient.emit("userAudioEnd", "speaker-1");
+  await new Promise((resolve) => setTimeout(resolve, 2600));
+
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_activity_started"),
+    true
+  );
+  assert.equal(session.supersededPrePlaybackReply, null);
+  const queuedTurns = manager.deferredActionQueue.getDeferredQueuedUserTurns(session);
+  assert.equal(queuedTurns.length, 1);
+  assert.equal(queuedTurns[0]?.transcript, "That was crazy, man.");
+  assert.equal(
+    logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"),
+    true
+  );
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_preplay_reply_recovered"),
+    true
+  );
+});
+
+test("startInboundCapture replays interrupted assistant speech when per-user ASR ends empty", async () => {
+  const { manager, logs } = createManager();
+  manager.shouldUsePerUserTranscription = () => true;
+  const prompts: string[] = [];
+  const voxClient = new EventEmitter();
+  voxClient.subscribeUser = () => {};
+  const session = createSession({
+    voxClient,
+    realtimeClient: {
+      requestTextUtterance(prompt: string) {
+        prompts.push(prompt);
+      },
+      isResponseInProgress() {
+        return false;
+      }
+    },
+    interruptedAssistantReply: {
+      utteranceText: "no, wait, one more thing",
+      interruptedByUserId: "speaker-1",
+      interruptedAt: Date.now() - 200,
+      source: "barge_in_interrupt",
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      }
+    }
+  });
+  seedReadyPerUserAsr(manager, session, "speaker-1");
+
+  manager.captureManager.startInboundCapture({
+    session,
+    userId: "speaker-1",
+    settings: session.settingsSnapshot
+  });
+
+  const strongPcm = makeMonoPcm16(
+    Math.ceil((24_000 * (VOICE_TURN_PROMOTION_MIN_CLIP_MS + 40)) / 1000),
+    3000
+  );
+  voxClient.emit("userAudio", "speaker-1", strongPcm);
+  await flushMicrotasks();
+  voxClient.emit("userAudioEnd", "speaker-1");
+  await new Promise((resolve) => setTimeout(resolve, 2600));
+
+  assert.deepEqual(prompts, [
+    "Speak this exact line verbatim and nothing else: no, wait, one more thing"
+  ]);
+  assert.equal(session.pendingResponse?.utteranceText, "no, wait, one more thing");
+  assert.equal(
+    logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"),
+    true
+  );
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_interrupted_reply_recovered"),
+    true
+  );
+});
+
+test("server-vad-confirmed capture cancels pending pre-audio normal reply", async () => {
+  const { manager, logs } = createManager();
+  manager.shouldUsePerUserTranscription = () => true;
   const cancelCalls: boolean[] = [];
   const voxClient = new EventEmitter();
   voxClient.subscribeUser = () => {};
@@ -388,7 +598,11 @@ test("promoting a capture cancels pending pre-audio normal reply", async () => {
       source: "realtime:speech_1",
       handlingSilence: false,
       audioReceivedAt: 0,
-      interruptionPolicy: null,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
       utteranceText: "yo",
       latencyContext: null,
       userId: null,
@@ -396,12 +610,15 @@ test("promoting a capture cancels pending pre-audio normal reply", async () => {
       hardRecoveryAttempted: false
     }
   });
+  const asrState = seedReadyPerUserAsr(manager, session, "speaker-1");
 
   manager.captureManager.startInboundCapture({
     session,
     userId: "speaker-1",
     settings: session.settingsSnapshot
   });
+  asrState.speechDetectedUtteranceId = asrState.utterance.id;
+  asrState.speechDetectedAt = Date.now();
 
   const strongPcm = makeMonoPcm16(Math.ceil((24_000 * (VOICE_TURN_PROMOTION_MIN_CLIP_MS + 40)) / 1000), 3000);
   voxClient.emit("userAudio", "speaker-1", strongPcm);
@@ -410,6 +627,7 @@ test("promoting a capture cancels pending pre-audio normal reply", async () => {
   const capture = session.userCaptures.get("speaker-1");
   assert.ok(capture);
   assert.ok(Number(capture.promotedAt || 0) > 0);
+  assert.equal(capture.promotionReason, "server_vad_confirmed");
   assert.equal(session.pendingResponse, null);
   assert.equal(cancelCalls.length, 1);
   const cancelLog = logs.find((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech");
@@ -418,9 +636,70 @@ test("promoting a capture cancels pending pre-audio normal reply", async () => {
   assert.equal(cancelLog?.metadata?.opportunityType, null);
 });
 
-test("promoting a capture cancels pending pre-audio tool followup and preserves owner followup admission", async () => {
+test("promoting a local-only strong-audio capture does not cancel pending pre-audio reply before server VAD confirmation", async () => {
   const { manager, logs } = createManager();
-  manager.shouldUsePerUserTranscription = () => false;
+  manager.shouldUsePerUserTranscription = () => true;
+  const cancelCalls: boolean[] = [];
+  const voxClient = new EventEmitter();
+  voxClient.subscribeUser = () => {};
+  const session = createSession({
+    voxClient,
+    realtimeClient: {
+      cancelActiveResponse() {
+        cancelCalls.push(true);
+        return true;
+      }
+    },
+    pendingResponse: {
+      requestId: 7,
+      requestedAt: Date.now(),
+      source: "realtime:speech_1",
+      handlingSilence: false,
+      audioReceivedAt: 0,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      utteranceText: "yo",
+      latencyContext: null,
+      userId: null,
+      retryCount: 0,
+      hardRecoveryAttempted: false
+    }
+  });
+  seedReadyPerUserAsr(manager, session, "speaker-1");
+
+  manager.captureManager.startInboundCapture({
+    session,
+    userId: "speaker-1",
+    settings: session.settingsSnapshot
+  });
+
+  const strongPcm = makeMonoPcm16(
+    Math.ceil((24_000 * (VOICE_TURN_PROMOTION_MIN_CLIP_MS + 40)) / 1000),
+    3000
+  );
+  voxClient.emit("userAudio", "speaker-1", strongPcm);
+  await flushMicrotasks();
+
+  const capture = session.userCaptures.get("speaker-1");
+  assert.ok(capture);
+  assert.ok(Number(capture.promotedAt || 0) > 0);
+  assert.equal(capture.promotionReason, "strong_local_audio");
+  assert.ok(session.pendingResponse);
+  assert.equal(cancelCalls.length, 0);
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech"),
+    false
+  );
+});
+
+test(
+  "server-vad-confirmed capture cancels pending pre-audio tool followup and preserves owner followup admission",
+  async () => {
+  const { manager, logs } = createManager();
+  manager.shouldUsePerUserTranscription = () => true;
   const cancelCalls: boolean[] = [];
   const voxClient = new EventEmitter();
   voxClient.subscribeUser = () => {};
@@ -445,7 +724,11 @@ test("promoting a capture cancels pending pre-audio tool followup and preserves 
       source: "tool_call_followup",
       handlingSilence: false,
       audioReceivedAt: 0,
-      interruptionPolicy: null,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
       utteranceText: "which one did you want?",
       latencyContext: null,
       userId: "speaker-1",
@@ -453,17 +736,23 @@ test("promoting a capture cancels pending pre-audio tool followup and preserves 
       hardRecoveryAttempted: false
     }
   });
+  const asrState = seedReadyPerUserAsr(manager, session, "speaker-1");
 
   manager.captureManager.startInboundCapture({
     session,
     userId: "speaker-1",
     settings: session.settingsSnapshot
   });
+  asrState.speechDetectedUtteranceId = asrState.utterance.id;
+  asrState.speechDetectedAt = Date.now();
 
   const strongPcm = makeMonoPcm16(Math.ceil((24_000 * (VOICE_TURN_PROMOTION_MIN_CLIP_MS + 40)) / 1000), 3000);
   voxClient.emit("userAudio", "speaker-1", strongPcm);
   await flushMicrotasks();
 
+  const capture = session.userCaptures.get("speaker-1");
+  assert.ok(capture);
+  assert.equal(capture.promotionReason, "server_vad_confirmed");
   assert.equal(session.pendingResponse, null);
   assert.equal(cancelCalls.length, 1);
   assert.equal(manager.ensureVoiceCommandState(session)?.intent, "tool_followup");

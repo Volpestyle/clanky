@@ -2,6 +2,8 @@ import { defaultModelForLlmProvider, normalizeLlmProvider } from "../llm/llmHelp
 
 const OPENAI_REALTIME_SHORT_CLIP_ASR_MS = 1200;
 const PCM16_MONO_BYTES_PER_SAMPLE = 2;
+const OPENAI_MINI_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
+const FULL_FALLBACK_TRANSCRIPTION_MODEL = "whisper-1";
 
 export function normalizeVoiceReplyDecisionProvider(value) {
   return normalizeLlmProvider(value);
@@ -25,14 +27,33 @@ export function resolveVoiceReplyDecisionMaxOutputTokens(provider, model) {
   return 2;
 }
 
-export function resolveRealtimeTurnTranscriptionPlan({
+export type VoiceTurnTranscriptionPlan = {
+  primaryModel: string;
+  fallbackModel: string | null;
+  reason: string;
+};
+
+export function resolveTurnTranscriptionPlan({
   mode,
-  configuredModel = "gpt-4o-mini-transcribe",
+  configuredModel = OPENAI_MINI_TRANSCRIPTION_MODEL,
   pcmByteLength = 0,
   sampleRateHz = 24000
-}) {
-  const normalizedModel = String(configuredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
-  if (String(mode || "") !== "openai_realtime") {
+}: {
+  mode?: string | null;
+  configuredModel?: string | null;
+  pcmByteLength?: number;
+  sampleRateHz?: number;
+}): VoiceTurnTranscriptionPlan {
+  const normalizedMode = String(mode || "").trim().toLowerCase();
+  const normalizedModel = String(configuredModel || OPENAI_MINI_TRANSCRIPTION_MODEL).trim() || OPENAI_MINI_TRANSCRIPTION_MODEL;
+  if (normalizedMode !== "openai_realtime") {
+    if (normalizedModel === OPENAI_MINI_TRANSCRIPTION_MODEL) {
+      return {
+        primaryModel: normalizedModel,
+        fallbackModel: FULL_FALLBACK_TRANSCRIPTION_MODEL,
+        reason: "mini_with_full_fallback_runtime"
+      };
+    }
     return {
       primaryModel: normalizedModel,
       fallbackModel: null,
@@ -40,7 +61,7 @@ export function resolveRealtimeTurnTranscriptionPlan({
     };
   }
 
-  if (normalizedModel !== "gpt-4o-mini-transcribe") {
+  if (normalizedModel !== OPENAI_MINI_TRANSCRIPTION_MODEL) {
     return {
       primaryModel: normalizedModel,
       fallbackModel: null,
@@ -51,7 +72,7 @@ export function resolveRealtimeTurnTranscriptionPlan({
   const clipDurationMs = estimatePcm16MonoDurationMs(pcmByteLength, sampleRateHz);
   if (clipDurationMs > 0 && clipDurationMs <= OPENAI_REALTIME_SHORT_CLIP_ASR_MS) {
     return {
-      primaryModel: "gpt-4o-mini-transcribe",
+      primaryModel: OPENAI_MINI_TRANSCRIPTION_MODEL,
       fallbackModel: null,
       reason: "short_clip_prefers_full_model"
     };
@@ -59,8 +80,102 @@ export function resolveRealtimeTurnTranscriptionPlan({
 
   return {
     primaryModel: normalizedModel,
-    fallbackModel: "whisper-1",
+    fallbackModel: FULL_FALLBACK_TRANSCRIPTION_MODEL,
     reason: "mini_with_full_fallback"
+  };
+}
+
+export const resolveRealtimeTurnTranscriptionPlan = resolveTurnTranscriptionPlan;
+
+export async function transcribePcmTurnWithPlan<TSession>({
+  transcribe,
+  session,
+  userId,
+  pcmBuffer,
+  plan,
+  sampleRateHz = 24000,
+  captureReason,
+  traceSource,
+  errorPrefix,
+  emptyTranscriptRuntimeEvent,
+  emptyTranscriptErrorStreakThreshold,
+  asrLanguage,
+  asrPrompt
+}: {
+  transcribe: (args: {
+    session: TSession;
+    userId: string;
+    pcmBuffer: Buffer;
+    model: string;
+    sampleRateHz?: number;
+    captureReason?: string;
+    traceSource?: string;
+    errorPrefix?: string;
+    emptyTranscriptRuntimeEvent?: string;
+    emptyTranscriptErrorStreakThreshold?: number;
+    suppressEmptyTranscriptLogs?: boolean;
+    asrLanguage?: string;
+    asrPrompt?: string;
+  }) => Promise<string>;
+  session: TSession;
+  userId: string;
+  pcmBuffer: Buffer;
+  plan: VoiceTurnTranscriptionPlan;
+  sampleRateHz?: number;
+  captureReason?: string;
+  traceSource?: string;
+  errorPrefix?: string;
+  emptyTranscriptRuntimeEvent?: string;
+  emptyTranscriptErrorStreakThreshold?: number;
+  asrLanguage?: string;
+  asrPrompt?: string;
+}) {
+  let transcript = await transcribe({
+    session,
+    userId,
+    pcmBuffer,
+    model: plan.primaryModel,
+    sampleRateHz,
+    captureReason,
+    traceSource,
+    errorPrefix,
+    emptyTranscriptRuntimeEvent,
+    emptyTranscriptErrorStreakThreshold,
+    asrLanguage,
+    asrPrompt
+  });
+
+  let usedFallbackModel = false;
+  if (
+    !transcript &&
+    plan.fallbackModel &&
+    plan.fallbackModel !== plan.primaryModel
+  ) {
+    transcript = await transcribe({
+      session,
+      userId,
+      pcmBuffer,
+      model: plan.fallbackModel,
+      sampleRateHz,
+      captureReason,
+      traceSource: traceSource ? `${traceSource}_fallback` : undefined,
+      errorPrefix: errorPrefix ? errorPrefix.replace(/_failed$/u, "_fallback_failed") : undefined,
+      emptyTranscriptRuntimeEvent,
+      emptyTranscriptErrorStreakThreshold,
+      suppressEmptyTranscriptLogs: true,
+      asrLanguage,
+      asrPrompt
+    });
+    if (transcript) {
+      usedFallbackModel = true;
+    }
+  }
+
+  return {
+    transcript,
+    usedFallbackModel,
+    fallbackModel: plan.fallbackModel,
+    reason: plan.reason
   };
 }
 

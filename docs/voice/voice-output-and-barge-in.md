@@ -4,6 +4,7 @@
 > Voice pipeline stages: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
 > Capture and ASR: [`voice-capture-and-asr-pipeline.md`](voice-capture-and-asr-pipeline.md)
 > Reply orchestration: [`voice-client-and-reply-orchestration.md`](voice-client-and-reply-orchestration.md)
+> Music behavior: [`music.md`](music.md)
 > Explicit cancel commands ("stop", "cancel"): [`cancel.md`](../cancel.md)
 
 ---
@@ -68,15 +69,13 @@ Only one helper should translate these phases into reply output lock decisions:
 
 Ground truth for output locks is `assistantOutput.phase` and `bot_audio_buffered`. The heuristic signals above are secondary guards.
 
-Wake-word music handoff rule:
+Wake-word music handoff summary:
 
-- if music was auto-paused because the user addressed the bot (`paused_wake_word`), auto-resume happens only after the assistant reply has actually drained from `clankvox`
-- `response.done` is not sufficient on its own because realtime generation can finish while buffered TTS is still playing locally
-- the handoff also waits for the short `botTurnOpen` guard to clear before resuming music
-- wake-word pause and explicit music pause/resume preserve the existing music subprocess when it is still alive; resume should continue the current pipeline rather than rebuilding from the original URL
-- when the music subprocess has already finished but `clankvox` still holds buffered music PCM, wake-word pause suppresses that local buffer instead of deleting it, and resume continues draining the preserved buffer from the current position
-- `clankvox` intentionally caps music prefetch to a short live window so the subprocess stays close to Discord playback instead of racing an entire track into memory
-- ducking is gain-only; duck/unduck lowers or restores music volume without pausing or restarting the track
+- `paused_wake_word` auto-resume waits for real playback drain and output-clear conditions, not just `response.done`
+- while `paused_wake_word` is active, ordinary follow-ups stay scoped to the wake-word speaker who opened that pause
+- after resume, wake-latch follow-ups return to the music decision layer rather than staying in a hardcoded pause path
+
+Canonical music semantics and the pause/duck/latch diagram live in [`music.md`](music.md).
 
 Freshness rule:
 
@@ -84,6 +83,11 @@ Freshness rule:
 - locally queued TTS above `clankvox` still counts as buffered assistant output until it is played or explicitly interrupted
 - if buffer-depth / playback-state updates stop arriving, stale positive TTS telemetry is treated as expired and the assistant output phase can return to `idle`
 - this prevents missed final drain events from pinning `outputLockReason=bot_audio_buffered`
+
+Telemetry note:
+
+- `clankvox` still sends `buffer_depth` IPC samples on a periodic cadence while output buffers are non-empty so the Bun side can keep assistant output state fresh
+- the raw `clankvox_buffer_depth` Rust log is `DEBUG` for periodic samples (`periodic_nonempty`, `periodic_drained`) and stays `INFO` for anomalous cases such as `audio_send_state_missing`
 
 ## 4. Transition Rules
 
@@ -107,8 +111,9 @@ When a turn is transcribed correctly but the bot does not answer:
 1. Check `voice_turn_addressing`.
 2. Treat top-level `reason="bot_turn_open"` as a coarse public label only.
 3. Use `outputLockReason` as the real blocker.
-4. Correlate with `openai_realtime_response_done`, `bot_audio_started`, and `openai_realtime_active_response_cleared_stale`.
-5. If a deferred turn is queued, verify whether there is a real active capture or only a silence-only capture that should not block replay.
+4. If you need the exact user wording in realtime bridge mode, correlate `voice_turn_addressing` with `openai_realtime_asr_final_segment`; the addressing log keeps transcript length, not duplicate transcript text.
+5. Correlate with `openai_realtime_response_done`, `bot_audio_started`, and `openai_realtime_active_response_cleared_stale`.
+6. If a deferred turn is queued, verify whether there is a real active capture or only a silence-only capture that should not block replay.
 
 Interpretation:
 
@@ -164,13 +169,13 @@ OpenAI cannot see Discord playback position or control Discord output. So we imp
 
 ## 9. Default Interruption Policy
 
-**Default: `"speaker"`** — the person the bot is responding to can interrupt. Others cannot. If the reply is not tied to a specific user, interruption stays disabled.
+**Default: `"speaker"`** — the person the bot is responding to can interrupt. Others cannot through plain talk-over. A direct wake-word / bot-name turn can still cut in.
 
 | Mode | Effect |
 |------|--------|
-| `"speaker"` | Only the person the bot is talking to can interrupt (default) |
-| `"anyone"` | Anyone in the channel can interrupt the bot |
-| `"none"` | Nobody can interrupt the bot |
+| `"speaker"` | Ordinary talk-over is bound to the assistant reply target. If the reply targets one participant, only that person can interrupt. If the reply targets `ALL` or the target cannot be resolved, ordinary talk-over stays closed. A wake-word / bot-name turn from anyone can still interrupt. |
+| `"anyone"` | Anyone in the channel can interrupt the bot. Wake-word / bot-name turns also interrupt. |
+| `"none"` | Nobody can interrupt the bot, including wake-word / bot-name turns. |
 
 Setting: `voice.conversationPolicy.defaultInterruptionMode`
 
@@ -190,9 +195,48 @@ Callers of `requestRealtimePromptUtterance()` can pass an explicit `interruption
 
 If no interruption policy resolves for an utterance, barge-in is disabled.
 
+The same rule applies before playback starts. A promoted live capture only
+supersedes preplay generation when that user is already allowed by the
+reply's interruption policy. Untargeted join greetings, optional system speech,
+and other replies with no resolved speaker stay protected from random channel
+noise until a real authorized interruption exists.
+
+### Wake-Word Override During Output Lock
+
+Wake-word interruption is a transcript-level override, separate from the fast acoustic barge-in gate:
+
+- if a finalized turn comes from the user currently allowed by the active interruption policy, it may also cut through `bot_turn_open` without repeating the bot name
+- if a finalized turn is directly addressed to the bot by wake word / bot alias, it may cut through `bot_turn_open`
+- in `"speaker"` mode this lets non-speakers say the bot's name to interrupt
+- in `"none"` mode the override stays disabled
+
+This is intentionally narrower than full `"anyone"` talk-over. In `"speaker"` mode, the current reply target can interrupt with an ordinary finalized follow-up, while a non-speaker still needs an actual wake-word turn.
+
 ### Agent-Influenced Policy
 
-The generation model can signal interruption preference as part of its output. For example, a brief casual remark could be freely interruptible, while a detailed explanation the user asked for should be harder to cut off. The infrastructure exists; model-side integration is pending.
+Full-brain spoken replies declare who they target inline with the hidden
+`[[TO:...]]` audience directive before speech playback begins. OpenAI
+provider-native realtime replies resolve the same target through a parallel,
+text-only out-of-band response on the same session shortly after the final
+assistant audio transcript lands. In `"speaker"` mode, that assistant-side
+target becomes the ordinary talk-over target:
+
+- target = one participant → that person can interrupt through ordinary talk-over
+- target = `ALL` → ordinary talk-over stays closed
+- target missing or unresolved → ordinary talk-over stays closed
+
+When full-brain reply streaming is enabled, the stream parser resolves that
+leading `[[TO:...]]` directive before the first spoken chunk is dispatched, so
+the very first realtime utterance already carries the correct interruption
+policy.
+
+OpenAI provider-native replies still start with the provisional reply-owner
+policy so speech is not delayed; once the side-channel target resolves, the
+active interruption policy is patched to the real assistant target. Wake-word /
+bot-name interruption remains a separate transcript-level override in
+`"speaker"` mode, so anyone can still cut in by explicitly addressing the bot.
+Finer model-driven interruptibility preferences beyond reply targeting are
+still future work.
 
 ## 10. Acoustic Gating
 
@@ -209,6 +253,8 @@ User audio arrives during output lock
 │    Bot hasn't produced any audio yet for this response.     │
 │    User can't interrupt something they haven't heard.       │
 │    Gate: pendingResponse.audioReceivedAt > 0                │
+│    Buffered subprocess drain still counts as audible output │
+│    even after the provider response has already settled.    │
 └────────────────────────────────────────────────────────────┘
     │
     ▼
@@ -221,11 +267,12 @@ User audio arrives during output lock
     │
     ▼
 ┌────────────────────────────────────────────────────────────┐
-│ 3. Active flow guard                                        │
-│    No live audio streaming AND bot turn not open.           │
-│    Bot finished generating — subprocess is just draining    │
-│    buffered frames. Response is effectively complete.       │
-│    Barge-in would truncate a finished sentence.             │
+│ 3. Output-present guard                                     │
+│    No live audio streaming, no open bot turn, and no        │
+│    buffered TTS playback.                                   │
+│    There is nothing audible left to interrupt.              │
+│    Buffered subprocess playback still counts as live        │
+│    interruptible assistant output.                          │
 └────────────────────────────────────────────────────────────┘
     │
     ▼
@@ -262,10 +309,18 @@ User audio arrives during output lock
 |------|---------|--------------------------|
 | Pre-audio | User speaking during tool call / before TTS starts | Policy check would pass, but nothing to interrupt yet |
 | Echo guard | Bot's own audio leaking through user mic | Signal assertiveness alone can't distinguish echo from speech in first 1.5s |
-| Active flow | Subprocess draining last few buffered frames | Output lock still held, but response is done — interrupting wastes completed audio |
+| Output-present | Pre-audio / stale-lock states with no remaining speech | Output lock alone is not enough — the user needs audible assistant output to interrupt |
 | Min speech | Micro Discord speaking events, mouth opens | Assertiveness thresholds alone can't catch sub-700ms blips |
 | Signal assertiveness | Breathing, background noise, quiet TV | Duration alone isn't enough — 700ms of breathing shouldn't interrupt |
+| Local-only promotion confirmation | Strong local audio that looks interrupt-worthy before Realtime VAD has confirmed speech | Local fallback keeps capture responsive, but live assistant playback should wait for speech confirmation before cutting out |
 | Policy check | Users who aren't part of the current exchange | Acoustic gates are user-agnostic — policy adds social context |
+
+Local-only promotion rule:
+
+- `strong_local_audio` can promote a capture before Realtime VAD confirms speech so the turn can keep collecting audio immediately
+- that local-only promotion still warms ASR state, but it does not supersede preplay reply generation until Realtime VAD confirms the same utterance
+- while assistant audio is already playing, barge-in stays blocked for that capture until Realtime VAD confirms the same utterance
+- once the utterance is VAD-confirmed, ordinary interruption policy applies to the already-live capture
 
 ## 11. Interrupt Execution
 
@@ -273,16 +328,19 @@ When all gates pass:
 
 1. **Cancel generation** — `response.cancel` to OpenAI Realtime API.
 2. **Truncate conversation** — `conversation.item.truncate` so API history only contains what was actually spoken.
-3. **Stop subprocess playback** — `resetBotAudioPlayback()` stops clankvox TTS.
-4. **Close bot turn** — `botTurnOpen = false`, clear reset timer.
-5. **Unduck music** — Release any music volume ducking immediately.
-6. **Post-cancel guard** — Check `responseCancelSucceeded`:
-   - **Cancel succeeded:** Store interruption context (what was being said, who interrupted, when) on the session for the next turn's prompt.
-   - **Cancel failed** (response already completed server-side): No suppression needed — the response finished and the bot is immediately available for the next turn.
+3. **Clear queued utterances** — Pending realtime assistant chunks are dropped so old speech cannot resume after the cut.
+4. **Stop subprocess playback** — `resetBotAudioPlayback()` stops clankvox TTS and clears buffered playback telemetry.
+5. **Close bot turn** — `botTurnOpen = false`, clear reset timer.
+6. **Unduck music** — Release any music volume ducking immediately.
+7. **Interruption context guard** — Check whether the live reply was actually cut:
+   - **`response.cancel` succeeded:** Store interruption context (what was being said, who interrupted, when) on the session for the next turn's prompt.
+   - **`conversation.item.truncate` succeeded but `response.cancel` did not:** Still store interruption context. The spoken reply was cut and is recoverable even if the provider reports the response as already finished server-side.
+   - **Neither cancel nor truncate succeeded:** Do not create interruption recovery state.
+8. **Suppression guard** — Keep the long post-barge-in suppression window only when `response.cancel` succeeded. Truncate-only cuts still fall back to the short echo guard.
 
 ### Event Loop Race
 
-`response_done` (WebSocket) and user audio (IPC) are separate async sources. A user audio chunk can arrive before `response_done` clears `pendingResponse`. The active flow guard catches most of these; the post-cancel guard handles the rest.
+`response_done` (WebSocket) and user audio (IPC) are separate async sources. A user audio chunk can arrive before `response_done` clears `pendingResponse`. The pre-audio and output-present guards catch the "nothing audible left" cases; the post-cancel guard handles the rest.
 
 ## 12. Post-Interruption Recovery (LLM-Driven)
 
@@ -301,13 +359,17 @@ When all gates pass:
    - **Adapt** — If the user changed direction ("actually, play rock instead"), respond to the new request.
    - **Drop** — If the original response is no longer relevant, start fresh.
 
+If the interrupting capture later finalizes with an empty ASR result, the runtime does not synthesize a fake user turn. It directly replays the interrupted assistant line with `requestRealtimeTextUtterance(...)`. Empty post-barge-in audio is treated as nonverbal noise or abandonment, not as a new conversational input.
+
 ### Suppression Window
 
-After a successful interrupt, barge-in is suppressed for **4 seconds**. This prevents:
+After a successful **acoustic barge-in**, barge-in is suppressed for **4 seconds**. This prevents:
 - The bot's interrupted audio echoing back and re-triggering
 - Rapid oscillation between interrupt → retry → interrupt
 
 4 seconds is enough for the interrupted audio to drain and the echo to clear, without locking the user out of a second legitimate interruption.
+
+Wake-word / bot-name output-lock interrupts do **not** use this suppression window. Those happen after the turn transcript is already finalized, so the bot can cut over and answer immediately.
 
 ## 13. Constants Reference
 

@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import {
   computeAsrTranscriptConfidence,
   parseVoiceThoughtDecisionContract,
-  resolveRealtimeTurnTranscriptionPlan
+  resolveTurnTranscriptionPlan,
+  transcribePcmTurnWithPlan
 } from "./voiceDecisionRuntime.ts";
 
 test("parseVoiceThoughtDecisionContract parses strict JSON payloads", () => {
@@ -103,8 +104,8 @@ test("computeAsrTranscriptConfidence hallucination scenario: very low logprobs",
   assert.equal(result.meanLogprob < -1.0, true);
 });
 
-test("resolveRealtimeTurnTranscriptionPlan upgrades short realtime mini clips without fallback", () => {
-  const plan = resolveRealtimeTurnTranscriptionPlan({
+test("resolveTurnTranscriptionPlan upgrades short realtime mini clips without fallback", () => {
+  const plan = resolveTurnTranscriptionPlan({
     mode: "openai_realtime",
     configuredModel: "gpt-4o-mini-transcribe",
     pcmByteLength: 22080,
@@ -117,7 +118,7 @@ test("resolveRealtimeTurnTranscriptionPlan upgrades short realtime mini clips wi
 });
 
 test("resolveRealtimeTurnTranscriptionPlan keeps mini with a full-model fallback on longer clips", () => {
-  const plan = resolveRealtimeTurnTranscriptionPlan({
+  const plan = resolveTurnTranscriptionPlan({
     mode: "openai_realtime",
     configuredModel: "gpt-4o-mini-transcribe",
     pcmByteLength: 160000,
@@ -127,4 +128,41 @@ test("resolveRealtimeTurnTranscriptionPlan keeps mini with a full-model fallback
   assert.equal(plan.primaryModel, "gpt-4o-mini-transcribe");
   assert.equal(plan.fallbackModel, "whisper-1");
   assert.equal(plan.reason, "mini_with_full_fallback");
+});
+
+test("resolveTurnTranscriptionPlan gives non-realtime mini turns the full fallback", () => {
+  const plan = resolveTurnTranscriptionPlan({
+    mode: "voice_agent",
+    configuredModel: "gpt-4o-mini-transcribe"
+  });
+
+  assert.equal(plan.primaryModel, "gpt-4o-mini-transcribe");
+  assert.equal(plan.fallbackModel, "whisper-1");
+  assert.equal(plan.reason, "mini_with_full_fallback_runtime");
+});
+
+test("transcribePcmTurnWithPlan retries with the fallback model once", async () => {
+  const models: string[] = [];
+  const result = await transcribePcmTurnWithPlan({
+    transcribe: async ({ model }) => {
+      models.push(model);
+      return model === "whisper-1" ? "stop music" : "";
+    },
+    session: { id: "session-1" },
+    userId: "user-1",
+    pcmBuffer: Buffer.from([1, 2, 3]),
+    plan: {
+      primaryModel: "gpt-4o-mini-transcribe",
+      fallbackModel: "whisper-1",
+      reason: "mini_with_full_fallback_runtime"
+    },
+    traceSource: "voice_music_stop_realtime",
+    errorPrefix: "voice_music_transcription_failed"
+  });
+
+  assert.deepEqual(models, ["gpt-4o-mini-transcribe", "whisper-1"]);
+  assert.equal(result.transcript, "stop music");
+  assert.equal(result.usedFallbackModel, true);
+  assert.equal(result.fallbackModel, "whisper-1");
+  assert.equal(result.reason, "mini_with_full_fallback_runtime");
 });

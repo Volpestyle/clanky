@@ -3,6 +3,7 @@ import {
   getVoiceSessionLimits,
   getVoiceSettings
 } from "../settings/agentStack.ts";
+import { getPromptBotName } from "../prompts/promptCore.ts";
 import { clamp } from "../utils.ts";
 import {
   getRealtimeRuntimeLabel,
@@ -10,6 +11,7 @@ import {
   isRecoverableRealtimeError,
   isRealtimeMode,
   normalizeInlineText,
+  normalizeVoiceAddressingTargetToken,
   parseRealtimeErrorPayload,
   parseSoundboardDirectiveSequence,
   transcriptSourceFromEventType
@@ -43,21 +45,29 @@ import { refreshRealtimeTools } from "./voiceToolCallInfra.ts";
 import type { VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 import { musicPhaseShouldAllowDucking, type VoiceSession } from "./voiceSessionTypes.ts";
 import { providerSupports } from "./voiceModes.ts";
+import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 
 type SessionLifecycleHost = VoiceToolCallManager & Pick<
   VoiceSessionManager,
+  | "annotateLatestVoiceTurnAddressing"
   | "buildAsrBridgeDeps"
   | "clearVoiceThoughtLoopTimer"
   | "engageBotSpeechMusicDuck"
   | "estimatePcm16MonoDurationMs"
   | "drainPendingRealtimeAssistantUtterances"
+  | "getOutputChannelState"
   | "getMusicPhase"
+  | "getVoiceChannelParticipants"
   | "handleRealtimeFunctionCallEvent"
   | "isAsrActive"
   | "musicPlayer"
+  | "normalizeVoiceAddressingAnnotation"
   | "recordVoiceTurn"
+  | "resolveReplyInterruptionPolicy"
+  | "resolveVoiceSpeakerName"
   | "resolveSpeakingEndFinalizeDelayMs"
   | "sessions"
+  | "setActiveReplyInterruptionPolicy"
   | "shouldUsePerUserTranscription"
   | "soundboardDirector"
   | "touchActivity"
@@ -86,6 +96,13 @@ type RefreshRealtimeToolsArgs = NonNullable<Parameters<typeof refreshRealtimeToo
 type RefreshRealtimeToolsSession = RefreshRealtimeToolsArgs["session"];
 type EndSessionArgs = Parameters<SessionLifecycleHost["endSession"]>[0];
 const OPENAI_REALTIME_ASSISTANT_OUTPUT_STATE_TTL_MS = 10 * 60 * 1000;
+const OPENAI_REALTIME_REPLY_ADDRESSING_ELIGIBLE_SOURCES = new Set([
+  "turn_flush",
+  "openai_realtime_text_turn",
+  "tool_call_followup",
+  "silent_retry",
+  "hard_recovery"
+]);
 const OPENAI_REALTIME_ASSISTANT_OUTPUT_EVENT_TYPES = new Set([
   "response.output_audio.delta",
   "response.output_audio.done",
@@ -113,6 +130,47 @@ function parseRealtimeResponseId(session: VoiceSession, event: Record<string, un
   const realtimeClient = session.realtimeClient;
   if (!realtimeClient || typeof realtimeClient !== "object" || !("activeResponseId" in realtimeClient)) return null;
   return normalizeInlineText(realtimeClient.activeResponseId, 180) || null;
+}
+
+function shouldRequestOpenAiRealtimeReplyAddressing(session: VoiceSession) {
+  if (!session || session.ending) return false;
+  if (String(session.mode || "").trim().toLowerCase() !== "openai_realtime") return false;
+  const pending = session.pendingResponse && typeof session.pendingResponse === "object"
+    ? session.pendingResponse
+    : null;
+  if (!pending) return false;
+  const normalizedSource = String(pending.source || "").trim().toLowerCase();
+  if (!OPENAI_REALTIME_REPLY_ADDRESSING_ELIGIBLE_SOURCES.has(normalizedSource)) return false;
+  return true;
+}
+
+function parseReplyAddressingClassifierToken(value: unknown) {
+  const firstLine = String(value || "")
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find(Boolean) || "";
+  if (!firstLine) return null;
+  const stripped = firstLine
+    .replace(/^`+|`+$/g, "")
+    .replace(/^["']+|["']+$/g, "")
+    .replace(/[.!,;:]+$/g, "")
+    .trim();
+  if (!stripped) return null;
+  const normalizedUpper = stripped.toUpperCase();
+  if (
+    normalizedUpper === "UNKNOWN" ||
+    normalizedUpper === "NONE" ||
+    normalizedUpper === "NULL" ||
+    normalizedUpper === "UNTARGETED"
+  ) {
+    return null;
+  }
+  return stripped.slice(0, 80);
+}
+
+function buildAssistantReplyTargetReason(talkingTo: string | null) {
+  if (!talkingTo) return "assistant_target_missing";
+  return talkingTo === "ALL" ? "assistant_target_all" : "assistant_target_speaker";
 }
 
 export class SessionLifecycle {
@@ -712,6 +770,52 @@ export class SessionLifecycle {
         });
       }
 
+      if (
+        transcriptSource === "output" &&
+        transcriptForLogs &&
+        finalTranscriptEvent &&
+        transcriptEventType === "response.output_audio_transcript.done" &&
+        shouldRequestOpenAiRealtimeReplyAddressing(session) &&
+        session.realtimeClient instanceof OpenAiRealtimeClient
+      ) {
+        const pending = session.pendingResponse && typeof session.pendingResponse === "object"
+          ? session.pendingResponse
+          : null;
+        const speakerUserId = String(pending?.userId || "").trim() || null;
+        const currentSpeakerName = speakerUserId
+          ? this.host.resolveVoiceSpeakerName(session, speakerUserId) || ""
+          : "";
+        const participants = this.host.getVoiceChannelParticipants(session)
+          .map((participant) => String(participant?.displayName || "").trim())
+          .filter(Boolean);
+        const requested = session.realtimeClient.requestReplyAddressingClassification({
+          assistantText: transcriptForLogs,
+          currentSpeakerName,
+          speakerUserId,
+          requestId: pending?.requestId || null,
+          responseSource: pending?.source || null,
+          participants,
+          botName: getPromptBotName(resolvedSettings)
+        });
+        if (requested) {
+          this.host.store.logAction({
+            kind: "voice_runtime",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId: this.host.client.user?.id || null,
+            content: "openai_realtime_reply_addressing_requested",
+            metadata: {
+              sessionId: session.id,
+              requestId: pending?.requestId || null,
+              responseSource: pending?.source || null,
+              currentSpeakerName: currentSpeakerName || null,
+              assistantTextChars: transcriptForLogs.length,
+              participantCount: participants.length
+            }
+          });
+        }
+      }
+
       if (transcriptSource === "output" && requestedSoundboardRefs.length > 0 && finalTranscriptEvent) {
         (async () => {
           let directiveIndex = 0;
@@ -850,6 +954,79 @@ export class SessionLifecycle {
       });
     };
 
+    const onReplyAddressingResult = (payload) => {
+      if (!session || session.ending) return;
+      if (!payload || typeof payload !== "object") return;
+      const assistantText = String(payload.assistantText || "").trim();
+      if (!assistantText) return;
+      const classifierText = String(payload.classifierText || "").trim();
+      const currentSpeakerName = String(payload.currentSpeakerName || "").trim();
+      const rawTarget = parseReplyAddressingClassifierToken(classifierText);
+      const resolvedTalkingTo =
+        String(rawTarget || "").trim().toUpperCase() === "SPEAKER"
+          ? currentSpeakerName || "SPEAKER"
+          : normalizeVoiceAddressingTargetToken(rawTarget || "") || null;
+      const normalizedAddressing = resolvedTalkingTo
+        ? this.host.normalizeVoiceAddressingAnnotation({
+          rawAddressing: { talkingTo: resolvedTalkingTo },
+          source: "openai_realtime_reply_target",
+          reason: "assistant_reply_target"
+        })
+        : null;
+      if (normalizedAddressing) {
+        this.host.annotateLatestVoiceTurnAddressing({
+          session,
+          role: "assistant",
+          userId: this.host.client.user?.id || null,
+          text: assistantText,
+          addressing: normalizedAddressing
+        });
+      }
+
+      const speakerUserId = String(payload.speakerUserId || "").trim() || null;
+      const requestId = Number.isFinite(Number(payload.requestId))
+        ? Math.max(0, Math.floor(Number(payload.requestId)))
+        : null;
+      const nextPolicy = this.host.resolveReplyInterruptionPolicy({
+        session,
+        userId: speakerUserId,
+        talkingTo: normalizedAddressing?.talkingTo || null,
+        source: "assistant_reply_target",
+        reason: buildAssistantReplyTargetReason(normalizedAddressing?.talkingTo || null)
+      });
+      const currentPending = session.pendingResponse && typeof session.pendingResponse === "object"
+        ? session.pendingResponse
+        : null;
+      const currentOutputState = this.host.getOutputChannelState(session);
+      const requestStillCurrent =
+        requestId != null &&
+        currentPending &&
+        Number(currentPending.requestId || 0) === requestId;
+      if (requestStillCurrent) {
+        currentPending.interruptionPolicy = nextPolicy;
+        this.host.setActiveReplyInterruptionPolicy(session, nextPolicy);
+      } else if (!currentPending && currentOutputState.locked) {
+        this.host.setActiveReplyInterruptionPolicy(session, nextPolicy);
+      }
+
+      this.host.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.host.client.user?.id || null,
+        content: "openai_realtime_reply_addressing_resolved",
+        metadata: {
+          sessionId: session.id,
+          requestId,
+          responseSource: String(payload.responseSource || "").trim() || null,
+          classifierText: classifierText || null,
+          talkingTo: normalizedAddressing?.talkingTo || null,
+          policyScope: nextPolicy?.scope || null,
+          policyAllowedUserId: nextPolicy?.allowedUserId || null
+        }
+      });
+    };
+
     const onEvent = (event) => {
       if (!session || session.ending) return;
       if (!event || typeof event !== "object") return;
@@ -882,6 +1059,7 @@ export class SessionLifecycle {
     session.realtimeClient.on("socket_closed", onSocketClosed);
     session.realtimeClient.on("socket_error", onSocketError);
     session.realtimeClient.on("response_done", onResponseDone);
+    session.realtimeClient.on("reply_addressing_result", onReplyAddressingResult);
     session.realtimeClient.on("event", onEvent);
 
     session.cleanupHandlers.push(() => {
@@ -891,6 +1069,7 @@ export class SessionLifecycle {
       session.realtimeClient.off("socket_closed", onSocketClosed);
       session.realtimeClient.off("socket_error", onSocketError);
       session.realtimeClient.off("response_done", onResponseDone);
+      session.realtimeClient.off("reply_addressing_result", onReplyAddressingResult);
       session.realtimeClient.off("event", onEvent);
     });
   }

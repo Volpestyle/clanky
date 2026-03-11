@@ -79,7 +79,7 @@ The hybrid design is deliberate:
 
 Promotion side effects:
 
-- Cancels pending system speech (thoughts) that hasn't produced audio yet
+- May cancel pending pre-audio system speech, but local-only `strong_local_audio` promotion waits for Realtime VAD confirmation before it can supersede preplay reply generation
 - Begins shared ASR utterance (if shared ASR mode) and flushes buffered PCM
 - Updates `session.lastInboundAudioAt`
 - Emits `voice_activity_started` log event
@@ -371,6 +371,10 @@ Audio arrives via `appendAudioToAsr` on every `onUserAudio` chunk:
 
 If the commit times out empty but the same utterance produces a late final segment shortly after, the capture manager still watches that committed utterance object during the late-recovery window. A new provisional utterance for the same speaker does not cancel recovery of the older committed transcript.
 
+If that late-recovery window also ends empty, both bridge empty-drop paths recover any stashed preplay-superseded turn before returning. If no preplay-superseded turn exists but the same speaker had just barge-interrupted a live reply, the runtime replays that interrupted assistant line directly. Empty newer speech is treated as noise or abandonment, not as durable reason to lose the older admitted turn.
+
+If that late transcript revises a turn that has already been admitted but has not started audio yet, the turn processor replaces the older queued turn in place and replays the corrected revision with a fresh reply scope. The corrected utterance is treated as the same turn becoming more complete, not as stale newer work that should be dropped.
+
 Per-user item association follows the committed `item_id` first. When OpenAI server VAD auto-commits a turn before local capture finalization enters `committing`, the bridge still binds that `item_id` to the current active utterance. This prevents a final transcript such as `"stop music"` from being misattached to an older turn through `previous_item_id`.
 
 ### Shared Commit Flow
@@ -401,6 +405,12 @@ Per-user item association follows the committed `item_id` first. When OpenAI ser
 ```
 
 This flows through `queueRealtimeTurnFromAsrBridge` into the turn processor as `*Override` fields on `RealtimeQueuedTurn`, skipping the turn processor's own ASR. See [Section 7](#7-the-turn-output) for the full routing.
+
+Canonical policy note:
+
+- raw PCM transcription plan selection is shared across realtime turn processing, file-ASR turns, and music-command interception
+- `gpt-4o-mini-transcribe` keeps the short-clip no-fallback optimization only for `openai_realtime`
+- otherwise the mini model gets a single full-model fallback to `whisper-1`
 
 ## 18. Cross-Domain State Reads
 

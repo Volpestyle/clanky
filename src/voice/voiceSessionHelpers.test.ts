@@ -77,8 +77,10 @@ test("getRealtimeCommitMinimumBytes uses passthrough minimum for non-openai mode
 test("resolveVoiceAsrLanguageGuidance supports auto and fixed language modes", () => {
   const autoGuidance = resolveVoiceAsrLanguageGuidance(createTestSettings({
     voice: {
-      asrLanguageMode: "auto",
-      asrLanguageHint: "EN"
+      transcription: {
+        languageMode: "auto",
+        languageHint: "EN"
+      }
     }
   }));
   assert.equal(autoGuidance.mode, "auto");
@@ -88,8 +90,10 @@ test("resolveVoiceAsrLanguageGuidance supports auto and fixed language modes", (
 
   const fixedGuidance = resolveVoiceAsrLanguageGuidance(createTestSettings({
     voice: {
-      asrLanguageMode: "fixed",
-      asrLanguageHint: "en-US"
+      transcription: {
+        languageMode: "fixed",
+        languageHint: "en-US"
+      }
     }
   }));
   assert.equal(fixedGuidance.mode, "fixed");
@@ -99,13 +103,25 @@ test("resolveVoiceAsrLanguageGuidance supports auto and fixed language modes", (
 });
 
 test("Gemini realtime mode resolves to gemini provider and label", () => {
-  assert.equal(resolveVoiceRuntimeMode(createTestSettings({ voice: { mode: "gemini_realtime" } })), "gemini_realtime");
+  assert.equal(resolveVoiceRuntimeMode(createTestSettings({
+    agentStack: {
+      overrides: {
+        voiceRuntime: "gemini_realtime"
+      }
+    }
+  })), "gemini_realtime");
   assert.equal(resolveRealtimeProvider("gemini_realtime"), "gemini");
   assert.equal(getRealtimeRuntimeLabel("gemini_realtime"), "gemini_realtime");
 });
 
 test("ElevenLabs realtime mode resolves to elevenlabs provider and label", () => {
-  assert.equal(resolveVoiceRuntimeMode(createTestSettings({ voice: { mode: "elevenlabs_realtime" } })), "elevenlabs_realtime");
+  assert.equal(resolveVoiceRuntimeMode(createTestSettings({
+    agentStack: {
+      overrides: {
+        voiceRuntime: "elevenlabs_realtime"
+      }
+    }
+  })), "elevenlabs_realtime");
   assert.equal(resolveRealtimeProvider("elevenlabs_realtime"), "elevenlabs");
   assert.equal(getRealtimeRuntimeLabel("elevenlabs_realtime"), "elevenlabs_realtime");
 });
@@ -212,7 +228,11 @@ test("parseResponseDoneUsage extracts realtime token totals and detail counts", 
 });
 
 test("isVoiceTurnAddressedToBot matches exact bot-name phrase and primary wake token", () => {
-  const settings = createTestSettings({ botName: "clanker conk" });
+  const settings = createTestSettings({
+    identity: {
+      botName: "clanker conk"
+    }
+  });
   const cases = [
     { text: "yo clanker conk can you answer this?", expected: true },
     { text: "clankerconk can you answer this?", expected: true },
@@ -231,7 +251,11 @@ test("isVoiceTurnAddressedToBot matches exact bot-name phrase and primary wake t
 });
 
 test("isVoiceTurnAddressedToBot follows configured botName without fuzzy fallbacks", () => {
-  const settings = createTestSettings({ botName: "sparky bot" });
+  const settings = createTestSettings({
+    identity: {
+      botName: "sparky bot"
+    }
+  });
   assert.equal(isVoiceTurnAddressedToBot("sparky bot can you help me with this?", settings), true);
   assert.equal(isVoiceTurnAddressedToBot("sparky can you help me with this?", settings), true);
   assert.equal(isVoiceTurnAddressedToBot("sporky can you help me with this?", settings), false);

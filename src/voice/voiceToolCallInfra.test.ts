@@ -65,8 +65,12 @@ test("refreshRealtimeTools registers local and MCP tool definitions", async () =
       memory: {
         enabled: true
       },
-      webSearch: {
-        enabled: true
+      agentStack: {
+        runtimeConfig: {
+          research: {
+            enabled: true
+          }
+        }
       }
     }),
     reason: "test"
@@ -105,7 +109,9 @@ test("buildRealtimeFunctionTools rewrites music_play for provider-native realtim
     },
     settings: createVoiceTestSettings({
       voice: {
-        replyPath: "native"
+        conversationPolicy: {
+          replyPath: "native"
+        }
       }
     }),
     target: "openai_realtime"
@@ -150,7 +156,9 @@ test("refreshRealtimeTools skips registration for brain sessions", async () => {
     session,
     settings: createVoiceTestSettings({
       voice: {
-        replyPath: "brain"
+        conversationPolicy: {
+          replyPath: "brain"
+        }
       }
     }),
     reason: "test"
@@ -180,7 +188,9 @@ test("refreshRealtimeTools registers provider-native tools for bridge sessions",
     session,
     settings: createVoiceTestSettings({
       voice: {
-        replyPath: "bridge",
+        conversationPolicy: {
+          replyPath: "bridge"
+        },
         soundboard: {
           enabled: true
         }
@@ -240,8 +250,12 @@ test("handleRealtimeFunctionCallEvent executes music_now_playing and sends funct
   session.realtimeToolDefinitions = buildRealtimeFunctionTools(manager, {
     session,
     settings: createVoiceTestSettings({
-      webSearch: {
-        enabled: true
+      agentStack: {
+        runtimeConfig: {
+          research: {
+            enabled: true
+          }
+        }
       }
     })
   });
@@ -304,7 +318,9 @@ test("handleRealtimeFunctionCallEvent executes play_soundboard and sends functio
 
   const settings = createVoiceTestSettings({
     voice: {
-      replyPath: "bridge",
+      conversationPolicy: {
+        replyPath: "bridge"
+      },
       soundboard: {
         enabled: true,
         preferredSoundIds: ["airhorn@123"]
@@ -380,7 +396,9 @@ test("handleRealtimeFunctionCallEvent ignores provider function calls in brain s
     session,
     settings: createVoiceTestSettings({
       voice: {
-        replyPath: "brain"
+        conversationPolicy: {
+          replyPath: "brain"
+        }
       }
     }),
     event: {
@@ -517,8 +535,12 @@ test("handleRealtimeFunctionCallEvent sends cancelled tool output when a voice t
   session.realtimeToolDefinitions = buildRealtimeFunctionTools(manager, {
     session,
     settings: createVoiceTestSettings({
-      webSearch: {
-        enabled: true
+      agentStack: {
+        runtimeConfig: {
+          research: {
+            enabled: true
+          }
+        }
       }
     })
   });
@@ -526,8 +548,12 @@ test("handleRealtimeFunctionCallEvent sends cancelled tool output when a voice t
   const toolRun = manager.handleRealtimeFunctionCallEvent({
     session,
     settings: createVoiceTestSettings({
-      webSearch: {
-        enabled: true
+      agentStack: {
+        runtimeConfig: {
+          research: {
+            enabled: true
+          }
+        }
       }
     }),
     event: {

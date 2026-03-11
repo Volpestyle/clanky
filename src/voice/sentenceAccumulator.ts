@@ -78,6 +78,29 @@ function findEagerFirstChunkBoundaryIndex(buffer: string) {
   return findLastBoundaryIndex(buffer, false);
 }
 
+const MIN_STANDALONE_POST_FIRST_CHUNK_CHARS = 24;
+const MIN_STANDALONE_POST_FIRST_CHUNK_WORDS = 4;
+
+function combineChunkText(...parts: string[]) {
+  return normalizeChunkText(parts.filter(Boolean).join(" "));
+}
+
+function countChunkWords(text: string) {
+  return normalizeChunkText(text)
+    .split(/\s+/u)
+    .filter(Boolean)
+    .length;
+}
+
+function isTooSmallStandalonePostFirstChunk(text: string) {
+  const normalized = normalizeChunkText(text);
+  if (!normalized) return false;
+  return (
+    normalized.length < MIN_STANDALONE_POST_FIRST_CHUNK_CHARS &&
+    countChunkWords(normalized) < MIN_STANDALONE_POST_FIRST_CHUNK_WORDS
+  );
+}
+
 export interface SentenceAccumulatorOptions {
   onSentence: (text: string, index: number) => void;
   eagerFirstChunk?: boolean;
@@ -89,6 +112,7 @@ export class SentenceAccumulator {
   private buffer = "";
   private sentenceIndex = 0;
   private emittedFirstChunk = false;
+  private deferredSmallPostFirstChunk = "";
   private readonly eagerFirstChunk: boolean;
   private readonly eagerMinChars: number;
   private readonly maxBufferChars: number;
@@ -111,7 +135,26 @@ export class SentenceAccumulator {
   flush() {
     const chunk = normalizeChunkText(this.buffer);
     this.buffer = "";
-    if (!chunk) return;
+    if (!chunk) {
+      if (this.deferredSmallPostFirstChunk) {
+        const deferred = this.deferredSmallPostFirstChunk;
+        this.deferredSmallPostFirstChunk = "";
+        this.emit(deferred);
+      }
+      return;
+    }
+    if (!this.emittedFirstChunk) {
+      this.emit(chunk);
+      return;
+    }
+    if (this.deferredSmallPostFirstChunk) {
+      const combined = combineChunkText(this.deferredSmallPostFirstChunk, chunk);
+      this.deferredSmallPostFirstChunk = "";
+      if (combined) {
+        this.emit(combined);
+      }
+      return;
+    }
     this.emit(chunk);
   }
 
@@ -133,7 +176,7 @@ export class SentenceAccumulator {
         const chunk = normalizeChunkText(this.buffer.slice(0, boundaryIndex));
         this.buffer = this.buffer.slice(boundaryIndex);
         if (chunk) {
-          this.emit(chunk);
+          this.dispatchChunk(chunk);
           continue;
         }
       }
@@ -152,7 +195,7 @@ export class SentenceAccumulator {
         const chunk = normalizeChunkText(this.buffer.slice(0, forcedBreakIndex));
         this.buffer = this.buffer.slice(forcedBreakIndex);
         if (chunk) {
-          this.emit(chunk);
+          this.dispatchChunk(chunk);
           continue;
         }
       }
@@ -165,5 +208,36 @@ export class SentenceAccumulator {
     this.onSentence(text, this.sentenceIndex);
     this.sentenceIndex += 1;
     this.emittedFirstChunk = true;
+  }
+
+  private dispatchChunk(text: string) {
+    const normalized = normalizeChunkText(text);
+    if (!normalized) return;
+    if (!this.emittedFirstChunk) {
+      this.emit(normalized);
+      return;
+    }
+
+    if (this.deferredSmallPostFirstChunk) {
+      const combined = combineChunkText(this.deferredSmallPostFirstChunk, normalized);
+      if (!combined) {
+        this.deferredSmallPostFirstChunk = "";
+        return;
+      }
+      if (isTooSmallStandalonePostFirstChunk(combined)) {
+        this.deferredSmallPostFirstChunk = combined;
+        return;
+      }
+      this.deferredSmallPostFirstChunk = "";
+      this.emit(combined);
+      return;
+    }
+
+    if (isTooSmallStandalonePostFirstChunk(normalized)) {
+      this.deferredSmallPostFirstChunk = normalized;
+      return;
+    }
+
+    this.emit(normalized);
   }
 }

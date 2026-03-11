@@ -1,7 +1,22 @@
 import { ChatInputCommandInteraction } from "discord.js";
 import { normalizeInlineText, STT_TRANSCRIPT_MAX_CHARS, isVoiceTurnAddressedToBot, resolveVoiceAsrLanguageGuidance } from "./voiceSessionHelpers.ts";
-import { getVoiceConversationPolicy, getVoiceRuntimeConfig } from "../settings/agentStack.ts";
+import {
+  getResolvedVoiceMusicBrainBinding,
+  isVoiceMusicBrainEnabled,
+  getVoiceConversationPolicy,
+  getVoiceRuntimeConfig
+} from "../settings/agentStack.ts";
 import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
+import { getMusicWakeFollowupState } from "./musicWakeLatch.ts";
+import { resolveTurnTranscriptionPlan, transcribePcmTurnWithPlan } from "./voiceDecisionRuntime.ts";
+import { VOICE_TOOL_SCHEMAS, toAnthropicTool } from "../tools/sharedToolSchemas.ts";
+import {
+  executeReplyTool,
+  type ReplyToolContext,
+  type ReplyToolRuntime
+} from "../tools/replyTools.ts";
+import type { ToolLoopContentBlock, ToolLoopMessage } from "../llm/serviceShared.ts";
+import { RECENT_ENGAGEMENT_WINDOW_MS } from "./voiceSessionManager.constants.ts";
 
 import { clamp } from "../utils.ts";
 import type { BargeInController } from "./bargeInController.ts";
@@ -12,7 +27,7 @@ import type { MusicSearchProvider } from "./musicSearch.ts";
 import type { ReplyManager } from "./replyManager.ts";
 
 // English-only fallback/fast-path heuristics for obvious music control turns.
-// These are convenience shortcuts, not the primary music-command decision logic.
+// These are lightweight transport shortcuts, not the main conversational brain.
 export const EN_MUSIC_STOP_VERB_RE = /\b(?:stop|halt|end|quit|shut\s*off)\b/i;
 export const EN_MUSIC_PAUSE_VERB_RE = /\b(?:pause)\b/i;
 export const EN_MUSIC_RESUME_VERB_RE = /\b(?:resume|unpause|continue)\b/i;
@@ -31,7 +46,23 @@ export const EN_MUSIC_QUERY_EMPTY_RE = /^(?:something|anything|some|a|the|please
 export const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
 export const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
 export const VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK = 5;
-const VOICE_COMMAND_SESSION_TTL_MS = 20 * 1000;
+const VOICE_MUSIC_BRAIN_MAX_STEPS = 4;
+const VOICE_MUSIC_BRAIN_MAX_OUTPUT_TOKENS = 120;
+const VOICE_MUSIC_BRAIN_RECENT_TURN_MAX_CHARS = 180;
+const VOICE_MUSIC_BRAIN_TOOL_NAMES = new Set([
+  "music_search",
+  "music_play",
+  "music_queue_add",
+  "music_queue_next",
+  "music_stop",
+  "music_pause",
+  "music_resume",
+  "music_skip",
+  "music_now_playing"
+]);
+const VOICE_MUSIC_BRAIN_TOOL_DEFINITIONS = VOICE_TOOL_SCHEMAS
+  .filter((schema) => VOICE_MUSIC_BRAIN_TOOL_NAMES.has(schema.name))
+  .map((schema) => toAnthropicTool(schema));
 
 import type {
   MusicSelectionResult,
@@ -40,6 +71,7 @@ import type {
   MusicTextCommandMessage,
   MusicPlaybackPhase,
   MusicPauseReason,
+  MusicReplyHandoffMode,
   VoiceSession,
   VoiceSessionMusicState
 } from "./voiceSessionTypes.ts";
@@ -52,6 +84,8 @@ import {
 } from "./voiceSessionTypes.ts";
 
 type MusicPlaybackSettings = Record<string, unknown> | null;
+type VoiceMusicBrainDecision = "consumed" | "pass";
+type VoiceMusicControlCommand = "stop" | "pause" | "resume" | "skip";
 
 type MusicPlaybackStoreLike = {
   getSettings: () => MusicPlaybackSettings;
@@ -62,6 +96,7 @@ type MusicPlaybackStoreLike = {
     userId?: string | null;
     content: string;
     metadata?: Record<string, unknown>;
+    usdCost?: number | null;
   }) => void;
 };
 
@@ -106,10 +141,51 @@ export interface MusicPlaybackHost {
   store: MusicPlaybackStoreLike;
   llm?: {
     transcribeAudio?: unknown;
+    chatWithTools?: (args: {
+      provider?: string;
+      model?: string;
+      systemPrompt: string;
+      messages: ToolLoopMessage[];
+      tools: Array<{
+        name: string;
+        description: string;
+        input_schema: {
+          type: "object";
+          properties: Record<string, unknown>;
+          required?: string[];
+          additionalProperties?: boolean;
+        };
+        strict?: boolean;
+      }>;
+      maxOutputTokens?: number;
+      temperature?: number;
+      trace?: Record<string, unknown>;
+      signal?: AbortSignal;
+    }) => Promise<{
+      content: ToolLoopContentBlock[];
+      stopReason: string;
+      usage: {
+        inputTokens: number;
+        outputTokens: number;
+        cacheWriteTokens: number;
+        cacheReadTokens: number;
+      };
+      costUsd: number;
+    }>;
   } | null;
-  replyManager: Pick<ReplyManager, "clearPendingResponse" | "hasBufferedTtsPlayback">;
+  replyManager: Pick<ReplyManager, "clearPendingResponse" | "hasBufferedTtsPlayback" | "schedulePausedReplyMusicResume">;
   bargeInController: Pick<BargeInController, "clearBargeInOutputSuppression">;
   deferredActionQueue: Pick<DeferredActionQueue, "clearAllDeferredVoiceActions">;
+  beginVoiceCommandSession: (args: {
+    session?: MusicRuntimeSessionLike | null;
+    userId?: string | null;
+    domain?: string | null;
+    intent?: string | null;
+    ttlMs?: number | null;
+  }) => unknown;
+  clearVoiceCommandSession: (
+    session: MusicRuntimeSessionLike | null | undefined
+  ) => void;
   musicPlayer?: Pick<DiscordMusicPlayer, "duck" | "unduck" | "play" | "stop" | "pause" | "resume"> | null;
   musicPlayback?: Pick<MusicPlaybackProvider, "provider" | "isConfigured" | "startPlayback" | "stopPlayback"> | null;
   musicSearch?: Pick<MusicSearchProvider, "isConfigured" | "search"> | null;
@@ -183,6 +259,10 @@ export interface MusicPlaybackHost {
     clearQueue?: boolean;
     mustNotify?: boolean;
   }) => Promise<unknown>;
+  buildVoiceToolCallbacks?: (args: {
+    session: VoiceSession;
+    settings?: MusicPlaybackSettings;
+  }) => NonNullable<ReplyToolRuntime["voiceSession"]>;
 }
 
 function logMusicAction(
@@ -190,41 +270,6 @@ function logMusicAction(
   entry: MusicPlaybackLogArgs
 ) {
   manager.store.logAction(entry);
-}
-
-function beginVoiceCommandSession(
-  session: VoiceSession | null | undefined,
-  {
-    userId = null,
-    domain = "voice",
-    intent = "followup",
-    ttlMs = VOICE_COMMAND_SESSION_TTL_MS
-  }: {
-    userId?: string | null;
-    domain?: string | null;
-    intent?: string | null;
-    ttlMs?: number | null;
-  } = {}
-) {
-  if (!session || session.ending) return null;
-  const normalizedUserId = String(userId || "").trim();
-  if (!normalizedUserId) return null;
-  const now = Date.now();
-  const durationMs = clamp(Math.round(Number(ttlMs) || VOICE_COMMAND_SESSION_TTL_MS), 3_000, 120_000);
-  const next = {
-    userId: normalizedUserId,
-    domain: normalizeInlineText(domain, 40) || "voice",
-    intent: normalizeInlineText(intent, 80) || "followup",
-    startedAt: now,
-    expiresAt: now + durationMs
-  };
-  session.voiceCommandState = next;
-  return next;
-}
-
-function clearVoiceCommandSession(session: VoiceSession | null | undefined) {
-  if (!session || typeof session !== "object") return;
-  session.voiceCommandState = null;
 }
 
 function clearToolMusicQueueState(
@@ -250,6 +295,10 @@ export function ensureSessionMusicState(
     phase: "idle" as const,
     ducked: false,
     pauseReason: null,
+    replyHandoffMode: null,
+    replyHandoffRequestedByUserId: null,
+    replyHandoffSource: null,
+    replyHandoffAt: 0,
     startedAt: 0,
     stoppedAt: 0,
     provider: null,
@@ -283,6 +332,13 @@ export function snapshotMusicRuntimeState(
   return {
     phase: music.phase || "idle",
     active: musicPhaseIsActive(music.phase || "idle"),
+    pauseReason: music.pauseReason || null,
+    replyHandoffMode: music.replyHandoffMode || null,
+    replyHandoffRequestedByUserId: music.replyHandoffRequestedByUserId || null,
+    replyHandoffSource: music.replyHandoffSource || null,
+    replyHandoffAt: Number(music.replyHandoffAt || 0) > 0
+      ? new Date(Number(music.replyHandoffAt)).toISOString()
+      : null,
     provider: music.provider || null,
     source: music.source || null,
     startedAt: music.startedAt > 0 ? new Date(music.startedAt).toISOString() : null,
@@ -341,6 +397,561 @@ export function setMusicPhase(
   if (!music) return;
   music.phase = phase;
   music.pauseReason = pauseReason;
+  if (music.replyHandoffMode === "pause" && phase !== "paused_wake_word") {
+    music.replyHandoffMode = null;
+    music.replyHandoffRequestedByUserId = null;
+    music.replyHandoffSource = null;
+    music.replyHandoffAt = 0;
+  }
+  if (
+    music.replyHandoffMode === "duck" &&
+    phase !== "playing" &&
+    phase !== "loading"
+  ) {
+    music.replyHandoffMode = null;
+    music.replyHandoffRequestedByUserId = null;
+    music.replyHandoffSource = null;
+    music.replyHandoffAt = 0;
+  }
+}
+
+export function setPendingMusicReplyHandoff(
+  manager: MusicPlaybackHost,
+  session: MusicRuntimeSessionLike | null | undefined,
+  {
+    mode,
+    requestedByUserId = null,
+    source = null
+  }: {
+    mode: MusicReplyHandoffMode;
+    requestedByUserId?: string | null;
+    source?: string | null;
+  }
+) {
+  const music = ensureSessionMusicState(manager, session);
+  if (!music) return null;
+  music.replyHandoffMode = mode;
+  music.replyHandoffRequestedByUserId = String(requestedByUserId || "").trim() || null;
+  music.replyHandoffSource = String(source || "").trim() || null;
+  music.replyHandoffAt = Date.now();
+  return music;
+}
+
+export function clearPendingMusicReplyHandoff(
+  manager: MusicPlaybackHost,
+  session: MusicRuntimeSessionLike | null | undefined
+) {
+  const music = ensureSessionMusicState(manager, session);
+  if (!music) return null;
+  music.replyHandoffMode = null;
+  music.replyHandoffRequestedByUserId = null;
+  music.replyHandoffSource = null;
+  music.replyHandoffAt = 0;
+  return music;
+}
+
+function formatVoiceMusicBrainTrack(
+  track: {
+    title?: string | null;
+    artist?: string | null;
+    artists?: string[];
+    id?: string | null;
+  } | null | undefined
+) {
+  const title = String(track?.title || "").trim();
+  if (!title) return null;
+  const artists = Array.isArray(track?.artists)
+    ? track.artists.map((entry) => String(entry || "").trim()).filter(Boolean)
+    : [];
+  const artist = artists.length > 0
+    ? artists.join(", ")
+    : String(track?.artist || "").trim();
+  const id = String(track?.id || "").trim();
+  return `${title}${artist ? ` - ${artist}` : ""}${id ? ` [selection_id: ${id}]` : ""}`;
+}
+
+function buildVoiceMusicBrainRecentContextLines(
+  session: VoiceSession,
+  userId: string | null,
+  transcript: string
+) {
+  const turns = Array.isArray(session?.recentVoiceTurns) ? session.recentVoiceTurns : [];
+  if (turns.length <= 0) return [];
+
+  const normalizedUserId = String(userId || "").trim() || null;
+  const normalizedCurrentTranscript = normalizeInlineText(transcript, VOICE_MUSIC_BRAIN_RECENT_TURN_MAX_CHARS);
+  let lastAssistantReply: string | null = null;
+  let previousSpeakerTurn: string | null = null;
+  let previousSpeakerLabel: string | null = null;
+  let lastUserTurnFallback: string | null = null;
+  let lastUserTurnFallbackLabel: string | null = null;
+
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+    const text = normalizeInlineText(turn?.text || "", VOICE_MUSIC_BRAIN_RECENT_TURN_MAX_CHARS);
+    if (!text) continue;
+
+    if (!lastAssistantReply && turn?.role === "assistant") {
+      lastAssistantReply = text;
+    }
+
+    if (turn?.role === "user") {
+      const speakerLabel = String(turn?.speakerName || "this speaker").trim() || "this speaker";
+      if (!lastUserTurnFallback && text !== normalizedCurrentTranscript) {
+        lastUserTurnFallback = text;
+        lastUserTurnFallbackLabel = speakerLabel;
+      }
+      if (
+        !previousSpeakerTurn &&
+        normalizedUserId &&
+        String(turn?.userId || "").trim() === normalizedUserId &&
+        text !== normalizedCurrentTranscript
+      ) {
+        previousSpeakerTurn = text;
+        previousSpeakerLabel = speakerLabel;
+      }
+    }
+
+    if (lastAssistantReply && (previousSpeakerTurn || (!normalizedUserId && lastUserTurnFallback))) {
+      break;
+    }
+  }
+
+  const lines: string[] = [];
+  if (lastAssistantReply) {
+    lines.push(`- Last assistant reply: ${lastAssistantReply}`);
+  }
+  if (previousSpeakerTurn) {
+    lines.push(`- Previous turn from this speaker (${previousSpeakerLabel || "this speaker"}): ${previousSpeakerTurn}`);
+  } else if (lastUserTurnFallback) {
+    lines.push(`- Previous user turn (${lastUserTurnFallbackLabel || "someone"}): ${lastUserTurnFallback}`);
+  }
+  return lines;
+}
+
+function buildVoiceMusicBrainSystemPrompt(
+  manager: MusicPlaybackHost,
+  {
+    session,
+    settings,
+    userId,
+    transcript,
+    directAddressedToBot,
+    musicWakeLatched,
+    pausedWakeWordOwnerFollowup,
+    passiveWakeFollowupAllowed,
+    interruptedReplyOwnerFollowup,
+    currentPhase,
+    source
+  }: {
+    session: VoiceSession;
+    settings: MusicPlaybackSettings;
+    userId: string | null;
+    transcript: string;
+    directAddressedToBot: boolean;
+    musicWakeLatched: boolean;
+    pausedWakeWordOwnerFollowup: boolean;
+    passiveWakeFollowupAllowed: boolean;
+    interruptedReplyOwnerFollowup: boolean;
+    currentPhase: MusicPlaybackPhase;
+    source: string;
+  }
+) {
+  const musicSnapshot = snapshotMusicRuntimeState(manager, session);
+  const currentTrack =
+    musicSnapshot?.queueState &&
+    Number.isInteger(musicSnapshot.queueState.nowPlayingIndex) &&
+    Number(musicSnapshot.queueState.nowPlayingIndex) >= 0
+      ? musicSnapshot.queueState.tracks[Number(musicSnapshot.queueState.nowPlayingIndex)] || null
+      : null;
+  const upcomingTracks = Array.isArray(musicSnapshot?.queueState?.tracks)
+    && Number.isInteger(musicSnapshot.queueState.nowPlayingIndex)
+      ? musicSnapshot.queueState.tracks.slice(Number(musicSnapshot.queueState.nowPlayingIndex) + 1, Number(musicSnapshot.queueState.nowPlayingIndex) + 4)
+      : [];
+  const lines = [
+    "You are the bot's tiny live music command brain for voice chat while music context is active.",
+    "Only decide whether this looks like a real playback-control or disambiguation turn that the music layer should consume now.",
+    "Use the provided music tools only when the user is actually asking to control playback, queue, search, pause, resume, skip, or stop music.",
+    "If tools fully handle the turn or the turn should stay swallowed as a music-side command, finish with exactly [CONSUMED].",
+    "If this should go to the main voice brain instead, finish with exactly [PASS].",
+    "Return only one final token: [CONSUMED] or [PASS]. No extra text.",
+    "Do not choose duck or pause floor-shaping here. Wake-word and conversational turns belong to the main voice brain.",
+    "If the user is asking an opinion, making normal conversation, or otherwise not clearly issuing a music-side command, use [PASS].",
+    "",
+    "Turn context:",
+    `- Heard: ${transcript}`,
+    `- Source: ${source}`,
+    `- Directly addressed to bot: ${directAddressedToBot ? "yes" : "no"}`,
+    `- Music wake latch open: ${musicWakeLatched ? "yes" : "no"}`,
+    `- Wake-word follow-up owned by this speaker: ${pausedWakeWordOwnerFollowup ? "yes" : "no"}`,
+    `- Passive wake follow-up allowed: ${passiveWakeFollowupAllowed ? "yes" : "no"}`,
+    `- Recent interrupted-reply follow-up from this speaker: ${interruptedReplyOwnerFollowup ? "yes" : "no"}`,
+    `- Current music phase: ${currentPhase}`
+  ];
+  const recentContextLines = buildVoiceMusicBrainRecentContextLines(session, userId, transcript);
+  if (recentContextLines.length > 0) {
+    lines.push(...recentContextLines);
+  }
+  if (musicSnapshot?.replyHandoffMode === "pause") {
+    lines.push("- Runtime already paused music for the current reply handoff.");
+  } else if (musicSnapshot?.replyHandoffMode === "duck") {
+    lines.push("- Runtime plans to duck music under the current reply handoff.");
+  }
+  const currentTrackLine = formatVoiceMusicBrainTrack(currentTrack);
+  if (currentTrackLine) {
+    lines.push(`- Current track: ${currentTrackLine}`);
+  }
+  const lastTrackLine = formatVoiceMusicBrainTrack({
+    id: musicSnapshot?.lastTrackId || null,
+    title: musicSnapshot?.lastTrackTitle || null,
+    artists: Array.isArray(musicSnapshot?.lastTrackArtists) ? musicSnapshot.lastTrackArtists : []
+  });
+  if (lastTrackLine && lastTrackLine !== currentTrackLine) {
+    lines.push(`- Last track: ${lastTrackLine}`);
+  }
+  if (upcomingTracks.length > 0) {
+    lines.push(`- Queue depth: ${Math.max(0, Number(musicSnapshot?.queueState?.tracks?.length || 0))}`);
+    for (const [index, track] of upcomingTracks.entries()) {
+      const line = formatVoiceMusicBrainTrack(track);
+      if (line) {
+        lines.push(`- Upcoming ${index + 1}: ${line}`);
+      }
+    }
+  }
+  if (musicSnapshot?.lastCommandReason) {
+    lines.push(`- Last music action: ${String(musicSnapshot.lastCommandReason)}`);
+  }
+  if (musicSnapshot?.lastQuery) {
+    lines.push(`- Last music query: ${String(musicSnapshot.lastQuery)}`);
+  }
+  const musicBrainBinding = getResolvedVoiceMusicBrainBinding(settings);
+  lines.push(`- Music brain model context: ${musicBrainBinding.provider}:${musicBrainBinding.model}`);
+  return lines.join("\n");
+}
+
+function normalizeVoiceMusicBrainDecision(text: string): VoiceMusicBrainDecision | null {
+  const normalized = String(text || "").trim().toUpperCase();
+  if (!normalized) return null;
+  if (normalized === "[CONSUMED]" || normalized === "CONSUMED") return "consumed";
+  if (normalized === "[PASS]" || normalized === "PASS") return "pass";
+  return null;
+}
+
+function normalizeVoiceMusicCommandTranscript(transcript: string) {
+  return normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS)
+    .toLowerCase()
+    .replace(/[^\w\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function resolveCompactVoiceMusicControlCommand(
+  transcript: string,
+  currentPhase: MusicPlaybackPhase
+): VoiceMusicControlCommand | null {
+  const normalizedTranscript = normalizeVoiceMusicCommandTranscript(transcript);
+  if (!normalizedTranscript) return null;
+
+  if (normalizedTranscript === "stop" || normalizedTranscript === "halt" || normalizedTranscript === "end" || normalizedTranscript === "quit" || normalizedTranscript === "shut off") {
+    return "stop";
+  }
+  if (normalizedTranscript === "pause") {
+    return "pause";
+  }
+  if (normalizedTranscript === "skip" || normalizedTranscript === "next") {
+    return "skip";
+  }
+  if (
+    (normalizedTranscript === "resume" || normalizedTranscript === "unpause" || normalizedTranscript === "continue")
+    && musicPhaseCanResume(currentPhase)
+  ) {
+    return "resume";
+  }
+  return null;
+}
+
+function isLikelyVoiceMusicControlCommandTurn(
+  manager: MusicPlaybackHost,
+  {
+    transcript,
+    currentPhase
+  }: {
+    transcript: string;
+    currentPhase: MusicPlaybackPhase;
+  }
+) {
+  if (isLikelyMusicStopPhrase(manager, { transcript })) return true;
+  if (isLikelyMusicPausePhrase(manager, { transcript })) return true;
+  if (isLikelyMusicSkipPhrase(manager, { transcript })) return true;
+  if (musicPhaseCanResume(currentPhase) && isLikelyMusicResumePhrase(manager, { transcript })) return true;
+  return false;
+}
+
+async function executeCompactVoiceMusicControlCommand(
+  manager: MusicPlaybackHost,
+  {
+    session,
+    settings,
+    userId,
+    transcript,
+    command,
+    source
+  }: {
+    session: VoiceSession;
+    settings: MusicPlaybackSettings;
+    userId: string | null;
+    transcript: string;
+    command: VoiceMusicControlCommand;
+    source: string;
+  }
+) {
+  const normalizedUserId = String(userId || "").trim() || null;
+  switch (command) {
+    case "stop":
+      await requestStopMusic(manager, {
+        guildId: session.guildId,
+        channelId: session.textChannelId || null,
+        requestedByUserId: normalizedUserId,
+        settings,
+        reason: "voice_fast_path_stop",
+        source,
+        requestText: transcript,
+        clearQueue: true,
+        mustNotify: false
+      });
+      return true;
+    case "pause":
+      await requestPauseMusic(manager, {
+        guildId: session.guildId,
+        channelId: session.textChannelId || null,
+        requestedByUserId: normalizedUserId,
+        settings,
+        reason: "voice_fast_path_pause",
+        source,
+        requestText: transcript,
+        mustNotify: false
+      });
+      return true;
+    case "resume": {
+      manager.musicPlayer?.resume?.();
+      setMusicPhase(manager, session, "playing");
+      clearPendingMusicReplyHandoff(manager, session);
+      const queueState = ensureToolMusicQueueState(manager, session);
+      if (queueState) queueState.isPaused = false;
+      haltSessionOutputForMusicPlayback(manager, session, "music_resumed_fast_path");
+      return true;
+    }
+    case "skip": {
+      const queueState = ensureToolMusicQueueState(manager, session);
+      if (!queueState || queueState.nowPlayingIndex == null) return false;
+      const nextIndex = queueState.nowPlayingIndex + 1;
+      await requestStopMusic(manager, {
+        guildId: session.guildId,
+        channelId: session.textChannelId || null,
+        requestedByUserId: normalizedUserId,
+        settings,
+        reason: "voice_fast_path_skip",
+        source,
+        requestText: transcript,
+        mustNotify: false
+      });
+      if (nextIndex < queueState.tracks.length) {
+        await manager.playVoiceQueueTrackByIndex({ session, settings, index: nextIndex });
+      } else {
+        queueState.nowPlayingIndex = null;
+        queueState.isPaused = false;
+      }
+      return true;
+    }
+  }
+}
+
+async function runVoiceMusicBrainDecision(
+  manager: MusicPlaybackHost,
+  {
+    session,
+    settings,
+    userId,
+    transcript,
+    directAddressedToBot,
+    musicWakeLatched,
+    pausedWakeWordOwnerFollowup,
+    passiveWakeFollowupAllowed,
+    interruptedReplyOwnerFollowup,
+    currentPhase,
+    source
+  }: {
+    session: VoiceSession;
+    settings: MusicPlaybackSettings;
+    userId: string | null;
+    transcript: string;
+    directAddressedToBot: boolean;
+    musicWakeLatched: boolean;
+    pausedWakeWordOwnerFollowup: boolean;
+    passiveWakeFollowupAllowed: boolean;
+    interruptedReplyOwnerFollowup: boolean;
+    currentPhase: MusicPlaybackPhase;
+    source: string;
+  }
+) {
+  const settingsRecord =
+    settings && typeof settings === "object"
+      ? settings
+      : session.settingsSnapshot && typeof session.settingsSnapshot === "object"
+        ? session.settingsSnapshot
+        : manager.store.getSettings() && typeof manager.store.getSettings() === "object"
+          ? manager.store.getSettings()
+          : {};
+  if (!isVoiceMusicBrainEnabled(settingsRecord)) {
+    return {
+      decision: "pass" as VoiceMusicBrainDecision,
+      rawText: "",
+      toolCallCount: 0,
+      totalCostUsd: 0,
+      steps: 0
+    };
+  }
+  const binding = getResolvedVoiceMusicBrainBinding(settingsRecord);
+  const llm = manager.llm;
+  if (!llm?.chatWithTools || !manager.buildVoiceToolCallbacks) {
+    return {
+      decision: "pass" as VoiceMusicBrainDecision,
+      rawText: "",
+      toolCallCount: 0,
+      totalCostUsd: 0,
+      steps: 0
+    };
+  }
+
+  const runtime: ReplyToolRuntime = {
+    voiceSession: manager.buildVoiceToolCallbacks({ session, settings })
+  };
+  const toolContext: ReplyToolContext = {
+    settings: settingsRecord,
+    guildId: session.guildId,
+    channelId: session.textChannelId || null,
+    userId: String(userId || session.requestedByUserId || "voice-user"),
+    sourceMessageId: session.id,
+    sourceText: transcript,
+    botUserId: String(manager.client.user?.id || "").trim() || undefined,
+    trace: {
+      guildId: session.guildId,
+      channelId: session.textChannelId || null,
+      userId,
+      source: "voice_music_brain"
+    }
+  };
+
+  const messages: ToolLoopMessage[] = [
+    {
+      role: "user",
+      content: transcript
+    }
+  ];
+  let step = 0;
+  let toolCallCount = 0;
+  let totalCostUsd = 0;
+  let finalText = "";
+
+  while (step < VOICE_MUSIC_BRAIN_MAX_STEPS) {
+    step++;
+    const response = await llm.chatWithTools({
+      provider: binding.provider,
+      model: binding.model,
+      systemPrompt: buildVoiceMusicBrainSystemPrompt(manager, {
+        session,
+        settings,
+        userId,
+        transcript,
+        directAddressedToBot,
+        musicWakeLatched,
+        pausedWakeWordOwnerFollowup,
+        passiveWakeFollowupAllowed,
+        interruptedReplyOwnerFollowup,
+        currentPhase,
+        source
+      }),
+      messages,
+      tools: VOICE_MUSIC_BRAIN_TOOL_DEFINITIONS,
+      maxOutputTokens: VOICE_MUSIC_BRAIN_MAX_OUTPUT_TOKENS,
+      temperature: 0,
+      trace: {
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        source: "voice_music_brain"
+      }
+    });
+    totalCostUsd += Number(response.costUsd || 0);
+    messages.push({ role: "assistant", content: response.content });
+
+    const toolCalls = response.content.filter((block) => block.type === "tool_call");
+    if (toolCalls.length <= 0) {
+      finalText = response.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text.trim())
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+      break;
+    }
+
+    const toolResults: ToolLoopContentBlock[] = [];
+    for (const toolCall of toolCalls) {
+      toolCallCount += 1;
+      const result = await executeReplyTool(
+        toolCall.name,
+        toolCall.input,
+        runtime,
+        toolContext
+      );
+      toolResults.push({
+        type: "tool_result",
+        toolCallId: toolCall.id,
+        content: result.content,
+        isError: Boolean(result.isError)
+      });
+    }
+    messages.push({
+      role: "user",
+      content: toolResults
+    });
+  }
+
+  return {
+    decision: normalizeVoiceMusicBrainDecision(finalText) || (toolCallCount > 0 ? "consumed" : "pass"),
+    rawText: finalText,
+    toolCallCount,
+    totalCostUsd,
+    steps: step
+  };
+}
+
+function hasRecentInterruptedReplyFollowup(
+  session: VoiceSession,
+  userId?: string | null,
+  now = Date.now()
+) {
+  if (!session || session.ending) return false;
+  const interrupted = session.interruptedAssistantReply;
+  if (!interrupted || typeof interrupted !== "object") return false;
+
+  const normalizedUserId = String(userId || "").trim();
+  const interruptedByUserId = String(interrupted.interruptedByUserId || "").trim();
+  if (!normalizedUserId || !interruptedByUserId || normalizedUserId !== interruptedByUserId) {
+    return false;
+  }
+
+  const interruptedAt = Math.max(0, Number(interrupted.interruptedAt || 0));
+  if (!interruptedAt) return false;
+  if (now - interruptedAt > RECENT_ENGAGEMENT_WINDOW_MS) {
+    return false;
+  }
+  if (Math.max(0, Number(session.lastAssistantReplyAt || 0)) > interruptedAt) {
+    return false;
+  }
+
+  return Boolean(normalizeInlineText(interrupted.utteranceText || "", STT_TRANSCRIPT_MAX_CHARS));
 }
 
 export function isMusicPlaybackActive(
@@ -482,6 +1093,9 @@ export async function releaseBotSpeechMusicDuck(
   }
   session.botSpeechMusicDucked = false;
   if (music) music.ducked = false;
+  if (music?.replyHandoffMode === "duck") {
+    clearPendingMusicReplyHandoff(manager, session);
+  }
   if (!force && !musicPhaseShouldAllowDucking(getMusicPhase(manager, session))) {
     return false;
   }
@@ -914,7 +1528,8 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
       requestedByUserId: resolvedUserId
     });
     if (resolvedUserId) {
-      beginVoiceCommandSession(session, {
+      manager.beginVoiceCommandSession({
+        session,
         userId: resolvedUserId,
         domain: "music",
         intent:
@@ -1057,12 +1672,19 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
       selectedResultPlatform === "discord"
     )
   );
+  const willAttemptPlayback = Boolean(selectedResult || playbackProviderConfigured);
+  if (music && willAttemptPlayback) {
+    setMusicPhase(manager, session, "loading");
+  }
 
   let playbackResult: { ok: boolean; provider: string; reason: string; message: string; status: number; track: { id: string; title: string; artistNames: string[]; externalUrl: string | null } | null; query: string | null } | null = null;
 
   if (useDiscordStreaming) {
     const discordResult = await playMusicViaDiscord(manager, session, selectedResult);
     if (!discordResult.ok) {
+      if (music) {
+        setMusicPhase(manager, session, "idle");
+      }
       logMusicAction(manager, {
         kind: "voice_error",
         guildId: session.guildId,
@@ -1136,6 +1758,9 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
     }
   }
   if (!playbackResult.ok) {
+    if (music) {
+      setMusicPhase(manager, session, "idle");
+    }
     logMusicAction(manager, {
       kind: "voice_error",
       guildId: session.guildId,
@@ -1181,6 +1806,7 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
 
   if (music) {
     setMusicPhase(manager, session, "playing");
+    clearPendingMusicReplyHandoff(manager, session);
     music.startedAt = Date.now();
     music.stoppedAt = 0;
     music.provider = playbackResult.provider || null;
@@ -1197,7 +1823,7 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
     music.lastCommandAt = Date.now();
     music.lastCommandReason = String(reason || "nl_play_music");
     clearMusicDisambiguationState(manager, session);
-    clearVoiceCommandSession(session);
+    manager.clearVoiceCommandSession(session);
   }
 
   haltSessionOutputForMusicPlayback(manager, session, "music_playback_started");
@@ -1372,6 +1998,7 @@ export async function requestStopMusic(manager: MusicPlaybackHost, {
       : playbackResult.reason || null;
   if (music) {
     setMusicPhase(manager, session, "idle");
+    clearPendingMusicReplyHandoff(manager, session);
     music.stoppedAt = Date.now();
     if (!music.provider) {
       music.provider = resolvedProvider || null;
@@ -1527,6 +2154,7 @@ export async function requestPauseMusic(manager: MusicPlaybackHost, {
     // Transition to paused — session unlocks so the bot can converse,
     // but musicPhaseCanResume() returns true so /resume works.
     setMusicPhase(manager, session, "paused", "user_pause");
+    clearPendingMusicReplyHandoff(manager, session);
     music.source = String(source || "text_voice_intent");
     music.lastRequestedByUserId = resolvedUserId || music.lastRequestedByUserId || null;
     music.lastRequestText = normalizedRequestText;
@@ -1640,6 +2268,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
   pcmBuffer,
   captureReason = "stream_end",
   source = "voice_turn",
+  musicWakeFollowupEligibleAtCapture = false,
   transcript: preTranscript = undefined as string | undefined
 }) {
   if (!session || session.ending) return false;
@@ -1674,14 +2303,18 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
     const sampleRateHz = source === "file_asr" ? 24000 : Number(session.realtimeInputSampleRateHz) || 24000;
     const voiceRuntime = getVoiceRuntimeConfig(settings);
     const preferredModel = voiceRuntime.openaiRealtime?.inputTranscriptionModel;
-    const primaryModel = String(preferredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
-    const fallbackModel = primaryModel === "gpt-4o-mini-transcribe" ? "whisper-1" : "";
-
-    let transcript = await manager.transcribePcmTurn({
+    const transcriptionPlan = resolveTurnTranscriptionPlan({
+      mode: session.mode,
+      configuredModel: preferredModel,
+      pcmByteLength: pcmBuffer.length,
+      sampleRateHz
+    });
+    const transcriptionResult = await transcribePcmTurnWithPlan({
+      transcribe: manager.transcribePcmTurn,
       session,
       userId,
       pcmBuffer,
-      model: primaryModel,
+      plan: transcriptionPlan,
       sampleRateHz,
       captureReason,
       traceSource: `voice_music_stop_${String(source || "voice_turn")}`,
@@ -1692,25 +2325,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
       asrPrompt: asrLanguageGuidance.prompt
     });
 
-    if (!transcript && fallbackModel && fallbackModel !== primaryModel) {
-      transcript = await manager.transcribePcmTurn({
-        session,
-        userId,
-        pcmBuffer,
-        model: fallbackModel,
-        sampleRateHz,
-        captureReason,
-        traceSource: `voice_music_stop_${String(source || "voice_turn")}_fallback`,
-        errorPrefix: "voice_music_transcription_fallback_failed",
-        emptyTranscriptRuntimeEvent: "voice_music_transcription_empty",
-        emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
-        suppressEmptyTranscriptLogs: true,
-        asrLanguage: asrLanguageGuidance.language,
-        asrPrompt: asrLanguageGuidance.prompt
-      });
-    }
-
-    normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    normalizedTranscript = normalizeInlineText(transcriptionResult.transcript, STT_TRANSCRIPT_MAX_CHARS);
   }
   if (!normalizedTranscript) {
     logMusicAction(manager, {
@@ -1729,6 +2344,23 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
     return true;
   }
   const directAddressedToBot = isVoiceTurnAddressedToBot(normalizedTranscript, resolvedSettings);
+  const normalizedUserId = String(userId || "").trim() || null;
+  const wakeFollowupState = getMusicWakeFollowupState(session, normalizedUserId);
+  const currentPhase = wakeFollowupState.currentPhase;
+  const latchedUserId = wakeFollowupState.latchedUserId;
+  const currentWakeLatched = wakeFollowupState.active;
+  const pausedWakeWordOwnerFollowup = wakeFollowupState.pausedWakeWordOwnerFollowup;
+  const passiveWakeFollowupAllowed =
+    wakeFollowupState.passiveWakeFollowupAllowed ||
+    Boolean(musicWakeFollowupEligibleAtCapture);
+  const interruptedReplyOwnerFollowup = hasRecentInterruptedReplyFollowup(session, normalizedUserId);
+  const musicWakeLatched =
+    currentWakeLatched ||
+    Boolean(musicWakeFollowupEligibleAtCapture);
+  const mainBrainEligible =
+    directAddressedToBot ||
+    passiveWakeFollowupAllowed ||
+    interruptedReplyOwnerFollowup;
   const disambiguationResolutionTurn = manager.isMusicDisambiguationResolutionTurn(
     session,
     userId,
@@ -1746,18 +2378,151 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
   if (handledPendingDisambiguation) {
     return true;
   }
+  const musicBrainEnabled = isVoiceMusicBrainEnabled(resolvedSettings);
+  const compactControlCommand =
+    musicBrainEnabled && !directAddressedToBot
+      ? resolveCompactVoiceMusicControlCommand(normalizedTranscript, currentPhase)
+      : null;
+  const controlCommandCandidate =
+    !directAddressedToBot &&
+    isLikelyVoiceMusicControlCommandTurn(manager, {
+      transcript: normalizedTranscript,
+      currentPhase
+    });
+  const shouldConsultMusicBrain =
+    musicBrainEnabled &&
+    !compactControlCommand &&
+    (disambiguationResolutionTurn || controlCommandCandidate);
+  const gateDecisionReason = directAddressedToBot
+    ? "direct_address"
+    : disambiguationResolutionTurn
+      ? "disambiguation"
+      : compactControlCommand
+        ? `fast_path_${compactControlCommand}`
+      : controlCommandCandidate
+        ? "music_control_candidate"
+      : pausedWakeWordOwnerFollowup
+        ? "paused_wake_word_owner"
+        : passiveWakeFollowupAllowed
+          ? (currentWakeLatched ? "wake_latch_open" : "wake_latch_capture_open")
+          : interruptedReplyOwnerFollowup
+            ? "interrupted_reply_followup"
+          : "swallowed";
 
-  // Heuristic-only stop/pause/resume/skip detection — no LLM round-trip.
-  // Each requires verb + music cue word (e.g. "stop music", "pause the song",
-  // "play the song", "skip track"). Bot-name commands ("Clanker, stop") go
-  // through the directAddressedToBot → LLM path instead.
-  const currentPhase = getMusicPhase(manager, session);
-  const shouldPause = isLikelyMusicPausePhrase(manager, { transcript: normalizedTranscript });
-  const shouldStop = !shouldPause && isLikelyMusicStopPhrase(manager, { transcript: normalizedTranscript });
-  const shouldResume = !shouldPause && !shouldStop
-    && musicPhaseCanResume(currentPhase)
-    && isLikelyMusicResumePhrase(manager, { transcript: normalizedTranscript });
-  const shouldSkip = !shouldPause && !shouldStop && !shouldResume && isLikelyMusicSkipPhrase(manager, { transcript: normalizedTranscript });
+  if (compactControlCommand) {
+    logMusicAction(manager, {
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: "voice_music_stop_check",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "voice_turn"),
+        captureReason: String(captureReason || "stream_end"),
+        transcript: normalizedTranscript,
+        currentPhase,
+        musicWakeLatched,
+        musicWakeCurrentLatched: currentWakeLatched,
+        musicWakeFollowupEligibleAtCapture: Boolean(musicWakeFollowupEligibleAtCapture),
+        musicWakeLatchedByUserId: latchedUserId,
+        interruptedReplyOwnerFollowup,
+        pausedWakeWordOwnerFollowup,
+        directAddressedToBot,
+        disambiguationResolutionTurn,
+        compactControlCommand,
+        musicBrainEnabled: true,
+        decisionReason: gateDecisionReason
+      }
+    });
+    return await executeCompactVoiceMusicControlCommand(manager, {
+      session,
+      settings: resolvedSettings,
+      userId: normalizedUserId,
+      transcript: normalizedTranscript,
+      command: compactControlCommand,
+      source: `voice_fast_path:${String(source || "voice_turn")}`
+    });
+  }
+
+  if (mainBrainEligible && !disambiguationResolutionTurn && !controlCommandCandidate) {
+    clearPendingMusicReplyHandoff(manager, session);
+    logMusicAction(manager, {
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: "voice_music_stop_check",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "voice_turn"),
+        captureReason: String(captureReason || "stream_end"),
+        transcript: normalizedTranscript,
+        currentPhase,
+        musicWakeLatched,
+        musicWakeCurrentLatched: currentWakeLatched,
+        musicWakeFollowupEligibleAtCapture: Boolean(musicWakeFollowupEligibleAtCapture),
+        musicWakeLatchedByUserId: latchedUserId,
+        interruptedReplyOwnerFollowup,
+        pausedWakeWordOwnerFollowup,
+        directAddressedToBot,
+        disambiguationResolutionTurn,
+        gateDecisionReason,
+        musicBrainEnabled,
+        decisionReason: "main_brain_decides"
+      }
+    });
+    return false;
+  }
+
+  if (!shouldConsultMusicBrain) {
+    clearPendingMusicReplyHandoff(manager, session);
+    logMusicAction(manager, {
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: "voice_music_stop_check",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "voice_turn"),
+        captureReason: String(captureReason || "stream_end"),
+        transcript: normalizedTranscript,
+        currentPhase,
+        musicWakeLatched,
+        musicWakeCurrentLatched: currentWakeLatched,
+        musicWakeFollowupEligibleAtCapture: Boolean(musicWakeFollowupEligibleAtCapture),
+        musicWakeLatchedByUserId: latchedUserId,
+        interruptedReplyOwnerFollowup,
+        pausedWakeWordOwnerFollowup,
+        directAddressedToBot,
+        disambiguationResolutionTurn,
+        gateDecisionReason,
+        decisionReason: gateDecisionReason
+      }
+    });
+    return true;
+  }
+
+  const musicBrainDecision = await runVoiceMusicBrainDecision(manager, {
+    session,
+    settings: resolvedSettings,
+    userId: normalizedUserId,
+      transcript: normalizedTranscript,
+      directAddressedToBot,
+      musicWakeLatched,
+      pausedWakeWordOwnerFollowup,
+      passiveWakeFollowupAllowed,
+      interruptedReplyOwnerFollowup,
+    currentPhase,
+    source: String(source || "voice_turn")
+  });
+
+  const resolvedBrainDecision = musicBrainDecision.decision;
+  const decisionReason =
+    resolvedBrainDecision === "consumed"
+      ? "music_brain_consumed"
+      : "music_brain_pass";
   logMusicAction(manager, {
     kind: "voice_runtime",
     guildId: session.guildId,
@@ -1769,135 +2534,30 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
       source: String(source || "voice_turn"),
       captureReason: String(captureReason || "stream_end"),
       transcript: normalizedTranscript,
-      shouldStop,
-      shouldPause,
-      shouldResume,
-      shouldSkip,
+      currentPhase,
+      musicWakeLatched,
+      musicWakeLatchedByUserId: latchedUserId,
+      interruptedReplyOwnerFollowup,
+      pausedWakeWordOwnerFollowup,
       directAddressedToBot,
-      decisionReason: shouldPause
-        ? "heuristic_pause"
-        : shouldStop
-          ? "heuristic_stop"
-          : shouldResume
-            ? "heuristic_resume"
-            : shouldSkip
-              ? "heuristic_skip"
-              : directAddressedToBot
-                ? "direct_address"
-                : disambiguationResolutionTurn
-                  ? "disambiguation"
-                  : "swallowed"
-    }
+      disambiguationResolutionTurn,
+      gateDecisionReason,
+      musicBrainDecision: resolvedBrainDecision,
+      musicBrainRawText: musicBrainDecision.rawText || null,
+      musicBrainToolCalls: Number(musicBrainDecision.toolCallCount || 0),
+      musicBrainCostUsd: Number(musicBrainDecision.totalCostUsd || 0) || 0,
+      decisionReason
+    },
+    usdCost: musicBrainDecision.totalCostUsd || undefined
   });
 
-  if (shouldPause) {
-    await requestPauseMusic(manager, {
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      requestedByUserId: userId,
-      settings: resolvedSettings,
-      reason: "voice_music_pause_phrase",
-      source: `voice_${String(source || "voice_turn")}`,
-      requestText: normalizedTranscript,
-      mustNotify: false
-    });
+  if (resolvedBrainDecision === "consumed") {
+    clearPendingMusicReplyHandoff(manager, session);
     return true;
   }
 
-  if (shouldStop) {
-    await requestStopMusic(manager, {
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      requestedByUserId: userId,
-      settings: resolvedSettings,
-      reason: "voice_music_stop_phrase",
-      source: `voice_${String(source || "voice_turn")}`,
-      requestText: normalizedTranscript,
-      clearQueue: true,
-      mustNotify: false
-    });
-    return true;
-  }
-
-  if (shouldResume) {
-    manager.musicPlayer?.resume?.();
-    setMusicPhase(manager, session, "playing");
-    haltSessionOutputForMusicPlayback(manager, session, "music_resumed_voice_heuristic");
-    const queueState = ensureToolMusicQueueState(manager, session);
-    if (queueState) queueState.isPaused = false;
-    logMusicAction(manager, {
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId,
-      content: "voice_music_resumed",
-      metadata: {
-        sessionId: session.id,
-        source: String(source || "voice_turn"),
-        reason: "voice_music_resume_phrase",
-        requestText: normalizedTranscript
-      }
-    });
-    return true;
-  }
-
-  if (shouldSkip) {
-    const queueState = ensureToolMusicQueueState(manager, session);
-    if (!queueState || queueState.nowPlayingIndex == null) {
-      await requestStopMusic(manager, {
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        requestedByUserId: userId,
-        settings: resolvedSettings,
-        reason: "voice_music_skip_phrase_no_queue",
-        source: `voice_${String(source || "voice_turn")}`,
-        requestText: normalizedTranscript,
-        mustNotify: false
-      });
-    } else {
-      const nextIndex = queueState.nowPlayingIndex + 1;
-      await requestStopMusic(manager, {
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        requestedByUserId: userId,
-        settings: resolvedSettings,
-        reason: "voice_music_skip_phrase",
-        source: `voice_${String(source || "voice_turn")}`,
-        requestText: normalizedTranscript,
-        mustNotify: false
-      });
-      if (nextIndex < queueState.tracks.length) {
-        await manager.playVoiceQueueTrackByIndex({ session, settings: resolvedSettings, index: nextIndex });
-      } else {
-        queueState.nowPlayingIndex = null;
-        queueState.isPaused = false;
-      }
-    }
-    return true;
-  }
-
-  if (directAddressedToBot || disambiguationResolutionTurn) {
-    // Pause music so the output lock releases and the bot can respond.
-    if (directAddressedToBot) {
-      setMusicPhase(manager, session, "paused_wake_word", "wake_word");
-      manager.musicPlayer?.pause?.();
-      logMusicAction(manager, {
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: "voice_music_paused_for_wake_word",
-        metadata: {
-          sessionId: session.id,
-          transcript: normalizedTranscript,
-          source: String(source || "voice_turn")
-        }
-      });
-    }
-    return false;
-  }
-
-  return true;
+  clearPendingMusicReplyHandoff(manager, session);
+  return false;
 }
 
 export async function handleMusicSlashCommand(
@@ -2197,7 +2857,8 @@ export async function handleMusicSlashCommand(
         results,
         requestedByUserId: user.id
       });
-      beginVoiceCommandSession(session, {
+      manager.beginVoiceCommandSession({
+        session,
         userId: user.id,
         domain: "music",
         intent: action === "play_now" ? "music_disambiguation" : `${action}_disambiguation`
@@ -2213,7 +2874,7 @@ export async function handleMusicSlashCommand(
     }
 
     clearMusicDisambiguationState(manager, session);
-    clearVoiceCommandSession(session);
+    manager.clearVoiceCommandSession(session);
     return await queueTrackForAction({
       session,
       query: resolvedQuery,

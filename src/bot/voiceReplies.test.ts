@@ -9,30 +9,74 @@ import {
 } from "./voiceReplies.ts";
 import { createTestSettings } from "../testSettings.ts";
 import { createAbortError } from "../tools/browserTaskRuntime.ts";
+import { deepMerge } from "../utils.ts";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
 
 function baseSettings(overrides = {}) {
+  const raw = isRecord(overrides) ? overrides : {};
+  const llm = isRecord(raw.llm) ? raw.llm : {};
+  const memory = isRecord(raw.memory) ? raw.memory : {};
+  const webSearch = isRecord(raw.webSearch) ? raw.webSearch : {};
+  const voice = isRecord(raw.voice) ? raw.voice : {};
+  const generationLlm = isRecord(voice.generationLlm) ? voice.generationLlm : {};
+  const soundboard = isRecord(voice.soundboard) ? voice.soundboard : {};
+  const codeAgent = isRecord(raw.codeAgent) ? raw.codeAgent : {};
+  const codeAgentProvider = String(codeAgent.provider || "").trim().toLowerCase();
+
   const base = {
-    botName: "clanker conk",
+    identity: {
+      botName: "clanker conk"
+    },
     persona: {
       flavor: "casual",
       hardLimits: []
     },
-    llm: {
-      provider: "openai",
-      model: "claude-haiku-4-5",
-      temperature: 0.8,
-      maxOutputTokens: 160
+    agentStack: {
+      overrides: {
+        orchestrator: {
+          provider: "openai",
+          model: "claude-haiku-4-5"
+        }
+      },
+      runtimeConfig: {
+        research: {
+          enabled: false
+        },
+        voice: {
+          generation: {
+            mode: "dedicated_model",
+            model: {
+              provider: "openai",
+              model: "claude-haiku-4-5"
+            }
+          }
+        }
+      }
+    },
+    interaction: {
+      replyGeneration: {
+        temperature: 0.8,
+        maxOutputTokens: 160
+      }
     },
     memory: {
       enabled: false
     },
-    webSearch: {
-      enabled: false
+    permissions: {
+      devTasks: {
+        allowedUserIds: []
+      }
     },
     voice: {
-      generationLlm: {
-        provider: "openai",
-        model: "claude-haiku-4-5"
+      conversationPolicy: {
+        streaming: {
+          enabled: true,
+          eagerFirstChunkChars: 30,
+          maxBufferChars: 300
+        }
       },
       soundboard: {
         enabled: false
@@ -40,38 +84,72 @@ function baseSettings(overrides = {}) {
     }
   };
 
-  return createTestSettings({
-    ...base,
-    ...overrides,
-    persona: {
-      ...base.persona,
-      ...(overrides.persona || {})
+  return createTestSettings(deepMerge(base, {
+    identity: {
+      botName: String(raw.botName || base.identity.botName)
     },
-    llm: {
-      ...base.llm,
-      ...(overrides.llm || {})
+    persona: isRecord(raw.persona) ? raw.persona : {},
+    interaction: {
+      replyGeneration: {
+        temperature: llm.temperature,
+        maxOutputTokens: llm.maxOutputTokens
+      }
     },
     memory: {
-      ...base.memory,
-      ...(overrides.memory || {})
+      enabled: memory.enabled
     },
-    webSearch: {
-      ...base.webSearch,
-      ...(overrides.webSearch || {})
+    permissions: {
+      devTasks: {
+        allowedUserIds: codeAgent.allowedUserIds
+      }
+    },
+    agentStack: {
+      overrides: {
+        orchestrator: {
+          provider: llm.provider,
+          model: llm.model
+        }
+      },
+      runtimeConfig: {
+        research: {
+          enabled: webSearch.enabled
+        },
+        voice: {
+          generation:
+            generationLlm.useTextModel
+              ? { mode: "inherit_orchestrator" }
+              : {
+                  mode: "dedicated_model",
+                  model: {
+                    provider: generationLlm.provider,
+                    model: generationLlm.model
+                  }
+                }
+        },
+        devTeam: {
+          codex: {
+            enabled: codeAgentProvider === "codex"
+          },
+          codexCli: {
+            enabled: codeAgentProvider === "codex-cli" || codeAgentProvider === "auto"
+          },
+          claudeCode: {
+            enabled: codeAgentProvider === "claude-code" || codeAgentProvider === "auto"
+          }
+        }
+      }
     },
     voice: {
-      ...base.voice,
-      ...(overrides.voice || {}),
-      generationLlm: {
-        ...base.voice.generationLlm,
-        ...(overrides.voice?.generationLlm || {})
+      conversationPolicy: {
+        streaming: {
+          enabled: voice.streamingEnabled,
+          eagerFirstChunkChars: voice.streamingEagerFirstChunkChars,
+          maxBufferChars: voice.streamingMaxBufferChars
+        }
       },
-      soundboard: {
-        ...base.voice.soundboard,
-        ...(overrides.voice?.soundboard || {})
-      }
+      soundboard
     }
-  });
+  }));
 }
 
 function structuredVoiceOutput(overrides: {
@@ -595,6 +673,63 @@ test("generateVoiceTurnReply preserves inline soundboard directives for streamed
   assert.equal(reply.streamedRequestedRealtimeUtterance, true);
 });
 
+test("generateVoiceTurnReply strips a leading reply-addressing directive from non-streaming speech", async () => {
+  const { bot } = createVoiceBot({
+    generationSequence: [
+      {
+        text: "[[TO:ALL]] alright everybody, lock in"
+      }
+    ]
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "say it to the whole room"
+  });
+
+  assert.equal(reply.text, "alright everybody, lock in");
+  assert.equal(reply.voiceAddressing?.talkingTo, "ALL");
+});
+
+test("generateVoiceTurnReply parses a leading reply-addressing directive before streaming speech dispatch", async () => {
+  const streamed: string[] = [];
+  const streamedTargets: Array<string | null> = [];
+  const { bot } = createVoiceBot({
+    generationSequence: [
+      {
+        text: "[[TO:SPEAKER]] nah, the other one",
+        textDeltas: ["[[TO:SPEAKER]] nah, ", "the other one"]
+      }
+    ]
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      voice: {
+        streamingEnabled: true,
+        streamingEagerFirstChunkChars: 12,
+        streamingMaxBufferChars: 120
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "correct that",
+    onSpokenSentence: ({ text, voiceAddressing }) => {
+      streamed.push(text);
+      streamedTargets.push(voiceAddressing?.talkingTo || null);
+    }
+  });
+
+  assert.deepEqual(streamed, ["nah, the other one"]);
+  assert.deepEqual(streamedTargets, ["alice"]);
+  assert.equal(reply.text, "nah, the other one");
+  assert.equal(reply.voiceAddressing?.talkingTo, "alice");
+});
+
 test("generateVoiceTurnReply preserves spoken text across tool-loop turns", async () => {
   const { bot } = createVoiceBot({
     generationSequence: [
@@ -877,7 +1012,7 @@ test("generateVoiceTurnReply handles representative soundboard permutations", as
   }
 });
 
-test("generateVoiceTurnReply returns direct-address fallback voice addressing without a tool", async () => {
+test("generateVoiceTurnReply leaves assistant reply targeting unset when the hidden audience prefix is missing", async () => {
   const { bot, getGenerationCalls } = createVoiceBot({
     generationSequence: [
       {
@@ -896,8 +1031,7 @@ test("generateVoiceTurnReply returns direct-address fallback voice addressing wi
   });
 
   assert.equal(reply.text, "yo");
-  assert.equal(reply.voiceAddressing?.talkingTo, "ME");
-  assert.equal(reply.voiceAddressing?.directedConfidence, 0.72);
+  assert.equal(reply.voiceAddressing, null);
   assert.equal(getGenerationCalls(), 1);
 });
 
@@ -1125,6 +1259,174 @@ test("generateVoiceTurnReply includes all tool results when a continuation-requi
     toolResults.map((entry) => entry?.tool_use_id),
     ["tc_1", "tc_2"]
   );
+});
+
+test("generateVoiceTurnReply marks music disambiguation tool followups as replay-safe on the in-flight turn", async () => {
+  const activeVoiceSession = {
+    id: "voice-session-tool-recovery-safe",
+    durableContext: [],
+    inFlightAcceptedBrainTurn: {
+      transcript: "play some minecraft music",
+      userId: "user-1",
+      pcmBuffer: null,
+      source: "realtime",
+      acceptedAt: Date.now(),
+      phase: "generation_only",
+      captureReason: "stream_end",
+      directAddressed: true,
+      toolPhaseRecoveryEligible: false,
+      toolPhaseRecoveryReason: null,
+      toolPhaseLastToolName: null
+    }
+  };
+  const { bot } = createVoiceBot({
+    activeVoiceSession
+  });
+  let generationCalls = 0;
+  const runGeneration = async (payload) => {
+    generationCalls += 1;
+    if (generationCalls === 1) {
+      payload?.onTextDelta?.("");
+      return {
+        text: "",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "music_play",
+            input: {
+              query: "Minecraft calm relaxing music",
+              platform: "youtube"
+            }
+          }
+        ],
+        rawContent: [
+          {
+            type: "tool_use",
+            id: "tc_1",
+            name: "music_play",
+            input: {
+              query: "Minecraft calm relaxing music",
+              platform: "youtube"
+            }
+          }
+        ]
+      };
+    }
+    throw createAbortError("superseded by newer capture");
+  };
+  bot.llm.generate = runGeneration;
+  bot.llm.generateStreaming = runGeneration;
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "play some minecraft music",
+    sessionId: "voice-session-tool-recovery-safe",
+    voiceToolCallbacks: {
+      musicPlay: async () => ({
+        ok: true,
+        status: "needs_disambiguation",
+        query: "Minecraft calm relaxing music",
+        options: [
+          { id: "track-1", title: "Minecraft Calm", artist: "C418", platform: "youtube" }
+        ]
+      })
+    }
+  });
+
+  assert.equal(reply.text, "");
+  assert.equal(activeVoiceSession.inFlightAcceptedBrainTurn.phase, "tool_call_started");
+  assert.equal(activeVoiceSession.inFlightAcceptedBrainTurn.toolPhaseRecoveryEligible, true);
+  assert.equal(
+    activeVoiceSession.inFlightAcceptedBrainTurn.toolPhaseRecoveryReason,
+    "music_play_needs_disambiguation"
+  );
+  assert.equal(activeVoiceSession.inFlightAcceptedBrainTurn.toolPhaseLastToolName, "music_play");
+});
+
+test("generateVoiceTurnReply keeps playback-starting music tool followups non-recoverable", async () => {
+  const activeVoiceSession = {
+    id: "voice-session-tool-recovery-unsafe",
+    durableContext: [],
+    inFlightAcceptedBrainTurn: {
+      transcript: "play some minecraft music",
+      userId: "user-1",
+      pcmBuffer: null,
+      source: "realtime",
+      acceptedAt: Date.now(),
+      phase: "generation_only",
+      captureReason: "stream_end",
+      directAddressed: true,
+      toolPhaseRecoveryEligible: false,
+      toolPhaseRecoveryReason: null,
+      toolPhaseLastToolName: null
+    }
+  };
+  const { bot } = createVoiceBot({
+    activeVoiceSession
+  });
+  let generationCalls = 0;
+  const runGeneration = async (payload) => {
+    generationCalls += 1;
+    if (generationCalls === 1) {
+      payload?.onTextDelta?.("");
+      return {
+        text: "",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "music_play",
+            input: {
+              query: "Minecraft calm relaxing music",
+              platform: "youtube"
+            }
+          }
+        ],
+        rawContent: [
+          {
+            type: "tool_use",
+            id: "tc_1",
+            name: "music_play",
+            input: {
+              query: "Minecraft calm relaxing music",
+              platform: "youtube"
+            }
+          }
+        ]
+      };
+    }
+    throw createAbortError("superseded by newer capture");
+  };
+  bot.llm.generate = runGeneration;
+  bot.llm.generateStreaming = runGeneration;
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "play some minecraft music",
+    sessionId: "voice-session-tool-recovery-unsafe",
+    voiceToolCallbacks: {
+      musicPlay: async () => ({
+        ok: true,
+        status: "loading",
+        query: "Minecraft calm relaxing music"
+      })
+    }
+  });
+
+  assert.equal(reply.text, "");
+  assert.equal(activeVoiceSession.inFlightAcceptedBrainTurn.phase, "tool_call_started");
+  assert.equal(activeVoiceSession.inFlightAcceptedBrainTurn.toolPhaseRecoveryEligible, false);
+  assert.equal(
+    activeVoiceSession.inFlightAcceptedBrainTurn.toolPhaseRecoveryReason,
+    "music_play_started_loading"
+  );
+  assert.equal(activeVoiceSession.inFlightAcceptedBrainTurn.toolPhaseLastToolName, "music_play");
+  assert.equal(generationCalls, 1);
 });
 
 test("generateVoiceTurnReply forwards browser screenshots from tool results into the continuation model call", async () => {

@@ -1,0 +1,45 @@
+flowchart TD
+    subgraph DET["Deterministic Floor Control"]
+        A["Music playing<br/>wake latch closed"]
+        B["Music paused for floor<br/>phase=paused_wake_word"]
+        D["Music playing<br/>wake latch renewed/open"]
+        X["Deny ordinary non-wake chatter"]
+    end
+
+    subgraph MODEL["Model-Owned Follow-Up Decision"]
+        E{"Eligible follow-up<br/>decision layer"}
+        P["pause<br/>pause for one reply"]
+        U["duck<br/>reply ducks live music"]
+        V["pass<br/>leave playback unchanged"]
+    end
+
+    A -- "fresh wake / direct address" --> B
+    A -- "ordinary chatter" --> X
+
+    B -- "assistant reply drains<br/>no active capture" --> D
+    B -- "wake speaker ordinary follow-up" --> B
+    B -- "other speaker ordinary chatter" --> X
+
+    D -- "latch expires" --> A
+    D -- "brand-new explicit wake" --> B
+    D -- "latch-open follow-up" --> E
+
+    E -- "pause" --> B
+    E -- "duck" --> U
+    E -- "pass" --> V
+
+    U -- "reply drains" --> D
+    V -- "reply ends or [SKIP]" --> D
+
+    N["Latch-open eligibility snapshots when capture promotes,<br/>so a turn that started inside the window can still continue."]
+    N -.-> D
+
+    classDef det fill:#173042,stroke:#4f86a6,stroke-width:2px,color:#ffffff
+    classDef model fill:#2f3b1d,stroke:#8aa05a,stroke-width:2px,color:#ffffff
+    classDef deny fill:#4a2525,stroke:#b76e6e,stroke-width:2px,color:#ffffff
+    classDef note fill:#2c2c2c,stroke:#8b8b8b,stroke-dasharray: 5 5,color:#ffffff
+
+    class A,B,D det
+    class E,P,U,V model
+    class X deny
+    class N note
