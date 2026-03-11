@@ -137,7 +137,6 @@ Normalization responsibilities:
 - clamp numeric ranges
 - sanitize lists and strings
 - normalize incoming settings into canonical nested fields
-- rewrite persisted legacy preset/admission aliases into canonical JSON during store bootstrap
 - apply preset defaults when canonical fields are absent
 
 Dashboard save semantics:

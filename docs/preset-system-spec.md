@@ -100,7 +100,6 @@ User settings (data/settings.json)
 Normalization (settingsNormalization.ts + store/normalize/*)
   ├── Preset name normalization via agentStackCatalog.ts
   ├── Preset config seeds defaults for admission mode, reply path, TTS mode
-  ├── Store bootstrap rewrites old persisted rows into canonical preset/admission names before normalization
   └── Per-section normalization (bounds, validation) via settingsConstraints.ts
   ↓
 Resolved Agent Stack (agentStack.ts → resolveAgentStack())
