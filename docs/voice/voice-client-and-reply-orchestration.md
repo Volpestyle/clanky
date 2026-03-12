@@ -609,7 +609,7 @@ Same-utterance late ASR revisions are treated as replacements, not as brand-new 
 
 **Cleanup on abort:** Catch `AbortError`, log `voice_generation_aborted_superseded`, skip playback, let the newer turn proceed through the queue drain, and keep watchdog/timer cleanup nonfatal so the abort does not escape as a process-level crash.
 
-### Stage 3: Pre-playback supersede (existing)
+### Stage 3: Pre-playback hold / supersede
 
 `maybeSupersedeRealtimeReplyBeforePlayback` runs before each speech playback step:
 
@@ -620,12 +620,27 @@ Same-utterance late ASR revisions are treated as replacements, not as brand-new 
 
 This is the final safety net for anything that slips through stages 1 and 2.
 
+There is also a narrower pre-audio yield path for the authorized same speaker.
+When Realtime ASR emits `speech_started` before any assistant audio has started
+and the admitted turn is still `generation_only`, the runtime records
+`heldPrePlaybackReply` instead of destroying the old turn immediately:
+
+- the older reply can keep generating
+- exact-line playback requests queue behind the hold instead of speaking
+- the new finalized transcript then resolves the hold:
+  - `ignore` means commentary or backchannel; drop the newer turn and release the queued old reply
+  - `replace` means a real revision/new request; abort or discard the old reply and admit the newer turn
+- if the old turn reaches a tool boundary before the newer transcript resolves,
+  the hold escalates to the destructive preplay supersede path because tool work
+  is no longer safely ignorable
+
 ### Behavior summary
 
 | Scenario | Stage | What happens |
 |---|---|---|
 | User corrects before generation starts | 1 | Skip generation, let newer turn process |
 | User corrects during generation | 2 | Abort LLM call, skip playback |
+| Same speaker comments before first audio | 3 | Hold old reply, classify finalized transcript as `ignore` or `replace` |
 | User corrects after generation, before playback | 3 | Drop at playback gate |
 | Clean short sentence, no correction | — | Normal path, no gating triggered |
 

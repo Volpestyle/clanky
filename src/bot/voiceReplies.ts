@@ -1434,6 +1434,17 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       let toolResultImageInputsAdded = false;
       let continuationRequested = false;
       if (activeVoiceSession?.inFlightAcceptedBrainTurn?.phase === "generation_only") {
+        const heldReplyAbortedBeforeToolCall =
+          activeVoiceSession &&
+          typeof runtime.voiceSessionManager?.abortHeldPrePlaybackReplyBeforeToolCall === "function"
+            ? runtime.voiceSessionManager.abortHeldPrePlaybackReplyBeforeToolCall({
+              session: activeVoiceSession,
+              source: "voice_generation_tool_boundary"
+            })
+            : false;
+        if (heldReplyAbortedBeforeToolCall) {
+          throw createAbortError("held_preplay_reply_replaced_before_tool_call");
+        }
         activeVoiceSession.inFlightAcceptedBrainTurn.phase = "tool_call_started";
         activeVoiceSession.inFlightAcceptedBrainTurn.toolPhaseRecoveryEligible = false;
         activeVoiceSession.inFlightAcceptedBrainTurn.toolPhaseRecoveryReason = "tool_call_started";

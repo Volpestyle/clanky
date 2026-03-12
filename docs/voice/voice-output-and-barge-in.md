@@ -219,9 +219,13 @@ Wake-word interruption is a transcript-level override, separate from the fast ac
 - in `"none"` mode the override stays disabled
 
 In ASR-bridge sessions, server-confirmed `speech_started` from the authorized
-speaker also gets a preplay supersede chance before any assistant audio has
-begun, so queued reply audio does not jump in front of someone who is already
-taking the floor.
+speaker first gets a non-destructive preplay hold chance before any assistant
+audio has begun. Same-speaker `generation_only` replies can keep generating,
+but playback stays blocked until the later finalized transcript resolves as
+`ignore` or `replace`. If the reply is already queued, already pending audio,
+or has crossed into a non-holdable phase, the runtime falls back to the older
+destructive preplay supersede path so queued reply audio still does not jump in
+front of someone who is already taking the floor.
 
 This is intentionally narrower than full `"anyone"` talk-over. In `"speaker"` mode, the current reply target gets the ordinary fast path, while a non-speaker still needs either an explicit wake-word turn or transcript-overlap arbitration that looks like a real floor takeover.
 

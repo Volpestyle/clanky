@@ -656,6 +656,12 @@ export interface SupersededPrePlaybackReply {
     supersededBySource: string;
 }
 
+export interface HeldPrePlaybackReply {
+    userId: string | null;
+    startedAt: number;
+    source: string;
+}
+
 export type DeferredVoiceActionType = "queued_user_turns";
 
 type DeferredVoiceActionStatus = "scheduled" | "deferred";
@@ -1097,6 +1103,7 @@ export interface VoiceSession {
     lastGenerationContext?: VoiceGenerationContextSnapshot | null;
     livePromptState?: VoiceLivePromptState | null;
     inFlightAcceptedBrainTurn?: InFlightAcceptedBrainTurn | null;
+    heldPrePlaybackReply?: HeldPrePlaybackReply | null;
     supersededPrePlaybackReply?: SupersededPrePlaybackReply | null;
     openAiAsrSessionIdleTtlMs?: number;
     realtimeTurnCoalesceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;

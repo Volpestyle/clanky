@@ -82,7 +82,7 @@ The hybrid design is deliberate:
 
 Promotion side effects:
 
-- May cancel pending pre-audio system speech, but local-only `strong_local_audio` promotion waits for Realtime VAD confirmation before it can supersede preplay reply generation
+- May hold or cancel pending pre-audio speech depending on phase, but local-only `strong_local_audio` promotion waits for Realtime VAD confirmation before it can supersede preplay reply generation
 - Begins shared ASR utterance (if shared ASR mode) and flushes buffered PCM
 - Updates `session.lastInboundAudioAt`
 - Emits `voice_activity_started` log event
@@ -443,7 +443,7 @@ The `OpenAiRealtimeTranscriptionClient` emits:
 | Event | Handler | Effect on ASR State |
 |---|---|---|
 | `transcript` | `wireClientEvents` | Updates `utterance.finalSegments` / `partialText`, sets `lastTranscriptAt`. Shared mode: populates `finalTranscriptsByItemId`. |
-| `speech_started` | `wireClientEvents` | Sets `speechDetectedAt`, `speechDetectedUtteranceId`, `speechActive = true`. Used by capture promotion (see [Section 4](#4-promotion-signals)) and, in transcript-overlap sessions, arms a pending same-speaker interrupt sustain window for the currently authorized interrupter. The runtime keeps re-checking the same assertive acoustic gate used for raw barge-in while that utterance stays active, so an early under-threshold `speech_started` can still mature into a real interrupt. |
+| `speech_started` | `wireClientEvents` | Sets `speechDetectedAt`, `speechDetectedUtteranceId`, `speechActive = true`. Used by capture promotion (see [Section 4](#4-promotion-signals)) and, in transcript-overlap sessions, arms a pending same-speaker interrupt sustain window for the currently authorized interrupter. Before assistant audio starts, that same authorized `speech_started` can also place a `generation_only` preplay reply on hold so playback waits for the later finalized transcript to resolve as `ignore` or `replace`. The runtime keeps re-checking the same assertive acoustic gate used for raw barge-in while that utterance stays active, so an early under-threshold `speech_started` can still mature into a real interrupt. |
 | `speech_stopped` | `wireClientEvents` | Sets `speechActive = false`. In transcript-overlap sessions this also releases an uncommitted pending same-speaker interrupt so the staged turn can flush normally. |
 | `error_event` | `wireClientEvents` | Logs error. May trigger session close depending on severity. |
 | `socket_closed` | `wireClientEvents` | Transitions phase to `idle`. Clears client reference. |

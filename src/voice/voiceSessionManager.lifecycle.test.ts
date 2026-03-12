@@ -1638,6 +1638,66 @@ test("handleAsrBridgeSpeechStarted clears an authorized pre-audio pending reply 
   );
 });
 
+test("handleAsrBridgeSpeechStarted holds same-speaker generation-only reply before playback instead of superseding immediately", () => {
+  const { manager, logs } = createManager();
+  manager.activeReplies = new ActiveReplyRegistry();
+  manager.shouldUseTranscriptOverlapInterrupts = () => true;
+
+  const session = createSession({
+    mode: "openai_realtime",
+    lastAudioDeltaAt: 0,
+    pendingResponse: null,
+    activeReplyInterruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "speaker-1"
+    },
+    inFlightAcceptedBrainTurn: {
+      transcript: "Can you look up the price of Apple?",
+      userId: "speaker-1",
+      pcmBuffer: null,
+      source: "realtime",
+      acceptedAt: Date.now() - 500,
+      phase: "generation_only",
+      captureReason: "stream_end",
+      directAddressed: true
+    },
+    userCaptures: new Map([
+      [
+        "speaker-1",
+        createAssertiveCaptureState("speaker-1", {
+          promotionReason: "server_vad_confirmed"
+        })
+      ]
+    ])
+  });
+  const replyScopeKey = buildVoiceReplyScopeKey(session.id);
+  const activeReply = manager.activeReplies.begin(replyScopeKey, "voice-generation", ["voice_generation"]);
+
+  const handled = manager.handleAsrBridgeSpeechStarted({
+    session,
+    userId: "speaker-1",
+    speakerName: "speaker one",
+    utteranceId: 98,
+    audioStartMs: 640,
+    itemId: "item_98",
+    eventType: "input_audio_buffer.speech_started"
+  });
+
+  assert.equal(handled, true);
+  assert.equal(activeReply.abortController.signal.aborted, false);
+  assert.equal(session.heldPrePlaybackReply?.userId, "speaker-1");
+  assert.equal(session.supersededPrePlaybackReply ?? null, null);
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_preplay_reply_held_for_user_speech"),
+    true
+  );
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech"),
+    false
+  );
+});
+
 test("commitPendingSpeechStartedInterrupt hard-cuts after sustained overlap and forwards the staged turn", () => {
   const { manager, logs } = createManager();
   const queuedTurns = [];
@@ -4601,6 +4661,190 @@ test("discardSupersededPrePlaybackReply clears stashed preplay reply", () => {
   assert.equal(session.supersededPrePlaybackReply, null);
   assert.equal(
     logs.some((entry) => entry?.content === "voice_preplay_reply_discarded"),
+    true
+  );
+});
+
+test("resolveHeldPrePlaybackReplyTurn ignores commentary and releases queued assistant speech", async () => {
+  const { manager, logs } = createManager();
+  const prompts = [];
+  manager.llm.generate = async () => ({
+    text: "IGNORE"
+  });
+
+  const session = createSession({
+    mode: "openai_realtime",
+    heldPrePlaybackReply: {
+      userId: "speaker-1",
+      startedAt: Date.now() - 400,
+      source: "asr_speech_started"
+    },
+    inFlightAcceptedBrainTurn: {
+      transcript: "Can you look up the price of Apple?",
+      userId: "speaker-1",
+      pcmBuffer: null,
+      source: "realtime",
+      acceptedAt: Date.now() - 800,
+      phase: "generation_only",
+      captureReason: "stream_end",
+      directAddressed: true
+    },
+    realtimeClient: {
+      requestTextUtterance(prompt) {
+        prompts.push(prompt);
+      },
+      isResponseInProgress() {
+        return false;
+      }
+    },
+    userCaptures: new Map()
+  });
+
+  const queued = manager.requestRealtimeTextUtterance({
+    session,
+    text: "Apple is around two sixty right now.",
+    source: "test_stream_chunk_1"
+  });
+
+  assert.equal(queued, true);
+  assert.equal(prompts.length, 0);
+  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 1);
+
+  const decision = await manager.resolveHeldPrePlaybackReplyTurn({
+    session,
+    userId: "speaker-1",
+    transcript: "Yeah, so it takes a second, but he'll get it.",
+    settings: session.settingsSnapshot,
+    source: "realtime"
+  });
+
+  assert.equal(decision, "ignore");
+  assert.equal(session.heldPrePlaybackReply ?? null, null);
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0] || "", /Apple is around two sixty right now/i);
+  assert.equal(session.pendingRealtimeAssistantUtterances?.length || 0, 0);
+  const resolutionLog = logs.find((entry) => entry?.content === "voice_preplay_reply_hold_resolved");
+  assert.ok(resolutionLog);
+  assert.equal(resolutionLog?.metadata?.decision, "ignore");
+  assert.equal(resolutionLog?.metadata?.decisionSource, "model_ignore");
+});
+
+test("resolveHeldPrePlaybackReplyTurn replaces held generation-only reply when the new finalized turn changes the job", async () => {
+  const { manager, logs } = createManager();
+  manager.activeReplies = new ActiveReplyRegistry();
+  manager.llm.generate = async () => ({
+    text: "REPLACE"
+  });
+
+  const session = createSession({
+    mode: "openai_realtime",
+    heldPrePlaybackReply: {
+      userId: "speaker-1",
+      startedAt: Date.now() - 400,
+      source: "asr_speech_started"
+    },
+    activeReplyInterruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "speaker-1"
+    },
+    inFlightAcceptedBrainTurn: {
+      transcript: "Can you look up the price of Apple?",
+      userId: "speaker-1",
+      pcmBuffer: null,
+      source: "realtime",
+      acceptedAt: Date.now() - 800,
+      phase: "generation_only",
+      captureReason: "stream_end",
+      directAddressed: true
+    },
+    userCaptures: new Map([
+      [
+        "speaker-1",
+        createAssertiveCaptureState("speaker-1", {
+          promotionReason: "server_vad_confirmed"
+        })
+      ]
+    ])
+  });
+  const replyScopeKey = buildVoiceReplyScopeKey(session.id);
+  const activeReply = manager.activeReplies.begin(replyScopeKey, "voice-generation", ["voice_generation"]);
+
+  const decision = await manager.resolveHeldPrePlaybackReplyTurn({
+    session,
+    userId: "speaker-1",
+    transcript: "I was asking about Microsoft.",
+    settings: session.settingsSnapshot,
+    source: "realtime"
+  });
+
+  assert.equal(decision, "replace");
+  assert.equal(activeReply.abortController.signal.aborted, true);
+  assert.equal(session.heldPrePlaybackReply ?? null, null);
+  assert.equal(session.supersededPrePlaybackReply?.transcript, "Can you look up the price of Apple?");
+  const resolutionLog = logs.find((entry) => entry?.content === "voice_preplay_reply_hold_resolved");
+  assert.ok(resolutionLog);
+  assert.equal(resolutionLog?.metadata?.decision, "replace");
+  assert.equal(resolutionLog?.metadata?.decisionSource, "model_replace");
+});
+
+test("runRealtimeTurn clears held preplay state before consuming cancel intent", async () => {
+  const { manager, logs } = createManager();
+  const prompts = [];
+  const session = createSession({
+    mode: "openai_realtime",
+    heldPrePlaybackReply: {
+      userId: "speaker-1",
+      startedAt: Date.now() - 400,
+      source: "asr_speech_started"
+    },
+    inFlightAcceptedBrainTurn: {
+      transcript: "Can you look up the price of Apple?",
+      userId: "speaker-1",
+      pcmBuffer: null,
+      source: "realtime",
+      acceptedAt: Date.now() - 800,
+      phase: "generation_only",
+      captureReason: "stream_end",
+      directAddressed: true
+    },
+    pendingRealtimeAssistantUtterances: [
+      {
+        prompt: "Apple is around two sixty right now.",
+        utteranceText: "Apple is around two sixty right now.",
+        userId: "bot-user",
+        source: "test_stream_chunk_1",
+        queuedAt: Date.now() - 100,
+        interruptionPolicy: null,
+        latencyContext: null
+      }
+    ],
+    realtimeClient: {
+      requestTextUtterance(prompt) {
+        prompts.push(prompt);
+      },
+      isResponseInProgress() {
+        return false;
+      }
+    }
+  });
+
+  await manager.turnProcessor.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.alloc(2, 1),
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    queuedAt: Date.now(),
+    replyScopeStartedAt: Date.now(),
+    transcriptOverride: "stop"
+  });
+
+  assert.equal(session.heldPrePlaybackReply ?? null, null);
+  assert.equal(session.pendingRealtimeAssistantUtterances?.length || 0, 0);
+  assert.equal(prompts.length, 1);
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_turn_cancel_intent"),
     true
   );
 });

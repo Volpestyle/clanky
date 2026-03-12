@@ -387,7 +387,16 @@ interface TurnProcessorHost {
     userId?: string | null;
     source?: string;
   }) => boolean;
+  getPendingRealtimeAssistantUtteranceCount: (session: VoiceSession) => number;
+  clearPendingRealtimeAssistantUtterances: (session: VoiceSession, reason?: string) => number;
   clearVoiceCommandSession: (session: VoiceSession) => void;
+  resolveHeldPrePlaybackReplyTurn: (args: {
+    session: VoiceSession;
+    userId?: string | null;
+    transcript?: string;
+    settings?: TurnProcessorSettings;
+    source?: string;
+  }) => Promise<"none" | "ignore" | "replace">;
   runRealtimeBrainReply: (args: RunRealtimeBrainReplyArgs) => Promise<boolean>;
   hasCommittedInterruptedBridgeTurn: (args: {
     session: VoiceSession;
@@ -724,6 +733,10 @@ export class TurnProcessor {
     const outputChannelState = this.host.getOutputChannelState(session);
     const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
     const activeVoiceGeneration = Boolean(this.host.activeReplies?.has(voiceReplyScopeKey));
+    const queuedAssistantUtteranceCount = Math.max(
+      0,
+      Number(this.host.getPendingRealtimeAssistantUtteranceCount(session) || 0)
+    );
     const participantCount = Math.max(0, Number(this.host.countHumanVoiceParticipants(session) || 0));
     const pendingResponseOwnerUserId = String(pendingResponse?.userId || "").trim() || null;
     const lastRealtimeToolCallerUserId = String(session?.lastRealtimeToolCallerUserId || "").trim() || null;
@@ -754,7 +767,8 @@ export class TurnProcessor {
       outputChannelState.awaitingToolOutputs ||
       outputChannelState.toolCallsRunning ||
       activeVoiceGeneration ||
-      activeCommandState
+      activeCommandState ||
+      queuedAssistantUtteranceCount > 0
     );
 
     return {
@@ -763,6 +777,7 @@ export class TurnProcessor {
       activeCommandState,
       outputChannelState,
       participantCount,
+      queuedAssistantUtteranceCount,
       pendingResponseOwnerUserId,
       lastRealtimeToolCallerUserId,
       commandOwnerUserId,
@@ -794,7 +809,7 @@ export class TurnProcessor {
     return [
       "A user just cancelled the work you were doing.",
       `User said: "${cancelContext.normalizedTranscript || normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS) || "stop"}".`,
-      `Interrupted work: pending response source=${pendingResponseSource}; pending utterance=${pendingUtterance}; active response=${cancelContext.outputChannelState.openAiActiveResponse ? "yes" : "no"}; tool calls running=${cancelContext.outputChannelState.toolCallsRunning ? "yes" : "no"}; awaiting tool outputs=${cancelContext.outputChannelState.awaitingToolOutputs ? "yes" : "no"}; active command=${activeCommand}.`,
+      `Interrupted work: pending response source=${pendingResponseSource}; pending utterance=${pendingUtterance}; active response=${cancelContext.outputChannelState.openAiActiveResponse ? "yes" : "no"}; queued speech=${cancelContext.queuedAssistantUtteranceCount > 0 ? "yes" : "no"}; tool calls running=${cancelContext.outputChannelState.toolCallsRunning ? "yes" : "no"}; awaiting tool outputs=${cancelContext.outputChannelState.awaitingToolOutputs ? "yes" : "no"}; active command=${activeCommand}.`,
       "Acknowledge briefly in one short spoken sentence.",
       "Do not continue, restart, or summarize the cancelled task unless the user asks."
     ].join(" ");
@@ -835,6 +850,10 @@ export class TurnProcessor {
       }
     }
     this.host.replyManager.clearPendingResponse(session);
+    const clearedQueuedAssistantUtterances = this.host.clearPendingRealtimeAssistantUtterances(
+      session,
+      "voice_turn_cancel_intent"
+    );
     this.host.clearVoiceCommandSession(session);
     cancelAcknowledgementQueued = this.host.requestRealtimePromptUtterance({
       session,
@@ -871,6 +890,8 @@ export class TurnProcessor {
         pendingResponseOwnerUserId: resolvedCancelContext.pendingResponseOwnerUserId,
         lastRealtimeToolCallerUserId: resolvedCancelContext.lastRealtimeToolCallerUserId,
         commandOwnerUserId: resolvedCancelContext.commandOwnerUserId,
+        queuedAssistantUtteranceCount: resolvedCancelContext.queuedAssistantUtteranceCount,
+        clearedQueuedAssistantUtterances,
         responseCancelSucceeded,
         cancelAcknowledgementQueued
       }
@@ -1788,6 +1809,19 @@ export class TurnProcessor {
       }
 
       if (isSuperseded("post_transcription")) return;
+
+      if (turnTranscript) {
+        const heldPrePlaybackResolution = await this.host.resolveHeldPrePlaybackReplyTurn({
+          session,
+          userId,
+          transcript: turnTranscript,
+          settings,
+          source: "realtime"
+        });
+        if (heldPrePlaybackResolution === "ignore") {
+          return;
+        }
+      }
 
       if (
         turnTranscript &&

@@ -9,6 +9,7 @@ import { getPromptBotName } from "../prompts/promptCore.ts";
 import { buildSingleTurnPromptLog } from "../promptLogging.ts";
 import { clamp } from "../utils.ts";
 import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
+import { isCancelIntent } from "../tools/cancelDetection.ts";
 import { SoundboardDirector } from "./soundboardDirector.ts";
 import { createMusicPlaybackProvider } from "./musicPlayback.ts";
 import { createMusicSearchProvider } from "./musicSearch.ts";
@@ -152,6 +153,7 @@ import {
   classifyVoiceInterruptBurst,
   hasObviousInterruptTakeoverBurst
 } from "./voiceInterruptClassifier.ts";
+import { classifyPrePlaybackReplyReplacement } from "./voicePrePlaybackReplyClassifier.ts";
 import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
   BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS,
@@ -227,6 +229,7 @@ import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
 import { executeLocalVoiceToolCall } from "./voiceToolCallDispatch.ts";
 import type {
   CaptureState,
+  HeldPrePlaybackReply,
   LoggedVoicePromptBundle,
   OutputChannelState,
   RealtimeToolOwnership,
@@ -1945,6 +1948,281 @@ export class VoiceSessionManager {
     return true;
   }
 
+  getHeldPrePlaybackReply(session) {
+    const held =
+      session?.heldPrePlaybackReply && typeof session.heldPrePlaybackReply === "object"
+        ? session.heldPrePlaybackReply
+        : null;
+    if (!held) return null;
+    const normalizedUserId = String(held.userId || "").trim() || null;
+    const startedAt = Math.max(0, Number(held.startedAt || 0)) || Date.now();
+    const source = String(held.source || "asr_speech_started").trim() || "asr_speech_started";
+    return {
+      userId: normalizedUserId,
+      startedAt,
+      source
+    } satisfies HeldPrePlaybackReply;
+  }
+
+  hasHeldPrePlaybackReply(session) {
+    return Boolean(this.getHeldPrePlaybackReply(session));
+  }
+
+  clearHeldPrePlaybackReply({
+    session = null,
+    reason = "cleared",
+    userId = null
+  } = {}) {
+    if (!session || session.ending) return false;
+    const held = this.getHeldPrePlaybackReply(session);
+    if (!held) return false;
+    session.heldPrePlaybackReply = null;
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: userId || held.userId || null,
+      content: "voice_preplay_reply_hold_cleared",
+      metadata: {
+        sessionId: session.id,
+        reason: String(reason || "cleared"),
+        heldUserId: held.userId,
+        heldSource: held.source,
+        heldAgeMs: Math.max(0, Date.now() - held.startedAt)
+      }
+    });
+    return true;
+  }
+
+  holdPendingPrePlaybackReplyForUserSpeech({
+    session = null,
+    userId = null,
+    captureState = null,
+    source = "capture_promoted",
+    now = Date.now()
+  } = {}) {
+    if (!session || session.ending) return false;
+    const pending = session.pendingResponse && typeof session.pendingResponse === "object"
+      ? session.pendingResponse
+      : null;
+    if (pending) return false;
+    const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
+    const hadActiveReply = Boolean(this.activeReplies?.has(voiceReplyScopeKey));
+    if (!hadActiveReply) return false;
+    const pendingHasAudio = false;
+    const outputAlreadyStarted =
+      pendingHasAudio ||
+      Boolean(session.botTurnOpen) ||
+      this.replyManager.hasBufferedTtsPlayback(session);
+    if (outputAlreadyStarted) return false;
+    if (!this.isCaptureEligibleForPrePlaybackSupersede({ session, capture: captureState })) {
+      return false;
+    }
+
+    const inFlight = session.inFlightAcceptedBrainTurn;
+    const inFlightPhase = String(inFlight?.phase || "").trim() || null;
+    if (inFlightPhase !== "generation_only") return false;
+    const inFlightUserId = String(inFlight?.userId || "").trim() || null;
+    const normalizedUserId = String(userId || "").trim() || null;
+    if (!normalizedUserId || !inFlightUserId || normalizedUserId !== inFlightUserId) return false;
+
+    const signal = this.bargeInController.getCaptureSignalMetrics(captureState);
+    const prePlaybackInterruptionPolicy = this.resolvePrePlaybackSupersedeInterruptionPolicy({
+      session,
+      pendingResponse: pending,
+      inFlightTurn: inFlight
+    });
+    if (
+      !this.isUserAllowedToInterruptReply({
+        policy: prePlaybackInterruptionPolicy,
+        userId: normalizedUserId
+      })
+    ) {
+      return false;
+    }
+    const existingHeld = this.getHeldPrePlaybackReply(session);
+    if (existingHeld && existingHeld.userId === normalizedUserId) {
+      return true;
+    }
+
+    session.heldPrePlaybackReply = {
+      userId: normalizedUserId,
+      startedAt: Math.max(0, Number(now || Date.now())) || Date.now(),
+      source: String(source || "capture_promoted").trim() || "capture_promoted"
+    };
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: normalizedUserId,
+      content: "voice_preplay_reply_held_for_user_speech",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "capture_promoted"),
+        inFlightPhase,
+        inFlightAgeMs: inFlight ? Math.max(0, now - Math.max(0, Number(inFlight.acceptedAt || 0))) : null,
+        captureStartedAt: Math.max(0, Number(captureState?.startedAt || 0)) || null,
+        capturePromotedAt: Math.max(0, Number(captureState?.promotedAt || now)) || null,
+        captureBytes: Math.max(0, Number(captureState?.bytesSent || 0)),
+        capturePeak: signal.peak,
+        captureRms: signal.rms,
+        captureActiveSampleRatio: signal.activeSampleRatio
+      }
+    });
+    return true;
+  }
+
+  abortHeldPrePlaybackReplyBeforeToolCall({
+    session = null,
+    source = "tool_call_started"
+  } = {}) {
+    if (!session || session.ending) return false;
+    const held = this.getHeldPrePlaybackReply(session);
+    if (!held?.userId) return false;
+    const captureState =
+      session.userCaptures instanceof Map
+        ? session.userCaptures.get(held.userId) || null
+        : null;
+    const cancelled = this.cancelPendingPrePlaybackReplyForUserSpeech({
+      session,
+      userId: held.userId,
+      captureState,
+      source: String(source || "tool_call_started"),
+      now: Date.now()
+    });
+    if (!cancelled) return false;
+    this.clearHeldPrePlaybackReply({
+      session,
+      reason: "tool_boundary_abort",
+      userId: held.userId
+    });
+    return true;
+  }
+
+  async resolveHeldPrePlaybackReplyTurn({
+    session = null,
+    userId = null,
+    transcript = "",
+    settings = null,
+    source = "realtime"
+  } = {}) {
+    if (!session || session.ending) return "none";
+    const held = this.getHeldPrePlaybackReply(session);
+    const normalizedUserId = String(userId || "").trim() || null;
+    const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    if (!held || !normalizedUserId || held.userId !== normalizedUserId || !normalizedTranscript) {
+      return "none";
+    }
+    if (isCancelIntent(normalizedTranscript)) {
+      this.clearHeldPrePlaybackReply({
+        session,
+        reason: "cancel_intent",
+        userId: normalizedUserId
+      });
+      return "replace";
+    }
+
+    const pendingTranscript =
+      normalizeVoiceText(
+        session.inFlightAcceptedBrainTurn?.transcript ||
+        session.supersededPrePlaybackReply?.transcript ||
+        "",
+        STT_REPLY_MAX_CHARS
+      ) || "";
+    const pendingSource =
+      String(
+        session.inFlightAcceptedBrainTurn?.source ||
+        session.supersededPrePlaybackReply?.source ||
+        held.source ||
+        "unknown"
+      ).trim() || "unknown";
+    const classification = await classifyPrePlaybackReplyReplacement(this, {
+      session,
+      settings: settings || session.settingsSnapshot || this.store.getSettings(),
+      userId: normalizedUserId,
+      pendingTranscript,
+      pendingSource,
+      incomingTranscript: normalizedTranscript
+    });
+
+    if (classification.decision === "ignore") {
+      this.clearHeldPrePlaybackReply({
+        session,
+        reason: "ignore",
+        userId: normalizedUserId
+      });
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: normalizedUserId,
+        content: "voice_preplay_reply_hold_resolved",
+        metadata: {
+          sessionId: session.id,
+          source: String(source || "realtime"),
+          decision: "ignore",
+          decisionSource: classification.source,
+          decisionLatencyMs: classification.latencyMs,
+          pendingSource,
+          pendingTranscriptChars: pendingTranscript.length,
+          transcriptChars: normalizedTranscript.length,
+          rawOutput: classification.rawOutput || null,
+          error: classification.error || null
+        }
+      });
+      this.recoverSupersededPrePlaybackReply({
+        session,
+        reason: "held_preplay_reply_ignored",
+        userId: normalizedUserId
+      });
+      this.drainPendingRealtimeAssistantUtterances(session, "held_preplay_reply_ignored");
+      return "ignore";
+    }
+
+    const captureState =
+      session.userCaptures instanceof Map
+        ? session.userCaptures.get(normalizedUserId) || null
+        : null;
+    const cancelled = this.cancelPendingPrePlaybackReplyForUserSpeech({
+      session,
+      userId: normalizedUserId,
+      captureState,
+      source: `${String(source || "realtime")}:held_replace`,
+      now: Date.now()
+    });
+    const clearedQueuedAssistantUtterances =
+      this.getPendingRealtimeAssistantUtterances(session).length > 0
+        ? this.clearPendingRealtimeAssistantUtterances(session, "held_preplay_reply_replace")
+        : 0;
+    this.clearHeldPrePlaybackReply({
+      session,
+      reason: "replace",
+      userId: normalizedUserId
+    });
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: normalizedUserId,
+      content: "voice_preplay_reply_hold_resolved",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "realtime"),
+        decision: "replace",
+        decisionSource: classification.source,
+        decisionLatencyMs: classification.latencyMs,
+        pendingSource,
+        pendingTranscriptChars: pendingTranscript.length,
+        transcriptChars: normalizedTranscript.length,
+        cancelledPendingReply: cancelled,
+        clearedQueuedUtterances: clearedQueuedAssistantUtterances,
+        rawOutput: classification.rawOutput || null,
+        error: classification.error || null
+      }
+    });
+    return "replace";
+  }
+
   isCaptureBlockingDeferredTurnFlush({ session, capture }) {
     if (!session || !capture || typeof capture !== "object") return false;
     const bytesSent = Math.max(0, Number(capture.bytesSent || 0));
@@ -2854,6 +3132,10 @@ export class VoiceSessionManager {
     return session.pendingRealtimeAssistantUtterances;
   }
 
+  getPendingRealtimeAssistantUtteranceCount(session) {
+    return this.getPendingRealtimeAssistantUtterances(session).length;
+  }
+
   collapsePendingRealtimeAssistantStreamTail({
     session,
     source = "voice_reply"
@@ -3009,6 +3291,8 @@ export class VoiceSessionManager {
     if (!isRealtimeMode(session.mode)) return false;
     if (this.replyManager.isRealtimeResponseActive(session)) return false;
     if (session.pendingResponse && typeof session.pendingResponse === "object") return false;
+    if (this.hasHeldPrePlaybackReply(session)) return false;
+    if (this.hasDeferredTurnBlockingActiveCapture(session)) return false;
 
     const queue = this.getPendingRealtimeAssistantUtterances(session);
     const next = queue[0];
@@ -3244,7 +3528,9 @@ export class VoiceSessionManager {
     const shouldQueueBecauseOutstandingReply =
       queue.length > 0 ||
       this.replyManager.isRealtimeResponseActive(session) ||
-      (session.pendingResponse && typeof session.pendingResponse === "object");
+      (session.pendingResponse && typeof session.pendingResponse === "object") ||
+      this.hasHeldPrePlaybackReply(session) ||
+      this.hasDeferredTurnBlockingActiveCapture(session);
     const backpressure = this.syncRealtimeAssistantUtteranceBackpressure(session, {
       queueDepth: queue.length + 1,
       source: queuedUtterance.source,
@@ -4681,8 +4967,20 @@ export class VoiceSessionManager {
         ? session.userCaptures.get(normalizedUserId) || null
         : null;
 
-    // Pending preplay replies should yield as soon as the authorized speaker is
-    // clearly taking the floor, even before assistant audio has started.
+    // Same-speaker generation-only replies can yield the floor without being
+    // destroyed immediately. More destructive supersede stays available as the
+    // fallback for pending pre-audio responses and tool-boundary escalation.
+    const prePlaybackHeld = this.holdPendingPrePlaybackReplyForUserSpeech({
+      session,
+      userId: normalizedUserId,
+      captureState,
+      source: "asr_speech_started",
+      now: Date.now()
+    });
+    if (prePlaybackHeld) return true;
+
+    // Pending preplay replies should otherwise yield as soon as the authorized
+    // speaker is clearly taking the floor, even before assistant audio starts.
     const prePlaybackSuperseded = this.cancelPendingPrePlaybackReplyForUserSpeech({
       session,
       userId: normalizedUserId,
