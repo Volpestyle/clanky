@@ -265,6 +265,21 @@ function seedReadyPerUserAsr(manager: VoiceSessionManager, session: VoiceSession
   return asrState;
 }
 
+function recordCommittedInterruptDecision(session: VoiceSession, utteranceId: number, source = "test_interrupt") {
+  session.interruptDecisionsByUtteranceId = new Map([
+    [
+      utteranceId,
+      {
+        transcript: "",
+        decision: "interrupt",
+        decidedAt: Date.now(),
+        source,
+        burstId: 1
+      }
+    ]
+  ]);
+}
+
 test("resolveCaptureTurnPromotionReason requires matching server VAD utterance id and local thresholds", () => {
   const { manager } = createManager();
   const session = createSession();
@@ -543,6 +558,66 @@ test("startInboundCapture hands empty interrupted ASR turns back to the voice br
       }
     }
   });
+  const asrState = seedReadyPerUserAsr(manager, session, "speaker-1");
+
+  manager.captureManager.startInboundCapture({
+    session,
+    userId: "speaker-1",
+    settings: session.settingsSnapshot
+  });
+
+  const strongPcm = makeMonoPcm16(
+    Math.ceil((24_000 * (VOICE_TURN_PROMOTION_MIN_CLIP_MS + 40)) / 1000),
+    3000
+  );
+  voxClient.emit("userAudio", "speaker-1", strongPcm);
+  await flushMicrotasks();
+  const utteranceId = Math.max(
+    0,
+    Number(session.userCaptures.get("speaker-1")?.asrUtteranceId || asrState.utterance?.id || 0)
+  );
+  assert.ok(utteranceId > 0);
+  recordCommittedInterruptDecision(session, utteranceId);
+  voxClient.emit("userAudioEnd", "speaker-1");
+  await new Promise((resolve) => setTimeout(resolve, 2600));
+
+  assert.equal(runtimeEvents.length, 1);
+  assert.equal(runtimeEvents[0]?.source, "unclear_empty_asr_bridge_turn");
+  assert.match(String(runtimeEvents[0]?.transcript || ""), /interrupted you, but their words were unclear/i);
+  assert.equal(
+    logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"),
+    true
+  );
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_interrupt_unclear_turn_handoff_requested"),
+    true
+  );
+});
+
+test("startInboundCapture does not hand empty ASR turns back to the voice brain without a committed interrupt", async () => {
+  const { manager, logs } = createManager();
+  manager.shouldUsePerUserTranscription = () => true;
+  const runtimeEvents = [];
+  manager.fireVoiceRuntimeEvent = async (payload) => {
+    runtimeEvents.push(payload);
+    return true;
+  };
+  const voxClient = new EventEmitter();
+  voxClient.subscribeUser = () => {};
+  const session = createSession({
+    voxClient,
+    interruptedAssistantReply: {
+      utteranceText: "no, wait, one more thing",
+      interruptedByUserId: "speaker-1",
+      interruptedAt: Date.now() - 200,
+      source: "barge_in_interrupt",
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      }
+    }
+  });
   seedReadyPerUserAsr(manager, session, "speaker-1");
 
   manager.captureManager.startInboundCapture({
@@ -560,15 +635,16 @@ test("startInboundCapture hands empty interrupted ASR turns back to the voice br
   voxClient.emit("userAudioEnd", "speaker-1");
   await new Promise((resolve) => setTimeout(resolve, 2600));
 
-  assert.equal(runtimeEvents.length, 1);
-  assert.equal(runtimeEvents[0]?.source, "unclear_empty_asr_bridge_turn");
-  assert.match(String(runtimeEvents[0]?.transcript || ""), /interrupted you, but their words were unclear/i);
-  assert.equal(
-    logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"),
-    true
-  );
+  assert.equal(runtimeEvents.length, 0);
   assert.equal(
     logs.some((entry) => entry?.content === "voice_interrupt_unclear_turn_handoff_requested"),
+    false
+  );
+  const skippedLog = logs.find((entry) => entry?.content === "voice_interrupt_unclear_turn_handoff_skipped");
+  assert.equal(Boolean(skippedLog), true);
+  assert.equal(skippedLog?.metadata?.skipReason, "missing_committed_interrupt_turn");
+  assert.equal(
+    logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"),
     true
   );
 });

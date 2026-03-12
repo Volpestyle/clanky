@@ -47,6 +47,7 @@ const SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*([\s\S]*?)\s*\]\]/gi;
 const OPENAI_TRANSCRIPT_CONTROL_TOKEN_RE = /<\|[^|>]+?\|>/g;
 const OPENAI_TRANSCRIPT_RESERVED_AUDIO_MARKER_RE =
   /\b(?:vq_[a-z]+_audio_[a-z0-9_]+|audio_future\d*|end_of_task)\b/gi;
+const ASR_TRANSCRIPT_SPEECHLIKE_CONTENT_RE = /[\p{L}\p{N}]/u;
 const MAX_SOUNDBOARD_DIRECTIVE_REF_LEN = 180;
 const ASR_LANGUAGE_BIAS_PROMPT_MAX_LEN = 280;
 const PRIMARY_WAKE_TOKEN_MIN_LEN = 4;
@@ -732,7 +733,7 @@ export function inspectAsrTranscript(value: unknown, maxChars = STT_TRANSCRIPT_M
   ).length;
 
   return {
-    transcript,
+    transcript: ASR_TRANSCRIPT_SPEECHLIKE_CONTENT_RE.test(transcript) ? transcript : "",
     malformed: controlTokenCount > 0 || reservedAudioMarkerCount > 0,
     controlTokenCount,
     reservedAudioMarkerCount

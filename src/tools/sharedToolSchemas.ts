@@ -263,7 +263,7 @@ const SHARED_TOOL_SCHEMAS: SharedToolSchema[] = [
 
 export const MUSIC_SEARCH_SCHEMA: SharedToolSchema = {
   name: "music_search",
-  description: "Search track candidates without starting playback. Use this for options or when you need track IDs for queue actions.",
+  description: "Search track candidates without starting playback. Prefer this for explicit browsing or when the user asks for options; ordinary play/queue requests can resolve directly from query.",
   strict: true,
   voiceContinuationPolicy: "always",
   parameters: {
@@ -282,23 +282,37 @@ export const MUSIC_SEARCH_SCHEMA: SharedToolSchema = {
 
 export const MUSIC_QUEUE_ADD_SCHEMA: SharedToolSchema = {
   name: "music_queue_add",
-  description: "Add exact track IDs to the queue. Use IDs returned by music_search or music_play, not a freeform query.",
-  voiceContinuationPolicy: "if_no_spoken_text",
+  description: "Append one or more tracks to the queue. You may pass direct query text, a prior selection_id, or exact track IDs from music_search/music_play.",
+  voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {
+      query: {
+        type: "string",
+        description: "Song, artist, or phrase to queue. Prefer this for ordinary queue requests."
+      },
+      selection_id: {
+        type: "string",
+        description: "Exact selection id returned from a previous music_play/music_search result. Leave empty when not reusing a prior selection."
+      },
       tracks: {
         type: "array",
         items: { type: "string" },
         minItems: 1,
         maxItems: 12
       },
+      platform: {
+        type: "string",
+        enum: ["youtube", "soundcloud", "auto"]
+      },
+      max_results: {
+        type: "integer"
+      },
       position: {
         type: "string",
         description: "Queue position: \"end\" to append, or a zero-based index as a string (e.g. \"0\" for front)"
       }
     },
-    required: ["tracks"],
     additionalProperties: false
   }
 };
@@ -331,19 +345,33 @@ export const MUSIC_PLAY_SCHEMA: SharedToolSchema = {
 
 export const MUSIC_QUEUE_NEXT_SCHEMA: SharedToolSchema = {
   name: "music_queue_next",
-  description: "Insert exact track IDs immediately after the current track. Use IDs returned by music_search or music_play, not a freeform query.",
-  voiceContinuationPolicy: "if_no_spoken_text",
+  description: "Insert one or more tracks immediately after the current track. You may pass direct query text, a prior selection_id, or exact track IDs from music_search/music_play.",
+  voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {
+      query: {
+        type: "string",
+        description: "Song, artist, or phrase to queue next. Prefer this for ordinary queue-next requests."
+      },
+      selection_id: {
+        type: "string",
+        description: "Exact selection id returned from a previous music_play/music_search result. Leave empty when not reusing a prior selection."
+      },
       tracks: {
         type: "array",
         items: { type: "string" },
         minItems: 1,
         maxItems: 12
+      },
+      platform: {
+        type: "string",
+        enum: ["youtube", "soundcloud", "auto"]
+      },
+      max_results: {
+        type: "integer"
       }
     },
-    required: ["tracks"],
     additionalProperties: false
   }
 };

@@ -62,6 +62,7 @@ const LEGACY_VOICE_KEYS = [
   "ttsMode",
   "operationalMessages",
   "streamingEnabled",
+  "streamingMinSentencesPerChunk",
   "streamingEagerFirstChunkChars",
   "streamingMaxBufferChars",
   "thoughtEngine",
@@ -135,6 +136,21 @@ function makeSparseMonoPcm16(sampleCount: number, amplitude: number, activeEvery
 async function flushMicrotasks() {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function recordCommittedInterruptDecision(session: VoiceSession, utteranceId: number, source = "test_interrupt") {
+  session.interruptDecisionsByUtteranceId = new Map([
+    [
+      utteranceId,
+      {
+        transcript: "",
+        decision: "interrupt",
+        decidedAt: Date.now(),
+        source,
+        burstId: 1
+      }
+    ]
+  ]);
 }
 
 function seedReadyPerUserAsr(
@@ -4116,6 +4132,73 @@ test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript instead of queue
   assert.equal(droppedLog?.metadata?.pcmBytes, pcmBuffer.length);
 });
 
+test("queueRealtimeTurnFromAsrBridge drops punctuation-only ASR transcript before authorized interrupt rescue", () => {
+  const { manager, logs } = createManager();
+  const queuedTurns = [];
+  const interruptCalls = [];
+  manager.turnProcessor.queueRealtimeTurn = (payload) => {
+    queuedTurns.push(payload);
+  };
+  manager.shouldUseTranscriptOverlapInterrupts = () => true;
+  manager.interruptBotSpeechForOutputLockTurn = (payload) => {
+    interruptCalls.push(payload);
+    return true;
+  };
+
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: true,
+    botTurnOpenAt: Date.now() - 1_800,
+    assistantOutput: {
+      phase: "speaking_live",
+      reason: "bot_audio_live",
+      phaseEnteredAt: Date.now() - 900,
+      lastSyncedAt: Date.now() - 900,
+      requestId: 25,
+      ttsPlaybackState: "playing",
+      ttsBufferedSamples: 18_000,
+      lastTrigger: "test_seed"
+    },
+    pendingResponse: {
+      requestId: 25,
+      requestedAt: Date.now() - 2_000,
+      source: "voice_reply",
+      handlingSilence: false,
+      audioReceivedAt: Date.now() - 1_000,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      utteranceText: "still talking",
+      latencyContext: null,
+      userId: "speaker-1",
+      retryCount: 0,
+      hardRecoveryAttempted: false
+    }
+  });
+  const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 6);
+
+  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-1",
+    pcmBuffer,
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    bridgeUtteranceId: 92,
+    asrResult: {
+      transcript: "?"
+    },
+    source: "per_user"
+  });
+
+  assert.equal(usedTranscript, false);
+  assert.equal(queuedTurns.length, 0);
+  assert.equal(interruptCalls.length, 0);
+  assert.equal(logs.some((entry) => entry?.content === "voice_interrupt_on_authorized_transcript_rescue"), false);
+  assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"), true);
+});
+
 test("queueRealtimeTurnFromAsrBridge drops malformed control-token ASR transcript instead of queueing PCM", () => {
   const { manager, logs } = createManager();
   const queuedTurns = [];
@@ -4212,6 +4295,8 @@ test("queueRealtimeTurnFromAsrBridge hands empty interrupted ASR turns back to t
       }
     }
   });
+  const bridgeUtteranceId = 91;
+  recordCommittedInterruptDecision(session, bridgeUtteranceId);
   const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 6);
 
   const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
@@ -4220,6 +4305,7 @@ test("queueRealtimeTurnFromAsrBridge hands empty interrupted ASR turns back to t
     pcmBuffer,
     captureReason: "stream_end",
     finalizedAt: Date.now(),
+    bridgeUtteranceId,
     asrResult: {
       transcript: ""
     },
@@ -4229,10 +4315,62 @@ test("queueRealtimeTurnFromAsrBridge hands empty interrupted ASR turns back to t
   assert.equal(usedTranscript, true);
   await flushMicrotasks();
   assert.equal(runtimeEvents.length, 1);
-  assert.equal(runtimeEvents[0]?.source, "unclear_empty_asr_bridge_turn");
+  assert.equal(runtimeEvents[0]?.source, "interrupted_empty_asr_bridge_turn");
   assert.match(String(runtimeEvents[0]?.transcript || ""), /interrupted you, but their words were unclear/i);
   assert.equal(
     logs.some((entry) => entry?.content === "voice_interrupt_unclear_turn_handoff_requested"),
+    true
+  );
+});
+
+test("queueRealtimeTurnFromAsrBridge drops empty ASR turns without synthetic unclear-interrupt handoff when no committed interrupt occurred", async () => {
+  const { manager, logs } = createManager();
+  const runtimeEvents = [];
+  manager.fireVoiceRuntimeEvent = async (payload) => {
+    runtimeEvents.push(payload);
+    return true;
+  };
+  const session = createSession({
+    mode: "openai_realtime",
+    interruptedAssistantReply: {
+      utteranceText: "let me finish that thought",
+      interruptedByUserId: "speaker-1",
+      interruptedAt: Date.now() - 250,
+      source: "cancel_failed_test",
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      }
+    }
+  });
+  const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 6);
+
+  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-1",
+    pcmBuffer,
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    bridgeUtteranceId: 91,
+    asrResult: {
+      transcript: ""
+    },
+    source: "per_user"
+  });
+
+  assert.equal(usedTranscript, false);
+  await flushMicrotasks();
+  assert.equal(runtimeEvents.length, 0);
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_interrupt_unclear_turn_handoff_requested"),
+    false
+  );
+  const skippedLog = logs.find((entry) => entry?.content === "voice_interrupt_unclear_turn_handoff_skipped");
+  assert.equal(Boolean(skippedLog), true);
+  assert.equal(skippedLog?.metadata?.skipReason, "missing_committed_interrupt_turn");
+  assert.equal(
+    logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"),
     true
   );
 });

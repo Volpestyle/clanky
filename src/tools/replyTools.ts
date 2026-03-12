@@ -217,8 +217,21 @@ export type ReplyToolRuntime = {
   voiceSession?: {
     musicSearch: (query: string, limit: number) => Promise<Record<string, unknown>>;
     musicPlay: (query: string, selectionId?: string | null, platform?: string | null) => Promise<Record<string, unknown>>;
-    musicQueueAdd: (trackIds: string[], position?: number | "end") => Promise<Record<string, unknown>>;
-    musicQueueNext: (trackIds: string[]) => Promise<Record<string, unknown>>;
+    musicQueueAdd: (args: {
+      tracks?: string[];
+      query?: string;
+      selection_id?: string | null;
+      position?: number | "end";
+      platform?: string | null;
+      max_results?: number;
+    }) => Promise<Record<string, unknown>>;
+    musicQueueNext: (args: {
+      tracks?: string[];
+      query?: string;
+      selection_id?: string | null;
+      platform?: string | null;
+      max_results?: number;
+    }) => Promise<Record<string, unknown>>;
     musicStop: () => Promise<Record<string, unknown>>;
     musicPause: () => Promise<Record<string, unknown>>;
     musicResume: () => Promise<Record<string, unknown>>;
@@ -1078,7 +1091,13 @@ async function executeVoiceTool(
         const tracks = Array.isArray(input?.tracks)
           ? (input.tracks as string[]).map((t) => String(t).trim()).filter(Boolean).slice(0, 12)
           : [];
-        if (!tracks.length) return { content: "No track IDs provided.", isError: true };
+        const query = String(input?.query || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN);
+        const selectionId = String(input?.selection_id || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN) || null;
+        const platform = String(input?.platform || "").trim().slice(0, 32) || null;
+        const maxResults = Math.max(1, Math.min(10, Math.floor(Number(input?.max_results) || 5)));
+        if (!tracks.length && !query && !selectionId) {
+          return { content: "No queue target provided. Use query, selection_id, or track IDs.", isError: true };
+        }
         const rawPos = input?.position;
         const position = rawPos === "end"
           ? "end"
@@ -1088,16 +1107,35 @@ async function executeVoiceTool(
               ? Math.max(0, Math.floor(rawPos))
               : undefined;
         throwIfAborted(context.signal, "Reply tool cancelled");
-        result = await runtime.voiceSession.musicQueueAdd(tracks, position);
+        result = await runtime.voiceSession.musicQueueAdd({
+          tracks,
+          query: query || undefined,
+          selection_id: selectionId,
+          position,
+          platform,
+          max_results: maxResults
+        });
         break;
       }
       case "music_queue_next": {
         const tracks = Array.isArray(input?.tracks)
           ? (input.tracks as string[]).map((t) => String(t).trim()).filter(Boolean).slice(0, 12)
           : [];
-        if (!tracks.length) return { content: "No track IDs provided.", isError: true };
+        const query = String(input?.query || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN);
+        const selectionId = String(input?.selection_id || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN) || null;
+        const platform = String(input?.platform || "").trim().slice(0, 32) || null;
+        const maxResults = Math.max(1, Math.min(10, Math.floor(Number(input?.max_results) || 5)));
+        if (!tracks.length && !query && !selectionId) {
+          return { content: "No queue target provided. Use query, selection_id, or track IDs.", isError: true };
+        }
         throwIfAborted(context.signal, "Reply tool cancelled");
-        result = await runtime.voiceSession.musicQueueNext(tracks);
+        result = await runtime.voiceSession.musicQueueNext({
+          tracks,
+          query: query || undefined,
+          selection_id: selectionId,
+          platform,
+          max_results: maxResults
+        });
         break;
       }
       case "music_stop":

@@ -139,6 +139,7 @@ interface CaptureManagerHost {
     reason?: string;
     userId?: string | null;
     source?: string;
+    bridgeUtteranceId?: number | null;
   }) => boolean;
 }
 
@@ -997,7 +998,8 @@ export class CaptureManager {
               session,
               reason: "empty_asr_bridge_drop",
               userId,
-              source: "unclear_empty_asr_bridge_turn"
+              source: "unclear_empty_asr_bridge_turn",
+              bridgeUtteranceId: Math.max(0, Number(captureState.asrUtteranceId || 0)) || null
             });
           }
           this.host.deferredActionQueue.recheckDeferredVoiceActions({

@@ -1,6 +1,11 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { executeLocalVoiceToolCall, executeVoiceBrowserBrowseTool, executeVoiceMusicPlayTool } from "./voiceToolCalls.ts";
+import {
+  executeLocalVoiceToolCall,
+  executeVoiceBrowserBrowseTool,
+  executeVoiceMusicPlayTool,
+  executeVoiceMusicQueueNextTool
+} from "./voiceToolCalls.ts";
 import { createTestSettings } from "../testSettings.ts";
 
 test("executeLocalVoiceToolCall forwards browser abort signals to browser_browse", async () => {
@@ -568,6 +573,123 @@ test("music_play updates queue state synchronously before returning", async () =
   assert.equal(queueState.tracks[1].id, "old-2");
   assert.equal(queueState.tracks.length, 2);
   assert.equal(session.music?.phase, "loading");
+});
+
+test("music_queue_next resolves a direct query and inserts it after the current track", async () => {
+  const queueState = {
+    guildId: "guild-1",
+    voiceChannelId: "vc-1",
+    tracks: [
+      {
+        id: "track-current",
+        title: "Subwoofer Lullaby",
+        artist: "C418",
+        durationMs: 210000,
+        source: "yt",
+        streamUrl: null,
+        platform: "youtube",
+        externalUrl: null
+      }
+    ],
+    nowPlayingIndex: 0,
+    isPaused: false,
+    volume: 1
+  };
+  const queuedTrack = {
+    id: "track-kh",
+    title: "Dearly Beloved",
+    artist: "Yoko Shimomura",
+    durationSeconds: 150,
+    platform: "youtube",
+    externalUrl: "https://example.com/kh"
+  };
+  const calls: Array<{ method: string; args: unknown }> = [];
+  const session = {
+    id: "voice-session-queue-next-1",
+    guildId: "guild-1",
+    textChannelId: "channel-1",
+    lastRealtimeToolCallerUserId: "user-1",
+    toolMusicTrackCatalog: new Map<string, unknown>()
+  };
+
+  const manager = {
+    client: {
+      user: {
+        id: "bot-user"
+      }
+    },
+    ensureToolMusicQueueState: () => queueState,
+    buildVoiceQueueStatePayload: () => ({
+      guildId: queueState.guildId,
+      voiceChannelId: queueState.voiceChannelId,
+      tracks: queueState.tracks.map((track) => ({
+        id: track.id,
+        title: track.title,
+        artist: track.artist,
+        durationMs: track.durationMs,
+        source: track.source,
+        streamUrl: track.streamUrl
+      })),
+      nowPlayingIndex: queueState.nowPlayingIndex,
+      isPaused: queueState.isPaused,
+      volume: queueState.volume
+    }),
+    musicSearch: {
+      isConfigured: () => true,
+      search: async () => ({ results: [queuedTrack] })
+    },
+    normalizeMusicSelectionResult: (row: Record<string, unknown>) => ({
+      id: String(row.id || ""),
+      title: String(row.title || ""),
+      artist: String(row.artist || ""),
+      platform: String(row.platform || "youtube"),
+      externalUrl: String(row.externalUrl || ""),
+      durationSeconds: Number(row.durationSeconds || 0)
+    }),
+    beginVoiceCommandSession: (...args: unknown[]) => {
+      calls.push({ method: "beginVoiceCommandSession", args });
+    },
+    setMusicPhase() {
+      return undefined;
+    },
+    isMusicPlaybackActive: () => true,
+    playVoiceQueueTrackByIndex: async () => {
+      calls.push({ method: "playVoiceQueueTrackByIndex", args: [] });
+      return { ok: true };
+    },
+    ensureSessionMusicState: () => ({
+      lastTrackId: null,
+      lastTrackTitle: null,
+      lastTrackArtists: [],
+      lastTrackUrl: null,
+      provider: "youtube"
+    }),
+    requestPlayMusic: async () => undefined,
+    requestRealtimePromptUtterance: () => true,
+    store: {
+      getSettings: () => null,
+      logAction: (...args: unknown[]) => {
+        calls.push({ method: "logAction", args });
+      }
+    }
+  };
+
+  const result = await executeVoiceMusicQueueNextTool(manager, {
+    session,
+    settings: createTestSettings({}),
+    args: {
+      query: "Kingdom Hearts Dearly Beloved Yoko Shimomura"
+    }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "queued_next");
+  assert.equal(result.query, "Kingdom Hearts Dearly Beloved Yoko Shimomura");
+  assert.deepEqual(result.added, ["track-kh"]);
+  assert.equal(queueState.tracks.length, 2);
+  assert.equal(queueState.tracks[1]?.id, "track-kh");
+  assert.equal(queueState.nowPlayingIndex, 0);
+  assert.equal(calls.some((entry) => entry.method === "beginVoiceCommandSession"), false);
 });
 
 test("music_play resolves selection_id from saved last-track state when the catalog is empty", async () => {

@@ -4418,22 +4418,48 @@ export class VoiceSessionManager {
     session,
     userId = null,
     reason = "interrupt_unclear",
-    source = "interrupted_turn_handoff"
+    source = "interrupted_turn_handoff",
+    bridgeUtteranceId = null
   }: {
     session: VoiceSession;
     userId?: string | null;
     reason?: string;
     source?: string;
+    bridgeUtteranceId?: number | null;
   }) {
     if (!session || session.ending) return false;
     const normalizedUserId = String(userId || "").trim() || null;
-    const interruptedReply =
-      session.interruptedAssistantReply && typeof session.interruptedAssistantReply === "object"
-        ? session.interruptedAssistantReply
-        : null;
-    if (!interruptedReply) return false;
-    const interruptedByUserId = String(interruptedReply.interruptedByUserId || "").trim() || null;
-    if (!normalizedUserId || !interruptedByUserId || normalizedUserId !== interruptedByUserId) {
+    const normalizedBridgeUtteranceId = Math.max(0, Number(bridgeUtteranceId || 0)) || null;
+    const logSkippedHandoff = (skipReason: string) => {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: normalizedUserId,
+        content: "voice_interrupt_unclear_turn_handoff_skipped",
+        metadata: {
+          sessionId: session.id,
+          reason: String(reason || "interrupt_unclear"),
+          source: String(source || "interrupted_turn_handoff"),
+          bridgeUtteranceId: normalizedBridgeUtteranceId,
+          skipReason
+        }
+      });
+    };
+    if (!normalizedUserId) {
+      logSkippedHandoff("missing_user_id");
+      return false;
+    }
+    if (!normalizedBridgeUtteranceId) {
+      logSkippedHandoff("missing_bridge_utterance_id");
+      return false;
+    }
+    if (!this.hasCommittedInterruptedBridgeTurn({
+      session,
+      userId: normalizedUserId,
+      bridgeUtteranceId: normalizedBridgeUtteranceId
+    })) {
+      logSkippedHandoff("missing_committed_interrupt_turn");
       return false;
     }
     const speakerName = this.resolveVoiceSpeakerName(session, normalizedUserId) || "someone";
@@ -4461,7 +4487,8 @@ export class VoiceSessionManager {
         sessionId: session.id,
         reason: String(reason || "interrupt_unclear"),
         source: String(source || "interrupted_turn_handoff"),
-        speakerName
+        speakerName,
+        bridgeUtteranceId: normalizedBridgeUtteranceId
       }
     });
     return true;
@@ -5479,6 +5506,7 @@ export class VoiceSessionManager {
         this.handoffInterruptedTurnToVoiceBrain({
           session,
           userId,
+          bridgeUtteranceId: normalizedBridgeUtteranceId,
           reason: committedInterruptedTurn
             ? transcriptGuard.malformed
               ? "control_token_asr_bridge_drop_after_interrupt"
@@ -7803,10 +7831,23 @@ export class VoiceSessionManager {
             platform
           }
         }),
-      musicQueueAdd: (trackIds: string[], position?: number | "end") =>
-        executeVoiceMusicQueueAddTool(this, { session, settings, args: { tracks: trackIds, position } }),
-      musicQueueNext: (trackIds: string[]) =>
-        executeVoiceMusicQueueNextTool(this, { session, settings, args: { tracks: trackIds } }),
+      musicQueueAdd: (args: {
+        tracks?: string[];
+        query?: string;
+        selection_id?: string | null;
+        position?: number | "end";
+        platform?: string | null;
+        max_results?: number;
+      }) =>
+        executeVoiceMusicQueueAddTool(this, { session, settings, args }),
+      musicQueueNext: (args: {
+        tracks?: string[];
+        query?: string;
+        selection_id?: string | null;
+        platform?: string | null;
+        max_results?: number;
+      }) =>
+        executeVoiceMusicQueueNextTool(this, { session, settings, args }),
       musicStop: () =>
         executeLocalVoiceToolCall(this, { session, settings, toolName: "music_stop", args: {} }),
       musicPause: () =>

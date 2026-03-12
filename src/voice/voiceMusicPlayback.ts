@@ -44,6 +44,8 @@ const EN_MUSIC_QUERY_TRAILING_NOISE_RE =
   /\b(?:in\s+vc|in\s+the\s+vc|in\s+voice|in\s+discord|right\s+now|rn|please|plz|for\s+me|for\s+us|for\s+everyone|for\s+everybody|for\s+the\s+chat|thanks?)\b/gi;
 const EN_MUSIC_QUERY_MEDIA_WORD_RE = /\b(?:music|musik|song|songs|track|tracks)\b/gi;
 const EN_MUSIC_QUERY_EMPTY_RE = /^(?:something|anything|some|a|the|please|plz)$/i;
+const COMPACT_MUSIC_CONTROL_NOISE_RE =
+  /\b(?:the|this|current|my|our|your|music|musik|song|songs|track|tracks|playback|playing|please|plz|now)\b/g;
 const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
 const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
 const VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK = 5;
@@ -770,18 +772,36 @@ function resolveCompactVoiceMusicControlCommand(
 ): VoiceMusicControlCommand | null {
   const normalizedTranscript = normalizeVoiceMusicCommandTranscript(transcript);
   if (!normalizedTranscript) return null;
+  const compactTranscript = normalizedTranscript
+    .replace(COMPACT_MUSIC_CONTROL_NOISE_RE, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const normalizedCompactTranscript =
+    compactTranscript && compactTranscript.split(" ").length <= 2
+      ? compactTranscript
+      : normalizedTranscript;
 
-  if (normalizedTranscript === "stop" || normalizedTranscript === "halt" || normalizedTranscript === "end" || normalizedTranscript === "quit" || normalizedTranscript === "shut off") {
+  if (
+    normalizedCompactTranscript === "stop" ||
+    normalizedCompactTranscript === "halt" ||
+    normalizedCompactTranscript === "end" ||
+    normalizedCompactTranscript === "quit" ||
+    normalizedCompactTranscript === "shut off"
+  ) {
     return "stop";
   }
-  if (normalizedTranscript === "pause") {
+  if (normalizedCompactTranscript === "pause") {
     return "pause";
   }
-  if (normalizedTranscript === "skip" || normalizedTranscript === "next") {
+  if (normalizedCompactTranscript === "skip" || normalizedCompactTranscript === "next") {
     return "skip";
   }
   if (
-    (normalizedTranscript === "resume" || normalizedTranscript === "unpause" || normalizedTranscript === "continue")
+    (
+      normalizedCompactTranscript === "resume" ||
+      normalizedCompactTranscript === "unpause" ||
+      normalizedCompactTranscript === "continue"
+    )
     && musicPhaseCanResume(currentPhase)
   ) {
     return "resume";

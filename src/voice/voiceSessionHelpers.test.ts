@@ -83,6 +83,14 @@ test("inspectAsrTranscript preserves normal speech and custom directives", () =>
   assert.equal(result.reservedAudioMarkerCount, 0);
 });
 
+test("inspectAsrTranscript treats punctuation-only ASR fragments as empty", () => {
+  const result = inspectAsrTranscript(" ... ?! ");
+  assert.equal(result.transcript, "");
+  assert.equal(result.malformed, false);
+  assert.equal(result.controlTokenCount, 0);
+  assert.equal(result.reservedAudioMarkerCount, 0);
+});
+
 test("inspectAsrTranscript flags OpenAI control-token garbage", () => {
   const result = inspectAsrTranscript(
     "<|audio_future3|><|vq_lbr_audio_58759|><|end_of_task|>"

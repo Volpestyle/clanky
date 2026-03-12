@@ -135,12 +135,25 @@ function createPlaybackHost({
         toolCalls.push({ tool: "musicPlay", args: { query, selectionId, platform } });
         return { ok: true };
       },
-      musicQueueAdd: async (trackIds: string[], position?: number | "end") => {
-        toolCalls.push({ tool: "musicQueueAdd", args: { trackIds, position } });
+      musicQueueAdd: async (args: {
+        tracks?: string[];
+        query?: string;
+        selection_id?: string | null;
+        position?: number | "end";
+        platform?: string | null;
+        max_results?: number;
+      }) => {
+        toolCalls.push({ tool: "musicQueueAdd", args });
         return { ok: true };
       },
-      musicQueueNext: async (trackIds: string[]) => {
-        toolCalls.push({ tool: "musicQueueNext", args: { trackIds } });
+      musicQueueNext: async (args: {
+        tracks?: string[];
+        query?: string;
+        selection_id?: string | null;
+        platform?: string | null;
+        max_results?: number;
+      }) => {
+        toolCalls.push({ tool: "musicQueueNext", args });
         return { ok: true };
       },
       musicStop: async () => {
@@ -234,7 +247,7 @@ test("maybeHandleMusicPlaybackTurn lets the music brain consume a fuzzy playback
     userId: "user-1",
     pcmBuffer: Buffer.alloc(0),
     source: "realtime",
-    transcript: "pause the music"
+    transcript: "could you pause the music for a second"
   });
 
   assert.equal(handled, true);
@@ -272,6 +285,36 @@ test("maybeHandleMusicPlaybackTurn fast-paths exact compact playback commands be
   assert.equal(musicBrainPrompts.length, 0);
   const stopCheckEvent = loggedEvents.find((entry) => entry.content === "voice_music_stop_check");
   assert.equal(stopCheckEvent?.metadata?.decisionReason, "fast_path_pause");
+});
+
+test("maybeHandleMusicPlaybackTurn fast-paths compact playback commands that include a music cue word", async () => {
+  const { manager, stopCalls, loggedEvents, musicBrainPrompts } = createPlaybackHost();
+  const session = {
+    id: "session-playing-stop-music",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    ending: false
+  };
+  ensureSessionMusicState(manager, session);
+  setMusicPhase(manager, session, "playing");
+  manager.sessions.set(session.guildId, session as VoiceSession);
+
+  const handled = await maybeHandleMusicPlaybackTurn(manager, {
+    session,
+    settings: createDedicatedMusicBrainSettings(),
+    userId: "user-1",
+    pcmBuffer: Buffer.alloc(0),
+    source: "realtime",
+    transcript: "stop music"
+  });
+
+  assert.equal(handled, true);
+  assert.equal(session.music?.phase, "idle");
+  assert.equal(stopCalls.length, 1);
+  assert.equal(musicBrainPrompts.length, 0);
+  const stopCheckEvent = loggedEvents.find((entry) => entry.content === "voice_music_stop_check");
+  assert.equal(stopCheckEvent?.metadata?.decisionReason, "fast_path_stop");
 });
 
 test("maybeHandleMusicPlaybackTurn sends direct-addressed music turns to the main brain", async () => {
