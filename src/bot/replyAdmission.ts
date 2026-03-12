@@ -32,6 +32,29 @@ export type TextAttentionState = {
   latestBotMessageId: string | null;
 };
 
+export type ReplyAdmissionDecisionReason =
+  | "force_respond"
+  | "force_decision_loop"
+  | "hard_address"
+  | "unsolicited_replies_disabled"
+  | "recent_reply_window"
+  | "cold_ambient_probability_zero"
+  | "cold_ambient_probability_full"
+  | "cold_ambient_gate_pass"
+  | "cold_ambient_gate_reject";
+
+export type ReplyAdmissionDecision = {
+  allow: boolean;
+  reason: ReplyAdmissionDecisionReason;
+  attentionState: TextAttentionState;
+  allowUnsolicitedReplies: boolean;
+  isReplyChannel: boolean;
+  coldAmbientProbability: number | null;
+  coldAmbientGateKey: string | null;
+  coldAmbientGateValue: number | null;
+  coldAmbientGatePassed: boolean | null;
+};
+
 type ReplyAdmissionRecentMessage = Record<string, unknown> & {
   message_id?: string;
   author_id?: string;
@@ -76,7 +99,7 @@ type ReplyAddressRuntime = {
   isDirectlyAddressed: (settings: Settings, message: ReplyAdmissionMessage) => boolean;
 };
 
-export function hasBotMessageInRecentWindow({
+function hasBotMessageInRecentWindow({
   botUserId,
   recentMessages,
   windowSize = 5,
@@ -102,7 +125,7 @@ export function hasBotMessageInRecentWindow({
     .some((row) => isBotRecentMessage(row, normalizedBotUserId));
 }
 
-export function getResponseWindowMessageCount(eagerness: unknown) {
+function getResponseWindowMessageCount(eagerness: unknown) {
   const normalized = clamp(Number(eagerness) || 0, 0, 100);
   if (normalized <= 0) return 0;
   if (normalized <= 20) return 1;
@@ -218,7 +241,7 @@ export function resolveColdAmbientReplyProbability({
   return clamp((normalizedEagerness + channelBonus - 20) / 80, 0, 1);
 }
 
-export function shouldAdmitColdAmbientTurn({
+function evaluateColdAmbientTurn({
   ambientReplyEagerness,
   isReplyChannel = false,
   gateKey = ""
@@ -231,12 +254,60 @@ export function shouldAdmitColdAmbientTurn({
     ambientReplyEagerness,
     isReplyChannel
   });
-  if (probability <= 0) return false;
-  if (probability >= 1) return true;
-
   const normalizedGateKey = String(gateKey || "").trim()
     || `cold_ambient:${String(ambientReplyEagerness || "")}:${isReplyChannel ? "reply_channel" : "other_channel"}`;
-  return hashTextGateKey(normalizedGateKey) < probability;
+  if (probability <= 0) {
+    return {
+      allow: false,
+      reason: "cold_ambient_probability_zero" as const,
+      probability,
+      gateKey: normalizedGateKey,
+      gateValue: null,
+      gatePassed: false
+    };
+  }
+  if (probability >= 1) {
+    return {
+      allow: true,
+      reason: "cold_ambient_probability_full" as const,
+      probability,
+      gateKey: normalizedGateKey,
+      gateValue: null,
+      gatePassed: true
+    };
+  }
+
+  const gateValue = hashTextGateKey(normalizedGateKey);
+  const gatePassed = gateValue < probability;
+  return {
+    allow: gatePassed,
+    reason: gatePassed
+      ? "cold_ambient_gate_pass" as const
+      : "cold_ambient_gate_reject" as const,
+    probability,
+    gateKey: normalizedGateKey,
+    gateValue,
+    gatePassed
+  };
+}
+
+function buildColdAmbientGateKey({
+  triggerMessageId = null,
+  triggerAuthorId = null,
+  triggerReferenceMessageId = null,
+  isReplyChannel = false
+}: {
+  triggerMessageId?: string | null;
+  triggerAuthorId?: string | null;
+  triggerReferenceMessageId?: string | null;
+  isReplyChannel?: boolean;
+}) {
+  return [
+    String(triggerMessageId || "").trim(),
+    String(triggerAuthorId || "").trim(),
+    String(triggerReferenceMessageId || "").trim(),
+    isReplyChannel ? "reply_channel" : "other_channel"
+  ].join(":");
 }
 
 function resolveRecentReplyWindowState({
@@ -448,9 +519,47 @@ export function shouldAttemptReplyDecision({
   triggerReferenceMessageId?: string | null;
   windowSize?: number;
 }) {
-  if (forceRespond || forceDecisionLoop || isHardAddressSignal(addressSignal)) return true;
-  if (!getReplyPermissions(settings).allowUnsolicitedReplies) return false;
+  return evaluateReplyAdmissionDecision({
+    botUserId,
+    settings,
+    recentMessages,
+    addressSignal,
+    isReplyChannel,
+    forceRespond,
+    forceDecisionLoop,
+    triggerMessageId,
+    triggerAuthorId,
+    triggerReferenceMessageId,
+    windowSize
+  }).allow;
+}
 
+export function evaluateReplyAdmissionDecision({
+  botUserId,
+  settings,
+  recentMessages,
+  addressSignal,
+  isReplyChannel = false,
+  forceRespond = false,
+  forceDecisionLoop = false,
+  triggerMessageId = null,
+  triggerAuthorId = null,
+  triggerReferenceMessageId = null,
+  windowSize = 5
+}: {
+  botUserId?: string | null;
+  settings: Settings;
+  recentMessages?: ReplyAdmissionRecentMessage[];
+  addressSignal?: Partial<ReplyAddressSignal> | null;
+  isReplyChannel?: boolean;
+  forceRespond?: boolean;
+  forceDecisionLoop?: boolean;
+  triggerMessageId?: string | null;
+  triggerAuthorId?: string | null;
+  triggerReferenceMessageId?: string | null;
+  windowSize?: number;
+}): ReplyAdmissionDecision {
+  const allowUnsolicitedReplies = getReplyPermissions(settings).allowUnsolicitedReplies;
   const attentionState = resolveTextAttentionState({
     botUserId,
     settings,
@@ -461,20 +570,99 @@ export function shouldAttemptReplyDecision({
     triggerReferenceMessageId,
     windowSize
   });
-  if (attentionState.recentReplyWindowActive) {
-    return true;
+
+  if (forceRespond) {
+    return {
+      allow: true,
+      reason: "force_respond",
+      attentionState,
+      allowUnsolicitedReplies,
+      isReplyChannel: Boolean(isReplyChannel),
+      coldAmbientProbability: null,
+      coldAmbientGateKey: null,
+      coldAmbientGateValue: null,
+      coldAmbientGatePassed: null
+    };
   }
 
-  return shouldAdmitColdAmbientTurn({
+  if (forceDecisionLoop) {
+    return {
+      allow: true,
+      reason: "force_decision_loop",
+      attentionState,
+      allowUnsolicitedReplies,
+      isReplyChannel: Boolean(isReplyChannel),
+      coldAmbientProbability: null,
+      coldAmbientGateKey: null,
+      coldAmbientGateValue: null,
+      coldAmbientGatePassed: null
+    };
+  }
+
+  if (isHardAddressSignal(addressSignal)) {
+    return {
+      allow: true,
+      reason: "hard_address",
+      attentionState,
+      allowUnsolicitedReplies,
+      isReplyChannel: Boolean(isReplyChannel),
+      coldAmbientProbability: null,
+      coldAmbientGateKey: null,
+      coldAmbientGateValue: null,
+      coldAmbientGatePassed: null
+    };
+  }
+
+  if (!allowUnsolicitedReplies) {
+    return {
+      allow: false,
+      reason: "unsolicited_replies_disabled",
+      attentionState,
+      allowUnsolicitedReplies,
+      isReplyChannel: Boolean(isReplyChannel),
+      coldAmbientProbability: null,
+      coldAmbientGateKey: null,
+      coldAmbientGateValue: null,
+      coldAmbientGatePassed: null
+    };
+  }
+
+  if (attentionState.recentReplyWindowActive) {
+    return {
+      allow: true,
+      reason: "recent_reply_window",
+      attentionState,
+      allowUnsolicitedReplies,
+      isReplyChannel: Boolean(isReplyChannel),
+      coldAmbientProbability: null,
+      coldAmbientGateKey: null,
+      coldAmbientGateValue: null,
+      coldAmbientGatePassed: null
+    };
+  }
+
+  const coldAmbient = evaluateColdAmbientTurn({
     ambientReplyEagerness: settings?.interaction?.activity?.ambientReplyEagerness,
     isReplyChannel,
-    gateKey: [
-      String(triggerMessageId || "").trim(),
-      String(triggerAuthorId || "").trim(),
-      String(triggerReferenceMessageId || "").trim(),
-      isReplyChannel ? "reply_channel" : "other_channel"
-    ].join(":")
+    gateKey: buildColdAmbientGateKey({
+      triggerMessageId,
+      triggerAuthorId,
+      triggerReferenceMessageId,
+      isReplyChannel
+    })
   });
+
+  return {
+    allow: coldAmbient.allow,
+    reason: coldAmbient.reason,
+    attentionState,
+    allowUnsolicitedReplies,
+    isReplyChannel: Boolean(isReplyChannel),
+    coldAmbientProbability: coldAmbient.probability,
+    coldAmbientGateKey: coldAmbient.gateKey,
+    coldAmbientGateValue: coldAmbient.gateValue,
+    coldAmbientGatePassed: coldAmbient.gatePassed
+  };
 }
 
 export async function getReplyAddressSignal(

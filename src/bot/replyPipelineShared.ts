@@ -12,7 +12,7 @@ export const CONVERSATION_HISTORY_PROMPT_LIMIT = 2;
 export const CONVERSATION_HISTORY_PROMPT_MAX_AGE_HOURS = 12;
 export const CONVERSATION_HISTORY_PROMPT_WINDOW_BEFORE = 1;
 export const CONVERSATION_HISTORY_PROMPT_WINDOW_AFTER = 1;
-export const REPLY_PERFORMANCE_VERSION = 1;
+const REPLY_PERFORMANCE_VERSION = 1;
 
 export type ReplyPerformanceSeed = {
   triggerMessageCreatedAtMs?: number | null;
@@ -20,7 +20,7 @@ export type ReplyPerformanceSeed = {
   ingestMs?: number | null;
 };
 
-export type ReplyPerformanceTracker = {
+type ReplyPerformanceTracker = {
   source: string;
   startedAtMs: number;
   triggerMessageCreatedAtMs: number | null;
@@ -31,11 +31,11 @@ export type ReplyPerformanceTracker = {
   followupMs: number | null;
 };
 
-export type ReplyPromptCapture = PromptCapture;
+type ReplyPromptCapture = PromptCapture;
 
-export type LoggedReplyPrompts = LoggedPromptBundle;
+type LoggedReplyPrompts = LoggedPromptBundle;
 
-export function normalizeNonNegativeMs(value: unknown) {
+function normalizeNonNegativeMs(value: unknown) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return null;
   if (parsed < 0) return null;

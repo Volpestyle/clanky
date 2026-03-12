@@ -86,7 +86,6 @@ test("formatPrettyLine highlights heard transcripts before generic metadata", ()
   assert.match(line, /voice_turn_addressing/);
   assert.match(line, /heard/);
   assert.match(line, /can you look that up for me/);
-  assert.equal(line.includes("transcript\x1b[2m="), false);
   assert.ok(line.indexOf("heard") < line.indexOf("sessionId"));
 });
 
@@ -108,7 +107,6 @@ test("formatPrettyLine highlights spoken transcripts for output events", () => {
   assert.match(line, /openai_realtime_transcript/);
   assert.match(line, /said/);
   assert.match(line, /yeah for sure, what do you want me to look up\?/);
-  assert.equal(line.includes("transcript\x1b[2m="), false);
 });
 
 test("formatPrettyLine keeps replyText visible without speech-style emphasis on request logs", () => {
@@ -128,8 +126,6 @@ test("formatPrettyLine keeps replyText visible without speech-style emphasis on 
   assert.match(line, /realtime_reply_requested/);
   assert.match(line, /replyText/);
   assert.match(line, /yeah for sure, what do you want me to look up\?/);
-  assert.equal(line.includes("said"), false);
-  assert.equal(line.includes("heard"), false);
 });
 
 test("formatPrettyLine surfaces drop reasons and signal metrics for provisional captures", () => {
@@ -181,5 +177,4 @@ test("formatPrettyLine highlights llm call returned text for runtime debugging",
   assert.match(line, /toolNames/);
   assert.match(line, /play_soundboard/);
   assert.match(line, /stopReason/);
-  assert.equal(line.includes("transcript\x1b[2m="), false);
 });

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { nowIso } from "../utils.ts";
 
-const MAX_STRING_LENGTH = 2_000;
+const MAX_STRING_LENGTH = 50_000;
 const MAX_DEPTH = 6;
 const MAX_ARRAY_LENGTH = 80;
 const MAX_OBJECT_KEYS = 80;

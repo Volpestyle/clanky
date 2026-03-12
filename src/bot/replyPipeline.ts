@@ -16,7 +16,7 @@ import {
 } from "./botHelpers.ts";
 import { getLocalTimeZoneLabel } from "./automation.ts";
 import { buildReplyToolSet, executeReplyTool } from "../tools/replyTools.ts";
-import type { ReplyToolContext, ReplyToolRuntime } from "../tools/replyTools.ts";
+import type { ReplyToolContext, ReplyToolRuntime, ReplyToolDefinition } from "../tools/replyTools.ts";
 import {
   resolveReplyFollowupGenerationSettings as resolveReplyFollowupGenerationSettingsForReplyFollowup,
   runModelRequestedWebSearch as runModelRequestedWebSearchForReplyFollowup
@@ -28,6 +28,7 @@ import {
   isAbortError,
   throwIfAborted
 } from "../tools/browserTaskRuntime.ts";
+import { buildRuntimeDecisionCorrelation } from "../services/runtimeCorrelation.ts";
 import { resolveDeterministicMentions as resolveDeterministicMentionsForMentions } from "./mentions.ts";
 import {
   MAX_MODEL_IMAGE_INPUTS,
@@ -60,6 +61,7 @@ import {
   type ContentBlock,
   type ContextMessage
 } from "../llm/serviceShared.ts";
+import { VOICE_TOOL_SCHEMAS } from "../tools/sharedToolSchemas.ts";
 import type { ReplyPipelineRuntime } from "./botContext.ts";
 
 type ReplyPipelineAttachment = {
@@ -321,9 +323,245 @@ function isReplySendableActionResult(result: ReplyActionResult): result is Reply
   return result.skipped === false;
 }
 
+function logReplyPipelineGate(
+  bot: ReplyPipelineRuntime,
+  {
+    message,
+    settings,
+    options,
+    allow,
+    reason,
+    sendBudgetAllowed = null,
+    talkNowAllowed = null,
+    ctx = null
+  }: {
+    message: ReplyPipelineMessage;
+    settings: Settings;
+    options: ReplyAttemptOptions;
+    allow: boolean;
+    reason: string;
+    sendBudgetAllowed?: boolean | null;
+    talkNowAllowed?: boolean | null;
+    ctx?: ReplyPipelineContext | null;
+  }
+) {
+  const triggerMessageIds = [
+    ...new Set(
+      [...(Array.isArray(options.triggerMessageIds) ? options.triggerMessageIds : []), message.id]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    )
+  ];
+  const source = String(options.source || "message_event").trim() || "message_event";
+  const triggerMessageId = triggerMessageIds[0] || String(message.id || "").trim() || null;
+  const isReplyChannel = bot.isReplyChannel(settings, message.channelId);
+  const addressSignal = options.addressSignal && typeof options.addressSignal === "object"
+    ? options.addressSignal
+    : null;
+
+  bot.store.logAction({
+    kind: "text_runtime",
+    guildId: message.guildId,
+    channelId: message.channelId,
+    messageId: message.id,
+    userId: message.author?.id || null,
+    content: "reply_pipeline_gate",
+    metadata: {
+      ...buildRuntimeDecisionCorrelation({
+        botId: bot.client.user?.id || null,
+        triggerMessageId,
+        source,
+        stage: "pipeline",
+        allow,
+        reason
+      }),
+      triggerMessageIds,
+      forceRespond: Boolean(options.forceRespond),
+      forceDecisionLoop: Boolean(options.forceDecisionLoop),
+      isReplyChannel,
+      sendBudgetAllowed,
+      talkNowAllowed,
+      ctxBuilt: Boolean(ctx),
+      ctxShouldRun: ctx ? Boolean(ctx.shouldRun) : null,
+      addressed: ctx ? Boolean(ctx.addressed) : null,
+      addressSignal: addressSignal
+        ? {
+            direct: Boolean(addressSignal.direct),
+            inferred: Boolean(addressSignal.inferred),
+            triggered: Boolean(addressSignal.triggered),
+            reason: String(addressSignal.reason || "llm_decides"),
+            confidence: Math.max(0, Math.min(1, Number(addressSignal.confidence) || 0)),
+            threshold: Math.max(0.4, Math.min(0.95, Number(addressSignal.threshold) || 0.62)),
+            confidenceSource: String(addressSignal.confidenceSource || "fallback")
+          }
+        : null
+    }
+  });
+}
+
+function buildReplyToolAvailabilityState(
+  settings: Settings,
+  {
+    webSearch,
+    browserBrowse,
+    imageLookup
+  }: Pick<ReplyPipelineContext, "webSearch" | "browserBrowse" | "imageLookup">
+): {
+  tools: ReplyToolDefinition[];
+  capabilities: {
+    webSearchAvailable?: boolean;
+    webScrapeAvailable?: boolean;
+    browserBrowseAvailable?: boolean;
+    memoryAvailable?: boolean;
+    imageLookupAvailable?: boolean;
+    codeAgentAvailable?: boolean;
+    voiceToolsAvailable?: boolean;
+  };
+  includedTools: string[];
+  excludedTools: Array<{ name: string; reason: string }>;
+} {
+  const memoryEnabled = Boolean(getMemorySettings(settings).enabled);
+  const voiceEnabled = Boolean(getVoiceSettings(settings).enabled);
+  const codeAgentEnabled = isDevTaskEnabled(settings);
+
+  const webSearchReason =
+    !webSearch?.enabled
+      ? "settings_disabled"
+      : !webSearch?.configured
+        ? "provider_unconfigured"
+        : webSearch?.optedOutByUser
+          ? "opted_out_by_user"
+          : webSearch?.blockedByBudget
+            ? "budget_blocked"
+            : webSearch?.budget?.canSearch === false
+              ? "budget_exhausted"
+              : "available";
+  const browserBrowseReason =
+    !browserBrowse?.enabled
+      ? "settings_disabled"
+      : !browserBrowse?.configured
+        ? "runtime_unavailable"
+        : browserBrowse?.blockedByBudget
+          ? "budget_blocked"
+          : browserBrowse?.budget?.canBrowse === false
+            ? "budget_exhausted"
+            : "available";
+  const imageLookupReason =
+    imageLookup?.enabled
+      ? "available"
+      : imageLookup?.error
+        ? "lookup_error"
+        : "no_history_images";
+  const memoryReason = memoryEnabled ? "available" : "settings_disabled";
+  const codeTaskReason = codeAgentEnabled ? "available" : "settings_disabled";
+  const voiceToolReason = voiceEnabled ? "available" : "settings_disabled";
+
+  const capabilities = {
+    webSearchAvailable: webSearchReason === "available",
+    webScrapeAvailable: webSearchReason === "available",
+    browserBrowseAvailable: browserBrowseReason === "available",
+    memoryAvailable: memoryReason === "available",
+    imageLookupAvailable: imageLookupReason === "available",
+    codeAgentAvailable: codeTaskReason === "available",
+    voiceToolsAvailable: voiceToolReason === "available"
+  };
+  const tools = buildReplyToolSet(settings, capabilities);
+  const includedSet = new Set(tools.map((tool) => String(tool.name || "").trim()).filter(Boolean));
+  const candidates: Array<{ name: string; reason: string }> = [
+    { name: "web_search", reason: webSearchReason },
+    { name: "web_scrape", reason: webSearchReason },
+    { name: "browser_browse", reason: browserBrowseReason },
+    { name: "memory_search", reason: memoryReason },
+    { name: "memory_write", reason: memoryReason },
+    { name: "conversation_search", reason: "available" },
+    { name: "image_lookup", reason: imageLookupReason },
+    { name: "code_task", reason: codeTaskReason },
+    ...VOICE_TOOL_SCHEMAS.map((schema) => ({
+      name: schema.name,
+      reason: voiceToolReason
+    }))
+  ];
+
+  return {
+    tools,
+    capabilities,
+    includedTools: candidates
+      .map((candidate) => candidate.name)
+      .filter((name, index, values) => values.indexOf(name) === index && includedSet.has(name)),
+    excludedTools: candidates
+      .filter((candidate, index, values) =>
+        values.findIndex((entry) => entry.name === candidate.name) === index &&
+        !includedSet.has(candidate.name)
+      )
+      .map((candidate) => ({
+        name: candidate.name,
+        reason: candidate.reason
+      }))
+  };
+}
+
+function logReplyToolAvailability(
+  bot: ReplyPipelineRuntime,
+  {
+    message,
+    options,
+    includedTools,
+    excludedTools,
+    capabilities
+  }: {
+    message: ReplyPipelineMessage;
+    options: ReplyAttemptOptions;
+    includedTools: string[];
+    excludedTools: Array<{ name: string; reason: string }>;
+    capabilities: {
+      webSearchAvailable?: boolean;
+      webScrapeAvailable?: boolean;
+      browserBrowseAvailable?: boolean;
+      memoryAvailable?: boolean;
+      imageLookupAvailable?: boolean;
+      codeAgentAvailable?: boolean;
+      voiceToolsAvailable?: boolean;
+    };
+  }
+) {
+  const triggerMessageIds = [
+    ...new Set(
+      [...(Array.isArray(options.triggerMessageIds) ? options.triggerMessageIds : []), message.id]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    )
+  ];
+  const source = String(options.source || "message_event").trim() || "message_event";
+  const triggerMessageId = triggerMessageIds[0] || String(message.id || "").trim() || null;
+  bot.store.logAction({
+    kind: "text_runtime",
+    guildId: message.guildId,
+    channelId: message.channelId,
+    messageId: message.id,
+    userId: message.author?.id || null,
+    content: "reply_tool_availability",
+    metadata: {
+      ...buildRuntimeDecisionCorrelation({
+        botId: bot.client.user?.id || null,
+        triggerMessageId,
+        source,
+        stage: "tool_availability",
+        allow: includedTools.length > 0,
+        reason: includedTools.length > 0 ? "tools_available" : "no_tools_available"
+      }),
+      triggerMessageIds,
+      includedToolCount: includedTools.length,
+      excludedToolCount: excludedTools.length,
+      includedTools,
+      excludedTools,
+      capabilities
+    }
+  });
+}
 
 
-export async function buildReplyContext(
+
+async function buildReplyContext(
   bot: ReplyPipelineRuntime,
   message: ReplyPipelineMessage,
   settings: Settings,
@@ -629,11 +867,11 @@ export async function buildReplyContext(
 }
 
 
-export async function executeReplyLlm(
+async function executeReplyLlm(
   bot: ReplyPipelineRuntime,
   message: ReplyPipelineMessage,
   settings: Settings,
-  _options: ReplyAttemptOptions,
+  options: ReplyAttemptOptions,
   ctx: ReplyPipelineContext
 ): Promise<ReplyLlmResult> {
   const {
@@ -643,23 +881,18 @@ export async function executeReplyLlm(
   } = ctx;
   let { webSearch, browserBrowse, memoryLookup, modelImageInputs, imageLookup, replyPrompts } = ctx;
 
-  const replyTools = buildReplyToolSet(settings, {
-    webSearchAvailable:
-      Boolean(webSearch?.enabled) &&
-      Boolean(webSearch?.configured) &&
-      !webSearch?.optedOutByUser &&
-      !webSearch?.blockedByBudget &&
-      webSearch?.budget?.canSearch !== false,
-    browserBrowseAvailable:
-      Boolean(browserBrowse?.enabled) &&
-      Boolean(browserBrowse?.configured) &&
-      !browserBrowse?.blockedByBudget &&
-      browserBrowse?.budget?.canBrowse !== false,
-    memoryAvailable: Boolean(getMemorySettings(settings).enabled),
-    imageLookupAvailable: Boolean(imageLookup?.enabled),
-    openArticleAvailable: false,
-    codeAgentAvailable: isDevTaskEnabled(settings),
-    voiceToolsAvailable: Boolean(getVoiceSettings(settings).enabled)
+  const replyToolAvailability = buildReplyToolAvailabilityState(settings, {
+    webSearch,
+    browserBrowse,
+    imageLookup
+  });
+  const replyTools = replyToolAvailability.tools;
+  logReplyToolAvailability(bot, {
+    message,
+    options,
+    includedTools: replyToolAvailability.includedTools,
+    excludedTools: replyToolAvailability.excludedTools,
+    capabilities: replyToolAvailability.capabilities
   });
 
   const activeVoiceCallbacks = inVoiceChannelNow && activeVoiceSession
@@ -989,7 +1222,7 @@ export async function executeReplyLlm(
   }
 
   const mediaPromptLimit = resolveMaxMediaPromptLen(settings);
-  let replyDirective = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
+  const replyDirective = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
   replyPrompts = buildLoggedReplyPrompts(replyPromptCapture, replyToolLoopSteps);
 
   const automationIntentHandled = await bot.maybeHandleStructuredAutomationIntent({
@@ -1025,7 +1258,7 @@ export async function executeReplyLlm(
 }
 
 
-export async function dispatchReplyActions(
+async function dispatchReplyActions(
   bot: ReplyPipelineRuntime,
   message: ReplyPipelineMessage,
   settings: Settings,
@@ -1259,7 +1492,7 @@ export async function dispatchReplyActions(
 }
 
 
-export async function sendReplyMessage(
+async function sendReplyMessage(
   bot: ReplyPipelineRuntime,
   message: ReplyPipelineMessage,
   settings: Settings,
@@ -1490,9 +1723,44 @@ export async function maybeReplyToMessagePipeline(
   options: ReplyAttemptOptions = {}
 ): Promise<boolean> {
   const permissions = getReplyPermissions(settings);
-  if (!permissions.allowReplies) return false;
-  if (!bot.canSendMessage(permissions.maxMessagesPerHour)) return false;
-  if (!bot.canTalkNow(settings)) return false;
+  if (!permissions.allowReplies) {
+    logReplyPipelineGate(bot, {
+      message,
+      settings,
+      options,
+      allow: false,
+      reason: "replies_disabled",
+      sendBudgetAllowed: null,
+      talkNowAllowed: null
+    });
+    return false;
+  }
+  const sendBudgetAllowed = bot.canSendMessage(permissions.maxMessagesPerHour);
+  if (!sendBudgetAllowed) {
+    logReplyPipelineGate(bot, {
+      message,
+      settings,
+      options,
+      allow: false,
+      reason: "send_budget_blocked",
+      sendBudgetAllowed,
+      talkNowAllowed: null
+    });
+    return false;
+  }
+  const talkNowAllowed = bot.canTalkNow(settings);
+  if (!talkNowAllowed) {
+    logReplyPipelineGate(bot, {
+      message,
+      settings,
+      options,
+      allow: false,
+      reason: "talk_now_blocked",
+      sendBudgetAllowed,
+      talkNowAllowed
+    });
+    return false;
+  }
 
   const replyScopeKey = buildTextReplyScopeKey({
     guildId: message.guildId,
@@ -1504,8 +1772,30 @@ export async function maybeReplyToMessagePipeline(
   try {
     throwIfAborted(signal, "Reply cancelled");
     const ctx = await buildReplyContext(bot, message, settings, options);
-    if (!ctx || !ctx.shouldRun) return false;
+    if (!ctx || !ctx.shouldRun) {
+      logReplyPipelineGate(bot, {
+        message,
+        settings,
+        options,
+        allow: false,
+        reason: "context_unavailable",
+        sendBudgetAllowed,
+        talkNowAllowed,
+        ctx: ctx || null
+      });
+      return false;
+    }
     ctx.signal = signal;
+    logReplyPipelineGate(bot, {
+      message,
+      settings,
+      options,
+      allow: true,
+      reason: "ready",
+      sendBudgetAllowed,
+      talkNowAllowed,
+      ctx
+    });
 
     throwIfAborted(signal, "Reply cancelled");
     const llmResult = await executeReplyLlm(bot, message, settings, options, ctx);

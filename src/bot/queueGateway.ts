@@ -6,6 +6,7 @@ import {
   getMemorySettings,
   getReplyPermissions
 } from "../settings/agentStack.ts";
+import { buildRuntimeDecisionCorrelation } from "../services/runtimeCorrelation.ts";
 
 const REPLY_QUEUE_RATE_LIMIT_WAIT_MS = 15_000;
 const REPLY_QUEUE_SEND_RETRY_BASE_MS = 2_500;
@@ -75,18 +76,18 @@ export function getReplyQueueWaitMs(
   return 0;
 }
 
-export function getReplyCoalesceWindowMs(settings: Record<string, unknown>) {
+function getReplyCoalesceWindowMs(settings: Record<string, unknown>) {
   const activity = getActivitySettings(settings);
   const seconds = clamp(Number(activity.replyCoalesceWindowSeconds) || 0, 0, 20);
   return Math.floor(seconds * 1000);
 }
 
-export function getReplyCoalesceMaxMessages(settings: Record<string, unknown>) {
+function getReplyCoalesceMaxMessages(settings: Record<string, unknown>) {
   const activity = getActivitySettings(settings);
   return clamp(Number(activity.replyCoalesceMaxMessages) || 1, 1, 20);
 }
 
-export function getReplyCoalesceWaitMs(
+function getReplyCoalesceWaitMs(
   settings: Record<string, unknown>,
   message: ReplyQueueMessage | null | undefined,
   options: ReplyCoalesceWaitOptions = {}
@@ -204,6 +205,55 @@ function normalizeConfidenceSource(
   return "fallback";
 }
 
+function logReplyQueueGateRejected(
+  bot: QueueGatewayRuntime,
+  {
+    channelId,
+    queueDepth,
+    head,
+    message,
+    reason,
+    metadata = {}
+  }: {
+    channelId: string;
+    queueDepth: number;
+    head: ReplyQueueJob | null | undefined;
+    message: ReplyQueueMessage | null | undefined;
+    reason: string;
+    metadata?: Record<string, unknown>;
+  }
+) {
+  const createdAt = Number(message?.createdTimestamp);
+  const ageMs = Number.isFinite(createdAt) && createdAt > 0
+    ? Math.max(0, Date.now() - createdAt)
+    : null;
+  const source = String(head?.source || "").trim() || null;
+  bot.store.logAction({
+    kind: "text_runtime",
+    guildId: String(message?.guildId || "").trim() || null,
+    channelId: String(message?.channelId || channelId || "").trim() || null,
+    messageId: String(message?.id || "").trim() || null,
+    userId: String(message?.author?.id || "").trim() || null,
+    content: "reply_queue_gate_rejected",
+    metadata: {
+      ...buildRuntimeDecisionCorrelation({
+        botId: bot.client.user?.id || null,
+        triggerMessageId: String(message?.id || "").trim() || null,
+        source,
+        stage: "queue",
+        allow: false,
+        reason
+      }),
+      queueDepth: Math.max(0, Number(queueDepth) || 0),
+      source,
+      attempts: Math.max(0, Number(head?.attempts) || 0),
+      forceRespond: Boolean(head?.forceRespond),
+      ageMs,
+      ...metadata
+    }
+  });
+}
+
 export async function processReplyQueue(bot: QueueGatewayRuntime, channelId: string) {
   if (bot.replyQueueWorkers.has(channelId)) return;
   bot.replyQueueWorkers.add(channelId);
@@ -216,6 +266,13 @@ export async function processReplyQueue(bot: QueueGatewayRuntime, channelId: str
       const head = queue[0];
       const headMessage = head?.message;
       if (!headMessage?.id) {
+        logReplyQueueGateRejected(bot, {
+          channelId,
+          queueDepth: queue.length,
+          head,
+          message: headMessage,
+          reason: "invalid_queue_head"
+        });
         dequeueReplyJob(bot, channelId);
         continue;
       }
@@ -225,26 +282,68 @@ export async function processReplyQueue(bot: QueueGatewayRuntime, channelId: str
       const memory = getMemorySettings(settings);
 
       if (!permissions.allowReplies) {
+        logReplyQueueGateRejected(bot, {
+          channelId,
+          queueDepth: queue.length,
+          head,
+          message: headMessage,
+          reason: "replies_disabled"
+        });
         dequeueReplyJob(bot, channelId);
         continue;
       }
       if (!headMessage.author || String(headMessage.author.id || "") === String(bot.client.user?.id || "")) {
+        logReplyQueueGateRejected(bot, {
+          channelId,
+          queueDepth: queue.length,
+          head,
+          message: headMessage,
+          reason: !headMessage.author ? "missing_author" : "self_message"
+        });
         dequeueReplyJob(bot, channelId);
         continue;
       }
       if (!headMessage.guild || !headMessage.channel) {
+        logReplyQueueGateRejected(bot, {
+          channelId,
+          queueDepth: queue.length,
+          head,
+          message: headMessage,
+          reason: "message_context_missing"
+        });
         dequeueReplyJob(bot, channelId);
         continue;
       }
       if (!bot.isChannelAllowed(settings, headMessage.channelId)) {
+        logReplyQueueGateRejected(bot, {
+          channelId,
+          queueDepth: queue.length,
+          head,
+          message: headMessage,
+          reason: "channel_blocked"
+        });
         dequeueReplyJob(bot, channelId);
         continue;
       }
       if (bot.isUserBlocked(settings, headMessage.author.id)) {
+        logReplyQueueGateRejected(bot, {
+          channelId,
+          queueDepth: queue.length,
+          head,
+          message: headMessage,
+          reason: "user_blocked"
+        });
         dequeueReplyJob(bot, channelId);
         continue;
       }
       if (bot.store.hasTriggeredResponse(headMessage.id)) {
+        logReplyQueueGateRejected(bot, {
+          channelId,
+          queueDepth: queue.length,
+          head,
+          message: headMessage,
+          reason: "duplicate_response_trigger"
+        });
         dequeueReplyJob(bot, channelId);
         continue;
       }
