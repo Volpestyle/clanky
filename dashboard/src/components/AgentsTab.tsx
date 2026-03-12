@@ -23,6 +23,13 @@ interface BrowserSession {
   totalSteps: number;
   hitStepLimit: boolean;
   durationMs: number | null;
+  runtime: string | null;
+  provider: string | null;
+  model: string | null;
+  currentUrl: string | null;
+  failed: boolean;
+  errorName: string | null;
+  errorMessage: string | null;
   toolSteps: ToolStep[];
 }
 
@@ -73,6 +80,7 @@ function formatStepTime(iso: string): string {
 function SessionCard({ session }: { session: BrowserSession }) {
   const hasToolSteps = session.toolSteps.length > 0;
   const hasMetadata = session.guildId || session.channelId || session.userId;
+  const hasRuntimeMetadata = session.runtime || session.provider || session.model || session.currentUrl;
 
   return (
     <details className="ag-card">
@@ -91,10 +99,21 @@ function SessionCard({ session }: { session: BrowserSession }) {
         <span className="ag-steps-count">{session.totalSteps} step{session.totalSteps !== 1 ? "s" : ""}</span>
         <span className="ag-duration">{formatDuration(session.durationMs)}</span>
         <span className="ag-cost">${session.totalCostUsd.toFixed(4)}</span>
+        {session.failed && <span className="ag-chip-failed">FAILED</span>}
         {session.hitStepLimit && <span className="ag-chip-limit">HIT LIMIT</span>}
       </summary>
 
       <div className="ag-detail">
+        {session.failed && session.errorMessage && (
+          <div>
+            <div className="ag-detail-section-label">ERROR</div>
+            <p className="ag-error-message">
+              {session.errorName ? `${session.errorName}: ` : ""}
+              {session.errorMessage}
+            </p>
+          </div>
+        )}
+
         {/* Full instruction */}
         {session.instruction && (
           <div>
@@ -115,6 +134,38 @@ function SessionCard({ session }: { session: BrowserSession }) {
                   <span className="ag-step-time">{formatStepTime(step.timestamp)}</span>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {hasRuntimeMetadata && (
+          <div>
+            <div className="ag-detail-section-label">RUNTIME</div>
+            <div className="ag-meta-grid">
+              {session.runtime && (
+                <div className="ag-meta-item">
+                  <span className="ag-meta-label">Runtime</span>
+                  <span className="ag-meta-value">{session.runtime}</span>
+                </div>
+              )}
+              {session.provider && (
+                <div className="ag-meta-item">
+                  <span className="ag-meta-label">Provider</span>
+                  <span className="ag-meta-value">{session.provider}</span>
+                </div>
+              )}
+              {session.model && (
+                <div className="ag-meta-item">
+                  <span className="ag-meta-label">Model</span>
+                  <span className="ag-meta-value">{session.model}</span>
+                </div>
+              )}
+              {session.currentUrl && (
+                <div className="ag-meta-item">
+                  <span className="ag-meta-label">URL</span>
+                  <span className="ag-meta-value">{session.currentUrl}</span>
+                </div>
+              )}
             </div>
           </div>
         )}

@@ -3,7 +3,13 @@ import { estimateUsdCost } from "../llm/pricing.ts";
 import { extractOpenAiResponseText, extractOpenAiResponseUsage } from "../llm/llmHelpers.ts";
 import type { ImageInput } from "../llm/serviceShared.ts";
 import type { BrowserManager } from "../services/BrowserManager.ts";
-import { createAbortError, isAbortError, throwIfAborted } from "./browserTaskRuntime.ts";
+import {
+  createAbortError,
+  describeBrowserTaskError,
+  isAbortError,
+  readBrowserCurrentUrl,
+  throwIfAborted
+} from "./browserTaskRuntime.ts";
 
 const COMPUTER_USE_DEFAULT_MODEL = "gpt-5.4";
 const COMPUTER_USE_DEFAULT_START_URL = "https://example.com";
@@ -343,11 +349,12 @@ export async function runOpenAiComputerUseTask({
   let totalCostUsd = 0;
   let hitStepLimit = false;
   let finalText = "";
+  let currentUrl: string | null = initialUrl;
 
   try {
     await browserManager.open(sessionKey, initialUrl, stepTimeoutMs, signal);
     let screenshot = await browserManager.screenshot(sessionKey, stepTimeoutMs, signal);
-    let currentUrl = await browserManager.currentUrl(sessionKey, stepTimeoutMs, signal).catch(() => initialUrl);
+    currentUrl = await readBrowserCurrentUrl(browserManager, sessionKey, stepTimeoutMs, initialUrl, signal);
 
     let response = await sendComputerRequest(
       openai,
@@ -458,6 +465,7 @@ export async function runOpenAiComputerUseTask({
         runtime: "openai_computer_use",
         provider: resolvedProvider,
         model: resolvedModel,
+        sessionKey,
         currentUrl: currentUrl || null,
         steps: step,
         hitStepLimit,
@@ -477,8 +485,35 @@ export async function runOpenAiComputerUseTask({
     if (isAbortError(error) || signal?.aborted) {
       throw createAbortError(signal?.reason || error);
     }
+
+    currentUrl = await readBrowserCurrentUrl(browserManager, sessionKey, stepTimeoutMs, currentUrl, signal);
+    const { errorName, errorMessage, errorCode } = describeBrowserTaskError(error);
+    store.logAction({
+      kind: "browser_browse_failed",
+      guildId: trace.guildId || null,
+      channelId: trace.channelId || null,
+      userId: trace.userId || null,
+      content: String(instruction || "").slice(0, 200),
+      metadata: {
+        runtime: "openai_computer_use",
+        provider: resolvedProvider,
+        model: resolvedModel,
+        sessionKey,
+        currentUrl: currentUrl || null,
+        steps: step,
+        source: logSource ?? trace.source ?? null,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        errorName,
+        errorMessage,
+        errorCode,
+        totalCostUsd
+      },
+      usdCost: totalCostUsd
+    });
     throw error;
   } finally {
-    await browserManager.close(sessionKey);
+    await browserManager.close(sessionKey).catch((closeError) => {
+      console.warn(`[openAiComputerUseRuntime] Error closing browser session ${sessionKey}:`, closeError);
+    });
   }
 }

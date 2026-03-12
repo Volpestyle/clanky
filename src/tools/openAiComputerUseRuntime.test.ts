@@ -174,6 +174,7 @@ test("runOpenAiComputerUseTask uses the GA computer tool and executes batched ac
   ]);
   assert.equal(logs.length, 1);
   assert.equal(logs[0]?.usdCost, 0.0005);
+  assert.equal((logs[0]?.metadata as Record<string, unknown>)?.sessionKey, "session-1");
 });
 
 test("runOpenAiComputerUseTask surfaces pending safety checks", async () => {
@@ -233,4 +234,67 @@ test("runOpenAiComputerUseTask surfaces pending safety checks", async () => {
   );
 
   assert.equal(closed, true);
+});
+
+test("runOpenAiComputerUseTask logs structured failures and preserves the original error when close fails", async () => {
+  const logs: Array<Record<string, unknown>> = [];
+  const openai = {
+    async post() {
+      return {
+        id: "resp_1",
+        output: [],
+        output_text: "unused",
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          input_tokens_details: { cached_tokens: 0 }
+        }
+      };
+    }
+  } as OpenAI;
+
+  const browserManager = {
+    configureSession() {
+      return undefined;
+    },
+    async open() {
+      throw new Error("browser_open_failed");
+    },
+    async currentUrl() {
+      return "https://example.com/failure";
+    },
+    async close() {
+      throw new Error("close_failed");
+    }
+  } as BrowserManager;
+
+  await assert.rejects(
+    runOpenAiComputerUseTask({
+      openai,
+      browserManager,
+      store: {
+        logAction(entry) {
+          logs.push(entry);
+        }
+      },
+      sessionKey: "session-2",
+      instruction: "Inspect https://example.com/failure",
+      maxSteps: 1,
+      stepTimeoutMs: 5_000,
+      trace: {
+        guildId: "guild-1",
+        channelId: "channel-1",
+        userId: "user-1",
+        source: "test"
+      }
+    }),
+    /browser_open_failed/
+  );
+
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0]?.kind, "browser_browse_failed");
+  assert.equal((logs[0]?.metadata as Record<string, unknown>)?.sessionKey, "session-2");
+  assert.equal((logs[0]?.metadata as Record<string, unknown>)?.runtime, "openai_computer_use");
+  assert.equal((logs[0]?.metadata as Record<string, unknown>)?.errorMessage, "browser_open_failed");
+  assert.equal((logs[0]?.metadata as Record<string, unknown>)?.currentUrl, "https://example.com/failure");
 });

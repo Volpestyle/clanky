@@ -501,7 +501,7 @@ export function getRecentBrowserSessions(
   const guildId = String(opts?.guildId || "").trim();
 
   const conditions: string[] = [
-    "kind IN ('browser_browse_call', 'browser_tool_step', 'browser_agent_session_turn')"
+    "kind IN ('browser_browse_call', 'browser_browse_failed', 'browser_tool_step', 'browser_agent_session_turn')"
   ];
   const params: Array<string | number> = [];
 
@@ -544,6 +544,13 @@ export function getRecentBrowserSessions(
     totalSteps: number;
     hitStepLimit: boolean;
     durationMs: number | null;
+    runtime: string | null;
+    provider: string | null;
+    model: string | null;
+    currentUrl: string | null;
+    failed: boolean;
+    errorName: string | null;
+    errorMessage: string | null;
     toolSteps: ToolStepEntry[];
   }
 
@@ -570,6 +577,13 @@ export function getRecentBrowserSessions(
       totalSteps: 0,
       hitStepLimit: false,
       durationMs: null,
+      runtime: null,
+      provider: null,
+      model: null,
+      currentUrl: null,
+      failed: false,
+      errorName: null,
+      errorMessage: null,
       toolSteps: []
     };
 
@@ -585,6 +599,10 @@ export function getRecentBrowserSessions(
     existing.channelId = existing.channelId || (row.channel_id ? String(row.channel_id) : null);
     existing.userId = existing.userId || (row.user_id ? String(row.user_id) : null);
     existing.source = existing.source || (meta.source ? String(meta.source) : null);
+    existing.runtime = existing.runtime || (meta.runtime ? String(meta.runtime) : null);
+    existing.provider = existing.provider || (meta.provider ? String(meta.provider) : null);
+    existing.model = existing.model || (meta.model ? String(meta.model) : null);
+    existing.currentUrl = existing.currentUrl || (meta.currentUrl ? String(meta.currentUrl) : null);
 
     if (row.kind === "browser_browse_call") {
       existing.instruction = existing.instruction || (row.content ? String(row.content) : null);
@@ -593,10 +611,29 @@ export function getRecentBrowserSessions(
       if (meta.hitStepLimit) existing.hitStepLimit = true;
       const cost = Number(meta.totalCostUsd || row.usd_cost);
       if (Number.isFinite(cost)) existing.totalCostUsd += cost;
+      const durationMs = Number(meta.durationMs);
+      if (Number.isFinite(durationMs) && durationMs >= 0) {
+        existing.durationMs = Math.max(existing.durationMs || 0, durationMs);
+      }
+    } else if (row.kind === "browser_browse_failed") {
+      existing.instruction = existing.instruction || (row.content ? String(row.content) : null);
+      existing.failed = true;
+      existing.errorName = existing.errorName || (meta.errorName ? String(meta.errorName) : null);
+      existing.errorMessage = existing.errorMessage || (meta.errorMessage ? String(meta.errorMessage) : null);
+      const steps = Number(meta.steps);
+      if (Number.isFinite(steps) && steps > existing.totalSteps) existing.totalSteps = steps;
+      const cost = Number(meta.totalCostUsd || row.usd_cost);
+      if (Number.isFinite(cost)) existing.totalCostUsd += cost;
+      const durationMs = Number(meta.durationMs);
+      if (Number.isFinite(durationMs) && durationMs >= 0) {
+        existing.durationMs = Math.max(existing.durationMs || 0, durationMs);
+      }
     } else if (row.kind === "browser_tool_step") {
+      const step = Math.max(0, Math.floor(Number(meta.step) || 0));
+      if (step > existing.totalSteps) existing.totalSteps = step;
       existing.toolSteps.push({
         tool: String(meta.tool || row.content || "unknown"),
-        step: Math.max(0, Math.floor(Number(meta.step) || 0)),
+        step,
         timestamp: rowTime
       });
     } else if (row.kind === "browser_agent_session_turn") {

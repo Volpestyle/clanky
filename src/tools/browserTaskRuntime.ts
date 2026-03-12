@@ -94,6 +94,40 @@ export function throwIfAborted(signal?: AbortSignal, fallbackReason = "Browser t
   throw createAbortError(signal.reason || fallbackReason);
 }
 
+export function describeBrowserTaskError(error: unknown) {
+  const rawName = String((error as { name?: unknown })?.name || "").trim();
+  const rawMessage =
+    error instanceof Error ? String(error.message || "").trim() : String(error || "").trim();
+  const rawCode = String((error as { code?: unknown })?.code || "").trim();
+
+  return {
+    errorName: rawName || "Error",
+    errorMessage: rawMessage || rawName || "unknown_browser_error",
+    errorCode: rawCode || null
+  };
+}
+
+export async function readBrowserCurrentUrl(
+  browserManager: BrowserManager,
+  sessionKey: string,
+  stepTimeoutMs: number,
+  fallbackUrl: string | null = null,
+  signal?: AbortSignal
+) {
+  const currentUrlReader = (browserManager as { currentUrl?: BrowserManager["currentUrl"] }).currentUrl;
+  if (typeof currentUrlReader !== "function") {
+    return fallbackUrl;
+  }
+
+  try {
+    const currentUrl = await currentUrlReader.call(browserManager, sessionKey, stepTimeoutMs, signal);
+    const normalizedCurrentUrl = String(currentUrl || "").trim();
+    return normalizedCurrentUrl || fallbackUrl;
+  } catch {
+    return fallbackUrl;
+  }
+}
+
 export function buildBrowserTaskScopeKey({
   guildId,
   channelId
@@ -168,6 +202,7 @@ export async function runBrowserBrowseTask({
   signal
 }: BrowserBrowseTaskOptions): Promise<BrowserBrowseTaskResult> {
   throwIfAborted(signal);
+  const startedAt = Date.now();
 
   try {
     const result = await runBrowseAgent({
@@ -193,11 +228,16 @@ export async function runBrowserBrowseTask({
       userId: trace.userId || null,
       content: instruction.slice(0, 200),
       metadata: {
+        sessionKey,
+        runtime: "local_browser_agent",
+        provider,
+        model,
         steps: result.steps,
         hitStepLimit: result.hitStepLimit,
         imageInputCount: Array.isArray(result.imageInputs) ? result.imageInputs.length : 0,
         totalCostUsd: result.totalCostUsd,
-        source: logSource ?? trace.source ?? null
+        source: logSource ?? trace.source ?? null,
+        durationMs: Math.max(0, Date.now() - startedAt)
       },
       usdCost: result.totalCostUsd
     });
@@ -207,6 +247,28 @@ export async function runBrowserBrowseTask({
     if (isAbortError(error) || signal?.aborted) {
       throw createAbortError(signal?.reason || error);
     }
+
+    const { errorName, errorMessage, errorCode } = describeBrowserTaskError(error);
+    const currentUrl = await readBrowserCurrentUrl(browserManager, sessionKey, stepTimeoutMs, null, signal);
+    store.logAction({
+      kind: "browser_browse_failed",
+      guildId: trace.guildId || null,
+      channelId: trace.channelId || null,
+      userId: trace.userId || null,
+      content: instruction.slice(0, 200),
+      metadata: {
+        sessionKey,
+        runtime: "local_browser_agent",
+        provider,
+        model,
+        currentUrl,
+        source: logSource ?? trace.source ?? null,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        errorName,
+        errorMessage,
+        errorCode
+      }
+    });
     throw error;
   }
 }

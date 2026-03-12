@@ -150,6 +150,17 @@
   white-space: nowrap;
 }
 
+.ag-chip-failed {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  background: rgba(248, 113, 113, 0.12);
+  color: #f87171;
+  white-space: nowrap;
+}
+
 /* ---- EXPANDED DETAIL ---- */
 
 .ag-detail {
@@ -173,6 +184,15 @@
   margin: 0;
   font-size: 0.8rem;
   color: var(--ink-1);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ag-error-message {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #fca5a5;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
