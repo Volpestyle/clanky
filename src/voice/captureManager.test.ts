@@ -327,6 +327,7 @@ test("resolveCaptureTurnPromotionReason allows strong local promotion without se
 test("startInboundCapture leaves live bot interruption to transcript bursts when realtime ASR bridge is active", async () => {
   const { manager } = createManager();
   manager.shouldUsePerUserTranscription = () => true;
+  manager.shouldUseTranscriptOverlapInterrupts = () => true;
   const interruptCalls: Array<Record<string, unknown>> = [];
   manager.interruptBotSpeechForBargeIn = (args) => {
     interruptCalls.push(args);
@@ -399,6 +400,66 @@ test("startInboundCapture leaves live bot interruption to transcript bursts when
   await flushMicrotasks();
 
   assert.equal(interruptCalls.length, 0);
+});
+
+test("startInboundCapture arms a local pending overlap interrupt before provider speech_started arrives", async () => {
+  const { manager, logs } = createManager();
+  manager.shouldUsePerUserTranscription = () => true;
+  manager.shouldUseTranscriptOverlapInterrupts = () => true;
+  const voxClient = new EventEmitter();
+  voxClient.subscribeUser = () => {};
+  voxClient.getTtsBufferDepthSamples = () => 18_000;
+  voxClient.getTtsPlaybackState = () => "buffered";
+  const now = Date.now();
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000,
+    assistantOutput: {
+      phase: "speaking_buffered",
+      reason: "bot_audio_buffered",
+      phaseEnteredAt: now - 1_200,
+      lastSyncedAt: now - 200,
+      requestId: 14,
+      ttsPlaybackState: "buffered",
+      ttsBufferedSamples: 18_000,
+      lastTrigger: "test_seed"
+    },
+    activeReplyInterruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "speaker-1"
+    },
+    voxClient
+  });
+  const asrState = seedReadyPerUserAsr(manager, session, "speaker-1");
+
+  manager.captureManager.startInboundCapture({
+    session,
+    userId: "speaker-1",
+    settings: session.settingsSnapshot
+  });
+
+  const firstChunk = makeMonoPcm16(
+    Math.ceil((24_000 * (VOICE_TURN_PROMOTION_MIN_CLIP_MS + 40)) / 1000),
+    3000
+  );
+  voxClient.emit("userAudio", "speaker-1", firstChunk);
+  await flushMicrotasks();
+
+  const capture = session.userCaptures.get("speaker-1");
+  assert.ok(capture);
+  assert.equal(capture.asrUtteranceId, asrState.utterance.id);
+  assert.equal(capture.promotionReason, "strong_local_audio");
+  assert.equal(
+    logs.some((entry) => entry?.content === "openai_realtime_asr_speech_started"),
+    false
+  );
+
+  const pendingLog = logs.find((entry) => entry?.content === "voice_interrupt_speech_started_pending");
+  assert.ok(pendingLog);
+  assert.equal(pendingLog?.metadata?.utteranceId, capture.asrUtteranceId);
+  assert.equal(pendingLog?.metadata?.eventType, "local_capture_overlap");
+  assert.equal(pendingLog?.metadata?.initialReason, "insufficient_capture_bytes");
 });
 
 test("startInboundCapture aborts near-silence captures once they age past the early-abort window", async () => {

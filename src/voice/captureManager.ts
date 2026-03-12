@@ -113,6 +113,12 @@ interface CaptureManagerHost {
     minCaptureBytes?: number;
     captureState?: CaptureState | null;
   }) => boolean;
+  ensurePendingSpeechStartedInterruptFromLocalCapture: (args: {
+    session: VoiceSession;
+    userId?: string | null;
+    captureState?: CaptureState | null;
+    source?: string;
+  }) => boolean;
   evaluatePcmSilenceGate: (args: {
     pcmBuffer: Buffer;
     sampleRateHz?: number;
@@ -710,6 +716,13 @@ export class CaptureManager {
           source: "speaking_data",
           minCaptureBytes: bargeEvaluation.minCaptureBytes || 0,
           captureState
+        });
+      } else if (transcriptOverlapInterruptsEnabled && isPromoted) {
+        this.host.ensurePendingSpeechStartedInterruptFromLocalCapture({
+          session,
+          userId,
+          captureState,
+          source: "local_capture_overlap"
         });
       }
 

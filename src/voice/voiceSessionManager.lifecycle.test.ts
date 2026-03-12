@@ -1908,6 +1908,82 @@ test("handleAsrBridgeSpeechStarted keeps a same-speaker interrupt pending while 
   assert.equal(logs.some((entry) => entry?.content === "voice_interrupt_speech_started_ignored"), false);
 });
 
+test("commitPendingSpeechStartedInterrupt accepts an active local capture when provider speech_started was missed", () => {
+  const { manager, logs } = createManager();
+  const interruptCalls = [];
+  manager.shouldUseTranscriptOverlapInterrupts = () => true;
+  manager.interruptBotSpeechForOutputLockTurn = (payload) => {
+    interruptCalls.push(payload);
+    return true;
+  };
+
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: false,
+    botTurnOpenAt: 0,
+    assistantOutput: {
+      phase: "speaking_buffered",
+      reason: "bot_audio_buffered",
+      phaseEnteredAt: Date.now() - 1_200,
+      lastSyncedAt: Date.now() - 200,
+      requestId: 26,
+      ttsPlaybackState: "buffered",
+      ttsBufferedSamples: 18_000,
+      lastTrigger: "test_seed"
+    },
+    voxClient: {
+      isAlive: true,
+      getTtsBufferDepthSamples() {
+        return 18_000;
+      },
+      getTtsPlaybackState() {
+        return "buffered";
+      }
+    },
+    pendingResponse: null,
+    activeReplyInterruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "speaker-1"
+    },
+    userCaptures: new Map([
+      [
+        "speaker-1",
+        createAssertiveCaptureState("speaker-1", {
+          asrUtteranceId: 92,
+          bytesSent: 20_640
+        })
+      ]
+    ])
+  });
+  const capture = session.userCaptures.get("speaker-1");
+  assert.ok(capture);
+
+  const armed = manager.ensurePendingSpeechStartedInterruptFromLocalCapture({
+    session,
+    userId: "speaker-1",
+    captureState: capture,
+    source: "local_capture_overlap"
+  });
+
+  assert.equal(armed, true);
+  capture.bytesSent = 48_000;
+
+  const committed = manager.commitPendingSpeechStartedInterrupt({
+    session,
+    utteranceId: 92,
+    reason: "recheck_window"
+  });
+
+  assert.equal(committed, true);
+  assert.equal(interruptCalls.length, 1);
+  assert.equal(session.pendingSpeechStartedInterrupts?.size || 0, 0);
+  assert.equal(session.interruptDecisionsByUtteranceId?.get(92)?.source, "speech_started_sustained");
+  const interruptLog = logs.find((entry) => entry?.content === "voice_interrupt_on_speech_started_sustain");
+  assert.equal(interruptLog?.metadata?.eventType, "local_capture_overlap");
+  assert.equal(interruptLog?.metadata?.speechStillActiveSource, "local_capture");
+});
+
 test("handleAsrBridgeSpeechStarted arms a same-speaker interrupt while buffered bot speech drains over active music", () => {
   const { manager, logs } = createManager();
   manager.shouldUseTranscriptOverlapInterrupts = () => true;

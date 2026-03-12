@@ -226,6 +226,7 @@ import {
 import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
 import { executeLocalVoiceToolCall } from "./voiceToolCallDispatch.ts";
 import type {
+  CaptureState,
   LoggedVoicePromptBundle,
   OutputChannelState,
   RealtimeToolOwnership,
@@ -4258,10 +4259,21 @@ export class VoiceSessionManager {
       )
         ? sharedAsrState
         : null;
-    const speechStillActive = Boolean(
+    const providerSpeechStillActive = Boolean(
       matchingAsrState?.speechActive &&
       Math.max(0, Number(matchingAsrState?.speechDetectedUtteranceId || 0)) === normalizedUtteranceId
     );
+    const localCaptureState =
+      normalizedPendingUserId && session.userCaptures instanceof Map
+        ? session.userCaptures.get(normalizedPendingUserId) || null
+        : null;
+    const localCaptureStillActive = Boolean(
+      localCaptureState &&
+      this.hasCaptureBeenPromoted(localCaptureState) &&
+      Math.max(0, Number(localCaptureState.asrUtteranceId || 0)) === normalizedUtteranceId &&
+      Math.max(0, Number(localCaptureState.bytesSent || 0)) > 0
+    );
+    const speechStillActive = providerSpeechStillActive || localCaptureStillActive;
     if (!speechStillActive) {
       this.releasePendingSpeechStartedInterrupt({
         session,
@@ -4307,6 +4319,8 @@ export class VoiceSessionManager {
             signalPeak: bargeEvaluation.signal.peak,
             signalRms: bargeEvaluation.signal.rms,
             signalActiveSampleRatio: bargeEvaluation.signal.activeSampleRatio,
+            providerSpeechStillActive,
+            localCaptureStillActive,
             outputLockReason: bargeEvaluation.outputState.lockReason,
             outputBotTurnOpen: bargeEvaluation.outputState.botTurnOpen,
             outputBufferedBotSpeech: bargeEvaluation.outputState.bufferedBotSpeech,
@@ -4378,7 +4392,12 @@ export class VoiceSessionManager {
         audioStartMs: pendingInterrupt.audioStartMs,
         itemId: pendingInterrupt.itemId,
         eventType: pendingInterrupt.eventType,
-        sustainMs: Math.max(0, Date.now() - Math.max(0, Number(pendingInterrupt.startedAt || 0)))
+        sustainMs: Math.max(0, Date.now() - Math.max(0, Number(pendingInterrupt.startedAt || 0))),
+        speechStillActiveSource: providerSpeechStillActive
+          ? "provider_speech_started"
+          : localCaptureStillActive
+            ? "local_capture"
+            : "unknown"
       }
     });
     return true;
@@ -4597,6 +4616,41 @@ export class VoiceSessionManager {
       pendingHasAudio ||
       this.replyManager.hasBufferedTtsPlayback(session) ||
       assistantSpeaking;
+  }
+
+  ensurePendingSpeechStartedInterruptFromLocalCapture({
+    session,
+    userId = null,
+    captureState = null,
+    source = "local_capture_overlap"
+  }: {
+    session: VoiceSession;
+    userId?: string | null;
+    captureState?: CaptureState | null;
+    source?: string;
+  }) {
+    if (!session || session.ending || !captureState) return false;
+    const normalizedUserId = String(userId || captureState.userId || "").trim() || null;
+    if (!normalizedUserId) return false;
+    const utteranceId = Math.max(0, Number(captureState.asrUtteranceId || 0)) || null;
+    if (!utteranceId) return false;
+    const currentDecision = this.ensureInterruptDecisionMap(session).get(utteranceId);
+    if (currentDecision?.decision === "interrupt" || currentDecision?.decision === "ignore") {
+      return false;
+    }
+    if (this.ensurePendingSpeechStartedInterruptMap(session).has(utteranceId)) {
+      return true;
+    }
+
+    return this.handleAsrBridgeSpeechStarted({
+      session,
+      userId: normalizedUserId,
+      speakerName: this.resolveVoiceSpeakerName(session, normalizedUserId),
+      utteranceId,
+      audioStartMs: null,
+      itemId: null,
+      eventType: String(source || "local_capture_overlap")
+    });
   }
 
   handleAsrBridgeSpeechStarted({

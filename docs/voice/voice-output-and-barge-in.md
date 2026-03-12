@@ -258,29 +258,30 @@ When a realtime `bridge` or `brain` session is using the OpenAI ASR bridge, live
 Flow while assistant speech is active:
 
 1. If Realtime ASR emits `speech_started` for the speaker who is already allowed to interrupt under the current reply policy, the runtime arms a sustain window instead of cutting immediately.
-2. While that same utterance is still active, the runtime keeps re-checking the same assertive acoustic gate used by raw barge-in. An early `speech_started` event does not permanently lose the interrupt just because the first overlap chunk was still below the byte or signal threshold.
-3. If that same utterance keeps the floor long enough to become interrupt-eligible while assistant output is still interruptible, the runtime commits the hard cut, stores interruption context, and flushes the staged turn into the normal turn pipeline.
-4. If `speech_started` was missed or arrived before the utterance crossed the assertive gate, later same-speaker transcript updates and the final bridge commit can still rescue the interrupt once that same capture becomes eligible while assistant output is still interruptible.
-5. If that same utterance stops before the sustain window closes and never becomes eligible, the pending interrupt is released and any staged bridge turn flushes normally with no interrupt recorded.
-6. A wake-word or direct-address transcript that is still allowed to seize the floor can cut immediately once the transcript makes that intent explicit.
-7. For everyone else, a non-empty partial or final ASR transcript opens an overlap burst.
-8. Later transcript updates replace the latest text for that utterance while the burst stays open.
-9. The burst closes on either:
+2. If the same authorized speaker has already promoted an obviously voiced local capture but provider `speech_started` has not arrived yet, the runtime can arm that same sustain window from the local capture itself instead of waiting for final transcript commit.
+3. While that same utterance is still active, the runtime keeps re-checking the same assertive acoustic gate used by raw barge-in. An early overlap chunk does not permanently lose the interrupt just because it was still below the byte or signal threshold.
+4. If that same utterance keeps the floor long enough to become interrupt-eligible while assistant output is still interruptible, the runtime commits the hard cut, stores interruption context, and flushes the staged turn into the normal turn pipeline.
+5. If both provider `speech_started` and the local sustain fallback miss, later same-speaker transcript updates and the final bridge commit can still rescue the interrupt once that same capture becomes eligible while assistant output is still interruptible.
+6. If that same utterance stops before the sustain window closes and never becomes eligible, the pending interrupt is released and any staged bridge turn flushes normally with no interrupt recorded.
+7. A wake-word or direct-address transcript that is still allowed to seize the floor can cut immediately once the transcript makes that intent explicit.
+8. For everyone else, a non-empty partial or final ASR transcript opens an overlap burst.
+9. Later transcript updates replace the latest text for that utterance while the burst stays open.
+10. The burst closes on either:
    - a short quiet gap (`VOICE_INTERRUPT_BURST_QUIET_GAP_MS = 360ms`)
    - the max burst window (`VOICE_INTERRUPT_BURST_MAX_MS = 1500ms`)
-10. Resolution order:
+11. Resolution order:
    - obvious takeover text like `wait`, `hold on`, `stop`, or explicit cancel intent interrupts immediately
    - obvious low-signal text like laughter, backchannel, and tiny acknowledgements is ignored immediately
    - ambiguous short overlap is sent once to the dedicated interrupt classifier, which must answer `INTERRUPT` or `IGNORE`
-11. While the decision is pending, finalized ASR turns for that utterance are staged instead of being forwarded to the normal turn queue.
-12. If the burst resolves to `INTERRUPT`, the runtime executes the normal output-lock interrupt, stores interruption context if the reply was actually cut, and flushes the staged turn into the normal pipeline.
-13. If the assistant output already moved on to a newer reply before the classifier result returns, the staged turn is forwarded normally and no retroactive cut is applied to the newer output.
-14. If the burst resolves to `IGNORE`, the staged turn is dropped and no interrupt is recorded. Filler, laughter, and room noise do not become user turns.
+12. While the decision is pending, finalized ASR turns for that utterance are staged instead of being forwarded to the normal turn queue.
+13. If the burst resolves to `INTERRUPT`, the runtime executes the normal output-lock interrupt, stores interruption context if the reply was actually cut, and flushes the staged turn into the normal pipeline.
+14. If the assistant output already moved on to a newer reply before the classifier result returns, the staged turn is forwarded normally and no retroactive cut is applied to the newer output.
+15. If the burst resolves to `IGNORE`, the staged turn is dropped and no interrupt is recorded. Filler, laughter, and room noise do not become user turns.
 
 The interrupt classifier binding comes from `agentStack.overrides.voiceInterruptClassifier` and is exposed in the dashboard as the voice-mode "Interrupt classifier" provider/model controls. If no dedicated override exists, it falls back to the preset interrupt classifier, then the admission classifier, then the orchestrator.
 
 ## 10. Acoustic Gating
-All acoustic gates are deterministic. The agent has no input here. In ASR-bridge sessions, these gates still control capture promotion, echo guards, and whether audio is worth transcribing. The current reply target can arm a same-speaker interrupt as soon as Realtime ASR confirms `speech_started`; the hard cut still requires the same assertive raw barge-in gate, but that gate is re-checked through the sustain window instead of being locked to the very first overlap chunk. Transcript bursts remain the floor-transfer path for everyone else trying to seize the floor mid-reply, and wake-word/direct-address transcripts can still seize the floor immediately when policy allows. Raw acoustic barge-in remains the direct interrupt path for sessions that are not using transcript-overlap interrupts.
+All acoustic gates are deterministic. The agent has no input here. In ASR-bridge sessions, these gates still control capture promotion, echo guards, and whether audio is worth transcribing. The current reply target can arm a same-speaker interrupt as soon as Realtime ASR confirms `speech_started`, and the runtime now has a matching local-capture fallback when provider `speech_started` is missing but the same promoted capture is clearly still taking the floor. The hard cut still requires the same assertive raw barge-in gate, but that gate is re-checked through the sustain window instead of being locked to the very first overlap chunk. Transcript bursts remain the floor-transfer path for everyone else trying to seize the floor mid-reply, and wake-word/direct-address transcripts can still seize the floor immediately when policy allows. Raw acoustic barge-in remains the direct interrupt path for sessions that are not using transcript-overlap interrupts.
 
 ### Gate Sequence
 
@@ -359,8 +360,8 @@ Local-only promotion rule:
 
 - `strong_local_audio` can promote a capture before Realtime VAD confirms speech so the turn can keep collecting audio immediately
 - that local-only promotion still warms ASR state, but it does not supersede preplay reply generation until Realtime VAD confirms the same utterance
-- while assistant audio is already playing, barge-in stays blocked for that capture until Realtime VAD confirms the same utterance
-- once the utterance is VAD-confirmed, the currently authorized interrupter can arm a same-speaker interrupt on `speech_started`; the runtime keeps re-checking the raw acoustic gate during that overlap and commits the hard cut once the utterance is still active and eligible, while other speakers still go through the overlap-burst path
+- while assistant audio is already playing, the runtime still blocks direct raw cut for that local-only capture, but the currently authorized interrupter can now arm the sustain recheck loop from the promoted capture itself even before provider `speech_started` lands
+- once the utterance is VAD-confirmed, or once the local sustain fallback proves the same promoted capture is still taking the floor long enough to satisfy the raw gate, the runtime commits the hard cut; other speakers still go through the overlap-burst path
 
 ## 11. Interrupt Execution
 
