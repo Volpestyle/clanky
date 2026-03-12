@@ -398,7 +398,7 @@ export interface VoiceQueuedRealtimeAssistantUtterance {
     musicWakeRefreshAfterSpeech?: boolean;
 }
 
-export interface VoiceMusicQueueTrack {
+interface VoiceMusicQueueTrack {
     id: string;
     title: string;
     artist: string | null;
@@ -658,14 +658,14 @@ export interface SupersededPrePlaybackReply {
 
 export type DeferredVoiceActionType = "queued_user_turns";
 
-export type DeferredVoiceActionStatus = "scheduled" | "deferred";
+type DeferredVoiceActionStatus = "scheduled" | "deferred";
 
-export type DeferredVoiceActionFreshnessPolicy =
+type DeferredVoiceActionFreshnessPolicy =
     | "retry_exact"
     | "regenerate_from_goal"
     | "retry_then_regenerate";
 
-export interface DeferredVoiceActionBase {
+interface DeferredVoiceActionBase {
     type: DeferredVoiceActionType;
     goal: string;
     freshnessPolicy: DeferredVoiceActionFreshnessPolicy;
@@ -748,6 +748,7 @@ export interface CaptureState {
     startedAt: number;
     promotedAt: number;
     promotionReason: string | null;
+    bargeInGateLoggedAt: number;
     musicWakeFollowupEligibleAtPromotion: boolean;
     asrUtteranceId: number;
     bytesSent: number;
@@ -804,6 +805,17 @@ export interface VoiceInterruptOverlapUtteranceState {
     decidedAt: number;
     source: string;
     burstId: number;
+}
+
+export interface VoicePendingSpeechStartedInterrupt {
+    userId: string | null;
+    speakerName: string;
+    utteranceId: number;
+    startedAt: number;
+    audioStartMs: number | null;
+    itemId: string | null;
+    eventType: string | null;
+    timer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
 }
 
 export interface VoicePendingInterruptBridgeTurn {
@@ -1014,6 +1026,7 @@ export interface VoiceSession {
     activeRealtimeTurn?: RealtimeQueuedTurn | null;
     interruptOverlapBurst?: VoiceInterruptOverlapBurstState | null;
     interruptDecisionsByUtteranceId?: Map<number, VoiceInterruptOverlapUtteranceState>;
+    pendingSpeechStartedInterrupts?: Map<number, VoicePendingSpeechStartedInterrupt>;
     pendingInterruptBridgeTurns?: Map<number, VoicePendingInterruptBridgeTurn>;
     nextInterruptBurstId?: number;
     openAiAsrSessions: Map<string, AsrBridgeState>;

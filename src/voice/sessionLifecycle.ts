@@ -391,6 +391,11 @@ export class SessionLifecycle {
       clearTimeout(session.realtimeTurnCoalesceTimer);
       session.realtimeTurnCoalesceTimer = null;
     }
+    for (const pendingInterrupt of session.pendingSpeechStartedInterrupts?.values?.() || []) {
+      if (pendingInterrupt?.timer) {
+        clearTimeout(pendingInterrupt.timer);
+      }
+    }
 
     for (const capture of session.userCaptures?.values?.() || []) {
       if (capture.idleFlushTimer) {
@@ -418,6 +423,7 @@ export class SessionLifecycle {
     session.activeRealtimeTurn = null;
     session.pendingRealtimeAssistantUtterances = [];
     session.realtimeAssistantUtteranceBackpressureActive = false;
+    session.pendingSpeechStartedInterrupts?.clear?.();
     this.host.deferredActionQueue.clearAllDeferredVoiceActions(session);
     if (session.realtimeToolOwnership === "provider_native") {
       session.awaitingToolOutputs = false;

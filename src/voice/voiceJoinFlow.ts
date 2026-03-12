@@ -711,6 +711,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         activeRealtimeTurn: null,
         interruptOverlapBurst: null,
         interruptDecisionsByUtteranceId: new Map(),
+        pendingSpeechStartedInterrupts: new Map(),
         pendingInterruptBridgeTurns: new Map(),
         nextInterruptBurstId: 0,
         openAiAsrSessions: new Map(),

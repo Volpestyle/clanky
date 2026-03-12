@@ -2978,7 +2978,7 @@ test("runRealtimeTurn keeps direct-addressed bot-turn-open turns deferred when i
   assert.equal(Boolean(deferredTurns[0]?.directAddressed), true);
 });
 
-test("runRealtimeTurn interrupts bot-turn-open for non-direct turns from the allowed speaker", async () => {
+test("runRealtimeTurn defers bot-turn-open bridge transcripts for the allowed speaker instead of transcript-timed interrupting", async () => {
   const deferredTurns = [];
   const directAddressInterruptCalls = [];
   const outputLockInterruptCalls = [];
@@ -3041,12 +3041,11 @@ test("runRealtimeTurn interrupts bot-turn-open for non-direct turns from the all
     captureReason: "stream_end"
   });
 
-  assert.equal(deferredTurns.length, 0);
+  assert.equal(deferredTurns.length, 1);
   assert.equal(directAddressInterruptCalls.length, 0);
-  assert.equal(outputLockInterruptCalls.length, 1);
-  assert.equal(brainReplyCalls.length, 1);
-  assert.equal(brainReplyCalls[0]?.transcript, "what about spider man though");
-  assert.equal(brainReplyCalls[0]?.directAddressed, false);
+  assert.equal(outputLockInterruptCalls.length, 0);
+  assert.equal(deferredTurns[0]?.transcript, "what about spider man though");
+  assert.equal(brainReplyCalls.length, 0);
 });
 
 test("runRealtimeTurn queues non-direct bot-turn-open turns for deferred flush", async () => {
