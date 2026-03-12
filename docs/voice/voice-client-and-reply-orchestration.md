@@ -119,6 +119,7 @@ All listeners are tracked in `session.cleanupHandlers` and removed during teardo
 Refresh triggers: session start, music idle/error, voice membership changes, channel changes, turn context updates.
 
 Music prompt context stays available while playback is idle when the session still has meaningful music state. Realtime instructions include the current/last known track, exact reusable `selection_id` values for current/last/queued tracks, queued tracks, last action, and last query so the model can reason about replay and queue followups directly from prompt context.
+The shared live-music guidance is intentionally compact: the prompt includes one contextual quick-reaction hint when music is still playing without a handoff, plus one canonical `music_reply_handoff` capability rule in tooling policy. Both the full-brain voice prompt and realtime instruction refresh use that same wording so the model sees the music semantics once per concern instead of repeated nudges in the same turn.
 
 ### Tool Refresh (`voiceToolCallInfra.ts`)
 
@@ -309,7 +310,7 @@ That shared path performs the admission decision, addressing normalization, clas
 | 11 | Brain classifier mode after deterministic gates | classifier YES/NO |
 | 12 | Bridge path after deterministic gates | classifier YES/NO |
 
-Direct address feeds classifier/generation context and arms the music wake latch when music is active. Fresh wake-word turns pause active music immediately; while music is still `paused_wake_word`, ordinary follow-ups stay owned by that wake-word speaker. Once wake-word-paused music resumes after assistant playback drains, the renewed latch lets brief follow-ups continue without another wake word. For ordinary replies spoken over already-playing music, the passive latch refreshes after assistant speech actually settles so the follow-up window is not consumed while buffered reply audio is still draining. Post-resume latch-open follow-ups snapshot that eligibility when the capture promotes, so a turn that started inside the window is still admitted even if finalization lands just after expiry. Those wake-word and latch-open conversational turns now go straight to the main reply brain. If the dedicated music brain is enabled, it only sits in front of compact playback-control/disambiguation turns: exact single-word controls like `pause` or `skip` use an immediate fast path, and fuzzier control phrasing can still be consumed by the mini model with music tools. If the dedicated music brain is disabled, even those control/disambiguation turns go straight to the main reply brain, which can ignore them with `[SKIP]`, answer normally, or use `music_reply_handoff` for temporary pause/duck floor control. In the shared attention model, this stage is the voice spoke's floor gate, not a separate conversational mind. Canonical music semantics live in [`music.md`](music.md). Eagerness `0` still flows through the admission prompt and classifier/generation outcome rather than acting as a standalone deny.
+Direct address feeds classifier/generation context and arms the music wake latch when music is active. Fresh wake-word turns pause active music immediately; while music is still `paused_wake_word`, ordinary follow-ups stay owned by that wake-word speaker. Once wake-word-paused music resumes after assistant playback drains, the renewed latch lets ordinary follow-ups continue without another wake word. The main reply brain still decides whether that admitted reply should be a quick line, a fuller answer, or silence. For ordinary replies spoken over already-playing music, the passive latch refreshes after assistant speech actually settles so the follow-up window is not consumed while buffered reply audio is still draining. Post-resume latch-open follow-ups snapshot that eligibility when the capture promotes, so a turn that started inside the window is still admitted even if finalization lands just after expiry. Those wake-word and latch-open conversational turns now go straight to the main reply brain. If the dedicated music brain is enabled, it only sits in front of compact playback-control/disambiguation turns: exact single-word controls like `pause` or `skip` use an immediate fast path, and fuzzier control phrasing can still be consumed by the mini model with music tools. If the dedicated music brain is disabled, even those control/disambiguation turns go straight to the main reply brain, which can ignore them with `[SKIP]`, answer normally, or use `music_reply_handoff` for temporary pause/duck floor control. That handoff is floor control, not a cue to monologue. In the shared attention model, this stage is the voice spoke's floor gate, not a separate conversational mind. Canonical music semantics live in [`music.md`](music.md). Eagerness `0` still flows through the admission prompt and classifier/generation outcome rather than acting as a standalone deny.
 
 The live voice prompt now relies on deterministic direct-address and interruption context, not the older best-effort `"current speaker likely talking to"` hints derived from transcript history. Room-addressing guesses remain infrastructure metadata until reply-side addressing is produced explicitly.
 
@@ -349,8 +350,19 @@ earlier queued or buffered assistant audio must drain first, then the chunk's
 ordered speech/soundboard steps run in sequence. Once the chunk's own speech
 request has played, the follow-on soundboard beat is released by that request's
 playback state rather than global tail flags such as `botTurnOpen`.
-The chunker keeps the first streamed utterance sentence-coherent and avoids
-shipping tiny post-first fragments as standalone realtime playback turns.
+The chunker keeps the first streamed utterance sentence-coherent, waits for the
+configured minimum completed sentences per chunk before normal dispatch
+(`2` by default), and avoids shipping tiny post-first fragments as standalone
+realtime playback turns. `maxBufferChars` and final flush still force output so
+short endings and long run-ons do not hang behind the threshold forever.
+This is a deliberate prosody tradeoff. The default brain-streaming path does
+not optimize purely for the lowest possible first-byte latency. Realtime
+exact-line playback turns each emitted chunk into its own spoken request, so
+over-eager one-sentence or clause-sized dispatch can make the bot sound like it
+is repeatedly restarting its thought instead of speaking one continuous idea. We
+therefore bias the defaults toward a sentence-coherent first utterance and
+fewer micro-turns, accepting some extra latency on slower model/tool loops in
+exchange for more natural cadence.
 Short follow-on leftovers are merged with adjacent speech before playback, so
 the transport hears one continuous thought instead of a series of miniature
 inference requests. OpenAI exact-line playback requests also carry
@@ -361,6 +373,11 @@ into one final playback turn before it reaches the realtime transport. Ordered
 stream chunks that already expanded into `speech -> soundboard -> speech`
 substeps are not collapsed, because their soundboard beats live in the ordered
 playback plan rather than in the queued speech transport.
+
+When this tradeoff is too expensive for a specific deployment, the preferred
+escape hatch is a turn-local timeout fallback that relaxes chunking after a
+latency budget is exceeded. The default product stance is not to globally drop
+sentence coherence just to chase the fastest possible first audio.
 Spoken brain replies also begin with a hidden leading audience directive,
 `[[TO:SPEAKER]]`, `[[TO:ALL]]`, or `[[TO:<participant display name>]]`, which
 the runtime strips before any speech is played. This lets the brain declare who
@@ -659,7 +676,7 @@ When post-barge-in recovery feels wrong:
 1. Check `session.interruptedAssistantReply` — was context actually stored?
 2. Check the interrupt runtime log metadata, especially `interruptAcceptanceMode`, `interruptAccepted`, `responseCancelSucceeded`, `truncateSucceeded`, and `providerInterruptConfirmationPending`
 3. Check whether a newer assistant reply cleared applicability (`lastAssistantReplyAt > interruptedAt`)
-4. If the follow-up ASR was empty or unclear, inspect `voice_interrupt_unclear_turn_handoff_requested` — the runtime should hand interruption context back to the voice brain instead of replaying the cut line directly
+4. If the follow-up ASR was empty or unclear, inspect `voice_interrupt_unclear_turn_handoff_requested` and `voice_interrupt_unclear_turn_handoff_skipped` — only a committed interrupt on that exact bridge utterance should hand interruption context back to the voice brain instead of replaying the cut line directly
 5. Inspect the generated prompt — did it include the interruption recovery section from `buildVoiceTurnPrompt`?
 
 ## 21. Regression Tests (Reply Orchestration)
@@ -673,7 +690,7 @@ These cases should remain covered:
 - Coalesced deferred turns re-run the full admission gate
 - Barge-in stores interruption context when `interruptAccepted` is true for both immediate-ack and async-confirmation providers
 - Prompt generation receives interruption recovery context on the interrupting user's next turn
-- Empty or unclear ASR after a committed barge-in hands interruption context back to the voice brain
+- Empty or unclear ASR after a committed barge-in on that exact bridge utterance hands interruption context back to the voice brain
 - Pre-generation gate skips generation when newer finalized turn exists
 - Pre-generation gate skips generation when live promoted capture exists
 - Aborted generation produces no playback and no conversation window entry

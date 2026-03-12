@@ -62,9 +62,11 @@ Add to `.env`:
 RUNTIME_STRUCTURED_LOGS_ENABLED=true
 RUNTIME_STRUCTURED_LOGS_STDOUT=true
 RUNTIME_STRUCTURED_LOGS_FILE_PATH=data/logs/runtime-actions.ndjson
+DASHBOARD_SETTINGS_SAVE_DEBUG=false
 ```
 
 `RUNTIME_STRUCTURED_LOGS_FILE_PATH` is the file Promtail tails into Loki.
+`DASHBOARD_SETTINGS_SAVE_DEBUG=true` enables the otherwise-silent dashboard settings save success log.
 
 ## Local Loki stack
 
@@ -131,6 +133,7 @@ Minimum replay payload for a text or multimodal turn:
 - prompt bundle (`metadata.replyPrompts`)
 - LLM calls in order, including `toolNames`, `toolCallCount`, `stopReason`, and transcript/output previews
 - tool loop steps and tool results
+- tool failures such as `browser_browse_failed`, including runtime, provider/model, URL, and error details
 - attachment artifacts, image lookup results, fetched pages, or other retrieved context
 - final delivered action: reaction, sent message, sent reply, skip, or failure
 - memory side effects such as retrieval, embedding, and reply ingestion
@@ -354,7 +357,9 @@ Important interpretation rules:
 - `voice_turn_dropped_provisional_capture` means the capture never became a real turn and was discarded before normal reply admission
 - `voice_realtime_transcription_empty` includes `trackedUtteranceId`, `activeUtteranceId`, `finalSegmentCount`, and `partialChars` so you can tell whether the commit went empty while a newer live utterance was already active
 - `file_asr_transcription_empty` means the local file-turn transcription path returned no transcript before admission/generation
-- `openai_realtime_asr_bridge_empty_dropped` means the bridge never forwarded any transcript into turn processing, so no downstream LLM generation happened for that utterance
+- `openai_realtime_asr_bridge_empty_dropped` means the bridge never forwarded any transcript into turn processing, so no downstream LLM generation happened for that utterance; punctuation-only ASR fragments such as `"?"` collapse into this path
+- `voice_interrupt_unclear_turn_handoff_requested` should appear only when that exact bridge utterance already committed a real interrupt; stale interruption context alone should not synthesize this recovery event
+- `voice_interrupt_unclear_turn_handoff_skipped` means empty/unclear ASR tried to enter interruption recovery, but the bridge utterance did not have valid committed interrupt context; inspect `skipReason` before blaming ASR quality alone
 - `voice_turn_addressing` and `openai_realtime_text_turn_forwarded` now report transcript length metadata rather than the full utterance text; inspect `openai_realtime_asr_final_segment` for the exact user wording in realtime bridge sessions
 
 Suggested query:

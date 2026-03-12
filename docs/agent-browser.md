@@ -217,12 +217,13 @@ Current guardrails include:
 Browser-agent activity is visible via action-log kinds:
 
 - `browser_browse_call`
+- `browser_browse_failed`
 - `browser_tool_step` (local runtime low-level steps)
 
 The dashboard text history also surfaces richer tool-result detail for browser-adjacent tool usage alongside other tool calls.
 The dashboard Agents tab follows the global header guild selector, so browser-session history stays isolated to the currently selected guild instead of mixing sessions from every server.
 
-`browser_browse_call` is emitted by both runtimes. The local runtime records step count, cost, and `imageInputCount` for screenshots forwarded back to the parent brain. The hosted runtime records `runtime: "openai_computer_use"`, step count, current URL, and duration. `browser_agent_session_turn` is specific to the local browse-agent loop.
+`browser_browse_call` is emitted by both runtimes. The local runtime records `sessionKey`, runtime/provider/model, step count, cost, screenshot count, and duration. The hosted runtime records `runtime: "openai_computer_use"`, `sessionKey`, step count, current URL, and duration. `browser_browse_failed` is emitted by both runtimes with the same correlation metadata plus the concrete error name/message so Grafana and the Agents tab can reconstruct failed runs. `browser_agent_session_turn` is specific to the local browse-agent loop.
 
 ## Testing
 

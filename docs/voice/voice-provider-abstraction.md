@@ -242,6 +242,9 @@ Implementation note:
 - The canonical precise timing mechanism on the `brain` path is inline `[[SOUNDBOARD:<sound_ref>]]` control markup in the model text. The runtime parses those directives into an ordered speech/soundboard sequence.
 - Buffered brain playback routes the whole reply through that ordered sequencer.
 - Streamed brain playback reuses the same ordered sequencer chunk-by-chunk. This supports `speech -> soundboard -> speech` timing inside streamed replies, but playback remains serialized rather than mixed.
+- Normal streamed chunk emission waits for the configured minimum completed sentences per chunk before dispatch. `maxBufferChars` and final flush still force delivery so long run-ons and short tails do not stall playback.
+- The default brain streaming settings are intentionally prosody-biased, not minimum-latency-biased. `minSentencesPerChunk=2` and a sentence-coherent first chunk exist so realtime exact-line playback sounds like one continuous thought instead of a run of tiny restarty utterances.
+- If a deployment needs faster first-byte latency on slow model/tool turns, prefer a per-turn timeout fallback that relaxes chunking after a latency budget rather than lowering these defaults globally.
 - In realtime streaming, any chunk that contains inline soundboard directives is treated as a strict output barrier. Earlier queued or buffered assistant speech must finish before that chunk continues, so the soundboard beat cannot jump ahead of the speech it belongs to.
 - When a streamed realtime speech step precedes an inline soundboard beat, the completion wait is request-scoped. Tail flags like `botTurnOpen` do not hold the beat after that specific utterance has already finished draining.
 - Parsing inline refs out of provider-native output transcripts remains a compatibility fallback, not the primary timing path.
@@ -267,6 +270,9 @@ Implementation note:
 | `voice.conversationPolicy.replyPath` | `"brain"` | `native`, `bridge`, or `brain` |
 | `voice.conversationPolicy.ttsMode` | `"realtime"` | `realtime` or `api` output |
 | `voice.conversationPolicy.streaming.enabled` | `true` | Enables streamed speech chunks on brain path |
+| `voice.conversationPolicy.streaming.minSentencesPerChunk` | `2` | Minimum completed sentences before a normal streamed chunk emits |
+| `voice.conversationPolicy.streaming.eagerFirstChunkChars` | `30` | Minimum buffered chars before the first streamed chunk can emit eagerly |
+| `voice.conversationPolicy.streaming.maxBufferChars` | `300` | Forced break size when streaming text grows too large without a clean chunk boundary |
 
 ### Soundboard Policy
 

@@ -72,12 +72,18 @@ Current meanings:
 - `bindings`: resolved runtime helpers for display/debugging
 - `_meta`: version and save/apply metadata
 
-The dashboard edits `intent`. It uses `effective` and `bindings` as a runtime preview.
+The dashboard edits `intent`. It uses `effective` and `bindings` as a runtime preview, but on save it materializes and submits the next full authored snapshot instead of sending a sparse intent patch.
 
-`PUT /api/settings` currently accepts:
+`PUT /api/settings` accepts:
 
 - the next full authored `intent` snapshot in the request body
 - `_meta.expectedUpdatedAt` for optimistic concurrency
+
+Save semantics:
+
+- the request body replaces the full authored snapshot
+- omitted branches revert to defaults or inherited runtime behavior after normalization
+- this is not merge-patch behavior
 
 Current save guarantees:
 

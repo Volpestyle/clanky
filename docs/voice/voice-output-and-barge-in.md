@@ -405,9 +405,9 @@ Transcript-overlap burst decisions are also bound to the assistant output instan
    - **Adapt** — If the user changed direction ("actually, play rock instead"), respond to the new request.
    - **Drop** — If the original response is no longer relevant, start fresh.
 
-If the interrupting capture later finalizes with an empty or unclear ASR result, the runtime does not synthesize a fake user turn and does not replay canned assistant speech. It hands an interruption-context event back to the normal voice brain instead, so the model decides whether to continue, rephrase, acknowledge the backchannel, or stay silent. Empty post-barge-in audio is treated as unclear overlap, not as deterministic reason to force a replay.
+If the exact capture that already committed a real interrupt later finalizes with an empty or unclear ASR result, the runtime does not synthesize a fake user turn and does not replay canned assistant speech. It hands an interruption-context event back to the normal voice brain instead, so the model decides whether to continue, rephrase, acknowledge the backchannel, or stay silent. Empty post-barge-in audio is treated as unclear overlap, not as deterministic reason to force a replay.
 
-Low-signal overlap that resolves to `IGNORE` never reaches this recovery path, because the runtime never commits a real interrupt in the first place.
+Low-signal overlap that resolves to `IGNORE`, denied captures, and unrelated empty ASR commits never reach this recovery path, because the runtime never commits a real interrupt for that exact bridge utterance in the first place.
 
 ### Suppression Window
 

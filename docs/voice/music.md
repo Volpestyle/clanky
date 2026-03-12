@@ -156,7 +156,8 @@ This is the intended nuanced behavior:
 - first fresh wake during active music: pause
 - after music resumes and the latch is open: ordinary follow-up replies can stay conversational without another wake word, and the main reply brain decides whether that reply should pause, duck, do nothing, or stay silent
 - a brand-new explicit wake word during that same latch-open window: pause again
-- if the bot speaks while music is still live and no handoff was claimed, the spoken reply should stay short by default; longer answers should first claim the floor with `duck` or `pause`
+- if the bot speaks while music is still live and no handoff was claimed, it should usually favor a quick reaction or short answer unless the moment clearly wants more
+- if the brain chooses `music_reply_handoff`, that only means this reply can temporarily take the floor and playback auto-restores afterward; the bot still decides whether the answer stays brief or goes longer
 
 So “latch-open follow-up” and “fresh wake” are intentionally different:
 
@@ -203,6 +204,9 @@ During active music:
 - pending music disambiguation followups resolve against the active option set before ordinary reply planning, even if playback has not started yet and music is still effectively idle
 - pending music disambiguation first uses cheap exact/ordinal/title matching, then may use a bounded model resolver over the active option list for fuzzy or ASR-noisy references; it never invents a new option id or starts a fresh search from that followup alone
 - `music_play` treats `selection_id` as advisory when a query is also present; if the selection id is stale or malformed, the tool logs the bad id and falls back to query search instead of failing the whole play request
+- `music_queue_next` and `music_queue_add` can resolve ordinary queue requests directly from query text, or reuse an exact `selection_id`/track id when one is already known
+- for "play X, then queue Y" turns, the intended tool order is `music_play` first and `music_queue_next` second in the same tool turn; this avoids stranding the queue intent behind async playback startup
+- spoken confirmations should not claim a track is queued until `music_queue_next` or `music_queue_add` has actually succeeded
 - pending music disambiguation or command followups still use the canonical `voiceCommandState` ownership rules managed by `VoiceSessionManager`
 - raw PCM music turns use the same transcription-plan and mini-model fallback policy as ordinary voice turns
 

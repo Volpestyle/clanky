@@ -3,6 +3,7 @@
 Complete documentation of the screen share pipeline: session lifecycle, frame processing, and how the agent sees and reasons about what's on screen.
 
 See also: [`docs/public-https-entrypoint-spec.md`](../public-https-entrypoint-spec.md) (public URL gating).
+Native Discord receive status: [`../native-discord-screen-share.md`](../native-discord-screen-share.md)
 Cross-cutting settings contract: [`../settings.md`](../settings.md)
 
 Persistence, preset inheritance, dashboard envelope shape, and save/version semantics live in [`../settings.md`](../settings.md). This document covers the screen-share pipeline and the stream-watch settings that shape voice-local visual context.
