@@ -18,7 +18,7 @@ export interface SharedToolSchema {
   voiceContinuationPolicy?: VoiceToolContinuationPolicy;
 }
 
-// ── 9 canonical shared tool schemas ──────────────────────────────────
+// ── Canonical shared tool schemas ────────────────────────────────────
 // These are the single source of truth. Voice schemas are the tested
 // superset so they are used as the canonical definition.
 
@@ -41,7 +41,7 @@ export const WEB_SEARCH_SCHEMA: SharedToolSchema = {
 
 export const WEB_SCRAPE_SCHEMA: SharedToolSchema = {
   name: "web_scrape",
-  description: "Fetch readable page text from a known URL. Prefer browser_browse when layout, screenshots, JS, or interaction matter.",
+  description: "Fetch readable page text from a known URL, including a URL you just got from web_search. Prefer browser_browse when layout, screenshots, JS, or interaction matter.",
   voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
@@ -154,6 +154,27 @@ export const CONVERSATION_SEARCH_SCHEMA: SharedToolSchema = {
   }
 };
 
+export const IMAGE_LOOKUP_SCHEMA: SharedToolSchema = {
+  name: "image_lookup",
+  description:
+    "Look up a previously shared image from message history. Use a specific image ref like IMG 3 or a short query when the user refers to an earlier image/photo.",
+  parameters: {
+    type: "object",
+    properties: {
+      imageId: {
+        type: "string",
+        description: "Specific history image ref from chat context, for example IMG 3"
+      },
+      query: {
+        type: "string",
+        description: "Concise description of the image to find, or the image ref itself (max 220 chars). Provide imageId OR query."
+      }
+    },
+    required: ["query"],
+    additionalProperties: false
+  }
+};
+
 export const CODE_TASK_SCHEMA: SharedToolSchema = {
   name: "code_task",
   description: "Run the configured coding worker on a coding task. Supports optional role routing and session continuation.",
@@ -228,7 +249,7 @@ export const DISCOVERY_SOURCE_REMOVE_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const SHARED_TOOL_SCHEMAS: SharedToolSchema[] = [
+const SHARED_TOOL_SCHEMAS: SharedToolSchema[] = [
   WEB_SEARCH_SCHEMA,
   WEB_SCRAPE_SCHEMA,
   BROWSER_BROWSE_SCHEMA,
@@ -400,7 +421,7 @@ export const MUSIC_NOW_PLAYING_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const JOIN_VOICE_CHANNEL_SCHEMA: SharedToolSchema = {
+const JOIN_VOICE_CHANNEL_SCHEMA: SharedToolSchema = {
   name: "join_voice_channel",
   description: "Join the requesting user's current voice channel.",
   voiceContinuationPolicy: "if_no_spoken_text",
@@ -476,7 +497,7 @@ export const SCREEN_MOMENT_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const NOTE_CONTEXT_SCHEMA: SharedToolSchema = {
+const NOTE_CONTEXT_SCHEMA: SharedToolSchema = {
   name: "note_context",
   description: "Pin important session-scoped context for later in the conversation. Avoid duplicates.",
   voiceContinuationPolicy: "if_no_spoken_text",
@@ -517,40 +538,22 @@ export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
   LEAVE_VOICE_CHANNEL_SCHEMA
 ];
 
-export const OPEN_ARTICLE_SCHEMA: SharedToolSchema = {
-  name: "open_article",
-  description: "Open and read a previously found article from cached web-search results.",
-  voiceContinuationPolicy: "always",
-  parameters: {
-    type: "object",
-    properties: {
-      ref: {
-        type: "string",
-        description: "Article reference — a row:col ref (e.g. r1:2), an index number, or a URL from cached results"
-      }
-    },
-    required: ["ref"],
-    additionalProperties: false
-  }
-};
-
 const LOCAL_VOICE_CONTINUATION_SCHEMAS: SharedToolSchema[] = [
   ...SHARED_TOOL_SCHEMAS,
-  ...VOICE_TOOL_SCHEMAS,
-  OPEN_ARTICLE_SCHEMA
+  ...VOICE_TOOL_SCHEMAS
 ];
 
 const LOCAL_VOICE_CONTINUATION_SCHEMA_BY_NAME = new Map(
   LOCAL_VOICE_CONTINUATION_SCHEMAS.map((schema) => [schema.name, schema] as const)
 );
 
-export function getLocalVoiceToolSchema(toolName: unknown): SharedToolSchema | null {
+function getLocalVoiceToolSchema(toolName: unknown): SharedToolSchema | null {
   const normalizedName = String(toolName || "").trim().toLowerCase();
   if (!normalizedName) return null;
   return LOCAL_VOICE_CONTINUATION_SCHEMA_BY_NAME.get(normalizedName) || null;
 }
 
-export function resolveVoiceToolContinuationPolicy(
+function resolveVoiceToolContinuationPolicy(
   toolName: unknown,
   { toolType = "function" }: { toolType?: "function" | "mcp" } = {}
 ): VoiceToolContinuationPolicy {

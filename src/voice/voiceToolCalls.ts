@@ -2,7 +2,6 @@ export type {
   RealtimeFunctionTool,
   SubAgentInteractiveSession,
   SubAgentSessionRegistry,
-  SubAgentTurnResult,
   VoiceToolCallArgs,
   VoiceToolCallManager
 } from "./voiceToolCallTypes.ts";

@@ -12,28 +12,8 @@ import {
   normalizeCodeAgentRole,
   type CodeAgentRole
 } from "../agents/codeAgent.ts";
-import {
-  WEB_SEARCH_SCHEMA,
-  WEB_SCRAPE_SCHEMA,
-  BROWSER_BROWSE_SCHEMA,
-  MEMORY_SEARCH_SCHEMA,
-  MEMORY_WRITE_SCHEMA,
-  CONVERSATION_SEARCH_SCHEMA,
-  CODE_TASK_SCHEMA,
-  OPEN_ARTICLE_SCHEMA,
-  OFFER_SCREEN_SHARE_LINK_SCHEMA,
-  PLAY_SOUNDBOARD_SCHEMA,
-  SCREEN_MOMENT_SCHEMA,
-  SCREEN_NOTE_SCHEMA,
-  VOICE_TOOL_SCHEMAS,
-  toAnthropicTool
-} from "./sharedToolSchemas.ts";
-import {
-  getMemorySettings,
-  isBrowserEnabled,
-  isDevTaskEnabled,
-  isResearchEnabled
-} from "../settings/agentStack.ts";
+import { toAnthropicTool } from "./sharedToolSchemas.ts";
+import { buildReplyToolSchemas, type ReplyToolAvailability } from "./toolRegistry.ts";
 
 const MAX_WEB_QUERY_LEN = 220;
 const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
@@ -44,7 +24,6 @@ const MAX_WEB_SCRAPE_MAX_CHARS = 24000;
 const MAX_WEB_SCRAPE_DEFAULT_CHARS = 8000;
 const MAX_BROWSER_BROWSE_QUERY_LEN = 500;
 const MAX_CODE_TASK_LEN = 2000;
-const MAX_OPEN_ARTICLE_REF_LEN = 260;
 const MAX_VOICE_MUSIC_QUERY_LEN = 180;
 
 function appendBrowserScreenshotNote(content: string, imageInputs: ImageInput[] | undefined) {
@@ -272,158 +251,44 @@ export type ReplyToolContext = {
   signal?: AbortSignal;
 };
 
-// --- Tool definitions ---
-// Shared tools use the canonical schemas from sharedToolSchemas.ts.
-
-const WEB_SEARCH_TOOL: ReplyToolDefinition = toAnthropicTool(WEB_SEARCH_SCHEMA);
-const WEB_SCRAPE_TOOL: ReplyToolDefinition = toAnthropicTool(WEB_SCRAPE_SCHEMA);
-const BROWSER_BROWSE_TOOL: ReplyToolDefinition = toAnthropicTool(BROWSER_BROWSE_SCHEMA);
-const MEMORY_SEARCH_TOOL: ReplyToolDefinition = toAnthropicTool(MEMORY_SEARCH_SCHEMA);
-const MEMORY_WRITE_TOOL: ReplyToolDefinition = toAnthropicTool(MEMORY_WRITE_SCHEMA);
-const CONVERSATION_SEARCH_TOOL: ReplyToolDefinition = toAnthropicTool(CONVERSATION_SEARCH_SCHEMA);
-const CODE_TASK_TOOL: ReplyToolDefinition = toAnthropicTool(CODE_TASK_SCHEMA);
-const OFFER_SCREEN_SHARE_LINK_TOOL: ReplyToolDefinition = toAnthropicTool(OFFER_SCREEN_SHARE_LINK_SCHEMA);
-const PLAY_SOUNDBOARD_TOOL: ReplyToolDefinition = toAnthropicTool(PLAY_SOUNDBOARD_SCHEMA);
-const SCREEN_NOTE_TOOL: ReplyToolDefinition = toAnthropicTool(SCREEN_NOTE_SCHEMA);
-const SCREEN_MOMENT_TOOL: ReplyToolDefinition = toAnthropicTool(SCREEN_MOMENT_SCHEMA);
-
-const IMAGE_LOOKUP_TOOL: ReplyToolDefinition = {
-  name: "image_lookup",
-  description:
-    "Look up a previously shared image from message history. Use a specific image ref like IMG 3 or a short query when the user refers to an earlier image/photo.",
-  input_schema: {
-    type: "object",
-    properties: {
-      imageId: {
-        type: "string",
-        description: "Specific history image ref from chat context, for example IMG 3"
-      },
-      query: {
-        type: "string",
-        description: "Concise description of the image to find, or the image ref itself (max 220 chars). Provide imageId OR query."
-      }
-    },
-    required: ["query"],
-    additionalProperties: false
-  }
-};
-
-const OPEN_ARTICLE_TOOL: ReplyToolDefinition = toAnthropicTool(OPEN_ARTICLE_SCHEMA);
-
-// WEB_SCRAPE_TOOL and CODE_TASK_TOOL are defined above via toAnthropicTool().
-
-const ALL_REPLY_TOOLS: ReplyToolDefinition[] = [
-  WEB_SEARCH_TOOL,
-  WEB_SCRAPE_TOOL,
-  BROWSER_BROWSE_TOOL,
-  MEMORY_SEARCH_TOOL,
-  MEMORY_WRITE_TOOL,
-  CONVERSATION_SEARCH_TOOL,
-  IMAGE_LOOKUP_TOOL,
-  OPEN_ARTICLE_TOOL,
-  OFFER_SCREEN_SHARE_LINK_TOOL,
-  CODE_TASK_TOOL
-];
-
-// --- Settings-gated tool set builder ---
-
-function isMemoryEnabled(settings: Record<string, unknown>): boolean {
-  return Boolean(getMemorySettings(settings).enabled);
-}
-
-function isWebSearchEnabled(settings: Record<string, unknown>): boolean {
-  return isResearchEnabled(settings);
-}
-
-function isBrowserBrowseEnabled(settings: Record<string, unknown>): boolean {
-  return isBrowserEnabled(settings);
-}
-
-function isCodeAgentEnabled(settings: Record<string, unknown>): boolean {
-  return isDevTaskEnabled(settings);
-}
-
 export function buildReplyToolSet(
   settings: Record<string, unknown>,
-  capabilities: {
-    webSearchAvailable?: boolean;
-    webScrapeAvailable?: boolean;
-    browserBrowseAvailable?: boolean;
-    memoryAvailable?: boolean;
-    conversationSearchAvailable?: boolean;
-    imageLookupAvailable?: boolean;
-    openArticleAvailable?: boolean;
-    screenShareAvailable?: boolean;
-    soundboardAvailable?: boolean;
-    codeAgentAvailable?: boolean;
-    voiceToolsAvailable?: boolean;
-  } = {}
+  capabilities: ReplyToolAvailability = {}
 ): ReplyToolDefinition[] {
-  const tools: ReplyToolDefinition[] = [];
-
-  if (
-    capabilities.webSearchAvailable !== false &&
-    isWebSearchEnabled(settings)
-  ) {
-    tools.push(WEB_SEARCH_TOOL);
-  }
-
-  if (
-    capabilities.webScrapeAvailable !== false &&
-    isWebSearchEnabled(settings)
-  ) {
-    tools.push(WEB_SCRAPE_TOOL);
-  }
-
-  if (
-    capabilities.browserBrowseAvailable !== false &&
-    isBrowserBrowseEnabled(settings)
-  ) {
-    tools.push(BROWSER_BROWSE_TOOL);
-  }
-
-  const memoryEnabled = isMemoryEnabled(settings);
-  if (capabilities.memoryAvailable !== false && memoryEnabled) {
-    tools.push(MEMORY_SEARCH_TOOL);
-    tools.push(MEMORY_WRITE_TOOL);
-  }
-
-  if (capabilities.conversationSearchAvailable !== false) {
-    tools.push(CONVERSATION_SEARCH_TOOL);
-  }
-
-  if (capabilities.imageLookupAvailable) {
-    tools.push(IMAGE_LOOKUP_TOOL);
-  }
-
-  if (capabilities.openArticleAvailable) {
-    tools.push(OPEN_ARTICLE_TOOL);
-  }
-
-  if (capabilities.screenShareAvailable) {
-    tools.push(OFFER_SCREEN_SHARE_LINK_TOOL);
-  }
-
-  if (
-    capabilities.codeAgentAvailable !== false &&
-    isCodeAgentEnabled(settings)
-  ) {
-    tools.push(CODE_TASK_TOOL);
-  }
-
-  if (capabilities.voiceToolsAvailable) {
-    for (const schema of VOICE_TOOL_SCHEMAS) {
-      if (schema.name === "play_soundboard" && capabilities.soundboardAvailable === false) {
-        continue;
-      }
-      tools.push(toAnthropicTool(schema));
-    }
-  }
-
-  return tools;
+  return buildReplyToolSchemas(settings, capabilities).map((schema) => toAnthropicTool(schema));
 }
 
 // --- Tool executor ---
+
+const REPLY_TOOL_HANDLERS: Record<
+  string,
+  (input: ReplyToolCallInput, runtime: ReplyToolRuntime, context: ReplyToolContext) => Promise<ReplyToolResult>
+> = {
+  web_search: executeWebSearch,
+  web_scrape: executeWebScrape,
+  browser_browse: executeBrowserBrowse,
+  memory_search: executeMemorySearch,
+  memory_write: executeMemoryWrite,
+  conversation_search: executeConversationSearch,
+  image_lookup: async (input, _runtime, context) => await executeImageLookup(input, context),
+  offer_screen_share_link: async (_input, runtime, context) => await executeOfferScreenShareLink(runtime, context),
+  play_soundboard: executePlaySoundboard,
+  screen_note: executeScreenNote,
+  screen_moment: executeScreenMoment,
+  join_voice_channel: async (_input, runtime, context) => await executeJoinVoiceChannel(runtime, context),
+  leave_voice_channel: async (_input, runtime, context) => await executeLeaveVoiceChannel(runtime, context.signal),
+  code_task: executeCodeTask,
+  music_search: async (input, runtime, context) => await executeVoiceTool("music_search", input, runtime, context),
+  music_play: async (input, runtime, context) => await executeVoiceTool("music_play", input, runtime, context),
+  music_queue_add: async (input, runtime, context) => await executeVoiceTool("music_queue_add", input, runtime, context),
+  music_queue_next: async (input, runtime, context) => await executeVoiceTool("music_queue_next", input, runtime, context),
+  music_stop: async (input, runtime, context) => await executeVoiceTool("music_stop", input, runtime, context),
+  music_pause: async (input, runtime, context) => await executeVoiceTool("music_pause", input, runtime, context),
+  music_resume: async (input, runtime, context) => await executeVoiceTool("music_resume", input, runtime, context),
+  music_reply_handoff: async (input, runtime, context) => await executeVoiceTool("music_reply_handoff", input, runtime, context),
+  music_skip: async (input, runtime, context) => await executeVoiceTool("music_skip", input, runtime, context),
+  music_now_playing: async (input, runtime, context) => await executeVoiceTool("music_now_playing", input, runtime, context)
+};
 
 export async function executeReplyTool(
   toolName: string,
@@ -432,51 +297,11 @@ export async function executeReplyTool(
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
   throwIfAborted(context.signal, "Reply tool cancelled");
-  switch (toolName) {
-    case "web_search":
-      return executeWebSearch(input, runtime, context);
-    case "web_scrape":
-      return executeWebScrape(input, runtime, context);
-    case "browser_browse":
-      return executeBrowserBrowse(input, runtime, context);
-    case "memory_search":
-      return executeMemorySearch(input, runtime, context);
-    case "memory_write":
-      return executeMemoryWrite(input, runtime, context);
-    case "conversation_search":
-      return executeConversationSearch(input, runtime, context);
-    case "image_lookup":
-      return executeImageLookup(input, context);
-    case "open_article":
-      return executeOpenArticle(input, runtime, context);
-    case "offer_screen_share_link":
-      return executeOfferScreenShareLink(runtime, context);
-    case "play_soundboard":
-      return executePlaySoundboard(input, runtime, context);
-    case "screen_note":
-      return executeScreenNote(input, runtime, context);
-    case "screen_moment":
-      return executeScreenMoment(input, runtime, context);
-    case "join_voice_channel":
-      return executeJoinVoiceChannel(runtime, context);
-    case "leave_voice_channel":
-      return executeLeaveVoiceChannel(runtime, context.signal);
-    case "code_task":
-      return executeCodeTask(input, runtime, context);
-    case "music_search":
-    case "music_play":
-    case "music_queue_add":
-    case "music_queue_next":
-    case "music_stop":
-    case "music_pause":
-    case "music_resume":
-    case "music_reply_handoff":
-    case "music_skip":
-    case "music_now_playing":
-      return executeVoiceTool(toolName, input, runtime, context);
-    default:
-      return { content: `Unknown tool: ${toolName}`, isError: true };
+  const handler = REPLY_TOOL_HANDLERS[toolName];
+  if (!handler) {
+    return { content: `Unknown tool: ${toolName}`, isError: true };
   }
+  return await handler(input, runtime, context);
 }
 
 async function executeConversationSearch(
@@ -898,29 +723,6 @@ async function executeImageLookup(
   // This tool returns a placeholder that the caller intercepts.
   return {
     content: `__IMAGE_LOOKUP_REQUEST__:${request}`
-  };
-}
-
-async function executeOpenArticle(
-  input: ReplyToolCallInput,
-  runtime: ReplyToolRuntime,
-  context: ReplyToolContext
-): Promise<ReplyToolResult> {
-  throwIfAborted(context.signal, "Reply tool cancelled");
-  const ref = normalizeDirectiveText(
-    String(input?.ref || ""),
-    MAX_OPEN_ARTICLE_REF_LEN
-  );
-  if (!ref) {
-    return { content: "Missing or empty article reference.", isError: true };
-  }
-  if (!runtime.search?.readPageSummary) {
-    return { content: "Article reading is not available.", isError: true };
-  }
-  // Open article also needs the caller to resolve the ref from cached
-  // candidates. Return a placeholder.
-  return {
-    content: `__OPEN_ARTICLE_REQUEST__:${ref}`
   };
 }
 
@@ -1346,23 +1148,6 @@ async function executeVoiceTool(
     };
   }
 }
-
-
-export {
-  ALL_REPLY_TOOLS,
-  WEB_SEARCH_TOOL,
-  WEB_SCRAPE_TOOL,
-  MEMORY_SEARCH_TOOL,
-  MEMORY_WRITE_TOOL,
-  IMAGE_LOOKUP_TOOL,
-  OPEN_ARTICLE_TOOL,
-  OFFER_SCREEN_SHARE_LINK_TOOL,
-  PLAY_SOUNDBOARD_TOOL,
-  SCREEN_NOTE_TOOL,
-  SCREEN_MOMENT_TOOL,
-  CODE_TASK_TOOL
-};
-
 export type {
   ReplyToolDefinition,
   ReplyToolCallInput,

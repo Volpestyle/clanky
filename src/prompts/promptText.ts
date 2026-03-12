@@ -19,6 +19,15 @@ import {
   formatMemoryFacts,
   formatImageLookupCandidates
 } from "./promptFormatters.ts";
+import {
+  buildActiveCuriosityCapabilityLine,
+  buildWebSearchPolicyLine,
+  buildWebToolRoutingPolicyLine,
+  BROWSER_BROWSE_POLICY_LINE,
+  BROWSER_SCREENSHOT_POLICY_LINE,
+  CONVERSATION_SEARCH_POLICY_LINE,
+  WEB_SCRAPE_POLICY_LINE
+} from "./toolPolicy.ts";
 
 function formatPromptTrackLabel(track) {
   const title = String(track?.title || "").trim();
@@ -140,7 +149,7 @@ export function buildReplyPrompt({
     parts.push(formatConversationWindows(recentConversationHistory));
     parts.push("Use this for continuity ONLY when it clearly matches the current topic AND is recent. Old windows (hours/days ago) are background context, not active conversation — do not treat them as ongoing. A voice chat transcript from hours ago is not the same as someone just saying something to you now.");
   }
-  parts.push("Conversation-history lookup is available for recalling prior text/voice exchanges. If the user asks what was said earlier or what you talked about before, use conversation_search.");
+  parts.push(CONVERSATION_SEARCH_POLICY_LINE);
 
   if (participantProfiles?.length || selfFacts?.length || loreFacts?.length) {
     parts.push("=== PEOPLE IN THIS CONVERSATION ===");
@@ -405,24 +414,38 @@ export function buildReplyPrompt({
     parts.push("When no automation control is requested, set automationAction.operation=none.");
   }
 
+  const webSearchToolAvailable =
+    !webSearch?.optedOutByUser &&
+    Boolean(webSearch?.enabled) &&
+    Boolean(webSearch?.configured) &&
+    !webSearch?.blockedByBudget &&
+    Boolean(webSearch?.budget?.canSearch);
+  const browserBrowseToolAvailable =
+    Boolean(browserBrowse?.enabled) &&
+    Boolean(browserBrowse?.configured) &&
+    !browserBrowse?.blockedByBudget &&
+    Boolean(browserBrowse?.budget?.canBrowse);
+
   parts.push("=== WEB SEARCH ===");
 
   if (webSearch?.optedOutByUser) {
     parts.push("The user explicitly asked not to use web search.");
-    parts.push("Do not call web_search and do not claim live lookup.");
+    parts.push("Do not call web_search or web_scrape and do not claim live lookup.");
   } else if (!webSearch?.enabled) {
     parts.push("Live web search capability exists but is currently unavailable (disabled in settings).");
-    parts.push("Do not call web_search and do not claim you searched the web.");
+    parts.push("Do not call web_search or web_scrape and do not claim you searched the web.");
   } else if (!webSearch?.configured) {
     parts.push("Live web search capability exists but is currently unavailable (no search provider is configured).");
-    parts.push("Do not call web_search and do not claim you searched the web.");
+    parts.push("Do not call web_search or web_scrape and do not claim you searched the web.");
   } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
     parts.push("Live web search capability exists but is currently unavailable (hourly search budget exhausted).");
-    parts.push("Do not call web_search and do not claim you searched the web.");
+    parts.push("Do not call web_search or web_scrape and do not claim you searched the web.");
   } else {
-    parts.push("Live web search is available via the web_search tool.");
-    parts.push("If better accuracy depends on current web information, call web_search with a concise query.");
-    parts.push("Use web_search only when it materially helps.");
+    parts.push("Live web search and direct page reading are available via the web_search and web_scrape tools.");
+    parts.push(buildWebToolRoutingPolicyLine({ includeBrowserBrowse: browserBrowseToolAvailable }));
+    parts.push(buildWebSearchPolicyLine());
+    parts.push(WEB_SCRAPE_POLICY_LINE);
+    parts.push("Use the web tools only when they materially help.");
   }
 
   parts.push("=== BROWSER ===");
@@ -438,10 +461,8 @@ export function buildReplyPrompt({
     parts.push("Do not call browser_browse and do not claim you browsed the site.");
   } else {
     parts.push("Interactive browser browsing is available via the browser_browse tool.");
-    parts.push("Prefer web_search for simple current facts.");
-    parts.push(
-      "Use browser_browse only when you need actual site navigation or interaction, such as checking listings, moving through a live page flow, or extracting page-specific details."
-    );
+    parts.push(BROWSER_BROWSE_POLICY_LINE);
+    parts.push(BROWSER_SCREENSHOT_POLICY_LINE);
   }
 
   parts.push("=== MEMORY LOOKUP ===");
@@ -569,7 +590,7 @@ export function buildReplyPrompt({
   return parts.join("\n\n");
 }
 
-export function buildDiscoveryPrompt({
+function buildDiscoveryPrompt({
   channelName,
   recentMessages,
   relevantFacts = [],
@@ -672,6 +693,9 @@ export function buildInitiativePrompt({
   guidanceFacts = [],
   behavioralFacts = [],
   allowActiveCuriosity = false,
+  allowWebSearch = false,
+  allowWebScrape = false,
+  allowBrowserBrowse = false,
   allowMemorySearch = false,
   allowSelfCuration = false,
   allowImagePosts = false,
@@ -745,10 +769,14 @@ export function buildInitiativePrompt({
   }
 
   parts.push("=== CAPABILITIES ===");
-  if (allowActiveCuriosity) {
-    parts.push("You can use web_search to look something up, or browser_browse to actually visit a site, inspect how a page looks, capture browser screenshots for visual inspection, or move through it interactively — if you're curious about something or want to check if a feed item is actually worth sharing.");
+  if (allowActiveCuriosity && (allowWebSearch || allowWebScrape || allowBrowserBrowse)) {
+    parts.push(buildActiveCuriosityCapabilityLine({
+      includeWebSearch: allowWebSearch,
+      includeWebScrape: allowWebScrape,
+      includeBrowserBrowse: allowBrowserBrowse
+    }));
   } else {
-    parts.push("web_search and browser_browse are unavailable right now. Reason from the feed, memory, and channel context unless another tool is listed below.");
+    parts.push("web_search, web_scrape, and browser_browse are unavailable right now. Reason from the feed, memory, and channel context unless another tool is listed below.");
   }
   if (allowMemorySearch) {
     parts.push("You can use memory_search to recall durable community context when it helps you read the room.");
@@ -789,13 +817,15 @@ export function buildInitiativePrompt({
       : "Look around. If something catches your eye — a conversation you can add to, a feed item worth sharing, a topic you want to explore — pick a channel and post. Otherwise, stay ambient."
   );
   parts.push("That can mean reacting to a live conversation, sharing something from your feed, or following your own curiosity.");
+  parts.push("If you notice someone said something and you never responded — especially if you were mid-conversation with them — follow up. Don't leave people hanging. Set replyToMessageId to the message you're replying to so it threads properly.");
   parts.push("If you notice a source consistently is not producing anything useful, or the community's interests point toward sources you do not have yet, you can adjust your feed.");
   parts.push("Choose the channel that best fits what you want to say. Do not pick a channel at random.");
   parts.push("Check when you last posted in each channel. If you posted recently, consider whether another message so soon would feel spammy or natural.");
   parts.push("Use exact channelId values from the CHANNELS section.");
   parts.push("Keep the text natural, non-spammy, and like a real community member.");
   parts.push("If you mention a feed item or web result, include the link only if it feels natural. Never force a link.");
-  parts.push("Return strict JSON only with shape: {\"action\":\"post_now\"|\"hold\"|\"drop\",\"channelId\":string|null,\"text\":string,\"mediaDirective\":\"none\"|\"image\"|\"video\"|\"gif\",\"mediaPrompt\":string|null,\"reason\":string}.");
+  parts.push("Return strict JSON only with shape: {\"action\":\"post_now\"|\"hold\"|\"drop\",\"channelId\":string|null,\"replyToMessageId\":string|null,\"text\":string,\"mediaDirective\":\"none\"|\"image\"|\"video\"|\"gif\",\"mediaPrompt\":string|null,\"reason\":string}.");
+  parts.push("If you are following up on a specific message, set replyToMessageId to that message's ID (from the recent messages list). Otherwise set it to null.");
   parts.push("If action is \"post_now\", channelId and text must contain the post you want to send now.");
   parts.push("If action is \"hold\", channelId and text must contain the thought you want to keep holding for later. It can be refined or replaced.");
   parts.push("If action is \"drop\", set channelId to null, text to an empty string, mediaDirective to \"none\", and mediaPrompt to null.");

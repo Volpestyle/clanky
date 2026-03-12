@@ -22,6 +22,7 @@ import {
   getMemorySettings,
   getReplyPermissions,
   getResolvedTextInitiativeBinding,
+  isResearchEnabled,
   getTextInitiativeSettings
 } from "../settings/agentStack.ts";
 import { loadBehavioralMemoryFacts } from "./memorySlice.ts";
@@ -38,6 +39,7 @@ import {
   DISCOVERY_SOURCE_LIST_SCHEMA,
   DISCOVERY_SOURCE_REMOVE_SCHEMA,
   MEMORY_SEARCH_SCHEMA,
+  WEB_SCRAPE_SCHEMA,
   WEB_SEARCH_SCHEMA,
   toAnthropicTool
 } from "../tools/sharedToolSchemas.ts";
@@ -101,6 +103,16 @@ type InitiativeChannelLike = {
     channelId: string;
   }>;
   sendTyping?: () => Promise<unknown>;
+  messages?: {
+    fetch?: (messageId: string) => Promise<{
+      reply: (payload: unknown) => Promise<{
+        id: string;
+        createdTimestamp: number;
+        guildId: string;
+        channelId: string;
+      }>;
+    }>;
+  };
 };
 
 type InitiativeClientLike = BotContext["client"] & {
@@ -136,8 +148,8 @@ type DiscoveryCandidate = {
   publishedAt?: string | null;
 };
 
-export type InitiativePendingThoughtStatus = "queued" | "reconsider";
-export type InitiativePendingThoughtAction = "post_now" | "hold" | "drop";
+type InitiativePendingThoughtStatus = "queued" | "reconsider";
+type InitiativePendingThoughtAction = "post_now" | "hold" | "drop";
 
 export type InitiativePendingThought = {
   id: string;
@@ -1073,17 +1085,26 @@ async function executeInitiativeTool(
 
 function initiativeToolSet({
   settings,
-  allowActiveCuriosity,
+  allowWebSearch,
+  allowWebScrape,
+  allowBrowserBrowse,
   allowSelfCuration
 }: {
   settings: Record<string, unknown>;
-  allowActiveCuriosity: boolean;
+  allowWebSearch: boolean;
+  allowWebScrape: boolean;
+  allowBrowserBrowse: boolean;
   allowSelfCuration: boolean;
 }) {
   const tools = [];
   const memoryEnabled = Boolean(getMemorySettings(settings).enabled);
-  if (allowActiveCuriosity) {
+  if (allowWebSearch) {
     tools.push(toAnthropicTool(WEB_SEARCH_SCHEMA));
+  }
+  if (allowWebScrape) {
+    tools.push(toAnthropicTool(WEB_SCRAPE_SCHEMA));
+  }
+  if (allowBrowserBrowse) {
     tools.push(toAnthropicTool(BROWSER_BROWSE_SCHEMA));
   }
   if (memoryEnabled) {
@@ -1251,6 +1272,12 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
     const gifBudget = runtime.getGifBudgetState(settings);
     const mediaCapabilities = runtime.getMediaGenerationCapabilities(settings);
     const allowActiveCuriosity = Boolean(initiative.allowActiveCuriosity);
+    const webSearchToolAvailable = allowActiveCuriosity && isResearchEnabled(settings);
+    const browserBrowseContext = runtime.buildBrowserBrowseContext(settings);
+    const browserBrowseToolAvailable = allowActiveCuriosity &&
+      Boolean(browserBrowseContext.enabled) &&
+      Boolean(browserBrowseContext.configured) &&
+      browserBrowseContext.budget?.canBrowse !== false;
     const allowSelfCuration = Boolean(discoverySettings.allowSelfCuration);
     const botName = getBotName(settings);
     const persona = getPromptStyle(settings);
@@ -1279,6 +1306,9 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
       guidanceFacts: Array.isArray(guildProfile?.guidanceFacts) ? guildProfile.guidanceFacts : [],
       behavioralFacts,
       allowActiveCuriosity,
+      allowWebSearch: webSearchToolAvailable,
+      allowWebScrape: webSearchToolAvailable,
+      allowBrowserBrowse: browserBrowseToolAvailable,
       allowMemorySearch: memorySettings.enabled,
       allowSelfCuration,
       allowImagePosts:
@@ -1302,7 +1332,9 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
     const initiativeSettings = buildInitiativeGenerationSettings(settings);
     const tools = initiativeToolSet({
       settings,
-      allowActiveCuriosity,
+      allowWebSearch: webSearchToolAvailable,
+      allowWebScrape: webSearchToolAvailable,
+      allowBrowserBrowse: browserBrowseToolAvailable,
       allowSelfCuration
     });
     const trace = {
@@ -1517,7 +1549,18 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
     await sleep(runtime.getSimulatedTypingDelayMs(350, 900));
     const chunks = splitDiscordMessage(mediaAttachment.payload.content);
     const firstPayload = { ...mediaAttachment.payload, content: chunks[0] };
-    const sent = await selectedChannel.channel.send(firstPayload);
+    const replyToMessageId = String(decision.replyToMessageId || "").trim() || null;
+    let replyTarget = null;
+    if (replyToMessageId) {
+      try {
+        replyTarget = await selectedChannel.channel.messages.fetch(replyToMessageId);
+      } catch {
+        // Message not found or inaccessible — fall back to standalone post
+      }
+    }
+    const sent = replyTarget
+      ? await replyTarget.reply(firstPayload)
+      : await selectedChannel.channel.send(firstPayload);
     for (let index = 1; index < chunks.length; index += 1) {
       await selectedChannel.channel.send({ content: chunks[index] });
     }
@@ -1533,7 +1576,7 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
       authorName: botName,
       isBot: true,
       content: runtime.composeMessageContentForHistory(sent, normalizedText),
-      referencedMessageId: null
+      referencedMessageId: replyToMessageId
     });
 
     const includedUrls = extractUrlsFromText(normalizedText)

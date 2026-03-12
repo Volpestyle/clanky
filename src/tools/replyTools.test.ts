@@ -55,6 +55,19 @@ test("buildReplyToolSet excludes web_scrape when caller opts out", () => {
   assert.equal(tools.some((tool) => tool.name === "web_scrape"), false);
 });
 
+test("buildReplyToolSet excludes web_scrape when web search is unavailable for the turn", () => {
+  const tools = buildReplyToolSet({
+    browser: { enabled: false },
+    webSearch: { enabled: true },
+    memory: { enabled: false }
+  }, {
+    webSearchAvailable: false,
+    conversationSearchAvailable: false
+  });
+
+  assert.equal(tools.some((tool) => tool.name === "web_scrape"), false);
+});
+
 test("buildReplyToolSet includes memory tools and conversation search when memory is enabled", () => {
   const toolNames = buildReplyToolSet({
     browser: { enabled: false },

@@ -177,7 +177,7 @@ export async function maybeRunAutomationCycle(runtime: AutomationEngineRuntime) 
   }
 }
 
-export async function runAutomationJob(
+async function runAutomationJob(
   runtime: AutomationEngineRuntime,
   automation: AutomationRowLike
 ) {
@@ -353,7 +353,7 @@ export async function runAutomationJob(
   });
 }
 
-export async function generateAutomationPayload(
+async function generateAutomationPayload(
   runtime: AutomationEngineRuntime,
   {
     automation,
@@ -463,8 +463,7 @@ export async function generateAutomationPayload(
     webScrapeAvailable: false,
     browserBrowseAvailable: false,
     memoryAvailable: memory.enabled,
-    imageLookupAvailable: false,
-    openArticleAvailable: false
+    imageLookupAvailable: false
   });
   const automationToolRuntime: ReplyToolRuntime = {
     search: runtime.search,

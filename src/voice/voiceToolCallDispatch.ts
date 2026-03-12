@@ -107,6 +107,135 @@ type McpVoiceToolCallOptions = {
   signal?: AbortSignal;
 };
 
+const LOCAL_VOICE_TOOL_HANDLERS: Record<
+  string,
+  (manager: VoiceToolCallManager, opts: LocalVoiceToolCallOptions) => Promise<Record<string, unknown>>
+> = {
+  memory_write: async (manager, opts) =>
+    await executeVoiceMemoryWriteTool(manager, {
+      session: opts.session,
+      settings: opts.settings,
+      args: opts.args,
+      signal: opts.signal
+    }),
+  conversation_search: async (manager, opts) =>
+    await executeVoiceConversationSearchTool(manager, {
+      session: opts.session,
+      args: opts.args,
+      signal: opts.signal
+    }),
+  music_search: async (manager, opts) =>
+    await executeVoiceMusicSearchTool(manager, {
+      session: opts.session,
+      args: opts.args,
+      signal: opts.signal
+    }),
+  music_play: async (manager, opts) =>
+    await executeVoiceMusicPlayTool(manager, {
+      session: opts.session,
+      settings: opts.settings,
+      args: opts.args,
+      signal: opts.signal
+    }),
+  music_queue_add: async (manager, opts) =>
+    await executeVoiceMusicQueueAddTool(manager, {
+      session: opts.session,
+      settings: opts.settings,
+      args: opts.args,
+      signal: opts.signal
+    }),
+  music_queue_next: async (manager, opts) =>
+    await executeVoiceMusicQueueNextTool(manager, {
+      session: opts.session,
+      settings: opts.settings,
+      args: opts.args,
+      signal: opts.signal
+    }),
+  music_stop: async (manager, opts) =>
+    await executeVoiceMusicStopTool(manager, {
+      session: opts.session,
+      settings: opts.settings,
+      signal: opts.signal
+    }),
+  music_pause: async (manager, opts) =>
+    await executeVoiceMusicPauseTool(manager, {
+      session: opts.session,
+      settings: opts.settings,
+      signal: opts.signal
+    }),
+  music_reply_handoff: async (manager, opts) =>
+    await executeVoiceMusicReplyHandoffTool(manager, {
+      session: opts.session,
+      settings: opts.settings,
+      args: opts.args,
+      signal: opts.signal
+    }),
+  music_resume: async (manager, opts) =>
+    await executeVoiceMusicResumeTool(manager, {
+      session: opts.session,
+      signal: opts.signal
+    }),
+  music_skip: async (manager, opts) =>
+    await executeVoiceMusicSkipTool(manager, {
+      session: opts.session,
+      settings: opts.settings,
+      signal: opts.signal
+    }),
+  music_now_playing: async (manager, opts) =>
+    await executeVoiceMusicNowPlayingTool(manager, {
+      session: opts.session,
+      signal: opts.signal
+    }),
+  play_soundboard: async (manager, opts) =>
+    await executeVoicePlaySoundboardTool(manager, {
+      session: opts.session,
+      settings: opts.settings,
+      args: opts.args
+    }),
+  offer_screen_share_link: async (manager, opts) => {
+    throwIfAborted(opts.signal, "Voice tool cancelled");
+    return await executeOfferScreenShareLinkTool(manager, {
+      session: opts.session,
+      settings: opts.settings
+    });
+  },
+  web_search: async (manager, opts) =>
+    await executeVoiceWebSearchTool(manager, {
+      session: opts.session,
+      settings: opts.settings,
+      args: opts.args,
+      signal: opts.signal
+    }),
+  web_scrape: async (manager, opts) =>
+    await executeVoiceWebScrapeTool(manager, {
+      session: opts.session,
+      args: opts.args,
+      signal: opts.signal
+    }),
+  browser_browse: async (manager, opts) =>
+    await executeVoiceBrowserBrowseTool(manager, {
+      session: opts.session,
+      settings: opts.settings,
+      args: opts.args,
+      signal: opts.signal
+    }),
+  code_task: async (manager, opts) =>
+    await executeVoiceCodeTaskTool(manager, {
+      session: opts.session,
+      settings: opts.settings,
+      args: opts.args,
+      signal: opts.signal
+    }),
+  leave_voice_channel: async (manager, opts) => {
+    throwIfAborted(opts.signal, "Voice tool cancelled");
+    scheduleLeaveVoiceChannel(manager, {
+      session: opts.session,
+      settings: opts.settings
+    });
+    return { ok: true, status: "leaving" };
+  }
+};
+
 async function executeOfferScreenShareLinkTool(
   manager: VoiceToolCallManager,
   { session, settings }: { session?: ToolRuntimeSession | null; settings?: VoiceRealtimeToolSettings | null }
@@ -228,67 +357,19 @@ async function executeVoicePlaySoundboardTool(
   };
 }
 
-export async function executeLocalVoiceToolCall(manager: VoiceToolCallManager, opts: LocalVoiceToolCallOptions) {
+export async function executeLocalVoiceToolCall(
+  manager: VoiceToolCallManager,
+  opts: LocalVoiceToolCallOptions
+): Promise<Record<string, unknown>> {
   const normalizedToolName = normalizeInlineText(opts.toolName, 120);
   if (!normalizedToolName) {
     throw new Error("missing_tool_name");
   }
-
-  switch (normalizedToolName) {
-    case "memory_write":
-      return executeVoiceMemoryWriteTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
-    case "conversation_search":
-      return executeVoiceConversationSearchTool(manager, { session: opts.session, args: opts.args, signal: opts.signal });
-    case "music_search":
-      return executeVoiceMusicSearchTool(manager, { session: opts.session, args: opts.args, signal: opts.signal });
-    case "music_play":
-      return executeVoiceMusicPlayTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
-    case "music_queue_add":
-      return executeVoiceMusicQueueAddTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
-    case "music_queue_next":
-      return executeVoiceMusicQueueNextTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
-    case "music_stop":
-      return executeVoiceMusicStopTool(manager, { session: opts.session, settings: opts.settings, signal: opts.signal });
-    case "music_pause":
-      return executeVoiceMusicPauseTool(manager, { session: opts.session, settings: opts.settings, signal: opts.signal });
-    case "music_reply_handoff":
-      return executeVoiceMusicReplyHandoffTool(manager, {
-        session: opts.session,
-        settings: opts.settings,
-        args: opts.args,
-        signal: opts.signal
-      });
-    case "music_resume":
-      return executeVoiceMusicResumeTool(manager, { session: opts.session, signal: opts.signal });
-    case "music_skip":
-      return executeVoiceMusicSkipTool(manager, { session: opts.session, settings: opts.settings, signal: opts.signal });
-    case "music_now_playing":
-      return executeVoiceMusicNowPlayingTool(manager, { session: opts.session, signal: opts.signal });
-    case "play_soundboard":
-      return executeVoicePlaySoundboardTool(manager, { session: opts.session, settings: opts.settings, args: opts.args });
-    case "offer_screen_share_link":
-      throwIfAborted(opts.signal, "Voice tool cancelled");
-      return executeOfferScreenShareLinkTool(manager, { session: opts.session, settings: opts.settings });
-    case "web_search":
-      return executeVoiceWebSearchTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
-    case "web_scrape":
-      return executeVoiceWebScrapeTool(manager, { session: opts.session, args: opts.args, signal: opts.signal });
-    case "browser_browse":
-      return executeVoiceBrowserBrowseTool(manager, {
-        session: opts.session,
-        settings: opts.settings,
-        args: opts.args,
-        signal: opts.signal
-      });
-    case "code_task":
-      return executeVoiceCodeTaskTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
-    case "leave_voice_channel":
-      throwIfAborted(opts.signal, "Voice tool cancelled");
-      scheduleLeaveVoiceChannel(manager, { session: opts.session, settings: opts.settings });
-      return { ok: true, status: "leaving" };
-    default:
-      throw new Error(`unsupported_tool:${normalizedToolName}`);
+  const handler = LOCAL_VOICE_TOOL_HANDLERS[normalizedToolName];
+  if (!handler) {
+    throw new Error(`unsupported_tool:${normalizedToolName}`);
   }
+  return await handler(manager, opts);
 }
 
 export async function executeMcpVoiceToolCall(

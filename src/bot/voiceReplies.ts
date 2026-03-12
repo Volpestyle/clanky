@@ -17,11 +17,11 @@ import {
   executeReplyTool
 } from "../tools/replyTools.ts";
 import type { ReplyToolRuntime, ReplyToolContext } from "../tools/replyTools.ts";
-import { isAbortError } from "../tools/browserTaskRuntime.ts";
+import { createAbortError, isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import { shouldRequestVoiceToolFollowup } from "../tools/sharedToolSchemas.ts";
 import { clamp, sanitizeBotText } from "../utils.ts";
 import { loadConversationContinuityContext } from "./conversationContinuity.ts";
-import { loadBehavioralMemoryFacts, normalizeFactProfileSlice } from "./memorySlice.ts";
+import { emptyFactProfileSlice, loadBehavioralMemoryFacts, normalizeFactProfileSlice } from "./memorySlice.ts";
 import {
   getActivitySettings,
   applyOrchestratorOverrideSettings,
@@ -56,9 +56,11 @@ import {
   buildLoggedPromptBundle,
   createPromptCapture
 } from "../promptLogging.ts";
+import {
+  VOICE_GENERATION_BEHAVIORAL_TIMEOUT_MS,
+  VOICE_GENERATION_CONTINUITY_TIMEOUT_MS
+} from "../voice/voiceSessionManager.constants.ts";
 
-const OPEN_ARTICLE_MAX_CANDIDATES = 12;
-const OPEN_ARTICLE_RESULTS_PER_ROW = 5;
 const SESSION_DURABLE_CONTEXT_MAX_ENTRIES = 50;
 const SELF_SUBJECT = "__self__";
 const LORE_SUBJECT = "__lore__";
@@ -70,6 +72,119 @@ type SessionDurableContextCategory = "fact" | "plan" | "preference" | "relations
 type GeneratedVoiceAddressing = {
   talkingTo: string | null;
 };
+
+type VoiceGenerationPrepStageOptions<T> = {
+  runtime: VoiceReplyRuntime;
+  guildId: string;
+  channelId: string;
+  userId: string;
+  sessionId?: string | null;
+  stage: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+  task: Promise<T>;
+  fallbackValue: T;
+};
+
+function createVoiceGenerationPrepTimeoutError(stage: string, timeoutMs: number) {
+  const error = new Error(`${stage} timed out after ${timeoutMs}ms.`);
+  error.name = "TimeoutError";
+  return error;
+}
+
+function isVoiceGenerationPrepTimeoutError(error: unknown) {
+  return String((error as Error | null)?.name || "").trim() === "TimeoutError";
+}
+
+async function awaitVoiceGenerationPrepStage<T>({
+  runtime,
+  guildId,
+  channelId,
+  userId,
+  sessionId = null,
+  stage,
+  timeoutMs,
+  signal,
+  task,
+  fallbackValue
+}: VoiceGenerationPrepStageOptions<T>): Promise<T> {
+  const normalizedStage = String(stage || "").trim() || "unknown";
+  runtime.store.logAction({
+    kind: "voice_runtime",
+    guildId,
+    channelId,
+    userId,
+    content: "voice_generation_prep_stage",
+    metadata: {
+      sessionId: sessionId || null,
+      stage: normalizedStage,
+      state: "start",
+      timeoutMs
+    }
+  });
+  const startedAt = Date.now();
+  try {
+    throwIfAborted(signal, `Voice generation ${normalizedStage} cancelled`);
+    const result = await new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const finish = (handler: () => void) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        handler();
+      };
+      const onAbort = () => {
+        finish(() => reject(createAbortError(signal?.reason || `Voice generation ${normalizedStage} cancelled`)));
+      };
+      const timer = setTimeout(() => {
+        finish(() => reject(createVoiceGenerationPrepTimeoutError(normalizedStage, timeoutMs)));
+      }, Math.max(1, Math.round(Number(timeoutMs) || 1)));
+      const cleanup = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      void task.then((value) => finish(() => resolve(value))).catch((error: unknown) => finish(() => reject(error)));
+    });
+    runtime.store.logAction({
+      kind: "voice_runtime",
+      guildId,
+      channelId,
+      userId,
+      content: "voice_generation_prep_stage",
+      metadata: {
+        sessionId: sessionId || null,
+        stage: normalizedStage,
+        state: "ok",
+        elapsedMs: Math.max(0, Date.now() - startedAt)
+      }
+    });
+    return result;
+  } catch (error) {
+    if (isAbortError(error) || signal?.aborted) {
+      throw error;
+    }
+    runtime.store.logAction({
+      kind: isVoiceGenerationPrepTimeoutError(error) ? "voice_runtime" : "voice_error",
+      guildId,
+      channelId,
+      userId,
+      content: isVoiceGenerationPrepTimeoutError(error)
+        ? "voice_generation_prep_stage"
+        : `voice_generation_${normalizedStage}_failed: ${String((error as Error)?.message || error)}`,
+      metadata: {
+        sessionId: sessionId || null,
+        stage: normalizedStage,
+        state: isVoiceGenerationPrepTimeoutError(error) ? "timeout" : "error",
+        elapsedMs: Math.max(0, Date.now() - startedAt),
+        timeoutMs,
+        fallbackUsed: true,
+        error: String((error as Error)?.message || error)
+      }
+    });
+    return fallbackValue;
+  }
+}
 
 function appendUniqueStrings(target: string[], values: unknown[]) {
   for (const value of values) {
@@ -565,7 +680,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     typeof runtime.runModelRequestedBrowserBrowse === "function" &&
     typeof runtime.buildBrowserBrowseContext === "function"
   );
-  const allowOpenArticleToolCall = Boolean(typeof runtime.search?.readPageSummary === "function");
   const screenShare = resolveVoiceScreenShareCapability(runtime, {
     settings,
     guildId,
@@ -670,36 +784,51 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       : null;
 
   const continuityStartedAt = Date.now();
-  const continuity = await loadConversationContinuityContext({
-    settings,
-    userId,
+  const continuity = await awaitVoiceGenerationPrepStage({
+    runtime,
     guildId,
     channelId,
-    queryText: incomingTranscript,
-    trace: {
+    userId,
+    sessionId,
+    stage: "continuity",
+    timeoutMs: VOICE_GENERATION_CONTINUITY_TIMEOUT_MS,
+    signal,
+    task: loadConversationContinuityContext({
+      settings,
+      userId,
       guildId,
       channelId,
-      userId
-    },
-    source: "voice_realtime_generation",
-    loadFactProfile:
-      (payload) => {
-        if (activeVoiceSession && typeof runtime.voiceSessionManager?.getSessionFactProfileSlice === "function") {
-          if (activeVoiceSession) {
-            return runtime.voiceSessionManager.getSessionFactProfileSlice({
-              session: activeVoiceSession,
-              userId: String(payload.userId || "").trim() || null
-            });
-          }
-        }
-        if (typeof runtime.loadFactProfile === "function") {
-          return runtime.loadFactProfile(payload);
-        }
-        return { userFacts: [], relevantFacts: [] };
+      queryText: incomingTranscript,
+      trace: {
+        guildId,
+        channelId,
+        userId
       },
-    loadRecentConversationHistory,
+      source: "voice_realtime_generation",
+      loadFactProfile:
+        (payload) => {
+          if (activeVoiceSession && typeof runtime.voiceSessionManager?.getSessionFactProfileSlice === "function") {
+            if (activeVoiceSession) {
+              return runtime.voiceSessionManager.getSessionFactProfileSlice({
+                session: activeVoiceSession,
+                userId: String(payload.userId || "").trim() || null
+              });
+            }
+          }
+          if (typeof runtime.loadFactProfile === "function") {
+            return runtime.loadFactProfile(payload);
+          }
+          return { userFacts: [], relevantFacts: [] };
+        },
+      loadRecentConversationHistory,
+    }),
+    fallbackValue: {
+      memorySlice: emptyFactProfileSlice(),
+      recentConversationHistory: []
+    }
   });
   const continuityLoadMs = Math.max(0, Date.now() - continuityStartedAt);
+  throwIfAborted(signal, "Voice generation continuity cancelled");
   const promptMemorySlice = normalizeFactProfileSlice(continuity.memorySlice);
   const recentConversationHistory = continuity.recentConversationHistory;
   const participantIds =
@@ -709,58 +838,79 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
           .filter(Boolean)
       : [];
   const behavioralStartedAt = Date.now();
-  const cachedBehavioralFacts =
-    activeVoiceSession
-      ? await loadSessionBehavioralMemoryFacts({
-        session: activeVoiceSession,
-        searchDurableFacts:
-          typeof runtime.memory?.searchDurableFacts === "function"
-            ? (payload) => runtime.memory.searchDurableFacts(payload)
-            : null,
-        rankBehavioralFacts:
-          typeof runtime.memory?.rankHybridCandidates === "function"
-            ? async ({ candidates, queryText, channelId, settings, trace, limit }) => {
-              const ranked = await runtime.memory.rankHybridCandidates({
-                candidates,
-                queryText,
-                settings,
-                trace,
-                channelId,
-                requireRelevanceGate: true
-              });
-              const boundedLimit = Math.max(1, Math.min(12, Math.floor(Number(limit) || 8)));
-              return Array.isArray(ranked) ? ranked.slice(0, boundedLimit) : [];
-            }
-            : null,
-        settings,
-        guildId,
-        channelId,
-        queryText: incomingTranscript,
-        participantIds,
-        trace: {
-          guildId,
-          channelId,
-          userId,
-          source: "voice_realtime_behavioral_memory:generation"
-        },
-        limit: 8
-      })
-      : null;
-  const behavioralFacts = cachedBehavioralFacts ?? await loadBehavioralMemoryFacts(runtime, {
-    settings,
+  const behavioralMemoryResult = await awaitVoiceGenerationPrepStage({
+    runtime,
     guildId,
     channelId,
-    queryText: incomingTranscript,
-    participantIds,
-    trace: {
-      guildId,
-      channelId,
-      userId,
-      source: "voice_realtime_behavioral_memory:generation"
-    },
-    limit: 8
+    userId,
+    sessionId,
+    stage: "behavioral_memory",
+    timeoutMs: VOICE_GENERATION_BEHAVIORAL_TIMEOUT_MS,
+    signal,
+    task: (async () => {
+      const cachedBehavioralFacts =
+        activeVoiceSession
+          ? await loadSessionBehavioralMemoryFacts({
+            session: activeVoiceSession,
+            searchDurableFacts:
+              typeof runtime.memory?.searchDurableFacts === "function"
+                ? (payload) => runtime.memory.searchDurableFacts(payload)
+                : null,
+            rankBehavioralFacts:
+              typeof runtime.memory?.rankHybridCandidates === "function"
+                ? async ({ candidates, queryText, channelId, settings, trace, limit }) => {
+                  const ranked = await runtime.memory.rankHybridCandidates({
+                    candidates,
+                    queryText,
+                    settings,
+                    trace,
+                    channelId,
+                    requireRelevanceGate: true
+                  });
+                  const boundedLimit = Math.max(1, Math.min(12, Math.floor(Number(limit) || 8)));
+                  return Array.isArray(ranked) ? ranked.slice(0, boundedLimit) : [];
+                }
+                : null,
+            settings,
+            guildId,
+            channelId,
+            queryText: incomingTranscript,
+            participantIds,
+            trace: {
+              guildId,
+              channelId,
+              userId,
+              source: "voice_realtime_behavioral_memory:generation"
+            },
+            limit: 8
+          })
+          : null;
+      return {
+        facts: cachedBehavioralFacts ?? await loadBehavioralMemoryFacts(runtime, {
+          settings,
+          guildId,
+          channelId,
+          queryText: incomingTranscript,
+          participantIds,
+          trace: {
+            guildId,
+            channelId,
+            userId,
+            source: "voice_realtime_behavioral_memory:generation"
+          },
+          limit: 8
+        }),
+        usedCachedBehavioralFacts: Array.isArray(cachedBehavioralFacts)
+      };
+    })(),
+    fallbackValue: {
+      facts: [],
+      usedCachedBehavioralFacts: false
+    }
   });
   const behavioralMemoryLoadMs = Math.max(0, Date.now() - behavioralStartedAt);
+  throwIfAborted(signal, "Voice generation behavioral memory cancelled");
+  const behavioralFacts = Array.isArray(behavioralMemoryResult.facts) ? behavioralMemoryResult.facts : [];
   const totalMemoryLoadMs = Math.max(0, Date.now() - continuityStartedAt);
   runtime.store.logAction({
     kind: "voice_runtime",
@@ -775,7 +925,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       continuityLoadMs,
       behavioralMemoryLoadMs,
       totalLoadMs: totalMemoryLoadMs,
-      usedCachedBehavioralFacts: Array.isArray(cachedBehavioralFacts),
+      usedCachedBehavioralFacts: Boolean(behavioralMemoryResult.usedCachedBehavioralFacts),
       participantProfileCount: Array.isArray(promptMemorySlice.participantProfiles)
         ? promptMemorySlice.participantProfiles.length
         : 0,
@@ -860,10 +1010,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     !browserBrowse?.blockedByBudget &&
     browserBrowse?.budget?.canBrowse !== false
   );
-  const openArticleCandidates = buildOpenArticleCandidates({
-    webSearch
-  });
-  const openedArticle = null;
   const voiceConversationPolicy = getVoiceConversationPolicy(settings);
   const streamingEnabled = Boolean(
     voiceConversationPolicy.streaming?.enabled &&
@@ -871,7 +1017,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     typeof runtime.llm?.generateStreaming === "function"
   );
   let usedWebSearchFollowup = false;
-  let usedOpenArticleFollowup = false;
   let usedScreenShareOffer = false;
   let leaveVoiceChannelRequested = false;
 
@@ -885,9 +1030,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   const buildVoiceUserPrompt = ({
     webSearchContext = webSearch,
     allowWebSearch = allowWebSearchToolCall,
-    openArticleCandidatesContext = openArticleCandidates,
-    openedArticleContext = openedArticle,
-    allowOpenArticle = allowOpenArticleToolCall,
     allowVoiceTools = Boolean(voiceToolCallbacks)
   } = {}) =>
     buildVoiceTurnPrompt({
@@ -917,11 +1059,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       webSearch: webSearchContext,
       browserBrowse,
       recentConversationHistory,
-      openArticleCandidates: openArticleCandidatesContext,
-      openedArticle: openedArticleContext,
       allowWebSearchToolCall: allowWebSearch,
       allowBrowserBrowseToolCall,
-      allowOpenArticleToolCall: allowOpenArticle,
       screenShare,
       allowScreenShareToolCall,
       allowMemoryToolCalls,
@@ -959,7 +1098,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       soundboard: allowSoundboardToolCall,
       webSearch: allowWebSearchToolCall,
       browserBrowse: allowBrowserBrowseToolCall,
-      openArticle: allowOpenArticleToolCall,
       screenShare: allowScreenShareToolCall,
       memory: allowMemoryToolCalls
     },
@@ -988,19 +1126,23 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     const codeAgentRuntimeAvailable = typeof runtime.runModelRequestedCodeTask === "function";
     const voiceReplyTools = buildReplyToolSet(settings as Record<string, unknown>, {
       webSearchAvailable: allowWebSearchToolCall && webSearchAvailableNow,
+      webScrapeAvailable: allowWebSearchToolCall && webSearchAvailableNow,
       browserBrowseAvailable: allowBrowserBrowseToolCall && browserBrowseAvailableNow,
       memoryAvailable: allowMemoryToolCalls,
       imageLookupAvailable: false,
-      openArticleAvailable: allowOpenArticleToolCall && openArticleCandidates.length > 0,
       screenShareAvailable: allowScreenShareToolCall,
       soundboardAvailable: allowSoundboardToolCall,
       codeAgentAvailable: codeAgentRuntimeAvailable,
       voiceToolsAvailable: Boolean(voiceToolCallbacks)
     });
 
+    const subAgentSessions =
+      typeof runtime.buildSubAgentSessionsRuntime === "function"
+        ? runtime.buildSubAgentSessionsRuntime()
+        : undefined;
     const voiceToolRuntime: ReplyToolRuntime = {
       search: {
-        searchAndRead: async ({ settings: toolSettings, query, trace }) =>
+        searchAndRead: async ({ settings: toolSettings, query, trace, signal: toolSignal }) =>
           await runtime.search.searchAndRead({
             settings: toolSettings,
             query,
@@ -1009,15 +1151,16 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
               channelId: trace.channelId ?? null,
               userId: trace.userId ?? null,
               source: trace.source ?? null
-            }
+            },
+            signal: toolSignal
           }),
         readPageSummary:
           typeof runtime.search.readPageSummary === "function"
-            ? async (url, maxChars) => await runtime.search.readPageSummary(url, maxChars)
+            ? async (url, maxChars, toolSignal) => await runtime.search.readPageSummary(url, maxChars, toolSignal)
             : undefined
       },
       browser: {
-        browse: async ({ settings: toolSettings, query, guildId, channelId, userId, source }) =>
+        browse: async ({ settings: toolSettings, query, guildId, channelId, userId, source, signal: toolSignal }) =>
           await runtime.runModelRequestedBrowserBrowse({
             settings: toolSettings,
             browserBrowse,
@@ -1025,13 +1168,22 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
             guildId,
             channelId,
             userId,
-            source
+            source,
+            signal: toolSignal
           })
       },
       screenShare:
         typeof runtime.offerVoiceScreenShareLink === "function"
           ? {
-              offerLink: async ({ settings: toolSettings, guildId, channelId, requesterUserId, transcript, source }) =>
+              offerLink: async ({
+                settings: toolSettings,
+                guildId,
+                channelId,
+                requesterUserId,
+                transcript,
+                source,
+                signal: toolSignal
+              }) =>
                 await runtime.offerVoiceScreenShareLink({
                   settings: toolSettings,
                   guildId,
@@ -1046,7 +1198,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         requestLeaveVoiceChannel: async () => ({ ok: true })
       },
       codeAgent: runtime.runModelRequestedCodeTask ? {
-        runTask: async ({ settings: toolSettings, task, cwd, guildId, channelId, userId, source }) =>
+        runTask: async ({ settings: toolSettings, task, cwd, guildId, channelId, userId, source, signal: toolSignal }) =>
           await runtime.runModelRequestedCodeTask({
             settings: toolSettings,
             task,
@@ -1054,11 +1206,13 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
             guildId,
             channelId,
             userId,
-            source
+            source,
+            signal: toolSignal
           })
       } : undefined,
       memory: runtime.memory,
       store: runtime.store,
+      subAgentSessions,
       voiceSession: voiceToolCallbacks || undefined
     };
     const voiceToolContext: ReplyToolContext = {
@@ -1069,7 +1223,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       sourceMessageId: `voice-${String(guildId || "guild")}-${Date.now()}`,
       sourceText: incomingTranscript,
       botUserId: runtime.client?.user?.id || undefined,
-      trace: voiceTrace
+      trace: voiceTrace,
+      signal
     };
 
     const initialUserPrompt = buildVoiceUserPrompt();
@@ -1366,9 +1521,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         if (toolCall.name === "web_search" && !result.isError) {
           usedWebSearchFollowup = true;
         }
-        if (toolCall.name === "open_article" && !result.isError) {
-          usedOpenArticleFollowup = true;
-        }
         if (toolCall.name === "play_soundboard" && !result.isError) {
           const toolPayload = parseReplyToolResultPayload(result.content);
           const playedRefs = Array.isArray(toolPayload?.played)
@@ -1490,7 +1642,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       return {
         text: "",
         usedWebSearchFollowup,
-        usedOpenArticleFollowup,
         usedScreenShareOffer,
         voiceAddressing,
         screenNote,
@@ -1506,7 +1657,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         text: "",
         playedSoundboardRefs,
         usedWebSearchFollowup,
-        usedOpenArticleFollowup,
         usedScreenShareOffer,
         voiceAddressing,
         screenNote,
@@ -1529,7 +1679,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       text: finalText,
       playedSoundboardRefs,
       usedWebSearchFollowup,
-      usedOpenArticleFollowup,
       usedScreenShareOffer,
       voiceAddressing,
       screenNote,
@@ -1586,7 +1735,7 @@ function normalizeGeneratedVoiceAddressing(
       ? normalizedSpeakerName || "SPEAKER"
       : rawTalkingToToken;
 
-  let talkingTo = talkingToToken || null;
+  const talkingTo = talkingToToken || null;
   if (!talkingTo) return null;
 
   return { talkingTo } satisfies GeneratedVoiceAddressing;
@@ -1650,7 +1799,6 @@ function classifyVoiceToolPrePlaybackRecovery(
     case "web_scrape":
     case "memory_search":
     case "conversation_search":
-    case "open_article":
       return {
         eligible: true,
         reason: "read_only_tool"
@@ -1697,54 +1845,4 @@ function resolveVoiceScreenShareCapability(runtime, { settings, guildId, channel
     publicUrl: String(capability?.publicUrl || "").trim(),
     reason: available ? null : rawReason || status || "unavailable"
   };
-}
-
-function buildOpenArticleCandidates({ webSearch }) {
-  const candidates = [];
-  const seenUrls = new Set();
-  const pushCandidate = ({
-    ref,
-    title,
-    url,
-    domain,
-    query
-  }) => {
-    const normalizedRef = String(ref || "").trim();
-    const normalizedUrl = String(url || "").trim();
-    if (!normalizedRef || !normalizedUrl || seenUrls.has(normalizedUrl)) return;
-    seenUrls.add(normalizedUrl);
-    candidates.push({
-      ref: normalizedRef,
-      title: String(title || "untitled").trim() || "untitled",
-      url: normalizedUrl,
-      domain: String(domain || "").trim(),
-      query: String(query || "").trim()
-    });
-  };
-
-  const currentResults = (Array.isArray(webSearch?.results) ? webSearch.results : [])
-    .slice(0, OPEN_ARTICLE_RESULTS_PER_ROW);
-  for (let index = 0; index < currentResults.length; index += 1) {
-    const row = currentResults[index];
-    const url = String(row?.url || "").trim();
-    if (!url) continue;
-    pushCandidate({
-      ref: `R0:${index + 1}`,
-      title: row?.title,
-      url,
-      domain: row?.domain,
-      query: webSearch?.query || ""
-    });
-  }
-
-  if (!candidates.length) return [];
-  const first = candidates[0];
-  const withAliases = [first, ...candidates.slice(1)];
-  if (first) {
-    withAliases.unshift({
-      ...first,
-      ref: "first"
-    });
-  }
-  return withAliases.slice(0, OPEN_ARTICLE_MAX_CANDIDATES);
 }

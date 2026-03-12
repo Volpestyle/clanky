@@ -169,9 +169,9 @@ function createVoiceBot({
     relevantFacts: []
   }),
   searchConfigured = true,
-  openArticleRead = async (url) => ({
-    title: "opened article",
-    summary: `opened ${String(url || "")}`.trim(),
+  webScrapeRead = async (url) => ({
+    title: "scraped article",
+    summary: `scraped ${String(url || "")}`.trim(),
     extractionMethod: "fast"
   }),
   recentConversationHistory = [],
@@ -204,8 +204,9 @@ function createVoiceBot({
   const ingests = [];
   const remembers = [];
   const webSearchCalls = [];
-  const openArticleCalls = [];
+  const webScrapeCalls = [];
   const screenShareCalls = [];
+  const browserBrowseCalls = [];
   const requestPlayMusicCalls = [];
   const requestStopMusicCalls = [];
   const requestPauseMusicCalls = [];
@@ -324,6 +325,39 @@ function createVoiceBot({
       screenShareCalls.push(payload);
       return await offerScreenShare(payload);
     },
+    buildSubAgentSessionsRuntime() {
+      return {
+        manager: {
+          get() {
+            return null;
+          },
+          register() {},
+          remove() {}
+        },
+        createCodeSession() {
+          return null;
+        },
+        createBrowserSession() {
+          return null;
+        }
+      };
+    },
+    async runModelRequestedBrowserBrowse(payload) {
+      browserBrowseCalls.push(payload);
+      return {
+        requested: true,
+        configured: true,
+        enabled: true,
+        used: true,
+        blockedByBudget: false,
+        error: null,
+        query: String(payload?.query || "").trim(),
+        text: "",
+        imageInputs: [],
+        steps: 0,
+        hitStepLimit: false
+      };
+    },
     voiceSessionManager: activeVoiceSession || musicDisambiguation ? {
       getSessionById(sessionId) {
         return sessionId ? activeVoiceSession : null;
@@ -370,11 +404,11 @@ function createVoiceBot({
         };
       },
       async readPageSummary(url, maxChars) {
-        openArticleCalls.push({
+        webScrapeCalls.push({
           url,
           maxChars
         });
-        return await openArticleRead(url, maxChars);
+        return await webScrapeRead(url, maxChars);
       }
     },
     client: {
@@ -393,8 +427,9 @@ function createVoiceBot({
     ingests,
     remembers,
     webSearchCalls,
-    openArticleCalls,
+    webScrapeCalls,
     screenShareCalls,
+    browserBrowseCalls,
     requestPlayMusicCalls,
     requestStopMusicCalls,
     requestPauseMusicCalls,
@@ -1501,7 +1536,6 @@ test("generateVoiceTurnReply forwards browser screenshots from tool results into
   assert.equal(reply.text, "let me look at it.\nyeah the banner says sold out.");
   assert.equal(getGenerationCalls(), 2);
   assert.equal(reply.replyPrompts?.hiddenByDefault, true);
-  assert.equal(reply.replyPrompts?.systemPrompt.includes("You are speaking in live Discord voice chat."), true);
   assert.match(String(reply.replyPrompts?.initialUserPrompt || ""), /what does the page look like/i);
   assert.deepEqual(reply.replyPrompts?.followupUserPrompts, [
     "Attached are images returned by the previous tool call. Use them if they help."
@@ -1513,6 +1547,177 @@ test("generateVoiceTurnReply forwards browser screenshots from tool results into
       dataBase64: "Zm9v"
     }
   ]);
+});
+
+test("generateVoiceTurnReply forwards the abort signal into browser tool execution", async () => {
+  const { bot, browserBrowseCalls, getGenerationCalls } = createVoiceBot({
+    generationSequence: [
+      {
+        text: "checking now",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "browser_browse",
+            input: {
+              query: "inspect ebay"
+            }
+          }
+        ],
+        rawContent: [
+          { type: "text", text: "checking now" },
+          {
+            type: "tool_use",
+            id: "tc_1",
+            name: "browser_browse",
+            input: { query: "inspect ebay" }
+          }
+        ]
+      },
+      {
+        text: "done"
+      }
+    ]
+  });
+
+  bot.buildBrowserBrowseContext = () => ({
+    requested: false,
+    configured: true,
+    enabled: true,
+    used: false,
+    blockedByBudget: false,
+    error: null,
+    query: "",
+    text: "",
+    imageInputs: [],
+    steps: 0,
+    hitStepLimit: false,
+    budget: {
+      canBrowse: true
+    }
+  });
+
+  const controller = new AbortController();
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "show me ebay",
+    signal: controller.signal
+  });
+
+  assert.equal(reply.text, "checking now\ndone");
+  assert.equal(getGenerationCalls(), 2);
+  assert.equal(browserBrowseCalls.length, 1);
+  assert.equal(browserBrowseCalls[0]?.signal, controller.signal);
+});
+
+test("generateVoiceTurnReply uses browser sub-agent sessions before one-shot browser browse", async () => {
+  const { bot, browserBrowseCalls, getGenerationCalls } = createVoiceBot({
+    generationSequence: [
+      {
+        text: "let me work through that",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "browser_browse",
+            input: {
+              query: "search ebay for pokemon diamond ds"
+            }
+          }
+        ],
+        rawContent: [
+          { type: "text", text: "let me work through that" },
+          {
+            type: "tool_use",
+            id: "tc_1",
+            name: "browser_browse",
+            input: { query: "search ebay for pokemon diamond ds" }
+          }
+        ]
+      },
+      {
+        text: "I found the cheapest ones."
+      }
+    ]
+  });
+
+  bot.buildBrowserBrowseContext = () => ({
+    requested: false,
+    configured: true,
+    enabled: true,
+    used: false,
+    blockedByBudget: false,
+    error: null,
+    query: "",
+    text: "",
+    imageInputs: [],
+    steps: 0,
+    hitStepLimit: false,
+    budget: {
+      canBrowse: true
+    }
+  });
+
+  const registeredSessions = [];
+  const removedSessions = [];
+  bot.buildSubAgentSessionsRuntime = () => ({
+    manager: {
+      get() {
+        return null;
+      },
+      register(session) {
+        registeredSessions.push(session.id);
+      },
+      remove(sessionId) {
+        removedSessions.push(sessionId);
+      }
+    },
+    createCodeSession() {
+      return null;
+    },
+    createBrowserSession() {
+      return {
+        id: "browser-session-1",
+        ownerUserId: "user-1",
+        async runTurn(query, options = {}) {
+          assert.equal(query, "search ebay for pokemon diamond ds");
+          assert.ok(options.signal instanceof AbortSignal);
+          return {
+            text: "I searched eBay.\n\n[session_id: browser-session-1]",
+            imageInputs: [],
+            isError: false,
+            errorMessage: "",
+            sessionCompleted: false,
+            costUsd: 0,
+            usage: {
+              inputTokens: 0,
+              outputTokens: 0,
+              cacheWriteTokens: 0,
+              cacheReadTokens: 0
+            }
+          };
+        }
+      };
+    }
+  });
+  bot.runModelRequestedBrowserBrowse = async () => {
+    throw new Error("one-shot browse should not run when browser sub-agent sessions are available");
+  };
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "find the cheapest pokemon diamond ds on ebay"
+  });
+
+  assert.equal(reply.text, "let me work through that\nI found the cheapest ones.");
+  assert.equal(getGenerationCalls(), 2);
+  assert.deepEqual(registeredSessions, ["browser-session-1"]);
+  assert.deepEqual(removedSessions, []);
+  assert.equal(browserBrowseCalls.length, 0);
 });
 
 test("generateVoiceTurnReply carries resolved streamed speech into the continuation context when generation.text is empty", async () => {
@@ -1840,11 +2045,7 @@ test("generateVoiceTurnReply advertises tool runtimes only when the capability e
         });
       },
       expectedToolName: "browser_browse",
-      expectedPresent: true,
-      assertPrompt(prompt) {
-        assert.equal(prompt.includes("browser_browse:"), true);
-        assert.equal(prompt.includes("interactive browsing"), true);
-      }
+      expectedPresent: true
     }
   ];
 
@@ -1867,7 +2068,6 @@ test("generateVoiceTurnReply advertises tool runtimes only when the capability e
     const firstTools = Array.isArray(generationPayloads[0]?.tools) ? generationPayloads[0].tools : [];
     const toolNames = firstTools.map((entry) => String(entry?.name || ""));
     assert.equal(toolNames.includes(row.expectedToolName), row.expectedPresent, row.name);
-    row.assertPrompt?.(String(generationPayloads[0]?.userPrompt || ""));
   }
 });
 
@@ -1914,21 +2114,21 @@ test("generateVoiceTurnReply runs web lookup follow-up via tool calls", async ()
   assert.equal(reply.usedWebSearchFollowup, true);
 });
 
-test("generateVoiceTurnReply handles open_article tool call", async () => {
-  const { bot, getGenerationCalls } = createVoiceBot({
+test("generateVoiceTurnReply handles web_scrape tool call", async () => {
+  const { bot, getGenerationCalls, webScrapeCalls } = createVoiceBot({
     generationSequence: [
       {
         text: "",
         toolCalls: [
           {
             id: "tc_1",
-            name: "open_article",
-            input: { ref: "first" }
+            name: "web_scrape",
+            input: { url: "https://example.com/news-1" }
           }
         ],
         rawContent: [
           { type: "text", text: "" },
-          { type: "tool_use", id: "tc_1", name: "open_article", input: { ref: "first" } }
+          { type: "tool_use", id: "tc_1", name: "web_scrape", input: { url: "https://example.com/news-1" } }
         ]
       },
       {
@@ -1936,17 +2136,7 @@ test("generateVoiceTurnReply handles open_article tool call", async () => {
           text: "here's what it says"
         })
       }
-    ],
-    webSearchOverride: {
-      results: [
-        {
-          title: "example headline",
-          url: "https://example.com/news-1",
-          domain: "example.com"
-        }
-      ],
-      query: "top news today"
-    }
+    ]
   });
 
   const reply = await generateVoiceTurnReply(bot, {
@@ -1958,8 +2148,10 @@ test("generateVoiceTurnReply handles open_article tool call", async () => {
   });
 
   assert.equal(getGenerationCalls(), 2);
+  assert.equal(webScrapeCalls.length, 1);
+  assert.equal(webScrapeCalls[0].url, "https://example.com/news-1");
   assert.equal(reply.text, "here's what it says");
-  assert.equal(reply.usedOpenArticleFollowup, true);
+  assert.equal(reply.usedWebSearchFollowup, false);
 });
 
 test("generateVoiceTurnReply tolerates empty fact profiles", async () => {

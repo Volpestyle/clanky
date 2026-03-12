@@ -7,28 +7,8 @@ import {
   isDevTaskEnabled,
   isResearchEnabled
 } from "../settings/agentStack.ts";
-import {
-  BROWSER_BROWSE_SCHEMA,
-  CODE_TASK_SCHEMA,
-  CONVERSATION_SEARCH_SCHEMA,
-  LEAVE_VOICE_CHANNEL_SCHEMA,
-  OFFER_SCREEN_SHARE_LINK_SCHEMA,
-  MEMORY_WRITE_SCHEMA,
-  MUSIC_NOW_PLAYING_SCHEMA,
-  MUSIC_PAUSE_SCHEMA,
-  MUSIC_PLAY_SCHEMA,
-  MUSIC_QUEUE_ADD_SCHEMA,
-  MUSIC_QUEUE_NEXT_SCHEMA,
-  MUSIC_REPLY_HANDOFF_SCHEMA,
-  MUSIC_RESUME_SCHEMA,
-  MUSIC_SEARCH_SCHEMA,
-  MUSIC_SKIP_SCHEMA,
-  MUSIC_STOP_SCHEMA,
-  PLAY_SOUNDBOARD_SCHEMA,
-  WEB_SCRAPE_SCHEMA,
-  WEB_SEARCH_SCHEMA,
-  toRealtimeTool
-} from "../tools/sharedToolSchemas.ts";
+import { toRealtimeTool } from "../tools/sharedToolSchemas.ts";
+import { buildVoiceRealtimeLocalToolSchemas } from "../tools/toolRegistry.ts";
 import { OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS, OPENAI_TOOL_CALL_EVENT_MAX } from "./voiceSessionManager.constants.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
 import type {
@@ -43,42 +23,6 @@ import type { RealtimeFunctionTool, VoiceToolCallManager } from "./voiceToolCall
 
 type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
 type RealtimeToolExportTarget = string;
-
-const BASE_REALTIME_TOOL_SCHEMAS = [
-  MEMORY_WRITE_SCHEMA,
-  CONVERSATION_SEARCH_SCHEMA,
-  MUSIC_SEARCH_SCHEMA,
-  MUSIC_PLAY_SCHEMA,
-  MUSIC_QUEUE_ADD_SCHEMA,
-  MUSIC_QUEUE_NEXT_SCHEMA,
-  MUSIC_STOP_SCHEMA,
-  MUSIC_PAUSE_SCHEMA,
-  MUSIC_REPLY_HANDOFF_SCHEMA,
-  MUSIC_RESUME_SCHEMA,
-  MUSIC_SKIP_SCHEMA,
-  MUSIC_NOW_PLAYING_SCHEMA,
-  PLAY_SOUNDBOARD_SCHEMA,
-  LEAVE_VOICE_CHANNEL_SCHEMA,
-  WEB_SEARCH_SCHEMA,
-  WEB_SCRAPE_SCHEMA,
-  BROWSER_BROWSE_SCHEMA,
-  CODE_TASK_SCHEMA
-];
-
-function shouldIncludeLocalRealtimeTool(name: string, options: {
-  includeBrowser: boolean;
-  includeCodeAgent: boolean;
-  includeMemory: boolean;
-  includeSoundboard: boolean;
-  includeWebSearch: boolean;
-}) {
-  if ((name === "web_search" || name === "web_scrape") && !options.includeWebSearch) return false;
-  if (name === "memory_write" && !options.includeMemory) return false;
-  if (name === "browser_browse" && !options.includeBrowser) return false;
-  if (name === "code_task" && !options.includeCodeAgent) return false;
-  if (name === "play_soundboard" && !options.includeSoundboard) return false;
-  return true;
-}
 
 function resolveRealtimeToolExportTarget({
   session,
@@ -226,8 +170,6 @@ export function resolveVoiceRealtimeToolDescriptors(
   } = {}
 ) {
   const exportTarget = resolveRealtimeToolExportTarget({ session, target });
-  const localTools = BASE_REALTIME_TOOL_SCHEMAS
-    .map((schema) => adaptRealtimeToolDescriptorForTarget(toRealtimeTool(schema), exportTarget));
   const screenShareCapability =
     typeof manager.getVoiceScreenShareCapability === "function"
       ? manager.getVoiceScreenShareCapability({
@@ -237,16 +179,6 @@ export function resolveVoiceRealtimeToolDescriptors(
           requesterUserId: session?.lastRealtimeToolCallerUserId || null
         })
       : null;
-  if (
-    screenShareCapability?.available &&
-    typeof manager.offerVoiceScreenShareLink === "function" &&
-    session?.guildId &&
-    session?.textChannelId
-  ) {
-    localTools.push(
-      adaptRealtimeToolDescriptorForTarget(toRealtimeTool(OFFER_SCREEN_SHARE_LINK_SCHEMA), exportTarget)
-    );
-  }
 
   const sessionState = ensureSessionToolRuntimeState(manager, session);
   const mcpTools = (Array.isArray(sessionState?.mcpStatus) ? sessionState.mcpStatus : []).flatMap((server) => {
@@ -286,16 +218,22 @@ export function resolveVoiceRealtimeToolDescriptors(
   const includeCodeAgent = Boolean(
     isDevTaskEnabled(settings) && ((manager.createCodeAgentSession && manager.subAgentSessions) || manager.runModelRequestedCodeTask)
   );
+  const includeScreenShare = Boolean(
+    screenShareCapability?.available &&
+      typeof manager.offerVoiceScreenShareLink === "function" &&
+      session?.guildId &&
+      session?.textChannelId
+  );
+  const localTools = buildVoiceRealtimeLocalToolSchemas({
+    browserAvailable: includeBrowser,
+    codeAgentAvailable: includeCodeAgent,
+    memoryAvailable: includeMemory,
+    screenShareAvailable: includeScreenShare,
+    soundboardAvailable: includeSoundboard,
+    webSearchAvailable: includeWebSearch
+  }).map((schema) => adaptRealtimeToolDescriptorForTarget(toRealtimeTool(schema), exportTarget));
   return [
-    ...localTools.filter((entry) =>
-      shouldIncludeLocalRealtimeTool(entry.name, {
-        includeBrowser,
-        includeCodeAgent,
-        includeMemory,
-        includeSoundboard,
-        includeWebSearch
-      })
-    ),
+    ...localTools,
     ...mcpTools
   ];
 }

@@ -55,7 +55,7 @@ export function buildSystemPrompt(settings) {
   ].join("\n");
 }
 
-export function stripEmojiForPrompt(text) {
+function stripEmojiForPrompt(text) {
   let value = String(text || "");
   value = value.replace(/<a?:[a-zA-Z0-9_~]+:\d+>/g, "");
   value = value.replace(/:[a-zA-Z0-9_+-]+:/g, "");
@@ -276,25 +276,6 @@ export function formatWebSearchFindings(webSearch) {
     .join("\n");
 }
 
-export function formatOpenArticleCandidates(candidates) {
-  const rows = Array.isArray(candidates) ? candidates : [];
-  if (!rows.length) return "(no cached lookup articles available)";
-
-  return rows
-    .slice(0, 12)
-    .map((item) => {
-      const ref = String(item?.ref || "").trim() || "first";
-      const title = String(item?.title || "untitled").trim() || "untitled";
-      const url = String(item?.url || "").trim();
-      const domain = String(item?.domain || "").trim();
-      const query = String(item?.query || "").trim();
-      const domainLabel = domain ? ` (${domain})` : "";
-      const queryLabel = query ? ` | from query: "${query}"` : "";
-      return `- [${ref}] ${title}${domainLabel} -> ${url}${queryLabel}`;
-    })
-    .join("\n");
-}
-
 function formatPromptRelativeAge(rawValue) {
   const createdAtMs = Date.parse(String(rawValue || ""));
   if (!Number.isFinite(createdAtMs)) return "unknown";
@@ -372,7 +353,9 @@ export function formatInitiativeChannelSummaries(channels) {
             const text = stripEmojiForPrompt(String(message?.content || ""))
               .replace(/\s+/g, " ")
               .trim() || "(empty)";
-            return `  - [${sourceTag}] ${author}: ${text}`;
+            const msgId = String(message?.message_id || "").trim();
+            const idLabel = msgId ? ` [id:${msgId}]` : "";
+            return `  - [${sourceTag}] ${author}: ${text}${idLabel}`;
           })
           .join("\n")
         : "  - (no recent messages captured)";
@@ -471,7 +454,7 @@ export function formatVideoFindings(videoContext) {
     .join("\n");
 }
 
-export function renderPromptMemoryFact(row, { includeType = true, includeProvenance = true } = {}) {
+function renderPromptMemoryFact(row, { includeType = true, includeProvenance = true } = {}) {
   const fact = String(row?.fact || "").replace(/\s+/g, " ").trim();
   if (!fact) return "";
 
@@ -507,7 +490,7 @@ export function formatMemoryFacts(facts, { includeType = true, includeProvenance
     .join("\n");
 }
 
-export function formatMemoryLookupResults(results) {
+function formatMemoryLookupResults(results) {
   if (!results?.length) return "(no matching durable memory found)";
   return results
     .map((row, index) => {
@@ -535,7 +518,7 @@ export function formatImageLookupCandidates(candidates) {
     .join("\n");
 }
 
-export function formatImageLookupResults(results) {
+function formatImageLookupResults(results) {
   if (!results?.length) return "(no matching history images found)";
   return results
     .map((row, index) => {
