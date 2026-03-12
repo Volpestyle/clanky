@@ -166,13 +166,13 @@ function buildMicroReflectionPrompts({
     "Be selective. Prefer a few stable, useful facts over weak or noisy memories.",
     "Focus on durable preferences, identity, relationships, ongoing projects, and stable shared lore.",
     "Ignore fleeting reactions, one-off requests, jokes, tactical back-and-forth, and ephemeral chatter.",
-    "Every fact must be grounded directly in the conversation excerpt.",
+    "Prefer facts that are clearly supported by the conversation excerpt.",
     "If multiple candidates say the same thing in different words, keep only the best version.",
     "Classify each fact subject as one of: author, bot, lore.",
     `Use subject=author for facts about a specific user. Include subjectName with the author's exact display name from the excerpt. Authors in this excerpt: ${authorNames}.`,
     `Use subject=bot only for explicit durable facts about ${botName} that were USER-ASSIGNED (e.g. nicknames, personality traits the user told it to adopt, or identity changes). Do NOT extract facts describing the bot's built-in capabilities or default behavior (responding to requests, playing music, answering questions, etc.) — those are inherent, not durable memories.`,
     "Use subject=lore for stable shared context not tied to one person.",
-    `Return strict JSON only: {"facts":[{"subject":"author|bot|lore","subjectName":"<author display name if subject=author, empty otherwise>","fact":"...","type":"preference|profile|relationship|project|other","confidence":0.0-1.0,"evidence":"exact short quote"}]}.`,
+    `Return strict JSON only: {"facts":[{"subject":"author|bot|lore","subjectName":"<author display name if subject=author, empty otherwise>","fact":"...","type":"preference|profile|relationship|project|other","confidence":0.0-1.0,"evidence":"short quote or excerpt"}]}.`,
     "If nothing should be saved, return {\"facts\":[]}."
   ].join("\n");
 

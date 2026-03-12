@@ -61,10 +61,9 @@ export function normalizeFactType(rawType) {
   return ALLOWED_FACT_TYPES.has(normalized) ? normalized : "other";
 }
 
-export function normalizeEvidenceText(rawEvidence, sourceText) {
+export function normalizeEvidenceText(rawEvidence, _sourceText) {
   const evidence = sanitizeInline(rawEvidence || "", 220);
-  if (!evidence) return null;
-  return isTextGroundedInSource(evidence, sourceText) ? evidence : null;
+  return evidence || null;
 }
 
 export function buildFactEmbeddingPayload(factRow) {
@@ -336,27 +335,6 @@ export function isBehavioralDirectiveLikeFactText(line) {
   if (EN_MEMORY_STYLE_GUIDANCE_RE.test(text)) return true;
   if (EN_MEMORY_BEHAVIOR_VERB_RE.test(text) && EN_MEMORY_FUTURE_BEHAVIOR_RE.test(text)) return true;
   if (EN_MEMORY_ABUSIVE_LABEL_RE.test(text) && EN_MEMORY_BEHAVIOR_VERB_RE.test(text)) return true;
-  return false;
-}
-
-export function isTextGroundedInSource(memoryLine, sourceText) {
-  const sourceCompact = normalizeHighlightText(sourceText);
-  const memoryCompact = normalizeHighlightText(memoryLine);
-  if (!sourceCompact || !memoryCompact) return false;
-  if (sourceCompact.includes(memoryCompact)) return true;
-
-  const sourceTokens = extractStableTokens(sourceText, 64);
-  if (!sourceTokens.length) return false;
-
-  const memoryTokens = extractStableTokens(memoryLine, 32);
-  if (!memoryTokens.length) return false;
-
-  const sourceSet = new Set(sourceTokens);
-  const overlapCount = memoryTokens.filter((token) => sourceSet.has(token)).length;
-  const minOverlap = Math.max(2, Math.ceil(memoryTokens.length * 0.45));
-  if (overlapCount >= minOverlap) return true;
-  if (memoryTokens.length <= 3 && overlapCount === memoryTokens.length && overlapCount >= 2) return true;
-
   return false;
 }
 

@@ -260,9 +260,9 @@ function buildReflectionOnePassPrompts({
     "Lines marked `vc` are voice transcripts — speech-to-text can mishear words, drop context, or mangle names. If a fact from voice feels off or doesn't quite make sense, trust your gut and skip it or lower the confidence.",
     "",
     "Use confidence to signal how sure you are: 0.9+ for stuff they clearly said or typed, lower for things you're inferring or that came from noisy voice transcripts.",
-    "Evidence should be a short quote from the journal that backs up the fact.",
+    "Evidence should be a short quote or excerpt from the journal that best supports the fact.",
     "",
-    `Return strict JSON only: {"facts":[{"subject":"author|bot|lore","subjectName":"<display name if author, empty otherwise>","fact":"...","type":"preference|profile|relationship|project|other","confidence":0.0-1.0,"evidence":"exact short quote"}]}.`,
+    `Return strict JSON only: {"facts":[{"subject":"author|bot|lore","subjectName":"<display name if author, empty otherwise>","fact":"...","type":"preference|profile|relationship|project|other","confidence":0.0-1.0,"evidence":"short quote or excerpt"}]}.`,
     "If nothing worth remembering happened today, return {\"facts\":[]}. That's fine — not every day is memorable."
   ].filter(Boolean).join("\n");
 

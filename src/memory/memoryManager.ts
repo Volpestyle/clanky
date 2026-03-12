@@ -18,7 +18,6 @@ import {
   isBehavioralDirectiveLikeFactText,
   isUnsafeMemoryFactText,
   isInstructionLikeFactText,
-  isTextGroundedInSource,
   normalizeEvidenceText,
   normalizeFactType,
   normalizeHighlightText,
@@ -1543,9 +1542,6 @@ export class MemoryManager {
       ) {
         return { ok: false, reason: "instruction_like" };
       }
-      if (!isTextGroundedInSource(cleaned, sourceText)) {
-        return { ok: false, reason: "not_grounded_in_source" };
-      }
     }
 
     const factText = normalizeStoredFactText(cleaned);
@@ -1883,6 +1879,5 @@ export class MemoryManager {
 export const __memoryTestables = {
   computeChannelScopeScore,
   passesHybridRelevanceGate,
-  isInstructionLikeFactText,
-  isTextGroundedInSource
+  isInstructionLikeFactText
 };

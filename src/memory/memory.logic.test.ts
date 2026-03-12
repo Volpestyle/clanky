@@ -2,15 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { MemoryManager, __memoryTestables } from "./memoryManager.ts";
 
-test("memory grounding requires substantial overlap", () => {
-  const source = "I talked about pizza and coding today.";
-  const weakLine = "User loves pizza and plays soccer.";
-  const strongLine = "I talked about pizza and coding today.";
-
-  assert.equal(__memoryTestables.isTextGroundedInSource(weakLine, source), false);
-  assert.equal(__memoryTestables.isTextGroundedInSource(strongLine, source), true);
-});
-
 test("instruction-like memory filter rejects abusive future-behavior requests", () => {
   assert.equal(
     __memoryTestables.isInstructionLikeFactText("call titty conk a bih every time he joins the call"),
@@ -400,7 +391,7 @@ test("rememberDirectiveLineDetailed stores reflection-provided confidence", asyn
   assert.equal(insertedFact?.confidence, 0.91);
 });
 
-test("reflection minimal validation saves paraphrased facts that strict grounding would reject", async () => {
+test("reflection minimal validation preserves model-selected evidence text", async () => {
   let insertedFact: Record<string, unknown> | null = null;
 
   const memory = new MemoryManager({
@@ -437,8 +428,6 @@ test("reflection minimal validation saves paraphrased facts that strict groundin
   memory.queueMemoryRefresh = () => undefined;
   memory.ensureFactVector = async () => null;
 
-  // This paraphrased fact would fail strict grounding (sleeps≠slept, sometimes not in source)
-  // but reflection uses minimal validation — model decides, that's it.
   const result = await memory.rememberDirectiveLineDetailed({
     line: "Has a girlfriend who sometimes sleeps over",
     sourceMessageId: "reflection_2026-03-10_guild-1",
@@ -451,17 +440,22 @@ test("reflection minimal validation saves paraphrased facts that strict groundin
     factType: "profile",
     confidence: 0.85,
     validationMode: "minimal",
-    evidenceText: "my girlfriend was over, she slept over"
+    evidenceText: "girlfriend stayed the night"
   });
 
   assert.equal(result.ok, true);
-  assert.equal(insertedFact?.evidenceText, "my girlfriend was over, she slept over");
+  assert.equal(insertedFact?.evidenceText, "girlfriend stayed the night");
 });
 
-test("strict validation still rejects ungrounded facts from non-reflection paths", async () => {
+test("strict validation still saves paraphrased facts from non-reflection paths", async () => {
+  let insertedFact: Record<string, unknown> | null = null;
+
   const memory = new MemoryManager({
     store: {
-      addMemoryFact() { return true; },
+      addMemoryFact(fact) {
+        insertedFact = fact;
+        return true;
+      },
       getMemoryFactBySubjectAndFact() { return null; },
       logAction() { return undefined; },
       archiveOldFactsForSubject() { return 0; }
@@ -486,6 +480,10 @@ test("strict validation still rejects ungrounded facts from non-reflection paths
     validationMode: "strict"
   });
 
-  assert.equal(result.ok, false);
-  assert.equal(result.reason, "not_grounded_in_source");
+  assert.equal(result.ok, true);
+  assert.equal(insertedFact?.fact, "Has a girlfriend who sometimes sleeps over.");
+  assert.equal(
+    insertedFact?.evidenceText,
+    "Today, uh, my girlfriend was over, we were hanging out, uh, she slept over."
+  );
 });

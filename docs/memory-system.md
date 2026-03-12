@@ -45,7 +45,7 @@ The brain notices something important mid-conversation and stores it immediately
 - `namespace = "guild"` → stored under `__lore__`.
 - `namespace = "self"` → stored under `__self__`.
 - `items[].type`: `preference`, `profile`, `relationship`, `project`, `guidance`, `behavioral`, or `other`.
-- All scopes: `confidence = 0.72`, grounding check, instruction-injection rejection.
+- All scopes: `confidence = 0.72`, instruction/prompt-injection rejection, model-selected evidence retention.
 - Execution path: tool call → memory fact write path → `store.addMemoryFact()` → async embedding → archive aged facts → markdown refresh.
 - In voice: the affected user's cached profile is refreshed immediately so the next turn sees the new fact.
 - In voice: prefer session-scoped `note_context` for facts that only need to stay available for the rest of the conversation. Reserve `memory_write` for explicit "remember this" requests or obviously durable facts.
@@ -61,7 +61,7 @@ This closes the gap between real-time writes (spotty) and daily reflection (too 
 - Triggers on voice session end event, or after sustained text silence in a channel.
 - Scoped to just that conversation's journal entries, not the full day.
 - Text-channel silence reflection is scheduled from human-authored messages and reflects on human-authored turns only, so the bot does not canonize its own prose into durable memory.
-- Same fact write path as `memory_write` — same grounding checks, dedup, archiving.
+- Same fact write path as `memory_write` — same instruction-style filtering, dedup, archiving.
 - Lightweight: short context, fast model, capped output.
 
 **Strengths:** Catches what the real-time path missed, while context is still fresh. **Gap:** Doesn't see full-day patterns.
@@ -74,7 +74,7 @@ An LLM reviews the full day's journal and distills it into durable facts. The br
 2. Reads `memory/YYYY-MM-DD.md`.
 3. Reflection prompt: "Review this day's conversations. Extract durable facts — things about people, ongoing projects, important events, preferences, recurring topics. Ignore throwaway chatter."
 4. LLM returns structured facts with scope and subject attribution. Reflection output uses strict JSON schema validation; every declared field is required, and non-author facts use `subjectName: ""` rather than omitting the field.
-5. Written through the same memory fact write path — same grounding checks, dedup, archiving.
+5. Written through the same memory fact write path — same instruction-style filtering, dedup, archiving.
 6. Journals marked as processed. Retained indefinitely.
 
 The reflection prompt includes existing durable facts for all subjects mentioned in the journal. This lets the model skip facts that already exist and merge near-duplicates with different wording into the best version. Combined with the database-level `UNIQUE` constraint and the agent seeing its own memory during conversation, this forms a three-layer dedup system.
@@ -321,7 +321,7 @@ Action log kinds: `memory_fact`, `memory_reflection_start`, `memory_reflection_c
 | File | Purpose |
 |------|---------|
 | `src/memory/memoryManager.ts` | Ingestion, journaling, reflection, fact profiles, retrieval |
-| `src/memory/memoryHelpers.ts` | Fact normalization, grounding checks, scoring |
+| `src/memory/memoryHelpers.ts` | Fact normalization, evidence handling, scoring |
 | `src/memory/dailyReflection.ts` | End-of-day reflection logic |
 | `src/store/store.ts` | `memory_facts` schema, query/update methods |
 | `src/tools/replyTools.ts` | `memory_write`, `memory_search`, `conversation_search` text tools |
