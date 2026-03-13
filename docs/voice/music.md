@@ -223,6 +223,7 @@ The wake latch does not force a reply. It only stops the music prefilter from ha
 When debugging music conversation behavior, start with:
 
 - `voice_music_stop_check`
+- `voice_music_output_halt_preserved_newer_turn`
 - `voice_music_paused_for_wake_word`
 - `voice_music_resumed`
 - `voice_music_resume_unavailable`
@@ -239,6 +240,7 @@ Interpretation rules:
 - `decisionReason=music_brain_pass`: the music brain decided this was not really a music-side command and let the ordinary reply path continue
 - `decisionReason=main_brain_decides`: the turn was forwarded straight to the main reply brain; inspect `gateDecisionReason` to see whether it came from direct address, wake-latch followup, interrupted-reply followup, or disabled music-brain routing
 - `voice_music_resume_unavailable`: the session believed music was paused, but no resumable queue/current-track state remained; JS clears the stale paused phase instead of pretending playback restarted
+- `voice_music_output_halt_preserved_newer_turn`: a late async `music_play` start finished after a newer same-session reply turn had already been accepted but had not requested playback yet. Music still starts, but JS preserves that newer pre-playback turn instead of aborting it with a session-wide `clearPendingResponse()`
 - interrupted assistant speech should clear any queued realtime assistant utterances from the abandoned reply before new playback begins
 - `paused_wake_word` followed by resume after playback drain and capture clear is the expected clean handoff path
 

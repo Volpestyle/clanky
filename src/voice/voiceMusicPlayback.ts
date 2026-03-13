@@ -1591,12 +1591,64 @@ export function extractMusicPlayQuery(
   return cleaned.slice(0, 120);
 }
 
+function normalizeMusicTurnAcceptedAt(value: unknown) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) && numericValue > 0
+    ? Math.max(0, Math.floor(numericValue))
+    : null;
+}
+
+function findNewerPrePlaybackTurnForMusicStart(
+  session: VoiceSession | null | undefined,
+  originAcceptedAt: unknown
+) {
+  if (!session || session.ending) return null;
+  const normalizedOriginAcceptedAt = normalizeMusicTurnAcceptedAt(originAcceptedAt);
+  if (!normalizedOriginAcceptedAt) return null;
+  const inFlightTurn = session.inFlightAcceptedBrainTurn;
+  if (!inFlightTurn) return null;
+  const inFlightAcceptedAt = normalizeMusicTurnAcceptedAt(inFlightTurn.acceptedAt);
+  if (!inFlightAcceptedAt || inFlightAcceptedAt <= normalizedOriginAcceptedAt) return null;
+  const normalizedPhase = String(inFlightTurn.phase || "").trim().toLowerCase();
+  if (normalizedPhase !== "generation_only" && normalizedPhase !== "tool_call_started") {
+    return null;
+  }
+  return {
+    originAcceptedAt: normalizedOriginAcceptedAt,
+    inFlightAcceptedAt,
+    inFlightPhase: normalizedPhase
+  };
+}
+
 export function haltSessionOutputForMusicPlayback(
   manager: MusicPlaybackHost,
   session: VoiceSession | null | undefined,
-  reason = "music_playback_started"
+  reason = "music_playback_started",
+  {
+    originAcceptedAt = null
+  }: {
+    originAcceptedAt?: number | null;
+  } = {}
 ) {
   if (!session || session.ending) return;
+  const preservedTurn = findNewerPrePlaybackTurnForMusicStart(session, originAcceptedAt);
+  if (preservedTurn) {
+    logMusicAction(manager, {
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: manager.client.user?.id || null,
+      content: "voice_music_output_halt_preserved_newer_turn",
+      metadata: {
+        sessionId: session.id,
+        reason: String(reason || "music_playback_started"),
+        originAcceptedAt: preservedTurn.originAcceptedAt,
+        inFlightAcceptedAt: preservedTurn.inFlightAcceptedAt,
+        inFlightPhase: preservedTurn.inFlightPhase
+      }
+    });
+    return;
+  }
   manager.replyManager.clearPendingResponse(session);
   // Clear main-process reply state WITHOUT sending stop_playback IPC —
   // the subprocess's handleMusicPlay already resets playback before
@@ -1645,6 +1697,7 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
   searchResults = null,
   reason = "nl_play_music",
   source = "text_voice_intent",
+  originAcceptedAt = null,
   mustNotify = true
 } = {}) {
   const resolvedGuildId = String(guildId || message?.guild?.id || message?.guildId || "").trim();
@@ -1661,6 +1714,13 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
   const resolvedUserId = String(requestedByUserId || message?.author?.id || "").trim() || null;
   const resolvedSettings = settings || session?.settingsSnapshot || manager.store.getSettings();
   const requestText = normalizeInlineText(message?.content || "", 220) || null;
+  const resolvedOriginAcceptedAt =
+    normalizeMusicTurnAcceptedAt(originAcceptedAt) ||
+    (
+      String(source || "").trim().toLowerCase() === "voice_tool_call"
+        ? normalizeMusicTurnAcceptedAt(session?.inFlightAcceptedBrainTurn?.acceptedAt)
+        : null
+    );
 
   if (!session) {
     await sendOperationalMessage(manager, {
@@ -2007,7 +2067,9 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
     manager.clearVoiceCommandSession(session);
   }
 
-  haltSessionOutputForMusicPlayback(manager, session, "music_playback_started");
+  haltSessionOutputForMusicPlayback(manager, session, "music_playback_started", {
+    originAcceptedAt: resolvedOriginAcceptedAt
+  });
   logMusicAction(manager, {
     kind: "voice_runtime",
     guildId: session.guildId,

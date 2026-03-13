@@ -7,6 +7,7 @@ import {
   getMusicDisambiguationPromptContext,
   handleMusicSlashCommand,
   maybeHandleMusicPlaybackTurn,
+  requestPlayMusic,
   setMusicPhase
 } from "./voiceMusicPlayback.ts";
 import type { MusicPlaybackHost } from "./voiceMusicPlayback.ts";
@@ -226,6 +227,122 @@ function createPausedSession(manager: MusicPlaybackHost) {
   setMusicPhase(manager, session, "paused", "user_pause");
   return session;
 }
+
+test("requestPlayMusic preserves a newer pre-playback voice turn when an older async music start completes", async () => {
+  let resolveStartPlayback: ((value: {
+    ok: boolean;
+    provider: string;
+    reason: string;
+    message: string;
+    status: number;
+    track: {
+      id: string;
+      title: string;
+      artistNames: string[];
+      externalUrl: string | null;
+    } | null;
+    query: string | null;
+  }) => void) | null = null;
+  const startPlaybackPromise = new Promise<{
+    ok: boolean;
+    provider: string;
+    reason: string;
+    message: string;
+    status: number;
+    track: {
+      id: string;
+      title: string;
+      artistNames: string[];
+      externalUrl: string | null;
+    } | null;
+    query: string | null;
+  }>((resolve) => {
+    resolveStartPlayback = resolve;
+  });
+
+  const { manager, loggedEvents } = createPlaybackHost();
+  let clearPendingResponseCalls = 0;
+  let abortInboundCaptureCalls = 0;
+  manager.replyManager.clearPendingResponse = () => {
+    clearPendingResponseCalls += 1;
+  };
+  manager.abortActiveInboundCaptures = () => {
+    abortInboundCaptureCalls += 1;
+  };
+  manager.musicPlayback = {
+    provider: "discord",
+    isConfigured: () => true,
+    startPlayback: () => startPlaybackPromise
+  };
+
+  const session = {
+    id: "session-async-music-race-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    ending: false,
+    botTurnOpen: false,
+    botTurnResetTimer: null,
+    lastRequestedRealtimeUtterance: null,
+    activeReplyInterruptionPolicy: null,
+    inFlightAcceptedBrainTurn: {
+      transcript: "play minecraft music",
+      userId: "user-1",
+      pcmBuffer: null,
+      source: "voice_reply_pipeline",
+      acceptedAt: 1_000,
+      phase: "tool_call_started" as const,
+      captureReason: "stream_end",
+      directAddressed: true
+    }
+  } as VoiceSession;
+  manager.sessions.set(session.guildId, session);
+
+  const requestPromise = requestPlayMusic(manager, {
+    guildId: session.guildId,
+    channelId: session.textChannelId,
+    requestedByUserId: "user-1",
+    query: "minecraft music",
+    reason: "voice_tool_music_play",
+    source: "voice_tool_call",
+    mustNotify: false
+  });
+
+  session.inFlightAcceptedBrainTurn = {
+    transcript: "actually queue c418 after this",
+    userId: "user-1",
+    pcmBuffer: null,
+    source: "voice_reply_pipeline",
+    acceptedAt: 2_000,
+    phase: "generation_only",
+    captureReason: "stream_end",
+    directAddressed: true
+  };
+
+  resolveStartPlayback?.({
+    ok: true,
+    provider: "discord",
+    reason: "started",
+    message: "playing",
+    status: 200,
+    track: {
+      id: "youtube:track-1",
+      title: "Minecraft",
+      artistNames: ["C418"],
+      externalUrl: "https://example.com/minecraft"
+    },
+    query: "minecraft music"
+  });
+
+  await requestPromise;
+
+  assert.equal(clearPendingResponseCalls, 0);
+  assert.equal(abortInboundCaptureCalls, 0);
+  assert.equal(
+    loggedEvents.some((entry) => entry.content === "voice_music_output_halt_preserved_newer_turn"),
+    true
+  );
+});
 
 test("maybeHandleMusicPlaybackTurn lets the music brain consume a fuzzy playback command with tools", async () => {
   const { manager, toolCalls } = createPlaybackHost({
