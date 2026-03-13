@@ -36,7 +36,7 @@ type StreamPublishSession = {
       daveChannelId: string;
     }) => void;
     streamPublishDisconnect?: (reason?: string | null) => void;
-    streamPublishPlay?: (url: string, resolvedDirectUrl?: boolean) => void;
+    streamPublishPlay?: (url: string, resolvedDirectUrl: boolean) => void;
     streamPublishPlayVisualizer?: (
       url: string,
       resolvedDirectUrl: boolean,
@@ -367,13 +367,7 @@ function updateTransportState(
   }
   if (visualizerMode !== undefined) {
     state.visualizerMode =
-      visualizerMode === "off" ||
-      visualizerMode === "cqt" ||
-      visualizerMode === "spectrum" ||
-      visualizerMode === "waves" ||
-      visualizerMode === "vectorscope"
-        ? visualizerMode
-        : null;
+      visualizerMode === null ? null : normalizeStreamWatchVisualizerMode(visualizerMode);
   }
   if (sourceKey !== undefined) state.sourceKey = String(sourceKey || "").trim() || null;
   if (sourceUrl !== undefined) state.sourceUrl = normalizeSourceUrl(sourceUrl);

@@ -1927,6 +1927,8 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
   }
 
   let playbackResult: { ok: boolean; provider: string; reason: string; message: string; status: number; track: { id: string; title: string; artistNames: string[]; externalUrl: string | null } | null; query: string | null } | null = null;
+  let playbackUrlForState: string | null = null;
+  let playbackResolvedDirectUrlForState = false;
 
   if (useDiscordStreaming) {
     const discordResult = await playMusicViaDiscord(manager, session, selectedResult);
@@ -1988,8 +1990,8 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
       query: playbackQuery
     };
     if (music) {
-      music.lastPlaybackUrl = discordResult.playbackUrl || selectedResult.externalUrl || null;
-      music.lastPlaybackResolvedDirectUrl = Boolean(discordResult.resolvedDirectUrl);
+      playbackUrlForState = discordResult.playbackUrl || selectedResult.externalUrl || null;
+      playbackResolvedDirectUrlForState = Boolean(discordResult.resolvedDirectUrl);
     }
   } else {
     const playbackProvider = manager.musicPlayback;
@@ -2070,8 +2072,8 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
       ? playbackResult.track.artistNames
       : [];
     music.lastTrackUrl = playbackResult.track?.externalUrl || null;
-    music.lastPlaybackUrl = music.lastPlaybackUrl || playbackResult.track?.externalUrl || null;
-    music.lastPlaybackResolvedDirectUrl = Boolean(music.lastPlaybackResolvedDirectUrl);
+    music.lastPlaybackUrl = playbackUrlForState || playbackResult.track?.externalUrl || null;
+    music.lastPlaybackResolvedDirectUrl = playbackResolvedDirectUrlForState;
     music.lastQuery = playbackResult.query || playbackQuery || null;
     music.lastRequestedByUserId = resolvedUserId || null;
     music.lastRequestText = requestText;

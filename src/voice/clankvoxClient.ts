@@ -152,11 +152,11 @@ type ClankvoxCommand =
   | { type: "music_pause" }
   | { type: "music_resume" }
   | { type: "music_set_gain"; target: number; fadeMs: number }
-  | { type: "stream_publish_play"; url: string; resolvedDirectUrl?: boolean }
+  | { type: "stream_publish_play"; url: string; resolvedDirectUrl: boolean }
   | {
       type: "stream_publish_play_visualizer";
       url: string;
-      resolvedDirectUrl?: boolean;
+      resolvedDirectUrl: boolean;
       visualizerMode: Exclude<StreamWatchVisualizerMode, "off">;
     }
   | { type: "stream_publish_browser_start"; mimeType: string }
@@ -1188,7 +1188,7 @@ export class ClankvoxClient extends EventEmitter {
     this._send({ type: "music_set_gain", target, fadeMs });
   }
 
-  streamPublishPlay(url: string, resolvedDirectUrl = false) {
+  streamPublishPlay(url: string, resolvedDirectUrl: boolean) {
     this._send({
       type: "stream_publish_play",
       url: String(url || "").trim(),
@@ -1198,7 +1198,7 @@ export class ClankvoxClient extends EventEmitter {
 
   streamPublishPlayVisualizer(
     url: string,
-    resolvedDirectUrl = false,
+    resolvedDirectUrl: boolean,
     visualizerMode: Exclude<StreamWatchVisualizerMode, "off">
   ) {
     this._send({
