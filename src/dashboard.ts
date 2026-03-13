@@ -10,6 +10,7 @@ import { attachAuthRoutes, hasValidDashboardSessionCookie, isDashboardAuthSessio
 import { attachSettingsRoutes } from "./dashboard/routesSettings.ts";
 import { attachMetricsRoutes } from "./dashboard/routesMetrics.ts";
 import { attachVoiceRoutes } from "./dashboard/routesVoice.ts";
+import { BonjourAdvertiser } from "./services/bonjourAdvertiser.ts";
 import {
   createDashboardServerHandle,
   DashboardHttpError,
@@ -514,6 +515,32 @@ export function createDashboardServer({
   const server = createDashboardServerHandle(bunServer, dashboardHost);
 
   console.log(`Dashboard running on http://${dashboardHost}:${bunServer.port}`);
+
+  // Bonjour: advertise dashboard on local network for iOS app discovery
+  const bonjour = new BonjourAdvertiser(bunServer.port);
+  const tunnelUrl = publicHttpsEntrypoint?.getState?.()?.publicUrl || "";
+  bonjour.start(tunnelUrl);
+  if (!tunnelUrl && publicHttpsEntrypoint) {
+    console.log("Bonjour: waiting for tunnel URL before advertising");
+  }
+
+  // Re-advertise quickly once the tunnel becomes ready so discovery clients
+  // can catch the new TXT record during initial setup.
+  if (publicHttpsEntrypoint) {
+    let lastTunnelUrl = tunnelUrl;
+    setInterval(() => {
+      const currentUrl = publicHttpsEntrypoint.getState?.()?.publicUrl || "";
+      if (currentUrl !== lastTunnelUrl) {
+        lastTunnelUrl = currentUrl;
+        bonjour.updateTunnelUrl(currentUrl);
+        if (currentUrl) {
+          console.log(`Bonjour: updated tunnel URL → ${currentUrl}`);
+        } else {
+          console.log("Bonjour: cleared tunnel URL advertisement");
+        }
+      }
+    }, 1_000);
+  }
 
   return { app, server };
 }

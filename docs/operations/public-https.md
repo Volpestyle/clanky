@@ -28,6 +28,12 @@ API surfaces:
 - `GET /api/public-https`
 - `GET /api/stats` includes `runtime.publicHttps`
 
+Local discovery:
+- The dashboard advertises `_clanky._tcp` over Bonjour for the iOS app.
+- The dashboard does not advertise the Bonjour service until a usable tunnel URL exists.
+- The Bonjour TXT record includes `tunnelUrl` once the public HTTPS entrypoint is ready.
+- The iOS setup flow keeps listening after it discovers the local service and only auto-fills once a usable tunnel URL is present.
+
 State shape:
 ```json
 {
