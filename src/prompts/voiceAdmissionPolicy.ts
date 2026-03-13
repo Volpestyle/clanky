@@ -25,18 +25,18 @@ type VoiceAdmissionPolicyOptions = {
 
 function getAmbientReplyTier(eagerness: number): string {
   if (eagerness <= 0) {
-    return "You are very quiet in ambient voice. Prefer silence unless someone clearly wants your attention or you have something genuinely important to say. Default to [SKIP].";
+    return "You are very quiet in ambient voice. You prefer silence unless someone clearly wants your attention or you have something genuinely important to say.";
   }
   if (eagerness <= 25) {
-    return "You are selective — you engage when addressed or when you have something clearly worth contributing. You're comfortable with silence and default to [SKIP] for ambient chatter.";
+    return "You are selective — you engage when addressed or when you have something clearly worth contributing. You're comfortable with silence.";
   }
   if (eagerness <= 50) {
-    return "You are a good listener — happy to contribute when you genuinely have something to add, but you don't force yourself into conversations. Use [SKIP] when you're not sure you'd be adding value.";
+    return "You are a good listener — happy to contribute when you genuinely have something to add, but you don't force yourself into conversations.";
   }
   if (eagerness <= 75) {
     return "You are social and engaged — you enjoy the conversation and participate when it interests you or you can add value. You'd rather contribute than sit back when the moment fits.";
   }
-  return "You are fully social — you treat this like a group hangout and want to be part of the conversation. You prefer participating over sitting back, while still skipping clear non-speech or turns meant for someone else.";
+  return "You are fully social — you treat this like a group hangout and want to be part of the conversation. You prefer participating over sitting back.";
 }
 
 function getResponseWindowTier(eagerness: number): string {
@@ -57,7 +57,7 @@ export function buildVoiceAdmissionPolicyLines({
   speakerName = "unknown",
   directAddressed = false,
   nameCueDetected = false,
-  isEagerTurn = false,
+  isEagerTurn: _isEagerTurn = false,
   ambientReplyEagerness = 0,
   responseWindowEagerness = 0,
   participantCount = 0,
@@ -74,7 +74,6 @@ export function buildVoiceAdmissionPolicyLines({
   const normalizedSpeakerName = String(speakerName || "").trim() || "unknown";
   const normalizedDirectAddressed = Boolean(directAddressed);
   const normalizedNameCueDetected = Boolean(nameCueDetected);
-  const normalizedIsEagerTurn = Boolean(isEagerTurn);
   const normalizedParticipantCount = Math.max(0, Math.floor(Number(participantCount) || 0));
   const normalizedAmbientEagerness = Math.max(0, Math.min(100, Number(ambientReplyEagerness) || 0));
   const normalizedResponseWindowEagerness = Math.max(
@@ -84,19 +83,43 @@ export function buildVoiceAdmissionPolicyLines({
   const normalizedRuntimeEventContext = normalizeVoiceRuntimeEventContext(runtimeEventContext);
   const currentSpeakerActive = Boolean(conversationContext?.currentSpeakerActive);
 
+  // --- Personality: how social you are ---
   lines.push(`Voice ambient-reply eagerness: ${normalizedAmbientEagerness}/100.`);
   lines.push(getAmbientReplyTier(normalizedAmbientEagerness));
   lines.push(`Response-window eagerness: ${normalizedResponseWindowEagerness}/100.`);
   lines.push(getResponseWindowTier(normalizedResponseWindowEagerness));
 
+  // --- Room context signals ---
   if (normalizedParticipantCount <= 1) {
-    lines.push("Single-human voice-room prior: default toward engagement unless the turn is clearly non-speech, self-talk, or low-value filler.");
-  } else if (normalizedParticipantCount > 1) {
-    lines.push("Multi-human room: avoid barging in without clear conversational value.");
+    lines.push("Room: 1:1 — you are the only other presence, so speech is more likely meant for you.");
+  } else {
+    lines.push(`Room: ${normalizedParticipantCount} humans present.`);
   }
-  lines.push(VOICE_TINY_REPLY_POLICY_LINE);
-  lines.push("Transcripts come from speech-to-text and can be garbled, nonsensical, or misheard — especially when music is playing. If the transcript doesn't form a coherent utterance directed at anyone (e.g. sentence fragments, random foreign words, misheard lyrics), output [SKIP].");
 
+  if (normalizedDirectAddressed) {
+    lines.push(`Addressing: ${normalizedSpeakerName} used your name or wake phrase directly.`);
+  } else if (normalizedNameCueDetected) {
+    lines.push(`Addressing: your name appeared in ${normalizedSpeakerName}'s transcript, though not as a direct wake phrase.`);
+  } else {
+    lines.push(`Addressing: no direct address or name cue detected from ${normalizedSpeakerName}.`);
+  }
+
+  if (currentSpeakerActive) {
+    lines.push("Thread state: you are actively in a thread with this speaker.");
+  }
+
+  if (musicActive) {
+    lines.push("Music is currently playing. Music audio often bleeds into the mic and produces garbled or nonsensical transcripts.");
+    if (musicWakeLatched) {
+      lines.push("Music wake latch is active — someone recently addressed you over music.");
+    }
+  }
+
+  if (pendingCommandFollowupSignal) {
+    lines.push("Signal: this may be a same-speaker command follow-up (e.g. music disambiguation).");
+  }
+
+  // --- Input type context ---
   if (normalizedInputKind === "event") {
     lines.push("This is a voice-room event cue, not literal quoted speech.");
     if (
@@ -104,67 +127,31 @@ export function buildVoiceAdmissionPolicyLines({
       normalizedRuntimeEventContext.eventType === "join" &&
       normalizedRuntimeEventContext.actorRole === "self"
     ) {
-      lines.push("If you just entered the channel and a quick hello would feel natural, you may reply briefly. Otherwise use [SKIP].");
+      lines.push("Event: you just entered the channel.");
     } else if (
       normalizedRuntimeEventContext?.category === "membership" &&
       normalizedRuntimeEventContext.eventType === "join"
     ) {
-      lines.push("If a brief acknowledgement of the join would feel natural, you may reply briefly. Otherwise use [SKIP].");
+      lines.push("Event: someone joined the channel.");
     } else if (
       normalizedRuntimeEventContext?.category === "membership" &&
       normalizedRuntimeEventContext.eventType === "leave"
     ) {
-      lines.push("If a brief goodbye or acknowledgement of the leave would feel natural, you may reply briefly. Otherwise use [SKIP].");
+      lines.push("Event: someone left the channel.");
     } else if (normalizedRuntimeEventContext?.category === "screen_share") {
-      lines.push("This is a screen-watch state cue, not a spoken request.");
+      lines.push("Event: screen-watch state change.");
       if (normalizedRuntimeEventContext.hasVisibleFrame) {
-        lines.push("A visible screen frame is attached, so you may react to what is on-screen if there is a natural short comment.");
-      }
-      lines.push("If the screen-watch moment gives you a real reaction or observation, reply briefly. Otherwise use [SKIP].");
-    } else {
-      lines.push("If a brief acknowledgement of the join/leave would feel natural, you may reply briefly. Otherwise use [SKIP].");
-    }
-  }
-
-  if (!normalizedDirectAddressed && normalizedNameCueDetected) {
-    lines.push("The transcript contains your name or a phonetic variant of it. This is a strong signal the speaker is talking to you — prefer responding unless the context clearly shows otherwise.");
-  }
-
-  if (musicActive) {
-    lines.push("Music is currently playing. Music audio often bleeds into the mic and produces garbled transcripts — be extra skeptical and [SKIP] anything that doesn't clearly make sense as a directed utterance.");
-  }
-
-  if (pendingCommandFollowupSignal) {
-    lines.push("Signal: this may be a same-speaker command follow-up. Treat as a strong positive context signal and prefer YES unless the transcript is unusable.");
-  }
-
-  if (normalizedIsEagerTurn) {
-    lines.push("You were NOT directly addressed. You're considering whether to chime in.");
-    if (currentSpeakerActive) {
-      if (normalizedResponseWindowEagerness <= 25) {
-        lines.push("You are actively in this speaker's thread, but do not force a reply unless the continuation is clearly for you.");
-      } else if (normalizedResponseWindowEagerness <= 70) {
-        lines.push("You are actively in this speaker's thread. Lean toward a short helpful reply over [SKIP] when the continuation plausibly connects to you.");
-      } else {
-        lines.push("You are actively in this speaker's thread. Treat likely continuations as a live back-and-forth and reply naturally when you can add something.");
+        lines.push("A visible screen frame is attached.");
       }
     }
-    lines.push(
-      "If the turn is laughter, filler, backchannel noise (haha, lol, hmm, mm, uh-huh, yup), or self-talk/thinking out loud (for example 'where did I put my keys', 'hmm let me think', 'wait what was I doing'), strongly prefer [SKIP]. These are not directed at you even in a 1:1 room."
-    );
-    lines.push("Only speak up if you can genuinely add value. If not, output exactly [SKIP].");
-    lines.push("Task: respond as a natural spoken VC reply, or skip if you have nothing to add.");
-    return lines;
   }
 
-  if (!normalizedDirectAddressed) {
-    lines.push(
-      "If the turn is only laughter, filler, or backchannel noise with no clear ask or meaningful new content, prefer [SKIP]."
-    );
-    lines.push("Task: decide whether to respond now or output [SKIP] if a reply would be interruptive, low-value, or likely not meant for you.");
-    return lines;
-  }
+  // --- Transcript quality reminder ---
+  lines.push("Transcripts come from speech-to-text and can be garbled, nonsensical, or misheard.");
 
-  lines.push("Task: respond as a natural spoken VC reply.");
+  // --- Output guidance ---
+  lines.push(VOICE_TINY_REPLY_POLICY_LINE);
+  lines.push("Respond naturally, or output [SKIP] if you have nothing to add. You decide.");
+
   return lines;
 }
