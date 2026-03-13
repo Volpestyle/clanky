@@ -1,0 +1,3 @@
+[submodule "src/voice/clankvox"]
+	path = src/voice/clankvox
+	url = https://github.com/Volpestyle/clankvox.git
