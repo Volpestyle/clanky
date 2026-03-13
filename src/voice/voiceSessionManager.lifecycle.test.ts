@@ -2551,6 +2551,65 @@ test("bindSessionHandlers does not touch activity on speaking.start before speec
   assert.equal(touchCalls.length, 0);
 });
 
+test("bindSessionHandlers requests share-link recovery when native stream transport fails", async () => {
+  const { manager, logs } = createManager();
+  const voxClient = new EventEmitter();
+  const stopCalls: Array<Record<string, unknown>> = [];
+  const fallbackCalls: Array<Record<string, unknown>> = [];
+  const session = createSession({
+    cleanupHandlers: [],
+    voxClient,
+    textChannelId: "text-1",
+    streamWatch: {
+      active: true,
+      targetUserId: "user-2",
+      requestedByUserId: "user-1",
+      lastFrameAt: 0,
+      lastCommentaryAt: 0,
+      ingestedFrameCount: 0
+    }
+  });
+
+  manager.stopWatchStreamForUser = async (payload) => {
+    stopCalls.push(payload);
+    session.streamWatch.active = false;
+    return {
+      ok: true,
+      reason: "watching_stopped"
+    };
+  };
+  manager.startVoiceScreenWatch = async (payload) => {
+    fallbackCalls.push(payload);
+    return {
+      started: true,
+      transport: "link",
+      reason: "started"
+    };
+  };
+
+  manager.sessionLifecycle.bindSessionHandlers(session, session.settingsSnapshot);
+  voxClient.emit("transportState", {
+    role: "stream_watch",
+    status: "failed",
+    reason: "ice_failed"
+  });
+  await flushMicrotasks();
+
+  assert.equal(stopCalls.length, 1);
+  assert.equal(stopCalls[0]?.reason, "native_discord_stream_transport_failed");
+  assert.equal(fallbackCalls.length, 1);
+  assert.equal(fallbackCalls[0]?.preferredTransport, "link");
+  assert.equal(fallbackCalls[0]?.nativeFailureReason, "native_discord_stream_transport_failed");
+  assert.equal(fallbackCalls[0]?.targetUserId, "user-2");
+  assert.equal(fallbackCalls[0]?.requesterUserId, "user-1");
+
+  const fallbackRequested = logs.find(
+    (entry) => String(entry?.content || "") === "native_discord_stream_transport_link_fallback_requested"
+  );
+  assert.equal(fallbackRequested?.metadata?.status, "failed");
+  assert.equal(fallbackRequested?.metadata?.targetUserId, "user-2");
+});
+
 test("startInboundCapture drops provisional noise before activity promotion while streaming provisional ASR audio", async () => {
   const { manager, logs, touchCalls } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
@@ -3717,7 +3776,14 @@ test("requestRealtimeTextUtterance queues assistant speech behind an active real
   assert.equal(prompts.length, 0);
   assert.equal(session.pendingRealtimeAssistantUtterances?.length, 1);
   assert.equal(session.pendingRealtimeAssistantUtterances?.[0]?.utteranceText, "second chunk");
-  assert.equal(logs.some((entry) => entry?.content === "realtime_assistant_utterance_queued"), true);
+  const queuedLog = logs.find((entry) => entry?.content === "realtime_assistant_utterance_queued");
+  assert.equal(Boolean(queuedLog), true);
+  assert.deepEqual(queuedLog?.metadata?.blockers, ["active_response", "pending_response"]);
+  assert.equal(queuedLog?.metadata?.activeResponse, true);
+  assert.equal(queuedLog?.metadata?.pendingResponse, true);
+  assert.equal(queuedLog?.metadata?.pendingResponseRequestId, 4);
+  assert.equal(queuedLog?.metadata?.pendingResponseSource, "test_active_reply");
+  assert.equal(queuedLog?.metadata?.outputLockReason, "pending_response");
 });
 
 test("requestRealtimeTextUtterance prefers playback-specific realtime client method when available", () => {
@@ -3852,6 +3918,67 @@ test("handleResponseDone drains queued assistant speech after realtime audio com
   assert.equal(Number(session.pendingResponse?.requestId || 0) > 0, true);
   assert.equal(session.pendingResponse?.utteranceText, "second chunk");
   assert.equal(logs.some((entry) => entry?.content === "realtime_assistant_utterance_queue_drained"), true);
+});
+
+test("drainPendingRealtimeAssistantUtterances logs blocker attribution when playback is still blocked", () => {
+  const { manager, logs } = createManager();
+  let activeResponse = true;
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeClient: {
+      isResponseInProgress() {
+        return activeResponse;
+      }
+    },
+    pendingResponse: {
+      requestId: 9,
+      userId: "bot-user",
+      requestedAt: Date.now() - 500,
+      retryCount: 0,
+      hardRecoveryAttempted: false,
+      source: "test_blocked_reply",
+      handlingSilence: false,
+      audioReceivedAt: 0,
+      interruptionPolicy: null,
+      utteranceText: "first chunk",
+      latencyContext: null
+    },
+    pendingRealtimeAssistantUtterances: [
+      {
+        prompt: "queued prompt",
+        utteranceText: "queued prompt",
+        userId: "bot-user",
+        source: "test_stream_chunk_queued",
+        queuedAt: Date.now(),
+        interruptionPolicy: null,
+        latencyContext: null
+      }
+    ]
+  });
+
+  const drained = manager.drainPendingRealtimeAssistantUtterances(session, "response_done_had_audio");
+
+  assert.equal(drained, false);
+  const blockedLog = logs.find((entry) => entry?.content === "realtime_assistant_utterance_drain_blocked");
+  assert.equal(Boolean(blockedLog), true);
+  assert.deepEqual(blockedLog?.metadata?.blockers, ["active_response", "pending_response"]);
+  assert.equal(blockedLog?.metadata?.reason, "response_done_had_audio");
+  assert.equal(blockedLog?.metadata?.source, "test_stream_chunk_queued");
+  assert.equal(blockedLog?.metadata?.queueDepth, 1);
+  assert.equal(blockedLog?.metadata?.pendingResponseRequestId, 9);
+  assert.equal(blockedLog?.metadata?.pendingResponseSource, "test_blocked_reply");
+  assert.equal(blockedLog?.metadata?.outputLockReason, "pending_response");
+  assert.equal(blockedLog?.metadata?.backpressureActive, false);
+
+  activeResponse = false;
+  const drainedAfterActiveResponseCleared = manager.drainPendingRealtimeAssistantUtterances(
+    session,
+    "response_done_had_audio"
+  );
+  assert.equal(drainedAfterActiveResponseCleared, false);
+  const blockedLogs = logs.filter((entry) => entry?.content === "realtime_assistant_utterance_drain_blocked");
+  assert.equal(blockedLogs.length, 2);
+  assert.deepEqual(blockedLogs[1]?.metadata?.blockers, ["pending_response"]);
 });
 
 test("requestRealtimeTextUtterance queues assistant speech when clankvox playback backlog is already high", () => {

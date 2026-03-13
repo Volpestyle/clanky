@@ -45,6 +45,7 @@ import {
   decodeNativeDiscordVideoFrameToJpeg,
   hasNativeDiscordVideoDecoderSupport
 } from "./nativeDiscordVideoDecoder.ts";
+import { ensureStreamPublishState } from "./voiceStreamPublish.ts";
 import {
   maybeTriggerAssistantDirectedSoundboard,
   normalizeSoundboardRefs
@@ -83,7 +84,12 @@ type SessionLifecycleHost = VoiceToolCallManager & Pick<
   | "resolveVoiceSpeakerName"
   | "resolveSpeakingEndFinalizeDelayMs"
   | "sessions"
+  | "startMusicStreamPublish"
+  | "stopBrowserSessionStreamPublish"
+  | "pauseMusicStreamPublish"
+  | "stopMusicStreamPublish"
   | "setActiveReplyInterruptionPolicy"
+  | "startVoiceScreenWatch"
   | "stopWatchStreamForUser"
   | "shouldUsePerUserTranscription"
   | "soundboardDirector"
@@ -558,13 +564,44 @@ export class SessionLifecycle {
             const settings = session.settingsSnapshot || this.host.store.getSettings();
             touchMusicWakeLatch(session, settings, null);
           }
-          if (resumeReason && resumeReason !== "music_resumed_reply_handoff_duck") {
+          if (resumeReason && resumeReason !== "media_resumed_reply_handoff_duck") {
             this.host.haltSessionOutputForMusicPlayback(
               session,
-              resumeReason === "voice_tool_music_resume" ? "music_resumed" : resumeReason
+              resumeReason === "voice_tool_media_resume" ? "music_resumed" : resumeReason
             );
           }
         }
+        void Promise.resolve(
+          this.host.startMusicStreamPublish({
+            guildId: session.guildId,
+            source: "music_player_state_playing"
+          })
+        ).catch((error) => {
+          this.logAsyncFailure({
+            session,
+            content: "music_stream_publish_start_failed",
+            error,
+            metadata: {
+              status
+            }
+          });
+        });
+      } else if (status === "paused") {
+        void Promise.resolve(
+          this.host.pauseMusicStreamPublish({
+            guildId: session.guildId,
+            reason: "music_player_state_paused"
+          })
+        ).catch((error) => {
+          this.logAsyncFailure({
+            session,
+            content: "music_stream_publish_pause_failed",
+            error,
+            metadata: {
+              status
+            }
+          });
+        });
       }
       this.host.replyManager.syncAssistantOutputState(session, "vox_player_state");
     };
@@ -604,6 +641,21 @@ export class SessionLifecycle {
         settings: session.settingsSnapshot || this.host.store.getSettings(),
         reason: "music_idle"
       });
+      void Promise.resolve(
+        this.host.stopMusicStreamPublish({
+          guildId: session.guildId,
+          reason: "music_idle"
+        })
+      ).catch((error) => {
+        this.logAsyncFailure({
+          session,
+          content: "music_stream_publish_stop_failed",
+          error,
+          metadata: {
+            source: "music_idle"
+          }
+        });
+      });
       this.host.replyManager.syncAssistantOutputState(session, "music_idle");
     };
 
@@ -616,6 +668,21 @@ export class SessionLifecycle {
         music.ducked = false;
       }
       this.host.musicPlayer?.clearCurrentTrack?.();
+      void Promise.resolve(
+        this.host.stopMusicStreamPublish({
+          guildId: session.guildId,
+          reason: "music_error"
+        })
+      ).catch((error) => {
+        this.logAsyncFailure({
+          session,
+          content: "music_stream_publish_stop_failed",
+          error,
+          metadata: {
+            source: "music_error"
+          }
+        });
+      });
       this.host.replyManager.syncAssistantOutputState(session, "music_error");
     };
 
@@ -1189,11 +1256,230 @@ export class SessionLifecycle {
       }, "vox_subprocess_crashed");
     };
 
+    const onTransportState = (payload) => {
+      if (!payload || typeof payload !== "object") return;
+      const transportRole = String(payload.role || "").trim();
+      if (transportRole === "stream_publish") {
+        const streamPublish = ensureStreamPublishState(session);
+        if (!streamPublish) return;
+
+        const transportStatus = String(payload.status || "").trim() || null;
+        const transportReason = String(payload.reason || "").trim() || null;
+        const now = Date.now();
+        streamPublish.transportStatus = transportStatus;
+        streamPublish.transportReason = transportReason;
+        streamPublish.transportUpdatedAt = now;
+        if (transportStatus === "ready") {
+          streamPublish.transportConnectedAt = now;
+        }
+
+        this.host.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.host.client.user?.id || null,
+          content: "stream_publish_transport_state_updated",
+          metadata: {
+            sessionId: session.id,
+            status: transportStatus,
+            reason: transportReason,
+            streamKey: streamPublish.streamKey || null,
+            sourceKind: streamPublish.sourceKind || null,
+            sourceKey: streamPublish.sourceKey || null,
+            sourceUrl: streamPublish.sourceUrl || null
+          }
+        });
+
+        if (
+          streamPublish.active &&
+          (transportStatus === "failed" || transportStatus === "disconnected")
+        ) {
+          const stopReason =
+            transportStatus === "failed"
+              ? "stream_publish_transport_failed"
+              : "stream_publish_transport_disconnected";
+          const stopPromise =
+            streamPublish.sourceKind === "browser_session"
+              ? this.host.stopBrowserSessionStreamPublish({
+                  guildId: session.guildId,
+                  reason: stopReason
+                })
+              : Promise.resolve(
+                  this.host.stopMusicStreamPublish({
+                    guildId: session.guildId,
+                    reason: stopReason
+                  })
+                );
+          void Promise.resolve(stopPromise).catch((error) => {
+            this.logAsyncFailure({
+              session,
+              content: "stream_publish_transport_recovery_failed",
+              error,
+              metadata: {
+                status: transportStatus,
+                reason: transportReason
+              }
+            });
+          });
+        }
+        return;
+      }
+      if (transportRole !== "stream_watch") return;
+
+      const nativeScreenShare = ensureNativeDiscordScreenShareState(session);
+      const transportStatus = String(payload.status || "").trim() || null;
+      const transportReason = String(payload.reason || "").trim() || null;
+      const now = Date.now();
+      nativeScreenShare.transportStatus = transportStatus;
+      nativeScreenShare.transportReason = transportReason;
+      nativeScreenShare.transportUpdatedAt = now;
+      if (transportStatus === "ready") {
+        nativeScreenShare.transportConnectedAt = now;
+      }
+
+      this.host.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: session.streamWatch?.targetUserId || this.host.client.user?.id || null,
+        content: "native_discord_stream_transport_state_updated",
+        metadata: {
+          sessionId: session.id,
+          status: transportStatus,
+          reason: transportReason,
+          streamKey: nativeScreenShare.activeStreamKey || null,
+          targetUserId: session.streamWatch?.targetUserId || null
+        }
+      });
+
+      if (
+        session.streamWatch?.active &&
+        (transportStatus === "failed" || transportStatus === "disconnected")
+      ) {
+        const recoveryReason =
+          transportStatus === "failed"
+            ? "native_discord_stream_transport_failed"
+            : "native_discord_stream_transport_disconnected";
+        const recoveryRequesterUserId =
+          String(session.streamWatch.requestedByUserId || session.streamWatch.targetUserId || "").trim() || null;
+        const recoveryTargetUserId = String(session.streamWatch.targetUserId || "").trim() || null;
+        const recoveryChannelId = String(session.textChannelId || "").trim() || null;
+
+        void (async () => {
+          const stopResult = await this.host.stopWatchStreamForUser({
+            guildId: session.guildId,
+            targetUserId: recoveryTargetUserId,
+            settings,
+            reason: recoveryReason
+          });
+
+          if (!stopResult?.ok) {
+            this.host.store.logAction({
+              kind: "voice_runtime",
+              guildId: session.guildId,
+              channelId: recoveryChannelId,
+              userId: recoveryRequesterUserId || recoveryTargetUserId || this.host.client.user?.id || null,
+              content: "native_discord_stream_transport_link_fallback_skipped",
+              metadata: {
+                sessionId: session.id,
+                status: transportStatus,
+                reason: transportReason,
+                recoveryReason,
+                targetUserId: recoveryTargetUserId,
+                requesterUserId: recoveryRequesterUserId,
+                stopReason: String(stopResult?.reason || "watch_stop_failed")
+              }
+            });
+            return;
+          }
+
+          if (!recoveryRequesterUserId || !recoveryChannelId) {
+            this.host.store.logAction({
+              kind: "voice_runtime",
+              guildId: session.guildId,
+              channelId: recoveryChannelId,
+              userId: recoveryRequesterUserId || recoveryTargetUserId || this.host.client.user?.id || null,
+              content: "native_discord_stream_transport_link_fallback_skipped",
+              metadata: {
+                sessionId: session.id,
+                status: transportStatus,
+                reason: transportReason,
+                recoveryReason,
+                targetUserId: recoveryTargetUserId,
+                requesterUserId: recoveryRequesterUserId,
+                missingTextChannel: !recoveryChannelId,
+                missingRequesterUserId: !recoveryRequesterUserId
+              }
+            });
+            return;
+          }
+
+          this.host.store.logAction({
+            kind: "voice_runtime",
+            guildId: session.guildId,
+            channelId: recoveryChannelId,
+            userId: recoveryRequesterUserId,
+            content: "native_discord_stream_transport_link_fallback_requested",
+            metadata: {
+              sessionId: session.id,
+              status: transportStatus,
+              reason: transportReason,
+              recoveryReason,
+              targetUserId: recoveryTargetUserId,
+              requesterUserId: recoveryRequesterUserId
+            }
+          });
+
+          const fallbackResult = await this.host.startVoiceScreenWatch({
+            settings,
+            guildId: session.guildId,
+            channelId: recoveryChannelId,
+            requesterUserId: recoveryRequesterUserId,
+            targetUserId: recoveryTargetUserId,
+            source: recoveryReason,
+            preferredTransport: "link",
+            nativeFailureReason: recoveryReason
+          });
+
+          if (!fallbackResult?.started) {
+            this.host.store.logAction({
+              kind: "voice_runtime",
+              guildId: session.guildId,
+              channelId: recoveryChannelId,
+              userId: recoveryRequesterUserId,
+              content: "native_discord_stream_transport_link_fallback_failed",
+              metadata: {
+                sessionId: session.id,
+                status: transportStatus,
+                reason: transportReason,
+                recoveryReason,
+                targetUserId: recoveryTargetUserId,
+                requesterUserId: recoveryRequesterUserId,
+                fallbackReason: String(fallbackResult?.reason || "screen_watch_unavailable")
+              }
+            });
+          }
+        })().catch((error) => {
+          this.logAsyncFailure({
+            session,
+            content: "native_discord_stream_transport_stop_failed",
+            error,
+            metadata: {
+              status: transportStatus,
+              reason: transportReason
+            }
+          });
+        });
+      }
+    };
+
     if (session.voxClient) {
       session.voxClient.on("connectionState", onConnectionState);
+      session.voxClient.on("transportState", onTransportState);
       session.voxClient.on("crashed", onCrashed);
       session.cleanupHandlers.push(() => {
         session.voxClient?.off("connectionState", onConnectionState);
+        session.voxClient?.off("transportState", onTransportState);
         session.voxClient?.off("crashed", onCrashed);
       });
     }

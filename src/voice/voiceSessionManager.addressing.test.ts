@@ -5990,6 +5990,75 @@ test("buildRealtimeInstructions surfaces active native Discord sharers without i
   assert.equal(instructions.includes("call start_screen_watch to request actual frame context."), true);
 });
 
+test("buildRealtimeInstructions resolves native sharer names through the manager host without losing method binding", () => {
+  const manager = createManager({ participantCount: 1 });
+  manager.getVoiceScreenWatchCapability = () => ({
+    supported: true,
+    enabled: true,
+    available: true,
+    status: "ready",
+    publicUrl: "",
+    reason: null
+  });
+  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-2", displayName: "bob" }];
+
+  const instructions = manager.instructionManager.buildRealtimeInstructions({
+    session: {
+      id: "session-native-screen-share-binding-1",
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      startedAt: Date.now() - 5_000,
+      membershipEvents: [],
+      voiceChannelEffects: [],
+      nativeScreenShare: {
+        sharers: new Map([[
+          "speaker-2",
+          {
+            userId: "speaker-2",
+            codec: "h264",
+            updatedAt: Date.now(),
+            lastFrameAt: 0,
+            lastFrameCodec: null,
+            lastFrameKeyframeAt: 0,
+            audioSsrc: null,
+            videoSsrc: 123,
+            streams: [
+              {
+                ssrc: 123,
+                rtxSsrc: null,
+                rid: "100",
+                quality: 100,
+                streamType: "screen",
+                active: true,
+                maxBitrate: null,
+                maxFramerate: 30,
+                width: 1280,
+                height: 720,
+                resolutionType: "fixed",
+                pixelCount: 921600
+              }
+            ]
+          }
+        ]]),
+        subscribedTargetUserId: null,
+        decodeInFlight: false,
+        lastDecodeAttemptAt: 0,
+        lastDecodeSuccessAt: 0,
+        lastDecodeFailureAt: 0,
+        lastDecodeFailureReason: null,
+        ffmpegAvailable: true
+      }
+    },
+    settings: baseSettings(),
+    speakerUserId: "speaker-1",
+    transcript: "can you watch that share"
+  });
+
+  assert.equal(instructions.includes("bob (screen, h264, 1280x720)"), true);
+});
+
 test("buildRealtimeInstructions does not invite start_screen_watch when screen watch is unavailable", () => {
   const manager = createManager();
   manager.getVoiceScreenWatchCapability = () => ({
@@ -6180,7 +6249,7 @@ test("buildRealtimeInstructions keeps active-music pass-through replies situatio
         description: "Play music"
       },
       {
-        name: "music_reply_handoff",
+        name: "media_reply_handoff",
         toolType: "function",
         description: "Temporarily own the floor during music"
       }
@@ -6196,11 +6265,11 @@ test("buildRealtimeInstructions keeps active-music pass-through replies situatio
   });
 
   assert.equal(
-    instructions.includes("Music is live right now. If you answer without claiming the floor with music_reply_handoff, favor a quick reaction or short answer unless the moment clearly wants more."),
+    instructions.includes("Playback is live right now. If you answer without claiming the floor with media_reply_handoff, favor a quick reaction or short answer unless the moment clearly wants more."),
     true
   );
   assert.equal(
-    instructions.split("Music is live right now. If you answer without claiming the floor with music_reply_handoff, favor a quick reaction or short answer unless the moment clearly wants more.").length - 1,
+    instructions.split("Playback is live right now. If you answer without claiming the floor with media_reply_handoff, favor a quick reaction or short answer unless the moment clearly wants more.").length - 1,
     1
   );
 });

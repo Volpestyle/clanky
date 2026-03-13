@@ -166,3 +166,76 @@ test("clearNativeDiscordScreenShareState resets the existing state object in pla
   assert.equal(state.lastDecodeFailureReason, null);
   assert.equal(state.ffmpegAvailable, null);
 });
+
+test("listActiveNativeDiscordScreenSharers ignores explicit inactive states but keeps frame-backed watchers", () => {
+  const session = {
+    nativeScreenShare: {
+      sharers: new Map([
+        [
+          "user-active",
+          {
+            userId: "user-active",
+            videoSsrc: 111,
+            updatedAt: 10,
+            lastFrameAt: 0,
+            streams: [
+              {
+                ssrc: 111,
+                streamType: "screen",
+                active: true
+              }
+            ]
+          }
+        ],
+        [
+          "user-ended",
+          {
+            userId: "user-ended",
+            videoSsrc: null,
+            updatedAt: 20,
+            lastFrameAt: 0,
+            streams: []
+          }
+        ],
+        [
+          "user-inactive",
+          {
+            userId: "user-inactive",
+            videoSsrc: 222,
+            updatedAt: 30,
+            lastFrameAt: 0,
+            streams: [
+              {
+                ssrc: 222,
+                streamType: "screen",
+                active: false
+              }
+            ]
+          }
+        ],
+        [
+          "user-frame-backed",
+          {
+            userId: "user-frame-backed",
+            videoSsrc: 333,
+            updatedAt: 5,
+            lastFrameAt: 40,
+            streams: []
+          }
+        ]
+      ]),
+      subscribedTargetUserId: null,
+      decodeInFlight: false,
+      lastDecodeAttemptAt: 0,
+      lastDecodeSuccessAt: 0,
+      lastDecodeFailureAt: 0,
+      lastDecodeFailureReason: null,
+      ffmpegAvailable: true
+    }
+  };
+
+  assert.deepEqual(
+    listActiveNativeDiscordScreenSharers(session).map((entry) => entry.userId),
+    ["user-frame-backed", "user-active"]
+  );
+});

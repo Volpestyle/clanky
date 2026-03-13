@@ -52,6 +52,43 @@ function buildSingleFrameVp8IvfBuffer(frame: Buffer, rtpTimestamp: number): Buff
   return Buffer.concat([header, frameHeader, frame]);
 }
 
+function startsWithAnnexBStartCode(frame: Buffer): boolean {
+  return frame.subarray(0, 4).equals(Buffer.from([0, 0, 0, 1])) ||
+    frame.subarray(0, 3).equals(Buffer.from([0, 0, 1]));
+}
+
+function convertLengthPrefixedH264ToAnnexB(frame: Buffer): Buffer | null {
+  if (frame.length < 5) {
+    return null;
+  }
+
+  let cursor = 0;
+  const nalUnits: Buffer[] = [];
+  while (cursor + 4 <= frame.length) {
+    const nalLength = frame.readUInt32BE(cursor);
+    cursor += 4;
+    if (nalLength <= 0 || cursor + nalLength > frame.length) {
+      return null;
+    }
+    nalUnits.push(Buffer.concat([Buffer.from([0, 0, 0, 1]), frame.subarray(cursor, cursor + nalLength)]));
+    cursor += nalLength;
+  }
+
+  if (cursor !== frame.length || nalUnits.length === 0) {
+    return null;
+  }
+
+  return Buffer.concat(nalUnits);
+}
+
+export function normalizeH264FrameForDecoding(frame: Buffer): Buffer {
+  if (startsWithAnnexBStartCode(frame)) {
+    return frame;
+  }
+
+  return convertLengthPrefixedH264ToAnnexB(frame) || frame;
+}
+
 function resolveVideoFrameInput({
   codec,
   frame,
@@ -66,7 +103,7 @@ function resolveVideoFrameInput({
     case "h264":
       return {
         inputFormat: "h264",
-        payload: frame
+        payload: normalizeH264FrameForDecoding(frame)
       };
     case "vp8":
       return {

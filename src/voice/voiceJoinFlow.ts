@@ -21,6 +21,8 @@ import { buildRealtimeFunctionTools, getVoiceMcpServerStatuses } from "./voiceTo
 import { providerSupports } from "./voiceModes.ts";
 import { createEmptyVoiceLivePromptState } from "./voicePromptState.ts";
 import { createNativeDiscordScreenShareState } from "./nativeDiscordScreenShare.ts";
+import { createGoLiveStreamState } from "../selfbot/streamDiscovery.ts";
+import { createStreamPublishState } from "./voiceStreamPublish.ts";
 import type { VoiceSession } from "./voiceSessionTypes.ts";
 import { createAssistantOutputState } from "./assistantOutputState.ts";
 import {
@@ -787,6 +789,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           latestFrameAt: 0
         },
         nativeScreenShare: createNativeDiscordScreenShareState(),
+        goLiveStream: createGoLiveStreamState(),
+        streamPublish: createStreamPublishState(),
         music: {
           phase: "idle",
           ducked: false,

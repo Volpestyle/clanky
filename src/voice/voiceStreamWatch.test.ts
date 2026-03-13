@@ -3,12 +3,15 @@ import assert from "node:assert/strict";
 import {
   enableWatchStreamForUser,
   getStreamWatchBrainContextForPrompt,
+  handleDiscoveredStreamCredentialsReceived,
+  handleDiscoveredStreamDeleted,
   ingestStreamFrame,
   initializeStreamWatchState,
   maybeTriggerStreamWatchCommentary,
   resolveStreamWatchVisionProviderSettings,
   stopWatchStreamForUser
 } from "./voiceStreamWatch.ts";
+import { createStreamDiscoveryState } from "../selfbot/streamDiscovery.ts";
 
 function createSettings(overrides = {}) {
   const defaults = {
@@ -88,11 +91,29 @@ function createSession(overrides = {}) {
       lastDecodeSuccessAt: 0,
       lastDecodeFailureAt: 0,
       lastDecodeFailureReason: null,
-      ffmpegAvailable: null
+      ffmpegAvailable: null,
+      activeStreamKey: null,
+      lastRtcServerId: null,
+      lastStreamEndpoint: null,
+      lastCredentialsReceivedAt: 0,
+      lastVoiceSessionId: null,
+      transportStatus: null,
+      transportReason: null,
+      transportUpdatedAt: 0,
+      transportConnectedAt: 0
     },
     userCaptures: new Map(),
     pendingResponse: false,
     lastInboundAudioAt: 0,
+    voxClient: {
+      subscribeUserVideo() {},
+      unsubscribeUserVideo() {},
+      streamWatchConnect() {},
+      streamWatchDisconnect() {},
+      getLastVoiceSessionId() {
+        return "voice-session-1";
+      }
+    },
     realtimeClient: {
       appendInputVideoFrame() {},
       requestVideoCommentary() {}
@@ -106,6 +127,7 @@ function createManager({
   settings = createSettings(),
   llm = {},
   memory = {},
+  streamDiscovery = createStreamDiscoveryState(),
   guildVoiceMembers = ["user-1"],
   deferredQueuedTurns = [],
   outputChannelState = null,
@@ -119,6 +141,7 @@ function createManager({
   const memoryWrites = [];
   const manager = {
     sessions: new Map(),
+    streamDiscovery,
     store: {
       getSettings() {
         return settings;
@@ -157,6 +180,16 @@ function createManager({
     client: {
       user: {
         id: "bot-1"
+      },
+      ws: {
+        shards: {
+          first() {
+            return {
+              id: 0,
+              send() {}
+            };
+          }
+        }
       },
       guilds: {
         cache: new Map()
@@ -388,7 +421,37 @@ test("enableWatchStreamForUser enforces same-voice-channel requirement and suppo
 
 test("enableWatchStreamForUser subscribes native Discord video and stopWatchStreamForUser clears it", async () => {
   const nativeVideoCalls: Array<Record<string, unknown>> = [];
+  const streamDiscovery = createStreamDiscoveryState();
+  streamDiscovery.streams.set("guild:guild-1:voice-1:user-2", {
+    streamKey: "guild:guild-1:voice-1:user-2",
+    userId: "user-2",
+    guildId: "guild-1",
+    channelId: "voice-1",
+    rtcServerId: "9002",
+    endpoint: "stream.discord.media:443",
+    token: "stream-token",
+    discoveredAt: Date.now(),
+    credentialsReceivedAt: Date.now()
+  });
   const session = createSession({
+    streamWatch: {
+      active: false,
+      targetUserId: null,
+      requestedByUserId: null,
+      lastFrameAt: 0,
+      lastCommentaryAt: 0,
+      lastCommentaryNote: null,
+      lastBrainContextAt: 0,
+      lastBrainContextProvider: null,
+      lastBrainContextModel: null,
+      brainContextEntries: [],
+      ingestedFrameCount: 0,
+      acceptedFrameCountInWindow: 0,
+      frameWindowStartedAt: 0,
+      latestFrameMimeType: null,
+      latestFrameDataBase64: "",
+      latestFrameAt: 0
+    },
     voxClient: {
       subscribeUserVideo(payload) {
         nativeVideoCalls.push({
@@ -401,10 +464,25 @@ test("enableWatchStreamForUser subscribes native Discord video and stopWatchStre
           type: "unsubscribe",
           userId
         });
+      },
+      streamWatchConnect(payload) {
+        nativeVideoCalls.push({
+          type: "stream_connect",
+          ...payload
+        });
+      },
+      streamWatchDisconnect(reason) {
+        nativeVideoCalls.push({
+          type: "stream_disconnect",
+          reason
+        });
+      },
+      getLastVoiceSessionId() {
+        return "voice-session-1";
       }
     }
   });
-  const { manager } = createManager({ session });
+  const { manager } = createManager({ session, streamDiscovery });
 
   const startResult = await enableWatchStreamForUser(manager, {
     guildId: "guild-1",
@@ -431,6 +509,15 @@ test("enableWatchStreamForUser subscribes native Discord video and stopWatchStre
   assert.equal(session.nativeScreenShare.subscribedTargetUserId, null);
   assert.deepEqual(nativeVideoCalls, [
     {
+      type: "stream_connect",
+      endpoint: "stream.discord.media:443",
+      token: "stream-token",
+      serverId: "9002",
+      sessionId: "voice-session-1",
+      userId: "bot-1",
+      daveChannelId: "9001"
+    },
+    {
       type: "subscribe",
       userId: "user-2",
       maxFramesPerSecond: 2,
@@ -441,8 +528,218 @@ test("enableWatchStreamForUser subscribes native Discord video and stopWatchStre
     {
       type: "unsubscribe",
       userId: "user-2"
+    },
+    {
+      type: "stream_disconnect",
+      reason: "native_discord_screen_share_ended"
     }
   ]);
+});
+
+test("enableWatchStreamForUser requests stream watch and connects later when credentials arrive", async () => {
+  const transportCalls: Array<Record<string, unknown>> = [];
+  const streamDiscovery = createStreamDiscoveryState();
+  const session = createSession({
+    streamWatch: {
+      active: false,
+      targetUserId: null,
+      requestedByUserId: null,
+      lastFrameAt: 0,
+      lastCommentaryAt: 0,
+      lastCommentaryNote: null,
+      lastBrainContextAt: 0,
+      lastBrainContextProvider: null,
+      lastBrainContextModel: null,
+      brainContextEntries: [],
+      ingestedFrameCount: 0,
+      acceptedFrameCountInWindow: 0,
+      frameWindowStartedAt: 0,
+      latestFrameMimeType: null,
+      latestFrameDataBase64: "",
+      latestFrameAt: 0
+    },
+    voxClient: {
+      subscribeUserVideo() {},
+      unsubscribeUserVideo() {},
+      streamWatchConnect(payload) {
+        transportCalls.push(payload);
+      },
+      streamWatchDisconnect() {},
+      getLastVoiceSessionId() {
+        return "voice-session-1";
+      }
+    }
+  });
+  const { manager } = createManager({ session, streamDiscovery });
+
+  const startResult = await enableWatchStreamForUser(manager, {
+    guildId: "guild-1",
+    requesterUserId: "user-1",
+    targetUserId: "user-2",
+    settings: createSettings(),
+    source: "test"
+  });
+
+  assert.equal(startResult.ok, true);
+  assert.equal(streamDiscovery.watchingStreamKey, "guild:guild-1:voice-1:user-2");
+  assert.equal(session.nativeScreenShare.transportStatus, "waiting_for_credentials");
+  assert.equal(transportCalls.length, 0);
+
+  const handled = handleDiscoveredStreamCredentialsReceived(manager, {
+    stream: {
+      streamKey: "guild:guild-1:voice-1:user-2",
+      userId: "user-2",
+      guildId: "guild-1",
+      channelId: "voice-1",
+      rtcServerId: "9010",
+      endpoint: "stream.discord.media:443",
+      token: "stream-token-2",
+      discoveredAt: Date.now(),
+      credentialsReceivedAt: Date.now()
+    }
+  });
+
+  assert.equal(handled, true);
+  assert.deepEqual(transportCalls, [
+    {
+      endpoint: "stream.discord.media:443",
+      token: "stream-token-2",
+      serverId: "9010",
+      sessionId: "voice-session-1",
+      userId: "bot-1",
+      daveChannelId: "9009"
+    }
+  ]);
+  assert.equal(session.nativeScreenShare.transportStatus, "connect_requested");
+  assert.equal(session.nativeScreenShare.activeStreamKey, "guild:guild-1:voice-1:user-2");
+});
+
+test("handleDiscoveredStreamDeleted stops an active native watch", async () => {
+  const stopCalls: Array<Record<string, unknown>> = [];
+  const session = createSession({
+    nativeScreenShare: {
+      sharers: new Map([
+        [
+          "user-2",
+          {
+            userId: "user-2",
+            codec: "h264",
+            updatedAt: Date.now(),
+            lastFrameAt: Date.now(),
+            lastFrameCodec: "h264",
+            lastFrameKeyframeAt: Date.now(),
+            audioSsrc: null,
+            videoSsrc: 4201,
+            streams: [
+              {
+                ssrc: 4201,
+                rtxSsrc: 4202,
+                rid: "100",
+                quality: 100,
+                streamType: "screen",
+                active: true,
+                maxBitrate: 2_500_000,
+                maxFramerate: 30,
+                width: 1920,
+                height: 1080,
+                resolutionType: "fixed",
+                pixelCount: 1920 * 1080
+              }
+            ]
+          }
+        ],
+        [
+          "user-3",
+          {
+            userId: "user-3",
+            codec: "h264",
+            updatedAt: Date.now(),
+            lastFrameAt: Date.now(),
+            lastFrameCodec: "h264",
+            lastFrameKeyframeAt: Date.now(),
+            audioSsrc: null,
+            videoSsrc: 4301,
+            streams: [
+              {
+                ssrc: 4301,
+                rtxSsrc: 4302,
+                rid: "100",
+                quality: 100,
+                streamType: "screen",
+                active: true,
+                maxBitrate: 2_500_000,
+                maxFramerate: 30,
+                width: 1920,
+                height: 1080,
+                resolutionType: "fixed",
+                pixelCount: 1920 * 1080
+              }
+            ]
+          }
+        ]
+      ]),
+      subscribedTargetUserId: null,
+      decodeInFlight: false,
+      lastDecodeAttemptAt: 0,
+      lastDecodeSuccessAt: 0,
+      lastDecodeFailureAt: 0,
+      lastDecodeFailureReason: null,
+      ffmpegAvailable: null,
+      activeStreamKey: null,
+      lastRtcServerId: null,
+      lastStreamEndpoint: null,
+      lastCredentialsReceivedAt: 0,
+      lastVoiceSessionId: null,
+      transportStatus: null,
+      transportReason: null,
+      transportUpdatedAt: 0,
+      transportConnectedAt: 0
+    },
+    voxClient: {
+      subscribeUserVideo() {},
+      unsubscribeUserVideo() {},
+      streamWatchConnect() {},
+      streamWatchDisconnect(reason) {
+        stopCalls.push({ reason });
+      },
+      getLastVoiceSessionId() {
+        return "voice-session-1";
+      }
+    }
+  });
+  initializeStreamWatchState({}, {
+    session,
+    requesterUserId: "user-1",
+    targetUserId: "user-2"
+  });
+
+  const { manager } = createManager({ session });
+  const handled = await handleDiscoveredStreamDeleted(manager, {
+    stream: {
+      streamKey: "guild:guild-1:voice-1:user-2",
+      userId: "user-2",
+      guildId: "guild-1",
+      channelId: "voice-1",
+      rtcServerId: "9002",
+      endpoint: "stream.discord.media:443",
+      token: "stream-token",
+      discoveredAt: Date.now(),
+      credentialsReceivedAt: Date.now()
+    },
+    settings: createSettings({
+      voice: {
+        streamWatch: {
+          brainContextEnabled: false
+        }
+      }
+    })
+  });
+
+  assert.equal(handled, true);
+  assert.equal(session.streamWatch.active, false);
+  assert.deepEqual(stopCalls, [{ reason: "native_discord_stream_deleted" }]);
+  assert.equal(session.nativeScreenShare.sharers.has("user-2"), false);
+  assert.equal(session.nativeScreenShare.sharers.has("user-3"), true);
 });
 
 test("ingestStreamFrame validates mime, frame size, and frame-rate limits", async () => {

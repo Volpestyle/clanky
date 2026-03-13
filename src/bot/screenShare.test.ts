@@ -11,6 +11,8 @@ function createScreenShareRuntime({
   nativeStartResult = null,
   nativeDecoderSupported = true,
   activeSharerUserIds = nativeStartResult ? ["user-1"] : [],
+  goLiveStreamTargetUserId = null,
+  existingNativeWatch = null,
   participantEntries = [
     { userId: "user-1", displayName: "alice", username: "alice_user" },
     { userId: "user-2", displayName: "bob", username: "bob_user" },
@@ -36,12 +38,64 @@ function createScreenShareRuntime({
       }
     ])
   );
+  const sessionState = {
+    ending: false,
+    mode: "openai_realtime",
+    voiceChannelId: "voice-1",
+    streamWatch: existingNativeWatch
+      ? {
+          active: true,
+          targetUserId: existingNativeWatch.targetUserId
+        }
+      : undefined,
+    goLiveStream: goLiveStreamTargetUserId
+      ? {
+          active: true,
+          targetUserId: goLiveStreamTargetUserId
+        }
+      : undefined,
+    settingsSnapshot: {
+      voice: {
+        streamWatch: {
+          enabled: true
+        }
+      }
+    },
+    nativeScreenShare: {
+      sharers: new Map(
+        activeSharerUserIds.map((userId, index) => {
+          const streamSsrc = 4_200 + index;
+          return [
+            userId,
+            {
+              userId,
+              codec: "h264",
+              videoSsrc: streamSsrc,
+              streams: [
+                {
+                  ssrc: streamSsrc,
+                  rtxSsrc: streamSsrc + 100,
+                  rid: "100",
+                  quality: 100,
+                  streamType: "screen",
+                  active: true
+                }
+              ]
+            }
+          ];
+        })
+      ),
+      transportStatus: existingNativeWatch?.transportStatus || null,
+      lastDecodeSuccessAt: existingNativeWatch?.lastDecodeSuccessAt || 0
+    }
+  };
 
   return {
     sentMessages,
     logs,
     createSessionCalls,
     nativeStartCalls,
+    sessionState,
     runtime: {
       screenShareSessionManager:
         capability || createSessionResult
@@ -55,35 +109,13 @@ function createScreenShareRuntime({
               }
             }
           : null,
-      voiceSessionManager: nativeStartResult
+      voiceSessionManager: nativeStartResult || existingNativeWatch
         ? {
             hasNativeDiscordVideoDecoderSupport() {
               return nativeDecoderSupported;
             },
             getSession() {
-              return {
-                ending: false,
-                mode: "openai_realtime",
-                voiceChannelId: "voice-1",
-                settingsSnapshot: {
-                  voice: {
-                    streamWatch: {
-                      enabled: true
-                    }
-                  }
-                },
-                nativeScreenShare: {
-                  sharers: new Map(
-                    activeSharerUserIds.map((userId) => [
-                      userId,
-                      {
-                        userId,
-                        codec: "h264"
-                      }
-                    ])
-                  )
-                }
-              };
+              return sessionState;
             },
             getVoiceChannelParticipants() {
               return participantEntries.map((entry) => ({
@@ -481,7 +513,7 @@ test("startVoiceScreenWatch lets the runtime choose a specific active sharer by 
 });
 
 test("startVoiceScreenWatch falls back to the share link when no active Discord sharer exists", async () => {
-  const { runtime, sentMessages, createSessionCalls } = createScreenShareRuntime({
+  const { runtime, sentMessages, createSessionCalls, logs } = createScreenShareRuntime({
     nativeStartResult: {
       ok: true,
       reason: "watching_started",
@@ -514,10 +546,58 @@ test("startVoiceScreenWatch falls back to the share link when no active Discord 
   assert.equal(result.transport, "link");
   assert.equal(createSessionCalls.length, 1);
   assert.equal(sentMessages.length, 1);
+  const nativeFailure = logs.find((entry) => String(entry?.content || "") === "screen_watch_native_start_failed");
+  assert.equal(nativeFailure?.metadata?.reason, "no_active_discord_screen_share");
+  assert.deepEqual(nativeFailure?.metadata?.nativeActiveSharerUserIds, []);
+  const fallbackStarted = logs.find((entry) => String(entry?.content || "") === "screen_watch_link_fallback_started");
+  assert.equal(fallbackStarted?.metadata?.nativeFailureReason, "no_active_discord_screen_share");
+});
+
+test("startVoiceScreenWatch can force share-link recovery without retrying native watch", async () => {
+  const { runtime, sentMessages, createSessionCalls, nativeStartCalls, logs } = createScreenShareRuntime({
+    nativeStartResult: {
+      ok: true,
+      reason: "watching_started",
+      targetUserId: "user-2"
+    },
+    activeSharerUserIds: ["user-2"],
+    createSessionResult: {
+      ok: true,
+      shareUrl: "https://screen.example/session/recovery",
+      expiresInMinutes: 15,
+      targetUserId: "user-2"
+    }
+  });
+
+  const result = await startVoiceScreenWatch(runtime, {
+    settings: {
+      voice: {
+        streamWatch: {
+          enabled: true
+        }
+      }
+    },
+    guildId: "guild-1",
+    channelId: "chan-1",
+    requesterUserId: "user-1",
+    targetUserId: "user-2",
+    source: "native_discord_stream_transport_failed",
+    preferredTransport: "link",
+    nativeFailureReason: "native_discord_stream_transport_failed"
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(result.transport, "link");
+  assert.equal(nativeStartCalls.length, 0);
+  assert.equal(createSessionCalls.length, 1);
+  assert.equal(createSessionCalls[0]?.targetUserId, "user-2");
+  assert.equal(sentMessages.length, 1);
+  const fallbackStarted = logs.find((entry) => String(entry?.content || "") === "screen_watch_link_fallback_started");
+  assert.equal(fallbackStarted?.metadata?.nativeFailureReason, "native_discord_stream_transport_failed");
 });
 
 test("startVoiceScreenWatch targets the named voice participant for share-link fallback when they are not actively sharing", async () => {
-  const { runtime, createSessionCalls } = createScreenShareRuntime({
+  const { runtime, createSessionCalls, logs } = createScreenShareRuntime({
     nativeStartResult: {
       ok: true,
       reason: "watching_started",
@@ -552,10 +632,110 @@ test("startVoiceScreenWatch targets the named voice participant for share-link f
   assert.equal(result.transport, "link");
   assert.equal(createSessionCalls.length, 1);
   assert.equal(createSessionCalls[0]?.targetUserId, "user-2");
+  const nativeFailure = logs.find((entry) => String(entry?.content || "") === "screen_watch_native_start_failed");
+  assert.equal(nativeFailure?.metadata?.reason, "requested_target_not_actively_sharing");
+  assert.equal(nativeFailure?.metadata?.requestedTargetUserId, "user-2");
+  const fallbackStarted = logs.find((entry) => String(entry?.content || "") === "screen_watch_link_fallback_started");
+  assert.equal(fallbackStarted?.metadata?.nativeFailureReason, "requested_target_not_actively_sharing");
+});
+
+test("startVoiceScreenWatch trusts discovered Go Live state for an explicit target before falling back", async () => {
+  const { runtime, createSessionCalls, nativeStartCalls, logs, sentMessages } = createScreenShareRuntime({
+    nativeStartResult: {
+      ok: true,
+      reason: "watching_started",
+      targetUserId: "user-2"
+    },
+    activeSharerUserIds: [],
+    goLiveStreamTargetUserId: "user-2",
+    createSessionResult: {
+      ok: true,
+      shareUrl: "https://screen.example/session/should-not-fallback",
+      expiresInMinutes: 15,
+      targetUserId: "user-2"
+    }
+  });
+
+  const result = await startVoiceScreenWatch(runtime, {
+    settings: {
+      voice: {
+        streamWatch: {
+          enabled: true
+        }
+      }
+    },
+    guildId: "guild-1",
+    channelId: "chan-1",
+    requesterUserId: "user-1",
+    targetUserId: "user-2",
+    transcript: "watch bob's screen",
+    source: "voice_turn_directive"
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(result.transport, "native");
+  assert.equal(nativeStartCalls.length, 1);
+  assert.equal(nativeStartCalls[0]?.targetUserId, "user-2");
+  assert.equal(createSessionCalls.length, 0);
+  assert.equal(sentMessages.length, 0);
+  const nativeFailure = logs.find((entry) => String(entry?.content || "") === "screen_watch_native_start_failed");
+  assert.equal(nativeFailure, undefined);
+  const fallbackStarted = logs.find((entry) => String(entry?.content || "") === "screen_watch_link_fallback_started");
+  assert.equal(fallbackStarted, undefined);
+});
+
+test("startVoiceScreenWatch cancels a stale link fallback once native watch becomes ready before send", async () => {
+  const { runtime, createSessionCalls, logs, sentMessages, sessionState } = createScreenShareRuntime({
+    createSessionResult: {
+      ok: true,
+      shareUrl: "https://screen.example/session/stale-fallback",
+      expiresInMinutes: 15,
+      targetUserId: "user-2"
+    },
+    existingNativeWatch: {
+      targetUserId: "user-2",
+      transportStatus: null,
+      lastDecodeSuccessAt: 0
+    },
+    offerMessage: "unused"
+  });
+
+  runtime.composeScreenShareOfferMessage = async ({ linkUrl }) => {
+    assert.equal(linkUrl, "https://screen.example/session/stale-fallback");
+    sessionState.nativeScreenShare.transportStatus = "ready";
+    sessionState.nativeScreenShare.lastDecodeSuccessAt = Date.now();
+    return "should never send";
+  };
+
+  const result = await startVoiceScreenWatch(runtime, {
+    settings: {
+      voice: {
+        streamWatch: {
+          enabled: true
+        }
+      }
+    },
+    guildId: "guild-1",
+    channelId: "chan-1",
+    requesterUserId: "user-1",
+    targetUserId: "user-2",
+    source: "native_discord_stream_transport_failed",
+    preferredTransport: "link",
+    nativeFailureReason: "requested_target_not_actively_sharing"
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(result.transport, "native");
+  assert.equal(createSessionCalls.length, 1);
+  assert.equal(sentMessages.length, 0);
+  const fallbackStarted = logs.find((entry) => String(entry?.content || "") === "screen_watch_link_fallback_started");
+  assert.equal(fallbackStarted, undefined);
+  const fallbackCancelled = logs.find((entry) => String(entry?.content || "") === "screen_watch_link_fallback_cancelled_native_active");
+  assert.equal(fallbackCancelled?.metadata?.stage, "post_compose");
 });
 
 test("startVoiceScreenWatch does not guess when multiple active sharers exist and no target was provided", async () => {
-  const { runtime, createSessionCalls } = createScreenShareRuntime({
+  const { runtime, createSessionCalls, logs } = createScreenShareRuntime({
     nativeStartResult: {
       ok: true,
       reason: "watching_started",
@@ -587,4 +767,7 @@ test("startVoiceScreenWatch does not guess when multiple active sharers exist an
   assert.equal(result.started, false);
   assert.equal(result.reason, "multiple_active_discord_screen_shares");
   assert.equal(createSessionCalls.length, 0);
+  const nativeFailure = logs.find((entry) => String(entry?.content || "") === "screen_watch_native_start_failed");
+  assert.equal(nativeFailure?.metadata?.reason, "multiple_active_discord_screen_shares");
+  assert.deepEqual(nativeFailure?.metadata?.nativeActiveSharerUserIds, ["user-2", "user-3"]);
 });

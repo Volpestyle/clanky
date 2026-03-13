@@ -21,6 +21,12 @@ type VoiceStateUpdatePayload = JsonRecord & {
   channel_id?: string | null;
   user_id?: string | null;
 };
+export type ClankvoxTransportRole = "voice" | "stream_watch" | "stream_publish";
+export type ClankvoxTransportState = {
+  role: ClankvoxTransportRole;
+  status: string;
+  reason: string | null;
+};
 export type ClankvoxVideoResolution = {
   width: number | null;
   height: number | null;
@@ -79,6 +85,8 @@ type ClankvoxIpcErrorCode =
   | "invalid_json"
   | "input_too_large"
   | "voice_connect_failed"
+  | "stream_watch_connect_failed"
+  | "stream_publish_connect_failed"
   | "voice_runtime_error";
 type ClankvoxIpcError = {
   code: ClankvoxIpcErrorCode | null;
@@ -94,6 +102,26 @@ type ClankvoxCommand =
     }
   | { type: "voice_server"; data: VoiceServerUpdatePayload }
   | { type: "voice_state"; data: VoiceStateUpdatePayload }
+  | {
+      type: "stream_watch_connect";
+      endpoint: string;
+      token: string;
+      serverId: string;
+      sessionId: string;
+      userId: string;
+      daveChannelId: string;
+    }
+  | { type: "stream_watch_disconnect"; reason: string | null }
+  | {
+      type: "stream_publish_connect";
+      endpoint: string;
+      token: string;
+      serverId: string;
+      sessionId: string;
+      userId: string;
+      daveChannelId: string;
+    }
+  | { type: "stream_publish_disconnect"; reason: string | null }
   | { type: "audio"; pcmBase64: string; sampleRate: number }
   | { type: "stop_playback" }
   | { type: "stop_tts_playback" }
@@ -118,6 +146,10 @@ type ClankvoxCommand =
   | { type: "music_pause" }
   | { type: "music_resume" }
   | { type: "music_set_gain"; target: number; fadeMs: number }
+  | { type: "stream_publish_play"; url: string }
+  | { type: "stream_publish_stop" }
+  | { type: "stream_publish_pause" }
+  | { type: "stream_publish_resume" }
   | { type: "destroy" };
 
 type PendingTtsIngressChunk = {
@@ -154,7 +186,20 @@ function asClankvoxIpcErrorCode(value: unknown): ClankvoxIpcErrorCode | null {
     case "invalid_json":
     case "input_too_large":
     case "voice_connect_failed":
+    case "stream_watch_connect_failed":
+    case "stream_publish_connect_failed":
     case "voice_runtime_error":
+      return value;
+    default:
+      return null;
+  }
+}
+
+function asTransportRole(value: unknown): ClankvoxTransportRole | null {
+  switch (value) {
+    case "voice":
+    case "stream_watch":
+    case "stream_publish":
       return value;
     default:
       return null;
@@ -283,6 +328,8 @@ export class ClankvoxClient extends EventEmitter {
   private stdoutReaderController: AbortController | null = null;
   private _resolveExitWaiter: (() => void) | null = null;
   private _exitWaiterPromise: Promise<void> | null = null;
+  private lastVoiceSessionId: string | null = null;
+  private lastVoiceStateUserId: string | null = null;
 
   constructor(guildId: string, channelId: string, guild: ClankvoxGuildLike) {
     super();
@@ -508,6 +555,8 @@ export class ClankvoxClient extends EventEmitter {
       },
       onVoiceStateUpdate: (data) => {
         this.adapterCallbackCount.voiceState++;
+        this.lastVoiceSessionId = asString(data?.session_id)?.trim() || null;
+        this.lastVoiceStateUserId = asString(data?.user_id)?.trim() || null;
         if (AUDIO_DEBUG) {
           console.log(
             `[clankvox] adapter onVoiceStateUpdate #${this.adapterCallbackCount.voiceState}`,
@@ -549,6 +598,18 @@ export class ClankvoxClient extends EventEmitter {
         const status = asString(msg.status);
         if (status) {
           this.emit("connectionState", status);
+        }
+        break;
+      }
+      case "transport_state": {
+        const role = asTransportRole(msg.role);
+        const status = asString(msg.status);
+        if (role && status) {
+          this.emit("transportState", {
+            role,
+            status,
+            reason: asString(msg.reason)
+          } satisfies ClankvoxTransportState);
         }
         break;
       }
@@ -1003,6 +1064,82 @@ export class ClankvoxClient extends EventEmitter {
     this._send({ type: "unsubscribe_user_video", userId });
   }
 
+  getLastVoiceSessionId() {
+    return this.lastVoiceSessionId;
+  }
+
+  getLastVoiceStateUserId() {
+    return this.lastVoiceStateUserId;
+  }
+
+  streamWatchConnect({
+    endpoint,
+    token,
+    serverId,
+    sessionId,
+    userId,
+    daveChannelId
+  }: {
+    endpoint: string;
+    token: string;
+    serverId: string;
+    sessionId: string;
+    userId: string;
+    daveChannelId: string;
+  }) {
+    this._send({
+      type: "stream_watch_connect",
+      endpoint: String(endpoint || "").trim(),
+      token: String(token || "").trim(),
+      serverId: String(serverId || "").trim(),
+      sessionId: String(sessionId || "").trim(),
+      userId: String(userId || "").trim(),
+      daveChannelId: String(daveChannelId || "").trim()
+    });
+  }
+
+  streamWatchDisconnect(reason: string | null = null) {
+    const normalizedReason = String(reason || "").trim();
+    this._send({
+      type: "stream_watch_disconnect",
+      reason: normalizedReason || null
+    });
+  }
+
+  streamPublishConnect({
+    endpoint,
+    token,
+    serverId,
+    sessionId,
+    userId,
+    daveChannelId
+  }: {
+    endpoint: string;
+    token: string;
+    serverId: string;
+    sessionId: string;
+    userId: string;
+    daveChannelId: string;
+  }) {
+    this._send({
+      type: "stream_publish_connect",
+      endpoint: String(endpoint || "").trim(),
+      token: String(token || "").trim(),
+      serverId: String(serverId || "").trim(),
+      sessionId: String(sessionId || "").trim(),
+      userId: String(userId || "").trim(),
+      daveChannelId: String(daveChannelId || "").trim()
+    });
+  }
+
+  streamPublishDisconnect(reason: string | null = null) {
+    const normalizedReason = String(reason || "").trim();
+    this._send({
+      type: "stream_publish_disconnect",
+      reason: normalizedReason || null
+    });
+  }
+
   musicPlay(url: string, resolvedDirectUrl = false) {
     this._send({ type: "music_play", url, resolvedDirectUrl });
   }
@@ -1021,6 +1158,46 @@ export class ClankvoxClient extends EventEmitter {
 
   musicSetGain(target: number, fadeMs: number) {
     this._send({ type: "music_set_gain", target, fadeMs });
+  }
+
+  streamPublishPlay(url: string) {
+    this._send({ type: "stream_publish_play", url: String(url || "").trim() });
+  }
+
+  streamPublishBrowserStart(mimeType = "image/png") {
+    this._send({
+      type: "stream_publish_browser_start",
+      mimeType: String(mimeType || "").trim() || "image/png"
+    });
+  }
+
+  streamPublishBrowserFrame({
+    mimeType = "image/png",
+    frameBase64,
+    capturedAtMs
+  }: {
+    mimeType?: string;
+    frameBase64: string;
+    capturedAtMs?: number;
+  }) {
+    this._send({
+      type: "stream_publish_browser_frame",
+      mimeType: String(mimeType || "").trim() || "image/png",
+      frameBase64: String(frameBase64 || "").trim(),
+      capturedAtMs: Math.max(0, Math.round(Number(capturedAtMs) || 0))
+    });
+  }
+
+  streamPublishStop() {
+    this._send({ type: "stream_publish_stop" });
+  }
+
+  streamPublishPause() {
+    this._send({ type: "stream_publish_pause" });
+  }
+
+  streamPublishResume() {
+    this._send({ type: "stream_publish_resume" });
   }
 
   async destroy(): Promise<void> {

@@ -776,6 +776,64 @@ export interface VoiceSessionNativeScreenShareState {
     lastDecodeFailureAt: number;
     lastDecodeFailureReason: string | null;
     ffmpegAvailable: boolean | null;
+    activeStreamKey: string | null;
+    lastRtcServerId: string | null;
+    lastStreamEndpoint: string | null;
+    lastCredentialsReceivedAt: number;
+    lastVoiceSessionId: string | null;
+    transportStatus: string | null;
+    transportReason: string | null;
+    transportUpdatedAt: number;
+    transportConnectedAt: number;
+}
+
+export interface VoiceSessionGoLiveStreamState {
+    /** Whether a Go Live stream is available with full credentials. */
+    active: boolean;
+    /** Stream key (e.g. "guild:123:456:789"). */
+    streamKey: string | null;
+    /** User who is streaming via Go Live. */
+    targetUserId: string | null;
+    /** Guild the stream belongs to. */
+    guildId: string | null;
+    /** Channel the stream is in. */
+    channelId: string | null;
+    /** RTC server ID from STREAM_CREATE. */
+    rtcServerId: string | null;
+    /** Stream media endpoint from STREAM_SERVER_UPDATE. */
+    endpoint: string | null;
+    /** Stream auth token from STREAM_SERVER_UPDATE. */
+    token: string | null;
+    /** When the Go Live stream was discovered. */
+    discoveredAt: number;
+    /** When stream credentials were received. */
+    credentialsReceivedAt: number;
+}
+
+export interface VoiceSessionStreamPublishState {
+    active: boolean;
+    paused: boolean;
+    streamKey: string | null;
+    guildId: string | null;
+    channelId: string | null;
+    rtcServerId: string | null;
+    endpoint: string | null;
+    token: string | null;
+    sourceKind: "music_youtube" | "browser_session" | null;
+    sourceKey: string | null;
+    sourceUrl: string | null;
+    sourceLabel: string | null;
+    discoveredAt: number;
+    credentialsReceivedAt: number;
+    requestedAt: number;
+    startedAt: number;
+    pausedAt: number;
+    stoppedAt: number;
+    lastVoiceSessionId: string | null;
+    transportStatus: string | null;
+    transportReason: string | null;
+    transportUpdatedAt: number;
+    transportConnectedAt: number;
 }
 
 export interface VoiceSessionSoundboardState {
@@ -1064,6 +1122,7 @@ export interface VoiceSession {
     interruptedAssistantReply?: VoiceInterruptedAssistantReply | null;
     pendingRealtimeAssistantUtterances?: VoiceQueuedRealtimeAssistantUtterance[];
     realtimeAssistantUtteranceBackpressureActive?: boolean;
+    lastRealtimeAssistantUtteranceDrainBlockSignature?: string | null;
     pendingFileAsrTurns: TurnProcessorState["pendingFileAsrTurns"];
     fileAsrTurnDrainActive: TurnProcessorState["fileAsrTurnDrainActive"];
     pendingFileAsrTurnsQueue: TurnProcessorState["pendingFileAsrTurnsQueue"];
@@ -1118,6 +1177,8 @@ export interface VoiceSession {
     userCaptures: Map<string, CaptureState>;
     streamWatch: VoiceSessionStreamWatchState;
     nativeScreenShare: VoiceSessionNativeScreenShareState;
+    goLiveStream: VoiceSessionGoLiveStreamState;
+    streamPublish: VoiceSessionStreamPublishState;
     music: VoiceSessionMusicState;
     soundboard: VoiceSessionSoundboardState;
     latencyStages: VoiceLatencyStageEntry[];

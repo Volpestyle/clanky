@@ -268,6 +268,139 @@ test("ClankvoxClient subscribeUserVideo forwards the native video subscription c
   ]);
 });
 
+test("ClankvoxClient forwards stream watch connect and disconnect commands", () => {
+  const client = new ClankvoxClient("guild-1", "channel-1", null);
+  const child = new FakeSubprocess();
+  attachFakeChild(client, child);
+
+  client.streamWatchConnect({
+    endpoint: "wss://stream.discord.media/",
+    token: "stream-token",
+    serverId: "999001",
+    sessionId: "session-123",
+    userId: "user-1",
+    daveChannelId: "999000"
+  });
+  client.streamWatchDisconnect("test_done");
+
+  assert.deepEqual(child.commands, [
+    {
+      type: "stream_watch_connect",
+      endpoint: "wss://stream.discord.media/",
+      token: "stream-token",
+      serverId: "999001",
+      sessionId: "session-123",
+      userId: "user-1",
+      daveChannelId: "999000"
+    },
+    {
+      type: "stream_watch_disconnect",
+      reason: "test_done"
+    }
+  ]);
+});
+
+test("ClankvoxClient forwards stream publish transport and playback commands", () => {
+  const client = new ClankvoxClient("guild-1", "channel-1", null);
+  const child = new FakeSubprocess();
+  attachFakeChild(client, child);
+
+  client.streamPublishConnect({
+    endpoint: "wss://stream.discord.media/",
+    token: "publish-token",
+    serverId: "999001",
+    sessionId: "session-456",
+    userId: "user-1",
+    daveChannelId: "999000"
+  });
+  client.streamPublishPlay("https://youtube.com/watch?v=abc123");
+  client.streamPublishBrowserStart("image/png");
+  client.streamPublishBrowserFrame({
+    mimeType: "image/png",
+    frameBase64: Buffer.from("browser-frame").toString("base64"),
+    capturedAtMs: 1234
+  });
+  client.streamPublishPause();
+  client.streamPublishResume();
+  client.streamPublishStop();
+  client.streamPublishDisconnect("stream_publish_done");
+
+  assert.deepEqual(child.commands, [
+    {
+      type: "stream_publish_connect",
+      endpoint: "wss://stream.discord.media/",
+      token: "publish-token",
+      serverId: "999001",
+      sessionId: "session-456",
+      userId: "user-1",
+      daveChannelId: "999000"
+    },
+    {
+      type: "stream_publish_play",
+      url: "https://youtube.com/watch?v=abc123"
+    },
+    {
+      type: "stream_publish_browser_start",
+      mimeType: "image/png"
+    },
+    {
+      type: "stream_publish_browser_frame",
+      mimeType: "image/png",
+      frameBase64: Buffer.from("browser-frame").toString("base64"),
+      capturedAtMs: 1234
+    },
+    {
+      type: "stream_publish_pause"
+    },
+    {
+      type: "stream_publish_resume"
+    },
+    {
+      type: "stream_publish_stop"
+    },
+    {
+      type: "stream_publish_disconnect",
+      reason: "stream_publish_done"
+    }
+  ]);
+});
+
+test("ClankvoxClient emits parsed transport state events", () => {
+  const client = new ClankvoxClient("guild-1", "channel-1", null);
+  const handleMessage = Reflect.get(client, "_handleMessage").bind(client);
+  const transportStates: unknown[] = [];
+
+  client.on("transportState", (payload) => {
+    transportStates.push(payload);
+  });
+
+  handleMessage({
+    type: "transport_state",
+    role: "stream_watch",
+    status: "failed",
+    reason: "websocket_closed"
+  });
+  handleMessage({
+    type: "transport_state",
+    role: "stream_publish",
+    status: "ready",
+    reason: null
+  });
+
+  assert.deepEqual(transportStates, [
+    {
+      role: "stream_watch",
+      status: "failed",
+      reason: "websocket_closed"
+    },
+    {
+      role: "stream_publish",
+      status: "ready",
+      reason: null
+    }
+  ]);
+});
+
 test("ClankvoxClient emits parsed native video state, frame, and end events", () => {
   const client = new ClankvoxClient("guild-1", "channel-1", null);
   const handleMessage = Reflect.get(client, "_handleMessage").bind(client);

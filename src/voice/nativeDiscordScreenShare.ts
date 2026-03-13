@@ -29,6 +29,15 @@ type NativeDiscordScreenShareSessionLike = {
     lastDecodeFailureAt?: number;
     lastDecodeFailureReason?: string | null;
     ffmpegAvailable?: boolean | null;
+    activeStreamKey?: string | null;
+    lastRtcServerId?: string | null;
+    lastStreamEndpoint?: string | null;
+    lastCredentialsReceivedAt?: number;
+    lastVoiceSessionId?: string | null;
+    transportStatus?: string | null;
+    transportReason?: string | null;
+    transportUpdatedAt?: number;
+    transportConnectedAt?: number;
   } | null;
 };
 
@@ -125,6 +134,30 @@ function normalizeSharersMap(
   );
 }
 
+function streamLooksActive(
+  stream: VoiceSessionNativeScreenShareStreamState | null | undefined
+): boolean {
+  if (!stream) return false;
+  const hasVideoSsrc =
+    Math.max(0, Math.floor(Number(stream.ssrc) || 0)) > 0 ||
+    Math.max(0, Math.floor(Number(stream.rtxSsrc) || 0)) > 0;
+  if (!hasVideoSsrc) return false;
+  return stream.active !== false;
+}
+
+function sharerLooksActive(
+  sharer: VoiceSessionNativeScreenShareSharerState | null | undefined
+): boolean {
+  if (!sharer) return false;
+  if (Array.isArray(sharer.streams) && sharer.streams.length > 0) {
+    return sharer.streams.some((stream) => streamLooksActive(stream));
+  }
+  return (
+    Math.max(0, Math.floor(Number(sharer.videoSsrc) || 0)) > 0 &&
+    Math.max(0, Math.floor(Number(sharer.lastFrameAt) || 0)) > 0
+  );
+}
+
 export function createNativeDiscordScreenShareState(): VoiceSessionNativeScreenShareState {
   return {
     sharers: new Map(),
@@ -134,7 +167,16 @@ export function createNativeDiscordScreenShareState(): VoiceSessionNativeScreenS
     lastDecodeSuccessAt: 0,
     lastDecodeFailureAt: 0,
     lastDecodeFailureReason: null,
-    ffmpegAvailable: null
+    ffmpegAvailable: null,
+    activeStreamKey: null,
+    lastRtcServerId: null,
+    lastStreamEndpoint: null,
+    lastCredentialsReceivedAt: 0,
+    lastVoiceSessionId: null,
+    transportStatus: null,
+    transportReason: null,
+    transportUpdatedAt: 0,
+    transportConnectedAt: 0
   };
 }
 
@@ -157,6 +199,15 @@ export function ensureNativeDiscordScreenShareState(
   state.lastDecodeFailureAt = Number(current?.lastDecodeFailureAt || 0);
   state.lastDecodeFailureReason = String(current?.lastDecodeFailureReason || "").trim() || null;
   state.ffmpegAvailable = typeof current?.ffmpegAvailable === "boolean" ? current.ffmpegAvailable : null;
+  state.activeStreamKey = String(current?.activeStreamKey || "").trim() || null;
+  state.lastRtcServerId = String(current?.lastRtcServerId || "").trim() || null;
+  state.lastStreamEndpoint = String(current?.lastStreamEndpoint || "").trim() || null;
+  state.lastCredentialsReceivedAt = Number(current?.lastCredentialsReceivedAt || 0);
+  state.lastVoiceSessionId = String(current?.lastVoiceSessionId || "").trim() || null;
+  state.transportStatus = String(current?.transportStatus || "").trim() || null;
+  state.transportReason = String(current?.transportReason || "").trim() || null;
+  state.transportUpdatedAt = Number(current?.transportUpdatedAt || 0);
+  state.transportConnectedAt = Number(current?.transportConnectedAt || 0);
   session.nativeScreenShare = state;
   return state;
 }
@@ -208,6 +259,15 @@ export function clearNativeDiscordScreenShareState(session: NativeDiscordScreenS
   state.lastDecodeFailureAt = 0;
   state.lastDecodeFailureReason = null;
   state.ffmpegAvailable = null;
+  state.activeStreamKey = null;
+  state.lastRtcServerId = null;
+  state.lastStreamEndpoint = null;
+  state.lastCredentialsReceivedAt = 0;
+  state.lastVoiceSessionId = null;
+  state.transportStatus = null;
+  state.transportReason = null;
+  state.transportUpdatedAt = 0;
+  state.transportConnectedAt = 0;
 }
 
 export function recordNativeDiscordVideoFrame(
@@ -234,11 +294,13 @@ export function listActiveNativeDiscordScreenSharers(
   session: NativeDiscordScreenShareSessionLike | null | undefined
 ): VoiceSessionNativeScreenShareSharerState[] {
   const state = ensureNativeDiscordScreenShareState(session || null);
-  return [...state.sharers.values()].sort((left, right) => {
-    const leftAt = Number(left.lastFrameAt || left.updatedAt || 0);
-    const rightAt = Number(right.lastFrameAt || right.updatedAt || 0);
-    return rightAt - leftAt;
-  });
+  return [...state.sharers.values()]
+    .filter((entry) => sharerLooksActive(entry))
+    .sort((left, right) => {
+      const leftAt = Number(left.lastFrameAt || left.updatedAt || 0);
+      const rightAt = Number(right.lastFrameAt || right.updatedAt || 0);
+      return rightAt - leftAt;
+    });
 }
 
 export function resolveNativeDiscordScreenWatchTarget({

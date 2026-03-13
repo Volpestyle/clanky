@@ -50,6 +50,8 @@ import {
 import {
   enableWatchStreamForUser,
   getStreamWatchBrainContextForPrompt,
+  handleDiscoveredStreamCredentialsReceived,
+  handleDiscoveredStreamDeleted,
   ingestStreamFrame,
   initializeStreamWatchState,
   isUserInSessionVoiceChannel,
@@ -62,6 +64,16 @@ import {
   supportsStreamWatchCommentary,
   supportsStreamWatchBrainContext
 } from "./voiceStreamWatch.ts";
+import {
+  handleDiscoveredSelfStreamCredentialsReceived,
+  handleDiscoveredSelfStreamDeleted,
+  startMusicStreamPublish,
+  pauseMusicStreamPublish,
+  stopMusicStreamPublish,
+  startBrowserStreamPublish,
+  stopBrowserStreamPublish
+} from "./voiceStreamPublish.ts";
+import { stopBrowserSessionStreamPublish } from "./voiceBrowserStreamPublish.ts";
 import { setVoiceLivePromptSnapshot } from "./voicePromptState.ts";
 import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
 import {
@@ -224,7 +236,9 @@ import {
   executeVoiceMusicPlayTool,
   executeVoiceMusicQueueAddTool,
   executeVoiceMusicQueueNextTool,
-  executeVoiceMusicSearchTool
+  executeVoiceMusicSearchTool,
+  executeVoiceVideoPlayTool,
+  executeVoiceVideoSearchTool
 } from "./voiceToolCallMusic.ts";
 import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
 import { executeLocalVoiceToolCall } from "./voiceToolCallDispatch.ts";
@@ -582,6 +596,7 @@ export class VoiceSessionManager {
   generateVoiceTurn;
   getVoiceScreenWatchCapabilityHook;
   startVoiceScreenWatchHook;
+  streamDiscovery;
   sessions;
   pendingSessionGuildIds;
   joinLocks;
@@ -612,7 +627,8 @@ export class VoiceSessionManager {
     composeOperationalMessage = null,
     generateVoiceTurn = null,
     getVoiceScreenWatchCapability = null,
-    startVoiceScreenWatch = null
+    startVoiceScreenWatch = null,
+    streamDiscovery = null
   }) {
     this.client = client;
     this.store = store;
@@ -629,6 +645,7 @@ export class VoiceSessionManager {
       typeof getVoiceScreenWatchCapability === "function" ? getVoiceScreenWatchCapability : null;
     this.startVoiceScreenWatchHook =
       typeof startVoiceScreenWatch === "function" ? startVoiceScreenWatch : null;
+    this.streamDiscovery = streamDiscovery || null;
     this.sessions = new Map();
     this.pendingSessionGuildIds = new Set();
     this.joinLocks = new Map();
@@ -795,8 +812,11 @@ export class VoiceSessionManager {
     channelId = null,
     requesterUserId = null,
     target = null,
+    targetUserId = null,
     transcript = "",
-    source = "voice_realtime_tool_call"
+    source = "voice_realtime_tool_call",
+    preferredTransport = "native",
+    nativeFailureReason = null
   } = {}) {
     if (typeof this.startVoiceScreenWatchHook !== "function") {
       return {
@@ -811,8 +831,11 @@ export class VoiceSessionManager {
         channelId,
         requesterUserId,
         target,
+        targetUserId,
         transcript,
-        source
+        source,
+        preferredTransport,
+        nativeFailureReason
       })
     ) || {
       started: false,
@@ -1488,6 +1511,91 @@ export class VoiceSessionManager {
       settings,
       reason
     });
+  }
+
+  startMusicStreamPublish({ guildId, source = "music_player_state_playing" }) {
+    return startMusicStreamPublish(this, {
+      guildId,
+      source
+    });
+  }
+
+  startBrowserStreamPublish({
+    guildId,
+    browserSessionId,
+    currentUrl = null,
+    mimeType = "image/png",
+    source = "browser_session_stream_publish"
+  }: {
+    guildId: string;
+    browserSessionId: string;
+    currentUrl?: string | null;
+    mimeType?: string | null;
+    source?: string | null;
+  }) {
+    return startBrowserStreamPublish(this, {
+      guildId,
+      browserSessionId,
+      currentUrl,
+      mimeType,
+      source
+    });
+  }
+
+  pauseMusicStreamPublish({ guildId, reason = "music_paused" }) {
+    return pauseMusicStreamPublish(this, {
+      guildId,
+      reason
+    });
+  }
+
+  stopMusicStreamPublish({ guildId, reason = "music_stopped" }) {
+    return stopMusicStreamPublish(this, {
+      guildId,
+      reason
+    });
+  }
+
+  stopBrowserStreamPublish({
+    guildId,
+    reason = "browser_stream_share_stopped"
+  }: {
+    guildId: string;
+    reason?: string | null;
+  }) {
+    return stopBrowserStreamPublish(this, {
+      guildId,
+      reason
+    });
+  }
+
+  async stopBrowserSessionStreamPublish({
+    guildId,
+    reason = "browser_stream_share_stopped"
+  }: {
+    guildId: string;
+    reason?: string | null;
+  }) {
+    return await stopBrowserSessionStreamPublish(this, {
+      guildId,
+      reason
+    });
+  }
+
+  handleDiscoveredStreamCredentialsReceived({ stream }) {
+    return handleDiscoveredStreamCredentialsReceived(this, { stream });
+  }
+
+  async handleDiscoveredStreamDeleted({ stream, settings = null }) {
+    return await handleDiscoveredStreamDeleted(this, { stream, settings });
+  }
+
+  handleDiscoveredSelfStreamCredentialsReceived({ stream }) {
+    return handleDiscoveredSelfStreamCredentialsReceived(this, { stream });
+  }
+
+  handleDiscoveredSelfStreamDeleted({ stream }) {
+    return handleDiscoveredSelfStreamDeleted(this, { stream });
   }
 
   async requestStreamWatchStatus({ message, settings }) {
@@ -3143,6 +3251,122 @@ export class VoiceSessionManager {
     return this.getPendingRealtimeAssistantUtterances(session).length;
   }
 
+  buildRealtimeAssistantUtteranceBlockerSummary(
+    session,
+    {
+      queueDepth = 0,
+      includeQueuedUtterances = false,
+      backpressureActive = false,
+      bufferedSamples = 0
+    }: {
+      queueDepth?: number | null;
+      includeQueuedUtterances?: boolean;
+      backpressureActive?: boolean;
+      bufferedSamples?: number | null;
+    } = {}
+  ) {
+    const normalizedQueueDepth = Number.isFinite(Number(queueDepth))
+      ? Math.max(0, Math.round(Number(queueDepth)))
+      : 0;
+    const pendingResponse = Boolean(session?.pendingResponse && typeof session.pendingResponse === "object");
+    const activeResponse = Boolean(session && this.replyManager.isRealtimeResponseActive(session));
+    const heldPrePlaybackReply = Boolean(session && this.hasHeldPrePlaybackReply(session));
+    const deferredActiveCapture = Boolean(session && this.hasDeferredTurnBlockingActiveCapture(session));
+    const outputState = session ? this.getOutputChannelState(session) : null;
+    const blockers: string[] = [];
+    if (includeQueuedUtterances && normalizedQueueDepth > 0) {
+      blockers.push("queued_utterances");
+    }
+    if (activeResponse) blockers.push("active_response");
+    if (pendingResponse) blockers.push("pending_response");
+    if (heldPrePlaybackReply) blockers.push("held_preplay_reply");
+    if (deferredActiveCapture) blockers.push("active_capture");
+    if (backpressureActive) blockers.push("tts_backpressure");
+
+    return {
+      blockers,
+      activeResponse,
+      pendingResponse,
+      pendingResponseRequestId: Number(session?.pendingResponse?.requestId || 0) || null,
+      pendingResponseSource: String(session?.pendingResponse?.source || "").trim() || null,
+      heldPrePlaybackReply,
+      deferredActiveCapture,
+      backpressureActive: Boolean(backpressureActive),
+      ttsBufferedSamples: Math.max(0, Number(bufferedSamples || 0)),
+      outputLocked: Boolean(outputState?.locked),
+      outputLockReason: outputState?.lockReason || null,
+      botTurnOpen: Boolean(outputState?.botTurnOpen),
+      bufferedBotSpeech: Boolean(outputState?.bufferedBotSpeech),
+      openAiActiveResponse: Boolean(outputState?.openAiActiveResponse),
+      awaitingToolOutputs: Boolean(outputState?.awaitingToolOutputs),
+      toolCallsRunning: Boolean(outputState?.toolCallsRunning),
+      deferredBlockReason: outputState?.deferredBlockReason || null
+    };
+  }
+
+  maybeLogRealtimeAssistantUtteranceDrainBlocked(
+    session,
+    {
+      reason = "response_done",
+      source = null,
+      queueDepth = 0,
+      backpressureActive = false,
+      bufferedSamples = 0
+    }: {
+      reason?: string;
+      source?: string | null;
+      queueDepth?: number | null;
+      backpressureActive?: boolean;
+      bufferedSamples?: number | null;
+    } = {}
+  ) {
+    if (!session || session.ending || !isRealtimeMode(session.mode)) return false;
+
+    const summary = this.buildRealtimeAssistantUtteranceBlockerSummary(session, {
+      queueDepth,
+      includeQueuedUtterances: false,
+      backpressureActive,
+      bufferedSamples
+    });
+    if (!summary.blockers.length) {
+      session.lastRealtimeAssistantUtteranceDrainBlockSignature = null;
+      return false;
+    }
+
+    const signature = JSON.stringify({
+      reason: String(reason || "response_done"),
+      source: String(source || "").trim() || null,
+      queueDepth: Number.isFinite(Number(queueDepth)) ? Math.max(0, Math.round(Number(queueDepth))) : 0,
+      blockers: summary.blockers,
+      outputLockReason: summary.outputLockReason,
+      deferredBlockReason: summary.deferredBlockReason,
+      pendingResponseRequestId: summary.pendingResponseRequestId,
+      pendingResponseSource: summary.pendingResponseSource,
+      backpressureActive: summary.backpressureActive,
+      ttsBufferedSamples: summary.ttsBufferedSamples
+    });
+    if (session.lastRealtimeAssistantUtteranceDrainBlockSignature === signature) {
+      return true;
+    }
+    session.lastRealtimeAssistantUtteranceDrainBlockSignature = signature;
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.client.user?.id || null,
+      content: "realtime_assistant_utterance_drain_blocked",
+      metadata: {
+        sessionId: session.id,
+        reason: String(reason || "response_done"),
+        source: String(source || "").trim() || null,
+        queueDepth: Number.isFinite(Number(queueDepth)) ? Math.max(0, Math.round(Number(queueDepth))) : 0,
+        ...summary
+      }
+    });
+    return true;
+  }
+
   collapsePendingRealtimeAssistantStreamTail({
     session,
     source = "voice_reply"
@@ -3274,6 +3498,7 @@ export class VoiceSessionManager {
     const clearedCount = queue.length;
     if (!clearedCount) return 0;
     session.pendingRealtimeAssistantUtterances = [];
+    session.lastRealtimeAssistantUtteranceDrainBlockSignature = null;
     this.syncRealtimeAssistantUtteranceBackpressure(session, {
       queueDepth: 0,
       trigger: `queue_cleared:${String(reason || "cleared")}`
@@ -3296,22 +3521,37 @@ export class VoiceSessionManager {
   drainPendingRealtimeAssistantUtterances(session, reason = "response_done") {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
-    if (this.replyManager.isRealtimeResponseActive(session)) return false;
-    if (session.pendingResponse && typeof session.pendingResponse === "object") return false;
-    if (this.hasHeldPrePlaybackReply(session)) return false;
-    if (this.hasDeferredTurnBlockingActiveCapture(session)) return false;
 
     const queue = this.getPendingRealtimeAssistantUtterances(session);
     const next = queue[0];
-    if (!next) return false;
+    if (!next) {
+      session.lastRealtimeAssistantUtteranceDrainBlockSignature = null;
+      return false;
+    }
     const backpressure = this.syncRealtimeAssistantUtteranceBackpressure(session, {
       queueDepth: queue.length,
       source: next.source,
       trigger: reason
     });
-    if (backpressure.active) return false;
+    const blockers = this.buildRealtimeAssistantUtteranceBlockerSummary(session, {
+      queueDepth: queue.length,
+      includeQueuedUtterances: false,
+      backpressureActive: backpressure.active,
+      bufferedSamples: backpressure.bufferedSamples
+    });
+    if (blockers.blockers.length > 0) {
+      this.maybeLogRealtimeAssistantUtteranceDrainBlocked(session, {
+        reason,
+        source: next.source,
+        queueDepth: queue.length,
+        backpressureActive: backpressure.active,
+        bufferedSamples: backpressure.bufferedSamples
+      });
+      return false;
+    }
 
     queue.shift();
+    session.lastRealtimeAssistantUtteranceDrainBlockSignature = null;
 
     const requested = this.sendRealtimePromptUtterance({
       session,
@@ -3325,6 +3565,13 @@ export class VoiceSessionManager {
     });
     if (!requested) {
       queue.unshift(next);
+      this.maybeLogRealtimeAssistantUtteranceDrainBlocked(session, {
+        reason: `${String(reason || "response_done")}:send_failed`,
+        source: next.source,
+        queueDepth: queue.length,
+        backpressureActive: false,
+        bufferedSamples: backpressure.bufferedSamples
+      });
       return false;
     }
 
@@ -3543,6 +3790,12 @@ export class VoiceSessionManager {
       source: queuedUtterance.source,
       trigger: shouldQueueBecauseOutstandingReply ? "request_queued" : "request_immediate"
     });
+    const queueBlockers = this.buildRealtimeAssistantUtteranceBlockerSummary(session, {
+      queueDepth: queue.length,
+      includeQueuedUtterances: true,
+      backpressureActive: backpressure.active,
+      bufferedSamples: backpressure.bufferedSamples
+    });
 
     if (shouldQueueBecauseOutstandingReply || backpressure.active) {
       queue.push(queuedUtterance);
@@ -3555,9 +3808,25 @@ export class VoiceSessionManager {
         metadata: {
           sessionId: session.id,
           source: String(source || "voice_prompt_utterance"),
+          queueDepthBeforeEnqueue: Math.max(0, queue.length - 1),
           queueDepth: queue.length,
+          blockers: queueBlockers.blockers,
+          activeResponse: queueBlockers.activeResponse,
+          pendingResponse: queueBlockers.pendingResponse,
+          pendingResponseRequestId: queueBlockers.pendingResponseRequestId,
+          pendingResponseSource: queueBlockers.pendingResponseSource,
+          heldPrePlaybackReply: queueBlockers.heldPrePlaybackReply,
+          deferredActiveCapture: queueBlockers.deferredActiveCapture,
           backpressureActive: backpressure.active,
-          ttsBufferedSamples: backpressure.bufferedSamples
+          ttsBufferedSamples: backpressure.bufferedSamples,
+          outputLocked: queueBlockers.outputLocked,
+          outputLockReason: queueBlockers.outputLockReason,
+          botTurnOpen: queueBlockers.botTurnOpen,
+          bufferedBotSpeech: queueBlockers.bufferedBotSpeech,
+          openAiActiveResponse: queueBlockers.openAiActiveResponse,
+          awaitingToolOutputs: queueBlockers.awaitingToolOutputs,
+          toolCallsRunning: queueBlockers.toolCallsRunning,
+          deferredBlockReason: queueBlockers.deferredBlockReason
         }
       });
       return true;
@@ -8190,6 +8459,17 @@ export class VoiceSessionManager {
             platform
           }
         }),
+      videoSearch: (query: string, limit: number) =>
+        executeVoiceVideoSearchTool(this, { session, args: { query, max_results: limit } }),
+      videoPlay: (query: string, selectionId?: string | null) =>
+        executeVoiceVideoPlayTool(this, {
+          session,
+          settings,
+          args: {
+            query,
+            selection_id: selectionId
+          }
+        }),
       musicQueueAdd: (args: {
         tracks?: string[];
         query?: string;
@@ -8208,22 +8488,24 @@ export class VoiceSessionManager {
       }) =>
         executeVoiceMusicQueueNextTool(this, { session, settings, args }),
       musicStop: () =>
-        executeLocalVoiceToolCall(this, { session, settings, toolName: "music_stop", args: {} }),
+        executeLocalVoiceToolCall(this, { session, settings, toolName: "media_stop", args: {} }),
       musicPause: () =>
-        executeLocalVoiceToolCall(this, { session, settings, toolName: "music_pause", args: {} }),
+        executeLocalVoiceToolCall(this, { session, settings, toolName: "media_pause", args: {} }),
       musicResume: () =>
-        executeLocalVoiceToolCall(this, { session, settings, toolName: "music_resume", args: {} }),
+        executeLocalVoiceToolCall(this, { session, settings, toolName: "media_resume", args: {} }),
       musicReplyHandoff: (mode: "pause" | "duck" | "none") =>
         executeLocalVoiceToolCall(this, {
           session,
           settings,
-          toolName: "music_reply_handoff",
+          toolName: "media_reply_handoff",
           args: { mode }
         }),
       musicSkip: () =>
-        executeLocalVoiceToolCall(this, { session, settings, toolName: "music_skip", args: {} }),
+        executeLocalVoiceToolCall(this, { session, settings, toolName: "media_skip", args: {} }),
       musicNowPlaying: () =>
-        executeLocalVoiceToolCall(this, { session, settings, toolName: "music_now_playing", args: {} }),
+        executeLocalVoiceToolCall(this, { session, settings, toolName: "media_now_playing", args: {} }),
+      stopVideoShare: () =>
+        executeLocalVoiceToolCall(this, { session, settings, toolName: "stop_video_share", args: {} }),
       playSoundboard: async (refs: string[], transcript: string) => {
         const normalizedRefs = (Array.isArray(refs) ? refs : [])
           .map((entry) => String(entry || "").trim().slice(0, 180))

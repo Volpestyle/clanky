@@ -763,7 +763,7 @@ export class InstructionManager {
     });
     const nativeDiscordSharers = getNativeDiscordScreenSharePromptEntries(
       session,
-      this.host.resolveVoiceSpeakerName
+      (currentSession, userId) => this.host.resolveVoiceSpeakerName(currentSession, userId)
     );
     const participants = this.host.getVoiceChannelParticipants(session);
     const recentMembershipEvents = this.host.getRecentVoiceMembershipEvents(session, {
@@ -1005,16 +1005,20 @@ export class InstructionManager {
           hasMemoryWriteTool ? "- For memory writes, only store concise durable facts and avoid secrets." : null,
           "- For music controls, use music_play to start or replace playback now. It searches internally and may return disambiguation options.",
           "- If music_play returns choices, ask which one they want and then call music_play again with selection_id.",
+          "- For YouTube video playback, use video_play. It resolves YouTube results and uses outbound stream publish when that runtime path is available.",
+          "- If video_play returns choices, ask which one they want and then call video_play again with selection_id.",
           "- Omit selection_id unless you are reusing an exact one already shown in prompt context or a prior tool result. Never invent placeholder or markup tokens.",
           "- Use music_search only for explicit browsing requests or when the user wants options. Ordinary play and queue requests can resolve directly from query text.",
+          "- Use video_search only for explicit video options. If thumbnails, page layout, or browsing the YouTube site would help, browser_browse may fit better.",
           "- For a fresh play request, pass query to music_play. For a followup choice after disambiguation, call music_play with selection_id.",
+          "- For a fresh video request, pass query to video_play. For a followup choice after disambiguation, call video_play with selection_id.",
           "- If Music playback context already shows a selection_id for the exact track you want, reuse that selection_id with music_play and include the matching query text instead of re-searching.",
           "- Use music_queue_next to place a track after the current one and music_queue_add to append. Both can take direct query text or exact prior IDs.",
           "- For requests like \"play X, then queue Y\", call music_play for X first and music_queue_next for Y second in the same tool response.",
           "- Do not claim a track is queued or added until music_queue_next or music_queue_add succeeds.",
-          "- Use music_stop to stop playback.",
-          "- Do not emulate play-now by chaining music_queue_add and music_skip.",
-          "- Do not use music_skip as a substitute for music_stop.",
+          "- Use media_stop to stop playback.",
+          "- Do not emulate play-now by chaining music_queue_add and media_skip.",
+          "- Do not use media_skip as a substitute for media_stop.",
           `- ${MUSIC_ACTIVE_AUTONOMY_POLICY_LINE}`,
           `- ${MUSIC_REPLY_HANDOFF_POLICY_LINE}`,
           "- If a tool fails, explain the failure briefly and continue naturally."

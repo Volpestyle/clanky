@@ -8,25 +8,114 @@ import {
   getResolvedVoiceGenerationBinding,
   getVoiceStreamWatchSettings
 } from "../settings/agentStack.ts";
+import {
+  buildStreamKey,
+  getStreamByUserAndGuild,
+  requestStreamWatch,
+  streamHasCredentials,
+  type GoLiveStream,
+  type StreamDiscoveryState
+} from "../selfbot/streamDiscovery.ts";
 import { isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
+import {
+  ensureNativeDiscordScreenShareState,
+  removeNativeDiscordVideoSharer
+} from "./nativeDiscordScreenShare.ts";
 import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
-import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 
-type StreamWatchManager = Pick<
-  VoiceSessionManager,
-  | "client"
-  | "llm"
-  | "memory"
-  | "resolveVoiceSpeakerName"
-  | "sessions"
-  | "store"
-  | "touchActivity"
-> & {
-  composeOperationalMessage?: VoiceSessionManager["composeOperationalMessage"];
-  deferredActionQueue?: VoiceSessionManager["deferredActionQueue"];
-  getOutputChannelState?: VoiceSessionManager["getOutputChannelState"];
-  runRealtimeBrainReply?: VoiceSessionManager["runRealtimeBrainReply"];
-  activeReplies?: VoiceSessionManager["activeReplies"];
+type StreamWatchSession = {
+  id?: string | null;
+  guildId?: string | null;
+  textChannelId?: string | null;
+  voiceChannelId?: string | null;
+  mode?: string | null;
+  ending?: boolean;
+  settingsSnapshot?: Record<string, unknown> | null;
+  streamWatch?: Record<string, unknown> | null;
+  nativeScreenShare?: Record<string, unknown> | null;
+  voxClient?: {
+    subscribeUserVideo?: (payload: Record<string, unknown>) => void;
+    unsubscribeUserVideo?: (userId: string) => void;
+    streamWatchConnect?: (payload: {
+      endpoint: string;
+      token: string;
+      serverId: string;
+      sessionId: string;
+      userId: string;
+      daveChannelId: string;
+    }) => void;
+    streamWatchDisconnect?: (reason?: string | null) => void;
+    getLastVoiceSessionId?: () => string | null;
+  } | null;
+  botTurnOpen?: boolean;
+  botAudioStream?: { writableLength?: number } | null;
+  inFlightAcceptedBrainTurn?: object | null;
+  pendingFileAsrTurns?: number;
+  realtimeTurnDrainActive?: boolean;
+  pendingRealtimeTurns?: unknown[] | null;
+  realtimeClient?: {
+    appendInputVideoFrame?: (payload: { mimeType: string; dataBase64: string }) => void;
+  } | null;
+  userCaptures?: Map<string, unknown>;
+  pendingResponse?: unknown;
+  lastInboundAudioAt?: number;
+  [key: string]: unknown;
+};
+
+type StreamWatchManager = {
+  client: {
+    user?: { id?: string | null; username?: string | null } | null;
+    guilds: {
+      cache: Map<string, {
+        channels?: {
+          cache?: Map<string, {
+            members?: {
+              has?: (userId: string) => boolean;
+            } | null;
+          }>;
+        } | null;
+        members?: {
+          me?: {
+            voice?: {
+              sessionId?: string | null;
+            } | null;
+          } | null;
+        } | null;
+      }>;
+    };
+  };
+  llm?: {
+    isProviderConfigured?: (provider: string) => boolean;
+    generate?: (payload: Record<string, unknown>) => Promise<{
+      text?: string | null;
+      provider?: string | null;
+      model?: string | null;
+    } | null>;
+  } | null;
+  memory?: {
+    ingestMessage?: (payload: Record<string, unknown>) => Promise<unknown>;
+    rememberDirectiveLineDetailed?: (payload: Record<string, unknown>) => Promise<{
+      ok?: boolean;
+      reason?: string | null;
+    } | null>;
+  } | null;
+  resolveVoiceSpeakerName: (session: StreamWatchSession, userId?: string | null) => string | null;
+  sessions: Map<string, StreamWatchSession>;
+  store: {
+    getSettings: () => Record<string, unknown> | null;
+    logAction: (entry: Record<string, unknown>) => void;
+  };
+  streamDiscovery?: StreamDiscoveryState | null;
+  touchActivity: (guildId: string, resolvedSettings?: Record<string, unknown> | null) => void;
+  composeOperationalMessage?: (payload: Record<string, unknown>) => Promise<string | null>;
+  deferredActionQueue?: {
+    getDeferredQueuedUserTurns?: (session: StreamWatchSession) => unknown[] | null;
+  } | null;
+  getOutputChannelState?: (session: StreamWatchSession) => { locked?: boolean } | null;
+  runRealtimeBrainReply?: (payload: Record<string, unknown>) => Promise<unknown>;
+  activeReplies?: {
+    has?: (scopeKey: string) => boolean;
+  } | null;
 };
 
 const STREAM_WATCH_AUDIO_QUIET_WINDOW_MS = 2200;
@@ -130,6 +219,348 @@ function resolveNativeDiscordVideoSubscriptionSettings(settings = null) {
         .trim()
         .toLowerCase() || null
   };
+}
+
+function getStreamDiscoveryState(manager: StreamWatchManager): StreamDiscoveryState | null {
+  const state = manager.streamDiscovery;
+  if (!state || typeof state !== "object") return null;
+  return state.streams instanceof Map ? state : null;
+}
+
+function deriveStreamWatchDaveChannelId(rtcServerId: string | null | undefined): string | null {
+  const normalizedRtcServerId = String(rtcServerId || "").trim();
+  if (!normalizedRtcServerId) return null;
+  try {
+    const serverId = BigInt(normalizedRtcServerId);
+    if (serverId <= 0n) return null;
+    return String(serverId - 1n);
+  } catch {
+    return null;
+  }
+}
+
+function getCurrentVoiceSessionId(manager: StreamWatchManager, session): string | null {
+  const clientSessionId =
+    session?.voxClient && typeof session.voxClient.getLastVoiceSessionId === "function"
+      ? session.voxClient.getLastVoiceSessionId()
+      : null;
+  const normalizedClientSessionId = String(clientSessionId || "").trim();
+  if (normalizedClientSessionId) return normalizedClientSessionId;
+
+  const guild = manager.client.guilds.cache.get(String(session?.guildId || "").trim()) || null;
+  const gatewayVoiceSessionId = String(guild?.members?.me?.voice?.sessionId || "").trim();
+  return gatewayVoiceSessionId || null;
+}
+
+function updateNativeDiscordStreamTransportState(session, {
+  activeStreamKey,
+  lastRtcServerId,
+  lastStreamEndpoint,
+  lastCredentialsReceivedAt,
+  lastVoiceSessionId,
+  transportStatus,
+  transportReason,
+  transportConnectedAt
+}: {
+  activeStreamKey?: string | null;
+  lastRtcServerId?: string | null;
+  lastStreamEndpoint?: string | null;
+  lastCredentialsReceivedAt?: number;
+  lastVoiceSessionId?: string | null;
+  transportStatus?: string | null;
+  transportReason?: string | null;
+  transportConnectedAt?: number;
+} = {}) {
+  const nativeScreenShare = ensureNativeDiscordScreenShareState(session);
+  const now = Date.now();
+
+  if (activeStreamKey !== undefined) {
+    nativeScreenShare.activeStreamKey = String(activeStreamKey || "").trim() || null;
+  }
+  if (lastRtcServerId !== undefined) {
+    nativeScreenShare.lastRtcServerId = String(lastRtcServerId || "").trim() || null;
+  }
+  if (lastStreamEndpoint !== undefined) {
+    nativeScreenShare.lastStreamEndpoint = String(lastStreamEndpoint || "").trim() || null;
+  }
+  if (lastCredentialsReceivedAt !== undefined) {
+    nativeScreenShare.lastCredentialsReceivedAt = Math.max(0, Math.floor(Number(lastCredentialsReceivedAt) || 0));
+  }
+  if (lastVoiceSessionId !== undefined) {
+    nativeScreenShare.lastVoiceSessionId = String(lastVoiceSessionId || "").trim() || null;
+  }
+  if (transportStatus !== undefined) {
+    nativeScreenShare.transportStatus = String(transportStatus || "").trim() || null;
+    nativeScreenShare.transportUpdatedAt = now;
+  }
+  if (transportReason !== undefined) {
+    nativeScreenShare.transportReason = String(transportReason || "").trim() || null;
+  }
+  if (transportConnectedAt !== undefined) {
+    nativeScreenShare.transportConnectedAt = Math.max(0, Math.floor(Number(transportConnectedAt) || 0));
+  }
+
+  return nativeScreenShare;
+}
+
+function clearNativeDiscordStreamTransportState(session, reason: string | null = null) {
+  return updateNativeDiscordStreamTransportState(session, {
+    activeStreamKey: null,
+    lastRtcServerId: null,
+    lastStreamEndpoint: null,
+    lastCredentialsReceivedAt: 0,
+    lastVoiceSessionId: null,
+    transportStatus: null,
+    transportReason: String(reason || "").trim() || null,
+    transportConnectedAt: 0
+  });
+}
+
+function resolveRequestedStream(session, targetUserId: string, discoveryState: StreamDiscoveryState | null) {
+  const normalizedTargetUserId = String(targetUserId || "").trim();
+  const normalizedGuildId = String(session?.guildId || "").trim();
+  const normalizedVoiceChannelId = String(session?.voiceChannelId || "").trim();
+  const discoveredStream =
+    discoveryState && normalizedGuildId && normalizedTargetUserId
+      ? getStreamByUserAndGuild(discoveryState, normalizedTargetUserId, normalizedGuildId)
+      : null;
+  if (discoveredStream?.streamKey) {
+    return {
+      streamKey: discoveredStream.streamKey,
+      stream: discoveredStream
+    };
+  }
+  if (!normalizedGuildId || !normalizedVoiceChannelId || !normalizedTargetUserId) {
+    return {
+      streamKey: null,
+      stream: null
+    };
+  }
+  return {
+    streamKey: buildStreamKey(normalizedGuildId, normalizedVoiceChannelId, normalizedTargetUserId),
+    stream: null
+  };
+}
+
+function requestNativeDiscordStreamWatch(manager: StreamWatchManager, session, {
+  targetUserId,
+  source = "screen_share_link"
+}: {
+  targetUserId: string;
+  source?: string | null;
+}) {
+  const discoveryState = getStreamDiscoveryState(manager);
+  if (!discoveryState) {
+    return {
+      ok: false,
+      reason: "stream_discovery_unavailable",
+      fallback: "screen_share_link",
+      stream: null as GoLiveStream | null
+    };
+  }
+
+  const requested = resolveRequestedStream(session, targetUserId, discoveryState);
+  if (!requested.streamKey) {
+    return {
+      ok: false,
+      reason: "stream_key_unavailable",
+      fallback: "screen_share_link",
+      stream: null as GoLiveStream | null
+    };
+  }
+
+  const watchRequested = requestStreamWatch(manager.client, discoveryState, requested.streamKey);
+  if (!watchRequested) {
+    return {
+      ok: false,
+      reason: "stream_watch_request_failed",
+      fallback: "screen_share_link",
+      stream: requested.stream
+    };
+  }
+
+  updateNativeDiscordStreamTransportState(session, {
+    activeStreamKey: requested.streamKey,
+    transportStatus: "watch_requested",
+    transportReason: null
+  });
+
+  manager.store.logAction({
+    kind: "voice_runtime",
+    guildId: session.guildId,
+    channelId: session.textChannelId,
+    userId: targetUserId,
+    content: "native_discord_stream_watch_requested",
+    metadata: {
+      sessionId: session.id,
+      source: String(source || "screen_share_link"),
+      streamKey: requested.streamKey,
+      hasDiscoveredStream: Boolean(requested.stream)
+    }
+  });
+
+  return {
+    ok: true,
+    reason: "stream_watch_requested",
+    fallback: null,
+    stream: requested.stream
+  };
+}
+
+function connectNativeDiscordStreamTransport(
+  manager: StreamWatchManager,
+  session,
+  stream: GoLiveStream,
+  {
+    source = "stream_credentials_received"
+  }: {
+    source?: string | null;
+  } = {}
+) {
+  if (!streamHasCredentials(stream)) {
+    updateNativeDiscordStreamTransportState(session, {
+      activeStreamKey: stream.streamKey,
+      transportStatus: "waiting_for_credentials",
+      transportReason: null
+    });
+    return {
+      ok: false,
+      reason: "waiting_for_credentials"
+    };
+  }
+
+  if (!session?.voxClient || typeof session.voxClient.streamWatchConnect !== "function") {
+    updateNativeDiscordStreamTransportState(session, {
+      activeStreamKey: stream.streamKey,
+      lastRtcServerId: stream.rtcServerId,
+      lastStreamEndpoint: stream.endpoint,
+      lastCredentialsReceivedAt: Number(stream.credentialsReceivedAt || 0),
+      transportStatus: "transport_unavailable",
+      transportReason: "stream_watch_connect_missing"
+    });
+    return {
+      ok: false,
+      reason: "stream_watch_transport_unavailable"
+    };
+  }
+
+  const currentVoiceSessionId = getCurrentVoiceSessionId(manager, session);
+  if (!currentVoiceSessionId) {
+    updateNativeDiscordStreamTransportState(session, {
+      activeStreamKey: stream.streamKey,
+      lastRtcServerId: stream.rtcServerId,
+      lastStreamEndpoint: stream.endpoint,
+      lastCredentialsReceivedAt: Number(stream.credentialsReceivedAt || 0),
+      transportStatus: "waiting_for_voice_session",
+      transportReason: null
+    });
+    return {
+      ok: false,
+      reason: "voice_session_id_unavailable"
+    };
+  }
+
+  const daveChannelId = deriveStreamWatchDaveChannelId(stream.rtcServerId);
+  if (!daveChannelId) {
+    updateNativeDiscordStreamTransportState(session, {
+      activeStreamKey: stream.streamKey,
+      lastRtcServerId: stream.rtcServerId,
+      lastStreamEndpoint: stream.endpoint,
+      lastCredentialsReceivedAt: Number(stream.credentialsReceivedAt || 0),
+      lastVoiceSessionId: currentVoiceSessionId,
+      transportStatus: "invalid_dave_channel",
+      transportReason: "rtc_server_id_derivation_failed"
+    });
+    return {
+      ok: false,
+      reason: "dave_channel_id_unavailable"
+    };
+  }
+
+  const nativeScreenShare = ensureNativeDiscordScreenShareState(session);
+  const alreadyCurrent =
+    nativeScreenShare.activeStreamKey === stream.streamKey &&
+    nativeScreenShare.lastRtcServerId === stream.rtcServerId &&
+    nativeScreenShare.lastStreamEndpoint === stream.endpoint &&
+    nativeScreenShare.lastVoiceSessionId === currentVoiceSessionId &&
+    (nativeScreenShare.transportStatus === "connect_requested" ||
+      nativeScreenShare.transportStatus === "connecting" ||
+      nativeScreenShare.transportStatus === "ready");
+  if (alreadyCurrent) {
+    return {
+      ok: true,
+      reason: nativeScreenShare.transportStatus || "already_connected"
+    };
+  }
+
+  session.voxClient.streamWatchConnect({
+    endpoint: String(stream.endpoint || "").trim(),
+    token: String(stream.token || "").trim(),
+    serverId: String(stream.rtcServerId || "").trim(),
+    sessionId: currentVoiceSessionId,
+    userId: String(manager.client.user?.id || "").trim(),
+    daveChannelId
+  });
+
+  updateNativeDiscordStreamTransportState(session, {
+    activeStreamKey: stream.streamKey,
+    lastRtcServerId: stream.rtcServerId,
+    lastStreamEndpoint: stream.endpoint,
+    lastCredentialsReceivedAt: Number(stream.credentialsReceivedAt || Date.now()),
+    lastVoiceSessionId: currentVoiceSessionId,
+    transportStatus: "connect_requested",
+    transportReason: null
+  });
+
+  manager.store.logAction({
+    kind: "voice_runtime",
+    guildId: session.guildId,
+    channelId: session.textChannelId,
+    userId: stream.userId,
+    content: "native_discord_stream_transport_connect_requested",
+    metadata: {
+      sessionId: session.id,
+      source: String(source || "stream_credentials_received"),
+      streamKey: stream.streamKey,
+      rtcServerId: stream.rtcServerId,
+      voiceSessionId: currentVoiceSessionId
+    }
+  });
+
+  return {
+    ok: true,
+    reason: "stream_transport_connect_requested"
+  };
+}
+
+function disconnectNativeDiscordStreamTransport(
+  manager: StreamWatchManager,
+  session,
+  reason: string | null = null
+) {
+  const nativeScreenShare = ensureNativeDiscordScreenShareState(session);
+  const normalizedReason = String(reason || "").trim() || "stream_watch_stopped";
+
+  if (session?.voxClient && typeof session.voxClient.streamWatchDisconnect === "function") {
+    try {
+      session.voxClient.streamWatchDisconnect(normalizedReason);
+    } catch (error) {
+      manager.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: session.streamWatch?.targetUserId || manager.client.user?.id || null,
+        content: `native_discord_stream_transport_disconnect_failed: ${String((error as Error)?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          reason: normalizedReason,
+          streamKey: nativeScreenShare.activeStreamKey || null
+        }
+      });
+    }
+  }
+
+  clearNativeDiscordStreamTransportState(session, normalizedReason);
 }
 
 function clearNativeDiscordSubscriptionState(session, targetUserId = null) {
@@ -439,6 +870,7 @@ export async function requestWatchStream(manager: StreamWatchManager, { message,
 export function initializeStreamWatchState(manager: StreamWatchManager, { session, requesterUserId, targetUserId = null }) {
   if (!session) return;
   session.streamWatch = session.streamWatch || {};
+  clearNativeDiscordStreamTransportState(session);
   session.streamWatch.active = true;
   session.streamWatch.targetUserId = String(targetUserId || requesterUserId || "").trim() || null;
   session.streamWatch.requestedByUserId = String(requesterUserId || "").trim() || null;
@@ -853,6 +1285,7 @@ async function finalizeStreamWatchState(manager: StreamWatchManager, {
   const previousTargetUserId = String(session.streamWatch?.targetUserId || "").trim() || null;
 
   unsubscribeNativeDiscordVideo(manager, session, previousTargetUserId, reason);
+  disconnectNativeDiscordStreamTransport(manager, session, reason);
 
   session.streamWatch.active = false;
   session.streamWatch.targetUserId = null;
@@ -931,11 +1364,53 @@ export async function enableWatchStreamForUser(manager: StreamWatchManager, {
   }
 
   const resolvedTarget = String(targetUserId || normalizedRequesterId).trim() || normalizedRequesterId;
+  if (
+    session.streamWatch?.active &&
+    String(session.streamWatch.targetUserId || "").trim() &&
+    String(session.streamWatch.targetUserId || "").trim() !== resolvedTarget
+  ) {
+    await finalizeStreamWatchState(manager, {
+      session,
+      settings: resolvedSettings,
+      reason: "stream_watch_retargeted",
+      preserveBrainContext: true,
+      persistMemory: true
+    });
+  }
+
   initializeStreamWatchState(manager, {
     session,
     requesterUserId: normalizedRequesterId,
     targetUserId: resolvedTarget
   });
+  const nativeTransportRequest = requestNativeDiscordStreamWatch(manager, session, {
+    targetUserId: resolvedTarget,
+    source
+  });
+  if (!nativeTransportRequest.ok) {
+    return {
+      ok: false,
+      reason: nativeTransportRequest.reason,
+      fallback: nativeTransportRequest.fallback
+    };
+  }
+  if (nativeTransportRequest.stream && streamHasCredentials(nativeTransportRequest.stream)) {
+    const connectResult = connectNativeDiscordStreamTransport(manager, session, nativeTransportRequest.stream, {
+      source
+    });
+    if (!connectResult.ok) {
+      return {
+        ok: false,
+        reason: connectResult.reason,
+        fallback: "screen_share_link"
+      };
+    }
+  } else {
+    updateNativeDiscordStreamTransportState(session, {
+      transportStatus: "waiting_for_credentials",
+      transportReason: null
+    });
+  }
   subscribeNativeDiscordVideo(manager, session, resolvedSettings, resolvedTarget, source);
   manager.store.logAction({
     kind: "voice_runtime",
@@ -946,7 +1421,9 @@ export async function enableWatchStreamForUser(manager: StreamWatchManager, {
     metadata: {
       sessionId: session.id,
       source: String(source || "screen_share_link"),
-      targetUserId: resolvedTarget
+      targetUserId: resolvedTarget,
+      streamKey: ensureNativeDiscordScreenShareState(session).activeStreamKey || null,
+      transportStatus: ensureNativeDiscordScreenShareState(session).transportStatus || null
     }
   });
 
@@ -1063,6 +1540,62 @@ export async function stopWatchStreamForUser(manager: StreamWatchManager, {
   });
 }
 
+export function handleDiscoveredStreamCredentialsReceived(
+  manager: StreamWatchManager,
+  {
+    stream
+  }: {
+    stream: GoLiveStream;
+  }
+) {
+  const normalizedGuildId = String(stream?.guildId || "").trim();
+  const normalizedUserId = String(stream?.userId || "").trim();
+  if (!normalizedGuildId || !normalizedUserId) return false;
+
+  const session = manager.sessions.get(normalizedGuildId);
+  if (!session || session.ending || !session.streamWatch?.active) return false;
+  if (String(session.streamWatch.targetUserId || "").trim() !== normalizedUserId) return false;
+
+  connectNativeDiscordStreamTransport(manager, session, stream, {
+    source: "stream_credentials_received"
+  });
+  return true;
+}
+
+export async function handleDiscoveredStreamDeleted(
+  manager: StreamWatchManager,
+  {
+    stream,
+    settings = null
+  }: {
+    stream: GoLiveStream;
+    settings?: Record<string, unknown> | null;
+  }
+) {
+  const normalizedGuildId = String(stream?.guildId || "").trim();
+  const normalizedUserId = String(stream?.userId || "").trim();
+  if (!normalizedGuildId || !normalizedUserId) return false;
+
+  const session = manager.sessions.get(normalizedGuildId);
+  if (!session || session.ending || !session.streamWatch?.active) return false;
+  if (String(session.streamWatch.targetUserId || "").trim() !== normalizedUserId) return false;
+
+  removeNativeDiscordVideoSharer(session, normalizedUserId);
+  updateNativeDiscordStreamTransportState(session, {
+    activeStreamKey: stream.streamKey,
+    transportStatus: "stream_deleted",
+    transportReason: null
+  });
+
+  await stopWatchStreamForUser(manager, {
+    guildId: normalizedGuildId,
+    targetUserId: normalizedUserId,
+    settings,
+    reason: "native_discord_stream_deleted"
+  });
+  return true;
+}
+
 export async function requestStreamWatchStatus(manager: StreamWatchManager, { message, settings }) {
   const context = await resolveStreamWatchRequestContext(manager, { message, settings });
   if (!context) return false;
@@ -1070,6 +1603,7 @@ export async function requestStreamWatchStatus(manager: StreamWatchManager, { me
   const { guildId, session, requesterId } = context;
 
   const streamWatch = session.streamWatch || {};
+  const nativeScreenShare = ensureNativeDiscordScreenShareState(session);
   const lastFrameAgoSec = Number(streamWatch.lastFrameAt || 0)
     ? Math.max(0, Math.floor((Date.now() - Number(streamWatch.lastFrameAt || 0)) / 1000))
     : null;
@@ -1096,7 +1630,10 @@ export async function requestStreamWatchStatus(manager: StreamWatchManager, { me
       lastFrameAgoSec,
       lastCommentaryAgoSec,
       lastBrainContextAgoSec,
-      ingestedFrameCount: Number(streamWatch.ingestedFrameCount || 0)
+      ingestedFrameCount: Number(streamWatch.ingestedFrameCount || 0),
+      activeStreamKey: nativeScreenShare.activeStreamKey || null,
+      transportStatus: nativeScreenShare.transportStatus || null,
+      transportReason: nativeScreenShare.transportReason || null
     }
   });
   return true;

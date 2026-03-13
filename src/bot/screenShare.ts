@@ -73,15 +73,30 @@ type ScreenWatchMessageLike = {
 };
 
 type ScreenWatchVoiceSessionLike = {
+  id?: string | null;
   ending?: boolean;
   mode?: string | null;
+  textChannelId?: string | null;
   voiceChannelId?: string | null;
   settingsSnapshot?: Record<string, unknown> | null;
+  streamWatch?: {
+    active?: boolean;
+    targetUserId?: string | null;
+  } | null;
   nativeScreenShare?: {
     sharers?: Map<string, {
       userId: string;
       codec?: string | null;
     }>;
+    transportStatus?: string | null;
+    lastDecodeSuccessAt?: number;
+  } | null;
+  goLiveStream?: {
+    active?: boolean;
+    streamKey?: string | null;
+    targetUserId?: string | null;
+    guildId?: string | null;
+    channelId?: string | null;
   } | null;
 } | null;
 
@@ -375,6 +390,56 @@ function resolveRequestedScreenWatchTarget(
   };
 }
 
+function logNativeScreenWatchStartFailed(
+  runtime: ScreenShareRuntime,
+  {
+    guildId,
+    channelId = null,
+    requesterUserId,
+    session = null,
+    source = "screen_watch_request",
+    transcript = "",
+    requestedTargetUserId = null,
+    selectionReason = null,
+    reason = "native_screen_watch_unavailable",
+    fallback = null
+  }: {
+    guildId: string;
+    channelId?: string | null;
+    requesterUserId: string;
+    session?: ScreenWatchVoiceSessionLike;
+    source?: string;
+    transcript?: string;
+    requestedTargetUserId?: string | null;
+    selectionReason?: string | null;
+    reason?: string | null;
+    fallback?: string | null;
+  }
+) {
+  const activeSharers = listActiveNativeDiscordScreenSharers(session);
+  runtime.store.logAction({
+    kind: "voice_runtime",
+    guildId,
+    channelId,
+    userId: requesterUserId,
+    content: "screen_watch_native_start_failed",
+    metadata: {
+      sessionId: String(session?.id || "").trim() || null,
+      source: String(source || "screen_watch_request"),
+      transcript: String(transcript || "").slice(0, 220),
+      requestedTargetUserId: String(requestedTargetUserId || "").trim() || null,
+      selectionReason: String(selectionReason || "").trim() || null,
+      reason: String(reason || "native_screen_watch_unavailable").trim() || "native_screen_watch_unavailable",
+      fallback: String(fallback || "").trim() || null,
+      nativeActiveSharerCount: activeSharers.length,
+      nativeActiveSharerUserIds: activeSharers.map((entry) => entry.userId),
+      nativeDecoderSupported: supportsNativeDiscordVideoDecode(runtime),
+      runtimeMode: String(session?.mode || "").trim() || null,
+      voiceChannelId: String(session?.voiceChannelId || "").trim() || null
+    }
+  });
+}
+
 function getLinkScreenWatchCapability(
   runtime: ScreenShareRuntime,
   {
@@ -532,20 +597,72 @@ function getDirectScreenWatchCapability(
     requesterUserId: normalizedRequesterUserId
   });
   const nativeTargetingAvailable = activeSharers.length > 0;
+  const goLiveAvailable = Boolean(session?.goLiveStream?.active);
+  const available = nativeTargetingAvailable || goLiveAvailable;
 
   return {
     supported: true,
     enabled,
-    available: nativeTargetingAvailable,
-    status: nativeTargetingAvailable ? "ready" : "unavailable",
+    available,
+    status: available ? "ready" : "unavailable",
     reason:
       nativeTargetingAvailable && !targetSelection.targetUserId
         ? "explicit_target_supported"
         : targetSelection.targetUserId
           ? null
-          : targetSelection.reason,
+          : goLiveAvailable
+            ? null
+            : targetSelection.reason,
     activeSharerCount: activeSharers.length,
-    activeSharerUserIds: activeSharers.map((entry) => entry.userId)
+    activeSharerUserIds: activeSharers.map((entry) => entry.userId),
+    goLiveStreamUserId: goLiveAvailable ? (session?.goLiveStream?.targetUserId ?? null) : null
+  };
+}
+
+function getScreenWatchSession(
+  runtime: ScreenShareRuntime,
+  guildId: string
+): NonNullable<ScreenWatchVoiceSessionLike> | null {
+  const voiceManager = runtime.voiceSessionManager;
+  if (!voiceManager || typeof voiceManager.getSession !== "function") return null;
+  return voiceManager.getSession(String(guildId || "").trim()) || null;
+}
+
+function shouldSuppressLinkFallbackDueToNativeWatch(
+  runtime: ScreenShareRuntime,
+  {
+    guildId,
+    targetUserId = null
+  }: {
+    guildId: string;
+    targetUserId?: string | null;
+  }
+) {
+  const session = getScreenWatchSession(runtime, guildId);
+  if (!session || session.ending) return false;
+
+  const activeTargetUserId = String(session.streamWatch?.targetUserId || "").trim() || null;
+  const normalizedTargetUserId = String(targetUserId || "").trim() || null;
+  if (!session.streamWatch?.active || !activeTargetUserId) return false;
+  if (normalizedTargetUserId && activeTargetUserId !== normalizedTargetUserId) return false;
+
+  const transportStatus = String(session.nativeScreenShare?.transportStatus || "").trim().toLowerCase();
+  const hasDecodedFrame = Number(session.nativeScreenShare?.lastDecodeSuccessAt || 0) > 0;
+  const targetHasSharerState = listActiveNativeDiscordScreenSharers(session).some(
+    (entry) => entry.userId === activeTargetUserId
+  );
+
+  return transportStatus === "ready" || hasDecodedFrame || targetHasSharerState;
+}
+
+function buildNativeWatchAlreadyActiveResult(targetUserId: string | null) {
+  return {
+    started: true,
+    appendText: "",
+    transport: "native" as const,
+    linkUrl: null,
+    reason: "native_watch_already_active",
+    targetUserId
   };
 }
 
@@ -554,6 +671,7 @@ async function tryStartNativeScreenWatch(
   {
     settings = null,
     guildId,
+    channelId = null,
     requesterUserId,
     targetUserId = null,
     requesterDisplayName = "",
@@ -562,6 +680,7 @@ async function tryStartNativeScreenWatch(
   }: {
     settings?: Record<string, unknown> | null;
     guildId: string;
+    channelId?: string | null;
     requesterUserId: string;
     targetUserId?: string | null;
     requesterDisplayName?: string;
@@ -577,12 +696,30 @@ async function tryStartNativeScreenWatch(
 }> {
   const voiceManager = runtime.voiceSessionManager;
   if (!voiceManager || typeof voiceManager.enableWatchStreamForUser !== "function") {
+    logNativeScreenWatchStartFailed(runtime, {
+      guildId,
+      channelId,
+      requesterUserId,
+      source,
+      transcript,
+      requestedTargetUserId: targetUserId,
+      reason: "native_screen_watch_unavailable"
+    });
     return {
       started: false,
       reason: "native_screen_watch_unavailable"
     };
   }
   if (!supportsNativeDiscordVideoDecode(runtime)) {
+    logNativeScreenWatchStartFailed(runtime, {
+      guildId,
+      channelId,
+      requesterUserId,
+      source,
+      transcript,
+      requestedTargetUserId: targetUserId,
+      reason: "native_discord_video_decode_unavailable"
+    });
     return {
       started: false,
       reason: "native_discord_video_decode_unavailable"
@@ -594,6 +731,10 @@ async function tryStartNativeScreenWatch(
       ? voiceManager.getSession(String(guildId || "").trim())
       : null;
   const normalizedTargetUserId = String(targetUserId || "").trim() || null;
+  const goLiveTargetUserId =
+    session?.goLiveStream?.active
+      ? String(session.goLiveStream.targetUserId || "").trim() || null
+      : null;
   const targetSelection = normalizedTargetUserId
     ? {
         targetUserId: normalizedTargetUserId,
@@ -604,6 +745,17 @@ async function tryStartNativeScreenWatch(
         requesterUserId
       });
   if (!targetSelection.targetUserId) {
+    logNativeScreenWatchStartFailed(runtime, {
+      guildId,
+      channelId,
+      requesterUserId,
+      session,
+      source,
+      transcript,
+      requestedTargetUserId: normalizedTargetUserId,
+      selectionReason: targetSelection.reason,
+      reason: targetSelection.reason
+    });
     return {
       started: false,
       reason: targetSelection.reason
@@ -611,8 +763,20 @@ async function tryStartNativeScreenWatch(
   }
   if (
     normalizedTargetUserId &&
-    !listActiveNativeDiscordScreenSharers(session).some((entry) => entry.userId === normalizedTargetUserId)
+    !listActiveNativeDiscordScreenSharers(session).some((entry) => entry.userId === normalizedTargetUserId) &&
+    goLiveTargetUserId !== normalizedTargetUserId
   ) {
+    logNativeScreenWatchStartFailed(runtime, {
+      guildId,
+      channelId,
+      requesterUserId,
+      session,
+      source,
+      transcript,
+      requestedTargetUserId: normalizedTargetUserId,
+      selectionReason: targetSelection.reason,
+      reason: "requested_target_not_actively_sharing"
+    });
     return {
       started: false,
       reason: "requested_target_not_actively_sharing",
@@ -628,6 +792,18 @@ async function tryStartNativeScreenWatch(
     source
   });
   if (!result?.ok) {
+    logNativeScreenWatchStartFailed(runtime, {
+      guildId,
+      channelId,
+      requesterUserId,
+      session,
+      source,
+      transcript,
+      requestedTargetUserId: normalizedTargetUserId || targetSelection.targetUserId,
+      selectionReason: targetSelection.reason,
+      reason: String(result?.reason || "native_screen_watch_unavailable"),
+      fallback: String(result?.fallback || "").trim() || null
+    });
     return {
       started: false,
       reason: String(result?.reason || "native_screen_watch_unavailable"),
@@ -715,7 +891,8 @@ async function tryStartLinkFallback(
     explicitRequest = false,
     intentRequested = false,
     confidence = 0,
-    sendToChannelOnResult = false
+    sendToChannelOnResult = false,
+    nativeFailureReason = null
   }: {
     message: ScreenWatchMessageLike;
     settings?: Record<string, unknown> | null;
@@ -730,18 +907,41 @@ async function tryStartLinkFallback(
     intentRequested?: boolean;
     confidence?: number;
     sendToChannelOnResult?: boolean;
+    nativeFailureReason?: string | null;
   }
 ): Promise<{
   started: boolean;
   reused?: boolean;
   appendText: string;
-  transport: "link" | null;
+  transport: "native" | "link" | null;
   linkUrl: string | null;
   expiresInMinutes?: number | null;
   reason: string;
+  targetUserId?: string | null;
 } | null> {
   const manager = runtime.screenShareSessionManager;
   if (!manager || typeof manager.createSession !== "function") return null;
+  const requestedTargetUserId = String(targetUserId || requesterUserId || "").trim() || requesterUserId;
+
+  if (shouldSuppressLinkFallbackDueToNativeWatch(runtime, {
+    guildId,
+    targetUserId: requestedTargetUserId
+  })) {
+    runtime.store.logAction({
+      kind: "voice_runtime",
+      guildId,
+      channelId,
+      userId: requesterUserId,
+      content: "screen_watch_link_fallback_cancelled_native_active",
+      metadata: {
+        source,
+        targetUserId: requestedTargetUserId,
+        nativeFailureReason: String(nativeFailureReason || "").trim() || null,
+        stage: "pre_create"
+      }
+    });
+    return buildNativeWatchAlreadyActiveResult(requestedTargetUserId);
+  }
 
   const resolveChannel =
     runtime.resolveOperationalChannel ||
@@ -762,7 +962,7 @@ async function tryStartLinkFallback(
     channelId,
     requesterUserId,
     requesterDisplayName,
-    targetUserId: String(targetUserId || requesterUserId || "").trim() || requesterUserId,
+    targetUserId: requestedTargetUserId,
     source
   });
 
@@ -829,7 +1029,8 @@ async function tryStartLinkFallback(
         targetUserId: String(created?.targetUserId || targetUserId || requesterUserId || "").trim() || null,
         expiresInMinutes: Number.isFinite(expiresInMinutes) ? expiresInMinutes : null,
         linkHost: safeUrlHost(linkUrl),
-        transport: "link"
+        transport: "link",
+        nativeFailureReason: String(nativeFailureReason || "").trim() || null
       }
     });
     return {
@@ -853,6 +1054,25 @@ async function tryStartLinkFallback(
     confidence,
     source
   });
+  if (shouldSuppressLinkFallbackDueToNativeWatch(runtime, {
+    guildId,
+    targetUserId: requestedTargetUserId
+  })) {
+    runtime.store.logAction({
+      kind: "voice_runtime",
+      guildId,
+      channelId,
+      userId: requesterUserId,
+      content: "screen_watch_link_fallback_cancelled_native_active",
+      metadata: {
+        source,
+        targetUserId: requestedTargetUserId,
+        nativeFailureReason: String(nativeFailureReason || "").trim() || null,
+        stage: "post_compose"
+      }
+    });
+    return buildNativeWatchAlreadyActiveResult(requestedTargetUserId);
+  }
   if (!appendText) {
     return {
       started: false,
@@ -918,7 +1138,8 @@ async function tryStartLinkFallback(
       targetUserId: String(created?.targetUserId || targetUserId || requesterUserId || "").trim() || null,
       expiresInMinutes: Number.isFinite(expiresInMinutes) ? expiresInMinutes : null,
       linkHost: safeUrlHost(linkUrl),
-      transport: "link"
+      transport: "link",
+      nativeFailureReason: String(nativeFailureReason || "").trim() || null
     }
   });
 
@@ -1017,8 +1238,11 @@ export async function startVoiceScreenWatch(
     channelId = null,
     requesterUserId = null,
     target = null,
+    targetUserId = null,
     transcript = "",
     source = "voice_turn_directive",
+    preferredTransport = "native",
+    nativeFailureReason = null,
     signal
   }: {
     settings?: Record<string, unknown> | null;
@@ -1026,8 +1250,11 @@ export async function startVoiceScreenWatch(
     channelId?: string | null;
     requesterUserId?: string | null;
     target?: string | null;
+    targetUserId?: string | null;
     transcript?: string;
     source?: string;
+    preferredTransport?: "native" | "link" | null;
+    nativeFailureReason?: string | null;
     signal?: AbortSignal;
   } = {}
 ): Promise<{
@@ -1061,6 +1288,9 @@ export async function startVoiceScreenWatch(
   }
   const normalizedChannelId = String(channelId || "").trim();
   const normalizedTarget = String(target || "").trim().replace(/\s+/g, " ").slice(0, 120) || null;
+  const normalizedTargetUserId = String(targetUserId || "").trim() || null;
+  const preferredTransportMode =
+    String(preferredTransport || "native").trim().toLowerCase() === "link" ? "link" : "native";
   const guild = runtime.client.guilds.cache.get(normalizedGuildId) || null;
   const requesterDisplayName =
     guild?.members?.cache?.get(normalizedRequesterUserId)?.displayName ||
@@ -1084,15 +1314,16 @@ export async function startVoiceScreenWatch(
     typeof runtime.voiceSessionManager?.getSession === "function"
       ? runtime.voiceSessionManager.getSession(normalizedGuildId)
       : null;
-  const requestedTargetResolution = normalizedTarget
+  const requestedTargetResolution = !normalizedTargetUserId && normalizedTarget
     ? resolveRequestedScreenWatchTarget(runtime, {
         session,
         guildId: normalizedGuildId,
         target: normalizedTarget
       })
     : null;
-  const requestedTargetUserId = String(requestedTargetResolution?.targetUserId || "").trim() || null;
-  if (normalizedTarget && !requestedTargetUserId) {
+  const requestedTargetUserId =
+    normalizedTargetUserId || String(requestedTargetResolution?.targetUserId || "").trim() || null;
+  if (!normalizedTargetUserId && normalizedTarget && !requestedTargetUserId) {
     return {
       started: false,
       reason: String(requestedTargetResolution?.reason || "requested_target_not_in_voice_session"),
@@ -1100,9 +1331,44 @@ export async function startVoiceScreenWatch(
     };
   }
 
+  if (preferredTransportMode === "link") {
+    if (!normalizedChannelId) {
+      return {
+        started: false,
+        reason: "screen_watch_channel_unavailable",
+        targetUserId: requestedTargetUserId
+      };
+    }
+
+    const fallbackStart = await tryStartLinkFallback(runtime, {
+      message: syntheticMessage,
+      settings: resolvedSettings,
+      guildId: normalizedGuildId,
+      channelId: normalizedChannelId,
+      requesterUserId: normalizedRequesterUserId,
+      targetUserId: requestedTargetUserId,
+      requesterDisplayName,
+      transcript,
+      source: eventSource,
+      explicitRequest: true,
+      intentRequested: true,
+      confidence: 1,
+      sendToChannelOnResult: true,
+      nativeFailureReason: String(nativeFailureReason || "").trim() || "native_transport_unhealthy"
+    });
+    if (fallbackStart) return fallbackStart;
+
+    return {
+      started: false,
+      reason: "screen_watch_unavailable",
+      targetUserId: requestedTargetUserId
+    };
+  }
+
   const directStart = await tryStartNativeScreenWatch(runtime, {
     settings: resolvedSettings,
     guildId: normalizedGuildId,
+    channelId: normalizedChannelId,
     requesterUserId: normalizedRequesterUserId,
     targetUserId: requestedTargetUserId,
     requesterDisplayName,
@@ -1135,7 +1401,8 @@ export async function startVoiceScreenWatch(
     explicitRequest: true,
     intentRequested: true,
     confidence: 1,
-    sendToChannelOnResult: true
+    sendToChannelOnResult: true,
+    nativeFailureReason: String(directStart?.reason || "").trim() || null
   });
   if (fallbackStart) return fallbackStart;
 
@@ -1214,6 +1481,7 @@ export async function maybeHandleScreenWatchIntent(
   const directStart = await tryStartNativeScreenWatch(runtime, {
     settings: resolvedSettings,
     guildId: String(message.guildId || ""),
+    channelId: String(message.channelId || ""),
     requesterUserId,
     requesterDisplayName,
     source: String(source || "message_event"),
@@ -1251,7 +1519,8 @@ export async function maybeHandleScreenWatchIntent(
     explicitRequest,
     intentRequested,
     confidence,
-    sendToChannelOnResult: false
+    sendToChannelOnResult: false,
+    nativeFailureReason: String(directStart?.reason || "").trim() || null
   });
   if (fallbackStart) {
     return {
