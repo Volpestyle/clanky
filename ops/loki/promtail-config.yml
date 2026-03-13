@@ -15,7 +15,7 @@ scrape_configs:
           - localhost
         labels:
           job: clanker_runtime
-          app: clanker_conk
+          app: clanky
           __path__: /var/log/clanker/runtime-actions.ndjson
     pipeline_stages:
       - json:

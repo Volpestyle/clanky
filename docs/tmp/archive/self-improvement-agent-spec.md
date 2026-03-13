@@ -7,7 +7,7 @@
 
 ## One-liner
 
-Clanker Conk can observe its own runtime behavior, identify problems, write fixes, and propose changes to its own codebase — as a natural extension of its conversational capabilities.
+Clanky can observe its own runtime behavior, identify problems, write fixes, and propose changes to its own codebase — as a natural extension of its conversational capabilities.
 
 ---
 
@@ -15,7 +15,7 @@ Clanker Conk can observe its own runtime behavior, identify problems, write fixe
 
 Every coding agent (OpenClaw, Devin, Codex, Claude Code) is a tool you point at a repo. You provide the intent, the context, and the judgment. The agent writes code.
 
-Clanker Conk is already running. It already has:
+Clanky is already running. It already has:
 - Structured runtime logs with per-action cost, latency, and error tracking
 - User interaction context (who said what, when, in what channel)
 - Settings and configuration state
@@ -114,7 +114,7 @@ Bot: "I've seen 4 timeouts in the last hour from web_search, all
       [spins up SelfImprovementAgent]
 Bot: "Found it — the retry logic in search.ts isn't handling
       Brave's new 429 rate limit header. I wrote a fix and tests
-      pass. PR is up: github.com/Volpestyle/clanker_conk/pull/47"
+      pass. PR is up: github.com/Volpestyle/clanky/pull/47"
 User: "Nice, ship it"
 Bot: [merges PR]
 ```

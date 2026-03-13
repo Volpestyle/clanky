@@ -10,7 +10,7 @@ function createManager() {
     off() {},
     guilds: { cache: new Map() },
     users: { cache: new Map() },
-    user: { id: "bot-user", username: "clanker conk" }
+    user: { id: "bot-user", username: "clanky" }
   };
   const store = {
     logAction(entry) {
@@ -19,7 +19,7 @@ function createManager() {
     getSettings() {
       return createTestSettings({
         identity: {
-          botName: "clanker conk"
+          botName: "clanky"
         }
       });
     }
@@ -62,7 +62,7 @@ function createRealtimeSession(overrides = {}) {
     userCaptures: new Map(),
     settingsSnapshot: createTestSettings({
       identity: {
-        botName: "clanker conk"
+        botName: "clanky"
       }
     }),
     realtimeClient: {
@@ -84,7 +84,7 @@ test("flushResponseFromBufferedAudio emits response.create for OpenAI native rep
     pendingRealtimeInputBytes: 5_000,
     settingsSnapshot: createTestSettings({
       identity: {
-        botName: "clanker conk"
+        botName: "clanky"
       },
       voice: {
         conversationPolicy: {
@@ -123,7 +123,7 @@ test("flushResponseFromBufferedAudio skips response.create for OpenAI brain repl
     pendingRealtimeInputBytes: 5_000,
     settingsSnapshot: createTestSettings({
       identity: {
-        botName: "clanker conk"
+        botName: "clanky"
       },
       voice: {
         conversationPolicy: {

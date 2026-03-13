@@ -1,14 +1,14 @@
 # Repository Instructions
 
-- Bot name is a customizable setting. Bot is not always named 'clanker conk'.
+- Bot name is a customizable setting. Bot is not always named 'clanky'.
 - This is more a framework for building a discord bot than a specific bot, which is why we have so much **configuration** [docs/voice/voice-provider-abstraction.md](docs/voice/voice-provider-abstraction.md).
 - When making changes, it is essential we think about the code paths of all these possible configurations.
 
 ## Agent Autonomy — Core Design Principle
 
-This bot in this repository (Clanker Conk) is built around a single idea: **the agent sees context like a human would, and decides what to do on its own.**
+This bot in this repository (Clanky) is built around a single idea: **the agent sees context like a human would, and decides what to do on its own.**
 
-We do not hardcode behaviors for the agent. We give it rich context — conversation history, channel events, available tools, memory, participant state — and let the model reason about what to do. The agent should feel like a real person who happens to have access to powerful tools, not a state machine following a script. Think about Clanker Conk as if it was YOU (agent reading this), and guide your product and design decisions based on what YOU would want if you were this autonomous, self-directed, discord 'user'.
+We do not hardcode behaviors for the agent. We give it rich context — conversation history, channel events, available tools, memory, participant state — and let the model reason about what to do. The agent should feel like a real person who happens to have access to powerful tools, not a state machine following a script. Think about Clanky as if it was YOU (agent reading this), and guide your product and design decisions based on what YOU would want if you were this autonomous, self-directed, discord 'user'.
 
 **What this means in practice:**
 
@@ -23,6 +23,9 @@ We do not hardcode behaviors for the agent. We give it rich context — conversa
 **When adding new features, ask:** "Am I telling the agent what to do, or am I giving it the context to decide for itself?" If the answer is the former, reconsider the design.
 
 ## General
+
+- /docs/ is the canonical documentation for this codebase. Refer to when in need of guidance.
+- We always test ios apps on real device, no simulator.
 
 #### Style
 - Include a 'Product language' conclusion in your messages and commit messages when it seems like it makes sense.
@@ -46,7 +49,7 @@ We do not hardcode behaviors for the agent. We give it rich context — conversa
 - Expect parallel in-flight edits from the user or other agents; treat unexpected diffs as active work, and never revert/reset/checkout files you did not explicitly change for the current task. Do not call out unrelated in-flight edits unless they directly interfere with your task.
 - Avoid typecasts to `any` or `unknown`; prefer explicit, concrete types and narrow unions. Use casts only as a last resort with clear justification.
 - Use git commit author `Volpestyle <14805252+Volpestyle@users.noreply.github.com>` for all commits in this repository.
-- Pull inspiration from ../openclaw when designing and coding agentic capabilities for clanker conk.
+- Pull inspiration from ../openclaw when designing and coding agentic capabilities for clanky.
 
 ## Testing Philosophy
 

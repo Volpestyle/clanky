@@ -41,6 +41,7 @@ import { SentenceAccumulator } from "../voice/sentenceAccumulator.ts";
 import {
   normalizeVoiceRuntimeEventContext,
   normalizeVoiceAddressingTargetToken,
+  normalizeInlineText,
   parseSoundboardDirectiveSequence
 } from "../voice/voiceSessionHelpers.ts";
 import {
@@ -685,13 +686,11 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     channelId,
     userId
   });
-  const allowScreenShareToolCall = Boolean(
-    screenShare.available &&
-    typeof runtime.startVoiceScreenWatch === "function" &&
-    guildId &&
-    userId &&
-    (screenShare.nativeAvailable || channelId)
-  );
+  const allowScreenShareToolCall = shouldExposeVoiceScreenWatchTool(screenShare, {
+    canStartScreenWatch: typeof runtime.startVoiceScreenWatch === "function",
+    guildId,
+    userId
+  });
   const activeVoiceSession =
     sessionId && typeof runtime.voiceSessionManager?.getSessionById === "function"
       ? runtime.voiceSessionManager.getSessionById(sessionId)
@@ -1116,6 +1115,34 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       messageId: null
     };
 
+    runtime.store.logAction({
+      kind: "voice_runtime",
+      guildId,
+      channelId,
+      userId,
+      content: "voice_screen_watch_capability",
+      metadata: {
+        sessionId,
+        source: voiceTrace.source,
+        supported: screenShare.supported,
+        enabled: screenShare.enabled,
+        available: screenShare.available,
+        status: screenShare.status,
+        reason: screenShare.reason,
+        nativeSupported: screenShare.nativeSupported,
+        nativeEnabled: screenShare.nativeEnabled,
+        nativeAvailable: screenShare.nativeAvailable,
+        nativeStatus: screenShare.nativeStatus,
+        nativeReason: screenShare.nativeReason,
+        linkSupported: screenShare.linkSupported,
+        linkEnabled: screenShare.linkEnabled,
+        linkFallbackAvailable: screenShare.linkFallbackAvailable,
+        linkStatus: screenShare.linkStatus,
+        linkReason: screenShare.linkReason,
+        toolExposed: allowScreenShareToolCall
+      }
+    });
+
     const codeAgentRuntimeAvailable = typeof runtime.runModelRequestedCodeTask === "function";
     const voiceReplyTools = buildReplyToolSet(settings as Record<string, unknown>, {
       webSearchAvailable: allowWebSearchToolCall && webSearchAvailableNow,
@@ -1495,6 +1522,9 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
             voiceToolContext
           );
         const toolDurationMs = Date.now() - toolStartMs;
+        const toolErrorSummary = result.isError
+          ? summarizeReplyToolError(result.content)
+          : null;
 
         runtime.store.logAction({
           kind: "voice_runtime",
@@ -1513,7 +1543,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
             toolCallIndex: voiceTotalToolCalls,
             durationMs: toolDurationMs,
             imageInputCount: Array.isArray(result.imageInputs) ? result.imageInputs.length : 0,
-            isError: result.isError || false
+            isError: result.isError || false,
+            error: toolErrorSummary
           }
         });
 
@@ -1761,6 +1792,18 @@ function parseReplyToolResultPayload(content: unknown) {
   }
 }
 
+function summarizeReplyToolError(content: unknown) {
+  const payload = parseReplyToolResultPayload(content);
+  const payloadError = payload?.error;
+  if (payloadError && typeof payloadError === "object" && !Array.isArray(payloadError)) {
+    const message = normalizeInlineText((payloadError as Record<string, unknown>).message, 280);
+    if (message) return message;
+  }
+  const errorText = normalizeInlineText(payloadError, 280);
+  if (errorText) return errorText;
+  return normalizeInlineText(content, 280) || null;
+}
+
 function classifyVoiceToolPrePlaybackRecovery(
   toolName: unknown,
   result: {
@@ -1830,7 +1873,17 @@ function resolveVoiceScreenWatchCapability(runtime, { settings, guildId, channel
       available: false,
       status: "disabled",
       publicUrl: "",
-      reason: "screen_watch_capability_unavailable"
+      reason: "screen_watch_capability_unavailable",
+      nativeSupported: false,
+      nativeEnabled: false,
+      nativeAvailable: false,
+      nativeStatus: "disabled",
+      nativeReason: "screen_watch_capability_unavailable",
+      linkSupported: false,
+      linkEnabled: false,
+      linkFallbackAvailable: false,
+      linkStatus: "disabled",
+      linkReason: "share_link_unavailable"
     };
   }
 
@@ -1848,6 +1901,28 @@ function resolveVoiceScreenWatchCapability(runtime, { settings, guildId, channel
     capability?.supported === undefined
       ? rawReason !== "screen_watch_unavailable"
       : Boolean(capability.supported);
+  const nativeStatus = String(capability?.nativeStatus || "disabled").trim().toLowerCase() || "disabled";
+  const nativeEnabled =
+    capability?.nativeEnabled === undefined
+      ? enabled
+      : Boolean(capability.nativeEnabled);
+  const nativeSupported =
+    capability?.nativeSupported === undefined
+      ? supported
+      : Boolean(capability.nativeSupported);
+  const nativeAvailable =
+    capability?.nativeAvailable === undefined
+      ? Boolean(capability?.transport === "native" && available)
+      : Boolean(capability.nativeAvailable);
+  const rawNativeReason = String(capability?.nativeReason || "").trim().toLowerCase();
+  const linkStatus = String(capability?.linkStatus || "disabled").trim().toLowerCase() || "disabled";
+  const linkEnabled = Boolean(capability?.linkEnabled);
+  const linkSupported = Boolean(capability?.linkSupported);
+  const linkFallbackAvailable =
+    capability?.linkFallbackAvailable === undefined
+      ? Boolean(capability?.transport === "link" && available)
+      : Boolean(capability.linkFallbackAvailable);
+  const rawLinkReason = String(capability?.linkReason || "").trim().toLowerCase();
   return {
     supported,
     enabled,
@@ -1855,7 +1930,63 @@ function resolveVoiceScreenWatchCapability(runtime, { settings, guildId, channel
     status,
     publicUrl: String(capability?.publicUrl || "").trim(),
     reason: available ? null : rawReason || status || "unavailable",
-    nativeAvailable: Boolean(capability?.nativeAvailable),
-    linkFallbackAvailable: Boolean(capability?.linkFallbackAvailable)
+    nativeSupported,
+    nativeEnabled,
+    nativeAvailable,
+    nativeStatus,
+    nativeReason: nativeAvailable ? null : rawNativeReason || nativeStatus || "unavailable",
+    linkSupported,
+    linkEnabled,
+    linkFallbackAvailable,
+    linkStatus,
+    linkReason: linkFallbackAvailable ? null : rawLinkReason || linkStatus || "unavailable"
   };
+}
+
+const SCREEN_WATCH_TOOL_HARD_BLOCK_REASONS = new Set([
+  "screen_watch_capability_unavailable",
+  "screen_watch_unavailable",
+  "screen_watch_context_unavailable",
+  "session_not_found",
+  "requester_not_in_same_vc",
+  "stream_watch_provider_unavailable",
+  "native_discord_video_decode_unavailable",
+  "stream_watch_disabled"
+]);
+
+function shouldExposeVoiceScreenWatchTool(
+  screenShare: {
+    supported?: boolean;
+    enabled?: boolean;
+    available?: boolean;
+    nativeSupported?: boolean;
+    nativeEnabled?: boolean;
+    nativeAvailable?: boolean;
+    nativeReason?: string | null;
+    reason?: string | null;
+  },
+  {
+    canStartScreenWatch,
+    guildId,
+    userId
+  }: {
+    canStartScreenWatch: boolean;
+    guildId: string | null | undefined;
+    userId: string | null | undefined;
+  }
+) {
+  if (!canStartScreenWatch || !guildId || !userId) return false;
+  const nativeSupported =
+    screenShare.nativeSupported === undefined
+      ? Boolean(screenShare.supported)
+      : Boolean(screenShare.nativeSupported);
+  const nativeEnabled =
+    screenShare.nativeEnabled === undefined
+      ? Boolean(screenShare.enabled)
+      : Boolean(screenShare.nativeEnabled);
+  if (!nativeSupported || !nativeEnabled) return false;
+  if (screenShare.nativeAvailable) return true;
+  const nativeReason = String(screenShare.nativeReason || screenShare.reason || "").trim().toLowerCase();
+  if (!nativeReason) return true;
+  return !SCREEN_WATCH_TOOL_HARD_BLOCK_REASONS.has(nativeReason);
 }

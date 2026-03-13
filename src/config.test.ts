@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 const CONFIG_ENV_KEYS = [
   "DISCORD_TOKEN",
+  "STREAM_LINK_FALLBACK",
   "DASHBOARD_PORT",
   "DASHBOARD_HOST",
   "DASHBOARD_TOKEN",
@@ -77,6 +78,7 @@ test("config parses explicit env values", async () => {
   await withConfigEnv(
     {
       DISCORD_TOKEN: "token-1",
+      STREAM_LINK_FALLBACK: "off",
       DASHBOARD_PORT: "9191",
       DASHBOARD_HOST: "0.0.0.0",
       DASHBOARD_SETTINGS_SAVE_DEBUG: "true",
@@ -97,6 +99,7 @@ test("config parses explicit env values", async () => {
     async () => {
       const { appConfig, ensureRuntimeEnv } = await importFreshConfig("explicit");
       assert.equal(appConfig.discordToken, "token-1");
+      assert.equal(appConfig.streamLinkFallbackEnabled, false);
       assert.equal(appConfig.dashboardPort, 9191);
       assert.equal(appConfig.dashboardHost, "0.0.0.0");
       assert.equal(appConfig.dashboardSettingsSaveDebug, true);
@@ -151,6 +154,18 @@ test("config falls back youtube key to GOOGLE_API_KEY", async () => {
     async () => {
       const { appConfig } = await importFreshConfig("youtube-key-fallback");
       assert.equal(appConfig.youtubeApiKey, "google-api-key");
+    }
+  );
+});
+
+test("config enables stream link fallback by default", async () => {
+  await withConfigEnv(
+    {
+      DISCORD_TOKEN: "token-default-link-fallback"
+    },
+    async () => {
+      const { appConfig } = await importFreshConfig("stream-link-fallback-default");
+      assert.equal(appConfig.streamLinkFallbackEnabled, true);
     }
   );
 });

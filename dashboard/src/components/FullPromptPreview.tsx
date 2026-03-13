@@ -13,7 +13,7 @@ function ScenarioSection({ title, prompt }) {
 
 export function FullPromptPreview({ form }) {
   const [expanded, setExpanded] = useState(false);
-  const botName = form.botName || "clanker conk";
+  const botName = form.botName || "clanky";
 
   const textGuidance = interpolatePromptTemplate(form.promptTextGuidance, { botName });
   const voiceGuidance = interpolatePromptTemplate(form.promptVoiceGuidance, { botName });

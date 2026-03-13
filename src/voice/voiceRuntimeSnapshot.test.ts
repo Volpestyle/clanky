@@ -87,7 +87,7 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
         },
         {
           role: "assistant",
-          speakerName: "clanker conk",
+          speakerName: "clanky",
           text: "what's up",
           at: now - 1_000
         }

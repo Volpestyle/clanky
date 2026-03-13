@@ -4,7 +4,7 @@ An experimental Discord selfbot that lives in your server as a genuine participa
 
 The core idea: give an LLM brain a growing set of capabilities (voice, browsing, memory, web search, media generation) and let it compose them naturally through conversation. You talk to the selfbot in voice or text and it figures out which tools to chain together to do what you're asking.
 
-This fork is selfbot-first. The canonical control surfaces are natural conversation plus the private dashboard. Some legacy bot-oriented codepaths from `clanker_conk` may still exist in the tree, but they are no longer the architectural center of the repo.
+This fork is selfbot-first. The canonical control surfaces are natural conversation plus the private dashboard. Some legacy bot-oriented codepaths from `clanky` may still exist in the tree, but they are no longer the architectural center of the repo.
 
 Ask it to check your GitHub issues? It can browse the page and summarize them. Ask it what song is playing in a stream it's watching? It can look at the screen, search the web, and queue it up. No rigid workflows, the brain orchestrates.
 
@@ -56,7 +56,7 @@ bun install
 
 ### Required
 
-- `DISCORD_TOKEN` (`clanker_conk_self` currently uses this legacy env name for the selfbot user token)
+- `DISCORD_TOKEN` (`clanky_self` currently uses this legacy env name for the selfbot user token)
 - At least one LLM provider credential: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `CLAUDE_OAUTH_REFRESH_TOKEN`, `OPENAI_OAUTH_REFRESH_TOKEN`, `GOOGLE_API_KEY`, and/or `ELEVENLABS_API_KEY`
 
 ### Optional
@@ -70,6 +70,7 @@ bun install
 | `DASHBOARD_TOKEN` | Private dashboard/admin API auth |
 | `PUBLIC_API_TOKEN` | Public tunnel stream-ingest auth |
 | `PUBLIC_HTTPS_ENABLED` | Enable Cloudflare Quick Tunnel |
+| `STREAM_LINK_FALLBACK` | Keep share-link screen-watch fallback enabled (default `true`) |
 
 For voice features, install `ffmpeg` and `yt-dlp` on the host.
 For optional local code-agent runtimes, ensure `claude` and/or `codex` CLI is on `PATH`.
@@ -113,7 +114,7 @@ In this fork, that means the selfbot runtime plus dashboard together.
 
 ```bash
 bun add --global pm2
-pm2 start "bun run start" --name clanker-conk
+pm2 start "bun run start" --name clanky
 pm2 save && pm2 startup
 ```
 
@@ -126,6 +127,8 @@ PUBLIC_HTTPS_ENABLED=true
 ```
 
 Spawns a Cloudflare Quick Tunnel automatically. Enables remote screen-share ingest and public share links.
+
+If you want native-only Discord Go Live watch with no share-link recovery path, set `STREAM_LINK_FALLBACK=false`.
 
 ### Local Loki Logs (Optional)
 

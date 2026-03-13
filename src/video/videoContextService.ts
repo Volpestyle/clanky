@@ -32,7 +32,7 @@ const YT_DLP_TIMEOUT_MS = 50_000;
 const FFMPEG_TIMEOUT_MS = 45_000;
 const MAX_COMMAND_OUTPUT_BYTES = 8 * 1024 * 1024;
 const VIDEO_USER_AGENT =
-  "clanker-conk/0.2 (+video-context; https://github.com/Volpestyle/clanker_conk)";
+  "clanky/0.2 (+video-context; https://github.com/Volpestyle/clanky)";
 
 type VideoTrace = {
   guildId?: string | null;

@@ -259,7 +259,7 @@ class HarnessStore {
 
   getSettings() {
     return {
-      botName: "clanker conk"
+      botName: "clanky"
     };
   }
 
@@ -578,7 +578,7 @@ function buildHarnessSettings({
 }) {
   return normalizeSettings({
     ...DEFAULT_SETTINGS,
-    botName: "clanker conk",
+    botName: "clanky",
     memory: {
       enabled: false
     },
@@ -770,7 +770,7 @@ function createDecisionRuntime(llm: DecisionLlm) {
       off() {},
       guilds: { cache: new Map() },
       users: { cache: new Map() },
-      user: { id: "bot-user", username: "clanker conk" }
+      user: { id: "bot-user", username: "clanky" }
     },
     store,
     appConfig,
@@ -812,8 +812,8 @@ function createLiveExecutionRuntime({
 
   bot.client.user = {
     id: "bot-user",
-    username: "clanker conk",
-    tag: "clanker conk#0001"
+    username: "clanky",
+    tag: "clanky#0001"
   };
 
   const manager = bot.voiceSessionManager;

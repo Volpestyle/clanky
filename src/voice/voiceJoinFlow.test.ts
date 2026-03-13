@@ -620,7 +620,7 @@ test("requestJoin emits structured self-join runtime context for the bot arrival
     const result = await requestJoin(manager, {
       message: createMessage(),
       settings: baseSettings({
-        botName: "clanker conk",
+        botName: "clanky",
         voice: {
           mode: "openai_realtime",
           replyPath: "brain"
@@ -635,7 +635,7 @@ test("requestJoin emits structured self-join runtime context for the bot arrival
       category: "membership",
       eventType: "join",
       actorUserId: "bot-1",
-      actorDisplayName: "clanker conk",
+      actorDisplayName: "clanky",
       actorRole: "self"
     });
   } finally {

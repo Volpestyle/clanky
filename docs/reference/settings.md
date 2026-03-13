@@ -181,6 +181,7 @@ Rules:
 - explicit overrides are authored in `intent`
 - `effective` is the combination of preset defaults plus authored overrides
 - removing an authored override should return the field to inherited preset behavior
+- when multiple sources can supply the same runtime choice, explicit authored runtime config wins over preset defaults
 
 Important consequence:
 

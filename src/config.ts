@@ -6,6 +6,7 @@ dotenv.config();
 
 export const appConfig = {
   discordToken: process.env.DISCORD_TOKEN ?? "",
+  streamLinkFallbackEnabled: parseBooleanFlag(process.env.STREAM_LINK_FALLBACK, true),
   dashboardPort: parseNumberOrFallback(process.env.DASHBOARD_PORT, 8787),
   dashboardHost: normalizeDashboardHost(process.env.DASHBOARD_HOST),
   dashboardToken: process.env.DASHBOARD_TOKEN ?? "",

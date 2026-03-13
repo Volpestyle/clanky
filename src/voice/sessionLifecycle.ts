@@ -1414,6 +1414,26 @@ export class SessionLifecycle {
             return;
           }
 
+          if (this.host.appConfig?.streamLinkFallbackEnabled === false) {
+            this.host.store.logAction({
+              kind: "voice_runtime",
+              guildId: session.guildId,
+              channelId: recoveryChannelId,
+              userId: recoveryRequesterUserId,
+              content: "native_discord_stream_transport_link_fallback_skipped",
+              metadata: {
+                sessionId: session.id,
+                status: transportStatus,
+                reason: transportReason,
+                recoveryReason,
+                targetUserId: recoveryTargetUserId,
+                requesterUserId: recoveryRequesterUserId,
+                skipReason: "stream_link_fallback_disabled"
+              }
+            });
+            return;
+          }
+
           this.host.store.logAction({
             kind: "voice_runtime",
             guildId: session.guildId,

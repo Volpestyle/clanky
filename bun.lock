@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "clanker_conk",
+      "name": "clanky",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.39.0",
         "discord.js": "^14.18.0",

@@ -31,7 +31,7 @@ function createBot() {
       getSettings() {
         return createTestSettings({
           identity: {
-            botName: "clanker conk"
+            botName: "clanky"
           }
         });
       },
@@ -160,7 +160,7 @@ test("buildReplyPipelineRuntime maps bot fields and preserves runtime delegation
   const { bot, calls } = createBot();
   const settings = createTestSettings({
     identity: {
-      botName: "clanker conk"
+      botName: "clanky"
     },
     permissions: {
       replies: {
@@ -232,7 +232,7 @@ test("buildQueueGatewayRuntime exposes live bot state through getters, setters, 
   const { bot, calls } = createBot();
   const settings = createTestSettings({
     identity: {
-      botName: "clanker conk"
+      botName: "clanky"
     },
     permissions: {
       replies: {

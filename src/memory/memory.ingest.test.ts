@@ -135,7 +135,7 @@ test("voice transcript ingest preserves bot-authored message rows", async () => 
   const ingestPromise = memory.ingestMessage({
     messageId: "voice-guild-1-bot-123456",
     authorId: "bot-1",
-    authorName: "  clanker conk  ",
+    authorName: "  clanky  ",
     content: "  bet say less  ",
     isBot: true,
     settings: {},
@@ -150,7 +150,7 @@ test("voice transcript ingest preserves bot-authored message rows", async () => 
   assert.equal(recorded.length, 1);
   assert.equal(recorded[0]?.messageId, "voice-guild-1-bot-123456");
   assert.equal(recorded[0]?.authorId, "bot-1");
-  assert.equal(recorded[0]?.authorName, "clanker conk");
+  assert.equal(recorded[0]?.authorName, "clanky");
   assert.equal(recorded[0]?.isBot, true);
   assert.equal(recorded[0]?.content, "bet say less");
 
@@ -252,7 +252,7 @@ test("processIngestMessage skips text micro-reflection scheduling for bot-author
   await memory.processIngestMessage({
     messageId: "bot-msg-1",
     authorId: "bot-1",
-    authorName: "clanker conk",
+    authorName: "clanky",
     content: "I already answered that.",
     isBot: true,
     trace: {

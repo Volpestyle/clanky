@@ -82,3 +82,32 @@ test("replaceSettingsWithVersion restores fields that were set back to defaults"
     store.close();
   }
 });
+
+test("rewriteRuntimeSettingsRow migrates legacy voiceRuntime overrides into canonical voice runtime config", () => {
+  const store = new Store(":memory:");
+  store.init();
+
+  try {
+    const legacyIntent = {
+      agentStack: {
+        advancedOverridesEnabled: true,
+        overrides: {
+          voiceRuntime: "voice_agent"
+        }
+      }
+    };
+
+    store.db
+      .prepare("UPDATE settings SET value = ?, updated_at = ? WHERE key = ?")
+      .run(JSON.stringify(legacyIntent), "2026-03-13T00:00:00.000Z", "runtime_settings");
+
+    const rewritten = store.rewriteRuntimeSettingsRow(JSON.stringify(legacyIntent));
+    const record = store.getSettingsRecord();
+
+    assert.equal(rewritten.agentStack.runtimeConfig.voice.runtimeMode, "voice_agent");
+    assert.equal(record.intent.agentStack?.runtimeConfig?.voice?.runtimeMode, "voice_agent");
+    assert.equal(record.intent.agentStack?.overrides?.voiceRuntime, undefined);
+  } finally {
+    store.close();
+  }
+});

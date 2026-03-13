@@ -140,7 +140,7 @@ test("settingsFormModel emits a full replacement snapshot for dashboard saves", 
 test("settingsFormModel converts settings to form defaults and back to normalized patch", () => {
   const form = settingsToForm(withResolved(normalizeSettings({
     identity: {
-      botName: "clanker conk",
+      botName: "clanky",
       botNameAliases: ["clank", "conk", "clank"]
     },
     persona: {
@@ -178,7 +178,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
     }
   })));
 
-  assert.equal(form.botName, "clanker conk");
+  assert.equal(form.botName, "clanky");
   assert.equal(form.botNameAliases, "clank, conk");
   assert.equal(form.personaFlavor, "chaotic but kind");
   assert.equal(form.personaHardLimits, "no hate\nkeep it fun");

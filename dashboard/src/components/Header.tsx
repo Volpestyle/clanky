@@ -92,7 +92,7 @@ export default function Header({
             <StatusDot online={isReady} />
           </div>
           <div className="hero-ident">
-            <span className="hero-tag">CLANKER CONK</span>
+            <span className="hero-tag">CLANKY</span>
             <span className="hero-divider" />
             <span className="hero-label">CONTROL ROOM</span>
           </div>

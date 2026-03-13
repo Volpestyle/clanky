@@ -38,7 +38,7 @@ async function withTempStore(run: (store: Store) => Promise<void>) {
 function applyBaselineSettings(store: Store, channelId: string) {
   store.patchSettings(createTestSettingsPatch({
     identity: {
-      botName: "clanker conk"
+      botName: "clanky"
     },
     interaction: {
       activity: {
@@ -259,8 +259,8 @@ test("maybeReplyToMessagePipeline treats an aborted in-flight reply as handled a
     bot.activeReplies = activeReplies;
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const guild = buildGuild();
@@ -357,8 +357,8 @@ test("maybeReplyToMessagePipeline recovers unstructured model output as prose re
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const guild = buildGuild();

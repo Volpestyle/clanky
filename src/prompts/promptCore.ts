@@ -2,7 +2,7 @@ import { normalizeBoundedStringList } from "../settings/listNormalization.ts";
 import { getBotName, getPersonaSettings, getPromptingSettings } from "../settings/agentStack.ts";
 import { clamp } from "../utils.ts";
 
-const DEFAULT_BOT_NAME = "clanker conk";
+const DEFAULT_BOT_NAME = "clanky";
 const PROMPT_TEMPLATE_TOKEN_RE = /\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g;
 const DEFAULT_PROMPT_STYLE = "playful slang, open, honest, exploratory";
 export const DEFAULT_PROMPT_TEXT_GUIDANCE = [

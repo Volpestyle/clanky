@@ -55,7 +55,7 @@ test("searchConversationWindows returns a matched conversation window with surro
       messageId: "m2",
       createdAt: baseTime + 1000,
       authorId: "bot-1",
-      authorName: "clanker conk",
+      authorName: "clanky",
       isBot: true,
       content: "NVDA was around 181 earlier."
     });

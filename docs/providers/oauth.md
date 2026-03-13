@@ -1,6 +1,6 @@
 # OAuth Providers
 
-Two OAuth-backed auth lanes let clanker conk use subscription-backed providers instead of standard API keys for its general-purpose orchestrator and voice paths.
+Two OAuth-backed auth lanes let clanky use subscription-backed providers instead of standard API keys for its general-purpose orchestrator and voice paths.
 
 | Provider | Upstream | Auth Target | Token Storage | Transport |
 |---|---|---|---|---|
@@ -166,7 +166,7 @@ The custom fetch wrapper rewrites OpenAI Responses API requests onto a ChatGPT b
 - `/v1/responses` -> `https://chatgpt.com/backend-api/codex/responses`
 - `Authorization: Bearer <access_token>`
 - `ChatGPT-Account-Id: <account_id>`
-- `originator: clanker_conk`
+- `originator: clanky`
 
 ### Setup
 

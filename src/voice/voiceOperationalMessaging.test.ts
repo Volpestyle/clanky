@@ -9,7 +9,7 @@ function createManager({ composeOperationalMessage = null } = {}) {
     store: {
       getSettings() {
         return {
-          botName: "clanker conk"
+          botName: "clanky"
         };
       },
       logAction() {}

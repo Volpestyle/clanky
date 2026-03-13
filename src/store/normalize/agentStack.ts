@@ -115,9 +115,6 @@ export function normalizeAgentStackSection(
   const browserRuntime = normalizeOptionalString(rawOverrides.browserRuntime, 64);
   if (browserRuntime) overrides.browserRuntime = browserRuntime;
 
-  const voiceRuntime = normalizeOptionalString(rawOverrides.voiceRuntime, 64);
-  if (voiceRuntime) overrides.voiceRuntime = voiceRuntime;
-
   if (rawDevTeamOverride) {
     const rawRoleOverrides = isRecord(rawDevTeamOverride.roles) ? rawDevTeamOverride.roles : {};
     const normalizedRoles = {

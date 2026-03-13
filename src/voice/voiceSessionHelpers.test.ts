@@ -151,6 +151,19 @@ test("ElevenLabs realtime mode resolves to elevenlabs provider and label", () =>
   assert.equal(getRealtimeRuntimeLabel("elevenlabs_realtime"), "elevenlabs_realtime");
 });
 
+test("explicit voice runtime config beats preset defaults", () => {
+  assert.equal(resolveVoiceRuntimeMode(createTestSettings({
+    agentStack: {
+      preset: "openai_native_realtime",
+      runtimeConfig: {
+        voice: {
+          runtimeMode: "voice_agent"
+        }
+      }
+    }
+  })), "voice_agent");
+});
+
 test("transcriptSourceFromEventType classifies Gemini transcription events", () => {
   assert.equal(transcriptSourceFromEventType("input_audio_transcription"), "input");
   assert.equal(transcriptSourceFromEventType("output_audio_transcription"), "output");
@@ -255,11 +268,11 @@ test("parseResponseDoneUsage extracts realtime token totals and detail counts", 
 test("isVoiceTurnAddressedToBot matches exact bot-name phrase and primary wake token", () => {
   const settings = createTestSettings({
     identity: {
-      botName: "clanker conk"
+      botName: "clanky"
     }
   });
   const cases = [
-    { text: "yo clanker conk can you answer this?", expected: true },
+    { text: "yo clanky can you answer this?", expected: true },
     { text: "clankerconk can you answer this?", expected: true },
     { text: "yo clanker can you answer this?", expected: true },
     { text: "link, can you answer this?", expected: true },
@@ -291,28 +304,28 @@ test("isBotNameAddressed normalizes punctuation and accents for exact matching",
   assert.equal(
     isBotNameAddressed({
       transcript: "clánker!!!",
-      botName: "clanker conk"
+      botName: "clanky"
     }),
     true
   );
   assert.equal(
     isBotNameAddressed({
       transcript: "clanker's still here",
-      botName: "clanker conk"
+      botName: "clanky"
     }),
     true
   );
   assert.equal(
     isBotNameAddressed({
       transcript: "clankerconk can you help me with this?",
-      botName: "clanker conk"
+      botName: "clanky"
     }),
     true
   );
   assert.equal(
     isBotNameAddressed({
       transcript: "clunker can you help me with this?",
-      botName: "clanker conk"
+      botName: "clanky"
     }),
     false
   );

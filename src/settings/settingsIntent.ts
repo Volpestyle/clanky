@@ -13,6 +13,38 @@ function cloneIntentCandidate(value: unknown): JsonRecord {
   return deepMerge({}, value) as JsonRecord;
 }
 
+function canonicalizeLegacyIntent(candidate: JsonRecord): JsonRecord {
+  const next = cloneIntentCandidate(candidate);
+  const agentStack = isRecordLike(next.agentStack) ? { ...next.agentStack } : null;
+  if (!agentStack) return next;
+
+  const overrides = isRecordLike(agentStack.overrides) ? { ...agentStack.overrides } : null;
+  const runtimeConfig = isRecordLike(agentStack.runtimeConfig) ? { ...agentStack.runtimeConfig } : {};
+  const voiceRuntime = overrides && typeof overrides.voiceRuntime === "string"
+    ? String(overrides.voiceRuntime).trim()
+    : "";
+  const voice = isRecordLike(runtimeConfig.voice) ? { ...runtimeConfig.voice } : {};
+  const hasExplicitRuntimeMode = Object.prototype.hasOwnProperty.call(voice, "runtimeMode");
+
+  if (voiceRuntime && !hasExplicitRuntimeMode) {
+    voice.runtimeMode = voiceRuntime;
+    runtimeConfig.voice = voice;
+    agentStack.runtimeConfig = runtimeConfig;
+  }
+
+  if (overrides && Object.prototype.hasOwnProperty.call(overrides, "voiceRuntime")) {
+    delete overrides.voiceRuntime;
+    if (Object.keys(overrides).length > 0) {
+      agentStack.overrides = overrides;
+    } else {
+      delete agentStack.overrides;
+    }
+  }
+
+  next.agentStack = agentStack;
+  return next;
+}
+
 function getCandidateValue(root: JsonRecord, path: string[]) {
   let current: unknown = root;
   for (const segment of path) {
@@ -95,7 +127,7 @@ export function minimizeSettingsIntent(value: unknown): SettingsInput {
     isRecordLike(value) && isRecordLike(value.intent)
       ? value.intent
       : value;
-  const candidate = cloneIntentCandidate(source);
+  const candidate = canonicalizeLegacyIntent(cloneIntentCandidate(source));
   const targetJson = normalizeIntentTargetJson(candidate);
   return pruneIntentAtPath(candidate, [], targetJson) as SettingsInput;
 }

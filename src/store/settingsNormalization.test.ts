@@ -684,6 +684,23 @@ test("normalizeSettings keeps elevenlabs voice runtime settings under canonical 
   assert.equal(normalized.agentStack.runtimeConfig.voice.elevenLabsRealtime.outputSampleRateHz, 8000);
 });
 
+test("normalizeSettings makes canonical voice runtime config override preset defaults", () => {
+  const normalized = normalizeSettings({
+    agentStack: {
+      preset: "openai_native_realtime",
+      advancedOverridesEnabled: true,
+      runtimeConfig: {
+        voice: {
+          runtimeMode: "voice_agent"
+        }
+      }
+    }
+  });
+
+  assert.equal(resolveAgentStack(normalized).voiceRuntime, "voice_agent");
+  assert.equal(normalized.agentStack.runtimeConfig.voice.runtimeMode, "voice_agent");
+});
+
 test("normalizeSettings uses provider-specific memory model fallbacks", () => {
   const normalized = normalizeSettings({
     memoryLlm: {

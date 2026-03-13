@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { ClankerBot } from "../bot.ts";
+import { buildStreamKey, createGoLiveStreamState } from "../selfbot/streamDiscovery.ts";
 import { Store } from "../store/store.ts";
 import { createTestSettingsPatch } from "../testSettings.ts";
 
@@ -147,8 +148,8 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
 
     bot.client.user = {
       id: botUserId,
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const guild = {
@@ -211,11 +212,11 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
       channel,
       author: {
         id: botUserId,
-        username: "clanker conk",
+        username: "clanky",
         bot: true
       },
       member: {
-        displayName: "clanker conk"
+        displayName: "clanky"
       },
       content: "bet",
       reference: {
@@ -245,7 +246,7 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
       guildId,
       channelId,
       authorId: botUserId,
-      authorName: "clanker conk",
+      authorName: "clanky",
       isBot: true,
       content: "bet",
       referencedMessageId: incomingMessageId
@@ -266,7 +267,7 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
       member: {
         displayName: "alice"
       },
-      content: "clanker conk, weigh in on this",
+      content: "clanky, weigh in on this",
       mentions: {
         users: {
           has(userId) {
@@ -330,7 +331,7 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
       await waitForCondition(() => {
         const rows = store.getRecentMessages(channelId, 20);
         const reactionRow = rows.find((item) => String(item.message_id).startsWith("reaction:"));
-        return Boolean(reactionRow?.content?.includes("alice reacted with 🔥 to clanker conk's message"));
+        return Boolean(reactionRow?.content?.includes("alice reacted with 🔥 to clanky's message"));
       });
 
       bot.client.emit("messageCreate", incomingMessage);
@@ -343,7 +344,7 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
       assert.equal(botIngest?.authorId, botUserId);
       assert.equal(botIngest?.isBot, true);
       assert.equal(botIngest?.trace?.source, "text_reply_memory_ingest");
-      assert.match(String(llmCalls[0]?.userPrompt || ""), /alice reacted with 🔥 to clanker conk's message: "bet"/);
+      assert.match(String(llmCalls[0]?.userPrompt || ""), /alice reacted with 🔥 to clanky's message: "bet"/);
       assert.equal(reactionCalls.length, 1);
       assert.equal(reactionCalls[0], "🔥");
       assert.equal(replyPayloads.length + channelSendPayloads.length, 1);
@@ -358,3 +359,213 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
     }
   });
 }, 15_000);
+
+test("stream discovery seeds session Go Live target before credentials arrive", async () => {
+  await withTempStore(async (store) => {
+    const guildId = "guild-1";
+    const voiceChannelId = "voice-1";
+    const targetUserId = "user-1";
+    const streamKey = `guild:${guildId}:${voiceChannelId}:${targetUserId}`;
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: null,
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanky",
+      tag: "clanky#0001"
+    };
+
+    const session = {
+      id: "session-1",
+      guildId,
+      textChannelId: "text-1",
+      voiceChannelId,
+      mode: "openai_realtime",
+      ending: false,
+      goLiveStream: createGoLiveStreamState()
+    };
+    bot.voiceSessionManager.sessions.set(guildId, session as never);
+
+    try {
+      bot.client.emit("clientReady", bot.client);
+      bot.client.emit("raw", {
+        t: "STREAM_CREATE",
+        d: {
+          stream_key: streamKey,
+          rtc_server_id: "rtc-1",
+          region: "us-east"
+        }
+      });
+
+      await waitForCondition(() => session.goLiveStream.targetUserId === targetUserId);
+
+      assert.equal(session.goLiveStream.active, false);
+      assert.equal(session.goLiveStream.targetUserId, targetUserId);
+      assert.equal(session.goLiveStream.streamKey, streamKey);
+      assert.equal(session.goLiveStream.channelId, voiceChannelId);
+      assert.equal(session.goLiveStream.guildId, guildId);
+      assert.equal(session.goLiveStream.rtcServerId, "rtc-1");
+    } finally {
+      await bot.stop();
+    }
+  });
+});
+
+test("stream discovery seeds provisional session Go Live target from self_stream before stream creation arrives", async () => {
+  await withTempStore(async (store) => {
+    const guildId = "guild-1";
+    const voiceChannelId = "voice-1";
+    const targetUserId = "user-1";
+    const streamKey = buildStreamKey(guildId, voiceChannelId, targetUserId);
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: null,
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanky",
+      tag: "clanky#0001"
+    };
+
+    const session = {
+      id: "session-1",
+      guildId,
+      textChannelId: "text-1",
+      voiceChannelId,
+      mode: "openai_realtime",
+      ending: false,
+      goLiveStream: createGoLiveStreamState()
+    };
+    bot.voiceSessionManager.sessions.set(guildId, session as never);
+
+    try {
+      bot.client.emit("clientReady", bot.client);
+      bot.client.emit("raw", {
+        t: "VOICE_STATE_UPDATE",
+        d: {
+          user_id: targetUserId,
+          guild_id: guildId,
+          channel_id: voiceChannelId,
+          self_stream: true
+        }
+      });
+
+      await waitForCondition(() => session.goLiveStream.targetUserId === targetUserId);
+
+      assert.equal(session.goLiveStream.active, false);
+      assert.equal(session.goLiveStream.targetUserId, targetUserId);
+      assert.equal(session.goLiveStream.streamKey, streamKey);
+      assert.equal(session.goLiveStream.channelId, voiceChannelId);
+      assert.equal(session.goLiveStream.guildId, guildId);
+      assert.equal(session.goLiveStream.rtcServerId, null);
+
+      await waitForCondition(() => store.getRecentActions(20, { kinds: ["stream_discovery"] }).some((entry) =>
+        String(entry.content || "").includes("stream_discovery_go_live_bootstrap_seeded")
+      ));
+
+      const seededLog = store.getRecentActions(20, { kinds: ["stream_discovery"] }).find((entry) =>
+        String(entry.content || "").includes("stream_discovery_go_live_bootstrap_seeded")
+      );
+      assert.equal(seededLog?.metadata?.streamKey, streamKey);
+    } finally {
+      await bot.stop();
+    }
+  });
+});
+
+test("stream discovery clears provisional Go Live target when self_stream ends before credentials arrive", async () => {
+  await withTempStore(async (store) => {
+    const guildId = "guild-1";
+    const voiceChannelId = "voice-1";
+    const targetUserId = "user-1";
+    const streamKey = buildStreamKey(guildId, voiceChannelId, targetUserId);
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: null,
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanky",
+      tag: "clanky#0001"
+    };
+
+    const session = {
+      id: "session-1",
+      guildId,
+      textChannelId: "text-1",
+      voiceChannelId,
+      mode: "openai_realtime",
+      ending: false,
+      goLiveStream: createGoLiveStreamState()
+    };
+    bot.voiceSessionManager.sessions.set(guildId, session as never);
+
+    try {
+      bot.client.emit("clientReady", bot.client);
+      bot.client.emit("raw", {
+        t: "VOICE_STATE_UPDATE",
+        d: {
+          user_id: targetUserId,
+          guild_id: guildId,
+          channel_id: voiceChannelId,
+          self_stream: true
+        }
+      });
+      await waitForCondition(() => session.goLiveStream.targetUserId === targetUserId);
+
+      bot.client.emit("raw", {
+        t: "VOICE_STATE_UPDATE",
+        d: {
+          user_id: targetUserId,
+          guild_id: guildId,
+          channel_id: voiceChannelId,
+          self_stream: false
+        }
+      });
+
+      await waitForCondition(() => session.goLiveStream.targetUserId === null);
+
+      assert.equal(session.goLiveStream.active, false);
+      assert.equal(session.goLiveStream.streamKey, null);
+      assert.equal(session.goLiveStream.guildId, null);
+      assert.equal(session.goLiveStream.channelId, null);
+
+      await waitForCondition(() => store.getRecentActions(20, { kinds: ["stream_discovery"] }).some((entry) =>
+        String(entry.content || "").includes("stream_discovery_go_live_bootstrap_cleared")
+      ));
+
+      const clearedLog = store.getRecentActions(20, { kinds: ["stream_discovery"] }).find((entry) =>
+        String(entry.content || "").includes("stream_discovery_go_live_bootstrap_cleared")
+      );
+      assert.equal(clearedLog?.metadata?.streamKey, streamKey);
+      assert.equal(clearedLog?.metadata?.reason, "voice_state_self_stream_false");
+    } finally {
+      await bot.stop();
+    }
+  });
+});

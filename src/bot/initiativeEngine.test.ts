@@ -132,7 +132,7 @@ test("maybeRunInitiativeCycle starts the min-gap cooldown after an initiative sk
       client: {
         user: {
           id: botUserId,
-          username: "clanker conk"
+          username: "clanky"
         },
         guilds: {
           cache: new Map()
@@ -377,7 +377,7 @@ test("maybeRunInitiativeCycle revisits a pending thought even during fresh-thoug
       client: {
         user: {
           id: botUserId,
-          username: "clanker conk"
+          username: "clanky"
         },
         guilds: {
           cache: new Map()
@@ -653,7 +653,7 @@ test("maybeRunInitiativeCycle can post a fresh thought in another guild while a 
       client: {
         user: {
           id: botUserId,
-          username: "clanker conk"
+          username: "clanky"
         },
         guilds: {
           cache: new Map()
@@ -881,7 +881,7 @@ test("maybeRunInitiativeCycle preserves a pending thought on structured contract
       client: {
         user: {
           id: botUserId,
-          username: "clanker conk"
+          username: "clanky"
         },
         guilds: {
           cache: new Map()

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * One-time script to obtain Claude OAuth tokens for clanker conk.
+ * One-time script to obtain Claude OAuth tokens for clanky.
  * Run: bun scripts/claude-oauth-login.ts
  *
  * 1. Opens the authorize URL in your browser

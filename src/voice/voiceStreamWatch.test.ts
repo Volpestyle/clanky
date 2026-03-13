@@ -15,7 +15,7 @@ import { createStreamDiscoveryState } from "../selfbot/streamDiscovery.ts";
 
 function createSettings(overrides = {}) {
   const defaults = {
-    botName: "clanker conk",
+    botName: "clanky",
     llm: {
       provider: "openai",
       model: "claude-haiku-4-5"

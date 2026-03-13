@@ -114,7 +114,7 @@ export type SettingsExecutionPolicy =
 
 export const DEFAULT_SETTINGS = {
   identity: {
-    botName: "clanker conk",
+    botName: "clanky",
     botNameAliases: [
       "blankie",
       "clank",
@@ -621,7 +621,6 @@ type SettingsAgentStack = Omit<SettingsFromDefaults["agentStack"], "overrides" |
     harness?: string;
     researchRuntime?: string;
     browserRuntime?: string;
-    voiceRuntime?: string;
     voiceAdmissionClassifier?: SettingsExecutionPolicy;
     voiceInterruptClassifier?: SettingsExecutionPolicy;
     devTeam?: {

@@ -14,14 +14,14 @@ export function createVoiceTestManager({
     off() {},
     guilds: { cache: new Map() },
     users: { cache: new Map() },
-    user: { id: "bot-user", username: "clanker conk" }
+    user: { id: "bot-user", username: "clanky" }
   };
   const fakeStore = {
     logAction() {},
     getSettings() {
       return createVoiceTestSettings({
         identity: {
-          botName: "clanker conk",
+          botName: "clanky",
           botNameAliases: ["clankerconk"]
         },
         voice: {
@@ -63,7 +63,7 @@ export function createVoiceTestManager({
 export function createVoiceTestSettings(overrides: VoiceTestSettingsOverrides = {}) {
   const base: VoiceTestSettingsOverrides = {
     identity: {
-      botName: "clanker conk",
+      botName: "clanky",
       botNameAliases: ["clankerconk"]
     },
     memory: {

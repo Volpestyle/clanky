@@ -798,7 +798,7 @@ const floodingScenario: ReplayScenarioDefinition<
     stats.userTurns += 1;
     const addressSignal = buildAddressSignal({
       botUserId,
-      botName: String(runtimeSettings.botName || "clanker conk"),
+      botName: String(runtimeSettings.botName || "clanky"),
       message,
       recentById: historyByMessageId
     });

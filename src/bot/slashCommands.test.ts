@@ -11,7 +11,7 @@ function createBot() {
       getSettings() {
         return createTestSettings({
           identity: {
-            botName: "clanker conk"
+            botName: "clanky"
           }
         });
       },
@@ -172,7 +172,7 @@ test("handleMessage ignores slash command invocation messages so they do not tri
       getSettings() {
         return createTestSettings({
           identity: {
-            botName: "clanker conk"
+            botName: "clanky"
           }
         });
       },
@@ -205,8 +205,8 @@ test("handleMessage ignores slash command invocation messages so they do not tri
   });
   bot.client.user = {
     id: "bot-1",
-    username: "clanker conk",
-    tag: "clanker conk#0001"
+    username: "clanky",
+    tag: "clanky#0001"
   };
   bot.enqueueReplyJob = (payload: Record<string, unknown>) => {
     queuedReplies.push(payload);

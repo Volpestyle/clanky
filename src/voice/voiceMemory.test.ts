@@ -14,7 +14,7 @@ function createManager({ memory = null }: { memory?: unknown } = {}) {
     off() {},
     guilds: { cache: new Map() },
     users: { cache: new Map() },
-    user: { id: "bot-user", username: "clanker conk" }
+    user: { id: "bot-user", username: "clanky" }
   };
 
   const manager = new VoiceSessionManager({
@@ -29,7 +29,7 @@ function createManager({ memory = null }: { memory?: unknown } = {}) {
       getSettings() {
         return createTestSettings({
           identity: {
-            botName: "clanker conk"
+            botName: "clanky"
           },
           memory: { enabled: false },
           agentStack: {
@@ -298,7 +298,7 @@ test("assistant voice turns are persisted into searchable message history", () =
     ending: false,
     settingsSnapshot: createTestSettings({
       identity: {
-        botName: "clanker conk"
+        botName: "clanky"
       }
     }),
     recentVoiceTurns: [],

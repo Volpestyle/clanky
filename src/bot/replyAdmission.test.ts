@@ -10,7 +10,7 @@ import { createTestSettings } from "../testSettings.ts";
 
 const BASE_SETTINGS = createTestSettings({
   identity: {
-    botName: "clanker conk",
+    botName: "clanky",
     botNameAliases: ["clank"]
   }
 });

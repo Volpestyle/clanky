@@ -134,7 +134,7 @@ function eagernessSweep(
 // spoken line.
 export const VOICE_LIVE_SHARED_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
   group("name detection fast-paths", [
-    scenario("exact bot name in transcript", "Hey clanker conk, what's up?", "YES"),
+    scenario("exact bot name in transcript", "Hey clanky, what's up?", "YES"),
     scenario("partial bot name (clanker)", "Hey clanker, play some music", "YES"),
     scenario(
       "ASR garble: planka (shared consonants with clanker)",
@@ -237,7 +237,7 @@ export const VOICE_LIVE_SHARED_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
       recentAssistantReply: false,
       msSinceDirectAddress: 4_000,
       timeline: turns(
-        'vuhlp: "clanker conk what\'s the capital of Peru?"',
+        'vuhlp: "clanky what\'s the capital of Peru?"',
         'jake: "pretty sure it\'s Lima"'
       )
     })
@@ -304,7 +304,7 @@ export const VOICE_LIVE_SHARED_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
       recentAssistantReply: false,
       msSinceDirectAddress: 45_000,
       timeline: turns(
-        'alice: "clanker conk what should I order?"',
+        'alice: "clanky what should I order?"',
         'bob: "bro just get tacos"',
         'carol: "yeah tacos are cheaper"'
       )
@@ -327,7 +327,7 @@ export const VOICE_LIVE_SHARED_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
   ]),
 
   group("command recognition", [
-    intentScenario("play command with bot name", "clanker conk play sicko mode", "YES", "music_play", {
+    intentScenario("play command with bot name", "clanky play sicko mode", "YES", "music_play", {
       eagerness: 10,
       participants: ["alice", "bob"]
     }),
@@ -373,7 +373,7 @@ export const VOICE_LIVE_SHARED_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
       recentAssistantReply: true,
       msSinceAssistantReply: 8_000,
       timeline: turns(
-        'vuhlp: "clanker conk play sicko mode"',
+        'vuhlp: "clanky play sicko mode"',
         'YOU: "playing sicko mode"',
         'jake: "this one is good"'
       )

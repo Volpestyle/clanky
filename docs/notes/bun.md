@@ -1,6 +1,6 @@
 # Bun Compatibility Notes
 
-Running clanker conk on Bun (v1.3.10) instead of Node.js.  This doc tracks
+Running clanky on Bun (v1.3.10) instead of Node.js.  This doc tracks
 the bugs we hit, the root causes, and the workarounds we shipped.
 
 ---

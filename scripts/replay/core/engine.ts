@@ -72,7 +72,7 @@ export async function runReplayEngine<
 
   const timeline: ReplayEvent[] = [];
   const turnSnapshots: TurnSnapshot[] = [];
-  const botName = String(runtimeSettings.botName || "clanker conk");
+  const botName = String(runtimeSettings.botName || "clanky");
   let syntheticBotCounter = 0;
   let processedTurns = 0;
 

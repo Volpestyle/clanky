@@ -237,7 +237,7 @@ test("getConversationHistoryForPrompt searches normalized conversation windows",
       messageId: "m2",
       createdAt: baseTime + 1000,
       authorId: "bot-1",
-      authorName: "clanker conk",
+      authorName: "clanky",
       isBot: true,
       content: "NVDA was around 181 earlier."
     });

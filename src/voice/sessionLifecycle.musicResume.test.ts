@@ -172,7 +172,7 @@ function createSession(overrides: Partial<VoiceSession> = {}) {
     pendingRealtimeAssistantUtterances: [],
     realtimeAssistantUtteranceBackpressureActive: false,
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         enabled: true,
         replyPath: "brain"

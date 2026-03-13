@@ -95,7 +95,7 @@ test("resolveVoiceThoughtEngineConfig uses the canonical voice initiative bindin
 test("generateVoiceThoughtCandidate strips soundboard directives from LLM output", async () => {
   const settings = createTestSettings({
     identity: {
-      botName: "clanker conk"
+      botName: "clanky"
     },
     initiative: {
       voice: {
@@ -136,7 +136,7 @@ test("generateVoiceThoughtCandidate strips soundboard directives from LLM output
 test("evaluateVoiceThoughtDecision returns an allowed decision when the classifier contract is valid", async () => {
   const settings = createTestSettings({
     identity: {
-      botName: "clanker conk"
+      botName: "clanky"
     },
     initiative: {
       voice: {

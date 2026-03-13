@@ -169,8 +169,8 @@ test("text cancel uses a model-generated acknowledgement after aborting active w
     });
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const replyScopeKey = buildTextReplyScopeKey({ guildId, channelId });
@@ -238,8 +238,8 @@ test("text cancel falls back to a reaction when acknowledgement generation fails
     });
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const replyScopeKey = buildTextReplyScopeKey({ guildId, channelId });

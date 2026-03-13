@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * One-time script to obtain OpenAI OAuth tokens for clanker conk.
+ * One-time script to obtain OpenAI OAuth tokens for clanky.
  * Canonical entrypoint: bun scripts/openai-oauth-login.ts
  *
  * 1. Starts a temporary localhost callback server

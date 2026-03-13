@@ -36,7 +36,6 @@ Voice configuration is split across these live surfaces:
 Preset resolution also matters:
 
 - `agentStack.preset`
-- `agentStack.overrides.voiceRuntime`
 - `agentStack.overrides.voiceAdmissionClassifier`
 
 ## 2. Runtime Overview
@@ -83,7 +82,10 @@ Base defaults from `settingsSchema.ts`:
 - `voice.conversationPolicy.ttsMode = "realtime"`
 - `voice.admission.mode = "generation_decides"`
 
-Preset defaults can override the effective voice runtime.
+Voice runtime precedence is:
+
+- explicit `agentStack.runtimeConfig.voice.runtimeMode`
+- preset default
 
 ## 3. Reply Paths
 

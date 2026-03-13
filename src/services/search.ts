@@ -26,7 +26,7 @@ const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const SEARCH_RETRY_ATTEMPTS = 2;
 const FETCH_RETRY_ATTEMPTS = 2;
 const SEARCH_USER_AGENT =
-  "clanker-conk/0.2 (+web-search-v2; https://github.com/Volpestyle/clanker_conk)";
+  "clanky/0.2 (+web-search-v2; https://github.com/Volpestyle/clanky)";
 type ProviderSearchInput = {
   query: string;
   maxResults: number;

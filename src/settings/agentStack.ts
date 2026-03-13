@@ -371,6 +371,22 @@ function getRuntimeConfig(settings: unknown): Settings["agentStack"]["runtimeCon
   return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig, agentStack.runtimeConfig);
 }
 
+function getExplicitVoiceRuntimeModeSetting(settings: unknown): string | undefined {
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) return undefined;
+
+  const agentStack = "agentStack" in settings ? settings.agentStack : undefined;
+  if (!agentStack || typeof agentStack !== "object" || Array.isArray(agentStack)) return undefined;
+
+  const runtimeConfig = "runtimeConfig" in agentStack ? agentStack.runtimeConfig : undefined;
+  if (!runtimeConfig || typeof runtimeConfig !== "object" || Array.isArray(runtimeConfig)) return undefined;
+
+  const voice = "voice" in runtimeConfig ? runtimeConfig.voice : undefined;
+  if (!voice || typeof voice !== "object" || Array.isArray(voice)) return undefined;
+
+  const runtimeMode = "runtimeMode" in voice ? voice.runtimeMode : undefined;
+  return typeof runtimeMode === "string" ? runtimeMode : undefined;
+}
+
 export function getResearchRuntimeConfig(settings: unknown): Settings["agentStack"]["runtimeConfig"]["research"] {
   return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig.research, getRuntimeConfig(settings).research);
 }
@@ -565,7 +581,7 @@ export function getResolvedVoiceInterruptClassifierBinding(settings: unknown) {
 }
 
 export function getResolvedVoiceProvider(settings: unknown): string {
-  const runtimeMode = String(getVoiceRuntimeConfig(settings).runtimeMode || resolveAgentStack(settings).voiceRuntime || "")
+  const runtimeMode = String(resolveAgentStack(settings).voiceRuntime || "")
     .trim()
     .toLowerCase();
   if (runtimeMode === "voice_agent") return "xai";
@@ -690,6 +706,7 @@ export function resolveAgentStack(settings: unknown) {
   ) as AgentStackPresetName;
   const presetDefaults = getPresetDefaults(settings);
   const overrides = agentStack.overrides || {};
+  const explicitVoiceRuntimeMode = getExplicitVoiceRuntimeModeSetting(settings);
   const voiceAdmission = getVoiceAdmissionSettings(settings);
 
   const devTeamRuntime = getDevTeamRuntimeConfig(settings);
@@ -722,7 +739,7 @@ export function resolveAgentStack(settings: unknown) {
     orchestrator: resolveModelBinding(overrides?.orchestrator, presetDefaults.orchestrator),
     researchRuntime: String(overrides?.researchRuntime || presetDefaults.researchRuntime),
     browserRuntime: String(overrides?.browserRuntime || presetDefaults.browserRuntime),
-    voiceRuntime: normalizeResolvedVoiceRuntime(overrides?.voiceRuntime, presetDefaults.voiceRuntime),
+    voiceRuntime: normalizeResolvedVoiceRuntime(explicitVoiceRuntimeMode, presetDefaults.voiceRuntime),
     voiceAdmissionPolicy: {
       mode: String(voiceAdmission.mode || presetDefaults.voiceAdmissionPolicy.mode),
       classifierProvider: getResolvedVoiceAdmissionClassifierBinding(settings)?.provider,

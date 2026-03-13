@@ -112,7 +112,7 @@ function logAdmissionClassifierDebug({
 }
 
 function buildMockManager(sc: VoiceLiveScenario): ReplyDecisionHost {
-  const botName = sc.botName || "clanker conk";
+  const botName = sc.botName || "clanky";
   const settings = createTestSettings({
     botName,
     llm: {

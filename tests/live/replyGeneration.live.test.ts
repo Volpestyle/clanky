@@ -155,7 +155,7 @@ function matchesFilter(label: string): boolean {
 }
 
 function buildBaseSettings({
-  botName = "clanker conk",
+  botName = "clanky",
   textBinding = TEXT_BINDING,
   voiceBinding = VOICE_BINDING,
   ambientReplyEagerness = 55,
@@ -451,7 +451,7 @@ function buildRecentMembershipEvents(sc: VoiceLiveScenario) {
 function buildVoicePrompt(sc: VoiceLiveScenario): PromptEnvelope {
   const voiceEagerness = sc.eagerness ?? 50;
   const settings = buildBaseSettings({
-    botName: sc.botName || "clanker conk",
+    botName: sc.botName || "clanky",
     voiceEagerness
   });
   const voiceBinding = getResolvedVoiceGenerationBinding(settings);
@@ -527,7 +527,7 @@ function buildVoicePrompt(sc: VoiceLiveScenario): PromptEnvelope {
       voiceEagerness,
       conversationContext,
       sessionTiming: null,
-      botName: sc.botName || "clanker conk",
+      botName: sc.botName || "clanky",
       participantRoster,
       recentMembershipEvents: buildRecentMembershipEvents(sc),
       recentVoiceEffectEvents: [],
@@ -804,7 +804,7 @@ const textScenarios: LiveScenario[] = [
     expected: "reply",
     buildPrompt: () =>
       buildTextPrompt({
-        messageContent: "clanker conk, what's a good starter roguelike on Steam right now?",
+        messageContent: "clanky, what's a good starter roguelike on Steam right now?",
         recentMessages: [
           {
             author_name: "alice",
@@ -887,11 +887,11 @@ const textScenarios: LiveScenario[] = [
         recentMessages: [
           {
             author_name: "alice",
-            content: "clanker conk, what's a good roguelike?",
+            content: "clanky, what's a good roguelike?",
             is_bot: 0
           },
           {
-            author_name: "clanker conk",
+            author_name: "clanky",
             content: "Hades is a great pick — tight combat and the story loop keeps pulling you back.",
             is_bot: 1
           }
@@ -973,7 +973,7 @@ const textToolSelectionScenarios: ToolSelectionScenario[] = [
     expectedInputPattern: /bun|version|latest/i,
     buildPrompt: () => {
       const prompt = buildTextPrompt({
-        messageContent: "clanker conk, look up the latest Bun version online and tell me what it is.",
+        messageContent: "clanky, look up the latest Bun version online and tell me what it is.",
         recentMessages: [
           {
             author_name: "alice",
@@ -997,7 +997,7 @@ const textToolSelectionScenarios: ToolSelectionScenario[] = [
     expectedInputPattern: /https:\/\/example\.com/i,
     buildPrompt: () => {
       const prompt = buildTextPrompt({
-        messageContent: "clanker conk, read https://example.com and summarize it in one sentence.",
+        messageContent: "clanky, read https://example.com and summarize it in one sentence.",
         recentMessages: [],
         ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED,
@@ -1016,7 +1016,7 @@ const textToolSelectionScenarios: ToolSelectionScenario[] = [
     expectedInputPattern: /roguelike|starter/i,
     buildPrompt: () => {
       const prompt = buildTextPrompt({
-        messageContent: "clanker conk, what did we say last week about starter roguelikes?",
+        messageContent: "clanky, what did we say last week about starter roguelikes?",
         recentMessages: [
           {
             author_name: "alice",
@@ -1040,7 +1040,7 @@ const textToolSelectionScenarios: ToolSelectionScenario[] = [
     expectedInputPattern: /captain|concise/i,
     buildPrompt: () => {
       const prompt = buildTextPrompt({
-        messageContent: "clanker conk, from now on call me Captain and keep your replies brutally concise.",
+        messageContent: "clanky, from now on call me Captain and keep your replies brutally concise.",
         recentMessages: [],
         ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED,
@@ -1059,7 +1059,7 @@ const textToolSelectionScenarios: ToolSelectionScenario[] = [
     expectedInputPattern: /favorite|color|blue/i,
     buildPrompt: () => {
       const prompt = buildTextPrompt({
-        messageContent: "clanker conk, remember that my favorite color is blue.",
+        messageContent: "clanky, remember that my favorite color is blue.",
         recentMessages: [],
         ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED,
@@ -1077,7 +1077,7 @@ const textToolSelectionScenarios: ToolSelectionScenario[] = [
     expectedInputPattern: /favorite|preference|color/i,
     buildPrompt: () => {
       const prompt = buildTextPrompt({
-        messageContent: "clanker conk, what do you remember about my preferences?",
+        messageContent: "clanky, what do you remember about my preferences?",
         recentMessages: [],
         ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED,
@@ -1095,7 +1095,7 @@ const textToolSelectionScenarios: ToolSelectionScenario[] = [
     expectedInputPattern: /reddit|thread|browse/i,
     buildPrompt: () => {
       const prompt = buildTextPrompt({
-        messageContent: "clanker conk, browse through the top posts on reddit right now and tell me what's trending.",
+        messageContent: "clanky, browse through the top posts on reddit right now and tell me what's trending.",
         recentMessages: [],
         ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED,
@@ -1116,7 +1116,7 @@ const textStructuredJsonScenarios: LiveScenario[] = [
     expected: "reply",
     buildPrompt: () =>
       buildTextPrompt({
-        messageContent: "clanker conk, give me one short opinion on pizza toppings.",
+        messageContent: "clanky, give me one short opinion on pizza toppings.",
         recentMessages: [],
         ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED
@@ -1151,7 +1151,7 @@ const textStructuredJsonScenarios: LiveScenario[] = [
     expected: "reply",
     buildPrompt: () =>
       buildTextPrompt({
-        messageContent: "clanker conk, I just shipped my first open source project!",
+        messageContent: "clanky, I just shipped my first open source project!",
         recentMessages: [],
         ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED
@@ -1162,7 +1162,7 @@ const textStructuredJsonScenarios: LiveScenario[] = [
     expected: "reply",
     buildPrompt: () =>
       buildTextPrompt({
-        messageContent: "clanker conk, who won the most recent Super Bowl?",
+        messageContent: "clanky, who won the most recent Super Bowl?",
         recentMessages: [],
         ambientReplyEagerness: 70,
         addressing: DIRECT_ADDRESSED,
@@ -1185,7 +1185,7 @@ const textImageScenarios: LiveScenario[] = [
     expected: "reply",
     buildPrompt: () =>
       buildTextPrompt({
-        messageContent: "clanker conk, what color is the attached image?",
+        messageContent: "clanky, what color is the attached image?",
         recentMessages: [],
         ambientReplyEagerness: 70,
         imageInputs: [RED_SQUARE_IMAGE],
@@ -1197,7 +1197,7 @@ const textImageScenarios: LiveScenario[] = [
     expected: "reply",
     buildPrompt: () =>
       buildTextPrompt({
-        messageContent: "clanker conk, describe what you see in this image",
+        messageContent: "clanky, describe what you see in this image",
         recentMessages: [],
         ambientReplyEagerness: 70,
         imageInputs: [RED_SQUARE_IMAGE],
@@ -1209,7 +1209,7 @@ const textImageScenarios: LiveScenario[] = [
     expected: "reply",
     buildPrompt: () =>
       buildTextPrompt({
-        messageContent: "clanker conk, are these two images the same color?",
+        messageContent: "clanky, are these two images the same color?",
         recentMessages: [],
         ambientReplyEagerness: 70,
         imageInputs: [RED_SQUARE_IMAGE, BLUE_SQUARE_IMAGE],

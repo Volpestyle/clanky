@@ -1761,6 +1761,75 @@ test("generateVoiceTurnReply uses browser sub-agent sessions before one-shot bro
   assert.equal(browserBrowseCalls.length, 0);
 });
 
+test("generateVoiceTurnReply logs failed brain tool errors with the returned tool message", async () => {
+  const { bot, logs } = createVoiceBot({
+    generationSequence: [
+      {
+        text: "trying to share it",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "share_browser_session",
+            input: {
+              session_id: "browser-session-1"
+            }
+          }
+        ],
+        rawContent: [
+          { type: "text", text: "trying to share it" },
+          {
+            type: "tool_use",
+            id: "tc_1",
+            name: "share_browser_session",
+            input: { session_id: "browser-session-1" }
+          }
+        ]
+      },
+      {
+        text: "share still failed"
+      }
+    ]
+  });
+
+  bot.buildBrowserBrowseContext = () => ({
+    requested: false,
+    configured: true,
+    enabled: true,
+    used: false,
+    blockedByBudget: false,
+    error: null,
+    query: "",
+    text: "",
+    imageInputs: [],
+    steps: 0,
+    hitStepLimit: false,
+    budget: {
+      canBrowse: true
+    }
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "show me your browser",
+    voiceToolCallbacks: {}
+  });
+
+  assert.equal(reply.text, "trying to share it");
+
+  const toolLog = logs.find((entry) =>
+    entry?.content === "voice_brain_tool_call" &&
+    isRecord(entry?.metadata) &&
+    entry.metadata.toolName === "share_browser_session"
+  );
+
+  assert.ok(toolLog);
+  assert.equal(toolLog?.metadata?.isError, true);
+  assert.equal(toolLog?.metadata?.error, "Browser session sharing is not available.");
+});
+
 test("generateVoiceTurnReply carries resolved streamed speech into the continuation context when generation.text is empty", async () => {
   const { bot, generationPayloads, getGenerationCalls } = createVoiceBot({
     generationSequence: [
@@ -2382,6 +2451,59 @@ test("generateVoiceTurnReply triggers voice screen watch start from tool-call fi
   assert.equal(screenShareCalls[0]?.target, "casey");
 });
 
+test("generateVoiceTurnReply exposes start_screen_watch before native watch is already ready and logs the capability snapshot", async () => {
+  const { bot, generationPayloads, logs } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "i can try it"
+    }),
+    screenShareCapability: {
+      supported: true,
+      enabled: true,
+      available: false,
+      status: "unavailable",
+      reason: "no_active_discord_screen_share",
+      nativeSupported: true,
+      nativeEnabled: true,
+      nativeAvailable: false,
+      nativeStatus: "unavailable",
+      nativeReason: "no_active_discord_screen_share",
+      linkSupported: true,
+      linkEnabled: true,
+      linkFallbackAvailable: false,
+      linkStatus: "starting",
+      linkReason: "starting",
+      publicUrl: "https://fancy-cat.trycloudflare.com"
+    }
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "can you see my stream right now?"
+  });
+
+  assert.equal(reply.text, "i can try it");
+  const firstTools = Array.isArray(generationPayloads[0]?.tools) ? generationPayloads[0].tools : [];
+  const toolNames = firstTools.map((entry) => String(entry?.name || ""));
+  assert.equal(toolNames.includes("start_screen_watch"), true);
+
+  const capabilityLog = logs.find((entry) =>
+    entry?.content === "voice_screen_watch_capability" &&
+    isRecord(entry?.metadata)
+  );
+  assert.ok(capabilityLog);
+  assert.equal(capabilityLog?.metadata?.supported, true);
+  assert.equal(capabilityLog?.metadata?.enabled, true);
+  assert.equal(capabilityLog?.metadata?.available, false);
+  assert.equal(capabilityLog?.metadata?.nativeSupported, true);
+  assert.equal(capabilityLog?.metadata?.nativeEnabled, true);
+  assert.equal(capabilityLog?.metadata?.nativeAvailable, false);
+  assert.equal(capabilityLog?.metadata?.nativeReason, "no_active_discord_screen_share");
+  assert.equal(capabilityLog?.metadata?.toolExposed, true);
+});
+
 test("generateVoiceTurnReply screen-watch prompt says not to read share links aloud", async () => {
   const { bot, generationPayloads } = createVoiceBot({
     generationText: structuredVoiceOutput({
@@ -2415,7 +2537,7 @@ test("generateVoiceTurnReply screen-watch prompt says not to read share links al
   );
 });
 
-test("generateVoiceTurnReply describes supported-but-unavailable screen-share capability in prompt", async () => {
+test("generateVoiceTurnReply hides start_screen_watch when native screen watch is hard-blocked", async () => {
   const { bot, generationPayloads, screenShareCalls } = createVoiceBot({
     generationText: structuredVoiceOutput({
       text: "can't pull it up rn"
@@ -2424,9 +2546,19 @@ test("generateVoiceTurnReply describes supported-but-unavailable screen-share ca
       supported: true,
       enabled: true,
       available: false,
-      status: "starting",
+      status: "unavailable",
       publicUrl: "https://fancy-cat.trycloudflare.com",
-      reason: "public_https_starting"
+      reason: "native_discord_video_decode_unavailable",
+      nativeSupported: true,
+      nativeEnabled: true,
+      nativeAvailable: false,
+      nativeStatus: "unavailable",
+      nativeReason: "native_discord_video_decode_unavailable",
+      linkSupported: true,
+      linkEnabled: true,
+      linkFallbackAvailable: true,
+      linkStatus: "ready",
+      linkReason: null
     }
   });
 

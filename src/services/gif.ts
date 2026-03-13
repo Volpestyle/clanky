@@ -4,7 +4,7 @@ import { normalizeWhitespaceText } from "../normalization/text.ts";
 const GIPHY_SEARCH_API_URL = "https://api.giphy.com/v1/gifs/search";
 const GIF_TIMEOUT_MS = 8_500;
 const GIF_USER_AGENT =
-  "clanker-conk/0.1 (+gif-search; https://github.com/Volpestyle/clanker_conk)";
+  "clanky/0.1 (+gif-search; https://github.com/Volpestyle/clanky)";
 const MAX_GIF_QUERY_LEN = 120;
 const GIPHY_ALLOWED_RATINGS = new Set(["g", "pg", "pg-13", "r"]);
 type GifTrace = {

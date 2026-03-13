@@ -1,4 +1,4 @@
-# Clanker Conk Self Technical Architecture
+# Clanky Self Technical Architecture
 
 This document explains the live runtime shape of the experimental selfbot: where core decisions happen, how settings flow through the system, and which modules own text, voice, memory, tools, persistence, and the Rust media plane.
 

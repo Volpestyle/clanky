@@ -502,7 +502,7 @@ Flags override individual pipeline settings on top of a preset. The canonical ma
 |------|---------|------|
 | `--preset` | preset name lookup | string |
 | `--reply-path` | `voice.conversationPolicy.replyPath` | `native` / `bridge` / `brain` |
-| `--voice-provider` | driver convenience override that normalizes into `agentStack.overrides.voiceRuntime` / `agentStack.runtimeConfig.voice.runtimeMode` | `openai` / `xai` / `gemini` / `elevenlabs` |
+| `--voice-provider` | driver convenience override that normalizes into `agentStack.runtimeConfig.voice.runtimeMode` | `openai` / `xai` / `gemini` / `elevenlabs` |
 | `--brain-provider` | driver convenience override that normalizes into `agentStack.overrides.orchestrator` and related generation bindings | `openai` / `anthropic` / `xai` / `gemini` |
 | `--brain-model` | effective brain generation override via orchestrator / voice generation binding | string |
 | `--voice-model` | `agentStack.runtimeConfig.voice.openaiRealtime.model` | string |

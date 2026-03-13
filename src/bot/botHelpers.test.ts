@@ -6,7 +6,7 @@ import { normalizeSettings } from "../store/settingsNormalization.ts";
 test("resolveMaxMediaPromptLen reads canonical discovery settings", () => {
   const settings = normalizeSettings({
     identity: {
-      botName: "clanker conk"
+      botName: "clanky"
     },
     initiative: {
       discovery: {

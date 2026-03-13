@@ -164,7 +164,7 @@ function recordSameAuthorFollowupContext(
     authorId = "user-1",
     authorName = "alice",
     botUserId = "bot-1",
-    botName = "clanker conk",
+    botName = "clanky",
     humanMessageId = "human-context-1",
     botMessageId = "bot-context-1"
   }
@@ -301,8 +301,8 @@ test("same-author active follow-up turn can still post when model contributes va
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const guild = buildGuild();
@@ -396,8 +396,8 @@ test("same-author active follow-up turn is skipped when the model declines", asy
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const guild = buildGuild();
@@ -494,8 +494,8 @@ test("smoke: text followup-window turn addressed to another user is llm-skipped"
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const guild = buildGuild();
@@ -512,7 +512,7 @@ test("smoke: text followup-window turn addressed to another user is llm-skipped"
       {
         message_id: "bot-context-followup",
         author_id: "bot-1",
-        author_name: "clanker conk",
+        author_name: "clanky",
         content: "yeah that build looked scuffed",
         created_at: new Date(Date.now() - 1_200).toISOString()
       },
@@ -603,8 +603,8 @@ test("non-addressed initiative turn can still contribute when model responds", a
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const guild = buildGuild();
@@ -616,7 +616,7 @@ test("non-addressed initiative turn can still contribute when model responds", a
       guildId: guild.id,
       channelId,
       authorId: "bot-1",
-      authorName: "clanker conk",
+      authorName: "clanky",
       isBot: true,
       content: "last bot line",
       referencedMessageId: null
@@ -711,8 +711,8 @@ test("reply channels can evaluate cold ambient turns when the eagerness gate adm
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const guild = buildGuild();
@@ -763,8 +763,8 @@ test("empty reply channel list disables reply-channel behavior everywhere (expli
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const guild = buildGuild();
@@ -837,8 +837,8 @@ test("non-addressed turn is dropped before llm when unsolicited gate is closed",
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const guild = buildGuild();
@@ -927,8 +927,8 @@ test("direct-addressed turn bypasses unsolicited gate and marks response as requ
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const guild = buildGuild();
@@ -937,7 +937,7 @@ test("direct-addressed turn bypasses unsolicited gate and marks response as requ
       guild,
       channel,
       messageId: "msg-direct",
-      content: "clanker conk you there?",
+      content: "clanky you there?",
       replyPayloads
     });
 
@@ -1064,8 +1064,8 @@ test("text reply follow-up can run web search and append cited sources", async (
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const guild = buildGuild();
@@ -1206,8 +1206,8 @@ test("reply follow-up regeneration can use dedicated provider/model override", a
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const guild = buildGuild();
@@ -1321,8 +1321,8 @@ test("reply follow-up regeneration can add history images when model requests im
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const guild = buildGuild();
@@ -1441,8 +1441,8 @@ test("image lookup tool accepts direct IMG refs from chat history", async () => 
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const guild = buildGuild();
@@ -1453,7 +1453,7 @@ test("image lookup tool accepts direct IMG refs from chat history", async () => 
       guildId: guild.id,
       channelId,
       authorId: "bot-1",
-      authorName: "clanker conk",
+      authorName: "clanky",
       isBot: true,
       content: "https://cdn.discordapp.com/attachments/chan-1/9001/selfie.png?ex=69a358b6&is=69a20736&hm=abc",
       referencedMessageId: null
@@ -1587,8 +1587,8 @@ test("reply tool loop keeps remaining concurrent tool results when one concurren
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
     const originalToReplyPipelineRuntime = bot.toReplyPipelineRuntime.bind(bot);
     bot.toReplyPipelineRuntime = () => ({
@@ -1618,7 +1618,7 @@ test("reply tool loop keeps remaining concurrent tool results when one concurren
       guildId: guild.id,
       channelId,
       authorId: "bot-1",
-      authorName: "clanker conk",
+      authorName: "clanky",
       isBot: true,
       content: "last bot line",
       referencedMessageId: null
@@ -1711,8 +1711,8 @@ test("reply generation passes a structured JSON schema contract for voice intent
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     const guild = buildGuild();
@@ -1802,8 +1802,8 @@ test("voice intent below confidence threshold falls back to normal text reply pa
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
     bot.voiceSessionManager.requestJoin = async () => {
       joinCallCount += 1;
@@ -1900,8 +1900,8 @@ test("smoke: 'clanka look at my screen' initiates a screen watch fallback link m
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
 
     bot.attachScreenShareSessionManager({
@@ -2006,8 +2006,8 @@ test("initiative-channel direct turns can be routed to thread replies when polic
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
     bot.shouldSendAsReply = () => true;
 
@@ -2093,8 +2093,8 @@ test("initiative-channel direct turns can be routed to standalone channel messag
 
     bot.client.user = {
       id: "bot-1",
-      username: "clanker conk",
-      tag: "clanker conk#0001"
+      username: "clanky",
+      tag: "clanky#0001"
     };
     bot.shouldSendAsReply = () => false;
 

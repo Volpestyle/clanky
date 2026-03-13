@@ -14,8 +14,8 @@ const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
 const CODEX_OAUTH_SCOPES = "openid profile email offline_access";
 const OPENAI_OAUTH_TOKEN_FILE_PATH = join("data", "openai-oauth-tokens.json");
 const LEGACY_CODEX_OAUTH_TOKEN_FILE_PATH = join("data", "codex-oauth-tokens.json");
-const REQUEST_ORIGINATOR = "clanker_conk";
-const REQUEST_USER_AGENT = "clanker-conk/1.0";
+const REQUEST_ORIGINATOR = "clanky";
+const REQUEST_USER_AGENT = "clanky/1.0";
 
 type CodexOAuthTokens = {
   refreshToken: string;
