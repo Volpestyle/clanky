@@ -313,7 +313,8 @@ test("ClankvoxClient forwards stream publish transport and playback commands", (
     userId: "user-1",
     daveChannelId: "999000"
   });
-  client.streamPublishPlay("https://youtube.com/watch?v=abc123");
+  client.streamPublishPlay("https://youtube.com/watch?v=abc123", false);
+  client.streamPublishPlayVisualizer("https://youtube.com/watch?v=abc123", false, "cqt");
   client.streamPublishBrowserStart("image/png");
   client.streamPublishBrowserFrame({
     mimeType: "image/png",
@@ -337,7 +338,14 @@ test("ClankvoxClient forwards stream publish transport and playback commands", (
     },
     {
       type: "stream_publish_play",
-      url: "https://youtube.com/watch?v=abc123"
+      url: "https://youtube.com/watch?v=abc123",
+      resolvedDirectUrl: false
+    },
+    {
+      type: "stream_publish_play_visualizer",
+      url: "https://youtube.com/watch?v=abc123",
+      resolvedDirectUrl: false,
+      visualizerMode: "cqt"
     },
     {
       type: "stream_publish_browser_start",

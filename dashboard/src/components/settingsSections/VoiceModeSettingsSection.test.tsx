@@ -48,6 +48,7 @@ function buildProps(mode: unknown, formOverrides: Record<string, unknown> = {}) 
       voiceAllowNsfwHumor: true,
       voiceThoughtEngineEnabled: false,
       voiceStreamWatchEnabled: false,
+      voiceStreamWatchVisualizerMode: "cqt",
       voiceSoundboardEagerness: 40,
       voiceSoundboardEnabled: false,
       voiceSoundboardAllowExternalSounds: false,
@@ -219,6 +220,8 @@ test("stream watch renders a compact mental model and hides advanced tuning behi
 
   assert.equal(markup.includes("How screen watch works"), true);
   assert.equal(markup.includes("Advanced screen watch settings"), true);
+  assert.equal(markup.includes("Music Go Live visualizer"), true);
+  assert.equal(markup.includes("voice-stream-watch-visualizer-mode"), true);
   assert.equal(markup.includes("Screen share pipeline"), false);
 });
 

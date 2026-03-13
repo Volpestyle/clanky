@@ -3,6 +3,7 @@ import type { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import type { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
 import type { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
 import type { ElevenLabsRealtimeClient } from "./elevenLabsRealtimeClient.ts";
+import type { StreamWatchVisualizerMode } from "../settings/voiceDashboardMappings.ts";
 import type { ReplyInterruptionPolicy } from "./bargeInController.ts";
 import type { AsrBridgeState, AsrCommitResult } from "./voiceAsrBridge.ts";
 import type {
@@ -612,6 +613,8 @@ export interface VoiceSessionMusicState {
     lastTrackTitle: string | null;
     lastTrackArtists: string[];
     lastTrackUrl: string | null;
+    lastPlaybackUrl?: string | null;
+    lastPlaybackResolvedDirectUrl?: boolean;
     lastQuery: string | null;
     lastRequestedByUserId: string | null;
     lastRequestText: string | null;
@@ -819,7 +822,8 @@ export interface VoiceSessionStreamPublishState {
     rtcServerId: string | null;
     endpoint: string | null;
     token: string | null;
-    sourceKind: "music_youtube" | "browser_session" | null;
+    sourceKind: "music" | "browser_session" | null;
+    visualizerMode: StreamWatchVisualizerMode | null;
     sourceKey: string | null;
     sourceUrl: string | null;
     sourceLabel: string | null;

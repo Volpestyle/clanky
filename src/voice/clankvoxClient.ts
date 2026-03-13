@@ -8,6 +8,7 @@
 
 import { EventEmitter } from "node:events";
 import path from "node:path";
+import type { StreamWatchVisualizerMode } from "../settings/voiceDashboardMappings.ts";
 import type { TtsPlaybackState } from "./assistantOutputState.ts";
 
 type ClankvoxProcess = ReturnType<typeof Bun.spawn<"pipe", "pipe", "inherit">>;
@@ -141,12 +142,30 @@ type ClankvoxCommand =
       preferredStreamType: string | null;
     }
   | { type: "unsubscribe_user_video"; userId: string }
-  | { type: "music_play"; url: string; resolvedDirectUrl: boolean }
+  | {
+      type: "music_play";
+      url: string;
+      resolvedDirectUrl: boolean;
+      visualizerMode?: StreamWatchVisualizerMode | null;
+    }
   | { type: "music_stop" }
   | { type: "music_pause" }
   | { type: "music_resume" }
   | { type: "music_set_gain"; target: number; fadeMs: number }
-  | { type: "stream_publish_play"; url: string }
+  | { type: "stream_publish_play"; url: string; resolvedDirectUrl?: boolean }
+  | {
+      type: "stream_publish_play_visualizer";
+      url: string;
+      resolvedDirectUrl?: boolean;
+      visualizerMode: Exclude<StreamWatchVisualizerMode, "off">;
+    }
+  | { type: "stream_publish_browser_start"; mimeType: string }
+  | {
+      type: "stream_publish_browser_frame";
+      mimeType: string;
+      frameBase64: string;
+      capturedAtMs: number;
+    }
   | { type: "stream_publish_stop" }
   | { type: "stream_publish_pause" }
   | { type: "stream_publish_resume" }
@@ -1140,8 +1159,17 @@ export class ClankvoxClient extends EventEmitter {
     });
   }
 
-  musicPlay(url: string, resolvedDirectUrl = false) {
-    this._send({ type: "music_play", url, resolvedDirectUrl });
+  musicPlay(
+    url: string,
+    resolvedDirectUrl = false,
+    visualizerMode: StreamWatchVisualizerMode | null = null
+  ) {
+    this._send({
+      type: "music_play",
+      url,
+      resolvedDirectUrl,
+      visualizerMode: visualizerMode || undefined
+    });
   }
 
   musicStop() {
@@ -1160,8 +1188,25 @@ export class ClankvoxClient extends EventEmitter {
     this._send({ type: "music_set_gain", target, fadeMs });
   }
 
-  streamPublishPlay(url: string) {
-    this._send({ type: "stream_publish_play", url: String(url || "").trim() });
+  streamPublishPlay(url: string, resolvedDirectUrl = false) {
+    this._send({
+      type: "stream_publish_play",
+      url: String(url || "").trim(),
+      resolvedDirectUrl
+    });
+  }
+
+  streamPublishPlayVisualizer(
+    url: string,
+    resolvedDirectUrl = false,
+    visualizerMode: Exclude<StreamWatchVisualizerMode, "off">
+  ) {
+    this._send({
+      type: "stream_publish_play_visualizer",
+      url: String(url || "").trim(),
+      resolvedDirectUrl,
+      visualizerMode
+    });
   }
 
   streamPublishBrowserStart(mimeType = "image/png") {

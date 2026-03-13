@@ -540,6 +540,7 @@ export const DEFAULT_SETTINGS = {
     },
     streamWatch: {
       enabled: true,
+      visualizerMode: "cqt",
       minCommentaryIntervalSeconds: 8,
       maxFramesPerMinute: 180,
       maxFrameBytes: 350000,

@@ -31,6 +31,7 @@ import {
 import { normalizeLlmProvider } from "../../src/llm/llmHelpers.ts";
 import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../src/settings/settingsConstraints.ts";
 import {
+  normalizeStreamWatchVisualizerMode,
   normalizeVoiceAdmissionModeForDashboard,
   resolveVoiceAdmissionModeForSettings,
   resolveVoiceRuntimeModeFromSelection,
@@ -662,6 +663,8 @@ export function settingsToForm(settings: unknown) {
     voiceGeminiRealtimeInputSampleRateHz: resolved?.voice?.geminiRealtime?.inputSampleRateHz ?? defaultVoiceGeminiRealtime.inputSampleRateHz,
     voiceGeminiRealtimeOutputSampleRateHz: resolved?.voice?.geminiRealtime?.outputSampleRateHz ?? defaultVoiceGeminiRealtime.outputSampleRateHz,
     voiceStreamWatchEnabled: resolved?.voice?.streamWatch?.enabled ?? defaultVoiceStreamWatch.enabled,
+    voiceStreamWatchVisualizerMode:
+      resolved?.voice?.streamWatch?.visualizerMode ?? defaultVoiceStreamWatch.visualizerMode,
     voiceStreamWatchMinCommentaryIntervalSeconds:
       resolved?.voice?.streamWatch?.minCommentaryIntervalSeconds ?? defaultVoiceStreamWatch.minCommentaryIntervalSeconds,
     voiceStreamWatchMaxFramesPerMinute: resolved?.voice?.streamWatch?.maxFramesPerMinute ?? defaultVoiceStreamWatch.maxFramesPerMinute,
@@ -1610,6 +1613,9 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
       },
       streamWatch: {
         enabled: form.voiceStreamWatchEnabled,
+        visualizerMode: normalizeStreamWatchVisualizerMode(
+          form.voiceStreamWatchVisualizerMode
+        ),
         minCommentaryIntervalSeconds: Number(form.voiceStreamWatchMinCommentaryIntervalSeconds),
         maxFramesPerMinute: Number(form.voiceStreamWatchMaxFramesPerMinute),
         maxFrameBytes: Number(form.voiceStreamWatchMaxFrameBytes),

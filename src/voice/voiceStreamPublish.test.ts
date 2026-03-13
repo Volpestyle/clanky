@@ -17,9 +17,15 @@ type StreamPublishSessionArg = StreamPublishManagerArg["sessions"] extends Map<s
   : never;
 
 function createHarness({
-  sourceUrl = "https://youtube.com/watch?v=abc123"
+  sourceUrl = "https://youtube.com/watch?v=abc123",
+  playbackUrl = sourceUrl,
+  playbackResolvedDirectUrl = false,
+  visualizerMode = "cqt"
 }: {
   sourceUrl?: string;
+  playbackUrl?: string;
+  playbackResolvedDirectUrl?: boolean;
+  visualizerMode?: "off" | "cqt" | "spectrum" | "waves" | "vectorscope";
 } = {}) {
   const gatewayPayloads: Array<{ shardId: number; payload: unknown }> = [];
   const client = {
@@ -48,7 +54,9 @@ function createHarness({
     ending: false,
     music: {
       provider: "youtube",
-      lastTrackUrl: sourceUrl
+      lastTrackUrl: sourceUrl,
+      lastPlaybackUrl: playbackUrl,
+      lastPlaybackResolvedDirectUrl: playbackResolvedDirectUrl
     },
     streamPublish: createStreamPublishState(),
     voxClient: {
@@ -58,8 +66,16 @@ function createHarness({
       streamPublishDisconnect(reason) {
         calls.push({ type: "disconnect", reason: String(reason || "") });
       },
-      streamPublishPlay(url) {
-        calls.push({ type: "play", url });
+      streamPublishPlay(url, resolvedDirectUrl) {
+        calls.push({ type: "play", url, resolvedDirectUrl: String(Boolean(resolvedDirectUrl)) });
+      },
+      streamPublishPlayVisualizer(url, resolvedDirectUrl, selectedVisualizerMode) {
+        calls.push({
+          type: "play_visualizer",
+          url,
+          resolvedDirectUrl: String(Boolean(resolvedDirectUrl)),
+          visualizerMode: selectedVisualizerMode
+        });
       },
       streamPublishBrowserStart(mimeType) {
         calls.push({ type: "browser_start", mimeType: String(mimeType || "") });
@@ -86,7 +102,13 @@ function createHarness({
     streamDiscovery,
     store: {
       getSettings() {
-        return null;
+        return {
+          voice: {
+            streamWatch: {
+              visualizerMode
+            }
+          }
+        };
       },
       logAction() {
         return undefined;
@@ -137,7 +159,12 @@ test("startMusicStreamPublish creates a self stream on first YouTube start", () 
     reason: "stream_publish_requested"
   });
   assert.deepEqual(harness.calls, [
-    { type: "play", url: "https://youtube.com/watch?v=abc123" }
+    {
+      type: "play_visualizer",
+      url: "https://youtube.com/watch?v=abc123",
+      resolvedDirectUrl: "false",
+      visualizerMode: "cqt"
+    }
   ]);
   assert.deepEqual(harness.gatewayPayloads, [
     {
@@ -164,6 +191,8 @@ test("startMusicStreamPublish creates a self stream on first YouTube start", () 
     }
   ]);
   assert.equal(harness.session.streamPublish?.transportStatus, "stream_requested");
+  assert.equal(harness.session.streamPublish?.sourceKind, "music");
+  assert.equal(harness.session.streamPublish?.visualizerMode, "cqt");
 });
 
 test("startMusicStreamPublish resumes an existing paused self stream without recreating it", () => {
@@ -180,7 +209,8 @@ test("startMusicStreamPublish resumes an existing paused self stream without rec
     rtcServerId: discoveredStream.rtcServerId,
     endpoint: discoveredStream.endpoint,
     token: discoveredStream.token,
-    sourceKind: "music_youtube",
+    sourceKind: "music",
+    visualizerMode: "cqt",
     sourceKey: "https://youtube.com/watch?v=abc123",
     sourceUrl: "https://youtube.com/watch?v=abc123",
     sourceLabel: "https://youtube.com/watch?v=abc123",
@@ -229,7 +259,8 @@ test("startMusicStreamPublish switches sources on an active self stream without 
     rtcServerId: discoveredStream.rtcServerId,
     endpoint: discoveredStream.endpoint,
     token: discoveredStream.token,
-    sourceKind: "music_youtube",
+    sourceKind: "music",
+    visualizerMode: "cqt",
     sourceKey: "https://youtube.com/watch?v=abc123",
     sourceUrl: "https://youtube.com/watch?v=abc123",
     sourceLabel: "https://youtube.com/watch?v=abc123",
@@ -247,7 +278,12 @@ test("startMusicStreamPublish switches sources on an active self stream without 
     reason: "stream_publish_requested"
   });
   assert.deepEqual(harness.calls, [
-    { type: "play", url: "https://youtube.com/watch?v=next-track" }
+    {
+      type: "play_visualizer",
+      url: "https://youtube.com/watch?v=next-track",
+      resolvedDirectUrl: "false",
+      visualizerMode: "cqt"
+    }
   ]);
   assert.deepEqual(harness.gatewayPayloads, []);
   assert.equal(harness.session.streamPublish?.transportStatus, "ready");
@@ -271,7 +307,8 @@ test("startMusicStreamPublish no-ops when the same source is already actively st
     rtcServerId: discoveredStream.rtcServerId,
     endpoint: discoveredStream.endpoint,
     token: discoveredStream.token,
-    sourceKind: "music_youtube",
+    sourceKind: "music",
+    visualizerMode: "cqt",
     sourceKey: "https://youtube.com/watch?v=abc123",
     sourceUrl: "https://youtube.com/watch?v=abc123",
     sourceLabel: "https://youtube.com/watch?v=abc123",
@@ -293,6 +330,30 @@ test("startMusicStreamPublish no-ops when the same source is already actively st
   assert.equal(harness.session.streamPublish?.transportStatus, "ready");
 });
 
+test("startMusicStreamPublish preserves legacy video-track publish when visualizer mode is off", () => {
+  const harness = createHarness({
+    visualizerMode: "off"
+  });
+
+  const result = startMusicStreamPublish(harness.manager, {
+    guildId: "guild-1",
+    source: "music_player_state_playing"
+  });
+
+  assert.deepEqual(result, {
+    ok: true,
+    reason: "stream_publish_requested"
+  });
+  assert.deepEqual(harness.calls, [
+    {
+      type: "play",
+      url: "https://youtube.com/watch?v=abc123",
+      resolvedDirectUrl: "false"
+    }
+  ]);
+  assert.equal(harness.session.streamPublish?.visualizerMode, "off");
+});
+
 test("startBrowserStreamPublish reuses an active self stream and switches the media source to browser frames", () => {
   const harness = createHarness();
   const discoveredStream = addDiscoveredSelfStream(harness);
@@ -307,7 +368,8 @@ test("startBrowserStreamPublish reuses an active self stream and switches the me
     rtcServerId: discoveredStream.rtcServerId,
     endpoint: discoveredStream.endpoint,
     token: discoveredStream.token,
-    sourceKind: "music_youtube",
+    sourceKind: "music",
+    visualizerMode: "cqt",
     sourceKey: "https://youtube.com/watch?v=abc123",
     sourceUrl: "https://youtube.com/watch?v=abc123",
     sourceLabel: "https://youtube.com/watch?v=abc123",

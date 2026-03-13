@@ -803,6 +803,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           lastTrackTitle: null,
           lastTrackArtists: [],
           lastTrackUrl: null,
+          lastPlaybackUrl: null,
+          lastPlaybackResolvedDirectUrl: false,
           lastQuery: null,
           lastRequestedByUserId: null,
           lastRequestText: null,

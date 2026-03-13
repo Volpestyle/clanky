@@ -1,4 +1,6 @@
 import type { Client } from "discord.js";
+import { getVoiceStreamWatchSettings } from "../settings/agentStack.ts";
+import { normalizeStreamWatchVisualizerMode } from "../settings/voiceDashboardMappings.ts";
 import {
   buildStreamKey,
   requestStreamCreate,
@@ -9,6 +11,7 @@ import {
   type StreamDiscoveryState
 } from "../selfbot/streamDiscovery.ts";
 import type { VoiceSessionStreamPublishState } from "./voiceSessionTypes.ts";
+import type { StreamWatchVisualizerMode } from "../settings/voiceDashboardMappings.ts";
 
 type StreamPublishSession = {
   id?: string | null;
@@ -19,6 +22,8 @@ type StreamPublishSession = {
   music?: {
     provider?: string | null;
     lastTrackUrl?: string | null;
+    lastPlaybackUrl?: string | null;
+    lastPlaybackResolvedDirectUrl?: boolean;
   } | null;
   streamPublish?: VoiceSessionStreamPublishState | null;
   voxClient?: {
@@ -31,7 +36,12 @@ type StreamPublishSession = {
       daveChannelId: string;
     }) => void;
     streamPublishDisconnect?: (reason?: string | null) => void;
-    streamPublishPlay?: (url: string) => void;
+    streamPublishPlay?: (url: string, resolvedDirectUrl?: boolean) => void;
+    streamPublishPlayVisualizer?: (
+      url: string,
+      resolvedDirectUrl: boolean,
+      visualizerMode: Exclude<StreamWatchVisualizerMode, "off">
+    ) => void;
     streamPublishBrowserStart?: (mimeType?: string) => void;
     streamPublishBrowserFrame?: (payload: {
       mimeType?: string;
@@ -58,13 +68,20 @@ type StreamPublishManager = {
 const YOUTUBE_HOST_RE = /(^|\.)youtube\.com$|(^|\.)youtu\.be$/i;
 type StreamPublishSourceKind = VoiceSessionStreamPublishState["sourceKind"];
 type StreamPublishStartPlayback =
-  | { kind: "url"; url: string }
+  | { kind: "url"; url: string; resolvedDirectUrl: boolean }
+  | {
+      kind: "visualizer";
+      url: string;
+      resolvedDirectUrl: boolean;
+      visualizerMode: Exclude<StreamWatchVisualizerMode, "off">;
+    }
   | { kind: "browser_session"; mimeType: string };
 type StreamPublishSourceResolution =
   | {
       ok: true;
       reason: string;
       sourceKind: StreamPublishSourceKind;
+      visualizerMode: StreamWatchVisualizerMode | null;
       sourceKey: string;
       sourceUrl: string | null;
       sourceLabel: string | null;
@@ -74,6 +91,7 @@ type StreamPublishSourceResolution =
       ok: false;
       reason: string;
       sourceKind: StreamPublishSourceKind;
+      visualizerMode: StreamWatchVisualizerMode | null;
       sourceKey: string | null;
       sourceUrl: string | null;
       sourceLabel: string | null;
@@ -90,6 +108,7 @@ export function createStreamPublishState(): VoiceSessionStreamPublishState {
     endpoint: null,
     token: null,
     sourceKind: null,
+    visualizerMode: null,
     sourceKey: null,
     sourceUrl: null,
     sourceLabel: null,
@@ -123,14 +142,58 @@ function normalizeSourceUrl(url: unknown) {
   return String(url || "").trim() || null;
 }
 
-function resolvePublishableMusicSource(session: StreamPublishSession | null | undefined) {
+function getConfiguredVisualizerMode(manager: StreamPublishManager) {
+  return normalizeStreamWatchVisualizerMode(
+    getVoiceStreamWatchSettings(manager.store.getSettings()).visualizerMode
+  );
+}
+
+function resolvePublishableMusicSource(
+  manager: StreamPublishManager,
+  session: StreamPublishSession | null | undefined
+): StreamPublishSourceResolution {
+  const visualizerMode = getConfiguredVisualizerMode(manager);
   const provider = String(session?.music?.provider || "").trim().toLowerCase();
-  const sourceUrl = normalizeSourceUrl(session?.music?.lastTrackUrl);
-  if (!sourceUrl) {
+  const trackUrl = normalizeSourceUrl(session?.music?.lastTrackUrl);
+  const playbackUrl = normalizeSourceUrl(session?.music?.lastPlaybackUrl) || trackUrl;
+  const playbackResolvedDirectUrl = Boolean(session?.music?.lastPlaybackResolvedDirectUrl);
+
+  if (visualizerMode !== "off") {
+    if (!playbackUrl) {
+      return {
+        ok: false,
+        reason: "music_playback_url_missing",
+        sourceKind: "music" as const,
+        visualizerMode,
+        sourceKey: null,
+        sourceUrl: null,
+        sourceLabel: null
+      };
+    }
+
+    return {
+      ok: true,
+      reason: "music_visualizer_ready",
+      sourceKind: "music" as const,
+      visualizerMode,
+      sourceKey: trackUrl || playbackUrl,
+      sourceUrl: trackUrl || playbackUrl,
+      sourceLabel: trackUrl || playbackUrl,
+      playback: {
+        kind: "visualizer",
+        url: playbackUrl,
+        resolvedDirectUrl: playbackResolvedDirectUrl,
+        visualizerMode
+      }
+    };
+  }
+
+  if (!trackUrl) {
     return {
       ok: false,
       reason: "music_track_url_missing",
-      sourceKind: "music_youtube" as const,
+      sourceKind: "music" as const,
+      visualizerMode,
       sourceKey: null as string | null,
       sourceUrl: null as string | null,
       sourceLabel: null as string | null
@@ -138,19 +201,21 @@ function resolvePublishableMusicSource(session: StreamPublishSession | null | un
   }
 
   try {
-    const parsed = new URL(sourceUrl);
+    const parsed = new URL(trackUrl);
     const isYouTubeHost = YOUTUBE_HOST_RE.test(parsed.hostname);
     if (provider === "youtube" || isYouTubeHost) {
       return {
         ok: true,
         reason: "youtube_track_url_ready",
-        sourceKind: "music_youtube" as const,
-        sourceKey: sourceUrl,
-        sourceUrl,
-        sourceLabel: sourceUrl,
+        sourceKind: "music" as const,
+        visualizerMode,
+        sourceKey: trackUrl,
+        sourceUrl: trackUrl,
+        sourceLabel: trackUrl,
         playback: {
           kind: "url" as const,
-          url: sourceUrl
+          url: trackUrl,
+          resolvedDirectUrl: false
         }
       };
     }
@@ -161,10 +226,11 @@ function resolvePublishableMusicSource(session: StreamPublishSession | null | un
   return {
     ok: false,
     reason: "music_stream_publish_only_supports_youtube",
-    sourceKind: "music_youtube" as const,
-    sourceKey: sourceUrl,
-    sourceUrl,
-    sourceLabel: sourceUrl
+    sourceKind: "music" as const,
+    visualizerMode,
+    sourceKey: trackUrl,
+    sourceUrl: trackUrl,
+    sourceLabel: trackUrl
   };
 }
 
@@ -183,6 +249,7 @@ function resolveBrowserSessionPublishSource({
       ok: false,
       reason: "browser_session_id_missing",
       sourceKind: "browser_session",
+      visualizerMode: null,
       sourceKey: null,
       sourceUrl: normalizeSourceUrl(currentUrl),
       sourceLabel: null
@@ -195,6 +262,7 @@ function resolveBrowserSessionPublishSource({
       ok: false,
       reason: "browser_stream_publish_only_supports_png",
       sourceKind: "browser_session",
+      visualizerMode: null,
       sourceKey,
       sourceUrl: normalizeSourceUrl(currentUrl),
       sourceLabel: sourceKey
@@ -206,6 +274,7 @@ function resolveBrowserSessionPublishSource({
     ok: true,
     reason: "browser_session_ready",
     sourceKind: "browser_session",
+    visualizerMode: null,
     sourceKey,
     sourceUrl: normalizedCurrentUrl,
     sourceLabel: normalizedCurrentUrl || sourceKey,
@@ -265,6 +334,7 @@ function updateTransportState(
     endpoint,
     token,
     sourceKind,
+    visualizerMode,
     sourceKey,
     sourceUrl,
     sourceLabel,
@@ -293,8 +363,17 @@ function updateTransportState(
   if (endpoint !== undefined) state.endpoint = String(endpoint || "").trim() || null;
   if (token !== undefined) state.token = String(token || "").trim() || null;
   if (sourceKind !== undefined) {
-    state.sourceKind =
-      sourceKind === "music_youtube" || sourceKind === "browser_session" ? sourceKind : null;
+    state.sourceKind = sourceKind === "music" || sourceKind === "browser_session" ? sourceKind : null;
+  }
+  if (visualizerMode !== undefined) {
+    state.visualizerMode =
+      visualizerMode === "off" ||
+      visualizerMode === "cqt" ||
+      visualizerMode === "spectrum" ||
+      visualizerMode === "waves" ||
+      visualizerMode === "vectorscope"
+        ? visualizerMode
+        : null;
   }
   if (sourceKey !== undefined) state.sourceKey = String(sourceKey || "").trim() || null;
   if (sourceUrl !== undefined) state.sourceUrl = normalizeSourceUrl(sourceUrl);
@@ -518,6 +597,7 @@ function startResolvedStreamPublish(
         active: false,
         paused: false,
         sourceKind: sourceResolution.sourceKind,
+        visualizerMode: sourceResolution.visualizerMode,
         sourceKey: sourceResolution.sourceKey,
         sourceUrl: sourceResolution.sourceUrl,
         sourceLabel: sourceResolution.sourceLabel,
@@ -536,7 +616,8 @@ function startResolvedStreamPublish(
   const wasPaused = Boolean(state.paused);
   const sameSource =
     state.sourceKind === sourceResolution.sourceKind &&
-    state.sourceKey === sourceResolution.sourceKey;
+    state.sourceKey === sourceResolution.sourceKey &&
+    state.visualizerMode === sourceResolution.visualizerMode;
   const discoveryState = getStreamDiscoveryState(manager);
   const discoveredStream = expectedStreamKey
     ? discoveryState?.streams.get(expectedStreamKey) || null
@@ -554,6 +635,7 @@ function startResolvedStreamPublish(
     active: true,
     paused: false,
     sourceKind: sourceResolution.sourceKind,
+    visualizerMode: sourceResolution.visualizerMode,
     sourceKey: sourceResolution.sourceKey,
     sourceUrl: sourceResolution.sourceUrl,
     sourceLabel: sourceResolution.sourceLabel,
@@ -582,7 +664,19 @@ function startResolvedStreamPublish(
         sourceResolution.playback.kind === "url" &&
         typeof session.voxClient.streamPublishPlay === "function"
       ) {
-        session.voxClient.streamPublishPlay(sourceResolution.playback.url);
+        session.voxClient.streamPublishPlay(
+          sourceResolution.playback.url,
+          sourceResolution.playback.resolvedDirectUrl
+        );
+      } else if (
+        sourceResolution.playback.kind === "visualizer" &&
+        typeof session.voxClient.streamPublishPlayVisualizer === "function"
+      ) {
+        session.voxClient.streamPublishPlayVisualizer(
+          sourceResolution.playback.url,
+          sourceResolution.playback.resolvedDirectUrl,
+          sourceResolution.playback.visualizerMode
+        );
       } else if (
         sourceResolution.playback.kind === "browser_session" &&
         typeof session.voxClient.streamPublishBrowserStart === "function"
@@ -630,6 +724,7 @@ function startResolvedStreamPublish(
       source,
       streamKey: expectedStreamKey,
       sourceKind: sourceResolution.sourceKind,
+      visualizerMode: sourceResolution.visualizerMode,
       sourceKey: sourceResolution.sourceKey,
       sourceUrl: sourceResolution.sourceUrl,
       resumeRequested: wasPaused && sameSource,
@@ -665,7 +760,7 @@ export function startMusicStreamPublish(
     };
   }
 
-  const sourceResolution = resolvePublishableMusicSource(session);
+  const sourceResolution = resolvePublishableMusicSource(manager, session);
   return startResolvedStreamPublish(manager, session, {
     sourceResolution,
     source,

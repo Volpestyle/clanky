@@ -5,7 +5,18 @@ import { rangeStyle } from "../../utils";
 import { LlmProviderOptions, VISION_LLM_PROVIDER_OPTIONS } from "./LlmProviderOptions";
 import { OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS } from "../../settingsFormModel";
 import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../../../src/settings/settingsConstraints.ts";
-import { normalizeVoiceAdmissionModeForDashboard } from "../../../../src/settings/voiceDashboardMappings.ts";
+import {
+  normalizeVoiceAdmissionModeForDashboard,
+  STREAM_WATCH_VISUALIZER_MODES
+} from "../../../../src/settings/voiceDashboardMappings.ts";
+
+const STREAM_WATCH_VISUALIZER_LABELS = Object.freeze({
+  off: "Off (relay source video when available)",
+  cqt: "Constant-Q waterfall",
+  spectrum: "Scrolling spectrum",
+  waves: "Waveform lines",
+  vectorscope: "Stereo vectorscope"
+} satisfies Record<(typeof STREAM_WATCH_VISUALIZER_MODES)[number], string>);
 
 /* ── Screen share mental model ── */
 
@@ -1401,6 +1412,26 @@ export function VoiceModeSettingsSection({
                 <span className="vps-advanced-summary-copy">Native receive limits, fallback transport, and scanner tuning</span>
               </summary>
               <div className="vps-advanced-body">
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-stream-watch-visualizer-mode">Music Go Live visualizer</label>
+                    <select
+                      id="voice-stream-watch-visualizer-mode"
+                      value={String(form.voiceStreamWatchVisualizerMode || "cqt")}
+                      onChange={set("voiceStreamWatchVisualizerMode")}
+                    >
+                      {STREAM_WATCH_VISUALIZER_MODES.map((mode) => (
+                        <option key={mode} value={mode}>
+                          {STREAM_WATCH_VISUALIZER_LABELS[mode]}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="vps-runtime-summary-note">
+                      Controls the video sent during music Go Live publish. `cqt` is the default shared audio+visualizer path. `off` keeps the legacy source-video relay path when the track exposes one.
+                    </p>
+                  </div>
+                </div>
+
                 <div className="split">
                   <div>
                     <label htmlFor="voice-stream-watch-commentary-interval">

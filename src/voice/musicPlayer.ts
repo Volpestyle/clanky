@@ -11,6 +11,7 @@
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import type { StreamWatchVisualizerMode } from "../settings/voiceDashboardMappings.ts";
 import type { ClankvoxClient } from "./clankvoxClient.ts";
 import type { MusicSearchResult } from "./musicSearch.ts";
 
@@ -45,6 +46,8 @@ type MusicPlayerResult = {
   ok: boolean;
   error: string | null;
   track: MusicSearchResult | null;
+  playbackUrl: string | null;
+  resolvedDirectUrl: boolean;
 };
 
 export class DiscordMusicPlayer {
@@ -71,35 +74,61 @@ export class DiscordMusicPlayer {
     this.currentTrack = null;
   }
 
-  async play(track: MusicSearchResult): Promise<MusicPlayerResult> {
+  async play(
+    track: MusicSearchResult,
+    options: {
+      visualizerMode?: StreamWatchVisualizerMode | null;
+    } = {}
+  ): Promise<MusicPlayerResult> {
     if (!this.voxClient?.isAlive) {
-      return { ok: false, error: "no voice connection", track: null };
+      return {
+        ok: false,
+        error: "no voice connection",
+        track: null,
+        playbackUrl: null,
+        resolvedDirectUrl: false
+      };
     }
 
     try {
       const resolutionStartedAt = Date.now();
       const resolvedPlaybackUrl = await this.resolvePlaybackUrl(track);
       if (!resolvedPlaybackUrl?.url) {
-        return { ok: false, error: "could not resolve stream URL", track };
+        return {
+          ok: false,
+          error: "could not resolve stream URL",
+          track,
+          playbackUrl: null,
+          resolvedDirectUrl: false
+        };
       }
 
       // Delegate to subprocess — it handles yt-dlp, ffmpeg, and AudioPlayer.
       // The subprocess calls resetPlayback() internally before starting.
       this.voxClient.musicPlay(
         resolvedPlaybackUrl.url,
-        resolvedPlaybackUrl.resolvedDirectUrl
+        resolvedPlaybackUrl.resolvedDirectUrl,
+        options.visualizerMode
       );
       this.currentTrack = track;
 
       console.info(
         `[musicPlayer] queued subprocess playback title=${JSON.stringify(track.title)} platform=${track.platform} resolveMs=${Date.now() - resolutionStartedAt} source=${resolvedPlaybackUrl.source} direct=${resolvedPlaybackUrl.resolvedDirectUrl}`
       );
-      return { ok: true, error: null, track };
+      return {
+        ok: true,
+        error: null,
+        track,
+        playbackUrl: resolvedPlaybackUrl.url,
+        resolvedDirectUrl: resolvedPlaybackUrl.resolvedDirectUrl
+      };
     } catch (error) {
       return {
         ok: false,
         error: getErrorMessage(error),
-        track
+        track,
+        playbackUrl: null,
+        resolvedDirectUrl: false
       };
     }
   }

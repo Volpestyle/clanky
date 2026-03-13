@@ -223,6 +223,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.textInitiativeLlmModel, "claude-haiku-4-5");
   assert.equal(form.voiceThoughtEngineEnabled, true);
   assert.equal(form.voiceThoughtEngineEagerness, 50);
+  assert.equal(form.voiceStreamWatchVisualizerMode, "cqt");
   assert.equal(form.voiceStreamWatchKeyframeIntervalMs, 1200);
   assert.equal(form.voiceStreamWatchAutonomousCommentaryEnabled, true);
   assert.equal(form.voiceStreamWatchBrainContextEnabled, true);
@@ -259,6 +260,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.automationsEnabled = false;
   form.browserHeaded = true;
   form.voiceGenerationLlmUseTextModel = true;
+  form.voiceStreamWatchVisualizerMode = "VECTORSCOPE";
   form.voiceStreamWatchKeyframeIntervalMs = 1750;
   form.voiceStreamWatchAutonomousCommentaryEnabled = false;
   form.voiceStreamWatchBrainContextEnabled = true;
@@ -328,6 +330,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(effectivePatch.initiative.text.maxToolSteps, 2);
   assert.equal(effectivePatch.initiative.text.maxToolCalls, 3);
   assert.equal(effectivePatch.agentStack.runtimeConfig.voice.generation.mode, "inherit_orchestrator");
+  assert.equal(effectivePatch.voice.streamWatch.visualizerMode, "vectorscope");
   assert.equal(effectivePatch.voice.streamWatch.keyframeIntervalMs, 1750);
   assert.equal(effectivePatch.voice.streamWatch.autonomousCommentaryEnabled, false);
   assert.equal(effectivePatch.voice.streamWatch.brainContextEnabled, true);

@@ -1,6 +1,6 @@
 # Music Visualizer over Go Live — Implementation Plan
 
-Status: design draft
+Status: implemented March 13, 2026
 
 References:
 - [`docs/native-discord-screen-share.md`](../native-discord-screen-share.md) — Go Live send/receive protocol
@@ -14,6 +14,24 @@ When music is playing, stream a real-time audio visualizer through Go Live so
 everyone in the voice channel sees it as a native Discord screen share. No
 browser needed — the visualizer is generated inside clankvox from the same audio
 stream that produces the opus voice output.
+
+## Shipped Outcome
+
+The shipped implementation keeps the design intent from this plan and wires it
+through the existing music lifecycle:
+
+- `voice.streamWatch.visualizerMode` is a real setting, exposed in the dashboard,
+  with `"cqt"` as the default
+- `music_play` can now start a shared `ffmpeg` pipeline that emits PCM audio for
+  Discord voice and H264 visualizer access units for Go Live at the same time
+- Bun uses `stream_publish_play_visualizer` to attach the publish transport to
+  that already-running visualizer feed instead of starting a second fetch
+- `"off"` preserves the legacy URL-backed source-video relay path
+- non-YouTube audio sources work in visualizer mode as long as the music
+  playback path resolved a playable URL for the active track
+
+Canonical runtime documentation lives in
+[`docs/voice/discord-streaming.md`](../voice/discord-streaming.md).
 
 ## What Exists Today
 
@@ -208,13 +226,15 @@ showwaves=s=960x540:mode=cline:rate=30:scale=sqrt:colors=0x00ff88
 
 | File | Change |
 |------|--------|
-| `clankvox/src/stream_publish.rs` | `build_visualizer_pipeline_command`, `VisualizerMode` enum, fd 3 PCM reader, unified player mode |
-| `clankvox/src/playback_supervisor.rs` | Route `stream_publish_play_visualizer` to unified pipeline, skip separate `MusicPlayer` start when visualizer active |
-| `clankvox/src/ipc_protocol.rs` | `StreamPublishPlayVisualizer { url, visualizer_mode }` command variant |
-| `clankvox/src/ipc_router.rs` | Parse new IPC command |
-| `src/voice/voiceStreamPublish.ts` | `streamPublishPlayVisualizer` IPC call, setting-driven mode selection |
-| `src/voice/clankvoxClient.ts` | `streamPublishPlayVisualizer` method |
-| `src/voice/voiceSessionTypes.ts` | `visualizerMode` on publish state |
+| `src/voice/clankvox/src/stream_publish.rs` | `build_visualizer_pipeline_command`, `VisualizerMode`, publish attach path for shared visualizer frames |
+| `src/voice/clankvox/src/music.rs` | shared music player source that can emit PCM audio and H264 visualizer frames from one process |
+| `src/voice/clankvox/src/playback_supervisor.rs` | routes `music_play` visualizer mode and `stream_publish_play_visualizer` through the shared pipeline |
+| `src/voice/clankvox/src/ipc.rs` + `src/voice/clankvox/src/ipc_protocol.rs` | `visualizerMode` on `music_play` plus `StreamPublishPlayVisualizer` IPC support |
+| `src/voice/voiceMusicPlayback.ts` | passes configured visualizer mode into `music_play` and stores the resolved playback URL |
+| `src/voice/voiceStreamPublish.ts` | selects visualizer vs legacy publish path from session music state |
+| `src/voice/clankvoxClient.ts` | `streamPublishPlayVisualizer` IPC method |
+| `src/voice/voiceSessionTypes.ts` | `visualizerMode` and last playback source metadata on publish/music state |
+| `dashboard/src/settingsFormModel.ts` + `dashboard/src/components/settingsSections/VoiceModeSettingsSection.tsx` | dashboard support for `voice.streamWatch.visualizerMode` |
 
 ## Risks and Constraints
 

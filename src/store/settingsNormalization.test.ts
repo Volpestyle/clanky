@@ -163,6 +163,7 @@ test("normalizeSettings clamps and canonicalizes complex settings payloads", () 
         languageHint: "EN_us"
       },
       streamWatch: {
+        visualizerMode: "SPECTRUM",
         minCommentaryIntervalSeconds: 1,
         maxFramesPerMinute: 9999,
         maxFrameBytes: 10,
@@ -300,6 +301,7 @@ test("normalizeSettings clamps and canonicalizes complex settings payloads", () 
   assert.equal(normalized.agentStack.runtimeConfig.voice.geminiRealtime.inputSampleRateHz, 8000);
   assert.equal(normalized.agentStack.runtimeConfig.voice.geminiRealtime.outputSampleRateHz, 96000);
   assert.equal(normalized.voice.streamWatch.minCommentaryIntervalSeconds, 3);
+  assert.equal(normalized.voice.streamWatch.visualizerMode, "spectrum");
   assert.equal(normalized.voice.streamWatch.maxFramesPerMinute, 600);
   assert.equal(normalized.voice.streamWatch.maxFrameBytes, 50_000);
   assert.equal(normalized.voice.streamWatch.keyframeIntervalMs, 500);

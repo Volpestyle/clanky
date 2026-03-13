@@ -10,8 +10,10 @@ import {
   getResolvedVoiceMusicBrainBinding,
   isVoiceMusicBrainEnabled,
   getVoiceConversationPolicy,
+  getVoiceStreamWatchSettings,
   getVoiceRuntimeConfig
 } from "../settings/agentStack.ts";
+import { normalizeStreamWatchVisualizerMode } from "../settings/voiceDashboardMappings.ts";
 import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
 import { getMusicWakeFollowupState } from "./musicWakeLatch.ts";
 import { resolveTurnTranscriptionPlan, transcribePcmTurnWithPlan } from "./voiceDecisionRuntime.ts";
@@ -467,6 +469,8 @@ export function ensureSessionMusicState(
     lastTrackTitle: null,
     lastTrackArtists: [],
     lastTrackUrl: null,
+    lastPlaybackUrl: null,
+    lastPlaybackResolvedDirectUrl: false,
     lastQuery: null,
     lastRequestedByUserId: null,
     lastRequestText: null,
@@ -507,6 +511,8 @@ export function snapshotMusicRuntimeState(
     lastTrackTitle: music.lastTrackTitle || null,
     lastTrackArtists: Array.isArray(music.lastTrackArtists) ? music.lastTrackArtists : [],
     lastTrackUrl: music.lastTrackUrl || null,
+    lastPlaybackUrl: music.lastPlaybackUrl || null,
+    lastPlaybackResolvedDirectUrl: Boolean(music.lastPlaybackResolvedDirectUrl),
     lastQuery: music.lastQuery || null,
     lastRequestedByUserId: music.lastRequestedByUserId || null,
     lastRequestText: music.lastRequestText || null,
@@ -1981,6 +1987,10 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
       },
       query: playbackQuery
     };
+    if (music) {
+      music.lastPlaybackUrl = discordResult.playbackUrl || selectedResult.externalUrl || null;
+      music.lastPlaybackResolvedDirectUrl = Boolean(discordResult.resolvedDirectUrl);
+    }
   } else {
     const playbackProvider = manager.musicPlayback;
     if (!playbackProvider?.startPlayback) {
@@ -2060,6 +2070,8 @@ export async function requestPlayMusic(manager: MusicPlaybackHost, {
       ? playbackResult.track.artistNames
       : [];
     music.lastTrackUrl = playbackResult.track?.externalUrl || null;
+    music.lastPlaybackUrl = music.lastPlaybackUrl || playbackResult.track?.externalUrl || null;
+    music.lastPlaybackResolvedDirectUrl = Boolean(music.lastPlaybackResolvedDirectUrl);
     music.lastQuery = playbackResult.query || playbackQuery || null;
     music.lastRequestedByUserId = resolvedUserId || null;
     music.lastRequestText = requestText;
@@ -2131,21 +2143,44 @@ export async function playMusicViaDiscord(
   track: { id: string; title: string; artist: string; platform: string; externalUrl: string | null }
 ) {
   if (!session?.guildId) {
-    return { ok: false, error: "no session" };
+    return {
+      ok: false,
+      error: "no session",
+      playbackUrl: null,
+      resolvedDirectUrl: false
+    };
   }
 
   const guild = manager.client.guilds.cache.get(session.guildId);
   if (!guild) {
-    return { ok: false, error: "guild not found" };
+    return {
+      ok: false,
+      error: "guild not found",
+      playbackUrl: null,
+      resolvedDirectUrl: false
+    };
   }
 
   if (!session.voxClient?.isAlive) {
-    return { ok: false, error: "not connected to voice" };
+    return {
+      ok: false,
+      error: "not connected to voice",
+      playbackUrl: null,
+      resolvedDirectUrl: false
+    };
   }
   const musicPlayer = manager.musicPlayer;
   if (!musicPlayer?.play) {
-    return { ok: false, error: "music player unavailable" };
+    return {
+      ok: false,
+      error: "music player unavailable",
+      playbackUrl: null,
+      resolvedDirectUrl: false
+    };
   }
+  const streamWatchSettings = getVoiceStreamWatchSettings(
+    session.settingsSnapshot || manager.store.getSettings()
+  );
 
   const searchPlatform: "youtube" | "soundcloud" =
     track.platform === "soundcloud" ? "soundcloud" : "youtube";
@@ -2160,8 +2195,15 @@ export async function playMusicViaDiscord(
     externalUrl: track.externalUrl || ""
   };
 
-  const result = await musicPlayer.play(searchResult);
-  return { ok: result.ok, error: result.error };
+  const result = await musicPlayer.play(searchResult, {
+    visualizerMode: normalizeStreamWatchVisualizerMode(streamWatchSettings.visualizerMode)
+  });
+  return {
+    ok: result.ok,
+    error: result.error,
+    playbackUrl: result.playbackUrl,
+    resolvedDirectUrl: result.resolvedDirectUrl
+  };
 }
 
 export async function requestStopMusic(manager: MusicPlaybackHost, {

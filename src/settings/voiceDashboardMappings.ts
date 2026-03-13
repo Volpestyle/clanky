@@ -5,7 +5,16 @@ const VOICE_RUNTIME_SELECTIONS = [
   "elevenlabs"
 ] as const;
 
+export const STREAM_WATCH_VISUALIZER_MODES = [
+  "off",
+  "cqt",
+  "spectrum",
+  "waves",
+  "vectorscope"
+] as const;
+
 type VoiceRuntimeSelection = (typeof VOICE_RUNTIME_SELECTIONS)[number];
+export type StreamWatchVisualizerMode = (typeof STREAM_WATCH_VISUALIZER_MODES)[number];
 
 function normalizeVoiceRuntimeSelection(
   value: unknown,
@@ -83,4 +92,18 @@ export function resolveRealtimeAdmissionModeForRuntime(
     return "hard_classifier";
   }
   return "generation_only";
+}
+
+export function normalizeStreamWatchVisualizerMode(
+  value: unknown,
+  fallback: StreamWatchVisualizerMode = "cqt"
+): StreamWatchVisualizerMode {
+  const normalized = String(value || fallback || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "off") return "off";
+  if (normalized === "spectrum") return "spectrum";
+  if (normalized === "waves") return "waves";
+  if (normalized === "vectorscope") return "vectorscope";
+  return "cqt";
 }

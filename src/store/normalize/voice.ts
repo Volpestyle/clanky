@@ -14,7 +14,10 @@ import {
   normalizeReplyPath,
   normalizeVoiceDefaultInterruptionMode
 } from "./shared.ts";
-import { resolveVoiceAdmissionModeForSettings } from "../../settings/voiceDashboardMappings.ts";
+import {
+  normalizeStreamWatchVisualizerMode,
+  resolveVoiceAdmissionModeForSettings
+} from "../../settings/voiceDashboardMappings.ts";
 
 export function normalizeVoiceSection(section: Settings["voice"]): Settings["voice"] {
   const transcription = section.transcription;
@@ -159,6 +162,10 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
     },
     streamWatch: {
       enabled: normalizeBoolean(streamWatch.enabled, DEFAULT_SETTINGS.voice.streamWatch.enabled),
+      visualizerMode: normalizeStreamWatchVisualizerMode(
+        streamWatch.visualizerMode,
+        DEFAULT_SETTINGS.voice.streamWatch.visualizerMode
+      ),
       minCommentaryIntervalSeconds: normalizeInt(
         streamWatch.minCommentaryIntervalSeconds,
         DEFAULT_SETTINGS.voice.streamWatch.minCommentaryIntervalSeconds,

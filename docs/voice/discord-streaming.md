@@ -53,7 +53,11 @@ The native Discord self-publish path is also built in code:
 - Bun currently drives publish from two source families:
   - music/video relay: start on music play, pause on music pause, stop on music idle/error
   - browser-session share: explicit `share_browser_session` start/stop around an active browser session
-- the current source gate is intentionally narrow: publish accepts either YouTube-backed music URLs that `clankvox` can resolve through `yt-dlp` / `ffmpeg`, or browser-session PNG frames forwarded from Bun capture
+- `voice.streamWatch.visualizerMode` controls how music publish renders:
+  - `"cqt"` is the default and starts one shared `ffmpeg` pipeline inside `clankvox` that emits PCM for the main voice connection and H264 visualizer access units for Go Live
+  - `stream_publish_play_visualizer` attaches the sender transport to that already-running visualizer feed instead of starting a second media fetch
+  - `"off"` preserves the legacy URL-backed source-video relay path when a real source video track is preferred
+- music publish is no longer limited to YouTube-backed video tracks when a visualizer is active; any playback URL the music pipeline already resolved for the active track can drive the visualizer
 
 Sender-side live Discord validation is still pending in this repo snapshot. What is validated today is protocol shape, transport wiring, automated coverage for create/resume/switch control-plane behavior, browser-session frame forwarding coverage in Bun, and `cargo test` coverage inside `clankvox`.
 
@@ -193,9 +197,10 @@ These are the same opcodes as the regular voice connection but exchanged on the 
 
 ```
 1. A publishable source becomes active
-   → music/video relay resolves a publishable source URL
+   → music playback resolves a publishable source URL
+   → if `voice.streamWatch.visualizerMode != "off"`, `music_play` starts one shared `ffmpeg` pipeline that emits both PCM audio and H264 visualizer video
+   → if `voice.streamWatch.visualizerMode == "off"`, Bun keeps the legacy URL-backed source-video relay path
    → browser-session share resolves a live browser session key
-   → current rollout accepts YouTube-backed URLs or browser-session PNG frames
 
 2. Create or reuse self stream
    → If no self stream exists, send OP18 STREAM_CREATE
@@ -210,9 +215,11 @@ These are the same opcodes as the regular voice connection but exchanged on the 
    → OP12 VIDEO announces active screen stream attributes
 
 4. Push media
-   → URL-backed publish launches yt-dlp/ffmpeg to produce H264 Annex-B access units
+   → visualizer-mode music publish sends `stream_publish_play_visualizer`
+   → clankvox attaches the sender transport to the shared music visualizer H264 queue
+   → legacy URL-backed music publish sends `stream_publish_play`
    → browser-session share sends stream_publish_browser_start + stream_publish_browser_frame payloads into clankvox
-   → clankvox encodes the active source to H264 Annex-B access units
+   → clankvox encodes or relays the active source to H264 Annex-B access units
    → DAVE encrypt + RTP packetize each access unit
    → OP5 speaking uses flag 2 on the stream connection
 
@@ -334,23 +341,23 @@ All of this is implemented and tested:
 Implemented in code:
 
 - `streamDiscovery.ts`: OP18/OP19/OP22 send helpers plus self stream discovery
-- `voiceStreamPublish.ts`: session state, source gating, self-stream connect orchestration
+- `voiceStreamPublish.ts`: session state, visualizer-aware source resolution, and self-stream connect orchestration
 - `voiceBrowserStreamPublish.ts`: browser-session capture loop and frame forwarding into `clankvox`
 - `sessionLifecycle.ts`: publish transport lifecycle, recovery, and stream discovery callbacks
-- `clankvoxClient.ts`: `stream_publish_*` IPC commands and transport state relay
-- `clankvox`: sender-side `stream_publish` transport role, H264 codec negotiation, DAVE video encrypt, RTP packetization, ffmpeg/yt-dlp source pipeline, and browser-frame encode path
+- `clankvoxClient.ts`: `stream_publish_*` IPC commands, including `stream_publish_play_visualizer`, and transport state relay
+- `clankvox`: sender-side `stream_publish` transport role, H264 codec negotiation, DAVE video encrypt, RTP packetization, shared music visualizer pipeline, legacy URL relay, and browser-frame encode path
 
 Current rollout boundary:
 
 - outbound publish is wired to music/video relay and explicit browser-session share, not a general-purpose arbitrary file/share tool
-- the current source gate is YouTube-backed track URLs plus browser-session PNG frames
+- music relay defaults to a shared audio visualizer (`voice.streamWatch.visualizerMode: "cqt"`) and only falls back to source-video relay when that setting is `"off"`
 - sender transport is H264-only
 
 ### What is still open
 
 1. **RTX retransmission receive** — the current UDP receive path still drops RTX packets, so packet-loss recovery remains limited until retransmission support lands
 2. **Live sender validation** — the sender path is implemented, but this repo snapshot still needs Discord-live validation against a real selfbot session
-3. **Broader publish sources** — current outbound publish only accepts YouTube-backed URLs or browser-session PNG frames
+3. **Broader publish surfaces** — outbound publish still centers on music lifecycle and explicit browser-session share; there is no general-purpose arbitrary file/share tool yet
 
 ## Implementation Plan
 
@@ -368,11 +375,13 @@ Current rollout boundary:
 ### Current Publish Flow
 
 - music playback enters `playing`
-- `voiceStreamPublish.ts` resolves a publishable source URL from session music state
+- `voiceMusicPlayback.ts` resolves the playback URL for the active track and starts `music_play`
+- if `voice.streamWatch.visualizerMode != "off"`, `music_play` starts a shared `ffmpeg` pipeline in `clankvox` that emits PCM audio plus H264 visualizer access units
+- `voiceStreamPublish.ts` resolves a publishable source from session music state or an active browser-session share
 - if no self stream exists yet, Bun sends OP18 `STREAM_CREATE`
 - self stream discovery callbacks hand `STREAM_CREATE` / `STREAM_SERVER_UPDATE` credentials back into the owning voice session
-- Bun sends `stream_publish_connect` + `stream_publish_play` to `clankvox`
-- `clankvox` starts a sender-side stream transport, marks video active, and sends H264 RTP frames
+- Bun sends `stream_publish_connect`, then either `stream_publish_play_visualizer` for shared visualizer mode or `stream_publish_play` for legacy URL relay
+- `clankvox` starts or reuses the sender-side stream transport, marks video active, and sends H264 RTP frames
 - music pause sends `stream_publish_pause` plus OP22 `paused: true`
 - music resume reuses the live stream when possible instead of recreating it
 - music idle/error/stop sends `stream_publish_stop`, `stream_publish_disconnect`, and OP19 `STREAM_DELETE`
@@ -394,14 +403,15 @@ The share-link fallback remains the recovery path when:
 
 ## Settings
 
-Native subscription tuning lives under `voice.streamWatch`:
+Native subscription tuning and music Go Live visualizer settings live under `voice.streamWatch`:
 
+- `visualizerMode` (default: `"cqt"`)
 - `nativeDiscordMaxFramesPerSecond` (default: 2)
 - `nativeDiscordPreferredQuality` (default: 100)
 - `nativeDiscordPreferredPixelCount` (default: 921600 / 1280x720)
 - `nativeDiscordPreferredStreamType` (default: `"screen"`)
 
-There is no separate public settings block for outbound native publish yet. The current rollout is code-driven: music playback can opportunistically start a self publish when the source is supported.
+There is no separate standalone settings block for outbound native publish. Music playback reuses `voice.streamWatch.visualizerMode` to choose between the shared audio-visualizer path and the legacy source-video relay path.
 
 ## Observability
 
@@ -434,7 +444,7 @@ There is no separate public settings block for outbound native publish yet. The 
 
 - **DAVE on stream connections.** Stream connections use DAVE channel ID `BigInt(rtc_server_id) - 1n`. Confirmed working live.
 - **RTX loss recovery is still limited.** The receive path currently traces and drops RTX payloads; retransmission support remains future work.
-- **Sender compatibility is narrower than receive.** Outbound publish currently assumes H264 sender negotiation and either YouTube-backed URL sources or browser-session PNG frames.
+- **Sender compatibility is narrower than receive.** Outbound publish is still H264-only and still centered on music lifecycle or browser-session share. `visualizerMode: "off"` also depends on a URL-backed source relay path being available.
 
 ## Reference: Discord-video-stream
 
