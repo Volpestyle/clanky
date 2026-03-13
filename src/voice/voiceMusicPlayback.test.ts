@@ -352,7 +352,7 @@ test("maybeHandleMusicPlaybackTurn lets the music brain consume a fuzzy playback
           {
             type: "tool_call",
             id: "tool-1",
-            name: "music_pause",
+            name: "media_pause",
             input: {}
           }
         ]

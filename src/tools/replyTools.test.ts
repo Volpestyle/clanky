@@ -2,7 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { SubAgentSessionManager } from "../agents/subAgentSession.ts";
 import { buildReplyToolSet, executeReplyTool } from "./replyTools.ts";
-import { MUSIC_PLAY_SCHEMA } from "./sharedToolSchemas.ts";
+import { MUSIC_PLAY_SCHEMA, VIDEO_PLAY_SCHEMA } from "./sharedToolSchemas.ts";
 
 test("buildReplyToolSet includes browser_browse when browser agent is enabled and available", () => {
   const tools = buildReplyToolSet({
@@ -158,6 +158,8 @@ test("buildReplyToolSet includes note_context when voice tools are available", (
   }).map((tool) => tool.name);
 
   assert.equal(toolNames.includes("note_context"), true);
+  assert.equal(toolNames.includes("video_search"), true);
+  assert.equal(toolNames.includes("video_play"), true);
   assert.equal(toolNames.includes("set_addressing"), false);
 });
 
@@ -168,6 +170,15 @@ test("music_play schema has no top-level anyOf and requires query (provider-safe
   assert.equal(Object.hasOwn(MUSIC_PLAY_SCHEMA.parameters.properties, "query"), true);
   assert.equal(Object.hasOwn(MUSIC_PLAY_SCHEMA.parameters.properties, "selection_id"), true);
   assert.deepEqual(MUSIC_PLAY_SCHEMA.parameters.required, ["query"]);
+});
+
+test("video_play schema has no top-level anyOf and requires query (provider-safe)", () => {
+  assert.equal(Object.hasOwn(VIDEO_PLAY_SCHEMA.parameters, "anyOf"), false);
+  assert.equal(Object.hasOwn(VIDEO_PLAY_SCHEMA.parameters, "oneOf"), false);
+  assert.equal(VIDEO_PLAY_SCHEMA.parameters.type, "object");
+  assert.equal(Object.hasOwn(VIDEO_PLAY_SCHEMA.parameters.properties, "query"), true);
+  assert.equal(Object.hasOwn(VIDEO_PLAY_SCHEMA.parameters.properties, "selection_id"), true);
+  assert.deepEqual(VIDEO_PLAY_SCHEMA.parameters.required, ["query"]);
 });
 
 test("executeReplyTool delegates web_scrape to readPageSummary", async () => {
@@ -413,6 +424,8 @@ test("executeReplyTool fails music_play with empty query", async () => {
       voiceSession: {
         async musicSearch() { throw new Error("not used"); },
         async musicPlay() { throw new Error("should not be called"); },
+        async videoSearch() { throw new Error("not used"); },
+        async videoPlay() { throw new Error("not used"); },
         async musicQueueAdd() { throw new Error("not used"); },
         async musicQueueNext() { throw new Error("not used"); },
         async musicStop() { throw new Error("not used"); },
@@ -442,6 +455,45 @@ test("executeReplyTool fails music_play with empty query", async () => {
   assert.match(result.content, /query was empty/);
 });
 
+test("executeReplyTool fails video_play with empty query", async () => {
+  const result = await executeReplyTool(
+    "video_play",
+    {},
+    {
+      voiceSession: {
+        async musicSearch() { throw new Error("not used"); },
+        async musicPlay() { throw new Error("not used"); },
+        async videoSearch() { throw new Error("not used"); },
+        async videoPlay() { throw new Error("should not be called"); },
+        async musicQueueAdd() { throw new Error("not used"); },
+        async musicQueueNext() { throw new Error("not used"); },
+        async musicStop() { throw new Error("not used"); },
+        async musicPause() { throw new Error("not used"); },
+        async musicResume() { throw new Error("not used"); },
+        async musicReplyHandoff() { throw new Error("not used"); },
+        async musicSkip() { throw new Error("not used"); },
+        async musicNowPlaying() { throw new Error("not used"); },
+        async playSoundboard() { throw new Error("not used"); },
+        async setScreenNote() { throw new Error("not used"); },
+        async setScreenMoment() { throw new Error("not used"); },
+        async leaveVoiceChannel() { throw new Error("not used"); }
+      }
+    },
+    {
+      settings: {},
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      sourceMessageId: "msg-1",
+      sourceText: "play some youtube video",
+      trace: { source: "voice_turn" }
+    }
+  );
+
+  assert.equal(result.isError, true);
+  assert.match(result.content, /query was empty/);
+});
+
 test("executeReplyTool fails music_search with empty query", async () => {
   const result = await executeReplyTool(
     "music_search",
@@ -450,6 +502,8 @@ test("executeReplyTool fails music_search with empty query", async () => {
       voiceSession: {
         async musicSearch() { throw new Error("should not be called"); },
         async musicPlay() { throw new Error("not used"); },
+        async videoSearch() { throw new Error("not used"); },
+        async videoPlay() { throw new Error("not used"); },
         async musicQueueAdd() { throw new Error("not used"); },
         async musicQueueNext() { throw new Error("not used"); },
         async musicStop() { throw new Error("not used"); },
@@ -479,16 +533,18 @@ test("executeReplyTool fails music_search with empty query", async () => {
   assert.match(result.content, /query was empty/);
 });
 
-test("executeReplyTool delegates music_reply_handoff to the voice runtime", async () => {
+test("executeReplyTool delegates media_reply_handoff to the voice runtime", async () => {
   const calls: string[] = [];
 
   const result = await executeReplyTool(
-    "music_reply_handoff",
+    "media_reply_handoff",
     { mode: "duck" },
     {
       voiceSession: {
         async musicSearch() { throw new Error("not used"); },
         async musicPlay() { throw new Error("not used"); },
+        async videoSearch() { throw new Error("not used"); },
+        async videoPlay() { throw new Error("not used"); },
         async musicQueueAdd() { throw new Error("not used"); },
         async musicQueueNext() { throw new Error("not used"); },
         async musicStop() { throw new Error("not used"); },

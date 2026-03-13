@@ -280,6 +280,25 @@ export const MUSIC_SEARCH_SCHEMA: SharedToolSchema = {
   }
 };
 
+export const VIDEO_SEARCH_SCHEMA: SharedToolSchema = {
+  name: "video_search",
+  description: "Search YouTube video candidates without starting playback. Prefer this when the user wants options; use browser_browse when thumbnails or page layout matter.",
+  strict: true,
+  voiceContinuationPolicy: "always",
+  parameters: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description: "YouTube video title, topic, or phrase to search for. Pull from the transcript or conversation context. Required."
+      },
+      max_results: { type: "integer" }
+    },
+    required: ["query"],
+    additionalProperties: false
+  }
+};
+
 export const MUSIC_QUEUE_ADD_SCHEMA: SharedToolSchema = {
   name: "music_queue_add",
   description: "Append one or more tracks to the queue. You may pass direct query text, a prior selection_id, or exact track IDs from music_search/music_play.",
@@ -343,6 +362,28 @@ export const MUSIC_PLAY_SCHEMA: SharedToolSchema = {
   }
 };
 
+export const VIDEO_PLAY_SCHEMA: SharedToolSchema = {
+  name: "video_play",
+  description: "Start YouTube video playback from a query or prior selection_id. May return clarification choices when the request is ambiguous.",
+  strict: true,
+  voiceContinuationPolicy: "always",
+  parameters: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description: "YouTube video title, topic, or phrase to play. Pull from the transcript or conversation context."
+      },
+      selection_id: {
+        type: "string",
+        description: "Exact selection id returned from a previous video_play or video_search result. Pass empty string when not selecting a prior result."
+      }
+    },
+    required: ["query"],
+    additionalProperties: false
+  }
+};
+
 export const MUSIC_QUEUE_NEXT_SCHEMA: SharedToolSchema = {
   name: "music_queue_next",
   description: "Insert one or more tracks immediately after the current track. You may pass direct query text, a prior selection_id, or exact track IDs from music_search/music_play.",
@@ -377,8 +418,8 @@ export const MUSIC_QUEUE_NEXT_SCHEMA: SharedToolSchema = {
 };
 
 export const MUSIC_STOP_SCHEMA: SharedToolSchema = {
-  name: "music_stop",
-  description: "Stop playback and clear the active queue.",
+  name: "media_stop",
+  description: "Stop the current playback item and clear the active queue. Applies to the shared music/video playback stack.",
   voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
@@ -388,8 +429,8 @@ export const MUSIC_STOP_SCHEMA: SharedToolSchema = {
 };
 
 export const MUSIC_PAUSE_SCHEMA: SharedToolSchema = {
-  name: "music_pause",
-  description: "Pause music playback.",
+  name: "media_pause",
+  description: "Pause the current playback item. Applies to the shared music/video playback stack.",
   voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
@@ -399,8 +440,8 @@ export const MUSIC_PAUSE_SCHEMA: SharedToolSchema = {
 };
 
 export const MUSIC_RESUME_SCHEMA: SharedToolSchema = {
-  name: "music_resume",
-  description: "Resume paused music playback.",
+  name: "media_resume",
+  description: "Resume paused playback. Applies to the shared music/video playback stack.",
   voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
@@ -410,8 +451,8 @@ export const MUSIC_RESUME_SCHEMA: SharedToolSchema = {
 };
 
 export const MUSIC_REPLY_HANDOFF_SCHEMA: SharedToolSchema = {
-  name: "music_reply_handoff",
-  description: "Temporarily claim the floor for the current spoken reply by pausing or ducking active music. Runtime auto-restores playback when you finish. This is not a persistent playback command.",
+  name: "media_reply_handoff",
+  description: "Temporarily claim the floor for the current spoken reply by pausing or ducking active playback. Runtime auto-restores playback when you finish. This is not a persistent playback command.",
   voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
@@ -419,7 +460,7 @@ export const MUSIC_REPLY_HANDOFF_SCHEMA: SharedToolSchema = {
       mode: {
         type: "string",
         enum: ["pause", "duck", "none"],
-        description: "\"pause\" fully pauses music for this reply, \"duck\" lowers music under this reply, \"none\" clears any pending temporary handoff."
+        description: "\"pause\" fully pauses playback for this reply, \"duck\" lowers playback under this reply, \"none\" clears any pending temporary handoff."
       }
     },
     required: ["mode"],
@@ -428,8 +469,8 @@ export const MUSIC_REPLY_HANDOFF_SCHEMA: SharedToolSchema = {
 };
 
 export const MUSIC_SKIP_SCHEMA: SharedToolSchema = {
-  name: "music_skip",
-  description: "Skip current track and advance to next queued track.",
+  name: "media_skip",
+  description: "Skip the current playback item and advance to the next queued item.",
   voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
@@ -439,8 +480,8 @@ export const MUSIC_SKIP_SCHEMA: SharedToolSchema = {
 };
 
 export const MUSIC_NOW_PLAYING_SCHEMA: SharedToolSchema = {
-  name: "music_now_playing",
-  description: "Read now-playing and queue status.",
+  name: "media_now_playing",
+  description: "Read current playback and queue status.",
   voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
@@ -476,6 +517,34 @@ export const START_SCREEN_WATCH_SCHEMA: SharedToolSchema = {
       }
     },
     required: [],
+    additionalProperties: false
+  }
+};
+
+export const SHARE_BROWSER_SESSION_SCHEMA: SharedToolSchema = {
+  name: "share_browser_session",
+  description: "Share an existing persistent browser session into Discord Go Live. Pass the session_id returned from browser_browse when you want to show the page while deciding or demonstrating.",
+  voiceContinuationPolicy: "if_no_spoken_text",
+  parameters: {
+    type: "object",
+    properties: {
+      session_id: {
+        type: "string",
+        description: "Browser session ID previously returned from browser_browse."
+      }
+    },
+    required: ["session_id"],
+    additionalProperties: false
+  }
+};
+
+export const STOP_VIDEO_SHARE_SCHEMA: SharedToolSchema = {
+  name: "stop_video_share",
+  description: "Stop the current outbound video share, whether it is a browser session or a published video stream.",
+  voiceContinuationPolicy: "if_no_spoken_text",
+  parameters: {
+    type: "object",
+    properties: {},
     additionalProperties: false
   }
 };
@@ -560,6 +629,8 @@ const NOTE_CONTEXT_SCHEMA: SharedToolSchema = {
 export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
   MUSIC_SEARCH_SCHEMA,
   MUSIC_PLAY_SCHEMA,
+  VIDEO_SEARCH_SCHEMA,
+  VIDEO_PLAY_SCHEMA,
   MUSIC_QUEUE_ADD_SCHEMA,
   MUSIC_QUEUE_NEXT_SCHEMA,
   MUSIC_STOP_SCHEMA,
@@ -568,6 +639,8 @@ export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
   MUSIC_REPLY_HANDOFF_SCHEMA,
   MUSIC_SKIP_SCHEMA,
   MUSIC_NOW_PLAYING_SCHEMA,
+  SHARE_BROWSER_SESSION_SCHEMA,
+  STOP_VIDEO_SHARE_SCHEMA,
   PLAY_SOUNDBOARD_SCHEMA,
   SCREEN_NOTE_SCHEMA,
   SCREEN_MOMENT_SCHEMA,

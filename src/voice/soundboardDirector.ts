@@ -1,4 +1,4 @@
-import { PermissionFlagsBits } from "discord.js";
+import { getDiscordAuthorizationHeaderValue } from "../selfbot/selfbotPatches.ts";
 
 const API_BASE = "https://discord.com/api/v10";
 
@@ -74,7 +74,7 @@ export class SoundboardDirector {
     }
 
     const perms = voiceChannel.permissionsFor(me);
-    if (!perms?.has(PermissionFlagsBits.Speak) || !perms.has(PermissionFlagsBits.UseSoundboard)) {
+    if (!perms?.has("Speak") || !perms.has("UseSoundboard")) {
       return {
         ok: false,
         reason: "missing_permissions",
@@ -82,7 +82,7 @@ export class SoundboardDirector {
       };
     }
 
-    if (sourceGuildId && !perms.has(PermissionFlagsBits.UseExternalSounds)) {
+    if (sourceGuildId && !perms.has("UseExternalSounds")) {
       return {
         ok: false,
         reason: "missing_external_permissions",
@@ -134,7 +134,7 @@ export class SoundboardDirector {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bot ${this.appConfig.discordToken}`
+          Authorization: getDiscordAuthorizationHeaderValue(this.appConfig.discordToken)
         },
         body: JSON.stringify(body)
       });

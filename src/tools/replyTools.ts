@@ -14,6 +14,10 @@ import {
 } from "../agents/codeAgent.ts";
 import { toAnthropicTool } from "./sharedToolSchemas.ts";
 import { buildReplyToolSchemas, type ReplyToolAvailability } from "./toolRegistry.ts";
+import {
+  startBrowserSessionStreamPublish,
+  type BrowserStreamPublishManager
+} from "../voice/voiceBrowserStreamPublish.ts";
 
 const MAX_WEB_QUERY_LEN = 220;
 const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
@@ -218,9 +222,17 @@ export type ReplyToolRuntime = {
       source: string;
     }) => SubAgentSession | null;
   };
+  voiceSessionManager?: BrowserStreamPublishManager & {
+    stopMusicStreamPublish?: (opts: {
+      guildId: string;
+      reason?: string | null;
+    }) => { ok?: boolean; reason?: string | null };
+  };
   voiceSession?: {
     musicSearch: (query: string, limit: number) => Promise<Record<string, unknown>>;
     musicPlay: (query: string, selectionId?: string | null, platform?: string | null) => Promise<Record<string, unknown>>;
+    videoSearch: (query: string, limit: number) => Promise<Record<string, unknown>>;
+    videoPlay: (query: string, selectionId?: string | null) => Promise<Record<string, unknown>>;
     musicQueueAdd: (args: {
       tracks?: string[];
       query?: string;
@@ -242,6 +254,7 @@ export type ReplyToolRuntime = {
     musicReplyHandoff: (mode: "pause" | "duck" | "none") => Promise<Record<string, unknown>>;
     musicSkip: () => Promise<Record<string, unknown>>;
     musicNowPlaying: () => Promise<Record<string, unknown>>;
+    stopVideoShare?: () => Promise<Record<string, unknown>>;
     playSoundboard: (refs: string[], transcript: string) => Promise<Record<string, unknown>>;
     setScreenNote: (note: string) => Promise<Record<string, unknown>>;
     setScreenMoment: (moment: string) => Promise<Record<string, unknown>>;
@@ -289,6 +302,7 @@ const REPLY_TOOL_HANDLERS: Record<
   conversation_search: executeConversationSearch,
   image_lookup: async (input, _runtime, context) => await executeImageLookup(input, context),
   start_screen_watch: async (input, runtime, context) => await executeStartScreenWatch(input, runtime, context),
+  share_browser_session: async (input, runtime, context) => await executeShareBrowserSession(input, runtime, context),
   play_soundboard: executePlaySoundboard,
   screen_note: executeScreenNote,
   screen_moment: executeScreenMoment,
@@ -297,14 +311,17 @@ const REPLY_TOOL_HANDLERS: Record<
   code_task: executeCodeTask,
   music_search: async (input, runtime, context) => await executeVoiceTool("music_search", input, runtime, context),
   music_play: async (input, runtime, context) => await executeVoiceTool("music_play", input, runtime, context),
+  video_search: async (input, runtime, context) => await executeVoiceTool("video_search", input, runtime, context),
+  video_play: async (input, runtime, context) => await executeVoiceTool("video_play", input, runtime, context),
   music_queue_add: async (input, runtime, context) => await executeVoiceTool("music_queue_add", input, runtime, context),
   music_queue_next: async (input, runtime, context) => await executeVoiceTool("music_queue_next", input, runtime, context),
-  music_stop: async (input, runtime, context) => await executeVoiceTool("music_stop", input, runtime, context),
-  music_pause: async (input, runtime, context) => await executeVoiceTool("music_pause", input, runtime, context),
-  music_resume: async (input, runtime, context) => await executeVoiceTool("music_resume", input, runtime, context),
-  music_reply_handoff: async (input, runtime, context) => await executeVoiceTool("music_reply_handoff", input, runtime, context),
-  music_skip: async (input, runtime, context) => await executeVoiceTool("music_skip", input, runtime, context),
-  music_now_playing: async (input, runtime, context) => await executeVoiceTool("music_now_playing", input, runtime, context)
+  media_stop: async (input, runtime, context) => await executeVoiceTool("media_stop", input, runtime, context),
+  media_pause: async (input, runtime, context) => await executeVoiceTool("media_pause", input, runtime, context),
+  media_resume: async (input, runtime, context) => await executeVoiceTool("media_resume", input, runtime, context),
+  media_reply_handoff: async (input, runtime, context) => await executeVoiceTool("media_reply_handoff", input, runtime, context),
+  media_skip: async (input, runtime, context) => await executeVoiceTool("media_skip", input, runtime, context),
+  media_now_playing: async (input, runtime, context) => await executeVoiceTool("media_now_playing", input, runtime, context),
+  stop_video_share: async (input, runtime, context) => await executeVoiceTool("stop_video_share", input, runtime, context)
 };
 
 export async function executeReplyTool(
@@ -796,6 +813,53 @@ async function executeStartScreenWatch(
   }
 }
 
+async function executeShareBrowserSession(
+  input: ReplyToolCallInput,
+  runtime: ReplyToolRuntime,
+  context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
+  if (!runtime.voiceSession) {
+    return { content: "Not in a voice channel. Join voice first, then share the browser session.", isError: true };
+  }
+  if (!runtime.voiceSessionManager || !runtime.subAgentSessions) {
+    return { content: "Browser session sharing is not available.", isError: true };
+  }
+
+  const sessionId = String(input?.session_id || "").trim().slice(0, 220);
+  if (!sessionId) {
+    return { content: "Missing browser session_id.", isError: true };
+  }
+
+  try {
+    const result = await startBrowserSessionStreamPublish({
+      ...runtime.voiceSessionManager,
+      subAgentSessions: runtime.subAgentSessions.manager
+    }, {
+      guildId: context.guildId,
+      browserSessionId: sessionId,
+      requesterUserId: context.userId,
+      source: String(context.trace?.source || "reply_tool_share_browser_session"),
+      signal: context.signal
+    });
+    return {
+      content: JSON.stringify({
+        ok: Boolean(result?.ok),
+        started: Boolean(result?.started),
+        reused: Boolean(result?.reused),
+        session_id: sessionId,
+        error: result?.error ? String(result.error) : null
+      }),
+      isError: result?.ok === false
+    };
+  } catch (error) {
+    return {
+      content: `Browser session share failed: ${String((error as Error)?.message || error)}`,
+      isError: true
+    };
+  }
+}
+
 async function executePlaySoundboard(
   input: ReplyToolCallInput,
   runtime: ReplyToolRuntime,
@@ -1102,6 +1166,24 @@ async function executeVoiceTool(
         result = await runtime.voiceSession.musicPlay(query, selectionId, platform);
         break;
       }
+      case "video_search": {
+        const query = String(input?.query || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN);
+        if (!query) return { content: "Failed: query was empty. You must provide the video/topic in the query argument.", isError: true };
+        const limit = Math.max(1, Math.min(10, Math.floor(Number(input?.max_results) || 5)));
+        throwIfAborted(context.signal, "Reply tool cancelled");
+        result = await runtime.voiceSession.videoSearch(query, limit);
+        break;
+      }
+      case "video_play": {
+        const query = String(input?.query || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN);
+        const selectionId = String(input?.selection_id || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN) || null;
+        if (!query && !selectionId) {
+          return { content: "Failed: query was empty. You must provide the video/topic in the query argument.", isError: true };
+        }
+        throwIfAborted(context.signal, "Reply tool cancelled");
+        result = await runtime.voiceSession.videoPlay(query, selectionId);
+        break;
+      }
       case "music_queue_add": {
         const tracks = Array.isArray(input?.tracks)
           ? (input.tracks as string[]).map((t) => String(t).trim()).filter(Boolean).slice(0, 12)
@@ -1153,38 +1235,45 @@ async function executeVoiceTool(
         });
         break;
       }
-      case "music_stop":
+      case "media_stop":
         throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicStop();
         break;
-      case "music_pause":
+      case "media_pause":
         throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicPause();
         break;
-      case "music_resume":
+      case "media_resume":
         throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicResume();
         break;
-      case "music_reply_handoff": {
+      case "media_reply_handoff": {
         const rawMode = String(input?.mode || "").trim().toLowerCase();
         const mode =
           rawMode === "pause" || rawMode === "duck" || rawMode === "none"
             ? rawMode
             : null;
         if (!mode) {
-          return { content: "Invalid music reply handoff mode. Use pause, duck, or none.", isError: true };
+          return { content: "Invalid media reply handoff mode. Use pause, duck, or none.", isError: true };
         }
         throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicReplyHandoff(mode);
         break;
       }
-      case "music_skip":
+      case "media_skip":
         throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicSkip();
         break;
-      case "music_now_playing":
+      case "media_now_playing":
         throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicNowPlaying();
+        break;
+      case "stop_video_share":
+        throwIfAborted(context.signal, "Reply tool cancelled");
+        if (typeof runtime.voiceSession.stopVideoShare !== "function") {
+          return { content: "Video share stop is not available.", isError: true };
+        }
+        result = await runtime.voiceSession.stopVideoShare();
         break;
       case "leave_voice_channel":
         throwIfAborted(context.signal, "Reply tool cancelled");

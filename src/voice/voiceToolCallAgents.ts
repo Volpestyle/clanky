@@ -4,6 +4,8 @@ import { normalizeCodeAgentRole } from "../agents/codeAgent.ts";
 import { isAbortError, runBrowserBrowseTask } from "../tools/browserTaskRuntime.ts";
 import { runOpenAiComputerUseTask } from "../tools/openAiComputerUseRuntime.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
+import { stopBrowserSessionStreamPublish, startBrowserSessionStreamPublish } from "./voiceBrowserStreamPublish.ts";
+import { ensureStreamPublishState } from "./voiceStreamPublish.ts";
 import type { VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 
@@ -242,4 +244,85 @@ export async function executeVoiceCodeTaskTool(
   } catch (error: unknown) {
     return { ok: false, text: "", error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+export async function executeVoiceShareBrowserSessionTool(
+  manager: VoiceToolCallManager,
+  { session, args, signal }: VoiceBrowserToolOptions
+) {
+  const browserSessionId = normalizeInlineText(args?.session_id, 220);
+  if (!browserSessionId) {
+    return { ok: false, text: "", error: "session_id_required" };
+  }
+  if (!session?.guildId) {
+    return { ok: false, text: "", error: "voice_session_missing" };
+  }
+
+  try {
+    const result = await startBrowserSessionStreamPublish(manager, {
+      guildId: session.guildId,
+      browserSessionId,
+      requesterUserId: session.lastRealtimeToolCallerUserId || null,
+      source: "voice_realtime_tool_share_browser_session",
+      signal
+    });
+    if (!result?.ok) {
+      return { ok: false, text: "", error: String(result?.error || "browser_stream_publish_failed") };
+    }
+    return {
+      ok: true,
+      text: "",
+      started: Boolean(result.started),
+      reused: Boolean(result.reused),
+      session_id: browserSessionId
+    };
+  } catch (error: unknown) {
+    return { ok: false, text: "", error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function executeVoiceStopVideoShareTool(
+  manager: VoiceToolCallManager,
+  { session }: VoiceBrowserToolOptions
+) {
+  if (!session?.guildId) {
+    return { ok: false, text: "", error: "voice_session_missing" };
+  }
+
+  const state = ensureStreamPublishState(manager.sessions.get(String(session.guildId || "").trim()) || null);
+  if (!state?.active || !state.sourceKind) {
+    return { ok: false, text: "", error: "video_share_inactive" };
+  }
+
+  if (state.sourceKind === "browser_session") {
+    const result = await stopBrowserSessionStreamPublish(manager, {
+      guildId: session.guildId,
+      reason: "voice_realtime_tool_stop_video_share"
+    });
+    return {
+      ok: Boolean(result?.ok),
+      text: "",
+      stopped: Boolean(result?.ok),
+      source_kind: state.sourceKind
+    };
+  }
+
+  const stopMusicStreamPublish = "stopMusicStreamPublish" in manager &&
+    typeof manager.stopMusicStreamPublish === "function"
+    ? manager.stopMusicStreamPublish.bind(manager)
+    : null;
+  if (!stopMusicStreamPublish) {
+    return { ok: false, text: "", error: "stream_publish_stop_unavailable" };
+  }
+
+  const result = stopMusicStreamPublish({
+    guildId: session.guildId,
+    reason: "voice_realtime_tool_stop_video_share"
+  });
+  return {
+    ok: Boolean(result?.ok),
+    text: "",
+    stopped: Boolean(result?.ok),
+    source_kind: state.sourceKind
+  };
 }

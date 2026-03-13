@@ -61,13 +61,15 @@ const VOICE_MUSIC_BRAIN_RECENT_TURN_MAX_CHARS = 180;
 const VOICE_MUSIC_BRAIN_TOOL_NAMES = new Set([
   "music_search",
   "music_play",
+  "video_search",
+  "video_play",
   "music_queue_add",
   "music_queue_next",
-  "music_stop",
-  "music_pause",
-  "music_resume",
-  "music_skip",
-  "music_now_playing"
+  "media_stop",
+  "media_pause",
+  "media_resume",
+  "media_skip",
+  "media_now_playing"
 ]);
 const VOICE_MUSIC_BRAIN_TOOL_DEFINITIONS = VOICE_TOOL_SCHEMAS
   .filter((schema) => VOICE_MUSIC_BRAIN_TOOL_NAMES.has(schema.name))

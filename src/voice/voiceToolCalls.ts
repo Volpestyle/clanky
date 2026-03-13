@@ -31,6 +31,8 @@ export {
   executeVoiceMusicPlayTool,
   executeVoiceMusicQueueAddTool,
   executeVoiceMusicQueueNextTool,
-  executeVoiceMusicSearchTool
+  executeVoiceMusicSearchTool,
+  executeVoiceVideoPlayTool,
+  executeVoiceVideoSearchTool
 } from "./voiceToolCallMusic.ts";
 export { executeVoiceWebScrapeTool, executeVoiceWebSearchTool } from "./voiceToolCallWeb.ts";

@@ -85,6 +85,8 @@ test("refreshRealtimeTools registers local and MCP tool definitions", async () =
   assert.equal(toolNames.includes("memory_write"), true);
   assert.equal(toolNames.includes("music_search"), true);
   assert.equal(toolNames.includes("music_play"), true);
+  assert.equal(toolNames.includes("video_search"), true);
+  assert.equal(toolNames.includes("video_play"), true);
   assert.equal(toolNames.includes("start_screen_watch"), true);
   assert.equal(toolNames.includes("server_status"), true);
   const descriptorRows = Array.isArray(session.realtimeToolDefinitions) ? session.realtimeToolDefinitions : [];
@@ -95,6 +97,11 @@ test("refreshRealtimeTools registers local and MCP tool definitions", async () =
   assert.equal(Object.hasOwn(musicPlayDescriptor?.parameters || {}, "anyOf"), false);
   assert.equal(Object.hasOwn(musicPlayDescriptor?.parameters || {}, "oneOf"), false);
   assert.equal(Object.hasOwn(musicPlayDescriptor?.parameters || {}, "allOf"), false);
+  const videoPlayDescriptor = descriptorRows.find((entry) => entry?.name === "video_play");
+  assert.equal(videoPlayDescriptor?.parameters?.type, "object");
+  assert.equal(Object.hasOwn(videoPlayDescriptor?.parameters || {}, "anyOf"), false);
+  assert.equal(Object.hasOwn(videoPlayDescriptor?.parameters || {}, "oneOf"), false);
+  assert.equal(Object.hasOwn(videoPlayDescriptor?.parameters || {}, "allOf"), false);
 });
 
 test("refreshRealtimeTools keeps start_screen_watch available for native watch sessions without a text channel", async () => {
@@ -173,6 +180,20 @@ test("buildRealtimeFunctionTools rewrites music_play for provider-native realtim
     Object.hasOwn((musicPlay?.parameters?.properties as Record<string, unknown>) || {}, "selection_id"),
     true
   );
+  const videoPlay = tools.find((entry) => entry.name === "video_play");
+  assert.ok(videoPlay);
+  assert.equal(videoPlay?.parameters?.type, "object");
+  assert.equal(Object.hasOwn(videoPlay?.parameters || {}, "anyOf"), false);
+  assert.equal(Object.hasOwn(videoPlay?.parameters || {}, "oneOf"), false);
+  assert.equal(Object.hasOwn(videoPlay?.parameters || {}, "allOf"), false);
+  assert.equal(
+    Object.hasOwn((videoPlay?.parameters?.properties as Record<string, unknown>) || {}, "query"),
+    true
+  );
+  assert.equal(
+    Object.hasOwn((videoPlay?.parameters?.properties as Record<string, unknown>) || {}, "selection_id"),
+    true
+  );
 });
 
 test("refreshRealtimeTools skips registration for brain sessions", async () => {
@@ -244,11 +265,12 @@ test("refreshRealtimeTools registers provider-native tools for bridge sessions",
     ? updatedToolsPayload.tools.map((entry) => entry?.name)
     : [];
   assert.equal(toolNames.includes("music_search"), true);
+  assert.equal(toolNames.includes("video_play"), true);
   assert.equal(toolNames.includes("play_soundboard"), true);
   assert.equal(toolNames.includes("web_search"), true);
 });
 
-test("handleRealtimeFunctionCallEvent executes music_now_playing and sends function output", async () => {
+test("handleRealtimeFunctionCallEvent executes media_now_playing and sends function output", async () => {
   const manager = createVoiceTestManager();
   manager.scheduleRealtimeToolFollowupResponse = () => {};
 
@@ -308,7 +330,7 @@ test("handleRealtimeFunctionCallEvent executes music_now_playing and sends funct
       item: {
         type: "function_call",
         call_id: "call_music_1",
-        name: "music_now_playing",
+        name: "media_now_playing",
         arguments: "{}"
       }
     }
@@ -322,7 +344,7 @@ test("handleRealtimeFunctionCallEvent executes music_now_playing and sends funct
   assert.equal(outputPayload?.now_playing?.title, "Track A");
   const toolEvents = Array.isArray(session.toolCallEvents) ? session.toolCallEvents : [];
   assert.equal(toolEvents.length, 1);
-  assert.equal(toolEvents[0]?.toolName, "music_now_playing");
+  assert.equal(toolEvents[0]?.toolName, "media_now_playing");
 });
 
 test("handleRealtimeFunctionCallEvent executes play_soundboard and sends function output", async () => {
@@ -446,7 +468,7 @@ test("handleRealtimeFunctionCallEvent ignores provider function calls in brain s
       item: {
         type: "function_call",
         call_id: "call_music_ignore_1",
-        name: "music_now_playing",
+        name: "media_now_playing",
         arguments: "{}"
       }
     }
@@ -713,7 +735,7 @@ test("handleRealtimeFunctionCallEvent ignores duplicate completed call ids", asy
     item: {
       type: "function_call",
       call_id: "call_music_dup_1",
-      name: "music_now_playing",
+      name: "media_now_playing",
       arguments: "{}"
     }
   };

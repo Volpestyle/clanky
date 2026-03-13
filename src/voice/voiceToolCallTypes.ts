@@ -112,6 +112,7 @@ interface SubAgentTurnResult {
 export interface SubAgentInteractiveSession {
   id: string;
   ownerUserId?: string | null;
+  getBrowserSessionKey?: () => string | null;
   runTurn: (instruction: string, options?: { signal?: AbortSignal }) => Promise<SubAgentTurnResult>;
 }
 

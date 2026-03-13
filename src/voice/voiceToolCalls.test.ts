@@ -4,7 +4,8 @@ import {
   executeLocalVoiceToolCall,
   executeVoiceBrowserBrowseTool,
   executeVoiceMusicPlayTool,
-  executeVoiceMusicQueueNextTool
+  executeVoiceMusicQueueNextTool,
+  executeVoiceVideoPlayTool
 } from "./voiceToolCalls.ts";
 import { createTestSettings } from "../testSettings.ts";
 
@@ -246,7 +247,7 @@ test("executeLocalVoiceToolCall applies a temporary pause reply handoff for the 
   }, {
     session,
     settings: createTestSettings({}),
-    toolName: "music_reply_handoff",
+    toolName: "media_reply_handoff",
     args: {
       mode: "pause"
     }
@@ -346,7 +347,7 @@ test("executeLocalVoiceToolCall requests music resume without forcing playing st
   }, {
     session,
     settings: createTestSettings({}),
-    toolName: "music_resume",
+    toolName: "media_resume",
     args: {}
   });
 
@@ -354,7 +355,7 @@ test("executeLocalVoiceToolCall requests music resume without forcing playing st
   assert.equal(result.status, "resume_requested");
   assert.equal(result.phase, "paused");
   assert.equal(session.music.phase, "paused");
-  assert.equal(session.music.lastCommandReason, "voice_tool_music_resume");
+  assert.equal(session.music.lastCommandReason, "voice_tool_media_resume");
   assert.equal(queueState.isPaused, true);
   assert.equal(resumeCalls.length, 1);
   assert.deepEqual(haltCalls, []);
@@ -436,12 +437,12 @@ test("executeLocalVoiceToolCall clears stale paused music state when resume is u
   }, {
     session,
     settings: createTestSettings({}),
-    toolName: "music_resume",
+    toolName: "media_resume",
     args: {}
   });
 
   assert.equal(result.ok, false);
-  assert.equal(result.error, "music_resume_unavailable");
+  assert.equal(result.error, "media_resume_unavailable");
   assert.equal(result.phase, "idle");
   assert.equal(session.music.phase, "idle");
   assert.equal(queueState.isPaused, false);
@@ -485,7 +486,7 @@ test("executeLocalVoiceToolCall keeps paused_wake_word until duck handoff playba
       pauseReason: "wake_word" as const,
       replyHandoffMode: "pause" as const,
       replyHandoffRequestedByUserId: "user-1",
-      replyHandoffSource: "voice_tool_music_reply_handoff",
+      replyHandoffSource: "voice_tool_media_reply_handoff",
       replyHandoffAt: Date.now(),
       startedAt: 0,
       stoppedAt: 0,
@@ -534,7 +535,7 @@ test("executeLocalVoiceToolCall keeps paused_wake_word until duck handoff playba
   }, {
     session,
     settings: createTestSettings({}),
-    toolName: "music_reply_handoff",
+    toolName: "media_reply_handoff",
     args: {
       mode: "duck"
     }
@@ -546,7 +547,7 @@ test("executeLocalVoiceToolCall keeps paused_wake_word until duck handoff playba
   assert.equal(result.phase, "paused_wake_word");
   assert.equal(session.music?.phase, "paused_wake_word");
   assert.equal(session.music?.replyHandoffMode, "duck");
-  assert.equal(session.music?.lastCommandReason, "music_resumed_reply_handoff_duck");
+  assert.equal(session.music?.lastCommandReason, "media_resumed_reply_handoff_duck");
   assert.equal(queueState.isPaused, true);
   assert.equal(resumeCalls.length, 1);
 });
@@ -684,6 +685,45 @@ test("music_play returns immediately with status loading for a direct match", as
   assert.equal(afterCalls.length, 0);
 });
 
+test("video_play returns immediately with status loading for a direct YouTube match", async () => {
+  let resolvePlayMusic: () => void;
+  const playMusicPromise = new Promise<void>((r) => { resolvePlayMusic = r; });
+  const directTrack = {
+    id: "video-abc",
+    title: "Rust MCP walkthrough",
+    artist: "OpenClaw Labs",
+    durationSeconds: 540,
+    platform: "youtube",
+    externalUrl: "https://youtube.com/watch?v=abc123"
+  };
+
+  const { manager, session, calls, sessionMusicState } = buildMusicPlayManager({
+    requestPlayMusicImpl: () => playMusicPromise,
+    searchResults: [directTrack]
+  });
+  let requestedPlatform: string | null = null;
+  manager.musicSearch.search = async (_query: string, opts?: { platform?: string }) => {
+    requestedPlatform = String(opts?.platform || "");
+    return { results: [directTrack] };
+  };
+
+  const result = await executeVoiceVideoPlayTool(manager, {
+    session,
+    settings: createTestSettings({}),
+    args: { query: "that rust mcp walkthrough video" }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "loading");
+  assert.equal(result.video.title, "Rust MCP walkthrough");
+  assert.equal(requestedPlatform, "youtube");
+  assert.equal(calls.filter((c) => c.method === "requestPlayMusic").length, 1);
+  assert.equal(sessionMusicState.phase, "loading");
+
+  resolvePlayMusic!();
+  await new Promise((r) => setTimeout(r, 10));
+});
+
 test("music_play falls back to query search when selection_id is unknown", async () => {
   const directTrack = {
     id: "track-abc",
@@ -759,6 +799,49 @@ test("music_play returns disambiguation options when search is ambiguous", async
   assert.equal(Array.isArray(result.options), true);
   assert.equal(result.options.length, 2);
   assert.equal(result.options[0]?.selection_id, "track-a");
+  assert.equal(calls.filter((c) => c.method === "requestPlayMusic").length, 0);
+  assert.equal(calls.filter((c) => c.method === "beginVoiceCommandSession").length, 1);
+});
+
+test("video_play returns disambiguation options when the YouTube request is ambiguous", async () => {
+  const searchResults = [
+    {
+      id: "video-a",
+      title: "MCP explained in 10 minutes",
+      artist: "Tech Channel",
+      durationSeconds: 600,
+      platform: "youtube",
+      externalUrl: "https://youtube.com/watch?v=video-a"
+    },
+    {
+      id: "video-b",
+      title: "MCP deep dive",
+      artist: "Infra Channel",
+      durationSeconds: 1200,
+      platform: "youtube",
+      externalUrl: "https://youtube.com/watch?v=video-b"
+    }
+  ];
+
+  const { manager, session, calls } = buildMusicPlayManager({ searchResults });
+  let requestedPlatform: string | null = null;
+  manager.musicSearch.search = async (_query: string, opts?: { platform?: string }) => {
+    requestedPlatform = String(opts?.platform || "");
+    return { results: searchResults };
+  };
+
+  const result = await executeVoiceVideoPlayTool(manager, {
+    session,
+    settings: createTestSettings({}),
+    args: { query: "find an mcp video" }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "needs_disambiguation");
+  assert.equal(Array.isArray(result.options), true);
+  assert.equal(result.options.length, 2);
+  assert.equal(result.options[0]?.selection_id, "video-a");
+  assert.equal(requestedPlatform, "youtube");
   assert.equal(calls.filter((c) => c.method === "requestPlayMusic").length, 0);
   assert.equal(calls.filter((c) => c.method === "beginVoiceCommandSession").length, 1);
 });

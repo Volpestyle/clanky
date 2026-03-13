@@ -5,7 +5,9 @@ import {
   IMAGE_LOOKUP_SCHEMA,
   MEMORY_SEARCH_SCHEMA,
   MEMORY_WRITE_SCHEMA,
+  SHARE_BROWSER_SESSION_SCHEMA,
   START_SCREEN_WATCH_SCHEMA,
+  STOP_VIDEO_SHARE_SCHEMA,
   PLAY_SOUNDBOARD_SCHEMA,
   VOICE_TOOL_SCHEMAS,
   WEB_SCRAPE_SCHEMA,
@@ -70,6 +72,8 @@ const TOOL_SCHEMA_BY_NAME = new Map(
     IMAGE_LOOKUP_SCHEMA,
     CODE_TASK_SCHEMA,
     START_SCREEN_WATCH_SCHEMA,
+    SHARE_BROWSER_SESSION_SCHEMA,
+    STOP_VIDEO_SHARE_SCHEMA,
     PLAY_SOUNDBOARD_SCHEMA,
     ...VOICE_TOOL_SCHEMAS
   ].map((schema) => [schema.name, schema] as const)
@@ -142,6 +146,19 @@ const LOCAL_TOOL_REGISTRY: LocalToolRegistryEntry[] = [
     isVoiceRealtimeAvailable: ({ capabilities }) => capabilities.screenShareAvailable
   },
   {
+    name: "share_browser_session",
+    surfaces: ["reply", "voice_realtime"],
+    isReplyAvailable: ({ capabilities }) =>
+      Boolean(capabilities.voiceToolsAvailable) && capabilities.browserBrowseAvailable !== false,
+    isVoiceRealtimeAvailable: ({ capabilities }) => capabilities.browserAvailable
+  },
+  {
+    name: "stop_video_share",
+    surfaces: ["reply", "voice_realtime"],
+    isReplyAvailable: ({ capabilities }) => Boolean(capabilities.voiceToolsAvailable),
+    isVoiceRealtimeAvailable: () => true
+  },
+  {
     name: "code_task",
     surfaces: ["reply", "voice_realtime"],
     isReplyAvailable: ({ settings, capabilities }) =>
@@ -161,6 +178,18 @@ const LOCAL_TOOL_REGISTRY: LocalToolRegistryEntry[] = [
     isVoiceRealtimeAvailable: () => true
   },
   {
+    name: "video_search",
+    surfaces: ["reply", "voice_realtime"],
+    isReplyAvailable: ({ capabilities }) => Boolean(capabilities.voiceToolsAvailable),
+    isVoiceRealtimeAvailable: () => true
+  },
+  {
+    name: "video_play",
+    surfaces: ["reply", "voice_realtime"],
+    isReplyAvailable: ({ capabilities }) => Boolean(capabilities.voiceToolsAvailable),
+    isVoiceRealtimeAvailable: () => true
+  },
+  {
     name: "music_queue_add",
     surfaces: ["reply", "voice_realtime"],
     isReplyAvailable: ({ capabilities }) => Boolean(capabilities.voiceToolsAvailable),
@@ -173,37 +202,37 @@ const LOCAL_TOOL_REGISTRY: LocalToolRegistryEntry[] = [
     isVoiceRealtimeAvailable: () => true
   },
   {
-    name: "music_stop",
+    name: "media_stop",
     surfaces: ["reply", "voice_realtime"],
     isReplyAvailable: ({ capabilities }) => Boolean(capabilities.voiceToolsAvailable),
     isVoiceRealtimeAvailable: () => true
   },
   {
-    name: "music_pause",
+    name: "media_pause",
     surfaces: ["reply", "voice_realtime"],
     isReplyAvailable: ({ capabilities }) => Boolean(capabilities.voiceToolsAvailable),
     isVoiceRealtimeAvailable: () => true
   },
   {
-    name: "music_resume",
+    name: "media_resume",
     surfaces: ["reply", "voice_realtime"],
     isReplyAvailable: ({ capabilities }) => Boolean(capabilities.voiceToolsAvailable),
     isVoiceRealtimeAvailable: () => true
   },
   {
-    name: "music_reply_handoff",
+    name: "media_reply_handoff",
     surfaces: ["reply", "voice_realtime"],
     isReplyAvailable: ({ capabilities }) => Boolean(capabilities.voiceToolsAvailable),
     isVoiceRealtimeAvailable: () => true
   },
   {
-    name: "music_skip",
+    name: "media_skip",
     surfaces: ["reply", "voice_realtime"],
     isReplyAvailable: ({ capabilities }) => Boolean(capabilities.voiceToolsAvailable),
     isVoiceRealtimeAvailable: () => true
   },
   {
-    name: "music_now_playing",
+    name: "media_now_playing",
     surfaces: ["reply", "voice_realtime"],
     isReplyAvailable: ({ capabilities }) => Boolean(capabilities.voiceToolsAvailable),
     isVoiceRealtimeAvailable: () => true

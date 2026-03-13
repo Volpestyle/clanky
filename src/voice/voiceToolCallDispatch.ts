@@ -1,5 +1,10 @@
 import { clamp } from "../utils.ts";
-import { executeVoiceBrowserBrowseTool, executeVoiceCodeTaskTool } from "./voiceToolCallAgents.ts";
+import {
+  executeVoiceBrowserBrowseTool,
+  executeVoiceCodeTaskTool,
+  executeVoiceShareBrowserSessionTool,
+  executeVoiceStopVideoShareTool
+} from "./voiceToolCallAgents.ts";
 import {
   executeVoiceConversationSearchTool,
   executeVoiceMemoryWriteTool
@@ -14,7 +19,9 @@ import {
   executeVoiceMusicReplyHandoffTool,
   executeVoiceMusicResumeTool,
   executeVoiceMusicSkipTool,
-  executeVoiceMusicStopTool
+  executeVoiceMusicStopTool,
+  executeVoiceVideoPlayTool,
+  executeVoiceVideoSearchTool
 } from "./voiceToolCallMusic.ts";
 import { executeVoiceWebScrapeTool, executeVoiceWebSearchTool } from "./voiceToolCallWeb.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
@@ -137,6 +144,19 @@ const LOCAL_VOICE_TOOL_HANDLERS: Record<
       args: opts.args,
       signal: opts.signal
     }),
+  video_search: async (manager, opts) =>
+    await executeVoiceVideoSearchTool(manager, {
+      session: opts.session,
+      args: opts.args,
+      signal: opts.signal
+    }),
+  video_play: async (manager, opts) =>
+    await executeVoiceVideoPlayTool(manager, {
+      session: opts.session,
+      settings: opts.settings,
+      args: opts.args,
+      signal: opts.signal
+    }),
   music_queue_add: async (manager, opts) =>
     await executeVoiceMusicQueueAddTool(manager, {
       session: opts.session,
@@ -151,37 +171,37 @@ const LOCAL_VOICE_TOOL_HANDLERS: Record<
       args: opts.args,
       signal: opts.signal
     }),
-  music_stop: async (manager, opts) =>
+  media_stop: async (manager, opts) =>
     await executeVoiceMusicStopTool(manager, {
       session: opts.session,
       settings: opts.settings,
       signal: opts.signal
     }),
-  music_pause: async (manager, opts) =>
+  media_pause: async (manager, opts) =>
     await executeVoiceMusicPauseTool(manager, {
       session: opts.session,
       settings: opts.settings,
       signal: opts.signal
     }),
-  music_reply_handoff: async (manager, opts) =>
+  media_reply_handoff: async (manager, opts) =>
     await executeVoiceMusicReplyHandoffTool(manager, {
       session: opts.session,
       settings: opts.settings,
       args: opts.args,
       signal: opts.signal
     }),
-  music_resume: async (manager, opts) =>
+  media_resume: async (manager, opts) =>
     await executeVoiceMusicResumeTool(manager, {
       session: opts.session,
       signal: opts.signal
     }),
-  music_skip: async (manager, opts) =>
+  media_skip: async (manager, opts) =>
     await executeVoiceMusicSkipTool(manager, {
       session: opts.session,
       settings: opts.settings,
       signal: opts.signal
     }),
-  music_now_playing: async (manager, opts) =>
+  media_now_playing: async (manager, opts) =>
     await executeVoiceMusicNowPlayingTool(manager, {
       session: opts.session,
       signal: opts.signal
@@ -215,6 +235,20 @@ const LOCAL_VOICE_TOOL_HANDLERS: Record<
     }),
   browser_browse: async (manager, opts) =>
     await executeVoiceBrowserBrowseTool(manager, {
+      session: opts.session,
+      settings: opts.settings,
+      args: opts.args,
+      signal: opts.signal
+    }),
+  share_browser_session: async (manager, opts) =>
+    await executeVoiceShareBrowserSessionTool(manager, {
+      session: opts.session,
+      settings: opts.settings,
+      args: opts.args,
+      signal: opts.signal
+    }),
+  stop_video_share: async (manager, opts) =>
+    await executeVoiceStopVideoShareTool(manager, {
       session: opts.session,
       settings: opts.settings,
       args: opts.args,
