@@ -512,7 +512,7 @@ test("reply decider allows direct-addressed turns in command-only mode", async (
     },
     userId: "speaker-1",
     settings: baseSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         commandOnlyMode: true,
         ambientReplyEagerness: 60,
@@ -659,7 +659,7 @@ test("formatVoiceDecisionHistory interleaves membership events with voice turns 
       { role: "user", userId: "u1", speakerName: "vuhlp", text: "Yo", at: now - 1000 }
     ],
     membershipEvents: [
-      { userId: "bot-user", displayName: "clanker conk", eventType: "join", at: now - 3000 },
+      { userId: "bot-user", displayName: "clanky", eventType: "join", at: now - 3000 },
       { userId: "u1", displayName: "vuhlp", eventType: "join", at: now - 2000 }
     ]
   };
@@ -683,7 +683,7 @@ test("formatVoiceDecisionHistory shows membership events even with no voice turn
     settingsSnapshot: baseSettings(),
     recentVoiceTurns: [],
     membershipEvents: [
-      { userId: "bot-user", displayName: "clanker conk", eventType: "join", at: now - 2000 },
+      { userId: "bot-user", displayName: "clanky", eventType: "join", at: now - 2000 },
       { userId: "u1", displayName: "vuhlp", eventType: "join", at: now - 1000 }
     ]
   };
@@ -1021,7 +1021,7 @@ test("reply decider routes single-human assistant followups through classifier",
             role: "assistant",
             userId: null,
             text: "yo, what's up?",
-            speakerName: "clanker conk",
+            speakerName: "clanky",
             at: now - 4_000
           },
           {
@@ -1081,7 +1081,7 @@ test("reply decider still runs classifier when single-human assistant followup w
           role: "assistant",
           userId: null,
           text: "yo, what's up?",
-          speakerName: "clanker conk",
+          speakerName: "clanky",
           at: now - 45_000
         },
         {
@@ -1139,7 +1139,7 @@ test("reply decider can disable single-human assistant followup fast path via en
             role: "assistant",
             userId: null,
             text: "yo, what's up?",
-            speakerName: "clanker conk",
+            speakerName: "clanky",
             at: now - 4_000
           },
           {
@@ -1240,7 +1240,7 @@ test("reply decider fast-paths merged bot-name tokens as direct address", async 
         }
       }
     }),
-    transcript: "clanker conk you there?"
+    transcript: "clanky you there?"
   });
 
   assert.equal(decision.allow, true);
@@ -1381,7 +1381,7 @@ test("reply classifier prompt includes attributed history and current turn field
       botTurnOpen: false,
       lastInboundAudioAt: Date.now() - 240,
       recentVoiceTurns: [
-        { role: "assistant", text: "yo what's good", speakerName: "clanker conk" },
+        { role: "assistant", text: "yo what's good", speakerName: "clanky" },
         { role: "user", text: "i'm working on a project", speakerName: "vuhlp" }
       ]
     },
@@ -1480,7 +1480,7 @@ test("reply classifier prompt treats the bot self-join event as a self-arrival",
       mode: "openai_realtime",
       botTurnOpen: false,
       recentVoiceTurns: [],
-      membershipEvents: [{ userId: "bot-user", displayName: "clanker conk", eventType: "join", at: Date.now() - 500 }]
+      membershipEvents: [{ userId: "bot-user", displayName: "clanky", eventType: "join", at: Date.now() - 500 }]
     },
     userId: "bot-user",
     settings: bridgeSettings({
@@ -1499,7 +1499,7 @@ test("reply classifier prompt treats the bot self-join event as a self-arrival",
       category: "membership",
       eventType: "join",
       actorUserId: "bot-user",
-      actorDisplayName: "clanker conk",
+      actorDisplayName: "clanky",
       actorRole: "self"
     }
   });
@@ -1928,7 +1928,7 @@ test("reply decider keeps merged bot-name token turns on the classifier with dir
     },
     userId: "speaker-1",
     settings,
-    transcript: "clanker conk can you help with this"
+    transcript: "clanky can you help with this"
   });
 
   assert.equal(decision.allow, true);
@@ -2002,12 +2002,12 @@ test("direct address denied when classifier LLM is unavailable", async () => {
     off() {},
     guilds: { cache: new Map() },
     users: { cache: new Map() },
-    user: { id: "bot-user", username: "clanker conk" }
+    user: { id: "bot-user", username: "clanky" }
   };
   const fakeStore = {
     logAction() {},
     getSettings() {
-      return { botName: "clanker conk" };
+      return { botName: "clanky" };
     }
   };
   const manager = new VoiceSessionManager({
@@ -4290,7 +4290,7 @@ test("runRealtimeBrainReply supersedes stale playback when a newer finalized rea
   assert.equal(session.realtimeReplySupersededCount, 1);
 });
 
-test("runRealtimeBrainReply exits before generation when a newer promoted capture already exists", async () => {
+test("runRealtimeBrainReply does not supersede on a live promoted capture before a newer turn is admitted", async () => {
   const runtimeLogs = [];
   let requestedRealtimeUtterances = 0;
   let generateVoiceTurnCalls = 0;
@@ -4310,7 +4310,7 @@ test("runRealtimeBrainReply exits before generation when a newer promoted captur
   manager.generateVoiceTurn = async () => {
     generateVoiceTurnCalls += 1;
     return {
-      text: "should not be generated"
+      text: "go ahead and answer"
     };
   };
   manager.isCaptureConfirmedLiveSpeech = () => true;
@@ -4364,16 +4364,13 @@ test("runRealtimeBrainReply exits before generation when a newer promoted captur
     }
   });
 
-  assert.equal(result, false);
-  assert.equal(generateVoiceTurnCalls, 0);
-  assert.equal(requestedRealtimeUtterances, 0);
+  assert.equal(result, true);
+  assert.equal(generateVoiceTurnCalls, 1);
+  assert.equal(requestedRealtimeUtterances, 1);
   const supersededLog = runtimeLogs.find(
     (row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_superseded_newer_input"
   );
-  assert.equal(Boolean(supersededLog), true);
-  assert.equal(supersededLog?.metadata?.supersedeReason, "newer_live_promoted_capture");
-  assert.equal(supersededLog?.metadata?.stashedForRecovery, true);
-  assert.equal(session.supersededPrePlaybackReply?.transcript, "older transcript");
+  assert.equal(Boolean(supersededLog), false);
 });
 
 test("runRealtimeBrainReply ends VC when model requests leave directive", async () => {
@@ -4453,7 +4450,7 @@ test("runRealtimeBrainReply keeps accepted turn stashed through the non-streamin
   };
 
   const session = {
-    id: "session-realtime-preplay-stash-1",
+    id: "session-realtime-accepted-turn-boundary-1",
     guildId: "guild-1",
     textChannelId: "chan-1",
     mode: "openai_realtime",
@@ -5717,7 +5714,7 @@ test("flushDeferredBotTurnOpenTurns preserves system-speech source for stream-wa
         updatedAt: Date.now(),
         notBeforeAt: Date.now(),
         expiresAt: 0,
-        reason: "preplay_supersede_requeue",
+        reason: "queued_turns_recheck",
         revision: 1,
         payload: {
           turns: [
@@ -5853,7 +5850,7 @@ test("voice decision history deduplicates consecutive identical turns", () => {
     mode: "openai_realtime",
     ending: false,
     recentVoiceTurns: [],
-    settingsSnapshot: { botName: "clanker conk" }
+    settingsSnapshot: { botName: "clanky" }
   };
 
   manager.resolveVoiceSpeakerName = (_session, userId) => `user-${String(userId || "")}`;

@@ -344,16 +344,6 @@ interface TurnProcessorHost {
     reason?: string;
   }) => void;
   clearDeferredQueuedUserTurns: (session: VoiceSession) => void;
-  discardSupersededPrePlaybackReply: (args: {
-    session: VoiceSession;
-    reason?: string;
-    userId?: string | null;
-  }) => boolean;
-  recoverSupersededPrePlaybackReply: (args: {
-    session: VoiceSession;
-    reason?: string;
-    userId?: string | null;
-  }) => boolean;
   shouldDirectAddressedTurnInterruptReply: (args: {
     session: VoiceSession;
     directAddressed?: boolean;
@@ -390,13 +380,6 @@ interface TurnProcessorHost {
   getPendingRealtimeAssistantUtteranceCount: (session: VoiceSession) => number;
   clearPendingRealtimeAssistantUtterances: (session: VoiceSession, reason?: string) => number;
   clearVoiceCommandSession: (session: VoiceSession) => void;
-  resolveHeldPrePlaybackReplyTurn: (args: {
-    session: VoiceSession;
-    userId?: string | null;
-    transcript?: string;
-    settings?: TurnProcessorSettings;
-    source?: string;
-  }) => Promise<"none" | "ignore" | "replace">;
   runRealtimeBrainReply: (args: RunRealtimeBrainReplyArgs) => Promise<boolean>;
   hasCommittedInterruptedBridgeTurn: (args: {
     session: VoiceSession;
@@ -1651,11 +1634,6 @@ export class TurnProcessor {
         musicWakeFollowupEligibleAtCapture
       });
       if (consumedByMusicMode) {
-        this.host.discardSupersededPrePlaybackReply({
-          session,
-          reason: "music_turn_consumed",
-          userId
-        });
         return;
       }
 
@@ -1715,11 +1693,6 @@ export class TurnProcessor {
             queueWaitMs,
             pendingQueueDepth
           }
-        });
-        this.host.recoverSupersededPrePlaybackReply({
-          session,
-          reason: "turn_dropped_silence_gate",
-          userId
         });
         return;
       }
@@ -1800,28 +1773,10 @@ export class TurnProcessor {
             bridgeUtteranceId: normalizedBridgeUtteranceId
           }
         });
-        this.host.recoverSupersededPrePlaybackReply({
-          session,
-          reason: "turn_dropped_control_tokens",
-          userId
-        });
         return;
       }
 
       if (isSuperseded("post_transcription")) return;
-
-      if (turnTranscript) {
-        const heldPrePlaybackResolution = await this.host.resolveHeldPrePlaybackReplyTurn({
-          session,
-          userId,
-          transcript: turnTranscript,
-          settings,
-          source: "realtime"
-        });
-        if (heldPrePlaybackResolution === "ignore") {
-          return;
-        }
-      }
 
       if (
         turnTranscript &&
@@ -1833,11 +1788,6 @@ export class TurnProcessor {
           source: "realtime"
         })
       ) {
-        this.host.discardSupersededPrePlaybackReply({
-          session,
-          reason: "music_disambiguation_cancelled",
-          userId
-        });
         return;
       }
 
@@ -1849,11 +1799,6 @@ export class TurnProcessor {
         source: "realtime",
         captureReason
       })) {
-        this.host.discardSupersededPrePlaybackReply({
-          session,
-          reason: "cancel_intent_consumed",
-          userId
-        });
         return;
       }
 
@@ -1911,11 +1856,6 @@ export class TurnProcessor {
                 clipDurationMs
               }
             });
-            this.host.recoverSupersededPrePlaybackReply({
-              session,
-              reason: "turn_dropped_low_confidence",
-              userId
-            });
             return;
           }
         }
@@ -1953,23 +1893,10 @@ export class TurnProcessor {
             hasTranscriptOverride
           }
         });
-        this.host.recoverSupersededPrePlaybackReply({
-          session,
-          reason: "turn_dropped_idle_hallucination",
-          userId
-        });
         return;
       }
 
       if (isSuperseded("pre_persist")) return;
-
-      if (turnTranscript) {
-        this.host.discardSupersededPrePlaybackReply({
-          session,
-          reason: "turn_admitted",
-          userId
-        });
-      }
 
       const persistRealtimeTranscriptTurn = this.host.shouldPersistUserTranscriptTimelineTurn({
         session,
@@ -2499,9 +2426,7 @@ export class TurnProcessor {
 
     if (!Array.isArray(deferredTurns)) {
       const outputChannelState = this.host.getOutputChannelState(session);
-      const hasEagerTurn = pendingQueue.some(
-        (t) => t?.directAddressed || t?.deferReason === "preplay_supersede_recover"
-      );
+      const hasEagerTurn = pendingQueue.some((t) => t?.directAddressed);
       const onlyLockedByMusic =
         outputChannelState.locked &&
         outputChannelState.musicActive &&

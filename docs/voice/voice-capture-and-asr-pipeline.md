@@ -82,7 +82,7 @@ The hybrid design is deliberate:
 
 Promotion side effects:
 
-- May hold or cancel pending pre-audio speech depending on phase, but local-only `strong_local_audio` promotion waits for Realtime VAD confirmation before it can supersede preplay reply generation
+- Does not hold, cancel, or supersede pending pre-audio assistant speech by itself
 - Begins shared ASR utterance (if shared ASR mode) and flushes buffered PCM
 - Updates `session.lastInboundAudioAt`
 - Emits `voice_activity_started` log event
@@ -380,7 +380,12 @@ Audio arrives via `appendAudioToAsr` on every `onUserAudio` chunk:
 
 If the commit times out empty but the same utterance produces a late final segment shortly after, the capture manager still watches that committed utterance object during the late-recovery window. A new provisional utterance for the same speaker does not cancel recovery of the older committed transcript.
 
-If that late-recovery window also ends empty, both bridge empty-drop paths recover any stashed preplay-superseded turn before returning. If no preplay-superseded turn exists but the same speaker had just committed a live barge-in, the runtime hands interruption context back to the normal voice brain instead of replaying the interrupted assistant line deterministically. Empty newer speech is treated as noise or abandonment, not as durable reason to lose the older admitted turn.
+If that late-recovery window also ends empty, both bridge empty-drop paths treat
+the newer speech as noise or abandonment rather than replaying older assistant
+audio deterministically. If the same speaker had just committed a live barge-in,
+the runtime hands interruption context back to the normal voice brain on the
+next real turn. Otherwise the runtime simply clears the no-turn capture and
+lets any still-valid queued assistant output drain naturally.
 
 Malformed provider transcripts that contain OpenAI reserved control-token syntax such as `<|...|>`, `vq_*_audio_*`, `audio_future*`, or `end_of_task` are dropped at the ASR bridge boundary and again at the bridge-turn handoff if needed. Punctuation-only bridge results such as `"?"`, `"..."`, or similar prosody noise are also treated as empty ASR. These malformed or punctuation-only transcripts are treated the same as empty bridge results for recovery and interruption handoff, and they never enter realtime turn context, memory lookup, or admitted user turns. This guard is ASR-only: assistant directives such as `[[TO:...]]` and `[[SOUNDBOARD:...]]` remain valid on assistant-generation paths.
 
@@ -443,7 +448,7 @@ The `OpenAiRealtimeTranscriptionClient` emits:
 | Event | Handler | Effect on ASR State |
 |---|---|---|
 | `transcript` | `wireClientEvents` | Updates `utterance.finalSegments` / `partialText`, sets `lastTranscriptAt`. Shared mode: populates `finalTranscriptsByItemId`. |
-| `speech_started` | `wireClientEvents` | Sets `speechDetectedAt`, `speechDetectedUtteranceId`, `speechActive = true`. Used by capture promotion (see [Section 4](#4-promotion-signals)) and, in transcript-overlap sessions, arms a pending same-speaker interrupt sustain window for the currently authorized interrupter. Before assistant audio starts, that same authorized `speech_started` can also place a `generation_only` preplay reply on hold so playback waits for the later finalized transcript to resolve as `ignore` or `replace`. The runtime keeps re-checking the same assertive acoustic gate used for raw barge-in while that utterance stays active, so an early under-threshold `speech_started` can still mature into a real interrupt. |
+| `speech_started` | `wireClientEvents` | Sets `speechDetectedAt`, `speechDetectedUtteranceId`, `speechActive = true`. Used by capture promotion (see [Section 4](#4-promotion-signals)) and, in transcript-overlap sessions, arms a pending same-speaker interrupt sustain window for the currently authorized interrupter. Before assistant audio starts, that same authorized `speech_started` does not hold or cancel a `generation_only` reply by itself. The runtime keeps re-checking the same assertive acoustic gate used for raw barge-in while that utterance stays active, so an early under-threshold `speech_started` can still mature into a real interrupt once assistant output is actually live. |
 | `speech_stopped` | `wireClientEvents` | Sets `speechActive = false`. In transcript-overlap sessions this also releases an uncommitted pending same-speaker interrupt so the staged turn can flush normally. |
 | `error_event` | `wireClientEvents` | Logs error. May trigger session close depending on severity. |
 | `socket_closed` | `wireClientEvents` | Transitions phase to `idle`. Clears client reference. |

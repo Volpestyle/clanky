@@ -85,6 +85,7 @@ interface CaptureManagerHost {
   buildAsrBridgeDeps: (session: VoiceSession) => AsrBridgeDeps;
   hasDeferredTurnBlockingActiveCapture: (session: VoiceSession) => boolean;
   deferredActionQueue: Pick<DeferredActionQueue, "recheckDeferredVoiceActions">;
+  drainPendingRealtimeAssistantUtterances: (session: VoiceSession, reason?: string) => boolean;
   hasCaptureBeenPromoted: (capture: CaptureState) => boolean;
   resolveCaptureTurnPromotionReason: (args: {
     session: VoiceSession;
@@ -93,13 +94,6 @@ interface CaptureManagerHost {
   hasCaptureServerVadSpeech: (args: {
     session: VoiceSession;
     capture: CaptureState;
-  }) => boolean;
-  cancelPendingPrePlaybackReplyForUserSpeech: (args: {
-    session: VoiceSession;
-    userId?: string | null;
-    captureState?: CaptureState | null;
-    source?: string;
-    now?: number;
   }) => boolean;
   touchActivity: (guildId: string, settings?: CaptureManagerSettings) => void;
   isCaptureConfirmedLiveSpeech: (args: {
@@ -134,11 +128,6 @@ interface CaptureManagerHost {
     bridgeUtteranceId?: number | null;
     asrResult?: AsrCommitResult | null;
     source?: string;
-  }) => boolean;
-  recoverSupersededPrePlaybackReply: (args: {
-    session: VoiceSession;
-    reason?: string;
-    userId?: string | null;
   }) => boolean;
   handoffInterruptedTurnToVoiceBrain: (args: {
     session: VoiceSession;
@@ -332,10 +321,15 @@ export class CaptureManager {
       }
     };
 
-    const maybeTriggerDeferredActions = () => {
+    const maybeTriggerDeferredActions = (reason = "capture_resolved") => {
       if (!this.host.hasDeferredTurnBlockingActiveCapture(session)) {
-        this.host.deferredActionQueue.recheckDeferredVoiceActions({ session, reason: "capture_resolved" });
+        this.host.deferredActionQueue.recheckDeferredVoiceActions({ session, reason });
       }
+    };
+
+    const maybeDrainQueuedAssistantSpeechAfterNoTurn = (reason = "capture_resolved") => {
+      if (this.host.hasDeferredTurnBlockingActiveCapture(session)) return;
+      this.host.drainPendingRealtimeAssistantUtterances(session, reason);
     };
 
     const appendBufferedCaptureToAsr = () => {
@@ -364,13 +358,6 @@ export class CaptureManager {
       captureState.promotionReason = String(promotionReason);
       captureState.musicWakeFollowupEligibleAtPromotion =
         getMusicWakeFollowupState(session, userId, now).passiveWakeFollowupAllowed;
-      this.host.cancelPendingPrePlaybackReplyForUserSpeech({
-        session,
-        userId,
-        captureState,
-        source: "capture_promoted",
-        now
-      });
       if (useOpenAiSharedAsr) {
         beginSharedAsrUtterance(userId);
       }
@@ -427,7 +414,8 @@ export class CaptureManager {
           }
         });
         cleanupCapture();
-        maybeTriggerDeferredActions();
+        maybeTriggerDeferredActions(String(reason || "stream_end"));
+        maybeDrainQueuedAssistantSpeechAfterNoTurn(String(reason || "stream_end"));
         if (useOpenAiPerUserAsr) {
           discardAsrUtterance("per_user", session, userId);
           scheduleAsrIdleClose("per_user", session, asrDeps, userId);
@@ -469,7 +457,8 @@ export class CaptureManager {
           }
         });
         cleanupCapture();
-        maybeTriggerDeferredActions();
+        maybeTriggerDeferredActions(String(reason || "stream_end"));
+        maybeDrainQueuedAssistantSpeechAfterNoTurn(String(reason || "stream_end"));
         if (useOpenAiPerUserAsr) {
           discardAsrUtterance("per_user", session, userId);
           scheduleAsrIdleClose("per_user", session, asrDeps, userId);
@@ -511,7 +500,8 @@ export class CaptureManager {
           }
         });
         cleanupCapture();
-        maybeTriggerDeferredActions();
+        maybeTriggerDeferredActions(String(reason || "stream_end"));
+        maybeDrainQueuedAssistantSpeechAfterNoTurn(String(reason || "stream_end"));
         if (useOpenAiPerUserAsr) {
           discardAsrUtterance("per_user", session, userId);
           scheduleAsrIdleClose("per_user", session, asrDeps, userId);
@@ -759,7 +749,8 @@ export class CaptureManager {
         }
       });
       cleanupCapture();
-      maybeTriggerDeferredActions();
+      maybeTriggerDeferredActions(String(reason || "capture_suppressed"));
+      maybeDrainQueuedAssistantSpeechAfterNoTurn(String(reason || "capture_suppressed"));
       if (useOpenAiPerUserAsr) {
         scheduleAsrIdleClose("per_user", session, asrDeps, userId);
       } else if (useOpenAiSharedAsr) {
@@ -1001,20 +992,13 @@ export class CaptureManager {
               asrResultAvailable: Boolean(asrResult)
             }
           });
-          const recoveredSupersededPrePlaybackReply = this.host.recoverSupersededPrePlaybackReply({
+          this.host.handoffInterruptedTurnToVoiceBrain({
             session,
             reason: "empty_asr_bridge_drop",
-            userId
+            userId,
+            source: "unclear_empty_asr_bridge_turn",
+            bridgeUtteranceId: Math.max(0, Number(captureState.asrUtteranceId || 0)) || null
           });
-          if (!recoveredSupersededPrePlaybackReply) {
-            this.host.handoffInterruptedTurnToVoiceBrain({
-              session,
-              reason: "empty_asr_bridge_drop",
-              userId,
-              source: "unclear_empty_asr_bridge_turn",
-              bridgeUtteranceId: Math.max(0, Number(captureState.asrUtteranceId || 0)) || null
-            });
-          }
           this.host.deferredActionQueue.recheckDeferredVoiceActions({
             session,
             reason: "empty_asr_bridge_drop"

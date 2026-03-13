@@ -520,61 +520,10 @@ Before calling `generateVoiceTurn` in `voiceReplyPipeline.ts`, check whether new
 ```
 pre-generation check:
   → summarizeRealtimeInterruptingQueue({ session, finalizedAfterMs: turnFinalizedAt })
-  → summarizeRealtimeInterruptingLiveCaptures({ session })
-  → if either has content: skip generation, let newer turn process
+  → if newer finalized input exists: skip generation, let newer turn process
 ```
 
-Reuses the same queue/live-capture inspection logic that stage 3 already uses, but runs it before paying for an LLM call. Log: `voice_generation_superseded_pre_generation`.
-
-If the supersede came from a newer promoted live capture rather than from a
-newer finalized queued turn, the accepted turn is stashed first. That lets the
-existing empty/noise recovery path revive it if the newer capture never becomes
-real work.
-
-### Pre-play Supersede Stash
-
-When user speech interrupts an in-flight generation that hasn't produced audio
-yet, the system may **stash** the interrupted turn so it can be retried after
-the user finishes speaking. This prevents dropping legitimate user turns that
-were just slow to generate.
-
-The runtime first stashes that interrupted turn above the normal deferred queue.
-Later, if the interrupting capture dies as empty/noise, the stashed turn is
-recovered into the deferred queue; if the new turn becomes real work, the stash
-is discarded instead.
-
-The same stash-and-recover rule also applies when a turn is superseded at the
-generation-preflight gate by a newer promoted live capture before the LLM call
-starts. Finalized queued turns do not use this recovery path because they are
-already durable newer work.
-
-During the brain tool loop, `tool_call_started` turns become recoverable only
-after the tool result proves the step is replay-safe. Read-only lookups and
-music disambiguation are recoverable; side-effecting tools such as playback
-starts, queue mutations, memory writes, soundboard playback, or leave requests
-are not.
-
-Async `music_play` starts that return `{ "status": "loading" }` are treated as
-an accepted side effect, not as replay-safe follow-up work. The brain loop
-does not keep spinning just to restate the start while playback is still
-booting in the background.
-
-**Stash eligibility** (`cancelPendingPrePlaybackReplyForUserSpeech`):
-
-- Promoted capture is already allowed by the same interruption policy that
-  would govern live barge-in
-- Active reply was aborted (`activeReplyAbortCount > 0`)
-- In-flight turn exists and is either:
-  `generation_only`, or
-  `tool_call_started` with `toolPhaseRecoveryEligible === true`
-- Turn age < `PREPLAY_SUPERSEDE_REQUEUE_MAX_AGE_MS`
-- Turn has a transcript
-- Turn did NOT originate from a deferred flush (prevents zombie loops)
-
-Synthetic/system turns are no longer special-cased out of recovery once an
-authorized interruption actually happens. The stash is discarded as soon as the
-new user turn is admitted, but it can still recover if the interrupting capture
-dies as empty/noise before becoming a real turn.
+This reuses the queued-turn inspection logic that stage 3 uses, but runs it before paying for an LLM call. Log: `voice_generation_superseded_pre_generation`.
 
 ### Stage 2: Abortable generation
 
@@ -609,30 +558,20 @@ Same-utterance late ASR revisions are treated as replacements, not as brand-new 
 
 **Cleanup on abort:** Catch `AbortError`, log `voice_generation_aborted_superseded`, skip playback, let the newer turn proceed through the queue drain, and keep watchdog/timer cleanup nonfatal so the abort does not escape as a process-level crash.
 
-### Stage 3: Pre-playback hold / supersede
+### Stage 3: Pre-playback supersede
 
 `maybeSupersedeRealtimeReplyBeforePlayback` runs before each speech playback step:
 
 - Checks if newer finalized realtime turns are queued
-- Checks if newer promoted live captures exist and are already allowed by the
-  current interruption policy
-- If either: abandon the stale reply (`completed: false`), let the newer content process
+- If they do: abandon the stale reply (`completed: false`), let the newer content process
 
 This is the final safety net for anything that slips through stages 1 and 2.
 
-There is also a narrower pre-audio yield path for the authorized same speaker.
-When Realtime ASR emits `speech_started` before any assistant audio has started
-and the admitted turn is still `generation_only`, the runtime records
-`heldPrePlaybackReply` instead of destroying the old turn immediately:
-
-- the older reply can keep generating
-- exact-line playback requests queue behind the hold instead of speaking
-- the new finalized transcript then resolves the hold:
-  - `ignore` means commentary or backchannel; drop the newer turn and release the queued old reply
-  - `replace` means a real revision/new request; abort or discard the old reply and admit the newer turn
-- if the old turn reaches a tool boundary before the newer transcript resolves,
-  the hold escalates to the destructive preplay supersede path because tool work
-  is no longer safely ignorable
+Raw live captures and pre-audio `speech_started` events do not steal the floor
+by themselves. Before assistant audio starts, filler noise, backchannel, and
+same-speaker half-starts are treated as non-turns unless they become a real
+admitted newer turn. Once assistant audio is actually playing, the ordinary
+interruption flow takes over.
 
 ### Behavior summary
 
@@ -640,7 +579,7 @@ and the admitted turn is still `generation_only`, the runtime records
 |---|---|---|
 | User corrects before generation starts | 1 | Skip generation, let newer turn process |
 | User corrects during generation | 2 | Abort LLM call, skip playback |
-| Same speaker comments before first audio | 3 | Hold old reply, classify finalized transcript as `ignore` or `replace` |
+| Same speaker comments before first audio | 3 | No special hold; old reply only loses if a newer finalized turn is admitted |
 | User corrects after generation, before playback | 3 | Drop at playback gate |
 | Clean short sentence, no correction | — | Normal path, no gating triggered |
 
@@ -707,12 +646,10 @@ These cases should remain covered:
 - Prompt generation receives interruption recovery context on the interrupting user's next turn
 - Empty or unclear ASR after a committed barge-in on that exact bridge utterance hands interruption context back to the voice brain
 - Pre-generation gate skips generation when newer finalized turn exists
-- Pre-generation gate skips generation when live promoted capture exists
 - Aborted generation produces no playback and no conversation window entry
 - Abort cleanup does not corrupt session state
-- Authorized preplay supersede stashes generation-only system speech too, so
-  empty/noise interruptions can recover cleanly
 - Pre-playback supersede (stage 3) abandons stale replies for newer input
+- Pre-audio noise or same-speaker backchannel does not create a special hold path
 - Silent response recovery retries and then hard-recovers
 - Deferred action expiry clears stale actions
 

@@ -9,10 +9,6 @@ import { VoiceSessionManager } from "./voiceSessionManager.ts";
 import { createTestSettings as createCanonicalTestSettings, normalizeLegacyTestSettingsInput } from "../testSettings.ts";
 import { deepMerge } from "../utils.ts";
 import {
-  SYSTEM_SPEECH_OPPORTUNITY,
-  SYSTEM_SPEECH_SOURCE
-} from "./systemSpeechOpportunity.ts";
-import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
   BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS,
   BARGE_IN_MIN_SPEECH_MS,
@@ -224,7 +220,7 @@ function createManager() {
     },
     guilds: { cache: new Map() },
     users: { cache: new Map() },
-    user: { id: "bot-user", username: "clanker conk" }
+    user: { id: "bot-user", username: "clanky" }
   };
 
   const manager = new VoiceSessionManager({
@@ -235,7 +231,7 @@ function createManager() {
       },
       getSettings() {
         return createTestSettings({
-          botName: "clanker conk",
+          botName: "clanky",
           voice: {
             replyPath: "brain"
           }
@@ -384,7 +380,7 @@ function createSession(overrides = {}) {
     pendingRealtimeAssistantUtterances: [],
     realtimeAssistantUtteranceBackpressureActive: false,
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         enabled: true,
         replyPath: "brain"
@@ -732,7 +728,7 @@ test("resolveReplyInterruptionPolicy applies speaker fallback for normal replies
   const { manager } = createManager();
   const session = createSession({
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         replyPath: "brain",
         defaultInterruptionMode: "speaker"
@@ -756,7 +752,7 @@ test("resolveReplyInterruptionPolicy uses the repo default speaker mode when uns
   const { manager } = createManager();
   const session = createSession({
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         replyPath: "brain"
       }
@@ -779,7 +775,7 @@ test("resolveReplyInterruptionPolicy keeps explicit anyone mode interruptible", 
   const { manager } = createManager();
   const session = createSession({
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         replyPath: "brain",
         defaultInterruptionMode: "anyone"
@@ -807,7 +803,7 @@ test("resolveReplyInterruptionPolicy routes speaker mode to the named assistant 
   ];
   const session = createSession({
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         replyPath: "brain",
         defaultInterruptionMode: "speaker"
@@ -837,7 +833,7 @@ test("resolveReplyInterruptionPolicy closes ordinary talk-over for ALL-target sp
   const { manager } = createManager();
   const session = createSession({
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         replyPath: "brain",
         defaultInterruptionMode: "speaker"
@@ -867,7 +863,7 @@ test("resolveReplyInterruptionPolicy keeps speaker mode closed when an assistant
   const { manager } = createManager();
   const session = createSession({
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         replyPath: "brain",
         defaultInterruptionMode: "speaker"
@@ -907,7 +903,7 @@ test("createTrackedAudioResponse applies uninterruptible fallback for normal rep
   const session = createSession({
     mode: "openai_realtime",
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         replyPath: "brain",
         defaultInterruptionMode: "none"
@@ -971,7 +967,7 @@ test("shouldDirectAddressedTurnInterruptReply keeps wake-word override for speak
   const { manager } = createManager();
   const session = createSession({
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         replyPath: "brain",
         defaultInterruptionMode: "speaker"
@@ -1575,7 +1571,7 @@ test("handleAsrBridgeSpeechStarted arms a sustained interrupt and flushes the st
   assert.equal(Boolean(session.interruptedAssistantReply), false);
 });
 
-test("handleAsrBridgeSpeechStarted clears an authorized pre-audio pending reply before playback starts", () => {
+test("handleAsrBridgeSpeechStarted leaves a pre-audio pending reply alone before playback starts", () => {
   const { manager, logs } = createManager();
   const cancelCalls = [];
   manager.shouldUseTranscriptOverlapInterrupts = () => true;
@@ -1625,20 +1621,16 @@ test("handleAsrBridgeSpeechStarted clears an authorized pre-audio pending reply 
     eventType: "input_audio_buffer.speech_started"
   });
 
-  assert.equal(handled, true);
-  assert.equal(cancelCalls.length, 1);
-  assert.equal(session.pendingResponse, null);
+  assert.equal(handled, false);
+  assert.equal(cancelCalls.length, 0);
+  assert.ok(session.pendingResponse);
   assert.equal(
     logs.some((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech"),
-    true
-  );
-  assert.equal(
-    logs.some((entry) => entry?.content === "voice_interrupt_speech_started_pending"),
     false
   );
 });
 
-test("handleAsrBridgeSpeechStarted holds same-speaker generation-only reply before playback instead of superseding immediately", () => {
+test("handleAsrBridgeSpeechStarted does not hold same-speaker generation-only reply before playback", () => {
   const { manager, logs } = createManager();
   manager.activeReplies = new ActiveReplyRegistry();
   manager.shouldUseTranscriptOverlapInterrupts = () => true;
@@ -1684,16 +1676,14 @@ test("handleAsrBridgeSpeechStarted holds same-speaker generation-only reply befo
     eventType: "input_audio_buffer.speech_started"
   });
 
-  assert.equal(handled, true);
+  assert.equal(handled, false);
   assert.equal(activeReply.abortController.signal.aborted, false);
-  assert.equal(session.heldPrePlaybackReply?.userId, "speaker-1");
-  assert.equal(session.supersededPrePlaybackReply ?? null, null);
-  assert.equal(
-    logs.some((entry) => entry?.content === "voice_preplay_reply_held_for_user_speech"),
-    true
-  );
   assert.equal(
     logs.some((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech"),
+    false
+  );
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_preplay_reply_held_for_user_speech"),
     false
   );
 });
@@ -2391,7 +2381,7 @@ test("handleAsrBridgeTranscriptOverlapSegment lets a wake-word transcript grab t
       lastTrigger: "test_seed"
     },
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         defaultInterruptionMode: "speaker"
       }
@@ -2438,7 +2428,7 @@ test("shouldDirectAddressedTurnInterruptReply allows wake-word overrides in spea
   const { manager } = createManager();
   const speakerModeSession = createSession({
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         defaultInterruptionMode: "speaker"
       }
@@ -2446,7 +2436,7 @@ test("shouldDirectAddressedTurnInterruptReply allows wake-word overrides in spea
   });
   const noneModeSession = createSession({
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         defaultInterruptionMode: "none"
       }
@@ -2535,7 +2525,7 @@ test("bindSessionHandlers does not touch activity on speaking.start before speec
     cleanupHandlers: [],
     voxClient,
     settingsSnapshot: {
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         enabled: true,
         asrEnabled: true
@@ -2610,6 +2600,59 @@ test("bindSessionHandlers requests share-link recovery when native stream transp
   assert.equal(fallbackRequested?.metadata?.targetUserId, "user-2");
 });
 
+test("bindSessionHandlers does not request share-link recovery when STREAM_LINK_FALLBACK is disabled", async () => {
+  const { manager, logs } = createManager();
+  manager.appConfig.streamLinkFallbackEnabled = false;
+  const voxClient = new EventEmitter();
+  const stopCalls: Array<Record<string, unknown>> = [];
+  const fallbackCalls: Array<Record<string, unknown>> = [];
+  const session = createSession({
+    cleanupHandlers: [],
+    voxClient,
+    textChannelId: "text-1",
+    streamWatch: {
+      active: true,
+      targetUserId: "user-2",
+      requestedByUserId: "user-1",
+      lastFrameAt: 0,
+      lastCommentaryAt: 0,
+      ingestedFrameCount: 0
+    }
+  });
+
+  manager.stopWatchStreamForUser = async (payload) => {
+    stopCalls.push(payload);
+    session.streamWatch.active = false;
+    return {
+      ok: true,
+      reason: "watching_stopped"
+    };
+  };
+  manager.startVoiceScreenWatch = async (payload) => {
+    fallbackCalls.push(payload);
+    return {
+      started: true,
+      transport: "link",
+      reason: "started"
+    };
+  };
+
+  manager.sessionLifecycle.bindSessionHandlers(session, session.settingsSnapshot);
+  voxClient.emit("transportState", {
+    role: "stream_watch",
+    status: "failed",
+    reason: "ice_failed"
+  });
+  await flushMicrotasks();
+
+  assert.equal(stopCalls.length, 1);
+  assert.equal(fallbackCalls.length, 0);
+  const fallbackSkipped = logs.find(
+    (entry) => String(entry?.content || "") === "native_discord_stream_transport_link_fallback_skipped"
+  );
+  assert.equal(fallbackSkipped?.metadata?.skipReason, "stream_link_fallback_disabled");
+});
+
 test("startInboundCapture drops provisional noise before activity promotion while streaming provisional ASR audio", async () => {
   const { manager, logs, touchCalls } = createManager();
   manager.appConfig.openaiApiKey = "test-openai-key";
@@ -2621,7 +2664,7 @@ test("startInboundCapture drops provisional noise before activity promotion whil
     realtimeInputSampleRateHz: 24_000,
     cleanupHandlers: [],
     settingsSnapshot: {
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         enabled: true,
         asrEnabled: true,
@@ -2666,7 +2709,7 @@ test("startInboundCapture promotes strong local speech while streaming per-user 
     realtimeInputSampleRateHz: 24_000,
     cleanupHandlers: [],
     settingsSnapshot: {
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         enabled: true,
         asrEnabled: true,
@@ -2712,7 +2755,7 @@ test("startInboundCapture promotes modest speech once server VAD confirms the pr
     realtimeInputSampleRateHz: 24_000,
     cleanupHandlers: [],
     settingsSnapshot: {
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         enabled: true,
         asrEnabled: true,
@@ -2756,7 +2799,7 @@ test("startInboundCapture keeps sparse spike noise provisional even while stream
     realtimeInputSampleRateHz: 24_000,
     cleanupHandlers: [],
     settingsSnapshot: {
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         enabled: true,
         asrEnabled: true,
@@ -2810,7 +2853,7 @@ test("bindSessionHandlers does not duplicate provisional capture creation for re
     mode: "openai_realtime",
     cleanupHandlers: [],
     settingsSnapshot: {
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         enabled: true,
         asrEnabled: true,
@@ -2905,7 +2948,7 @@ test("bindSessionHandlers defers shared OpenAI ASR start until speech is confirm
     mode: "openai_realtime",
     cleanupHandlers: [],
     settingsSnapshot: {
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         enabled: true,
         asrEnabled: true,
@@ -3285,7 +3328,7 @@ test("playVoiceReplyInOrder preserves inline soundboard sequencing on buffered p
   const { manager } = createManager();
   const session = createSession({
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         soundboard: {
           enabled: true,
@@ -3351,7 +3394,7 @@ test("playVoiceReplyInOrder waits for prior realtime playback before a soundboar
       latencyContext: null
     },
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         soundboard: {
           enabled: true,
@@ -3404,7 +3447,7 @@ test("playVoiceReplyInOrder waits for the current realtime speech segment before
     mode: "openai_realtime",
     realtimeClient: {},
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         soundboard: {
           enabled: true,
@@ -3487,7 +3530,7 @@ test("playVoiceReplyInOrder does not stall on bot turn tail flags after targeted
     mode: "openai_realtime",
     realtimeClient: {},
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         soundboard: {
           enabled: true,
@@ -3816,6 +3859,124 @@ test("requestRealtimeTextUtterance prefers playback-specific realtime client met
   assert.equal(playbackPrompts.length, 1);
 });
 
+test("capture abort drains queued assistant speech once a non-turn capture stops blocking playback", () => {
+  const { manager, logs } = createManager();
+  const prompts = [];
+  const voxClient = new EventEmitter();
+  voxClient.subscribeUser = () => {};
+  const session = createSession({
+    mode: "openai_realtime",
+    cleanupHandlers: [],
+    settingsSnapshot: createTestSettings({
+      botName: "clanky",
+      voice: {
+        enabled: true,
+        asrEnabled: true,
+        brainProvider: "anthropic"
+      }
+    }),
+    voxClient,
+    realtimeClient: {
+      requestTextUtterance(prompt) {
+        prompts.push(prompt);
+      },
+      isResponseInProgress() {
+        return false;
+      }
+    }
+  });
+
+  manager.captureManager.startInboundCapture({
+    session,
+    userId: "speaker-1",
+    settings: session.settingsSnapshot
+  });
+
+  const queued = manager.requestRealtimeTextUtterance({
+    session,
+    text: "yo what's up",
+    source: "test_noise_queue"
+  });
+
+  assert.equal(queued, true);
+  assert.equal(prompts.length, 0);
+  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 1);
+
+  const capture = session.userCaptures.get("speaker-1");
+  assert.ok(capture);
+  capture.abort("capture_suppressed");
+
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0] || "", /yo what's up/i);
+  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 0);
+  assert.equal(
+    logs.some((entry) => entry?.content === "realtime_assistant_utterance_queue_drained"),
+    true
+  );
+});
+
+test("promoted capture finalization does not revive queued assistant speech before downstream turn admission", async () => {
+  const { manager } = createManager();
+  manager.shouldUsePerUserTranscription = () => false;
+  manager.shouldUseSharedTranscription = () => false;
+  const prompts = [];
+  const queuedTurns = [];
+  const voxClient = new EventEmitter();
+  voxClient.subscribeUser = () => {};
+  manager.turnProcessor.queueRealtimeTurn = (payload) => {
+    queuedTurns.push(payload);
+  };
+  const session = createSession({
+    mode: "openai_realtime",
+    cleanupHandlers: [],
+    settingsSnapshot: createTestSettings({
+      botName: "clanky",
+      voice: {
+        enabled: true,
+        asrEnabled: true,
+        brainProvider: "anthropic"
+      }
+    }),
+    voxClient,
+    realtimeClient: {
+      requestTextUtterance(prompt) {
+        prompts.push(prompt);
+      },
+      isResponseInProgress() {
+        return false;
+      }
+    }
+  });
+
+  manager.captureManager.startInboundCapture({
+    session,
+    userId: "speaker-1",
+    settings: session.settingsSnapshot
+  });
+
+  const speechPcm = makeMonoPcm16(Math.ceil((24_000 * (VOICE_TURN_PROMOTION_MIN_CLIP_MS + 40)) / 1000), 3000);
+  voxClient.emit("userAudio", "speaker-1", speechPcm);
+  await flushMicrotasks();
+
+  const queued = manager.requestRealtimeTextUtterance({
+    session,
+    text: "old queued line",
+    source: "test_promoted_capture_queue"
+  });
+
+  assert.equal(queued, true);
+  assert.equal(prompts.length, 0);
+  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 1);
+
+  const capture = session.userCaptures.get("speaker-1");
+  assert.ok(capture);
+  capture.finalize("stream_end");
+
+  assert.equal(prompts.length, 0);
+  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 1);
+  assert.equal(queuedTurns.length, 1);
+});
+
 test("forwardRealtimeTextTurnToBrain logs prompt details for bridge-style realtime turns", async () => {
   const { manager, logs } = createManager();
   const requestedPrompts = [];
@@ -3834,7 +3995,7 @@ test("forwardRealtimeTextTurnToBrain logs prompt details for bridge-style realti
       }
     },
     settingsSnapshot: createTestSettings({
-      botName: "clanker conk",
+      botName: "clanky",
       voice: {
         enabled: true,
         replyPath: "bridge"
@@ -4493,23 +4654,31 @@ test("queueRealtimeTurnFromAsrBridge drops malformed control-token ASR transcrip
   assert.equal(droppedLog?.metadata?.reservedAudioMarkerCount, 2);
 });
 
-test("queueRealtimeTurnFromAsrBridge recovers stashed preplay reply on empty ASR transcript", () => {
+test("queueRealtimeTurnFromAsrBridge drains queued assistant speech when empty ASR produces no replacement work", () => {
   const { manager, logs } = createManager();
+  const prompts = [];
   const session = createSession({
     mode: "openai_realtime",
-    supersededPrePlaybackReply: {
-      userId: "speaker-1",
-      transcript: "[YOU joined the voice channel]",
-      pcmBuffer: null,
-      source: "bot_join_greeting",
-      captureReason: "bot_join_greeting",
-      directAddressed: false,
-      queuedAt: Date.now() - 500,
-      interruptionPolicy: null,
-      supersededAt: Date.now() - 200,
-      supersededByUserId: "speaker-1",
-      supersededBySource: "capture_promoted"
-    }
+    realtimeClient: {
+      requestTextUtterance(prompt) {
+        prompts.push(prompt);
+      },
+      isResponseInProgress() {
+        return false;
+      }
+    },
+    pendingRealtimeAssistantUtterances: [
+      {
+        prompt: "queued prompt",
+        utteranceText: "queued prompt",
+        userId: "bot-user",
+        source: "test_stream_chunk_queued",
+        queuedAt: Date.now(),
+        interruptionPolicy: null,
+        latencyContext: null,
+        musicWakeRefreshAfterSpeech: false
+      }
+    ]
   });
   const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 6);
 
@@ -4526,15 +4695,10 @@ test("queueRealtimeTurnFromAsrBridge recovers stashed preplay reply on empty ASR
   });
 
   assert.equal(usedTranscript, false);
-  assert.equal(session.supersededPrePlaybackReply, null);
-  const queuedTurns = manager.deferredActionQueue.getDeferredQueuedUserTurns(session);
-  assert.equal(queuedTurns.length, 1);
-  assert.equal(queuedTurns[0]?.transcript, "[YOU joined the voice channel]");
-  assert.equal(queuedTurns[0]?.source, "bot_join_greeting");
-  assert.equal(
-    logs.some((entry) => entry?.content === "voice_preplay_reply_recovered"),
-    true
-  );
+  assert.deepEqual(prompts, ["queued prompt"]);
+  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 0);
+  assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"), true);
+  assert.equal(logs.some((entry) => entry?.content === "realtime_assistant_utterance_queue_drained"), true);
 });
 
 test("queueRealtimeTurnFromAsrBridge hands empty interrupted ASR turns back to the voice brain", async () => {
@@ -4638,85 +4802,6 @@ test("queueRealtimeTurnFromAsrBridge drops empty ASR turns without synthetic unc
   );
 });
 
-test("queueRealtimeTurnFromAsrBridge recovers a live-capture-superseded turn when the newer ASR result is empty", async () => {
-  const { manager, logs } = createManager();
-  manager.activeReplies = new ActiveReplyRegistry();
-  manager.resolveSoundboardCandidates = async () => ({
-    candidates: []
-  });
-  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
-  manager.generateVoiceTurn = async () => ({
-    text: "should not be generated"
-  });
-  manager.isCaptureConfirmedLiveSpeech = () => true;
-
-  const finalizedAtMs = Date.now() - 1_000;
-  const session = createSession({
-    mode: "openai_realtime",
-    realtimeInputSampleRateHz: 24_000,
-    userCaptures: new Map([
-      [
-        "speaker-1",
-        {
-          userId: "speaker-1",
-          startedAt: finalizedAtMs + 100,
-          promotedAt: finalizedAtMs + 150,
-          bytesSent: 24_000,
-          signalSampleCount: 12_000,
-          signalActiveSampleCount: 6_000,
-          signalPeakAbs: 12_000,
-          signalSumSquares: 12_000 * 12_000 * 12_000
-        }
-      ]
-    ])
-  });
-
-  const generationResult = await manager.runRealtimeBrainReply({
-    session,
-    settings: session.settingsSnapshot,
-    userId: "speaker-1",
-    transcript: "older transcript",
-    directAddressed: true,
-    source: "realtime",
-    latencyContext: {
-      finalizedAtMs,
-      asrStartedAtMs: finalizedAtMs - 100,
-      asrCompletedAtMs: finalizedAtMs - 50,
-      queueWaitMs: 0,
-      pendingQueueDepth: 0,
-      captureReason: "stream_end"
-    }
-  });
-
-  assert.equal(generationResult, false);
-  assert.equal(session.supersededPrePlaybackReply?.transcript, "older transcript");
-
-  const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 6);
-  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
-    session,
-    userId: "speaker-1",
-    pcmBuffer,
-    captureReason: "stream_end",
-    finalizedAt: Date.now(),
-    asrResult: {
-      transcript: ""
-    },
-    source: "per_user"
-  });
-
-  assert.equal(usedTranscript, false);
-  assert.equal(session.supersededPrePlaybackReply, null);
-  const queuedTurns = manager.deferredActionQueue.getDeferredQueuedUserTurns(session);
-  assert.equal(queuedTurns.length, 1);
-  assert.equal(queuedTurns[0]?.transcript, "older transcript");
-  assert.equal(queuedTurns[0]?.source, "realtime");
-  assert.equal(
-    logs.some((entry) => entry?.content === "voice_preplay_reply_recovered"),
-    true
-  );
-});
-
 test("interruptBotSpeechForOutputLockTurn aborts active voice reply scopes", () => {
   const { manager, logs } = createManager();
   manager.activeReplies = new ActiveReplyRegistry();
@@ -4754,734 +4839,6 @@ test("interruptBotSpeechForOutputLockTurn aborts active voice reply scopes", () 
   const interruptLog = logs.find((entry) => entry?.content === "voice_output_lock_interrupt");
   assert.equal(Boolean(interruptLog), true);
   assert.equal(interruptLog?.metadata?.activeReplyAbortCount, 1);
-});
-
-test("discardSupersededPrePlaybackReply clears stashed preplay reply", () => {
-  const { manager, logs } = createManager();
-  const session = createSession({
-    supersededPrePlaybackReply: {
-      userId: "speaker-1",
-      transcript: "play daft punk",
-      pcmBuffer: null,
-      source: "realtime",
-      captureReason: "stream_end",
-      directAddressed: true,
-      queuedAt: Date.now() - 1_000,
-      interruptionPolicy: {
-        assertive: true,
-        scope: "speaker",
-        allowedUserId: "speaker-1"
-      },
-      supersededAt: Date.now() - 500,
-      supersededByUserId: "speaker-2",
-      supersededBySource: "capture_promoted"
-    }
-  });
-
-  const discarded = manager.discardSupersededPrePlaybackReply({
-    session,
-    reason: "turn_admitted",
-    userId: "speaker-2"
-  });
-
-  assert.equal(discarded, true);
-  assert.equal(session.supersededPrePlaybackReply, null);
-  assert.equal(
-    logs.some((entry) => entry?.content === "voice_preplay_reply_discarded"),
-    true
-  );
-});
-
-test("resolveHeldPrePlaybackReplyTurn ignores commentary and releases queued assistant speech", async () => {
-  const { manager, logs } = createManager();
-  const prompts = [];
-  manager.llm.generate = async () => ({
-    text: "IGNORE"
-  });
-
-  const session = createSession({
-    mode: "openai_realtime",
-    heldPrePlaybackReply: {
-      userId: "speaker-1",
-      startedAt: Date.now() - 400,
-      source: "asr_speech_started"
-    },
-    inFlightAcceptedBrainTurn: {
-      transcript: "Can you look up the price of Apple?",
-      userId: "speaker-1",
-      pcmBuffer: null,
-      source: "realtime",
-      acceptedAt: Date.now() - 800,
-      phase: "generation_only",
-      captureReason: "stream_end",
-      directAddressed: true
-    },
-    realtimeClient: {
-      requestTextUtterance(prompt) {
-        prompts.push(prompt);
-      },
-      isResponseInProgress() {
-        return false;
-      }
-    },
-    userCaptures: new Map()
-  });
-
-  const queued = manager.requestRealtimeTextUtterance({
-    session,
-    text: "Apple is around two sixty right now.",
-    source: "test_stream_chunk_1"
-  });
-
-  assert.equal(queued, true);
-  assert.equal(prompts.length, 0);
-  assert.equal(session.pendingRealtimeAssistantUtterances?.length, 1);
-
-  const decision = await manager.resolveHeldPrePlaybackReplyTurn({
-    session,
-    userId: "speaker-1",
-    transcript: "Yeah, so it takes a second, but he'll get it.",
-    settings: session.settingsSnapshot,
-    source: "realtime"
-  });
-
-  assert.equal(decision, "ignore");
-  assert.equal(session.heldPrePlaybackReply ?? null, null);
-  assert.equal(prompts.length, 1);
-  assert.match(prompts[0] || "", /Apple is around two sixty right now/i);
-  assert.equal(session.pendingRealtimeAssistantUtterances?.length || 0, 0);
-  const resolutionLog = logs.find((entry) => entry?.content === "voice_preplay_reply_hold_resolved");
-  assert.ok(resolutionLog);
-  assert.equal(resolutionLog?.metadata?.decision, "ignore");
-  assert.equal(resolutionLog?.metadata?.decisionSource, "model_ignore");
-});
-
-test("resolveHeldPrePlaybackReplyTurn replaces held generation-only reply when the new finalized turn changes the job", async () => {
-  const { manager, logs } = createManager();
-  manager.activeReplies = new ActiveReplyRegistry();
-  manager.llm.generate = async () => ({
-    text: "REPLACE"
-  });
-
-  const session = createSession({
-    mode: "openai_realtime",
-    heldPrePlaybackReply: {
-      userId: "speaker-1",
-      startedAt: Date.now() - 400,
-      source: "asr_speech_started"
-    },
-    activeReplyInterruptionPolicy: {
-      assertive: true,
-      scope: "speaker",
-      allowedUserId: "speaker-1"
-    },
-    inFlightAcceptedBrainTurn: {
-      transcript: "Can you look up the price of Apple?",
-      userId: "speaker-1",
-      pcmBuffer: null,
-      source: "realtime",
-      acceptedAt: Date.now() - 800,
-      phase: "generation_only",
-      captureReason: "stream_end",
-      directAddressed: true
-    },
-    userCaptures: new Map([
-      [
-        "speaker-1",
-        createAssertiveCaptureState("speaker-1", {
-          promotionReason: "server_vad_confirmed"
-        })
-      ]
-    ])
-  });
-  const replyScopeKey = buildVoiceReplyScopeKey(session.id);
-  const activeReply = manager.activeReplies.begin(replyScopeKey, "voice-generation", ["voice_generation"]);
-
-  const decision = await manager.resolveHeldPrePlaybackReplyTurn({
-    session,
-    userId: "speaker-1",
-    transcript: "I was asking about Microsoft.",
-    settings: session.settingsSnapshot,
-    source: "realtime"
-  });
-
-  assert.equal(decision, "replace");
-  assert.equal(activeReply.abortController.signal.aborted, true);
-  assert.equal(session.heldPrePlaybackReply ?? null, null);
-  assert.equal(session.supersededPrePlaybackReply?.transcript, "Can you look up the price of Apple?");
-  const resolutionLog = logs.find((entry) => entry?.content === "voice_preplay_reply_hold_resolved");
-  assert.ok(resolutionLog);
-  assert.equal(resolutionLog?.metadata?.decision, "replace");
-  assert.equal(resolutionLog?.metadata?.decisionSource, "model_replace");
-});
-
-test("runRealtimeTurn clears held preplay state before consuming cancel intent", async () => {
-  const { manager, logs } = createManager();
-  const prompts = [];
-  const session = createSession({
-    mode: "openai_realtime",
-    heldPrePlaybackReply: {
-      userId: "speaker-1",
-      startedAt: Date.now() - 400,
-      source: "asr_speech_started"
-    },
-    inFlightAcceptedBrainTurn: {
-      transcript: "Can you look up the price of Apple?",
-      userId: "speaker-1",
-      pcmBuffer: null,
-      source: "realtime",
-      acceptedAt: Date.now() - 800,
-      phase: "generation_only",
-      captureReason: "stream_end",
-      directAddressed: true
-    },
-    pendingRealtimeAssistantUtterances: [
-      {
-        prompt: "Apple is around two sixty right now.",
-        utteranceText: "Apple is around two sixty right now.",
-        userId: "bot-user",
-        source: "test_stream_chunk_1",
-        queuedAt: Date.now() - 100,
-        interruptionPolicy: null,
-        latencyContext: null
-      }
-    ],
-    realtimeClient: {
-      requestTextUtterance(prompt) {
-        prompts.push(prompt);
-      },
-      isResponseInProgress() {
-        return false;
-      }
-    }
-  });
-
-  await manager.turnProcessor.runRealtimeTurn({
-    session,
-    userId: "speaker-1",
-    pcmBuffer: Buffer.alloc(2, 1),
-    captureReason: "stream_end",
-    finalizedAt: Date.now(),
-    queuedAt: Date.now(),
-    replyScopeStartedAt: Date.now(),
-    transcriptOverride: "stop"
-  });
-
-  assert.equal(session.heldPrePlaybackReply ?? null, null);
-  assert.equal(session.pendingRealtimeAssistantUtterances?.length || 0, 0);
-  assert.equal(prompts.length, 1);
-  assert.equal(
-    logs.some((entry) => entry?.content === "voice_turn_cancel_intent"),
-    true
-  );
-});
-
-test("cancelPendingPrePlaybackReplyForUserSpeech clears pre-audio thought response", () => {
-  const { manager, logs } = createManager();
-  const cancelCalls = [];
-  const session = createSession({
-    mode: "openai_realtime",
-    realtimeClient: {
-      cancelActiveResponse() {
-        cancelCalls.push(true);
-        return true;
-      }
-    },
-    lastAudioDeltaAt: 0,
-    pendingResponse: {
-      requestId: 11,
-      requestedAt: Date.now() + 5_000,
-      source: SYSTEM_SPEECH_SOURCE.THOUGHT,
-      handlingSilence: false,
-      audioReceivedAt: 0,
-      interruptionPolicy: {
-        assertive: true,
-        scope: "speaker",
-        allowedUserId: "speaker-1"
-      },
-      utteranceText: "wild thought",
-      latencyContext: null,
-      userId: null,
-      retryCount: 0,
-      hardRecoveryAttempted: false
-    }
-  });
-  const promotedAt = Date.now();
-  const capture = {
-    userId: "speaker-1",
-    startedAt: promotedAt - 420,
-    promotedAt,
-    bytesSent: 24_000,
-    signalSampleCount: 12_000,
-    signalActiveSampleCount: 6_000,
-    signalPeakAbs: 12_000,
-    signalSumSquares: 12_000 * 12_000 * 12_000
-  };
-
-  const cancelled = manager.cancelPendingPrePlaybackReplyForUserSpeech({
-    session,
-    userId: "speaker-1",
-    captureState: capture,
-    source: "capture_promoted",
-    now: promotedAt
-  });
-
-  assert.equal(cancelled, true);
-  assert.equal(session.pendingResponse, null);
-  assert.equal(cancelCalls.length, 1);
-  const cancelLog = logs.find((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech");
-  assert.ok(cancelLog);
-  assert.equal(cancelLog?.metadata?.pendingSource, SYSTEM_SPEECH_SOURCE.THOUGHT);
-  assert.equal(cancelLog?.metadata?.opportunityType, SYSTEM_SPEECH_OPPORTUNITY.THOUGHT);
-  assert.equal(Boolean(cancelLog?.metadata?.responseCancelAttempted), true);
-});
-
-test("cancelPendingPrePlaybackReplyForUserSpeech aborts active voice generation before audio starts", () => {
-  const { manager, logs } = createManager();
-  manager.activeReplies = new ActiveReplyRegistry();
-  const session = createSession({
-    mode: "openai_realtime",
-    lastAudioDeltaAt: 0,
-    pendingResponse: null,
-    activeReplyInterruptionPolicy: {
-      assertive: true,
-      scope: "speaker",
-      allowedUserId: "speaker-1"
-    }
-  });
-  const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
-  const activeReply = manager.activeReplies.begin(voiceReplyScopeKey, "voice-generation", ["voice_generation"]);
-  const promotedAt = Date.now();
-  const capture = {
-    userId: "speaker-1",
-    startedAt: promotedAt - 420,
-    promotedAt,
-    bytesSent: 24_000,
-    signalSampleCount: 12_000,
-    signalActiveSampleCount: 6_000,
-    signalPeakAbs: 12_000,
-    signalSumSquares: 12_000 * 12_000 * 12_000
-  };
-
-  const cancelled = manager.cancelPendingPrePlaybackReplyForUserSpeech({
-    session,
-    userId: "speaker-1",
-    captureState: capture,
-    source: "capture_promoted",
-    now: promotedAt
-  });
-
-  assert.equal(cancelled, true);
-  assert.equal(activeReply.abortController.signal.aborted, true);
-  const cancelLog = logs.find((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech");
-  assert.ok(cancelLog);
-  assert.equal(cancelLog?.metadata?.hadPendingResponse, false);
-  assert.equal(cancelLog?.metadata?.hadActiveReply, true);
-  assert.equal(cancelLog?.metadata?.activeReplyAbortCount, 1);
-});
-
-test("cancelPendingPrePlaybackReplyForUserSpeech requeues safe in-flight accepted brain turns", () => {
-  const { manager, logs } = createManager();
-  manager.activeReplies = new ActiveReplyRegistry();
-  const session = createSession({
-    mode: "openai_realtime",
-    lastAudioDeltaAt: 0,
-    pendingResponse: null
-  });
-  const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
-  const activeReply = manager.activeReplies.begin(voiceReplyScopeKey, "voice-generation", ["voice_generation"]);
-  const promotedAt = Date.now();
-  session.inFlightAcceptedBrainTurn = {
-    transcript: "play daft punk",
-    userId: "speaker-1",
-    pcmBuffer: null,
-    source: "realtime",
-    acceptedAt: promotedAt - 500,
-    phase: "generation_only",
-    captureReason: "stream_end",
-    directAddressed: true
-  };
-  const capture = {
-    userId: "speaker-1",
-    startedAt: promotedAt - 420,
-    promotedAt,
-    bytesSent: 24_000,
-    signalSampleCount: 12_000,
-    signalActiveSampleCount: 6_000,
-    signalPeakAbs: 12_000,
-    signalSumSquares: 12_000 * 12_000 * 12_000
-  };
-
-  const cancelled = manager.cancelPendingPrePlaybackReplyForUserSpeech({
-    session,
-    userId: "speaker-1",
-    captureState: capture,
-    source: "capture_promoted",
-    now: promotedAt
-  });
-
-  assert.equal(cancelled, true);
-  assert.equal(activeReply.abortController.signal.aborted, true);
-  assert.equal(session.inFlightAcceptedBrainTurn, null);
-  assert.equal(session.supersededPrePlaybackReply?.transcript, "play daft punk");
-  assert.equal(session.supersededPrePlaybackReply?.userId, "speaker-1");
-  assert.equal(session.supersededPrePlaybackReply?.supersededByUserId, "speaker-1");
-  const cancelLog = logs.find((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech");
-  assert.ok(cancelLog);
-  assert.equal(cancelLog?.metadata?.inFlightPhase, "generation_only");
-  assert.equal(cancelLog?.metadata?.stashedForRecovery, true);
-});
-
-test("cancelPendingPrePlaybackReplyForUserSpeech requeues replay-safe tool-followup turns", () => {
-  const { manager, logs } = createManager();
-  manager.activeReplies = new ActiveReplyRegistry();
-  const session = createSession({
-    mode: "openai_realtime",
-    lastAudioDeltaAt: 0,
-    pendingResponse: null
-  });
-  const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
-  const activeReply = manager.activeReplies.begin(voiceReplyScopeKey, "voice-generation", ["voice_generation"]);
-  const promotedAt = Date.now();
-  session.inFlightAcceptedBrainTurn = {
-    transcript: "play some minecraft music",
-    userId: "speaker-1",
-    pcmBuffer: null,
-    source: "realtime",
-    acceptedAt: promotedAt - 500,
-    phase: "tool_call_started",
-    captureReason: "stream_end",
-    directAddressed: true,
-    toolPhaseRecoveryEligible: true,
-    toolPhaseRecoveryReason: "music_play_needs_disambiguation",
-    toolPhaseLastToolName: "music_play"
-  };
-  const capture = {
-    userId: "speaker-1",
-    startedAt: promotedAt - 420,
-    promotedAt,
-    bytesSent: 24_000,
-    signalSampleCount: 12_000,
-    signalActiveSampleCount: 6_000,
-    signalPeakAbs: 12_000,
-    signalSumSquares: 12_000 * 12_000 * 12_000
-  };
-
-  const cancelled = manager.cancelPendingPrePlaybackReplyForUserSpeech({
-    session,
-    userId: "speaker-1",
-    captureState: capture,
-    source: "capture_promoted",
-    now: promotedAt
-  });
-
-  assert.equal(cancelled, true);
-  assert.equal(activeReply.abortController.signal.aborted, true);
-  assert.equal(session.inFlightAcceptedBrainTurn, null);
-  assert.equal(session.supersededPrePlaybackReply?.transcript, "play some minecraft music");
-  assert.equal(session.supersededPrePlaybackReply?.userId, "speaker-1");
-  const cancelLog = logs.find((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech");
-  assert.ok(cancelLog);
-  assert.equal(cancelLog?.metadata?.inFlightPhase, "tool_call_started");
-  assert.equal(cancelLog?.metadata?.inFlightToolRecoveryEligible, true);
-  assert.equal(cancelLog?.metadata?.inFlightToolRecoveryReason, "music_play_needs_disambiguation");
-  assert.equal(cancelLog?.metadata?.inFlightToolLastToolName, "music_play");
-  assert.equal(cancelLog?.metadata?.stashedForRecovery, true);
-});
-
-test("cancelPendingPrePlaybackReplyForUserSpeech ignores unauthorized promoted capture before bot_join_greeting playback", () => {
-  const { manager, logs } = createManager();
-  manager.activeReplies = new ActiveReplyRegistry();
-  const session = createSession({
-    mode: "openai_realtime",
-    lastAudioDeltaAt: 0,
-    pendingResponse: null
-  });
-  const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
-  const activeReply = manager.activeReplies.begin(voiceReplyScopeKey, "voice-generation", ["voice_generation"]);
-  const promotedAt = Date.now();
-  session.inFlightAcceptedBrainTurn = {
-    transcript: "[YOU joined the voice channel]",
-    userId: "bot-user-id",
-    pcmBuffer: null,
-    source: "bot_join_greeting",
-    acceptedAt: promotedAt - 500,
-    phase: "generation_only",
-    captureReason: "bot_join_greeting",
-    directAddressed: false
-  };
-  const capture = {
-    userId: "speaker-1",
-    startedAt: promotedAt - 420,
-    promotedAt,
-    bytesSent: 24_000,
-    signalSampleCount: 12_000,
-    signalActiveSampleCount: 6_000,
-    signalPeakAbs: 12_000,
-    signalSumSquares: 12_000 * 12_000 * 12_000
-  };
-
-  const cancelled = manager.cancelPendingPrePlaybackReplyForUserSpeech({
-    session,
-    userId: "speaker-1",
-    captureState: capture,
-    source: "capture_promoted",
-    now: promotedAt
-  });
-
-  assert.equal(cancelled, false);
-  assert.equal(activeReply.abortController.signal.aborted, false);
-  const queuedTurns = manager.deferredActionQueue.getDeferredQueuedUserTurns(session);
-  assert.equal(queuedTurns.length, 0);
-  assert.equal(
-    logs.some((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech"),
-    false
-  );
-});
-
-test("cancelPendingPrePlaybackReplyForUserSpeech requeues authorized stream-watch commentary", () => {
-  const { manager, logs } = createManager();
-  manager.activeReplies = new ActiveReplyRegistry();
-  const session = createSession({
-    mode: "openai_realtime",
-    lastAudioDeltaAt: 0,
-    pendingResponse: null
-  });
-  const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
-  const activeReply = manager.activeReplies.begin(voiceReplyScopeKey, "voice-generation", ["voice_generation"]);
-  const promotedAt = Date.now();
-  session.inFlightAcceptedBrainTurn = {
-    transcript: "[alice is still screen sharing. The visible scene changed.]",
-    userId: "speaker-1",
-    pcmBuffer: null,
-    source: "stream_watch_brain_turn:scene_changed",
-    acceptedAt: promotedAt - 500,
-    phase: "generation_only",
-    captureReason: "stream_watch_brain_turn:scene_changed",
-    directAddressed: false
-  };
-  const capture = {
-    userId: "speaker-1",
-    startedAt: promotedAt - 420,
-    promotedAt,
-    bytesSent: 24_000,
-    signalSampleCount: 12_000,
-    signalActiveSampleCount: 6_000,
-    signalPeakAbs: 12_000,
-    signalSumSquares: 12_000 * 12_000 * 12_000
-  };
-
-  const cancelled = manager.cancelPendingPrePlaybackReplyForUserSpeech({
-    session,
-    userId: "speaker-1",
-    captureState: capture,
-    source: "capture_promoted",
-    now: promotedAt
-  });
-
-  assert.equal(cancelled, true);
-  assert.equal(activeReply.abortController.signal.aborted, true);
-  assert.equal(
-    session.supersededPrePlaybackReply?.source,
-    "stream_watch_brain_turn:scene_changed"
-  );
-  assert.equal(
-    session.supersededPrePlaybackReply?.supersededByUserId,
-    "speaker-1"
-  );
-  const cancelLog = logs.find((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech");
-  assert.ok(cancelLog);
-  assert.equal(cancelLog?.metadata?.stashedForRecovery, true);
-});
-
-test("cancelPendingPrePlaybackReplyForUserSpeech ignores unauthorized promoted capture before speaker-scoped preplay reply", () => {
-  const { manager } = createManager();
-  manager.activeReplies = new ActiveReplyRegistry();
-  const session = createSession({
-    mode: "openai_realtime",
-    lastAudioDeltaAt: 0,
-    pendingResponse: null
-  });
-  const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
-  const activeReply = manager.activeReplies.begin(voiceReplyScopeKey, "voice-generation", ["voice_generation"]);
-  const promotedAt = Date.now();
-  session.inFlightAcceptedBrainTurn = {
-    transcript: "play daft punk",
-    userId: "speaker-1",
-    pcmBuffer: null,
-    source: "realtime",
-    acceptedAt: promotedAt - 500,
-    phase: "generation_only",
-    captureReason: "stream_end",
-    directAddressed: true
-  };
-  const capture = {
-    userId: "speaker-2",
-    startedAt: promotedAt - 420,
-    promotedAt,
-    bytesSent: 24_000,
-    signalSampleCount: 12_000,
-    signalActiveSampleCount: 6_000,
-    signalPeakAbs: 12_000,
-    signalSumSquares: 12_000 * 12_000 * 12_000
-  };
-
-  const cancelled = manager.cancelPendingPrePlaybackReplyForUserSpeech({
-    session,
-    userId: "speaker-2",
-    captureState: capture,
-    source: "capture_promoted",
-    now: promotedAt
-  });
-
-  assert.equal(cancelled, false);
-  assert.equal(activeReply.abortController.signal.aborted, false);
-  assert.equal(manager.deferredActionQueue.getDeferredQueuedUserTurns(session).length, 0);
-});
-
-test("maybeSupersedeRealtimeReplyBeforePlayback ignores unauthorized promoted live capture", () => {
-  const { manager, logs } = createManager();
-  const session = createSession({
-    mode: "openai_realtime",
-    userCaptures: new Map([
-      [
-        "speaker-2",
-        {
-          userId: "speaker-2",
-          startedAt: Date.now() - 800,
-          promotedAt: Date.now() - 400,
-          promotionReason: "strong_local_audio",
-          bytesSent: 24_000,
-          signalSampleCount: 12_000,
-          signalActiveSampleCount: 6_000,
-          signalPeakAbs: 12_000,
-          signalSumSquares: 12_000 * 12_000 * 12_000,
-          speakingEndFinalizeTimer: null
-        }
-      ]
-    ])
-  });
-
-  const superseded = manager.maybeSupersedeRealtimeReplyBeforePlayback({
-    session,
-    source: "voice_reply:speech_1",
-    speechStep: 1,
-    includePromotedCaptureSupersede: true,
-    interruptionPolicy: {
-      assertive: true,
-      scope: "speaker",
-      allowedUserId: "speaker-1"
-    }
-  });
-
-  assert.equal(superseded, false);
-  assert.equal(
-    logs.some((entry) => entry?.content === "realtime_reply_superseded_newer_input"),
-    false
-  );
-});
-
-test("maybeSupersedeRealtimeReplyBeforePlayback ignores local-only strong-audio capture until server VAD confirms", () => {
-  const { manager, logs } = createManager();
-  const session = createSession({
-    mode: "openai_realtime",
-    realtimeInputSampleRateHz: 24_000,
-    userCaptures: new Map([
-      [
-        "speaker-1",
-        {
-          userId: "speaker-1",
-          startedAt: Date.now() - 800,
-          promotedAt: Date.now() - 400,
-          promotionReason: "strong_local_audio",
-          asrUtteranceId: 17,
-          bytesSent: 24_000,
-          signalSampleCount: 12_000,
-          signalActiveSampleCount: 6_000,
-          signalPeakAbs: 12_000,
-          signalSumSquares: 12_000 * 12_000 * 12_000,
-          speakingEndFinalizeTimer: null
-        }
-      ]
-    ])
-  });
-  const { asrState } = seedReadyPerUserAsr(manager, session, "speaker-1");
-
-  const beforeVad = manager.maybeSupersedeRealtimeReplyBeforePlayback({
-    session,
-    source: "voice_reply:speech_1",
-    speechStep: 1,
-    includePromotedCaptureSupersede: true,
-    interruptionPolicy: {
-      assertive: true,
-      scope: "speaker",
-      allowedUserId: "speaker-1"
-    }
-  });
-
-  assert.equal(beforeVad, false);
-  assert.equal(
-    logs.some((entry) => entry?.content === "realtime_reply_superseded_newer_input"),
-    false
-  );
-
-  asrState.speechDetectedUtteranceId = 17;
-  asrState.speechDetectedAt = Date.now();
-
-  const afterVad = manager.maybeSupersedeRealtimeReplyBeforePlayback({
-    session,
-    source: "voice_reply:speech_1",
-    speechStep: 1,
-    includePromotedCaptureSupersede: true,
-    interruptionPolicy: {
-      assertive: true,
-      scope: "speaker",
-      allowedUserId: "speaker-1"
-    }
-  });
-
-  assert.equal(afterVad, true);
-  const supersededLog = logs.find((entry) => entry?.content === "realtime_reply_superseded_newer_input");
-  assert.ok(supersededLog);
-  assert.equal(supersededLog?.metadata?.supersedeReason, "newer_live_promoted_capture");
-});
-
-test("maybeSupersedeRealtimeReplyBeforePlayback supersedes an authorized live capture already underway", () => {
-  const { manager, logs } = createManager();
-  const generationStartedAt = Date.now() - 500;
-  const session = createSession({
-    mode: "openai_realtime",
-    userCaptures: new Map([
-      [
-        "speaker-1",
-        createAssertiveCaptureState("speaker-1", {
-          startedAt: generationStartedAt - 400,
-          promotedAt: generationStartedAt - 200,
-          promotionReason: "server_vad_confirmed",
-          speakingEndFinalizeTimer: null
-        })
-      ]
-    ])
-  });
-
-  const superseded = manager.maybeSupersedeRealtimeReplyBeforePlayback({
-    session,
-    source: "voice_reply:speech_1",
-    speechStep: 1,
-    generationStartedAtMs: generationStartedAt,
-    includePromotedCaptureSupersede: true,
-    interruptionPolicy: {
-      assertive: true,
-      scope: "speaker",
-      allowedUserId: "speaker-1"
-    }
-  });
-
-  assert.equal(superseded, true);
-  const supersededLog = logs.find((entry) => entry?.content === "realtime_reply_superseded_newer_input");
-  assert.ok(supersededLog);
-  assert.equal(supersededLog?.metadata?.supersedeReason, "active_authorized_live_capture");
-  assert.equal(supersededLog?.metadata?.preexistingActiveCaptureCount, 1);
 });
 
 test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript for all capture reasons", () => {
@@ -6010,7 +5367,7 @@ test("shared ASR bridge forwards recovered transcript after timeout instead of d
   };
 
   const settings = createTestSettings({
-    botName: "clanker conk",
+    botName: "clanky",
     llm: {
       provider: "anthropic",
       model: "claude-haiku-4-5"
@@ -6115,7 +5472,7 @@ test("per-user ASR bridge keeps watching the committed utterance across rollover
   };
 
   const settings = createTestSettings({
-    botName: "clanker conk",
+    botName: "clanky",
     llm: {
       provider: "anthropic",
       model: "claude-haiku-4-5"
@@ -6219,7 +5576,7 @@ test("per-user ASR bridge logs explicit empty drop when no transcript ever mater
   };
 
   const settings = createTestSettings({
-    botName: "clanker conk",
+    botName: "clanky",
     llm: {
       provider: "anthropic",
       model: "claude-haiku-4-5"
@@ -6312,7 +5669,7 @@ test("per-user ASR bridge forwards same-utterance transcript continuity across l
   };
 
   const settings = createTestSettings({
-    botName: "clanker conk",
+    botName: "clanky",
     llm: {
       provider: "anthropic",
       model: "claude-haiku-4-5"
@@ -6505,7 +5862,7 @@ test("maybeRunVoiceThoughtLoop speaks approved thought candidates", async () => 
   const { manager } = createManager();
   const now = Date.now();
   const settings = createTestSettings({
-    botName: "clanker conk",
+    botName: "clanky",
     voice: {
       enabled: true,
       ambientReplyEagerness: 100
@@ -6569,7 +5926,7 @@ test("maybeRunVoiceThoughtLoop can hold and revisit a pending ambient thought", 
   const { manager } = createManager();
   const now = Date.now();
   const settings = createTestSettings({
-    botName: "clanker conk",
+    botName: "clanky",
     initiative: {
       voice: {
         enabled: true,
@@ -6648,7 +6005,7 @@ test("maybeRunVoiceThoughtLoop can hold and revisit a pending ambient thought", 
 test("maybeRunVoiceThoughtLoop skips generation when eagerness probability roll fails", async () => {
   const { manager } = createManager();
   const settings = createTestSettings({
-    botName: "clanker conk",
+    botName: "clanky",
     voice: {
       enabled: true,
       ambientReplyEagerness: 10
@@ -7004,7 +6361,7 @@ test("handleClankSlashCommand routes /clank music subcommands to the music slash
   };
 
   const settings = createTestSettings({
-    botName: "clanker conk"
+    botName: "clanky"
   });
   const slash = createClankSlashInteraction({
     subcommandGroup: "music",

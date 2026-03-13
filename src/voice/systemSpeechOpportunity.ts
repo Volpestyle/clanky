@@ -27,8 +27,6 @@ type SystemSpeechOpportunityDefinition = {
   type: SystemSpeechOpportunityType;
   sourcePrefixes: readonly string[];
   speechClass: SystemSpeechClass;
-  cancelOnPromotedUserSpeechBeforePlayback: boolean;
-  liveCaptureSupersedeBeforePlayback: boolean;
   allowSkipAfterFire: boolean;
   replyAccountingOnRequest: SystemSpeechReplyAccounting;
   replyAccountingOnLocalPlayback: SystemSpeechReplyAccounting;
@@ -39,8 +37,6 @@ const SYSTEM_SPEECH_OPPORTUNITY_DEFINITIONS: readonly SystemSpeechOpportunityDef
     type: SYSTEM_SPEECH_OPPORTUNITY.THOUGHT,
     sourcePrefixes: [SYSTEM_SPEECH_SOURCE.THOUGHT, SYSTEM_SPEECH_SOURCE.THOUGHT_TTS],
     speechClass: SYSTEM_SPEECH_CLASS.SYSTEM_OPTIONAL,
-    cancelOnPromotedUserSpeechBeforePlayback: true,
-    liveCaptureSupersedeBeforePlayback: true,
     allowSkipAfterFire: true,
     replyAccountingOnRequest: "requested",
     replyAccountingOnLocalPlayback: "spoken"
@@ -49,8 +45,6 @@ const SYSTEM_SPEECH_OPPORTUNITY_DEFINITIONS: readonly SystemSpeechOpportunityDef
     type: SYSTEM_SPEECH_OPPORTUNITY.STREAM_WATCH,
     sourcePrefixes: [SYSTEM_SPEECH_SOURCE.STREAM_WATCH],
     speechClass: SYSTEM_SPEECH_CLASS.SYSTEM_OPTIONAL,
-    cancelOnPromotedUserSpeechBeforePlayback: true,
-    liveCaptureSupersedeBeforePlayback: true,
     allowSkipAfterFire: true,
     replyAccountingOnRequest: "requested",
     replyAccountingOnLocalPlayback: "spoken"
@@ -75,28 +69,10 @@ function resolveSystemSpeechOpportunityDefinition(
   return null;
 }
 
-export function resolveSystemSpeechOpportunityType(
-  source: string | null | undefined
-): SystemSpeechOpportunityType | null {
-  return resolveSystemSpeechOpportunityDefinition(source)?.type || null;
-}
-
 export function isSystemSpeechOpportunitySource(
   source: string | null | undefined
 ): boolean {
   return resolveSystemSpeechOpportunityDefinition(source) !== null;
-}
-
-export function shouldCancelSystemSpeechBeforeAudioOnPromotedUserSpeech(
-  source: string | null | undefined
-): boolean {
-  return Boolean(resolveSystemSpeechOpportunityDefinition(source)?.cancelOnPromotedUserSpeechBeforePlayback);
-}
-
-export function shouldSupersedeSystemSpeechBeforePlayback(
-  source: string | null | undefined
-): boolean {
-  return Boolean(resolveSystemSpeechOpportunityDefinition(source)?.liveCaptureSupersedeBeforePlayback);
 }
 
 export function resolveSystemSpeechClass(

@@ -273,6 +273,7 @@ Start with these events:
 Interpretation notes:
 
 - `voice_brain_*` events come from the full-brain reply path. They should carry `metadata.replyPath="brain"` and `metadata.realtimeToolOwnership="transport_only"`.
+- Failed `voice_brain_tool_call` events also carry `metadata.error` with the tool-returned error summary when one is available, so you do not need to infer the failure from `metadata.isError` alone.
 - `realtime_tool_call_*` events come from provider-native tool execution. These happen only when the session owns provider tools directly (`realtimeToolOwnership="provider_native"`).
 - `session.mode` still tells you which realtime runtime carried audio. It does not, by itself, tell you who owned planning or tools.
 
@@ -281,6 +282,7 @@ Interpretation notes:
 When screen watch falls back to the share link and you need to know why native
 Discord watch did not bind, inspect these events together:
 
+- `voice_screen_watch_capability`
 - `screen_watch_native_start_failed`
 - `screen_watch_started_native`
 - `screen_watch_link_fallback_started`
@@ -288,18 +290,34 @@ Discord watch did not bind, inspect these events together:
 
 Interpretation notes:
 
+- `voice_screen_watch_capability` is the per-turn capability snapshot from the full-brain voice path. It records whether screen watch was supported, enabled, currently available, what the native-specific reason/status were, and whether `start_screen_watch` was actually exposed to the model on that turn.
+- `voice_screen_watch_capability` can report native watch as ready from discovered Go Live state before the active-sharer roster has frame evidence or full stream credentials.
+- `stream_discovery_go_live_bootstrap_seeded` marks the moment Bun turns `VOICE_STATE_UPDATE.self_stream=true` into provisional per-session Go Live state, before `STREAM_CREATE` or `STREAM_SERVER_UPDATE` arrive.
+- `stream_discovery_go_live_bootstrap_cleared` marks provisional bootstrap state being cleared after `VOICE_STATE_UPDATE.self_stream=false` when Discord never promoted that share into full discovered credentials.
 - `screen_watch_native_start_failed` is the authoritative native-start failure event before fallback.
 - `screen_watch_started_native` means the Bun runtime actually bound a native Discord share target.
 - `screen_watch_link_fallback_started` and `screen_watch_link_reused` now carry `metadata.nativeFailureReason` so the fallback line still explains why native did not win.
 
 Useful metadata fields:
 
+- `toolExposed`
+- `supported`
+- `enabled`
+- `available`
+- `nativeSupported`
+- `nativeEnabled`
+- `nativeAvailable`
+- `nativeStatus`
 - `reason`
+- `nativeReason`
 - `fallback`
 - `requestedTargetUserId`
 - `selectionReason`
 - `nativeActiveSharerCount`
 - `nativeActiveSharerUserIds`
+- `goLiveStreamUserId`
+- `goLiveStreamCredentialsReady`
+- `streamKey`
 - `nativeDecoderSupported`
 - `runtimeMode`
 - `voiceChannelId`
@@ -380,7 +398,7 @@ Common blockers:
 Operator notes:
 
 - `voice_barge_in_gate` is promotion-scoped, not chunk-scoped. It captures the first summarized interruption decision for a promoted user capture when some assistant output context is active.
-- `realtime_assistant_utterance_queued` tells you why spoken playback was queued instead of sent immediately. Look at `blockers`, `outputLockReason`, `pendingResponse*`, `heldPrePlaybackReply`, `deferredActiveCapture`, and `ttsBufferedSamples`.
+- `realtime_assistant_utterance_queued` tells you why spoken playback was queued instead of sent immediately. Look at `blockers`, `outputLockReason`, `pendingResponse*`, `deferredActiveCapture`, and `ttsBufferedSamples`.
 - `realtime_assistant_utterance_drain_blocked` fires when queued spoken playback tried to drain but some blocker still held the floor. It is deduped by blocker signature, so a new line usually means the wedge changed state rather than simple polling noise.
 - if `voice_barge_in_gate` shows `allow=false`, treat `reason` as the primary interruption blocker and `outputLockReason` as supporting context about what the assistant was doing.
 - if `voice_barge_in_gate` shows `allow=false reason=music_only_playback`, that means music was the only remaining output lock. Buffered or live bot speech should not resolve to this reason.
@@ -389,9 +407,7 @@ Operator notes:
 - `voice_interrupt_speech_started_pending initialReason=insufficient_capture_bytes` means the authorized same-speaker overlap is still live and the runtime will keep checking whether it matures into a valid interrupt; the first under-threshold chunk is no longer a permanent miss by itself. If `eventType=local_capture_overlap`, that pending sustain loop came from promoted local capture rather than provider `input_audio_buffer.speech_started`.
 - `voice_interrupt_speech_started_retry_scheduled` means a pending same-speaker overlap stayed active but still had not crossed the raw cut gate on the last sustain check; inspect `captureBytesSent`, `minCaptureBytes`, and signal metrics before blaming policy or music.
 - `voice_interrupt_on_speech_started_sustain speechStillActiveSource=local_capture` means the runtime committed the cut from an actively growing promoted capture even though provider `speech_started` never arrived in time; `provider_speech_started` means the sustain path was driven by provider VAD as usual.
-- `voice_preplay_reply_held_for_user_speech` means an authorized same-speaker `speech_started` won the floor before any assistant audio began, but the runtime kept the older `generation_only` reply alive and blocked playback instead of aborting it immediately.
-- `voice_preplay_reply_hold_resolved decision=ignore` means the later finalized transcript was treated as commentary/backchannel, so the newer turn was dropped and any queued older speech was released.
-- `voice_preplay_reply_hold_resolved decision=replace` means the later finalized transcript really changed the job, so the held older reply was aborted or discarded and the newer turn took over.
+- if `realtime_assistant_utterance_queued` shows `blockers=["active_capture"]`, the runtime is only waiting on a currently promoted capture. If that capture later resolves as no-turn work (`voice_turn_dropped_provisional_capture`, `voice_turn_dropped_silence_gate`, `openai_realtime_asr_bridge_empty_dropped`), queued assistant speech should drain without replaying an older interrupted reply.
 - on `voice_barge_in_interrupt` or `voice_output_lock_interrupt`, read `interruptAcceptanceMode` and `interruptAccepted` separately from `responseCancelSucceeded` / `truncateSucceeded`; async-confirmation providers can accept a locally committed cut before the provider emits its later interruption/completion event.
 - if `providerInterruptConfirmationPending=true`, the runtime already cut local playback and accepted the interrupt, but the provider did not give an immediate ack for that cut path.
 - if `outputLockReason=bot_audio_buffered` persists for more than a couple seconds after `openai_realtime_response_done`, suspect stale `clankvox` playback telemetry rather than real remaining speech

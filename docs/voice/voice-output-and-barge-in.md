@@ -200,14 +200,17 @@ Callers of `requestRealtimePromptUtterance()` can pass an explicit `interruption
 
 If no interruption policy resolves for an utterance, barge-in is disabled.
 
-The same rule applies before playback starts. A promoted live capture only
-supersedes preplay generation when that user is already allowed by the
-reply's interruption policy. Untargeted join greetings, optional system speech,
-and other replies with no resolved speaker stay protected from random channel
-noise until a real authorized interruption exists.
-If an authorized speaker is already mid-capture when preplay generation starts,
-that live capture still wins the floor; the runtime does not require the
-capture to begin after generation started.
+Before playback starts, raw live capture does not steal the floor by itself.
+Promotion and `speech_started` can prove that an utterance is underway, but the
+runtime does not supersede or hold pre-audio assistant speech until one of two
+things happens:
+
+- a real interruption is committed against live assistant output
+- a newer finalized user turn is admitted and replaces the older reply
+
+Untargeted join greetings, optional system speech, and other replies with no
+resolved speaker therefore stay protected from humming, coughing, laughing,
+backchannel, and other channel noise before audio actually begins.
 
 ### Wake-Word Override During Output Lock
 
@@ -219,13 +222,12 @@ Wake-word interruption is a transcript-level override, separate from the fast ac
 - in `"none"` mode the override stays disabled
 
 In ASR-bridge sessions, server-confirmed `speech_started` from the authorized
-speaker first gets a non-destructive preplay hold chance before any assistant
-audio has begun. Same-speaker `generation_only` replies can keep generating,
-but playback stays blocked until the later finalized transcript resolves as
-`ignore` or `replace`. If the reply is already queued, already pending audio,
-or has crossed into a non-holdable phase, the runtime falls back to the older
-destructive preplay supersede path so queued reply audio still does not jump in
-front of someone who is already taking the floor.
+speaker can arm the sustain checks for a real interrupt, but before assistant
+audio has begun it does not place a `generation_only` reply on hold.
+Same-speaker backchannel and other pre-audio noise should not make the bot
+hesitate.
+Only a committed interrupt after audible assistant output, or a newer admitted
+turn, can replace the pending reply.
 
 This is intentionally narrower than full `"anyone"` talk-over. In `"speaker"` mode, the current reply target gets the ordinary fast path, while a non-speaker still needs either an explicit wake-word turn or transcript-overlap arbitration that looks like a real floor takeover.
 
@@ -363,7 +365,7 @@ User audio arrives during output lock
 Local-only promotion rule:
 
 - `strong_local_audio` can promote a capture before Realtime VAD confirms speech so the turn can keep collecting audio immediately
-- that local-only promotion still warms ASR state, but it does not supersede preplay reply generation until Realtime VAD confirms the same utterance
+- that local-only promotion still warms ASR state, but it does not hold, cancel, or supersede pre-audio assistant speech by itself
 - while assistant audio is already playing, the runtime still blocks direct raw cut for that local-only capture, but the currently authorized interrupter can now arm the sustain recheck loop from the promoted capture itself even before provider `speech_started` lands
 - once the utterance is VAD-confirmed, or once the local sustain fallback proves the same promoted capture is still taking the floor long enough to satisfy the raw gate, the runtime commits the hard cut; other speakers still go through the overlap-burst path
 

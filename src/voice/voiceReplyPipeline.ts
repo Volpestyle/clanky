@@ -87,7 +87,6 @@ type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
   | "buildVoiceReplyPlaybackPlan"
   | "buildVoiceToolCallbacks"
   | "collapsePendingRealtimeAssistantStreamTail"
-  | "discardSupersededPrePlaybackReply"
   | "endSession"
   | "generateVoiceTurn"
   | "getRecentVoiceChannelEffectEvents"
@@ -100,7 +99,6 @@ type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
   | "normalizeVoiceAddressingAnnotation"
   | "playVoiceReplyInOrder"
   | "recordVoiceTurn"
-  | "recoverSupersededPrePlaybackReply"
   | "resolveReplyInterruptionPolicy"
   | "requestRealtimeTextUtterance"
   | "schedulePassiveMusicWakeLatchRefresh"
@@ -417,9 +415,7 @@ export async function runVoiceReplyPipeline(
   if (host.maybeSupersedeRealtimeReplyBeforePlayback({
     session,
     source: `${source}:generation_preflight`,
-    generationStartedAtMs: latencyFinalizedAtMs || generationStartedAt,
-    includePromotedCaptureSupersede: true,
-    interruptionPolicy: prePlaybackInterruptionPolicy
+    generationStartedAtMs: latencyFinalizedAtMs || generationStartedAt
   })) {
     clearInFlightAcceptedBrainTurn();
     return false;
@@ -891,11 +887,6 @@ export async function runVoiceReplyPipeline(
       contextTurns,
       contextMessageChars
     });
-    host.recoverSupersededPrePlaybackReply({
-      session,
-      reason: "brain_reply_skipped",
-      userId: params.userId
-    });
     clearInFlightAcceptedBrainTurn();
     return true;
   }
@@ -946,11 +937,6 @@ export async function runVoiceReplyPipeline(
   if (!streamedSpeechPlayed && playbackPlan.steps.length > 0) {
     markInFlightAcceptedBrainTurnPhase("playback_requested");
   }
-  host.discardSupersededPrePlaybackReply({
-    session,
-    reason: streamedSpeechPlayed ? "streamed_reply_output_started" : "reply_output_started",
-    userId: params.userId
-  });
   const playbackResult = await (async () => {
     try {
       return streamedSpeechPlayed

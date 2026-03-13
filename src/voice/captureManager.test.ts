@@ -36,7 +36,7 @@ function createManager() {
       channels: { async fetch() { return null; } },
       guilds: { cache: new Map() },
       users: { cache: new Map() },
-      user: { id: "bot-user", username: "clanker conk" }
+      user: { id: "bot-user", username: "clanky" }
     },
     store: {
       logAction(entry: Record<string, unknown>) {
@@ -45,7 +45,7 @@ function createManager() {
       getSettings() {
         return createTestSettings({
           identity: {
-            botName: "clanker conk"
+            botName: "clanky"
           },
           voice: {
             enabled: true,
@@ -232,7 +232,7 @@ function createSession(overrides: Partial<VoiceSession> = {}): VoiceSession {
     realtimeTurnContextRefreshState: { pending: false, lastStartedAt: 0, lastCompletedAt: 0, lastSkippedReason: null },
     settingsSnapshot: createTestSettings({
       identity: {
-        botName: "clanker conk"
+        botName: "clanky"
       },
       voice: {
         enabled: true,
@@ -539,62 +539,6 @@ test("startInboundCapture max duration timer finalizes long captures", async () 
   }
 });
 
-test("startInboundCapture recovers stashed preplay reply when per-user ASR ends empty", async () => {
-  const { manager, logs } = createManager();
-  manager.shouldUsePerUserTranscription = () => true;
-  const voxClient = new EventEmitter();
-  voxClient.subscribeUser = () => {};
-  const session = createSession({
-    voxClient,
-    supersededPrePlaybackReply: {
-      userId: "speaker-1",
-      transcript: "That was crazy, man.",
-      pcmBuffer: null,
-      source: "realtime",
-      captureReason: "stream_end",
-      directAddressed: false,
-      queuedAt: Date.now() - 200,
-      interruptionPolicy: null,
-      supersededAt: Date.now() - 100,
-      supersededByUserId: "speaker-1",
-      supersededBySource: "realtime:generation_preflight"
-    }
-  });
-  seedReadyPerUserAsr(manager, session, "speaker-1");
-
-  manager.captureManager.startInboundCapture({
-    session,
-    userId: "speaker-1",
-    settings: session.settingsSnapshot
-  });
-
-  const strongPcm = makeMonoPcm16(
-    Math.ceil((24_000 * (VOICE_TURN_PROMOTION_MIN_CLIP_MS + 40)) / 1000),
-    3000
-  );
-  voxClient.emit("userAudio", "speaker-1", strongPcm);
-  await flushMicrotasks();
-  voxClient.emit("userAudioEnd", "speaker-1");
-  await new Promise((resolve) => setTimeout(resolve, 2600));
-
-  assert.equal(
-    logs.some((entry) => entry?.content === "voice_activity_started"),
-    true
-  );
-  assert.equal(session.supersededPrePlaybackReply, null);
-  const queuedTurns = manager.deferredActionQueue.getDeferredQueuedUserTurns(session);
-  assert.equal(queuedTurns.length, 1);
-  assert.equal(queuedTurns[0]?.transcript, "That was crazy, man.");
-  assert.equal(
-    logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped"),
-    true
-  );
-  assert.equal(
-    logs.some((entry) => entry?.content === "voice_preplay_reply_recovered"),
-    true
-  );
-});
-
 test("startInboundCapture hands empty interrupted ASR turns back to the voice brain", async () => {
   const { manager, logs } = createManager();
   manager.shouldUsePerUserTranscription = () => true;
@@ -710,7 +654,7 @@ test("startInboundCapture does not hand empty ASR turns back to the voice brain 
   );
 });
 
-test("server-vad-confirmed capture cancels pending pre-audio normal reply", async () => {
+test("server-vad-confirmed capture does not cancel a pending pre-audio normal reply", async () => {
   const { manager, logs } = createManager();
   manager.shouldUsePerUserTranscription = () => true;
   const cancelCalls: boolean[] = [];
@@ -760,12 +704,12 @@ test("server-vad-confirmed capture cancels pending pre-audio normal reply", asyn
   assert.ok(capture);
   assert.ok(Number(capture.promotedAt || 0) > 0);
   assert.equal(capture.promotionReason, "server_vad_confirmed");
-  assert.equal(session.pendingResponse, null);
-  assert.equal(cancelCalls.length, 1);
-  const cancelLog = logs.find((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech");
-  assert.ok(cancelLog);
-  assert.equal(cancelLog?.metadata?.pendingSource, "realtime:speech_1");
-  assert.equal(cancelLog?.metadata?.opportunityType, null);
+  assert.ok(session.pendingResponse);
+  assert.equal(cancelCalls.length, 0);
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech"),
+    false
+  );
 });
 
 test("promoting a local-only strong-audio capture does not cancel pending pre-audio reply before server VAD confirmation", async () => {
@@ -879,7 +823,7 @@ test("startInboundCapture logs one voice_barge_in_gate for a promoted capture ov
 });
 
 test(
-  "server-vad-confirmed capture cancels pending pre-audio tool followup and preserves owner followup admission",
+  "server-vad-confirmed capture leaves pending pre-audio tool followup intact",
   async () => {
   const { manager, logs } = createManager();
   manager.shouldUsePerUserTranscription = () => true;
@@ -936,8 +880,8 @@ test(
   const capture = session.userCaptures.get("speaker-1");
   assert.ok(capture);
   assert.equal(capture.promotionReason, "server_vad_confirmed");
-  assert.equal(session.pendingResponse, null);
-  assert.equal(cancelCalls.length, 1);
+  assert.ok(session.pendingResponse);
+  assert.equal(cancelCalls.length, 0);
   assert.equal(manager.ensureVoiceCommandState(session)?.intent, "tool_followup");
 
   const decision = await manager.evaluateVoiceReplyDecision({
@@ -947,9 +891,9 @@ test(
     transcript: "yeah do that"
   });
 
-  assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "owned_tool_followup");
-  const cancelLog = logs.find((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech");
-  assert.ok(cancelLog);
-  assert.equal(cancelLog?.metadata?.pendingSource, "tool_call_followup");
+  assert.equal(decision.allow, false);
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech"),
+    false
+  );
 });

@@ -46,7 +46,6 @@ export const BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS = 1500;
 // Bot-speaking gate: require clearly audible speech, not just faint echo leak.
 export const BARGE_IN_BOT_SPEAKING_ACTIVE_RATIO_MIN = 0.06;
 export const BARGE_IN_BOT_SPEAKING_PEAK_MIN = 0.05;
-export const PREPLAY_SUPERSEDE_REQUEUE_MAX_AGE_MS = 15_000;
 export const ACTIVITY_TOUCH_THROTTLE_MS = 2000;
 export const ACTIVITY_TOUCH_MIN_SPEECH_MS = 120;
 export const RESPONSE_FLUSH_DEBOUNCE_MS = 280;
