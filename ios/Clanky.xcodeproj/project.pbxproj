@@ -30,6 +30,7 @@
 		DAC1A912D57917BB9A0486AD /* Stats.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2BCDA09EF1796B414E48660 /* Stats.swift */; };
 		E8DACD310A54F2D6B848F46A /* ActionRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59D141D40F3B5437285D6B18 /* ActionRow.swift */; };
 		ECB9FE337084AB625EDE0566 /* BonjourDiscoveryLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCF9988AE148C0C7D39E351A /* BonjourDiscoveryLogicTests.swift */; };
+		F6BD2C22A592E964BF98BEEF /* ClankyClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41742759F1A548CEDAC4114B /* ClankyClientTests.swift */; };
 		FBC9A278FAC23463C7949720 /* Connection.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0A5750DC48CF53C59F3764D /* Connection.swift */; };
 /* End PBXBuildFile section */
 
@@ -52,6 +53,7 @@
 		2DB6B02E0963658583B07883 /* ClankyAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClankyAction.swift; sourceTree = "<group>"; };
 		2E66012A1B2731327EE5607C /* Color+Domain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+Domain.swift"; sourceTree = "<group>"; };
 		359880E88AD2D2363C8C9580 /* FilterChips.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterChips.swift; sourceTree = "<group>"; };
+		41742759F1A548CEDAC4114B /* ClankyClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClankyClientTests.swift; sourceTree = "<group>"; };
 		4A1F211A8DDAE307E76F3FDB /* BonjourBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourBrowser.swift; sourceTree = "<group>"; };
 		50B427E9B17AB6890BB7EB42 /* PulseTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PulseTab.swift; sourceTree = "<group>"; };
 		59D141D40F3B5437285D6B18 /* ActionRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionRow.swift; sourceTree = "<group>"; };
@@ -164,6 +166,7 @@
 			isa = PBXGroup;
 			children = (
 				CCF9988AE148C0C7D39E351A /* BonjourDiscoveryLogicTests.swift */,
+				41742759F1A548CEDAC4114B /* ClankyClientTests.swift */,
 			);
 			path = ClankyTests;
 			sourceTree = "<group>";
@@ -276,6 +279,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				ECB9FE337084AB625EDE0566 /* BonjourDiscoveryLogicTests.swift in Sources */,
+				F6BD2C22A592E964BF98BEEF /* ClankyClientTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

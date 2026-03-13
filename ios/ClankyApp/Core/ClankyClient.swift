@@ -1,4 +1,25 @@
 import Foundation
+import os
+
+private let log = Logger(subsystem: "com.clanky.app", category: "ClankyClient")
+
+enum ClankyClientError: LocalizedError {
+    case invalidResponse
+    case http(statusCode: Int, body: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidResponse:
+            return "Invalid server response"
+        case .http(let statusCode, let body):
+            let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedBody.isEmpty {
+                return "HTTP \(statusCode)"
+            }
+            return "HTTP \(statusCode): \(trimmedBody)"
+        }
+    }
+}
 
 /// HTTP + SSE client for the Clanky dashboard API.
 /// Connects through a Cloudflare tunnel URL with token auth.
@@ -15,8 +36,8 @@ struct ClankyClient: Sendable {
     // MARK: - REST
 
     func healthCheck() async throws -> Bool {
-        let (_, response) = try await request("GET", path: "/api/health")
-        return (response as? HTTPURLResponse)?.statusCode == 200
+        _ = try await request("GET", path: "/api/health")
+        return true
     }
 
     func fetchStats(guildId: String? = nil) async throws -> StatsPayload {
@@ -39,7 +60,7 @@ struct ClankyClient: Sendable {
 
         var req = URLRequest(url: components.url!)
         req.setValue(token, forHTTPHeaderField: "x-dashboard-token")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await execute(req)
         return try decoder.decode([ClankyAction].self, from: data)
     }
 
@@ -66,6 +87,25 @@ struct ClankyClient: Sendable {
         req.httpMethod = method
         req.setValue(token, forHTTPHeaderField: "x-dashboard-token")
         req.timeoutInterval = 15
-        return try await URLSession.shared.data(for: req)
+        return try await execute(req)
+    }
+
+    private func execute(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        let urlString = request.url?.absoluteString ?? "nil"
+        log.info("HTTP \(request.httpMethod ?? "GET", privacy: .public) \(urlString, privacy: .public) tokenLength=\(self.token.count)")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            log.error("Invalid non-HTTP response for \(urlString, privacy: .public)")
+            throw ClankyClientError.invalidResponse
+        }
+
+        guard (200...299).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            log.error("HTTP \(http.statusCode) for \(urlString, privacy: .public): \(body, privacy: .public)")
+            throw ClankyClientError.http(statusCode: http.statusCode, body: body)
+        }
+
+        return (data, response)
     }
 }
