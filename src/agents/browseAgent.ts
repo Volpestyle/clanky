@@ -367,6 +367,10 @@ export class BrowserAgentSession implements SubAgentSession {
     return AbortSignal.any(signals);
   }
 
+  getBrowserSessionKey() {
+    return this.sessionKey;
+  }
+
   async runTurn(input: string, options: { signal?: AbortSignal } = {}): Promise<SubAgentTurnResult> {
     if (this.status === "cancelled" || this.status === "error" || this.status === "completed") {
       return {

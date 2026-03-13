@@ -7,6 +7,14 @@ import {
   REST,
   Routes
 } from "discord.js";
+import { applySelfbotPatches } from "./selfbot/selfbotPatches.ts";
+import {
+  createStreamDiscoveryState,
+  createGoLiveStreamState,
+  buildGoLiveStreamStateFromStream,
+  setupStreamDiscovery,
+  type StreamDiscoveryState
+} from "./selfbot/streamDiscovery.ts";
 import { clankCommand } from "./commands/clankCommand.ts";
 import type { Settings } from "./settings/settingsSchema.ts";
 import {
@@ -290,6 +298,8 @@ export class ClankerBot {
   activeBrowserTasks: BrowserTaskRegistry;
   subAgentSessions: SubAgentSessionManager;
   imageCaptionCache: ImageCaptionCache;
+  streamDiscovery: StreamDiscoveryState;
+  private streamDiscoveryCleanup: (() => void) | null;
   private captionTimestamps: number[];
 
   constructor({ appConfig, store, llm, memory, discovery, search, gifs, video, browserManager = null }) {
@@ -337,6 +347,8 @@ export class ClankerBot {
       defaultTtlMs: 60 * 60 * 1000 // 1 hour
     });
     this.captionTimestamps = [];
+    this.streamDiscovery = createStreamDiscoveryState();
+    this.streamDiscoveryCleanup = null;
 
     this.client = new Client({
       intents: [
@@ -348,6 +360,7 @@ export class ClankerBot {
       ],
       partials: [Partials.Channel, Partials.Message, Partials.Reaction]
     });
+    applySelfbotPatches(this.client);
     this.voiceSessionManager = new VoiceSessionManager({
       client: this.client,
       store: this.store,
@@ -361,6 +374,7 @@ export class ClankerBot {
       generateVoiceTurn: (payload) =>
         generateVoiceTurnReplyForVoiceCoordination(this.toVoiceCoordinationRuntime(), payload),
       activeReplies: this.activeReplies,
+      streamDiscovery: this.streamDiscovery,
       getVoiceScreenWatchCapability: (payload) =>
         getVoiceScreenWatchCapabilityForScreenShare(this.toScreenShareRuntime(), payload),
       startVoiceScreenWatch: (payload) =>
@@ -602,15 +616,83 @@ export class ClankerBot {
       this.hasConnectedAtLeastOnce = true;
       this.reconnectAttempts = 0;
       this.lastGatewayEventAt = Date.now();
-      console.log(`Logged in as ${this.client.user?.tag || "unknown"}`);
+      console.log(`Logged in as ${this.client.user?.tag || this.client.user?.username || "unknown"}`);
 
-      try {
-        const rest = new REST({ version: "10" }).setToken(this.appConfig.discordToken);
-        await rest.put(Routes.applicationCommands(this.client.user?.id || ""), { body: [clankCommand] });
-        console.log("[slashCommands] Registered slash commands");
-      } catch (error) {
-        console.error("[slashCommands] Failed to register slash commands:", error);
-      }
+      this.streamDiscoveryCleanup = setupStreamDiscovery(
+        this.client as never,
+        this.streamDiscovery,
+        {
+          onStreamDiscovered: (stream) => {
+            this.store.logAction({
+              kind: "stream_discovery",
+              guildId: stream.guildId,
+              channelId: stream.channelId,
+              userId: stream.userId,
+              content: `stream_discovered: streamKey=${stream.streamKey} rtcServerId=${stream.rtcServerId ?? "unknown"}`,
+              metadata: { streamKey: stream.streamKey, rtcServerId: stream.rtcServerId }
+            });
+          },
+          onStreamCredentialsReceived: (stream) => {
+            this.store.logAction({
+              kind: "stream_discovery",
+              guildId: stream.guildId,
+              channelId: stream.channelId,
+              userId: stream.userId,
+              content: `stream_credentials_received: streamKey=${stream.streamKey} hasEndpoint=${Boolean(stream.endpoint)} hasToken=${Boolean(stream.token)}`,
+              metadata: { streamKey: stream.streamKey, rtcServerId: stream.rtcServerId }
+            });
+            const isSelfStream = String(stream.userId || "").trim() === String(this.client.user?.id || "").trim();
+            const session = this.voiceSessionManager.getSession(stream.guildId);
+            if (session && !isSelfStream) {
+              session.goLiveStream = buildGoLiveStreamStateFromStream(stream);
+            }
+            if (isSelfStream) {
+              this.voiceSessionManager.handleDiscoveredSelfStreamCredentialsReceived({ stream });
+            } else {
+              this.voiceSessionManager.handleDiscoveredStreamCredentialsReceived({ stream });
+            }
+          },
+          onStreamDeleted: (stream) => {
+            this.store.logAction({
+              kind: "stream_discovery",
+              guildId: stream.guildId,
+              channelId: stream.channelId,
+              userId: stream.userId,
+              content: `stream_deleted: streamKey=${stream.streamKey}`,
+              metadata: { streamKey: stream.streamKey }
+            });
+            const isSelfStream = String(stream.userId || "").trim() === String(this.client.user?.id || "").trim();
+            const session = this.voiceSessionManager.getSession(stream.guildId);
+            if (!isSelfStream && session?.goLiveStream?.streamKey === stream.streamKey) {
+              session.goLiveStream = createGoLiveStreamState();
+            }
+            const handlerPromise = isSelfStream
+              ? Promise.resolve(this.voiceSessionManager.handleDiscoveredSelfStreamDeleted({ stream }))
+              : this.voiceSessionManager.handleDiscoveredStreamDeleted({ stream });
+            void handlerPromise.catch((error) => {
+              this.store.logAction({
+                kind: "voice_error",
+                guildId: stream.guildId,
+                channelId: stream.channelId,
+                userId: stream.userId,
+                content: `stream_discovery_delete_handler_failed: ${String((error as Error)?.message || error)}`,
+                metadata: {
+                  streamKey: stream.streamKey
+                }
+              });
+            });
+          },
+          onLog: (action, detail) => {
+            this.store.logAction({
+              kind: "stream_discovery",
+              guildId: (detail.guildId as string) ?? null,
+              channelId: (detail.channelId as string) ?? null,
+              userId: (detail.userId as string) ?? null,
+              content: `${action}: ${JSON.stringify(detail)}`
+            });
+          }
+        }
+      );
     });
 
     this.client.on("shardResume", () => {
@@ -666,19 +748,6 @@ export class ClankerBot {
           userId: message.author?.id,
           content: String(error?.message || error)
         });
-      }
-    });
-
-    this.client.on("interactionCreate", async (interaction) => {
-      if (!interaction.isChatInputCommand()) return;
-      const { commandName } = interaction;
-      if (commandName === "clank") {
-        try {
-          await this.handleClankSlashCommand(interaction);
-        } catch (error) {
-          console.error("[slashCommands] Error handling clank command:", error);
-          await interaction.reply({ content: "An error occurred processing your command.", ephemeral: true });
-        }
       }
     });
 
@@ -822,6 +891,8 @@ export class ClankerBot {
     this.replyQueueWorkers.clear();
     this.replyQueuedMessageIds.clear();
     this.pendingInitiativeThoughts.clear();
+    this.streamDiscoveryCleanup?.();
+    this.streamDiscoveryCleanup = null;
     await this.voiceSessionManager.dispose("shutdown");
     if (this.memory?.drainIngestQueue) {
       try {

@@ -546,6 +546,7 @@ export function buildVoiceReplyRuntime(bot: ClankerBot): VoiceReplyRuntime {
       runModelRequestedBrowserBrowseForAgentTasks(agentContext, payload),
     buildBrowserBrowseContext: (settings) =>
       buildBrowserBrowseContextForBudgetTracking(budgetContext, settings),
-    runModelRequestedCodeTask: (payload) => runModelRequestedCodeTaskForAgentTasks(agentContext, payload)
+    runModelRequestedCodeTask: (payload) => runModelRequestedCodeTaskForAgentTasks(agentContext, payload),
+    buildSubAgentSessionsRuntime: () => buildSubAgentSessionsRuntimeForAgentTasks(agentContext)
   };
 }

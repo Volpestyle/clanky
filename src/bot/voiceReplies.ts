@@ -1586,7 +1586,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         });
         const toolRecovery = classifyVoiceToolPrePlaybackRecovery(toolCall.name, result);
         const suppressToolFollowup =
-          toolRecovery.reason === "music_play_started_loading";
+          toolRecovery.reason === "music_play_started_loading" ||
+          toolRecovery.reason === "video_play_started_loading";
         const effectiveToolFollowupRequested =
           toolFollowupRequested && !suppressToolFollowup;
         toolPhaseRecoveryStillEligible = toolPhaseRecoveryStillEligible && toolRecovery.eligible;
@@ -1770,39 +1771,41 @@ function classifyVoiceToolPrePlaybackRecovery(
   const normalizedToolName = String(toolName || "").trim().toLowerCase();
   const payload = parseReplyToolResultPayload(result?.content);
   switch (normalizedToolName) {
-    case "music_play": {
+    case "music_play":
+    case "video_play": {
       const normalizedStatus = String(payload?.status || "").trim().toLowerCase();
       if (normalizedStatus === "needs_disambiguation") {
         return {
           eligible: true,
-          reason: "music_play_needs_disambiguation"
+          reason: normalizedToolName === "video_play" ? "video_play_needs_disambiguation" : "music_play_needs_disambiguation"
         };
       }
       if (normalizedStatus === "not_found") {
         return {
           eligible: true,
-          reason: "music_play_not_found"
+          reason: normalizedToolName === "video_play" ? "video_play_not_found" : "music_play_not_found"
         };
       }
       if (normalizedStatus === "loading") {
         return {
           eligible: false,
-          reason: "music_play_started_loading"
+          reason: normalizedToolName === "video_play" ? "video_play_started_loading" : "music_play_started_loading"
         };
       }
       if (payload?.ok === false || result?.isError) {
         return {
           eligible: true,
-          reason: "music_play_failed_before_playback"
+          reason: normalizedToolName === "video_play" ? "video_play_failed_before_playback" : "music_play_failed_before_playback"
         };
       }
       return {
         eligible: false,
-        reason: "music_play_side_effect_uncertain"
+        reason: normalizedToolName === "video_play" ? "video_play_side_effect_uncertain" : "music_play_side_effect_uncertain"
       };
     }
     case "music_search":
-    case "music_now_playing":
+    case "video_search":
+    case "media_now_playing":
     case "web_search":
     case "web_scrape":
     case "memory_search":

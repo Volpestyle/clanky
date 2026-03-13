@@ -37,6 +37,7 @@ export interface SubAgentSession {
   readonly ownerUserId: string | null;
   lastUsedAt: number;
   status: "idle" | "running" | "completed" | "error" | "cancelled";
+  getBrowserSessionKey?(): string | null;
 
   /** Send a turn (initial instruction or follow-up) and get the result. */
   runTurn(input: string, options?: { signal?: AbortSignal }): Promise<SubAgentTurnResult>;

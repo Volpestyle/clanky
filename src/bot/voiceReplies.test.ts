@@ -546,6 +546,35 @@ test("composeVoiceOperationalMessage handles voice status request flow", async (
   assert.equal(generationPayloads.length, 1);
 });
 
+test("generateVoiceTurnReply voice prompt warns against reading long links aloud", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "open the link i sent"
+    })
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "can you send me the screen share link?"
+  });
+
+  assert.equal(reply.text, "open the link i sent");
+  assert.equal(generationPayloads.length > 0, true);
+  const systemPrompt = String(generationPayloads[0]?.systemPrompt || "");
+  assert.equal(systemPrompt.includes("optimize for how it sounds out loud"), true);
+  assert.equal(
+    systemPrompt.includes("Do not read long URLs, invite links, screen-share links, IDs, hashes, or access tokens aloud"),
+    true
+  );
+  assert.equal(
+    systemPrompt.includes("refer to it naturally"),
+    true
+  );
+});
+
 test("generateVoiceTurnReply returns early for empty transcripts", async () => {
   const { bot, getGenerationCalls } = createVoiceBot();
   const reply = await generateVoiceTurnReply(bot, {
@@ -2351,6 +2380,39 @@ test("generateVoiceTurnReply triggers voice screen watch start from tool-call fi
   assert.equal(screenShareCalls[0]?.channelId, "text-1");
   assert.equal(screenShareCalls[0]?.requesterUserId, "user-1");
   assert.equal(screenShareCalls[0]?.target, "casey");
+});
+
+test("generateVoiceTurnReply screen-watch prompt says not to read share links aloud", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "open the link i sent"
+    }),
+    screenShareCapability: {
+      enabled: true,
+      available: true,
+      status: "ready",
+      publicUrl: "https://fancy-cat.trycloudflare.com"
+    }
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "can you see my screen?"
+  });
+
+  assert.equal(reply.text, "open the link i sent");
+  const userPrompt = String(generationPayloads[0]?.userPrompt || "");
+  assert.equal(
+    userPrompt.includes("Do not read the full URL aloud unless they explicitly ask you to spell it out."),
+    true
+  );
+  assert.equal(
+    userPrompt.includes("tell them to open the link you sent or the screen-share link"),
+    true
+  );
 });
 
 test("generateVoiceTurnReply describes supported-but-unavailable screen-share capability in prompt", async () => {
