@@ -1,0 +1,543 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		02DA752124881997C6A61E28 /* StatusDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 930D3294E39DDBC9D7353687 /* StatusDot.swift */; };
+		199F78903ABA4C09EC7C2F7C /* ConnectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 188DE079A3C48E839E2181A2 /* ConnectionStore.swift */; };
+		1DAD44C57C6F1C7C9C4B8AF0 /* RelativeTimestamp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 740EE30FED1F2F0F03465F6B /* RelativeTimestamp.swift */; };
+		3929013A73D6C104F9DBB61E /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEADEAFF0CAE9533551AEA9 /* SetupView.swift */; };
+		39DB805B73B3C94FE83316D9 /* FilterChips.swift in Sources */ = {isa = PBXBuildFile; fileRef = 359880E88AD2D2363C8C9580 /* FilterChips.swift */; };
+		3A99058F6BFD4F2A5F7C473A /* MetricText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 173C00809F21ABC7E39D4AA1 /* MetricText.swift */; };
+		3CC1AA3B16489A8D585F6FC2 /* SSEClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0FEFECEE3620B4FE3B77659 /* SSEClient.swift */; };
+		4A5723A18BACAA91F324E19E /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8229C47A563B9CFAFE03698A /* KeychainStore.swift */; };
+		5A78C67C58FB0D8F19D7BD10 /* ClankyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9A82C80603DFEAB78A5F68C /* ClankyApp.swift */; };
+		5D22BC08D9F869869EBDADC2 /* BonjourBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A1F211A8DDAE307E76F3FDB /* BonjourBrowser.swift */; };
+		774AC383BC47EC41330A54FF /* BonjourDiscoveryLogic.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63333F7EC156C580625A3B1D /* BonjourDiscoveryLogic.swift */; };
+		889F8B3D0B3409E8D9623520 /* ActivityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B47291789600C774B0601783 /* ActivityStore.swift */; };
+		891B80364285F4D67B8CAE61 /* ClankyClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B40826527D25E949CC79EA4 /* ClankyClient.swift */; };
+		96C779E5D756CEFE7CE92BBA /* HapticEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A86088B15532564572E0A56C /* HapticEngine.swift */; };
+		9F8CEE63468EFB989ABD6363 /* ClankyAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DB6B02E0963658583B07883 /* ClankyAction.swift */; };
+		A85E489A33C0714548B53737 /* StatsBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DD5553116B7B3FC4526C675 /* StatsBar.swift */; };
+		BE69BC760230C99ECD743811 /* PulseTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50B427E9B17AB6890BB7EB42 /* PulseTab.swift */; };
+		D891ED0980C5D4029A126DA2 /* ActionDetail.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F135E4A4800D517F115F314 /* ActionDetail.swift */; };
+		D9CD4B5B8E0C7A9FA57ABAF4 /* PanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFF620C4BFD866DAB0E8E725 /* PanelView.swift */; };
+		D9F10737901CF096433E3AE1 /* Color+Domain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E66012A1B2731327EE5607C /* Color+Domain.swift */; };
+		DAC1A912D57917BB9A0486AD /* Stats.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2BCDA09EF1796B414E48660 /* Stats.swift */; };
+		E8DACD310A54F2D6B848F46A /* ActionRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59D141D40F3B5437285D6B18 /* ActionRow.swift */; };
+		ECB9FE337084AB625EDE0566 /* BonjourDiscoveryLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCF9988AE148C0C7D39E351A /* BonjourDiscoveryLogicTests.swift */; };
+		FBC9A278FAC23463C7949720 /* Connection.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0A5750DC48CF53C59F3764D /* Connection.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		2286D774D7922234C8FF514D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5E549D9F61349E307BDDAAD2 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 253E225E3F6B556E2ACB0258;
+			remoteInfo = Clanky;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0F135E4A4800D517F115F314 /* ActionDetail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionDetail.swift; sourceTree = "<group>"; };
+		1636BF04E21C3FA7F2167DBE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		173C00809F21ABC7E39D4AA1 /* MetricText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricText.swift; sourceTree = "<group>"; };
+		188DE079A3C48E839E2181A2 /* ConnectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStore.swift; sourceTree = "<group>"; };
+		1AC73C4257462CE83E5A21A9 /* Clanky.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Clanky.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		2DB6B02E0963658583B07883 /* ClankyAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClankyAction.swift; sourceTree = "<group>"; };
+		2E66012A1B2731327EE5607C /* Color+Domain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+Domain.swift"; sourceTree = "<group>"; };
+		359880E88AD2D2363C8C9580 /* FilterChips.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterChips.swift; sourceTree = "<group>"; };
+		4A1F211A8DDAE307E76F3FDB /* BonjourBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourBrowser.swift; sourceTree = "<group>"; };
+		50B427E9B17AB6890BB7EB42 /* PulseTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PulseTab.swift; sourceTree = "<group>"; };
+		59D141D40F3B5437285D6B18 /* ActionRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionRow.swift; sourceTree = "<group>"; };
+		5B40826527D25E949CC79EA4 /* ClankyClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClankyClient.swift; sourceTree = "<group>"; };
+		63333F7EC156C580625A3B1D /* BonjourDiscoveryLogic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourDiscoveryLogic.swift; sourceTree = "<group>"; };
+		6DD5553116B7B3FC4526C675 /* StatsBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsBar.swift; sourceTree = "<group>"; };
+		740EE30FED1F2F0F03465F6B /* RelativeTimestamp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelativeTimestamp.swift; sourceTree = "<group>"; };
+		8229C47A563B9CFAFE03698A /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		930D3294E39DDBC9D7353687 /* StatusDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusDot.swift; sourceTree = "<group>"; };
+		A86088B15532564572E0A56C /* HapticEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticEngine.swift; sourceTree = "<group>"; };
+		B0FEFECEE3620B4FE3B77659 /* SSEClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSEClient.swift; sourceTree = "<group>"; };
+		B47291789600C774B0601783 /* ActivityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityStore.swift; sourceTree = "<group>"; };
+		CCF9988AE148C0C7D39E351A /* BonjourDiscoveryLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourDiscoveryLogicTests.swift; sourceTree = "<group>"; };
+		D0A5750DC48CF53C59F3764D /* Connection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Connection.swift; sourceTree = "<group>"; };
+		D2BCDA09EF1796B414E48660 /* Stats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stats.swift; sourceTree = "<group>"; };
+		DDA97B9F862A8E4638ED57A1 /* ClankyTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ClankyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		EEEADEAFF0CAE9533551AEA9 /* SetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupView.swift; sourceTree = "<group>"; };
+		EFF620C4BFD866DAB0E8E725 /* PanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelView.swift; sourceTree = "<group>"; };
+		F9A82C80603DFEAB78A5F68C /* ClankyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClankyApp.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		16B310F06C528FC4B69B6CF2 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				1B0048CEE250857C0CD3E608 /* Pulse */,
+				DEB03DBE059B69DD00817ACF /* Setup */,
+				330603CDCC19953391F1F159 /* Shared */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		1B0048CEE250857C0CD3E608 /* Pulse */ = {
+			isa = PBXGroup;
+			children = (
+				0F135E4A4800D517F115F314 /* ActionDetail.swift */,
+				59D141D40F3B5437285D6B18 /* ActionRow.swift */,
+				359880E88AD2D2363C8C9580 /* FilterChips.swift */,
+				50B427E9B17AB6890BB7EB42 /* PulseTab.swift */,
+				6DD5553116B7B3FC4526C675 /* StatsBar.swift */,
+			);
+			path = Pulse;
+			sourceTree = "<group>";
+		};
+		1B9BB94E8CE0AD9CAC990E50 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				1AC73C4257462CE83E5A21A9 /* Clanky.app */,
+				DDA97B9F862A8E4638ED57A1 /* ClankyTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		330603CDCC19953391F1F159 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				173C00809F21ABC7E39D4AA1 /* MetricText.swift */,
+				EFF620C4BFD866DAB0E8E725 /* PanelView.swift */,
+				740EE30FED1F2F0F03465F6B /* RelativeTimestamp.swift */,
+				930D3294E39DDBC9D7353687 /* StatusDot.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		3388826DCA724864AC9DF7DF /* ClankyApp */ = {
+			isa = PBXGroup;
+			children = (
+				F9A82C80603DFEAB78A5F68C /* ClankyApp.swift */,
+				1636BF04E21C3FA7F2167DBE /* Info.plist */,
+				C5081C1F501256E57716E784 /* Core */,
+				66B21D80E4C6EABC1ECAF4C7 /* Extensions */,
+				D49BF5882A0090F2341B576B /* Models */,
+				6FDEEC2165C68C8B808BD2EF /* Stores */,
+				16B310F06C528FC4B69B6CF2 /* Views */,
+			);
+			path = ClankyApp;
+			sourceTree = "<group>";
+		};
+		66B21D80E4C6EABC1ECAF4C7 /* Extensions */ = {
+			isa = PBXGroup;
+			children = (
+				2E66012A1B2731327EE5607C /* Color+Domain.swift */,
+			);
+			path = Extensions;
+			sourceTree = "<group>";
+		};
+		6FDEEC2165C68C8B808BD2EF /* Stores */ = {
+			isa = PBXGroup;
+			children = (
+				B47291789600C774B0601783 /* ActivityStore.swift */,
+				188DE079A3C48E839E2181A2 /* ConnectionStore.swift */,
+			);
+			path = Stores;
+			sourceTree = "<group>";
+		};
+		C5081C1F501256E57716E784 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				4A1F211A8DDAE307E76F3FDB /* BonjourBrowser.swift */,
+				63333F7EC156C580625A3B1D /* BonjourDiscoveryLogic.swift */,
+				5B40826527D25E949CC79EA4 /* ClankyClient.swift */,
+				A86088B15532564572E0A56C /* HapticEngine.swift */,
+				8229C47A563B9CFAFE03698A /* KeychainStore.swift */,
+				B0FEFECEE3620B4FE3B77659 /* SSEClient.swift */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		C5A01C234F3CEDF55FA31F3F /* ClankyTests */ = {
+			isa = PBXGroup;
+			children = (
+				CCF9988AE148C0C7D39E351A /* BonjourDiscoveryLogicTests.swift */,
+			);
+			path = ClankyTests;
+			sourceTree = "<group>";
+		};
+		D49BF5882A0090F2341B576B /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				2DB6B02E0963658583B07883 /* ClankyAction.swift */,
+				D0A5750DC48CF53C59F3764D /* Connection.swift */,
+				D2BCDA09EF1796B414E48660 /* Stats.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		DEB03DBE059B69DD00817ACF /* Setup */ = {
+			isa = PBXGroup;
+			children = (
+				EEEADEAFF0CAE9533551AEA9 /* SetupView.swift */,
+			);
+			path = Setup;
+			sourceTree = "<group>";
+		};
+		E54A00CF5FCDA39A6AAEFBF3 = {
+			isa = PBXGroup;
+			children = (
+				3388826DCA724864AC9DF7DF /* ClankyApp */,
+				C5A01C234F3CEDF55FA31F3F /* ClankyTests */,
+				1B9BB94E8CE0AD9CAC990E50 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		253E225E3F6B556E2ACB0258 /* Clanky */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 8E92F74C79278C0F2E986877 /* Build configuration list for PBXNativeTarget "Clanky" */;
+			buildPhases = (
+				878A548125B259D16C93EA42 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Clanky;
+			packageProductDependencies = (
+			);
+			productName = Clanky;
+			productReference = 1AC73C4257462CE83E5A21A9 /* Clanky.app */;
+			productType = "com.apple.product-type.application";
+		};
+		3EEA6AFD3C89F509A214AEE2 /* ClankyTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D9B8D175ECBB7A0554DF737C /* Build configuration list for PBXNativeTarget "ClankyTests" */;
+			buildPhases = (
+				08AAC7A3FD711264BBBCD5FF /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				59894F431EBB65992B1FF0DC /* PBXTargetDependency */,
+			);
+			name = ClankyTests;
+			packageProductDependencies = (
+			);
+			productName = ClankyTests;
+			productReference = DDA97B9F862A8E4638ED57A1 /* ClankyTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		5E549D9F61349E307BDDAAD2 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					253E225E3F6B556E2ACB0258 = {
+						DevelopmentTeam = 8YW4D4C6CW;
+					};
+					3EEA6AFD3C89F509A214AEE2 = {
+						DevelopmentTeam = 8YW4D4C6CW;
+					};
+				};
+			};
+			buildConfigurationList = 5C663E1EDFCCE35F1563D192 /* Build configuration list for PBXProject "Clanky" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = E54A00CF5FCDA39A6AAEFBF3;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				253E225E3F6B556E2ACB0258 /* Clanky */,
+				3EEA6AFD3C89F509A214AEE2 /* ClankyTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		08AAC7A3FD711264BBBCD5FF /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				ECB9FE337084AB625EDE0566 /* BonjourDiscoveryLogicTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		878A548125B259D16C93EA42 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D891ED0980C5D4029A126DA2 /* ActionDetail.swift in Sources */,
+				E8DACD310A54F2D6B848F46A /* ActionRow.swift in Sources */,
+				889F8B3D0B3409E8D9623520 /* ActivityStore.swift in Sources */,
+				5D22BC08D9F869869EBDADC2 /* BonjourBrowser.swift in Sources */,
+				774AC383BC47EC41330A54FF /* BonjourDiscoveryLogic.swift in Sources */,
+				9F8CEE63468EFB989ABD6363 /* ClankyAction.swift in Sources */,
+				5A78C67C58FB0D8F19D7BD10 /* ClankyApp.swift in Sources */,
+				891B80364285F4D67B8CAE61 /* ClankyClient.swift in Sources */,
+				D9F10737901CF096433E3AE1 /* Color+Domain.swift in Sources */,
+				FBC9A278FAC23463C7949720 /* Connection.swift in Sources */,
+				199F78903ABA4C09EC7C2F7C /* ConnectionStore.swift in Sources */,
+				39DB805B73B3C94FE83316D9 /* FilterChips.swift in Sources */,
+				96C779E5D756CEFE7CE92BBA /* HapticEngine.swift in Sources */,
+				4A5723A18BACAA91F324E19E /* KeychainStore.swift in Sources */,
+				3A99058F6BFD4F2A5F7C473A /* MetricText.swift in Sources */,
+				D9CD4B5B8E0C7A9FA57ABAF4 /* PanelView.swift in Sources */,
+				BE69BC760230C99ECD743811 /* PulseTab.swift in Sources */,
+				1DAD44C57C6F1C7C9C4B8AF0 /* RelativeTimestamp.swift in Sources */,
+				3CC1AA3B16489A8D585F6FC2 /* SSEClient.swift in Sources */,
+				3929013A73D6C104F9DBB61E /* SetupView.swift in Sources */,
+				DAC1A912D57917BB9A0486AD /* Stats.swift in Sources */,
+				A85E489A33C0714548B53737 /* StatsBar.swift in Sources */,
+				02DA752124881997C6A61E28 /* StatusDot.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		59894F431EBB65992B1FF0DC /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 253E225E3F6B556E2ACB0258 /* Clanky */;
+			targetProxy = 2286D774D7922234C8FF514D /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		098929ECD2BA6FACE8AB21C6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.clanky.app.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Clanky.app/Clanky";
+			};
+			name = Release;
+		};
+		0FDC4677215C556A9EEB9C27 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 8YW4D4C6CW;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		53ACEB4D78F19AD89D88C5FF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = ClankyApp/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.clanky.app;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		6369C35C43133825B773B1CE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.clanky.app.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Clanky.app/Clanky";
+			};
+			name = Debug;
+		};
+		87C08FD4A4700EEFE7BC014A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = ClankyApp/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.clanky.app;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A463EF9CAE9EBE6A8EC35CDC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 8YW4D4C6CW;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		5C663E1EDFCCE35F1563D192 /* Build configuration list for PBXProject "Clanky" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A463EF9CAE9EBE6A8EC35CDC /* Debug */,
+				0FDC4677215C556A9EEB9C27 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		8E92F74C79278C0F2E986877 /* Build configuration list for PBXNativeTarget "Clanky" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				87C08FD4A4700EEFE7BC014A /* Debug */,
+				53ACEB4D78F19AD89D88C5FF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		D9B8D175ECBB7A0554DF737C /* Build configuration list for PBXNativeTarget "ClankyTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6369C35C43133825B773B1CE /* Debug */,
+				098929ECD2BA6FACE8AB21C6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 5E549D9F61349E307BDDAAD2 /* Project object */;
+}

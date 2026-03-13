@@ -1,0 +1,53 @@
+name: Clanky
+options:
+  bundleIdPrefix: com.clanky
+  deploymentTarget:
+    iOS: "26.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    DEVELOPMENT_TEAM: 8YW4D4C6CW
+    TARGETED_DEVICE_FAMILY: "1"
+
+targets:
+  Clanky:
+    type: application
+    platform: iOS
+    sources:
+      - path: ClankyApp
+        type: group
+    info:
+      path: ClankyApp/Info.plist
+      properties:
+        CFBundleDisplayName: Clanky
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UIApplicationSupportsIndirectInputEvents: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSLocalNetworkUsageDescription: "Clanky searches the local network to auto-discover your bot dashboard."
+        NSBonjourServices:
+          - _clanky._tcp.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.clanky.app
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    scheme:
+      testTargets:
+        - ClankyTests
+
+  ClankyTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: ClankyTests
+        type: group
+    dependencies:
+      - target: Clanky
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.clanky.app.tests
