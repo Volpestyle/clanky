@@ -4048,11 +4048,15 @@ export class VoiceSessionManager {
 
   isRetryableSpeechStartedInterruptReason(reason: string | null | undefined) {
     const normalizedReason = String(reason || "").trim().toLowerCase();
+    // echo_guard_active is intentionally NOT retryable: it means "this is
+    // probably the bot's own audio echoing back."  If we retry, the sustain
+    // loop just waits out the guard window and then fires — defeating the
+    // entire purpose of echo protection.  A denied echo guard should
+    // terminate the sustain attempt so the bot can finish speaking.
     return (
       normalizedReason === "insufficient_capture_bytes" ||
       normalizedReason === "capture_signal_not_assertive" ||
       normalizedReason === "capture_signal_not_assertive_during_bot_speech" ||
-      normalizedReason === "echo_guard_active" ||
       normalizedReason === "capture_too_young_for_buffered_playback"
     );
   }
@@ -6082,6 +6086,39 @@ export class VoiceSessionManager {
         }
       });
       session.pendingMemoryIngest = trackedPromise;
+
+      // Pre-compute the query embedding for this transcript so it's cached
+      // before the generation pipeline needs it.  Also stores the vector on
+      // the session for topic-drift detection (warm memory system).
+      if (
+        session.warmMemory &&
+        this.memory &&
+        typeof this.memory.getQueryEmbeddingForRetrieval === "function"
+      ) {
+        const embeddingPromise = this.memory
+          .getQueryEmbeddingForRetrieval({
+            queryText: normalizedTranscript,
+            settings,
+            trace: {
+              guildId: session.guildId,
+              channelId: session.textChannelId,
+              userId: normalizedUserId,
+              source: "voice_ingest_precompute"
+            }
+          })
+          .then((result) => {
+            if (result?.embedding?.length && result?.model) {
+              session.warmMemory.lastIngestEmbedding = {
+                embedding: result.embedding,
+                model: result.model
+              };
+              return { embedding: result.embedding, model: result.model };
+            }
+            return null;
+          })
+          .catch(() => null);
+        session.warmMemory.pendingIngestEmbedding = embeddingPromise;
+      }
     }
   }
 

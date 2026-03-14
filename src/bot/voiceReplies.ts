@@ -21,6 +21,13 @@ import { shouldRequestVoiceToolFollowup } from "../tools/sharedToolSchemas.ts";
 import { clamp, sanitizeBotText } from "../utils.ts";
 import { loadConversationContinuityContext } from "./conversationContinuity.ts";
 import { emptyFactProfileSlice, loadBehavioralMemoryFacts, normalizeFactProfileSlice } from "./memorySlice.ts";
+import type { MemoryFactRow } from "../store/storeMemory.ts";
+import {
+  resolveWarmMemory,
+  updateTopicFingerprint,
+  captureWarmSnapshot,
+  invalidateWarmSnapshot
+} from "../voice/voiceSessionWarmMemory.ts";
 import {
   getActivitySettings,
   applyOrchestratorOverrideSettings,
@@ -847,6 +854,95 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
           : runtime.loadRecentConversationHistory(payload)
       : null;
 
+  // ── Warm memory: attempt to resolve from cached snapshot ─────────────
+  // Await the pre-computed embedding from the ingest pipeline (already
+  // in-flight since transcript capture).  Use it for topic-drift detection
+  // to decide whether full retrieval is needed.
+  let turnEmbedding: { embedding: number[]; model: string } | null = null;
+  let warmMemoryVerdict: import("../voice/voiceSessionWarmMemory.ts").DriftVerdict = "cold";
+  let warmMemorySimilarity = 0;
+  let warmMemoryReason = "no_session";
+  let usedWarmMemory = false;
+
+  if (activeVoiceSession?.warmMemory) {
+    const wm = activeVoiceSession.warmMemory;
+    if (wm.pendingIngestEmbedding) {
+      try {
+        turnEmbedding = await wm.pendingIngestEmbedding;
+      } catch {
+        turnEmbedding = null;
+      }
+      wm.pendingIngestEmbedding = null;
+    }
+    if (!turnEmbedding && wm.lastIngestEmbedding) {
+      turnEmbedding = wm.lastIngestEmbedding;
+    }
+
+    const warmResult = resolveWarmMemory(wm, turnEmbedding);
+    warmMemoryVerdict = warmResult.drift;
+    warmMemorySimilarity = warmResult.similarity;
+    warmMemoryReason = warmResult.reason;
+
+    if (warmResult.snapshot) {
+      // Warm memory hit — skip full retrieval
+      usedWarmMemory = true;
+    }
+  }
+
+  let promptMemorySlice;
+  let recentConversationHistory: unknown[];
+  let behavioralFacts: MemoryFactRow[];
+  let usedCachedBehavioralFacts: boolean;
+  let continuityLoadMs: number;
+  let behavioralMemoryLoadMs: number;
+  let totalMemoryLoadMs: number;
+
+  if (usedWarmMemory && activeVoiceSession?.warmMemory?.snapshot) {
+    // ── Fast path: reuse warm snapshot ──────────────────────────────────
+    const snap = activeVoiceSession.warmMemory.snapshot;
+    promptMemorySlice = normalizeFactProfileSlice(snap.continuity.memorySlice);
+    recentConversationHistory = snap.continuity.recentConversationHistory;
+    behavioralFacts = snap.behavioralFacts;
+    usedCachedBehavioralFacts = true;
+    continuityLoadMs = 0;
+    behavioralMemoryLoadMs = 0;
+    totalMemoryLoadMs = 0;
+
+    runtime.store.logAction({
+      kind: "voice_runtime",
+      guildId,
+      channelId,
+      userId,
+      content: "voice_generation_memory_loaded",
+      metadata: {
+        sessionId: sessionId || null,
+        memorySource: "warm_memory_reuse",
+        warmMemoryVerdict,
+        warmMemorySimilarity: Math.round(warmMemorySimilarity * 1000) / 1000,
+        warmMemoryReason,
+        transcriptChars: incomingTranscript.length,
+        continuityLoadMs: 0,
+        behavioralMemoryLoadMs: 0,
+        totalLoadMs: 0,
+        usedCachedBehavioralFacts: true,
+        participantProfileCount: Array.isArray(promptMemorySlice.participantProfiles)
+          ? promptMemorySlice.participantProfiles.length
+          : 0,
+        userFactCount: Array.isArray(promptMemorySlice.userFacts) ? promptMemorySlice.userFacts.length : 0,
+        relevantFactCount: Array.isArray(promptMemorySlice.relevantFacts)
+          ? promptMemorySlice.relevantFacts.length
+          : 0,
+        guidanceFactCount: Array.isArray(promptMemorySlice.guidanceFacts)
+          ? promptMemorySlice.guidanceFacts.length
+          : 0,
+        behavioralFactCount: behavioralFacts.length,
+        recentConversationHistoryCount: Array.isArray(recentConversationHistory)
+          ? recentConversationHistory.length
+          : 0
+      }
+    });
+  } else {
+  // ── Full retrieval path (cold start or topic drift) ─────────────────
   const continuityStartedAt = Date.now();
   const continuity = await awaitVoiceGenerationPrepStage({
     runtime,
@@ -891,10 +987,10 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       recentConversationHistory: []
     }
   });
-  const continuityLoadMs = Math.max(0, Date.now() - continuityStartedAt);
+  continuityLoadMs = Math.max(0, Date.now() - continuityStartedAt);
   throwIfAborted(signal, "Voice generation continuity cancelled");
-  const promptMemorySlice = normalizeFactProfileSlice(continuity.memorySlice);
-  const recentConversationHistory = continuity.recentConversationHistory;
+  promptMemorySlice = normalizeFactProfileSlice(continuity.memorySlice);
+  recentConversationHistory = continuity.recentConversationHistory;
   const participantIds =
     Array.isArray(promptMemorySlice.participantProfiles)
       ? promptMemorySlice.participantProfiles
@@ -972,10 +1068,11 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       usedCachedBehavioralFacts: false
     }
   });
-  const behavioralMemoryLoadMs = Math.max(0, Date.now() - behavioralStartedAt);
   throwIfAborted(signal, "Voice generation behavioral memory cancelled");
-  const behavioralFacts = Array.isArray(behavioralMemoryResult.facts) ? behavioralMemoryResult.facts : [];
-  const totalMemoryLoadMs = Math.max(0, Date.now() - continuityStartedAt);
+  behavioralFacts = Array.isArray(behavioralMemoryResult.facts) ? behavioralMemoryResult.facts : [];
+  usedCachedBehavioralFacts = Boolean(behavioralMemoryResult.usedCachedBehavioralFacts);
+  behavioralMemoryLoadMs = Math.max(0, Date.now() - behavioralStartedAt);
+  totalMemoryLoadMs = Math.max(0, Date.now() - continuityStartedAt);
   runtime.store.logAction({
     kind: "voice_runtime",
     guildId,
@@ -989,7 +1086,9 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       continuityLoadMs,
       behavioralMemoryLoadMs,
       totalLoadMs: totalMemoryLoadMs,
-      usedCachedBehavioralFacts: Boolean(behavioralMemoryResult.usedCachedBehavioralFacts),
+      warmMemoryVerdict,
+      warmMemorySimilarity: Math.round(warmMemorySimilarity * 1000) / 1000,
+      usedCachedBehavioralFacts,
       participantProfileCount: Array.isArray(promptMemorySlice.participantProfiles)
         ? promptMemorySlice.participantProfiles.length
         : 0,
@@ -1006,6 +1105,25 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         : 0
     }
   });
+
+  // Capture warm snapshot for subsequent turns
+  if (activeVoiceSession?.warmMemory) {
+    captureWarmSnapshot(activeVoiceSession.warmMemory, {
+      continuity: {
+        memorySlice: promptMemorySlice,
+        recentConversationHistory
+      },
+      behavioralFacts,
+      usedCachedBehavioralFacts,
+      capturedAt: Date.now(),
+      sourceTranscript: incomingTranscript
+    });
+    // Update topic fingerprint with this turn's embedding
+    if (turnEmbedding) {
+      updateTopicFingerprint(activeVoiceSession.warmMemory, turnEmbedding, "user");
+    }
+  }
+  } // close else (full retrieval path)
 
   const voiceGenerationBinding = getResolvedVoiceGenerationBinding(settings);
   const replyGeneration = getReplyGenerationSettings(settings);
@@ -1717,6 +1835,9 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
           const writtenEntries = Array.isArray(toolPayload?.written) ? toolPayload.written : [];
           if (toolPayload?.ok !== false && writtenEntries.length > 0) {
             invalidateSessionBehavioralMemoryCache(activeVoiceSession);
+            if (activeVoiceSession?.warmMemory) {
+              invalidateWarmSnapshot(activeVoiceSession.warmMemory);
+            }
             const writtenSubjects = new Set(
               writtenEntries
                 .map((entry) => String(entry?.subject || "").trim())

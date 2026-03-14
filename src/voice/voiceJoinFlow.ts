@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { clamp } from "../utils.ts";
+import { createWarmMemoryState } from "./voiceSessionWarmMemory.ts";
 import { ClankvoxClient } from "./clankvoxClient.ts";
 import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
@@ -829,6 +830,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         mcpStatus: getVoiceMcpServerStatuses(manager),
         toolMusicTrackCatalog: new Map(),
         memoryWriteWindow: [],
+        warmMemory: createWarmMemoryState(),
         behavioralFactCache: null,
         conversationHistoryCaches: null,
         ...(realtimeToolOwnership === "provider_native"

@@ -3,6 +3,7 @@ import type { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import type { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
 import type { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
 import type { ElevenLabsRealtimeClient } from "./elevenLabsRealtimeClient.ts";
+import type { WarmMemoryState } from "./voiceSessionWarmMemory.ts";
 import type { StreamWatchVisualizerMode } from "../settings/voiceDashboardMappings.ts";
 import type { ReplyInterruptionPolicy } from "./bargeInController.ts";
 import type { AsrBridgeState, AsrCommitResult } from "./voiceAsrBridge.ts";
@@ -1176,6 +1177,7 @@ export interface VoiceSession {
     mcpStatus: VoiceMcpServerStatus[];
     toolMusicTrackCatalog: Map<string, unknown>;
     memoryWriteWindow: number[];
+    warmMemory: WarmMemoryState;
     behavioralFactCache?: VoiceBehavioralFactCacheEntry | null;
     conversationHistoryCaches?: Partial<Record<VoiceConversationHistoryCacheStrategy, VoiceConversationHistoryCacheEntry | null>> | null;
     factProfiles: Map<string, VoiceUserFactProfile>;

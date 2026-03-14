@@ -567,7 +567,8 @@ export class MemoryManager {
       });
       return {
         model,
-        dims: vector.length
+        dims: vector.length,
+        embedding: vector
       };
     } catch {
       return null;
