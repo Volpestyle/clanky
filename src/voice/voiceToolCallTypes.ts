@@ -99,7 +99,7 @@ export type RealtimeFunctionTool = {
   parameters: Record<string, unknown>;
   toolType: "function" | "mcp";
   serverName: string | null;
-  continuationPolicy?: "always" | "if_no_spoken_text" | "never";
+  continuationPolicy?: "always" | "fire_and_forget";
 };
 
 interface SubAgentTurnResult {

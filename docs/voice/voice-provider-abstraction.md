@@ -211,6 +211,17 @@ Tool ownership:
 - full-brain replies use the shared orchestrator tool loop instead of provider-native replanning
 - provider-native sessions emit `realtime_tool_call_*` events; brain/transport-only sessions emit `voice_brain_*` events
 
+Voice tool continuation policy (`voiceContinuationPolicy` in `sharedToolSchemas.ts`):
+
+Each tool declares whether the LLM gets a follow-up generation turn after the tool executes. This controls whether tool results are fed back to the LLM for a spoken follow-up.
+
+| Policy | Behavior | Typical tools |
+|---|---|---|
+| `always` | Tool result is always fed back to the LLM for follow-up speech. The LLM sees the result (including errors) and can respond. | `video_play`, `music_play`, `web_search`, `browser_open`, `code_execute`, `memory_write` |
+| `fire_and_forget` | No follow-up generation. The tool is a silent side-effect; the LLM's speech from the same generation is the complete response. If the LLM needs to say something, it must include text alongside the tool call. | `play_soundboard`, `music_skip`, `note_context`, `leave_voice_channel`, `start_screen_watch` |
+
+When speech is dispatched before tools execute (pre-tool flush or sentence streaming), `fire_and_forget` tools will not produce additional speech on failure. This is intentional — these tools are low-failure side effects where the preamble speech is the complete user-facing response.
+
 ### Stage 5: Output
 
 Conversation-policy output knobs:

@@ -1,6 +1,6 @@
 import type { VoiceRealtimeToolDescriptor } from "../voice/voiceSessionTypes.ts";
 
-export type VoiceToolContinuationPolicy = "always" | "if_no_spoken_text" | "never";
+export type VoiceToolContinuationPolicy = "always" | "fire_and_forget";
 
 export interface SharedToolSchema {
   name: string;
@@ -98,7 +98,7 @@ export const MEMORY_SEARCH_SCHEMA: SharedToolSchema = {
 export const MEMORY_WRITE_SCHEMA: SharedToolSchema = {
   name: "memory_write",
   description: "Store durable memory facts. Save only long-lived useful facts or standing guidance, never secrets or throwaway chatter.",
-  voiceContinuationPolicy: "if_no_spoken_text",
+  voiceContinuationPolicy: "fire_and_forget",
   parameters: {
     type: "object",
     properties: {
@@ -420,7 +420,7 @@ export const MUSIC_QUEUE_NEXT_SCHEMA: SharedToolSchema = {
 export const MUSIC_STOP_SCHEMA: SharedToolSchema = {
   name: "media_stop",
   description: "Stop the current playback item and clear the active queue. Applies to the shared music/video playback stack.",
-  voiceContinuationPolicy: "if_no_spoken_text",
+  voiceContinuationPolicy: "fire_and_forget",
   parameters: {
     type: "object",
     properties: {},
@@ -431,7 +431,7 @@ export const MUSIC_STOP_SCHEMA: SharedToolSchema = {
 export const MUSIC_PAUSE_SCHEMA: SharedToolSchema = {
   name: "media_pause",
   description: "Pause the current playback item. Applies to the shared music/video playback stack.",
-  voiceContinuationPolicy: "if_no_spoken_text",
+  voiceContinuationPolicy: "fire_and_forget",
   parameters: {
     type: "object",
     properties: {},
@@ -442,7 +442,7 @@ export const MUSIC_PAUSE_SCHEMA: SharedToolSchema = {
 export const MUSIC_RESUME_SCHEMA: SharedToolSchema = {
   name: "media_resume",
   description: "Resume paused playback. Applies to the shared music/video playback stack.",
-  voiceContinuationPolicy: "if_no_spoken_text",
+  voiceContinuationPolicy: "fire_and_forget",
   parameters: {
     type: "object",
     properties: {},
@@ -471,7 +471,7 @@ export const MUSIC_REPLY_HANDOFF_SCHEMA: SharedToolSchema = {
 export const MUSIC_SKIP_SCHEMA: SharedToolSchema = {
   name: "media_skip",
   description: "Skip the current playback item and advance to the next queued item.",
-  voiceContinuationPolicy: "if_no_spoken_text",
+  voiceContinuationPolicy: "fire_and_forget",
   parameters: {
     type: "object",
     properties: {},
@@ -493,21 +493,21 @@ export const MUSIC_NOW_PLAYING_SCHEMA: SharedToolSchema = {
 const JOIN_VOICE_CHANNEL_SCHEMA: SharedToolSchema = {
   name: "join_voice_channel",
   description: "Join the requesting user's current voice channel.",
-  voiceContinuationPolicy: "if_no_spoken_text",
+  voiceContinuationPolicy: "fire_and_forget",
   parameters: { type: "object", properties: {}, required: [], additionalProperties: false }
 };
 
 export const LEAVE_VOICE_CHANNEL_SCHEMA: SharedToolSchema = {
   name: "leave_voice_channel",
   description: "Leave the voice channel and end the current voice session.",
-  voiceContinuationPolicy: "if_no_spoken_text",
+  voiceContinuationPolicy: "fire_and_forget",
   parameters: { type: "object", properties: {}, required: [], additionalProperties: false }
 };
 
 export const START_SCREEN_WATCH_SCHEMA: SharedToolSchema = {
   name: "start_screen_watch",
   description: "Start watching the most relevant active stream using the best available runtime path. Optionally specify a target name or Discord user id when you want a specific sharer. The runtime may bind to an already-live Discord sharer or fall back to a capture-link flow.",
-  voiceContinuationPolicy: "if_no_spoken_text",
+  voiceContinuationPolicy: "fire_and_forget",
   parameters: {
     type: "object",
     properties: {
@@ -524,7 +524,7 @@ export const START_SCREEN_WATCH_SCHEMA: SharedToolSchema = {
 export const SHARE_BROWSER_SESSION_SCHEMA: SharedToolSchema = {
   name: "share_browser_session",
   description: "Share an existing persistent browser session into Discord Go Live. Pass the session_id returned from browser_browse when you want to show the page while deciding or demonstrating.",
-  voiceContinuationPolicy: "if_no_spoken_text",
+  voiceContinuationPolicy: "fire_and_forget",
   parameters: {
     type: "object",
     properties: {
@@ -541,7 +541,7 @@ export const SHARE_BROWSER_SESSION_SCHEMA: SharedToolSchema = {
 export const STREAM_VISUALIZER_SCHEMA: SharedToolSchema = {
   name: "stream_visualizer",
   description: "Start Discord Go Live with an audio visualizer for currently playing music.",
-  voiceContinuationPolicy: "if_no_spoken_text",
+  voiceContinuationPolicy: "fire_and_forget",
   parameters: {
     type: "object",
     properties: {
@@ -558,7 +558,7 @@ export const STREAM_VISUALIZER_SCHEMA: SharedToolSchema = {
 export const STOP_VIDEO_SHARE_SCHEMA: SharedToolSchema = {
   name: "stop_video_share",
   description: "Stop the current outbound video share, whether it is a browser session or a published video stream.",
-  voiceContinuationPolicy: "if_no_spoken_text",
+  voiceContinuationPolicy: "fire_and_forget",
   parameters: {
     type: "object",
     properties: {},
@@ -569,7 +569,7 @@ export const STOP_VIDEO_SHARE_SCHEMA: SharedToolSchema = {
 export const PLAY_SOUNDBOARD_SCHEMA: SharedToolSchema = {
   name: "play_soundboard",
   description: "Play one or more soundboard refs in the current voice session, in order.",
-  voiceContinuationPolicy: "if_no_spoken_text",
+  voiceContinuationPolicy: "fire_and_forget",
   parameters: {
     type: "object",
     properties: {
@@ -588,7 +588,7 @@ export const PLAY_SOUNDBOARD_SCHEMA: SharedToolSchema = {
 const NOTE_CONTEXT_SCHEMA: SharedToolSchema = {
   name: "note_context",
   description: "Pin important session-scoped context for later in the conversation. Avoid duplicates.",
-  voiceContinuationPolicy: "if_no_spoken_text",
+  voiceContinuationPolicy: "fire_and_forget",
   parameters: {
     type: "object",
     properties: {
@@ -649,23 +649,21 @@ function resolveVoiceToolContinuationPolicy(
   { toolType = "function" }: { toolType?: "function" | "mcp" } = {}
 ): VoiceToolContinuationPolicy {
   if (toolType === "mcp") return "always";
-  return getLocalVoiceToolSchema(toolName)?.voiceContinuationPolicy || "if_no_spoken_text";
+  return getLocalVoiceToolSchema(toolName)?.voiceContinuationPolicy || "fire_and_forget";
 }
 
 export function shouldRequestVoiceToolFollowup(
   toolName: unknown,
   {
-    toolType = "function",
-    hasSpokenText = false
+    toolType = "function"
   }: {
     toolType?: "function" | "mcp";
+    /** @deprecated No longer used — retained for call-site compatibility. */
     hasSpokenText?: boolean;
   } = {}
 ): boolean {
   const continuationPolicy = resolveVoiceToolContinuationPolicy(toolName, { toolType });
-  if (continuationPolicy === "always") return true;
-  if (continuationPolicy === "never") return false;
-  return !hasSpokenText;
+  return continuationPolicy === "always";
 }
 
 // ── Format adapters ──────────────────────────────────────────────────
@@ -692,6 +690,6 @@ export function toRealtimeTool(schema: SharedToolSchema): VoiceRealtimeToolDescr
     name: schema.name,
     description: schema.description,
     parameters: schema.parameters,
-    continuationPolicy: schema.voiceContinuationPolicy || "if_no_spoken_text"
+    continuationPolicy: schema.voiceContinuationPolicy || "fire_and_forget"
   };
 }

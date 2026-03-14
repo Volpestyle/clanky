@@ -907,10 +907,10 @@ test("generateVoiceTurnReply preserves spoken text across tool-loop turns", asyn
   assert.equal(reply.text, "let me check that.\nit shipped in 2004.");
 });
 
-test("generateVoiceTurnReply handles note_context continuation based on whether spoken text already exists", async () => {
+test("generateVoiceTurnReply handles note_context as fire_and_forget (no continuation regardless of spoken text)", async () => {
   const cases = [
     {
-      name: "continues_without_spoken_text",
+      name: "no_continuation_without_spoken_text",
       sessionId: "voice-session-1",
       initialContext: [
         {
@@ -944,19 +944,16 @@ test("generateVoiceTurnReply handles note_context continuation based on whether 
             { type: "tool_use", id: "tc_1", name: "note_context", input: { text: "Alice prefers concise answers", category: "preference" } },
             { type: "tool_use", id: "tc_2", name: "note_context", input: { text: "alice prefers concise answers", category: "fact" } }
           ]
-        },
-        {
-          text: "noted"
         }
       ],
       transcript: "keep it short later too",
-      expectedGenerationCalls: 2,
-      expectedText: "noted",
+      expectedGenerationCalls: 1,
+      expectedText: "",
       expectedContextText: "alice prefers concise answers",
       expectedContextLength: 2
     },
     {
-      name: "stops_after_first_pass_when_spoken_text_exists",
+      name: "no_continuation_with_spoken_text",
       sessionId: "voice-session-2",
       initialContext: [],
       generationSequence: [
@@ -2335,7 +2332,7 @@ test("generateVoiceTurnReply triggers voice screen watch start from tool-call fi
   const { bot, generationPayloads, screenShareCalls } = createVoiceBot({
     generationSequence: [
       {
-        text: "",
+        text: structuredVoiceOutput({ text: "i can check it" }),
         toolCalls: [
           {
             id: "tc_1",
@@ -2344,14 +2341,9 @@ test("generateVoiceTurnReply triggers voice screen watch start from tool-call fi
           }
         ],
         rawContent: [
-          { type: "text", text: "" },
+          { type: "text", text: structuredVoiceOutput({ text: "i can check it" }) },
           { type: "tool_use", id: "tc_1", name: "start_screen_watch", input: { target: "casey" } }
         ]
-      },
-      {
-        text: structuredVoiceOutput({
-          text: "i can check it"
-        })
       }
     ],
     screenShareCapability: {
@@ -2514,7 +2506,7 @@ test("generateVoiceTurnReply returns leave request when model calls leave_voice_
   const { bot } = createVoiceBot({
     generationSequence: [
       {
-        text: "",
+        text: structuredVoiceOutput({ text: "aight i'ma bounce" }),
         toolCalls: [
           {
             id: "tc_1",
@@ -2523,14 +2515,9 @@ test("generateVoiceTurnReply returns leave request when model calls leave_voice_
           }
         ],
         rawContent: [
-          { type: "text", text: "" },
+          { type: "text", text: structuredVoiceOutput({ text: "aight i'ma bounce" }) },
           { type: "tool_use", id: "tc_1", name: "leave_voice_channel", input: {} }
         ]
-      },
-      {
-        text: structuredVoiceOutput({
-          text: "aight i'ma bounce"
-        })
       }
     ]
   });

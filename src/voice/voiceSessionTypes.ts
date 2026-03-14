@@ -183,7 +183,7 @@ export type VoiceRealtimeToolDescriptor = {
     description: string;
     parameters: Record<string, unknown>;
     serverName?: string | null;
-    continuationPolicy?: "always" | "if_no_spoken_text" | "never";
+    continuationPolicy?: "always" | "fire_and_forget";
 };
 
 export type VoiceToolCallEvent = {
