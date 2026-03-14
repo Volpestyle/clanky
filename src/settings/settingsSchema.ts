@@ -553,7 +553,7 @@ export const DEFAULT_SETTINGS = {
       brainContextMinIntervalSeconds: 4,
       brainContextMaxEntries: 8,
       brainContextProvider: "claude-oauth",
-      brainContextModel: "claude-opus-4-6",
+      brainContextModel: "claude-sonnet-4-5",
       brainContextPrompt:
         "Write one short factual private note about the most salient visible state or change in this frame. Prioritize gameplay actions, objectives, outcomes, menus, or unusual/funny moments that could support a natural later comment. If the frame is mostly idle UI, lobby, desktop, or other non-gameplay context, say that plainly. Prefer what is newly different from the previous frame.",
       nativeDiscordMaxFramesPerSecond: 2,

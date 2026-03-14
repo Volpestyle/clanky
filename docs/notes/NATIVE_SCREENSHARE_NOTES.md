@@ -188,6 +188,77 @@ Backpressure drops and recovery are logged so the parent process can correlate m
 
 `cargo test` in `src/voice/clankvox` passes after the review-pass fixes.
 
+## March 14, 2026 — Transport and Decode Incident
+
+A series of refactoring changes in `voice_conn.rs` broke the audio and video
+receive paths. Root causes and fixes:
+
+### 1. Transport crypto AAD mismatch (bot completely deaf)
+
+The `decrypt()` method was changed to delegate to `decrypt_with_aad(packet,
+header_size)`, where `header_size` from `parse_rtp_header` includes the full
+RTP extension body. Discord's `rtpsize` AEAD modes only authenticate the
+fixed header + CSRC + 4-byte extension prefix as AAD — not the extension body.
+Every packet failed transport decryption silently at `debug` level.
+
+Fix: `decrypt()` recomputes AAD from raw packet bytes (`RTP_HEADER_LEN + cc*4
++ 4 if extension`), ignoring the `header_size` parameter. A regression test
+(`rtp_decrypt_uses_correct_aad_when_extension_is_present`) catches future
+breakage.
+
+### 2. Inbound RTCP packets hitting RTP decrypt
+
+Discord multiplexes RTCP on the same UDP socket (RFC 5761). Payload types
+72-76 (RTCP SR/RR/SDES/BYE/APP) were fed into the RTP `decrypt()` path and
+failed because RTCP has a different header/AAD layout. Fixed by filtering
+RTCP packets early in the UDP recv loop.
+
+### 3. MediaSinkWants OP15 format
+
+The refactored OP15 payload dropped `streams` and `pixelCounts` in favor of a
+flat `{"any": N, "ssrc": N}` map. Discord did not recognize this format and
+sent video at the lowest quality with very sparse keyframes. Restored the
+original `{"any": N, "streams": {...}, "pixelCounts": {...}}` structure.
+
+### 4. H264 keyframe detection too strict
+
+The refactored code only treated IDR slices (NAL type 5) as keyframes. Discord
+H264 screen shares send SPS (NAL type 7) as sync points without IDR. Restored
+SPS-as-keyframe detection. Also changed the depacketizer to always prepend
+cached SPS+PPS to every emitted frame, since PLI/FIR RTCP feedback does not
+work on the raw UDP protocol path (only on the WebRTC path used by
+`Discord-video-stream`).
+
+### 5. ffmpeg H264 raw demuxer EOF hang
+
+ffmpeg 8.x's H264 raw demuxer (`-f h264`) hangs waiting for more data even
+when reading from a file with a single access unit. Bun's `stdin.end()` also
+does not reliably deliver EOF. Fixed by writing H264 to a temp file then
+piping through `cat | ffmpeg -fflags +genpts -f h264 -i pipe:0`, which
+guarantees clean pipe close.
+
+### 6. DAVE video passthrough forwarding encrypted garbage
+
+Go Live video frames fail DAVE decrypt with `UnencryptedWhenPassthroughDisabled`.
+The passthrough path returned the raw (encrypted) bytes as if they were
+cleartext H264. ffmpeg parsed valid NAL headers but hit garbage in slice bodies:
+`deblocking_filter_idc out of range`, `cabac_init_idc overflow`, `reference
+count overflow`.
+
+Fix: video frames that fail DAVE decrypt are now dropped instead of passed
+through. Screen watch relies on the initial unencrypted frames that arrive
+during the DAVE session transition window after commit.
+
+### Reference repo findings
+
+Examined `Discord-video-stream` and `Discord-video-selfbot`:
+- Neither handles OP15 or receives video (sender-only libraries)
+- `Discord-video-stream` uses `protocol: "webrtc"` with SDP — PLI/FIR is
+  handled by the native WebRTC stack, not manually crafted RTCP
+- `Discord-video-selfbot` uses raw UDP and ignores all inbound packets
+- Neither caches SPS/PPS or depacketizes H264 (no receive path)
+- Voice gateway v7/v8, not v9
+
 ## Bun Integration Pass
 
 The Bun runtime now consumes the native Discord video contract end to end:

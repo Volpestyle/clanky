@@ -285,6 +285,7 @@ Discord watch did not bind, inspect these events together:
 - `voice_screen_watch_capability`
 - `screen_watch_native_start_failed`
 - `screen_watch_started_native`
+- `stream_watch_reused_programmatic`
 - `screen_watch_link_fallback_started`
 - `screen_watch_link_reused`
 
@@ -295,7 +296,8 @@ Interpretation notes:
 - `stream_discovery_go_live_bootstrap_seeded` marks the moment Bun turns `VOICE_STATE_UPDATE.self_stream=true` into provisional per-session Go Live state, before `STREAM_CREATE` or `STREAM_SERVER_UPDATE` arrive.
 - `stream_discovery_go_live_bootstrap_cleared` marks provisional bootstrap state being cleared after `VOICE_STATE_UPDATE.self_stream=false` when Discord never promoted that share into full discovered credentials.
 - `screen_watch_native_start_failed` is the authoritative native-start failure event before fallback.
-- `screen_watch_started_native` means the Bun runtime actually bound a native Discord share target.
+- `screen_watch_started_native` means the Bun runtime actually bound a native Discord share target. Inspect `metadata.reused` and `metadata.frameReady` to tell whether it attached to an existing watch and whether usable pixels were already available.
+- `stream_watch_reused_programmatic` is the manager-level reuse breadcrumb. It means a same-target native watch stayed active and Bun re-subscribed without resetting frame context.
 - `screen_watch_link_fallback_started` and `screen_watch_link_reused` now carry `metadata.nativeFailureReason` so the fallback line still explains why native did not win.
 
 Useful metadata fields:
@@ -321,6 +323,8 @@ Useful metadata fields:
 - `nativeDecoderSupported`
 - `runtimeMode`
 - `voiceChannelId`
+- `reused`
+- `frameReady`
 
 When you need to locate the failure layer for native Discord screen watch,
 follow the cross-process breadcrumb trail in order:
@@ -334,6 +338,7 @@ follow the cross-process breadcrumb trail in order:
 - Rust refreshed Discord sink wants: `clankvox_video_sink_wants_updated`
 - Rust forwarded the first subscribed frame: `clankvox_first_video_frame_forwarded`
 - Bun ingested a frame for model context: `stream_watch_frame_ingested`
+- Bun failed to decode a forwarded frame before ingest: `native_discord_video_decode_failed`
 
 Interpretation notes:
 
@@ -342,6 +347,7 @@ Interpretation notes:
 - if you see `ignoring video state payload without user_id`, Discord sent video-like state without the user identity field our Rust parser requires
 - if `clankvox_discord_video_state_observed` appears without `native_discord_screen_share_state_updated`, the issue is between Rust IPC emission and Bun session-state application
 - if state-update logs appear but `clankvox_first_video_frame_forwarded` never appears, native share discovery worked but no subscribed frame made it through
+- if `native_discord_video_decode_failed` appears with `metadata.timedOut=true` or content `ffmpeg_decode_timeout`, Bun killed the per-frame `ffmpeg` decode watchdog before a JPEG reached stream-watch ingest
 - if `clankvox_video_sink_wants_skipped_no_connection` appears, a subscription request arrived before the voice connection was ready; later `voice_ready` or another state update should trigger a retry path
 
 ## Voice output incident workflow
@@ -413,6 +419,38 @@ Operator notes:
 - if `outputLockReason=bot_audio_buffered` persists for more than a couple seconds after `openai_realtime_response_done`, suspect stale `clankvox` playback telemetry rather than real remaining speech
 - if `voice_turn_addressing` shows `reason=bot_turn_open` but a same-moment `voice_direct_address_interrupt` follows, the turn cut through output lock because it was an allowed wake-word / bot-name interruption
 - if a deferred turn keeps rescheduling, inspect whether `voice_activity_started` is followed by `voice_turn_dropped_silence_gate`; silence-only captures should not be treated the same as real live speech
+
+## Video transport and DAVE decrypt workflow
+
+When the screen watch pipeline fails to produce frames, start with the transport
+and DAVE layers before looking at Bun-side decode failures.
+
+Start with these events:
+
+- `clankvox_transport_decrypt_failed`
+- `clankvox_h264_frame_nal_diagnostic`
+- `clankvox_first_video_frame_forwarded`
+- `native_discord_video_decode_failed`
+- `stream_watch_frame_ingested`
+
+Interpretation notes:
+
+- `clankvox_transport_decrypt_failed` fires once per unique payload type when transport-level (AES-GCM / XChaCha20) decryption fails. If this fires for audio PT (111) or video PTs (103/105), the transport crypto AAD computation may be wrong. Inbound RTCP packets (PT 72-76) are filtered before decrypt and should never appear here.
+- `clankvox_h264_frame_nal_diagnostic` logs NAL types, keyframe status, and frame byte count at frame 1-5 and every 100th frame. `video_keyframe_count=0` after hundreds of frames means no SPS/IDR has arrived. `nal_types=[7, 8, 1]` means SPS+PPS were prepended to a P-slice from the depacketizer cache (normal for Go Live).
+- DAVE video passthrough warnings (`DAVE: video frame from user ... appears unencrypted`) are expected on Go Live streams. Video frames that fail DAVE decrypt with `UnencryptedWhenPassthroughDisabled` are dropped instead of forwarded, because the DAVE library's unencrypted detection can misfire on Go Live video that IS encrypted. Audio passthrough is still allowed on the stream watch transport since that audio channel is not used for ASR.
+- `native_discord_video_decode_failed` with `ffmpeg_decode_timeout` means ffmpeg hung waiting for EOF. This is an ffmpeg H264 raw demuxer issue. The current workaround pipes H264 data through `cat | ffmpeg` to guarantee clean pipe close.
+- `native_discord_video_decode_failed` with `deblocking_filter_idc out of range` or `reference count overflow` on frames that have `headerHex` starting with valid SPS bytes means DAVE-encrypted video was forwarded as cleartext. The DAVE video drop fix should prevent this.
+- `native_discord_video_decode_failed` with `h264_missing_parameter_sets` means the depacketizer hasn't cached SPS/PPS yet. Wait for more frames.
+
+Useful metadata fields:
+
+- `codec`
+- `keyframe`
+- `rtpTimestamp`
+- `frameBytes`
+- `pendingH264AccessUnitCount`
+- `timedOut`
+- `headerHex`
 
 ## Voice input / VAD workflow
 

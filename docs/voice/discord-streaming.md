@@ -47,8 +47,8 @@ The native Discord screen watch pipeline is built end to end in clankvox and Bun
 - Bun forwards those credentials into `clankvox`
 - `clankvox` opens the second stream transport, completes the modern watcher handshake,
   reaches DAVE-ready, and forwards encrypted H264 frames back to Bun
-- DAVE MLS E2EE decrypt produces valid H264 Annex-B frames
-- ffmpeg decodes keyframes to JPEG successfully
+- DAVE MLS E2EE session completes successfully on the stream watch transport, though per-frame video decrypt currently fails for Go Live (frames arrive during the post-commit unencrypted window instead)
+- ffmpeg decodes sampled VP8 keyframes and H264 access units (IDR or SPS+PPS+P-slice) to JPEG successfully
 - stream-watch brain context pipeline ingests frames and produces accurate visual commentary
 - DAVE channel ID derivation (`BigInt(rtcServerId) - 1`) confirmed working
 - two-checkpoint link fallback suppression prevents duplicate transports when native watch is active
@@ -95,6 +95,13 @@ resolves before stream credentials arrive, triggers a link fallback, and then
 native watch connects 200ms later — resulting in both transports running in
 parallel. `shouldSuppressLinkFallbackDueToNativeWatch` checks transport status,
 decoded frame presence, or active sharer state.
+
+If the brain asks for `start_screen_watch` again for the same target while the
+native watch is already active, Bun reuses that watch instead of reconnecting
+the `stream_watch` transport. Tool results now separate transport attachment
+from visual readiness: `frameReady=false` means the watch is up but no decoded
+or buffered image frame exists yet, so the agent should not claim it can
+already see the screen.
 
 `startVoiceScreenWatch` also accepts a `preferredTransport` parameter. Callers
 can pass `"link"` to skip native entirely and go straight to the share-link
@@ -266,11 +273,13 @@ These are the same opcodes as the regular voice connection but exchanged on the 
    → OP12 VIDEO with video state from the streamer
 
 4. Request video quality
-   → OP15 MEDIA_SINK_WANTS with desired SSRCs and quality
+    → OP15 MEDIA_SINK_WANTS with `streams`, `pixelCounts`, and `any` default quality
 
-5. Receive video frames
-   → Encrypted RTP/UDP video packets arrive
-   → DAVE decrypt → depacketize → decode → stream-watch pipeline
+ 5. Receive video frames
+    → Encrypted RTP/UDP video packets arrive
+    → Transport decrypt (AES-GCM/XChaCha20) → depacketize H264/VP8 → DAVE decrypt attempt
+    → DAVE video decrypt currently fails for Go Live (frames forwarded from post-commit unencrypted window)
+    → ffmpeg decode to JPEG → stream-watch pipeline
 ```
 
 ### OP0 Identify (stream connection)
@@ -316,6 +325,33 @@ These are the same opcodes as the regular voice connection but exchanged on the 
 
 Video SSRCs are in `d.streams[].ssrc`, not in a top-level `d.video_ssrc` field.
 
+### OP15 Media Sink Wants
+
+`clankvox` sends Discord media sink wants with `streams` and `pixelCounts`
+maps plus a top-level `any` default quality:
+
+```json
+{
+  "op": 15,
+  "d": {
+    "any": 100,
+    "streams": {
+      "12346": 100,
+      "12347": 0
+    },
+    "pixelCounts": {
+      "12346": 921600.0,
+      "12347": 230400.0
+    }
+  }
+}
+```
+
+The `pixelCounts` map is required for Discord to send video at the requested
+resolution. Without it, Discord may send the lowest quality layer where
+keyframes are very sparse. The `any` field provides a default quality for
+SSRCs not explicitly listed.
+
 ### Stream speaking flag
 
 On the stream connection, speaking flag 2 indicates video (vs flag 1 for audio on the regular connection):
@@ -333,6 +369,7 @@ All of this is implemented and tested:
 - OP12/OP18 remote video state parsing and tracking (`voice_conn.rs`)
 - OP14 session/codec update handling (`voice_conn.rs`)
 - OP15 media sink wants send (`voice_conn.rs`, `capture_supervisor.rs`)
+- Protected RTCP receiver-report / PLI / FIR keyframe feedback while waiting for the first renderable stream frame (`voice_conn.rs`, `capture_supervisor.rs`)
 - Video codec advertisement in SelectProtocol: H264, VP8 decode (`voice_conn.rs`)
 - Non-Opus RTP acceptance: H264 (PT 103), VP8 (PT 105) (`voice_conn.rs`)
 - DAVE video decrypt path (`dave.rs`)
@@ -344,6 +381,15 @@ All of this is implemented and tested:
 - Per-user video subscription management (`capture_supervisor.rs`)
 - Remote video state merge semantics for partial updates (`capture_supervisor.rs`)
 - Session reconnect teardown of stale video state (`capture_supervisor.rs`)
+
+### Audio receive pipeline (clankvox, Rust)
+
+All of this is implemented and tested:
+
+- OP5 speaking payload parsing into the audio SSRC map (`voice_conn.rs`)
+- DAVE audio decrypt on the main voice transport (`dave.rs`, `voice_conn.rs`)
+- Audio SSRC remap fallback from successful DAVE decrypt when OP5 is delayed or missing (`voice_conn.rs`)
+- Opus decode plus PCM downmix/resample into Bun-visible `UserAudio` IPC (`capture_supervisor.rs`, `audio_pipeline.rs`, `ipc.rs`)
 
 ### Bun runtime integration
 
@@ -385,7 +431,7 @@ Current rollout boundary:
 - If credentials are already present, Bun immediately sends `stream_watch_connect` to `clankvox`
 - If credentials arrive later, discovery callbacks connect the `stream_watch` transport when `STREAM_SERVER_UPDATE` lands
 - `clankvox` emits role-aware `transport_state`, `userVideoState`, `userVideoFrame`, and `userVideoEnd`
-- Bun decodes sampled keyframes to JPEG and feeds them into the existing stream-watch commentary path
+- Bun decodes sampled VP8 keyframes and H264 IDR access units to JPEG and feeds them into the existing stream-watch commentary path
 - `STREAM_DELETE` prunes the cached sharer and tears native watch down
 - Native transport failure/disconnect tears native watch down and directly requests share-link fallback when requester + text-channel context exist
 
@@ -461,7 +507,10 @@ There is no separate standalone settings block for outbound native publish. Musi
 
 ## Risk Assessment
 
-- **DAVE on stream connections.** Stream connections use DAVE channel ID `BigInt(rtc_server_id) - 1n`. Confirmed working live.
+- **DAVE on stream connections.** Stream connections use DAVE channel ID `BigInt(rtc_server_id) - 1n`. Confirmed working live. However, DAVE per-frame video decrypt does not work for Go Live — the `davey` library classifies Go Live video frames as `UnencryptedWhenPassthroughDisabled` when they are likely encrypted. Video frames that fail DAVE decrypt are dropped to prevent feeding encrypted garbage to ffmpeg. Screen watch currently relies on the initial unencrypted frames that arrive during the DAVE transition window after session commit.
+- **PLI/FIR keyframe requests do not work.** clankvox uses `protocol: "udp"` for stream connections. Discord's media server only processes RTCP PLI/FIR feedback from WebRTC peers. PLI/FIR packets are still sent as a best-effort hint, but keyframes cannot be requested on demand. The H264 receive path compensates by always prepending cached SPS+PPS to every frame and treating SPS-containing access units as keyframes.
+- **Transport crypto AAD for RTP.** Discord's `rtpsize` AEAD modes authenticate the RTP fixed header + CSRC + 4-byte extension prefix as AAD. The extension body is part of the ciphertext. `decrypt()` recomputes AAD from raw packet bytes and must NOT use `parse_rtp_header`'s `header_size` (which includes the extension body). Inbound RTCP (PT 72-76 per RFC 5761 mux) is filtered before decrypt.
+- **ffmpeg H264 decode EOF.** The H264 raw demuxer (`-f h264`) hangs on single-frame files. Bun pipes H264 through `cat | ffmpeg -fflags +genpts -f h264 -i pipe:0` to guarantee EOF delivery.
 - **RTX loss recovery is still limited.** The receive path currently traces and drops RTX payloads; retransmission support remains future work.
 - **Sender compatibility is narrower than receive.** Outbound publish is still H264-only and still centered on music lifecycle or browser-session share. `visualizerMode: "off"` also depends on a URL-backed source relay path being available.
 
