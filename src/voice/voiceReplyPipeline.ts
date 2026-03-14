@@ -675,11 +675,28 @@ export async function runVoiceReplyPipeline(
             }
             : null;
         const playbackSource = `${source}:stream_chunk_${Math.max(0, Number(index || 0))}`;
+        // Derive supersede user from the resolved addressing:
+        // TO:ALL → null (un-supersedable by queue).
+        // TO:specific-user → that user.  No addressing → triggering speaker.
+        const streamSupersedeUserId =
+          voiceAddressing?.talkingTo === "ALL"
+            ? null
+            : (streamedReplyInterruptionPolicy?.allowedUserId || params.userId || null);
         // Fast path: realtime utterance request (no soundboard, realtime TTS available)
         if (useRealtimeTts && playbackPlan.soundboardRefs.length === 0) {
           const normalizedText = normalizeVoiceText(playbackPlan.spokenText, STT_REPLY_MAX_CHARS);
           if (!normalizedText) return false;
           if (generationInterrupted()) return false;
+          if (host.maybeSupersedeRealtimeReplyBeforePlayback({
+            session,
+            source: playbackSource,
+            speechStep: index,
+            generationStartedAtMs: generationStartedAt,
+            outputLeaseMode: streamedReplyOutputLeaseMode,
+            replyUserId: streamSupersedeUserId
+          })) {
+            return false;
+          }
           const requested = host.requestRealtimeTextUtterance({
             session,
             text: normalizedText,
@@ -712,7 +729,8 @@ export async function runVoiceReplyPipeline(
           interruptionPolicy: streamedReplyInterruptionPolicy,
           outputLeaseMode: streamedReplyOutputLeaseMode,
           latencyContext,
-          musicWakeRefreshAfterSpeech: shouldRefreshMusicWakeAfterSpeech
+          musicWakeRefreshAfterSpeech: shouldRefreshMusicWakeAfterSpeech,
+          replyUserId: streamSupersedeUserId
         });
         if (generationInterrupted()) return false;
         const accepted = Boolean(playbackResult.completed) &&
@@ -979,7 +997,12 @@ export async function runVoiceReplyPipeline(
           interruptionPolicy: replyInterruptionPolicy,
           outputLeaseMode: replyOutputLeaseMode,
           latencyContext: replyLatencyContext,
-          musicWakeRefreshAfterSpeech: shouldRefreshMusicWakeAfterSpeech
+          musicWakeRefreshAfterSpeech: shouldRefreshMusicWakeAfterSpeech,
+          // Derive supersede user from resolved addressing:
+          // TO:ALL → null (un-supersedable). TO:specific or no addressing → triggering speaker.
+          replyUserId: generatedVoiceAddressing?.talkingTo === "ALL"
+            ? null
+            : (replyInterruptionPolicy?.allowedUserId || params.userId || null)
         });
     } finally {
       clearInFlightAcceptedBrainTurn();

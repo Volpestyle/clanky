@@ -51,7 +51,7 @@ import { resolveRealtimeAdmissionModeForRuntime } from "../settings/voiceDashboa
 import { isCancelIntent } from "../tools/cancelDetection.ts";
 import {
   clearMusicWakeLatch,
-  getMusicWakeLatchState,
+  getMusicWakeFollowupState,
   touchMusicWakeLatch
 } from "./musicWakeLatch.ts";
 
@@ -495,8 +495,10 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   if (!musicActive) {
     clearMusicWakeLatch(session);
   }
-  let musicWakeLatchState = getMusicWakeLatchState(session, now);
-  let musicWakeLatched = musicWakeLatchState.active;
+  let musicWakeLatchState = getMusicWakeFollowupState(session, normalizedUserId, now);
+  // Music wake latch is scoped to the user who set it. In a group channel,
+  // Alice saying "hey clanky" shouldn't open the latch for Bob's next turn.
+  let musicWakeLatched = musicWakeLatchState.passiveWakeFollowupAllowed;
   let msUntilMusicWakeLatchExpiry = musicWakeLatchState.msUntilExpiry;
   const baseConversationContext = buildVoiceConversationContext(manager, {
     session,
@@ -620,8 +622,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     if (directAddressSignal.addressedOrNamed) {
       if (musicActive) {
         touchMusicWakeLatch(session, settings, normalizedUserId, now);
-        musicWakeLatchState = getMusicWakeLatchState(session, now);
-        musicWakeLatched = musicWakeLatchState.active;
+        musicWakeLatchState = getMusicWakeFollowupState(session, normalizedUserId, now);
+        musicWakeLatched = musicWakeLatchState.passiveWakeFollowupAllowed;
         msUntilMusicWakeLatchExpiry = musicWakeLatchState.msUntilExpiry;
         conversationContext = buildConversationContext();
       }
@@ -682,8 +684,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   // the classifier decides with directAddressed as a strong hint.
   if (directAddressed && musicActive) {
     touchMusicWakeLatch(session, settings, normalizedUserId, now);
-    musicWakeLatchState = getMusicWakeLatchState(session, now);
-    musicWakeLatched = musicWakeLatchState.active;
+    musicWakeLatchState = getMusicWakeFollowupState(session, normalizedUserId, now);
+    musicWakeLatched = musicWakeLatchState.passiveWakeFollowupAllowed;
     msUntilMusicWakeLatchExpiry = musicWakeLatchState.msUntilExpiry;
     conversationContext = buildConversationContext();
   }
@@ -717,8 +719,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   if (musicActive) {
     if (nameCueDetected || directAddressed) {
       touchMusicWakeLatch(session, settings, normalizedUserId, now);
-      musicWakeLatchState = getMusicWakeLatchState(session, now);
-      musicWakeLatched = musicWakeLatchState.active;
+      musicWakeLatchState = getMusicWakeFollowupState(session, normalizedUserId, now);
+      musicWakeLatched = musicWakeLatchState.passiveWakeFollowupAllowed;
       msUntilMusicWakeLatchExpiry = musicWakeLatchState.msUntilExpiry;
       conversationContext = buildConversationContext();
     }
@@ -785,8 +787,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   });
   if (classifierResult.allow && musicActive && musicWakeLatched) {
     touchMusicWakeLatch(session, settings, normalizedUserId, now);
-    musicWakeLatchState = getMusicWakeLatchState(session, now);
-    musicWakeLatched = musicWakeLatchState.active;
+    musicWakeLatchState = getMusicWakeFollowupState(session, normalizedUserId, now);
+    musicWakeLatched = musicWakeLatchState.passiveWakeFollowupAllowed;
     msUntilMusicWakeLatchExpiry = musicWakeLatchState.msUntilExpiry;
     conversationContext = buildConversationContext();
   }

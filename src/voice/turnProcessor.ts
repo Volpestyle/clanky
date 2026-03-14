@@ -204,6 +204,7 @@ interface VoiceTurnDecisionLogContext {
   asrSkippedShortClip?: boolean;
   deferredActionReason?: string | null;
   deferredTurnCount?: number | null;
+  totalDeferredSpeakers?: number | null;
 }
 
 interface HandleResolvedVoiceTurnArgs {
@@ -618,7 +619,14 @@ export class TurnProcessor {
       });
 
     if (!decision.allow && !directAddressOutputInterrupted && !authorizedSpeakerOutputInterrupted) {
-      if (decision.reason === "bot_turn_open") {
+      // Defer turns that were blocked by temporary conditions (bot speaking,
+      // tool followup in progress) so they can be replayed when the blocker
+      // clears. Turns blocked for other reasons (command_only, etc.) are
+      // intentionally dropped — they weren't relevant enough to admit.
+      const deferrableReason =
+        decision.reason === "bot_turn_open" ||
+        decision.reason === "owned_tool_followup_other_speaker_blocked";
+      if (deferrableReason) {
         this.host.queueDeferredBotTurnOpenTurn({
           session,
           userId,
@@ -2495,57 +2503,85 @@ export class TurnProcessor {
       this.host.clearDeferredQueuedUserTurns(session);
     }
 
-    const coalescedTurns = pendingQueue.slice(-BOT_TURN_DEFERRED_COALESCE_MAX);
-    const directAddressedTurn = coalescedTurns.find((entry) => entry?.directAddressed) || null;
-    const latestTurn = directAddressedTurn || coalescedTurns[coalescedTurns.length - 1];
-    const orderedTurns = directAddressedTurn
-      ? [directAddressedTurn, ...coalescedTurns.filter((entry) => entry !== directAddressedTurn)]
-      : coalescedTurns;
-    const distinctSources = Array.from(
-      new Set(
-        orderedTurns
-          .map((entry) => String(entry?.source || "").trim())
-          .filter((entry): entry is string => entry.length > 0)
-      )
-    );
-    const deferredReplySource =
-      distinctSources.length === 1 && isSystemSpeechOpportunitySource(distinctSources[0])
-        ? distinctSources[0]
-        : "bot_turn_open_deferred_flush";
-    const coalescedTranscript = normalizeVoiceText(
-      orderedTurns
-        .map((entry) => String(entry?.transcript || "").trim())
-        .filter(Boolean)
-        .join(" "),
-      STT_TRANSCRIPT_MAX_CHARS
-    );
-    if (!coalescedTranscript) return;
+    // Group deferred turns by speaker so each person's speech is attributed
+    // correctly. Direct-addressed turns from any speaker are processed first.
+    // Within each speaker group, turns are coalesced (same-speaker merging is
+    // fine — it's cross-speaker mashing that loses attribution).
+    const recentTurns = pendingQueue.slice(-BOT_TURN_DEFERRED_COALESCE_MAX);
+    const speakerGroups = new Map<string, typeof recentTurns>();
+    for (const turn of recentTurns) {
+      const speakerId = String(turn?.userId || "unknown").trim();
+      const group = speakerGroups.get(speakerId) || [];
+      group.push(turn);
+      speakerGroups.set(speakerId, group);
+    }
 
-    const coalescedPcmBuffer = isRealtimeMode(session.mode)
-      ? Buffer.concat(
-        orderedTurns
-          .map((entry) => (entry?.pcmBuffer?.length ? entry.pcmBuffer : null))
-          .filter((entry): entry is Buffer => Boolean(entry))
-      )
-      : null;
+    // Sort speaker groups: direct-addressed first, then most recent
+    const sortedGroups = [...speakerGroups.entries()].sort(([, turnsA], [, turnsB]) => {
+      const aDirectAddress = turnsA.some((t) => t?.directAddressed);
+      const bDirectAddress = turnsB.some((t) => t?.directAddressed);
+      if (aDirectAddress && !bDirectAddress) return -1;
+      if (!aDirectAddress && bDirectAddress) return 1;
+      const aLatest = Math.max(...turnsA.map((t) => Number(t?.queuedAt || 0)));
+      const bLatest = Math.max(...turnsB.map((t) => Number(t?.queuedAt || 0)));
+      return bLatest - aLatest;
+    });
+
     const settings = session.settingsSnapshot || this.store.getSettings();
 
-    await this.handleResolvedVoiceTurn({
-      session,
-      settings,
-      userId: latestTurn?.userId || null,
-      transcript: coalescedTranscript,
-      source: deferredReplySource,
-      captureReason: latestTurn?.captureReason || "stream_end",
-      pcmBuffer: coalescedPcmBuffer,
-      logContext: {
-        deferredActionReason: reason,
-        deferredTurnCount: coalescedTurns.length
-      },
-      bridgeSource: deferredReplySource,
-      nativeCaptureReason: "bot_turn_open_deferred_flush",
-      allowReplyDispatch: isRealtimeMode(session.mode)
-    });
+    for (const [speakerId, speakerTurns] of sortedGroups) {
+      if (session.ending) break;
+      const directAddressedTurn = speakerTurns.find((entry) => entry?.directAddressed) || null;
+      const latestTurn = directAddressedTurn || speakerTurns[speakerTurns.length - 1];
+      const orderedTurns = directAddressedTurn
+        ? [directAddressedTurn, ...speakerTurns.filter((entry) => entry !== directAddressedTurn)]
+        : speakerTurns;
+      const distinctSources = Array.from(
+        new Set(
+          orderedTurns
+            .map((entry) => String(entry?.source || "").trim())
+            .filter((entry): entry is string => entry.length > 0)
+        )
+      );
+      const deferredReplySource =
+        distinctSources.length === 1 && isSystemSpeechOpportunitySource(distinctSources[0])
+          ? distinctSources[0]
+          : "bot_turn_open_deferred_flush";
+      const coalescedTranscript = normalizeVoiceText(
+        orderedTurns
+          .map((entry) => String(entry?.transcript || "").trim())
+          .filter(Boolean)
+          .join(" "),
+        STT_TRANSCRIPT_MAX_CHARS
+      );
+      if (!coalescedTranscript) continue;
+
+      const coalescedPcmBuffer = isRealtimeMode(session.mode)
+        ? Buffer.concat(
+          orderedTurns
+            .map((entry) => (entry?.pcmBuffer?.length ? entry.pcmBuffer : null))
+            .filter((entry): entry is Buffer => Boolean(entry))
+        )
+        : null;
+
+      await this.handleResolvedVoiceTurn({
+        session,
+        settings,
+        userId: latestTurn?.userId || speakerId,
+        transcript: coalescedTranscript,
+        source: deferredReplySource,
+        captureReason: latestTurn?.captureReason || "stream_end",
+        pcmBuffer: coalescedPcmBuffer,
+        logContext: {
+          deferredActionReason: reason,
+          deferredTurnCount: speakerTurns.length,
+          totalDeferredSpeakers: sortedGroups.length
+        },
+        bridgeSource: deferredReplySource,
+        nativeCaptureReason: "bot_turn_open_deferred_flush",
+        allowReplyDispatch: isRealtimeMode(session.mode)
+      });
+    }
   }
 
   scheduleResponseFromBufferedAudio({

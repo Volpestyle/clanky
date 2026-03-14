@@ -3548,13 +3548,19 @@ export class VoiceSessionManager {
       return false;
     }
     const generationStartedAt = Math.max(0, Number(generationStartedAtMs || 0));
-    // Only the person the bot is replying to can supersede the reply,
+    // Only the person who triggered this reply can supersede it,
     // mirroring the "speaker" barge-in policy. Ambient chatter from
     // other participants does not invalidate a targeted response.
+    // When replyUserId is null (e.g. bot-initiated greetings, system
+    // events), nobody supersedes via the queue — the bot says what it
+    // intended. Direct-address / wake-word interrupts still work
+    // through the transcript interrupt path.
+    const normalizedReplyUserId = String(replyUserId || "").trim() || null;
+    if (!normalizedReplyUserId) return false;
     const pendingSummary = this.summarizeRealtimeInterruptingQueue({
       session,
       finalizedAfterMs: generationStartedAt,
-      replyUserId
+      replyUserId: normalizedReplyUserId
     });
     const hasInterruptingNewerInput = pendingSummary.pendingInterruptingQueueDepth > 0;
     if (!hasInterruptingNewerInput) return false;
@@ -3600,7 +3606,8 @@ export class VoiceSessionManager {
     interruptionPolicy = null,
     outputLeaseMode = null,
     latencyContext = null,
-    musicWakeRefreshAfterSpeech = false
+    musicWakeRefreshAfterSpeech = false,
+    replyUserId = null
   }) {
     if (!session || session.ending) {
       return {
@@ -3630,9 +3637,13 @@ export class VoiceSessionManager {
     let completed = true;
     let localSpeechPolicyActivated = false;
 
-    // Derive reply target from the interruption policy so supersede checks
-    // only consider turns from the same speaker, mirroring barge-in semantics.
-    const supersedeReplyUserId = normalizedInterruptionPolicy?.allowedUserId || null;
+    // Use the triggering speaker for supersede checks so only turns from
+    // the same person can invalidate a reply, mirroring barge-in semantics.
+    // Falls back to the interruption policy's allowedUserId if not provided.
+    const supersedeReplyUserId =
+      String(replyUserId || "").trim() ||
+      normalizedInterruptionPolicy?.allowedUserId ||
+      null;
 
     if (preferRealtimeUtterance && requiresOrderedPlayback) {
       const barrierReady = await this.waitForOrderedRealtimePlaybackBarrier({
@@ -7657,16 +7668,18 @@ export class VoiceSessionManager {
             }
           });
 
-          if (movedIntoSession && recordedEvent.displayName) {
+          if (recordedEvent.displayName) {
             void this.fireVoiceRuntimeEvent({
               session,
               settings: session.settingsSnapshot || this.store.getSettings(),
               userId: stateUserId,
-              transcript: `[${recordedEvent.displayName} joined the voice channel]`,
-              source: "member_join_greeting",
+              transcript: movedIntoSession
+                ? `[${recordedEvent.displayName} joined the voice channel]`
+                : `[${recordedEvent.displayName} left the voice channel]`,
+              source: movedIntoSession ? "member_join_greeting" : "member_leave_acknowledgment",
               runtimeEventContext: {
                 category: "membership",
-                eventType: "join",
+                eventType: movedIntoSession ? "join" : "leave",
                 actorUserId: recordedEvent.userId,
                 actorDisplayName: recordedEvent.displayName,
                 actorRole: "other"

@@ -563,12 +563,15 @@ Same-utterance late ASR revisions are treated as replacements, not as brand-new 
 
 `maybeSupersedeRealtimeReplyBeforePlayback` runs before each speech playback step:
 
-- Checks if newer finalized realtime turns are queued
-- Queued turns are only counted as interrupting if they pass both the PCM silence gate AND a server-VAD speech confirmation check (when the ASR bridge was active). Non-speech audio like humming, coughing, or laughing does not supersede a pending reply.
+- Checks if newer finalized realtime turns are queued **from the same speaker the bot is replying to**
+- Only the reply target can supersede a pending reply. Ambient chatter from other participants does not invalidate a response generated for a specific person. This mirrors the `"speaker"` barge-in policy: the person the bot is talking to owns the conversational context that the reply was generated against, so only they can invalidate it by saying something new.
+- Queued turns are only counted as interrupting if they pass the PCM silence gate, a server-VAD speech confirmation check (when the ASR bridge was active), AND the speaker identity check. Non-speech audio like humming, coughing, or laughing does not supersede a pending reply. Speech from other participants is tracked for observability (`pendingOtherSpeakerQueueDepth`) but does not trigger supersede.
 - If interrupting turns exist and no active/proposed output lease exists: abandon the stale reply (`completed: false`), let the newer content process
 - If the pending reply carries `[[LEASE:ASSERTIVE]]` or `[[LEASE:ATOMIC]]`: keep the older reply for a short bounded pre-audio lease window until first audio starts
 
 This is the final safety net for anything that slips through stages 1 and 2.
+
+**`TO:ALL` and bot-initiated replies:** When `replyUserId` is null — for bot-initiated events (join greetings), system events, or `[[TO:ALL]]` replies where no single triggering user exists — supersede is disabled entirely via the queue check. The bot committed to saying something and will finish it. Direct-address / wake-word interrupts still work through the transcript interrupt path, so humans can always say "hey clanky stop" to cut a runaway `TO:ALL` reply. The agent should use `TO:ALL` judiciously — it's a strong commitment to hold the floor against all ambient chatter.
 
 Raw live captures and pre-audio `speech_started` events do not steal the floor
 by themselves. Before assistant audio starts, filler noise, backchannel, and
@@ -587,10 +590,11 @@ The lease mechanism is intentionally narrow:
 
 | Scenario | Stage | What happens |
 |---|---|---|
-| User corrects before generation starts | 1 | Skip generation, let newer turn process |
-| User corrects during generation | 2 | Abort LLM call, skip playback |
-| Same speaker comments before first audio | 3 | No special hold; old reply only loses if a newer finalized turn is admitted |
-| User corrects after generation, before playback | 3 | Drop at playback gate |
+| Reply target corrects before generation starts | 1 | Skip generation, let newer turn process |
+| Reply target corrects during generation | 2 | Abort LLM call, skip playback |
+| Reply target comments before first audio | 3 | No special hold; old reply only loses if a newer finalized turn from the same speaker is admitted |
+| Reply target corrects after generation, before playback | 3 | Drop at playback gate |
+| Other participant chats during generation | — | Not counted as interrupting; bot reply proceeds |
 | Clean short sentence, no correction | — | Normal path, no gating triggered |
 
 ## 18. Cross-Domain State Reads (Reply Orchestration)

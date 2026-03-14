@@ -4096,7 +4096,7 @@ test("runRealtimeBrainReply does not supersede stale playback on active capture 
   assert.equal(session.realtimeReplySupersededCount, 0);
 });
 
-test("runRealtimeBrainReply supersedes stale playback when a newer finalized realtime turn is queued", async () => {
+test("runRealtimeBrainReply supersedes stale playback when the same speaker queues a newer finalized turn", async () => {
   const runtimeLogs = [];
   let requestedRealtimeUtterances = 0;
   const manager = createManager();
@@ -4113,9 +4113,10 @@ test("runRealtimeBrainReply supersedes stale playback when a newer finalized rea
     return true;
   };
   manager.generateVoiceTurn = async (_payload) => {
+    // Same speaker (speaker-1) says something new during generation
     session.pendingRealtimeTurns.push({
       session: null,
-      userId: "speaker-2",
+      userId: "speaker-1",
       pcmBuffer: Buffer.alloc(6_000, 0x7f),
       captureReason: "stream_end",
       queuedAt: Date.now(),
@@ -4160,6 +4161,154 @@ test("runRealtimeBrainReply supersedes stale playback when a newer finalized rea
   assert.equal(Boolean(supersededLog), true);
   assert.equal(supersededLog?.metadata?.supersedeReason, "newer_finalized_realtime_turn");
   assert.equal(session.realtimeReplySupersededCount, 1);
+});
+
+test("runRealtimeBrainReply does NOT supersede when a different speaker queues a newer finalized turn", async () => {
+  const runtimeLogs = [];
+  let requestedRealtimeUtterances = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [
+    { userId: "speaker-1", displayName: "alice" },
+    { userId: "speaker-2", displayName: "bob" }
+  ];
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = () => {
+    requestedRealtimeUtterances += 1;
+    return true;
+  };
+  manager.generateVoiceTurn = async (_payload) => {
+    // Different speaker (speaker-2) chats during generation — should NOT supersede
+    session.pendingRealtimeTurns.push({
+      session: null,
+      userId: "speaker-2",
+      pcmBuffer: Buffer.alloc(6_000, 0x7f),
+      captureReason: "stream_end",
+      queuedAt: Date.now(),
+      finalizedAt: Date.now() + 5
+    });
+    return {
+      text: "reply should NOT be superseded by other speaker chatter"
+    };
+  };
+
+  const session = {
+    id: "session-realtime-supersede-other-speaker-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 8_000,
+    realtimeClient: {},
+    realtimeInputSampleRateHz: 24_000,
+    userCaptures: new Map(),
+    pendingRealtimeTurns: [],
+    realtimeReplySupersededCount: 0,
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "question from speaker-1",
+    directAddressed: false,
+    source: "realtime"
+  });
+
+  // Reply should proceed — speaker-2's chatter doesn't supersede speaker-1's reply
+  assert.equal(requestedRealtimeUtterances > 0, true);
+  const supersededLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_superseded_newer_input"
+  );
+  assert.equal(Boolean(supersededLog), false);
+  assert.equal(session.realtimeReplySupersededCount, 0);
+});
+
+test("maybeSupersedeRealtimeReplyBeforePlayback does NOT supersede when replyUserId is null (TO:ALL)", () => {
+  const runtimeLogs = [];
+  const manager = createManager();
+  manager.store.logAction = (row) => { runtimeLogs.push(row); };
+  const session = {
+    id: "session-supersede-to-all-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeInputSampleRateHz: 24_000,
+    pendingRealtimeTurns: [
+      {
+        session: null,
+        userId: "speaker-1",
+        pcmBuffer: Buffer.alloc(6_000, 0x7f),
+        captureReason: "stream_end",
+        queuedAt: Date.now(),
+        finalizedAt: Date.now() + 5,
+        serverVadConfirmed: true
+      }
+    ],
+    realtimeReplySupersededCount: 0
+  };
+
+  // replyUserId=null simulates TO:ALL where no specific user owns the reply
+  const superseded = manager.maybeSupersedeRealtimeReplyBeforePlayback({
+    session,
+    source: "test:to_all",
+    generationStartedAtMs: Date.now() - 100,
+    replyUserId: null
+  });
+
+  assert.equal(superseded, false);
+  assert.equal(session.realtimeReplySupersededCount, 0);
+  const supersededLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_superseded_newer_input"
+  );
+  assert.equal(Boolean(supersededLog), false);
+});
+
+test("maybeSupersedeRealtimeReplyBeforePlayback does NOT supersede when same speaker talks during TO:ALL", () => {
+  const runtimeLogs = [];
+  const manager = createManager();
+  manager.store.logAction = (row) => { runtimeLogs.push(row); };
+  const session = {
+    id: "session-supersede-to-all-same-speaker-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeInputSampleRateHz: 24_000,
+    pendingRealtimeTurns: [
+      {
+        session: null,
+        userId: "speaker-1",
+        pcmBuffer: Buffer.alloc(6_000, 0x7f),
+        captureReason: "stream_end",
+        queuedAt: Date.now(),
+        finalizedAt: Date.now() + 5,
+        serverVadConfirmed: true
+      }
+    ],
+    realtimeReplySupersededCount: 0
+  };
+
+  // Even though speaker-1 triggered the TO:ALL reply, the resolved
+  // addressing nulls out replyUserId — same speaker cannot supersede
+  const superseded = manager.maybeSupersedeRealtimeReplyBeforePlayback({
+    session,
+    source: "test:to_all_same_speaker",
+    generationStartedAtMs: Date.now() - 100,
+    replyUserId: null
+  });
+
+  assert.equal(superseded, false);
+  assert.equal(session.realtimeReplySupersededCount, 0);
 });
 
 test("runRealtimeBrainReply preserves leased playback when a newer finalized realtime turn is queued", async () => {
@@ -5456,7 +5605,7 @@ test("flushDeferredBotTurnOpenTurns waits for silence before admission", async (
   assert.equal(manager.deferredActionQueue.getDeferredQueuedUserTurns(session).length, 1);
 });
 
-test("flushDeferredBotTurnOpenTurns coalesces deferred transcripts into one admission", async () => {
+test("flushDeferredBotTurnOpenTurns coalesces same-speaker deferred transcripts", async () => {
   const decisionPayloads = [];
   const replyPayloads = [];
   const manager = createManager();
@@ -5506,7 +5655,7 @@ test("flushDeferredBotTurnOpenTurns coalesces deferred transcripts into one admi
               queuedAt: Date.now() - 20
             },
             {
-              userId: "speaker-2",
+              userId: "speaker-1",
               transcript: "what about the rust panic trace",
               pcmBuffer: null,
               captureReason: "speaking_end",
@@ -5524,20 +5673,18 @@ test("flushDeferredBotTurnOpenTurns coalesces deferred transcripts into one admi
 
   await manager.flushDeferredBotTurnOpenTurns({ session });
 
+  // Same speaker — coalesced into one turn
   assert.equal(decisionPayloads.length, 1);
   assert.equal(
     decisionPayloads[0]?.transcript,
     "clanker hold on what about the rust panic trace"
   );
+  assert.equal(decisionPayloads[0]?.userId, "speaker-1");
   assert.equal(replyPayloads.length, 1);
-  assert.equal(
-    replyPayloads[0]?.transcript,
-    "clanker hold on what about the rust panic trace"
-  );
   assert.equal(manager.deferredActionQueue.getDeferredQueuedUserTurns(session).length, 0);
 });
 
-test("flushDeferredBotTurnOpenTurns runs brain realtime reply after one admission", async () => {
+test("flushDeferredBotTurnOpenTurns runs brain realtime reply per speaker", async () => {
   const decisionPayloads = [];
   const realtimeReplyPayloads = [];
   const manager = createManager();
@@ -5547,7 +5694,7 @@ test("flushDeferredBotTurnOpenTurns runs brain realtime reply after one admissio
       allow: true,
       reason: "brain_decides",
       participantCount: 2,
-      directAddressed: false,
+      directAddressed: Boolean(payload.directAddressed),
       transcript: payload.transcript
     };
   };
@@ -5606,12 +5753,14 @@ test("flushDeferredBotTurnOpenTurns runs brain realtime reply after one admissio
 
   await manager.flushDeferredBotTurnOpenTurns({ session });
 
-  assert.equal(decisionPayloads.length, 1);
-  assert.equal(decisionPayloads[0]?.transcript, "clanker hold up add this too");
-  assert.equal(realtimeReplyPayloads.length, 1);
-  assert.equal(realtimeReplyPayloads[0]?.transcript, "clanker hold up add this too");
+  // Per-speaker: direct-addressed speaker-1 first, then speaker-2
+  assert.equal(decisionPayloads.length, 2);
+  assert.equal(decisionPayloads[0]?.transcript, "clanker hold up");
+  assert.equal(decisionPayloads[0]?.userId, "speaker-1");
+  assert.equal(decisionPayloads[1]?.transcript, "add this too");
+  assert.equal(decisionPayloads[1]?.userId, "speaker-2");
+  assert.equal(realtimeReplyPayloads.length >= 1, true);
   assert.equal(realtimeReplyPayloads[0]?.source, "bot_turn_open_deferred_flush");
-  assert.equal(realtimeReplyPayloads[0]?.directAddressed, false);
   assert.equal(manager.deferredActionQueue.getDeferredQueuedUserTurns(session).length, 0);
 });
 
@@ -5766,14 +5915,18 @@ test("flushDeferredBotTurnOpenTurns forwards native realtime audio after one adm
 
   await manager.flushDeferredBotTurnOpenTurns({ session });
 
-  assert.equal(decisionPayloads.length, 1);
-  assert.equal(decisionPayloads[0]?.transcript, "clanker hold up add this too");
-  assert.equal(forwardedPayloads.length, 1);
-  assert.equal(forwardedPayloads[0]?.transcript, "clanker hold up add this too");
-  const forwardedPcm = Buffer.isBuffer(forwardedPayloads[0]?.pcmBuffer)
+  // Per-speaker flush: direct-addressed speaker-1 first, then speaker-2
+  assert.equal(decisionPayloads.length, 2);
+  assert.equal(decisionPayloads[0]?.transcript, "clanker hold up");
+  assert.equal(decisionPayloads[0]?.userId, "speaker-1");
+  assert.equal(decisionPayloads[1]?.transcript, "add this too");
+  assert.equal(decisionPayloads[1]?.userId, "speaker-2");
+  // Each speaker's PCM stays with their own turn
+  assert.equal(forwardedPayloads.length >= 1, true);
+  const firstForwardedPcm = Buffer.isBuffer(forwardedPayloads[0]?.pcmBuffer)
     ? forwardedPayloads[0].pcmBuffer
     : Buffer.alloc(0);
-  assert.deepEqual([...forwardedPcm], [...Buffer.concat([firstPcm, secondPcm])]);
+  assert.deepEqual([...firstForwardedPcm], [...firstPcm]);
   assert.equal(forwardedPayloads[0]?.captureReason, "bot_turn_open_deferred_flush");
   assert.equal(manager.deferredActionQueue.getDeferredQueuedUserTurns(session).length, 0);
 });
