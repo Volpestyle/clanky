@@ -163,6 +163,10 @@ The system keeps infrastructure decisions deterministic, but gives the agent own
 
 This layer is voice transport hygiene under the shared attention model. It protects the floor; it does not define a separate voice-only social state.
 
+### Floor-Taking Symmetry
+
+Barge-in is not one-directional. Just as humans can interrupt the bot, the bot can speak while humans are talking. Active user captures do not block the bot from sending generated speech to TTS — the agent decides *whether* to speak (via `[SKIP]` or generation), and once that decision is made, infrastructure does not prevent it. In a group voice channel with ambient chatter, a perpetually active capture would otherwise muzzle the bot indefinitely. The bot should behave like a person: if it has something to say, it says it, even if someone else is mid-sentence. Proactive thoughts and music resume/refresh still defer to active captures, since those are lower-priority outputs that benefit from polite timing.
+
 ## 8. Why We Handle Barge-In Ourselves
 
 OpenAI's Realtime API has built-in interruption handling, but it only works when audio flows directly through OpenAI's channels (WebRTC or WebSocket with direct audio). Our bot routes audio through Discord:
@@ -290,7 +294,7 @@ Flow while assistant speech is active:
 
 1. If Realtime ASR emits `speech_started` for the speaker who is already allowed to interrupt under the current reply policy, the runtime arms a sustain window instead of cutting immediately.
 2. If the same authorized speaker has already promoted an obviously voiced local capture but provider `speech_started` has not arrived yet, the runtime can arm that same sustain window from the local capture itself instead of waiting for final transcript commit.
-3. While that same utterance is still active, the runtime keeps re-checking the same assertive acoustic gate used by raw barge-in. An early overlap chunk does not permanently lose the interrupt just because it was still below the byte or signal threshold.
+3. While that same utterance is still active, the runtime keeps re-checking the same assertive acoustic gate used by raw barge-in. An early overlap chunk does not permanently lose the interrupt just because it was still below the byte or signal threshold. However, `echo_guard_active` is a terminal denial — if the echo guard blocks a sustain recheck, the pending interrupt is released rather than rescheduled. This prevents the sustain loop from simply waiting out the echo guard window and then cutting the bot's own audio.
 4. If that same utterance keeps the floor long enough to become interrupt-eligible while assistant output is still interruptible, the runtime commits the hard cut, stores interruption context, and flushes the staged turn into the normal turn pipeline.
 5. If both provider `speech_started` and the local sustain fallback miss, later same-speaker transcript updates and the final bridge commit can still rescue the interrupt once that same capture becomes eligible while assistant output is still interruptible.
 6. If that same utterance stops before the sustain window closes and never becomes eligible, the pending interrupt is released and any staged bridge turn flushes normally with no interrupt recorded.

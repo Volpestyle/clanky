@@ -2688,7 +2688,9 @@ export class VoiceSessionManager {
     }
     if (activeResponse) blockers.push("active_response");
     if (pendingResponse) blockers.push("pending_response");
-    if (deferredActiveCapture) blockers.push("active_capture");
+    // active_capture is no longer a blocker — the bot should speak while
+    // humans are talking.  Deferred capture state is still tracked for
+    // observability but does not block utterance drain.
     if (backpressureActive) blockers.push("tts_backpressure");
 
     return {
@@ -3198,11 +3200,15 @@ export class VoiceSessionManager {
           }
           : null
     };
+    // Queue only when the bot's own prior speech is still in flight.
+    // Active user captures are NOT a blocker — the bot should be able to
+    // speak while humans are talking, just like a real person in a call.
+    // The agent already decides *whether* to speak via [SKIP]; infrastructure
+    // should not prevent it from speaking once that decision is made.
     const shouldQueueBecauseOutstandingReply =
       queue.length > 0 ||
       this.replyManager.isRealtimeResponseActive(session) ||
-      (session.pendingResponse && typeof session.pendingResponse === "object") ||
-      this.hasDeferredTurnBlockingActiveCapture(session);
+      (session.pendingResponse && typeof session.pendingResponse === "object");
     const backpressure = this.syncRealtimeAssistantUtteranceBackpressure(session, {
       queueDepth: queue.length + 1,
       source: queuedUtterance.source,
@@ -3840,7 +3846,8 @@ export class VoiceSessionManager {
     source = "voice_tts_line"
   }) {
     if (!session || session.ending) return false;
-    if (this.hasDeferredTurnBlockingActiveCapture(session)) return false;
+    // Active user captures no longer block bot speech — the bot speaks
+    // when it has something to say, even while humans are talking.
     const line = normalizeVoiceText(text, STT_REPLY_MAX_CHARS);
     if (!line) return false;
     if (!this.llm?.synthesizeSpeech) return false;
