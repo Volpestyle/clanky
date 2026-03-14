@@ -549,7 +549,7 @@ export const DEFAULT_SETTINGS = {
       maxFrameBytes: 350000,
       keyframeIntervalMs: 1200,
       autonomousCommentaryEnabled: true,
-      brainContextMode: "context_brain" as "context_brain" | "direct",
+      brainContextMode: "direct" as "context_brain" | "direct",
       brainContextEnabled: true,
       brainContextMinIntervalSeconds: 4,
       brainContextMaxEntries: 8,
