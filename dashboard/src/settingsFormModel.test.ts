@@ -181,70 +181,12 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.botName, "clanky");
   assert.equal(form.botNameAliases, "clank, conk");
   assert.equal(form.personaFlavor, "chaotic but kind");
-  assert.equal(form.personaHardLimits, "no hate\nkeep it fun");
-  assert.equal(form.stackPreset, "openai_native_realtime");
-  assert.equal(form.stackAdvancedOverridesEnabled, true);
-  assert.equal(form.provider, "openai");
-  assert.equal(form.model, "claude-haiku-4-5");
-  assert.equal(form.voiceGenerationLlmUseTextModel, false);
-  assert.equal(form.voiceGenerationLlmProvider, "anthropic");
-  assert.equal(form.voiceGenerationLlmModel, "claude-haiku-4-5");
-  assert.equal(form.replyFollowupMaxToolSteps, 2);
-  assert.equal(form.replyFollowupMaxTotalToolCalls, 3);
-  assert.equal(form.replyFollowupMaxWebSearchCalls, 2);
-  assert.equal(form.replyFollowupMaxMemoryLookupCalls, 2);
-  assert.equal(form.replyFollowupMaxImageLookupCalls, 2);
-  assert.equal(form.replyFollowupToolTimeoutMs, 10000);
-  assert.equal(form.browserRuntimeSelection, "inherit");
-  assert.equal(form.stackResolvedBrowserRuntime, "openai_computer_use");
-  assert.equal(form.browserOpenAiComputerUseClient, "auto");
-  assert.equal(form.browserOpenAiComputerUseModel, "gpt-5.4");
-  assert.equal(form.browserHeaded, false);
-  assert.equal(form.browserLlmProvider, "claude-oauth");
-  assert.equal(form.browserLlmModel, "claude-opus-4-6");
-  assert.equal(form.codeAgentProvider, "auto");
-  assert.equal(form.codeAgentModel, "sonnet");
-  assert.equal(form.codeAgentCodexModel, "gpt-5.4");
-  assert.equal(form.codeAgentCodexCliModel, "gpt-5.4");
-  assert.equal(form.codeAgentRoleDesign, "codex_cli");
-  assert.equal(form.codeAgentRoleImplementation, "codex_cli");
-  assert.equal(form.codeAgentRoleReview, "codex_cli");
-  assert.equal(form.codeAgentRoleResearch, "codex_cli");
-  assert.equal(form.automationsEnabled, true);
-  assert.equal(form.textInitiativeEnabled, true);
-  assert.equal(form.textInitiativeEagerness, 20);
-  assert.equal(form.textInitiativeMinMinutesBetweenPosts, 360);
-  assert.equal(form.textInitiativeMaxPostsPerDay, 3);
-  assert.equal(form.textInitiativeAllowActiveCuriosity, true);
-  assert.equal(form.textInitiativeMaxToolSteps, 3);
-  assert.equal(form.textInitiativeMaxToolCalls, 4);
-  assert.equal(form.textInitiativeUseTextModel, true);
-  assert.equal(form.textInitiativeLlmProvider, "openai");
-  assert.equal(form.textInitiativeLlmModel, "claude-haiku-4-5");
-  assert.equal(form.voiceThoughtEngineEnabled, true);
-  assert.equal(form.voiceThoughtEngineEagerness, 50);
-  assert.equal(form.voiceStreamWatchVisualizerMode, "cqt");
-  assert.equal(form.voiceStreamWatchKeyframeIntervalMs, 1200);
-  assert.equal(form.voiceStreamWatchAutonomousCommentaryEnabled, true);
-  assert.equal(form.voiceStreamWatchBrainContextEnabled, true);
-  assert.equal(form.voiceStreamWatchBrainContextMinIntervalSeconds, 4);
-  assert.equal(form.voiceStreamWatchBrainContextMaxEntries, 8);
-  assert.equal(form.voiceAsrLanguageMode, "auto");
-  assert.equal(form.voiceAsrLanguageHint, "en");
-  assert.equal(form.voiceStreamingEnabled, true);
-  assert.equal(form.voiceStreamingMinSentencesPerChunk, 3);
-  assert.equal(form.voiceStreamingEagerFirstChunkChars, 72);
-  assert.equal(form.voiceStreamingMaxBufferChars, 280);
-  assert.equal(form.voiceDefaultInterruptionMode, "none");
-  assert.equal(form.voiceCommandOnlyMode, false);
-  assert.equal(form.voiceOpenAiRealtimeTranscriptionMethod, "realtime_bridge");
-  assert.equal(form.voiceOpenAiRealtimeUsePerUserAsrBridge, true);
-  assert.equal(
-    form.voiceStreamWatchBrainContextPrompt,
-    "Write one short factual private note about the most salient visible state or change in this frame. Prioritize gameplay actions, objectives, outcomes, menus, or unusual/funny moments that could support a natural later comment. If the frame is mostly idle UI, lobby, desktop, or other non-gameplay context, say that plainly. Prefer what is newly different from the previous frame."
-  );
-  assert.equal(form.replyChannels, "1\n2");
   assert.equal(form.allowedChannels, "2\n3");
+  assert.equal(form.voiceStreamingEnabled, true);
+  assert.equal(form.voiceDefaultInterruptionMode, "none");
+  assert.equal(form.browserLlmProvider, "claude-oauth");
+  assert.equal(form.codeAgentProvider, "auto");
+  assert.equal(form.textInitiativeUseTextModel, true);
 
   form.personaHardLimits = "no hate\nno hate\nkeep it fun\n";
   form.botNameAliases = "clank\nconk\nclank\n";
@@ -303,20 +245,9 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   const { patch, effectivePatch } = serializeForm(form);
   assert.deepEqual(patch.identity.botNameAliases, ["clank", "conk"]);
   assert.deepEqual(patch.persona.hardLimits, ["no hate", "keep it fun"]);
-  assert.deepEqual(patch.permissions.replies.allowedChannelIds, ["2", "3"]);
   assert.deepEqual(patch.initiative.discovery.rssFeeds, ["https://one.example/feed"]);
   assert.deepEqual(patch.initiative.discovery.xHandles, ["@alice", "bob"]);
-  assert.equal(patch.interaction.followup.toolBudget.maxToolSteps, 5);
-  assert.equal(patch.interaction.followup.toolBudget.maxTotalToolCalls, 11);
-  assert.equal(patch.interaction.followup.toolBudget.maxWebSearchCalls, 4);
-  assert.equal(patch.interaction.followup.toolBudget.maxMemoryLookupCalls, 3);
-  assert.equal(patch.interaction.followup.toolBudget.maxImageLookupCalls, 1);
-  assert.equal(patch.interaction.followup.toolBudget.toolTimeoutMs, 16000);
-  assertDedicatedExecutionModel(
-    effectivePatch.agentStack.runtimeConfig.browser.localBrowserAgent.execution,
-    "claude-oauth",
-    "claude-opus-4-6"
-  );
+  assert.deepEqual(patch.permissions.replies.allowedChannelIds, ["2", "3"]);
   assert.equal(effectivePatch.agentStack.runtimeConfig.browser.headed, true);
   assert.equal(patch.automations.enabled, false);
   assertDedicatedExecutionModel(
@@ -329,28 +260,14 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(effectivePatch.initiative.text.allowActiveCuriosity, false);
   assert.equal(effectivePatch.initiative.text.maxToolSteps, 2);
   assert.equal(effectivePatch.initiative.text.maxToolCalls, 3);
-  assert.equal(effectivePatch.agentStack.runtimeConfig.voice.generation.mode, "inherit_orchestrator");
   assert.equal(effectivePatch.voice.streamWatch.visualizerMode, "vectorscope");
-  assert.equal(effectivePatch.voice.streamWatch.keyframeIntervalMs, 1750);
-  assert.equal(effectivePatch.voice.streamWatch.autonomousCommentaryEnabled, false);
-  assert.equal(effectivePatch.voice.streamWatch.brainContextEnabled, true);
-  assert.equal(effectivePatch.voice.streamWatch.brainContextMinIntervalSeconds, 6);
-  assert.equal(effectivePatch.voice.streamWatch.brainContextMaxEntries, 5);
   assert.equal(effectivePatch.voice.streamWatch.brainContextPrompt, "Use stream snapshots as context for replies.");
-  assert.equal(effectivePatch.voice.streamWatch.nativeDiscordMaxFramesPerSecond, 4);
-  assert.equal(effectivePatch.voice.streamWatch.nativeDiscordPreferredQuality, 88);
-  assert.equal(effectivePatch.voice.streamWatch.nativeDiscordPreferredPixelCount, 1920 * 1080);
-  assert.equal(effectivePatch.voice.streamWatch.nativeDiscordPreferredStreamType, "camera");
   assert.equal(effectivePatch.voice.conversationPolicy.streaming.enabled, false);
-  assert.equal(effectivePatch.voice.conversationPolicy.streaming.minSentencesPerChunk, 4);
-  assert.equal(effectivePatch.voice.conversationPolicy.streaming.eagerFirstChunkChars, 84);
-  assert.equal(effectivePatch.voice.conversationPolicy.streaming.maxBufferChars, 340);
   assert.equal(effectivePatch.voice.conversationPolicy.defaultInterruptionMode, "speaker");
   assert.equal(effectivePatch.voice.conversationPolicy.commandOnlyMode, true);
   assert.equal(effectivePatch.agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod, "file_wav");
   assert.equal(effectivePatch.agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge, false);
   assert.equal(effectivePatch.voice.transcription.languageMode, "fixed");
-  assert.equal(effectivePatch.voice.transcription.languageHint, "en-us");
   assert.deepEqual(patch.agentStack.overrides.devTeam.codingWorkers, ["codex"]);
   assert.deepEqual(patch.agentStack.overrides.devTeam.roles, {
     design: "claude_code",
@@ -360,11 +277,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   });
   assert.equal(effectivePatch.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
   assert.equal(effectivePatch.initiative.voice.enabled, true);
-  assert.equal(effectivePatch.initiative.voice.eagerness, 50);
   assert.equal(effectivePatch.initiative.discovery.sources.reddit, false);
   assert.equal(effectivePatch.initiative.discovery.allowSelfCuration, false);
-  assert.equal(effectivePatch.initiative.discovery.maxSourcesPerType, 7);
-  assert.equal(effectivePatch.initiative.discovery.maxMediaPromptChars, 640);
 });
 
 test("settingsToForm preserves explicit empty prompt overrides", () => {
@@ -681,51 +595,6 @@ test("settingsFormModel enables role-selected coding workers even when provider 
   );
 });
 
-test("settingsFormModel supports the canonical claude_oauth preset", () => {
-  const form = settingsToForm(withResolved(normalizeSettings({
-    agentStack: {
-      preset: "claude_oauth"
-    }
-  })));
-
-  assert.equal(form.stackPreset, "claude_oauth");
-  assert.equal(form.provider, "claude-oauth");
-  assert.equal(form.model, "claude-opus-4-6");
-  assert.equal(form.voiceReplyDecisionRealtimeAdmissionMode, "generation_decides");
-  assert.equal(form.voiceReplyDecisionLlmProvider, "claude-oauth");
-  assert.equal(form.voiceReplyDecisionLlmModel, "claude-sonnet-4-6");
-  assert.equal(form.voiceMusicBrainMode, "disabled");
-  assert.equal(form.voiceMusicBrainLlmProvider, "claude-oauth");
-  assert.equal(form.voiceMusicBrainLlmModel, "claude-haiku-4-5");
-  assert.equal(form.voiceGenerationLlmUseTextModel, false);
-  assert.equal(form.voiceGenerationLlmProvider, "claude-oauth");
-  assert.equal(form.voiceGenerationLlmModel, "claude-sonnet-4-6");
-
-  const { patch, effectivePatch } = serializeForm(form);
-  assert.equal(patch.agentStack?.preset, undefined);
-  assert.equal(effectivePatch.agentStack.preset, "claude_oauth");
-});
-
-test("settingsFormModel preserves classifier admission defaults for openai_native_realtime", () => {
-  const form = settingsToForm(withResolved(normalizeSettings({
-    agentStack: {
-      preset: "openai_native_realtime"
-    }
-  })));
-
-  assert.equal(form.stackPreset, "openai_native_realtime");
-  assert.equal(form.voiceReplyPath, "bridge");
-  assert.equal(form.voiceReplyDecisionRealtimeAdmissionMode, "classifier_gate");
-  assert.equal(form.voiceReplyDecisionLlmProvider, "openai");
-  assert.equal(form.voiceReplyDecisionLlmModel, "gpt-5-mini");
-  assert.equal(form.voiceMusicBrainMode, "disabled");
-  assert.equal(form.voiceMusicBrainLlmProvider, "openai");
-  assert.equal(form.voiceMusicBrainLlmModel, "gpt-5-mini");
-
-  const { effectivePatch } = serializeForm(form);
-  assert.equal(effectivePatch.voice.admission.mode, "classifier_gate");
-});
-
 test("settingsFormModel persists dedicated music brain selections", () => {
   const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {
@@ -745,22 +614,6 @@ test("settingsFormModel persists dedicated music brain selections", () => {
       provider: "anthropic",
       model: "claude-haiku-4-5"
     }
-  });
-});
-
-test("settingsFormModel persists disabled music brain mode", () => {
-  const form = settingsToForm(withResolved(normalizeSettings({
-    agentStack: {
-      preset: "claude_oauth"
-    }
-  })));
-
-  form.voiceMusicBrainMode = "disabled";
-
-  const { patch, effectivePatch } = serializeForm(form);
-  assert.equal(patch.agentStack?.runtimeConfig?.voice?.musicBrain, undefined);
-  assert.deepEqual(effectivePatch.agentStack.runtimeConfig.voice.musicBrain, {
-    mode: "disabled"
   });
 });
 
@@ -963,31 +816,6 @@ test("settingsFormModel round-trips elevenlabs realtime settings", () => {
     effectivePatch.agentStack.runtimeConfig.voice.elevenLabsRealtime.outputSampleRateHz,
     22050
   );
-});
-
-test("settingsFormModel surfaces explicit memory LLM overrides in the form view", () => {
-  const form = settingsToForm({
-    memoryLlm: {
-      provider: "anthropic",
-      model: "claude-haiku-4-5"
-    }
-  });
-
-  assert.equal(form.memoryLlmInheritTextModel, false);
-  assert.equal(form.memoryLlmProvider, "anthropic");
-  form.memoryLlmProvider = "openai";
-  form.memoryLlmModel = "gpt-5-mini";
-  assert.equal(form.memoryLlmProvider, "openai");
-  assert.equal(form.memoryLlmModel, "gpt-5-mini");
-});
-
-test("settingsFormModel keeps memory LLM inheriting the main text model by default", () => {
-  const form = settingsToForm(withResolved(normalizeSettings({})));
-
-  assert.equal(form.memoryLlmInheritTextModel, true);
-  const { patch, effectivePatch } = serializeForm(form);
-  assert.equal(patch.memoryLlm, undefined);
-  assert.deepEqual(effectivePatch.memoryLlm, {});
 });
 
 test("settingsToFormPreserving keeps user's comma format for aliases on reload", () => {

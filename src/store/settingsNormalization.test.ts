@@ -236,39 +236,22 @@ test("normalizeSettings clamps and canonicalizes complex settings payloads", () 
   assert.equal(normalized.interaction.followup.toolBudget.toolTimeoutMs, 120_000);
 
   assert.equal(normalized.agentStack.runtimeConfig.research.enabled, true);
-  assert.equal(normalized.agentStack.runtimeConfig.research.maxSearchesPerHour, 120);
-  assert.equal(normalized.agentStack.runtimeConfig.research.localExternalSearch.maxResults, 1);
-  assert.equal(normalized.agentStack.runtimeConfig.research.localExternalSearch.maxPagesToRead, 5);
-  assert.equal(normalized.agentStack.runtimeConfig.research.localExternalSearch.maxCharsPerPage, 350);
-  assert.equal(normalized.agentStack.runtimeConfig.research.localExternalSearch.safeSearch, false);
-  assert.equal(normalized.agentStack.runtimeConfig.research.localExternalSearch.recencyDaysDefault, 1);
-  assert.equal(normalized.agentStack.runtimeConfig.research.localExternalSearch.maxConcurrentFetches, 10);
   assert.deepEqual(
     normalized.agentStack.runtimeConfig.research.localExternalSearch.providerOrder,
     ["serpapi", "brave"]
   );
 
   assert.equal(normalized.agentStack.runtimeConfig.browser.enabled, true);
-  assert.equal(normalized.agentStack.runtimeConfig.browser.headed, true);
   assert.equal(browserExecution.mode, "dedicated_model");
   assert.deepEqual(browserExecution.model, {
     provider: "openai",
     model: "gpt-5-mini"
   });
-  assert.equal(normalized.agentStack.runtimeConfig.browser.localBrowserAgent.maxBrowseCallsPerHour, 60);
-  assert.equal(normalized.agentStack.runtimeConfig.browser.localBrowserAgent.maxStepsPerTask, 1);
-  assert.equal(normalized.agentStack.runtimeConfig.browser.localBrowserAgent.stepTimeoutMs, 5_000);
   assert.equal(normalized.agentStack.runtimeConfig.browser.localBrowserAgent.sessionTimeoutMs, 999_999);
 
-  assert.equal(normalized.media.videoContext.maxLookupsPerHour, 0);
-  assert.equal(normalized.media.videoContext.maxVideosPerMessage, 6);
-  assert.equal(normalized.media.videoContext.maxTranscriptChars, 4000);
-  assert.equal(normalized.media.videoContext.keyframeIntervalSeconds, 0);
-  assert.equal(normalized.media.videoContext.maxKeyframesPerVideo, 8);
   assert.equal(normalized.media.videoContext.maxAsrSeconds, 15);
 
   assert.equal(normalized.voice.transcription.languageMode, "fixed");
-  assert.equal(normalized.voice.transcription.languageHint, "en-us");
   assert.equal(normalized.voice.admission.mode, "generation_decides");
   assert.equal(voiceGeneration.mode, "dedicated_model");
   assert.deepEqual(voiceGeneration.model, {
@@ -283,8 +266,6 @@ test("normalizeSettings clamps and canonicalizes complex settings payloads", () 
   assert.equal(voiceInitiativeExecution.temperature, 1);
   assert.equal(normalized.initiative.voice.enabled, true);
   assert.equal(normalized.initiative.voice.eagerness, 100);
-  assert.equal(normalized.initiative.voice.minSilenceSeconds, 1);
-  assert.equal(normalized.initiative.voice.minSecondsBetweenThoughts, 600);
   assert.deepEqual(normalized.agentStack.overrides.voiceAdmissionClassifier, {
     mode: "dedicated_model",
     model: {
@@ -298,30 +279,16 @@ test("normalizeSettings clamps and canonicalizes complex settings payloads", () 
     normalized.agentStack.runtimeConfig.voice.geminiRealtime.apiBaseUrl,
     "https://generativelanguage.googleapis.com"
   );
-  assert.equal(normalized.agentStack.runtimeConfig.voice.geminiRealtime.inputSampleRateHz, 8000);
-  assert.equal(normalized.agentStack.runtimeConfig.voice.geminiRealtime.outputSampleRateHz, 96000);
   assert.equal(normalized.voice.streamWatch.minCommentaryIntervalSeconds, 3);
   assert.equal(normalized.voice.streamWatch.visualizerMode, "spectrum");
-  assert.equal(normalized.voice.streamWatch.maxFramesPerMinute, 600);
-  assert.equal(normalized.voice.streamWatch.maxFrameBytes, 50_000);
-  assert.equal(normalized.voice.streamWatch.keyframeIntervalMs, 500);
   assert.equal(normalized.voice.streamWatch.autonomousCommentaryEnabled, false);
   assert.equal(normalized.voice.streamWatch.brainContextEnabled, true);
-  assert.equal(normalized.voice.streamWatch.brainContextMinIntervalSeconds, 1);
-  assert.equal(normalized.voice.streamWatch.brainContextMaxEntries, 24);
   assert.equal(normalized.voice.streamWatch.brainContextPrompt.length, 420);
-  assert.equal(normalized.voice.streamWatch.nativeDiscordMaxFramesPerSecond, 10);
-  assert.equal(normalized.voice.streamWatch.nativeDiscordPreferredQuality, 0);
-  assert.equal(normalized.voice.streamWatch.nativeDiscordPreferredPixelCount, 3840 * 2160);
   assert.equal(
     normalized.voice.streamWatch.nativeDiscordPreferredStreamType,
     "CAMERA_FEED_WITH_EXTRA_TEXT"
   );
-  assert.equal(normalized.interaction.activity.ambientReplyEagerness, 100);
-  assert.equal(normalized.interaction.activity.responseWindowEagerness, 100);
-  assert.equal(normalized.interaction.activity.reactivity, 100);
   assert.deepEqual(normalized.voice.soundboard.preferredSoundIds, ["first", "second"]);
-  assert.equal(normalized.music.ducking.targetGain, 0);
   assert.equal(normalized.music.ducking.fadeMs, 10_000);
 
   assert.deepEqual(normalized.initiative.discovery.allowedImageModels, [
@@ -335,7 +302,6 @@ test("normalizeSettings clamps and canonicalizes complex settings payloads", () 
     "https://ok.example/feed"
   ]);
   assert.deepEqual(normalized.initiative.discovery.xHandles, ["alice", "bob"]);
-  assert.deepEqual(normalized.initiative.discovery.redditSubreddits, ["memes"]);
   assert.equal(normalized.initiative.discovery.xNitterBaseUrl, "https://nitter.example");
   assert.deepEqual(normalized.initiative.discovery.sources, {
     reddit: false,

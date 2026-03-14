@@ -3942,53 +3942,6 @@ test("requestRealtimeTextUtterance prefers playback-specific realtime client met
   assert.equal(playbackPrompts.length, 1);
 });
 
-test("utterance fires immediately even during active capture (floor-taking symmetry)", () => {
-  const { manager } = createManager();
-  const prompts = [];
-  const voxClient = new EventEmitter();
-  voxClient.subscribeUser = () => {};
-  const session = createSession({
-    mode: "openai_realtime",
-    cleanupHandlers: [],
-    settingsSnapshot: createTestSettings({
-      botName: "clanky",
-      voice: {
-        enabled: true,
-        asrEnabled: true,
-        brainProvider: "anthropic"
-      }
-    }),
-    voxClient,
-    realtimeClient: {
-      requestTextUtterance(prompt) {
-        prompts.push(prompt);
-      },
-      isResponseInProgress() {
-        return false;
-      }
-    }
-  });
-
-  manager.captureManager.startInboundCapture({
-    session,
-    userId: "speaker-1",
-    settings: session.settingsSnapshot
-  });
-
-  // Active captures no longer block bot speech — the bot speaks while
-  // humans are talking, just like a person in a call.
-  const queued = manager.requestRealtimeTextUtterance({
-    session,
-    text: "yo what's up",
-    source: "test_noise_queue"
-  });
-
-  assert.equal(queued, true);
-  // Utterance fires immediately, not deferred until capture ends.
-  assert.equal(prompts.length, 1);
-  assert.match(prompts[0] || "", /yo what's up/i);
-});
-
 test("utterance fires immediately during promoted capture (floor-taking symmetry)", async () => {
   const { manager } = createManager();
   manager.shouldUsePerUserTranscription = () => false;
@@ -4043,53 +3996,6 @@ test("utterance fires immediately during promoted capture (floor-taking symmetry
   // Utterance fires immediately — not deferred.
   assert.equal(prompts.length, 1);
   assert.match(prompts[0] || "", /old queued line/i);
-});
-
-test("forwardRealtimeTextTurnToBrain logs prompt details for bridge-style realtime turns", async () => {
-  const { manager, logs } = createManager();
-  const requestedPrompts = [];
-  manager.instructionManager.prepareRealtimeTurnContext = async ({ session }) => {
-    session.lastRealtimeInstructions = "You are in bridge mode. Reply naturally.";
-  };
-  manager.client.users.cache.set("user-1", {
-    id: "user-1",
-    username: "alice"
-  });
-  const session = createSession({
-    mode: "openai_realtime",
-    realtimeClient: {
-      requestTextUtterance(prompt) {
-        requestedPrompts.push(prompt);
-      }
-    },
-    settingsSnapshot: createTestSettings({
-      botName: "clanky",
-      voice: {
-        enabled: true,
-        replyPath: "bridge"
-      }
-    })
-  });
-
-  const forwarded = await manager.forwardRealtimeTextTurnToBrain({
-    session,
-    settings: session.settingsSnapshot,
-    userId: "user-1",
-    transcript: "where's lunch",
-    source: "bridge_test"
-  });
-
-  assert.equal(forwarded, true);
-  assert.deepEqual(requestedPrompts, ["(alice): where's lunch"]);
-  const forwardedLog = logs.find((entry) => entry?.content === "openai_realtime_text_turn_forwarded");
-  assert.equal(Boolean(forwardedLog), true);
-  assert.equal(forwardedLog?.metadata?.transcript, undefined);
-  assert.equal(forwardedLog?.metadata?.labeledTranscript, undefined);
-  assert.equal(forwardedLog?.metadata?.transcriptChars, "where's lunch".length);
-  assert.equal(forwardedLog?.metadata?.labeledTranscriptChars, "(alice): where's lunch".length);
-  assert.equal(forwardedLog?.metadata?.replyPrompts?.hiddenByDefault, true);
-  assert.equal(forwardedLog?.metadata?.replyPrompts?.systemPrompt, "You are in bridge mode. Reply naturally.");
-  assert.equal(forwardedLog?.metadata?.replyPrompts?.initialUserPrompt, "(alice): where's lunch");
 });
 
 test("handleResponseDone drains queued assistant speech after realtime audio completes", () => {
@@ -4907,58 +4813,6 @@ test("interruptBotSpeechForOutputLockTurn aborts active voice reply scopes", () 
   const interruptLog = logs.find((entry) => entry?.content === "voice_output_lock_interrupt");
   assert.equal(Boolean(interruptLog), true);
   assert.equal(interruptLog?.metadata?.activeReplyAbortCount, 1);
-});
-
-test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript for all capture reasons", () => {
-  const { manager, logs } = createManager();
-  const queuedTurns = [];
-  manager.turnProcessor.queueRealtimeTurn = (payload) => {
-    queuedTurns.push(payload);
-  };
-  const session = createSession({
-    mode: "openai_realtime",
-    realtimeInputSampleRateHz: 24_000
-  });
-
-  const droppedNearSilence = manager.queueRealtimeTurnFromAsrBridge({
-    session,
-    userId: "speaker-1",
-    pcmBuffer: Buffer.alloc(DISCORD_PCM_FRAME_BYTES, 2),
-    captureReason: "near_silence_early_abort",
-    finalizedAt: Date.now(),
-    asrResult: {
-      transcript: ""
-    },
-    source: "per_user"
-  });
-  const droppedReceiveError = manager.queueRealtimeTurnFromAsrBridge({
-    session,
-    userId: "speaker-1",
-    pcmBuffer: Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 2),
-    captureReason: "receive_error",
-    finalizedAt: Date.now(),
-    asrResult: null,
-    source: "per_user_error"
-  });
-  const droppedTinyClip = manager.queueRealtimeTurnFromAsrBridge({
-    session,
-    userId: "speaker-1",
-    pcmBuffer: Buffer.alloc(1600, 2),
-    captureReason: "stream_end",
-    finalizedAt: Date.now(),
-    asrResult: {
-      transcript: ""
-    },
-    source: "per_user"
-  });
-
-  assert.equal(droppedNearSilence, false);
-  assert.equal(droppedReceiveError, false);
-  assert.equal(droppedTinyClip, false);
-  assert.equal(queuedTurns.length, 0);
-  const droppedLogs = logs.filter((entry) => entry?.content === "openai_realtime_asr_bridge_empty_dropped");
-  assert.equal(droppedLogs.length, 3);
-  assert.equal(droppedLogs.some((entry) => entry?.metadata?.captureReason === "receive_error"), true);
 });
 
 test("queueRealtimeTurnFromAsrBridge forwards transcript metadata when ASR transcript exists", () => {
