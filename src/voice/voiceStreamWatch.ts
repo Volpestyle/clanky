@@ -120,6 +120,27 @@ type StreamWatchManager = {
 };
 
 const STREAM_WATCH_AUDIO_QUIET_WINDOW_MS = 2200;
+const SCANNER_RECENT_TRANSCRIPT_MAX_TURNS = 3;
+const SCANNER_RECENT_TRANSCRIPT_MAX_CHARS = 200;
+
+function getRecentTranscriptSnippet(session: StreamWatchSession): string {
+  const turns = Array.isArray(session.transcriptTurns) ? session.transcriptTurns : [];
+  const speechTurns = turns
+    .filter((t): t is Record<string, unknown> =>
+      t != null && typeof t === "object" && (!("kind" in t) || t.kind === "speech")
+    )
+    .slice(-SCANNER_RECENT_TRANSCRIPT_MAX_TURNS);
+  if (speechTurns.length === 0) return "";
+  const lines = speechTurns.map((t) => {
+    const name = String(t.speakerName || t.role || "?").trim();
+    const text = String(t.text || "").replace(/\s+/g, " ").trim().slice(0, 80);
+    return `${name}: ${text}`;
+  });
+  const joined = lines.join(" | ");
+  return joined.length > SCANNER_RECENT_TRANSCRIPT_MAX_CHARS
+    ? joined.slice(0, SCANNER_RECENT_TRANSCRIPT_MAX_CHARS - 1) + "…"
+    : joined;
+}
 const STREAM_WATCH_BRAIN_CONTEXT_PROMPT_MAX_CHARS = 420;
 const STREAM_WATCH_BRAIN_CONTEXT_LINE_MAX_CHARS = 220;
 const STREAM_WATCH_VISION_MAX_OUTPUT_TOKENS = 72;
@@ -129,9 +150,9 @@ const STREAM_WATCH_FRAME_ANALYSIS_JSON_SCHEMA = JSON.stringify({
   type: "object",
   properties: {
     note: { type: "string" },
-    sceneChanged: { type: "boolean" }
+    urgency: { type: "string", enum: ["high", "low", "none"] }
   },
-  required: ["note", "sceneChanged"],
+  required: ["note", "urgency"],
   additionalProperties: false
 });
 const STREAM_WATCH_MEMORY_RECAP_JSON_SCHEMA = JSON.stringify({
@@ -998,16 +1019,26 @@ async function generateVisionFallbackStreamWatchBrainContext(manager: StreamWatc
     "Never claim you cannot see the stream.",
     "Return strict JSON only.",
     "The note must be one short factual private note, max 16 words.",
-    "sceneChanged should be true only when the visible scene meaningfully changed from the previous private note.",
-    "Menus, static HUDs, unchanged desktop views, and near-identical frames should usually set sceneChanged false.",
+    "urgency decides whether this frame warrants unprompted spoken commentary:",
+    '"high" = something genuinely reaction-worthy happened that you would want to speak about unprompted — a dramatic moment, a visible error/crash, a funny or surprising event, a major state change like winning/losing/dying.',
+    '"low" = the scene changed but nothing demands a spoken reaction right now.',
+    '"none" = the frame is essentially the same as before, or is idle/static UI.',
+    "Be conservative with high — most frames are none or low. Reserve high for moments a human spectator would genuinely react to out loud.",
     "Do not write dialogue or commands."
   ].join(" ");
-  const userPrompt = [
+  const recentTranscript = getRecentTranscriptSnippet(session);
+  const userPromptParts = [
     `Frame from ${speakerName}'s stream.`,
-    previousNote ? `Previous private note: ${previousNote}` : "Previous private note: none.",
+    previousNote ? `Previous private note: ${previousNote}` : "Previous private note: none."
+  ];
+  if (recentTranscript) {
+    userPromptParts.push(`Recent conversation: ${recentTranscript}`);
+  }
+  userPromptParts.push(
     String(brainContextSettings.prompt || DEFAULT_STREAM_WATCH_BRAIN_CONTEXT_PROMPT),
     "Focus only on what is visible now. Mention uncertainty briefly if needed."
-  ].join(" ");
+  );
+  const userPrompt = userPromptParts.join(" ");
 
   const generated = await manager.llm.generate({
     settings: {
@@ -1037,12 +1068,12 @@ async function generateVisionFallbackStreamWatchBrainContext(manager: StreamWatc
   const oneLine = String(parsedNote || rawText).split(/\r?\n/)[0] || "";
   const text = normalizeVoiceText(oneLine, STREAM_WATCH_BRAIN_CONTEXT_LINE_MAX_CHARS);
   if (!text) return null;
-  const sceneChanged = parsed && typeof parsed === "object" && typeof parsed.sceneChanged === "boolean"
-    ? parsed.sceneChanged
-    : !previousNote || previousNote.toLowerCase() !== text.toLowerCase();
+  const VALID_URGENCY_VALUES = ["high", "low", "none"];
+  const rawUrgency = parsed && typeof parsed === "object" ? String(parsed.urgency || "").trim().toLowerCase() : "";
+  const urgency = VALID_URGENCY_VALUES.includes(rawUrgency) ? rawUrgency : "none";
   return {
     text,
-    sceneChanged,
+    urgency,
     provider: generated?.provider || providerSettings.provider || null,
     model: generated?.model || providerSettings.model || null
   };
@@ -1105,10 +1136,7 @@ async function maybeRefreshStreamWatchBrainContext(manager: StreamWatchManager, 
 
   return {
     note: stored.text,
-    changed: !previousLast || previousLast.text.toLowerCase() !== stored.text.toLowerCase(),
-    sceneChanged: generated?.sceneChanged !== undefined
-      ? Boolean(generated.sceneChanged)
-      : !previousLast || previousLast.text.toLowerCase() !== stored.text.toLowerCase(),
+    urgency: String(generated?.urgency || "none"),
     provider: generated?.provider || null,
     model: generated?.model || null
   };
@@ -1874,8 +1902,6 @@ export async function ingestStreamFrame(manager: StreamWatchManager, {
   };
 }
 
-const DIRECT_VISION_SILENCE_THRESHOLD_MS = 10_000;
-
 export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchManager, {
   session,
   settings,
@@ -1937,13 +1963,11 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
     120
   );
   if (now - Number(session.streamWatch.lastCommentaryAt || 0) < minCommentaryIntervalSeconds * 1000) return;
-  const sceneChanged = brainContextUpdate?.sceneChanged === true;
-  const firstFrameTriggered = Number(session.streamWatch.ingestedFrameCount || 0) <= 1;
-  const silenceTriggered =
-    Number(session.lastInboundAudioAt || 0) > 0 &&
-    sinceLastInboundAudio >= DIRECT_VISION_SILENCE_THRESHOLD_MS;
 
-  if (!sceneChanged && !silenceTriggered && !firstFrameTriggered) return;
+  const firstFrameTriggered = Number(session.streamWatch.ingestedFrameCount || 0) <= 1;
+  const urgencyTriggered = String(brainContextUpdate?.urgency || "none") === "high";
+
+  if (!firstFrameTriggered && !urgencyTriggered) return;
 
   const bufferedFrame = String(session.streamWatch?.latestFrameDataBase64 || "").trim();
   if (!bufferedFrame) return;
@@ -1962,15 +1986,13 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
       "",
     STREAM_WATCH_BRAIN_CONTEXT_LINE_MAX_CHARS
   );
-  const triggerReason = firstFrameTriggered ? "share_start" : sceneChanged ? "scene_changed" : "silence";
+  const triggerReason = firstFrameTriggered ? "share_start" : "urgent";
   const normalizedStreamerUserId = String(streamerUserId || "").trim() || null;
   const botUserId = String(manager.client.user?.id || "").trim() || null;
   const transcript =
     triggerReason === "share_start"
       ? `[${speakerName} started screen sharing. You can see the latest frame.]`
-      : triggerReason === "scene_changed"
-        ? `[${speakerName} is still screen sharing. The visible scene changed.]`
-        : `[${speakerName} is still screen sharing. Nobody has spoken for a while.]`;
+      : `[${speakerName} is screen sharing. Something notable just happened on screen.]`;
 
   session.streamWatch.lastCommentaryAt = now;
   session.streamWatch.lastCommentaryNote = latestNote || null;
@@ -2024,6 +2046,7 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
       streamerUserId: streamerUserId || null,
       commentaryMode: "brain_turn",
       triggerReason,
+      urgency: String(brainContextUpdate?.urgency || "none"),
       latestNote: latestNote || null
     }
   });

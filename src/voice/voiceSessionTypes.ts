@@ -458,7 +458,7 @@ export interface VoiceMembershipPromptEntry extends VoiceMembershipEvent {
 
 export type VoiceRuntimeEventCategory = "membership" | "screen_share" | "generic";
 export type VoiceRuntimeEventActorRole = "self" | "other" | "unknown";
-export type VoiceRuntimeScreenShareEventType = "share_start" | "scene_changed" | "silence";
+export type VoiceRuntimeScreenShareEventType = "share_start" | "urgent";
 
 export interface VoiceRuntimeEventContext {
     category: VoiceRuntimeEventCategory;

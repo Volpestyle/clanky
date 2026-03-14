@@ -30,7 +30,7 @@ test("system speech reply accounting is explicit for request and local playback 
     "spoken"
   );
   assert.equal(
-    resolveSystemSpeechReplyAccountingOnLocalPlayback(`${SYSTEM_SPEECH_SOURCE.STREAM_WATCH}:scene_changed`),
+    resolveSystemSpeechReplyAccountingOnLocalPlayback(`${SYSTEM_SPEECH_SOURCE.STREAM_WATCH}:urgent`),
     "spoken"
   );
   assert.equal(resolveSystemSpeechReplyAccountingOnRequest("file_asr_reply"), null);
@@ -43,10 +43,10 @@ test("system speech definitions expose speech class and skip policy", () => {
     SYSTEM_SPEECH_CLASS.SYSTEM_OPTIONAL
   );
   assert.equal(
-    resolveSystemSpeechClass(`${SYSTEM_SPEECH_SOURCE.STREAM_WATCH}:scene_changed`),
+    resolveSystemSpeechClass(`${SYSTEM_SPEECH_SOURCE.STREAM_WATCH}:urgent`),
     SYSTEM_SPEECH_CLASS.SYSTEM_OPTIONAL
   );
   assert.equal(shouldAllowSystemSpeechSkipAfterFire(SYSTEM_SPEECH_SOURCE.THOUGHT), true);
-  assert.equal(shouldAllowSystemSpeechSkipAfterFire(`${SYSTEM_SPEECH_SOURCE.STREAM_WATCH}:silence`), true);
+  assert.equal(shouldAllowSystemSpeechSkipAfterFire(`${SYSTEM_SPEECH_SOURCE.STREAM_WATCH}:urgent`), true);
   assert.equal(shouldAllowSystemSpeechSkipAfterFire("file_asr_reply"), true);
 });

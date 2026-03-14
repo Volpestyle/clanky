@@ -85,7 +85,7 @@ export function normalizeVoiceRuntimeEventContext(value: unknown): VoiceRuntimeE
   if (category === "membership" && eventType !== "join" && eventType !== "leave") {
     return null;
   }
-  if (category === "screen_share" && eventType !== "share_start" && eventType !== "scene_changed" && eventType !== "silence") {
+  if (category === "screen_share" && eventType !== "share_start" && eventType !== "urgent") {
     return null;
   }
 

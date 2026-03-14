@@ -86,7 +86,7 @@ Discord VC user says "share my screen"
   │                      │                   │   brain access) │
   │  Produces:           │                   └───────┬────────┘
   │  - note (observation)│                           │
-  │  - sceneChanged bool │                           │
+   │  - urgency level     │                           │
   └──────┬───────────────┘                           │
          │                                            │
   ┌──────▼───────────────┐                           │
@@ -123,9 +123,9 @@ Discord VC user says "share my screen"
 
 ### Scanner (always-on background)
 
-The scanner runs a cheap/fast model on ingested frames at a configurable interval (default every 4 seconds). It extracts a short observation note and a `sceneChanged` flag. Notes accumulate in `brainContextEntries` (max 8 by default), with timestamps for aging.
+The scanner runs a cheap/fast model on ingested frames at a configurable interval (default every 4 seconds). It extracts a short observation note and an `urgency` level (`high`, `low`, or `none`). Notes accumulate in `brainContextEntries` (max 8 by default), with timestamps for aging.
 
-The scanner does NOT decide whether the brain should speak. Its job is observation only — building the temporal context that lets the brain say things like "oh you're back on the code editor" or "looks like that error is gone now."
+The scanner also decides whether the current frame warrants unprompted commentary. When `urgency` is `high`, the system fires an autonomous brain turn — but the brain still decides whether to actually speak or `[SKIP]`. For `low` and `none` urgency, notes are stored for context but no autonomous turn fires.
 
 Scanner provider and model are independently configurable (`brainContextProvider`, `brainContextModel`) and do not affect whether the brain sees raw frames.
 
@@ -140,13 +140,11 @@ This happens on ALL turns — user-initiated, autonomous commentary, tool follow
 
 ### Autonomous commentary triggers
 
-When nobody is speaking, the system periodically checks whether to fire a brain turn with the current frame. Triggers:
-
-- **Scene change** — scanner flagged `sceneChanged: true`
-- **Extended silence** — no speech for 10+ seconds while frames are arriving
-- **First frame** — initial share start
+Autonomous commentary fires when the scanner's vision model flags a frame as `urgency: "high"` — meaning something genuinely reaction-worthy happened (a dramatic gameplay moment, a visible error, a surprising event). The system also fires a one-time trigger on the first frame (`share_start`).
 
 These triggers don't gate whether the brain speaks — they trigger a normal voice turn where the brain sees the frame + notes and decides whether to comment (or `[SKIP]`). The `autonomousCommentaryEnabled` setting controls whether these proactive triggers fire at all.
+
+Commentary is subject to cost/safety gates (minimum cooldown, audio quiet window, no pending work) but the relevance decision lives in the vision model, not in deterministic rules. There is no silence-based trigger — the bot does not fill quiet moments just because it can.
 
 Autonomous commentary is treated as optional speech, not as a normal conversational obligation:
 - It does not start while another voice reply is already generating, draining, or deferred.
@@ -186,6 +184,8 @@ When a watch session ends, the default text model summarizes the accumulated key
 - Bun normalizes H264 payloads from length-prefixed AVC to Annex-B start codes before `ffmpeg` decode (required for correct decode)
 - Decoded JPEGs are forwarded into the existing stream-watch pipeline
 - The latest decoded frame becomes normal voice-brain context on active turns
+- Repeating `start_screen_watch` for the same native target reuses the active watch instead of reconnecting and preserves buffered frame context
+- Successful native watch start can still be `waiting_for_frame_context`; runtime only reports `frameReady=true` once a decoded or buffered image frame exists for the watch session
 - If multiple unrelated Discord sharers are active, the agent can pick one with `start_screen_watch({ target: "name" })`
 - If multiple unrelated Discord sharers are active and no explicit target is provided, runtime does not guess a native target
 - The same rolling-note scanner and commentary triggers apply regardless of transport
@@ -256,6 +256,12 @@ If those native fields are absent, runtime uses these defaults:
 - prefer roughly 1280x720 target pixel count
 
 Native Discord decode remains keyframe-only today. That is a fixed runtime behavior, not a stream-watch setting.
+For H264, runtime only samples access units that contain an IDR slice. SPS/PPS/SEI-only parameter updates stay cached for later decode, but they are not treated as renderable keyframes.
+If a native watch attaches mid-stream and the first subscribed frames are delta-only, `clankvox` reasserts Discord sink-wants and sends protected RTCP receiver-report / PLI / FIR feedback packets until the first renderable keyframe arrives so Bun can build initial frame context sooner.
+Those Discord sink-wants are a flat OP15 map with `any` and per-SSRC numeric quality entries, matching the desktop client wire shape.
+Bun only starts a pending H264 first-frame decode sequence after that real keyframe arrives; delta-only access units on their own are ignored instead of being sent through `ffmpeg` as failed decode attempts.
+Native still-frame decode feeds `ffmpeg` an EOF-terminated raw payload without `+nobuffer`, because single-frame H264 keyframes need normal EOF flushing to actually emit the first image.
+Each new watch session resets native frame-readiness state. `frameReady=true` means current-session pixels are available, not stale success from an older watch.
 
 ## Dashboard visibility
 
@@ -286,7 +292,8 @@ This separates "what the scanner saw" from "what context the VC brain currently 
 - If no `target` is provided, runtime only auto-picks when the requester is sharing or exactly one sharer is active
 - If multiple sharers are active and no `target` is provided, runtime refuses instead of guessing
 - Only available when `screenShareAvailable = true`
-- Returns `{ ok, started, reused, reason, transport, targetUserId, linkUrl, expiresInMinutes }`
+- Returns `{ ok, started, reused, reason, frameReady, transport, targetUserId, linkUrl, expiresInMinutes }`
+- Native success reasons are `frame_context_ready` when a decoded or buffered frame already exists, or `waiting_for_frame_context` when transport is active but pixels are not ready yet
 
 ## Security Model
 

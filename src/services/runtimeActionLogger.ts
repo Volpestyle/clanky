@@ -49,12 +49,12 @@ function formatAgentBadge(agent) {
 
 function isSpeechMetadataKey(key) {
   const normalizedKey = String(key || "").trim();
-  return normalizedKey === "transcript" || normalizedKey === "replyText" || normalizedKey === "incomingTranscript";
+  return normalizedKey === "transcript" || normalizedKey === "replyText" || normalizedKey === "incomingTranscript" || normalizedKey === "heard";
 }
 
 function isHighlightedSpeechMetadataKey(key) {
   const normalizedKey = String(key || "").trim();
-  return normalizedKey === "transcript" || normalizedKey === "incomingTranscript";
+  return normalizedKey === "transcript" || normalizedKey === "incomingTranscript" || normalizedKey === "heard";
 }
 
 function normalizeInlineSpeechValue(value, maxLength = 220) {

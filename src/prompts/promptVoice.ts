@@ -404,10 +404,8 @@ export function buildVoiceTurnPrompt({
       const actorLabel = normalizedRuntimeEventContext.actorDisplayName || speaker;
       if (normalizedRuntimeEventContext.eventType === "share_start") {
         parts.push(`Voice runtime event cue: ${actorLabel} started sharing their screen.`);
-      } else if (normalizedRuntimeEventContext.eventType === "scene_changed") {
-        parts.push(`Voice runtime event cue: ${actorLabel}'s on-screen scene changed.`);
       } else {
-        parts.push(`Voice runtime event cue: ${actorLabel} is still sharing their screen and the room is quiet.`);
+        parts.push(`Voice runtime event cue: Something notable just happened on ${actorLabel}'s screen.`);
       }
       parts.push(`Structured event type: screen_share.${normalizedRuntimeEventContext.eventType}.`);
       if (normalizedRuntimeEventContext.hasVisibleFrame) {

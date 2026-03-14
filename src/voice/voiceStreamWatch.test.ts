@@ -12,6 +12,7 @@ import {
   stopWatchStreamForUser
 } from "./voiceStreamWatch.ts";
 import { createStreamDiscoveryState } from "../selfbot/streamDiscovery.ts";
+import { ensureNativeDiscordScreenShareState } from "./nativeDiscordScreenShare.ts";
 
 function createSettings(overrides = {}) {
   const defaults = {
@@ -259,6 +260,47 @@ function createManager({
 
 test("initializeStreamWatchState resets stream-watch counters and frame buffers", () => {
   const session = createSession({
+    nativeScreenShare: {
+      sharers: new Map([[
+        "target-1",
+        {
+          userId: "target-1",
+          audioSsrc: 1001,
+          videoSsrc: 1002,
+          codec: "h264",
+          streams: [],
+          updatedAt: 123,
+          lastFrameAt: 123,
+          lastFrameCodec: "h264",
+          lastFrameKeyframeAt: 123
+        }
+      ]]),
+      subscribedTargetUserId: "target-1",
+      decodeInFlight: false,
+      lastDecodeAttemptAt: 123,
+      lastDecodeSuccessAt: 456,
+      lastDecodeFailureAt: 789,
+      lastDecodeFailureReason: "old_failure",
+      ffmpegAvailable: true,
+      activeStreamKey: "old_stream",
+      lastRtcServerId: "old_rtc",
+      lastStreamEndpoint: "old_endpoint",
+      lastCredentialsReceivedAt: 123,
+      lastVoiceSessionId: "old_session",
+      transportStatus: "ready",
+      transportReason: "old_reason",
+      transportUpdatedAt: 123,
+      transportConnectedAt: 123,
+      pendingH264Decode: {
+        userId: "target-1",
+        startedAt: 123,
+        updatedAt: 123,
+        firstRtpTimestamp: 1,
+        lastRtpTimestamp: 2,
+        frameBase64s: ["AAAA"],
+        approximateBytes: 3
+      }
+    },
     streamWatch: {
       active: false,
       targetUserId: null,
@@ -301,6 +343,16 @@ test("initializeStreamWatchState resets stream-watch counters and frame buffers"
   assert.equal(session.streamWatch.latestFrameMimeType, null);
   assert.equal(session.streamWatch.latestFrameDataBase64, "");
   assert.equal(session.streamWatch.latestFrameAt, 0);
+
+  const nativeScreenShare = ensureNativeDiscordScreenShareState(session);
+  assert.equal(nativeScreenShare.lastDecodeAttemptAt, 0);
+  assert.equal(nativeScreenShare.lastDecodeSuccessAt, 0);
+  assert.equal(nativeScreenShare.lastDecodeFailureAt, 0);
+  assert.equal(nativeScreenShare.lastDecodeFailureReason, null);
+  assert.equal(nativeScreenShare.activeStreamKey, null);
+  assert.equal(nativeScreenShare.transportStatus, null);
+  assert.equal(nativeScreenShare.pendingH264Decode, null);
+  assert.deepEqual([...nativeScreenShare.sharers.keys()], []);
 });
 
 test("getStreamWatchBrainContextForPrompt retains recent notes after screen share stops", () => {
@@ -413,7 +465,9 @@ test("enableWatchStreamForUser enforces same-voice-channel requirement and suppo
   });
 
   assert.equal(allowedResult.ok, true);
-  assert.equal(allowedResult.reason, "watching_started");
+  assert.equal(allowedResult.reason, "waiting_for_frame_context");
+  assert.equal(allowedResult.frameReady, false);
+  assert.equal(allowedResult.reused, false);
   assert.equal(allowedResult.targetUserId, "user-2");
   assert.equal(allowed.manager.sessions.get("guild-1")?.streamWatch?.active, true);
   assert.equal(allowed.actions.some((entry) => entry.kind === "voice_runtime"), true);
@@ -614,9 +668,36 @@ test("enableWatchStreamForUser requests stream watch and connects later when cre
   assert.equal(session.nativeScreenShare.activeStreamKey, "guild:guild-1:voice-1:user-2");
 });
 
-test("handleDiscoveredStreamDeleted stops an active native watch", async () => {
-  const stopCalls: Array<Record<string, unknown>> = [];
+test("enableWatchStreamForUser reuses an active native watch for the same target without resetting frame context", async () => {
+  const transportCalls: Array<Record<string, unknown>> = [];
+  const now = Date.now();
   const session = createSession({
+    streamWatch: {
+      active: true,
+      targetUserId: "user-2",
+      requestedByUserId: "user-1",
+      lastFrameAt: now,
+      lastCommentaryAt: now - 500,
+      lastCommentaryNote: "scoreboard visible",
+      lastBrainContextAt: now - 400,
+      lastBrainContextProvider: "anthropic",
+      lastBrainContextModel: "claude-haiku-4-5",
+      brainContextEntries: [
+        {
+          text: "scoreboard visible",
+          at: now - 400,
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          speakerName: "alice"
+        }
+      ],
+      ingestedFrameCount: 3,
+      acceptedFrameCountInWindow: 3,
+      frameWindowStartedAt: now - 5_000,
+      latestFrameMimeType: "image/jpeg",
+      latestFrameDataBase64: "AAAA",
+      latestFrameAt: now
+    },
     nativeScreenShare: {
       sharers: new Map([
         [
@@ -624,10 +705,10 @@ test("handleDiscoveredStreamDeleted stops an active native watch", async () => {
           {
             userId: "user-2",
             codec: "h264",
-            updatedAt: Date.now(),
-            lastFrameAt: Date.now(),
+            updatedAt: now,
+            lastFrameAt: now,
             lastFrameCodec: "h264",
-            lastFrameKeyframeAt: Date.now(),
+            lastFrameKeyframeAt: now,
             audioSsrc: null,
             videoSsrc: 4201,
             streams: [
@@ -647,54 +728,64 @@ test("handleDiscoveredStreamDeleted stops an active native watch", async () => {
               }
             ]
           }
-        ],
-        [
-          "user-3",
-          {
-            userId: "user-3",
-            codec: "h264",
-            updatedAt: Date.now(),
-            lastFrameAt: Date.now(),
-            lastFrameCodec: "h264",
-            lastFrameKeyframeAt: Date.now(),
-            audioSsrc: null,
-            videoSsrc: 4301,
-            streams: [
-              {
-                ssrc: 4301,
-                rtxSsrc: 4302,
-                rid: "100",
-                quality: 100,
-                streamType: "screen",
-                active: true,
-                maxBitrate: 2_500_000,
-                maxFramerate: 30,
-                width: 1920,
-                height: 1080,
-                resolutionType: "fixed",
-                pixelCount: 1920 * 1080
-              }
-            ]
-          }
         ]
       ]),
-      subscribedTargetUserId: null,
+      subscribedTargetUserId: "user-2",
       decodeInFlight: false,
-      lastDecodeAttemptAt: 0,
-      lastDecodeSuccessAt: 0,
+      lastDecodeAttemptAt: now - 250,
+      lastDecodeSuccessAt: now - 200,
       lastDecodeFailureAt: 0,
       lastDecodeFailureReason: null,
-      ffmpegAvailable: null,
-      activeStreamKey: null,
-      lastRtcServerId: null,
-      lastStreamEndpoint: null,
-      lastCredentialsReceivedAt: 0,
-      lastVoiceSessionId: null,
-      transportStatus: null,
+      ffmpegAvailable: true,
+      activeStreamKey: "guild:guild-1:voice-1:user-2",
+      lastRtcServerId: "9010",
+      lastStreamEndpoint: "stream.discord.media:443",
+      lastCredentialsReceivedAt: now - 1_000,
+      lastVoiceSessionId: "voice-session-1",
+      transportStatus: "ready",
       transportReason: null,
-      transportUpdatedAt: 0,
-      transportConnectedAt: 0
+      transportUpdatedAt: now - 200,
+      transportConnectedAt: now - 200
     },
+    voxClient: {
+      subscribeUserVideo() {},
+      unsubscribeUserVideo() {},
+      streamWatchConnect(payload) {
+        transportCalls.push(payload);
+      },
+      streamWatchDisconnect() {},
+      getLastVoiceSessionId() {
+        return "voice-session-1";
+      }
+    }
+  });
+  const { manager, actions } = createManager({ session });
+
+  const result = await enableWatchStreamForUser(manager, {
+    guildId: "guild-1",
+    requesterUserId: "user-1",
+    targetUserId: "user-2",
+    settings: createSettings(),
+    source: "test"
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.reused, true);
+  assert.equal(result.frameReady, true);
+  assert.equal(result.reason, "frame_context_ready");
+  assert.equal(transportCalls.length, 0);
+  assert.equal(session.streamWatch.latestFrameDataBase64, "AAAA");
+  assert.equal(session.streamWatch.latestFrameMimeType, "image/jpeg");
+  assert.equal(session.streamWatch.brainContextEntries.length, 1);
+  assert.equal(session.streamWatch.targetUserId, "user-2");
+  const reuseLog = actions.find((entry) => entry.content === "stream_watch_reused_programmatic");
+  assert.equal(Boolean(reuseLog), true);
+  assert.equal(reuseLog?.metadata?.frameReady, true);
+});
+
+test("handleDiscoveredStreamDeleted stops an active native watch", async () => {
+  const stopCalls: Array<Record<string, unknown>> = [];
+  const session = createSession({
     voxClient: {
       subscribeUserVideo() {},
       unsubscribeUserVideo() {},
@@ -712,6 +803,67 @@ test("handleDiscoveredStreamDeleted stops an active native watch", async () => {
     requesterUserId: "user-1",
     targetUserId: "user-2"
   });
+  const nativeScreenShare = ensureNativeDiscordScreenShareState(session);
+  nativeScreenShare.sharers = new Map([
+    [
+      "user-2",
+      {
+        userId: "user-2",
+        codec: "h264",
+        updatedAt: Date.now(),
+        lastFrameAt: Date.now(),
+        lastFrameCodec: "h264",
+        lastFrameKeyframeAt: Date.now(),
+        audioSsrc: null,
+        videoSsrc: 4201,
+        streams: [
+          {
+            ssrc: 4201,
+            rtxSsrc: 4202,
+            rid: "100",
+            quality: 100,
+            streamType: "screen",
+            active: true,
+            maxBitrate: 2_500_000,
+            maxFramerate: 30,
+            width: 1920,
+            height: 1080,
+            resolutionType: "fixed",
+            pixelCount: 1920 * 1080
+          }
+        ]
+      }
+    ],
+    [
+      "user-3",
+      {
+        userId: "user-3",
+        codec: "h264",
+        updatedAt: Date.now(),
+        lastFrameAt: Date.now(),
+        lastFrameCodec: "h264",
+        lastFrameKeyframeAt: Date.now(),
+        audioSsrc: null,
+        videoSsrc: 4301,
+        streams: [
+          {
+            ssrc: 4301,
+            rtxSsrc: 4302,
+            rid: "100",
+            quality: 100,
+            streamType: "screen",
+            active: true,
+            maxBitrate: 2_500_000,
+            maxFramerate: 30,
+            width: 1920,
+            height: 1080,
+            resolutionType: "fixed",
+            pixelCount: 1920 * 1080
+          }
+        ]
+      }
+    ]
+  ]);
 
   const { manager } = createManager({ session });
   const handled = await handleDiscoveredStreamDeleted(manager, {
@@ -933,7 +1085,7 @@ test("maybeTriggerStreamWatchCommentary keeps direct frame-to-brain active even 
         return {
           text: JSON.stringify({
             note: "scoreboard changed and the timer is low",
-            sceneChanged: true
+            urgency: "high"
           }),
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -950,12 +1102,12 @@ test("maybeTriggerStreamWatchCommentary keeps direct frame-to-brain active even 
   });
 
   assert.equal(brainReplyCalls.length, 1);
-  assert.equal(String(brainReplyCalls[0]?.source || ""), "stream_watch_brain_turn:scene_changed");
+  assert.equal(String(brainReplyCalls[0]?.source || ""), "stream_watch_brain_turn:urgent");
   assert.equal(createdResponses.length, 0);
   const logged = actions.find((entry) => entry.content === "stream_watch_commentary_requested");
   assert.equal(Boolean(logged), true);
   assert.equal(logged?.metadata?.commentaryMode, "brain_turn");
-  assert.equal(logged?.metadata?.triggerReason, "scene_changed");
+  assert.equal(logged?.metadata?.triggerReason, "urgent");
 });
 
 test("maybeTriggerStreamWatchCommentary can update brain context without speaking commentary", async () => {
@@ -1070,8 +1222,7 @@ test("maybeTriggerStreamWatchCommentary does not let scanner shouldComment disab
           return {
             text: JSON.stringify({
               note: "inventory menu still open",
-              sceneChanged: true,
-              shouldComment: false
+              urgency: "high"
             }),
             provider: "anthropic",
             model: "claude-haiku-4-5"
@@ -1094,7 +1245,7 @@ test("maybeTriggerStreamWatchCommentary does not let scanner shouldComment disab
   });
 
   assert.equal(brainReplyCalls.length, 1);
-  assert.equal(String(brainReplyCalls[0]?.source || ""), "stream_watch_brain_turn:scene_changed");
+  assert.equal(String(brainReplyCalls[0]?.source || ""), "stream_watch_brain_turn:urgent");
   assert.equal(createdResponses.length, 0);
   assert.equal(
     actions.some((entry) => entry.content === "stream_watch_brain_context_updated"),

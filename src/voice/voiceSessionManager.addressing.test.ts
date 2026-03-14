@@ -4290,6 +4290,75 @@ test("runRealtimeBrainReply supersedes stale playback when a newer finalized rea
   assert.equal(session.realtimeReplySupersededCount, 1);
 });
 
+test("runRealtimeBrainReply preserves leased playback when a newer finalized realtime turn is queued", async () => {
+  const runtimeLogs = [];
+  let requestedRealtimeUtterances = 0;
+  const requestedLeaseModes = [];
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = ({ outputLeaseMode }) => {
+    requestedRealtimeUtterances += 1;
+    requestedLeaseModes.push(outputLeaseMode || null);
+    return true;
+  };
+  manager.generateVoiceTurn = async (_payload) => {
+    session.pendingRealtimeTurns.push({
+      session: null,
+      userId: "speaker-2",
+      pcmBuffer: Buffer.alloc(6_000, 0x7f),
+      captureReason: "stream_end",
+      queuedAt: Date.now(),
+      finalizedAt: Date.now() + 5
+    });
+    return {
+      text: "old reply should keep the floor",
+      voiceOutputLeaseMode: "assertive"
+    };
+  };
+
+  const session = {
+    id: "session-realtime-supersede-finalized-turn-leased-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 8_000,
+    realtimeClient: {},
+    realtimeInputSampleRateHz: 24_000,
+    userCaptures: new Map(),
+    pendingRealtimeTurns: [],
+    realtimeReplySupersededCount: 0,
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "older transcript",
+    directAddressed: false,
+    source: "realtime"
+  });
+
+  assert.equal(result, true);
+  assert.equal(requestedRealtimeUtterances, 1);
+  assert.deepEqual(requestedLeaseModes, ["assertive"]);
+  const supersededLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_superseded_newer_input"
+  );
+  assert.equal(Boolean(supersededLog), false);
+  assert.equal(session.realtimeReplySupersededCount, 0);
+});
+
 test("runRealtimeBrainReply does not supersede on a live promoted capture before a newer turn is admitted", async () => {
   const runtimeLogs = [];
   let requestedRealtimeUtterances = 0;
@@ -5720,10 +5789,10 @@ test("flushDeferredBotTurnOpenTurns preserves system-speech source for stream-wa
           turns: [
             {
               userId: "speaker-1",
-              transcript: "[alice is still screen sharing. The visible scene changed.]",
+              transcript: "[alice is screen sharing. Something notable just happened on screen.]",
               pcmBuffer: null,
               captureReason: "stream_end",
-              source: "stream_watch_brain_turn:scene_changed",
+              source: "stream_watch_brain_turn:urgent",
               directAddressed: false,
               queuedAt: Date.now()
             }
@@ -5738,9 +5807,9 @@ test("flushDeferredBotTurnOpenTurns preserves system-speech source for stream-wa
   await manager.flushDeferredBotTurnOpenTurns({ session });
 
   assert.equal(decisionPayloads.length, 1);
-  assert.equal(decisionPayloads[0]?.source, "stream_watch_brain_turn:scene_changed");
+  assert.equal(decisionPayloads[0]?.source, "stream_watch_brain_turn:urgent");
   assert.equal(realtimeReplyPayloads.length, 1);
-  assert.equal(realtimeReplyPayloads[0]?.source, "stream_watch_brain_turn:scene_changed");
+  assert.equal(realtimeReplyPayloads[0]?.source, "stream_watch_brain_turn:urgent");
   assert.equal(manager.deferredActionQueue.getDeferredQueuedUserTurns(session).length, 0);
 });
 
