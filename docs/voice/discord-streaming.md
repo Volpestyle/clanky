@@ -31,7 +31,8 @@ before the tool appears.
 The native Discord screen watch pipeline is built end to end in clankvox and Bun:
 
 - selfbot gateway stream discovery for `VOICE_STATE_UPDATE.self_stream`,
-  `STREAM_CREATE`, `STREAM_SERVER_UPDATE`, and `STREAM_DELETE`
+  `STREAM_CREATE`, `STREAM_SERVER_UPDATE`, `STREAM_DELETE`, and
+  `GUILD_CREATE` voice state scan for pre-existing streamers on connect
 - Gateway OP20 `STREAM_WATCH` request dispatch from the selfbot session
 - `clankvox` `stream_watch` IPC + second transport role
 - video receive, DAVE decrypt, H264/VP8 depacketization, IPC, ffmpeg decode, stream-watch ingest
@@ -259,6 +260,7 @@ These are the same opcodes as the regular voice connection but exchanged on the 
    → Listen for VOICE_STATE_UPDATE with self_stream: true
    → Seed provisional session Go Live state from that early signal
    → OR listen for STREAM_CREATE dispatch event
+   → OR scan GUILD_CREATE voice_states on connect for users already streaming
 
 2. Subscribe to stream
    → Gateway OP20 STREAM_WATCH { stream_key }
@@ -427,6 +429,7 @@ Current rollout boundary:
 ### Current Receive Flow
 
 - Selfbot gateway records active Go Live streams and credentials in stream discovery state
+- On connect (or full reconnect), `GUILD_CREATE` voice states are scanned for users with `self_stream: true` to detect streams that were already active before the bot connected
 - `start_screen_watch` requests OP20 `STREAM_WATCH` and records the expected stream key on the voice session
 - If credentials are already present, Bun immediately sends `stream_watch_connect` to `clankvox`
 - If credentials arrive later, discovery callbacks connect the `stream_watch` transport when `STREAM_SERVER_UPDATE` lands
@@ -481,6 +484,8 @@ There is no separate standalone settings block for outbound native publish. Musi
 ### Stream discovery layer (implemented)
 
 - `native_discord_go_live_detected` — selfbot gateway saw `self_stream: true`
+- `stream_discovery_existing_streamer_detected` — `GUILD_CREATE` voice state scan found a user already streaming on connect
+- `stream_discovery_guild_create_scan_complete` — `GUILD_CREATE` scan finished with count of existing streamers found
 - `stream_discovery_go_live_bootstrap_seeded` — Bun seeded provisional session Go Live state from `self_stream: true`
 - `stream_discovery_go_live_bootstrap_cleared` — Bun cleared stale provisional session Go Live state after `self_stream: false`
 - `native_discord_stream_watch_requested` — Gateway OP20 sent

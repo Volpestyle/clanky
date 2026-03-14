@@ -464,6 +464,106 @@ describe("streamDiscovery", () => {
     });
   });
 
+  describe("GUILD_CREATE existing streamer detection", () => {
+    it("detects users with self_stream=true in voice_states", () => {
+      emitDispatch(client, "GUILD_CREATE", {
+        id: "222",
+        voice_states: [
+          { user_id: "111", channel_id: "333", self_stream: true },
+          { user_id: "444", channel_id: "333", self_stream: false },
+          { user_id: "555", channel_id: "333" }, // no self_stream
+        ],
+      });
+
+      // Only user 111 should trigger onGoLiveDetected
+      expect(goLiveDetected).toHaveLength(1);
+      expect(goLiveDetected[0]).toEqual({
+        userId: "111",
+        guildId: "222",
+        channelId: "333",
+      });
+    });
+
+    it("detects multiple existing streamers", () => {
+      emitDispatch(client, "GUILD_CREATE", {
+        id: "222",
+        voice_states: [
+          { user_id: "111", channel_id: "333", self_stream: true },
+          { user_id: "444", channel_id: "555", self_stream: true },
+          { user_id: "666", channel_id: "333" },
+        ],
+      });
+
+      expect(goLiveDetected).toHaveLength(2);
+      expect(goLiveDetected[0].userId).toBe("111");
+      expect(goLiveDetected[1].userId).toBe("444");
+    });
+
+    it("logs scan completion with streamer count", () => {
+      emitDispatch(client, "GUILD_CREATE", {
+        id: "222",
+        voice_states: [
+          { user_id: "111", channel_id: "333", self_stream: true },
+          { user_id: "444", channel_id: "333" },
+        ],
+      });
+
+      const scanLog = logs.find(
+        (l) => l.action === "stream_discovery_guild_create_scan_complete"
+      );
+      expect(scanLog).toBeDefined();
+      expect(scanLog!.detail.guildId).toBe("222");
+      expect(scanLog!.detail.totalVoiceStates).toBe(2);
+      expect(scanLog!.detail.existingStreamers).toBe(1);
+    });
+
+    it("skips guilds with no voice states", () => {
+      emitDispatch(client, "GUILD_CREATE", {
+        id: "222",
+        voice_states: [],
+      });
+
+      expect(goLiveDetected).toHaveLength(0);
+      expect(logs).toHaveLength(0);
+    });
+
+    it("skips guilds with missing voice_states field", () => {
+      emitDispatch(client, "GUILD_CREATE", {
+        id: "222",
+      });
+
+      expect(goLiveDetected).toHaveLength(0);
+    });
+
+    it("skips voice states with missing channel_id", () => {
+      emitDispatch(client, "GUILD_CREATE", {
+        id: "222",
+        voice_states: [
+          { user_id: "111", self_stream: true }, // no channel_id
+        ],
+      });
+
+      expect(goLiveDetected).toHaveLength(0);
+    });
+
+    it("does not fire when no users are streaming", () => {
+      emitDispatch(client, "GUILD_CREATE", {
+        id: "222",
+        voice_states: [
+          { user_id: "111", channel_id: "333", self_stream: false },
+          { user_id: "444", channel_id: "333" },
+        ],
+      });
+
+      expect(goLiveDetected).toHaveLength(0);
+      // No scan completion log when no streamers found
+      const scanLog = logs.find(
+        (l) => l.action === "stream_discovery_guild_create_scan_complete"
+      );
+      expect(scanLog).toBeUndefined();
+    });
+  });
+
   describe("full lifecycle", () => {
     it("handles complete stream lifecycle: create -> credentials -> watch -> delete", () => {
       const sent: unknown[] = [];

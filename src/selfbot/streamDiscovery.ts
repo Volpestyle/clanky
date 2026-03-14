@@ -122,6 +122,18 @@ interface StreamDeleteDispatch {
   unavailable?: boolean;
 }
 
+/** Subset of GUILD_CREATE dispatch — we only need voice_states. */
+interface GuildCreateVoiceState {
+  user_id: string;
+  channel_id?: string | null;
+  self_stream?: boolean;
+}
+
+interface GuildCreateDispatch {
+  id: string; // guild_id
+  voice_states?: GuildCreateVoiceState[];
+}
+
 // ---------------------------------------------------------------------------
 // State factory
 // ---------------------------------------------------------------------------
@@ -199,6 +211,12 @@ export function setupStreamDiscovery(
 
   onRawDispatch(client, "STREAM_DELETE", (data) => {
     handleStreamDelete(state, data as unknown as StreamDeleteDispatch, callbacks);
+  });
+
+  // GUILD_CREATE fires on initial connect (and full reconnect) with the
+  // complete voice_states array. Scan for users already Go Live streaming.
+  onRawDispatch(client, "GUILD_CREATE", (data) => {
+    handleGuildCreate(state, data as unknown as GuildCreateDispatch, callbacks);
   });
 
   return () => {
@@ -376,6 +394,62 @@ function handleStreamDelete(
   });
 
   callbacks.onStreamDeleted?.(stream);
+}
+
+/**
+ * GUILD_CREATE contains the full voice_states array for the guild.
+ * On connect (or reconnect without RESUME), Discord sends this with all
+ * users currently in voice channels. We scan for self_stream=true to
+ * detect users who were already Go Live streaming before the bot connected.
+ *
+ * This closes the cold-start gap: if someone starts streaming before the bot
+ * is online, we seed the same provisional state that handleVoiceStateUpdate
+ * would have created, so the agent can later decide to watch.
+ */
+export function handleGuildCreate(
+  _state: StreamDiscoveryState,
+  data: GuildCreateDispatch,
+  callbacks: StreamDiscoveryCallbacks
+): void {
+  const log = callbacks.onLog ?? (() => {});
+  const guildId = String(data.id || "").trim();
+  if (!guildId) return;
+
+  const voiceStates = Array.isArray(data.voice_states) ? data.voice_states : [];
+  if (voiceStates.length === 0) return;
+
+  const existingStreamers: Array<{ userId: string; guildId: string; channelId: string }> = [];
+
+  for (const vs of voiceStates) {
+    if (vs.self_stream !== true) continue;
+
+    const userId = String(vs.user_id || "").trim();
+    const channelId = String(vs.channel_id || "").trim();
+    if (!userId || !channelId) continue;
+
+    existingStreamers.push({ userId, guildId, channelId });
+
+    log("stream_discovery_existing_streamer_detected", {
+      userId,
+      guildId,
+      channelId,
+      source: "guild_create_voice_states",
+    });
+
+    // Fire the same callback that a live VOICE_STATE_UPDATE would trigger.
+    // This seeds provisional goLiveStream state on the voice session so the
+    // agent can later decide to watch via enableWatchStreamForUser().
+    callbacks.onGoLiveDetected?.({ userId, guildId, channelId });
+  }
+
+  if (existingStreamers.length > 0) {
+    log("stream_discovery_guild_create_scan_complete", {
+      guildId,
+      totalVoiceStates: voiceStates.length,
+      existingStreamers: existingStreamers.length,
+      streamerUserIds: existingStreamers.map((s) => s.userId),
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
