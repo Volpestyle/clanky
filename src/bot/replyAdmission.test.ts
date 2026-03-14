@@ -34,7 +34,7 @@ test("reply admission treats exact bot-name token commands as direct address", a
   const signal = await getReplyAddressSignal(
     BASE_RUNTIME,
     BASE_SETTINGS,
-    buildMessage("Clanker go tell the silly boys in vc to go to bed"),
+    buildMessage("Clanky go tell the silly boys in vc to go to bed"),
     []
   );
 
@@ -46,8 +46,13 @@ test("reply admission treats exact bot-name token commands as direct address", a
 test("reply admission treats merged bot-name token commands as direct address", async () => {
   const signal = await getReplyAddressSignal(
     BASE_RUNTIME,
-    BASE_SETTINGS,
-    buildMessage("clankerconk can you answer this?"),
+    createTestSettings({
+      identity: {
+        botName: "clanky conk",
+        botNameAliases: ["clank"]
+      }
+    }),
+    buildMessage("clankyconk can you answer this?"),
     []
   );
 

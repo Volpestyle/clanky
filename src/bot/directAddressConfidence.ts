@@ -56,10 +56,6 @@ function isLikelyNameCueToken(token = "", primary = "") {
   ) {
     return true;
   }
-  if (sharedConsonantCount(normalizedToken, normalizedPrimary) >= 3) {
-    return true;
-  }
-
   const distance = levenshteinDistance(normalizedToken, normalizedPrimary);
   const maxLen = Math.max(normalizedToken.length, normalizedPrimary.length);
   const normalizedSimilarity = maxLen > 0 ? 1 - distance / maxLen : 0;

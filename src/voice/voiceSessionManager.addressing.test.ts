@@ -2469,6 +2469,7 @@ test("runRealtimeTurn drops turns without bridge transcript", async () => {
     textChannelId: "chan-1",
     mode: "voice_agent",
     ending: false,
+    perUserAsrEnabled: true,
     pendingRealtimeInputBytes: 0,
     realtimeInputSampleRateHz: 24000,
     realtimeClient: {

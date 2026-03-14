@@ -307,22 +307,22 @@ test("isVoiceTurnAddressedToBot follows configured botName without fuzzy fallbac
 test("isBotNameAddressed normalizes punctuation and accents for exact matching", () => {
   assert.equal(
     isBotNameAddressed({
-      transcript: "clánker!!!",
+      transcript: "clánky!!!",
       botName: "clanky"
     }),
     true
   );
   assert.equal(
     isBotNameAddressed({
-      transcript: "clanker's still here",
+      transcript: "clanky's still here",
       botName: "clanky"
     }),
     true
   );
   assert.equal(
     isBotNameAddressed({
-      transcript: "clankerconk can you help me with this?",
-      botName: "clanky"
+      transcript: "clankyconk can you help me with this?",
+      botName: "clanky conk"
     }),
     true
   );
