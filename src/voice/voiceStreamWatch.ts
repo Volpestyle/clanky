@@ -1037,7 +1037,15 @@ async function generateVisionFallbackStreamWatchBrainContext(manager: StreamWatc
   if (!providerSettings) return null;
   const speakerName = manager.resolveVoiceSpeakerName(session, streamerUserId) || "the streamer";
   const brainContextSettings = resolveStreamWatchBrainContextSettings(settings);
-  const previousNote = getLatestStreamWatchBrainContextEntry(session)?.text || "";
+  const previousEntries = getStreamWatchBrainContextEntries(session, 8);
+  const now = Date.now();
+  const formattedHistory = previousEntries
+    .map((entry) => {
+      const ageSec = entry.at ? Math.round((now - entry.at) / 1000) : 0;
+      const ageLabel = ageSec > 0 ? ` (${ageSec}s ago)` : "";
+      return `- ${entry.text}${ageLabel}`;
+    })
+    .join("\n");
   const systemPrompt = [
     `You are ${getPromptBotName(settings)} preparing private stream-watch notes for your own voice brain.`,
     "You are looking at one still frame from a live stream.",
@@ -1048,13 +1056,16 @@ async function generateVisionFallbackStreamWatchBrainContext(manager: StreamWatc
     '"high" = something genuinely reaction-worthy happened that you would want to speak about unprompted — a dramatic moment, a visible error/crash, a funny or surprising event, a major state change like winning/losing/dying.',
     '"low" = the scene changed but nothing demands a spoken reaction right now.',
     '"none" = the frame is essentially the same as before, or is idle/static UI.',
+    "Use your observation history to detect meaningful changes, trends, and escalation. A gradual shift that would surprise a returning viewer can be high even if each individual frame looked similar to the last.",
     "Be conservative with high — most frames are none or low. Reserve high for moments a human spectator would genuinely react to out loud.",
     "Do not write dialogue or commands."
   ].join(" ");
   const recentTranscript = getRecentTranscriptSnippet(session);
   const userPromptParts = [
     `Frame from ${speakerName}'s stream.`,
-    previousNote ? `Previous private note: ${previousNote}` : "Previous private note: none."
+    formattedHistory
+      ? `Your previous observations:\n${formattedHistory}`
+      : "Previous observations: none (this is the first frame)."
   ];
   if (recentTranscript) {
     userPromptParts.push(`Recent conversation: ${recentTranscript}`);
