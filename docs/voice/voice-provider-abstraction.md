@@ -113,7 +113,7 @@ Properties:
 
 ### Brain
 
-The orchestrator owns text generation and tool calling. The realtime provider is used as transport, or OpenAI Audio API is used as TTS when `voice.conversationPolicy.ttsMode = "api"`.
+The orchestrator owns text generation and tool calling. The realtime provider is used as TTS transport (WebSocket streaming for OpenAI/xAI/Gemini/ElevenLabs), or OpenAI Audio API is used as TTS when `voice.conversationPolicy.ttsMode = "api"`.
 
 Properties:
 
@@ -363,7 +363,7 @@ Current runtime families:
 | `openai_realtime` | OpenAI | Supports native, bridge, and brain transports |
 | `voice_agent` | xAI | Shipped native path via `grok_native_agent` preset |
 | `gemini_realtime` | Gemini | Realtime transport/runtime family |
-| `elevenlabs_realtime` | ElevenLabs | Full-brain runtime that uses ElevenLabs API TTS and optional file-turn transcription |
+| `elevenlabs_realtime` | ElevenLabs | Full-brain runtime with WebSocket streaming TTS (`ElevenLabsRealtimeClient`), shared ASR bridge, and optional file-turn transcription |
 
 Provider differences live in thin adapters. The higher-level product behavior stays in shared orchestration, prompts, and tool execution.
 
@@ -377,3 +377,4 @@ Provider differences live in thin adapters. The higher-level product behavior st
 - `src/voice/sessionLifecycle.ts`
 - `src/voice/voiceToolCallDispatch.ts`
 - `src/voice/voiceThoughtGeneration.ts`
+- `src/voice/elevenLabsRealtimeClient.ts`

@@ -16,7 +16,7 @@ This part defines the realtime transport lifecycle — how the bot connects to p
 
 ## 1. Source of Truth
 
-The `VoiceSession` owns the realtime client reference in `session.realtimeClient`. The client type depends on the resolved runtime mode, and may be `null` for full-brain API-only runtimes such as `elevenlabs_realtime`.
+The `VoiceSession` owns the realtime client reference in `session.realtimeClient`. The client type depends on the resolved runtime mode.
 
 External systems provide events but do not own client state:
 
@@ -29,6 +29,7 @@ Code:
 - `src/voice/openaiRealtimeClient.ts` — OpenAI Realtime API client
 - `src/voice/xaiRealtimeClient.ts` — xAI realtime client
 - `src/voice/geminiRealtimeClient.ts` — Gemini Live API client
+- `src/voice/elevenLabsRealtimeClient.ts` — ElevenLabs WebSocket TTS streaming client
 - `src/llm/audioService.ts` — provider-backed API TTS and file-turn transcription adapters
 - `src/voice/realtimeClientCore.ts` — shared WebSocket utilities
 - `src/voice/sessionLifecycle.ts` — event binding (`bindRealtimeHandlers`)
@@ -43,15 +44,15 @@ Code:
 | `openai_realtime` | `OpenAiRealtimeClient` | yes | yes | yes | yes | immediate provider ack | yes | yes |
 | `voice_agent` | `XaiRealtimeClient` | yes | yes | yes | yes | immediate provider ack | yes | yes |
 | `gemini_realtime` | `GeminiRealtimeClient` | yes | yes (local only) | — | — | local cut + async confirmation | — | yes |
-| `elevenlabs_realtime` | — | — | — | — | — | local output lock only | — | — |
+| `elevenlabs_realtime` | `ElevenLabsRealtimeClient` | yes | — | — | — | local cut + async confirmation | — | yes |
 
 Capability checks use `providerSupports(mode, capability)` in `src/voice/voiceModes.ts`.
 
-For text-mediated sessions, the OpenAI ASR bridge still powers `bridge` mode and the optional bridge-style ASR lane in `brain` mode. ElevenLabs can also be selected for file-turn transcription on the full-brain path, and ElevenLabs speech output is rendered through the official TTS streaming endpoint instead of a provider-native conversational runtime client.
+For text-mediated sessions, the OpenAI ASR bridge still powers `bridge` mode and the optional bridge-style ASR lane in `brain` mode. ElevenLabs speech output is rendered through a persistent WebSocket connection to the ElevenLabs TTS streaming API (`/v1/text-to-speech/{voice_id}/stream-input`). Text chunks are sent as the brain LLM generates them, and audio chunks stream back for playback. ElevenLabs can also be selected for file-turn transcription on the full-brain path.
 
 ## 3. Lifecycle Phases
 
-Provider-native realtime clients have a simpler lifecycle than the ASR bridge — there is **no automatic reconnection**. Fatal errors end the session. `elevenlabs_realtime` skips this provider-client lifecycle entirely and uses local orchestration plus provider API calls at ASR/TTS time.
+Provider-native realtime clients have a simpler lifecycle than the ASR bridge — there is **no automatic reconnection**. Fatal errors end the session.
 
 | Phase | Meaning |
 |---|---|
@@ -179,7 +180,7 @@ Completely different protocol. Uses `setup` message at connection, then `realtim
 
 ### ElevenLabs
 
-Agent-based model. Uses signed URL auth (`fetchSignedUrl`). Audio sent as `user_audio_chunk`. `ping`/`pong` keepalive. Instructions sent only at connect time; no mid-session updates. `cancelActiveResponse()` returns false for immediate ack. Interrupt acceptance is `local_cut_async_confirmation`: the runtime can accept a locally committed cut immediately, and the provider's later `interruption` event is mapped to `response_done` with `status: "interrupted"` for confirmation/observability.
+TTS-only WebSocket client. Connects to `wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input` with model, output format, and API key as query/header params. First message initializes with `{ text: " ", voice_settings, generation_config }`. Subsequent text is sent as `{ text: "...", flush: true }` to trigger immediate audio generation. Server responds with `{ audio: "<base64>" }` chunks and `{ isFinal: true }` on completion. Audio input (ASR) is handled by a separate shared ASR bridge, not through the ElevenLabs WebSocket. No mid-session instruction or tool updates. `cancelActiveResponse()` returns false (mid-stream cancellation not supported). Interrupt acceptance is `local_cut_async_confirmation`.
 
 ## 8. Cross-Domain Interactions (Client)
 

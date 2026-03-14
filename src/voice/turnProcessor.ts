@@ -1746,12 +1746,14 @@ export class TurnProcessor {
             minAsrClipBytes
           }
         });
-      } else if (!hasTranscriptOverride) {
-        // No bridge transcript available. With per-user ASR as the default
-        // transcription path for all modes, a turn without a bridge transcript
-        // means the ASR bridge wasn't connected yet or the capture was
-        // non-speech audio. Drop the turn rather than running file-based ASR
-        // which hallucinates on ambient noise and music.
+      } else if (
+        !hasTranscriptOverride &&
+        (session.perUserAsrEnabled || session.sharedAsrEnabled)
+      ) {
+        // ASR bridge is enabled but no bridge transcript arrived. This means
+        // the bridge wasn't connected yet or the capture was non-speech audio.
+        // Drop the turn rather than falling back to file-based ASR which
+        // hallucinates on ambient noise and music.
         this.store.logAction({
           kind: "voice_runtime",
           guildId: session.guildId,
@@ -1774,6 +1776,30 @@ export class TurnProcessor {
           }
         });
         return;
+      } else if (!hasTranscriptOverride && this.llm?.isAsrReady?.() && this.llm?.transcribeAudio) {
+        // File-based ASR path: used when the ASR bridge is intentionally
+        // disabled (e.g. transcriptionMethod: "file_wav" or no OpenAI API key).
+        asrStartedAtMs = Date.now();
+        const transcriptionResult = await transcribePcmTurnWithPlan({
+          transcribe: (args) => this.host.transcribePcmTurn(args),
+          session,
+          userId,
+          pcmBuffer: normalizedPcmBuffer,
+          plan: transcriptionPlan,
+          sampleRateHz,
+          captureReason,
+          traceSource: "voice_realtime_turn_decider",
+          errorPrefix: "voice_realtime_transcription_failed",
+          emptyTranscriptRuntimeEvent: "voice_realtime_transcription_empty",
+          emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
+          asrLanguage: asrLanguageGuidance.language,
+          asrPrompt: asrLanguageGuidance.prompt
+        });
+        turnTranscript = transcriptionResult.transcript;
+        resolvedFallbackModel = transcriptionResult.fallbackModel;
+        resolvedTranscriptionPlanReason = transcriptionResult.reason;
+        usedFallbackModelForTranscript = transcriptionResult.usedFallbackModel;
+        asrCompletedAtMs = Date.now();
       }
 
       const realtimeTranscriptGuard = inspectAsrTranscript(turnTranscript, STT_TRANSCRIPT_MAX_CHARS);
