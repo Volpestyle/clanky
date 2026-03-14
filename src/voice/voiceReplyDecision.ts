@@ -486,6 +486,12 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
         manager.hasPendingMusicDisambiguationForUser(session, normalizedUserId)
       );
   const musicActive = typeof manager.isMusicPlaybackActive === "function" && manager.isMusicPlaybackActive(session);
+  // Consume the transient bypass flag set by maybeHandleMusicPlaybackTurn when
+  // a control command candidate is deferred to the main brain (musicBrain off).
+  const musicControlCommandCandidateBypass = Boolean(session?.musicControlCommandCandidateBypass);
+  if (session) {
+    session.musicControlCommandCandidateBypass = false;
+  }
   if (!musicActive) {
     clearMusicWakeLatch(session);
   }
@@ -657,7 +663,7 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
         runtimeEventContext: normalizedRuntimeEventContext
       };
     }
-    if (!musicWakeLatched) {
+    if (!musicWakeLatched && !musicControlCommandCandidateBypass) {
       return {
         allow: false,
         reason: "music_playing_not_awake",
@@ -716,7 +722,7 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
       msUntilMusicWakeLatchExpiry = musicWakeLatchState.msUntilExpiry;
       conversationContext = buildConversationContext();
     }
-    if (!musicWakeLatched && !interruptedReplyOwnerFollowup) {
+    if (!musicWakeLatched && !interruptedReplyOwnerFollowup && !musicControlCommandCandidateBypass) {
       return {
         allow: false,
         reason: "music_playing_not_awake",

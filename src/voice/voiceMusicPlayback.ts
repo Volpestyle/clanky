@@ -2692,7 +2692,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
   );
   const musicBrainEnabled = isVoiceMusicBrainEnabled(resolvedSettings);
   const compactControlCommand =
-    musicBrainEnabled && !directAddressedToBot && !nameCueDetected
+    !directAddressedToBot && !nameCueDetected
       ? resolveCompactVoiceMusicControlCommand(normalizedTranscript, currentPhase)
       : null;
   const controlCommandCandidate =
@@ -2747,7 +2747,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
         nameCueDetected,
         disambiguationResolutionTurn,
         compactControlCommand,
-        musicBrainEnabled: true,
+        musicBrainEnabled,
         decisionReason: gateDecisionReason
       }
     });
@@ -2795,6 +2795,12 @@ export async function maybeHandleMusicPlaybackTurn(manager: MusicPlaybackHost, {
   }
 
   if (!musicBrainEnabled && controlCommandCandidate) {
+    // Signal to the downstream reply decision that this turn looks like a
+    // media control command so it can bypass the music wake gate.  The main
+    // brain will evaluate the full transcript and decide what to do.
+    if (session) {
+      session.musicControlCommandCandidateBypass = true;
+    }
     clearPendingMusicReplyHandoff(manager, session);
     logMusicAction(manager, {
       kind: "voice_runtime",
