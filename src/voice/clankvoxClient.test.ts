@@ -501,7 +501,8 @@ test("ClankvoxClient emits parsed native video state, frame, and end events", ()
       frameBase64: "AAAA",
       rtpTimestamp: 444,
       streamType: "screen",
-      rid: "100"
+      rid: "100",
+      daveDecrypted: false
     }
   ]);
   assert.deepEqual(endEvents, [

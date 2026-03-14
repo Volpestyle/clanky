@@ -36,13 +36,15 @@ import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 import { ensureAsrSessionConnected } from "./voiceAsrBridge.ts";
 import {
   applyNativeDiscordVideoState,
+  clearPendingNativeDiscordH264DecodeSequence,
   ensureNativeDiscordScreenShareState,
   listActiveNativeDiscordScreenSharers,
+  selectNativeDiscordH264BootstrapSequence,
   recordNativeDiscordVideoFrame,
   removeNativeDiscordVideoSharer
 } from "./nativeDiscordScreenShare.ts";
 import {
-  decodeNativeDiscordVideoFrameToJpeg,
+  decodeNativeDiscordVideoFrameToStillImage,
   hasNativeDiscordVideoDecoderSupport
 } from "./nativeDiscordVideoDecoder.ts";
 import { ensureStreamPublishState } from "./voiceStreamPublish.ts";
@@ -495,6 +497,22 @@ export class SessionLifecycle {
 
     session.inactivityEndsAt = Date.now() + inactivitySeconds * 1000;
     session.inactivityTimer = setTimeout(() => {
+      if (this.host.isMusicPlaybackActive(session)) {
+        this.host.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: null,
+          content: "voice_inactivity_deferred_media_active",
+          metadata: {
+            sessionId: session.id,
+            musicPhase: this.host.getMusicPhase(session),
+            inactivitySeconds
+          }
+        });
+        this.touchActivity(String(session.guildId), resolvedSettings);
+        return;
+      }
       this.fireAndForgetEndSession(session, {
         guildId: session.guildId,
         reason: "inactivity_timeout",
@@ -555,6 +573,7 @@ export class SessionLifecycle {
       session.playerState = status;
       if (status === "playing") {
         session.lastActivityAt = Date.now();
+        this.touchActivity(String(session.guildId));
         if (previousMusicPhase === "paused" || previousMusicPhase === "paused_wake_word") {
           this.host.setMusicPhase(session, "playing");
           setKnownMusicQueuePausedState(session, false);
@@ -1638,10 +1657,35 @@ export class SessionLifecycle {
       recordNativeDiscordVideoFrame(session, payload);
       if (!session.streamWatch?.active) return;
       if (String(session.streamWatch.targetUserId || "") !== normalizedUserId) return;
-      if (!payload.keyframe) return;
 
       const nativeScreenShare = ensureNativeDiscordScreenShareState(session);
-      nativeScreenShare.lastDecodeAttemptAt = Date.now();
+      const codec = String(payload.codec || "").trim().toLowerCase() || null;
+      const shouldBootstrapH264FirstFrame = codec === "h264" && nativeScreenShare.lastDecodeSuccessAt <= 0;
+      const pendingH264Sequence = shouldBootstrapH264FirstFrame
+        ? selectNativeDiscordH264BootstrapSequence(session, payload)
+        : null;
+
+      // During bootstrap (before first successful decode), only attempt to
+      // decode DAVE-decrypted frames.  Passthrough frames have valid NAL
+      // headers but garbage encrypted payloads that evade the pre-decode
+      // validators and burn the full 2-second ffmpeg timeout.  Skipping
+      // them here eliminates the ~18-second first-frame latency.
+      if (shouldBootstrapH264FirstFrame && !payload.daveDecrypted) {
+        return;
+      }
+
+      if (codec === "h264") {
+        if (shouldBootstrapH264FirstFrame) {
+          if (!pendingH264Sequence) {
+            return;
+          }
+        } else if (!payload.keyframe) {
+          return;
+        }
+      } else if (!payload.keyframe) {
+        return;
+      }
+
       nativeScreenShare.ffmpegAvailable = hasNativeDiscordVideoDecoderSupport();
       if (!nativeScreenShare.ffmpegAvailable) {
         if (nativeScreenShare.lastDecodeFailureReason !== "ffmpeg_not_installed") {
@@ -1671,22 +1715,32 @@ export class SessionLifecycle {
           content: "native_discord_video_frame_dropped_while_decoding",
           metadata: {
             sessionId: session.id,
-            codec: String(payload.codec || "").trim().toLowerCase() || null
+            codec,
+            pendingH264AccessUnitCount: pendingH264Sequence?.frameBase64s.length || null
           }
         });
         return;
       }
 
+      nativeScreenShare.lastDecodeAttemptAt = Date.now();
       nativeScreenShare.decodeInFlight = true;
       void (async () => {
         try {
-          const decoded = await decodeNativeDiscordVideoFrameToJpeg({
+          const decoded = await decodeNativeDiscordVideoFrameToStillImage({
             codec: payload.codec,
             frameBase64: payload.frameBase64,
+            sequenceFrameBase64s: pendingH264Sequence?.frameBase64s,
             rtpTimestamp: payload.rtpTimestamp
           });
           nativeScreenShare.lastDecodeSuccessAt = Date.now();
           nativeScreenShare.lastDecodeFailureReason = null;
+          if (
+            pendingH264Sequence &&
+            nativeScreenShare.pendingH264Decode?.userId === normalizedUserId &&
+            nativeScreenShare.pendingH264Decode?.firstRtpTimestamp === pendingH264Sequence.firstRtpTimestamp
+          ) {
+            clearPendingNativeDiscordH264DecodeSequence(session, normalizedUserId);
+          }
 
           const ingestResult = await this.host.ingestStreamFrame({
             guildId: session.guildId,
@@ -1712,7 +1766,8 @@ export class SessionLifecycle {
                 metadata: {
                   sessionId: session.id,
                   reason: ingestReason,
-                  codec: String(payload.codec || "").trim().toLowerCase() || null
+                  codec,
+                  pendingH264AccessUnitCount: pendingH264Sequence?.frameBase64s.length || null
                 }
               });
             }
@@ -1721,6 +1776,14 @@ export class SessionLifecycle {
           const errorMessage = String((error as Error)?.message || error);
           nativeScreenShare.lastDecodeFailureAt = Date.now();
           nativeScreenShare.lastDecodeFailureReason = errorMessage;
+          if (
+            codec === "h264" &&
+            pendingH264Sequence &&
+            nativeScreenShare.pendingH264Decode?.userId === normalizedUserId &&
+            nativeScreenShare.pendingH264Decode?.firstRtpTimestamp === pendingH264Sequence.firstRtpTimestamp
+          ) {
+            clearPendingNativeDiscordH264DecodeSequence(session, normalizedUserId);
+          }
           this.host.store.logAction({
             kind: "voice_error",
             guildId: session.guildId,
@@ -1729,14 +1792,17 @@ export class SessionLifecycle {
             content: `native_discord_video_decode_failed: ${errorMessage}`,
             metadata: {
               sessionId: session.id,
-              codec: String(payload.codec || "").trim().toLowerCase() || null,
+              codec,
               keyframe: Boolean(payload.keyframe),
               rtpTimestamp: Number.isFinite(Number(payload.rtpTimestamp))
                 ? Math.max(0, Math.floor(Number(payload.rtpTimestamp)))
                 : null,
               frameBytes: Buffer.from(String(payload.frameBase64 || "").trim(), "base64").length,
-              timedOut: errorMessage === "ffmpeg_decode_timeout",
-              transportStatus: nativeScreenShare.transportStatus || null
+              pendingH264AccessUnitCount: pendingH264Sequence?.frameBase64s.length || null,
+              pendingH264ApproximateBytes: pendingH264Sequence?.approximateBytes || null,
+              timedOut: errorMessage.startsWith("ffmpeg_decode_timeout"),
+              transportStatus: nativeScreenShare.transportStatus || null,
+              headerHex: Buffer.from(String(payload.frameBase64 || "").trim(), "base64").subarray(0, 32).toString("hex") || null
             }
           });
         } finally {

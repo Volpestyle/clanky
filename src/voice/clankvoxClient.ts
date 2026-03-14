@@ -60,6 +60,7 @@ export type ClankvoxUserVideoFrame = {
   rtpTimestamp: number;
   streamType: string | null;
   rid: string | null;
+  daveDecrypted: boolean;
 };
 export type ClankvoxUserVideoEnd = {
   userId: string;
@@ -318,7 +319,8 @@ function parseUserVideoFrame(msg: JsonRecord): ClankvoxUserVideoFrame | null {
     frameBase64,
     rtpTimestamp,
     streamType: asString(msg.streamType),
-    rid: asString(msg.rid)
+    rid: asString(msg.rid),
+    daveDecrypted: asBoolean(msg.daveDecrypted) ?? false
   };
 }
 
