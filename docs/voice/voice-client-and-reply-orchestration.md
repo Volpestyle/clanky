@@ -466,7 +466,7 @@ While assistant speech is active:
 1. Partial and final ASR transcripts from non-target speakers are coalesced into a short overlap burst, while the current reply target keeps the privileged same-speaker interrupt path.
 2. Obvious takeover phrases can resolve the burst immediately to `INTERRUPT`.
 3. Obvious laughter, backchannel, and other low-signal overlap can resolve the burst immediately to `IGNORE`.
-4. Ambiguous overlap is sent once to the interrupt classifier.
+4. Ambiguous overlap is sent once to the interrupt classifier (when enabled; otherwise defaults to `IGNORE`).
 5. Finalized ASR bridge turns are staged while the decision is pending.
 6. `INTERRUPT` flushes the staged turn into the normal pipeline after cutting current assistant output.
 7. `IGNORE` drops the staged turn entirely. The room reacted, but nobody actually took the floor.

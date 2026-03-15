@@ -980,40 +980,56 @@ export function VoiceModeSettingsSection({
             </div>
           </div>
           <p>
-            Who can interrupt the bot mid-speech. Speaker mode gives the current reply target the privileged fast path, while other speakers can still seize the floor through overlap arbitration when they clearly take over.
+            Who can interrupt the bot mid-speech. Speaker mode gives the current reply target the privileged fast path; other speakers can only interrupt via wake word{form.voiceUseInterruptClassifier ? " or when the interrupt classifier detects a clear takeover" : ""}.
           </p>
-          <div className="split">
-            <div>
-              <label htmlFor="voice-interrupt-provider">Interrupt classifier provider</label>
-              <select
-                id="voice-interrupt-provider"
-                value={form.voiceInterruptLlmProvider}
-                onChange={setVoiceInterruptProvider}
-              >
-                <LlmProviderOptions />
-              </select>
-            </div>
-            <div>
-              <label htmlFor="voice-interrupt-model-preset">Interrupt classifier model ID</label>
-              <select
-                id="voice-interrupt-model-preset"
-                value={selectedVoiceInterruptPresetModel}
-                onChange={selectVoiceInterruptPresetModel}
-              >
-                {voiceInterruptModelOptions.map((modelId) => (
-                  <option key={modelId} value={modelId}>
-                    {modelId}
-                  </option>
-                ))}
-              </select>
-            </div>
+          <div className="toggles">
+            <label>
+              <input
+                type="checkbox"
+                checked={form.voiceUseInterruptClassifier !== false}
+                onChange={set("voiceUseInterruptClassifier")}
+              />
+              Use interrupt classifier
+            </label>
           </div>
           <p>
-            While the bot is already speaking, overlapping ASR snippets are grouped into short bursts and this model decides whether the room is actually taking the floor or just reacting.
+            {form.voiceUseInterruptClassifier !== false
+              ? "When enabled, overlapping ASR snippets are grouped into short bursts. Obvious noise (laughter, filler) is filtered instantly, obvious takeovers are detected instantly, and ambiguous overlap is sent to a dedicated LLM for a final decision."
+              : "When disabled, non-target speakers can only interrupt via wake word (bot name/aliases). The reply target still gets the normal fast interrupt path. No LLM calls are made for overlap arbitration."}
           </p>
-          <p className="vps-runtime-summary-note">
-            Current interrupt binding: {formatProviderModelLabel(voiceInterruptProvider, voiceInterruptModel, "auto")}
-          </p>
+          {form.voiceUseInterruptClassifier !== false && (
+            <>
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-interrupt-provider">Interrupt classifier provider</label>
+                  <select
+                    id="voice-interrupt-provider"
+                    value={form.voiceInterruptLlmProvider}
+                    onChange={setVoiceInterruptProvider}
+                  >
+                    <LlmProviderOptions />
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="voice-interrupt-model-preset">Interrupt classifier model ID</label>
+                  <select
+                    id="voice-interrupt-model-preset"
+                    value={selectedVoiceInterruptPresetModel}
+                    onChange={selectVoiceInterruptPresetModel}
+                  >
+                    {voiceInterruptModelOptions.map((modelId) => (
+                      <option key={modelId} value={modelId}>
+                        {modelId}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <p className="vps-runtime-summary-note">
+                Current interrupt binding: {formatProviderModelLabel(voiceInterruptProvider, voiceInterruptModel, "auto")}
+              </p>
+            </>
+          )}
 
         </VoiceSubpanel>
 

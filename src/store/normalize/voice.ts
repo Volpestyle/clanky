@@ -120,6 +120,10 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
         conversationPolicy.defaultInterruptionMode,
         DEFAULT_SETTINGS.voice.conversationPolicy.defaultInterruptionMode
       ),
+      useInterruptClassifier: normalizeBoolean(
+        conversationPolicy.useInterruptClassifier,
+        DEFAULT_SETTINGS.voice.conversationPolicy.useInterruptClassifier
+      ),
       replyPath: normalizedReplyPath,
       ttsMode: normalizedTtsMode,
       thinking:

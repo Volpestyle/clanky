@@ -5101,6 +5101,7 @@ export class VoiceSessionManager {
         .reverse()
         .map((entry) => String(entry.userId || "").trim() || null)
         .find(Boolean) || null;
+    const classifierEnabled = getVoiceConversationPolicy(settings).useInterruptClassifier !== false;
     const result = await classifyVoiceInterruptBurst(this, {
       session,
       settings,
@@ -5108,7 +5109,8 @@ export class VoiceSessionManager {
         normalizeVoiceText(burst.assistantUtteranceText || "", STT_REPLY_MAX_CHARS) ||
         this.resolveCurrentInterruptibleUtteranceText(session),
       entries: burst.entries,
-      traceUserId
+      traceUserId,
+      skipLlm: !classifierEnabled
     });
     const decidedAt = Date.now();
     const latestTranscriptByUtteranceId = new Map<number, string>();
@@ -5383,6 +5385,24 @@ export class VoiceSessionManager {
         source: "transcript_allowed_speaker_late_rescue"
       });
       if (rescued) return;
+      return;
+    }
+
+    const useInterruptClassifier = getVoiceConversationPolicy(settings).useInterruptClassifier !== false;
+    if (!useInterruptClassifier && interruptionPolicy?.scope === "speaker") {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: normalizedUserId,
+        content: "voice_interrupt_overlap_skipped_classifier_disabled",
+        metadata: {
+          sessionId: session.id,
+          utteranceId: normalizedUtteranceId,
+          speakerName: normalizeInlineText(speakerName, 80) || this.resolveVoiceSpeakerName(session, normalizedUserId),
+          transcript: normalizedTranscript
+        }
+      });
       return;
     }
 

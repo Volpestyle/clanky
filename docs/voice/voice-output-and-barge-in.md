@@ -307,13 +307,21 @@ Flow while assistant speech is active:
 11. Resolution order:
    - obvious takeover text like `wait`, `hold on`, `stop`, or explicit cancel intent interrupts immediately
    - obvious low-signal text like laughter, backchannel, and tiny acknowledgements is ignored immediately
-   - ambiguous short overlap is sent once to the dedicated interrupt classifier, which must answer `INTERRUPT` or `IGNORE`
+    - ambiguous short overlap is sent once to the dedicated interrupt classifier, which must answer `INTERRUPT` or `IGNORE` (unless the classifier is disabled — see below)
 12. While the decision is pending, finalized ASR turns for that utterance are staged instead of being forwarded to the normal turn queue.
 13. If the burst resolves to `INTERRUPT`, the runtime executes the normal output-lock interrupt, stores interruption context if the reply was actually cut, and flushes the staged turn into the normal pipeline.
 14. If the assistant output already moved on to a newer reply before the classifier result returns, the staged turn is forwarded normally and no retroactive cut is applied to the newer output.
 15. If the burst resolves to `IGNORE`, the staged turn is dropped and no interrupt is recorded. Filler, laughter, and room noise do not become user turns.
 
 The interrupt classifier binding comes from `agentStack.overrides.voiceInterruptClassifier` and is exposed in the dashboard as the voice-mode "Interrupt classifier" provider/model controls. If no dedicated override exists, it falls back to the preset interrupt classifier, then the admission classifier, then the orchestrator.
+
+### Disabling the interrupt classifier
+
+The setting `voice.conversationPolicy.useInterruptClassifier` (default `true`) controls whether the LLM classifier tier is used. When disabled:
+
+- **Speaker mode:** Non-target speakers can only interrupt via wake word (bot name/aliases). The burst accumulation path is skipped entirely for non-target speakers — if direct address didn't match, the overlap is silently dropped. The reply target still gets the normal fast acoustic interrupt path.
+- **Anyone mode:** Heuristic fast paths still run (obvious noise is filtered, obvious takeovers are detected instantly), but ambiguous overlap defaults to `ignore` instead of calling the LLM. No latency penalty, no LLM cost.
+- **None mode:** All interrupts are already disabled, so the classifier toggle has no effect.
 
 ## 10. Acoustic Gating
 All acoustic gates are deterministic. The agent has no input here. In ASR-bridge sessions, these gates still control capture promotion, echo guards, and whether audio is worth transcribing. The current reply target can arm a same-speaker interrupt as soon as Realtime ASR confirms `speech_started`, and the runtime now has a matching local-capture fallback when provider `speech_started` is missing but the same promoted capture is clearly still taking the floor. The hard cut still requires the same assertive raw barge-in gate, but that gate is re-checked through the sustain window instead of being locked to the very first overlap chunk. Transcript bursts remain the floor-transfer path for everyone else trying to seize the floor mid-reply, and wake-word/direct-address transcripts can still seize the floor immediately when policy allows. Raw acoustic barge-in remains the direct interrupt path for sessions that are not using transcript-overlap interrupts.

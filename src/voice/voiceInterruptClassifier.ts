@@ -194,13 +194,15 @@ export async function classifyVoiceInterruptBurst(
     settings,
     interruptedUtteranceText,
     entries,
-    traceUserId = null
+    traceUserId = null,
+    skipLlm = false
   }: {
     session: Pick<VoiceSession, "id" | "guildId" | "textChannelId">;
     settings: InterruptClassifierSettings;
     interruptedUtteranceText: string;
     entries: VoiceInterruptOverlapBurstEntry[];
     traceUserId?: string | null;
+    skipLlm?: boolean;
   }
 ): Promise<VoiceInterruptClassifierResult> {
   const normalizedEntries = (Array.isArray(entries) ? entries : [])
@@ -229,6 +231,15 @@ export async function classifyVoiceInterruptBurst(
     return {
       decision: "interrupt",
       source: "takeover_heuristic",
+      latencyMs: 0,
+      promptLog: null
+    };
+  }
+
+  if (skipLlm) {
+    return {
+      decision: "ignore",
+      source: "classifier_disabled",
       latencyMs: 0,
       promptLog: null
     };
@@ -334,8 +345,3 @@ export async function classifyVoiceInterruptBurst(
   }
 }
 
-function isLowSignalInterruptBurst(entries: VoiceInterruptOverlapBurstEntry[]) {
-  const normalizedEntries = Array.isArray(entries) ? entries : [];
-  return normalizedEntries.length > 0 &&
-    normalizedEntries.every((entry) => isLikelyLowSignalOverlapText(entry.transcript));
-}

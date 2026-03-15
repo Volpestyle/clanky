@@ -521,6 +521,7 @@ export const DEFAULT_SETTINGS = {
       allowNsfwHumor: true,
       textOnlyMode: false,
       defaultInterruptionMode: "speaker",
+      useInterruptClassifier: false,
       replyPath: "brain",
       ttsMode: "realtime",
       thinking: "disabled",

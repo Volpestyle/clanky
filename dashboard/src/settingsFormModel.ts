@@ -344,6 +344,7 @@ function buildSettingsFormView(settings: unknown) {
       asrLanguageHint: transcription.languageHint,
       allowNsfwHumor: voiceConversation.allowNsfwHumor,
       defaultInterruptionMode: voiceConversation.defaultInterruptionMode,
+      useInterruptClassifier: voiceConversation.useInterruptClassifier,
       maxSessionMinutes: voiceSessionLimits.maxSessionMinutes,
       inactivityLeaveSeconds: voiceSessionLimits.inactivityLeaveSeconds,
       maxSessionsPerDay: voiceSessionLimits.maxSessionsPerDay,
@@ -581,6 +582,8 @@ export function settingsToForm(settings: unknown) {
     voiceAllowNsfwHumor: resolved?.voice?.allowNsfwHumor ?? defaultVoice.allowNsfwHumor,
     voiceDefaultInterruptionMode:
       resolved?.voice?.defaultInterruptionMode ?? defaultVoice.defaultInterruptionMode ?? "speaker",
+    voiceUseInterruptClassifier:
+      resolved?.voice?.useInterruptClassifier ?? defaultVoice.useInterruptClassifier ?? true,
     voiceMaxSessionMinutes: resolved?.voice?.maxSessionMinutes ?? defaultVoice.maxSessionMinutes,
     voiceInactivityLeaveSeconds: resolved?.voice?.inactivityLeaveSeconds ?? defaultVoice.inactivityLeaveSeconds,
     voiceMaxSessionsPerDay: resolved?.voice?.maxSessionsPerDay ?? defaultVoice.maxSessionsPerDay,
@@ -1644,6 +1647,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
         allowNsfwHumor: form.voiceAllowNsfwHumor,
         textOnlyMode: Boolean(form.voiceTextOnlyMode),
         defaultInterruptionMode: String(form.voiceDefaultInterruptionMode || "speaker").trim().toLowerCase(),
+        useInterruptClassifier: form.voiceUseInterruptClassifier !== false,
         replyPath: normalizedVoiceReplyPath,
         ttsMode: normalizedVoiceTtsMode,
         thinking: String(form.voiceThinking || "disabled").trim().toLowerCase(),
