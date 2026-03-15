@@ -8,14 +8,14 @@
 > `clankvox` local docs: [`../../src/voice/clankvox/README.md`](../../src/voice/clankvox/README.md)
 > Reference implementations: [`Discord-video-stream`](https://github.com/Discord-RE/Discord-video-stream), [`Discord-video-selfbot`](https://github.com/aiko-chan-ai/Discord-video-selfbot)
 
-This repo supports native Discord Go Live in both directions:
+This repo supports native Discord video in both directions:
 
-- Native Discord screen watch: subscribe to an active Discord Go Live stream through Discord's voice media protocol.
-- Native Discord self publish: create our own Go Live stream and send H264 video through the stream server connection.
-- Share-link fallback: send `/share/:token`, capture with `getDisplayMedia()`, and POST JPEG frames back into the bot.
-  This transport can be disabled completely with `STREAM_LINK_FALLBACK=false`.
+- **Native Go Live screen watch**: subscribe to an active Discord Go Live stream through Discord's voice media protocol. Uses a separate `stream_watch` RTC transport.
+- **Webcam video watch**: subscribe to a user's webcam video on the main voice connection. No separate transport needed — video arrives alongside audio on the same UDP socket. Activated as a fallback when the target has their webcam on but is not Go Live streaming.
+- **Native Discord self publish**: create our own Go Live stream and send H264 video through the stream server connection.
+- **Share-link fallback**: send `/share/:token`, capture with `getDisplayMedia()`, and POST JPEG frames back into the bot. This transport can be disabled completely with `STREAM_LINK_FALLBACK=false`.
 
-The model still only sees `start_screen_watch` for inbound visual context. Outbound publish is a runtime capability tied to the music pipeline, not a new conversational tool.
+The model still only sees `start_screen_watch` for inbound visual context (both Go Live and webcam). Outbound publish is a runtime capability tied to the music pipeline, not a new conversational tool.
 
 In the full-brain voice path, `start_screen_watch` is exposed as soon as native
 screen watch is supported and enabled for the session, even if only discovered
@@ -147,6 +147,20 @@ Confirmed via live debugging in the older bot-token runtime on March 12, 2026:
 The selfbot fork changes the account/control-plane model, not the fact that Go Live uses a separate stream server connection.
 
 Go Live video state and video frames live on a separate stream server that requires its own connection.
+
+## Webcam Video on the Voice Connection
+
+Unlike Go Live, webcam video (when a user enables their camera in a voice channel) lives on the **main voice connection**:
+
+- Discord sends OP12/OP18 video state updates with `streamType: "video"` on the main voice WebSocket
+- The user's webcam SSRC appears alongside their audio SSRC on the same UDP socket
+- No separate transport, stream key, or Go Live discovery is needed
+- clankvox sends OP15 media sink wants on the voice connection to request the webcam SSRC
+- The same H264 depacketization, DAVE E2EE decryption, persistent decoder, and JPEG pipeline applies
+
+When both a Go Live stream_watch transport and webcam video exist simultaneously, clankvox partitions media sink wants: screen-share SSRCs route to stream_watch, webcam SSRCs route to the voice connection. The capture supervisor allows webcam frames from the voice transport to pass through even when a stream_watch connection is active (it only suppresses screen-type frames to avoid duplicates).
+
+On the TS side, `enableWatchStreamForUser` first tries Go Live discovery. If that fails (no stream key — user isn't Go Live streaming), it checks `sharerHasWebcamOnly()` for webcam streams and subscribes with `preferredStreamType: null`. Frames flow through the same `DecodedVideoFrame` IPC → `ingestStreamFrame` → vision model path.
 
 ## Discord Protocol: Go Live Stream Architecture
 

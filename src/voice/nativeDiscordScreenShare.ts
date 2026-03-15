@@ -290,6 +290,30 @@ export function recordNativeDiscordVideoFrame(
   return nextValue;
 }
 
+/**
+ * Returns true if the given sharer has an active webcam ("video") stream
+ * but NO active Go Live ("screen") stream.  Used to distinguish webcam
+ * watching (which uses the main voice connection) from screen share
+ * watching (which uses a separate stream_watch transport).
+ */
+export function sharerHasWebcamOnly(
+  sharer: VoiceSessionNativeScreenShareSharerState | null | undefined
+): boolean {
+  if (!sharer || !Array.isArray(sharer.streams) || sharer.streams.length === 0) {
+    return false;
+  }
+  const hasScreen = sharer.streams.some(
+    (s) => streamLooksActive(s) && s.streamType === "screen"
+  );
+  const hasVideo = sharer.streams.some(
+    (s) =>
+      streamLooksActive(s) &&
+      s.streamType != null &&
+      s.streamType !== "screen"
+  );
+  return hasVideo && !hasScreen;
+}
+
 export function listActiveNativeDiscordScreenSharers(
   session: NativeDiscordScreenShareSessionLike | null | undefined
 ): VoiceSessionNativeScreenShareSharerState[] {

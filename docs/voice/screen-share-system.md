@@ -8,7 +8,7 @@ Native Discord receive status: [`discord-streaming.md`](discord-streaming.md)
 Direct selfbot stream-watch plan: [`../archive/selfbot-stream-watch.md`](../archive/selfbot-stream-watch.md)
 Cross-cutting settings contract: [`../reference/settings.md`](../reference/settings.md)
 
-This document is about inbound screen watch. For the broader product-level media story, including music/video playback and outbound publish context, start at [`../capabilities/media.md`](../capabilities/media.md). The same selfbot stream-discovery control plane also supports outbound native self publish for music video relay and browser-session share; that sender path is documented in [`discord-streaming.md`](discord-streaming.md).
+This document is about inbound screen/video watch. For the broader product-level media story, including music/video playback and outbound publish context, start at [`../capabilities/media.md`](../capabilities/media.md). The same selfbot stream-discovery control plane also supports outbound native self publish for music video relay and browser-session share; that sender path is documented in [`discord-streaming.md`](discord-streaming.md).
 
 Persistence, preset inheritance, dashboard envelope shape, and save/version semantics live in [`../reference/settings.md`](../reference/settings.md). This document covers the screen-watch pipeline and the stream-watch settings that shape voice-local visual context.
 
@@ -56,7 +56,7 @@ The mode is configurable in the dashboard under **Screen watch vision mode** or 
 <!-- source: docs/diagrams/screen-share-system.mmd -->
 
 ```
-Discord VC user says "share my screen"
+Discord VC user says "share my screen" / turns on webcam
          │
          ▼
   Selfbot reply pipeline / voice tool
@@ -64,13 +64,19 @@ Discord VC user says "share my screen"
          │
          ▼
   Runtime chooses watch transport
-  ├─ Native Discord watch (preferred)
+  ├─ Native Go Live screen watch (preferred for screen shares)
   │  ├─ selfbot gateway resolves target + stream credentials
-  │  ├─ clankvox opens native stream-watch transport
+  │  ├─ clankvox opens native stream-watch transport (separate RTC connection)
   │  ├─ clankvox decrypts and depacketizes H264/VP8 video frames
   │  ├─ H264: persistent OpenH264 decoder in clankvox decodes to YUV, turbojpeg encodes to JPEG, sent as DecodedVideoFrame IPC
   │  ├─ VP8: raw bitstream forwarded to Bun for per-frame ffmpeg decode to JPEG
   │  └─ feed frames to the processing pipeline
+  ├─ Webcam video watch (fallback when no Go Live stream)
+  │  ├─ target user has webcam on but is not Go Live streaming
+  │  ├─ webcam video arrives on the main voice connection (no separate transport)
+  │  ├─ clankvox subscribes via OP15 media sink wants on the voice connection
+  │  ├─ same H264 decode + JPEG + DecodedVideoFrame IPC pipeline
+  │  └─ feed frames to the same processing pipeline
   └─ Share-link fallback
      ├─ ScreenShareSessionManager.createSession()
      ├─ bot sends /share/:token link
@@ -183,10 +189,11 @@ When a watch session ends, the default text model summarizes the accumulated key
 - Fallback sessions reuse existing requester+target links when possible
 - Set `STREAM_LINK_FALLBACK=false` to disable that fallback transport entirely and stay native-only
 
-### Native Discord watch
+### Native Discord watch (Go Live + webcam)
 
-- the selfbot gateway tracks active sharers and stream credentials
-- `clankvox` opens a separate native `stream_watch` transport for the target user's active stream
+Two transport modes exist for native Discord video:
+
+**Go Live screen share** — the selfbot gateway tracks active sharers and stream credentials. `clankvox` opens a separate native `stream_watch` transport for the target user's active stream.
 - For H264, `clankvox` maintains a persistent per-user OpenH264 decoder that accumulates reference frame state across all frames (IDR and P-frames). Decoded YUV is encoded to JPEG via turbojpeg and emitted as `DecodedVideoFrame` IPC messages with pre-encoded JPEG, width, height, and scene-cut metrics. JPEG emission is rate-limited to `nativeDiscordMaxFramesPerSecond` but the decoder sees every frame for state accumulation. The decoder auto-resets after 50 consecutive errors and sends PLI for recovery.
 - For VP8, `clankvox` emits raw frame payloads through Bun IPC and Bun decodes sampled keyframes to JPEG via per-frame ffmpeg
 - Decoded JPEGs (from either codec path) are forwarded into the existing stream-watch pipeline
@@ -199,6 +206,15 @@ When a watch session ends, the default text model summarizes the accumulated key
 - Active native sharer metadata is prompt context, but image visibility still requires an active watch session
 - Voice session tracks Go Live state in a `goLiveStream` field (active, streamKey, targetUserId, credentials) populated by stream discovery callbacks
 - Link fallback is suppressed at two checkpoints when native watch is already active for the target (see `discord-streaming.md`)
+
+**Webcam video** — when the target user has their webcam on but is NOT Go Live streaming, the system falls back to watching webcam video over the **main voice connection** (no separate transport needed):
+- Go Live discovery fails (no stream key) → `enableWatchStreamForUser` checks if the target has a webcam stream via `sharerHasWebcamOnly()`
+- If webcam detected, subscribes to the user's video on the main voice connection with `preferredStreamType: null` (accepts any stream type)
+- Webcam video SSRC appears on the main voice UDP socket alongside audio
+- clankvox sends OP15 media sink wants for the webcam SSRC on the voice connection (not stream_watch)
+- The same H264 persistent decoder pipeline handles webcam frames
+- Frames flow through the same `DecodedVideoFrame` IPC → `ingestStreamFrame` → vision model path
+- Media sink wants are partitioned: screen SSRCs route to stream_watch, webcam SSRCs route to voice connection. Both can coexist.
 
 ### Share page fallback
 
@@ -298,7 +314,8 @@ This separates "what the scanner saw" from "what context the VC brain currently 
 - Optional parameter: `{ target?: string }`
 - `target` can be a display name, username, Discord mention, or Discord user id
 - If `target` resolves to one active sharer, runtime watches that share
-- If `target` resolves to a voice participant who is not actively sharing, runtime can still open the share-link fallback for that user when `STREAM_LINK_FALLBACK=true`
+- If `target` resolves to a voice participant who is not actively sharing but has their webcam on, runtime watches the webcam video over the main voice connection
+- If `target` resolves to a voice participant who is not actively sharing and has no webcam, runtime can still open the share-link fallback for that user when `STREAM_LINK_FALLBACK=true`
 - If no `target` is provided, runtime only auto-picks when the requester is sharing or exactly one sharer is active
 - If multiple sharers are active and no `target` is provided, runtime refuses instead of guessing
 - Only available when `screenShareAvailable = true`
@@ -323,7 +340,7 @@ This separates "what the scanner saw" from "what context the VC brain currently 
 | `src/bot/screenShare.ts` | Bot integration, native-first transport selection, fallback suppression |
 | `src/voice/clankvox/src/video_decoder.rs` | Persistent OpenH264 H264 decoder, turbojpeg JPEG encode, scene-cut metrics |
 | `src/voice/nativeDiscordVideoDecoder.ts` | VP8 keyframe decode to JPEG via ffmpeg (H264 is decoded in-process by clankvox) |
-| `src/voice/nativeDiscordScreenShare.ts` | Active sharer tracking, target resolution |
+| `src/voice/nativeDiscordScreenShare.ts` | Active sharer tracking, target resolution, `sharerHasWebcamOnly()` webcam detection |
 | `src/selfbot/streamDiscovery.ts` | Go Live stream discovery state, stream key management |
 | `src/voice/voiceReplyPipeline.ts` | Frame + notes passed to brain generation |
 | `src/prompts/promptVoice.ts` | Screen context in voice prompts |

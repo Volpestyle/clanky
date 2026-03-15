@@ -22,7 +22,8 @@ import {
   clearNativeDiscordScreenShareState,
   ensureNativeDiscordScreenShareState,
   listActiveNativeDiscordScreenSharers,
-  removeNativeDiscordVideoSharer
+  removeNativeDiscordVideoSharer,
+  sharerHasWebcamOnly
 } from "./nativeDiscordScreenShare.ts";
 import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
 
@@ -1504,47 +1505,117 @@ export async function enableWatchStreamForUser(manager: StreamWatchManager, {
     requesterUserId: normalizedRequesterId,
     targetUserId: resolvedTarget
   });
+
+  // ── Try Go Live (screen share) first ─────────────────────────
   const nativeTransportRequest = requestNativeDiscordStreamWatch(manager, session, {
     targetUserId: resolvedTarget,
     source
   });
+
+  // ── Webcam fallback ──────────────────────────────────────────
+  // If Go Live discovery fails (no stream key — user isn't Go
+  // Live streaming), check if the target has a webcam ("video")
+  // stream on the main voice connection.  Webcam video uses the
+  // same voice transport, so we just subscribe — no separate RTC
+  // connection needed.
+  let isWebcamPath = false;
   if (!nativeTransportRequest.ok) {
-    return {
-      ok: false,
-      reason: nativeTransportRequest.reason,
-      fallback: nativeTransportRequest.fallback
-    };
-  }
-  if (nativeTransportRequest.stream && streamHasCredentials(nativeTransportRequest.stream)) {
-    const connectResult = connectNativeDiscordStreamTransport(manager, session, nativeTransportRequest.stream, {
-      source
-    });
-    if (!connectResult.ok) {
+    const nativeState = ensureNativeDiscordScreenShareState(session);
+    const sharer = nativeState.sharers.get(resolvedTarget);
+    if (sharer && sharerHasWebcamOnly(sharer)) {
+      isWebcamPath = true;
+      updateNativeDiscordStreamTransportState(session, {
+        transportStatus: "ready",
+        transportReason: "webcam_on_voice_transport"
+      });
+      manager.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: resolvedTarget,
+        content: "screen_watch_started_native",
+        metadata: {
+          sessionId: session.id,
+          source: String(source || "webcam"),
+          targetUserId: resolvedTarget,
+          transport: "voice_webcam",
+          streamType: "video"
+        }
+      });
+    } else {
       return {
         ok: false,
-        reason: connectResult.reason,
-        fallback: "screen_share_link"
+        reason: nativeTransportRequest.reason,
+        fallback: nativeTransportRequest.fallback
       };
     }
-  } else {
-    updateNativeDiscordStreamTransportState(session, {
-      transportStatus: "waiting_for_credentials",
-      transportReason: null
-    });
   }
-  subscribeNativeDiscordVideo(manager, session, resolvedSettings, resolvedTarget, source);
+
+  if (!isWebcamPath) {
+    if (nativeTransportRequest.stream && streamHasCredentials(nativeTransportRequest.stream)) {
+      const connectResult = connectNativeDiscordStreamTransport(manager, session, nativeTransportRequest.stream, {
+        source
+      });
+      if (!connectResult.ok) {
+        return {
+          ok: false,
+          reason: connectResult.reason,
+          fallback: "screen_share_link"
+        };
+      }
+    } else {
+      updateNativeDiscordStreamTransportState(session, {
+        transportStatus: "waiting_for_credentials",
+        transportReason: null
+      });
+    }
+  }
+
+  // Subscribe to the target user's video.  For webcam, use null
+  // preferredStreamType so the soft-preference sort picks the
+  // webcam stream.  For Go Live, use the configured default
+  // ("screen").
+  if (isWebcamPath) {
+    const subscription = resolveNativeDiscordVideoSubscriptionSettings(resolvedSettings);
+    try {
+      session.voxClient.subscribeUserVideo({
+        userId: resolvedTarget,
+        maxFramesPerSecond: subscription.maxFramesPerSecond,
+        preferredQuality: subscription.preferredQuality,
+        preferredPixelCount: subscription.preferredPixelCount,
+        preferredStreamType: null  // accept any stream type (webcam)
+      });
+      const nativeState = ensureNativeDiscordScreenShareState(session);
+      nativeState.subscribedTargetUserId = resolvedTarget;
+    } catch (error) {
+      manager.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: resolvedTarget,
+        content: `webcam_video_subscribe_failed: ${String((error as Error)?.message || error)}`,
+        metadata: { sessionId: session.id, targetUserId: resolvedTarget }
+      });
+    }
+  } else {
+    subscribeNativeDiscordVideo(manager, session, resolvedSettings, resolvedTarget, source);
+  }
+
   manager.store.logAction({
     kind: "voice_runtime",
     guildId: session.guildId,
     channelId: session.textChannelId,
     userId: normalizedRequesterId,
-    content: "stream_watch_enabled_programmatic",
+    content: isWebcamPath
+      ? "stream_watch_enabled_webcam"
+      : "stream_watch_enabled_programmatic",
     metadata: {
       sessionId: session.id,
       source: String(source || "screen_share_link"),
       targetUserId: resolvedTarget,
       streamKey: ensureNativeDiscordScreenShareState(session).activeStreamKey || null,
-      transportStatus: ensureNativeDiscordScreenShareState(session).transportStatus || null
+      transportStatus: ensureNativeDiscordScreenShareState(session).transportStatus || null,
+      isWebcam: isWebcamPath
     }
   });
 
