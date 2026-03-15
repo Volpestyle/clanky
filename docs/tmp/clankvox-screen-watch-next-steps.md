@@ -1,173 +1,109 @@
-# Clankvox Screen Watch — Session Handoff (March 14, 2026)
+# Clankvox Screen Watch — Session Handoff (March 15, 2026)
 
-## What Happened This Session
+## Session Summary (March 14-15 evening session)
 
-A refactoring pass on `voice_conn.rs` broke audio receive, then a deep debugging session uncovered and fixed a chain of issues through the entire screen watch pipeline. By the end, native Discord Go Live screen watch is working end to end: DAVE video decrypt, H264 decode, vision analysis, and proactive spoken commentary.
+Major progress on the screen watch pipeline. First-frame latency solved, module split done, vision scanner improved, DAVE diagnostics added. The remaining blocker is bimodal DAVE video decrypt reliability (~40% in bad sessions vs ~90% in good ones).
 
-### Fixes Landed (5 commits)
+### Fixes Landed
 
-1. **Transport crypto AAD mismatch** — `decrypt()` was using `parse_rtp_header`'s `header_size` as the AEAD AAD boundary, but `rtpsize` modes only authenticate the fixed header + CSRC + 4-byte extension prefix. Extension body is ciphertext. Every packet silently failed decrypt.
+1. **First-frame latency (18s → 1s)** — Thread `daveDecrypted` boolean through the pipeline (Rust → IPC → TypeScript). During bootstrap, skip passthrough frames that burn 2s ffmpeg timeouts.
 
-2. **Inbound RTCP filtering** — RTCP packets (PT 72-76, RFC 5761 mux) were hitting the RTP decrypt path and failing. Now filtered early in the UDP recv loop.
+2. **`decodeInFlight` blocking on vision model** — Release the decode gate after ffmpeg completes (~200ms), before the vision model ingest (~5-16s). Subsequent frames can now decode while the brain processes the previous one.
 
-3. **MediaSinkWants OP15 format** — Refactored payload dropped `streams` and `pixelCounts` in favor of a flat map. Discord didn't recognize it and sent lowest quality video with sparse keyframes. Restored the original `{"any", "streams", "pixelCounts"}` structure.
+3. **Stream publish choppy playback** — Drain up to 4 video frames per 20ms tick instead of one. Prevents queue buildup when ffmpeg outputs in bursts.
 
-4. **DAVE video decrypt** — SPS+PPS were prepended to frames BEFORE DAVE decrypt, shifting the byte offsets that the DAVE trailer's unencrypted ranges reference. Moved prepend to AFTER decrypt. DAVE video decrypt now works for Go Live streams.
+4. **voice_conn.rs module split (4187 → 2747 lines)** — Extracted 7 focused modules: `transport_crypto.rs`, `rtp.rs`, `h264.rs`, `vp8.rs`, `video_state.rs`, `rtcp.rs`, `media_sink_wants.rs`. Deduplicated `MAX_VIDEO_FRAME_BYTES` and `find_next_start_code`.
 
-5. **H264 keyframe detection** — Removed SPS (NAL type 7) from the `keyframe` flag since SPS+PPS are now prepended to every frame post-decrypt. This was causing every frame to bypass the 2fps rate limiter.
+5. **DAVE-ready PLI** — Send PLI/FIR immediately when DAVE session becomes ready, to get a fresh keyframe now that decryption actually works. Fixes the race where initial keyframe burst arrives before DAVE keys are ready.
 
-6. **ffmpeg H264 decode** — `cat | ffmpeg` pipe for reliable EOF delivery (Bun's `stdin.end()` unreliable under load). Timeout reduced from 8s to 2s. Added passthrough frame validation (repeated-byte padding detection, SPS profile validation).
+6. **Periodic keyframe PLI** — Continue requesting keyframes every 4s after the first one. The per-frame ffmpeg decoder can only decode keyframes independently — without periodic PLIs, the vision scanner only ever sees one frame.
 
-7. **Vision model default** — `brainContextModel` changed from `claude-opus-4-6` to `claude-sonnet-4-5` for the claude-oauth preset.
+7. **ElevenLabs idle timeout reconnect** — Treat `input_timeout_exceeded` as recoverable. Attempt to reconnect the TTS WebSocket instead of killing the entire voice session.
+
+8. **Vision scanner context window** — Scanner now sees rolling history of 8 previous observations with timestamps, not just the single previous note. Enables pattern detection and trend awareness for urgency decisions.
+
+9. **Generous urgency threshold** — `high` urgency lowered from "dramatic events only" to "anything worth commenting on." The main brain still decides whether to actually speak.
+
+10. **DAVE decrypt stats fix** — `decrypt_video_frame_candidates` was called on every RTP packet including mid-frame FU-A fragments (guaranteed `None`). Stats were inflated ~10x. Now skips the decrypt call entirely when no complete frame is assembled, also saving a mutex lock per fragment.
+
+11. **DAVE trailer diagnostics** — Extract `truncated_nonce`, `supplemental_size`, and magic marker presence from the DAVE frame trailer on decrypt failure. Confirmed frame assembly is correct (has_marker=true on all failures).
 
 ### Current State
 
-- Audio capture and ASR: fully working
-- Screen share: working end to end (DAVE decrypt, decode, vision analysis, commentary)
-- First-frame latency: ~18 seconds (the main remaining issue)
-- Subsequent frames: ~2fps rate-limited, decode in ~200-400ms each
-- Proactive commentary: triggers on `share_start`, `scene_changed`, and `silence`
-- Vision scanner: Sonnet at 4-second intervals (configurable)
+- **Screen watch pipeline:** Working end-to-end when DAVE cooperates (~90% success sessions)
+- **First-frame latency:** ~1 second (DAVE-ready PLI → keyframe → ffmpeg → ingest)
+- **Vision scanning:** Every 4 seconds via periodic PLI keyframe requests
+- **Commentary:** Autonomous on `share_start` and `urgency=high` frames; main brain sees screen image + rolling context notes
+- **ElevenLabs timeout:** Recoverable — reconnects instead of killing session
 
 ## Known Remaining Issues
 
-### 1. First-Frame Decode Latency (~18 seconds)
+### 1. Bimodal DAVE Video Decrypt Reliability
 
-The first DAVE-decrypted IDR keyframe takes ~18 seconds to produce a decoded JPEG, while subsequent frames decode in ~200ms. The 2-second timeout means ~9 retry cycles before success.
+**The primary remaining blocker.** DAVE video decrypt success rate is bimodal across sessions:
 
-**Root cause hypothesis:** The `pendingH264Decode` bootstrap path in `sessionLifecycle.ts` accumulates multiple access units before attempting decode. The first IDR triggers a decode, but by the time it starts, several DAVE-failed passthrough frames have been forwarded and are being processed first. Each passthrough frame hits the 2s timeout, and only after they're exhausted does the real IDR get decoded.
+| Category | DAVE Rate | PLI Works | Example Servers |
+|----------|-----------|-----------|-----------------|
+| Good sessions | 85-90% | Yes, keyframes arrive | c-atl06, c-atl10, c-atl11 |
+| Bad sessions | ~40% | Often no keyframes | c-atl10, c-atl12, c-atl13 |
 
-**Investigation path:**
-- Add logging to see which specific frame is being decoded (keyframe vs P-frame)
-- The `selectNativeDiscordH264BootstrapSequence` logic might be accumulating too many frames
-- Consider skipping passthrough frames entirely during bootstrap (only decode DAVE-decrypted frames)
+Same servers appear in both categories — it's not server-specific. The ~40% rate is consistent within bad sessions and doesn't improve over time.
 
-### 2. DAVE Video Decrypt Success Rate
+#### What we confirmed:
+- **Frame assembly is correct.** `has_marker=true` on every failure — the DAVE magic marker, truncated nonce, and supplemental bytes parse correctly.
+- **Nonces are monotonically increasing** (2, 26, 256, 448, 683...) — no reordering.
+- **Primary vs alternate candidate doesn't matter.** Swapping the extension-stripping order didn't change the rate (both variants fail at ~60%).
+- **Audio decrypts fine** (99%+ success) on the same DAVE session — the CipherManager exists and has correct keys for audio.
+- **The failure is at AES-GCM tag verification** — not nonce replay, not generation mismatch, not missing CipherManager.
 
-DAVE decrypt works for some frames but not all. From the logs:
-- Frames with `has_dave_marker=true` succeed ~30-50% of the time
-- Some large frames (12-24KB) consistently fail both primary and fallback candidates
-- Small frames (200-1000 bytes) succeed more reliably
+#### Hypotheses:
+1. **Video uses a different encryption path than audio in the sender's DAVE implementation.** Audio is single-packet, video is multi-packet (FU-A fragments). The sender might encrypt video frames differently from how we reassemble them.
+2. **The davey crate's nonce tracking (shared across audio+video) rejects some video nonces.** With audio at 50fps advancing `newest_processed_nonce` rapidly, late-arriving video nonces might fall outside the `missing_nonces` window. But `MAX_MISSING_NONCES=1000` should handle this.
+3. **Frame-size-dependent issue.** Large frames (10-44KB, keyframes and complex P-frames) fail more often than small frames (100-2000 bytes). The `validate_encrypted_frame` check on the sender side might miss false H264 start codes deep in large ciphertext.
 
-#### Investigation Results (March 14, 2026)
+#### Next steps:
+- **Fork or patch the davey crate** to add per-attempt logging inside `decrypt_impl`: log which step fails (`can_process_nonce`, `get_cipher`, or AES-GCM). This is the critical diagnostic gap.
+- **Check if the ~40% success correlates with frame size.** Log frame bytes alongside success/failure to see if small frames decrypt and large ones don't.
+- **Compare the sender's DAVE trailer structure with what `parse_frame` expects.** Capture raw frame bytes from a successful and failed decrypt and compare the trailer parsing.
 
-**Architecture confirmed correct:** The stream watch transport has its own `stream_watch_dave: Arc<Mutex<Option<DaveManager>>>` (separate from the voice DAVE session). Each Go Live stream is its own MLS group with independent epochs. OP25/OP27/OP29/OP30 are all handled identically for all transport roles via `handle_binary_opcode`.
+### 2. Pre-existing Go Live Stream Detection
 
-**Davey crate decrypt pipeline analyzed.** The full failure chain is:
+When the bot joins a voice channel where a user is already screen sharing, it doesn't detect the existing stream. The `stream_discovery_user_go_live` event only fires for NEW Go Live starts — not pre-existing ones.
 
-| Failure Mode | davey Error | Likely Cause |
-|---|---|---|
-| No decryptor for user | `NoDecryptorForUser` | Streamer's user_id not in MLS group (welcome not processed, or user_id mismatch in video_ssrc_map binding) |
-| Frame not encrypted + passthrough expired | `UnencryptedWhenPassthroughDisabled` | Frame lacks `0xFA 0xFA` magic marker — either genuinely unencrypted or depacketizer corruption (missing/extra bytes at frame end) |
-| No valid cryptor found (manager_count=0) | `NoValidCryptorFound` | All CipherManagers expired — epoch transition happened but welcome/commit wasn't processed |
-| No valid cryptor found (manager_count>0) | `NoValidCryptorFound` | AES-GCM-128 tag mismatch — wrong epoch key, frame corruption, or generation out of range |
-
-**Most likely root causes for the 30-50% failure rate:**
-
-1. **Epoch transition timing** — davey gives old CipherManagers a 10-second expiry (`RATCHET_EXPIRY`) when a new epoch arrives. If the sender's client transitions to the new epoch key before the bot processes the commit/welcome, frames encrypted with the new key will fail against all managers. This affects large frames disproportionately because they span more RTP packets and are more likely to straddle an epoch boundary.
-
-2. **Depacketization corruption** — H264 depacketization (FU-A reassembly) may produce frames with incorrect byte boundaries. If the last 2 bytes of a reassembled frame aren't `0xFA 0xFA` (the DAVE magic marker), davey treats it as unencrypted. If the supplemental bytes (tag, nonce, unencrypted ranges) are shifted by even one byte, `parse_frame()` silently returns `encrypted=false`. This would affect larger frames more because they require more RTP fragment reassembly.
-
-3. **RTP extension stripping ambiguity** — The `strip_rtp_extension_payload` function produces both a `primary_payload` (extension stripped) and a `fallback_payload` (extension body included). If the wrong payload variant is fed to the depacketizer, the DAVE trailer at the end of the assembled frame will be at the wrong offset. The code already tries both (primary and alternate candidates), but if both produce corrupted frames, decrypt fails.
-
-**Diagnostic logging added:**
-- `dave.rs`: `decrypt_media` now logs the specific error type (`NoDecryptorForUser` vs `NoValidCryptorFound`) with user_id, known_users, frame_bytes, pv, and consecutive failure count
-- `voice_conn.rs` `decrypt_video_frame_candidates`: failure log now includes `frame_bytes`, `has_dave_marker`, `candidate_count`, `known_users`, and `pv`
-- `voice_conn.rs` UDP recv loop: periodic `clankvox_dave_video_decrypt_stats` log (every 100 frames) with success/fail/passthrough counts and percentage
-- `dave.rs` `log_decrypt_stats`: dumps davey-internal `DecryptionStats` per user (successes, failures, passthroughs, attempts, duration_us)
-- `voice_conn.rs` OP29/OP30: logs `known_users` after successful commit/welcome processing to confirm streamer is in MLS group
-
-**Next steps for further investigation:**
-- Run with the new logging and analyze: is the failure `NoDecryptorForUser` (user_id not in group) or `NoValidCryptorFound` (key mismatch)?
-- If `NoValidCryptorFound` with `manager_count > 0`: check whether `has_dave_marker=true` on failed frames — if true, the frame parsed as encrypted but the key was wrong (epoch transition issue). If false, depacketization is corrupting the frame tail.
-- Check davey-internal stats: compare `attempts` vs `successes` — if attempts > successes consistently, the CipherManager exists but the key doesn't match, pointing to epoch key drift
-- If `NoDecryptorForUser`: compare the user_id in the video_ssrc_map binding against the known_users logged after welcome — user_id mapping may be wrong
+**Fix:** On voice channel join, scan for existing Go Live streams via the Discord gateway's `GUILD_CREATE` voice state data or query the stream discovery cache.
 
 ### 3. Persistent ffmpeg Decoder (Deferred)
 
-Per-frame `cat | ffmpeg` spawns work but add ~200ms overhead per frame. A persistent ffmpeg process that reads a continuous H264 stream would eliminate spawn overhead. However, ffmpeg's H264 raw demuxer (`-f h264`) buffers internally and doesn't flush individual frames on stdin — it needs to see the next access unit's start code or EOF.
+The per-frame `cat | ffmpeg` approach works but can only decode keyframes independently. P-frames need a reference frame. A persistent ffmpeg process maintaining H264 decode state would enable:
+- Decoding P-frames (most frames) without keyframes
+- Eliminating the ~200ms spawn overhead per frame
+- Reducing PLI/keyframe dependency
 
-**Options explored:**
-- Direct `stdin.write()` + `stdin.end()` — works in isolated tests but unreliable under Bun's event loop contention
-- `image2pipe` output — hangs, same H264 demuxer issue
-- FIFO-based approach — ffmpeg dies when the writer closes
-- `-update 1` file output — works with cat pipe but ffmpeg exits after stdin closes
-
-**Possible approaches not yet tried:**
-- Use `-f mpegts` as an intermediary container (has proper framing)
-- Use a native H264 decoder library in Rust (decode in clankvox, forward raw RGB/JPEG)
-- Use `-re` flag or frame-rate limiting on the input side
-- Pre-wrap each access unit in a minimal MP4/MPEG-TS container before writing to stdin
-
-### 4. voice_conn.rs Module Split
-
-The file is ~4200 lines covering transport crypto, RTP parsing, H264/VP8 depacketization, DAVE integration, video state management, RTCP generation, and UDP send/receive. A bad change in any of these can break everything (as demonstrated today).
-
-**Proposed split:**
-- `transport_crypto.rs` — `TransportCrypto`, `decrypt()`, `encrypt()`, AAD computation
-- `rtp.rs` — `parse_rtp_header`, `build_rtp_header`, `strip_rtp_extension_payload`
-- `h264_depacketizer.rs` — `H264Depacketizer`, SPS/PPS caching, Annex-B helpers
-- `vp8_depacketizer.rs` — `Vp8Depacketizer`
-- `video_state.rs` — `RemoteVideoTrackBinding`, `VideoStreamDescriptor`, OP12/OP18 parsing
-- `rtcp.rs` — PLI/FIR/RR construction, `build_protected_rtcp_packet`
-- `media_sink_wants.rs` — OP15 payload construction
-- `voice_conn.rs` — WebSocket handling, UDP recv loop, event dispatch (the orchestrator)
-
-### 5. WebRTC Protocol Path Evaluation
-
-`Discord-video-stream` uses `protocol: "webrtc"` with SDP for stream connections. This gives:
-- Native PLI/FIR support (WebRTC stack handles RTCP feedback)
-- Potentially better DAVE video handling (WebRTC normalizes frame boundaries)
-- RTX retransmission for free
-
-clankvox uses `protocol: "udp"` which means manual RTP/RTCP handling and no PLI/FIR.
-
-**Effort estimate:** Large. Would require:
-- WebRTC stack integration (libwebrtc or a Rust WebRTC crate like `webrtc-rs`)
-- SDP generation for `SelectProtocol`
-- Reworking the UDP recv loop to use WebRTC's frame delivery callbacks
-- DAVE integration through WebRTC's frame transform API
-
-This would be a significant architectural change but would solve PLI/FIR, RTX, and potentially the DAVE video decrypt issues.
+This would make the periodic PLI mechanism unnecessary and solve the "bad server doesn't respond to PLI" problem.
 
 ## Key Files Reference
 
-### Clankvox (Rust)
-- `src/voice_conn.rs` — Transport protocol core (4200 lines)
-- `src/dave.rs` — DAVE encrypt/decrypt wrapper with passthrough validation
-- `src/capture_supervisor.rs` — Video subscriptions, frame forwarding, rate limiting
-- `src/connection_supervisor.rs` — Transport role lifecycle (voice, stream_watch, stream_publish)
+### Clankvox (Rust) — Post Module Split
+- `src/voice_conn.rs` (2747 lines) — Orchestrator: WS/UDP loops, DAVE decrypt, depacketizer dispatch
+- `src/transport_crypto.rs` — AES-256-GCM / XChaCha20 encrypt/decrypt
+- `src/rtp.rs` — RTP header parsing/building, codec types, extension stripping
+- `src/h264.rs` — H.264 FU-A/STAP-A depacketizer, Annex-B helpers
+- `src/vp8.rs` — VP8 depacketizer
+- `src/video_state.rs` — Video stream metadata, OP12/OP18 handling
+- `src/rtcp.rs` — RTCP header building, protected packet construction
+- `src/media_sink_wants.rs` — OP15 media sink wants payload
+- `src/dave.rs` — DAVE encrypt/decrypt wrapper, diagnostic logging
+- `src/capture_supervisor.rs` — Video subscriptions, frame forwarding, PLI/keyframe management
 
 ### Bun (TypeScript)
-- `src/voice/nativeDiscordVideoDecoder.ts` — ffmpeg H264/VP8 decode to JPEG
-- `src/voice/nativeDiscordScreenShare.ts` — Active sharer tracking, target resolution, bootstrap sequence
-- `src/voice/sessionLifecycle.ts` — Video frame handler (`onUserVideoFrame`), decode gate (`decodeInFlight`)
-- `src/voice/voiceStreamWatch.ts` — Commentary triggers, vision scanner, brain context management
-- `src/settings/settingsSchema.ts` — `brainContextModel`, `brainContextMinIntervalSeconds`, etc.
-
-### Documentation
-- `docs/voice/discord-streaming.md` — Canonical screen share doc
-- `docs/operations/logging.md` — Video transport diagnostic workflow
-- `docs/notes/NATIVE_SCREENSHARE_NOTES.md` — Incident history and review passes
-- `src/voice/clankvox/docs/go-live.md` — Clankvox-local Go Live reference
-- `src/voice/clankvox/README.md` — Known limitations
+- `src/voice/sessionLifecycle.ts` — Video frame handler, decode gate, `daveDecrypted` bootstrap
+- `src/voice/voiceStreamWatch.ts` — Vision scanner, commentary triggers, brain context
+- `src/voice/nativeDiscordVideoDecoder.ts` — ffmpeg H264/VP8 decode
+- `src/voice/elevenLabsRealtimeClient.ts` — TTS WebSocket with idle timeout handling
 
 ### External References
-- `davey` crate (crates.io 0.1.2) — DAVE MLS E2EE. Cached at `~/.cargo/registry/src/.../davey-0.1.2/`
-  - `src/cryptor/frame_processors.rs` — `parse_frame()` magic marker detection
-  - `src/cryptor/decryptor.rs` — `decrypt()` passthrough logic
-  - `src/cryptor/codec_utils.rs` — H264 encrypt with NAL-level unencrypted ranges
-- `Discord-video-stream` (`../Discord-video-stream`) — WebRTC-based Go Live sender reference
-- `Discord-video-selfbot` (`../Discord-video-selfbot`) — Raw UDP Go Live sender reference
-
-## Priority Recommendation
-
-1. **First-frame latency** — highest impact, moderate effort. The 18-second delay dominates the user experience. Start by investigating whether passthrough frames are clogging the bootstrap decode queue.
-
-2. **voice_conn.rs split** — medium impact, moderate effort. Reduces blast radius of future transport changes. Good maintenance work.
-
-3. **DAVE decrypt success rate** — medium impact, requires davey crate investigation. More frames decrypting = better image quality and fewer passthrough artifacts.
-
-4. **Persistent decoder** — medium impact, high effort. The `cat | ffmpeg` approach works at ~200ms per frame. Worth exploring only after the first-frame latency is solved.
-
-5. **WebRTC protocol path** — high impact, very high effort. Architectural change. Evaluate only after the simpler items are exhausted.
+- `davey` crate (0.1.2) at `~/.cargo/registry/src/.../davey-0.1.2/`
+  - `src/cryptor/decryptor.rs` — `decrypt_impl`, nonce tracking, CipherManager selection
+  - `src/cryptor/cryptor_manager.rs` — `can_process_nonce`, `get_cipher`, generation wrapping
+  - `src/cryptor/frame_processors.rs` — `parse_frame`, magic marker detection, trailer parsing
+  - `src/cryptor/codec_utils.rs` — H264 encrypt with unencrypted ranges
