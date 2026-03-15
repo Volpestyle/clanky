@@ -405,6 +405,16 @@ function resolveLogFilePath(value) {
   return path.isAbsolute(normalized) ? normalized : path.resolve(process.cwd(), normalized);
 }
 
+/**
+ * Maximum ndjson log file size before rotation (default 50 MB).
+ * When the file exceeds this size at startup, it is rotated to a
+ * `.prev.ndjson` backup and a fresh file is opened.  This keeps the
+ * file small enough that Promtail can re-read it from the top in
+ * under a minute if it loses its position tracking, and all entries
+ * stay within Loki's `reject_old_samples_max_age` window.
+ */
+const LOG_FILE_MAX_BYTES = 50 * 1024 * 1024; // 50 MB
+
 export class RuntimeActionLogger {
   enabled;
   writeToStdout;
@@ -421,6 +431,7 @@ export class RuntimeActionLogger {
 
     if (this.enabled && this.logFilePath) {
       fs.mkdirSync(path.dirname(this.logFilePath), { recursive: true });
+      this.rotateIfNeeded();
       this.fileStream = fs.createWriteStream(this.logFilePath, {
         flags: "a",
         encoding: "utf8"
@@ -428,6 +439,25 @@ export class RuntimeActionLogger {
       this.fileStream.on("error", () => {
         this.fileStream = null;
       });
+    }
+  }
+
+  /**
+   * Rotate the ndjson log file on startup if it exceeds LOG_FILE_MAX_BYTES.
+   * Keeps one `.prev.ndjson` backup — Promtail only tails the primary file,
+   * so the backup is purely for manual forensics.
+   */
+  private rotateIfNeeded() {
+    if (!this.logFilePath) return;
+    try {
+      const stat = fs.statSync(this.logFilePath);
+      if (stat.size <= LOG_FILE_MAX_BYTES) return;
+      const prevPath = this.logFilePath.replace(/\.ndjson$/, ".prev.ndjson");
+      // Overwrite any existing backup
+      fs.renameSync(this.logFilePath, prevPath);
+    } catch {
+      // File doesn't exist or rename failed — either way, the append
+      // open below will create a fresh file.
     }
   }
 
