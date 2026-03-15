@@ -1,8 +1,18 @@
 # DAVE Video Decrypt Failure — Investigation & Remediation
 
-## Status: Persistent H264 decoder working, DAVE packet loss causing visual corruption
+## Status: ROOT CAUSE FOUND AND FIXED — RTP padding not stripped from decrypted payloads
 
-The persistent H264 decoder pipeline is fully functional end-to-end. The bot sees the screen, identifies content accurately, and responds in real time. The remaining quality issue is upstream: ~45-55% of video RTP packets fail DAVE decryption, causing H264 reference frame corruption that manifests as visual artifacts in the decoded frames.
+### Root Cause
+
+RTP packets with padding (P bit = 1) include trailing pad bytes inside the encrypted envelope under Discord's `rtpsize` AEAD modes. After transport decryption, the padding bytes were left in the payload and fed to the H264 depacketizer. When padding appeared on FU-A middle fragments, the extra bytes were inserted into the middle of the reassembled encrypted frame body, corrupting the ciphertext and causing AES-GCM tag verification failure on ~50-60% of video frames.
+
+### Fix
+
+`strip_rtp_padding()` in `rtp.rs` reads the P bit from the RTP header (byte 0, bit 5) and strips trailing pad bytes from the decrypted payload before extension stripping and depacketization. Called on every packet in the UDP recv loop immediately after transport decryption.
+
+### Discovery Path
+
+Byte-level frame dumps (`ok_head`/`ok_tail` vs `fail_head`/`fail_tail`) revealed that successful frame #4 had `0e 0e 0e 0e...` (14 bytes of value `0x0e`) trailing after the DAVE `FA FA` marker — classic RFC 3550 RTP padding where the last byte is the pad count. The padded frame was silently passing through as "unencrypted" because `parse_frame` couldn't find the marker at `frame[len-2..]`. Meanwhile, frames where padding landed on middle FU-A fragments (not the last) had corrupted ciphertext and failed DAVE decrypt.
 
 ## What's Working
 
@@ -35,49 +45,66 @@ When the decoder loses P-frames to DAVE failures, subsequent P-frames that refer
 - **The failure is at AES-GCM tag verification** — not nonce replay or generation mismatch
 - **Pattern:** failures come in bursts of 3-10 consecutive packets, suggesting temporal correlation (possibly related to sender-side DAVE key rotation or RTP extension changes)
 
-### Hypotheses to investigate
+### Hypotheses investigated
 
-1. **Sender encrypts video differently from how we reassemble.** Video frames are multi-packet (FU-A fragments). If the sender encrypts the complete frame but we're attempting decryption on a slightly different reassembly (e.g., different RTP header extension handling between fragments), the AEAD tag won't verify.
+#### 1. Depacketize-then-decrypt vs Decrypt-then-depacketize (NEW LEADING HYPOTHESIS)
 
-2. **Supplemental data / unencrypted ranges mismatch.** H264 has codec-specific unencrypted ranges (NAL headers). The `davey` crate's `parse_frame` might disagree with the sender's `validate_encrypted_frame` on where unencrypted ranges are, especially for large multi-slice access units.
+The DAVE protocol spec describes: `encode → DAVE encrypt → packetize → SRTP encrypt → send` and the reverse `receive → SRTP decrypt → depacketize → DAVE decrypt → decode`. Our pipeline follows this spec.
 
-3. **RTP extension stripping inconsistency.** The decryption input (AAD for AES-GCM) includes the RTP header. If some packets have extensions that others don't, or if extension stripping is inconsistent across fragments of the same frame, the AAD mismatch causes tag verification failure.
+However, an exhaustive code review reveals that if the **Discord desktop client encrypts at the per-RTP-packet level** (each individual RTP payload gets its own DAVE trailer) rather than per-frame, our depacketize-then-decrypt approach would produce corrupted frames. The depacketizer would assemble packets containing DAVE trailers, and the resulting "frame" would not match what any single encrypt call produced.
 
-4. **Nonce window issue with interleaved audio/video.** Audio at 50fps advances `newest_processed_nonce` rapidly. Video nonces that arrive late might fall outside the davey crate's `MAX_MISSING_NONCES=1000` window. But this seems unlikely given the window size.
+**Diagnostic deployed:** A per-packet DAVE marker probe (`clankvox_per_packet_dave_marker_probe`) checks the first 500 video RTP payloads for the `0xFA 0xFA` DAVE marker. If a significant percentage have markers, it confirms per-packet encryption.
 
-## Remediation Options
+**Fix deployed:** When an individual RTP payload has a DAVE marker, we now try per-packet DAVE decrypt BEFORE depacketization. If per-packet decrypt succeeds, the depacketizer receives plain H264 data, and the assembled frame bypasses frame-level DAVE decrypt. This "decrypt-then-depacketize" path coexists with the standard "depacketize-then-decrypt" path.
 
-### Option A: Fork/patch davey crate (diagnostic)
+#### 2. Start code mismatch (ELIMINATED)
 
-Add per-attempt logging inside `decrypt_impl` to identify exactly which step fails:
-- `can_process_nonce` rejection?
-- `get_cipher` returning None?
-- AES-GCM tag verification failure?
-- Which generation/epoch is being tried?
+The DAVE `process_frame_h264` always writes 4-byte start codes (`00 00 00 01`), matching our `H264Depacketizer::append_start_code`. The spec explicitly states: "Any 3 byte start codes in the unencrypted sections of the frame are replaced with a 4 byte start code." Both sides agree.
 
-This is the critical diagnostic gap — we know decryption fails but not why.
+#### 3. RTP extension stripping inconsistency (ELIMINATED)
 
-### Option B: Increase IDR keyframe frequency
+Under Discord's `rtpsize` AEAD mode, the extension prefix is authenticated (AAD) and the extension body is encrypted with the media payload. Our `strip_rtp_extension_payload` correctly reads `ext_len` from the unencrypted extension prefix and strips that many words from the decrypted payload. This is consistent regardless of whether different packets in the same frame have different extension sizes.
 
-If we can get Discord to send IDR frames every 2-4 seconds instead of never, the decoder can resync from corruption much faster. Options:
-- Send PLI/FIR more aggressively (currently every ~5s via decoder reset)
-- Use the `fixed_keyframe_interval` experiment flag that Discord advertises in session ready
-- Investigate if there's a signaling mechanism to request keyframe interval
+#### 4. Nonce window / audio-video interleaving (ELIMINATED)
 
-### Option C: Tolerate corruption, improve downstream handling
+The davey `Encryptor` uses a single `truncated_nonce` counter shared between audio and video. The `Decryptor` has a single `CipherManager` per user with shared nonce tracking. The `MAX_MISSING_NONCES=1000` window provides ~12 seconds of slack at 80 nonces/sec (50 audio + 30 video). Video frames that take time to assemble from FU-A fragments would still have their nonces in the missing_nonces window.
 
-The decoder already produces frames even with ~45% packet loss. The visual quality is degraded but often still recognizable. Options:
-- Add a corruption score to the JPEG output based on concealment ratio
-- Skip sending heavily-corrupted frames to the vision model (they waste tokens and confuse the brain)
-- Add prompt guidance telling the model to expect some visual artifacts from the stream codec
+However, if the Discord client uses **separate** nonce counters per media type (separate encryptors for audio and video), the nonces would collide. Audio nonce N and video nonce N would be the same value, and the nonce replay protection would reject the video nonce after audio nonce N was processed. This would cause near-100% failure (not 45-55%), so it doesn't fully explain the observed rate — unless the counters are close but offset.
 
-### Option D: Investigate DAVE nonce/AAD construction
+#### 5. SPS/PPS prepend timing (ALREADY FIXED)
 
-Capture raw RTP packets (pre and post DAVE) for a successful and failed decrypt of adjacent frames. Compare:
-- RTP header bytes (used as AAD)
-- Extension presence and content
-- Frame reassembly byte boundaries
-- DAVE trailer structure (nonce, supplemental size, magic marker)
+The `H264Depacketizer` deliberately does NOT prepend cached SPS/PPS before DAVE decrypt, as this would shift the byte offsets that the DAVE trailer's unencrypted ranges reference. SPS+PPS prepend happens AFTER DAVE decrypt in the UDP recv loop (voice_conn.rs:2685-2691).
+
+#### 6. Frame processor tag leak (ELIMINATED)
+
+The davey `InboundFrameProcessor` pool reuses processors. `clear()` doesn't clear `self.tag`, but `parse_frame` reassigns it unconditionally. If `parse_frame` fails early, `encrypted` stays false and `decrypt_impl` is never called. No stale tag leak.
+
+### Enhanced diagnostic logging deployed
+
+The failed decrypt log now includes:
+- `trailer_supp_size`: the supplemental bytes size from the DAVE trailer
+- `internal_marker_count`: count of `0xFA 0xFA` sequences within the frame body — if > 1, the sender encrypted per-NAL or per-packet and our assembly concatenated multiple DAVE trailers
+- `trailer_hex_tail`: hex dump of the last 24 bytes for trailer inspection
+- `frame_hex_head`: hex dump of the first 24 bytes for start-code/NAL header inspection
+
+## Changes Made
+
+### voice_conn.rs (udp_recv_loop)
+
+1. **Per-packet DAVE marker probe**: Checks first 500 video RTP payloads for `0xFA 0xFA` markers, logs hit rate as `clankvox_per_packet_dave_marker_probe`
+2. **Per-packet DAVE decrypt path**: When a packet has a DAVE marker, attempts DAVE decrypt on the individual payload before depacketization. If successful, feeds decrypted H264 to the depacketizer. Assembled frames from per-packet-decrypted payloads bypass frame-level DAVE decrypt.
+3. **Enhanced failure diagnostics**: Frame-level DAVE decrypt failures now log trailer hex, frame head hex, supplemental size, and internal marker count.
+
+### capture_supervisor.rs
+
+4. **PLI interval halved**: `PERIODIC_KEYFRAME_PLI_INTERVAL_MS` reduced from 4000ms to 2000ms. With ~45-55% frame loss from DAVE failures, the H264 reference chain accumulates corruption quickly. More frequent IDR keyframes via PLI requests help the decoder resync faster.
+
+## Next Steps
+
+1. **Deploy and observe** the per-packet DAVE marker probe. If `clankvox_per_packet_dave_marker_probe` shows a high hit rate (>30%), per-packet encryption is confirmed and the decrypt-then-depacketize path should resolve most failures.
+2. **If per-packet probe shows low hit rate**, the issue is elsewhere. Next step would be to fork/patch the davey crate to log exactly which `decrypt_impl` step fails (can_process_nonce vs get_cipher vs AES-GCM) and whether the nonce values suggest separate audio/video counters.
+3. **Monitor internal_marker_count** in the enhanced failure logs. If consistently >1 on failed frames, it confirms the assembled frame contains multiple DAVE trailers from per-packet encryption.
+4. **Consider** requesting fixed keyframe intervals via Discord's `fixed_keyframe_interval` experiment flag.
 
 ## Key Files
 
@@ -87,12 +114,15 @@ Capture raw RTP packets (pre and post DAVE) for a successful and failed decrypt 
 | `src/voice/clankvox/src/capture_supervisor.rs` | H264 path routing, decoder lifecycle, rate-limited JPEG emission |
 | `src/voice/clankvox/src/ipc.rs` | `DecodedVideoFrame` IPC message variant |
 | `src/voice/clankvox/src/dave.rs` | DAVE decrypt wrapper, diagnostic logging |
-| `src/voice/clankvox/src/voice_conn.rs` | Frame depacketization, NAL diagnostics, DAVE decrypt dispatch |
+| `src/voice/clankvox/src/voice_conn.rs` | Frame depacketization, NAL diagnostics, DAVE decrypt dispatch, per-packet probe |
 | `src/voice/sessionLifecycle.ts` | `onDecodedVideoFrame` handler, JPEG ingest to vision model |
 | `src/voice/clankvoxClient.ts` | `decoded_video_frame` IPC parser |
 | `davey` crate (external, `~/.cargo/registry/src/.../davey-0.1.2/`) | DAVE protocol implementation |
+| `davey` codec_utils.rs | H264 unencrypted range computation, start code handling |
+| `davey` frame_processors.rs | DAVE trailer parsing, authenticated/ciphertext split, frame reconstruction |
+| `davey` decryptor.rs | Per-user decrypt orchestration, nonce window, cipher manager iteration |
 
-## Bugs Found During This Session
+## Bugs Found During This Investigation
 
 1. **Case mismatch** (`capture_supervisor.rs`): `codec == "h264"` vs `VideoCodecKind::H264::as_str()` returning `"H264"`. Fixed with `eq_ignore_ascii_case`.
 2. **OpenH264 wrapper overly strict**: `NativeErrorExt::ok()` treats any non-zero `DECODING_STATE` as error, including `dsDataErrorConcealed` (32) which means "decoded with concealment." Fixed by calling raw C API directly.
