@@ -28,6 +28,7 @@ import {
   VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT,
   VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
 } from "./voiceSessionManager.constants.ts";
+import { getCompactedSessionSummaryContext } from "./voiceContextCompaction.ts";
 import {
   formatVoiceChannelEffectSummary,
   inspectAsrTranscript,
@@ -44,6 +45,8 @@ import {
   shouldHandleRealtimeFunctionCalls,
   shouldRegisterRealtimeTools
 } from "./voiceConfigResolver.ts";
+import { getVoiceStreamWatchSettings } from "../settings/agentStack.ts";
+import { getScreenWatchCommentaryTier } from "../prompts/voiceAdmissionPolicy.ts";
 import type {
   RealtimeInstructionMemorySlice,
   RealtimeTurnContextRefreshState,
@@ -802,6 +805,7 @@ export class InstructionManager {
     const recentConversationHistory = formatConversationWindows(memorySlice?.recentConversationHistory);
     const guidanceFacts = formatBehaviorMemoryFacts(memorySlice?.guidanceFacts, 8);
     const behavioralFacts = formatBehaviorMemoryFacts(memorySlice?.behavioralFacts, 8);
+    const compactedSessionSummary = getCompactedSessionSummaryContext(session);
     const activeVoiceCommandState = this.host.ensureVoiceCommandState(session);
     const musicDisambiguation = this.host.getMusicDisambiguationPromptContext(session);
 
@@ -862,6 +866,15 @@ export class InstructionManager {
           "Recent conversation continuity:",
           "- These windows come from persisted shared text/voice history.",
           recentConversationHistory
+        ].join("\n")
+      );
+    }
+
+    if (compactedSessionSummary?.text) {
+      sections.push(
+        [
+          "Session conversation summary:",
+          `- ${compactedSessionSummary.text}`
         ].join("\n")
       );
     }
@@ -1033,13 +1046,18 @@ export class InstructionManager {
     const screenShareAvailable = Boolean(screenShareCapability?.available);
     const screenShareSupported = Boolean(screenShareCapability?.supported);
 
+    const commentaryEagerness = Math.max(0, Math.min(100,
+      Number(getVoiceStreamWatchSettings(settings).commentaryEagerness) || 60
+    ));
     if (hasActiveScreenFrameContext) {
       sections.push(
         [
           "Visual context:",
           "- You currently have screen-watch frame snapshots for this conversation.",
           "- You may comment only on what those snapshots show.",
-          "- Do not imply you have a continuous live view beyond the provided frame context."
+          "- Do not imply you have a continuous live view beyond the provided frame context.",
+          `Screen watch commentary eagerness: ${commentaryEagerness}/100.`,
+          getScreenWatchCommentaryTier(commentaryEagerness)
         ].join("\n")
       );
     } else if (hasRecentScreenFrameMemory) {

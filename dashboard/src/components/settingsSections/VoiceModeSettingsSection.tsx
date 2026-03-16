@@ -1537,6 +1537,28 @@ export function VoiceModeSettingsSection({
             </div>
           )}
 
+          {form.voiceStreamWatchEnabled && Boolean(form.voiceStreamWatchAutonomousCommentaryEnabled) && (
+            <div>
+              <label htmlFor="voice-stream-watch-commentary-eagerness">
+                Screen watch commentary eagerness: <strong>{form.voiceStreamWatchCommentaryEagerness}%</strong>
+              </label>
+              <input
+                id="voice-stream-watch-commentary-eagerness"
+                type="range"
+                min={SETTINGS_NUMERIC_CONSTRAINTS.voice.streamWatch.commentaryEagerness.min}
+                max={SETTINGS_NUMERIC_CONSTRAINTS.voice.streamWatch.commentaryEagerness.max}
+                step="1"
+                value={form.voiceStreamWatchCommentaryEagerness}
+                onChange={set("voiceStreamWatchCommentaryEagerness")}
+                style={rangeStyle(form.voiceStreamWatchCommentaryEagerness)}
+              />
+              <p>
+                How chatty the bot is during screen watches. Separate from overall voice reply eagerness.
+                At low values, commentary is rare and reserved for notable moments. At high values, the bot reacts freely and frequently.
+              </p>
+            </div>
+          )}
+
           {form.voiceStreamWatchEnabled && (
             <div>
               <label htmlFor="stream-watch-brain-context-mode">Screen watch vision mode</label>

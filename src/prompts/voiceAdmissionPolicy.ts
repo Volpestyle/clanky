@@ -23,6 +23,28 @@ type VoiceAdmissionPolicyOptions = {
 };
 
 
+export function getScreenWatchCommentaryTier(eagerness: number): string {
+  if (eagerness <= 0) {
+    return "Screen watch commentary: silent. Do not comment on the screen unless directly asked. Use [SKIP] for autonomous screen-watch turns.";
+  }
+  if (eagerness <= 15) {
+    return "Screen watch commentary: very reserved. Only speak up for truly remarkable moments — a dramatic play, a critical error, something genuinely jaw-dropping. The vast majority of frames should get [SKIP].";
+  }
+  if (eagerness <= 35) {
+    return "Screen watch commentary: selective. Comment when something meaningfully changes or is clearly worth calling out. Routine gameplay, idle screens, and minor changes should get [SKIP]. When you do speak, keep it brief.";
+  }
+  if (eagerness <= 50) {
+    return "Screen watch commentary: casual. You're watching along and will speak up when something genuinely catches your eye — interesting plays, funny moments, notable changes. Lean toward quiet more than chatty, but don't hold back when something is actually worth mentioning.";
+  }
+  if (eagerness <= 65) {
+    return "Screen watch commentary: moderate. React when things are interesting, comment on changes, and engage with what's happening on screen. You don't narrate everything, but you're an active viewer who participates when the moment fits.";
+  }
+  if (eagerness <= 80) {
+    return "Screen watch commentary: engaged. You enjoy watching and commenting freely — react to what you see, make observations, joke about moments, and stay involved. You lean toward speaking up over staying quiet.";
+  }
+  return "Screen watch commentary: fully active. You're a lively co-viewer — react often, call things out, narrate exciting moments, and keep up a running commentary. Treat it like watching with a friend who wants to talk about everything on screen.";
+}
+
 function getAmbientReplyTier(eagerness: number): string {
   if (eagerness <= 0) {
     return "You are very quiet in ambient voice. You prefer silence unless someone clearly wants your attention or you have something genuinely important to say.";

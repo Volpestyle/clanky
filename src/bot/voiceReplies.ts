@@ -36,7 +36,8 @@ import {
   getResolvedOrchestratorBinding,
   getResolvedVoiceGenerationBinding,
   getVoiceConversationPolicy,
-  getVoiceSoundboardSettings
+  getVoiceSoundboardSettings,
+  getVoiceStreamWatchSettings
 } from "../settings/agentStack.ts";
 import {
   buildContextContentBlocks,
@@ -751,6 +752,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     .slice(0, 40);
   const activityReactivity = Number(getActivitySettings(settings).reactivity) || 0;
   const soundboardEagerness = Number(getVoiceSoundboardSettings(settings).eagerness) || 0;
+  const screenWatchCommentaryEagerness = Number(getVoiceStreamWatchSettings(settings).commentaryEagerness) || 60;
   const allowSoundboardToolCall = Boolean(
     getVoiceSoundboardSettings(settings).enabled && normalizedSoundboardCandidates.length
   );
@@ -1271,7 +1273,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       allowVoiceToolCalls: allowVoiceTools,
       musicContext,
       hasDirectVisionFrame: Boolean(streamWatchLatestFrame?.dataBase64),
-      durableContext: Array.isArray(activeVoiceSession?.durableContext) ? activeVoiceSession.durableContext : []
+      durableContext: Array.isArray(activeVoiceSession?.durableContext) ? activeVoiceSession.durableContext : [],
+      screenWatchCommentaryEagerness
     });
 
   const generationContextSnapshot = {
@@ -1490,8 +1493,13 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     let voiceOutputLeaseMode: Exclude<VoiceOutputLeaseMode, "ambient"> | null = null;
     const preserveInlineSoundboardDirectives = allowSoundboardToolCall;
     let streamedRequestedRealtimeUtterance = false;
+    const rawTextParts: string[] = [];
 
     const captureGenerationText = (rawText: unknown) => {
+      // Preserve the raw generation text (with [[NOTE:...]] directives intact)
+      // so the pipeline can extract and store notes before normalization strips them.
+      const rawString = String(rawText || "");
+      if (rawString.trim()) rawTextParts.push(rawString);
       const normalized = normalizeVoiceReplyText(rawText, {
         preserveInlineSoundboardDirectives
       });
@@ -1939,9 +1947,13 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     const finalText = normalizeVoiceReplyText(mergeSpokenReplyText(spokenTextParts), {
       preserveInlineSoundboardDirectives
     });
+    // Raw generation text preserves [[NOTE:...]] directives that normalizeVoiceReplyText
+    // strips. The pipeline uses this to extract and store notes for screen watch context.
+    const rawText = rawTextParts.join(" ").trim() || "";
     if (!finalText && playedSoundboardRefs.length === 0 && !leaveVoiceChannelRequested) {
       return {
         text: "",
+        rawText,
         usedWebSearchFollowup,
         usedScreenShareOffer,
         voiceAddressing,
@@ -1955,6 +1967,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     if (!finalText) {
       const response = {
         text: "",
+        rawText,
         playedSoundboardRefs,
         usedWebSearchFollowup,
         usedScreenShareOffer,
@@ -1976,6 +1989,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
 
     const response = {
       text: finalText,
+      rawText,
       playedSoundboardRefs,
       usedWebSearchFollowup,
       usedScreenShareOffer,

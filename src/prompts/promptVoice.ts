@@ -18,7 +18,8 @@ import {
   normalizeVoiceRuntimeEventContext
 } from "../voice/voiceSessionHelpers.ts";
 import {
-  buildVoiceAdmissionPolicyLines
+  buildVoiceAdmissionPolicyLines,
+  getScreenWatchCommentaryTier
 } from "./voiceAdmissionPolicy.ts";
 import { VOICE_TOOL_SCHEMAS } from "../tools/sharedToolSchemas.ts";
 import type { VoiceSessionDurableContextEntry } from "../voice/voiceSessionTypes.ts";
@@ -182,7 +183,8 @@ export function buildVoiceTurnPrompt({
   allowVoiceToolCalls = false,
   musicContext = null,
   hasDirectVisionFrame = false,
-  durableContext = []
+  durableContext = [],
+  screenWatchCommentaryEagerness = 60
 }) {
   const parts = [];
   const speaker = String(speakerName || "unknown").trim() || "unknown";
@@ -210,6 +212,18 @@ export function buildVoiceTurnPrompt({
   const normalizedRuntimeEventContext = normalizeVoiceRuntimeEventContext(runtimeEventContext);
   const normalizedConversationContext =
     conversationContext && typeof conversationContext === "object" ? conversationContext : null;
+  const normalizedCompactedSessionSummary =
+    normalizedConversationContext?.compactedSessionSummary && typeof normalizedConversationContext.compactedSessionSummary === "object"
+      ? {
+        text: String(normalizedConversationContext.compactedSessionSummary.text || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 1400),
+        coveredThroughTurn: normalizedConversationContext.compactedSessionSummary.coveredThroughTurn != null && Number.isFinite(Number(normalizedConversationContext.compactedSessionSummary.coveredThroughTurn))
+          ? Math.max(0, Math.round(Number(normalizedConversationContext.compactedSessionSummary.coveredThroughTurn)))
+          : null
+      }
+      : null;
   const normalizedSessionTiming =
     sessionTiming && typeof sessionTiming === "object"
       ? {
@@ -565,11 +579,12 @@ export function buildVoiceTurnPrompt({
     );
   }
   const isDirectScreenWatchMode = normalizedStreamWatchBrainContext?.brainContextMode === "direct";
+  const normalizedCommentaryEagerness = Math.max(0, Math.min(100, Number(screenWatchCommentaryEagerness) || 60));
   if (hasDirectVisionFrame) {
     const screenContextParts = [
       "Live screen watch: You can see the user's screen directly in the attached image.",
-      "Comment on what you see when it feels natural — react to interesting moments, changes, or anything worth noting aloud.",
-      "If nothing warrants a spoken comment right now, say nothing.",
+      `Screen watch commentary eagerness: ${normalizedCommentaryEagerness}/100.`,
+      getScreenWatchCommentaryTier(normalizedCommentaryEagerness),
       normalizedStreamWatchBrainContext?.prompt
         ? `- Guidance: ${normalizedStreamWatchBrainContext.prompt}`
         : null
@@ -659,6 +674,20 @@ export function buildVoiceTurnPrompt({
 
   if (recentConversationHistory?.length) {
     parts.push("Past conversation:\n" + formatConversationWindows(recentConversationHistory));
+  }
+
+  if (normalizedCompactedSessionSummary?.text) {
+    parts.push(
+      [
+        "Earlier in this session:",
+        `- ${normalizedCompactedSessionSummary.text}`,
+        normalizedCompactedSessionSummary.coveredThroughTurn != null
+          ? `- This summary covers everything before transcript turn ${normalizedCompactedSessionSummary.coveredThroughTurn + 1}.`
+          : null
+      ]
+        .filter(Boolean)
+        .join("\n")
+    );
   }
 
   if (shouldRenderMusicPromptContext(normalizedMusicContext)) {

@@ -57,6 +57,9 @@ export const SETTINGS_NUMERIC_CONSTRAINTS = {
     admission: {
       musicWakeLatchSeconds: { min: 0, max: 120 }
     },
+    streamWatch: {
+      commentaryEagerness: { min: 0, max: 100 }
+    },
     soundboard: {
       eagerness: { min: 0, max: 100 }
     }

@@ -189,6 +189,12 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
     },
     streamWatch: {
       enabled: normalizeBoolean(streamWatch.enabled, DEFAULT_SETTINGS.voice.streamWatch.enabled),
+      commentaryEagerness: normalizeInt(
+        streamWatch.commentaryEagerness,
+        DEFAULT_SETTINGS.voice.streamWatch.commentaryEagerness,
+        0,
+        100
+      ),
       visualizerMode: normalizeStreamWatchVisualizerMode(
         streamWatch.visualizerMode,
         DEFAULT_SETTINGS.voice.streamWatch.visualizerMode

@@ -673,6 +673,8 @@ export function settingsToForm(settings: unknown) {
     voiceGeminiRealtimeInputSampleRateHz: resolved?.voice?.geminiRealtime?.inputSampleRateHz ?? defaultVoiceGeminiRealtime.inputSampleRateHz,
     voiceGeminiRealtimeOutputSampleRateHz: resolved?.voice?.geminiRealtime?.outputSampleRateHz ?? defaultVoiceGeminiRealtime.outputSampleRateHz,
     voiceStreamWatchEnabled: resolved?.voice?.streamWatch?.enabled ?? defaultVoiceStreamWatch.enabled,
+    voiceStreamWatchCommentaryEagerness:
+      resolved?.voice?.streamWatch?.commentaryEagerness ?? defaultVoiceStreamWatch.commentaryEagerness,
     voiceStreamWatchVisualizerMode:
       resolved?.voice?.streamWatch?.visualizerMode ?? defaultVoiceStreamWatch.visualizerMode,
     voiceStreamWatchMinCommentaryIntervalSeconds:
@@ -1659,6 +1661,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
       },
       streamWatch: {
         enabled: form.voiceStreamWatchEnabled,
+        commentaryEagerness: Number(form.voiceStreamWatchCommentaryEagerness),
         visualizerMode: normalizeStreamWatchVisualizerMode(
           form.voiceStreamWatchVisualizerMode
         ),
