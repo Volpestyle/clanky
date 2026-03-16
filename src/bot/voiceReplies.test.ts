@@ -158,6 +158,7 @@ function baseSettings(overrides = {}) {
           maxBufferChars: voice.streamingMaxBufferChars
         }
       },
+      streamWatch: isRecord(voice.streamWatch) ? voice.streamWatch : {},
       soundboard
     }
   }));
@@ -1875,6 +1876,80 @@ test("generateVoiceTurnReply carries resolved streamed speech into the continuat
 });
 
 
+test("generateVoiceTurnReply dispatches tool-loop follow-up speech to onSpokenSentence (non-streaming continuation)", async () => {
+  // Reproduces the bug where the initial generation streams speech to TTS
+  // ("Sure thing!"), then the tool loop produces additional speech ("Got
+  // some options...") via the non-streaming text path (generation.text set
+  // but no text deltas). The follow-up text was captured in replyText but
+  // never dispatched to onSpokenSentence because the pipeline saw
+  // streamedSentenceCount > 0 from the initial generation and skipped the
+  // fallback playback path.
+  //
+  // Simulated by giving the tool-loop generation textDeltas: [""] (empty
+  // delta, so the accumulator never fires) but text set to the follow-up.
+  const spokenChunks: string[] = [];
+  const { bot } = createVoiceBot({
+    generationSequence: [
+      {
+        text: "",
+        textDeltas: ["Sure thing! Let me pull up some Minecraft vibes"],
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "music_play",
+            input: { query: "Minecraft music C418" }
+          }
+        ],
+        rawContent: [
+          { type: "tool_use", id: "tc_1", name: "music_play", input: { query: "Minecraft music C418" } }
+        ]
+      },
+      {
+        text: "Got some options - want the classic Sweden track or the cozy cabin vibe?",
+        textDeltas: [""]
+      }
+    ]
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      voice: {
+        streamingEnabled: true,
+        streamingEagerFirstChunkChars: 16,
+        streamingMaxBufferChars: 200
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "play me some minecraft music",
+    onSpokenSentence: ({ text }) => {
+      spokenChunks.push(text);
+      return true;
+    },
+    voiceToolCallbacks: {
+      playSoundboard: async (refs) => ({ ok: true, played: refs }),
+      leaveVoiceChannel: async () => ({ ok: true })
+    }
+  });
+
+  // Both parts should be in the final text
+  assert.equal(
+    reply.text,
+    "Sure thing! Let me pull up some Minecraft vibes\nGot some options - want the classic Sweden track or the cozy cabin vibe?"
+  );
+  // The tool-loop follow-up speech must have been dispatched to
+  // onSpokenSentence so it actually gets played via TTS
+  assert.ok(
+    spokenChunks.length >= 2,
+    `Expected at least 2 spoken chunks (initial + tool-loop follow-up), got ${spokenChunks.length}: ${JSON.stringify(spokenChunks)}`
+  );
+  assert.ok(
+    spokenChunks.some((c) => c.includes("options")),
+    `Tool-loop follow-up speech ("Got some options...") was never dispatched to onSpokenSentence. Chunks: ${JSON.stringify(spokenChunks)}`
+  );
+});
+
 test("generateVoiceTurnReply injects recent conversation history into the prompt", async () => {
   const { bot, generationPayloads } = createVoiceBot({
     generationText: structuredVoiceOutput({
@@ -2108,6 +2183,98 @@ test("generateVoiceTurnReply uses text llm provider/model when voice generation 
   assert.equal(generationPayloads.length > 0, true);
   assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).provider, "claude-oauth");
   assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).model, "claude-sonnet-4-6");
+});
+
+test("generateVoiceTurnReply uses the separate commentary model only for initiative screen watch commentary", async () => {
+  const activeVoiceSession = {
+    streamWatch: {
+      lastCommentaryAt: Date.now()
+    }
+  };
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: "copy that",
+    activeVoiceSession
+  });
+
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      voice: {
+        generationLlm: {
+          provider: "openai",
+          model: "gpt-4.1-mini"
+        },
+        streamWatch: {
+          commentaryProvider: "anthropic",
+          commentaryModel: "claude-haiku-4-5"
+        }
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    sessionId: "session-1",
+    transcript: "[alice is screen sharing. Something notable just happened on screen.]",
+    inputKind: "event",
+    source: "stream_watch_direct_brain_turn:urgent",
+    runtimeEventContext: {
+      category: "screen_share",
+      eventType: "direct_frame",
+      actorUserId: "user-1",
+      actorDisplayName: "alice",
+      actorRole: "other",
+      hasVisibleFrame: true
+    }
+  });
+
+  assert.equal(generationPayloads.length > 0, true);
+  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).provider, "anthropic");
+  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).model, "claude-haiku-4-5");
+});
+
+test("generateVoiceTurnReply keeps the main reply model for direct replies during screen share", async () => {
+  const activeVoiceSession = {
+    streamWatch: {
+      lastCommentaryAt: Date.now()
+    }
+  };
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: "copy that",
+    activeVoiceSession
+  });
+
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      voice: {
+        generationLlm: {
+          provider: "openai",
+          model: "gpt-4.1-mini"
+        },
+        streamWatch: {
+          commentaryProvider: "anthropic",
+          commentaryModel: "claude-haiku-4-5"
+        }
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    sessionId: "session-1",
+    transcript: "what am I looking at here?",
+    directAddressed: true,
+    source: "voice_turn",
+    runtimeEventContext: {
+      category: "screen_share",
+      eventType: "direct_frame",
+      actorUserId: "user-1",
+      actorDisplayName: "alice",
+      actorRole: "other",
+      hasVisibleFrame: true
+    }
+  });
+
+  assert.equal(generationPayloads.length > 0, true);
+  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).provider, "openai");
+  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).model, "gpt-4.1-mini");
 });
 
 test("generateVoiceTurnReply advertises tool runtimes only when the capability exists", async () => {

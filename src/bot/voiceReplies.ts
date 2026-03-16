@@ -709,6 +709,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   transcript = "",
   inputKind = "transcript",
   directAddressed = false,
+  source = "",
   contextMessages = [],
   sessionId = null,
   isEagerTurn = false,
@@ -1150,9 +1151,40 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
 
   const voiceGenerationBinding = getResolvedVoiceGenerationBinding(settings);
   const replyGeneration = getReplyGenerationSettings(settings);
+
+  // Stream watch commentary model override: when a dedicated commentary model
+  // is configured, use it for bot-initiated screen watch turns. Skip the
+  // override on the very first commentary turn (lastCommentaryAt === 0) since
+  // the user just asked to watch and is waiting for the first reaction.
+  const isStreamWatchCommentary =
+    runtimeEventContext?.category === "screen_share" &&
+    String(inputKind || "").trim().toLowerCase() === "event";
+  const streamWatchSettings = (settings as Record<string, Record<string, Record<string, unknown>>>)
+    ?.voice?.streamWatch || {};
+  const commentaryProvider = String(streamWatchSettings.commentaryProvider || "").trim();
+  const commentaryModel = String(streamWatchSettings.commentaryModel || "").trim();
+  const isFirstCommentaryTurn = !activeVoiceSession?.streamWatch?.lastCommentaryAt;
+  const normalizedSource = String(source || "").trim().toLowerCase();
+  const isInitiativeStreamWatchCommentarySource =
+    normalizedSource.startsWith("stream_watch_brain_turn:") ||
+    normalizedSource.startsWith("stream_watch_direct_brain_turn:");
+  const useCommentaryModelOverride =
+    isStreamWatchCommentary &&
+    isInitiativeStreamWatchCommentarySource &&
+    commentaryModel &&
+    !directAddressed &&
+    !isFirstCommentaryTurn;
+
+  const effectiveBinding = useCommentaryModelOverride
+    ? {
+      provider: commentaryProvider || voiceGenerationBinding.provider,
+      model: commentaryModel
+    }
+    : voiceGenerationBinding;
+
   const tunedSettings = applyOrchestratorOverrideSettings(settings, {
-    provider: voiceGenerationBinding.provider,
-    model: voiceGenerationBinding.model,
+    provider: effectiveBinding.provider,
+    model: effectiveBinding.model,
     temperature: Number(replyGeneration.temperature) || 1.0,
     maxOutputTokens: Number(replyGeneration.maxOutputTokens) || 2500
   });
@@ -1749,6 +1781,10 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       }
     }
 
+    // Track how many spoken parts existed before the tool loop so we can
+    // detect and flush any new speech produced by tool-loop iterations.
+    const spokenPartsBeforeToolLoop = spokenTextParts.length;
+
     const VOICE_TOOL_LOOP_MAX_STEPS = 2;
     const VOICE_TOOL_LOOP_MAX_CALLS = 6;
     let voiceToolLoopSteps = 0;
@@ -1977,6 +2013,46 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       );
       captureGenerationText(generation.resolvedSpokenText);
       voiceToolLoopSteps += 1;
+    }
+
+    // Post-tool-loop speech flush: if tool-loop iterations produced spoken
+    // text that was NOT already streamed to TTS, dispatch it now so the user
+    // actually hears the follow-up (e.g. "Got some options here — want the
+    // classic Sweden track?"). Without this, the text ends up in the final
+    // replyText but is never played because the pipeline sees
+    // streamedSentenceCount > 0 from the initial generation and skips the
+    // fallback playback path.
+    if (
+      voiceToolLoopSteps > 0 &&
+      spokenTextParts.length > spokenPartsBeforeToolLoop &&
+      typeof onSpokenSentence === "function" &&
+      !signal?.aborted
+    ) {
+      const toolLoopParts = spokenTextParts.slice(spokenPartsBeforeToolLoop);
+      const toolLoopText = normalizeVoiceReplyText(mergeSpokenReplyText(toolLoopParts), {
+        preserveInlineSoundboardDirectives
+      });
+      // Only flush if this text was not already dispatched via streaming.
+      // If the tool-loop generation was streamed and accepted, the
+      // SentenceAccumulator already fired onSpokenSentence for each chunk.
+      const toolLoopTextAlreadyStreamed = generation.streamedTextAccepted;
+      if (toolLoopText && toolLoopText !== "[SKIP]" && !toolLoopTextAlreadyStreamed) {
+        const dispatchResult = normalizeSpokenSentenceDispatchResult(
+          await onSpokenSentence({
+            text: toolLoopText,
+            index: streamedSentenceIndex,
+            voiceAddressing,
+            voiceOutputLeaseMode
+          })
+        );
+        if (dispatchResult.accepted) {
+          streamedSentenceIndex += 1;
+          streamedSentenceCount += 1;
+          streamedRequestedRealtimeUtterance =
+            streamedRequestedRealtimeUtterance || dispatchResult.requestedRealtimeUtterance;
+          appendUniqueStrings(playedSoundboardRefs, dispatchResult.playedSoundboardRefs);
+        }
+      }
     }
 
     const replyPrompts = buildLoggedPromptBundle(promptCapture, voiceToolLoopSteps);
