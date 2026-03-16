@@ -55,6 +55,7 @@ import {
 } from "./musicResumeState.ts";
 import { touchMusicWakeLatch } from "./musicWakeLatch.ts";
 import {
+  resolveRealtimeToolOwnership,
   shouldHandleRealtimeFunctionCalls as shouldHandleRealtimeFunctionCallsModule,
   shouldRegisterRealtimeTools as shouldRegisterRealtimeToolsModule
 } from "./voiceConfigResolver.ts";
@@ -312,8 +313,56 @@ export class SessionLifecycle {
         continue;
       }
 
-      this.host.touchActivity(session.guildId, settings);
+      await this.refreshSessionRuntimeForSettings(session, settings);
     }
+  }
+
+  private async refreshSessionRuntimeForSettings(session: VoiceSession, settings: SessionLifecycleSettings) {
+    if (!session || session.ending) return;
+
+    session.realtimeToolOwnership = resolveRealtimeToolOwnership({
+      settings,
+      mode: session.mode
+    });
+
+    this.clearSessionRuntimeTimers(session);
+    this.startSessionTimers(session, settings);
+
+    const refreshedRealtimeTools =
+      Boolean(session.realtimeClient) &&
+      (shouldRegisterRealtimeToolsModule({ session, settings }) ||
+        (Array.isArray(session.realtimeToolDefinitions) && session.realtimeToolDefinitions.length > 0) ||
+        Boolean(String(session.lastRealtimeToolHash || "")));
+    if (refreshedRealtimeTools) {
+      await refreshRealtimeTools(this.host, {
+        session: session as RefreshRealtimeToolsSession,
+        settings,
+        reason: "settings_reconcile"
+      });
+    }
+
+    const scheduledInstructionRefresh = providerSupports(session.mode || "", "updateInstructions");
+    if (scheduledInstructionRefresh) {
+      this.host.instructionManager.scheduleRealtimeInstructionRefresh({
+        session,
+        settings,
+        reason: "settings_reconcile"
+      });
+    }
+
+    this.host.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.host.client.user?.id || null,
+      content: "voice_session_settings_reconciled",
+      metadata: {
+        sessionId: session.id,
+        refreshedRealtimeTools,
+        scheduledInstructionRefresh,
+        maxSessionMinutes: Number(getVoiceSessionLimits(settings).maxSessionMinutes) || null
+      }
+    });
   }
 
   startSessionTimers(session: VoiceSession, settings: SessionLifecycleSettings) {

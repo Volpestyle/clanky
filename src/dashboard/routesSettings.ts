@@ -109,8 +109,20 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
 
     let saveAppliedToRuntime = true;
     let saveApplyError = "";
+    let activeVoiceSessions = 0;
     try {
       await bot.applyRuntimeSettings(saved.settings);
+      const runtimeState = typeof bot.getRuntimeState === "function" ? bot.getRuntimeState() : null;
+      activeVoiceSessions = Math.max(0, Number(runtimeState?.voice?.activeCount) || 0);
+      store.logAction({
+        kind: "dashboard",
+        content: "settings_runtime_applied",
+        metadata: {
+          source: "save",
+          activeVoiceSessions,
+          updatedAt: saved.updatedAt
+        }
+      });
     } catch (error) {
       saveAppliedToRuntime = false;
       saveApplyError = error instanceof Error ? error.message : String(error);
@@ -169,6 +181,14 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
     await bot.applyRuntimeSettings(settings);
     const runtimeState = typeof bot.getRuntimeState === "function" ? bot.getRuntimeState() : null;
     const activeVoiceSessions = Number(runtimeState?.voice?.activeCount) || 0;
+    store.logAction({
+      kind: "dashboard",
+      content: "settings_runtime_applied",
+      metadata: {
+        source: "refresh",
+        activeVoiceSessions
+      }
+    });
 
     return c.json({
       ok: true,

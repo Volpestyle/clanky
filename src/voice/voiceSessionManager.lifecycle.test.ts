@@ -5960,6 +5960,53 @@ test("reconcileSettings ends blocked sessions and touches allowed sessions", asy
   assert.equal(touchCalls[0]?.guildId, "guild-allowed");
 });
 
+test("reconcileSettings hot-refreshes active realtime sessions", async () => {
+  const { manager, touchCalls, logs } = createManager();
+  const instructionRefreshCalls = [];
+  const toolUpdates = [];
+  manager.instructionManager.scheduleRealtimeInstructionRefresh = (payload) => {
+    instructionRefreshCalls.push(payload);
+  };
+
+  const originalMaxTimer = setTimeout(() => {}, 60_000);
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeToolOwnership: "provider_native",
+    maxTimer: originalMaxTimer,
+    realtimeClient: {
+      updateTools(payload) {
+        toolUpdates.push(payload);
+      },
+      updateInstructions() {}
+    }
+  });
+  manager.sessions.set(session.guildId, session);
+
+  const nextSettings = createTestSettings({
+    voice: {
+      enabled: true,
+      replyPath: "bridge",
+      maxSessionMinutes: 45
+    }
+  });
+
+  await manager.reconcileSettings(nextSettings);
+
+  assert.equal(session.settingsSnapshot, nextSettings);
+  assert.notEqual(session.maxTimer, originalMaxTimer);
+  assert.equal(touchCalls.length, 1);
+  assert.equal(toolUpdates.length, 1);
+  assert.equal(instructionRefreshCalls.length, 1);
+  assert.equal(instructionRefreshCalls[0]?.reason, "settings_reconcile");
+  assert.equal(
+    logs.some((entry) => entry.content === "voice_session_settings_reconciled"),
+    true
+  );
+
+  clearTimeout(originalMaxTimer);
+  clearTimeout(session.maxTimer);
+});
+
 test("handleVoiceStateUpdate records join/leave membership events and refreshes realtime instructions", async () => {
   const { manager, logs } = createManager();
   const now = Date.now();

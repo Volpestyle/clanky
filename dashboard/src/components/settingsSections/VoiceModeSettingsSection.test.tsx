@@ -96,7 +96,11 @@ function buildProps(mode: unknown, formOverrides: Record<string, unknown> = {}) 
     setStreamWatchVisionProvider: noop,
     selectStreamWatchVisionPresetModel: noop,
     streamWatchVisionModelOptions: ["gpt-5-mini"],
-    selectedStreamWatchVisionPresetModel: "gpt-5-mini"
+    selectedStreamWatchVisionPresetModel: "gpt-5-mini",
+    setStreamWatchCommentaryProvider: noop,
+    selectStreamWatchCommentaryPresetModel: noop,
+    streamWatchCommentaryModelOptions: ["claude-opus-4-6"],
+    selectedStreamWatchCommentaryPresetModel: "claude-opus-4-6"
   };
 }
 

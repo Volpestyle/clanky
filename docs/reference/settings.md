@@ -92,10 +92,11 @@ Current save guarantees:
 - missing version metadata is rejected
 - persistence and live-runtime apply are separate outcomes
 - a save can succeed even if live voice sessions fail to reconcile immediately
+- successful live apply rebinds active voice-session timers and refreshes realtime tools/instructions for sessions that support hot updates
 
 `POST /api/settings/preset-defaults` returns a preview envelope for a selected preset. Save is still required before that preview becomes persisted intent.
 
-`POST /api/settings/refresh` reapplies the last saved effective settings to the live runtime. It does not apply unsaved form draft state.
+`POST /api/settings/refresh` reapplies the last saved effective settings to the live runtime. For active voice sessions, it hot-refreshes session timers plus realtime tools/instructions where the provider supports in-place updates. It does not apply unsaved form draft state.
 
 ## 4. Resolution Pipeline
 

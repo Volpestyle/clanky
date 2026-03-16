@@ -221,7 +221,11 @@ export function VoiceModeSettingsSection({
   setStreamWatchVisionProvider,
   selectStreamWatchVisionPresetModel,
   streamWatchVisionModelOptions,
-  selectedStreamWatchVisionPresetModel
+  selectedStreamWatchVisionPresetModel,
+  setStreamWatchCommentaryProvider,
+  selectStreamWatchCommentaryPresetModel,
+  streamWatchCommentaryModelOptions = [],
+  selectedStreamWatchCommentaryPresetModel = ""
 }) {
   const isRealtimeMode =
     isVoiceAgentMode || isOpenAiRealtimeMode || isGeminiRealtimeMode || isElevenLabsRealtimeMode;
@@ -1868,9 +1872,42 @@ export function VoiceModeSettingsSection({
                           />
                         </>
                       )}
+
                     </>
                   );
                 })()}
+
+                {/* ── Commentary model override — applies to both direct and scanner modes ── */}
+                <h4 style={{ marginTop: "1rem" }}>Commentary model override</h4>
+                <p className="hint">Optional model for bot-initiated screen watch commentary. When set, ambient commentary uses this model while the first reaction and all conversational turns use the default voice model. Leave empty to use the default voice model for everything.</p>
+                <div className="split">
+                  <div>
+                    <label htmlFor="stream-watch-commentary-provider">Commentary provider</label>
+                    <select
+                      id="stream-watch-commentary-provider"
+                      value={form.voiceStreamWatchCommentaryProvider}
+                      onChange={setStreamWatchCommentaryProvider}
+                    >
+                      <option value="">Default (voice provider)</option>
+                      <LlmProviderOptions options={VISION_LLM_PROVIDER_OPTIONS} />
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="stream-watch-commentary-model">Commentary model</label>
+                    <select
+                      id="stream-watch-commentary-model"
+                      value={selectedStreamWatchCommentaryPresetModel}
+                      onChange={selectStreamWatchCommentaryPresetModel}
+                    >
+                      <option value="">Default (voice model)</option>
+                      {streamWatchCommentaryModelOptions.map((modelId) => (
+                        <option key={modelId} value={modelId}>
+                          {modelId}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
               </div>
             </details>
           )}

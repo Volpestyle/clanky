@@ -241,13 +241,51 @@ export async function refreshRealtimeTools(
   }: { session?: ToolRuntimeSession | null; settings?: VoiceRealtimeToolSettings | null; reason?: string } = {}
 ) {
   if (!session || session.ending) return;
-  if (!shouldRegisterRealtimeTools({ session, settings })) return;
   const realtimeClient = session.realtimeClient;
   const updateTools =
     realtimeClient && "updateTools" in realtimeClient && typeof realtimeClient.updateTools === "function"
       ? realtimeClient.updateTools.bind(realtimeClient)
       : null;
   if (!updateTools) return;
+
+  const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
+  if (!shouldRegisterRealtimeTools({ session, settings: resolvedSettings })) {
+    const hadRealtimeTools =
+      (Array.isArray(session.realtimeToolDefinitions) && session.realtimeToolDefinitions.length > 0) ||
+      Boolean(String(session.lastRealtimeToolHash || ""));
+    if (!hadRealtimeTools) return;
+
+    try {
+      updateTools({
+        tools: [],
+        toolChoice: "auto"
+      });
+      session.realtimeToolDefinitions = [];
+      session.lastRealtimeToolHash = "";
+      session.lastRealtimeToolRefreshAt = Date.now();
+      manager.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: manager.client.user?.id || null,
+        content: "realtime_tools_cleared",
+        metadata: {
+          sessionId: session.id,
+          reason: String(reason || "voice_context_refresh")
+        }
+      });
+    } catch (error) {
+      manager.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: manager.client.user?.id || null,
+        content: `realtime_tools_update_failed: ${String(error?.message || error)}`,
+        metadata: { sessionId: session.id, reason: String(reason || "voice_context_refresh") }
+      });
+    }
+    return;
+  }
 
   ensureSessionToolRuntimeState(manager, session);
   const previousMcpStatuses = new Map<string, VoiceMcpServerStatus>();
@@ -265,7 +303,6 @@ export async function refreshRealtimeTools(
     };
   });
 
-  const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
   const tools = buildRealtimeFunctionTools(manager, { session, settings: resolvedSettings });
   const nextToolHash = JSON.stringify(
     tools.map((tool) => ({

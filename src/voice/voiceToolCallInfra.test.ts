@@ -175,6 +175,46 @@ test("refreshRealtimeTools skips registration for brain sessions", async () => {
   assert.equal(updateCount, 0);
 });
 
+test("refreshRealtimeTools clears stale provider tools when settings disable them", async () => {
+  const manager = createVoiceTestManager();
+  const updates = [];
+  const session = {
+    id: "session-openai-tools-clear",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeToolOwnership: "transport_only",
+    lastRealtimeToolHash: "previous-tool-hash",
+    realtimeToolDefinitions: [{ name: "music_play" }],
+    realtimeClient: {
+      updateTools(payload) {
+        updates.push(payload);
+      }
+    }
+  };
+
+  await refreshRealtimeTools(manager, {
+    session,
+    settings: createVoiceTestSettings({
+      voice: {
+        conversationPolicy: {
+          replyPath: "brain"
+        }
+      }
+    }),
+    reason: "settings_reconcile"
+  });
+
+  assert.equal(updates.length, 1);
+  assert.deepEqual(updates[0], {
+    tools: [],
+    toolChoice: "auto"
+  });
+  assert.deepEqual(session.realtimeToolDefinitions, []);
+  assert.equal(session.lastRealtimeToolHash, "");
+});
+
 test("refreshRealtimeTools registers provider-native tools for bridge sessions", async () => {
   const manager = createVoiceTestManager();
   let updatedToolsPayload = null;

@@ -1177,6 +1177,7 @@ test("dashboard voice join returns unavailable when bot does not expose join hel
 
 test("dashboard settings refresh reapplies runtime settings and reports active sessions", async () => {
   const applyCalls = [];
+  const refreshActions: { content: string; metadata?: Record<string, unknown> }[] = [];
   const result = await withDashboardServer(
     {
       botOverrides: {
@@ -1195,6 +1196,12 @@ test("dashboard settings refresh reapplies runtime settings and reports active s
       }
     },
     async ({ baseUrl, store }) => {
+      const prev = store.onActionLogged;
+      store.onActionLogged = (action) => {
+        refreshActions.push(action);
+        if (prev) prev(action);
+      };
+
       const response = await fetch(`${baseUrl}/api/settings/refresh`, {
         method: "POST"
       });
@@ -1205,6 +1212,68 @@ test("dashboard settings refresh reapplies runtime settings and reports active s
       assert.equal(json.activeVoiceSessions, 2);
       assert.equal(applyCalls.length, 1);
       assert.deepEqual(applyCalls[0], store.getSettings());
+      const runtimeApplyAction = refreshActions.find((action) => action.content === "settings_runtime_applied");
+      assert.equal(Boolean(runtimeApplyAction), true);
+      assert.equal(runtimeApplyAction?.metadata?.source, "refresh");
+      assert.equal(runtimeApplyAction?.metadata?.activeVoiceSessions, 2);
+    }
+  );
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard settings save logs live runtime apply outcome", async () => {
+  const saveActions: { content: string; metadata?: Record<string, unknown> }[] = [];
+  const result = await withDashboardServer(
+    {
+      botOverrides: {
+        getRuntimeState() {
+          return {
+            connected: true,
+            replyQueuePending: 0,
+            voice: {
+              activeCount: 1
+            }
+          };
+        }
+      }
+    },
+    async ({ baseUrl, store }) => {
+      const prev = store.onActionLogged;
+      store.onActionLogged = (action) => {
+        saveActions.push(action);
+        if (prev) prev(action);
+      };
+
+      const beforeResponse = await fetch(`${baseUrl}/api/settings`);
+      assert.equal(beforeResponse.status, 200);
+      const beforeJson = await beforeResponse.json();
+      const expectedUpdatedAt = String(beforeJson._meta?.updatedAt || "");
+
+      const response = await fetch(`${baseUrl}/api/settings`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          _meta: {
+            expectedUpdatedAt
+          },
+          ...beforeJson.intent,
+          identity: {
+            ...beforeJson.intent?.identity,
+            botName: "live apply logger"
+          }
+        })
+      });
+
+      assert.equal(response.status, 200);
+      const runtimeApplyAction = saveActions.find((action) => action.content === "settings_runtime_applied");
+      assert.equal(Boolean(runtimeApplyAction), true);
+      assert.equal(runtimeApplyAction?.metadata?.source, "save");
+      assert.equal(runtimeApplyAction?.metadata?.activeVoiceSessions, 1);
     }
   );
 
