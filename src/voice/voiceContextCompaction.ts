@@ -86,6 +86,7 @@ function buildCompactionPrompt({
 
   return [
     "Summarize the following voice conversation context into a concise running summary for an autonomous Discord participant re-entering the ongoing session.",
+    "Write densely. Prefer one factual sentence or two short ones over a chatty recap.",
     "",
     "Preserve, in priority order:",
     "1. Who said what, with speaker names when material",
@@ -94,7 +95,9 @@ function buildCompactionPrompt({
     "4. Decisions, commitments, plans, and preferences that still matter in-session",
     "5. Important screen-watch context tied to the people involved",
     "",
-    "Do not preserve filler chatter, greetings, laughter, backchannels, repeated rephrasings, or small talk that does not change the conversational state.",
+    "Aggressively drop filler chatter, greetings, laughter, backchannels, repeated rephrasings, vibe commentary, and small talk that does not change the conversational state.",
+    "Drop colorful wording unless it affects future turns. Keep unresolved asks, active tasks, and still-relevant preferences before jokes or flavor.",
+    "If an older detail has been superseded, replace it instead of keeping both versions.",
     "",
     "Previous summary (incorporate and condense):",
     previousSummary || "None - first compaction.",
@@ -108,6 +111,8 @@ function buildCompactionPrompt({
     "Output:",
     "- A single compact paragraph in plain prose",
     `- Max ${CONTEXT_COMPACTION_MAX_SUMMARY_CHARS} characters`,
+    "- Prefer compact clauses separated by semicolons over long explanatory sentences",
+    "- Avoid hedging, scene-setting, and obvious restatements like 'the session is a casual hangout' unless that is actually important",
     "- Keep the newest still-relevant details if forced to compress",
     "- Do not invent facts or motivations"
   ].join("\n");

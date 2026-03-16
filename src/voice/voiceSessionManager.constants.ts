@@ -81,7 +81,7 @@ export const CONTEXT_COMPACTION_RECENT_WINDOW = 50;
 export const CONTEXT_COMPACTION_BATCH_SIZE = 10;
 export const CONTEXT_COMPACTION_MAX_SUMMARY_CHARS = 1_200;
 export const CONTEXT_COMPACTION_MAX_NOTE_CHARS = 400;
-export const CONTEXT_COMPACTION_MAX_OUTPUT_TOKENS = 320;
+export const CONTEXT_COMPACTION_MAX_OUTPUT_TOKENS = 256;
 // Promotion fallback when server VAD has not confirmed speech yet. This should
 // only pass obviously voiced local speech, not quiet background chatter.
 export const VOICE_TURN_PROMOTION_STRONG_LOCAL_RMS_MIN = 0.008;
