@@ -42,7 +42,8 @@ export const appConfig = {
   runtimeStructuredLogsEnabled: parseBooleanFlag(process.env.RUNTIME_STRUCTURED_LOGS_ENABLED, true),
   runtimeStructuredLogsStdout: parseBooleanFlag(process.env.RUNTIME_STRUCTURED_LOGS_STDOUT, true),
   runtimeStructuredLogsFilePath:
-    process.env.RUNTIME_STRUCTURED_LOGS_FILE_PATH ?? "data/logs/runtime-actions.ndjson"
+    process.env.RUNTIME_STRUCTURED_LOGS_FILE_PATH ?? "data/logs/runtime-actions.ndjson",
+  instanceId: String(process.env.CLANKER_INSTANCE_ID || "").trim() || "default"
 };
 
 export function ensureRuntimeEnv() {

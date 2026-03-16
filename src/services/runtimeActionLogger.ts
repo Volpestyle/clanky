@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { nowIso } from "../utils.ts";
+import { appConfig } from "../config.ts";
 
 const MAX_STRING_LENGTH = 50_000;
 const MAX_DEPTH = 6;
@@ -384,6 +385,7 @@ export function normalizeRuntimeActionEvent(action) {
 
   return {
     ts: normalizeIdentifier(normalizedAction.createdAt, 40) || nowIso(),
+    instance: appConfig.instanceId,
     source: "store_action",
     level: normalizeLevel(kind),
     kind,

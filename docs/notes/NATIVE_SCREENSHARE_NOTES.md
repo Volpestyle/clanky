@@ -220,34 +220,39 @@ flat `{"any": N, "ssrc": N}` map. Discord did not recognize this format and
 sent video at the lowest quality with very sparse keyframes. Restored the
 original `{"any": N, "streams": {...}, "pixelCounts": {...}}` structure.
 
-### 4. H264 keyframe detection too strict
+### 4. H264 keyframe detection (since revised)
 
-The refactored code only treated IDR slices (NAL type 5) as keyframes. Discord
-H264 screen shares send SPS (NAL type 7) as sync points without IDR. Restored
-SPS-as-keyframe detection. Also changed the depacketizer to always prepend
-cached SPS+PPS to every emitted frame, since PLI/FIR RTCP feedback does not
-work on the raw UDP protocol path (only on the WebRTC path used by
-`Discord-video-stream`).
+The refactored code only treated IDR slices (NAL type 5) as keyframes. At the
+time, SPS-as-keyframe detection was restored. This has since been revised:
+the current code only treats IDR (NAL type 5) as keyframes for rate-limiting,
+while the persistent OpenH264 decoder processes all frames (IDR + P-frames)
+for reference state accumulation. Cached SPS+PPS are prepended after DAVE
+decrypt (not during depacketization) so DAVE trailer byte offsets stay correct.
 
-### 5. ffmpeg H264 raw demuxer EOF hang
+### 5. ffmpeg raw demuxer EOF hang (H264 no longer applies)
 
-ffmpeg 8.x's H264 raw demuxer (`-f h264`) hangs waiting for more data even
-when reading from a file with a single access unit. Bun's `stdin.end()` also
-does not reliably deliver EOF. Fixed by writing H264 to a temp file then
-piping through `cat | ffmpeg -fflags +genpts -f h264 -i pipe:0`, which
-guarantees clean pipe close.
+ffmpeg 8.x's raw demuxer hangs waiting for more data on single-frame input.
+This was originally a problem for H264, but H264 decode has since moved
+entirely into clankvox's persistent OpenH264 decoder and no longer uses
+ffmpeg. The `cat | ffmpeg` pipe workaround remains in use for VP8 frames
+(using `-f ivf`).
 
-### 6. DAVE video passthrough forwarding encrypted garbage
+### 6. DAVE video passthrough forwarding encrypted garbage (Go Live only)
 
 Go Live video frames fail DAVE decrypt with `UnencryptedWhenPassthroughDisabled`.
 The passthrough path returned the raw (encrypted) bytes as if they were
-cleartext H264. ffmpeg parsed valid NAL headers but hit garbage in slice bodies:
-`deblocking_filter_idc out of range`, `cabac_init_idc overflow`, `reference
-count overflow`.
+cleartext H264, producing `deblocking_filter_idc out of range` and `reference
+count overflow` errors.
 
-Fix: video frames that fail DAVE decrypt are now dropped instead of passed
-through. Screen watch relies on the initial unencrypted frames that arrive
-during the DAVE session transition window after commit.
+Fix: video frames that fail DAVE decrypt are now validated by
+`looks_like_valid_h264` and dropped when they appear encrypted. Screen watch
+relies on the initial unencrypted frames that arrive during the DAVE session
+transition window after commit.
+
+Note: DAVE video decrypt on the main voice connection now works at near 100%
+after the RTP padding strip fix (`strip_rtp_padding` in `rtp.rs`). The Go Live
+issue is a separate problem specific to the `davey` crate's handling of Go Live
+video DAVE framing.
 
 ### Reference repo findings
 

@@ -16,11 +16,12 @@ scrape_configs:
         labels:
           job: clanker_runtime
           app: clanky
-          __path__: /var/log/clanker/runtime-actions.ndjson
+          __path__: /var/log/clanker/*/runtime-actions.ndjson
     pipeline_stages:
       - json:
           expressions:
             ts: ts
+            instance: instance
             level: level
             kind: kind
             event: event
@@ -32,6 +33,7 @@ scrape_configs:
           source: ts
           format: RFC3339
       - labels:
+          instance:
           level:
           kind:
           event:

@@ -174,6 +174,7 @@ Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details 
 | `docs/operations/e2e.md` | E2E selfbot + driver-bot voice validation suites |
 | `docs/operations/testing.md` | Test commands, live tests, and replay harnesses |
 | `docs/operations/logging.md` | Structured logging and Loki setup |
+| `docs/operations/multi-instance.md` | Running multiple bot instances with shared Loki |
 
 Canonical specs live under `docs/architecture/`, `docs/capabilities/`, `docs/operations/`, `docs/providers/`, `docs/reference/`, and `docs/voice/`. Historical notes live under `docs/archive/` and `docs/tmp/`.
 

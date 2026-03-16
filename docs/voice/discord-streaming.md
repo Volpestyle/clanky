@@ -48,7 +48,7 @@ The native Discord screen watch pipeline is built end to end in clankvox and Bun
 - Bun forwards those credentials into `clankvox`
 - `clankvox` opens the second stream transport, completes the modern watcher handshake,
   reaches DAVE-ready, and forwards encrypted H264 frames back to Bun
-- DAVE MLS E2EE session completes successfully on the stream watch transport, though per-frame video decrypt currently fails for Go Live (frames arrive during the post-commit unencrypted window instead)
+- DAVE MLS E2EE session completes successfully on the stream watch transport. DAVE video decrypt works at near 100% on the main voice connection (after the RTP padding strip fix), but per-frame video decrypt still fails for Go Live streams — the `davey` crate classifies Go Live video as `UnencryptedWhenPassthroughDisabled`. Screen watch frames arrive during the post-commit unencrypted window instead.
 - H264 frames are decoded in-process by clankvox's persistent OpenH264 decoder and emitted as pre-encoded JPEG via `DecodedVideoFrame` IPC
 - VP8 keyframes are decoded by Bun via per-frame ffmpeg
 - stream-watch brain context pipeline ingests frames and produces accurate visual commentary
@@ -295,7 +295,7 @@ These are the same opcodes as the regular voice connection but exchanged on the 
  5. Receive video frames
     → Encrypted RTP/UDP video packets arrive
     → Transport decrypt (AES-GCM/XChaCha20) → depacketize H264/VP8 → DAVE decrypt attempt
-    → DAVE video decrypt currently fails for Go Live (frames forwarded from post-commit unencrypted window)
+     → DAVE video decrypt works on the main voice connection; Go Live streams still fail (frames forwarded from post-commit unencrypted window)
     → H264: persistent OpenH264 decoder in clankvox → turbojpeg JPEG encode → DecodedVideoFrame IPC → stream-watch pipeline
     → VP8: raw bitstream IPC → Bun ffmpeg decode to JPEG → stream-watch pipeline
 ```
@@ -547,8 +547,8 @@ Direct mode is the default because it is more aligned with agent autonomy — th
 
 ## Risk Assessment
 
-- **DAVE on stream connections.** Stream connections use DAVE channel ID `BigInt(rtc_server_id) - 1n`. Confirmed working live. However, DAVE per-frame video decrypt does not work for Go Live — the `davey` library classifies Go Live video frames as `UnencryptedWhenPassthroughDisabled` when they are likely encrypted. Video frames that fail DAVE decrypt are dropped to prevent feeding encrypted garbage to ffmpeg. Screen watch currently relies on the initial unencrypted frames that arrive during the DAVE transition window after session commit.
-- **PLI/FIR keyframe requests do not work.** clankvox uses `protocol: "udp"` for stream connections. Discord's media server only processes RTCP PLI/FIR feedback from WebRTC peers. PLI/FIR packets are still sent as a best-effort hint, but keyframes cannot be requested on demand. The persistent H264 decoder compensates by processing all frames (IDR + P-frames) for reference state accumulation, and auto-resets with PLI after 50 consecutive errors.
+- **DAVE video decrypt.** DAVE video decrypt works at near 100% on the main voice connection after the RTP padding strip fix (`strip_rtp_padding` in `rtp.rs`). **Go Live streams are a separate, still-open problem:** the `davey` library classifies Go Live video frames as `UnencryptedWhenPassthroughDisabled` when they are actually encrypted. Video frames that fail DAVE decrypt are dropped (validated by `looks_like_valid_h264`). Screen watch relies on the initial unencrypted frames that arrive during the DAVE transition window after session commit. Stream connections use DAVE channel ID `BigInt(rtc_server_id) - 1n` (confirmed working live).
+- **PLI/FIR keyframe requests do not work.** clankvox uses `protocol: "udp"` for stream connections. Discord's media server only processes RTCP PLI/FIR feedback from WebRTC peers. PLI/FIR packets are still sent as a best-effort hint (periodic, after decoder reset, after DAVE ready), but keyframes cannot be requested on demand. The persistent H264 decoder compensates by processing all frames (IDR + P-frames) for reference state accumulation, and auto-resets with PLI after 50 consecutive errors.
 - **Transport crypto AAD for RTP.** Discord's `rtpsize` AEAD modes authenticate the RTP fixed header + CSRC + 4-byte extension prefix as AAD. The extension body is part of the ciphertext. `decrypt()` recomputes AAD from raw packet bytes and must NOT use `parse_rtp_header`'s `header_size` (which includes the extension body). Inbound RTCP (PT 72-76 per RFC 5761 mux) is filtered before decrypt.
 - **VP8 ffmpeg decode EOF.** VP8 still uses per-frame ffmpeg decode on the Bun side. H264 decode is handled entirely in-process by clankvox's persistent OpenH264 decoder and does not use ffmpeg.
 - **RTX loss recovery is still limited.** The receive path currently traces and drops RTX payloads; retransmission support remains future work.

@@ -15,7 +15,8 @@ services:
       - loki
     volumes:
       - ./ops/loki/promtail-config.yml:/etc/promtail/config.yml:ro
-      - ./data/logs:/var/log/clanker:ro
+      - ./data/logs:/var/log/clanker/default:ro
+      - /Users/jamesvolpe/web/clanky-2/data/logs:/var/log/clanker/clunky:ro
       - promtail-data:/tmp
 
   grafana:

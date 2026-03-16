@@ -41,6 +41,7 @@ Use the docs in this order:
 - [`operations/testing.md`](operations/testing.md) — canonical test commands
 - [`operations/e2e.md`](operations/e2e.md) — selfbot + driver-bot validation harness
 - [`operations/logging.md`](operations/logging.md) — structured logging, Loki/Grafana workflow, and incident debugging
+- [`operations/multi-instance.md`](operations/multi-instance.md) — running multiple bot instances with shared Loki
 - [`operations/public-https.md`](operations/public-https.md) — public HTTPS tunnel behavior
 - [`operations/cancellation.md`](operations/cancellation.md) — shared cancellation behavior across text, voice, and tool loops
 
