@@ -95,6 +95,11 @@ export type VoiceConversationContext = {
         ageMs: number | null;
         source: string | null;
     } | null;
+    compactedSessionSummary?: {
+        text: string;
+        coveredThroughTurn: number | null;
+        updatedAt: number | null;
+    } | null;
 };
 
 export type VoiceReplyDecision = {
@@ -1104,6 +1109,12 @@ export interface VoiceSession {
     realtimeOutputSampleRateHz: number;
     recentVoiceTurns: VoiceTimelineTurn[];
     transcriptTurns: VoiceTranscriptTimelineEntry[];
+    compactedContextSummary?: string | null;
+    compactedContextLastAt?: number;
+    compactedContextCoveredThroughTurn?: number | null;
+    compactedContextCursor?: number;
+    compactedContextInFlight?: boolean;
+    pendingCompactionNotes?: string[];
     durableContext?: VoiceSessionDurableContextEntry[];
     modelContextSummary: {
         generation: VoiceModelContextSummary | null;

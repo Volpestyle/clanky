@@ -34,6 +34,11 @@ import { setVoiceLivePromptSnapshot } from "./voicePromptState.ts";
 
 import { normalizeVoiceOutputLeaseMode } from "./voiceOutputLease.ts";
 import { appendStreamWatchBrainContextEntry } from "./voiceStreamWatch.ts";
+import {
+  getCompactedSessionSummaryContext,
+  getCompactionCursor,
+  maybeStartVoiceContextCompaction
+} from "./voiceContextCompaction.ts";
 import type { ReplyInterruptionPolicy } from "./bargeInController.ts";
 import type {
   InFlightAcceptedBrainTurn,
@@ -51,6 +56,9 @@ import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 
 type GeneratedPayload = {
   text?: string;
+  /** Raw generation text before normalizeVoiceReplyText strips [[NOTE:...]] directives.
+   *  Used by the pipeline to extract and store screen-watch notes. */
+  rawText?: string;
   playedSoundboardRefs?: unknown[];
   streamedRequestedRealtimeUtterance?: boolean;
   usedWebSearchFollowup?: boolean;
@@ -244,11 +252,15 @@ function normalizeAssistantReplyOutputLeaseMode(rawOutputLeaseMode: unknown) {
 
 function buildContextMessages(session: VoiceSession, normalizedTranscript: string) {
   const contextTranscript = normalizeVoiceText(normalizedTranscript, STT_REPLY_MAX_CHARS);
-  const contextTurnRows = Array.isArray(session.transcriptTurns)
-    ? session.transcriptTurns
-      .filter((row) => row && typeof row === "object")
-      .slice(-STT_CONTEXT_MAX_MESSAGES)
+  const transcriptTurns = Array.isArray(session.transcriptTurns)
+    ? session.transcriptTurns.filter((row) => row && typeof row === "object")
     : [];
+  const compactionCursor = getCompactionCursor(session);
+  const contextTurnRows = (
+    compactionCursor > 0
+      ? transcriptTurns.slice(compactionCursor)
+      : transcriptTurns.slice(-STT_CONTEXT_MAX_MESSAGES)
+  );
   if (contextTurnRows.length > 0 && contextTranscript) {
     for (let index = contextTurnRows.length - 1; index >= 0; index -= 1) {
       const row = contextTurnRows[index];
@@ -271,7 +283,7 @@ function buildContextMessages(session: VoiceSession, normalizedTranscript: strin
   }));
   const contextMessages: ContextMessage[] = contextTurns
     .sort((a, b) => a.at - b.at)
-    .slice(-STT_CONTEXT_MAX_MESSAGES)
+    .slice(compactionCursor > 0 ? 0 : -STT_CONTEXT_MAX_MESSAGES)
     .map((row) => ({
       role: row.role === "assistant" ? "assistant" : "user",
       content: row.kind === "thought" ? `[thought: ${row.content}]` : row.content
@@ -452,6 +464,12 @@ export async function runVoiceReplyPipeline(
       )
     );
 
+  void maybeStartVoiceContextCompaction(host, {
+    session,
+    settings: params.settings,
+    source
+  });
+
   const { contextMessages, contextMessageChars, contextTurns } = buildContextMessages(session, normalizedTranscript);
   host.updateModelContextSummary(session, "generation", {
     source,
@@ -579,7 +597,8 @@ export async function runVoiceReplyPipeline(
     ...(resolvedConversationContext || {}),
     sessionTimeoutWarningActive: Boolean(sessionTiming?.timeoutWarningActive),
     sessionTimeoutWarningReason: String(sessionTiming?.timeoutWarningReason || "none"),
-    streamWatchBrainContext
+    streamWatchBrainContext,
+    compactedSessionSummary: getCompactedSessionSummaryContext(session)
   };
 
   const markInFlightAcceptedBrainTurnPhase = (phase: "generation_only" | "tool_call_started" | "playback_requested") => {
@@ -868,9 +887,11 @@ export async function runVoiceReplyPipeline(
     });
   }
 
-  // Extract [[NOTE:...]] directives before normalization so that
-  // `[SKIP] [[NOTE:...]]` correctly resolves to a skip + stored note.
-  const noteExtraction = extractNoteDirectives(generatedPayload?.text);
+  // Extract [[NOTE:...]] directives from the raw (pre-normalization) generation
+  // text. normalizeVoiceReplyText strips notes to prevent TTS from reading them
+  // aloud, so generatedPayload.text is already note-free. The rawText field
+  // preserves the original output for note extraction and storage.
+  const noteExtraction = extractNoteDirectives(generatedPayload?.rawText || generatedPayload?.text);
   const replyText = normalizeVoiceText(noteExtraction.text || "", STT_REPLY_MAX_CHARS);
   const playedSoundboardRefs = normalizeSoundboardRefsModule(generatedPayload?.playedSoundboardRefs);
   const streamedSentenceCount = Math.max(0, Number(generatedPayload?.streamedSentenceCount || 0));

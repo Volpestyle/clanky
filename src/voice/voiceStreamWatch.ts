@@ -735,6 +735,13 @@ export function appendStreamWatchBrainContextEntry({
   const normalizedSpeakerName = String(speakerName || "").trim() || null;
   let nextEntries = current;
 
+  const formatPendingCompactionNote = (entry) => {
+    const noteText = normalizeVoiceText(entry?.text || "", STREAM_WATCH_BRAIN_CONTEXT_LINE_MAX_CHARS);
+    if (!noteText) return "";
+    const noteSpeaker = String(entry?.speakerName || "").trim();
+    return noteSpeaker ? `${noteSpeaker}: ${noteText}` : noteText;
+  };
+
   if (last && last.text.toLowerCase() === normalizedText.toLowerCase()) {
     nextEntries = [
       ...current.slice(0, -1),
@@ -747,6 +754,13 @@ export function appendStreamWatchBrainContextEntry({
       }
     ];
   } else {
+    const evictedEntries = current.length >= boundedMax ? current.slice(0, current.length - boundedMax + 1) : [];
+    if (evictedEntries.length > 0) {
+      session.pendingCompactionNotes = [
+        ...(Array.isArray(session.pendingCompactionNotes) ? session.pendingCompactionNotes : []),
+        ...evictedEntries.map((entry) => formatPendingCompactionNote(entry)).filter(Boolean)
+      ].slice(-24);
+    }
     nextEntries = [
       ...current,
       {

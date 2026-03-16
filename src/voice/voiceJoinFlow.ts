@@ -765,6 +765,12 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         realtimeOutputSampleRateHz,
         recentVoiceTurns: [],
         transcriptTurns: [],
+        compactedContextSummary: null,
+        compactedContextLastAt: 0,
+        compactedContextCoveredThroughTurn: null,
+        compactedContextCursor: 0,
+        compactedContextInFlight: false,
+        pendingCompactionNotes: [],
         durableContext: [],
         modelContextSummary: {
           generation: null,

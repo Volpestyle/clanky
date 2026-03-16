@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
+  appendStreamWatchBrainContextEntry,
   enableWatchStreamForUser,
   getStreamWatchBrainContextForPrompt,
   handleDiscoveredStreamCredentialsReceived,
@@ -1530,4 +1531,47 @@ test("maybeTriggerStreamWatchCommentary skips while deferred turns are queued", 
 
   assert.equal(brainReplyCalls.length, 0);
   assert.equal(actions.some((entry) => entry.content === "stream_watch_commentary_requested"), false);
+});
+
+test("appendStreamWatchBrainContextEntry queues evicted notes for compaction", () => {
+  const session = createSession({
+    pendingCompactionNotes: [],
+    streamWatch: {
+      active: true,
+      targetUserId: "user-1",
+      requestedByUserId: "user-1",
+      lastFrameAt: 0,
+      lastCommentaryAt: 0,
+      lastCommentaryNote: null,
+      lastBrainContextAt: 0,
+      lastBrainContextProvider: "anthropic",
+      lastBrainContextModel: "claude-haiku-4-5",
+      brainContextEntries: [
+        { text: "menu open", at: 1000, provider: "anthropic", model: "claude-haiku-4-5", speakerName: "alice" },
+        { text: "queue popped", at: 2000, provider: "anthropic", model: "claude-haiku-4-5", speakerName: "alice" }
+      ],
+      ingestedFrameCount: 0,
+      acceptedFrameCountInWindow: 0,
+      frameWindowStartedAt: 0,
+      latestFrameMimeType: null,
+      latestFrameDataBase64: "",
+      latestFrameAt: 0
+    }
+  });
+
+  appendStreamWatchBrainContextEntry({
+    session,
+    text: "match started",
+    at: 3000,
+    provider: "anthropic",
+    model: "claude-haiku-4-5",
+    speakerName: "alice",
+    maxEntries: 2
+  });
+
+  assert.deepEqual(
+    session.streamWatch.brainContextEntries.map((entry) => entry.text),
+    ["queue popped", "match started"]
+  );
+  assert.deepEqual(session.pendingCompactionNotes, ["alice: menu open"]);
 });
