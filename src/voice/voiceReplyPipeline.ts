@@ -552,6 +552,19 @@ export async function runVoiceReplyPipeline(
     maxItems: VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT
   });
   const sessionTiming = host.sessionLifecycle.buildVoiceSessionTimingContext(session);
+  // Build active Discord screen share context for the prompt so the model
+  // knows who is currently sharing and can target start_screen_watch correctly.
+  const activeDiscordStreams: Array<{ displayName: string }> = (() => {
+    const goLiveUserId = session.goLiveStream?.targetUserId;
+    if (!goLiveUserId) return [];
+    const rosterEntry = participantRoster.find(
+      (p: { userId?: string }) => String(p?.userId || "") === goLiveUserId
+    );
+    const displayName = String(
+      (rosterEntry as { displayName?: string })?.displayName || goLiveUserId
+    ).trim();
+    return displayName ? [{ displayName }] : [];
+  })();
   const streamWatchBrainContext = host.getStreamWatchBrainContextForPrompt(session, params.settings);
   const streamWatchLatestFrame =
     params.frozenFrameSnapshot?.dataBase64
@@ -633,6 +646,7 @@ export async function runVoiceReplyPipeline(
       recentVoiceEffectEvents,
       soundboardCandidates: soundboardCandidateLines,
       streamWatchLatestFrame,
+      activeDiscordStreams,
       webSearchTimeoutMs: Number(followup.toolBudget?.toolTimeoutMs),
       voiceToolCallbacks: host.buildVoiceToolCallbacks({ session, settings: params.settings }),
       onSpokenSentence: async ({

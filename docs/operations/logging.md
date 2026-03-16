@@ -6,6 +6,7 @@ This project emits structured runtime action logs as JSON lines and can stream t
 
 Runtime action logs are produced from `Store.onActionLogged` and include:
 - `ts`
+- `instance` — unique instance identifier from `CLANKER_INSTANCE_ID` env var (defaults to `"default"`)
 - `source`
 - `level`
 - `kind`
@@ -59,12 +60,14 @@ The Voice tab complements these per-event logs with a live SSE snapshot view:
 Add to `.env`:
 
 ```bash
+CLANKER_INSTANCE_ID=default
 RUNTIME_STRUCTURED_LOGS_ENABLED=true
 RUNTIME_STRUCTURED_LOGS_STDOUT=true
 RUNTIME_STRUCTURED_LOGS_FILE_PATH=data/logs/runtime-actions.ndjson
 DASHBOARD_SETTINGS_SAVE_DEBUG=false
 ```
 
+`CLANKER_INSTANCE_ID` distinguishes multiple bot instances in Loki/Grafana. Set a unique value per instance (e.g. `clanky`, `clanky-2`). Promoted to a first-class Loki label `{instance="..."}`.
 `RUNTIME_STRUCTURED_LOGS_FILE_PATH` is the file Promtail tails into Loki.
 `DASHBOARD_SETTINGS_SAVE_DEBUG=true` enables the otherwise-silent dashboard settings save success log.
 
@@ -122,6 +125,12 @@ Stop:
 bun run logs:loki:down
 ```
 
+### Multi-instance log ingestion
+
+Promtail uses a glob path (`/var/log/clanker/*/runtime-actions.ndjson`) so it picks up logs from any mounted instance directory. Each instance's log directory is mounted as a subdirectory under `/var/log/clanker/` in `docker-compose.loki.yml`. The `instance` Loki label (from `CLANKER_INSTANCE_ID`) distinguishes instances in Grafana queries.
+
+See [`multi-instance.md`](multi-instance.md) for full setup instructions.
+
 ## Usage flow
 
 1. Start Loki stack (`bun run logs:loki:up`).
@@ -138,6 +147,7 @@ Filter examples:
 ```logql
 {job="clanker_runtime",kind="voice_runtime"}
 {job="clanker_runtime",agent="voice",level="error"}
+{job="clanker_runtime",instance="clanky-2"}
 ```
 
 ## Incident analysis and replay
@@ -561,7 +571,7 @@ Interpretation notes:
 
 - `clankvox_transport_decrypt_failed` fires once per unique payload type when transport-level (AES-GCM / XChaCha20) decryption fails. If this fires for audio PT (111) or video PTs (103/105), the transport crypto AAD computation may be wrong. Inbound RTCP packets (PT 72-76) are filtered before decrypt and should never appear here.
 - `clankvox_h264_frame_nal_diagnostic` logs NAL types, keyframe status, and frame byte count at frame 1-5 and every 100th frame. `video_keyframe_count=0` after hundreds of frames means no SPS/IDR has arrived. `nal_types=[7, 8, 1]` means SPS+PPS were prepended to a P-slice from the depacketizer cache (normal for Go Live).
-- DAVE video passthrough warnings (`DAVE: video frame from user ... appears unencrypted`) are expected on Go Live streams. Video frames that fail DAVE decrypt with `UnencryptedWhenPassthroughDisabled` are dropped instead of forwarded, because the DAVE library's unencrypted detection can misfire on Go Live video that IS encrypted. Audio passthrough is still allowed on the stream watch transport since that audio channel is not used for ASR.
+- DAVE video decrypt works at near 100% on the main voice connection after the RTP padding strip fix. DAVE video passthrough warnings (`DAVE: video frame from user ... appears unencrypted`) are expected only on **Go Live streams**, where the `davey` crate still misclassifies encrypted frames as `UnencryptedWhenPassthroughDisabled`. These frames are validated by `looks_like_valid_h264` and dropped when they appear encrypted. Audio passthrough is still allowed on the stream watch transport since that audio channel is not used for ASR.
 - `native_discord_video_decode_failed` with `ffmpeg_decode_timeout` applies only to VP8 frames (H264 is decoded in-process by clankvox's persistent OpenH264 decoder and does not use ffmpeg). This means ffmpeg hung waiting for EOF on a VP8 decode.
 - `native_discord_video_decode_failed` with `deblocking_filter_idc out of range` or `reference count overflow` on frames that have `headerHex` starting with valid SPS bytes means DAVE-encrypted video was forwarded as cleartext. The DAVE video drop fix should prevent this. This applies only to VP8 ffmpeg decode; H264 decode errors surface through clankvox-side log events (see below).
 - `native_discord_video_decode_failed` with `h264_missing_parameter_sets` is a legacy VP8/ffmpeg path error. H264 parameter set management is handled internally by the persistent OpenH264 decoder in clankvox.

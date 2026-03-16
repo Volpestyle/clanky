@@ -97,9 +97,12 @@ export const VOICE_OUTPUT_LEASE_ATOMIC_MS = 2_400;
 // barge-in is blocked for this window so the reply's point can land.
 export const BARGE_IN_LEASE_IMMUNITY_ASSERTIVE_MS = 2_000;
 export const BARGE_IN_LEASE_IMMUNITY_ATOMIC_MS = 4_000;
-// Disabled to reduce end-of-turn latency. Realtime turns still coalesce while
-// the drain is active and when deferred bot-turn-open turns flush together.
-// export const REALTIME_TURN_COALESCE_WINDOW_MS = 1100;
+// Hard failsafe for room-coalesce holds. The primary flush trigger is capture
+// finalization removing the last active capture ("room went quiet"). This timeout
+// only fires if something is genuinely broken — a capture that never finalizes
+// despite the 8s max-duration cap and idle/silence abort timers. Set well above
+// CAPTURE_MAX_DURATION_MS so it never preempts normal room settling.
+export const REALTIME_TURN_COALESCE_WINDOW_MS = 10_000;
 // Maximum PCM bytes allowed in a coalesced multi-segment turn.
 export const REALTIME_TURN_COALESCE_MAX_BYTES = 24_000 * 2 * 12;
 // Keep only one pending realtime turn; newer finalized captures are merged into it.

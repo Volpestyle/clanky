@@ -4111,9 +4111,7 @@ export class VoiceSessionManager {
     const normalizedSource = String(source || "").trim().toLowerCase();
     return (
       normalizedSource === "speech_started_sustained" ||
-      normalizedSource === "transcript_direct_address" ||
-      normalizedSource === "transcript_allowed_speaker_late_rescue" ||
-      normalizedSource === "bridge_commit_allowed_speaker_late_rescue"
+      normalizedSource === "transcript_direct_address"
     );
   }
 
@@ -4573,68 +4571,6 @@ export class VoiceSessionManager {
     return burst;
   }
 
-  supersedeInterruptOverlapBurstWithAuthorizedRescue({
-    session,
-    burst,
-    rescuedUtteranceId,
-    source
-  }: {
-    session: VoiceSession;
-    burst: VoiceInterruptOverlapBurstState | null | undefined;
-    rescuedUtteranceId: number;
-    source: string;
-  }) {
-    const resolvedBurst = burst && typeof burst === "object" ? burst : null;
-    if (!resolvedBurst) return;
-
-    const normalizedRescuedUtteranceId = Math.max(0, Number(rescuedUtteranceId || 0)) || null;
-    if (!normalizedRescuedUtteranceId) return;
-
-    const decisions = this.ensureInterruptDecisionMap(session);
-    const decidedAt = Date.now();
-    const supersededUtteranceIds: number[] = [];
-    const supersededSource = `${String(source || "authorized_speaker_late_rescue").trim() || "authorized_speaker_late_rescue"}_superseded`;
-
-    for (const utteranceId of resolvedBurst.utteranceIds) {
-      if (utteranceId === normalizedRescuedUtteranceId) continue;
-      const currentState = decisions.get(utteranceId);
-      if (this.isProtectedInterruptDecisionSource(currentState?.source)) continue;
-      if (currentState && Number(currentState.burstId || 0) > resolvedBurst.id) continue;
-      decisions.set(utteranceId, {
-        transcript: currentState?.transcript || "",
-        decision: "ignore",
-        decidedAt,
-        source: supersededSource,
-        burstId: resolvedBurst.id
-      });
-      supersededUtteranceIds.push(utteranceId);
-    }
-
-    if (supersededUtteranceIds.length === 0) return;
-
-    this.discardPendingInterruptBridgeTurns({
-      session,
-      utteranceIds: supersededUtteranceIds,
-      burstId: resolvedBurst.id,
-      reason: supersededSource
-    });
-
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: null,
-      content: "voice_interrupt_overlap_burst_superseded_by_authorized_rescue",
-      metadata: {
-        sessionId: session.id,
-        burstId: resolvedBurst.id,
-        rescuedUtteranceId: normalizedRescuedUtteranceId,
-        supersededUtteranceIds,
-        source: String(source || "authorized_speaker_late_rescue")
-      }
-    });
-  }
-
   pruneInterruptOverlapState(session: VoiceSession, now = Date.now()) {
     const decisions = this.ensureInterruptDecisionMap(session);
     const pendingTurns = this.ensurePendingInterruptBridgeTurnMap(session);
@@ -4870,131 +4806,6 @@ export class VoiceSessionManager {
     return normalizeVoiceText(session.interruptedAssistantReply?.utteranceText || "", STT_REPLY_MAX_CHARS);
   }
 
-  buildTranscriptRescueCaptureState(userId: string, pcmBuffer: Buffer | null | undefined) {
-    const normalizedPcmBuffer = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
-    if (normalizedPcmBuffer.length <= 0) return null;
-    const signal = analyzeMonoPcmSignal(normalizedPcmBuffer);
-    const sampleCount = Math.max(0, Number(signal.sampleCount || 0));
-    const activeSampleCount = Math.max(0, Math.round(signal.activeSampleRatio * sampleCount));
-    const peakAbs = Math.max(0, Math.round(signal.peak * 32768));
-    const rmsAbs = Math.max(0, signal.rms * 32768);
-    return {
-      userId,
-      bytesSent: normalizedPcmBuffer.length,
-      signalSampleCount: sampleCount,
-      signalActiveSampleCount: activeSampleCount,
-      signalPeakAbs: peakAbs,
-      signalSumSquares: Math.max(0, Math.round(sampleCount * rmsAbs * rmsAbs)),
-      speakingEndFinalizeTimer: null
-    };
-  }
-
-  tryLateAuthorizedTranscriptInterrupt({
-    session,
-    userId = null,
-    speakerName = "someone",
-    utteranceId = 0,
-    transcript = "",
-    eventType = null,
-    itemId = null,
-    source = "transcript_allowed_speaker_late_rescue",
-    pcmBuffer = null
-  }: {
-    session: VoiceSession;
-    userId?: string | null;
-    speakerName?: string;
-    utteranceId?: number;
-    transcript?: string;
-    eventType?: string | null;
-    itemId?: string | null;
-    source?: string;
-    pcmBuffer?: Buffer | null;
-  }) {
-    if (!session || session.ending) return false;
-    const normalizedUserId = String(userId || "").trim() || null;
-    const normalizedUtteranceId = Math.max(0, Number(utteranceId || 0)) || null;
-    const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedUserId || !normalizedUtteranceId || !normalizedTranscript) return false;
-    if (!this.hasInterruptibleAssistantOutput(session)) return false;
-
-    const interruptionPolicy =
-      session.pendingResponse?.interruptionPolicy || session.activeReplyInterruptionPolicy || null;
-    if (
-      !this.isUserAllowedToInterruptReply({
-        policy: interruptionPolicy,
-        userId: normalizedUserId
-      })
-    ) {
-      return false;
-    }
-
-    const captureState =
-      session.userCaptures instanceof Map
-        ? session.userCaptures.get(normalizedUserId) || null
-        : null;
-    const rescueCaptureState =
-      captureState ||
-      this.buildTranscriptRescueCaptureState(normalizedUserId, pcmBuffer);
-    const bargeEvaluation = this.bargeInController.evaluateBargeInDecision({
-      session,
-      userId: normalizedUserId,
-      captureState: rescueCaptureState
-    });
-    if (!bargeEvaluation.allowed) return false;
-
-    const interrupted = this.interruptBotSpeechForOutputLockTurn({
-      session,
-      userId: normalizedUserId,
-      source
-    });
-    if (!interrupted) return false;
-
-    this.releasePendingSpeechStartedInterrupt({
-      session,
-      utteranceId: normalizedUtteranceId,
-      reason: "late_transcript_rescue",
-      flushPendingTurn: false
-    });
-    const rescuedBurst = this.clearInterruptOverlapBurst(session);
-    const decisions = this.ensureInterruptDecisionMap(session);
-    decisions.set(normalizedUtteranceId, {
-      transcript: normalizedTranscript,
-      decision: "interrupt",
-      decidedAt: Date.now(),
-      source: String(source || "transcript_allowed_speaker_late_rescue"),
-      burstId: 0
-    });
-    this.supersedeInterruptOverlapBurstWithAuthorizedRescue({
-      session,
-      burst: rescuedBurst,
-      rescuedUtteranceId: normalizedUtteranceId,
-      source: String(source || "transcript_allowed_speaker_late_rescue")
-    });
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: normalizedUserId,
-      content: "voice_interrupt_on_authorized_transcript_rescue",
-      metadata: {
-        sessionId: session.id,
-        utteranceId: normalizedUtteranceId,
-        speakerName: normalizeInlineText(speakerName, 80) || this.resolveVoiceSpeakerName(session, normalizedUserId),
-        transcript: normalizedTranscript,
-        eventType: String(eventType || "").trim() || null,
-        itemId: normalizeInlineText(itemId, 180) || null,
-        source: String(source || "transcript_allowed_speaker_late_rescue"),
-        minCaptureBytes: bargeEvaluation.minCaptureBytes,
-        captureAgeMs: bargeEvaluation.captureAgeMs,
-        captureBytesSent: bargeEvaluation.captureBytesSent,
-        signalPeak: bargeEvaluation.signal.peak,
-        signalRms: bargeEvaluation.signal.rms,
-        signalActiveSampleRatio: bargeEvaluation.signal.activeSampleRatio
-      }
-    });
-    return true;
-  }
-
   stagePendingInterruptBridgeTurn({
     session,
     userId,
@@ -5192,6 +5003,10 @@ export class VoiceSessionManager {
     });
 
     if (result.decision === "interrupt") {
+      // Only allow the interrupt if at least one burst entry comes from a
+      // user authorized by the active reply's interruption policy.  In a
+      // multi-person VC, someone saying "wait" to another participant
+      // should not cut the bot's reply to a different listener.
       const interruptUserId =
         [...burst.entries]
           .reverse()
@@ -5203,10 +5018,6 @@ export class VoiceSessionManager {
               userId: candidate
             })
           ) ||
-        [...burst.entries]
-          .reverse()
-          .map((entry) => String(entry.userId || "").trim() || null)
-          .find(Boolean) ||
         null;
       const interrupted = interruptUserId
         ? this.interruptBotSpeechForOutputLockTurn({
@@ -5364,27 +5175,14 @@ export class VoiceSessionManager {
       this.isUserAllowedToInterruptReply({
         policy: interruptionPolicy,
         userId: normalizedUserId
-      })
+      }) &&
+      existingState?.decision === "pending"
     ) {
-      if (existingState?.decision === "pending") {
-        decisions.set(normalizedUtteranceId, {
-          ...existingState,
-          transcript: normalizedTranscript,
-          decidedAt: Date.now()
-        });
-        return;
-      }
-      const rescued = this.tryLateAuthorizedTranscriptInterrupt({
-        session,
-        userId: normalizedUserId,
-        speakerName,
-        utteranceId: normalizedUtteranceId,
+      decisions.set(normalizedUtteranceId, {
+        ...existingState,
         transcript: normalizedTranscript,
-        eventType,
-        itemId,
-        source: "transcript_allowed_speaker_late_rescue"
+        decidedAt: Date.now()
       });
-      if (rescued) return;
       return;
     }
 
@@ -5677,27 +5475,6 @@ export class VoiceSessionManager {
       );
       if (
         !committedInterrupt &&
-        policyAllowedSpeaker &&
-        !hasPendingSpeechStartedInterrupt &&
-        (!currentDecision || currentDecision.decision === "pending")
-      ) {
-        const rescued = this.tryLateAuthorizedTranscriptInterrupt({
-          session,
-          userId,
-          speakerName: this.resolveVoiceSpeakerName(session, userId),
-          utteranceId: normalizedBridgeUtteranceId,
-          transcript,
-          eventType: "bridge_commit",
-          itemId: null,
-          source: "bridge_commit_allowed_speaker_late_rescue",
-          pcmBuffer: normalizedPcmBuffer
-        });
-        if (rescued) {
-          currentDecision = decisions.get(normalizedBridgeUtteranceId);
-        }
-      }
-      if (
-        !committedInterrupt &&
         !policyAllowedSpeaker &&
         (!currentDecision || currentDecision.transcript !== transcript)
       ) {
@@ -5973,7 +5750,8 @@ export class VoiceSessionManager {
     source = "openai_realtime_text_turn",
     directAddressed = false,
     conversationContext: _conversationContext = null,
-    latencyContext = null
+    latencyContext = null,
+    speakerTranscripts = null
   }) {
     if (!session || session.ending) return false;
     if (!providerSupports(session.mode || "", "textInput")) return false;
@@ -5987,12 +5765,30 @@ export class VoiceSessionManager {
     if (normalizedUserId) {
       session.lastRealtimeToolCallerUserId = normalizedUserId;
     }
+
     const speakerName =
       this.resolveVoiceSpeakerName(session, normalizedUserId) || normalizedUserId || "someone";
-    const labeledTranscript = normalizeVoiceText(
-      `(${speakerName}): ${normalizedTranscript}`,
-      STT_REPLY_MAX_CHARS
-    );
+
+    // For cross-speaker coalesced turns, format each speaker's contribution
+    // separately so the realtime model sees proper attribution.
+    let labeledTranscript: string;
+    if (Array.isArray(speakerTranscripts) && speakerTranscripts.length > 1) {
+      labeledTranscript = normalizeVoiceText(
+        speakerTranscripts
+          .filter((s) => s && s.transcript)
+          .map((s) => {
+            const name = this.resolveVoiceSpeakerName(session, s.userId) || "someone";
+            return `(${name}): ${s.transcript}`;
+          })
+          .join("\n"),
+        STT_REPLY_MAX_CHARS
+      );
+    } else {
+      labeledTranscript = normalizeVoiceText(
+        `(${speakerName}): ${normalizedTranscript}`,
+        STT_REPLY_MAX_CHARS
+      );
+    }
     if (!labeledTranscript) return false;
 
     // Cancel any in-flight response so the model sees all user messages and
@@ -6240,7 +6036,8 @@ export class VoiceSessionManager {
     inputKind = "transcript",
     source = "realtime",
     transcriptionContext = null,
-    runtimeEventContext = null
+    runtimeEventContext = null,
+    speakerTranscripts = null
   }): Promise<VoiceReplyDecision> {
     return evaluateVoiceReplyDecisionModule(this, {
       session,
@@ -6250,7 +6047,8 @@ export class VoiceSessionManager {
       inputKind,
       source,
       transcriptionContext,
-      runtimeEventContext
+      runtimeEventContext,
+      speakerTranscripts
     });
   }
 
@@ -6643,6 +6441,23 @@ export class VoiceSessionManager {
     }
 
     return 1;
+  }
+
+  hasOtherActiveCaptures(session, excludeUserId) {
+    if (!session || !(session.userCaptures instanceof Map) || session.userCaptures.size <= 0) {
+      return false;
+    }
+    const normalizedExclude = String(excludeUserId || "").trim();
+    for (const [captureUserId] of session.userCaptures.entries()) {
+      if (String(captureUserId || "").trim() !== normalizedExclude) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  flushHeldRoomCoalesceTurns(session, reason = "room_quiet") {
+    this.turnProcessor.flushHeldRoomCoalesceTurns(session, reason);
   }
 
   extractRealtimeFunctionCallEnvelope(event) {
@@ -7393,13 +7208,27 @@ export class VoiceSessionManager {
     source = "realtime",
     latencyContext = null,
     frozenFrameSnapshot = null,
-    runtimeEventContext = null
+    runtimeEventContext = null,
+    speakerTranscripts = null
   }) {
+    // For cross-speaker coalesced turns, format the transcript with per-speaker
+    // attribution so the generation model sees who said what.
+    const formattedTranscript =
+      Array.isArray(speakerTranscripts) && speakerTranscripts.length > 1
+        ? speakerTranscripts
+          .filter((s) => s && s.transcript)
+          .map((s) => {
+            const name = this.resolveVoiceSpeakerName(session, s.userId) || "someone";
+            return `[${name}]: "${s.transcript}"`;
+          })
+          .join("\n") || transcript
+        : transcript;
+
     return await runVoiceReplyPipeline(this, {
       session,
       settings,
       userId,
-      transcript,
+      transcript: formattedTranscript,
       inputKind,
       directAddressed,
       directAddressConfidence,

@@ -175,6 +175,7 @@ export function buildVoiceTurnPrompt({
   allowScreenShareToolCall = false,
   screenWatchActive = false,
   screenWatchFrameReady = false,
+  activeDiscordStreams = [],
   allowMemoryToolCalls = false,
   allowSoundboardToolCall = false,
   allowInlineSoundboardDirectives = false,
@@ -542,6 +543,20 @@ export function buildVoiceTurnPrompt({
   }
 
   const normalizedDurableContext = selectPromptDurableContextEntries(durableContext);
+  const normalizedActiveStreams = (Array.isArray(activeDiscordStreams) ? activeDiscordStreams : [])
+    .filter((entry) => entry?.displayName)
+    .slice(0, 6);
+  if (normalizedActiveStreams.length > 0 && !screenWatchActive) {
+    parts.push(
+      [
+        "Active Discord screen shares:",
+        ...normalizedActiveStreams.map((entry) => `- ${entry.displayName} (Go Live)`),
+        allowScreenShareToolCall
+          ? "Use start_screen_watch to request frame context. Pass { target: \"display name\" } to watch a specific share."
+          : ""
+      ].filter(Boolean).join("\n")
+    );
+  }
   if (screenWatchActive && !hasDirectVisionFrame && !normalizedStreamWatchBrainContext?.notes?.length) {
     parts.push(
       screenWatchFrameReady

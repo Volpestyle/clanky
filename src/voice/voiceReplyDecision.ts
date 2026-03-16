@@ -35,7 +35,8 @@ import type {
   VoiceSession,
   OutputChannelState,
   MusicPlaybackPhase,
-  VoiceRuntimeEventContext
+  VoiceRuntimeEventContext,
+  SpeakerTranscript
 } from "./voiceSessionTypes.ts";
 import {
   musicPhaseShouldForceCommandOnly
@@ -407,7 +408,18 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
   inputKind = "transcript",
   source: _source = "realtime",
   transcriptionContext: _transcriptionContext = null,
-  runtimeEventContext = null
+  runtimeEventContext = null,
+  speakerTranscripts = null
+}: {
+  session: VoiceSession;
+  settings: Record<string, unknown> | null;
+  userId: string;
+  transcript: string;
+  inputKind?: string;
+  source?: string;
+  transcriptionContext?: Record<string, unknown> | null;
+  runtimeEventContext?: VoiceRuntimeEventContext | null;
+  speakerTranscripts?: SpeakerTranscript[] | null;
 }): Promise<VoiceReplyDecision> {
   const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
   const normalizedInputKind = inputKind === "event" ? "event" : "transcript";
@@ -764,6 +776,17 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     conversationContext,
     runtimeEventContext: normalizedRuntimeEventContext
   };
+  // Resolve speaker names for cross-speaker coalesced turns.
+  const resolvedSpeakerTranscripts =
+    Array.isArray(speakerTranscripts) && speakerTranscripts.length > 1
+      ? speakerTranscripts
+        .filter((s) => s && s.transcript)
+        .map((s) => ({
+          speakerName: manager.resolveVoiceSpeakerName(session, s.userId) || "someone",
+          transcript: s.transcript
+        }))
+      : null;
+
   const classifierResult = await runVoiceReplyClassifier(manager, {
     session,
     settings,
@@ -783,7 +806,8 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     musicWakeLatched,
     msUntilMusicWakeLatchExpiry,
     activeCommandOwner,
-    runtimeEventContext: normalizedRuntimeEventContext
+    runtimeEventContext: normalizedRuntimeEventContext,
+    speakerTranscripts: resolvedSpeakerTranscripts
   });
   if (classifierResult.allow && musicActive && musicWakeLatched) {
     touchMusicWakeLatch(session, settings, normalizedUserId, now);
@@ -838,6 +862,8 @@ type ClassifierPromptInput = {
   >;
   recentHistory?: string;
   runtimeEventContext?: VoiceRuntimeEventContext | null;
+  /** Per-speaker transcript segments from cross-speaker room coalescing. */
+  speakerTranscripts?: { speakerName: string; transcript: string }[] | null;
 };
 
 function buildClassifierPrompt(input: ClassifierPromptInput): {
@@ -890,6 +916,12 @@ function buildClassifierPrompt(input: ClassifierPromptInput): {
     }
     if (screenShareEvent?.hasVisibleFrame) {
       parts.push("Visible frame attached: yes.");
+    }
+  } else if (Array.isArray(input.speakerTranscripts) && input.speakerTranscripts.length > 1) {
+    // Multi-speaker coalesced turn — show each speaker's contribution.
+    parts.push("Multiple speakers (room moment):");
+    for (const segment of input.speakerTranscripts) {
+      parts.push(`  ${segment.speakerName}: "${segment.transcript}"`);
     }
   } else {
     parts.push(`Speaker: ${input.speakerName}`);
@@ -1055,7 +1087,8 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   musicWakeLatched = false,
   msUntilMusicWakeLatchExpiry = null,
   activeCommandOwner = null,
-  runtimeEventContext = null
+  runtimeEventContext = null,
+  speakerTranscripts = null
 }: {
   session: ReplyDecisionSessionLike;
   settings: ReplyDecisionSettings;
@@ -1076,6 +1109,7 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   msUntilMusicWakeLatchExpiry?: number | null;
   activeCommandOwner?: string | null;
   runtimeEventContext?: VoiceRuntimeEventContext | null;
+  speakerTranscripts?: { speakerName: string; transcript: string }[] | null;
 }): Promise<{
   allow: boolean;
   decision: "allow" | "deny" | null;
@@ -1209,7 +1243,8 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
     activeCommandOwner,
     conversationContext,
     recentHistory,
-    runtimeEventContext: normalizedRuntimeEventContext
+    runtimeEventContext: normalizedRuntimeEventContext,
+    speakerTranscripts
   });
   const replyPrompts = buildSingleTurnPromptLog({
     systemPrompt: classifierSystemPrompt,

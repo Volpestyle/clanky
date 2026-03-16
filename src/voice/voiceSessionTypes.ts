@@ -945,6 +945,12 @@ export interface VoicePendingInterruptBridgeTurn {
     serverVadConfirmed: boolean;
 }
 
+/** Per-speaker transcript segment preserved during cross-speaker merge. */
+export interface SpeakerTranscript {
+    userId: string;
+    transcript: string;
+}
+
 export interface RealtimeQueuedTurn {
     session: VoiceSession;
     userId: string;
@@ -968,6 +974,11 @@ export interface RealtimeQueuedTurn {
     musicWakeFollowupEligibleAtCapture: boolean;
     mergedTurnCount: number;
     droppedHeadBytes: number;
+    /** When turns from different speakers are merged (room coalescing),
+     *  this array preserves per-speaker transcript attribution. Null/empty
+     *  means this is a single-speaker turn and userId+transcriptOverride
+     *  carry the full information. */
+    speakerTranscripts?: SpeakerTranscript[] | null;
 }
 
 export interface FileAsrQueuedTurn {

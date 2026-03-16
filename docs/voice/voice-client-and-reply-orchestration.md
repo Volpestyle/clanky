@@ -268,7 +268,7 @@ Turns enter the system via two queues and are drained serially:
 ```
 captureManager.finalizeUserTurn()
   → turnProcessor.queueRealtimeTurn()
-    → drain immediately unless another realtime turn is already pending/in flight
+    → room-aware coalescing decision (see below)
     → drainRealtimeTurnQueue() (serial, one at a time)
       → runRealtimeTurn()
 ```
@@ -282,7 +282,25 @@ captureManager.finalizeUserTurn() (realtime session with `transcriptionMethod="f
       → runFileAsrTurn()
 ```
 
-Turn coalescing: multiple turns arriving within the coalesce window are merged into a single turn with concatenated PCM and merged transcripts.
+### Room-Aware Turn Coalescing
+
+When a turn finalizes and enters the queue, the system checks whether anyone else in the channel has an active capture (is currently speaking). This determines whether to drain immediately or hold:
+
+| Condition | Behavior |
+|---|---|
+| No other active captures (room quiet) | Drain immediately — zero added latency |
+| Other users still speaking | Hold turn in pending queue, wait for room to settle |
+| Turn contains direct address (wake word) | Drain immediately regardless of other captures |
+| Drain already active (processing prior turn) | Merge into pending queue entry (existing behavior) |
+
+**Flush triggers** for held turns:
+
+1. **Room went quiet** — when the last active capture finalizes (via `cleanupCapture`), any held turns flush together. This is the primary mechanism.
+2. **Hard failsafe** — `REALTIME_TURN_COALESCE_WINDOW_MS` (10s) timeout prevents truly stuck turns if a capture never finalizes. Should never fire under normal operation since captures are capped at `CAPTURE_MAX_DURATION_MS` (8s) with idle/silence abort timers.
+
+**`max_duration` exclusion**: when a capture finalizes due to hitting the 8s cap, the room-coalesce flush is *not* triggered. The user is still speaking; a new capture will start and eventually finalize with a real speech-end reason.
+
+**Speaker-aware merging**: when turns from different speakers are merged during room coalescing, the `speakerTranscripts` array on `RealtimeQueuedTurn` preserves per-speaker attribution (`[{userId, transcript}]`). This flows through to conversation history recording (each speaker recorded separately) and provides the LLM with proper "who said what" context.
 
 After capture/transcription, all three entry points converge on the same post-transcript helper in `turnProcessor.ts`:
 

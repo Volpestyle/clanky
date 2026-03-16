@@ -796,7 +796,7 @@ async function tryStartNativeScreenWatch(
     session,
     requesterUserId
   });
-  const targetSelection = normalizedTargetUserId
+  let targetSelection = normalizedTargetUserId
     ? {
         targetUserId: normalizedTargetUserId,
         reason: "explicit_requested_target"
@@ -836,22 +836,33 @@ async function tryStartNativeScreenWatch(
     !activeSharers.some((entry) => entry.userId === normalizedTargetUserId) &&
     goLiveTargetUserId !== normalizedTargetUserId
   ) {
-    logNativeScreenWatchStartFailed(runtime, {
-      guildId,
-      channelId,
-      requesterUserId,
-      session,
-      source,
-      transcript,
-      requestedTargetUserId: normalizedTargetUserId,
-      selectionReason: targetSelection.reason,
-      reason: "requested_target_not_actively_sharing"
-    });
-    return {
-      started: false,
-      reason: "requested_target_not_actively_sharing",
-      targetUserId: normalizedTargetUserId
-    };
+    // The explicit target isn't sharing, but another user might be.
+    // Fall back to the Go Live bootstrap user or an active sharer instead
+    // of failing — the model's intent is "watch a stream".
+    const fallbackUserId = goLiveTargetUserId || activeTargetSelection.targetUserId || null;
+    if (fallbackUserId) {
+      targetSelection.targetUserId = fallbackUserId;
+      targetSelection.reason = goLiveTargetUserId
+        ? "explicit_target_fallback_to_go_live"
+        : "explicit_target_fallback_to_active_sharer";
+    } else {
+      logNativeScreenWatchStartFailed(runtime, {
+        guildId,
+        channelId,
+        requesterUserId,
+        session,
+        source,
+        transcript,
+        requestedTargetUserId: normalizedTargetUserId,
+        selectionReason: targetSelection.reason,
+        reason: "requested_target_not_actively_sharing"
+      });
+      return {
+        started: false,
+        reason: "requested_target_not_actively_sharing",
+        targetUserId: normalizedTargetUserId
+      };
+    }
   }
 
   if (shouldSuppressLinkFallbackDueToNativeWatch(runtime, {

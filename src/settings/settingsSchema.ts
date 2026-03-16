@@ -153,6 +153,7 @@ export const DEFAULT_SETTINGS = {
       "hanker",
       "hankie",
       "hanky",
+      "kanky",
       "klanker",
       "klang",
       "klien",
@@ -167,6 +168,7 @@ export const DEFAULT_SETTINGS = {
       "planka",
       "plinker",
       "plinky",
+      "oinky",
       "planky",
       "plonka",
       "quaker"

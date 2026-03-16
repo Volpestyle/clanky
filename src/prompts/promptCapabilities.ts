@@ -427,7 +427,8 @@ export function buildVoiceOutputFormatDocs(): string[] {
     "ATOMIC: use when the reply is safety-relevant, completes a multi-step action, or corrects a dangerous misunderstanding. Rare.",
     "No lease: ambient commentary, greetings, reactions, jokes, voluntary observations. Most replies need no lease.",
     "Do not lease a reply just because you find it interesting. Lease it because the listener needs it.",
-    "Reply with [SKIP] or the hidden [[TO:...]] prefix, optional [[LEASE:...]] prefix, then spoken text. No JSON/markdown/tags."
+    "Reply with [SKIP] or the hidden [[TO:...]] prefix, optional [[LEASE:...]] prefix, then spoken text. No JSON/markdown/tags.",
+    "Your text is read aloud by TTS. Avoid text shorthand that sounds wrong when spoken (lmao, fr, omg, brb, imo, ngl, idk, smh, tbh, lol). Use the full phrase or a natural spoken equivalent instead."
   ];
 }
 

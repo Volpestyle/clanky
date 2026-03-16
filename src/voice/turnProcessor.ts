@@ -13,6 +13,7 @@ import {
   MIN_RESPONSE_REQUEST_GAP_MS,
   OPENAI_ACTIVE_RESPONSE_RETRY_MS,
   REALTIME_TURN_COALESCE_MAX_BYTES,
+  REALTIME_TURN_COALESCE_WINDOW_MS,
   REALTIME_TURN_PENDING_MERGE_MAX_BYTES,
   REALTIME_TURN_QUEUE_MAX,
   REALTIME_TURN_STALE_SKIP_MS,
@@ -45,6 +46,7 @@ import type {
   OutputChannelState,
   RealtimeQueuedTurn,
   FileAsrQueuedTurn,
+  SpeakerTranscript,
   VoiceAddressingAnnotation,
   VoiceAddressingState,
   VoiceConversationContext,
@@ -100,6 +102,7 @@ interface RunRealtimeTurnArgs extends QueueRealtimeTurnArgs {
   bridgeRevision?: number;
   mergedTurnCount?: number;
   droppedHeadBytes?: number;
+  speakerTranscripts?: SpeakerTranscript[] | null;
 }
 
 interface QueueFileAsrTurnArgs {
@@ -157,6 +160,7 @@ interface EvaluateVoiceReplyDecisionArgs {
   transcript: string;
   source: string;
   transcriptionContext?: TurnDecisionTranscriptionContext;
+  speakerTranscripts?: SpeakerTranscript[] | null;
 }
 
 interface NormalizeVoiceAddressingAnnotationArgs {
@@ -224,6 +228,8 @@ interface HandleResolvedVoiceTurnArgs {
   allowReplyDispatch?: boolean;
   allowAuthorizedOutputLockInterrupt?: boolean;
   shouldAbortStage?: ((stage: "post_decision" | "pre_native_reply" | "pre_brain_forward" | "pre_brain_reply") => boolean) | null;
+  /** Per-speaker transcript segments from cross-speaker room coalescing. */
+  speakerTranscripts?: SpeakerTranscript[] | null;
 }
 
 interface ForwardRealtimeTurnAudioArgs {
@@ -245,6 +251,7 @@ interface ForwardRealtimeTextTurnToBrainArgs {
   directAddressed?: boolean;
   conversationContext?: VoiceConversationContext | null;
   latencyContext?: Record<string, unknown> | null;
+  speakerTranscripts?: SpeakerTranscript[] | null;
 }
 
 interface RunRealtimeBrainReplyArgs {
@@ -261,6 +268,7 @@ interface RunRealtimeBrainReplyArgs {
   latencyContext?: Record<string, unknown> | null;
   frozenFrameSnapshot?: { mimeType: string; dataBase64: string } | null;
   runtimeEventContext?: VoiceRuntimeEventContext | null;
+  speakerTranscripts?: SpeakerTranscript[] | null;
 }
 
 type TurnProcessorStoreLike = {
@@ -392,6 +400,10 @@ interface TurnProcessorHost {
   touchActivity: (guildId: string, settings?: TurnProcessorSettings) => void;
   getOutputChannelState: (session: VoiceSession) => OutputChannelState;
   countHumanVoiceParticipants: (session: VoiceSession) => number;
+  /** Returns true if any user *other than* excludeUserId has an active (non-finalized) capture. */
+  hasOtherActiveCaptures: (session: VoiceSession, excludeUserId: string) => boolean;
+  /** Drain any room-coalesce-held turns in the pending queue. */
+  flushHeldRoomCoalesceTurns: (session: VoiceSession, reason?: string) => void;
 }
 
 export class TurnProcessor {
@@ -522,7 +534,8 @@ export class TurnProcessor {
     musicWakeFollowupEligibleAtCapture = false,
     allowReplyDispatch = true,
     allowAuthorizedOutputLockInterrupt = true,
-    shouldAbortStage = null
+    shouldAbortStage = null,
+    speakerTranscripts = null
   }: HandleResolvedVoiceTurnArgs) {
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
 
@@ -532,7 +545,8 @@ export class TurnProcessor {
       userId,
       transcript: normalizedTranscript,
       source,
-      transcriptionContext
+      transcriptionContext,
+      speakerTranscripts
     });
     if (shouldAbortStage?.("post_decision")) return;
 
@@ -673,7 +687,8 @@ export class TurnProcessor {
         source: bridgeSource,
         directAddressed: Boolean(decision.directAddressed),
         conversationContext: decision.conversationContext || null,
-        latencyContext
+        latencyContext,
+        speakerTranscripts
       });
       return;
     }
@@ -689,7 +704,8 @@ export class TurnProcessor {
       conversationContext: decision.conversationContext || null,
       musicWakeFollowupEligibleAtCapture,
       source,
-      latencyContext
+      latencyContext,
+      speakerTranscripts
     });
   }
 
@@ -1235,9 +1251,62 @@ export class TurnProcessor {
       )
       : 1;
 
+    // --- Speaker-aware merge ---
+    // When turns from different speakers are merged (room coalescing),
+    // preserve per-speaker transcript attribution so the downstream pipeline
+    // can present "Speaker A said X / Speaker B said Y" to the LLM.
+    const existingUserId = String(existingTurn.userId || "").trim();
+    const incomingUserId = String(incomingTurn.userId || "").trim();
+    const isCrossSpeaker = Boolean(existingUserId && incomingUserId && existingUserId !== incomingUserId);
+
+    let mergedSpeakerTranscripts: SpeakerTranscript[] | null = null;
+    if (isCrossSpeaker) {
+      // Bootstrap from existing turn's speakerTranscripts or create initial entry.
+      const existingSpeakers: SpeakerTranscript[] = Array.isArray(existingTurn.speakerTranscripts) && existingTurn.speakerTranscripts.length > 0
+        ? [...existingTurn.speakerTranscripts]
+        : existingTurn.transcriptOverride
+          ? [{ userId: existingUserId, transcript: existingTurn.transcriptOverride }]
+          : [];
+      const incomingText = normalizeVoiceText(incomingTurn.transcriptOverride || "", STT_TRANSCRIPT_MAX_CHARS);
+      if (incomingText) {
+        // Append or coalesce with existing entry for the same speaker.
+        const existingIdx = existingSpeakers.findIndex((s) => s.userId === incomingUserId);
+        if (existingIdx >= 0) {
+          const prev = existingSpeakers[existingIdx].transcript || "";
+          existingSpeakers[existingIdx] = {
+            userId: incomingUserId,
+            transcript: prev ? `${prev} ${incomingText}` : incomingText
+          };
+        } else {
+          existingSpeakers.push({ userId: incomingUserId, transcript: incomingText });
+        }
+      }
+      mergedSpeakerTranscripts = existingSpeakers.length > 0 ? existingSpeakers : null;
+    } else if (Array.isArray(existingTurn.speakerTranscripts) && existingTurn.speakerTranscripts.length > 0) {
+      // Same speaker but existing turn already carries speakerTranscripts (prior cross-speaker merge).
+      // Coalesce the incoming transcript into the matching speaker entry.
+      mergedSpeakerTranscripts = [...existingTurn.speakerTranscripts];
+      const incomingText = normalizeVoiceText(incomingTurn.transcriptOverride || "", STT_TRANSCRIPT_MAX_CHARS);
+      if (incomingText) {
+        const speakerIdx = mergedSpeakerTranscripts.findIndex((s) => s.userId === incomingUserId);
+        if (speakerIdx >= 0) {
+          const prev = mergedSpeakerTranscripts[speakerIdx].transcript || "";
+          mergedSpeakerTranscripts[speakerIdx] = {
+            userId: incomingUserId,
+            transcript: prev ? `${prev} ${incomingText}` : incomingText
+          };
+        } else {
+          mergedSpeakerTranscripts.push({ userId: incomingUserId, transcript: incomingText });
+        }
+      }
+    }
+
     return {
       ...existingTurn,
       ...incomingTurn,
+      // For cross-speaker merges, keep the existing (first) speaker as the primary userId.
+      // The speakerTranscripts array carries the full attribution.
+      userId: isCrossSpeaker ? existingUserId : incomingUserId || existingUserId,
       pcmBuffer: mergedBuffer,
       transcriptOverride: mergedTranscript || null,
       transcriptLogprobsOverride: mergedLogprobs,
@@ -1254,7 +1323,8 @@ export class TurnProcessor {
         Boolean(existingTurn.musicWakeFollowupEligibleAtCapture) ||
         Boolean(incomingTurn.musicWakeFollowupEligibleAtCapture),
       mergedTurnCount: Math.max(1, Number(existingTurn.mergedTurnCount || 1)) + 1,
-      droppedHeadBytes
+      droppedHeadBytes,
+      speakerTranscripts: mergedSpeakerTranscripts
     };
   }
 
@@ -1388,19 +1458,47 @@ export class TurnProcessor {
     }
 
     if (pendingQueue.length > 0) {
+      // Merge the incoming turn into the pending queue.
+      const firstPending = pendingQueue.shift() || queuedTurn;
+      let mergedTurn = firstPending;
+      while (pendingQueue.length > 0) {
+        const pendingTurn = pendingQueue.shift();
+        if (!pendingTurn) continue;
+        mergedTurn = this.mergeRealtimeQueuedTurn(mergedTurn, pendingTurn);
+      }
+      if (firstPending !== queuedTurn) {
+        mergedTurn = this.mergeRealtimeQueuedTurn(mergedTurn, queuedTurn);
+      }
+      if (!mergedTurn) return;
+
+      // If other users are still speaking, keep holding — don't drain yet.
+      // The room-quiet flush trigger (cleanupCapture) or safety timeout will
+      // drain when the room settles.
+      if (this.host.hasOtherActiveCaptures(session, mergedTurn.userId)) {
+        pendingQueue.push(mergedTurn);
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: "realtime_turn_merged_still_holding",
+          metadata: {
+            sessionId: session.id,
+            captureReason: String(captureReason || "stream_end"),
+            mergedTurnCount: Number(mergedTurn.mergedTurnCount || 1),
+            activeCaptureCount: Number(session.userCaptures?.size || 0),
+            pendingQueueDepth: 1
+          }
+        });
+        return;
+      }
+
+      // Room is quiet — flush everything.
       if (session.realtimeTurnCoalesceTimer) {
         clearTimeout(session.realtimeTurnCoalesceTimer);
         session.realtimeTurnCoalesceTimer = null;
       }
-      let nextTurn = pendingQueue.shift() || queuedTurn;
-      while (pendingQueue.length > 0) {
-        const pendingTurn = pendingQueue.shift();
-        if (!pendingTurn) continue;
-        nextTurn = this.mergeRealtimeQueuedTurn(nextTurn, pendingTurn);
-      }
-      nextTurn = this.mergeRealtimeQueuedTurn(nextTurn, queuedTurn);
-      if (!nextTurn) return;
-      this.spawnRealtimeTurnDrain(nextTurn, "pending_queue_merge");
+      this.spawnRealtimeTurnDrain(mergedTurn, "pending_queue_merge");
       return;
     }
 
@@ -1409,25 +1507,64 @@ export class TurnProcessor {
       pcmBytes >= REALTIME_TURN_COALESCE_MAX_BYTES ||
       session.ending;
 
-    // Disabled to reduce end-of-turn latency. Keep the old hold path nearby so
-    // we can restore it quickly if immediate draining proves too eager.
-    // if (!skipCoalesce && REALTIME_TURN_COALESCE_WINDOW_MS > 0) {
-    //   pendingQueue.push(queuedTurn);
-    //   session.realtimeTurnCoalesceTimer = setTimeout(() => {
-    //     session.realtimeTurnCoalesceTimer = null;
-    //     if (session.ending) return;
-    //     let turn = pendingQueue.shift() || null;
-    //     while (pendingQueue.length > 0) {
-    //       const next = pendingQueue.shift();
-    //       if (!next) continue;
-    //       turn = turn ? this.mergeRealtimeQueuedTurn(turn, next) : next;
-    //     }
-    //     if (turn) {
-    //       this.spawnRealtimeTurnDrain(turn, "coalesce_window_flush");
-    //     }
-    //   }, REALTIME_TURN_COALESCE_WINDOW_MS);
-    //   return;
-    // }
+    // --- Room-aware coalescing ---
+    // If other users are still speaking, hold this turn so it can be merged with
+    // subsequent turns. When the room goes quiet (last active capture finalizes),
+    // the held turns are flushed together. Direct-addressed turns bypass the hold.
+    if (!skipCoalesce && this.host.hasOtherActiveCaptures(session, userId)) {
+      // Bypass: if the turn is directly addressed (wake word), drain immediately.
+      const settings = session.settingsSnapshot || this.store.getSettings();
+      const directAddressSignal = queuedTurn.transcriptOverride
+        ? resolveVoiceDirectAddressSignal({
+          transcript: queuedTurn.transcriptOverride,
+          settings
+        })
+        : { directAddressed: false, nameCueDetected: false, addressedOrNamed: false };
+
+      if (directAddressSignal.addressedOrNamed) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: "realtime_turn_room_coalesce_bypassed_direct_address",
+          metadata: {
+            sessionId: session.id,
+            captureReason: String(captureReason || "stream_end"),
+            directAddressed: directAddressSignal.directAddressed,
+            nameCueDetected: directAddressSignal.nameCueDetected
+          }
+        });
+        this.spawnRealtimeTurnDrain(queuedTurn, "direct_address_bypass");
+        return;
+      }
+
+      // Hold the turn — push to pending queue and start safety timeout.
+      pendingQueue.push(queuedTurn);
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "realtime_turn_held_room_coalesce",
+        metadata: {
+          sessionId: session.id,
+          captureReason: String(captureReason || "stream_end"),
+          activeCaptureCount: Number(session.userCaptures?.size || 0),
+          pendingQueueDepth: pendingQueue.length
+        }
+      });
+      // Hard failsafe: if a capture never finalizes despite the 8s max-duration
+      // cap and idle/silence timers, drain after COALESCE_WINDOW_MS (10s) to
+      // prevent truly stuck turns. Should never fire under normal operation.
+      if (!session.realtimeTurnCoalesceTimer && REALTIME_TURN_COALESCE_WINDOW_MS > 0) {
+        session.realtimeTurnCoalesceTimer = setTimeout(() => {
+          session.realtimeTurnCoalesceTimer = null;
+          this.flushHeldRoomCoalesceTurns(session, "room_coalesce_safety_timeout");
+        }, REALTIME_TURN_COALESCE_WINDOW_MS);
+      }
+      return;
+    }
 
     if (skipCoalesce && session.realtimeTurnCoalesceTimer) {
       clearTimeout(session.realtimeTurnCoalesceTimer);
@@ -1435,6 +1572,43 @@ export class TurnProcessor {
     }
 
     this.spawnRealtimeTurnDrain(queuedTurn, "direct_queue_start");
+  }
+
+  /** Merge all pending held turns and drain. Called by the session manager when
+   *  the room goes quiet and by the safety timeout when a held turn has waited
+   *  too long. Owns the merge + drain mechanics so callers don't need to reach
+   *  into queue internals. */
+  flushHeldRoomCoalesceTurns(session: VoiceSession, trigger: string) {
+    if (!session || session.ending) return;
+    const pendingQueue = this.ensurePendingRealtimeTurnQueue(session);
+    if (pendingQueue.length <= 0) return;
+    if (session.realtimeTurnDrainActive) return;
+    if (session.realtimeTurnCoalesceTimer) {
+      clearTimeout(session.realtimeTurnCoalesceTimer);
+      session.realtimeTurnCoalesceTimer = null;
+    }
+    let turn = pendingQueue.shift() || null;
+    while (pendingQueue.length > 0) {
+      const next = pendingQueue.shift();
+      if (!next) continue;
+      turn = turn ? this.mergeRealtimeQueuedTurn(turn, next) : next;
+    }
+    if (turn) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: turn.userId,
+        content: "realtime_turn_room_coalesce_flushed",
+        metadata: {
+          sessionId: session.id,
+          trigger,
+          mergedTurnCount: Number(turn.mergedTurnCount || 1),
+          combinedBytes: turn.pcmBuffer?.length || 0
+        }
+      });
+      this.spawnRealtimeTurnDrain(turn, trigger);
+    }
   }
 
   private spawnRealtimeTurnDrain(turn: RealtimeQueuedTurn, trigger: string) {
@@ -1528,7 +1702,8 @@ export class TurnProcessor {
     bridgeRevision = 1,
     mergedTurnCount = 1,
     droppedHeadBytes = 0,
-    serverVadConfirmed = false
+    serverVadConfirmed = false,
+    speakerTranscripts = null
   }: RunRealtimeTurnArgs) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
@@ -1569,7 +1744,10 @@ export class TurnProcessor {
       musicWakeFollowupEligibleAtCapture: Boolean(musicWakeFollowupEligibleAtCapture),
       mergedTurnCount: Math.max(1, Number(mergedTurnCount || 1)),
       droppedHeadBytes: Math.max(0, Number(droppedHeadBytes || 0)),
-      serverVadConfirmed: Boolean(serverVadConfirmed)
+      serverVadConfirmed: Boolean(serverVadConfirmed),
+      speakerTranscripts: Array.isArray(speakerTranscripts) && speakerTranscripts.length > 0
+        ? speakerTranscripts
+        : null
     };
     const isSuperseded = (stage: string) => {
       const superseded = this.isRealtimeTurnSuperseded(
@@ -1961,12 +2139,27 @@ export class TurnProcessor {
         settings,
         transcript: turnTranscript
       });
+      // Cross-speaker merge: record each speaker's transcript separately for
+      // proper conversation history attribution.
+      const hasCrossSpeakerTranscripts =
+        Array.isArray(speakerTranscripts) && speakerTranscripts.length > 1;
       if (turnTranscript && persistRealtimeTranscriptTurn) {
-        this.host.recordVoiceTurn(session, {
-          role: "user",
-          userId,
-          text: turnTranscript
-        });
+        if (hasCrossSpeakerTranscripts) {
+          for (const segment of speakerTranscripts!) {
+            if (!segment.transcript) continue;
+            this.host.recordVoiceTurn(session, {
+              role: "user",
+              userId: segment.userId,
+              text: segment.transcript
+            });
+          }
+        } else {
+          this.host.recordVoiceTurn(session, {
+            role: "user",
+            userId,
+            text: turnTranscript
+          });
+        }
         this.host.queueVoiceMemoryIngest({
           session,
           settings,
@@ -2014,7 +2207,8 @@ export class TurnProcessor {
           pendingQueueDepth,
           captureReason: String(captureReason || "stream_end")
         },
-        shouldAbortStage: isSuperseded
+        shouldAbortStage: isSuperseded,
+        speakerTranscripts: hasCrossSpeakerTranscripts ? speakerTranscripts : null
       });
     } finally {
       if (session.activeRealtimeTurn === currentTurn) {

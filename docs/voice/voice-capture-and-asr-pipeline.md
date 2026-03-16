@@ -211,6 +211,14 @@ next finalization (stream_end / speaking_end / another max_duration)
                                     (bot replies to fragment, ignores real intent)
 ```
 
+### Room-Coalesce Flush on Capture Cleanup
+
+When `cleanupCapture()` removes a user from `userCaptures`, it checks whether that was the last active capture in the session. If the pending realtime turn queue has held turns (from room-aware coalescing — see [voice-client-and-reply-orchestration.md](voice-client-and-reply-orchestration.md#room-aware-turn-coalescing)), the flush fires immediately via `flushHeldRoomCoalesceTurns()`.
+
+**`max_duration` exception**: captures that finalize due to hitting the 8s `CAPTURE_MAX_DURATION_MS` cap do NOT trigger the room-coalesce flush. The user is still speaking — a new capture will start on the next `speakingStart` event and eventually finalize with a real speech-end reason. Flushing held turns at the 8s boundary would defeat the purpose of room-aware coalescing by processing turns without the full room context.
+
+The `cleanupCapture(reason)` function passes the finalization reason through, and skips the flush when `reason === "max_duration"`.
+
 ## 8. Speaking End Debounce
 
 The `speakingEndFinalizeTimer` uses an adaptive delay (`resolveSpeakingEndFinalizeDelayMs`) that scales based on system load:

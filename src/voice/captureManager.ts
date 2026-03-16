@@ -84,6 +84,7 @@ interface CaptureManagerHost {
   }) => boolean;
   buildAsrBridgeDeps: (session: VoiceSession) => AsrBridgeDeps;
   hasDeferredTurnBlockingActiveCapture: (session: VoiceSession) => boolean;
+  flushHeldRoomCoalesceTurns: (session: VoiceSession, reason?: string) => void;
   deferredActionQueue: Pick<DeferredActionQueue, "recheckDeferredVoiceActions">;
   drainPendingRealtimeAssistantUtterances: (session: VoiceSession, reason?: string) => boolean;
   hasCaptureBeenPromoted: (capture: CaptureState) => boolean;
@@ -301,7 +302,7 @@ export class CaptureManager {
       captureState.asrUtteranceId = Math.max(0, Number(asrState?.utterance?.id || 0));
     }
 
-    const cleanupCapture = () => {
+    const cleanupCapture = (reason?: string) => {
       const current = session.userCaptures.get(userId);
       if (!current) return;
       session.userCaptures.delete(userId);
@@ -319,6 +320,17 @@ export class CaptureManager {
         current.removeSubprocessListeners?.();
       } catch {
         // ignore
+      }
+      // Room-coalesce: if this was the last active capture, flush any held turns.
+      // Skip for max_duration — the user is still speaking; a new capture will
+      // start and eventually finalize with a real speech-end reason.
+      const isRealSpeechEnd = reason !== "max_duration";
+      if (
+        isRealSpeechEnd &&
+        session.userCaptures.size <= 0 &&
+        typeof this.host.flushHeldRoomCoalesceTurns === "function"
+      ) {
+        this.host.flushHeldRoomCoalesceTurns(session, "last_capture_finalized");
       }
     };
 
@@ -414,7 +426,7 @@ export class CaptureManager {
             activeSampleRatio: signal.activeSampleRatio
           }
         });
-        cleanupCapture();
+        cleanupCapture(reason);
         maybeTriggerDeferredActions(String(reason || "stream_end"));
         maybeDrainQueuedAssistantSpeechAfterNoTurn(String(reason || "stream_end"));
         if (useOpenAiPerUserAsr) {
@@ -457,7 +469,7 @@ export class CaptureManager {
             ending: Boolean(session.ending)
           }
         });
-        cleanupCapture();
+        cleanupCapture(reason);
         maybeTriggerDeferredActions(String(reason || "stream_end"));
         maybeDrainQueuedAssistantSpeechAfterNoTurn(String(reason || "stream_end"));
         if (useOpenAiPerUserAsr) {
@@ -500,7 +512,7 @@ export class CaptureManager {
             silenceGateDrop: silenceGate.drop
           }
         });
-        cleanupCapture();
+        cleanupCapture(reason);
         maybeTriggerDeferredActions(String(reason || "stream_end"));
         maybeDrainQueuedAssistantSpeechAfterNoTurn(String(reason || "stream_end"));
         if (useOpenAiPerUserAsr) {
@@ -530,7 +542,7 @@ export class CaptureManager {
         });
       }
 
-      cleanupCapture();
+      cleanupCapture(reason);
       if (this.host.shouldUseFileTurnTranscription({ session, settings })) {
         this.host.turnProcessor.queueFileAsrTurn({
           session,
@@ -750,7 +762,7 @@ export class CaptureManager {
           durationMs: Math.max(0, Date.now() - captureState.startedAt)
         }
       });
-      cleanupCapture();
+      cleanupCapture(reason);
       maybeTriggerDeferredActions(String(reason || "capture_suppressed"));
       maybeDrainQueuedAssistantSpeechAfterNoTurn(String(reason || "capture_suppressed"));
       if (useOpenAiPerUserAsr) {

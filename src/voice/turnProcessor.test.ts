@@ -106,7 +106,9 @@ test("queueRealtimeTurn coalesces queued turns even when speaker or reason chang
   assert.equal(session.pendingRealtimeTurns.length, 1);
   assert.equal(Buffer.isBuffer(session.pendingRealtimeTurns[0]?.pcmBuffer), true);
   assert.equal(session.pendingRealtimeTurns[0]?.pcmBuffer.equals(Buffer.from([1, 2, 3, 4, 5])), true);
-  assert.equal(session.pendingRealtimeTurns[0]?.userId, "speaker-2");
+  // Cross-speaker merge preserves the first speaker as primary userId.
+  // The speakerTranscripts array carries per-speaker attribution.
+  assert.equal(session.pendingRealtimeTurns[0]?.userId, "speaker-1");
   assert.equal(session.pendingRealtimeTurns[0]?.captureReason, "idle_timeout");
 });
 
