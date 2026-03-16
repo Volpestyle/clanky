@@ -672,6 +672,48 @@ test("generateVoiceTurnReply waits for the configured minimum sentences before s
   assert.equal(reply.streamedSentenceCount, 1);
 });
 
+test("generateVoiceTurnReply builds a larger first chunk for stream-watch commentary", async () => {
+  const streamed: string[] = [];
+  const { bot, logs } = createVoiceBot({
+    generationSequence: [
+      {
+        text: "First sentence. Second sentence. Third sentence.",
+        textDeltas: ["First sentence. ", "Second sentence. ", "Third sentence."]
+      }
+    ]
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      voice: {
+        streamingEnabled: true,
+        streamingMinSentencesPerChunk: 2,
+        streamingEagerFirstChunkChars: 10,
+        streamingMaxBufferChars: 120
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "react to the stream",
+    inputKind: "event",
+    runtimeEventContext: {
+      category: "screen_share",
+      eventType: "frame"
+    },
+    onSpokenSentence: ({ text }) => {
+      streamed.push(text);
+    }
+  });
+
+  assert.deepEqual(streamed, ["First sentence. Second sentence. Third sentence."]);
+  assert.equal(reply.streamedSentenceCount, 1);
+  assert.equal(
+    logs.some((entry) => entry?.content === "voice_streaming_chunk_profile"),
+    true
+  );
+});
+
 test("generateVoiceTurnReply keeps the first streamed chunk intact until punctuation arrives", async () => {
   const streamed: string[] = [];
   const { bot } = createVoiceBot({

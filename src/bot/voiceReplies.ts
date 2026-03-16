@@ -78,6 +78,9 @@ const LORE_SUBJECT = "__lore__";
 const LEADING_REPLY_METADATA_DIRECTIVE_RE =
   /^\[\[\s*(TO|LEASE)\s*:\s*([^\]]+?)\s*\]\]\s*/i;
 const MAX_LEADING_REPLY_ADDRESSING_BUFFER_CHARS = 160;
+const STREAM_WATCH_STREAMING_MIN_SENTENCES = 3;
+const STREAM_WATCH_STREAMING_EAGER_FIRST_CHUNK_CHARS = 120;
+const STREAM_WATCH_STREAMING_MAX_BUFFER_CHARS = 420;
 
 type SessionDurableContextCategory = "fact" | "plan" | "preference" | "relationship";
 type GeneratedVoiceAddressing = {
@@ -1556,11 +1559,45 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         };
       }
 
+      const baseStreamingMinSentences = Number(voiceConversationPolicy.streaming?.minSentencesPerChunk);
+      const baseStreamingEagerFirstChunkChars = Number(voiceConversationPolicy.streaming?.eagerFirstChunkChars);
+      const baseStreamingMaxBufferChars = Number(voiceConversationPolicy.streaming?.maxBufferChars);
+      const prefersBufferedStreamWatchChunks =
+        runtimeEventContext?.category === "screen_share" &&
+        String(inputKind || "").trim().toLowerCase() === "event" &&
+        !directAddressed;
+      const streamingMinSentencesPerChunk = prefersBufferedStreamWatchChunks
+        ? Math.max(baseStreamingMinSentences || 0, STREAM_WATCH_STREAMING_MIN_SENTENCES)
+        : baseStreamingMinSentences;
+      const streamingEagerFirstChunkChars = prefersBufferedStreamWatchChunks
+        ? Math.max(baseStreamingEagerFirstChunkChars || 0, STREAM_WATCH_STREAMING_EAGER_FIRST_CHUNK_CHARS)
+        : baseStreamingEagerFirstChunkChars;
+      const streamingMaxBufferChars = prefersBufferedStreamWatchChunks
+        ? Math.max(baseStreamingMaxBufferChars || 0, STREAM_WATCH_STREAMING_MAX_BUFFER_CHARS)
+        : baseStreamingMaxBufferChars;
+
+      if (prefersBufferedStreamWatchChunks) {
+        runtime.store.logAction({
+          kind: "voice_runtime",
+          guildId,
+          channelId,
+          userId,
+          content: "voice_streaming_chunk_profile",
+          metadata: {
+            sessionId: sessionId || null,
+            profile: "stream_watch_buffered",
+            minSentencesPerChunk: streamingMinSentencesPerChunk,
+            eagerFirstChunkChars: streamingEagerFirstChunkChars,
+            maxBufferChars: streamingMaxBufferChars
+          }
+        });
+      }
+
       const accumulator = new SentenceAccumulator({
         eagerFirstChunk: true,
-        minSentencesPerChunk: Number(voiceConversationPolicy.streaming?.minSentencesPerChunk),
-        eagerMinChars: Number(voiceConversationPolicy.streaming?.eagerFirstChunkChars),
-        maxBufferChars: Number(voiceConversationPolicy.streaming?.maxBufferChars),
+        minSentencesPerChunk: streamingMinSentencesPerChunk,
+        eagerMinChars: streamingEagerFirstChunkChars,
+        maxBufferChars: streamingMaxBufferChars,
         onSentence(text) {
           const normalized = normalizeVoiceReplyText(text, {
             preserveInlineSoundboardDirectives
