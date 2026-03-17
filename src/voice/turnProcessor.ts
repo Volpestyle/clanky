@@ -404,6 +404,8 @@ interface TurnProcessorHost {
   hasOtherActiveCaptures: (session: VoiceSession, excludeUserId: string) => boolean;
   /** Drain any room-coalesce-held turns in the pending queue. */
   flushHeldRoomCoalesceTurns: (session: VoiceSession, reason?: string) => void;
+  /** Resolve a userId to a human-readable display name for logging. */
+  resolveVoiceSpeakerName: (session: VoiceSession, userId?: string | null) => string;
 }
 
 export class TurnProcessor {
@@ -428,7 +430,8 @@ export class TurnProcessor {
     source,
     captureReason,
     transcript,
-    logContext = null
+    logContext = null,
+    speakerTranscripts = null
   }: {
     session: VoiceSession;
     decision: VoiceReplyDecision;
@@ -439,7 +442,26 @@ export class TurnProcessor {
     captureReason?: string;
     transcript: string;
     logContext?: VoiceTurnDecisionLogContext | null;
+    speakerTranscripts?: SpeakerTranscript[] | null;
   }) {
+    // When multiple speakers are coalesced, format `heard` with per-speaker
+    // attribution so log consumers see who said what instead of a flat string.
+    const hasCrossSpeaker = Array.isArray(speakerTranscripts) && speakerTranscripts.length > 1;
+    let heardValue: string | null = transcript || null;
+    let heardPerSpeaker: { speakerName: string; userId: string; transcript: string }[] | undefined;
+    if (hasCrossSpeaker) {
+      const segments = speakerTranscripts!
+        .filter((s) => s && s.transcript)
+        .map((s) => {
+          const name = this.host.resolveVoiceSpeakerName(session, s.userId) || s.userId || "someone";
+          return { speakerName: name, userId: s.userId, transcript: s.transcript };
+        });
+      if (segments.length > 0) {
+        heardValue = segments.map((s) => `[${s.speakerName}]: ${s.transcript}`).join(" | ");
+        heardPerSpeaker = segments;
+      }
+    }
+
     return {
       sessionId: session.id,
       mode: session.mode,
@@ -460,8 +482,10 @@ export class TurnProcessor {
         decisionAddressingState?.currentSpeakerDirectedConfidence,
         0
       ),
-      heard: transcript || null,
+      heard: heardValue,
       transcriptChars: transcript ? transcript.length : 0,
+      speakerCount: hasCrossSpeaker ? speakerTranscripts!.length : undefined,
+      heardPerSpeaker: heardPerSpeaker || undefined,
       transcriptionModelPrimary: logContext?.transcriptionModelPrimary || undefined,
       transcriptionModelFallback: logContext?.transcriptionModelFallback ?? undefined,
       transcriptionUsedFallbackModel:
@@ -597,7 +621,8 @@ export class TurnProcessor {
         source,
         captureReason,
         transcript: decisionTranscript,
-        logContext
+        logContext,
+        speakerTranscripts
       })
     });
 
