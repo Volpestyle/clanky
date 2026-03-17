@@ -512,7 +512,7 @@ type VoiceToolCallEvent = {
   completedAt: string | null;
   runtimeMs: number | null;
   success: boolean;
-  outputSummary: string | null;
+  outputSummary: Record<string, unknown> | string | null;
   error: string | null;
   sourceEventType?: string | null;
 };

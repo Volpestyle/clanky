@@ -31,11 +31,11 @@ import {
   resolveSoundboardCandidates as resolveSoundboardCandidatesModule
 } from "./voiceSoundboard.ts";
 import { setVoiceLivePromptSnapshot } from "./voicePromptState.ts";
+import { buildSharedVoiceTurnContext } from "./voiceTurnContext.ts";
 
 import { normalizeVoiceOutputLeaseMode } from "./voiceOutputLease.ts";
 import { appendStreamWatchNoteEntry } from "./voiceStreamWatch.ts";
 import {
-  getCompactedSessionSummaryContext,
   getCompactionCursor,
   maybeStartVoiceContextCompaction
 } from "./voiceContextCompaction.ts";
@@ -580,34 +580,19 @@ export async function runVoiceReplyPipeline(
         userId: params.userId,
         directAddressed: Boolean(params.directAddressed)
       });
-  const participantRoster = host.getVoiceChannelParticipants(session).slice(0, REALTIME_CONTEXT_MEMBER_LIMIT);
-  const recentMembershipEvents = host.getRecentVoiceMembershipEvents(session, {
-    maxItems: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
+  const sharedTurnContext = buildSharedVoiceTurnContext(host, {
+    session,
+    settings: params.settings,
+    speakerUserId: params.userId,
+    maxParticipants: REALTIME_CONTEXT_MEMBER_LIMIT,
+    maxMembershipEvents: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT,
+    maxVoiceEffects: VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT
   });
-  const recentVoiceEffectEvents = host.getRecentVoiceChannelEffectEvents(session, {
-    maxItems: VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT
-  });
+  const participantRoster = sharedTurnContext.participantRoster;
+  const recentMembershipEvents = sharedTurnContext.recentMembershipEvents;
+  const recentVoiceEffectEvents = sharedTurnContext.recentVoiceEffectEvents;
   const sessionTiming = host.sessionLifecycle.buildVoiceSessionTimingContext(session);
-  // Build active Discord screen share context for the prompt so the model
-  // knows who is currently sharing and can target start_screen_watch correctly.
-  const activeDiscordStreams: Array<{ displayName: string }> = (() => {
-    const discoveredGoLiveUserIds = session.goLiveStreams instanceof Map && session.goLiveStreams.size > 0
-      ? [...session.goLiveStreams.values()].map((stream) => String(stream.targetUserId || "").trim()).filter(Boolean)
-      : [String(session.goLiveStream?.targetUserId || "").trim()].filter(Boolean);
-    const seen = new Set<string>();
-    return discoveredGoLiveUserIds.flatMap((goLiveUserId) => {
-      if (seen.has(goLiveUserId)) return [];
-      seen.add(goLiveUserId);
-      const rosterEntry = participantRoster.find(
-        (p: { userId?: string }) => String(p?.userId || "") === goLiveUserId
-      );
-      const displayName = String(
-        (rosterEntry as { displayName?: string })?.displayName || goLiveUserId
-      ).trim();
-      return displayName ? [{ displayName }] : [];
-    });
-  })();
-  const streamWatchNotes = host.getStreamWatchNotesForPrompt(session, params.settings);
+  const streamWatchNotes = sharedTurnContext.streamWatchNotes;
 
   // Only attach the raw image frame for stream_watch commentary turns.
   // User-speech voice replies still get the rolling [[NOTE:...]] context
@@ -631,7 +616,7 @@ export async function runVoiceReplyPipeline(
     sessionTimeoutWarningActive: Boolean(sessionTiming?.timeoutWarningActive),
     sessionTimeoutWarningReason: String(sessionTiming?.timeoutWarningReason || "none"),
     streamWatchNotes,
-    compactedSessionSummary: getCompactedSessionSummaryContext(session)
+    compactedSessionSummary: sharedTurnContext.compactedSessionSummary
   };
 
   const markInFlightAcceptedBrainTurnPhase = (phase: "generation_only" | "tool_call_started" | "playback_requested") => {
@@ -697,9 +682,10 @@ export async function runVoiceReplyPipeline(
       participantRoster,
       recentMembershipEvents,
       recentVoiceEffectEvents,
+      recentToolOutcomes: sharedTurnContext.recentToolOutcomeLines,
       soundboardCandidates: soundboardCandidateLines,
       streamWatchLatestFrame,
-      activeDiscordStreams,
+      nativeDiscordSharers: sharedTurnContext.nativeDiscordSharers,
       webSearchTimeoutMs: Number(followup.toolBudget?.toolTimeoutMs),
       voiceToolCallbacks: host.buildVoiceToolCallbacks({ session, settings: params.settings }),
       onSpokenSentence: async ({

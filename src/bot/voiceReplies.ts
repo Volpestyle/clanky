@@ -19,8 +19,7 @@ import type { ReplyToolRuntime, ReplyToolContext } from "../tools/replyTools.ts"
 import { createAbortError, isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import { shouldRequestVoiceToolFollowup } from "../tools/sharedToolSchemas.ts";
 import { clamp, sanitizeBotText } from "../utils.ts";
-import { loadConversationContinuityContext } from "./conversationContinuity.ts";
-import { emptyFactProfileSlice, loadBehavioralMemoryFacts, normalizeFactProfileSlice } from "./memorySlice.ts";
+import { normalizeFactProfileSlice } from "./memorySlice.ts";
 import type { MemoryFactRow } from "../store/storeMemory.ts";
 import {
   resolveWarmMemory,
@@ -49,16 +48,27 @@ import { SentenceAccumulator } from "../voice/sentenceAccumulator.ts";
 import {
   normalizeVoiceRuntimeEventContext,
   normalizeVoiceAddressingTargetToken,
-  normalizeInlineText,
   parseSoundboardDirectiveSequence,
   extractNoteDirectives
 } from "../voice/voiceSessionHelpers.ts";
 import {
   invalidateSessionBehavioralMemoryCache,
-  loadSessionBehavioralMemoryFacts,
   loadSessionConversationHistory
 } from "../voice/voiceSessionMemoryCache.ts";
+import {
+  loadSharedVoiceMemoryContext,
+  type VoiceMemoryContextSessionLike
+} from "../voice/voiceMemoryContext.ts";
 import { isStreamWatchFrameReady } from "../voice/voiceStreamWatch.ts";
+import { recordVoiceToolCallEvent } from "../voice/voiceToolCallToolRegistry.ts";
+import {
+  buildSharedVoiceTurnContext,
+  normalizeVoiceScreenWatchCapability
+} from "../voice/voiceTurnContext.ts";
+import {
+  summarizeVoiceToolError,
+  summarizeVoiceToolResult
+} from "../voice/voiceToolResultSummary.ts";
 import { mergeImageInputs } from "./imageAnalysis.ts";
 import { MAX_MODEL_IMAGE_INPUTS } from "./replyPipelineShared.ts";
 import {
@@ -66,10 +76,6 @@ import {
   buildLoggedPromptBundle,
   createPromptCapture
 } from "../promptLogging.ts";
-import {
-  VOICE_GENERATION_BEHAVIORAL_TIMEOUT_MS,
-  VOICE_GENERATION_CONTINUITY_TIMEOUT_MS
-} from "../voice/voiceSessionManager.constants.ts";
 import type { VoiceOutputLeaseMode } from "../voice/voiceSessionTypes.ts";
 
 const SESSION_DURABLE_CONTEXT_MAX_ENTRIES = 50;
@@ -89,119 +95,6 @@ type GeneratedVoiceAddressing = {
 type GeneratedVoiceOutputLease = {
   mode: Exclude<VoiceOutputLeaseMode, "ambient">;
 };
-
-type VoiceGenerationPrepStageOptions<T> = {
-  runtime: VoiceReplyRuntime;
-  guildId: string;
-  channelId: string;
-  userId: string;
-  sessionId?: string | null;
-  stage: string;
-  timeoutMs: number;
-  signal?: AbortSignal;
-  task: Promise<T>;
-  fallbackValue: T;
-};
-
-function createVoiceGenerationPrepTimeoutError(stage: string, timeoutMs: number) {
-  const error = new Error(`${stage} timed out after ${timeoutMs}ms.`);
-  error.name = "TimeoutError";
-  return error;
-}
-
-function isVoiceGenerationPrepTimeoutError(error: unknown) {
-  return String((error as Error | null)?.name || "").trim() === "TimeoutError";
-}
-
-async function awaitVoiceGenerationPrepStage<T>({
-  runtime,
-  guildId,
-  channelId,
-  userId,
-  sessionId = null,
-  stage,
-  timeoutMs,
-  signal,
-  task,
-  fallbackValue
-}: VoiceGenerationPrepStageOptions<T>): Promise<T> {
-  const normalizedStage = String(stage || "").trim() || "unknown";
-  runtime.store.logAction({
-    kind: "voice_runtime",
-    guildId,
-    channelId,
-    userId,
-    content: "voice_generation_prep_stage",
-    metadata: {
-      sessionId: sessionId || null,
-      stage: normalizedStage,
-      state: "start",
-      timeoutMs
-    }
-  });
-  const startedAt = Date.now();
-  try {
-    throwIfAborted(signal, `Voice generation ${normalizedStage} cancelled`);
-    const result = await new Promise<T>((resolve, reject) => {
-      let settled = false;
-      const finish = (handler: () => void) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        handler();
-      };
-      const onAbort = () => {
-        finish(() => reject(createAbortError(signal?.reason || `Voice generation ${normalizedStage} cancelled`)));
-      };
-      const timer = setTimeout(() => {
-        finish(() => reject(createVoiceGenerationPrepTimeoutError(normalizedStage, timeoutMs)));
-      }, Math.max(1, Math.round(Number(timeoutMs) || 1)));
-      const cleanup = () => {
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", onAbort);
-      };
-      signal?.addEventListener("abort", onAbort, { once: true });
-      void task.then((value) => finish(() => resolve(value))).catch((error: unknown) => finish(() => reject(error)));
-    });
-    runtime.store.logAction({
-      kind: "voice_runtime",
-      guildId,
-      channelId,
-      userId,
-      content: "voice_generation_prep_stage",
-      metadata: {
-        sessionId: sessionId || null,
-        stage: normalizedStage,
-        state: "ok",
-        elapsedMs: Math.max(0, Date.now() - startedAt)
-      }
-    });
-    return result;
-  } catch (error) {
-    if (isAbortError(error) || signal?.aborted) {
-      throw error;
-    }
-    runtime.store.logAction({
-      kind: isVoiceGenerationPrepTimeoutError(error) ? "voice_runtime" : "voice_error",
-      guildId,
-      channelId,
-      userId,
-      content: isVoiceGenerationPrepTimeoutError(error)
-        ? "voice_generation_prep_stage"
-        : `voice_generation_${normalizedStage}_failed: ${String((error as Error)?.message || error)}`,
-      metadata: {
-        sessionId: sessionId || null,
-        stage: normalizedStage,
-        state: isVoiceGenerationPrepTimeoutError(error) ? "timeout" : "error",
-        elapsedMs: Math.max(0, Date.now() - startedAt),
-        timeoutMs,
-        fallbackUsed: true,
-        error: String((error as Error)?.message || error)
-      }
-    });
-    return fallbackValue;
-  }
-}
 
 function appendUniqueStrings(target: string[], values: unknown[]) {
   for (const value of values) {
@@ -721,7 +614,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   recentVoiceEffectEvents = [],
   soundboardCandidates = [],
   streamWatchLatestFrame = null,
-  activeDiscordStreams = [],
+  nativeDiscordSharers = [],
+  recentToolOutcomes = [],
   webSearchTimeoutMs: _webSearchTimeoutMs = null,
   voiceToolCallbacks = null,
   onSpokenSentence = null,
@@ -768,29 +662,55 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     typeof runtime.runModelRequestedBrowserBrowse === "function" &&
     typeof runtime.buildBrowserBrowseContext === "function"
   );
-  const screenShare = resolveVoiceScreenWatchCapability(runtime, {
-    settings,
-    guildId,
-    channelId,
-    userId
-  });
+  const activeVoiceSession =
+    sessionId && typeof runtime.voiceSessionManager?.getSessionById === "function"
+      ? runtime.voiceSessionManager.getSessionById(sessionId)
+      : null;
+  const canBuildSharedTurnContext = Boolean(
+    activeVoiceSession &&
+    runtime.voiceSessionManager &&
+    typeof runtime.voiceSessionManager.resolveVoiceSpeakerName === "function" &&
+    typeof runtime.voiceSessionManager.getStreamWatchNotesForPrompt === "function" &&
+    typeof runtime.voiceSessionManager.getVoiceScreenWatchCapability === "function" &&
+    typeof runtime.voiceSessionManager.getVoiceChannelParticipants === "function" &&
+    typeof runtime.voiceSessionManager.getRecentVoiceMembershipEvents === "function" &&
+    typeof runtime.voiceSessionManager.getRecentVoiceChannelEffectEvents === "function"
+  );
+  const sharedTurnContext =
+    canBuildSharedTurnContext && runtime.voiceSessionManager
+      ? buildSharedVoiceTurnContext(runtime.voiceSessionManager, {
+          session: activeVoiceSession,
+          settings,
+          speakerUserId: userId,
+          maxParticipants: 12,
+          maxMembershipEvents: 6,
+          maxVoiceEffects: 6
+        })
+      : null;
+  const screenShare = sharedTurnContext?.screenWatchCapability || normalizeVoiceScreenWatchCapability(
+    typeof runtime?.getVoiceScreenWatchCapability === "function"
+      ? runtime.getVoiceScreenWatchCapability({
+          settings,
+          guildId,
+          channelId,
+          requesterUserId: userId
+        })
+      : null
+  );
   const allowScreenShareToolCall = shouldExposeVoiceScreenWatchTool(screenShare, {
     canStartScreenWatch: typeof runtime.startVoiceScreenWatch === "function",
     guildId,
     userId
   });
-  const activeVoiceSession =
-    sessionId && typeof runtime.voiceSessionManager?.getSessionById === "function"
-      ? runtime.voiceSessionManager.getSessionById(sessionId)
-      : null;
   const realtimeToolOwnership = activeVoiceSession?.realtimeToolOwnership === "provider_native"
     ? "provider_native"
     : "transport_only";
   const runtimeMode = String(activeVoiceSession?.mode || "").trim() || null;
-  const musicContext =
+  const musicContext = sharedTurnContext?.musicContext || (
     activeVoiceSession && typeof runtime.voiceSessionManager?.getMusicPromptContext === "function"
       ? runtime.voiceSessionManager.getMusicPromptContext(activeVoiceSession)
-      : null;
+      : null
+  );
   const guild = runtime.client.guilds.cache.get(String(guildId || ""));
   const speakerName =
     guild?.members?.cache?.get(String(userId || ""))?.displayName ||
@@ -804,7 +724,11 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
        runtime.client.users?.cache?.get(screenWatchStreamerUserId)?.username ||
        "")
     : "";
-  const normalizedParticipantRoster = (Array.isArray(participantRoster) ? participantRoster : [])
+  const normalizedParticipantRoster = (
+    sharedTurnContext?.participantRoster.length
+      ? sharedTurnContext.participantRoster
+      : Array.isArray(participantRoster) ? participantRoster : []
+  )
     .map((entry) => {
       if (typeof entry === "string") {
         return String(entry).trim();
@@ -813,7 +737,11 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     })
     .filter(Boolean)
     .slice(0, 12);
-  const normalizedMembershipEvents = (Array.isArray(recentMembershipEvents) ? recentMembershipEvents : [])
+  const normalizedMembershipEvents = (
+    sharedTurnContext?.recentMembershipEvents.length
+      ? sharedTurnContext.recentMembershipEvents
+      : Array.isArray(recentMembershipEvents) ? recentMembershipEvents : []
+  )
     .map((entry) => {
       const eventType = String(entry?.eventType || entry?.event || "")
         .trim()
@@ -831,7 +759,11 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     })
     .filter(Boolean)
     .slice(-6);
-  const normalizedVoiceEffectEvents = (Array.isArray(recentVoiceEffectEvents) ? recentVoiceEffectEvents : [])
+  const normalizedVoiceEffectEvents = (
+    sharedTurnContext?.recentVoiceEffectEvents.length
+      ? sharedTurnContext.recentVoiceEffectEvents
+      : Array.isArray(recentVoiceEffectEvents) ? recentVoiceEffectEvents : []
+  )
     .map((entry) => {
       const displayName = String(entry?.displayName || "").trim().slice(0, 80);
       const effectType = String(entry?.effectType || "").trim().toLowerCase();
@@ -853,29 +785,21 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     })
     .filter(Boolean)
     .slice(-6);
-  const loadRecentConversationHistory =
-    typeof runtime.loadRecentConversationHistory === "function"
-      ? (payload: {
-        guildId: string;
-        channelId?: string | null;
-        queryText: string;
-        limit: number;
-        maxAgeHours: number;
-      }) =>
-        activeVoiceSession
-          ? loadSessionConversationHistory({
-            session: activeVoiceSession,
-            loadRecentConversationHistory: runtime.loadRecentConversationHistory,
-            strategy: "semantic",
-            guildId: String(payload.guildId || "").trim(),
-            channelId: String(payload.channelId || "").trim() || null,
-            queryText: String(payload.queryText || ""),
-            limit: Number(payload.limit) || 1,
-            maxAgeHours: Number(payload.maxAgeHours) || 1
-          })
-          : runtime.loadRecentConversationHistory(payload)
-      : null;
-
+  const normalizedNativeDiscordSharers = (
+    sharedTurnContext?.nativeDiscordSharers.length
+      ? sharedTurnContext.nativeDiscordSharers
+      : Array.isArray(nativeDiscordSharers) ? nativeDiscordSharers : []
+  )
+    .filter((entry) => entry?.displayName)
+    .slice(0, 6);
+  const normalizedRecentToolOutcomes = (
+    sharedTurnContext?.recentToolOutcomeLines.length
+      ? sharedTurnContext.recentToolOutcomeLines
+      : Array.isArray(recentToolOutcomes) ? recentToolOutcomes : []
+  )
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean)
+    .slice(-4);
   // ── Warm memory: attempt to resolve from cached snapshot ─────────────
   // Await the pre-computed embedding from the ingest pipeline (already
   // in-flight since transcript capture).  Use it for topic-drift detection
@@ -971,137 +895,90 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       }
     });
   } else {
-  // ── Full retrieval path (cold start or topic drift) ─────────────────
-  const continuityStartedAt = Date.now();
-  const continuity = await awaitVoiceGenerationPrepStage({
-    runtime,
-    guildId,
-    channelId,
-    userId,
-    sessionId,
-    stage: "continuity",
-    timeoutMs: VOICE_GENERATION_CONTINUITY_TIMEOUT_MS,
-    signal,
-    task: loadConversationContinuityContext({
+    // ── Full retrieval path (cold start or topic drift) ─────────────────
+    throwIfAborted(signal, "Voice generation memory load cancelled");
+    const memoryContextSession: VoiceMemoryContextSessionLike = activeVoiceSession || {
+      guildId,
+      textChannelId: channelId,
+      pendingMemoryIngest: null
+    };
+    const loaded = await loadSharedVoiceMemoryContext({
+      loadRecentConversationHistory:
+        typeof runtime.loadRecentConversationHistory === "function"
+          ? (payload) =>
+              activeVoiceSession
+                ? loadSessionConversationHistory({
+                    session: activeVoiceSession,
+                    loadRecentConversationHistory: runtime.loadRecentConversationHistory,
+                    strategy: "semantic",
+                    guildId: String(payload.guildId || "").trim(),
+                    channelId: String(payload.channelId || "").trim() || null,
+                    queryText: String(payload.queryText || ""),
+                    limit: Number(payload.limit) || 1,
+                    maxAgeHours: Number(payload.maxAgeHours) || 1
+                  })
+                : runtime.loadRecentConversationHistory(payload)
+          : null,
+      getSessionFactProfileSlice:
+        activeVoiceSession && typeof runtime.voiceSessionManager?.getSessionFactProfileSlice === "function"
+          ? (payload) => runtime.voiceSessionManager.getSessionFactProfileSlice(payload)
+          : typeof runtime.loadFactProfile === "function"
+            ? ({ userId: factUserId }) => runtime.loadFactProfile({
+                settings,
+                userId: String(factUserId || "").trim() || null,
+                guildId,
+                channelId,
+                queryText: incomingTranscript,
+                trace: {
+                  guildId,
+                  channelId,
+                  userId
+                }
+              })
+            : undefined,
+      searchDurableFacts:
+        typeof runtime.memory?.searchDurableFacts === "function"
+          ? (payload) => runtime.memory.searchDurableFacts(payload)
+          : null,
+      rankBehavioralFacts:
+        typeof runtime.memory?.rankHybridCandidates === "function"
+          ? async ({ candidates, queryText, channelId, settings, trace, limit }) => {
+              const ranked = await runtime.memory.rankHybridCandidates({
+                candidates,
+                queryText,
+                settings,
+                trace,
+                channelId,
+                requireRelevanceGate: true
+              });
+              const boundedLimit = Math.max(1, Math.min(12, Math.floor(Number(limit) || 8)));
+              return Array.isArray(ranked) ? ranked.slice(0, boundedLimit) : [];
+            }
+          : null,
+      loadBehavioralFactsForPrompt:
+        typeof runtime.memory?.loadBehavioralFactsForPrompt === "function"
+          ? async (payload) => await runtime.memory.loadBehavioralFactsForPrompt(payload)
+          : null
+    }, {
+      session: memoryContextSession,
       settings,
       userId,
-      guildId,
-      channelId,
-      queryText: incomingTranscript,
-      trace: {
-        guildId,
-        channelId,
-        userId
-      },
-      source: "voice_realtime_generation",
-      loadFactProfile:
-        (payload) => {
-          if (activeVoiceSession && typeof runtime.voiceSessionManager?.getSessionFactProfileSlice === "function") {
-            if (activeVoiceSession) {
-              return runtime.voiceSessionManager.getSessionFactProfileSlice({
-                session: activeVoiceSession,
-                userId: String(payload.userId || "").trim() || null
-              });
-            }
-          }
-          if (typeof runtime.loadFactProfile === "function") {
-            return runtime.loadFactProfile(payload);
-          }
-          return { userFacts: [], relevantFacts: [] };
-        },
-      loadRecentConversationHistory,
-    }),
-    fallbackValue: {
-      memorySlice: emptyFactProfileSlice(),
-      recentConversationHistory: []
-    }
-  });
-  continuityLoadMs = Math.max(0, Date.now() - continuityStartedAt);
-  throwIfAborted(signal, "Voice generation continuity cancelled");
-  promptMemorySlice = normalizeFactProfileSlice(continuity.memorySlice);
-  recentConversationHistory = continuity.recentConversationHistory;
-  const participantIds =
-    Array.isArray(promptMemorySlice.participantProfiles)
-      ? promptMemorySlice.participantProfiles
-          .map((entry) => String(entry?.userId || "").trim())
-          .filter(Boolean)
+      transcript: incomingTranscript,
+      continuitySource: "voice_realtime_generation",
+      behavioralSource: "voice_realtime_behavioral_memory:generation"
+    });
+    throwIfAborted(signal, "Voice generation memory load cancelled");
+    promptMemorySlice = normalizeFactProfileSlice(loaded.memorySlice);
+    recentConversationHistory = Array.isArray(loaded.memorySlice.recentConversationHistory)
+      ? loaded.memorySlice.recentConversationHistory
       : [];
-  const behavioralStartedAt = Date.now();
-  const behavioralMemoryResult = await awaitVoiceGenerationPrepStage({
-    runtime,
-    guildId,
-    channelId,
-    userId,
-    sessionId,
-    stage: "behavioral_memory",
-    timeoutMs: VOICE_GENERATION_BEHAVIORAL_TIMEOUT_MS,
-    signal,
-    task: (async () => {
-      const cachedBehavioralFacts =
-        activeVoiceSession
-          ? await loadSessionBehavioralMemoryFacts({
-            session: activeVoiceSession,
-            searchDurableFacts:
-              typeof runtime.memory?.searchDurableFacts === "function"
-                ? (payload) => runtime.memory.searchDurableFacts(payload)
-                : null,
-            rankBehavioralFacts:
-              typeof runtime.memory?.rankHybridCandidates === "function"
-                ? async ({ candidates, queryText, channelId, settings, trace, limit }) => {
-                  const ranked = await runtime.memory.rankHybridCandidates({
-                    candidates,
-                    queryText,
-                    settings,
-                    trace,
-                    channelId,
-                    requireRelevanceGate: true
-                  });
-                  const boundedLimit = Math.max(1, Math.min(12, Math.floor(Number(limit) || 8)));
-                  return Array.isArray(ranked) ? ranked.slice(0, boundedLimit) : [];
-                }
-                : null,
-            settings,
-            guildId,
-            channelId,
-            queryText: incomingTranscript,
-            participantIds,
-            trace: {
-              guildId,
-              channelId,
-              userId,
-              source: "voice_realtime_behavioral_memory:generation"
-            },
-            limit: 8
-          })
-          : null;
-      return {
-        facts: cachedBehavioralFacts ?? await loadBehavioralMemoryFacts(runtime, {
-          settings,
-          guildId,
-          channelId,
-          queryText: incomingTranscript,
-          participantIds,
-          trace: {
-            guildId,
-            channelId,
-            userId,
-            source: "voice_realtime_behavioral_memory:generation"
-          },
-          limit: 8
-        }),
-        usedCachedBehavioralFacts: Array.isArray(cachedBehavioralFacts)
-      };
-    })(),
-    fallbackValue: {
-      facts: [],
-      usedCachedBehavioralFacts: false
-    }
-  });
-  throwIfAborted(signal, "Voice generation behavioral memory cancelled");
-  behavioralFacts = Array.isArray(behavioralMemoryResult.facts) ? behavioralMemoryResult.facts : [];
-  usedCachedBehavioralFacts = Boolean(behavioralMemoryResult.usedCachedBehavioralFacts);
-  behavioralMemoryLoadMs = Math.max(0, Date.now() - behavioralStartedAt);
-  totalMemoryLoadMs = Math.max(0, Date.now() - continuityStartedAt);
+    behavioralFacts = Array.isArray(loaded.memorySlice.behavioralFacts)
+      ? loaded.memorySlice.behavioralFacts
+      : [];
+    usedCachedBehavioralFacts = loaded.usedCachedBehavioralFacts;
+    continuityLoadMs = loaded.continuityLoadMs;
+    behavioralMemoryLoadMs = loaded.behavioralMemoryLoadMs;
+    totalMemoryLoadMs = loaded.totalLoadMs;
   runtime.store.logAction({
     kind: "voice_runtime",
     guildId,
@@ -1313,7 +1190,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         activeVoiceSession?.streamWatch?.active &&
         String(activeVoiceSession?.streamWatch?.latestFrameDataBase64 || "").trim()
       ),
-      activeDiscordStreams: Array.isArray(activeDiscordStreams) ? activeDiscordStreams : [],
+      nativeDiscordSharers: normalizedNativeDiscordSharers,
       allowMemoryToolCalls,
       allowSoundboardToolCall,
       allowInlineSoundboardDirectives: allowSoundboardToolCall,
@@ -1321,7 +1198,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       musicContext,
       hasDirectVisionFrame: Boolean(streamWatchLatestFrame?.dataBase64),
       durableContext: Array.isArray(activeVoiceSession?.durableContext) ? activeVoiceSession.durableContext : [],
-      screenWatchCommentaryEagerness
+      screenWatchCommentaryEagerness,
+      recentToolOutcomes: normalizedRecentToolOutcomes
     });
 
   const generationContextSnapshot = {
@@ -1344,6 +1222,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     },
     recentConversationHistory,
     durableContext: Array.isArray(activeVoiceSession?.durableContext) ? activeVoiceSession.durableContext : [],
+    nativeDiscordSharers: normalizedNativeDiscordSharers,
+    recentToolOutcomes: normalizedRecentToolOutcomes,
     sessionTiming: sessionTiming || null,
     tools: {
       soundboard: allowSoundboardToolCall,
@@ -1901,9 +1781,9 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
           );
         const toolDurationMs = Date.now() - toolStartMs;
         const toolErrorSummary = result.isError
-          ? summarizeReplyToolError(result.content)
+          ? summarizeVoiceToolError(result.content)
           : null;
-        const toolResultSummary = summarizeToolResultForLog(result.content, toolCall.name);
+        const toolResultSummary = summarizeVoiceToolResult(toolCall.name, result.content);
 
         runtime.store.logAction({
           kind: "voice_runtime",
@@ -1927,6 +1807,24 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
             toolResultSummary
           }
         });
+        if (activeVoiceSession && runtime.voiceSessionManager) {
+          recordVoiceToolCallEvent(runtime.voiceSessionManager, {
+            session: activeVoiceSession,
+            event: {
+              callId: String(toolCall.id || "").trim() || `brain_tool_${voiceTotalToolCalls}`,
+              toolName: toolCall.name,
+              toolType: "function",
+              arguments: toolInput,
+              startedAt: new Date(toolStartMs).toISOString(),
+              completedAt: new Date().toISOString(),
+              runtimeMs: toolDurationMs,
+              success: !result.isError,
+              outputSummary: toolResultSummary,
+              error: toolErrorSummary,
+              sourceEventType: "voice_brain_tool_call"
+            }
+          });
+        }
 
         if (Array.isArray(result.imageInputs) && result.imageInputs.length) {
           voiceImageInputs = mergeImageInputs({
@@ -2224,123 +2122,6 @@ function parseReplyToolResultPayload(content: unknown) {
   }
 }
 
-function summarizeReplyToolError(content: unknown) {
-  const payload = parseReplyToolResultPayload(content);
-  const payloadError = payload?.error;
-  if (payloadError && typeof payloadError === "object" && !Array.isArray(payloadError)) {
-    const message = normalizeInlineText((payloadError as Record<string, unknown>).message, 280);
-    if (message) return message;
-  }
-  const errorText = normalizeInlineText(payloadError, 280);
-  if (errorText) return errorText;
-  return normalizeInlineText(content, 280) || null;
-}
-
-/**
- * Extract a compact, structured summary of a tool result for logging.
- * Returns null for tools whose results are uninteresting to log.
- * For search/play tools, extracts result titles and IDs so operators
- * can see what the model was offered without wading through full payloads.
- */
-function summarizeToolResultForLog(
-  content: unknown,
-  toolName: string
-): Record<string, unknown> | string | null {
-  const MAX_RESULT_PREVIEW_CHARS = 400;
-  const payload = parseReplyToolResultPayload(content);
-  if (!payload) {
-    // Not JSON — return a truncated string preview
-    const raw = String(content || "").trim();
-    if (!raw) return null;
-    return raw.length > MAX_RESULT_PREVIEW_CHARS
-      ? raw.slice(0, MAX_RESULT_PREVIEW_CHARS) + "…"
-      : raw;
-  }
-
-  const name = String(toolName || "").trim().toLowerCase();
-
-  // Music/video search and play tools: extract result titles and IDs
-  if (
-    name === "video_search" || name === "video_play" ||
-    name === "music_search" || name === "music_play" ||
-    name === "music_queue_add" || name === "music_queue_next"
-  ) {
-    const results = Array.isArray(payload.results) ? payload.results : [];
-    const resultSummaries = results.slice(0, 5).map((r: unknown) => {
-      if (!r || typeof r !== "object") return null;
-      const entry = r as Record<string, unknown>;
-      return {
-        title: normalizeInlineText(entry.title, 80) || null,
-        id: normalizeInlineText(entry.id, 60) || null,
-        platform: normalizeInlineText(entry.platform, 20) || null,
-        channel: normalizeInlineText(entry.channel || entry.artist || entry.artists, 60) || null,
-        url: normalizeInlineText(entry.url, 120) || null
-      };
-    }).filter(Boolean);
-    return {
-      ok: payload.ok ?? null,
-      resultCount: results.length,
-      results: resultSummaries.length > 0 ? resultSummaries : null,
-      selectedId: normalizeInlineText(payload.selectedId || payload.selection_id, 60) || null,
-      trackTitle: normalizeInlineText(payload.title || payload.trackTitle, 80) || null,
-      trackId: normalizeInlineText(payload.trackId || payload.id, 60) || null,
-      playing: payload.playing ?? null,
-      error: normalizeInlineText(payload.error, 200) || null
-    };
-  }
-
-  // Browser browse: extract session ID and completion status
-  if (name === "browser_browse") {
-    return {
-      ok: payload.ok ?? null,
-      sessionId: normalizeInlineText(payload.session_id, 40) || null,
-      completed: payload.completed ?? null,
-      error: normalizeInlineText(payload.error, 200) || null,
-      resultChars: String(content || "").length
-    };
-  }
-
-  // Web search: extract query and result count
-  if (name === "web_search") {
-    const results = Array.isArray(payload.results) ? payload.results : [];
-    return {
-      resultCount: results.length,
-      resultTitles: results.slice(0, 3).map((r: unknown) =>
-        normalizeInlineText((r as Record<string, unknown>)?.title, 80)
-      ).filter(Boolean),
-      error: normalizeInlineText(payload.error, 200) || null
-    };
-  }
-
-  // Memory tools: compact summary
-  if (name === "memory_write" || name === "memory_search") {
-    return {
-      ok: payload.ok ?? null,
-      count: Array.isArray(payload.written) ? payload.written.length
-        : Array.isArray(payload.results) ? payload.results.length
-        : null,
-      error: normalizeInlineText(payload.error, 200) || null
-    };
-  }
-
-  // Screen watch: started/stopped
-  if (name === "start_screen_watch" || name === "stop_screen_watch") {
-    return {
-      ok: payload.ok ?? null,
-      started: payload.started ?? null,
-      stopped: payload.stopped ?? null,
-      error: normalizeInlineText(payload.error, 200) || null
-    };
-  }
-
-  // Default: truncated raw content
-  const raw = String(content || "").trim();
-  if (!raw) return null;
-  return raw.length > MAX_RESULT_PREVIEW_CHARS
-    ? raw.slice(0, MAX_RESULT_PREVIEW_CHARS) + "…"
-    : raw;
-}
-
 function classifyVoiceToolPrePlaybackRecovery(
   toolName: unknown,
   result: {
@@ -2400,84 +2181,6 @@ function classifyVoiceToolPrePlaybackRecovery(
         reason: "tool_has_side_effects"
       };
   }
-}
-
-function resolveVoiceScreenWatchCapability(runtime, { settings, guildId, channelId, userId }) {
-  if (typeof runtime?.getVoiceScreenWatchCapability !== "function") {
-    return {
-      supported: false,
-      enabled: false,
-      available: false,
-      status: "disabled",
-      publicUrl: "",
-      reason: "screen_watch_capability_unavailable",
-      nativeSupported: false,
-      nativeEnabled: false,
-      nativeAvailable: false,
-      nativeStatus: "disabled",
-      nativeReason: "screen_watch_capability_unavailable",
-      linkSupported: false,
-      linkEnabled: false,
-      linkFallbackAvailable: false,
-      linkStatus: "disabled",
-      linkReason: "share_link_unavailable"
-    };
-  }
-
-  const capability = runtime.getVoiceScreenWatchCapability({
-    settings,
-    guildId,
-    channelId,
-    requesterUserId: userId
-  });
-  const status = String(capability?.status || "disabled").trim().toLowerCase() || "disabled";
-  const enabled = Boolean(capability?.enabled);
-  const available = capability?.available === undefined ? enabled && status === "ready" : Boolean(capability.available);
-  const rawReason = String(capability?.reason || "").trim().toLowerCase();
-  const supported =
-    capability?.supported === undefined
-      ? rawReason !== "screen_watch_unavailable"
-      : Boolean(capability.supported);
-  const nativeStatus = String(capability?.nativeStatus || "disabled").trim().toLowerCase() || "disabled";
-  const nativeEnabled =
-    capability?.nativeEnabled === undefined
-      ? enabled
-      : Boolean(capability.nativeEnabled);
-  const nativeSupported =
-    capability?.nativeSupported === undefined
-      ? supported
-      : Boolean(capability.nativeSupported);
-  const nativeAvailable =
-    capability?.nativeAvailable === undefined
-      ? Boolean(capability?.transport === "native" && available)
-      : Boolean(capability.nativeAvailable);
-  const rawNativeReason = String(capability?.nativeReason || "").trim().toLowerCase();
-  const linkStatus = String(capability?.linkStatus || "disabled").trim().toLowerCase() || "disabled";
-  const linkEnabled = Boolean(capability?.linkEnabled);
-  const linkSupported = Boolean(capability?.linkSupported);
-  const linkFallbackAvailable =
-    capability?.linkFallbackAvailable === undefined
-      ? Boolean(capability?.transport === "link" && available)
-      : Boolean(capability.linkFallbackAvailable);
-  const rawLinkReason = String(capability?.linkReason || "").trim().toLowerCase();
-  return {
-    supported,
-    enabled,
-    available,
-    status,
-    publicUrl: String(capability?.publicUrl || "").trim(),
-    reason: available ? null : rawReason || status || "unavailable",
-    nativeSupported,
-    nativeEnabled,
-    nativeAvailable,
-    nativeStatus,
-    nativeReason: nativeAvailable ? null : rawNativeReason || nativeStatus || "unavailable",
-    linkSupported,
-    linkEnabled,
-    linkFallbackAvailable,
-    linkStatus,
-    linkReason: linkFallbackAvailable ? null : rawLinkReason || linkStatus || "unavailable"
-  };
 }
 
 const SCREEN_WATCH_TOOL_HARD_BLOCK_REASONS = new Set([

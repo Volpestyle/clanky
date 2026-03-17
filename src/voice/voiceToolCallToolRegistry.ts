@@ -11,6 +11,7 @@ import { toRealtimeTool } from "../tools/sharedToolSchemas.ts";
 import { buildVoiceRealtimeLocalToolSchemas } from "../tools/toolRegistry.ts";
 import { OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS, OPENAI_TOOL_CALL_EVENT_MAX } from "./voiceSessionManager.constants.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
+import { summarizeVoiceToolResult } from "./voiceToolResultSummary.ts";
 import type {
   VoiceMcpServerStatus,
   VoiceRealtimeToolDescriptor,
@@ -311,13 +312,11 @@ export function resolveRealtimeToolDescriptor(
   return configuredTools.find((tool) => String(tool?.name || "") === normalizedToolName) || null;
 }
 
-export function summarizeVoiceToolOutput(manager: VoiceToolCallManager, output: unknown = null) {
+export function summarizeVoiceToolOutput(
+  manager: VoiceToolCallManager,
+  toolName = "",
+  output: unknown = null
+) {
   void manager;
-  if (output == null) return null;
-  if (typeof output === "string") return normalizeInlineText(output, 280) || null;
-  try {
-    return normalizeInlineText(JSON.stringify(output), 280) || null;
-  } catch {
-    return normalizeInlineText(String(output), 280) || null;
-  }
+  return summarizeVoiceToolResult(toolName, output);
 }

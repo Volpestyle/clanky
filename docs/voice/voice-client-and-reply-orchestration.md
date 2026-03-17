@@ -35,6 +35,9 @@ Code:
 - `src/voice/sessionLifecycle.ts` — event binding (`bindRealtimeHandlers`)
 - `src/voice/voiceJoinFlow.ts` — client creation and session initialization
 - `src/voice/instructionManager.ts` — instruction/tool refresh
+- `src/voice/voiceMemoryContext.ts` — shared continuity + behavioral-memory loader for realtime and brain turns
+- `src/voice/voiceTurnContext.ts` — shared prompt-facing live room snapshot builder
+- `src/voice/voiceToolResultSummary.ts` — canonical compact tool-result summary formatter
 - `src/voice/replyManager.ts` — response tracking, output state sync
 
 ## 2. Client Types and Capabilities
@@ -114,10 +117,17 @@ All listeners are tracked in `session.cleanupHandlers` and removed during teardo
 
 - `scheduleRealtimeInstructionRefresh()` — debounced timer
 - `refreshRealtimeInstructions()` — builds instructions, calls `realtimeClient.updateInstructions()` if text changed (provider must support `updateInstructions`)
-- `prepareRealtimeTurnContext()` — builds memory slice (user facts, conversation history, web lookups, guidance facts, relevant behavioral memory), then refreshes instructions
+- `prepareRealtimeTurnContext()` — loads the shared voice memory slice for the triggering user turn, caches it on the session, then refreshes instructions
 - `queueRealtimeTurnContextRefresh()` — serialized async queue preventing concurrent refreshes
 
 Refresh triggers: session start, music idle/error, voice membership changes, channel changes, turn context updates.
+
+Realtime instruction refresh and full-brain generation now consume the same parity surfaces instead of assembling separate room snapshots:
+
+- `loadSharedVoiceMemoryContext()` applies one continuity and behavioral-memory policy to both paths
+- `buildSharedVoiceTurnContext()` builds one prompt-facing room snapshot for participant roster, membership/effect events, native sharers, screen-watch capability, stream-watch notes, compacted summary, music context, and recent tool outcomes
+- the last loaded realtime memory slice is cached on `session.lastRealtimeMemorySlice` so later provider-native refreshes can reuse the same memory view until a newer turn context replaces it
+- provider-native tool executions record the same compact structured tool summary shape that brain-path tool calls use, then schedule an instruction refresh so follow-up reasoning sees the result immediately
 
 Music prompt context stays available while playback is idle when the session still has meaningful music state. Realtime instructions include the current/last known track, exact reusable `selection_id` values for current/last/queued tracks, queued tracks, last action, and last query so the model can reason about replay and queue followups directly from prompt context.
 The shared live-music guidance is intentionally compact: the prompt includes one contextual quick-reaction hint when playback is still live without a handoff, plus one canonical `media_reply_handoff` capability rule in tooling policy. Both the full-brain voice prompt and realtime instruction refresh use that same wording so the model sees the playback semantics once per concern instead of repeated nudges in the same turn.
@@ -127,6 +137,7 @@ The shared live-music guidance is intentionally compact: the prompt includes one
 - `refreshRealtimeTools()` — rebuilds provider-safe tool definitions from the shared registry, then sends `session.update` if the tool hash changed (provider must support `updateTools`)
 - Called at session start and during instruction refresh
 - Runs only for `session.realtimeToolOwnership === "provider_native"` sessions. Full-brain transport sessions skip provider-native tool registration entirely.
+- Provider-native tool completions also feed the shared structured result summary back into `session.toolCallEvents`, then request an instruction refresh so the provider-native model sees the same recent tool outcome trail that the brain path sees on its next turn
 
 ## 6. Response Tracking
 
@@ -356,6 +367,8 @@ Labeled transcript `(speakerName): text` sent to realtime provider. Cancels any 
 ### Brain Path (`runVoiceReplyPipeline`)
 
 The unified pipeline: generate text via LLM, build playback plan, play via realtime TTS or API TTS. See [`voice-provider-abstraction.md`](voice-provider-abstraction.md) §3 for detailed stage description.
+
+Before `generateVoiceTurn` runs, `voiceReplyPipeline.ts` now uses the same shared turn-context builder that realtime instruction refresh uses. Brain-path prompts therefore see the same normalized participant roster, native sharers, screen-watch capability, stream-watch notes, music state, compacted summary, and recent tool outcomes that provider-native realtime instructions see.
 
 In realtime sessions, this path can still deliver speech through the realtime client even when settings-level `voice.conversationPolicy.replyPath` is `"brain"`. Here `mode: "realtime_transport"` means "use realtime output transport for pre-generated text", not "use the transcript-to-realtime bridge path above". On OpenAI, these exact-line playback requests are sent out-of-band with tools disabled so pre-generated speech cannot start a second provider tool/reasoning loop.
 

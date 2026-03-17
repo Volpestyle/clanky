@@ -178,7 +178,7 @@ export function buildVoiceTurnPrompt({
   screenWatchStreamerName = "",
   screenWatchFrameReady = false,
   screenShareSnapshotAvailable = false,
-  activeDiscordStreams = [],
+  nativeDiscordSharers = [],
   allowMemoryToolCalls = false,
   allowSoundboardToolCall = false,
   allowInlineSoundboardDirectives = false,
@@ -186,7 +186,8 @@ export function buildVoiceTurnPrompt({
   musicContext = null,
   hasDirectVisionFrame = false,
   durableContext = [],
-  screenWatchCommentaryEagerness = 60
+  screenWatchCommentaryEagerness = 60,
+  recentToolOutcomes = []
 }) {
   const parts = [];
   const speaker = String(speakerName || "unknown").trim() || "unknown";
@@ -561,14 +562,22 @@ export function buildVoiceTurnPrompt({
   }
 
   const normalizedDurableContext = selectPromptDurableContextEntries(durableContext);
-  const normalizedActiveStreams = (Array.isArray(activeDiscordStreams) ? activeDiscordStreams : [])
+  const normalizedNativeDiscordSharers = (Array.isArray(nativeDiscordSharers) ? nativeDiscordSharers : [])
     .filter((entry) => entry?.displayName)
     .slice(0, 6);
-  if (normalizedActiveStreams.length > 0 && !screenWatchActive) {
+  if (normalizedNativeDiscordSharers.length > 0 && !screenWatchActive) {
     parts.push(
       [
         "Active Discord screen shares:",
-        ...normalizedActiveStreams.map((entry) => `- ${entry.displayName} (Go Live)`),
+        ...normalizedNativeDiscordSharers.map((entry) => {
+          const details = [
+            entry.streamType,
+            entry.codec,
+            entry.width && entry.height ? `${entry.width}x${entry.height}` : null
+          ].filter(Boolean).join(", ");
+          return `- ${entry.displayName}${details ? ` (${details})` : ""}`;
+        }),
+        "You do not automatically see those shares just because they are active.",
         allowScreenShareToolCall
           ? "Use start_screen_watch to request frame context. Pass { target: \"display name\" } to watch a specific share."
           : ""
@@ -658,6 +667,19 @@ export function buildVoiceTurnPrompt({
 
   if (behavioralFacts?.length) {
     parts.push("Behavioral memory (follow when relevant):\n" + formatBehaviorMemoryFacts(behavioralFacts, 8));
+  }
+
+  const normalizedRecentToolOutcomes = (Array.isArray(recentToolOutcomes) ? recentToolOutcomes : [])
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean)
+    .slice(-4);
+  if (normalizedRecentToolOutcomes.length) {
+    parts.push(
+      [
+        "Recent tool outcomes:",
+        ...normalizedRecentToolOutcomes.map((entry) => `- ${entry}`)
+      ].join("\n")
+    );
   }
 
   parts.push(`Tools: ${availableToolNames.join(", ")}.`);

@@ -755,7 +755,12 @@ export function buildVoiceRuntimeSnapshot(
           completedAt: entry?.completedAt ? String(entry.completedAt) : null,
           runtimeMs: Number.isFinite(Number(entry?.runtimeMs)) ? Math.round(Number(entry.runtimeMs)) : null,
           success: Boolean(entry?.success),
-          outputSummary: entry?.outputSummary ? String(entry.outputSummary) : null,
+          outputSummary:
+            entry?.outputSummary && typeof entry.outputSummary === "object"
+              ? entry.outputSummary
+              : entry?.outputSummary
+                ? String(entry.outputSummary)
+                : null,
           error: entry?.error ? String(entry.error) : null
         }));
       })(),

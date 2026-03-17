@@ -72,11 +72,12 @@ export async function executeRealtimeFunctionCall(
   const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
   const callArgs = parseRealtimeToolArguments(manager, pendingCall?.argumentsText || "");
   const toolDescriptor = resolveRealtimeToolDescriptor(manager, session, toolName);
+  const resolvedToolName = toolName || toolDescriptor?.name || "unknown_tool";
   const toolType = toolDescriptor?.toolType === "mcp" ? "mcp" : "function";
   const activeReply = manager.activeReplies?.begin(
     buildVoiceReplyScopeKey(session.id),
     "voice-tool",
-    [toolName || toolDescriptor?.name || "unknown_tool"]
+    [resolvedToolName]
   ) || null;
 
   const abortController = new AbortController();
@@ -88,16 +89,16 @@ export async function executeRealtimeFunctionCall(
   }
   runtimeSession.realtimePendingToolAbortControllers.set(callId, abortController);
 
-    manager.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: manager.client.user?.id || null,
-      content: "realtime_tool_call_started",
-      metadata: {
-        sessionId: session.id,
-        callId,
-      toolName: toolName || null,
+  manager.store.logAction({
+    kind: "voice_runtime",
+    guildId: session.guildId,
+    channelId: session.textChannelId,
+    userId: manager.client.user?.id || null,
+    content: "realtime_tool_call_started",
+    metadata: {
+      sessionId: session.id,
+      callId,
+      toolName: resolvedToolName || null,
       toolType,
       arguments: callArgs
     }
@@ -143,13 +144,13 @@ export async function executeRealtimeFunctionCall(
 
   const runtimeMs = Math.max(0, Date.now() - startedAtMs);
   const normalizedOutput = normalizeRealtimeToolOutputForModel(output, success);
-  const outputSummary = summarizeVoiceToolOutput(manager, normalizedOutput);
+  const outputSummary = summarizeVoiceToolOutput(manager, resolvedToolName, normalizedOutput);
   const responseHadAssistantOutput =
     typeof manager.hasRealtimeAssistantOutputForResponse === "function" &&
     pendingCall.responseId
       ? manager.hasRealtimeAssistantOutputForResponse(session, pendingCall.responseId)
       : false;
-  const requestFollowup = shouldRequestVoiceToolFollowup(toolName || toolDescriptor?.name || "unknown_tool", {
+  const requestFollowup = shouldRequestVoiceToolFollowup(resolvedToolName, {
     toolType,
     hasSpokenText: responseHadAssistantOutput
   });
@@ -157,7 +158,7 @@ export async function executeRealtimeFunctionCall(
     session,
     event: {
       callId,
-      toolName: toolName || toolDescriptor?.name || "unknown_tool",
+      toolName: resolvedToolName,
       toolType,
       arguments: callArgs,
       startedAt: new Date(startedAtMs).toISOString(),
@@ -168,6 +169,13 @@ export async function executeRealtimeFunctionCall(
       error: success ? null : errorMessage,
       sourceEventType: String(pendingCall?.sourceEventType || "")
     }
+  });
+  manager.instructionManager.scheduleRealtimeInstructionRefresh?.({
+    session,
+    settings: resolvedSettings,
+    reason: "tool_result",
+    speakerUserId: session.lastRealtimeToolCallerUserId || null,
+    transcript: ""
   });
 
   try {
@@ -191,7 +199,7 @@ export async function executeRealtimeFunctionCall(
       channelId: session.textChannelId,
       userId: manager.client.user?.id || null,
       content: `realtime_tool_output_send_failed: ${String(sendError?.message || sendError)}`,
-      metadata: { sessionId: session.id, callId, toolName: toolName || null }
+      metadata: { sessionId: session.id, callId, toolName: resolvedToolName || null }
     });
   }
 
@@ -204,7 +212,7 @@ export async function executeRealtimeFunctionCall(
     metadata: {
       sessionId: session.id,
       callId,
-      toolName: toolName || null,
+      toolName: resolvedToolName || null,
       toolType,
       runtimeMs,
       outputSummary,
@@ -227,7 +235,7 @@ export async function executeRealtimeFunctionCall(
       userId: session.lastRealtimeToolCallerUserId || null,
       startedAtMs,
       requestFollowup,
-      toolName: toolName || toolDescriptor?.name || null
+      toolName: resolvedToolName || null
     });
   }
 }

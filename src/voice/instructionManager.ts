@@ -17,9 +17,8 @@ import {
 } from "../prompts/voiceLivePolicy.ts";
 import { buildSingleTurnPromptLog } from "../promptLogging.ts";
 import {
-  loadConversationContinuityContext,
-  type ConversationContinuityPayload
-} from "../bot/conversationContinuity.ts";
+  loadSharedVoiceMemoryContext
+} from "./voiceMemoryContext.ts";
 import {
   REALTIME_CONTEXT_MEMBER_LIMIT,
   REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS,
@@ -28,17 +27,11 @@ import {
   VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT,
   VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
 } from "./voiceSessionManager.constants.ts";
-import { getCompactedSessionSummaryContext } from "./voiceContextCompaction.ts";
 import {
   formatVoiceChannelEffectSummary,
   inspectAsrTranscript,
   normalizeVoiceText
 } from "./voiceSessionHelpers.ts";
-import {
-  loadSessionBehavioralMemoryFacts,
-  loadSessionConversationHistory
-} from "./voiceSessionMemoryCache.ts";
-import { getNativeDiscordScreenSharePromptEntries } from "./nativeDiscordScreenShare.ts";
 import {
   buildVoiceInstructions,
   isTransportOnlySession,
@@ -47,6 +40,7 @@ import {
 } from "./voiceConfigResolver.ts";
 import { getVoiceStreamWatchSettings } from "../settings/agentStack.ts";
 import { getScreenWatchCommentaryTier } from "../prompts/voiceAdmissionPolicy.ts";
+import { buildSharedVoiceTurnContext, type SharedVoiceTurnContext } from "./voiceTurnContext.ts";
 import type {
   RealtimeInstructionMemorySlice,
   RealtimeTurnContextRefreshState,
@@ -199,6 +193,7 @@ interface BuildRealtimeInstructionsArgs {
   speakerUserId?: string | null;
   transcript?: string;
   memorySlice?: RealtimeInstructionMemorySlice | null;
+  sharedTurnContext?: SharedVoiceTurnContext | null;
 }
 
 interface BuildRealtimeMemorySliceArgs {
@@ -395,6 +390,7 @@ export class InstructionManager {
           userId,
           transcript: normalizedTranscript
         });
+    session.lastRealtimeMemorySlice = memorySlice;
 
     await this.refreshRealtimeInstructions({
       session,
@@ -419,139 +415,28 @@ export class InstructionManager {
       maxChars: STT_TRANSCRIPT_MAX_CHARS,
       stage: "build_realtime_memory_slice"
     });
-    if (!normalizedTranscript) {
-      const factProfile =
-        typeof this.host.getSessionFactProfileSlice === "function"
-          ? this.host.getSessionFactProfileSlice({
-              session,
-              userId: String(userId || "").trim() || null
-            })
-          : null;
-      return {
-        participantProfiles: Array.isArray(factProfile?.participantProfiles) ? factProfile.participantProfiles : [],
-        selfFacts: Array.isArray(factProfile?.selfFacts) ? factProfile.selfFacts : [],
-        loreFacts: Array.isArray(factProfile?.loreFacts) ? factProfile.loreFacts : [],
-        userFacts: Array.isArray(factProfile?.userFacts) ? factProfile.userFacts : [],
-        relevantFacts: Array.isArray(factProfile?.relevantFacts) ? factProfile.relevantFacts : [],
-        guidanceFacts: Array.isArray(factProfile?.guidanceFacts) ? factProfile.guidanceFacts : [],
-        behavioralFacts: [],
-        recentConversationHistory: []
-      };
-    }
-
-    if (session?.pendingMemoryIngest) {
-      try {
-        await session.pendingMemoryIngest;
-      } catch {
-        // Best effort — fresh instructions are still more useful than failing the turn.
-      }
-      session.pendingMemoryIngest = null;
-    }
-
     const normalizedUserId = String(userId || "").trim() || null;
-    const memoryLoadStartedAt = Date.now();
-    const loadRecentConversationHistory =
-      this.store.searchConversationWindows
-        ? (payload: {
-          guildId: string;
-          channelId?: string | null;
-          queryText: string;
-          limit?: number;
-          maxAgeHours?: number;
-        }) =>
-          loadSessionConversationHistory({
-            session,
-            loadRecentConversationHistory: ({ guildId, channelId, queryText, limit, maxAgeHours }) =>
-              (this.store.searchConversationWindows?.({
-                guildId,
-                channelId,
-                queryText,
-                limit,
-                maxAgeHours,
-                before: 1,
-                after: 1
-              }) || []),
-            strategy: "lexical",
-            guildId: String(payload.guildId || "").trim(),
-            channelId: String(payload.channelId || "").trim() || null,
-            queryText: String(payload.queryText || ""),
-            limit: Number(payload.limit) || 1,
-            maxAgeHours: Number(payload.maxAgeHours) || 1
-          })
-        : null;
-    const continuityStartedAt = Date.now();
-    const continuity = await loadConversationContinuityContext({
-      settings,
-      userId: normalizedUserId,
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      queryText: normalizedTranscript,
-      trace: {
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: normalizedUserId
-      },
-      source: "voice_realtime_instruction_context",
-      loadFactProfile:
-        typeof this.host.getSessionFactProfileSlice === "function"
-          ? (_payload: ConversationContinuityPayload) =>
-            this.host.getSessionFactProfileSlice({
-              session,
-              userId: normalizedUserId
-            })
-          : null,
-      loadRecentConversationHistory
-    });
-    const continuityLoadMs = Math.max(0, Date.now() - continuityStartedAt);
-    const guidanceFacts = Array.isArray(continuity.memorySlice?.guidanceFacts)
-      ? continuity.memorySlice.guidanceFacts
-      : [];
-    const participantIds = Array.isArray(continuity.memorySlice?.participantProfiles)
-      ? continuity.memorySlice.participantProfiles
-          .map((entry) => String((entry as Record<string, unknown>)?.userId || "").trim())
-          .filter(Boolean)
-      : [];
-    const behavioralStartedAt = Date.now();
-    const cachedBehavioralFacts = await loadSessionBehavioralMemoryFacts({
-      session,
+    const loaded = await loadSharedVoiceMemoryContext({
+      searchConversationWindows: this.store.searchConversationWindows,
+      getSessionFactProfileSlice: typeof this.host.getSessionFactProfileSlice === "function"
+        ? (payload) => this.host.getSessionFactProfileSlice?.(payload) || null
+        : undefined,
       searchDurableFacts:
         typeof this.host.memory?.searchDurableFacts === "function"
           ? (payload) => this.host.memory.searchDurableFacts(payload)
           : null,
-      guildId: String(session.guildId || "").trim(),
-      channelId: String(session.textChannelId || "").trim() || null,
-      queryText: normalizedTranscript,
-      participantIds,
-      settings,
-      trace: {
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: normalizedUserId,
-        source: "voice_realtime_behavioral_memory:instruction_refresh"
-      },
-      limit: 8
+      loadBehavioralFactsForPrompt:
+        typeof this.host.memory?.loadBehavioralFactsForPrompt === "function"
+          ? async (payload) => await this.host.memory.loadBehavioralFactsForPrompt(payload)
+          : null
+    }, {
+      session,
+      settings: settings || session.settingsSnapshot || this.store.getSettings(),
+      userId: normalizedUserId,
+      transcript: normalizedTranscript,
+      continuitySource: "voice_realtime_instruction_context",
+      behavioralSource: "voice_realtime_behavioral_memory:instruction_refresh"
     });
-    const behavioralFacts = cachedBehavioralFacts ?? (
-      typeof this.host.memory?.loadBehavioralFactsForPrompt === "function"
-        ? await this.host.memory.loadBehavioralFactsForPrompt({
-            guildId: String(session.guildId || "").trim(),
-            channelId: String(session.textChannelId || "").trim() || null,
-            queryText: normalizedTranscript,
-            participantIds,
-            settings,
-            trace: {
-              guildId: session.guildId,
-              channelId: session.textChannelId,
-              userId: normalizedUserId,
-              source: "voice_realtime_behavioral_memory:instruction_refresh"
-            },
-            limit: 8
-          })
-        : []
-    );
-    const behavioralMemoryLoadMs = Math.max(0, Date.now() - behavioralStartedAt);
-    const usedCachedBehavioralFacts = Array.isArray(cachedBehavioralFacts);
-    const totalLoadMs = Math.max(0, Date.now() - memoryLoadStartedAt);
     this.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
@@ -562,40 +447,31 @@ export class InstructionManager {
         sessionId: session.id,
         memorySource: "voice_realtime_instruction_context",
         transcriptChars: normalizedTranscript.length,
-        continuityLoadMs,
-        behavioralMemoryLoadMs,
-        totalLoadMs,
-        usedCachedBehavioralFacts,
-        participantProfileCount: Array.isArray(continuity.memorySlice?.participantProfiles)
-          ? continuity.memorySlice.participantProfiles.length
+        continuityLoadMs: loaded.continuityLoadMs,
+        behavioralMemoryLoadMs: loaded.behavioralMemoryLoadMs,
+        totalLoadMs: loaded.totalLoadMs,
+        usedCachedBehavioralFacts: loaded.usedCachedBehavioralFacts,
+        participantProfileCount: Array.isArray(loaded.memorySlice.participantProfiles)
+          ? loaded.memorySlice.participantProfiles.length
           : 0,
-        userFactCount: Array.isArray(continuity.memorySlice?.userFacts)
-          ? continuity.memorySlice.userFacts.length
+        userFactCount: Array.isArray(loaded.memorySlice.userFacts)
+          ? loaded.memorySlice.userFacts.length
           : 0,
-        relevantFactCount: Array.isArray(continuity.memorySlice?.relevantFacts)
-          ? continuity.memorySlice.relevantFacts.length
+        relevantFactCount: Array.isArray(loaded.memorySlice.relevantFacts)
+          ? loaded.memorySlice.relevantFacts.length
           : 0,
-        guidanceFactCount: guidanceFacts.length,
-        behavioralFactCount: Array.isArray(behavioralFacts) ? behavioralFacts.length : 0,
-        recentConversationHistoryCount: Array.isArray(continuity.recentConversationHistory)
-          ? continuity.recentConversationHistory.length
+        guidanceFactCount: Array.isArray(loaded.memorySlice.guidanceFacts)
+          ? loaded.memorySlice.guidanceFacts.length
+          : 0,
+        behavioralFactCount: Array.isArray(loaded.memorySlice.behavioralFacts)
+          ? loaded.memorySlice.behavioralFacts.length
+          : 0,
+        recentConversationHistoryCount: Array.isArray(loaded.memorySlice.recentConversationHistory)
+          ? loaded.memorySlice.recentConversationHistory.length
           : 0
       }
     });
-    return {
-      participantProfiles: Array.isArray(continuity.memorySlice?.participantProfiles)
-        ? continuity.memorySlice.participantProfiles
-        : [],
-      selfFacts: Array.isArray(continuity.memorySlice?.selfFacts) ? continuity.memorySlice.selfFacts : [],
-      loreFacts: Array.isArray(continuity.memorySlice?.loreFacts) ? continuity.memorySlice.loreFacts : [],
-      userFacts: Array.isArray(continuity.memorySlice?.userFacts) ? continuity.memorySlice.userFacts : [],
-      relevantFacts: Array.isArray(continuity.memorySlice?.relevantFacts) ? continuity.memorySlice.relevantFacts : [],
-      guidanceFacts,
-      behavioralFacts: Array.isArray(behavioralFacts) ? behavioralFacts : [],
-      recentConversationHistory: Array.isArray(continuity.recentConversationHistory)
-        ? continuity.recentConversationHistory
-        : []
-    };
+    return loaded.memorySlice;
   }
 
   scheduleRealtimeInstructionRefresh({
@@ -683,12 +559,23 @@ export class InstructionManager {
         reason
       });
     }
+    const effectiveMemorySlice = memorySlice ?? session.lastRealtimeMemorySlice ?? null;
+    session.lastRealtimeMemorySlice = effectiveMemorySlice;
+    const sharedTurnContext = buildSharedVoiceTurnContext(this.host, {
+      session,
+      settings: resolvedSettings,
+      speakerUserId,
+      maxParticipants: REALTIME_CONTEXT_MEMBER_LIMIT,
+      maxMembershipEvents: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT,
+      maxVoiceEffects: VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT
+    });
     const instructions = this.buildRealtimeInstructions({
       session,
       settings: resolvedSettings,
       speakerUserId,
       transcript,
-      memorySlice
+      memorySlice: effectiveMemorySlice,
+      sharedTurnContext
     });
     if (!instructions) return;
     if (instructions === session.lastRealtimeInstructions) return;
@@ -708,13 +595,20 @@ export class InstructionManager {
           sessionId: session.id,
           reason: String(reason || "voice_context_refresh"),
           speakerUserId: speakerUserId ? String(speakerUserId) : null,
-          participantCount: this.host.getVoiceChannelParticipants(session).length,
+          participantCount: sharedTurnContext.participantRoster.length,
           transcriptChars: transcript ? String(transcript).length : 0,
-          userFactCount: Array.isArray(memorySlice?.userFacts) ? memorySlice.userFacts.length : 0,
-          relevantFactCount: Array.isArray(memorySlice?.relevantFacts) ? memorySlice.relevantFacts.length : 0,
-          conversationWindowCount: Array.isArray(memorySlice?.recentConversationHistory)
-            ? memorySlice.recentConversationHistory.length
+          userFactCount: Array.isArray(effectiveMemorySlice?.userFacts) ? effectiveMemorySlice.userFacts.length : 0,
+          relevantFactCount: Array.isArray(effectiveMemorySlice?.relevantFacts) ? effectiveMemorySlice.relevantFacts.length : 0,
+          conversationWindowCount: Array.isArray(effectiveMemorySlice?.recentConversationHistory)
+            ? effectiveMemorySlice.recentConversationHistory.length
             : 0,
+          toolNames: Array.isArray(session.realtimeToolDefinitions)
+            ? session.realtimeToolDefinitions.map((tool) => String(tool?.name || "")).filter(Boolean)
+            : [],
+          recentToolOutcomeCount: sharedTurnContext.recentToolOutcomes.length,
+          nativeDiscordSharerCount: sharedTurnContext.nativeDiscordSharers.length,
+          screenWatchAvailable: sharedTurnContext.screenWatchCapability.available,
+          screenWatchActive: Boolean(sharedTurnContext.streamWatchNotes?.active),
           instructionsChars: instructions.length,
           replyPrompts: buildSingleTurnPromptLog({
             systemPrompt: instructions,
@@ -742,7 +636,8 @@ export class InstructionManager {
     settings,
     speakerUserId = null,
     transcript = "",
-    memorySlice = null
+    memorySlice = null,
+    sharedTurnContext = null
   }: BuildRealtimeInstructionsArgs) {
     const baseInstructions = String(session?.baseVoiceInstructions || buildVoiceInstructions(settings)).trim();
     const speakerName = this.host.resolveVoiceSpeakerName(session, speakerUserId);
@@ -753,28 +648,25 @@ export class InstructionManager {
       maxChars: REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS,
       stage: "build_realtime_instructions"
     });
-    const streamWatchNotes = this.host.getStreamWatchNotesForPrompt(session, settings);
+    const effectiveMemorySlice = memorySlice ?? session.lastRealtimeMemorySlice ?? null;
+    const resolvedTurnContext = sharedTurnContext || buildSharedVoiceTurnContext(this.host, {
+      session,
+      settings,
+      speakerUserId,
+      maxParticipants: REALTIME_CONTEXT_MEMBER_LIMIT,
+      maxMembershipEvents: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT,
+      maxVoiceEffects: VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT
+    });
+    const streamWatchNotes = resolvedTurnContext.streamWatchNotes;
     const hasScreenFrameContext =
       Array.isArray(streamWatchNotes?.notes) && streamWatchNotes.notes.length > 0;
     const hasActiveScreenFrameContext = hasScreenFrameContext && Boolean(streamWatchNotes?.active);
     const hasRecentScreenFrameMemory = hasScreenFrameContext && !streamWatchNotes?.active;
-    const screenShareCapability = this.host.getVoiceScreenWatchCapability({
-      settings,
-      guildId: session?.guildId || null,
-      channelId: session?.textChannelId || null,
-      requesterUserId: speakerUserId || null
-    });
-    const nativeDiscordSharers = getNativeDiscordScreenSharePromptEntries(
-      session,
-      (currentSession, userId) => this.host.resolveVoiceSpeakerName(currentSession, userId)
-    );
-    const participants = this.host.getVoiceChannelParticipants(session);
-    const recentMembershipEvents = this.host.getRecentVoiceMembershipEvents(session, {
-      maxItems: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
-    });
-    const recentVoiceChannelEffects = this.host.getRecentVoiceChannelEffectEvents(session, {
-      maxItems: VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT
-    });
+    const screenShareCapability = resolvedTurnContext.screenWatchCapability;
+    const nativeDiscordSharers = resolvedTurnContext.nativeDiscordSharers;
+    const participants = resolvedTurnContext.participantRoster;
+    const recentMembershipEvents = resolvedTurnContext.recentMembershipEvents;
+    const recentVoiceChannelEffects = resolvedTurnContext.recentVoiceEffectEvents;
     const guild = this.host.client.guilds.cache.get(String(session?.guildId || "")) || null;
     const voiceChannel = guild?.channels?.cache?.get(String(session?.voiceChannelId || "")) || null;
     const roster =
@@ -798,14 +690,15 @@ export class InstructionManager {
         .join(" | ")
       : "none";
     const participantMemory = formatConversationParticipantMemory({
-      participantProfiles: toPromptRecordRows(memorySlice?.participantProfiles),
-      selfFacts: toPromptRecordRows(memorySlice?.selfFacts),
-      loreFacts: toPromptRecordRows(memorySlice?.loreFacts)
+      participantProfiles: toPromptRecordRows(effectiveMemorySlice?.participantProfiles),
+      selfFacts: toPromptRecordRows(effectiveMemorySlice?.selfFacts),
+      loreFacts: toPromptRecordRows(effectiveMemorySlice?.loreFacts)
     });
-    const recentConversationHistory = formatConversationWindows(memorySlice?.recentConversationHistory);
-    const guidanceFacts = formatBehaviorMemoryFacts(memorySlice?.guidanceFacts, 8);
-    const behavioralFacts = formatBehaviorMemoryFacts(memorySlice?.behavioralFacts, 8);
-    const compactedSessionSummary = getCompactedSessionSummaryContext(session);
+    const recentConversationHistory = formatConversationWindows(effectiveMemorySlice?.recentConversationHistory);
+    const guidanceFacts = formatBehaviorMemoryFacts(effectiveMemorySlice?.guidanceFacts, 8);
+    const behavioralFacts = formatBehaviorMemoryFacts(effectiveMemorySlice?.behavioralFacts, 8);
+    const compactedSessionSummary = resolvedTurnContext.compactedSessionSummary;
+    const recentToolOutcomeLines = resolvedTurnContext.recentToolOutcomeLines;
     const activeVoiceCommandState = this.host.ensureVoiceCommandState(session);
     const musicDisambiguation = this.host.getMusicDisambiguationPromptContext(session);
 
@@ -836,9 +729,9 @@ export class InstructionManager {
     }
 
     if (
-      Array.isArray(memorySlice?.participantProfiles) && memorySlice.participantProfiles.length > 0 ||
-      Array.isArray(memorySlice?.selfFacts) && memorySlice.selfFacts.length > 0 ||
-      Array.isArray(memorySlice?.loreFacts) && memorySlice.loreFacts.length > 0
+      Array.isArray(effectiveMemorySlice?.participantProfiles) && effectiveMemorySlice.participantProfiles.length > 0 ||
+      Array.isArray(effectiveMemorySlice?.selfFacts) && effectiveMemorySlice.selfFacts.length > 0 ||
+      Array.isArray(effectiveMemorySlice?.loreFacts) && effectiveMemorySlice.loreFacts.length > 0
     ) {
       sections.push(
         [
@@ -850,7 +743,7 @@ export class InstructionManager {
       );
     }
 
-    if (Array.isArray(memorySlice?.guidanceFacts) && memorySlice.guidanceFacts.length > 0) {
+    if (Array.isArray(effectiveMemorySlice?.guidanceFacts) && effectiveMemorySlice.guidanceFacts.length > 0) {
       sections.push(
         [
           "Behavior guidance:",
@@ -860,7 +753,7 @@ export class InstructionManager {
       );
     }
 
-    if (Array.isArray(memorySlice?.recentConversationHistory) && memorySlice.recentConversationHistory.length > 0) {
+    if (Array.isArray(effectiveMemorySlice?.recentConversationHistory) && effectiveMemorySlice.recentConversationHistory.length > 0) {
       sections.push(
         [
           "Recent conversation continuity:",
@@ -879,12 +772,22 @@ export class InstructionManager {
       );
     }
 
-    if (Array.isArray(memorySlice?.behavioralFacts) && memorySlice.behavioralFacts.length > 0) {
+    if (Array.isArray(effectiveMemorySlice?.behavioralFacts) && effectiveMemorySlice.behavioralFacts.length > 0) {
       sections.push(
         [
           "Relevant behavioral memory:",
           "- These behavior memories were retrieved because they match the current turn. Follow them when relevant.",
           behavioralFacts
+        ].join("\n")
+      );
+    }
+
+    if (recentToolOutcomeLines.length > 0) {
+      sections.push(
+        [
+          "Recent tool outcomes:",
+          "- Treat these as recent room state and prior action context.",
+          ...recentToolOutcomeLines.map((line) => `- ${line}`)
         ].join("\n")
       );
     }
@@ -921,7 +824,7 @@ export class InstructionManager {
       );
     }
 
-    const musicContext = this.host.getMusicPromptContext(session);
+    const musicContext = resolvedTurnContext.musicContext;
     if (
       musicContext && (
         musicContext.currentTrack?.title ||

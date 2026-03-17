@@ -211,6 +211,14 @@ Tool ownership:
 - full-brain replies use the shared orchestrator tool loop instead of provider-native replanning
 - provider-native sessions emit `realtime_tool_call_*` events; brain/transport-only sessions emit `voice_brain_*` events
 
+Turn-context parity:
+
+- `src/voice/voiceTurnContext.ts` is the shared live-room context builder for both full-brain replies and provider-native realtime instruction refresh
+- that shared context normalizes participant roster, recent membership/effect events, native Discord sharers, screen-watch capability, stream-watch notes, compacted session summary, music state, and recent tool outcomes into one prompt-facing shape
+- `src/voice/voiceMemoryContext.ts` applies the same continuity and behavioral-memory loading policy to provider-native instruction refreshes and brain-path generation turns
+- `src/voice/voiceToolResultSummary.ts` is the canonical compact tool-result summary shape for both brain and provider-native tool loops, so follow-up reasoning sees the same post-tool facts even when the transport differs
+- provider-native tool completion schedules a live instruction refresh after execution, so the realtime model sees the updated tool outcome summary and room state instead of reasoning from stale pre-tool instructions
+
 Voice tool continuation policy (`voiceContinuationPolicy` in `sharedToolSchemas.ts`):
 
 Each tool declares whether the LLM gets a follow-up generation turn after the tool executes. This controls whether tool results are fed back to the LLM for a spoken follow-up.

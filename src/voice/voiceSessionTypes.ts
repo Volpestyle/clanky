@@ -13,6 +13,7 @@ import type {
     AssistantOutputState
 } from "./assistantOutputState.ts";
 import type { MemoryFactRow } from "../store/storeMemory.ts";
+import type { VoiceToolResultSummary } from "./voiceToolResultSummary.ts";
 import type { LoggedPromptBundle } from "../promptLogging.ts";
 
 export type {
@@ -201,7 +202,7 @@ export type VoiceToolCallEvent = {
     completedAt: string | null;
     runtimeMs: number | null;
     success: boolean;
-    outputSummary: string | null;
+    outputSummary: VoiceToolResultSummary;
     error: string | null;
     sourceEventType?: string | null;
 };
@@ -1199,6 +1200,7 @@ export interface VoiceSession {
     lastRealtimeToolRefreshAt?: number;
     lastRealtimeToolCallerUserId: string | null;
     awaitingToolOutputs?: boolean;
+    pendingMemoryIngest?: Promise<unknown> | null;
     toolCallEvents: VoiceToolCallEvent[];
     mcpStatus: VoiceMcpServerStatus[];
     toolMusicTrackCatalog: Map<string, unknown>;
@@ -1231,6 +1233,7 @@ export interface VoiceSession {
     baseVoiceInstructions: InstructionManagerState["baseVoiceInstructions"];
     lastRealtimeInstructions: InstructionManagerState["lastRealtimeInstructions"];
     lastRealtimeInstructionsAt: InstructionManagerState["lastRealtimeInstructionsAt"];
+    lastRealtimeMemorySlice?: RealtimeInstructionMemorySlice | null;
     realtimeInstructionRefreshTimer: InstructionManagerState["realtimeInstructionRefreshTimer"];
     realtimeTurnContextRefreshState: InstructionManagerState["realtimeTurnContextRefreshState"];
     settingsSnapshot: VoiceRealtimeToolSettings | null;

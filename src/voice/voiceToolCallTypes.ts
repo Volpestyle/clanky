@@ -24,6 +24,7 @@ export type VoiceToolCallManager = Pick<
   | "haltSessionOutputForMusicPlayback"
   | "isMusicDisambiguationResolutionTurn"
   | "isMusicPlaybackActive"
+  | "instructionManager"
   | "llm"
   | "memory"
   | "maybeClearActiveReplyInterruptionPolicy"
