@@ -591,15 +591,21 @@ export async function runVoiceReplyPipeline(
   // Build active Discord screen share context for the prompt so the model
   // knows who is currently sharing and can target start_screen_watch correctly.
   const activeDiscordStreams: Array<{ displayName: string }> = (() => {
-    const goLiveUserId = session.goLiveStream?.targetUserId;
-    if (!goLiveUserId) return [];
-    const rosterEntry = participantRoster.find(
-      (p: { userId?: string }) => String(p?.userId || "") === goLiveUserId
-    );
-    const displayName = String(
-      (rosterEntry as { displayName?: string })?.displayName || goLiveUserId
-    ).trim();
-    return displayName ? [{ displayName }] : [];
+    const discoveredGoLiveUserIds = session.goLiveStreams instanceof Map && session.goLiveStreams.size > 0
+      ? [...session.goLiveStreams.values()].map((stream) => String(stream.targetUserId || "").trim()).filter(Boolean)
+      : [String(session.goLiveStream?.targetUserId || "").trim()].filter(Boolean);
+    const seen = new Set<string>();
+    return discoveredGoLiveUserIds.flatMap((goLiveUserId) => {
+      if (seen.has(goLiveUserId)) return [];
+      seen.add(goLiveUserId);
+      const rosterEntry = participantRoster.find(
+        (p: { userId?: string }) => String(p?.userId || "") === goLiveUserId
+      );
+      const displayName = String(
+        (rosterEntry as { displayName?: string })?.displayName || goLiveUserId
+      ).trim();
+      return displayName ? [{ displayName }] : [];
+    });
   })();
   const streamWatchNotes = host.getStreamWatchNotesForPrompt(session, params.settings);
 

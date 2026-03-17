@@ -13,6 +13,7 @@ function createScreenShareRuntime({
   nativeDecoderSupported = true,
   activeSharerUserIds = nativeStartResult ? ["user-1"] : [],
   goLiveStreamTargetUserId = null,
+  goLiveStreamTargetUserIds = goLiveStreamTargetUserId ? [goLiveStreamTargetUserId] : [],
   goLiveStreamActive = goLiveStreamTargetUserId ? true : false,
   existingNativeWatch = null,
   participantEntries = [
@@ -56,6 +57,23 @@ function createScreenShareRuntime({
           targetUserId: goLiveStreamTargetUserId
         }
       : undefined,
+    goLiveStreams: new Map(
+      goLiveStreamTargetUserIds.map((userId, index) => {
+        const normalizedUserId = String(userId);
+        return [
+          `guild:guild-1:voice-1:${normalizedUserId}`,
+          {
+            active: goLiveStreamActive,
+            streamKey: `guild:guild-1:voice-1:${normalizedUserId}`,
+            targetUserId: normalizedUserId,
+            guildId: "guild-1",
+            channelId: "voice-1",
+            discoveredAt: index + 1,
+            credentialsReceivedAt: goLiveStreamActive ? index + 1 : 0
+          }
+        ];
+      })
+    ),
     settingsSnapshot: {
       voice: {
         streamWatch: {
@@ -868,6 +886,89 @@ test("startVoiceScreenWatch trusts discovered Go Live state for an explicit targ
   assert.equal(nativeFailure, undefined);
   const fallbackStarted = logs.find((entry) => String(entry?.content || "") === "screen_watch_link_fallback_started");
   assert.equal(fallbackStarted, undefined);
+});
+
+test("startVoiceScreenWatch does not silently swap an explicit target to another discovered Go Live user", async () => {
+  const { runtime, createSessionCalls, nativeStartCalls, logs } = createScreenShareRuntime({
+    streamLinkFallbackEnabled: false,
+    nativeStartResult: {
+      ok: true,
+      reason: "watching_started",
+      targetUserId: "user-1"
+    },
+    activeSharerUserIds: [],
+    goLiveStreamTargetUserId: "user-1",
+    goLiveStreamTargetUserIds: ["user-1"],
+    goLiveStreamActive: false
+  });
+
+  const result = await startVoiceScreenWatch(runtime, {
+    settings: {
+      voice: {
+        streamWatch: {
+          enabled: true
+        }
+      }
+    },
+    guildId: "guild-1",
+    channelId: "chan-1",
+    requesterUserId: "user-3",
+    target: "bob",
+    transcript: "watch bob's stream",
+    source: "voice_turn_directive"
+  });
+
+  assert.equal(result.started, false);
+  assert.equal(result.reason, "requested_target_not_actively_sharing");
+  assert.equal(nativeStartCalls.length, 0);
+  assert.equal(createSessionCalls.length, 0);
+  const nativeFailure = logs.find((entry) => String(entry?.content || "") === "screen_watch_native_start_failed");
+  assert.equal(nativeFailure?.metadata?.requestedTargetUserId, "user-2");
+  assert.equal(nativeFailure?.metadata?.goLiveStreamUserIds?.includes("user-1"), true);
+});
+
+test("startVoiceScreenWatch can use the explicitly requested discovered Go Live user when multiple Go Live users exist", async () => {
+  const { runtime, createSessionCalls, nativeStartCalls, sentMessages } = createScreenShareRuntime({
+    nativeStartResult: {
+      ok: true,
+      reason: "watching_started",
+      targetUserId: "user-2"
+    },
+    activeSharerUserIds: [],
+    goLiveStreamTargetUserId: "user-1",
+    goLiveStreamTargetUserIds: ["user-1", "user-2"],
+    goLiveStreamActive: false,
+    createSessionResult: {
+      ok: true,
+      shareUrl: "https://screen.example/session/unused",
+      expiresInMinutes: 15,
+      targetUserId: "user-2"
+    }
+  });
+
+  const result = await startVoiceScreenWatch(runtime, {
+    settings: {
+      voice: {
+        streamWatch: {
+          enabled: true
+        }
+      }
+    },
+    guildId: "guild-1",
+    channelId: "chan-1",
+    requesterUserId: "user-1",
+    target: "bob",
+    transcript: "watch bob's stream",
+    source: "voice_turn_directive"
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(result.transport, "native");
+  assert.equal(result.targetUserId, "user-2");
+  assert.equal(nativeStartCalls.length, 1);
+  assert.equal(nativeStartCalls[0]?.targetUserId, "user-2");
+  assert.equal(createSessionCalls.length, 0);
+  assert.equal(sentMessages.length, 0);
 });
 
 test("startVoiceScreenWatch bootstraps native watch from the requester's discovered Go Live state before any active sharer frames exist", async () => {

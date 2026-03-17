@@ -23,7 +23,12 @@ import { buildRealtimeFunctionTools, getVoiceMcpServerStatuses } from "./voiceTo
 import { providerSupports } from "./voiceModes.ts";
 import { createEmptyVoiceLivePromptState } from "./voicePromptState.ts";
 import { createNativeDiscordScreenShareState } from "./nativeDiscordScreenShare.ts";
-import { createGoLiveStreamState, buildGoLiveStreamStateFromStream } from "../selfbot/streamDiscovery.ts";
+import {
+  createGoLiveStreamState,
+  buildGoLiveStreamStateFromStream,
+  syncPrimaryGoLiveStream,
+  upsertSessionGoLiveStream
+} from "../selfbot/streamDiscovery.ts";
 import { createStreamPublishState } from "./voiceStreamPublish.ts";
 import type { VoiceSession } from "./voiceSessionTypes.ts";
 import { createAssistantOutputState } from "./assistantOutputState.ts";
@@ -900,6 +905,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         },
         nativeScreenShare: createNativeDiscordScreenShareState(),
         goLiveStream: createGoLiveStreamState(),
+        goLiveStreams: new Map(),
         streamPublish: createStreamPublishState(),
         music: {
           phase: "idle",
@@ -977,14 +983,14 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       // STREAM_CREATE wasn't received (e.g., stream started before the
       // gateway connected).
       const botUserId = String(manager.client.user?.id || "").trim();
-      if (manager.streamDiscovery && !session.goLiveStream?.streamKey) {
+      if (manager.streamDiscovery) {
         for (const stream of manager.streamDiscovery.streams.values()) {
           if (
             stream.guildId === guildId &&
             stream.channelId === targetVoiceChannelId &&
             String(stream.userId || "").trim() !== botUserId
           ) {
-            session.goLiveStream = buildGoLiveStreamStateFromStream(stream);
+            upsertSessionGoLiveStream(session, buildGoLiveStreamStateFromStream(stream));
             manager.store.logAction({
               kind: "stream_discovery",
               guildId,
@@ -997,7 +1003,6 @@ export async function requestJoin(manager, { message, settings, intentConfidence
                 source: "stream_discovery_streams_map"
               }
             });
-            break;
           }
         }
       }
@@ -1005,21 +1010,21 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       // when streamDiscovery didn't have the stream entry (e.g., bot
       // connected after the stream was already live and STREAM_CREATE
       // was missed).
-      if (!session.goLiveStream?.streamKey && memberVoiceChannel?.members) {
+      if (memberVoiceChannel?.members) {
         for (const [memberId, member] of memberVoiceChannel.members) {
           if (
             String(memberId).trim() !== botUserId &&
             member.voice?.streaming === true
           ) {
             const streamKey = `guild:${guildId}:${targetVoiceChannelId}:${memberId}`;
-            session.goLiveStream = {
+            upsertSessionGoLiveStream(session, {
               ...createGoLiveStreamState(),
               streamKey,
               targetUserId: String(memberId),
               guildId,
               channelId: targetVoiceChannelId,
               discoveredAt: Date.now(),
-            };
+            });
             manager.store.logAction({
               kind: "stream_discovery",
               guildId,
@@ -1032,10 +1037,10 @@ export async function requestJoin(manager, { message, settings, intentConfidence
                 source: "voice_channel_member_streaming"
               }
             });
-            break;
           }
         }
       }
+      syncPrimaryGoLiveStream(session);
 
       // Record the bot's own join as a membership event so the classifier
       // history shows "[botName] joined" as the first event.

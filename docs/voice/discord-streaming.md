@@ -273,9 +273,12 @@ These are the same opcodes as the regular voice connection but exchanged on the 
 ```
 1. Detect Go Live
    → Listen for VOICE_STATE_UPDATE with self_stream: true
-   → Seed provisional session Go Live state from that early signal
+   → Seed provisional per-user session Go Live state from that early signal
    → OR listen for STREAM_CREATE dispatch event
    → OR scan GUILD_CREATE voice_states on connect for users already streaming
+
+   The voice session keeps all discovered Go Live users in `goLiveStreams`.
+   `goLiveStream` is only the current primary/legacy view, not the source of truth.
 
 2. Subscribe to stream
    → Gateway OP20 STREAM_WATCH { stream_key }

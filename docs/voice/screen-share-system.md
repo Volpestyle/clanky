@@ -178,6 +178,7 @@ This preserves temporal continuity. The agent keeps fresh detail from recent not
 - Runtime tries native Discord watch first through the selfbot's active voice session
 - Native watch binds an explicit target first when one is provided and resolves cleanly
 - An explicit target can use discovered Go Live state immediately, even before native video-state frames have populated the active-sharer roster
+- Explicit targets never silently retarget to a different sharer; if the requested person is not sharing, native watch fails cleanly and link fallback can still target that same person
 - Without an explicit target, native watch auto-binds only when runtime can identify a safe target:
   - requester has discovered Go Live state, even before credentials or frame-backed sharer state
   - requester is actively sharing
@@ -206,7 +207,7 @@ Two transport modes exist for native Discord video.
 - If multiple unrelated Discord sharers are active, the agent can pick one with `start_screen_watch({ target: "name" })`
 - If multiple unrelated Discord sharers are active and no explicit target is provided, runtime does not guess a native target
 - Active native sharer metadata is prompt context, but image visibility still requires an active watch session
-- Voice session tracks Go Live state in `goLiveStream` (active, streamKey, targetUserId, credentials) populated by stream discovery callbacks
+- Voice session tracks discovered Go Live users in `goLiveStreams`, plus a derived primary `goLiveStream` for legacy consumers and current-target hints
 - Link fallback is suppressed at two checkpoints when native watch is already active for the target
 
 **Webcam video** is the fallback when the target user has webcam video but is not Go Live streaming:

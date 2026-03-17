@@ -11,7 +11,7 @@
  * watch connection) is a separate concern built on top of the credentials
  * discovered here.
  */
-import type { VoiceSessionGoLiveStreamState } from "../voice/voiceSessionTypes.ts";
+import type { VoiceSessionGoLiveStreamMap, VoiceSessionGoLiveStreamState } from "../voice/voiceSessionTypes.ts";
 
 type GatewayShardLike = {
   id?: number;
@@ -178,6 +178,118 @@ export function buildGoLiveStreamStateFromStream(
     discoveredAt: stream.discoveredAt,
     credentialsReceivedAt: stream.credentialsReceivedAt ?? 0,
   };
+}
+
+type GoLiveSessionLike = {
+  goLiveStream?: VoiceSessionGoLiveStreamState | null;
+  goLiveStreams?: VoiceSessionGoLiveStreamMap | null;
+  streamWatch?: {
+    active?: boolean;
+    targetUserId?: string | null;
+  } | null;
+} | null | undefined;
+
+export function ensureGoLiveStreamsMap(session: GoLiveSessionLike): VoiceSessionGoLiveStreamMap {
+  if (!session) return new Map();
+  if (!(session.goLiveStreams instanceof Map)) {
+    session.goLiveStreams = new Map();
+  }
+  return session.goLiveStreams;
+}
+
+export function listSessionGoLiveStreams(session: GoLiveSessionLike): VoiceSessionGoLiveStreamState[] {
+  if (!session) return [];
+  if (session.goLiveStreams instanceof Map) {
+    return [...session.goLiveStreams.values()];
+  }
+  const legacy = session.goLiveStream;
+  if (!legacy) return [];
+  if (!String(legacy.streamKey || legacy.targetUserId || "").trim()) return [];
+  return [legacy];
+}
+
+function rankGoLiveStreamState(
+  stream: VoiceSessionGoLiveStreamState,
+  preferredTargetUserId: string | null
+): number {
+  const normalizedPreferredTargetUserId = String(preferredTargetUserId || "").trim() || null;
+  const normalizedTargetUserId = String(stream.targetUserId || "").trim() || null;
+  let score = 0;
+  if (normalizedPreferredTargetUserId && normalizedTargetUserId === normalizedPreferredTargetUserId) score += 100;
+  if (stream.active) score += 10;
+  if (stream.credentialsReceivedAt > 0) score += 5;
+  if (stream.discoveredAt > 0) score += 1;
+  return score;
+}
+
+export function syncPrimaryGoLiveStream(
+  session: GoLiveSessionLike,
+  preferredTargetUserId: string | null = null
+): VoiceSessionGoLiveStreamState {
+  if (!session) return createGoLiveStreamState();
+  const streams = listSessionGoLiveStreams(session);
+  if (streams.length <= 0) {
+    const empty = createGoLiveStreamState();
+    session.goLiveStream = empty;
+    return empty;
+  }
+
+  const watchTargetUserId =
+    session.streamWatch?.active && String(session.streamWatch?.targetUserId || "").trim()
+      ? String(session.streamWatch?.targetUserId || "").trim()
+      : null;
+  const effectivePreferredTargetUserId = watchTargetUserId || String(preferredTargetUserId || "").trim() || null;
+  const nextPrimary = [...streams].sort((left, right) => {
+    const rankDiff = rankGoLiveStreamState(right, effectivePreferredTargetUserId)
+      - rankGoLiveStreamState(left, effectivePreferredTargetUserId);
+    if (rankDiff !== 0) return rankDiff;
+    const discoveredAtDiff = Number(right.discoveredAt || 0) - Number(left.discoveredAt || 0);
+    if (discoveredAtDiff !== 0) return discoveredAtDiff;
+    return String(left.targetUserId || "").localeCompare(String(right.targetUserId || ""));
+  })[0] || createGoLiveStreamState();
+  session.goLiveStream = nextPrimary;
+  return nextPrimary;
+}
+
+export function upsertSessionGoLiveStream(
+  session: GoLiveSessionLike,
+  stream: VoiceSessionGoLiveStreamState,
+  preferredTargetUserId: string | null = null
+): VoiceSessionGoLiveStreamState {
+  if (!session) return createGoLiveStreamState();
+  const streamKey = String(stream.streamKey || "").trim();
+  const targetUserId = String(stream.targetUserId || "").trim();
+  const mapKey = streamKey || targetUserId;
+  if (!mapKey) return syncPrimaryGoLiveStream(session, preferredTargetUserId);
+  const goLiveStreams = ensureGoLiveStreamsMap(session);
+  goLiveStreams.set(mapKey, stream);
+  return syncPrimaryGoLiveStream(session, preferredTargetUserId || targetUserId || null);
+}
+
+export function removeSessionGoLiveStream(
+  session: GoLiveSessionLike,
+  {
+    streamKey = null,
+    targetUserId = null
+  }: {
+    streamKey?: string | null;
+    targetUserId?: string | null;
+  },
+  preferredTargetUserId: string | null = null
+): VoiceSessionGoLiveStreamState {
+  if (!session) return createGoLiveStreamState();
+  const normalizedStreamKey = String(streamKey || "").trim() || null;
+  const normalizedTargetUserId = String(targetUserId || "").trim() || null;
+  const goLiveStreams = ensureGoLiveStreamsMap(session);
+  if (normalizedStreamKey) goLiveStreams.delete(normalizedStreamKey);
+  if (normalizedTargetUserId) {
+    for (const [mapKey, stream] of goLiveStreams.entries()) {
+      if (String(stream.targetUserId || "").trim() === normalizedTargetUserId) {
+        goLiveStreams.delete(mapKey);
+      }
+    }
+  }
+  return syncPrimaryGoLiveStream(session, preferredTargetUserId);
 }
 
 // ---------------------------------------------------------------------------

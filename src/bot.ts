@@ -13,7 +13,10 @@ import {
   createGoLiveStreamState,
   buildStreamKey,
   buildGoLiveStreamStateFromStream,
+  removeSessionGoLiveStream,
   setupStreamDiscovery,
+  syncPrimaryGoLiveStream,
+  upsertSessionGoLiveStream,
   type StreamDiscoveryState
 } from "./selfbot/streamDiscovery.ts";
 import { clankCommand } from "./commands/clankCommand.ts";
@@ -628,24 +631,20 @@ export class ClankerBot {
           onGoLiveDetected: ({ userId, guildId, channelId }) => {
             const isSelfStream = String(userId || "").trim() === String(this.client.user?.id || "").trim();
             const session = this.voiceSessionManager.getSession(guildId);
-            if (session && !isSelfStream && !session.goLiveStream?.active) {
+            if (session && !isSelfStream) {
               const streamKey = buildStreamKey(guildId, channelId, userId);
-              if (
-                String(session.goLiveStream?.streamKey || "").trim() === streamKey &&
-                String(session.goLiveStream?.targetUserId || "").trim() === String(userId || "").trim() &&
-                String(session.goLiveStream?.guildId || "").trim() === String(guildId || "").trim() &&
-                String(session.goLiveStream?.channelId || "").trim() === String(channelId || "").trim()
-              ) {
+              const existingGoLiveStream = session.goLiveStreams?.get(streamKey);
+              if (existingGoLiveStream) {
                 return;
               }
-              session.goLiveStream = {
+              upsertSessionGoLiveStream(session, {
                 ...createGoLiveStreamState(),
                 streamKey,
                 targetUserId: userId,
                 guildId,
                 channelId,
                 discoveredAt: Date.now(),
-              };
+              });
               this.store.logAction({
                 kind: "stream_discovery",
                 guildId,
@@ -663,10 +662,13 @@ export class ClankerBot {
             if (
               session &&
               !isSelfStream &&
-              !session.goLiveStream?.active &&
-              String(session.goLiveStream?.targetUserId || "").trim() === String(userId || "").trim() &&
-              String(session.goLiveStream?.guildId || "").trim() === String(guildId || "").trim() &&
-              (!channelId || String(session.goLiveStream?.channelId || "").trim() === String(channelId || "").trim())
+              (provisionalStreamKey
+                ? session.goLiveStreams?.has(provisionalStreamKey)
+                : [...(session.goLiveStreams?.values() || [])].some((stream) =>
+                    String(stream.targetUserId || "").trim() === String(userId || "").trim() &&
+                    String(stream.guildId || "").trim() === String(guildId || "").trim() &&
+                    (!channelId || String(stream.channelId || "").trim() === String(channelId || "").trim())
+                  ))
             ) {
               this.store.logAction({
                 kind: "stream_discovery",
@@ -679,7 +681,10 @@ export class ClankerBot {
                   reason: "voice_state_self_stream_false"
                 }
               });
-              session.goLiveStream = createGoLiveStreamState();
+              removeSessionGoLiveStream(session, {
+                streamKey: provisionalStreamKey,
+                targetUserId: userId
+              });
             }
           },
           onStreamDiscovered: (stream) => {
@@ -694,7 +699,7 @@ export class ClankerBot {
             const isSelfStream = String(stream.userId || "").trim() === String(this.client.user?.id || "").trim();
             const session = this.voiceSessionManager.getSession(stream.guildId);
             if (session && !isSelfStream) {
-              session.goLiveStream = buildGoLiveStreamStateFromStream(stream);
+              upsertSessionGoLiveStream(session, buildGoLiveStreamStateFromStream(stream), stream.userId);
             }
           },
           onStreamCredentialsReceived: (stream) => {
@@ -709,7 +714,7 @@ export class ClankerBot {
             const isSelfStream = String(stream.userId || "").trim() === String(this.client.user?.id || "").trim();
             const session = this.voiceSessionManager.getSession(stream.guildId);
             if (session && !isSelfStream) {
-              session.goLiveStream = buildGoLiveStreamStateFromStream(stream);
+              upsertSessionGoLiveStream(session, buildGoLiveStreamStateFromStream(stream), stream.userId);
             }
             if (isSelfStream) {
               this.voiceSessionManager.handleDiscoveredSelfStreamCredentialsReceived({ stream });
@@ -728,8 +733,12 @@ export class ClankerBot {
             });
             const isSelfStream = String(stream.userId || "").trim() === String(this.client.user?.id || "").trim();
             const session = this.voiceSessionManager.getSession(stream.guildId);
-            if (!isSelfStream && session?.goLiveStream?.streamKey === stream.streamKey) {
-              session.goLiveStream = createGoLiveStreamState();
+            if (!isSelfStream && session) {
+              removeSessionGoLiveStream(session, {
+                streamKey: stream.streamKey,
+                targetUserId: stream.userId
+              });
+              syncPrimaryGoLiveStream(session);
             }
             const handlerPromise = isSelfStream
               ? Promise.resolve(this.voiceSessionManager.handleDiscoveredSelfStreamDeleted({ stream }))

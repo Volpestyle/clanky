@@ -825,6 +825,8 @@ export interface VoiceSessionGoLiveStreamState {
     credentialsReceivedAt: number;
 }
 
+export type VoiceSessionGoLiveStreamMap = Map<string, VoiceSessionGoLiveStreamState>;
+
 export interface VoiceSessionStreamPublishState {
     active: boolean;
     paused: boolean;
@@ -1219,6 +1221,7 @@ export interface VoiceSession {
     streamWatch: VoiceSessionStreamWatchState;
     nativeScreenShare: VoiceSessionNativeScreenShareState;
     goLiveStream: VoiceSessionGoLiveStreamState;
+    goLiveStreams: VoiceSessionGoLiveStreamMap;
     streamPublish: VoiceSessionStreamPublishState;
     music: VoiceSessionMusicState;
     soundboard: VoiceSessionSoundboardState;

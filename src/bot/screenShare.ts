@@ -100,6 +100,15 @@ type ScreenWatchVoiceSessionLike = {
     guildId?: string | null;
     channelId?: string | null;
   } | null;
+  goLiveStreams?: Map<string, {
+    active?: boolean;
+    streamKey?: string | null;
+    targetUserId?: string | null;
+    guildId?: string | null;
+    channelId?: string | null;
+    discoveredAt?: number;
+    credentialsReceivedAt?: number;
+  }> | null;
 } | null;
 
 type ScreenWatchParticipantLike = {
@@ -333,10 +342,30 @@ function buildScreenWatchTargetCandidates(
   });
 }
 
-function getDiscoveredGoLiveBootstrapTargetUserId(
-  session: ScreenWatchVoiceSessionLike
+function listDiscoveredGoLiveBootstrapStreams(session: ScreenWatchVoiceSessionLike) {
+  const goLiveStreams = session?.goLiveStreams;
+  if (goLiveStreams instanceof Map && goLiveStreams.size > 0) {
+    return [...goLiveStreams.values()].filter((stream) => String(stream?.targetUserId || "").trim());
+  }
+  const legacyStream = session?.goLiveStream;
+  return legacyStream && String(legacyStream.targetUserId || "").trim()
+    ? [legacyStream]
+    : [];
+}
+
+function getDiscoveredGoLiveBootstrapTargetUserIds(session: ScreenWatchVoiceSessionLike) {
+  return listDiscoveredGoLiveBootstrapStreams(session).map((stream) => String(stream?.targetUserId || "").trim()).filter(Boolean);
+}
+
+function getDiscoveredGoLiveBootstrapStreamForUser(
+  session: ScreenWatchVoiceSessionLike,
+  targetUserId: string | null | undefined
 ) {
-  return String(session?.goLiveStream?.targetUserId || "").trim() || null;
+  const normalizedTargetUserId = String(targetUserId || "").trim();
+  if (!normalizedTargetUserId) return null;
+  return listDiscoveredGoLiveBootstrapStreams(session).find(
+    (stream) => String(stream?.targetUserId || "").trim() === normalizedTargetUserId
+  ) || null;
 }
 
 function resolveRequestedScreenWatchTarget(
@@ -431,7 +460,10 @@ function logNativeScreenWatchStartFailed(
   }
 ) {
   const activeSharers = listActiveNativeDiscordScreenSharers(session);
-  const goLiveBootstrapTargetUserId = getDiscoveredGoLiveBootstrapTargetUserId(session);
+  const goLiveBootstrapTargetUserIds = getDiscoveredGoLiveBootstrapTargetUserIds(session);
+  const goLiveBootstrapTargetUserId = goLiveBootstrapTargetUserIds.length === 1
+    ? goLiveBootstrapTargetUserIds[0] || null
+    : null;
   runtime.store.logAction({
     kind: "voice_runtime",
     guildId,
@@ -449,7 +481,10 @@ function logNativeScreenWatchStartFailed(
       nativeActiveSharerCount: activeSharers.length,
       nativeActiveSharerUserIds: activeSharers.map((entry) => entry.userId),
       goLiveStreamUserId: goLiveBootstrapTargetUserId,
-      goLiveStreamCredentialsReady: Boolean(session?.goLiveStream?.active),
+      goLiveStreamUserIds: goLiveBootstrapTargetUserIds,
+      goLiveStreamCredentialsReady: goLiveBootstrapTargetUserIds.some((userId) =>
+        Boolean(getDiscoveredGoLiveBootstrapStreamForUser(session, userId)?.active)
+      ),
       nativeDecoderSupported: supportsNativeDiscordVideoDecode(runtime),
       runtimeMode: String(session?.mode || "").trim() || null,
       voiceChannelId: String(session?.voiceChannelId || "").trim() || null
@@ -626,8 +661,11 @@ function getDirectScreenWatchCapability(
     requesterUserId: normalizedRequesterUserId
   });
   const nativeTargetingAvailable = activeSharers.length > 0;
-  const goLiveBootstrapTargetUserId = getDiscoveredGoLiveBootstrapTargetUserId(session);
-  const goLiveBootstrapAvailable = Boolean(goLiveBootstrapTargetUserId);
+  const goLiveBootstrapTargetUserIds = getDiscoveredGoLiveBootstrapTargetUserIds(session);
+  const goLiveBootstrapTargetUserId = goLiveBootstrapTargetUserIds.length === 1
+    ? goLiveBootstrapTargetUserIds[0] || null
+    : null;
+  const goLiveBootstrapAvailable = goLiveBootstrapTargetUserIds.length > 0;
   const available = nativeTargetingAvailable || goLiveBootstrapAvailable;
 
   return {
@@ -645,7 +683,8 @@ function getDirectScreenWatchCapability(
             : targetSelection.reason,
     activeSharerCount: activeSharers.length,
     activeSharerUserIds: activeSharers.map((entry) => entry.userId),
-    goLiveStreamUserId: goLiveBootstrapTargetUserId
+    goLiveStreamUserId: goLiveBootstrapTargetUserId,
+    goLiveStreamUserIds: goLiveBootstrapTargetUserIds
   };
 }
 
@@ -791,7 +830,10 @@ async function tryStartNativeScreenWatch(
       : null;
   const normalizedTargetUserId = String(targetUserId || "").trim() || null;
   const activeSharers = listActiveNativeDiscordScreenSharers(session);
-  const goLiveTargetUserId = getDiscoveredGoLiveBootstrapTargetUserId(session);
+  const goLiveTargetUserIds = getDiscoveredGoLiveBootstrapTargetUserIds(session);
+  const requesterGoLiveTargetUserId = goLiveTargetUserIds.includes(requesterUserId)
+    ? requesterUserId
+    : null;
   const activeTargetSelection = resolveNativeDiscordScreenWatchTarget({
     session,
     requesterUserId
@@ -801,18 +843,23 @@ async function tryStartNativeScreenWatch(
         targetUserId: normalizedTargetUserId,
         reason: "explicit_requested_target"
       }
-    : goLiveTargetUserId && goLiveTargetUserId === requesterUserId
+    : requesterGoLiveTargetUserId
       ? {
-          targetUserId: goLiveTargetUserId,
+          targetUserId: requesterGoLiveTargetUserId,
           reason: "requester_discovered_discord_go_live"
         }
-      : activeTargetSelection.targetUserId
+    : activeTargetSelection.targetUserId
         ? activeTargetSelection
-        : goLiveTargetUserId && activeSharers.length <= 0
+        : goLiveTargetUserIds.length === 1 && activeSharers.length <= 0
           ? {
-              targetUserId: goLiveTargetUserId,
+              targetUserId: goLiveTargetUserIds[0] || null,
               reason: "discovered_discord_go_live"
             }
+          : goLiveTargetUserIds.length > 1 && activeSharers.length <= 0
+            ? {
+                targetUserId: null,
+                reason: "multiple_discovered_discord_go_live_streams"
+              }
           : activeTargetSelection;
   if (!targetSelection.targetUserId) {
     logNativeScreenWatchStartFailed(runtime, {
@@ -834,35 +881,24 @@ async function tryStartNativeScreenWatch(
   if (
     normalizedTargetUserId &&
     !activeSharers.some((entry) => entry.userId === normalizedTargetUserId) &&
-    goLiveTargetUserId !== normalizedTargetUserId
+    !getDiscoveredGoLiveBootstrapStreamForUser(session, normalizedTargetUserId)
   ) {
-    // The explicit target isn't sharing, but another user might be.
-    // Fall back to the Go Live bootstrap user or an active sharer instead
-    // of failing — the model's intent is "watch a stream".
-    const fallbackUserId = goLiveTargetUserId || activeTargetSelection.targetUserId || null;
-    if (fallbackUserId) {
-      targetSelection.targetUserId = fallbackUserId;
-      targetSelection.reason = goLiveTargetUserId
-        ? "explicit_target_fallback_to_go_live"
-        : "explicit_target_fallback_to_active_sharer";
-    } else {
-      logNativeScreenWatchStartFailed(runtime, {
-        guildId,
-        channelId,
-        requesterUserId,
-        session,
-        source,
-        transcript,
-        requestedTargetUserId: normalizedTargetUserId,
-        selectionReason: targetSelection.reason,
-        reason: "requested_target_not_actively_sharing"
-      });
-      return {
-        started: false,
-        reason: "requested_target_not_actively_sharing",
-        targetUserId: normalizedTargetUserId
-      };
-    }
+    logNativeScreenWatchStartFailed(runtime, {
+      guildId,
+      channelId,
+      requesterUserId,
+      session,
+      source,
+      transcript,
+      requestedTargetUserId: normalizedTargetUserId,
+      selectionReason: targetSelection.reason,
+      reason: "requested_target_not_actively_sharing"
+    });
+    return {
+      started: false,
+      reason: "requested_target_not_actively_sharing",
+      targetUserId: normalizedTargetUserId
+    };
   }
 
   if (shouldSuppressLinkFallbackDueToNativeWatch(runtime, {

@@ -569,3 +569,64 @@ test("stream discovery clears provisional Go Live target when self_stream ends b
     }
   });
 });
+
+test("stream discovery preserves multiple Go Live users instead of overwriting the first one", async () => {
+  await withTempStore(async (store) => {
+    const guildId = "guild-1";
+    const voiceChannelId = "voice-1";
+    const firstUserId = "user-1";
+    const secondUserId = "user-2";
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: null,
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanky",
+      tag: "clanky#0001"
+    };
+
+    const session = {
+      id: "session-1",
+      guildId,
+      textChannelId: "text-1",
+      voiceChannelId,
+      mode: "openai_realtime",
+      ending: false,
+      goLiveStream: createGoLiveStreamState(),
+      goLiveStreams: new Map()
+    };
+    bot.voiceSessionManager.sessions.set(guildId, session as never);
+
+    try {
+      bot.client.emit("clientReady", bot.client);
+      for (const userId of [firstUserId, secondUserId]) {
+        bot.client.emit("raw", {
+          t: "VOICE_STATE_UPDATE",
+          d: {
+            user_id: userId,
+            guild_id: guildId,
+            channel_id: voiceChannelId,
+            self_stream: true
+          }
+        });
+      }
+
+      await waitForCondition(() => session.goLiveStreams.size === 2);
+
+      assert.equal(session.goLiveStreams.size, 2);
+      assert.equal(session.goLiveStreams.has(buildStreamKey(guildId, voiceChannelId, firstUserId)), true);
+      assert.equal(session.goLiveStreams.has(buildStreamKey(guildId, voiceChannelId, secondUserId)), true);
+    } finally {
+      await bot.stop();
+    }
+  });
+});
