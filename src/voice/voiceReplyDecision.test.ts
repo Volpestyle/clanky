@@ -87,6 +87,10 @@ test("runVoiceReplyClassifier emits debug prompt/result logs when VOICE_CLASSIFI
       String(result.replyPrompts.initialUserPrompt || ""),
       /Current speaker is not currently in an active thread with you\./
     );
+    assert.doesNotMatch(
+      String(result.replyPrompts.initialUserPrompt || ""),
+      /Treat this as continuity context, not an automatic yes\./
+    );
     assert.match(String(result.replyPrompts.initialUserPrompt || ""), /Response-window eagerness: 65\/100\./);
     const debugLogs = logs.filter((entry) => entry.content === "voice_reply_classifier_debug");
     assert.equal(debugLogs.length, 2);
@@ -152,4 +156,33 @@ test("runVoiceReplyClassifier uses an OpenAI-safe token floor for bridge admissi
     (generateCalls[0]?.settings as Record<string, unknown>)?.interaction?.replyGeneration?.maxOutputTokens,
     64
   );
+});
+
+test("runVoiceReplyClassifier treats screen-share events as shared room moments", async () => {
+  const { manager } = createClassifierTestContext("YES");
+  const result = await runVoiceReplyClassifier(manager, {
+    ...buildClassifierArgs(),
+    inputKind: "event",
+    transcript: "alice started sharing their screen",
+    runtimeEventContext: {
+      category: "screen_share",
+      eventType: "share_start",
+      actorUserId: "user-1",
+      actorDisplayName: "alice",
+      actorRole: "other",
+      hasVisibleFrame: true
+    },
+    conversationContext: {
+      ...buildClassifierArgs().conversationContext,
+      attentionMode: "ACTIVE",
+      currentSpeakerActive: false
+    }
+  });
+
+  const prompt = String(result.replyPrompts.initialUserPrompt || "");
+  assert.match(prompt, /Structured event type: screen_share\.share_start/);
+  assert.match(prompt, /Visible frame attached: yes\./);
+  assert.match(prompt, /Direct address is not required here\./);
+  assert.doesNotMatch(prompt, /not clearly part of your current thread/i);
+  assert.doesNotMatch(prompt, /Treat this as continuity context, not an automatic yes\./);
 });

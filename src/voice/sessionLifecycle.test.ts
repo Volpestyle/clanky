@@ -533,3 +533,80 @@ test("bindRealtimeHandlers skips OpenAI reply addressing side-channel for pre-ge
 
   assert.equal(requestCount, 0);
 });
+
+test("bindRealtimeHandlers keeps ElevenLabs sessions alive when idle-timeout reconnect fails", async () => {
+  const runtimeLogs = [];
+  const handlerMap = new Map();
+  const manager = createVoiceTestManager();
+  let endSessionCalls = 0;
+
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.endSession = async () => {
+    endSessionCalls += 1;
+  };
+
+  const session = {
+    id: "session-elevenlabs-idle-timeout-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "elevenlabs_realtime",
+    ending: false,
+    pendingResponse: null,
+    responseDoneGraceTimer: null,
+    settingsSnapshot: createVoiceTestSettings({
+      voice: {
+        ambientReplyEagerness: 60,
+        elevenLabsRealtime: {
+          voiceId: "voice-123"
+        }
+      }
+    }),
+    realtimeClient: {
+      sessionConfig: {
+        voiceId: "voice-123",
+        model: "eleven_multilingual_v2",
+        outputFormat: "pcm_24000"
+      },
+      on(eventName, handler) {
+        handlerMap.set(eventName, handler);
+      },
+      off(eventName, handler) {
+        if (handlerMap.get(eventName) === handler) {
+          handlerMap.delete(eventName);
+        }
+      },
+      async connect() {
+        throw new Error("Timed out connecting to ElevenLabs TTS WebSocket after 10000ms.");
+      }
+    },
+    cleanupHandlers: []
+  };
+
+  manager.sessionLifecycle.bindRealtimeHandlers(session, session.settingsSnapshot);
+
+  const onErrorEvent = handlerMap.get("error_event");
+  const onSocketClosed = handlerMap.get("socket_closed");
+  assert.equal(typeof onErrorEvent, "function");
+  assert.equal(typeof onSocketClosed, "function");
+
+  onErrorEvent({ message: "input_timeout_exceeded" });
+  onSocketClosed({ code: 1000, reason: "idle timeout" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(endSessionCalls, 0);
+  assert.equal(
+    runtimeLogs.some((row) => row?.content === "elevenlabs_realtime_socket_closed_idle_timeout_reconnectable"),
+    true
+  );
+  assert.equal(
+    runtimeLogs.some((row) => row?.content?.startsWith("elevenlabs_realtime_idle_timeout_reconnect_failed:")),
+    true
+  );
+  assert.equal(
+    runtimeLogs.some((row) => row?.content === "elevenlabs_realtime_idle_timeout_reconnect_degraded"),
+    true
+  );
+});

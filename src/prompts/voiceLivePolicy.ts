@@ -4,7 +4,7 @@ type ActiveMusicGuidanceContext = {
 };
 
 export const VOICE_TINY_REPLY_POLICY_LINE =
-  "A valid spoken reply can be tiny. Do not inflate admitted turns by default.";
+  "If you speak, a short natural reply is enough.";
 
 export const ACTIVE_MUSIC_REPLY_CONTEXT_LINE =
   "Playback is live right now. If you answer without claiming the floor with media_reply_handoff, favor a quick reaction or short answer unless the moment clearly wants more.";

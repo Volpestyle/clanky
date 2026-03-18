@@ -147,8 +147,14 @@ export const DEFAULT_SETTINGS = {
       "clunky",
       "coinker",
       "crank",
+      "craigey",
+      "craigy",
       "cranker",
+      "crankey",
+      "flakey",
       "flanker",
+      "flankey",
+      "frankie",
       "hank",
       "hanker",
       "hankie",
@@ -168,10 +174,14 @@ export const DEFAULT_SETTINGS = {
       "planka",
       "plinker",
       "plinky",
+      "plakey",
+      "plakie",
       "oinky",
+      "plankey",
       "planky",
       "plonka",
-      "quaker"
+      "quaker",
+      "quakie"
     ]
   },
   persona: {

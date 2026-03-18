@@ -932,13 +932,10 @@ function buildClassifierPrompt(input: ClassifierPromptInput): {
   if (normalizedInputKind !== "event") {
     if (input.conversationContext.currentSpeakerActive) {
       parts.push("Current speaker is already in your active thread.");
-    } else if (input.conversationContext.attentionMode === "ACTIVE") {
-      parts.push("The room is active, but this speaker is not clearly part of your current thread.");
     } else {
       parts.push("Current speaker is not currently in an active thread with you.");
     }
   }
-  parts.push("Treat this as continuity context, not an automatic yes.");
 
   // Conversation recency
   if (input.conversationContext.recentAssistantReply) {
@@ -1026,7 +1023,7 @@ function buildClassifierPrompt(input: ClassifierPromptInput): {
       if (screenShareEvent.hasVisibleFrame) {
         parts.push("A visible frame is attached, so a short reaction can be appropriate.");
       }
-      parts.push("Only say YES if you have a natural brief reaction to the on-screen moment.");
+      parts.push("Direct address is not required here. Say YES when you have a natural brief reaction to a fresh on-screen moment.");
     } else {
       parts.push("A runtime event occurred. Only say YES if a brief acknowledgement would feel natural.");
     }
