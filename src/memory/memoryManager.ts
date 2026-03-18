@@ -55,6 +55,20 @@ const HYBRID_RECENT_CANDIDATE_LIMIT = 24;
 const HYBRID_MMR_LAMBDA = 0.7;
 const HYBRID_TEMPORAL_DECAY_HALF_LIFE_DAYS = 90;
 const HYBRID_TEMPORAL_DECAY_MIN_MULTIPLIER = 0.2;
+const MAX_USER_PROFILE_FACTS = 20;
+const MAX_USER_GUIDANCE_FACTS = 8;
+const MAX_GUILD_SELF_FACTS = 10;
+const MAX_GUILD_LORE_FACTS = 10;
+const MAX_GUILD_GUIDANCE_FACTS = 12;
+const MAX_PROFILE_GUIDANCE_FACTS = 24;
+const MAX_PRIMARY_PARTICIPANT_FACTS = 12;
+const MAX_SECONDARY_PARTICIPANT_FACTS = 6;
+const MAX_SECONDARY_RELEVANT_FACTS = 3;
+const MAX_CONVERSATION_QUERY_CHARS = 320;
+const MAX_BEHAVIORAL_QUERY_CHARS = 420;
+const MAX_SECTION_FACTS = 6;
+const MAX_PEOPLE_FACTS_PER_SUBJECT = 6;
+const MAX_DIRECTIVE_EVIDENCE_CHARS = 220;
 
 function sortProfileFacts<T extends MemoryFactRow>(rows: T[]) {
   return [...(Array.isArray(rows) ? rows : [])].sort((left, right) => {
@@ -349,8 +363,8 @@ export class MemoryManager {
     });
 
     return {
-      userFacts: sortProfileFacts(userFacts).slice(0, 20),
-      guidanceFacts: decoratePromptFactRows(guidanceFacts, { [normalizedUserId]: normalizedUserId }).slice(0, 8)
+      userFacts: sortProfileFacts(userFacts).slice(0, MAX_USER_PROFILE_FACTS),
+      guidanceFacts: decoratePromptFactRows(guidanceFacts, { [normalizedUserId]: normalizedUserId }).slice(0, MAX_USER_GUIDANCE_FACTS)
     };
   }
 
@@ -378,14 +392,14 @@ export class MemoryManager {
     return {
       selfFacts: sortProfileFacts(
         regularFacts.filter((row) => String(row.subject || "").trim() === SELF_SUBJECT)
-      ).slice(0, 10),
+      ).slice(0, MAX_GUILD_SELF_FACTS),
       loreFacts: sortProfileFacts(
         regularFacts.filter((row) => String(row.subject || "").trim() === LORE_SUBJECT)
-      ).slice(0, 10),
+      ).slice(0, MAX_GUILD_LORE_FACTS),
       guidanceFacts: decoratePromptFactRows(guidanceFacts, {
         [SELF_SUBJECT]: "Bot",
         [LORE_SUBJECT]: "Shared lore"
-      }).slice(0, 12)
+      }).slice(0, MAX_GUILD_GUIDANCE_FACTS)
     };
   }
 
@@ -461,22 +475,22 @@ export class MemoryManager {
         rows.filter((row) => String(row?.fact_type || "").trim() === GUIDANCE_FACT_TYPE),
         subjectLabels
       )
-    ).slice(0, 24);
+    ).slice(0, MAX_PROFILE_GUIDANCE_FACTS);
     const participants = normalizedParticipantIds.map((participantId) => {
       const participantFacts = regularFacts.filter((row) => String(row?.subject || "").trim() === participantId);
       return {
         userId: participantId,
         displayName: subjectLabels[participantId],
         isPrimary: participantId === normalizedUserId,
-        facts: participantFacts.slice(0, participantId === normalizedUserId ? 12 : 6)
+        facts: participantFacts.slice(0, participantId === normalizedUserId ? MAX_PRIMARY_PARTICIPANT_FACTS : MAX_SECONDARY_PARTICIPANT_FACTS)
       };
     });
     const primaryProfile = participants.find((entry) => entry.isPrimary) || participants[0] || null;
-    const selfFacts = regularFacts.filter((row) => String(row?.subject || "").trim() === SELF_SUBJECT).slice(0, 10);
-    const loreFacts = regularFacts.filter((row) => String(row?.subject || "").trim() === LORE_SUBJECT).slice(0, 10);
+    const selfFacts = regularFacts.filter((row) => String(row?.subject || "").trim() === SELF_SUBJECT).slice(0, MAX_GUILD_SELF_FACTS);
+    const loreFacts = regularFacts.filter((row) => String(row?.subject || "").trim() === LORE_SUBJECT).slice(0, MAX_GUILD_LORE_FACTS);
     const secondaryFacts = participants
       .filter((entry) => !entry.isPrimary)
-      .flatMap((entry) => entry.facts.slice(0, 3));
+      .flatMap((entry) => entry.facts.slice(0, MAX_SECONDARY_RELEVANT_FACTS));
 
     return {
       participantProfiles: participants.map((entry) => ({
@@ -511,7 +525,7 @@ export class MemoryManager {
     limit?: number;
   }) {
     const normalizedGuildId = String(guildId || "").trim();
-    const normalizedQueryText = String(queryText || "").replace(/\s+/g, " ").trim().slice(0, 420);
+    const normalizedQueryText = String(queryText || "").replace(/\s+/g, " ").trim().slice(0, MAX_BEHAVIORAL_QUERY_CHARS);
     if (!normalizedGuildId || !normalizedQueryText) return [];
 
     const subjectIds = [
@@ -605,7 +619,7 @@ export class MemoryManager {
     after?: number;
   }) {
     const normalizedGuildId = String(guildId || "").trim();
-    const normalizedQuery = String(queryText || "").replace(/\s+/g, " ").trim().slice(0, 320);
+    const normalizedQuery = String(queryText || "").replace(/\s+/g, " ").trim().slice(0, MAX_CONVERSATION_QUERY_CHARS);
     if (!normalizedGuildId || !normalizedQuery) return [];
 
     try {
@@ -1387,14 +1401,14 @@ export class MemoryManager {
   async buildMemoryMarkdown({ guildId = null }: { guildId?: string | null } = {}) {
     const normalizedGuildId = String(guildId || "").trim() || null;
     const peopleSection = this.buildPeopleSection(normalizedGuildId);
-    const selfSection = this.buildSelfSection(6, normalizedGuildId);
+    const selfSection = this.buildSelfSection(MAX_SECTION_FACTS, normalizedGuildId);
     const recentDailyEntries = await this.getRecentDailyEntries({
       days: 3,
       maxEntries: 120,
       guildId: normalizedGuildId
     });
     const highlightsSection = buildHighlightsSection(recentDailyEntries, 24);
-    const loreSection = this.buildLoreSection(6, normalizedGuildId);
+    const loreSection = this.buildLoreSection(MAX_SECTION_FACTS, normalizedGuildId);
     const dailyFiles = await this.getRecentDailyFiles(5);
     const dailyFilesLine = dailyFiles.length
       ? dailyFiles.map((filePath) => `memory/${path.basename(filePath)}`).join(", ")
@@ -1523,7 +1537,7 @@ export class MemoryManager {
             .map((row) => formatTypedFactForMemory(row.fact, row.fact_type))
             .filter(Boolean)
         )
-      ].slice(0, 6);
+      ].slice(0, MAX_PEOPLE_FACTS_PER_SUBJECT);
       if (!cleaned.length) continue;
       const scopeLabel = normalizedGuildId ? "" : subjectRow.guild_id ? `[guild:${subjectRow.guild_id}] ` : "";
       peopleLines.push(`- ${scopeLabel}${subjectRow.subject}: ${cleaned.join(" | ")}`);
@@ -1550,7 +1564,7 @@ export class MemoryManager {
       const rows = this.store.getFactsForSubjectsScoped({
         guildId,
         subjectIds,
-        perSubjectLimit: 6,
+        perSubjectLimit: MAX_PEOPLE_FACTS_PER_SUBJECT,
         totalLimit: Math.min(1200, Math.max(200, subjectIds.length * 10))
       });
 
@@ -1560,7 +1574,7 @@ export class MemoryManager {
         if (!scopedGuildId || !scopedSubjectId) continue;
         const scopedSubjectKey = `${scopedGuildId}::${scopedSubjectId}`;
         const existing = factsByScopedSubject.get(scopedSubjectKey) || [];
-        if (existing.length >= 6) continue;
+        if (existing.length >= MAX_PEOPLE_FACTS_PER_SUBJECT) continue;
         existing.push(row);
         factsByScopedSubject.set(scopedSubjectKey, existing);
       }
@@ -1569,7 +1583,7 @@ export class MemoryManager {
     return factsByScopedSubject;
   }
 
-  buildSelfSection(maxItems = 6, guildId: string | null = null) {
+  buildSelfSection(maxItems = MAX_SECTION_FACTS, guildId: string | null = null) {
     const normalizedGuildId = String(guildId || "").trim() || null;
     const rows = this.store.getFactsForSubjectScoped(
       SELF_SUBJECT,
@@ -1590,7 +1604,7 @@ export class MemoryManager {
     return durableSelfLines.slice(0, Math.max(1, maxItems));
   }
 
-  buildLoreSection(maxItems = 6, guildId: string | null = null) {
+  buildLoreSection(maxItems = MAX_SECTION_FACTS, guildId: string | null = null) {
     const normalizedGuildId = String(guildId || "").trim() || null;
     const rows = this.store.getFactsForSubjectScoped(
       LORE_SUBJECT,
@@ -1683,7 +1697,7 @@ export class MemoryManager {
 
     const factText = normalizeStoredFactText(cleaned);
     const normalizedEvidenceText = evidenceText
-      ? sanitizeInline(evidenceText, 220)
+      ? sanitizeInline(evidenceText, MAX_DIRECTIVE_EVIDENCE_CHARS)
       : normalizeEvidenceText(sourceText, sourceText);
     const normalizedConfidence = clamp01(
       Number.isFinite(Number(confidence)) ? Number(confidence) : 0.72,
