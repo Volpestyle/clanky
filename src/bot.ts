@@ -137,12 +137,18 @@ import { isCancelIntent } from "./tools/cancelDetection.ts";
 import { maybeReplyToMessagePipeline } from "./bot/replyPipeline.ts";
 import { SubAgentSessionManager } from "./agents/subAgentSession.ts";
 import {
+  BackgroundTaskRunner,
+  buildCodeTaskScopeKey,
+  type BackgroundTask
+} from "./agents/backgroundTaskRunner.ts";
+import {
   getMemorySettings,
   getBotName,
   getReplyPermissions,
   getActivitySettings,
   isDevTaskEnabled
 } from "./settings/agentStack.ts";
+import { buildCodeTaskResultPrompt } from "./prompts/promptText.ts";
 
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
 const TEXT_CANCEL_FALLBACK_REACTION = "🛑";
@@ -304,6 +310,7 @@ export class ClankerBot {
   activeReplies: ActiveReplyRegistry;
   activeBrowserTasks: BrowserTaskRegistry;
   subAgentSessions: SubAgentSessionManager;
+  backgroundTaskRunner: BackgroundTaskRunner;
   imageCaptionCache: ImageCaptionCache;
   streamDiscovery: StreamDiscoveryState;
   private streamDiscoveryCleanup: (() => void) | null;
@@ -349,6 +356,10 @@ export class ClankerBot {
       maxSessions: Number(appConfig?.subAgentOrchestration?.maxConcurrentSessions) || 20
     });
     this.subAgentSessions.startSweep();
+    this.backgroundTaskRunner = new BackgroundTaskRunner({
+      store: this.store,
+      sessionManager: this.subAgentSessions
+    });
     this.imageCaptionCache = new ImageCaptionCache({
       maxEntries: 200,
       defaultTtlMs: 60 * 60 * 1000 // 1 hour
@@ -398,6 +409,8 @@ export class ClankerBot {
       const sessionsRuntime = buildSubAgentSessionsRuntimeForAgentTasks(voiceAgentContext);
       return sessionsRuntime.createCodeSession(opts) ?? null;
     };
+    this.voiceSessionManager.dispatchBackgroundCodeTask = (payload) =>
+      this.dispatchBackgroundCodeTask(payload);
     this.voiceSessionManager.subAgentSessions = this.subAgentSessions;
 
     this.registerEvents();
@@ -1010,6 +1023,7 @@ export class ClankerBot {
         console.warn("[ClankerBot] Failed to close browser sessions during shutdown:", error);
       }
     }
+    this.backgroundTaskRunner.close();
     await this.client.destroy();
   }
 
@@ -1220,6 +1234,234 @@ export class ClankerBot {
     return queue.length;
   }
 
+  dispatchBackgroundCodeTask({
+    session,
+    task,
+    role,
+    guildId,
+    channelId,
+    userId = null,
+    triggerMessageId = null,
+    source = "reply_tool_code_task",
+    progressReports
+  }: {
+    session: import("./agents/subAgentSession.ts").SubAgentSession;
+    task: string;
+    role: import("./agents/codeAgent.ts").CodeAgentRole;
+    guildId: string;
+    channelId: string;
+    userId?: string | null;
+    triggerMessageId?: string | null;
+    source?: string;
+    progressReports?: {
+      enabled?: boolean;
+      intervalMs?: number;
+      maxReportsPerTask?: number;
+    };
+  }) {
+    const scopeKey = buildCodeTaskScopeKey({ guildId, channelId });
+    return this.backgroundTaskRunner.dispatch({
+      session,
+      input: task,
+      role,
+      guildId,
+      channelId,
+      userId,
+      triggerMessageId,
+      scopeKey,
+      source,
+      progressReports: {
+        enabled: progressReports?.enabled !== false,
+        intervalMs: Number(progressReports?.intervalMs) || 60_000,
+        maxReportsPerTask: Number(progressReports?.maxReportsPerTask) || 5
+      },
+      onProgress: async (taskSnapshot, recentEvents) => {
+        await this.deliverAsyncTaskProgress(taskSnapshot, recentEvents);
+      },
+      onComplete: async (taskSnapshot) => {
+        await this.deliverAsyncTaskResult(taskSnapshot);
+      }
+    });
+  }
+
+  async deliverAsyncTaskResult(task: BackgroundTask) {
+    if (!task?.channelId || !task?.guildId) return false;
+    const mode = task.status === "cancelled" ? "cancelled" : "completion";
+    const durationMs = Math.max(0, Number(task.completedAt || Date.now()) - Number(task.startedAt || Date.now()));
+    const rawResultText = String(task.result?.text || "").trim();
+    const fallbackResultText = String(task.errorMessage || "").trim();
+    const resultText = (rawResultText || fallbackResultText || "Task finished with no text output.").slice(0, 6000);
+    const promptText = buildCodeTaskResultPrompt({
+      mode,
+      sessionId: task.sessionId,
+      role: task.role,
+      status: task.status,
+      durationMs,
+      costUsd: Number(task.result?.costUsd || 0),
+      resultText,
+      filesTouched: task.progress.fileEdits,
+      triggerMessageId: task.triggerMessageId
+    });
+    const source = String(task.source || "")
+      .trim()
+      .toLowerCase();
+    const fromVoiceRealtime = source.startsWith("voice_realtime_tool_code_task");
+    if (fromVoiceRealtime) {
+      const deliveredToVoiceRealtime = this.voiceSessionManager.requestRealtimeCodeTaskFollowup({
+        guildId: task.guildId,
+        channelId: task.channelId,
+        prompt: promptText,
+        userId: task.userId,
+        source:
+          mode === "cancelled"
+            ? "voice_realtime_code_task_cancelled_followup"
+            : "voice_realtime_code_task_result_followup"
+      });
+      if (deliveredToVoiceRealtime) {
+        return true;
+      }
+    }
+    return await this.enqueueCodeTaskSyntheticEvent({
+      task,
+      source: "code_task_result",
+      promptText,
+      forceRespond: true
+    });
+  }
+
+  async deliverAsyncTaskProgress(task: BackgroundTask, recentEvents: import("./agents/subAgentSession.ts").SubAgentProgressEvent[]) {
+    if (!task?.channelId || !task?.guildId) return false;
+    if (!Array.isArray(recentEvents) || recentEvents.length <= 0) return false;
+    const elapsedMs = Math.max(0, Date.now() - Number(task.startedAt || Date.now()));
+    const promptText = buildCodeTaskResultPrompt({
+      mode: "progress",
+      sessionId: task.sessionId,
+      role: task.role,
+      status: task.status,
+      durationMs: elapsedMs,
+      costUsd: Number(task.result?.costUsd || 0),
+      filesTouched: task.progress.fileEdits,
+      triggerMessageId: task.triggerMessageId,
+      recentEvents: recentEvents.map((event) => ({ summary: event.summary }))
+    });
+    return await this.enqueueCodeTaskSyntheticEvent({
+      task,
+      source: "code_task_progress",
+      promptText,
+      forceRespond: true
+    });
+  }
+
+  private async enqueueCodeTaskSyntheticEvent({
+    task,
+    source,
+    promptText,
+    forceRespond
+  }: {
+    task: BackgroundTask;
+    source: string;
+    promptText: string;
+    forceRespond: boolean;
+  }) {
+    const channel = this.client.channels.cache.get(String(task.channelId || ""));
+    if (!isSendableChannel(channel)) {
+      this.store.logAction({
+        kind: "bot_error",
+        guildId: task.guildId || null,
+        channelId: task.channelId || null,
+        userId: task.userId || null,
+        content: "code_task_synthetic_delivery_channel_unavailable",
+        metadata: {
+          taskId: task.id,
+          sessionId: task.sessionId,
+          source
+        }
+      });
+      return false;
+    }
+
+    const guild = this.client.guilds.cache.get(String(task.guildId || ""));
+    if (!guild) {
+      this.store.logAction({
+        kind: "bot_error",
+        guildId: task.guildId || null,
+        channelId: task.channelId || null,
+        userId: task.userId || null,
+        content: "code_task_synthetic_delivery_guild_unavailable",
+        metadata: {
+          taskId: task.id,
+          sessionId: task.sessionId,
+          source
+        }
+      });
+      return false;
+    }
+
+    const requesterUserId = String(task.userId || this.client.user?.id || "system").trim() || "system";
+    const requesterNameFromGuild = guild.members?.cache?.get(requesterUserId)?.displayName;
+    const requesterNameFromUser = this.client.users?.cache?.get(requesterUserId)?.username;
+    const requesterName = String(requesterNameFromGuild || requesterNameFromUser || "Requester");
+    const syntheticId = `${source}-${task.id}-${Date.now()}`;
+    const syntheticTimestamp = Date.now();
+
+    this.store.recordMessage({
+      messageId: syntheticId,
+      createdAt: syntheticTimestamp,
+      guildId: String(task.guildId || ""),
+      channelId: String(task.channelId || ""),
+      authorId: requesterUserId,
+      authorName: requesterName,
+      isBot: false,
+      content: promptText,
+      referencedMessageId: task.triggerMessageId || null
+    });
+
+    const syntheticMessage = {
+      id: syntheticId,
+      channelId: String(task.channelId || ""),
+      guildId: String(task.guildId || ""),
+      guild,
+      channel,
+      content: promptText,
+      createdTimestamp: syntheticTimestamp,
+      author: {
+        id: requesterUserId,
+        username: requesterName,
+        bot: false
+      },
+      member: {
+        displayName: requesterName
+      },
+      mentions: { users: new Map(), repliedUser: null },
+      reference: task.triggerMessageId
+        ? { messageId: task.triggerMessageId }
+        : null,
+      referencedMessage: null,
+      attachments: new Map()
+    };
+
+    const queued = this.enqueueReplyJob({
+      source,
+      message: syntheticMessage,
+      forceRespond
+    });
+    this.store.logAction({
+      kind: queued ? "text_runtime" : "bot_error",
+      guildId: String(task.guildId || ""),
+      channelId: String(task.channelId || ""),
+      userId: requesterUserId,
+      content: queued ? "code_task_synthetic_delivery_queued" : "code_task_synthetic_delivery_queue_rejected",
+      metadata: {
+        taskId: task.id,
+        sessionId: task.sessionId,
+        source,
+        forceRespond: Boolean(forceRespond),
+        syntheticMessageId: syntheticId
+      }
+    });
+    return queued;
+  }
+
   async acknowledgeTextCancellation({
     message,
     settings,
@@ -1325,8 +1567,21 @@ export class ClankerBot {
         browserScopeKey,
         "User requested cancellation via text"
       );
+      const codeTaskScopeKey = buildCodeTaskScopeKey({
+        guildId: message.guildId,
+        channelId: message.channelId
+      });
+      const cancelledBackgroundCodeTaskCount = this.backgroundTaskRunner.cancelByScope(
+        codeTaskScopeKey,
+        "User requested cancellation via text"
+      );
       const cancelledQueuedReplyCount = this.clearQueuedReplies(message.channelId);
-      if (cancelledReplyCount > 0 || cancelledQueuedReplyCount > 0 || browserCancelled) {
+      if (
+        cancelledReplyCount > 0 ||
+        cancelledQueuedReplyCount > 0 ||
+        browserCancelled ||
+        cancelledBackgroundCodeTaskCount > 0
+      ) {
         await this.acknowledgeTextCancellation({
           message,
           settings,

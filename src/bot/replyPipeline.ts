@@ -1017,6 +1017,9 @@ async function executeReplyLlm(
     memory: bot.memory,
     store: bot.store,
     subAgentSessions: bot.buildSubAgentSessionsRuntime(),
+    backgroundCodeTasks: {
+      dispatch: (args) => bot.dispatchBackgroundCodeTask(args)
+    },
     voiceSession: activeVoiceCallbacks || undefined,
     voiceJoin: Boolean(getVoiceSettings(settings).enabled) && bot.voiceSessionManager
       ? async () => {

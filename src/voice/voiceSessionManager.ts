@@ -613,6 +613,7 @@ export class VoiceSessionManager {
   // is available on the voice_realtime surface.
   createCodeAgentSession: VoiceToolCallManager["createCodeAgentSession"];
   runModelRequestedCodeTask: VoiceToolCallManager["runModelRequestedCodeTask"];
+  dispatchBackgroundCodeTask: VoiceToolCallManager["dispatchBackgroundCodeTask"];
   subAgentSessions: VoiceToolCallManager["subAgentSessions"];
 
   constructor({
@@ -648,6 +649,7 @@ export class VoiceSessionManager {
     this.streamDiscovery = streamDiscovery || null;
     this.createCodeAgentSession = null;
     this.runModelRequestedCodeTask = null;
+    this.dispatchBackgroundCodeTask = null;
     this.subAgentSessions = null;
     this.sessions = new Map();
     this.pendingSessionGuildIds = new Set();
@@ -3114,7 +3116,8 @@ export class VoiceSessionManager {
     outputLeaseMode = null,
     latencyContext = null,
     utteranceText = null,
-    musicWakeRefreshAfterSpeech = false
+    musicWakeRefreshAfterSpeech = false,
+    maxPromptChars = STT_REPLY_MAX_CHARS + 420
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
@@ -3129,10 +3132,14 @@ export class VoiceSessionManager {
       return false;
     }
 
+    const promptCharCap = Math.max(
+      STT_REPLY_MAX_CHARS,
+      Math.floor(Number(maxPromptChars) || (STT_REPLY_MAX_CHARS + 420))
+    );
     const utterancePrompt = String(prompt || "")
       .replace(/\s+/g, " ")
       .trim()
-      .slice(0, STT_REPLY_MAX_CHARS + 420);
+      .slice(0, promptCharCap);
     if (!utterancePrompt) return false;
     const normalizedInterruptionPolicy = this.resolveReplyInterruptionPolicy({
       session,
@@ -3242,6 +3249,60 @@ export class VoiceSessionManager {
       utteranceText: normalizedUtteranceText,
       musicWakeRefreshAfterSpeech
     });
+  }
+
+  requestRealtimeCodeTaskFollowup({
+    guildId,
+    channelId,
+    prompt,
+    userId = null,
+    source = "voice_realtime_code_task_followup"
+  }: {
+    guildId?: string | null;
+    channelId?: string | null;
+    prompt?: string | null;
+    userId?: string | null;
+    source?: string | null;
+  } = {}) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) return false;
+    const session = this.getSession(normalizedGuildId);
+    if (!session || session.ending) return false;
+
+    const normalizedChannelId = String(channelId || "").trim();
+    const sessionChannelId = String(session.textChannelId || "").trim();
+    if (normalizedChannelId && sessionChannelId && sessionChannelId !== normalizedChannelId) {
+      return false;
+    }
+
+    const normalizedPrompt = String(prompt || "").trim();
+    if (!normalizedPrompt) return false;
+
+    const delivered = this.requestRealtimePromptUtterance({
+      session,
+      prompt: normalizedPrompt,
+      userId: String(userId || "").trim() || null,
+      source: String(source || "voice_realtime_code_task_followup"),
+      utteranceText: null,
+      maxPromptChars: 7_000
+    });
+
+    this.store.logAction({
+      kind: delivered ? "voice_runtime" : "voice_error",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: String(userId || "").trim() || null,
+      content: delivered
+        ? "realtime_async_code_task_followup_enqueued"
+        : "realtime_async_code_task_followup_skipped",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "voice_realtime_code_task_followup"),
+        promptChars: normalizedPrompt.length
+      }
+    });
+
+    return delivered;
   }
 
   requestRealtimeTextUtterance({

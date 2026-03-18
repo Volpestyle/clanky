@@ -8,7 +8,7 @@ import {
   type ClaudeCliStreamSessionLike
 } from "../llm/llmClaudeCode.ts";
 import { runCodexTask } from "../llm/llmCodex.ts";
-import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
+import type { SubAgentRunTurnOptions, SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
 import { generateSessionId } from "./subAgentSession.ts";
 import { CodexAgentSession, getActiveCodexAgentTaskCount } from "./codexAgent.ts";
 import { CodexCliAgentSession, getActiveCodexCliAgentTaskCount } from "./codexCliAgent.ts";
@@ -126,6 +126,15 @@ interface CodeAgentConfig {
   maxBufferBytes: number;
   maxTasksPerHour: number;
   maxParallelTasks: number;
+  asyncDispatch: {
+    enabled: boolean;
+    thresholdMs: number;
+    progressReports: {
+      enabled: boolean;
+      intervalMs: number;
+      maxReportsPerTask: number;
+    };
+  };
 }
 
 function getPreferredWorkerForRole(
@@ -179,7 +188,46 @@ export function resolveCodeAgentConfig(
   const maxBufferBytes = clamp(Number(primaryWorkerConfig?.maxBufferBytes) || 2 * 1024 * 1024, 4096, 10 * 1024 * 1024);
   const maxTasksPerHour = clamp(Number(primaryWorkerConfig?.maxTasksPerHour) || 10, 1, 500);
   const maxParallelTasks = clamp(Number(primaryWorkerConfig?.maxParallelTasks) || 2, 1, 32);
-  return { role, worker: preferredWorker, cwd, provider, model, codexModel, codexCliModel, maxTurns, timeoutMs, maxBufferBytes, maxTasksPerHour, maxParallelTasks };
+  const asyncDispatchEnabled = primaryWorkerConfig?.asyncDispatch?.enabled !== false;
+  const asyncDispatchThresholdMs = clamp(
+    Number(primaryWorkerConfig?.asyncDispatch?.thresholdMs) || 0,
+    0,
+    1_800_000
+  );
+  const asyncDispatchProgressEnabled = primaryWorkerConfig?.asyncDispatch?.progressReports?.enabled !== false;
+  const asyncDispatchProgressIntervalMs = clamp(
+    Number(primaryWorkerConfig?.asyncDispatch?.progressReports?.intervalMs) || 60_000,
+    10_000,
+    1_800_000
+  );
+  const asyncDispatchMaxReportsPerTask = clamp(
+    Number(primaryWorkerConfig?.asyncDispatch?.progressReports?.maxReportsPerTask) || 5,
+    0,
+    20
+  );
+  return {
+    role,
+    worker: preferredWorker,
+    cwd,
+    provider,
+    model,
+    codexModel,
+    codexCliModel,
+    maxTurns,
+    timeoutMs,
+    maxBufferBytes,
+    maxTasksPerHour,
+    maxParallelTasks,
+    asyncDispatch: {
+      enabled: asyncDispatchEnabled,
+      thresholdMs: asyncDispatchThresholdMs,
+      progressReports: {
+        enabled: asyncDispatchProgressEnabled,
+        intervalMs: asyncDispatchProgressIntervalMs,
+        maxReportsPerTask: asyncDispatchMaxReportsPerTask
+      }
+    }
+  };
 }
 
 function resolveCodexAgentModel(model: string, costProvider: "openai" | "openai-oauth"): string {
@@ -462,7 +510,7 @@ class CodeAgentSession implements SubAgentSession {
     });
   }
 
-  async runTurn(input: string, options: { signal?: AbortSignal } = {}): Promise<SubAgentTurnResult> {
+  async runTurn(input: string, options: SubAgentRunTurnOptions = {}): Promise<SubAgentTurnResult> {
     if (this.status === "cancelled" || this.status === "error") {
       return {
         text: `Session is ${this.status} and cannot accept new turns.`,
@@ -490,7 +538,8 @@ class CodeAgentSession implements SubAgentSession {
       const result = await this.streamSession.run({
         input: stdinPayload,
         timeoutMs: this.timeoutMs,
-        signal: turnSignal
+        signal: turnSignal,
+        onEvent: options.onProgress
       });
 
       const parsed = parseClaudeCodeStreamOutput(result.stdout);

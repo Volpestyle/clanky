@@ -3,7 +3,7 @@ import type { ImageInput } from "../llm/serviceShared.ts";
 import type { BrowserManager } from "../services/BrowserManager.ts";
 import { BROWSER_AGENT_TOOL_DEFINITIONS, executeBrowserTool } from "../tools/browserTools.ts";
 import { isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
-import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
+import type { SubAgentRunTurnOptions, SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
 import { generateSessionId } from "./subAgentSession.ts";
 
 const BROWSE_AGENT_TOOL_RESULT_TRUNCATE_LEN = 800;
@@ -380,7 +380,7 @@ export class BrowserAgentSession implements SubAgentSession {
     return this.sessionKey;
   }
 
-  async runTurn(input: string, options: { signal?: AbortSignal } = {}): Promise<SubAgentTurnResult> {
+  async runTurn(input: string, options: SubAgentRunTurnOptions = {}): Promise<SubAgentTurnResult> {
     if (this.status === "cancelled" || this.status === "error" || this.status === "completed") {
       return {
         text: `Session is ${this.status} and cannot accept new turns.`,

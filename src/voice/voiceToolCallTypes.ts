@@ -70,6 +70,24 @@ export type VoiceToolCallManager = Pick<
     userId: string | null;
     source: string;
   }) => SubAgentInteractiveSession | null | undefined) | null;
+  dispatchBackgroundCodeTask?: ((args: {
+    session: SubAgentInteractiveSession;
+    task: string;
+    role: CodeAgentRole;
+    guildId: string;
+    channelId: string;
+    userId?: string | null;
+    triggerMessageId?: string | null;
+    source?: string;
+    progressReports?: {
+      enabled?: boolean;
+      intervalMs?: number;
+      maxReportsPerTask?: number;
+    };
+  }) => {
+    id: string;
+    sessionId: string;
+  }) | null;
   runModelRequestedCodeTask?: ((args: {
     settings?: VoiceRealtimeToolSettings | null;
     task: string;

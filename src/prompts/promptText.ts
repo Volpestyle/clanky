@@ -718,3 +718,95 @@ export function buildAutomationPrompt({
 
   return parts.join("\n\n");
 }
+
+function formatCodeTaskDuration(durationMs: number) {
+  const boundedMs = Math.max(0, Math.floor(Number(durationMs) || 0));
+  const totalSeconds = Math.floor(boundedMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds}s`;
+  return `${minutes}m ${seconds}s`;
+}
+
+export function buildCodeTaskResultPrompt({
+  mode = "completion",
+  sessionId,
+  role = "implementation",
+  status = "completed",
+  durationMs = 0,
+  costUsd = 0,
+  resultText = "",
+  filesTouched = [],
+  triggerMessageId = null,
+  recentEvents = []
+}: {
+  mode?: "completion" | "progress" | "cancelled";
+  sessionId: string;
+  role?: string;
+  status?: string;
+  durationMs?: number;
+  costUsd?: number;
+  resultText?: string;
+  filesTouched?: string[];
+  triggerMessageId?: string | null;
+  recentEvents?: Array<{ summary?: string | null }>;
+}) {
+  const normalizedMode = mode === "progress" ? "progress" : mode === "cancelled" ? "cancelled" : "completion";
+  const lines: string[] = [];
+
+  if (normalizedMode === "progress") {
+    lines.push("[CODE TASK PROGRESS]");
+  } else if (normalizedMode === "cancelled") {
+    lines.push("[CODE TASK CANCELLED]");
+  } else {
+    lines.push("[CODE TASK COMPLETED]");
+  }
+
+  lines.push(`Session: ${String(sessionId || "").trim() || "unknown"}`);
+  lines.push(`Role: ${String(role || "implementation").trim() || "implementation"}`);
+  lines.push(`Status: ${String(status || "").trim() || "unknown"}`);
+  lines.push(`Duration: ${formatCodeTaskDuration(durationMs)}`);
+  if (Number(costUsd || 0) > 0) {
+    lines.push(`Cost: $${Number(costUsd || 0).toFixed(4)}`);
+  }
+  if (triggerMessageId) {
+    lines.push(`Requested via message: ${String(triggerMessageId).trim()}`);
+  }
+
+  const normalizedFilesTouched = Array.isArray(filesTouched)
+    ? filesTouched.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
+  if (normalizedFilesTouched.length > 0) {
+    lines.push(`Files touched: ${normalizedFilesTouched.join(", ")}`);
+  }
+
+  if (normalizedMode === "progress") {
+    const items = Array.isArray(recentEvents)
+      ? recentEvents
+        .map((event) => String(event?.summary || "").trim())
+        .filter(Boolean)
+        .slice(-6)
+      : [];
+    if (items.length > 0) {
+      lines.push("Recent activity:");
+      for (const item of items) {
+        lines.push(`- ${item}`);
+      }
+    }
+    lines.push("");
+    lines.push("This is a progress update for an active async code task.");
+    lines.push("Compose a brief natural update for the requester, or output [SKIP] if unnecessary.");
+    return lines.join("\n");
+  }
+
+  const normalizedResultText = String(resultText || "").trim();
+  if (normalizedResultText) {
+    lines.push("");
+    lines.push("Result:");
+    lines.push(normalizedResultText);
+  }
+  lines.push("");
+  lines.push("This is an async code task completion event, not a chat message.");
+  lines.push("Compose a natural follow-up for the user who requested this task.");
+  return lines.join("\n");
+}

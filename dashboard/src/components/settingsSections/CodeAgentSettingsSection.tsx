@@ -183,6 +183,75 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
             </p>
           </div>
 
+          <h4 className="text-xs text-muted-foreground tracking-wider mt-4 mb-2">ASYNC DISPATCH</h4>
+          <div className="toggles">
+            <label>
+              <input
+                type="checkbox"
+                checked={Boolean(form.codeAgentAsyncDispatchEnabled)}
+                onChange={set("codeAgentAsyncDispatchEnabled")}
+              />
+              Enable async code task dispatch
+            </label>
+          </div>
+          {Boolean(form.codeAgentAsyncDispatchEnabled) && (
+            <>
+              <div className="field">
+                <label htmlFor="code-agent-async-threshold">Async threshold (ms)</label>
+                <input
+                  id="code-agent-async-threshold"
+                  type="number"
+                  min={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchThresholdMs.min}
+                  max={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchThresholdMs.max}
+                  step="1000"
+                  value={form.codeAgentAsyncDispatchThresholdMs}
+                  onChange={set("codeAgentAsyncDispatchThresholdMs")}
+                />
+                <p className="status-msg" role="status">
+                  Set to <code>0</code> to always dispatch in background.
+                </p>
+              </div>
+              <div className="toggles">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(form.codeAgentAsyncProgressReportsEnabled)}
+                    onChange={set("codeAgentAsyncProgressReportsEnabled")}
+                  />
+                  Enable periodic progress reports
+                </label>
+              </div>
+              {Boolean(form.codeAgentAsyncProgressReportsEnabled) && (
+                <div className="split">
+                  <div>
+                    <label htmlFor="code-agent-async-progress-interval">Progress interval (ms)</label>
+                    <input
+                      id="code-agent-async-progress-interval"
+                      type="number"
+                      min={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchProgressIntervalMs.min}
+                      max={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchProgressIntervalMs.max}
+                      step="1000"
+                      value={form.codeAgentAsyncProgressIntervalMs}
+                      onChange={set("codeAgentAsyncProgressIntervalMs")}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="code-agent-async-max-reports">Max reports per task</label>
+                    <input
+                      id="code-agent-async-max-reports"
+                      type="number"
+                      min={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.min}
+                      max={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.max}
+                      step="1"
+                      value={form.codeAgentAsyncMaxReportsPerTask}
+                      onChange={set("codeAgentAsyncMaxReportsPerTask")}
+                    />
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
           <h4 className="text-xs text-muted-foreground tracking-wider mt-4 mb-2">DEV TEAM ROLES</h4>
           <div className="split">
             <div>

@@ -6,6 +6,7 @@ import {
 import { sleepMs } from "../normalization/time.ts";
 import { estimateUsdCost } from "./pricing.ts";
 import { createAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
+import type { SubAgentProgressEvent } from "../agents/subAgentSession.ts";
 
 const CODEX_POLL_INTERVAL_MS = 1200;
 const CODEX_PENDING_STATUSES = new Set(["queued", "in_progress"]);
@@ -45,6 +46,7 @@ interface RunCodexSessionTurnOptions {
   costProvider?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  onProgress?: (event: SubAgentProgressEvent) => void;
 }
 
 function normalizeStatus(status: unknown): string {
@@ -78,16 +80,29 @@ async function waitForTerminalResponse({
   openai,
   initialResponse,
   timeoutMs,
-  signal
+  signal,
+  onProgress
 }: {
   openai: OpenAI;
   initialResponse: unknown;
   timeoutMs: number;
   signal?: AbortSignal;
+  onProgress?: (event: SubAgentProgressEvent) => void;
 }) {
   const responseId = String((initialResponse as { id?: unknown })?.id || "").trim();
   let response = initialResponse;
   const deadlineMs = Date.now() + timeoutMs;
+  const startedAtMs = Date.now();
+  let pollCount = 0;
+
+  const emitProgress = (event: SubAgentProgressEvent) => {
+    if (typeof onProgress !== "function") return;
+    try {
+      onProgress(event);
+    } catch {
+      // Best-effort: progress callbacks must not break Codex polling.
+    }
+  };
 
   while (CODEX_PENDING_STATUSES.has(normalizeStatus((response as { status?: unknown })?.status))) {
     throwIfAborted(signal, "Codex request cancelled");
@@ -98,9 +113,25 @@ async function waitForTerminalResponse({
     if (remainingMs <= 0) {
       throw new Error(`Codex request timed out after ${timeoutMs}ms.`);
     }
+    pollCount += 1;
+    const status = normalizeStatus((response as { status?: unknown })?.status) || "in_progress";
+    emitProgress({
+      kind: "assistant_message",
+      summary: `Codex status: ${status} (poll ${pollCount})`,
+      elapsedMs: Math.max(0, Date.now() - startedAtMs),
+      timestamp: Date.now()
+    });
     await waitForCodexPoll(Math.min(CODEX_POLL_INTERVAL_MS, remainingMs), signal);
     response = await openai.responses.retrieve(responseId, undefined, signal ? { signal } : undefined);
   }
+
+  const finalStatus = normalizeStatus((response as { status?: unknown })?.status) || "completed";
+  emitProgress({
+    kind: "turn_complete",
+    summary: `Codex status: ${finalStatus}`,
+    elapsedMs: Math.max(0, Date.now() - startedAtMs),
+    timestamp: Date.now()
+  });
 
   return response;
 }
@@ -187,7 +218,8 @@ async function runCodexInput({
   previousResponseId = "",
   costProvider = "openai",
   timeoutMs = 300_000,
-  signal
+  signal,
+  onProgress
 }: {
   openai: OpenAI;
   model: string;
@@ -196,6 +228,7 @@ async function runCodexInput({
   costProvider?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  onProgress?: (event: SubAgentProgressEvent) => void;
 }): Promise<CodexRunResult> {
   const normalizedTimeoutMs = normalizeTimeoutMs(timeoutMs);
   const normalizedModel = String(model || "").trim();
@@ -225,7 +258,8 @@ async function runCodexInput({
       openai,
       initialResponse,
       timeoutMs: normalizedTimeoutMs,
-      signal
+      signal,
+      onProgress
     });
 
     return parseCodexResponse({
@@ -268,7 +302,8 @@ export async function runCodexSessionTurn({
   model,
   costProvider = "openai",
   timeoutMs = 300_000,
-  signal
+  signal,
+  onProgress
 }: RunCodexSessionTurnOptions): Promise<CodexRunResult> {
   return runCodexInput({
     openai,
@@ -277,6 +312,7 @@ export async function runCodexSessionTurn({
     previousResponseId,
     costProvider,
     timeoutMs,
-    signal
+    signal,
+    onProgress
   });
 }

@@ -1,7 +1,7 @@
 import type OpenAI from "openai";
 import { runCodexSessionTurn } from "../llm/llmCodex.ts";
 import { createAbortError, isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
-import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
+import type { SubAgentRunTurnOptions, SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
 import { generateSessionId } from "./subAgentSession.ts";
 
 interface CodeAgentTrace {
@@ -67,7 +67,7 @@ export class CodexAgentSession implements SubAgentSession {
     this.activeAbortController = null;
   }
 
-  async runTurn(input: string, options: { signal?: AbortSignal } = {}): Promise<SubAgentTurnResult> {
+  async runTurn(input: string, options: SubAgentRunTurnOptions = {}): Promise<SubAgentTurnResult> {
     if (this.status === "cancelled" || this.status === "error") {
       return {
         text: `Session is ${this.status} and cannot accept new turns.`,
@@ -97,7 +97,8 @@ export class CodexAgentSession implements SubAgentSession {
         model: this.model,
         costProvider: this.costProvider,
         timeoutMs: this.timeoutMs,
-        signal: turnSignal
+        signal: turnSignal,
+        onProgress: options.onProgress
       });
       this.previousResponseId = response.responseId || this.previousResponseId;
       this.status = "idle";

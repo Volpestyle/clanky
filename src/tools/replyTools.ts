@@ -10,6 +10,7 @@ import { formatConversationWindows } from "../prompts/promptFormatters.ts";
 import type { SubAgentSessionManager, SubAgentSession } from "../agents/subAgentSession.ts";
 import {
   normalizeCodeAgentRole,
+  resolveCodeAgentConfig,
   type CodeAgentRole
 } from "../agents/codeAgent.ts";
 import { toAnthropicTool } from "./sharedToolSchemas.ts";
@@ -23,6 +24,7 @@ import {
   isBrowserEnabled,
   getMemorySettings
 } from "../settings/agentStack.ts";
+import type { SubAgentProgressEvent } from "../agents/subAgentSession.ts";
 
 const MAX_WEB_QUERY_LEN = 220;
 const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
@@ -54,6 +56,31 @@ function buildSessionNote(sessionId: string, sessionCompleted?: boolean) {
 function maybeRemoveCompletedSession(manager: Pick<SubAgentSessionManager, "remove">, sessionId: string, sessionCompleted?: boolean) {
   if (!sessionCompleted) return;
   manager.remove(sessionId);
+}
+
+function shouldDispatchAsyncCodeTask({
+  settings,
+  role,
+  cwd,
+  guildId,
+  channelId,
+  hasBackgroundDispatcher
+}: {
+  settings: Record<string, unknown>;
+  role: CodeAgentRole;
+  cwd?: string;
+  guildId: string;
+  channelId: string | null;
+  hasBackgroundDispatcher: boolean;
+}) {
+  if (!hasBackgroundDispatcher) return false;
+  if (!String(guildId || "").trim()) return false;
+  if (!String(channelId || "").trim()) return false;
+  const config = resolveCodeAgentConfig(settings, cwd, role);
+  if (!config.asyncDispatch.enabled) return false;
+  if (config.asyncDispatch.thresholdMs <= 0) return true;
+  // We only have a coarse estimate at dispatch time. Use timeout as an upper bound.
+  return config.timeoutMs >= config.asyncDispatch.thresholdMs;
 }
 
 interface ReplyToolDefinition {
@@ -233,6 +260,29 @@ export type ReplyToolRuntime = {
       userId: string | null;
       source: string;
     }) => SubAgentSession | null;
+  };
+  backgroundCodeTasks?: {
+    dispatch: (args: {
+      session: SubAgentSession;
+      task: string;
+      role: CodeAgentRole;
+      guildId: string;
+      channelId: string;
+      userId?: string | null;
+      triggerMessageId?: string | null;
+      source?: string;
+      progressReports?: {
+        enabled?: boolean;
+        intervalMs?: number;
+        maxReportsPerTask?: number;
+      };
+    }) => {
+      id: string;
+      sessionId: string;
+      progress: {
+        events: SubAgentProgressEvent[];
+      };
+    };
   };
   voiceSessionManager?: BrowserStreamPublishManager & {
     stopMusicStreamPublish?: (opts: {
@@ -1134,6 +1184,7 @@ async function executeCodeTask(
   }
 
   const sessionId = typeof input?.session_id === "string" ? String(input.session_id).trim() : "";
+  const resolvedCwd = typeof input?.cwd === "string" ? String(input.cwd).trim() : undefined;
 
   // --- Multi-turn session continuation ---
   if (sessionId && runtime.subAgentSessions) {
@@ -1167,7 +1218,7 @@ async function executeCodeTask(
     const session = runtime.subAgentSessions.createCodeSession({
       settings: context.settings,
       role,
-      cwd: typeof input?.cwd === "string" ? String(input.cwd).trim() : undefined,
+      cwd: resolvedCwd,
       guildId: context.guildId,
       channelId: context.channelId,
       userId: context.userId,
@@ -1176,6 +1227,51 @@ async function executeCodeTask(
 
     if (session) {
       runtime.subAgentSessions.manager.register(session);
+      const canDispatchAsync = shouldDispatchAsyncCodeTask({
+        settings: context.settings,
+        role,
+        cwd: resolvedCwd,
+        guildId: context.guildId,
+        channelId: context.channelId,
+        hasBackgroundDispatcher: Boolean(runtime.backgroundCodeTasks?.dispatch)
+      });
+
+      if (canDispatchAsync && runtime.backgroundCodeTasks?.dispatch) {
+        try {
+          const codeConfig = resolveCodeAgentConfig(context.settings, resolvedCwd, role);
+          const dispatchedTask = runtime.backgroundCodeTasks.dispatch({
+            session,
+            task,
+            role,
+            guildId: context.guildId,
+            channelId: String(context.channelId || ""),
+            userId: context.userId,
+            triggerMessageId: context.sourceMessageId,
+            source: String(context.trace?.source || "reply_tool_code_task"),
+            progressReports: {
+              enabled: codeConfig.asyncDispatch.progressReports.enabled,
+              intervalMs: codeConfig.asyncDispatch.progressReports.intervalMs,
+              maxReportsPerTask: codeConfig.asyncDispatch.progressReports.maxReportsPerTask
+            }
+          });
+          const maxRuntimeMinutes = Math.max(1, Math.ceil(Number(codeConfig.timeoutMs || 0) / 60_000));
+          return {
+            content:
+              `Code task dispatched. Background session ${dispatchedTask.sessionId} is running.\n` +
+              `The task will run for up to ${maxRuntimeMinutes} minute${maxRuntimeMinutes === 1 ? "" : "s"}.\n` +
+              "A follow-up will be posted in this channel when it completes.\n" +
+              "You can acknowledge this to the user now.",
+            isError: false
+          };
+        } catch (error) {
+          runtime.subAgentSessions.manager.remove(session.id);
+          return {
+            content: `Code task dispatch failed: ${String((error as Error)?.message || error)}`,
+            isError: true
+          };
+        }
+      }
+
       try {
         const turnResult = await session.runTurn(task, { signal: context.signal });
         maybeRemoveCompletedSession(runtime.subAgentSessions.manager, session.id, turnResult.sessionCompleted);
@@ -1205,7 +1301,7 @@ async function executeCodeTask(
       settings: context.settings,
       task,
       role,
-      cwd: typeof input?.cwd === "string" ? String(input.cwd).trim() : undefined,
+      cwd: resolvedCwd,
       guildId: context.guildId,
       channelId: context.channelId,
       userId: context.userId,

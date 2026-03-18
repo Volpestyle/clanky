@@ -1,6 +1,6 @@
 import { clamp } from "../utils.ts";
 import { getResolvedBrowserTaskConfig } from "../settings/agentStack.ts";
-import { normalizeCodeAgentRole } from "../agents/codeAgent.ts";
+import { normalizeCodeAgentRole, resolveCodeAgentConfig } from "../agents/codeAgent.ts";
 import { isAbortError, runBrowserBrowseTask } from "../tools/browserTaskRuntime.ts";
 import { runOpenAiComputerUseTask } from "../tools/openAiComputerUseRuntime.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
@@ -160,6 +160,7 @@ export async function executeVoiceCodeTaskTool(
 ) {
   const task = normalizeInlineText(args?.task, 2000);
   const role = normalizeCodeAgentRole(args?.role, "implementation");
+  const resolvedCwd = typeof args?.cwd === "string" ? String(args.cwd).trim() : undefined;
   if (!task) {
     return { ok: false, text: "", error: "task_required" };
   }
@@ -175,13 +176,20 @@ export async function executeVoiceCodeTaskTool(
     }
     try {
       const turnResult = await existingSession.runTurn(task, { signal });
+      maybeRemoveCompletedVoiceSession(manager.subAgentSessions, existingSession.id, turnResult.sessionCompleted);
       if (turnResult.isError) return { ok: false, text: "", error: turnResult.errorMessage };
-      return {
-        ok: true,
-        text: turnResult.text.trim() || "Code task completed.",
-        cost_usd: turnResult.costUsd || 0,
-        session_id: existingSession.id
-      };
+      return turnResult.sessionCompleted
+        ? {
+            ok: true,
+            text: turnResult.text.trim() || "Code task completed.",
+            cost_usd: turnResult.costUsd || 0
+          }
+        : {
+            ok: true,
+            text: turnResult.text.trim() || "Code task completed.",
+            cost_usd: turnResult.costUsd || 0,
+            session_id: existingSession.id
+          };
     } catch (error: unknown) {
       return { ok: false, text: "", error: error instanceof Error ? error.message : String(error) };
     }
@@ -191,7 +199,7 @@ export async function executeVoiceCodeTaskTool(
     const newSession = manager.createCodeAgentSession({
       settings,
       role,
-      cwd: typeof args?.cwd === "string" ? String(args.cwd).trim() : undefined,
+      cwd: resolvedCwd,
       guildId: session?.guildId || "",
       channelId: session?.textChannelId || "",
       userId: session?.lastRealtimeToolCallerUserId || null,
@@ -199,17 +207,70 @@ export async function executeVoiceCodeTaskTool(
     });
     if (newSession) {
       manager.subAgentSessions.register(newSession);
+      const normalizedGuildId = String(session?.guildId || "").trim();
+      const normalizedChannelId = String(session?.textChannelId || "").trim();
+      const canDispatchAsync = Boolean(
+        manager.dispatchBackgroundCodeTask &&
+        normalizedGuildId &&
+        normalizedChannelId
+      );
+      if (canDispatchAsync) {
+        try {
+          const codeConfig = resolveCodeAgentConfig(settings || {}, resolvedCwd, role);
+          if (codeConfig.asyncDispatch.enabled && codeConfig.asyncDispatch.thresholdMs <= codeConfig.timeoutMs) {
+            const dispatchedTask = manager.dispatchBackgroundCodeTask?.({
+              session: newSession,
+              task,
+              role,
+              guildId: normalizedGuildId,
+              channelId: normalizedChannelId,
+              userId: session?.lastRealtimeToolCallerUserId || null,
+              triggerMessageId: null,
+              source: "voice_realtime_tool_code_task",
+              progressReports: {
+                enabled: codeConfig.asyncDispatch.progressReports.enabled,
+                intervalMs: codeConfig.asyncDispatch.progressReports.intervalMs,
+                maxReportsPerTask: codeConfig.asyncDispatch.progressReports.maxReportsPerTask
+              }
+            });
+            if (dispatchedTask?.sessionId) {
+              return {
+                ok: true,
+                text: `Code task dispatched in background (session ${dispatchedTask.sessionId}). I will follow up when it's done.`,
+                session_id: dispatchedTask.sessionId,
+                dispatched: true
+              };
+            }
+          }
+        } catch (error: unknown) {
+          manager.subAgentSessions.remove?.(newSession.id);
+          return {
+            ok: false,
+            text: "",
+            error: error instanceof Error ? error.message : String(error)
+          };
+        }
+      }
       try {
         const turnResult = await newSession.runTurn(task, { signal });
+        maybeRemoveCompletedVoiceSession(manager.subAgentSessions, newSession.id, turnResult.sessionCompleted);
         if (turnResult.isError) {
-          return { ok: false, text: "", error: turnResult.errorMessage, session_id: newSession.id };
+          return turnResult.sessionCompleted
+            ? { ok: false, text: "", error: turnResult.errorMessage }
+            : { ok: false, text: "", error: turnResult.errorMessage, session_id: newSession.id };
         }
-        return {
-          ok: true,
-          text: turnResult.text.trim() || "Code task completed.",
-          cost_usd: turnResult.costUsd || 0,
-          session_id: newSession.id
-        };
+        return turnResult.sessionCompleted
+          ? {
+              ok: true,
+              text: turnResult.text.trim() || "Code task completed.",
+              cost_usd: turnResult.costUsd || 0
+            }
+          : {
+              ok: true,
+              text: turnResult.text.trim() || "Code task completed.",
+              cost_usd: turnResult.costUsd || 0,
+              session_id: newSession.id
+            };
       } catch (error: unknown) {
         return { ok: false, text: "", error: error instanceof Error ? error.message : String(error) };
       }
@@ -225,7 +286,7 @@ export async function executeVoiceCodeTaskTool(
       settings,
       task,
       role,
-      cwd: typeof args?.cwd === "string" ? String(args.cwd).trim() : undefined,
+      cwd: resolvedCwd,
       guildId: session?.guildId || "",
       channelId: session?.textChannelId || "",
       userId: session?.lastRealtimeToolCallerUserId || null,

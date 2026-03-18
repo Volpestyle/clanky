@@ -146,6 +146,100 @@ test("executeReplyTool forwards code_task role to the code agent runtime", async
   }]);
 });
 
+test("executeReplyTool dispatches async code_task when background runner is available", async () => {
+  const manager = new SubAgentSessionManager();
+  let runTurnCalled = false;
+  const dispatchedCalls: Array<Record<string, unknown>> = [];
+  const mockSession = {
+    id: "code:impl:1",
+    type: "code" as const,
+    createdAt: Date.now(),
+    ownerUserId: "user-1",
+    lastUsedAt: Date.now(),
+    status: "idle" as "idle" | "running" | "completed" | "error" | "cancelled",
+    async runTurn() {
+      runTurnCalled = true;
+      return {
+        text: "done",
+        costUsd: 0,
+        isError: false,
+        errorMessage: "",
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 0
+        }
+      };
+    },
+    cancel() {
+      this.status = "cancelled";
+    },
+    close() {
+      this.status = "cancelled";
+    }
+  };
+
+  const result = await executeReplyTool(
+    "code_task",
+    { task: "refactor auth flow" },
+    {
+      subAgentSessions: {
+        manager,
+        createCodeSession() {
+          return mockSession;
+        },
+        createBrowserSession() {
+          return null;
+        }
+      },
+      backgroundCodeTasks: {
+        dispatch(args) {
+          dispatchedCalls.push(args as Record<string, unknown>);
+          return {
+            id: "code:impl:1",
+            sessionId: "code:impl:1",
+            progress: { events: [] }
+          };
+        }
+      }
+    },
+    {
+      settings: {
+        agentStack: {
+          runtimeConfig: {
+            devTeam: {
+              codexCli: {
+                enabled: true,
+                asyncDispatch: {
+                  enabled: true,
+                  thresholdMs: 0,
+                  progressReports: {
+                    enabled: true,
+                    intervalMs: 60_000,
+                    maxReportsPerTask: 5
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      sourceMessageId: "msg-1",
+      sourceText: "please run this task",
+      trace: { source: "reply_message" }
+    }
+  );
+
+  assert.equal(result.isError, false);
+  assert.match(result.content, /Code task dispatched\./);
+  assert.equal(dispatchedCalls.length, 1);
+  assert.equal(runTurnCalled, false);
+});
+
 test("buildReplyToolSet includes note_context when voice tools are available", () => {
   const toolNames = buildReplyToolSet({
     browser: { enabled: false },

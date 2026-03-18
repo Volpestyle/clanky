@@ -397,7 +397,16 @@ export const DEFAULT_SETTINGS = {
           maxBufferBytes: 2 * 1024 * 1024,
           defaultCwd: "",
           maxTasksPerHour: 10,
-          maxParallelTasks: 2
+          maxParallelTasks: 2,
+          asyncDispatch: {
+            enabled: true,
+            thresholdMs: 0,
+            progressReports: {
+              enabled: true,
+              intervalMs: 60_000,
+              maxReportsPerTask: 5
+            }
+          }
         },
         codexCli: {
           enabled: false,
@@ -407,7 +416,16 @@ export const DEFAULT_SETTINGS = {
           maxBufferBytes: 2 * 1024 * 1024,
           defaultCwd: "",
           maxTasksPerHour: 10,
-          maxParallelTasks: 2
+          maxParallelTasks: 2,
+          asyncDispatch: {
+            enabled: true,
+            thresholdMs: 0,
+            progressReports: {
+              enabled: true,
+              intervalMs: 60_000,
+              maxReportsPerTask: 5
+            }
+          }
         },
         claudeCode: {
           enabled: false,
@@ -417,7 +435,16 @@ export const DEFAULT_SETTINGS = {
           maxBufferBytes: 2 * 1024 * 1024,
           defaultCwd: "",
           maxTasksPerHour: 10,
-          maxParallelTasks: 2
+          maxParallelTasks: 2,
+          asyncDispatch: {
+            enabled: true,
+            thresholdMs: 0,
+            progressReports: {
+              enabled: true,
+              intervalMs: 60_000,
+              maxReportsPerTask: 5
+            }
+          }
         }
       }
     }

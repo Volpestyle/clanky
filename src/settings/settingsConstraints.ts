@@ -33,7 +33,10 @@ export const SETTINGS_NUMERIC_CONSTRAINTS = {
       timeoutMs: { min: 10_000, max: 1_800_000 },
       maxBufferBytes: { min: 4_096, max: 10 * 1024 * 1024 },
       maxTasksPerHour: { min: 0, max: 200 },
-      maxParallelTasks: { min: 1, max: 20 }
+      maxParallelTasks: { min: 1, max: 20 },
+      asyncDispatchThresholdMs: { min: 0, max: 1_800_000 },
+      asyncDispatchProgressIntervalMs: { min: 10_000, max: 1_800_000 },
+      asyncDispatchMaxReportsPerTask: { min: 0, max: 20 }
     },
     voiceRuntime: {
       sampleRateHz: { min: 8_000, max: 96_000 }

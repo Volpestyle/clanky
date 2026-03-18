@@ -127,6 +127,7 @@ type MaybeHandleScreenWatchIntentFn = typeof import("./screenShare.ts").maybeHan
 type RunModelRequestedBrowserBrowseFn = typeof import("./agentTasks.ts").runModelRequestedBrowserBrowse;
 type RunModelRequestedCodeTaskFn = typeof import("./agentTasks.ts").runModelRequestedCodeTask;
 type BuildSubAgentSessionsRuntimeFn = typeof import("./agentTasks.ts").buildSubAgentSessionsRuntime;
+type DispatchBackgroundCodeTaskFn = ClankerBot["dispatchBackgroundCodeTask"];
 type ResolveMediaAttachmentFn = typeof import("./mediaAttachment.ts").resolveMediaAttachment;
 type MaybeAttachReplyGifFn = typeof import("./mediaAttachment.ts").maybeAttachReplyGif;
 type MaybeAttachGeneratedImageFn = typeof import("./mediaAttachment.ts").maybeAttachGeneratedImage;
@@ -202,6 +203,7 @@ type ReplyPipelineRuntimeMember =
   | "gifs"
   | "search"
   | "voiceSessionManager"
+  | "dispatchBackgroundCodeTask"
   | "getReactionEmojiOptions"
   | "getEmojiHints"
   | "maybeHandleStructuredAutomationIntent"
@@ -237,6 +239,7 @@ export interface ReplyPipelineRuntime extends BotContext, Pick<ClankerBot, Reply
   runModelRequestedBrowserBrowse: StripFirstArg<RunModelRequestedBrowserBrowseFn>;
   runModelRequestedCodeTask: StripFirstArg<RunModelRequestedCodeTaskFn>;
   buildSubAgentSessionsRuntime: StripFirstArg<BuildSubAgentSessionsRuntimeFn>;
+  dispatchBackgroundCodeTask: DispatchBackgroundCodeTaskFn;
   runModelRequestedImageLookup: RunModelRequestedImageLookupRuntimeFn;
   mergeImageInputs: MergeImageInputsFn;
   maybeHandleScreenWatchIntent: MaybeHandleScreenWatchIntentRuntimeFn;
@@ -415,6 +418,7 @@ export interface VoiceReplyRuntime extends BotContext {
   buildBrowserBrowseContext: StripFirstArg<BuildBrowserBrowseContextFn>;
   runModelRequestedCodeTask: StripFirstArg<RunModelRequestedCodeTaskFn>;
   buildSubAgentSessionsRuntime?: StripFirstArg<BuildSubAgentSessionsRuntimeFn>;
+  dispatchBackgroundCodeTask?: DispatchBackgroundCodeTaskFn;
 }
 
 type TextThoughtLoopPolicyRuntime = {

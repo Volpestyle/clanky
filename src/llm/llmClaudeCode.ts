@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { clampInt } from "../normalization/numbers.ts";
 import { safeJsonParseFromString } from "../normalization/valueParsers.ts";
 import { createAbortError } from "../tools/browserTaskRuntime.ts";
+import type { SubAgentProgressEvent } from "../agents/subAgentSession.ts";
 
 type ClaudeCliResult = {
   stdout: string;
@@ -19,6 +20,8 @@ type ClaudeCliError = Error & {
 type ClaudeCliStreamJob = {
   input: string;
   timeoutMs: number;
+  onEvent?: (event: SubAgentProgressEvent) => void;
+  startedAtMs: number;
   stdout: string;
   stderr: string;
   stdoutBytes: number;
@@ -34,13 +37,86 @@ type ClaudeCliStreamJob = {
 };
 
 export type ClaudeCliStreamSessionLike = {
-  run: (payload: { input?: string; timeoutMs?: number; signal?: AbortSignal }) => Promise<ClaudeCliResult>;
+  run: (payload: {
+    input?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    onEvent?: (event: SubAgentProgressEvent) => void;
+  }) => Promise<ClaudeCliResult>;
   close: () => void;
   isIdle: () => boolean;
 };
 
 export function safeJsonParse(value, fallback = null) {
   return safeJsonParseFromString(value, fallback);
+}
+
+function truncateProgressSummary(value: unknown, maxChars = 180) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(1, maxChars - 3)).trim()}...`;
+}
+
+function extractClaudeToolFilePath(input: unknown): string {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return "";
+  const record = input as Record<string, unknown>;
+  const rawValue =
+    record.file_path ??
+    record.path ??
+    record.target_path ??
+    record.new_path ??
+    record.old_path ??
+    record.destination ??
+    record.filename;
+  return String(rawValue || "").trim();
+}
+
+function isClaudeFileEditTool(toolName: string, filePath: string): boolean {
+  if (!filePath) return false;
+  const normalizedName = String(toolName || "").trim().toLowerCase();
+  return normalizedName.includes("write") ||
+    normalizedName.includes("edit") ||
+    normalizedName.includes("patch") ||
+    normalizedName.includes("create") ||
+    normalizedName.includes("append") ||
+    normalizedName.includes("mv") ||
+    normalizedName.includes("rename");
+}
+
+function summarizeClaudeToolUse(part: Record<string, unknown>) {
+  const toolName = String(part?.name || "tool").trim() || "tool";
+  const filePath = extractClaudeToolFilePath(part?.input);
+  const summary = filePath
+    ? `Tool ${toolName} on ${filePath}`
+    : `Tool ${toolName}`;
+  return {
+    kind: isClaudeFileEditTool(toolName, filePath) ? "file_edit" as const : "tool_use" as const,
+    summary: truncateProgressSummary(summary),
+    filePath
+  };
+}
+
+function summarizeClaudeAssistantText(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  const textParts: string[] = [];
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    if (String((part as { type?: unknown }).type || "") !== "text") continue;
+    const text = String((part as { text?: unknown }).text || "").trim();
+    if (!text) continue;
+    textParts.push(text);
+  }
+  return truncateProgressSummary(textParts.join(" ").trim());
+}
+
+function emitProgress(job: ClaudeCliStreamJob, event: SubAgentProgressEvent) {
+  if (typeof job.onEvent !== "function") return;
+  try {
+    job.onEvent(event);
+  } catch {
+    // Progress callbacks are best-effort and must not break stream execution.
+  }
 }
 
 function runClaudeCli({ args, input, timeoutMs, maxBufferBytes, cwd = "", signal = undefined as AbortSignal | undefined }) {
@@ -251,7 +327,17 @@ class ClaudeCliStreamSession {
     return !this.activeJob && this.queue.length === 0;
   }
 
-  async run({ input = "", timeoutMs = 30_000, signal = undefined as AbortSignal | undefined }: { input?: string; timeoutMs?: number; signal?: AbortSignal }) {
+  async run({
+    input = "",
+    timeoutMs = 30_000,
+    signal = undefined as AbortSignal | undefined,
+    onEvent
+  }: {
+    input?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    onEvent?: (event: SubAgentProgressEvent) => void;
+  }) {
     if (this.closed) {
       throw new Error("claude-code session is closed");
     }
@@ -263,6 +349,8 @@ class ClaudeCliStreamSession {
       this.queue.push({
         input: String(input || ""),
         timeoutMs: Math.max(1, Math.floor(Number(timeoutMs) || 30_000)),
+        onEvent,
+        startedAtMs: Date.now(),
         stdout: "",
         stderr: "",
         stdoutBytes: 0,
@@ -415,9 +503,72 @@ class ClaudeCliStreamSession {
 
     appendLimitedText(active, "stdout", `${line}\n`, this.maxBufferBytes);
     const parsed = safeJsonParse(line, null);
-    if (!parsed || typeof parsed !== "object" || parsed.type !== "result") return;
+    if (!parsed || typeof parsed !== "object") return;
+
+    this.emitProgressForParsedLine(active, parsed as Record<string, unknown>);
+
+    if (parsed.type !== "result") return;
 
     this.finishActiveJob();
+  }
+
+  private emitProgressForParsedLine(active: ClaudeCliStreamJob, parsed: Record<string, unknown>) {
+    const now = Date.now();
+    const elapsedMs = Math.max(0, now - Number(active.startedAtMs || now));
+    const eventType = String(parsed.type || "").trim().toLowerCase();
+
+    if (eventType === "assistant") {
+      const message = parsed.message && typeof parsed.message === "object"
+        ? parsed.message as Record<string, unknown>
+        : null;
+      const content = Array.isArray(message?.content) ? message.content : [];
+      for (const partValue of content) {
+        if (!partValue || typeof partValue !== "object") continue;
+        const part = partValue as Record<string, unknown>;
+        const partType = String(part.type || "").trim().toLowerCase();
+        if (partType === "tool_use") {
+          const toolEvent = summarizeClaudeToolUse(part);
+          emitProgress(active, {
+            kind: toolEvent.kind,
+            summary: toolEvent.summary || "Tool call executed.",
+            elapsedMs,
+            timestamp: now,
+            filePath: toolEvent.filePath || undefined
+          });
+        }
+      }
+      const assistantSummary = summarizeClaudeAssistantText(content);
+      if (assistantSummary) {
+        emitProgress(active, {
+          kind: "assistant_message",
+          summary: assistantSummary,
+          elapsedMs,
+          timestamp: now
+        });
+      }
+      return;
+    }
+
+    if (eventType === "result") {
+      const status = String(parsed.subtype || parsed.status || "completed").trim() || "completed";
+      emitProgress(active, {
+        kind: "turn_complete",
+        summary: truncateProgressSummary(`Turn ${status}`) || "Turn completed.",
+        elapsedMs,
+        timestamp: now
+      });
+      return;
+    }
+
+    if (eventType === "error") {
+      const detail = truncateProgressSummary(parsed.message || parsed.error || "Sub-agent stream error.");
+      emitProgress(active, {
+        kind: "error",
+        summary: detail || "Sub-agent stream error.",
+        elapsedMs,
+        timestamp: now
+      });
+    }
   }
 
   private handleStderrChunk(chunk: unknown) {

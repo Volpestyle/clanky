@@ -1,6 +1,6 @@
 import { createCodexCliStreamSession, type CodexCliStreamSessionLike, normalizeCodexCliError, parseCodexCliJsonlOutput } from "../llm/llmCodexCli.ts";
 import { createAbortError, isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
-import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
+import type { SubAgentRunTurnOptions, SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
 import { generateSessionId } from "./subAgentSession.ts";
 import type { CodeAgentWorkspaceLease } from "./codeAgentWorkspace.ts";
 
@@ -67,7 +67,7 @@ export class CodexCliAgentSession implements SubAgentSession {
     this.streamSession = createCodexCliStreamSession({ model: this.model, maxBufferBytes, cwd });
   }
 
-  async runTurn(input: string, options: { signal?: AbortSignal } = {}): Promise<SubAgentTurnResult> {
+  async runTurn(input: string, options: SubAgentRunTurnOptions = {}): Promise<SubAgentTurnResult> {
     if (this.status === "cancelled" || this.status === "error") {
       return {
         text: `Session is ${this.status} and cannot accept new turns.`,
@@ -93,7 +93,8 @@ export class CodexCliAgentSession implements SubAgentSession {
       const result = await this.streamSession.run({
         input,
         timeoutMs: this.timeoutMs,
-        signal: turnSignal
+        signal: turnSignal,
+        onEvent: options.onProgress
       });
       const parsed = parseCodexCliJsonlOutput(result.stdout, this.model);
       const turnResult: SubAgentTurnResult = parsed

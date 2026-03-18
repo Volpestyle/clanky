@@ -1444,6 +1444,11 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       memory: runtime.memory,
       store: runtime.store,
       subAgentSessions,
+      backgroundCodeTasks: runtime.dispatchBackgroundCodeTask
+        ? {
+            dispatch: (args) => runtime.dispatchBackgroundCodeTask!(args)
+          }
+        : undefined,
       voiceSessionManager: runtime.voiceSessionManager || undefined,
       voiceSession: voiceToolCallbacks || undefined
     };

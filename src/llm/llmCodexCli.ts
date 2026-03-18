@@ -6,6 +6,7 @@ import { clampInt } from "../normalization/numbers.ts";
 import { safeJsonParseFromString } from "../normalization/valueParsers.ts";
 import { createAbortError } from "../tools/browserTaskRuntime.ts";
 import { estimateUsdCost } from "./pricing.ts";
+import type { SubAgentProgressEvent } from "../agents/subAgentSession.ts";
 
 type CodexCliResult = {
   stdout: string;
@@ -37,7 +38,12 @@ type CodexCliParsedResult = {
 };
 
 export type CodexCliStreamSessionLike = {
-  run: (payload: { input?: string; timeoutMs?: number; signal?: AbortSignal }) => Promise<CodexCliResult>;
+  run: (payload: {
+    input?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    onEvent?: (event: SubAgentProgressEvent) => void;
+  }) => Promise<CodexCliResult>;
   close: () => void;
   isIdle: () => boolean;
 };
@@ -46,6 +52,7 @@ type PendingJob = {
   input: string;
   timeoutMs: number;
   signal?: AbortSignal;
+  onEvent?: (event: SubAgentProgressEvent) => void;
   resolve: (result: CodexCliResult) => void;
   reject: (error: Error) => void;
 };
@@ -54,13 +61,141 @@ function safeJsonParse(value: string, fallback: unknown = null) {
   return safeJsonParseFromString(value, fallback);
 }
 
-export function runCodexCli({ args, input, timeoutMs, maxBufferBytes, cwd = "", signal = undefined as AbortSignal | undefined }: {
+function truncateProgressSummary(value: unknown, maxChars = 180) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(1, maxChars - 3)).trim()}...`;
+}
+
+function extractCodexToolArguments(rawValue: unknown): Record<string, unknown> {
+  if (!rawValue) return {};
+  if (typeof rawValue === "object" && !Array.isArray(rawValue)) {
+    return rawValue as Record<string, unknown>;
+  }
+  if (typeof rawValue === "string") {
+    const parsed = safeJsonParse(rawValue, null);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  }
+  return {};
+}
+
+function extractCodexToolFilePath(argumentsValue: Record<string, unknown>): string {
+  return String(
+    argumentsValue.file_path ??
+    argumentsValue.path ??
+    argumentsValue.target_path ??
+    argumentsValue.new_path ??
+    argumentsValue.old_path ??
+    argumentsValue.filename ??
+    ""
+  ).trim();
+}
+
+function isCodexFileEditTool(toolName: string, filePath: string): boolean {
+  if (!filePath) return false;
+  const normalized = String(toolName || "").trim().toLowerCase();
+  return normalized.includes("write") ||
+    normalized.includes("edit") ||
+    normalized.includes("patch") ||
+    normalized.includes("create") ||
+    normalized.includes("append") ||
+    normalized.includes("move") ||
+    normalized.includes("rename");
+}
+
+function emitProgress(onEvent: PendingJob["onEvent"], event: SubAgentProgressEvent) {
+  if (typeof onEvent !== "function") return;
+  try {
+    onEvent(event);
+  } catch {
+    // Best-effort: progress callbacks must not break CLI session execution.
+  }
+}
+
+function emitProgressFromCodexJsonlLine({
+  line,
+  startedAtMs,
+  onEvent
+}: {
+  line: string;
+  startedAtMs: number;
+  onEvent?: PendingJob["onEvent"];
+}) {
+  const parsed = safeJsonParse(line, null);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+  const event = parsed as Record<string, unknown>;
+  const now = Date.now();
+  const elapsedMs = Math.max(0, now - Number(startedAtMs || now));
+  const type = String(event.type || "").trim().toLowerCase();
+
+  if (type === "item.completed") {
+    const item = event.item && typeof event.item === "object" && !Array.isArray(event.item)
+      ? event.item as Record<string, unknown>
+      : null;
+    if (!item) return;
+    const itemType = String(item.type || "").trim().toLowerCase();
+    if (itemType === "agent_message") {
+      const summary = truncateProgressSummary(item.text || item.message || "Agent message received.");
+      if (!summary) return;
+      emitProgress(onEvent, {
+        kind: "assistant_message",
+        summary,
+        elapsedMs,
+        timestamp: now
+      });
+      return;
+    }
+    if (itemType === "tool_call") {
+      const toolName = String(item.name || item.tool_name || "tool").trim() || "tool";
+      const toolArgs = extractCodexToolArguments(item.arguments);
+      const filePath = extractCodexToolFilePath(toolArgs);
+      const kind = isCodexFileEditTool(toolName, filePath) ? "file_edit" as const : "tool_use" as const;
+      const summary = truncateProgressSummary(
+        filePath ? `Tool ${toolName} on ${filePath}` : `Tool ${toolName}`
+      );
+      emitProgress(onEvent, {
+        kind,
+        summary: summary || "Tool call executed.",
+        elapsedMs,
+        timestamp: now,
+        filePath: filePath || undefined
+      });
+    }
+    return;
+  }
+
+  if (type === "turn.completed") {
+    emitProgress(onEvent, {
+      kind: "turn_complete",
+      summary: "Turn completed.",
+      elapsedMs,
+      timestamp: now
+    });
+    return;
+  }
+
+  if (type === "error") {
+    const summary = truncateProgressSummary(event.message || event.error || "codex-cli error");
+    emitProgress(onEvent, {
+      kind: "error",
+      summary: summary || "codex-cli error",
+      elapsedMs,
+      timestamp: now
+    });
+  }
+}
+
+export function runCodexCli({ args, input, timeoutMs, maxBufferBytes, cwd = "", signal = undefined as AbortSignal | undefined, onStdoutLine = undefined as ((line: string) => void) | undefined }: {
   args: string[];
   input?: string;
   timeoutMs: number;
   maxBufferBytes: number;
   cwd?: string;
   signal?: AbortSignal;
+  onStdoutLine?: (line: string) => void;
 }) {
   return new Promise<CodexCliResult>((resolve, reject) => {
     const spawnOptions: { stdio: ["pipe", "pipe", "pipe"]; cwd?: string } = { stdio: ["pipe", "pipe", "pipe"] };
@@ -74,6 +209,7 @@ export function runCodexCli({ args, input, timeoutMs, maxBufferBytes, cwd = "", 
     let settled = false;
     let timedOut = false;
     let aborted = false;
+    let stdoutLineRemainder = "";
 
     if (signal?.aborted) {
       reject(createAbortError(signal.reason || "codex CLI cancelled"));
@@ -130,6 +266,16 @@ export function runCodexCli({ args, input, timeoutMs, maxBufferBytes, cwd = "", 
         stdout += buffer.subarray(0, remaining).toString("utf8");
       }
       stdoutBytes += buffer.length;
+      if (typeof onStdoutLine === "function") {
+        stdoutLineRemainder += buffer.toString("utf8");
+        while (true) {
+          const newlineIndex = stdoutLineRemainder.indexOf("\n");
+          if (newlineIndex < 0) break;
+          const line = stdoutLineRemainder.slice(0, newlineIndex);
+          stdoutLineRemainder = stdoutLineRemainder.slice(newlineIndex + 1);
+          onStdoutLine(line);
+        }
+      }
     });
 
     child.stderr.on("data", (chunk) => {
@@ -142,6 +288,11 @@ export function runCodexCli({ args, input, timeoutMs, maxBufferBytes, cwd = "", 
     });
 
     child.on("close", (code, signal) => {
+      if (typeof onStdoutLine === "function" && stdoutLineRemainder.length > 0) {
+        const trailingLine = stdoutLineRemainder;
+        stdoutLineRemainder = "";
+        onStdoutLine(trailingLine);
+      }
       if (aborted) {
         const error = createAbortError(signal || "codex CLI cancelled") as CodexCliError;
         error.killed = true;
@@ -206,7 +357,17 @@ class CodexCliStreamSession implements CodexCliStreamSessionLike {
     return !this.running && this.queue.length === 0;
   }
 
-  async run({ input = "", timeoutMs = 30_000, signal = undefined as AbortSignal | undefined }: { input?: string; timeoutMs?: number; signal?: AbortSignal }) {
+  async run({
+    input = "",
+    timeoutMs = 30_000,
+    signal = undefined as AbortSignal | undefined,
+    onEvent
+  }: {
+    input?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    onEvent?: (event: SubAgentProgressEvent) => void;
+  }) {
     if (this.closed) {
       throw new Error("codex-cli session is closed");
     }
@@ -219,6 +380,7 @@ class CodexCliStreamSession implements CodexCliStreamSessionLike {
         input: String(input || ""),
         timeoutMs: Math.max(1, Math.floor(Number(timeoutMs) || 30_000)),
         signal,
+        onEvent,
         resolve,
         reject
       });
@@ -254,13 +416,20 @@ class CodexCliStreamSession implements CodexCliStreamSessionLike {
       const signal = job.signal
         ? AbortSignal.any([this.activeRunAbortController.signal, job.signal])
         : this.activeRunAbortController.signal;
+      const startedAtMs = Date.now();
       const result = await runCodexCli({
         args,
         input: "",
         timeoutMs: job.timeoutMs,
         maxBufferBytes: this.maxBufferBytes,
         cwd: this.cwd,
-        signal
+        signal,
+        onStdoutLine: (line) =>
+          emitProgressFromCodexJsonlLine({
+            line,
+            startedAtMs,
+            onEvent: job.onEvent
+          })
       });
       const parsed = parseCodexCliJsonlOutput(result.stdout, this.model);
       if (parsed?.threadId) {
@@ -501,5 +670,3 @@ export function normalizeCodexCliError(
       : `codex-cli error: ${typedError?.message || error}`
   };
 }
-
-

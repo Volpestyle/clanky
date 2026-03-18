@@ -300,6 +300,31 @@ function buildSettingsFormView(settings: unknown) {
         Number(devTeam.codexCli?.maxParallelTasks || 0),
         Number(devTeam.claudeCode?.maxParallelTasks || 0)
       ),
+      asyncDispatchEnabled: Boolean(
+        devTeam.codex?.asyncDispatch?.enabled ||
+        devTeam.codexCli?.asyncDispatch?.enabled ||
+        devTeam.claudeCode?.asyncDispatch?.enabled
+      ),
+      asyncDispatchThresholdMs: Math.max(
+        Number(devTeam.codex?.asyncDispatch?.thresholdMs || 0),
+        Number(devTeam.codexCli?.asyncDispatch?.thresholdMs || 0),
+        Number(devTeam.claudeCode?.asyncDispatch?.thresholdMs || 0)
+      ),
+      asyncProgressReportsEnabled: Boolean(
+        devTeam.codex?.asyncDispatch?.progressReports?.enabled ||
+        devTeam.codexCli?.asyncDispatch?.progressReports?.enabled ||
+        devTeam.claudeCode?.asyncDispatch?.progressReports?.enabled
+      ),
+      asyncProgressIntervalMs: Math.max(
+        Number(devTeam.codex?.asyncDispatch?.progressReports?.intervalMs || 0),
+        Number(devTeam.codexCli?.asyncDispatch?.progressReports?.intervalMs || 0),
+        Number(devTeam.claudeCode?.asyncDispatch?.progressReports?.intervalMs || 0)
+      ),
+      asyncMaxReportsPerTask: Math.max(
+        Number(devTeam.codex?.asyncDispatch?.progressReports?.maxReportsPerTask || 0),
+        Number(devTeam.codexCli?.asyncDispatch?.progressReports?.maxReportsPerTask || 0),
+        Number(devTeam.claudeCode?.asyncDispatch?.progressReports?.maxReportsPerTask || 0)
+      ),
       allowedUserIds: devPermissions.allowedUserIds,
       roleDesign: String(resolvedStack?.devTeam?.roles?.design || ""),
       roleImplementation: String(resolvedStack?.devTeam?.roles?.implementation || ""),
@@ -539,6 +564,16 @@ export function settingsToForm(settings: unknown) {
     codeAgentDefaultCwd: resolved.codeAgent.defaultCwd ?? defaults.codeAgent.defaultCwd,
     codeAgentMaxTasksPerHour: resolved.codeAgent.maxTasksPerHour ?? defaults.codeAgent.maxTasksPerHour,
     codeAgentMaxParallelTasks: resolved.codeAgent.maxParallelTasks ?? defaults.codeAgent.maxParallelTasks,
+    codeAgentAsyncDispatchEnabled:
+      resolved.codeAgent.asyncDispatchEnabled ?? defaults.codeAgent.asyncDispatchEnabled,
+    codeAgentAsyncDispatchThresholdMs:
+      resolved.codeAgent.asyncDispatchThresholdMs ?? defaults.codeAgent.asyncDispatchThresholdMs,
+    codeAgentAsyncProgressReportsEnabled:
+      resolved.codeAgent.asyncProgressReportsEnabled ?? defaults.codeAgent.asyncProgressReportsEnabled,
+    codeAgentAsyncProgressIntervalMs:
+      resolved.codeAgent.asyncProgressIntervalMs ?? defaults.codeAgent.asyncProgressIntervalMs,
+    codeAgentAsyncMaxReportsPerTask:
+      resolved.codeAgent.asyncMaxReportsPerTask ?? defaults.codeAgent.asyncMaxReportsPerTask,
     codeAgentAllowedUserIds: formatLineList(resolved.codeAgent.allowedUserIds ?? defaults.codeAgent.allowedUserIds),
     codeAgentRoleDesign: String(resolved.codeAgent.roleDesign ?? "claude_code"),
     codeAgentRoleImplementation: String(resolved.codeAgent.roleImplementation ?? "claude_code"),
@@ -1085,6 +1120,44 @@ export function getSettingsValidationError(form: SettingsForm): SettingsFormVali
       value: form.codeAgentMaxBufferBytes,
       min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxBufferBytes.min,
       max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxBufferBytes.max
+    }),
+    validateNumericField({
+      enabled: Boolean(
+        form.stackAdvancedOverridesEnabled &&
+        form.codeAgentEnabled &&
+        form.codeAgentAsyncDispatchEnabled
+      ),
+      sectionId: "sec-code-agent",
+      label: "Async dispatch threshold (ms)",
+      value: form.codeAgentAsyncDispatchThresholdMs,
+      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchThresholdMs.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchThresholdMs.max
+    }),
+    validateNumericField({
+      enabled: Boolean(
+        form.stackAdvancedOverridesEnabled &&
+        form.codeAgentEnabled &&
+        form.codeAgentAsyncDispatchEnabled &&
+        form.codeAgentAsyncProgressReportsEnabled
+      ),
+      sectionId: "sec-code-agent",
+      label: "Async progress interval (ms)",
+      value: form.codeAgentAsyncProgressIntervalMs,
+      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchProgressIntervalMs.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchProgressIntervalMs.max
+    }),
+    validateNumericField({
+      enabled: Boolean(
+        form.stackAdvancedOverridesEnabled &&
+        form.codeAgentEnabled &&
+        form.codeAgentAsyncDispatchEnabled &&
+        form.codeAgentAsyncProgressReportsEnabled
+      ),
+      sectionId: "sec-code-agent",
+      label: "Async max progress reports per task",
+      value: form.codeAgentAsyncMaxReportsPerTask,
+      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.max
     })
   ].filter((entry): entry is SettingsFormValidationError => entry !== null);
 
@@ -1144,6 +1217,31 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
       Number(preservedCodeAgentWorkers.codex.maxParallelTasks || 0),
       Number(preservedCodeAgentWorkers.codexCli.maxParallelTasks || 0),
       Number(preservedCodeAgentWorkers.claudeCode.maxParallelTasks || 0)
+    ),
+    asyncDispatchEnabled: Boolean(
+      preservedCodeAgentWorkers.codex.asyncDispatch?.enabled ||
+      preservedCodeAgentWorkers.codexCli.asyncDispatch?.enabled ||
+      preservedCodeAgentWorkers.claudeCode.asyncDispatch?.enabled
+    ),
+    asyncDispatchThresholdMs: Math.max(
+      Number(preservedCodeAgentWorkers.codex.asyncDispatch?.thresholdMs || 0),
+      Number(preservedCodeAgentWorkers.codexCli.asyncDispatch?.thresholdMs || 0),
+      Number(preservedCodeAgentWorkers.claudeCode.asyncDispatch?.thresholdMs || 0)
+    ),
+    asyncProgressReportsEnabled: Boolean(
+      preservedCodeAgentWorkers.codex.asyncDispatch?.progressReports?.enabled ||
+      preservedCodeAgentWorkers.codexCli.asyncDispatch?.progressReports?.enabled ||
+      preservedCodeAgentWorkers.claudeCode.asyncDispatch?.progressReports?.enabled
+    ),
+    asyncProgressIntervalMs: Math.max(
+      Number(preservedCodeAgentWorkers.codex.asyncDispatch?.progressReports?.intervalMs || 0),
+      Number(preservedCodeAgentWorkers.codexCli.asyncDispatch?.progressReports?.intervalMs || 0),
+      Number(preservedCodeAgentWorkers.claudeCode.asyncDispatch?.progressReports?.intervalMs || 0)
+    ),
+    asyncMaxReportsPerTask: Math.max(
+      Number(preservedCodeAgentWorkers.codex.asyncDispatch?.progressReports?.maxReportsPerTask || 0),
+      Number(preservedCodeAgentWorkers.codexCli.asyncDispatch?.progressReports?.maxReportsPerTask || 0),
+      Number(preservedCodeAgentWorkers.claudeCode.asyncDispatch?.progressReports?.maxReportsPerTask || 0)
     )
   };
   const codeAgentSharedOverrides = {
@@ -1152,7 +1250,12 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
     maxBufferBytes: Number(form.codeAgentMaxBufferBytes),
     defaultCwd: String(form.codeAgentDefaultCwd || "").trim(),
     maxTasksPerHour: Number(form.codeAgentMaxTasksPerHour),
-    maxParallelTasks: Number(form.codeAgentMaxParallelTasks)
+    maxParallelTasks: Number(form.codeAgentMaxParallelTasks),
+    asyncDispatchEnabled: Boolean(form.codeAgentAsyncDispatchEnabled),
+    asyncDispatchThresholdMs: Number(form.codeAgentAsyncDispatchThresholdMs),
+    asyncProgressReportsEnabled: Boolean(form.codeAgentAsyncProgressReportsEnabled),
+    asyncProgressIntervalMs: Number(form.codeAgentAsyncProgressIntervalMs),
+    asyncMaxReportsPerTask: Number(form.codeAgentAsyncMaxReportsPerTask)
   };
   const shouldOverrideSharedCodeAgentField = (
     field: keyof typeof preservedCodeAgentAggregate
@@ -1196,7 +1299,39 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
         : Number(preserved.maxTasksPerHour ?? codeAgentSharedOverrides.maxTasksPerHour),
       maxParallelTasks: shouldOverrideSharedCodeAgentField("maxParallelTasks")
         ? codeAgentSharedOverrides.maxParallelTasks
-        : Number(preserved.maxParallelTasks ?? codeAgentSharedOverrides.maxParallelTasks)
+        : Number(preserved.maxParallelTasks ?? codeAgentSharedOverrides.maxParallelTasks),
+      asyncDispatch: {
+        enabled: shouldOverrideSharedCodeAgentField("asyncDispatchEnabled")
+          ? codeAgentSharedOverrides.asyncDispatchEnabled
+          : Boolean(
+              preserved.asyncDispatch?.enabled ?? codeAgentSharedOverrides.asyncDispatchEnabled
+            ),
+        thresholdMs: shouldOverrideSharedCodeAgentField("asyncDispatchThresholdMs")
+          ? codeAgentSharedOverrides.asyncDispatchThresholdMs
+          : Number(
+              preserved.asyncDispatch?.thresholdMs ?? codeAgentSharedOverrides.asyncDispatchThresholdMs
+            ),
+        progressReports: {
+          enabled: shouldOverrideSharedCodeAgentField("asyncProgressReportsEnabled")
+            ? codeAgentSharedOverrides.asyncProgressReportsEnabled
+            : Boolean(
+                preserved.asyncDispatch?.progressReports?.enabled ??
+                codeAgentSharedOverrides.asyncProgressReportsEnabled
+              ),
+          intervalMs: shouldOverrideSharedCodeAgentField("asyncProgressIntervalMs")
+            ? codeAgentSharedOverrides.asyncProgressIntervalMs
+            : Number(
+                preserved.asyncDispatch?.progressReports?.intervalMs ??
+                codeAgentSharedOverrides.asyncProgressIntervalMs
+              ),
+          maxReportsPerTask: shouldOverrideSharedCodeAgentField("asyncMaxReportsPerTask")
+            ? codeAgentSharedOverrides.asyncMaxReportsPerTask
+            : Number(
+                preserved.asyncDispatch?.progressReports?.maxReportsPerTask ??
+                codeAgentSharedOverrides.asyncMaxReportsPerTask
+              )
+        }
+      }
     };
   };
   const normalizeCodeAgentRole = (value: unknown): "claude_code" | "codex_cli" | "codex" => {

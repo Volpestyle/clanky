@@ -3657,6 +3657,66 @@ test("deliverVoiceThoughtCandidate does not fallback to TTS in realtime mode", a
   assert.equal(ttsCalls, 0);
 });
 
+test("requestRealtimeCodeTaskFollowup injects async code task completion into realtime session", () => {
+  const { manager, logs } = createManager();
+  const prompts: string[] = [];
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeClient: {
+      requestTextUtterance(prompt: string) {
+        prompts.push(prompt);
+      },
+      isResponseInProgress() {
+        return false;
+      }
+    }
+  });
+  manager.sessions.set(session.guildId, session as unknown as VoiceSession);
+
+  const delivered = manager.requestRealtimeCodeTaskFollowup({
+    guildId: session.guildId,
+    channelId: session.textChannelId,
+    prompt: "[CODE TASK COMPLETED]\nSession: code:guild-1:text-1:123\nResult:\nUpdated auth module.",
+    userId: "user-1",
+    source: "voice_realtime_code_task_result_followup"
+  });
+
+  assert.equal(delivered, true);
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0] || "", /\[CODE TASK COMPLETED\]/i);
+  assert.equal(session.lastRealtimeToolCallerUserId, "user-1");
+  const logEntry = logs.find((entry) => entry?.content === "realtime_async_code_task_followup_enqueued");
+  assert.equal(Boolean(logEntry), true);
+});
+
+test("requestRealtimeCodeTaskFollowup skips when channel does not match active session", () => {
+  const { manager, logs } = createManager();
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeClient: {
+      requestTextUtterance() {
+        throw new Error("should not be called");
+      },
+      isResponseInProgress() {
+        return false;
+      }
+    }
+  });
+  manager.sessions.set(session.guildId, session as unknown as VoiceSession);
+
+  const delivered = manager.requestRealtimeCodeTaskFollowup({
+    guildId: session.guildId,
+    channelId: "different-text-channel",
+    prompt: "[CODE TASK COMPLETED]\nSession: code:guild-1:text-1:123",
+    userId: "user-1",
+    source: "voice_realtime_code_task_result_followup"
+  });
+
+  assert.equal(delivered, false);
+  const logEntry = logs.find((entry) => entry?.content === "realtime_async_code_task_followup_skipped");
+  assert.equal(Boolean(logEntry), false);
+});
+
 test("requestRealtimeTextUtterance queues assistant speech behind an active realtime response", () => {
   const { manager, logs } = createManager();
   const prompts = [];
