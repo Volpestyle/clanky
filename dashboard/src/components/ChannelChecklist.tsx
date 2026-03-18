@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { api } from "../api";
 import { parseUniqueList } from "../../../src/settings/listNormalization.ts";
 import { useDashboardGuildScope } from "../guildScope";

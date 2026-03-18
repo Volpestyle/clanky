@@ -1,4 +1,3 @@
-import React from "react";
 import { SettingsSection } from "../SettingsSection";
 import { BROWSER_LLM_PROVIDER_OPTIONS, LlmProviderOptions } from "./LlmProviderOptions";
 import {

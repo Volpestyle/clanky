@@ -21,13 +21,22 @@ export interface SubAgentTurnResult {
   errorMessage: string;
   /** True when the sub-agent intentionally ended the session during this turn. */
   sessionCompleted?: boolean;
-  usage: {
-    inputTokens: number;
-    outputTokens: number;
-    cacheWriteTokens: number;
-    cacheReadTokens: number;
-  };
+  usage: SubAgentUsage;
 }
+
+export type SubAgentUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheWriteTokens: number;
+  cacheReadTokens: number;
+};
+
+export const EMPTY_USAGE: SubAgentUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheWriteTokens: 0,
+  cacheReadTokens: 0
+};
 
 export interface SubAgentSession {
   readonly id: string;
@@ -48,12 +57,6 @@ export interface SubAgentSession {
   /** Close the session and free resources. */
   close(): void;
 }
-
-type SubAgentSessionFactory = (opts: {
-  type: "code" | "browser";
-  scopeKey: string;
-  config: Record<string, unknown>;
-}) => SubAgentSession;
 
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const DEFAULT_MAX_SESSIONS = 20;

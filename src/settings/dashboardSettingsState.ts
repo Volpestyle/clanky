@@ -15,6 +15,7 @@ import {
 } from "./agentStack.ts";
 import { resolveVoiceRuntimeSelectionFromMode } from "./voiceDashboardMappings.ts";
 import { normalizeSettings } from "../store/settingsNormalization.ts";
+import { isRecord } from "../store/normalize/primitives.ts";
 import { minimizeSettingsIntent } from "./settingsIntent.ts";
 
 export type DashboardProviderAuthBindings = {
@@ -53,15 +54,11 @@ export type DashboardSettingsEnvelope = {
   _meta?: DashboardSettingsEnvelopeMeta;
 };
 
-function isRecordLike(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 export function isDashboardSettingsEnvelope(value: unknown): value is DashboardSettingsEnvelope {
-  return isRecordLike(value) &&
-    isRecordLike(value.intent) &&
-    isRecordLike(value.effective) &&
-    isRecordLike(value.bindings);
+  return isRecord(value) &&
+    isRecord(value.intent) &&
+    isRecord(value.effective) &&
+    isRecord(value.bindings);
 }
 
 export function resolveSettingsBindings(
@@ -97,7 +94,7 @@ export function buildDashboardSettingsEnvelope({
   meta?: DashboardSettingsEnvelopeMeta;
 }): DashboardSettingsEnvelope {
   const minimizedIntent = minimizeSettingsIntent(intent);
-  const resolvedEffective = normalizeSettings(isRecordLike(effective) ? effective : minimizedIntent);
+  const resolvedEffective = normalizeSettings(isRecord(effective) ? effective : minimizedIntent);
   const envelope: DashboardSettingsEnvelope = {
     intent: minimizedIntent,
     effective: resolvedEffective,

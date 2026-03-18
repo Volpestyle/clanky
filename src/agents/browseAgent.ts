@@ -4,7 +4,7 @@ import type { BrowserManager } from "../services/BrowserManager.ts";
 import { BROWSER_AGENT_TOOL_DEFINITIONS, executeBrowserTool } from "../tools/browserTools.ts";
 import { isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
-import { generateSessionId } from "./subAgentSession.ts";
+import { EMPTY_USAGE, generateSessionId } from "./subAgentSession.ts";
 
 const BROWSE_AGENT_TOOL_RESULT_TRUNCATE_LEN = 800;
 const BROWSE_AGENT_REASONING_TRUNCATE_LEN = 500;
@@ -300,8 +300,6 @@ interface BrowserAgentSessionOptions {
   trace: BrowseAgentTrace;
   signal?: AbortSignal;
 }
-
-const EMPTY_USAGE = { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 };
 
 /**
  * BrowserAgentSession keeps the browser open and the conversation history

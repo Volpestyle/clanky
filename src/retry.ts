@@ -13,7 +13,7 @@ const RETRYABLE_FETCH_ERROR_CODES = new Set([
   "UND_ERR_BODY_TIMEOUT"
 ]);
 
-type ErrorWithAttempts = Error & {
+export type ErrorWithAttempts = Error & {
   attempts?: number;
 };
 

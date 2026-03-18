@@ -9,6 +9,7 @@ import "./styles/action-stream.css";
 import "./styles/text-tab.css";
 import "./styles/agents-tab.css";
 import "./styles/inspector.css";
+import "./styles/voice-debugger.css";
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>

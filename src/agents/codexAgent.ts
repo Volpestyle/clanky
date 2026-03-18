@@ -2,7 +2,7 @@ import type OpenAI from "openai";
 import { runCodexSessionTurn } from "../llm/llmCodex.ts";
 import { createAbortError, isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
-import { generateSessionId } from "./subAgentSession.ts";
+import { EMPTY_USAGE, generateSessionId } from "./subAgentSession.ts";
 
 interface CodeAgentTrace {
   guildId?: string | null;
@@ -11,7 +11,6 @@ interface CodeAgentTrace {
   source?: string | null;
 }
 
-const EMPTY_USAGE = { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 };
 const activeCodexTaskCount = { current: 0 };
 
 export function getActiveCodexAgentTaskCount(): number {

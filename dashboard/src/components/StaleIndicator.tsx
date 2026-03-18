@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 export default function StaleIndicator({ lastSuccess }: { lastSuccess: number | null }) {
   const [now, setNow] = useState(Date.now());

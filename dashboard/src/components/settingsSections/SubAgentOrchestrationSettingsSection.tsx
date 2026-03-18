@@ -1,4 +1,3 @@
-import React from "react";
 import { SettingsSection } from "../SettingsSection";
 
 export function SubAgentOrchestrationSettingsSection({ id, form, set }) {

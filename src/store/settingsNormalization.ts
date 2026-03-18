@@ -31,10 +31,6 @@ export {
   PERSONA_FLAVOR_MAX_CHARS
 } from "./normalize/primitives.ts";
 
-function isRecordLike(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 export function normalizeSettings(raw: unknown): Settings {
   const rawRecord = isRecord(raw) ? raw : {};
   const canonicalInput = omitUndefinedDeep(rawRecord) as SettingsInput;

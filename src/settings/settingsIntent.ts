@@ -1,29 +1,26 @@
 import type { SettingsInput } from "./settingsSchema.ts";
 import { normalizeSettings } from "../store/settingsNormalization.ts";
+import { isRecord } from "../store/normalize/primitives.ts";
 import { deepMerge } from "../utils.ts";
 
 type JsonRecord = Record<string, unknown>;
 
-function isRecordLike(value: unknown): value is JsonRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function cloneIntentCandidate(value: unknown): JsonRecord {
-  if (!isRecordLike(value)) return {};
+  if (!isRecord(value)) return {};
   return deepMerge({}, value) as JsonRecord;
 }
 
 function canonicalizeLegacyIntent(candidate: JsonRecord): JsonRecord {
   const next = cloneIntentCandidate(candidate);
-  const agentStack = isRecordLike(next.agentStack) ? { ...next.agentStack } : null;
+  const agentStack = isRecord(next.agentStack) ? { ...next.agentStack } : null;
   if (!agentStack) return next;
 
-  const overrides = isRecordLike(agentStack.overrides) ? { ...agentStack.overrides } : null;
-  const runtimeConfig = isRecordLike(agentStack.runtimeConfig) ? { ...agentStack.runtimeConfig } : {};
+  const overrides = isRecord(agentStack.overrides) ? { ...agentStack.overrides } : null;
+  const runtimeConfig = isRecord(agentStack.runtimeConfig) ? { ...agentStack.runtimeConfig } : {};
   const voiceRuntime = overrides && typeof overrides.voiceRuntime === "string"
     ? String(overrides.voiceRuntime).trim()
     : "";
-  const voice = isRecordLike(runtimeConfig.voice) ? { ...runtimeConfig.voice } : {};
+  const voice = isRecord(runtimeConfig.voice) ? { ...runtimeConfig.voice } : {};
   const hasExplicitRuntimeMode = Object.prototype.hasOwnProperty.call(voice, "runtimeMode");
 
   if (voiceRuntime && !hasExplicitRuntimeMode) {
@@ -48,7 +45,7 @@ function canonicalizeLegacyIntent(candidate: JsonRecord): JsonRecord {
 function getCandidateValue(root: JsonRecord, path: string[]) {
   let current: unknown = root;
   for (const segment of path) {
-    if (!isRecordLike(current)) return undefined;
+    if (!isRecord(current)) return undefined;
     current = current[segment];
   }
   return current;
@@ -67,7 +64,7 @@ function deleteCandidatePath(root: JsonRecord, path: string[]): JsonRecord {
   }
 
   const currentChild = clone[head];
-  if (!isRecordLike(currentChild)) {
+  if (!isRecord(currentChild)) {
     delete clone[head];
     return clone;
   }
@@ -91,7 +88,7 @@ function effectiveMatches(candidate: JsonRecord, targetJson: string) {
 
 function pruneIntentAtPath(root: JsonRecord, path: string[], targetJson: string): JsonRecord {
   const current = getCandidateValue(root, path);
-  if (!isRecordLike(current)) return root;
+  if (!isRecord(current)) return root;
 
   let workingRoot = root;
   for (const key of Object.keys(current)) {
@@ -103,13 +100,13 @@ function pruneIntentAtPath(root: JsonRecord, path: string[], targetJson: string)
     }
 
     const nextChild = getCandidateValue(workingRoot, childPath);
-    if (!isRecordLike(nextChild)) {
+    if (!isRecord(nextChild)) {
       continue;
     }
 
     workingRoot = pruneIntentAtPath(workingRoot, childPath, targetJson);
     const prunedChild = getCandidateValue(workingRoot, childPath);
-    if (!isRecordLike(prunedChild) || Object.keys(prunedChild).length > 0) {
+    if (!isRecord(prunedChild) || Object.keys(prunedChild).length > 0) {
       continue;
     }
 
@@ -124,7 +121,7 @@ function pruneIntentAtPath(root: JsonRecord, path: string[], targetJson: string)
 
 export function minimizeSettingsIntent(value: unknown): SettingsInput {
   const source =
-    isRecordLike(value) && isRecordLike(value.intent)
+    isRecord(value) && isRecord(value.intent)
       ? value.intent
       : value;
   const candidate = canonicalizeLegacyIntent(cloneIntentCandidate(source));

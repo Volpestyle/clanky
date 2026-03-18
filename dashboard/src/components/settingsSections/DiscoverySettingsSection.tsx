@@ -1,4 +1,3 @@
-import React from "react";
 import { SettingsSection } from "../SettingsSection";
 import { Collapse } from "../Collapse";
 import { rangeStyle } from "../../utils";

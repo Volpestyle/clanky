@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { api } from "../api";
 import {
   GEMINI_REALTIME_MODEL_OPTIONS,

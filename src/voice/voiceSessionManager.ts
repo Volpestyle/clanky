@@ -235,17 +235,32 @@ import { executeLocalVoiceToolCall } from "./voiceToolCallDispatch.ts";
 import type {
   CaptureState,
   LoggedVoicePromptBundle,
+  MusicDisambiguationPayload,
+  MusicSelectionResult,
+  MusicTextCommandMessage,
+  MusicTextRequestPayload,
   OutputChannelState,
   RealtimeToolOwnership,
+  VoiceAddressingAnnotation,
+  VoiceAddressingState,
+  VoiceConversationContext,
   VoiceInterruptOverlapBurstEntry,
   VoiceInterruptOverlapBurstState,
   VoiceInterruptOverlapDecision,
   VoiceInterruptOverlapUtteranceState,
+  VoiceMcpServerStatus,
   VoicePendingSpeechStartedInterrupt,
   VoicePendingInterruptBridgeTurn,
+  VoiceRealtimeToolDescriptor,
+  VoiceRealtimeToolSettings,
+  VoiceReplyDecision,
   VoiceRuntimeEventContext,
   VoiceQueuedRealtimeAssistantUtterance,
-  VoiceSession
+  VoiceSession,
+  VoiceTimelineTurn,
+  VoiceToolCallEvent,
+  VoiceToolRuntimeSessionLike,
+  VoiceTranscriptTimelineEntry
 } from "./voiceSessionTypes.ts";
 import {
   musicPhaseIsActive,
@@ -335,246 +350,6 @@ function resolveVoiceToolFollowupDomain(toolName: string | null = null) {
   if (normalizedToolName.startsWith("music_")) return "music";
   return "tool";
 }
-
-type MusicSelectionResult = {
-  id: string;
-  title: string;
-  artist: string;
-  platform: "youtube" | "soundcloud" | "discord" | "auto";
-  externalUrl: string | null;
-  durationSeconds: number | null;
-};
-
-type MusicDisambiguationPayload = {
-  session?: Record<string, unknown> | null;
-  query?: string;
-  platform?: string;
-  action?: "play_now" | "queue_next" | "queue_add";
-  results?: Array<Record<string, unknown>>;
-  requestedByUserId?: string | null;
-};
-
-type MusicTextCommandMessage = {
-  guild?: { id?: string | null } | null;
-  guildId?: string | null;
-  channel?: unknown;
-  channelId?: string | null;
-  author?: { id?: string | null } | null;
-  id?: string | null;
-  content?: string | null;
-};
-
-type MusicTextRequestPayload = {
-  message?: MusicTextCommandMessage | null;
-  settings?: Record<string, unknown> | null;
-};
-
-type VoiceAddressingAnnotation = {
-  talkingTo: string | null;
-  directedConfidence: number;
-  source: string | null;
-  reason: string | null;
-};
-
-type VoiceAddressingState = {
-  currentSpeakerTarget: string | null;
-  currentSpeakerDirectedConfidence: number;
-  lastDirectedToMe: {
-    speakerName: string;
-    directedConfidence: number;
-    ageMs: number | null;
-  } | null;
-  recentAddressingGuesses: Array<{
-    speakerName: string;
-    talkingTo: string | null;
-    directedConfidence: number;
-    ageMs: number | null;
-  }>;
-};
-
-type VoiceConversationContext = {
-  attentionMode: "ACTIVE" | "AMBIENT";
-  currentSpeakerActive: boolean;
-  recentAssistantReply: boolean;
-  recentDirectAddress: boolean;
-  sameAsRecentDirectAddress: boolean;
-  msSinceAssistantReply: number | null;
-  msSinceDirectAddress: number | null;
-  activeCommandSpeaker?: string | null;
-  activeCommandDomain?: string | null;
-  activeCommandIntent?: string | null;
-  msUntilCommandSessionExpiry?: number | null;
-  pendingCommandFollowupSignal?: boolean;
-  musicActive?: boolean;
-  musicWakeLatched?: boolean;
-  msUntilMusicWakeLatchExpiry?: number | null;
-  interruptedAssistantReply?: {
-    utteranceText: string;
-    interruptedByUserId: string | null;
-    interruptedBySpeakerName: string | null;
-    interruptedAt: number;
-    ageMs: number | null;
-    source: string | null;
-  } | null;
-};
-
-type VoiceReplyDecision = {
-  allow: boolean;
-  reason: string;
-  participantCount: number;
-  directAddressed: boolean;
-  directAddressConfidence: number;
-  directAddressThreshold: number;
-  transcript: string;
-  conversationContext: VoiceConversationContext;
-  voiceAddressing?: VoiceAddressingAnnotation | null;
-  llmResponse?: string | null;
-  llmProvider?: string | null;
-  llmModel?: string | null;
-  error?: string | null;
-  retryAfterMs?: number | null;
-  requiredSilenceMs?: number | null;
-  msSinceInboundAudio?: number | null;
-  outputLockReason?: string | null;
-  classifierLatencyMs?: number | null;
-  classifierDecision?: "allow" | "deny" | null;
-  classifierConfidence?: number | null;
-  classifierTarget?: string | null;
-  classifierReason?: string | null;
-  runtimeEventContext?: VoiceRuntimeEventContext | null;
-  replyPrompts?: LoggedVoicePromptBundle | null;
-};
-
-type VoiceTimelineTurn = {
-  kind?: "speech";
-  role: "assistant" | "user";
-  userId: string | null;
-  speakerName: string;
-  text: string;
-  at: number;
-  addressing?: VoiceAddressingAnnotation;
-};
-
-type VoiceTranscriptTimelineMembershipEntry = {
-  kind: "membership";
-  role: "user";
-  userId: string | null;
-  speakerName: string;
-  text: string;
-  at: number;
-  eventType: "join" | "leave";
-  addressing?: VoiceAddressingAnnotation;
-};
-
-type VoiceTranscriptTimelineEffectEntry = {
-  kind: "effect";
-  role: "user";
-  userId: string | null;
-  speakerName: string;
-  text: string;
-  at: number;
-  effectType: "soundboard" | "emoji" | "unknown";
-  summary: string;
-  soundId: string | null;
-  soundName: string | null;
-  emoji: string | null;
-  addressing?: VoiceAddressingAnnotation;
-};
-
-type VoiceTranscriptTimelineEntry =
-  | VoiceTimelineTurn
-  | VoiceTranscriptTimelineMembershipEntry
-  | VoiceTranscriptTimelineEffectEntry;
-
-type VoiceRealtimeToolDescriptor = {
-  toolType: "function" | "mcp";
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
-  serverName?: string | null;
-};
-
-type VoiceToolCallEvent = {
-  callId: string;
-  toolName: string;
-  toolType: "function" | "mcp";
-  arguments: Record<string, unknown>;
-  startedAt: string;
-  completedAt: string | null;
-  runtimeMs: number | null;
-  success: boolean;
-  outputSummary: Record<string, unknown> | string | null;
-  error: string | null;
-  sourceEventType?: string | null;
-};
-
-type VoiceMcpServerStatus = {
-  serverName: string;
-  connected: boolean;
-  tools: Array<{ name: string; description: string; inputSchema?: Record<string, unknown> }>;
-  lastError: string | null;
-  lastConnectedAt: string | null;
-  lastCallAt: string | null;
-  baseUrl: string;
-  toolPath: string;
-  timeoutMs: number;
-  headers: Record<string, string>;
-};
-
-type VoiceRealtimeToolSettings = {
-  webSearch?: {
-    enabled?: boolean;
-    maxResults?: number;
-    recencyDaysDefault?: number;
-  };
-  memory?: {
-    enabled?: boolean;
-  };
-  browser?: {
-    enabled?: boolean;
-  };
-  voice?: {
-    replyPath?: string;
-  };
-  [key: string]: unknown;
-};
-
-type VoiceToolRuntimeSessionLike = {
-  ending?: boolean;
-  mode?: string;
-  realtimeToolOwnership?: RealtimeToolOwnership | null;
-  realtimeClient?: object | null;
-  mcpStatus?: VoiceMcpServerStatus[];
-  settingsSnapshot?: VoiceRealtimeToolSettings | null;
-  realtimeToolDefinitions?: VoiceRealtimeToolDescriptor[];
-  lastRealtimeToolHash?: string | null;
-  lastRealtimeToolRefreshAt?: number | null;
-  guildId?: string;
-  textChannelId?: string;
-  id?: string;
-  realtimeToolResponseDebounceTimer?: ReturnType<typeof setTimeout> | null;
-  realtimeToolCallExecutions?: Map<string, { startedAtMs: number; toolName: string }>;
-  realtimePendingToolCalls?: Map<string, {
-    callId: string;
-    name: string;
-    argumentsText: string;
-    responseId?: string | null;
-    done: boolean;
-    startedAtMs: number;
-    sourceEventType: string;
-  }>;
-  realtimePendingToolAbortControllers?: Map<string, AbortController>;
-  realtimeResponsesWithAssistantOutput?: Map<string, number>;
-  realtimeToolFollowupNeeded?: boolean;
-  toolMusicTrackCatalog?: Map<string, unknown>;
-  memoryWriteWindow?: number[];
-  toolCallEvents?: VoiceToolCallEvent[];
-  musicQueueState?: Record<string, unknown> | null;
-  lastRealtimeToolCallerUserId?: string | null;
-  awaitingToolOutputs?: boolean;
-  pendingMemoryIngest?: Promise<unknown> | null;
-  [key: string]: unknown;
-};
 
 export class VoiceSessionManager {
   client;

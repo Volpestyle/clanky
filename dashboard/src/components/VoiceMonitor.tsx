@@ -16,30 +16,14 @@ const VoiceDebugger = lazy(() => import("./VoiceDebugger"));
 import { useVoiceHistory } from "../hooks/useVoiceHistory";
 import { useDashboardGuildScope } from "../guildScope";
 import { CopyButton, Section } from "./ui";
+import {
+  deriveBotState,
+  elapsed,
+  normalizeFollowupPrompts,
+  normalizePromptText
+} from "../utils/voiceHelpers";
 
 // ---- helpers ----
-
-function deriveBotState(s: VoiceSession): "processing" | "speaking" | "listening" | "idle" | "disconnected" {
-  const pendingTurns = (s.batchAsr?.pendingTurns || 0) + (s.realtime?.pendingTurns || 0);
-  if (s.botTurnOpen) return "speaking";
-  if (pendingTurns > 0) return "processing";
-  if (s.activeInputStreams > 0) return "listening";
-  const connected = s.realtime?.state
-    ? (s.realtime.state as { connected?: boolean })?.connected !== false
-    : true;
-  if (!connected) return "disconnected";
-  return "idle";
-}
-
-function elapsed(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  const s = Math.floor(ms / 1000);
-  const m = Math.floor(s / 60);
-  const h = Math.floor(m / 60);
-  if (h > 0) return `${h}h ${m % 60}m`;
-  if (m > 0) return `${m}m ${s % 60}s`;
-  return `${s}s`;
-}
 
 function relativeTime(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
@@ -128,16 +112,6 @@ function resolveWakeIndicator(session: VoiceSession): {
 function snippet(text?: string, max = 120): string {
   if (!text) return "";
   return text.length > max ? text.slice(0, max) + "..." : text;
-}
-
-function normalizePromptText(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  return String(value);
-}
-
-function normalizeFollowupPrompts(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.map((entry) => normalizePromptText(entry));
 }
 
 function getPromptBundle(snapshot: PromptSnapshot): Exclude<PromptLogBundle, null> | null {

@@ -1,9 +1,13 @@
-import { normalizeInlineText, parseMemoryExtractionJson } from "../llm/llmHelpers.ts";
+import { normalizeInlineText } from "../llm/llmHelpers.ts";
 import {
   getBotName,
   getMemorySettings,
   getResolvedMemoryBinding
 } from "../settings/agentStack.ts";
+import {
+  REFLECTION_FACTS_JSON_SCHEMA,
+  normalizeReflectionFacts
+} from "./memoryHelpers.ts";
 
 type MicroReflectionEntry = {
   timestampIso: string;
@@ -12,15 +16,6 @@ type MicroReflectionEntry = {
   authorId: string | null;
   isBot: boolean;
   content: string;
-};
-
-type MicroReflectionFact = {
-  subject: string;
-  subjectName: string;
-  fact: string;
-  type: string;
-  confidence: number;
-  evidence: string;
 };
 
 type MicroReflectionSettings = Record<string, unknown> & {
@@ -33,6 +28,7 @@ type MicroReflectionSettings = Record<string, unknown> & {
 };
 
 type ExistingFactRow = {
+  id?: number;
   subject: string;
   fact: string;
   fact_type: string;
@@ -56,6 +52,7 @@ type MicroReflectionMemory = {
     confidence?: number | null;
     validationMode?: string;
     evidenceText?: string | null;
+    supersedesFactText?: string | null;
   }): Promise<{
     ok: boolean;
     reason?: string;
@@ -91,61 +88,9 @@ type MicroReflectionLlm = {
   }>;
 };
 
-const MICRO_REFLECTION_FACTS_JSON_SCHEMA = JSON.stringify({
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    facts: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          subject: { type: "string", enum: ["author", "bot", "lore"] },
-          subjectName: { type: "string", maxLength: 80 },
-          fact: { type: "string", minLength: 1, maxLength: 190 },
-          type: { type: "string", enum: ["preference", "profile", "relationship", "project", "other"] },
-          confidence: { type: "number", minimum: 0, maximum: 1 },
-          evidence: { type: "string", minLength: 1, maxLength: 220 }
-        },
-        required: ["subject", "subjectName", "fact", "type", "confidence", "evidence"]
-      }
-    }
-  },
-  required: ["facts"]
-});
-
 const MICRO_REFLECTION_MAX_FACTS = 8;
 const MICRO_REFLECTION_MAX_ENTRIES = 80;
 const MICRO_REFLECTION_MAX_TOTAL_CHARS = 9_000;
-
-function normalizeMicroReflectionFacts(rawText: string, maxFacts: number): MicroReflectionFact[] {
-  const parsed = parseMemoryExtractionJson(rawText);
-  const rawFacts = Array.isArray(parsed?.facts) ? parsed.facts : [];
-  const facts: MicroReflectionFact[] = [];
-  const validSubjects = new Set(["author", "bot", "lore"]);
-
-  for (const item of rawFacts) {
-    if (!item || typeof item !== "object") continue;
-
-    const subject = String(item.subject || "").trim().toLowerCase();
-    const fact = normalizeInlineText(item.fact, 190);
-    const evidence = normalizeInlineText(item.evidence, 220);
-    if (!validSubjects.has(subject) || !fact || !evidence) continue;
-
-    facts.push({
-      subject,
-      subjectName: normalizeInlineText(item.subjectName, 80) || "",
-      fact,
-      type: String(item.type || "other").trim().toLowerCase() || "other",
-      confidence: Math.max(0, Math.min(1, Number(item.confidence) || 0.5)),
-      evidence
-    });
-    if (facts.length >= maxFacts) break;
-  }
-
-  return facts;
-}
 
 function buildMicroReflectionPrompts({
   trigger,
@@ -167,11 +112,12 @@ function buildMicroReflectionPrompts({
     "Focus on durable preferences, identity, relationships, ongoing projects, and stable shared lore.",
     "Ignore fleeting reactions, one-off requests, jokes, tactical back-and-forth, and ephemeral chatter.",
     "Prefer facts that are clearly supported by the conversation excerpt.",
-    "If multiple candidates say the same thing in different words, keep only the best version.",
+    "If multiple candidates say the same thing in different words, keep only the best version. To replace an existing fact with a better version, set the supersedes field to the exact existing fact text being replaced.",
     "Classify each fact subject as one of: author, bot, lore.",
     `Use subject=author for facts about a specific user. Include subjectName with the author's exact display name from the excerpt. Authors in this excerpt: ${authorNames}.`,
     `Use subject=bot only for explicit durable facts about ${botName} that were USER-ASSIGNED (e.g. nicknames, personality traits the user told it to adopt, or identity changes). Do NOT extract facts describing the bot's built-in capabilities or default behavior (responding to requests, playing music, answering questions, etc.) — those are inherent, not durable memories.`,
     "Use subject=lore for stable shared context not tied to one person.",
+    `Write all fact text from first-person perspective — use "me", "I", "my" instead of referring to ${botName} by name. Example: "CURSED conk told me to be more nonchalant" not "CURSED conk told ${botName} to be more nonchalant".`,
     `Return strict JSON only: {"facts":[{"subject":"author|bot|lore","subjectName":"<author display name if subject=author, empty otherwise>","fact":"...","type":"preference|profile|relationship|project|other","confidence":0.0-1.0,"evidence":"short quote or excerpt"}]}.`,
     "If nothing should be saved, return {\"facts\":[]}."
   ].join("\n");
@@ -227,7 +173,7 @@ export async function runMicroReflection({
   settings: MicroReflectionSettings;
   guildId: string;
   channelId?: string | null;
-  trigger: "voice_session_end" | "text_channel_silence";
+  trigger: "voice_session_end" | "text_channel_silence" | "text_context_pressure";
   sourceMessageId: string;
   entries: MicroReflectionEntry[];
 }) {
@@ -301,8 +247,14 @@ export async function runMicroReflection({
   }
 
   const memoryBinding = getResolvedMemoryBinding(settings);
+  const triggerLabel =
+    trigger === "voice_session_end"
+      ? "voice session"
+      : trigger === "text_context_pressure"
+        ? "text channel nearing context truncation"
+        : "text channel";
   const { systemPrompt, userPrompt } = buildMicroReflectionPrompts({
-    trigger: trigger === "voice_session_end" ? "voice session" : "text channel",
+    trigger: triggerLabel,
     authorNames,
     botName,
     maxFacts: MICRO_REFLECTION_MAX_FACTS,
@@ -314,9 +266,9 @@ export async function runMicroReflection({
     userPrompt,
     temperature: 0.2,
     maxOutputTokens: 1_200,
-    jsonSchema: MICRO_REFLECTION_FACTS_JSON_SCHEMA
+    jsonSchema: REFLECTION_FACTS_JSON_SCHEMA
   });
-  const facts = normalizeMicroReflectionFacts(String(response?.text || ""), MICRO_REFLECTION_MAX_FACTS);
+  const facts = normalizeReflectionFacts(String(response?.text || ""), MICRO_REFLECTION_MAX_FACTS);
   if (!facts.length) {
     return { ok: true, reason: "no_facts_selected" as const, savedCount: 0 };
   }
@@ -331,7 +283,7 @@ export async function runMicroReflection({
     let scope: "user" | "self" | "lore" = "lore";
     if (fact.subject === "author") scope = "user";
     if (fact.subject === "bot") scope = "self";
-    if (trigger === "text_channel_silence" && scope === "self") {
+    if (trigger !== "voice_session_end" && scope === "self") {
       continue;
     }
 
@@ -360,7 +312,8 @@ export async function runMicroReflection({
       factType: fact.type,
       confidence: fact.confidence,
       validationMode: "minimal",
-      evidenceText: fact.evidence || null
+      evidenceText: fact.evidence || null,
+      supersedesFactText: fact.supersedes || null
     });
     if (saveResult?.ok) {
       savedCount += 1;

@@ -1,12 +1,9 @@
 import {
   AGENT_STACK_PRESETS,
+  type DevTeamRoles,
+  type SettingsModelBinding,
   type SettingsCodingWorkerName
 } from "./settingsSchema.ts";
-
-type ModelBinding = {
-  provider: string;
-  model: string;
-};
 
 export type AgentSessionToolPolicy = "none" | "fast_only" | "full";
 
@@ -18,16 +15,9 @@ export type AgentSessionPolicy = {
   };
 };
 
-type DevTeamRoles = {
-  design: SettingsCodingWorkerName;
-  implementation: SettingsCodingWorkerName;
-  review: SettingsCodingWorkerName;
-  research?: SettingsCodingWorkerName;
-};
-
 export type AgentStackPresetDefaults = {
   harness: string;
-  orchestrator: ModelBinding;
+  orchestrator: SettingsModelBinding;
   researchRuntime: string;
   browserRuntime: string;
   voiceRuntime: string;
@@ -36,13 +26,13 @@ export type AgentStackPresetDefaults = {
   voiceAdmissionPolicy: {
     mode: "generation_decides" | "classifier_gate";
   };
-  voiceAdmissionClassifier?: ModelBinding;
-  voiceInterruptClassifier?: ModelBinding;
-  voiceMusicBrain?: ModelBinding;
-  voiceGeneration?: ModelBinding;
+  voiceAdmissionClassifier?: SettingsModelBinding;
+  voiceInterruptClassifier?: SettingsModelBinding;
+  voiceMusicBrain?: SettingsModelBinding;
+  voiceGeneration?: SettingsModelBinding;
   sessionPolicy?: AgentSessionPolicy;
   devTeam: {
-    orchestrator: ModelBinding;
+    orchestrator: SettingsModelBinding;
     roles: DevTeamRoles;
     codingWorkers: SettingsCodingWorkerName[];
   };
@@ -52,8 +42,8 @@ export type AgentStackPresetName = (typeof AGENT_STACK_PRESETS)[number];
 
 type AgentStackPresetDefinition = AgentStackPresetDefaults & {
   label: string;
-  browserFallback?: ModelBinding;
-  visionFallback?: ModelBinding;
+  browserFallback?: SettingsModelBinding;
+  visionFallback?: SettingsModelBinding;
 };
 
 const AGENT_STACK_PRESET_DEFINITIONS = {
@@ -250,11 +240,11 @@ const AGENT_STACK_PRESET_DEFINITIONS = {
     },
     voiceMusicBrain: {
       provider: "openai-oauth",
-      model: "gpt-5.1-codex-mini"
+      model: "gpt-5.4-nano"
     },
     voiceGeneration: {
       provider: "openai-oauth",
-      model: "gpt-5.4"
+      model: "gpt-5.4-mini"
     },
     visionFallback: {
       provider: "openai-oauth",
@@ -400,7 +390,7 @@ export function getAgentStackPresetDefaults(
 
 export function getPresetVoiceAdmissionClassifierFallback(
   preset: unknown
-): ModelBinding | undefined {
+): SettingsModelBinding | undefined {
   const definition = getAgentStackPresetDefinition(preset);
   return definition.voiceAdmissionClassifier
     ? { ...definition.voiceAdmissionClassifier }
@@ -409,7 +399,7 @@ export function getPresetVoiceAdmissionClassifierFallback(
 
 export function getPresetVoiceInterruptClassifierFallback(
   preset: unknown
-): ModelBinding | undefined {
+): SettingsModelBinding | undefined {
   const definition = getAgentStackPresetDefinition(preset);
   if (definition.voiceInterruptClassifier) {
     return { ...definition.voiceInterruptClassifier };
@@ -421,7 +411,7 @@ export function getPresetVoiceInterruptClassifierFallback(
 
 export function getPresetVoiceMusicBrainFallback(
   preset: unknown
-): ModelBinding | undefined {
+): SettingsModelBinding | undefined {
   const definition = getAgentStackPresetDefinition(preset);
   return definition.voiceMusicBrain
     ? { ...definition.voiceMusicBrain }

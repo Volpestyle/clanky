@@ -11,7 +11,7 @@ import { summarizeNamedMetricRows, type NumericStats } from "../../scripts/repla
 import { formatPct, stableNumber } from "../../scripts/replay/core/utils.ts";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
 import { VOICE_RUNTIME_MODES, parseVoiceRuntimeMode } from "./voiceModes.ts";
-import { sleepMs } from "../normalization/time.ts";
+import { sleep } from "../normalization/time.ts";
 
 export const VOICE_GOLDEN_MODES = VOICE_RUNTIME_MODES;
 
@@ -1047,7 +1047,7 @@ async function runSimulatedCase({
   const ttsMs = decisionAllow ? simulatedDelayMs(`${idSeed}:tts`, 48, 18) : 0;
   const responseMs = decisionAllow ? simulatedDelayMs(`${idSeed}:response`, 180, 70) : 0;
 
-  await sleepMs(connectMs + inputPrepMs + inputSendMs + asrMs + actorMs + ttsMs + responseMs);
+  await sleep(connectMs + inputPrepMs + inputSendMs + asrMs + actorMs + ttsMs + responseMs);
 
   const transcript = caseRow.userText;
   const responseText =

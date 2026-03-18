@@ -1,6 +1,6 @@
 import type OpenAI from "openai";
 import { estimateImageUsdCost } from "./pricing.ts";
-import { sleepMs } from "../normalization/time.ts";
+import { sleep } from "../normalization/time.ts";
 import {
   extractOpenAiImageBase64,
   extractXaiVideoUrl,
@@ -339,7 +339,7 @@ export async function generateVideo(
     let statusResponse: XaiJsonRecord | null = null;
 
     while (Date.now() - startedAt < XAI_VIDEO_TIMEOUT_MS) {
-      await sleepMs(XAI_VIDEO_POLL_INTERVAL_MS);
+      await sleep(XAI_VIDEO_POLL_INTERVAL_MS);
       pollAttempts += 1;
 
       const poll = await fetchXaiJson(

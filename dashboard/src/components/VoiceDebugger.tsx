@@ -5,7 +5,7 @@ import type {
   LatencyTurnEntry,
   SessionLatency,
 } from "../hooks/useVoiceSSE";
-import "../styles/voice-debugger.css";
+import { deriveBotState, elapsed } from "../utils/voiceHelpers";
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -211,16 +211,6 @@ function fmtTimeMs(ts: number): string {
   return `${h}:${m}:${s}.${ms}`;
 }
 
-function elapsed(iso: string): string {
-  const ms = Date.now() - parseTs(iso);
-  const s = Math.floor(ms / 1000);
-  const m = Math.floor(s / 60);
-  const h = Math.floor(m / 60);
-  if (h > 0) return `${h}h ${m % 60}m`;
-  if (m > 0) return `${m}m ${s % 60}s`;
-  return `${s}s`;
-}
-
 function classifyEvent(evt: VoiceEvent): LaneId | null {
   // Voice events have kind like "voice_runtime" / "voice_error" with the
   // specific event type in the `content` field.  Some sentinel kinds
@@ -243,17 +233,6 @@ function classifyEvent(evt: VoiceEvent): LaneId | null {
     if (content && pat.test(content)) return laneId;
   }
   return null;
-}
-
-function deriveBotState(
-  s: VoiceSession
-): "processing" | "speaking" | "listening" | "idle" {
-  const pendingTurns =
-    (s.batchAsr?.pendingTurns ?? 0) + (s.realtime?.pendingTurns ?? 0);
-  if (s.botTurnOpen) return "speaking";
-  if (pendingTurns > 0) return "processing";
-  if (s.activeInputStreams > 0) return "listening";
-  return "idle";
 }
 
 function shortLabel(evt: VoiceEvent): string {

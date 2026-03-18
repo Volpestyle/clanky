@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 
 import { deepMerge, nowIso } from "../utils.ts";
 import { SETTINGS_KEY } from "./store.ts";
+import { isRecord } from "./normalize/primitives.ts";
 import { safeJsonParse } from "../normalization/valueParsers.ts";
 import { DEFAULT_SETTINGS, type SettingsInput } from "../settings/settingsSchema.ts";
 import { normalizeSettings } from "./settingsNormalization.ts";
@@ -40,12 +41,8 @@ type VersionedSettingsWriteResult =
 
 const CANONICAL_DEFAULT_SETTINGS_INTENT = minimizeSettingsIntent({});
 
-function isRecordLike(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function mergeSettingsPatch(current: SettingsInput, patch: unknown): SettingsInput {
-  const patchRecord = isRecordLike(patch) ? patch : {};
+  const patchRecord = isRecord(patch) ? patch : {};
   const merged = deepMerge(current, patchRecord);
 
   if (Object.prototype.hasOwnProperty.call(patchRecord, "memoryLlm")) {

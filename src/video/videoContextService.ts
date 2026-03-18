@@ -17,6 +17,7 @@ import {
   type VideoTarget
 } from "./videoTargets.ts";
 import {
+  type ErrorWithAttempts,
   getRetryDelayMs,
   isRetryableFetchError,
   isRedirectStatus,
@@ -39,10 +40,6 @@ type VideoTrace = {
   channelId?: string | null;
   userId?: string | null;
   source?: string;
-};
-
-type ErrorWithAttempts = Error & {
-  attempts?: number;
 };
 
 export class VideoContextService {

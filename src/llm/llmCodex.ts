@@ -3,7 +3,7 @@ import {
   extractOpenAiResponseText,
   extractOpenAiResponseUsage
 } from "./llmHelpers.ts";
-import { sleepMs } from "../normalization/time.ts";
+import { sleep } from "../normalization/time.ts";
 import { estimateUsdCost } from "./pricing.ts";
 import { createAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
 
@@ -108,7 +108,7 @@ async function waitForTerminalResponse({
 async function waitForCodexPoll(delayMs: number, signal?: AbortSignal) {
   throwIfAborted(signal, "Codex request cancelled");
   if (!signal) {
-    await sleepMs(delayMs);
+    await sleep(delayMs);
     return;
   }
   await new Promise<void>((resolve, reject) => {

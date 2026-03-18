@@ -1,4 +1,3 @@
-import React from "react";
 import Skeleton from "./Skeleton";
 import { formatUptime } from "../utils";
 import { StatusDot } from "./ui";

@@ -1,8 +1,11 @@
 import { deepMerge } from "../utils.ts";
+import { isRecord } from "../store/normalize/primitives.ts";
 import {
   DEFAULT_SETTINGS,
+  type DevTeamRoles,
   type Settings,
   type SettingsCodingWorkerName,
+  type SettingsModelBinding,
   type SettingsInput
 } from "./settingsSchema.ts";
 import {
@@ -17,31 +20,19 @@ import {
   resolveVoiceProviderFromRuntimeMode
 } from "./voiceDashboardMappings.ts";
 
-type ModelBinding = {
-  provider?: string;
-  model?: string;
-};
-
 type CapabilityExecutionPolicy = {
   mode?: string;
-  model?: ModelBinding;
+  model?: SettingsModelBinding;
   temperature?: number;
   maxOutputTokens?: number;
   reasoningEffort?: string;
-};
-
-type DevTeamRoles = {
-  design: SettingsCodingWorkerName;
-  implementation: SettingsCodingWorkerName;
-  review: SettingsCodingWorkerName;
-  research?: SettingsCodingWorkerName;
 };
 
 type ResolvedAgentStack = {
   preset: string;
   harness: string;
   sessionPolicy?: AgentSessionPolicy;
-  orchestrator: Required<ModelBinding>;
+  orchestrator: SettingsModelBinding;
   researchRuntime: string;
   browserRuntime: string;
   voiceRuntime: string;
@@ -52,7 +43,7 @@ type ResolvedAgentStack = {
     musicWakeLatchSeconds?: number;
   };
   devTeam: {
-    orchestrator: Required<ModelBinding>;
+    orchestrator: SettingsModelBinding;
     roles: DevTeamRoles;
     codingWorkers: SettingsCodingWorkerName[];
   };
@@ -72,7 +63,7 @@ function mergeWithDefaults<T>(defaults: T, value: unknown): T {
 }
 
 function isSettingsInput(value: unknown): value is SettingsInput {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function getSettingsInput(settings: unknown): SettingsInput {
@@ -87,9 +78,9 @@ function getSettingsSection<T>(
   return mergeWithDefaults(defaults, select(getSettingsInput(settings)));
 }
 
-function resolveModelBinding(binding: unknown, fallback: ModelBinding): Required<ModelBinding> {
+function resolveModelBinding(binding: unknown, fallback: SettingsModelBinding): SettingsModelBinding {
   const source = binding && typeof binding === "object" && !Array.isArray(binding)
-    ? binding as ModelBinding
+    ? binding as SettingsModelBinding
     : {};
   const provider = String(source.provider || fallback.provider || "").trim() || String(fallback.provider || "");
   const model = String(source.model || fallback.model || "").trim() || String(fallback.model || "");
@@ -98,7 +89,7 @@ function resolveModelBinding(binding: unknown, fallback: ModelBinding): Required
 
 function resolveExecutionPolicy(
   policy: unknown,
-  fallbackBinding: Required<ModelBinding>,
+  fallbackBinding: SettingsModelBinding,
   fallbackTemperature?: number,
   fallbackMaxOutputTokens?: number,
   fallbackReasoningEffort?: string

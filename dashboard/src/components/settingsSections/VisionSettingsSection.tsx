@@ -1,4 +1,3 @@
-import React from "react";
 import { SettingsSection } from "../SettingsSection";
 import { LlmProviderOptions, VISION_LLM_PROVIDER_OPTIONS } from "./LlmProviderOptions";
 

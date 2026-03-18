@@ -9,7 +9,7 @@ import {
 } from "../llm/llmClaudeCode.ts";
 import { runCodexTask } from "../llm/llmCodex.ts";
 import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
-import { generateSessionId } from "./subAgentSession.ts";
+import { EMPTY_USAGE, generateSessionId } from "./subAgentSession.ts";
 import { CodexAgentSession, getActiveCodexAgentTaskCount } from "./codexAgent.ts";
 import { CodexCliAgentSession, getActiveCodexCliAgentTaskCount } from "./codexCliAgent.ts";
 import { provisionCodeAgentWorkspace, type CodeAgentWorkspaceLease } from "./codeAgentWorkspace.ts";
@@ -416,8 +416,6 @@ interface CodeAgentSessionOptions {
   };
   workspace?: CodeAgentWorkspaceLease | null;
 }
-
-const EMPTY_USAGE = { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 };
 
 class CodeAgentSession implements SubAgentSession {
   readonly id: string;

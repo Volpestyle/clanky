@@ -1,4 +1,3 @@
-import React from "react";
 import { SettingsSection } from "../SettingsSection";
 import { ChannelChecklist } from "../ChannelChecklist";
 import { UserIdTagInput } from "../UserIdTagInput";

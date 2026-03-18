@@ -1,4 +1,3 @@
-import React from "react";
 import { PanelHead } from "./ui";
 const PHASE_ROWS = [
   { key: "queueMs", label: "Queue" },

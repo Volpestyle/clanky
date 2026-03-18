@@ -1,6 +1,7 @@
 import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Skeleton from "./Skeleton";
 import { CopyButton, PanelHead } from "./ui";
+import { normalizeFollowupPrompts, normalizePromptText } from "../utils/voiceHelpers";
 
 const STORAGE_KEY = "actionStreamColWidths";
 const COLUMNS = ["time", "kind", "channel", "content", "cost"] as const;
@@ -97,16 +98,6 @@ function withoutReplyPrompts(metadata: unknown) {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return metadata;
   const { replyPrompts: _replyPrompts, ...rest } = metadata as Record<string, unknown>;
   return rest;
-}
-
-function normalizePromptText(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  return String(value);
-}
-
-function normalizeFollowupPrompts(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.map((entry) => normalizePromptText(entry));
 }
 
 function ToolBadges({ metadata }: { metadata: unknown }) {

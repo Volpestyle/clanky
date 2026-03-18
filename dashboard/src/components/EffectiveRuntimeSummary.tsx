@@ -1,4 +1,3 @@
-import React from "react";
 import { AGENT_STACK_PRESET_OPTIONS } from "../../../src/settings/agentStackCatalog.ts";
 import { getEffectiveBrowserRuntime } from "../settingsFormModel";
 

@@ -6,6 +6,7 @@ import MemorySearch from "./memoryTab/MemorySearch";
 import MemoryFactProfiles from "./memoryTab/MemoryFactProfiles";
 import MemoryReflections from "./memoryTab/MemoryReflections";
 import MemoryInspector from "./memoryTab/MemoryInspector";
+import { loadStoredTab, saveStoredTab } from "../tabState";
 
 const MEMORY_SUB_TABS = ["runtime", "snapshot", "inspector", "profiles", "reflections", "search"] as const;
 const MEMORY_SUB_TAB_STORAGE_KEY = "dashboard_memory_sub_tab";
@@ -18,37 +19,17 @@ interface Props {
   notify: (text: string, type?: string) => void;
 }
 
-function loadStoredMemorySubTab(fallback: SubTab): SubTab {
-  try {
-    const raw = localStorage.getItem(MEMORY_SUB_TAB_STORAGE_KEY);
-    if (raw && MEMORY_SUB_TABS.some((tab) => tab === raw)) {
-      return raw as SubTab;
-    }
-  } catch {
-    // ignore localStorage failures and fall back to the default tab
-  }
-  return fallback;
-}
-
-function saveStoredMemorySubTab(value: SubTab) {
-  try {
-    localStorage.setItem(MEMORY_SUB_TAB_STORAGE_KEY, value);
-  } catch {
-    // ignore localStorage failures
-  }
-}
-
 function isMemorySubTab(value: string): value is SubTab {
   return MEMORY_SUB_TABS.some((tab) => tab === value);
 }
 
 export default function MemoryTab({ markdown, onRefresh, notify }: Props) {
   const [subTab, setSubTab] = useState<SubTab>(() =>
-    loadStoredMemorySubTab("runtime")
+    loadStoredTab(MEMORY_SUB_TAB_STORAGE_KEY, MEMORY_SUB_TABS, "runtime")
   );
 
   useEffect(() => {
-    saveStoredMemorySubTab(subTab);
+    saveStoredTab(MEMORY_SUB_TAB_STORAGE_KEY, subTab);
   }, [subTab]);
 
   return (

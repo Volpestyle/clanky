@@ -1,4 +1,3 @@
-import React from "react";
 import { SettingsSection } from "../SettingsSection";
 import { FullPromptPreview } from "../FullPromptPreview";
 

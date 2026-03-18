@@ -1,7 +1,7 @@
 import { createCodexCliStreamSession, type CodexCliStreamSessionLike, normalizeCodexCliError, parseCodexCliJsonlOutput } from "../llm/llmCodexCli.ts";
 import { createAbortError, isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
-import { generateSessionId } from "./subAgentSession.ts";
+import { EMPTY_USAGE, generateSessionId } from "./subAgentSession.ts";
 import type { CodeAgentWorkspaceLease } from "./codeAgentWorkspace.ts";
 
 interface CodeAgentTrace {
@@ -11,7 +11,6 @@ interface CodeAgentTrace {
   source?: string | null;
 }
 
-const EMPTY_USAGE = { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 };
 const activeCodexCliTaskCount = { current: 0 };
 
 export function getActiveCodexCliAgentTaskCount(): number {
@@ -95,7 +94,7 @@ export class CodexCliAgentSession implements SubAgentSession {
         timeoutMs: this.timeoutMs,
         signal: turnSignal
       });
-      const parsed = parseCodexCliJsonlOutput(result.stdout);
+      const parsed = parseCodexCliJsonlOutput(result.stdout, this.model);
       const turnResult: SubAgentTurnResult = parsed
         ? {
             text: parsed.text,
