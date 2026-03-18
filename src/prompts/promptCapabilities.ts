@@ -43,7 +43,7 @@ const TEXT_TOOL_SUMMARIES: Record<string, string> = {
   web_scrape: "Read a known URL's text, including one you just got from web_search.",
   browser_browse: "JS rendering, visual layout, screenshots, navigation, or interaction.",
   memory_search: "Look up durable memory facts (speaker, guild, self, lore).",
-  memory_write: "Store long-lived useful facts or standing guidance, never secrets or chatter.",
+  memory_write: "Store long-lived useful facts or standing guidance, never secrets or chatter. Write from your own perspective (use 'me'/'my', not your name).",
   image_lookup: "Find a previously shared image from message history by ref or description.",
   code_task: "Run the configured coding worker on a coding task.",
   join_voice_channel: "Join the requesting user's current voice channel.",
@@ -372,7 +372,7 @@ export function buildVoiceToolUsageDocs(): string[] {
 export function buildVoiceMemoryToolDocs(): string[] {
   return [
     "note_context: session-scoped facts, preferences, or plans for this conversation.",
-    "memory_write: long-term durable facts only (namespace=speaker/guild/self, type=preference/profile/relationship/guidance/behavioral/other). Don't save chatter, prompt instructions, or session-only info."
+    "memory_write: long-term durable facts only (namespace=speaker/guild/self, type=preference/profile/relationship/guidance/behavioral/other). Don't save chatter, prompt instructions, or session-only info. Write facts from your own perspective — use 'me'/'my' instead of your name."
   ];
 }
 

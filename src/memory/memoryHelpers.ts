@@ -103,6 +103,29 @@ export function computeRecencyScore(createdAtIso) {
   return 1 / (1 + ageDays / 45);
 }
 
+const DECAY_EXEMPT_FACT_TYPES = new Set(["guidance", "behavioral"]);
+
+export function computeTemporalDecayMultiplier({
+  createdAtIso,
+  factType,
+  halfLifeDays = 90,
+  minMultiplier = 0.2
+}) {
+  const normalizedFactType = String(factType || "").trim().toLowerCase();
+  if (DECAY_EXEMPT_FACT_TYPES.has(normalizedFactType)) return 1;
+
+  const timestamp = Date.parse(String(createdAtIso || ""));
+  if (!Number.isFinite(timestamp)) return 1;
+
+  const boundedHalfLifeDays = Math.max(1, Number(halfLifeDays) || 90);
+  const boundedMinMultiplier = clamp01(minMultiplier, 0);
+  const ageMs = Math.max(0, Date.now() - timestamp);
+  const ageDays = ageMs / (24 * 60 * 60 * 1000);
+  const lambda = Math.LN2 / boundedHalfLifeDays;
+  const rawMultiplier = Math.exp(-lambda * ageDays);
+  return Math.max(boundedMinMultiplier, rawMultiplier);
+}
+
 export function computeChannelScopeScore(rowChannelId, queryChannelId) {
   const normalizedQueryChannelId = String(queryChannelId || "").trim();
   if (!normalizedQueryChannelId) return 0;
@@ -123,6 +146,82 @@ export function passesHybridRelevanceGate({ row, semanticAvailable }) {
   }
 
   return lexicalScore >= 0.24 || combinedScore >= 0.62;
+}
+
+function computeFactTokenSimilarity(left, right) {
+  const mmrStopwords = new Set([
+    "and",
+    "for",
+    "from",
+    "have",
+    "that",
+    "the",
+    "this",
+    "user",
+    "with",
+    "you",
+    "your"
+  ]);
+  const leftRawTokens = extractStableTokens(normalizeHighlightText(left), 80);
+  const rightRawTokens = extractStableTokens(normalizeHighlightText(right), 80);
+  const leftTokens = new Set(leftRawTokens.filter((token) => !mmrStopwords.has(token)));
+  const rightTokens = new Set(rightRawTokens.filter((token) => !mmrStopwords.has(token)));
+  const fallbackLeftTokens = leftTokens.size ? leftTokens : new Set(leftRawTokens);
+  const fallbackRightTokens = rightTokens.size ? rightTokens : new Set(rightRawTokens);
+  if (!fallbackLeftTokens.size || !fallbackRightTokens.size) return 0;
+
+  let overlap = 0;
+  for (const token of fallbackLeftTokens) {
+    if (fallbackRightTokens.has(token)) overlap += 1;
+  }
+  return overlap / Math.max(1, Math.min(fallbackLeftTokens.size, fallbackRightTokens.size));
+}
+
+export function rerankWithMmr(rows = [], { lambda = 0.7 } = {}) {
+  const candidates = Array.isArray(rows) ? rows : [];
+  if (candidates.length <= 1) return candidates;
+
+  const boundedLambda = clamp01(lambda, 0.7);
+  const working = candidates.map((row) => ({
+    row,
+    relevance: clamp01(row?._score, 0),
+    text: `${String(row?.fact || "")} ${String(row?.evidence_text || "")}`.trim()
+  }));
+
+  const selected: typeof working = [];
+  const remaining = [...working];
+
+  while (remaining.length) {
+    let bestIndex = 0;
+    let bestScore = -Infinity;
+
+    for (let index = 0; index < remaining.length; index += 1) {
+      const candidate = remaining[index];
+      let redundancy = 0;
+      for (const picked of selected) {
+        redundancy = Math.max(redundancy, computeFactTokenSimilarity(candidate.text, picked.text));
+      }
+
+      const mmrScore = boundedLambda * candidate.relevance - (1 - boundedLambda) * redundancy;
+      if (mmrScore > bestScore) {
+        bestScore = mmrScore;
+        bestIndex = index;
+        continue;
+      }
+      if (Math.abs(mmrScore - bestScore) <= 1e-9) {
+        const current = remaining[bestIndex];
+        if (candidate.relevance > current.relevance) {
+          bestIndex = index;
+        }
+      }
+    }
+
+    const [next] = remaining.splice(bestIndex, 1);
+    if (!next) break;
+    selected.push(next);
+  }
+
+  return selected.map((entry) => entry.row);
 }
 
 function cleanFactForMemory(rawFact) {

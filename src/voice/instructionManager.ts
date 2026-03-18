@@ -419,7 +419,11 @@ export class InstructionManager {
     const loaded = await loadSharedVoiceMemoryContext({
       searchConversationWindows: this.store.searchConversationWindows,
       getSessionFactProfileSlice: typeof this.host.getSessionFactProfileSlice === "function"
-        ? (payload) => this.host.getSessionFactProfileSlice?.(payload) || null
+        ? ({ userId: memoryUserId }) =>
+            this.host.getSessionFactProfileSlice?.({
+              session,
+              userId: memoryUserId
+            }) || null
         : undefined,
       searchDurableFacts:
         typeof this.host.memory?.searchDurableFacts === "function"
@@ -918,7 +922,7 @@ export class InstructionManager {
           hasBrowserBrowseTool ? `- ${BROWSER_SCREENSHOT_POLICY_LINE}` : null,
           hasWebSearchTool ? `- ${IMMEDIATE_WEB_SEARCH_POLICY_LINE} Do not respond with only audio saying you will search.` : null,
           hasConversationSearchTool ? `- ${CONVERSATION_SEARCH_POLICY_LINE}` : null,
-          hasMemoryWriteTool ? "- For memory writes, only store concise durable facts and avoid secrets." : null,
+          hasMemoryWriteTool ? "- For memory writes, only store concise durable facts and avoid secrets. Write facts from your own perspective — use 'me'/'my' instead of your name." : null,
           "- For music controls, use music_play to start or replace playback now. It searches internally and may return disambiguation options.",
           "- If music_play returns choices, ask which one they want and then call music_play again with selection_id.",
           "- For YouTube video playback, use video_play. It resolves YouTube results and uses outbound stream publish when that runtime path is available.",

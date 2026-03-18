@@ -32,11 +32,13 @@ type SearchConversationWindowsFn = (payload: {
 
 type SearchDurableFactsFn = (payload: {
   guildId: string;
-  channelId: string | null;
+  channelId?: string | null;
   queryText: string;
-  participantIds?: string[];
-  limit?: number;
+  subjectIds?: string[] | null;
+  factTypes?: string[] | null;
+  settings: Record<string, unknown> | null;
   trace?: Record<string, unknown>;
+  limit?: number;
 }) => Promise<MemoryFactRow[]> | MemoryFactRow[];
 
 type LoadBehavioralFactsFn = (payload: {
@@ -67,7 +69,7 @@ export interface VoiceMemoryContextHost {
   searchConversationWindows?: SearchConversationWindowsFn;
   loadRecentConversationHistory?: LoadRecentConversationHistoryFn | null;
   getSessionFactProfileSlice?: (payload: {
-    session: VoiceSession;
+    session: VoiceMemoryContextSessionLike;
     userId?: string | null;
   }) => {
     participantProfiles?: unknown[];

@@ -12,6 +12,7 @@ import {
   computeChannelScopeScore,
   computeLexicalFactScore,
   computeRecencyScore,
+  computeTemporalDecayMultiplier,
   extractStableTokens,
   formatDateLocal,
   formatTypedFactForMemory,
@@ -28,6 +29,7 @@ import {
   normalizeSelfFactForDisplay,
   parseDailyEntryLineWithScope,
   passesHybridRelevanceGate,
+  rerankWithMmr,
   resolveDirectiveScopeConfig,
   sanitizeInline,
 } from "./memoryHelpers.ts";
@@ -44,10 +46,15 @@ const QUERY_EMBEDDING_CACHE_TTL_MS = 60 * 1000;
 const QUERY_EMBEDDING_CACHE_MAX_ENTRIES = 256;
 const TEXT_MICRO_REFLECTION_SILENCE_MS = 10 * 60 * 1000;
 const TEXT_MICRO_REFLECTION_LOOKBACK_MS = 30 * 60 * 1000;
+const TEXT_MICRO_REFLECTION_CONTEXT_PRESSURE_MARGIN = 4;
+const TEXT_MICRO_REFLECTION_CONTEXT_PRESSURE_COOLDOWN_MS = 2 * 60 * 1000;
 const GUIDANCE_FACT_TYPE = "guidance";
 const BEHAVIORAL_FACT_TYPE = "behavioral";
 const FULL_MEMORY_DUMP_LIMIT = 200;
 const HYBRID_RECENT_CANDIDATE_LIMIT = 24;
+const HYBRID_MMR_LAMBDA = 0.7;
+const HYBRID_TEMPORAL_DECAY_HALF_LIFE_DAYS = 90;
+const HYBRID_TEMPORAL_DECAY_MIN_MULTIPLIER = 0.2;
 
 function sortProfileFacts<T extends MemoryFactRow>(rows: T[]) {
   return [...(Array.isArray(rows) ? rows : [])].sort((left, right) => {
@@ -391,6 +398,7 @@ export class MemoryManager {
       limit: 200
     });
     return rows.map((row) => ({
+      id: Number(row.id || 0),
       subject: String(row.subject || ""),
       fact: String(row.fact || ""),
       fact_type: String(row.fact_type || "other")
@@ -686,6 +694,12 @@ export class MemoryManager {
       settings: resolvedSettings
     });
 
+    void this.maybeRunContextPressureMicroReflection({
+      key,
+      state: this.textMicroReflectionState.get(key),
+      memorySettings
+    });
+
     const timer = setTimeout(() => {
       this.textMicroReflectionTimers.delete(key);
       void this.runTextChannelMicroReflection(key).catch((error) => {
@@ -698,16 +712,109 @@ export class MemoryManager {
     this.textMicroReflectionTimers.set(key, timer);
   }
 
-  async runTextChannelMicroReflection(key = "") {
+  async maybeRunContextPressureMicroReflection({
+    key,
+    state,
+    memorySettings
+  }: {
+    key: string;
+    state: Record<string, unknown> | undefined;
+    memorySettings: ReturnType<typeof getMemorySettings>;
+  }) {
+    if (!this.store?.getMessagesInWindow) return;
+    if (!state || typeof state !== "object") return;
+
+    const guildId = String(state.guildId || "").trim();
+    const channelId = String(state.channelId || "").trim();
+    const lastMessageAtMs = Number(state.lastMessageAtMs || 0);
+    if (!guildId || !channelId || !lastMessageAtMs) return;
+
+    const inFlightKey = `text:${guildId}:${channelId}`;
+    if (this.microReflectionInFlight.has(inFlightKey)) return;
+
+    const now = Date.now();
+    const lastContextPressureAtMs = Number(state.lastContextPressureAtMs || 0);
+    if (lastContextPressureAtMs > 0 && now - lastContextPressureAtMs < TEXT_MICRO_REFLECTION_CONTEXT_PRESSURE_COOLDOWN_MS) {
+      return;
+    }
+
+    const maxRecentMessages = clampInt(memorySettings.promptSlice?.maxRecentMessages, 4, 120);
+    const threshold = Math.max(6, maxRecentMessages - TEXT_MICRO_REFLECTION_CONTEXT_PRESSURE_MARGIN);
+    const processedThroughMs = Number(state.processedThroughMs || 0);
+    const sinceMs = Math.max(0, Math.max(processedThroughMs, lastMessageAtMs - TEXT_MICRO_REFLECTION_LOOKBACK_MS));
+
+    const entries = this.store.getMessagesInWindow({
+      guildId,
+      channelId,
+      sinceIso: new Date(sinceMs).toISOString(),
+      untilIso: new Date(lastMessageAtMs).toISOString(),
+      limit: Math.max(maxRecentMessages * 2, 120)
+    });
+    const humanCount = (Array.isArray(entries) ? entries : []).filter((entry) => {
+      const messageId = String(entry?.message_id || "");
+      if (messageId.startsWith("reaction:")) return false;
+      return !entry?.is_bot;
+    }).length;
+    if (humanCount < threshold) return;
+
+    this.textMicroReflectionState.set(key, {
+      ...state,
+      lastContextPressureAtMs: now
+    });
+
+    const startedAt = Date.now();
+    void this.runTextChannelMicroReflection(key, {
+      trigger: "text_context_pressure",
+      untilMs: lastMessageAtMs
+    })
+      .then((result) => {
+        this.store.logAction?.({
+          kind: "text_runtime",
+          guildId,
+          channelId,
+          content: "memory_micro_reflection_context_pressure",
+          metadata: {
+            trigger: "text_context_pressure",
+            ok: Boolean(result?.ok),
+            reason: result?.reason || null,
+            humanCount,
+            threshold,
+            durationMs: Math.max(0, Date.now() - startedAt)
+          }
+        });
+      })
+      .catch((error) => {
+        this.logMemoryError("text_micro_reflection_context_pressure", error, {
+          guildId,
+          channelId,
+          humanCount,
+          threshold
+        });
+      });
+  }
+
+  async runTextChannelMicroReflection(
+    key = "",
+    {
+      trigger = "text_channel_silence",
+      untilMs = null
+    }: {
+      trigger?: "text_channel_silence" | "text_context_pressure";
+      untilMs?: number | null;
+    } = {}
+  ) {
     const state = this.textMicroReflectionState.get(String(key || "").trim()) || null;
     if (!state) return { ok: false, reason: "state_missing" };
 
     const guildId = String(state.guildId || "").trim();
     const channelId = String(state.channelId || "").trim();
     const lastMessageAtMs = Number(state.lastMessageAtMs || 0);
+    const reflectionUntilMs = Number.isFinite(Number(untilMs))
+      ? Math.min(lastMessageAtMs, Number(untilMs))
+      : lastMessageAtMs;
     const settings = state.settings || this.store.getSettings?.() || null;
     const memorySettings = getMemorySettings(settings);
-    if (!guildId || !channelId || !lastMessageAtMs || !memorySettings.enabled || !memorySettings.reflection?.enabled) {
+    if (!guildId || !channelId || !reflectionUntilMs || !memorySettings.enabled || !memorySettings.reflection?.enabled) {
       return { ok: false, reason: "state_invalid" };
     }
 
@@ -717,12 +824,23 @@ export class MemoryManager {
     }
 
     const processedThroughMs = Number(state.processedThroughMs || 0);
-    const sinceMs = Math.max(processedThroughMs, lastMessageAtMs - TEXT_MICRO_REFLECTION_LOOKBACK_MS);
+    const sinceMs = Math.max(processedThroughMs, reflectionUntilMs - TEXT_MICRO_REFLECTION_LOOKBACK_MS);
+    const persistProcessedThrough = (value: number) => {
+      const latestStateRaw = this.textMicroReflectionState.get(key);
+      const latestState = latestStateRaw && typeof latestStateRaw === "object"
+        ? latestStateRaw as Record<string, unknown>
+        : state;
+      const previousProcessedThroughMs = Number(latestState.processedThroughMs || 0);
+      this.textMicroReflectionState.set(key, {
+        ...latestState,
+        processedThroughMs: Math.max(previousProcessedThroughMs, value)
+      });
+    };
     const entries = this.store.getMessagesInWindow({
       guildId,
       channelId,
       sinceIso: new Date(sinceMs).toISOString(),
-      untilIso: new Date(lastMessageAtMs).toISOString(),
+      untilIso: new Date(reflectionUntilMs).toISOString(),
       limit: 120
     });
     const normalizedEntries = (Array.isArray(entries) ? entries : [])
@@ -738,10 +856,7 @@ export class MemoryManager {
       .filter((entry) => !entry.isBot)
       .filter((entry) => entry.content);
     if (!normalizedEntries.length) {
-      this.textMicroReflectionState.set(key, {
-        ...state,
-        processedThroughMs: lastMessageAtMs
-      });
+      persistProcessedThrough(reflectionUntilMs);
       return { ok: false, reason: "no_entries" };
     }
 
@@ -754,14 +869,11 @@ export class MemoryManager {
         settings,
         guildId,
         channelId,
-        trigger: "text_channel_silence",
-        sourceMessageId: `micro_reflection_text_${guildId}_${channelId}_${lastMessageAtMs}`,
+        trigger,
+        sourceMessageId: `micro_reflection_text_${trigger}_${guildId}_${channelId}_${reflectionUntilMs}`,
         entries: normalizedEntries
       });
-      this.textMicroReflectionState.set(key, {
-        ...state,
-        processedThroughMs: lastMessageAtMs
-      });
+      persistProcessedThrough(reflectionUntilMs);
       return result;
     } finally {
       this.microReflectionInFlight.delete(inFlightKey);
@@ -1005,10 +1117,17 @@ export class MemoryManager {
       const combined = semanticAvailable
         ? 0.5 * semanticScore + 0.28 * lexicalScore + 0.1 * confidenceScore + 0.07 * recencyScore + 0.05 * channelScore
         : 0.75 * lexicalScore + 0.1 * confidenceScore + 0.1 * recencyScore + 0.05 * channelScore;
+      const temporalMultiplier = computeTemporalDecayMultiplier({
+        createdAtIso: row.created_at,
+        factType: row.fact_type,
+        halfLifeDays: HYBRID_TEMPORAL_DECAY_HALF_LIFE_DAYS,
+        minMultiplier: HYBRID_TEMPORAL_DECAY_MIN_MULTIPLIER
+      });
+      const decayedScore = combined * temporalMultiplier;
 
       return {
         ...row,
-        _score: Number(combined.toFixed(6)),
+        _score: Number(decayedScore.toFixed(6)),
         _semanticScore: Number(semanticScore.toFixed(6)),
         _lexicalScore: Number(lexicalScore.toFixed(6))
       };
@@ -1028,9 +1147,11 @@ export class MemoryManager {
         row,
         semanticAvailable
       }));
-    if (filtered.length) return filtered;
+    if (filtered.length) {
+      return rerankWithMmr(filtered, { lambda: HYBRID_MMR_LAMBDA });
+    }
     if (requireRelevanceGate) return [];
-    return sorted;
+    return rerankWithMmr(sorted, { lambda: HYBRID_MMR_LAMBDA });
   }
 
   buildQueryEmbeddingCacheKey({ queryText, settings }) {
@@ -1502,7 +1623,22 @@ export class MemoryManager {
     factType = null,
     confidence = null,
     validationMode = "strict",
-    evidenceText = null
+    evidenceText = null,
+    supersedesFactText = null
+  }: {
+    line: string;
+    sourceMessageId?: string | null;
+    userId?: string | null;
+    guildId?: string | null;
+    channelId?: string | null;
+    sourceText?: string;
+    scope?: string;
+    subjectOverride?: string | null;
+    factType?: string | null;
+    confidence?: number | null;
+    validationMode?: string;
+    evidenceText?: string | null;
+    supersedesFactText?: string | null;
   }) {
     const scopeGuildId = String(guildId || "").trim();
     if (!scopeGuildId) {
@@ -1553,6 +1689,74 @@ export class MemoryManager {
       Number.isFinite(Number(confidence)) ? Number(confidence) : 0.72,
       0.72
     );
+    // If this fact supersedes an older one (reflection merge), update in-place.
+    const normalizedSupersedesText = supersedesFactText
+      ? String(supersedesFactText || "").replace(/\s+/g, " ").trim()
+      : null;
+    let supersededFact = null;
+    if (normalizedSupersedesText && normalizedSupersedesText !== factText) {
+      supersededFact = this.store.getMemoryFactBySubjectAndFact?.(
+        scopeGuildId,
+        subject,
+        normalizedSupersedesText
+      ) || null;
+      if (supersededFact && typeof this.store.updateMemoryFact === "function") {
+        const updateResult = this.store.updateMemoryFact({
+          guildId: scopeGuildId,
+          factId: supersededFact.id,
+          subject,
+          fact: factText,
+          factType: normalizedFactType,
+          evidenceText: normalizedEvidenceText,
+          confidence: Math.max(normalizedConfidence, Number(supersededFact.confidence || 0))
+        });
+        if (updateResult?.ok) {
+          const updatedRow = updateResult.row || this.store.getMemoryFactBySubjectAndFact(scopeGuildId, subject, factText);
+          this.store.logAction({
+            kind: "memory_fact",
+            guildId: scopeGuildId,
+            channelId: channelId ? String(channelId) : null,
+            userId,
+            messageId: sourceMessageId,
+            content: factText,
+            metadata: {
+              actorName: userId ? String(userId) : null,
+              factId: Number(updatedRow?.id || supersededFact.id || 0) || null,
+              subject,
+              fact: factText,
+              factType: normalizedFactType,
+              confidence: Number(updatedRow?.confidence ?? normalizedConfidence),
+              evidenceText: normalizedEvidenceText,
+              source: scopeConfig.traceSource,
+              reason: "merged_superseded",
+              supersededFact: normalizedSupersedesText,
+              scope: scopeConfig.scope,
+              channelId: channelId ? String(channelId) : null,
+              sourceMessageId
+            }
+          });
+          if (updatedRow) {
+            void this.ensureFactVector({
+              factRow: updatedRow,
+              settings: null,
+              trace: { userId, source: scopeConfig.traceSource }
+            });
+          }
+          this.queueMemoryRefresh();
+          return {
+            ok: true,
+            reason: "merged_superseded",
+            factText,
+            scope: scopeConfig.scope,
+            subject,
+            factType: normalizedFactType,
+            isNew: false
+          };
+        }
+        // If update failed (e.g. duplicate), fall through to normal insert path.
+      }
+    }
+
     const existingFact = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, subject, factText);
     const inserted = this.store.addMemoryFact({
       guildId: scopeGuildId,
@@ -1879,6 +2083,8 @@ export class MemoryManager {
 
 export const __memoryTestables = {
   computeChannelScopeScore,
+  computeTemporalDecayMultiplier,
   passesHybridRelevanceGate,
+  rerankWithMmr,
   isInstructionLikeFactText
 };

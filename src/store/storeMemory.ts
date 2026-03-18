@@ -29,6 +29,8 @@ export interface MemoryFactRow {
 interface MemoryFactIdRow {
   id: number;
   fact_type?: string;
+  confidence?: number;
+  updated_at?: string;
 }
 
 interface DuplicateMemoryFactRow {
@@ -893,7 +895,7 @@ if (factType) {
 
 const rows = store.db
   .prepare<MemoryFactIdRow, string[]>(
-    `SELECT id, fact_type
+    `SELECT id, fact_type, confidence, updated_at
          FROM memory_facts
          WHERE ${where.join(" AND ")}
          ORDER BY confidence DESC, updated_at DESC
@@ -902,13 +904,31 @@ const rows = store.db
   .all(...args);
 if (rows.length <= boundedKeep) return 0;
 
+// Sort by time-weighted confidence so old unreinforced facts become evictable.
+// Guidance and behavioral facts are exempt from decay (evergreen rules).
+const EVICTION_DECAY_EXEMPT = new Set(["guidance", "behavioral"]);
+const EVICTION_HALF_LIFE_DAYS = 120;
+const sorted = [...rows].sort((left, right) => {
+  const leftConf = Number(left.confidence ?? 0.5);
+  const rightConf = Number(right.confidence ?? 0.5);
+  const leftType = String(left.fact_type || "").trim().toLowerCase();
+  const rightType = String(right.fact_type || "").trim().toLowerCase();
+  const leftAge = Math.max(0, Date.now() - Date.parse(String(left.updated_at || ""))) / (24 * 60 * 60 * 1000);
+  const rightAge = Math.max(0, Date.now() - Date.parse(String(right.updated_at || ""))) / (24 * 60 * 60 * 1000);
+  const lambda = Math.LN2 / EVICTION_HALF_LIFE_DAYS;
+  const leftDecayed = EVICTION_DECAY_EXEMPT.has(leftType) ? leftConf : leftConf * Math.exp(-lambda * leftAge);
+  const rightDecayed = EVICTION_DECAY_EXEMPT.has(rightType) ? rightConf : rightConf * Math.exp(-lambda * rightAge);
+  if (Math.abs(rightDecayed - leftDecayed) > 1e-9) return rightDecayed - leftDecayed;
+  return Date.parse(String(right.updated_at || "")) - Date.parse(String(left.updated_at || ""));
+});
+
 let staleIds: number[] = [];
 if (factType) {
-  staleIds = rows.slice(boundedKeep).map((row) => Number(row.id)).filter((id) => Number.isInteger(id) && id > 0);
+  staleIds = sorted.slice(boundedKeep).map((row) => Number(row.id)).filter((id) => Number.isInteger(id) && id > 0);
 } else {
-  const contextualRows = rows.filter((row) => !CORE_FACT_TYPE_SET.has(String(row.fact_type || "").trim()));
-  const coreRows = rows.filter((row) => CORE_FACT_TYPE_SET.has(String(row.fact_type || "").trim()));
-  const overflowCount = Math.max(0, rows.length - boundedKeep);
+  const contextualRows = sorted.filter((row) => !CORE_FACT_TYPE_SET.has(String(row.fact_type || "").trim()));
+  const coreRows = sorted.filter((row) => CORE_FACT_TYPE_SET.has(String(row.fact_type || "").trim()));
+  const overflowCount = Math.max(0, sorted.length - boundedKeep);
   const contextualKeep = Math.max(0, contextualRows.length - overflowCount);
   const contextualStaleIds = contextualRows
     .slice(contextualKeep)

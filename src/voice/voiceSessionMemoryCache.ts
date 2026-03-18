@@ -5,6 +5,7 @@ import {
   computeChannelScopeScore,
   computeLexicalFactScore,
   computeRecencyScore,
+  computeTemporalDecayMultiplier,
   extractStableTokens,
   normalizeHighlightText,
   normalizeQueryEmbeddingText,
@@ -21,6 +22,8 @@ import type {
 const SESSION_BEHAVIORAL_FACT_POOL_LIMIT = 64;
 const SESSION_CONVERSATION_HISTORY_CACHE_TTL_MS = 45_000;
 const SESSION_CONVERSATION_HISTORY_SIMILARITY_THRESHOLD = 0.58;
+const SESSION_BEHAVIORAL_TEMPORAL_HALF_LIFE_DAYS = 90;
+const SESSION_BEHAVIORAL_TEMPORAL_MIN_MULTIPLIER = 0.2;
 const LOW_SIGNAL_CONVERSATION_QUERIES = new Set([
   "ah",
   "alright",
@@ -135,10 +138,16 @@ function rankCachedBehavioralFactsLexically(
       0.1 * confidenceScore +
       0.1 * recencyScore +
       0.05 * channelScore;
+    const temporalMultiplier = computeTemporalDecayMultiplier({
+      createdAtIso: row.created_at,
+      factType: row.fact_type,
+      halfLifeDays: SESSION_BEHAVIORAL_TEMPORAL_HALF_LIFE_DAYS,
+      minMultiplier: SESSION_BEHAVIORAL_TEMPORAL_MIN_MULTIPLIER
+    });
 
     return {
       ...row,
-      _score: Number(combined.toFixed(6)),
+      _score: Number((combined * temporalMultiplier).toFixed(6)),
       _semanticScore: 0,
       _lexicalScore: Number(lexicalScore.toFixed(6))
     };

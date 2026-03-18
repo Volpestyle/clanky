@@ -58,6 +58,58 @@ test("channel scope score prefers same channel and gives small credit to unknown
   assert.equal(__memoryTestables.computeChannelScopeScore("chan-1", ""), 0);
 });
 
+test("temporal decay keeps guidance and behavioral facts evergreen", () => {
+  const staleDate = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
+  const preferenceDecay = __memoryTestables.computeTemporalDecayMultiplier({
+    createdAtIso: staleDate,
+    factType: "preference",
+    halfLifeDays: 90,
+    minMultiplier: 0.2
+  });
+  const guidanceDecay = __memoryTestables.computeTemporalDecayMultiplier({
+    createdAtIso: staleDate,
+    factType: "guidance",
+    halfLifeDays: 90,
+    minMultiplier: 0.2
+  });
+  const behavioralDecay = __memoryTestables.computeTemporalDecayMultiplier({
+    createdAtIso: staleDate,
+    factType: "behavioral",
+    halfLifeDays: 90,
+    minMultiplier: 0.2
+  });
+
+  assert.equal(preferenceDecay, 0.2, "365-day-old preference fact should hit the 0.2 floor");
+  assert.equal(guidanceDecay, 1);
+  assert.equal(behavioralDecay, 1);
+});
+
+test("MMR reranking favors diversity after first top hit", () => {
+  const ranked = __memoryTestables.rerankWithMmr([
+    {
+      id: 1,
+      fact: "User likes Rust and systems programming.",
+      evidence_text: "likes Rust and systems programming",
+      _score: 0.92
+    },
+    {
+      id: 2,
+      fact: "User likes Rust and systems programming for backend work.",
+      evidence_text: "likes Rust and systems programming",
+      _score: 0.9
+    },
+    {
+      id: 3,
+      fact: "User wants concise responses.",
+      evidence_text: "wants concise responses",
+      _score: 0.84
+    }
+  ], { lambda: 0.7 });
+
+  assert.equal(ranked[0]?.id, 1);
+  assert.equal(ranked[1]?.id, 3);
+});
+
 test("strict relevance mode returns no results when every candidate is weak", async () => {
   const memory = new MemoryManager({
     store: {},
@@ -445,6 +497,129 @@ test("reflection minimal validation preserves model-selected evidence text", asy
 
   assert.equal(result.ok, true);
   assert.equal(insertedFact?.evidenceText, "girlfriend stayed the night");
+});
+
+test("supersedesFactText merges into existing fact via updateMemoryFact", async () => {
+  let updateCalled = false;
+  let addCalled = false;
+  const existingRow = {
+    id: 42,
+    confidence: 0.75,
+    subject: "user-1",
+    fact: "User likes Python.",
+    fact_type: "preference",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    guild_id: "guild-1",
+    channel_id: null,
+    evidence_text: "likes Python",
+    source_message_id: "msg-old"
+  };
+
+  const memory = new MemoryManager({
+    store: {
+      addMemoryFact() {
+        addCalled = true;
+        return true;
+      },
+      getMemoryFactBySubjectAndFact(_guildId, _subject, factText) {
+        if (factText === "User likes Python.") return existingRow;
+        return null;
+      },
+      updateMemoryFact({ factId, fact, confidence }) {
+        updateCalled = true;
+        return {
+          ok: true,
+          row: {
+            ...existingRow,
+            id: factId,
+            fact,
+            confidence,
+            updated_at: new Date().toISOString()
+          }
+        };
+      },
+      logAction() {
+        return undefined;
+      },
+      archiveOldFactsForSubject() {
+        return 0;
+      }
+    },
+    llm: {},
+    memoryFilePath: "memory/MEMORY.md"
+  });
+  memory.queueMemoryRefresh = () => undefined;
+  memory.ensureFactVector = async () => null;
+
+  const result = await memory.rememberDirectiveLineDetailed({
+    line: "User is really into Python for data science and ML work",
+    sourceMessageId: "reflection_2026-03-18_guild-1",
+    userId: "user-1",
+    guildId: "guild-1",
+    channelId: null,
+    sourceText: "I've been doing a ton of Python data science work lately.",
+    scope: "user",
+    subjectOverride: "user-1",
+    factType: "preference",
+    confidence: 0.88,
+    validationMode: "minimal",
+    supersedesFactText: "User likes Python."
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.reason, "merged_superseded");
+  assert.equal(result.isNew, false);
+  assert.equal(updateCalled, true);
+  assert.equal(addCalled, false);
+});
+
+test("supersedesFactText falls through to insert when superseded fact not found", async () => {
+  let addCalled = false;
+
+  const memory = new MemoryManager({
+    store: {
+      addMemoryFact() {
+        addCalled = true;
+        return true;
+      },
+      getMemoryFactBySubjectAndFact() {
+        return null;
+      },
+      updateMemoryFact() {
+        return { ok: false, reason: "not_found" };
+      },
+      logAction() {
+        return undefined;
+      },
+      archiveOldFactsForSubject() {
+        return 0;
+      }
+    },
+    llm: {},
+    memoryFilePath: "memory/MEMORY.md"
+  });
+  memory.queueMemoryRefresh = () => undefined;
+  memory.ensureFactVector = async () => null;
+
+  const result = await memory.rememberDirectiveLineDetailed({
+    line: "User enjoys board games on weekends",
+    sourceMessageId: "reflection_2026-03-18_guild-1",
+    userId: "user-1",
+    guildId: "guild-1",
+    channelId: null,
+    sourceText: "We played Catan last Saturday, it was great.",
+    scope: "user",
+    subjectOverride: "user-1",
+    factType: "preference",
+    confidence: 0.8,
+    validationMode: "minimal",
+    supersedesFactText: "User likes card games."
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.reason, "added_new");
+  assert.equal(addCalled, true);
 });
 
 test("strict validation still saves paraphrased facts from non-reflection paths", async () => {

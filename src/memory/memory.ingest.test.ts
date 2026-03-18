@@ -265,6 +265,276 @@ test("processIngestMessage skips text micro-reflection scheduling for bot-author
   assert.equal(scheduled, false);
 });
 
+test("text micro-reflection can trigger on context pressure before silence", async () => {
+  const logActions: Array<Record<string, unknown>> = [];
+  const memory = createMemoryForIngestTests({
+    getMessagesInWindow() {
+      const now = new Date().toISOString();
+      return Array.from({ length: 18 }, (_, index) => ({
+        message_id: `msg-${index + 1}`,
+        is_bot: false,
+        created_at: now,
+        author_name: `user-${index + 1}`,
+        author_id: `user-${index + 1}`,
+        content: `message ${index + 1}`
+      }));
+    },
+    logAction(payload) {
+      logActions.push(payload as Record<string, unknown>);
+    }
+  });
+
+  const runs: Array<Record<string, unknown>> = [];
+  memory.runTextChannelMicroReflection = async (_key, payload) => {
+    runs.push(payload as Record<string, unknown>);
+    return { ok: true, reason: "completed" };
+  };
+
+  memory.scheduleTextChannelMicroReflection({
+    messageId: "msg-99",
+    guildId: "guild-1",
+    channelId: "chan-1",
+    settings: {
+      memory: {
+        enabled: true,
+        promptSlice: {
+          maxRecentMessages: 20
+        },
+        reflection: {
+          enabled: true
+        }
+      }
+    }
+  });
+
+  await Promise.resolve();
+
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0]?.trigger, "text_context_pressure");
+  assert.equal(typeof runs[0]?.untilMs, "number");
+  assert.equal(
+    logActions.some((entry) => entry.content === "memory_micro_reflection_context_pressure"),
+    true
+  );
+
+  const timer = memory.textMicroReflectionTimers.get("guild-1:chan-1");
+  if (timer) {
+    clearTimeout(timer);
+    memory.textMicroReflectionTimers.delete("guild-1:chan-1");
+  }
+});
+
+test("context-pressure reflection skips while a text micro-reflection is already running", async () => {
+  const memory = createMemoryForIngestTests({
+    getMessagesInWindow() {
+      const now = new Date().toISOString();
+      return Array.from({ length: 18 }, (_, index) => ({
+        message_id: `msg-${index + 1}`,
+        is_bot: false,
+        created_at: now,
+        author_name: `user-${index + 1}`,
+        author_id: `user-${index + 1}`,
+        content: `message ${index + 1}`
+      }));
+    }
+  });
+  const runs: Array<Record<string, unknown>> = [];
+  memory.runTextChannelMicroReflection = async (_key, payload) => {
+    runs.push(payload as Record<string, unknown>);
+    return { ok: true, reason: "completed" };
+  };
+  memory.microReflectionInFlight.add("text:guild-1:chan-1");
+
+  memory.scheduleTextChannelMicroReflection({
+    messageId: "msg-100",
+    guildId: "guild-1",
+    channelId: "chan-1",
+    settings: {
+      memory: {
+        enabled: true,
+        promptSlice: {
+          maxRecentMessages: 20
+        },
+        reflection: {
+          enabled: true
+        }
+      }
+    }
+  });
+
+  await Promise.resolve();
+
+  assert.equal(runs.length, 0);
+  memory.microReflectionInFlight.delete("text:guild-1:chan-1");
+  const timer = memory.textMicroReflectionTimers.get("guild-1:chan-1");
+  if (timer) {
+    clearTimeout(timer);
+    memory.textMicroReflectionTimers.delete("guild-1:chan-1");
+  }
+});
+
+test("context-pressure reflection preserves newer state updates after async completion", async () => {
+  let releaseModel = () => undefined;
+  const modelGate = new Promise<void>((resolve) => {
+    releaseModel = () => resolve();
+  });
+
+  const memory = new MemoryManager({
+    store: {
+      getFactProfileRows() {
+        return [];
+      },
+      getMessagesInWindow() {
+        const now = Date.now();
+        return [
+          {
+            message_id: "msg-1",
+            created_at: new Date(now - 10_000).toISOString(),
+            author_name: "Alice",
+            author_id: "user-1",
+            is_bot: false,
+            content: "I like Rust and systems programming for backend infrastructure and performance work"
+          },
+          {
+            message_id: "msg-2",
+            created_at: new Date(now - 5_000).toISOString(),
+            author_name: "Alice",
+            author_id: "user-1",
+            is_bot: false,
+            content: "Also, I prefer concise replies when we troubleshoot deployment and production incidents"
+          }
+        ];
+      },
+      logAction() {
+        return undefined;
+      }
+    },
+    llm: {
+      async callChatModel() {
+        await modelGate;
+        return { text: '{"facts":[]}' };
+      }
+    },
+    memoryFilePath: "memory/MEMORY.md"
+  });
+  memory.rememberDirectiveLineDetailed = async () => ({ ok: true });
+
+  const key = "guild-1:chan-1";
+  const firstMessageAtMs = Date.now() - 1_000;
+  const newerMessageAtMs = Date.now();
+  const settings = {
+    memory: {
+      enabled: true,
+      reflection: {
+        enabled: true
+      }
+    }
+  };
+
+  memory.textMicroReflectionState.set(key, {
+    guildId: "guild-1",
+    channelId: "chan-1",
+    lastMessageAtMs: firstMessageAtMs,
+    lastMessageId: "msg-1",
+    settings
+  });
+
+  const reflectionPromise = memory.runTextChannelMicroReflection(key, {
+    trigger: "text_context_pressure",
+    untilMs: firstMessageAtMs
+  });
+
+  memory.textMicroReflectionState.set(key, {
+    guildId: "guild-1",
+    channelId: "chan-1",
+    lastMessageAtMs: newerMessageAtMs,
+    lastMessageId: "msg-2",
+    settings
+  });
+
+  releaseModel();
+  const result = await reflectionPromise;
+  assert.equal(result.ok, true);
+  const finalState = memory.textMicroReflectionState.get(key) as Record<string, unknown>;
+  assert.equal(Number(finalState.lastMessageAtMs || 0), newerMessageAtMs);
+  assert.equal(Number(finalState.processedThroughMs || 0), firstMessageAtMs);
+});
+
+test("archival eviction prefers removing old unreinforced facts over recent ones", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-memory-eviction-"));
+  const store = new Store(path.join(tempDir, "clanker.db"));
+  store.init();
+
+  try {
+    // Insert an old high-confidence fact and a newer lower-confidence fact.
+    const sixMonthsAgo = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
+    const now = new Date().toISOString();
+
+    store.db.prepare(
+      `INSERT INTO memory_facts(created_at, updated_at, guild_id, subject, fact, fact_type, confidence, is_active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1)`
+    ).run(sixMonthsAgo, sixMonthsAgo, "guild-1", "user-1", "Old fact about user.", "preference", 0.95);
+
+    store.db.prepare(
+      `INSERT INTO memory_facts(created_at, updated_at, guild_id, subject, fact, fact_type, confidence, is_active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1)`
+    ).run(now, now, "guild-1", "user-1", "Recent fact about user.", "preference", 0.72);
+
+    // Request keeping only 1 fact — with decay, the old 0.95 should be evicted
+    // because its decayed confidence is well below the recent 0.72.
+    const archived = store.archiveOldFactsForSubject({
+      guildId: "guild-1",
+      subject: "user-1",
+      keep: 1
+    });
+
+    assert.equal(archived, 1);
+
+    const remaining = store.getFactsForScope({ guildId: "guild-1", limit: 10 });
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0]?.fact, "Recent fact about user.");
+  } finally {
+    store.close();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("archival eviction keeps guidance facts despite age (evergreen)", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-memory-eviction-guidance-"));
+  const store = new Store(path.join(tempDir, "clanker.db"));
+  store.init();
+
+  try {
+    const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
+    const now = new Date().toISOString();
+
+    store.db.prepare(
+      `INSERT INTO memory_facts(created_at, updated_at, guild_id, subject, fact, fact_type, confidence, is_active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1)`
+    ).run(oneYearAgo, oneYearAgo, "guild-1", "user-1", "Always greet me in Spanish.", "guidance", 0.9);
+
+    store.db.prepare(
+      `INSERT INTO memory_facts(created_at, updated_at, guild_id, subject, fact, fact_type, confidence, is_active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1)`
+    ).run(now, now, "guild-1", "user-1", "Recent preference fact.", "preference", 0.72);
+
+    const archived = store.archiveOldFactsForSubject({
+      guildId: "guild-1",
+      subject: "user-1",
+      keep: 1
+    });
+
+    assert.equal(archived, 1);
+    const remaining = store.getFactsForScope({ guildId: "guild-1", limit: 10 });
+    assert.equal(remaining.length, 1);
+    // Guidance fact is evergreen — it should survive despite being a year old.
+    assert.equal(remaining[0]?.fact, "Always greet me in Spanish.");
+  } finally {
+    store.close();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("purgeGuildMemory removes only the selected guild's stored memory artifacts", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-memory-purge-"));
   const store = new Store(path.join(tempDir, "clanker.db"));

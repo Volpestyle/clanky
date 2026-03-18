@@ -31,6 +31,7 @@ type ReflectionFact = {
   type: string;
   confidence: number;
   evidence: string;
+  supersedes?: string;
 };
 
 type ReflectionSaveResult = ReflectionFact & {
@@ -99,6 +100,7 @@ type ReflectionStore = {
 };
 
 type ExistingFactRow = {
+  id?: number;
   subject: string;
   fact: string;
   fact_type: string;
@@ -123,6 +125,7 @@ type ReflectionMemory = {
     confidence?: number | null;
     validationMode?: string;
     evidenceText?: string | null;
+    supersedesFactText?: string | null;
   }): Promise<{
     ok: boolean;
     reason?: string;
@@ -165,7 +168,8 @@ const REFLECTION_FACTS_JSON_SCHEMA = JSON.stringify({
           fact: { type: "string", minLength: 1, maxLength: 190 },
           type: { type: "string", enum: ["preference", "profile", "relationship", "project", "other"] },
           confidence: { type: "number", minimum: 0, maximum: 1 },
-          evidence: { type: "string", minLength: 1, maxLength: 220 }
+          evidence: { type: "string", minLength: 1, maxLength: 220 },
+          supersedes: { type: "string", maxLength: 200 }
         },
         required: ["subject", "subjectName", "fact", "type", "confidence", "evidence"]
       }
@@ -204,13 +208,15 @@ function normalizeReflectionFacts(rawText: string, maxFacts: number): Reflection
     const evidence = normalizeInlineText(item.evidence, 220);
     if (!validSubjects.has(subject) || !fact || !evidence) continue;
 
+    const supersedes = normalizeInlineText(item.supersedes, 200) || "";
     facts.push({
       subject,
       subjectName: normalizeInlineText(item.subjectName, 80) || "",
       fact,
       type: String(item.type || "other").trim().toLowerCase() || "other",
       confidence: Math.max(0, Math.min(1, Number(item.confidence) || 0.5)),
-      evidence
+      evidence,
+      ...(supersedes ? { supersedes } : {})
     });
     if (facts.length >= maxFacts) break;
   }
@@ -249,13 +255,15 @@ function buildReflectionOnePassPrompts({
     "Don't bother saving:",
     "- Mundane back-and-forth that won't matter tomorrow",
     "- Things you already know (check the existing facts below if provided)",
-    "- Stuff that's basically the same fact worded differently — just keep the best version",
+    "- Stuff that's basically the same fact worded differently — merge into the best version using the supersedes field (set supersedes to the exact existing fact text being replaced)",
     "- Anything about your own built-in capabilities — you already know what you can do",
     "",
     "For each fact, note who it's about:",
     `- subject=author for facts about a specific person. Set subjectName to their exact display name. Authors today: ${authorNames}.`,
     `- subject=bot only when a user explicitly told ${normalizedBotName} something about itself (a nickname, a personality trait to adopt, an identity thing). Not your default behavior.`,
     "- subject=lore for shared context that isn't about one person (server lore, group dynamics, recurring bits).",
+    "",
+    `Write all fact text from your own perspective — use "me", "I", "my" instead of your name. Example: "tiny conk told me to call them pookie conk" not "tiny conk told ${normalizedBotName} to call them pookie conk".`,
     "",
     "Lines marked `vc` are voice transcripts — speech-to-text can mishear words, drop context, or mangle names. If a fact from voice feels off or doesn't quite make sense, trust your gut and skip it or lower the confidence.",
     "",
@@ -461,7 +469,7 @@ async function reflectGuildJournal({
       const subjectIds = [...nameToAuthorId.values(), "__self__", "__lore__"];
       const existingFacts = memory.loadExistingFactsForReflection({ guildId, subjectIds });
       if (existingFacts.length > 0) {
-        const lines = existingFacts.map((f) => `- [${f.subject}] ${f.fact}`);
+        const lines = existingFacts.map((f) => `- [${f.subject}] (fact: "${f.fact}")`);
         existingFactsSummary = `\n\nAlready in memory (do not duplicate — skip or merge if today's journal says the same thing differently):\n${lines.join("\n")}`;
       }
     }
@@ -561,7 +569,8 @@ async function reflectGuildJournal({
         factType: item.type,
         confidence: item.confidence,
         validationMode: "minimal",
-        evidenceText: item.evidence || null
+        evidenceText: item.evidence || null,
+        supersedesFactText: item.supersedes || null
       });
 
       if (saveResult?.ok) {
