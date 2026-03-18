@@ -250,6 +250,7 @@ export function buildVideoContextDocs(): string[] {
   return [
     "=== VIDEO CONTEXT (video_context tool) ===",
     "Use the video_context tool to extract metadata, transcripts, and keyframe images from video URLs.",
+    "For current message uploads, you may pass a video ref (for example VID 1) instead of a raw URL.",
     "Supports YouTube, TikTok, X/Twitter, Reddit, Twitch, Streamable, and other video hosts.",
     "Prefer video_context over web_scrape or browser_browse when you want video-specific content like transcripts.",
     "Treat transcripts and keyframes as partial context. Avoid overclaiming what happened in the full video.",

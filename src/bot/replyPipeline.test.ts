@@ -590,3 +590,128 @@ test("maybeReplyToMessagePipeline lets the model attach tool-returned images in 
     assert.match(llmCalls[1]?.userPrompt || "", /tool_images/);
   });
 });
+
+test("maybeReplyToMessagePipeline includes current message video attachments with VID refs in the prompt", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+
+    const llmCalls: Array<{ userPrompt: string }> = [];
+    const replyPayloads: Array<Record<string, unknown>> = [];
+    const channelSendPayloads: Array<Record<string, unknown>> = [];
+    const typingCallsRef = { count: 0 };
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate(payload) {
+          llmCalls.push({ userPrompt: String(payload.userPrompt || "") });
+          return {
+            text: JSON.stringify({
+              text: "I can check that clip if needed.",
+              skip: false,
+              reactionEmoji: null,
+              media: null,
+              automationAction: {
+                operation: "none",
+                title: null,
+                instruction: null,
+                schedule: null,
+                targetQuery: null,
+                automationId: null,
+                runImmediately: false,
+                targetChannelId: null
+              },
+              screenWatchIntent: {
+                action: "none",
+                confidence: 0,
+                reason: null
+              }
+            }),
+            toolCalls: [],
+            rawContent: null,
+            provider: "claude-oauth",
+            model: "claude-opus-4-6",
+            usage: {
+              inputTokens: 10,
+              outputTokens: 10,
+              cacheWriteTokens: 0,
+              cacheReadTokens: 0
+            },
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanky",
+      tag: "clanky#0001"
+    };
+
+    const guild = buildGuild();
+    const channel = buildChannel({
+      guild,
+      channelId,
+      channelSendPayloads,
+      typingCallsRef
+    });
+    const message = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-video-1",
+      content: "can you break down this clip?",
+      replyPayloads
+    }) as Record<string, unknown>;
+    message.attachments = new Map([
+      [
+        "video-1",
+        {
+          url: "https://cdn.discordapp.com/attachments/1/2/demo.mp4",
+          proxyURL: "https://media.discordapp.net/attachments/1/2/demo.mp4",
+          name: "demo.mp4",
+          contentType: "video/mp4"
+        }
+      ]
+    ]);
+
+    const settings = store.getSettings();
+    const runtime = buildReplyPipelineRuntime(bot, {
+      captionTimestamps: [],
+      unsolicitedReplyContextWindow: 2
+    });
+
+    const handled = await maybeReplyToMessagePipeline(runtime, message as never, settings, {
+      source: "message_event",
+      forceDecisionLoop: true,
+      forceRespond: true,
+      recentMessages: [],
+      triggerMessageIds: [String(message.id || "")],
+      addressSignal: {
+        direct: true,
+        inferred: false,
+        triggered: true,
+        reason: "direct_address"
+      }
+    });
+
+    assert.equal(handled, true);
+    assert.equal(typingCallsRef.count, 1);
+    const sentPayload = replyPayloads[0] || channelSendPayloads[0];
+    assert.ok(sentPayload, "expected a sent reply payload");
+    assert.equal(sentPayload.content, "I can check that clip if needed.");
+    assert.match(llmCalls[0]?.userPrompt || "", /Current message video attachments:/);
+    assert.match(llmCalls[0]?.userPrompt || "", /VID 1: demo\.mp4 \(video\/mp4\)/);
+    assert.match(
+      llmCalls[0]?.userPrompt || "",
+      /https:\/\/cdn\.discordapp\.com\/attachments\/1\/2\/demo\.mp4/
+    );
+  });
+});

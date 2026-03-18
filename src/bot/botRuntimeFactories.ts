@@ -39,7 +39,8 @@ import {
 import {
   composeMessageContentForHistory as composeMessageContentForHistoryForMessageHistory,
   getConversationHistoryForPrompt as getConversationHistoryForPromptForMessageHistory,
-  getImageInputs as getImageInputsForMessageHistory
+  getImageInputs as getImageInputsForMessageHistory,
+  getVideoInputs as getVideoInputsForMessageHistory
 } from "./messageHistory.ts";
 import {
   buildMediaMemoryFacts as buildMediaMemoryFactsForMemorySlice,
@@ -466,6 +467,8 @@ export function buildReplyPipelineRuntime(
     buildMediaMemoryFacts: (payload) => buildMediaMemoryFactsForMemorySlice(payload),
     getImageInputs: (message) =>
       getImageInputsForMessageHistory(message as Parameters<typeof getImageInputsForMessageHistory>[0]),
+    getVideoInputs: (message) =>
+      getVideoInputsForMessageHistory(message as Parameters<typeof getVideoInputsForMessageHistory>[0]),
     getImageBudgetState: (settings) => getImageBudgetStateForBudgetTracking(budgetContext, settings),
     getVideoGenerationBudgetState: (settings) =>
       getVideoGenerationBudgetStateForBudgetTracking(budgetContext, settings),

@@ -102,6 +102,7 @@ export function buildReplyPrompt({
   message,
   triggerMessageIds = [],
   imageInputs,
+  videoInputs = [],
   recentMessages,
   userFacts: _userFacts,
   relevantFacts: _relevantFacts,
@@ -166,6 +167,22 @@ export function buildReplyPrompt({
           const name = image.filename || "(unnamed)";
           const type = image.contentType || "unknown";
           return `- ${name} (${type})`;
+        })
+      ].join("\n")
+    );
+  }
+  if (Array.isArray(videoInputs) && videoInputs.length) {
+    parts.push(
+      [
+        "Current message video attachments:",
+        ...videoInputs.map((video, index) => {
+          const ref = String(video?.videoRef || `VID ${index + 1}`).trim();
+          const name = String(video?.filename || "(unnamed)").trim() || "(unnamed)";
+          const type = String(video?.contentType || "unknown").trim() || "unknown";
+          const url = String(video?.url || "").trim();
+          return url
+            ? `- ${ref}: ${name} (${type}) — ${url}`
+            : `- ${ref}: ${name} (${type})`;
         })
       ].join("\n")
     );

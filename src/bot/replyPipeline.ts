@@ -68,6 +68,8 @@ import type { ReplyPipelineRuntime } from "./botContext.ts";
 type ReplyPipelineAttachment = {
   url?: string;
   proxyURL?: string;
+  name?: string;
+  contentType?: string;
 };
 
 type ReplyPipelineAttachmentCollection = {
@@ -77,6 +79,7 @@ type ReplyPipelineAttachmentCollection = {
 
 type ReplyPipelineEmbed = {
   url?: string;
+  type?: string;
   video?: {
     url?: string;
     proxyURL?: string;
@@ -180,6 +183,12 @@ type ReplyImageInput = Record<string, unknown> & {
   contentType?: string;
   dataBase64?: string;
 };
+type ReplyVideoInput = Record<string, unknown> & {
+  url?: string;
+  filename?: string;
+  contentType?: string;
+  videoRef?: string;
+};
 type ReplyGeneration = {
   provider?: string;
   model?: string;
@@ -235,6 +244,8 @@ type ReplyPipelineContext = {
   memorySlice: ReplyContinuityContext["memorySlice"];
   replyMediaMemoryFacts: ReturnType<ReplyPipelineRuntime["buildMediaMemoryFacts"]>;
   attachmentImageInputs: ReplyImageInput[];
+  attachmentVideoInputs: ReplyVideoInput[];
+  videoLookupRefs: Record<string, string>;
   imageBudget: ReturnType<ReplyPipelineRuntime["getImageBudgetState"]>;
   videoBudget: ReturnType<ReplyPipelineRuntime["getVideoGenerationBudgetState"]>;
   mediaCapabilities: ReturnType<ReplyPipelineRuntime["getMediaGenerationCapabilities"]>;
@@ -697,6 +708,19 @@ async function buildReplyContext(
     relevantFacts: memorySlice.relevantFacts
   });
   const attachmentImageInputs: ReplyImageInput[] = bot.getImageInputs(message);
+  const attachmentVideoInputs: ReplyVideoInput[] = (bot.getVideoInputs(message) || [])
+    .map((video, index) => ({
+      ...video,
+      videoRef: `VID ${index + 1}`
+    }));
+  const videoLookupRefs = Object.fromEntries(
+    attachmentVideoInputs
+      .map((video) => [
+        String(video.videoRef || "").trim(),
+        String(video.url || "").trim()
+      ])
+      .filter(([videoRef, url]) => Boolean(videoRef && url))
+  );
   const imageBudget = bot.getImageBudgetState(settings);
   const videoBudget = bot.getVideoGenerationBudgetState(settings);
   const mediaCapabilities = bot.getMediaGenerationCapabilities(settings);
@@ -844,6 +868,7 @@ async function buildReplyContext(
   const initialUserPrompt = buildReplyPrompt({
     ...replyPromptBase,
     imageInputs: modelImageInputs,
+    videoInputs: attachmentVideoInputs,
     webSearch,
     browserBrowse,
     memoryLookup,
@@ -860,7 +885,7 @@ async function buildReplyContext(
     recentMessages, addressSignal, triggerMessageIds, addressed, reactivity,
     isReplyChannel, ambientReplyEagerness, responseWindowEagerness, recentReplyWindowActive,
     reactionEmojiOptions, source, performance,
-    memorySlice, replyMediaMemoryFacts, attachmentImageInputs, imageBudget, videoBudget,
+    memorySlice, replyMediaMemoryFacts, attachmentImageInputs, attachmentVideoInputs, videoLookupRefs, imageBudget, videoBudget,
     mediaCapabilities, simpleImageCapabilityReady, complexImageCapabilityReady, imageCapabilityReady,
     videoCapabilityReady, gifBudget, gifsConfigured, webSearch, browserBrowse, recentConversationHistory, memoryLookup,
     modelImageInputs, imageLookup, replyTrace, screenShareCapability,
@@ -880,7 +905,7 @@ async function executeReplyLlm(
   const {
     addressSignal, triggerMessageIds, source, performance, signal,
     replyTrace, systemPrompt, initialUserPrompt, replyPromptCapture,
-    activeVoiceSession, inVoiceChannelNow
+    activeVoiceSession, inVoiceChannelNow, videoLookupRefs
   } = ctx;
   let { webSearch, browserBrowse, memoryLookup, modelImageInputs, imageLookup, replyPrompts } = ctx;
 
@@ -1031,6 +1056,9 @@ async function executeReplyLlm(
     trace: {
       ...replyTrace,
       source
+    },
+    videoLookup: {
+      refs: videoLookupRefs
     },
     signal
   };

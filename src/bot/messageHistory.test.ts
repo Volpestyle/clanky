@@ -12,6 +12,7 @@ import {
   composeMessageContentForHistory,
   getConversationHistoryForPrompt,
   getImageInputs,
+  getVideoInputs,
   isLikelyImageUrl,
   parseHistoryImageReference,
   recordReactionHistoryEvent,
@@ -205,6 +206,60 @@ test("getImageInputs keeps only images and caps the list at three", () => {
     {
       url: "https://cdn.example.com/three.webp?size=400",
       filename: "three.webp",
+      contentType: ""
+    }
+  ]);
+});
+
+test("getVideoInputs keeps only videos and caps the list at three", () => {
+  const videos = getVideoInputs({
+    attachments: createAttachmentCollection([
+      {
+        url: "https://cdn.example.com/readme.pdf",
+        name: "readme.pdf",
+        contentType: "application/pdf"
+      },
+      {
+        url: "https://cdn.example.com/clip.mp4",
+        name: "clip.mp4"
+      },
+      {
+        url: "https://cdn.example.com/stream",
+        name: "stream",
+        contentType: "video/webm"
+      },
+      {
+        url: "https://cdn.example.com/trailer.mov?download=1",
+        name: "trailer.mov"
+      },
+      {
+        url: "https://cdn.example.com/four.mkv",
+        name: "four.mkv"
+      }
+    ]),
+    embeds: [
+      {
+        video: {
+          url: "https://video.example.com/embed-preview.mp4"
+        }
+      }
+    ]
+  });
+
+  assert.deepEqual(videos, [
+    {
+      url: "https://cdn.example.com/clip.mp4",
+      filename: "clip.mp4",
+      contentType: ""
+    },
+    {
+      url: "https://cdn.example.com/stream",
+      filename: "stream",
+      contentType: "video/webm"
+    },
+    {
+      url: "https://cdn.example.com/trailer.mov?download=1",
+      filename: "trailer.mov",
       contentType: ""
     }
   ]);

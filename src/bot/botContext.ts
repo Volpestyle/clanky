@@ -109,6 +109,7 @@ type BuildMediaMemoryFactsFn = typeof import("./memorySlice.ts").buildMediaMemor
 type LoadRelevantMemoryFactsFn = typeof import("./memorySlice.ts").loadRelevantMemoryFacts;
 type GetConversationHistoryForPromptFn = typeof import("./messageHistory.ts").getConversationHistoryForPrompt;
 type GetImageInputsFn = typeof import("./messageHistory.ts").getImageInputs;
+type GetVideoInputsFn = typeof import("./messageHistory.ts").getVideoInputs;
 type GetImageBudgetStateFn = typeof import("./budgetTracking.ts").getImageBudgetState;
 type GetVideoGenerationBudgetStateFn = typeof import("./budgetTracking.ts").getVideoGenerationBudgetState;
 type GetGifBudgetStateFn = typeof import("./budgetTracking.ts").getGifBudgetState;
@@ -221,6 +222,7 @@ export interface ReplyPipelineRuntime extends BotContext, Pick<ClankerBot, Reply
   getConversationHistoryForPrompt: StripFirstArg<GetConversationHistoryForPromptFn>;
   buildMediaMemoryFacts: BuildMediaMemoryFactsFn;
   getImageInputs: (message: unknown) => ReturnType<GetImageInputsFn>;
+  getVideoInputs: (message: unknown) => ReturnType<GetVideoInputsFn>;
   getImageBudgetState: StripFirstArg<GetImageBudgetStateFn>;
   getVideoGenerationBudgetState: StripFirstArg<GetVideoGenerationBudgetStateFn>;
   getMediaGenerationCapabilities: StripFirstArg<GetMediaGenerationCapabilitiesFn>;

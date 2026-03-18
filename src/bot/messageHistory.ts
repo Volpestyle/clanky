@@ -9,7 +9,9 @@ import {
 } from "./replyPipelineShared.ts";
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
+const VIDEO_EXT_RE = /\.(mp4|m4v|mov|webm|mkv|avi|mpeg|mpg)$/i;
 const MAX_IMAGE_INPUTS = 3;
+const MAX_VIDEO_INPUTS = 3;
 
 type HistoryAttachment = {
   url?: string;
@@ -25,6 +27,7 @@ type HistoryAttachmentCollection = {
 
 type HistoryEmbed = {
   url?: string;
+  type?: string;
   video?: {
     url?: string;
     proxyURL?: string;
@@ -188,6 +191,93 @@ export function getImageInputs(message: HistoryMessage) {
   }
 
   return images;
+}
+
+function deriveFilenameFromUrl(url: string, fallback = "(unnamed)") {
+  const normalizedUrl = String(url || "").trim();
+  if (!normalizedUrl) return fallback;
+  try {
+    const parsed = new URL(normalizedUrl);
+    const segment = parsed.pathname.split("/").filter(Boolean).at(-1) || "";
+    const decoded = decodeURIComponent(segment).trim();
+    return decoded || fallback;
+  } catch {
+    const segment = normalizedUrl.split("?")[0].split("/").filter(Boolean).at(-1) || "";
+    const decoded = decodeURIComponent(segment).trim();
+    return decoded || fallback;
+  }
+}
+
+function isLikelyVideoAttachment({
+  url,
+  filename,
+  contentType
+}: {
+  url: string;
+  filename: string;
+  contentType: string;
+}) {
+  const urlPath = String(url || "").split("?")[0];
+  return (
+    String(contentType || "").startsWith("video/") ||
+    VIDEO_EXT_RE.test(String(filename || "")) ||
+    VIDEO_EXT_RE.test(urlPath)
+  );
+}
+
+export function getVideoInputs(message: HistoryMessage) {
+  const videos = [];
+  const seen = new Set();
+  const pushVideo = (entry: { url: string; filename: string; contentType: string }) => {
+    const url = String(entry.url || "").trim();
+    if (!url || seen.has(url) || videos.length >= MAX_VIDEO_INPUTS) return;
+    seen.add(url);
+    videos.push({
+      url,
+      filename: String(entry.filename || "(unnamed)").trim() || "(unnamed)",
+      contentType: String(entry.contentType || "").toLowerCase()
+    });
+  };
+
+  for (const attachment of message.attachments?.values?.() || []) {
+    if (videos.length >= MAX_VIDEO_INPUTS) break;
+
+    const url = String(attachment.url || attachment.proxyURL || "").trim();
+    if (!url) continue;
+    const filename = String(attachment.name || "").trim() || deriveFilenameFromUrl(url);
+    const contentType = String(attachment.contentType || "").toLowerCase();
+    if (!isLikelyVideoAttachment({ url, filename, contentType })) continue;
+
+    pushVideo({ url, filename, contentType });
+  }
+
+  for (const embed of Array.isArray(message.embeds) ? message.embeds : []) {
+    if (videos.length >= MAX_VIDEO_INPUTS) break;
+
+    const embedVideoUrl = String(embed?.video?.url || embed?.video?.proxyURL || "").trim();
+    if (embedVideoUrl) {
+      const filename = deriveFilenameFromUrl(embedVideoUrl);
+      pushVideo({
+        url: embedVideoUrl,
+        filename,
+        contentType: ""
+      });
+      continue;
+    }
+
+    const embedUrl = String(embed?.url || "").trim();
+    if (!embedUrl) continue;
+    const filename = deriveFilenameFromUrl(embedUrl);
+    const embedType = String(embed?.type || "").toLowerCase();
+    if (embedType !== "video" && !isLikelyVideoAttachment({ url: embedUrl, filename, contentType: "" })) continue;
+    pushVideo({
+      url: embedUrl,
+      filename,
+      contentType: ""
+    });
+  }
+
+  return videos;
 }
 
 export async function syncMessageSnapshotFromReaction(

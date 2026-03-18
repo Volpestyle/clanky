@@ -182,9 +182,16 @@ export const VIDEO_CONTEXT_SCHEMA: SharedToolSchema = {
   parameters: {
     type: "object",
     properties: {
-      url: { type: "string", description: "The full URL of the video to extract context from." }
+      url: {
+        type: "string",
+        description: "The full URL of the video to extract context from."
+      },
+      videoRef: {
+        type: "string",
+        description: "Video ref from the current message context, for example VID 1."
+      }
     },
-    required: ["url"],
+    anyOf: [{ required: ["url"] }, { required: ["videoRef"] }],
     additionalProperties: false
   }
 };

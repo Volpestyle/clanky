@@ -78,6 +78,14 @@ The agent decides when to call this tool. It is preferred over `web_scrape` or
 metadata. For pages requiring JS rendering or interaction, the agent falls back
 to `browser_browse`.
 
+Current-message Discord video uploads are surfaced to the model as `VID n`
+references in prompt context. The model may call `video_context` with a direct
+`url` or with a `videoRef` like `VID 1`.
+
+Direct video URLs (for example Discord CDN `.mp4`/`.webm`) are processed without
+`yt-dlp`. Non-direct hosts can use `yt-dlp` when available. Keyframe and ASR
+fallback extraction rely on `ffmpeg`.
+
 Settings: `media.videoContext` controls enablement and extraction parameters
 (transcript length, keyframe interval, ASR fallback).
 

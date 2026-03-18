@@ -226,6 +226,53 @@ test("executeReplyTool web_scrape suggests browser_browse on failure", async () 
   assert.match(result.content, /browser_browse/);
 });
 
+test("executeReplyTool resolves video_context by VID ref from current message attachments", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+
+  const result = await executeReplyTool(
+    "video_context",
+    { videoRef: "VID 1" },
+    {
+      video: {
+        async fetchContext(opts) {
+          calls.push(opts);
+          return {
+            text: "Title: direct upload",
+            imageInputs: []
+          };
+        }
+      }
+    },
+    {
+      settings: {},
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      sourceMessageId: "msg-1",
+      sourceText: "check this upload",
+      trace: { source: "reply_message" },
+      videoLookup: {
+        refs: {
+          "VID 1": "https://cdn.discordapp.com/attachments/1/2/demo.mp4"
+        }
+      }
+    }
+  );
+
+  assert.equal(result.isError, undefined);
+  assert.match(result.content, /Title: direct upload/);
+  assert.deepEqual(calls, [{
+    url: "https://cdn.discordapp.com/attachments/1/2/demo.mp4",
+    settings: {},
+    trace: {
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      source: "video_context_tool"
+    }
+  }]);
+});
+
 test("executeReplyTool delegates conversation_search to store history search", async () => {
   const queries: Array<Record<string, unknown>> = [];
 

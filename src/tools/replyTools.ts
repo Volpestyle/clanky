@@ -299,6 +299,9 @@ export type ReplyToolContext = {
   botUserId?: string;
   actorName?: string;
   trace?: Record<string, unknown>;
+  videoLookup?: {
+    refs?: Record<string, string> | null;
+  } | null;
   signal?: AbortSignal;
 };
 
@@ -524,15 +527,66 @@ async function executeWebScrape(
 
 const MAX_VIDEO_CONTEXT_URL_LEN = 2000;
 
+function normalizeVideoLookupRef(value: unknown) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toUpperCase();
+}
+
+function resolveVideoLookupUrl(videoRef: unknown, context: ReplyToolContext) {
+  const normalizedRef = normalizeVideoLookupRef(videoRef);
+  if (!normalizedRef) return "";
+  const refs =
+    context.videoLookup?.refs && typeof context.videoLookup.refs === "object" && !Array.isArray(context.videoLookup.refs)
+      ? context.videoLookup.refs
+      : null;
+  if (!refs) return "";
+
+  for (const [rawRef, rawUrl] of Object.entries(refs)) {
+    if (normalizeVideoLookupRef(rawRef) !== normalizedRef) continue;
+    const normalizedUrl = String(rawUrl || "").trim().slice(0, MAX_VIDEO_CONTEXT_URL_LEN);
+    if (normalizedUrl) return normalizedUrl;
+  }
+  return "";
+}
+
+function listAvailableVideoRefs(context: ReplyToolContext) {
+  const refs =
+    context.videoLookup?.refs && typeof context.videoLookup.refs === "object" && !Array.isArray(context.videoLookup.refs)
+      ? context.videoLookup.refs
+      : null;
+  if (!refs) return [];
+  return Object.keys(refs)
+    .map((key) => String(key || "").trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
 async function executeVideoContext(
   input: ReplyToolCallInput,
   runtime: ReplyToolRuntime,
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
   throwIfAborted(context.signal, "Reply tool cancelled");
-  const url = String(input?.url || "").trim().slice(0, MAX_VIDEO_CONTEXT_URL_LEN);
+  const inputUrl = String(input?.url || "").trim().slice(0, MAX_VIDEO_CONTEXT_URL_LEN);
+  const videoRef = String(input?.videoRef || input?.videoId || "").trim();
+  const url = inputUrl || resolveVideoLookupUrl(videoRef, context);
   if (!url) {
-    return { content: "Missing or empty URL.", isError: true };
+    if (videoRef) {
+      const refs = listAvailableVideoRefs(context);
+      if (refs.length) {
+        return {
+          content: `Unknown video ref "${videoRef}". Available refs: ${refs.join(", ")}.`,
+          isError: true
+        };
+      }
+      return {
+        content: `Unknown video ref "${videoRef}". No current message video refs are available in this turn context.`,
+        isError: true
+      };
+    }
+    return { content: "Missing or empty URL/videoRef.", isError: true };
   }
   if (!runtime.video?.fetchContext) {
     return { content: "Video context extraction is not available.", isError: true };
