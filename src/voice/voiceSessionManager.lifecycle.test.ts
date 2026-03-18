@@ -3717,6 +3717,39 @@ test("requestRealtimeCodeTaskFollowup skips when channel does not match active s
   assert.equal(Boolean(logEntry), false);
 });
 
+test("requestRealtimeCodeTaskFollowup uses realtime text transport when playback transport is available", () => {
+  const { manager } = createManager();
+  let textCalls = 0;
+  let playbackCalls = 0;
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeClient: {
+      requestTextUtterance() {
+        textCalls += 1;
+      },
+      requestPlaybackUtterance() {
+        playbackCalls += 1;
+      },
+      isResponseInProgress() {
+        return false;
+      }
+    }
+  });
+  manager.sessions.set(session.guildId, session as unknown as VoiceSession);
+
+  const delivered = manager.requestRealtimeCodeTaskFollowup({
+    guildId: session.guildId,
+    channelId: session.textChannelId,
+    prompt: "[CODE TASK COMPLETED]\nSession: code:guild-1:text-1:123",
+    userId: "user-1",
+    source: "voice_realtime_code_task_result_followup"
+  });
+
+  assert.equal(delivered, true);
+  assert.equal(textCalls, 1);
+  assert.equal(playbackCalls, 0);
+});
+
 test("requestRealtimeTextUtterance queues assistant speech behind an active realtime response", () => {
   const { manager, logs } = createManager();
   const prompts = [];

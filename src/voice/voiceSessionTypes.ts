@@ -422,6 +422,7 @@ export interface VoiceQueuedRealtimeAssistantUtterance {
     utteranceText: string | null;
     userId: string | null;
     source: string;
+    transport?: "auto" | "text" | "playback";
     queuedAt: number;
     interruptionPolicy: ReplyInterruptionPolicy | null;
     outputLeaseMode?: VoiceOutputLeaseMode | null;

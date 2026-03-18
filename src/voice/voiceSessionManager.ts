@@ -2945,6 +2945,7 @@ export class VoiceSessionManager {
       prompt: next.prompt,
       userId: next.userId,
       source: next.source,
+      transport: next.transport || "auto",
       interruptionPolicy: next.interruptionPolicy,
       outputLeaseMode: next.outputLeaseMode || null,
       latencyContext: next.latencyContext,
@@ -3043,18 +3044,27 @@ export class VoiceSessionManager {
     outputLeaseMode = null,
     latencyContext = null,
     utteranceText = null,
-    musicWakeRefreshAfterSpeech = false
+    musicWakeRefreshAfterSpeech = false,
+    transport = "auto"
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
     const realtimeClient = session.realtimeClient;
-    const requestPlaybackUtterance =
-      typeof realtimeClient?.requestPlaybackUtterance === "function"
-        ? realtimeClient.requestPlaybackUtterance.bind(realtimeClient)
-        : typeof realtimeClient?.requestTextUtterance === "function"
-          ? realtimeClient.requestTextUtterance.bind(realtimeClient)
-          : null;
-    if (!requestPlaybackUtterance) return false;
+    const requestPlaybackUtterance = typeof realtimeClient?.requestPlaybackUtterance === "function"
+      ? realtimeClient.requestPlaybackUtterance.bind(realtimeClient)
+      : null;
+    const requestTextUtterance = typeof realtimeClient?.requestTextUtterance === "function"
+      ? realtimeClient.requestTextUtterance.bind(realtimeClient)
+      : null;
+    const normalizedTransport =
+      transport === "text" || transport === "playback" ? transport : "auto";
+    const requestUtterance =
+      normalizedTransport === "text"
+        ? requestTextUtterance
+        : normalizedTransport === "playback"
+          ? (requestPlaybackUtterance || requestTextUtterance)
+          : (requestPlaybackUtterance || requestTextUtterance);
+    if (!requestUtterance) return false;
 
     const normalizedInterruptionPolicy = this.resolveReplyInterruptionPolicy({
       session,
@@ -3070,7 +3080,7 @@ export class VoiceSessionManager {
         : normalizeVoiceText(String(utteranceText || ""), STT_REPLY_MAX_CHARS) || null;
 
     try {
-      requestPlaybackUtterance(prompt);
+      requestUtterance(prompt);
       this.replyManager.createTrackedAudioResponse({
         session,
         userId: userId || this.client.user?.id || null,
@@ -3117,7 +3127,8 @@ export class VoiceSessionManager {
     latencyContext = null,
     utteranceText = null,
     musicWakeRefreshAfterSpeech = false,
-    maxPromptChars = STT_REPLY_MAX_CHARS + 420
+    maxPromptChars = STT_REPLY_MAX_CHARS + 420,
+    transport = "auto"
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
@@ -3146,6 +3157,8 @@ export class VoiceSessionManager {
       userId,
       policy: interruptionPolicy,
     });
+    const normalizedTransport =
+      transport === "text" || transport === "playback" ? transport : "auto";
     const normalizedOutputLeaseMode = normalizeVoiceOutputLeaseMode(outputLeaseMode);
     const effectiveOutputLeaseMode =
       session.botTurnOpen ? "ambient" : normalizedOutputLeaseMode;
@@ -3159,6 +3172,7 @@ export class VoiceSessionManager {
       utteranceText: normalizedUtteranceText,
       userId: userId || this.client.user?.id || null,
       source: String(source || "voice_prompt_utterance"),
+      transport: normalizedTransport,
       queuedAt: Date.now(),
       interruptionPolicy: normalizedInterruptionPolicy,
       outputLeaseMode: effectiveOutputLeaseMode,
@@ -3247,7 +3261,8 @@ export class VoiceSessionManager {
       outputLeaseMode: normalizedOutputLeaseMode,
       latencyContext,
       utteranceText: normalizedUtteranceText,
-      musicWakeRefreshAfterSpeech
+      musicWakeRefreshAfterSpeech,
+      transport: normalizedTransport
     });
   }
 
@@ -3284,7 +3299,8 @@ export class VoiceSessionManager {
       userId: String(userId || "").trim() || null,
       source: String(source || "voice_realtime_code_task_followup"),
       utteranceText: null,
-      maxPromptChars: 7_000
+      maxPromptChars: 7_000,
+      transport: "text"
     });
 
     this.store.logAction({
@@ -3353,6 +3369,7 @@ export class VoiceSessionManager {
     if (!this.isCollapsibleQueuedStreamTailEntry(laterEntry, sourcePrefix)) return false;
     return (
       String(earlierEntry?.userId || "") === String(laterEntry?.userId || "") &&
+      String(earlierEntry?.transport || "auto") === String(laterEntry?.transport || "auto") &&
       Boolean(earlierEntry?.musicWakeRefreshAfterSpeech) === Boolean(laterEntry?.musicWakeRefreshAfterSpeech) &&
       this.replyInterruptionPoliciesMatch(earlierEntry?.interruptionPolicy || null, laterEntry?.interruptionPolicy || null) &&
       voiceOutputLeaseModesMatch(earlierEntry?.outputLeaseMode || null, laterEntry?.outputLeaseMode || null)
