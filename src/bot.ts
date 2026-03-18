@@ -1421,13 +1421,6 @@ export class ClankerBot {
         recentReplyWindowActive: replyAdmissionDecision.attentionState.recentReplyWindowActive,
         responseWindowSize: replyAdmissionDecision.attentionState.responseWindowSize,
         latestBotMessageId: replyAdmissionDecision.attentionState.latestBotMessageId,
-        coldAmbientProbability: Number.isFinite(replyAdmissionDecision.coldAmbientProbability)
-          ? Number(replyAdmissionDecision.coldAmbientProbability.toFixed(4))
-          : null,
-        coldAmbientGatePassed: replyAdmissionDecision.coldAmbientGatePassed,
-        coldAmbientGateValue: Number.isFinite(replyAdmissionDecision.coldAmbientGateValue)
-          ? Number(replyAdmissionDecision.coldAmbientGateValue.toFixed(4))
-          : null,
         triggerReferenceMessageId: message.reference?.messageId || null,
         recentMessageCount: Array.isArray(recentMessages) ? recentMessages.length : 0
       }

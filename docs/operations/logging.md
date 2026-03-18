@@ -230,8 +230,6 @@ Inspect these metadata fields together:
 - `attentionMode`
 - `attentionReason`
 - `recentReplyWindowActive`
-- `coldAmbientProbability`
-- `coldAmbientGatePassed`
 - `queueDepth`
 - `forceRespond`
 - `sendBudgetAllowed`
@@ -245,7 +243,7 @@ Interpretation notes:
 - `reply_admission_decision` is the text ingress decision before the message is ever queued for generation.
 - `reason=hard_address` means the text path admitted the turn immediately because it was a direct address or exact bot-name hit.
 - `reason=recent_reply_window` means the turn stayed in the active follow-up window from a recent bot reply.
-- `reason=cold_ambient_*` means the turn was ambient and passed or failed the deterministic cold-ambient probability gate.
+- `reason=cold_ambient_llm_decides` means the turn was ambient and admitted to the LLM for it to decide whether to respond or `[SKIP]`.
 - `reply_queue_gate_rejected` means the message was already queued, but the queue worker later dropped it because settings, identity, permissions, or duplicate-trigger state changed before send-time.
 - `reply_pipeline_gate` means the queued turn reached `maybeReplyToMessagePipeline()`. `reason=ready` is the successful boundary crossing; other reasons explain why the pipeline exited before any LLM call.
 - `reply_tool_availability` records the tool set that was actually exposed to the model for that text turn, including excluded tool names with collapsed reasons like `settings_disabled`, `budget_blocked`, `provider_unconfigured`, and `no_history_images`.

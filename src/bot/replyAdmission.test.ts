@@ -2,7 +2,6 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   getReplyAddressSignal,
-  resolveColdAmbientReplyProbability,
   resolveTextAttentionState,
   shouldAttemptReplyDecision
 } from "./replyAdmission.ts";
@@ -218,44 +217,42 @@ test("reply admission disables recent-window followups when response-window eage
     reason: "llm_decides"
   };
 
-  assert.equal(
-    shouldAttemptReplyDecision({
-      botUserId: "bot-1",
-      settings: {
-        permissions: {
-          allowUnsolicitedReplies: true
-        },
-        interaction: {
-          activity: {
-            ambientReplyEagerness: 10,
-            responseWindowEagerness: 0
-          }
-        }
+  const attention = resolveTextAttentionState({
+    botUserId: "bot-1",
+    settings: {
+      permissions: {
+        allowUnsolicitedReplies: true
       },
-      recentMessages: [
-        {
-          message_id: "bot-ctx-1",
-          author_id: "bot-1",
-          referenced_message_id: "human-ctx-1"
-        },
-        {
-          message_id: "human-ctx-1",
-          author_id: "user-1"
+      interaction: {
+        activity: {
+          ambientReplyEagerness: 10,
+          responseWindowEagerness: 0
         }
-      ],
-      addressSignal: noAddress,
-      triggerMessageId: "msg-1",
-      triggerAuthorId: "user-1"
-    }),
-    false
-  );
+      }
+    },
+    recentMessages: [
+      {
+        message_id: "bot-ctx-1",
+        author_id: "bot-1",
+        referenced_message_id: "human-ctx-1"
+      },
+      {
+        message_id: "human-ctx-1",
+        author_id: "user-1"
+      }
+    ],
+    addressSignal: noAddress,
+    triggerMessageId: "msg-1",
+    triggerAuthorId: "user-1"
+  });
+
+  // Zero response-window eagerness means no follow-up window activates,
+  // even though the bot recently replied to this user.
+  assert.equal(attention.recentReplyWindowActive, false);
+  assert.equal(attention.reason, "cold_ambient");
 });
 
-test("reply admission blocks zero-eagerness cold ambient turns and admits max-eagerness ones", () => {
-  const highEagernessSettings = {
-    permissions: { allowUnsolicitedReplies: true },
-    interaction: { activity: { ambientReplyEagerness: 100 } }
-  };
+test("reply admission always admits cold ambient turns for LLM to decide", () => {
   const lowEagernessSettings = {
     permissions: { allowUnsolicitedReplies: true },
     interaction: { activity: { ambientReplyEagerness: 0 } }
@@ -270,23 +267,12 @@ test("reply admission blocks zero-eagerness cold ambient turns and admits max-ea
   assert.equal(
     shouldAttemptReplyDecision({
       botUserId: "bot-1",
-      settings: highEagernessSettings,
-      recentMessages: [],
-      addressSignal: noAddress,
-      triggerMessageId: "msg-1"
-    }),
-    true
-  );
-
-  assert.equal(
-    shouldAttemptReplyDecision({
-      botUserId: "bot-1",
       settings: lowEagernessSettings,
       recentMessages: [],
       addressSignal: noAddress,
       triggerMessageId: "msg-1"
     }),
-    false
+    true
   );
 });
 
@@ -325,12 +311,4 @@ test("reply admission falls back to AMBIENT when another human has already moved
   assert.equal(attention.recentReplyWindowActive, false);
 });
 
-test("reply admission applies a reply-channel bonus to cold ambient probability", () => {
-  assert.equal(resolveColdAmbientReplyProbability({
-    ambientReplyEagerness: 30,
-    isReplyChannel: false
-  }) < resolveColdAmbientReplyProbability({
-    ambientReplyEagerness: 30,
-    isReplyChannel: true
-  }), true);
-});
+
