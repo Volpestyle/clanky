@@ -1,7 +1,8 @@
 import type OpenAI from "openai";
 import { runCodexSessionTurn } from "../llm/llmCodex.ts";
-import { createAbortError, isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
-import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
+import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
+import { BaseAgentSession } from "./baseAgentSession.ts";
+import type { SubAgentTurnOptions, SubAgentTurnResult } from "./subAgentSession.ts";
 import { EMPTY_USAGE, generateSessionId } from "./subAgentSession.ts";
 
 interface CodeAgentTrace {
@@ -29,14 +30,7 @@ interface CodexAgentSessionOptions {
   openai: OpenAI;
 }
 
-export class CodexAgentSession implements SubAgentSession {
-  readonly id: string;
-  readonly type = "code" as const;
-  readonly createdAt: number;
-  readonly ownerUserId: string | null;
-  lastUsedAt: number;
-  status: SubAgentSession["status"];
-
+export class CodexAgentSession extends BaseAgentSession {
   private readonly model: string;
   private readonly costProvider: string;
   private readonly timeoutMs: number;
@@ -45,16 +39,17 @@ export class CodexAgentSession implements SubAgentSession {
   private readonly openai: OpenAI;
   private turnCount: number;
   private previousResponseId: string;
-  private activeAbortController: AbortController | null;
+  private lastTurnInput: string;
+  private lastTurnStartedAtMs: number;
 
   constructor(options: CodexAgentSessionOptions) {
     const { scopeKey, model, costProvider = "openai", timeoutMs, trace, store, openai } = options;
-
-    this.id = generateSessionId("code", scopeKey);
-    this.createdAt = Date.now();
-    this.lastUsedAt = Date.now();
-    this.ownerUserId = trace.userId ?? null;
-    this.status = "idle";
+    super({
+      id: generateSessionId("code", scopeKey),
+      type: "code",
+      ownerUserId: trace.userId ?? null,
+      logAction: store.logAction
+    });
     this.model = String(model || "").trim();
     this.costProvider = String(costProvider || "openai").trim() || "openai";
     this.timeoutMs = timeoutMs;
@@ -63,28 +58,15 @@ export class CodexAgentSession implements SubAgentSession {
     this.openai = openai;
     this.turnCount = 0;
     this.previousResponseId = "";
-    this.activeAbortController = null;
+    this.lastTurnInput = "";
+    this.lastTurnStartedAtMs = 0;
   }
 
-  async runTurn(input: string, options: { signal?: AbortSignal } = {}): Promise<SubAgentTurnResult> {
-    if (this.status === "cancelled" || this.status === "error") {
-      return {
-        text: `Session is ${this.status} and cannot accept new turns.`,
-        costUsd: 0,
-        isError: true,
-        errorMessage: `Session ${this.status}`,
-        usage: { ...EMPTY_USAGE }
-      };
-    }
-
-    this.status = "running";
-    this.lastUsedAt = Date.now();
+  protected async executeTurn(input: string, options: SubAgentTurnOptions): Promise<SubAgentTurnResult> {
     this.turnCount += 1;
-    const turnStartMs = Date.now();
-    this.activeAbortController = new AbortController();
-    const turnSignal = options.signal
-      ? AbortSignal.any([this.activeAbortController.signal, options.signal])
-      : this.activeAbortController.signal;
+    this.lastTurnInput = String(input || "");
+    this.lastTurnStartedAtMs = Date.now();
+    const turnSignal = options.signal;
 
     try {
       throwIfAborted(turnSignal, "Codex session cancelled");
@@ -99,8 +81,6 @@ export class CodexAgentSession implements SubAgentSession {
         signal: turnSignal
       });
       this.previousResponseId = response.responseId || this.previousResponseId;
-      this.status = "idle";
-      this.lastUsedAt = Date.now();
 
       const turnResult: SubAgentTurnResult = {
         text: response.text || (response.isError ? response.errorMessage : "Code agent turn completed with no output."),
@@ -126,63 +106,41 @@ export class CodexAgentSession implements SubAgentSession {
           isError: turnResult.isError,
           usage: turnResult.usage,
           source: this.trace.source,
-          durationMs: Date.now() - turnStartMs
+          durationMs: Date.now() - this.lastTurnStartedAtMs
         },
         usdCost: turnResult.costUsd
       });
 
       return turnResult;
-    } catch (error) {
-      if (isAbortError(error) || turnSignal.aborted) {
-        this.status = "cancelled";
-        this.lastUsedAt = Date.now();
-        throw createAbortError(turnSignal.reason || error);
-      }
-      const message = String(error instanceof Error ? error.message : error || "Codex session turn failed.");
-      this.status = "error";
-      this.lastUsedAt = Date.now();
-
-      this.store.logAction({
-        kind: "code_agent_error",
-        guildId: this.trace.guildId || null,
-        channelId: this.trace.channelId || null,
-        userId: this.trace.userId || null,
-        content: input.slice(0, 200),
-        metadata: {
-          provider: "codex",
-          model: this.model,
-          sessionId: this.id,
-          turnNumber: this.turnCount,
-          errorMessage: message,
-          source: this.trace.source,
-          durationMs: Date.now() - turnStartMs
-        }
-      });
-
-      return {
-        text: message,
-        costUsd: 0,
-        isError: true,
-        errorMessage: message,
-        usage: { ...EMPTY_USAGE }
-      };
     } finally {
-      this.activeAbortController = null;
       activeCodexTaskCount.current = Math.max(0, activeCodexTaskCount.current - 1);
     }
   }
 
-  cancel(reason = "Codex session cancelled"): void {
-    if (this.status === "cancelled") return;
-    this.status = "cancelled";
-    try {
-      this.activeAbortController?.abort(reason);
-    } catch {
-      // ignore
-    }
-  }
-
-  close(): void {
-    this.cancel("Codex session closed");
+  protected handleTurnError(error: unknown, _input: string): SubAgentTurnResult {
+    const message = String(error instanceof Error ? error.message : error || "Codex session turn failed.");
+    this.store.logAction({
+      kind: "code_agent_error",
+      guildId: this.trace.guildId || null,
+      channelId: this.trace.channelId || null,
+      userId: this.trace.userId || null,
+      content: this.lastTurnInput.slice(0, 200),
+      metadata: {
+        provider: "codex",
+        model: this.model,
+        sessionId: this.id,
+        turnNumber: this.turnCount,
+        errorMessage: message,
+        source: this.trace.source,
+        durationMs: Date.now() - this.lastTurnStartedAtMs
+      }
+    });
+    return {
+      text: message,
+      costUsd: 0,
+      isError: true,
+      errorMessage: message,
+      usage: { ...EMPTY_USAGE }
+    };
   }
 }

@@ -2,8 +2,9 @@ import type { LLMService, ToolLoopContentBlock, ToolLoopMessage } from "../llm.t
 import type { ImageInput } from "../llm/serviceShared.ts";
 import type { BrowserManager } from "../services/BrowserManager.ts";
 import { BROWSER_AGENT_TOOL_DEFINITIONS, executeBrowserTool } from "../tools/browserTools.ts";
-import { isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
-import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
+import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
+import { BaseAgentSession } from "./baseAgentSession.ts";
+import type { SubAgentTurnOptions, SubAgentTurnResult } from "./subAgentSession.ts";
 import { EMPTY_USAGE, generateSessionId } from "./subAgentSession.ts";
 
 const BROWSE_AGENT_TOOL_RESULT_TRUNCATE_LEN = 800;
@@ -308,14 +309,7 @@ interface BrowserAgentSessionOptions {
  * pauses and returns the result. Follow-up messages are injected as new user
  * turns and the loop resumes.
  */
-export class BrowserAgentSession implements SubAgentSession {
-  readonly id: string;
-  readonly type = "browser" as const;
-  readonly createdAt: number;
-  readonly ownerUserId: string | null;
-  lastUsedAt: number;
-  status: SubAgentSession["status"];
-
+export class BrowserAgentSession extends BaseAgentSession {
   private readonly llm: LLMService;
   private readonly browserManager: BrowserManager;
   private readonly store: BrowserAgentSessionOptions["store"];
@@ -325,21 +319,25 @@ export class BrowserAgentSession implements SubAgentSession {
   private readonly maxSteps: number;
   private readonly stepTimeoutMs: number;
   private readonly trace: BrowseAgentTrace;
-  private readonly baseSignal?: AbortSignal;
 
   private messages: ToolLoopMessage[];
   private stepCount: number;
   private totalCostUsd: number;
   private browserClosed: boolean;
-  private completedByAgent: boolean;
-  private activeAbortController: AbortController | null;
+  private lastTurnInput: string;
+  private lastTurnStartedAtMs: number;
+  private lastTurnCostUsd: number;
+  private lastTurnUsage: SubAgentTurnResult["usage"];
+  private lastTurnImageInputs: ImageInput[];
 
   constructor(options: BrowserAgentSessionOptions) {
-    this.id = generateSessionId("browser", options.scopeKey);
-    this.createdAt = Date.now();
-    this.lastUsedAt = Date.now();
-    this.ownerUserId = options.trace.userId ?? null;
-    this.status = "idle";
+    super({
+      id: generateSessionId("browser", options.scopeKey),
+      type: "browser",
+      ownerUserId: options.trace.userId ?? null,
+      baseSignal: options.signal,
+      logAction: options.store.logAction
+    });
 
     this.llm = options.llm;
     this.browserManager = options.browserManager;
@@ -350,7 +348,6 @@ export class BrowserAgentSession implements SubAgentSession {
     this.maxSteps = options.maxSteps;
     this.stepTimeoutMs = options.stepTimeoutMs;
     this.trace = options.trace;
-    this.baseSignal = options.signal;
 
     this.browserManager.configureSession(this.sessionKey, {
       headed: options.headed,
@@ -362,273 +359,224 @@ export class BrowserAgentSession implements SubAgentSession {
     this.stepCount = 0;
     this.totalCostUsd = 0;
     this.browserClosed = false;
-    this.completedByAgent = false;
-    this.activeAbortController = null;
-  }
-
-  private buildTurnSignal(signal?: AbortSignal) {
-    const signals = [this.baseSignal, this.activeAbortController?.signal, signal]
-      .filter((entry): entry is AbortSignal => Boolean(entry));
-    if (signals.length <= 0) return undefined;
-    if (signals.length === 1) return signals[0];
-    return AbortSignal.any(signals);
+    this.lastTurnInput = "";
+    this.lastTurnStartedAtMs = 0;
+    this.lastTurnCostUsd = 0;
+    this.lastTurnUsage = { ...EMPTY_USAGE };
+    this.lastTurnImageInputs = [];
   }
 
   getBrowserSessionKey() {
     return this.sessionKey;
   }
 
-  async runTurn(input: string, options: { signal?: AbortSignal } = {}): Promise<SubAgentTurnResult> {
-    if (this.status === "cancelled" || this.status === "error" || this.status === "completed") {
-      return {
-        text: `Session is ${this.status} and cannot accept new turns.`,
-        costUsd: 0,
-        isError: true,
-        errorMessage: `Session ${this.status}`,
-        sessionCompleted: this.status === "completed",
-        usage: { ...EMPTY_USAGE }
-      };
-    }
-
-    this.status = "running";
-    this.lastUsedAt = Date.now();
-    this.activeAbortController = new AbortController();
-    const turnSignal = this.buildTurnSignal(options.signal);
+  protected async executeTurn(input: string, options: SubAgentTurnOptions): Promise<SubAgentTurnResult> {
+    const turnSignal = options.signal;
+    this.lastTurnInput = String(input || "");
+    this.lastTurnStartedAtMs = Date.now();
+    this.lastTurnCostUsd = 0;
+    this.lastTurnUsage = { ...EMPTY_USAGE };
+    this.lastTurnImageInputs = [];
 
     // Add the user's input as a new message
     this.messages.push({ role: "user", content: input });
 
-    let turnCostUsd = 0;
-    const turnStartMs = Date.now();
-    const turnUsage = { ...EMPTY_USAGE };
-    const turnImageInputs: ImageInput[] = [];
+    const turnUsage = this.lastTurnUsage;
     let allowPostCloseFinalizationTurn = false;
 
-    try {
-      // Run the tool loop until we get text without tool calls (yield point)
-      while (this.stepCount < this.maxSteps || allowPostCloseFinalizationTurn) {
-        throwIfAborted(turnSignal, "Browse agent session cancelled");
-        if (allowPostCloseFinalizationTurn) {
-          allowPostCloseFinalizationTurn = false;
-        } else {
-          this.stepCount++;
-        }
+    // Run the tool loop until we get text without tool calls (yield point)
+    while (this.stepCount < this.maxSteps || allowPostCloseFinalizationTurn) {
+      throwIfAborted(turnSignal, "Browse agent session cancelled");
+      if (allowPostCloseFinalizationTurn) {
+        allowPostCloseFinalizationTurn = false;
+      } else {
+        this.stepCount++;
+      }
 
-        const response = await this.llm.chatWithTools({
-          provider: this.provider,
-          model: this.model,
-          systemPrompt: BROWSE_AGENT_SYSTEM_PROMPT,
-          messages: this.messages,
-          tools: BROWSER_AGENT_TOOL_DEFINITIONS,
-          maxOutputTokens: 4096,
-          temperature: 0.7,
-          trace: this.trace,
-          signal: turnSignal
+      const response = await this.llm.chatWithTools({
+        provider: this.provider,
+        model: this.model,
+        systemPrompt: BROWSE_AGENT_SYSTEM_PROMPT,
+        messages: this.messages,
+        tools: BROWSER_AGENT_TOOL_DEFINITIONS,
+        maxOutputTokens: 4096,
+        temperature: 0.7,
+        trace: this.trace,
+        signal: turnSignal
+      });
+
+      this.lastTurnCostUsd += response.costUsd;
+      this.totalCostUsd += response.costUsd;
+      turnUsage.inputTokens += response.usage.inputTokens;
+      turnUsage.outputTokens += response.usage.outputTokens;
+      turnUsage.cacheWriteTokens += response.usage.cacheWriteTokens;
+      turnUsage.cacheReadTokens += response.usage.cacheReadTokens;
+      this.messages.push({ role: "assistant", content: response.content });
+
+      const toolCalls = response.content.filter((block) => block.type === "tool_call");
+      const sessionReasoning = extractTextContent(response.content);
+
+      if (toolCalls.length === 0) {
+        // No tool calls — this is the yield point
+        const text = extractTextContent(response.content, "\n\n") || "The agent paused without returning text.";
+
+        const sessionCompleted = this.browserClosed;
+
+        this.store.logAction({
+          kind: "browser_agent_session_turn",
+          guildId: this.trace.guildId || null,
+          channelId: this.trace.channelId || null,
+          userId: this.trace.userId || null,
+          content: input.slice(0, 200),
+          metadata: {
+            sessionId: this.id,
+            steps: this.stepCount,
+            turnCostUsd: this.lastTurnCostUsd,
+            imageInputCount: this.lastTurnImageInputs.length,
+            source: this.trace.source,
+            durationMs: Date.now() - this.lastTurnStartedAtMs
+          },
+          usdCost: this.lastTurnCostUsd
         });
 
-        turnCostUsd += response.costUsd;
-        this.totalCostUsd += response.costUsd;
-        turnUsage.inputTokens += response.usage.inputTokens;
-        turnUsage.outputTokens += response.usage.outputTokens;
-        turnUsage.cacheWriteTokens += response.usage.cacheWriteTokens;
-        turnUsage.cacheReadTokens += response.usage.cacheReadTokens;
-        this.messages.push({ role: "assistant", content: response.content });
+        return {
+          text,
+          costUsd: this.lastTurnCostUsd,
+          imageInputs: this.lastTurnImageInputs,
+          isError: false,
+          errorMessage: "",
+          sessionCompleted,
+          usage: turnUsage
+        };
+      }
 
-        const toolCalls = response.content.filter((block) => block.type === "tool_call");
-        const sessionReasoning = extractTextContent(response.content);
+      if (this.browserClosed) {
+        const textBlocks = response.content.filter((block) => block.type === "text");
+        const text = textBlocks
+          .map((block) => block.text.trim())
+          .filter(Boolean)
+          .join("\n\n");
+        return {
+          text: text || "Browser session closed before the agent produced a final answer.",
+          costUsd: this.lastTurnCostUsd,
+          imageInputs: this.lastTurnImageInputs,
+          isError: !text,
+          errorMessage: text ? "" : "Browser session closed before final answer",
+          sessionCompleted: false,
+          usage: turnUsage
+        };
+      }
 
-        if (toolCalls.length === 0) {
-          // No tool calls — this is the yield point
-          const text = extractTextContent(response.content, "\n\n") || "The agent paused without returning text.";
-
-          const sessionCompleted = this.browserClosed;
-          this.completedByAgent = sessionCompleted;
-          this.status = sessionCompleted ? "completed" : "idle";
-          this.lastUsedAt = Date.now();
-
-          this.store.logAction({
-            kind: "browser_agent_session_turn",
-            guildId: this.trace.guildId || null,
-            channelId: this.trace.channelId || null,
-            userId: this.trace.userId || null,
-            content: input.slice(0, 200),
-            metadata: {
-              sessionId: this.id,
-              steps: this.stepCount,
-              turnCostUsd,
-              imageInputCount: turnImageInputs.length,
-              source: this.trace.source,
-              durationMs: Date.now() - turnStartMs
-            },
-            usdCost: turnCostUsd
-          });
-
-          return {
-            text,
-            costUsd: turnCostUsd,
-            imageInputs: turnImageInputs,
-            isError: false,
-            errorMessage: "",
-            sessionCompleted,
-            usage: turnUsage
-          };
-        }
-
-        if (this.browserClosed) {
-          const textBlocks = response.content.filter((block) => block.type === "text");
-          const text = textBlocks
-            .map((block) => block.text.trim())
-            .filter(Boolean)
-            .join("\n\n");
-          this.status = "idle";
-          this.lastUsedAt = Date.now();
-          return {
-            text: text || "Browser session closed before the agent produced a final answer.",
-            costUsd: turnCostUsd,
-            imageInputs: turnImageInputs,
-            isError: !text,
-            errorMessage: text ? "" : "Browser session closed before final answer",
-            sessionCompleted: false,
-            usage: turnUsage
-          };
-        }
-
-        if (sessionReasoning) {
-          this.store.logAction({
-            kind: "browser_agent_reasoning",
-            guildId: this.trace.guildId || null,
-            channelId: this.trace.channelId || null,
-            userId: this.trace.userId || null,
-            content: truncate(sessionReasoning, BROWSE_AGENT_REASONING_TRUNCATE_LEN),
-            metadata: {
-              step: this.stepCount,
-              sessionKey: this.sessionKey,
-              sessionId: this.id,
-              fullLength: sessionReasoning.length
-            }
-          });
-        }
-
-        // Execute tool calls
-        const toolResults: ToolLoopContentBlock[] = [];
-        let browserClosedThisResponse = false;
-        for (const toolCall of toolCalls) {
-          const sessionToolInput = toolCall.input as Record<string, unknown>;
-          this.store.logAction({
-            kind: "browser_tool_step",
-            guildId: this.trace.guildId || null,
-            channelId: this.trace.channelId || null,
-            userId: this.trace.userId || null,
-            content: toolCall.name,
-            metadata: {
-              step: this.stepCount,
-              tool: toolCall.name,
-              sessionKey: this.sessionKey,
-              sessionId: this.id,
-              input: sessionToolInput
-            }
-          });
-
-          const result = await executeBrowserTool(
-            this.browserManager,
-            this.sessionKey,
-            toolCall.name,
-            sessionToolInput,
-            this.stepTimeoutMs,
-            turnSignal
-          );
-
-          this.store.logAction({
-            kind: "browser_tool_result",
-            guildId: this.trace.guildId || null,
-            channelId: this.trace.channelId || null,
-            userId: this.trace.userId || null,
-            content: truncate(result.text, BROWSE_AGENT_TOOL_RESULT_TRUNCATE_LEN),
-            metadata: {
-              step: this.stepCount,
-              tool: toolCall.name,
-              sessionKey: this.sessionKey,
-              sessionId: this.id,
-              isError: Boolean(result.isError),
-              fullLength: result.text.length,
-              imageCount: Array.isArray(result.imageInputs) ? result.imageInputs.length : 0
-            }
-          });
-
-          if (toolCall.name === "browser_close" && !result.isError) {
-            this.browserClosed = true;
-            browserClosedThisResponse = true;
+      if (sessionReasoning) {
+        this.store.logAction({
+          kind: "browser_agent_reasoning",
+          guildId: this.trace.guildId || null,
+          channelId: this.trace.channelId || null,
+          userId: this.trace.userId || null,
+          content: truncate(sessionReasoning, BROWSE_AGENT_REASONING_TRUNCATE_LEN),
+          metadata: {
+            step: this.stepCount,
+            sessionKey: this.sessionKey,
+            sessionId: this.id,
+            fullLength: sessionReasoning.length
           }
-
-          appendUniqueImageInputs(turnImageInputs, result.imageInputs);
-
-          toolResults.push({
-            type: "tool_result",
-            toolCallId: toolCall.id,
-            content: result.text,
-            isError: Boolean(result.isError)
-          });
-
-          if (browserClosedThisResponse) break;
-        }
-
-        this.messages.push({ role: "user", content: toolResults });
-        if (browserClosedThisResponse) {
-          allowPostCloseFinalizationTurn = true;
-        }
+        });
       }
 
-      // Hit step limit
-      this.status = "idle";
-      this.lastUsedAt = Date.now();
+      // Execute tool calls
+      const toolResults: ToolLoopContentBlock[] = [];
+      let browserClosedThisResponse = false;
+      for (const toolCall of toolCalls) {
+        const sessionToolInput = toolCall.input as Record<string, unknown>;
+        this.store.logAction({
+          kind: "browser_tool_step",
+          guildId: this.trace.guildId || null,
+          channelId: this.trace.channelId || null,
+          userId: this.trace.userId || null,
+          content: toolCall.name,
+          metadata: {
+            step: this.stepCount,
+            tool: toolCall.name,
+            sessionKey: this.sessionKey,
+            sessionId: this.id,
+            input: sessionToolInput
+          }
+        });
 
-      return {
-        text: "Agent reached the maximum number of steps without finishing.",
-        costUsd: turnCostUsd,
-        imageInputs: turnImageInputs,
-        isError: false,
-        errorMessage: "",
-        sessionCompleted: false,
-        usage: turnUsage
-      };
-    } catch (error) {
-      if (isAbortError(error) || turnSignal?.aborted) {
-        this.status = "cancelled";
-        this.lastUsedAt = Date.now();
-        throw error;
+        const result = await executeBrowserTool(
+          this.browserManager,
+          this.sessionKey,
+          toolCall.name,
+          sessionToolInput,
+          this.stepTimeoutMs,
+          turnSignal
+        );
+
+        this.store.logAction({
+          kind: "browser_tool_result",
+          guildId: this.trace.guildId || null,
+          channelId: this.trace.channelId || null,
+          userId: this.trace.userId || null,
+          content: truncate(result.text, BROWSE_AGENT_TOOL_RESULT_TRUNCATE_LEN),
+          metadata: {
+            step: this.stepCount,
+            tool: toolCall.name,
+            sessionKey: this.sessionKey,
+            sessionId: this.id,
+            isError: Boolean(result.isError),
+            fullLength: result.text.length,
+            imageCount: Array.isArray(result.imageInputs) ? result.imageInputs.length : 0
+          }
+        });
+
+        if (toolCall.name === "browser_close" && !result.isError) {
+          this.browserClosed = true;
+          browserClosedThisResponse = true;
+        }
+
+        appendUniqueImageInputs(this.lastTurnImageInputs, result.imageInputs);
+
+        toolResults.push({
+          type: "tool_result",
+          toolCallId: toolCall.id,
+          content: result.text,
+          isError: Boolean(result.isError)
+        });
+
+        if (browserClosedThisResponse) break;
       }
-      this.status = "error";
-      this.lastUsedAt = Date.now();
-      const message = error instanceof Error ? error.message : String(error);
 
-      return {
-        text: message,
-        costUsd: turnCostUsd,
-        isError: true,
-        errorMessage: message,
-        sessionCompleted: false,
-        usage: turnUsage
-      };
-    } finally {
-      this.activeAbortController = null;
+      this.messages.push({ role: "user", content: toolResults });
+      if (browserClosedThisResponse) {
+        allowPostCloseFinalizationTurn = true;
+      }
     }
+
+    return {
+      text: "Agent reached the maximum number of steps without finishing.",
+      costUsd: this.lastTurnCostUsd,
+      imageInputs: this.lastTurnImageInputs,
+      isError: false,
+      errorMessage: "",
+      sessionCompleted: false,
+      usage: turnUsage
+    };
   }
 
-  cancel(reason = "Browser agent session cancelled"): void {
-    if (this.status === "cancelled") return;
-    this.status = "cancelled";
-    try {
-      this.activeAbortController?.abort(reason);
-    } catch {
-      // ignore
-    }
-    this.close();
+  protected handleTurnError(error: unknown, _input: string): SubAgentTurnResult {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      text: message,
+      costUsd: this.lastTurnCostUsd,
+      imageInputs: this.lastTurnImageInputs,
+      isError: true,
+      errorMessage: message,
+      sessionCompleted: false,
+      usage: this.lastTurnUsage
+    };
   }
 
-  close(): void {
-    if (this.status === "idle" || this.status === "running") {
-      this.status = "cancelled";
-    }
+  protected onCancelled(_reason: string): void {
     if (!this.browserClosed) {
       this.browserClosed = true;
       this.browserManager.close(this.sessionKey).catch((err) => {

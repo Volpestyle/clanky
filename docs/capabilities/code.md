@@ -16,6 +16,7 @@ Core runtime files:
 - `src/agents/codeAgent.ts`
 - `src/agents/codexAgent.ts`
 - `src/agents/codexCliAgent.ts`
+- `src/agents/baseAgentSession.ts`
 - `src/agents/subAgentSession.ts`
 - `src/llm/llmClaudeCode.ts`
 - `src/llm/llmCodex.ts`
@@ -100,6 +101,8 @@ Session manager:
 - `SubAgentSessionManager` with idle sweep and max concurrent session controls
 - owner checks prevent one user from continuing another user’s session
 - provider-specific session implementations for Claude Code, Codex CLI, and Codex
+- all provider sessions extend `BaseAgentSession`, which owns shared `runTurn` lifecycle semantics (abort wiring, status transitions, cancel/close behavior, and lifecycle logging)
+- `runTurn` options support both `signal` and `onProgress` (for async background task progress emission)
 
 ## Workspace Isolation
 
@@ -145,6 +148,7 @@ Primary action kinds:
 
 - `code_agent_call`
 - `code_agent_error`
+- `sub_agent_session_lifecycle`
 
 Common metadata fields:
 

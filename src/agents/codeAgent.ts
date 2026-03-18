@@ -8,7 +8,8 @@ import {
   type ClaudeCliStreamSessionLike
 } from "../llm/llmClaudeCode.ts";
 import { runCodexTask } from "../llm/llmCodex.ts";
-import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
+import { BaseAgentSession } from "./baseAgentSession.ts";
+import type { SubAgentSession, SubAgentTurnOptions, SubAgentTurnResult } from "./subAgentSession.ts";
 import { EMPTY_USAGE, generateSessionId } from "./subAgentSession.ts";
 import { CodexAgentSession, getActiveCodexAgentTaskCount } from "./codexAgent.ts";
 import { CodexCliAgentSession, getActiveCodexCliAgentTaskCount } from "./codexCliAgent.ts";
@@ -417,14 +418,7 @@ interface CodeAgentSessionOptions {
   workspace?: CodeAgentWorkspaceLease | null;
 }
 
-class CodeAgentSession implements SubAgentSession {
-  readonly id: string;
-  readonly type = "code" as const;
-  readonly createdAt: number;
-  readonly ownerUserId: string | null;
-  lastUsedAt: number;
-  status: SubAgentSession["status"];
-
+class CodeAgentSession extends BaseAgentSession {
   private readonly streamSession: ClaudeCliStreamSessionLike;
   private readonly timeoutMs: number;
   private readonly trace: CodeAgentTrace;
@@ -432,25 +426,27 @@ class CodeAgentSession implements SubAgentSession {
   private readonly workspace: CodeAgentWorkspaceLease | null;
   private turnCount: number;
   private totalCostUsd: number;
-  private activeAbortController: AbortController | null;
   private workspaceReleased: boolean;
+  private lastTurnInput: string;
+  private lastTurnStartedAtMs: number;
 
   constructor(options: CodeAgentSessionOptions) {
     const { scopeKey, cwd, model, maxTurns, timeoutMs, maxBufferBytes, trace, store, workspace = null } = options;
-
-    this.id = generateSessionId("code", scopeKey);
-    this.createdAt = Date.now();
-    this.lastUsedAt = Date.now();
-    this.ownerUserId = trace.userId ?? null;
-    this.status = "idle";
+    super({
+      id: generateSessionId("code", scopeKey),
+      type: "code",
+      ownerUserId: trace.userId ?? null,
+      logAction: store.logAction
+    });
     this.timeoutMs = timeoutMs;
     this.trace = trace;
     this.store = store;
     this.workspace = workspace;
     this.turnCount = 0;
     this.totalCostUsd = 0;
-    this.activeAbortController = null;
     this.workspaceReleased = false;
+    this.lastTurnInput = "";
+    this.lastTurnStartedAtMs = 0;
 
     const args = buildCodeAgentSessionCliArgs({ model, maxTurns });
     this.streamSession = createClaudeCliStreamSession({
@@ -460,25 +456,11 @@ class CodeAgentSession implements SubAgentSession {
     });
   }
 
-  async runTurn(input: string, options: { signal?: AbortSignal } = {}): Promise<SubAgentTurnResult> {
-    if (this.status === "cancelled" || this.status === "error") {
-      return {
-        text: `Session is ${this.status} and cannot accept new turns.`,
-        costUsd: 0,
-        isError: true,
-        errorMessage: `Session ${this.status}`,
-        usage: { ...EMPTY_USAGE }
-      };
-    }
-
-    this.status = "running";
-    this.lastUsedAt = Date.now();
+  protected async executeTurn(input: string, options: SubAgentTurnOptions): Promise<SubAgentTurnResult> {
     this.turnCount += 1;
-    const turnStartMs = Date.now();
-    this.activeAbortController = new AbortController();
-    const turnSignal = options.signal
-      ? AbortSignal.any([this.activeAbortController.signal, options.signal])
-      : this.activeAbortController.signal;
+    this.lastTurnInput = String(input || "");
+    this.lastTurnStartedAtMs = Date.now();
+    const turnSignal = options.signal;
 
     const stdinPayload = buildCodeAgentSessionTurnInput(input);
 
@@ -509,8 +491,6 @@ class CodeAgentSession implements SubAgentSession {
           };
 
       this.totalCostUsd += turnResult.costUsd;
-      this.status = "idle";
-      this.lastUsedAt = Date.now();
 
       this.store.logAction({
         kind: "code_agent_call",
@@ -530,77 +510,58 @@ class CodeAgentSession implements SubAgentSession {
           isError: turnResult.isError,
           usage: turnResult.usage,
           source: this.trace.source,
-          durationMs: Date.now() - turnStartMs
+          durationMs: Date.now() - this.lastTurnStartedAtMs
         },
         usdCost: turnResult.costUsd
       });
 
       return turnResult;
-    } catch (error) {
-      if (isAbortError(error) || turnSignal.aborted) {
-        this.status = "cancelled";
-        this.lastUsedAt = Date.now();
-        this.releaseWorkspace();
-        throw createAbortError(turnSignal.reason || error);
-      }
-      const normalized = normalizeClaudeCodeCliError(error, {
-        timeoutPrefix: "Code agent session turn timed out",
-        timeoutMs: this.timeoutMs
-      });
-
-      this.status = "error";
-      this.lastUsedAt = Date.now();
-
-      this.store.logAction({
-        kind: "code_agent_error",
-        guildId: this.trace.guildId || null,
-        channelId: this.trace.channelId || null,
-        userId: this.trace.userId || null,
-        content: input.slice(0, 200),
-        metadata: {
-          sessionId: this.id,
-          turnNumber: this.turnCount,
-          role: this.trace.role || "implementation",
-          workspaceMode: this.workspace?.mode || null,
-          workspaceBranch: this.workspace?.branch || null,
-          workspaceBaseRef: this.workspace?.baseRef || null,
-          workspaceRepoRoot: this.workspace?.repoRoot || null,
-          workspaceCwd: this.workspace?.cwd || null,
-          isTimeout: normalized.isTimeout,
-          errorMessage: normalized.message,
-          source: this.trace.source,
-          durationMs: Date.now() - turnStartMs
-        }
-      });
-      this.releaseWorkspace();
-
-      return {
-        text: normalized.message,
-        costUsd: 0,
-        isError: true,
-        errorMessage: normalized.message,
-        usage: { ...EMPTY_USAGE }
-      };
     } finally {
-      this.activeAbortController = null;
       activeTaskCount.current = Math.max(0, activeTaskCount.current - 1);
     }
   }
 
-  cancel(reason = "Code agent session cancelled"): void {
-    if (this.status === "cancelled") return;
-    this.status = "cancelled";
-    try {
-      this.activeAbortController?.abort(reason);
-    } catch {
-      // ignore
-    }
+  protected onCancelled(_reason: string): void {
     this.streamSession.close();
     this.releaseWorkspace();
   }
 
-  close(): void {
-    this.cancel("Code agent session closed");
+  protected handleTurnError(error: unknown, _input: string): SubAgentTurnResult {
+    const normalized = normalizeClaudeCodeCliError(error, {
+      timeoutPrefix: "Code agent session turn timed out",
+      timeoutMs: this.timeoutMs
+    });
+
+    this.store.logAction({
+      kind: "code_agent_error",
+      guildId: this.trace.guildId || null,
+      channelId: this.trace.channelId || null,
+      userId: this.trace.userId || null,
+      content: this.lastTurnInput.slice(0, 200),
+      metadata: {
+        sessionId: this.id,
+        turnNumber: this.turnCount,
+        role: this.trace.role || "implementation",
+        workspaceMode: this.workspace?.mode || null,
+        workspaceBranch: this.workspace?.branch || null,
+        workspaceBaseRef: this.workspace?.baseRef || null,
+        workspaceRepoRoot: this.workspace?.repoRoot || null,
+        workspaceCwd: this.workspace?.cwd || null,
+        isTimeout: normalized.isTimeout,
+        errorMessage: normalized.message,
+        source: this.trace.source,
+        durationMs: Date.now() - this.lastTurnStartedAtMs
+      }
+    });
+    this.releaseWorkspace();
+
+    return {
+      text: normalized.message,
+      costUsd: 0,
+      isError: true,
+      errorMessage: normalized.message,
+      usage: { ...EMPTY_USAGE }
+    };
   }
 
   private releaseWorkspace() {

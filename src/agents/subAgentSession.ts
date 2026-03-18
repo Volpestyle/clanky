@@ -24,6 +24,18 @@ export interface SubAgentTurnResult {
   usage: SubAgentUsage;
 }
 
+export type SubAgentProgressEvent = {
+  kind?: string;
+  message?: string;
+  percent?: number;
+  metadata?: Record<string, unknown>;
+};
+
+export interface SubAgentTurnOptions {
+  signal?: AbortSignal;
+  onProgress?: (event: SubAgentProgressEvent) => void;
+}
+
 export type SubAgentUsage = {
   inputTokens: number;
   outputTokens: number;
@@ -49,7 +61,7 @@ export interface SubAgentSession {
   getBrowserSessionKey?(): string | null;
 
   /** Send a turn (initial instruction or follow-up) and get the result. */
-  runTurn(input: string, options?: { signal?: AbortSignal }): Promise<SubAgentTurnResult>;
+  runTurn(input: string, options?: SubAgentTurnOptions): Promise<SubAgentTurnResult>;
 
   /** Cancel any in-flight work and reject future turns. */
   cancel(reason?: string): void;
