@@ -8,6 +8,7 @@ import {
   getVoiceTranscriptionSettings,
   resolveAgentStack
 } from "../settings/agentStack.ts";
+import { resolveVoiceProviderFromRuntimeMode } from "../settings/voiceDashboardMappings.ts";
 import type { VoiceRuntimeEventContext } from "./voiceSessionTypes.ts";
 
 const VOICE_ADDRESSING_ALL_TOKENS = new Set([
@@ -447,14 +448,7 @@ export function resolveVoiceRuntimeMode(settings) {
 }
 
 export function resolveRealtimeProvider(mode) {
-  const normalized = String(mode || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "voice_agent") return "xai";
-  if (normalized === "openai_realtime") return "openai";
-  if (normalized === "gemini_realtime") return "gemini";
-  if (normalized === "elevenlabs_realtime") return "elevenlabs";
-  return null;
+  return resolveVoiceProviderFromRuntimeMode(mode);
 }
 
 export function isRealtimeMode(mode) {

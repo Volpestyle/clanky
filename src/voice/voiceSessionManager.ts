@@ -18,15 +18,9 @@ import {
   clearMusicDisambiguationState as clearMusicDisambiguationStateRuntime,
   ensureSessionMusicState as ensureSessionMusicStateRuntime,
   ensureToolMusicQueueState as ensureToolMusicQueueStateRuntime,
-
-  extractMusicPlayQuery as extractMusicPlayQueryFallback,
-  findPendingMusicSelectionById as findPendingMusicSelectionByIdRuntime,
   getMusicDisambiguationPromptContext as getMusicDisambiguationPromptContextRuntime,
   haltSessionOutputForMusicPlayback as haltSessionOutputForMusicPlaybackRuntime,
   handleMusicSlashCommand as handleMusicSlashCommandRuntime,
-  isLikelyMusicPlayPhrase as isLikelyMusicPlayPhraseFallback,
-  isLikelyMusicStopPhrase as isLikelyMusicStopPhraseFallback,
-  isMusicDisambiguationActive as isMusicDisambiguationActiveRuntime,
   getMusicPhase as getMusicPhaseRuntime,
   setMusicPhase as setMusicPhaseRuntime,
   isCommandOnlyActive as isCommandOnlyActiveRuntime,
@@ -39,8 +33,6 @@ import {
   requestPauseMusic as requestPauseMusicRuntime,
   requestPlayMusic as requestPlayMusicRuntime,
   requestStopMusic as requestStopMusicRuntime,
-  resolveMusicDuckingConfig as resolveMusicDuckingConfigRuntime,
-  clearBotSpeechMusicUnduckTimer as clearBotSpeechMusicUnduckTimerRuntime,
   engageBotSpeechMusicDuck as engageBotSpeechMusicDuckRuntime,
   scheduleBotSpeechMusicUnduck as scheduleBotSpeechMusicUnduckRuntime,
   releaseBotSpeechMusicDuck as releaseBotSpeechMusicDuckRuntime,
@@ -141,8 +133,7 @@ import {
   getMusicPromptContext as getMusicPromptContextModule,
   hasPendingMusicDisambiguationForUser as hasPendingMusicDisambiguationForUserModule,
   isMusicDisambiguationResolutionTurn as isMusicDisambiguationResolutionTurnModule,
-  maybeHandlePendingMusicDisambiguationTurn as maybeHandlePendingMusicDisambiguationTurnModule,
-  resolvePendingMusicDisambiguationSelection as resolvePendingMusicDisambiguationSelectionModule
+  maybeHandlePendingMusicDisambiguationTurn as maybeHandlePendingMusicDisambiguationTurnModule
 } from "./voiceMusicDisambiguation.ts";
 import {
   deliverVoiceThoughtCandidate as deliverVoiceThoughtCandidateModule,
@@ -230,6 +221,7 @@ import {
 } from "./voiceSessionManager.constants.ts";
 import { providerSupports } from "./voiceModes.ts";
 import { executeRealtimeFunctionCall } from "./voiceToolCallInfra.ts";
+import type { VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 import { hasNativeDiscordVideoDecoderSupport as hasNativeDiscordVideoDecoderSupportRuntime } from "./nativeDiscordVideoDecoder.ts";
 import {
   executeVoiceMusicPlayTool,
@@ -617,6 +609,12 @@ export class VoiceSessionManager {
   onVoiceStateUpdate;
   onVoiceChannelEffectSend;
 
+  // Code agent hooks — wired post-construction by bot.ts so code_task
+  // is available on the voice_realtime surface.
+  createCodeAgentSession: VoiceToolCallManager["createCodeAgentSession"];
+  runModelRequestedCodeTask: VoiceToolCallManager["runModelRequestedCodeTask"];
+  subAgentSessions: VoiceToolCallManager["subAgentSessions"];
+
   constructor({
     client,
     store,
@@ -648,6 +646,9 @@ export class VoiceSessionManager {
     this.startVoiceScreenWatchHook =
       typeof startVoiceScreenWatch === "function" ? startVoiceScreenWatch : null;
     this.streamDiscovery = streamDiscovery || null;
+    this.createCodeAgentSession = null;
+    this.runModelRequestedCodeTask = null;
+    this.subAgentSessions = null;
     this.sessions = new Map();
     this.pendingSessionGuildIds = new Set();
     this.joinLocks = new Map();
@@ -1096,14 +1097,6 @@ export class VoiceSessionManager {
     return musicPhaseIsAudible(this.getMusicPhase(session));
   }
 
-  resolveMusicDuckingConfig(settings = null) {
-    return resolveMusicDuckingConfigRuntime(this, settings);
-  }
-
-  clearBotSpeechMusicUnduckTimer(session) {
-    return clearBotSpeechMusicUnduckTimerRuntime(this, session);
-  }
-
   schedulePassiveMusicWakeLatchRefresh({
     session,
     settings = null,
@@ -1124,11 +1117,6 @@ export class VoiceSessionManager {
     return scheduleBotSpeechMusicUnduckRuntime(this, session, settings, delayMs);
   }
 
-  async releaseBotSpeechMusicDuck(session, settings = null, { force = false } = {}) {
-    return releaseBotSpeechMusicDuckRuntime(this, session, settings, { force });
-  }
-
-
   isAsrActive(session, settings = null) {
     return isAsrActiveModule({
       session,
@@ -1136,16 +1124,8 @@ export class VoiceSessionManager {
     });
   }
 
-  normalizeMusicPlatformToken(value: unknown = "", fallback: "youtube" | "soundcloud" | "discord" | "auto" | null = null) {
-    return normalizeMusicPlatformTokenRuntime(this, value, fallback);
-  }
-
   normalizeMusicSelectionResult(rawResult: Record<string, unknown> | null = null): MusicSelectionResult | null {
     return normalizeMusicSelectionResultRuntime(this, rawResult);
-  }
-
-  isMusicDisambiguationActive(musicState = null) {
-    return isMusicDisambiguationActiveRuntime(this, musicState);
   }
 
   clearMusicDisambiguationState(session) {
@@ -1170,10 +1150,6 @@ export class VoiceSessionManager {
     });
   }
 
-  findPendingMusicSelectionById(session, selectedResultId = "") {
-    return findPendingMusicSelectionByIdRuntime(this, session, selectedResultId);
-  }
-
   getMusicDisambiguationPromptContext(session): {
     active: true;
     query: string | null;
@@ -1194,18 +1170,6 @@ export class VoiceSessionManager {
       transcript,
       settings: settings || this.store.getSettings()
     });
-  }
-
-  isLikelyMusicStopPhrase({ transcript = "", settings = null } = {}) {
-    return isLikelyMusicStopPhraseFallback(this, { transcript, settings });
-  }
-
-  isLikelyMusicPlayPhrase({ transcript = "", settings = null } = {}) {
-    return isLikelyMusicPlayPhraseFallback(this, { transcript, settings });
-  }
-
-  extractMusicPlayQuery(transcript = "") {
-    return extractMusicPlayQueryFallback(this, transcript);
   }
 
   haltSessionOutputForMusicPlayback(session, reason = "music_playback_started") {
@@ -1334,10 +1298,6 @@ export class VoiceSessionManager {
 
   isMusicDisambiguationResolutionTurn(session, userId = null, transcript = "") {
     return isMusicDisambiguationResolutionTurnModule(this, session, userId, transcript);
-  }
-
-  resolvePendingMusicDisambiguationSelection(session, transcript = "") {
-    return resolvePendingMusicDisambiguationSelectionModule(this, session, transcript);
   }
 
   async completePendingMusicDisambiguationSelection({
@@ -2317,7 +2277,7 @@ export class VoiceSessionManager {
 
     // Unduck music immediately when speech is interrupted so the user hears the room state.
     const resolvedSettings = session.settingsSnapshot || this.store.getSettings();
-    this.releaseBotSpeechMusicDuck(session, resolvedSettings, { force: true }).catch((error) => {
+    releaseBotSpeechMusicDuckRuntime(this, session, resolvedSettings, { force: true }).catch((error) => {
       this.store.logAction({
         kind: "voice_error",
         guildId: session.guildId,
@@ -3976,7 +3936,7 @@ export class VoiceSessionManager {
     const duckedMusic = await this.engageBotSpeechMusicDuck(session, settings, { awaitFade: true });
     if (!ttsPcm.length || session.ending) {
       if (duckedMusic) {
-        await this.releaseBotSpeechMusicDuck(session, settings, { force: true });
+        await releaseBotSpeechMusicDuckRuntime(this, session, settings, { force: true });
       }
       return false;
     }
@@ -3987,7 +3947,7 @@ export class VoiceSessionManager {
     });
     if (!queued) {
       if (duckedMusic) {
-        await this.releaseBotSpeechMusicDuck(session, settings, { force: true });
+        await releaseBotSpeechMusicDuckRuntime(this, session, settings, { force: true });
       }
       return false;
     }
@@ -6764,7 +6724,7 @@ export class VoiceSessionManager {
       id: track.id,
       title: track.title,
       artist: track.artist || "Unknown",
-      platform: this.normalizeMusicPlatformToken(track.platform, "youtube") || "youtube",
+      platform: normalizeMusicPlatformTokenRuntime(this, track.platform, "youtube") || "youtube",
       externalUrl: track.externalUrl || track.streamUrl || null,
       durationSeconds: Number.isFinite(Number(track.durationMs))
         ? Math.max(0, Math.round(Number(track.durationMs) / 1000))

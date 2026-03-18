@@ -12,7 +12,10 @@ import {
   type AgentStackPresetName,
   type AgentStackPresetDefaults as PresetDefaults
 } from "./agentStackCatalog.ts";
-import { resolveVoiceAdmissionModeForSettings } from "./voiceDashboardMappings.ts";
+import {
+  resolveVoiceAdmissionModeForSettings,
+  resolveVoiceProviderFromRuntimeMode
+} from "./voiceDashboardMappings.ts";
 
 type ModelBinding = {
   provider?: string;
@@ -584,10 +587,7 @@ export function getResolvedVoiceProvider(settings: unknown): string {
   const runtimeMode = String(resolveAgentStack(settings).voiceRuntime || "")
     .trim()
     .toLowerCase();
-  if (runtimeMode === "voice_agent") return "xai";
-  if (runtimeMode === "gemini_realtime") return "gemini";
-  if (runtimeMode === "elevenlabs_realtime") return "elevenlabs";
-  return "openai";
+  return resolveVoiceProviderFromRuntimeMode(runtimeMode) || "openai";
 }
 
 export function getResolvedVoiceGenerationBinding(settings: unknown) {
