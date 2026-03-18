@@ -446,6 +446,86 @@ const afterRows = boundedAfter > 0
 return [...beforeRows, ...anchorRows, ...afterRows];
 }
 
+type RankedConversationWindowRow = {
+  message_id: string;
+  created_at: string;
+  guild_id: string | null;
+  channel_id: string | null;
+  author_id: string | null;
+  author_name: string | null;
+  _score: number;
+  _ageMinutes: number | null;
+  score?: number;
+};
+
+function mapConversationWindowMessages(messages: ConversationMessageRow[]) {
+  return messages.map((entry) => ({
+    message_id: String(entry?.message_id || "").trim(),
+    created_at: String(entry?.created_at || "").trim(),
+    guild_id: String(entry?.guild_id || "").trim() || null,
+    channel_id: String(entry?.channel_id || "").trim() || null,
+    author_id: String(entry?.author_id || "").trim() || null,
+    author_name: String(entry?.author_name || "").trim() || "unknown",
+    is_bot: Number(entry?.is_bot) === 1 ? 1 : 0,
+    content: String(entry?.content || "").trim()
+  }));
+}
+
+function assembleConversationWindows(
+  store: MessageStore,
+  rankedRows: RankedConversationWindowRow[],
+  {
+    limit = 4,
+    before = 1,
+    after = 1,
+    includeSemanticScore = false
+  }: {
+    limit?: number;
+    before?: number;
+    after?: number;
+    includeSemanticScore?: boolean;
+  } = {}
+) {
+  const boundedLimit = clamp(Math.floor(Number(limit) || 4), 1, 8);
+  const windows = [];
+  const usedMessageIds = new Set<string>();
+
+  for (const row of rankedRows) {
+    if (windows.length >= boundedLimit) break;
+    if (usedMessageIds.has(String(row.message_id || ""))) continue;
+    const messages = fetchConversationWindowRows(store, row, before, after);
+    if (!messages.length) continue;
+    const messageIds = messages
+      .map((entry) => String(entry?.message_id || "").trim())
+      .filter(Boolean);
+    if (!messageIds.length) continue;
+    if (messageIds.some((messageId) => usedMessageIds.has(messageId))) continue;
+    for (const messageId of messageIds) {
+      usedMessageIds.add(messageId);
+    }
+
+    const window = {
+      anchorMessageId: String(row.message_id || "").trim(),
+      createdAt: String(row.created_at || "").trim(),
+      guildId: String(row.guild_id || "").trim() || null,
+      channelId: String(row.channel_id || "").trim() || null,
+      authorId: String(row.author_id || "").trim() || null,
+      authorName: String(row.author_name || "").trim() || null,
+      ageMinutes: row._ageMinutes ?? null,
+      score: includeSemanticScore
+        ? Number(Number(row._score || 0).toFixed(6))
+        : Number(row._score || 0),
+      ...(includeSemanticScore
+        ? { semanticScore: Number(Number(row.score || 0).toFixed(6)) }
+        : {}),
+      messages: mapConversationWindowMessages(messages)
+    };
+    windows.push(window);
+  }
+
+  return windows;
+}
+
 export function searchConversationWindows(store: MessageStore, {
     guildId,
     channelId = null,
@@ -514,44 +594,11 @@ const rankedRows = rows
     return a._rank - b._rank;
   });
 
-const windows = [];
-const usedMessageIds = new Set();
-for (const row of rankedRows) {
-  if (windows.length >= boundedLimit) break;
-  if (usedMessageIds.has(String(row.message_id || ""))) continue;
-  const messages = fetchConversationWindowRows(store, row, before, after);
-  if (!messages.length) continue;
-  const messageIds = messages
-    .map((entry) => String(entry?.message_id || "").trim())
-    .filter(Boolean);
-  if (!messageIds.length) continue;
-  if (messageIds.some((messageId) => usedMessageIds.has(messageId))) continue;
-  for (const messageId of messageIds) {
-    usedMessageIds.add(messageId);
-  }
-  windows.push({
-    anchorMessageId: String(row.message_id || "").trim(),
-    createdAt: String(row.created_at || "").trim(),
-    guildId: String(row.guild_id || "").trim() || null,
-    channelId: String(row.channel_id || "").trim() || null,
-    authorId: String(row.author_id || "").trim() || null,
-    authorName: String(row.author_name || "").trim() || null,
-    ageMinutes: row._ageMinutes,
-    score: row._score,
-    messages: messages.map((entry) => ({
-      message_id: String(entry?.message_id || "").trim(),
-      created_at: String(entry?.created_at || "").trim(),
-      guild_id: String(entry?.guild_id || "").trim() || null,
-      channel_id: String(entry?.channel_id || "").trim() || null,
-      author_id: String(entry?.author_id || "").trim() || null,
-      author_name: String(entry?.author_name || "").trim() || "unknown",
-      is_bot: Number(entry?.is_bot) === 1 ? 1 : 0,
-      content: String(entry?.content || "").trim()
-    }))
-  });
-}
-
-return windows;
+return assembleConversationWindows(store, rankedRows, {
+  limit: boundedLimit,
+  before,
+  after
+});
 }
 
 export function searchConversationWindowsByEmbedding(
@@ -657,45 +704,12 @@ export function searchConversationWindowsByEmbedding(
       return a._rank - b._rank;
     });
 
-  const windows = [];
-  const usedMessageIds = new Set<string>();
-  for (const row of rankedRows) {
-    if (windows.length >= boundedLimit) break;
-    if (usedMessageIds.has(String(row.message_id || ""))) continue;
-    const messages = fetchConversationWindowRows(store, row, before, after);
-    if (!messages.length) continue;
-    const messageIds = messages
-      .map((entry) => String(entry?.message_id || "").trim())
-      .filter(Boolean);
-    if (!messageIds.length) continue;
-    if (messageIds.some((messageId) => usedMessageIds.has(messageId))) continue;
-    for (const messageId of messageIds) {
-      usedMessageIds.add(messageId);
-    }
-    windows.push({
-      anchorMessageId: String(row.message_id || "").trim(),
-      createdAt: String(row.created_at || "").trim(),
-      guildId: String(row.guild_id || "").trim() || null,
-      channelId: String(row.channel_id || "").trim() || null,
-      authorId: String(row.author_id || "").trim() || null,
-      authorName: String(row.author_name || "").trim() || null,
-      ageMinutes: row._ageMinutes,
-      score: Number(Number(row._score || 0).toFixed(6)),
-      semanticScore: Number(Number(row.score || 0).toFixed(6)),
-      messages: messages.map((entry) => ({
-        message_id: String(entry?.message_id || "").trim(),
-        created_at: String(entry?.created_at || "").trim(),
-        guild_id: String(entry?.guild_id || "").trim() || null,
-        channel_id: String(entry?.channel_id || "").trim() || null,
-        author_id: String(entry?.author_id || "").trim() || null,
-        author_name: String(entry?.author_name || "").trim() || "unknown",
-        is_bot: Number(entry?.is_bot) === 1 ? 1 : 0,
-        content: String(entry?.content || "").trim()
-      }))
-    });
-  }
-
-  return windows;
+  return assembleConversationWindows(store, rankedRows, {
+    limit: boundedLimit,
+    before,
+    after,
+    includeSemanticScore: true
+  });
 }
 
 export function getActiveChannels(store: MessageStore, guildId, hours = 24, limit = 10) {
