@@ -5,6 +5,13 @@ const VOICE_RUNTIME_SELECTIONS = [
   "elevenlabs"
 ] as const;
 
+const VOICE_RUNTIME_MODE_TO_SELECTION = Object.freeze({
+  voice_agent: "xai",
+  openai_realtime: "openai",
+  gemini_realtime: "gemini",
+  elevenlabs_realtime: "elevenlabs"
+} as const);
+
 export const STREAM_WATCH_VISUALIZER_MODES = [
   "off",
   "cqt",
@@ -15,6 +22,8 @@ export const STREAM_WATCH_VISUALIZER_MODES = [
 
 type VoiceRuntimeSelection = (typeof VOICE_RUNTIME_SELECTIONS)[number];
 export type StreamWatchVisualizerMode = (typeof STREAM_WATCH_VISUALIZER_MODES)[number];
+export type VoiceRuntimeProvider = VoiceRuntimeSelection;
+const VOICE_RUNTIME_SELECTION_SET = new Set<string>(VOICE_RUNTIME_SELECTIONS);
 
 function normalizeVoiceRuntimeSelection(
   value: unknown,
@@ -23,10 +32,10 @@ function normalizeVoiceRuntimeSelection(
   const normalized = String(value || fallback || "")
     .trim()
     .toLowerCase();
-  if (normalized === "xai") return "xai";
-  if (normalized === "gemini") return "gemini";
-  if (normalized === "elevenlabs") return "elevenlabs";
-  return "openai";
+  if (VOICE_RUNTIME_SELECTION_SET.has(normalized)) {
+    return normalized as VoiceRuntimeSelection;
+  }
+  return fallback;
 }
 
 export function resolveVoiceRuntimeSelectionFromMode(
@@ -35,20 +44,21 @@ export function resolveVoiceRuntimeSelectionFromMode(
   const normalized = String(runtimeMode || "")
     .trim()
     .toLowerCase();
-  if (normalized === "voice_agent") return "xai";
-  if (normalized === "gemini_realtime") return "gemini";
-  if (normalized === "elevenlabs_realtime") return "elevenlabs";
-  return "openai";
+  return VOICE_RUNTIME_MODE_TO_SELECTION[normalized as keyof typeof VOICE_RUNTIME_MODE_TO_SELECTION] || "openai";
 }
 
 export function resolveVoiceRuntimeModeFromSelection(
   selection: unknown
 ): "voice_agent" | "openai_realtime" | "gemini_realtime" | "elevenlabs_realtime" {
   const normalized = normalizeVoiceRuntimeSelection(selection);
-  if (normalized === "xai") return "voice_agent";
-  if (normalized === "gemini") return "gemini_realtime";
-  if (normalized === "elevenlabs") return "elevenlabs_realtime";
-  return "openai_realtime";
+  const entry = Object.entries(VOICE_RUNTIME_MODE_TO_SELECTION).find(([, value]) => value === normalized);
+  return (entry?.[0] || "openai_realtime") as "voice_agent" | "openai_realtime" | "gemini_realtime" | "elevenlabs_realtime";
+}
+
+export function resolveVoiceProviderFromRuntimeMode(runtimeMode: unknown): VoiceRuntimeProvider | null {
+  const normalized = String(runtimeMode || "").trim().toLowerCase();
+  const selection = VOICE_RUNTIME_MODE_TO_SELECTION[normalized as keyof typeof VOICE_RUNTIME_MODE_TO_SELECTION];
+  return selection || null;
 }
 
 export function normalizeVoiceAdmissionModeForDashboard(

@@ -43,5 +43,5 @@ test("estimateUsdCost treats openai-oauth models as zero-cost subscription usage
 
 test("getLlmModelCatalog exposes only the curated openai-oauth models", () => {
   const catalog = getLlmModelCatalog();
-  assert.deepEqual(catalog["openai-oauth"], ["gpt-5.4", "gpt-5.3-codex", "gpt-5.1-codex-mini"]);
+  assert.deepEqual(catalog["openai-oauth"], ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex", "gpt-5.1-codex-mini"]);
 });

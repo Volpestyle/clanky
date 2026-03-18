@@ -39,21 +39,6 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
     ).toLowerCase() === "api"
     ? "api"
     : "realtime";
-  const normalizedLegacyMode = String(streamWatch.brainContextMode || "").trim().toLowerCase() === "context_brain"
-    ? "context_brain"
-    : "direct";
-  const legacyCommentaryInterval =
-    normalizedLegacyMode === "direct"
-      ? streamWatch.directMinIntervalSeconds
-      : streamWatch.minCommentaryIntervalSeconds;
-  const legacyNoteInterval =
-    normalizedLegacyMode === "context_brain"
-      ? streamWatch.brainContextMinIntervalSeconds
-      : streamWatch.directMinIntervalSeconds;
-  const legacyMaxNoteEntries =
-    normalizedLegacyMode === "context_brain"
-      ? streamWatch.brainContextMaxEntries
-      : streamWatch.directMaxEntries;
 
   return {
     enabled: normalizeBoolean(section.enabled, DEFAULT_SETTINGS.voice.enabled),
@@ -214,7 +199,7 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
         DEFAULT_SETTINGS.voice.streamWatch.visualizerMode
       ),
       commentaryIntervalSeconds: normalizeInt(
-        streamWatch.commentaryIntervalSeconds ?? legacyCommentaryInterval,
+        streamWatch.commentaryIntervalSeconds,
         DEFAULT_SETTINGS.voice.streamWatch.commentaryIntervalSeconds,
         5,
         120
@@ -242,17 +227,17 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
         DEFAULT_SETTINGS.voice.streamWatch.autonomousCommentaryEnabled
       ),
       noteProvider: normalizeString(
-        streamWatch.noteProvider ?? streamWatch.brainContextProvider,
+        streamWatch.noteProvider,
         DEFAULT_SETTINGS.voice.streamWatch.noteProvider,
         40
       ),
       noteModel: normalizeString(
-        streamWatch.noteModel ?? streamWatch.brainContextModel,
+        streamWatch.noteModel,
         DEFAULT_SETTINGS.voice.streamWatch.noteModel,
         120
       ),
       noteIntervalSeconds: normalizeInt(
-        streamWatch.noteIntervalSeconds ?? legacyNoteInterval,
+        streamWatch.noteIntervalSeconds,
         DEFAULT_SETTINGS.voice.streamWatch.noteIntervalSeconds,
         3,
         120
@@ -270,25 +255,25 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
         0.05
       ),
       maxNoteEntries: normalizeInt(
-        streamWatch.maxNoteEntries ?? legacyMaxNoteEntries,
+        streamWatch.maxNoteEntries,
         DEFAULT_SETTINGS.voice.streamWatch.maxNoteEntries,
         1,
         24
       ),
       changeThreshold: normalizeNumber(
-        streamWatch.changeThreshold ?? streamWatch.directChangeThreshold,
+        streamWatch.changeThreshold,
         DEFAULT_SETTINGS.voice.streamWatch.changeThreshold,
         0.005,
         1.0
       ),
       changeMinIntervalSeconds: normalizeInt(
-        streamWatch.changeMinIntervalSeconds ?? streamWatch.directChangeMinIntervalSeconds,
+        streamWatch.changeMinIntervalSeconds,
         DEFAULT_SETTINGS.voice.streamWatch.changeMinIntervalSeconds,
         1,
         30
       ),
       notePrompt: normalizePromptBlock(
-        streamWatch.notePrompt ?? streamWatch.brainContextPrompt,
+        streamWatch.notePrompt,
         DEFAULT_SETTINGS.voice.streamWatch.notePrompt,
         420
       ),

@@ -23,7 +23,6 @@ import {
 // raw gateway events via a fake client.
 // ---------------------------------------------------------------------------
 
-import { onRawDispatch } from "./selfbotPatches.ts";
 import { setupStreamDiscovery } from "./streamDiscovery.ts";
 
 function createFakeClient() {
@@ -33,6 +32,14 @@ function createFakeClient() {
     on(event: string, cb: (data: unknown, extra?: unknown) => void) {
       if (!listeners.has(event)) listeners.set(event, []);
       listeners.get(event)!.push(cb as (data: unknown) => void);
+    },
+    off(event: string, cb: (data: unknown, extra?: unknown) => void) {
+      const existing = listeners.get(event) ?? [];
+      listeners.set(event, existing.filter((entry) => entry !== cb));
+    },
+    removeListener(event: string, cb: (data: unknown, extra?: unknown) => void) {
+      const existing = listeners.get(event) ?? [];
+      listeners.set(event, existing.filter((entry) => entry !== cb));
     },
     emit(event: string, data: unknown) {
       for (const cb of listeners.get(event) ?? []) cb(data);
@@ -78,6 +85,7 @@ describe("streamDiscovery", () => {
   let deletedStreams: GoLiveStream[];
   let goLiveDetected: Array<{ userId: string; guildId: string; channelId: string }>;
   let goLiveEnded: Array<{ userId: string; guildId: string; channelId: string | null }>;
+  let cleanup: (() => void) | null;
 
   beforeEach(() => {
     state = createStreamDiscoveryState();
@@ -88,8 +96,9 @@ describe("streamDiscovery", () => {
     deletedStreams = [];
     goLiveDetected = [];
     goLiveEnded = [];
+    cleanup = null;
 
-    setupStreamDiscovery(client as never, state, {
+    cleanup = setupStreamDiscovery(client as never, state, {
       onGoLiveDetected: (info) => goLiveDetected.push(info),
       onGoLiveEnded: (info) => goLiveEnded.push(info),
       onStreamDiscovered: (s) => discoveredStreams.push(s),
@@ -105,6 +114,26 @@ describe("streamDiscovery", () => {
       expect(fresh.streams.size).toBe(0);
       expect(fresh.watchingStreamKey).toBeNull();
       expect(fresh.watchRequestedAt).toBeNull();
+    });
+
+    it("cleanup detaches raw listeners and clears stream-watch state", () => {
+      emitDispatch(client, "STREAM_CREATE", {
+        stream_key: "guild:222:333:111",
+        rtc_server_id: "rtc_1"
+      });
+      expect(state.streams.size).toBe(1);
+
+      cleanup?.();
+
+      expect(state.streams.size).toBe(0);
+      expect(state.watchingStreamKey).toBeNull();
+      expect(state.watchRequestedAt).toBeNull();
+
+      emitDispatch(client, "STREAM_CREATE", {
+        stream_key: "guild:222:333:222",
+        rtc_server_id: "rtc_2"
+      });
+      expect(state.streams.size).toBe(0);
     });
   });
 

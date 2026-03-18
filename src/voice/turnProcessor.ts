@@ -1381,6 +1381,7 @@ export class TurnProcessor {
       pcmBuffer,
       captureReason,
       finalizedAt,
+      musicWakeFollowupEligibleAtCapture,
       transcriptOverride,
       clipDurationMsOverride,
       asrStartedAtMsOverride,

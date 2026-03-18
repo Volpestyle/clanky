@@ -1001,10 +1001,11 @@ async function executeReplyLlm(
       }
     },
     codeAgent: {
-      runTask: async ({ settings: toolSettings, task, cwd, guildId, channelId, userId, source }) =>
+      runTask: async ({ settings: toolSettings, task, role, cwd, guildId, channelId, userId, source }) =>
         await bot.runModelRequestedCodeTask({
           settings: toolSettings,
           task,
+          role,
           cwd,
           guildId,
           channelId,

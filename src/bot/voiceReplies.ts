@@ -63,7 +63,8 @@ import { isStreamWatchFrameReady } from "../voice/voiceStreamWatch.ts";
 import { recordVoiceToolCallEvent } from "../voice/voiceToolCallToolRegistry.ts";
 import {
   buildSharedVoiceTurnContext,
-  normalizeVoiceScreenWatchCapability
+  normalizeVoiceScreenWatchCapability,
+  type SharedVoiceTurnContextHost
 } from "../voice/voiceTurnContext.ts";
 import {
   summarizeVoiceToolError,
@@ -76,7 +77,8 @@ import {
   buildLoggedPromptBundle,
   createPromptCapture
 } from "../promptLogging.ts";
-import type { VoiceOutputLeaseMode } from "../voice/voiceSessionTypes.ts";
+import type { VoiceOutputLeaseMode, VoiceSession } from "../voice/voiceSessionTypes.ts";
+import type { VoiceToolCallManager } from "../voice/voiceToolCallTypes.ts";
 
 const SESSION_DURABLE_CONTEXT_MAX_ENTRIES = 50;
 const SELF_SUBJECT = "__self__";
@@ -102,6 +104,47 @@ function appendUniqueStrings(target: string[], values: unknown[]) {
     if (!normalized || target.includes(normalized)) continue;
     target.push(normalized);
   }
+}
+
+function isVoiceMemoryContextSession(value: unknown): value is VoiceMemoryContextSessionLike {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    typeof (value as { guildId?: unknown }).guildId === "string"
+  );
+}
+
+function isVoiceSessionForSharedTurnContext(value: unknown): value is VoiceSession {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    typeof (value as { id?: unknown }).id === "string" &&
+    typeof (value as { guildId?: unknown }).guildId === "string" &&
+    typeof (value as { voiceChannelId?: unknown }).voiceChannelId === "string"
+  );
+}
+
+function isSharedVoiceTurnContextHost(value: unknown): value is SharedVoiceTurnContextHost {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    typeof (value as SharedVoiceTurnContextHost).resolveVoiceSpeakerName === "function" &&
+    typeof (value as SharedVoiceTurnContextHost).getStreamWatchNotesForPrompt === "function" &&
+    typeof (value as SharedVoiceTurnContextHost).getVoiceScreenWatchCapability === "function" &&
+    typeof (value as SharedVoiceTurnContextHost).getVoiceChannelParticipants === "function" &&
+    typeof (value as SharedVoiceTurnContextHost).getRecentVoiceMembershipEvents === "function" &&
+    typeof (value as SharedVoiceTurnContextHost).getRecentVoiceChannelEffectEvents === "function"
+  );
+}
+
+function isVoiceToolCallManager(value: unknown): value is VoiceToolCallManager {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    typeof (value as { resolveVoiceSpeakerName?: unknown }).resolveVoiceSpeakerName === "function" &&
+    typeof (value as { store?: { logAction?: unknown } }).store?.logAction === "function" &&
+    typeof (value as { transcribePcmTurn?: unknown }).transcribePcmTurn === "function"
+  );
 }
 
 function mergeSpokenReplyText(parts: string[]) {
@@ -662,24 +705,21 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     typeof runtime.runModelRequestedBrowserBrowse === "function" &&
     typeof runtime.buildBrowserBrowseContext === "function"
   );
-  const activeVoiceSession =
+  const rawActiveVoiceSession =
     sessionId && typeof runtime.voiceSessionManager?.getSessionById === "function"
       ? runtime.voiceSessionManager.getSessionById(sessionId)
       : null;
-  const canBuildSharedTurnContext = Boolean(
-    activeVoiceSession &&
-    runtime.voiceSessionManager &&
-    typeof runtime.voiceSessionManager.resolveVoiceSpeakerName === "function" &&
-    typeof runtime.voiceSessionManager.getStreamWatchNotesForPrompt === "function" &&
-    typeof runtime.voiceSessionManager.getVoiceScreenWatchCapability === "function" &&
-    typeof runtime.voiceSessionManager.getVoiceChannelParticipants === "function" &&
-    typeof runtime.voiceSessionManager.getRecentVoiceMembershipEvents === "function" &&
-    typeof runtime.voiceSessionManager.getRecentVoiceChannelEffectEvents === "function"
-  );
+  const activeVoiceSession = rawActiveVoiceSession;
+  const sharedTurnContextHost = isSharedVoiceTurnContextHost(runtime.voiceSessionManager)
+    ? runtime.voiceSessionManager
+    : null;
+  const sharedTurnContextSession = isVoiceSessionForSharedTurnContext(rawActiveVoiceSession)
+    ? rawActiveVoiceSession
+    : null;
   const sharedTurnContext =
-    canBuildSharedTurnContext && runtime.voiceSessionManager
-      ? buildSharedVoiceTurnContext(runtime.voiceSessionManager, {
-          session: activeVoiceSession,
+    sharedTurnContextHost && sharedTurnContextSession
+      ? buildSharedVoiceTurnContext(sharedTurnContextHost, {
+          session: sharedTurnContextSession,
           settings,
           speakerUserId: userId,
           maxParticipants: 12,
@@ -897,11 +937,17 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   } else {
     // ── Full retrieval path (cold start or topic drift) ─────────────────
     throwIfAborted(signal, "Voice generation memory load cancelled");
-    const memoryContextSession: VoiceMemoryContextSessionLike = activeVoiceSession || {
-      guildId,
-      textChannelId: channelId,
-      pendingMemoryIngest: null
-    };
+    const memoryContextSession: VoiceMemoryContextSessionLike =
+      isVoiceMemoryContextSession(activeVoiceSession)
+        ? activeVoiceSession
+        : {
+            guildId,
+            textChannelId: channelId,
+            pendingMemoryIngest: null
+          };
+    const activeFactProfileSession = isVoiceSessionForSharedTurnContext(activeVoiceSession)
+      ? activeVoiceSession
+      : null;
     const loaded = await loadSharedVoiceMemoryContext({
       loadRecentConversationHistory:
         typeof runtime.loadRecentConversationHistory === "function"
@@ -920,8 +966,11 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
                 : runtime.loadRecentConversationHistory(payload)
           : null,
       getSessionFactProfileSlice:
-        activeVoiceSession && typeof runtime.voiceSessionManager?.getSessionFactProfileSlice === "function"
-          ? (payload) => runtime.voiceSessionManager.getSessionFactProfileSlice(payload)
+        activeFactProfileSession && typeof runtime.voiceSessionManager?.getSessionFactProfileSlice === "function"
+          ? ({ userId: factUserId }) => runtime.voiceSessionManager.getSessionFactProfileSlice({
+              session: activeFactProfileSession,
+              userId: String(factUserId || "").trim() || null
+            })
           : typeof runtime.loadFactProfile === "function"
             ? ({ userId: factUserId }) => runtime.loadFactProfile({
                 settings,
@@ -973,7 +1022,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       ? loaded.memorySlice.recentConversationHistory
       : [];
     behavioralFacts = Array.isArray(loaded.memorySlice.behavioralFacts)
-      ? loaded.memorySlice.behavioralFacts
+      ? loaded.memorySlice.behavioralFacts as MemoryFactRow[]
       : [];
     usedCachedBehavioralFacts = loaded.usedCachedBehavioralFacts;
     continuityLoadMs = loaded.continuityLoadMs;
@@ -1379,10 +1428,11 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         requestLeaveVoiceChannel: async () => ({ ok: true })
       },
       codeAgent: runtime.runModelRequestedCodeTask ? {
-        runTask: async ({ settings: toolSettings, task, cwd, guildId, channelId, userId, source, signal: toolSignal }) =>
+        runTask: async ({ settings: toolSettings, task, role, cwd, guildId, channelId, userId, source, signal: toolSignal }) =>
           await runtime.runModelRequestedCodeTask({
             settings: toolSettings,
             task,
+            role,
             cwd,
             guildId,
             channelId,
@@ -1807,7 +1857,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
             toolResultSummary
           }
         });
-        if (activeVoiceSession && runtime.voiceSessionManager) {
+        if (activeVoiceSession && isVoiceToolCallManager(runtime.voiceSessionManager)) {
           recordVoiceToolCallEvent(runtime.voiceSessionManager, {
             session: activeVoiceSession,
             event: {

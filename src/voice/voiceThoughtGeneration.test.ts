@@ -104,7 +104,7 @@ test("generateVoiceThoughtCandidate strips soundboard directives from LLM output
           mode: "dedicated_model",
           model: {
             provider: "openai",
-            model: "gpt-4o-mini"
+            model: "gpt-5.4-mini"
           },
           temperature: 0.9
         }
@@ -116,7 +116,7 @@ test("generateVoiceThoughtCandidate strips soundboard directives from LLM output
       return {
         text: "  [[SOUNDBOARD:airhorn]] what if pigeons had rent  ",
         provider: "openai",
-        model: "gpt-4o-mini"
+        model: "gpt-5.4-mini"
       };
     }
   });

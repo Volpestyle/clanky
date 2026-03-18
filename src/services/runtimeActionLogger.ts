@@ -32,6 +32,8 @@ const BLACK = "\x1b[30m";
 
 const BRIGHT_RED = "\x1b[91m";
 const BRIGHT_YELLOW = "\x1b[93m";
+const USD_COST_DECIMAL_PLACES_MIN = 4;
+const USD_COST_DECIMAL_PLACES_MAX = 8;
 
 const AGENT_STYLES = {
   voice: { bg: BG_CYAN, fg: BLACK },
@@ -208,6 +210,18 @@ function formatSkipReason(payload, skipKind) {
   return metricsPart;
 }
 
+function formatUsdCost(usdCost) {
+  const numericCost = Number(usdCost);
+  if (!Number.isFinite(numericCost) || numericCost <= 0) return "";
+
+  const minPrecision = numericCost.toFixed(USD_COST_DECIMAL_PLACES_MIN);
+  if (Number(minPrecision) > 0) {
+    return `  ${YELLOW}$${minPrecision}${RESET}`;
+  }
+
+  return `  ${YELLOW}$${numericCost.toFixed(USD_COST_DECIMAL_PLACES_MAX)}${RESET}`;
+}
+
 export function formatPrettyLine(payload) {
   const time = (payload.ts || "").slice(11, 19); // HH:MM:SS
   const isError = payload.level === "error";
@@ -221,10 +235,7 @@ export function formatPrettyLine(payload) {
     const badge = formatSkipBadge(skipKind);
     const speechPart = formatSpeechInline(payload.metadata);
     const reasonPart = formatSkipReason(payload, skipKind);
-    const costPart =
-      payload.usd_cost > 0
-        ? `  ${YELLOW}$${payload.usd_cost.toFixed(4)}${RESET}`
-        : "";
+    const costPart = formatUsdCost(payload.usd_cost);
     const eventPart = `${DIM}${eventText}${RESET}`;
     return `${timePart} ${agentPart} ${badge} ${eventPart}${speechPart}${reasonPart}${costPart}\n`;
   }
@@ -234,10 +245,7 @@ export function formatPrettyLine(payload) {
     : `${BOLD}${WHITE}${eventText}${RESET}`;
   const speechPart = formatSpeechInline(payload.metadata);
   const metaPart = formatMetadataInline(payload.metadata);
-  const costPart =
-    payload.usd_cost > 0
-      ? `  ${YELLOW}$${payload.usd_cost.toFixed(4)}${RESET}`
-      : "";
+  const costPart = formatUsdCost(payload.usd_cost);
 
   return `${timePart} ${agentPart} ${eventPart}${speechPart}${metaPart}${costPart}\n`;
 }

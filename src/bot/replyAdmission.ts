@@ -38,10 +38,7 @@ export type ReplyAdmissionDecisionReason =
   | "hard_address"
   | "unsolicited_replies_disabled"
   | "recent_reply_window"
-  | "cold_ambient_probability_zero"
-  | "cold_ambient_probability_full"
-  | "cold_ambient_gate_pass"
-  | "cold_ambient_gate_reject";
+  | "cold_ambient_llm_decides";
 
 export type ReplyAdmissionDecision = {
   allow: boolean;
@@ -49,10 +46,6 @@ export type ReplyAdmissionDecision = {
   attentionState: TextAttentionState;
   allowUnsolicitedReplies: boolean;
   isReplyChannel: boolean;
-  coldAmbientProbability: number | null;
-  coldAmbientGateKey: string | null;
-  coldAmbientGateValue: number | null;
-  coldAmbientGatePassed: boolean | null;
 };
 
 type ReplyAdmissionRecentMessage = Record<string, unknown> & {
@@ -220,95 +213,7 @@ function resolveRecentMessageAuthorId(
   return authorId || null;
 }
 
-function hashTextGateKey(input: string) {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < input.length; index += 1) {
-    hash ^= input.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0) / 0xffffffff;
-}
 
-export function resolveColdAmbientReplyProbability({
-  ambientReplyEagerness,
-  isReplyChannel = false
-}: {
-  ambientReplyEagerness: unknown;
-  isReplyChannel?: boolean;
-}) {
-  const normalizedEagerness = clamp(Number(ambientReplyEagerness) || 0, 0, 100);
-  const channelBonus = isReplyChannel ? 20 : 0;
-  return clamp((normalizedEagerness + channelBonus - 20) / 80, 0, 1);
-}
-
-function evaluateColdAmbientTurn({
-  ambientReplyEagerness,
-  isReplyChannel = false,
-  gateKey = ""
-}: {
-  ambientReplyEagerness: unknown;
-  isReplyChannel?: boolean;
-  gateKey?: string;
-}) {
-  const probability = resolveColdAmbientReplyProbability({
-    ambientReplyEagerness,
-    isReplyChannel
-  });
-  const normalizedGateKey = String(gateKey || "").trim()
-    || `cold_ambient:${String(ambientReplyEagerness || "")}:${isReplyChannel ? "reply_channel" : "other_channel"}`;
-  if (probability <= 0) {
-    return {
-      allow: false,
-      reason: "cold_ambient_probability_zero" as const,
-      probability,
-      gateKey: normalizedGateKey,
-      gateValue: null,
-      gatePassed: false
-    };
-  }
-  if (probability >= 1) {
-    return {
-      allow: true,
-      reason: "cold_ambient_probability_full" as const,
-      probability,
-      gateKey: normalizedGateKey,
-      gateValue: null,
-      gatePassed: true
-    };
-  }
-
-  const gateValue = hashTextGateKey(normalizedGateKey);
-  const gatePassed = gateValue < probability;
-  return {
-    allow: gatePassed,
-    reason: gatePassed
-      ? "cold_ambient_gate_pass" as const
-      : "cold_ambient_gate_reject" as const,
-    probability,
-    gateKey: normalizedGateKey,
-    gateValue,
-    gatePassed
-  };
-}
-
-function buildColdAmbientGateKey({
-  triggerMessageId = null,
-  triggerAuthorId = null,
-  triggerReferenceMessageId = null,
-  isReplyChannel = false
-}: {
-  triggerMessageId?: string | null;
-  triggerAuthorId?: string | null;
-  triggerReferenceMessageId?: string | null;
-  isReplyChannel?: boolean;
-}) {
-  return [
-    String(triggerMessageId || "").trim(),
-    String(triggerAuthorId || "").trim(),
-    String(triggerReferenceMessageId || "").trim(),
-    isReplyChannel ? "reply_channel" : "other_channel"
-  ].join(":");
-}
 
 function resolveRecentReplyWindowState({
   botUserId,
@@ -577,11 +482,7 @@ export function evaluateReplyAdmissionDecision({
       reason: "force_respond",
       attentionState,
       allowUnsolicitedReplies,
-      isReplyChannel: Boolean(isReplyChannel),
-      coldAmbientProbability: null,
-      coldAmbientGateKey: null,
-      coldAmbientGateValue: null,
-      coldAmbientGatePassed: null
+      isReplyChannel: Boolean(isReplyChannel)
     };
   }
 
@@ -591,11 +492,7 @@ export function evaluateReplyAdmissionDecision({
       reason: "force_decision_loop",
       attentionState,
       allowUnsolicitedReplies,
-      isReplyChannel: Boolean(isReplyChannel),
-      coldAmbientProbability: null,
-      coldAmbientGateKey: null,
-      coldAmbientGateValue: null,
-      coldAmbientGatePassed: null
+      isReplyChannel: Boolean(isReplyChannel)
     };
   }
 
@@ -605,11 +502,7 @@ export function evaluateReplyAdmissionDecision({
       reason: "hard_address",
       attentionState,
       allowUnsolicitedReplies,
-      isReplyChannel: Boolean(isReplyChannel),
-      coldAmbientProbability: null,
-      coldAmbientGateKey: null,
-      coldAmbientGateValue: null,
-      coldAmbientGatePassed: null
+      isReplyChannel: Boolean(isReplyChannel)
     };
   }
 
@@ -619,11 +512,7 @@ export function evaluateReplyAdmissionDecision({
       reason: "unsolicited_replies_disabled",
       attentionState,
       allowUnsolicitedReplies,
-      isReplyChannel: Boolean(isReplyChannel),
-      coldAmbientProbability: null,
-      coldAmbientGateKey: null,
-      coldAmbientGateValue: null,
-      coldAmbientGatePassed: null
+      isReplyChannel: Boolean(isReplyChannel)
     };
   }
 
@@ -633,35 +522,18 @@ export function evaluateReplyAdmissionDecision({
       reason: "recent_reply_window",
       attentionState,
       allowUnsolicitedReplies,
-      isReplyChannel: Boolean(isReplyChannel),
-      coldAmbientProbability: null,
-      coldAmbientGateKey: null,
-      coldAmbientGateValue: null,
-      coldAmbientGatePassed: null
+      isReplyChannel: Boolean(isReplyChannel)
     };
   }
 
-  const coldAmbient = evaluateColdAmbientTurn({
-    ambientReplyEagerness: settings?.interaction?.activity?.ambientReplyEagerness,
-    isReplyChannel,
-    gateKey: buildColdAmbientGateKey({
-      triggerMessageId,
-      triggerAuthorId,
-      triggerReferenceMessageId,
-      isReplyChannel
-    })
-  });
-
+  // No probabilistic gate — always let the LLM see the message and decide
+  // whether to respond or [SKIP]. Eagerness is communicated via prompt context.
   return {
-    allow: coldAmbient.allow,
-    reason: coldAmbient.reason,
+    allow: true,
+    reason: "cold_ambient_llm_decides",
     attentionState,
     allowUnsolicitedReplies,
-    isReplyChannel: Boolean(isReplyChannel),
-    coldAmbientProbability: coldAmbient.probability,
-    coldAmbientGateKey: coldAmbient.gateKey,
-    coldAmbientGateValue: coldAmbient.gateValue,
-    coldAmbientGatePassed: coldAmbient.gatePassed
+    isReplyChannel: Boolean(isReplyChannel)
   };
 }
 

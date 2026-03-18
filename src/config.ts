@@ -38,6 +38,7 @@ export const appConfig = {
   defaultOpenAiOAuthModel: process.env.DEFAULT_MODEL_OPENAI_OAUTH ?? process.env.DEFAULT_MODEL_CODEX_OAUTH ?? "gpt-5.4",
   defaultCodexCliModel: process.env.DEFAULT_MODEL_CODEX_CLI ?? "gpt-5.4",
   defaultMemoryEmbeddingModel: process.env.DEFAULT_MEMORY_EMBEDDING_MODEL ?? "text-embedding-3-small",
+  ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? "",
   voiceMcpServers: parseVoiceMcpServers(process.env.VOICE_MCP_SERVERS_JSON),
   runtimeStructuredLogsEnabled: parseBooleanFlag(process.env.RUNTIME_STRUCTURED_LOGS_ENABLED, true),
   runtimeStructuredLogsStdout: parseBooleanFlag(process.env.RUNTIME_STRUCTURED_LOGS_STDOUT, true),

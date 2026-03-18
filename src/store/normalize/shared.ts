@@ -175,13 +175,6 @@ export function normalizeVoiceDefaultInterruptionMode(value: unknown, fallback: 
   return fallback;
 }
 
-function normalizeReflectionStrategy(value: unknown, fallback: string) {
-  const normalized = normalizeString(value, fallback, 64).toLowerCase();
-  if (normalized === "one_pass_main") return "one_pass_main";
-  if (normalized === "two_pass_extract_then_main") return "two_pass_extract_then_main";
-  return fallback;
-}
-
 export function normalizeClaudeCodeSessionScope(value: unknown, fallback: string) {
   const normalized = normalizeString(value, fallback, 32).toLowerCase();
   if (normalized === "guild") return "guild";
@@ -218,13 +211,6 @@ export function normalizeDiscoverySourceMap(
     rss: normalizeBoolean(source.rss, defaults.rss),
     x: normalizeBoolean(source.x, defaults.x)
   };
-}
-
-function normalizeVoiceAdmissionMode(value: unknown, fallback: string) {
-  const normalized = normalizeString(value, fallback, 40).toLowerCase();
-  if (normalized === "classifier_gate") return "classifier_gate";
-  if (normalized === "generation_decides") return "generation_decides";
-  return fallback;
 }
 
 export type AgentStackPresetConfig = {

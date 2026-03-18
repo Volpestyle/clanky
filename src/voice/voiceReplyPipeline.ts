@@ -103,6 +103,7 @@ type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
   | "getRecentVoiceChannelEffectEvents"
   | "getRecentVoiceMembershipEvents"
   | "getStreamWatchNotesForPrompt"
+  | "getVoiceScreenWatchCapability"
   | "getVoiceChannelParticipants"
   | "logVoiceLatencyStage"
   | "maybeSupersedeRealtimeReplyBeforePlayback"
@@ -110,6 +111,7 @@ type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
   | "normalizeVoiceAddressingAnnotation"
   | "playVoiceReplyInOrder"
   | "recordVoiceTurn"
+  | "resolveVoiceSpeakerName"
   | "resolveReplyInterruptionPolicy"
   | "requestRealtimeTextUtterance"
   | "schedulePassiveMusicWakeLatchRefresh"
@@ -397,7 +399,7 @@ export async function runVoiceReplyPipeline(
   // can tag the ActiveReply and conditionally skip the image attachment.
   const isStreamWatchCommentaryTurn =
     params.inputKind === "event" &&
-    Boolean(params.runtimeEventContext && (params.runtimeEventContext as unknown as { category?: string }).category === "screen_share");
+    params.runtimeEventContext?.category === "screen_share";
 
   const currentMusicPhase = host.getMusicPhase(session);
   const musicWakeFollowupState = getMusicWakeFollowupState(session, params.userId || null);

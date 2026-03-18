@@ -10,10 +10,13 @@ import {
 } from "./selfbotPatches.ts";
 
 const require = createRequire(import.meta.url);
-const DISCORD_JS_HANDLERS_PATH = path.resolve(
-  process.cwd(),
-  "node_modules/discord.js/src/client/websocket/handlers/index.js"
-);
+const DISCORD_JS_HANDLERS_PATH = (() => {
+  try {
+    return require.resolve("discord.js/src/client/websocket/handlers/index.js");
+  } catch {
+    return path.resolve(process.cwd(), "node_modules/discord.js/src/client/websocket/handlers/index.js");
+  }
+})();
 
 // ---------------------------------------------------------------------------
 // Minimal fakes that mirror the discord.js internal shapes we patch
@@ -58,7 +61,12 @@ function createFakeClient() {
   const rest = createFakeRest();
   const listeners = new Map<string, Array<(data: unknown, extra?: unknown) => void>>();
   const ws = {
-    _ws: null as unknown,
+    _ws: null as null | {
+      options?: Record<string, unknown>;
+      gatewayInformation?: { data: unknown; expiresAt: number } | null;
+      fetchGatewayInformation?: (force?: boolean) => Promise<unknown>;
+      send?: (shardId: number, payload: { op: number; d: unknown }) => void;
+    },
     shards: {
       first() {
         return { id: 0 };
@@ -166,7 +174,7 @@ describe("selfbotPatches", () => {
           identifyProperties: {},
           rest: client.rest,
         },
-        gatewayInformation: null as unknown,
+        gatewayInformation: null as null | { data: unknown; expiresAt: number },
         fetchGatewayInformation: async () => ({}),
         send: () => {},
       };
@@ -193,7 +201,7 @@ describe("selfbotPatches", () => {
           identifyProperties: {},
           rest: client.rest,
         },
-        gatewayInformation: null as unknown,
+        gatewayInformation: null as null | { data: unknown; expiresAt: number },
         fetchGatewayInformation: async () => ({}),
         send: () => {},
       };

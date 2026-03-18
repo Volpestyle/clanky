@@ -24,10 +24,16 @@ const SELFBOT_IDENTIFY_PROPERTIES = {
 };
 
 const require = createRequire(import.meta.url);
-const DISCORD_JS_HANDLERS_PATH = path.resolve(
-  process.cwd(),
-  "node_modules/discord.js/src/client/websocket/handlers/index.js"
-);
+
+function resolveDiscordJsHandlersPath() {
+  try {
+    return require.resolve("discord.js/src/client/websocket/handlers/index.js");
+  } catch {
+    return path.resolve(process.cwd(), "node_modules/discord.js/src/client/websocket/handlers/index.js");
+  }
+}
+
+const DISCORD_JS_HANDLERS_PATH = resolveDiscordJsHandlersPath();
 
 export function getDiscordAuthorizationHeaderValue(token: string): string {
   return String(token || "").trim();
@@ -56,9 +62,14 @@ export function applySelfbotPatches(client: Client): void {
  * Patched location: @discordjs/rest/dist/index.js ~line 1383
  */
 function patchRestAuth(client: Client): void {
-  const rest = client.rest as unknown as RestLike;
-  const originalResolveRequest = rest.resolveRequest.bind(rest);
-  rest.resolveRequest = async function (request: Record<string, unknown>) {
+  const resolveRequestValue = Reflect.get(client.rest, "resolveRequest");
+  if (typeof resolveRequestValue !== "function") {
+    return;
+  }
+  const originalResolveRequest = (request: Record<string, unknown>) =>
+    Promise.resolve(resolveRequestValue.call(client.rest, request) as RestResolveRequestResult);
+
+  Reflect.set(client.rest, "resolveRequest", async function (request: Record<string, unknown>) {
     const result = await originalResolveRequest(request);
     const headers = result?.fetchOptions?.headers;
     if (headers?.Authorization && typeof headers.Authorization === "string") {
@@ -67,7 +78,7 @@ function patchRestAuth(client: Client): void {
       }
     }
     return result;
-  };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -96,18 +107,19 @@ function patchRestAuth(client: Client): void {
  * - @discordjs/ws/dist/index.js line 1404 (fetchGatewayInformation)
  */
 function patchInternalWebSocketManager(client: Client): void {
-  const ws = client.ws as unknown as WebSocketManagerLike;
-  let wsInner: InternalWSManager | null = ws._ws;
+  const ws = client.ws;
+  let wsInner: InternalWSManager | null = coerceInternalWsManager(Reflect.get(ws, "_ws"));
 
   Object.defineProperty(ws, "_ws", {
     get() {
       return wsInner;
     },
-    set(value: InternalWSManager | null) {
-      wsInner = value;
-      if (value?.options) {
-        value.options.identifyProperties = { ...SELFBOT_IDENTIFY_PROPERTIES };
-        patchFetchGatewayInformation(value);
+    set(value: unknown) {
+      const nextWs = coerceInternalWsManager(value);
+      wsInner = nextWs;
+      if (nextWs?.options) {
+        nextWs.options.identifyProperties = { ...SELFBOT_IDENTIFY_PROPERTIES };
+        patchFetchGatewayInformation(nextWs);
       }
     },
     configurable: true,
@@ -220,13 +232,33 @@ function buildSyntheticReadyApplication(data: Record<string, unknown>): Record<s
  *   OP20 STREAM_WATCH
  *   OP22 STREAM_SET_PAUSED
  */
+export type GatewayRawDispatchPacket = {
+  t?: string;
+  d?: Record<string, unknown> | null;
+};
+
+type GatewayRawDispatchListener = (packet: GatewayRawDispatchPacket, shardId?: number) => void;
+
+export interface GatewayDispatchClientLike {
+  on: (event: string, callback: GatewayRawDispatchListener) => void;
+  off?: (event: string, callback: GatewayRawDispatchListener) => void;
+  removeListener?: (event: string, callback: GatewayRawDispatchListener) => void;
+  ws: {
+    _ws?: {
+      send: (shardId: number, payload: { op: number; d: unknown }) => void;
+    } | null;
+    shards: {
+      first: () => { id?: number } | null | undefined;
+    };
+  };
+}
+
 export function sendGatewayPayload(
-  client: Client,
+  client: GatewayDispatchClientLike,
   payload: { op: number; d: unknown }
 ): void {
-  const ws = client.ws as unknown as WebSocketManagerLike;
-  const shardId = ws.shards.first()?.id ?? 0;
-  ws._ws?.send(shardId, payload);
+  const shardId = client.ws.shards.first()?.id ?? 0;
+  client.ws._ws?.send(shardId, payload);
 }
 
 /**
@@ -239,30 +271,46 @@ export function sendGatewayPayload(
  * The callback receives the full gateway payload { t, d, s, op }.
  */
 export function onRawDispatch(
-  client: Client,
+  client: GatewayDispatchClientLike,
   eventName: string,
   callback: (data: Record<string, unknown>) => void
-): void {
-  client.on("raw" as string, (packet: { t: string; d: Record<string, unknown> }) => {
-    if (packet.t === eventName) {
-      callback(packet.d);
+): () => void {
+  const listener: GatewayRawDispatchListener = (packet) => {
+    if (!packet || packet.t !== eventName) return;
+    if (!packet.d || typeof packet.d !== "object" || Array.isArray(packet.d)) return;
+    callback(packet.d);
+  };
+  client.on("raw", listener);
+  return () => {
+    if (typeof client.off === "function") {
+      client.off("raw", listener);
+      return;
     }
-  });
+    if (typeof client.removeListener === "function") {
+      client.removeListener("raw", listener);
+    }
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Internal types (not exported — these describe discord.js internals)
 // ---------------------------------------------------------------------------
 
-interface RestLike {
-  resolveRequest: (request: Record<string, unknown>) => Promise<{
-    url: string;
-    fetchOptions: {
-      headers: Record<string, string>;
-      [key: string]: unknown;
-    };
-  }>;
-  get: (route: string) => Promise<unknown>;
+interface RestResolveRequestResult {
+  url?: string;
+  fetchOptions?: {
+    headers?: Record<string, string>;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+function coerceInternalWsManager(value: unknown): InternalWSManager | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as InternalWSManager;
+  if (!candidate.options || typeof candidate.options !== "object") return null;
+  if (typeof candidate.fetchGatewayInformation !== "function") return null;
+  return candidate;
 }
 
 interface InternalWSManager {
@@ -292,9 +340,4 @@ interface GatewayBotResponse {
     reset_after: number;
     max_concurrency: number;
   };
-}
-
-interface WebSocketManagerLike {
-  _ws: InternalWSManager | null;
-  shards: { first(): { id: number } | undefined };
 }

@@ -261,6 +261,8 @@ Reply orchestration state lives on the `VoiceSession`:
 
 The `TurnProcessor` owns turn queueing, transcript admission, addressing/logging, and dispatch for realtime turns, file-ASR turns, and deferred flushes. The `DeferredActionQueue` owns deferred action scheduling and dispatch. The `VoiceSessionManager` is the lifecycle host that exposes the runtime capabilities the turn processor calls into.
 
+Manager host surface rule: keep `VoiceSessionManager` capability methods limited to collaborators that depend on them (`TurnProcessor`, `SessionLifecycle`, `ReplyManager`, `VoiceToolCallManager`, and external bot runtime entrypoints). For manager-private behavior, call the runtime module helpers directly instead of adding pass-through wrapper methods.
+
 Code:
 
 - `src/voice/turnProcessor.ts` — turn queueing, drain loops, shared post-transcript admission/dispatch, deferred flush execution

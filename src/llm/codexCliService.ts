@@ -182,7 +182,7 @@ export async function callCodexCli(
           signal
         });
 
-    const parsed = parseCodexCliJsonlOutput(stdout);
+    const parsed = parseCodexCliJsonlOutput(stdout, model);
     if (parsed?.isError) {
       throw new Error(parsed.errorMessage || "codex-cli returned an error result.");
     }
@@ -233,7 +233,7 @@ export async function callCodexCli(
       maxBufferBytes: CODEX_CLI_MAX_BUFFER_BYTES,
       signal
     });
-    const parsed = parseCodexCliJsonlOutput(stdout);
+    const parsed = parseCodexCliJsonlOutput(stdout, model);
     if (parsed?.isError) {
       throw new Error(parsed.errorMessage || "codex-cli returned an error result.");
     }

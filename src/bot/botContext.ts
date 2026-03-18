@@ -15,6 +15,7 @@ import type { SubAgentSessionManager } from "../agents/subAgentSession.ts";
 import type { BrowserStreamPublishManager } from "../voice/voiceBrowserStreamPublish.ts";
 import type {
   InFlightAcceptedBrainTurn,
+  VoiceSession,
   VoiceSessionStreamWatchState,
   VoiceSessionDurableContextEntry
 } from "../voice/voiceSessionTypes.ts";
@@ -258,6 +259,57 @@ export interface VoiceReplyRuntime extends BotContext {
       warmMemory?: WarmMemoryState | null;
       streamWatch?: VoiceSessionStreamWatchState | null;
     } | null;
+    resolveVoiceSpeakerName?: (session: VoiceSession, userId?: string | null) => string;
+    getStreamWatchNotesForPrompt?: (
+      session: VoiceSession,
+      settings?: Record<string, unknown> | null
+    ) => {
+      prompt?: string;
+      notes?: string[];
+      active?: boolean;
+      lastAt?: number;
+      provider?: string | null;
+      model?: string | null;
+    } | null;
+    getVoiceScreenWatchCapability?: (args?: {
+      settings?: Record<string, unknown> | null;
+      guildId?: string | null;
+      channelId?: string | null;
+      requesterUserId?: string | null;
+    }) => Record<string, unknown> | null;
+    getVoiceChannelParticipants?: (session: VoiceSession) => Array<{
+      userId: string;
+      displayName: string;
+    }>;
+    getRecentVoiceMembershipEvents?: (
+      session: VoiceSession,
+      args?: { now?: number; maxItems?: number }
+    ) => Array<{
+      userId: string;
+      displayName: string;
+      eventType: string;
+      at: number;
+      ageMs: number;
+    }>;
+    getRecentVoiceChannelEffectEvents?: (
+      session: VoiceSession,
+      args?: { now?: number; maxItems?: number }
+    ) => Array<{
+      userId: string;
+      displayName: string;
+      channelId: string;
+      guildId: string;
+      effectType: string;
+      soundId: string | null;
+      soundName: string | null;
+      soundVolume: number | null;
+      emoji: string | null;
+      animationType: number | null;
+      animationId: number | null;
+      at: number;
+      ageMs: number;
+      summary: string;
+    }>;
     abortHeldPrePlaybackReplyBeforeToolCall?: (payload: {
       session?: {
         durableContext?: VoiceSessionDurableContextEntry[];

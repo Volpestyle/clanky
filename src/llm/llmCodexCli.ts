@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { clampInt } from "../normalization/numbers.ts";
 import { safeJsonParseFromString } from "../normalization/valueParsers.ts";
 import { createAbortError } from "../tools/browserTaskRuntime.ts";
+import { estimateUsdCost } from "./pricing.ts";
 
 type CodexCliResult = {
   stdout: string;
@@ -261,7 +262,7 @@ class CodexCliStreamSession implements CodexCliStreamSessionLike {
         cwd: this.cwd,
         signal
       });
-      const parsed = parseCodexCliJsonlOutput(result.stdout);
+      const parsed = parseCodexCliJsonlOutput(result.stdout, this.model);
       if (parsed?.threadId) {
         this.threadId = parsed.threadId;
       }
@@ -296,7 +297,7 @@ export function createCodexCliStreamSession({
   });
 }
 
-export function parseCodexCliJsonlOutput(rawOutput: string): CodexCliParsedResult | null {
+export function parseCodexCliJsonlOutput(rawOutput: string, model = ""): CodexCliParsedResult | null {
   const lines = String(rawOutput || "")
     .split(/\r?\n/g)
     .map((line) => line.trim())
@@ -339,17 +340,29 @@ export function parseCodexCliJsonlOutput(rawOutput: string): CodexCliParsedResul
   const text = textParts.join("\n").trim();
   if (!text && !turnUsage && !threadId && !isError) return null;
 
+  const inputTokens = Number(turnUsage?.input_tokens || 0);
+  const outputTokens = Number(turnUsage?.output_tokens || 0);
+  const cacheReadTokens = Number(turnUsage?.cached_input_tokens || 0);
+  const costUsd = estimateUsdCost({
+    provider: "codex-cli",
+    model,
+    inputTokens,
+    outputTokens,
+    cacheWriteTokens: 0,
+    cacheReadTokens
+  });
+
   return {
     text,
     isError,
     errorMessage: errorMessage || (isError ? text || "codex-cli returned an error." : ""),
     usage: {
-      inputTokens: Number(turnUsage?.input_tokens || 0),
-      outputTokens: Number(turnUsage?.output_tokens || 0),
+      inputTokens,
+      outputTokens,
       cacheWriteTokens: 0,
-      cacheReadTokens: Number(turnUsage?.cached_input_tokens || 0)
+      cacheReadTokens
     },
-    costUsd: 0,
+    costUsd,
     threadId
   };
 }
@@ -489,6 +502,4 @@ export function normalizeCodexCliError(
   };
 }
 
-function clampCodexCliMaxTurns(value: unknown, fallback = 30) {
-  return clampInt(value, 1, Math.max(1, clampInt(fallback, 1, 10_000)));
-}
+

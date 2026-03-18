@@ -119,7 +119,7 @@ test("transcribeAudio uses the official ElevenLabs realtime speech-to-text webso
   let socket: FakeRealtimeSocket | null = null;
   const { deps, logs } = createAudioDeps({
     openWebSocket: async (args) => {
-      seenConnectArgs = args as unknown as Record<string, unknown>;
+      seenConnectArgs = args as Record<string, unknown>;
       socket = new FakeRealtimeSocket((payload) => {
         if (payload.commit === true && socket) {
           queueMicrotask(() => {

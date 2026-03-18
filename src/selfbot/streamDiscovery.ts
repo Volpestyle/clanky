@@ -12,41 +12,9 @@
  * discovered here.
  */
 import type { VoiceSessionGoLiveStreamMap, VoiceSessionGoLiveStreamState } from "../voice/voiceSessionTypes.ts";
+import { onRawDispatch, sendGatewayPayload, type GatewayDispatchClientLike } from "./selfbotPatches.ts";
 
-type GatewayShardLike = {
-  id?: number;
-};
-
-type GatewaySocketLike = {
-  send: (shardId: number, payload: unknown) => void;
-};
-
-export type StreamDiscoveryClientLike = {
-  on: (event: string, callback: (packet: { t?: string; d?: Record<string, unknown> }) => void) => void;
-  ws: {
-    _ws?: GatewaySocketLike | null;
-    shards: {
-      first: () => GatewayShardLike | null | undefined;
-    };
-  };
-};
-
-function sendGatewayPayload(client: StreamDiscoveryClientLike, payload: { op: number; d: unknown }) {
-  const shardId = client.ws.shards.first()?.id ?? 0;
-  client.ws._ws?.send(shardId, payload);
-}
-
-function onRawDispatch(
-  client: StreamDiscoveryClientLike,
-  eventName: string,
-  callback: (data: Record<string, unknown>) => void
-) {
-  client.on("raw", (packet) => {
-    if (packet?.t === eventName && packet.d && typeof packet.d === "object") {
-      callback(packet.d);
-    }
-  });
-}
+export type StreamDiscoveryClientLike = GatewayDispatchClientLike;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -132,6 +100,78 @@ interface GuildCreateVoiceState {
 interface GuildCreateDispatch {
   id: string; // guild_id
   voice_states?: GuildCreateVoiceState[];
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  const normalized = String(value || "").trim();
+  return normalized || undefined;
+}
+
+function normalizeNullableString(value: unknown): string | null {
+  const normalized = String(value || "").trim();
+  return normalized || null;
+}
+
+function normalizeOptionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function normalizeStringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.map((entry) => String(entry || "").trim()).filter(Boolean);
+}
+
+function toVoiceStateUpdateDispatch(data: Record<string, unknown>): VoiceStateUpdateDispatch {
+  return {
+    user_id: String(data.user_id || "").trim(),
+    guild_id: normalizeOptionalString(data.guild_id),
+    channel_id: normalizeNullableString(data.channel_id),
+    self_stream: normalizeOptionalBoolean(data.self_stream)
+  };
+}
+
+function toStreamCreateDispatch(data: Record<string, unknown>): StreamCreateDispatch {
+  return {
+    stream_key: String(data.stream_key || "").trim(),
+    rtc_server_id: normalizeOptionalString(data.rtc_server_id),
+    region: normalizeOptionalString(data.region),
+    viewer_ids: normalizeStringList(data.viewer_ids)
+  };
+}
+
+function toStreamServerUpdateDispatch(data: Record<string, unknown>): StreamServerUpdateDispatch {
+  return {
+    stream_key: String(data.stream_key || "").trim(),
+    endpoint: String(data.endpoint || "").trim(),
+    token: String(data.token || "").trim()
+  };
+}
+
+function toStreamDeleteDispatch(data: Record<string, unknown>): StreamDeleteDispatch {
+  return {
+    stream_key: String(data.stream_key || "").trim(),
+    reason: normalizeOptionalString(data.reason),
+    unavailable: normalizeOptionalBoolean(data.unavailable)
+  };
+}
+
+function toGuildCreateDispatch(data: Record<string, unknown>): GuildCreateDispatch {
+  const voiceStatesRaw = Array.isArray(data.voice_states) ? data.voice_states : [];
+  const voice_states = voiceStatesRaw
+    .filter((entry) => Boolean(entry && typeof entry === "object" && !Array.isArray(entry)))
+    .map((entry) => {
+      const row = entry as Record<string, unknown>;
+      return {
+        user_id: String(row.user_id || "").trim(),
+        channel_id: normalizeNullableString(row.channel_id),
+        self_stream: normalizeOptionalBoolean(row.self_stream)
+      };
+    });
+
+  return {
+    id: String(data.id || "").trim(),
+    voice_states
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -307,35 +347,31 @@ export function setupStreamDiscovery(
   state: StreamDiscoveryState,
   callbacks: StreamDiscoveryCallbacks = {}
 ): () => void {
-  const log = callbacks.onLog ?? (() => {});
+  const detachRawListeners = [
+    onRawDispatch(client, "VOICE_STATE_UPDATE", (data) => {
+      handleVoiceStateUpdate(state, toVoiceStateUpdateDispatch(data), callbacks);
+    }),
+    onRawDispatch(client, "STREAM_CREATE", (data) => {
+      handleStreamCreate(state, toStreamCreateDispatch(data), callbacks);
+    }),
+    onRawDispatch(client, "STREAM_SERVER_UPDATE", (data) => {
+      handleStreamServerUpdate(state, toStreamServerUpdateDispatch(data), callbacks);
+    }),
+    onRawDispatch(client, "STREAM_DELETE", (data) => {
+      handleStreamDelete(state, toStreamDeleteDispatch(data), callbacks);
+    }),
 
-  onRawDispatch(client, "VOICE_STATE_UPDATE", (data) => {
-    handleVoiceStateUpdate(state, data as unknown as VoiceStateUpdateDispatch, callbacks);
-  });
-
-  onRawDispatch(client, "STREAM_CREATE", (data) => {
-    handleStreamCreate(state, data as unknown as StreamCreateDispatch, callbacks);
-  });
-
-  onRawDispatch(client, "STREAM_SERVER_UPDATE", (data) => {
-    handleStreamServerUpdate(state, data as unknown as StreamServerUpdateDispatch, callbacks);
-  });
-
-  onRawDispatch(client, "STREAM_DELETE", (data) => {
-    handleStreamDelete(state, data as unknown as StreamDeleteDispatch, callbacks);
-  });
-
-  // GUILD_CREATE fires on initial connect (and full reconnect) with the
-  // complete voice_states array. Scan for users already Go Live streaming.
-  onRawDispatch(client, "GUILD_CREATE", (data) => {
-    handleGuildCreate(state, data as unknown as GuildCreateDispatch, callbacks);
-  });
+    // GUILD_CREATE fires on initial connect (and full reconnect) with the
+    // complete voice_states array. Scan for users already Go Live streaming.
+    onRawDispatch(client, "GUILD_CREATE", (data) => {
+      handleGuildCreate(state, toGuildCreateDispatch(data), callbacks);
+    })
+  ];
 
   return () => {
-    // onRawDispatch registers on the client event emitter. Since we can't
-    // easily remove anonymous closures from the "raw" listener, cleanup is
-    // a best-effort state clear. The listeners are lightweight and scoped
-    // to stream event types, so they're safe to leave attached.
+    for (const detach of detachRawListeners) {
+      detach();
+    }
     state.streams.clear();
     state.watchingStreamKey = null;
     state.watchRequestedAt = null;

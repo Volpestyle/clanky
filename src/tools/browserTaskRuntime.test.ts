@@ -58,7 +58,7 @@ test("runBrowserBrowseTask logs structured failures for the local browser runtim
     async chatWithTools() {
       throw new Error("browse_llm_failed");
     }
-  } as unknown as LLMService;
+  } as LLMService;
 
   const browserManager = {
     configureSession() {

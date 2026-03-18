@@ -39,7 +39,10 @@ import {
   embedText as embedTextRequest,
   isEmbeddingReady as isEmbeddingReadyRequest,
   resolveEmbeddingModel as resolveEmbeddingModelRequest,
-  type EmbeddingServiceDeps
+  createOpenAiEmbeddingProvider,
+  createOllamaEmbeddingProvider,
+  type EmbeddingServiceDeps,
+  type EmbeddingProvider
 } from "./llm/embeddingService.ts";
 import {
   fetchXaiJson as fetchXaiJsonRequest,
@@ -165,6 +168,24 @@ export class LLMService {
         this.store.logAction({kind: "llm_lifecycle", content: "claude_oauth_warmup_failed", metadata: { durationMs: Date.now() - startedAt, error: String(error?.message || error) }});
       }
     }
+
+    // Probe Ollama health so its isReady() returns true if reachable.
+    const chain = this.buildEmbeddingProviderChain();
+    const ollamaProvider = chain.find((provider) => provider.name === "ollama");
+    if (ollamaProvider) {
+      const { probeOllamaHealth } = await import("./llm/embeddingService.ts");
+      const healthy = await probeOllamaHealth(ollamaProvider);
+      const readyProviders = chain.filter((provider) => provider.isReady()).map((provider) => provider.name);
+      this.store.logAction({
+        kind: "llm_lifecycle",
+        content: "embedding_provider_chain_ready",
+        metadata: {
+          providers: chain.map((provider) => provider.name),
+          readyProviders,
+          ollamaHealthy: healthy
+        }
+      });
+    }
   }
 
   private chatDeps(provider?: string): ChatGenerationDeps {
@@ -192,8 +213,25 @@ export class LLMService {
     return {
       openai: this.openai,
       store: this.store,
-      defaultMemoryEmbeddingModel: this.appConfig.defaultMemoryEmbeddingModel
+      defaultMemoryEmbeddingModel: this.appConfig.defaultMemoryEmbeddingModel,
+      providers: this.buildEmbeddingProviderChain()
     };
+  }
+
+  private embeddingProviderChainCache: EmbeddingProvider[] | null = null;
+
+  private buildEmbeddingProviderChain(): EmbeddingProvider[] {
+    if (this.embeddingProviderChainCache) return this.embeddingProviderChainCache;
+    const chain: EmbeddingProvider[] = [];
+    // Primary: OpenAI (requires API key).
+    if (this.openai) {
+      chain.push(createOpenAiEmbeddingProvider(this.openai));
+    }
+    // Fallback: local Ollama (no API key needed; health-probed on startup).
+    const ollamaBaseUrl = String(this.appConfig.ollamaBaseUrl || "").trim() || null;
+    chain.push(createOllamaEmbeddingProvider(ollamaBaseUrl));
+    this.embeddingProviderChainCache = chain;
+    return chain;
   }
 
   private audioDeps(): AudioServiceDeps {

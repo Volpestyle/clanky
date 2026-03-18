@@ -7,7 +7,8 @@ This document describes the `code_task` capability.
 `code_task` is available in:
 
 - text reply tool loop (`src/tools/replyTools.ts`)
-- voice realtime tool loop (`src/voice/voiceToolCalls.ts`)
+- voice text-mediated reply loop (`src/bot/voiceReplies.ts`)
+- voice realtime tool loop (`src/voice/voiceToolCallAgents.ts`)
 - `/clank code` slash subcommand (`src/commands/codeCommand.ts`)
 
 Core runtime files:
@@ -125,6 +126,18 @@ Important boundary:
 - the resolved `cwd` must point inside a git repository for local workers
 
 `codex` still runs through OpenAI's API-driven Responses execution path and does not provision a local worktree.
+
+## Async Dispatch (Design)
+
+The current `code_task` path is synchronous — the orchestrator LLM blocks until the sub-agent finishes. For multi-minute tasks, this results in silence in the channel with no progress feedback.
+
+The async dispatch design (`async-code-task-design.md`) introduces:
+
+1. **Async dispatch:** `code_task` returns immediately for long-running tasks. The orchestrator composes an acknowledgment.
+2. **Progress streaming:** Sub-agent stream events are parsed in real-time and accumulated as progress milestones.
+3. **Result delivery:** On completion, a synthetic event triggers a new reply pipeline run. The LLM composes the follow-up with full result context.
+
+See [async-code-task-design.md](async-code-task-design.md) for the full specification.
 
 ## Logging
 

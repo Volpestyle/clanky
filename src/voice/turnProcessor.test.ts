@@ -112,6 +112,30 @@ test("queueRealtimeTurn coalesces queued turns even when speaker or reason chang
   assert.equal(session.pendingRealtimeTurns[0]?.captureReason, "idle_timeout");
 });
 
+test("queueRealtimeTurn preserves music wake followup eligibility on queued turns", () => {
+  const manager = createVoiceTestManager();
+  const session = {
+    id: "session-queue-music-wake-followup-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeTurnDrainActive: true,
+    pendingRealtimeTurns: []
+  };
+
+  manager.turnProcessor.queueRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([1, 2, 3]),
+    captureReason: "speaking_end",
+    musicWakeFollowupEligibleAtCapture: true
+  });
+
+  assert.equal(session.pendingRealtimeTurns.length, 1);
+  assert.equal(session.pendingRealtimeTurns[0]?.musicWakeFollowupEligibleAtCapture, true);
+});
+
 test("queueRealtimeTurn dedupes repeated transcript revisions for the same ASR utterance", () => {
   const manager = createVoiceTestManager();
   const session = {

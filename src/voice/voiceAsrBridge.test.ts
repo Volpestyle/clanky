@@ -511,7 +511,7 @@ test("closeAllPerUserAsrSessions logs per_user scope metadata", async () => {
     client: {
       async close() {}
     }
-  } as unknown as AsrBridgeState);
+  } as AsrBridgeState);
 
   await closeAllPerUserAsrSessions(session, deps, "session_end");
 
@@ -535,7 +535,7 @@ test("closeSharedAsrSession logs shared scope metadata", async () => {
     client: {
       async close() {}
     }
-  } as unknown as AsrBridgeState;
+  } as AsrBridgeState;
 
   await closeSharedAsrSession(session, deps, "session_end");
 

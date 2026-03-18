@@ -1,10 +1,12 @@
 // Pricing tables are manually maintained in this file.
-// Last updated: 2026-02-26.
+// Last updated: 2026-03-18.
 const DEFAULT_PRICING = {
   openai: {
     "gpt-5.2": { inputPer1M: 1.75, cacheReadPer1M: 0.175, outputPer1M: 14.0 },
     "gpt-5.1": { inputPer1M: 1.25, cacheReadPer1M: 0.125, outputPer1M: 10.0 },
     "gpt-5.4": { inputPer1M: 1.25, cacheReadPer1M: 0.125, outputPer1M: 10.0 },
+    "gpt-5.4-mini": { inputPer1M: 0.75, cacheReadPer1M: 0.075, outputPer1M: 4.5 },
+    "gpt-5.4-nano": { inputPer1M: 0.2, cacheReadPer1M: 0.02, outputPer1M: 1.25 },
     "gpt-5": { inputPer1M: 1.25, cacheReadPer1M: 0.125, outputPer1M: 10.0 },
     "gpt-5-mini": { inputPer1M: 0.25, cacheReadPer1M: 0.025, outputPer1M: 2.0 },
     "gpt-5-nano": { inputPer1M: 0.05, cacheReadPer1M: 0.005, outputPer1M: 0.4 },
@@ -20,12 +22,6 @@ const DEFAULT_PRICING = {
     "codex-mini-latest": { inputPer1M: 1.5, cacheReadPer1M: 0.375, outputPer1M: 6.0 },
     "gpt-5.2-pro": { inputPer1M: 21.0, outputPer1M: 168.0 },
     "gpt-5-pro": { inputPer1M: 15.0, outputPer1M: 120.0 },
-    "gpt-4.1": { inputPer1M: 2.0, cacheReadPer1M: 0.5, outputPer1M: 8.0 },
-    "gpt-4.1-mini": { inputPer1M: 0.4, cacheReadPer1M: 0.1, outputPer1M: 1.6 },
-    "gpt-4.1-nano": { inputPer1M: 0.1, cacheReadPer1M: 0.025, outputPer1M: 0.4 },
-    "gpt-4o": { inputPer1M: 2.5, cacheReadPer1M: 1.25, outputPer1M: 10.0 },
-    "gpt-4o-2024-05-13": { inputPer1M: 5.0, outputPer1M: 15.0 },
-    "gpt-4o-mini": { inputPer1M: 0.15, cacheReadPer1M: 0.075, outputPer1M: 0.6 },
     "gpt-realtime": { inputPer1M: 4.0, cacheReadPer1M: 0.4, outputPer1M: 16.0 },
     "gpt-realtime-1.5": { inputPer1M: 4.0, cacheReadPer1M: 0.4, outputPer1M: 16.0 },
     "gpt-realtime-mini": { inputPer1M: 0.6, cacheReadPer1M: 0.06, outputPer1M: 2.4 },
@@ -36,15 +32,8 @@ const DEFAULT_PRICING = {
     "gpt-audio-mini": { inputPer1M: 0.6, outputPer1M: 2.4 },
     "gpt-4o-audio-preview": { inputPer1M: 2.5, outputPer1M: 10.0 },
     "gpt-4o-mini-audio-preview": { inputPer1M: 0.15, outputPer1M: 0.6 },
-    "o1": { inputPer1M: 15.0, cacheReadPer1M: 7.5, outputPer1M: 60.0 },
-    "o1-pro": { inputPer1M: 150.0, outputPer1M: 600.0 },
-    "o3-pro": { inputPer1M: 20.0, outputPer1M: 80.0 },
-    "o3": { inputPer1M: 2.0, cacheReadPer1M: 0.5, outputPer1M: 8.0 },
-    "o3-deep-research": { inputPer1M: 10.0, cacheReadPer1M: 2.5, outputPer1M: 40.0 },
     "o4-mini": { inputPer1M: 1.1, cacheReadPer1M: 0.275, outputPer1M: 4.4 },
     "o4-mini-deep-research": { inputPer1M: 2.0, cacheReadPer1M: 0.5, outputPer1M: 8.0 },
-    "o3-mini": { inputPer1M: 1.1, cacheReadPer1M: 0.55, outputPer1M: 4.4 },
-    "o1-mini": { inputPer1M: 1.1, cacheReadPer1M: 0.55, outputPer1M: 4.4 },
     "gpt-5-search-api": { inputPer1M: 1.25, cacheReadPer1M: 0.125, outputPer1M: 10.0 },
     "gpt-4o-mini-search-preview": { inputPer1M: 0.15, outputPer1M: 0.6 },
     "gpt-4o-search-preview": { inputPer1M: 2.5, outputPer1M: 10.0 },
@@ -190,11 +179,15 @@ const DEFAULT_PRICING = {
   },
   "openai-oauth": {
     "gpt-5.4": { inputPer1M: 0, outputPer1M: 0 },
+    "gpt-5.4-mini": { inputPer1M: 0, outputPer1M: 0 },
+    "gpt-5.4-nano": { inputPer1M: 0, outputPer1M: 0 },
     "gpt-5.3-codex": { inputPer1M: 0, outputPer1M: 0 },
     "gpt-5.1-codex-mini": { inputPer1M: 0, outputPer1M: 0 }
   },
   "codex-cli": {
     "gpt-5.4": { inputPer1M: 0, outputPer1M: 0 },
+    "gpt-5.4-mini": { inputPer1M: 0, outputPer1M: 0 },
+    "gpt-5.4-nano": { inputPer1M: 0, outputPer1M: 0 },
     "gpt-5-codex": { inputPer1M: 0, outputPer1M: 0 }
   },
   xaiImages: {
@@ -228,6 +221,8 @@ const MODEL_ALIASES = {
     "grok 2 vision": "grok-2-vision-latest",
     "grok beta": "grok-beta",
     "gpt 5.4": "gpt-5.4",
+    "gpt 5.4 mini": "gpt-5.4-mini",
+    "gpt 5.4 nano": "gpt-5.4-nano",
     "grok vision beta": "grok-vision-beta"
   };
 const LLM_PROVIDER_KEYS = ["openai", "anthropic", "xai", "claude-oauth", "openai-oauth", "codex-cli"];

@@ -24,7 +24,7 @@ test("ElevenLabsRealtimeClient requestPlaybackUtterance sets response state", ()
   client.ws = {
     readyState: 1, // WebSocket.OPEN
     send(data: string) { sent.push(data); }
-  } as any;
+  } as { readyState: number; send: (data: string) => void };
   client.connectedAt = Date.now();
 
   client.requestPlaybackUtterance("Hello, world!");
@@ -45,7 +45,7 @@ test("ElevenLabsRealtimeClient requestTextUtterance delegates to requestPlayback
   client.ws = {
     readyState: 1,
     send(data: string) { sent.push(data); }
-  } as any;
+  } as { readyState: number; send: (data: string) => void };
   client.connectedAt = Date.now();
 
   client.requestTextUtterance("Test message");

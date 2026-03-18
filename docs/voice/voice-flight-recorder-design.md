@@ -63,7 +63,7 @@ each voice subsystem gets its own lane, all time-synchronized.
                     direct-addr 0.95            direct-addr 0.91
 
  GENERATE   ··············┈┈┈┈████████┈·············┈┈███████████┈
-                              gpt-4o                   gpt-4o
+                           gpt-5.4-mini              gpt-5.4-mini
                               340ms                    520ms
 
  OUTPUT     ···················▓▓▓▓▓▓▓▓▓▓···················▓▓▓▓▓▓▓▓▓▓▓▓
@@ -141,7 +141,7 @@ Below the waterfall, show the causality chain as a compact flow:
 ```
  ┌─────────┐    ┌─────────────┐    ┌────────────────────┐    ┌──────────┐
  │ CAPTURE  │───▶│ ASR          │───▶│ ADMISSION          │───▶│ GENERATE │
- │ 1.2s     │    │ "Hey Clanky, │    │ ● ALLOW            │    │ gpt-4o   │
+ │ 1.2s     │    │ "Hey Clanky, │    │ ● ALLOW            │    │gpt-5.4-mini│
  │ promoted │    │  what time   │    │ direct-addr: 0.95  │    │ 340ms    │
  │ strong   │    │  is it?"     │    │ output: unlocked   │    │ 42 tok   │
  │ local    │    │ conf: 0.94   │    │ wake: ACTIVE       │    │          │
@@ -322,7 +322,7 @@ ran. The operator immediately sees exactly where and why the pipeline stopped.
 │  │ 14:32:07 capture_promoted James strong_local   │  │  🔴 Empty ASR   │
 │  │ 14:32:08 asr_final "Hey Clanky..."  conf:0.94  │  │  🟡 Lock > 5s   │
 │  │ 14:32:08 admission_allow direct_addr:0.95      │  │                  │
-│  │ 14:32:08 generation_start gpt-4o               │  │  HEALTH          │
+│  │ 14:32:08 generation_start gpt-5.4-mini          │  │  HEALTH          │
 │  │ 14:32:09 output_lock reason:bot_audio_live     │  │  Turns: 12       │
 │  └────────────────────────────────────────────────┘  │  Avg: 720ms      │
 ├────────────────────────────────────────────────────────┴─────────────────┤

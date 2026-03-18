@@ -654,7 +654,7 @@ test("non-addressed initiative turn can still contribute when model responds", a
   });
 });
 
-test("reply channels can evaluate cold ambient turns when the eagerness gate admits them", async () => {
+test("reply channels pass cold ambient turns to LLM for decision", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";
     applyBaselineSettings(store, channelId);

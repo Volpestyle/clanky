@@ -4,6 +4,7 @@ import {
   buildSharedVoiceTurnContext,
   normalizeVoiceScreenWatchCapability
 } from "./voiceTurnContext.ts";
+import type { VoiceSession } from "./voiceSessionTypes.ts";
 
 test("normalizeVoiceScreenWatchCapability returns disabled defaults when capability is missing", () => {
   const capability = normalizeVoiceScreenWatchCapability(null);
@@ -64,7 +65,7 @@ test("buildSharedVoiceTurnContext includes native sharers and recent tool outcom
         error: null
       }
     ]
-  } as any;
+  } as VoiceSession;
 
   const context = buildSharedVoiceTurnContext({
     resolveVoiceSpeakerName: (_session, userId) => userId === "speaker-2" ? "bob" : "casey",

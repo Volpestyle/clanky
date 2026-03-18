@@ -8,11 +8,12 @@ See also: `AGENTS.md` — Agent Autonomy section.
 
 Memory should feel like memory, not like a database the bot has to query. A human in a Discord server knows things about the people they talk to, remembers past conversations, and recalls relevant context without performing a lookup. The bot should work the same way.
 
-**Three principles:**
+**Four principles:**
 
 - **The bot knows everyone in the room.** In voice, fact profiles for all participants are in context — not just the current speaker. In text, profiles are loaded for everyone in the recent conversation window. The bot can cross-reference: "James, you should ask Sarah about that — she's been learning Rust too."
 - **Past conversations surface automatically.** Relevant prior conversations are retrieved by topic similarity at context assembly time, running in parallel with other I/O. The bot doesn't need to call a tool to access its own memory of what was said before.
 - **The bot builds memory three ways.** Real-time writes for things it notices mid-conversation, session-end micro-reflection for things it missed in the moment, and daily reflection for big-picture patterns. Each layer catches what the others miss.
+- **Memories are first-person.** Facts are written from the bot's own perspective — "CURSED conk told me to be more nonchalant," not "CURSED conk told clanky to be more nonchalant." These are the bot's memories, not a third-party report.
 
 ## Scope
 
@@ -58,9 +59,10 @@ When a voice session ends or a text conversation goes quiet, a lightweight refle
 
 This closes the gap between real-time writes (spotty) and daily reflection (too late). Someone mentions their birthday at 10am — micro-reflection catches it at the end of the voice session, not 14 hours later at the daily reflection run.
 
-- Triggers on voice session end event, or after sustained text silence in a channel.
+- Triggers on voice session end event, after sustained text silence in a channel, or when channel traffic is about to push key context out of the configured recent-message window.
 - Scoped to just that conversation's journal entries, not the full day.
-- Text-channel silence reflection is scheduled from human-authored messages and reflects on human-authored turns only, so the bot does not canonize its own prose into durable memory.
+- Text-channel reflection is scheduled from human-authored messages and reflects on human-authored turns only, so the bot does not canonize its own prose into durable memory.
+- Context-pressure reflection uses a short cooldown and only runs when human message volume in the recent lookback nears `memory.promptSlice.maxRecentMessages`.
 - Same fact write path as `memory_write` — same instruction-style filtering, dedup, archiving.
 - Lightweight: short context, fast model, capped output.
 
@@ -77,7 +79,7 @@ An LLM reviews the full day's journal and distills it into durable facts. The br
 5. Written through the same memory fact write path — same instruction-style filtering, dedup, archiving.
 6. Journals marked as processed. Retained indefinitely.
 
-The reflection prompt includes existing durable facts for all subjects mentioned in the journal. This lets the model skip facts that already exist and merge near-duplicates with different wording into the best version. Combined with the database-level `UNIQUE` constraint and the agent seeing its own memory during conversation, this forms a three-layer dedup system.
+The reflection prompt includes existing durable facts (with IDs) for all subjects mentioned in the journal. This lets the model skip facts that already exist and merge near-duplicates with different wording into the best version using the `supersedes` field — when set, the write path updates the existing fact in-place rather than creating a duplicate. Combined with the database-level `UNIQUE` constraint and the agent seeing its own memory during conversation, this forms a three-layer dedup system.
 
 With micro-reflection handling heavy voice sessions at session-end, daily reflection mostly processes text chat and cross-session patterns — the load is distributed rather than one massive batch.
 
@@ -201,9 +203,12 @@ Behavioral guidance is stored, retrieved, and reasoned about the same way as any
 **Per-subject total cap:** 120 facts. Enough to hold a real relationship's worth of knowledge about someone you talk to regularly.
 
 **Eviction order** (`archiveOldFactsForSubject`):
-1. Archive contextual and behavioral facts beyond cap (oldest first).
-2. Only if contextual/behavioral within budget AND total exceeds subject cap, archive core facts.
-3. Core facts are never archived to make room for other tiers.
+1. Sort by time-weighted confidence: `confidence * exp(-ln2 * ageDays / 120)`. Old unreinforced facts drift down the ranking even if they were originally high-confidence. `guidance` and `behavioral` facts are exempt from decay (evergreen).
+2. Archive contextual and behavioral facts beyond cap (lowest decayed confidence first).
+3. Only if contextual/behavioral within budget AND total exceeds subject cap, archive core facts.
+4. Core facts are never archived to make room for other tiers.
+
+This means a 0.95-confidence fact from 6 months ago no longer blocks eviction of a 0.72-confidence fact written today. Facts that are repeatedly reinforced (re-written or confirmed) get their `updated_at` refreshed, resetting their decay.
 
 ## Safety Guards
 
@@ -221,9 +226,23 @@ Used for semantic ranking in `memory_search`, conversation retrieval, and dashbo
 
 - Query embedding: `llm.embedText(...)` when query length >= 3.
 - Fact embedding payload: `type` + `fact` + optional `evidence`.
-- Model resolution: `settings.memory.embeddingModel` → `DEFAULT_MEMORY_EMBEDDING_MODEL` env → `"text-embedding-3-small"`.
+- Model resolution: `settings.memory.embeddingModel` → `DEFAULT_MEMORY_EMBEDDING_MODEL` env → first ready provider's default model → `"text-embedding-3-small"`.
 - Missing vectors are backfilled (up to 8 per query).
 - Fact embeddings generated at write time. Conversation window embeddings generated at storage time.
+
+### Embedding provider chain
+
+Embedding calls are dispatched through a provider fallback chain. Each provider implements the `EmbeddingProvider` interface (`embed`, `isReady`, `defaultModel`). The chain is tried in order; if a provider fails, the next is attempted.
+
+| Priority | Provider | Config | Default model |
+|----------|----------|--------|---------------|
+| 1 | OpenAI | `OPENAI_API_KEY` | `text-embedding-3-small` |
+| 2 | Ollama (local) | `OLLAMA_BASE_URL` (default `http://127.0.0.1:11434`) | `nomic-embed-text` |
+
+- On startup, Ollama is health-probed to set its `isReady()` state.
+- If all ready providers fail, non-ready providers are tried as a last resort.
+- If all providers fail, the caller degrades gracefully to FTS-only search (no semantic lane).
+- Each attempt is logged (`memory_embedding_call` or `memory_embedding_error` with `provider` field).
 
 ### Hybrid score formula (for `searchDurableFacts`)
 
@@ -242,6 +261,10 @@ Per candidate:
 - `channelScore`: 1 (same channel), 0.25 (no channel), 0 (different channel).
 
 Combined: `0.50 * semantic + 0.28 * lexical + 0.10 * confidence + 0.07 * recency + 0.05 * channel` (with fallback weights when semantic is unavailable).
+
+Temporal decay then down-weights stale facts with an exponential half-life (90 days, floor 0.2) while keeping `guidance` and `behavioral` facts evergreen (`multiplier = 1.0`).
+
+After scoring, MMR diversity reranking reduces near-duplicate facts so prompt memory covers more distinct context.
 
 Relevance gate filters low-quality matches.
 

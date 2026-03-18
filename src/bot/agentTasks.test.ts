@@ -150,7 +150,7 @@ test("runModelRequestedBrowserBrowse uses OpenAI OAuth for hosted computer use w
     async closeAll() {
       return undefined;
     }
-  } as unknown as BrowserManager;
+  } as BrowserManager;
 
   await withTempAgentContext(
     {

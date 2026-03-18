@@ -111,3 +111,19 @@ test("formatPrettyLine surfaces drop reasons and signal metrics for provisional 
   assert.match(line, /rms=/);
   assert.match(line, /active=/);
 });
+
+test("formatPrettyLine shows high precision for tiny usd costs", () => {
+  const line = formatPrettyLine({
+    ts: "2026-03-01T10:11:12.000Z",
+    level: "info",
+    kind: "memory_embedding_call",
+    event: "text-embedding-3-small",
+    agent: "memory",
+    usd_cost: 0.00000156,
+    metadata: {
+      traceSource: "memory_user_ingest"
+    }
+  });
+
+  assert.match(line, /\$0\.00000156/);
+});
