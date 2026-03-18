@@ -53,7 +53,6 @@ import {
   type MediaGenerationDeps
 } from "./llm/mediaGeneration.ts";
 import {
-  appendJsonSchemaInstruction,
   type ChatModelResponse,
   type ChatModelRequest,
   type ChatModelStreamCallbacks,
@@ -387,10 +386,9 @@ export class LLMService {
       messageId: trace.messageId == null ? null : String(trace.messageId),
       sessionId: trace.sessionId == null ? null : String(trace.sessionId)
     };
-    const effectiveSystemPrompt =
-      normalizedJsonSchema && provider !== "codex-cli" && provider !== "codex_cli_session" && provider !== "openai" && provider !== "openai-oauth"
-        ? appendJsonSchemaInstruction(systemPrompt, normalizedJsonSchema)
-        : systemPrompt;
+    // JSON schema instructions are appended inside each provider's request
+    // builder (buildAnthropicMessagesRequest, buildOpenAiResponsesRequestBody,
+    // callXaiChatCompletions). Do NOT pre-append here to avoid duplication.
     const streamingTransportSupported =
       provider === "anthropic" ||
       provider === "claude-oauth" ||
@@ -402,7 +400,7 @@ export class LLMService {
       const response = streamingTransportAllowed
         ? await this.callChatModelStreaming(provider, {
           model,
-          systemPrompt: effectiveSystemPrompt,
+          systemPrompt,
           userPrompt,
           imageInputs,
           contextMessages,
@@ -421,7 +419,7 @@ export class LLMService {
         })
         : await this.callChatModel(provider, {
           model,
-          systemPrompt: effectiveSystemPrompt,
+          systemPrompt,
           userPrompt,
           imageInputs,
           contextMessages,
@@ -477,7 +475,7 @@ export class LLMService {
           messageId: normalizedTrace.messageId || null,
           sessionId: normalizedTrace.sessionId || null,
           streaming: usedStreamingTransport,
-          systemPrompt: effectiveSystemPrompt || null,
+          systemPrompt: systemPrompt || null,
           userPrompt: userPrompt || null,
           contextMessageCount: contextMessages.length
         },
@@ -496,6 +494,7 @@ export class LLMService {
         costUsd
       };
     } catch (error) {
+      const errObj = error && typeof error === "object" ? error as Record<string, unknown> : null;
       this.store.logAction({
         kind: "llm_error",
         guildId: normalizedTrace.guildId,
@@ -505,7 +504,10 @@ export class LLMService {
         metadata: {
           provider,
           model,
-          streaming: usedStreamingTransport
+          streaming: usedStreamingTransport,
+          status: errObj?.status ?? null,
+          errorType: (errObj?.error as Record<string, unknown>)?.type ?? null,
+          requestId: errObj?.request_id ?? (errObj?.headers as Record<string, unknown>)?.["request-id"] ?? null
         }
       });
       throw error;
@@ -517,6 +519,7 @@ export class LLMService {
     payload: ChatModelRequest & { trace?: LlmTrace }
   ): Promise<ChatModelResponse> {
     if (provider === "claude-oauth") {
+      await this.claudeOAuth?.ensureFresh();
       return callAnthropicRequest(this.chatDeps("claude-oauth"), payload);
     }
     if (provider === "openai-oauth") {
@@ -543,6 +546,7 @@ export class LLMService {
     callbacks: ChatModelStreamCallbacks
   ): Promise<ChatModelResponse> {
     if (provider === "claude-oauth") {
+      await this.claudeOAuth?.ensureFresh();
       return callAnthropicStreamingRequest(this.chatDeps("claude-oauth"), payload, callbacks);
     }
     if (provider === "anthropic") {

@@ -151,16 +151,17 @@ function buildAnthropicMessagesRequest({
       }
     : {};
 
-  const thinkingParam = thinking === "disabled"
-    ? { thinking: { type: "disabled" as const } }
-    : (thinking === "enabled" || thinking === "think_aloud")
-      ? {
-          thinking: {
-            type: "enabled" as const,
-            budget_tokens: Math.max(128, Math.min(thinkingBudgetTokens || 1024, maxOutputTokens - 1))
-          }
+  // The interleaved-thinking beta header (required by claude-oauth) mandates an
+  // explicit thinking parameter on every request. Default to disabled when the
+  // caller doesn't specify a thinking mode.
+  const thinkingParam = (thinking === "enabled" || thinking === "think_aloud")
+    ? {
+        thinking: {
+          type: "enabled" as const,
+          budget_tokens: Math.max(128, Math.min(thinkingBudgetTokens || 1024, maxOutputTokens - 1))
         }
-      : {};
+      }
+    : { thinking: { type: "disabled" as const } };
 
   return {
     model,

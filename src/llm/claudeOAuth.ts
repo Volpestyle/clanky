@@ -2,16 +2,18 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import type { Fetch as AnthropicFetch } from "@anthropic-ai/sdk/core";
 
 const CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CLAUDE_OAUTH_REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback";
 const CLAUDE_OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
 const CLAUDE_OAUTH_AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const CLAUDE_OAUTH_SCOPES = "org:create_api_key user:profile user:inference";
-const CLAUDE_CLI_USER_AGENT = "claude-cli/2.1.2 (external, cli)";
-const TOOL_PREFIX = "";
-const REQUIRED_BETA_HEADERS = ["oauth-2025-04-20", "interleaved-thinking-2025-05-14"];
+
+const REQUIRED_BETA_HEADERS = [
+  "claude-code-20250219",
+  "oauth-2025-04-20",
+  "interleaved-thinking-2025-05-14"
+];
 
 const TOKEN_FILE_PATH = join("data", "claude-oauth-tokens.json");
 
@@ -88,165 +90,27 @@ async function refreshAccessToken(tokens: ClaudeOAuthTokens): Promise<ClaudeOAut
   return updated;
 }
 
-function prefixToolNames(body: string): string {
-  if (!TOOL_PREFIX) return body;
-  try {
-    const parsed = JSON.parse(body);
+// ── Client factory ──────────────────────────────────────────────────
+// Uses the SDK's native authToken + defaultHeaders instead of a custom
+// fetch wrapper. The previous custom fetch approach broke Bun's native
+// HTTP/2 handling, causing opaque 400s from the OAuth API endpoint.
 
-    if (parsed.tools && Array.isArray(parsed.tools)) {
-      parsed.tools = parsed.tools.map((tool: Record<string, unknown>) => ({
-        ...tool,
-        name: tool.name ? `${TOOL_PREFIX}${tool.name}` : tool.name
-      }));
-    }
-
-    if (parsed.messages && Array.isArray(parsed.messages)) {
-      parsed.messages = parsed.messages.map((msg: Record<string, unknown>) => {
-        if (msg.content && Array.isArray(msg.content)) {
-          msg.content = (msg.content as Array<Record<string, unknown>>).map((block) => {
-            if (block.type === "tool_use" && block.name) {
-              return { ...block, name: `${TOOL_PREFIX}${block.name}` };
-            }
-            return block;
-          });
-        }
-        return msg;
-      });
-    }
-
-    return JSON.stringify(parsed);
-  } catch {
-    return body;
-  }
-}
-
-function stripToolPrefix(text: string): string {
-  if (!TOOL_PREFIX) return text;
-  return text.replace(/"name"\s*:\s*"mcp_([^"]+)"/g, '"name": "$1"');
-}
-
-function createOAuthFetch(
-  getTokens: () => ClaudeOAuthTokens,
-  setTokens: (t: ClaudeOAuthTokens) => void
-): AnthropicFetch {
-  const oauthFetch = async (input: unknown, init?: RequestInit): Promise<Response> => {
-    let tokens = getTokens();
-
-    if (!tokens.accessToken || tokens.expiresAt < Date.now()) {
-      tokens = await refreshAccessToken(tokens);
-      setTokens(tokens);
-    }
-
-    const requestHeaders = new Headers();
-
-    if (input instanceof Request) {
-      input.headers.forEach((value, key) => {
-        requestHeaders.set(key, value);
-      });
-    }
-
-    if (init?.headers) {
-      if (init.headers instanceof Headers) {
-        init.headers.forEach((value, key) => {
-          requestHeaders.set(key, value);
-        });
-      } else if (Array.isArray(init.headers)) {
-        for (const [key, value] of init.headers) {
-          if (typeof value !== "undefined") {
-            requestHeaders.set(key, String(value));
-          }
-        }
-      } else {
-        for (const [key, value] of Object.entries(init.headers)) {
-          if (typeof value !== "undefined") {
-            requestHeaders.set(key, String(value));
-          }
-        }
-      }
-    }
-
-    const incomingBeta = requestHeaders.get("anthropic-beta") || "";
-    const incomingBetasList = incomingBeta.split(",").map((b) => b.trim()).filter(Boolean);
-    const mergedBetas = [...new Set([...REQUIRED_BETA_HEADERS, ...incomingBetasList])].join(",");
-
-    requestHeaders.set("authorization", `Bearer ${tokens.accessToken}`);
-    requestHeaders.set("anthropic-beta", mergedBetas);
-    requestHeaders.set("user-agent", CLAUDE_CLI_USER_AGENT);
-    requestHeaders.delete("x-api-key");
-
-    let body = init?.body;
-    if (body && typeof body === "string") {
-      body = prefixToolNames(body);
-    }
-
-    let requestInput: string | URL | Request =
-      typeof input === "string" || input instanceof URL || input instanceof Request
-        ? input
-        : "";
-    let requestUrl: URL | null = null;
-    try {
-      if (typeof input === "string" || input instanceof URL) {
-        requestUrl = new URL(input.toString());
-      } else if (input instanceof Request) {
-        requestUrl = new URL(input.url);
-      } else if (typeof input === "object" && input !== null && "url" in input) {
-        const url = Reflect.get(input, "url");
-        if (typeof url === "string" && url.trim()) {
-          requestUrl = new URL(url);
-          requestInput = url;
-        }
-      }
-    } catch {
-      requestUrl = null;
-    }
-
-    if (requestUrl && requestUrl.pathname === "/v1/messages" && !requestUrl.searchParams.has("beta")) {
-      requestUrl.searchParams.set("beta", "true");
-      requestInput = input instanceof Request ? new Request(requestUrl.toString(), input) : requestUrl.toString();
-    }
-
-    const response = await fetch(requestInput, {
-      ...init,
-      body,
-      headers: requestHeaders
-    });
-
-    if (response.body) {
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      const encoder = new TextEncoder();
-
-      const stream = new ReadableStream({
-        async pull(controller) {
-          const { done, value } = await reader.read();
-          if (done) {
-            controller.close();
-            return;
-          }
-          let text = decoder.decode(value, { stream: true });
-          text = stripToolPrefix(text);
-          controller.enqueue(encoder.encode(text));
-        }
-      });
-
-      return new Response(stream, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers
-      });
-    }
-
-    return response;
-  };
-  // Anthropic's SDK still types its fetch hook around node-fetch shims.
-  // eslint-disable-next-line no-restricted-syntax
-  return oauthFetch as unknown as AnthropicFetch;
+function buildClient(accessToken: string): Anthropic {
+  return new Anthropic({
+    authToken: accessToken,
+    defaultHeaders: {
+      "anthropic-beta": REQUIRED_BETA_HEADERS.join(",")
+    },
+    defaultQuery: { beta: "true" }
+  });
 }
 
 export type ClaudeOAuthState = {
   tokens: ClaudeOAuthTokens;
   client: Anthropic;
   warmup: () => Promise<void>;
+  /** Refresh the access token if expired and rebuild the SDK client. */
+  ensureFresh: () => Promise<void>;
 };
 
 export function isClaudeOAuthConfigured(envRefreshToken: string): boolean {
@@ -273,26 +137,26 @@ export function createClaudeOAuthClient(envRefreshToken: string): ClaudeOAuthSta
   }
 
   let currentTokens = tokens;
-  const oauthFetch = createOAuthFetch(
-    () => currentTokens,
-    (updated) => {
-      currentTokens = updated;
+  let currentClient = buildClient(currentTokens.accessToken);
+
+  async function ensureFresh() {
+    if (!currentTokens.accessToken || currentTokens.expiresAt < Date.now()) {
+      currentTokens = await refreshAccessToken(currentTokens);
+      currentClient = buildClient(currentTokens.accessToken);
     }
-  );
-  const client = new Anthropic({
-    apiKey: "claude-oauth-placeholder",
-    fetch: oauthFetch
-  });
+  }
+
   return {
     get tokens() {
       return currentTokens;
     },
-    client,
+    get client() {
+      return currentClient;
+    },
     async warmup() {
-      if (!currentTokens.accessToken || currentTokens.expiresAt < Date.now()) {
-        currentTokens = await refreshAccessToken(currentTokens);
-      }
-    }
+      await ensureFresh();
+    },
+    ensureFresh
   };
 }
 
@@ -347,11 +211,11 @@ export async function exchangeCodeForTokens(
     expires_in: number;
   };
 
-  const tokens: ClaudeOAuthTokens = {
+  const oauthTokens: ClaudeOAuthTokens = {
     refreshToken: json.refresh_token,
     accessToken: json.access_token,
     expiresAt: Date.now() + json.expires_in * 1000
   };
-  saveTokens(tokens);
-  return tokens;
+  saveTokens(oauthTokens);
+  return oauthTokens;
 }
