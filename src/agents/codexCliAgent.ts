@@ -95,7 +95,7 @@ export class CodexCliAgentSession implements SubAgentSession {
         timeoutMs: this.timeoutMs,
         signal: turnSignal
       });
-      const parsed = parseCodexCliJsonlOutput(result.stdout);
+      const parsed = parseCodexCliJsonlOutput(result.stdout, this.model);
       const turnResult: SubAgentTurnResult = parsed
         ? {
             text: parsed.text,

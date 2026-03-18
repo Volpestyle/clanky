@@ -250,11 +250,11 @@ const AGENT_STACK_PRESET_DEFINITIONS = {
     },
     voiceMusicBrain: {
       provider: "openai-oauth",
-      model: "gpt-5.1-codex-mini"
+      model: "gpt-5.4-nano"
     },
     voiceGeneration: {
       provider: "openai-oauth",
-      model: "gpt-5.4"
+      model: "gpt-5.4-mini"
     },
     visionFallback: {
       provider: "openai-oauth",

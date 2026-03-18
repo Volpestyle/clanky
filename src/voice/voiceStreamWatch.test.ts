@@ -1357,7 +1357,7 @@ test("stopWatchStreamForUser persists a screen-share recap to memory and preserv
               recap: "Alice recently screen-shared a boss fight HUD with a flashing health bar."
             }),
             provider: "openai",
-            model: "gpt-4o-mini"
+            model: "gpt-5.4-nano"
           };
         }
         return {

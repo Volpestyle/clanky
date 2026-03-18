@@ -816,7 +816,7 @@ periods, commas, and capitalization, and use only the context provided.
 
 const transcript = await transcribe(audioFile);
 const completion = await openai.chat.completions.create({
-model: "gpt-4.1",
+model: "gpt-5.4-mini",
 temperature: temperature,
 messages: [
   {
@@ -847,7 +847,7 @@ context provided.
 
 def generate_corrected_transcript(temperature, system_prompt, audio_file):
   response = client.chat.completions.create(
-      model="gpt-4.1",
+      model="gpt-5.4-mini",
       temperature=temperature,
       messages=[
           {

@@ -244,7 +244,7 @@ test("normalizeSettings clamps and canonicalizes complex settings payloads", () 
   assert.equal(browserExecution.mode, "dedicated_model");
   assert.deepEqual(browserExecution.model, {
     provider: "openai",
-    model: "gpt-5-mini"
+    model: "gpt-5.4-mini"
   });
   assert.equal(normalized.agentStack.runtimeConfig.browser.localBrowserAgent.sessionTimeoutMs, 999_999);
 
@@ -671,7 +671,7 @@ test("normalizeSettings uses provider-specific memory model fallbacks", () => {
 
   assert.deepEqual(normalized.memoryLlm, {
     provider: "openai",
-    model: "gpt-5-mini"
+    model: "gpt-5.4-mini"
   });
 });
 

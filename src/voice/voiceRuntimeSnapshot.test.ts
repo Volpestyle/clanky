@@ -163,13 +163,13 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
         frameWindowStartedAt: now - 20_000,
         lastNoteAt: now - 650,
         lastNoteProvider: "openai",
-        lastNoteModel: "gpt-4o",
+        lastNoteModel: "gpt-5.4-mini",
         noteEntries: [
           {
             text: "enemy spotted left side",
             at: now - 600,
             provider: "openai",
-            model: "gpt-4o",
+            model: "gpt-5.4-mini",
             speakerName: "Alice"
           }
         ],
@@ -481,7 +481,7 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
           notes: ["enemy nearby", "", "watching doorway"],
           lastAt: now - 650,
           provider: "openai",
-          model: "gpt-4o"
+          model: "gpt-5.4-mini"
         };
       },
       snapshotMusicRuntimeState(session) {
@@ -558,7 +558,7 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
       notes: ["enemy nearby", "watching doorway"],
       lastAt: "2026-03-06T17:59:59.350Z",
       provider: "openai",
-      model: "gpt-4o"
+      model: "gpt-5.4-mini"
     });
     assert.equal(
       realtime?.promptState?.instructions?.replyPrompts?.systemPrompt,

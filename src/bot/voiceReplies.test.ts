@@ -2201,7 +2201,7 @@ test("generateVoiceTurnReply uses the separate commentary model only for initiat
       voice: {
         generationLlm: {
           provider: "openai",
-          model: "gpt-4.1-mini"
+          model: "gpt-5.4-mini"
         },
         streamWatch: {
           commentaryProvider: "anthropic",
@@ -2247,7 +2247,7 @@ test("generateVoiceTurnReply keeps the main reply model for direct replies durin
       voice: {
         generationLlm: {
           provider: "openai",
-          model: "gpt-4.1-mini"
+          model: "gpt-5.4-mini"
         },
         streamWatch: {
           commentaryProvider: "anthropic",
@@ -2274,7 +2274,7 @@ test("generateVoiceTurnReply keeps the main reply model for direct replies durin
 
   assert.equal(generationPayloads.length > 0, true);
   assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).provider, "openai");
-  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).model, "gpt-4.1-mini");
+  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).model, "gpt-5.4-mini");
 });
 
 test("generateVoiceTurnReply advertises tool runtimes only when the capability exists", async () => {

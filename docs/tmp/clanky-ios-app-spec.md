@@ -384,7 +384,7 @@ Deep view into how Clanky is reasoning. Prompt inspection, model context, genera
 │ ┌─ RECENT LLM CALLS ────────────────┐ │
 │ │ (filtered from action feed)        │ │
 │ │ ◆ claude-opus-4-6  3 tools  2.1s  │ │
-│ │ ◆ gpt-4o           0 tools  0.8s  │ │
+│ │ ◆ gpt-5.4-mini     0 tools  0.8s  │ │
 │ │ ◆ claude-opus-4-6  1 tool   1.5s  │ │
 │ └─────────────────────────────────────┘ │
 │                                         │
