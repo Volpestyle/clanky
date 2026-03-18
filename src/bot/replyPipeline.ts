@@ -18,8 +18,8 @@ import { getLocalTimeZoneLabel } from "./automation.ts";
 import { buildReplyToolSet, executeReplyTool } from "../tools/replyTools.ts";
 import type { ReplyToolContext, ReplyToolRuntime, ReplyToolDefinition } from "../tools/replyTools.ts";
 import {
-  resolveReplyFollowupGenerationSettings as resolveReplyFollowupGenerationSettingsForReplyFollowup,
-  runModelRequestedWebSearch as runModelRequestedWebSearchForReplyFollowup
+  resolveReplyFollowupGenerationSettings,
+  runModelRequestedWebSearch
 } from "./replyFollowup.ts";
 import {
   buildTextReplyScopeKey
@@ -29,7 +29,7 @@ import {
   throwIfAborted
 } from "../tools/browserTaskRuntime.ts";
 import { buildRuntimeDecisionCorrelation } from "../services/runtimeCorrelation.ts";
-import { resolveDeterministicMentions as resolveDeterministicMentionsForMentions } from "./mentions.ts";
+import { resolveDeterministicMentions } from "./mentions.ts";
 import {
   MAX_MODEL_IMAGE_INPUTS,
   UNICODE_REACTIONS,
@@ -219,7 +219,7 @@ type ReplyTrace = {
 };
 type ReplyDirective = ReturnType<typeof parseStructuredReplyOutput>;
 type ReplyMediaDirective = ReturnType<typeof pickReplyMediaDirective>;
-type ReplyMentionResolution = Awaited<ReturnType<typeof resolveDeterministicMentionsForMentions>>;
+type ReplyMentionResolution = Awaited<ReturnType<typeof resolveDeterministicMentions>>;
 type ReplyReactionResult = Awaited<ReturnType<ReplyPipelineRuntime["maybeApplyReplyReaction"]>>;
 type ReplyScreenShareOffer = Awaited<ReturnType<ReplyPipelineRuntime["maybeHandleScreenWatchIntent"]>>;
 type ReplyWebSearchState = ReturnType<ReplyPipelineRuntime["buildWebSearchContext"]> & {
@@ -1087,7 +1087,7 @@ async function executeReplyLlm(
     trace: replyTrace,
     signal
   });
-  const followupGenerationSettings = resolveReplyFollowupGenerationSettingsForReplyFollowup(settings);
+  const followupGenerationSettings = resolveReplyFollowupGenerationSettings(settings);
   performance.llm1Ms = Math.max(0, Date.now() - llm1StartedAtMs);
   let usedWebSearchFollowup = false;
   let usedBrowserBrowseFollowup = false;
@@ -1198,7 +1198,7 @@ async function executeReplyLlm(
       let result: ReplyToolExecutionResult;
       if (toolCall.name === "web_search") {
         const toolQuery = String(toolInput.query || "");
-        webSearch = await runModelRequestedWebSearchForReplyFollowup(
+        webSearch = await runModelRequestedWebSearch(
           { llm: bot.llm, search: bot.search, memory: bot.memory },
           {
             settings,
@@ -1462,7 +1462,7 @@ async function dispatchReplyActions(
     return { skipped: true };
   }
 
-  mentionResolution = await resolveDeterministicMentionsForMentions(
+  mentionResolution = await resolveDeterministicMentions(
     { store: bot.store },
     {
       text: finalText,

@@ -25,13 +25,41 @@ import {
   withAttemptCount
 } from "../retry.ts";
 
+// HTTP fetch and redirect retry limits for metadata/context requests.
 const REQUEST_TIMEOUT_MS = 5_500;
 const MAX_FETCH_ATTEMPTS = 3;
 const MAX_FETCH_REDIRECTS = 5;
 const CACHE_TTL_MS = 30 * 60 * 1000;
+
+// External tool execution timeouts and log-capture bounds.
 const YT_DLP_TIMEOUT_MS = 50_000;
 const FFMPEG_TIMEOUT_MS = 45_000;
 const MAX_COMMAND_OUTPUT_BYTES = 8 * 1024 * 1024;
+const MAX_LOG_CONTENT_CHARS = 2000;
+
+// Public API clamps for transcript/keyframe/ASR request parameters.
+const DEFAULT_MAX_TRANSCRIPT_CHARS = 1200;
+const MIN_MAX_TRANSCRIPT_CHARS = 200;
+const MAX_MAX_TRANSCRIPT_CHARS = 4000;
+const DEFAULT_KEYFRAME_INTERVAL_SECONDS = 0;
+const MAX_KEYFRAME_INTERVAL_SECONDS = 120;
+const DEFAULT_MAX_ASR_SECONDS = 120;
+const MIN_MAX_ASR_SECONDS = 15;
+const MAX_MAX_ASR_SECONDS = 600;
+
+// Availability probing cache for yt-dlp/ffmpeg presence checks.
+const COMMAND_AVAILABILITY_CACHE_TTL_MS = 5 * 60 * 1000;
+const COMMAND_PROBE_TIMEOUT_MS = 4_000;
+
+// ASR/transcript formatting limits used in extracted context payloads.
+const ASR_AUDIO_SAMPLE_RATE_HZ = "16000";
+const TEXT_SANITIZE_VIDEO_ID_MAX_CHARS = 80;
+const TEXT_SANITIZE_TITLE_MAX_CHARS = 180;
+const TEXT_SANITIZE_CHANNEL_MAX_CHARS = 120;
+const TEXT_SANITIZE_DESCRIPTION_MAX_CHARS = 360;
+const COMMAND_ERROR_MESSAGE_MAX_CHARS = 400;
+
+// Explicit UA so upstream providers can identify this integration.
 const VIDEO_USER_AGENT =
   "clanky/0.2 (+video-context; https://github.com/Volpestyle/clanky)";
 
@@ -60,11 +88,11 @@ export class VideoContextService {
   logCleanupError(scope: string, error: unknown, metadata: Record<string, unknown> | null = null) {
     const detail = error instanceof Error ? error.message : String(error);
     try {
-      this.store.logAction({
-        kind: "video_context_error",
-        content: `${scope}: ${detail}`.slice(0, 2000),
-        metadata
-      });
+        this.store.logAction({
+          kind: "video_context_error",
+          content: `${scope}: ${detail}`.slice(0, MAX_LOG_CONTENT_CHARS),
+          metadata
+        });
     } catch {
       console.warn(`[VideoContextService] ${scope}:`, error);
     }
@@ -120,11 +148,11 @@ export class VideoContextService {
 
   async fetchContexts({
     targets,
-    maxTranscriptChars = 1200,
-    keyframeIntervalSeconds = 0,
+    maxTranscriptChars = DEFAULT_MAX_TRANSCRIPT_CHARS,
+    keyframeIntervalSeconds = DEFAULT_KEYFRAME_INTERVAL_SECONDS,
     maxKeyframesPerVideo = 0,
     allowAsrFallback = false,
-    maxAsrSeconds = 120,
+    maxAsrSeconds = DEFAULT_MAX_ASR_SECONDS,
     trace = {}
   }: {
     targets: VideoTarget[];
@@ -136,10 +164,22 @@ export class VideoContextService {
     trace?: VideoTrace;
   }) {
     const list = Array.isArray(targets) ? targets : [];
-    const transcriptLimit = clamp(Number(maxTranscriptChars) || 1200, 200, 4000);
-    const keyframeInterval = clamp(Number(keyframeIntervalSeconds) || 0, 0, 120);
+    const transcriptLimit = clamp(
+      Number(maxTranscriptChars) || DEFAULT_MAX_TRANSCRIPT_CHARS,
+      MIN_MAX_TRANSCRIPT_CHARS,
+      MAX_MAX_TRANSCRIPT_CHARS
+    );
+    const keyframeInterval = clamp(
+      Number(keyframeIntervalSeconds) || DEFAULT_KEYFRAME_INTERVAL_SECONDS,
+      DEFAULT_KEYFRAME_INTERVAL_SECONDS,
+      MAX_KEYFRAME_INTERVAL_SECONDS
+    );
     const keyframeCount = clamp(Number(maxKeyframesPerVideo) || 0, 0, 8);
-    const asrSeconds = clamp(Number(maxAsrSeconds) || 120, 15, 600);
+    const asrSeconds = clamp(
+      Number(maxAsrSeconds) || DEFAULT_MAX_ASR_SECONDS,
+      MIN_MAX_ASR_SECONDS,
+      MAX_MAX_ASR_SECONDS
+    );
     const asrEnabled = Boolean(allowAsrFallback);
     const videos = [];
     const errors = [];
@@ -161,7 +201,7 @@ export class VideoContextService {
           guildId: trace.guildId,
           channelId: trace.channelId,
           userId: trace.userId,
-          content: String(context.videoId || context.url || target.key || "").slice(0, 2000),
+          content: String(context.videoId || context.url || target.key || "").slice(0, MAX_LOG_CONTENT_CHARS),
           metadata: {
             source: trace.source || "unknown",
             provider: context.provider,
@@ -191,7 +231,7 @@ export class VideoContextService {
           guildId: trace.guildId,
           channelId: trace.channelId,
           userId: trace.userId,
-          content: `${target.key}: ${message}`.slice(0, 2000),
+          content: `${target.key}: ${message}`.slice(0, MAX_LOG_CONTENT_CHARS),
           metadata: {
             source: trace.source || "unknown",
             kind: target.kind,
@@ -415,18 +455,18 @@ export class VideoContextService {
     return {
       provider,
       kind: target.kind,
-      videoId: sanitizeText(String(info?.id || target.videoId || ""), 80) || null,
+      videoId: sanitizeText(String(info?.id || target.videoId || ""), TEXT_SANITIZE_VIDEO_ID_MAX_CHARS) || null,
       url: normalizeDiscoveryUrl(info?.webpage_url || info?.original_url || target.url) || target.url,
-      title: sanitizeText(info?.title || "", 180) || "untitled video",
+      title: sanitizeText(info?.title || "", TEXT_SANITIZE_TITLE_MAX_CHARS) || "untitled video",
       channel:
         sanitizeText(
           info?.uploader || info?.channel || info?.creator || info?.channel_url || fallbackHost || "",
-          120
+          TEXT_SANITIZE_CHANNEL_MAX_CHARS
         ) || "unknown channel",
       publishedAt: normalizeYtDlpDate(info?.upload_date) || normalizeDateIso(info?.release_timestamp),
       durationSeconds: safeNumber(info?.duration),
       viewCount: safeNumber(info?.view_count),
-      description: sanitizeText(info?.description || "", 360),
+      description: sanitizeText(info?.description || "", TEXT_SANITIZE_DESCRIPTION_MAX_CHARS),
       transcript: transcriptResult.text || "",
       transcriptSource: transcriptResult.source || "",
       transcriptError: transcriptResult.error || null
@@ -506,14 +546,14 @@ export class VideoContextService {
     return {
       provider: "tiktok",
       kind: "tiktok",
-      videoId: sanitizeText(extractTikTokIdFromUrl(url) || "", 80) || null,
+      videoId: sanitizeText(extractTikTokIdFromUrl(url) || "", TEXT_SANITIZE_VIDEO_ID_MAX_CHARS) || null,
       url,
-      title: sanitizeText(data?.title || "", 180) || "TikTok video",
-      channel: sanitizeText(data?.author_name || host || "", 120) || "unknown channel",
+      title: sanitizeText(data?.title || "", TEXT_SANITIZE_TITLE_MAX_CHARS) || "TikTok video",
+      channel: sanitizeText(data?.author_name || host || "", TEXT_SANITIZE_CHANNEL_MAX_CHARS) || "unknown channel",
       publishedAt: null,
       durationSeconds: null,
       viewCount: null,
-      description: sanitizeText(data?.title || "", 360),
+      description: sanitizeText(data?.title || "", TEXT_SANITIZE_DESCRIPTION_MAX_CHARS),
       transcript: "",
       transcriptSource: "",
       transcriptError: null
@@ -534,11 +574,11 @@ export class VideoContextService {
         title =
           sanitizeText(
             readMetaTag(html, "og:title") || readMetaTag(html, "twitter:title") || readHtmlTitle(html) || "",
-            180
+            TEXT_SANITIZE_TITLE_MAX_CHARS
           ) || "";
         description = sanitizeText(
           readMetaTag(html, "og:description") || readMetaTag(html, "twitter:description") || "",
-          360
+          TEXT_SANITIZE_DESCRIPTION_MAX_CHARS
         );
         publishedAt =
           normalizeDateIso(readMetaTag(html, "article:published_time")) ||
@@ -643,7 +683,11 @@ export class VideoContextService {
       throw new Error("ffmpeg is not installed.");
     }
 
-    const interval = clamp(Number(keyframeIntervalSeconds) || 0, 1, 120);
+    const interval = clamp(
+      Number(keyframeIntervalSeconds) || DEFAULT_KEYFRAME_INTERVAL_SECONDS,
+      1,
+      MAX_KEYFRAME_INTERVAL_SECONDS
+    );
     const maxFrames = clamp(Number(maxKeyframesPerVideo) || 0, 1, 8);
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-frames-"));
     const outputPattern = path.join(tempDir, "frame-%03d.jpg");
@@ -715,7 +759,11 @@ export class VideoContextService {
       throw new Error("ASR fallback requires OPENAI_API_KEY.");
     }
 
-    const segmentSeconds = clamp(Number(maxAsrSeconds) || 120, 15, 600);
+    const segmentSeconds = clamp(
+      Number(maxAsrSeconds) || DEFAULT_MAX_ASR_SECONDS,
+      MIN_MAX_ASR_SECONDS,
+      MAX_MAX_ASR_SECONDS
+    );
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-audio-"));
     const audioPath = path.join(tempDir, "audio.wav");
 
@@ -733,7 +781,7 @@ export class VideoContextService {
           "-ac",
           "1",
           "-ar",
-          "16000",
+          ASR_AUDIO_SAMPLE_RATE_HZ,
           "-t",
           String(segmentSeconds),
           audioPath
@@ -763,9 +811,8 @@ export class VideoContextService {
   }
 
   async getToolAvailability() {
-    const TOOL_CHECK_TTL_MS = 5 * 60 * 1000;
     const now = Date.now();
-    if (this.toolAvailabilityPromise && now - this.toolAvailabilityCheckedAt < TOOL_CHECK_TTL_MS) {
+    if (this.toolAvailabilityPromise && now - this.toolAvailabilityCheckedAt < COMMAND_AVAILABILITY_CACHE_TTL_MS) {
       return this.toolAvailabilityPromise;
     }
     this.toolAvailabilityCheckedAt = now;
@@ -801,7 +848,7 @@ export class VideoContextService {
       await runCommand({
         command,
         args,
-        timeoutMs: 4_000,
+        timeoutMs: COMMAND_PROBE_TIMEOUT_MS,
         useShell: true
       });
       return true;
@@ -817,10 +864,10 @@ function summarizeYouTubeVideo({ videoId, url, playerResponse }) {
   const micro = playerResponse?.microformat?.playerMicroformatRenderer || {};
 
   const title =
-    sanitizeText(details?.title || micro?.title?.simpleText || micro?.title || "", 180) || "untitled video";
+    sanitizeText(details?.title || micro?.title?.simpleText || micro?.title || "", TEXT_SANITIZE_TITLE_MAX_CHARS) || "untitled video";
   const channel =
-    sanitizeText(details?.author || micro?.ownerChannelName || micro?.ownerChannel || "", 120) || "unknown channel";
-  const description = sanitizeText(details?.shortDescription || micro?.description?.simpleText || "", 360);
+    sanitizeText(details?.author || micro?.ownerChannelName || micro?.ownerChannel || "", TEXT_SANITIZE_CHANNEL_MAX_CHARS) || "unknown channel";
+  const description = sanitizeText(details?.shortDescription || micro?.description?.simpleText || "", TEXT_SANITIZE_DESCRIPTION_MAX_CHARS);
   const publishedAt = normalizeDateIso(micro?.publishDate || micro?.uploadDate || "");
   const durationSeconds = safeNumber(details?.lengthSeconds);
   const viewCount = safeNumber(details?.viewCount);
@@ -1162,7 +1209,7 @@ async function runCommand({ command, args, timeoutMs = 30_000, useShell = false 
       }
       if (code !== 0) {
         const message = String(stderr || stdout || "").replace(/\s+/g, " ").trim();
-        reject(new Error(`${command} exited with code ${code}${message ? `: ${message.slice(0, 400)}` : ""}`));
+        reject(new Error(`${command} exited with code ${code}${message ? `: ${message.slice(0, COMMAND_ERROR_MESSAGE_MAX_CHARS)}` : ""}`));
         return;
       }
       resolve({

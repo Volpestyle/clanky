@@ -292,7 +292,6 @@ export type VoiceToolRuntimeSessionLike = {
         startedAt: number;
         expiresAt: number;
     } | null;
-    [key: string]: unknown;
 };
 
 export type MusicSelectionResult = {
@@ -1254,5 +1253,4 @@ export interface VoiceSession {
     inFlightAcceptedBrainTurn?: InFlightAcceptedBrainTurn | null;
     openAiAsrSessionIdleTtlMs?: number;
     realtimeTurnCoalesceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
-    [key: string]: unknown;
 }

@@ -5,6 +5,7 @@ import { clamp, nowIso } from "../utils.ts";
 import { normalizeMessageCreatedAt } from "./storeHelpers.ts";
 import { normalizeEmbeddingVector, vectorToBlob } from "./storeHelpers.ts";
 
+// English fallback stopwords used when tokenizing conversation search queries.
 const EN_CONVERSATION_SEARCH_STOPWORDS = new Set([
   "about",
   "again",
@@ -43,6 +44,59 @@ const EN_CONVERSATION_SEARCH_STOPWORDS = new Set([
   "yesterday",
   "your"
 ]);
+
+// Storage truncation and query-window defaults for message rows.
+const AUTHOR_NAME_MAX_CHARS = 80;
+const MESSAGE_CONTENT_MAX_CHARS = 2000;
+const DEFAULT_RECENT_MESSAGES_LIMIT = 40;
+const MIN_RECENT_MESSAGES_LIMIT = 1;
+const MAX_RECENT_MESSAGES_LIMIT = 200;
+const DEFAULT_RECENT_GUILD_MESSAGES_LIMIT = 120;
+const MAX_RECENT_GUILD_MESSAGES_LIMIT = 300;
+const DEFAULT_WINDOW_QUERY_LIMIT = 120;
+const MAX_WINDOW_QUERY_LIMIT = 500;
+
+// Relevant/conversation search clamps exposed to callers.
+const DEFAULT_RELEVANT_SEARCH_LIMIT = 8;
+const MAX_RELEVANT_SEARCH_LIMIT = 24;
+const MAX_RELEVANT_SEARCH_TOKENS = 5;
+const MAX_CONVERSATION_SEARCH_TOKENS = 8;
+const CONVERSATION_PHRASE_MAX_CHARS = 180;
+const DEFAULT_CONVERSATION_WINDOW_LIMIT = 4;
+const MAX_CONVERSATION_WINDOW_LIMIT = 8;
+const DEFAULT_CONVERSATION_MAX_AGE_HOURS = 168;
+const MAX_CONVERSATION_MAX_AGE_HOURS = 24 * 30;
+
+// Candidate-pool sizing for lexical vs semantic conversation retrieval.
+const CONVERSATION_CANDIDATE_MULTIPLIER_LEXICAL = 20;
+const CONVERSATION_CANDIDATE_LIMIT_LEXICAL = 160;
+const CONVERSATION_CANDIDATE_MULTIPLIER_SEMANTIC = 24;
+const CONVERSATION_CANDIDATE_LIMIT_SEMANTIC = 192;
+
+// Recency tiers and scoring weights used in lexical ranking.
+const MINUTES_TO_MS = 60_000;
+const RECENCY_TIER_RECENT_MINUTES = 30;
+const RECENCY_TIER_MID_MINUTES = 6 * 60;
+const RECENCY_TIER_DAY_MINUTES = 24 * 60;
+const SCORE_EXACT_PHRASE_MATCH = 10;
+const SCORE_TOKEN_MATCH = 3;
+const SCORE_AUTHOR_MATCH = 1;
+const SCORE_SAME_CHANNEL = 4;
+const SCORE_RECENT_ACTIVITY = 3;
+const SCORE_MID_ACTIVITY = 2;
+const SCORE_OLDER_ACTIVITY = 1;
+
+// Semantic reranking nudges and minimum quality gate.
+const SEMANTIC_CHANNEL_BOOST = 0.08;
+const SEMANTIC_RECENCY_BOOST_RECENT = 0.05;
+const SEMANTIC_RECENCY_BOOST_MID = 0.03;
+const SEMANTIC_RECENCY_BOOST_DAY = 0.015;
+const SEMANTIC_SCORE_FLOOR = 0.12;
+
+// Active-channel summary defaults used by dashboard/status surfaces.
+const DEFAULT_ACTIVE_CHANNEL_HOURS = 24;
+const DEFAULT_ACTIVE_CHANNEL_LIMIT = 10;
+const MAX_ACTIVE_CHANNEL_LIMIT = 50;
 
 interface MessageStore {
   db: Database;
@@ -90,7 +144,7 @@ interface ReferencedMessageStatsRow {
   reply_count: number;
 }
 
-interface MessageVectorScoreRow extends MessageSqlRow {
+interface MessageVectorScoreRow extends ConversationMessageRow {
   score: number;
 }
 
@@ -133,9 +187,9 @@ store.db
     message.guildId ? String(message.guildId) : null,
     String(message.channelId),
     String(message.authorId),
-    String(message.authorName).slice(0, 80),
+    String(message.authorName).slice(0, AUTHOR_NAME_MAX_CHARS),
     message.isBot ? 1 : 0,
-    String(message.content ?? "").slice(0, 2000),
+    String(message.content ?? "").slice(0, MESSAGE_CONTENT_MAX_CHARS),
     message.referencedMessageId ? String(message.referencedMessageId) : null
   );
 }
@@ -225,7 +279,7 @@ export function deleteMessagesForGuild(store: MessageStore, guildId: string) {
   } as const;
 }
 
-export function getRecentMessages(store: MessageStore, channelId, limit = 40) {
+export function getRecentMessages(store: MessageStore, channelId, limit = DEFAULT_RECENT_MESSAGES_LIMIT) {
 return store.db
 .prepare<MessageSqlRow, [string, number]>(
 `SELECT message_id, created_at, guild_id, channel_id, author_id, author_name, is_bot, content, referenced_message_id
@@ -234,11 +288,11 @@ return store.db
          ORDER BY created_at DESC
          LIMIT ?`
 )
-.all(String(channelId), clamp(Math.floor(limit), 1, 200))
+.all(String(channelId), clamp(Math.floor(limit), MIN_RECENT_MESSAGES_LIMIT, MAX_RECENT_MESSAGES_LIMIT))
 .map(mapStoredMessageRow);
 }
 
-export function getRecentMessagesAcrossGuild(store: MessageStore, guildId, limit = 120) {
+export function getRecentMessagesAcrossGuild(store: MessageStore, guildId, limit = DEFAULT_RECENT_GUILD_MESSAGES_LIMIT) {
 return store.db
 .prepare<MessageSqlRow, [string, number]>(
 `SELECT message_id, created_at, guild_id, channel_id, author_id, author_name, is_bot, content, referenced_message_id
@@ -247,7 +301,7 @@ return store.db
          ORDER BY created_at DESC
          LIMIT ?`
 )
-.all(String(guildId), clamp(Math.floor(limit), 1, 300))
+.all(String(guildId), clamp(Math.floor(limit), MIN_RECENT_MESSAGES_LIMIT, MAX_RECENT_GUILD_MESSAGES_LIMIT))
 .map(mapStoredMessageRow);
 }
 
@@ -258,7 +312,7 @@ export function getMessagesInWindow(
     channelId = null,
     sinceIso = null,
     untilIso = null,
-    limit = 120
+    limit = DEFAULT_WINDOW_QUERY_LIMIT
   }: {
     guildId: string;
     channelId?: string | null;
@@ -296,13 +350,13 @@ export function getMessagesInWindow(
            ORDER BY created_at ASC
            LIMIT ?`
     )
-    .all(...args, clamp(Math.floor(Number(limit) || 120), 1, 500))
+    .all(...args, clamp(Math.floor(Number(limit) || DEFAULT_WINDOW_QUERY_LIMIT), MIN_RECENT_MESSAGES_LIMIT, MAX_WINDOW_QUERY_LIMIT))
     .map(mapStoredMessageRow);
 }
 
-export function searchRelevantMessages(store: MessageStore, channelId, queryText, limit = 8) {
+export function searchRelevantMessages(store: MessageStore, channelId, queryText, limit = DEFAULT_RELEVANT_SEARCH_LIMIT) {
 const raw = String(queryText ?? "").toLowerCase();
-const tokens = [...new Set(raw.match(/[a-z0-9]{4,}/g) ?? [])].slice(0, 5);
+const tokens = [...new Set(raw.match(/[a-z0-9]{4,}/g) ?? [])].slice(0, MAX_RELEVANT_SEARCH_TOKENS);
 
 if (!tokens.length) {
   return store.db
@@ -313,12 +367,16 @@ if (!tokens.length) {
            ORDER BY created_at DESC
            LIMIT ?`
     )
-    .all(String(channelId), clamp(limit, 1, 24))
+    .all(String(channelId), clamp(limit, MIN_RECENT_MESSAGES_LIMIT, MAX_RELEVANT_SEARCH_LIMIT))
     .map(mapStoredMessageRow);
 }
 
 const clauses = tokens.map(() => "content LIKE ?").join(" OR ");
-const args = [String(channelId), ...tokens.map((t) => `%${t}%`), clamp(limit, 1, 24)];
+const args = [
+  String(channelId),
+  ...tokens.map((t) => `%${t}%`),
+  clamp(limit, MIN_RECENT_MESSAGES_LIMIT, MAX_RELEVANT_SEARCH_LIMIT)
+];
 
 return store.db
   .prepare<MessageSqlRow, Array<string | number>>(
@@ -341,7 +399,7 @@ if (!raw) return [];
 
 return [...new Set(raw.match(/[a-z0-9]{3,}/g) || [])]
   .filter((token) => !EN_CONVERSATION_SEARCH_STOPWORDS.has(token))
-  .slice(0, 8);
+  .slice(0, MAX_CONVERSATION_SEARCH_TOKENS);
 }
 
 function scoreConversationMessage(row, {
@@ -355,35 +413,35 @@ const rowChannelId = String(row?.channel_id || "").trim();
 const normalizedChannelId = String(channelId || "").trim();
 const createdAtMs = Date.parse(String(row?.created_at || ""));
 const ageMinutes = Number.isFinite(createdAtMs)
-  ? Math.max(0, Math.round((Date.now() - createdAtMs) / 60000))
+  ? Math.max(0, Math.round((Date.now() - createdAtMs) / MINUTES_TO_MS))
   : null;
 
 let score = 0;
 if (phrase && content.includes(phrase)) {
-  score += 10;
+  score += SCORE_EXACT_PHRASE_MATCH;
 }
 
 for (const token of tokens) {
   if (!token) continue;
   if (content.includes(token)) {
-    score += 3;
+    score += SCORE_TOKEN_MATCH;
     continue;
   }
   if (authorName.includes(token)) {
-    score += 1;
+    score += SCORE_AUTHOR_MATCH;
   }
 }
 
 if (normalizedChannelId && rowChannelId && rowChannelId === normalizedChannelId) {
-  score += 4;
+  score += SCORE_SAME_CHANNEL;
 }
 if (Number.isFinite(ageMinutes)) {
-  if (ageMinutes <= 30) {
-    score += 3;
-  } else if (ageMinutes <= 6 * 60) {
-    score += 2;
-  } else if (ageMinutes <= 24 * 60) {
-    score += 1;
+  if (ageMinutes <= RECENCY_TIER_RECENT_MINUTES) {
+    score += SCORE_RECENT_ACTIVITY;
+  } else if (ageMinutes <= RECENCY_TIER_MID_MINUTES) {
+    score += SCORE_MID_ACTIVITY;
+  } else if (ageMinutes <= RECENCY_TIER_DAY_MINUTES) {
+    score += SCORE_OLDER_ACTIVITY;
   }
 }
 
@@ -475,7 +533,7 @@ function assembleConversationWindows(
   store: MessageStore,
   rankedRows: RankedConversationWindowRow[],
   {
-    limit = 4,
+    limit = DEFAULT_CONVERSATION_WINDOW_LIMIT,
     before = 1,
     after = 1,
     includeSemanticScore = false
@@ -486,7 +544,11 @@ function assembleConversationWindows(
     includeSemanticScore?: boolean;
   } = {}
 ) {
-  const boundedLimit = clamp(Math.floor(Number(limit) || 4), 1, 8);
+  const boundedLimit = clamp(
+    Math.floor(Number(limit) || DEFAULT_CONVERSATION_WINDOW_LIMIT),
+    MIN_RECENT_MESSAGES_LIMIT,
+    MAX_CONVERSATION_WINDOW_LIMIT
+  );
   const windows = [];
   const usedMessageIds = new Set<string>();
 
@@ -530,8 +592,8 @@ export function searchConversationWindows(store: MessageStore, {
     guildId,
     channelId = null,
     queryText = "",
-    limit = 4,
-    maxAgeHours = 168,
+    limit = DEFAULT_CONVERSATION_WINDOW_LIMIT,
+    maxAgeHours = DEFAULT_CONVERSATION_MAX_AGE_HOURS,
     before = 1,
     after = 1
   }) {
@@ -543,13 +605,17 @@ const normalizedPhrase = String(queryText || "")
   .toLowerCase()
   .replace(/\s+/g, " ")
   .trim()
-  .slice(0, 180);
+  .slice(0, CONVERSATION_PHRASE_MAX_CHARS);
 if (!tokens.length) return [];
 
-const boundedLimit = clamp(Math.floor(Number(limit) || 4), 1, 8);
-const boundedMaxAgeHours = clamp(Math.floor(Number(maxAgeHours) || 168), 1, 24 * 30);
+const boundedLimit = clamp(Math.floor(Number(limit) || DEFAULT_CONVERSATION_WINDOW_LIMIT), MIN_RECENT_MESSAGES_LIMIT, MAX_CONVERSATION_WINDOW_LIMIT);
+const boundedMaxAgeHours = clamp(Math.floor(Number(maxAgeHours) || DEFAULT_CONVERSATION_MAX_AGE_HOURS), MIN_RECENT_MESSAGES_LIMIT, MAX_CONVERSATION_MAX_AGE_HOURS);
 const sinceIso = new Date(Date.now() - boundedMaxAgeHours * 60 * 60 * 1000).toISOString();
-const candidateLimit = clamp(boundedLimit * 20, boundedLimit, 160);
+const candidateLimit = clamp(
+  boundedLimit * CONVERSATION_CANDIDATE_MULTIPLIER_LEXICAL,
+  boundedLimit,
+  CONVERSATION_CANDIDATE_LIMIT_LEXICAL
+);
 const likeArgs = tokens.map((token) => `%${token}%`);
 const tokenClauses = tokens.map(() => "content LIKE ? COLLATE NOCASE");
 const args: Array<string | number> = [normalizedGuildId, sinceIso];
@@ -608,8 +674,8 @@ export function searchConversationWindowsByEmbedding(
     channelId = null,
     queryEmbedding,
     model,
-    limit = 4,
-    maxAgeHours = 168,
+    limit = DEFAULT_CONVERSATION_WINDOW_LIMIT,
+    maxAgeHours = DEFAULT_CONVERSATION_MAX_AGE_HOURS,
     before = 1,
     after = 1
   }: {
@@ -630,10 +696,14 @@ export function searchConversationWindowsByEmbedding(
   const normalizedQueryEmbedding = normalizeEmbeddingVector(queryEmbedding);
   if (!normalizedGuildId || !normalizedModel || !normalizedQueryEmbedding.length) return [];
 
-  const boundedLimit = clamp(Math.floor(Number(limit) || 4), 1, 8);
-  const boundedMaxAgeHours = clamp(Math.floor(Number(maxAgeHours) || 168), 1, 24 * 30);
+  const boundedLimit = clamp(Math.floor(Number(limit) || DEFAULT_CONVERSATION_WINDOW_LIMIT), MIN_RECENT_MESSAGES_LIMIT, MAX_CONVERSATION_WINDOW_LIMIT);
+  const boundedMaxAgeHours = clamp(Math.floor(Number(maxAgeHours) || DEFAULT_CONVERSATION_MAX_AGE_HOURS), MIN_RECENT_MESSAGES_LIMIT, MAX_CONVERSATION_MAX_AGE_HOURS);
   const sinceIso = new Date(Date.now() - boundedMaxAgeHours * 60 * 60 * 1000).toISOString();
-  const candidateLimit = clamp(boundedLimit * 24, boundedLimit, 192);
+  const candidateLimit = clamp(
+    boundedLimit * CONVERSATION_CANDIDATE_MULTIPLIER_SEMANTIC,
+    boundedLimit,
+    CONVERSATION_CANDIDATE_LIMIT_SEMANTIC
+  );
   const rows = store.db
     .prepare<MessageVectorScoreRow, Array<string | number | Buffer>>(
       `SELECT
@@ -673,22 +743,22 @@ export function searchConversationWindowsByEmbedding(
       const baseScore = Number.isFinite(Number(row.score)) ? Number(row.score) : 0;
       const channelBoost =
         normalizedChannelId && String(row.channel_id || "").trim() === normalizedChannelId
-          ? 0.08
+          ? SEMANTIC_CHANNEL_BOOST
           : !normalizedChannelId
             ? 0
             : 0;
       const createdAtMs = Date.parse(String(row.created_at || ""));
       const ageMinutes = Number.isFinite(createdAtMs)
-        ? Math.max(0, Math.round((Date.now() - createdAtMs) / 60000))
+        ? Math.max(0, Math.round((Date.now() - createdAtMs) / MINUTES_TO_MS))
         : null;
       const recencyBoost =
         Number.isFinite(ageMinutes) && ageMinutes !== null
-          ? ageMinutes <= 30
-            ? 0.05
-            : ageMinutes <= 6 * 60
-              ? 0.03
-              : ageMinutes <= 24 * 60
-                ? 0.015
+          ? ageMinutes <= RECENCY_TIER_RECENT_MINUTES
+            ? SEMANTIC_RECENCY_BOOST_RECENT
+            : ageMinutes <= RECENCY_TIER_MID_MINUTES
+              ? SEMANTIC_RECENCY_BOOST_MID
+              : ageMinutes <= RECENCY_TIER_DAY_MINUTES
+                ? SEMANTIC_RECENCY_BOOST_DAY
                 : 0
           : 0;
       return {
@@ -698,7 +768,7 @@ export function searchConversationWindowsByEmbedding(
         _rank: index
       };
     })
-    .filter((row) => Number(row._score) >= 0.12)
+    .filter((row) => Number(row._score) >= SEMANTIC_SCORE_FLOOR)
     .sort((a, b) => {
       if (b._score !== a._score) return b._score - a._score;
       return a._rank - b._rank;
@@ -712,7 +782,7 @@ export function searchConversationWindowsByEmbedding(
   });
 }
 
-export function getActiveChannels(store: MessageStore, guildId, hours = 24, limit = 10) {
+export function getActiveChannels(store: MessageStore, guildId, hours = DEFAULT_ACTIVE_CHANNEL_HOURS, limit = DEFAULT_ACTIVE_CHANNEL_LIMIT) {
 const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
 
 return store.db
@@ -724,7 +794,7 @@ return store.db
          ORDER BY message_count DESC
          LIMIT ?`
   )
-  .all(String(guildId), since, clamp(limit, 1, 50));
+  .all(String(guildId), since, clamp(limit, MIN_RECENT_MESSAGES_LIMIT, MAX_ACTIVE_CHANNEL_LIMIT));
 }
 
 export function getReferencedMessageStats(

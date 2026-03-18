@@ -6,6 +6,25 @@ import { ACTION_LOG_RETENTION_DAYS_MIN, ACTION_LOG_RETENTION_DAYS_MAX, ACTION_LO
 import { safeJsonParse } from "../normalization/valueParsers.ts";
 import { shouldTrackResponseTriggerKind, normalizeResponseTriggerMessageIds } from "./responseTriggers.ts";
 
+// Insert/query limits to keep action-log payloads and scans bounded.
+const ACTION_LOG_CONTENT_MAX_CHARS = 2000;
+const DEFAULT_RECENT_ACTIONS_LIMIT = 200;
+const MAX_RECENT_ACTIONS_LIMIT = 1000;
+const DEFAULT_RECENT_REFLECTIONS_LIMIT = 20;
+const MAX_RECENT_REFLECTIONS_LIMIT = 100;
+
+// Reflection scan multipliers oversample recent actions before filtering by kind.
+const MIN_REFLECTION_SCAN_LIMIT = 60;
+const REFLECTION_SCAN_LIMIT_MULTIPLIER = 6;
+
+// Browser-session query limits and oversampling behavior.
+const DEFAULT_RECENT_BROWSER_SESSIONS_LIMIT = 50;
+const MAX_RECENT_BROWSER_SESSIONS_LIMIT = 200;
+const BROWSER_SESSION_SCAN_MULTIPLIER = 20;
+
+// Hour-to-millisecond conversion for retention cutoff arithmetic.
+const HOURS_TO_MS = 60 * 60 * 1000;
+
 interface ActionLogEntry {
   kind: string;
   guildId?: string | null;
@@ -93,7 +112,7 @@ export function pruneActionLog(store: ActionLogStore, {
     ACTION_LOG_MAX_ROWS_RUNTIME_MIN,
     ACTION_LOG_MAX_ROWS_MAX
   );
-  const cutoffIso = new Date(referenceMs - boundedMaxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+  const cutoffIso = new Date(referenceMs - boundedMaxAgeDays * 24 * HOURS_TO_MS).toISOString();
 
   let deletedActions = Number(
     store.db
@@ -170,7 +189,7 @@ export function logAction(store: ActionLogStore, action: ActionLogEntry) {
       action.messageId ? String(action.messageId) : null,
       action.userId ? String(action.userId) : null,
       actionKind,
-      action.content ? String(action.content).slice(0, 2000) : null,
+      action.content ? String(action.content).slice(0, ACTION_LOG_CONTENT_MAX_CHARS) : null,
       metadata,
       Number(action.usdCost) || 0
     );
@@ -223,11 +242,15 @@ export function getLastActionTime(store: ActionLogStore, kind) {
 
 export function getRecentActions(
   store: ActionLogStore,
-  limit = 200,
+  limit = DEFAULT_RECENT_ACTIONS_LIMIT,
   opts: { kinds?: string[]; sinceIso?: string | null; guildId?: string | null } = {}
 ) {
   const parsedLimit = Number(limit);
-  const boundedLimit = clamp(Number.isFinite(parsedLimit) ? Math.floor(parsedLimit) : 200, 1, 1000);
+  const boundedLimit = clamp(
+    Number.isFinite(parsedLimit) ? Math.floor(parsedLimit) : DEFAULT_RECENT_ACTIONS_LIMIT,
+    1,
+    MAX_RECENT_ACTIONS_LIMIT
+  );
   const normalizedKinds = [...new Set(
     (Array.isArray(opts?.kinds) ? opts.kinds : [])
       .map((value) => String(value || "").trim())
@@ -270,11 +293,15 @@ export function getRecentActions(
 
 export function getRecentMemoryReflections(
   store: ActionLogStore,
-  limit = 20,
+  limit = DEFAULT_RECENT_REFLECTIONS_LIMIT,
   opts: { guildId?: string | null } = {}
 ) {
   const parsedLimit = Number(limit);
-  const boundedLimit = clamp(Number.isFinite(parsedLimit) ? Math.floor(parsedLimit) : 20, 1, 100);
+  const boundedLimit = clamp(
+    Number.isFinite(parsedLimit) ? Math.floor(parsedLimit) : DEFAULT_RECENT_REFLECTIONS_LIMIT,
+    1,
+    MAX_RECENT_REFLECTIONS_LIMIT
+  );
   const normalizedGuildId = String(opts?.guildId || "").trim();
   const params: Array<string | number> = [];
   const conditions = ["kind IN ('memory_reflection_start', 'memory_reflection_complete', 'memory_reflection_error')"];
@@ -282,7 +309,7 @@ export function getRecentMemoryReflections(
     conditions.push("guild_id = ?");
     params.push(normalizedGuildId);
   }
-  params.push(Math.max(60, boundedLimit * 6));
+  params.push(Math.max(MIN_REFLECTION_SCAN_LIMIT, boundedLimit * REFLECTION_SCAN_LIMIT_MULTIPLIER));
   const rows = store.db
     .prepare<ActionLogRow, Array<string | number>>(
       `SELECT id, created_at, guild_id, channel_id, message_id, user_id, kind, content, metadata, usd_cost
@@ -493,10 +520,14 @@ export function deleteMemoryReflectionRunsForGuild(store: ActionLogStore, guildI
 
 export function getRecentBrowserSessions(
   store: ActionLogStore,
-  limit = 50,
+  limit = DEFAULT_RECENT_BROWSER_SESSIONS_LIMIT,
   opts: { sinceIso?: string | null; guildId?: string | null } = {}
 ) {
-  const parsedLimit = clamp(Math.floor(Number(limit) || 50), 1, 200);
+  const parsedLimit = clamp(
+    Math.floor(Number(limit) || DEFAULT_RECENT_BROWSER_SESSIONS_LIMIT),
+    1,
+    MAX_RECENT_BROWSER_SESSIONS_LIMIT
+  );
   const sinceIso = String(opts?.sinceIso || "").trim();
   const guildId = String(opts?.guildId || "").trim();
 
@@ -523,7 +554,7 @@ export function getRecentBrowserSessions(
          ORDER BY created_at DESC
          LIMIT ?`
     )
-    .all(...params, parsedLimit * 20);
+    .all(...params, parsedLimit * BROWSER_SESSION_SCAN_MULTIPLIER);
 
   interface ToolStepEntry {
     tool: string;

@@ -90,6 +90,7 @@ type MicroReflectionLlm = {
 };
 
 
+// Caps for the micro-reflection prompt window and extraction payload size.
 const MICRO_REFLECTION_MAX_FACTS = 8;
 const MICRO_REFLECTION_MAX_ENTRIES = 80;
 const MICRO_REFLECTION_MAX_TOTAL_CHARS = 9_000;

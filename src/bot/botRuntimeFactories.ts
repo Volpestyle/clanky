@@ -1,18 +1,18 @@
 import type { ClankerBot } from "../bot.ts";
 import {
-  buildSubAgentSessionsRuntime as buildSubAgentSessionsRuntimeForAgentTasks,
-  runModelRequestedBrowserBrowse as runModelRequestedBrowserBrowseForAgentTasks,
-  runModelRequestedCodeTask as runModelRequestedCodeTaskForAgentTasks
+  buildSubAgentSessionsRuntime,
+  runModelRequestedBrowserBrowse,
+  runModelRequestedCodeTask
 } from "./agentTasks.ts";
 import {
-  buildBrowserBrowseContext as buildBrowserBrowseContextForBudgetTracking,
-  buildImageLookupContext as buildImageLookupContextForBudgetTracking,
-  buildMemoryLookupContext as buildMemoryLookupContextForBudgetTracking,
-  buildWebSearchContext as buildWebSearchContextForBudgetTracking,
-  getGifBudgetState as getGifBudgetStateForBudgetTracking,
-  getImageBudgetState as getImageBudgetStateForBudgetTracking,
-  getMediaGenerationCapabilities as getMediaGenerationCapabilitiesForBudgetTracking,
-  getVideoGenerationBudgetState as getVideoGenerationBudgetStateForBudgetTracking
+  buildBrowserBrowseContext,
+  buildImageLookupContext,
+  buildMemoryLookupContext,
+  buildWebSearchContext,
+  getGifBudgetState,
+  getImageBudgetState,
+  getMediaGenerationCapabilities,
+  getVideoGenerationBudgetState
 } from "./budgetTracking.ts";
 import type {
   AgentContext,
@@ -26,46 +26,46 @@ import type {
 import type { AutomationEngineRuntime } from "./automationEngine.ts";
 import type { InitiativeRuntime } from "./initiativeEngine.ts";
 import {
-  captionRecentHistoryImages as captionRecentHistoryImagesForImageAnalysis,
-  mergeImageInputs as mergeImageInputsForImageAnalysis,
-  runModelRequestedImageLookup as runModelRequestedImageLookupForImageAnalysis
+  captionRecentHistoryImages,
+  mergeImageInputs,
+  runModelRequestedImageLookup
 } from "./imageAnalysis.ts";
 import {
-  resolveMediaAttachment as resolveMediaAttachmentForMediaAttachment,
-  maybeAttachReplyGif as maybeAttachReplyGifForMediaAttachment,
-  maybeAttachGeneratedImage as maybeAttachGeneratedImageForMediaAttachment,
-  maybeAttachGeneratedVideo as maybeAttachGeneratedVideoForMediaAttachment
+  resolveMediaAttachment,
+  maybeAttachReplyGif,
+  maybeAttachGeneratedImage,
+  maybeAttachGeneratedVideo
 } from "./mediaAttachment.ts";
 import {
-  composeMessageContentForHistory as composeMessageContentForHistoryForMessageHistory,
-  getConversationHistoryForPrompt as getConversationHistoryForPromptForMessageHistory,
-  getImageInputs as getImageInputsForMessageHistory,
-  getVideoInputs as getVideoInputsForMessageHistory
+  composeMessageContentForHistory,
+  getConversationHistoryForPrompt,
+  getImageInputs,
+  getVideoInputs
 } from "./messageHistory.ts";
 import {
-  buildMediaMemoryFacts as buildMediaMemoryFactsForMemorySlice,
-  loadFactProfile as loadFactProfileForMemorySlice,
-  loadRelevantMemoryFacts as loadRelevantMemoryFactsForMemorySlice
+  buildMediaMemoryFacts,
+  loadFactProfile,
+  loadRelevantMemoryFacts
 } from "./memorySlice.ts";
 import {
-  isChannelAllowed as isChannelAllowedForPermissions,
-  isDiscoveryChannel as isDiscoveryChannelForPermissions,
-  isReplyChannel as isReplyChannelForPermissions,
-  isUserBlocked as isUserBlockedForPermissions
+  isChannelAllowed,
+  isDiscoveryChannel,
+  isReplyChannel,
+  isUserBlocked
 } from "./permissions.ts";
 import {
-  getReplyAddressSignal as getReplyAddressSignalForReplyAdmission,
-  shouldAttemptReplyDecision as shouldAttemptReplyDecisionForReplyAdmission
+  getReplyAddressSignal,
+  shouldAttemptReplyDecision
 } from "./replyAdmission.ts";
 import {
-  getVoiceScreenWatchCapability as getVoiceScreenWatchCapabilityForScreenShare,
-  maybeHandleScreenWatchIntent as maybeHandleScreenWatchIntentForScreenShare,
-  startVoiceScreenWatch as startVoiceScreenWatchForScreenShare,
+  getVoiceScreenWatchCapability,
+  maybeHandleScreenWatchIntent,
+  startVoiceScreenWatch,
 } from "./screenShare.ts";
 import type { ScreenShareRuntime } from "./screenShare.ts";
 import type { VoiceCoordinationRuntime } from "./voiceCoordination.ts";
 import {
-  composeVoiceOperationalMessage as composeVoiceOperationalMessageForVoiceCoordination
+  composeVoiceOperationalMessage
 } from "./voiceCoordination.ts";
 
 type ReplyPipelineFactoryDeps = {
@@ -114,13 +114,32 @@ function createMediaAttachmentContext(
 }
 
 function composeHistoryMessageContent(message: unknown, baseText?: string) {
-  return composeMessageContentForHistoryForMessageHistory(message as Parameters<
-    typeof composeMessageContentForHistoryForMessageHistory
+  return composeMessageContentForHistory(message as Parameters<
+    typeof composeMessageContentForHistory
   >[0], baseText);
 }
 
 function markSpoke(bot: ClankerBot) {
   bot.lastBotMessageAt = Date.now();
+}
+
+function resolveReplyAddressSignal(
+  bot: ClankerBot,
+  botContext: BotContext,
+  settings: unknown,
+  message: unknown,
+  recentMessages: Array<Record<string, unknown>> = []
+) {
+  return getReplyAddressSignal(
+    {
+      botUserId: botContext.botUserId,
+      isDirectlyAddressed: (resolvedSettings, resolvedMessage) =>
+        bot.isDirectlyAddressed(resolvedSettings, resolvedMessage)
+    },
+    settings as Parameters<typeof getReplyAddressSignal>[1],
+    message,
+    recentMessages
+  );
 }
 
 export function buildBotContext(bot: ClankerBot): BotContext {
@@ -145,7 +164,7 @@ export function buildScreenShareRuntime(bot: ClankerBot): ScreenShareRuntime {
     voiceSessionManager: bot.voiceSessionManager,
     screenShareSessionManager: bot.screenShareSessionManager,
     composeVoiceOperationalMessage: (payload) =>
-      composeVoiceOperationalMessageForVoiceCoordination(buildVoiceCoordinationRuntime(bot), {
+      composeVoiceOperationalMessage(buildVoiceCoordinationRuntime(bot), {
         settings: null,
         ...payload
       })
@@ -186,8 +205,8 @@ export function buildInitiativeRuntime(bot: ClankerBot): InitiativeRuntime {
     canTalkNow: (settings) => bot.canTalkNow(settings),
     hydrateRecentMessages: (channel, limit) => bot.hydrateRecentMessages(channel, limit),
     isChannelAllowed: (settings, channelId) =>
-      isChannelAllowedForPermissions(
-        settings as Parameters<typeof isChannelAllowedForPermissions>[0],
+      isChannelAllowed(
+        settings as Parameters<typeof isChannelAllowed>[0],
         String(channelId)
       ),
     isNonPrivateReplyEligibleChannel: (channel) => bot.isNonPrivateReplyEligibleChannel(channel),
@@ -198,45 +217,45 @@ export function buildInitiativeRuntime(bot: ClankerBot): InitiativeRuntime {
     composeMessageContentForHistory: (message, baseText) =>
       composeHistoryMessageContent(message, baseText),
     loadRelevantMemoryFacts: (payload) =>
-      loadRelevantMemoryFactsForMemorySlice(
+      loadRelevantMemoryFacts(
         botContext,
-        payload as Parameters<typeof loadRelevantMemoryFactsForMemorySlice>[1]
+        payload as Parameters<typeof loadRelevantMemoryFacts>[1]
       ),
-    buildMediaMemoryFacts: (payload) => buildMediaMemoryFactsForMemorySlice(payload),
+    buildMediaMemoryFacts: (payload) => buildMediaMemoryFacts(payload),
     getImageBudgetState: (settings) =>
-      getImageBudgetStateForBudgetTracking(
+      getImageBudgetState(
         budgetContext,
-        settings as Parameters<typeof getImageBudgetStateForBudgetTracking>[1]
+        settings as Parameters<typeof getImageBudgetState>[1]
       ),
     getVideoGenerationBudgetState: (settings) =>
-      getVideoGenerationBudgetStateForBudgetTracking(
+      getVideoGenerationBudgetState(
         budgetContext,
-        settings as Parameters<typeof getVideoGenerationBudgetStateForBudgetTracking>[1]
+        settings as Parameters<typeof getVideoGenerationBudgetState>[1]
       ),
     getGifBudgetState: (settings) =>
-      getGifBudgetStateForBudgetTracking(
+      getGifBudgetState(
         budgetContext,
-        settings as Parameters<typeof getGifBudgetStateForBudgetTracking>[1]
+        settings as Parameters<typeof getGifBudgetState>[1]
       ),
     getMediaGenerationCapabilities: (settings) =>
-      getMediaGenerationCapabilitiesForBudgetTracking(
+      getMediaGenerationCapabilities(
         budgetContext,
-        settings as Parameters<typeof getMediaGenerationCapabilitiesForBudgetTracking>[1]
+        settings as Parameters<typeof getMediaGenerationCapabilities>[1]
       ),
     resolveMediaAttachment: (payload) =>
-      resolveMediaAttachmentForMediaAttachment(
+      resolveMediaAttachment(
         mediaAttachmentContext,
-        payload as Parameters<typeof resolveMediaAttachmentForMediaAttachment>[1]
+        payload as Parameters<typeof resolveMediaAttachment>[1]
       ),
     buildBrowserBrowseContext: (settings) =>
-      buildBrowserBrowseContextForBudgetTracking(
+      buildBrowserBrowseContext(
         budgetContext,
-        settings as Parameters<typeof buildBrowserBrowseContextForBudgetTracking>[1]
+        settings as Parameters<typeof buildBrowserBrowseContext>[1]
       ),
     runModelRequestedBrowserBrowse: (payload) =>
-      runModelRequestedBrowserBrowseForAgentTasks(
+      runModelRequestedBrowserBrowse(
         createAgentContext(bot, botContext),
-        payload as Parameters<typeof runModelRequestedBrowserBrowseForAgentTasks>[1]
+        payload as Parameters<typeof runModelRequestedBrowserBrowse>[1]
       ),
     initiativeCycleRunning: bot.initiativeCycleRunning
   };
@@ -261,8 +280,8 @@ export function buildAutomationEngineRuntime(bot: ClankerBot): AutomationEngineR
     client: bot.client,
     search: bot.search,
     isChannelAllowed: (settings, channelId) =>
-      isChannelAllowedForPermissions(
-        settings as Parameters<typeof isChannelAllowedForPermissions>[0],
+      isChannelAllowed(
+        settings as Parameters<typeof isChannelAllowed>[0],
         String(channelId)
       ),
     canSendMessage: (maxPerHour) => bot.canSendMessage(maxPerHour),
@@ -273,37 +292,37 @@ export function buildAutomationEngineRuntime(bot: ClankerBot): AutomationEngineR
     },
     composeMessageContentForHistory: (message, baseText) =>
       composeHistoryMessageContent(message, baseText),
-    loadFactProfile: (payload) => loadFactProfileForMemorySlice(botContext, payload),
-    buildMediaMemoryFacts: (payload) => buildMediaMemoryFactsForMemorySlice(payload),
+    loadFactProfile: (payload) => loadFactProfile(botContext, payload),
+    buildMediaMemoryFacts: (payload) => buildMediaMemoryFacts(payload),
     buildMemoryLookupContext: (payload) =>
-      buildMemoryLookupContextForBudgetTracking(
+      buildMemoryLookupContext(
         budgetContext,
-        payload as Parameters<typeof buildMemoryLookupContextForBudgetTracking>[1]
+        payload as Parameters<typeof buildMemoryLookupContext>[1]
       ),
     getImageBudgetState: (settings) =>
-      getImageBudgetStateForBudgetTracking(
+      getImageBudgetState(
         budgetContext,
-        settings as Parameters<typeof getImageBudgetStateForBudgetTracking>[1]
+        settings as Parameters<typeof getImageBudgetState>[1]
       ),
     getVideoGenerationBudgetState: (settings) =>
-      getVideoGenerationBudgetStateForBudgetTracking(
+      getVideoGenerationBudgetState(
         budgetContext,
-        settings as Parameters<typeof getVideoGenerationBudgetStateForBudgetTracking>[1]
+        settings as Parameters<typeof getVideoGenerationBudgetState>[1]
       ),
     getGifBudgetState: (settings) =>
-      getGifBudgetStateForBudgetTracking(
+      getGifBudgetState(
         budgetContext,
-        settings as Parameters<typeof getGifBudgetStateForBudgetTracking>[1]
+        settings as Parameters<typeof getGifBudgetState>[1]
       ),
     getMediaGenerationCapabilities: (settings) =>
-      getMediaGenerationCapabilitiesForBudgetTracking(
+      getMediaGenerationCapabilities(
         budgetContext,
-        settings as Parameters<typeof getMediaGenerationCapabilitiesForBudgetTracking>[1]
+        settings as Parameters<typeof getMediaGenerationCapabilities>[1]
       ),
     resolveMediaAttachment: (payload) =>
-      resolveMediaAttachmentForMediaAttachment(
+      resolveMediaAttachment(
         mediaAttachmentContext,
-        payload as Parameters<typeof resolveMediaAttachmentForMediaAttachment>[1]
+        payload as Parameters<typeof resolveMediaAttachment>[1]
       ),
     automationCycleRunning: bot.automationCycleRunning
   };
@@ -330,23 +349,20 @@ export function buildQueueGatewayRuntime(bot: ClankerBot): QueueGatewayRuntime {
     replyQueuedMessageIds: bot.replyQueuedMessageIds,
     isStopping: bot.isStopping,
     isChannelAllowed: (settings, channelId) =>
-      isChannelAllowedForPermissions(
-        settings as Parameters<typeof isChannelAllowedForPermissions>[0],
+      isChannelAllowed(
+        settings as Parameters<typeof isChannelAllowed>[0],
         String(channelId)
       ),
     isUserBlocked: (settings, userId) =>
-      isUserBlockedForPermissions(
-        settings as Parameters<typeof isUserBlockedForPermissions>[0],
+      isUserBlocked(
+        settings as Parameters<typeof isUserBlocked>[0],
         String(userId)
       ),
     getReplyAddressSignal: (settings, message, recentMessages = []) =>
-      getReplyAddressSignalForReplyAdmission(
-        {
-          botUserId: botContext.botUserId,
-          isDirectlyAddressed: (resolvedSettings, resolvedMessage) =>
-            bot.isDirectlyAddressed(resolvedSettings, resolvedMessage)
-        },
-        settings as Parameters<typeof getReplyAddressSignalForReplyAdmission>[1],
+      resolveReplyAddressSignal(
+        bot,
+        botContext,
+        settings,
         message,
         recentMessages
       ),
@@ -425,6 +441,7 @@ export function buildReplyPipelineRuntime(
   const budgetContext = createBudgetContext(bot, botContext);
   const mediaAttachmentContext = createMediaAttachmentContext(bot, budgetContext);
   const agentContext = createAgentContext(bot, botContext);
+  const screenShareRuntime = buildScreenShareRuntime(bot);
 
   return {
     ...botContext,
@@ -436,55 +453,52 @@ export function buildReplyPipelineRuntime(
     dispatchBackgroundCodeTask: (payload) => bot.dispatchBackgroundCodeTask(payload),
     backgroundTaskRunner: bot.backgroundTaskRunner,
     getReplyAddressSignal: (settings, message, recentMessages = []) =>
-      getReplyAddressSignalForReplyAdmission(
-        {
-          botUserId: botContext.botUserId,
-          isDirectlyAddressed: (resolvedSettings, resolvedMessage) =>
-            bot.isDirectlyAddressed(resolvedSettings, resolvedMessage)
-        },
-        settings as Parameters<typeof getReplyAddressSignalForReplyAdmission>[1],
+      resolveReplyAddressSignal(
+        bot,
+        botContext,
+        settings,
         message,
         recentMessages
       ),
     isReplyChannel: (settings, channelId) =>
-      isReplyChannelForPermissions(
-        settings as Parameters<typeof isReplyChannelForPermissions>[0],
+      isReplyChannel(
+        settings as Parameters<typeof isReplyChannel>[0],
         String(channelId)
       ),
     isDiscoveryChannel: (settings, channelId) =>
-      isDiscoveryChannelForPermissions(
-        settings as Parameters<typeof isDiscoveryChannelForPermissions>[0],
+      isDiscoveryChannel(
+        settings as Parameters<typeof isDiscoveryChannel>[0],
         String(channelId)
       ),
     getReactionEmojiOptions: (guild) => bot.getReactionEmojiOptions(guild),
     shouldAttemptReplyDecision: (payload) =>
-      shouldAttemptReplyDecisionForReplyAdmission({
+      shouldAttemptReplyDecision({
         botUserId: bot.client.user?.id,
         ...payload,
         windowSize: unsolicitedReplyContextWindow
-      } as Parameters<typeof shouldAttemptReplyDecisionForReplyAdmission>[0]),
-    loadFactProfile: (payload) => loadFactProfileForMemorySlice(botContext, payload),
+      } as Parameters<typeof shouldAttemptReplyDecision>[0]),
+    loadFactProfile: (payload) => loadFactProfile(botContext, payload),
     getConversationHistoryForPrompt: (payload) =>
-      getConversationHistoryForPromptForMessageHistory(botContext, payload),
-    buildMediaMemoryFacts: (payload) => buildMediaMemoryFactsForMemorySlice(payload),
+      getConversationHistoryForPrompt(botContext, payload),
+    buildMediaMemoryFacts: (payload) => buildMediaMemoryFacts(payload),
     getImageInputs: (message) =>
-      getImageInputsForMessageHistory(message as Parameters<typeof getImageInputsForMessageHistory>[0]),
+      getImageInputs(message as Parameters<typeof getImageInputs>[0]),
     getVideoInputs: (message) =>
-      getVideoInputsForMessageHistory(message as Parameters<typeof getVideoInputsForMessageHistory>[0]),
-    getImageBudgetState: (settings) => getImageBudgetStateForBudgetTracking(budgetContext, settings),
+      getVideoInputs(message as Parameters<typeof getVideoInputs>[0]),
+    getImageBudgetState: (settings) => getImageBudgetState(budgetContext, settings),
     getVideoGenerationBudgetState: (settings) =>
-      getVideoGenerationBudgetStateForBudgetTracking(budgetContext, settings),
+      getVideoGenerationBudgetState(budgetContext, settings),
     getMediaGenerationCapabilities: (settings) =>
-      getMediaGenerationCapabilitiesForBudgetTracking(budgetContext, settings),
-    getGifBudgetState: (settings) => getGifBudgetStateForBudgetTracking(budgetContext, settings),
+      getMediaGenerationCapabilities(budgetContext, settings),
+    getGifBudgetState: (settings) => getGifBudgetState(budgetContext, settings),
     buildWebSearchContext: (settings, messageText) =>
-      buildWebSearchContextForBudgetTracking(budgetContext, settings, messageText),
+      buildWebSearchContext(budgetContext, settings, messageText),
     buildBrowserBrowseContext: (settings) =>
-      buildBrowserBrowseContextForBudgetTracking(budgetContext, settings),
-    buildMemoryLookupContext: (payload) => buildMemoryLookupContextForBudgetTracking(budgetContext, payload),
-    buildImageLookupContext: (payload) => buildImageLookupContextForBudgetTracking(budgetContext, payload),
+      buildBrowserBrowseContext(budgetContext, settings),
+    buildMemoryLookupContext: (payload) => buildMemoryLookupContext(budgetContext, payload),
+    buildImageLookupContext: (payload) => buildImageLookupContext(budgetContext, payload),
     captionRecentHistoryImages: (payload = {}) =>
-      captionRecentHistoryImagesForImageAnalysis(botContext, {
+      captionRecentHistoryImages(botContext, {
         imageCaptionCache: bot.imageCaptionCache,
         captionTimestamps,
         candidates: payload.candidates || [],
@@ -492,34 +506,34 @@ export function buildReplyPipelineRuntime(
         trace: payload.trace || null
       }),
     getVoiceScreenWatchCapability: (payload) =>
-      getVoiceScreenWatchCapabilityForScreenShare(buildScreenShareRuntime(bot), payload),
+      getVoiceScreenWatchCapability(screenShareRuntime, payload),
     getEmojiHints: (guild) => bot.getEmojiHints(guild),
     runModelRequestedBrowserBrowse: (payload) =>
-      runModelRequestedBrowserBrowseForAgentTasks(agentContext, payload),
-    runModelRequestedCodeTask: (payload) => runModelRequestedCodeTaskForAgentTasks(agentContext, payload),
-    buildSubAgentSessionsRuntime: () => buildSubAgentSessionsRuntimeForAgentTasks(agentContext),
+      runModelRequestedBrowserBrowse(agentContext, payload),
+    runModelRequestedCodeTask: (payload) => runModelRequestedCodeTask(agentContext, payload),
+    buildSubAgentSessionsRuntime: () => buildSubAgentSessionsRuntime(agentContext),
     runModelRequestedImageLookup: (payload) =>
-      runModelRequestedImageLookupForImageAnalysis({
+      runModelRequestedImageLookup({
         imageLookup: payload.imageLookup || {},
         query: payload.query || ""
       }),
-    mergeImageInputs: (payload) => mergeImageInputsForImageAnalysis(payload),
+    mergeImageInputs: (payload) => mergeImageInputs(payload),
     maybeHandleStructuredAutomationIntent: (payload) =>
       bot.maybeHandleStructuredAutomationIntent(payload),
     maybeApplyReplyReaction: (payload) => bot.maybeApplyReplyReaction(payload),
     logSkippedReply: (payload) => bot.logSkippedReply(payload),
     maybeHandleScreenWatchIntent: (payload) =>
-      maybeHandleScreenWatchIntentForScreenShare(buildScreenShareRuntime(bot), {
+      maybeHandleScreenWatchIntent(screenShareRuntime, {
         ...payload,
         settings: bot.store.getSettings()
       }),
     resolveMediaAttachment: (payload) =>
-      resolveMediaAttachmentForMediaAttachment(mediaAttachmentContext, payload),
-    maybeAttachReplyGif: (payload) => maybeAttachReplyGifForMediaAttachment(mediaAttachmentContext, payload),
+      resolveMediaAttachment(mediaAttachmentContext, payload),
+    maybeAttachReplyGif: (payload) => maybeAttachReplyGif(mediaAttachmentContext, payload),
     maybeAttachGeneratedImage: (payload) =>
-      maybeAttachGeneratedImageForMediaAttachment(mediaAttachmentContext, payload),
+      maybeAttachGeneratedImage(mediaAttachmentContext, payload),
     maybeAttachGeneratedVideo: (payload) =>
-      maybeAttachGeneratedVideoForMediaAttachment(mediaAttachmentContext, payload),
+      maybeAttachGeneratedVideo(mediaAttachmentContext, payload),
     getSimulatedTypingDelayMs: (minMs, jitterMs) => bot.getSimulatedTypingDelayMs(minMs, jitterMs),
     shouldSendAsReply: (payload) => bot.shouldSendAsReply(payload),
     markSpoke: () => {
@@ -536,28 +550,29 @@ export function buildVoiceReplyRuntime(bot: ClankerBot): VoiceReplyRuntime {
   const botContext = createBotContext(bot);
   const budgetContext = createBudgetContext(bot, botContext);
   const agentContext = createAgentContext(bot, botContext);
+  const screenShareRuntime = buildScreenShareRuntime(bot);
 
   return {
     ...botContext,
     search: bot.search,
     voiceSessionManager: bot.voiceSessionManager,
-    loadRelevantMemoryFacts: (payload) => loadRelevantMemoryFactsForMemorySlice(botContext, payload),
-    buildMediaMemoryFacts: (payload) => buildMediaMemoryFactsForMemorySlice(payload),
-    loadFactProfile: (payload) => loadFactProfileForMemorySlice(botContext, payload),
+    loadRelevantMemoryFacts: (payload) => loadRelevantMemoryFacts(botContext, payload),
+    buildMediaMemoryFacts: (payload) => buildMediaMemoryFacts(payload),
+    loadFactProfile: (payload) => loadFactProfile(botContext, payload),
     buildWebSearchContext: (settings, messageText) =>
-      buildWebSearchContextForBudgetTracking(budgetContext, settings, messageText),
+      buildWebSearchContext(budgetContext, settings, messageText),
     loadRecentConversationHistory: (payload) =>
-      getConversationHistoryForPromptForMessageHistory(botContext, payload),
+      getConversationHistoryForPrompt(botContext, payload),
     getVoiceScreenWatchCapability: (payload) =>
-      getVoiceScreenWatchCapabilityForScreenShare(buildScreenShareRuntime(bot), payload),
+      getVoiceScreenWatchCapability(screenShareRuntime, payload),
     startVoiceScreenWatch: (payload) =>
-      startVoiceScreenWatchForScreenShare(buildScreenShareRuntime(bot), payload),
+      startVoiceScreenWatch(screenShareRuntime, payload),
     runModelRequestedBrowserBrowse: (payload) =>
-      runModelRequestedBrowserBrowseForAgentTasks(agentContext, payload),
+      runModelRequestedBrowserBrowse(agentContext, payload),
     buildBrowserBrowseContext: (settings) =>
-      buildBrowserBrowseContextForBudgetTracking(budgetContext, settings),
-    runModelRequestedCodeTask: (payload) => runModelRequestedCodeTaskForAgentTasks(agentContext, payload),
-    buildSubAgentSessionsRuntime: () => buildSubAgentSessionsRuntimeForAgentTasks(agentContext),
+      buildBrowserBrowseContext(budgetContext, settings),
+    runModelRequestedCodeTask: (payload) => runModelRequestedCodeTask(agentContext, payload),
+    buildSubAgentSessionsRuntime: () => buildSubAgentSessionsRuntime(agentContext),
     dispatchBackgroundCodeTask: (payload) => bot.dispatchBackgroundCodeTask(payload),
     backgroundTaskRunner: bot.backgroundTaskRunner
   };

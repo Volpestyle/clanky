@@ -47,48 +47,48 @@ import {
 } from "./bot/replyPipelineShared.ts";
 import type { ReplyPerformanceSeed } from "./bot/replyPipelineShared.ts";
 import {
-  runModelRequestedBrowserBrowse as runModelRequestedBrowserBrowseForAgentTasks,
-  runModelRequestedCodeTask as runModelRequestedCodeTaskForAgentTasks,
-  buildSubAgentSessionsRuntime as buildSubAgentSessionsRuntimeForAgentTasks
+  runModelRequestedBrowserBrowse,
+  runModelRequestedCodeTask,
+  buildSubAgentSessionsRuntime
 } from "./bot/agentTasks.ts";
 import {
-  buildBrowserBrowseContext as buildBrowserBrowseContextForBudgetTracking,
+  buildBrowserBrowseContext,
 } from "./bot/budgetTracking.ts";
 import {
-  composeMessageContentForHistory as composeMessageContentForHistoryForMessageHistory,
-  recordReactionHistoryEvent as recordReactionHistoryEventForMessageHistory,
-  syncMessageSnapshot as syncMessageSnapshotForMessageHistory,
-  syncMessageSnapshotFromReaction as syncMessageSnapshotFromReactionForMessageHistory
+  composeMessageContentForHistory,
+  recordReactionHistoryEvent,
+  syncMessageSnapshot,
+  syncMessageSnapshotFromReaction
 } from "./bot/messageHistory.ts";
 import { generateTextCancelAcknowledgement } from "./bot/textCancelAcknowledgement.ts";
 import {
-  isChannelAllowed as isChannelAllowedForPermissions,
-  isDiscoveryChannel as isDiscoveryChannelForPermissions,
-  isReplyChannel as isReplyChannelForPermissions,
-  isUserBlocked as isUserBlockedForPermissions
+  isChannelAllowed,
+  isDiscoveryChannel,
+  isReplyChannel,
+  isUserBlocked
 } from "./bot/permissions.ts";
 import {
   evaluateReplyAdmissionDecision,
-  getReplyAddressSignal as getReplyAddressSignalForReplyAdmission,
-  hasStartupFollowupAfterMessage as hasStartupFollowupAfterMessageForReplyAdmission
+  getReplyAddressSignal,
+  hasStartupFollowupAfterMessage
 } from "./bot/replyAdmission.ts";
 import { buildRuntimeDecisionCorrelation } from "./services/runtimeCorrelation.ts";
-import { runStartupCatchup as runStartupCatchupForStartupCatchup } from "./bot/startupCatchup.ts";
+import { runStartupCatchup } from "./bot/startupCatchup.ts";
 import {
-  maybeRunInitiativeCycle as maybeRunInitiativeCycleForInitiativeEngine
+  maybeRunInitiativeCycle
 } from "./bot/initiativeEngine.ts";
 import {
-  getVoiceScreenWatchCapability as getVoiceScreenWatchCapabilityForScreenShare,
-  startVoiceScreenWatch as startVoiceScreenWatchForScreenShare,
+  getVoiceScreenWatchCapability,
+  startVoiceScreenWatch,
 } from "./bot/screenShare.ts";
 import type { ScreenShareSessionManagerLike } from "./bot/screenShare.ts";
 import {
-  composeVoiceOperationalMessage as composeVoiceOperationalMessageForVoiceCoordination,
-  generateVoiceTurnReply as generateVoiceTurnReplyForVoiceCoordination,
-  requestVoiceJoinFromDashboard as requestVoiceJoinFromDashboardForVoiceCoordination
+  composeVoiceOperationalMessage,
+  generateVoiceTurnReply,
+  requestVoiceJoinFromDashboard
 } from "./bot/voiceCoordination.ts";
 import {
-  maybeRunAutomationCycle as maybeRunAutomationCycleForAutomationEngine
+  maybeRunAutomationCycle
 } from "./bot/automationEngine.ts";
 import {
   dequeueReplyBurst,
@@ -389,25 +389,31 @@ export class ClankerBot {
       search: this.search,
       browserManager: this.browserManager,
       composeOperationalMessage: (payload) =>
-        composeVoiceOperationalMessageForVoiceCoordination(this.toVoiceCoordinationRuntime(), payload),
+        composeVoiceOperationalMessage(this.toVoiceCoordinationRuntime(), payload),
       generateVoiceTurn: (payload) =>
-        generateVoiceTurnReplyForVoiceCoordination(this.toVoiceCoordinationRuntime(), payload),
+        generateVoiceTurnReply(this.toVoiceCoordinationRuntime(), payload),
       activeReplies: this.activeReplies,
       streamDiscovery: this.streamDiscovery,
       getVoiceScreenWatchCapability: (payload) =>
-        getVoiceScreenWatchCapabilityForScreenShare(this.toScreenShareRuntime(), payload),
+        getVoiceScreenWatchCapability(this.toScreenShareRuntime(), payload),
       startVoiceScreenWatch: (payload) =>
-        startVoiceScreenWatchForScreenShare(this.toScreenShareRuntime(), payload)
+        startVoiceScreenWatch(this.toScreenShareRuntime(), payload)
     });
 
     // Wire code agent hooks onto VoiceSessionManager so code_task is
     // available on the voice_realtime surface (provider-native tool calls).
     const voiceAgentContext = this.toAgentContext();
     this.voiceSessionManager.runModelRequestedCodeTask = (payload) =>
-      runModelRequestedCodeTaskForAgentTasks(voiceAgentContext, payload);
+      runModelRequestedCodeTask(voiceAgentContext, {
+        ...payload,
+        settings: payload.settings || this.store.getSettings()
+      });
     this.voiceSessionManager.createCodeAgentSession = (opts) => {
-      const sessionsRuntime = buildSubAgentSessionsRuntimeForAgentTasks(voiceAgentContext);
-      return sessionsRuntime.createCodeSession(opts) ?? null;
+      const sessionsRuntime = buildSubAgentSessionsRuntime(voiceAgentContext);
+      return sessionsRuntime.createCodeSession({
+        ...opts,
+        settings: opts.settings || this.store.getSettings()
+      }) ?? null;
     };
     this.voiceSessionManager.dispatchBackgroundCodeTask = (payload) =>
       this.dispatchBackgroundCodeTask(payload);
@@ -497,7 +503,7 @@ export class ClankerBot {
     const browseInstruction = interaction.options.getString("task", true);
 
     try {
-      const browserContext = buildBrowserBrowseContextForBudgetTracking(
+      const browserContext = buildBrowserBrowseContext(
         this.toBudgetContext(),
         settings
       );
@@ -510,7 +516,7 @@ export class ClankerBot {
         return;
       }
 
-      const result = await runModelRequestedBrowserBrowseForAgentTasks(this.toAgentContext(), {
+      const result = await runModelRequestedBrowserBrowse(this.toAgentContext(), {
         settings,
         browserBrowse: browserContext,
         query: browseInstruction,
@@ -941,7 +947,7 @@ export class ClankerBot {
     }, 5 * 60_000);
 
     this.initiativeTimer = setInterval(() => {
-      maybeRunInitiativeCycleForInitiativeEngine(this.toInitiativeRuntime()).catch((error) => {
+      maybeRunInitiativeCycle(this.toInitiativeRuntime()).catch((error) => {
         this.store.logAction({
           kind: "bot_error",
           content: `initiative_cycle: ${String(error?.message || error)}`
@@ -949,7 +955,7 @@ export class ClankerBot {
       });
     }, INITIATIVE_TICK_MS);
     this.automationTimer = setInterval(() => {
-      maybeRunAutomationCycleForAutomationEngine(this.toAutomationEngineRuntime()).catch((error) => {
+      maybeRunAutomationCycle(this.toAutomationEngineRuntime()).catch((error) => {
         this.store.logAction({
           kind: "bot_error",
           content: `automation_cycle: ${String(error?.message || error)}`
@@ -1091,7 +1097,7 @@ export class ClankerBot {
     textChannelId = null,
     source = "dashboard_voice_tab"
   } = {}) {
-    return await requestVoiceJoinFromDashboardForVoiceCoordination(this.toVoiceCoordinationRuntime(), {
+    return await requestVoiceJoinFromDashboard(this.toVoiceCoordinationRuntime(), {
       guildId,
       requesterUserId,
       textChannelId,
@@ -1501,8 +1507,8 @@ export class ClankerBot {
             authorId: botUserId,
             authorName: getBotName(settings),
             isBot: true,
-            content: composeMessageContentForHistoryForMessageHistory(
-              sent as Parameters<typeof composeMessageContentForHistoryForMessageHistory>[0],
+            content: composeMessageContentForHistory(
+              sent as Parameters<typeof composeMessageContentForHistory>[0],
               acknowledgement
             ),
             referencedMessageId: message.id
@@ -1530,8 +1536,8 @@ export class ClankerBot {
     const settings = this.store.getSettings();
 
     const text = String(message.content || "").trim();
-    const recordedContent = composeMessageContentForHistoryForMessageHistory(
-      message as Parameters<typeof composeMessageContentForHistoryForMessageHistory>[0],
+    const recordedContent = composeMessageContentForHistory(
+      message as Parameters<typeof composeMessageContentForHistory>[0],
       text
     );
     this.store.recordMessage({
@@ -1547,8 +1553,8 @@ export class ClankerBot {
     });
 
     if (String(message.author.id) === String(this.client.user?.id || "")) return;
-    if (!isChannelAllowedForPermissions(settings, String(message.channelId))) return;
-    if (isUserBlockedForPermissions(settings, String(message.author.id))) return;
+    if (!isChannelAllowed(settings, String(message.channelId))) return;
+    if (isUserBlocked(settings, String(message.author.id))) return;
 
     if (isCancelIntent(text)) {
       const replyScopeKey = buildTextReplyScopeKey({
@@ -1634,7 +1640,7 @@ export class ClankerBot {
       message.channelId,
       memorySettings.promptSlice.maxRecentMessages
     );
-    const addressSignal = await getReplyAddressSignalForReplyAdmission(
+    const addressSignal = await getReplyAddressSignal(
       {
         botUserId: String(this.client.user?.id || "").trim(),
         isDirectlyAddressed: (resolvedSettings, resolvedMessage) =>
@@ -1644,13 +1650,13 @@ export class ClankerBot {
       message,
       recentMessages
     );
-    const isReplyChannel = isReplyChannelForPermissions(settings, String(message.channelId));
+    const replyChannelEligible = isReplyChannel(settings, String(message.channelId));
     const replyAdmissionDecision = evaluateReplyAdmissionDecision({
       botUserId: this.client.user?.id,
       settings,
       recentMessages,
       addressSignal,
-      isReplyChannel,
+      isReplyChannel: replyChannelEligible,
       triggerMessageId: message.id,
       triggerAuthorId: message.author?.id || null,
       triggerReferenceMessageId: message.reference?.messageId || null,
@@ -1735,20 +1741,20 @@ export class ClankerBot {
     let targetChannel = null;
     for (const channelId of greetingCandidateIds) {
       const channel = this.client.channels.cache.get(channelId);
-      if (isSendableChannel(channel) && isChannelAllowedForPermissions(settings, channelId)) {
+      if (isSendableChannel(channel) && isChannelAllowed(settings, channelId)) {
         targetChannel = channel;
         break;
       }
     }
     if (!targetChannel && member.guild.systemChannelId) {
       const sysChannel = this.client.channels.cache.get(member.guild.systemChannelId);
-      if (isSendableChannel(sysChannel) && isChannelAllowedForPermissions(settings, member.guild.systemChannelId)) {
+      if (isSendableChannel(sysChannel) && isChannelAllowed(settings, member.guild.systemChannelId)) {
         targetChannel = sysChannel;
       }
     }
     if (!targetChannel) {
       const fallback = member.guild.channels.cache
-        .filter((ch) => isSendableChannel(ch) && isChannelAllowedForPermissions(settings, String(ch.id)))
+        .filter((ch) => isSendableChannel(ch) && isChannelAllowed(settings, String(ch.id)))
         .first();
       if (fallback && isSendableChannel(fallback)) {
         targetChannel = fallback;
@@ -1819,13 +1825,13 @@ export class ClankerBot {
       threshold: 0.62,
       confidenceSource: "fallback" as const
     };
-    const isReplyChannel = isReplyChannelForPermissions(settings, String(targetChannel.id));
+    const replyChannelEligible = isReplyChannel(settings, String(targetChannel.id));
     const replyAdmissionDecision = evaluateReplyAdmissionDecision({
       botUserId: this.client.user?.id,
       settings,
       recentMessages,
       addressSignal,
-      isReplyChannel,
+      isReplyChannel: replyChannelEligible,
       triggerMessageId: syntheticId,
       triggerAuthorId: member.user.id,
       triggerReferenceMessageId: null,
@@ -1899,8 +1905,8 @@ export class ClankerBot {
         store: this.store,
         client: this.client,
         isChannelAllowed: (runtimeSettings, channelId) =>
-          isChannelAllowedForPermissions(runtimeSettings, String(channelId)),
-        maybeRunAutomationCycle: () => maybeRunAutomationCycleForAutomationEngine(this.toAutomationEngineRuntime())
+          isChannelAllowed(runtimeSettings, String(channelId)),
+        maybeRunAutomationCycle: () => maybeRunAutomationCycle(this.toAutomationEngineRuntime())
       },
       {
         message,
@@ -1958,8 +1964,8 @@ export class ClankerBot {
       authorId: this.client.user.id,
       authorName: getBotName(settings),
       isBot: true,
-      content: composeMessageContentForHistoryForMessageHistory(
-        sent as Parameters<typeof composeMessageContentForHistoryForMessageHistory>[0],
+      content: composeMessageContentForHistory(
+        sent as Parameters<typeof composeMessageContentForHistory>[0],
         finalText
       ),
       referencedMessageId: message.id
@@ -2001,8 +2007,8 @@ export class ClankerBot {
         triggerMessageIds,
         source,
         sendAsReply: true,
-        canStandalonePost: isReplyChannelForPermissions(settings, String(message.channelId))
-          || isDiscoveryChannelForPermissions(settings, String(message.channelId)),
+        canStandalonePost: isReplyChannel(settings, String(message.channelId))
+          || isDiscoveryChannel(settings, String(message.channelId)),
         addressing,
         replyPrompts,
         automationControl: resultMetadata || null,
@@ -2194,17 +2200,17 @@ export class ClankerBot {
     this.startupTasksRan = true;
 
     const settings = this.store.getSettings();
-    await runStartupCatchupForStartupCatchup(
+    await runStartupCatchup(
       {
         botUserId: String(this.client.user?.id || "").trim(),
         store: this.store,
         getStartupScanChannels: (runtimeSettings) => this.getStartupScanChannels(runtimeSettings),
         hydrateRecentMessages: (channel, limit) => this.hydrateRecentMessages(channel, limit),
         isChannelAllowed: (runtimeSettings, channelId) =>
-          isChannelAllowedForPermissions(runtimeSettings, String(channelId)),
-        isUserBlocked: (runtimeSettings, userId) => isUserBlockedForPermissions(runtimeSettings, String(userId)),
+          isChannelAllowed(runtimeSettings, String(channelId)),
+        isUserBlocked: (runtimeSettings, userId) => isUserBlocked(runtimeSettings, String(userId)),
         getReplyAddressSignal: (runtimeSettings, message, recentMessages) =>
-          getReplyAddressSignalForReplyAdmission(
+          getReplyAddressSignal(
             {
               botUserId: this.toBotContext().botUserId,
               isDirectlyAddressed: (resolvedSettings, resolvedMessage) =>
@@ -2215,7 +2221,7 @@ export class ClankerBot {
             recentMessages
           ),
         hasStartupFollowupAfterMessage: (payload) =>
-          hasStartupFollowupAfterMessageForReplyAdmission({
+          hasStartupFollowupAfterMessage({
             botUserId: this.client.user?.id,
             ...payload
           }),
@@ -2223,10 +2229,10 @@ export class ClankerBot {
       },
       settings
     );
-    await maybeRunAutomationCycleForAutomationEngine(this.toAutomationEngineRuntime());
+    await maybeRunAutomationCycle(this.toAutomationEngineRuntime());
 
     // Run an ambient initiative cycle on startup to catch unanswered conversations
-    await maybeRunInitiativeCycleForInitiativeEngine(this.toInitiativeRuntime());
+    await maybeRunInitiativeCycle(this.toInitiativeRuntime());
 
     // Catch up on any missed reflections from past days
     const startupSettings = this.store.getSettings();
@@ -2290,7 +2296,7 @@ export class ClankerBot {
 
       for (const channel of guildChannels) {
         if (seen.has(channel.id)) continue;
-        if (!isChannelAllowedForPermissions(settings, String(channel.id))) continue;
+        if (!isChannelAllowed(settings, String(channel.id))) continue;
         seen.add(channel.id);
         channels.push(channel);
       }
@@ -2313,8 +2319,8 @@ export class ClankerBot {
           authorId: message.author?.id || "unknown",
           authorName: message.member?.displayName || message.author?.username || "unknown",
           isBot: Boolean(message.author?.bot),
-          content: composeMessageContentForHistoryForMessageHistory(
-            message as Parameters<typeof composeMessageContentForHistoryForMessageHistory>[0],
+          content: composeMessageContentForHistory(
+            message as Parameters<typeof composeMessageContentForHistory>[0],
             String(message.content || "").trim()
           ),
           referencedMessageId: message.reference?.messageId
@@ -2340,15 +2346,15 @@ export class ClankerBot {
   }
 
   async syncMessageSnapshotFromReaction(reaction) {
-    await syncMessageSnapshotFromReactionForMessageHistory(this.toBotContext(), reaction);
+    await syncMessageSnapshotFromReaction(this.toBotContext(), reaction);
   }
 
   async recordReactionHistoryEvent(reaction, user) {
-    await recordReactionHistoryEventForMessageHistory(this.toBotContext(), reaction, user);
+    await recordReactionHistoryEvent(this.toBotContext(), reaction, user);
   }
 
   async syncMessageSnapshot(message) {
-    await syncMessageSnapshotForMessageHistory(this.toBotContext(), message);
+    await syncMessageSnapshot(this.toBotContext(), message);
   }
 
 }

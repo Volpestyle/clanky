@@ -29,14 +29,49 @@ import type { BackgroundTask } from "../agents/backgroundTaskRunner.ts";
 
 type BackgroundTaskSnapshot = BackgroundTask;
 
+// Default text budget for free-form tool queries unless a tool has stricter needs.
 const MAX_TOOL_QUERY_LEN = 220;
+
+// Research/web tool argument guards.
 const MAX_WEB_SCRAPE_URL_LEN = 2000;
 const MAX_WEB_SCRAPE_MAX_CHARS = 24000;
 const MAX_WEB_SCRAPE_DEFAULT_CHARS = 8000;
 const MAX_BROWSER_BROWSE_QUERY_LEN = 500;
+
+// Agent execution/request payload guards.
 const MAX_CODE_TASK_LEN = 2000;
+
+// Voice/music/soundboard-specific payload bounds.
 const MAX_VOICE_MUSIC_QUERY_LEN = 180;
 const MAX_SCREEN_WATCH_TARGET_LEN = 120;
+const MAX_SOUNDBOARD_REF_LEN = 180;
+const MAX_SOUNDBOARD_REF_COUNT = 10;
+const MAX_VIDEO_LOOKUP_REF_COUNT = 8;
+
+// Background task summaries shown inline in reply-tool responses.
+const MAX_BACKGROUND_TASK_EVENT_COUNT = 5;
+const MAX_BACKGROUND_TASK_RESULT_PREVIEW_CHARS = 500;
+
+// Music tool input clamps and defaults.
+const MAX_MUSIC_PLATFORM_LEN = 32;
+const MAX_MUSIC_TRACK_IDS = 12;
+const MIN_MUSIC_RESULT_COUNT = 1;
+const MAX_MUSIC_RESULT_COUNT = 10;
+const DEFAULT_MUSIC_RESULT_COUNT = 5;
+
+// Conversation search limits used by the memory/reply tooling path.
+const MIN_CONVERSATION_TOP_K = 1;
+const MAX_CONVERSATION_TOP_K = 4;
+const DEFAULT_CONVERSATION_TOP_K = 3;
+const MIN_CONVERSATION_MAX_AGE_HOURS = 1;
+const DEFAULT_CONVERSATION_MAX_AGE_HOURS = 24 * 7;
+const MAX_CONVERSATION_MAX_AGE_HOURS = 24 * 30;
+const CONVERSATION_WINDOW_BEFORE_TURNS = 1;
+const CONVERSATION_WINDOW_AFTER_TURNS = 1;
+
+// Minimum scrape content budget and URL safety cap shared with video lookup.
+const MIN_WEB_SCRAPE_MAX_CHARS = 350;
+const MAX_VIDEO_CONTEXT_URL_LEN = 2000;
 
 function appendBrowserScreenshotNote(content: string, imageInputs: ImageInput[] | undefined) {
   const imageCount = Array.isArray(imageInputs) ? imageInputs.length : 0;
@@ -437,8 +472,14 @@ async function executeConversationSearch(
 
   const scope = String(input?.scope || "channel").trim().toLowerCase();
   const searchChannelId = scope === "guild" ? null : context.channelId;
-  const topK = Math.max(1, Math.min(4, Math.floor(Number(input?.top_k) || 3)));
-  const maxAgeHours = Math.max(1, Math.min(24 * 30, Math.floor(Number(input?.max_age_hours) || 24 * 7)));
+  const topK = Math.max(
+    MIN_CONVERSATION_TOP_K,
+    Math.min(MAX_CONVERSATION_TOP_K, Math.floor(Number(input?.top_k) || DEFAULT_CONVERSATION_TOP_K))
+  );
+  const maxAgeHours = Math.max(
+    MIN_CONVERSATION_MAX_AGE_HOURS,
+    Math.min(MAX_CONVERSATION_MAX_AGE_HOURS, Math.floor(Number(input?.max_age_hours) || DEFAULT_CONVERSATION_MAX_AGE_HOURS))
+  );
 
   try {
     const windows = runtime.memory?.searchConversationHistory
@@ -453,8 +494,8 @@ async function executeConversationSearch(
         },
         limit: topK,
         maxAgeHours,
-        before: 1,
-        after: 1
+        before: CONVERSATION_WINDOW_BEFORE_TURNS,
+        after: CONVERSATION_WINDOW_AFTER_TURNS
       })
       : runtime.store.searchConversationWindows({
         guildId: context.guildId,
@@ -462,8 +503,8 @@ async function executeConversationSearch(
         queryText: query,
         limit: topK,
         maxAgeHours,
-        before: 1,
-        after: 1
+        before: CONVERSATION_WINDOW_BEFORE_TURNS,
+        after: CONVERSATION_WINDOW_AFTER_TURNS
       });
     if (!Array.isArray(windows) || !windows.length) {
       return { content: `No conversation history found for: "${query}"` };
@@ -558,7 +599,7 @@ async function executeWebScrape(
 
   const maxChars = Math.min(
     MAX_WEB_SCRAPE_MAX_CHARS,
-    Math.max(350, Math.floor(Number(input?.max_chars) || MAX_WEB_SCRAPE_DEFAULT_CHARS))
+    Math.max(MIN_WEB_SCRAPE_MAX_CHARS, Math.floor(Number(input?.max_chars) || MAX_WEB_SCRAPE_DEFAULT_CHARS))
   );
 
   try {
@@ -577,8 +618,6 @@ async function executeWebScrape(
     };
   }
 }
-
-const MAX_VIDEO_CONTEXT_URL_LEN = 2000;
 
 function normalizeVideoLookupRef(value: unknown) {
   return String(value || "")
@@ -613,7 +652,7 @@ function listAvailableVideoRefs(context: ReplyToolContext) {
   return Object.keys(refs)
     .map((key) => String(key || "").trim())
     .filter(Boolean)
-    .slice(0, 8);
+    .slice(0, MAX_VIDEO_LOOKUP_REF_COUNT);
 }
 
 async function executeVideoContext(
@@ -1046,7 +1085,7 @@ async function executeShareBrowserSession(
     return { content: "Browser session sharing is not available.", isError: true };
   }
 
-  const sessionId = String(input?.session_id || "").trim().slice(0, 220);
+  const sessionId = String(input?.session_id || "").trim().slice(0, MAX_TOOL_QUERY_LEN);
   if (!sessionId) {
     return { content: "Missing browser session_id.", isError: true };
   }
@@ -1092,9 +1131,9 @@ async function executePlaySoundboard(
 
   const refs = Array.isArray(input?.refs)
     ? input.refs
-      .map((entry) => String(entry || "").trim().slice(0, 180))
+      .map((entry) => String(entry || "").trim().slice(0, MAX_SOUNDBOARD_REF_LEN))
       .filter(Boolean)
-      .slice(0, 10)
+      .slice(0, MAX_SOUNDBOARD_REF_COUNT)
     : [];
   if (!refs.length) {
     return { content: "No soundboard refs provided.", isError: true };
@@ -1186,7 +1225,7 @@ function formatBackgroundTaskStatus(task: BackgroundTaskSnapshot): string {
   if (task.progress.turnNumber > 1) {
     lines.push(`Turn: ${task.progress.turnNumber}${task.progress.totalTurns ? ` of ${task.progress.totalTurns}` : ""}`);
   }
-  const recentEvents = task.progress.events.slice(-5);
+  const recentEvents = task.progress.events.slice(-MAX_BACKGROUND_TASK_EVENT_COUNT);
   if (recentEvents.length > 0) {
     lines.push("Recent activity:");
     for (const event of recentEvents) {
@@ -1194,7 +1233,7 @@ function formatBackgroundTaskStatus(task: BackgroundTaskSnapshot): string {
     }
   }
   if (task.result?.text) {
-    const preview = task.result.text.trim().slice(0, 500);
+    const preview = task.result.text.trim().slice(0, MAX_BACKGROUND_TASK_RESULT_PREVIEW_CHARS);
     lines.push(`\nResult preview:\n${preview}`);
   }
   if (task.errorMessage) {
@@ -1435,7 +1474,10 @@ async function executeVoiceTool(
       case "music_search": {
         const query = String(input?.query || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN);
         if (!query) return { content: "Failed: query was empty. You must provide the song/artist name in the query argument.", isError: true };
-        const limit = Math.max(1, Math.min(10, Math.floor(Number(input?.max_results) || 5)));
+        const limit = Math.max(
+          MIN_MUSIC_RESULT_COUNT,
+          Math.min(MAX_MUSIC_RESULT_COUNT, Math.floor(Number(input?.max_results) || DEFAULT_MUSIC_RESULT_COUNT))
+        );
         throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicSearch(query, limit);
         break;
@@ -1443,7 +1485,7 @@ async function executeVoiceTool(
       case "music_play": {
         const query = String(input?.query || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN);
         const selectionId = String(input?.selection_id || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN) || null;
-        const platform = String(input?.platform || "").trim().slice(0, 32) || null;
+        const platform = String(input?.platform || "").trim().slice(0, MAX_MUSIC_PLATFORM_LEN) || null;
         if (!query && !selectionId) {
           return { content: "Failed: query was empty. You must provide the song/artist name in the query argument.", isError: true };
         }
@@ -1454,7 +1496,10 @@ async function executeVoiceTool(
       case "video_search": {
         const query = String(input?.query || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN);
         if (!query) return { content: "Failed: query was empty. You must provide the video/topic in the query argument.", isError: true };
-        const limit = Math.max(1, Math.min(10, Math.floor(Number(input?.max_results) || 5)));
+        const limit = Math.max(
+          MIN_MUSIC_RESULT_COUNT,
+          Math.min(MAX_MUSIC_RESULT_COUNT, Math.floor(Number(input?.max_results) || DEFAULT_MUSIC_RESULT_COUNT))
+        );
         throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.videoSearch(query, limit);
         break;
@@ -1471,12 +1516,15 @@ async function executeVoiceTool(
       }
       case "music_queue_add": {
         const tracks = Array.isArray(input?.tracks)
-          ? (input.tracks as string[]).map((t) => String(t).trim()).filter(Boolean).slice(0, 12)
+          ? (input.tracks as string[]).map((t) => String(t).trim()).filter(Boolean).slice(0, MAX_MUSIC_TRACK_IDS)
           : [];
         const query = String(input?.query || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN);
         const selectionId = String(input?.selection_id || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN) || null;
-        const platform = String(input?.platform || "").trim().slice(0, 32) || null;
-        const maxResults = Math.max(1, Math.min(10, Math.floor(Number(input?.max_results) || 5)));
+        const platform = String(input?.platform || "").trim().slice(0, MAX_MUSIC_PLATFORM_LEN) || null;
+        const maxResults = Math.max(
+          MIN_MUSIC_RESULT_COUNT,
+          Math.min(MAX_MUSIC_RESULT_COUNT, Math.floor(Number(input?.max_results) || DEFAULT_MUSIC_RESULT_COUNT))
+        );
         if (!tracks.length && !query && !selectionId) {
           return { content: "No queue target provided. Use query, selection_id, or track IDs.", isError: true };
         }
@@ -1501,12 +1549,15 @@ async function executeVoiceTool(
       }
       case "music_queue_next": {
         const tracks = Array.isArray(input?.tracks)
-          ? (input.tracks as string[]).map((t) => String(t).trim()).filter(Boolean).slice(0, 12)
+          ? (input.tracks as string[]).map((t) => String(t).trim()).filter(Boolean).slice(0, MAX_MUSIC_TRACK_IDS)
           : [];
         const query = String(input?.query || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN);
         const selectionId = String(input?.selection_id || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN) || null;
-        const platform = String(input?.platform || "").trim().slice(0, 32) || null;
-        const maxResults = Math.max(1, Math.min(10, Math.floor(Number(input?.max_results) || 5)));
+        const platform = String(input?.platform || "").trim().slice(0, MAX_MUSIC_PLATFORM_LEN) || null;
+        const maxResults = Math.max(
+          MIN_MUSIC_RESULT_COUNT,
+          Math.min(MAX_MUSIC_RESULT_COUNT, Math.floor(Number(input?.max_results) || DEFAULT_MUSIC_RESULT_COUNT))
+        );
         if (!tracks.length && !query && !selectionId) {
           return { content: "No queue target provided. Use query, selection_id, or track IDs.", isError: true };
         }

@@ -18,7 +18,7 @@ import {
   ensureSessionMusicState as ensureSessionMusicStateRuntime,
   ensureToolMusicQueueState as ensureToolMusicQueueStateRuntime,
   getMusicDisambiguationPromptContext as getMusicDisambiguationPromptContextRuntime,
-  haltSessionOutputForMusicPlayback as haltSessionOutputForMusicPlaybackRuntime,
+  haltSessionOutputForMusicPlayback,
   handleMusicSlashCommand as handleMusicSlashCommandRuntime,
   getMusicPhase as getMusicPhaseRuntime,
   setMusicPhase as setMusicPhaseRuntime,
@@ -105,7 +105,7 @@ import {
   annotateLatestVoiceTurnAddressing as annotateLatestVoiceTurnAddressingModule,
   buildVoiceAddressingState as buildVoiceAddressingStateModule,
   findLatestVoiceTurnIndex as findLatestVoiceTurnIndexModule,
-  hasBotNameCueForTranscript as hasBotNameCueForTranscriptModule,
+  hasBotNameCueForTranscript,
   mergeVoiceAddressingAnnotation as mergeVoiceAddressingAnnotationModule,
   normalizeVoiceAddressingAnnotation as normalizeVoiceAddressingAnnotationModule,
   resolveVoiceDirectAddressSignal
@@ -130,7 +130,7 @@ import {
   completePendingMusicDisambiguationSelection as completePendingMusicDisambiguationSelectionModule,
   describeMusicPromptAction as describeMusicPromptActionModule,
   getMusicPromptContext as getMusicPromptContextModule,
-  hasPendingMusicDisambiguationForUser as hasPendingMusicDisambiguationForUserModule,
+  hasPendingMusicDisambiguationForUser,
   isMusicDisambiguationResolutionTurn as isMusicDisambiguationResolutionTurnModule,
   maybeHandlePendingMusicDisambiguationTurn as maybeHandlePendingMusicDisambiguationTurnModule
 } from "./voiceMusicDisambiguation.ts";
@@ -942,14 +942,14 @@ export class VoiceSessionManager {
   }
 
   hasBotNameCueForTranscript({ transcript = "", settings = null } = {}) {
-    return hasBotNameCueForTranscriptModule({
+    return hasBotNameCueForTranscript({
       transcript,
       settings: settings || this.store.getSettings()
     });
   }
 
   haltSessionOutputForMusicPlayback(session, reason = "music_playback_started") {
-    return haltSessionOutputForMusicPlaybackRuntime(this, session, reason);
+    return haltSessionOutputForMusicPlayback(this, session, reason);
   }
 
   async requestPlayMusic({
@@ -1069,7 +1069,7 @@ export class VoiceSessionManager {
   }
 
   hasPendingMusicDisambiguationForUser(session, userId = null) {
-    return hasPendingMusicDisambiguationForUserModule(this, session, userId);
+    return hasPendingMusicDisambiguationForUser(this, session, userId);
   }
 
   isMusicDisambiguationResolutionTurn(session, userId = null, transcript = "") {

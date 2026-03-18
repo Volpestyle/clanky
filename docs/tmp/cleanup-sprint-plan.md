@@ -4,6 +4,17 @@ Focused sprint to address over-engineering, code duplication, dead code, and mai
 
 Organized into phases by dependency order and risk. Each phase is independently shippable.
 
+## Status Update (2026-03-18)
+
+- Completed in this pass:
+  - **Phase 4.1** import alias cleanup in `src/bot.ts`, `src/bot/botRuntimeFactories.ts`, `src/bot/replyPipeline.ts`, and `src/voice/voiceSessionManager.ts`
+  - **Phase 7.3** runtime-factory simplification in `src/bot/botRuntimeFactories.ts` (shared reply-address helper + reduced repeated runtime construction)
+  - **Phase 7.4** removed the permissive index signatures from `VoiceSession` and `VoiceToolRuntimeSessionLike`
+  - **Phase 7.5** extracted named constants for remaining bare numeric literals in the targeted memory/tooling/store/video modules
+- **Phase 7.2** completed:
+  - Decomposed `VoiceDebugger.tsx` by extracting `TurnReconstructor`, `AnomalyDetection`, `FlightLog`, and shared debugger types to `dashboard/src/components/voiceDebugger/`
+  - Decomposed `VoiceMonitor.tsx` into focused modules under `dashboard/src/components/voiceMonitor/` (`SessionCard`, `ParticipantList`, `MusicDetail`, `StreamWatchDetail`, `LatencyPanel`, `McpPanel`, `ToolCallLog`, `ConversationContext`, `PromptStateViewer`, and shared helpers)
+
 > **Sequencing constraint:** The [Async Code Task Design](../capabilities/async-code-task-design.md) modifies all four agent session classes, `replyTools.ts`, `bot.ts`, `SubAgentSession`, and adds a new `BackgroundTaskRunner`. Phases 1-5 and 7.1 of this cleanup should land **before** async dispatch work begins, so the new code doesn't perpetuate the duplication and patterns we're removing. See [Sequencing with Async Code Task Work](#sequencing-with-async-code-task-work) at the end.
 
 ---

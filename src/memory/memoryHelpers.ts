@@ -2,6 +2,7 @@ import { clamp01 } from "../normalization/numbers.ts";
 import { normalizeWhitespaceText } from "../normalization/text.ts";
 import { normalizeInlineText, parseMemoryExtractionJson } from "../llm/llmHelpers.ts";
 
+// Reserved subjects for shared lore and bot-self facts in memory tables.
 export const LORE_SUBJECT = "__lore__";
 export const SELF_SUBJECT = "__self__";
 type DirectiveScope = "lore" | "self" | "user";
@@ -23,6 +24,7 @@ const FACT_TYPE_LABELS = {
   behavioral: "Behavioral"
 };
 
+// Character budgets used when normalizing reflection output and embedding payloads.
 const MEMORY_FACT_MAX_CHARS = 190;
 const MEMORY_EVIDENCE_MAX_CHARS = 220;
 const FACT_EMBEDDING_FACT_MAX_CHARS = 220;
@@ -30,7 +32,11 @@ const FACT_EMBEDDING_EVIDENCE_MAX_CHARS = 180;
 const MEMORY_LINE_MAX_CHARS = 180;
 const MEMORY_RECENCY_HALF_LIFE_DAYS = 45;
 const HIGHLIGHT_ENTRY_MAX_CHARS = 220;
+const QUERY_EMBEDDING_MAX_CHARS = 420;
+const DAILY_ENTRY_CONTENT_MAX_CHARS = 640;
+const SANITIZE_INLINE_DEFAULT_MAX_LEN = 120;
 
+// Fact types accepted by normalization; unrecognized types become "other".
 const ALLOWED_FACT_TYPES = new Set(["preference", "profile", "relationship", "project", "guidance", "behavioral", "other"]);
 // English-only fallback heuristics for filtering obvious instruction-like memory writes.
 // These are guardrails, not the primary memory decision-maker.
@@ -177,6 +183,7 @@ export function computeRecencyScore(createdAtIso) {
   return 1 / (1 + ageDays / MEMORY_RECENCY_HALF_LIFE_DAYS);
 }
 
+// Guidance/behavioral facts are explicit directives, so we never age them down.
 const DECAY_EXEMPT_FACT_TYPES = new Set(["guidance", "behavioral"]);
 
 export function computeTemporalDecayMultiplier({
@@ -386,7 +393,9 @@ function parseDailyEntryLine(line) {
   };
 }
 
+// Scope fragment format appended by the ingest pipeline in daily markdown lines.
 const SCOPE_FRAGMENT_RE = /\[guild:(\S+)\s+channel:(\S+)\s+message:(\S+)(?:\s+(voice))?\]/;
+// Author IDs are serialized as trailing "(123456789)" in daily lines.
 const AUTHOR_ID_RE = /\((\d+)\)$/;
 
 export function parseDailyEntryLineWithScope(line) {
@@ -522,7 +531,7 @@ export function normalizeQueryEmbeddingText(text) {
   return String(text || "")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 420);
+    .slice(0, QUERY_EMBEDDING_MAX_CHARS);
 }
 
 export function cleanDailyEntryContent(content) {
@@ -532,10 +541,10 @@ export function cleanDailyEntryContent(content) {
     .trim();
   if (!text) return "";
   if (text.length < 2) return "";
-  return text.slice(0, 640);
+  return text.slice(0, DAILY_ENTRY_CONTENT_MAX_CHARS);
 }
 
-export function sanitizeInline(value, maxLen = 120) {
+export function sanitizeInline(value, maxLen = SANITIZE_INLINE_DEFAULT_MAX_LEN) {
   return normalizeWhitespaceText(value, {
     maxLen,
     replacements: [{ pattern: /[\r\n|]/g, replacement: " " }]

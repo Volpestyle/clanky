@@ -37,24 +37,37 @@ import { runDailyReflection } from "./dailyReflection.ts";
 import { runMicroReflection } from "./microReflection.ts";
 import type { MemoryFactRow } from "../store/storeMemory.ts";
 
+// Daily transcript journals are stored as YYYY-MM-DD.md files.
 const DAILY_FILE_PATTERN = /^\d{4}-\d{2}-\d{2}\.md$/;
+
+// Hybrid memory retrieval tuning: controls candidate breadth vs ranking cost.
 const HYBRID_FACT_LIMIT = 10;
 const HYBRID_CANDIDATE_MULTIPLIER = 6;
 const HYBRID_MAX_CANDIDATES = 90;
 const HYBRID_MAX_VECTOR_BACKFILL_PER_QUERY = 8;
+
+// Query embedding cache for repeated lookups during short bursts.
 const QUERY_EMBEDDING_CACHE_TTL_MS = 60 * 1000;
 const QUERY_EMBEDDING_CACHE_MAX_ENTRIES = 256;
+
+// Text-channel micro-reflection trigger windows and cooldown behavior.
 const TEXT_MICRO_REFLECTION_SILENCE_MS = 10 * 60 * 1000;
 const TEXT_MICRO_REFLECTION_LOOKBACK_MS = 30 * 60 * 1000;
 const TEXT_MICRO_REFLECTION_CONTEXT_PRESSURE_MARGIN = 4;
 const TEXT_MICRO_REFLECTION_CONTEXT_PRESSURE_COOLDOWN_MS = 2 * 60 * 1000;
+
+// Canonical fact type labels used by directive/fact filtering paths.
 const GUIDANCE_FACT_TYPE = "guidance";
 const BEHAVIORAL_FACT_TYPE = "behavioral";
+
+// Limits for prompt construction and hybrid reranking behavior.
 const FULL_MEMORY_DUMP_LIMIT = 200;
 const HYBRID_RECENT_CANDIDATE_LIMIT = 24;
 const HYBRID_MMR_LAMBDA = 0.7;
 const HYBRID_TEMPORAL_DECAY_HALF_LIFE_DAYS = 90;
 const HYBRID_TEMPORAL_DECAY_MIN_MULTIPLIER = 0.2;
+
+// Per-section caps to keep memory prompts focused and bounded.
 const MAX_USER_PROFILE_FACTS = 20;
 const MAX_USER_GUIDANCE_FACTS = 8;
 const MAX_GUILD_SELF_FACTS = 10;
@@ -69,6 +82,30 @@ const MAX_BEHAVIORAL_QUERY_CHARS = 420;
 const MAX_SECTION_FACTS = 6;
 const MAX_PEOPLE_FACTS_PER_SUBJECT = 6;
 const MAX_DIRECTIVE_EVIDENCE_CHARS = 220;
+
+// Ingest worker backpressure and shutdown drain behavior.
+const MAX_INGEST_QUEUE_SIZE = 400;
+const DEFAULT_INGEST_DRAIN_TIMEOUT_MS = 5_000;
+const MIN_INGEST_DRAIN_TIMEOUT_MS = 100;
+const INGEST_QUEUE_POLL_INTERVAL_MS = 25;
+
+// Database fetch caps for reflection, profiles, and markdown snapshots.
+const FACT_PROFILE_LOAD_LIMIT = 120;
+const REFLECTION_EXISTING_FACT_LIMIT = 200;
+const MEMORY_MARKDOWN_REFRESH_DEBOUNCE_MS = 1000;
+const MARKDOWN_RECENT_DAILY_DAYS = 3;
+const MARKDOWN_RECENT_DAILY_MAX_ENTRIES = 120;
+const MARKDOWN_HIGHLIGHT_MAX_ITEMS = 24;
+const MARKDOWN_RECENT_DAILY_FILES = 5;
+const MAX_MEMORY_SUBJECTS = 80;
+const PEOPLE_FACT_TOTAL_LIMIT_MIN = 200;
+const PEOPLE_FACT_TOTAL_LIMIT_MAX = 1200;
+const PEOPLE_FACT_TOTAL_LIMIT_MULTIPLIER = 10;
+const FACT_SECTION_SUBJECT_FETCH_LIMIT = 32;
+
+// Settling delay before micro-reflection runs after queued text events.
+const DEFAULT_MICRO_REFLECTION_SETTLE_TIMEOUT_MS = 8_000;
+const MIN_MICRO_REFLECTION_SETTLE_TIMEOUT_MS = 100;
 
 function sortProfileFacts<T extends MemoryFactRow>(rows: T[]) {
   return [...(Array.isArray(rows) ? rows : [])].sort((left, right) => {
@@ -154,7 +191,7 @@ export class MemoryManager {
     this.ingestQueue = [];
     this.ingestQueuedJobs = new Map();
     this.ingestWorkerActive = false;
-    this.maxIngestQueue = 400;
+    this.maxIngestQueue = MAX_INGEST_QUEUE_SIZE;
     this.queryEmbeddingCache = new Map();
     this.queryEmbeddingInFlight = new Map();
     this.dailyLogMessageIds = new Map();
@@ -333,11 +370,11 @@ export class MemoryManager {
     }
   }
 
-  async drainIngestQueue({ timeoutMs = 5000 } = {}) {
-    const timeout = Math.max(100, Number(timeoutMs) || 5000);
+  async drainIngestQueue({ timeoutMs = DEFAULT_INGEST_DRAIN_TIMEOUT_MS } = {}) {
+    const timeout = Math.max(MIN_INGEST_DRAIN_TIMEOUT_MS, Number(timeoutMs) || DEFAULT_INGEST_DRAIN_TIMEOUT_MS);
     const deadline = Date.now() + timeout;
     while ((this.ingestWorkerActive || this.ingestQueue.length) && Date.now() < deadline) {
-      await sleep(25);
+      await sleep(INGEST_QUEUE_POLL_INTERVAL_MS);
     }
   }
 
@@ -354,7 +391,7 @@ export class MemoryManager {
     const rows = this.store.getFactsForScope({
       guildId: normalizedGuildId,
       subjectIds: [normalizedUserId],
-      limit: 120
+      limit: FACT_PROFILE_LOAD_LIMIT
     });
     const guidanceFacts = rows.filter((row) => String(row?.fact_type || "").trim() === GUIDANCE_FACT_TYPE);
     const userFacts = rows.filter((row) => {
@@ -381,7 +418,7 @@ export class MemoryManager {
     const rows = this.store.getFactsForScope({
       guildId: normalizedGuildId,
       subjectIds: [SELF_SUBJECT, LORE_SUBJECT],
-      limit: 120
+      limit: FACT_PROFILE_LOAD_LIMIT
     });
     const guidanceFacts = rows.filter((row) => String(row?.fact_type || "").trim() === GUIDANCE_FACT_TYPE);
     const regularFacts = rows.filter((row) => {
@@ -409,7 +446,7 @@ export class MemoryManager {
     const rows = this.store.getFactProfileRows({
       guildId: normalizedGuildId,
       subjects: subjectIds,
-      limit: 200
+      limit: REFLECTION_EXISTING_FACT_LIMIT
     });
     return rows.map((row) => ({
       id: Number(row.id || 0),
@@ -1389,7 +1426,7 @@ export class MemoryManager {
       } finally {
         this.pendingWrite = false;
       }
-    }, 1000);
+    }, MEMORY_MARKDOWN_REFRESH_DEBOUNCE_MS);
   }
 
   async refreshMemoryMarkdown() {
@@ -1403,13 +1440,13 @@ export class MemoryManager {
     const peopleSection = this.buildPeopleSection(normalizedGuildId);
     const selfSection = this.buildSelfSection(MAX_SECTION_FACTS, normalizedGuildId);
     const recentDailyEntries = await this.getRecentDailyEntries({
-      days: 3,
-      maxEntries: 120,
+      days: MARKDOWN_RECENT_DAILY_DAYS,
+      maxEntries: MARKDOWN_RECENT_DAILY_MAX_ENTRIES,
       guildId: normalizedGuildId
     });
-    const highlightsSection = buildHighlightsSection(recentDailyEntries, 24);
+    const highlightsSection = buildHighlightsSection(recentDailyEntries, MARKDOWN_HIGHLIGHT_MAX_ITEMS);
     const loreSection = this.buildLoreSection(MAX_SECTION_FACTS, normalizedGuildId);
-    const dailyFiles = await this.getRecentDailyFiles(5);
+    const dailyFiles = await this.getRecentDailyFiles(MARKDOWN_RECENT_DAILY_FILES);
     const dailyFilesLine = dailyFiles.length
       ? dailyFiles.map((filePath) => `memory/${path.basename(filePath)}`).join(", ")
       : "(No daily files yet.)";
@@ -1523,7 +1560,7 @@ export class MemoryManager {
   buildPeopleSection(guildId: string | null = null) {
     const normalizedGuildId = String(guildId || "").trim() || null;
     const subjects = this.store
-      .getMemorySubjects(80, normalizedGuildId ? { guildId: normalizedGuildId } : null)
+      .getMemorySubjects(MAX_MEMORY_SUBJECTS, normalizedGuildId ? { guildId: normalizedGuildId } : null)
       .filter((subjectRow) => subjectRow.subject !== LORE_SUBJECT && subjectRow.subject !== SELF_SUBJECT);
     const factsByScopedSubject = this.getPeopleFactsByScopedSubject(subjects);
     const peopleLines = [];
@@ -1565,7 +1602,10 @@ export class MemoryManager {
         guildId,
         subjectIds,
         perSubjectLimit: MAX_PEOPLE_FACTS_PER_SUBJECT,
-        totalLimit: Math.min(1200, Math.max(200, subjectIds.length * 10))
+        totalLimit: Math.min(
+          PEOPLE_FACT_TOTAL_LIMIT_MAX,
+          Math.max(PEOPLE_FACT_TOTAL_LIMIT_MIN, subjectIds.length * PEOPLE_FACT_TOTAL_LIMIT_MULTIPLIER)
+        )
       });
 
       for (const row of rows) {
@@ -1587,7 +1627,7 @@ export class MemoryManager {
     const normalizedGuildId = String(guildId || "").trim() || null;
     const rows = this.store.getFactsForSubjectScoped(
       SELF_SUBJECT,
-      32,
+      FACT_SECTION_SUBJECT_FETCH_LIMIT,
       normalizedGuildId ? { guildId: normalizedGuildId } : null
     );
     const durableSelfLines = [];
@@ -1608,7 +1648,7 @@ export class MemoryManager {
     const normalizedGuildId = String(guildId || "").trim() || null;
     const rows = this.store.getFactsForSubjectScoped(
       LORE_SUBJECT,
-      32,
+      FACT_SECTION_SUBJECT_FETCH_LIMIT,
       normalizedGuildId ? { guildId: normalizedGuildId } : null
     );
     const durableLoreLines = [];
@@ -1898,11 +1938,11 @@ export class MemoryManager {
     }
   }
 
-  async waitForGuildMicroReflectionsToSettle(guildId: string, timeoutMs = 8_000) {
+  async waitForGuildMicroReflectionsToSettle(guildId: string, timeoutMs = DEFAULT_MICRO_REFLECTION_SETTLE_TIMEOUT_MS) {
     const normalizedGuildId = String(guildId || "").trim();
     if (!normalizedGuildId) return;
 
-    const deadline = Date.now() + Math.max(100, Number(timeoutMs) || 8_000);
+    const deadline = Date.now() + Math.max(MIN_MICRO_REFLECTION_SETTLE_TIMEOUT_MS, Number(timeoutMs) || DEFAULT_MICRO_REFLECTION_SETTLE_TIMEOUT_MS);
     while (Date.now() < deadline) {
       let hasInFlight = false;
       for (const key of this.microReflectionInFlight) {
@@ -1915,7 +1955,7 @@ export class MemoryManager {
         }
       }
       if (!hasInFlight) return;
-      await sleep(25);
+      await sleep(INGEST_QUEUE_POLL_INTERVAL_MS);
     }
   }
 
