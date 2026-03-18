@@ -119,6 +119,7 @@ export type LLMAppConfig = {
   defaultOpenAiOAuthModel?: string | null;
   defaultCodexCliModel?: string | null;
   defaultMemoryEmbeddingModel?: string | null;
+  ollamaBaseUrl?: string | null;
 };
 
 type ToolLoopTextBlock = {
