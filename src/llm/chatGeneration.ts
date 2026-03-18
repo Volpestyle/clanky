@@ -24,6 +24,7 @@ import {
   type ContentBlock,
   type ChatModelStreamCallbacks,
   type ChatModelRequest,
+  type ImageInput,
   type ToolLoopContentBlock,
   type ToolLoopMessage
 } from "./serviceShared.ts";
@@ -84,6 +85,65 @@ async function sleepForAnthropicRetry(attempt: number, signal?: AbortSignal) {
   throwIfAborted(signal);
   await sleep(getRetryDelayMs(attempt));
   throwIfAborted(signal);
+}
+
+// ── Image prefetch ───────────────────────────────────────────────────
+// Anthropic's API fetches URL-based images server-side, but Discord CDN URLs
+// use expiring auth tokens that Anthropic's servers often can't download.
+// Pre-download URL images to base64 before building the request.
+
+const IMAGE_PREFETCH_TIMEOUT_MS = 8_000;
+const PREFETCHABLE_URL_RE = /^https?:\/\//i;
+
+async function prefetchUrlImageInputs(imageInputs?: ImageInput[]): Promise<ImageInput[]> {
+  const inputs = Array.isArray(imageInputs) ? imageInputs : [];
+  if (!inputs.length) return inputs;
+
+  return Promise.all(
+    inputs.map(async (input): Promise<ImageInput> => {
+      // Already has inline base64 data — skip.
+      if (input.dataBase64) return input;
+
+      const url = String(input.url || "").trim();
+      if (!url || !PREFETCHABLE_URL_RE.test(url)) return input;
+
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), IMAGE_PREFETCH_TIMEOUT_MS);
+        try {
+          const response = await fetch(url, { signal: controller.signal });
+          if (!response.ok) {
+            console.log(`[prefetchUrlImageInputs] fetch_failed  status=${response.status}  url=${url}`);
+            return input;
+          }
+
+          const contentType = String(response.headers.get("content-type") || "")
+            .split(";")[0]
+            .trim()
+            .toLowerCase();
+          const buffer = await response.arrayBuffer();
+          const base64 = Buffer.from(buffer).toString("base64");
+          const mediaType = /^image\/[a-z0-9.+-]+$/i.test(contentType)
+            ? contentType
+            : String(input.mediaType || input.contentType || "image/png").trim().toLowerCase();
+
+          console.log(
+            `[prefetchUrlImageInputs] prefetched  bytes=${buffer.byteLength}  type=${mediaType}  url=${url}`
+          );
+          // Keep url as fallback in case base64 validation fails in buildAnthropicImageParts.
+          return { ...input, dataBase64: base64, mediaType };
+        } finally {
+          clearTimeout(timeout);
+        }
+      } catch (error) {
+        console.log(
+          `[prefetchUrlImageInputs] prefetch_error  error=${String((error as Error)?.message || error)}  url=${url}`
+        );
+        // Fall back to URL — Anthropic will try server-side fetch.
+        return input;
+      }
+    })
+  );
 }
 
 function buildAnthropicMessagesRequest({
@@ -665,7 +725,10 @@ export async function callAnthropic(
     throw new Error("Anthropic LLM calls require ANTHROPIC_API_KEY.");
   }
 
-  const requestBody = buildAnthropicMessagesRequest(request);
+  const prefetchedImageInputs = request.imageInputs?.length
+    ? await prefetchUrlImageInputs(request.imageInputs)
+    : request.imageInputs || [];
+  const requestBody = buildAnthropicMessagesRequest({ ...request, imageInputs: prefetchedImageInputs });
   for (let attempt = 1; attempt <= ANTHROPIC_TRANSIENT_MAX_ATTEMPTS; attempt += 1) {
     throwIfAborted(request.signal);
     try {
@@ -714,7 +777,13 @@ export async function callAnthropicStreaming(
     throw new Error("Anthropic LLM calls require ANTHROPIC_API_KEY.");
   }
 
-  const requestBody = buildAnthropicMessagesRequest(request);
+  // Pre-download URL images to base64 (avoids Anthropic server-side fetch failures
+  // for Discord CDN URLs with expiring auth tokens).  Skip the async yield when
+  // there are no images so abort-signal timing is unchanged for the common case.
+  const prefetchedImageInputs = request.imageInputs?.length
+    ? await prefetchUrlImageInputs(request.imageInputs)
+    : request.imageInputs || [];
+  const requestBody = buildAnthropicMessagesRequest({ ...request, imageInputs: prefetchedImageInputs });
   const abortSignal = callbacks.signal || request.signal;
   for (let attempt = 1; attempt <= ANTHROPIC_TRANSIENT_MAX_ATTEMPTS; attempt += 1) {
     throwIfAborted(abortSignal);
