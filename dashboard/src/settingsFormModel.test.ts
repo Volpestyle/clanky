@@ -348,7 +348,7 @@ test("resolveProviderModelOptions merges catalog values with provider fallback d
     },
     "openai"
   );
-  assert.deepEqual(openai, ["claude-haiku-4-5", "gpt-5.2", "gpt-5-mini", "gpt-5", "gpt-4.1-mini"]);
+  assert.deepEqual(openai, ["claude-haiku-4-5", "gpt-5.2", "gpt-5.4-mini", "gpt-5-mini", "gpt-5"]);
 
   const anthropic = resolveProviderModelOptions(
     {

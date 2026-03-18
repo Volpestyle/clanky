@@ -444,25 +444,6 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       });
       return true;
     }
-    if (usesRealtimeBridgeAsr && runtimeMode !== "openai_realtime" && !manager.appConfig?.openaiApiKey) {
-      await sendOperationalMessage(manager, {
-        channel: message.channel,
-        settings,
-        guildId,
-        channelId: message.channelId,
-        userId,
-        messageId: message.id,
-        event: "voice_join_request",
-        reason: "openai_audio_api_key_missing",
-        details: {
-          mode: runtimeMode,
-          transcriptionMethod,
-          replyPath
-        },
-        mustNotify: true
-      });
-      return true;
-    }
     if (usesFileTurnTranscription && !manager.llm?.isAsrReady?.(transcriberProvider)) {
       await sendOperationalMessage(manager, {
         channel: message.channel,
