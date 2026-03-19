@@ -28,7 +28,10 @@ import {
   getPresetVoiceInterruptClassifierFallback,
   getPresetVoiceMusicBrainFallback
 } from "../../src/settings/agentStackCatalog.ts";
-import { normalizeLlmProvider } from "../../src/llm/llmHelpers.ts";
+import {
+  normalizeLlmProvider,
+  normalizeOpenAiReasoningEffort
+} from "../../src/llm/llmHelpers.ts";
 import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../src/settings/settingsConstraints.ts";
 import {
   normalizeStreamWatchVisualizerMode,
@@ -247,7 +250,8 @@ function buildSettingsFormView(settings: unknown) {
     llm: orchestrator,
     replyGeneration: {
       temperature: replyGeneration.temperature,
-      maxOutputTokens: replyGeneration.maxOutputTokens
+      maxOutputTokens: replyGeneration.maxOutputTokens,
+      reasoningEffort: replyGeneration.reasoningEffort
     },
     replyFollowupLlm: {
       enabled: followup.enabled,
@@ -364,9 +368,16 @@ function buildSettingsFormView(settings: unknown) {
       replyPath: voiceConversation.replyPath,
       ttsMode: voiceConversation.ttsMode,
       thinking: voiceConversation.thinking || "disabled",
+      thinkingBudgetTokens: voiceConversation.thinkingBudgetTokens || 1024,
       transcriptionProvider: transcription.provider,
       asrLanguageMode: transcription.languageMode,
       asrLanguageHint: transcription.languageHint,
+      asrNoiseReduction: transcription.noiseReduction || "near_field",
+      asrAudioPrompt: transcription.audioPrompt || "",
+      asrMicSensitivity: transcription.micSensitivity || "normal",
+      asrLogprobThreshold: transcription.logprobConfidenceThreshold ?? -1.0,
+      asrSparseMinCharsPerSec: transcription.sparseTranscriptMinCharsPerSec ?? 4.0,
+      asrSparseMinClipMs: transcription.sparseTranscriptMinClipMs ?? 2000,
       allowNsfwHumor: voiceConversation.allowNsfwHumor,
       defaultInterruptionMode: voiceConversation.defaultInterruptionMode,
       useInterruptClassifier: voiceConversation.useInterruptClassifier,
@@ -537,6 +548,9 @@ export function settingsToForm(settings: unknown) {
     memoryLlmModel: resolved.memoryLlm.model ?? defaultMemoryLlm.model,
     temperature: resolved.replyGeneration.temperature ?? defaults.replyGeneration.temperature,
     maxTokens: resolved.replyGeneration.maxOutputTokens ?? defaults.replyGeneration.maxOutputTokens,
+    reasoningEffort:
+      resolved.replyGeneration.reasoningEffort ??
+      defaults.replyGeneration.reasoningEffort,
     browserEnabled: resolved.browser.enabled ?? defaults.browser.enabled,
     browserHeaded: resolved.browser.headed ?? defaults.browser.headed,
     browserProfile: resolved.browser.profile ?? defaults.browser.profile ?? "",
@@ -582,6 +596,11 @@ export function settingsToForm(settings: unknown) {
     providerAuthClaudeCode: Boolean(resolved.providerAuth?.claude_code),
     providerAuthCodexCli: Boolean(resolved.providerAuth?.codex_cli),
     providerAuthCodex: Boolean(resolved.providerAuth?.codex),
+    providerAuthAnthropic: Boolean(resolved.providerAuth?.anthropic),
+    providerAuthOpenai: Boolean(resolved.providerAuth?.openai),
+    providerAuthClaudeOauth: Boolean(resolved.providerAuth?.claude_oauth),
+    providerAuthOpenaiOauth: Boolean(resolved.providerAuth?.openai_oauth),
+    providerAuthXai: Boolean(resolved.providerAuth?.xai),
     codeAgentWorkerConfigs: resolved.codeAgent.workerConfigs ?? defaults.codeAgent.workerConfigs,
     visionCaptionEnabled: resolved.vision.captionEnabled ?? defaultVision.captionEnabled,
     visionProvider: resolved.vision.provider ?? defaultVision.provider,
@@ -612,8 +631,16 @@ export function settingsToForm(settings: unknown) {
     voiceReplyPath: resolved?.voice?.replyPath ?? defaultVoice.replyPath,
     voiceTtsMode: resolved?.voice?.ttsMode ?? defaultVoice.ttsMode ?? "realtime",
     voiceThinking: resolved?.voice?.thinking ?? defaultVoice.thinking ?? "disabled",
+    voiceThinkingBudgetTokens:
+      resolved?.voice?.thinkingBudgetTokens ?? defaultVoice.thinkingBudgetTokens ?? 1024,
     voiceAsrLanguageMode: resolved?.voice?.asrLanguageMode ?? defaultVoice.asrLanguageMode,
     voiceAsrLanguageHint: resolved?.voice?.asrLanguageHint ?? defaultVoice.asrLanguageHint,
+    voiceAsrNoiseReduction: resolved?.voice?.asrNoiseReduction ?? defaultVoice.asrNoiseReduction ?? "near_field",
+    voiceAsrAudioPrompt: resolved?.voice?.asrAudioPrompt ?? defaultVoice.asrAudioPrompt ?? "",
+    voiceAsrMicSensitivity: resolved?.voice?.asrMicSensitivity ?? defaultVoice.asrMicSensitivity ?? "normal",
+    voiceAsrLogprobThreshold: resolved?.voice?.asrLogprobThreshold ?? defaultVoice.asrLogprobThreshold ?? -1.0,
+    voiceAsrSparseMinCharsPerSec: resolved?.voice?.asrSparseMinCharsPerSec ?? defaultVoice.asrSparseMinCharsPerSec ?? 4.0,
+    voiceAsrSparseMinClipMs: resolved?.voice?.asrSparseMinClipMs ?? defaultVoice.asrSparseMinClipMs ?? 2000,
     voiceAllowNsfwHumor: resolved?.voice?.allowNsfwHumor ?? defaultVoice.allowNsfwHumor,
     voiceDefaultInterruptionMode:
       resolved?.voice?.defaultInterruptionMode ?? defaultVoice.defaultInterruptionMode ?? "speaker",
@@ -1011,6 +1038,14 @@ export function getSettingsValidationError(form: SettingsForm): SettingsFormVali
       value: form.maxReactions,
       min: SETTINGS_NUMERIC_CONSTRAINTS.permissions.replies.maxReactionsPerHour.min,
       max: SETTINGS_NUMERIC_CONSTRAINTS.permissions.replies.maxReactionsPerHour.max
+    }),
+    validateNumericField({
+      enabled: String(form.voiceThinking || "disabled").trim().toLowerCase() !== "disabled",
+      sectionId: "sec-voice",
+      label: "Voice thinking budget tokens",
+      value: form.voiceThinkingBudgetTokens,
+      min: SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.thinkingBudgetTokens.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.thinkingBudgetTokens.max
     }),
     validateNumericField({
       sectionId: "sec-startup",
@@ -1476,7 +1511,12 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
       },
       replyGeneration: {
         temperature: Number(form.temperature),
-        maxOutputTokens: Number(form.maxTokens)
+        maxOutputTokens: Number(form.maxTokens),
+        reasoningEffort:
+          normalizeOpenAiReasoningEffort(
+            form.reasoningEffort,
+            DEFAULT_SETTINGS.interaction.replyGeneration.reasoningEffort
+          ) || "low"
       },
       followup: {
         enabled: Boolean(form.replyFollowupLlmEnabled),
@@ -1757,7 +1797,13 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
         enabled: Boolean(form.voiceAsrEnabled),
         provider: normalizedVoiceTranscriptionProvider,
         languageMode: String(form.voiceAsrLanguageMode || "").trim(),
-        languageHint: String(form.voiceAsrLanguageHint || "").trim()
+        languageHint: String(form.voiceAsrLanguageHint || "").trim(),
+        noiseReduction: String(form.voiceAsrNoiseReduction || "near_field").trim(),
+        audioPrompt: String(form.voiceAsrAudioPrompt || "").trim(),
+        micSensitivity: String(form.voiceAsrMicSensitivity || "normal").trim(),
+        logprobConfidenceThreshold: Number(form.voiceAsrLogprobThreshold) || -1.0,
+        sparseTranscriptMinCharsPerSec: Number(form.voiceAsrSparseMinCharsPerSec) || 4.0,
+        sparseTranscriptMinClipMs: Number(form.voiceAsrSparseMinClipMs) || 2000
       },
       channelPolicy: {
         allowedChannelIds: parseUniqueList(form.voiceAllowedChannelIds),
@@ -1786,6 +1832,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
         replyPath: normalizedVoiceReplyPath,
         ttsMode: normalizedVoiceTtsMode,
         thinking: String(form.voiceThinking || "disabled").trim().toLowerCase(),
+        thinkingBudgetTokens: Number(form.voiceThinkingBudgetTokens || 1024),
         operationalMessages: String(form.voiceOperationalMessages || "minimal").trim().toLowerCase()
       },
       admission: {

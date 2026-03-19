@@ -720,20 +720,53 @@ function normalizeVoiceAsrLanguageHint(hint = "", fallback = "") {
   return normalizedHint.slice(0, 24);
 }
 
+const DEFAULT_AUDIO_PROMPT =
+  "Speaker may speak quietly or at low volume. Transcribe all speech accurately even when soft.";
+
+// Mic sensitivity presets map to capture promotion thresholds.
+// "normal" = current whisper-friendly defaults.
+// "sensitive" = even lower thresholds for very quiet speakers.
+// "strict" = higher thresholds for noisy environments.
+const MIC_SENSITIVITY_PRESETS = Object.freeze({
+  sensitive: { peakMin: 0.014, rmsMin: 0.001, activeRatioMin: 0.015 },
+  normal:    { peakMin: 0.018, rmsMin: 0.0015, activeRatioMin: 0.025 },
+  strict:    { peakMin: 0.06,  rmsMin: 0.008,  activeRatioMin: 0.14 }
+});
+
+export function resolveMicSensitivityThresholds(settings = null) {
+  const transcription = getVoiceTranscriptionSettings(settings);
+  const preset = String(transcription.micSensitivity || "normal").trim().toLowerCase();
+  return MIC_SENSITIVITY_PRESETS[preset] || MIC_SENSITIVITY_PRESETS.normal;
+}
+
+export function resolveAsrFilterSettings(settings = null) {
+  const transcription = getVoiceTranscriptionSettings(settings);
+  return {
+    logprobConfidenceThreshold: Number(transcription.logprobConfidenceThreshold) || -1.0,
+    sparseTranscriptMinCharsPerSec: Number(transcription.sparseTranscriptMinCharsPerSec) || 4.0,
+    sparseTranscriptMinClipMs: Number(transcription.sparseTranscriptMinClipMs) || 2000
+  };
+}
+
 export function resolveVoiceAsrLanguageGuidance(settings = null) {
   const transcription = getVoiceTranscriptionSettings(settings);
   const mode = normalizeVoiceAsrLanguageMode(transcription.languageMode, "auto");
   const hint = normalizeVoiceAsrLanguageHint(transcription.languageHint, "en");
   const fixedLanguage = mode === "fixed" ? hint : "";
-  const promptHint = hint
+  const languagePart = hint
     ? `Language hint: ${hint}. Prefer this language when uncertain, but transcribe the actual spoken language.`
     : "";
+  const customAudioPrompt = String(transcription.audioPrompt || "").trim();
+  const audioGuidance = customAudioPrompt || DEFAULT_AUDIO_PROMPT;
+  const promptHint = [languagePart, audioGuidance].filter(Boolean).join(" ");
   const prompt = mode === "auto" ? promptHint.slice(0, ASR_LANGUAGE_BIAS_PROMPT_MAX_LEN) : "";
+  const noiseReduction = String(transcription.noiseReduction || "near_field").trim().toLowerCase();
   return {
     mode,
     hint,
     language: fixedLanguage || "",
-    prompt
+    prompt,
+    noiseReduction: noiseReduction === "far_field" ? "far_field" : noiseReduction === "off" ? "off" : "near_field"
   };
 }
 

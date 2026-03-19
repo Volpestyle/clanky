@@ -5,10 +5,25 @@ import { rangeStyle } from "../../utils";
 import { LlmProviderOptions, VISION_LLM_PROVIDER_OPTIONS } from "./LlmProviderOptions";
 import { OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS } from "../../settingsFormModel";
 import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../../../src/settings/settingsConstraints.ts";
+import { isGpt5FamilyModel } from "../../../../src/llm/llmHelpers.ts";
 import {
   normalizeVoiceAdmissionModeForDashboard,
   STREAM_WATCH_VISUALIZER_MODES
 } from "../../../../src/settings/voiceDashboardMappings.ts";
+
+const REASONING_EFFORT_OPTIONS = Object.freeze([
+  { value: "none", label: "None" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "X-High" }
+]);
+
+const ANTHROPIC_THINKING_PROVIDER_SET = new Set([
+  "anthropic",
+  "claude-oauth",
+  "ai_sdk_anthropic"
+]);
 
 const STREAM_WATCH_VISUALIZER_LABELS = Object.freeze({
   off: "Off (relay source video when available)",
@@ -274,6 +289,20 @@ export function VoiceModeSettingsSection({
           ? "Allows occasional humorous Discord sound effects when they work as reaction punctuation."
           : "Lets the bot lean into playful soundboard bits when the timing is right, while still avoiding spam.";
   const voiceGenerationModel = String(form.voiceGenerationLlmModel || "").trim();
+  const activeVoiceBrainProvider = String(
+    form.voiceGenerationLlmUseTextModel
+      ? form.provider || ""
+      : form.voiceGenerationLlmProvider || ""
+  )
+    .trim()
+    .toLowerCase();
+  const activeVoiceBrainModel = String(
+    form.voiceGenerationLlmUseTextModel
+      ? form.model || ""
+      : voiceGenerationModel || selectedVoiceGenerationPresetModel || ""
+  ).trim();
+  const voiceBrainSupportsAnthropicThinking = ANTHROPIC_THINKING_PROVIDER_SET.has(activeVoiceBrainProvider);
+  const voiceBrainSupportsReasoningEffort = isGpt5FamilyModel(activeVoiceBrainModel);
   const voiceInterruptProvider = String(form.voiceInterruptLlmProvider || "").trim();
   const voiceInterruptModel = String(form.voiceInterruptLlmModel || "").trim();
   const streamWatchNoteProvider = String(form.voiceStreamWatchNoteProvider || "").trim();
@@ -429,31 +458,6 @@ export function VoiceModeSettingsSection({
                       </label>
                     </div>
                   )}
-                  <h4>Thinking</h4>
-                  <div className="radio-group">
-                    <label>
-                      <input
-                        type="radio"
-                        name="voiceThinking"
-                        value="disabled"
-                        checked={String(form.voiceThinking || "disabled") === "disabled"}
-                        onChange={set("voiceThinking")}
-                      />
-                      <strong>Off</strong>
-                      <span> &mdash; No extended thinking. Fastest response time.</span>
-                    </label>
-                    <label>
-                      <input
-                        type="radio"
-                        name="voiceThinking"
-                        value="think_aloud"
-                        checked={String(form.voiceThinking) === "think_aloud"}
-                        onChange={set("voiceThinking")}
-                      />
-                      <strong>Think aloud</strong>
-                      <span> &mdash; Thinking is spoken before the reply. Adds latency but lets you hear the reasoning.</span>
-                    </label>
-                  </div>
                   <div className="toggles">
                     <label>
                       <input
@@ -741,6 +745,105 @@ export function VoiceModeSettingsSection({
                 Auto mode keeps multilingual switching and uses the hint only for ambiguity bias. Fixed mode forces that
                 language for transcription.
               </p>
+
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-asr-noise-reduction">Noise reduction</label>
+                  <select
+                    id="voice-asr-noise-reduction"
+                    value={form.voiceAsrNoiseReduction}
+                    onChange={set("voiceAsrNoiseReduction")}
+                  >
+                    <option value="near_field">Near-field (headset / AirPods)</option>
+                    <option value="far_field">Far-field (speakers / room mic)</option>
+                    <option value="off">Off</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="voice-asr-audio-prompt">Transcription prompt</label>
+                <input
+                  id="voice-asr-audio-prompt"
+                  type="text"
+                  value={form.voiceAsrAudioPrompt}
+                  onChange={set("voiceAsrAudioPrompt")}
+                  maxLength={280}
+                />
+              </div>
+              <p>
+                Guides the ASR model on how to interpret incoming audio. Appended to the language hint. Max 280 characters.
+              </p>
+
+              <details className="vps-advanced-card">
+                <summary className="vps-advanced-summary">
+                  <span className="vps-advanced-arrow">&#x25B8;</span>
+                  <span>Advanced ASR settings</span>
+                  <span className="vps-advanced-summary-copy">Mic sensitivity, confidence thresholds, and hallucination filter tuning</span>
+                </summary>
+                <div className="vps-advanced-body">
+                  <div className="split">
+                    <div>
+                      <label htmlFor="voice-asr-mic-sensitivity">Microphone sensitivity</label>
+                      <select
+                        id="voice-asr-mic-sensitivity"
+                        value={form.voiceAsrMicSensitivity}
+                        onChange={set("voiceAsrMicSensitivity")}
+                      >
+                        <option value="sensitive">Sensitive (very quiet speakers)</option>
+                        <option value="normal">Normal (default, whisper-friendly)</option>
+                        <option value="strict">Strict (noisy environments)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="voice-asr-logprob-threshold">Logprob confidence threshold</label>
+                      <input
+                        id="voice-asr-logprob-threshold"
+                        type="number"
+                        step="0.1"
+                        min="-5"
+                        max="0"
+                        value={form.voiceAsrLogprobThreshold}
+                        onChange={set("voiceAsrLogprobThreshold")}
+                      />
+                    </div>
+                  </div>
+                  <p>
+                    Sensitivity controls how loud speech must be to be captured. Logprob threshold controls how confident the
+                    ASR must be before accepting a transcript (lower = stricter, default -1.0).
+                  </p>
+                  <div className="split">
+                    <div>
+                      <label htmlFor="voice-asr-sparse-chars">Sparse transcript min chars/sec</label>
+                      <input
+                        id="voice-asr-sparse-chars"
+                        type="number"
+                        step="0.5"
+                        min="0"
+                        max="20"
+                        value={form.voiceAsrSparseMinCharsPerSec}
+                        onChange={set("voiceAsrSparseMinCharsPerSec")}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="voice-asr-sparse-clip">Sparse transcript min clip (ms)</label>
+                      <input
+                        id="voice-asr-sparse-clip"
+                        type="number"
+                        step="100"
+                        min="0"
+                        max="10000"
+                        value={form.voiceAsrSparseMinClipMs}
+                        onChange={set("voiceAsrSparseMinClipMs")}
+                      />
+                    </div>
+                  </div>
+                  <p>
+                    Hallucination filter: transcripts with fewer chars/sec than the threshold are dropped for clips longer than the
+                    min clip duration. Catches ASR hallucinations on quiet or ambiguous audio.
+                  </p>
+                </div>
+              </details>
             </StagePanel>
           )}
 
@@ -1078,6 +1181,88 @@ export function VoiceModeSettingsSection({
                   </select>
                 </div>
               </div>
+              {voiceBrainSupportsAnthropicThinking && (
+                <>
+                  <label>Thinking mode</label>
+                  <div className="radio-group">
+                    <label>
+                      <input
+                        type="radio"
+                        name="voiceThinking"
+                        value="disabled"
+                        checked={String(form.voiceThinking || "disabled") === "disabled"}
+                        onChange={set("voiceThinking")}
+                      />
+                      <strong>Off</strong>
+                      <span> &mdash; No extended thinking. Fastest response time.</span>
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="voiceThinking"
+                        value="enabled"
+                        checked={String(form.voiceThinking) === "enabled"}
+                        onChange={set("voiceThinking")}
+                      />
+                      <strong>Enabled</strong>
+                      <span> &mdash; Uses internal reasoning without speaking hidden thoughts.</span>
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="voiceThinking"
+                        value="think_aloud"
+                        checked={String(form.voiceThinking) === "think_aloud"}
+                        onChange={set("voiceThinking")}
+                      />
+                      <strong>Think aloud</strong>
+                      <span> &mdash; Speaks summarized thinking before the final reply.</span>
+                    </label>
+                  </div>
+                  {String(form.voiceThinking || "disabled") !== "disabled" && (
+                    <div className="split">
+                      <div>
+                        <label htmlFor="voice-thinking-budget-tokens">Thinking budget tokens</label>
+                        <input
+                          id="voice-thinking-budget-tokens"
+                          type="number"
+                          min={SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.thinkingBudgetTokens.min}
+                          max={SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.thinkingBudgetTokens.max}
+                          step="1"
+                          value={form.voiceThinkingBudgetTokens}
+                          onChange={set("voiceThinkingBudgetTokens")}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  <p>
+                    {form.voiceGenerationLlmUseTextModel
+                      ? "Voice Brain is inheriting the text model, so this thinking mode is shared with that model binding."
+                      : "Available for Anthropic/Claude-style Brain providers. Increase budget for deeper reasoning at higher latency/cost."}
+                  </p>
+                </>
+              )}
+              {voiceBrainSupportsReasoningEffort && (
+                <>
+                  <label htmlFor="voice-brain-reasoning-effort">Reasoning effort</label>
+                  <select
+                    id="voice-brain-reasoning-effort"
+                    value={String(form.reasoningEffort || "low")}
+                    onChange={set("reasoningEffort")}
+                  >
+                    {REASONING_EFFORT_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p>
+                    {form.voiceGenerationLlmUseTextModel
+                      ? "Voice Brain is inheriting the text model, so this control is shared with Text LLM reasoning effort."
+                      : "Applied when the Brain-stage model supports reasoning effort controls (GPT-5 family)."}
+                  </p>
+                </>
+              )}
             </StagePanel>
           )}
 

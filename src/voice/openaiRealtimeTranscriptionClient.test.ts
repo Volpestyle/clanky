@@ -22,14 +22,7 @@ test("OpenAiRealtimeTranscriptionClient sendSessionUpdate uses transcription ses
   assert.equal(outbound.session.type, "transcription");
   assert.equal(outbound.session.audio.input.format.type, "audio/pcm");
   assert.equal(outbound.session.audio.input.format.rate, 24000);
-  assert.deepEqual(outbound.session.audio.input.turn_detection, {
-    type: "server_vad",
-    threshold: 0.55,
-    prefix_padding_ms: 240,
-    silence_duration_ms: 450,
-    create_response: false,
-    interrupt_response: false
-  });
+  assert.equal(outbound.session.audio.input.turn_detection, null);
   assert.deepEqual(outbound.session.audio.input.noise_reduction, { type: "near_field" });
   assert.equal(outbound.session.audio.input.transcription.model, "gpt-4o-mini-transcribe");
   assert.equal(outbound.session.audio.input.transcription.language, "en");

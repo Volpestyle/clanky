@@ -160,9 +160,7 @@ export class CaptureManager {
     evaluation,
     allow,
     reason,
-    transcriptOverlapInterruptsEnabled,
-    serverVadConfirmed,
-    localOnlyPromotionStillUnconfirmed
+    transcriptOverlapInterruptsEnabled
   }: {
     session: VoiceSession;
     userId: string;
@@ -172,8 +170,6 @@ export class CaptureManager {
     allow: boolean;
     reason: string;
     transcriptOverlapInterruptsEnabled: boolean;
-    serverVadConfirmed: boolean;
-    localOnlyPromotionStillUnconfirmed: boolean;
   }) {
     const now = Date.now();
     captureState.bargeInGateLoggedAt = now;
@@ -202,9 +198,7 @@ export class CaptureManager {
         captureAgeMs: evaluation.captureAgeMs,
         captureBytesSent: evaluation.captureBytesSent,
         promotionReason: String(captureState.promotionReason || "").trim() || null,
-        promotionServerVadConfirmed: serverVadConfirmed,
         transcriptOverlapInterruptsEnabled,
-        localOnlyPromotionStillUnconfirmed,
         signalPeak: evaluation.signal.peak,
         signalRms: evaluation.signal.rms,
         signalActiveSampleRatio: evaluation.signal.activeSampleRatio,
@@ -674,21 +668,11 @@ export class CaptureManager {
         session,
         settings: settings || null
       });
-      const serverVadConfirmed = this.host.hasCaptureServerVadSpeech({
-        session,
-        capture: captureState
-      });
-      const localOnlyPromotionStillUnconfirmed =
-        captureState.promotionReason === "strong_local_audio" &&
-        !serverVadConfirmed;
       let bargeInAllowed = bargeEvaluation.allowed;
       let bargeInReason: string = bargeEvaluation.reason;
       if (bargeInAllowed && transcriptOverlapInterruptsEnabled) {
         bargeInAllowed = false;
         bargeInReason = "transcript_overlap_interrupts_enabled";
-      } else if (bargeInAllowed && localOnlyPromotionStillUnconfirmed) {
-        bargeInAllowed = false;
-        bargeInReason = "local_only_promotion_pending_server_vad";
       }
       if (
         !wasPromoted &&
@@ -704,15 +688,12 @@ export class CaptureManager {
           evaluation: bargeEvaluation,
           allow: bargeInAllowed,
           reason: bargeInReason,
-          transcriptOverlapInterruptsEnabled,
-          serverVadConfirmed,
-          localOnlyPromotionStillUnconfirmed
+          transcriptOverlapInterruptsEnabled
         });
       }
       if (
         !transcriptOverlapInterruptsEnabled &&
-        bargeEvaluation.allowed &&
-        !localOnlyPromotionStillUnconfirmed
+        bargeEvaluation.allowed
       ) {
         this.host.interruptBotSpeechForBargeIn({
           session,

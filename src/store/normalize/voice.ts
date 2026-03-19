@@ -63,6 +63,49 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
       languageHint: normalizeLanguageHint(
         transcription.languageHint,
         DEFAULT_SETTINGS.voice.transcription.languageHint
+      ),
+      noiseReduction: (() => {
+        const raw = normalizeString(
+          transcription.noiseReduction,
+          DEFAULT_SETTINGS.voice.transcription.noiseReduction,
+          20
+        ).toLowerCase();
+        if (raw === "far_field") return "far_field";
+        if (raw === "off") return "off";
+        return "near_field";
+      })(),
+      audioPrompt: normalizeString(
+        transcription.audioPrompt,
+        DEFAULT_SETTINGS.voice.transcription.audioPrompt,
+        280
+      ),
+      micSensitivity: (() => {
+        const raw = normalizeString(
+          transcription.micSensitivity,
+          DEFAULT_SETTINGS.voice.transcription.micSensitivity,
+          20
+        ).toLowerCase();
+        if (raw === "sensitive") return "sensitive";
+        if (raw === "strict") return "strict";
+        return "normal";
+      })(),
+      logprobConfidenceThreshold: normalizeNumber(
+        transcription.logprobConfidenceThreshold,
+        DEFAULT_SETTINGS.voice.transcription.logprobConfidenceThreshold,
+        -5.0,
+        0
+      ),
+      sparseTranscriptMinCharsPerSec: normalizeNumber(
+        transcription.sparseTranscriptMinCharsPerSec,
+        DEFAULT_SETTINGS.voice.transcription.sparseTranscriptMinCharsPerSec,
+        0,
+        20
+      ),
+      sparseTranscriptMinClipMs: normalizeInt(
+        transcription.sparseTranscriptMinClipMs,
+        DEFAULT_SETTINGS.voice.transcription.sparseTranscriptMinClipMs,
+        0,
+        10000
       )
     },
     channelPolicy: {
@@ -139,6 +182,12 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
             ).toLowerCase() === "enabled"
             ? "enabled"
             : "disabled",
+      thinkingBudgetTokens: normalizeInt(
+        conversationPolicy.thinkingBudgetTokens,
+        DEFAULT_SETTINGS.voice.conversationPolicy.thinkingBudgetTokens,
+        SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.thinkingBudgetTokens.min,
+        SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.thinkingBudgetTokens.max
+      ),
       operationalMessages: normalizeOperationalMessages(
         conversationPolicy.operationalMessages,
         DEFAULT_SETTINGS.voice.conversationPolicy.operationalMessages

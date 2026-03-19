@@ -86,6 +86,7 @@ import {
   normalizeVoiceAddressingTargetToken,
   normalizeVoiceText,
   parseSoundboardDirectiveSequence,
+  resolveMicSensitivityThresholds,
   resolveTranscriberProvider,
   resolveVoiceApiTtsProvider,
   shortError
@@ -1775,10 +1776,11 @@ export class VoiceSessionManager {
       return "server_vad_confirmed";
     }
 
+    const micThresholds = resolveMicSensitivityThresholds(session.settingsSnapshot);
     if (
-      signal.activeSampleRatio >= VOICE_TURN_PROMOTION_STRONG_LOCAL_ACTIVE_RATIO_MIN &&
-      signal.peak >= VOICE_TURN_PROMOTION_STRONG_LOCAL_PEAK_MIN &&
-      signal.rms >= VOICE_TURN_PROMOTION_STRONG_LOCAL_RMS_MIN
+      signal.activeSampleRatio >= micThresholds.activeRatioMin &&
+      signal.peak >= micThresholds.peakMin &&
+      signal.rms >= micThresholds.rmsMin
     ) {
       return "strong_local_audio";
     }
@@ -3321,15 +3323,11 @@ export class VoiceSessionManager {
         pendingNearSilentQueueDepth += 1;
         continue;
       }
-      // If ASR bridge was active (bridgeUtteranceId present) but server VAD
-      // never confirmed speech, this is likely non-speech audio (humming,
-      // coughing, laughing). Don't let it supersede a pending reply.
-      // We trust VAD over ASR transcript here because Whisper hallucinates
-      // text on non-speech audio (humming produced 37 chars of junk).
-      if (queuedTurn.bridgeUtteranceId && !queuedTurn.serverVadConfirmed) {
-        pendingUnconfirmedSpeechQueueDepth += 1;
-        continue;
-      }
+      // Non-speech audio (humming, coughing) that hallucinates transcript
+      // junk is now caught upstream by the logprob confidence gate
+      // (meanLogprob < VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD). Server VAD
+      // confirmation is no longer required since turn_detection is disabled
+      // and turn boundaries are managed locally by clankvox captures.
       // Only the person the bot is replying to can supersede the reply.
       // Ambient chatter from other participants should not invalidate a
       // response the bot generated for a specific person. This mirrors

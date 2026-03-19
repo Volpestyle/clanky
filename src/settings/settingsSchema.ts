@@ -547,7 +547,13 @@ export const DEFAULT_SETTINGS = {
       enabled: true,
       provider: "openai",
       languageMode: "auto",
-      languageHint: "en"
+      languageHint: "en",
+      noiseReduction: "near_field",
+      audioPrompt: "Speaker may speak quietly or at low volume. Transcribe all speech accurately even when soft.",
+      micSensitivity: "normal",
+      logprobConfidenceThreshold: -1.0,
+      sparseTranscriptMinCharsPerSec: 4.0,
+      sparseTranscriptMinClipMs: 2000
     },
     channelPolicy: {
       allowedChannelIds: [],
@@ -570,6 +576,7 @@ export const DEFAULT_SETTINGS = {
       replyPath: "brain",
       ttsMode: "realtime",
       thinking: "disabled",
+      thinkingBudgetTokens: 1024,
       operationalMessages: "minimal",
       streaming: {
         enabled: true,

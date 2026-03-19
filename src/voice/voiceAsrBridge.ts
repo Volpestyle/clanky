@@ -375,7 +375,8 @@ function resolveAsrModelParams(session: VoiceSession, settings: Record<string, u
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 280);
-  return { normalizedModel, language, prompt };
+  const noiseReduction = voiceAsrGuidance.noiseReduction || "near_field";
+  return { normalizedModel, language, prompt, noiseReduction };
 }
 
 function pruneMap(map: Map<string, unknown>, maxSize = MAX_MAP_SIZE) {
@@ -1042,7 +1043,7 @@ export async function ensureAsrSessionConnected(
   }
 
   const resolvedSettings = settings || session.settingsSnapshot || store.getSettings();
-  const { normalizedModel, language, prompt } = resolveAsrModelParams(session, resolvedSettings);
+  const { normalizedModel, language, prompt, noiseReduction } = resolveAsrModelParams(session, resolvedSettings);
   const logUserId = mode === "shared" ? "shared_asr" : String(userId || "").trim();
   const runtimeLogger = createAsrRuntimeLogger(deps, logUserId);
   const client = new OpenAiRealtimeTranscriptionClient({
@@ -1060,7 +1061,8 @@ export async function ensureAsrSessionConnected(
       inputAudioFormat: "pcm16",
       inputTranscriptionModel: normalizedModel,
       inputTranscriptionLanguage: language,
-      inputTranscriptionPrompt: prompt
+      inputTranscriptionPrompt: prompt,
+      noiseReduction
     });
     asrState.connectedAt = Date.now();
     asrState.phase = "ready";

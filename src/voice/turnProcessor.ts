@@ -24,6 +24,8 @@ import {
   FILE_ASR_TURN_QUEUE_MAX,
   FILE_ASR_TURN_STALE_SKIP_MS,
   VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD,
+  VOICE_ASR_SPARSE_TRANSCRIPT_MIN_CLIP_MS,
+  VOICE_ASR_SPARSE_TRANSCRIPT_MIN_CHARS_PER_SEC,
   VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
   VOICE_FALLBACK_NOISE_GATE_ACTIVE_RATIO_MAX,
   VOICE_FALLBACK_NOISE_GATE_PEAK_MAX,
@@ -35,6 +37,7 @@ import {
   inspectAsrTranscript,
   isRealtimeMode,
   normalizeVoiceText,
+  resolveAsrFilterSettings,
   resolveTranscriberProvider,
   resolveVoiceAsrLanguageGuidance
 } from "./voiceSessionHelpers.ts";
@@ -2064,6 +2067,8 @@ export class TurnProcessor {
         return;
       }
 
+      const asrFilterSettings = resolveAsrFilterSettings(settings);
+
       if (
         hasTranscriptOverride &&
         turnTranscript &&
@@ -2071,7 +2076,7 @@ export class TurnProcessor {
         transcriptLogprobsOverride.length > 0
       ) {
         const confidence = computeAsrTranscriptConfidence(transcriptLogprobsOverride);
-        if (confidence && confidence.meanLogprob < VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD) {
+        if (confidence && confidence.meanLogprob < asrFilterSettings.logprobConfidenceThreshold) {
           const committedInterruptedBridgeTurn =
             normalizedBridgeUtteranceId &&
             this.host.hasCommittedInterruptedBridgeTurn({
@@ -2120,6 +2125,37 @@ export class TurnProcessor {
             });
             return;
           }
+        }
+      }
+
+      // Sparse transcript hallucination filter: ASR models hallucinate short
+      // phrases on whispered/ambiguous audio. Real speech produces ≥4 chars/sec
+      // even at a slow whisper; hallucinations typically score 2–4 chars/sec.
+      if (
+        hasTranscriptOverride &&
+        turnTranscript &&
+        clipDurationMs >= asrFilterSettings.sparseTranscriptMinClipMs
+      ) {
+        const charsPerSec = turnTranscript.length / (clipDurationMs / 1000);
+        if (charsPerSec < asrFilterSettings.sparseTranscriptMinCharsPerSec) {
+          this.store.logAction({
+            kind: "voice_runtime",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId,
+            content: "voice_turn_dropped_asr_sparse_transcript",
+            metadata: {
+              sessionId: session.id,
+              source: "realtime",
+              captureReason: String(captureReason || "stream_end"),
+              transcript: turnTranscript,
+              transcriptChars: turnTranscript.length,
+              clipDurationMs,
+              charsPerSec: Number(charsPerSec.toFixed(2)),
+              threshold: asrFilterSettings.sparseTranscriptMinCharsPerSec
+            }
+          });
+          return;
         }
       }
 

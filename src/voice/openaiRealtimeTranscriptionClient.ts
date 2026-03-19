@@ -27,14 +27,12 @@ const TRANSCRIPT_FINAL_TYPES = new Set([
 
 const INPUT_AUDIO_SPEECH_STARTED_TYPE = "input_audio_buffer.speech_started";
 const INPUT_AUDIO_SPEECH_STOPPED_TYPE = "input_audio_buffer.speech_stopped";
-const OPENAI_REALTIME_ASR_TURN_DETECTION = Object.freeze({
-  type: "server_vad",
-  threshold: 0.55,
-  prefix_padding_ms: 240,
-  silence_duration_ms: 450,
-  create_response: false,
-  interrupt_response: false
-});
+// Server-side VAD is disabled. Turn boundaries are managed locally by
+// clankvox capture lifecycle (speakingStart/speakingEnd, idle timeout,
+// max-duration cap). The local system commits the full utterance audio
+// via input_audio_buffer.commit, avoiding server VAD fragmentation that
+// breaks whispered and quiet speech.
+const OPENAI_REALTIME_ASR_TURN_DETECTION = null;
 
 export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
   apiKey;
@@ -79,7 +77,8 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
     inputAudioFormat = "pcm16",
     inputTranscriptionModel = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
     inputTranscriptionLanguage = "",
-    inputTranscriptionPrompt = ""
+    inputTranscriptionPrompt = "",
+    noiseReduction = "near_field"
   } = {}) {
     if (!this.apiKey) {
       throw new Error("Missing OPENAI_API_KEY for OpenAI realtime transcription runtime.");
@@ -125,11 +124,16 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
       });
     });
 
+    const resolvedNoiseReduction = String(noiseReduction || "").trim().toLowerCase();
+
     this.sessionConfig = {
       inputAudioFormat: resolvedInputAudioFormat,
       inputTranscriptionModel: resolvedInputTranscriptionModel,
       inputTranscriptionLanguage: resolvedInputTranscriptionLanguage,
-      inputTranscriptionPrompt: resolvedInputTranscriptionPrompt
+      inputTranscriptionPrompt: resolvedInputTranscriptionPrompt,
+      noiseReduction: resolvedNoiseReduction === "far_field" ? "far_field"
+        : resolvedNoiseReduction === "off" ? "off"
+        : "near_field"
     };
     this.sendSessionUpdate();
     return this.getState();
@@ -334,7 +338,7 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
     });
     const inputAudio = {
       format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat),
-      noise_reduction: { type: "near_field" },
+      noise_reduction: session.noiseReduction === "off" ? null : { type: session.noiseReduction === "far_field" ? "far_field" : "near_field" },
       turn_detection: OPENAI_REALTIME_ASR_TURN_DETECTION,
       transcription
     };
