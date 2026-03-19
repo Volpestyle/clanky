@@ -552,7 +552,8 @@ async function resolveVoiceMusicQueueToolTracks(
         queue_length: queueLength,
         added: [],
         options: options.map((entry) => buildMusicToolOptionResult(entry)),
-        queue_state: manager.buildVoiceQueueStatePayload(session)
+        queue_state: manager.buildVoiceQueueStatePayload(session),
+        instruction: "Ask the user which option they want, then call this tool again with selection_id set to the exact id of their choice. Do not re-search."
       }
     };
   }
@@ -791,7 +792,8 @@ export async function executeVoiceMusicPlayTool(
       ok: true,
       status: "needs_disambiguation",
       query,
-      options: options.map((entry) => buildMusicToolOptionResult(entry))
+      options: options.map((entry) => buildMusicToolOptionResult(entry)),
+      instruction: "Ask the user which option they want, then call this tool again with selection_id set to the exact id of their choice. Do not re-search."
     };
   }
 
@@ -927,7 +929,8 @@ export async function executeVoiceVideoPlayTool(
       ok: true,
       status: "needs_disambiguation",
       query,
-      options: options.map((entry) => buildMusicToolOptionResult(entry))
+      options: options.map((entry) => buildMusicToolOptionResult(entry)),
+      instruction: "Ask the user which option they want, then call this tool again with selection_id set to the exact id of their choice. Do not re-search."
     };
   }
 
