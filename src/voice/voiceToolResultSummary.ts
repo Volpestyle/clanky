@@ -41,6 +41,7 @@ function summarizeVoiceToolPayload(
     name === "music_queue_add" || name === "music_queue_next"
   ) {
     const results = Array.isArray(payload.results) ? payload.results : [];
+    const options = Array.isArray(payload.options) ? payload.options : [];
     const resultSummaries = results.slice(0, 5).map((row: unknown) => {
       if (!isObjectRecord(row)) return null;
       return {
@@ -51,11 +52,26 @@ function summarizeVoiceToolPayload(
         url: normalizeInlineText(row.url, 120) || null
       };
     }).filter(Boolean);
+    const optionSummaries = options.slice(0, 5).map((row: unknown) => {
+      if (!isObjectRecord(row)) return null;
+      return {
+        title: normalizeInlineText(row.title, 80) || null,
+        id: normalizeInlineText(row.id, 60) || null,
+        selectionId: normalizeInlineText(row.selection_id || row.id, 60) || null,
+        platform: normalizeInlineText(row.platform, 20) || null,
+        channel: normalizeInlineText(row.channel || row.artist || row.artists, 60) || null,
+        url: normalizeInlineText(row.url || row.streamUrl, 120) || null
+      };
+    }).filter(Boolean);
+    const hasResultSummaries = resultSummaries.length > 0;
+    const hasOptionSummaries = optionSummaries.length > 0;
     return {
       ok: payload.ok ?? null,
       status: normalizeInlineText(payload.status, 60) || null,
       resultCount: results.length,
-      results: resultSummaries.length > 0 ? resultSummaries : null,
+      optionCount: options.length,
+      results: hasResultSummaries ? resultSummaries : hasOptionSummaries ? optionSummaries : null,
+      disambiguationOptions: hasOptionSummaries ? optionSummaries : null,
       selectedId: normalizeInlineText(payload.selectedId || payload.selection_id, 60) || null,
       trackTitle: normalizeInlineText(payload.title || payload.trackTitle, 80) || null,
       trackId: normalizeInlineText(payload.trackId || payload.id, 60) || null,

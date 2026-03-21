@@ -101,6 +101,7 @@ export function buildTextOutputFormatDocs(): string[] {
     "Return strict JSON only. Do not output markdown or code fences.",
     "JSON format:",
     REPLY_JSON_SCHEMA,
+    "In text, prefer readability: short paragraphs; when listing multiple sources/items, put one per line.",
     "Set skip=true only when no response should be sent. If skip=true, set text to [SKIP].",
     "When no reaction is needed, set reactionEmoji to null.",
     "When no media should be generated, set media to null.",

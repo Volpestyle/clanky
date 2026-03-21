@@ -8,6 +8,7 @@ import {
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
 import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
 import {
+  clearMusicDisambiguationState,
   clearBotSpeechMusicUnduckTimer,
   clearPendingMusicReplyHandoff,
   findPendingMusicSelectionById,
@@ -51,6 +52,12 @@ type MusicQueueTrack = {
   streamUrl: string | null;
   platform: MusicSelectionResult["platform"];
   externalUrl: string | null;
+};
+
+type PlaybackStartOverrides = {
+  requestReason?: string;
+  failureLogContent?: string;
+  resultFieldName?: "track" | "video";
 };
 
 function isMusicSelectionResult(value: unknown): value is MusicSelectionResult {
@@ -271,6 +278,98 @@ function resolveMusicPlaySelection(
   return null;
 }
 
+function normalizeMusicDisambiguationQueryToken(value: unknown) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/&amp;/g, " and ")
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function resolvePendingMusicSelectionFromQuery(
+  manager: VoiceToolCallManager,
+  session: ToolRuntimeSession | null | undefined,
+  query: string
+) {
+  const disambiguation = getMusicDisambiguationPromptContext(manager, session);
+  const options = Array.isArray(disambiguation?.options) ? disambiguation.options : [];
+  if (!disambiguation?.active || !options.length) return null;
+
+  const rawQuery = String(query || "").trim().toLowerCase();
+  if (!rawQuery) return null;
+  const queryIdMatch = options.find((entry) => String(entry?.id || "").trim().toLowerCase() === rawQuery);
+  if (queryIdMatch) return queryIdMatch;
+
+  const normalizedQuery = normalizeMusicDisambiguationQueryToken(rawQuery);
+  if (!normalizedQuery) return null;
+
+  const exactTitleMatches = options.filter((entry) => {
+    const normalizedTitle = normalizeMusicDisambiguationQueryToken(entry?.title);
+    return Boolean(normalizedTitle) && normalizedTitle === normalizedQuery;
+  });
+  if (exactTitleMatches.length === 1) return exactTitleMatches[0];
+
+  const containedTitleMatches = options.filter((entry) => {
+    const normalizedTitle = normalizeMusicDisambiguationQueryToken(entry?.title);
+    if (!normalizedTitle) return false;
+    return (
+      (normalizedQuery.length >= 10 && normalizedTitle.includes(normalizedQuery)) ||
+      (normalizedTitle.length >= 10 && normalizedQuery.includes(normalizedTitle))
+    );
+  });
+  if (containedTitleMatches.length === 1) return containedTitleMatches[0];
+
+  return null;
+}
+
+function resolvePendingSelectionQueryPlayback(
+  manager: VoiceToolCallManager,
+  {
+    session,
+    settings,
+    query,
+    catalog,
+    resolvedLogContent,
+    playbackOverrides,
+    onBeforePlaybackStart
+  }: {
+    session: ToolRuntimeSession | null | undefined;
+    settings?: VoiceRealtimeToolSettings | null;
+    query: string;
+    catalog: Map<string, unknown>;
+    resolvedLogContent: string;
+    playbackOverrides?: PlaybackStartOverrides;
+    onBeforePlaybackStart?: () => void;
+  }
+) {
+  const queryResolvedSelection = resolvePendingMusicSelectionFromQuery(manager, session, query);
+  if (!queryResolvedSelection) return null;
+  catalog.set(queryResolvedSelection.id, queryResolvedSelection);
+  manager.store.logAction({
+    kind: "voice_runtime",
+    guildId: String(session?.guildId || "").trim() || null,
+    channelId: String(session?.textChannelId || "").trim() || null,
+    userId: String(session?.lastRealtimeToolCallerUserId || "").trim() || null,
+    content: resolvedLogContent,
+    metadata: {
+      sessionId: String(session?.id || "").trim() || null,
+      query,
+      selectionId: queryResolvedSelection.id
+    }
+  });
+  onBeforePlaybackStart?.();
+  return startVoicePlaybackRequest(manager, {
+    session,
+    settings,
+    query,
+    selectedTrack: queryResolvedSelection,
+    ...playbackOverrides
+  });
+}
+
 function startVoicePlaybackRequest(
   manager: VoiceToolCallManager,
   {
@@ -305,6 +404,8 @@ function startVoicePlaybackRequest(
     normalizeInlineText(`${selectedTrack.title} ${selectedTrack.artist || ""}`, 120);
 
   if (session) {
+    clearMusicDisambiguationState(manager, session);
+    manager.clearVoiceCommandSession(session);
     manager.setMusicPhase(session, "loading");
   }
 
@@ -715,6 +816,17 @@ export async function executeVoiceMusicPlayTool(
     });
   }
 
+  if (!selectionId && query) {
+    const queryResolvedPlayback = resolvePendingSelectionQueryPlayback(manager, {
+      session,
+      settings,
+      query,
+      catalog,
+      resolvedLogContent: "voice_tool_music_play_query_resolved_pending_selection"
+    });
+    if (queryResolvedPlayback) return queryResolvedPlayback;
+  }
+
   const canSearch = Boolean(manager.musicSearch?.isConfigured?.()) && typeof manager.musicSearch?.search === "function";
   if (!canSearch) {
     if (session) {
@@ -847,6 +959,27 @@ export async function executeVoiceVideoPlayTool(
         reason: "unknown_selection_id"
       }
     });
+  }
+
+  if (!selectionId && query) {
+    const queryResolvedPlayback = resolvePendingSelectionQueryPlayback(manager, {
+      session,
+      settings,
+      query,
+      catalog,
+      resolvedLogContent: "voice_tool_video_play_query_resolved_pending_selection",
+      playbackOverrides: {
+        requestReason: "voice_tool_video_play",
+        failureLogContent: "voice_tool_video_play_failed",
+        resultFieldName: "video"
+      },
+      onBeforePlaybackStart: () => {
+        if (hasFullVoiceSessionShape(session)) {
+          session.streamPublishIntent = { mode: "video" };
+        }
+      }
+    });
+    if (queryResolvedPlayback) return queryResolvedPlayback;
   }
 
   const canSearch = Boolean(manager.musicSearch?.isConfigured?.()) && typeof manager.musicSearch?.search === "function";

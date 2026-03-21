@@ -29,3 +29,18 @@ test("parseStructuredInitiativeOutput treats malformed non-drop actions as contr
   assert.equal(parsed.contractViolation, true);
   assert.equal(parsed.contractViolationReason, "missing_channel_id_and_text");
 });
+
+test("parseStructuredInitiativeOutput preserves multiline post text", () => {
+  const parsed = parseStructuredInitiativeOutput(JSON.stringify({
+    action: "post_now",
+    channelId: "123",
+    replyToMessageId: null,
+    text: "Quick rundown:\n- One\n- Two\n\nMore if you want",
+    mediaDirective: "none",
+    mediaPrompt: null,
+    reason: "share summary"
+  }));
+
+  assert.equal(parsed.contractViolation, false);
+  assert.equal(parsed.text, "Quick rundown:\n- One\n- Two\n\nMore if you want");
+});

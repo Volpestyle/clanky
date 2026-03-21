@@ -2072,6 +2072,55 @@ test("generateVoiceTurnReply includes active-music guidance only once per prompt
   assert.equal(countOccurrences(systemPrompt, MUSIC_REPLY_HANDOFF_POLICY_LINE), 1);
 });
 
+test("generateVoiceTurnReply includes pending music disambiguation options in voice prompts", async () => {
+  const activeVoiceSession = {
+    id: "voice-session-1",
+    mode: "openai_realtime"
+  };
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "got it"
+    }),
+    activeVoiceSession,
+    musicDisambiguation: {
+      active: true,
+      query: "minecraft winter cabin ambience",
+      platform: "youtube",
+      action: "play_now",
+      requestedByUserId: "user-1",
+      options: [
+        {
+          id: "youtube:sWuPmn6qClo",
+          title: "Minecraft Winter Cabin Ambience | 6 Hours of Relaxing Snow Sounds & Cozy Fireplace",
+          artist: "TICraft",
+          platform: "youtube"
+        },
+        {
+          id: "youtube:txvYcUGUzaQ",
+          title: "Minecraft Winter Cabin w/ C418 Music | 8 Hours",
+          artist: "CozyCraft",
+          platform: "youtube"
+        }
+      ]
+    }
+  });
+
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    sessionId: "voice-session-1",
+    transcript: "the first one",
+    voiceToolCallbacks: {}
+  });
+
+  const userPrompt = String(generationPayloads[0]?.userPrompt || "");
+  assert.equal(userPrompt.includes("Pending music options:"), true);
+  assert.equal(userPrompt.includes("selection_id set to that exact id"), true);
+  assert.equal(userPrompt.includes("id=youtube:sWuPmn6qClo"), true);
+});
+
 test("generateVoiceTurnReply logs voice errors when generation fails", async () => {
   const { bot, logs } = createVoiceBot({
     generationError: new Error("generation failed")

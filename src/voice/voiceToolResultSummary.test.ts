@@ -38,6 +38,41 @@ test("summarizeVoiceToolResult normalizes music disambiguation summaries", () =>
   assert.equal((summary as Record<string, unknown>)?.resultCount, 2);
 });
 
+test("summarizeVoiceToolResult includes disambiguation option selection ids", () => {
+  const summary = summarizeVoiceToolResult("music_play", {
+    ok: true,
+    status: "needs_disambiguation",
+    options: [
+      {
+        selection_id: "track-101",
+        id: "track-101",
+        title: "Classic Down South Atlanta Trap Mix",
+        artist: "DJ Kno It All",
+        platform: "youtube"
+      },
+      {
+        selection_id: "track-102",
+        id: "track-102",
+        title: "TRAP MIX VOL 1",
+        artist: "Unknown",
+        platform: "youtube"
+      }
+    ]
+  });
+
+  assert.equal(typeof summary, "object");
+  const summaryRecord = summary as Record<string, unknown>;
+  assert.equal(summaryRecord.status, "needs_disambiguation");
+  assert.equal(summaryRecord.resultCount, 0);
+  assert.equal(summaryRecord.optionCount, 2);
+  const options = Array.isArray(summaryRecord.disambiguationOptions)
+    ? summaryRecord.disambiguationOptions as Array<Record<string, unknown>>
+    : [];
+  assert.equal(options.length, 2);
+  assert.equal(options[0]?.selectionId, "track-101");
+  assert.equal(options[1]?.selectionId, "track-102");
+});
+
 test("formatVoiceToolResultSummary serializes structured summaries compactly", () => {
   const rendered = formatVoiceToolResultSummary({
     ok: true,

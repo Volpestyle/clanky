@@ -631,6 +631,13 @@ function buildMusicPlayManager({
       durationSeconds: Number(row.durationSeconds || 0)
     }),
     beginVoiceCommandSession: (...args: unknown[]) => { calls.push({ method: "beginVoiceCommandSession", args }); },
+    clearVoiceCommandSession: (runtimeSession: unknown) => {
+      const targetSession = runtimeSession as { voiceCommandState?: unknown } | null;
+      if (targetSession && typeof targetSession === "object") {
+        targetSession.voiceCommandState = null;
+      }
+      calls.push({ method: "clearVoiceCommandSession", args: [runtimeSession] });
+    },
     setMusicPhase: (_session: unknown, phase: string) => {
       sessionMusicState.phase = phase;
       calls.push({ method: "setMusicPhase", args: [_session, phase] });
@@ -805,6 +812,95 @@ test("music_play returns disambiguation options when search is ambiguous", async
   assert.equal(calls.filter((c) => c.method === "beginVoiceCommandSession").length, 1);
 });
 
+test("music_play resolves pending disambiguation by exact option title query without selection_id", async () => {
+  const searchResults = [
+    {
+      id: "track-a",
+      title: "Minecraft Winter Cabin Ambience | 6 Hours of Relaxing Snow Sounds & Cozy Fireplace",
+      artist: "TICraft",
+      durationSeconds: 21600,
+      platform: "youtube",
+      externalUrl: "https://example.com/a"
+    },
+    {
+      id: "track-b",
+      title: "Minecraft Winter Cabin w/ C418 Music | 8 Hours",
+      artist: "CozyCraft",
+      durationSeconds: 28800,
+      platform: "youtube",
+      externalUrl: "https://example.com/b"
+    }
+  ];
+
+  const { manager, session, calls } = buildMusicPlayManager({ searchResults });
+  const persistentMusicState = {
+    phase: "idle",
+    ducked: false,
+    pauseReason: null,
+    pendingQuery: null,
+    pendingPlatform: "auto",
+    pendingAction: "play_now",
+    pendingResults: [] as unknown[],
+    pendingRequestedByUserId: null,
+    pendingRequestedAt: 0,
+    lastTrackId: null,
+    lastTrackTitle: null,
+    lastTrackArtists: [] as string[],
+    lastTrackUrl: null,
+    provider: "youtube"
+  };
+  manager.ensureSessionMusicState = () => persistentMusicState;
+  (session as Record<string, unknown>).music = persistentMusicState;
+  let searchCallCount = 0;
+  manager.musicSearch.search = async () => {
+    searchCallCount += 1;
+    return { results: searchResults };
+  };
+
+  const disambiguation = await executeVoiceMusicPlayTool(manager, {
+    session,
+    settings: createTestSettings({}),
+    args: { query: "winter cabin ambience" }
+  });
+
+  assert.equal(disambiguation.ok, true);
+  assert.equal(disambiguation.status, "needs_disambiguation");
+  assert.equal(searchCallCount, 1);
+  assert.equal(persistentMusicState.pendingResults.length, 2);
+  (session as { voiceCommandState?: unknown }).voiceCommandState = {
+    userId: "user-1",
+    domain: "music",
+    intent: "music_disambiguation"
+  };
+
+  const resolved = await executeVoiceMusicPlayTool(manager, {
+    session,
+    settings: createTestSettings({}),
+    args: {
+      query: "Minecraft Winter Cabin Ambience | 6 Hours of Relaxing Snow Sounds & Cozy Fireplace"
+    }
+  });
+
+  assert.equal(resolved.ok, true);
+  assert.equal(resolved.status, "loading");
+  assert.equal(resolved.track.id, "track-a");
+  assert.equal(searchCallCount, 1);
+  assert.equal(calls.filter((entry) => entry.method === "requestPlayMusic").length, 1);
+  assert.equal(persistentMusicState.pendingResults.length, 0);
+  assert.equal(persistentMusicState.pendingQuery, null);
+  assert.equal((session as { voiceCommandState?: unknown }).voiceCommandState, null);
+  const resolvedQueryLog = calls.find((entry) => {
+    if (entry.method !== "logAction" || !Array.isArray(entry.args)) return false;
+    const payload = entry.args[0];
+    return Boolean(
+      payload &&
+      typeof payload === "object" &&
+      (payload as { content?: unknown }).content === "voice_tool_music_play_query_resolved_pending_selection"
+    );
+  });
+  assert.equal(Boolean(resolvedQueryLog), true);
+});
+
 test("video_play returns disambiguation options when the YouTube request is ambiguous", async () => {
   const searchResults = [
     {
@@ -906,6 +1002,12 @@ test("music_play updates queue state synchronously before returning", async () =
     }),
     beginVoiceCommandSession() {
       return undefined;
+    },
+    clearVoiceCommandSession(runtimeSession: unknown) {
+      const targetSession = runtimeSession as { voiceCommandState?: unknown } | null;
+      if (targetSession && typeof targetSession === "object") {
+        targetSession.voiceCommandState = null;
+      }
     },
     setMusicPhase(runtimeSession: unknown, phase: string) {
       const targetSession = runtimeSession as {
@@ -1117,6 +1219,12 @@ test("music_play resolves selection_id from saved last-track state when the cata
     }),
     beginVoiceCommandSession() {
       return undefined;
+    },
+    clearVoiceCommandSession(runtimeSession: unknown) {
+      const targetSession = runtimeSession as { voiceCommandState?: unknown } | null;
+      if (targetSession && typeof targetSession === "object") {
+        targetSession.voiceCommandState = null;
+      }
     },
     setMusicPhase(runtimeSession: unknown, phase: string) {
       const targetSession = runtimeSession as {

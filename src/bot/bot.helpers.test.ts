@@ -24,6 +24,34 @@ test("parseStructuredReplyOutput reads structured reply JSON", () => {
   assert.equal(parsed.automationAction.operation, null);
 });
 
+test("parseStructuredReplyOutput preserves multiline formatting in text", () => {
+  const parsed = parseStructuredReplyOutput(
+    JSON.stringify({
+      text: "Top sources:\n- Reuters\n- AP\n\nWant one pulled up?",
+      skip: false,
+      reactionEmoji: null,
+      media: null,
+      automationAction: {
+        operation: "none",
+        title: null,
+        instruction: null,
+        schedule: null,
+        targetQuery: null,
+        automationId: null,
+        runImmediately: false,
+        targetChannelId: null
+      },
+      screenWatchIntent: {
+        action: "none",
+        confidence: 0,
+        reason: null
+      }
+    })
+  );
+
+  assert.equal(parsed.text, "Top sources:\n- Reuters\n- AP\n\nWant one pulled up?");
+});
+
 test("parseStructuredReplyOutput accepts tool image attachments without a prompt", () => {
   const parsed = parseStructuredReplyOutput(
     JSON.stringify({
@@ -64,7 +92,7 @@ test("parseStructuredReplyOutput recovers text from truncated fenced JSON", () =
 
   assert.equal(
     parsed.text,
-    "nah corbexx you're actually unhinged and i respect it lmaooo. 'penjamin' mode activated. can't be grinding your brain 24/7"
+    "nah corbexx you're actually unhinged and i respect it lmaooo. 'penjamin' mode activated.\n\ncan't be grinding your brain 24/7"
   );
   assert.equal(parsed.parseState, "recovered_json");
 });

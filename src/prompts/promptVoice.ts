@@ -35,6 +35,20 @@ type VoiceMusicPromptContext = {
   lastQuery: string | null;
 };
 
+type VoiceMusicDisambiguationPromptContext = {
+  active: boolean;
+  query: string | null;
+  platform: "youtube" | "soundcloud" | "discord" | "auto";
+  action: "play_now" | "queue_next" | "queue_add";
+  requestedByUserId: string | null;
+  options: Array<{
+    id: string;
+    title: string;
+    artist: string;
+    platform: "youtube" | "soundcloud" | "discord" | "auto";
+  }>;
+};
+
 const VOICE_CONTROL_TOOL_NAMES = VOICE_TOOL_SCHEMAS.map((schema) => schema.name);
 const SESSION_CONTEXT_PROMPT_MAX_ENTRIES = 12;
 const SESSION_CONTEXT_PROMPT_MAX_TOTAL_CHARS = 1_200;
@@ -73,6 +87,33 @@ function resolveMusicPromptDisplayState(musicContext: VoiceMusicPromptContext | 
     return "stopped";
   }
   return musicContext.playbackState;
+}
+
+function getPendingMusicActionToolName(action: VoiceMusicDisambiguationPromptContext["action"]) {
+  return action === "queue_next"
+    ? "music_queue_next"
+    : action === "queue_add"
+      ? "music_queue_add"
+      : "music_play";
+}
+
+function normalizeMusicDisambiguationPlatform(
+  value: unknown
+): VoiceMusicDisambiguationPromptContext["platform"] {
+  const token = String(value || "").trim().toLowerCase();
+  if (token === "youtube" || token === "soundcloud" || token === "discord") {
+    return token;
+  }
+  return "auto";
+}
+
+function normalizeMusicDisambiguationAction(
+  value: unknown
+): VoiceMusicDisambiguationPromptContext["action"] {
+  const token = String(value || "").trim().toLowerCase();
+  if (token === "queue_next") return "queue_next";
+  if (token === "queue_add") return "queue_add";
+  return "play_now";
 }
 
 function collectAvailableVoiceToolNames({
@@ -184,6 +225,7 @@ export function buildVoiceTurnPrompt({
   allowInlineSoundboardDirectives = false,
   allowVoiceToolCalls = false,
   musicContext = null,
+  musicDisambiguation = null,
   hasDirectVisionFrame = false,
   durableContext = [],
   screenWatchCommentaryEagerness = 60,
@@ -359,6 +401,36 @@ export function buildVoiceTurnPrompt({
                     ? "skip"
                     : null,
         lastQuery: String(musicContext?.lastQuery || "").trim().slice(0, 180) || null
+      }
+      : null;
+  const normalizedMusicDisambiguation: VoiceMusicDisambiguationPromptContext | null =
+    musicDisambiguation && typeof musicDisambiguation === "object" && Boolean(musicDisambiguation?.active)
+      ? {
+        active: true,
+        query: String(musicDisambiguation?.query || "").trim().slice(0, 180) || null,
+        platform: normalizeMusicDisambiguationPlatform(musicDisambiguation?.platform),
+        action: normalizeMusicDisambiguationAction(musicDisambiguation?.action),
+        requestedByUserId: String(musicDisambiguation?.requestedByUserId || "").trim().slice(0, 80) || null,
+        options: (
+          Array.isArray(musicDisambiguation?.options)
+            ? musicDisambiguation.options
+            : []
+        )
+          .map((entry) => {
+            const id = String(entry?.id || "").trim().slice(0, 180);
+            const title = String(entry?.title || "").trim().slice(0, 160);
+            const artist = String(entry?.artist || "").trim().slice(0, 100);
+            const platform = normalizeMusicDisambiguationPlatform(entry?.platform);
+            if (!id || !title) return null;
+            return {
+              id,
+              title,
+              artist: artist || "unknown",
+              platform
+            };
+          })
+          .filter((entry): entry is { id: string; title: string; artist: string; platform: "youtube" | "soundcloud" | "discord" | "auto" } => Boolean(entry))
+          .slice(0, 5)
       }
       : null;
   const normalizedStreamWatchNotes =
@@ -764,6 +836,20 @@ export function buildVoiceTurnPrompt({
     }
     musicLines.push(...buildActiveMusicReplyGuidanceLines(normalizedMusicContext));
     parts.push(musicLines.join("\n"));
+  }
+
+  if (normalizedMusicDisambiguation?.active && normalizedMusicDisambiguation.options.length > 0) {
+    const pendingActionToolName = getPendingMusicActionToolName(normalizedMusicDisambiguation.action);
+    parts.push(
+      [
+        `There is a pending music disambiguation request${normalizedMusicDisambiguation.query ? ` for query "${normalizedMusicDisambiguation.query}"` : ""} on platform ${normalizedMusicDisambiguation.platform}.`,
+        "Pending music options:",
+        ...normalizedMusicDisambiguation.options.map((entry, index) =>
+          `${index + 1}. id=${entry.id}; title=${entry.title}; artist=${entry.artist}; platform=${entry.platform}`
+        ),
+        `If the user picks one of those options (by number or by naming it), call ${pendingActionToolName} with the selection_id set to that exact id.`
+      ].join("\n")
+    );
   }
 
   if (webSearch?.requested && !webSearch?.used) {

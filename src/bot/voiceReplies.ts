@@ -752,6 +752,10 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       ? runtime.voiceSessionManager.getMusicPromptContext(activeVoiceSession)
       : null
   );
+  const musicDisambiguation =
+    activeVoiceSession && typeof runtime.voiceSessionManager?.getMusicDisambiguationPromptContext === "function"
+      ? runtime.voiceSessionManager.getMusicDisambiguationPromptContext(activeVoiceSession)
+      : null;
   const guild = runtime.client.guilds.cache.get(String(guildId || ""));
   const speakerName =
     guild?.members?.cache?.get(String(userId || ""))?.displayName ||
@@ -1253,6 +1257,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       allowInlineSoundboardDirectives: allowSoundboardToolCall,
       allowVoiceToolCalls: allowVoiceTools,
       musicContext,
+      musicDisambiguation,
       hasDirectVisionFrame: Boolean(streamWatchLatestFrame?.dataBase64),
       durableContext: Array.isArray(activeVoiceSession?.durableContext) ? activeVoiceSession.durableContext : [],
       screenWatchCommentaryEagerness,

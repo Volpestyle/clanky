@@ -595,7 +595,7 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     };
   }
 
-  const baseText = normalizeDirectiveText(parsed?.text, MAX_REPLY_TEXT_LEN);
+  const baseText = normalizeDirectiveMessageText(parsed?.text, MAX_REPLY_TEXT_LEN);
   const skip = parsed?.skip === true;
   const text = skip ? "[SKIP]" : baseText;
   const reactionEmoji = normalizeDirectiveText(parsed?.reactionEmoji, 64) || null;
@@ -654,7 +654,7 @@ export function parseStructuredInitiativeOutput(rawText, maxLen = DEFAULT_MAX_ME
     : normalizeDirectiveText(parsed?.replyToMessageId, MAX_INITIATIVE_CHANNEL_ID_LEN) || null;
   const text = skip
     ? ""
-    : normalizeDirectiveText(parsed?.text, MAX_INITIATIVE_TEXT_LEN) || "";
+    : normalizeDirectiveMessageText(parsed?.text, MAX_INITIATIVE_TEXT_LEN) || "";
   const rawMediaDirective = String(parsed?.mediaDirective || "none").trim().toLowerCase();
   const mediaDirective: "none" | "image" | "video" | "gif" =
     rawMediaDirective === "image" || rawMediaDirective === "video" || rawMediaDirective === "gif"
@@ -701,7 +701,7 @@ function recoverStructuredReplyText(rawText) {
   const textMatch = candidate.match(STRUCTURED_REPLY_TEXT_FIELD_RE);
   if (!textMatch) return null;
   const decoded = decodeJsonStringField(textMatch[1]);
-  return normalizeDirectiveText(decoded, MAX_REPLY_TEXT_LEN) || null;
+  return normalizeDirectiveMessageText(decoded, MAX_REPLY_TEXT_LEN) || null;
 }
 
 function stripStructuredReplyCodeFence(rawText) {
@@ -861,6 +861,22 @@ export function pickReplyMediaDirective(parsed) {
 
 export function normalizeDirectiveText(text, maxLen) {
   return normalizeWhitespaceText(text, { maxLen });
+}
+
+export function normalizeDirectiveMessageText(text, maxLen) {
+  let normalized = String(text || "").replace(/\r\n?/g, "\n");
+  normalized = normalized
+    .split("\n")
+    .map((line) => line.replace(/[^\S\n]+/g, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  const maxCandidate = Number(maxLen);
+  if (!Number.isFinite(maxCandidate)) return normalized;
+  const boundedMax = Math.max(0, Math.floor(maxCandidate));
+  if (!boundedMax || normalized.length <= boundedMax) return normalized;
+  return normalized.slice(0, boundedMax).trimEnd();
 }
 
 export function serializeForPrompt(value, maxLen = 1200) {
