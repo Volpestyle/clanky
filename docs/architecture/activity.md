@@ -83,7 +83,7 @@ Main settings:
 
 Direct address bypasses the ambient and response-window admission gates. Those knobs still shape prompt context, but they do not decide whether an explicitly addressed turn enters the reply pipeline.
 
-Startup catchup reuses this same direct-address path for missed addressed turns after downtime. It replays those turns into the normal decision loop rather than forcing a guaranteed reply.
+Startup catchup reuses this same direct-address path for missed addressed turns after downtime. It scans the full reply-eligible startup channel set, hydrates recent history into the store, and replays addressed turns into the normal decision loop rather than forcing a guaranteed reply.
 
 Relevant code:
 

@@ -163,6 +163,7 @@ type IsReplyChannelRuntimeFn = (settings: Record<string, unknown>, channelId: st
 type IsDiscoveryChannelRuntimeFn = (settings: Record<string, unknown>, channelId: string) => boolean;
 type ShouldAttemptReplyDecisionRuntimeFn = (payload: {
   settings: Record<string, unknown>;
+  message?: Record<string, unknown> | null;
   recentMessages: Array<Record<string, unknown>>;
   addressSignal: Record<string, unknown> | null;
   isReplyChannel?: boolean;

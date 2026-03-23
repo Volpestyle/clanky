@@ -171,6 +171,8 @@ High-level ownership:
 | `music` | playback ducking/runtime-adjacent music behavior |
 | `automations` | scheduled autonomous work |
 
+At the product level, `permissions` is not just a raw allow/block layer. It is the deterministic enforcement surface for Clanky's relationship model: broad community-safe capabilities in shared Discord spaces, higher-trust collaborator capabilities for approved users on approved resources, and owner-scoped device capabilities for the operator's local instance. The conceptual model lives in [`../architecture/relationship-model.md`](../architecture/relationship-model.md).
+
 ## 6. Presets And Overrides
 
 Presets are starting points, not an alternate storage system.

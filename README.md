@@ -6,6 +6,8 @@ The core idea: give an LLM brain a growing set of capabilities (voice, browsing,
 
 This fork is selfbot-first. The canonical control surfaces are natural conversation plus the private dashboard. Some legacy bot-oriented codepaths from `clanky` may still exist in the tree, but they are no longer the architectural center of the repo.
 
+Clanky is Discord-centric and community-embedded first, but it is also a deeper personal assistant for the person running it. The intended product model is one socially real entity with relationship-based capability tiers: everyone in the community can use baseline shared abilities like conversation, web search, and music; explicitly approved collaborators can be granted higher-trust powers like code orchestration on shared or approved resources; and owner-only local/device powers stay with the operator's own Clanky instance.
+
 Ask it to check your GitHub issues? It can browse the page and summarize them. Ask it what song is playing in a stream it's watching? It can look at the screen, search the web, and queue it up. No rigid workflows, the brain orchestrates.
 
 ## Capabilities
@@ -25,6 +27,12 @@ Ask it to check your GitHub issues? It can browse the page and summarize them. A
 - Claude Code/Codex agents for coding tasks (file editing, git, PRs) — allowed users only, with local workers running in disposable git worktrees
 - Music playback with queue management (yt-dlp + ffmpeg)
 - MCP servers for extensibility
+
+**Capability Tiers**
+- Community capabilities for everyone in shared spaces: conversation, web search, page reading, media lookups, music playback, and community memory
+- Trusted collaborator capabilities for explicitly approved users: deeper help on shared or approved resources, code orchestration, longer-running tasks, and richer scoped memory access
+- Owner assistant capabilities for the person running this instance: private notifications, screenshots, clipboard, location, camera/share handoff, and other device-node actions
+- Operator capabilities for dashboard admins: settings, permissions, dangerous actions, and runtime control
 
 **Autonomy**
 - Initiative posts on its own schedule — finds interesting content from Reddit, Hacker News, YouTube, RSS feeds
@@ -160,6 +168,7 @@ Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details 
 | `docs/capabilities/media.md` | Unified media surface: music, video, screen watch, publish, and browser visual context |
 | `docs/architecture/overview.md` | System architecture, data model, runtime flows |
 | `docs/architecture/activity.md` | Text + voice activity model: direct replies, recent-window follow-ups, unified initiative, voice thought engine |
+| `docs/architecture/relationship-model.md` | Product direction for community participation, owner-assistant depth, trusted collaborators, and capability ownership |
 | `docs/architecture/initiative.md` | Unified text initiative cycle and discovery feed |
 | `docs/architecture/presets.md` | Preset-driven stack/runtime settings |
 | `docs/capabilities/code.md` | Code agent runtime (Claude Code, Codex CLI, Codex) |

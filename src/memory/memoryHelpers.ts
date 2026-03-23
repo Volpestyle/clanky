@@ -5,7 +5,8 @@ import { normalizeInlineText, parseMemoryExtractionJson } from "../llm/llmHelper
 // Reserved subjects for shared lore and bot-self facts in memory tables.
 export const LORE_SUBJECT = "__lore__";
 export const SELF_SUBJECT = "__self__";
-type DirectiveScope = "lore" | "self" | "user";
+export const OWNER_SUBJECT = "__owner__";
+type DirectiveScope = "lore" | "self" | "user" | "owner";
 
 type DirectiveScopeConfig = {
   scope: DirectiveScope;
@@ -463,6 +464,16 @@ export function resolveDirectiveScopeConfig(scope: string | null | undefined): D
       defaultFactType: "other",
       keep: 120,
       traceSource: "memory_user_ingest"
+    };
+  }
+
+  if (normalizedScope === "owner") {
+    return {
+      scope: "owner",
+      subject: OWNER_SUBJECT,
+      defaultFactType: "other",
+      keep: 180,
+      traceSource: "memory_owner_ingest"
     };
   }
 

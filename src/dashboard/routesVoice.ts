@@ -1260,7 +1260,7 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
     if (!guildId) {
       return c.json({ guildId, subjects: [], limit });
     }
-    const subjects = store.getMemorySubjects(limit, { guildId, includePortableUserScope: true, includeOwnerScope: false });
+    const subjects = store.getMemorySubjects(limit, { guildId, includePortableUserScope: true, includeOwnerScope: true });
     return c.json({ guildId, limit, subjects });
   });
 
@@ -1277,7 +1277,7 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
       limit,
       subjectIds: subjectFilter ? [subjectFilter] : null,
       includePortableUserScope: true,
-      includeOwnerScope: false,
+      includeOwnerScope: true,
       queryText
     });
     return c.json({ guildId, limit, subject: subjectFilter, queryText, facts: normalizeDashboardEditableFactRows(facts) });
@@ -1312,9 +1312,6 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
     const existing = store.getMemoryFactById(factId);
     if (!existing) {
       return c.json({ ok: false, error: "not_found" }, 404);
-    }
-    if (existing.scope === "owner") {
-      return c.json({ ok: false, error: "owner_private_only" }, 400);
     }
     if (existing.scope === "guild" && existing.guild_id !== guildId) {
       return c.json({ ok: false, error: "not_found" }, 404);
@@ -1360,9 +1357,6 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
     const existing = store.getMemoryFactById(factId);
     if (!existing) {
       return c.json({ ok: false, error: "not_found" }, 404);
-    }
-    if (existing.scope === "owner") {
-      return c.json({ ok: false, error: "owner_private_only" }, 400);
     }
     if (existing.scope === "guild" && existing.guild_id !== guildId) {
       return c.json({ ok: false, error: "not_found" }, 404);

@@ -685,7 +685,7 @@ test("dashboard memory fact inspector can update portable user facts", async () 
   }
 });
 
-test("dashboard owner-private routes stay separate from shared memory inspector", async () => {
+test("dashboard memory inspector includes owner-private facts and owner-private routes expose them separately", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
     store.addMemoryFact({
       scope: "owner",
@@ -702,12 +702,14 @@ test("dashboard owner-private routes stay separate from shared memory inspector"
     const subjectsResponse = await fetch(`${baseUrl}/api/memory/subjects?guildId=guild-1&limit=20`);
     assert.equal(subjectsResponse.status, 200);
     const subjectsJson = await subjectsResponse.json();
-    assert.equal(subjectsJson.subjects.some((entry) => entry.subject === "__owner__" && entry.scope === "owner"), false);
+    assert.equal(subjectsJson.subjects.some((entry) => entry.subject === "__owner__" && entry.scope === "owner"), true);
 
     const factsResponse = await fetch(`${baseUrl}/api/memory/facts?guildId=guild-1&subject=__owner__&limit=10`);
     assert.equal(factsResponse.status, 200);
     const factsJson = await factsResponse.json();
-    assert.equal(factsJson.facts.length, 0);
+    assert.equal(factsJson.facts.length, 1);
+    assert.equal(factsJson.facts[0]?.scope, "owner");
+    assert.equal(factsJson.facts[0]?.subject, "__owner__");
 
     const ownerProfileResponse = await fetch(`${baseUrl}/api/memory/owner-private`);
     assert.equal(ownerProfileResponse.status, 200);

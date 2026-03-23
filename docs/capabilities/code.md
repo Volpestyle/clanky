@@ -29,6 +29,8 @@ Access is settings-driven, not env-var-driven:
 - at least one coding worker must be enabled under `agentStack.runtimeConfig.devTeam.*`
 - caller Discord user ID must be present in `permissions.devTasks.allowedUserIds`
 
+Product-wise, `code_task` belongs to Clanky's trusted-collaborator tier, not the baseline community tier. Shared/community users can still talk to Clanky, search the web, or use other lower-trust capabilities, but code orchestration stays reserved for explicitly approved people and approved resources. The broader relationship model is documented in [`../architecture/relationship-model.md`](../architecture/relationship-model.md).
+
 Dashboard compatibility fields still flatten those controls into the `codeAgent*` form section, but the persisted source of truth is the preset-driven `agentStack` plus `permissions.devTasks`.
 
 The canonical persistence, preset, and save semantics for these fields live in [`../reference/settings.md`](../reference/settings.md).

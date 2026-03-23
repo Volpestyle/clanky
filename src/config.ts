@@ -44,7 +44,8 @@ export const appConfig = {
   runtimeStructuredLogsStdout: parseBooleanFlag(process.env.RUNTIME_STRUCTURED_LOGS_STDOUT, true),
   runtimeStructuredLogsFilePath:
     process.env.RUNTIME_STRUCTURED_LOGS_FILE_PATH ?? "data/logs/runtime-actions.ndjson",
-  instanceId: String(process.env.CLANKER_INSTANCE_ID || "").trim() || "default"
+  instanceId: String(process.env.CLANKER_INSTANCE_ID || "").trim() || "default",
+  ownerUserIds: parseStringListEnv(process.env.CLANKER_OWNER_USER_IDS || process.env.OWNER_USER_IDS || "")
 };
 
 export function ensureRuntimeEnv() {
@@ -114,4 +115,19 @@ function parseVoiceMcpServers(rawValue) {
   } catch {
     return [];
   }
+}
+
+function parseStringListEnv(rawValue: unknown) {
+  return [...new Set(
+    String(rawValue || "")
+      .split(/[\s,]+/u)
+      .map((value) => value.trim())
+      .filter(Boolean)
+  )];
+}
+
+export function isConfiguredOwnerUserId(userId: unknown) {
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) return false;
+  return appConfig.ownerUserIds.includes(normalizedUserId);
 }

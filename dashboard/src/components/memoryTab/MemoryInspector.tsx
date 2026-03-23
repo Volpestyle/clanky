@@ -3,7 +3,9 @@ import { api } from "../../api";
 import { useDashboardGuildScope } from "../../guildScope";
 
 interface SubjectRow {
+  scope: "user" | "guild" | "owner";
   guild_id: string;
+  user_id?: string | null;
   subject: string;
   last_seen_at: string;
   fact_count: number;
@@ -13,14 +15,19 @@ interface FactRow {
   id: number;
   created_at: string;
   updated_at: string;
+  scope?: "user" | "guild" | "owner";
   guild_id: string;
   channel_id: string | null;
+  user_id?: string | null;
   subject: string;
   fact: string;
   fact_type: string;
   evidence_text: string | null;
   source_message_id: string | null;
   confidence: number;
+  metadata?: {
+    isLegacy?: boolean;
+  };
 }
 
 interface FactEditorState {
@@ -112,6 +119,22 @@ function formatApiError(error: unknown) {
   } catch {
     return message;
   }
+}
+
+function getScopeLabel(scope: string | null | undefined, subject?: string | null) {
+  if (subject === "__lore__") return "community";
+  if (subject === "__self__") return "self";
+  if (subject === "__owner__" || scope === "owner") return "owner private";
+  if (scope === "user") return "person";
+  if (scope === "guild") return "community";
+  return "memory";
+}
+
+function getSubjectLabel(subject: string | null | undefined) {
+  if (subject === "__lore__") return "Community";
+  if (subject === "__self__") return "Clanky";
+  if (subject === "__owner__") return "Owner Private";
+  return String(subject || "").trim() || "unknown subject";
 }
 
 export default function MemoryInspector({ onMemoryMutated }: Props) {
@@ -336,8 +359,8 @@ export default function MemoryInspector({ onMemoryMutated }: Props) {
       </div>
 
       <p className="memory-reflection-copy">
-        Browse, edit, and delete raw durable facts by subject. Snapshot markdown refreshes automatically after a save or
-        delete.
+        Browse canonical durable memory by person, community, and self. Snapshot markdown refreshes automatically after a
+        save or delete.
       </p>
 
       {status ? (
@@ -365,18 +388,19 @@ export default function MemoryInspector({ onMemoryMutated }: Props) {
               className={`inspector-subject-item${!selectedSubject ? " active" : ""}`}
               onClick={() => setSelectedSubject(null)}
             >
-              <span className="inspector-subject-name">All subjects</span>
-              <span className="inspector-subject-count">{totalFactCount}</span>
-            </button>
-            {filteredSubjects.map((subject) => (
+                <span className="inspector-subject-name">All memory</span>
+                <span className="inspector-subject-count">{totalFactCount}</span>
+              </button>
+              {filteredSubjects.map((subject) => (
               <button
                 key={`${subject.guild_id}:${subject.subject}`}
                 type="button"
                 className={`inspector-subject-item${selectedSubject === subject.subject ? " active" : ""}`}
                 onClick={() => setSelectedSubject(subject.subject)}
-                title={formatTimestamp(subject.last_seen_at)}
+                title={`${getScopeLabel(subject.scope, subject.subject)} · ${formatTimestamp(subject.last_seen_at)}`}
               >
-                <span className="inspector-subject-name">{subject.subject}</span>
+                <span className="inspector-subject-name">{getSubjectLabel(subject.subject)}</span>
+                <span className="inspector-type-badge">{getScopeLabel(subject.scope, subject.subject)}</span>
                 <span className="inspector-subject-count">{subject.fact_count}</span>
               </button>
             ))}
@@ -386,7 +410,7 @@ export default function MemoryInspector({ onMemoryMutated }: Props) {
         <section className="inspector-facts">
           <div className="inspector-facts-header">
             <div className="inspector-facts-title">
-              {selectedSubject ? `Facts: ${selectedSubject}` : "Facts"}
+              {selectedSubject ? `Memory: ${getSubjectLabel(selectedSubject)}` : "Memory"}
             </div>
             <div className="inspector-facts-controls">
               <input
@@ -419,6 +443,7 @@ export default function MemoryInspector({ onMemoryMutated }: Props) {
                   <tr>
                     <th className="inspector-th-id">ID</th>
                     <th className="inspector-th-subject">Subject</th>
+                    <th className="inspector-th-type">Scope</th>
                     <th className="inspector-th-type">Type</th>
                     <th className="inspector-th-fact">Fact</th>
                     <th className="inspector-th-conf">Conf</th>
@@ -447,19 +472,26 @@ export default function MemoryInspector({ onMemoryMutated }: Props) {
                             <span className={`inspector-expand${isOpen ? " open" : ""}`}>&#9654;</span>
                             {fact.id}
                           </td>
-                          <td className="inspector-td-subject">{fact.subject}</td>
-                          <td className="inspector-td-type">
-                            <span className="inspector-type-badge">{fact.fact_type}</span>
-                          </td>
+                            <td className="inspector-td-subject">{getSubjectLabel(fact.subject)}</td>
+                            <td className="inspector-td-type">
+                              <span className="inspector-type-badge">{getScopeLabel(fact.scope, fact.subject)}</span>
+                            </td>
+                            <td className="inspector-td-type">
+                              <span className="inspector-type-badge">{fact.fact_type}</span>
+                            </td>
                           <td className="inspector-td-fact">{fact.fact}</td>
                           <td className="inspector-td-conf">{Math.round(Number(fact.confidence || 0) * 100)}%</td>
                           <td className="inspector-td-updated">{timeAgo(fact.updated_at)}</td>
                         </tr>
                         {isOpen ? (
                           <tr className="inspector-detail-row">
-                            <td colSpan={6}>
+                            <td colSpan={7}>
                               <div className="inspector-detail">
                                 <div className="inspector-detail-grid">
+                                  <div>
+                                    <span className="inspector-detail-label">Scope</span>
+                                    <span className="inspector-detail-value">{getScopeLabel(fact.scope, fact.subject)}</span>
+                                  </div>
                                   <div>
                                     <span className="inspector-detail-label">Created</span>
                                     <span className="inspector-detail-value">{formatTimestamp(fact.created_at)}</span>
@@ -473,8 +505,16 @@ export default function MemoryInspector({ onMemoryMutated }: Props) {
                                     <span className="inspector-detail-value">{fact.channel_id || "none"}</span>
                                   </div>
                                   <div>
+                                    <span className="inspector-detail-label">Portable Owner</span>
+                                    <span className="inspector-detail-value">{fact.user_id || "none"}</span>
+                                  </div>
+                                  <div>
                                     <span className="inspector-detail-label">Source Message</span>
                                     <span className="inspector-detail-value">{fact.source_message_id || "none"}</span>
+                                  </div>
+                                  <div>
+                                    <span className="inspector-detail-label">Legacy</span>
+                                    <span className="inspector-detail-value">{fact.metadata?.isLegacy ? "yes" : "no"}</span>
                                   </div>
                                 </div>
 

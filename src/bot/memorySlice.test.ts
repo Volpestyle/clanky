@@ -181,6 +181,7 @@ test("loadFactProfile logs and returns empty slice when memory manager throws", 
       participantProfiles: [],
       selfFacts: [],
       loreFacts: [],
+      ownerFacts: [],
       userFacts: [],
       relevantFacts: [],
       guidanceFacts: []

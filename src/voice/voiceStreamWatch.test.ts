@@ -8,10 +8,10 @@ import {
   handleDiscoveredStreamDeleted,
   ingestStreamFrame,
   initializeStreamWatchState,
-  maybeTriggerStreamWatchCommentary,
   resolveStreamWatchNoteModelSettings,
   stopWatchStreamForUser
 } from "./voiceStreamWatch.ts";
+import { maybeTriggerStreamWatchCommentary } from "./streamWatch/commentary.ts";
 import { createStreamDiscoveryState } from "../selfbot/streamDiscovery.ts";
 import { ensureNativeDiscordScreenShareState } from "./nativeDiscordScreenShare.ts";
 
@@ -73,6 +73,9 @@ function createSession(overrides = {}) {
       lastFrameAt: 0,
       lastCommentaryAt: 0,
       lastCommentaryNote: null,
+      pendingCommentaryTriggerReason: null,
+      pendingCommentaryQueuedAt: 0,
+      pendingCommentarySource: null,
       lastNoteAt: 0,
       lastNoteProvider: null,
       lastNoteModel: null,
@@ -299,6 +302,9 @@ test("initializeStreamWatchState resets stream-watch counters and frame buffers"
       lastFrameAt: 100,
       lastCommentaryAt: 100,
       lastCommentaryNote: "old note",
+      pendingCommentaryTriggerReason: "change_detected",
+      pendingCommentaryQueuedAt: 123,
+      pendingCommentarySource: "unit_test",
       lastNoteAt: 100,
       lastNoteProvider: "anthropic",
       lastNoteModel: "claude-haiku-4-5",
@@ -324,6 +330,9 @@ test("initializeStreamWatchState resets stream-watch counters and frame buffers"
   assert.equal(session.streamWatch.lastFrameAt, 0);
   assert.equal(session.streamWatch.lastCommentaryAt, 0);
   assert.equal(session.streamWatch.lastCommentaryNote, null);
+  assert.equal(session.streamWatch.pendingCommentaryTriggerReason, null);
+  assert.equal(session.streamWatch.pendingCommentaryQueuedAt, 0);
+  assert.equal(session.streamWatch.pendingCommentarySource, null);
   assert.equal(session.streamWatch.lastNoteAt, 0);
   assert.equal(session.streamWatch.lastNoteProvider, null);
   assert.equal(session.streamWatch.lastNoteModel, null);
@@ -1248,6 +1257,116 @@ test("maybeTriggerStreamWatchCommentary triggers early on visual change", async 
   assert.equal(actions.some((entry) => entry.content === "stream_watch_commentary_requested"), true);
   const logged = actions.find((entry) => entry.content === "stream_watch_commentary_requested");
   assert.equal(logged?.metadata?.triggerReason, "change_detected");
+});
+
+test("maybeTriggerStreamWatchCommentary prefers change_detected when interval also elapsed", async () => {
+  const now = Date.now();
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: false,
+    realtimeClient: {
+      appendInputVideoFrame() {}
+    },
+    streamWatch: {
+      active: true,
+      targetUserId: "user-1",
+      requestedByUserId: "user-1",
+      lastFrameAt: now,
+      lastCommentaryAt: now - 30_000,
+      lastCommentaryNote: null,
+      lastNoteAt: 0,
+      lastNoteProvider: null,
+      lastNoteModel: null,
+      noteEntries: [],
+      ingestedFrameCount: 2,
+      acceptedFrameCountInWindow: 2,
+      frameWindowStartedAt: 0,
+      latestFrameMimeType: "image/png",
+      latestFrameDataBase64: "AAAA",
+      latestFrameAt: now,
+      latestChangeScore: 0.02,
+      latestEmaChangeScore: 0.02,
+      latestIsSceneCut: false
+    }
+  });
+  const { manager, actions, brainReplyCalls } = createManager({ session });
+
+  await maybeTriggerStreamWatchCommentary(manager, {
+    session,
+    settings: createSettings(),
+    streamerUserId: "user-1",
+    source: "unit_test"
+  });
+
+  assert.equal(brainReplyCalls.length, 1);
+  assert.equal(String(brainReplyCalls[0]?.source || ""), "stream_watch_brain_turn:change_detected");
+  const logged = actions.find((entry) => entry.content === "stream_watch_commentary_requested");
+  assert.equal(logged?.metadata?.triggerReason, "change_detected");
+  assert.equal(logged?.metadata?.intervalTriggered, true);
+  assert.equal(logged?.metadata?.changeTriggered, true);
+});
+
+test("maybeTriggerStreamWatchCommentary defers and later delivers when voice pipeline is busy", async () => {
+  const now = Date.now();
+  const session = createSession({
+    mode: "openai_realtime",
+    pendingResponse: true,
+    streamWatch: {
+      active: true,
+      targetUserId: "user-1",
+      requestedByUserId: "user-1",
+      lastFrameAt: now,
+      lastCommentaryAt: 0,
+      lastCommentaryNote: null,
+      pendingCommentaryTriggerReason: null,
+      pendingCommentaryQueuedAt: 0,
+      pendingCommentarySource: null,
+      lastNoteAt: 0,
+      lastNoteProvider: null,
+      lastNoteModel: null,
+      noteEntries: [],
+      ingestedFrameCount: 1,
+      acceptedFrameCountInWindow: 1,
+      frameWindowStartedAt: now,
+      latestFrameMimeType: "image/png",
+      latestFrameDataBase64: "AAAA",
+      latestFrameAt: now,
+      latestChangeScore: 0.0,
+      latestEmaChangeScore: 0.0,
+      latestIsSceneCut: false
+    }
+  });
+  const { manager, actions, brainReplyCalls } = createManager({ session });
+
+  await maybeTriggerStreamWatchCommentary(manager, {
+    session,
+    settings: createSettings(),
+    streamerUserId: "user-1",
+    source: "unit_test"
+  });
+
+  assert.equal(brainReplyCalls.length, 0);
+  assert.equal(session.streamWatch.pendingCommentaryTriggerReason, "share_start");
+  assert.equal(actions.some((entry) => entry.content === "stream_watch_commentary_requested"), false);
+  assert.equal(actions.some((entry) => entry.content === "stream_watch_commentary_deferred"), true);
+
+  session.pendingResponse = false;
+  session.streamWatch.ingestedFrameCount = 2;
+  session.streamWatch.lastCommentaryAt = Date.now();
+
+  await maybeTriggerStreamWatchCommentary(manager, {
+    session,
+    settings: createSettings(),
+    streamerUserId: "user-1",
+    source: "unit_test"
+  });
+
+  assert.equal(brainReplyCalls.length, 1);
+  assert.equal(String(brainReplyCalls[0]?.source || ""), "stream_watch_brain_turn:share_start");
+  assert.equal(session.streamWatch.pendingCommentaryTriggerReason, null);
+  const requested = actions.filter((entry) => entry.content === "stream_watch_commentary_requested");
+  assert.equal(requested.length, 1);
+  assert.equal(requested[0]?.metadata?.deferredTriggerUsed, true);
 });
 
 test("maybeTriggerStreamWatchCommentary skips autonomous commentary when no trigger is active", async () => {

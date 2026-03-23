@@ -101,6 +101,7 @@ type ReflectionStore = {
     metadata?: Record<string, unknown>;
   }): void;
   hasReflectionBeenCompleted(dateKey: string, guildId: string): boolean;
+  markReflectionCompleted?(dateKey: string, guildId: string, opts?: { runId?: string | null; completedAt?: string | null }): unknown;
 };
 
 type ExistingFactRow = {
@@ -582,6 +583,9 @@ async function reflectGuildJournal({
         usage: usageTotals,
         reflectionPasses
       }
+    });
+    store.markReflectionCompleted?.(dateKey, guildId, {
+      runId: reflectionRunId
     });
   } catch (error) {
     store.logAction({

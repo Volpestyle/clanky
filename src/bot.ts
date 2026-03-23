@@ -1659,6 +1659,7 @@ export class ClankerBot {
     const replyAdmissionDecision = evaluateReplyAdmissionDecision({
       botUserId: this.client.user?.id,
       settings,
+      message,
       recentMessages,
       addressSignal,
       isReplyChannel: replyChannelEligible,
@@ -2277,6 +2278,27 @@ export class ClankerBot {
     const permissions = getReplyPermissions(settings);
     const channels = [];
     const seen = new Set();
+    let explicitSelectedCount = 0;
+    let replyEligibleSelectedCount = 0;
+    let skippedNotSendableCount = 0;
+    let skippedNotAllowedCount = 0;
+    let skippedDuplicateCount = 0;
+    const startupScanMetadata = {
+      replyChannelCount: Array.isArray(permissions.replyChannelIds) ? permissions.replyChannelIds.length : 0,
+      discoveryChannelCount: Array.isArray(permissions.discoveryChannelIds) ? permissions.discoveryChannelIds.length : 0,
+      allowedChannelCount: Array.isArray(permissions.allowedChannelIds) ? permissions.allowedChannelIds.length : 0
+    };
+    const logStartupScan = (content, metadata = {}) => {
+      this.store.logAction({
+        kind: "bot_lifecycle",
+        userId: this.client.user?.id || null,
+        content,
+        metadata: {
+          ...startupScanMetadata,
+          ...metadata
+        }
+      });
+    };
 
     const explicit = [
       ...permissions.replyChannelIds,
@@ -2286,26 +2308,49 @@ export class ClankerBot {
 
     for (const id of explicit) {
       const channel = this.client.channels.cache.get(String(id));
-      if (!isSendableChannel(channel)) continue;
-      if (seen.has(channel.id)) continue;
+      if (!isSendableChannel(channel)) {
+        skippedNotSendableCount += 1;
+        continue;
+      }
+      if (seen.has(channel.id)) {
+        skippedDuplicateCount += 1;
+        continue;
+      }
       seen.add(channel.id);
       channels.push(channel);
+      explicitSelectedCount += 1;
     }
-
-    if (channels.length) return channels;
 
     for (const guild of this.client.guilds.cache.values()) {
-      const guildChannels = guild.channels.cache
-        .filter((channel) => isSendableChannel(channel))
-        .first(8);
+      const guildChannels = Array.from(guild.channels.cache?.values?.() || []);
 
       for (const channel of guildChannels) {
-        if (seen.has(channel.id)) continue;
-        if (!isChannelAllowed(settings, String(channel.id))) continue;
+        if (!isSendableChannel(channel)) {
+          skippedNotSendableCount += 1;
+          continue;
+        }
+        if (seen.has(channel.id)) {
+          skippedDuplicateCount += 1;
+          continue;
+        }
+        if (!isChannelAllowed(settings, String(channel.id))) {
+          skippedNotAllowedCount += 1;
+          continue;
+        }
         seen.add(channel.id);
         channels.push(channel);
+        replyEligibleSelectedCount += 1;
       }
     }
+
+    logStartupScan("startup_catchup_channel_scan_complete", {
+      selectedChannelCount: channels.length,
+      explicitSelectedCount,
+      replyEligibleSelectedCount,
+      skippedNotSendableCount,
+      skippedNotAllowedCount,
+      skippedDuplicateCount
+    });
 
     return channels;
   }

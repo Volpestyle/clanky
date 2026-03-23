@@ -1765,6 +1765,7 @@ export class MemoryManager {
     const normalizedGuildId = String(guildId || "").trim() || null;
     const peopleSection = this.buildPeopleSection(normalizedGuildId);
     const selfSection = this.buildSelfSection(MAX_SECTION_FACTS, normalizedGuildId);
+    const ownerSection = normalizedGuildId ? [] : this.buildOwnerSection(MAX_SECTION_FACTS);
     const recentDailyEntries = await this.getRecentDailyEntries({
       days: MARKDOWN_RECENT_DAILY_DAYS,
       maxEntries: MARKDOWN_RECENT_DAILY_MAX_ENTRIES,
@@ -1791,6 +1792,11 @@ export class MemoryManager {
       "## Bot Self Memory",
       ...(selfSection.length ? selfSection : ["- (No durable self-memory lines yet.)"]),
       "",
+      ...(normalizedGuildId ? [] : [
+        "## Owner Private",
+        ...(ownerSection.length ? ownerSection : ["- (No owner-private durable memory lines yet.)"]),
+        ""
+      ]),
       "## Ongoing Lore",
       ...(loreSection.length ? loreSection : ["- (No durable lore lines yet.)"]),
       "",
@@ -1988,6 +1994,25 @@ export class MemoryManager {
       durableSelfLines.push(`- ${scopeLabel}${normalized}`);
     }
     return durableSelfLines.slice(0, Math.max(1, maxItems));
+  }
+
+  buildOwnerSection(maxItems = MAX_SECTION_FACTS) {
+    const rows = this.store.getFactsForSubjectScoped(
+      OWNER_SUBJECT,
+      FACT_SECTION_SUBJECT_FETCH_LIMIT,
+      { scope: "owner" }
+    );
+    const durableOwnerLines = [];
+    const seen = new Set();
+    for (const row of rows) {
+      const normalized = normalizeSelfFactForDisplay(row.fact);
+      if (!normalized) continue;
+      const key = normalized.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      durableOwnerLines.push(`- ${normalized}`);
+    }
+    return durableOwnerLines.slice(0, Math.max(1, maxItems));
   }
 
   buildLoreSection(maxItems = MAX_SECTION_FACTS, guildId: string | null = null) {

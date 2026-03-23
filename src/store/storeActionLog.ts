@@ -70,6 +70,12 @@ interface ActionTimeRow {
 
 interface ActionPresenceRow {
   found: number;
+  created_at?: string;
+  run_id?: string | null;
+}
+
+interface ReflectionCheckpointRow {
+  found: number;
 }
 
 interface ActionLogRow {
@@ -466,9 +472,22 @@ export function indexResponseTriggersForAction(store: ActionLogStore, {
 }
 
 export function hasReflectionBeenCompleted(store: ActionLogStore, dateKey: string, guildId: string): boolean {
+  const checkpointRow = store.db
+    .prepare<ReflectionCheckpointRow, [string, string]>(
+      `SELECT 1 AS found
+         FROM reflection_checkpoints
+         WHERE date_key = ?
+           AND guild_id = ?
+         LIMIT 1`
+    )
+    .get(String(dateKey), String(guildId));
+  if (checkpointRow) return true;
+
   const row = store.db
     .prepare<ActionPresenceRow, [string, string]>(
-      `SELECT 1 AS found
+      `SELECT 1 AS found,
+              created_at,
+              json_extract(metadata, '$.runId') AS run_id
          FROM actions
          WHERE kind = 'memory_reflection_complete'
            AND guild_id = ?
@@ -476,7 +495,36 @@ export function hasReflectionBeenCompleted(store: ActionLogStore, dateKey: strin
          LIMIT 1`
     )
     .get(String(guildId), String(dateKey));
+  if (row) {
+    markReflectionCompleted(store, dateKey, guildId, {
+      runId: row.run_id || null,
+      completedAt: row.created_at || nowIso()
+    });
+  }
   return Boolean(row);
+}
+
+export function markReflectionCompleted(
+  store: ActionLogStore,
+  dateKey: string,
+  guildId: string,
+  { runId = null, completedAt = nowIso() }: { runId?: string | null; completedAt?: string | null } = {}
+) {
+  const normalizedDateKey = String(dateKey || "").trim();
+  const normalizedGuildId = String(guildId || "").trim();
+  if (!normalizedDateKey || !normalizedGuildId) return { ok: false, reason: "checkpoint_key_required" } as const;
+
+  store.db
+    .prepare<never, [string, string, string, string | null]>(
+      `INSERT INTO reflection_checkpoints(date_key, guild_id, completed_at, run_id)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(date_key, guild_id) DO UPDATE SET
+           completed_at = excluded.completed_at,
+           run_id = excluded.run_id`
+    )
+    .run(normalizedDateKey, normalizedGuildId, String(completedAt || nowIso()), runId ? String(runId) : null);
+
+  return { ok: true, reason: "marked" } as const;
 }
 
 export function deleteReflectionRun(store: ActionLogStore, runId: string): { deleted: number } {
@@ -490,7 +538,13 @@ export function deleteReflectionRun(store: ActionLogStore, runId: string): { del
            AND json_extract(metadata, '$.runId') = ?`
     )
     .run(normalizedRunId);
-  return { deleted: result.changes };
+  const deletedCheckpoints = store.db
+    .prepare<never, [string]>(
+      `DELETE FROM reflection_checkpoints
+         WHERE run_id = ?`
+    )
+    .run(normalizedRunId);
+  return { deleted: Number(result.changes || 0) + Number(deletedCheckpoints.changes || 0) };
 }
 
 export function deleteMemoryReflectionRunsForGuild(store: ActionLogStore, guildId: string) {
@@ -511,10 +565,17 @@ export function deleteMemoryReflectionRunsForGuild(store: ActionLogStore, guildI
     )
     .run(normalizedGuildId);
 
+  const deletedCheckpoints = store.db
+    .prepare<never, [string]>(
+      `DELETE FROM reflection_checkpoints
+         WHERE guild_id = ?`
+    )
+    .run(normalizedGuildId);
+
   return {
     ok: true,
     reason: "deleted",
-    deleted: Number(result?.changes || 0)
+    deleted: Number(result?.changes || 0) + Number(deletedCheckpoints?.changes || 0)
   } as const;
 }
 

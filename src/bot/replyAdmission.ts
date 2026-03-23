@@ -71,6 +71,7 @@ type ReplyAdmissionReference = {
 
 type ReplyAdmissionMentionUsers = {
   has: (id: string | undefined) => boolean;
+  size?: number;
 };
 
 type ReplyAdmissionMessage = {
@@ -217,6 +218,7 @@ function resolveRecentMessageAuthorId(
 
 function resolveRecentReplyWindowState({
   botUserId,
+  message,
   recentMessages,
   windowSize = 5,
   triggerMessageId = null,
@@ -224,6 +226,7 @@ function resolveRecentReplyWindowState({
   triggerReferenceMessageId = null
 }: {
   botUserId?: string | null;
+  message?: ReplyAdmissionMessage | null;
   recentMessages?: ReplyAdmissionRecentMessage[];
   windowSize?: number;
   triggerMessageId?: string | null;
@@ -333,6 +336,7 @@ function resolveRecentReplyWindowState({
 export function resolveTextAttentionState({
   botUserId,
   settings,
+  message,
   recentMessages,
   addressSignal,
   triggerMessageId = null,
@@ -342,6 +346,7 @@ export function resolveTextAttentionState({
 }: {
   botUserId?: string | null;
   settings: Settings;
+  message?: ReplyAdmissionMessage | null;
   recentMessages?: ReplyAdmissionRecentMessage[];
   addressSignal?: Partial<ReplyAddressSignal> | null;
   triggerMessageId?: string | null;
@@ -374,6 +379,7 @@ export function resolveTextAttentionState({
 
   const recentWindow = resolveRecentReplyWindowState({
     botUserId,
+    message,
     recentMessages,
     windowSize: Math.min(responseWindowSize, clamp(Math.floor(windowSize), 1, 50)),
     triggerMessageId,
@@ -402,6 +408,7 @@ export function resolveTextAttentionState({
 export function shouldAttemptReplyDecision({
   botUserId,
   settings,
+  message,
   recentMessages,
   addressSignal,
   isReplyChannel = false,
@@ -414,6 +421,7 @@ export function shouldAttemptReplyDecision({
 }: {
   botUserId?: string | null;
   settings: Settings;
+  message?: ReplyAdmissionMessage | null;
   recentMessages?: ReplyAdmissionRecentMessage[];
   addressSignal?: Partial<ReplyAddressSignal> | null;
   isReplyChannel?: boolean;
@@ -427,6 +435,7 @@ export function shouldAttemptReplyDecision({
   return evaluateReplyAdmissionDecision({
     botUserId,
     settings,
+    message,
     recentMessages,
     addressSignal,
     isReplyChannel,
@@ -442,6 +451,7 @@ export function shouldAttemptReplyDecision({
 export function evaluateReplyAdmissionDecision({
   botUserId,
   settings,
+  message,
   recentMessages,
   addressSignal,
   isReplyChannel = false,
@@ -454,6 +464,7 @@ export function evaluateReplyAdmissionDecision({
 }: {
   botUserId?: string | null;
   settings: Settings;
+  message?: ReplyAdmissionMessage | null;
   recentMessages?: ReplyAdmissionRecentMessage[];
   addressSignal?: Partial<ReplyAddressSignal> | null;
   isReplyChannel?: boolean;
@@ -468,6 +479,7 @@ export function evaluateReplyAdmissionDecision({
   const attentionState = resolveTextAttentionState({
     botUserId,
     settings,
+    message,
     recentMessages,
     addressSignal,
     triggerMessageId,

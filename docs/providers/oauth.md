@@ -114,7 +114,7 @@ This is prompt-prefix reuse, not hidden server-side conversation memory. The Mes
 
 JSON compliance for reply generation is requested via a text instruction appended to the system prompt (`"Return strict JSON only."` + the schema). API-level enforcement via `output_config.format` is not used because `REPLY_OUTPUT_SCHEMA` exceeds Claude's union type limit (29 `type: ["string", "null"]` / `anyOf` parameters).
 
-When the model returns plain prose instead of JSON (e.g. short simple requests like "call me X"), the reply pipeline recovers the raw text as the reply content (`structured_output_recovered_as_prose` warning) instead of silently dropping it. Only truly empty model output is skipped.
+When the model returns plain prose instead of JSON (e.g. short simple requests like "call me X"), the reply pipeline recovers the raw text as the reply content (`structured_output_recovered_as_prose` warning) instead of silently dropping it. After a tool loop, prose that looks like process narration (e.g. "I searched the conversation history and found...") is dropped to prevent tool internals from leaking into chat, but genuinely conversational prose is still recovered — the model's intent to communicate is preserved.
 
 ### Reverse-Engineered From
 

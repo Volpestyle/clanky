@@ -4,6 +4,7 @@ This document explains the live runtime shape of the experimental selfbot: where
 
 Docs map: [`../README.md`](../README.md)
 Unified media product surface: [`../capabilities/media.md`](../capabilities/media.md)
+Product relationship tiers: [`relationship-model.md`](relationship-model.md)
 
 For the `clankvox`-local transport/media docs, start at [`../../src/voice/clankvox/README.md`](../../src/voice/clankvox/README.md).
 
@@ -23,6 +24,7 @@ Account/runtime model:
 - one Discord user account is the primary runtime identity
 - Bun owns gateway/session orchestration, prompts, tools, memory, and the dashboard
 - `clankvox` is the Rust voice/media subprocess that owns Discord RTP, Opus, DAVE, music, TTS pacing, and native stream-watch media transport
+- the product model is one Discord-native community entity: a deep personal assistant for the operator, and a higher-trust collaborator for explicitly approved others, not separate public/private bots
 
 Code entrypoint:
 
@@ -47,6 +49,8 @@ Core runtime:
 - `src/dashboard.ts` and `dashboard/src/*`: REST control plane and dashboard UI
 
 Behaviorally, the selfbot is documented as one shared attention system with text and voice spokes. That attention layer is currently implemented across several modules rather than one single package: text reply admission and recent windows, initiative, voice reply admission, thought generation, and music/floor overlays.
+
+Permissioning and capability depth are part of that same product shape: community-safe capabilities are broadly available in shared Discord contexts, higher-trust collaborator capabilities are intentionally gated for approved users and resources, and owner-only device powers stay local to the operator's instance. The product-level relationship model is documented in [`relationship-model.md`](relationship-model.md).
 
 ## 2. Runtime Lifecycle
 
@@ -273,7 +277,7 @@ Key server entrypoints:
 - `GET /api/stats`
 - `GET /api/actions`
 - memory and voice history endpoints
-- `DELETE /api/memory/guild` for confirmed guild-scoped memory purges
+- `DELETE /api/memory/guild` for confirmed community-memory purges within a guild
 
 ## 11. Latency-Critical Model Choices
 

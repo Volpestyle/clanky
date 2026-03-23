@@ -183,6 +183,13 @@ Minimum replay payload for a text or multimodal turn:
 - memory side effects such as retrieval, embedding, and reply ingestion
 - cost and latency breakdown (`performance.*`, `usd_cost`)
 
+For startup downtime incidents, include the startup catchup boundary events too:
+
+- `startup_catchup_channel_scan_complete`
+- `startup_catchup_begin`
+- `startup_catchup_channel_scanned` when any channel actually queues catchup replies
+- `startup_catchup_complete`
+
 Correlation keys to preserve across the UI:
 
 - `metadata.botId`

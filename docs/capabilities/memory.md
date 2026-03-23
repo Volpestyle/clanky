@@ -64,16 +64,22 @@ Runtime composition:
 
 This is the current implemented foundation. Owner-private retrieval is intentionally gated. The owner scope does not bleed into guild contexts or ordinary DMs with other people.
 
-### Target scopes
+### Product language for scopes
+
+The runtime still stores `user`, `guild`, and `owner` in the database, but product-facing language should describe them as:
+
+- `People` - portable person memory
+- `Community` - guild-scoped shared memory
+- `Owner Private` - private assistant memory for the owner-facing relationship
+
+### Future scopes
 
 The relationship model implies a richer memory model over time.
 
-Clanky should eventually distinguish at least these buckets:
+Beyond the currently implemented scopes, Clanky should eventually distinguish at least these additional buckets:
 
-- `community memory` - guild-scoped shared social context and lore
 - `collaborator-private memory` - user-specific context for an approved collaborator relationship
 - `shared-resource memory` - memory attached to a shared repo, project, workspace, channel, or team workflow
-- `owner-private memory` - private assistant memory for the owner-facing relationship
 
 These are not separate bots. They are separate visibility and ownership domains inside one memory fabric.
 
@@ -94,7 +100,7 @@ Examples:
 - server culture, running jokes, guild lore, recurring events
 - socially useful facts that help Clanky feel continuous in public conversation
 
-### Collaborator memory
+### Collaborator / shared-work memory
 
 Used when an approved person asks more of Clanky on shared or specifically approved resources.
 
@@ -105,7 +111,7 @@ Examples:
 - follow-through on a longer-running shared task
 - shared-resource notes that should help future collaboration without exposing owner-private context
 
-In the target model this is not one flat bucket. It eventually breaks down into at least:
+This is still mostly a future lane. The current shipped memory model does not yet have a separate shared-resource storage scope. In the target model this eventually breaks down into at least:
 
 - collaborator-private memory
 - shared-resource memory
@@ -137,6 +143,12 @@ The model can write durable facts immediately when it notices something worth re
 - Writes dedupe, refresh embeddings, archive lower-priority old facts, and refresh prompt snapshots
 - Owner writes are accepted only inside owner-private contexts
 
+Owner-private writes are currently narrow by design:
+
+- `owner` and `private` namespaces are accepted only for configured owner user ids
+- owner-private memory is intended for owner DMs and other explicitly owner-only flows
+- ordinary guild/community contexts should not silently write owner memory
+
 This path is best for explicit "remember this" requests or obviously durable facts.
 
 ### Session-end micro-reflection
@@ -148,6 +160,7 @@ After a voice session ends or a text thread goes quiet, a lightweight reflection
 - uses the same durable write path as direct writes
 
 This is especially important in voice, where the model is often focused on responding rather than filing memory in real time.
+
 
 ### Pre-compaction voice reflection
 
@@ -176,6 +189,7 @@ Clanky loads memory for all relevant participants, not just the current speaker.
 - In voice, participant fact profiles are cached in-session.
 - In text, user facts are loaded for people in the recent message window.
 - Guild lore and bot-self facts are included where relevant.
+- Owner DMs can additionally load owner-private facts.
 
 This makes memory feel like natural social recall rather than a special tool call.
 
@@ -203,6 +217,8 @@ Text and automation contexts can still use explicit search tools when needed.
 
 - `memory_search` for deeper durable-fact lookup
 - `conversation_search` for broader transcript/history lookup
+
+Configured owners can also explicitly target owner-private memory through the `owner` / `private` namespace in tool contexts.
 
 These are fallback tools, not the primary way Clanky accesses memory in ordinary interaction.
 
@@ -282,6 +298,7 @@ Notes:
 - useful for inspection and debugging
 - not the runtime source of truth
 - dashboard can also render a scoped runtime snapshot without changing the file on disk
+- the global snapshot now includes an `Owner Private` section so operators can inspect the private assistant layer separately from person/community memory
 
 ## Safety and quality guards
 
@@ -309,7 +326,7 @@ That is correct and important.
 
 But the relationship model now makes it clear that Clanky also needs stronger assistant-oriented memory for higher-trust use cases.
 
-Today the system has the technical foundations for scoped durable memory, but the product direction extends beyond pure social recall. Clanky should grow toward a unified memory fabric that supports:
+Today the system already ships the first step beyond pure social recall: owner-private facts. Clanky should keep growing toward a unified memory fabric that supports:
 
 - social continuity in community spaces
 - approved collaborator continuity in collaborator-private and shared-resource contexts
@@ -331,6 +348,8 @@ Clanky's current memory is strongest at socially embedded continuity:
 - shared history
 - guild lore
 - conversation recall
+
+The new owner-private layer starts closing that gap by giving the owner a real private assistant memory lane without changing Clanky's public social identity.
 
 Clanky should not replace its social memory with OpenClaw-style memory.
 It should add assistant-oriented scopes and retrieval on top of the social foundation while preserving one identity and one consistent public personality.

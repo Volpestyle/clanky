@@ -146,6 +146,10 @@ The commentary loop is the proactive speech path. It uses the same visual-change
 - no active playback
 - `autonomousCommentaryEnabled`
 
+When interval and visual-change triggers are both true on the same frame, runtime labels the request as `change_detected` so logs and downstream prompt context reflect the on-screen event that caused the turn.
+
+If a trigger fires while the voice pipeline is busy (ongoing playback, pending response, queued voice work, or the inbound-audio quiet window), runtime defers that trigger and delivers it on the next eligible frame instead of dropping it.
+
 When commentary fires, the voice brain sees:
 
 - rolling notes from the note loop

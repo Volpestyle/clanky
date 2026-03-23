@@ -411,6 +411,134 @@ test("maybeReplyToMessagePipeline recovers unstructured model output as prose re
   });
 });
 
+test("maybeReplyToMessagePipeline skips tool narration prose after a tool loop", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+
+    store.recordMessage({
+      messageId: "history-1",
+      createdAt: Date.now() - 5_000,
+      guildId: "guild-1",
+      channelId,
+      authorId: "user-2",
+      authorName: "bob",
+      isBot: false,
+      content: "CURSED conk said hello earlier",
+      referencedMessageId: null
+    });
+
+    const replyPayloads: Array<Record<string, unknown>> = [];
+    const channelSendPayloads: Array<Record<string, unknown>> = [];
+    const typingCallsRef = { count: 0 };
+    let generateCount = 0;
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate() {
+          generateCount += 1;
+          if (generateCount === 1) {
+            return {
+              text: "",
+              rawContent: null,
+              toolCalls: [
+                {
+                  id: "tool-1",
+                  name: "conversation_search",
+                  input: {
+                    query: "what did cursed say"
+                  }
+                }
+              ],
+              provider: "claude-oauth",
+              model: "claude-opus-4-6",
+              usage: {
+                inputTokens: 10,
+                outputTokens: 8,
+                cacheWriteTokens: 0,
+                cacheReadTokens: 0
+              },
+              costUsd: 0
+            };
+          }
+
+          return {
+            text: "I searched the conversation history and found that cursed conk said hello earlier today.",
+            rawContent: null,
+            toolCalls: [],
+            provider: "claude-oauth",
+            model: "claude-opus-4-6",
+            usage: {
+              inputTokens: 10,
+              outputTokens: 8,
+              cacheWriteTokens: 0,
+              cacheReadTokens: 0
+            },
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanky",
+      tag: "clanky#0001"
+    };
+
+    const guild = buildGuild();
+    const channel = buildChannel({
+      guild,
+      channelId,
+      channelSendPayloads,
+      typingCallsRef
+    });
+    const message = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-1",
+      content: "what did cursed say",
+      replyPayloads
+    });
+    const settings = store.getSettings();
+    const runtime = buildReplyPipelineRuntime(bot, {
+      captionTimestamps: [],
+      unsolicitedReplyContextWindow: 2
+    });
+
+    const handled = await maybeReplyToMessagePipeline(runtime, message, settings, {
+      source: "text_thought_loop",
+      forceDecisionLoop: true,
+      recentMessages: [],
+      triggerMessageIds: [message.id],
+      addressSignal: {
+        direct: true,
+        inferred: false,
+        triggered: true,
+        reason: "direct",
+        confidence: 1,
+        threshold: 0.62,
+        confidenceSource: "direct"
+      }
+    });
+
+    assert.equal(handled, false);
+    assert.equal(replyPayloads.length, 0);
+    assert.equal(channelSendPayloads.length, 0);
+    assert.equal(
+      store.getRecentActions(20).some((entry) => entry.kind === "reply_skipped" && entry.content === "invalid_structured_output_after_tool_loop"),
+      true
+    );
+  });
+});
+
 test("maybeReplyToMessagePipeline lets the model attach tool-returned images in the final reply", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";

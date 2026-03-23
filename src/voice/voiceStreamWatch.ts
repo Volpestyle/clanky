@@ -1,11 +1,9 @@
-import { clamp, deepMerge } from "../utils.ts";
+import { clamp } from "../utils.ts";
 import { getPromptBotName } from "../prompts/promptCore.ts";
 import { safeJsonParseFromString } from "../normalization/valueParsers.ts";
-import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
 import {
   getBotName,
   getResolvedOrchestratorBinding,
-  getResolvedVoiceGenerationBinding,
   getVoiceStreamWatchSettings
 } from "../settings/agentStack.ts";
 import {
@@ -19,6 +17,11 @@ import {
 } from "../selfbot/streamDiscovery.ts";
 import { isRealtimeMode, normalizeVoiceText, resolveVoiceSettingsSnapshot } from "./voiceSessionHelpers.ts";
 import {
+  getStreamWatchChangeState,
+  maybeTriggerStreamWatchCommentary,
+  supportsDirectVisionCommentary,
+} from "./streamWatch/commentary.ts";
+import {
   clearNativeDiscordScreenShareState,
   ensureNativeDiscordScreenShareState,
   listActiveNativeDiscordScreenSharers,
@@ -27,7 +30,103 @@ import {
 } from "./nativeDiscordScreenShare.ts";
 import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
 
-type StreamWatchSession = {
+type StreamWatchNoteEntry = {
+  text: string;
+  at: number;
+  provider: string | null;
+  model: string | null;
+  speakerName: string | null;
+};
+
+type StreamWatchState = {
+  active: boolean;
+  targetUserId: string | null;
+  requestedByUserId: string | null;
+  lastFrameAt: number;
+  lastCommentaryAt: number;
+  lastCommentaryNote: string | null;
+  pendingCommentaryTriggerReason: string | null;
+  pendingCommentaryQueuedAt: number;
+  pendingCommentarySource: string | null;
+  lastMemoryRecapAt: number;
+  lastMemoryRecapText: string | null;
+  lastMemoryRecapDurableSaved: boolean;
+  lastMemoryRecapReason: string | null;
+  lastNoteAt: number;
+  lastNoteProvider: string | null;
+  lastNoteModel: string | null;
+  noteEntries: StreamWatchNoteEntry[];
+  ingestedFrameCount: number;
+  acceptedFrameCountInWindow: number;
+  frameWindowStartedAt: number;
+  latestFrameMimeType: string | null;
+  latestFrameDataBase64: string;
+  latestFrameAt: number;
+  latestChangeScore: number;
+  latestEmaChangeScore: number;
+  latestIsSceneCut: boolean;
+};
+
+const STREAM_WATCH_STATE_DEFAULTS: StreamWatchState = {
+  active: false,
+  targetUserId: null,
+  requestedByUserId: null,
+  lastFrameAt: 0,
+  lastCommentaryAt: 0,
+  lastCommentaryNote: null,
+  pendingCommentaryTriggerReason: null,
+  pendingCommentaryQueuedAt: 0,
+  pendingCommentarySource: null,
+  lastMemoryRecapAt: 0,
+  lastMemoryRecapText: null,
+  lastMemoryRecapDurableSaved: false,
+  lastMemoryRecapReason: null,
+  lastNoteAt: 0,
+  lastNoteProvider: null,
+  lastNoteModel: null,
+  noteEntries: [],
+  ingestedFrameCount: 0,
+  acceptedFrameCountInWindow: 0,
+  frameWindowStartedAt: 0,
+  latestFrameMimeType: null,
+  latestFrameDataBase64: "",
+  latestFrameAt: 0,
+  latestChangeScore: 0,
+  latestEmaChangeScore: 0,
+  latestIsSceneCut: false
+};
+
+function ensureStreamWatchState(session: StreamWatchSession): StreamWatchState {
+  if (!session.streamWatch) {
+    session.streamWatch = { ...STREAM_WATCH_STATE_DEFAULTS };
+  }
+  return session.streamWatch;
+}
+
+function resetStreamWatchState(session: StreamWatchSession, opts: { preserveNotes?: boolean } = {}): StreamWatchState {
+  const sw = ensureStreamWatchState(session);
+  sw.active = false;
+  sw.targetUserId = null;
+  sw.requestedByUserId = null;
+  sw.pendingCommentaryTriggerReason = null;
+  sw.pendingCommentaryQueuedAt = 0;
+  sw.pendingCommentarySource = null;
+  sw.latestFrameMimeType = null;
+  sw.latestFrameDataBase64 = "";
+  sw.latestFrameAt = 0;
+  sw.latestChangeScore = 0;
+  sw.latestEmaChangeScore = 0;
+  sw.latestIsSceneCut = false;
+  if (!opts.preserveNotes) {
+    sw.lastNoteAt = 0;
+    sw.lastNoteProvider = null;
+    sw.lastNoteModel = null;
+    sw.noteEntries = [];
+  }
+  return sw;
+}
+
+export type StreamWatchSession = {
   id?: string | null;
   guildId?: string | null;
   textChannelId?: string | null;
@@ -35,7 +134,7 @@ type StreamWatchSession = {
   mode?: string | null;
   ending?: boolean;
   settingsSnapshot?: Record<string, unknown> | null;
-  streamWatch?: Record<string, unknown> | null;
+  streamWatch?: StreamWatchState | null;
   nativeScreenShare?: Record<string, unknown> | null;
   voxClient?: {
     subscribeUserVideo?: (payload: Record<string, unknown>) => void;
@@ -66,7 +165,7 @@ type StreamWatchSession = {
   [key: string]: unknown;
 };
 
-type StreamWatchManager = {
+export type StreamWatchManager = {
   client: StreamDiscoveryClientLike & {
     user?: { id?: string | null; username?: string | null } | null;
     guilds: {
@@ -145,7 +244,6 @@ type EnableWatchStreamResult = {
   frameReady?: boolean;
 };
 
-const STREAM_WATCH_AUDIO_QUIET_WINDOW_MS = 2200;
 const NOTE_RECENT_TRANSCRIPT_MAX_TURNS = 3;
 const NOTE_RECENT_TRANSCRIPT_MAX_CHARS = 200;
 
@@ -168,7 +266,7 @@ function getRecentTranscriptSnippet(session: StreamWatchSession): string {
     : joined;
 }
 const STREAM_WATCH_NOTE_PROMPT_MAX_CHARS = 600;
-const STREAM_WATCH_NOTE_LINE_MAX_CHARS = 400;
+export const STREAM_WATCH_NOTE_LINE_MAX_CHARS = 400;
 const STREAM_WATCH_NOTE_MAX_OUTPUT_TOKENS = 256;
 const DEFAULT_STREAM_WATCH_NOTE_PROMPT =
   "Write a concise private note (max ~40 words) capturing the most decision-useful information from this frame. " +
@@ -228,7 +326,7 @@ function clearStreamWatchNoteTimer(session: StreamWatchSession | null | undefine
   state.nextRunAt = 0;
 }
 
-function resolveStreamWatchNoteSettings(settings = null) {
+export function resolveStreamWatchNoteSettings(settings = null) {
   const streamWatchSettings = getVoiceStreamWatchSettings(settings);
   const prompt = normalizeVoiceText(
     String(streamWatchSettings.notePrompt || ""),
@@ -269,33 +367,6 @@ function resolveStreamWatchNoteSettings(settings = null) {
       30
     ),
     prompt: prompt || DEFAULT_STREAM_WATCH_NOTE_PROMPT
-  };
-}
-
-function resolveStreamWatchCommentarySettings(settings = null) {
-  const streamWatchSettings = getVoiceStreamWatchSettings(settings);
-  return {
-    enabled:
-      streamWatchSettings.autonomousCommentaryEnabled !== undefined
-        ? Boolean(streamWatchSettings.autonomousCommentaryEnabled)
-        : true,
-    intervalSeconds: clamp(
-      Number(streamWatchSettings.commentaryIntervalSeconds) || 15,
-      5,
-      120
-    ),
-    changeThreshold: clamp(
-      Number(streamWatchSettings.changeThreshold) || 0.01,
-      0.005,
-      1.0
-    ),
-    changeMinIntervalSeconds: clamp(
-      Number(streamWatchSettings.changeMinIntervalSeconds) || 2,
-      1,
-      30
-    ),
-    provider: String(streamWatchSettings.commentaryProvider || "").trim(),
-    model: String(streamWatchSettings.commentaryModel || "").trim()
   };
 }
 
@@ -855,48 +926,12 @@ export function appendStreamWatchNoteEntry({
     ].slice(-boundedMax);
   }
 
-  session.streamWatch = session.streamWatch || {};
-  session.streamWatch.noteEntries = nextEntries;
-  session.streamWatch.lastNoteAt = normalizedAt;
-  session.streamWatch.lastNoteProvider = normalizedProvider;
-  session.streamWatch.lastNoteModel = normalizedModel;
+  const sw = ensureStreamWatchState(session);
+  sw.noteEntries = nextEntries;
+  sw.lastNoteAt = normalizedAt;
+  sw.lastNoteProvider = normalizedProvider;
+  sw.lastNoteModel = normalizedModel;
   return nextEntries[nextEntries.length - 1] || null;
-}
-
-function isStreamWatchPlaybackBusy(session) {
-  if (!session || session.ending) return false;
-  if (session.botTurnOpen) return true;
-  const streamBuffered = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
-  return streamBuffered > 0;
-}
-
-function hasPendingDeferredVoiceTurns(manager: StreamWatchManager, session) {
-  if (!session || session.ending) return false;
-  const deferredTurns = manager.deferredActionQueue?.getDeferredQueuedUserTurns?.(session);
-  return Array.isArray(deferredTurns) && deferredTurns.length > 0;
-}
-
-function hasActiveVoiceGeneration(manager: StreamWatchManager, session) {
-  if (!session || session.ending) return false;
-  if (session.inFlightAcceptedBrainTurn && typeof session.inFlightAcceptedBrainTurn === "object") {
-    return true;
-  }
-  try {
-    return Boolean(manager.activeReplies?.has?.(buildVoiceReplyScopeKey(session.id)));
-  } catch {
-    return false;
-  }
-}
-
-function hasQueuedVoiceWork(manager: StreamWatchManager, session) {
-  if (!session || session.ending) return false;
-  if (hasActiveVoiceGeneration(manager, session)) return true;
-  if (Number(session.pendingFileAsrTurns || 0) > 0) return true;
-  if (session.realtimeTurnDrainActive) return true;
-  if (Array.isArray(session.pendingRealtimeTurns) && session.pendingRealtimeTurns.length > 0) return true;
-  if (hasPendingDeferredVoiceTurns(manager, session)) return true;
-  const outputChannelState = manager.getOutputChannelState?.(session);
-  return Boolean(outputChannelState?.locked);
 }
 
 async function sendStreamWatchOfflineMessage(manager: StreamWatchManager, { message, settings, guildId, requesterId }) {
@@ -1023,36 +1058,19 @@ export function initializeStreamWatchState(manager: StreamWatchManager, { sessio
   const noteLoop = getStreamWatchNoteLoopState(session);
   noteLoop.running = false;
   noteLoop.lastChangeCaptureAt = 0;
-  session.streamWatch = session.streamWatch || {};
+  const sw = ensureStreamWatchState(session);
   clearNativeDiscordScreenShareState(session);
-  session.streamWatch.active = true;
-  session.streamWatch.targetUserId = String(targetUserId || requesterUserId || "").trim() || null;
-  session.streamWatch.requestedByUserId = String(requesterUserId || "").trim() || null;
-  session.streamWatch.lastFrameAt = 0;
-  session.streamWatch.lastCommentaryAt = 0;
-  session.streamWatch.lastCommentaryNote = null;
-  session.streamWatch.lastMemoryRecapAt = 0;
-  session.streamWatch.lastMemoryRecapText = null;
-  session.streamWatch.lastMemoryRecapDurableSaved = false;
-  session.streamWatch.lastMemoryRecapReason = null;
-  session.streamWatch.lastNoteAt = 0;
-  session.streamWatch.lastNoteProvider = null;
-  session.streamWatch.lastNoteModel = null;
-  session.streamWatch.noteEntries = [];
-  session.streamWatch.ingestedFrameCount = 0;
-  session.streamWatch.acceptedFrameCountInWindow = 0;
-  session.streamWatch.frameWindowStartedAt = 0;
-  session.streamWatch.latestFrameMimeType = null;
-  session.streamWatch.latestFrameDataBase64 = "";
-  session.streamWatch.latestFrameAt = 0;
-  session.streamWatch.latestChangeScore = 0;
-  session.streamWatch.latestEmaChangeScore = 0;
-  session.streamWatch.latestIsSceneCut = false;
+  Object.assign(sw, STREAM_WATCH_STATE_DEFAULTS, {
+    active: true,
+    targetUserId: String(targetUserId || requesterUserId || "").trim() || null,
+    requestedByUserId: String(requesterUserId || "").trim() || null,
+    noteEntries: []
+  });
 }
 
 export function getStreamWatchNotesForPrompt(session, settings = null) {
   if (!session || session.ending) return null;
-  const streamWatch = session.streamWatch || {};
+  const streamWatch = session.streamWatch || STREAM_WATCH_STATE_DEFAULTS;
   const noteSettings = resolveStreamWatchNoteSettings(settings);
   const entries = getStreamWatchNoteEntries(session, noteSettings.maxEntries);
   if (!entries.length) return null;
@@ -1111,51 +1129,6 @@ export function resolveStreamWatchNoteModelSettings(manager: StreamWatchManager,
     temperature: 0.3,
     maxOutputTokens: STREAM_WATCH_NOTE_MAX_OUTPUT_TOKENS
   };
-}
-
-const DIRECT_VISION_PROVIDERS = new Set([
-  "openai",
-  "anthropic",
-  "claude-oauth",
-  "openai-oauth",
-  "codex-cli",
-  "codex_cli_session",
-  "xai"
-]);
-
-function supportsDirectVisionCommentary(manager: StreamWatchManager, settings = null) {
-  if (!manager.llm || typeof manager.llm.generate !== "function") return false;
-  const commentarySettings = resolveStreamWatchCommentarySettings(settings);
-  const resolvedSettings =
-    commentarySettings.provider && commentarySettings.model
-      ? withStreamWatchCommentaryBinding(settings, {
-          provider: commentarySettings.provider,
-          model: commentarySettings.model
-        })
-      : settings;
-  const voiceBinding = getResolvedVoiceGenerationBinding(resolvedSettings);
-  return DIRECT_VISION_PROVIDERS.has(voiceBinding.provider);
-}
-
-function withStreamWatchCommentaryBinding(
-  settings: Record<string, unknown> | null,
-  binding: { provider: string; model: string }
-) {
-  return deepMerge(settings || {}, {
-    agentStack: {
-      runtimeConfig: {
-        voice: {
-          generation: {
-            mode: "dedicated_model",
-            model: {
-              provider: binding.provider,
-              model: binding.model
-            }
-          }
-        }
-      }
-    }
-  });
 }
 
 async function generateStreamWatchNote(manager: StreamWatchManager, {
@@ -1241,28 +1214,6 @@ async function generateStreamWatchNote(manager: StreamWatchManager, {
     text,
     provider: generated?.provider || providerSettings.provider || null,
     model: generated?.model || providerSettings.model || null
-  };
-}
-
-function getStreamWatchChangeState(session: StreamWatchSession, settings = null) {
-  const noteSettings = resolveStreamWatchNoteSettings(settings);
-  const latestChangeScore = Number(session.streamWatch?.latestChangeScore || 0);
-  const latestEmaChangeScore = Number(session.streamWatch?.latestEmaChangeScore || 0);
-  const isSceneCut = Boolean(session.streamWatch?.latestIsSceneCut);
-  const significantChange =
-    isSceneCut ||
-    latestChangeScore >= noteSettings.changeThreshold ||
-    latestEmaChangeScore >= noteSettings.changeThreshold;
-  const staticMotion =
-    !isSceneCut &&
-    latestChangeScore < noteSettings.staticFloor &&
-    latestEmaChangeScore < noteSettings.staticFloor;
-  return {
-    latestChangeScore,
-    latestEmaChangeScore,
-    isSceneCut,
-    significantChange,
-    staticMotion
   };
 }
 
@@ -1590,10 +1541,11 @@ async function persistStreamWatchRecapToMemory(manager: StreamWatchManager, {
     }
   });
 
-  session.streamWatch.lastMemoryRecapAt = Date.now();
-  session.streamWatch.lastMemoryRecapText = recap.recap;
-  session.streamWatch.lastMemoryRecapDurableSaved = durableSaved;
-  session.streamWatch.lastMemoryRecapReason = String(reason || "watching_stopped");
+  const sw = ensureStreamWatchState(session);
+  sw.lastMemoryRecapAt = Date.now();
+  sw.lastMemoryRecapText = recap.recap;
+  sw.lastMemoryRecapDurableSaved = durableSaved;
+  sw.lastMemoryRecapReason = String(reason || "watching_stopped");
 
   return {
     recap: recap.recap,
@@ -1629,22 +1581,7 @@ async function finalizeStreamWatchState(manager: StreamWatchManager, {
   clearStreamWatchNoteTimer(session);
   getStreamWatchNoteLoopState(session).running = false;
 
-  session.streamWatch.active = false;
-  session.streamWatch.targetUserId = null;
-  session.streamWatch.requestedByUserId = null;
-  session.streamWatch.latestFrameMimeType = null;
-  session.streamWatch.latestFrameDataBase64 = "";
-  session.streamWatch.latestFrameAt = 0;
-  session.streamWatch.latestChangeScore = 0;
-  session.streamWatch.latestEmaChangeScore = 0;
-  session.streamWatch.latestIsSceneCut = false;
-
-  if (!preserveNotes) {
-    session.streamWatch.lastNoteAt = 0;
-    session.streamWatch.lastNoteProvider = null;
-    session.streamWatch.lastNoteModel = null;
-    session.streamWatch.noteEntries = [];
-  }
+  resetStreamWatchState(session, { preserveNotes });
 
   return {
     ok: true,
@@ -2080,7 +2017,7 @@ export async function requestStreamWatchStatus(manager: StreamWatchManager, { me
   if (context.handled) return true;
   const { guildId, session, requesterId } = context;
 
-  const streamWatch = session.streamWatch || {};
+  const streamWatch = session.streamWatch || STREAM_WATCH_STATE_DEFAULTS;
   const nativeScreenShare = ensureNativeDiscordScreenShareState(session);
   const lastFrameAgoSec = Number(streamWatch.lastFrameAt || 0)
     ? Math.max(0, Math.floor((Date.now() - Number(streamWatch.lastFrameAt || 0)) / 1000))
@@ -2159,7 +2096,7 @@ export async function ingestStreamFrame(manager: StreamWatchManager, {
     };
   }
 
-  const streamWatch = session.streamWatch || {};
+  const streamWatch = ensureStreamWatchState(session);
   if (!streamWatch.active) {
     return {
       accepted: false,
@@ -2310,133 +2247,4 @@ export async function ingestStreamFrame(manager: StreamWatchManager, {
     reason: "ok",
     targetUserId: streamWatch.targetUserId || null
   };
-}
-
-export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchManager, {
-  session,
-  settings,
-  streamerUserId = null,
-  source = "api_stream_ingest"
-}) {
-  if (!session || session.ending) return;
-  if (!supportsStreamWatchCommentary(manager, session, settings)) return;
-  if (!session.streamWatch?.active) return;
-  const baseSettings = resolveVoiceSettingsSnapshot(manager.store, session, settings) as Record<string, unknown> | null;
-  const commentarySettings = resolveStreamWatchCommentarySettings(baseSettings);
-  if (!commentarySettings.enabled) return;
-  if (typeof manager.runRealtimeBrainReply !== "function") return;
-
-  if (session.pendingResponse) return;
-  if (isStreamWatchPlaybackBusy(session)) return;
-  if (hasQueuedVoiceWork(manager, session)) return;
-
-  const quietWindowMs = STREAM_WATCH_AUDIO_QUIET_WINDOW_MS;
-  const now = Date.now();
-  const sinceLastInboundAudio = now - Number(session.lastInboundAudioAt || 0);
-  if (Number(session.lastInboundAudioAt || 0) > 0 && sinceLastInboundAudio < quietWindowMs) return;
-
-  const sinceLastCommentary = now - Number(session.streamWatch.lastCommentaryAt || 0);
-  const firstFrameTriggered = Number(session.streamWatch.ingestedFrameCount || 0) <= 1;
-  const intervalTriggered = sinceLastCommentary >= commentarySettings.intervalSeconds * 1000;
-  const changeState = getStreamWatchChangeState(session, baseSettings);
-  const changeTriggered =
-    sinceLastCommentary >= commentarySettings.changeMinIntervalSeconds * 1000 &&
-    changeState.significantChange;
-  if (!firstFrameTriggered && !intervalTriggered && !changeTriggered) return;
-
-  const bufferedFrame = String(session.streamWatch?.latestFrameDataBase64 || "").trim();
-  if (!bufferedFrame) return;
-
-  const frozenFrameSnapshot = {
-    mimeType: String(session.streamWatch?.latestFrameMimeType || "image/jpeg"),
-    dataBase64: bufferedFrame
-  };
-  const speakerName = manager.resolveVoiceSpeakerName(session, streamerUserId) || "the streamer";
-  const latestNoteEntries = Array.isArray(session.streamWatch?.noteEntries) ? session.streamWatch.noteEntries : [];
-  const latestNote = normalizeVoiceText(
-    latestNoteEntries[latestNoteEntries.length - 1]?.text || "",
-    STREAM_WATCH_NOTE_LINE_MAX_CHARS
-  );
-  const triggerReason = firstFrameTriggered
-    ? "share_start"
-    : changeTriggered && !intervalTriggered
-      ? "change_detected"
-      : "interval";
-  const normalizedStreamerUserId = String(streamerUserId || "").trim() || null;
-  const botUserId = String(manager.client.user?.id || "").trim() || null;
-  const transcript =
-    triggerReason === "share_start"
-      ? `[${speakerName} started screen sharing. You can see the latest frame.]`
-      : triggerReason === "change_detected"
-        ? `[${speakerName} is screen sharing. Something notable just happened on screen.]`
-        : `[A fresh frame from ${speakerName}'s screen share is available.]`;
-  const resolvedCommentarySettings =
-    commentarySettings.provider && commentarySettings.model
-      ? withStreamWatchCommentaryBinding(baseSettings, {
-          provider: commentarySettings.provider,
-          model: commentarySettings.model
-        })
-      : baseSettings;
-
-  session.streamWatch.lastCommentaryAt = now;
-  session.streamWatch.lastCommentaryNote = latestNote || null;
-
-  void manager.runRealtimeBrainReply({
-    session,
-    settings: resolvedCommentarySettings,
-    userId: session.streamWatch.targetUserId || streamerUserId || manager.client.user?.id || null,
-    transcript,
-    inputKind: "event",
-    directAddressed: false,
-    source: `stream_watch_brain_turn:${triggerReason}`,
-    frozenFrameSnapshot,
-    runtimeEventContext: {
-      category: "screen_share",
-      eventType: triggerReason,
-      actorUserId: normalizedStreamerUserId,
-      actorDisplayName: speakerName,
-      actorRole:
-        normalizedStreamerUserId && botUserId && normalizedStreamerUserId === botUserId
-          ? "self"
-          : normalizedStreamerUserId
-            ? "other"
-            : "unknown",
-      hasVisibleFrame: true
-    }
-  }).catch((error: unknown) => {
-    manager.store.logAction({
-      kind: "voice_error",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: manager.client.user?.id || null,
-      content: `stream_watch_commentary_request_failed: ${String((error as Error)?.message || error)}`,
-      metadata: {
-        sessionId: session.id,
-        source: String(source || "api_stream_ingest"),
-        triggerReason
-      }
-    });
-  });
-
-  manager.store.logAction({
-    kind: "voice_runtime",
-    guildId: session.guildId,
-    channelId: session.textChannelId,
-    userId: manager.client.user?.id || null,
-    content: "stream_watch_commentary_requested",
-    metadata: {
-      sessionId: session.id,
-      source: String(source || "api_stream_ingest"),
-      streamerUserId: streamerUserId || null,
-      commentaryMode: "brain_turn",
-      triggerReason,
-      changeScore: changeState.latestChangeScore,
-      emaChangeScore: changeState.latestEmaChangeScore,
-      isSceneCut: changeState.isSceneCut,
-      changeTriggered,
-      commentaryProvider: commentarySettings.provider || null,
-      commentaryModel: commentarySettings.model || null,
-      latestNote: latestNote || null
-    }
-  });
 }

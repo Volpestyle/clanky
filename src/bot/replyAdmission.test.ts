@@ -311,4 +311,57 @@ test("reply admission falls back to AMBIENT when another human has already moved
   assert.equal(attention.recentReplyWindowActive, false);
 });
 
+test("message mentioning another user still reaches the LLM (no hard gate)", () => {
+  const noAddress = {
+    direct: false,
+    inferred: false,
+    triggered: false,
+    reason: "llm_decides"
+  };
+  const settings = {
+    permissions: { allowUnsolicitedReplies: true },
+    interaction: {
+      activity: {
+        ambientReplyEagerness: 10,
+        responseWindowEagerness: 80
+      }
+    }
+  };
+  const message = {
+    content: "@donky conk u see that thats hot af",
+    mentions: {
+      users: {
+        size: 1,
+        has(id: string | undefined) {
+          return id === "user-2";
+        }
+      },
+      repliedUser: null
+    },
+    reference: null,
+    referencedMessage: null
+  };
 
+  assert.equal(
+    shouldAttemptReplyDecision({
+      botUserId: "bot-1",
+      settings,
+      message,
+      recentMessages: [
+        {
+          message_id: "bot-ctx-1",
+          author_id: "bot-1",
+          referenced_message_id: "human-ctx-1"
+        },
+        {
+          message_id: "human-ctx-1",
+          author_id: "user-1"
+        }
+      ],
+      addressSignal: noAddress,
+      triggerMessageId: "msg-1",
+      triggerAuthorId: "user-1"
+    }),
+    true
+  );
+});

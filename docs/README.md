@@ -10,6 +10,7 @@ Use the docs in this order:
 
 - [`../README.md`](../README.md) — repo setup, runtime identity, and the high-level product pitch
 - [`architecture/overview.md`](architecture/overview.md) — the live runtime shape of Bun, `clankvox`, settings, tools, memory, and Discord integration
+- [`architecture/relationship-model.md`](architecture/relationship-model.md) — product direction for community participation, owner-assistant depth, trusted collaborators, and capability tiers
 - [`reference/settings.md`](reference/settings.md) — canonical settings contract and persistence model
 
 ## Capability Hubs
@@ -32,6 +33,7 @@ Use the docs in this order:
 ## Behavior And Activity
 
 - [`architecture/activity.md`](architecture/activity.md) — text + voice activity model and initiative behavior
+- [`architecture/relationship-model.md`](architecture/relationship-model.md) — relationship tiers, capability classes, and ownership boundaries
 - [`architecture/initiative.md`](architecture/initiative.md) — unified initiative/discovery cycle
 - [`architecture/presence-and-attention.md`](architecture/presence-and-attention.md) — presence and shared-attention model
 - [`architecture/presets.md`](architecture/presets.md) — preset-driven runtime selection and setting inheritance
