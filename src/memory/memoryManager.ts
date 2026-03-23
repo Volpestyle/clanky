@@ -5,6 +5,7 @@ import { sleep } from "../normalization/time.ts";
 import { getMemorySettings } from "../settings/agentStack.ts";
 import {
   LORE_SUBJECT,
+  OWNER_SUBJECT,
   SELF_SUBJECT,
   buildFactEmbeddingPayload,
   buildHighlightsSection,
@@ -106,6 +107,24 @@ const FACT_SECTION_SUBJECT_FETCH_LIMIT = 32;
 // Settling delay before micro-reflection runs after queued text events.
 const DEFAULT_MICRO_REFLECTION_SETTLE_TIMEOUT_MS = 8_000;
 const MIN_MICRO_REFLECTION_SETTLE_TIMEOUT_MS = 100;
+const RECENT_VOICE_SESSION_SUMMARY_WINDOW_MINUTES = 30;
+const RECENT_VOICE_SESSION_SUMMARY_LIMIT = 2;
+const RECENT_VOICE_SESSION_SUMMARY_RETENTION_HOURS = 24;
+const VOICE_PRE_COMPACTION_MAX_FACTS = 4;
+const VOICE_PRE_COMPACTION_MAX_ENTRIES = 24;
+const VOICE_PRE_COMPACTION_MAX_TOTAL_CHARS = 3_200;
+
+function toIsoOrNull(value: unknown) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return new Date(numeric).toISOString();
+  }
+  const normalized = String(value || "").trim();
+  if (!normalized) return null;
+  const parsed = Date.parse(normalized);
+  if (!Number.isFinite(parsed)) return null;
+  return new Date(parsed).toISOString();
+}
 
 function sortProfileFacts<T extends MemoryFactRow>(rows: T[]) {
   return [...(Array.isArray(rows) ? rows : [])].sort((left, right) => {
@@ -156,8 +175,26 @@ function mergeUniqueFactCandidates(...groups: Array<Array<MemoryFactRow> | null 
   for (const group of groups) {
     for (const row of Array.isArray(group) ? group : []) {
       const rowId = Number(row?.id);
-      if (!Number.isInteger(rowId) || rowId <= 0 || merged.has(rowId)) continue;
-      merged.set(rowId, row);
+      if (!Number.isInteger(rowId) || rowId <= 0) continue;
+      const existing = merged.get(rowId);
+      if (!existing) {
+        merged.set(rowId, row);
+        continue;
+      }
+      merged.set(rowId, {
+        ...existing,
+        ...row,
+        lexical_score: Number.isFinite(Number(row?.lexical_score))
+          ? Number(row.lexical_score)
+          : Number.isFinite(Number(existing?.lexical_score))
+            ? Number(existing.lexical_score)
+            : null,
+        semantic_score: Number.isFinite(Number(row?.semantic_score))
+          ? Number(row.semantic_score)
+          : Number.isFinite(Number(existing?.semantic_score))
+            ? Number(existing.semantic_score)
+            : null
+      });
     }
   }
   return [...merged.values()];
@@ -440,6 +477,23 @@ export class MemoryManager {
     };
   }
 
+  loadOwnerFactProfile() {
+    const rows = this.store.getFactsForScope({
+      scope: "owner",
+      subjectIds: [OWNER_SUBJECT],
+      limit: FACT_PROFILE_LOAD_LIMIT
+    });
+    const guidanceFacts = rows.filter((row) => String(row?.fact_type || "").trim() === GUIDANCE_FACT_TYPE);
+    const ownerFacts = rows.filter((row) => {
+      const factType = String(row?.fact_type || "").trim();
+      return factType !== GUIDANCE_FACT_TYPE && factType !== BEHAVIORAL_FACT_TYPE;
+    });
+    return {
+      ownerFacts: sortProfileFacts(ownerFacts).slice(0, MAX_USER_PROFILE_FACTS),
+      guidanceFacts: decoratePromptFactRows(guidanceFacts, { [OWNER_SUBJECT]: "Owner private" }).slice(0, MAX_USER_GUIDANCE_FACTS)
+    };
+  }
+
   loadExistingFactsForReflection({ guildId, subjectIds }: { guildId: string; subjectIds: string[] }) {
     const normalizedGuildId = String(guildId || "").trim();
     if (!normalizedGuildId || !subjectIds.length) return [];
@@ -467,12 +521,14 @@ export class MemoryManager {
     userId,
     guildId,
     participantIds = [],
-    participantNames = {}
+    participantNames = {},
+    includeOwner = false
   }: {
     userId?: string | null;
     guildId?: string | null;
     participantIds?: string[];
     participantNames?: Record<string, string>;
+    includeOwner?: boolean;
   }) {
     const normalizedUserId = String(userId || "").trim() || null;
     const normalizedParticipantIds = [
@@ -489,7 +545,8 @@ export class MemoryManager {
 
     const subjectLabels: Record<string, string> = {
       [SELF_SUBJECT]: "Bot",
-      [LORE_SUBJECT]: "Shared lore"
+      [LORE_SUBJECT]: "Shared lore",
+      [OWNER_SUBJECT]: "Owner private"
     };
     for (const participantId of normalizedParticipantIds) {
       subjectLabels[participantId] = String(participantNames?.[participantId] || participantId).trim() || participantId;
@@ -509,15 +566,23 @@ export class MemoryManager {
       })
       : [];
     const rows = mergeUniqueFactCandidates(userRows, guildRows);
+    const ownerRows = includeOwner
+      ? this.store.getFactsForScope({
+        scope: "owner",
+        subjectIds: [OWNER_SUBJECT],
+        limit: 80
+      })
+      : [];
+    const mergedRows = mergeUniqueFactCandidates(rows, ownerRows);
     const regularFacts = sortProfileFacts(
-      rows.filter((row) => {
+      mergedRows.filter((row) => {
         const factType = String(row?.fact_type || "").trim();
         return factType !== GUIDANCE_FACT_TYPE && factType !== BEHAVIORAL_FACT_TYPE;
       })
     );
     const guidanceFacts = dedupePromptFactRows(
       decoratePromptFactRows(
-        rows.filter((row) => String(row?.fact_type || "").trim() === GUIDANCE_FACT_TYPE),
+        mergedRows.filter((row) => String(row?.fact_type || "").trim() === GUIDANCE_FACT_TYPE),
         subjectLabels
       )
     ).slice(0, MAX_PROFILE_GUIDANCE_FACTS);
@@ -535,6 +600,9 @@ export class MemoryManager {
     const loreFacts = regularFacts
       .filter((row) => String(row?.subject || "").trim() === LORE_SUBJECT)
       .slice(0, MAX_GUILD_LORE_FACTS);
+    const ownerFacts = regularFacts
+      .filter((row) => String(row?.subject || "").trim() === OWNER_SUBJECT)
+      .slice(0, MAX_USER_PROFILE_FACTS);
     const secondaryFacts = participants
       .filter((entry) => !entry.isPrimary)
       .flatMap((entry) => entry.facts.slice(0, MAX_SECONDARY_RELEVANT_FACTS));
@@ -549,7 +617,8 @@ export class MemoryManager {
       selfFacts,
       loreFacts,
       userFacts: Array.isArray(primaryProfile?.facts) ? primaryProfile.facts : [],
-      relevantFacts: [...secondaryFacts, ...selfFacts, ...loreFacts],
+      ownerFacts,
+      relevantFacts: [...secondaryFacts, ...selfFacts, ...loreFacts, ...ownerFacts],
       guidanceFacts
     };
   }
@@ -1024,6 +1093,176 @@ export class MemoryManager {
     }
   }
 
+  async runVoiceCompactionMiniReflection({
+    guildId,
+    channelId = null,
+    sessionId,
+    batchStart = 0,
+    settings,
+    transcriptTurns = []
+  }: {
+    guildId?: string | null;
+    channelId?: string | null;
+    sessionId?: string | null;
+    batchStart?: number;
+    settings?: Record<string, unknown> | null;
+    transcriptTurns?: Array<Record<string, unknown>>;
+  }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedSessionId = String(sessionId || "").trim() || "session";
+    const resolvedSettings = settings || this.store.getSettings?.() || null;
+    const memorySettings = getMemorySettings(resolvedSettings);
+    if (!normalizedGuildId || !memorySettings.enabled || !memorySettings.reflection?.enabled) {
+      return { ok: false, reason: "memory_reflection_disabled" };
+    }
+
+    const inFlightKey = `voice_compaction:${normalizedGuildId}:${normalizedSessionId}:${Math.max(0, Math.floor(Number(batchStart) || 0))}`;
+    if (this.microReflectionInFlight.has(inFlightKey)) {
+      return { ok: false, reason: "already_running" };
+    }
+
+    const normalizedEntries = (Array.isArray(transcriptTurns) ? transcriptTurns : [])
+      .filter((turn) => {
+        const kind = String(turn?.kind || "speech").trim();
+        return kind === "speech" || !kind;
+      })
+      .map((turn) => ({
+        timestampIso: Number.isFinite(Number(turn?.at))
+          ? new Date(Number(turn.at)).toISOString()
+          : "",
+        timestampMs: Number(turn?.at) || 0,
+        author: String(turn?.speakerName || "unknown").trim() || "unknown",
+        authorId: String(turn?.userId || "").trim() || null,
+        isBot: String(turn?.role || "").trim() === "assistant",
+        content: String(turn?.text || "").trim()
+      }))
+      .filter((entry) => entry.content);
+    if (!normalizedEntries.length) {
+      return { ok: false, reason: "no_entries" };
+    }
+
+    this.microReflectionInFlight.add(inFlightKey);
+    try {
+      return await runMicroReflection({
+        memory: this,
+        store: this.store,
+        llm: this.llm,
+        settings: resolvedSettings,
+        guildId: normalizedGuildId,
+        channelId: String(channelId || "").trim() || null,
+        trigger: "voice_pre_compaction",
+        sourceMessageId: `micro_reflection_voice_compaction_${normalizedGuildId}_${normalizedSessionId}_${Math.max(0, Math.floor(Number(batchStart) || 0))}`,
+        entries: normalizedEntries,
+        maxFacts: VOICE_PRE_COMPACTION_MAX_FACTS,
+        maxEntries: VOICE_PRE_COMPACTION_MAX_ENTRIES,
+        maxTotalChars: VOICE_PRE_COMPACTION_MAX_TOTAL_CHARS
+      });
+    } finally {
+      this.microReflectionInFlight.delete(inFlightKey);
+    }
+  }
+
+  persistVoiceSessionSummary({
+    sessionId,
+    guildId,
+    channelId = null,
+    summaryText,
+    startedAtMs = null,
+    endedAtMs = null
+  }: {
+    sessionId: string;
+    guildId: string;
+    channelId?: string | null;
+    summaryText: string;
+    startedAtMs?: number | null;
+    endedAtMs?: number | null;
+  }) {
+    const normalizedSessionId = String(sessionId || "").trim();
+    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedChannelId = String(channelId || "").trim();
+    const normalizedSummaryText = String(summaryText || "").replace(/\s+/g, " ").trim();
+    if (!normalizedSessionId || !normalizedGuildId || !normalizedChannelId || !normalizedSummaryText) {
+      return false;
+    }
+
+    const persisted = this.store.upsertSessionSummary?.({
+      sessionId: normalizedSessionId,
+      guildId: normalizedGuildId,
+      channelId: normalizedChannelId,
+      summaryText: normalizedSummaryText,
+      startedAt: toIsoOrNull(startedAtMs),
+      endedAt: toIsoOrNull(endedAtMs) || new Date().toISOString(),
+      modality: "voice"
+    });
+    if (!persisted) return false;
+
+    this.store.pruneExpiredSessionSummaries?.({
+      retentionHours: RECENT_VOICE_SESSION_SUMMARY_RETENTION_HOURS
+    });
+    this.store.logAction({
+      kind: "memory_runtime",
+      guildId: normalizedGuildId,
+      channelId: normalizedChannelId,
+      userId: null,
+      content: "voice_session_summary_persisted",
+      metadata: {
+        sessionId: normalizedSessionId,
+        summaryChars: normalizedSummaryText.length
+      }
+    });
+    return true;
+  }
+
+  getRecentVoiceSessionSummariesForPrompt({
+    guildId,
+    channelId = null,
+    referenceAtMs = null,
+    limit = RECENT_VOICE_SESSION_SUMMARY_LIMIT,
+    windowMinutes = RECENT_VOICE_SESSION_SUMMARY_WINDOW_MINUTES
+  }: {
+    guildId: string;
+    channelId?: string | null;
+    referenceAtMs?: number | null;
+    limit?: number;
+    windowMinutes?: number;
+  }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedChannelId = String(channelId || "").trim();
+    if (!normalizedGuildId || !normalizedChannelId) return [];
+
+    const referenceMs = Number.isFinite(Number(referenceAtMs)) && Number(referenceAtMs) > 0
+      ? Number(referenceAtMs)
+      : Date.now();
+    const boundedWindowMinutes = clampInt(windowMinutes, 1, 24 * 60);
+    const rows = this.store.getRecentSessionSummaries?.({
+      guildId: normalizedGuildId,
+      channelId: normalizedChannelId,
+      modality: "voice",
+      sinceIso: new Date(referenceMs - boundedWindowMinutes * 60_000).toISOString(),
+      beforeIso: new Date(referenceMs).toISOString(),
+      limit: clampInt(limit, 1, 4)
+    }) || [];
+
+    return rows
+      .map((row) => {
+        const endedAt = String(row?.ended_at || "").trim() || null;
+        const summaryText = String(row?.summary_text || "").replace(/\s+/g, " ").trim();
+        if (!endedAt || !summaryText) return null;
+        const endedAtMs = Date.parse(endedAt);
+        return {
+          sessionId: String(row?.session_id || "").trim() || null,
+          guildId: String(row?.guild_id || "").trim() || null,
+          channelId: String(row?.channel_id || "").trim() || null,
+          endedAt,
+          ageMinutes: Number.isFinite(endedAtMs)
+            ? Math.max(0, Math.round((referenceMs - endedAtMs) / 60_000))
+            : null,
+          summaryText
+        };
+      })
+      .filter((row) => row !== null);
+  }
+
   async searchDurableFacts({
     guildId = null,
     scope = "all",
@@ -1036,7 +1275,7 @@ export class MemoryManager {
     limit = HYBRID_FACT_LIMIT
   }: {
     guildId?: string | null;
-    scope?: "user" | "guild" | "all";
+    scope?: "user" | "guild" | "owner" | "owner_private" | "all";
     channelId?: string | null;
     queryText: string;
     subjectIds?: string[] | null;
@@ -1047,7 +1286,7 @@ export class MemoryManager {
   }) {
     const scopeGuildId = String(guildId || "").trim() || null;
     const rawScopeMode = String(scope || "all").trim().toLowerCase();
-    const scopeMode = rawScopeMode === "user" || rawScopeMode === "guild" || rawScopeMode === "all"
+    const scopeMode = rawScopeMode === "user" || rawScopeMode === "guild" || rawScopeMode === "owner" || rawScopeMode === "owner_private" || rawScopeMode === "all"
       ? rawScopeMode
       : "all";
     const normalizedTrace =
@@ -1065,9 +1304,11 @@ export class MemoryManager {
     const scopedSubjectIds = normalizedSubjectIds.length ? normalizedSubjectIds : null;
     const includeUserScope =
       scopeMode === "user" ||
+      scopeMode === "owner_private" ||
       (scopeMode === "all" && (!scopeGuildId || hasSubjectFilter));
-    const includeGuildScope = (scopeMode === "all" || scopeMode === "guild") && Boolean(scopeGuildId);
-    if (!includeUserScope && !includeGuildScope) return [];
+    const includeGuildScope = (scopeMode === "all" || scopeMode === "guild" || scopeMode === "owner_private") && Boolean(scopeGuildId);
+    const includeOwnerScope = scopeMode === "owner" || scopeMode === "owner_private";
+    if (!includeUserScope && !includeGuildScope && !includeOwnerScope) return [];
 
     const isFullMemoryQuery = queryText === "__ALL__";
     const boundedLimit = isFullMemoryQuery
@@ -1088,6 +1329,14 @@ export class MemoryManager {
           ? this.store.getFactsForScope?.({
             scope: "guild",
             guildId: scopeGuildId,
+            subjectIds: scopedSubjectIds,
+            factTypes,
+            limit: Math.max(boundedLimit, 24)
+          }) || []
+          : [],
+        includeOwnerScope
+          ? this.store.getFactsForScope?.({
+            scope: "owner",
             subjectIds: scopedSubjectIds,
             factTypes,
             limit: Math.max(boundedLimit, 24)
@@ -1142,7 +1391,7 @@ export class MemoryManager {
         }).catch(() => null)
         : null;
 
-    const collectScopeCandidates = (factScope: "user" | "guild") => {
+    const collectScopeCandidates = (factScope: "user" | "guild" | "owner") => {
       if (factScope === "guild" && !scopeGuildId) return;
       const scopeGuild = factScope === "guild" ? scopeGuildId : null;
       const recentRows = this.store.getFactsForScope?.({
@@ -1181,6 +1430,7 @@ export class MemoryManager {
 
     if (includeUserScope) collectScopeCandidates("user");
     if (includeGuildScope) collectScopeCandidates("guild");
+    if (includeOwnerScope) collectScopeCandidates("owner");
 
     const candidates = mergeUniqueFactCandidates(
       semanticCandidates,
@@ -1234,7 +1484,9 @@ export class MemoryManager {
     const semanticAvailable = semanticScores.size > 0;
 
     const scored = candidates.map((row) => {
-      const lexicalScore = computeLexicalFactScore(row, { queryTokens, queryCompact });
+      const lexicalScore = Number.isFinite(Number(row?.lexical_score))
+        ? clamp01(Number(row.lexical_score), 0)
+        : computeLexicalFactScore(row, { queryTokens, queryCompact });
       const semanticScore = semanticScores.get(Number(row.id)) || 0;
       const recencyScore = computeRecencyScore(row.created_at);
       const confidenceScore = clamp01(row.confidence, 0.5);
@@ -1574,13 +1826,14 @@ export class MemoryManager {
         reason: "guild_required",
         guildId: null,
         durableFactsDeleted: 0,
-        durableFactVectorsDeleted: 0,
-        conversationMessagesDeleted: 0,
-        conversationVectorsDeleted: 0,
-        reflectionEventsDeleted: 0,
-        journalEntriesDeleted: 0,
-        journalFilesTouched: 0,
-        summaryRefreshed: false
+      durableFactVectorsDeleted: 0,
+      conversationMessagesDeleted: 0,
+      conversationVectorsDeleted: 0,
+      reflectionEventsDeleted: 0,
+      sessionSummariesDeleted: 0,
+      journalEntriesDeleted: 0,
+      journalFilesTouched: 0,
+      summaryRefreshed: false
       } as const;
     }
 
@@ -1606,6 +1859,10 @@ export class MemoryManager {
       typeof this.store?.deleteMemoryReflectionRunsForGuild === "function"
         ? this.store.deleteMemoryReflectionRunsForGuild(normalizedGuildId)
         : { deleted: 0 };
+    const sessionSummaryResult =
+      typeof this.store?.deleteSessionSummariesForGuild === "function"
+        ? this.store.deleteSessionSummariesForGuild(normalizedGuildId)
+        : { deleted: 0 };
     const journalResult = await this.purgeGuildEntriesFromDailyLogs(normalizedGuildId);
 
     let summaryRefreshed = false;
@@ -1625,6 +1882,7 @@ export class MemoryManager {
       conversationMessagesDeleted: Number(messageResult?.messagesDeleted || 0),
       conversationVectorsDeleted: Number(messageResult?.vectorsDeleted || 0),
       reflectionEventsDeleted: Number(reflectionResult?.deleted || 0),
+      sessionSummariesDeleted: Number(sessionSummaryResult?.deleted || 0),
       journalEntriesDeleted: Number(journalResult?.entriesDeleted || 0),
       journalFilesTouched: Number(journalResult?.filesTouched || 0),
       summaryRefreshed
@@ -1784,7 +2042,7 @@ export class MemoryManager {
   }) {
     const scopeGuildId = String(guildId || "").trim() || null;
     const scopeConfig = resolveDirectiveScopeConfig(scope);
-    const memoryScope = scopeConfig.scope === "lore" ? "guild" : "user";
+    const memoryScope = scopeConfig.scope === "lore" ? "guild" : scopeConfig.scope === "owner" ? "owner" : "user";
     if (memoryScope === "guild" && !scopeGuildId) {
       return {
         ok: false,
@@ -1801,7 +2059,7 @@ export class MemoryManager {
       };
     }
     const scopedUserId =
-      memoryScope === "user" && subject !== SELF_SUBJECT
+      (memoryScope === "user" || memoryScope === "owner") && subject !== SELF_SUBJECT
         ? String(subjectOverride || userId || subject).trim() || null
         : null;
 

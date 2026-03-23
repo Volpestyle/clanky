@@ -6,9 +6,10 @@ import MemorySearch from "./memoryTab/MemorySearch";
 import MemoryFactProfiles from "./memoryTab/MemoryFactProfiles";
 import MemoryReflections from "./memoryTab/MemoryReflections";
 import MemoryInspector from "./memoryTab/MemoryInspector";
+import MemoryOwnerPrivate from "./memoryTab/MemoryOwnerPrivate";
 import { loadStoredTab, saveStoredTab } from "../tabState";
 
-const MEMORY_SUB_TABS = ["runtime", "snapshot", "inspector", "profiles", "reflections", "search"] as const;
+const MEMORY_SUB_TABS = ["runtime", "snapshot", "inspector", "owner", "profiles", "reflections", "search"] as const;
 const MEMORY_SUB_TAB_STORAGE_KEY = "dashboard_memory_sub_tab";
 
 type SubTab = (typeof MEMORY_SUB_TABS)[number];
@@ -45,6 +46,7 @@ export default function MemoryTab({ markdown, onRefresh, notify }: Props) {
         label={(t) => {
           if (t === "runtime") return "Runtime";
           if (t === "snapshot") return "Summary";
+          if (t === "owner") return "Owner Private";
           return t.charAt(0).toUpperCase() + t.slice(1);
         }}
       />
@@ -56,6 +58,9 @@ export default function MemoryTab({ markdown, onRefresh, notify }: Props) {
       </div>
       <div style={{ display: subTab === "inspector" ? undefined : "none" }}>
         <MemoryInspector onMemoryMutated={onRefresh} />
+      </div>
+      <div style={{ display: subTab === "owner" ? undefined : "none" }}>
+        <MemoryOwnerPrivate onMemoryMutated={onRefresh} />
       </div>
       <div style={{ display: subTab === "reflections" ? undefined : "none" }}>
         <MemoryReflections />

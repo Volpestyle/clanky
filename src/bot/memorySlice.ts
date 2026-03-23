@@ -1,4 +1,5 @@
 import { collectMemoryFactHints } from "./botHelpers.ts";
+import { isOwnerPrivateContext } from "../memory/memoryContext.ts";
 import { clamp } from "../utils.ts";
 import type { BotContext } from "./botContext.ts";
 
@@ -16,6 +17,7 @@ type FactProfileSlice = {
   participantProfiles: Array<Record<string, unknown>>;
   selfFacts: Array<Record<string, unknown>>;
   loreFacts: Array<Record<string, unknown>>;
+  ownerFacts: Array<Record<string, unknown>>;
   userFacts: Array<Record<string, unknown>>;
   relevantFacts: Array<Record<string, unknown>>;
   guidanceFacts: Array<Record<string, unknown>>;
@@ -37,6 +39,7 @@ export function emptyFactProfileSlice(): FactProfileSlice {
     participantProfiles: [],
     selfFacts: [],
     loreFacts: [],
+    ownerFacts: [],
     userFacts: [],
     relevantFacts: [],
     guidanceFacts: []
@@ -53,6 +56,7 @@ export function normalizeFactProfileSlice(slice: unknown): FactProfileSlice {
       : [],
     selfFacts: Array.isArray(value.selfFacts) ? value.selfFacts as Array<Record<string, unknown>> : [],
     loreFacts: Array.isArray(value.loreFacts) ? value.loreFacts as Array<Record<string, unknown>> : [],
+    ownerFacts: Array.isArray(value.ownerFacts) ? value.ownerFacts as Array<Record<string, unknown>> : [],
     userFacts: Array.isArray(value.userFacts) ? value.userFacts as Array<Record<string, unknown>> : [],
     relevantFacts: Array.isArray(value.relevantFacts) ? value.relevantFacts as Array<Record<string, unknown>> : [],
     guidanceFacts: Array.isArray(value.guidanceFacts) ? value.guidanceFacts as Array<Record<string, unknown>> : []
@@ -157,7 +161,11 @@ export function loadFactProfile(
       userId: normalizedUserId,
       guildId: normalizedGuildId,
       participantIds: participants.participantIds,
-      participantNames: participants.participantNames
+      participantNames: participants.participantNames,
+      includeOwner: isOwnerPrivateContext({
+        guildId: normalizedGuildId,
+        actorUserId: normalizedUserId
+      })
     }));
     return factProfile;
   } catch (error) {

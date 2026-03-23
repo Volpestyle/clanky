@@ -3,6 +3,7 @@ import type { DashboardBot, DashboardMemory, DashboardScreenShareSessionManager 
 import type { DashboardApp, DashboardSseClient } from "./shared.ts";
 import type { Store } from "../store/store.ts";
 import { parseBoundedInt, readDashboardBody, STREAM_INGEST_API_PATH, toRecord } from "./shared.ts";
+import { canonicalizeMemoryFactText, canonicalizeMemoryFactType, isLegacyMemoryFactRow } from "../store/storeMemory.ts";
 
 interface VoiceRouteDeps {
   store: Store;
@@ -29,13 +30,18 @@ interface DashboardVoiceManagerRuntime {
 
 function mapDashboardFactRow(row: unknown) {
   const record = toRecord(row);
-  const fact = String(record.fact || "").trim();
+  const fact = canonicalizeMemoryFactText(record.fact || "").trim();
   if (!fact) return null;
   const confidence = Number(record.confidence);
+  const factType = canonicalizeMemoryFactType(record.factType || record.fact_type || "").trim() || null;
+  const scope = String(record.scope || "").trim() || null;
+  const userId = String(record.userId || record.user_id || "").trim() || null;
   return {
     id: Number.isInteger(Number(record.id)) ? Number(record.id) : null,
+    scope,
+    userId,
     subject: String(record.subject || "").trim() || null,
-    factType: String(record.factType || record.fact_type || "").trim() || null,
+    factType,
     fact,
     confidence: Number.isFinite(confidence) ? Number(confidence) : null,
     metadata: {
@@ -50,7 +56,11 @@ function mapDashboardFactRow(row: unknown) {
           ? String(record.sourceMessageId)
           : record.source_message_id
             ? String(record.source_message_id)
-            : null
+            : null,
+      isLegacy: isLegacyMemoryFactRow({
+        fact: String(record.fact || "").trim(),
+        fact_type: String(record.factType || record.fact_type || "").trim()
+      })
     }
   };
 }
@@ -59,6 +69,43 @@ function normalizeDashboardFactRows(rows: unknown) {
   return (Array.isArray(rows) ? rows : [])
     .map((row) => mapDashboardFactRow(row))
     .filter((row) => row !== null);
+}
+
+function mapDashboardEditableFactRow(row: unknown) {
+  const record = toRecord(row);
+  const fact = canonicalizeMemoryFactText(record.fact || "").trim();
+  if (!fact) return null;
+  return {
+    id: Number.isInteger(Number(record.id)) ? Number(record.id) : null,
+    created_at: record.created_at ? String(record.created_at) : record.createdAt ? String(record.createdAt) : null,
+    updated_at: record.updated_at ? String(record.updated_at) : record.updatedAt ? String(record.updatedAt) : null,
+    scope: String(record.scope || "").trim() || null,
+    guild_id: record.guild_id ? String(record.guild_id) : record.guildId ? String(record.guildId) : null,
+    channel_id: record.channel_id ? String(record.channel_id) : record.channelId ? String(record.channelId) : null,
+    user_id: record.user_id ? String(record.user_id) : record.userId ? String(record.userId) : null,
+    subject: String(record.subject || "").trim() || null,
+    fact,
+    fact_type: canonicalizeMemoryFactType(record.fact_type || record.factType || "").trim() || "other",
+    evidence_text:
+      record.evidence_text ? String(record.evidence_text) : record.evidenceText ? String(record.evidenceText) : null,
+    source_message_id:
+      record.source_message_id
+        ? String(record.source_message_id)
+        : record.sourceMessageId
+          ? String(record.sourceMessageId)
+          : null,
+    confidence: Number.isFinite(Number(record.confidence)) ? Number(record.confidence) : 0,
+    metadata: {
+      isLegacy: isLegacyMemoryFactRow({
+        fact: String(record.fact || "").trim(),
+        fact_type: String(record.fact_type || record.factType || "").trim()
+      })
+    }
+  };
+}
+
+function normalizeDashboardEditableFactRows(rows: unknown) {
+  return (Array.isArray(rows) ? rows : []).map((row) => mapDashboardEditableFactRow(row)).filter((row) => row !== null);
 }
 
 function normalizeDashboardFactEditorText(value: unknown, maxChars: number) {
@@ -111,6 +158,21 @@ function mapConversationWindowRow(row: unknown) {
     semanticScore: Number.isFinite(semanticScore) ? semanticScore : null,
     ageMinutes: Number.isFinite(ageMinutes) ? ageMinutes : null,
     messages
+  };
+}
+
+function mapRecentVoiceSessionSummaryRow(row: unknown) {
+  const record = toRecord(row);
+  const summaryText = String(record.summaryText || record.summary_text || "").trim();
+  if (!summaryText) return null;
+  const ageMinutes = Number(record.ageMinutes || record.age_minutes);
+  return {
+    sessionId: String(record.sessionId || record.session_id || "").trim() || null,
+    guildId: String(record.guildId || record.guild_id || "").trim() || null,
+    channelId: String(record.channelId || record.channel_id || "").trim() || null,
+    endedAt: record.endedAt ? String(record.endedAt) : record.ended_at ? String(record.ended_at) : null,
+    ageMinutes: Number.isFinite(ageMinutes) ? ageMinutes : null,
+    summaryText
   };
 }
 
@@ -853,6 +915,14 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
             after: 1
           })
         : [];
+    const recentVoiceSessionContext =
+      typeof memory.getRecentVoiceSessionSummariesForPrompt === "function" && channelId
+        ? memory.getRecentVoiceSessionSummariesForPrompt({
+            guildId,
+            channelId,
+            referenceAtMs: Date.now()
+          })
+        : [];
 
     return c.json({
       guildId,
@@ -870,7 +940,8 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
         loreFactCount: Array.isArray(factProfile.loreFacts) ? factProfile.loreFacts.length : 0,
         guidanceFactCount: Array.isArray(factProfile.guidanceFacts) ? factProfile.guidanceFacts.length : 0,
         behavioralFactCount: Array.isArray(behavioralFacts) ? behavioralFacts.length : 0,
-        conversationWindowCount: Array.isArray(recentConversationHistory) ? recentConversationHistory.length : 0
+        conversationWindowCount: Array.isArray(recentConversationHistory) ? recentConversationHistory.length : 0,
+        recentVoiceSessionCount: Array.isArray(recentVoiceSessionContext) ? recentVoiceSessionContext.length : 0
       },
       slice: {
         participantProfiles: (Array.isArray(factProfile.participantProfiles) ? factProfile.participantProfiles : [])
@@ -893,7 +964,10 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
       promptContext: {
         recentConversationHistory: (Array.isArray(recentConversationHistory) ? recentConversationHistory : [])
           .map((row) => mapConversationWindowRow(row))
-          .filter((row): row is NonNullable<ReturnType<typeof mapConversationWindowRow>> => row !== null)
+          .filter((row): row is NonNullable<ReturnType<typeof mapConversationWindowRow>> => row !== null),
+        recentVoiceSessionContext: (Array.isArray(recentVoiceSessionContext) ? recentVoiceSessionContext : [])
+          .map((row) => mapRecentVoiceSessionSummaryRow(row))
+          .filter((row): row is NonNullable<ReturnType<typeof mapRecentVoiceSessionSummaryRow>> => row !== null)
       },
       activeVoiceSession
     });
@@ -1004,6 +1078,16 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
         .map((row) => mapConversationWindowRow(row))
         .filter((row): row is NonNullable<ReturnType<typeof mapConversationWindowRow>> => row !== null);
     }
+    const recentVoiceSessionContext =
+      typeof memory.getRecentVoiceSessionSummariesForPrompt === "function" && channelId
+        ? memory.getRecentVoiceSessionSummariesForPrompt({
+            guildId,
+            channelId,
+            referenceAtMs: Date.now()
+          })
+            .map((row) => mapRecentVoiceSessionSummaryRow(row))
+            .filter((row): row is NonNullable<ReturnType<typeof mapRecentVoiceSessionSummaryRow>> => row !== null)
+        : [];
 
     return c.json({
       guildId,
@@ -1020,12 +1104,135 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
         ])
       },
       promptContext: {
-        recentConversationHistory
+        recentConversationHistory,
+        recentVoiceSessionContext
       },
       activeVoiceSession: getActiveVoiceSessionFactProfileSnapshot(bot, {
         guildId,
         userId
       })
+    });
+  });
+
+  app.get("/api/memory/owner-private", (c) => {
+    const ownerProfile =
+      typeof memory.loadOwnerFactProfile === "function"
+        ? toRecord(memory.loadOwnerFactProfile())
+        : (() => {
+            const rows = store.getFactsForScope({
+              scope: "owner",
+              subjectIds: ["__owner__"],
+              limit: 120
+            });
+            return {
+              ownerFacts: rows.filter((row) => {
+                const factType = String(row?.fact_type || "").trim();
+                return factType !== "guidance" && factType !== "behavioral";
+              }),
+              guidanceFacts: rows.filter((row) => String(row?.fact_type || "").trim() === "guidance")
+            };
+          })();
+    return c.json({
+      ownerProfile: {
+        ownerFacts: normalizeDashboardFactRows(ownerProfile.ownerFacts),
+        guidanceFacts: normalizeDashboardFactRows(ownerProfile.guidanceFacts)
+      }
+    });
+  });
+
+  app.get("/api/memory/owner-private/facts", (c) => {
+    const limit = parseBoundedInt(c.req.query("limit"), 120, 1, 500);
+    const queryText = String(c.req.query("q") || "").trim();
+    const facts = store.getFactsForScope({
+      scope: "owner",
+      limit,
+      subjectIds: ["__owner__"],
+      queryText
+    });
+    return c.json({
+      limit,
+      queryText,
+      facts: normalizeDashboardEditableFactRows(facts)
+    });
+  });
+
+  app.put("/api/memory/owner-private/facts/:factId", async (c) => {
+    const factId = Number(c.req.param("factId"));
+    const body = await readDashboardBody(c);
+    const subject = normalizeDashboardFactEditorText(body.subject, 120);
+    const fact = normalizeDashboardFactEditorText(body.fact, 400);
+    const factType = normalizeDashboardFactEditorText(body.factType, 40).toLowerCase() || "other";
+    const evidenceText = normalizeDashboardFactEditorText(body.evidenceText, 240) || null;
+    const confidence = normalizeDashboardFactConfidence(body.confidence);
+
+    if (!Number.isInteger(factId) || factId <= 0) {
+      return c.json({ ok: false, error: "valid factId required" }, 400);
+    }
+    if (!subject) {
+      return c.json({ ok: false, error: "subject required" }, 400);
+    }
+    if (!fact) {
+      return c.json({ ok: false, error: "fact required" }, 400);
+    }
+    if (confidence === null) {
+      return c.json({ ok: false, error: "confidence must be a number between 0 and 1" }, 400);
+    }
+
+    const existing = store.getMemoryFactById(factId, null, "owner");
+    if (!existing || existing.scope !== "owner") {
+      return c.json({ ok: false, error: "not_found" }, 404);
+    }
+
+    const result = store.updateMemoryFact({
+      guildId: null,
+      scope: "owner",
+      userId: existing.user_id,
+      factId,
+      subject,
+      fact,
+      factType,
+      evidenceText,
+      confidence
+    });
+    if (!result.ok) {
+      const status = result.reason === "duplicate" ? 409 : result.reason === "not_found" ? 404 : 400;
+      return c.json({ ok: false, error: result.reason }, status);
+    }
+
+    await refreshDashboardMemoryMarkdown(memory);
+
+    return c.json({
+      ok: true,
+      fact: mapDashboardEditableFactRow(result.row)
+    });
+  });
+
+  app.delete("/api/memory/owner-private/facts/:factId", async (c) => {
+    const factId = Number(c.req.param("factId"));
+    if (!Number.isInteger(factId) || factId <= 0) {
+      return c.json({ ok: false, error: "valid factId required" }, 400);
+    }
+
+    const existing = store.getMemoryFactById(factId, null, "owner");
+    if (!existing || existing.scope !== "owner") {
+      return c.json({ ok: false, error: "not_found" }, 404);
+    }
+
+    const result = store.deleteMemoryFact({
+      guildId: null,
+      scope: "owner",
+      userId: existing.user_id,
+      factId
+    });
+    if (!result.ok) {
+      return c.json({ ok: false, error: result.reason }, result.reason === "not_found" ? 404 : 400);
+    }
+
+    await refreshDashboardMemoryMarkdown(memory);
+
+    return c.json({
+      ok: true,
+      deleted: result.deleted
     });
   });
 
@@ -1053,7 +1260,7 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
     if (!guildId) {
       return c.json({ guildId, subjects: [], limit });
     }
-    const subjects = store.getMemorySubjects(limit, { guildId });
+    const subjects = store.getMemorySubjects(limit, { guildId, includePortableUserScope: true, includeOwnerScope: false });
     return c.json({ guildId, limit, subjects });
   });
 
@@ -1069,9 +1276,11 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
       guildId,
       limit,
       subjectIds: subjectFilter ? [subjectFilter] : null,
+      includePortableUserScope: true,
+      includeOwnerScope: false,
       queryText
     });
-    return c.json({ guildId, limit, subject: subjectFilter, queryText, facts });
+    return c.json({ guildId, limit, subject: subjectFilter, queryText, facts: normalizeDashboardEditableFactRows(facts) });
   });
 
   app.put("/api/memory/facts/:factId", async (c) => {
@@ -1100,8 +1309,21 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
       return c.json({ ok: false, error: "confidence must be a number between 0 and 1" }, 400);
     }
 
+    const existing = store.getMemoryFactById(factId);
+    if (!existing) {
+      return c.json({ ok: false, error: "not_found" }, 404);
+    }
+    if (existing.scope === "owner") {
+      return c.json({ ok: false, error: "owner_private_only" }, 400);
+    }
+    if (existing.scope === "guild" && existing.guild_id !== guildId) {
+      return c.json({ ok: false, error: "not_found" }, 404);
+    }
+
     const result = store.updateMemoryFact({
-      guildId,
+      guildId: existing.guild_id,
+      scope: existing.scope,
+      userId: existing.user_id,
       factId,
       subject,
       fact,
@@ -1119,7 +1341,7 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
 
     return c.json({
       ok: true,
-      fact: result.row
+      fact: mapDashboardEditableFactRow(result.row)
     });
   });
 
@@ -1135,8 +1357,20 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
       return c.json({ ok: false, error: "valid factId required" }, 400);
     }
 
+    const existing = store.getMemoryFactById(factId);
+    if (!existing) {
+      return c.json({ ok: false, error: "not_found" }, 404);
+    }
+    if (existing.scope === "owner") {
+      return c.json({ ok: false, error: "owner_private_only" }, 400);
+    }
+    if (existing.scope === "guild" && existing.guild_id !== guildId) {
+      return c.json({ ok: false, error: "not_found" }, 404);
+    }
+
     const result = store.deleteMemoryFact({
-      guildId,
+      guildId: existing.guild_id,
+      scope: existing.scope,
       factId
     });
     if (!result.ok) {

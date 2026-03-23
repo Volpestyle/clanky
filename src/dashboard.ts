@@ -102,6 +102,7 @@ export interface DashboardMemory {
     conversationMessagesDeleted?: number;
     conversationVectorsDeleted?: number;
     reflectionEventsDeleted?: number;
+    sessionSummariesDeleted?: number;
     journalEntriesDeleted?: number;
     journalFilesTouched?: number;
     summaryRefreshed?: boolean;
@@ -111,10 +112,12 @@ export interface DashboardMemory {
     guildId?: string | null;
     participantIds?: string[];
     participantNames?: Record<string, string>;
+    includeOwner?: boolean;
   }): {
     participantProfiles?: unknown[];
     selfFacts?: unknown[];
     loreFacts?: unknown[];
+    ownerFacts?: unknown[];
     userFacts?: unknown[];
     relevantFacts?: unknown[];
     guidanceFacts?: unknown[];
@@ -131,6 +134,10 @@ export interface DashboardMemory {
     selfFacts?: unknown[];
     loreFacts?: unknown[];
   };
+  loadOwnerFactProfile?(): {
+    ownerFacts?: unknown[];
+    guidanceFacts?: unknown[];
+  };
   loadBehavioralFactsForPrompt?(payload: {
     guildId: string;
     channelId?: string | null;
@@ -141,9 +148,10 @@ export interface DashboardMemory {
     limit?: number;
   }): Promise<unknown[]>;
   searchDurableFacts(payload: {
-    guildId: string;
+    guildId?: string | null;
+    scope?: "user" | "guild" | "owner" | "owner_private" | "all";
     queryText: string;
-    settings: unknown;
+    settings?: Record<string, unknown>;
     channelId?: string | null;
     subjectIds?: string[] | null;
     factTypes?: string[] | null;
@@ -151,16 +159,23 @@ export interface DashboardMemory {
     limit?: number;
   }): Promise<unknown[]>;
   searchConversationHistory?(payload: {
-    guildId: string;
+    guildId?: string | null;
     channelId?: string | null;
     queryText: string;
-    settings?: unknown;
+    settings?: Record<string, unknown>;
     trace?: Record<string, unknown>;
     limit?: number;
     maxAgeHours?: number;
     before?: number;
     after?: number;
   }): Promise<unknown[]>;
+  getRecentVoiceSessionSummariesForPrompt?(payload: {
+    guildId: string;
+    channelId?: string | null;
+    referenceAtMs?: number | null;
+    limit?: number;
+    windowMinutes?: number;
+  }): Array<Record<string, unknown>>;
 }
 
 export interface DashboardPublicHttpsState {

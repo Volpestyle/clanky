@@ -26,9 +26,19 @@ export interface MemoryFactRow {
   evidence_text: string | null;
   source_message_id: string | null;
   confidence: number;
+  lexical_score?: number | null;
+  semantic_score?: number | null;
 }
 
-export type MemoryFactScope = "user" | "guild";
+export type MemoryFactScope = "user" | "guild" | "owner";
+
+const LEGACY_FACT_TYPE_MAP: Record<string, string> = {
+  lore: "other",
+  self: "other",
+  general: "other"
+};
+
+const LEGACY_FACT_PREFIX_RE = /^(?:memory line|self memory|identity memory|important tidbit|lore|general|server norm)\s*:\s*/i;
 
 interface MemoryFactIdRow {
   id: number;
@@ -54,6 +64,10 @@ interface MemoryFactVectorScoreRow {
   score: number;
 }
 
+interface CountRow {
+  count: number;
+}
+
 interface MemoryFactLexicalSearchRow extends MemoryFactRow {
   lexical_score: number;
 }
@@ -71,8 +85,57 @@ interface MemorySubjectRow {
   fact_count: number;
 }
 
+function isPortableUserSubject(value: unknown) {
+  const normalized = String(value || "").trim();
+  return Boolean(normalized) && /^[0-9]+$/.test(normalized);
+}
+
 function escapeSqlLikePattern(value: string) {
   return String(value || "").replace(/[\\%_]/g, "\\$&");
+}
+
+function escapeFtsToken(value: string) {
+  return String(value || "")
+    .replace(/["']/g, " ")
+    .replace(/[^\p{L}\p{N}_-]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildFtsMatchTerm(value: string) {
+  const normalized = escapeFtsToken(value);
+  if (!normalized) return "";
+  if (/[-\s]/.test(normalized)) {
+    const phrase = normalized
+      .replace(/-/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return phrase ? `"${phrase.replace(/"/g, "\"\"")}"` : "";
+  }
+  return `${normalized}*`;
+}
+
+function buildMemoryFactsFtsQuery({
+  queryText = "",
+  queryTokens = []
+}: {
+  queryText?: string;
+  queryTokens?: string[];
+}) {
+  const normalizedQueryText = escapeFtsToken(queryText);
+  const normalizedTokens = [
+    ...new Set((Array.isArray(queryTokens) ? queryTokens : []).map((value) => escapeFtsToken(value)).filter(Boolean))
+  ].slice(0, 8);
+  const parts: string[] = [];
+  if (normalizedQueryText) {
+    parts.push(`"${normalizedQueryText.replace(/"/g, "\"\"")}"`);
+  }
+  for (const token of normalizedTokens) {
+    const term = buildFtsMatchTerm(token);
+    if (term) parts.push(term);
+  }
+  if (!parts.length) return "";
+  return parts.join(" OR ");
 }
 
 function normalizeMemoryFactSubject(value: unknown) {
@@ -82,19 +145,39 @@ function normalizeMemoryFactSubject(value: unknown) {
     .slice(0, 120);
 }
 
-function normalizeMemoryFactText(value: unknown) {
+export function canonicalizeMemoryFactText(value: unknown) {
   return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(LEGACY_FACT_PREFIX_RE, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeMemoryFactText(value: unknown) {
+  return canonicalizeMemoryFactText(value)
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 400);
 }
 
-function normalizeMemoryFactType(value: unknown) {
-  return String(value || "other")
+export function canonicalizeMemoryFactType(value: unknown) {
+  const normalized = String(value || "other")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase()
     .slice(0, 40) || "other";
+  return LEGACY_FACT_TYPE_MAP[normalized] || normalized;
+}
+
+function normalizeMemoryFactType(value: unknown) {
+  return canonicalizeMemoryFactType(value);
+}
+
+export function isLegacyMemoryFactRow(row: Pick<MemoryFactRow, "fact" | "fact_type"> | null | undefined) {
+  const currentType = String(row?.fact_type || "").trim().toLowerCase();
+  const currentFact = String(row?.fact || "").trim();
+  return canonicalizeMemoryFactType(currentType) !== currentType || canonicalizeMemoryFactText(currentFact) !== currentFact;
 }
 
 function normalizeMemoryFactEvidence(value: unknown) {
@@ -111,6 +194,13 @@ function deleteMemoryFactVectors(store: MemoryStore, factId: number) {
     .prepare("DELETE FROM memory_fact_vectors_native WHERE fact_id = ?")
     .run(factId);
   return Number(result?.changes || 0);
+}
+
+function countRows(store: MemoryStore, sql: string, args: Array<string | number | null> = []) {
+  const row = store.db
+    .prepare<CountRow, Array<string | number | null>>(sql)
+    .get(...args);
+  return Number(row?.count || 0);
 }
 
 const MEMORY_FACT_SELECT_COLUMNS = [
@@ -139,6 +229,9 @@ function normalizeMemoryFactScope(
   if (normalized === "user" || normalized === "guild") {
     return normalized;
   }
+  if (normalized === "owner") {
+    return normalized;
+  }
   return fallback;
 }
 
@@ -147,12 +240,16 @@ function buildScopedFactWhereClause({
   scope = null,
   subjectIds = null,
   factTypes = null,
+  includePortableUserScope = false,
+  includeOwnerScope = false,
   tableAlias = ""
 }: {
   guildId?: string | null;
   scope?: MemoryFactScope | null;
   subjectIds?: string[] | null;
   factTypes?: string[] | null;
+  includePortableUserScope?: boolean;
+  includeOwnerScope?: boolean;
   tableAlias?: string;
 }) {
   const normalizedGuildId = String(guildId || "").trim();
@@ -166,8 +263,13 @@ function buildScopedFactWhereClause({
   if (normalizedScope) {
     where.push(`${prefix}scope = ?`);
     args.push(normalizedScope);
-  }
-  if (normalizedGuildId) {
+  } else if (normalizedGuildId && (includePortableUserScope || includeOwnerScope)) {
+    const scopeClauses = [`(${prefix}scope = 'guild' AND ${prefix}guild_id = ?)`];
+    if (includePortableUserScope) scopeClauses.push(`${prefix}scope = 'user'`);
+    if (includeOwnerScope) scopeClauses.push(`${prefix}scope = 'owner'`);
+    where.push(`(${scopeClauses.join(" OR ")})`);
+    args.push(normalizedGuildId);
+  } else if (normalizedGuildId) {
     where.push(`${prefix}guild_id = ?`);
     args.push(normalizedGuildId);
   }
@@ -204,7 +306,7 @@ export function addMemoryFact(store: MemoryStore, fact) {
 const normalizedGuildId = String(fact.guildId || "").trim();
 const normalizedScope = normalizeMemoryFactScope(fact.scope, normalizedGuildId ? "guild" : "user");
 if (!normalizedScope) return false;
-if (normalizedScope === "guild" && !normalizedGuildId) return false;
+  if (normalizedScope === "guild" && !normalizedGuildId) return false;
 
 const rawConfidence = Number(fact.confidence);
 const confidence = clamp(Number.isFinite(rawConfidence) ? rawConfidence : 0.5, 0, 1);
@@ -219,7 +321,9 @@ const normalizedUserId =
       const requestedUserId = String(fact.userId || "").trim();
       return requestedUserId || normalizedSubject;
     })()
-    : null;
+    : normalizedScope === "owner"
+      ? String(fact.userId || "").trim() || null
+      : null;
 const result = store.db
   .prepare(
     `INSERT INTO memory_facts(
@@ -301,7 +405,7 @@ const where = ["subject = ?", "is_active = 1"];
 const args: string[] = [String(subject)];
 const normalizedScope = normalizeMemoryFactScope(scope?.scope);
 const normalizedGuildId = String(scope?.guildId || "").trim();
-if (normalizedScope === "guild" && !normalizedGuildId) return [];
+  if (normalizedScope === "guild" && !normalizedGuildId) return [];
 if (normalizedScope) {
   where.push("scope = ?");
   args.push(normalizedScope);
@@ -333,7 +437,7 @@ const where = [`subject IN (${placeholders})`, "is_active = 1"];
 const args: string[] = [...normalizedSubjects];
 const normalizedScope = normalizeMemoryFactScope(scope?.scope);
 const normalizedGuildId = String(scope?.guildId || "").trim();
-if (normalizedScope === "guild" && !normalizedGuildId) return [];
+  if (normalizedScope === "guild" && !normalizedGuildId) return [];
 if (normalizedScope) {
   where.push("scope = ?");
   args.push(normalizedScope);
@@ -367,7 +471,7 @@ export function getFactProfileRows(store: MemoryStore, {
 }) {
 const normalizedGuildId = String(guildId || "").trim();
 const normalizedScope = normalizeMemoryFactScope(scope);
-if (normalizedScope === "guild" && !normalizedGuildId) return [];
+  if (normalizedScope === "guild" && !normalizedGuildId) return [];
 
 const normalizedSubjects: string[] = [
   ...new Set((Array.isArray(subjects) ? subjects : []).map((value) => String(value || "").trim()).filter(Boolean))
@@ -402,6 +506,8 @@ export function getFactsForScope(store: MemoryStore, {
   limit = 120,
   subjectIds = null,
   factTypes = null,
+  includePortableUserScope = false,
+  includeOwnerScope = false,
   queryText = ""
 }: {
   guildId?: string | null;
@@ -409,14 +515,18 @@ export function getFactsForScope(store: MemoryStore, {
   limit?: number;
   subjectIds?: string[] | null;
   factTypes?: string[] | null;
+  includePortableUserScope?: boolean;
+  includeOwnerScope?: boolean;
   queryText?: string;
 }) {
-const scoped = buildScopedFactWhereClause({
-  guildId,
-  scope,
-  subjectIds,
-  factTypes
-});
+  const scoped = buildScopedFactWhereClause({
+    guildId,
+    scope,
+    subjectIds,
+    factTypes,
+    includePortableUserScope,
+    includeOwnerScope
+  });
 if (!scoped) return [];
 
 const { where, args } = scoped;
@@ -469,33 +579,16 @@ export function searchMemoryFactsLexical(store: MemoryStore, {
     guildId,
     scope,
     subjectIds,
-    factTypes
+    factTypes,
+    tableAlias: "m"
   });
   if (!scoped) return [];
 
-  const normalizedQueryText = String(queryText || "").trim();
-  const normalizedTokens = [
-    ...new Set((Array.isArray(queryTokens) ? queryTokens : []).map((value) => String(value || "").trim()).filter(Boolean))
-  ].slice(0, 8);
-  if (!normalizedQueryText && !normalizedTokens.length) return [];
-
-  const scoreParts: string[] = [];
-  const scoreArgs: string[] = [];
-  if (normalizedQueryText) {
-    const likePattern = `%${escapeSqlLikePattern(normalizedQueryText)}%`;
-    scoreParts.push("CASE WHEN fact LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 6 ELSE 0 END");
-    scoreParts.push("CASE WHEN COALESCE(evidence_text, '') LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 4 ELSE 0 END");
-    scoreArgs.push(likePattern, likePattern);
-  }
-
-  for (const token of normalizedTokens) {
-    const likePattern = `%${escapeSqlLikePattern(token)}%`;
-    scoreParts.push("CASE WHEN fact LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 3 ELSE 0 END");
-    scoreParts.push("CASE WHEN COALESCE(evidence_text, '') LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 2 ELSE 0 END");
-    scoreParts.push("CASE WHEN subject LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 1 ELSE 0 END");
-    scoreParts.push("CASE WHEN fact_type LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 1 ELSE 0 END");
-    scoreArgs.push(likePattern, likePattern, likePattern, likePattern);
-  }
+  const ftsQuery = buildMemoryFactsFtsQuery({
+    queryText,
+    queryTokens
+  });
+  if (!ftsQuery) return [];
 
   const boundedLimit = clamp(Math.floor(Number(limit) || 60), 1, 240);
   const rows = store.db
@@ -517,44 +610,62 @@ export function searchMemoryFactsLexical(store: MemoryStore, {
            lexical_score
          FROM (
            SELECT
-             id,
-             created_at,
-             updated_at,
-             scope,
-             guild_id,
-             channel_id,
-             user_id,
-             subject,
-             fact,
-             fact_type,
-             evidence_text,
-             source_message_id,
-             confidence,
-             (${scoreParts.join(" + ")}) AS lexical_score
-           FROM memory_facts
-           WHERE ${scoped.where.join(" AND ")}
+             m.id,
+             m.created_at,
+             m.updated_at,
+             m.scope,
+             m.guild_id,
+             m.channel_id,
+             m.user_id,
+             m.subject,
+             m.fact,
+             m.fact_type,
+             m.evidence_text,
+             m.source_message_id,
+             m.confidence,
+             bm25(memory_facts_fts, 6.0, 3.0, 1.5, 1.0) AS lexical_score
+           FROM memory_facts_fts
+           JOIN memory_facts AS m
+             ON m.id = memory_facts_fts.rowid
+           WHERE memory_facts_fts MATCH ?
+             AND ${scoped.where.join(" AND ")}
          ) AS ranked
-         WHERE lexical_score > 0
-         ORDER BY lexical_score DESC, updated_at DESC
+         ORDER BY lexical_score ASC, updated_at DESC
          LIMIT ?`
     )
-    .all(...scoreArgs, ...scoped.args, boundedLimit);
+    .all(ftsQuery, ...scoped.args, boundedLimit);
 
-  return rows.map((row) => ({
-    id: Number(row.id),
-    created_at: String(row.created_at || ""),
-    updated_at: String(row.updated_at || ""),
-    scope: normalizeMemoryFactScope(row.scope, "guild") || "guild",
-    guild_id: String(row.guild_id || "").trim() || null,
-    channel_id: String(row.channel_id || "").trim() || null,
-    user_id: String(row.user_id || "").trim() || null,
-    subject: String(row.subject || ""),
-    fact: String(row.fact || ""),
-    fact_type: String(row.fact_type || ""),
-    evidence_text: String(row.evidence_text || "").trim() || null,
-    source_message_id: String(row.source_message_id || "").trim() || null,
-    confidence: Number(row.confidence || 0)
-  }));
+  if (!rows.length) return [];
+
+  const rawScores = rows
+    .map((row) => Number(row.lexical_score))
+    .filter((value) => Number.isFinite(value));
+  const minScore = rawScores.length ? Math.min(...rawScores) : 0;
+  const maxScore = rawScores.length ? Math.max(...rawScores) : minScore;
+  const scoreRange = Math.max(1e-6, maxScore - minScore);
+
+  return rows.map((row) => {
+    const rawScore = Number(row.lexical_score);
+    const normalizedLexicalScore = Number.isFinite(rawScore)
+      ? (rawScores.length <= 1 ? 1 : 1 - ((rawScore - minScore) / scoreRange))
+      : 0;
+    return {
+      id: Number(row.id),
+      created_at: String(row.created_at || ""),
+      updated_at: String(row.updated_at || ""),
+      scope: normalizeMemoryFactScope(row.scope, "guild") || "guild",
+      guild_id: String(row.guild_id || "").trim() || null,
+      channel_id: String(row.channel_id || "").trim() || null,
+      user_id: String(row.user_id || "").trim() || null,
+      subject: String(row.subject || ""),
+      fact: String(row.fact || ""),
+      fact_type: String(row.fact_type || ""),
+      evidence_text: String(row.evidence_text || "").trim() || null,
+      source_message_id: String(row.source_message_id || "").trim() || null,
+      confidence: Number(row.confidence || 0),
+      lexical_score: Number(normalizedLexicalScore.toFixed(6))
+    };
+  });
 }
 
 export function searchMemoryFactsByEmbedding(store: MemoryStore, {
@@ -714,7 +825,7 @@ return store.db
 export function getMemoryFactBySubjectAndFact(store: MemoryStore, {
   guildId = null,
   scope = null,
-  userId = null,
+    userId = null,
   subject,
   fact
 }: {
@@ -785,10 +896,10 @@ if (!normalizedFact) return { ok: false, reason: "fact_required" } as const;
 
 const existing = getMemoryFactById(store, factIdInt, normalizedGuildId || null, normalizedScope);
 if (!existing) return { ok: false, reason: "not_found" } as const;
-const normalizedUserId =
-  normalizedScope === "user"
-    ? String(userId || existing.user_id || "").trim() || null
-    : null;
+  const normalizedUserId =
+    normalizedScope === "user" || normalizedScope === "owner"
+      ? String(userId || existing.user_id || "").trim() || null
+      : null;
 
 const duplicate = store.db
   .prepare<DuplicateMemoryFactRow, Array<string | number>>(
@@ -875,14 +986,19 @@ const normalizedGuildId = String(guildId || "").trim();
 const normalizedScope = normalizeMemoryFactScope(scope, normalizedGuildId ? "guild" : "user");
 const factIdInt = Number(factId);
 if (!normalizedScope) return { ok: false, reason: "scope_required", deleted: 0 } as const;
-if (normalizedScope === "guild" && !normalizedGuildId) {
+  if (normalizedScope === "guild" && !normalizedGuildId) {
   return { ok: false, reason: "guild_required", deleted: 0 } as const;
 }
 if (!Number.isInteger(factIdInt) || factIdInt <= 0) {
   return { ok: false, reason: "invalid_fact_id", deleted: 0 } as const;
 }
 
-const result = store.db
+const existing = getMemoryFactById(store, factIdInt, normalizedGuildId || null, normalizedScope);
+if (!existing) {
+  return { ok: false, reason: "not_found", deleted: 0 } as const;
+}
+
+store.db
   .prepare(
     `UPDATE memory_facts
          SET is_active = 0,
@@ -893,14 +1009,11 @@ const result = store.db
            AND is_active = 1`
   )
   .run(nowIso(), factIdInt, normalizedScope, normalizedGuildId || null);
-const deleted = Number(result?.changes || 0);
-if (deleted > 0) {
-  deleteMemoryFactVectors(store, factIdInt);
-}
+deleteMemoryFactVectors(store, factIdInt);
 return {
-  ok: deleted > 0,
-  reason: deleted > 0 ? "deleted" : "not_found",
-  deleted
+  ok: true,
+  reason: "deleted",
+  deleted: 1
 } as const;
 }
 
@@ -916,26 +1029,40 @@ if (!normalizedGuildId) {
 }
 
 const deleteTx = store.db.transaction((targetGuildId: string) => {
-  const vectorsDeleted = Number(
-    store.db
-      .prepare(
-        `DELETE FROM memory_fact_vectors_native
-           WHERE fact_id IN (
-             SELECT id
-               FROM memory_facts
-              WHERE guild_id = ?
-           )`
-      )
-      .run(targetGuildId)?.changes || 0
+  const factsDeleted = countRows(
+    store,
+    `SELECT COUNT(*) AS count
+       FROM memory_facts
+      WHERE guild_id = ?`,
+    [targetGuildId]
   );
-  const factsDeleted = Number(
-    store.db
-      .prepare(
-        `DELETE FROM memory_facts
-           WHERE guild_id = ?`
-      )
-      .run(targetGuildId)?.changes || 0
+  const vectorsDeleted = countRows(
+    store,
+    `SELECT COUNT(*) AS count
+       FROM memory_fact_vectors_native
+      WHERE fact_id IN (
+        SELECT id
+          FROM memory_facts
+         WHERE guild_id = ?
+      )`,
+    [targetGuildId]
   );
+  store.db
+    .prepare(
+      `DELETE FROM memory_fact_vectors_native
+         WHERE fact_id IN (
+           SELECT id
+             FROM memory_facts
+            WHERE guild_id = ?
+         )`
+    )
+    .run(targetGuildId);
+  store.db
+    .prepare(
+      `DELETE FROM memory_facts
+         WHERE guild_id = ?`
+    )
+    .run(targetGuildId);
   return {
     factsDeleted,
     vectorsDeleted
@@ -948,6 +1075,126 @@ return {
   reason: "deleted",
   ...result
 } as const;
+}
+
+export function cleanupLegacyMemoryFacts(store: MemoryStore) {
+  const rows = store.db
+    .prepare<MemoryFactRow, []>(
+      `SELECT ${MEMORY_FACT_SELECT_COLUMNS}
+         FROM memory_facts
+        WHERE is_active = 1
+        ORDER BY id ASC`
+    )
+    .all();
+
+  const cleanupTx = store.db.transaction((activeRows: MemoryFactRow[]) => {
+    let inspected = 0;
+    let normalized = 0;
+    let textRewritten = 0;
+    let typeCanonicalized = 0;
+    let mergedDuplicates = 0;
+    let archivedDuplicates = 0;
+    let vectorsDeleted = 0;
+    let scopeMigrated = 0;
+
+    for (const row of activeRows) {
+      inspected += 1;
+      const canonicalFact = normalizeMemoryFactText(row.fact);
+      const canonicalFactType = normalizeMemoryFactType(row.fact_type);
+      const factChanged = canonicalFact !== String(row.fact || "").trim();
+      const typeChanged = canonicalFactType !== String(row.fact_type || "").trim().toLowerCase();
+      const shouldPromotePortableUser = row.scope === "guild" && isPortableUserSubject(row.subject);
+      if (!factChanged && !typeChanged && !shouldPromotePortableUser) continue;
+      if (!canonicalFact) continue;
+
+      const targetScope = shouldPromotePortableUser ? "user" : row.scope;
+      const targetGuildId = shouldPromotePortableUser ? null : row.guild_id;
+      const targetUserId = (targetScope === "user" || targetScope === "owner") && row.subject !== "__self__"
+        ? String(row.user_id || row.subject || "").trim() || null
+        : null;
+
+      const duplicate = store.db
+        .prepare<DuplicateMemoryFactRow, Array<string | number | null>>(
+          `SELECT id
+             FROM memory_facts
+            WHERE scope = ?
+              AND IFNULL(guild_id, '') = IFNULL(?, '')
+              AND IFNULL(user_id, '') = IFNULL(?, '')
+              AND subject = ?
+              AND fact = ?
+              AND is_active = 1
+              AND id != ?
+            LIMIT 1`
+        )
+        .get(targetScope, targetGuildId, targetUserId, row.subject, canonicalFact, row.id);
+
+      if (Number.isInteger(Number(duplicate?.id)) && Number(duplicate.id) > 0) {
+        const duplicateId = Number(duplicate.id);
+        store.db
+          .prepare(
+            `UPDATE memory_facts
+                SET updated_at = ?,
+                    fact_type = ?,
+                    confidence = MAX(confidence, ?),
+                    evidence_text = CASE
+                      WHEN (evidence_text IS NULL OR TRIM(evidence_text) = '') AND ? IS NOT NULL THEN ?
+                      ELSE evidence_text
+                    END
+              WHERE id = ?`
+          )
+          .run(nowIso(), canonicalFactType, Number(row.confidence || 0), row.evidence_text, row.evidence_text, duplicateId);
+        const archived = store.db
+          .prepare(
+            `UPDATE memory_facts
+                SET is_active = 0,
+                    updated_at = ?
+              WHERE id = ?
+                AND is_active = 1`
+          )
+          .run(nowIso(), row.id);
+        if (Number(archived?.changes || 0) > 0) {
+          archivedDuplicates += 1;
+          mergedDuplicates += 1;
+          vectorsDeleted += deleteMemoryFactVectors(store, row.id);
+        }
+        continue;
+      }
+
+      const result = store.db
+        .prepare(
+          `UPDATE memory_facts
+              SET updated_at = ?,
+                  scope = ?,
+                  guild_id = ?,
+                  user_id = ?,
+                  fact = ?,
+                  fact_type = ?
+            WHERE id = ?
+              AND is_active = 1`
+        )
+        .run(nowIso(), targetScope, targetGuildId, targetUserId, canonicalFact, canonicalFactType, row.id);
+      if (Number(result?.changes || 0) > 0) {
+        normalized += 1;
+        if (factChanged) textRewritten += 1;
+        if (typeChanged) typeCanonicalized += 1;
+        if (shouldPromotePortableUser) scopeMigrated += 1;
+        vectorsDeleted += deleteMemoryFactVectors(store, row.id);
+      }
+    }
+
+    return {
+      inspected,
+      normalized,
+      textRewritten,
+      typeCanonicalized,
+      scopeMigrated,
+      mergedDuplicates,
+      archivedDuplicates,
+      vectorsDeleted
+    };
+  });
+
+  return cleanupTx(rows);
 }
 
 export function ensureSqliteVecReady(store: MemoryStore) {
@@ -1051,13 +1298,20 @@ try {
 export function getMemorySubjects(store: MemoryStore, limit = 80, scope = null) {
 const where = ["is_active = 1"];
 const args: Array<string | number> = [];
-const normalizedScope = normalizeMemoryFactScope(scope?.scope);
-const normalizedGuildId = String(scope?.guildId || "").trim();
-if (normalizedScope) {
-  where.push("scope = ?");
-  args.push(normalizedScope);
-}
-if (normalizedGuildId) {
+  const normalizedScope = normalizeMemoryFactScope(scope?.scope);
+  const normalizedGuildId = String(scope?.guildId || "").trim();
+  const includePortableUserScope = scope?.includePortableUserScope === true;
+  const includeOwnerScope = scope?.includeOwnerScope === true;
+  if (normalizedScope) {
+    where.push("scope = ?");
+    args.push(normalizedScope);
+  } else if (normalizedGuildId && (includePortableUserScope || includeOwnerScope)) {
+    const clauses = ["(scope = 'guild' AND guild_id = ?)"];
+    if (includePortableUserScope) clauses.push("scope = 'user'");
+    if (includeOwnerScope) clauses.push("scope = 'owner'");
+    where.push(`(${clauses.join(" OR ")})`);
+    args.push(normalizedGuildId);
+  } else if (normalizedGuildId) {
   where.push("guild_id = ?");
   args.push(normalizedGuildId);
 }
@@ -1090,10 +1344,10 @@ export function archiveOldFactsForSubject(store: MemoryStore, {
 }) {
 const normalizedGuildId = String(guildId || "").trim();
 const normalizedScope = normalizeMemoryFactScope(scope, normalizedGuildId ? "guild" : "user");
-const normalizedUserId =
-  normalizedScope === "user"
-    ? String(userId || "").trim() || null
-    : null;
+  const normalizedUserId =
+    normalizedScope === "user" || normalizedScope === "owner"
+      ? String(userId || "").trim() || null
+      : null;
 const normalizedSubject = String(subject || "").trim();
 if (!normalizedScope || !normalizedSubject) return 0;
 if (normalizedScope === "guild" && !normalizedGuildId) return 0;
@@ -1171,8 +1425,8 @@ if (factType) {
 if (!staleIds.length) return 0;
 
 const placeholders = staleIds.map(() => "?").join(", ");
-const result = store.db
+store.db
   .prepare(`UPDATE memory_facts SET is_active = 0, updated_at = ? WHERE id IN (${placeholders})`)
   .run(nowIso(), ...staleIds);
-return Number(result?.changes || 0);
+return staleIds.length;
 }

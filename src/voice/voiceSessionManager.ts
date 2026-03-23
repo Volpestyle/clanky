@@ -46,7 +46,6 @@ import {
   ingestStreamFrame,
   initializeStreamWatchState,
   isUserInSessionVoiceChannel,
-  maybeTriggerStreamWatchCommentary,
   requestStopWatchingStream,
   requestStreamWatchStatus,
   requestWatchStream,
@@ -55,6 +54,7 @@ import {
   supportsStreamWatchCommentary,
   supportsStreamWatchNotes
 } from "./voiceStreamWatch.ts";
+import { maybeTriggerStreamWatchCommentary } from "./streamWatch/commentary.ts";
 import {
   handleDiscoveredSelfStreamCredentialsReceived,
   handleDiscoveredSelfStreamDeleted,
@@ -7243,6 +7243,35 @@ export class VoiceSessionManager {
         requestedByUserId
       }
     });
+
+    if (
+      this.memory &&
+      typeof this.memory.persistVoiceSessionSummary === "function" &&
+      session.textChannelId &&
+      String(session.compactedContextSummary || "").trim()
+    ) {
+      try {
+        this.memory.persistVoiceSessionSummary({
+          sessionId: session.id,
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          summaryText: String(session.compactedContextSummary || ""),
+          startedAtMs: session.startedAt,
+          endedAtMs: Date.now()
+        });
+      } catch (error) {
+        this.store.logAction({
+          kind: "bot_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          content: `memory_voice_session_summary: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id,
+            reason
+          }
+        });
+      }
+    }
 
     if (this.memory && typeof this.memory.runVoiceSessionMicroReflection === "function") {
       void this.memory.runVoiceSessionMicroReflection({

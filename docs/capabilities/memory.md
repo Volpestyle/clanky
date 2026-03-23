@@ -1,361 +1,350 @@
 # Memory System
 
-This document describes how the bot's memory works — how it learns, what it remembers, and how memories surface during conversation.
+This document describes how Clanky's memory works today and where it is headed as the product deepens from community participant to trusted collaborator to owner assistant.
 
-See also: `AGENTS.md` — Agent Autonomy section.
+See also:
 
-## Design Philosophy
+- `AGENTS.md` - Agent Autonomy
+- `docs/architecture/relationship-model.md`
+- `docs/architecture/dm-support-and-user-scoped-memory.md`
 
-Memory should feel like memory, not like a database the bot has to query. A human in a Discord server knows things about the people they talk to, remembers past conversations, and recalls relevant context without performing a lookup. The bot should work the same way.
+## Product shape
 
-**Four principles:**
+Clanky is one socially real Discord-native entity.
 
-- **The bot knows everyone in the room.** In voice, fact profiles for all participants are in context — not just the current speaker. In text, profiles are loaded for everyone in the recent conversation window. The bot can cross-reference: "James, you should ask Sarah about that — she's been learning Rust too."
-- **Past conversations surface automatically.** Relevant prior conversations are retrieved by topic similarity at context assembly time, running in parallel with other I/O. The bot doesn't need to call a tool to access its own memory of what was said before.
-- **The bot builds memory three ways.** Real-time writes for things it notices mid-conversation, session-end micro-reflection for things it missed in the moment, and daily reflection for big-picture patterns. Each layer catches what the others miss.
-- **Memories are first-person.** Facts are written from the bot's own perspective — "CURSED conk told me to be more nonchalant," not "CURSED conk told clanky to be more nonchalant." These are the bot's memories, not a third-party report.
+Memory should reinforce that identity rather than split Clanky into separate personas or separate bots. The same agent should:
 
-## Scope
+- remember people and shared history like a real community participant
+- carry forward durable context for approved higher-trust collaboration
+- become a deeper private assistant for the owner without leaking that private context into public interactions
 
-The memory system has two persistence layers:
+This means memory is not one flat bucket. It is one unified memory system with multiple scopes, visibility rules, and ownership boundaries.
 
-1. **Durable facts** (`memory_facts`, `memory_fact_vectors_native`): the bot's long-term knowledge base — things it knows about people, the server, itself, and how it should behave. This includes behavioral guidance stored as `guidance` and `behavioral` facts with contextual retrieval.
-2. **Conversation history** (`messages` table): saved text chat, voice transcripts, and bot replies. Auto-retrieved by topic relevance at context assembly time. `conversation_search` tool remains available for deeper or broader lookups.
+## Design principles
 
-Supporting infrastructure:
-- **Daily journals** (`memory/YYYY-MM-DD.md`): append-only logs of all ingested text and transcripts. Raw material consumed by reflection.
-- **Snapshot** (`memory/MEMORY.md`): periodically regenerated global markdown for operator inspection. The dashboard can also request a guild-scoped summary view without changing the on-disk file. Runtime prompts never consume this markdown directly.
-- **Runtime snapshot** (dashboard API): previews the actual turn-scoped memory slice the model would receive for a given guild/channel/user/query combination.
-- **Guild purge control** (dashboard API): an operator can hard-reset one guild by typing the exact guild name. This deletes that guild's durable facts, conversation history, reflection runs, and journal entries, while leaving other guilds untouched. New future conversations can repopulate memory normally.
+- Memory should feel like recall, not like the bot manually searching a database every turn.
+- Social continuity is the default public behavior.
+- Deeper memory access expands with trust, policy, and resource ownership.
+- Private memory never silently bleeds into shared community contexts.
+- The model decides what matters, but the system constrains where that memory can live and who can see it.
 
-## Flow Diagram
+## Memory layers
 
-![Memory System Flow](../diagrams/memory-system-flow.png)
-<!-- source: docs/diagrams/memory-system-flow.mmd -->
+Clanky has two persistence layers in the current runtime:
 
-## How Memory Is Created
+1. Durable facts in SQLite (`memory_facts`, `memory_fact_vectors_native`)
+2. Conversation history in SQLite (`messages` and conversation-window vectors)
 
-Three complementary paths, each catching what the others miss:
+Supporting artifacts:
 
-### Real-time writes (`memory_write` tool)
+- Recent voice session summaries in SQLite (`session_summaries`)
+- Daily journals in `memory/YYYY-MM-DD.md`
+- Operator snapshot in `memory/MEMORY.md`
+- Dashboard runtime snapshot for inspecting the effective prompt slice
 
-The brain notices something important mid-conversation and stores it immediately. The agent decides what matters — no hardcoded extraction rules.
+The markdown files are useful operator-facing artifacts, but the runtime source of truth is the indexed SQLite memory store.
 
-- Accepts `namespace` (speaker/guild/self) and `items` array with `text` and optional `type`.
-- `namespace = "speaker"` / `user:<id>` → stored under that user's Discord ID.
-- `namespace = "guild"` → stored under `__lore__`.
-- `namespace = "self"` → stored under `__self__`.
-- `items[].type`: `preference`, `profile`, `relationship`, `project`, `guidance`, `behavioral`, or `other`.
-- All scopes: `confidence = 0.72`, instruction/prompt-injection rejection, model-selected evidence retention.
-- Execution path: tool call → memory fact write path → `store.addMemoryFact()` → async embedding → archive aged facts → markdown refresh.
-- In voice: the affected user's cached profile is refreshed immediately so the next turn sees the new fact.
-- In voice: prefer session-scoped `note_context` for facts that only need to stay available for the rest of the conversation. Reserve `memory_write` for explicit "remember this" requests or obviously durable facts.
+## Memory scopes
 
-**Strengths:** Immediate. Agent-driven. **Gap:** Spotty in fast-moving voice sessions — the model is focused on responding, not archiving.
+### Current scopes
+
+Today the durable fact store has three runtime scopes:
+
+- `user` - user-portable facts that follow a person across guilds and DMs
+- `guild` - guild-specific shared context such as lore, norms, and server-local context
+- `owner` - owner-private facts that only load in owner-private contexts
+
+Runtime composition:
+
+| Context | Memory in scope |
+|---------|-----------------|
+| Guild text/voice | participant user facts + guild facts |
+| Standard DM | DM partner user facts + bot self facts |
+| Owner-private DM/dashboard | owner facts + owner guidance + bot self facts, with owner user facts when relevant |
+
+This is the current implemented foundation. Owner-private retrieval is intentionally gated. The owner scope does not bleed into guild contexts or ordinary DMs with other people.
+
+### Target scopes
+
+The relationship model implies a richer memory model over time.
+
+Clanky should eventually distinguish at least these buckets:
+
+- `community memory` - guild-scoped shared social context and lore
+- `collaborator-private memory` - user-specific context for an approved collaborator relationship
+- `shared-resource memory` - memory attached to a shared repo, project, workspace, channel, or team workflow
+- `owner-private memory` - private assistant memory for the owner-facing relationship
+
+These are not separate bots. They are separate visibility and ownership domains inside one memory fabric.
+
+The important architectural point is that community context remains real context, not just provenance metadata. Memory should not be flattened into one global personal store. Clanky should remember people across contexts while still preserving community, resource, and private visibility boundaries.
+
+## What memory is for
+
+Different scopes serve different product needs.
+
+### Community memory
+
+Used for Clanky as a socially embedded public participant.
+
+Examples:
+
+- who regulars are
+- their preferences and recurring interests
+- server culture, running jokes, guild lore, recurring events
+- socially useful facts that help Clanky feel continuous in public conversation
+
+### Collaborator memory
+
+Used when an approved person asks more of Clanky on shared or specifically approved resources.
+
+Examples:
+
+- collaborator-private context that belongs to that approved relationship
+- ongoing work context for an approved repo or project
+- follow-through on a longer-running shared task
+- shared-resource notes that should help future collaboration without exposing owner-private context
+
+In the target model this is not one flat bucket. It eventually breaks down into at least:
+
+- collaborator-private memory
+- shared-resource memory
+
+### Owner-private assistant memory
+
+Used for the deepest assistant relationship with the person running the instance.
+
+Examples:
+
+- private reminders
+- personal preferences and routines
+- device-linked context
+- ongoing personal workflows and assistant continuity
+
+This layer is the closest analogue to OpenClaw-style personal assistant memory.
+
+## How memory is created today
+
+Clanky builds durable memory through three complementary paths:
+
+### Real-time writes
+
+The model can write durable facts immediately when it notices something worth remembering.
+
+- Tool path: `memory_write`
+- Namespaces resolve to user, guild, self, or owner scopes
+- Fact types are normalized and filtered before storage
+- Writes dedupe, refresh embeddings, archive lower-priority old facts, and refresh prompt snapshots
+- Owner writes are accepted only inside owner-private contexts
+
+This path is best for explicit "remember this" requests or obviously durable facts.
 
 ### Session-end micro-reflection
 
-When a voice session ends or a text conversation goes quiet, a lightweight reflection pass reviews just that conversation: "anything worth remembering from the last 30 minutes?"
+After a voice session ends or a text thread goes quiet, a lightweight reflection reviews that recent conversation and extracts missed durable facts.
 
-This closes the gap between real-time writes (spotty) and daily reflection (too late). Someone mentions their birthday at 10am — micro-reflection catches it at the end of the voice session, not 14 hours later at the daily reflection run.
+- catches facts not saved in the moment
+- stays narrow to the recent session or quiet text window
+- uses the same durable write path as direct writes
 
-- Triggers on voice session end event, after sustained text silence in a channel, or when channel traffic is about to push key context out of the configured recent-message window.
-- Scoped to just that conversation's journal entries, not the full day.
-- Text-channel reflection is scheduled from human-authored messages and reflects on human-authored turns only, so the bot does not canonize its own prose into durable memory.
-- Context-pressure reflection uses a short cooldown and only runs when human message volume in the recent lookback nears `memory.promptSlice.maxRecentMessages`.
-- Same fact write path as `memory_write` — same instruction-style filtering, dedup, archiving.
-- Lightweight: short context, fast model, capped output.
+This is especially important in voice, where the model is often focused on responding rather than filing memory in real time.
 
-**Strengths:** Catches what the real-time path missed, while context is still fresh. **Gap:** Doesn't see full-day patterns.
+### Pre-compaction voice reflection
+
+Long voice sessions flush a lighter reflection pass before old transcript turns are compacted into the rolling summary.
+
+- runs on the exact batch about to be compacted
+- extracts a small number of durable facts without blocking compaction
+- reduces the chance that early-session details disappear before the session-end reflection sees them
 
 ### Daily reflection
 
-An LLM reviews the full day's journal and distills it into durable facts. The bridge between raw logs and long-term memory.
+A broader reflection pass reviews the day journal and distills durable facts.
 
-1. Job triggers at the configured time (default: end of day).
-2. Reads `memory/YYYY-MM-DD.md`.
-3. Reflection prompt: "Review this day's conversations. Extract durable facts — things about people, ongoing projects, important events, preferences, recurring topics. Ignore throwaway chatter."
-4. LLM returns structured facts with scope and subject attribution. Reflection output uses strict JSON schema validation; every declared field is required, and non-author facts use `subjectName: ""` rather than omitting the field.
-5. Written through the same memory fact write path — same instruction-style filtering, dedup, archiving.
-6. Journals marked as processed. Retained indefinitely.
+- sees larger patterns across multiple sessions
+- merges near-duplicates against existing memory
+- writes through the same validation, dedupe, and archival path
 
-The reflection prompt includes existing durable facts (quoted fact text per subject) for all subjects mentioned in the journal. This lets the model skip facts that already exist and merge near-duplicates with different wording into the best version using the `supersedes` field — when set to the exact existing fact text, the write path updates that fact in-place rather than creating a duplicate. Combined with the database-level `UNIQUE` constraint and the agent seeing its own memory during conversation, this forms a three-layer dedup system.
+This turns raw journal history into longer-lived memory.
 
-With micro-reflection handling heavy voice sessions at session-end, daily reflection mostly processes text chat and cross-session patterns — the load is distributed rather than one massive batch.
+## How memory is surfaced today
 
-**Strengths:** Sees patterns across the full day. Catches recurring themes the moment-by-moment paths miss. Consolidates semantic duplicates. **Gap:** 24-hour delay (mitigated by micro-reflection).
+### Fact profiles for people in the room
 
-## How Memory Is Surfaced
+Clanky loads memory for all relevant participants, not just the current speaker.
 
-### Everyone in the room (fact profiles)
+- In voice, participant fact profiles are cached in-session.
+- In text, user facts are loaded for people in the recent message window.
+- Guild lore and bot-self facts are included where relevant.
 
-Fact profiles are loaded for **all participants**, not just the current speaker. The bot knows things about everyone it's talking to simultaneously.
+This makes memory feel like natural social recall rather than a special tool call.
 
-**Voice:**
-- When a user joins, their fact profile is loaded and cached on `session.factProfiles[userId]`.
-- When a user leaves, their profile is removed.
-- On every generation turn, all participants' facts are included in the prompt.
-- The current speaker gets full facts. Other participants get a compact summary of key facts.
-- Lore (`__lore__`) and self-facts (`__self__`) are loaded at session start and refreshed on `memory_write`.
-- Behavioral facts are cached as a session-scoped fact pool keyed by the active participant set. Spoken generation reranks that pool with the normal hybrid semantic+lexical scoring path, reusing cached fact vectors instead of refetching the pool every turn, and `memory_write` invalidates the pool.
-- Conversation-history retrieval keeps short per-session caches per retrieval mode. Same-topic follow-ups reuse recent results, and low-signal backchannels reuse the freshest cached history or skip retrieval entirely instead of re-querying memory.
-- Voice also has a session-scoped scratchpad via `note_context`. This keeps short-term plans/preferences/relationships live without promoting them to durable memory mid-conversation. The runtime may keep more notes than the prompt shows; prompts include a recent prompt-safe subset rather than dumping the full scratchpad every turn.
+### Relevant past conversations
 
-**Text:**
-- Fact profiles are loaded for everyone who appears in the recent message window, not just the message author.
-- Loading is SQLite-only, sub-millisecond per user. 3-5 profiles in parallel adds nothing to latency.
+Conversation windows are retrieved automatically by topic relevance during context assembly.
 
-**Prompt structure:**
-```
-People in this conversation:
+- current turn is embedded
+- relevant prior windows are recalled in parallel
+- low-signal backchannels can reuse fresh recent recall instead of re-querying every turn
 
-James (current speaker):
-  - Loves Rust, works at Acme Corp, plays Elden Ring
-  - Prefers concise replies
+This gives Clanky recall of what was said before without forcing the model to manually search history in the common case.
 
-Sarah:
-  - Into indie games, learning Rust, birthday March 15
+### Recent voice session carryover
 
-Mike:
-  - Streams on Twitch, competitive FPS player
-```
+When a voice session ends, the compacted session summary is persisted as a short-lived artifact and can be injected into the text reply prompt for the same channel.
 
-The model sees people, not "current speaker" vs "others." It can cross-reference naturally.
+- text replies can inherit the most recent voice context for a short window after the session ends
+- summaries expire automatically instead of becoming permanent durable memory
+- dashboard prompt inspection shows the injected voice-session context
 
-### Relevant past conversations (auto-retrieved)
+### Fallback memory tools
 
-Past conversations are retrieved by topic similarity at context assembly time, without the model calling a tool. This runs in parallel with fact profile loading and other I/O.
+Text and automation contexts can still use explicit search tools when needed.
 
-- Conversation windows are embedded at storage time (async, background).
-- At context assembly, meaningful current messages/transcripts are embedded (~50-100ms) and matched against stored windows via vector similarity.
-- Top 2-3 relevant past conversations are included in the prompt.
-- Low-signal follow-ups like backchannels do not force a fresh semantic lookup every turn; the bot reuses recent same-topic recall when it already has it.
+- `memory_search` for deeper durable-fact lookup
+- `conversation_search` for broader transcript/history lookup
 
-The model references past conversations naturally, like genuine recall: "Oh yeah, we talked about that last week" — not "let me search my history."
+These are fallback tools, not the primary way Clanky accesses memory in ordinary interaction.
 
-### Fallback tools
+## Durable fact model today
 
-Text and automation runs keep `memory_search` and `conversation_search` as fallback tools for cases the auto-retrieval doesn't cover:
-- Cross-subject queries ("what do I know about Rust?" across all users)
-- Deeper lookups beyond the auto-retrieval's top-k
-- Broader time ranges or guild-wide conversation search
+Durable facts live in `memory_facts`.
 
-Voice keeps `conversation_search` for "what did we say earlier?" style recall, but does not expose `memory_search` as a live tool. Same-session continuity should come from the auto-retrieved context plus `note_context`, not a manual durable-memory search on every spoken turn.
+Important fields:
 
-These are fallbacks, not primary access paths. The model shouldn't need to search its own memory for the common case.
+- `scope` - `user`, `guild`, or `owner`
+- `guild_id` - used for guild-scoped facts
+- `user_id` - owner for user-scoped or owner-scoped facts
+- `subject` - user ID, `__lore__`, `__self__`, or `__owner__`
+- `fact`
+- `fact_type`
+- `evidence_text`
+- `source_message_id`
+- `confidence`
+- `is_active`
 
-## Data Model
+### Current fact types
 
-### `memory_facts` (durable facts)
+Canonical fact types today:
 
-- `scope` (required): `user` or `guild`.
-- `guild_id` (optional): required for `scope='guild'`, `NULL` for `scope='user'`.
-- `channel_id` (optional): retrieval bias, not hard partitioning.
-- `user_id` (optional): owner for user-scoped facts (NULL for shared bot-self facts like `__self__`).
-- `subject` (required): user ID, `__lore__`, or `__self__`.
-- `fact`, `fact_type`, `evidence_text`, `source_message_id`, `confidence`.
-- `is_active`: soft archive flag (archiving is soft delete, not hard).
-- Unique key spans both scopes: `(scope, COALESCE(guild_id,''), COALESCE(user_id,''), subject, fact)`.
+- `profile`
+- `relationship`
+- `preference`
+- `project`
+- `guidance`
+- `behavioral`
+- `other`
 
-Runtime composition:
-- Guild context: user-scoped participant facts + guild-scoped server facts.
-- DM context: user-scoped facts only (DM partner + bot self), no guild lore.
+Notes:
 
-### `memory_fact_vectors_native` (semantic vectors)
+- `__lore__` is a subject, not a fact type.
+- `__self__` is a subject, not a fact type.
+- `__owner__` is the canonical owner-private subject.
+- Legacy stored rows may still contain old types like `lore`, `self`, or `general`, but those are not part of the intended canonical model.
 
-- Primary key: `(fact_id, model)`.
-- Float32 blob, queried with sqlite-vec cosine similarity.
+### Fact type intent
 
-### Fact types
+| Type | Use |
+|------|-----|
+| `profile` | stable identity facts |
+| `relationship` | important links between people |
+| `preference` | tastes, habits, recurring likes/dislikes |
+| `project` | ongoing work and active efforts |
+| `guidance` | standing style/tone guidance |
+| `behavioral` | contextual behavior rules |
+| `other` | lore, observations, and facts that do not fit the above |
 
-| Type | Tier | Description | Examples |
-|------|------|-------------|----------|
-| `profile` | Core | Identity-level, rarely changes | Name, birthday, occupation, timezone |
-| `relationship` | Core | Connections between people | Family members, close friends, work relationships |
-| `preference` | Contextual | Likes, dislikes, habits | "Prefers short replies", "Likes Rust" |
-| `project` | Contextual | Ongoing work, activities | "Building a Discord selfbot", "Playing Elden Ring" |
-| `guidance` | Behavioral | Standing style/tone instructions | "Keep responses brief", "Use casual tone in #general" |
-| `behavioral` | Behavioral | Trigger/action rules from the community | "Send a GIF when Tiny Conk says 'what the heli'", "Always greet James in Spanish" |
-| `other` | Contextual | Everything else | Lore, observations, miscellaneous |
+### Retrieval behavior
 
-### Tiered storage and retrieval
+- core people/context facts are loaded directly into participant fact profiles
+- community-scoped lore remains a real retrieval surface in guild contexts
+- owner-private facts load only in owner-private contexts and in the dedicated dashboard owner-private surface
+- `guidance` is meant to act like always-relevant standing context
+- `behavioral` is retrieved more selectively to avoid bloating every prompt
+- provenance such as guild, channel, and source message should inform ranking and inspection, but it is not the only organizing principle of the system
+- lexical fact recall uses SQLite FTS5/BM25 instead of tokenized `LIKE` scoring
+- embeddings support hybrid semantic + lexical ranking for both fact search and conversation recall
 
-Facts are classified into three tiers that control eviction and retrieval:
+## Journals and snapshots
 
-**Core facts** — identity-level, rarely change:
-- Types: `profile`, `relationship`.
-- Evicted last. Consolidation pass merges/compresses when tier fills.
-- Cap: 35 per user subject.
-- Retrieval: always loaded for all participants in the conversation.
+### Daily journals
 
-**Contextual facts** — situational, expected to rotate:
-- Types: `preference`, `project`, `other`.
-- FIFO eviction by `updated_at`.
-- Cap: remaining budget after core facts (e.g., 85 contextual if 35 core out of 120 total).
-- Retrieval: always loaded for all participants in the conversation.
+`memory/YYYY-MM-DD.md` is the append-only raw journal.
 
-Lore is stored under the special subject `__lore__`, not as a separate fact type.
+- stores ingested text messages and voice transcripts
+- provides source material for reflection
+- keeps message/guild/channel provenance visible for operators
 
-**Behavioral facts** — standing instructions about how to act:
-- Types: `guidance`, `behavioral`.
-- `guidance` facts are always included in the prompt (light, few of them — style/tone context the bot reasons about on every turn).
-- `behavioral` facts are contextually retrieved — only included when the current turn's content is relevant (prevents bloating every prompt with trigger/action rules).
-- In voice sessions, the bot loads the scoped behavioral fact pool once, reranks it locally against each transcript, and refreshes that pool on `memory_write` or participant-set changes.
-- Subject scoping: `__lore__` for server-wide behavioral rules, user ID for per-person rules.
-- FIFO eviction, same as contextual.
+### Operator snapshot
 
-Behavioral guidance is stored, retrieved, and reasoned about the same way as any other fact. The bot doesn't distinguish between "facts about people" and "rules for how to act." It just knows things and acts accordingly.
+`memory/MEMORY.md` is a generated operator-facing summary.
 
-**Per-subject total cap:** 120 facts. Enough to hold a real relationship's worth of knowledge about someone you talk to regularly.
+- useful for inspection and debugging
+- not the runtime source of truth
+- dashboard can also render a scoped runtime snapshot without changing the file on disk
 
-**Eviction order** (`archiveOldFactsForSubject`):
-1. Sort by time-weighted confidence: `confidence * exp(-ln2 * ageDays / 120)`. Old unreinforced facts drift down the ranking even if they were originally high-confidence. `guidance` and `behavioral` facts are exempt from decay (evergreen).
-2. Archive contextual and behavioral facts beyond cap (lowest decayed confidence first).
-3. Only if contextual/behavioral within budget AND total exceeds subject cap, archive core facts.
-4. Core facts are never archived to make room for other tiers.
+## Safety and quality guards
 
-This means a 0.95-confidence fact from 6 months ago no longer blocks eviction of a 0.72-confidence fact written today. Facts that are repeatedly reinforced (re-written or confirmed) get their `updated_at` refreshed, resetting their decay.
+Writes are filtered before becoming durable memory.
 
-## Safety Guards
+- normalized input and length bounds
+- fact type normalization
+- rejection of prompt-injection and unsafe instruction text
+- evidence grounding requirements
+- dedupe and supersession handling
+- soft archival instead of destructive deletion when rotating old facts
 
-Facts are filtered at write time:
+If embeddings fail, the fact can still be stored and embedded later.
 
-- Input normalization and length bounds.
-- Fact type normalization (`preference|profile|relationship|project|guidance|behavioral|other`).
-- Instruction/prompt-injection rejection (rejects `system`, `developer`, `ignore previous`, secrets, etc.).
-- Grounding requirement: exact substring match or ~45% token-overlap threshold.
-- If embedding fails, fact is still stored; embedding backfill happens on next retrieval.
+## Current reality vs target direction
 
-## Embeddings
+The current runtime is strongest at social memory:
 
-Used for semantic ranking in `memory_search`, conversation retrieval, and dashboard search.
+- knowing people
+- recalling conversations
+- carrying guild lore and recurring context
+- feeling continuous in Discord voice and text
 
-- Query embedding: `llm.embedText(...)` when query length >= 3.
-- Fact embedding payload: `type` + `fact` + optional `evidence`.
-- Model resolution: `settings.memory.embeddingModel` → `DEFAULT_MEMORY_EMBEDDING_MODEL` env → first ready provider's default model → `"text-embedding-3-small"`.
-- Missing vectors are backfilled (up to 8 per query).
-- Fact embeddings generated at write time. Conversation window embeddings generated at storage time.
+That is correct and important.
 
-### Embedding provider chain
+But the relationship model now makes it clear that Clanky also needs stronger assistant-oriented memory for higher-trust use cases.
 
-Embedding calls are dispatched through a provider fallback chain. Each provider implements the `EmbeddingProvider` interface (`embed`, `isReady`, `defaultModel`). The chain is tried in order; if a provider fails, the next is attempted.
+Today the system has the technical foundations for scoped durable memory, but the product direction extends beyond pure social recall. Clanky should grow toward a unified memory fabric that supports:
 
-| Priority | Provider | Config | Default model |
-|----------|----------|--------|---------------|
-| 1 | OpenAI | `OPENAI_API_KEY` | `text-embedding-3-small` |
-| 2 | Ollama (local) | `OLLAMA_BASE_URL` (default `http://127.0.0.1:11434`) | `nomic-embed-text` |
+- social continuity in community spaces
+- approved collaborator continuity in collaborator-private and shared-resource contexts
+- deeper owner-private assistant continuity
 
-- On startup, Ollama is health-probed to set its `isReady()` state.
-- If Ollama was unavailable at startup, it re-probes automatically every 60 seconds so it recovers if Ollama comes up later.
-- When Ollama is used as fallback, OpenAI-specific model names (e.g. `text-embedding-3-small`) are automatically substituted with the provider's own default (`nomic-embed-text`).
-- If all ready providers fail, non-ready providers are tried as a last resort.
-- If all providers fail, the caller degrades gracefully to FTS-only search (no semantic lane).
-- Each attempt is logged (`memory_embedding_call` or `memory_embedding_error` with `provider` field).
+## Comparison to OpenClaw-style memory
 
-### Hybrid score formula (for `searchDurableFacts`)
+OpenClaw-style memory is strongest at explicit assistant continuity:
 
-Candidate generation happens in three lanes before ranking:
-- Semantic lane: vector search over stored fact embeddings within the scoped subject/type filter.
-- Lexical lane: token/phrase match search over fact text and evidence.
-- Recent fallback lane: a small recent scoped slice so continuity still works when embeddings are unavailable or the query is too weak.
+- notes
+- decisions
+- project context
+- reminders
+- durable private working context written to inspectable artifacts
 
-The merged candidate set is then reranked with the hybrid score below.
+Clanky's current memory is strongest at socially embedded continuity:
 
-Per candidate:
-- `lexicalScore`: token overlap / substring match.
-- `semanticScore`: cosine similarity from sqlite-vec.
-- `confidenceScore`: stored confidence.
-- `recencyScore`: `1 / (1 + ageDays / 45)`.
-- `channelScore`: 1 (same channel), 0.25 (no channel), 0 (different channel).
+- people in the room
+- shared history
+- guild lore
+- conversation recall
 
-Combined: `0.50 * semantic + 0.28 * lexical + 0.10 * confidence + 0.07 * recency + 0.05 * channel` (with fallback weights when semantic is unavailable).
+Clanky should not replace its social memory with OpenClaw-style memory.
+It should add assistant-oriented scopes and retrieval on top of the social foundation while preserving one identity and one consistent public personality.
 
-Temporal decay then down-weights stale facts with an exponential half-life (90 days, floor 0.2) while keeping `guidance` and `behavioral` facts evergreen (`multiplier = 1.0`).
+## Intended end state
 
-After scoring, MMR diversity reranking reduces near-duplicate facts so prompt memory covers more distinct context.
+Clanky remembers you like a real social participant and supports you like a serious assistant.
 
-Relevance gate filters low-quality matches.
+That means:
 
-## Unified Memory Model
+- one agent identity
+- one memory system
+- multiple scopes
+- explicit ownership boundaries
+- deeper memory visibility and continuity as trust increases
 
-Everything the bot knows lives in `memory_facts`. There is no separate store for behavioral instructions — they're facts with a behavioral type and contextual retrieval.
-
-| What the bot knows | Stored as | Example |
-|----|----|-----|
-| Facts about people | `profile`, `relationship`, `preference` facts | "James likes Nvidia" |
-| What happened before | `messages` table (conversation history) | "Two days ago we talked about NVDA at $181" |
-| How to behave | `guidance` and `behavioral` facts | "Use 'type shit' occasionally", "Greet James in Spanish" |
-| Server context | `other` facts under the `__lore__` subject | "This server is focused on game dev" |
-| Self-knowledge | `__self__` subject facts | "I prefer concise replies" |
-
-A human doesn't have separate mental stores for "what I know" and "how I should act." The bot shouldn't either. When someone says "hey, from now on always greet me in Spanish," the bot stores that as a behavioral fact about that person. It sees the fact in context and acts on it — same as any other fact.
-
-### Behavioral retrieval
-
-- `guidance` facts are always included in prompt context
-- `behavioral` facts are retrieved by relevance when the current turn matches
-
-This is a retrieval strategy on fact types within the same memory store.
-
-## Message Ingest Pipeline
-
-### Text chat
-
-Both incoming user messages and outgoing bot replies are journaled when `memory.enabled` is true:
-
-1. `ClankerBot.handleMessage()` → `memory.ingestMessage(...)` for user messages.
-2. Reply pipeline, automation engine, initiative engine → `memory.ingestMessage(...)` for bot output.
-3. Jobs queued by `messageId`, deduped, max queue 400.
-4. Worker appends one line to `memory/YYYY-MM-DD.md`.
-
-`processIngestMessage` does NOT perform automatic fact extraction. Durable facts come from `memory_write`, micro-reflection, or daily reflection.
-
-Journal entries are capped at 640 characters — long enough to preserve a full thought or explanation without truncating nuance.
-
-### Voice transcripts
-
-Both sides captured via synthetic message IDs:
-- User speech: `queueVoiceMemoryIngest()` for transcripts from realtime bridge and file-ASR.
-- Bot replies: `persistAssistantVoiceTimelineTurn()`.
-
-## Settings
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `memory.enabled` | `true` | Master switch for journaling, fact retrieval, and writes |
-| `memory.embeddingModel` | `"text-embedding-3-small"` | Model for fact and conversation embeddings |
-| `memory.promptSlice.maxRecentMessages` | `35` | Short-term chat context window size |
-| `memory.reflection.enabled` | `true` | Daily reflection toggle |
-| `memory.reflection.hour` / `minute` | end of day | Daily reflection schedule |
-| `memory.reflection.maxFactsPerReflection` | `20` | Cap on facts per reflection run |
-| `memoryLlm` | inherit | Optional override for reflection and memory-adjacent background work. The dashboard defaults this to inherit/on, and an empty object clears any explicit override back to the main text/orchestrator model. |
-
-## APIs and Observability
-
-Dashboard API:
-
-- `GET /api/memory?guildId=` — operator summary markdown. Without `guildId`, returns the global snapshot. With `guildId`, returns a guild-scoped dashboard summary.
-- `POST /api/memory/refresh` — regenerate snapshot.
-- `POST /api/memory/runtime-snapshot` — preview the real runtime memory slice for a prospective turn, including participant profiles, guidance, behavioral facts, and conversation recall.
-- `GET /api/memory/search?q=&guildId=&channelId=&limit=` — hybrid durable fact search.
-- `GET /api/memory/fact-profile` — structured fact profile for guild/user.
-- `GET /api/memory/facts` — list/filter raw facts.
-- `PUT /api/memory/facts/:factId` — edit a durable fact from the dashboard inspector.
-- `DELETE /api/memory/facts/:factId` — soft-delete a durable fact from the dashboard inspector.
-- `GET /api/memory/subjects` — list subjects with fact counts.
-- `GET /api/memory/reflections?guildId=` — reflection run history, optionally scoped to one guild.
-
-Action log kinds: `memory_fact`, `memory_reflection_start`, `memory_reflection_complete`, `memory_reflection_error`, `memory_embedding_call`, `memory_embedding_error`, `memory_log_prune`.
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `src/memory/memoryManager.ts` | Ingestion, journaling, reflection, fact profiles, retrieval |
-| `src/memory/memoryHelpers.ts` | Fact normalization, evidence handling, scoring |
-| `src/memory/dailyReflection.ts` | End-of-day reflection logic |
-| `src/store/store.ts` | `memory_facts` schema, query/update methods |
-| `src/tools/replyTools.ts` | `memory_write`, `memory_search`, `conversation_search` text tools |
-| `src/voice/voiceToolCallMemory.ts` | Voice `memory_write` and `conversation_search` handlers |
-| `src/bot.ts` | Ingest triggers, reflection scheduling |
-| `src/voice/voiceSessionManager.ts` | Voice transcript ingestion, session fact profile caching |
+The public Clanky people know in Discord and the deeper assistant the owner relies on are the same being, with different memory surfaces available depending on relationship depth, policy, and resource ownership.

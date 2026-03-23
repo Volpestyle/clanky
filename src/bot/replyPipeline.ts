@@ -258,6 +258,14 @@ type ReplyPipelineContext = {
   webSearch: ReplyWebSearchState;
   browserBrowse: ReturnType<ReplyPipelineRuntime["buildBrowserBrowseContext"]>;
   recentConversationHistory: ReplyContinuityContext["recentConversationHistory"];
+  recentVoiceSessionContext: Array<{
+    sessionId?: string | null;
+    guildId?: string | null;
+    channelId?: string | null;
+    endedAt?: string | null;
+    ageMinutes?: number | null;
+    summaryText?: string | null;
+  }>;
   memoryLookup: ReturnType<ReplyPipelineRuntime["buildMemoryLookupContext"]>;
   modelImageInputs: ReplyImageInput[];
   imageLookup: ReturnType<ReplyPipelineRuntime["buildImageLookupContext"]>;
@@ -283,6 +291,7 @@ type ReplyActionableLlmResult = {
   handledByIntent: false;
   generation: ReplyGeneration;
   typingDelayMs: number;
+  usedToolLoop: boolean;
   usedWebSearchFollowup: boolean;
   usedBrowserBrowseFollowup: boolean;
   usedMemoryLookupFollowup: boolean;
@@ -340,6 +349,14 @@ function isReplyActionableLlmResult(result: ReplyLlmResult): result is ReplyActi
 
 function isReplySendableActionResult(result: ReplyActionResult): result is ReplySendableActionResult {
   return result.skipped === false;
+}
+
+const TOOL_NARRATION_PATTERN = /^(?:I\s+(?:searched|looked|found|checked|browsed|fetched|retrieved|queried|ran|used|called|executed|performed|attempted|tried)\b|(?:After|Based on|From)\s+(?:searching|looking|browsing|checking|running|using|calling)\b)/i;
+
+function looksLikeToolNarration(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  return TOOL_NARRATION_PATTERN.test(trimmed);
 }
 
 function logReplyPipelineGate(
@@ -624,6 +641,7 @@ async function buildReplyContext(
   const textAttentionState = resolveTextAttentionState({
     botUserId: bot.client.user?.id || null,
     settings,
+    message,
     recentMessages,
     addressSignal,
     triggerMessageId: message.id,
@@ -638,6 +656,7 @@ async function buildReplyContext(
 
   const shouldRunDecisionLoop = bot.shouldAttemptReplyDecision({
     settings,
+    message,
     recentMessages,
     addressSignal,
     isReplyChannel,
@@ -733,6 +752,14 @@ async function buildReplyContext(
   const webSearch: ReplyWebSearchState = bot.buildWebSearchContext(settings, message.content);
   const browserBrowse = bot.buildBrowserBrowseContext(settings);
   const recentConversationHistory = continuity.recentConversationHistory;
+  const recentVoiceSessionContext =
+    memorySettings.enabled && typeof bot.memory?.getRecentVoiceSessionSummariesForPrompt === "function"
+      ? bot.memory.getRecentVoiceSessionSummariesForPrompt({
+          guildId: message.guildId,
+          channelId: message.channelId,
+          referenceAtMs: message.createdTimestamp
+        })
+      : [];
   const memoryLookup = bot.buildMemoryLookupContext({ settings });
   const modelImageInputs: ReplyImageInput[] = [
     ...attachmentImageInputs
@@ -856,6 +883,7 @@ async function buildReplyContext(
       musicDisambiguation
     },
     recentConversationHistory,
+    recentVoiceSessionContext,
     screenShare: screenShareCapability,
     channelMode: isReplyChannel
       ? "reply_channel"
@@ -887,7 +915,7 @@ async function buildReplyContext(
     reactionEmojiOptions, source, performance,
     memorySlice, replyMediaMemoryFacts, attachmentImageInputs, attachmentVideoInputs, videoLookupRefs, imageBudget, videoBudget,
     mediaCapabilities, simpleImageCapabilityReady, complexImageCapabilityReady, imageCapabilityReady,
-    videoCapabilityReady, gifBudget, gifsConfigured, webSearch, browserBrowse, recentConversationHistory, memoryLookup,
+    videoCapabilityReady, gifBudget, gifsConfigured, webSearch, browserBrowse, recentConversationHistory, recentVoiceSessionContext, memoryLookup,
     modelImageInputs, imageLookup, replyTrace, screenShareCapability,
     activeVoiceSession, inVoiceChannelNow, activeVoiceParticipantRoster, musicState, musicDisambiguation,
     systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture, replyPrompts
@@ -1364,7 +1392,7 @@ async function executeReplyLlm(
 
   return {
     handledByIntent: false,
-    generation, typingDelayMs, usedWebSearchFollowup, usedBrowserBrowseFollowup, usedMemoryLookupFollowup, usedImageLookupFollowup,
+    generation, typingDelayMs, usedToolLoop: replyToolLoopSteps > 0, usedWebSearchFollowup, usedBrowserBrowseFollowup, usedMemoryLookupFollowup, usedImageLookupFollowup,
     mediaPromptLimit, replyDirective,
     webSearch, browserBrowse, memoryLookup, imageLookup, modelImageInputs, toolResultImageInputs, replyPrompts
   };
@@ -1385,10 +1413,29 @@ async function dispatchReplyActions(
     replyMediaMemoryFacts
   } = ctx;
   const {
-    generation, usedWebSearchFollowup, mediaPromptLimit, replyDirective,
+    generation, usedToolLoop, usedWebSearchFollowup, mediaPromptLimit, replyDirective,
     webSearch, toolResultImageInputs, replyPrompts
   } = llmResult;
   if (replyDirective.parseState === "unstructured") {
+    if (usedToolLoop && looksLikeToolNarration(String(generation.text || ""))) {
+      bot.logSkippedReply({
+        message,
+        source,
+        triggerMessageIds,
+        addressSignal,
+        generation,
+        usedWebSearchFollowup,
+        reason: "invalid_structured_output_after_tool_loop",
+        reaction: null,
+        screenShareOffer: null,
+        performance,
+        prompts: replyPrompts,
+        extraMetadata: {
+          rawTextPreview: sanitizeBotText(String(generation.text || ""), 280) || null
+        }
+      });
+      return { skipped: true };
+    }
     const recoveredText = sanitizeBotText(String(generation.text || ""));
     if (recoveredText) {
       replyDirective.text = recoveredText;

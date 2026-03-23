@@ -499,6 +499,18 @@ test("dashboard runtime snapshot route returns the real turn-scoped memory slice
 test("dashboard memory fact inspector routes list subjects and facts", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
     store.addMemoryFact({
+      scope: "user",
+      guildId: null,
+      userId: "portable-user",
+      channelId: "chan-portable",
+      subject: "portable-user",
+      fact: "Portable user likes old school DS hardware.",
+      factType: "preference",
+      evidenceText: "Talked about a DS.",
+      sourceMessageId: "portable-msg",
+      confidence: 0.82
+    });
+    store.addMemoryFact({
       guildId: "guild-1",
       channelId: "chan-2",
       subject: "user-1",
@@ -520,19 +532,20 @@ test("dashboard memory fact inspector routes list subjects and facts", async () 
     });
 
     const searched = await fetch(
-      `${baseUrl}/api/memory/facts?guildId=guild-1&subject=user-1&q=old+school+ds&limit=10`
+      `${baseUrl}/api/memory/facts?guildId=guild-1&subject=portable-user&q=old+school+ds&limit=10`
     );
     assert.equal(searched.status, 200);
     const searchedJson = await searched.json();
     assert.equal(Array.isArray(searchedJson.facts), true);
     assert.equal(searchedJson.facts.length, 1);
-    assert.equal(searchedJson.facts[0]?.fact, "Speaker likes old school DS hardware.");
+    assert.equal(searchedJson.facts[0]?.fact, "Portable user likes old school DS hardware.");
 
     const subjects = await fetch(`${baseUrl}/api/memory/subjects?guildId=guild-1&limit=10`);
     assert.equal(subjects.status, 200);
     const subjectsJson = await subjects.json();
     assert.equal(Array.isArray(subjectsJson.subjects), true);
     assert.equal(subjectsJson.subjects.length >= 2, true);
+    assert.equal(subjectsJson.subjects.some((entry) => entry.subject === "portable-user"), true);
     assert.equal(subjectsJson.subjects.some((entry) => entry.subject === "user-1"), true);
   });
 
@@ -616,6 +629,98 @@ test("dashboard memory fact inspector can update and delete facts", async () => 
       assert.equal(refreshCalls, 2);
     }
   );
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard memory fact inspector can update portable user facts", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
+    store.addMemoryFact({
+      scope: "user",
+      guildId: null,
+      userId: "portable-user",
+      channelId: "chan-2",
+      subject: "portable-user",
+      fact: "Memory line: Likes old handhelds.",
+      factType: "general",
+      evidenceText: "legacy portable fact",
+      sourceMessageId: "msg-user",
+      confidence: 0.75
+    });
+
+    const initialFact = store.getFactsForScope({
+      guildId: "guild-1",
+      includePortableUserScope: true,
+      limit: 10,
+      subjectIds: ["portable-user"]
+    })[0];
+    assert.ok(initialFact);
+
+    const updateResponse = await fetch(`${baseUrl}/api/memory/facts/${initialFact.id}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        guildId: "guild-1",
+        subject: "portable-user",
+        fact: "Likes handheld PCs.",
+        factType: "project",
+        evidenceText: "operator tightened the portable fact",
+        confidence: 0.91
+      })
+    });
+    assert.equal(updateResponse.status, 200);
+    const updateJson = await updateResponse.json();
+    assert.equal(updateJson.ok, true);
+    assert.equal(updateJson.fact?.scope, "user");
+    assert.equal(updateJson.fact?.fact, "Likes handheld PCs.");
+    assert.equal(updateJson.fact?.fact_type, "project");
+  });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard owner-private routes stay separate from shared memory inspector", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
+    store.addMemoryFact({
+      scope: "owner",
+      guildId: null,
+      userId: "owner-1",
+      channelId: "dm-owner",
+      subject: "__owner__",
+      fact: "Renew passport in May.",
+      factType: "project",
+      sourceMessageId: "owner-msg-1",
+      confidence: 0.9
+    });
+
+    const subjectsResponse = await fetch(`${baseUrl}/api/memory/subjects?guildId=guild-1&limit=20`);
+    assert.equal(subjectsResponse.status, 200);
+    const subjectsJson = await subjectsResponse.json();
+    assert.equal(subjectsJson.subjects.some((entry) => entry.subject === "__owner__" && entry.scope === "owner"), false);
+
+    const factsResponse = await fetch(`${baseUrl}/api/memory/facts?guildId=guild-1&subject=__owner__&limit=10`);
+    assert.equal(factsResponse.status, 200);
+    const factsJson = await factsResponse.json();
+    assert.equal(factsJson.facts.length, 0);
+
+    const ownerProfileResponse = await fetch(`${baseUrl}/api/memory/owner-private`);
+    assert.equal(ownerProfileResponse.status, 200);
+    const ownerProfileJson = await ownerProfileResponse.json();
+    assert.equal(ownerProfileJson.ownerProfile.ownerFacts.length, 1);
+    assert.equal(ownerProfileJson.ownerProfile.ownerFacts[0]?.scope, "owner");
+
+    const ownerFactsResponse = await fetch(`${baseUrl}/api/memory/owner-private/facts?limit=10`);
+    assert.equal(ownerFactsResponse.status, 200);
+    const ownerFactsJson = await ownerFactsResponse.json();
+    assert.equal(ownerFactsJson.facts.length, 1);
+    assert.equal(ownerFactsJson.facts[0]?.scope, "owner");
+  });
 
   if (result?.skipped) {
     return;

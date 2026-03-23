@@ -13,6 +13,16 @@ type VoiceContextCompactionHost = {
   llm?: {
     generate?: (args: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
   } | null;
+  memory?: {
+    runVoiceCompactionMiniReflection?: (args: {
+      guildId?: string | null;
+      channelId?: string | null;
+      sessionId?: string | null;
+      batchStart?: number;
+      settings?: Record<string, unknown> | null;
+      transcriptTurns?: Array<Record<string, unknown>>;
+    }) => Promise<Record<string, unknown> | null>;
+  } | null;
   store: {
     logAction: (payload: Record<string, unknown>) => void;
   };
@@ -261,6 +271,32 @@ export async function maybeStartVoiceContextCompaction(
     turns: turnsToCompact,
     notes: pendingNotes
   });
+
+  if (typeof host.memory?.runVoiceCompactionMiniReflection === "function") {
+    void host.memory.runVoiceCompactionMiniReflection({
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      sessionId: session.id,
+      batchStart: cursor,
+      settings: settings && typeof settings === "object" ? settings as Record<string, unknown> : null,
+      transcriptTurns: turnsToCompact
+    }).catch((error) => {
+      host.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: host.client.user?.id || null,
+        content: "voice_context_compaction_reflection_failed",
+        metadata: {
+          sessionId: session.id,
+          source,
+          cursor,
+          batchSize: turnsToCompact.length,
+          error: String((error as Error)?.message || error)
+        }
+      });
+    });
+  }
 
   session.compactedContextInFlight = true;
   const startedAt = Date.now();

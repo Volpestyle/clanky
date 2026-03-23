@@ -1,5 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { appConfig } from "../config.ts";
 import {
   executeSharedMemoryToolSearch,
   executeSharedMemoryToolWrite
@@ -211,6 +212,52 @@ test("executeSharedMemoryToolSearch defaults to user scope in DMs", async () => 
   }]);
 });
 
+test("executeSharedMemoryToolSearch expands to owner-private scope in owner DMs", async () => {
+  const originalOwnerIds = [...appConfig.ownerUserIds];
+  appConfig.ownerUserIds.splice(0, appConfig.ownerUserIds.length, "owner-1");
+  const calls: Array<Record<string, unknown>> = [];
+
+  try {
+    const result = await executeSharedMemoryToolSearch({
+      runtime: {
+        memory: {
+          async searchDurableFacts(opts) {
+            calls.push(opts as Record<string, unknown>);
+            return [];
+          },
+          async rememberDirectiveLineDetailed() {
+            throw new Error("not used");
+          }
+        }
+      },
+      settings: {},
+      guildId: null,
+      channelId: "dm-owner",
+      actorUserId: "owner-1",
+      namespace: "",
+      queryText: "what should i remember",
+      trace: { source: "test_memory_search_owner_dm" },
+      limit: 5
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.namespace, "owner_private:owner-1");
+    assert.deepEqual(calls, [{
+      guildId: null,
+      scope: "owner_private",
+      channelId: "dm-owner",
+      queryText: "what should i remember",
+      subjectIds: ["owner-1", "__self__", "__owner__"],
+      factTypes: null,
+      settings: {},
+      trace: { source: "test_memory_search_owner_dm" },
+      limit: 10
+    }]);
+  } finally {
+    appConfig.ownerUserIds.splice(0, appConfig.ownerUserIds.length, ...originalOwnerIds);
+  }
+});
+
 test("executeSharedMemoryToolWrite rejects guild namespace in DMs", async () => {
   const result = await executeSharedMemoryToolWrite({
     runtime: {
@@ -233,4 +280,102 @@ test("executeSharedMemoryToolWrite rejects guild namespace in DMs", async () => 
 
   assert.equal(result.ok, false);
   assert.equal(result.error, "guild_context_required");
+});
+
+test("executeSharedMemoryToolWrite allows owner-private namespace for configured owner", async () => {
+  const originalOwnerIds = [...appConfig.ownerUserIds];
+  appConfig.ownerUserIds.splice(0, appConfig.ownerUserIds.length, "owner-1");
+  const searchCalls: Array<Record<string, unknown>> = [];
+  const writeCalls: Array<Record<string, unknown>> = [];
+
+  try {
+    const result = await executeSharedMemoryToolWrite({
+      runtime: {
+        memory: {
+          async searchDurableFacts(opts) {
+            searchCalls.push(opts as Record<string, unknown>);
+            return [];
+          },
+          async rememberDirectiveLineDetailed(opts) {
+            writeCalls.push(opts as Record<string, unknown>);
+            return { ok: true, reason: "added_new", factText: String(opts.line || "") };
+          }
+        }
+      },
+      settings: {},
+      guildId: null,
+      channelId: "dm-owner",
+      actorUserId: "owner-1",
+      namespace: "owner",
+      items: [{ text: "Remind me to renew my passport.", type: "project" }],
+      sourceText: "Remind me to renew my passport."
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(searchCalls[0]?.scope, "owner");
+    assert.equal(writeCalls[0]?.scope, "owner");
+    assert.equal(writeCalls[0]?.subjectOverride, "__owner__");
+  } finally {
+    appConfig.ownerUserIds.splice(0, appConfig.ownerUserIds.length, ...originalOwnerIds);
+  }
+});
+
+test("executeSharedMemoryToolWrite rejects owner-private namespace for non-owner", async () => {
+  const originalOwnerIds = [...appConfig.ownerUserIds];
+  appConfig.ownerUserIds.splice(0, appConfig.ownerUserIds.length, "owner-1");
+  try {
+    const result = await executeSharedMemoryToolWrite({
+      runtime: {
+        memory: {
+          async searchDurableFacts() {
+            return [];
+          },
+          async rememberDirectiveLineDetailed() {
+            return { ok: true };
+          }
+        }
+      },
+      settings: {},
+      guildId: null,
+      channelId: "dm-owner",
+      actorUserId: "user-2",
+      namespace: "owner",
+      items: [{ text: "Private note." }]
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "owner_required");
+  } finally {
+    appConfig.ownerUserIds.splice(0, appConfig.ownerUserIds.length, ...originalOwnerIds);
+  }
+});
+
+test("executeSharedMemoryToolWrite rejects owner-private namespace outside owner-private context", async () => {
+  const originalOwnerIds = [...appConfig.ownerUserIds];
+  appConfig.ownerUserIds.splice(0, appConfig.ownerUserIds.length, "owner-1");
+  try {
+    const result = await executeSharedMemoryToolWrite({
+      runtime: {
+        memory: {
+          async searchDurableFacts() {
+            return [];
+          },
+          async rememberDirectiveLineDetailed() {
+            return { ok: true };
+          }
+        }
+      },
+      settings: {},
+      guildId: "guild-1",
+      channelId: "chan-1",
+      actorUserId: "owner-1",
+      namespace: "owner",
+      items: [{ text: "Private note." }]
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "owner_private_context_required");
+  } finally {
+    appConfig.ownerUserIds.splice(0, appConfig.ownerUserIds.length, ...originalOwnerIds);
+  }
 });

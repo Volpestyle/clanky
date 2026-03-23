@@ -1,4 +1,6 @@
 import { clamp } from "../utils.ts";
+import { isConfiguredOwnerUserId } from "../config.ts";
+import { isOwnerPrivateContext } from "./memoryContext.ts";
 import {
   isBehavioralDirectiveLikeFactText,
   isUnsafeMemoryFactText,
@@ -14,8 +16,8 @@ type MemoryToolNamespaceScope = {
   guildId?: string | null;
   subject?: string | null;
   subjectIds?: string[] | null;
-  searchScope?: "user" | "guild" | "all";
-  directiveScope?: "lore" | "self" | "user";
+  searchScope?: "user" | "guild" | "owner" | "owner_private" | "all";
+  directiveScope?: "lore" | "self" | "user" | "owner";
 };
 
 type MemorySearchRow = {
@@ -32,7 +34,7 @@ type SharedMemoryRuntime = {
   memory: {
     searchDurableFacts: (opts: {
       guildId?: string | null;
-      scope?: "user" | "guild" | "all";
+      scope?: "user" | "guild" | "owner" | "owner_private" | "all";
       channelId: string | null;
       queryText: string;
       subjectIds?: string[] | null;
@@ -48,7 +50,7 @@ type SharedMemoryRuntime = {
       guildId?: string | null;
       channelId: string | null;
       sourceText: string;
-      scope: "lore" | "self" | "user";
+      scope: "lore" | "self" | "user" | "owner";
       subjectOverride?: string;
       factType?: string | null;
       validationMode?: "strict" | "minimal";
@@ -68,6 +70,7 @@ type ResolveScopeArgs = {
   actorUserId: string | null;
   namespace?: unknown;
   operation?: "search" | "write";
+  ownerPrivateContext?: boolean;
 };
 
 type SearchArgs = {
@@ -104,8 +107,10 @@ const MEMORY_NAMESPACE_GUILD_RE = /^guild:(.+)$/i;
 const USER_NAMESPACE_ALIASES = new Set(["speaker", "user", "me", "current_user", "current-speaker"]);
 const GUILD_NAMESPACE_ALIASES = new Set(["guild", "lore", "shared"]);
 const SELF_NAMESPACE_ALIASES = new Set(["self", "bot", "assistant"]);
+const OWNER_NAMESPACE_ALIASES = new Set(["owner", "private"]);
 const LORE_SUBJECT = "__lore__";
 const SELF_SUBJECT = "__self__";
+const OWNER_SUBJECT = "__owner__";
 
 function resolveMemorySearchSubjectIds(rawNamespace: unknown, scope: MemoryToolNamespaceScope) {
   const explicitSubjectIds = Array.isArray(scope.subjectIds)
@@ -118,6 +123,9 @@ function resolveMemorySearchSubjectIds(rawNamespace: unknown, scope: MemoryToolN
   if (normalizedNamespace === "self" || normalizedNamespace === "bot" || normalizedNamespace === "assistant") {
     return [SELF_SUBJECT];
   }
+  if (normalizedNamespace === "owner" || normalizedNamespace === "private") {
+    return [OWNER_SUBJECT];
+  }
   if (normalizedNamespace === "lore" || normalizedNamespace === "shared") {
     return [LORE_SUBJECT];
   }
@@ -128,12 +136,21 @@ export function resolveMemoryToolNamespaceScope({
   guildId,
   actorUserId,
   namespace = "",
-  operation = "search"
+  operation = "search",
+  ownerPrivateContext
 }: ResolveScopeArgs): MemoryToolNamespaceScope {
   const normalizedGuildId = String(guildId || "").trim() || null;
   const normalizedActorUserId = String(actorUserId || "").trim() || null;
   const normalizedOperation = operation === "write" ? "write" : "search";
   const hasGuildContext = Boolean(normalizedGuildId);
+  const actorIsOwner = isConfiguredOwnerUserId(normalizedActorUserId);
+  const inOwnerPrivateContext = Boolean(
+    ownerPrivateContext ??
+    isOwnerPrivateContext({
+      guildId: normalizedGuildId,
+      actorUserId: normalizedActorUserId
+    })
+  );
   const normalizedNamespace = String(namespace || "")
     .trim()
     .toLowerCase();
@@ -175,6 +192,16 @@ export function resolveMemoryToolNamespaceScope({
           reason: "actor_user_required"
         };
       }
+      if (inOwnerPrivateContext) {
+        return {
+          ok: true,
+          namespace: `owner_private:${normalizedActorUserId}`,
+          guildId: null,
+          subject: normalizedActorUserId,
+          subjectIds: [normalizedActorUserId, SELF_SUBJECT, OWNER_SUBJECT],
+          searchScope: "owner_private"
+        };
+      }
       return {
         ok: true,
         namespace: `user:${normalizedActorUserId}`,
@@ -207,6 +234,30 @@ export function resolveMemoryToolNamespaceScope({
       subjectIds: [SELF_SUBJECT],
       searchScope: "user",
       directiveScope: "self"
+    };
+  }
+
+  if (OWNER_NAMESPACE_ALIASES.has(normalizedNamespace)) {
+    if (!actorIsOwner) {
+      return {
+        ok: false,
+        reason: "owner_required"
+      };
+    }
+    if (!inOwnerPrivateContext) {
+      return {
+        ok: false,
+        reason: "owner_private_context_required"
+      };
+    }
+    return {
+      ok: true,
+      namespace: "owner",
+      guildId: null,
+      subject: OWNER_SUBJECT,
+      subjectIds: [OWNER_SUBJECT],
+      searchScope: "owner",
+      directiveScope: "owner"
     };
   }
 
@@ -450,7 +501,7 @@ export async function executeSharedMemoryToolWrite({
   const written = [];
   const skipped = [];
   const resolvedDedupeThreshold = clamp(Number(dedupeThreshold) || 0.9, 0, 1);
-  const writeSearchScope = scope.directiveScope === "lore" ? "guild" : "user";
+  const writeSearchScope = scope.directiveScope === "lore" ? "guild" : scope.directiveScope === "owner" ? "owner" : "user";
 
   for (const [index, item] of normalizedItems.entries()) {
     const factType = String(item.factType || "").trim().toLowerCase();
@@ -510,7 +561,7 @@ export async function executeSharedMemoryToolWrite({
       sourceText: sourceText || item.text,
       scope: scope.directiveScope,
       factType: item.factType,
-      ...(scope.directiveScope === "user" && scope.subject ? { subjectOverride: scope.subject } : {})
+      ...((scope.directiveScope === "user" || scope.directiveScope === "owner") && scope.subject ? { subjectOverride: scope.subject } : {})
     });
     if (!result?.ok) {
       skipped.push({

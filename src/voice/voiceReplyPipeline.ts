@@ -123,6 +123,7 @@ type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
   client: VoiceSessionManager["client"];
   instructionManager: VoiceSessionManager["instructionManager"];
   llm: VoiceSessionManager["llm"];
+  memory: VoiceSessionManager["memory"];
   sessionLifecycle: VoiceSessionManager["sessionLifecycle"];
   store: VoiceSessionManager["store"];
   activeReplies: VoiceSessionManager["activeReplies"];

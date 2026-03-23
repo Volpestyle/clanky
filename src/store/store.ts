@@ -27,12 +27,13 @@ import {
   upsertMessageVectorNative,
   deleteMessagesForGuild
 } from "./storeMessages.ts";
-import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, getRecentActions, getRecentMemoryReflections, deleteReflectionRun, deleteMemoryReflectionRunsForGuild, getRecentBrowserSessions, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./storeActionLog.ts";
+import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, getRecentActions, getRecentMemoryReflections, deleteReflectionRun, deleteMemoryReflectionRunsForGuild, getRecentBrowserSessions, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted, markReflectionCompleted } from "./storeActionLog.ts";
 import { wasLinkSharedSince, recordSharedLink } from "./storeLookups.ts";
 import { getRecentVoiceSessions, getVoiceSessionEvents } from "./storeVoice.ts";
 import { getReplyPerformanceStats, getStats } from "./storeStats.ts";
 import { createAutomation, getAutomationById, countAutomations, listAutomations, getMostRecentAutomations, findAutomationsByQuery, setAutomationStatus, claimDueAutomations, finalizeAutomationRun, recordAutomationRun, getAutomationRuns } from "./storeAutomation.ts";
-import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactById, getMemoryFactBySubjectAndFact, updateMemoryFact, deleteMemoryFact, deleteMemoryFactsForGuild, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject, searchMemoryFactsLexical, searchMemoryFactsByEmbedding } from "./storeMemory.ts";
+import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactById, getMemoryFactBySubjectAndFact, updateMemoryFact, deleteMemoryFact, deleteMemoryFactsForGuild, cleanupLegacyMemoryFacts, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject, searchMemoryFactsLexical, searchMemoryFactsByEmbedding } from "./storeMemory.ts";
+import { deleteSessionSummariesForGuild, getRecentSessionSummaries, pruneExpiredSessionSummaries, upsertSessionSummary } from "./storeSessionSummaries.ts";
 
 export const SETTINGS_KEY = "runtime_settings";
 const ACTION_LOG_RETENTION_DAYS_DEFAULT = 14;
@@ -99,6 +100,37 @@ function ensureMemoryFactsIndexes(db: Database) {
     CREATE INDEX IF NOT EXISTS idx_memory_scope_channel
       ON memory_facts(scope, guild_id, channel_id, updated_at DESC);
   `);
+}
+
+function ensureMemoryFactsFtsSchema(db: Database) {
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS memory_facts_fts USING fts5(
+      fact,
+      evidence_text,
+      subject,
+      fact_type,
+      content='memory_facts',
+      content_rowid='id'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS memory_facts_ai AFTER INSERT ON memory_facts BEGIN
+      INSERT INTO memory_facts_fts(rowid, fact, evidence_text, subject, fact_type)
+      VALUES (new.id, new.fact, COALESCE(new.evidence_text, ''), new.subject, new.fact_type);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS memory_facts_ad AFTER DELETE ON memory_facts BEGIN
+      INSERT INTO memory_facts_fts(memory_facts_fts, rowid, fact, evidence_text, subject, fact_type)
+      VALUES ('delete', old.id, old.fact, COALESCE(old.evidence_text, ''), old.subject, old.fact_type);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS memory_facts_au AFTER UPDATE ON memory_facts BEGIN
+      INSERT INTO memory_facts_fts(memory_facts_fts, rowid, fact, evidence_text, subject, fact_type)
+      VALUES ('delete', old.id, old.fact, COALESCE(old.evidence_text, ''), old.subject, old.fact_type);
+      INSERT INTO memory_facts_fts(rowid, fact, evidence_text, subject, fact_type)
+      VALUES (new.id, new.fact, COALESCE(new.evidence_text, ''), new.subject, new.fact_type);
+    END;
+  `);
+  db.prepare("INSERT INTO memory_facts_fts(memory_facts_fts) VALUES('rebuild')").run();
 }
 
 function migrateMemoryFactsToDualScope(db: Database) {
@@ -252,6 +284,7 @@ function setupMemoryFactsSchema(db: Database) {
     migrateMemoryFactsToDualScope(db);
   }
   ensureMemoryFactsIndexes(db);
+  ensureMemoryFactsFtsSchema(db);
 }
 
 
@@ -413,6 +446,26 @@ export class Store {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS reflection_checkpoints (
+        date_key TEXT NOT NULL,
+        guild_id TEXT NOT NULL,
+        completed_at TEXT NOT NULL,
+        run_id TEXT,
+        PRIMARY KEY (date_key, guild_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS session_summaries (
+        session_id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        guild_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        modality TEXT NOT NULL DEFAULT 'voice',
+        started_at TEXT,
+        ended_at TEXT NOT NULL,
+        summary_text TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_messages_channel_time ON messages(channel_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_messages_guild_time ON messages(guild_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_actions_kind_time ON actions(kind, created_at DESC);
@@ -425,9 +478,13 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_automations_match_text ON automations(guild_id, match_text);
       CREATE INDEX IF NOT EXISTS idx_automation_runs_job_time ON automation_runs(automation_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_response_triggers_action_id ON response_triggers(action_id);
+      CREATE INDEX IF NOT EXISTS idx_reflection_checkpoints_completed_at ON reflection_checkpoints(completed_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_session_summaries_scope_time ON session_summaries(guild_id, channel_id, modality, ended_at DESC);
     `);
     this.ensureSqliteVecReady();
     setupMemoryFactsSchema(this.db);
+    cleanupLegacyMemoryFacts(this);
+    pruneExpiredSessionSummaries(this);
 
     if (!this.db.prepare("SELECT 1 FROM settings WHERE key = ?").get(SETTINGS_KEY)) {
       const defaultSettings = minimizeSettingsIntent({});
@@ -614,6 +671,10 @@ export class Store {
     return hasReflectionBeenCompleted(this, dateKey, guildId);
   }
 
+  markReflectionCompleted(dateKey: string, guildId: string, opts: { runId?: string | null; completedAt?: string | null } = {}) {
+    return markReflectionCompleted(this, dateKey, guildId, opts);
+  }
+
   deleteReflectionRun(runId: string): { deleted: number } {
     return deleteReflectionRun(this, runId);
   }
@@ -756,16 +817,18 @@ export class Store {
     return getFactsForSubjects(this, subjects, limit, scope);
   }
 
-  getFactProfileRows(opts: { guildId?; scope?: "user" | "guild" | null; subjects?; limit? } = {}) {
+  getFactProfileRows(opts: { guildId?; scope?: "user" | "guild" | "owner" | null; subjects?; limit? } = {}) {
     return getFactProfileRows(this, opts);
   }
 
   getFactsForScope(opts: {
     guildId?;
-    scope?: "user" | "guild" | null;
+      scope?: "user" | "guild" | "owner" | null;
     limit?;
     subjectIds?;
     factTypes?;
+    includePortableUserScope?: boolean;
+    includeOwnerScope?: boolean;
     queryText?;
   }) {
     return getFactsForScope(this, opts);
@@ -773,7 +836,7 @@ export class Store {
 
   searchMemoryFactsLexical(opts: {
     guildId?;
-    scope?: "user" | "guild" | null;
+      scope?: "user" | "guild" | "owner" | null;
     subjectIds?;
     factTypes?;
     queryText?;
@@ -785,7 +848,7 @@ export class Store {
 
   searchMemoryFactsByEmbedding(opts: {
     guildId?;
-    scope?: "user" | "guild" | null;
+      scope?: "user" | "guild" | "owner" | null;
     subjectIds?;
     factTypes?;
     model;
@@ -797,7 +860,7 @@ export class Store {
 
   getFactsForSubjectsScoped(opts: {
     guildId?;
-    scope?: "user" | "guild" | null;
+      scope?: "user" | "guild" | "owner" | null;
     subjectIds?;
     perSubjectLimit?;
     totalLimit?;
@@ -807,7 +870,7 @@ export class Store {
 
   getMemoryFactBySubjectAndFact(opts: {
     guildId?: string | null;
-    scope?: "user" | "guild" | null;
+    scope?: "user" | "guild" | "owner" | null;
     userId?: string | null;
     subject: string;
     fact: string;
@@ -815,13 +878,13 @@ export class Store {
     return getMemoryFactBySubjectAndFact(this, opts);
   }
 
-  getMemoryFactById(factId, guildId = null, scope: "user" | "guild" | null = null) {
+  getMemoryFactById(factId, guildId = null, scope: "user" | "guild" | "owner" | null = null) {
     return getMemoryFactById(this, factId, guildId, scope);
   }
 
   updateMemoryFact(opts: {
     guildId?;
-    scope?: "user" | "guild" | null;
+      scope?: "user" | "guild" | "owner" | null;
     userId?;
     factId;
     subject;
@@ -835,7 +898,7 @@ export class Store {
 
   deleteMemoryFact(opts: {
     guildId?;
-    scope?: "user" | "guild" | null;
+      scope?: "user" | "guild" | "owner" | null;
     userId?;
     factId;
   }) {
@@ -844,6 +907,37 @@ export class Store {
 
   deleteMemoryFactsForGuild(guildId: string) {
     return deleteMemoryFactsForGuild(this, guildId);
+  }
+
+  upsertSessionSummary(opts: {
+    sessionId: string;
+    guildId: string;
+    channelId: string;
+    summaryText: string;
+    startedAt?: string | null;
+    endedAt?: string | null;
+    modality?: string;
+  }) {
+    return upsertSessionSummary(this, opts);
+  }
+
+  getRecentSessionSummaries(opts: {
+    guildId: string;
+    channelId?: string | null;
+    modality?: string;
+    sinceIso?: string | null;
+    beforeIso?: string | null;
+    limit?: number;
+  }) {
+    return getRecentSessionSummaries(this, opts);
+  }
+
+  deleteSessionSummariesForGuild(guildId: string) {
+    return deleteSessionSummariesForGuild(this, guildId);
+  }
+
+  pruneExpiredSessionSummaries(opts: { retentionHours?: number } = {}) {
+    return pruneExpiredSessionSummaries(this, opts);
   }
 
   ensureSqliteVecReady() {
@@ -862,13 +956,13 @@ export class Store {
     return getMemoryFactVectorNativeScores(this, opts);
   }
 
-  getMemorySubjects(limit = 80, scope = null) {
+  getMemorySubjects(limit = 80, scope: { guildId?: string | null; scope?: "user" | "guild" | "owner" | null; includePortableUserScope?: boolean; includeOwnerScope?: boolean } | null = null) {
     return getMemorySubjects(this, limit, scope);
   }
 
   archiveOldFactsForSubject(opts: {
     guildId?;
-    scope?: "user" | "guild" | null;
+      scope?: "user" | "guild" | "owner" | null;
     userId?;
     subject;
     factType?;

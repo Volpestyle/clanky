@@ -37,6 +37,7 @@ function createSession(turnCount = 0) {
 function createHost(generatedText = "Alice and Bob kept talking through the early part of the session.") {
   const actions: Array<Record<string, unknown>> = [];
   const generateCalls: Array<Record<string, unknown>> = [];
+  const miniReflectionCalls: Array<Record<string, unknown>> = [];
   return {
     host: {
       llm: {
@@ -47,6 +48,12 @@ function createHost(generatedText = "Alice and Bob kept talking through the earl
             provider: "anthropic",
             model: "claude-haiku-4-5"
           };
+        }
+      },
+      memory: {
+        async runVoiceCompactionMiniReflection(args: Record<string, unknown>) {
+          miniReflectionCalls.push(args);
+          return { ok: true };
         }
       },
       store: {
@@ -61,14 +68,15 @@ function createHost(generatedText = "Alice and Bob kept talking through the earl
       }
     },
     actions,
-    generateCalls
+    generateCalls,
+    miniReflectionCalls
   };
 }
 
 test("maybeStartVoiceContextCompaction summarizes the oldest eligible batch and advances the cursor", async () => {
   const session = createSession(61);
   session.pendingCompactionNotes = ["alice: Tokyo map on screen"];
-  const { host, actions, generateCalls } = createHost(
+  const { host, actions, generateCalls, miniReflectionCalls } = createHost(
     "Earlier the group discussed strategy, Bob struggled with Hulk, and Alice was on the Tokyo map."
   );
 
@@ -88,6 +96,8 @@ test("maybeStartVoiceContextCompaction summarizes the oldest eligible batch and 
   });
 
   assert.equal(generateCalls.length, 1);
+  assert.equal(miniReflectionCalls.length, 1);
+  assert.equal(miniReflectionCalls[0]?.batchStart, 0);
   assert.equal(session.compactedContextCursor, 10);
   assert.equal(session.compactedContextCoveredThroughTurn, 9);
   assert.equal(Boolean(session.compactedContextSummary), true);

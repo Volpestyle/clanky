@@ -7,6 +7,8 @@ import { useDashboardGuildScope } from "../../guildScope";
 
 interface FactRow {
   id?: number | null;
+  scope?: string | null;
+  userId?: string | null;
   subject?: string | null;
   factType?: string | null;
   fact?: string | null;
@@ -15,10 +17,27 @@ interface FactRow {
     createdAt?: string | null;
     updatedAt?: string | null;
     guildId?: string | null;
-    channelId?: string | null;
-    evidenceText?: string | null;
-    sourceMessageId?: string | null;
-  };
+      channelId?: string | null;
+      evidenceText?: string | null;
+      sourceMessageId?: string | null;
+      isLegacy?: boolean | null;
+    };
+}
+
+function getSubjectLabel(subject: string | null | undefined) {
+  if (subject === "__lore__") return "Community";
+  if (subject === "__self__") return "Clanky";
+  if (subject === "__owner__") return "Owner Private";
+  return subject || "unknown subject";
+}
+
+function getScopeLabel(scope: string | null | undefined, subject: string | null | undefined) {
+  if (subject === "__lore__") return "community";
+  if (subject === "__self__") return "self";
+  if (subject === "__owner__" || scope === "owner") return "owner private";
+  if (scope === "user") return "person";
+  if (scope === "guild") return "community";
+  return "memory";
 }
 
 interface ParticipantProfile {
@@ -35,6 +54,15 @@ interface ConversationWindow {
   semanticScore?: number | null;
   ageMinutes?: number | null;
   messages?: RelevantMessage[];
+}
+
+interface RecentVoiceSessionContext {
+  sessionId?: string | null;
+  guildId?: string | null;
+  channelId?: string | null;
+  endedAt?: string | null;
+  ageMinutes?: number | null;
+  summaryText?: string | null;
 }
 
 interface RuntimeSnapshotResponse {
@@ -58,6 +86,7 @@ interface RuntimeSnapshotResponse {
     guidanceFactCount: number;
     behavioralFactCount: number;
     conversationWindowCount: number;
+    recentVoiceSessionCount: number;
   };
   slice: {
     participantProfiles: ParticipantProfile[];
@@ -70,6 +99,7 @@ interface RuntimeSnapshotResponse {
   };
   promptContext: {
     recentConversationHistory: ConversationWindow[];
+    recentVoiceSessionContext: RecentVoiceSessionContext[];
   };
   activeVoiceSession: {
     sessionId?: string | null;
@@ -118,7 +148,8 @@ function FactCardList({
           className="memory-reflection-fact"
         >
           <div className="memory-reflection-fact-head">
-            <strong>{fact.subject || "unknown subject"}</strong>
+            <strong>{getSubjectLabel(fact.subject)}</strong>
+            <span>{getScopeLabel(fact.scope, fact.subject)}</span>
             <span>{fact.factType || "other"}</span>
             {fact.confidence != null ? <span>{Math.round(Number(fact.confidence) * 100)}%</span> : null}
           </div>
@@ -287,11 +318,12 @@ export default function MemoryRuntimeSnapshot({
               </div>
 
               <div className="memory-reflection-usage">
-                <div><span>User facts</span><strong>{counts?.userFactCount || 0}</strong></div>
+               <div><span>People facts</span><strong>{counts?.userFactCount || 0}</strong></div>
                 <div><span>Relevant facts</span><strong>{counts?.relevantFactCount || 0}</strong></div>
                 <div><span>Guidance</span><strong>{counts?.guidanceFactCount || 0}</strong></div>
                 <div><span>Behavioral</span><strong>{counts?.behavioralFactCount || 0}</strong></div>
                 <div><span>Conversation windows</span><strong>{counts?.conversationWindowCount || 0}</strong></div>
+                <div><span>Recent voice context</span><strong>{counts?.recentVoiceSessionCount || 0}</strong></div>
               </div>
             </div>
 
@@ -321,10 +353,10 @@ export default function MemoryRuntimeSnapshot({
 
           <section className="memory-style-section">
             <div className="memory-style-section-head">
-              <h4>Primary User Facts</h4>
+              <h4>Primary Person Facts</h4>
               <span className="memory-result-count">{result.slice.userFacts.length}</span>
             </div>
-            <FactCardList facts={result.slice.userFacts} emptyLabel="No primary-user durable facts loaded." />
+            <FactCardList facts={result.slice.userFacts} emptyLabel="No primary-person durable facts loaded." />
           </section>
 
           <section className="memory-style-section">
@@ -348,10 +380,10 @@ export default function MemoryRuntimeSnapshot({
 
           <section className="memory-style-section">
             <div className="memory-style-section-head">
-              <h4>Guild Lore</h4>
+              <h4>Community Facts</h4>
               <span className="memory-result-count">{result.slice.loreFacts.length}</span>
             </div>
-            <FactCardList facts={result.slice.loreFacts} emptyLabel="No guild lore facts loaded." />
+            <FactCardList facts={result.slice.loreFacts} emptyLabel="No community facts loaded." />
           </section>
 
           <section className="memory-style-section">
@@ -397,6 +429,32 @@ export default function MemoryRuntimeSnapshot({
               </div>
             ) : (
               <p className="memory-reflection-empty">No conversation windows matched this snapshot.</p>
+            )}
+          </section>
+
+          <section className="memory-style-section">
+            <div className="memory-style-section-head">
+              <h4>Recent Voice Session Context</h4>
+              <span className="memory-result-count">{result.promptContext.recentVoiceSessionContext.length}</span>
+            </div>
+            {result.promptContext.recentVoiceSessionContext.length > 0 ? (
+              <div className="memory-style-audit-list">
+                {result.promptContext.recentVoiceSessionContext.map((entry, index) => (
+                  <article
+                    key={`${String(entry.sessionId || "voice-summary")}:${index}`}
+                    className="memory-style-audit-card"
+                  >
+                    <div className="memory-style-audit-meta">
+                      <strong>{entry.sessionId || "recent voice session"}</strong>
+                      {entry.ageMinutes != null ? <span>{entry.ageMinutes}m ago</span> : null}
+                      <span>{formatTimestamp(entry.endedAt)}</span>
+                    </div>
+                    <p>{entry.summaryText || "(empty summary)"}</p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="memory-reflection-empty">No recent persisted voice session summaries for this channel.</p>
             )}
           </section>
 

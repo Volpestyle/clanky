@@ -57,6 +57,28 @@ function buildImageLookupStateLine(imageLookup: unknown): string {
   return `Image lookup: available (${candidates.length} recent image reference(s)).`;
 }
 
+function formatRecentVoiceSessionContext(
+  items: Array<{
+    summaryText?: string | null;
+    ageMinutes?: number | null;
+    endedAt?: string | null;
+  }>
+) {
+  return (Array.isArray(items) ? items : [])
+    .map((item) => {
+      const summaryText = String(item?.summaryText || "").trim();
+      if (!summaryText) return "";
+      const ageMinutes = Number(item?.ageMinutes);
+      if (Number.isFinite(ageMinutes)) {
+        return `- ${Math.max(0, Math.round(ageMinutes))}m ago: ${summaryText}`;
+      }
+      const endedAt = String(item?.endedAt || "").trim();
+      return endedAt ? `- Ended at ${endedAt}: ${summaryText}` : `- ${summaryText}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 function formatPromptTrackLabel(track) {
   const title = String(track?.title || "").trim();
   if (!title) return "";
@@ -132,6 +154,7 @@ export function buildReplyPrompt({
   webSearch = null,
   browserBrowse = null,
   recentConversationHistory = [],
+  recentVoiceSessionContext = [],
   memoryLookup = null,
   imageLookup = null,
   allowMemoryDirective: _allowMemoryDirective = false,
@@ -195,6 +218,12 @@ export function buildReplyPrompt({
     parts.push("Relevant past conversation windows (each labeled with age and source type — voice chat or text):");
     parts.push(formatConversationWindows(recentConversationHistory));
     parts.push("Use this for continuity ONLY when it clearly matches the current topic AND is recent. Old windows (hours/days ago) are background context, not active conversation — do not treat them as ongoing. A voice chat transcript from hours ago is not the same as someone just saying something to you now.");
+  }
+
+  if (recentVoiceSessionContext?.length) {
+    parts.push("=== RECENT VOICE SESSION CONTEXT ===");
+    parts.push("A voice session in this channel ended recently. Treat this as fresh continuity for the room, not as a brand-new direct message to you.");
+    parts.push(formatRecentVoiceSessionContext(recentVoiceSessionContext));
   }
 
   if (participantProfiles?.length || selfFacts?.length || loreFacts?.length) {

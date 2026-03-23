@@ -10,6 +10,8 @@ interface Props {
 
 interface FactProfileFact {
   id?: number | null;
+  scope?: string | null;
+  userId?: string | null;
   subject?: string | null;
   factType?: string | null;
   fact?: string | null;
@@ -18,10 +20,27 @@ interface FactProfileFact {
     createdAt?: string | null;
     updatedAt?: string | null;
     guildId?: string | null;
-    channelId?: string | null;
-    evidenceText?: string | null;
-    sourceMessageId?: string | null;
-  };
+      channelId?: string | null;
+      evidenceText?: string | null;
+      sourceMessageId?: string | null;
+      isLegacy?: boolean | null;
+    };
+}
+
+function getSubjectLabel(subject: string | null | undefined) {
+  if (subject === "__lore__") return "Community";
+  if (subject === "__self__") return "Clanky";
+  if (subject === "__owner__") return "Owner Private";
+  return subject || "unknown subject";
+}
+
+function getScopeLabel(scope: string | null | undefined, subject: string | null | undefined) {
+  if (subject === "__lore__") return "community";
+  if (subject === "__self__") return "self";
+  if (subject === "__owner__" || scope === "owner") return "owner private";
+  if (scope === "user") return "person";
+  if (scope === "guild") return "community";
+  return "memory";
 }
 
 interface ActiveVoiceUserCache {
@@ -74,6 +93,14 @@ interface FactProfileResponse {
       ageMinutes?: number | null;
       messages: RelevantMessage[];
     }>;
+    recentVoiceSessionContext: Array<{
+      sessionId?: string | null;
+      guildId?: string | null;
+      channelId?: string | null;
+      endedAt?: string | null;
+      ageMinutes?: number | null;
+      summaryText?: string | null;
+    }>;
   };
   activeVoiceSession: ActiveVoiceSessionProfile | null;
 }
@@ -113,7 +140,8 @@ function FactProfileFactList({
           className="memory-reflection-fact"
         >
           <div className="memory-reflection-fact-head">
-            <strong>{fact.subject || "unknown subject"}</strong>
+            <strong>{getSubjectLabel(fact.subject)}</strong>
+            <span>{getScopeLabel(fact.scope, fact.subject)}</span>
             <span>{fact.factType || "other"}</span>
             {fact.confidence != null ? <span>{Math.round(Number(fact.confidence) * 100)}%</span> : null}
           </div>
@@ -166,6 +194,9 @@ export default function MemoryFactProfiles({ notify }: Props) {
   const recentConversationHistory = Array.isArray(result?.promptContext?.recentConversationHistory)
     ? result?.promptContext?.recentConversationHistory
     : [];
+  const recentVoiceSessionContext = Array.isArray(result?.promptContext?.recentVoiceSessionContext)
+    ? result?.promptContext?.recentVoiceSessionContext
+    : [];
   const totalDurableFacts =
     durable.userFacts.length +
     durable.selfFacts.length +
@@ -175,7 +206,7 @@ export default function MemoryFactProfiles({ notify }: Props) {
   return (
     <div>
       <p className="memory-reflection-copy">
-        Fact profiles come straight from durable SQLite memory. Query text does not change which facts load. It only
+        Fact profiles come straight from canonical durable SQLite memory. Query text does not change which facts load. It only
         affects the optional conversation-recall preview below.
       </p>
 
@@ -221,7 +252,7 @@ export default function MemoryFactProfiles({ notify }: Props) {
 
             <div className="memory-result-group">
               <h4 className="memory-result-group-title">
-                User Facts
+                Person Facts
                 <span className="memory-result-group-count">{durable.userFacts.length}</span>
               </h4>
               <FactProfileFactList
@@ -240,10 +271,10 @@ export default function MemoryFactProfiles({ notify }: Props) {
 
             <div className="memory-result-group">
               <h4 className="memory-result-group-title">
-                Guild Lore Facts
+                Community Facts
                 <span className="memory-result-group-count">{durable.loreFacts.length}</span>
               </h4>
-              <FactProfileFactList facts={durable.loreFacts} emptyLabel="No guild lore facts found for this guild." />
+              <FactProfileFactList facts={durable.loreFacts} emptyLabel="No community facts found for this guild." />
             </div>
 
             <div className="memory-result-group">
@@ -287,6 +318,36 @@ export default function MemoryFactProfiles({ notify }: Props) {
                 <p className="memory-reflection-empty">
                   Provide both channel ID and query text to inspect the auto-retrieved conversation history that feeds prompt context.
                 </p>
+              )}
+            </div>
+
+            <div className="memory-result-group">
+              <h4 className="memory-result-group-title">
+                Recent Voice Session Context
+                <span className="memory-result-group-count">{recentVoiceSessionContext.length}</span>
+              </h4>
+              {channelId.trim() ? (
+                recentVoiceSessionContext.length > 0 ? (
+                  <div className="memory-style-audit-list">
+                    {recentVoiceSessionContext.map((entry, index) => (
+                      <article
+                        key={`${String(entry.sessionId || "voice-summary")}:${index}`}
+                        className="memory-style-audit-card"
+                      >
+                        <div className="memory-style-audit-meta">
+                          <strong>{entry.sessionId || "recent voice session"}</strong>
+                          {entry.ageMinutes != null ? <span>{entry.ageMinutes}m ago</span> : null}
+                          <span>{formatTimestamp(entry.endedAt)}</span>
+                        </div>
+                        <p>{entry.summaryText || "(empty summary)"}</p>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="memory-reflection-empty">No recent persisted voice session summaries for this channel.</p>
+                )
+              ) : (
+                <p className="memory-reflection-empty">Provide a channel ID to inspect recent cross-modal voice continuity.</p>
               )}
             </div>
           </section>

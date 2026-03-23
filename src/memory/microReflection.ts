@@ -130,7 +130,16 @@ function buildMicroReflectionPrompts({
   return { systemPrompt, userPrompt };
 }
 
-function buildBoundedConversationText(entries: MicroReflectionEntry[]) {
+function buildBoundedConversationText(
+  entries: MicroReflectionEntry[],
+  {
+    maxEntries = MICRO_REFLECTION_MAX_ENTRIES,
+    maxTotalChars = MICRO_REFLECTION_MAX_TOTAL_CHARS
+  }: {
+    maxEntries?: number;
+    maxTotalChars?: number;
+  } = {}
+) {
   const rows = Array.isArray(entries) ? entries : [];
   const bounded: MicroReflectionEntry[] = [];
   let totalChars = 0;
@@ -142,7 +151,7 @@ function buildBoundedConversationText(entries: MicroReflectionEntry[]) {
     if (!content) continue;
     const line = `- ${author}: ${content}`;
     const nextTotal = totalChars + line.length + (bounded.length > 0 ? 1 : 0);
-    if (bounded.length >= MICRO_REFLECTION_MAX_ENTRIES || nextTotal > MICRO_REFLECTION_MAX_TOTAL_CHARS) {
+    if (bounded.length >= maxEntries || nextTotal > maxTotalChars) {
       break;
     }
     bounded.push({
@@ -169,7 +178,10 @@ export async function runMicroReflection({
   channelId = null,
   trigger,
   sourceMessageId,
-  entries
+  entries,
+  maxFacts = MICRO_REFLECTION_MAX_FACTS,
+  maxEntries = MICRO_REFLECTION_MAX_ENTRIES,
+  maxTotalChars = MICRO_REFLECTION_MAX_TOTAL_CHARS
 }: {
   memory: MicroReflectionMemory;
   store: MicroReflectionStore;
@@ -177,9 +189,12 @@ export async function runMicroReflection({
   settings: MicroReflectionSettings;
   guildId: string;
   channelId?: string | null;
-  trigger: "voice_session_end" | "text_channel_silence" | "text_context_pressure";
+  trigger: "voice_session_end" | "voice_pre_compaction" | "text_channel_silence" | "text_context_pressure";
   sourceMessageId: string;
   entries: MicroReflectionEntry[];
+  maxFacts?: number;
+  maxEntries?: number;
+  maxTotalChars?: number;
 }) {
   const normalizedGuildId = String(guildId || "").trim();
   if (!normalizedGuildId) return { ok: false, reason: "guild_required" as const };
@@ -205,7 +220,10 @@ export async function runMicroReflection({
     return { ok: false, reason: "conversation_too_small" as const };
   }
 
-  const boundedConversation = buildBoundedConversationText(normalizedEntries);
+  const boundedConversation = buildBoundedConversationText(normalizedEntries, {
+    maxEntries,
+    maxTotalChars
+  });
   if (!boundedConversation.entries.length || !boundedConversation.text) {
     return { ok: false, reason: "conversation_empty" as const };
   }
@@ -254,6 +272,8 @@ export async function runMicroReflection({
   const triggerLabel =
     trigger === "voice_session_end"
       ? "voice session"
+      : trigger === "voice_pre_compaction"
+        ? "voice session segment about to be compacted"
       : trigger === "text_context_pressure"
         ? "text channel nearing context truncation"
         : "text channel";
@@ -261,7 +281,7 @@ export async function runMicroReflection({
     trigger: triggerLabel,
     authorNames,
     botName,
-    maxFacts: MICRO_REFLECTION_MAX_FACTS,
+    maxFacts,
     conversationText: boundedConversation.text + existingFactsSummary
   });
   const response = await llm.callChatModel(memoryBinding.provider, {
@@ -272,7 +292,7 @@ export async function runMicroReflection({
     maxOutputTokens: 1_200,
     jsonSchema: REFLECTION_FACTS_JSON_SCHEMA
   });
-  const facts = normalizeReflectionFacts(String(response?.text || ""), MICRO_REFLECTION_MAX_FACTS);
+  const facts = normalizeReflectionFacts(String(response?.text || ""), maxFacts);
   if (!facts.length) {
     return { ok: true, reason: "no_facts_selected" as const, savedCount: 0 };
   }
@@ -287,7 +307,7 @@ export async function runMicroReflection({
     let scope: "user" | "self" | "lore" = "lore";
     if (fact.subject === "author") scope = "user";
     if (fact.subject === "bot") scope = "self";
-    if (trigger !== "voice_session_end" && scope === "self") {
+    if (trigger !== "voice_session_end" && trigger !== "voice_pre_compaction" && scope === "self") {
       continue;
     }
 
