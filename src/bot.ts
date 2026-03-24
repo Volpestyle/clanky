@@ -3,9 +3,7 @@ import {
   Client,
   GatewayIntentBits,
   MessageType,
-  Partials,
-  REST,
-  Routes
+  Partials
 } from "discord.js";
 import { applySelfbotPatches } from "./selfbot/selfbotPatches.ts";
 import {
@@ -19,7 +17,6 @@ import {
   upsertSessionGoLiveStream,
   type StreamDiscoveryState
 } from "./selfbot/streamDiscovery.ts";
-import { clankCommand } from "./commands/clankCommand.ts";
 import type { Settings } from "./settings/settingsSchema.ts";
 import {
   runCodeAgent,

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect } from "bun:test";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { Client, GatewayIntentBits } from "discord.js";
@@ -114,7 +114,6 @@ describe("selfbotPatches", () => {
       applySelfbotPatches(client as never);
 
       // Simulate a request that already has custom authPrefix
-      const originalResolve = client.rest.resolveRequest.bind(client.rest);
       const saved = client.rest.resolveRequest;
       // Temporarily restore to produce a non-Bot header for testing
       // (the patch wraps the original, so we test the wrapper behavior)

@@ -1,5 +1,3 @@
-const MEMORY_FACT_TYPES = ["preference", "profile", "relationship", "project", "other"];
-const MEMORY_FACT_SUBJECTS = ["author", "bot", "lore"];
 const XAI_DEFAULT_BASE_URL = "https://api.x.ai/v1";
 const XAI_VIDEO_DONE_STATUSES = new Set(["done", "completed", "succeeded", "success", "ready"]);
 import { clamp01, clampInt, clampNumber } from "../normalization/numbers.ts";
@@ -90,45 +88,11 @@ export function normalizeInlineText(value, maxLen) {
   return normalizeWhitespaceText(value, { maxLen });
 }
 
-function normalizeFactType(type) {
-  const normalized = String(type || "")
-    .trim()
-    .toLowerCase();
-  return MEMORY_FACT_TYPES.includes(normalized) ? normalized : "other";
-}
-
 export function parseMemoryExtractionJson(rawText) {
   const raw = String(rawText || "").trim();
   if (!raw) return { facts: [] };
 
   return extractJsonObjectFromText(raw) || { facts: [] };
-}
-
-function normalizeExtractedFacts(parsed, maxFacts) {
-  const facts = Array.isArray(parsed?.facts) ? parsed.facts : [];
-  const normalized = [];
-
-  for (const item of facts) {
-    if (!item || typeof item !== "object") continue;
-
-    const subject = String(item.subject || "")
-      .trim()
-      .toLowerCase();
-    const fact = normalizeInlineText(item.fact, 190);
-    const evidence = normalizeInlineText(item.evidence, 220);
-    if (!MEMORY_FACT_SUBJECTS.includes(subject) || !fact || !evidence) continue;
-
-    normalized.push({
-      subject,
-      fact,
-      type: normalizeFactType(item.type),
-      confidence: clamp01(item.confidence, 0.5),
-      evidence
-    });
-    if (normalized.length >= maxFacts) break;
-  }
-
-  return normalized;
 }
 
 export function normalizeXaiBaseUrl(value) {

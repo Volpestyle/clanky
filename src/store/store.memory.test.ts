@@ -104,26 +104,33 @@ test("memory facts support owner scope", async () => {
 
 test("session summaries persist, filter by channel, and order by most recent end time", async () => {
   await withTempStore(async (store) => {
+    const now = Date.now();
+    const endedAtA = new Date(now - 60 * 60 * 1000).toISOString();       // 1 hour ago
+    const endedAtB = new Date(now - 50 * 60 * 1000).toISOString();       // 50 min ago
+    const endedAtC = new Date(now - 55 * 60 * 1000).toISOString();       // 55 min ago
+    const sinceIso = new Date(now - 2 * 60 * 60 * 1000).toISOString();   // 2 hours ago
+    const beforeIso = new Date(now + 60 * 60 * 1000).toISOString();      // 1 hour from now
+
     const insertedA = store.upsertSessionSummary({
       sessionId: "voice-session-a",
       guildId: "guild-a",
       channelId: "chan-1",
       summaryText: "Alice and Bob planned the build.",
-      endedAt: "2026-03-22T12:00:00.000Z"
+      endedAt: endedAtA
     });
     const insertedB = store.upsertSessionSummary({
       sessionId: "voice-session-b",
       guildId: "guild-a",
       channelId: "chan-1",
       summaryText: "They narrowed the rollout to Friday.",
-      endedAt: "2026-03-22T12:10:00.000Z"
+      endedAt: endedAtB
     });
     store.upsertSessionSummary({
       sessionId: "voice-session-c",
       guildId: "guild-a",
       channelId: "chan-2",
       summaryText: "Other channel summary.",
-      endedAt: "2026-03-22T12:05:00.000Z"
+      endedAt: endedAtC
     });
 
     assert.equal(insertedA, true);
@@ -132,8 +139,8 @@ test("session summaries persist, filter by channel, and order by most recent end
     const rows = store.getRecentSessionSummaries({
       guildId: "guild-a",
       channelId: "chan-1",
-      sinceIso: "2026-03-22T11:30:00.000Z",
-      beforeIso: "2026-03-22T12:30:00.000Z",
+      sinceIso,
+      beforeIso,
       limit: 5
     });
     assert.equal(rows.length, 2);

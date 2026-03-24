@@ -7,7 +7,6 @@ import {
 } from "./voiceSessionManager.ts";
 import {
   FILE_ASR_TURN_QUEUE_MAX,
-  VOICE_TURN_MIN_ASR_CLIP_MS
 } from "./voiceSessionManager.constants.ts";
 import {
   createVoiceTestManager as createManager,
@@ -4064,7 +4063,7 @@ test("runRealtimeBrainReply does NOT supersede when a different speaker queues a
     settingsSnapshot: baseSettings()
   };
 
-  const result = await manager.runRealtimeBrainReply({
+  const _result = await manager.runRealtimeBrainReply({
     session,
     settings: session.settingsSnapshot,
     userId: "speaker-1",

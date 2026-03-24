@@ -730,7 +730,7 @@ export function toAnthropicTool(schema: SharedToolSchema): {
 } {
   // Claude API rejects oneOf/allOf/anyOf/not at the top level of input_schema.
   // Strip them defensively (mirrors sanitizeProviderNativeRealtimeParameters in voice path).
-  const { anyOf, oneOf, allOf, not, ...sanitizedParameters } = schema.parameters as Record<string, unknown>;
+  const { anyOf: _anyOf, oneOf: _oneOf, allOf: _allOf, not: _not, ...sanitizedParameters } = schema.parameters as Record<string, unknown>;
   return {
     name: schema.name,
     description: schema.description,

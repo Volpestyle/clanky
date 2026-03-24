@@ -9,7 +9,6 @@ import { getPromptBotName } from "../prompts/promptCore.ts";
 import { buildSingleTurnPromptLog } from "../promptLogging.ts";
 import { clamp } from "../utils.ts";
 import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
-import { isCancelIntent } from "../tools/cancelDetection.ts";
 import { SoundboardDirector } from "./soundboardDirector.ts";
 import { createMusicSearchProvider } from "./musicSearch.ts";
 import { createDiscordMusicPlayer } from "./musicPlayer.ts";
@@ -96,7 +95,6 @@ import {
 } from "./realtimeInterruptAcceptance.ts";
 import type { RealtimeInterruptAcceptanceMode } from "./realtimeInterruptAcceptance.ts";
 import {
-  analyzeMonoPcmSignal,
   estimateDiscordPcmPlaybackDurationMs as estimateDiscordPcmPlaybackDurationMsModule,
   estimatePcm16MonoDurationMs as estimatePcm16MonoDurationMsModule,
   evaluatePcmSilenceGate as evaluatePcmSilenceGateModule
@@ -143,9 +141,7 @@ import {
   resolveVoiceThoughtEngineConfig as resolveVoiceThoughtEngineConfigModule
 } from "./voiceThoughtGeneration.ts";
 import { buildVoiceRuntimeSnapshot } from "./voiceRuntimeSnapshot.ts";
-import {
-  isSystemSpeechOpportunitySource,
-} from "./systemSpeechOpportunity.ts";
+
 import { runVoiceReplyPipeline } from "./voiceReplyPipeline.ts";
 import { requestJoin } from "./voiceJoinFlow.ts";
 import { ASSISTANT_OUTPUT_PHASE } from "./assistantOutputState.ts";
@@ -214,9 +210,6 @@ import {
   VOICE_TURN_PROMOTION_ACTIVE_RATIO_MIN,
   VOICE_TURN_PROMOTION_MIN_CLIP_MS,
   VOICE_TURN_PROMOTION_PEAK_MIN,
-  VOICE_TURN_PROMOTION_STRONG_LOCAL_ACTIVE_RATIO_MIN,
-  VOICE_TURN_PROMOTION_STRONG_LOCAL_PEAK_MIN,
-  VOICE_TURN_PROMOTION_STRONG_LOCAL_RMS_MIN,
   VOICE_TURN_MIN_ASR_CLIP_MS
 } from "./voiceSessionManager.constants.ts";
 import { providerSupports } from "./voiceModes.ts";
@@ -235,31 +228,23 @@ import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
 import { executeLocalVoiceToolCall } from "./voiceToolCallDispatch.ts";
 import type {
   CaptureState,
-  LoggedVoicePromptBundle,
   MusicDisambiguationPayload,
   MusicSelectionResult,
   MusicTextCommandMessage,
   MusicTextRequestPayload,
   OutputChannelState,
-  RealtimeToolOwnership,
   VoiceAddressingAnnotation,
   VoiceAddressingState,
   VoiceConversationContext,
   VoiceInterruptOverlapBurstEntry,
   VoiceInterruptOverlapBurstState,
-  VoiceInterruptOverlapDecision,
   VoiceInterruptOverlapUtteranceState,
-  VoiceMcpServerStatus,
   VoicePendingSpeechStartedInterrupt,
   VoicePendingInterruptBridgeTurn,
-  VoiceRealtimeToolDescriptor,
-  VoiceRealtimeToolSettings,
   VoiceReplyDecision,
-  VoiceRuntimeEventContext,
   VoiceQueuedRealtimeAssistantUtterance,
   VoiceSession,
   VoiceTimelineTurn,
-  VoiceToolCallEvent,
   VoiceToolRuntimeSessionLike,
   VoiceTranscriptTimelineEntry
 } from "./voiceSessionTypes.ts";
@@ -3291,7 +3276,7 @@ export class VoiceSessionManager {
     const sampleRateHz = Number(session?.realtimeInputSampleRateHz) || 24000;
     let pendingInterruptingQueueDepth = 0;
     let pendingNearSilentQueueDepth = 0;
-    let pendingUnconfirmedSpeechQueueDepth = 0;
+    const pendingUnconfirmedSpeechQueueDepth = 0;
     let pendingOtherSpeakerQueueDepth = 0;
     let consideredPendingRealtimeQueueDepth = 0;
     let oldestConsideredFinalizedAt = Number.POSITIVE_INFINITY;
@@ -5106,7 +5091,7 @@ export class VoiceSessionManager {
     musicWakeFollowupEligibleAtCapture = false,
     bridgeUtteranceId = null,
     asrResult = null,
-    source = "unknown",
+    source: _source = "unknown",
     serverVadConfirmed = false
   }: {
     session: VoiceSession;

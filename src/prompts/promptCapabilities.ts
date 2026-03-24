@@ -223,7 +223,7 @@ export function buildConversationSearchDocs(): string[] {
 // Voice control (text-channel perspective)
 // ---------------------------------------------------------------------------
 
-export function buildVoiceControlDocs(settings: unknown): string[] {
+export function buildVoiceControlDocs(_settings: unknown): string[] {
   return [
     "If not in a voice channel, call join_voice_channel first, then call the music tool.",
     "If the user asks what is playing, what was stopped, or what is queued, answer from the current music state directly.",

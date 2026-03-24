@@ -211,25 +211,6 @@ export default function SettingsForm({
     document.getElementById(entry.scrollTo)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [setClickedId]);
 
-  /* Map validation sectionIds to nav groups for sidebar indicators */
-  const VALIDATION_SECTION_MAP: Record<string, string> = {
-    "sec-core": "sec-behavior",
-    "sec-browser": "sec-research",
-    "sec-search": "sec-research",
-    "sec-rate": "sec-perms",
-    "sec-startup": "sec-perms",
-    "sec-channels": "sec-perms",
-    "sec-provider-auth": "sec-advanced",
-    "sec-llm": "sec-advanced",
-    "sec-code-agent": "sec-advanced",
-    "sec-orchestration": "sec-advanced",
-    "sec-stack": "sec-advanced",
-    "sec-prompts": "sec-advanced",
-    "sec-vision": "sec-media",
-    "sec-video": "sec-media",
-    "sec-discovery": "sec-media"
-  };
-
   const isDirty = useMemo(() => {
     if (!form || !savedFormRef.current) return false;
     return JSON.stringify(form) !== savedFormRef.current;
@@ -251,10 +232,27 @@ export default function SettingsForm({
   const codeAgentValidationError = useMemo(() => getCodeAgentValidationError(effectiveForm), [effectiveForm]);
   const validationError = useMemo(() => getSettingsValidationError(effectiveForm), [effectiveForm]);
   const sectionErrors = useMemo(() => {
+    const validationSectionMap: Record<string, string> = {
+      "sec-core": "sec-behavior",
+      "sec-browser": "sec-research",
+      "sec-search": "sec-research",
+      "sec-rate": "sec-perms",
+      "sec-startup": "sec-perms",
+      "sec-channels": "sec-perms",
+      "sec-provider-auth": "sec-advanced",
+      "sec-llm": "sec-advanced",
+      "sec-code-agent": "sec-advanced",
+      "sec-orchestration": "sec-advanced",
+      "sec-stack": "sec-advanced",
+      "sec-prompts": "sec-advanced",
+      "sec-vision": "sec-media",
+      "sec-video": "sec-media",
+      "sec-discovery": "sec-media"
+    };
     const errors = new Set<string>();
     if (codeAgentValidationError) errors.add("sec-advanced");
     if (validationError?.sectionId) {
-      const mapped = VALIDATION_SECTION_MAP[validationError.sectionId] || validationError.sectionId;
+      const mapped = validationSectionMap[validationError.sectionId] || validationError.sectionId;
       errors.add(mapped);
     }
     return errors;

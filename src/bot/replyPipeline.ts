@@ -935,7 +935,8 @@ async function executeReplyLlm(
     replyTrace, systemPrompt, initialUserPrompt, replyPromptCapture,
     activeVoiceSession, inVoiceChannelNow, videoLookupRefs
   } = ctx;
-  let { webSearch, browserBrowse, memoryLookup, modelImageInputs, imageLookup, replyPrompts } = ctx;
+  const { memoryLookup } = ctx;
+  let { webSearch, browserBrowse, modelImageInputs, imageLookup, replyPrompts } = ctx;
 
   const replyToolAvailability = buildReplyToolAvailabilityState(settings, {
     webSearch,

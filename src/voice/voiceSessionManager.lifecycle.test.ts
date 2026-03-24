@@ -27,7 +27,6 @@ import {
   trackSharedAsrCommittedItem,
   tryHandoffSharedAsr
 } from "./voiceAsrBridge.ts";
-import { ensureNativeDiscordScreenShareState } from "./nativeDiscordScreenShare.ts";
 import type { AsrBridgeState } from "./voiceAsrBridge.ts";
 import type { CaptureState, VoiceSession } from "./voiceSessionTypes.ts";
 
@@ -3671,6 +3670,7 @@ test("requestRealtimeCodeTaskFollowup injects async code task completion into re
       }
     }
   });
+  // eslint-disable-next-line no-restricted-syntax -- partial mock session for test
   manager.sessions.set(session.guildId, session as unknown as VoiceSession);
 
   const delivered = manager.requestRealtimeCodeTaskFollowup({
@@ -3702,6 +3702,7 @@ test("requestRealtimeCodeTaskFollowup skips when channel does not match active s
       }
     }
   });
+  // eslint-disable-next-line no-restricted-syntax -- partial mock session for test
   manager.sessions.set(session.guildId, session as unknown as VoiceSession);
 
   const delivered = manager.requestRealtimeCodeTaskFollowup({
@@ -3735,6 +3736,7 @@ test("requestRealtimeCodeTaskFollowup uses realtime text transport when playback
       }
     }
   });
+  // eslint-disable-next-line no-restricted-syntax -- partial mock session for test
   manager.sessions.set(session.guildId, session as unknown as VoiceSession);
 
   const delivered = manager.requestRealtimeCodeTaskFollowup({

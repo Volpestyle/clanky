@@ -838,7 +838,7 @@ async function tryStartNativeScreenWatch(
     session,
     requesterUserId
   });
-  let targetSelection = normalizedTargetUserId
+  const targetSelection = normalizedTargetUserId
     ? {
         targetUserId: normalizedTargetUserId,
         reason: "explicit_requested_target"

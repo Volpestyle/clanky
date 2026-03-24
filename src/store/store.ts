@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 import { clamp, nowIso } from "../utils.ts";
-import { normalizeSettings } from "./settingsNormalization.ts";
 import { minimizeSettingsIntent } from "../settings/settingsIntent.ts";
 import {
   rewriteRuntimeSettingsRow,

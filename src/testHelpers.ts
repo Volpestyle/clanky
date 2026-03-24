@@ -7,7 +7,6 @@ import type {
   DashboardPublicHttpsState,
   DashboardScreenShareSessionManager
 } from "./dashboard.ts";
-import { parseBooleanFlag, parseNumberOrFallback } from "./normalization/valueParsers.ts";
 import { createDashboardServer } from "./dashboard.ts";
 import { Store } from "./store/store.ts";
 
@@ -45,14 +44,6 @@ function isListenPermissionError(error: unknown): boolean {
     (code === "EADDRINUSE" && /port\s+0\s+in\s+use/i.test(message)) ||
     /listen\s+EPERM|listen\s+EACCES/i.test(message)
   );
-}
-
-function envFlag(name: string, fallback = false): boolean {
-  return parseBooleanFlag(process.env[name], fallback);
-}
-
-function envNumber(name: string, fallback: number): number {
-  return parseNumberOrFallback(process.env[name], fallback);
 }
 
 export async function withDashboardServer<T>(

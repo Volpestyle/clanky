@@ -415,7 +415,7 @@ export class MemoryManager {
     }
   }
 
-  loadUserFactProfile({ userId, guildId }: { userId?: string | null; guildId?: string | null }) {
+  loadUserFactProfile({ userId, guildId: _guildId }: { userId?: string | null; guildId?: string | null }) {
     const normalizedUserId = String(userId || "").trim();
     if (!normalizedUserId) {
       return {

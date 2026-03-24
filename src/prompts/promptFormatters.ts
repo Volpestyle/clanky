@@ -541,17 +541,6 @@ export function formatMemoryFacts(facts, { includeType = true, includeProvenance
     .join("\n");
 }
 
-function formatMemoryLookupResults(results) {
-  if (!results?.length) return "(no matching durable memory found)";
-  return results
-    .map((row, index) => {
-      const rendered = renderPromptMemoryFact(row, { includeType: true, includeProvenance: true });
-      return rendered ? `- [M${index + 1}] ${rendered}` : "";
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
 export function formatImageLookupCandidates(candidates) {
   if (!candidates?.length) return "(no recent image references found)";
   return candidates
@@ -569,18 +558,4 @@ export function formatImageLookupCandidates(candidates) {
     .join("\n");
 }
 
-function formatImageLookupResults(results) {
-  if (!results?.length) return "(no matching history images found)";
-  return results
-    .map((row, index) => {
-      const filename = String(row?.filename || "(unnamed)").trim();
-      const author = String(row?.authorName || "unknown").trim();
-      const when = formatRelativePromptAge(row?.createdAt) || String(row?.createdAt || "").trim();
-      const reason = String(row?.matchReason || "").trim();
-      const ref = String(row?.imageRef || `IMG ${index + 1}`).trim();
-      const whenLabel = when ? `, ${when}` : "";
-      const reasonLabel = reason ? ` | match: ${reason}` : "";
-      return `- [${ref}] ${filename} by ${author}${whenLabel}${reasonLabel}`;
-    })
-    .join("\n");
-}
+

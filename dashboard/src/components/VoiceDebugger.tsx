@@ -10,7 +10,6 @@ import { loadFlightLogs, saveFlightLog } from "./voiceDebugger/FlightLog";
 import { detectAnomalies } from "./voiceDebugger/AnomalyDetection";
 import { reconstructTurns } from "./voiceDebugger/TurnReconstructor";
 import type {
-  Anomaly,
   ClassifiedEvent,
   FlightLog,
   LaneConfig,
@@ -205,14 +204,6 @@ function latencyBarClass(
   if (ms === null) return "good";
   if (avg === null || avg === 0) return "good";
   const ratio = ms / avg;
-  if (ratio <= 1.3) return "good";
-  if (ratio <= 2.0) return "ok";
-  return "bad";
-}
-
-function trendBarClass(totalMs: number, avgMs: number): "good" | "ok" | "bad" {
-  if (avgMs === 0) return "good";
-  const ratio = totalMs / avgMs;
   if (ratio <= 1.3) return "good";
   if (ratio <= 2.0) return "ok";
   return "bad";

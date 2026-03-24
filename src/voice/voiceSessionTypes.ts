@@ -267,6 +267,7 @@ export type VoiceToolRuntimeSessionLike = {
     lastRealtimeToolRefreshAt?: number | null;
     guildId?: string;
     textChannelId?: string;
+    voiceChannelId?: string;
     id?: string;
     realtimeToolResponseDebounceTimer?: ReturnType<typeof setTimeout> | null;
     realtimeToolCallExecutions?: Map<string, VoiceToolExecutionState>;
@@ -304,7 +305,7 @@ export type MusicSelectionResult = {
 };
 
 export type MusicDisambiguationPayload = {
-    session?: Record<string, unknown> | null;
+    session?: VoiceSession | VoiceToolRuntimeSessionLike | null;
     query?: string;
     platform?: string;
     action?: "play_now" | "queue_next" | "queue_add";
@@ -1252,5 +1253,9 @@ export interface VoiceSession {
     livePromptState?: VoiceLivePromptState | null;
     inFlightAcceptedBrainTurn?: InFlightAcceptedBrainTurn | null;
     openAiAsrSessionIdleTtlMs?: number;
+    openAiAsrTranscriptStableMs?: number;
+    openAiAsrTranscriptWaitMaxMs?: number;
     realtimeTurnCoalesceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
+    botSpeechMusicDucked?: boolean;
+    botSpeechMusicUnduckTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
 }

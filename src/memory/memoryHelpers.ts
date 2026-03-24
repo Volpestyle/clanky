@@ -374,26 +374,6 @@ export function normalizeHighlightText(text) {
     .trim();
 }
 
-function parseDailyEntryLine(line) {
-  if (!String(line).startsWith("- ")) return null;
-  const payload = line.slice(2).trim();
-  const parts = payload.split(" | ");
-  if (parts.length < 3) return null;
-
-  const [timestampIso, authorPart, ...textParts] = parts;
-  const text = textParts.join(" | ").trim();
-  const author = authorPart.replace(/\s*\([^)]+\)\s*$/, "").trim();
-  if (!timestampIso || !author || !text) return null;
-
-  const timestampMs = Date.parse(timestampIso);
-  return {
-    timestampIso,
-    timestampMs: Number.isFinite(timestampMs) ? timestampMs : 0,
-    author,
-    text
-  };
-}
-
 // Scope fragment format appended by the ingest pipeline in daily markdown lines.
 const SCOPE_FRAGMENT_RE = /\[guild:(\S+)\s+channel:(\S+)\s+message:(\S+)(?:\s+(voice))?\]/;
 // Author IDs are serialized as trailing "(123456789)" in daily lines.

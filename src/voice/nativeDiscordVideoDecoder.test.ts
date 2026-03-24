@@ -2,7 +2,6 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 
 import {
-  decodeNativeDiscordVideoFrameToStillImage,
   hasNativeDiscordVideoDecoderSupport
 } from "./nativeDiscordVideoDecoder.ts";
 

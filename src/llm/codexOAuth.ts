@@ -391,7 +391,8 @@ async function readRequestParts(input: OpenAiFetchInput, init?: OpenAiFetchInit)
   if (input instanceof Request) {
     const headers = new Headers(input.headers);
     if (init?.headers) {
-      new Headers(init.headers as unknown as HeadersInit).forEach((value, key) => {
+       
+      new Headers(init.headers as HeadersInit).forEach((value, key) => {
         headers.set(key, value);
       });
     }
@@ -408,7 +409,8 @@ async function readRequestParts(input: OpenAiFetchInput, init?: OpenAiFetchInit)
   return {
     url: String(input),
     method: init?.method,
-    headers: new Headers(init?.headers as unknown as HeadersInit),
+     
+    headers: new Headers(init?.headers as HeadersInit),
     body: init?.body,
     signal: init?.signal
   };

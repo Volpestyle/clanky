@@ -35,7 +35,6 @@ import {
 import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../src/settings/settingsConstraints.ts";
 import {
   normalizeStreamWatchVisualizerMode,
-  normalizeVoiceAdmissionModeForDashboard,
   resolveVoiceAdmissionModeForSettings,
   resolveVoiceRuntimeModeFromSelection,
   resolveVoiceRuntimeSelectionFromMode
@@ -187,7 +186,6 @@ function buildSettingsFormView(settings: unknown) {
     resolved?.voiceInterruptClassifierBinding || getResolvedVoiceInterruptClassifierBinding(s);
   const rawVoiceInterruptClassifier = intent.agentStack?.overrides?.voiceInterruptClassifier;
   const voiceInterruptClassifierExplicit = isRecordLike(rawVoiceInterruptClassifier);
-  const voiceMusicBrainBinding = resolved?.voiceMusicBrainBinding || orchestrator;
   const voiceMusicBrainMode = String(voiceRuntime.musicBrain?.mode || d.agentStack.runtimeConfig.voice.musicBrain.mode || "disabled")
     .trim()
     .toLowerCase() === "disabled"
@@ -198,8 +196,6 @@ function buildSettingsFormView(settings: unknown) {
   const presetInterruptClassifierFallback = getPresetVoiceInterruptClassifierFallback(agentStack.preset);
   const voiceInterruptClassifierFallback =
     voiceInterruptClassifierBinding || presetInterruptClassifierFallback || voiceClassifierFallback;
-  const presetMusicBrainFallback = getPresetVoiceMusicBrainFallback(agentStack.preset);
-  const voiceMusicBrainFallback = voiceMusicBrainBinding || presetMusicBrainFallback || orchestrator;
   const voiceStreamWatch = valueOr(s.voice?.streamWatch, d.voice.streamWatch);
   const voiceSoundboard = valueOr(s.voice?.soundboard, d.voice.soundboard);
   const startup = valueOr(s.interaction?.startup, d.interaction.startup);
@@ -1203,23 +1199,11 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
   const discoveryFeedEnabled = Boolean(form.discoveryFeedEnabled);
   const advancedOverridesEnabled = Boolean(form.stackAdvancedOverridesEnabled);
   const normalizedCodeAgentProvider = String(form.codeAgentProvider || "auto").trim().toLowerCase();
-  const rawCodeAgentWorkerConfigs =
-    form.codeAgentWorkerConfigs && typeof form.codeAgentWorkerConfigs === "object"
-      ? form.codeAgentWorkerConfigs as Record<string, Record<string, unknown>>
-      : {};
+  const rawCodeAgentWorkerConfigs = form.codeAgentWorkerConfigs;
   const preservedCodeAgentWorkers = {
-    codex:
-      rawCodeAgentWorkerConfigs.codex && typeof rawCodeAgentWorkerConfigs.codex === "object"
-        ? rawCodeAgentWorkerConfigs.codex
-        : {},
-    codexCli:
-      rawCodeAgentWorkerConfigs.codexCli && typeof rawCodeAgentWorkerConfigs.codexCli === "object"
-        ? rawCodeAgentWorkerConfigs.codexCli
-        : {},
-    claudeCode:
-      rawCodeAgentWorkerConfigs.claudeCode && typeof rawCodeAgentWorkerConfigs.claudeCode === "object"
-        ? rawCodeAgentWorkerConfigs.claudeCode
-        : {}
+    codex: rawCodeAgentWorkerConfigs.codex,
+    codexCli: rawCodeAgentWorkerConfigs.codexCli,
+    claudeCode: rawCodeAgentWorkerConfigs.claudeCode
   };
   const preservedCodeAgentAggregate = {
     maxTurns: Math.max(

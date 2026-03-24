@@ -47,21 +47,6 @@ export type AsrBridgePhase = "idle" | "connecting" | "ready" | "committing" | "c
 // bridge lifecycle state. They replace the old `closing` / `isCommittingAsr`
 // boolean checks.
 
-/** The bridge can accept audio (connected and not tearing down). */
-function asrPhaseCanAcceptAudio(phase: AsrBridgePhase): boolean {
-  return phase === "ready" || phase === "committing";
-}
-
-/** The bridge has an active WebSocket connection. */
-function asrPhaseIsConnected(phase: AsrBridgePhase): boolean {
-  return phase === "ready" || phase === "committing" || phase === "closing";
-}
-
-/** The bridge can start a new commit. */
-function asrPhaseCanCommit(phase: AsrBridgePhase): boolean {
-  return phase === "ready";
-}
-
 /** The bridge is tearing down (replaces `closing` boolean). */
 function asrPhaseIsClosing(phase: AsrBridgePhase): boolean {
   return phase === "closing";

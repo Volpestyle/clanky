@@ -60,7 +60,7 @@ test("createCodexOAuthFetch rewrites responses requests and injects codex header
     getTokens: () => tokens,
     setTokens() {},
     fetchImpl: mockFetch
-  }) as unknown as typeof fetch;
+  });
 
   await oauthFetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -131,7 +131,7 @@ test("createCodexOAuthFetch forces stream for non-stream responses and returns J
     getTokens: () => tokens,
     setTokens() {},
     fetchImpl: mockFetch
-  }) as unknown as typeof fetch;
+  });
 
   const response = await oauthFetch("https://api.openai.com/v1/responses", {
     method: "POST",

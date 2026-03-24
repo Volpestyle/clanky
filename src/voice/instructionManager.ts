@@ -29,8 +29,7 @@ import {
 } from "./voiceSessionManager.constants.ts";
 import {
   formatVoiceChannelEffectSummary,
-  inspectAsrTranscript,
-  normalizeVoiceText
+  inspectAsrTranscript
 } from "./voiceSessionHelpers.ts";
 import {
   buildVoiceInstructions,

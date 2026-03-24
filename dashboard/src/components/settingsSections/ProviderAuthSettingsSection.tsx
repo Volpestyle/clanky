@@ -89,7 +89,7 @@ export function ProviderAuthSettingsSection({
     }
   };
 
-  const pollOAuthStatus = (providerKey: string, formKey: string) => {
+  const pollOAuthStatus = (providerKey: string, _formKey: string) => {
     let attempts = 0;
     const maxAttempts = 60; // 2 minutes of polling
     const interval = setInterval(async () => {

@@ -160,7 +160,7 @@ type MusicRuntimeSessionLike = {
   } | null;
   music?: VoiceSessionMusicState | null;
   musicQueueState?: Record<string, unknown> | null;
-  [key: string]: unknown;
+  botSpeechMusicDucked?: boolean;
 };
 
 type MusicPlaybackLogArgs = Parameters<MusicPlaybackStoreLike["logAction"]>[0];

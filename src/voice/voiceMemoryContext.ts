@@ -13,11 +13,11 @@ import type {
 } from "./voiceSessionTypes.ts";
 
 type LoadRecentConversationHistoryFn = (payload: {
-  guildId: string;
+  guildId?: string | null;
   channelId?: string | null;
   queryText: string;
-  limit?: number;
-  maxAgeHours?: number;
+  limit: number;
+  maxAgeHours: number;
 }) => Promise<unknown[]> | unknown[];
 
 type SearchConversationWindowsFn = (payload: {

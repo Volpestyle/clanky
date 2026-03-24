@@ -93,32 +93,6 @@ type ReplyAddressRuntime = {
   isDirectlyAddressed: (settings: Settings, message: ReplyAdmissionMessage) => boolean;
 };
 
-function hasBotMessageInRecentWindow({
-  botUserId,
-  recentMessages,
-  windowSize = 5,
-  triggerMessageId = null
-}: {
-  botUserId?: string | null;
-  recentMessages?: ReplyAdmissionRecentMessage[];
-  windowSize?: number;
-  triggerMessageId?: string | null;
-}) {
-  const normalizedBotUserId = String(botUserId || "").trim();
-  if (!normalizedBotUserId) return false;
-  if (!Array.isArray(recentMessages) || !recentMessages.length) return false;
-
-  const excludedMessageId = String(triggerMessageId || "").trim();
-  const candidateMessages = excludedMessageId
-    ? recentMessages.filter((row) => String(row?.message_id || "").trim() !== excludedMessageId)
-    : recentMessages;
-
-  const cappedWindow = clamp(Math.floor(windowSize), 1, 50);
-  return candidateMessages
-    .slice(0, cappedWindow)
-    .some((row) => isBotRecentMessage(row, normalizedBotUserId));
-}
-
 function getResponseWindowMessageCount(eagerness: unknown) {
   const normalized = clamp(Number(eagerness) || 0, 0, 100);
   if (normalized <= 0) return 0;
@@ -218,7 +192,7 @@ function resolveRecentMessageAuthorId(
 
 function resolveRecentReplyWindowState({
   botUserId,
-  message,
+  message: _message,
   recentMessages,
   windowSize = 5,
   triggerMessageId = null,

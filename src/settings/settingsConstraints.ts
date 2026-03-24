@@ -1,8 +1,3 @@
-type NumericConstraint = {
-  min: number;
-  max: number;
-};
-
 export const SETTINGS_NUMERIC_CONSTRAINTS = {
   permissions: {
     replies: {

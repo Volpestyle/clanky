@@ -93,8 +93,6 @@ export function resolveTurnTranscriptionPlan({
   };
 }
 
-const resolveRealtimeTurnTranscriptionPlan = resolveTurnTranscriptionPlan;
-
 export async function transcribePcmTurnWithPlan<TSession>({
   transcribe,
   session,
@@ -184,65 +182,6 @@ export async function transcribePcmTurnWithPlan<TSession>({
     usedFallbackModel,
     fallbackModel: plan.fallbackModel,
     reason: plan.reason
-  };
-}
-
-function parseVoiceDecisionContract(rawText) {
-  const normalized = String(rawText || "").trim();
-  if (!normalized) {
-    return {
-      allow: false,
-      confident: false
-    };
-  }
-
-  const unwrapped = normalized.replace(/^```(?:[a-z]+)?\s*/i, "").replace(/```$/i, "").trim();
-  try {
-    const parsedJson = JSON.parse(unwrapped);
-    const jsonDecisionValue =
-      typeof parsedJson === "string"
-        ? parsedJson
-        : parsedJson && typeof parsedJson === "object"
-          ? parsedJson.decision || parsedJson.answer || parsedJson.value || ""
-          : "";
-    const jsonDecision = String(jsonDecisionValue || "").trim().toUpperCase();
-    if (jsonDecision === "YES") {
-      return {
-        allow: true,
-        confident: true
-      };
-    }
-    if (jsonDecision === "NO") {
-      return {
-        allow: false,
-        confident: true
-      };
-    }
-  } catch {
-    // ignore invalid JSON and continue with token parsing fallback
-  }
-
-  const quoted = unwrapped
-    .replace(/^["'`]\s*/g, "")
-    .replace(/\s*["'`]$/g, "")
-    .trim()
-    .toUpperCase();
-  if (quoted === "YES") {
-    return {
-      allow: true,
-      confident: true
-    };
-  }
-  if (quoted === "NO") {
-    return {
-      allow: false,
-      confident: true
-    };
-  }
-
-  return {
-    allow: false,
-    confident: false
   };
 }
 

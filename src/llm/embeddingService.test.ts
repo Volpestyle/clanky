@@ -5,8 +5,7 @@ import {
   isEmbeddingReady,
   resolveEmbeddingModel,
   embedText,
-  type EmbeddingProvider,
-  type EmbeddingServiceDeps
+  type EmbeddingProvider
 } from "./embeddingService.ts";
 
 function createMockProvider(overrides: Partial<EmbeddingProvider> = {}): EmbeddingProvider {

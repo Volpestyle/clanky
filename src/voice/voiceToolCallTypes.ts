@@ -1,6 +1,7 @@
 import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 import type { VoiceRealtimeToolSettings } from "./voiceSessionTypes.ts";
 import type { CodeAgentRole } from "../agents/codeAgent.ts";
+import type { SubAgentSession } from "../agents/subAgentSession.ts";
 
 export type VoiceToolCallManager = Pick<
   VoiceSessionManager,
@@ -69,9 +70,9 @@ export type VoiceToolCallManager = Pick<
     channelId: string;
     userId: string | null;
     source: string;
-  }) => SubAgentInteractiveSession | null | undefined) | null;
+  }) => SubAgentSession | null | undefined) | null;
   dispatchBackgroundCodeTask?: ((args: {
-    session: SubAgentInteractiveSession;
+    session: SubAgentSession;
     task: string;
     role: CodeAgentRole;
     guildId: string;

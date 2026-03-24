@@ -649,7 +649,7 @@ test("maybeHandleMusicPlaybackTurn teaches the music brain to stay command-scope
     transcript: "pause the music after this verse"
   });
 
-  const prompt = musicBrainPrompts[0] || "";
+  const _prompt = musicBrainPrompts[0] || "";
 });
 
 test("maybeHandleMusicPlaybackTurn routes eligible music turns to the main brain when the music brain is disabled", async () => {

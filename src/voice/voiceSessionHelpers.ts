@@ -3,7 +3,6 @@ import {
   getBotName,
   getBotNameAliases,
   getResolvedVoiceProvider,
-  getResolvedVoiceGenerationBinding,
   getVoiceConversationPolicy,
   getVoiceTranscriptionSettings,
   resolveAgentStack
@@ -33,7 +32,6 @@ export function normalizeVoiceAddressingTargetToken(value = "") {
 import {
   normalizeVoiceRuntimeMode,
   normalizeVoiceProvider,
-  normalizeBrainProvider,
   normalizeTranscriberProvider,
   VOICE_RUNTIME_MODES
 } from "./voiceModes.ts";
@@ -433,11 +431,6 @@ export function shortError(text) {
 
 function resolveVoiceProvider(settings) {
   return normalizeVoiceProvider(getResolvedVoiceProvider(settings), "openai");
-}
-
-function resolveBrainProvider(settings) {
-  const voiceProvider = resolveVoiceProvider(settings);
-  return normalizeBrainProvider(getResolvedVoiceGenerationBinding(settings).provider, voiceProvider, "openai");
 }
 
 export function resolveTranscriberProvider(settings) {

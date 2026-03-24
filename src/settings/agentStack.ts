@@ -80,7 +80,7 @@ function getSettingsSection<T>(
 }
 
 function resolveModelBinding(binding: unknown, fallback: SettingsModelBinding): SettingsModelBinding {
-  const source = binding && typeof binding === "object" && !Array.isArray(binding)
+  const source: Partial<SettingsModelBinding> = binding && typeof binding === "object" && !Array.isArray(binding)
     ? binding as SettingsModelBinding
     : {};
   const provider = String(source.provider || fallback.provider || "").trim() || String(fallback.provider || "");

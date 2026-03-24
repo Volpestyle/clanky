@@ -4,13 +4,9 @@ import { getPromptBotName } from "../prompts/promptCore.ts";
 import {
   normalizeVoiceText,
   isRealtimeMode,
-  normalizeVoiceRuntimeEventContext,
-  resolveVoiceSettingsSnapshot
+  normalizeVoiceRuntimeEventContext
 } from "./voiceSessionHelpers.ts";
 import {
-  buildVoiceAddressingState as buildVoiceAddressingStateFromTranscript,
-  hasBotNameCueForTranscript as hasBotNameCueForTranscriptFromSettings,
-  normalizeVoiceAddressingAnnotation as normalizeVoiceAddressingAnnotationFromTranscript,
   resolveVoiceDirectAddressSignal
 } from "./voiceAddressing.ts";
 import { parseBooleanFlag } from "../normalization/valueParsers.ts";
@@ -29,8 +25,6 @@ import { DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD } from "../bot/directAddres
 import type {
   VoiceConversationContext,
   VoiceReplyDecision,
-  VoiceAddressingState,
-  VoiceAddressingAnnotation,
   VoiceCommandState,
   LoggedVoicePromptBundle,
   VoiceSession,
@@ -38,9 +32,6 @@ import type {
   MusicPlaybackPhase,
   VoiceRuntimeEventContext,
   SpeakerTranscript
-} from "./voiceSessionTypes.ts";
-import {
-  musicPhaseShouldForceCommandOnly
 } from "./voiceSessionTypes.ts";
 import {
   applyOrchestratorOverrideSettings,
@@ -163,19 +154,6 @@ function parseClassifierDecision(rawText: string): "allow" | "deny" | null {
   return null;
 }
 
-
-function hasBotNameCueForTranscript(
-  manager: ReplyDecisionHost,
-  { transcript = "", settings = null }: {
-    transcript?: string;
-    settings?: ReplyDecisionSettings;
-  } = {}
-) {
-  return hasBotNameCueForTranscriptFromSettings({
-    transcript,
-    settings: settings || manager.store.getSettings()
-  });
-}
 
 function detectSingleParticipantAssistantFollowup(manager: ReplyDecisionHost, {
   session = null,
@@ -369,36 +347,6 @@ export function buildVoiceConversationContext(manager: ReplyDecisionHost, {
       : null,
     interruptedAssistantReply
   };
-}
-
-function buildVoiceAddressingState(manager: ReplyDecisionHost, {
-  session = null,
-  userId = null,
-  now = Date.now(),
-  maxItems = 6
-} = {}): VoiceAddressingState | null {
-  return buildVoiceAddressingStateFromTranscript({
-    session,
-    userId,
-    now,
-    maxItems
-  });
-}
-
-function normalizeVoiceAddressingAnnotation(_manager: ReplyDecisionHost, {
-  rawAddressing = null,
-  directAddressed = false,
-  directedConfidence = Number.NaN,
-  source = "",
-  reason = null
-} = {}): VoiceAddressingAnnotation | null {
-  return normalizeVoiceAddressingAnnotationFromTranscript({
-    rawAddressing,
-    directAddressed,
-    directedConfidence,
-    source,
-    reason
-  });
 }
 
 export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
@@ -1374,14 +1322,4 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   }
 }
 
-function isCommandOnlyActive(
-  manager: ReplyDecisionHost,
-  session: ReplyDecisionSessionLike | null | undefined,
-  settings: ReplyDecisionSettings = null
-) {
-  const resolved = resolveVoiceSettingsSnapshot(manager.store, session, settings);
-  if (getVoiceConversationPolicy(resolved).commandOnlyMode) return true;
-  return typeof manager.getMusicPhase === "function"
-    ? musicPhaseShouldForceCommandOnly(manager.getMusicPhase(session))
-    : false;
-}
+

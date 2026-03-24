@@ -35,12 +35,6 @@ type StreamUrlCacheEntry = {
   expiresAt: number;
 };
 
-type MusicPlayerStatus = {
-  playing: boolean;
-  paused: boolean;
-  currentTrack: MusicSearchResult | null;
-  position: number;
-};
 
 type MusicPlayerResult = {
   ok: boolean;

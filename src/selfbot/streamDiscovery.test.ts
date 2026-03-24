@@ -13,7 +13,6 @@ import {
   requestStreamWatch,
   setStreamPaused,
   type StreamDiscoveryState,
-  type StreamDiscoveryCallbacks,
   type GoLiveStream,
 } from "./streamDiscovery.ts";
 

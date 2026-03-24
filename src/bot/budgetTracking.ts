@@ -59,13 +59,6 @@ export type BrowserBudgetState = {
   canBrowse: boolean;
 };
 
-type TraceContext = {
-  guildId?: string | null;
-  channelId?: string | null;
-  userId?: string | null;
-  source?: string | null;
-};
-
 type RecentHistoryMessage = Record<string, unknown>;
 type GenericLookupResult = Record<string, unknown>;
 type SelectedImageInput = {

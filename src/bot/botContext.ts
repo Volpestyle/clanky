@@ -1,6 +1,6 @@
 import type { ClankerBot } from "../bot.ts";
 import type { appConfig } from "../config.ts";
-import type { DiscoveryService } from "../services/discovery.ts";
+
 import type { GifService } from "../services/gif.ts";
 import type { LLMService } from "../llm.ts";
 import type { MemoryManager } from "../memory/memoryManager.ts";
@@ -77,15 +77,6 @@ export interface BotContext {
   readonly memory: MemoryManager;
   readonly client: DiscordClientLike;
   readonly botUserId?: string | null;
-}
-
-interface DiscoveryContext extends BotContext {
-  readonly discovery: DiscoveryService;
-}
-
-interface MediaContext extends BotContext {
-  readonly gifs: GifService;
-  readonly video: VideoContextService;
 }
 
 export interface MediaAttachmentContext extends BudgetContext {
@@ -173,11 +164,7 @@ type ShouldAttemptReplyDecisionRuntimeFn = (payload: {
   triggerAuthorId?: string | null;
   triggerReferenceMessageId?: string | null;
 }) => ReturnType<ShouldAttemptReplyDecisionFn>;
-type HasBotMessageInRecentWindowRuntimeFn = (payload: {
-  recentMessages: Array<Record<string, unknown>>;
-  windowSize?: number;
-  triggerMessageId?: string | null;
-}) => boolean;
+
 
 type QueueGatewayRuntimeMember =
   | "lastBotMessageAt"
@@ -424,7 +411,3 @@ export interface VoiceReplyRuntime extends BotContext {
   backgroundTaskRunner?: import("../agents/backgroundTaskRunner.ts").BackgroundTaskRunner | null;
 }
 
-type TextThoughtLoopPolicyRuntime = {
-  isChannelAllowed: IsChannelAllowedRuntimeFn;
-  hasBotMessageInRecentWindow: HasBotMessageInRecentWindowRuntimeFn;
-};

@@ -14,7 +14,6 @@ import {
   formatConversationWindows,
   formatConversationParticipantMemory,
   formatEmojiChoices,
-  formatDiscoveryFindings,
   formatMemoryFacts,
   formatImageLookupCandidates
 } from "./promptFormatters.ts";
@@ -163,8 +162,8 @@ export function buildReplyPrompt({
   voiceMode = null,
   screenShare = null,
   channelMode = "other_channel" as "reply_channel" | "discovery_channel" | "other_channel",
-  maxMediaPromptChars = 900,
-  mediaPromptCraftGuidance = null
+  maxMediaPromptChars: _maxMediaPromptChars = 900,
+  mediaPromptCraftGuidance: _mediaPromptCraftGuidance = null
 }) {
   const parts = [];
   const normalizedChannelMode = channelMode === "reply_channel"
