@@ -705,7 +705,14 @@ export class ClankvoxClient extends EventEmitter {
         const status = asString(msg.status)?.trim().toLowerCase() === "buffered" ? "buffered" : "idle";
         this.lastTtsTelemetryAt = Date.now();
         this.lastTtsPlaybackState = status;
-        if (status === "idle" && this.ttsBufferDepthSamples <= 0) {
+        if (status === "idle") {
+          // Trust the Rust-reported idle state: zero out the Rust-side depth
+          // and decay estimate so the output lock converges immediately.
+          // Do NOT zero queuedTtsOutputSamples — that tracks PCM still queued
+          // locally in the TS ingress pipeline (e.g. a follow-up utterance).
+          // Zeroing it would make the system think it's fully idle when the
+          // next utterance's PCM is already waiting to be sent to Rust.
+          this.ttsBufferDepthSamples = 0;
           this._setEstimatedBufferedTtsSamples(0, Date.now());
         }
         this._scheduleTtsDrain(0);
@@ -822,6 +829,11 @@ export class ClankvoxClient extends EventEmitter {
         this.lastTtsPlaybackState =
           this.ttsBufferDepthSamples > 0 ? "buffered" : "idle";
         this._setEstimatedBufferedTtsSamples(this.ttsBufferDepthSamples, now);
+        // Note: we do NOT zero queuedTtsOutputSamples here — that counter
+        // tracks PCM still queued locally in the TS ingress pipeline (e.g. a
+        // follow-up utterance).  Zeroing it when utterance A's drain arrives
+        // would discard the count for utterance B's unsent PCM, causing a
+        // false idle transition between back-to-back utterances.
         this._scheduleTtsDrain(0);
         this.emit("bufferDepth", ttsSamples, musicSamples);
         break;
