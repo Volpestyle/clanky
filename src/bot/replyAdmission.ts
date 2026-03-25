@@ -17,14 +17,14 @@ export type ReplyAddressSignal = {
   confidenceSource: "llm" | "fallback" | "direct" | "exact_name";
 };
 
-export type TextAttentionMode = "ACTIVE" | "AMBIENT";
-export type TextAttentionReason =
+type TextAttentionMode = "ACTIVE" | "AMBIENT";
+type TextAttentionReason =
   | "direct_address"
   | "reply_to_bot"
   | "same_author_followup"
   | "cold_ambient";
 
-export type TextAttentionState = {
+type TextAttentionState = {
   mode: TextAttentionMode;
   reason: TextAttentionReason;
   responseWindowSize: number;
@@ -32,7 +32,7 @@ export type TextAttentionState = {
   latestBotMessageId: string | null;
 };
 
-export type ReplyAdmissionDecisionReason =
+type ReplyAdmissionDecisionReason =
   | "force_respond"
   | "force_decision_loop"
   | "hard_address"
@@ -40,7 +40,7 @@ export type ReplyAdmissionDecisionReason =
   | "recent_reply_window"
   | "cold_ambient_llm_decides";
 
-export type ReplyAdmissionDecision = {
+type ReplyAdmissionDecision = {
   allow: boolean;
   reason: ReplyAdmissionDecisionReason;
   attentionState: TextAttentionState;

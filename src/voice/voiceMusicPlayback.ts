@@ -74,7 +74,6 @@ const EN_MEDIA_RESUME_PLAY_CURRENT_RE =
   /\bplay\s+(?:it|this(?:\s+(?:song|track|music|playback))?|the\s+(?:song|track|music|playback))(?:\s+(?:again|back(?:\s+up)?))?(?:\s+(?:please|plz|now))?\s*$/i;
 const EN_MEDIA_SKIP_VERB_RE = /\b(?:skip|next)\b/i;
 const EN_MEDIA_CUE_RE = /\b(?:music|musik|song|songs|track|tracks|playback|playing|video|stream|streaming)\b/i;
-const EN_MEDIA_PLAY_VERB_RE = /\b(?:play|start|queue|put\s+on|spin)\b/i;
 const EN_MEDIA_PLAY_QUERY_RE =
   /\b(?:play|start|queue|put\s+on|spin)\s+(.+?)\b(?:in\s+vc|in\s+the\s+vc|in\s+voice|in\s+discord|right\s+now|rn|please|plz)?$/i;
 const EN_MEDIA_QUERY_TRAILING_NOISE_RE =
@@ -1189,7 +1188,7 @@ export function isCommandOnlyActive(
   return musicPhaseShouldForceCommandOnly(getMusicPhase(manager, session));
 }
 
-export function resolveMusicDuckingConfig(
+function resolveMusicDuckingConfig(
   manager: MusicPlaybackHost,
   settings: MusicPlaybackSettings = null
 ) {
@@ -1362,7 +1361,7 @@ export function normalizeMusicSelectionResult(
   };
 }
 
-export function isMusicDisambiguationActive(
+function isMusicDisambiguationActive(
   manager: MusicPlaybackHost,
   musicState: VoiceSessionMusicState | null = null
 ) {
@@ -1527,7 +1526,7 @@ export function ensureToolMusicQueueState(
 
 // All three music heuristics (stop, pause, skip) require verb + music cue word.
 // Bot-name commands ("Clanker, stop") go through the directAddressedToBot → LLM path instead.
-export function isLikelyMusicStopPhrase(
+function isLikelyMusicStopPhrase(
   _manager: MusicPlaybackHost,
   { transcript = "" }: {
     transcript?: string;
@@ -1586,21 +1585,7 @@ function isLikelyMusicResumePhrase(
   return EN_MEDIA_CUE_RE.test(normalizedResumeTranscript) || EN_MEDIA_RESUME_PRONOUN_RE.test(normalizedResumeTranscript);
 }
 
-export function isLikelyMusicPlayPhrase(
-  manager: MusicPlaybackHost,
-  { transcript = "", settings = null }: {
-    transcript?: string;
-    settings?: MusicPlaybackSettings;
-  } = {}
-) {
-  const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-  if (!normalizedTranscript) return false;
-  if (!EN_MEDIA_PLAY_VERB_RE.test(normalizedTranscript)) return false;
-  if (EN_MEDIA_CUE_RE.test(normalizedTranscript)) return true;
-  return manager.hasBotNameCueForTranscript({ transcript: normalizedTranscript, settings });
-}
-
-export function extractMusicPlayQuery(
+function extractMusicPlayQuery(
   manager: MusicPlaybackHost,
   transcript = ""
 ) {

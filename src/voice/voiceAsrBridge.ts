@@ -22,9 +22,6 @@ import {
 } from "./voiceSessionManager.constants.ts";
 import type { VoiceSession } from "./voiceSessionTypes.ts";
 
-// Re-export the STT_TRANSCRIPT_MAX_CHARS that callers use alongside ASR results.
-export { STT_TRANSCRIPT_MAX_CHARS } from "./voiceSessionHelpers.ts";
-
 // ── Types ────────────────────────────────────────────────────────────
 
 type AsrBridgeMode = "per_user" | "shared";

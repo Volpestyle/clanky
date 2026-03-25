@@ -19,10 +19,7 @@ import type { LoggedPromptBundle } from "../promptLogging.ts";
 export type {
     AssistantOutputLockReason,
     AssistantOutputPhase,
-    AssistantOutputReason,
-    AssistantOutputState,
-    ReplyOutputLockState,
-    TtsPlaybackState
+    AssistantOutputState
 } from "./assistantOutputState.ts";
 
 export type VoiceAddressingAnnotation = {

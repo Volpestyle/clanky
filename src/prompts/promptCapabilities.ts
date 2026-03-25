@@ -73,7 +73,7 @@ const VOICE_TOOL_SUMMARIES: Record<string, string> = {
   // voice-surface overrides / additions (none currently differ)
 };
 
-export function buildToolSummaryBlock(
+function buildToolSummaryBlock(
   toolNames: string[],
   summaryMap: Record<string, string> = TEXT_TOOL_SUMMARIES
 ): string[] {
@@ -92,7 +92,7 @@ export function buildToolSummaryBlock(
 // Text output format (fully static)
 // ---------------------------------------------------------------------------
 
-export function buildTextOutputFormatDocs(): string[] {
+function buildTextOutputFormatDocs(): string[] {
   return [
     "=== OUTPUT FORMAT ===",
     "Task: write one natural Discord reply for this turn.",
@@ -118,7 +118,7 @@ export function buildTextOutputFormatDocs(): string[] {
 // Automation
 // ---------------------------------------------------------------------------
 
-export function buildAutomationDocs(): string[] {
+function buildAutomationDocs(): string[] {
   return [
     "=== AUTOMATION ===",
     "You can create and manage scheduled automations for users.",
@@ -141,7 +141,7 @@ export function buildAutomationDocs(): string[] {
 // Media generation (images, video, GIFs)
 // ---------------------------------------------------------------------------
 
-export function buildMediaGenerationDocs(settings: unknown, maxMediaPromptChars = 900): string[] {
+function buildMediaGenerationDocs(settings: unknown, maxMediaPromptChars = 900): string[] {
   const mediaGuidance = getMediaPromptCraftGuidance(settings);
   const limit = Math.max(100, Math.floor(Number(maxMediaPromptChars) || 900));
   return [
@@ -160,7 +160,7 @@ export function buildMediaGenerationDocs(settings: unknown, maxMediaPromptChars 
   ];
 }
 
-export function buildGifDocs(): string[] {
+function buildGifDocs(): string[] {
   return [
     "=== GIFS ===",
     "Reply GIF lookup is available via a search-based GIF tool.",
@@ -175,7 +175,7 @@ export function buildGifDocs(): string[] {
 // Web search + browser
 // ---------------------------------------------------------------------------
 
-export function buildWebSearchDocs({ includeBrowserBrowse = false }: { includeBrowserBrowse?: boolean } = {}): string[] {
+function buildWebSearchDocs({ includeBrowserBrowse = false }: { includeBrowserBrowse?: boolean } = {}): string[] {
   return [
     buildWebToolRoutingPolicyLine({ includeBrowserBrowse }),
     buildWebSearchPolicyLine(),
@@ -184,7 +184,7 @@ export function buildWebSearchDocs({ includeBrowserBrowse = false }: { includeBr
   ];
 }
 
-export function buildBrowserDocs(): string[] {
+function buildBrowserDocs(): string[] {
   return [
     BROWSER_BROWSE_POLICY_LINE,
     BROWSER_SCREENSHOT_POLICY_LINE
@@ -195,7 +195,7 @@ export function buildBrowserDocs(): string[] {
 // Memory lookup + image lookup
 // ---------------------------------------------------------------------------
 
-export function buildMemoryLookupDocs(): string[] {
+function buildMemoryLookupDocs(): string[] {
   return [
     "If the user asks what you remember (or asks for stored facts) and current memory context is insufficient, call memory_search with a concise query.",
     "If the user asks for a broad dump of stored memory or everything you remember, use query \"__ALL__\".",
@@ -203,7 +203,7 @@ export function buildMemoryLookupDocs(): string[] {
   ];
 }
 
-export function buildImageLookupDocs(): string[] {
+function buildImageLookupDocs(): string[] {
   return [
     "If the user refers to an earlier image/photo and current message attachments are insufficient, call image_lookup with a short query or a specific image ref like IMG 3.",
     "The [IMG n] markers in recent chat are historical images, not fresh attachments on the latest user message.",
@@ -215,7 +215,7 @@ export function buildImageLookupDocs(): string[] {
 // Conversation search
 // ---------------------------------------------------------------------------
 
-export function buildConversationSearchDocs(): string[] {
+function buildConversationSearchDocs(): string[] {
   return [CONVERSATION_SEARCH_POLICY_LINE];
 }
 
@@ -223,7 +223,7 @@ export function buildConversationSearchDocs(): string[] {
 // Voice control (text-channel perspective)
 // ---------------------------------------------------------------------------
 
-export function buildVoiceControlDocs(_settings: unknown): string[] {
+function buildVoiceControlDocs(_settings: unknown): string[] {
   return [
     "If not in a voice channel, call join_voice_channel first, then call the music tool.",
     "If the user asks what is playing, what was stopped, or what is queued, answer from the current music state directly.",
@@ -235,7 +235,7 @@ export function buildVoiceControlDocs(_settings: unknown): string[] {
 // Screen watch (text-channel perspective)
 // ---------------------------------------------------------------------------
 
-export function buildScreenWatchDocs(): string[] {
+function buildScreenWatchDocs(): string[] {
   return [
     "If the user asks you to see/watch their screen or stream, set screenWatchIntent.action to start_watch.",
     "If visual context would materially improve troubleshooting/help, you may proactively set screenWatchIntent.action to start_watch.",
@@ -247,7 +247,7 @@ export function buildScreenWatchDocs(): string[] {
 // Video context
 // ---------------------------------------------------------------------------
 
-export function buildVideoContextDocs(): string[] {
+function buildVideoContextDocs(): string[] {
   return [
     "=== VIDEO CONTEXT (video_context tool) ===",
     "Use the video_context tool to extract metadata, transcripts, and keyframe images from video URLs.",
@@ -360,7 +360,7 @@ export function buildTextCapabilitiesDocs(
 // Voice tool usage philosophy (static guidance)
 // ---------------------------------------------------------------------------
 
-export function buildVoiceToolUsageDocs(): string[] {
+function buildVoiceToolUsageDocs(): string[] {
   return [
     "Speak first on casual turns. Use tools to improve accuracy or execute requested actions. Always include a brief spoken acknowledgment before calling tools (e.g., 'Sure, one sec' or 'Let me pull that up') — tool calls can take several seconds and the user hears silence until you speak. Ground factual or success claims in tool results — never claim success before a tool returns."
   ];
@@ -370,7 +370,7 @@ export function buildVoiceToolUsageDocs(): string[] {
 // Voice memory tool docs
 // ---------------------------------------------------------------------------
 
-export function buildVoiceMemoryToolDocs(): string[] {
+function buildVoiceMemoryToolDocs(): string[] {
   return [
     "note_context: session-scoped facts, preferences, or plans for this conversation.",
     "memory_write: long-term durable facts only (namespace=speaker/guild/self, type=preference/profile/relationship/guidance/behavioral/other). Don't save chatter, prompt instructions, or session-only info. Write facts from your own perspective — use 'me'/'my' instead of your name."
@@ -381,7 +381,7 @@ export function buildVoiceMemoryToolDocs(): string[] {
 // Voice music/media tool docs
 // ---------------------------------------------------------------------------
 
-export function buildVoiceMusicToolDocs(): string[] {
+function buildVoiceMusicToolDocs(): string[] {
   return [
     "Music: music_play starts audio-only playback (no Go Live stream). Re-call with selection_id only when reusing an exact prior id. Omit selection_id unless you already have the exact id from prompt context or a prior tool result. Never invent placeholder or markup tokens.",
     "Video: video_play starts YouTube video playback and shows it via Discord Go Live. Re-call with selection_id only when reusing an exact prior id.",
@@ -399,7 +399,7 @@ export function buildVoiceMusicToolDocs(): string[] {
 // Voice screen share tool docs
 // ---------------------------------------------------------------------------
 
-export function buildVoiceScreenShareToolDocs(): string[] {
+function buildVoiceScreenShareToolDocs(): string[] {
   return [
     "start_screen_watch: begin screen watch when live visual context would help. If multiple Discord shares are live and you want a specific one, pass { target: \"display name\" }. The runtime binds to an active Discord sharer when possible and falls back automatically when needed.",
     "A successful start_screen_watch does not always mean live pixels are ready yet. If the tool result says frameReady=false, do not claim to see the screen yet.",
@@ -411,7 +411,7 @@ export function buildVoiceScreenShareToolDocs(): string[] {
 // Voice leave channel docs
 // ---------------------------------------------------------------------------
 
-export function buildVoiceLeaveChannelDocs(): string[] {
+function buildVoiceLeaveChannelDocs(): string[] {
   return [
     "leave_voice_channel: only when you choose to end your VC session. Goodbyes alone don't force exit."
   ];
@@ -421,7 +421,7 @@ export function buildVoiceLeaveChannelDocs(): string[] {
 // Voice output format (spoken text rules)
 // ---------------------------------------------------------------------------
 
-export function buildVoiceOutputFormatDocs(): string[] {
+function buildVoiceOutputFormatDocs(): string[] {
   return [
     "=== OUTPUT FORMAT ===",
     "If you speak, begin with one hidden audience prefix: [[TO:SPEAKER]], [[TO:ALL]], or [[TO:<participant display name>]]. This prefix is metadata only and is not spoken aloud.",
@@ -440,7 +440,7 @@ export function buildVoiceOutputFormatDocs(): string[] {
 // Voice web search docs (voice-specific variant with onePerTurn)
 // ---------------------------------------------------------------------------
 
-export function buildVoiceWebSearchDocs({ includeBrowserBrowse = false }: { includeBrowserBrowse?: boolean } = {}): string[] {
+function buildVoiceWebSearchDocs({ includeBrowserBrowse = false }: { includeBrowserBrowse?: boolean } = {}): string[] {
   return [
     buildWebToolRoutingPolicyLine({ includeBrowserBrowse }),
     buildWebSearchPolicyLine({ onePerTurn: true }),
@@ -448,7 +448,7 @@ export function buildVoiceWebSearchDocs({ includeBrowserBrowse = false }: { incl
   ];
 }
 
-export function buildVoiceBrowserDocs(): string[] {
+function buildVoiceBrowserDocs(): string[] {
   return [BROWSER_BROWSE_POLICY_LINE];
 }
 

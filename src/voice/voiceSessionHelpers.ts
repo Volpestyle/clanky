@@ -66,7 +66,7 @@ export function resolveVoiceSettingsSnapshot<TSettings>(
   return settings || session?.settingsSnapshot || store.getSettings();
 }
 
-export interface AsrTranscriptGuardResult {
+interface AsrTranscriptGuardResult {
   transcript: string;
   malformed: boolean;
   controlTokenCount: number;

@@ -1,9 +1,7 @@
 const VOICE_PROVIDERS = ["openai", "xai", "gemini", "elevenlabs"] as const;
-const BRAIN_PROVIDERS = ["native", "openai", "anthropic", "xai", "gemini"] as const;
 const TRANSCRIBER_PROVIDERS = ["openai", "elevenlabs"] as const;
 
 type VoiceProvider = (typeof VOICE_PROVIDERS)[number];
-type BrainProvider = (typeof BRAIN_PROVIDERS)[number];
 type TranscriberProvider = (typeof TRANSCRIBER_PROVIDERS)[number];
 
 export function normalizeVoiceProvider(value: unknown, fallback: VoiceProvider = "openai"): VoiceProvider {
@@ -12,21 +10,6 @@ export function normalizeVoiceProvider(value: unknown, fallback: VoiceProvider =
     .toLowerCase();
   if (VOICE_PROVIDERS.includes(normalized as VoiceProvider)) {
     return normalized as VoiceProvider;
-  }
-  return fallback;
-}
-
-export function normalizeBrainProvider(
-  value: unknown,
-  voiceProvider: unknown,
-  fallback: BrainProvider = "openai"
-): BrainProvider {
-  const normalizedInput = String(value || fallback || "")
-    .trim()
-    .toLowerCase();
-  const normalized = normalizedInput === "native" ? "openai" : normalizedInput;
-  if (BRAIN_PROVIDERS.includes(normalized as BrainProvider)) {
-    return normalized as BrainProvider;
   }
   return fallback;
 }

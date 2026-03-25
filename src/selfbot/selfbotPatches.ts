@@ -232,7 +232,7 @@ function buildSyntheticReadyApplication(data: Record<string, unknown>): Record<s
  *   OP20 STREAM_WATCH
  *   OP22 STREAM_SET_PAUSED
  */
-export type GatewayRawDispatchPacket = {
+type GatewayRawDispatchPacket = {
   t?: string;
   d?: Record<string, unknown> | null;
 };

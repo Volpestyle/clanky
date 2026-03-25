@@ -301,20 +301,6 @@ export function formatEmojiChoices(emojiOptions) {
   return emojiOptions.map((emoji) => `- ${emoji}`).join("\n");
 }
 
-export function formatDiscoveryFindings(findings) {
-  if (!findings?.length) return "(no fresh links found)";
-
-  return findings
-    .map((item) => {
-      const source = item.sourceLabel || item.source || "web";
-      const title = String(item.title || "untitled").trim();
-      const url = String(item.url || "").trim();
-      const excerpt = String(item.excerpt || "").trim();
-      const excerptLine = excerpt ? ` | ${excerpt}` : "";
-      return `- [${source}] ${title} -> ${url}${excerptLine}`;
-    })
-    .join("\n");
-}
 
 export function formatWebSearchFindings(webSearch) {
   if (!webSearch?.results?.length) return "(no web results available)";
@@ -476,35 +462,6 @@ export function formatInitiativeInterestFacts(facts) {
     .join("\n");
 }
 
-export function formatVideoFindings(videoContext) {
-  if (!videoContext?.videos?.length) return "(no video context available)";
-
-  return videoContext.videos
-    .map((item, index) => {
-      const sourceId = `V${index + 1}`;
-      const provider = String(item.provider || item.kind || "video").trim();
-      const title = String(item.title || "untitled video").trim();
-      const channel = String(item.channel || "unknown channel").trim();
-      const url = String(item.url || "").trim();
-      const description = String(item.description || "").trim();
-      const transcript = String(item.transcript || "").trim();
-      const transcriptSource = String(item.transcriptSource || "").trim();
-      const keyframeCount = Number(item.keyframeCount);
-      const publishedAt = String(item.publishedAt || "").trim();
-      const durationSeconds = Number(item.durationSeconds);
-      const durationLabel = Number.isFinite(durationSeconds) && durationSeconds > 0
-        ? ` | duration: ${durationSeconds}s`
-        : "";
-      const publishedLabel = publishedAt ? ` | published: ${publishedAt}` : "";
-      const summaryLabel = description ? ` | summary: ${description}` : "";
-      const transcriptSourceLabel = transcriptSource ? ` | transcript_source: ${transcriptSource}` : "";
-      const transcriptLabel = transcript ? ` | transcript: ${transcript}` : "";
-      const keyframeLabel = Number.isFinite(keyframeCount) && keyframeCount > 0 ? ` | keyframes: ${keyframeCount}` : "";
-      return `- [${sourceId}] (${provider}) ${title} by ${channel} -> ${url}${durationLabel}${publishedLabel}${summaryLabel}${transcriptSourceLabel}${transcriptLabel}${keyframeLabel}`;
-    })
-    .join("\n");
-}
-
 function renderPromptMemoryFact(row, { includeType = true, includeProvenance = true } = {}) {
   const fact = String(row?.fact || "").replace(/\s+/g, " ").trim();
   if (!fact) return "";
@@ -557,5 +514,3 @@ export function formatImageLookupCandidates(candidates) {
     })
     .join("\n");
 }
-
-

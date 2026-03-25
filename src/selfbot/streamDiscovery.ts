@@ -49,7 +49,7 @@ export interface StreamDiscoveryState {
 }
 
 /** Callbacks fired when stream state changes. */
-export interface StreamDiscoveryCallbacks {
+interface StreamDiscoveryCallbacks {
   /** Fired when VOICE_STATE_UPDATE self_stream=true is detected (early Go Live signal). */
   onGoLiveDetected?: (info: { userId: string; guildId: string; channelId: string }) => void;
   /** Fired when VOICE_STATE_UPDATE self_stream=false is detected before stream deletion arrives. */
@@ -229,7 +229,7 @@ type GoLiveSessionLike = {
   } | null;
 } | null | undefined;
 
-export function ensureGoLiveStreamsMap(session: GoLiveSessionLike): VoiceSessionGoLiveStreamMap {
+function ensureGoLiveStreamsMap(session: GoLiveSessionLike): VoiceSessionGoLiveStreamMap {
   if (!session) return new Map();
   if (!(session.goLiveStreams instanceof Map)) {
     session.goLiveStreams = new Map();
@@ -237,7 +237,7 @@ export function ensureGoLiveStreamsMap(session: GoLiveSessionLike): VoiceSession
   return session.goLiveStreams;
 }
 
-export function listSessionGoLiveStreams(session: GoLiveSessionLike): VoiceSessionGoLiveStreamState[] {
+function listSessionGoLiveStreams(session: GoLiveSessionLike): VoiceSessionGoLiveStreamState[] {
   if (!session) return [];
   if (session.goLiveStreams instanceof Map) {
     return [...session.goLiveStreams.values()];
@@ -554,7 +554,7 @@ function handleStreamDelete(
  * is online, we seed the same provisional state that handleVoiceStateUpdate
  * would have created, so the agent can later decide to watch.
  */
-export function handleGuildCreate(
+function handleGuildCreate(
   _state: StreamDiscoveryState,
   data: GuildCreateDispatch,
   callbacks: StreamDiscoveryCallbacks

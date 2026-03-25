@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import type { BrowserManager } from "./BrowserManager.ts";
 
-export type BrowserSessionVideoFrameReason = "initial" | "activity" | "poll" | "heartbeat";
+type BrowserSessionVideoFrameReason = "initial" | "activity" | "poll" | "heartbeat";
 
-export type BrowserSessionVideoFrame = {
+type BrowserSessionVideoFrame = {
   sessionKey: string;
   sequence: number;
   capturedAt: number;

@@ -42,9 +42,6 @@ function isLocalDashboardHost(value: string) {
   );
 }
 
-export { STREAM_INGEST_API_PATH } from "./dashboard/shared.ts";
-export type { DashboardApp, DashboardServerHandle, DashboardSseClient } from "./dashboard/shared.ts";
-
 export interface DashboardAppConfig {
   dashboardPort: number;
   dashboardHost: string;

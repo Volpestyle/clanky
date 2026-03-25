@@ -42,7 +42,7 @@ const DEFAULT_MEDIA_PROMPT_CRAFT_GUIDANCE = [
   "For video prompts, describe the motion arc: what starts, what changes, and how it ends.",
   "Never put text, words, or UI elements in media prompts."
 ].join(" ");
-export function interpolatePromptTemplate(template, variables = {}) {
+function interpolatePromptTemplate(template, variables = {}) {
   const input = String(template || "");
   if (!input) return "";
   const normalizedVariables = normalizeTemplateVariables(variables);

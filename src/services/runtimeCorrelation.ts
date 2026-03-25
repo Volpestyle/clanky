@@ -6,7 +6,7 @@ function firstNonEmptyEnvValue(...keys: string[]) {
   return null;
 }
 
-export function resolveDeploymentIdentity() {
+function resolveDeploymentIdentity() {
   return firstNonEmptyEnvValue(
     "CLANKER_DEPLOYMENT_ID",
     "RUNTIME_DEPLOYMENT_ID",

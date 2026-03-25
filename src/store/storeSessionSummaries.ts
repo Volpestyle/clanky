@@ -9,7 +9,7 @@ interface SessionSummaryStore {
   };
 }
 
-export interface SessionSummaryRow {
+interface SessionSummaryRow {
   session_id: string;
   created_at: string;
   updated_at: string;

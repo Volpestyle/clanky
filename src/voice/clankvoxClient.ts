@@ -22,13 +22,13 @@ type VoiceStateUpdatePayload = JsonRecord & {
   channel_id?: string | null;
   user_id?: string | null;
 };
-export type ClankvoxTransportRole = "voice" | "stream_watch" | "stream_publish";
-export type ClankvoxTransportState = {
+type ClankvoxTransportRole = "voice" | "stream_watch" | "stream_publish";
+type ClankvoxTransportState = {
   role: ClankvoxTransportRole;
   status: string;
   reason: string | null;
 };
-export type ClankvoxVideoResolution = {
+type ClankvoxVideoResolution = {
   width: number | null;
   height: number | null;
   type: string | null;
@@ -62,7 +62,7 @@ export type ClankvoxUserVideoFrame = {
   rid: string | null;
   daveDecrypted: boolean;
 };
-export type ClankvoxDecodedVideoFrame = {
+type ClankvoxDecodedVideoFrame = {
   userId: string;
   ssrc: number;
   width: number;
@@ -78,7 +78,7 @@ export type ClankvoxDecodedVideoFrame = {
   /** True when instantaneous diff indicates a hard scene cut. */
   isSceneCut: boolean;
 };
-export type ClankvoxUserVideoEnd = {
+type ClankvoxUserVideoEnd = {
   userId: string;
   ssrc: number | null;
 };

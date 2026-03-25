@@ -19,7 +19,7 @@ interface PersonaPreset {
   fields: Record<string, unknown>;
 }
 
-export const PERSONA_PRESETS: PersonaPreset[] = [
+const PERSONA_PRESETS: PersonaPreset[] = [
   {
     value: "crush",
     label: "Crush (Chill)",
@@ -55,7 +55,7 @@ export const PERSONA_PRESETS: PersonaPreset[] = [
   }
 ];
 
-export function matchPersonaPreset(presets: PersonaPreset[], form: Record<string, unknown>): string {
+function matchPersonaPreset(presets: PersonaPreset[], form: Record<string, unknown>): string {
   for (const preset of presets) {
     const match = Object.entries(preset.fields).every(
       ([key, val]) => String(form[key] || "").trim() === String(val).trim()

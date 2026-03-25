@@ -24,7 +24,7 @@ import {
   isResearchEnabled
 } from "../settings/agentStack.ts";
 
-export type LocalToolSurface = "reply" | "voice_realtime";
+type LocalToolSurface = "reply" | "voice_realtime";
 
 export type ReplyToolAvailability = {
   webSearchAvailable?: boolean;
@@ -41,7 +41,7 @@ export type ReplyToolAvailability = {
   voiceToolsAvailable?: boolean;
 };
 
-export type VoiceRealtimeLocalToolAvailability = {
+type VoiceRealtimeLocalToolAvailability = {
   browserAvailable: boolean;
   codeAgentAvailable: boolean;
   memoryAvailable: boolean;

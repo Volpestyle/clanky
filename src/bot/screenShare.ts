@@ -13,14 +13,14 @@ const SCREEN_WATCH_INTENT_THRESHOLD = 0.66;
 const SCREEN_WATCH_EXPLICIT_REQUEST_RE =
   /\b(?:screen\s*share|share\s*(?:my|the)?\s*screen|watch\s*(?:my|the)?\s*screen|see\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*stream|watch\s*(?:my|the)?\s*stream)\b/i;
 
-export type ScreenWatchLinkCapability = {
+type ScreenWatchLinkCapability = {
   enabled?: boolean;
   status?: string;
   publicUrl?: string;
   reason?: string | null;
 };
 
-export type ScreenWatchLinkSessionResult = {
+type ScreenWatchLinkSessionResult = {
   ok: boolean;
   reason?: string;
   shareUrl?: string;

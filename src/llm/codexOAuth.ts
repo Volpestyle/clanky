@@ -547,7 +547,7 @@ async function collectCompletedResponseFromSse(stream: ReadableStream<Uint8Array
   );
 }
 
-export type CodexOAuthFetchOptions = {
+type CodexOAuthFetchOptions = {
   getTokens: () => CodexOAuthTokens;
   setTokens: (tokens: CodexOAuthTokens) => void;
   fetchImpl?: typeof fetch;

@@ -37,8 +37,6 @@ const REPLY_MEDIA_TYPES = new Set(["image_simple", "image_complex", "video", "gi
 const REPLY_AUTOMATION_OPERATION_TYPES = new Set(["create", "pause", "resume", "delete", "list", "none"]);
 const REPLY_SCREEN_SHARE_ACTION_TYPES = new Set(["start_watch", "none"]);
 const MAX_SCREEN_SHARE_REASON_LEN = 180;
-export const MAX_VIDEO_TARGET_SCAN = 8;
-export const MAX_VIDEO_FALLBACK_MESSAGES = 18;
 const MENTION_CANDIDATE_RE = /(?<![\w<])@([a-z0-9][a-z0-9 ._'-]{0,63})/gi;
 export const MAX_MENTION_CANDIDATES = 8;
 const MAX_MENTION_LOOKUP_VARIANTS = 8;
@@ -330,50 +328,6 @@ export function collectMemberLookupKeys(member) {
   }
 
   return keys;
-}
-
-export function looksLikeVideoFollowupMessage(rawText) {
-  const text = String(rawText || "").trim();
-  if (!text) return false;
-  if (extractUrlsFromText(text).length) return false;
-
-  const hasVideoTopic = /\b(?:video|clip|youtube|yt|tiktok|tt|reel|short)\b/i.test(text);
-  if (!hasVideoTopic) return false;
-
-  return /\b(?:watch|watched|watching|see|seen|view|check|open|play)\b/i.test(text);
-}
-
-export function extractRecentVideoTargets({
-  videoService,
-  recentMessages,
-  maxMessages = MAX_VIDEO_FALLBACK_MESSAGES,
-  maxTargets = MAX_VIDEO_TARGET_SCAN
-}) {
-  if (!videoService || !Array.isArray(recentMessages) || !recentMessages.length) return [];
-
-  const normalizedMaxMessages = clamp(Number(maxMessages) || MAX_VIDEO_FALLBACK_MESSAGES, 1, 120);
-  const normalizedMaxTargets = clamp(Number(maxTargets) || MAX_VIDEO_TARGET_SCAN, 1, 8);
-  const targets = [];
-  const seenKeys = new Set();
-
-  for (const row of recentMessages.slice(0, normalizedMaxMessages)) {
-    if (targets.length >= normalizedMaxTargets) break;
-    if (Number(row?.is_bot || 0) === 1) continue;
-
-    const content = String(row?.content || "");
-    if (!content) continue;
-
-    const rowTargets = videoService.extractVideoTargets(content, normalizedMaxTargets);
-    for (const target of rowTargets) {
-      if (targets.length >= normalizedMaxTargets) break;
-      const key = String(target?.key || "").trim();
-      if (!key || seenKeys.has(key)) continue;
-      seenKeys.add(key);
-      targets.push(target);
-    }
-  }
-
-  return targets;
 }
 
 function normalizeMediaPromptContext(rawText) {
@@ -863,7 +817,7 @@ export function normalizeDirectiveText(text, maxLen) {
   return normalizeWhitespaceText(text, { maxLen });
 }
 
-export function normalizeDirectiveMessageText(text, maxLen) {
+function normalizeDirectiveMessageText(text, maxLen) {
   let normalized = String(text || "").replace(/\r\n?/g, "\n");
   normalized = normalized
     .split("\n")

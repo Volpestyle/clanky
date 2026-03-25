@@ -28,7 +28,7 @@ export function voiceOutputLeaseModesMatch(leftMode: unknown, rightMode: unknown
   return normalizeVoiceOutputLeaseMode(leftMode) === normalizeVoiceOutputLeaseMode(rightMode);
 }
 
-export function getVoiceOutputLeaseDurationMs(rawMode: unknown) {
+function getVoiceOutputLeaseDurationMs(rawMode: unknown) {
   switch (normalizeVoiceOutputLeaseMode(rawMode)) {
     case "atomic":
       return VOICE_OUTPUT_LEASE_ATOMIC_MS;
@@ -74,7 +74,7 @@ export function createVoiceOutputLease({
   };
 }
 
-export function clearExpiredVoiceOutputLease(
+function clearExpiredVoiceOutputLease(
   session: VoiceSession | null | undefined,
   now = Date.now()
 ) {

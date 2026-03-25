@@ -3,8 +3,6 @@ import type {
   LatencyTurnEntry,
   PromptLogBundle,
   PromptSnapshot,
-  SessionLatency,
-  VoiceMembershipEvent,
   VoiceSession
 } from "../../hooks/useVoiceSSE";
 import {
@@ -367,5 +365,3 @@ export function resolveVoiceJoinStatusMessage(result: VoiceJoinResponse): {
     text: "Voice join failed."
   };
 }
-
-export type { SessionLatency, VoiceMembershipEvent };

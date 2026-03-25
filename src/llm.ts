@@ -85,10 +85,6 @@ import {
 import type { CodexCliStreamSessionLike } from "./llm/llmCodexCli.ts";
 
 export {
-  buildOpenAiJsonSchemaTextFormat,
-  buildOpenAiReasoningParam,
-  buildOpenAiTemperatureParam,
-  XAI_REQUEST_TIMEOUT_MS,
   type ToolLoopContentBlock,
   type ToolLoopMessage
 } from "./llm/serviceShared.ts";
@@ -874,24 +870,9 @@ export class LLMService {
 }
 
 export {
-  isClaudeOAuthConfigured,
-  createClaudeOAuthClient,
-  buildAuthorizeUrl as buildClaudeOAuthAuthorizeUrl,
-  exchangeCodeForTokens as exchangeClaudeOAuthCode
-} from "./llm/claudeOAuth.ts";
-
-export {
-  isCodexOAuthConfigured,
-  createCodexOAuthClient,
-  buildAuthorizeUrl as buildCodexOAuthAuthorizeUrl,
-  exchangeCodeForTokens as exchangeCodexOAuthCode
-} from "./llm/codexOAuth.ts";
-
-export {
   buildCodexCliBrainArgs,
   buildCodexCliCodeAgentArgs,
   buildCodexCliResumeArgs,
-  buildCodexCliTextArgs,
   createCodexCliStreamSession,
   parseCodexCliJsonlOutput
 } from "./llm/llmCodexCli.ts";

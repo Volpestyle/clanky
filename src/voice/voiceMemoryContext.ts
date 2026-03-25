@@ -65,7 +65,7 @@ type RankBehavioralFactsFn = (payload: {
   limit: number;
 }) => Promise<MemoryFactRow[]> | MemoryFactRow[];
 
-export interface VoiceMemoryContextHost {
+interface VoiceMemoryContextHost {
   searchConversationWindows?: SearchConversationWindowsFn;
   loadRecentConversationHistory?: LoadRecentConversationHistoryFn | null;
   getSessionFactProfileSlice?: (payload: {
@@ -84,7 +84,7 @@ export interface VoiceMemoryContextHost {
   rankBehavioralFacts?: RankBehavioralFactsFn | null;
 }
 
-export interface LoadedVoiceMemoryContext {
+interface LoadedVoiceMemoryContext {
   memorySlice: RealtimeInstructionMemorySlice;
   usedCachedBehavioralFacts: boolean;
   continuityLoadMs: number;

@@ -26,7 +26,9 @@ import {
   resolveWarmMemory,
   updateTopicFingerprint,
   captureWarmSnapshot,
-  invalidateWarmSnapshot
+  invalidateWarmSnapshot,
+  type DriftVerdict,
+  type IngestEmbeddingEntry
 } from "../voice/voiceSessionWarmMemory.ts";
 import {
   getActivitySettings,
@@ -850,7 +852,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   // in-flight since transcript capture).  Use it for topic-drift detection
   // to decide whether full retrieval is needed.
   let turnEmbedding: { embedding: number[]; model: string } | null = null;
-  let warmMemoryVerdict: import("../voice/voiceSessionWarmMemory.ts").DriftVerdict = "cold";
+  let warmMemoryVerdict: DriftVerdict = "cold";
   let warmMemorySimilarity = 0;
   let warmMemoryReason = "no_session";
   let usedWarmMemory = false;
@@ -859,7 +861,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     const wm = activeVoiceSession.warmMemory;
     // Resolve the pending ingest embedding — keyed by transcript to prevent
     // cross-turn contamination when multiple transcripts land quickly.
-    let ingestEntry: import("../voice/voiceSessionWarmMemory.ts").IngestEmbeddingEntry | null = null;
+    let ingestEntry: IngestEmbeddingEntry | null = null;
     if (wm.pendingIngestEmbedding) {
       try {
         ingestEntry = await wm.pendingIngestEmbedding;

@@ -67,7 +67,7 @@ export function isDashboardSettingsEnvelope(value: unknown): value is DashboardS
     isRecord(value.bindings);
 }
 
-export function resolveSettingsBindings(
+function resolveSettingsBindings(
   settings: unknown,
   providerAuth: DashboardProviderAuthBindings = {}
 ): ResolvedBindings {

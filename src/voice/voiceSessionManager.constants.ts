@@ -72,22 +72,12 @@ export const VOICE_INTERRUPT_DECISION_TTL_MS = 30_000;
 export const VOICE_INTERRUPT_SPEECH_START_SUSTAIN_MS = 700;
 export const VOICE_INTERRUPT_SPEECH_START_RECHECK_MS = 200;
 export const VOICE_GENERATION_SOUNDBOARD_CANDIDATE_TIMEOUT_MS = 1_200;
-export const VOICE_GENERATION_CONTINUITY_TIMEOUT_MS = 2_400;
-export const VOICE_GENERATION_BEHAVIORAL_TIMEOUT_MS = 1_800;
 export const VOICE_GENERATION_ONLY_WATCHDOG_MS = 20_000;
 export const CONTEXT_COMPACTION_RECENT_WINDOW = 50;
 export const CONTEXT_COMPACTION_BATCH_SIZE = 10;
 export const CONTEXT_COMPACTION_MAX_SUMMARY_CHARS = 1_200;
 export const CONTEXT_COMPACTION_MAX_NOTE_CHARS = 400;
 export const CONTEXT_COMPACTION_MAX_OUTPUT_TOKENS = 256;
-// Promotion fallback when server VAD has not confirmed speech yet. Thresholds
-// are set low enough to capture whispered speech (observed peak ~0.02–0.05,
-// rms ~0.002–0.005) while staying above the near-silence abort floor (peak
-// 0.011) and silence gate (peak 0.012, rms 0.003). Downstream logprob
-// confidence gating catches any noise that slips through.
-export const VOICE_TURN_PROMOTION_STRONG_LOCAL_RMS_MIN = 0.0015;
-export const VOICE_TURN_PROMOTION_STRONG_LOCAL_PEAK_MIN = 0.018;
-export const VOICE_TURN_PROMOTION_STRONG_LOCAL_ACTIVE_RATIO_MIN = 0.025;
 export const OPENAI_TOOL_CALL_EVENT_MAX = 180;
 export const OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS = 24_000;
 export const OPENAI_TOOL_RESPONSE_DEBOUNCE_MS = 140;
@@ -171,12 +161,5 @@ export const SOUNDBOARD_CATALOG_REFRESH_MS = 60_000;
 // OpenAI logprobs are log-base-e: -1.0 ≈ 37% per-token confidence.
 // Hallucinations on noise/breathing typically score well below -2.0.
 export const VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD = -1.0;
-// Sparse transcript hallucination filter. ASR models hallucinate short
-// phrases ("Hello", "You played.") on whispered or ambiguous audio.
-// Real speech at even a slow whisper pace produces ≥5 chars/sec; common
-// hallucinations score 2–4 chars/sec. Only applied to clips above the
-// minimum duration so legitimate short utterances are not penalized.
-export const VOICE_ASR_SPARSE_TRANSCRIPT_MIN_CLIP_MS = 2000;
-export const VOICE_ASR_SPARSE_TRANSCRIPT_MIN_CHARS_PER_SEC = 4.0;
 export const MEMORY_SENSITIVE_PATTERN_RE =
   /\b(?:sk-[a-z0-9]{20,}|api[_-]?key|token|password|passphrase|authorization|secret)\b/i;

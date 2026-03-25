@@ -1,10 +1,10 @@
 const XAI_DEFAULT_BASE_URL = "https://api.x.ai/v1";
 const XAI_VIDEO_DONE_STATUSES = new Set(["done", "completed", "succeeded", "success", "ready"]);
-import { clamp01, clampInt, clampNumber } from "../normalization/numbers.ts";
+import { clampInt, clampNumber } from "../normalization/numbers.ts";
 import { extractJsonObjectFromText } from "../normalization/jsonExtraction.ts";
 import { normalizeBoundedStringList } from "../settings/listNormalization.ts";
 import { normalizeWhitespaceText } from "../normalization/text.ts";
-export { clamp01, clampInt, clampNumber };
+export { clampInt, clampNumber };
 
 export function extractOpenAiResponseText(response) {
   const direct = String(response?.output_text || "").trim();

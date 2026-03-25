@@ -22,7 +22,7 @@ export const STREAM_WATCH_VISUALIZER_MODES = [
 
 type VoiceRuntimeSelection = (typeof VOICE_RUNTIME_SELECTIONS)[number];
 export type StreamWatchVisualizerMode = (typeof STREAM_WATCH_VISUALIZER_MODES)[number];
-export type VoiceRuntimeProvider = VoiceRuntimeSelection;
+type VoiceRuntimeProvider = VoiceRuntimeSelection;
 const VOICE_RUNTIME_SELECTION_SET = new Set<string>(VOICE_RUNTIME_SELECTIONS);
 
 function normalizeVoiceRuntimeSelection(

@@ -1628,7 +1628,5 @@ async function executeVoiceTool(
   }
 }
 export type {
-  ReplyToolDefinition,
-  ReplyToolCallInput,
-  ReplyToolResult
+  ReplyToolDefinition
 };

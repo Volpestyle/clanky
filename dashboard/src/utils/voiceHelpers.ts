@@ -1,6 +1,6 @@
 import type { VoiceSession } from "../hooks/useVoiceSSE";
 
-export type DashboardVoiceBotState = "processing" | "speaking" | "listening" | "idle" | "disconnected";
+type DashboardVoiceBotState = "processing" | "speaking" | "listening" | "idle" | "disconnected";
 
 export function deriveBotState(session: VoiceSession): DashboardVoiceBotState {
   const pendingTurns = (session.batchAsr?.pendingTurns || 0) + (session.realtime?.pendingTurns || 0);

@@ -297,7 +297,7 @@ const SHARED_TOOL_SCHEMAS: SharedToolSchema[] = [
 
 // ── Voice-only tool schemas ─────────────────────────────────────────
 
-export const MUSIC_SEARCH_SCHEMA: SharedToolSchema = {
+const MUSIC_SEARCH_SCHEMA: SharedToolSchema = {
   name: "music_search",
   description: "Search track candidates without starting playback. Prefer this for explicit browsing or when the user asks for options; ordinary play/queue requests can resolve directly from query.",
   strict: true,
@@ -316,7 +316,7 @@ export const MUSIC_SEARCH_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const VIDEO_SEARCH_SCHEMA: SharedToolSchema = {
+const VIDEO_SEARCH_SCHEMA: SharedToolSchema = {
   name: "video_search",
   description: "Search YouTube video candidates without starting playback. Prefer this when the user wants options; use browser_browse when thumbnails or page layout matter.",
   strict: true,
@@ -335,7 +335,7 @@ export const VIDEO_SEARCH_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const MUSIC_QUEUE_ADD_SCHEMA: SharedToolSchema = {
+const MUSIC_QUEUE_ADD_SCHEMA: SharedToolSchema = {
   name: "music_queue_add",
   description: "Append one or more tracks to the queue. You may pass direct query text, a prior selection_id, or exact track IDs from music_search/music_play.",
   voiceContinuationPolicy: "always",
@@ -372,7 +372,7 @@ export const MUSIC_QUEUE_ADD_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const MUSIC_PLAY_SCHEMA: SharedToolSchema = {
+const MUSIC_PLAY_SCHEMA: SharedToolSchema = {
   name: "music_play",
   description: "Start playback from a query or prior selection_id. May return clarification choices when the request is ambiguous.",
   strict: true,
@@ -398,7 +398,7 @@ export const MUSIC_PLAY_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const VIDEO_PLAY_SCHEMA: SharedToolSchema = {
+const VIDEO_PLAY_SCHEMA: SharedToolSchema = {
   name: "video_play",
   description: "Start YouTube video playback from a query or prior selection_id. May return clarification choices when the request is ambiguous.",
   strict: true,
@@ -420,7 +420,7 @@ export const VIDEO_PLAY_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const MUSIC_QUEUE_NEXT_SCHEMA: SharedToolSchema = {
+const MUSIC_QUEUE_NEXT_SCHEMA: SharedToolSchema = {
   name: "music_queue_next",
   description: "Insert one or more tracks immediately after the current track. You may pass direct query text, a prior selection_id, or exact track IDs from music_search/music_play.",
   voiceContinuationPolicy: "always",
@@ -453,7 +453,7 @@ export const MUSIC_QUEUE_NEXT_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const MUSIC_STOP_SCHEMA: SharedToolSchema = {
+const MUSIC_STOP_SCHEMA: SharedToolSchema = {
   name: "media_stop",
   description: "Stop the current playback item and clear the active queue. Applies to the shared music/video playback stack.",
   voiceContinuationPolicy: "fire_and_forget",
@@ -464,7 +464,7 @@ export const MUSIC_STOP_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const MUSIC_PAUSE_SCHEMA: SharedToolSchema = {
+const MUSIC_PAUSE_SCHEMA: SharedToolSchema = {
   name: "media_pause",
   description: "Pause the current playback item. Applies to the shared music/video playback stack.",
   voiceContinuationPolicy: "fire_and_forget",
@@ -475,7 +475,7 @@ export const MUSIC_PAUSE_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const MUSIC_RESUME_SCHEMA: SharedToolSchema = {
+const MUSIC_RESUME_SCHEMA: SharedToolSchema = {
   name: "media_resume",
   description: "Resume paused playback. Applies to the shared music/video playback stack.",
   voiceContinuationPolicy: "fire_and_forget",
@@ -486,7 +486,7 @@ export const MUSIC_RESUME_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const MUSIC_REPLY_HANDOFF_SCHEMA: SharedToolSchema = {
+const MUSIC_REPLY_HANDOFF_SCHEMA: SharedToolSchema = {
   name: "media_reply_handoff",
   description: "Temporarily claim the floor for the current spoken reply by pausing or ducking active playback. Runtime auto-restores playback when you finish. This is not a persistent playback command.",
   voiceContinuationPolicy: "always",
@@ -504,7 +504,7 @@ export const MUSIC_REPLY_HANDOFF_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const MUSIC_SKIP_SCHEMA: SharedToolSchema = {
+const MUSIC_SKIP_SCHEMA: SharedToolSchema = {
   name: "media_skip",
   description: "Skip the current playback item and advance to the next queued item.",
   voiceContinuationPolicy: "fire_and_forget",
@@ -515,7 +515,7 @@ export const MUSIC_SKIP_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const MUSIC_NOW_PLAYING_SCHEMA: SharedToolSchema = {
+const MUSIC_NOW_PLAYING_SCHEMA: SharedToolSchema = {
   name: "media_now_playing",
   description: "Read current playback and queue status.",
   voiceContinuationPolicy: "always",
@@ -533,7 +533,7 @@ const JOIN_VOICE_CHANNEL_SCHEMA: SharedToolSchema = {
   parameters: { type: "object", properties: {}, required: [], additionalProperties: false }
 };
 
-export const LEAVE_VOICE_CHANNEL_SCHEMA: SharedToolSchema = {
+const LEAVE_VOICE_CHANNEL_SCHEMA: SharedToolSchema = {
   name: "leave_voice_channel",
   description: "Leave the voice channel and end the current voice session.",
   voiceContinuationPolicy: "fire_and_forget",
@@ -586,7 +586,7 @@ export const SHARE_BROWSER_SESSION_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const STREAM_VISUALIZER_SCHEMA: SharedToolSchema = {
+const STREAM_VISUALIZER_SCHEMA: SharedToolSchema = {
   name: "stream_visualizer",
   description: "Start Discord Go Live with an audio visualizer for currently playing music.",
   voiceContinuationPolicy: "fire_and_forget",

@@ -31,12 +31,6 @@ export const MODEL_PROVIDER_KINDS = [
   "codex-cli"
 ] as const;
 
-export const OPENAI_COMPUTER_USE_CLIENT_KINDS = [
-  "auto",
-  "openai",
-  "openai-oauth"
-] as const;
-
 export const CODING_WORKER_RUNTIME_KINDS = [
   "claude_code",
   "codex",

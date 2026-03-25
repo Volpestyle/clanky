@@ -61,7 +61,7 @@ const EN_MEMORY_SECRET_RE = /(?:api key|token|password|credential|secret)/;
 const EN_MEMORY_STYLE_GUIDANCE_RE =
   /\b(?:use|keep|be|stay|avoid|prefer)\b[\s\S]{0,80}\b(?:tone|style|voice|responses?|replies?|brief|concise|casual|formal|playful|direct)\b/i;
 
-export type NormalizedReflectionFact = {
+type NormalizedReflectionFact = {
   subject: string;
   subjectName: string;
   fact: string;

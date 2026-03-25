@@ -21,7 +21,7 @@ export function clearMusicWakeLatch(session: MusicWakeLatchSessionLike) {
   session.musicWakeLatchedByUserId = null;
 }
 
-export function getMusicWakeLatchState(
+function getMusicWakeLatchState(
   session: MusicWakeLatchSessionLike,
   now = Date.now()
 ) {

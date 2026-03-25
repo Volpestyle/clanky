@@ -12,7 +12,7 @@ import {
 
 const STREAM_WATCH_AUDIO_QUIET_WINDOW_MS = 2200;
 
-export type StreamWatchCommentaryTriggerReason = "share_start" | "change_detected" | "interval";
+type StreamWatchCommentaryTriggerReason = "share_start" | "change_detected" | "interval";
 
 const STREAM_WATCH_COMMENTARY_TRIGGER_PRIORITY: Record<StreamWatchCommentaryTriggerReason, number> = {
   share_start: 3,
