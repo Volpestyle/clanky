@@ -1,6 +1,6 @@
-import { parseStructuredReplyOutput } from "../../../src/botHelpers.ts";
+import { parseStructuredReplyOutput } from "../../../src/bot/botHelpers.ts";
 import { shouldAttemptReplyDecision } from "../../../src/bot/replyAdmission.ts";
-import { buildReplyPrompt, buildSystemPrompt } from "../../../src/prompts.ts";
+import { buildReplyPrompt, buildSystemPrompt } from "../../../src/prompts/index.ts";
 import { isBotNameAddressed } from "../../../src/voice/voiceSessionHelpers.ts";
 import {
   parseMetadataObject,
@@ -8,6 +8,7 @@ import {
 } from "../core/db.ts";
 import { runReplayEngine } from "../core/engine.ts";
 import { printTurnSnapshots, writeJsonReport } from "../core/output.ts";
+import type { LLMService } from "../../../src/llm.ts";
 import type {
   ActionRow,
   ChannelMode,
@@ -87,6 +88,8 @@ type FloodingScenarioState = {
   decisionByTrigger: Map<string, ActionRow>;
   voiceIntentByMessage: Map<string, ActionRow>;
 };
+
+type ReplayLlmService = LLMService;
 
 const DEFAULT_ARGS: FloodingReplayArgs = {
   mode: "recorded",
@@ -301,19 +304,7 @@ async function runLiveActorDecision({
   ambientReplyEagerness,
   reactivity
 }: {
-  llm: {
-    generate: (input: {
-      settings: Record<string, unknown>;
-      systemPrompt: string;
-      userPrompt: string;
-      trace: Record<string, unknown>;
-    }) => Promise<{
-      text: string;
-      provider: string;
-      model: string;
-      costUsd: number;
-    }>;
-  };
+  llm: ReplayLlmService;
   settings: Record<string, unknown>;
   botUserId: string;
   message: {
@@ -332,7 +323,7 @@ async function runLiveActorDecision({
   reactivity: number;
 }): Promise<ReplayDecision> {
   const systemPrompt = buildSystemPrompt(settings);
-  const userPrompt = buildReplyPrompt({
+  const replyPromptInput: Record<string, unknown> = {
     message: {
       authorName: String(message.author_name || "unknown"),
       content: String(message.content || "")
@@ -425,7 +416,9 @@ async function runLiveActorDecision({
       )?.initiative?.maxMediaPromptChars || 900
     ),
     mediaPromptCraftGuidance: ""
-  });
+  };
+  // eslint-disable-next-line no-restricted-syntax -- replay harness passes the full runtime payload shape to prompt builder.
+  const userPrompt = buildReplyPrompt(replyPromptInput as unknown as Parameters<typeof buildReplyPrompt>[0]);
 
   const generation = await llm.generate({
     settings,
@@ -450,9 +443,15 @@ async function runLiveActorDecision({
       )?.initiative?.maxMediaPromptChars || 900
     )
   );
+  const parsedVoiceIntent = (parsed as {
+    voiceIntent?: {
+      intent?: string;
+      confidence?: number;
+    };
+  }).voiceIntent;
   const text = String(parsed.text || "").trim();
-  const voiceIntent = String(parsed.voiceIntent?.intent || "").trim();
-  const voiceIntentConfidence = stableNumber(parsed.voiceIntent?.confidence, 0);
+  const voiceIntent = String(parsedVoiceIntent?.intent || "").trim();
+  const voiceIntentConfidence = stableNumber(parsedVoiceIntent?.confidence, 0);
   const voiceIntentThreshold = clamp(
     stableNumber(
       (settings as { voice?: { intentConfidenceThreshold?: number } })?.voice
@@ -514,14 +513,7 @@ async function runJudge({
   windowStart,
   windowEnd
 }: {
-  llm: {
-    generate: (input: {
-      settings: Record<string, unknown>;
-      systemPrompt: string;
-      userPrompt: string;
-      trace: Record<string, unknown>;
-    }) => Promise<{ text: string }>;
-  };
+  llm: ReplayLlmService;
   settings: Record<string, unknown>;
   mode: "recorded" | "live";
   windowTimeline: ReplayEvent[];
@@ -557,7 +549,15 @@ async function runJudge({
   ].join("\n\n");
 
   return await runJsonJudge<JudgeResult>({
-    llm,
+    llm: {
+      generate: async (input) => llm.generate({
+        settings: input.settings,
+        systemPrompt: input.systemPrompt,
+        userPrompt: input.userPrompt,
+        trace: input.trace,
+        jsonSchema: input.jsonSchema
+      })
+    },
     settings,
     systemPrompt,
     userPrompt,
@@ -566,7 +566,9 @@ async function runJudge({
       channelId: null,
       userId: null,
       source: "flooding_replay_judge",
-      event: "flooding_verdict"
+      event: "flooding_verdict",
+      reason: null,
+      messageId: null
     },
     onParsed: (parsed, rawText) => {
       const rawSignals = Array.isArray(parsed.signals) ? parsed.signals : [];
@@ -816,7 +818,7 @@ const floodingScenario: ReplayScenarioDefinition<
     );
     const attempted = shouldAttemptReplyDecision({
       botUserId,
-      settings: runtimeSettings,
+      settings: runtimeSettings as Parameters<typeof shouldAttemptReplyDecision>[0]["settings"],
       recentMessages,
       addressSignal,
       forceRespond: false,

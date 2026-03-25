@@ -1,4 +1,4 @@
-export const SYSTEM_SPEECH_OPPORTUNITY = {
+const SYSTEM_SPEECH_OPPORTUNITY = {
   THOUGHT: "thought",
   STREAM_WATCH: "stream_watch"
 } as const;

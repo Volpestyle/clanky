@@ -1,21 +1,25 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "entry": [
-    "src/app.ts",
-    "dashboard/src/main.tsx",
     "scripts/**/*.ts",
     "tests/**/*.ts",
     "src/**/*.test.ts",
-    "src/**/*.test.tsx",
     "dashboard/src/**/*.test.ts",
     "dashboard/src/**/*.test.tsx"
   ],
   "project": [
     "src/**/*.ts",
-    "src/**/*.tsx",
     "dashboard/src/**/*.ts",
     "dashboard/src/**/*.tsx",
     "scripts/**/*.ts",
     "tests/**/*.ts"
+  ],
+  "ignoreDependencies": [
+    "@mermaid-js/mermaid-cli"
+  ],
+  "ignoreBinaries": [
+    "agent-browser",
+    "lsof",
+    "rg"
   ]
 }

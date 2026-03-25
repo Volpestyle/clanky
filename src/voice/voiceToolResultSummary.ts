@@ -16,7 +16,7 @@ function truncateRawSummary(value: unknown, maxChars = MAX_RESULT_PREVIEW_CHARS)
     : raw;
 }
 
-export function parseVoiceToolResultPayload(content: unknown) {
+function parseVoiceToolResultPayload(content: unknown) {
   if (isObjectRecord(content)) return content;
   const text = String(content || "").trim();
   if (!text) return null;

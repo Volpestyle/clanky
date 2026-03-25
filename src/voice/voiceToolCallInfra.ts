@@ -18,17 +18,6 @@ import { shouldRequestVoiceToolFollowup } from "../tools/sharedToolSchemas.ts";
 
 type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
 
-export {
-  buildRealtimeFunctionTools,
-  ensureSessionToolRuntimeState,
-  getVoiceMcpServerStatuses,
-  parseRealtimeToolArguments,
-  recordVoiceToolCallEvent,
-  resolveRealtimeToolDescriptor,
-  resolveVoiceRealtimeToolDescriptors,
-  summarizeVoiceToolOutput
-} from "./voiceToolCallToolRegistry.ts";
-
 type RealtimeFunctionOutputClient = NonNullable<VoiceSession["realtimeClient"]> & {
   sendFunctionCallOutput?: (payload: { callId: string; output: string }) => void;
 };

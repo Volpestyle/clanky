@@ -2,6 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+const SKIP_DIRECTORY_NAMES = new Set([
+  ".git",
+  "node_modules",
+  "target",
+  "dist",
+  "build",
+  ".next",
+  ".turbo",
+  "coverage"
+]);
+
 async function collectTypeScriptModules(rootDir, currentDir = rootDir) {
   const entries = await fs.readdir(currentDir, { withFileTypes: true });
   const files = [];
@@ -9,6 +20,9 @@ async function collectTypeScriptModules(rootDir, currentDir = rootDir) {
   for (const entry of entries) {
     const fullPath = path.join(currentDir, entry.name);
     if (entry.isDirectory()) {
+      if (SKIP_DIRECTORY_NAMES.has(entry.name)) {
+        continue;
+      }
       files.push(...(await collectTypeScriptModules(rootDir, fullPath)));
       continue;
     }

@@ -9,7 +9,7 @@ This document describes the `code_task` capability.
 - text reply tool loop (`src/tools/replyTools.ts`)
 - voice text-mediated reply loop (`src/bot/voiceReplies.ts`)
 - voice realtime tool loop (`src/voice/voiceToolCallAgents.ts`)
-- `/clank code` slash subcommand (`src/commands/codeCommand.ts`)
+- `/clank code` slash subcommand (`src/bot.ts`, `handleClankCodeSlashCommand`)
 
 Core runtime files:
 

@@ -224,7 +224,7 @@ function formatRelativeAge(ageMs: number | null) {
   return `${Math.max(1, Math.round(normalizedAgeMs / 60_000))}m ago`;
 }
 
-export function buildRecentVoiceToolOutcomeContext(
+function buildRecentVoiceToolOutcomeContext(
   session: VoiceSession | null | undefined,
   {
     now = Date.now(),
@@ -259,7 +259,7 @@ export function buildRecentVoiceToolOutcomeContext(
     .filter((entry) => entry.toolName);
 }
 
-export function formatRecentVoiceToolOutcomeLine(entry: VoiceTurnToolOutcomeContext) {
+function formatRecentVoiceToolOutcomeLine(entry: VoiceTurnToolOutcomeContext) {
   const timing = formatRelativeAge(entry.ageMs);
   const outcome = entry.success ? "succeeded" : "failed";
   const summary = formatVoiceToolResultSummary(entry.outputSummary, 220);

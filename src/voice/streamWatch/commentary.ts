@@ -37,7 +37,7 @@ function readStreamWatchCommentaryTriggerReason(value: unknown): StreamWatchComm
   return null;
 }
 
-export function resolveStreamWatchCommentarySettings(settings = null) {
+function resolveStreamWatchCommentarySettings(settings = null) {
   const streamWatchSettings = getVoiceStreamWatchSettings(settings);
   return {
     enabled:
