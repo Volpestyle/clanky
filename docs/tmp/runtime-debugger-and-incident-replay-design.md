@@ -3,10 +3,10 @@
 Status: proposed
 
 References:
-- [`docs/logs.md`](../logs.md)
-- [`docs/technical-architecture.md`](../technical-architecture.md)
-- [`docs/clanker-activity.md`](../clanker-activity.md)
-- [`docs/memory-system.md`](../memory-system.md)
+- [`docs/operations/logging.md`](../operations/logging.md)
+- [`docs/architecture/overview.md`](../architecture/overview.md)
+- [`docs/architecture/activity.md`](../architecture/activity.md)
+- [`docs/capabilities/memory.md`](../capabilities/memory.md)
 - [`docs/voice/voice-provider-abstraction.md`](../voice/voice-provider-abstraction.md)
 - [`docs/voice/voice-client-and-reply-orchestration.md`](../voice/voice-client-and-reply-orchestration.md)
 - [`docs/voice/voice-capture-and-asr-pipeline.md`](../voice/voice-capture-and-asr-pipeline.md)
@@ -710,7 +710,7 @@ Primary files:
 - `src/bot.ts`
 - `src/bot/replyPipeline.ts`
 - `src/voice/*`
-- [`docs/logs.md`](../logs.md)
+- [`docs/operations/logging.md`](../operations/logging.md)
 
 ### Phase 2. Text and multimodal replay MVP
 

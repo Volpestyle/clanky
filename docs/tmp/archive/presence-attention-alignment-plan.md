@@ -3,8 +3,8 @@
 Status: complete
 
 Reference:
-- [`docs/presence-and-attention.md`](../presence-and-attention.md)
-- [`docs/clanker-activity.md`](../clanker-activity.md)
+- [`docs/architecture/presence-and-attention.md`](../../architecture/presence-and-attention.md)
+- [`docs/architecture/activity.md`](../../architecture/activity.md)
 - `AGENTS.md` core principle: shared context, soft guidance, no fake extra modes
 
 ## Review Summary

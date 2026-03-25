@@ -141,8 +141,8 @@ Debug visibility:
 
 The project includes two offline behavior-validation harnesses:
 
-- Flooding replay harness: [`scripts/floodingReplayHarness.ts`](../scripts/floodingReplayHarness.ts)
-- Voice golden harness: [`../scripts/voiceGoldenHarness.ts`](../scripts/voiceGoldenHarness.ts) (covered in [`e2e.md`](e2e.md))
+- Flooding replay harness: [`../../scripts/floodingReplayHarness.ts`](../../scripts/floodingReplayHarness.ts)
+- Voice golden harness: [`../../scripts/voiceGoldenHarness.ts`](../../scripts/voiceGoldenHarness.ts) (covered in [`e2e.md`](e2e.md))
 
 Harness intent:
 

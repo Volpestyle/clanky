@@ -64,25 +64,29 @@ bun install
 
 ### Required
 
-- `DISCORD_TOKEN` (`clanky_self` currently uses this legacy env name for the selfbot user token)
-- At least one LLM provider credential: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `CLAUDE_OAUTH_REFRESH_TOKEN`, `OPENAI_OAUTH_REFRESH_TOKEN`, `GOOGLE_API_KEY`, and/or `ELEVENLABS_API_KEY`
+- `DISCORD_TOKEN`
+- At least one model credential or refresh token: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `GOOGLE_API_KEY`, `ELEVENLABS_API_KEY`, `CLAUDE_OAUTH_REFRESH_TOKEN`, `OPENAI_OAUTH_REFRESH_TOKEN`, or the legacy alias `CODEX_OAUTH_REFRESH_TOKEN`
 
-### Optional
+### Common Optional
 
 | Variable | Purpose |
 |----------|---------|
 | `BRAVE_SEARCH_API_KEY` | Primary web search |
 | `SERPAPI_API_KEY` | Fallback web search |
 | `GIPHY_API_KEY` | GIF replies |
+| `YOUTUBE_API_KEY` | YouTube metadata/search for music flows |
+| `SOUNDCLOUD_CLIENT_ID` | SoundCloud playback/search support |
 | `DASHBOARD_HOST` | Dashboard bind address (default `127.0.0.1`) |
 | `DASHBOARD_TOKEN` | Private dashboard/admin API auth |
 | `PUBLIC_API_TOKEN` | Public tunnel stream-ingest auth |
 | `PUBLIC_HTTPS_ENABLED` | Enable Cloudflare Quick Tunnel |
+| `CLANKER_OWNER_USER_IDS` | Owner-only assistant/memory surfaces |
 | `STREAM_LINK_FALLBACK` | Keep share-link screen-watch fallback enabled (default `true`) |
 
 For voice features, install `ffmpeg` and `yt-dlp` on the host.
 For optional local code-agent runtimes, ensure `claude` and/or `codex` CLI is on `PATH`.
 Point the code-agent working directory at a git repo root or subdirectory; local workers execute inside disposable worktree branches instead of the live checkout.
+See [.env.example](.env.example) for the full env surface, including public-tunnel, logging, and E2E test variables.
 
 ### Browser Profile (Authenticated Browsing)
 
@@ -124,7 +128,7 @@ This fork assumes a real Discord user account used only for private experimentat
 bun run start
 ```
 
-Builds the React dashboard, then starts bot + dashboard together.
+Builds the dashboard and `clankvox`, then starts the selfbot runtime plus dashboard together.
 
 In this fork, that means the selfbot runtime plus dashboard together.
 
@@ -162,30 +166,15 @@ Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details 
 
 ## Docs
 
-| Doc | Description |
-|-----|-------------|
-| `docs/README.md` | Documentation map and canonical entry point into the docs tree |
-| `docs/capabilities/media.md` | Unified media surface: music, video, screen watch, publish, and browser visual context |
-| `docs/architecture/overview.md` | System architecture, data model, runtime flows |
-| `docs/architecture/activity.md` | Text + voice activity model: direct replies, recent-window follow-ups, unified initiative, voice thought engine |
-| `docs/architecture/relationship-model.md` | Product direction for community participation, owner-assistant depth, trusted collaborators, and capability ownership |
-| `docs/architecture/initiative.md` | Unified text initiative cycle and discovery feed |
-| `docs/architecture/presets.md` | Preset-driven stack/runtime settings |
-| `docs/capabilities/code.md` | Code agent runtime (Claude Code, Codex CLI, Codex) |
-| `docs/capabilities/browser.md` | Browser agent runtime, persistent profiles, authenticated browsing |
-| `docs/voice/voice-provider-abstraction.md` | Voice pipeline stages, providers, and settings |
-| `docs/voice/screen-share-system.md` | Screen share pipeline and frame reasoning flow |
-| `docs/voice/discord-streaming.md` | Discord-native Go Live watch/publish transport details |
-| `docs/archive/selfbot-stream-watch.md` | Historical selfbot-native Go Live watch plan and `clankvox` transport narrative |
-| `docs/providers/oauth.md` | OAuth providers (`claude-oauth`, `openai-oauth`) |
-| `docs/capabilities/memory.md` | Memory system design |
-| `docs/operations/public-https.md` | Public HTTPS tunnel |
-| `docs/operations/e2e.md` | E2E selfbot + driver-bot voice validation suites |
-| `docs/operations/testing.md` | Test commands, live tests, and replay harnesses |
-| `docs/operations/logging.md` | Structured logging and Loki setup |
-| `docs/operations/multi-instance.md` | Running multiple bot instances with shared Loki |
+Start with [docs/README.md](docs/README.md). The current canon lives in:
 
-Canonical specs live under `docs/architecture/`, `docs/capabilities/`, `docs/operations/`, `docs/providers/`, `docs/reference/`, and `docs/voice/`. Historical notes live under `docs/archive/` and `docs/tmp/`.
+- `docs/architecture/` for runtime shape, relationship model, initiative, and presets
+- `docs/reference/settings.md` for the settings contract
+- `docs/capabilities/` for browser, code, media, and memory behavior
+- `docs/voice/` for transport, screen-watch, output, and orchestration details
+- `docs/operations/` for testing, logging, tunnels, and runbooks
+
+Historical or point-in-time material lives under `docs/archive/`, `docs/tmp/`, `docs/notes/`, and `docs/log-dives/`.
 
 ## Notes
 

@@ -3,8 +3,8 @@
 Status: proposed
 
 References:
-- [`docs/voice/voice-client-and-reply-orchestration.md`](../voice/voice-client-and-reply-orchestration.md)
-- [`docs/voice/voice-capture-and-asr-pipeline.md`](../voice/voice-capture-and-asr-pipeline.md)
+- [`docs/voice/voice-client-and-reply-orchestration.md`](../../voice/voice-client-and-reply-orchestration.md)
+- [`docs/voice/voice-capture-and-asr-pipeline.md`](../../voice/voice-capture-and-asr-pipeline.md)
 - `src/voice/voiceReplyPipeline.ts` — `buildContextMessages()`
 - `src/voice/instructionManager.ts` — `buildRealtimeInstructions()`
 - `src/voice/voiceStreamWatch.ts` — screen-watch note accumulation

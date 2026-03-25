@@ -4,9 +4,10 @@ This document describes how Clanky's memory works today and where it is headed a
 
 See also:
 
-- `AGENTS.md` - Agent Autonomy
-- `docs/architecture/relationship-model.md`
-- `docs/architecture/dm-support-and-user-scoped-memory.md`
+- [`../../AGENTS.md`](../../AGENTS.md) - Agent Autonomy
+- [`../architecture/relationship-model.md`](../architecture/relationship-model.md)
+
+Portable user memory, standard DM recall, and owner-private retrieval are the shipped baseline now. This document is the canonical source for that foundation; there is no separate migration doc to maintain in parallel.
 
 ## Product shape
 

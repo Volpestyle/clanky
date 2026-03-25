@@ -3,8 +3,8 @@
 Status: proposed
 
 References:
-- [`docs/voice/screen-share-system.md`](../voice/screen-share-system.md)
-- [`docs/voice/voice-client-and-reply-orchestration.md`](../voice/voice-client-and-reply-orchestration.md)
+- [`docs/voice/screen-share-system.md`](../../voice/screen-share-system.md)
+- [`docs/voice/voice-client-and-reply-orchestration.md`](../../voice/voice-client-and-reply-orchestration.md)
 - `src/voice/voiceStreamWatch.ts` — frame ingestion, vision triage, commentary triggers
 - `src/voice/voiceReplyPipeline.ts` — generation pipeline, frame/note injection
 - `src/voice/clankvox/src/video_decoder.rs` — H264 decode, scene-cut metrics, change scores

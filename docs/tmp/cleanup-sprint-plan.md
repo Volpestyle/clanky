@@ -15,7 +15,7 @@ Organized into phases by dependency order and risk. Each phase is independently 
   - Decomposed `VoiceDebugger.tsx` by extracting `TurnReconstructor`, `AnomalyDetection`, `FlightLog`, and shared debugger types to `dashboard/src/components/voiceDebugger/`
   - Decomposed `VoiceMonitor.tsx` into focused modules under `dashboard/src/components/voiceMonitor/` (`SessionCard`, `ParticipantList`, `MusicDetail`, `StreamWatchDetail`, `LatencyPanel`, `McpPanel`, `ToolCallLog`, `ConversationContext`, `PromptStateViewer`, and shared helpers)
 
-> **Sequencing constraint:** The [Async Code Task Design](../capabilities/async-code-task-design.md) modifies all four agent session classes, `replyTools.ts`, `bot.ts`, `SubAgentSession`, and adds a new `BackgroundTaskRunner`. Phases 1-5 and 7.1 of this cleanup should land **before** async dispatch work begins, so the new code doesn't perpetuate the duplication and patterns we're removing. See [Sequencing with Async Code Task Work](#sequencing-with-async-code-task-work) at the end.
+> **Sequencing constraint:** The [code runtime async-dispatch design](../capabilities/code.md#async-dispatch) modifies all four agent session classes, `replyTools.ts`, `bot.ts`, `SubAgentSession`, and adds a new `BackgroundTaskRunner`. Phases 1-5 and 7.1 of this cleanup should land **before** async dispatch work begins, so the new code doesn't perpetuate the duplication and patterns we're removing. See [Sequencing with Async Code Task Work](#sequencing-with-async-code-task-work) at the end.
 
 ---
 
@@ -276,7 +276,7 @@ Phases 1-4 are independent and can be done in parallel or any order. Total estim
 
 ## Sequencing with Async Code Task Work
 
-The [async code task design](../capabilities/async-code-task-design.md) touches a large cross-section of the files this cleanup targets. The two efforts must be sequenced carefully or the async work will perpetuate the exact problems we're cleaning up.
+The [code runtime async-dispatch design](../capabilities/code.md#async-dispatch) touches a large cross-section of the files this cleanup targets. The two efforts must be sequenced carefully or the async work will perpetuate the exact problems we're cleaning up.
 
 ### Files touched by both efforts
 

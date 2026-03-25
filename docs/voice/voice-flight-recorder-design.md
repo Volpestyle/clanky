@@ -1,6 +1,6 @@
 # Voice Flight Recorder — Visual Debugging System
 
-Status: approved
+Status: forward-looking design reference. The shipped debugger surfaces live in `dashboard/src/components/VoiceDebugger.tsx` and `dashboard/src/components/VoiceMonitor.tsx`; this doc is not canonical runtime truth.
 
 References:
 - [`docs/tmp/runtime-debugger-and-incident-replay-design.md`](../tmp/runtime-debugger-and-incident-replay-design.md)

@@ -1,11 +1,12 @@
 # Memory System Review
 
+Status: historical review from before owner-private dashboard parity and some later memory/runtime refinements. Use [`../capabilities/memory.md`](../capabilities/memory.md) for current shipped behavior.
+
 Deep review of Clanky's memory system: current state, how it compares to OpenClaw, dashboard visibility, cross-modal behavior, and recommended path forward.
 
 See also:
 
 - [`../capabilities/memory.md`](../capabilities/memory.md)
-- [`../architecture/dm-support-and-user-scoped-memory.md`](../architecture/dm-support-and-user-scoped-memory.md)
 - [`owner-private-memory-plan.md`](owner-private-memory-plan.md)
 - [`owner-assistant-gap-plan.md`](owner-assistant-gap-plan.md)
 

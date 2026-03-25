@@ -49,19 +49,15 @@ Use the docs in this order:
 
 ## Provider Notes
 
-- [`providers/oauth.md`](providers/oauth.md)
-- [`providers/openai/openai-realtime-api.md`](providers/openai/openai-realtime-api.md)
-- [`providers/openai/openai-realtime-websocket.md`](providers/openai/openai-realtime-websocket.md)
-- [`providers/openai/openai-realtime-transcription.md`](providers/openai/openai-realtime-transcription.md)
-- [`providers/openai/openai-realtime-speech.md`](providers/openai/openai-realtime-speech.md)
-- [`providers/openai/openai-computer-use.md`](providers/openai/openai-computer-use.md)
-- [`providers/xai/xai-voice-agent-api.md`](providers/xai/xai-voice-agent-api.md)
+- [`providers/oauth.md`](providers/oauth.md) — local OAuth-backed provider lanes used by the repo
+- [`providers/`](providers/) — upstream/provider reference snapshots and implementation notes (OpenAI, xAI, ElevenLabs). Useful when working on adapters; product/runtime truth still lives in the canonical architecture, capability, voice, and settings docs.
 
 ## Working Notes And Historical Material
 
 - [`notes/`](notes/) — operator/developer notes, useful but not canonical
-- [`tmp/`](tmp/) — work-in-progress and archived design docs, not canonical
-- [`archive/selfbot-stream-watch.md`](archive/selfbot-stream-watch.md) — historical direct-integration plan with validation notes; current product truth lives in [`capabilities/media.md`](capabilities/media.md) and [`voice/discord-streaming.md`](voice/discord-streaming.md)
+- [`log-dives/`](log-dives/) — incident postmortems, prompt snapshots, and debugging writeups
+- [`tmp/`](tmp/) — work-in-progress specs, reviews, and design docs; not canonical and may intentionally lag implementation
+- [`archive/`](archive/) — historical rollout notes and handoff docs retained for context
 
 ## Rules Of Thumb
 
@@ -69,3 +65,4 @@ Use the docs in this order:
 - Transport or pipeline internals belong in subsystem deep dives.
 - Provider-specific material belongs under provider docs, not in product docs.
 - Historical plans should not become the main source of truth after implementation lands.
+- Run `bun run docs:check` after moving or editing docs so relative links do not silently drift.

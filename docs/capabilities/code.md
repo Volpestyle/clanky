@@ -167,7 +167,7 @@ Delivery surfaces:
 - text and text-mediated voice use synthetic message events (`code_task_progress` / `code_task_result`) fed into `enqueueReplyJob(..., forceRespond: true)`
 - voice realtime tasks (`voice_realtime_tool_code_task`) deliver completion/cancellation back into the live realtime conversation via `VoiceSessionManager.requestRealtimeCodeTaskFollowup(...)`, then trigger spoken follow-up output
 
-See [async-code-task-design.md](async-code-task-design.md) for the original design specification.
+Async background dispatch now lives in this runtime doc; there is no separate canonical design spec to keep in sync.
 
 ## Logging
 

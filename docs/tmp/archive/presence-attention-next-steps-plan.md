@@ -3,10 +3,10 @@
 Status: proposed
 
 Reference:
-- [`docs/presence-and-attention.md`](../presence-and-attention.md)
-- [`docs/clanker-activity.md`](../clanker-activity.md)
-- [`docs/voice/voice-provider-abstraction.md`](../voice/voice-provider-abstraction.md)
-- [`docs/initiative-unified-spec.md`](../initiative-unified-spec.md)
+- [`docs/architecture/presence-and-attention.md`](../../architecture/presence-and-attention.md)
+- [`docs/architecture/activity.md`](../../architecture/activity.md)
+- [`docs/voice/voice-provider-abstraction.md`](../../voice/voice-provider-abstraction.md)
+- [`docs/architecture/initiative.md`](../../architecture/initiative.md)
 - [`docs/tmp/presence-attention-alignment-plan.md`](presence-attention-alignment-plan.md)
 - [`docs/tmp/thought-queue-alignment-plan.md`](thought-queue-alignment-plan.md)
 
@@ -94,8 +94,8 @@ Primary files:
 - `src/settings/voiceDashboardMappings.ts`
 - `src/settings/agentStack.ts`
 - `dashboard/src/components/settingsSections/VoiceModeSettingsSection.tsx`
-- [`docs/clanker-activity.md`](../clanker-activity.md)
-- [`docs/voice/voice-provider-abstraction.md`](../voice/voice-provider-abstraction.md)
+- [`docs/architecture/activity.md`](../../architecture/activity.md)
+- [`docs/voice/voice-provider-abstraction.md`](../../voice/voice-provider-abstraction.md)
 
 ### 2. Lock in cross-modal asymmetry
 
@@ -110,8 +110,8 @@ Primary files:
 - `src/bot/replyPipeline.ts`
 - `src/prompts/promptText.ts`
 - `src/prompts/promptVoice.ts`
-- [`docs/presence-and-attention.md`](../presence-and-attention.md)
-- [`docs/clanker-activity.md`](../clanker-activity.md)
+- [`docs/architecture/presence-and-attention.md`](../../architecture/presence-and-attention.md)
+- [`docs/architecture/activity.md`](../../architecture/activity.md)
 
 ### 3. Add a lightweight continuity debug surface
 

@@ -3,10 +3,10 @@
 Status: implemented March 13, 2026
 
 References:
-- [`docs/native-discord-screen-share.md`](../native-discord-screen-share.md) — Go Live send/receive protocol
-- [`src/voice/clankvox/src/stream_publish.rs`](../../src/voice/clankvox/src/stream_publish.rs) — current publish pipeline
-- [`src/voice/clankvox/src/music.rs`](../../src/voice/clankvox/src/music.rs) — current music pipeline
-- [`src/voice/voiceStreamPublish.ts`](../../src/voice/voiceStreamPublish.ts) — Bun-side publish orchestration
+- [`docs/voice/discord-streaming.md`](../../voice/discord-streaming.md) — Go Live transport reference
+- [`src/voice/clankvox/src/stream_publish.rs`](../../../src/voice/clankvox/src/stream_publish.rs) — current publish pipeline
+- [`src/voice/clankvox/src/music.rs`](../../../src/voice/clankvox/src/music.rs) — current music pipeline
+- [`src/voice/voiceStreamPublish.ts`](../../../src/voice/voiceStreamPublish.ts) — Bun-side publish orchestration
 
 ## Goal
 
@@ -31,7 +31,7 @@ through the existing music lifecycle:
   playback path resolved a playable URL for the active track
 
 Canonical runtime documentation lives in
-[`docs/voice/discord-streaming.md`](../voice/discord-streaming.md).
+[`docs/voice/discord-streaming.md`](../../voice/discord-streaming.md).
 
 ## What Exists Today
 

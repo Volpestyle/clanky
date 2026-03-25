@@ -60,7 +60,7 @@ Use:
 - `--allow-missing-credentials`
 - `--max-cases`
 
-For the current authoritative defaults, check [`../scripts/voiceGoldenHarness.ts`](../scripts/voiceGoldenHarness.ts) and [`testing.md`](testing.md).
+For the current authoritative defaults, check [`../../scripts/voiceGoldenHarness.ts`](../../scripts/voiceGoldenHarness.ts) and [`testing.md`](testing.md).
 
 ### Credential Requirements
 
@@ -466,7 +466,7 @@ The harness now also includes `VoiceHistoryAssertionHelper`, and some suites alr
 ## Pipeline Presets & CLI Flags
 
 E2E tests use **pipeline presets** to lock down the voice pipeline configuration under test.
-The driver applies these overrides through [`src/testSettings.ts`](../src/testSettings.ts) before runtime use.
+The driver applies these overrides through [`../../src/testSettings.ts`](../../src/testSettings.ts) before runtime use.
 
 ### Available Presets
 

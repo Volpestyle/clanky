@@ -22,6 +22,7 @@
     "test:e2e:text": "RUN_E2E_TEXT=1 bun test ./tests/e2e/textHarness.test.ts",
     "test:coverage": "bun test --coverage $(bun run --silent test:default:files)",
     "test:coverage:check": "bun test --coverage $(bun run --silent test:default:files)",
+    "docs:check": "bun scripts/check-doc-links.mjs",
     "replay:flooding": "bun scripts/floodingReplayHarness.ts --mode recorded",
     "replay:flooding:live": "bun scripts/floodingReplayHarness.ts --mode live",
     "replay:voice-golden": "bun scripts/voiceGoldenHarness.ts --mode simulated",
