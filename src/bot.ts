@@ -593,29 +593,27 @@ export class ClankerBot {
     try {
       const {
         cwd,
+        swarm,
+        workspaceMode,
         provider,
         model,
-        codexModel,
         codexCliModel,
         maxTurns,
         timeoutMs,
         maxBufferBytes
       } = codeAgentConfig;
-      const codexCompatibleClient = this.llm?.getCodexCompatibleClient() || null;
-      const codexCostProvider = this.llm?.openai ? "openai" : this.llm?.codexOAuth ? "openai-oauth" : undefined;
 
       const result = await runCodeAgent({
         instruction: codeInstruction,
         cwd,
+        swarm,
+        workspaceMode,
         provider,
         maxTurns,
         timeoutMs,
         maxBufferBytes,
         model,
-        codexModel,
         codexCliModel,
-        openai: codexCompatibleClient,
-        codexCostProvider,
         trace: {
           guildId: interaction.guildId,
           channelId: interaction.channelId,

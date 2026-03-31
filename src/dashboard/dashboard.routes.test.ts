@@ -1854,7 +1854,6 @@ test("dashboard settings expose provider auth from OAuth-backed app config", asy
       const json = await response.json();
       assert.equal(json.bindings.providerAuth.claude_code, true);
       assert.equal(json.bindings.providerAuth.codex_cli, true);
-      assert.equal(json.bindings.providerAuth.codex, true);
     }
   );
 

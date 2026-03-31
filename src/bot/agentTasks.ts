@@ -278,30 +278,28 @@ export async function runModelRequestedCodeTask(
 
   const {
     cwd,
+    swarm,
+    workspaceMode,
     provider,
     model,
-    codexModel,
     codexCliModel,
     maxTurns,
     timeoutMs,
     maxBufferBytes
   } = codeAgentConfig;
-  const codexCompatibleClient = ctx.llm?.getCodexCompatibleClient() || null;
-  const codexCostProvider = ctx.llm?.openai ? "openai" : ctx.llm?.codexOAuth ? "openai-oauth" : undefined;
 
   try {
     const result = await runCodeAgent({
       instruction: task,
       cwd,
+      swarm,
+      workspaceMode,
       provider,
       maxTurns,
       timeoutMs,
       maxBufferBytes,
       model,
-      codexModel,
       codexCliModel,
-      openai: codexCompatibleClient,
-      codexCostProvider,
       trace: buildTrace({
         guildId,
         channelId,
@@ -353,16 +351,15 @@ export function createCodeAgentSession(
 
   const {
     cwd,
+    swarm,
+    workspaceMode,
     provider,
     model,
-    codexModel,
     codexCliModel,
     maxTurns,
     timeoutMs,
     maxBufferBytes
   } = codeAgentConfig;
-  const codexCompatibleClient = ctx.llm?.getCodexCompatibleClient() || null;
-  const codexCostProvider = ctx.llm?.openai ? "openai" : ctx.llm?.codexOAuth ? "openai-oauth" : undefined;
 
   const scopeKey = buildScopeKey({
     guildId,
@@ -372,9 +369,10 @@ export function createCodeAgentSession(
     return createCodeAgentSessionRuntime({
       scopeKey,
       cwd,
+      swarm,
+      workspaceMode,
       provider,
       model,
-      codexModel,
       codexCliModel,
       maxTurns,
       timeoutMs,
@@ -386,9 +384,7 @@ export function createCodeAgentSession(
         source,
         role: normalizedRole
       }),
-      store: ctx.store,
-      openai: codexCompatibleClient,
-      codexCostProvider
+      store: ctx.store
     });
   } catch {
     return null;

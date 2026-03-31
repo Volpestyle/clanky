@@ -1,7 +1,12 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import path from "node:path";
 import { resolveCodeAgentConfig, resolveCodeAgentCwd } from "./codeAgent.ts";
 import { createTestSettings } from "../testSettings.ts";
+
+function normalizeExpectedPath(value: string) {
+  return path.resolve(value);
+}
 
 test("resolveCodeAgentConfig routes worker selection through the requested role", () => {
   const base = createTestSettings({
@@ -13,10 +18,6 @@ test("resolveCodeAgentConfig routes worker selection through the requested role"
     agentStack: {
       runtimeConfig: {
         devTeam: {
-          codex: {
-            maxParallelTasks: 2,
-            maxTasksPerHour: 5
-          },
           codexCli: {
             maxParallelTasks: 2,
             maxTasksPerHour: 5
@@ -74,14 +75,16 @@ test("resolveCodeAgentConfig routes worker selection through the requested role"
   assert.equal(designConfig.role, "design");
   assert.equal(designConfig.worker, "claude_code");
   assert.equal(designConfig.provider, "claude-code");
-  assert.equal(designConfig.cwd, "/tmp/claude-code");
+  assert.equal(designConfig.cwd, normalizeExpectedPath("/tmp/claude-code"));
   assert.equal(designConfig.maxParallelTasks, 5);
+  assert.equal(designConfig.workspaceMode, "isolated_worktree");
 
   assert.equal(implementationConfig.role, "implementation");
   assert.equal(implementationConfig.worker, "codex_cli");
   assert.equal(implementationConfig.provider, "codex-cli");
-  assert.equal(implementationConfig.cwd, "/tmp/codex-cli");
+  assert.equal(implementationConfig.cwd, normalizeExpectedPath("/tmp/codex-cli"));
   assert.equal(implementationConfig.maxParallelTasks, 3);
+  assert.equal(implementationConfig.workspaceMode, "isolated_worktree");
 
   assert.equal(reviewConfig.worker, "claude_code");
   assert.equal(reviewConfig.provider, "claude-code");
@@ -89,8 +92,72 @@ test("resolveCodeAgentConfig routes worker selection through the requested role"
   assert.equal(researchConfig.provider, "codex-cli");
 });
 
+test("resolveCodeAgentConfig defaults swarm-enabled local workers to the shared checkout", () => {
+  const settings = createTestSettings({
+    permissions: {
+      devTasks: {
+        allowedUserIds: ["user-1"]
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        devTeam: {
+          swarm: {
+            enabled: true,
+            command: "bun",
+            args: ["run", "C:/Users/volpe/swarm-mcp/src/index.ts"]
+          },
+          codexCli: {
+            enabled: true,
+            defaultCwd: "/tmp/codex-cli"
+          }
+        }
+      }
+    }
+  });
+
+  const config = resolveCodeAgentConfig(settings, undefined, "implementation");
+  assert.equal(config.provider, "codex-cli");
+  assert.equal(config.workspaceMode, "shared_checkout");
+});
+
+test("resolveCodeAgentConfig respects an explicit isolated workspace override even with swarm enabled", () => {
+  const settings = createTestSettings({
+    permissions: {
+      devTasks: {
+        allowedUserIds: ["user-1"]
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        devTeam: {
+          workspace: {
+            mode: "isolated_worktree"
+          },
+          swarm: {
+            enabled: true,
+            command: "bun",
+            args: ["run", "C:/Users/volpe/swarm-mcp/src/index.ts"]
+          },
+          claudeCode: {
+            enabled: true,
+            defaultCwd: "/tmp/claude-code"
+          }
+        }
+      }
+    }
+  });
+
+  const config = resolveCodeAgentConfig(settings, undefined, "implementation");
+  assert.equal(config.provider, "claude-code");
+  assert.equal(config.workspaceMode, "isolated_worktree");
+});
+
 test("resolveCodeAgentCwd defaults to the provided repo root and normalizes relative paths", () => {
-  assert.equal(resolveCodeAgentCwd("", "/tmp/project"), "/tmp/project");
-  assert.equal(resolveCodeAgentCwd("packages/app", "/tmp/project"), "/tmp/project/packages/app");
-  assert.equal(resolveCodeAgentCwd("/var/tmp/repo", "/tmp/project"), "/var/tmp/repo");
+  assert.equal(resolveCodeAgentCwd("", "/tmp/project"), normalizeExpectedPath("/tmp/project"));
+  assert.equal(
+    resolveCodeAgentCwd("packages/app", "/tmp/project"),
+    normalizeExpectedPath("/tmp/project/packages/app")
+  );
+  assert.equal(resolveCodeAgentCwd("/var/tmp/repo", "/tmp/project"), normalizeExpectedPath("/var/tmp/repo"));
 });

@@ -357,9 +357,6 @@ function resolveProviderAuth(appConfig: DashboardAppConfig): DashboardProviderAu
     codex_cli:
       Boolean(appConfig.openaiApiKey) ||
       isCodexOAuthConfigured(appConfig.openaiOAuthRefreshToken || ""),
-    codex:
-      Boolean(appConfig.openaiApiKey) ||
-      isCodexOAuthConfigured(appConfig.openaiOAuthRefreshToken || ""),
     anthropic: Boolean(appConfig.anthropicApiKey),
     openai: Boolean(appConfig.openaiApiKey),
     claude_oauth: isClaudeOAuthConfigured(appConfig.claudeOAuthRefreshToken || ""),

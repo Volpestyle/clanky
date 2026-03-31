@@ -52,7 +52,6 @@ type ResolvedAgentStack = {
 
 const VALID_CODING_WORKERS = new Set<SettingsCodingWorkerName>([
   "claude_code",
-  "codex",
   "codex_cli"
 ]);
 
@@ -675,7 +674,6 @@ export function resolveAgentStack(settings: unknown) {
 
   const devTeamRuntime = getDevTeamRuntimeConfig(settings);
   const enabledWorkers = [
-    devTeamRuntime?.codex?.enabled ? "codex" : null,
     devTeamRuntime?.codexCli?.enabled ? "codex_cli" : null,
     devTeamRuntime?.claudeCode?.enabled ? "claude_code" : null
   ].filter(Boolean) as SettingsCodingWorkerName[];
@@ -754,6 +752,6 @@ export function isBrowserEnabled(settings: unknown): boolean {
 export function isDevTaskEnabled(settings: unknown): boolean {
   const permissions = getDevTaskPermissions(settings);
   const runtime = getDevTeamRuntimeConfig(settings);
-  const hasWorkers = Boolean(runtime?.codex?.enabled || runtime?.codexCli?.enabled || runtime?.claudeCode?.enabled);
+  const hasWorkers = Boolean(runtime?.codexCli?.enabled || runtime?.claudeCode?.enabled);
   return hasWorkers && Array.isArray(permissions.allowedUserIds) && permissions.allowedUserIds.length > 0;
 }

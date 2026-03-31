@@ -166,9 +166,7 @@ export function normalizeLegacyTestSettingsInput(overrides: unknown): Record<str
           : {}),
         devTeam: {
           codingWorkers:
-            String(codeAgent.provider || "").trim().toLowerCase() === "codex"
-              ? ["codex"]
-              : String(codeAgent.provider || "").trim().toLowerCase() === "codex-cli"
+            String(codeAgent.provider || "").trim().toLowerCase() === "codex-cli"
                 ? ["codex_cli"]
                 : String(codeAgent.provider || "").trim().toLowerCase() === "claude-code"
                   ? ["claude_code"]
@@ -235,16 +233,6 @@ export function normalizeLegacyTestSettingsInput(overrides: unknown): Record<str
               }
         },
         devTeam: {
-          codex: {
-            enabled: String(codeAgent.provider || "").trim().toLowerCase() === "codex",
-            model: codeAgent.codexModel,
-            maxTurns: codeAgent.maxTurns,
-            timeoutMs: codeAgent.timeoutMs,
-            maxBufferBytes: codeAgent.maxBufferBytes,
-            defaultCwd: codeAgent.defaultCwd,
-            maxTasksPerHour: codeAgent.maxTasksPerHour,
-            maxParallelTasks: codeAgent.maxParallelTasks
-          },
           codexCli: {
             enabled:
               String(codeAgent.provider || "").trim().toLowerCase() === "codex-cli" ||

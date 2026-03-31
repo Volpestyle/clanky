@@ -504,9 +504,6 @@ test("resolveAgentStack routes implementation through available workers", () => 
       },
       runtimeConfig: {
         devTeam: {
-          codex: {
-            enabled: false
-          },
           codexCli: {
             enabled: true
           },
@@ -532,9 +529,6 @@ test("resolveAgentStack routes implementation through available workers", () => 
       preset: "openai_oauth",
       runtimeConfig: {
         devTeam: {
-          codex: {
-            enabled: false
-          },
           codexCli: {
             enabled: false
           },
@@ -721,6 +715,40 @@ test("normalizeSettings preserves the dedicated voice music brain runtime config
       provider: "openai",
       model: "gpt-5-mini"
     }
+  });
+});
+
+test("normalizeSettings preserves canonical dev-team swarm runtime config", () => {
+  const normalized = normalizeSettings({
+    agentStack: {
+      runtimeConfig: {
+        devTeam: {
+          workspace: {
+            mode: "shared_checkout"
+          },
+          swarm: {
+            enabled: true,
+            serverName: "Swarm Bus",
+            command: "bun",
+            args: ["run", "C:/Users/volpe/swarm-mcp/src/index.ts"],
+            dbPath: "C:/shared/swarm.db",
+            appendCoordinationPrompt: false
+          }
+        }
+      }
+    }
+  });
+
+  assert.deepEqual(normalized.agentStack.runtimeConfig.devTeam.workspace, {
+    mode: "shared_checkout"
+  });
+  assert.deepEqual(normalized.agentStack.runtimeConfig.devTeam.swarm, {
+    enabled: true,
+    serverName: "swarm-bus",
+    command: "bun",
+    args: ["run", "C:/Users/volpe/swarm-mcp/src/index.ts"],
+    dbPath: "C:/shared/swarm.db",
+    appendCoordinationPrompt: false
   });
 });
 

@@ -6,7 +6,6 @@ function WorkerAuthBadge({ worker, form }: { worker: string; form: Record<string
   const authed =
     worker === "claude_code" ? form.providerAuthClaudeCode :
     worker === "codex_cli" ? form.providerAuthCodexCli :
-    worker === "codex" ? form.providerAuthCodex :
     false;
   if (authed) return null;
   return (
@@ -19,7 +18,6 @@ function WorkerAuthBadge({ worker, form }: { worker: string; form: Record<string
 export function CodeAgentSettingsSection({ id, form, set, validationError = "" }) {
   const provider = String(form.codeAgentProvider || "auto").trim().toLowerCase();
   const showClaudeModel = provider === "claude-code" || provider === "auto";
-  const showCodexModel = provider === "codex" || provider === "auto";
   const showCodexCliModel = provider === "codex-cli" || provider === "auto";
 
   return (
@@ -61,7 +59,6 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
                 <option value="auto">Auto (preset/default)</option>
                 <option value="claude-code">Claude Code (local)</option>
                 <option value="codex-cli">Codex CLI (local)</option>
-                <option value="codex">Codex API (remote)</option>
               </select>
             </div>
             <div>
@@ -86,19 +83,6 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
                 value={form.codeAgentModel}
                 onChange={set("codeAgentModel")}
                 placeholder="sonnet"
-              />
-            </div>
-          )}
-
-          {showCodexModel && (
-            <div className="field">
-              <label htmlFor="code-agent-codex-model">Codex model</label>
-              <input
-                id="code-agent-codex-model"
-                type="text"
-                value={form.codeAgentCodexModel}
-                onChange={set("codeAgentCodexModel")}
-                placeholder="gpt-5.4"
               />
             </div>
           )}
@@ -178,7 +162,23 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
               placeholder="Leave empty for this repo root"
             />
             <p className="status-msg" role="status">
-              Local workers treat this as a git repo path and spin up a disposable worktree branch instead of editing the live checkout.
+              Local workers treat this as a git repo path. Shared checkout uses the live repo path, isolated worktree creates a disposable branch checkout, and auto uses shared checkout when swarm is enabled.
+            </p>
+          </div>
+
+          <div className="field">
+            <label htmlFor="code-agent-workspace-mode">Local workspace mode</label>
+            <select
+              id="code-agent-workspace-mode"
+              value={form.codeAgentWorkspaceMode}
+              onChange={set("codeAgentWorkspaceMode")}
+            >
+              <option value="auto">Auto</option>
+              <option value="shared_checkout">Shared checkout</option>
+              <option value="isolated_worktree">Isolated worktree</option>
+            </select>
+            <p className="status-msg" role="status">
+              Applies to local Claude Code and Codex CLI sessions. Auto uses a shared checkout for swarm-enabled sessions and isolated worktrees otherwise.
             </p>
           </div>
 
@@ -265,7 +265,6 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
               >
                 <option value="claude_code">Claude Code</option>
                 <option value="codex_cli">Codex CLI</option>
-                <option value="codex">Codex API</option>
               </select>
             </div>
             <div>
@@ -280,7 +279,6 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
               >
                 <option value="claude_code">Claude Code</option>
                 <option value="codex_cli">Codex CLI</option>
-                <option value="codex">Codex API</option>
               </select>
             </div>
           </div>
@@ -297,7 +295,6 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
               >
                 <option value="claude_code">Claude Code</option>
                 <option value="codex_cli">Codex CLI</option>
-                <option value="codex">Codex API</option>
               </select>
             </div>
             <div>
@@ -312,7 +309,6 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
               >
                 <option value="claude_code">Claude Code</option>
                 <option value="codex_cli">Codex CLI</option>
-                <option value="codex">Codex API</option>
               </select>
             </div>
           </div>

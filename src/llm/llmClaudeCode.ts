@@ -36,6 +36,8 @@ type ClaudeCliStreamJob = {
   reject: (error: Error) => void;
 };
 
+type ClaudeCliEnv = Record<string, string>;
+
 export type ClaudeCliStreamSessionLike = {
   run: (payload: {
     input?: string;
@@ -184,6 +186,7 @@ class ClaudeCliStreamSession {
   args: string[];
   maxBufferBytes: number;
   cwd: string;
+  env: ClaudeCliEnv;
   child: ReturnType<typeof spawn> | null;
   queue: ClaudeCliStreamJob[];
   activeJob: ClaudeCliStreamJob | null;
@@ -191,10 +194,21 @@ class ClaudeCliStreamSession {
   closed: boolean;
   lastUsedAt: number;
 
-  constructor({ args, maxBufferBytes, cwd = "" }: { args: string[]; maxBufferBytes: number; cwd?: string }) {
+  constructor({
+    args,
+    maxBufferBytes,
+    cwd = "",
+    env = {}
+  }: {
+    args: string[];
+    maxBufferBytes: number;
+    cwd?: string;
+    env?: ClaudeCliEnv;
+  }) {
     this.args = Array.isArray(args) ? [...args] : [];
     this.maxBufferBytes = Math.max(4096, Math.floor(Number(maxBufferBytes) || 1024 * 1024));
     this.cwd = String(cwd || "").trim();
+    this.env = env && typeof env === "object" ? { ...env } : {};
     this.child = null;
     this.queue = [];
     this.activeJob = null;
@@ -305,8 +319,13 @@ class ClaudeCliStreamSession {
     if (this.child) return;
     this.stdoutRemainder = "";
 
-    const spawnOptions: { stdio: ["pipe", "pipe", "pipe"]; cwd?: string } = { stdio: ["pipe", "pipe", "pipe"] };
+    const spawnOptions: { stdio: ["pipe", "pipe", "pipe"]; cwd?: string; env?: NodeJS.ProcessEnv } = {
+      stdio: ["pipe", "pipe", "pipe"]
+    };
     if (this.cwd) spawnOptions.cwd = this.cwd;
+    if (Object.keys(this.env).length > 0) {
+      spawnOptions.env = { ...process.env, ...this.env };
+    }
     const child = spawn("claude", this.args, spawnOptions);
     this.child = child;
 
@@ -498,11 +517,13 @@ class ClaudeCliStreamSession {
 export function createClaudeCliStreamSession({
   args,
   maxBufferBytes = 1024 * 1024,
-  cwd = ""
+  cwd = "",
+  env = {}
 }: {
   args: string[];
   maxBufferBytes?: number;
   cwd?: string;
+  env?: ClaudeCliEnv;
 }): ClaudeCliStreamSessionLike {
   if (!Array.isArray(args) || !args.length) {
     throw new Error("claude-code stream session requires non-empty CLI args");
@@ -510,7 +531,8 @@ export function createClaudeCliStreamSession({
   return new ClaudeCliStreamSession({
     args,
     maxBufferBytes,
-    cwd
+    cwd,
+    env
   });
 }
 
@@ -798,8 +820,12 @@ export function parseClaudeCodeJsonOutput(rawOutput) {
  * Uses stream-json for both input and output so follow-up messages
  * can be sent on stdin after the initial instruction completes.
  */
-export function buildCodeAgentSessionCliArgs({ model, maxTurns = 30 }) {
-  return [
+export function buildCodeAgentSessionCliArgs({ model, maxTurns = 30, mcpConfig = "" }: {
+  model: string;
+  maxTurns?: number;
+  mcpConfig?: string;
+}) {
+  const args = [
     "-p",
     "--verbose",
     "--input-format", "stream-json",
@@ -808,6 +834,11 @@ export function buildCodeAgentSessionCliArgs({ model, maxTurns = 30 }) {
     "--model", String(model || "sonnet"),
     "--max-turns", String(clampInt(maxTurns, 1, 10000))
   ];
+  const normalizedMcpConfig = String(mcpConfig || "").trim();
+  if (normalizedMcpConfig) {
+    args.push("--strict-mcp-config", "--mcp-config", normalizedMcpConfig);
+  }
+  return args;
 }
 
 /**

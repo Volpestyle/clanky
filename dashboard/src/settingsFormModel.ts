@@ -4,6 +4,7 @@ import {
   type Settings,
   type SettingsInput
 } from "../../src/settings/settingsSchema.ts";
+import { normalizeCodeAgentWorkspaceModeSetting } from "../../src/settings/codeAgentWorkspaceMode.ts";
 import {
   buildDashboardSettingsEnvelope,
   isDashboardSettingsEnvelope,
@@ -203,10 +204,8 @@ function buildSettingsFormView(settings: unknown) {
   const codingWorkers = resolvedStack?.devTeam?.codingWorkers || [];
   const codeAgentProvider =
     codingWorkers.length === 1
-      ? codingWorkers[0] === "codex"
-        ? "codex"
-        : codingWorkers[0] === "codex_cli"
-          ? "codex-cli"
+      ? codingWorkers[0] === "codex_cli"
+        ? "codex-cli"
         : "claude-code"
       : "auto";
 
@@ -277,51 +276,43 @@ function buildSettingsFormView(settings: unknown) {
       sessionTimeoutMs: browser.localBrowserAgent.sessionTimeoutMs
     },
     codeAgent: {
-      enabled: devPermissions.allowedUserIds.length > 0 && Boolean(devTeam.codex?.enabled || devTeam.codexCli?.enabled || devTeam.claudeCode?.enabled),
+      enabled: devPermissions.allowedUserIds.length > 0 && Boolean(devTeam.codexCli?.enabled || devTeam.claudeCode?.enabled),
       provider: codeAgentProvider,
       model: String(devTeam.claudeCode?.model || ""),
-      codexModel: String(devTeam.codex?.model || ""),
       codexCliModel: String(devTeam.codexCli?.model || ""),
-      maxTurns: Math.max(Number(devTeam.codex?.maxTurns || 0), Number(devTeam.codexCli?.maxTurns || 0), Number(devTeam.claudeCode?.maxTurns || 0)),
-      timeoutMs: Math.max(Number(devTeam.codex?.timeoutMs || 0), Number(devTeam.codexCli?.timeoutMs || 0), Number(devTeam.claudeCode?.timeoutMs || 0)),
+      maxTurns: Math.max(Number(devTeam.codexCli?.maxTurns || 0), Number(devTeam.claudeCode?.maxTurns || 0)),
+      timeoutMs: Math.max(Number(devTeam.codexCli?.timeoutMs || 0), Number(devTeam.claudeCode?.timeoutMs || 0)),
       maxBufferBytes: Math.max(
-        Number(devTeam.codex?.maxBufferBytes || 0),
         Number(devTeam.codexCli?.maxBufferBytes || 0),
         Number(devTeam.claudeCode?.maxBufferBytes || 0)
       ),
-      defaultCwd: String(devTeam.codexCli?.defaultCwd || devTeam.claudeCode?.defaultCwd || devTeam.codex?.defaultCwd || ""),
+      defaultCwd: String(devTeam.codexCli?.defaultCwd || devTeam.claudeCode?.defaultCwd || ""),
+      workspaceMode: String(devTeam.workspace?.mode || "auto"),
       maxTasksPerHour: Math.max(
-        Number(devTeam.codex?.maxTasksPerHour || 0),
         Number(devTeam.codexCli?.maxTasksPerHour || 0),
         Number(devTeam.claudeCode?.maxTasksPerHour || 0)
       ),
       maxParallelTasks: Math.max(
-        Number(devTeam.codex?.maxParallelTasks || 0),
         Number(devTeam.codexCli?.maxParallelTasks || 0),
         Number(devTeam.claudeCode?.maxParallelTasks || 0)
       ),
       asyncDispatchEnabled: Boolean(
-        devTeam.codex?.asyncDispatch?.enabled ||
         devTeam.codexCli?.asyncDispatch?.enabled ||
         devTeam.claudeCode?.asyncDispatch?.enabled
       ),
       asyncDispatchThresholdMs: Math.max(
-        Number(devTeam.codex?.asyncDispatch?.thresholdMs || 0),
         Number(devTeam.codexCli?.asyncDispatch?.thresholdMs || 0),
         Number(devTeam.claudeCode?.asyncDispatch?.thresholdMs || 0)
       ),
       asyncProgressReportsEnabled: Boolean(
-        devTeam.codex?.asyncDispatch?.progressReports?.enabled ||
         devTeam.codexCli?.asyncDispatch?.progressReports?.enabled ||
         devTeam.claudeCode?.asyncDispatch?.progressReports?.enabled
       ),
       asyncProgressIntervalMs: Math.max(
-        Number(devTeam.codex?.asyncDispatch?.progressReports?.intervalMs || 0),
         Number(devTeam.codexCli?.asyncDispatch?.progressReports?.intervalMs || 0),
         Number(devTeam.claudeCode?.asyncDispatch?.progressReports?.intervalMs || 0)
       ),
       asyncMaxReportsPerTask: Math.max(
-        Number(devTeam.codex?.asyncDispatch?.progressReports?.maxReportsPerTask || 0),
         Number(devTeam.codexCli?.asyncDispatch?.progressReports?.maxReportsPerTask || 0),
         Number(devTeam.claudeCode?.asyncDispatch?.progressReports?.maxReportsPerTask || 0)
       ),
@@ -331,9 +322,12 @@ function buildSettingsFormView(settings: unknown) {
       roleReview: String(resolvedStack?.devTeam?.roles?.review || ""),
       roleResearch: String(resolvedStack?.devTeam?.roles?.research || ""),
       workerConfigs: {
-        codex: { ...devTeam.codex },
         codexCli: { ...devTeam.codexCli },
         claudeCode: { ...devTeam.claudeCode }
+      },
+      nonWorkerRuntimeConfig: {
+        workspace: { ...valueOr(devTeam.workspace, d.agentStack.runtimeConfig.devTeam.workspace) },
+        swarm: { ...valueOr(devTeam.swarm, d.agentStack.runtimeConfig.devTeam.swarm) }
       }
     },
     vision: {
@@ -566,12 +560,12 @@ export function settingsToForm(settings: unknown) {
     codeAgentEnabled: resolved.codeAgent.enabled ?? defaults.codeAgent.enabled,
     codeAgentProvider: resolved.codeAgent.provider ?? defaults.codeAgent.provider,
     codeAgentModel: resolved.codeAgent.model ?? defaults.codeAgent.model,
-    codeAgentCodexModel: resolved.codeAgent.codexModel ?? defaults.codeAgent.codexModel,
     codeAgentCodexCliModel: resolved.codeAgent.codexCliModel ?? defaults.codeAgent.codexCliModel,
     codeAgentMaxTurns: resolved.codeAgent.maxTurns ?? defaults.codeAgent.maxTurns,
     codeAgentTimeoutMs: resolved.codeAgent.timeoutMs ?? defaults.codeAgent.timeoutMs,
     codeAgentMaxBufferBytes: resolved.codeAgent.maxBufferBytes ?? defaults.codeAgent.maxBufferBytes,
     codeAgentDefaultCwd: resolved.codeAgent.defaultCwd ?? defaults.codeAgent.defaultCwd,
+    codeAgentWorkspaceMode: resolved.codeAgent.workspaceMode ?? defaults.codeAgent.workspaceMode,
     codeAgentMaxTasksPerHour: resolved.codeAgent.maxTasksPerHour ?? defaults.codeAgent.maxTasksPerHour,
     codeAgentMaxParallelTasks: resolved.codeAgent.maxParallelTasks ?? defaults.codeAgent.maxParallelTasks,
     codeAgentAsyncDispatchEnabled:
@@ -591,13 +585,14 @@ export function settingsToForm(settings: unknown) {
     codeAgentRoleResearch: String(resolved.codeAgent.roleResearch ?? "claude_code"),
     providerAuthClaudeCode: Boolean(resolved.providerAuth?.claude_code),
     providerAuthCodexCli: Boolean(resolved.providerAuth?.codex_cli),
-    providerAuthCodex: Boolean(resolved.providerAuth?.codex),
     providerAuthAnthropic: Boolean(resolved.providerAuth?.anthropic),
     providerAuthOpenai: Boolean(resolved.providerAuth?.openai),
     providerAuthClaudeOauth: Boolean(resolved.providerAuth?.claude_oauth),
     providerAuthOpenaiOauth: Boolean(resolved.providerAuth?.openai_oauth),
     providerAuthXai: Boolean(resolved.providerAuth?.xai),
     codeAgentWorkerConfigs: resolved.codeAgent.workerConfigs ?? defaults.codeAgent.workerConfigs,
+    codeAgentNonWorkerRuntimeConfig:
+      resolved.codeAgent.nonWorkerRuntimeConfig ?? defaults.codeAgent.nonWorkerRuntimeConfig,
     visionCaptionEnabled: resolved.vision.captionEnabled ?? defaultVision.captionEnabled,
     visionProvider: resolved.vision.provider ?? defaultVision.provider,
     visionModel: resolved.vision.model ?? defaultVision.model,
@@ -1200,65 +1195,60 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
   const advancedOverridesEnabled = Boolean(form.stackAdvancedOverridesEnabled);
   const normalizedCodeAgentProvider = String(form.codeAgentProvider || "auto").trim().toLowerCase();
   const rawCodeAgentWorkerConfigs = form.codeAgentWorkerConfigs;
+  const rawCodeAgentNonWorkerRuntimeConfig: Record<string, unknown> = isRecordLike(form.codeAgentNonWorkerRuntimeConfig)
+    ? form.codeAgentNonWorkerRuntimeConfig
+    : {};
+  const normalizedCodeAgentWorkspaceMode = normalizeCodeAgentWorkspaceModeSetting(
+    form.codeAgentWorkspaceMode,
+    DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.workspace.mode
+  );
   const preservedCodeAgentWorkers = {
-    codex: rawCodeAgentWorkerConfigs.codex,
     codexCli: rawCodeAgentWorkerConfigs.codexCli,
     claudeCode: rawCodeAgentWorkerConfigs.claudeCode
   };
   const preservedCodeAgentAggregate = {
     maxTurns: Math.max(
-      Number(preservedCodeAgentWorkers.codex.maxTurns || 0),
       Number(preservedCodeAgentWorkers.codexCli.maxTurns || 0),
       Number(preservedCodeAgentWorkers.claudeCode.maxTurns || 0)
     ),
     timeoutMs: Math.max(
-      Number(preservedCodeAgentWorkers.codex.timeoutMs || 0),
       Number(preservedCodeAgentWorkers.codexCli.timeoutMs || 0),
       Number(preservedCodeAgentWorkers.claudeCode.timeoutMs || 0)
     ),
     maxBufferBytes: Math.max(
-      Number(preservedCodeAgentWorkers.codex.maxBufferBytes || 0),
       Number(preservedCodeAgentWorkers.codexCli.maxBufferBytes || 0),
       Number(preservedCodeAgentWorkers.claudeCode.maxBufferBytes || 0)
     ),
     defaultCwd: String(
-      preservedCodeAgentWorkers.codex.defaultCwd ||
       preservedCodeAgentWorkers.codexCli.defaultCwd ||
       preservedCodeAgentWorkers.claudeCode.defaultCwd ||
       ""
     ).trim(),
     maxTasksPerHour: Math.max(
-      Number(preservedCodeAgentWorkers.codex.maxTasksPerHour || 0),
       Number(preservedCodeAgentWorkers.codexCli.maxTasksPerHour || 0),
       Number(preservedCodeAgentWorkers.claudeCode.maxTasksPerHour || 0)
     ),
     maxParallelTasks: Math.max(
-      Number(preservedCodeAgentWorkers.codex.maxParallelTasks || 0),
       Number(preservedCodeAgentWorkers.codexCli.maxParallelTasks || 0),
       Number(preservedCodeAgentWorkers.claudeCode.maxParallelTasks || 0)
     ),
     asyncDispatchEnabled: Boolean(
-      preservedCodeAgentWorkers.codex.asyncDispatch?.enabled ||
       preservedCodeAgentWorkers.codexCli.asyncDispatch?.enabled ||
       preservedCodeAgentWorkers.claudeCode.asyncDispatch?.enabled
     ),
     asyncDispatchThresholdMs: Math.max(
-      Number(preservedCodeAgentWorkers.codex.asyncDispatch?.thresholdMs || 0),
       Number(preservedCodeAgentWorkers.codexCli.asyncDispatch?.thresholdMs || 0),
       Number(preservedCodeAgentWorkers.claudeCode.asyncDispatch?.thresholdMs || 0)
     ),
     asyncProgressReportsEnabled: Boolean(
-      preservedCodeAgentWorkers.codex.asyncDispatch?.progressReports?.enabled ||
       preservedCodeAgentWorkers.codexCli.asyncDispatch?.progressReports?.enabled ||
       preservedCodeAgentWorkers.claudeCode.asyncDispatch?.progressReports?.enabled
     ),
     asyncProgressIntervalMs: Math.max(
-      Number(preservedCodeAgentWorkers.codex.asyncDispatch?.progressReports?.intervalMs || 0),
       Number(preservedCodeAgentWorkers.codexCli.asyncDispatch?.progressReports?.intervalMs || 0),
       Number(preservedCodeAgentWorkers.claudeCode.asyncDispatch?.progressReports?.intervalMs || 0)
     ),
     asyncMaxReportsPerTask: Math.max(
-      Number(preservedCodeAgentWorkers.codex.asyncDispatch?.progressReports?.maxReportsPerTask || 0),
       Number(preservedCodeAgentWorkers.codexCli.asyncDispatch?.progressReports?.maxReportsPerTask || 0),
       Number(preservedCodeAgentWorkers.claudeCode.asyncDispatch?.progressReports?.maxReportsPerTask || 0)
     )
@@ -1353,9 +1343,8 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
       }
     };
   };
-  const normalizeCodeAgentRole = (value: unknown): "claude_code" | "codex_cli" | "codex" => {
+  const normalizeCodeAgentRole = (value: unknown): "claude_code" | "codex_cli" => {
     const normalized = String(value || "").trim().toLowerCase();
-    if (normalized === "codex") return "codex";
     if (normalized === "codex_cli") return "codex_cli";
     return "claude_code";
   };
@@ -1365,8 +1354,6 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
     normalizeCodeAgentRole(form.codeAgentRoleReview),
     normalizeCodeAgentRole(form.codeAgentRoleResearch)
   ];
-  const codeAgentUsesCodex =
-    normalizedCodeAgentProvider === "codex" || selectedCodeAgentRoles.includes("codex");
   const codeAgentUsesCodexCli =
     normalizedCodeAgentProvider === "codex-cli" ||
     normalizedCodeAgentProvider === "auto" ||
@@ -1549,13 +1536,11 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
                   research: selectedCodeAgentRoles[3]
                 },
                 codingWorkers:
-                  normalizedCodeAgentProvider === "codex"
-                    ? ["codex"]
-                    : normalizedCodeAgentProvider === "codex-cli"
-                      ? ["codex_cli"]
-                      : normalizedCodeAgentProvider === "claude-code"
-                        ? ["claude_code"]
-                        : undefined
+                  normalizedCodeAgentProvider === "codex-cli"
+                    ? ["codex_cli"]
+                    : normalizedCodeAgentProvider === "claude-code"
+                      ? ["claude_code"]
+                      : undefined
               }
             }
           : {}),
@@ -1678,12 +1663,13 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
           }
         },
         devTeam: {
-          codex: buildCodeAgentWorkerConfig({
-            workerKey: "codex",
-            enabled: Boolean(form.codeAgentEnabled) && codeAgentUsesCodex,
-            model: String(form.codeAgentCodexModel || "gpt-5.4"),
-            fallbackModel: "gpt-5.4"
-          }),
+          ...rawCodeAgentNonWorkerRuntimeConfig,
+          workspace: {
+            ...(isRecordLike(rawCodeAgentNonWorkerRuntimeConfig.workspace)
+              ? rawCodeAgentNonWorkerRuntimeConfig.workspace
+              : {}),
+            mode: normalizedCodeAgentWorkspaceMode
+          },
           codexCli: buildCodeAgentWorkerConfig({
             workerKey: "codexCli",
             enabled: Boolean(form.codeAgentEnabled) && codeAgentUsesCodexCli,

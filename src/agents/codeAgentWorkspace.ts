@@ -3,23 +3,42 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { ResolvedCodeAgentWorkspaceMode } from "../settings/codeAgentWorkspaceMode.ts";
 
 const WORKTREE_PARENT_DIR = path.join(tmpdir(), "clanker-code-worktrees");
 
-export interface CodeAgentWorkspaceLease {
-  readonly mode: "git_worktree";
+type CodeAgentWorkspaceLeaseBase = {
+  readonly mode: ResolvedCodeAgentWorkspaceMode;
   readonly repoRoot: string;
-  readonly worktreePath: string;
   readonly cwd: string;
+  readonly canonicalCwd: string;
+  readonly relativeCwd: string;
+  readonly worktreePath?: string;
+  readonly branch?: string;
+  readonly baseRef?: string;
+  cleanup(): void;
+};
+
+export type SharedCheckoutCodeAgentWorkspaceLease = CodeAgentWorkspaceLeaseBase & {
+  readonly mode: "shared_checkout";
+};
+
+export type IsolatedWorktreeCodeAgentWorkspaceLease = CodeAgentWorkspaceLeaseBase & {
+  readonly mode: "isolated_worktree";
+  readonly worktreePath: string;
   readonly branch: string;
   readonly baseRef: string;
-  cleanup(): void;
-}
+};
+
+export type CodeAgentWorkspaceLease =
+  | SharedCheckoutCodeAgentWorkspaceLease
+  | IsolatedWorktreeCodeAgentWorkspaceLease;
 
 type ProvisionCodeAgentWorkspaceOptions = {
   cwd: string;
   provider: "claude-code" | "codex-cli";
   scopeKey: string;
+  mode: ResolvedCodeAgentWorkspaceMode;
 };
 
 function sanitizeSegment(value: string, fallback: string, maxLen = 48): string {
@@ -92,17 +111,39 @@ function resolveBaseRef(repoRoot: string): string {
   return "HEAD";
 }
 
-export function provisionCodeAgentWorkspace({
-  cwd,
-  provider,
-  scopeKey
-}: ProvisionCodeAgentWorkspaceOptions): CodeAgentWorkspaceLease {
+function resolveWorkspaceContext(cwd: string) {
   const absoluteRequestedCwd = path.resolve(String(cwd || "").trim() || process.cwd());
   const repoRoot = resolveRepoRoot(absoluteRequestedCwd);
   const resolvedRequestedCwd = realpathSync(absoluteRequestedCwd);
   const relativeCwd = path.relative(repoRoot, resolvedRequestedCwd);
   if (relativeCwd.startsWith("..") || path.isAbsolute(relativeCwd)) {
     throw new Error(`Code agent working directory must stay inside repo root: ${repoRoot}`);
+  }
+
+  return {
+    repoRoot,
+    resolvedRequestedCwd,
+    relativeCwd
+  };
+}
+
+export function provisionCodeAgentWorkspace({
+  cwd,
+  provider,
+  scopeKey,
+  mode
+}: ProvisionCodeAgentWorkspaceOptions): CodeAgentWorkspaceLease {
+  const { repoRoot, resolvedRequestedCwd, relativeCwd } = resolveWorkspaceContext(cwd);
+
+  if (mode === "shared_checkout") {
+    return {
+      mode: "shared_checkout",
+      repoRoot,
+      cwd: resolvedRequestedCwd,
+      canonicalCwd: resolvedRequestedCwd,
+      relativeCwd,
+      cleanup() {}
+    };
   }
 
   mkdirSync(WORKTREE_PARENT_DIR, { recursive: true });
@@ -124,10 +165,12 @@ export function provisionCodeAgentWorkspace({
   let cleanedUp = false;
 
   return {
-    mode: "git_worktree",
+    mode: "isolated_worktree",
     repoRoot,
     worktreePath,
     cwd: worktreeCwd,
+    canonicalCwd: resolvedRequestedCwd,
+    relativeCwd,
     branch,
     baseRef,
     cleanup() {

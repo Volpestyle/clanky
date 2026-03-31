@@ -198,6 +198,8 @@ Preset-specific default choices and product intent live in [`../architecture/pre
 
 - browser runtime knobs and behavior: [`../capabilities/browser.md`](../capabilities/browser.md)
 - code-agent knobs and behavior: [`../capabilities/code.md`](../capabilities/code.md)
+- `agentStack.runtimeConfig.devTeam.workspace` controls whether local coding workers use the shared checkout or isolated worktrees; its behavioral contract lives in [`../capabilities/code.md`](../capabilities/code.md)
+- `agentStack.runtimeConfig.devTeam.swarm` is the optional MCP coordination wiring for local code workers; its behavioral contract also lives in [`../capabilities/code.md`](../capabilities/code.md)
 - voice transport and pipeline knobs: [`../voice/voice-provider-abstraction.md`](../voice/voice-provider-abstraction.md)
 - activity/attention-facing behavior knobs: [`../architecture/activity.md`](../architecture/activity.md)
 

@@ -21,7 +21,6 @@ import { minimizeSettingsIntent } from "./settingsIntent.ts";
 export type DashboardProviderAuthBindings = {
   claude_code?: boolean;
   codex_cli?: boolean;
-  codex?: boolean;
   /** Per-provider auth status for the full provider set (orchestrator + code agent). */
   anthropic?: boolean;
   openai?: boolean;

@@ -134,7 +134,7 @@ Based on the `opencode-anthropic-auth` plugin (npm `opencode-anthropic-auth@0.0.
 
 OpenAI OAuth is the product-level auth lane for ChatGPT-backed OpenAI usage in this repo. The canonical provider key is `openai-oauth`.
 
-Use it for the general-purpose OpenAI orchestrator, voice admission, and voice generation paths. It is not itself the coding worker. The local OpenAI-side coding worker is `codex-cli`; remote `codex` remains an optional separate worker.
+Use it for the general-purpose OpenAI orchestrator, voice admission, and voice generation paths. It is not itself the coding worker. The local OpenAI-side coding worker is `codex-cli`.
 
 When the `openai_oauth` preset is used, the expected split is:
 
@@ -207,7 +207,6 @@ Use the canonical provider id `provider: "openai-oauth"` in settings with a supp
 For dev-team code-agent tasks:
 
 - `codex-cli` is the local workspace-aware OpenAI coding worker and uses the local Codex CLI login/session on that machine
-- remote `codex` will prefer `OPENAI_API_KEY` when present and otherwise fall back to the `openai-oauth` client
 
 ### Pricing
 

@@ -6,7 +6,7 @@ import {
   buildCodexCliResumeArgs,
   createCodexCliStreamSession,
   parseCodexCliJsonlOutput
-} from "../llm.ts";
+} from "./llmCodexCli.ts";
 
 test("buildCodexCliBrainArgs includes json ephemeral flags", () => {
   const args = buildCodexCliBrainArgs({ model: "gpt-5.4", prompt: "hello" });
@@ -29,6 +29,25 @@ test("buildCodexCliCodeAgentArgs includes cwd and workspace sandbox", () => {
   assert.equal(args[args.indexOf("-s") + 1], "workspace-write");
   assert.equal(args.includes("-C"), true);
   assert.equal(args[args.indexOf("-C") + 1], "/tmp/project");
+  assert.equal(args[args.length - 1], "fix it");
+});
+
+test("buildCodexCliCodeAgentArgs appends MCP config overrides before the instruction", () => {
+  const args = buildCodexCliCodeAgentArgs({
+    model: "gpt-5.4",
+    cwd: "/tmp/project",
+    instruction: "fix it",
+    configOverrides: [
+      "mcp_servers.swarm.command='bun'",
+      "mcp_servers.swarm.args=['run', '/tmp/swarm.ts']"
+    ]
+  });
+
+  const firstConfigIndex = args.indexOf("-c");
+  assert.ok(firstConfigIndex >= 0);
+  assert.equal(args[firstConfigIndex + 1], "mcp_servers.swarm.command='bun'");
+  assert.equal(args[firstConfigIndex + 2], "-c");
+  assert.equal(args[firstConfigIndex + 3], "mcp_servers.swarm.args=['run', '/tmp/swarm.ts']");
   assert.equal(args[args.length - 1], "fix it");
 });
 

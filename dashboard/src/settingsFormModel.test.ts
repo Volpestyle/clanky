@@ -225,12 +225,12 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.voiceCommandOnlyMode = true;
   form.voiceOpenAiRealtimeTranscriptionMethod = "file_wav";
   form.voiceOpenAiRealtimeUsePerUserAsrBridge = false;
-  form.codeAgentProvider = "codex";
-  form.codeAgentCodexModel = "gpt-5-codex";
+  form.codeAgentProvider = "codex-cli";
+  form.codeAgentCodexCliModel = "gpt-5.3-codex";
   form.codeAgentRoleDesign = "claude_code";
   form.codeAgentRoleImplementation = "codex_cli";
   form.codeAgentRoleReview = "claude_code";
-  form.codeAgentRoleResearch = "codex";
+  form.codeAgentRoleResearch = "codex_cli";
   form.textInitiativeUseTextModel = false;
   form.textInitiativeLlmProvider = "anthropic";
   form.textInitiativeLlmModel = "claude-haiku-4-5";
@@ -273,14 +273,14 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(effectivePatch.agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod, "file_wav");
   assert.equal(effectivePatch.agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge, false);
   assert.equal(effectivePatch.voice.transcription.languageMode, "fixed");
-  assert.deepEqual(patch.agentStack.overrides.devTeam.codingWorkers, ["codex"]);
+  assert.deepEqual(patch.agentStack.overrides.devTeam.codingWorkers, ["codex_cli"]);
   assert.deepEqual(patch.agentStack.overrides.devTeam.roles, {
     design: "claude_code",
     implementation: "codex_cli",
     review: "claude_code",
-    research: "codex"
+    research: "codex_cli"
   });
-  assert.equal(effectivePatch.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
+  assert.equal(effectivePatch.agentStack.runtimeConfig.devTeam.codexCli.model, "gpt-5.3-codex");
   assert.equal(effectivePatch.interaction.replyGeneration.reasoningEffort, "xhigh");
   assert.equal(effectivePatch.initiative.voice.enabled, true);
   assert.equal(effectivePatch.initiative.discovery.sources.reddit, false);
@@ -578,6 +578,46 @@ test("settingsFormModel round-trips codex cli code agent fields", () => {
   assert.equal(effectivePatch.agentStack.runtimeConfig.devTeam.codexCli.model, "gpt-5.4");
 });
 
+test("settingsFormModel preserves code-agent workspace mode and swarm runtime config", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({
+    agentStack: {
+      advancedOverridesEnabled: true,
+      runtimeConfig: {
+        devTeam: {
+          workspace: {
+            mode: "shared_checkout"
+          },
+          swarm: {
+            enabled: true,
+            serverName: "swarm-bus",
+            command: "bun",
+            args: ["run", "C:/Users/volpe/swarm-mcp/src/index.ts"],
+            dbPath: "C:/shared/swarm.db",
+            appendCoordinationPrompt: false
+          },
+          codexCli: {
+            enabled: true,
+            model: "gpt-5.4"
+          }
+        }
+      }
+    }
+  })));
+
+  assert.equal(form.codeAgentWorkspaceMode, "shared_checkout");
+
+  const { patch, effectivePatch } = serializeForm(form);
+  assert.equal(patch.agentStack.runtimeConfig.devTeam.workspace.mode, "shared_checkout");
+  assert.deepEqual(effectivePatch.agentStack.runtimeConfig.devTeam.swarm, {
+    enabled: true,
+    serverName: "swarm-bus",
+    command: "bun",
+    args: ["run", "C:/Users/volpe/swarm-mcp/src/index.ts"],
+    dbPath: "C:/shared/swarm.db",
+    appendCoordinationPrompt: false
+  });
+});
+
 test("settingsFormModel enables role-selected coding workers even when provider stays auto", () => {
   const form = settingsToForm(withResolved(normalizeSettings({})));
   form.stackAdvancedOverridesEnabled = true;
@@ -587,17 +627,16 @@ test("settingsFormModel enables role-selected coding workers even when provider 
   form.codeAgentRoleDesign = "claude_code";
   form.codeAgentRoleImplementation = "codex_cli";
   form.codeAgentRoleReview = "claude_code";
-  form.codeAgentRoleResearch = "codex";
+  form.codeAgentRoleResearch = "codex_cli";
 
   const patch = formToSettingsPatch(form);
 
-  assert.equal(patch.agentStack.runtimeConfig.devTeam.codex.enabled, true);
   assert.equal(patch.agentStack.runtimeConfig.devTeam.codexCli.enabled, true);
   assert.equal(patch.agentStack.runtimeConfig.devTeam.claudeCode.enabled, true);
   assert.equal(patch.agentStack.overrides.devTeam.codingWorkers, undefined);
   assert.equal(
     resolveAgentStack(normalizeSettings(patch)).devTeam.roles.research,
-    "codex"
+    "codex_cli"
   );
 });
 

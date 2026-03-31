@@ -4,6 +4,7 @@ import { BaseAgentSession } from "./baseAgentSession.ts";
 import type { SubAgentTurnOptions, SubAgentTurnResult } from "./subAgentSession.ts";
 import { EMPTY_USAGE, generateSessionId } from "./subAgentSession.ts";
 import type { CodeAgentWorkspaceLease } from "./codeAgentWorkspace.ts";
+import { applyCodeAgentFirstTurnPreamble, type CodeAgentSwarmSessionConfig } from "./codeAgentSwarm.ts";
 
 interface CodeAgentTrace {
   guildId?: string | null;
@@ -29,6 +30,7 @@ interface CodexCliAgentSessionOptions {
     logAction: (entry: Record<string, unknown>) => void;
   };
   workspace?: CodeAgentWorkspaceLease | null;
+  swarm?: CodeAgentSwarmSessionConfig | null;
 }
 
 export class CodexCliAgentSession extends BaseAgentSession {
@@ -38,13 +40,14 @@ export class CodexCliAgentSession extends BaseAgentSession {
   private readonly trace: CodeAgentTrace;
   private readonly store: { logAction: (entry: Record<string, unknown>) => void };
   private readonly workspace: CodeAgentWorkspaceLease | null;
+  private readonly swarm: CodeAgentSwarmSessionConfig | null;
   private turnCount: number;
   private workspaceReleased: boolean;
   private lastTurnInput: string;
   private lastTurnStartedAtMs: number;
 
   constructor(options: CodexCliAgentSessionOptions) {
-    const { scopeKey, cwd, model, timeoutMs, maxBufferBytes, trace, store, workspace = null } = options;
+    const { scopeKey, cwd, model, timeoutMs, maxBufferBytes, trace, store, workspace = null, swarm = null } = options;
     super({
       id: generateSessionId("code", scopeKey),
       type: "code",
@@ -56,11 +59,18 @@ export class CodexCliAgentSession extends BaseAgentSession {
     this.trace = trace;
     this.store = store;
     this.workspace = workspace;
+    this.swarm = swarm;
     this.turnCount = 0;
     this.workspaceReleased = false;
     this.lastTurnInput = "";
     this.lastTurnStartedAtMs = 0;
-    this.streamSession = createCodexCliStreamSession({ model: this.model, maxBufferBytes, cwd });
+    this.streamSession = createCodexCliStreamSession({
+      model: this.model,
+      maxBufferBytes,
+      cwd,
+      configOverrides: this.swarm?.codexConfigOverrides || [],
+      env: this.swarm?.env || {}
+    });
   }
 
   protected async executeTurn(input: string, options: SubAgentTurnOptions): Promise<SubAgentTurnResult> {
@@ -72,8 +82,11 @@ export class CodexCliAgentSession extends BaseAgentSession {
     try {
       throwIfAborted(turnSignal, "Codex CLI session cancelled");
       activeCodexCliTaskCount.current += 1;
+      const turnInput = this.turnCount === 1
+        ? applyCodeAgentFirstTurnPreamble(input, this.swarm?.firstTurnPreamble)
+        : input;
       const result = await this.streamSession.run({
-        input,
+        input: turnInput,
         timeoutMs: this.timeoutMs,
         signal: turnSignal,
         onEvent: options.onProgress
@@ -111,6 +124,10 @@ export class CodexCliAgentSession extends BaseAgentSession {
           workspaceBaseRef: this.workspace?.baseRef || null,
           workspaceRepoRoot: this.workspace?.repoRoot || null,
           workspaceCwd: this.workspace?.cwd || null,
+          swarmEnabled: Boolean(this.swarm),
+          swarmServerName: this.swarm?.serverName || null,
+          swarmScope: this.swarm?.scope || null,
+          swarmFileRoot: this.swarm?.fileRoot || null,
           isError: turnResult.isError,
           usage: turnResult.usage,
           source: this.trace.source,
@@ -150,6 +167,10 @@ export class CodexCliAgentSession extends BaseAgentSession {
         workspaceBaseRef: this.workspace?.baseRef || null,
         workspaceRepoRoot: this.workspace?.repoRoot || null,
         workspaceCwd: this.workspace?.cwd || null,
+        swarmEnabled: Boolean(this.swarm),
+        swarmServerName: this.swarm?.serverName || null,
+        swarmScope: this.swarm?.scope || null,
+        swarmFileRoot: this.swarm?.fileRoot || null,
         isTimeout: normalized.isTimeout,
         errorMessage: normalized.message,
         source: this.trace.source,

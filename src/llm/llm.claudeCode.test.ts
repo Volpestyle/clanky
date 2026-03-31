@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
+  buildCodeAgentSessionCliArgs,
   buildClaudeCodeCliArgs,
   buildClaudeCodeJsonCliArgs,
   buildClaudeCodeTextCliArgs,
@@ -108,6 +109,19 @@ test("buildClaudeCodeCliArgs allows overriding max turns for persistent stream s
   });
   const maxTurnsIndex = args.indexOf("--max-turns");
   assert.equal(args[maxTurnsIndex + 1], "120");
+});
+
+test("buildCodeAgentSessionCliArgs can pin a strict one-off MCP config", () => {
+  const args = buildCodeAgentSessionCliArgs({
+    model: "sonnet",
+    maxTurns: 12,
+    mcpConfig: '{"swarm":{"type":"stdio","command":"bun","args":["run","/tmp/swarm.ts"],"env":{}}}'
+  });
+
+  assert.equal(args.includes("--strict-mcp-config"), true);
+  assert.equal(args.includes("--mcp-config"), true);
+  assert.equal(args[args.indexOf("--mcp-config") + 1], '{"swarm":{"type":"stdio","command":"bun","args":["run","/tmp/swarm.ts"],"env":{}}}');
+  assert.equal(args[args.indexOf("--max-turns") + 1], "12");
 });
 
 test("buildClaudeCodeJsonCliArgs includes output-format json and trailing prompt", () => {

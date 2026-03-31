@@ -33,7 +33,6 @@ export const MODEL_PROVIDER_KINDS = [
 
 export const CODING_WORKER_RUNTIME_KINDS = [
   "claude_code",
-  "codex",
   "codex_cli"
 ] as const;
 
@@ -365,24 +364,16 @@ export const DEFAULT_SETTINGS = {
         textToolPolicy: "full"
       },
       devTeam: {
-        codex: {
+        workspace: {
+          mode: "auto"
+        },
+        swarm: {
           enabled: false,
-          model: "gpt-5.4",
-          maxTurns: 30,
-          timeoutMs: 300_000,
-          maxBufferBytes: 2 * 1024 * 1024,
-          defaultCwd: "",
-          maxTasksPerHour: 10,
-          maxParallelTasks: 2,
-          asyncDispatch: {
-            enabled: true,
-            thresholdMs: 0,
-            progressReports: {
-              enabled: true,
-              intervalMs: 60_000,
-              maxReportsPerTask: 5
-            }
-          }
+          serverName: "swarm",
+          command: "",
+          args: [],
+          dbPath: "",
+          appendCoordinationPrompt: true
         },
         codexCli: {
           enabled: false,

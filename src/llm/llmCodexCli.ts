@@ -56,6 +56,8 @@ type PendingJob = {
   reject: (error: Error) => void;
 };
 
+type CodexCliEnv = Record<string, string>;
+
 function safeJsonParse(value: string, fallback: unknown = null) {
   return safeJsonParseFromString(value, fallback);
 }
@@ -187,19 +189,26 @@ function emitProgressFromCodexJsonlLine({
   }
 }
 
-export function runCodexCli({ args, input, timeoutMs, maxBufferBytes, cwd = "", signal = undefined as AbortSignal | undefined, onStdoutLine = undefined as ((line: string) => void) | undefined }: {
+export function runCodexCli({ args, input, timeoutMs, maxBufferBytes, cwd = "", env = {}, signal = undefined as AbortSignal | undefined, onStdoutLine = undefined as ((line: string) => void) | undefined }: {
   args: string[];
   input?: string;
   timeoutMs: number;
   maxBufferBytes: number;
   cwd?: string;
+  env?: CodexCliEnv;
   signal?: AbortSignal;
   onStdoutLine?: (line: string) => void;
 }) {
   return new Promise<CodexCliResult>((resolve, reject) => {
-    const spawnOptions: { stdio: ["pipe", "pipe", "pipe"]; cwd?: string } = { stdio: ["pipe", "pipe", "pipe"] };
+    const spawnOptions: { stdio: ["pipe", "pipe", "pipe"]; cwd?: string; env?: NodeJS.ProcessEnv } = {
+      stdio: ["pipe", "pipe", "pipe"]
+    };
     const normalizedCwd = String(cwd || "").trim();
     if (normalizedCwd) spawnOptions.cwd = normalizedCwd;
+    const normalizedEnv = env && typeof env === "object" ? env : undefined;
+    if (normalizedEnv && Object.keys(normalizedEnv).length > 0) {
+      spawnOptions.env = { ...process.env, ...normalizedEnv };
+    }
     const child = spawn("codex", args, spawnOptions);
     let stdout = "";
     let stderr = "";
@@ -335,16 +344,34 @@ class CodexCliStreamSession implements CodexCliStreamSessionLike {
   private readonly model: string;
   private readonly maxBufferBytes: number;
   private readonly cwd: string;
+  private readonly configOverrides: string[];
+  private readonly env: CodexCliEnv;
   private closed: boolean;
   private running: boolean;
   private readonly queue: PendingJob[];
   private threadId: string;
   private activeRunAbortController: AbortController | null;
 
-  constructor({ model, maxBufferBytes, cwd = "" }: { model: string; maxBufferBytes: number; cwd?: string }) {
+  constructor({
+    model,
+    maxBufferBytes,
+    cwd = "",
+    configOverrides = [],
+    env = {}
+  }: {
+    model: string;
+    maxBufferBytes: number;
+    cwd?: string;
+    configOverrides?: string[];
+    env?: CodexCliEnv;
+  }) {
     this.model = String(model || "").trim();
     this.maxBufferBytes = Math.max(4096, Math.floor(Number(maxBufferBytes) || 1024 * 1024));
     this.cwd = String(cwd || "").trim();
+    this.configOverrides = Array.isArray(configOverrides)
+      ? configOverrides.map((value) => String(value || "").trim()).filter(Boolean)
+      : [];
+    this.env = env && typeof env === "object" ? { ...env } : {};
     this.closed = false;
     this.running = false;
     this.queue = [];
@@ -410,8 +437,17 @@ class CodexCliStreamSession implements CodexCliStreamSessionLike {
     try {
       const prompt = String(job.input || "").trim();
       const args = this.threadId
-        ? buildCodexCliResumeArgs({ model: this.model, threadId: this.threadId, prompt })
-        : buildCodexCliBrainArgs({ model: this.model, prompt });
+        ? buildCodexCliResumeArgs({
+            model: this.model,
+            threadId: this.threadId,
+            prompt,
+            configOverrides: this.configOverrides
+          })
+        : buildCodexCliBrainArgs({
+            model: this.model,
+            prompt,
+            configOverrides: this.configOverrides
+          });
       const signal = job.signal
         ? AbortSignal.any([this.activeRunAbortController.signal, job.signal])
         : this.activeRunAbortController.signal;
@@ -422,6 +458,7 @@ class CodexCliStreamSession implements CodexCliStreamSessionLike {
         timeoutMs: job.timeoutMs,
         maxBufferBytes: this.maxBufferBytes,
         cwd: this.cwd,
+        env: this.env,
         signal,
         onStdoutLine: (line) =>
           emitProgressFromCodexJsonlLine({
@@ -448,11 +485,15 @@ class CodexCliStreamSession implements CodexCliStreamSessionLike {
 export function createCodexCliStreamSession({
   model,
   maxBufferBytes = 1024 * 1024,
-  cwd = ""
+  cwd = "",
+  configOverrides = [],
+  env = {}
 }: {
   model: string;
   maxBufferBytes?: number;
   cwd?: string;
+  configOverrides?: string[];
+  env?: CodexCliEnv;
 }): CodexCliStreamSessionLike {
   const normalizedModel = String(model || "").trim();
   if (!normalizedModel) {
@@ -461,8 +502,18 @@ export function createCodexCliStreamSession({
   return new CodexCliStreamSession({
     model: normalizedModel,
     maxBufferBytes,
-    cwd
+    cwd,
+    configOverrides,
+    env
   });
+}
+
+function appendCodexConfigOverrides(args: string[], configOverrides: string[] = []) {
+  for (const value of configOverrides) {
+    const normalized = String(value || "").trim();
+    if (!normalized) continue;
+    args.push("-c", normalized);
+  }
 }
 
 export function parseCodexCliJsonlOutput(rawOutput: string, model = ""): CodexCliParsedResult | null {
@@ -535,10 +586,11 @@ export function parseCodexCliJsonlOutput(rawOutput: string, model = ""): CodexCl
   };
 }
 
-export function buildCodexCliBrainArgs({ model, prompt = "", outputSchemaPath = "" }: {
+export function buildCodexCliBrainArgs({ model, prompt = "", outputSchemaPath = "", configOverrides = [] }: {
   model: string;
   prompt?: string;
   outputSchemaPath?: string;
+  configOverrides?: string[];
 }) {
   const args = [
     "exec",
@@ -552,6 +604,7 @@ export function buildCodexCliBrainArgs({ model, prompt = "", outputSchemaPath = 
   if (normalizedOutputSchemaPath) {
     args.push("--output-schema", normalizedOutputSchemaPath);
   }
+  appendCodexConfigOverrides(args, configOverrides);
   const normalizedPrompt = String(prompt || "").trim();
   if (normalizedPrompt) {
     args.push(normalizedPrompt);
@@ -559,10 +612,11 @@ export function buildCodexCliBrainArgs({ model, prompt = "", outputSchemaPath = 
   return args;
 }
 
-export function buildCodexCliTextArgs({ model, prompt = "", outputSchemaPath = "" }: {
+export function buildCodexCliTextArgs({ model, prompt = "", outputSchemaPath = "", configOverrides = [] }: {
   model: string;
   prompt?: string;
   outputSchemaPath?: string;
+  configOverrides?: string[];
 }) {
   const args = [
     "exec",
@@ -575,6 +629,7 @@ export function buildCodexCliTextArgs({ model, prompt = "", outputSchemaPath = "
   if (normalizedOutputSchemaPath) {
     args.push("--output-schema", normalizedOutputSchemaPath);
   }
+  appendCodexConfigOverrides(args, configOverrides);
   const normalizedPrompt = String(prompt || "").trim();
   if (normalizedPrompt) {
     args.push(normalizedPrompt);
@@ -582,10 +637,11 @@ export function buildCodexCliTextArgs({ model, prompt = "", outputSchemaPath = "
   return args;
 }
 
-export function buildCodexCliCodeAgentArgs({ model, cwd = "", instruction = "" }: {
+export function buildCodexCliCodeAgentArgs({ model, cwd = "", instruction = "", configOverrides = [] }: {
   model: string;
   cwd?: string;
   instruction?: string;
+  configOverrides?: string[];
 }) {
   const args = [
     "exec",
@@ -599,6 +655,7 @@ export function buildCodexCliCodeAgentArgs({ model, cwd = "", instruction = "" }
   if (normalizedCwd) {
     args.push("-C", normalizedCwd);
   }
+  appendCodexConfigOverrides(args, configOverrides);
   const normalizedInstruction = String(instruction || "").trim();
   if (normalizedInstruction) {
     args.push(normalizedInstruction);
@@ -606,11 +663,12 @@ export function buildCodexCliCodeAgentArgs({ model, cwd = "", instruction = "" }
   return args;
 }
 
-export function buildCodexCliResumeArgs({ model, threadId, prompt = "", outputSchemaPath = "" }: {
+export function buildCodexCliResumeArgs({ model, threadId, prompt = "", outputSchemaPath = "", configOverrides = [] }: {
   model: string;
   threadId: string;
   prompt?: string;
   outputSchemaPath?: string;
+  configOverrides?: string[];
 }) {
   const args = [
     "exec",
@@ -625,6 +683,7 @@ export function buildCodexCliResumeArgs({ model, threadId, prompt = "", outputSc
   if (normalizedOutputSchemaPath) {
     args.push("--output-schema", normalizedOutputSchemaPath);
   }
+  appendCodexConfigOverrides(args, configOverrides);
   const normalizedPrompt = String(prompt || "").trim();
   if (normalizedPrompt) {
     args.push(normalizedPrompt);

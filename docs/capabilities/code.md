@@ -14,12 +14,10 @@ This document describes the `code_task` capability.
 Core runtime files:
 
 - `src/agents/codeAgent.ts`
-- `src/agents/codexAgent.ts`
 - `src/agents/codexCliAgent.ts`
 - `src/agents/baseAgentSession.ts`
 - `src/agents/subAgentSession.ts`
 - `src/llm/llmClaudeCode.ts`
-- `src/llm/llmCodex.ts`
 - `src/llm/llmCodexCli.ts`
 
 ## Access Control
@@ -54,26 +52,22 @@ Preset defaults are intentionally asymmetric:
 - `openai_*` presets keep `codex-cli` as the primary implementation worker and `claude-code` as the secondary local worker
 - `claude_*` presets keep `claude-code` as the primary implementation worker and `codex-cli` as the secondary local worker
 - review work can route to a different worker than implementation
-- remote `codex` remains available, but it is not part of the preset-default local worker order
 
 The dashboard-facing `codeAgent.provider` compatibility field supports:
 
 - `"claude-code"` — local Claude CLI runtime
 - `"codex-cli"` — local Codex CLI runtime
-- `"codex"` — remote OpenAI Responses/Codex runtime
 - `"auto"` — defer to the resolved preset/default worker routing
 
 Provider model fields:
 
 - `codeAgent.model` (Claude Code model alias)
 - `codeAgent.codexCliModel` (Codex CLI model)
-- `codeAgent.codexModel` (OpenAI Codex Responses model)
 
 In product terms:
 
 - `claude-code` is the local Anthropic-side coding worker
 - `codex-cli` is the local OpenAI-side coding worker
-- `codex` is the optional remote OpenAI Responses worker
 
 ## Tool Contract
 
@@ -115,11 +109,11 @@ Session manager:
 
 - `SubAgentSessionManager` with idle sweep and max concurrent session controls
 - owner checks prevent one user from continuing another user’s session
-- provider-specific session implementations for Claude Code, Codex CLI, and Codex
+- provider-specific session implementations for Claude Code and Codex CLI
 - all provider sessions extend `BaseAgentSession`, which owns shared `runTurn` lifecycle semantics (abort wiring, status transitions, cancel/close behavior, and lifecycle logging)
 - `runTurn` options support both `signal` and `onProgress` (for async background task progress emission)
 
-## Workspace Isolation
+## Workspace Mode
 
 `cwd` resolution:
 
@@ -127,23 +121,43 @@ Session manager:
 - otherwise the selected role worker's `defaultCwd`
 - otherwise fallback: the bot repo root (`process.cwd()`)
 
-For local workers (`claude-code`, `codex-cli`), that resolved path is treated as a target path inside a git repo, not as the live execution directory. Runtime behavior:
+For local workers (`claude-code`, `codex-cli`), that resolved path is treated as a target path inside a git repo, not just as a raw shell cwd. The runtime resolves a local workspace mode through `agentStack.runtimeConfig.devTeam.workspace.mode`:
 
-- resolve the containing git repo root for the requested path
-- create a disposable `git worktree` on a fresh `clanker/...` branch
-- run the local coding worker inside the matching path within that worktree
-- reuse the same worktree across follow-up turns in the same code session
-- remove the worktree and throw away the branch when the session closes, times out, errors, or is cancelled
+- `auto`: default mode. Uses `shared_checkout` when swarm is enabled and `isolated_worktree` when swarm is disabled.
+- `shared_checkout`: run the worker directly in the live checkout at the requested repo path.
+- `shared_checkout`: follow-up turns in the same code session stay in that same live checkout.
+- `isolated_worktree`: create a disposable `git worktree` on a fresh `clanker/...` branch.
+- `isolated_worktree`: run the local worker inside the matching path within that worktree.
+- `isolated_worktree`: reuse the same worktree across follow-up turns in the same code session.
+- `isolated_worktree`: remove the worktree and throw away the branch when the session closes, times out, errors, or is cancelled.
 
-This protects the live checkout from routine agent edits while still preserving full local shell power inside the disposable branch workspace.
+Product-wise, `shared_checkout` is the more natural swarm-collaboration mode because every local worker sees the same live repo state. `isolated_worktree` remains the safer containment mode for non-swarm or higher-risk tasks.
 
 Important boundary:
 
-- this is workspace isolation, not host isolation
+- this is workspace selection, not host isolation
 - local workers still run as the same OS user and keep normal machine access
 - the resolved `cwd` must point inside a git repository for local workers
 
-`codex` still runs through OpenAI's API-driven Responses execution path and does not provision a local worktree.
+## Swarm Coordination
+
+Clanky can optionally mount `swarm-mcp` into local code workers as an internal coordination layer.
+
+When `agentStack.runtimeConfig.devTeam.swarm.enabled` is true:
+
+- local `codex-cli` and `claude-code` workers get a per-session swarm MCP config at launch time
+- the worker receives first-turn guidance to register itself into the shared swarm
+- `workspace.mode: auto` defaults those local workers to the shared checkout so the swarm naturally sees one live repo
+- when a session still uses `isolated_worktree`, registration uses the disposable worktree as the live `directory`, but uses the original requested repo path as `file_root`
+- swarm `scope` is pinned to the canonical repo root
+
+This matters because local workers can now run either in the shared checkout or in disposable git worktrees. Without the canonical `file_root` and repo-root `scope`, an isolated worker's file lock or annotation would point at its transient worktree path instead of the shared repo path that another worker should see.
+
+Operationally:
+
+- `agentStack.runtimeConfig.devTeam.swarm` configures how Clanky launches the swarm MCP server for local coding workers
+- the swarm command and args should normally use absolute paths so both Codex CLI and Claude Code can start the same server reliably
+- `dbPath` is optional and overrides the shared SQLite location via `SWARM_DB_PATH`
 
 ## Async Dispatch
 
@@ -193,24 +207,16 @@ Canonical persisted defaults live under `agentStack.runtimeConfig.devTeam` in `s
 
 ```ts
 devTeam: {
-  codex: {
+  workspace: {
+    mode: "auto"
+  },
+  swarm: {
     enabled: false,
-    model: "gpt-5.4",
-    maxTurns: 30,
-    timeoutMs: 300_000,
-    maxBufferBytes: 2 * 1024 * 1024,
-    defaultCwd: "",
-    maxTasksPerHour: 10,
-    maxParallelTasks: 2,
-    asyncDispatch: {
-      enabled: true,
-      thresholdMs: 0,
-      progressReports: {
-        enabled: true,
-        intervalMs: 60_000,
-        maxReportsPerTask: 5
-      }
-    }
+    serverName: "swarm",
+    command: "",
+    args: [],
+    dbPath: "",
+    appendCoordinationPrompt: true
   },
   codexCli: {
     enabled: false,
@@ -254,3 +260,4 @@ devTeam: {
 ```
 
 The selected worker order is controlled through `agentStack.overrides.devTeam.codingWorkers` when advanced overrides are enabled. The dashboard's `Auto` option leaves worker ordering on the preset/default path instead of pinning a specific worker override.
+

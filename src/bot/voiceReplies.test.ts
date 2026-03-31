@@ -137,9 +137,6 @@ function baseSettings(overrides = {}) {
                 }
         },
         devTeam: {
-          codex: {
-            enabled: codeAgentProvider === "codex"
-          },
           codexCli: {
             enabled: codeAgentProvider === "codex-cli" || codeAgentProvider === "auto"
           },

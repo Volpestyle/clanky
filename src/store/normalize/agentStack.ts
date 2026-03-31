@@ -12,6 +12,7 @@ import {
   normalizeOpenAiRealtimeTranscriptionModel
 } from "../../voice/realtimeProviderNormalization.ts";
 import { normalizeVoiceRuntimeMode } from "../../voice/voiceModes.ts";
+import { normalizeCodeAgentWorkspaceModeSetting } from "../../settings/codeAgentWorkspaceMode.ts";
 import {
   isRecord,
   normalizeBoolean,
@@ -53,6 +54,16 @@ function normalizeCodingWorkerList(value: unknown) {
   return normalizeStringList(value, 4, 40)
     .map((entry) => normalizeCodingWorkerName(entry))
     .filter((entry): entry is SettingsCodingWorkerName => entry !== undefined);
+}
+
+function normalizeMcpServerName(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 64)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+/g, "")
+    .replace(/-+$/g, "");
+  return normalized || fallback;
 }
 
 export function normalizeAgentStackSection(
@@ -445,82 +456,40 @@ export function normalizeAgentStackSection(
         )
       },
       devTeam: {
-        codex: {
+        workspace: {
+          mode: normalizeCodeAgentWorkspaceModeSetting(
+            devTeam.workspace?.mode,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.workspace.mode
+          )
+        },
+        swarm: {
           enabled: normalizeBoolean(
-            devTeam.codex.enabled,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.enabled
+            devTeam.swarm?.enabled,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.swarm.enabled
           ),
-          model:
-            normalizeString(
-              devTeam.codex.model,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.model,
-              120
-            ) || DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.model,
-          maxTurns: normalizeInt(
-            devTeam.codex.maxTurns,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.maxTurns,
-            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTurns.min,
-            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTurns.max
+          serverName: normalizeMcpServerName(
+            devTeam.swarm?.serverName,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.swarm.serverName
           ),
-          timeoutMs: normalizeInt(
-            devTeam.codex.timeoutMs,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.timeoutMs,
-            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.timeoutMs.min,
-            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.timeoutMs.max
-          ),
-          maxBufferBytes: normalizeInt(
-            devTeam.codex.maxBufferBytes,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.maxBufferBytes,
-            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxBufferBytes.min,
-            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxBufferBytes.max
-          ),
-          defaultCwd: normalizeString(
-            devTeam.codex.defaultCwd,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.defaultCwd,
+          command: normalizeString(
+            devTeam.swarm?.command,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.swarm.command,
             400
           ),
-          maxTasksPerHour: normalizeInt(
-            devTeam.codex.maxTasksPerHour,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.maxTasksPerHour,
-            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTasksPerHour.min,
-            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTasksPerHour.max
+          args: normalizeStringList(
+            devTeam.swarm?.args,
+            32,
+            500
           ),
-          maxParallelTasks: normalizeInt(
-            devTeam.codex.maxParallelTasks,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.maxParallelTasks,
-            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxParallelTasks.min,
-            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxParallelTasks.max
+          dbPath: normalizeString(
+            devTeam.swarm?.dbPath,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.swarm.dbPath,
+            500
           ),
-          asyncDispatch: {
-            enabled: normalizeBoolean(
-              devTeam.codex.asyncDispatch?.enabled,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.asyncDispatch.enabled
-            ),
-            thresholdMs: normalizeInt(
-              devTeam.codex.asyncDispatch?.thresholdMs,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.asyncDispatch.thresholdMs,
-              SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchThresholdMs.min,
-              SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchThresholdMs.max
-            ),
-            progressReports: {
-              enabled: normalizeBoolean(
-                devTeam.codex.asyncDispatch?.progressReports?.enabled,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.asyncDispatch.progressReports.enabled
-              ),
-              intervalMs: normalizeInt(
-                devTeam.codex.asyncDispatch?.progressReports?.intervalMs,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.asyncDispatch.progressReports.intervalMs,
-                SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchProgressIntervalMs.min,
-                SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchProgressIntervalMs.max
-              ),
-              maxReportsPerTask: normalizeInt(
-                devTeam.codex.asyncDispatch?.progressReports?.maxReportsPerTask,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.asyncDispatch.progressReports.maxReportsPerTask,
-                SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.min,
-                SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.max
-              )
-            }
-          }
+          appendCoordinationPrompt: normalizeBoolean(
+            devTeam.swarm?.appendCoordinationPrompt,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.swarm.appendCoordinationPrompt
+          )
         },
         codexCli: {
           enabled: normalizeBoolean(
