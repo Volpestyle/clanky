@@ -45,6 +45,10 @@ test("buildCodeAgentSwarmSessionConfig creates stable canonical registration inf
   assert.equal(session.serverName, "swarm-bus");
   assert.equal(session.scope, "C:\\repo");
   assert.equal(session.fileRoot, "C:\\repo\\packages\\app");
+  assert.equal(
+    session.label,
+    "origin:clanky provider:codex-cli role:implementer"
+  );
   assert.deepEqual(session.env, {
     SWARM_DB_PATH: "C:\\shared\\swarm.db"
   });
@@ -71,6 +75,8 @@ test("buildCodeAgentSwarmSessionConfig creates stable canonical registration inf
   );
   assert.match(session.firstTurnPreamble, /"file_root": "C:\\\\repo\\\\packages\\\\app"/);
   assert.match(session.firstTurnPreamble, /disposable git worktree/i);
+  assert.match(session.firstTurnPreamble, /role:planner/i);
+  assert.match(session.firstTurnPreamble, /generalist/i);
 });
 
 test("buildCodeAgentSwarmSessionConfig describes shared checkout sessions directly", () => {
@@ -99,8 +105,33 @@ test("buildCodeAgentSwarmSessionConfig describes shared checkout sessions direct
   });
   if (!session) throw new Error("Expected swarm session config");
 
+  assert.equal(
+    session.label,
+    "origin:clanky provider:claude-code role:reviewer"
+  );
   assert.match(session.firstTurnPreamble, /shared checkout/i);
   assert.doesNotMatch(session.firstTurnPreamble, /disposable git worktree/i);
+});
+
+test("buildCodeAgentSwarmSessionConfig omits the role token when no role is provided", () => {
+  const runtime = resolveCodeAgentSwarmRuntimeConfig({
+    enabled: true,
+    serverName: "swarm",
+    command: "bun",
+    args: ["run", "C:\\Users\\volpe\\swarm-mcp\\src\\index.ts"],
+    appendCoordinationPrompt: false
+  });
+  if (!runtime) throw new Error("Expected swarm runtime config");
+
+  const session = buildCodeAgentSwarmSessionConfig({
+    runtime,
+    workspace,
+    provider: "codex-cli",
+    role: null
+  });
+  if (!session) throw new Error("Expected swarm session config");
+
+  assert.equal(session.label, "origin:clanky provider:codex-cli");
 });
 
 test("applyCodeAgentFirstTurnPreamble preserves the task body", () => {

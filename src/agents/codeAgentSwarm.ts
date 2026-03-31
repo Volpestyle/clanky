@@ -47,6 +47,22 @@ function tomlLiteralArray(values: string[]) {
   return `[${values.map((value) => tomlLiteralString(value)).join(", ")}]`;
 }
 
+function normalizeSwarmRoleToken(role?: string | null) {
+  const normalized = String(role || "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "design") return "planner";
+  if (normalized === "implementation") return "implementer";
+  if (normalized === "review") return "reviewer";
+  if (normalized === "research") return "researcher";
+  const sanitized = normalized
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+/g, "")
+    .replace(/-+$/g, "");
+  return sanitized || null;
+}
+
 function buildSwarmLabel({
   provider,
   role
@@ -54,8 +70,12 @@ function buildSwarmLabel({
   provider: "claude-code" | "codex-cli";
   role?: string | null;
 }) {
-  const roleLabel = String(role || "implementation").trim() || "implementation";
-  return `clanky ${provider} ${roleLabel}`;
+  const tokens = [`origin:clanky`, `provider:${provider}`];
+  const roleToken = normalizeSwarmRoleToken(role);
+  if (roleToken) {
+    tokens.push(`role:${roleToken}`);
+  }
+  return tokens.join(" ");
 }
 
 export function resolveCodeAgentSwarmRuntimeConfig(rawValue: unknown): CodeAgentSwarmRuntimeConfig | null {
@@ -110,7 +130,7 @@ export function buildCodeAgentSwarmSessionConfig({
         workspaceSummary,
         "Use the swarm register tool with this payload:",
         `\`\`\`json\n${JSON.stringify(registerPayload, null, 2)}\n\`\`\``,
-        "After registration, normal relative paths from your current working directory are valid for swarm file tools. Use swarm messages/tasks when collaboration is useful, lock files before editing, unlock them when finished, and annotate important findings or hazards when they would help other agents."
+        "After registration, normal relative paths from your current working directory are valid for swarm file tools. When choosing collaborators, inspect swarm instance labels for machine-readable tokens like `role:planner`, `role:reviewer`, or `role:implementer`. If a session has no `role:` token, treat it as a generalist. Use swarm messages/tasks when collaboration is useful, lock files before editing, unlock them when finished, and annotate important findings or hazards when they would help other agents."
       ].join("\n\n")
     : "";
 

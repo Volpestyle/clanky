@@ -147,11 +147,14 @@ When `agentStack.runtimeConfig.devTeam.swarm.enabled` is true:
 
 - local `codex-cli` and `claude-code` workers get a per-session swarm MCP config at launch time
 - the worker receives first-turn guidance to register itself into the shared swarm
+- the worker registers with a machine-readable label like `origin:clanky provider:codex-cli role:implementer`
 - `workspace.mode: auto` defaults those local workers to the shared checkout so the swarm naturally sees one live repo
 - when a session still uses `isolated_worktree`, registration uses the disposable worktree as the live `directory`, but uses the original requested repo path as `file_root`
 - swarm `scope` is pinned to the canonical repo root
 
 This matters because local workers can now run either in the shared checkout or in disposable git worktrees. Without the canonical `file_root` and repo-root `scope`, an isolated worker's file lock or annotation would point at its transient worktree path instead of the shared repo path that another worker should see.
+
+Role-bearing labels are advisory, not enforced schema. A session can omit the `role:` token entirely and be treated as a generalist by the shared swarm protocol.
 
 Operationally:
 
