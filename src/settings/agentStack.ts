@@ -759,28 +759,39 @@ export function isDevTaskEnabled(settings: unknown): boolean {
 // ── Minecraft ───────────────────────────────────────────────────────────────
 
 export type MinecraftConfig = {
-  mcpUrl: string;
+  /** Explicit URL to an already-running MCP server, or null to auto-spawn. */
+  mcpUrl: string | null;
   operatorPlayerName: string | null;
+  /** Whether auto-spawn is enabled (true when no explicit URL is given). */
+  autoSpawn: boolean;
 };
 
 /**
- * Minecraft is enabled when the MCP server URL is configured via settings or
- * the MINECRAFT_MCP_URL environment variable.
+ * Minecraft is enabled when explicitly enabled in settings OR when a MCP
+ * server URL is configured.  Setting `minecraft.enabled: true` in the
+ * dashboard enables auto-spawn mode — the bot starts the MCP server itself.
  */
 export function isMinecraftEnabled(settings: unknown): boolean {
   const s = settings as Record<string, unknown> | null;
-  const mc = (s?.minecraft ?? s?.minecraftAgent) as Record<string, unknown> | undefined;
+  // Check canonical path: agentStack.runtimeConfig.minecraft
+  const agentStack = s?.agentStack as Record<string, unknown> | undefined;
+  const runtimeConfig = agentStack?.runtimeConfig as Record<string, unknown> | undefined;
+  const mc = (runtimeConfig?.minecraft ?? s?.minecraft ?? s?.minecraftAgent) as Record<string, unknown> | undefined;
   if (mc?.enabled === false) return false;
-  return Boolean(mc?.mcpUrl || process.env.MINECRAFT_MCP_URL);
+  return Boolean(mc?.enabled || mc?.mcpUrl || process.env.MINECRAFT_MCP_URL);
 }
 
 export function getMinecraftConfig(settings: unknown): MinecraftConfig {
   const s = settings as Record<string, unknown> | null;
-  const mc = (s?.minecraft ?? s?.minecraftAgent) as Record<string, unknown> | undefined;
+  const agentStack = s?.agentStack as Record<string, unknown> | undefined;
+  const runtimeConfig = agentStack?.runtimeConfig as Record<string, unknown> | undefined;
+  const mc = (runtimeConfig?.minecraft ?? s?.minecraft ?? s?.minecraftAgent) as Record<string, unknown> | undefined;
+  const explicitUrl = String(mc?.mcpUrl || process.env.MINECRAFT_MCP_URL || "").trim() || null;
   return {
-    mcpUrl: String(mc?.mcpUrl || process.env.MINECRAFT_MCP_URL || "http://127.0.0.1:3847"),
+    mcpUrl: explicitUrl,
     operatorPlayerName: mc?.operatorPlayerName
       ? String(mc.operatorPlayerName)
-      : process.env.MC_OPERATOR_USERNAME || null
+      : process.env.MC_OPERATOR_USERNAME || null,
+    autoSpawn: !explicitUrl
   };
 }

@@ -27,6 +27,7 @@ import { PromptGuidanceSettingsSection } from "./settingsSections/PromptGuidance
 import { LlmConfigurationSettingsSection } from "./settingsSections/LlmConfigurationSettingsSection";
 import { ResearchBrowsingSettingsSection } from "./settingsSections/ResearchBrowsingSettingsSection";
 import { CodeAgentSettingsSection } from "./settingsSections/CodeAgentSettingsSection";
+import { MinecraftSettingsSection } from "./settingsSections/MinecraftSettingsSection";
 import { VisionSettingsSection } from "./settingsSections/VisionSettingsSection";
 import { VideoContextSettingsSection } from "./settingsSections/VideoContextSettingsSection";
 import { VoiceModeSettingsSection } from "./settingsSections/VoiceModeSettingsSection";
@@ -106,6 +107,7 @@ const SEARCH_INDEX: SearchEntry[] = [
   { label: "Prompt Lab", scrollTo: "sec-prompts", navSection: "sec-advanced", keywords: "prompt guidance capability honesty impossible action memory skip text voice media" },
   { label: "Text LLM", scrollTo: "sec-llm", navSection: "sec-advanced", keywords: "llm provider model temperature reasoning effort tokens followup" },
   { label: "Code Agent", scrollTo: "sec-code-agent", navSection: "sec-advanced", keywords: "code agent codex claude dev team" },
+  { label: "Minecraft Agent", scrollTo: "sec-minecraft", navSection: "sec-advanced", keywords: "minecraft mcp server bot game follow guard collect" },
   { label: "Sub-Agent Orchestration", scrollTo: "sec-orchestration", navSection: "sec-advanced", keywords: "orchestration sub agent session" }
 ];
 
@@ -848,6 +850,13 @@ export default function SettingsForm({
                 form={form}
                 set={set}
                 validationError={codeAgentValidationError}
+              />
+            )}
+            {showAdvancedStackSections && (
+              <MinecraftSettingsSection
+                id="sec-minecraft"
+                form={form}
+                set={set}
               />
             )}
             {showAdvancedStackSections && <SubAgentOrchestrationSettingsSection id="sec-orchestration" form={form} set={set} />}

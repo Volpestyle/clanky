@@ -413,6 +413,11 @@ export const DEFAULT_SETTINGS = {
             }
           }
         }
+      },
+      minecraft: {
+        enabled: false,
+        mcpUrl: "",
+        operatorPlayerName: ""
       }
     }
   },

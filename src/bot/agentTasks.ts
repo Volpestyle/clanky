@@ -18,6 +18,8 @@ import { clamp } from "../utils.ts";
 import { MAX_BROWSER_BROWSE_QUERY_LEN, normalizeDirectiveText } from "./botHelpers.ts";
 import { getResolvedBrowserTaskConfig, isDevTaskEnabled, isMinecraftEnabled, getMinecraftConfig } from "../settings/agentStack.ts";
 import { createMinecraftSession as createMinecraftSessionRuntime } from "../agents/minecraft/minecraftSession.ts";
+import { createMinecraftChatBrain } from "../agents/minecraft/minecraftChatBrain.ts";
+import { resolveMinecraftMcpServer, type MinecraftMcpProcess } from "../agents/minecraft/minecraftMcpProcess.ts";
 import type { BrowserBrowseContextState } from "./budgetTracking.ts";
 import type { AgentContext } from "./botContext.ts";
 
@@ -445,6 +447,7 @@ export type CreateMinecraftSessionOptions = {
 
 function createMinecraftSession(
   ctx: AgentContext,
+  mcpBaseUrl: string | null,
   {
     settings,
     guildId,
@@ -454,12 +457,14 @@ function createMinecraftSession(
   }: CreateMinecraftSessionOptions
 ) {
   if (!isMinecraftEnabled(settings)) return null;
-
   const config = getMinecraftConfig(settings);
+  const baseUrl = mcpBaseUrl || config.mcpUrl;
+  if (!baseUrl) return null;
+
   const scopeKey = buildScopeKey({ guildId, channelId });
   return createMinecraftSessionRuntime({
     scopeKey,
-    baseUrl: config.mcpUrl,
+    baseUrl,
     ownerUserId: userId,
     operatorPlayerName: config.operatorPlayerName,
     logAction: (entry) =>
@@ -469,17 +474,52 @@ function createMinecraftSession(
         channelId,
         userId,
         source
+      }),
+    onGameEvent: (events) =>
+      ctx.store.logAction({
+        kind: "minecraft_game_events",
+        content: events.join("; "),
+        metadata: { events, eventCount: events.length },
+        guildId,
+        channelId,
+        userId,
+        source
       })
   });
 }
 
-export function buildSubAgentSessionsRuntime(ctx: AgentContext) {
+/**
+ * Resolve and auto-spawn the Minecraft MCP server if enabled.
+ * Call once at bot startup — returns the base URL and a process handle
+ * for cleanup on shutdown.
+ */
+export async function initMinecraftMcpServer(settings: Record<string, unknown>, logAction: (entry: Record<string, unknown>) => void): Promise<{
+  baseUrl: string;
+  process: MinecraftMcpProcess | null;
+} | null> {
+  if (!isMinecraftEnabled(settings)) return null;
+  const config = getMinecraftConfig(settings);
+  try {
+    return await resolveMinecraftMcpServer({
+      explicitUrl: config.mcpUrl,
+      logAction
+    });
+  } catch (error) {
+    logAction({
+      kind: "minecraft_mcp_init_error",
+      content: String((error as Error)?.message || error)
+    });
+    return null;
+  }
+}
+
+export function buildSubAgentSessionsRuntime(ctx: AgentContext, minecraftMcpUrl: string | null = null) {
   return {
     manager: ctx.subAgentSessions,
     createCodeSession: (opts: CreateCodeAgentSessionOptions) => createCodeAgentSession(ctx, opts),
     createBrowserSession: (opts: CreateBrowserAgentSessionOptions) =>
       createBrowserAgentSession(ctx, opts),
     createMinecraftSession: (opts: CreateMinecraftSessionOptions) =>
-      createMinecraftSession(ctx, opts)
+      createMinecraftSession(ctx, minecraftMcpUrl, opts)
   };
 }

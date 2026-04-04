@@ -46,8 +46,10 @@ import type { ReplyPerformanceSeed } from "./bot/replyPipelineShared.ts";
 import {
   runModelRequestedBrowserBrowse,
   runModelRequestedCodeTask,
-  buildSubAgentSessionsRuntime
+  buildSubAgentSessionsRuntime,
+  initMinecraftMcpServer
 } from "./bot/agentTasks.ts";
+import type { MinecraftMcpProcess } from "./agents/minecraft/minecraftMcpProcess.ts";
 import {
   buildBrowserBrowseContext,
 } from "./bot/budgetTracking.ts";
@@ -312,6 +314,9 @@ export class ClankerBot {
   streamDiscovery: StreamDiscoveryState;
   private streamDiscoveryCleanup: (() => void) | null;
   private captionTimestamps: number[];
+  private minecraftMcpProcess: MinecraftMcpProcess | null;
+  /** Resolved URL for the Minecraft MCP server (set by initMinecraftAgent). */
+  minecraftMcpUrl: string | null;
 
   constructor({ appConfig, store, llm, memory, discovery, search, gifs, video, browserManager = null }) {
     this.appConfig = appConfig;
@@ -353,6 +358,8 @@ export class ClankerBot {
       maxSessions: Number(appConfig?.subAgentOrchestration?.maxConcurrentSessions) || 20
     });
     this.subAgentSessions.startSweep();
+    this.minecraftMcpProcess = null;
+    this.minecraftMcpUrl = null;
     this.backgroundTaskRunner = new BackgroundTaskRunner({
       store: this.store,
       sessionManager: this.subAgentSessions
@@ -406,7 +413,7 @@ export class ClankerBot {
         settings: payload.settings || this.store.getSettings()
       });
     this.voiceSessionManager.createCodeAgentSession = (opts) => {
-      const sessionsRuntime = buildSubAgentSessionsRuntime(voiceAgentContext);
+      const sessionsRuntime = buildSubAgentSessionsRuntime(voiceAgentContext, this.minecraftMcpUrl);
       return sessionsRuntime.createCodeSession({
         ...opts,
         settings: opts.settings || this.store.getSettings()
@@ -415,7 +422,7 @@ export class ClankerBot {
     this.voiceSessionManager.dispatchBackgroundCodeTask = (payload) =>
       this.dispatchBackgroundCodeTask(payload);
     this.voiceSessionManager.createMinecraftSession = (opts) => {
-      const sessionsRuntime = buildSubAgentSessionsRuntime(voiceAgentContext);
+      const sessionsRuntime = buildSubAgentSessionsRuntime(voiceAgentContext, this.minecraftMcpUrl);
       return sessionsRuntime.createMinecraftSession({
         ...opts,
         settings: opts.settings || this.store.getSettings()
@@ -428,6 +435,33 @@ export class ClankerBot {
 
   attachScreenShareSessionManager(manager: ScreenShareSessionManagerLike | null) {
     this.screenShareSessionManager = manager || null;
+  }
+
+  /**
+   * Auto-spawn the Minecraft MCP server if enabled in settings.
+   * Call once after construction, before the bot goes live.
+   */
+  async initMinecraftAgent(): Promise<void> {
+    const settings = this.store.getSettings();
+    const result = await initMinecraftMcpServer(
+      settings,
+      (entry) => this.store.logAction(entry)
+    );
+    if (result) {
+      this.minecraftMcpUrl = result.baseUrl;
+      this.minecraftMcpProcess = result.process;
+    }
+  }
+
+  /**
+   * Stop the auto-spawned MCP server (if any). Call on bot shutdown.
+   */
+  async stopMinecraftAgent(): Promise<void> {
+    if (this.minecraftMcpProcess) {
+      await this.minecraftMcpProcess.stop();
+      this.minecraftMcpProcess = null;
+      this.minecraftMcpUrl = null;
+    }
   }
 
   toBotContext(): BotContext {
@@ -936,6 +970,8 @@ export class ClankerBot {
 
   async start() {
     this.isStopping = false;
+    // Auto-spawn Minecraft MCP server before going live (non-blocking if disabled).
+    await this.initMinecraftAgent();
     await this.client.login(this.appConfig.discordToken);
     this.lastGatewayEventAt = Date.now();
 
@@ -1032,6 +1068,7 @@ export class ClankerBot {
       }
     }
     this.backgroundTaskRunner.close();
+    await this.stopMinecraftAgent();
     await this.client.destroy();
   }
 

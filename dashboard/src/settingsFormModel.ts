@@ -167,6 +167,7 @@ function buildSettingsFormView(settings: unknown) {
       : orchestrator;
   const devPermissions = valueOr(s.permissions?.devTasks, d.permissions.devTasks);
   const devTeam = valueOr(agentStack.runtimeConfig?.devTeam, d.agentStack.runtimeConfig.devTeam);
+  const minecraft = valueOr(agentStack.runtimeConfig?.minecraft, d.agentStack.runtimeConfig.minecraft);
   const resolvedStack = resolved?.agentStack;
   const vision = valueOr(s.media?.vision, d.media.vision);
   const visionBinding = resolved?.visionBinding || orchestrator;
@@ -329,6 +330,11 @@ function buildSettingsFormView(settings: unknown) {
         workspace: { ...valueOr(devTeam.workspace, d.agentStack.runtimeConfig.devTeam.workspace) },
         swarm: { ...valueOr(devTeam.swarm, d.agentStack.runtimeConfig.devTeam.swarm) }
       }
+    },
+    minecraft: {
+      enabled: Boolean(minecraft.enabled),
+      mcpUrl: String(minecraft.mcpUrl || ""),
+      operatorPlayerName: String(minecraft.operatorPlayerName || "")
     },
     vision: {
       captionEnabled: vision.enabled,
@@ -593,6 +599,9 @@ export function settingsToForm(settings: unknown) {
     codeAgentWorkerConfigs: resolved.codeAgent.workerConfigs ?? defaults.codeAgent.workerConfigs,
     codeAgentNonWorkerRuntimeConfig:
       resolved.codeAgent.nonWorkerRuntimeConfig ?? defaults.codeAgent.nonWorkerRuntimeConfig,
+    minecraftEnabled: resolved.minecraft.enabled ?? defaults.minecraft.enabled,
+    minecraftMcpUrl: resolved.minecraft.mcpUrl ?? defaults.minecraft.mcpUrl,
+    minecraftOperatorPlayerName: resolved.minecraft.operatorPlayerName ?? defaults.minecraft.operatorPlayerName,
     visionCaptionEnabled: resolved.vision.captionEnabled ?? defaultVision.captionEnabled,
     visionProvider: resolved.vision.provider ?? defaultVision.provider,
     visionModel: resolved.vision.model ?? defaultVision.model,
@@ -1682,6 +1691,11 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
             model: String(form.codeAgentModel || "sonnet"),
             fallbackModel: "sonnet"
           })
+        },
+        minecraft: {
+          enabled: Boolean(form.minecraftEnabled),
+          mcpUrl: String(form.minecraftMcpUrl || "").trim(),
+          operatorPlayerName: String(form.minecraftOperatorPlayerName || "").trim()
         }
       }
     },

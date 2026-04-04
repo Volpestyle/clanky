@@ -79,6 +79,7 @@ export function normalizeAgentStackSection(
   const voice = runtimeConfig.voice;
   const claudeOAuthSession = runtimeConfig.claudeOAuthSession;
   const devTeam = runtimeConfig.devTeam;
+  const minecraft = runtimeConfig.minecraft;
   const rawDevTeamOverride = isRecord(rawOverrides.devTeam) ? rawOverrides.devTeam : null;
   const rawRuntimeConfig = isRecord(rawAgentStack.runtimeConfig) ? rawAgentStack.runtimeConfig : {};
   const rawVoiceRuntime = isRecord(rawRuntimeConfig.voice) ? rawRuntimeConfig.voice : {};
@@ -645,6 +646,22 @@ export function normalizeAgentStackSection(
             }
           }
         }
+      },
+      minecraft: {
+        enabled: normalizeBoolean(
+          minecraft.enabled,
+          DEFAULT_SETTINGS.agentStack.runtimeConfig.minecraft.enabled
+        ),
+        mcpUrl: normalizeString(
+          minecraft.mcpUrl,
+          DEFAULT_SETTINGS.agentStack.runtimeConfig.minecraft.mcpUrl,
+          500
+        ),
+        operatorPlayerName: normalizeString(
+          minecraft.operatorPlayerName,
+          DEFAULT_SETTINGS.agentStack.runtimeConfig.minecraft.operatorPlayerName,
+          50
+        )
       }
     }
   };
