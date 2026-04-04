@@ -661,6 +661,11 @@ export function normalizeAgentStackSection(
           minecraft.operatorPlayerName,
           DEFAULT_SETTINGS.agentStack.runtimeConfig.minecraft.operatorPlayerName,
           50
+        ),
+        execution: normalizeExecutionPolicy(
+          minecraft.execution,
+          presetConfig.presetOrchestratorFallback.provider,
+          presetConfig.presetOrchestratorFallback.model
         )
       }
     }

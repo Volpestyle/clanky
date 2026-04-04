@@ -2,10 +2,10 @@
  * MinecraftSession — extends BaseAgentSession for the Minecraft agent.
  *
  * Each session wraps a MinecraftRuntime (HTTP client to the MCP server) and
- * translates natural-language task strings into MCP tool calls.  The outer
- * LLM selects the `minecraft_task` tool with mode/task/constraints; the
- * handler serialises that as JSON input to `runTurn()`.  Followup turns
- * can be plain text or JSON.
+ * an embodied Minecraft brain. Discord text, Discord voice, and Minecraft
+ * chat all feed intent/context into the same session brain, which decides the
+ * next high-level Minecraft command. The runtime then executes that command
+ * deterministically through the MCP/Mineflayer stack.
  *
  * The session is long-lived — it stays alive across multiple turns until the
  * user disconnects or cancels.
@@ -28,7 +28,7 @@ import type { MinecraftConstraints, MinecraftMode, Position } from "./types.ts";
 import { MinecraftRuntime, type McpStatusSnapshot } from "./minecraftRuntime.ts";
 import { buildWorldSnapshot } from "./minecraftWorldModel.ts";
 import { evaluateReflexes, executeReflex } from "./minecraftReflexes.ts";
-import type { MinecraftChatMessage, MinecraftChatReplyFn } from "./minecraftChatBrain.ts";
+import type { MinecraftBrain, MinecraftChatMessage } from "./minecraftBrain.ts";
 import { FollowPlayerSkill } from "./skills/followPlayer.ts";
 import { GuardPlayerSkill } from "./skills/guardPlayer.ts";
 import { CollectBlockSkill } from "./skills/collectBlock.ts";
@@ -64,7 +64,7 @@ type TurnInput = {
   task?: string;
   command?: string;
   mode?: MinecraftMode;
-   constraints?: MinecraftConstraints | Record<string, unknown>;
+  constraints?: MinecraftConstraints | Record<string, unknown>;
   operatorPlayerName?: string;
 };
 
@@ -276,11 +276,10 @@ export type MinecraftSessionOptions = {
    */
   onGameEvent?: (events: string[]) => void;
   /**
-   * LLM-powered chat brain for responding to in-game Minecraft chat.
-   * When set, the session monitors chat events and generates natural
-   * conversational replies using the same persona as Discord text.
+   * LLM-powered embodied Minecraft brain.
+   * It owns both operator-turn planning and in-game chat behavior.
    */
-  generateChatReply?: MinecraftChatReplyFn;
+  brain?: MinecraftBrain;
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -362,8 +361,8 @@ export class MinecraftSession extends BaseAgentSession {
   private seenEventCount = 0;
   private readonly onGameEvent: ((events: string[]) => void) | undefined;
 
-  // ── Chat brain ──
-  private readonly generateChatReply: MinecraftChatReplyFn | undefined;
+  // ── Minecraft brain ──
+  private readonly brain: MinecraftBrain | undefined;
   private readonly chatHistory: MinecraftChatMessage[] = [];
   private lastChatReplyMs = 0;
   private chatReplyInFlight = false;
@@ -381,7 +380,7 @@ export class MinecraftSession extends BaseAgentSession {
     this.constraints = options.constraints ?? {};
     this.homePosition = options.homePosition ?? null;
     this.onGameEvent = options.onGameEvent;
-    this.generateChatReply = options.generateChatReply;
+    this.brain = options.brain;
   }
 
   // ── Auto-connect ────────────────────────────────────────────────────────
@@ -486,8 +485,8 @@ export class MinecraftSession extends BaseAgentSession {
           }
         }
 
-        // Detect chat messages and route to the brain.
-        if (this.generateChatReply) {
+        // Detect chat messages and route to the session brain.
+        if (this.brain) {
           for (const event of newEvents) {
             const chatMatch = event.match(CHAT_EVENT_RE);
             if (chatMatch) {
@@ -527,7 +526,7 @@ export class MinecraftSession extends BaseAgentSession {
     }
   }
 
-  // ── Chat brain ────────────────────────────────────────────────────────────
+  // ── Minecraft brain ──────────────────────────────────────────────────────
 
   private pushChatHistory(msg: MinecraftChatMessage): void {
     this.chatHistory.push(msg);
@@ -537,13 +536,13 @@ export class MinecraftSession extends BaseAgentSession {
   }
 
   /**
-   * Process an incoming Minecraft chat message through the LLM brain.
+   * Process an incoming Minecraft chat message through the session brain.
    *
    * Applies a cooldown to avoid rapid-fire responses and serializes
    * concurrent calls so only one brain invocation runs at a time.
    */
   private async handleIncomingChat(sender: string, message: string): Promise<void> {
-    if (!this.generateChatReply) return;
+    if (!this.brain) return;
     if (this.chatReplyInFlight) return; // one at a time
 
     const now = Date.now();
@@ -553,12 +552,15 @@ export class MinecraftSession extends BaseAgentSession {
     try {
       const snapshot = await this.getWorldSnapshot();
 
-      const result = await this.generateChatReply({
+      const result = await this.brain.replyToChat({
         sender,
         message,
         chatHistory: this.chatHistory.slice(-20),
         worldSnapshot: snapshot,
-        botUsername: this.botUsername || "ClankyBuddy"
+        botUsername: this.botUsername || "ClankyBuddy",
+        mode: this.mode,
+        operatorPlayerName: this.operatorPlayerName,
+        constraints: { ...this.constraints }
       });
 
       this.lastChatReplyMs = Date.now();
@@ -571,7 +573,7 @@ export class MinecraftSession extends BaseAgentSession {
       // Execute game command if the brain requested one.
       if (result.gameCommand) {
         const command = parseCommand(result.gameCommand, this.mode, this.operatorPlayerName);
-        this.logLifecycle("minecraft_chat_brain_action", {
+        this.logLifecycle("minecraft_brain_chat_action", {
           sender,
           gameCommand: result.gameCommand,
           parsedKind: command.kind
@@ -579,14 +581,14 @@ export class MinecraftSession extends BaseAgentSession {
         try {
           await this.executeCommand(command, { signal: AbortSignal.timeout(30_000) });
         } catch (error) {
-          this.logLifecycle("minecraft_chat_brain_action_error", {
+          this.logLifecycle("minecraft_brain_chat_action_error", {
             error: error instanceof Error ? error.message : String(error)
           });
         }
       }
 
       if (result.costUsd > 0) {
-        this.logLifecycle("minecraft_chat_brain_cost", {
+        this.logLifecycle("minecraft_brain_chat_cost", {
           sender,
           costUsd: result.costUsd
         });
@@ -622,6 +624,31 @@ export class MinecraftSession extends BaseAgentSession {
     }
   }
 
+  private async planTurnCommand(task: string): Promise<{ commandText: string; costUsd: number }> {
+    if (!this.brain) {
+      return { commandText: task, costUsd: 0 };
+    }
+
+    const snapshot = await this.getWorldSnapshot();
+    const decision = await this.brain.planTurn({
+      instruction: task,
+      chatHistory: this.chatHistory.slice(-20),
+      worldSnapshot: snapshot,
+      botUsername: this.botUsername || "ClankyBuddy",
+      mode: this.mode,
+      operatorPlayerName: this.operatorPlayerName,
+      constraints: { ...this.constraints }
+    });
+
+    const commandText = decision.command?.trim() || "status";
+    this.logLifecycle("minecraft_brain_turn_decision", {
+      instruction: task,
+      commandText,
+      costUsd: decision.costUsd
+    });
+    return { commandText, costUsd: decision.costUsd };
+  }
+
   // ── Turn execution ────────────────────────────────────────────────────────
 
   protected async executeTurn(input: string, options: SubAgentTurnOptions): Promise<SubAgentTurnResult> {
@@ -634,8 +661,17 @@ export class MinecraftSession extends BaseAgentSession {
     if (normalizedConstraints) this.constraints = { ...this.constraints, ...normalizedConstraints };
     if (parsed.operatorPlayerName) this.operatorPlayerName = parsed.operatorPlayerName;
 
-    const task = parsed.task || parsed.command || "";
-    const command = task ? parseCommand(task, this.mode, this.operatorPlayerName) : { kind: "status" as const };
+    const task = parsed.task || "";
+    let command = parsed.command ? parseCommand(parsed.command, this.mode, this.operatorPlayerName) : null;
+    let costUsd = 0;
+    if (!command && !task) {
+      command = { kind: "status" };
+    }
+    if (!command) {
+      const brainDecision = await this.planTurnCommand(task);
+      costUsd += brainDecision.costUsd;
+      command = parseCommand(brainDecision.commandText, this.mode, this.operatorPlayerName);
+    }
 
     const startMs = Date.now();
     this.logLifecycle("minecraft_turn_start", {
@@ -656,7 +692,7 @@ export class MinecraftSession extends BaseAgentSession {
       });
       return {
         text: result,
-        costUsd: 0,
+        costUsd,
         isError: false,
         errorMessage: "",
         sessionCompleted: false,
@@ -671,7 +707,7 @@ export class MinecraftSession extends BaseAgentSession {
       });
       return {
         text: `Minecraft command failed: ${message}`,
-        costUsd: 0,
+        costUsd,
         isError: true,
         errorMessage: message,
         usage: { ...EMPTY_USAGE }

@@ -162,16 +162,16 @@ The `MinecraftSession` in the main bot handles the full lifecycle automatically:
 - **Event tracking**: Game events (chat, death, combat) are diffed against a watermark
   so status reports only surface new events. An `onGameEvent` callback forwards events
   to the action log for proactive narration.
-- **Chat brain**: When another player speaks in Minecraft chat, the session detects
-  the event, feeds it to the same LLM brain used for Discord text (persona, guidance,
-  memory), and replies via `minecraft_chat`. The brain can also trigger game actions
-  via `[ACTION: ...]` prefixes (e.g. "follow me" in chat makes the bot follow).
-- **Multi-channel**: Minecraft chat and Discord voice are independent input channels.
-  Clanky responds to each in its native medium — chat replies stay in Minecraft chat,
-  voice replies stay in Discord voice. Both work simultaneously.
+- **Minecraft brain**: The active `MinecraftSession` owns one embodied Minecraft
+  brain. Discord text, Discord voice, and Minecraft chat all feed intent/context into
+  that same in-world brain, which chooses the next high-level action.
+- **In-game chat**: When another player speaks in Minecraft chat, the session can ask
+  the Minecraft brain whether to reply in chat, act in the world, both, or neither.
+- **Multi-channel**: Minecraft chat and Discord voice remain independent transport
+  channels, but they no longer imply separate Minecraft decision-makers.
 - **Voice + text**: The `minecraft_task` tool is available on both the text reply and
-  voice realtime surfaces. You can ask Clanky to join your Minecraft server via Discord
-  voice chat and he'll control his character while talking to you.
+  voice realtime surfaces. Those surfaces hand instructions into the same live
+  Minecraft session brain.
 
 ## Known gaps
 
@@ -179,5 +179,5 @@ The `MinecraftSession` in the main bot handles the full lifecycle automatically:
 - No chest deposit / home base workflow
 - No building planner
 - No first-person vision (uses Mineflayer's structured game state)
-- Hazard detection not yet exposed by MCP status (guard mode handles combat reactively at the Mineflayer level)
+- No long-horizon autonomous project loop yet
 - Proactive event narration in Discord (events are logged but not yet pushed to channels unprompted)

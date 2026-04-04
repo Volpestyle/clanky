@@ -18,6 +18,7 @@ Use the docs in this order:
 - [`capabilities/media.md`](capabilities/media.md) — the unified media surface: music, video, native screen watch, outbound publish, and browser visual context
 - [`capabilities/browser.md`](capabilities/browser.md) — browser runtime behavior, `browser_browse`, persistent profiles for authenticated browsing, session continuation, cancellation, and headless visual capture
 - [`capabilities/code.md`](capabilities/code.md) — code agent runtime and worker model
+- [`capabilities/minecraft.md`](capabilities/minecraft.md) — embodied Minecraft runtime, session brain ownership, server selection, and current capability limits
 - [`capabilities/memory.md`](capabilities/memory.md) — durable memory, journals, fact extraction, and retrieval
 
 ## Voice Deep Dives
@@ -61,7 +62,7 @@ Use the docs in this order:
 
 ## Rules Of Thumb
 
-- Product-level truth belongs in hub docs like [`capabilities/media.md`](capabilities/media.md) and [`architecture/overview.md`](architecture/overview.md).
+- Product-level truth belongs in hub docs like [`capabilities/media.md`](capabilities/media.md), [`capabilities/minecraft.md`](capabilities/minecraft.md), and [`architecture/overview.md`](architecture/overview.md).
 - Transport or pipeline internals belong in subsystem deep dives.
 - Provider-specific material belongs under provider docs, not in product docs.
 - Historical plans should not become the main source of truth after implementation lands.

@@ -1,4 +1,5 @@
 import { SettingsSection } from "../SettingsSection";
+import { LlmProviderOptions } from "./LlmProviderOptions";
 
 export function MinecraftSettingsSection({
   id,
@@ -10,6 +11,7 @@ export function MinecraftSettingsSection({
   set: (key: string) => (e: unknown) => void;
 }) {
   const enabled = Boolean(form.minecraftEnabled);
+  const useTextModel = Boolean(form.minecraftBrainUseTextModel);
 
   return (
     <SettingsSection id={id} title="Minecraft Agent" active={enabled}>
@@ -27,7 +29,8 @@ export function MinecraftSettingsSection({
       <p className="status-msg" style={{ marginTop: 0, marginBottom: 12 }}>
         When enabled, the bot auto-spawns a Minecraft MCP server and exposes
         the <code>minecraft_task</code> tool on both text and voice surfaces.
-        Set an explicit MCP URL to connect to an external server instead.
+        Those surfaces feed the same embodied Minecraft session brain once it is
+        active. Set an explicit MCP URL to connect to an external server instead.
       </p>
 
       {enabled && (
@@ -60,6 +63,44 @@ export function MinecraftSettingsSection({
               <code>MC_OPERATOR_USERNAME</code> env var.
             </p>
           </div>
+
+          <div className="toggles">
+            <label>
+              <input
+                type="checkbox"
+                checked={useTextModel}
+                onChange={set("minecraftBrainUseTextModel")}
+              />
+              Use the main text model for the Minecraft brain
+            </label>
+          </div>
+          <div className="split">
+            <div>
+              <label>Minecraft brain provider</label>
+              <select
+                value={String(form.minecraftBrainLlmProvider || "")}
+                onChange={set("minecraftBrainLlmProvider")}
+                disabled={useTextModel}
+              >
+                <LlmProviderOptions />
+              </select>
+            </div>
+            <div>
+              <label>Minecraft brain model ID</label>
+              <input
+                type="text"
+                value={String(form.minecraftBrainLlmModel || "")}
+                onChange={set("minecraftBrainLlmModel")}
+                placeholder="e.g. claude-opus-4-6"
+                disabled={useTextModel}
+              />
+            </div>
+          </div>
+          <p className="status-msg">
+            This is the model that interprets Minecraft instructions, reacts to
+            in-game chat, and chooses the next high-level in-world action. It
+            stays the same whether the input came from Discord text or voice.
+          </p>
         </>
       )}
     </SettingsSection>

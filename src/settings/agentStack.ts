@@ -377,6 +377,10 @@ export function getDevTeamRuntimeConfig(settings: unknown): Settings["agentStack
   return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam, getRuntimeConfig(settings).devTeam);
 }
 
+export function getMinecraftRuntimeConfig(settings: unknown): Settings["agentStack"]["runtimeConfig"]["minecraft"] {
+  return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig.minecraft, getRuntimeConfig(settings).minecraft);
+}
+
 function getPresetDefaults(settings: unknown): PresetDefaults {
   const agentStack = getAgentStackSettings(settings);
   return getAgentStackPresetDefaults(agentStack.preset || DEFAULT_SETTINGS.agentStack.preset);
@@ -567,6 +571,28 @@ export function getResolvedVoiceGenerationBinding(settings: unknown) {
   return {
     provider: String(binding?.provider || orchestrator.provider || fallback.provider),
     model: String(binding?.model || orchestrator.model || fallback.model)
+  };
+}
+
+export function getResolvedMinecraftBrainBinding(settings: unknown) {
+  const minecraftRuntime = getMinecraftRuntimeConfig(settings);
+  const fallback = getResolvedOrchestratorBinding(settings);
+  const policy = resolveExecutionPolicy(
+    minecraftRuntime.execution,
+    fallback,
+    fallback.temperature,
+    fallback.maxOutputTokens,
+    fallback.reasoningEffort
+  );
+  const binding = policy.mode === "dedicated_model"
+    ? policy.model
+    : fallback;
+  return {
+    provider: String(binding?.provider || fallback.provider),
+    model: String(binding?.model || fallback.model),
+    temperature: policy.temperature ?? fallback.temperature,
+    maxOutputTokens: policy.maxOutputTokens ?? fallback.maxOutputTokens,
+    reasoningEffort: policy.reasoningEffort ?? fallback.reasoningEffort
   };
 }
 
@@ -773,25 +799,44 @@ export type MinecraftConfig = {
  */
 export function isMinecraftEnabled(settings: unknown): boolean {
   const s = settings as Record<string, unknown> | null;
-  // Check canonical path: agentStack.runtimeConfig.minecraft
-  const agentStack = s?.agentStack as Record<string, unknown> | undefined;
-  const runtimeConfig = agentStack?.runtimeConfig as Record<string, unknown> | undefined;
-  const mc = (runtimeConfig?.minecraft ?? s?.minecraft ?? s?.minecraftAgent) as Record<string, unknown> | undefined;
-  if (mc?.enabled === false) return false;
-  return Boolean(mc?.enabled || mc?.mcpUrl || process.env.MINECRAFT_MCP_URL);
+  const runtimeConfig = getMinecraftRuntimeConfig(settings) as Record<string, unknown>;
+  const rawRuntimeConfig = (s?.agentStack as Record<string, unknown> | undefined)?.runtimeConfig as Record<string, unknown> | undefined;
+  const rawMinecraft = rawRuntimeConfig?.minecraft as Record<string, unknown> | undefined;
+  const hasRawRuntimeMinecraft = Boolean(rawMinecraft && typeof rawMinecraft === "object");
+  const legacy = (s?.minecraft ?? s?.minecraftAgent) as Record<string, unknown> | undefined;
+  const runtimeExplicitlyDisabled = runtimeConfig?.enabled === false;
+  if (runtimeExplicitlyDisabled || (!hasRawRuntimeMinecraft && legacy?.enabled === false)) return false;
+  return Boolean(
+    runtimeConfig?.enabled ||
+    (!hasRawRuntimeMinecraft && legacy?.enabled) ||
+    runtimeConfig?.mcpUrl ||
+    (!hasRawRuntimeMinecraft && legacy?.mcpUrl) ||
+    process.env.MINECRAFT_MCP_URL
+  );
 }
 
 export function getMinecraftConfig(settings: unknown): MinecraftConfig {
   const s = settings as Record<string, unknown> | null;
-  const agentStack = s?.agentStack as Record<string, unknown> | undefined;
-  const runtimeConfig = agentStack?.runtimeConfig as Record<string, unknown> | undefined;
-  const mc = (runtimeConfig?.minecraft ?? s?.minecraft ?? s?.minecraftAgent) as Record<string, unknown> | undefined;
-  const explicitUrl = String(mc?.mcpUrl || process.env.MINECRAFT_MCP_URL || "").trim() || null;
+  const runtimeConfig = getMinecraftRuntimeConfig(settings) as Record<string, unknown>;
+  const rawRuntimeConfig = (s?.agentStack as Record<string, unknown> | undefined)?.runtimeConfig as Record<string, unknown> | undefined;
+  const rawMinecraft = rawRuntimeConfig?.minecraft as Record<string, unknown> | undefined;
+  const hasRawRuntimeMinecraft = Boolean(rawMinecraft && typeof rawMinecraft === "object");
+  const legacy = (s?.minecraft ?? s?.minecraftAgent) as Record<string, unknown> | undefined;
+  const explicitUrl = String(
+    runtimeConfig?.mcpUrl ||
+    (!hasRawRuntimeMinecraft && legacy?.mcpUrl) ||
+    process.env.MINECRAFT_MCP_URL ||
+    ""
+  ).trim() || null;
+  const operatorPlayerName = String(
+    runtimeConfig?.operatorPlayerName ||
+    (!hasRawRuntimeMinecraft && legacy?.operatorPlayerName) ||
+    process.env.MC_OPERATOR_USERNAME ||
+    ""
+  ).trim() || null;
   return {
     mcpUrl: explicitUrl,
-    operatorPlayerName: mc?.operatorPlayerName
-      ? String(mc.operatorPlayerName)
-      : process.env.MC_OPERATOR_USERNAME || null,
+    operatorPlayerName,
     autoSpawn: !explicitUrl
   };
 }

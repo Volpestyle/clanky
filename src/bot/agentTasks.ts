@@ -22,7 +22,7 @@ import {
   buildMinecraftSessionScopeKey,
   findReusableMinecraftSession
 } from "../agents/minecraft/minecraftSessionAccess.ts";
-import { createMinecraftChatBrain } from "../agents/minecraft/minecraftChatBrain.ts";
+import { createMinecraftBrain } from "../agents/minecraft/minecraftBrain.ts";
 import { resolveMinecraftMcpServer, type MinecraftMcpProcess } from "../agents/minecraft/minecraftMcpProcess.ts";
 import type { BrowserBrowseContextState } from "./budgetTracking.ts";
 import type { AgentContext } from "./botContext.ts";
@@ -546,7 +546,7 @@ async function createMinecraftSession(
         content: events.join("; "),
         metadata: { events, eventCount: events.length }
       }),
-    generateChatReply: createMinecraftChatBrain(
+    brain: createMinecraftBrain(
       ctx.llm,
       () => ctx.store.getSettings()
     )

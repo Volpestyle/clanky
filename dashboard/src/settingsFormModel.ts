@@ -20,6 +20,7 @@ import {
   parseUniqueList
 } from "../../src/settings/listNormalization.ts";
 import {
+  getResolvedMinecraftBrainBinding,
   getResolvedMemoryBinding,
   getResolvedVoiceInterruptClassifierBinding,
   getResolvedVoiceMusicBrainBinding
@@ -168,6 +169,7 @@ function buildSettingsFormView(settings: unknown) {
   const devPermissions = valueOr(s.permissions?.devTasks, d.permissions.devTasks);
   const devTeam = valueOr(agentStack.runtimeConfig?.devTeam, d.agentStack.runtimeConfig.devTeam);
   const minecraft = valueOr(agentStack.runtimeConfig?.minecraft, d.agentStack.runtimeConfig.minecraft);
+  const minecraftBrainBinding = resolved?.minecraftBrainBinding || getResolvedMinecraftBrainBinding(s);
   const resolvedStack = resolved?.agentStack;
   const vision = valueOr(s.media?.vision, d.media.vision);
   const visionBinding = resolved?.visionBinding || orchestrator;
@@ -334,7 +336,9 @@ function buildSettingsFormView(settings: unknown) {
     minecraft: {
       enabled: Boolean(minecraft.enabled),
       mcpUrl: String(minecraft.mcpUrl || ""),
-      operatorPlayerName: String(minecraft.operatorPlayerName || "")
+      operatorPlayerName: String(minecraft.operatorPlayerName || ""),
+      useTextModel: minecraft.execution?.mode !== "dedicated_model",
+      llm: minecraftBrainBinding
     },
     vision: {
       captionEnabled: vision.enabled,
@@ -602,6 +606,9 @@ export function settingsToForm(settings: unknown) {
     minecraftEnabled: resolved.minecraft.enabled ?? defaults.minecraft.enabled,
     minecraftMcpUrl: resolved.minecraft.mcpUrl ?? defaults.minecraft.mcpUrl,
     minecraftOperatorPlayerName: resolved.minecraft.operatorPlayerName ?? defaults.minecraft.operatorPlayerName,
+    minecraftBrainUseTextModel: resolved.minecraft.useTextModel ?? defaults.minecraft.useTextModel,
+    minecraftBrainLlmProvider: resolved.minecraft.llm.provider ?? defaults.minecraft.llm.provider,
+    minecraftBrainLlmModel: resolved.minecraft.llm.model ?? defaults.minecraft.llm.model,
     visionCaptionEnabled: resolved.vision.captionEnabled ?? defaultVision.captionEnabled,
     visionProvider: resolved.vision.provider ?? defaultVision.provider,
     visionModel: resolved.vision.model ?? defaultVision.model,
@@ -1695,7 +1702,18 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
         minecraft: {
           enabled: Boolean(form.minecraftEnabled),
           mcpUrl: String(form.minecraftMcpUrl || "").trim(),
-          operatorPlayerName: String(form.minecraftOperatorPlayerName || "").trim()
+          operatorPlayerName: String(form.minecraftOperatorPlayerName || "").trim(),
+          execution: Boolean(form.minecraftBrainUseTextModel)
+            ? {
+                mode: "inherit_orchestrator"
+              }
+            : {
+                mode: "dedicated_model",
+                model: {
+                  provider: String(form.minecraftBrainLlmProvider || "").trim(),
+                  model: String(form.minecraftBrainLlmModel || "").trim()
+                }
+              }
         }
       }
     },

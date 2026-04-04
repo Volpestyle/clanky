@@ -417,7 +417,10 @@ export const DEFAULT_SETTINGS = {
       minecraft: {
         enabled: false,
         mcpUrl: "",
-        operatorPlayerName: ""
+        operatorPlayerName: "",
+        execution: {
+          mode: "inherit_orchestrator"
+        }
       }
     }
   },
@@ -665,7 +668,7 @@ type SettingsAgentStack = Omit<SettingsFromDefaults["agentStack"], "overrides" |
       };
     };
   };
-  runtimeConfig: Omit<SettingsFromDefaults["agentStack"]["runtimeConfig"], "browser" | "voice"> & {
+  runtimeConfig: Omit<SettingsFromDefaults["agentStack"]["runtimeConfig"], "browser" | "voice" | "minecraft"> & {
     browser: Omit<SettingsFromDefaults["agentStack"]["runtimeConfig"]["browser"], "localBrowserAgent"> & {
       localBrowserAgent: Omit<
         SettingsFromDefaults["agentStack"]["runtimeConfig"]["browser"]["localBrowserAgent"],
@@ -677,6 +680,9 @@ type SettingsAgentStack = Omit<SettingsFromDefaults["agentStack"], "overrides" |
     voice: Omit<SettingsFromDefaults["agentStack"]["runtimeConfig"]["voice"], "musicBrain" | "generation"> & {
       musicBrain: SettingsExecutionPolicy;
       generation: SettingsExecutionPolicy;
+    };
+    minecraft: Omit<SettingsFromDefaults["agentStack"]["runtimeConfig"]["minecraft"], "execution"> & {
+      execution: SettingsExecutionPolicy;
     };
   };
 };

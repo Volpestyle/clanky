@@ -2,6 +2,7 @@ import type { Settings, SettingsInput } from "./settingsSchema.ts";
 import {
   getResolvedFollowupBinding,
   getResolvedMemoryBinding,
+  getResolvedMinecraftBrainBinding,
   getResolvedOrchestratorBinding,
   getResolvedTextInitiativeBinding,
   getResolvedVisionBinding,
@@ -34,6 +35,7 @@ export type ResolvedBindings = {
   orchestrator: ReturnType<typeof getResolvedOrchestratorBinding>;
   followupBinding: ReturnType<typeof getResolvedFollowupBinding>;
   memoryBinding: ReturnType<typeof getResolvedMemoryBinding>;
+  minecraftBrainBinding: ReturnType<typeof getResolvedMinecraftBrainBinding>;
   textInitiativeBinding: ReturnType<typeof getResolvedTextInitiativeBinding>;
   visionBinding: ReturnType<typeof getResolvedVisionBinding>;
   voiceProvider: ReturnType<typeof resolveVoiceRuntimeSelectionFromMode>;
@@ -75,6 +77,7 @@ function resolveSettingsBindings(
     orchestrator: getResolvedOrchestratorBinding(settings),
     followupBinding: getResolvedFollowupBinding(settings),
     memoryBinding: getResolvedMemoryBinding(settings),
+    minecraftBrainBinding: getResolvedMinecraftBrainBinding(settings),
     textInitiativeBinding: getResolvedTextInitiativeBinding(settings),
     visionBinding: getResolvedVisionBinding(settings),
     voiceProvider: resolveVoiceRuntimeSelectionFromMode(getVoiceRuntimeConfig(settings).runtimeMode),

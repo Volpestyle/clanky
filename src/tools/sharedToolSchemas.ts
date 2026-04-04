@@ -241,8 +241,8 @@ export const CODE_TASK_SCHEMA: SharedToolSchema = {
 export const MINECRAFT_TASK_SCHEMA: SharedToolSchema = {
   name: "minecraft_task",
   description:
-    "Control the Minecraft companion bot. " +
-    "action=run starts a new behavior (follow, guard, gather, go to location) or changes mode. " +
+    "Send intent to Clanky's embodied Minecraft session brain. " +
+    "action=run starts or continues a Minecraft session and lets the Minecraft brain choose the next high-level action. " +
     "action=followup sends additional instructions to an active session. " +
     "action=status returns the bot's current world state, task progress, and hazards. " +
     "action=cancel stops the current behavior and returns to idle.",
@@ -258,7 +258,7 @@ export const MINECRAFT_TASK_SCHEMA: SharedToolSchema = {
       task: {
         type: "string",
         description:
-          "Natural language instruction for the Minecraft bot. " +
+          "Natural language instruction or context for the Minecraft brain. " +
           "Examples: 'follow me', 'guard me from mobs', 'collect 16 oak logs', " +
           "'go to 100 64 200', 'connect to the server', 'disconnect'. " +
           "Required for run and followup."

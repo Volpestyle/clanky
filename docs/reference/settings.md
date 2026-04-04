@@ -9,6 +9,7 @@ Companion docs:
 - [`../voice/voice-provider-abstraction.md`](../voice/voice-provider-abstraction.md) for voice-specific stage behavior
 - [`../capabilities/browser.md`](../capabilities/browser.md) for browser-runtime behavior
 - [`../capabilities/code.md`](../capabilities/code.md) for code-agent behavior
+- [`../capabilities/minecraft.md`](../capabilities/minecraft.md) for Minecraft runtime behavior and brain ownership
 
 ## 1. Mental Model
 
@@ -198,6 +199,7 @@ Preset-specific default choices and product intent live in [`../architecture/pre
 
 - browser runtime knobs and behavior: [`../capabilities/browser.md`](../capabilities/browser.md)
 - code-agent knobs and behavior: [`../capabilities/code.md`](../capabilities/code.md)
+- Minecraft runtime knobs and brain binding: [`../capabilities/minecraft.md`](../capabilities/minecraft.md)
 - `agentStack.runtimeConfig.devTeam.workspace` controls whether local coding workers use the shared checkout or isolated worktrees; its behavioral contract lives in [`../capabilities/code.md`](../capabilities/code.md)
 - `agentStack.runtimeConfig.devTeam.swarm` is the optional MCP coordination wiring for local code workers; its behavioral contract also lives in [`../capabilities/code.md`](../capabilities/code.md)
 - voice transport and pipeline knobs: [`../voice/voice-provider-abstraction.md`](../voice/voice-provider-abstraction.md)

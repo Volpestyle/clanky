@@ -1,0 +1,13 @@
+flowchart LR
+  DT[Discord text] --> Tool[minecraft_task]
+  DV[Discord voice] --> Tool
+  Tool --> Session[MinecraftSession]
+  Chat[Minecraft chat events] --> Session
+  Session --> Brain[Minecraft brain]
+  Brain --> Decision[High-level command or chat/action decision]
+  Decision --> Exec[Deterministic session executor]
+  Exec --> MCP[Minecraft MCP server]
+  MCP --> Mineflayer[Mineflayer bot]
+  Mineflayer --> World[Minecraft server]
+  MCP --> Snapshot[World state and event snapshots]
+  Snapshot --> Session

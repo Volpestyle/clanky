@@ -662,6 +662,28 @@ test("settingsFormModel persists dedicated music brain selections", () => {
   });
 });
 
+test("settingsFormModel persists dedicated Minecraft brain selections", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({
+    agentStack: {
+      preset: "claude_oauth"
+    }
+  })));
+
+  form.minecraftBrainUseTextModel = false;
+  form.minecraftBrainLlmProvider = "anthropic";
+  form.minecraftBrainLlmModel = "claude-haiku-4-5";
+
+  const { patch, effectivePatch } = serializeForm(form);
+  assert.equal(patch.agentStack.runtimeConfig.minecraft.execution.mode, "dedicated_model");
+  assert.deepEqual(effectivePatch.agentStack.runtimeConfig.minecraft.execution, {
+    mode: "dedicated_model",
+    model: {
+      provider: "anthropic",
+      model: "claude-haiku-4-5"
+    }
+  });
+});
+
 test("settingsFormModel persists bridge classifier overrides even when advanced overrides are off", () => {
   const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {
