@@ -15,7 +15,7 @@
     "lint:fix": "eslint . --fix",
     "typecheck": "bunx tsc -b --noEmit",
     "cleanup": "bun run lint:fix && bun run typecheck",
-    "test:default:files": "rg --files src dashboard/src | rg '\\.(test|spec)\\.(ts|tsx|js|jsx)$' | rg -v '\\.live\\.'",
+    "test:default:files": "bun scripts/list-default-test-files.ts",
     "test": "bun test $(bun run --silent test:default:files)",
     "test:e2e": "bun test ./tests/e2e",
     "test:e2e:voice": "RUN_E2E_VOICE_PHYSICAL=1 bun test ./tests/e2e/voicePhysicalHarness.test.ts",

@@ -11,6 +11,7 @@ import { ClankerBot } from "../bot.ts";
 import { getReplyAddressSignal as getReplyAddressSignalForReplyAdmission } from "./replyAdmission.ts";
 import { isReplyChannel as isReplyChannelForPermissions } from "./permissions.ts";
 import { Store } from "../store/store.ts";
+import { rmTempDir } from "../testHelpers.ts";
 import { createTestSettingsPatch } from "../testSettings.ts";
 
 async function withTempStore(run) {
@@ -23,7 +24,7 @@ async function withTempStore(run) {
     await run(store);
   } finally {
     store.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
   }
 }
 

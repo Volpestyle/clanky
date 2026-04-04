@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { LLMService } from "../llm.ts";
+import { rmTempDir } from "../testHelpers.ts";
 
 function createService(appConfig = {}, { logs = null } = {}) {
   return new LLMService({
@@ -235,7 +236,7 @@ test("transcribeAudio and synthesizeSpeech enforce readiness and log successful 
     assert.equal(tts.audioBuffer.length > 0, true);
     assert.equal(tts.responseFormat, "pcm");
   } finally {
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
   }
 
   assert.equal(logs.some((entry) => entry.kind === "asr_call"), true);

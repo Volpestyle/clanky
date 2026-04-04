@@ -7,6 +7,7 @@ import { appConfig } from "../config.ts";
 import { LLMService } from "../llm.ts";
 import { MemoryManager } from "../memory/memoryManager.ts";
 import { Store } from "../store/store.ts";
+import { rmTempDir } from "../testHelpers.ts";
 import type { BotContext } from "./botContext.ts";
 import {
   composeMessageContentForHistory,
@@ -51,7 +52,7 @@ async function withTempHistoryContext(run: (ctx: BotContext & { store: Store }) 
     await run(ctx);
   } finally {
     store.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
   }
 }
 

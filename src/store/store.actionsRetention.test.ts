@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { Store } from "./store.ts";
+import { rmTempDir } from "../testHelpers.ts";
 
 async function withTempStore(run) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-store-actions-retention-test-"));
@@ -15,7 +16,7 @@ async function withTempStore(run) {
     await run(store);
   } finally {
     store.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
   }
 }
 

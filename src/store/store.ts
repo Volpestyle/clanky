@@ -129,7 +129,10 @@ function ensureMemoryFactsFtsSchema(db: Database) {
       VALUES (new.id, new.fact, COALESCE(new.evidence_text, ''), new.subject, new.fact_type);
     END;
   `);
-  db.prepare("INSERT INTO memory_facts_fts(memory_facts_fts) VALUES('rebuild')").run();
+  // Use exec() not prepare().run() — on bun+Windows, a non-finalized prepared
+  // statement at init time holds the WAL/SHM file handles open past db.close(),
+  // which makes test temp-dir cleanup fail with EBUSY.
+  db.exec("INSERT INTO memory_facts_fts(memory_facts_fts) VALUES('rebuild')");
 }
 
 function migrateMemoryFactsToDualScope(db: Database) {
@@ -326,7 +329,14 @@ export class Store {
   }
 
   init() {
-    fs.mkdirSync(path.dirname(this.dbPath), { recursive: true });
+    // SQLite in-memory databases (":memory:") and URI paths don't live on disk,
+    // so skip the parent-dir mkdir. On bun+Windows, fs.mkdirSync(".", {recursive: true})
+    // throws EEXIST even with recursive:true, which would otherwise break in-memory tests.
+    const isOnDiskPath =
+      this.dbPath && this.dbPath !== ":memory:" && !this.dbPath.startsWith("file::memory:");
+    if (isOnDiskPath) {
+      fs.mkdirSync(path.dirname(this.dbPath), { recursive: true });
+    }
     this.db = new Database(this.dbPath);
     this.db.exec("PRAGMA journal_mode = WAL;");
 
@@ -500,8 +510,18 @@ export class Store {
 
   close() {
     if (this.db) {
+      // Finalize any dangling prepared statements before closing. On bun+Windows,
+      // prepared statements are not finalized on db.close() automatically, and
+      // their open handles keep the SQLite WAL/SHM files locked, causing EBUSY
+      // when callers (mostly tests) try to fs.rm the containing directory.
+      // Running GC before close releases the statements synchronously; the
+      // second GC call after close handles anything the close itself released.
+      // No-op on runtimes without Bun.gc.
+      const runGc = typeof Bun !== "undefined" && typeof Bun.gc === "function";
+      if (runGc) Bun.gc(true);
       this.db.close();
       this.db = null;
+      if (runGc) Bun.gc(true);
     }
   }
 

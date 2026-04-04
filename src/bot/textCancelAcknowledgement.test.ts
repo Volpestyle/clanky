@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import { ClankerBot } from "../bot.ts";
 import { Store } from "../store/store.ts";
+import { rmTempDir } from "../testHelpers.ts";
 import { createTestSettingsPatch } from "../testSettings.ts";
 import { buildTextReplyScopeKey } from "../tools/activeReplyRegistry.ts";
 import { buildBrowserTaskScopeKey } from "../tools/browserTaskRuntime.ts";
@@ -19,7 +20,7 @@ async function withTempStore(run: (store: Store) => Promise<void>) {
     await run(store);
   } finally {
     store.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
   }
 }
 

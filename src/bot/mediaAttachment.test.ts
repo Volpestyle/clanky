@@ -9,6 +9,7 @@ import { LLMService } from "../llm.ts";
 import { MemoryManager } from "../memory/memoryManager.ts";
 import { WebSearchService } from "../services/search.ts";
 import { Store } from "../store/store.ts";
+import { rmTempDir } from "../testHelpers.ts";
 import { createTestSettings } from "../testSettings.ts";
 import { VideoContextService } from "../video/videoContextService.ts";
 import { ImageCaptionCache } from "../vision/imageCaptionCache.ts";
@@ -59,7 +60,7 @@ async function withTempMediaAttachmentContext(
     await run(ctx);
   } finally {
     store.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
   }
 }
 

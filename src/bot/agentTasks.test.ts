@@ -9,6 +9,7 @@ import { LLMService } from "../llm.ts";
 import { MemoryManager } from "../memory/memoryManager.ts";
 import { BrowserManager } from "../services/BrowserManager.ts";
 import { Store } from "../store/store.ts";
+import { rmTempDir } from "../testHelpers.ts";
 import { createTestSettings } from "../testSettings.ts";
 import { BrowserTaskRegistry } from "../tools/browserTaskRuntime.ts";
 import type { AgentContext } from "./botContext.ts";
@@ -69,7 +70,7 @@ async function withTempAgentContext(
     ctx.subAgentSessions.closeAll();
     await browserManager?.closeAll();
     store.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
   }
 }
 

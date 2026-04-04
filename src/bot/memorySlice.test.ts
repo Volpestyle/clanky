@@ -7,6 +7,7 @@ import { appConfig } from "../config.ts";
 import { LLMService } from "../llm.ts";
 import { MemoryManager } from "../memory/memoryManager.ts";
 import { Store } from "../store/store.ts";
+import { rmTempDir } from "../testHelpers.ts";
 import { createTestSettings } from "../testSettings.ts";
 import type { BotContext } from "./botContext.ts";
 import {
@@ -50,7 +51,7 @@ async function withTempMemoryContext(
     await run(ctx);
   } finally {
     store.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
   }
 }
 

@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import { getResolvedVoiceAdmissionClassifierBinding } from "../settings/agentStack.ts";
 import { Store } from "./store.ts";
+import { rmTempDir } from "../testHelpers.ts";
 import { createTestSettingsPatch } from "../testSettings.ts";
 
 async function withTempStore(run) {
@@ -17,7 +18,7 @@ async function withTempStore(run) {
     await run(store);
   } finally {
     store.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
   }
 }
 
@@ -478,7 +479,7 @@ test("store init performs one-time legacy memory canonicalization", async () => 
     assert.equal(migratedPersonFacts[0]?.subject, "123456789");
     reopened.close();
   } finally {
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
   }
 });
 

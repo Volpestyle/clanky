@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { Store } from "../store/store.ts";
 import { normalizeSettings } from "../store/settingsNormalization.ts";
+import { rmTempDir } from "../testHelpers.ts";
 import { createTestSettingsPatch } from "../testSettings.ts";
 import { getEligibleInitiativeChannelIds, maybeRunInitiativeCycle } from "./initiativeEngine.ts";
 
@@ -19,7 +20,7 @@ async function withTempStore(run: (store: Store) => Promise<void>) {
     await run(store);
   } finally {
     store.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
   }
 }
 

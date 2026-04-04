@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ClankerBot } from "../bot.ts";
+import { rmTempDir } from "../testHelpers.ts";
 import { buildReplyPipelineRuntime } from "./botRuntimeFactories.ts";
 import { maybeReplyToMessagePipeline } from "./replyPipeline.ts";
 import type { ActiveReply } from "../tools/activeReplyRegistry.ts";
@@ -32,7 +33,7 @@ async function withTempStore(run: (store: Store) => Promise<void>) {
     await run(store);
   } finally {
     store.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
   }
 }
 

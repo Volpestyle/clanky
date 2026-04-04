@@ -33,6 +33,33 @@ type TestDashboardServerResult = {
   memoryCalls: unknown[];
 };
 
+/**
+ * Removes a temporary directory with retry + GC on EBUSY.
+ *
+ * On bun+Windows, prepared SQLite statements created while exercising the Store
+ * may keep WAL/SHM file handles open briefly after db.close(), causing
+ * fs.rm to fail with EBUSY. Forcing GC between attempts releases the stray
+ * handles. This is a test-only helper — production shutdown paths don't care
+ * about removing the DB directory.
+ *
+ * Tests should use this instead of calling fs.rm directly.
+ */
+export async function rmTempDir(dir: string, { attempts = 20, delayMs = 50 } = {}) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (i === attempts - 1) throw error;
+      const bunGlobal = (globalThis as { Bun?: { gc?: (sync: boolean) => void } }).Bun;
+      if (typeof bunGlobal?.gc === "function") {
+        bunGlobal.gc(true);
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 function isListenPermissionError(error: unknown): boolean {
   const errorLike = (typeof error === "object" && error !== null ? error : {}) as ErrorLike;
   const code = String(errorLike.code || "").toUpperCase();
@@ -202,7 +229,7 @@ export async function withDashboardServer<T>(
       });
     }
     store.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
   }
 
   return { skipped: false };

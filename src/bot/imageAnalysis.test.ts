@@ -7,6 +7,7 @@ import { appConfig } from "../config.ts";
 import { LLMService } from "../llm.ts";
 import { MemoryManager } from "../memory/memoryManager.ts";
 import { Store } from "../store/store.ts";
+import { rmTempDir } from "../testHelpers.ts";
 import type { BotContext } from "./botContext.ts";
 import {
   captionRecentHistoryImages,
@@ -49,7 +50,7 @@ async function withTempImageContext(run: (ctx: BotContext) => Promise<void>) {
     await run(ctx);
   } finally {
     store.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
   }
 }
 

@@ -6,6 +6,7 @@ import { test } from "bun:test";
 import { ClankerBot } from "../bot.ts";
 import { buildStreamKey, createGoLiveStreamState } from "../selfbot/streamDiscovery.ts";
 import { Store } from "../store/store.ts";
+import { rmTempDir } from "../testHelpers.ts";
 import { createTestSettingsPatch } from "../testSettings.ts";
 
 async function withTempStore(run) {
@@ -18,7 +19,7 @@ async function withTempStore(run) {
     await run(store);
   } finally {
     store.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
   }
 }
 

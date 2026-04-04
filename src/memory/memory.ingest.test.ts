@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { MemoryManager } from "./memoryManager.ts";
 import { Store } from "../store/store.ts";
+import { rmTempDir } from "../testHelpers.ts";
 
 function createMemoryForIngestTests(storeOverrides = {}) {
   return new MemoryManager({
@@ -196,7 +197,7 @@ test("appendDailyLogEntry dedupes repeated message ids", async () => {
     const matches = text.match(/message:voice-guild-1-dup-1/gu) || [];
     assert.equal(matches.length, 1);
   } finally {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await rmTempDir(tempDir);
   }
 });
 
@@ -495,7 +496,7 @@ test("archival eviction prefers removing old unreinforced facts over recent ones
     assert.equal(remaining[0]?.fact, "Recent fact about user.");
   } finally {
     store.close();
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await rmTempDir(tempDir);
   }
 });
 
@@ -531,7 +532,7 @@ test("archival eviction keeps guidance facts despite age (evergreen)", async () 
     assert.equal(remaining[0]?.fact, "Always greet me in Spanish.");
   } finally {
     store.close();
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await rmTempDir(tempDir);
   }
 });
 
@@ -727,6 +728,6 @@ test("purgeGuildMemory removes only the selected guild's stored memory artifacts
     assert.equal(dailyFileText.includes("journal entry for guild two"), true);
   } finally {
     store.close();
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await rmTempDir(tempDir);
   }
 });
