@@ -424,6 +424,7 @@ const REPLY_TOOL_HANDLERS: Record<
   join_voice_channel: async (_input, runtime, context) => await executeJoinVoiceChannel(runtime, context),
   leave_voice_channel: async (_input, runtime, context) => await executeLeaveVoiceChannel(runtime, context.signal),
   code_task: executeCodeTask,
+  minecraft_task: executeMinecraftTask,
   music_search: async (input, runtime, context) => await executeVoiceTool("music_search", input, runtime, context),
   music_play: async (input, runtime, context) => await executeVoiceTool("music_play", input, runtime, context),
   video_search: async (input, runtime, context) => await executeVoiceTool("video_search", input, runtime, context),
@@ -1627,6 +1628,58 @@ async function executeVoiceTool(
     };
   }
 }
+// ── Minecraft Task ──
+// Stub handler — full implementation in src/agents/minecraft/minecraftSession.ts
+// mirrors the code_task pattern (run/followup/status/cancel).
+
+async function executeMinecraftTask(
+  input: ReplyToolCallInput,
+  _runtime: ReplyToolRuntime,
+  _context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  const action = String(input.action || "run");
+  const task = String(input.task || "");
+  const sessionId = input.session_id ? String(input.session_id) : undefined;
+
+  // TODO: Wire to MinecraftSessionManager once the agent layer is built.
+  // The full implementation will:
+  //   action=run    → create/continue a MinecraftSession, dispatch skill
+  //   action=followup → send new instructions to running session
+  //   action=status → return compressed WorldSnapshot from blackboard
+  //   action=cancel → abort current skill, return to idle
+
+  switch (action) {
+    case "status":
+      return {
+        content: JSON.stringify({
+          connected: false,
+          message: "Minecraft agent not yet initialized. Use action=run with a task to start."
+        })
+      };
+    case "cancel":
+      return {
+        content: sessionId
+          ? `Minecraft session ${sessionId} cancelled.`
+          : "No active Minecraft session to cancel."
+      };
+    case "followup":
+      return {
+        content: "Minecraft followup received but no active session. Use action=run to start first.",
+        isError: !sessionId
+      };
+    case "run":
+    default:
+      return {
+        content: JSON.stringify({
+          message: `Minecraft agent foundation is in place but the runtime is not yet wired. ` +
+            `Task received: "${task}". ` +
+            `The three-loop architecture (reflex/skill/planner) is defined in src/agents/minecraft/. ` +
+            `Next step: implement MinecraftSession extending BaseAgentSession.`
+        })
+      };
+  }
+}
+
 export type {
   ReplyToolDefinition
 };

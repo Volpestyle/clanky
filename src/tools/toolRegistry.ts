@@ -1,6 +1,7 @@
 import {
   BROWSER_BROWSE_SCHEMA,
   CODE_TASK_SCHEMA,
+  MINECRAFT_TASK_SCHEMA,
   CONVERSATION_SEARCH_SCHEMA,
   IMAGE_LOOKUP_SCHEMA,
   MEMORY_SEARCH_SCHEMA,
@@ -39,11 +40,13 @@ export type ReplyToolAvailability = {
   soundboardAvailable?: boolean;
   codeAgentAvailable?: boolean;
   voiceToolsAvailable?: boolean;
+  minecraftAvailable?: boolean;
 };
 
 type VoiceRealtimeLocalToolAvailability = {
   browserAvailable: boolean;
   codeAgentAvailable: boolean;
+  minecraftAvailable?: boolean;
   memoryAvailable: boolean;
   screenShareAvailable: boolean;
   screenShareSnapshotAvailable: boolean;
@@ -78,6 +81,7 @@ const TOOL_SCHEMA_BY_NAME = new Map(
     IMAGE_LOOKUP_SCHEMA,
     VIDEO_CONTEXT_SCHEMA,
     CODE_TASK_SCHEMA,
+    MINECRAFT_TASK_SCHEMA,
     START_SCREEN_WATCH_SCHEMA,
     SEE_SCREENSHARE_SNAPSHOT_SCHEMA,
     SHARE_BROWSER_SESSION_SCHEMA,
@@ -185,6 +189,12 @@ const LOCAL_TOOL_REGISTRY: LocalToolRegistryEntry[] = [
     isReplyAvailable: ({ settings, capabilities }) =>
       capabilities.codeAgentAvailable !== false && isDevTaskEnabled(settings),
     isVoiceRealtimeAvailable: ({ capabilities }) => capabilities.codeAgentAvailable
+  },
+  {
+    name: "minecraft_task",
+    surfaces: ["reply", "voice_realtime"],
+    isReplyAvailable: ({ capabilities }) => Boolean(capabilities.minecraftAvailable),
+    isVoiceRealtimeAvailable: ({ capabilities }) => Boolean(capabilities.minecraftAvailable)
   },
   {
     name: "music_search",

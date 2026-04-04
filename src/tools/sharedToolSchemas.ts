@@ -232,6 +232,61 @@ export const CODE_TASK_SCHEMA: SharedToolSchema = {
   }
 };
 
+export const MINECRAFT_TASK_SCHEMA: SharedToolSchema = {
+  name: "minecraft_task",
+  description:
+    "Control the Minecraft companion bot. " +
+    "action=run starts a new behavior (follow, guard, gather, go to location) or changes mode. " +
+    "action=followup sends additional instructions to an active session. " +
+    "action=status returns the bot's current world state, task progress, and hazards. " +
+    "action=cancel stops the current behavior and returns to idle.",
+  voiceContinuationPolicy: "always",
+  parameters: {
+    type: "object",
+    properties: {
+      action: {
+        type: "string",
+        enum: ["run", "followup", "cancel", "status"],
+        description: "Action to perform. Defaults to run."
+      },
+      task: {
+        type: "string",
+        description:
+          "Natural language instruction for the Minecraft bot. " +
+          "Examples: 'follow me', 'guard me from mobs', 'collect 16 oak logs', " +
+          "'go to 100 64 200', 'connect to the server', 'disconnect'. " +
+          "Required for run and followup."
+      },
+      mode: {
+        type: "string",
+        enum: ["companion", "gather", "guard", "builder", "idle"],
+        description:
+          "Operating mode. companion=follow and assist, guard=follow and fight hostiles, " +
+          "gather=collect resources, builder=place blocks, idle=stand still. " +
+          "Only used with action=run. Defaults to companion."
+      },
+      session_id: {
+        type: "string",
+        description: "Session ID for continuation (run) or management (followup, cancel, status)."
+      },
+      constraints: {
+        type: "object",
+        description: "Optional behavioral constraints for the bot.",
+        properties: {
+          stay_near_player: { type: "boolean", description: "Keep within max_distance of the player." },
+          max_distance: { type: "number", description: "Maximum distance from the player in blocks." },
+          avoid_combat: { type: "boolean", description: "Do not engage hostiles." }
+        }
+      }
+    },
+    anyOf: [
+      { required: ["task"] },
+      { required: ["session_id"] }
+    ],
+    additionalProperties: false
+  }
+};
+
 export const DISCOVERY_SOURCE_LIST_SCHEMA: SharedToolSchema = {
   name: "discovery_source_list",
   description: "List current discovery feed subscriptions and source-type capacity.",

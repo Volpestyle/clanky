@@ -431,7 +431,9 @@ export class ClankvoxClient extends EventEmitter {
     );
 
     // Prefer the pre-built Rust binary; fall back to cargo run for development.
-    const releaseBin = path.join(clankvoxDir, "target", "release", "clankvox");
+    // On Windows cargo produces clankvox.exe; on Unix it's just clankvox.
+    const binName = process.platform === "win32" ? "clankvox.exe" : "clankvox";
+    const releaseBin = path.join(clankvoxDir, "target", "release", binName);
     const usePrebuilt = await Bun.file(releaseBin).exists();
 
     const spawnEnv = {
@@ -441,6 +443,8 @@ export class ClankvoxClient extends EventEmitter {
       // linked or the binary is pre-built.
       OPUS_STATIC: "1",
       OPUS_NO_PKG: "1",
+      // CMake 4.x removed compat with cmake_minimum_required < 3.5.
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5",
     };
 
     // Set up exit-waiter before spawning so _handleExit can resolve it

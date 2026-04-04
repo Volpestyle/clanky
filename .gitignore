@@ -17,5 +17,9 @@ tests/e2e/.settings-snapshot.json
 tests/fixtures/*.wav
 tests/fixtures/*.pcm
 
+# MCP server build artifacts
+mcp-servers/*/dist/
+mcp-servers/*/node_modules/
+
 # Xcode derived data
 .deriveddata-ios-setup-refresh/

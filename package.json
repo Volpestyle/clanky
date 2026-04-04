@@ -31,7 +31,7 @@
     "logs:loki:down": "docker compose -f docker-compose.loki.yml down",
     "check": "bun run lint && bun run typecheck && bun scripts/check-backend.mjs && bunx vite build",
     "diagrams": "bun scripts/gen-diagrams.mjs",
-    "build:voice": "cd src/voice/clankvox && OPUS_STATIC=1 OPUS_NO_PKG=1 cargo build --release",
+    "build:voice": "bun scripts/build-voice.ts",
     "browser:login": "agent-browser --profile ~/.clanky/browser-profile --args '--disable-blink-features=AutomationControlled' --headed open",
     "kill:port": "lsof -ti :8787 | xargs kill -9 2>/dev/null || echo 'Port 8787 is free'"
   },
