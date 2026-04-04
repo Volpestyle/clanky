@@ -89,7 +89,11 @@ function createAgentContext(bot: ClankerBot, botContext: BotContext): AgentConte
     ...botContext,
     browserManager: bot.browserManager,
     activeBrowserTasks: bot.activeBrowserTasks,
-    subAgentSessions: bot.subAgentSessions
+    subAgentSessions: bot.subAgentSessions,
+    isGuildInVoice: (guildId: string) => {
+      const session = bot.voiceSessionManager?.getSession(guildId);
+      return Boolean(session && !session.ending);
+    }
   };
 }
 

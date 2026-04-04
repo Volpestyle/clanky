@@ -144,10 +144,36 @@ To give Clanky a real Minecraft account with a proper skin and profile:
 
 After the one-time auth, Clanky joins with a real profile, real skin, and shows up on friends lists.
 
+## Runtime behavior
+
+The `MinecraftSession` in the main bot handles the full lifecycle automatically:
+
+- **Auto-connect**: When the LLM calls `minecraft_task` with a command like "follow me",
+  the session detects the bot isn't connected and auto-connects using the MCP server's
+  host resolution (S3 discovery -> `MC_HOST` env -> localhost). No explicit "connect"
+  step needed from the user.
+- **Reflex tick loop**: A background loop polls status every 5 seconds, evaluates
+  deterministic reflexes (eat when hungry, flee when low health near hazards, attack
+  nearby threats), and executes them autonomously.
+- **Event tracking**: Game events (chat, death, combat) are diffed against a watermark
+  so status reports only surface new events. An `onGameEvent` callback forwards events
+  to the action log for proactive narration.
+- **Chat brain**: When another player speaks in Minecraft chat, the session detects
+  the event, feeds it to the same LLM brain used for Discord text (persona, guidance,
+  memory), and replies via `minecraft_chat`. The brain can also trigger game actions
+  via `[ACTION: ...]` prefixes (e.g. "follow me" in chat makes the bot follow).
+- **Multi-channel**: Minecraft chat and Discord voice are independent input channels.
+  Clanky responds to each in its native medium — chat replies stay in Minecraft chat,
+  voice replies stay in Discord voice. Both work simultaneously.
+- **Voice + text**: The `minecraft_task` tool is available on both the text reply and
+  voice realtime surfaces. You can ask Clanky to join your Minecraft server via Discord
+  voice chat and he'll control his character while talking to you.
+
 ## Known gaps
 
 - No crafting pipeline
 - No chest deposit / home base workflow
 - No building planner
 - No first-person vision (uses Mineflayer's structured game state)
-- Proactive event narration (Clanky speaking about game events unprompted) not yet implemented
+- Hazard detection not yet exposed by MCP status (guard mode handles combat reactively at the Mineflayer level)
+- Proactive event narration in Discord (events are logged but not yet pushed to channels unprompted)

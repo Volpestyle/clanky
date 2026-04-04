@@ -9,6 +9,16 @@
  *
  * The session is long-lived — it stays alive across multiple turns until the
  * user disconnects or cancels.
+ *
+ * Key runtime behaviors:
+ *   - **Auto-connect**: Commands that need a bot auto-connect to the
+ *     Minecraft server on first use (host resolved by MCP server via
+ *     S3 discovery / MC_HOST env / localhost fallback).
+ *   - **Reflex tick**: A background loop polls status every few seconds,
+ *     evaluates deterministic reflexes (eat, flee, attack), and fires them.
+ *   - **Event tracking**: New game events (chat, death, combat) are diffed
+ *     against the last-seen watermark and forwarded via an optional
+ *     `onGameEvent` callback for proactive narration.
  */
 
 import { BaseAgentSession } from "../baseAgentSession.ts";
@@ -17,10 +27,36 @@ import type { SubAgentTurnOptions, SubAgentTurnResult } from "../subAgentSession
 import type { MinecraftConstraints, MinecraftMode, Position } from "./types.ts";
 import { MinecraftRuntime, type McpStatusSnapshot } from "./minecraftRuntime.ts";
 import { buildWorldSnapshot } from "./minecraftWorldModel.ts";
+import { evaluateReflexes, executeReflex } from "./minecraftReflexes.ts";
+import type { MinecraftChatMessage, MinecraftChatReplyFn } from "./minecraftChatBrain.ts";
 import { FollowPlayerSkill } from "./skills/followPlayer.ts";
 import { GuardPlayerSkill } from "./skills/guardPlayer.ts";
 import { CollectBlockSkill } from "./skills/collectBlock.ts";
 import { ReturnHomeSkill } from "./skills/returnHome.ts";
+
+// ── Constants ───────────────────────────────────────────────────────────────
+
+/** How often the background reflex/event loop ticks (ms). */
+const REFLEX_TICK_INTERVAL_MS = 5_000;
+
+/** Max consecutive tick failures before the loop self-disables. */
+const MAX_TICK_FAILURES = 5;
+
+/** Max chat history entries kept for brain context. */
+const MAX_CHAT_HISTORY = 30;
+
+/** Minimum ms between brain-generated chat replies to avoid spam. */
+const CHAT_REPLY_COOLDOWN_MS = 2_000;
+
+/** Minecraft chat message hard limit. We target slightly under for safety. */
+const MC_CHAT_MAX_LEN = 240;
+
+/** Delay between multi-line chat messages (ms). */
+const MC_MULTI_LINE_DELAY_MS = 400;
+
+/** Regex to extract chat events from the MCP server's event log.
+ *  Format: `<ISO timestamp> chat<Username> message text` */
+const CHAT_EVENT_RE = /^\S+\s+chat<(\w+)>\s+(.+)$/;
 
 // ── Turn input ──────────────────────────────────────────────────────────────
 
@@ -152,7 +188,14 @@ function extractPlayerName(task: string, prefix: RegExp, fallback: string | null
 
 // ── Status formatting ───────────────────────────────────────────────────────
 
-function formatStatus(status: McpStatusSnapshot, mode: MinecraftMode): string {
+/**
+ * Format a status snapshot into a human-readable summary.
+ *
+ * @param newEvents  If provided, only these events are shown (for incremental
+ *                   status updates).  Falls back to the last 3 events from the
+ *                   full snapshot when omitted.
+ */
+function formatStatus(status: McpStatusSnapshot, mode: MinecraftMode, newEvents?: string[]): string {
   if (!status.connected) return "Bot is not connected to any Minecraft server.";
 
   const parts: string[] = [];
@@ -172,8 +215,9 @@ function formatStatus(status: McpStatusSnapshot, mode: MinecraftMode): string {
       parts.push(`Nearby players: ${visible.map((p) => `${p.username} (${p.distance?.toFixed(0) ?? "?"}m)`).join(", ")}.`);
     }
   }
-  if (status.recentEvents.length > 0) {
-    parts.push(`Recent: ${status.recentEvents.slice(-3).join("; ")}.`);
+  const events = newEvents ?? status.recentEvents.slice(-3);
+  if (events.length > 0) {
+    parts.push(`Recent: ${events.slice(-5).join("; ")}.`);
   }
   return parts.join(" ");
 }
@@ -189,7 +233,62 @@ export type MinecraftSessionOptions = {
   constraints?: MinecraftConstraints;
   homePosition?: Position | null;
   logAction?: (entry: Record<string, unknown>) => void;
+  /**
+   * Called when new game events are detected (chat, death, combat, etc.).
+   * The outer system can use this for proactive narration in Discord.
+   */
+  onGameEvent?: (events: string[]) => void;
+  /**
+   * LLM-powered chat brain for responding to in-game Minecraft chat.
+   * When set, the session monitors chat events and generates natural
+   * conversational replies using the same persona as Discord text.
+   */
+  generateChatReply?: MinecraftChatReplyFn;
 };
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Split a long message into Minecraft-safe chunks.  Prefers splitting on
+ * sentence boundaries, then word boundaries, then hard-truncates.
+ */
+function splitMinecraftMessage(text: string, maxLen = MC_CHAT_MAX_LEN): string[] {
+  if (text.length <= maxLen) return [text];
+
+  const lines: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLen) {
+      lines.push(remaining);
+      break;
+    }
+
+    // Try sentence boundary (. ! ?) within the limit.
+    let splitIdx = -1;
+    for (let i = maxLen; i > maxLen * 0.4; i--) {
+      if (".!?".includes(remaining[i]) && (i + 1 >= remaining.length || remaining[i + 1] === " ")) {
+        splitIdx = i + 1;
+        break;
+      }
+    }
+
+    // Fall back to word boundary.
+    if (splitIdx === -1) {
+      splitIdx = remaining.lastIndexOf(" ", maxLen);
+    }
+
+    // Hard truncate as last resort.
+    if (splitIdx <= 0) {
+      splitIdx = maxLen;
+    }
+
+    lines.push(remaining.slice(0, splitIdx).trimEnd());
+    remaining = remaining.slice(splitIdx).trimStart();
+  }
+
+  return lines;
+}
 
 // ── Session ─────────────────────────────────────────────────────────────────
 
@@ -200,6 +299,24 @@ export class MinecraftSession extends BaseAgentSession {
   private constraints: MinecraftConstraints;
   private homePosition: Position | null;
   private turnCount = 0;
+
+  // ── Auto-connect state ──
+  private botConnected = false;
+  private botUsername: string | null = null;
+
+  // ── Reflex tick loop ──
+  private reflexTimer: ReturnType<typeof setInterval> | null = null;
+  private reflexTickFailures = 0;
+
+  // ── Event tracking ──
+  private seenEventCount = 0;
+  private readonly onGameEvent: ((events: string[]) => void) | undefined;
+
+  // ── Chat brain ──
+  private readonly generateChatReply: MinecraftChatReplyFn | undefined;
+  private readonly chatHistory: MinecraftChatMessage[] = [];
+  private lastChatReplyMs = 0;
+  private chatReplyInFlight = false;
 
   constructor(options: MinecraftSessionOptions) {
     super({
@@ -213,7 +330,249 @@ export class MinecraftSession extends BaseAgentSession {
     this.operatorPlayerName = options.operatorPlayerName ?? null;
     this.constraints = options.constraints ?? {};
     this.homePosition = options.homePosition ?? null;
+    this.onGameEvent = options.onGameEvent;
+    this.generateChatReply = options.generateChatReply;
   }
+
+  // ── Auto-connect ────────────────────────────────────────────────────────
+
+  /**
+   * Ensure the Mineflayer bot is connected to a Minecraft server.
+   *
+   * If not connected, issues a connect call to the MCP server which resolves
+   * the target host via S3 server-info discovery, MC_HOST env, or localhost.
+   * Saves the spawn position as home and starts the background reflex loop.
+   */
+  private async ensureConnected(): Promise<void> {
+    if (this.botConnected) {
+      // Cheap fast-path — we think we're connected.  Verify with a quick
+      // status probe to catch kicked/crashed states.
+      try {
+        const probe = await this.runtime.status();
+        if (probe.ok && probe.output.connected) return;
+        // Bot disconnected underneath us (kicked, server restart, etc.)
+        this.botConnected = false;
+        this.logLifecycle("minecraft_connection_lost", {});
+      } catch {
+        // MCP server unreachable — fall through to reconnect attempt.
+        this.botConnected = false;
+      }
+    }
+
+    this.logLifecycle("minecraft_auto_connect", { mode: this.mode });
+    const result = await this.runtime.connect({});
+    if (!result.ok) {
+      throw new Error(`Auto-connect to Minecraft server failed: ${result.error || "unknown error"}`);
+    }
+
+    const status = result.output;
+    this.botConnected = true;
+    this.botUsername = status.username ?? null;
+
+    // Save spawn position as home.
+    if (status.position && !this.homePosition) {
+      this.homePosition = { x: status.position.x, y: status.position.y, z: status.position.z };
+    }
+
+    // Sync event watermark so we don't replay pre-connect events.
+    this.seenEventCount = status.recentEvents.length;
+
+    // Start the background reflex/event loop now that we have a live bot.
+    this.startReflexLoop();
+
+    this.logLifecycle("minecraft_auto_connect_ok", {
+      username: status.username,
+      position: status.position,
+      dimension: status.dimension
+    });
+  }
+
+  // ── Reflex tick loop ──────────────────────────────────────────────────────
+
+  private startReflexLoop(): void {
+    if (this.reflexTimer) return;
+    this.reflexTickFailures = 0;
+    this.reflexTimer = setInterval(() => {
+      void this.tickReflexesAndEvents();
+    }, REFLEX_TICK_INTERVAL_MS);
+  }
+
+  private stopReflexLoop(): void {
+    if (this.reflexTimer) {
+      clearInterval(this.reflexTimer);
+      this.reflexTimer = null;
+    }
+  }
+
+  /**
+   * Background tick: polls status, evaluates reflexes, and forwards new
+   * game events.  Failures are non-fatal but self-disable after too many
+   * consecutive errors to avoid log spam on a dead MCP server.
+   */
+  private async tickReflexesAndEvents(): Promise<void> {
+    try {
+      const statusResult = await this.runtime.status();
+      if (!statusResult.ok || !statusResult.output.connected) {
+        this.botConnected = false;
+        return;
+      }
+      this.botConnected = true;
+      this.reflexTickFailures = 0;
+
+      const status = statusResult.output;
+
+      // ── Forward new game events + detect chat ──
+      const allEvents = status.recentEvents ?? [];
+      if (allEvents.length > this.seenEventCount) {
+        const newEvents = allEvents.slice(this.seenEventCount);
+        this.seenEventCount = allEvents.length;
+
+        // Forward raw events to the outer system.
+        if (newEvents.length > 0 && this.onGameEvent) {
+          try {
+            this.onGameEvent(newEvents);
+          } catch {
+            // Callback errors are non-fatal.
+          }
+        }
+
+        // Detect chat messages and route to the brain.
+        if (this.generateChatReply) {
+          for (const event of newEvents) {
+            const chatMatch = event.match(CHAT_EVENT_RE);
+            if (chatMatch) {
+              const sender = chatMatch[1];
+              const text = chatMatch[2];
+              const isBot = sender === this.botUsername;
+              const timestamp = event.split(" ")[0] || new Date().toISOString();
+
+              // Record ALL messages (including own) for history context.
+              this.pushChatHistory({ sender, text, timestamp, isBot });
+
+              // Only trigger the brain for OTHER players' messages.
+              if (!isBot) {
+                void this.handleIncomingChat(sender, text);
+              }
+            }
+          }
+        }
+      }
+
+      // ── Evaluate reflexes ──
+      const snapshot = buildWorldSnapshot(this.id, this.mode, status, this.operatorPlayerName);
+      const action = evaluateReflexes(snapshot);
+      if (action.type !== "none") {
+        this.logLifecycle("minecraft_reflex_fire", { action: action.type, mode: this.mode });
+        await executeReflex(this.runtime, action);
+      }
+    } catch {
+      this.reflexTickFailures += 1;
+      if (this.reflexTickFailures >= MAX_TICK_FAILURES) {
+        this.logLifecycle("minecraft_reflex_loop_disabled", {
+          reason: "too many consecutive failures",
+          failures: this.reflexTickFailures
+        });
+        this.stopReflexLoop();
+      }
+    }
+  }
+
+  // ── Chat brain ────────────────────────────────────────────────────────────
+
+  private pushChatHistory(msg: MinecraftChatMessage): void {
+    this.chatHistory.push(msg);
+    if (this.chatHistory.length > MAX_CHAT_HISTORY) {
+      this.chatHistory.splice(0, this.chatHistory.length - MAX_CHAT_HISTORY);
+    }
+  }
+
+  /**
+   * Process an incoming Minecraft chat message through the LLM brain.
+   *
+   * Applies a cooldown to avoid rapid-fire responses and serializes
+   * concurrent calls so only one brain invocation runs at a time.
+   */
+  private async handleIncomingChat(sender: string, message: string): Promise<void> {
+    if (!this.generateChatReply) return;
+    if (this.chatReplyInFlight) return; // one at a time
+
+    const now = Date.now();
+    if (now - this.lastChatReplyMs < CHAT_REPLY_COOLDOWN_MS) return;
+
+    this.chatReplyInFlight = true;
+    try {
+      const snapshot = await this.getWorldSnapshot();
+
+      const result = await this.generateChatReply({
+        sender,
+        message,
+        chatHistory: this.chatHistory.slice(-20),
+        worldSnapshot: snapshot,
+        botUsername: this.botUsername || "ClankyBuddy"
+      });
+
+      this.lastChatReplyMs = Date.now();
+
+      // Send chat reply.
+      if (result.chatText) {
+        await this.sendMinecraftChat(result.chatText);
+      }
+
+      // Execute game command if the brain requested one.
+      if (result.gameCommand) {
+        const command = parseCommand(result.gameCommand, this.mode, this.operatorPlayerName);
+        this.logLifecycle("minecraft_chat_brain_action", {
+          sender,
+          gameCommand: result.gameCommand,
+          parsedKind: command.kind
+        });
+        try {
+          await this.executeCommand(command, { signal: AbortSignal.timeout(30_000) });
+        } catch (error) {
+          this.logLifecycle("minecraft_chat_brain_action_error", {
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+
+      if (result.costUsd > 0) {
+        this.logLifecycle("minecraft_chat_brain_cost", {
+          sender,
+          costUsd: result.costUsd
+        });
+      }
+    } catch (error) {
+      this.logLifecycle("minecraft_chat_reply_error", {
+        sender,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      this.chatReplyInFlight = false;
+    }
+  }
+
+  /**
+   * Send a message in Minecraft chat, splitting for the 256-char limit.
+   */
+  private async sendMinecraftChat(text: string): Promise<void> {
+    const lines = splitMinecraftMessage(text);
+    for (let i = 0; i < lines.length; i++) {
+      await this.runtime.chat(lines[i]);
+      // Record own messages in history for context.
+      this.pushChatHistory({
+        sender: this.botUsername || "ClankyBuddy",
+        text: lines[i],
+        timestamp: new Date().toISOString(),
+        isBot: true
+      });
+      // Small delay between multi-line messages so they render in order.
+      if (i < lines.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, MC_MULTI_LINE_DELAY_MS));
+      }
+    }
+  }
+
+  // ── Turn execution ────────────────────────────────────────────────────────
 
   protected async executeTurn(input: string, options: SubAgentTurnOptions): Promise<SubAgentTurnResult> {
     this.turnCount += 1;
@@ -270,6 +629,12 @@ export class MinecraftSession extends BaseAgentSession {
   }
 
   private async executeCommand(command: ParsedCommand, options: SubAgentTurnOptions): Promise<string> {
+    // Auto-connect for any command that needs a live bot.
+    // connect/disconnect manage the connection explicitly.
+    if (command.kind !== "connect" && command.kind !== "disconnect") {
+      await this.ensureConnected();
+    }
+
     switch (command.kind) {
       case "connect": {
         const result = await this.runtime.connect({
@@ -280,15 +645,21 @@ export class MinecraftSession extends BaseAgentSession {
         });
         if (!result.ok) return `Connection failed: ${result.error || "unknown error"}`;
         const status = result.output;
+        this.botConnected = true;
+        this.botUsername = status.username ?? null;
         // Save spawn position as home
         if (status.position && !this.homePosition) {
           this.homePosition = { x: status.position.x, y: status.position.y, z: status.position.z };
         }
+        this.seenEventCount = status.recentEvents.length;
+        this.startReflexLoop();
         return formatStatus(status, this.mode);
       }
 
       case "disconnect": {
+        this.stopReflexLoop();
         const result = await this.runtime.disconnect("user requested");
+        this.botConnected = false;
         this.mode = "idle";
         return result.ok ? "Disconnected from Minecraft server." : `Disconnect failed: ${result.error}`;
       }
@@ -296,7 +667,11 @@ export class MinecraftSession extends BaseAgentSession {
       case "status": {
         const result = await this.runtime.status();
         if (!result.ok) return `Status check failed: ${result.error}`;
-        return formatStatus(result.output, this.mode);
+        // Include only new events in the status report.
+        const allEvents = result.output.recentEvents ?? [];
+        const newEvents = allEvents.slice(this.seenEventCount);
+        this.seenEventCount = allEvents.length;
+        return formatStatus(result.output, this.mode, newEvents);
       }
 
       case "follow": {
@@ -384,11 +759,13 @@ export class MinecraftSession extends BaseAgentSession {
   }
 
   protected onCancelled(_reason: string): void {
+    this.stopReflexLoop();
     // Best-effort stop the bot when the session is cancelled.
     void this.runtime.stop().catch(() => {});
   }
 
   protected onClosed(): void {
+    this.stopReflexLoop();
     // Best-effort stop on close.
     void this.runtime.stop().catch(() => {});
   }

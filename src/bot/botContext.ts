@@ -87,6 +87,8 @@ export interface AgentContext extends BotContext {
   readonly browserManager: BrowserManager | null;
   readonly activeBrowserTasks: BrowserTaskRegistry;
   readonly subAgentSessions: SubAgentSessionManager;
+  /** Check whether the bot is in an active voice session for a guild. */
+  readonly isGuildInVoice?: (guildId: string) => boolean;
 }
 
 export interface BudgetContext extends BotContext {
