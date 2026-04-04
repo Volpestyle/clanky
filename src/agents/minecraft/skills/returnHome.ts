@@ -39,7 +39,7 @@ export class ReturnHomeSkill implements MinecraftSkill {
 
     try {
       context.onProgress?.(`Returning home to ${this.home.x}, ${this.home.y}, ${this.home.z}...`);
-      const result = await this.runtime.goTo(this.home.x, this.home.y, this.home.z, this.range);
+      const result = await this.runtime.goTo(this.home.x, this.home.y, this.home.z, this.range, context.signal);
       if (!result.ok) {
         return { status: "failed", summary: result.error || "Go-to command rejected.", retries: 0 };
       }

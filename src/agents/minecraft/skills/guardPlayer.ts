@@ -37,7 +37,7 @@ export class GuardPlayerSkill implements MinecraftSkill {
     }
 
     try {
-      const result = await this.runtime.guardPlayer(this.playerName, this.radius, this.followDistance);
+      const result = await this.runtime.guardPlayer(this.playerName, this.radius, this.followDistance, context.signal);
       if (!result.ok) {
         return { status: "failed", summary: result.error || "Guard command rejected.", retries: 0 };
       }

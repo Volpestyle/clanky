@@ -38,7 +38,7 @@ export class CollectBlockSkill implements MinecraftSkill {
 
     try {
       context.onProgress?.(`Collecting ${this.count} ${this.blockName}...`);
-      const result = await this.runtime.collectBlock(this.blockName, this.count, this.maxDistance);
+      const result = await this.runtime.collectBlock(this.blockName, this.count, this.maxDistance, context.signal);
       if (!result.ok) {
         return { status: "failed", summary: result.error || "Collect command rejected.", retries: 0 };
       }

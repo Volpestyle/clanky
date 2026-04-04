@@ -11,7 +11,7 @@
  * nearby-entity queries.
  */
 
-import type { ReflexAction, WorldSnapshot } from "./types.ts";
+import type { MinecraftConstraints, ReflexAction, WorldSnapshot } from "./types.ts";
 import type { MinecraftRuntime } from "./minecraftRuntime.ts";
 
 // ── Thresholds ──────────────────────────────────────────────────────────────
@@ -27,7 +27,10 @@ const HAZARD_ATTACK_DISTANCE = 4;
  * Evaluate the current world state and return the highest-priority reflex
  * action.  Returns `{ type: "none" }` when no reflex should fire.
  */
-export function evaluateReflexes(snapshot: WorldSnapshot): ReflexAction {
+export function evaluateReflexes(
+  snapshot: WorldSnapshot,
+  constraints: MinecraftConstraints = {}
+): ReflexAction {
   if (!snapshot.connected || !snapshot.self) {
     return { type: "none" };
   }
@@ -51,7 +54,7 @@ export function evaluateReflexes(snapshot: WorldSnapshot): ReflexAction {
   }
 
   // 3. Attack if a hazard is extremely close and we're not avoiding combat.
-  if (snapshot.hazards.length > 0) {
+  if (!constraints.avoidCombat && snapshot.hazards.length > 0) {
     const nearest = snapshot.hazards[0];
     if (nearest.distance <= HAZARD_ATTACK_DISTANCE) {
       return { type: "attack", target: nearest.type };

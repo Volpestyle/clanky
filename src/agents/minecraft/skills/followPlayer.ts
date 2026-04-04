@@ -34,7 +34,7 @@ export class FollowPlayerSkill implements MinecraftSkill {
     }
 
     try {
-      const result = await this.runtime.followPlayer(this.playerName, this.distance);
+      const result = await this.runtime.followPlayer(this.playerName, this.distance, context.signal);
       if (!result.ok) {
         return { status: "failed", summary: result.error || "Follow command rejected.", retries: 0 };
       }

@@ -154,7 +154,11 @@ The `MinecraftSession` in the main bot handles the full lifecycle automatically:
   step needed from the user.
 - **Reflex tick loop**: A background loop polls status every 5 seconds, evaluates
   deterministic reflexes (eat when hungry, flee when low health near hazards, attack
-  nearby threats), and executes them autonomously.
+  nearby threats), and executes them autonomously. Hazards come from the MCP status
+  snapshot's nearby hostile-entity scan.
+- **Single companion session**: Discord text and voice reuse the same live Minecraft
+  session for the same user. Other users cannot inspect, continue, or cancel that
+  session while it is active.
 - **Event tracking**: Game events (chat, death, combat) are diffed against a watermark
   so status reports only surface new events. An `onGameEvent` callback forwards events
   to the action log for proactive narration.

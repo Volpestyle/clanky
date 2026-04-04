@@ -18,6 +18,10 @@ import { clamp } from "../utils.ts";
 import { MAX_BROWSER_BROWSE_QUERY_LEN, normalizeDirectiveText } from "./botHelpers.ts";
 import { getResolvedBrowserTaskConfig, isDevTaskEnabled, isMinecraftEnabled, getMinecraftConfig } from "../settings/agentStack.ts";
 import { createMinecraftSession as createMinecraftSessionRuntime } from "../agents/minecraft/minecraftSession.ts";
+import {
+  buildMinecraftSessionScopeKey,
+  findReusableMinecraftSession
+} from "../agents/minecraft/minecraftSessionAccess.ts";
 import { createMinecraftChatBrain } from "../agents/minecraft/minecraftChatBrain.ts";
 import { resolveMinecraftMcpServer, type MinecraftMcpProcess } from "../agents/minecraft/minecraftMcpProcess.ts";
 import type { BrowserBrowseContextState } from "./budgetTracking.ts";
@@ -515,6 +519,13 @@ async function createMinecraftSession(
 ) {
   if (!isMinecraftEnabled(settings)) return null;
 
+  const scopeKey = buildMinecraftSessionScopeKey({ guildId, channelId });
+  const existingSession = findReusableMinecraftSession(ctx.subAgentSessions, {
+    ownerUserId: userId,
+    scopeKey
+  });
+  if (existingSession) return existingSession;
+
   const logAction = (entry: Record<string, unknown>) =>
     ctx.store.logAction({ ...entry, guildId, channelId, userId, source });
 
@@ -523,7 +534,6 @@ async function createMinecraftSession(
   if (!baseUrl) return null;
 
   const config = getMinecraftConfig(settings);
-  const scopeKey = buildScopeKey({ guildId, channelId });
   return createMinecraftSessionRuntime({
     scopeKey,
     baseUrl,

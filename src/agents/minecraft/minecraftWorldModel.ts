@@ -14,7 +14,7 @@ import type {
   TaskSnapshot,
   WorldSnapshot
 } from "./types.ts";
-import type { McpStatusSnapshot, McpPlayerEntry } from "./minecraftRuntime.ts";
+import type { McpStatusSnapshot, McpPlayerEntry, McpHazardEntry } from "./minecraftRuntime.ts";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -57,6 +57,16 @@ function buildSelfSnapshot(status: McpStatusSnapshot): SelfSnapshot | null {
       name: item.name,
       count: item.count
     }))
+  };
+}
+
+function buildHazardSnapshot(entry: McpHazardEntry): HazardSnapshot | null {
+  const position = toPosition(entry.position);
+  if (!position) return null;
+  return {
+    type: entry.type,
+    distance: entry.distance,
+    position
   };
 }
 
@@ -112,10 +122,9 @@ export function buildWorldSnapshot(
     }
   }
 
-  // Hazards are not yet exposed by the MCP server.  The guard mode handles
-  // combat reactively; the agent layer will add hazard detection once the
-  // MCP server exposes nearby-entity queries.
-  const hazards: HazardSnapshot[] = [];
+  const hazards = (status.hazards ?? [])
+    .map((entry) => buildHazardSnapshot(entry))
+    .filter((entry): entry is HazardSnapshot => Boolean(entry));
 
   return {
     sessionId,

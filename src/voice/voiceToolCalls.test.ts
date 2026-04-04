@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   executeVoiceBrowserBrowseTool,
+  executeVoiceMinecraftTaskTool,
 } from "./voiceToolCallAgents.ts";
 import { executeLocalVoiceToolCall } from "./voiceToolCallDispatch.ts";
 import {
@@ -10,6 +11,36 @@ import {
   executeVoiceVideoPlayTool
 } from "./voiceToolCallMusic.ts";
 import { createTestSettings } from "../testSettings.ts";
+
+function createMockVoiceMinecraftSession({
+  id,
+  ownerUserId,
+  onRunTurn
+}: {
+  id: string;
+  ownerUserId: string | null;
+  onRunTurn?: (input: string) => Promise<{
+    text: string;
+    isError?: boolean;
+    errorMessage?: string | null;
+    sessionCompleted?: boolean;
+  }>;
+}) {
+  return {
+    id,
+    type: "minecraft",
+    ownerUserId,
+    status: "idle",
+    lastUsedAt: Date.now(),
+    async runTurn(input: string) {
+      this.lastUsedAt = Date.now();
+      return await (onRunTurn?.(input) ?? Promise.resolve({ text: "ok" }));
+    },
+    cancel() {
+      this.status = "cancelled";
+    }
+  };
+}
 
 test("executeLocalVoiceToolCall forwards browser abort signals to browser_browse", async () => {
   const controller = new AbortController();
@@ -177,6 +208,174 @@ test("executeVoiceBrowserBrowseTool omits session_id when the browser session co
     text: "Finished browsing."
   });
   assert.equal(sessions.size, 0);
+});
+
+test("executeVoiceMinecraftTaskTool rejects unauthorized status access", async () => {
+  const sessions = new Map<string, ReturnType<typeof createMockVoiceMinecraftSession>>();
+  const existing = createMockVoiceMinecraftSession({
+    id: "minecraft:guild-1:channel-1:1:1",
+    ownerUserId: "user-2"
+  });
+  sessions.set(existing.id, existing);
+
+  const result = await executeVoiceMinecraftTaskTool({
+    subAgentSessions: {
+      get(sessionId: string) {
+        return sessions.get(sessionId);
+      },
+      list() {
+        return [...sessions.values()].map((entry) => ({
+          id: entry.id,
+          type: entry.type,
+          status: entry.status,
+          lastUsedAt: entry.lastUsedAt
+        }));
+      },
+      register(session) {
+        sessions.set(session.id, session as ReturnType<typeof createMockVoiceMinecraftSession>);
+      },
+      remove(sessionId: string) {
+        return sessions.delete(sessionId);
+      }
+    }
+  }, {
+    session: {
+      id: "voice-session-1",
+      guildId: "guild-1",
+      textChannelId: "channel-1",
+      lastRealtimeToolCallerUserId: "user-1"
+    },
+    settings: createTestSettings({}),
+    args: {
+      action: "status",
+      session_id: existing.id
+    }
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    text: "",
+    error: `Not authorized to continue Minecraft session '${existing.id}'.`
+  });
+});
+
+test("executeVoiceMinecraftTaskTool reuses the caller's active session without creating a new one", async () => {
+  const sessions = new Map<string, ReturnType<typeof createMockVoiceMinecraftSession>>();
+  const runInputs: string[] = [];
+  const existing = createMockVoiceMinecraftSession({
+    id: "minecraft:guild-1:channel-1:2:1",
+    ownerUserId: "user-1",
+    async onRunTurn(input: string) {
+      runInputs.push(input);
+      return { text: "On it." };
+    }
+  });
+  sessions.set(existing.id, existing);
+
+  let createCalls = 0;
+  const result = await executeVoiceMinecraftTaskTool({
+    subAgentSessions: {
+      get(sessionId: string) {
+        return sessions.get(sessionId);
+      },
+      list() {
+        return [...sessions.values()].map((entry) => ({
+          id: entry.id,
+          type: entry.type,
+          status: entry.status,
+          lastUsedAt: entry.lastUsedAt
+        }));
+      },
+      register(session) {
+        sessions.set(session.id, session as ReturnType<typeof createMockVoiceMinecraftSession>);
+      },
+      remove(sessionId: string) {
+        return sessions.delete(sessionId);
+      }
+    },
+    async createMinecraftSession() {
+      createCalls += 1;
+      return null;
+    }
+  }, {
+    session: {
+      id: "voice-session-1",
+      guildId: "guild-1",
+      textChannelId: "channel-1",
+      lastRealtimeToolCallerUserId: "user-1"
+    },
+    settings: createTestSettings({}),
+    args: {
+      task: "follow me",
+      constraints: {
+        stay_near_player: true,
+        max_distance: 4
+      }
+    }
+  });
+
+  assert.equal(createCalls, 0);
+  assert.equal(runInputs.length, 1);
+  assert.deepEqual(JSON.parse(runInputs[0] || "{}"), {
+    task: "follow me",
+    constraints: {
+      stay_near_player: true,
+      max_distance: 4
+    }
+  });
+  assert.deepEqual(result, {
+    ok: true,
+    text: "On it.",
+    session_id: existing.id
+  });
+});
+
+test("executeVoiceMinecraftTaskTool cancels the caller's active session without session_id", async () => {
+  const sessions = new Map<string, ReturnType<typeof createMockVoiceMinecraftSession>>();
+  const existing = createMockVoiceMinecraftSession({
+    id: "minecraft:guild-1:channel-1:3:1",
+    ownerUserId: "user-1"
+  });
+  sessions.set(existing.id, existing);
+
+  const result = await executeVoiceMinecraftTaskTool({
+    subAgentSessions: {
+      get(sessionId: string) {
+        return sessions.get(sessionId);
+      },
+      list() {
+        return [...sessions.values()].map((entry) => ({
+          id: entry.id,
+          type: entry.type,
+          status: entry.status,
+          lastUsedAt: entry.lastUsedAt
+        }));
+      },
+      register(session) {
+        sessions.set(session.id, session as ReturnType<typeof createMockVoiceMinecraftSession>);
+      },
+      remove(sessionId: string) {
+        return sessions.delete(sessionId);
+      }
+    }
+  }, {
+    session: {
+      id: "voice-session-1",
+      guildId: "guild-1",
+      textChannelId: "channel-1",
+      lastRealtimeToolCallerUserId: "user-1"
+    },
+    settings: createTestSettings({}),
+    args: {
+      action: "cancel"
+    }
+  });
+
+  assert.deepEqual(result, {
+    ok: true,
+    text: `Minecraft session '${existing.id}' cancelled.`
+  });
+  assert.equal(sessions.has(existing.id), false);
 });
 
 test("executeLocalVoiceToolCall applies a temporary pause reply handoff for the main brain", async () => {

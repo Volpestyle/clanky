@@ -13,6 +13,13 @@ import {
   resolveCodeAgentConfig,
   type CodeAgentRole
 } from "../agents/codeAgent.ts";
+import {
+  buildMinecraftSessionScopeKey,
+  findConflictingMinecraftSession,
+  findReusableMinecraftSession,
+  isMinecraftSessionAuthorized,
+  resolveMinecraftSessionById
+} from "../agents/minecraft/minecraftSessionAccess.ts";
 import { toAnthropicTool } from "./sharedToolSchemas.ts";
 import { buildReplyToolSchemas, type ReplyToolAvailability } from "./toolRegistry.ts";
 import {
@@ -91,6 +98,10 @@ function buildSessionNote(sessionId: string, sessionCompleted?: boolean) {
 function maybeRemoveCompletedSession(manager: Pick<SubAgentSessionManager, "remove">, sessionId: string, sessionCompleted?: boolean) {
   if (!sessionCompleted) return;
   manager.remove(sessionId);
+}
+
+function buildMinecraftBusyMessage(conflictingSessionId: string): string {
+  return `Minecraft companion is already active in session '${conflictingSessionId}' for another user.`;
 }
 
 function shouldDispatchAsyncCodeTask({
@@ -1645,49 +1656,54 @@ async function executeMinecraftTask(
   throwIfAborted(context.signal, "Reply tool cancelled");
   const action = String(input?.action || "run").trim().toLowerCase();
   const sessionId = typeof input?.session_id === "string" ? String(input.session_id).trim() : "";
+  const scopeKey = buildMinecraftSessionScopeKey({
+    guildId: context.guildId,
+    channelId: context.channelId
+  });
+
+  const resolveExistingSession = () => {
+    if (!runtime.subAgentSessions) return null;
+    if (sessionId) {
+      const requested = resolveMinecraftSessionById(runtime.subAgentSessions.manager, sessionId);
+      if (!requested) return { session: null, error: `Minecraft session '${sessionId}' not found or expired.` };
+      if (!isMinecraftSessionAuthorized(requested, context.userId)) {
+        return { session: null, error: `Not authorized to continue Minecraft session '${sessionId}'.` };
+      }
+      return { session: requested, error: null };
+    }
+    const reusable = findReusableMinecraftSession(runtime.subAgentSessions.manager, {
+      ownerUserId: context.userId,
+      scopeKey
+    });
+    return { session: reusable, error: null };
+  };
 
   // --- action: status ---
   if (action === "status") {
-    if (sessionId && runtime.subAgentSessions) {
-      const session = runtime.subAgentSessions.manager.get(sessionId);
-      if (!session) return { content: `Minecraft session '${sessionId}' not found or expired.`, isError: true };
-      try {
-        const result = await session.runTurn(JSON.stringify({ command: "status" }), { signal: context.signal });
-        return { content: result.text };
-      } catch (error) {
-        return { content: `Status check failed: ${String((error as Error)?.message || error)}`, isError: true };
-      }
+    const resolved = resolveExistingSession();
+    if (resolved?.error) return { content: resolved.error, isError: true };
+    const session = resolved?.session;
+    if (!session) {
+      return { content: "No active Minecraft session. Use action=run with a task to start one." };
     }
-    // No session specified — check for any active minecraft session
-    if (runtime.subAgentSessions) {
-      const sessions = runtime.subAgentSessions.manager.list()
-        .filter((s) => s.type === "minecraft" && (s.status === "idle" || s.status === "running"));
-      if (sessions.length > 0) {
-        const session = runtime.subAgentSessions.manager.get(sessions[0].id);
-        if (session) {
-          try {
-            const result = await session.runTurn(JSON.stringify({ command: "status" }), { signal: context.signal });
-            return { content: result.text };
-          } catch (error) {
-            return { content: `Status check failed: ${String((error as Error)?.message || error)}`, isError: true };
-          }
-        }
-      }
+    try {
+      const result = await session.runTurn(JSON.stringify({ command: "status" }), { signal: context.signal });
+      return { content: result.text };
+    } catch (error) {
+      return { content: `Status check failed: ${String((error as Error)?.message || error)}`, isError: true };
     }
-    return { content: "No active Minecraft session. Use action=run with a task to start one." };
   }
 
   // --- action: cancel ---
   if (action === "cancel") {
-    if (!sessionId) return { content: "Missing session_id for cancellation.", isError: true };
-    if (runtime.subAgentSessions) {
-      const session = runtime.subAgentSessions.manager.get(sessionId);
-      if (!session) return { content: `No Minecraft session found with ID '${sessionId}'.`, isError: true };
-      session.cancel("Cancelled by user via minecraft_task action");
-      runtime.subAgentSessions.manager.remove(sessionId);
-      return { content: `Minecraft session '${sessionId}' cancelled.` };
-    }
-    return { content: "Session management unavailable.", isError: true };
+    if (!runtime.subAgentSessions) return { content: "Session management unavailable.", isError: true };
+    const resolved = resolveExistingSession();
+    if (resolved?.error) return { content: resolved.error, isError: true };
+    const session = resolved?.session;
+    if (!session) return { content: "No active Minecraft session to cancel.", isError: true };
+    session.cancel?.("Cancelled by user via minecraft_task action");
+    runtime.subAgentSessions.manager.remove(session.id);
+    return { content: `Minecraft session '${session.id}' cancelled.` };
   }
 
   // --- action: followup ---
@@ -1696,11 +1712,10 @@ async function executeMinecraftTask(
     if (!task) return { content: "Missing or empty follow-up instruction.", isError: true };
     if (!sessionId) return { content: "Missing session_id for follow-up.", isError: true };
     if (!runtime.subAgentSessions) return { content: "Session management unavailable.", isError: true };
-    const session = runtime.subAgentSessions.manager.get(sessionId);
+    const resolved = resolveExistingSession();
+    if (resolved?.error) return { content: resolved.error, isError: true };
+    const session = resolved?.session;
     if (!session) return { content: `Minecraft session '${sessionId}' not found or expired.`, isError: true };
-    if (session.ownerUserId && session.ownerUserId !== context.userId) {
-      return { content: `Not authorized to continue Minecraft session '${sessionId}'.`, isError: true };
-    }
     try {
       const turnResult = await session.runTurn(task, { signal: context.signal });
       maybeRemoveCompletedSession(runtime.subAgentSessions.manager, session.id, turnResult.sessionCompleted);
@@ -1721,23 +1736,31 @@ async function executeMinecraftTask(
   const constraints = input?.constraints && typeof input.constraints === "object" ? input.constraints as Record<string, unknown> : undefined;
 
   // Session continuation
-  if (sessionId && runtime.subAgentSessions) {
-    const session = runtime.subAgentSessions.manager.get(sessionId);
-    if (!session) return { content: `Minecraft session '${sessionId}' not found or expired.`, isError: true };
-    if (session.ownerUserId && session.ownerUserId !== context.userId) {
-      return { content: `Not authorized to continue Minecraft session '${sessionId}'.`, isError: true };
-    }
-    try {
-      const turnInput = JSON.stringify({ task, mode, constraints });
-      const turnResult = await session.runTurn(turnInput, { signal: context.signal });
-      maybeRemoveCompletedSession(runtime.subAgentSessions.manager, session.id, turnResult.sessionCompleted);
-      const sessionNote = buildSessionNote(session.id, turnResult.sessionCompleted);
-      if (turnResult.isError) {
-        return { content: `Minecraft task failed: ${turnResult.errorMessage}${sessionNote}`, isError: true };
+  if (runtime.subAgentSessions) {
+    const resolved = resolveExistingSession();
+    if (resolved?.error) return { content: resolved.error, isError: true };
+    const session = resolved?.session;
+    if (session) {
+      try {
+        const turnInput = JSON.stringify({ task, mode, constraints });
+        const turnResult = await session.runTurn(turnInput, { signal: context.signal });
+        maybeRemoveCompletedSession(runtime.subAgentSessions.manager, session.id, turnResult.sessionCompleted);
+        const sessionNote = buildSessionNote(session.id, turnResult.sessionCompleted);
+        if (turnResult.isError) {
+          return { content: `Minecraft task failed: ${turnResult.errorMessage}${sessionNote}`, isError: true };
+        }
+        return { content: (turnResult.text.trim() || "Minecraft task completed.") + sessionNote };
+      } catch (error) {
+        return { content: `Minecraft task failed: ${String((error as Error)?.message || error)}`, isError: true };
       }
-      return { content: (turnResult.text.trim() || "Minecraft task completed.") + sessionNote };
-    } catch (error) {
-      return { content: `Minecraft task failed: ${String((error as Error)?.message || error)}`, isError: true };
+    }
+
+    const conflictingSession = findConflictingMinecraftSession(runtime.subAgentSessions.manager, {
+      ownerUserId: context.userId,
+      scopeKey
+    });
+    if (conflictingSession) {
+      return { content: buildMinecraftBusyMessage(conflictingSession.id), isError: true };
     }
   }
 
@@ -1767,7 +1790,7 @@ async function executeMinecraftTask(
     }
   }
 
-  return { content: "Minecraft agent is not available. Ensure MINECRAFT_MCP_URL is configured.", isError: true };
+  return { content: "Minecraft agent is not available. Ensure Minecraft is enabled and the MCP server can start.", isError: true };
 }
 
 export type {

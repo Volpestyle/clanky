@@ -71,7 +71,7 @@ export type WorldSnapshot = {
 
 // ── Modes ──
 
-export type MinecraftMode = "companion" | "gather" | "guard" | "builder" | "idle";
+export type MinecraftMode = "companion" | "gather" | "guard" | "idle";
 
 // ── Skill interface ──
 

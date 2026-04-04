@@ -139,13 +139,18 @@ interface SubAgentTurnResult {
 
 export interface SubAgentInteractiveSession {
   id: string;
+  type?: string;
   ownerUserId?: string | null;
+  status?: string;
+  lastUsedAt?: number;
   getBrowserSessionKey?: () => string | null;
+  cancel?: (reason?: string) => void;
   runTurn: (instruction: string, options?: { signal?: AbortSignal }) => Promise<SubAgentTurnResult>;
 }
 
 export interface SubAgentSessionRegistry {
   get: (sessionId: string) => SubAgentInteractiveSession | null | undefined;
   register: (session: SubAgentInteractiveSession) => void;
+  list?: () => Array<{ id: string; type: string; status: string; lastUsedAt: number }>;
   remove?: (sessionId: string) => boolean;
 }

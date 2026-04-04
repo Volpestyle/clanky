@@ -64,7 +64,7 @@ type TurnInput = {
   task?: string;
   command?: string;
   mode?: MinecraftMode;
-  constraints?: MinecraftConstraints;
+   constraints?: MinecraftConstraints | Record<string, unknown>;
   operatorPlayerName?: string;
 };
 
@@ -78,6 +78,43 @@ function parseTurnInput(raw: string): TurnInput {
     }
   }
   return { task: trimmed };
+}
+
+function toPositiveFiniteNumber(value: unknown): number | undefined {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return undefined;
+  return numeric;
+}
+
+function normalizeConstraints(raw: MinecraftConstraints | Record<string, unknown> | undefined): MinecraftConstraints | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const record = raw as Record<string, unknown>;
+  const stayNearPlayer = typeof record.stayNearPlayer === "boolean"
+    ? record.stayNearPlayer
+    : typeof record.stay_near_player === "boolean"
+      ? record.stay_near_player
+      : undefined;
+  const avoidCombat = typeof record.avoidCombat === "boolean"
+    ? record.avoidCombat
+    : typeof record.avoid_combat === "boolean"
+      ? record.avoid_combat
+      : undefined;
+  const maxDistance = toPositiveFiniteNumber(record.maxDistance ?? record.max_distance);
+  const allowedChestsRaw = Array.isArray(record.allowedChests)
+    ? record.allowedChests
+    : Array.isArray(record.allowed_chests)
+      ? record.allowed_chests
+      : null;
+  const allowedChests = allowedChestsRaw
+    ?.map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
+
+  return {
+    ...(stayNearPlayer !== undefined ? { stayNearPlayer } : {}),
+    ...(maxDistance !== undefined ? { maxDistance } : {}),
+    ...(avoidCombat !== undefined ? { avoidCombat } : {}),
+    ...(allowedChests && allowedChests.length > 0 ? { allowedChests } : {})
+  };
 }
 
 // ── Command parsing ─────────────────────────────────────────────────────────
@@ -290,6 +327,19 @@ function splitMinecraftMessage(text: string, maxLen = MC_CHAT_MAX_LEN): string[]
   return lines;
 }
 
+function clampDistance(value: number | undefined, fallback: number, max = 32): number {
+  const normalized = toPositiveFiniteNumber(value);
+  if (normalized === undefined) return fallback;
+  return Math.max(1, Math.min(max, Math.round(normalized)));
+}
+
+function distanceBetweenPositions(left: Position, right: Position): number {
+  const dx = left.x - right.x;
+  const dy = left.y - right.y;
+  const dz = left.z - right.z;
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+
 // ── Session ─────────────────────────────────────────────────────────────────
 
 export class MinecraftSession extends BaseAgentSession {
@@ -343,12 +393,12 @@ export class MinecraftSession extends BaseAgentSession {
    * the target host via S3 server-info discovery, MC_HOST env, or localhost.
    * Saves the spawn position as home and starts the background reflex loop.
    */
-  private async ensureConnected(): Promise<void> {
+  private async ensureConnected(signal?: AbortSignal): Promise<void> {
     if (this.botConnected) {
       // Cheap fast-path — we think we're connected.  Verify with a quick
       // status probe to catch kicked/crashed states.
       try {
-        const probe = await this.runtime.status();
+        const probe = await this.runtime.status(signal);
         if (probe.ok && probe.output.connected) return;
         // Bot disconnected underneath us (kicked, server restart, etc.)
         this.botConnected = false;
@@ -360,7 +410,7 @@ export class MinecraftSession extends BaseAgentSession {
     }
 
     this.logLifecycle("minecraft_auto_connect", { mode: this.mode });
-    const result = await this.runtime.connect({});
+    const result = await this.runtime.connect({}, signal);
     if (!result.ok) {
       throw new Error(`Auto-connect to Minecraft server failed: ${result.error || "unknown error"}`);
     }
@@ -460,7 +510,7 @@ export class MinecraftSession extends BaseAgentSession {
 
       // ── Evaluate reflexes ──
       const snapshot = buildWorldSnapshot(this.id, this.mode, status, this.operatorPlayerName);
-      const action = evaluateReflexes(snapshot);
+      const action = evaluateReflexes(snapshot, this.constraints);
       if (action.type !== "none") {
         this.logLifecycle("minecraft_reflex_fire", { action: action.type, mode: this.mode });
         await executeReflex(this.runtime, action);
@@ -577,10 +627,11 @@ export class MinecraftSession extends BaseAgentSession {
   protected async executeTurn(input: string, options: SubAgentTurnOptions): Promise<SubAgentTurnResult> {
     this.turnCount += 1;
     const parsed = parseTurnInput(input);
+    const normalizedConstraints = normalizeConstraints(parsed.constraints);
 
     // Apply structured fields if present
     if (parsed.mode) this.mode = parsed.mode;
-    if (parsed.constraints) this.constraints = { ...this.constraints, ...parsed.constraints };
+    if (normalizedConstraints) this.constraints = { ...this.constraints, ...normalizedConstraints };
     if (parsed.operatorPlayerName) this.operatorPlayerName = parsed.operatorPlayerName;
 
     const task = parsed.task || parsed.command || "";
@@ -632,8 +683,34 @@ export class MinecraftSession extends BaseAgentSession {
     // Auto-connect for any command that needs a live bot.
     // connect/disconnect manage the connection explicitly.
     if (command.kind !== "connect" && command.kind !== "disconnect") {
-      await this.ensureConnected();
+      await this.ensureConnected(options.signal);
     }
+
+    const resolveFollowDistance = (explicitDistance?: number) => {
+      const constrainedDistance = this.constraints.maxDistance;
+      return clampDistance(explicitDistance ?? constrainedDistance, 3, 16);
+    };
+
+    const resolveCollectDistance = () => {
+      if (this.constraints.maxDistance === undefined) return 32;
+      return clampDistance(this.constraints.maxDistance, 32, 32);
+    };
+
+    const violatesStayNearConstraint = async (target: Position): Promise<{ distance: number; maxDistance: number } | null> => {
+      if (!this.constraints.stayNearPlayer || !this.operatorPlayerName || this.constraints.maxDistance === undefined) {
+        return null;
+      }
+      const status = await this.runtime.status(options.signal);
+      if (!status.ok) return null;
+      const operator = (status.output.players ?? []).find(
+        (player) => player.username === this.operatorPlayerName && player.position
+      );
+      if (!operator?.position) return null;
+      const distance = distanceBetweenPositions(target, operator.position);
+      return distance > this.constraints.maxDistance
+        ? { distance, maxDistance: this.constraints.maxDistance }
+        : null;
+    };
 
     switch (command.kind) {
       case "connect": {
@@ -642,7 +719,7 @@ export class MinecraftSession extends BaseAgentSession {
           port: command.port,
           username: command.username,
           auth: command.auth
-        });
+        }, options.signal);
         if (!result.ok) return `Connection failed: ${result.error || "unknown error"}`;
         const status = result.output;
         this.botConnected = true;
@@ -658,14 +735,14 @@ export class MinecraftSession extends BaseAgentSession {
 
       case "disconnect": {
         this.stopReflexLoop();
-        const result = await this.runtime.disconnect("user requested");
+        const result = await this.runtime.disconnect("user requested", options.signal);
         this.botConnected = false;
         this.mode = "idle";
         return result.ok ? "Disconnected from Minecraft server." : `Disconnect failed: ${result.error}`;
       }
 
       case "status": {
-        const result = await this.runtime.status();
+        const result = await this.runtime.status(options.signal);
         if (!result.ok) return `Status check failed: ${result.error}`;
         // Include only new events in the status report.
         const allEvents = result.output.recentEvents ?? [];
@@ -676,7 +753,7 @@ export class MinecraftSession extends BaseAgentSession {
 
       case "follow": {
         if (!command.playerName) return "Cannot follow — no player name specified.";
-        const skill = new FollowPlayerSkill(this.runtime, command.playerName, command.distance);
+        const skill = new FollowPlayerSkill(this.runtime, command.playerName, resolveFollowDistance(command.distance));
         const preconditions = skill.checkPreconditions();
         if (!preconditions.ok) return `Cannot follow: ${preconditions.reason}`;
         const skillResult = await skill.execute({
@@ -689,7 +766,24 @@ export class MinecraftSession extends BaseAgentSession {
 
       case "guard": {
         if (!command.playerName) return "Cannot guard — no player name specified.";
-        const skill = new GuardPlayerSkill(this.runtime, command.playerName, command.radius, command.followDistance);
+        if (this.constraints.avoidCombat) {
+          const skill = new FollowPlayerSkill(this.runtime, command.playerName, resolveFollowDistance(command.followDistance));
+          const skillResult = await skill.execute({
+            signal: options.signal ?? AbortSignal.timeout(30_000),
+            onProgress: (msg) => options.onProgress?.({ summary: msg })
+          });
+          this.mode = "companion";
+          return `Avoiding combat. ${skillResult.summary}`;
+        }
+        const guardRadius = this.constraints.maxDistance !== undefined
+          ? clampDistance(Math.min(command.radius ?? 8, this.constraints.maxDistance), 8, 16)
+          : command.radius;
+        const skill = new GuardPlayerSkill(
+          this.runtime,
+          command.playerName,
+          guardRadius,
+          resolveFollowDistance(command.followDistance)
+        );
         const preconditions = skill.checkPreconditions();
         if (!preconditions.ok) return `Cannot guard: ${preconditions.reason}`;
         const skillResult = await skill.execute({
@@ -701,7 +795,7 @@ export class MinecraftSession extends BaseAgentSession {
       }
 
       case "collect": {
-        const skill = new CollectBlockSkill(this.runtime, command.blockName, command.count);
+        const skill = new CollectBlockSkill(this.runtime, command.blockName, command.count, resolveCollectDistance());
         const preconditions = skill.checkPreconditions();
         if (!preconditions.ok) return `Cannot collect: ${preconditions.reason}`;
         const skillResult = await skill.execute({
@@ -712,7 +806,11 @@ export class MinecraftSession extends BaseAgentSession {
       }
 
       case "go_to": {
-        const result = await this.runtime.goTo(command.x, command.y, command.z);
+        const constrainedTarget = await violatesStayNearConstraint({ x: command.x, y: command.y, z: command.z });
+        if (constrainedTarget) {
+          return `Cannot move there while staying near ${this.operatorPlayerName}. Target is ${constrainedTarget.distance.toFixed(1)} blocks away (max ${constrainedTarget.maxDistance}).`;
+        }
+        const result = await this.runtime.goTo(command.x, command.y, command.z, 1, options.signal);
         if (!result.ok) return `Navigation failed: ${result.error}`;
         return `Pathfinding to ${command.x}, ${command.y}, ${command.z}.`;
       }
@@ -729,26 +827,27 @@ export class MinecraftSession extends BaseAgentSession {
       }
 
       case "stop": {
-        await this.runtime.stop();
+        await this.runtime.stop(options.signal);
         this.mode = "idle";
         return "Stopped. Standing idle.";
       }
 
       case "chat": {
-        const result = await this.runtime.chat(command.message);
+        const result = await this.runtime.chat(command.message, options.signal);
         if (!result.ok) return `Chat failed: ${result.error}`;
         return `Sent: ${command.message}`;
       }
 
       case "attack": {
-        const result = await this.runtime.attackNearestHostile();
+        if (this.constraints.avoidCombat) return "Combat is disabled by current constraints.";
+        const result = await this.runtime.attackNearestHostile(undefined, options.signal);
         if (!result.ok) return `Attack failed: ${result.error}`;
         return `Attacking ${result.output.target}.`;
       }
 
       case "look_at": {
         if (!command.playerName) return "Cannot look — no player name specified.";
-        const result = await this.runtime.lookAtPlayer(command.playerName);
+        const result = await this.runtime.lookAtPlayer(command.playerName, options.signal);
         if (!result.ok) return `Look failed: ${result.error}`;
         return `Looking at ${command.playerName}.`;
       }

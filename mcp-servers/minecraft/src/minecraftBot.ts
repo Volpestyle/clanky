@@ -111,6 +111,7 @@ type MinecraftBotLike = {
   username: string;
   version?: string;
   players: Record<string, PlayerLike>;
+  entities: Record<string, EntityLike>;
   entity: { position: Vec3 };
   inventory: InventoryLike;
   registry: RegistryLike;
@@ -170,6 +171,11 @@ type StatusSnapshot = {
     distance?: number;
     position?: Position;
   }>;
+  hazards?: Array<{
+    type: string;
+    distance: number;
+    position: Position;
+  }>;
   inventory?: Array<{
     name: string;
     displayName?: string;
@@ -182,6 +188,7 @@ type StatusSnapshot = {
 };
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
+const DEFAULT_HAZARD_DISTANCE = 16;
 const MAX_EVENT_LOG = 100;
 const GUARDED_HOSTILE_NAMES = new Set([
   "blaze",
@@ -394,6 +401,7 @@ export class MinecraftBotController {
       ...(bot.time.timeOfDay !== undefined ? { timeOfDay: bot.time.timeOfDay } : {}),
       position: toPosition(bot.entity.position),
       players: this.listPlayersInternal(),
+      hazards: this.listHazardsInternal(),
       inventory: this.listInventoryInternal(),
       task: this.currentTask,
       ...(this.followState ? { follow: this.followState } : {}),
@@ -735,6 +743,26 @@ export class MinecraftBotController {
         count: item.count
       }))
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  }
+
+  private listHazardsInternal(maxDistance = DEFAULT_HAZARD_DISTANCE): Array<{
+    type: string;
+    distance: number;
+    position: Position;
+  }> {
+    const bot = this.ensureBot();
+    const selfPosition = bot.entity.position;
+
+    return Object.values(bot.entities)
+      .filter((entity) => this.isHostileMob(entity))
+      .map((entity) => ({
+        type: String(entity.name ?? entity.displayName ?? entity.type ?? "hostile"),
+        distance: Number(distanceBetween(selfPosition, entity.position).toFixed(2)),
+        position: toPosition(entity.position)
+      }))
+      .filter((entity) => entity.distance <= maxDistance)
+      .sort((left, right) => left.distance - right.distance)
+      .slice(0, 8);
   }
 
   private requirePlayer(playerName: string): PlayerLike {

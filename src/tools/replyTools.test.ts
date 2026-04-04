@@ -3,6 +3,58 @@ import assert from "node:assert/strict";
 import { SubAgentSessionManager } from "../agents/subAgentSession.ts";
 import { buildReplyToolSet, executeReplyTool } from "./replyTools.ts";
 
+function createMockMinecraftSession({
+  id,
+  ownerUserId,
+  onRunTurn
+}: {
+  id: string;
+  ownerUserId: string | null;
+  onRunTurn?: (input: string) => Promise<{
+    text: string;
+    costUsd?: number;
+    isError?: boolean;
+    errorMessage?: string;
+    sessionCompleted?: boolean;
+    usage?: {
+      inputTokens: number;
+      outputTokens: number;
+      cacheWriteTokens: number;
+      cacheReadTokens: number;
+    };
+  }>;
+}) {
+  return {
+    id,
+    type: "minecraft" as const,
+    createdAt: Date.now(),
+    ownerUserId,
+    lastUsedAt: Date.now(),
+    status: "idle" as "idle" | "running" | "completed" | "error" | "cancelled",
+    async runTurn(input: string) {
+      this.lastUsedAt = Date.now();
+      return await (onRunTurn?.(input) ?? Promise.resolve({
+        text: "ok",
+        costUsd: 0,
+        isError: false,
+        errorMessage: "",
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 0
+        }
+      }));
+    },
+    cancel() {
+      this.status = "cancelled";
+    },
+    close() {
+      this.status = "cancelled";
+    }
+  };
+}
+
 test("buildReplyToolSet includes browser_browse when browser agent is enabled and available", () => {
   const tools = buildReplyToolSet({
     browser: { enabled: true },
@@ -536,6 +588,198 @@ test("executeReplyTool omits session_id when a browser session completes itself"
   assert.equal(result.content.includes("[session_id:"), false);
   assert.match(result.content, /Finished browsing\./);
   assert.equal(manager.has(completedSession.id), false);
+});
+
+test("executeReplyTool rejects unauthorized minecraft status access", async () => {
+  const manager = new SubAgentSessionManager();
+  const session = createMockMinecraftSession({
+    id: "minecraft:guild-1:channel-1:1:1",
+    ownerUserId: "user-2"
+  });
+  manager.register(session);
+
+  const result = await executeReplyTool(
+    "minecraft_task",
+    { action: "status", session_id: session.id },
+    {
+      subAgentSessions: {
+        manager,
+        createCodeSession() {
+          return null;
+        },
+        createBrowserSession() {
+          return null;
+        },
+        createMinecraftSession() {
+          return null;
+        }
+      }
+    },
+    {
+      settings: {},
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      sourceMessageId: "msg-1",
+      sourceText: "status?",
+      trace: { source: "reply_message" }
+    }
+  );
+
+  assert.equal(result.isError, true);
+  assert.match(result.content, /Not authorized/);
+});
+
+test("executeReplyTool reuses the caller's active minecraft session when no session_id is provided", async () => {
+  const manager = new SubAgentSessionManager();
+  const runInputs: string[] = [];
+  const session = createMockMinecraftSession({
+    id: "minecraft:guild-1:channel-1:2:1",
+    ownerUserId: "user-1",
+    async onRunTurn(input) {
+      runInputs.push(input);
+      return {
+        text: "Following you.",
+        costUsd: 0,
+        isError: false,
+        errorMessage: "",
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 0
+        }
+      };
+    }
+  });
+  manager.register(session);
+
+  let createCalls = 0;
+  const result = await executeReplyTool(
+    "minecraft_task",
+    {
+      task: "follow me",
+      mode: "companion",
+      constraints: { stay_near_player: true, max_distance: 4 }
+    },
+    {
+      subAgentSessions: {
+        manager,
+        createCodeSession() {
+          return null;
+        },
+        createBrowserSession() {
+          return null;
+        },
+        createMinecraftSession() {
+          createCalls += 1;
+          return null;
+        }
+      }
+    },
+    {
+      settings: {},
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      sourceMessageId: "msg-1",
+      sourceText: "follow me",
+      trace: { source: "reply_message" }
+    }
+  );
+
+  assert.equal(createCalls, 0);
+  assert.equal(runInputs.length, 1);
+  assert.deepEqual(JSON.parse(runInputs[0] || "{}"), {
+    task: "follow me",
+    mode: "companion",
+    constraints: { stay_near_player: true, max_distance: 4 }
+  });
+  assert.match(result.content, /Following you\./);
+  assert.match(result.content, /\[session_id:/);
+});
+
+test("executeReplyTool blocks new minecraft control when another user already owns the live session", async () => {
+  const manager = new SubAgentSessionManager();
+  manager.register(createMockMinecraftSession({
+    id: "minecraft:guild-1:channel-1:3:1",
+    ownerUserId: "user-2"
+  }));
+
+  let createCalls = 0;
+  const result = await executeReplyTool(
+    "minecraft_task",
+    { task: "follow me" },
+    {
+      subAgentSessions: {
+        manager,
+        createCodeSession() {
+          return null;
+        },
+        createBrowserSession() {
+          return null;
+        },
+        createMinecraftSession() {
+          createCalls += 1;
+          return null;
+        }
+      }
+    },
+    {
+      settings: {},
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      sourceMessageId: "msg-1",
+      sourceText: "follow me",
+      trace: { source: "reply_message" }
+    }
+  );
+
+  assert.equal(createCalls, 0);
+  assert.equal(result.isError, true);
+  assert.match(result.content, /already active/);
+});
+
+test("executeReplyTool cancels the caller's active minecraft session without requiring session_id", async () => {
+  const manager = new SubAgentSessionManager();
+  const session = createMockMinecraftSession({
+    id: "minecraft:guild-1:channel-1:4:1",
+    ownerUserId: "user-1"
+  });
+  manager.register(session);
+
+  const result = await executeReplyTool(
+    "minecraft_task",
+    { action: "cancel" },
+    {
+      subAgentSessions: {
+        manager,
+        createCodeSession() {
+          return null;
+        },
+        createBrowserSession() {
+          return null;
+        },
+        createMinecraftSession() {
+          return null;
+        }
+      }
+    },
+    {
+      settings: {},
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      sourceMessageId: "msg-1",
+      sourceText: "stop it",
+      trace: { source: "reply_message" }
+    }
+  );
+
+  assert.equal(result.isError, undefined);
+  assert.match(result.content, /cancelled/);
+  assert.equal(manager.has(session.id), false);
 });
 
 test("executeReplyTool fails music_play with empty query", async () => {

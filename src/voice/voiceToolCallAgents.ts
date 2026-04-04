@@ -1,6 +1,13 @@
 import { clamp } from "../utils.ts";
 import { getResolvedBrowserTaskConfig } from "../settings/agentStack.ts";
 import { normalizeCodeAgentRole, resolveCodeAgentConfig } from "../agents/codeAgent.ts";
+import {
+  buildMinecraftSessionScopeKey,
+  findConflictingMinecraftSession,
+  findReusableMinecraftSession,
+  isMinecraftSessionAuthorized,
+  resolveMinecraftSessionById
+} from "../agents/minecraft/minecraftSessionAccess.ts";
 import { isAbortError, runBrowserBrowseTask } from "../tools/browserTaskRuntime.ts";
 import { runOpenAiComputerUseTask } from "../tools/openAiComputerUseRuntime.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
@@ -28,6 +35,10 @@ function maybeRemoveCompletedVoiceSession(
 ) {
   if (!sessionCompleted) return;
   manager?.remove?.(sessionId);
+}
+
+function buildMinecraftBusyError(sessionId: string): string {
+  return `Minecraft companion is already active in session '${sessionId}' for another user.`;
 }
 
 export async function executeVoiceBrowserBrowseTool(
@@ -398,12 +409,34 @@ export async function executeVoiceMinecraftTaskTool(
   const action = normalizeInlineText(args?.action, 20) || "run";
   const mode = normalizeInlineText(args?.mode, 20) || undefined;
   const sessionId = typeof args?.session_id === "string" ? String(args.session_id).trim() : "";
+  const scopeKey = buildMinecraftSessionScopeKey({
+    guildId: session?.guildId || null,
+    channelId: session?.textChannelId || null
+  });
+
+  const resolveExistingSession = () => {
+    if (!manager.subAgentSessions) return null;
+    if (sessionId) {
+      const requested = resolveMinecraftSessionById(manager.subAgentSessions, sessionId);
+      if (!requested) return { session: null, error: `Minecraft session '${sessionId}' not found or expired.` };
+      if (!isMinecraftSessionAuthorized(requested, session?.lastRealtimeToolCallerUserId)) {
+        return { session: null, error: `Not authorized to continue Minecraft session '${sessionId}'.` };
+      }
+      return { session: requested, error: null };
+    }
+    const reusable = findReusableMinecraftSession(manager.subAgentSessions, {
+      ownerUserId: session?.lastRealtimeToolCallerUserId || null,
+      scopeKey
+    });
+    return { session: reusable, error: null };
+  };
 
   // Status can work without a task
   if (action === "status") {
-    if (sessionId && manager.subAgentSessions) {
-      const existing = manager.subAgentSessions.get(sessionId);
-      if (!existing) return { ok: false, text: "", error: `Minecraft session '${sessionId}' not found.` };
+    const resolved = resolveExistingSession();
+    if (resolved?.error) return { ok: false, text: "", error: resolved.error };
+    const existing = resolved?.session;
+    if (existing) {
       try {
         const result = await existing.runTurn(JSON.stringify({ command: "status" }), { signal });
         return { ok: true, text: result.text.trim() || "Minecraft status retrieved." };
@@ -411,61 +444,48 @@ export async function executeVoiceMinecraftTaskTool(
         return { ok: false, text: "", error: error instanceof Error ? error.message : String(error) };
       }
     }
-    // Find any active minecraft session
-    if (manager.subAgentSessions) {
-      const allSessions = (manager.subAgentSessions as { get: (id: string) => unknown; register: (s: unknown) => void; list?: () => Array<{ id: string; type: string; status: string }> });
-      if (typeof allSessions.list === "function") {
-        const mcSessions = allSessions.list().filter((s) => s.type === "minecraft" && (s.status === "idle" || s.status === "running"));
-        if (mcSessions.length > 0) {
-          const existing = manager.subAgentSessions.get(mcSessions[0].id);
-          if (existing) {
-            try {
-              const result = await existing.runTurn(JSON.stringify({ command: "status" }), { signal });
-              return { ok: true, text: result.text.trim() || "Minecraft status retrieved." };
-            } catch (error: unknown) {
-              return { ok: false, text: "", error: error instanceof Error ? error.message : String(error) };
-            }
-          }
-        }
-      }
-    }
     return { ok: false, text: "", error: "No active Minecraft session." };
   }
 
   // Cancel
   if (action === "cancel") {
-    if (!sessionId) return { ok: false, text: "", error: "session_id_required" };
-    if (manager.subAgentSessions) {
-      const existing = manager.subAgentSessions.get(sessionId);
-      if (!existing) return { ok: false, text: "", error: `Minecraft session '${sessionId}' not found.` };
-      if ("cancel" in existing && typeof existing.cancel === "function") {
-        (existing as { cancel: (reason: string) => void }).cancel("Voice cancel");
-      }
-      manager.subAgentSessions.remove?.(sessionId);
-      return { ok: true, text: `Minecraft session '${sessionId}' cancelled.` };
-    }
-    return { ok: false, text: "", error: "session_management_unavailable" };
+    if (!manager.subAgentSessions) return { ok: false, text: "", error: "session_management_unavailable" };
+    const resolved = resolveExistingSession();
+    if (resolved?.error) return { ok: false, text: "", error: resolved.error };
+    const existing = resolved?.session;
+    if (!existing) return { ok: false, text: "", error: "No active Minecraft session." };
+    existing.cancel?.("Voice cancel");
+    manager.subAgentSessions.remove?.(existing.id);
+    return { ok: true, text: `Minecraft session '${existing.id}' cancelled.` };
   }
 
   if (!task) return { ok: false, text: "", error: "task_required" };
 
   // Session continuation
-  if (sessionId && manager.subAgentSessions) {
-    const existing = manager.subAgentSessions.get(sessionId);
-    if (!existing) return { ok: false, text: "", error: `Minecraft session '${sessionId}' not found or expired.` };
-    if (existing.ownerUserId && existing.ownerUserId !== session?.lastRealtimeToolCallerUserId) {
-      return { ok: false, text: "", error: `Not authorized to continue Minecraft session '${sessionId}'.` };
+  if (manager.subAgentSessions) {
+    const resolved = resolveExistingSession();
+    if (resolved?.error) return { ok: false, text: "", error: resolved.error };
+    const existing = resolved?.session;
+    if (existing) {
+      try {
+        const turnInput = JSON.stringify({ task, mode, constraints: args?.constraints ?? undefined });
+        const turnResult = await existing.runTurn(turnInput, { signal });
+        maybeRemoveCompletedVoiceSession(manager.subAgentSessions, existing.id, turnResult.sessionCompleted);
+        if (turnResult.isError) return { ok: false, text: "", error: turnResult.errorMessage };
+        return turnResult.sessionCompleted
+          ? { ok: true, text: turnResult.text.trim() || "Minecraft task completed." }
+          : { ok: true, text: turnResult.text.trim() || "Minecraft task completed.", session_id: existing.id };
+      } catch (error: unknown) {
+        return { ok: false, text: "", error: error instanceof Error ? error.message : String(error) };
+      }
     }
-    try {
-      const turnInput = JSON.stringify({ task, mode });
-      const turnResult = await existing.runTurn(turnInput, { signal });
-      maybeRemoveCompletedVoiceSession(manager.subAgentSessions, existing.id, turnResult.sessionCompleted);
-      if (turnResult.isError) return { ok: false, text: "", error: turnResult.errorMessage };
-      return turnResult.sessionCompleted
-        ? { ok: true, text: turnResult.text.trim() || "Minecraft task completed." }
-        : { ok: true, text: turnResult.text.trim() || "Minecraft task completed.", session_id: existing.id };
-    } catch (error: unknown) {
-      return { ok: false, text: "", error: error instanceof Error ? error.message : String(error) };
+
+    const conflictingSession = findConflictingMinecraftSession(manager.subAgentSessions, {
+      ownerUserId: session?.lastRealtimeToolCallerUserId || null,
+      scopeKey
+    });
+    if (conflictingSession) {
+      return { ok: false, text: "", error: buildMinecraftBusyError(conflictingSession.id) };
     }
   }
 
@@ -481,7 +501,7 @@ export async function executeVoiceMinecraftTaskTool(
     if (newSession) {
       manager.subAgentSessions.register(newSession);
       try {
-        const turnInput = JSON.stringify({ task, mode });
+        const turnInput = JSON.stringify({ task, mode, constraints: args?.constraints ?? undefined });
         const turnResult = await newSession.runTurn(turnInput, { signal });
         maybeRemoveCompletedVoiceSession(manager.subAgentSessions, newSession.id, turnResult.sessionCompleted);
         if (turnResult.isError) {

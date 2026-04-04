@@ -10,9 +10,7 @@ export interface SharedToolSchema {
     type: "object";
     properties: Record<string, unknown>;
     required?: string[];
-    anyOf?: Array<{
-      required: string[];
-    }>;
+    anyOf?: Array<Record<string, unknown>>;
     additionalProperties?: boolean;
   };
   voiceContinuationPolicy?: VoiceToolContinuationPolicy;
@@ -226,7 +224,15 @@ export const CODE_TASK_SCHEMA: SharedToolSchema = {
     },
     anyOf: [
       { required: ["task"] },
-      { required: ["session_id"] }
+      { required: ["session_id"] },
+      {
+        properties: {
+          action: {
+            enum: ["cancel", "status"]
+          }
+        },
+        required: ["action"]
+      }
     ],
     additionalProperties: false
   }
@@ -259,15 +265,15 @@ export const MINECRAFT_TASK_SCHEMA: SharedToolSchema = {
       },
       mode: {
         type: "string",
-        enum: ["companion", "gather", "guard", "builder", "idle"],
+        enum: ["companion", "gather", "guard", "idle"],
         description:
           "Operating mode. companion=follow and assist, guard=follow and fight hostiles, " +
-          "gather=collect resources, builder=place blocks, idle=stand still. " +
+          "gather=collect resources, idle=stand still. " +
           "Only used with action=run. Defaults to companion."
       },
       session_id: {
         type: "string",
-        description: "Session ID for continuation (run) or management (followup, cancel, status)."
+        description: "Session ID for continuation (run) or explicit management (followup, cancel, status)."
       },
       constraints: {
         type: "object",

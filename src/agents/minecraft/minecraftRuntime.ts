@@ -30,6 +30,12 @@ export type McpInventoryEntry = {
   count: number;
 };
 
+export type McpHazardEntry = {
+  type: string;
+  distance: number;
+  position: McpPosition;
+};
+
 export type McpFollowState = {
   playerName: string;
   distance: number;
@@ -52,6 +58,7 @@ export type McpStatusSnapshot = {
   timeOfDay?: number;
   position?: McpPosition;
   players?: McpPlayerEntry[];
+  hazards?: McpHazardEntry[];
   inventory?: McpInventoryEntry[];
   task: string;
   follow?: McpFollowState | null;
@@ -84,6 +91,11 @@ const HEALTH_TIMEOUT_MS = 5_000;
 
 type LogAction = (entry: Record<string, unknown>) => void;
 
+function buildTimeoutSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+}
+
 export class MinecraftRuntime {
   readonly baseUrl: string;
   private readonly logAction: LogAction;
@@ -98,7 +110,8 @@ export class MinecraftRuntime {
   async callTool<T = unknown>(
     toolName: string,
     args: Record<string, unknown> = {},
-    timeoutMs = DEFAULT_TIMEOUT_MS
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    signal?: AbortSignal
   ): Promise<McpToolResult<T>> {
     const url = `${this.baseUrl}/tools/call`;
     this.logAction({ kind: "minecraft_runtime_call", content: toolName, metadata: { args, url } });
@@ -107,7 +120,7 @@ export class MinecraftRuntime {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ toolName, arguments: args }),
-      signal: AbortSignal.timeout(timeoutMs)
+      signal: buildTimeoutSignal(timeoutMs, signal)
     });
 
     if (!response.ok) {
@@ -126,7 +139,7 @@ export class MinecraftRuntime {
 
   async health(): Promise<McpHealthResponse> {
     const response = await fetch(`${this.baseUrl}/health`, {
-      signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS)
+      signal: buildTimeoutSignal(HEALTH_TIMEOUT_MS)
     });
     return (await response.json()) as McpHealthResponse;
   }
@@ -142,50 +155,54 @@ export class MinecraftRuntime {
 
   // ── Typed convenience methods ───────────────────────────────────────────
 
-  async connect(options: MinecraftConnectOptions = {}): Promise<McpToolResult<McpStatusSnapshot>> {
-    return this.callTool<McpStatusSnapshot>("minecraft_connect", options as Record<string, unknown>);
+  async connect(options: MinecraftConnectOptions = {}, signal?: AbortSignal): Promise<McpToolResult<McpStatusSnapshot>> {
+    return this.callTool<McpStatusSnapshot>("minecraft_connect", options as Record<string, unknown>, DEFAULT_TIMEOUT_MS, signal);
   }
 
-  async disconnect(reason = "session ended"): Promise<McpToolResult<McpStatusSnapshot>> {
-    return this.callTool<McpStatusSnapshot>("minecraft_disconnect", { reason });
+  async disconnect(reason = "session ended", signal?: AbortSignal): Promise<McpToolResult<McpStatusSnapshot>> {
+    return this.callTool<McpStatusSnapshot>("minecraft_disconnect", { reason }, DEFAULT_TIMEOUT_MS, signal);
   }
 
-  async status(): Promise<McpToolResult<McpStatusSnapshot>> {
-    return this.callTool<McpStatusSnapshot>("minecraft_status");
+  async status(signal?: AbortSignal): Promise<McpToolResult<McpStatusSnapshot>> {
+    return this.callTool<McpStatusSnapshot>("minecraft_status", {}, DEFAULT_TIMEOUT_MS, signal);
   }
 
-  async chat(message: string): Promise<McpToolResult<{ ok: true; message: string }>> {
-    return this.callTool("minecraft_chat", { message });
+  async chat(message: string, signal?: AbortSignal): Promise<McpToolResult<{ ok: true; message: string }>> {
+    return this.callTool("minecraft_chat", { message }, DEFAULT_TIMEOUT_MS, signal);
   }
 
   async followPlayer(
     playerName: string,
-    distance = 3
+    distance = 3,
+    signal?: AbortSignal
   ): Promise<McpToolResult<{ ok: true; playerName: string; distance: number }>> {
-    return this.callTool("minecraft_follow_player", { playerName, distance });
+    return this.callTool("minecraft_follow_player", { playerName, distance }, DEFAULT_TIMEOUT_MS, signal);
   }
 
   async guardPlayer(
     playerName: string,
     radius = 8,
-    followDistance = 4
+    followDistance = 4,
+    signal?: AbortSignal
   ): Promise<McpToolResult<{ ok: true; playerName: string; radius: number; followDistance: number }>> {
-    return this.callTool("minecraft_guard_player", { playerName, radius, followDistance });
+    return this.callTool("minecraft_guard_player", { playerName, radius, followDistance }, DEFAULT_TIMEOUT_MS, signal);
   }
 
   async goTo(
     x: number,
     y: number,
     z: number,
-    range = 1
+    range = 1,
+    signal?: AbortSignal
   ): Promise<McpToolResult<{ ok: true; target: McpPosition; range: number }>> {
-    return this.callTool("minecraft_go_to", { x, y, z, range });
+    return this.callTool("minecraft_go_to", { x, y, z, range }, DEFAULT_TIMEOUT_MS, signal);
   }
 
   async collectBlock(
     blockName: string,
     count = 1,
-    maxDistance = 32
+    maxDistance = 32,
+    signal?: AbortSignal
   ): Promise<McpToolResult<{
     ok: true;
     blockName: string;
@@ -194,32 +211,33 @@ export class MinecraftRuntime {
     inventoryBefore: number;
     inventoryAfter: number;
   }>> {
-    return this.callTool("minecraft_collect_block", { blockName, count, maxDistance });
+    return this.callTool("minecraft_collect_block", { blockName, count, maxDistance }, DEFAULT_TIMEOUT_MS, signal);
   }
 
   async attackNearestHostile(
-    maxDistance = 8
+    maxDistance = 8,
+    signal?: AbortSignal
   ): Promise<McpToolResult<{ ok: true; target: string }>> {
-    return this.callTool("minecraft_attack_nearest_hostile", { maxDistance });
+    return this.callTool("minecraft_attack_nearest_hostile", { maxDistance }, DEFAULT_TIMEOUT_MS, signal);
   }
 
-  async lookAtPlayer(playerName: string): Promise<McpToolResult<{ ok: true; playerName: string }>> {
-    return this.callTool("minecraft_look_at_player", { playerName });
+  async lookAtPlayer(playerName: string, signal?: AbortSignal): Promise<McpToolResult<{ ok: true; playerName: string }>> {
+    return this.callTool("minecraft_look_at_player", { playerName }, DEFAULT_TIMEOUT_MS, signal);
   }
 
-  async stop(): Promise<McpToolResult<{ ok: true }>> {
-    return this.callTool("minecraft_stop");
+  async stop(signal?: AbortSignal): Promise<McpToolResult<{ ok: true }>> {
+    return this.callTool("minecraft_stop", {}, DEFAULT_TIMEOUT_MS, signal);
   }
 
-  async listPlayers(): Promise<McpToolResult<McpPlayerEntry[]>> {
-    return this.callTool<McpPlayerEntry[]>("minecraft_list_players");
+  async listPlayers(signal?: AbortSignal): Promise<McpToolResult<McpPlayerEntry[]>> {
+    return this.callTool<McpPlayerEntry[]>("minecraft_list_players", {}, DEFAULT_TIMEOUT_MS, signal);
   }
 
-  async inventory(): Promise<McpToolResult<McpInventoryEntry[]>> {
-    return this.callTool<McpInventoryEntry[]>("minecraft_inventory");
+  async inventory(signal?: AbortSignal): Promise<McpToolResult<McpInventoryEntry[]>> {
+    return this.callTool<McpInventoryEntry[]>("minecraft_inventory", {}, DEFAULT_TIMEOUT_MS, signal);
   }
 
-  async recentEvents(limit = 20): Promise<McpToolResult<string[]>> {
-    return this.callTool<string[]>("minecraft_recent_events", { limit });
+  async recentEvents(limit = 20, signal?: AbortSignal): Promise<McpToolResult<string[]>> {
+    return this.callTool<string[]>("minecraft_recent_events", { limit }, DEFAULT_TIMEOUT_MS, signal);
   }
 }
