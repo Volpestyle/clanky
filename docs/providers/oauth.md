@@ -4,7 +4,7 @@ Two OAuth-backed auth lanes let clanky use subscription-backed providers instead
 
 | Provider | Upstream | Auth Target | Token Storage | Transport |
 |---|---|---|---|---|
-| `claude-oauth` | Anthropic Messages API | `claude.ai/oauth/authorize` | `data/claude-oauth-tokens.json` | Standard Anthropic SDK with custom fetch |
+| `claude-oauth` | Anthropic Messages API | `claude.ai/oauth/authorize` | `data/claude-oauth-tokens.json` (with optional bootstrap from opencode auth) | Standard Anthropic SDK with OAuth headers |
 | OpenAI OAuth (`openai-oauth`) | OpenAI / ChatGPT-authenticated Codex lane | `auth.openai.com` | `data/openai-oauth-tokens.json` | Reverse-engineered ChatGPT Codex backend |
 
 ---
@@ -15,7 +15,7 @@ Two OAuth-backed auth lanes let clanky use subscription-backed providers instead
 
 The `claude-oauth` provider authenticates against the Anthropic Messages API using OAuth tokens from a Claude Pro/Max subscription, instead of a paid API key. This gives access to Claude models at zero marginal cost (covered by the subscription).
 
-The OAuth provider calls the API directly via `@anthropic-ai/sdk` with a custom fetch wrapper.
+The OAuth provider calls the API directly via `@anthropic-ai/sdk` using an OAuth bearer token plus the required beta headers/query params.
 
 ### Authentication Flow
 
@@ -25,12 +25,10 @@ The OAuth provider calls the API directly via `@anthropic-ai/sdk` with a custom 
 
 ### API Compatibility Layer
 
-The OAuth endpoint requires requests to look like they come from the Claude CLI. The custom fetch wrapper handles:
+The OAuth lane uses the standard Anthropic SDK request path with OAuth-specific auth and beta flags:
 
 - `Authorization: Bearer <access_token>` instead of `x-api-key`
-- `anthropic-beta: oauth-2025-04-20,interleaved-thinking-2025-05-14` header
-- `user-agent: claude-cli/2.1.2 (external, cli)` spoofing
-- Tool name prefixing: `prefixToolNames()` / `stripToolPrefix()` plumbing exists but is currently disabled (`TOOL_PREFIX = ""`)
+- `anthropic-beta: claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14` header
 - `?beta=true` query param appended to `/v1/messages`
 
 ### Token Lifecycle
@@ -39,9 +37,10 @@ The OAuth endpoint requires requests to look like they come from the Claude CLI.
 [refresh_token] --POST /v1/oauth/token--> [access_token + new refresh_token]
                                             |
                                             v
-                                   stored in data/claude-oauth-tokens.json
+                                   stored in clanky's local token file
+                     (optionally bootstrapped once from opencode Anthropic auth)
                                    access_token used for API calls
-                                   auto-refreshed when expires < Date.now()
+                          auto-refreshed when expires within the refresh buffer
 ```
 
 ### Setup
@@ -68,6 +67,12 @@ Create `data/claude-oauth-tokens.json`:
 
 The access token will be auto-populated on first use.
 
+If you want that file somewhere else, set `CLAUDE_OAUTH_TOKEN_FILE` and clanky reads and writes that path instead.
+
+**Option 3: Reuse opencode Anthropic auth**
+
+If you've already logged into Anthropic via opencode or `ocrefresh`, clanky can bootstrap its own `data/claude-oauth-tokens.json` from opencode's file-backed Anthropic auth. After that, clanky refreshes its own local token file independently. On Windows this bootstrap understands DPAPI-protected `auth-secret.json` entries.
+
 ### Configuration
 
 ```env
@@ -90,15 +95,16 @@ In settings, use `provider: "claude-oauth"` with standard Anthropic model IDs:
 LLMService
   └── claude-oauth provider
         └── Anthropic SDK (same as `anthropic` provider)
-              └── custom fetch wrapper (claudeOAuth.ts)
+              └── OAuth token loader (claudeOAuth.ts)
+                    ├── local token file
+                    ├── one-time bootstrap from opencode auth when needed
                     ├── token refresh (console.anthropic.com/v1/oauth/token)
                     ├── Bearer auth header
-                    ├── beta headers + user-agent
-                    ├── tool name prefix plumbing (currently disabled)
+                    ├── beta headers
                     └── ?beta=true query param
 ```
 
-The provider reuses the exact same `callAnthropic` code path as the regular `anthropic` provider. The only difference is the Anthropic SDK client is configured with a custom fetch that handles OAuth auth.
+The provider reuses the exact same `callAnthropic` code path as the regular `anthropic` provider. The only difference is the Anthropic SDK client is configured with an OAuth bearer token plus the required beta headers/query flags.
 
 ### Prompt Caching
 

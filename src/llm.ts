@@ -760,7 +760,7 @@ export class LLMService {
 
     if (desiredProvider === "claude-oauth" && !this.isProviderConfigured("claude-oauth")) {
       throw new Error(
-        "LLM provider is set to claude-oauth, but no OAuth tokens are configured. Set CLAUDE_OAUTH_REFRESH_TOKEN or create data/claude-oauth-tokens.json."
+        "LLM provider is set to claude-oauth, but no OAuth tokens are configured. Set CLAUDE_OAUTH_REFRESH_TOKEN, create data/claude-oauth-tokens.json, or sign in via opencode so clanky can bootstrap its own local OAuth token cache."
       );
     }
     if (desiredProvider === "openai-oauth" && !this.isProviderConfigured("openai-oauth")) {
