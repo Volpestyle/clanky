@@ -150,8 +150,13 @@ The `MinecraftSession` in the main bot handles the full lifecycle automatically:
 
 - **Auto-connect**: When the LLM calls `minecraft_task` with a command like "follow me",
   the session detects the bot isn't connected and auto-connects using the MCP server's
+  configured preferred server target when one exists, otherwise the MCP server's
   host resolution (S3 discovery -> `MC_HOST` env -> localhost). No explicit "connect"
   step needed from the user.
+- **Planner checkpoint loop**: The active `MinecraftSession` can take a few bounded
+  planner checkpoints within one turn, so setup steps like joining the world can be
+  followed immediately by a meaningful in-world action without splitting authority
+  across transport surfaces.
 - **Reflex tick loop**: A background loop polls status every 5 seconds, evaluates
   deterministic reflexes (eat when hungry, flee when low health near hazards, attack
   nearby threats), and executes them autonomously. Hazards come from the MCP status
@@ -164,7 +169,8 @@ The `MinecraftSession` in the main bot handles the full lifecycle automatically:
   to the action log for proactive narration.
 - **Minecraft brain**: The active `MinecraftSession` owns one embodied Minecraft
   brain. Discord text, Discord voice, and Minecraft chat all feed intent/context into
-  that same in-world brain, which chooses the next high-level action.
+  that same in-world brain, which chooses structured high-level actions and carries
+  goal/subgoal/progress state across turns.
 - **In-game chat**: When another player speaks in Minecraft chat, the session can ask
   the Minecraft brain whether to reply in chat, act in the world, both, or neither.
 - **Multi-channel**: Minecraft chat and Discord voice remain independent transport
@@ -180,4 +186,5 @@ The `MinecraftSession` in the main bot handles the full lifecycle automatically:
 - No building planner
 - No first-person vision (uses Mineflayer's structured game state)
 - No long-horizon autonomous project loop yet
+- No multi-world registry beyond one preferred server target
 - Proactive event narration in Discord (events are logged but not yet pushed to channels unprompted)

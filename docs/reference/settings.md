@@ -202,6 +202,7 @@ Preset-specific default choices and product intent live in [`../architecture/pre
 - Minecraft runtime knobs and brain binding: [`../capabilities/minecraft.md`](../capabilities/minecraft.md)
 - `agentStack.runtimeConfig.devTeam.workspace` controls whether local coding workers use the shared checkout or isolated worktrees; its behavioral contract lives in [`../capabilities/code.md`](../capabilities/code.md)
 - `agentStack.runtimeConfig.devTeam.swarm` is the optional MCP coordination wiring for local code workers; its behavioral contract also lives in [`../capabilities/code.md`](../capabilities/code.md)
+- `agentStack.runtimeConfig.minecraft.server` is the canonical preferred world/server target for embodied Minecraft sessions; its behavioral contract lives in [`../capabilities/minecraft.md`](../capabilities/minecraft.md)
 - voice transport and pipeline knobs: [`../voice/voice-provider-abstraction.md`](../voice/voice-provider-abstraction.md)
 - activity/attention-facing behavior knobs: [`../architecture/activity.md`](../architecture/activity.md)
 

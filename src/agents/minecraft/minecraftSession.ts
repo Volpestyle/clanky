@@ -24,7 +24,14 @@
 import { BaseAgentSession } from "../baseAgentSession.ts";
 import { EMPTY_USAGE, generateSessionId } from "../subAgentSession.ts";
 import type { SubAgentTurnOptions, SubAgentTurnResult } from "../subAgentSession.ts";
-import type { MinecraftConstraints, MinecraftMode, Position } from "./types.ts";
+import type {
+  MinecraftBrainAction,
+  MinecraftConstraints,
+  MinecraftMode,
+  MinecraftPlannerState,
+  MinecraftServerTarget,
+  Position
+} from "./types.ts";
 import { MinecraftRuntime, type McpStatusSnapshot } from "./minecraftRuntime.ts";
 import { buildWorldSnapshot } from "./minecraftWorldModel.ts";
 import { evaluateReflexes, executeReflex } from "./minecraftReflexes.ts";
@@ -48,6 +55,15 @@ const MAX_CHAT_HISTORY = 30;
 /** Minimum ms between brain-generated chat replies to avoid spam. */
 const CHAT_REPLY_COOLDOWN_MS = 2_000;
 
+/** Max planner checkpoints the embodied brain can take in one turn. */
+const MAX_PLANNER_CHECKPOINTS_PER_TURN = 3;
+
+/** Max remembered subgoals in the long-horizon planner state. */
+const MAX_PLANNER_SUBGOALS = 6;
+
+/** Max remembered progress notes in the long-horizon planner state. */
+const MAX_PLANNER_PROGRESS = 10;
+
 /** Minecraft chat message hard limit. We target slightly under for safety. */
 const MC_CHAT_MAX_LEN = 240;
 
@@ -66,6 +82,8 @@ type TurnInput = {
   mode?: MinecraftMode;
   constraints?: MinecraftConstraints | Record<string, unknown>;
   operatorPlayerName?: string;
+  server?: Partial<MinecraftServerTarget> | Record<string, unknown>;
+  serverTarget?: Partial<MinecraftServerTarget> | Record<string, unknown>;
 };
 
 function parseTurnInput(raw: string): TurnInput {
@@ -117,6 +135,81 @@ function normalizeConstraints(raw: MinecraftConstraints | Record<string, unknown
   };
 }
 
+function normalizeMinecraftServerTarget(
+  raw: Partial<MinecraftServerTarget> | Record<string, unknown> | undefined | null
+): MinecraftServerTarget | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  const label = typeof record.label === "string" ? record.label.trim().slice(0, 80) : "";
+  const host = typeof record.host === "string" ? record.host.trim().slice(0, 200) : "";
+  const description = typeof record.description === "string" ? record.description.trim().slice(0, 160) : "";
+  const rawPort = typeof record.port === "number" ? record.port : Number(record.port);
+  const port = Number.isFinite(rawPort) && rawPort >= 1 && rawPort <= 65535 ? Math.round(rawPort) : null;
+  if (!label && !host && !description && !port) return null;
+  return {
+    label: label || null,
+    host: host || null,
+    port,
+    description: description || null
+  };
+}
+
+function mergeServerTargets(
+  base: MinecraftServerTarget | null,
+  update: MinecraftServerTarget | null
+): MinecraftServerTarget | null {
+  if (!base) return update;
+  if (!update) return base;
+  return {
+    label: update.label ?? base.label,
+    host: update.host ?? base.host,
+    port: update.port ?? base.port,
+    description: update.description ?? base.description
+  };
+}
+
+function formatServerTarget(serverTarget: MinecraftServerTarget | null): string {
+  if (!serverTarget) return "none configured";
+  const parts = [serverTarget.label, serverTarget.host].filter(Boolean);
+  if (serverTarget.port) parts.push(`port ${serverTarget.port}`);
+  if (serverTarget.description) parts.push(serverTarget.description);
+  return parts.length > 0 ? parts.join("; ") : "none configured";
+}
+
+function mergePlannerTextEntries(current: string[], next: string[], limit: number): string[] {
+  const merged = [...current];
+  for (const entry of next) {
+    const normalized = String(entry || "").trim();
+    if (!normalized) continue;
+    if (merged.includes(normalized)) continue;
+    merged.push(normalized);
+    if (merged.length > limit) {
+      merged.splice(0, merged.length - limit);
+    }
+  }
+  return merged;
+}
+
+function joinPlannerSummaries(parts: string[]): string {
+  const normalized = parts
+    .map((part) => String(part || "").trim())
+    .filter(Boolean);
+  const deduped: string[] = [];
+  for (const part of normalized) {
+    if (deduped[deduped.length - 1] === part) continue;
+    deduped.push(part);
+  }
+  return deduped.join(" ").trim();
+}
+
+function canContinueAfterBrainAction(action: MinecraftBrainAction): boolean {
+  return action.kind === "wait"
+    || action.kind === "connect"
+    || action.kind === "status"
+    || action.kind === "chat"
+    || action.kind === "look_at";
+}
+
 // ── Command parsing ─────────────────────────────────────────────────────────
 
 type ParsedCommand =
@@ -132,6 +225,11 @@ type ParsedCommand =
   | { kind: "chat"; message: string }
   | { kind: "attack" }
   | { kind: "look_at"; playerName: string };
+
+type CommandExecutionResult = {
+  text: string;
+  ok: boolean;
+};
 
 const COORD_RE = /(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)/;
 
@@ -266,6 +364,7 @@ export type MinecraftSessionOptions = {
   baseUrl: string;
   ownerUserId: string | null;
   operatorPlayerName?: string | null;
+  serverTarget?: MinecraftServerTarget | null;
   mode?: MinecraftMode;
   constraints?: MinecraftConstraints;
   homePosition?: Position | null;
@@ -345,6 +444,7 @@ export class MinecraftSession extends BaseAgentSession {
   readonly runtime: MinecraftRuntime;
   private mode: MinecraftMode;
   private operatorPlayerName: string | null;
+  private serverTarget: MinecraftServerTarget | null;
   private constraints: MinecraftConstraints;
   private homePosition: Position | null;
   private turnCount = 0;
@@ -364,6 +464,7 @@ export class MinecraftSession extends BaseAgentSession {
   // ── Minecraft brain ──
   private readonly brain: MinecraftBrain | undefined;
   private readonly chatHistory: MinecraftChatMessage[] = [];
+  private plannerState: MinecraftPlannerState;
   private lastChatReplyMs = 0;
   private chatReplyInFlight = false;
 
@@ -377,10 +478,19 @@ export class MinecraftSession extends BaseAgentSession {
     this.runtime = new MinecraftRuntime(options.baseUrl, options.logAction);
     this.mode = options.mode ?? "companion";
     this.operatorPlayerName = options.operatorPlayerName ?? null;
+    this.serverTarget = options.serverTarget ?? null;
     this.constraints = options.constraints ?? {};
     this.homePosition = options.homePosition ?? null;
     this.onGameEvent = options.onGameEvent;
     this.brain = options.brain;
+    this.plannerState = {
+      activeGoal: null,
+      subgoals: [],
+      progress: [],
+      lastInstruction: null,
+      lastDecisionSummary: null,
+      lastActionResult: null
+    };
   }
 
   // ── Auto-connect ────────────────────────────────────────────────────────
@@ -408,8 +518,14 @@ export class MinecraftSession extends BaseAgentSession {
       }
     }
 
-    this.logLifecycle("minecraft_auto_connect", { mode: this.mode });
-    const result = await this.runtime.connect({}, signal);
+    this.logLifecycle("minecraft_auto_connect", {
+      mode: this.mode,
+      serverTarget: this.serverTarget
+    });
+    const result = await this.runtime.connect({
+      host: this.serverTarget?.host ?? undefined,
+      port: this.serverTarget?.port ?? undefined
+    }, signal);
     if (!result.ok) {
       throw new Error(`Auto-connect to Minecraft server failed: ${result.error || "unknown error"}`);
     }
@@ -432,7 +548,8 @@ export class MinecraftSession extends BaseAgentSession {
     this.logLifecycle("minecraft_auto_connect_ok", {
       username: status.username,
       position: status.position,
-      dimension: status.dimension
+      dimension: status.dimension,
+      serverTarget: this.serverTarget
     });
   }
 
@@ -560,7 +677,17 @@ export class MinecraftSession extends BaseAgentSession {
         botUsername: this.botUsername || "ClankyBuddy",
         mode: this.mode,
         operatorPlayerName: this.operatorPlayerName,
-        constraints: { ...this.constraints }
+        constraints: { ...this.constraints },
+        serverTarget: this.serverTarget,
+        sessionState: this.getPlannerStateSnapshot()
+      });
+
+      this.applyPlannerDecision({
+        goal: result.goal,
+        subgoals: result.subgoals,
+        progress: result.progress,
+        summary: result.summary,
+        instruction: message
       });
 
       this.lastChatReplyMs = Date.now();
@@ -570,16 +697,17 @@ export class MinecraftSession extends BaseAgentSession {
         await this.sendMinecraftChat(result.chatText);
       }
 
-      // Execute game command if the brain requested one.
-      if (result.gameCommand) {
-        const command = parseCommand(result.gameCommand, this.mode, this.operatorPlayerName);
+      // Execute structured in-world action if the brain requested one.
+      if (result.action.kind !== "wait") {
         this.logLifecycle("minecraft_brain_chat_action", {
           sender,
-          gameCommand: result.gameCommand,
-          parsedKind: command.kind
+          action: result.action
         });
         try {
-          await this.executeCommand(command, { signal: AbortSignal.timeout(30_000) });
+          const execution = await this.executeBrainAction(result.action, {
+            signal: AbortSignal.timeout(30_000)
+          });
+          this.recordPlannerActionResult(execution.text, result.action);
         } catch (error) {
           this.logLifecycle("minecraft_brain_chat_action_error", {
             error: error instanceof Error ? error.message : String(error)
@@ -624,29 +752,222 @@ export class MinecraftSession extends BaseAgentSession {
     }
   }
 
-  private async planTurnCommand(task: string): Promise<{ commandText: string; costUsd: number }> {
-    if (!this.brain) {
-      return { commandText: task, costUsd: 0 };
+  private getPlannerStateSnapshot(): MinecraftPlannerState {
+    return {
+      activeGoal: this.plannerState.activeGoal,
+      subgoals: [...this.plannerState.subgoals],
+      progress: [...this.plannerState.progress],
+      lastInstruction: this.plannerState.lastInstruction,
+      lastDecisionSummary: this.plannerState.lastDecisionSummary,
+      lastActionResult: this.plannerState.lastActionResult
+    };
+  }
+
+  private applyPlannerDecision(update: {
+    goal?: string | null;
+    subgoals?: string[];
+    progress?: string[];
+    summary?: string | null;
+    instruction?: string | null;
+  }): void {
+    if (update.instruction) {
+      this.plannerState.lastInstruction = update.instruction;
+    }
+    if (update.goal) {
+      this.plannerState.activeGoal = update.goal;
+    }
+    if (Array.isArray(update.subgoals) && update.subgoals.length > 0) {
+      this.plannerState.subgoals = update.subgoals.slice(0, MAX_PLANNER_SUBGOALS);
+    }
+    if (Array.isArray(update.progress) && update.progress.length > 0) {
+      this.plannerState.progress = mergePlannerTextEntries(
+        this.plannerState.progress,
+        update.progress,
+        MAX_PLANNER_PROGRESS
+      );
+    }
+    if (update.summary) {
+      this.plannerState.lastDecisionSummary = update.summary;
+    }
+  }
+
+  private clearPlannerGoal(): void {
+    this.plannerState.activeGoal = null;
+    this.plannerState.subgoals = [];
+  }
+
+  private recordPlannerActionResult(resultText: string, action: MinecraftBrainAction): void {
+    const normalized = String(resultText || "").trim().slice(0, 220);
+    if (normalized) {
+      this.plannerState.lastActionResult = normalized;
+      this.plannerState.progress = mergePlannerTextEntries(
+        this.plannerState.progress,
+        [normalized],
+        MAX_PLANNER_PROGRESS
+      );
+    }
+    if (action.kind === "stop" || action.kind === "disconnect") {
+      this.clearPlannerGoal();
+    }
+  }
+
+  private buildPlannerStateSummary(): string {
+    const parts: string[] = [];
+    if (this.serverTarget) {
+      parts.push(`Server target: ${formatServerTarget(this.serverTarget)}.`);
+    }
+    if (this.plannerState.activeGoal) {
+      parts.push(`Goal: ${this.plannerState.activeGoal}.`);
+    }
+    if (this.plannerState.subgoals.length > 0) {
+      parts.push(`Subgoals: ${this.plannerState.subgoals.slice(-3).join(" | ")}.`);
+    }
+    if (this.plannerState.progress.length > 0) {
+      parts.push(`Progress: ${this.plannerState.progress.slice(-3).join(" | ")}.`);
+    }
+    return parts.join(" ").trim();
+  }
+
+  private resolveBrainActionCommand(action: MinecraftBrainAction): ParsedCommand {
+    switch (action.kind) {
+      case "connect": {
+        const target = mergeServerTargets(this.serverTarget, normalizeMinecraftServerTarget(action.target));
+        return {
+          kind: "connect",
+          host: target?.host ?? undefined,
+          port: target?.port ?? undefined
+        };
+      }
+      case "disconnect":
+        return { kind: "disconnect" };
+      case "status":
+        return { kind: "status" };
+      case "follow":
+        return { kind: "follow", playerName: action.playerName, distance: action.distance };
+      case "guard":
+        return {
+          kind: "guard",
+          playerName: action.playerName,
+          radius: action.radius,
+          followDistance: action.followDistance
+        };
+      case "collect":
+        return { kind: "collect", blockName: action.blockName, count: action.count ?? 1 };
+      case "go_to":
+        return { kind: "go_to", x: action.x, y: action.y, z: action.z };
+      case "return_home":
+        return { kind: "return_home" };
+      case "stop":
+        return { kind: "stop" };
+      case "chat":
+        return { kind: "chat", message: action.message };
+      case "attack":
+        return { kind: "attack" };
+      case "look_at":
+        return { kind: "look_at", playerName: action.playerName };
+      case "wait":
+      default:
+        return { kind: "status" };
+    }
+  }
+
+  private async executeBrainAction(
+    action: MinecraftBrainAction,
+    options: SubAgentTurnOptions
+  ): Promise<CommandExecutionResult> {
+    if (action.kind === "wait") {
+      return {
+        text: this.buildPlannerStateSummary() || "Standing by in Minecraft.",
+        ok: true
+      };
     }
 
-    const snapshot = await this.getWorldSnapshot();
-    const decision = await this.brain.planTurn({
-      instruction: task,
-      chatHistory: this.chatHistory.slice(-20),
-      worldSnapshot: snapshot,
-      botUsername: this.botUsername || "ClankyBuddy",
-      mode: this.mode,
-      operatorPlayerName: this.operatorPlayerName,
-      constraints: { ...this.constraints }
-    });
+    if (action.kind === "connect") {
+      const updatedTarget = mergeServerTargets(this.serverTarget, normalizeMinecraftServerTarget(action.target));
+      if (updatedTarget) {
+        this.serverTarget = updatedTarget;
+        this.logLifecycle("minecraft_server_target_updated", {
+          source: "brain_action",
+          serverTarget: this.serverTarget
+        });
+      }
+    }
 
-    const commandText = decision.command?.trim() || "status";
-    this.logLifecycle("minecraft_brain_turn_decision", {
-      instruction: task,
-      commandText,
-      costUsd: decision.costUsd
-    });
-    return { commandText, costUsd: decision.costUsd };
+    return this.executeCommand(this.resolveBrainActionCommand(action), options);
+  }
+
+  private async runPlannerLoop(
+    task: string,
+    options: SubAgentTurnOptions
+  ): Promise<{ text: string; costUsd: number }> {
+    if (!this.brain) {
+      return { text: task, costUsd: 0 };
+    }
+
+    const instruction = task.trim();
+    if (instruction) {
+      this.plannerState.lastInstruction = instruction;
+    }
+
+    let checkpointInstruction = instruction || this.plannerState.lastInstruction || "status";
+    let costUsd = 0;
+    const summaries: string[] = [];
+
+    for (let checkpoint = 1; checkpoint <= MAX_PLANNER_CHECKPOINTS_PER_TURN; checkpoint += 1) {
+      const snapshot = await this.getWorldSnapshot();
+      const decision = await this.brain.planTurn({
+        instruction: checkpointInstruction,
+        chatHistory: this.chatHistory.slice(-20),
+        worldSnapshot: snapshot,
+        botUsername: this.botUsername || "ClankyBuddy",
+        mode: this.mode,
+        operatorPlayerName: this.operatorPlayerName,
+        constraints: { ...this.constraints },
+        serverTarget: this.serverTarget,
+        sessionState: this.getPlannerStateSnapshot()
+      });
+
+      costUsd += decision.costUsd;
+      this.applyPlannerDecision({
+        goal: decision.goal,
+        subgoals: decision.subgoals,
+        progress: decision.progress,
+        summary: decision.summary,
+        instruction: checkpoint === 1 ? instruction : undefined
+      });
+      this.logLifecycle("minecraft_planner_checkpoint", {
+        checkpoint,
+        instruction: checkpointInstruction,
+        action: decision.action,
+        shouldContinue: decision.shouldContinue,
+        costUsd: decision.costUsd,
+        plannerState: this.getPlannerStateSnapshot(),
+        serverTarget: this.serverTarget
+      });
+
+      if (decision.summary) {
+        summaries.push(decision.summary);
+      }
+
+      if (decision.action.kind === "wait") {
+        break;
+      }
+
+      const execution = await this.executeBrainAction(decision.action, options);
+      summaries.push(execution.text);
+      this.recordPlannerActionResult(execution.text, decision.action);
+
+      if (!execution.ok || !decision.shouldContinue || !canContinueAfterBrainAction(decision.action)) {
+        break;
+      }
+
+      checkpointInstruction = "Continue the current Minecraft goal using the updated world state and planner state.";
+    }
+
+    return {
+      text: joinPlannerSummaries(summaries) || this.buildPlannerStateSummary() || "Standing by in Minecraft.",
+      costUsd
+    };
   }
 
   // ── Turn execution ────────────────────────────────────────────────────────
@@ -655,11 +976,19 @@ export class MinecraftSession extends BaseAgentSession {
     this.turnCount += 1;
     const parsed = parseTurnInput(input);
     const normalizedConstraints = normalizeConstraints(parsed.constraints);
+    const normalizedServerTarget = normalizeMinecraftServerTarget(parsed.serverTarget ?? parsed.server);
 
     // Apply structured fields if present
     if (parsed.mode) this.mode = parsed.mode;
     if (normalizedConstraints) this.constraints = { ...this.constraints, ...normalizedConstraints };
     if (parsed.operatorPlayerName) this.operatorPlayerName = parsed.operatorPlayerName;
+    if (normalizedServerTarget) {
+      this.serverTarget = mergeServerTargets(this.serverTarget, normalizedServerTarget);
+      this.logLifecycle("minecraft_server_target_updated", {
+        source: "turn_input",
+        serverTarget: this.serverTarget
+      });
+    }
 
     const task = parsed.task || "";
     let command = parsed.command ? parseCommand(parsed.command, this.mode, this.operatorPlayerName) : null;
@@ -667,32 +996,51 @@ export class MinecraftSession extends BaseAgentSession {
     if (!command && !task) {
       command = { kind: "status" };
     }
-    if (!command) {
-      const brainDecision = await this.planTurnCommand(task);
-      costUsd += brainDecision.costUsd;
-      command = parseCommand(brainDecision.commandText, this.mode, this.operatorPlayerName);
+    if (!command && task && !this.brain) {
+      command = parseCommand(task, this.mode, this.operatorPlayerName);
     }
 
     const startMs = Date.now();
     this.logLifecycle("minecraft_turn_start", {
       turnCount: this.turnCount,
-      command: command.kind,
+      command: command?.kind || "planner",
       mode: this.mode,
-      task
+      task,
+      serverTarget: this.serverTarget,
+      plannerState: this.getPlannerStateSnapshot()
     });
 
     try {
-      const result = await this.executeCommand(command, options);
+      let resultText = "";
+      let resultCostUsd = 0;
+
+      if (command) {
+        const execution = await this.executeCommand(command, options);
+        resultText = execution.text;
+        if (task.trim()) {
+          this.plannerState.lastInstruction = task.trim();
+        }
+        this.plannerState.lastActionResult = execution.text.trim().slice(0, 220) || this.plannerState.lastActionResult;
+        if (command.kind === "stop" || command.kind === "disconnect") {
+          this.clearPlannerGoal();
+        }
+      } else {
+        const planned = await this.runPlannerLoop(task, options);
+        resultText = planned.text;
+        resultCostUsd = planned.costUsd;
+      }
+
       const durationMs = Date.now() - startMs;
       this.logLifecycle("minecraft_turn_complete", {
         turnCount: this.turnCount,
-        command: command.kind,
+        command: command?.kind || "planner",
         durationMs,
-        resultLength: result.length
+        resultLength: resultText.length,
+        plannerState: this.getPlannerStateSnapshot()
       });
       return {
-        text: result,
-        costUsd,
+        text: resultText,
+        costUsd: costUsd + resultCostUsd,
         isError: false,
         errorMessage: "",
         sessionCompleted: false,
@@ -702,7 +1050,7 @@ export class MinecraftSession extends BaseAgentSession {
       const message = error instanceof Error ? error.message : String(error);
       this.logLifecycle("minecraft_turn_error", {
         turnCount: this.turnCount,
-        command: command.kind,
+        command: command?.kind || "planner",
         error: message
       });
       return {
@@ -715,12 +1063,22 @@ export class MinecraftSession extends BaseAgentSession {
     }
   }
 
-  private async executeCommand(command: ParsedCommand, options: SubAgentTurnOptions): Promise<string> {
+  private async executeCommand(
+    command: ParsedCommand,
+    options: SubAgentTurnOptions
+  ): Promise<CommandExecutionResult> {
     // Auto-connect for any command that needs a live bot.
     // connect/disconnect manage the connection explicitly.
     if (command.kind !== "connect" && command.kind !== "disconnect") {
       await this.ensureConnected(options.signal);
     }
+
+    const withPlannerContext = (text: string) => {
+      const plannerSummary = this.buildPlannerStateSummary();
+      return plannerSummary ? `${text} ${plannerSummary}`.trim() : text;
+    };
+
+    const commandResult = (text: string, ok = true): CommandExecutionResult => ({ text, ok });
 
     const resolveFollowDistance = (explicitDistance?: number) => {
       const constrainedDistance = this.constraints.maxDistance;
@@ -751,12 +1109,12 @@ export class MinecraftSession extends BaseAgentSession {
     switch (command.kind) {
       case "connect": {
         const result = await this.runtime.connect({
-          host: command.host,
-          port: command.port,
+          host: command.host ?? this.serverTarget?.host ?? undefined,
+          port: command.port ?? this.serverTarget?.port ?? undefined,
           username: command.username,
           auth: command.auth
         }, options.signal);
-        if (!result.ok) return `Connection failed: ${result.error || "unknown error"}`;
+        if (!result.ok) return commandResult(`Connection failed: ${result.error || "unknown error"}`, false);
         const status = result.output;
         this.botConnected = true;
         this.botUsername = status.username ?? null;
@@ -766,7 +1124,7 @@ export class MinecraftSession extends BaseAgentSession {
         }
         this.seenEventCount = status.recentEvents.length;
         this.startReflexLoop();
-        return formatStatus(status, this.mode);
+        return commandResult(withPlannerContext(formatStatus(status, this.mode)));
       }
 
       case "disconnect": {
@@ -774,34 +1132,36 @@ export class MinecraftSession extends BaseAgentSession {
         const result = await this.runtime.disconnect("user requested", options.signal);
         this.botConnected = false;
         this.mode = "idle";
-        return result.ok ? "Disconnected from Minecraft server." : `Disconnect failed: ${result.error}`;
+        return result.ok
+          ? commandResult("Disconnected from Minecraft server.")
+          : commandResult(`Disconnect failed: ${result.error}`, false);
       }
 
       case "status": {
         const result = await this.runtime.status(options.signal);
-        if (!result.ok) return `Status check failed: ${result.error}`;
+        if (!result.ok) return commandResult(`Status check failed: ${result.error}`, false);
         // Include only new events in the status report.
         const allEvents = result.output.recentEvents ?? [];
         const newEvents = allEvents.slice(this.seenEventCount);
         this.seenEventCount = allEvents.length;
-        return formatStatus(result.output, this.mode, newEvents);
+        return commandResult(withPlannerContext(formatStatus(result.output, this.mode, newEvents)));
       }
 
       case "follow": {
-        if (!command.playerName) return "Cannot follow — no player name specified.";
+        if (!command.playerName) return commandResult("Cannot follow — no player name specified.", false);
         const skill = new FollowPlayerSkill(this.runtime, command.playerName, resolveFollowDistance(command.distance));
         const preconditions = skill.checkPreconditions();
-        if (!preconditions.ok) return `Cannot follow: ${preconditions.reason}`;
+        if (!preconditions.ok) return commandResult(`Cannot follow: ${preconditions.reason}`, false);
         const skillResult = await skill.execute({
           signal: options.signal ?? AbortSignal.timeout(30_000),
           onProgress: (msg) => options.onProgress?.({ summary: msg })
         });
         this.mode = "companion";
-        return skillResult.summary;
+        return commandResult(skillResult.summary, skillResult.status === "succeeded");
       }
 
       case "guard": {
-        if (!command.playerName) return "Cannot guard — no player name specified.";
+        if (!command.playerName) return commandResult("Cannot guard — no player name specified.", false);
         if (this.constraints.avoidCombat) {
           const skill = new FollowPlayerSkill(this.runtime, command.playerName, resolveFollowDistance(command.followDistance));
           const skillResult = await skill.execute({
@@ -809,7 +1169,7 @@ export class MinecraftSession extends BaseAgentSession {
             onProgress: (msg) => options.onProgress?.({ summary: msg })
           });
           this.mode = "companion";
-          return `Avoiding combat. ${skillResult.summary}`;
+          return commandResult(`Avoiding combat. ${skillResult.summary}`, skillResult.status === "succeeded");
         }
         const guardRadius = this.constraints.maxDistance !== undefined
           ? clampDistance(Math.min(command.radius ?? 8, this.constraints.maxDistance), 8, 16)
@@ -821,75 +1181,80 @@ export class MinecraftSession extends BaseAgentSession {
           resolveFollowDistance(command.followDistance)
         );
         const preconditions = skill.checkPreconditions();
-        if (!preconditions.ok) return `Cannot guard: ${preconditions.reason}`;
+        if (!preconditions.ok) return commandResult(`Cannot guard: ${preconditions.reason}`, false);
         const skillResult = await skill.execute({
           signal: options.signal ?? AbortSignal.timeout(30_000),
           onProgress: (msg) => options.onProgress?.({ summary: msg })
         });
         this.mode = "guard";
-        return skillResult.summary;
+        return commandResult(skillResult.summary, skillResult.status === "succeeded");
       }
 
       case "collect": {
         const skill = new CollectBlockSkill(this.runtime, command.blockName, command.count, resolveCollectDistance());
         const preconditions = skill.checkPreconditions();
-        if (!preconditions.ok) return `Cannot collect: ${preconditions.reason}`;
+        if (!preconditions.ok) return commandResult(`Cannot collect: ${preconditions.reason}`, false);
         const skillResult = await skill.execute({
           signal: options.signal ?? AbortSignal.timeout(60_000),
           onProgress: (msg) => options.onProgress?.({ summary: msg })
         });
-        return skillResult.summary;
+        return commandResult(skillResult.summary, skillResult.status === "succeeded");
       }
 
       case "go_to": {
         const constrainedTarget = await violatesStayNearConstraint({ x: command.x, y: command.y, z: command.z });
         if (constrainedTarget) {
-          return `Cannot move there while staying near ${this.operatorPlayerName}. Target is ${constrainedTarget.distance.toFixed(1)} blocks away (max ${constrainedTarget.maxDistance}).`;
+          return commandResult(
+            `Cannot move there while staying near ${this.operatorPlayerName}. Target is ${constrainedTarget.distance.toFixed(1)} blocks away (max ${constrainedTarget.maxDistance}).`,
+            false
+          );
         }
         const result = await this.runtime.goTo(command.x, command.y, command.z, 1, options.signal);
-        if (!result.ok) return `Navigation failed: ${result.error}`;
-        return `Pathfinding to ${command.x}, ${command.y}, ${command.z}.`;
+        if (!result.ok) return commandResult(`Navigation failed: ${result.error}`, false);
+        return commandResult(`Pathfinding to ${command.x}, ${command.y}, ${command.z}.`);
       }
 
       case "return_home": {
         const skill = new ReturnHomeSkill(this.runtime, this.homePosition);
         const preconditions = skill.checkPreconditions();
-        if (!preconditions.ok) return `Cannot return home: ${preconditions.reason}`;
+        if (!preconditions.ok) return commandResult(`Cannot return home: ${preconditions.reason}`, false);
         const skillResult = await skill.execute({
           signal: options.signal ?? AbortSignal.timeout(30_000),
           onProgress: (msg) => options.onProgress?.({ summary: msg })
         });
-        return skillResult.summary;
+        return commandResult(skillResult.summary, skillResult.status === "succeeded");
       }
 
       case "stop": {
         await this.runtime.stop(options.signal);
         this.mode = "idle";
-        return "Stopped. Standing idle.";
+        return commandResult("Stopped. Standing idle.");
       }
 
       case "chat": {
         const result = await this.runtime.chat(command.message, options.signal);
-        if (!result.ok) return `Chat failed: ${result.error}`;
-        return `Sent: ${command.message}`;
+        if (!result.ok) return commandResult(`Chat failed: ${result.error}`, false);
+        return commandResult(`Sent: ${command.message}`);
       }
 
       case "attack": {
-        if (this.constraints.avoidCombat) return "Combat is disabled by current constraints.";
+        if (this.constraints.avoidCombat) {
+          return commandResult("Combat is disabled by current constraints.", false);
+        }
         const result = await this.runtime.attackNearestHostile(undefined, options.signal);
-        if (!result.ok) return `Attack failed: ${result.error}`;
-        return `Attacking ${result.output.target}.`;
+        if (!result.ok) return commandResult(`Attack failed: ${result.error}`, false);
+        return commandResult(`Attacking ${result.output.target}.`);
       }
 
       case "look_at": {
-        if (!command.playerName) return "Cannot look — no player name specified.";
+        if (!command.playerName) return commandResult("Cannot look — no player name specified.", false);
         const result = await this.runtime.lookAtPlayer(command.playerName, options.signal);
-        if (!result.ok) return `Look failed: ${result.error}`;
-        return `Looking at ${command.playerName}.`;
+        if (!result.ok) return commandResult(`Look failed: ${result.error}`, false);
+        return commandResult(`Looking at ${command.playerName}.`);
       }
 
       default:
-        return "Unknown command.";
+        return commandResult("Unknown command.", false);
     }
   }
 

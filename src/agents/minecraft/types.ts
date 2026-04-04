@@ -124,6 +124,37 @@ export type MinecraftConstraints = {
   allowedChests?: string[];
 };
 
+export type MinecraftServerTarget = {
+  label: string | null;
+  host: string | null;
+  port: number | null;
+  description: string | null;
+};
+
+export type MinecraftPlannerState = {
+  activeGoal: string | null;
+  subgoals: string[];
+  progress: string[];
+  lastInstruction: string | null;
+  lastDecisionSummary: string | null;
+  lastActionResult: string | null;
+};
+
+export type MinecraftBrainAction =
+  | { kind: "wait" }
+  | { kind: "connect"; target?: Partial<MinecraftServerTarget> }
+  | { kind: "disconnect" }
+  | { kind: "status" }
+  | { kind: "follow"; playerName: string; distance?: number }
+  | { kind: "guard"; playerName: string; radius?: number; followDistance?: number }
+  | { kind: "collect"; blockName: string; count?: number }
+  | { kind: "go_to"; x: number; y: number; z: number }
+  | { kind: "return_home" }
+  | { kind: "stop" }
+  | { kind: "chat"; message: string }
+  | { kind: "attack" }
+  | { kind: "look_at"; playerName: string };
+
 // ── minecraft_task tool arguments ──
 
 export type MinecraftTaskAction = "run" | "followup" | "status" | "cancel";
@@ -134,4 +165,5 @@ export type MinecraftTaskArgs = {
   session_id?: string;
   mode?: MinecraftMode;
   constraints?: MinecraftConstraints;
+  server?: Partial<MinecraftServerTarget>;
 };

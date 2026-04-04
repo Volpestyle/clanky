@@ -17,38 +17,136 @@ import {
   getPromptingSettings,
   getResolvedMinecraftBrainBinding
 } from "../../settings/agentStack.ts";
-import type { MinecraftConstraints, MinecraftMode, WorldSnapshot } from "./types.ts";
+import type {
+  MinecraftBrainAction,
+  MinecraftConstraints,
+  MinecraftMode,
+  MinecraftPlannerState,
+  MinecraftServerTarget,
+  WorldSnapshot
+} from "./types.ts";
+
+const ACTION_KINDS = [
+  "wait",
+  "connect",
+  "disconnect",
+  "status",
+  "follow",
+  "guard",
+  "collect",
+  "go_to",
+  "return_home",
+  "stop",
+  "chat",
+  "attack",
+  "look_at"
+] as const;
+
+const SERVER_TARGET_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    label: {
+      type: "string",
+      description: "Short human-facing world/server label, for example Survival SMP."
+    },
+    host: {
+      type: "string",
+      description: "Minecraft server hostname or IP when known."
+    },
+    port: {
+      type: "integer",
+      description: "Minecraft server port when it matters."
+    },
+    description: {
+      type: "string",
+      description: "Short note about this world/server."
+    }
+  },
+  additionalProperties: false
+};
+
+const ACTION_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    kind: {
+      type: "string",
+      enum: [...ACTION_KINDS],
+      description: "Structured next action for the embodied Minecraft teammate."
+    },
+    playerName: { type: "string" },
+    distance: { type: "number" },
+    radius: { type: "number" },
+    followDistance: { type: "number" },
+    blockName: { type: "string" },
+    count: { type: "integer" },
+    x: { type: "number" },
+    y: { type: "number" },
+    z: { type: "number" },
+    message: { type: "string" },
+    target: SERVER_TARGET_JSON_SCHEMA
+  },
+  required: ["kind"],
+  additionalProperties: false
+};
 
 const TURN_DECISION_JSON_SCHEMA = JSON.stringify({
   type: "object",
   properties: {
-    command: {
+    goal: {
       type: "string",
-      description:
-        "Exactly one high-level Minecraft command to execute next. Examples: " +
-        "connect, disconnect, status, follow Volpestyle, guard Volpestyle, collect 16 oak_log, " +
-        "go to 100 64 200, return home, stop, attack, look at Volpestyle, chat On my way."
-    }
+      description: "Longer-horizon in-world goal. Use an empty string when unchanged or not needed."
+    },
+    subgoals: {
+      type: "array",
+      items: { type: "string" },
+      description: "Current short subgoals/checkpoints for that goal."
+    },
+    progress: {
+      type: "array",
+      items: { type: "string" },
+      description: "Important progress notes worth carrying across turns."
+    },
+    summary: {
+      type: "string",
+      description: "Short checkpoint summary for session memory. Use an empty string when unnecessary."
+    },
+    shouldContinue: {
+      type: "boolean",
+      description: "True only when the session should immediately re-checkpoint after this action in the same turn."
+    },
+    action: ACTION_JSON_SCHEMA
   },
-  required: ["command"],
+  required: ["goal", "subgoals", "progress", "summary", "shouldContinue", "action"],
   additionalProperties: false
 });
 
 const CHAT_DECISION_JSON_SCHEMA = JSON.stringify({
   type: "object",
   properties: {
+    goal: {
+      type: "string",
+      description: "Longer-horizon in-world goal. Use an empty string when unchanged or not needed."
+    },
+    subgoals: {
+      type: "array",
+      items: { type: "string" }
+    },
+    progress: {
+      type: "array",
+      items: { type: "string" }
+    },
+    summary: {
+      type: "string",
+      description: "Short checkpoint summary for session memory. Use an empty string when unnecessary."
+    },
     chatText: {
       type: "string",
       description:
         "Minecraft chat reply text. Use an empty string when you should stay silent."
     },
-    command: {
-      type: "string",
-      description:
-        "Optional high-level Minecraft command to execute because of the message. Use an empty string when no action is needed."
-    }
+    action: ACTION_JSON_SCHEMA
   },
-  required: ["chatText", "command"],
+  required: ["goal", "subgoals", "progress", "summary", "chatText", "action"],
   additionalProperties: false
 });
 
@@ -68,6 +166,8 @@ type MinecraftBrainSharedContext = {
   mode: MinecraftMode;
   operatorPlayerName: string | null;
   constraints: MinecraftConstraints;
+  serverTarget: MinecraftServerTarget | null;
+  sessionState: MinecraftPlannerState;
 };
 
 export type MinecraftTurnContext = MinecraftBrainSharedContext & {
@@ -75,7 +175,12 @@ export type MinecraftTurnContext = MinecraftBrainSharedContext & {
 };
 
 export type MinecraftTurnDecision = {
-  command: string | null;
+  goal: string | null;
+  subgoals: string[];
+  progress: string[];
+  summary: string | null;
+  shouldContinue: boolean;
+  action: MinecraftBrainAction;
   costUsd: number;
 };
 
@@ -85,8 +190,12 @@ export type MinecraftChatContext = MinecraftBrainSharedContext & {
 };
 
 export type MinecraftChatResult = {
+  goal: string | null;
+  subgoals: string[];
+  progress: string[];
+  summary: string | null;
   chatText: string | null;
-  gameCommand: string | null;
+  action: MinecraftBrainAction;
   costUsd: number;
 };
 
@@ -100,6 +209,145 @@ function normalizeInlineText(value: unknown, maxLen = 240): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
   return trimmed.slice(0, maxLen);
+}
+
+function normalizeTextArray(value: unknown, maxItems: number, maxLen: number): string[] {
+  if (!Array.isArray(value)) return [];
+  const unique = new Set<string>();
+  for (const entry of value) {
+    const normalized = normalizeInlineText(entry, maxLen);
+    if (!normalized) continue;
+    unique.add(normalized);
+    if (unique.size >= maxItems) break;
+  }
+  return [...unique];
+}
+
+function normalizeBoundedNumber(
+  value: unknown,
+  min: number,
+  max: number,
+  round = false
+): number | undefined {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return undefined;
+  const bounded = Math.max(min, Math.min(max, numeric));
+  return round ? Math.round(bounded) : bounded;
+}
+
+function normalizeServerTarget(value: unknown): MinecraftServerTarget | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const label = normalizeInlineText(record.label, 80);
+  const host = normalizeInlineText(record.host, 200);
+  const port = normalizeBoundedNumber(record.port, 1, 65535, true) ?? null;
+  const description = normalizeInlineText(record.description, 160);
+  if (!label && !host && !port && !description) return null;
+  return {
+    label,
+    host,
+    port,
+    description
+  };
+}
+
+function normalizeBrainAction(
+  value: unknown,
+  operatorPlayerName: string | null,
+  fallbackKind: "status" | "wait" = "status"
+): MinecraftBrainAction {
+  const record = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const kind = normalizeInlineText(record.kind, 40)?.toLowerCase();
+
+  switch (kind) {
+    case "wait":
+      return { kind: "wait" };
+    case "connect": {
+      const target = normalizeServerTarget(record.target);
+      return target ? { kind: "connect", target } : { kind: "connect" };
+    }
+    case "disconnect":
+      return { kind: "disconnect" };
+    case "status":
+      return { kind: "status" };
+    case "follow": {
+      const playerName = normalizeInlineText(record.playerName, 80) || operatorPlayerName || "";
+      return playerName
+        ? {
+            kind: "follow",
+            playerName,
+            distance: normalizeBoundedNumber(record.distance, 1, 32, true)
+          }
+        : { kind: fallbackKind };
+    }
+    case "guard": {
+      const playerName = normalizeInlineText(record.playerName, 80) || operatorPlayerName || "";
+      return playerName
+        ? {
+            kind: "guard",
+            playerName,
+            radius: normalizeBoundedNumber(record.radius, 1, 32, true),
+            followDistance: normalizeBoundedNumber(record.followDistance, 1, 32, true)
+          }
+        : { kind: fallbackKind };
+    }
+    case "collect": {
+      const blockName = normalizeInlineText(record.blockName, 80)?.replace(/\s+/g, "_") || "";
+      return blockName
+        ? {
+            kind: "collect",
+            blockName,
+            count: normalizeBoundedNumber(record.count, 1, 512, true)
+          }
+        : { kind: fallbackKind };
+    }
+    case "go_to": {
+      const x = normalizeBoundedNumber(record.x, -30_000_000, 30_000_000);
+      const y = normalizeBoundedNumber(record.y, -256, 512);
+      const z = normalizeBoundedNumber(record.z, -30_000_000, 30_000_000);
+      return x !== undefined && y !== undefined && z !== undefined
+        ? { kind: "go_to", x, y, z }
+        : { kind: fallbackKind };
+    }
+    case "return_home":
+      return { kind: "return_home" };
+    case "stop":
+      return { kind: "stop" };
+    case "chat": {
+      const message = normalizeInlineText(record.message, 240);
+      return message ? { kind: "chat", message } : { kind: fallbackKind };
+    }
+    case "attack":
+      return { kind: "attack" };
+    case "look_at": {
+      const playerName = normalizeInlineText(record.playerName, 80) || operatorPlayerName || "";
+      return playerName ? { kind: "look_at", playerName } : { kind: fallbackKind };
+    }
+    default:
+      return { kind: fallbackKind };
+  }
+}
+
+function formatServerTarget(serverTarget: MinecraftServerTarget | null): string {
+  if (!serverTarget) return "none configured";
+  const parts = [serverTarget.label, serverTarget.host].filter(Boolean);
+  if (serverTarget.port) parts.push(`port ${serverTarget.port}`);
+  if (serverTarget.description) parts.push(serverTarget.description);
+  return parts.length > 0 ? parts.join("; ") : "none configured";
+}
+
+function formatPlannerState(sessionState: MinecraftPlannerState): string {
+  return [
+    `[Planner state]`,
+    `Goal: ${sessionState.activeGoal || "none"}.`,
+    `Subgoals: ${sessionState.subgoals.length > 0 ? sessionState.subgoals.join(" | ") : "none"}.`,
+    `Progress: ${sessionState.progress.length > 0 ? sessionState.progress.join(" | ") : "none"}.`,
+    `Last instruction: ${sessionState.lastInstruction || "none"}.`,
+    `Last planner summary: ${sessionState.lastDecisionSummary || "none"}.`,
+    `Last action result: ${sessionState.lastActionResult || "none"}.`
+  ].join("\n");
 }
 
 function formatWorldContext(snapshot: WorldSnapshot | null, botUsername: string): string {
@@ -200,25 +448,27 @@ function buildSharedSystemPrompt(settings: Record<string, unknown>, botUsername:
     `=== OPERATING MODEL ===`,
     `Discord text, Discord voice, and Minecraft chat are all just input surfaces into the same Minecraft self.`,
     `Once you are in a Minecraft session, you decide what to do inside the game.`,
-    `Use high-level Minecraft commands when action is useful. Low-level movement, pathfinding, combat mechanics, and block interaction are handled by the runtime tools.`,
+    `Maintain longer-horizon in-world intent across turns: keep track of the current goal, subgoals, and progress when it helps you stay coherent.`,
+    `Choose structured high-level actions when action is useful. Low-level movement, pathfinding, combat mechanics, and block interaction are handled by the runtime tools.`,
     `Do not narrate from outside the game. Behave like a real participant who is there with the players.`,
     ``,
     textGuidance ? `=== GUIDANCE ===\n${textGuidance}\n` : "",
-    `=== AVAILABLE HIGH-LEVEL COMMANDS ===`,
-    `connect`,
+    `=== AVAILABLE STRUCTURED ACTIONS ===`,
+    `wait`,
+    `connect { target? }`,
     `disconnect`,
     `status`,
-    `follow <player>`,
-    `guard <player>`,
-    `collect <count> <block>`,
-    `go to <x> <y> <z>`,
-    `return home`,
+    `follow { playerName, distance? }`,
+    `guard { playerName, radius?, followDistance? }`,
+    `collect { blockName, count? }`,
+    `go_to { x, y, z }`,
+    `return_home`,
     `stop`,
     `attack`,
-    `look at <player>`,
-    `chat <message>`,
+    `look_at { playerName }`,
+    `chat { message }`,
     ``,
-    `Only choose commands the runtime already supports. Do not invent crafting, building, chest management, or vision abilities that do not exist yet.`
+    `Only choose actions the runtime already supports. Do not invent crafting, building, chest management, or vision abilities that do not exist yet.`
   ];
 
   if (hardLimits) {
@@ -233,8 +483,10 @@ function buildTurnSystemPrompt(settings: Record<string, unknown>, botUsername: s
     buildSharedSystemPrompt(settings, botUsername),
     ``,
     `=== TASK ===`,
-    `Choose the single best next high-level command to execute for the current operator instruction.`,
-    `Prefer a concrete action over vague commentary.`,
+    `Choose the best next structured action for the current operator instruction and current planner checkpoint.`,
+    `Update goal, subgoals, and progress when that improves continuity.`,
+    `Set shouldContinue=true only when the session should immediately checkpoint again after this action in the same turn. Typical examples: connect first, then follow; status first, then decide.`,
+    `Prefer a concrete in-world action over vague commentary.`,
     `If the operator is asking what is happening, what you see, or for an update, use status.`,
     `Return JSON only.`
   ].join("\n");
@@ -248,6 +500,9 @@ function buildTurnUserPrompt(context: MinecraftTurnContext): string {
     `Mode: ${context.mode}.`,
     `Operator player: ${context.operatorPlayerName || "unknown"}.`,
     `Constraints: ${formatConstraints(context.constraints)}.`,
+    `Preferred server target: ${formatServerTarget(context.serverTarget)}.`,
+    ``,
+    formatPlannerState(context.sessionState),
     ``,
     formatChatHistory(context.chatHistory, context.botUsername),
     ``,
@@ -261,10 +516,11 @@ function buildChatSystemPrompt(settings: Record<string, unknown>, botUsername: s
     buildSharedSystemPrompt(settings, botUsername),
     ``,
     `=== TASK ===`,
-    `Decide whether to reply in Minecraft chat, take a high-level Minecraft action, both, or neither.`,
+    `Decide whether to reply in Minecraft chat, take a structured Minecraft action, both, or neither.`,
+    `Update goal, subgoals, and progress when that improves continuity.`,
     `Keep chat replies short and natural for Minecraft.`,
     `Use an empty string for chatText when you should stay silent.`,
-    `Use an empty string for command when no game action is needed.`,
+    `Use action.kind="wait" when no game action is needed.`,
     `Return JSON only.`
   ].join("\n");
 }
@@ -277,6 +533,9 @@ function buildChatUserPrompt(context: MinecraftChatContext): string {
     `Mode: ${context.mode}.`,
     `Operator player: ${context.operatorPlayerName || "unknown"}.`,
     `Constraints: ${formatConstraints(context.constraints)}.`,
+    `Preferred server target: ${formatServerTarget(context.serverTarget)}.`,
+    ``,
+    formatPlannerState(context.sessionState),
     ``,
     formatChatHistory(context.chatHistory, context.botUsername),
     ``,
@@ -313,9 +572,21 @@ export function createMinecraftBrain(
           sessionId: context.worldSnapshot?.sessionId
         }
       });
-      const parsed = safeJsonParseFromString(generation.text, null) as { command?: unknown } | null;
+      const parsed = safeJsonParseFromString(generation.text, null) as {
+        goal?: unknown;
+        subgoals?: unknown;
+        progress?: unknown;
+        summary?: unknown;
+        shouldContinue?: unknown;
+        action?: unknown;
+      } | null;
       return {
-        command: normalizeInlineText(parsed?.command, 220) || "status",
+        goal: normalizeInlineText(parsed?.goal, 160),
+        subgoals: normalizeTextArray(parsed?.subgoals, 6, 120),
+        progress: normalizeTextArray(parsed?.progress, 8, 160),
+        summary: normalizeInlineText(parsed?.summary, 220),
+        shouldContinue: parsed?.shouldContinue === true,
+        action: normalizeBrainAction(parsed?.action, context.operatorPlayerName, "status"),
         costUsd: generation.costUsd ?? 0
       };
     },
@@ -333,12 +604,20 @@ export function createMinecraftBrain(
         }
       });
       const parsed = safeJsonParseFromString(generation.text, null) as {
+        goal?: unknown;
+        subgoals?: unknown;
+        progress?: unknown;
+        summary?: unknown;
         chatText?: unknown;
-        command?: unknown;
+        action?: unknown;
       } | null;
       return {
+        goal: normalizeInlineText(parsed?.goal, 160),
+        subgoals: normalizeTextArray(parsed?.subgoals, 6, 120),
+        progress: normalizeTextArray(parsed?.progress, 8, 160),
+        summary: normalizeInlineText(parsed?.summary, 220),
         chatText: normalizeInlineText(parsed?.chatText),
-        gameCommand: normalizeInlineText(parsed?.command, 220),
+        action: normalizeBrainAction(parsed?.action, context.operatorPlayerName, "wait"),
         costUsd: generation.costUsd ?? 0
       };
     }

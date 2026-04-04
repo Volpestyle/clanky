@@ -788,6 +788,12 @@ export type MinecraftConfig = {
   /** Explicit URL to an already-running MCP server, or null to auto-spawn. */
   mcpUrl: string | null;
   operatorPlayerName: string | null;
+  serverTarget: {
+    label: string | null;
+    host: string | null;
+    port: number | null;
+    description: string | null;
+  } | null;
   /** Whether auto-spawn is enabled (true when no explicit URL is given). */
   autoSpawn: boolean;
 };
@@ -828,15 +834,32 @@ export function getMinecraftConfig(settings: unknown): MinecraftConfig {
     process.env.MINECRAFT_MCP_URL ||
     ""
   ).trim() || null;
+  const runtimeServer = runtimeConfig?.server as Record<string, unknown> | undefined;
   const operatorPlayerName = String(
     runtimeConfig?.operatorPlayerName ||
     (!hasRawRuntimeMinecraft && legacy?.operatorPlayerName) ||
     process.env.MC_OPERATOR_USERNAME ||
     ""
   ).trim() || null;
+  const serverLabel = String(runtimeServer?.label || "").trim() || null;
+  const serverHost = String(runtimeServer?.host || "").trim() || null;
+  const rawServerPort = Number(runtimeServer?.port);
+  const serverPort = Number.isFinite(rawServerPort) && rawServerPort >= 1 && rawServerPort <= 65535
+    ? Math.round(rawServerPort)
+    : null;
+  const serverDescription = String(runtimeServer?.description || "").trim() || null;
+  const serverTarget = serverLabel || serverHost || serverPort || serverDescription
+    ? {
+        label: serverLabel,
+        host: serverHost,
+        port: serverPort,
+        description: serverDescription
+      }
+    : null;
   return {
     mcpUrl: explicitUrl,
     operatorPlayerName,
+    serverTarget,
     autoSpawn: !explicitUrl
   };
 }

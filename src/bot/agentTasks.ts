@@ -477,7 +477,9 @@ async function ensureMinecraftMcpServer(
     try {
       const result = await resolveMinecraftMcpServer({
         explicitUrl: config.mcpUrl,
-        logAction
+        logAction,
+        mcHost: config.serverTarget?.host ?? undefined,
+        mcPort: config.serverTarget?.port ?? undefined
       });
       minecraftMcpSingleton = result;
       return result;
@@ -539,6 +541,7 @@ async function createMinecraftSession(
     baseUrl,
     ownerUserId: userId,
     operatorPlayerName: config.operatorPlayerName,
+    serverTarget: config.serverTarget,
     logAction,
     onGameEvent: (events) =>
       logAction({

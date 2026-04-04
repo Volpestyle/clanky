@@ -242,7 +242,7 @@ export const MINECRAFT_TASK_SCHEMA: SharedToolSchema = {
   name: "minecraft_task",
   description:
     "Send intent to Clanky's embodied Minecraft session brain. " +
-    "action=run starts or continues a Minecraft session and lets the Minecraft brain choose the next high-level action. " +
+    "action=run starts or continues a Minecraft session and lets the Minecraft brain update its in-world goal state and choose the next structured high-level action. " +
     "action=followup sends additional instructions to an active session. " +
     "action=status returns the bot's current world state, task progress, and hazards. " +
     "action=cancel stops the current behavior and returns to idle.",
@@ -283,6 +283,17 @@ export const MINECRAFT_TASK_SCHEMA: SharedToolSchema = {
           max_distance: { type: "number", description: "Maximum distance from the player in blocks." },
           avoid_combat: { type: "boolean", description: "Do not engage hostiles." }
         }
+      },
+      server: {
+        type: "object",
+        description: "Optional preferred Minecraft world/server target for this embodied session.",
+        properties: {
+          label: { type: "string", description: "Human-facing world/server label." },
+          host: { type: "string", description: "Minecraft server host or IP." },
+          port: { type: "integer", description: "Minecraft server port." },
+          description: { type: "string", description: "Short note about this world/server." }
+        },
+        additionalProperties: false
       }
     },
     anyOf: [

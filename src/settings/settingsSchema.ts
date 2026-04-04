@@ -418,6 +418,12 @@ export const DEFAULT_SETTINGS = {
         enabled: false,
         mcpUrl: "",
         operatorPlayerName: "",
+        server: {
+          label: "",
+          host: "",
+          port: 25565,
+          description: ""
+        },
         execution: {
           mode: "inherit_orchestrator"
         }

@@ -1734,6 +1734,7 @@ async function executeMinecraftTask(
   if (!task) return { content: "Missing or empty Minecraft task instruction.", isError: true };
   const mode = typeof input?.mode === "string" ? String(input.mode).trim() : undefined;
   const constraints = input?.constraints && typeof input.constraints === "object" ? input.constraints as Record<string, unknown> : undefined;
+  const server = input?.server && typeof input.server === "object" ? input.server as Record<string, unknown> : undefined;
 
   // Session continuation
   if (runtime.subAgentSessions) {
@@ -1742,7 +1743,7 @@ async function executeMinecraftTask(
     const session = resolved?.session;
     if (session) {
       try {
-        const turnInput = JSON.stringify({ task, mode, constraints });
+        const turnInput = JSON.stringify({ task, mode, constraints, server });
         const turnResult = await session.runTurn(turnInput, { signal: context.signal });
         maybeRemoveCompletedSession(runtime.subAgentSessions.manager, session.id, turnResult.sessionCompleted);
         const sessionNote = buildSessionNote(session.id, turnResult.sessionCompleted);
@@ -1776,7 +1777,7 @@ async function executeMinecraftTask(
     if (session) {
       runtime.subAgentSessions.manager.register(session);
       try {
-        const turnInput = JSON.stringify({ task, mode, constraints });
+        const turnInput = JSON.stringify({ task, mode, constraints, server });
         const turnResult = await session.runTurn(turnInput, { signal: context.signal });
         maybeRemoveCompletedSession(runtime.subAgentSessions.manager, session.id, turnResult.sessionCompleted);
         const sessionNote = buildSessionNote(session.id, turnResult.sessionCompleted);

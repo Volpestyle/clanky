@@ -33,12 +33,18 @@ class FakeMinecraftBrainLlm implements Pick<LLMService, "generate"> {
 }
 
 test("createMinecraftBrain uses the dedicated Minecraft binding for operator turns", async () => {
-  const llm = new FakeMinecraftBrainLlm('{"command":"follow Volpestyle"}');
+  const llm = new FakeMinecraftBrainLlm('{"goal":"Stay with Volpestyle","subgoals":["follow Volpestyle"],"progress":["Already in the same area"],"summary":"Continuing the escort.","shouldContinue":false,"action":{"kind":"follow","playerName":"Volpestyle"}}');
   const settings = normalizeSettings({
     agentStack: {
       runtimeConfig: {
         minecraft: {
           enabled: true,
+          server: {
+            label: "Survival SMP",
+            host: "mc.example.test",
+            port: 25570,
+            description: "Primary operator world"
+          },
           execution: {
             mode: "dedicated_model",
             model: {
@@ -59,19 +65,38 @@ test("createMinecraftBrain uses the dedicated Minecraft binding for operator tur
     botUsername: "ClankyBuddy",
     mode: "companion",
     operatorPlayerName: "Volpestyle",
-    constraints: {}
+    constraints: {},
+    serverTarget: {
+      label: "Survival SMP",
+      host: "mc.example.test",
+      port: 25570,
+      description: "Primary operator world"
+    },
+    sessionState: {
+      activeGoal: "Stay with Volpestyle",
+      subgoals: ["keep up"],
+      progress: ["recently rejoined"],
+      lastInstruction: "follow me",
+      lastDecisionSummary: "Rejoined the server.",
+      lastActionResult: "Connected as ClankyBuddy."
+    }
   });
 
-  assert.equal(result.command, "follow Volpestyle");
+  assert.equal(result.goal, "Stay with Volpestyle");
+  assert.deepEqual(result.subgoals, ["follow Volpestyle"]);
+  assert.equal(result.action.kind, "follow");
+  if (result.action.kind !== "follow") throw new Error("expected follow action");
+  assert.equal(result.action.playerName, "Volpestyle");
   assert.equal(llm.calls.length, 1);
   const orchestrator = getResolvedOrchestratorBinding(llm.calls[0]?.settings);
   assert.equal(orchestrator.provider, "anthropic");
   assert.equal(orchestrator.model, "claude-haiku-4-5");
   assert.equal(llm.calls[0]?.trace?.source, "minecraft_brain_turn");
+  assert.match(String(llm.calls[0]?.userPrompt || ""), /Preferred server target: Survival SMP; mc\.example\.test; port 25570; Primary operator world\./);
 });
 
 test("createMinecraftBrain parses Minecraft chat reply and action separately", async () => {
-  const llm = new FakeMinecraftBrainLlm('{"chatText":"on my way","command":"follow Volpestyle"}');
+  const llm = new FakeMinecraftBrainLlm('{"goal":"Escort Volpestyle","subgoals":["stay close"],"progress":["he asked again in chat"],"summary":"Acknowledging in chat and following.","chatText":"on my way","action":{"kind":"follow","playerName":"Volpestyle"}}');
   const settings = normalizeSettings({});
   const brain = createMinecraftBrain(llm, () => settings as Record<string, unknown>);
 
@@ -83,10 +108,22 @@ test("createMinecraftBrain parses Minecraft chat reply and action separately", a
     botUsername: "ClankyBuddy",
     mode: "companion",
     operatorPlayerName: "Volpestyle",
-    constraints: {}
+    constraints: {},
+    serverTarget: null,
+    sessionState: {
+      activeGoal: null,
+      subgoals: [],
+      progress: [],
+      lastInstruction: null,
+      lastDecisionSummary: null,
+      lastActionResult: null
+    }
   });
 
   assert.equal(result.chatText, "on my way");
-  assert.equal(result.gameCommand, "follow Volpestyle");
+  assert.equal(result.goal, "Escort Volpestyle");
+  assert.equal(result.action.kind, "follow");
+  if (result.action.kind !== "follow") throw new Error("expected follow action");
+  assert.equal(result.action.playerName, "Volpestyle");
   assert.equal(llm.calls[0]?.trace?.source, "minecraft_brain_chat");
 });

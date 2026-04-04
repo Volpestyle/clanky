@@ -408,6 +408,7 @@ export async function executeVoiceMinecraftTaskTool(
   const task = normalizeInlineText(args?.task, 2000);
   const action = normalizeInlineText(args?.action, 20) || "run";
   const mode = normalizeInlineText(args?.mode, 20) || undefined;
+  const server = args?.server && typeof args.server === "object" ? args.server as Record<string, unknown> : undefined;
   const sessionId = typeof args?.session_id === "string" ? String(args.session_id).trim() : "";
   const scopeKey = buildMinecraftSessionScopeKey({
     guildId: session?.guildId || null,
@@ -468,7 +469,12 @@ export async function executeVoiceMinecraftTaskTool(
     const existing = resolved?.session;
     if (existing) {
       try {
-        const turnInput = JSON.stringify({ task, mode, constraints: args?.constraints ?? undefined });
+        const turnInput = JSON.stringify({
+          task,
+          mode,
+          constraints: args?.constraints ?? undefined,
+          server
+        });
         const turnResult = await existing.runTurn(turnInput, { signal });
         maybeRemoveCompletedVoiceSession(manager.subAgentSessions, existing.id, turnResult.sessionCompleted);
         if (turnResult.isError) return { ok: false, text: "", error: turnResult.errorMessage };
@@ -501,7 +507,12 @@ export async function executeVoiceMinecraftTaskTool(
     if (newSession) {
       manager.subAgentSessions.register(newSession);
       try {
-        const turnInput = JSON.stringify({ task, mode, constraints: args?.constraints ?? undefined });
+        const turnInput = JSON.stringify({
+          task,
+          mode,
+          constraints: args?.constraints ?? undefined,
+          server
+        });
         const turnResult = await newSession.runTurn(turnInput, { signal });
         maybeRemoveCompletedVoiceSession(manager.subAgentSessions, newSession.id, turnResult.sessionCompleted);
         if (turnResult.isError) {

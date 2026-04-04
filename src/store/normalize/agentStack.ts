@@ -662,6 +662,29 @@ export function normalizeAgentStackSection(
           DEFAULT_SETTINGS.agentStack.runtimeConfig.minecraft.operatorPlayerName,
           50
         ),
+        server: {
+          label: normalizeString(
+            minecraft.server?.label,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.minecraft.server.label,
+            80
+          ),
+          host: normalizeString(
+            minecraft.server?.host,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.minecraft.server.host,
+            200
+          ),
+          port: normalizeInt(
+            minecraft.server?.port,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.minecraft.server.port,
+            1,
+            65535
+          ),
+          description: normalizeString(
+            minecraft.server?.description,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.minecraft.server.description,
+            160
+          )
+        },
         execution: normalizeExecutionPolicy(
           minecraft.execution,
           presetConfig.presetOrchestratorFallback.provider,
