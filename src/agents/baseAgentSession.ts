@@ -1,4 +1,4 @@
-import { createAbortError, isAbortError } from "../tools/browserTaskRuntime.ts";
+import { createAbortError, isAbortError } from "../tools/abortError.ts";
 import {
   EMPTY_USAGE,
   type SubAgentSession,

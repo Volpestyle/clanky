@@ -2,7 +2,7 @@ import type { LLMService, ToolLoopContentBlock, ToolLoopMessage } from "../llm.t
 import type { ImageInput } from "../llm/serviceShared.ts";
 import type { BrowserManager } from "../services/BrowserManager.ts";
 import { BROWSER_AGENT_TOOL_DEFINITIONS, executeBrowserTool } from "../tools/browserTools.ts";
-import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
+import { throwIfAborted } from "../tools/abortError.ts";
 import { BaseAgentSession } from "./baseAgentSession.ts";
 import type { SubAgentTurnOptions, SubAgentTurnResult } from "./subAgentSession.ts";
 import { EMPTY_USAGE, generateSessionId } from "./subAgentSession.ts";

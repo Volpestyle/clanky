@@ -1,6 +1,6 @@
 import type { BrowserManager } from "../services/BrowserManager.ts";
 import { BrowserSessionVideoSource } from "../services/browserSessionVideoSource.ts";
-import { isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
+import { isAbortError, throwIfAborted } from "../tools/abortError.ts";
 import type { StreamDiscoveryClientLike } from "../selfbot/streamDiscovery.ts";
 import { ensureStreamPublishState, startBrowserStreamPublish, stopBrowserStreamPublish } from "./voiceStreamPublish.ts";
 import type { VoiceSessionStreamPublishState } from "./voiceSessionTypes.ts";

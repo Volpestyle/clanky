@@ -5,7 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { assertPublicUrl } from "./urlSafety.ts";
-import { createAbortError, isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
+import { createAbortError, isAbortError, throwIfAborted } from "../tools/abortError.ts";
 
 const execFileAsync = promisify(execFile);
 

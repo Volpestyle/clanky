@@ -3,12 +3,10 @@ import { estimateUsdCost } from "../llm/pricing.ts";
 import { extractOpenAiResponseText, extractOpenAiResponseUsage } from "../llm/llmHelpers.ts";
 import type { ImageInput } from "../llm/serviceShared.ts";
 import type { BrowserManager } from "../services/BrowserManager.ts";
+import { createAbortError, isAbortError, throwIfAborted } from "./abortError.ts";
 import {
-  createAbortError,
   describeBrowserTaskError,
-  isAbortError,
-  readBrowserCurrentUrl,
-  throwIfAborted
+  readBrowserCurrentUrl
 } from "./browserTaskRuntime.ts";
 
 const COMPUTER_USE_DEFAULT_MODEL = "gpt-5.4";

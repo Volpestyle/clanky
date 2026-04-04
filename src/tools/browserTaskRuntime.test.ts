@@ -2,7 +2,8 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { BrowserManager } from "../services/BrowserManager.ts";
 import type { LLMService } from "../llm.ts";
-import { BrowserTaskRegistry, buildBrowserTaskScopeKey, isAbortError, runBrowserBrowseTask } from "./browserTaskRuntime.ts";
+import { isAbortError } from "./abortError.ts";
+import { BrowserTaskRegistry, buildBrowserTaskScopeKey, runBrowserBrowseTask } from "./browserTaskRuntime.ts";
 
 test("BrowserTaskRegistry scopes active browser tasks to the channel and does not clear newer tasks", () => {
   const registry = new BrowserTaskRegistry();

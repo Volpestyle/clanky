@@ -1,5 +1,5 @@
 import { createCodexCliStreamSession, type CodexCliStreamSessionLike, normalizeCodexCliError, parseCodexCliJsonlOutput } from "../llm/llmCodexCli.ts";
-import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
+import { throwIfAborted } from "../tools/abortError.ts";
 import { BaseAgentSession } from "./baseAgentSession.ts";
 import type { SubAgentTurnOptions, SubAgentTurnResult } from "./subAgentSession.ts";
 import { EMPTY_USAGE, generateSessionId } from "./subAgentSession.ts";

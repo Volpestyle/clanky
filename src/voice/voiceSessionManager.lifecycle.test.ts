@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import type { ChatInputCommandInteraction } from "discord.js";
 import { ActiveReplyRegistry, buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
-import { createAbortError } from "../tools/browserTaskRuntime.ts";
+import { createAbortError } from "../tools/abortError.ts";
 import type { CaptureManager } from "./captureManager.ts";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
 import { createTestSettings as createCanonicalTestSettings, normalizeLegacyTestSettingsInput } from "../testSettings.ts";

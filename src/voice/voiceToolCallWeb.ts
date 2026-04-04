@@ -1,7 +1,7 @@
 import { deepMerge, clamp } from "../utils.ts";
 import { getResearchRuntimeConfig } from "../settings/agentStack.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
-import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
+import { throwIfAborted } from "../tools/abortError.ts";
 import type { VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 

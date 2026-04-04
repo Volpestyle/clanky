@@ -122,10 +122,10 @@ import {
 } from "./bot/botRuntimeFactories.ts";
 import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
 import type { BrowserManager } from "./services/BrowserManager.ts";
+import { isAbortError } from "./tools/abortError.ts";
 import {
   BrowserTaskRegistry,
-  buildBrowserTaskScopeKey,
-  isAbortError
+  buildBrowserTaskScopeKey
 } from "./tools/browserTaskRuntime.ts";
 import {
   ActiveReplyRegistry,

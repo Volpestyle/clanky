@@ -20,7 +20,7 @@ import {
 } from "./codeAgentSwarm.ts";
 import { clamp } from "../utils.ts";
 import path from "node:path";
-import { createAbortError, isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
+import { createAbortError, isAbortError, throwIfAborted } from "../tools/abortError.ts";
 import {
   resolveCodeAgentWorkspaceMode,
   type ResolvedCodeAgentWorkspaceMode

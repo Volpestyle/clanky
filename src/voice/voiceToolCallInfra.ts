@@ -13,7 +13,7 @@ import {
 } from "./voiceToolCallToolRegistry.ts";
 import { executeLocalVoiceToolCall, executeMcpVoiceToolCall } from "./voiceToolCallDispatch.ts";
 import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
-import { isAbortError } from "../tools/browserTaskRuntime.ts";
+import { isAbortError } from "../tools/abortError.ts";
 import { shouldRequestVoiceToolFollowup } from "../tools/sharedToolSchemas.ts";
 
 type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;

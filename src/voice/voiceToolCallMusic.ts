@@ -19,7 +19,7 @@ import {
   setPendingMusicReplyHandoff,
   setMusicDisambiguationState
 } from "./voiceMusicPlayback.ts";
-import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
+import { throwIfAborted } from "../tools/abortError.ts";
 import { musicPhaseCanResume, musicPhaseIsActive } from "./voiceSessionTypes.ts";
 import type { MusicSelectionResult, VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";

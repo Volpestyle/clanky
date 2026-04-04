@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { clampInt } from "../normalization/numbers.ts";
 import { safeJsonParseFromString } from "../normalization/valueParsers.ts";
-import { createAbortError } from "../tools/browserTaskRuntime.ts";
+import { createAbortError } from "../tools/abortError.ts";
 import type { SubAgentProgressEvent } from "../agents/subAgentSession.ts";
 
 type ClaudeCliResult = {

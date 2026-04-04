@@ -10,7 +10,7 @@ import { clamp } from "../utils.ts";
 import { normalizeProviderOrder } from "../store/normalize/primitives.ts";
 import { normalizeWhitespaceText } from "../normalization/text.ts";
 import { sleep } from "../normalization/time.ts";
-import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
+import { throwIfAborted } from "../tools/abortError.ts";
 import {
   getRetryDelayMs,
   isRetryableFetchError,

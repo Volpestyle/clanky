@@ -8,7 +8,8 @@ import {
   isMinecraftSessionAuthorized,
   resolveMinecraftSessionById
 } from "../agents/minecraft/minecraftSessionAccess.ts";
-import { isAbortError, runBrowserBrowseTask } from "../tools/browserTaskRuntime.ts";
+import { isAbortError } from "../tools/abortError.ts";
+import { runBrowserBrowseTask } from "../tools/browserTaskRuntime.ts";
 import { runOpenAiComputerUseTask } from "../tools/openAiComputerUseRuntime.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
 import { stopBrowserSessionStreamPublish, startBrowserSessionStreamPublish } from "./voiceBrowserStreamPublish.ts";

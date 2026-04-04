@@ -2,6 +2,7 @@ import type { ImageInput } from "../llm/serviceShared.ts";
 import { runBrowseAgent } from "../agents/browseAgent.ts";
 import type { LLMService } from "../llm.ts";
 import type { BrowserManager } from "../services/BrowserManager.ts";
+import { createAbortError, isAbortError, throwIfAborted } from "./abortError.ts";
 
 type BrowserTaskActionEntry = {
   kind: string;
@@ -57,43 +58,6 @@ type ActiveBrowserTask = {
 };
 
 let browserTaskCounter = 0;
-
-function normalizeAbortReason(reason: unknown, fallbackMessage: string) {
-  if (typeof reason === "string" && reason.trim()) return reason.trim();
-  if (reason instanceof Error) {
-    const message = String(reason.message || "").trim();
-    if (message) return message;
-  }
-  return fallbackMessage;
-}
-
-export function createAbortError(reason: unknown = "Browser task cancelled") {
-  const error = new Error(`AbortError: ${normalizeAbortReason(reason, "Browser task cancelled")}`);
-  error.name = "AbortError";
-  return error;
-}
-
-export function isAbortError(error: unknown) {
-  if (!error) return false;
-  const name = String((error as { name?: unknown }).name || "").trim();
-  if (name === "AbortError") return true;
-
-  const code = String((error as { code?: unknown }).code || "").trim().toUpperCase();
-  if (code === "ABORT_ERR") return true;
-
-  const message = String((error as { message?: unknown }).message || "").toLowerCase();
-  return (
-    message.includes("aborterror") ||
-    message.includes("aborted") ||
-    message.includes("cancelled") ||
-    message.includes("canceled")
-  );
-}
-
-export function throwIfAborted(signal?: AbortSignal, fallbackReason = "Browser task cancelled"): void {
-  if (!signal?.aborted) return;
-  throw createAbortError(signal.reason || fallbackReason);
-}
 
 export function describeBrowserTaskError(error: unknown) {
   const rawName = String((error as { name?: unknown })?.name || "").trim();

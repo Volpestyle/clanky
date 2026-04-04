@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { createAbortError } from "../tools/browserTaskRuntime.ts";
+import { createAbortError } from "../tools/abortError.ts";
 import { buildRealtimeFunctionTools } from "./voiceToolCallToolRegistry.ts";
 import { refreshRealtimeTools } from "./voiceToolCallInfra.ts";
 import { createVoiceTestManager, createVoiceTestSettings } from "./voiceTestHarness.ts";

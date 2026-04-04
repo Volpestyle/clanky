@@ -5,7 +5,7 @@ import {
 } from "../settings/agentStack.ts";
 import { clamp } from "../utils.ts";
 import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
-import { isAbortError } from "../tools/browserTaskRuntime.ts";
+import { isAbortError } from "../tools/abortError.ts";
 import { getMusicWakeFollowupState } from "./musicWakeLatch.ts";
 import {
   VOICE_GENERATION_ONLY_WATCHDOG_MS,

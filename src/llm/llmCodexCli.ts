@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { safeJsonParseFromString } from "../normalization/valueParsers.ts";
-import { createAbortError } from "../tools/browserTaskRuntime.ts";
+import { createAbortError } from "../tools/abortError.ts";
 import { estimateUsdCost } from "./pricing.ts";
 import type { SubAgentProgressEvent } from "../agents/subAgentSession.ts";
 

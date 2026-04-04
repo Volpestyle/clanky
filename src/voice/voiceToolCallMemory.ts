@@ -6,7 +6,7 @@ import { MEMORY_SENSITIVE_PATTERN_RE, VOICE_MEMORY_WRITE_MAX_PER_MINUTE } from "
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
 import { invalidateSessionBehavioralMemoryCache } from "./voiceSessionMemoryCache.ts";
 import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
-import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
+import { throwIfAborted } from "../tools/abortError.ts";
 import type { VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 

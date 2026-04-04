@@ -36,7 +36,7 @@ import type {
   VoiceToolRuntimeSessionLike
 } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
-import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
+import { throwIfAborted } from "../tools/abortError.ts";
 
 type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
 

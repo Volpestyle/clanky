@@ -1,4 +1,4 @@
-import { isAbortError } from "../tools/browserTaskRuntime.ts";
+import { isAbortError } from "../tools/abortError.ts";
 import type { CodeAgentRole } from "./codeAgent.ts";
 import type {
   SubAgentProgressEvent,

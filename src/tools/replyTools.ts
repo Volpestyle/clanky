@@ -1,7 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { normalizeDirectiveText } from "../bot/botHelpers.ts";
 import type { ImageInput } from "../llm/serviceShared.ts";
-import { throwIfAborted } from "./browserTaskRuntime.ts";
+import { throwIfAborted } from "./abortError.ts";
 import {
   executeSharedMemoryToolSearch,
   executeSharedMemoryToolWrite
