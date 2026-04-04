@@ -54,7 +54,8 @@ import {
   getVideoContextSettings,
   getVisionSettings,
   getVoiceSettings,
-  isDevTaskEnabled
+  isDevTaskEnabled,
+  isMinecraftEnabled
 } from "../settings/agentStack.ts";
 import type { Settings } from "../settings/settingsSchema.ts";
 import {
@@ -459,6 +460,7 @@ function buildReplyToolAvailabilityState(
   const memoryEnabled = Boolean(getMemorySettings(settings).enabled);
   const voiceEnabled = Boolean(getVoiceSettings(settings).enabled);
   const codeAgentEnabled = isDevTaskEnabled(settings);
+  const minecraftEnabled = isMinecraftEnabled(settings);
 
   const webSearchReason =
     !webSearch?.enabled
@@ -503,7 +505,8 @@ function buildReplyToolAvailabilityState(
     imageLookupAvailable: imageLookupReason === "available",
     videoContextAvailable: videoContextReason === "available",
     codeAgentAvailable: codeTaskReason === "available",
-    voiceToolsAvailable: voiceToolReason === "available"
+    voiceToolsAvailable: voiceToolReason === "available",
+    minecraftAvailable: minecraftEnabled
   };
   const tools = buildReplyToolSet(settings, capabilities);
   const includedSet = new Set(tools.map((tool) => String(tool.name || "").trim()).filter(Boolean));

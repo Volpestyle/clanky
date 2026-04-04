@@ -755,3 +755,32 @@ export function isDevTaskEnabled(settings: unknown): boolean {
   const hasWorkers = Boolean(runtime?.codexCli?.enabled || runtime?.claudeCode?.enabled);
   return hasWorkers && Array.isArray(permissions.allowedUserIds) && permissions.allowedUserIds.length > 0;
 }
+
+// ── Minecraft ───────────────────────────────────────────────────────────────
+
+export type MinecraftConfig = {
+  mcpUrl: string;
+  operatorPlayerName: string | null;
+};
+
+/**
+ * Minecraft is enabled when the MCP server URL is configured via settings or
+ * the MINECRAFT_MCP_URL environment variable.
+ */
+export function isMinecraftEnabled(settings: unknown): boolean {
+  const s = settings as Record<string, unknown> | null;
+  const mc = (s?.minecraft ?? s?.minecraftAgent) as Record<string, unknown> | undefined;
+  if (mc?.enabled === false) return false;
+  return Boolean(mc?.mcpUrl || process.env.MINECRAFT_MCP_URL);
+}
+
+export function getMinecraftConfig(settings: unknown): MinecraftConfig {
+  const s = settings as Record<string, unknown> | null;
+  const mc = (s?.minecraft ?? s?.minecraftAgent) as Record<string, unknown> | undefined;
+  return {
+    mcpUrl: String(mc?.mcpUrl || process.env.MINECRAFT_MCP_URL || "http://127.0.0.1:3847"),
+    operatorPlayerName: mc?.operatorPlayerName
+      ? String(mc.operatorPlayerName)
+      : process.env.MC_OPERATOR_USERNAME || null
+  };
+}

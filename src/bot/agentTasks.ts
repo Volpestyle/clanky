@@ -16,7 +16,8 @@ import {
 } from "../tools/browserTaskRuntime.ts";
 import { clamp } from "../utils.ts";
 import { MAX_BROWSER_BROWSE_QUERY_LEN, normalizeDirectiveText } from "./botHelpers.ts";
-import { getResolvedBrowserTaskConfig, isDevTaskEnabled } from "../settings/agentStack.ts";
+import { getResolvedBrowserTaskConfig, isDevTaskEnabled, isMinecraftEnabled, getMinecraftConfig } from "../settings/agentStack.ts";
+import { createMinecraftSession as createMinecraftSessionRuntime } from "../agents/minecraft/minecraftSession.ts";
 import type { BrowserBrowseContextState } from "./budgetTracking.ts";
 import type { AgentContext } from "./botContext.ts";
 
@@ -434,11 +435,51 @@ function createBrowserAgentSession(
   });
 }
 
+export type CreateMinecraftSessionOptions = {
+  settings: Record<string, unknown>;
+  guildId?: string | null;
+  channelId?: string | null;
+  userId?: string | null;
+  source?: string;
+};
+
+function createMinecraftSession(
+  ctx: AgentContext,
+  {
+    settings,
+    guildId,
+    channelId = null,
+    userId = null,
+    source = "reply_session"
+  }: CreateMinecraftSessionOptions
+) {
+  if (!isMinecraftEnabled(settings)) return null;
+
+  const config = getMinecraftConfig(settings);
+  const scopeKey = buildScopeKey({ guildId, channelId });
+  return createMinecraftSessionRuntime({
+    scopeKey,
+    baseUrl: config.mcpUrl,
+    ownerUserId: userId,
+    operatorPlayerName: config.operatorPlayerName,
+    logAction: (entry) =>
+      ctx.store.logAction({
+        ...entry,
+        guildId,
+        channelId,
+        userId,
+        source
+      })
+  });
+}
+
 export function buildSubAgentSessionsRuntime(ctx: AgentContext) {
   return {
     manager: ctx.subAgentSessions,
     createCodeSession: (opts: CreateCodeAgentSessionOptions) => createCodeAgentSession(ctx, opts),
     createBrowserSession: (opts: CreateBrowserAgentSessionOptions) =>
-      createBrowserAgentSession(ctx, opts)
+      createBrowserAgentSession(ctx, opts),
+    createMinecraftSession: (opts: CreateMinecraftSessionOptions) =>
+      createMinecraftSession(ctx, opts)
   };
 }

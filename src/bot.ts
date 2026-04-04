@@ -414,6 +414,13 @@ export class ClankerBot {
     };
     this.voiceSessionManager.dispatchBackgroundCodeTask = (payload) =>
       this.dispatchBackgroundCodeTask(payload);
+    this.voiceSessionManager.createMinecraftSession = (opts) => {
+      const sessionsRuntime = buildSubAgentSessionsRuntime(voiceAgentContext);
+      return sessionsRuntime.createMinecraftSession({
+        ...opts,
+        settings: opts.settings || this.store.getSettings()
+      }) ?? null;
+    };
     this.voiceSessionManager.subAgentSessions = this.subAgentSessions;
 
     this.registerEvents();

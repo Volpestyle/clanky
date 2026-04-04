@@ -107,6 +107,13 @@ export type VoiceToolCallManager = Pick<
     blockedByBudget?: boolean;
     blockedByParallelLimit?: boolean;
   }>) | null;
+  createMinecraftSession?: ((args: {
+    settings?: VoiceRealtimeToolSettings | null;
+    guildId: string;
+    channelId: string;
+    userId: string | null;
+    source: string;
+  }) => SubAgentSession | null | undefined) | null;
   subAgentSessions?: SubAgentSessionRegistry | null;
 };
 

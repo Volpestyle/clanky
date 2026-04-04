@@ -374,6 +374,7 @@ export class VoiceSessionManager {
   createCodeAgentSession: VoiceToolCallManager["createCodeAgentSession"];
   runModelRequestedCodeTask: VoiceToolCallManager["runModelRequestedCodeTask"];
   dispatchBackgroundCodeTask: VoiceToolCallManager["dispatchBackgroundCodeTask"];
+  createMinecraftSession: VoiceToolCallManager["createMinecraftSession"];
   subAgentSessions: VoiceToolCallManager["subAgentSessions"];
 
   constructor({
@@ -410,6 +411,7 @@ export class VoiceSessionManager {
     this.createCodeAgentSession = null;
     this.runModelRequestedCodeTask = null;
     this.dispatchBackgroundCodeTask = null;
+    this.createMinecraftSession = null;
     this.subAgentSessions = null;
     this.sessions = new Map();
     this.pendingSessionGuildIds = new Set();

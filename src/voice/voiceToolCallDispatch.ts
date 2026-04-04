@@ -2,6 +2,7 @@ import { clamp } from "../utils.ts";
 import {
   executeVoiceBrowserBrowseTool,
   executeVoiceCodeTaskTool,
+  executeVoiceMinecraftTaskTool,
   executeVoiceShareBrowserSessionTool,
   executeVoiceStopVideoShareTool
 } from "./voiceToolCallAgents.ts";
@@ -287,6 +288,13 @@ const LOCAL_VOICE_TOOL_HANDLERS: Record<
     }),
   code_task: async (manager, opts) =>
     await executeVoiceCodeTaskTool(manager, {
+      session: opts.session,
+      settings: opts.settings,
+      args: opts.args,
+      signal: opts.signal
+    }),
+  minecraft_task: async (manager, opts) =>
+    await executeVoiceMinecraftTaskTool(manager, {
       session: opts.session,
       settings: opts.settings,
       args: opts.args,
