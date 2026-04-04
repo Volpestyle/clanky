@@ -52,11 +52,14 @@ It also carries lightweight long-horizon state inside the session:
 ### Discord text
 
 - The text/orchestrator brain decides whether to use `minecraft_task`.
+- The text system prompt explicitly describes Minecraft as an embodied-self handoff, not a command router.
 - Once a Minecraft session exists, the instruction is handed to the Minecraft brain for in-world interpretation.
+- When the current channel already has an active Minecraft session, the user prompt includes a one-line session-state hint so the orchestrator can keep continuity without re-querying blindly.
 
 ### Discord voice
 
 - The voice runtime decides whether to use `minecraft_task`.
+- The voice system prompt uses the same embodied-self framing, and the live voice prompt includes the same active-session hint when a Minecraft session already exists for the current scope.
 - Once a Minecraft session exists, the instruction is handed to the same Minecraft brain.
 
 ### Minecraft chat
@@ -66,12 +69,18 @@ It also carries lightweight long-horizon state inside the session:
 
 The transport that delivered the instruction does not change who is making the Minecraft decision.
 
+### Cross-surface Discord context
+
+When the Minecraft session is scoped to a guild channel, the brain also sees a labeled window of recent Discord channel messages on every planning turn and every in-game chat reply. In-game chat history and Discord channel history are kept in separate prompt sections so the brain can reason about surface-of-origin — it knows which speaker was in Minecraft versus in Discord and can connect follow-ups across surfaces ("Volpe said 'help Alice' in voice, Alice just typed 'hey clanky help me' in MC chat") without conflating the two streams.
+
+DM/owner-private scopes deliberately receive no Discord context. That filter happens at the plumbing boundary: the `getRecentDiscordContext` callback is simply not wired for DM-scoped sessions, so private conversation cannot leak into Minecraft chat visible to other players.
+
 ## Runtime Shape
 
 The live path is:
 
 1. A Discord text turn, Discord voice turn, or Minecraft chat event reaches the active `MinecraftSession`.
-2. The session assembles world state, recent game events, chat history, current mode, constraints, preferred server target, and longer-horizon planner state.
+2. The session assembles world state, recent game events, in-game chat history, recent Discord channel context (guild-scoped sessions only), current mode, constraints, preferred server target, and longer-horizon planner state.
 3. The Minecraft brain chooses a structured checkpoint action plus any goal/subgoal/progress updates.
 4. The session may run a bounded internal planner loop for that turn when the brain marks the step as a setup/checkpoint, such as `connect` before `follow`.
 5. The session converts each chosen action into concrete MCP tool calls.

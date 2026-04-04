@@ -14,8 +14,17 @@ import {
   buildVoiceToneGuardrails
 } from "./promptCore.ts";
 import { buildTextCapabilitiesDocs, buildVoiceCapabilitiesDocs, type TextSystemCapabilityFlags, type VoiceSystemCapabilityFlags } from "./promptCapabilities.ts";
-import { getMemorySettings, getVoiceSettings, getAutomationsSettings, getDiscoverySettings, getVideoContextSettings, getVoiceStreamWatchSettings } from "../settings/agentStack.ts";
-import { isResearchEnabled, isBrowserEnabled } from "../settings/agentStack.ts";
+import {
+  getMemorySettings,
+  getVoiceSettings,
+  getAutomationsSettings,
+  getDiscoverySettings,
+  getVideoContextSettings,
+  getVoiceStreamWatchSettings,
+  isBrowserEnabled,
+  isMinecraftEnabled,
+  isResearchEnabled
+} from "../settings/agentStack.ts";
 import { extractUrlsFromText } from "../bot/botHelpers.ts";
 
 const IMAGE_URL_RE = /\.(?:jpe?g|png|gif|webp|bmp|heic)(?:$|[?#])/i;
@@ -50,6 +59,7 @@ export function buildSystemPrompt(settings) {
     webSearchEnabled: isResearchEnabled(settings),
     browserEnabled: isBrowserEnabled(settings),
     memoryEnabled,
+    minecraftEnabled: isMinecraftEnabled(settings),
     mediaGenerationEnabled: Boolean(discovery.allowReplyImages || discovery.allowReplyVideos),
     gifsEnabled: Boolean(discovery.allowReplyGifs),
     automationEnabled: Boolean(getAutomationsSettings(settings).enabled),
@@ -88,6 +98,7 @@ export function buildVoiceSystemPrompt(settings) {
     webSearchEnabled: isResearchEnabled(settings),
     browserEnabled: isBrowserEnabled(settings),
     memoryEnabled,
+    minecraftEnabled: isMinecraftEnabled(settings),
     screenShareEnabled: Boolean(getVoiceStreamWatchSettings(settings).enabled)
   };
 

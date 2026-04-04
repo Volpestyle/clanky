@@ -273,6 +273,40 @@ test("code_task included when code agent is enabled and one-shot runtime hook is
   assert.ok(names.includes("code_task"), "code_task should be included when runtime hook is available");
 });
 
+test("voice minecraft_task tool is included when Minecraft is enabled and session hooks are available", () => {
+  const { manager } = createManager();
+  manager.createMinecraftSession = async () => null;
+  manager.subAgentSessions = {
+    get() {
+      return null;
+    },
+    register() {},
+    list() {
+      return [];
+    },
+    remove() {
+      return false;
+    }
+  };
+
+  const tools = resolveVoiceRealtimeToolDescriptors(manager, {
+    session: null,
+    settings: {
+      memory: { enabled: false },
+      agentStack: {
+        runtimeConfig: {
+          minecraft: {
+            enabled: true
+          }
+        }
+      }
+    }
+  });
+
+  const names = tools.map((t: { name: string }) => t.name);
+  assert.ok(names.includes("minecraft_task"), "minecraft_task should be included");
+});
+
 // --- Fix 2: Short transcript passes through normalizeVoiceText ---
 
 test("normalizeVoiceText passes through short text", () => {

@@ -211,6 +211,7 @@ export function buildVoiceTurnPrompt({
   webSearch = null,
   browserBrowse = null,
   recentConversationHistory = [],
+  minecraftSessionHint = "",
   allowWebSearchToolCall = false,
   allowBrowserBrowseToolCall = false,
   screenShare: _screenShare = null,
@@ -787,6 +788,14 @@ export function buildVoiceTurnPrompt({
 
   if (recentConversationHistory?.length) {
     parts.push("Past conversation:\n" + formatConversationWindows(recentConversationHistory));
+  }
+
+  const normalizedMinecraftSessionHint = String(minecraftSessionHint || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 420);
+  if (normalizedMinecraftSessionHint) {
+    parts.push(normalizedMinecraftSessionHint);
   }
 
   if (normalizedCompactedSessionSummary?.text) {

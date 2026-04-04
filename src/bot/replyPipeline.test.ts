@@ -8,9 +8,10 @@ import { buildReplyPipelineRuntime } from "./botRuntimeFactories.ts";
 import { maybeReplyToMessagePipeline } from "./replyPipeline.ts";
 import type { ActiveReply } from "../tools/activeReplyRegistry.ts";
 import { ActiveReplyRegistry, buildTextReplyScopeKey } from "../tools/activeReplyRegistry.ts";
-import { createAbortError } from "../tools/browserTaskRuntime.ts";
+import { createAbortError } from "../tools/abortError.ts";
 import { Store } from "../store/store.ts";
 import { createTestSettingsPatch } from "../testSettings.ts";
+import type { SubAgentSession } from "../agents/subAgentSession.ts";
 
 class TrackingActiveReplyRegistry extends ActiveReplyRegistry {
   clearCalls = 0;
@@ -841,5 +842,148 @@ test("maybeReplyToMessagePipeline includes current message video attachments wit
       llmCalls[0]?.userPrompt || "",
       /https:\/\/cdn\.discordapp\.com\/attachments\/1\/2\/demo\.mp4/
     );
+  });
+});
+
+test("maybeReplyToMessagePipeline includes Minecraft docs, tool exposure, and active session hint", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-mc-1";
+    applyBaselineSettings(store, channelId);
+    store.patchSettings({
+      agentStack: {
+        runtimeConfig: {
+          minecraft: {
+            enabled: true
+          }
+        }
+      }
+    });
+
+    const llmCalls: Array<{
+      systemPrompt: string;
+      userPrompt: string;
+      tools: Array<{ name?: string }>;
+    }> = [];
+    const replyPayloads: Array<Record<string, unknown>> = [];
+    const channelSendPayloads: Array<Record<string, unknown>> = [];
+    const typingCallsRef = { count: 0 };
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate(payload) {
+          llmCalls.push({
+            systemPrompt: String(payload.systemPrompt || ""),
+            userPrompt: String(payload.userPrompt || ""),
+            tools: Array.isArray(payload.tools) ? payload.tools as Array<{ name?: string }> : []
+          });
+          return {
+            text: JSON.stringify({
+              text: "Minecraft noted.",
+              skip: false,
+              reactionEmoji: null,
+              media: null,
+              automationAction: {
+                operation: "none",
+                title: null,
+                instruction: null,
+                schedule: null,
+                targetQuery: null,
+                automationId: null,
+                runImmediately: false,
+                targetChannelId: null
+              },
+              screenWatchIntent: {
+                action: "none",
+                confidence: 0,
+                reason: null
+              }
+            }),
+            toolCalls: [],
+            rawContent: null,
+            provider: "claude-oauth",
+            model: "claude-opus-4-6",
+            usage: {
+              inputTokens: 10,
+              outputTokens: 10,
+              cacheWriteTokens: 0,
+              cacheReadTokens: 0
+            },
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanky",
+      tag: "clanky#0001"
+    };
+    const minecraftSession: SubAgentSession & { getPromptStateHint(): string } = {
+      id: "minecraft:guild-1:chan-mc-1:1:1",
+      type: "minecraft",
+      createdAt: Date.now(),
+      ownerUserId: "user-1",
+      lastUsedAt: Date.now(),
+      status: "idle",
+      getPromptStateHint() {
+        return "[Minecraft] Active session - goal: \"Stay with Steve\" | mode: companion | server: Survival SMP | connected: yes | last action: Following Steve.";
+      },
+      async runTurn() {
+        throw new Error("not used");
+      },
+      cancel() {},
+      close() {}
+    };
+    bot.subAgentSessions.register(minecraftSession);
+
+    const guild = buildGuild();
+    const channel = buildChannel({
+      guild,
+      channelId,
+      channelSendPayloads,
+      typingCallsRef
+    });
+    const message = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-mc-1",
+      content: "what's going on in Minecraft?",
+      replyPayloads
+    });
+
+    const settings = store.getSettings();
+    const runtime = buildReplyPipelineRuntime(bot, {
+      captionTimestamps: [],
+      unsolicitedReplyContextWindow: 2
+    });
+
+    const handled = await maybeReplyToMessagePipeline(runtime, message, settings, {
+      source: "message_event",
+      forceDecisionLoop: true,
+      forceRespond: true,
+      recentMessages: [],
+      triggerMessageIds: [message.id],
+      addressSignal: {
+        direct: true,
+        inferred: false,
+        triggered: true,
+        reason: "direct_address"
+      }
+    });
+
+    assert.equal(handled, true);
+    assert.equal(typingCallsRef.count, 1);
+    assert.match(llmCalls[0]?.systemPrompt || "", /=== MINECRAFT ===/);
+    assert.match(llmCalls[0]?.systemPrompt || "", /hand over the user's intent or relevant context/i);
+    assert.match(llmCalls[0]?.userPrompt || "", /\[Minecraft\] Active session - goal: "Stay with Steve"/);
+    assert.equal(llmCalls[0]?.tools.some((tool) => tool?.name === "minecraft_task"), true);
   });
 });

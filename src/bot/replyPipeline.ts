@@ -27,7 +27,7 @@ import {
 import {
   isAbortError,
   throwIfAborted
-} from "../tools/browserTaskRuntime.ts";
+} from "../tools/abortError.ts";
 import { buildRuntimeDecisionCorrelation } from "../services/runtimeCorrelation.ts";
 import { resolveDeterministicMentions } from "./mentions.ts";
 import {
@@ -65,6 +65,11 @@ import {
 } from "../llm/serviceShared.ts";
 import { VOICE_TOOL_SCHEMAS } from "../tools/sharedToolSchemas.ts";
 import type { ReplyPipelineRuntime } from "./botContext.ts";
+import {
+  buildMinecraftSessionScopeKey,
+  findReusableMinecraftSession,
+  getMinecraftSessionPromptHint
+} from "../agents/minecraft/minecraftSessionAccess.ts";
 
 type ReplyPipelineAttachment = {
   url?: string;
@@ -270,6 +275,7 @@ type ReplyPipelineContext = {
   memoryLookup: ReturnType<ReplyPipelineRuntime["buildMemoryLookupContext"]>;
   modelImageInputs: ReplyImageInput[];
   imageLookup: ReturnType<ReplyPipelineRuntime["buildImageLookupContext"]>;
+  subAgentSessions: ReturnType<ReplyPipelineRuntime["buildSubAgentSessionsRuntime"]>;
   replyTrace: ReplyTrace;
   screenShareCapability: ReturnType<ReplyPipelineRuntime["getVoiceScreenWatchCapability"]>;
   activeVoiceSession: ReturnType<ReplyPipelineRuntime["voiceSessionManager"]["getSession"]> | null;
@@ -519,6 +525,7 @@ function buildReplyToolAvailabilityState(
     { name: "conversation_search", reason: "available" },
     { name: "image_lookup", reason: imageLookupReason },
     { name: "code_task", reason: codeTaskReason },
+    { name: "minecraft_task", reason: minecraftEnabled ? "available" : "settings_disabled" },
     ...VOICE_TOOL_SCHEMAS.map((schema) => ({
       name: schema.name,
       reason: voiceToolReason
@@ -823,6 +830,15 @@ async function buildReplyContext(
       typeof bot.voiceSessionManager?.getMusicPromptContext === "function"
       ? bot.voiceSessionManager.getMusicPromptContext(activeVoiceSession)
       : null;
+  const subAgentSessions = bot.buildSubAgentSessionsRuntime();
+  const activeMinecraftSession = findReusableMinecraftSession(subAgentSessions.manager, {
+    ownerUserId: message.author.id,
+    scopeKey: buildMinecraftSessionScopeKey({
+      guildId: message.guildId,
+      channelId: message.channelId
+    })
+  });
+  const minecraftSessionHint = getMinecraftSessionPromptHint(activeMinecraftSession);
 
   const systemPrompt = buildSystemPrompt(settings);
   const replyPromptBase: ReplyPromptBase = {
@@ -887,6 +903,7 @@ async function buildReplyContext(
     },
     recentConversationHistory,
     recentVoiceSessionContext,
+    minecraftSessionHint,
     screenShare: screenShareCapability,
     channelMode: isReplyChannel
       ? "reply_channel"
@@ -919,7 +936,7 @@ async function buildReplyContext(
     memorySlice, replyMediaMemoryFacts, attachmentImageInputs, attachmentVideoInputs, videoLookupRefs, imageBudget, videoBudget,
     mediaCapabilities, simpleImageCapabilityReady, complexImageCapabilityReady, imageCapabilityReady,
     videoCapabilityReady, gifBudget, gifsConfigured, webSearch, browserBrowse, recentConversationHistory, recentVoiceSessionContext, memoryLookup,
-    modelImageInputs, imageLookup, replyTrace, screenShareCapability,
+    modelImageInputs, imageLookup, subAgentSessions, replyTrace, screenShareCapability,
     activeVoiceSession, inVoiceChannelNow, activeVoiceParticipantRoster, musicState, musicDisambiguation,
     systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture, replyPrompts
   };
@@ -940,6 +957,7 @@ async function executeReplyLlm(
   } = ctx;
   const { memoryLookup } = ctx;
   let { webSearch, browserBrowse, modelImageInputs, imageLookup, replyPrompts } = ctx;
+  const { subAgentSessions } = ctx;
 
   const replyToolAvailability = buildReplyToolAvailabilityState(settings, {
     webSearch,
@@ -1070,7 +1088,7 @@ async function executeReplyLlm(
     },
     memory: bot.memory,
     store: bot.store,
-    subAgentSessions: bot.buildSubAgentSessionsRuntime(),
+    subAgentSessions,
     backgroundCodeTasks: {
       dispatch: (args) => bot.dispatchBackgroundCodeTask(args),
       getTask: (taskId) => bot.backgroundTaskRunner.getTask(taskId),

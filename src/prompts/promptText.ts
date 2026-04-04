@@ -154,6 +154,7 @@ export function buildReplyPrompt({
   browserBrowse = null,
   recentConversationHistory = [],
   recentVoiceSessionContext = [],
+  minecraftSessionHint = "",
   memoryLookup = null,
   imageLookup = null,
   allowMemoryDirective: _allowMemoryDirective = false,
@@ -223,6 +224,14 @@ export function buildReplyPrompt({
     parts.push("=== RECENT VOICE SESSION CONTEXT ===");
     parts.push("A voice session in this channel ended recently. Treat this as fresh continuity for the room, not as a brand-new direct message to you.");
     parts.push(formatRecentVoiceSessionContext(recentVoiceSessionContext));
+  }
+
+  const normalizedMinecraftSessionHint = String(minecraftSessionHint || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 420);
+  if (normalizedMinecraftSessionHint) {
+    parts.push(normalizedMinecraftSessionHint);
   }
 
   if (participantProfiles?.length || selfFacts?.length || loreFacts?.length) {

@@ -241,9 +241,9 @@ export const CODE_TASK_SCHEMA: SharedToolSchema = {
 export const MINECRAFT_TASK_SCHEMA: SharedToolSchema = {
   name: "minecraft_task",
   description:
-    "Send intent to Clanky's embodied Minecraft session brain. " +
-    "action=run starts or continues a Minecraft session and lets the Minecraft brain update its in-world goal state and choose the next structured high-level action. " +
-    "action=followup sends additional instructions to an active session. " +
+    "Send intent or relevant context to Clanky's embodied Minecraft self. " +
+    "action=run starts or continues a Minecraft session and lets the Minecraft brain decide the next in-world action. " +
+    "action=followup sends additional intent or context to an active session. " +
     "action=status returns the bot's current world state, task progress, and hazards. " +
     "action=cancel stops the current behavior and returns to idle.",
   voiceContinuationPolicy: "always",
@@ -258,9 +258,8 @@ export const MINECRAFT_TASK_SCHEMA: SharedToolSchema = {
       task: {
         type: "string",
         description:
-          "Natural language instruction or context for the Minecraft brain. " +
-          "Examples: 'follow me', 'guard me from mobs', 'collect 16 oak logs', " +
-          "'go to 100 64 200', 'connect to the server', 'disconnect'. " +
+          "Natural-language intent or relevant context for Clanky's embodied Minecraft self. " +
+          "Describe what the user wants or what is happening around the Minecraft session; the Minecraft brain decides the in-world action. " +
           "Required for run and followup."
       },
       mode: {

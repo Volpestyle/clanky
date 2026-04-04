@@ -35,7 +35,7 @@ import type {
 import { MinecraftRuntime, type McpStatusSnapshot } from "./minecraftRuntime.ts";
 import { buildWorldSnapshot } from "./minecraftWorldModel.ts";
 import { evaluateReflexes, executeReflex } from "./minecraftReflexes.ts";
-import type { MinecraftBrain, MinecraftChatMessage } from "./minecraftBrain.ts";
+import type { DiscordContextMessage, MinecraftBrain, MinecraftChatMessage } from "./minecraftBrain.ts";
 import { FollowPlayerSkill } from "./skills/followPlayer.ts";
 import { GuardPlayerSkill } from "./skills/guardPlayer.ts";
 import { CollectBlockSkill } from "./skills/collectBlock.ts";
@@ -176,6 +176,31 @@ function formatServerTarget(serverTarget: MinecraftServerTarget | null): string 
   return parts.length > 0 ? parts.join("; ") : "none configured";
 }
 
+function normalizePromptHintPart(value: unknown, fallback: string, maxLen: number): string {
+  const normalized = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return fallback;
+  return normalized.slice(0, Math.max(1, maxLen));
+}
+
+function cloneServerTarget(serverTarget: MinecraftServerTarget | null): MinecraftServerTarget | null {
+  return serverTarget ? { ...serverTarget } : null;
+}
+
+function diffServerTargetFields(
+  previousTarget: MinecraftServerTarget | null,
+  nextTarget: MinecraftServerTarget | null
+): Array<keyof MinecraftServerTarget> {
+  const changedFields: Array<keyof MinecraftServerTarget> = [];
+  for (const field of ["label", "host", "port", "description"] as const) {
+    if ((previousTarget?.[field] ?? null) !== (nextTarget?.[field] ?? null)) {
+      changedFields.push(field);
+    }
+  }
+  return changedFields;
+}
+
 function mergePlannerTextEntries(current: string[], next: string[], limit: number): string[] {
   const merged = [...current];
   for (const entry of next) {
@@ -210,7 +235,13 @@ function canContinueAfterBrainAction(action: MinecraftBrainAction): boolean {
     || action.kind === "look_at";
 }
 
-// ── Command parsing ─────────────────────────────────────────────────────────
+// ── Structured command routing ──────────────────────────────────────────────
+//
+// The session has exactly one decision-maker: the embodied Minecraft brain.
+// Callers hand over intent via `task` and the brain picks the in-world
+// action.  A narrow set of bare read/teardown commands can bypass the brain
+// directly via `parsed.command` — they are deterministic, argument-free, and
+// safe to route without reasoning.  Anything else falls through to the brain.
 
 type ParsedCommand =
   | { kind: "connect"; host?: string; port?: number; username?: string; auth?: string }
@@ -231,94 +262,20 @@ type CommandExecutionResult = {
   ok: boolean;
 };
 
-const COORD_RE = /(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)/;
-
-function parseCommand(task: string, mode: MinecraftMode | undefined, operatorPlayerName: string | null): ParsedCommand {
-  const lower = task.toLowerCase().trim();
-
-  // Explicit commands
-  if (/^connect\b/.test(lower)) return { kind: "connect" };
-  if (/^disconnect\b/.test(lower)) return { kind: "disconnect" };
-  if (/^status\b/.test(lower)) return { kind: "status" };
-  if (/^stop\b|^halt\b|^idle\b/.test(lower)) return { kind: "stop" };
-
-  // Chat
-  if (/^(?:chat|say)\s+/.test(lower)) {
-    return { kind: "chat", message: task.replace(/^(?:chat|say)\s+/i, "").trim() };
+function parseStructuredCommand(raw: string): ParsedCommand | null {
+  const command = String(raw || "").trim().toLowerCase();
+  if (!command) return null;
+  switch (command) {
+    case "status": return { kind: "status" };
+    case "stop":
+    case "halt":
+    case "idle": return { kind: "stop" };
+    case "disconnect": return { kind: "disconnect" };
+    case "attack": return { kind: "attack" };
+    case "return_home":
+    case "return": return { kind: "return_home" };
+    default: return null;
   }
-
-  // Go-to coordinates
-  const coordMatch = task.match(COORD_RE);
-  if (/^(?:go\s*to|move\s*to|walk\s*to|navigate\s*to)\b/.test(lower) && coordMatch) {
-    return {
-      kind: "go_to",
-      x: Number(coordMatch[1]),
-      y: Number(coordMatch[2]),
-      z: Number(coordMatch[3])
-    };
-  }
-
-  // Return home
-  if (/\b(?:come\s*home|go\s*home|return\s*home|return)\b/.test(lower)) {
-    return { kind: "return_home" };
-  }
-
-  // Attack
-  if (/^attack\b/.test(lower)) return { kind: "attack" };
-
-  // Look at
-  if (/^look\s*at\b/.test(lower)) {
-    const name = task.replace(/^look\s*at\s*/i, "").trim();
-    return { kind: "look_at", playerName: name || operatorPlayerName || "" };
-  }
-
-  // Collect / gather / mine
-  const collectMatch = lower.match(/^(?:collect|gather|mine|get)\s+(\d+)?\s*(.+)/);
-  if (collectMatch) {
-    const count = collectMatch[1] ? Number(collectMatch[1]) : 1;
-    const blockName = collectMatch[2].trim().replace(/\s+/g, "_");
-    return { kind: "collect", blockName, count };
-  }
-
-  // Follow
-  if (/\bfollow\b/.test(lower)) {
-    const name = extractPlayerName(task, /\bfollow\s+/i, operatorPlayerName);
-    return { kind: "follow", playerName: name };
-  }
-
-  // Guard / protect / defend
-  if (/\b(?:guard|protect|defend)\b/.test(lower)) {
-    const name = extractPlayerName(task, /\b(?:guard|protect|defend)\s+/i, operatorPlayerName);
-    return { kind: "guard", playerName: name };
-  }
-
-  // Mode-based fallback
-  if (mode === "companion" || mode === "idle") {
-    if (operatorPlayerName) return { kind: "follow", playerName: operatorPlayerName };
-    return { kind: "status" };
-  }
-  if (mode === "guard") {
-    if (operatorPlayerName) return { kind: "guard", playerName: operatorPlayerName };
-    return { kind: "status" };
-  }
-  if (mode === "gather") {
-    // Try to extract block name from the task
-    const words = task.split(/\s+/).filter(Boolean);
-    if (words.length > 0) {
-      return { kind: "collect", blockName: words.join("_"), count: 1 };
-    }
-    return { kind: "status" };
-  }
-
-  // Unknown — treat as status query
-  return { kind: "status" };
-}
-
-function extractPlayerName(task: string, prefix: RegExp, fallback: string | null): string {
-  const cleaned = task.replace(prefix, "").replace(/\bme\b/gi, "").trim();
-  const name = cleaned.split(/\s+/)[0];
-  if (name && name.length > 0 && name !== "me") return name;
-  return fallback || "";
 }
 
 // ── Status formatting ───────────────────────────────────────────────────────
@@ -374,6 +331,16 @@ export type MinecraftSessionOptions = {
    * The outer system can use this for proactive narration in Discord.
    */
   onGameEvent?: (events: string[]) => void;
+  /**
+   * Returns recent Discord channel messages tied to this session's scope,
+   * so the Minecraft brain can reason about cross-surface follow-ups.
+   *
+   * Pull-style on purpose: the session only calls this when it is about to
+   * invoke the brain, so Discord reads stay cheap and fresh. Returns an empty
+   * array (or `undefined`) when there's nothing to share — the outer layer is
+   * responsible for filtering owner-private / DM context out at the boundary.
+   */
+  getRecentDiscordContext?: () => DiscordContextMessage[];
   /**
    * LLM-powered embodied Minecraft brain.
    * It owns both operator-turn planning and in-game chat behavior.
@@ -461,6 +428,11 @@ export class MinecraftSession extends BaseAgentSession {
   private seenEventCount = 0;
   private readonly onGameEvent: ((events: string[]) => void) | undefined;
 
+  // ── Cross-surface context ──
+  private readonly getRecentDiscordContext:
+    | (() => DiscordContextMessage[])
+    | undefined;
+
   // ── Minecraft brain ──
   private readonly brain: MinecraftBrain | undefined;
   private readonly chatHistory: MinecraftChatMessage[] = [];
@@ -482,6 +454,7 @@ export class MinecraftSession extends BaseAgentSession {
     this.constraints = options.constraints ?? {};
     this.homePosition = options.homePosition ?? null;
     this.onGameEvent = options.onGameEvent;
+    this.getRecentDiscordContext = options.getRecentDiscordContext;
     this.brain = options.brain;
     this.plannerState = {
       activeGoal: null,
@@ -653,6 +626,24 @@ export class MinecraftSession extends BaseAgentSession {
   }
 
   /**
+   * Pull recent Discord channel context (if the outer layer provided a
+   * callback). Failures never break the brain — we just drop to an empty
+   * array and log once per failure.
+   */
+  private resolveDiscordContext(): DiscordContextMessage[] {
+    if (!this.getRecentDiscordContext) return [];
+    try {
+      const entries = this.getRecentDiscordContext();
+      return Array.isArray(entries) ? entries : [];
+    } catch (error) {
+      this.logLifecycle("minecraft_discord_context_error", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return [];
+    }
+  }
+
+  /**
    * Process an incoming Minecraft chat message through the session brain.
    *
    * Applies a cooldown to avoid rapid-fire responses and serializes
@@ -673,6 +664,7 @@ export class MinecraftSession extends BaseAgentSession {
         sender,
         message,
         chatHistory: this.chatHistory.slice(-20),
+        discordContext: this.resolveDiscordContext(),
         worldSnapshot: snapshot,
         botUsername: this.botUsername || "ClankyBuddy",
         mode: this.mode,
@@ -828,6 +820,27 @@ export class MinecraftSession extends BaseAgentSession {
     return parts.join(" ").trim();
   }
 
+  getPromptStateHint(): string {
+    const goal = normalizePromptHintPart(this.plannerState.activeGoal, "none", 120);
+    const mode = normalizePromptHintPart(this.mode, "idle", 32);
+    const server = normalizePromptHintPart(formatServerTarget(this.serverTarget), "none configured", 120);
+    const lastAction = normalizePromptHintPart(this.plannerState.lastActionResult, "none", 140);
+    return `[Minecraft] Active session - goal: "${goal}" | mode: ${mode} | server: ${server} | connected: ${this.botConnected ? "yes" : "no"} | last action: ${lastAction}`;
+  }
+
+  private logServerTargetUpdate(
+    source: "brain_action" | "turn_input",
+    previousTarget: MinecraftServerTarget | null,
+    nextTarget: MinecraftServerTarget | null
+  ): void {
+    this.logLifecycle("minecraft_server_target_updated", {
+      source,
+      previousServerTarget: cloneServerTarget(previousTarget),
+      serverTarget: cloneServerTarget(nextTarget),
+      changedFields: diffServerTargetFields(previousTarget, nextTarget)
+    });
+  }
+
   private resolveBrainActionCommand(action: MinecraftBrainAction): ParsedCommand {
     switch (action.kind) {
       case "connect": {
@@ -883,13 +896,11 @@ export class MinecraftSession extends BaseAgentSession {
     }
 
     if (action.kind === "connect") {
+      const previousTarget = cloneServerTarget(this.serverTarget);
       const updatedTarget = mergeServerTargets(this.serverTarget, normalizeMinecraftServerTarget(action.target));
       if (updatedTarget) {
         this.serverTarget = updatedTarget;
-        this.logLifecycle("minecraft_server_target_updated", {
-          source: "brain_action",
-          serverTarget: this.serverTarget
-        });
+        this.logServerTargetUpdate("brain_action", previousTarget, this.serverTarget);
       }
     }
 
@@ -901,7 +912,7 @@ export class MinecraftSession extends BaseAgentSession {
     options: SubAgentTurnOptions
   ): Promise<{ text: string; costUsd: number }> {
     if (!this.brain) {
-      return { text: task, costUsd: 0 };
+      throw new Error("Minecraft brain is unavailable for natural-language planning.");
     }
 
     const instruction = task.trim();
@@ -918,6 +929,7 @@ export class MinecraftSession extends BaseAgentSession {
       const decision = await this.brain.planTurn({
         instruction: checkpointInstruction,
         chatHistory: this.chatHistory.slice(-20),
+        discordContext: this.resolveDiscordContext(),
         worldSnapshot: snapshot,
         botUsername: this.botUsername || "ClankyBuddy",
         mode: this.mode,
@@ -983,21 +995,17 @@ export class MinecraftSession extends BaseAgentSession {
     if (normalizedConstraints) this.constraints = { ...this.constraints, ...normalizedConstraints };
     if (parsed.operatorPlayerName) this.operatorPlayerName = parsed.operatorPlayerName;
     if (normalizedServerTarget) {
+      const previousTarget = cloneServerTarget(this.serverTarget);
       this.serverTarget = mergeServerTargets(this.serverTarget, normalizedServerTarget);
-      this.logLifecycle("minecraft_server_target_updated", {
-        source: "turn_input",
-        serverTarget: this.serverTarget
-      });
+      this.logServerTargetUpdate("turn_input", previousTarget, this.serverTarget);
     }
 
     const task = parsed.task || "";
-    let command = parsed.command ? parseCommand(parsed.command, this.mode, this.operatorPlayerName) : null;
+    let command: ParsedCommand | null = parsed.command ? parseStructuredCommand(parsed.command) : null;
     let costUsd = 0;
     if (!command && !task) {
+      // No task and no recognizable structured command — default to a status read.
       command = { kind: "status" };
-    }
-    if (!command && task && !this.brain) {
-      command = parseCommand(task, this.mode, this.operatorPlayerName);
     }
 
     const startMs = Date.now();
@@ -1009,6 +1017,22 @@ export class MinecraftSession extends BaseAgentSession {
       serverTarget: this.serverTarget,
       plannerState: this.getPlannerStateSnapshot()
     });
+
+    if (!command && !this.brain) {
+      const message = "Minecraft brain is unavailable for natural-language planning.";
+      this.logLifecycle("minecraft_turn_error", {
+        turnCount: this.turnCount,
+        command: "planner",
+        error: message
+      });
+      return {
+        text: `Minecraft task failed: ${message}`,
+        costUsd,
+        isError: true,
+        errorMessage: message,
+        usage: { ...EMPTY_USAGE }
+      };
+    }
 
     try {
       let resultText = "";

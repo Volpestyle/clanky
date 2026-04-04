@@ -16,6 +16,7 @@ type SessionLike = {
   status?: string;
   ownerUserId?: string | null;
   lastUsedAt?: number;
+  getPromptStateHint?: () => string | null;
   cancel?: (reason?: string) => void;
 };
 
@@ -90,6 +91,14 @@ export function findReusableMinecraftSession<TSession extends SessionLike>(
     return activeSessions.find((session) => !session.ownerUserId && sessionMatchesScope(session.id, scopeKey)) ?? null;
   }
   return activeSessions.find((session) => !session.ownerUserId) ?? null;
+}
+
+export function getMinecraftSessionPromptHint<TSession extends SessionLike>(
+  session: TSession | null | undefined
+): string | null {
+  return typeof session?.getPromptStateHint === "function"
+    ? session.getPromptStateHint()
+    : null;
 }
 
 export function findConflictingMinecraftSession<TSession extends SessionLike>(

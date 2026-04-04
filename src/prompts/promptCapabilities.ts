@@ -46,6 +46,7 @@ const TEXT_TOOL_SUMMARIES: Record<string, string> = {
   memory_write: "Store long-lived useful facts or standing guidance, never secrets or chatter. Write from your own perspective (use 'me'/'my', not your name).",
   image_lookup: "Find a previously shared image from message history by ref or description.",
   code_task: "Run, follow up on, check status of, or cancel a coding task. Use action=followup with a session_id to steer a running background task.",
+  minecraft_task: "Hand off Minecraft intent or relevant context to your embodied in-world self; use action=status when you need current world state.",
   join_voice_channel: "Join the requesting user's current voice channel.",
   leave_voice_channel: "Leave the voice channel.",
   music_search: "Browse track candidates without starting playback.",
@@ -211,6 +212,16 @@ function buildImageLookupDocs(): string[] {
   ];
 }
 
+function buildMinecraftDocs(): string[] {
+  return [
+    "=== MINECRAFT ===",
+    "You have an embodied Minecraft self with a dedicated in-world brain.",
+    "Use minecraft_task when someone wants you to do something in Minecraft or when Minecraft context matters to the conversation.",
+    "Hand over the user's intent or relevant context, not translated low-level commands; the Minecraft brain decides the in-world action.",
+    "Use minecraft_task with action=status when you need current world state, task progress, or hazards before deciding what to say or do."
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // Conversation search
 // ---------------------------------------------------------------------------
@@ -268,6 +279,7 @@ export type TextSystemCapabilityFlags = {
   webSearchEnabled: boolean;
   browserEnabled: boolean;
   memoryEnabled: boolean;
+  minecraftEnabled: boolean;
   mediaGenerationEnabled: boolean;
   gifsEnabled: boolean;
   automationEnabled: boolean;
@@ -288,6 +300,7 @@ export function buildTextCapabilitiesDocs(
   if (flags.browserEnabled) availableToolNames.push("browser_browse");
   if (flags.memoryEnabled) availableToolNames.push("memory_search", "memory_write");
   availableToolNames.push("image_lookup");
+  if (flags.minecraftEnabled) availableToolNames.push("minecraft_task");
   if (flags.voiceEnabled) {
     availableToolNames.push(
       "join_voice_channel", "leave_voice_channel",
@@ -321,6 +334,10 @@ export function buildTextCapabilitiesDocs(
 
   // Image lookup works on message history, not durable memory — always include docs
   sections.push(...buildImageLookupDocs());
+
+  if (flags.minecraftEnabled) {
+    sections.push(...buildMinecraftDocs());
+  }
 
   if (flags.voiceEnabled) {
     sections.push(...buildVoiceControlDocs(settings));
@@ -460,6 +477,7 @@ export type VoiceSystemCapabilityFlags = {
   webSearchEnabled: boolean;
   browserEnabled: boolean;
   memoryEnabled: boolean;
+  minecraftEnabled: boolean;
   screenShareEnabled: boolean;
 };
 
@@ -478,6 +496,7 @@ export function buildVoiceCapabilitiesDocs(
     "media_reply_handoff", "stream_visualizer", "play_soundboard",
     "leave_voice_channel"
   );
+  if (flags.minecraftEnabled) availableToolNames.push("minecraft_task");
   if (flags.webSearchEnabled) availableToolNames.push("web_search", "web_scrape");
   if (flags.browserEnabled) availableToolNames.push("browser_browse");
   if (flags.screenShareEnabled) availableToolNames.push("start_screen_watch");
@@ -493,6 +512,10 @@ export function buildVoiceCapabilitiesDocs(
 
   if (flags.memoryEnabled) {
     sections.push(...buildVoiceMemoryToolDocs());
+  }
+
+  if (flags.minecraftEnabled) {
+    sections.push(...buildMinecraftDocs());
   }
 
   // Voice/music tools are always present in voice sessions

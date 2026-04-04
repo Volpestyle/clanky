@@ -65,6 +65,7 @@ export interface SubAgentSession {
   lastUsedAt: number;
   status: "idle" | "running" | "completed" | "error" | "cancelled";
   getBrowserSessionKey?(): string | null;
+  getPromptStateHint?(): string | null;
 
   /** Send a turn (initial instruction or follow-up) and get the result. */
   runTurn(input: string, options?: SubAgentTurnOptions): Promise<SubAgentTurnResult>;

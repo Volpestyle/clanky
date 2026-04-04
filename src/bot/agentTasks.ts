@@ -9,9 +9,9 @@ import {
 } from "../agents/codeAgent.ts";
 import { BrowserAgentSession } from "../agents/browseAgent.ts";
 import { runOpenAiComputerUseTask } from "../tools/openAiComputerUseRuntime.ts";
+import { isAbortError } from "../tools/abortError.ts";
 import {
   buildBrowserTaskScopeKey,
-  isAbortError,
   runBrowserBrowseTask
 } from "../tools/browserTaskRuntime.ts";
 import { clamp } from "../utils.ts";
@@ -449,6 +449,13 @@ export type CreateMinecraftSessionOptions = {
   source?: string;
 };
 
+/**
+ * How many recent Discord messages to expose to the Minecraft brain as
+ * cross-surface context. Kept small so the brain's prompt stays compact —
+ * the brain only needs enough history to connect follow-ups across surfaces.
+ */
+const MINECRAFT_DISCORD_CONTEXT_LIMIT = 10;
+
 // ── Lazy Minecraft MCP lifecycle ─────────────────────────────────────────────
 // The MCP server is spawned on first minecraft_task call, not at bot startup.
 // A singleton resolver ensures only one spawn happens even under concurrent
@@ -536,6 +543,25 @@ async function createMinecraftSession(
   if (!baseUrl) return null;
 
   const config = getMinecraftConfig(settings);
+
+  // Cross-surface Discord context: only for guild-scoped sessions. DM/owner-private
+  // scopes deliberately get no Discord context because MC chat may be visible to
+  // other players the brain shouldn't leak private conversation to.
+  const getRecentDiscordContext =
+    guildId && channelId
+      ? () => {
+          const rows = ctx.store.getRecentMessages(channelId, MINECRAFT_DISCORD_CONTEXT_LIMIT);
+          // getRecentMessages returns DESC (newest first); flip to chronological
+          // so the brain reads the prompt section like a conversation.
+          return rows.reverse().map((row) => ({
+            speaker: row.author_name,
+            text: row.content,
+            timestamp: row.created_at,
+            isBot: row.is_bot
+          }));
+        }
+      : undefined;
+
   return createMinecraftSessionRuntime({
     scopeKey,
     baseUrl,
@@ -549,6 +575,7 @@ async function createMinecraftSession(
         content: events.join("; "),
         metadata: { events, eventCount: events.length }
       }),
+    getRecentDiscordContext,
     brain: createMinecraftBrain(
       ctx.llm,
       () => ctx.store.getSettings()

@@ -12,7 +12,7 @@ import {
   MUSIC_REPLY_HANDOFF_POLICY_LINE
 } from "../prompts/voiceLivePolicy.ts";
 import { createTestSettings } from "../testSettings.ts";
-import { createAbortError } from "../tools/browserTaskRuntime.ts";
+import { createAbortError } from "../tools/abortError.ts";
 import { deepMerge } from "../utils.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -2797,4 +2797,79 @@ test("generateVoiceTurnReply returns leave request when model calls leave_voice_
   assert.equal(reply.text, "aight i'ma bounce");
   assert.equal(reply.leaveVoiceChannelRequested, true);
   assert.equal(leaveCalls, 0);
+});
+
+test("generateVoiceTurnReply includes Minecraft docs, tool exposure, and active session hint", async () => {
+  const { bot, generationPayloads } = createVoiceBot();
+  const minecraftSession = {
+    id: "minecraft:guild-1:text-1:1:1",
+    type: "minecraft",
+    ownerUserId: "user-1",
+    lastUsedAt: Date.now(),
+    status: "idle",
+    getPromptStateHint() {
+      return "[Minecraft] Active session - goal: \"Stay with Steve\" | mode: companion | server: Survival SMP | connected: yes | last action: Following Steve.";
+    }
+  };
+  bot.buildSubAgentSessionsRuntime = () => ({
+    manager: {
+      get(sessionId: string) {
+        return sessionId === minecraftSession.id ? minecraftSession : null;
+      },
+      list() {
+        return [
+          {
+            id: minecraftSession.id,
+            type: "minecraft",
+            status: "idle",
+            lastUsedAt: minecraftSession.lastUsedAt
+          }
+        ];
+      },
+      register() {},
+      remove() {}
+    },
+    createCodeSession() {
+      return null;
+    },
+    createBrowserSession() {
+      return null;
+    },
+    async createMinecraftSession() {
+      return null;
+    }
+  });
+
+  const settings = deepMerge(baseSettings(), {
+    agentStack: {
+      runtimeConfig: {
+        minecraft: {
+          enabled: true
+        }
+      }
+    }
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings,
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "what are you doing in minecraft?"
+  });
+
+  assert.equal(reply.text, "all good");
+  assert.match(String(generationPayloads[0]?.systemPrompt || ""), /=== MINECRAFT ===/);
+  assert.match(
+    String(generationPayloads[0]?.systemPrompt || ""),
+    /hand over the user's intent or relevant context/i
+  );
+  assert.match(
+    String(generationPayloads[0]?.userPrompt || ""),
+    /\[Minecraft\] Active session - goal: "Stay with Steve"/
+  );
+  const toolNames = Array.isArray(generationPayloads[0]?.tools)
+    ? generationPayloads[0].tools.map((tool) => String(tool?.name || ""))
+    : [];
+  assert.equal(toolNames.includes("minecraft_task"), true);
 });

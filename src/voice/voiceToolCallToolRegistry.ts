@@ -5,6 +5,7 @@ import {
   getVoiceSoundboardSettings,
   isBrowserEnabled,
   isDevTaskEnabled,
+  isMinecraftEnabled,
   isResearchEnabled
 } from "../settings/agentStack.ts";
 import { toRealtimeTool } from "../tools/sharedToolSchemas.ts";
@@ -223,6 +224,9 @@ export function resolveVoiceRealtimeToolDescriptors(
   const includeCodeAgent = Boolean(
     isDevTaskEnabled(settings) && ((manager.createCodeAgentSession && manager.subAgentSessions) || manager.runModelRequestedCodeTask)
   );
+  const includeMinecraft = Boolean(
+    isMinecraftEnabled(settings) && manager.createMinecraftSession && manager.subAgentSessions
+  );
   const includeScreenShare = Boolean(
     screenShareCapability?.available &&
       typeof manager.startVoiceScreenWatch === "function" &&
@@ -237,6 +241,7 @@ export function resolveVoiceRealtimeToolDescriptors(
   const localTools = buildVoiceRealtimeLocalToolSchemas({
     browserAvailable: includeBrowser,
     codeAgentAvailable: includeCodeAgent,
+    minecraftAvailable: includeMinecraft,
     memoryAvailable: includeMemory,
     screenShareAvailable: includeScreenShare,
     screenShareSnapshotAvailable: includeScreenShareSnapshot,

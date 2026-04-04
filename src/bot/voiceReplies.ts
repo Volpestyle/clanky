@@ -16,7 +16,7 @@ import {
   executeReplyTool
 } from "../tools/replyTools.ts";
 import type { ReplyToolRuntime, ReplyToolContext } from "../tools/replyTools.ts";
-import { createAbortError, isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
+import { createAbortError, isAbortError, throwIfAborted } from "../tools/abortError.ts";
 import { shouldRequestVoiceToolFollowup } from "../tools/sharedToolSchemas.ts";
 import { clamp, sanitizeBotText } from "../utils.ts";
 import { SETTINGS_NUMERIC_CONSTRAINTS } from "../settings/settingsConstraints.ts";
@@ -37,6 +37,7 @@ import {
   getReplyGenerationSettings,
   getResolvedOrchestratorBinding,
   getResolvedVoiceGenerationBinding,
+  isMinecraftEnabled,
   getVoiceConversationPolicy,
   getVoiceSoundboardSettings,
   getVoiceStreamWatchSettings
@@ -82,6 +83,11 @@ import {
 } from "../promptLogging.ts";
 import type { VoiceOutputLeaseMode, VoiceSession } from "../voice/voiceSessionTypes.ts";
 import type { VoiceToolCallManager } from "../voice/voiceToolCallTypes.ts";
+import {
+  buildMinecraftSessionScopeKey,
+  findReusableMinecraftSession,
+  getMinecraftSessionPromptHint
+} from "../agents/minecraft/minecraftSessionAccess.ts";
 
 const SESSION_DURABLE_CONTEXT_MAX_ENTRIES = 50;
 const SELF_SUBJECT = "__self__";
@@ -1208,6 +1214,22 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   let usedWebSearchFollowup = false;
   let usedScreenShareOffer = false;
   let leaveVoiceChannelRequested = false;
+  const subAgentSessions =
+    typeof runtime.buildSubAgentSessionsRuntime === "function"
+      ? runtime.buildSubAgentSessionsRuntime()
+      : undefined;
+  const minecraftToolAvailable = Boolean(
+    isMinecraftEnabled(settings) &&
+    subAgentSessions?.manager &&
+    subAgentSessions?.createMinecraftSession
+  );
+  const activeMinecraftSession = subAgentSessions?.manager
+    ? findReusableMinecraftSession(subAgentSessions.manager, {
+        ownerUserId: userId,
+        scopeKey: buildMinecraftSessionScopeKey({ guildId, channelId })
+      })
+    : null;
+  const minecraftSessionHint = getMinecraftSessionPromptHint(activeMinecraftSession);
 
   const systemPrompt = buildVoiceSystemPrompt(settings);
   const buildVoiceUserPrompt = ({
@@ -1242,6 +1264,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       webSearch: webSearchContext,
       browserBrowse,
       recentConversationHistory,
+      minecraftSessionHint,
       allowWebSearchToolCall: allowWebSearch,
       allowBrowserBrowseToolCall,
       screenShare,
@@ -1361,13 +1384,9 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       ),
       soundboardAvailable: allowSoundboardToolCall,
       codeAgentAvailable: codeAgentRuntimeAvailable,
-      voiceToolsAvailable: Boolean(voiceToolCallbacks)
+      voiceToolsAvailable: Boolean(voiceToolCallbacks),
+      minecraftAvailable: minecraftToolAvailable
     });
-
-    const subAgentSessions =
-      typeof runtime.buildSubAgentSessionsRuntime === "function"
-        ? runtime.buildSubAgentSessionsRuntime()
-        : undefined;
     const voiceToolRuntime: ReplyToolRuntime = {
       search: {
         searchAndRead: async ({ settings: toolSettings, query, trace, signal: toolSignal }) =>
