@@ -511,7 +511,7 @@ export function buildReplyPipelineRuntime(
     runModelRequestedBrowserBrowse: (payload) =>
       runModelRequestedBrowserBrowse(agentContext, payload),
     runModelRequestedCodeTask: (payload) => runModelRequestedCodeTask(agentContext, payload),
-    buildSubAgentSessionsRuntime: () => buildSubAgentSessionsRuntime(agentContext, bot.minecraftMcpUrl),
+    buildSubAgentSessionsRuntime: () => buildSubAgentSessionsRuntime(agentContext),
     runModelRequestedImageLookup: (payload) =>
       runModelRequestedImageLookup({
         imageLookup: payload.imageLookup || {},
@@ -572,7 +572,7 @@ export function buildVoiceReplyRuntime(bot: ClankerBot): VoiceReplyRuntime {
     buildBrowserBrowseContext: (settings) =>
       buildBrowserBrowseContext(budgetContext, settings),
     runModelRequestedCodeTask: (payload) => runModelRequestedCodeTask(agentContext, payload),
-    buildSubAgentSessionsRuntime: () => buildSubAgentSessionsRuntime(agentContext, bot.minecraftMcpUrl),
+    buildSubAgentSessionsRuntime: () => buildSubAgentSessionsRuntime(agentContext),
     dispatchBackgroundCodeTask: (payload) => bot.dispatchBackgroundCodeTask(payload),
     backgroundTaskRunner: bot.backgroundTaskRunner
   };

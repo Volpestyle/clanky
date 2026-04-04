@@ -113,7 +113,7 @@ export type VoiceToolCallManager = Pick<
     channelId: string;
     userId: string | null;
     source: string;
-  }) => SubAgentSession | null | undefined) | null;
+  }) => Promise<SubAgentSession | null | undefined> | SubAgentSession | null | undefined) | null;
   subAgentSessions?: SubAgentSessionRegistry | null;
 };
 

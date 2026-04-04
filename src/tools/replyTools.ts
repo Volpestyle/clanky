@@ -302,7 +302,7 @@ export type ReplyToolRuntime = {
       channelId?: string | null;
       userId?: string | null;
       source?: string;
-    }) => SubAgentSession | null;
+    }) => Promise<SubAgentSession | null> | SubAgentSession | null;
   };
   backgroundCodeTasks?: {
     dispatch: (args: {
@@ -1743,7 +1743,7 @@ async function executeMinecraftTask(
 
   // New session
   if (runtime.subAgentSessions?.createMinecraftSession) {
-    const session = runtime.subAgentSessions.createMinecraftSession({
+    const session = await runtime.subAgentSessions.createMinecraftSession({
       settings: context.settings,
       guildId: context.guildId,
       channelId: context.channelId,

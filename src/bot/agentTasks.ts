@@ -445,9 +445,66 @@ export type CreateMinecraftSessionOptions = {
   source?: string;
 };
 
-function createMinecraftSession(
+// ── Lazy Minecraft MCP lifecycle ─────────────────────────────────────────────
+// The MCP server is spawned on first minecraft_task call, not at bot startup.
+// A singleton resolver ensures only one spawn happens even under concurrent
+// requests.
+
+let minecraftMcpSingleton: { baseUrl: string; process: MinecraftMcpProcess | null } | null = null;
+let minecraftMcpSpawnPromise: Promise<{ baseUrl: string; process: MinecraftMcpProcess | null } | null> | null = null;
+
+async function ensureMinecraftMcpServer(
+  settings: Record<string, unknown>,
+  logAction: (entry: Record<string, unknown>) => void
+): Promise<string | null> {
+  if (!isMinecraftEnabled(settings)) return null;
+
+  // Already resolved.
+  if (minecraftMcpSingleton) return minecraftMcpSingleton.baseUrl;
+
+  // Another caller is already spawning — wait for it.
+  if (minecraftMcpSpawnPromise) {
+    const result = await minecraftMcpSpawnPromise;
+    return result?.baseUrl ?? null;
+  }
+
+  const config = getMinecraftConfig(settings);
+  minecraftMcpSpawnPromise = (async () => {
+    try {
+      const result = await resolveMinecraftMcpServer({
+        explicitUrl: config.mcpUrl,
+        logAction
+      });
+      minecraftMcpSingleton = result;
+      return result;
+    } catch (error) {
+      logAction({
+        kind: "minecraft_mcp_init_error",
+        content: String((error as Error)?.message || error)
+      });
+      return null;
+    } finally {
+      minecraftMcpSpawnPromise = null;
+    }
+  })();
+
+  const result = await minecraftMcpSpawnPromise;
+  return result?.baseUrl ?? null;
+}
+
+/**
+ * Stop the auto-spawned MCP server (if any). Call on bot shutdown.
+ */
+export async function stopMinecraftMcpServer(): Promise<void> {
+  if (minecraftMcpSingleton?.process) {
+    await minecraftMcpSingleton.process.stop();
+  }
+  minecraftMcpSingleton = null;
+  minecraftMcpSpawnPromise = null;
+}
+
+async function createMinecraftSession(
   ctx: AgentContext,
-  mcpBaseUrl: string | null,
   {
     settings,
     guildId,
@@ -457,69 +514,42 @@ function createMinecraftSession(
   }: CreateMinecraftSessionOptions
 ) {
   if (!isMinecraftEnabled(settings)) return null;
-  const config = getMinecraftConfig(settings);
-  const baseUrl = mcpBaseUrl || config.mcpUrl;
+
+  const logAction = (entry: Record<string, unknown>) =>
+    ctx.store.logAction({ ...entry, guildId, channelId, userId, source });
+
+  // Lazy-spawn the MCP server on first use.
+  const baseUrl = await ensureMinecraftMcpServer(settings, logAction);
   if (!baseUrl) return null;
 
+  const config = getMinecraftConfig(settings);
   const scopeKey = buildScopeKey({ guildId, channelId });
   return createMinecraftSessionRuntime({
     scopeKey,
     baseUrl,
     ownerUserId: userId,
     operatorPlayerName: config.operatorPlayerName,
-    logAction: (entry) =>
-      ctx.store.logAction({
-        ...entry,
-        guildId,
-        channelId,
-        userId,
-        source
-      }),
+    logAction,
     onGameEvent: (events) =>
-      ctx.store.logAction({
+      logAction({
         kind: "minecraft_game_events",
         content: events.join("; "),
-        metadata: { events, eventCount: events.length },
-        guildId,
-        channelId,
-        userId,
-        source
-      })
+        metadata: { events, eventCount: events.length }
+      }),
+    generateChatReply: createMinecraftChatBrain(
+      ctx.llm,
+      () => ctx.store.getSettings()
+    )
   });
 }
 
-/**
- * Resolve and auto-spawn the Minecraft MCP server if enabled.
- * Call once at bot startup — returns the base URL and a process handle
- * for cleanup on shutdown.
- */
-export async function initMinecraftMcpServer(settings: Record<string, unknown>, logAction: (entry: Record<string, unknown>) => void): Promise<{
-  baseUrl: string;
-  process: MinecraftMcpProcess | null;
-} | null> {
-  if (!isMinecraftEnabled(settings)) return null;
-  const config = getMinecraftConfig(settings);
-  try {
-    return await resolveMinecraftMcpServer({
-      explicitUrl: config.mcpUrl,
-      logAction
-    });
-  } catch (error) {
-    logAction({
-      kind: "minecraft_mcp_init_error",
-      content: String((error as Error)?.message || error)
-    });
-    return null;
-  }
-}
-
-export function buildSubAgentSessionsRuntime(ctx: AgentContext, minecraftMcpUrl: string | null = null) {
+export function buildSubAgentSessionsRuntime(ctx: AgentContext) {
   return {
     manager: ctx.subAgentSessions,
     createCodeSession: (opts: CreateCodeAgentSessionOptions) => createCodeAgentSession(ctx, opts),
     createBrowserSession: (opts: CreateBrowserAgentSessionOptions) =>
       createBrowserAgentSession(ctx, opts),
     createMinecraftSession: (opts: CreateMinecraftSessionOptions) =>
-      createMinecraftSession(ctx, minecraftMcpUrl, opts)
+      createMinecraftSession(ctx, opts)
   };
 }

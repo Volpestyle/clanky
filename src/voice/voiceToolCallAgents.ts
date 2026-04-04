@@ -471,7 +471,7 @@ export async function executeVoiceMinecraftTaskTool(
 
   // New session
   if (manager.createMinecraftSession && manager.subAgentSessions) {
-    const newSession = manager.createMinecraftSession({
+    const newSession = await manager.createMinecraftSession({
       settings,
       guildId: session?.guildId || "",
       channelId: session?.textChannelId || "",
