@@ -71,7 +71,7 @@ If you want that file somewhere else, set `CLAUDE_OAUTH_TOKEN_FILE` and clanky r
 
 **Option 3: Reuse opencode Anthropic auth**
 
-If you've already logged into Anthropic via opencode or `ocrefresh`, clanky can bootstrap its own `data/claude-oauth-tokens.json` from opencode's file-backed Anthropic auth. After that, clanky refreshes its own local token file independently. On Windows this bootstrap understands DPAPI-protected `auth-secret.json` entries.
+If you've already logged into Anthropic via opencode or `ocrefresh`, clanky can bootstrap its own `data/claude-oauth-tokens.json` from opencode's file-backed Anthropic auth. When both the local cache and opencode auth exist, clanky prefers the more complete/fresher token set and mirrors that into the local cache before continuing to refresh locally. On Windows this bootstrap understands DPAPI-protected `auth-secret.json` entries.
 
 ### Configuration
 
@@ -97,7 +97,7 @@ LLMService
         └── Anthropic SDK (same as `anthropic` provider)
               └── OAuth token loader (claudeOAuth.ts)
                     ├── local token file
-                    ├── one-time bootstrap from opencode auth when needed
+                    ├── bootstrap or refresh local cache from fresher opencode auth when available
                     ├── token refresh (console.anthropic.com/v1/oauth/token)
                     ├── Bearer auth header
                     ├── beta headers

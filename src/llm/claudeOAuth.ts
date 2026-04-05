@@ -36,6 +36,8 @@ type ClaudeOAuthTokenStore = {
   save: (tokens: ClaudeOAuthTokens) => void;
 };
 
+type ClaudeOAuthTokenRank = [hasRefreshToken: number, hasAccessToken: number, expiresAt: number];
+
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -251,10 +253,37 @@ function loadTokensFromOpencodeAuth(): ClaudeOAuthTokens | null {
   return null;
 }
 
-function bootstrapLocalTokensFromOpencode(): ClaudeOAuthTokenStore | null {
+function rankTokens(tokens: ClaudeOAuthTokens): ClaudeOAuthTokenRank {
+  return [
+    normalizeString(tokens.refreshToken) ? 1 : 0,
+    normalizeString(tokens.accessToken) ? 1 : 0,
+    normalizeNumber(tokens.expiresAt)
+  ];
+}
+
+function shouldPreferCandidateTokens(candidate: ClaudeOAuthTokens, current: ClaudeOAuthTokens): boolean {
+  const candidateRank = rankTokens(candidate);
+  const currentRank = rankTokens(current);
+  for (let index = 0; index < candidateRank.length; index += 1) {
+    if (candidateRank[index] === currentRank[index]) continue;
+    return candidateRank[index] > currentRank[index];
+  }
+  return false;
+}
+
+function loadPreferredStoredTokens(): ClaudeOAuthTokenStore | null {
+  const existing = loadTokensFromLegacyFiles();
   const opencodeTokens = loadTokensFromOpencodeAuth();
-  if (!opencodeTokens) return null;
-  return createLegacyTokenStore(opencodeTokens);
+
+  if (!existing) {
+    return opencodeTokens ? createLegacyTokenStore(opencodeTokens) : null;
+  }
+
+  if (opencodeTokens && shouldPreferCandidateTokens(opencodeTokens, existing.tokens)) {
+    return createLegacyTokenStore(opencodeTokens);
+  }
+
+  return existing;
 }
 
 function initTokensFromEnv(envRefreshToken: string): ClaudeOAuthTokenStore {
@@ -356,7 +385,7 @@ export function createClaudeOAuthClient(envRefreshToken: string): ClaudeOAuthSta
   const normalizedEnv = String(envRefreshToken || "").trim();
   const source = normalizedEnv
     ? initTokensFromEnv(normalizedEnv)
-    : loadTokensFromLegacyFiles() || bootstrapLocalTokensFromOpencode();
+    : loadPreferredStoredTokens();
   if (!source) {
     throw new Error(
       "Claude OAuth not configured. Set CLAUDE_OAUTH_REFRESH_TOKEN, create data/claude-oauth-tokens.json, or sign in via opencode so clanky can bootstrap its own local OAuth token cache."

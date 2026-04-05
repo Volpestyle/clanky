@@ -142,6 +142,58 @@ test("claude oauth bootstraps a local token cache from opencode auth storage", a
   });
 });
 
+test("claude oauth prefers fresher opencode auth over a stale local token cache", async () => {
+  await withClaudeOAuthEnv(async ({ shareDir, tokenFilePath }) => {
+    await fs.writeFile(
+      tokenFilePath,
+      JSON.stringify(
+        {
+          refreshToken: "stale-local-refresh",
+          accessToken: "stale-local-access",
+          expiresAt: 100
+        },
+        null,
+        2
+      )
+    );
+
+    await writeOpencodeAuthFiles({
+      shareDir,
+      auth: {
+        anthropic: {
+          type: "oauth",
+          expires: 200
+        }
+      },
+      authSecret: {
+        anthropic: {
+          type: "oauth",
+          refresh: "refresh-from-opencode",
+          access: "access-from-opencode"
+        }
+      }
+    });
+
+    const claudeOAuth = await importFreshClaudeOAuth("opencode-preferred-over-stale-local");
+    const state = claudeOAuth.createClaudeOAuthClient("");
+
+    assert.equal(state.tokens.refreshToken, "refresh-from-opencode");
+    assert.equal(state.tokens.accessToken, "access-from-opencode");
+    assert.equal(state.tokens.expiresAt, 200);
+
+    const mirrored = JSON.parse(await fs.readFile(tokenFilePath, "utf8")) as {
+      refreshToken?: string;
+      accessToken?: string;
+      expiresAt?: number;
+    };
+    assert.deepEqual(mirrored, {
+      refreshToken: "refresh-from-opencode",
+      accessToken: "access-from-opencode",
+      expiresAt: 200
+    });
+  });
+});
+
 test("claude oauth refresh persists to clanky's local token cache after opencode bootstrap", async () => {
   await withClaudeOAuthEnv(async ({ shareDir, tokenFilePath }) => {
     const { authPath, authSecretPath } = await writeOpencodeAuthFiles({
