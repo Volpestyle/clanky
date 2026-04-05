@@ -119,7 +119,6 @@ export function normalizeLlmProvider(value, fallback = "openai") {
   if (normalized === "openai") return "openai";
   if (normalized === "anthropic") return "anthropic";
   if (normalized === "ai_sdk_anthropic") return "ai_sdk_anthropic";
-  if (normalized === "litellm") return "litellm";
   if (normalized === "claude-oauth") return "claude-oauth";
   if (normalized === "openai-oauth" || normalized === "codex-oauth") return "openai-oauth";
   if (normalized === "codex_cli_session") return "codex_cli_session";
@@ -133,7 +132,6 @@ export function normalizeLlmProvider(value, fallback = "openai") {
   if (fallbackProvider === "openai") return "openai";
   if (fallbackProvider === "anthropic") return "anthropic";
   if (fallbackProvider === "ai_sdk_anthropic") return "ai_sdk_anthropic";
-  if (fallbackProvider === "litellm") return "litellm";
   if (fallbackProvider === "claude-oauth") return "claude-oauth";
   if (fallbackProvider === "openai-oauth" || fallbackProvider === "codex-oauth") return "openai-oauth";
   if (fallbackProvider === "codex_cli_session") return "codex_cli_session";
@@ -166,7 +164,6 @@ export function isGpt5FamilyModel(model) {
 export function defaultModelForLlmProvider(provider) {
   if (provider === "anthropic") return "claude-haiku-4-5";
   if (provider === "ai_sdk_anthropic") return "claude-haiku-4-5";
-  if (provider === "litellm") return "claude-haiku-4-5";
   if (provider === "claude-oauth") return "claude-sonnet-4-6";
   if (provider === "openai-oauth") return "gpt-5.4";
   if (provider === "codex_cli_session") return "gpt-5.4";
@@ -183,7 +180,6 @@ export function resolveProviderFallbackOrder(provider) {
   if (provider === "codex-cli") return ["codex-cli", "codex_cli_session", "openai-oauth", "openai", "anthropic", "claude-oauth", "xai"];
   if (provider === "codex") return ["codex", "openai-oauth", "openai", "anthropic", "claude-oauth", "xai"];
   if (provider === "ai_sdk_anthropic") return ["ai_sdk_anthropic", "anthropic", "openai", "xai", "claude-oauth", "openai-oauth"];
-  if (provider === "litellm") return ["litellm", "openai", "anthropic", "xai", "claude-oauth", "openai-oauth"];
   if (provider === "anthropic") return ["anthropic", "openai", "xai", "claude-oauth", "openai-oauth"];
   if (provider === "xai") return ["xai", "openai", "anthropic", "claude-oauth", "openai-oauth"];
   return ["openai", "openai-oauth", "anthropic", "xai", "claude-oauth"];

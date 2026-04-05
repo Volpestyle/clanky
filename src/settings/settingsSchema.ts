@@ -22,7 +22,6 @@ export const MODEL_PROVIDER_KINDS = [
   "openai",
   "anthropic",
   "ai_sdk_anthropic",
-  "litellm",
   "claude-oauth",
   "openai-oauth",
   "codex_cli_session",
