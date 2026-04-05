@@ -146,10 +146,8 @@ function buildSettingsFormView(settings: unknown) {
   const memory = valueOr(s.memory, d.memory);
   const automations = valueOr(s.automations, d.automations);
   const sessions = valueOr(s.interaction?.sessions, d.interaction.sessions);
-  const followup = valueOr(s.interaction?.followup, d.interaction.followup);
   const replyGeneration = valueOr(s.interaction?.replyGeneration, d.interaction.replyGeneration);
   const orchestrator = resolved?.orchestrator || { provider: agentStack.overrides?.orchestrator?.provider || "openai", model: agentStack.overrides?.orchestrator?.model || "gpt-5" };
-  const followupBinding = resolved?.followupBinding || orchestrator;
   const rawMemoryBinding =
     intent.memoryLlm && typeof intent.memoryLlm === "object" && !Array.isArray(intent.memoryLlm)
       ? intent.memoryLlm
@@ -250,17 +248,6 @@ function buildSettingsFormView(settings: unknown) {
       temperature: replyGeneration.temperature,
       maxOutputTokens: replyGeneration.maxOutputTokens,
       reasoningEffort: replyGeneration.reasoningEffort
-    },
-    replyFollowupLlm: {
-      enabled: followup.enabled,
-      provider: followupBinding.provider,
-      model: followupBinding.model,
-      maxToolSteps: followup.toolBudget.maxToolSteps,
-      maxTotalToolCalls: followup.toolBudget.maxTotalToolCalls,
-      maxWebSearchCalls: followup.toolBudget.maxWebSearchCalls,
-      maxMemoryLookupCalls: followup.toolBudget.maxMemoryLookupCalls,
-      maxImageLookupCalls: followup.toolBudget.maxImageLookupCalls,
-      toolTimeoutMs: followup.toolBudget.toolTimeoutMs
     },
     memoryLlm: memoryBinding,
     memoryLlmInheritTextModel: !memoryOverrideConfigured,
@@ -455,7 +442,6 @@ export function settingsToForm(settings: unknown) {
   const defaultActivity = defaults.activity;
   const defaultPermissions = defaults.permissions;
   const defaultLlm = defaults.llm;
-  const defaultReplyFollowupLlm = defaults.replyFollowupLlm;
   const defaultMemoryLlm = defaults.memoryLlm;
   const defaultWebSearch = defaults.webSearch;
   const defaultVideoContext = defaults.videoContext;
@@ -540,20 +526,6 @@ export function settingsToForm(settings: unknown) {
       resolved.subAgentOrchestration.maxConcurrentSessions ?? defaults.subAgentOrchestration.maxConcurrentSessions,
     provider: resolved.llm.provider ?? defaultLlm.provider,
     model: resolved.llm.model ?? defaultLlm.model,
-    replyFollowupLlmEnabled: resolved.replyFollowupLlm.enabled ?? defaultReplyFollowupLlm.enabled,
-    replyFollowupLlmProvider: resolved.replyFollowupLlm.provider ?? defaultReplyFollowupLlm.provider,
-    replyFollowupLlmModel: resolved.replyFollowupLlm.model ?? defaultReplyFollowupLlm.model,
-    replyFollowupMaxToolSteps: resolved.replyFollowupLlm.maxToolSteps ?? defaultReplyFollowupLlm.maxToolSteps,
-    replyFollowupMaxTotalToolCalls:
-      resolved.replyFollowupLlm.maxTotalToolCalls ?? defaultReplyFollowupLlm.maxTotalToolCalls,
-    replyFollowupMaxWebSearchCalls:
-      resolved.replyFollowupLlm.maxWebSearchCalls ?? defaultReplyFollowupLlm.maxWebSearchCalls,
-    replyFollowupMaxMemoryLookupCalls:
-      resolved.replyFollowupLlm.maxMemoryLookupCalls ?? defaultReplyFollowupLlm.maxMemoryLookupCalls,
-    replyFollowupMaxImageLookupCalls:
-      resolved.replyFollowupLlm.maxImageLookupCalls ?? defaultReplyFollowupLlm.maxImageLookupCalls,
-    replyFollowupToolTimeoutMs:
-      resolved.replyFollowupLlm.toolTimeoutMs ?? defaultReplyFollowupLlm.toolTimeoutMs,
     memoryLlmInheritTextModel: resolved.memoryLlmInheritTextModel ?? true,
     memoryLlmProvider: resolved.memoryLlm.provider ?? defaultMemoryLlm.provider,
     memoryLlmModel: resolved.memoryLlm.model ?? defaultMemoryLlm.model,
@@ -1012,14 +984,6 @@ export function getSettingsValidationError(form: SettingsForm): SettingsFormVali
       value: form.maxTokens,
       min: 32,
       max: 16_384
-    }),
-    validateNumericField({
-      enabled: Boolean(form.replyFollowupLlmEnabled),
-      sectionId: "sec-llm",
-      label: "Follow-up tool timeout (ms)",
-      value: form.replyFollowupToolTimeoutMs,
-      min: 1_000,
-      max: 120_000
     }),
     validateNumericField({
       sectionId: "sec-rate",
@@ -1540,24 +1504,6 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
             form.reasoningEffort,
             DEFAULT_SETTINGS.interaction.replyGeneration.reasoningEffort
           ) || "low"
-      },
-      followup: {
-        enabled: Boolean(form.replyFollowupLlmEnabled),
-        execution: {
-          mode: "dedicated_model",
-          model: {
-            provider: String(form.replyFollowupLlmProvider || "").trim(),
-            model: String(form.replyFollowupLlmModel || "").trim()
-          }
-        },
-        toolBudget: {
-          maxToolSteps: Number(form.replyFollowupMaxToolSteps),
-          maxTotalToolCalls: Number(form.replyFollowupMaxTotalToolCalls),
-          maxWebSearchCalls: Number(form.replyFollowupMaxWebSearchCalls),
-          maxMemoryLookupCalls: Number(form.replyFollowupMaxMemoryLookupCalls),
-          maxImageLookupCalls: Number(form.replyFollowupMaxImageLookupCalls),
-          toolTimeoutMs: Number(form.replyFollowupToolTimeoutMs)
-        }
       },
       startup: {
         catchupEnabled: form.catchupEnabled,

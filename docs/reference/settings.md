@@ -163,7 +163,7 @@ High-level ownership:
 |---|---|
 | `identity`, `persona`, `prompting` | model context and presentation |
 | `permissions` | deterministic safety and access control |
-| `interaction` | text reply budgets, followup behavior, sessions, startup/catchup |
+| `interaction` | text reply budgets, sessions, startup/catchup |
 | `agentStack` | preset selection, runtime families, model/runtime bindings |
 | `memory`, `memoryLlm` | durable memory behavior and retrieval/generation bindings |
 | `initiative` | ambient text and voice initiative cadence |

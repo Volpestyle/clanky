@@ -17,10 +17,7 @@ import {
 import { getLocalTimeZoneLabel } from "./automation.ts";
 import { buildReplyToolSet, executeReplyTool } from "../tools/replyTools.ts";
 import type { ReplyToolContext, ReplyToolRuntime, ReplyToolDefinition } from "../tools/replyTools.ts";
-import {
-  resolveReplyFollowupGenerationSettings,
-  runModelRequestedWebSearch
-} from "./replyFollowup.ts";
+import { runModelRequestedWebSearch } from "./replyFollowup.ts";
 import {
   buildTextReplyScopeKey
 } from "../tools/activeReplyRegistry.ts";
@@ -1159,7 +1156,6 @@ async function executeReplyLlm(
     trace: replyTrace,
     signal
   });
-  const followupGenerationSettings = resolveReplyFollowupGenerationSettings(settings);
   performance.llm1Ms = Math.max(0, Date.now() - llm1StartedAtMs);
   let usedWebSearchFollowup = false;
   let usedBrowserBrowseFollowup = false;
@@ -1368,7 +1364,7 @@ async function executeReplyLlm(
       : "";
     appendReplyFollowupPrompt(replyPromptCapture, toolLoopUserPrompt);
     generation = await bot.llm.generate({
-      settings: followupGenerationSettings,
+      settings,
       systemPrompt,
       userPrompt: toolLoopUserPrompt,
       imageInputs: modelImageInputs,

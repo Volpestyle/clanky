@@ -78,7 +78,7 @@ export function normalizeSettings(raw: unknown): Settings {
     };
   }
 
-  const normalizedInteraction = normalizeInteractionSection(merged.interaction, orchestratorOverride);
+  const normalizedInteraction = normalizeInteractionSection(merged.interaction);
 
   return {
     identity: normalizeIdentitySection(merged.identity),

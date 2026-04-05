@@ -234,24 +234,6 @@ export const DEFAULT_SETTINGS = {
       reasoningEffort: "minimal",
       pricing: {}
     },
-    followup: {
-      enabled: false,
-      execution: {
-        mode: "dedicated_model",
-        model: {
-          provider: "anthropic",
-          model: "claude-haiku-4-5"
-        }
-      },
-      toolBudget: {
-        maxToolSteps: 2,
-        maxTotalToolCalls: 3,
-        maxWebSearchCalls: 2,
-        maxMemoryLookupCalls: 2,
-        maxImageLookupCalls: 2,
-        toolTimeoutMs: 10_000
-      }
-    },
     startup: {
       catchupEnabled: true,
       catchupLookbackHours: 6,
@@ -659,12 +641,9 @@ export const DEFAULT_SETTINGS = {
 
 type SettingsFromDefaults = DeepWiden<typeof DEFAULT_SETTINGS>;
 
-type SettingsInteraction = Omit<SettingsFromDefaults["interaction"], "replyGeneration" | "followup"> & {
+type SettingsInteraction = Omit<SettingsFromDefaults["interaction"], "replyGeneration"> & {
   replyGeneration: Omit<SettingsFromDefaults["interaction"]["replyGeneration"], "pricing"> & {
     pricing: Record<string, unknown>;
-  };
-  followup: Omit<SettingsFromDefaults["interaction"]["followup"], "execution"> & {
-    execution: SettingsExecutionPolicy;
   };
 };
 

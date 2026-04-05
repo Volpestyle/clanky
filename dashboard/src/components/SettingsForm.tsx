@@ -326,10 +326,6 @@ export default function SettingsForm({
     selectedPresetModel: selectedTextInitiativePresetModel
   } = resolvePresetSelection("textInitiativeLlmProvider", "textInitiativeLlmModel");
   const {
-    options: replyFollowupModelOptions,
-    selectedPresetModel: selectedReplyFollowupPresetModel
-  } = resolvePresetSelection("replyFollowupLlmProvider", "replyFollowupLlmModel");
-  const {
     options: memoryLlmModelOptions,
     selectedPresetModel: selectedMemoryLlmPresetModel
   } = resolvePresetSelection("memoryLlmProvider", "memoryLlmModel");
@@ -426,7 +422,6 @@ export default function SettingsForm({
       };
       syncModel("model", selectedPresetModel);
       syncModel("textInitiativeLlmModel", selectedTextInitiativePresetModel);
-      syncModel("replyFollowupLlmModel", selectedReplyFollowupPresetModel);
       syncModel("memoryLlmModel", selectedMemoryLlmPresetModel);
       syncModel("browserLlmModel", selectedBrowserLlmPresetModel);
       syncModel("visionModel", selectedVisionPresetModel);
@@ -453,7 +448,6 @@ export default function SettingsForm({
   }, [
     selectedPresetModel,
     selectedTextInitiativePresetModel,
-    selectedReplyFollowupPresetModel,
     selectedMemoryLlmPresetModel,
     selectedBrowserLlmPresetModel,
     selectedVoiceGenerationPresetModel,
@@ -532,7 +526,6 @@ export default function SettingsForm({
   const setProvider = createProviderSetter("provider", "model");
   const setTextInitiativeProvider = createProviderSetter("textInitiativeLlmProvider", "textInitiativeLlmModel");
   const setMemoryLlmProvider = createProviderSetter("memoryLlmProvider", "memoryLlmModel");
-  const setReplyFollowupProvider = createProviderSetter("replyFollowupLlmProvider", "replyFollowupLlmModel");
   const setBrowserLlmProvider = createProviderSetter("browserLlmProvider", "browserLlmModel");
   const setVoiceGenerationProvider = createProviderSetter("voiceGenerationLlmProvider", "voiceGenerationLlmModel");
   const setVoiceReplyDecisionProvider = createProviderSetter("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel");
@@ -554,7 +547,6 @@ export default function SettingsForm({
 
   const selectPresetModel = createPresetSelector("model");
   const selectTextInitiativePresetModel = createPresetSelector("textInitiativeLlmModel");
-  const selectReplyFollowupPresetModel = createPresetSelector("replyFollowupLlmModel");
   const selectMemoryLlmPresetModel = createPresetSelector("memoryLlmModel");
   const selectBrowserLlmPresetModel = createPresetSelector("browserLlmModel");
   const selectVoiceGenerationPresetModel = createPresetSelector("voiceGenerationLlmModel");
@@ -835,10 +827,6 @@ export default function SettingsForm({
                 selectTextInitiativePresetModel={selectTextInitiativePresetModel}
                 textInitiativeModelOptions={textInitiativeModelOptions}
                 selectedTextInitiativePresetModel={selectedTextInitiativePresetModel}
-                setReplyFollowupProvider={setReplyFollowupProvider}
-                selectReplyFollowupPresetModel={selectReplyFollowupPresetModel}
-                replyFollowupModelOptions={replyFollowupModelOptions}
-                selectedReplyFollowupPresetModel={selectedReplyFollowupPresetModel}
                 setMemoryLlmProvider={setMemoryLlmProvider}
                 selectMemoryLlmPresetModel={selectMemoryLlmPresetModel}
                 memoryLlmModelOptions={memoryLlmModelOptions}

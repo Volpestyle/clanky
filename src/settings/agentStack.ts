@@ -212,14 +212,6 @@ export function getReplyGenerationSettings(settings: unknown): Settings["interac
   );
 }
 
-export function getFollowupSettings(settings: unknown): Settings["interaction"]["followup"] {
-  return getSettingsSection(
-    settings,
-    (input) => input.interaction?.followup,
-    DEFAULT_SETTINGS.interaction.followup
-  );
-}
-
 export function getStartupSettings(settings: unknown): Settings["interaction"]["startup"] {
   return getSettingsSection(
     settings,
@@ -453,28 +445,6 @@ export function getResolvedOrchestratorBinding(settings: unknown) {
     maxOutputTokens: Number(interaction.maxOutputTokens),
     reasoningEffort: String(interaction.reasoningEffort || "").trim() || undefined,
     pricing: interaction.pricing
-  };
-}
-
-export function getResolvedFollowupBinding(settings: unknown) {
-  const followup = getFollowupSettings(settings);
-  const fallback = getResolvedOrchestratorBinding(settings);
-  const policy = resolveExecutionPolicy(
-    followup.execution,
-    fallback,
-    fallback.temperature,
-    fallback.maxOutputTokens,
-    fallback.reasoningEffort
-  );
-  const binding = policy.mode === "dedicated_model"
-    ? policy.model
-    : fallback;
-  return {
-    provider: String(binding?.provider || fallback.provider),
-    model: String(binding?.model || fallback.model),
-    temperature: policy.temperature ?? fallback.temperature,
-    maxOutputTokens: policy.maxOutputTokens ?? fallback.maxOutputTokens,
-    reasoningEffort: policy.reasoningEffort ?? fallback.reasoningEffort
   };
 }
 

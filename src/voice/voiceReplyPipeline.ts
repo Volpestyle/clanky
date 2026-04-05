@@ -1,6 +1,5 @@
 import {
   getActivitySettings,
-  getFollowupSettings,
   getVoiceConversationPolicy
 } from "../settings/agentStack.ts";
 import { clamp } from "../utils.ts";
@@ -630,7 +629,6 @@ export async function runVoiceReplyPipeline(
   let generatedPayload: GeneratedPayload | null = null;
   let generationFinished = false;
   const voiceConversation = getVoiceConversationPolicy(params.settings);
-  const followup = getFollowupSettings(params.settings);
   const useRealtimeTts = String(voiceConversation.ttsMode || "").trim().toLowerCase() !== "api";
   const streamingVoiceReplyEnabled =
     useRealtimeTts &&
@@ -689,7 +687,6 @@ export async function runVoiceReplyPipeline(
       soundboardCandidates: soundboardCandidateLines,
       streamWatchLatestFrame,
       nativeDiscordSharers: sharedTurnContext.nativeDiscordSharers,
-      webSearchTimeoutMs: Number(followup.toolBudget?.toolTimeoutMs),
       voiceToolCallbacks: host.buildVoiceToolCallbacks({ session, settings: params.settings }),
       onSpokenSentence: async ({
         text,

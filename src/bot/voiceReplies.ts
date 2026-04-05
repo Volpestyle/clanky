@@ -668,7 +668,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   streamWatchLatestFrame = null,
   nativeDiscordSharers = [],
   recentToolOutcomes = [],
-  webSearchTimeoutMs: _webSearchTimeoutMs = null,
   voiceToolCallbacks = null,
   onSpokenSentence = null,
   streamingSentencesEnabled: _streamingSentencesEnabled = null,

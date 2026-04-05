@@ -1,6 +1,4 @@
 import { MAX_WEB_QUERY_LEN, normalizeDirectiveText } from "./botHelpers.ts";
-import { getFollowupSettings, getResolvedFollowupBinding } from "../settings/agentStack.ts";
-import { deepMerge } from "../utils.ts";
 
 type ReplyFollowupTrace = Record<string, unknown> & {
   event?: string;
@@ -26,27 +24,6 @@ type WebSearchState = {
   };
   [key: string]: unknown;
 };
-
-export function resolveReplyFollowupGenerationSettings(settings) {
-  const followupConfig = getFollowupSettings(settings);
-  if (!followupConfig.enabled) return settings;
-
-  const binding = getResolvedFollowupBinding(settings);
-  const provider = String(binding.provider || "").trim();
-  const model = String(binding.model || "").trim();
-  if (!provider || !model) return settings;
-
-  return deepMerge(deepMerge({}, settings), {
-    agentStack: {
-      overrides: {
-        orchestrator: {
-          provider,
-          model
-        }
-      }
-    }
-  });
-}
 
 export async function runModelRequestedWebSearch<T extends WebSearchState>(
   runtime,

@@ -105,24 +105,6 @@ test("normalizeSettings clamps and canonicalizes complex settings payloads", () 
       replyGeneration: {
         temperature: 9,
         maxOutputTokens: 1
-      },
-      followup: {
-        enabled: true,
-        execution: {
-          mode: "dedicated_model",
-          model: {
-            provider: "not-real",
-            model: ""
-          }
-        },
-        toolBudget: {
-          maxToolSteps: 99,
-          maxTotalToolCalls: -5,
-          maxWebSearchCalls: 7,
-          maxMemoryLookupCalls: -2,
-          maxImageLookupCalls: 999,
-          toolTimeoutMs: 999999
-        }
       }
     },
     media: {
@@ -190,10 +172,6 @@ test("normalizeSettings clamps and canonicalizes complex settings payloads", () 
     }
   });
 
-  const followupExecution = normalized.interaction.followup.execution as {
-    mode: string;
-    model?: { provider: string; model: string };
-  };
   const browserExecution = normalized.agentStack.runtimeConfig.browser.localBrowserAgent.execution as {
     mode: string;
     model?: { provider: string; model: string };
@@ -220,19 +198,6 @@ test("normalizeSettings clamps and canonicalizes complex settings payloads", () 
   });
   assert.equal(normalized.interaction.replyGeneration.temperature, 2);
   assert.equal(normalized.interaction.replyGeneration.maxOutputTokens, 32);
-
-  assert.equal(normalized.interaction.followup.enabled, true);
-  assert.equal(followupExecution.mode, "dedicated_model");
-  assert.deepEqual(followupExecution.model, {
-    provider: "xai",
-    model: "grok-3-mini-latest"
-  });
-  assert.equal(normalized.interaction.followup.toolBudget.maxToolSteps, 6);
-  assert.equal(normalized.interaction.followup.toolBudget.maxTotalToolCalls, 0);
-  assert.equal(normalized.interaction.followup.toolBudget.maxWebSearchCalls, 7);
-  assert.equal(normalized.interaction.followup.toolBudget.maxMemoryLookupCalls, 0);
-  assert.equal(normalized.interaction.followup.toolBudget.maxImageLookupCalls, 8);
-  assert.equal(normalized.interaction.followup.toolBudget.toolTimeoutMs, 120_000);
 
   assert.equal(normalized.agentStack.runtimeConfig.research.enabled, true);
   assert.deepEqual(

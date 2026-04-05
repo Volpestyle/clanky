@@ -22,10 +22,6 @@ export function LlmConfigurationSettingsSection({
   selectTextInitiativePresetModel,
   textInitiativeModelOptions,
   selectedTextInitiativePresetModel,
-  setReplyFollowupProvider,
-  selectReplyFollowupPresetModel,
-  replyFollowupModelOptions,
-  selectedReplyFollowupPresetModel,
   setMemoryLlmProvider,
   selectMemoryLlmPresetModel,
   memoryLlmModelOptions,
@@ -133,125 +129,6 @@ export function LlmConfigurationSettingsSection({
               </option>
             ))}
           </select>
-        </div>
-      </div>
-
-      <h4>Reply Follow-Up Regeneration LLM</h4>
-      <p>Optional override for second-pass reply regeneration (web search / memory lookup follow-ups).</p>
-      <div className="toggles">
-        <label>
-          <input
-            type="checkbox"
-            checked={form.replyFollowupLlmEnabled}
-            onChange={set("replyFollowupLlmEnabled")}
-          />
-          Use separate follow-up LLM
-        </label>
-      </div>
-      <div className="split">
-        <div>
-          <label htmlFor="reply-followup-llm-provider">Provider</label>
-          <select
-            id="reply-followup-llm-provider"
-            value={form.replyFollowupLlmProvider}
-            onChange={setReplyFollowupProvider}
-            disabled={!form.replyFollowupLlmEnabled}
-          >
-            <LlmProviderOptions />
-          </select>
-        </div>
-        <div>
-          <label htmlFor="reply-followup-llm-model-preset">Model ID</label>
-          <select
-            id="reply-followup-llm-model-preset"
-            value={selectedReplyFollowupPresetModel}
-            onChange={selectReplyFollowupPresetModel}
-            disabled={!form.replyFollowupLlmEnabled}
-          >
-            {replyFollowupModelOptions.map((modelId) => (
-              <option key={modelId} value={modelId}>
-                {modelId}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-      <div className="split">
-        <div>
-          <label htmlFor="reply-followup-max-tool-steps">Max loop steps</label>
-          <input
-            id="reply-followup-max-tool-steps"
-            type="number"
-            min="0"
-            max="6"
-            step="1"
-            value={form.replyFollowupMaxToolSteps}
-            onChange={set("replyFollowupMaxToolSteps")}
-          />
-        </div>
-        <div>
-          <label htmlFor="reply-followup-max-total-tool-calls">Max total tool calls</label>
-          <input
-            id="reply-followup-max-total-tool-calls"
-            type="number"
-            min="0"
-            max="12"
-            step="1"
-            value={form.replyFollowupMaxTotalToolCalls}
-            onChange={set("replyFollowupMaxTotalToolCalls")}
-          />
-        </div>
-      </div>
-      <div className="split">
-        <div>
-          <label htmlFor="reply-followup-max-web-search-calls">Max web-search calls</label>
-          <input
-            id="reply-followup-max-web-search-calls"
-            type="number"
-            min="0"
-            max="6"
-            step="1"
-            value={form.replyFollowupMaxWebSearchCalls}
-            onChange={set("replyFollowupMaxWebSearchCalls")}
-          />
-        </div>
-        <div>
-          <label htmlFor="reply-followup-max-memory-lookup-calls">Max memory-lookup calls</label>
-          <input
-            id="reply-followup-max-memory-lookup-calls"
-            type="number"
-            min="0"
-            max="6"
-            step="1"
-            value={form.replyFollowupMaxMemoryLookupCalls}
-            onChange={set("replyFollowupMaxMemoryLookupCalls")}
-          />
-        </div>
-      </div>
-      <div className="split">
-        <div>
-          <label htmlFor="reply-followup-max-image-lookup-calls">Max image-lookup calls</label>
-          <input
-            id="reply-followup-max-image-lookup-calls"
-            type="number"
-            min="0"
-            max="6"
-            step="1"
-            value={form.replyFollowupMaxImageLookupCalls}
-            onChange={set("replyFollowupMaxImageLookupCalls")}
-          />
-        </div>
-        <div>
-          <label htmlFor="reply-followup-tool-timeout-ms">Tool timeout (ms)</label>
-          <input
-            id="reply-followup-tool-timeout-ms"
-            type="number"
-            min="0"
-            max="60000"
-            step="100"
-            value={form.replyFollowupToolTimeoutMs}
-            onChange={set("replyFollowupToolTimeoutMs")}
-          />
         </div>
       </div>
 

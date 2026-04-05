@@ -194,12 +194,6 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.allowedChannels = "2\n2\n3\n";
   form.discoveryRssFeeds = "https://one.example/feed\nhttps://one.example/feed\n";
   form.discoveryXHandles = "@alice\n@alice\nbob\n";
-  form.replyFollowupMaxToolSteps = 5;
-  form.replyFollowupMaxTotalToolCalls = 11;
-  form.replyFollowupMaxWebSearchCalls = 4;
-  form.replyFollowupMaxMemoryLookupCalls = 3;
-  form.replyFollowupMaxImageLookupCalls = 1;
-  form.replyFollowupToolTimeoutMs = 16000;
   form.automationsEnabled = false;
   form.browserHeaded = true;
   form.voiceGenerationLlmUseTextModel = true;

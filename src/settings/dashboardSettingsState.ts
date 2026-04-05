@@ -1,6 +1,5 @@
 import type { Settings, SettingsInput } from "./settingsSchema.ts";
 import {
-  getResolvedFollowupBinding,
   getResolvedMemoryBinding,
   getResolvedMinecraftBrainBinding,
   getResolvedOrchestratorBinding,
@@ -33,7 +32,6 @@ export type DashboardProviderAuthBindings = {
 export type ResolvedBindings = {
   agentStack: ReturnType<typeof resolveAgentStack>;
   orchestrator: ReturnType<typeof getResolvedOrchestratorBinding>;
-  followupBinding: ReturnType<typeof getResolvedFollowupBinding>;
   memoryBinding: ReturnType<typeof getResolvedMemoryBinding>;
   minecraftBrainBinding: ReturnType<typeof getResolvedMinecraftBrainBinding>;
   textInitiativeBinding: ReturnType<typeof getResolvedTextInitiativeBinding>;
@@ -75,7 +73,6 @@ function resolveSettingsBindings(
   return {
     agentStack: resolveAgentStack(settings),
     orchestrator: getResolvedOrchestratorBinding(settings),
-    followupBinding: getResolvedFollowupBinding(settings),
     memoryBinding: getResolvedMemoryBinding(settings),
     minecraftBrainBinding: getResolvedMinecraftBrainBinding(settings),
     textInitiativeBinding: getResolvedTextInitiativeBinding(settings),

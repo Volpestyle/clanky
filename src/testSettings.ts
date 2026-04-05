@@ -26,7 +26,6 @@ export function normalizeLegacyTestSettingsInput(overrides: unknown): Record<str
   const prompt = isRecord(raw.prompt) ? raw.prompt : {};
   const activity = isRecord(raw.activity) ? raw.activity : {};
   const llm = isRecord(raw.llm) ? raw.llm : {};
-  const replyFollowupLlm = isRecord(raw.replyFollowupLlm) ? raw.replyFollowupLlm : {};
   const memoryLlm = isRecord(raw.memoryLlm) ? raw.memoryLlm : {};
   const webSearch = isRecord(raw.webSearch) ? raw.webSearch : {};
   const browser = isRecord(raw.browser) ? raw.browser : {};
@@ -117,24 +116,6 @@ export function normalizeLegacyTestSettingsInput(overrides: unknown): Record<str
         maxOutputTokens: llm.maxOutputTokens,
         reasoningEffort: llm.reasoningEffort,
         pricing: llm.pricing
-      },
-      followup: {
-        enabled: replyFollowupLlm.enabled,
-        execution: {
-          mode: "dedicated_model",
-          model: {
-            provider: replyFollowupLlm.provider ?? llm.provider,
-            model: replyFollowupLlm.model ?? llm.model
-          }
-        },
-        toolBudget: {
-          maxToolSteps: replyFollowupLlm.maxToolSteps,
-          maxTotalToolCalls: replyFollowupLlm.maxTotalToolCalls,
-          maxWebSearchCalls: replyFollowupLlm.maxWebSearchCalls,
-          maxMemoryLookupCalls: replyFollowupLlm.maxMemoryLookupCalls,
-          maxImageLookupCalls: replyFollowupLlm.maxImageLookupCalls,
-          toolTimeoutMs: replyFollowupLlm.toolTimeoutMs
-        }
       },
       startup: {
         catchupEnabled: startup.catchupEnabled,
