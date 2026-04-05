@@ -89,6 +89,11 @@ export interface AgentContext extends BotContext {
   readonly subAgentSessions: SubAgentSessionManager;
   /** Check whether the bot is in an active voice session for a guild. */
   readonly isGuildInVoice?: (guildId: string) => boolean;
+  readonly canSendMessage: (maxPerHour: number) => boolean;
+  readonly canTalkNow: (settings: Record<string, unknown>) => boolean;
+  readonly getSimulatedTypingDelayMs: (minMs: number, jitterMs: number) => number;
+  readonly composeMessageContentForHistory: ComposeMessageContentForHistoryRuntimeFn;
+  readonly markSpoke: () => void;
 }
 
 export interface BudgetContext extends BotContext {

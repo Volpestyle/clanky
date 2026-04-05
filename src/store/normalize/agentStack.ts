@@ -37,6 +37,27 @@ import {
 
 const CODING_WORKER_SET = new Set<SettingsCodingWorkerName>(CODING_WORKER_RUNTIME_KINDS);
 
+function normalizeMinecraftServerCatalog(raw: unknown): Array<{
+  label: string;
+  host: string;
+  port: number;
+  description: string;
+}> {
+  if (!Array.isArray(raw)) return [];
+  const entries: Array<{ label: string; host: string; port: number; description: string }> = [];
+  for (const entry of raw) {
+    if (!isRecord(entry)) continue;
+    const label = normalizeString(entry.label, "", 80);
+    if (!label.trim()) continue;
+    const host = normalizeString(entry.host, "", 200);
+    const port = normalizeInt(entry.port, 25565, 1, 65535);
+    const description = normalizeString(entry.description, "", 160);
+    entries.push({ label, host, port, description });
+    if (entries.length >= 16) break;
+  }
+  return entries;
+}
+
 function normalizeCodingWorkerName(value: unknown): SettingsCodingWorkerName | undefined {
   const normalized = normalizeString(value, "", 40).toLowerCase() as SettingsCodingWorkerName;
   return CODING_WORKER_SET.has(normalized) ? normalized : undefined;
@@ -683,6 +704,29 @@ export function normalizeAgentStackSection(
             minecraft.server?.description,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.minecraft.server.description,
             160
+          )
+        },
+        serverCatalog: normalizeMinecraftServerCatalog(minecraft.serverCatalog),
+        narration: {
+          eagerness: normalizeInt(
+            minecraft.narration?.eagerness,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.minecraft.narration.eagerness,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.minecraft.narration.eagerness.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.minecraft.narration.eagerness.max
+          ),
+          minSecondsBetweenPosts: normalizeInt(
+            minecraft.narration?.minSecondsBetweenPosts,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.minecraft.narration.minSecondsBetweenPosts,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.minecraft.narration.minSecondsBetweenPosts.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.minecraft.narration.minSecondsBetweenPosts.max
+          )
+        },
+        project: {
+          defaultActionBudget: normalizeInt(
+            minecraft.project?.defaultActionBudget,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.minecraft.project.defaultActionBudget,
+            5,
+            200
           )
         },
         execution: normalizeExecutionPolicy(

@@ -93,6 +93,14 @@ function createAgentContext(bot: ClankerBot, botContext: BotContext): AgentConte
     isGuildInVoice: (guildId: string) => {
       const session = bot.voiceSessionManager?.getSession(guildId);
       return Boolean(session && !session.ending);
+    },
+    canSendMessage: (maxPerHour) => bot.canSendMessage(maxPerHour),
+    canTalkNow: (settings) => bot.canTalkNow(settings),
+    getSimulatedTypingDelayMs: (minMs, jitterMs) => bot.getSimulatedTypingDelayMs(minMs, jitterMs),
+    composeMessageContentForHistory: (message, baseText) =>
+      composeHistoryMessageContent(message, baseText),
+    markSpoke: () => {
+      markSpoke(bot);
     }
   };
 }

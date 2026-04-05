@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { normalizeSettings } from "../store/settingsNormalization.ts";
-import { getMinecraftConfig } from "./agentStack.ts";
+import { getMinecraftConfig, getMinecraftNarrationSettings } from "./agentStack.ts";
 
 test("getMinecraftConfig surfaces the canonical Minecraft server target for embodied sessions", () => {
   const settings = normalizeSettings({
@@ -31,4 +31,24 @@ test("getMinecraftConfig surfaces the canonical Minecraft server target for embo
     port: 25570,
     description: "Primary operator world"
   });
+});
+
+test("getMinecraftNarrationSettings surfaces scoped Discord narration controls", () => {
+  const settings = normalizeSettings({
+    agentStack: {
+      runtimeConfig: {
+        minecraft: {
+          narration: {
+            eagerness: 72,
+            minSecondsBetweenPosts: 90
+          }
+        }
+      }
+    }
+  });
+
+  const narration = getMinecraftNarrationSettings(settings);
+
+  assert.equal(narration.eagerness, 72);
+  assert.equal(narration.minSecondsBetweenPosts, 90);
 });

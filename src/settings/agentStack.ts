@@ -381,6 +381,46 @@ export function getMinecraftRuntimeConfig(settings: unknown): Settings["agentSta
   return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig.minecraft, getRuntimeConfig(settings).minecraft);
 }
 
+export function getMinecraftNarrationSettings(settings: unknown): Settings["agentStack"]["runtimeConfig"]["minecraft"]["narration"] {
+  return getMinecraftRuntimeConfig(settings).narration;
+}
+
+export function getMinecraftProjectSettings(settings: unknown): Settings["agentStack"]["runtimeConfig"]["minecraft"]["project"] {
+  return getMinecraftRuntimeConfig(settings).project;
+}
+
+export function getMinecraftProjectActionBudget(settings: unknown): number {
+  const project = getMinecraftProjectSettings(settings);
+  const budget = Number(project?.defaultActionBudget);
+  if (!Number.isFinite(budget)) return 40;
+  return Math.max(5, Math.min(200, Math.round(budget)));
+}
+
+export function getMinecraftServerCatalog(settings: unknown): Array<{
+  label: string;
+  host: string | null;
+  port: number | null;
+  description: string | null;
+}> {
+  const runtimeConfig = getMinecraftRuntimeConfig(settings) as Record<string, unknown>;
+  const raw = runtimeConfig?.serverCatalog;
+  if (!Array.isArray(raw)) return [];
+  const entries: Array<{ label: string; host: string | null; port: number | null; description: string | null }> = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    const label = String(record.label || "").trim().slice(0, 80);
+    if (!label) continue;
+    const host = String(record.host || "").trim().slice(0, 200) || null;
+    const rawPort = Number(record.port);
+    const port = Number.isFinite(rawPort) && rawPort >= 1 && rawPort <= 65535 ? Math.round(rawPort) : null;
+    const description = String(record.description || "").trim().slice(0, 160) || null;
+    entries.push({ label, host, port, description });
+    if (entries.length >= 16) break;
+  }
+  return entries;
+}
+
 function getPresetDefaults(settings: unknown): PresetDefaults {
   const agentStack = getAgentStackSettings(settings);
   return getAgentStackPresetDefaults(agentStack.preset || DEFAULT_SETTINGS.agentStack.preset);

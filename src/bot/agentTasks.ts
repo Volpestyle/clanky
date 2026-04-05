@@ -16,13 +16,26 @@ import {
 } from "../tools/browserTaskRuntime.ts";
 import { clamp } from "../utils.ts";
 import { MAX_BROWSER_BROWSE_QUERY_LEN, normalizeDirectiveText } from "./botHelpers.ts";
-import { getResolvedBrowserTaskConfig, isDevTaskEnabled, isMinecraftEnabled, getMinecraftConfig } from "../settings/agentStack.ts";
+import {
+  getResolvedBrowserTaskConfig,
+  isDevTaskEnabled,
+  isMinecraftEnabled,
+  getMinecraftConfig,
+  getMinecraftProjectActionBudget,
+  getMinecraftServerCatalog
+} from "../settings/agentStack.ts";
 import { createMinecraftSession as createMinecraftSessionRuntime } from "../agents/minecraft/minecraftSession.ts";
 import {
   buildMinecraftSessionScopeKey,
   findReusableMinecraftSession
 } from "../agents/minecraft/minecraftSessionAccess.ts";
+import {
+  createMinecraftNarrationState,
+  maybePostMinecraftNarration,
+  type MinecraftNarrationRuntime
+} from "./minecraftNarration.ts";
 import { createMinecraftBrain } from "../agents/minecraft/minecraftBrain.ts";
+import { createMinecraftBuilder } from "../agents/minecraft/minecraftBuilder.ts";
 import { resolveMinecraftMcpServer, type MinecraftMcpProcess } from "../agents/minecraft/minecraftMcpProcess.ts";
 import type { BrowserBrowseContextState } from "./budgetTracking.ts";
 import type { AgentContext } from "./botContext.ts";
@@ -543,6 +556,11 @@ async function createMinecraftSession(
   if (!baseUrl) return null;
 
   const config = getMinecraftConfig(settings);
+  const narrationState = createMinecraftNarrationState();
+  const narrationRuntime: MinecraftNarrationRuntime = {
+    ...ctx,
+    client: ctx.client as MinecraftNarrationRuntime["client"]
+  };
 
   // Cross-surface Discord context: only for guild-scoped sessions. DM/owner-private
   // scopes deliberately get no Discord context because MC chat may be visible to
@@ -568,18 +586,43 @@ async function createMinecraftSession(
     ownerUserId: userId,
     operatorPlayerName: config.operatorPlayerName,
     serverTarget: config.serverTarget,
+    serverCatalog: getMinecraftServerCatalog(settings),
     logAction,
-    onGameEvent: (events) =>
-      logAction({
-        kind: "minecraft_game_events",
-        content: events.join("; "),
-        metadata: { events, eventCount: events.length }
-      }),
+    onGameEvent: (events, context) =>
+      {
+        logAction({
+          kind: "minecraft_game_events",
+          content: events.map((event) => `[${event.type}] ${event.summary}`).join("; "),
+          metadata: { events, eventCount: events.length }
+        });
+        void maybePostMinecraftNarration(narrationRuntime, {
+          guildId,
+          channelId,
+          ownerUserId: userId,
+          scopeKey,
+          source,
+          serverLabel: config.serverTarget?.label || config.serverTarget?.host || null,
+          events,
+          chatHistory: context?.chatHistory,
+          state: narrationState
+        }).catch((error) => {
+          logAction({
+            kind: "bot_error",
+            content: `minecraft_narration: ${String(error instanceof Error ? error.message : error)}`,
+            metadata: { scopeKey, events }
+          });
+        });
+      },
     getRecentDiscordContext,
     brain: createMinecraftBrain(
       ctx.llm,
       () => ctx.store.getSettings()
-    )
+    ),
+    builder: createMinecraftBuilder(
+      ctx.llm,
+      () => ctx.store.getSettings()
+    ),
+    projectActionBudget: getMinecraftProjectActionBudget(settings)
   });
 }
 

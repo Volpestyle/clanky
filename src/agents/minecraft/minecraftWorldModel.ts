@@ -8,6 +8,7 @@
 import type {
   HazardSnapshot,
   MinecraftMode,
+  MinecraftVisualScene,
   PlayerSnapshot,
   Position,
   SelfSnapshot,
@@ -34,6 +35,14 @@ function buildPlayerSnapshot(entry: McpPlayerEntry, _botPosition: Position | nul
 
 function buildSelfSnapshot(status: McpStatusSnapshot): SelfSnapshot | null {
   if (!status.connected || !status.position) return null;
+  const equipment = status.equipment ?? {
+    hand: null,
+    offhand: null,
+    helmet: null,
+    chestplate: null,
+    leggings: null,
+    boots: null
+  };
   return {
     position: toPosition(status.position)!,
     health: status.health ?? 20,
@@ -45,12 +54,12 @@ function buildSelfSnapshot(status: McpStatusSnapshot): SelfSnapshot | null {
     dimension: status.dimension ?? "overworld",
     gameMode: status.gameMode ?? "survival",
     equipment: {
-      hand: null,
-      offhand: null,
-      helmet: null,
-      chestplate: null,
-      leggings: null,
-      boots: null
+      hand: equipment.hand,
+      offhand: equipment.offhand,
+      helmet: equipment.helmet,
+      chestplate: equipment.chestplate,
+      leggings: equipment.leggings,
+      boots: equipment.boots
     },
     inventoryFull: (status.inventory?.length ?? 0) >= 36,
     inventorySummary: (status.inventory ?? []).map((item) => ({
@@ -96,7 +105,8 @@ export function buildWorldSnapshot(
   sessionId: string,
   mode: MinecraftMode,
   status: McpStatusSnapshot,
-  operatorName: string | null = null
+  operatorName: string | null = null,
+  visualScene: MinecraftVisualScene | null = null
 ): WorldSnapshot {
   const self = buildSelfSnapshot(status);
   const allPlayers = (status.players ?? [])
@@ -136,6 +146,7 @@ export function buildWorldSnapshot(
     hazards,
     task: buildTaskSnapshot(status.task),
     recentEvents: status.recentEvents ?? [],
+    visualScene,
     timeOfDay: status.timeOfDay ?? null,
     isRaining: false,
     reflexStatus: "idle"

@@ -1,5 +1,7 @@
 import { SettingsSection } from "../SettingsSection";
 import { LlmProviderOptions } from "./LlmProviderOptions";
+import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../../../src/settings/settingsConstraints.ts";
+import { rangeStyle } from "../../utils";
 
 export function MinecraftSettingsSection({
   id,
@@ -12,6 +14,7 @@ export function MinecraftSettingsSection({
 }) {
   const enabled = Boolean(form.minecraftEnabled);
   const useTextModel = Boolean(form.minecraftBrainUseTextModel);
+  const narrationEagerness = Number(form.minecraftNarrationEagerness) || 0;
 
   return (
     <SettingsSection id={id} title="Minecraft Agent" active={enabled}>
@@ -61,6 +64,45 @@ export function MinecraftSettingsSection({
               Your Minecraft username. Used for &quot;follow me&quot; and
               &quot;guard me&quot; commands. Can also be set via the{" "}
               <code>MC_OPERATOR_USERNAME</code> env var.
+            </p>
+          </div>
+
+          <label htmlFor="minecraft-narration-eagerness">
+            Proactive narration eagerness: <strong>{narrationEagerness}%</strong>
+          </label>
+          <input
+            id="minecraft-narration-eagerness"
+            type="range"
+            min={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.minecraft.narration.eagerness.min}
+            max={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.minecraft.narration.eagerness.max}
+            step="1"
+            value={narrationEagerness}
+            onChange={set("minecraftNarrationEagerness")}
+            style={rangeStyle(narrationEagerness)}
+          />
+          <p className="status-msg">
+            Cost gate that shortlists significant in-world events (deaths, combat,
+            player joins/leaves, first-time major finds) before the model decides
+            whether to post to the owning Discord channel. Higher widens the
+            filter; the model can still <code>[SKIP]</code>.
+          </p>
+
+          <div className="field">
+            <label htmlFor="minecraft-narration-min-gap">
+              Minimum seconds between narration posts
+            </label>
+            <input
+              id="minecraft-narration-min-gap"
+              type="number"
+              min={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.minecraft.narration.minSecondsBetweenPosts.min}
+              max={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.minecraft.narration.minSecondsBetweenPosts.max}
+              value={Number(form.minecraftNarrationMinSecondsBetweenPosts) || 0}
+              onChange={set("minecraftNarrationMinSecondsBetweenPosts")}
+            />
+            <p className="status-msg">
+              Per-channel cooldown between narration attempts (including SKIPs).
+              Prevents rapid-fire posts when several significant events fire close
+              together.
             </p>
           </div>
 

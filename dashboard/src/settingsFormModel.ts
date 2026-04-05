@@ -337,8 +337,19 @@ function buildSettingsFormView(settings: unknown) {
       enabled: Boolean(minecraft.enabled),
       mcpUrl: String(minecraft.mcpUrl || ""),
       operatorPlayerName: String(minecraft.operatorPlayerName || ""),
+      runtimeConfig: { ...minecraft },
       useTextModel: minecraft.execution?.mode !== "dedicated_model",
-      llm: minecraftBrainBinding
+      llm: minecraftBrainBinding,
+      narration: {
+        eagerness: Number(
+          minecraft.narration?.eagerness ??
+            d.agentStack.runtimeConfig.minecraft.narration.eagerness
+        ),
+        minSecondsBetweenPosts: Number(
+          minecraft.narration?.minSecondsBetweenPosts ??
+            d.agentStack.runtimeConfig.minecraft.narration.minSecondsBetweenPosts
+        )
+      }
     },
     vision: {
       captionEnabled: vision.enabled,
@@ -606,9 +617,15 @@ export function settingsToForm(settings: unknown) {
     minecraftEnabled: resolved.minecraft.enabled ?? defaults.minecraft.enabled,
     minecraftMcpUrl: resolved.minecraft.mcpUrl ?? defaults.minecraft.mcpUrl,
     minecraftOperatorPlayerName: resolved.minecraft.operatorPlayerName ?? defaults.minecraft.operatorPlayerName,
+    minecraftRuntimeConfig: resolved.minecraft.runtimeConfig ?? defaults.minecraft.runtimeConfig,
     minecraftBrainUseTextModel: resolved.minecraft.useTextModel ?? defaults.minecraft.useTextModel,
     minecraftBrainLlmProvider: resolved.minecraft.llm.provider ?? defaults.minecraft.llm.provider,
     minecraftBrainLlmModel: resolved.minecraft.llm.model ?? defaults.minecraft.llm.model,
+    minecraftNarrationEagerness:
+      resolved.minecraft.narration?.eagerness ?? defaults.minecraft.narration.eagerness,
+    minecraftNarrationMinSecondsBetweenPosts:
+      resolved.minecraft.narration?.minSecondsBetweenPosts ??
+      defaults.minecraft.narration.minSecondsBetweenPosts,
     visionCaptionEnabled: resolved.vision.captionEnabled ?? defaultVision.captionEnabled,
     visionProvider: resolved.vision.provider ?? defaultVision.provider,
     visionModel: resolved.vision.model ?? defaultVision.model,
@@ -1200,6 +1217,22 @@ export function getSettingsValidationError(form: SettingsForm): SettingsFormVali
       value: form.codeAgentAsyncMaxReportsPerTask,
       min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.min,
       max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.max
+    }),
+    validateNumericField({
+      enabled: Boolean(form.minecraftEnabled),
+      sectionId: "sec-minecraft",
+      label: "Minecraft narration eagerness",
+      value: form.minecraftNarrationEagerness,
+      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.minecraft.narration.eagerness.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.minecraft.narration.eagerness.max
+    }),
+    validateNumericField({
+      enabled: Boolean(form.minecraftEnabled),
+      sectionId: "sec-minecraft",
+      label: "Minecraft narration minimum seconds between posts",
+      value: form.minecraftNarrationMinSecondsBetweenPosts,
+      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.minecraft.narration.minSecondsBetweenPosts.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.minecraft.narration.minSecondsBetweenPosts.max
     })
   ].filter((entry): entry is SettingsFormValidationError => entry !== null);
 
@@ -1213,6 +1246,9 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
   const rawCodeAgentWorkerConfigs = form.codeAgentWorkerConfigs;
   const rawCodeAgentNonWorkerRuntimeConfig: Record<string, unknown> = isRecordLike(form.codeAgentNonWorkerRuntimeConfig)
     ? form.codeAgentNonWorkerRuntimeConfig
+    : {};
+  const rawMinecraftRuntimeConfig: Record<string, unknown> = isRecordLike(form.minecraftRuntimeConfig)
+    ? form.minecraftRuntimeConfig
     : {};
   const normalizedCodeAgentWorkspaceMode = normalizeCodeAgentWorkspaceModeSetting(
     form.codeAgentWorkspaceMode,
@@ -1700,9 +1736,17 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
           })
         },
         minecraft: {
+          ...rawMinecraftRuntimeConfig,
           enabled: Boolean(form.minecraftEnabled),
           mcpUrl: String(form.minecraftMcpUrl || "").trim(),
           operatorPlayerName: String(form.minecraftOperatorPlayerName || "").trim(),
+          narration: {
+            ...(isRecordLike(rawMinecraftRuntimeConfig.narration)
+              ? rawMinecraftRuntimeConfig.narration
+              : {}),
+            eagerness: Number(form.minecraftNarrationEagerness),
+            minSecondsBetweenPosts: Number(form.minecraftNarrationMinSecondsBetweenPosts)
+          },
           execution: Boolean(form.minecraftBrainUseTextModel)
             ? {
                 mode: "inherit_orchestrator"

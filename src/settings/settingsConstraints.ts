@@ -35,6 +35,15 @@ export const SETTINGS_NUMERIC_CONSTRAINTS = {
     },
     voiceRuntime: {
       sampleRateHz: { min: 8_000, max: 96_000 }
+    },
+    minecraft: {
+      narration: {
+        eagerness: { min: 0, max: 100 },
+        minSecondsBetweenPosts: { min: 0, max: 86_400 }
+      },
+      project: {
+        defaultActionBudget: { min: 5, max: 200 }
+      }
     }
   },
   voice: {

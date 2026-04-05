@@ -684,6 +684,80 @@ test("settingsFormModel persists dedicated Minecraft brain selections", () => {
   });
 });
 
+test("settingsFormModel round-trips Minecraft narration knobs", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({
+    agentStack: {
+      runtimeConfig: {
+        minecraft: {
+          enabled: true,
+          narration: {
+            eagerness: 72,
+            minSecondsBetweenPosts: 45
+          }
+        }
+      }
+    }
+  })));
+
+  assert.equal(form.minecraftNarrationEagerness, 72);
+  assert.equal(form.minecraftNarrationMinSecondsBetweenPosts, 45);
+
+  form.minecraftNarrationEagerness = 10;
+  form.minecraftNarrationMinSecondsBetweenPosts = 600;
+
+  const { effectivePatch } = serializeForm(form);
+  assert.deepEqual(effectivePatch.agentStack.runtimeConfig.minecraft.narration, {
+    eagerness: 10,
+    minSecondsBetweenPosts: 600
+  });
+});
+
+test("settingsFormModel preserves hidden Minecraft server and project config on save", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({
+    agentStack: {
+      runtimeConfig: {
+        minecraft: {
+          enabled: true,
+          server: {
+            label: "Survival",
+            host: "survival.example",
+            port: 25565,
+            description: "Primary world"
+          },
+          serverCatalog: [{
+            label: "Creative",
+            host: "creative.example",
+            port: 25566,
+            description: "Sandbox"
+          }],
+          project: {
+            defaultActionBudget: 77
+          }
+        }
+      }
+    }
+  })));
+
+  form.minecraftNarrationEagerness = 33;
+
+  const snapshot = formToSettingsSnapshot(form);
+  assert.deepEqual(snapshot.agentStack.runtimeConfig.minecraft.server, {
+    label: "Survival",
+    host: "survival.example",
+    port: 25565,
+    description: "Primary world"
+  });
+  assert.deepEqual(snapshot.agentStack.runtimeConfig.minecraft.serverCatalog, [{
+    label: "Creative",
+    host: "creative.example",
+    port: 25566,
+    description: "Sandbox"
+  }]);
+  assert.deepEqual(snapshot.agentStack.runtimeConfig.minecraft.project, {
+    defaultActionBudget: 77
+  });
+});
+
 test("settingsFormModel persists bridge classifier overrides even when advanced overrides are off", () => {
   const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {

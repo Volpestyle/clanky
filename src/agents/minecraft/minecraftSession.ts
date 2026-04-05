@@ -22,24 +22,40 @@
  */
 
 import { BaseAgentSession } from "../baseAgentSession.ts";
+import type { ImageInput } from "../../llm/serviceShared.ts";
 import { EMPTY_USAGE, generateSessionId } from "../subAgentSession.ts";
 import type { SubAgentTurnOptions, SubAgentTurnResult } from "../subAgentSession.ts";
 import type {
+  MinecraftActionFailure,
+  MinecraftActionFailureReason,
+  MinecraftAllowedChest,
   MinecraftBrainAction,
+  MinecraftBuildPlan,
+  MinecraftGameEvent,
   MinecraftConstraints,
+  MinecraftItemRequest,
+  MinecraftLookCapture,
   MinecraftMode,
   MinecraftPlannerState,
+  MinecraftProject,
+  MinecraftServerCatalogEntry,
   MinecraftServerTarget,
+  MinecraftVisualScene,
   Position
 } from "./types.ts";
 import { MinecraftRuntime, type McpStatusSnapshot } from "./minecraftRuntime.ts";
 import { buildWorldSnapshot } from "./minecraftWorldModel.ts";
-import { evaluateReflexes, executeReflex } from "./minecraftReflexes.ts";
+import { detectStuck, evaluateReflexes, executeReflex } from "./minecraftReflexes.ts";
 import type { DiscordContextMessage, MinecraftBrain, MinecraftChatMessage } from "./minecraftBrain.ts";
 import { FollowPlayerSkill } from "./skills/followPlayer.ts";
 import { GuardPlayerSkill } from "./skills/guardPlayer.ts";
 import { CollectBlockSkill } from "./skills/collectBlock.ts";
 import { ReturnHomeSkill } from "./skills/returnHome.ts";
+import { CraftItemSkill } from "./skills/craftItem.ts";
+import { DepositItemsSkill } from "./skills/depositItems.ts";
+import { WithdrawItemsSkill } from "./skills/withdrawItems.ts";
+import { BuildStructureSkill } from "./skills/buildStructure.ts";
+import type { MinecraftBuilder } from "./minecraftBuilder.ts";
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -52,11 +68,24 @@ const MAX_TICK_FAILURES = 5;
 /** Max chat history entries kept for brain context. */
 const MAX_CHAT_HISTORY = 30;
 
+/** Max queued in-game chat messages waiting for a brain decision. */
+const MAX_PENDING_IN_GAME_MESSAGES = 10;
+
 /** Minimum ms between brain-generated chat replies to avoid spam. */
 const CHAT_REPLY_COOLDOWN_MS = 2_000;
 
 /** Max planner checkpoints the embodied brain can take in one turn. */
 const MAX_PLANNER_CHECKPOINTS_PER_TURN = 3;
+
+/**
+ * How long a captured rendered glance remains usable for the next checkpoint.
+ *
+ * The planner loop stashes the image between checkpoint N (where the brain
+ * picks `look`) and checkpoint N+1 (where the brain reasons over it). If the
+ * session sits idle between turns, the stashed capture ages out here so we
+ * never feed the brain a stale view of the world.
+ */
+const PENDING_LOOK_CAPTURE_TTL_MS = 45_000;
 
 /** Max remembered subgoals in the long-horizon planner state. */
 const MAX_PLANNER_SUBGOALS = 6;
@@ -69,10 +98,6 @@ const MC_CHAT_MAX_LEN = 240;
 
 /** Delay between multi-line chat messages (ms). */
 const MC_MULTI_LINE_DELAY_MS = 400;
-
-/** Regex to extract chat events from the MCP server's event log.
- *  Format: `<ISO timestamp> chat<Username> message text` */
-const CHAT_EVENT_RE = /^\S+\s+chat<(\w+)>\s+(.+)$/;
 
 // ── Turn input ──────────────────────────────────────────────────────────────
 
@@ -124,14 +149,30 @@ function normalizeConstraints(raw: MinecraftConstraints | Record<string, unknown
       ? record.allowed_chests
       : null;
   const allowedChests = allowedChestsRaw
-    ?.map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-    .filter(Boolean);
+    ?.map((entry) => normalizeAllowedChest(entry))
+    .filter((entry): entry is MinecraftAllowedChest => Boolean(entry));
 
   return {
     ...(stayNearPlayer !== undefined ? { stayNearPlayer } : {}),
     ...(maxDistance !== undefined ? { maxDistance } : {}),
     ...(avoidCombat !== undefined ? { avoidCombat } : {}),
     ...(allowedChests && allowedChests.length > 0 ? { allowedChests } : {})
+  };
+}
+
+function normalizeAllowedChest(raw: unknown): MinecraftAllowedChest | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  const x = Number(record.x);
+  const y = Number(record.y);
+  const z = Number(record.z);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
+  const label = typeof record.label === "string" ? record.label.trim().slice(0, 40) : "";
+  return {
+    x: Math.round(x),
+    y: Math.round(y),
+    z: Math.round(z),
+    ...(label ? { label } : {})
   };
 }
 
@@ -227,12 +268,32 @@ function joinPlannerSummaries(parts: string[]): string {
   return deduped.join(" ").trim();
 }
 
-function canContinueAfterBrainAction(action: MinecraftBrainAction): boolean {
+function canContinueAfterBrainAction(
+  action: MinecraftBrainAction,
+  execution: CommandExecutionResult,
+  plannerRequestedContinue: boolean
+): boolean {
+  if (!execution.ok) return true;
+  if (!plannerRequestedContinue) return false;
   return action.kind === "wait"
     || action.kind === "connect"
     || action.kind === "status"
+    || action.kind === "look"
     || action.kind === "chat"
-    || action.kind === "look_at";
+    || action.kind === "look_at"
+    || action.kind === "eat"
+    || action.kind === "equip_offhand"
+    || action.kind === "place_block"
+    || action.kind === "project_start"
+    || action.kind === "project_step"
+    || action.kind === "project_pause"
+    || action.kind === "project_resume"
+    || action.kind === "project_abort";
+}
+
+function toLookImageInputs(capture: MinecraftLookCapture | null | undefined): ImageInput[] {
+  if (!capture?.dataBase64) return [];
+  return [{ mediaType: capture.mediaType, dataBase64: capture.dataBase64 }];
 }
 
 // ── Structured command routing ──────────────────────────────────────────────
@@ -247,6 +308,7 @@ type ParsedCommand =
   | { kind: "connect"; host?: string; port?: number; username?: string; auth?: string }
   | { kind: "disconnect" }
   | { kind: "status" }
+  | { kind: "look" }
   | { kind: "follow"; playerName: string; distance?: number }
   | { kind: "guard"; playerName: string; radius?: number; followDistance?: number }
   | { kind: "collect"; blockName: string; count: number }
@@ -255,11 +317,21 @@ type ParsedCommand =
   | { kind: "stop" }
   | { kind: "chat"; message: string }
   | { kind: "attack" }
-  | { kind: "look_at"; playerName: string };
+  | { kind: "look_at"; playerName: string }
+  | { kind: "eat" }
+  | { kind: "equip_offhand"; itemName: string }
+  | { kind: "craft"; recipeName: string; count: number; useCraftingTable: boolean }
+  | { kind: "deposit"; chest: { x: number; y: number; z: number }; items: MinecraftItemRequest[] }
+  | { kind: "withdraw"; chest: { x: number; y: number; z: number }; items: MinecraftItemRequest[] }
+  | { kind: "place_block"; x: number; y: number; z: number; blockName: string }
+  | { kind: "build"; plan: MinecraftBuildPlan };
 
 type CommandExecutionResult = {
   text: string;
   ok: boolean;
+  failure: MinecraftActionFailure | null;
+  imageInputs?: ImageInput[];
+  lookCapture?: MinecraftLookCapture | null;
 };
 
 function parseStructuredCommand(raw: string): ParsedCommand | null {
@@ -287,7 +359,7 @@ function parseStructuredCommand(raw: string): ParsedCommand | null {
  *                   status updates).  Falls back to the last 3 events from the
  *                   full snapshot when omitted.
  */
-function formatStatus(status: McpStatusSnapshot, mode: MinecraftMode, newEvents?: string[]): string {
+function formatStatus(status: McpStatusSnapshot, mode: MinecraftMode, newEvents?: MinecraftGameEvent[]): string {
   if (!status.connected) return "Bot is not connected to any Minecraft server.";
 
   const parts: string[] = [];
@@ -309,7 +381,7 @@ function formatStatus(status: McpStatusSnapshot, mode: MinecraftMode, newEvents?
   }
   const events = newEvents ?? status.recentEvents.slice(-3);
   if (events.length > 0) {
-    parts.push(`Recent: ${events.slice(-5).join("; ")}.`);
+    parts.push(`Recent: ${events.slice(-5).map((event) => `[${event.type}] ${event.summary}`).join("; ")}.`);
   }
   return parts.join(" ");
 }
@@ -322,6 +394,12 @@ export type MinecraftSessionOptions = {
   ownerUserId: string | null;
   operatorPlayerName?: string | null;
   serverTarget?: MinecraftServerTarget | null;
+  /**
+   * Multi-world catalog of known server targets. The brain sees these in
+   * planner state as labeled choices and can connect to any of them by
+   * name. The `serverTarget` remains the primary/default.
+   */
+  serverCatalog?: MinecraftServerCatalogEntry[];
   mode?: MinecraftMode;
   constraints?: MinecraftConstraints;
   homePosition?: Position | null;
@@ -329,8 +407,17 @@ export type MinecraftSessionOptions = {
   /**
    * Called when new game events are detected (chat, death, combat, etc.).
    * The outer system can use this for proactive narration in Discord.
+   *
+   * The second `context` argument carries a snapshot of recent in-game chat
+   * history so the narration pipeline can reason about what's already been
+   * said in MC chat when deciding whether/how to surface an event in Discord.
+   * Labeled and kept separate from Discord context at the prompt layer
+   * (same pattern as Phase 2's cross-surface design).
    */
-  onGameEvent?: (events: string[]) => void;
+  onGameEvent?: (
+    events: MinecraftGameEvent[],
+    context?: { chatHistory: MinecraftChatMessage[] }
+  ) => void;
   /**
    * Returns recent Discord channel messages tied to this session's scope,
    * so the Minecraft brain can reason about cross-surface follow-ups.
@@ -346,6 +433,17 @@ export type MinecraftSessionOptions = {
    * It owns both operator-turn planning and in-game chat behavior.
    */
   brain?: MinecraftBrain;
+  /**
+   * Sub-planner that expands short build descriptions into concrete
+   * placement plans. Only consulted when the brain emits a `build` action
+   * without an explicit plan.
+   */
+  builder?: MinecraftBuilder;
+  /**
+   * Default per-project action budget. The brain can override per project
+   * when calling project_start. Infrastructure cap, not a relevance gate.
+   */
+  projectActionBudget?: number;
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -405,6 +503,129 @@ function distanceBetweenPositions(left: Position, right: Position): number {
   return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 
+function normalizePlayerNameForMatch(value: string): string {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
+function levenshteinDistance(left: string, right: string): number {
+  if (left === right) return 0;
+  if (!left.length) return right.length;
+  if (!right.length) return left.length;
+
+  const previous = new Array(right.length + 1).fill(0);
+  const current = new Array(right.length + 1).fill(0);
+
+  for (let col = 0; col <= right.length; col += 1) {
+    previous[col] = col;
+  }
+
+  for (let row = 1; row <= left.length; row += 1) {
+    current[0] = row;
+    for (let col = 1; col <= right.length; col += 1) {
+      const cost = left[row - 1] === right[col - 1] ? 0 : 1;
+      current[col] = Math.min(
+        previous[col] + 1,
+        current[col - 1] + 1,
+        previous[col - 1] + cost
+      );
+    }
+    for (let col = 0; col <= right.length; col += 1) {
+      previous[col] = current[col];
+    }
+  }
+
+  return previous[right.length] ?? Math.max(left.length, right.length);
+}
+
+function findSuggestedPlayerName(requestedPlayerName: string, candidateNames: string[]): string | null {
+  const requested = normalizePlayerNameForMatch(requestedPlayerName);
+  if (!requested) return null;
+
+  let bestMatch: { name: string; score: number } | null = null;
+
+  for (const rawCandidate of candidateNames) {
+    const candidateName = String(rawCandidate || "").trim();
+    const candidate = normalizePlayerNameForMatch(candidateName);
+    if (!candidate || candidate === requested) continue;
+
+    const substringMatch = candidate.startsWith(requested)
+      || requested.startsWith(candidate)
+      || candidate.includes(requested)
+      || requested.includes(candidate);
+    const score = substringMatch ? 0 : levenshteinDistance(requested, candidate);
+    const maxScore = substringMatch ? 0 : Math.max(2, Math.floor(Math.max(requested.length, candidate.length) / 3));
+    if (score > maxScore) continue;
+
+    if (!bestMatch
+      || score < bestMatch.score
+      || (score === bestMatch.score && candidateName.length < bestMatch.name.length)
+      || (score === bestMatch.score && candidateName.length === bestMatch.name.length && candidateName.localeCompare(bestMatch.name) < 0)) {
+      bestMatch = { name: candidateName, score };
+    }
+  }
+
+  return bestMatch?.name ?? null;
+}
+
+function classifyActionFailureReason(message: string): MinecraftActionFailureReason {
+  const normalized = String(message || "").toLowerCase();
+  if (!normalized) return "unknown";
+  if (normalized.includes("not currently visible") || normalized.includes("not known in the current world state")) {
+    return "player_not_visible";
+  }
+  if (normalized.includes("inventory full") || normalized.includes("inventory is full")) {
+    return "inventory_full";
+  }
+  if (normalized.includes("missing ingredients")) {
+    return "missing_ingredients";
+  }
+  if (normalized.includes("no recipe known")) {
+    return "no_recipe";
+  }
+  if (normalized.includes("no crafting table")) {
+    return "no_crafting_table";
+  }
+  if (normalized.includes("not in allowedchests") || normalized.includes("not allowed")) {
+    return "chest_not_allowed";
+  }
+  if (normalized.includes("already occupied") || normalized.includes("no adjacent solid block")) {
+    return "placement_blocked";
+  }
+  if (normalized.includes("budget")) {
+    return "budget_exceeded";
+  }
+  if (normalized.includes("resume it first") || normalized.includes("project status:")) {
+    return "project_not_executing";
+  }
+  if (normalized.includes("no active project")) {
+    return "no_active_project";
+  }
+  if (normalized.includes("project is already active") || normalized.includes("already active")) {
+    return "project_already_active";
+  }
+  if (normalized.includes("while staying near") || normalized.includes("disabled by current constraints")) {
+    return "constraint_violation";
+  }
+  if (normalized.includes("no player name specified") || normalized.includes("unknown block") || normalized.includes("no home position set")) {
+    return "invalid_target";
+  }
+  if (normalized.includes("not connected")) {
+    return "not_connected";
+  }
+  if (normalized.includes("path blocked") || normalized.includes("no path") || normalized.includes("cannot find path") || normalized.includes("navigation failed")) {
+    return "path_blocked";
+  }
+  if (normalized.includes("within") || normalized.includes("blocks away") || normalized.includes("out of range")) {
+    return "out_of_range";
+  }
+  if (normalized.includes("failed") || normalized.includes("rejected") || normalized.includes("kicked")) {
+    return "rejected_by_server";
+  }
+  return "unknown";
+}
+
 // ── Session ─────────────────────────────────────────────────────────────────
 
 export class MinecraftSession extends BaseAgentSession {
@@ -412,6 +633,7 @@ export class MinecraftSession extends BaseAgentSession {
   private mode: MinecraftMode;
   private operatorPlayerName: string | null;
   private serverTarget: MinecraftServerTarget | null;
+  private serverCatalog: MinecraftServerCatalogEntry[];
   private constraints: MinecraftConstraints;
   private homePosition: Position | null;
   private turnCount = 0;
@@ -426,7 +648,12 @@ export class MinecraftSession extends BaseAgentSession {
 
   // ── Event tracking ──
   private seenEventCount = 0;
-  private readonly onGameEvent: ((events: string[]) => void) | undefined;
+  private readonly onGameEvent:
+    | ((
+        events: MinecraftGameEvent[],
+        context?: { chatHistory: MinecraftChatMessage[] }
+      ) => void)
+    | undefined;
 
   // ── Cross-surface context ──
   private readonly getRecentDiscordContext:
@@ -435,10 +662,19 @@ export class MinecraftSession extends BaseAgentSession {
 
   // ── Minecraft brain ──
   private readonly brain: MinecraftBrain | undefined;
+  private readonly builder: MinecraftBuilder | undefined;
+  private readonly defaultProjectBudget: number;
   private readonly chatHistory: MinecraftChatMessage[] = [];
   private plannerState: MinecraftPlannerState;
+  private pendingLookCapture: MinecraftLookCapture | null = null;
+  private pendingLookCapturedAtMs: number | null = null;
   private lastChatReplyMs = 0;
   private chatReplyInFlight = false;
+  private chatReplyFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // ── Stuck detection ──
+  private lastPositionSample: Position | null = null;
+  private stuckTickCount = 0;
 
   constructor(options: MinecraftSessionOptions) {
     super({
@@ -451,18 +687,24 @@ export class MinecraftSession extends BaseAgentSession {
     this.mode = options.mode ?? "companion";
     this.operatorPlayerName = options.operatorPlayerName ?? null;
     this.serverTarget = options.serverTarget ?? null;
+    this.serverCatalog = Array.isArray(options.serverCatalog) ? [...options.serverCatalog] : [];
     this.constraints = options.constraints ?? {};
     this.homePosition = options.homePosition ?? null;
     this.onGameEvent = options.onGameEvent;
     this.getRecentDiscordContext = options.getRecentDiscordContext;
     this.brain = options.brain;
+    this.builder = options.builder;
+    this.defaultProjectBudget = Math.max(5, Math.min(200, Number(options.projectActionBudget) || 40));
     this.plannerState = {
       activeGoal: null,
       subgoals: [],
       progress: [],
       lastInstruction: null,
       lastDecisionSummary: null,
-      lastActionResult: null
+      lastActionResult: null,
+      lastActionFailure: null,
+      pendingInGameMessages: [],
+      activeProject: null
     };
   }
 
@@ -566,10 +808,13 @@ export class MinecraftSession extends BaseAgentSession {
         const newEvents = allEvents.slice(this.seenEventCount);
         this.seenEventCount = allEvents.length;
 
-        // Forward raw events to the outer system.
+        // Forward raw events to the outer system, with a chat-history
+        // snapshot so downstream narration has matching in-game context.
         if (newEvents.length > 0 && this.onGameEvent) {
           try {
-            this.onGameEvent(newEvents);
+            this.onGameEvent(newEvents, {
+              chatHistory: this.chatHistory.slice()
+            });
           } catch {
             // Callback errors are non-fatal.
           }
@@ -578,20 +823,21 @@ export class MinecraftSession extends BaseAgentSession {
         // Detect chat messages and route to the session brain.
         if (this.brain) {
           for (const event of newEvents) {
-            const chatMatch = event.match(CHAT_EVENT_RE);
-            if (chatMatch) {
-              const sender = chatMatch[1];
-              const text = chatMatch[2];
-              const isBot = sender === this.botUsername;
-              const timestamp = event.split(" ")[0] || new Date().toISOString();
+            if (event.type !== "chat") continue;
 
-              // Record ALL messages (including own) for history context.
-              this.pushChatHistory({ sender, text, timestamp, isBot });
+            const chatMessage = {
+              sender: event.sender,
+              text: event.message,
+              timestamp: event.timestamp,
+              isBot: event.isBot
+            };
 
-              // Only trigger the brain for OTHER players' messages.
-              if (!isBot) {
-                void this.handleIncomingChat(sender, text);
-              }
+            // Record ALL messages (including own) for history context.
+            this.pushChatHistory(chatMessage);
+
+            // Only trigger the brain for OTHER players' messages.
+            if (!event.isBot) {
+              void this.handleIncomingChat(chatMessage);
             }
           }
         }
@@ -599,10 +845,37 @@ export class MinecraftSession extends BaseAgentSession {
 
       // ── Evaluate reflexes ──
       const snapshot = buildWorldSnapshot(this.id, this.mode, status, this.operatorPlayerName);
-      const action = evaluateReflexes(snapshot, this.constraints);
-      if (action.type !== "none") {
-        this.logLifecycle("minecraft_reflex_fire", { action: action.type, mode: this.mode });
-        await executeReflex(this.runtime, action);
+
+      // Stuck detection: if we've moved <0.25 blocks across two consecutive
+      // ticks while a navigation task is active, kick an unstick reflex.
+      let stuckOverride = false;
+      if (snapshot.self) {
+        const currentPosition: Position = {
+          x: snapshot.self.position.x,
+          y: snapshot.self.position.y,
+          z: snapshot.self.position.z
+        };
+        const stuck = detectStuck(snapshot, this.lastPositionSample);
+        this.lastPositionSample = currentPosition;
+        if (stuck) {
+          this.stuckTickCount += 1;
+          if (this.stuckTickCount >= 2) {
+            stuckOverride = true;
+            this.stuckTickCount = 0;
+            this.logLifecycle("minecraft_reflex_fire", { action: "unstick", mode: this.mode });
+            await executeReflex(this.runtime, { type: "unstick" });
+          }
+        } else {
+          this.stuckTickCount = 0;
+        }
+      }
+
+      if (!stuckOverride) {
+        const action = evaluateReflexes(snapshot, this.constraints);
+        if (action.type !== "none") {
+          this.logLifecycle("minecraft_reflex_fire", { action: action.type, mode: this.mode });
+          await executeReflex(this.runtime, action);
+        }
       }
     } catch {
       this.reflexTickFailures += 1;
@@ -623,6 +896,51 @@ export class MinecraftSession extends BaseAgentSession {
     if (this.chatHistory.length > MAX_CHAT_HISTORY) {
       this.chatHistory.splice(0, this.chatHistory.length - MAX_CHAT_HISTORY);
     }
+  }
+
+  private enqueuePendingInGameMessage(message: MinecraftChatMessage): void {
+    this.plannerState.pendingInGameMessages.push(message);
+    if (this.plannerState.pendingInGameMessages.length > MAX_PENDING_IN_GAME_MESSAGES) {
+      this.plannerState.pendingInGameMessages.splice(
+        0,
+        this.plannerState.pendingInGameMessages.length - MAX_PENDING_IN_GAME_MESSAGES
+      );
+    }
+    this.logLifecycle("minecraft_chat_backlog_updated", {
+      pendingCount: this.plannerState.pendingInGameMessages.length,
+      latestSender: message.sender,
+      latestMessage: message.text
+    });
+  }
+
+  private drainPendingInGameMessages(): MinecraftChatMessage[] {
+    const pending = this.plannerState.pendingInGameMessages.slice();
+    this.plannerState.pendingInGameMessages = [];
+    return pending;
+  }
+
+  private restorePendingInGameMessages(messages: MinecraftChatMessage[]): void {
+    if (messages.length <= 0) return;
+    this.plannerState.pendingInGameMessages = [
+      ...messages,
+      ...this.plannerState.pendingInGameMessages
+    ].slice(-MAX_PENDING_IN_GAME_MESSAGES);
+  }
+
+  private clearChatReplyFlushTimer(): void {
+    if (this.chatReplyFlushTimer) {
+      clearTimeout(this.chatReplyFlushTimer);
+      this.chatReplyFlushTimer = null;
+    }
+  }
+
+  private schedulePendingChatFlush(delayMs = 0): void {
+    if (!this.brain || this.plannerState.pendingInGameMessages.length <= 0) return;
+    this.clearChatReplyFlushTimer();
+    this.chatReplyFlushTimer = setTimeout(() => {
+      this.chatReplyFlushTimer = null;
+      void this.flushPendingInGameMessages();
+    }, Math.max(0, delayMs));
   }
 
   /**
@@ -649,20 +967,47 @@ export class MinecraftSession extends BaseAgentSession {
    * Applies a cooldown to avoid rapid-fire responses and serializes
    * concurrent calls so only one brain invocation runs at a time.
    */
-  private async handleIncomingChat(sender: string, message: string): Promise<void> {
+  private async handleIncomingChat(message: MinecraftChatMessage): Promise<void> {
     if (!this.brain) return;
-    if (this.chatReplyInFlight) return; // one at a time
+    this.enqueuePendingInGameMessage(message);
+    await this.flushPendingInGameMessages();
+  }
+
+  private async flushPendingInGameMessages(): Promise<void> {
+    if (!this.brain) return;
+    if (this.chatReplyInFlight) return;
+    if (this.plannerState.pendingInGameMessages.length <= 0) return;
 
     const now = Date.now();
-    if (now - this.lastChatReplyMs < CHAT_REPLY_COOLDOWN_MS) return;
+    const remainingCooldown = CHAT_REPLY_COOLDOWN_MS - (now - this.lastChatReplyMs);
+    if (remainingCooldown > 0) {
+      this.logLifecycle("minecraft_chat_backlog_deferred", {
+        pendingCount: this.plannerState.pendingInGameMessages.length,
+        remainingCooldownMs: remainingCooldown
+      });
+      this.schedulePendingChatFlush(remainingCooldown);
+      return;
+    }
+
+    const pendingBatch = this.drainPendingInGameMessages();
+    const latestMessage = pendingBatch[pendingBatch.length - 1];
+    if (!latestMessage) return;
+
+    const sessionState = this.getPlannerStateSnapshot();
+    sessionState.pendingInGameMessages = pendingBatch.map((entry) => ({ ...entry }));
 
     this.chatReplyInFlight = true;
     try {
       const snapshot = await this.getWorldSnapshot();
+      this.logLifecycle("minecraft_chat_backlog_flush", {
+        pendingCount: pendingBatch.length,
+        primarySender: latestMessage.sender,
+        primaryMessage: latestMessage.text
+      });
 
       const result = await this.brain.replyToChat({
-        sender,
-        message,
+        sender: latestMessage.sender,
+        message: latestMessage.text,
         chatHistory: this.chatHistory.slice(-20),
         discordContext: this.resolveDiscordContext(),
         worldSnapshot: snapshot,
@@ -671,7 +1016,8 @@ export class MinecraftSession extends BaseAgentSession {
         operatorPlayerName: this.operatorPlayerName,
         constraints: { ...this.constraints },
         serverTarget: this.serverTarget,
-        sessionState: this.getPlannerStateSnapshot()
+        serverCatalog: [...this.serverCatalog],
+        sessionState
       });
 
       this.applyPlannerDecision({
@@ -679,7 +1025,7 @@ export class MinecraftSession extends BaseAgentSession {
         subgoals: result.subgoals,
         progress: result.progress,
         summary: result.summary,
-        instruction: message
+        instruction: latestMessage.text
       });
 
       this.lastChatReplyMs = Date.now();
@@ -692,34 +1038,49 @@ export class MinecraftSession extends BaseAgentSession {
       // Execute structured in-world action if the brain requested one.
       if (result.action.kind !== "wait") {
         this.logLifecycle("minecraft_brain_chat_action", {
-          sender,
+          sender: latestMessage.sender,
+          pendingCount: pendingBatch.length,
           action: result.action
         });
         try {
           const execution = await this.executeBrainAction(result.action, {
             signal: AbortSignal.timeout(30_000)
           });
-          this.recordPlannerActionResult(execution.text, result.action);
+          this.recordPlannerActionResult(execution, result.action.kind);
         } catch (error) {
           this.logLifecycle("minecraft_brain_chat_action_error", {
             error: error instanceof Error ? error.message : String(error)
           });
         }
+        // Chat-driven actions don't get a follow-up reasoning checkpoint,
+        // so any rendered glance captured here would become a stale leftover
+        // for the next operator turn. Drop it explicitly.
+        if (result.action.kind === "look") {
+          this.clearPendingLookCapture("chat_flow_has_no_followup_checkpoint");
+        }
       }
 
       if (result.costUsd > 0) {
         this.logLifecycle("minecraft_brain_chat_cost", {
-          sender,
+          sender: latestMessage.sender,
+          pendingCount: pendingBatch.length,
           costUsd: result.costUsd
         });
       }
     } catch (error) {
+      this.restorePendingInGameMessages(pendingBatch);
       this.logLifecycle("minecraft_chat_reply_error", {
-        sender,
+        sender: latestMessage.sender,
+        pendingCount: pendingBatch.length,
         error: error instanceof Error ? error.message : String(error)
       });
+      this.schedulePendingChatFlush(250);
     } finally {
       this.chatReplyInFlight = false;
+      if (this.plannerState.pendingInGameMessages.length > 0) {
+        const nextDelay = Math.max(0, CHAT_REPLY_COOLDOWN_MS - (Date.now() - this.lastChatReplyMs));
+        this.schedulePendingChatFlush(nextDelay);
+      }
     }
   }
 
@@ -751,8 +1112,49 @@ export class MinecraftSession extends BaseAgentSession {
       progress: [...this.plannerState.progress],
       lastInstruction: this.plannerState.lastInstruction,
       lastDecisionSummary: this.plannerState.lastDecisionSummary,
-      lastActionResult: this.plannerState.lastActionResult
+      lastActionResult: this.plannerState.lastActionResult,
+      lastActionFailure: this.plannerState.lastActionFailure ? { ...this.plannerState.lastActionFailure } : null,
+      pendingInGameMessages: this.plannerState.pendingInGameMessages.map((message) => ({ ...message })),
+      activeProject: this.plannerState.activeProject
+        ? {
+            ...this.plannerState.activeProject,
+            checkpoints: [...this.plannerState.activeProject.checkpoints],
+            completedCheckpoints: [...this.plannerState.activeProject.completedCheckpoints]
+          }
+        : null
     };
+  }
+
+  getActiveProject(): MinecraftProject | null {
+    return this.getPlannerStateSnapshot().activeProject;
+  }
+
+  getServerTargetSnapshot(): MinecraftServerTarget | null {
+    return cloneServerTarget(this.serverTarget);
+  }
+
+  private consumePendingLookCapture(): MinecraftLookCapture | null {
+    const capture = this.pendingLookCapture;
+    const capturedAtMs = this.pendingLookCapturedAtMs;
+    this.pendingLookCapture = null;
+    this.pendingLookCapturedAtMs = null;
+    if (!capture || capturedAtMs === null) return null;
+    const ageMs = Date.now() - capturedAtMs;
+    if (ageMs > PENDING_LOOK_CAPTURE_TTL_MS) {
+      this.logLifecycle("minecraft_look_capture_expired", {
+        ageMs,
+        ttlMs: PENDING_LOOK_CAPTURE_TTL_MS
+      });
+      return null;
+    }
+    return capture;
+  }
+
+  private clearPendingLookCapture(reason: string): void {
+    if (!this.pendingLookCapture) return;
+    this.logLifecycle("minecraft_look_capture_dropped", { reason });
+    this.pendingLookCapture = null;
+    this.pendingLookCapturedAtMs = null;
   }
 
   private applyPlannerDecision(update: {
@@ -788,8 +1190,51 @@ export class MinecraftSession extends BaseAgentSession {
     this.plannerState.subgoals = [];
   }
 
-  private recordPlannerActionResult(resultText: string, action: MinecraftBrainAction): void {
-    const normalized = String(resultText || "").trim().slice(0, 220);
+  private async resolvePlayerNameSuggestion(requestedPlayerName: string, signal?: AbortSignal): Promise<string | null> {
+    const normalized = String(requestedPlayerName || "").trim();
+    if (!normalized) return null;
+    try {
+      const status = await this.runtime.status(signal);
+      if (!status.ok) return null;
+      return findSuggestedPlayerName(
+        normalized,
+        (status.output.players ?? [])
+          .map((player) => String(player.username || "").trim())
+          .filter(Boolean)
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  private async buildActionFailure(
+    command: ParsedCommand,
+    resultText: string,
+    signal?: AbortSignal
+  ): Promise<MinecraftActionFailure> {
+    const message = String(resultText || "").trim().slice(0, 220) || "Minecraft action failed.";
+    const failure: MinecraftActionFailure = {
+      actionKind: command.kind,
+      reason: classifyActionFailureReason(message),
+      message
+    };
+
+    if (failure.reason === "player_not_visible"
+      && (command.kind === "follow" || command.kind === "guard" || command.kind === "look_at")) {
+      const didYouMeanPlayerName = await this.resolvePlayerNameSuggestion(command.playerName, signal);
+      if (didYouMeanPlayerName) {
+        failure.didYouMeanPlayerName = didYouMeanPlayerName;
+      }
+    }
+
+    return failure;
+  }
+
+  private recordPlannerActionResult(
+    execution: CommandExecutionResult,
+    actionKind: ParsedCommand["kind"] | MinecraftBrainAction["kind"]
+  ): void {
+    const normalized = String(execution.text || "").trim().slice(0, 220);
     if (normalized) {
       this.plannerState.lastActionResult = normalized;
       this.plannerState.progress = mergePlannerTextEntries(
@@ -798,7 +1243,19 @@ export class MinecraftSession extends BaseAgentSession {
         MAX_PLANNER_PROGRESS
       );
     }
-    if (action.kind === "stop" || action.kind === "disconnect") {
+    this.plannerState.lastActionFailure = execution.ok
+      ? null
+      : execution.failure ?? {
+          actionKind,
+          reason: "unknown",
+          message: normalized || "Minecraft action failed."
+        };
+    if (this.plannerState.lastActionFailure) {
+      this.logLifecycle("minecraft_action_failure_classified", {
+        failure: this.plannerState.lastActionFailure
+      });
+    }
+    if (actionKind === "stop" || actionKind === "disconnect") {
       this.clearPlannerGoal();
     }
   }
@@ -841,10 +1298,16 @@ export class MinecraftSession extends BaseAgentSession {
     });
   }
 
-  private resolveBrainActionCommand(action: MinecraftBrainAction): ParsedCommand {
+  private resolveCatalogEntryByLabel(label: string | null | undefined): MinecraftServerCatalogEntry | null {
+    const normalized = String(label || "").trim().toLowerCase();
+    if (!normalized) return null;
+    return this.serverCatalog.find((entry) => entry.label.toLowerCase() === normalized) ?? null;
+  }
+
+  private resolveBrainActionCommand(action: MinecraftBrainAction): ParsedCommand | null {
     switch (action.kind) {
       case "connect": {
-        const target = mergeServerTargets(this.serverTarget, normalizeMinecraftServerTarget(action.target));
+        const target = this.serverTarget;
         return {
           kind: "connect",
           host: target?.host ?? undefined,
@@ -855,6 +1318,8 @@ export class MinecraftSession extends BaseAgentSession {
         return { kind: "disconnect" };
       case "status":
         return { kind: "status" };
+      case "look":
+        return { kind: "look" };
       case "follow":
         return { kind: "follow", playerName: action.playerName, distance: action.distance };
       case "guard":
@@ -878,7 +1343,40 @@ export class MinecraftSession extends BaseAgentSession {
         return { kind: "attack" };
       case "look_at":
         return { kind: "look_at", playerName: action.playerName };
+      case "eat":
+        return { kind: "eat" };
+      case "equip_offhand":
+        return { kind: "equip_offhand", itemName: action.itemName };
+      case "craft":
+        return {
+          kind: "craft",
+          recipeName: action.recipeName,
+          count: action.count ?? 1,
+          useCraftingTable: action.useCraftingTable ?? false
+        };
+      case "deposit":
+        return { kind: "deposit", chest: action.chest, items: action.items };
+      case "withdraw":
+        return { kind: "withdraw", chest: action.chest, items: action.items };
+      case "place_block":
+        return {
+          kind: "place_block",
+          x: action.x,
+          y: action.y,
+          z: action.z,
+          blockName: action.blockName
+        };
+      case "build":
+        // Build requires plan expansion — handled in executeBrainAction.
+        return null;
       case "wait":
+      case "project_start":
+      case "project_step":
+      case "project_pause":
+      case "project_resume":
+      case "project_abort":
+        // No direct world action; handled by executeBrainAction.
+        return null;
       default:
         return { kind: "status" };
     }
@@ -891,26 +1389,394 @@ export class MinecraftSession extends BaseAgentSession {
     if (action.kind === "wait") {
       return {
         text: this.buildPlannerStateSummary() || "Standing by in Minecraft.",
-        ok: true
+        ok: true,
+        failure: null
       };
     }
 
     if (action.kind === "connect") {
       const previousTarget = cloneServerTarget(this.serverTarget);
-      const updatedTarget = mergeServerTargets(this.serverTarget, normalizeMinecraftServerTarget(action.target));
+      const rawTarget = normalizeMinecraftServerTarget(action.target);
+      const catalogEntry = this.resolveCatalogEntryByLabel(rawTarget?.label);
+      const enrichedTarget: MinecraftServerTarget | null = rawTarget
+        ? {
+            label: rawTarget.label,
+            host: rawTarget.host ?? catalogEntry?.host ?? null,
+            port: rawTarget.port ?? catalogEntry?.port ?? null,
+            description: rawTarget.description ?? catalogEntry?.description ?? null
+          }
+        : null;
+      const updatedTarget = mergeServerTargets(this.serverTarget, enrichedTarget);
       if (updatedTarget) {
         this.serverTarget = updatedTarget;
         this.logServerTargetUpdate("brain_action", previousTarget, this.serverTarget);
       }
     }
 
-    return this.executeCommand(this.resolveBrainActionCommand(action), options);
+    // Project actions mutate planner state but don't touch the MCP runtime.
+    if (action.kind === "project_start"
+      || action.kind === "project_step"
+      || action.kind === "project_pause"
+      || action.kind === "project_resume"
+      || action.kind === "project_abort") {
+      return this.executeProjectAction(action);
+    }
+
+    // Build actions expand via the sub-planner before dispatching to the
+    // BuildStructureSkill. The expansion may involve an LLM call for
+    // freeform descriptions.
+    let execution: CommandExecutionResult;
+    if (action.kind === "build") {
+      execution = await this.executeBuildAction(action, options);
+    } else {
+      const command = this.resolveBrainActionCommand(action);
+      if (!command) {
+        return {
+          text: `No-op Minecraft action: ${action.kind}.`,
+          ok: true,
+          failure: null
+        };
+      }
+      execution = await this.executeCommand(command, options);
+    }
+
+    // Auto-deduct from the active project budget when a concrete in-world
+    // action ran during project execution. project_step remains the
+    // brain-explicit path for ticking checkpoints.
+    this.maybeAccrueProjectAction(action, execution);
+    return execution;
+  }
+
+  private maybeAccrueProjectAction(
+    action: MinecraftBrainAction,
+    execution: CommandExecutionResult
+  ): void {
+    const project = this.plannerState.activeProject;
+    if (!project || project.status !== "executing") return;
+    if (!execution.ok) return;
+    // These action kinds don't cost a project action — they're reads,
+    // teardown, or session plumbing.
+    const nonAccruing: ReadonlySet<MinecraftBrainAction["kind"]> = new Set([
+      "wait",
+      "status",
+      "stop",
+      "connect",
+      "disconnect",
+      "chat",
+      "look",
+      "look_at"
+    ]);
+    if (nonAccruing.has(action.kind)) return;
+    project.actionsUsed += 1;
+    project.lastStepAt = new Date().toISOString();
+    if (project.actionsUsed >= project.actionBudget) {
+      project.status = "paused";
+      this.logLifecycle("minecraft_project_budget_exceeded", {
+        projectId: project.id,
+        actionsUsed: project.actionsUsed,
+        budget: project.actionBudget,
+        triggerKind: action.kind
+      });
+    }
+  }
+
+  // ── Project lifecycle ────────────────────────────────────────────────────
+
+  private async executeProjectAction(action: MinecraftBrainAction & {
+    kind: "project_start" | "project_step" | "project_pause" | "project_resume" | "project_abort";
+  }): Promise<CommandExecutionResult> {
+    if (action.kind === "project_start") {
+      if (this.plannerState.activeProject
+        && this.plannerState.activeProject.status !== "completed"
+        && this.plannerState.activeProject.status !== "abandoned") {
+        return {
+          text: `A project is already active: "${this.plannerState.activeProject.title}". Abort or complete it first.`,
+          ok: false,
+          failure: {
+            actionKind: "project_start",
+            reason: "project_already_active",
+            message: `Active project: ${this.plannerState.activeProject.title}`
+          }
+        };
+      }
+      const title = String(action.title || "").trim().slice(0, 80) || "Untitled project";
+      const description = String(action.description || "").trim().slice(0, 400);
+      const checkpoints = Array.isArray(action.checkpoints)
+        ? action.checkpoints
+            .map((entry) => String(entry || "").trim())
+            .filter(Boolean)
+            .slice(0, 8)
+        : [];
+      const budget = Math.max(
+        1,
+        Math.min(200, Math.round(Number(action.actionBudget) || this.defaultProjectBudget))
+      );
+      const project: MinecraftProject = {
+        id: `proj_${Date.now().toString(36)}`,
+        title,
+        description,
+        checkpoints,
+        completedCheckpoints: [],
+        status: "executing",
+        actionsUsed: 0,
+        actionBudget: budget,
+        startedAt: new Date().toISOString(),
+        lastStepAt: null,
+        lastStepSummary: null
+      };
+      this.plannerState.activeProject = project;
+      this.logLifecycle("minecraft_project_started", {
+        projectId: project.id,
+        title,
+        checkpoints,
+        budget
+      });
+      return {
+        text: `Started project "${title}" with budget ${budget} actions and ${checkpoints.length} checkpoints.`,
+        ok: true,
+        failure: null
+      };
+    }
+
+    const project = this.plannerState.activeProject;
+    if (!project) {
+      return {
+        text: "No active project to operate on.",
+        ok: false,
+        failure: {
+          actionKind: action.kind,
+          reason: "no_active_project",
+          message: "No active project"
+        }
+      };
+    }
+
+    if (action.kind === "project_step") {
+      if (project.status !== "executing") {
+        this.logLifecycle("minecraft_project_step_rejected", {
+          projectId: project.id,
+          status: project.status
+        });
+        return {
+          text: `Project "${project.title}" is ${project.status}. Resume it first.`,
+          ok: false,
+          failure: {
+            actionKind: "project_step",
+            reason: "project_not_executing",
+            message: `project status: ${project.status}`
+          }
+        };
+      }
+      const summary = String(action.summary || "").trim().slice(0, 200);
+      project.actionsUsed += 1;
+      project.lastStepAt = new Date().toISOString();
+      project.lastStepSummary = summary || null;
+      if (summary) {
+        const checkpointIndex = project.checkpoints.findIndex(
+          (cp) => cp === summary || cp.toLowerCase() === summary.toLowerCase()
+        );
+        if (checkpointIndex >= 0 && !project.completedCheckpoints.includes(project.checkpoints[checkpointIndex]!)) {
+          project.completedCheckpoints.push(project.checkpoints[checkpointIndex]!);
+        }
+      }
+      const budgetExceeded = project.actionsUsed >= project.actionBudget;
+      if (budgetExceeded) {
+        project.status = "paused";
+        this.logLifecycle("minecraft_project_budget_exceeded", {
+          projectId: project.id,
+          actionsUsed: project.actionsUsed,
+          budget: project.actionBudget
+        });
+        return {
+          text: `Project "${project.title}" hit its ${project.actionBudget}-action budget. Paused.`,
+          ok: false,
+          failure: {
+            actionKind: "project_step",
+            reason: "budget_exceeded",
+            message: `${project.actionsUsed}/${project.actionBudget} actions used`
+          }
+        };
+      }
+      this.logLifecycle("minecraft_project_step", {
+        projectId: project.id,
+        actionsUsed: project.actionsUsed,
+        summary
+      });
+      return {
+        text: `Project step ${project.actionsUsed}/${project.actionBudget} logged${summary ? `: ${summary}` : ""}.`,
+        ok: true,
+        failure: null
+      };
+    }
+
+    if (action.kind === "project_pause") {
+      project.status = "paused";
+      this.logLifecycle("minecraft_project_paused", {
+        projectId: project.id,
+        reason: action.reason || null
+      });
+      return {
+        text: `Project "${project.title}" paused.`,
+        ok: true,
+        failure: null
+      };
+    }
+
+    if (action.kind === "project_resume") {
+      if (project.status === "abandoned") {
+        return {
+          text: `Project "${project.title}" was abandoned and cannot be resumed. Start a new project instead.`,
+          ok: false,
+          failure: {
+            actionKind: "project_resume",
+            reason: "project_not_executing",
+            message: "project status: abandoned"
+          }
+        };
+      }
+      if (project.actionsUsed >= project.actionBudget) {
+        return {
+          text: `Project "${project.title}" already exhausted its ${project.actionBudget}-action budget and cannot resume. Start a new project instead.`,
+          ok: false,
+          failure: {
+            actionKind: "project_resume",
+            reason: "budget_exceeded",
+            message: `${project.actionsUsed}/${project.actionBudget} actions used`
+          }
+        };
+      }
+      project.status = "executing";
+      this.logLifecycle("minecraft_project_resumed", {
+        projectId: project.id
+      });
+      return {
+        text: `Project "${project.title}" resumed.`,
+        ok: true,
+        failure: null
+      };
+    }
+
+    if (action.kind === "project_abort") {
+      project.status = "abandoned";
+      this.logLifecycle("minecraft_project_aborted", {
+        projectId: project.id,
+        reason: action.reason || null,
+        actionsUsed: project.actionsUsed
+      });
+      return {
+        text: `Project "${project.title}" aborted after ${project.actionsUsed} actions.`,
+        ok: true,
+        failure: null
+      };
+    }
+
+    return {
+      text: `Unknown project action.`,
+      ok: false,
+      failure: {
+        actionKind: "project_step",
+        reason: "unknown",
+        message: "unknown project action"
+      }
+    };
+  }
+
+  // ── Build expansion ──────────────────────────────────────────────────────
+
+  private async executeBuildAction(
+    action: MinecraftBrainAction & { kind: "build" },
+    options: SubAgentTurnOptions
+  ): Promise<CommandExecutionResult> {
+    let plan = action.plan ?? null;
+    if (!plan) {
+      if (!this.builder) {
+        return {
+          text: "Build sub-planner is unavailable.",
+          ok: false,
+          failure: {
+            actionKind: "build",
+            reason: "invalid_target",
+            message: "no build sub-planner"
+          }
+        };
+      }
+      const description = String(action.description || "").trim();
+      if (!description) {
+        return {
+          text: "Build action needs either a plan or a description.",
+          ok: false,
+          failure: {
+            actionKind: "build",
+            reason: "invalid_target",
+            message: "no description or plan"
+          }
+        };
+      }
+      // Pull a sensible origin — either the supplied one or the bot's position.
+      let origin: Position | null = action.origin ?? null;
+      if (!origin) {
+        await this.ensureConnected(options.signal);
+        const statusResult = await this.runtime.status(options.signal).catch(() => null);
+        if (statusResult?.ok && statusResult.output.position) {
+          origin = {
+            x: Math.round(statusResult.output.position.x),
+            y: Math.round(statusResult.output.position.y),
+            z: Math.round(statusResult.output.position.z)
+          };
+        }
+      }
+      if (!origin) {
+        return {
+          text: "Cannot plan build — no origin position available.",
+          ok: false,
+          failure: {
+            actionKind: "build",
+            reason: "invalid_target",
+            message: "no origin"
+          }
+        };
+      }
+      try {
+        plan = await this.builder.buildPlan({
+          description,
+          origin,
+          ...(action.dimensions ? { dimensions: action.dimensions } : {})
+        });
+      } catch (error) {
+        return {
+          text: `Build planning failed: ${error instanceof Error ? error.message : String(error)}`,
+          ok: false,
+          failure: {
+            actionKind: "build",
+            reason: "unknown",
+            message: error instanceof Error ? error.message : String(error)
+          }
+        };
+      }
+      if (!plan || plan.blocks.length === 0) {
+        return {
+          text: "Build sub-planner returned an empty plan.",
+          ok: false,
+          failure: {
+            actionKind: "build",
+            reason: "invalid_target",
+            message: "empty plan"
+          }
+        };
+      }
+      this.logLifecycle("minecraft_build_plan_expanded", {
+        title: plan.title,
+        blockCount: plan.blocks.length
+      });
+    }
+
+    return this.executeCommand({ kind: "build", plan }, options);
   }
 
   private async runPlannerLoop(
     task: string,
     options: SubAgentTurnOptions
-  ): Promise<{ text: string; costUsd: number }> {
+  ): Promise<{ text: string; costUsd: number; imageInputs?: ImageInput[] }> {
     if (!this.brain) {
       throw new Error("Minecraft brain is unavailable for natural-language planning.");
     }
@@ -923,9 +1789,11 @@ export class MinecraftSession extends BaseAgentSession {
     let checkpointInstruction = instruction || this.plannerState.lastInstruction || "status";
     let costUsd = 0;
     const summaries: string[] = [];
+    let latestImageInputs: ImageInput[] | undefined;
 
     for (let checkpoint = 1; checkpoint <= MAX_PLANNER_CHECKPOINTS_PER_TURN; checkpoint += 1) {
       const snapshot = await this.getWorldSnapshot();
+      const lookCapture = this.consumePendingLookCapture();
       const decision = await this.brain.planTurn({
         instruction: checkpointInstruction,
         chatHistory: this.chatHistory.slice(-20),
@@ -936,7 +1804,10 @@ export class MinecraftSession extends BaseAgentSession {
         operatorPlayerName: this.operatorPlayerName,
         constraints: { ...this.constraints },
         serverTarget: this.serverTarget,
-        sessionState: this.getPlannerStateSnapshot()
+        serverCatalog: [...this.serverCatalog],
+        sessionState: this.getPlannerStateSnapshot(),
+        lookCapture,
+        lookImageInputs: toLookImageInputs(lookCapture)
       });
 
       costUsd += decision.costUsd;
@@ -967,18 +1838,24 @@ export class MinecraftSession extends BaseAgentSession {
 
       const execution = await this.executeBrainAction(decision.action, options);
       summaries.push(execution.text);
-      this.recordPlannerActionResult(execution.text, decision.action);
+      this.recordPlannerActionResult(execution, decision.action.kind);
+      if (execution.imageInputs?.length) {
+        latestImageInputs = execution.imageInputs;
+      }
 
-      if (!execution.ok || !decision.shouldContinue || !canContinueAfterBrainAction(decision.action)) {
+      if (!canContinueAfterBrainAction(decision.action, execution, decision.shouldContinue)) {
         break;
       }
 
-      checkpointInstruction = "Continue the current Minecraft goal using the updated world state and planner state.";
+      checkpointInstruction = execution.lookCapture
+        ? "Continue the current Minecraft goal using the attached rendered first-person glance, plus the updated world state and planner state."
+        : "Continue the current Minecraft goal using the updated world state and planner state.";
     }
 
     return {
       text: joinPlannerSummaries(summaries) || this.buildPlannerStateSummary() || "Standing by in Minecraft.",
-      costUsd
+      costUsd,
+      ...(latestImageInputs?.length ? { imageInputs: latestImageInputs } : {})
     };
   }
 
@@ -1037,21 +1914,21 @@ export class MinecraftSession extends BaseAgentSession {
     try {
       let resultText = "";
       let resultCostUsd = 0;
+      let resultImageInputs: ImageInput[] | undefined;
 
       if (command) {
         const execution = await this.executeCommand(command, options);
         resultText = execution.text;
+        resultImageInputs = execution.imageInputs;
         if (task.trim()) {
           this.plannerState.lastInstruction = task.trim();
         }
-        this.plannerState.lastActionResult = execution.text.trim().slice(0, 220) || this.plannerState.lastActionResult;
-        if (command.kind === "stop" || command.kind === "disconnect") {
-          this.clearPlannerGoal();
-        }
+        this.recordPlannerActionResult(execution, command.kind);
       } else {
         const planned = await this.runPlannerLoop(task, options);
         resultText = planned.text;
         resultCostUsd = planned.costUsd;
+        resultImageInputs = planned.imageInputs;
       }
 
       const durationMs = Date.now() - startMs;
@@ -1065,6 +1942,7 @@ export class MinecraftSession extends BaseAgentSession {
       return {
         text: resultText,
         costUsd: costUsd + resultCostUsd,
+        ...(resultImageInputs?.length ? { imageInputs: resultImageInputs } : {}),
         isError: false,
         errorMessage: "",
         sessionCompleted: false,
@@ -1102,7 +1980,16 @@ export class MinecraftSession extends BaseAgentSession {
       return plannerSummary ? `${text} ${plannerSummary}`.trim() : text;
     };
 
-    const commandResult = (text: string, ok = true): CommandExecutionResult => ({ text, ok });
+    const commandResult = async (
+      text: string,
+      ok = true,
+      extra: Pick<CommandExecutionResult, "imageInputs" | "lookCapture"> = {}
+    ): Promise<CommandExecutionResult> => ({
+      text,
+      ok,
+      failure: ok ? null : await this.buildActionFailure(command, text, options.signal),
+      ...extra
+    });
 
     const resolveFollowDistance = (explicitDistance?: number) => {
       const constrainedDistance = this.constraints.maxDistance;
@@ -1169,6 +2056,23 @@ export class MinecraftSession extends BaseAgentSession {
         const newEvents = allEvents.slice(this.seenEventCount);
         this.seenEventCount = allEvents.length;
         return commandResult(withPlannerContext(formatStatus(result.output, this.mode, newEvents)));
+      }
+
+      case "look": {
+        // No clearModes() call here — a rendered glance is a read-only
+        // action and must not drop an ongoing follow/guard/path task.
+        const result = await this.runtime.look(640, 360, 4, options.signal);
+        if (!result.ok) return commandResult(`Look capture failed: ${result.error}`, false);
+        this.pendingLookCapture = result.output;
+        this.pendingLookCapturedAtMs = Date.now();
+        return commandResult(
+          `Captured a rendered first-person glance from the current view.`,
+          true,
+          {
+            lookCapture: result.output,
+            imageInputs: toLookImageInputs(result.output)
+          }
+        );
       }
 
       case "follow": {
@@ -1277,19 +2181,114 @@ export class MinecraftSession extends BaseAgentSession {
         return commandResult(`Looking at ${command.playerName}.`);
       }
 
+      case "eat": {
+        const result = await this.runtime.eatBestFood(options.signal);
+        if (!result.ok) return commandResult(`Eat failed: ${result.error}`, false);
+        const output = result.output;
+        return commandResult(`Ate ${output.foodName} (food ${output.foodBefore ?? "?"} -> ${output.foodAfter ?? "?"}).`);
+      }
+
+      case "equip_offhand": {
+        if (!command.itemName) return commandResult("Cannot equip — no item specified.", false);
+        const result = await this.runtime.equipOffhand(command.itemName, options.signal);
+        if (!result.ok) return commandResult(`Equip failed: ${result.error}`, false);
+        return commandResult(`Equipped ${result.output.itemName} to off-hand.`);
+      }
+
+      case "craft": {
+        const skill = new CraftItemSkill(
+          this.runtime,
+          command.recipeName,
+          command.count,
+          command.useCraftingTable
+        );
+        const preconditions = skill.checkPreconditions();
+        if (!preconditions.ok) return commandResult(`Cannot craft: ${preconditions.reason}`, false);
+        const skillResult = await skill.execute({
+          signal: options.signal ?? AbortSignal.timeout(60_000),
+          onProgress: (msg) => options.onProgress?.({ summary: msg })
+        });
+        return commandResult(skillResult.summary, skillResult.status === "succeeded");
+      }
+
+      case "deposit": {
+        const chestViolation = this.checkChestConstraint(command.chest);
+        if (chestViolation) return commandResult(chestViolation, false);
+        const skill = new DepositItemsSkill(this.runtime, command.chest, command.items);
+        const preconditions = skill.checkPreconditions();
+        if (!preconditions.ok) return commandResult(`Cannot deposit: ${preconditions.reason}`, false);
+        const skillResult = await skill.execute({
+          signal: options.signal ?? AbortSignal.timeout(30_000),
+          onProgress: (msg) => options.onProgress?.({ summary: msg })
+        });
+        return commandResult(skillResult.summary, skillResult.status === "succeeded");
+      }
+
+      case "withdraw": {
+        const chestViolation = this.checkChestConstraint(command.chest);
+        if (chestViolation) return commandResult(chestViolation, false);
+        const skill = new WithdrawItemsSkill(this.runtime, command.chest, command.items);
+        const preconditions = skill.checkPreconditions();
+        if (!preconditions.ok) return commandResult(`Cannot withdraw: ${preconditions.reason}`, false);
+        const skillResult = await skill.execute({
+          signal: options.signal ?? AbortSignal.timeout(30_000),
+          onProgress: (msg) => options.onProgress?.({ summary: msg })
+        });
+        return commandResult(skillResult.summary, skillResult.status === "succeeded");
+      }
+
+      case "place_block": {
+        const result = await this.runtime.placeBlock(
+          command.x,
+          command.y,
+          command.z,
+          command.blockName,
+          options.signal
+        );
+        if (!result.ok) return commandResult(`Place failed: ${result.error}`, false);
+        return commandResult(`Placed ${result.output.blockName} at ${command.x},${command.y},${command.z}.`);
+      }
+
+      case "build": {
+        const skill = new BuildStructureSkill(this.runtime, command.plan);
+        const preconditions = skill.checkPreconditions();
+        if (!preconditions.ok) return commandResult(`Cannot build: ${preconditions.reason}`, false);
+        const skillResult = await skill.execute({
+          signal: options.signal ?? AbortSignal.timeout(180_000),
+          onProgress: (msg) => options.onProgress?.({ summary: msg })
+        });
+        return commandResult(skillResult.summary, skillResult.status === "succeeded");
+      }
+
       default:
         return commandResult("Unknown command.", false);
     }
   }
 
+  private checkChestConstraint(chest: { x: number; y: number; z: number }): string | null {
+    const allowed = this.constraints.allowedChests;
+    if (!Array.isArray(allowed) || allowed.length === 0) return null;
+    const match = allowed.some((entry) =>
+      entry.x === chest.x && entry.y === chest.y && entry.z === chest.z
+    );
+    if (match) return null;
+    const allowedSummary = allowed
+      .slice(0, 4)
+      .map((entry) => `${entry.label ? `${entry.label}:` : ""}${entry.x},${entry.y},${entry.z}`)
+      .join(" | ");
+    return `Chest ${chest.x},${chest.y},${chest.z} is not in allowedChests (${allowedSummary}).`;
+  }
+
   protected onCancelled(_reason: string): void {
     this.stopReflexLoop();
+    this.clearChatReplyFlushTimer();
     // Best-effort stop the bot when the session is cancelled.
     void this.runtime.stop().catch(() => {});
   }
 
   protected onClosed(): void {
     this.stopReflexLoop();
+    this.clearChatReplyFlushTimer();
     // Best-effort stop on close.
     void this.runtime.stop().catch(() => {});
   }
@@ -1299,9 +2298,23 @@ export class MinecraftSession extends BaseAgentSession {
    */
   async getWorldSnapshot() {
     try {
-      const result = await this.runtime.status();
-      if (!result.ok) return null;
-      return buildWorldSnapshot(this.id, this.mode, result.output, this.operatorPlayerName);
+      const maybeVisibleBlocks = this.runtime as MinecraftRuntime & {
+        visibleBlocks?: () => Promise<{ ok: boolean; output: MinecraftVisualScene }>;
+      };
+      const [statusResult, visibleBlocksResult] = await Promise.all([
+        this.runtime.status(),
+        typeof maybeVisibleBlocks.visibleBlocks === "function"
+          ? maybeVisibleBlocks.visibleBlocks().catch(() => ({ ok: false, output: null as never }))
+          : Promise.resolve({ ok: false, output: null as never })
+      ]);
+      if (!statusResult.ok) return null;
+      return buildWorldSnapshot(
+        this.id,
+        this.mode,
+        statusResult.output,
+        this.operatorPlayerName,
+        visibleBlocksResult.ok ? visibleBlocksResult.output : null
+      );
     } catch {
       return null;
     }

@@ -659,6 +659,75 @@ export function buildInitiativePrompt({
   return parts.join("\n\n");
 }
 
+export function buildMinecraftNarrationPrompt({
+  botName,
+  channelName = "channel",
+  serverLabel = null,
+  narrationEagerness = 0,
+  recentMessages = [],
+  recentMcChat = [],
+  botUsername = null,
+  significantEvents = []
+}) {
+  const parts = [];
+  const normalizedEvents = Array.isArray(significantEvents)
+    ? significantEvents
+      .map((event) => {
+        const category = String(event?.category || "event").trim();
+        const summary = String(event?.summary || event?.event?.summary || event?.rawEvent || "").trim();
+        if (!summary) return "";
+        return category ? `- [${category}] ${summary}` : `- ${summary}`;
+      })
+      .filter(Boolean)
+    : [];
+
+  parts.push("=== MINECRAFT NARRATION ===");
+  parts.push(`You are ${String(botName || "the bot").trim() || "the bot"}, deciding whether your embodied Minecraft self should say something in Discord about what just happened in-game.`);
+  parts.push(`Target Discord channel: #${String(channelName || "channel").trim() || "channel"}.`);
+  if (String(serverLabel || "").trim()) {
+    parts.push(`Minecraft server context: ${String(serverLabel).trim()}.`);
+  }
+  parts.push(`Narration eagerness: ${Math.max(0, Math.min(100, Number(narrationEagerness) || 0))}/100.`);
+  parts.push("This is proactive ambient narration, not a direct reply request.");
+  parts.push("Only speak up if the event is genuinely worth surfacing to the room right now.");
+
+  parts.push("=== RECENT DISCORD CONTEXT ===");
+  parts.push(formatRecentChat(recentMessages));
+
+  parts.push("=== RECENT IN-GAME CHAT ===");
+  parts.push(formatMinecraftChatForNarration(recentMcChat, botUsername || botName));
+
+  parts.push("=== SIGNIFICANT IN-GAME EVENTS ===");
+  parts.push(normalizedEvents.length ? normalizedEvents.join("\n") : "(no significant Minecraft events)");
+
+  parts.push("=== TASK ===");
+  parts.push("Decide whether to post one short natural Discord message about these Minecraft events.");
+  parts.push("Sound like a real person in the room, not a status bot or action log.");
+  parts.push("First-person is fine when it fits naturally because this is your own Minecraft body.");
+  parts.push("If the room already knows, would not care, or another post would feel spammy, skip.");
+  parts.push("Return strict JSON only: {\"skip\":boolean,\"text\":string,\"reason\":string|null}.");
+  parts.push("If skip is true, set text to [SKIP]. If skip is false, set text to the exact message you want to post now.");
+
+  return parts.join("\n\n");
+}
+
+function formatMinecraftChatForNarration(recentMcChat, botUsername) {
+  if (!Array.isArray(recentMcChat) || recentMcChat.length <= 0) {
+    return "(no recent in-game chat)";
+  }
+  const resolvedBotName = String(botUsername || "").trim();
+  return recentMcChat
+    .slice(-15)
+    .map((message) => {
+      const isBot = Boolean(message?.isBot);
+      const rawSender = String(message?.sender || "").trim();
+      const speaker = isBot && resolvedBotName ? resolvedBotName : (rawSender || "unknown");
+      const text = String(message?.text || "").replace(/\s+/g, " ").trim();
+      return `<${speaker}> ${text || "(empty)"}`;
+    })
+    .join("\n");
+}
+
 export function buildAutomationPrompt({
   instruction,
   channelName = "channel",

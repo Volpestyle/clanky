@@ -244,6 +244,7 @@ export default function SettingsForm({
       "sec-provider-auth": "sec-advanced",
       "sec-llm": "sec-advanced",
       "sec-code-agent": "sec-advanced",
+      "sec-minecraft": "sec-advanced",
       "sec-orchestration": "sec-advanced",
       "sec-stack": "sec-advanced",
       "sec-prompts": "sec-advanced",

@@ -54,6 +54,145 @@ export type TaskSnapshot = {
   startedAt: number;
 };
 
+export type MinecraftGameEvent =
+  | {
+      type: "chat";
+      timestamp: string;
+      summary: string;
+      sender: string;
+      message: string;
+      isBot: boolean;
+    }
+  | {
+      type: "death";
+      timestamp: string;
+      summary: string;
+    }
+  | {
+      type: "player_join" | "player_leave";
+      timestamp: string;
+      summary: string;
+      playerName: string;
+    }
+  | {
+      type: "combat";
+      timestamp: string;
+      summary: string;
+      combatKind: "attack" | "guard_engage";
+      target: string;
+      source?: string | null;
+    }
+  | {
+      type: "block_break";
+      timestamp: string;
+      summary: string;
+      blockName: string;
+      count: number;
+    }
+  | {
+      type: "item_pickup";
+      timestamp: string;
+      summary: string;
+      itemName: string;
+      count: number;
+    }
+  | {
+      type: "server";
+      timestamp: string;
+      summary: string;
+      serverEvent:
+        | "spawned_as"
+        | "disconnecting"
+        | "logged_in"
+        | "spawn"
+        | "connection_ended"
+        | "kicked"
+        | "error";
+      detail?: string;
+    }
+  | {
+      type: "navigation";
+      timestamp: string;
+      summary: string;
+      x: number;
+      y: number;
+      z: number;
+      range: number;
+    }
+  | {
+      type: "follow";
+      timestamp: string;
+      summary: string;
+      playerName: string;
+      distance: number;
+    }
+  | {
+      type: "guard";
+      timestamp: string;
+      summary: string;
+      playerName: string;
+      radius: number;
+      followDistance: number;
+    }
+  | {
+      type: "look_at";
+      timestamp: string;
+      summary: string;
+      playerName: string;
+    }
+  | {
+      type: "rendered_look";
+      timestamp: string;
+      summary: string;
+      width: number;
+      height: number;
+      viewDistance: number;
+      bytes: number;
+    }
+  | {
+      type: "system";
+      timestamp: string;
+      summary: string;
+      detail?: string;
+    };
+
+export type MinecraftVisibleBlock = {
+  name: string;
+  displayName?: string;
+  position: Position;
+  relative: Position;
+  distance: number;
+};
+
+export type MinecraftVisibleEntity = {
+  name: string;
+  type: string;
+  position: Position;
+  distance: number;
+};
+
+export type MinecraftVisualScene = {
+  sampledFrom: Position;
+  blocks: MinecraftVisibleBlock[];
+  nearbyEntities: MinecraftVisibleEntity[];
+  skyVisible: boolean;
+  enclosed: boolean;
+  notableFeatures: string[];
+};
+
+export type MinecraftLookCapture = {
+  mediaType: string;
+  dataBase64: string;
+  width: number;
+  height: number;
+  capturedAt: string;
+  viewpoint: {
+    position: Position;
+    yaw: number | null;
+    pitch: number | null;
+  };
+};
+
 export type WorldSnapshot = {
   sessionId: string;
   mode: MinecraftMode;
@@ -63,7 +202,8 @@ export type WorldSnapshot = {
   nearbyPlayers: PlayerSnapshot[];
   hazards: HazardSnapshot[];
   task: TaskSnapshot | null;
-  recentEvents: string[];
+  recentEvents: MinecraftGameEvent[];
+  visualScene: MinecraftVisualScene | null;
   timeOfDay: number | null;
   isRaining: boolean;
   reflexStatus: string;
@@ -109,7 +249,7 @@ export interface MinecraftSkill {
 
 export type ReflexAction =
   | { type: "eat" }
-  | { type: "flee"; from: Position }
+  | { type: "flee"; from: Position; away: Position }
   | { type: "attack"; target: string }
   | { type: "unstick" }
   | { type: "equip_shield" }
@@ -117,11 +257,18 @@ export type ReflexAction =
 
 // ── Session constraints (from the planner) ──
 
+export type MinecraftAllowedChest = {
+  label?: string;
+  x: number;
+  y: number;
+  z: number;
+};
+
 export type MinecraftConstraints = {
   stayNearPlayer?: boolean;
   maxDistance?: number;
   avoidCombat?: boolean;
-  allowedChests?: string[];
+  allowedChests?: MinecraftAllowedChest[];
 };
 
 export type MinecraftServerTarget = {
@@ -131,13 +278,50 @@ export type MinecraftServerTarget = {
   description: string | null;
 };
 
-export type MinecraftPlannerState = {
-  activeGoal: string | null;
-  subgoals: string[];
-  progress: string[];
-  lastInstruction: string | null;
-  lastDecisionSummary: string | null;
-  lastActionResult: string | null;
+export type MinecraftServerCatalogEntry = {
+  label: string;
+  host: string | null;
+  port: number | null;
+  description: string | null;
+};
+
+export type MinecraftChatMessage = {
+  sender: string;
+  text: string;
+  timestamp: string;
+  isBot: boolean;
+};
+
+export type MinecraftItemRequest = {
+  name: string;
+  count: number;
+};
+
+export type MinecraftBuildBlockPlacement = {
+  x: number;
+  y: number;
+  z: number;
+  blockName: string;
+};
+
+export type MinecraftBuildPlan = {
+  title: string;
+  blocks: MinecraftBuildBlockPlacement[];
+  clearFirst?: boolean;
+};
+
+export type MinecraftProject = {
+  id: string;
+  title: string;
+  description: string;
+  checkpoints: string[];
+  completedCheckpoints: string[];
+  status: "planning" | "executing" | "paused" | "completed" | "abandoned";
+  actionsUsed: number;
+  actionBudget: number;
+  startedAt: string;
+  lastStepAt: string | null;
+  lastStepSummary: string | null;
 };
 
 export type MinecraftBrainAction =
@@ -145,6 +329,7 @@ export type MinecraftBrainAction =
   | { kind: "connect"; target?: Partial<MinecraftServerTarget> }
   | { kind: "disconnect" }
   | { kind: "status" }
+  | { kind: "look" }
   | { kind: "follow"; playerName: string; distance?: number }
   | { kind: "guard"; playerName: string; radius?: number; followDistance?: number }
   | { kind: "collect"; blockName: string; count?: number }
@@ -153,7 +338,58 @@ export type MinecraftBrainAction =
   | { kind: "stop" }
   | { kind: "chat"; message: string }
   | { kind: "attack" }
-  | { kind: "look_at"; playerName: string };
+  | { kind: "look_at"; playerName: string }
+  | { kind: "eat" }
+  | { kind: "equip_offhand"; itemName: string }
+  | { kind: "craft"; recipeName: string; count?: number; useCraftingTable?: boolean }
+  | { kind: "deposit"; chest: { x: number; y: number; z: number }; items: MinecraftItemRequest[] }
+  | { kind: "withdraw"; chest: { x: number; y: number; z: number }; items: MinecraftItemRequest[] }
+  | { kind: "place_block"; x: number; y: number; z: number; blockName: string }
+  | { kind: "build"; plan?: MinecraftBuildPlan; description?: string; origin?: Position; dimensions?: { width: number; height: number; depth: number } }
+  | { kind: "project_start"; title: string; description: string; checkpoints?: string[]; actionBudget?: number }
+  | { kind: "project_step"; summary?: string }
+  | { kind: "project_pause"; reason?: string }
+  | { kind: "project_resume" }
+  | { kind: "project_abort"; reason?: string };
+
+export type MinecraftActionFailureReason =
+  | "player_not_visible"
+  | "path_blocked"
+  | "inventory_full"
+  | "out_of_range"
+  | "constraint_violation"
+  | "invalid_target"
+  | "not_connected"
+  | "rejected_by_server"
+  | "missing_ingredients"
+  | "no_recipe"
+  | "no_crafting_table"
+  | "chest_not_allowed"
+  | "placement_blocked"
+  | "budget_exceeded"
+  | "no_active_project"
+  | "project_already_active"
+  | "project_not_executing"
+  | "unknown";
+
+export type MinecraftActionFailure = {
+  actionKind: MinecraftBrainAction["kind"];
+  reason: MinecraftActionFailureReason;
+  message: string;
+  didYouMeanPlayerName?: string;
+};
+
+export type MinecraftPlannerState = {
+  activeGoal: string | null;
+  subgoals: string[];
+  progress: string[];
+  lastInstruction: string | null;
+  lastDecisionSummary: string | null;
+  lastActionResult: string | null;
+  lastActionFailure: MinecraftActionFailure | null;
+  pendingInGameMessages: MinecraftChatMessage[];
+  activeProject: MinecraftProject | null;
+};
 
 // ── minecraft_task tool arguments ──
 

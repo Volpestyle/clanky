@@ -177,12 +177,39 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: "minecraft_recent_events",
-    description: "Return recent internal bot events like spawn, kicks, deaths, chat observations, and errors.",
+    description: "Return recent typed bot events like spawn, kicks, deaths, chat observations, combat, and player joins/leaves.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
         limit: { type: "number", description: "How many recent events to return. Default: 20." }
+      }
+    }
+  },
+  {
+    name: "minecraft_visible_blocks",
+    description:
+      "Return a bounded projection of blocks and entities in front of the bot for short-range environmental reasoning.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        maxDistance: { type: "number", description: "Maximum sample distance in blocks. Default: 8." },
+        maxBlocks: { type: "number", description: "Maximum returned non-air blocks. Default: 24." }
+      }
+    }
+  },
+  {
+    name: "minecraft_look",
+    description:
+      "Capture a rendered first-person scene image from the bot's current perspective for aesthetic or social inspection.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        width: { type: "number", description: "Image width in pixels. Default: 640." },
+        height: { type: "number", description: "Image height in pixels. Default: 360." },
+        viewDistance: { type: "number", description: "Viewer chunk radius. Default: 4." }
       }
     }
   },
@@ -193,6 +220,203 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       type: "object",
       additionalProperties: false,
       properties: {}
+    }
+  },
+  {
+    name: "minecraft_equip_offhand",
+    description: "Equip an item from the bot's inventory to the off-hand slot (e.g. shield).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["itemName"],
+      properties: {
+        itemName: { type: "string", description: "Canonical item id to equip, e.g. shield, totem_of_undying." }
+      }
+    }
+  },
+  {
+    name: "minecraft_unequip_offhand",
+    description: "Unequip the item currently in the bot's off-hand slot.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    }
+  },
+  {
+    name: "minecraft_eat_best_food",
+    description: "Select the highest-value food in inventory and eat it to restore hunger and saturation.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    }
+  },
+  {
+    name: "minecraft_jump",
+    description: "Trigger a short jump. Useful for unstick recovery or stepping onto a single block.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    }
+  },
+  {
+    name: "minecraft_repath",
+    description: "Clear and re-assert the current pathfinding goal to recover from stuck navigation.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    }
+  },
+  {
+    name: "minecraft_flee_toward",
+    description: "Pathfind to a safe coordinate vector away from a hazard. Used as a reflex recovery.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["x", "y", "z"],
+      properties: {
+        x: { type: "number" },
+        y: { type: "number" },
+        z: { type: "number" },
+        range: { type: "number", description: "How close is close enough. Default: 2." }
+      }
+    }
+  },
+  {
+    name: "minecraft_craft",
+    description: "Craft an item using known recipes. Requires a crafting table for 3x3 recipes.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["recipeName"],
+      properties: {
+        recipeName: { type: "string", description: "Canonical item id to craft, e.g. crafting_table, wooden_pickaxe." },
+        count: { type: "number", description: "How many result items to craft. Default: 1." },
+        useCraftingTable: {
+          type: "boolean",
+          description: "Whether to use a nearby crafting table for 3x3 recipes. Default: false (2x2 inventory)."
+        }
+      }
+    }
+  },
+  {
+    name: "minecraft_recipe_check",
+    description: "Report whether a recipe is known and craftable right now, with missing ingredients if not.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["recipeName"],
+      properties: {
+        recipeName: { type: "string", description: "Canonical item id to check." },
+        useCraftingTable: { type: "boolean", description: "Consider the nearby crafting table. Default: false." }
+      }
+    }
+  },
+  {
+    name: "minecraft_find_crafting_table",
+    description: "Find the nearest crafting table within maxDistance blocks.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        maxDistance: { type: "number", description: "Search radius in blocks. Default: 16." }
+      }
+    }
+  },
+  {
+    name: "minecraft_find_chests",
+    description: "Find nearby chests, trapped chests, ender chests, and barrels.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        maxDistance: { type: "number", description: "Search radius in blocks. Default: 16." },
+        maxChests: { type: "number", description: "Maximum chests to return. Default: 8." }
+      }
+    }
+  },
+  {
+    name: "minecraft_deposit_items",
+    description: "Deposit items from the bot's inventory into a chest at the given coordinates.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["x", "y", "z", "items"],
+      properties: {
+        x: { type: "number" },
+        y: { type: "number" },
+        z: { type: "number" },
+        items: {
+          type: "array",
+          description: "List of {name, count} pairs to deposit.",
+          items: {
+            type: "object",
+            required: ["name", "count"],
+            properties: {
+              name: { type: "string" },
+              count: { type: "number" }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    name: "minecraft_withdraw_items",
+    description: "Withdraw items from a chest at the given coordinates into the bot's inventory.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["x", "y", "z", "items"],
+      properties: {
+        x: { type: "number" },
+        y: { type: "number" },
+        z: { type: "number" },
+        items: {
+          type: "array",
+          description: "List of {name, count} pairs to withdraw.",
+          items: {
+            type: "object",
+            required: ["name", "count"],
+            properties: {
+              name: { type: "string" },
+              count: { type: "number" }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    name: "minecraft_place_block",
+    description: "Place a single block from inventory at the given coordinates. Requires an adjacent solid face.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["x", "y", "z", "blockName"],
+      properties: {
+        x: { type: "number" },
+        y: { type: "number" },
+        z: { type: "number" },
+        blockName: { type: "string", description: "Canonical Minecraft block id to place." }
+      }
+    }
+  },
+  {
+    name: "minecraft_dig_block",
+    description: "Dig a single block at the given coordinates. Low-level action used by the building planner.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["x", "y", "z"],
+      properties: {
+        x: { type: "number" },
+        y: { type: "number" },
+        z: { type: "number" }
+      }
     }
   }
 ];
@@ -342,10 +566,140 @@ export async function dispatchToolCall(
     case "minecraft_recent_events":
       return { ok: true, output: controller.recentEventLog(optionalNumber(a, "limit") ?? 20) };
 
+    case "minecraft_visible_blocks":
+      return {
+        ok: true,
+        output: controller.visibleBlocks(optionalNumber(a, "maxDistance") ?? 8, optionalNumber(a, "maxBlocks") ?? 24)
+      };
+
+    case "minecraft_look":
+      return {
+        ok: true,
+        output: await controller.look({
+          width: optionalNumber(a, "width") ?? 640,
+          height: optionalNumber(a, "height") ?? 360,
+          viewDistance: optionalNumber(a, "viewDistance") ?? 4
+        })
+      };
+
     case "minecraft_stop":
       return { ok: true, output: await controller.stop() };
+
+    case "minecraft_equip_offhand":
+      return { ok: true, output: await controller.equipOffhand(requiredString(a, "itemName")) };
+
+    case "minecraft_unequip_offhand":
+      return { ok: true, output: await controller.unequipOffhand() };
+
+    case "minecraft_eat_best_food":
+      return { ok: true, output: await controller.eatBestFood() };
+
+    case "minecraft_jump":
+      return { ok: true, output: await controller.jump() };
+
+    case "minecraft_repath":
+      return { ok: true, output: await controller.repath() };
+
+    case "minecraft_flee_toward":
+      return {
+        ok: true,
+        output: await controller.fleeToward(
+          optionalNumber(a, "x") ?? (() => { throw new Error("x is required"); })(),
+          optionalNumber(a, "y") ?? (() => { throw new Error("y is required"); })(),
+          optionalNumber(a, "z") ?? (() => { throw new Error("z is required"); })(),
+          optionalNumber(a, "range") ?? 2
+        )
+      };
+
+    case "minecraft_craft":
+      return {
+        ok: true,
+        output: await controller.craftItem(
+          requiredString(a, "recipeName"),
+          optionalNumber(a, "count") ?? 1,
+          Boolean(a["useCraftingTable"])
+        )
+      };
+
+    case "minecraft_recipe_check":
+      return {
+        ok: true,
+        output: controller.checkRecipe(
+          requiredString(a, "recipeName"),
+          Boolean(a["useCraftingTable"])
+        )
+      };
+
+    case "minecraft_find_crafting_table":
+      return { ok: true, output: controller.findCraftingTable(optionalNumber(a, "maxDistance") ?? 16) };
+
+    case "minecraft_find_chests":
+      return {
+        ok: true,
+        output: controller.findNearbyChests(
+          optionalNumber(a, "maxDistance") ?? 16,
+          optionalNumber(a, "maxChests") ?? 8
+        )
+      };
+
+    case "minecraft_deposit_items":
+      return {
+        ok: true,
+        output: await controller.depositToChest(
+          optionalNumber(a, "x") ?? (() => { throw new Error("x is required"); })(),
+          optionalNumber(a, "y") ?? (() => { throw new Error("y is required"); })(),
+          optionalNumber(a, "z") ?? (() => { throw new Error("z is required"); })(),
+          asItemList(a["items"])
+        )
+      };
+
+    case "minecraft_withdraw_items":
+      return {
+        ok: true,
+        output: await controller.withdrawFromChest(
+          optionalNumber(a, "x") ?? (() => { throw new Error("x is required"); })(),
+          optionalNumber(a, "y") ?? (() => { throw new Error("y is required"); })(),
+          optionalNumber(a, "z") ?? (() => { throw new Error("z is required"); })(),
+          asItemList(a["items"])
+        )
+      };
+
+    case "minecraft_place_block":
+      return {
+        ok: true,
+        output: await controller.placeBlockAt(
+          optionalNumber(a, "x") ?? (() => { throw new Error("x is required"); })(),
+          optionalNumber(a, "y") ?? (() => { throw new Error("y is required"); })(),
+          optionalNumber(a, "z") ?? (() => { throw new Error("z is required"); })(),
+          requiredString(a, "blockName")
+        )
+      };
+
+    case "minecraft_dig_block":
+      return {
+        ok: true,
+        output: await controller.digBlockAt(
+          optionalNumber(a, "x") ?? (() => { throw new Error("x is required"); })(),
+          optionalNumber(a, "y") ?? (() => { throw new Error("y is required"); })(),
+          optionalNumber(a, "z") ?? (() => { throw new Error("z is required"); })()
+        )
+      };
 
     default:
       throw new Error(`Unknown tool '${toolName}'`);
   }
+}
+
+function asItemList(raw: unknown): Array<{ name: string; count: number }> {
+  if (!Array.isArray(raw)) throw new Error("items must be an array");
+  const items: Array<{ name: string; count: number }> = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    const name = String(record.name || "").trim();
+    const count = Number(record.count);
+    if (!name || !Number.isFinite(count) || count < 1) continue;
+    items.push({ name, count: Math.floor(count) });
+  }
+  return items;
 }

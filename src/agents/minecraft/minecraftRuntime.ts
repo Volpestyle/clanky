@@ -7,6 +7,8 @@
  * lifecycle and world state.
  */
 
+import type { MinecraftGameEvent, MinecraftLookCapture, MinecraftVisualScene } from "./types.ts";
+
 // ── MCP server response types ───────────────────────────────────────────────
 
 export type McpToolResult<T = unknown> = {
@@ -47,6 +49,15 @@ export type McpGuardState = {
   followDistance: number;
 };
 
+export type McpEquipmentSnapshot = {
+  hand: string | null;
+  offhand: string | null;
+  helmet: string | null;
+  chestplate: string | null;
+  leggings: string | null;
+  boots: string | null;
+};
+
 export type McpStatusSnapshot = {
   connected: boolean;
   username?: string;
@@ -57,13 +68,16 @@ export type McpStatusSnapshot = {
   dimension?: string;
   timeOfDay?: number;
   position?: McpPosition;
+  yaw?: number;
+  pitch?: number;
   players?: McpPlayerEntry[];
   hazards?: McpHazardEntry[];
   inventory?: McpInventoryEntry[];
+  equipment?: McpEquipmentSnapshot;
   task: string;
   follow?: McpFollowState | null;
   guard?: McpGuardState | null;
-  recentEvents: string[];
+  recentEvents: MinecraftGameEvent[];
 };
 
 export type McpHealthResponse = {
@@ -88,6 +102,7 @@ export type MinecraftConnectOptions = {
 
 const DEFAULT_TIMEOUT_MS = 35_000;
 const HEALTH_TIMEOUT_MS = 5_000;
+const LOOK_TIMEOUT_MS = 45_000;
 
 type LogAction = (entry: Record<string, unknown>) => void;
 
@@ -237,7 +252,174 @@ export class MinecraftRuntime {
     return this.callTool<McpInventoryEntry[]>("minecraft_inventory", {}, DEFAULT_TIMEOUT_MS, signal);
   }
 
-  async recentEvents(limit = 20, signal?: AbortSignal): Promise<McpToolResult<string[]>> {
-    return this.callTool<string[]>("minecraft_recent_events", { limit }, DEFAULT_TIMEOUT_MS, signal);
+  async recentEvents(limit = 20, signal?: AbortSignal): Promise<McpToolResult<MinecraftGameEvent[]>> {
+    return this.callTool<MinecraftGameEvent[]>("minecraft_recent_events", { limit }, DEFAULT_TIMEOUT_MS, signal);
+  }
+
+  async visibleBlocks(
+    maxDistance = 8,
+    maxBlocks = 24,
+    signal?: AbortSignal
+  ): Promise<McpToolResult<MinecraftVisualScene>> {
+    return this.callTool<MinecraftVisualScene>(
+      "minecraft_visible_blocks",
+      { maxDistance, maxBlocks },
+      DEFAULT_TIMEOUT_MS,
+      signal
+    );
+  }
+
+  async look(
+    width = 640,
+    height = 360,
+    viewDistance = 4,
+    signal?: AbortSignal
+  ): Promise<McpToolResult<MinecraftLookCapture>> {
+    return this.callTool<MinecraftLookCapture>(
+      "minecraft_look",
+      { width, height, viewDistance },
+      LOOK_TIMEOUT_MS,
+      signal
+    );
+  }
+
+  // ── Phase 6: Reflex completion ──────────────────────────────────────────
+
+  async equipOffhand(
+    itemName: string,
+    signal?: AbortSignal
+  ): Promise<McpToolResult<{ ok: true; itemName: string }>> {
+    return this.callTool("minecraft_equip_offhand", { itemName }, DEFAULT_TIMEOUT_MS, signal);
+  }
+
+  async unequipOffhand(signal?: AbortSignal): Promise<McpToolResult<{ ok: true }>> {
+    return this.callTool("minecraft_unequip_offhand", {}, DEFAULT_TIMEOUT_MS, signal);
+  }
+
+  async eatBestFood(
+    signal?: AbortSignal
+  ): Promise<McpToolResult<{ ok: true; foodName: string; foodBefore: number | null; foodAfter: number | null }>> {
+    return this.callTool("minecraft_eat_best_food", {}, DEFAULT_TIMEOUT_MS, signal);
+  }
+
+  async jump(signal?: AbortSignal): Promise<McpToolResult<{ ok: true }>> {
+    return this.callTool("minecraft_jump", {}, DEFAULT_TIMEOUT_MS, signal);
+  }
+
+  async repath(signal?: AbortSignal): Promise<McpToolResult<{ ok: true; mode: string }>> {
+    return this.callTool("minecraft_repath", {}, DEFAULT_TIMEOUT_MS, signal);
+  }
+
+  async fleeToward(
+    x: number,
+    y: number,
+    z: number,
+    range = 2,
+    signal?: AbortSignal
+  ): Promise<McpToolResult<{ ok: true; target: McpPosition; range: number }>> {
+    return this.callTool("minecraft_flee_toward", { x, y, z, range }, DEFAULT_TIMEOUT_MS, signal);
+  }
+
+  // ── Phase 7.1: Crafting ─────────────────────────────────────────────────
+
+  async craftItem(
+    recipeName: string,
+    count: number,
+    useCraftingTable: boolean,
+    signal?: AbortSignal
+  ): Promise<McpToolResult<{ ok: true; recipeName: string; crafted: number; requested: number }>> {
+    return this.callTool(
+      "minecraft_craft",
+      { recipeName, count, useCraftingTable },
+      DEFAULT_TIMEOUT_MS,
+      signal
+    );
+  }
+
+  async checkRecipe(
+    recipeName: string,
+    useCraftingTable: boolean,
+    signal?: AbortSignal
+  ): Promise<McpToolResult<{
+    ok: true;
+    recipeName: string;
+    canCraft: boolean;
+    known: boolean;
+    missingIngredients: string[];
+  }>> {
+    return this.callTool(
+      "minecraft_recipe_check",
+      { recipeName, useCraftingTable },
+      DEFAULT_TIMEOUT_MS,
+      signal
+    );
+  }
+
+  async findCraftingTable(
+    maxDistance = 16,
+    signal?: AbortSignal
+  ): Promise<McpToolResult<{ ok: true; found: boolean; position: McpPosition | null; distance: number | null }>> {
+    return this.callTool("minecraft_find_crafting_table", { maxDistance }, DEFAULT_TIMEOUT_MS, signal);
+  }
+
+  // ── Phase 7.2: Chest workflows ──────────────────────────────────────────
+
+  async findChests(
+    maxDistance = 16,
+    maxChests = 8,
+    signal?: AbortSignal
+  ): Promise<McpToolResult<{ ok: true; chests: Array<{ position: McpPosition; distance: number }> }>> {
+    return this.callTool("minecraft_find_chests", { maxDistance, maxChests }, DEFAULT_TIMEOUT_MS, signal);
+  }
+
+  async depositItems(
+    x: number,
+    y: number,
+    z: number,
+    items: Array<{ name: string; count: number }>,
+    signal?: AbortSignal
+  ): Promise<McpToolResult<{
+    ok: true;
+    chest: McpPosition;
+    deposited: Array<{ name: string; count: number }>;
+    skipped: Array<{ name: string; reason: string }>;
+  }>> {
+    return this.callTool("minecraft_deposit_items", { x, y, z, items }, DEFAULT_TIMEOUT_MS, signal);
+  }
+
+  async withdrawItems(
+    x: number,
+    y: number,
+    z: number,
+    items: Array<{ name: string; count: number }>,
+    signal?: AbortSignal
+  ): Promise<McpToolResult<{
+    ok: true;
+    chest: McpPosition;
+    withdrawn: Array<{ name: string; count: number }>;
+    skipped: Array<{ name: string; reason: string }>;
+  }>> {
+    return this.callTool("minecraft_withdraw_items", { x, y, z, items }, DEFAULT_TIMEOUT_MS, signal);
+  }
+
+  // ── Phase 7.3: Block placement ──────────────────────────────────────────
+
+  async placeBlock(
+    x: number,
+    y: number,
+    z: number,
+    blockName: string,
+    signal?: AbortSignal
+  ): Promise<McpToolResult<{ ok: true; placed: boolean; position: McpPosition; blockName: string }>> {
+    return this.callTool("minecraft_place_block", { x, y, z, blockName }, DEFAULT_TIMEOUT_MS, signal);
+  }
+
+  async digBlock(
+    x: number,
+    y: number,
+    z: number,
+    signal?: AbortSignal
+  ): Promise<McpToolResult<{ ok: true; dug: boolean; position: McpPosition; blockName: string }>> {
+    return this.callTool("minecraft_dig_block", { x, y, z }, DEFAULT_TIMEOUT_MS, signal);
   }
 }

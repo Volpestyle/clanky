@@ -424,6 +424,19 @@ export const DEFAULT_SETTINGS = {
           port: 25565,
           description: ""
         },
+        serverCatalog: [] as Array<{
+          label: string;
+          host: string;
+          port: number;
+          description: string;
+        }>,
+        narration: {
+          eagerness: 25,
+          minSecondsBetweenPosts: 300
+        },
+        project: {
+          defaultActionBudget: 40
+        },
         execution: {
           mode: "inherit_orchestrator"
         }
