@@ -9,7 +9,15 @@ test("getMinecraftConfig surfaces the canonical Minecraft server target for embo
       runtimeConfig: {
         minecraft: {
           enabled: true,
-          operatorPlayerName: "Volpestyle",
+          knownIdentities: [
+            {
+              mcUsername: "Volpestyle",
+              discordUsername: "Volpestyle",
+              label: "Volpe",
+              relationship: "operator",
+              notes: "Primary collaborator"
+            }
+          ],
           server: {
             label: "Survival SMP",
             host: "mc.example.test",
@@ -23,7 +31,15 @@ test("getMinecraftConfig surfaces the canonical Minecraft server target for embo
 
   const config = getMinecraftConfig(settings);
 
-  assert.equal(config.operatorPlayerName, "Volpestyle");
+  assert.deepEqual(config.knownIdentities, [
+    {
+      mcUsername: "Volpestyle",
+      discordUsername: "Volpestyle",
+      label: "Volpe",
+      relationship: "operator",
+      notes: "Primary collaborator"
+    }
+  ]);
   assert.equal(config.autoSpawn, true);
   assert.deepEqual(config.serverTarget, {
     label: "Survival SMP",

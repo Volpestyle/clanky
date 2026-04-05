@@ -308,7 +308,7 @@ test("executeVoiceMinecraftTaskTool reuses the caller's active session without c
     args: {
       task: "follow me",
       constraints: {
-        stay_near_player: true,
+        stay_near_player: "Volpestyle",
         max_distance: 4
       }
     }
@@ -319,7 +319,7 @@ test("executeVoiceMinecraftTaskTool reuses the caller's active session without c
   assert.deepEqual(JSON.parse(runInputs[0] || "{}"), {
     task: "follow me",
     constraints: {
-      stay_near_player: true,
+      stay_near_player: "Volpestyle",
       max_distance: 4
     }
   });

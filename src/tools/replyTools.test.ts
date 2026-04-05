@@ -660,7 +660,7 @@ test("executeReplyTool reuses the caller's active minecraft session when no sess
     {
       task: "follow me",
       mode: "companion",
-      constraints: { stay_near_player: true, max_distance: 4 }
+      constraints: { stay_near_player: "Volpestyle", max_distance: 4 }
     },
     {
       subAgentSessions: {
@@ -693,7 +693,7 @@ test("executeReplyTool reuses the caller's active minecraft session when no sess
   assert.deepEqual(JSON.parse(runInputs[0] || "{}"), {
     task: "follow me",
     mode: "companion",
-    constraints: { stay_near_player: true, max_distance: 4 }
+    constraints: { stay_near_player: "Volpestyle", max_distance: 4 }
   });
   assert.match(result.content, /Following you\./);
   assert.match(result.content, /\[session_id:/);

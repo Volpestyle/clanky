@@ -398,7 +398,13 @@ export const DEFAULT_SETTINGS = {
       minecraft: {
         enabled: false,
         mcpUrl: "",
-        operatorPlayerName: "",
+        knownIdentities: [] as Array<{
+          mcUsername: string;
+          discordUsername: string;
+          label: string;
+          relationship: string;
+          notes: string;
+        }>,
         server: {
           label: "",
           host: "",

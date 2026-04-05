@@ -59,7 +59,7 @@ test("MinecraftSession normalizes snake_case constraints and downgrades guard to
     scopeKey: "guild-1:channel-1",
     baseUrl: "http://minecraft.test",
     ownerUserId: "user-1",
-    operatorPlayerName: "Steve",
+    knownIdentities: [{ mcUsername: "Steve", relationship: "friend" }],
     brain
   });
 
@@ -87,7 +87,7 @@ test("MinecraftSession normalizes snake_case constraints and downgrades guard to
     task: "guard me",
     constraints: {
       avoid_combat: true,
-      stay_near_player: true,
+      stay_near_player: "Steve",
       max_distance: 2
     }
   }));
@@ -108,7 +108,7 @@ test("MinecraftSession uses max_distance to limit resource gathering range", asy
     scopeKey: "guild-1:channel-1",
     baseUrl: "http://minecraft.test",
     ownerUserId: "user-1",
-    operatorPlayerName: "Steve",
+    knownIdentities: [{ mcUsername: "Steve", relationship: "friend" }],
     brain
   });
 
@@ -216,7 +216,7 @@ test("MinecraftSession runs a bounded planner checkpoint loop and carries goal s
     scopeKey: "guild-1:channel-1",
     baseUrl: "http://minecraft.test",
     ownerUserId: "user-1",
-    operatorPlayerName: "Steve",
+    knownIdentities: [{ mcUsername: "Steve", relationship: "friend" }],
     serverTarget: {
       label: "Survival SMP",
       host: "mc.example.test",
@@ -327,7 +327,7 @@ test("MinecraftSession retries within the same turn after a failed follow and su
     scopeKey: "guild-1:channel-1",
     baseUrl: "http://minecraft.test",
     ownerUserId: "user-1",
-    operatorPlayerName: "Volpestyle",
+    knownIdentities: [{ mcUsername: "Volpestyle", relationship: "operator" }],
     brain
   });
 
@@ -376,7 +376,7 @@ test("MinecraftSession rejects natural-language turns when the brain is unavaila
     scopeKey: "guild-1:channel-1",
     baseUrl: "http://minecraft.test",
     ownerUserId: "user-1",
-    operatorPlayerName: "Steve"
+    knownIdentities: [{ mcUsername: "Steve", relationship: "friend" }]
   });
 
   const result = await session.runTurn("follow me");
@@ -392,7 +392,7 @@ test("MinecraftSession keeps explicit structured commands working when the brain
     scopeKey: "guild-1:channel-1",
     baseUrl: "http://minecraft.test",
     ownerUserId: "user-1",
-    operatorPlayerName: "Steve"
+    knownIdentities: [{ mcUsername: "Steve", relationship: "friend" }]
   });
 
   const runtime = session.runtime as unknown as {
@@ -428,7 +428,7 @@ test("MinecraftSession logs server target deltas when the brain rewrites the ser
     scopeKey: "guild-1:channel-1",
     baseUrl: "http://minecraft.test",
     ownerUserId: "user-1",
-    operatorPlayerName: "Steve",
+    knownIdentities: [{ mcUsername: "Steve", relationship: "friend" }],
     serverTarget: {
       label: "Survival SMP",
       host: "old.example.test",
@@ -521,7 +521,7 @@ test("MinecraftSession flows Discord context into brain planTurn and replyToChat
     scopeKey: "guild-1:channel-1",
     baseUrl: "http://minecraft.test",
     ownerUserId: "user-1",
-    operatorPlayerName: "Steve",
+    knownIdentities: [{ mcUsername: "Steve", relationship: "friend" }],
     getRecentDiscordContext: () => {
       callCount += 1;
       return [
@@ -582,7 +582,7 @@ test("MinecraftSession tolerates missing or throwing getRecentDiscordContext by 
     scopeKey: "guild-1:channel-1",
     baseUrl: "http://minecraft.test",
     ownerUserId: "user-1",
-    operatorPlayerName: "Steve",
+    knownIdentities: [{ mcUsername: "Steve", relationship: "friend" }],
     brain
   });
   await sessionA.runTurn("status");
@@ -595,7 +595,7 @@ test("MinecraftSession tolerates missing or throwing getRecentDiscordContext by 
     scopeKey: "guild-1:channel-2",
     baseUrl: "http://minecraft.test",
     ownerUserId: "user-1",
-    operatorPlayerName: "Steve",
+    knownIdentities: [{ mcUsername: "Steve", relationship: "friend" }],
     getRecentDiscordContext: () => {
       throw new Error("store unavailable");
     },
@@ -647,7 +647,7 @@ test("MinecraftSession queues in-game chat during cooldown and later flushes the
     scopeKey: "guild-1:channel-1",
     baseUrl: "http://minecraft.test",
     ownerUserId: "user-1",
-    operatorPlayerName: "Steve",
+    knownIdentities: [{ mcUsername: "Steve", relationship: "friend" }],
     brain
   });
 
@@ -746,7 +746,7 @@ test("MinecraftSession forwards typed game events and routes typed chat events i
     scopeKey: "guild-1:channel-1",
     baseUrl: "http://minecraft.test",
     ownerUserId: "user-1",
-    operatorPlayerName: "Steve",
+    knownIdentities: [{ mcUsername: "Steve", relationship: "friend" }],
     brain,
     onGameEvent(events) {
       seenGameEvents.push(events);
@@ -808,7 +808,7 @@ test("MinecraftSession enriches planner world snapshots with visible block proje
     scopeKey: "guild-1:channel-1",
     baseUrl: "http://minecraft.test",
     ownerUserId: "user-1",
-    operatorPlayerName: "Steve",
+    knownIdentities: [{ mcUsername: "Steve", relationship: "friend" }],
     brain
   });
 
@@ -892,7 +892,7 @@ test("MinecraftSession lets the same planner capture a rendered glance and inspe
     scopeKey: "guild-1:channel-1",
     baseUrl: "http://minecraft.test",
     ownerUserId: "user-1",
-    operatorPlayerName: "Steve",
+    knownIdentities: [{ mcUsername: "Steve", relationship: "friend" }],
     brain
   });
 

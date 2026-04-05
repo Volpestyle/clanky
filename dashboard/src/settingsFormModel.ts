@@ -323,7 +323,18 @@ function buildSettingsFormView(settings: unknown) {
     minecraft: {
       enabled: Boolean(minecraft.enabled),
       mcpUrl: String(minecraft.mcpUrl || ""),
-      operatorPlayerName: String(minecraft.operatorPlayerName || ""),
+      knownIdentities: Array.isArray(minecraft.knownIdentities)
+        ? minecraft.knownIdentities.map((entry: unknown) => {
+            const record = (entry && typeof entry === "object" ? entry : {}) as Record<string, unknown>;
+            return {
+              mcUsername: String(record.mcUsername || ""),
+              discordUsername: String(record.discordUsername || ""),
+              label: String(record.label || ""),
+              relationship: String(record.relationship || ""),
+              notes: String(record.notes || "")
+            };
+          })
+        : [],
       runtimeConfig: { ...minecraft },
       useTextModel: minecraft.execution?.mode !== "dedicated_model",
       llm: minecraftBrainBinding,
@@ -588,7 +599,7 @@ export function settingsToForm(settings: unknown) {
       resolved.codeAgent.nonWorkerRuntimeConfig ?? defaults.codeAgent.nonWorkerRuntimeConfig,
     minecraftEnabled: resolved.minecraft.enabled ?? defaults.minecraft.enabled,
     minecraftMcpUrl: resolved.minecraft.mcpUrl ?? defaults.minecraft.mcpUrl,
-    minecraftOperatorPlayerName: resolved.minecraft.operatorPlayerName ?? defaults.minecraft.operatorPlayerName,
+    minecraftKnownIdentities: resolved.minecraft.knownIdentities ?? defaults.minecraft.knownIdentities,
     minecraftRuntimeConfig: resolved.minecraft.runtimeConfig ?? defaults.minecraft.runtimeConfig,
     minecraftBrainUseTextModel: resolved.minecraft.useTextModel ?? defaults.minecraft.useTextModel,
     minecraftBrainLlmProvider: resolved.minecraft.llm.provider ?? defaults.minecraft.llm.provider,
@@ -1685,7 +1696,17 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
           ...rawMinecraftRuntimeConfig,
           enabled: Boolean(form.minecraftEnabled),
           mcpUrl: String(form.minecraftMcpUrl || "").trim(),
-          operatorPlayerName: String(form.minecraftOperatorPlayerName || "").trim(),
+          knownIdentities: Array.isArray(form.minecraftKnownIdentities)
+            ? (form.minecraftKnownIdentities as Array<Record<string, unknown>>)
+                .map((entry) => ({
+                  mcUsername: String(entry.mcUsername || "").trim(),
+                  discordUsername: String(entry.discordUsername || "").trim(),
+                  label: String(entry.label || "").trim(),
+                  relationship: String(entry.relationship || "").trim(),
+                  notes: String(entry.notes || "").trim()
+                }))
+                .filter((entry) => entry.mcUsername.length > 0)
+            : [],
           narration: {
             ...(isRecordLike(rawMinecraftRuntimeConfig.narration)
               ? rawMinecraftRuntimeConfig.narration

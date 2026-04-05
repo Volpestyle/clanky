@@ -94,18 +94,22 @@ function buildTaskSnapshot(taskString: string): TaskSnapshot | null {
 /**
  * Build a WorldSnapshot from MCP server status.
  *
- * @param sessionId    The agent session owning this snapshot.
- * @param mode         Current operating mode.
- * @param status       Raw StatusSnapshot from the MCP server.
- * @param operatorName The Minecraft username of the operator (primary player).
- *                     If provided, this player is separated into `player` and
- *                     the rest go to `nearbyPlayers`.
+ * @param sessionId          The agent session owning this snapshot.
+ * @param mode               Current operating mode.
+ * @param status             Raw StatusSnapshot from the MCP server.
+ * @param knownMcUsernames   Optional list of MC usernames the operator has
+ *                           configured as known identities. If any visible
+ *                           player matches, the closest one is promoted to
+ *                           `primaryPlayer` as a focus hint. When empty (or
+ *                           no matches), `primaryPlayer` is null and every
+ *                           player shows up in `nearbyPlayers` — Clanky
+ *                           forms impressions organically.
  */
 export function buildWorldSnapshot(
   sessionId: string,
   mode: MinecraftMode,
   status: McpStatusSnapshot,
-  operatorName: string | null = null,
+  knownMcUsernames: readonly string[] | null = [],
   visualScene: MinecraftVisualScene | null = null
 ): WorldSnapshot {
   const self = buildSelfSnapshot(status);
@@ -113,23 +117,21 @@ export function buildWorldSnapshot(
     .filter((p) => p.username !== status.username)
     .map((p) => buildPlayerSnapshot(p, self?.position ?? null));
 
+  // Promote the closest visible known identity to primaryPlayer when one is
+  // present. No arbitrary "closest visible player" fallback — without known
+  // identities, everyone is a peer and the brain reasons about them equally.
+  const knownSet = new Set((knownMcUsernames ?? []).map((name) => name.toLowerCase()));
   let primaryPlayer: PlayerSnapshot | null = null;
   const nearbyPlayers: PlayerSnapshot[] = [];
-  for (const p of allPlayers) {
-    if (operatorName && p.name === operatorName && !primaryPlayer) {
-      primaryPlayer = p;
-    } else {
-      nearbyPlayers.push(p);
-    }
+  if (knownSet.size > 0) {
+    const visibleKnown = allPlayers
+      .filter((p) => p.visible && knownSet.has(p.name.toLowerCase()))
+      .sort((a, b) => a.distance - b.distance);
+    primaryPlayer = visibleKnown[0] ?? null;
   }
-  // If no operator was specified, promote the closest visible player.
-  if (!primaryPlayer && allPlayers.length > 0) {
-    const closest = allPlayers.reduce((a, b) => (a.distance < b.distance ? a : b));
-    if (closest.visible) {
-      primaryPlayer = closest;
-      const idx = nearbyPlayers.indexOf(closest);
-      if (idx !== -1) nearbyPlayers.splice(idx, 1);
-    }
+  for (const p of allPlayers) {
+    if (p === primaryPlayer) continue;
+    nearbyPlayers.push(p);
   }
 
   const hazards = (status.hazards ?? [])

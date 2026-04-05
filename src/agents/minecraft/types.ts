@@ -265,10 +265,40 @@ export type MinecraftAllowedChest = {
 };
 
 export type MinecraftConstraints = {
-  stayNearPlayer?: boolean;
+  /**
+   * MC username to stay close to (paired with `maxDistance`).
+   *
+   * Explicit player name rather than a boolean so the brain decides WHO the
+   * leash applies to per turn. Cleared by omission (undefined = no leash).
+   */
+  stayNearPlayer?: string;
   maxDistance?: number;
   avoidCombat?: boolean;
   allowedChests?: MinecraftAllowedChest[];
+};
+
+/**
+ * A Discord↔Minecraft identity bridge entry the operator has configured.
+ *
+ * These are context for the brain, not permission gates. Clanky can still
+ * interact with any player by name; these entries just let the brain resolve
+ * "Volpe said follow me in voice" to a specific MC username, carry social
+ * context (relationship, notes), and prefer known people as primary focus.
+ *
+ * The operator is just one entry in this list, typically with
+ * `relationship: "operator"`. There is no privileged single-operator slot.
+ */
+export type MinecraftPlayerIdentity = {
+  /** Required: the player's in-game MC username. */
+  mcUsername: string;
+  /** Optional: Discord display name used in channel/voice context. */
+  discordUsername?: string;
+  /** Optional: human-facing label (e.g. "Volpe (owner)"). */
+  label?: string;
+  /** Optional freeform role, e.g. "operator", "trusted collab", "friend". */
+  relationship?: string;
+  /** Optional freeform additional context. */
+  notes?: string;
 };
 
 export type MinecraftServerTarget = {

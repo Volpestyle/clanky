@@ -48,7 +48,7 @@ Phases 1 through 7 and 5.1a/5.1b/5.2/5.3 have all shipped. Remaining gaps are na
 
 - **Vision budgeting is still basic.** Clanky now has both structured block/entity projection (`minecraft_visible_blocks`) and on-demand rendered first-person capture (`minecraft_look`), but explicit per-session/per-scope look budgets and cooldown hints are still future refinement.
 
-- **Multi-operator session pivot.** `operatorPlayerName` is fixed at session start — trusted collaborators can't say "follow me" and pivot the session without an explicit handoff.
+- **Cross-surface identity ambiguity.** Without an optional `knownIdentities` address book, Clanky has to infer who "follow me" refers to from Discord and Minecraft context alone. When the address book is present, it helps bridge Discord and MC identities without acting like a permission list.
 
 - **Prismarine-viewer fidelity.** Rendered first-person glances use vanilla textures with approximate lighting. Modded/packed/shadered servers are misrepresented until 5.1c (high-fidelity tier) ships.
 
@@ -359,7 +359,7 @@ If prismarine-viewer's fidelity proves insufficient — specifically for heavily
 
 ## Open questions
 
-- **Multi-operator MC sessions.** Today `operatorPlayerName` is fixed at session start. Should trusted collaborators be able to say "follow me" and have the session temporarily pivot to them? Or do we require explicit session handoff?
+- **Cross-surface MC identity resolution.** When should Clanky trust his own inference about who a Discord speaker maps to in Minecraft, versus asking a clarifying question? How much should the optional `knownIdentities` address book bias that decision?
 - ~~**Owner-private vs guild-public game context.** DMs and owner-private memory don't leak into MC chat today by accident (the session is scoped). Phase 2 adds Discord context merging — we need an explicit filter there.~~ **Resolved in Phase 2:** filter lives at the plumbing boundary — `getRecentDiscordContext` is simply not wired for DM-scoped sessions in `createMinecraftSession`, so private channel history can never enter the brain's Discord-context window in the first place.
 - **Narration channel routing.** Proactive narration targets the scope-keyed channel by default. Should we support a per-guild "minecraft-logbook" channel override?
 - ~~**Brain model binding for high-frequency chat decisions.** If chat narration fires frequently, the `dedicated_model` binding may want a cheaper model than planning turns. Consider separate bindings for `planTurn` vs `replyToChat` vs narration.~~ **Resolved in Phase 3:** narration shares the Minecraft brain binding via `getResolvedMinecraftBrainBinding` (`src/bot/minecraftNarration.ts`). Clanky is one mind across surfaces — the same model that plans his in-world actions speaks about them to Discord, because voice consistency matters more than per-call token savings. Revisit only if cost telemetry shows narration dominating spend, latency complaints surface, or we want a deliberate stylistic difference between surfaces.

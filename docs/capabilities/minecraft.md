@@ -133,7 +133,7 @@ The canonical config lives under `agentStack.runtimeConfig.minecraft`:
 
 - `enabled`
 - `mcpUrl`
-- `operatorPlayerName`
+- `knownIdentities`
 - `server`
 - `narration.eagerness`
 - `narration.minSecondsBetweenPosts`
@@ -185,7 +185,17 @@ The bundled MCP runtime resolves the bot username in this order:
 2. `MC_USERNAME`
 3. `ClankyBuddy`
 
-`operatorPlayerName` is separate. It is the human operator's Minecraft username and is used for things like `follow me` and `guard me`.
+`knownIdentities` is optional. When empty, Clanky treats every Minecraft player as a peer and forms impressions organically from chat, behavior, and memory.
+
+When populated, it acts like a small Discord to Minecraft address book:
+
+- `mcUsername`
+- `discordUsername`
+- `label`
+- `relationship`
+- `notes`
+
+This is context, not a permission list. It helps the brain resolve people across Discord and Minecraft when that is useful, but it does not stop Clanky from interacting with players who are not listed.
 
 ## Building And Projects
 
@@ -219,7 +229,7 @@ Budget caps are infrastructure cost controls, not creative limits. The brain alw
 
 - `agentStack.runtimeConfig.minecraft.enabled`
 - `agentStack.runtimeConfig.minecraft.mcpUrl`
-- `agentStack.runtimeConfig.minecraft.operatorPlayerName`
+- `agentStack.runtimeConfig.minecraft.knownIdentities`
 - `agentStack.runtimeConfig.minecraft.server` (single preferred target)
 - `agentStack.runtimeConfig.minecraft.serverCatalog` (optional list of labeled targets the brain can connect to by name)
 - `agentStack.runtimeConfig.minecraft.narration.{eagerness, minSecondsBetweenPosts}`
@@ -231,7 +241,7 @@ Budget caps are infrastructure cost controls, not creative limits. The brain alw
 Minecraft is currently an embodied teammate runtime. Remaining gaps:
 
 - no first-person vision upgrades beyond the rendered scene glance (no shaders, modded servers, resource packs)
-- no multi-operator session pivot (`operatorPlayerName` fixed at session start)
+- no deeper reputation model yet beyond chat history, memory, and the optional `knownIdentities` address book
 - no automated food-slot pre-equip management (eat reflex picks best food at eat time)
 
 The important boundary is that these are narrow gaps, not architecture limits. The runtime has the right authority boundary: the Minecraft brain owns in-world decisions, the tool/runtime layer owns reliable execution, reflexes own survival safety, and the sub-planner expands shorthand into concrete plans.

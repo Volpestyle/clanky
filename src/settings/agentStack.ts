@@ -794,10 +794,25 @@ export function isDevTaskEnabled(settings: unknown): boolean {
 
 // ── Minecraft ───────────────────────────────────────────────────────────────
 
+export type MinecraftKnownIdentity = {
+  mcUsername: string;
+  discordUsername: string | null;
+  label: string | null;
+  relationship: string | null;
+  notes: string | null;
+};
+
 export type MinecraftConfig = {
   /** Explicit URL to an already-running MCP server, or null to auto-spawn. */
   mcpUrl: string | null;
-  operatorPlayerName: string | null;
+  /**
+   * Optional Discord↔Minecraft identity bridge the operator has configured.
+   *
+   * Empty is a first-class mode: Clanky treats all MC players as peers and
+   * forms impressions organically from chat, memory, and behavior. When
+   * populated, entries act as background context — not a permission gate.
+   */
+  knownIdentities: MinecraftKnownIdentity[];
   serverTarget: {
     label: string | null;
     host: string | null;
@@ -845,12 +860,7 @@ export function getMinecraftConfig(settings: unknown): MinecraftConfig {
     ""
   ).trim() || null;
   const runtimeServer = runtimeConfig?.server as Record<string, unknown> | undefined;
-  const operatorPlayerName = String(
-    runtimeConfig?.operatorPlayerName ||
-    (!hasRawRuntimeMinecraft && legacy?.operatorPlayerName) ||
-    process.env.MC_OPERATOR_USERNAME ||
-    ""
-  ).trim() || null;
+  const knownIdentities = normalizeMinecraftKnownIdentities(runtimeConfig?.knownIdentities);
   const serverLabel = String(runtimeServer?.label || "").trim() || null;
   const serverHost = String(runtimeServer?.host || "").trim() || null;
   const rawServerPort = Number(runtimeServer?.port);
@@ -868,8 +878,35 @@ export function getMinecraftConfig(settings: unknown): MinecraftConfig {
     : null;
   return {
     mcpUrl: explicitUrl,
-    operatorPlayerName,
+    knownIdentities,
     serverTarget,
     autoSpawn: !explicitUrl
   };
+}
+
+function normalizeMinecraftKnownIdentities(raw: unknown): MinecraftKnownIdentity[] {
+  if (!Array.isArray(raw)) return [];
+  const entries: MinecraftKnownIdentity[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    const mcUsername = String(record.mcUsername || "").trim().slice(0, 40);
+    if (!mcUsername) continue;
+    const dedupeKey = mcUsername.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    const discordUsername = String(record.discordUsername || "").trim().slice(0, 64) || null;
+    const label = String(record.label || "").trim().slice(0, 80) || null;
+    const relationship = String(record.relationship || "").trim().slice(0, 40) || null;
+    const notes = String(record.notes || "").trim().slice(0, 240) || null;
+    entries.push({ mcUsername, discordUsername, label, relationship, notes });
+    if (entries.length >= 32) break;
+  }
+  return entries;
+}
+
+export function getMinecraftKnownIdentities(settings: unknown): MinecraftKnownIdentity[] {
+  const runtimeConfig = getMinecraftRuntimeConfig(settings) as Record<string, unknown>;
+  return normalizeMinecraftKnownIdentities(runtimeConfig?.knownIdentities);
 }

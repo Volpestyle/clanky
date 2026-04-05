@@ -58,6 +58,39 @@ function normalizeMinecraftServerCatalog(raw: unknown): Array<{
   return entries;
 }
 
+function normalizeMinecraftKnownIdentities(raw: unknown): Array<{
+  mcUsername: string;
+  discordUsername: string;
+  label: string;
+  relationship: string;
+  notes: string;
+}> {
+  if (!Array.isArray(raw)) return [];
+  const entries: Array<{
+    mcUsername: string;
+    discordUsername: string;
+    label: string;
+    relationship: string;
+    notes: string;
+  }> = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    if (!isRecord(entry)) continue;
+    const mcUsername = normalizeString(entry.mcUsername, "", 40).trim();
+    if (!mcUsername) continue;
+    const dedupeKey = mcUsername.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    const discordUsername = normalizeString(entry.discordUsername, "", 64).trim();
+    const label = normalizeString(entry.label, "", 80).trim();
+    const relationship = normalizeString(entry.relationship, "", 40).trim();
+    const notes = normalizeString(entry.notes, "", 240).trim();
+    entries.push({ mcUsername, discordUsername, label, relationship, notes });
+    if (entries.length >= 32) break;
+  }
+  return entries;
+}
+
 function normalizeCodingWorkerName(value: unknown): SettingsCodingWorkerName | undefined {
   const normalized = normalizeString(value, "", 40).toLowerCase() as SettingsCodingWorkerName;
   return CODING_WORKER_SET.has(normalized) ? normalized : undefined;
@@ -678,11 +711,7 @@ export function normalizeAgentStackSection(
           DEFAULT_SETTINGS.agentStack.runtimeConfig.minecraft.mcpUrl,
           500
         ),
-        operatorPlayerName: normalizeString(
-          minecraft.operatorPlayerName,
-          DEFAULT_SETTINGS.agentStack.runtimeConfig.minecraft.operatorPlayerName,
-          50
-        ),
+        knownIdentities: normalizeMinecraftKnownIdentities(minecraft.knownIdentities),
         server: {
           label: normalizeString(
             minecraft.server?.label,

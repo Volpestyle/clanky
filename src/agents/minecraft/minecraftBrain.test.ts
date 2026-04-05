@@ -65,7 +65,7 @@ test("createMinecraftBrain uses the dedicated Minecraft binding for operator tur
     worldSnapshot: null,
     botUsername: "ClankyBuddy",
     mode: "companion",
-    operatorPlayerName: "Volpestyle",
+    knownIdentities: [{ mcUsername: "Volpestyle", relationship: "operator" }],
     constraints: {},
     serverTarget: {
       label: "Survival SMP",
@@ -139,7 +139,7 @@ test("createMinecraftBrain parses Minecraft chat reply and action separately", a
     worldSnapshot: null,
     botUsername: "ClankyBuddy",
     mode: "companion",
-    operatorPlayerName: "Volpestyle",
+    knownIdentities: [{ mcUsername: "Volpestyle", relationship: "operator" }],
     constraints: {},
     serverTarget: null,
     serverCatalog: [],

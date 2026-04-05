@@ -3,6 +3,18 @@ import { LlmProviderOptions } from "./LlmProviderOptions";
 import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../../../src/settings/settingsConstraints.ts";
 import { rangeStyle } from "../../utils";
 
+type KnownIdentity = {
+  mcUsername: string;
+  discordUsername: string;
+  label: string;
+  relationship: string;
+  notes: string;
+};
+
+function emptyIdentity(): KnownIdentity {
+  return { mcUsername: "", discordUsername: "", label: "", relationship: "", notes: "" };
+}
+
 export function MinecraftSettingsSection({
   id,
   form,
@@ -15,6 +27,26 @@ export function MinecraftSettingsSection({
   const enabled = Boolean(form.minecraftEnabled);
   const useTextModel = Boolean(form.minecraftBrainUseTextModel);
   const narrationEagerness = Number(form.minecraftNarrationEagerness) || 0;
+  const knownIdentities: KnownIdentity[] = Array.isArray(form.minecraftKnownIdentities)
+    ? (form.minecraftKnownIdentities as KnownIdentity[])
+    : [];
+
+  const updateIdentity = (index: number, field: keyof KnownIdentity, value: string) => {
+    const next = knownIdentities.map((entry, i) =>
+      i === index ? { ...entry, [field]: value } : entry
+    );
+    set("minecraftKnownIdentities")(next as unknown);
+  };
+
+  const addIdentity = () => {
+    set("minecraftKnownIdentities")([...knownIdentities, emptyIdentity()] as unknown);
+  };
+
+  const removeIdentity = (index: number) => {
+    set("minecraftKnownIdentities")(
+      knownIdentities.filter((_, i) => i !== index) as unknown
+    );
+  };
 
   return (
     <SettingsSection id={id} title="Minecraft Agent" active={enabled}>
@@ -53,18 +85,89 @@ export function MinecraftSettingsSection({
           </div>
 
           <div className="field">
-            <label>Operator player name</label>
-            <input
-              type="text"
-              value={String(form.minecraftOperatorPlayerName || "")}
-              onChange={set("minecraftOperatorPlayerName")}
-              placeholder="e.g. Volpestyle"
-            />
-            <p className="status-msg">
-              Your Minecraft username. Used for &quot;follow me&quot; and
-              &quot;guard me&quot; commands. Can also be set via the{" "}
-              <code>MC_OPERATOR_USERNAME</code> env var.
+            <label>Known identities (optional)</label>
+            <p className="status-msg" style={{ marginTop: 0, marginBottom: 8 }}>
+              Optional Discord↔Minecraft address book. Empty is a first-class
+              mode — Clanky forms impressions about every MC player organically
+              from chat, behavior, and memory. Populated entries are background
+              context, not a permission list. Anyone NOT listed is still worth
+              engaging with.
             </p>
+            {knownIdentities.length === 0 && (
+              <p className="status-msg" style={{ marginTop: 0, marginBottom: 8, fontStyle: "italic" }}>
+                No identities configured. Clanky will treat every MC player as
+                a peer.
+              </p>
+            )}
+            {knownIdentities.map((entry, index) => (
+              <div
+                key={index}
+                style={{
+                  border: "1px solid var(--border, #333)",
+                  borderRadius: 4,
+                  padding: 8,
+                  marginBottom: 8
+                }}
+              >
+                <div className="split" style={{ gap: 8 }}>
+                  <div>
+                    <label>MC username (required)</label>
+                    <input
+                      type="text"
+                      value={entry.mcUsername}
+                      onChange={(e) => updateIdentity(index, "mcUsername", (e.target as HTMLInputElement).value)}
+                      placeholder="e.g. Volpestyle"
+                    />
+                  </div>
+                  <div>
+                    <label>Discord username</label>
+                    <input
+                      type="text"
+                      value={entry.discordUsername}
+                      onChange={(e) => updateIdentity(index, "discordUsername", (e.target as HTMLInputElement).value)}
+                      placeholder="e.g. volpestyle"
+                    />
+                  </div>
+                </div>
+                <div className="split" style={{ gap: 8, marginTop: 8 }}>
+                  <div>
+                    <label>Label</label>
+                    <input
+                      type="text"
+                      value={entry.label}
+                      onChange={(e) => updateIdentity(index, "label", (e.target as HTMLInputElement).value)}
+                      placeholder="e.g. Volpe"
+                    />
+                  </div>
+                  <div>
+                    <label>Relationship</label>
+                    <input
+                      type="text"
+                      value={entry.relationship}
+                      onChange={(e) => updateIdentity(index, "relationship", (e.target as HTMLInputElement).value)}
+                      placeholder="e.g. operator, trusted collab, friend"
+                    />
+                  </div>
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  <label>Notes</label>
+                  <input
+                    type="text"
+                    value={entry.notes}
+                    onChange={(e) => updateIdentity(index, "notes", (e.target as HTMLInputElement).value)}
+                    placeholder="e.g. plays weekends, likes redstone"
+                  />
+                </div>
+                <div style={{ marginTop: 8, textAlign: "right" }}>
+                  <button type="button" onClick={() => removeIdentity(index)}>
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+            <button type="button" onClick={addIdentity}>
+              Add identity
+            </button>
           </div>
 
           <label htmlFor="minecraft-narration-eagerness">

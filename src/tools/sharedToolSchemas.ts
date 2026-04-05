@@ -278,8 +278,11 @@ export const MINECRAFT_TASK_SCHEMA: SharedToolSchema = {
         type: "object",
         description: "Optional behavioral constraints for the bot.",
         properties: {
-          stay_near_player: { type: "boolean", description: "Keep within max_distance of the player." },
-          max_distance: { type: "number", description: "Maximum distance from the player in blocks." },
+          stay_near_player: {
+            type: "string",
+            description: "MC username to keep close to (within max_distance). Omit for no leash."
+          },
+          max_distance: { type: "number", description: "Maximum distance from stay_near_player in blocks." },
           avoid_combat: { type: "boolean", description: "Do not engage hostiles." }
         }
       },

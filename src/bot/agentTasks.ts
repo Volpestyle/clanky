@@ -584,7 +584,13 @@ async function createMinecraftSession(
     scopeKey,
     baseUrl,
     ownerUserId: userId,
-    operatorPlayerName: config.operatorPlayerName,
+    knownIdentities: config.knownIdentities.map((entry) => ({
+      mcUsername: entry.mcUsername,
+      ...(entry.discordUsername ? { discordUsername: entry.discordUsername } : {}),
+      ...(entry.label ? { label: entry.label } : {}),
+      ...(entry.relationship ? { relationship: entry.relationship } : {}),
+      ...(entry.notes ? { notes: entry.notes } : {})
+    })),
     serverTarget: config.serverTarget,
     serverCatalog: getMinecraftServerCatalog(settings),
     logAction,

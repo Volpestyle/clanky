@@ -37,6 +37,7 @@ import type {
   MinecraftLookCapture,
   MinecraftMode,
   MinecraftPlannerState,
+  MinecraftPlayerIdentity,
   MinecraftProject,
   MinecraftServerCatalogEntry,
   MinecraftServerTarget,
@@ -106,7 +107,6 @@ type TurnInput = {
   command?: string;
   mode?: MinecraftMode;
   constraints?: MinecraftConstraints | Record<string, unknown>;
-  operatorPlayerName?: string;
   server?: Partial<MinecraftServerTarget> | Record<string, unknown>;
   serverTarget?: Partial<MinecraftServerTarget> | Record<string, unknown>;
 };
@@ -132,11 +132,12 @@ function toPositiveFiniteNumber(value: unknown): number | undefined {
 function normalizeConstraints(raw: MinecraftConstraints | Record<string, unknown> | undefined): MinecraftConstraints | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const record = raw as Record<string, unknown>;
-  const stayNearPlayer = typeof record.stayNearPlayer === "boolean"
-    ? record.stayNearPlayer
-    : typeof record.stay_near_player === "boolean"
-      ? record.stay_near_player
-      : undefined;
+  // stayNearPlayer is now a string MC username (or omitted). The brain or
+  // orchestrator specifies WHO to stay near; there's no implicit operator.
+  const rawStayNear = record.stayNearPlayer ?? record.stay_near_player;
+  const stayNearPlayer = typeof rawStayNear === "string" && rawStayNear.trim().length > 0
+    ? rawStayNear.trim().slice(0, 40)
+    : undefined;
   const avoidCombat = typeof record.avoidCombat === "boolean"
     ? record.avoidCombat
     : typeof record.avoid_combat === "boolean"
@@ -392,7 +393,13 @@ export type MinecraftSessionOptions = {
   scopeKey: string;
   baseUrl: string;
   ownerUserId: string | null;
-  operatorPlayerName?: string | null;
+  /**
+   * Optional Discord↔Minecraft identity bridge the operator has configured.
+   * Empty (default) means Clanky forms impressions about every MC player
+   * organically — no one is pre-designated as special. When populated, these
+   * act as background context, not a permission list.
+   */
+  knownIdentities?: MinecraftPlayerIdentity[];
   serverTarget?: MinecraftServerTarget | null;
   /**
    * Multi-world catalog of known server targets. The brain sees these in
@@ -631,7 +638,7 @@ function classifyActionFailureReason(message: string): MinecraftActionFailureRea
 export class MinecraftSession extends BaseAgentSession {
   readonly runtime: MinecraftRuntime;
   private mode: MinecraftMode;
-  private operatorPlayerName: string | null;
+  private knownIdentities: MinecraftPlayerIdentity[];
   private serverTarget: MinecraftServerTarget | null;
   private serverCatalog: MinecraftServerCatalogEntry[];
   private constraints: MinecraftConstraints;
@@ -685,7 +692,9 @@ export class MinecraftSession extends BaseAgentSession {
     });
     this.runtime = new MinecraftRuntime(options.baseUrl, options.logAction);
     this.mode = options.mode ?? "companion";
-    this.operatorPlayerName = options.operatorPlayerName ?? null;
+    this.knownIdentities = Array.isArray(options.knownIdentities)
+      ? options.knownIdentities.map((entry) => ({ ...entry }))
+      : [];
     this.serverTarget = options.serverTarget ?? null;
     this.serverCatalog = Array.isArray(options.serverCatalog) ? [...options.serverCatalog] : [];
     this.constraints = options.constraints ?? {};
@@ -844,7 +853,12 @@ export class MinecraftSession extends BaseAgentSession {
       }
 
       // ── Evaluate reflexes ──
-      const snapshot = buildWorldSnapshot(this.id, this.mode, status, this.operatorPlayerName);
+      const snapshot = buildWorldSnapshot(
+        this.id,
+        this.mode,
+        status,
+        this.knownIdentities.map((entry) => entry.mcUsername)
+      );
 
       // Stuck detection: if we've moved <0.25 blocks across two consecutive
       // ticks while a navigation task is active, kick an unstick reflex.
@@ -1013,7 +1027,7 @@ export class MinecraftSession extends BaseAgentSession {
         worldSnapshot: snapshot,
         botUsername: this.botUsername || "ClankyBuddy",
         mode: this.mode,
-        operatorPlayerName: this.operatorPlayerName,
+        knownIdentities: this.knownIdentities.map((entry) => ({ ...entry })),
         constraints: { ...this.constraints },
         serverTarget: this.serverTarget,
         serverCatalog: [...this.serverCatalog],
@@ -1801,7 +1815,7 @@ export class MinecraftSession extends BaseAgentSession {
         worldSnapshot: snapshot,
         botUsername: this.botUsername || "ClankyBuddy",
         mode: this.mode,
-        operatorPlayerName: this.operatorPlayerName,
+        knownIdentities: this.knownIdentities.map((entry) => ({ ...entry })),
         constraints: { ...this.constraints },
         serverTarget: this.serverTarget,
         serverCatalog: [...this.serverCatalog],
@@ -1870,7 +1884,6 @@ export class MinecraftSession extends BaseAgentSession {
     // Apply structured fields if present
     if (parsed.mode) this.mode = parsed.mode;
     if (normalizedConstraints) this.constraints = { ...this.constraints, ...normalizedConstraints };
-    if (parsed.operatorPlayerName) this.operatorPlayerName = parsed.operatorPlayerName;
     if (normalizedServerTarget) {
       const previousTarget = cloneServerTarget(this.serverTarget);
       this.serverTarget = mergeServerTargets(this.serverTarget, normalizedServerTarget);
@@ -2002,16 +2015,17 @@ export class MinecraftSession extends BaseAgentSession {
     };
 
     const violatesStayNearConstraint = async (target: Position): Promise<{ distance: number; maxDistance: number } | null> => {
-      if (!this.constraints.stayNearPlayer || !this.operatorPlayerName || this.constraints.maxDistance === undefined) {
+      const leashTarget = this.constraints.stayNearPlayer;
+      if (!leashTarget || this.constraints.maxDistance === undefined) {
         return null;
       }
       const status = await this.runtime.status(options.signal);
       if (!status.ok) return null;
-      const operator = (status.output.players ?? []).find(
-        (player) => player.username === this.operatorPlayerName && player.position
+      const leashPlayer = (status.output.players ?? []).find(
+        (player) => player.username === leashTarget && player.position
       );
-      if (!operator?.position) return null;
-      const distance = distanceBetweenPositions(target, operator.position);
+      if (!leashPlayer?.position) return null;
+      const distance = distanceBetweenPositions(target, leashPlayer.position);
       return distance > this.constraints.maxDistance
         ? { distance, maxDistance: this.constraints.maxDistance }
         : null;
@@ -2133,7 +2147,7 @@ export class MinecraftSession extends BaseAgentSession {
         const constrainedTarget = await violatesStayNearConstraint({ x: command.x, y: command.y, z: command.z });
         if (constrainedTarget) {
           return commandResult(
-            `Cannot move there while staying near ${this.operatorPlayerName}. Target is ${constrainedTarget.distance.toFixed(1)} blocks away (max ${constrainedTarget.maxDistance}).`,
+            `Cannot move there while staying near ${this.constraints.stayNearPlayer}. Target is ${constrainedTarget.distance.toFixed(1)} blocks away (max ${constrainedTarget.maxDistance}).`,
             false
           );
         }
@@ -2312,7 +2326,7 @@ export class MinecraftSession extends BaseAgentSession {
         this.id,
         this.mode,
         statusResult.output,
-        this.operatorPlayerName,
+        this.knownIdentities.map((entry) => entry.mcUsername),
         visibleBlocksResult.ok ? visibleBlocksResult.output : null
       );
     } catch {
