@@ -1,3 +1,6 @@
 [submodule "src/voice/clankvox"]
 	path = src/voice/clankvox
 	url = https://github.com/Volpestyle/clankvox.git
+[submodule "mcp-servers/swarm-mcp"]
+	path = mcp-servers/swarm-mcp
+	url = https://github.com/Volpestyle/swarm-mcp.git

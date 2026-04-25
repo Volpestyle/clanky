@@ -95,7 +95,7 @@ function getRegistrationParityRow(dbPath: string, id: string) {
 }
 
 function registerWithSwarmMcpRegistry(fixture: ReturnType<typeof makeFixture>, label: string) {
-  const registryUrl = pathToFileURL(path.resolve(import.meta.dir, "../../../swarm-mcp/src/registry.ts")).href;
+  const registryUrl = pathToFileURL(path.resolve(import.meta.dir, "../../mcp-servers/swarm-mcp/src/registry.ts")).href;
   const script = `
     const { register } = await import(${JSON.stringify(registryUrl)});
     const instance = register(

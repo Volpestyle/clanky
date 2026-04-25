@@ -346,10 +346,10 @@ export const DEFAULT_SETTINGS = {
       },
       devTeam: {
         swarm: {
-          enabled: false,
+          enabled: true,
           serverName: "swarm",
-          command: "",
-          args: [],
+          command: "bun",
+          args: ["run", "./mcp-servers/swarm-mcp/src/index.ts"],
           dbPath: "",
           appendCoordinationPrompt: true
         },

@@ -275,9 +275,9 @@ async function closeChild(child: ChildProcessWithoutNullStreams) {
 }
 
 test("reserved row is adopted by a real swarm-mcp child via SWARM_MCP_INSTANCE_ID", async () => {
-  const swarmIndex = path.resolve(process.cwd(), "../swarm-mcp/src/index.ts");
+  const swarmIndex = path.resolve(process.cwd(), "./mcp-servers/swarm-mcp/src/index.ts");
   if (!existsSync(swarmIndex)) {
-    // No sibling checkout — skip the live integration leg.
+    // Submodule not initialized — skip the live integration leg.
     return;
   }
 

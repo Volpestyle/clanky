@@ -126,8 +126,8 @@ test("resolveSwarmDbPath and getSwarmDbPath centralize the effective path", () =
 });
 
 test("swarm-mcp bootstraps the runtime instances schema Clanky depends on", async () => {
-  const swarmIndex = path.resolve(process.cwd(), "../swarm-mcp/src/index.ts");
-  assert.equal(existsSync(swarmIndex), true, `Expected sibling swarm-mcp checkout at ${swarmIndex}`);
+  const swarmIndex = path.resolve(process.cwd(), "./mcp-servers/swarm-mcp/src/index.ts");
+  assert.equal(existsSync(swarmIndex), true, `Expected swarm-mcp submodule checkout at ${swarmIndex}. Run \`git submodule update --init --recursive\`.`);
 
   const dbPath = makeTempDbPath();
   const child = spawn(process.execPath, ["run", swarmIndex], {
