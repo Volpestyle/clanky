@@ -39,7 +39,9 @@ test("buildCodeAgentSwarmSessionConfig creates stable canonical registration inf
     runtime,
     workspace,
     provider: "codex-cli",
-    role: "implementation"
+    role: "implementation",
+    thread: "1234567890",
+    user: "9876543210"
   });
   if (!session) throw new Error("Expected swarm session config");
   assert.equal(session.serverName, "swarm-bus");
@@ -47,7 +49,7 @@ test("buildCodeAgentSwarmSessionConfig creates stable canonical registration inf
   assert.equal(session.fileRoot, "C:\\repo\\packages\\app");
   assert.equal(
     session.label,
-    "origin:clanky provider:codex-cli role:implementer"
+    "origin:clanky provider:codex-cli role:implementer thread:1234567890 user:9876543210"
   );
   assert.deepEqual(session.env, {
     SWARM_DB_PATH: "C:\\shared\\swarm.db"
@@ -107,7 +109,7 @@ test("buildCodeAgentSwarmSessionConfig describes shared checkout sessions direct
 
   assert.equal(
     session.label,
-    "origin:clanky provider:claude-code role:reviewer"
+    "origin:clanky provider:claude-code role:reviewer thread:dm user:anon"
   );
   assert.match(session.firstTurnPreamble, /shared checkout/i);
   assert.doesNotMatch(session.firstTurnPreamble, /disposable git worktree/i);
@@ -131,7 +133,59 @@ test("buildCodeAgentSwarmSessionConfig omits the role token when no role is prov
   });
   if (!session) throw new Error("Expected swarm session config");
 
-  assert.equal(session.label, "origin:clanky provider:codex-cli");
+  assert.equal(session.label, "origin:clanky provider:codex-cli thread:dm user:anon");
+});
+
+test("buildCodeAgentSwarmSessionConfig sanitizes thread and user tokens", () => {
+  const runtime = resolveCodeAgentSwarmRuntimeConfig({
+    enabled: true,
+    serverName: "swarm",
+    command: "bun",
+    args: ["run", "/tmp/swarm-mcp/src/index.ts"],
+    appendCoordinationPrompt: false
+  });
+  if (!runtime) throw new Error("Expected swarm runtime config");
+
+  const session = buildCodeAgentSwarmSessionConfig({
+    runtime,
+    workspace,
+    provider: "claude-code",
+    role: "implementation",
+    thread: " Channel 42! ",
+    user: "VolpeStyle@Discord"
+  });
+  if (!session) throw new Error("Expected swarm session config");
+
+  assert.equal(
+    session.label,
+    "origin:clanky provider:claude-code role:implementer thread:channel-42 user:volpestyle-discord"
+  );
+});
+
+test("buildCodeAgentSwarmSessionConfig falls back to dm/anon when thread/user are blank", () => {
+  const runtime = resolveCodeAgentSwarmRuntimeConfig({
+    enabled: true,
+    serverName: "swarm",
+    command: "bun",
+    args: ["run", "/tmp/swarm-mcp/src/index.ts"],
+    appendCoordinationPrompt: false
+  });
+  if (!runtime) throw new Error("Expected swarm runtime config");
+
+  const session = buildCodeAgentSwarmSessionConfig({
+    runtime,
+    workspace,
+    provider: "codex-cli",
+    role: "research",
+    thread: "   ",
+    user: undefined
+  });
+  if (!session) throw new Error("Expected swarm session config");
+
+  assert.equal(
+    session.label,
+    "origin:clanky provider:codex-cli role:researcher thread:dm user:anon"
+  );
 });
 
 test("applyCodeAgentFirstTurnPreamble preserves the task body", () => {

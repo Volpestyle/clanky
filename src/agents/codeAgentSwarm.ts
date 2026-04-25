@@ -63,18 +63,34 @@ function normalizeSwarmRoleToken(role?: string | null) {
   return sanitized || null;
 }
 
+function normalizeLabelToken(value: unknown, fallback: string) {
+  const sanitized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+/g, "")
+    .replace(/-+$/g, "");
+  return sanitized || fallback;
+}
+
 function buildSwarmLabel({
   provider,
-  role
+  role,
+  thread,
+  user
 }: {
   provider: "claude-code" | "codex-cli";
   role?: string | null;
+  thread?: string | null;
+  user?: string | null;
 }) {
   const tokens = [`origin:clanky`, `provider:${provider}`];
   const roleToken = normalizeSwarmRoleToken(role);
   if (roleToken) {
     tokens.push(`role:${roleToken}`);
   }
+  tokens.push(`thread:${normalizeLabelToken(thread, "dm")}`);
+  tokens.push(`user:${normalizeLabelToken(user, "anon")}`);
   return tokens.join(" ");
 }
 
@@ -96,19 +112,23 @@ export function buildCodeAgentSwarmSessionConfig({
   runtime,
   workspace,
   provider,
-  role
+  role,
+  thread,
+  user
 }: {
   runtime: CodeAgentSwarmRuntimeConfig | null;
   workspace: CodeAgentWorkspaceLease;
   provider: "claude-code" | "codex-cli";
   role?: string | null;
+  thread?: string | null;
+  user?: string | null;
 }): CodeAgentSwarmSessionConfig | null {
   if (!runtime?.enabled) return null;
   if (!runtime.command) {
     throw new Error("Code-agent swarm is enabled, but agentStack.runtimeConfig.devTeam.swarm.command is empty.");
   }
 
-  const label = buildSwarmLabel({ provider, role });
+  const label = buildSwarmLabel({ provider, role, thread, user });
   const env = runtime.dbPath
     ? {
         SWARM_DB_PATH: runtime.dbPath

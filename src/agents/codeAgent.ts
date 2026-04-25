@@ -282,7 +282,9 @@ async function runLocalCodeAgentOnce({
       runtime: swarm,
       workspace,
       provider,
-      role: trace.role || null
+      role: trace.role || null,
+      thread: trace.channelId || null,
+      user: trace.userId || null
     });
     session =
       provider === "codex-cli"
@@ -643,7 +645,9 @@ export function createCodeAgentSession(options: CreateCodeAgentSessionOptions): 
         runtime: swarm,
         workspace,
         provider: "codex-cli",
-        role: trace.role || null
+        role: trace.role || null,
+        thread: trace.channelId || null,
+        user: trace.userId || null
       });
       return new CodexCliAgentSession({
         scopeKey,
@@ -674,7 +678,9 @@ export function createCodeAgentSession(options: CreateCodeAgentSessionOptions): 
       runtime: swarm,
       workspace,
       provider: "claude-code",
-      role: trace.role || null
+      role: trace.role || null,
+      thread: trace.channelId || null,
+      user: trace.userId || null
     });
     return new CodeAgentSession({
       scopeKey,
