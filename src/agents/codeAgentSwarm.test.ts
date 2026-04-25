@@ -47,10 +47,19 @@ test("buildSwarmLauncherFirstTurnPreamble defaults to one-shot and reports usage
     taskId: "task-abc"
   });
   assert.match(preamble, /auto-adopted you on boot/);
-  assert.match(preamble, /Your task is reserved as id `task-abc`/);
+  assert.match(preamble, /Your assigned task is `task-abc`/);
+  assert.match(preamble, /Clanky-specific overlays/);
   assert.match(preamble, /annotate\(file=<task_id>, kind="usage"/);
-  assert.match(preamble, /Do not pack usage into `update_task\.metadata`/);
+  assert.match(preamble, /not in `update_task\.metadata`/);
+  assert.match(preamble, /plain text — not structured JSON/);
   assert.doesNotMatch(preamble, /Inbox-loop mode/);
+});
+
+test("buildSwarmLauncherFirstTurnPreamble does not duplicate SKILL-covered guidance in the overlays", () => {
+  const preamble = buildSwarmLauncherFirstTurnPreamble({ taskId: "task-1" });
+  // SKILL.md is the source of truth for these — preamble shouldn't repeat them.
+  assert.doesNotMatch(preamble, /Use `claim_task` on it before starting work/);
+  assert.doesNotMatch(preamble, /lock_file before editing shared files/);
 });
 
 test("buildSwarmLauncherFirstTurnPreamble appends inbox-loop instructions when requested", () => {
@@ -66,8 +75,8 @@ test("buildSwarmLauncherFirstTurnPreamble appends inbox-loop instructions when r
 
 test("buildSwarmLauncherFirstTurnPreamble omits the task-id line when none is provided", () => {
   const preamble = buildSwarmLauncherFirstTurnPreamble();
-  assert.match(preamble, /Read the task below and execute it directly/);
-  assert.doesNotMatch(preamble, /reserved as id/);
+  assert.match(preamble, /No task is pre-assigned/);
+  assert.doesNotMatch(preamble, /Your assigned task is/);
 });
 
 test("buildSwarmLauncherFirstTurnPreamble appends the role coordination skill when provided", () => {
@@ -77,7 +86,6 @@ test("buildSwarmLauncherFirstTurnPreamble appends the role coordination skill wh
     coordinationSkill: skillBody
   });
   assert.match(preamble, /## Swarm coordination skill/);
-  assert.match(preamble, /authoritative guidance/);
   assert.match(preamble, /name: swarm-implementer/);
   assert.match(preamble, /Do work\./);
 });

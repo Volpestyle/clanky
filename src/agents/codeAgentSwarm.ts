@@ -119,40 +119,48 @@ export function buildSwarmLauncherFirstTurnPreamble({
   taskId?: string | null;
   workerMode?: SwarmLauncherWorkerMode;
   /**
-   * Optional role-specific swarm-mcp skill (`SKILL.md` content) loaded from
-   * the vendored submodule. Appended after the coordination contract so the
-   * worker has the canonical guidance in-context from turn 1, regardless of
-   * whether the host harness's skill discovery would find it on disk.
+   * Optional role-specific swarm-mcp skill (`SKILL.md` + role reference)
+   * loaded from the vendored submodule. Appended after the Clanky-specific
+   * overlays so the worker has the canonical playbook in-context from turn 1
+   * without relying on the host harness's on-disk skill discovery.
+   *
+   * The skill is the source of truth for general coordination patterns
+   * (when to register, claim, lock, annotate). The preamble keeps only the
+   * deltas Clanky imposes on top of that — auto-adoption, the assigned task
+   * id, the usage-annotation shape, and the plain-text result override.
    */
   coordinationSkill?: string;
 } = {}): string {
   const lines: string[] = [
-    `You are running as a swarm peer. Your identity has been reserved and your swarm-mcp server (\`${serverName}\`) auto-adopted you on boot — do not call \`register\`.`,
-    "",
-    "Coordination contract:"
+    `You are running as a Clanky-spawned swarm peer. Your identity has been reserved and your swarm-mcp server (\`${serverName}\`) auto-adopted you on boot — do not call \`register\`.`
   ];
+
   const trimmedTaskId = String(taskId || "").trim();
   if (trimmedTaskId) {
     lines.push(
-      `- Your task is reserved as id \`${trimmedTaskId}\`. Use \`claim_task\` on it before starting work, then complete the task below.`
+      "",
+      `Your assigned task is \`${trimmedTaskId}\`. The full coordination playbook follows in the swarm-mcp skill below — read and follow it. Two Clanky-specific overlays apply on top of the skill:`
     );
   } else {
-    lines.push("- Read the task below and execute it directly.");
+    lines.push(
+      "",
+      "No task is pre-assigned. The full coordination playbook follows in the swarm-mcp skill below — read and follow it. Two Clanky-specific overlays apply on top of the skill:"
+    );
   }
+
   lines.push(
-    "- When complete, call `update_task` on your assigned task with status=\"done\" and a `result` field containing the final user-facing output text.",
-    "- Report cost/usage as a sibling annotation on the same task: `annotate(file=<task_id>, kind=\"usage\", content=JSON.stringify({ inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd }))`. Do not pack usage into `update_task.metadata` — Clanky reads it from the annotation.",
-    "- On unrecoverable error, call `update_task` with status=\"failed\" and a clear error message in `result`.",
-    "- Other peers in this scope are visible via `list_instances`. Use `lock_file` before editing shared files, `unlock_file` when done, and `annotate` hazards or progress notes that would help collaborators."
+    "",
+    "1. **Cost/usage telemetry.** Report token/cost numbers as a sibling annotation, not in `update_task.metadata`:",
+    "   `annotate(file=<task_id>, kind=\"usage\", content=JSON.stringify({ inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd }))`",
+    "   Clanky reads usage from this annotation; anything in `update_task.metadata` is ignored.",
+    "",
+    "2. **Result format.** Post the final user-facing output text directly in `update_task(status=\"done\", result=<text>)` as plain text — not structured JSON. Clanky surfaces this verbatim to the requesting user."
   );
 
   if (workerMode === "inbox_loop") {
     lines.push(
       "",
-      "Inbox-loop mode:",
-      "- After `update_task(done)`, do not exit. Poll your inbox via `wait_for_activity` and `list_messages`.",
-      "- Treat each `send_message` you receive as a follow-up instruction. Claim or create the appropriate follow-up task, execute, and report again with `update_task` + `annotate(kind=\"usage\")`.",
-      "- Exit when you receive an explicit termination message in your inbox or when your idle timeout elapses."
+      "**Inbox-loop mode.** After `update_task(done)`, do not exit. Poll your inbox via `wait_for_activity` and `list_messages`. Treat each `send_message` you receive as a follow-up instruction; claim or create the appropriate follow-up task, execute, and report again with `update_task` + `annotate(kind=\"usage\")`. Exit when you receive an explicit termination message or your idle timeout elapses."
     );
   }
 
@@ -160,9 +168,9 @@ export function buildSwarmLauncherFirstTurnPreamble({
   if (trimmedSkill) {
     lines.push(
       "",
-      "## Swarm coordination skill",
+      "---",
       "",
-      "The canonical swarm-mcp skill for your role follows. Treat it as authoritative guidance for when and how to use the swarm tools.",
+      "## Swarm coordination skill",
       "",
       trimmedSkill
     );
