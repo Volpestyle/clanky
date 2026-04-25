@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { bootstrapSwarmTestSchema } from "./__fixtures__/swarmTestSchema.ts";
 import { type CodeAgentSwarmRuntimeConfig } from "./codeAgentSwarm.ts";
-import { spawnPeer, SwarmLauncherAdoptionTimeoutError } from "./swarmLauncher.ts";
+import { resolveSwarmArgs, spawnPeer, SwarmLauncherAdoptionTimeoutError } from "./swarmLauncher.ts";
 import { SwarmReservationKeeper } from "./swarmReservationKeeper.ts";
 
 const FAKE_WORKER = path.resolve(__dirname, "__fixtures__/fakeSwarmWorker.ts");
@@ -257,4 +257,18 @@ test("spawnPeer rejects when swarm runtime is disabled", async () => {
       harnessOverride: makeFakeHarnessOverride()
     })
   ).rejects.toThrow(/swarm runtime/i);
+});
+
+test("resolveSwarmArgs anchors relative paths at clanky's repo root", () => {
+  const repoRoot = path.resolve(__dirname, "..", "..");
+  const resolved = resolveSwarmArgs(["run", "./mcp-servers/swarm-mcp/src/index.ts"]);
+  expect(resolved[0]).toBe("run");
+  expect(resolved[1]).toBe(path.resolve(repoRoot, "./mcp-servers/swarm-mcp/src/index.ts"));
+  expect(path.isAbsolute(resolved[1])).toBe(true);
+});
+
+test("resolveSwarmArgs leaves absolute paths and bare tokens unchanged", () => {
+  const absolute = path.join(path.sep, "tmp", "swarm-mcp", "index.ts");
+  const resolved = resolveSwarmArgs(["run", absolute, "--flag"]);
+  expect(resolved).toEqual(["run", absolute, "--flag"]);
 });

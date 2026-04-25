@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import path from "node:path";
 import { buildClaudeCodeAgentArgs } from "../llm/llmClaudeCode.ts";
 import { buildCodexCliCodeAgentArgs } from "../llm/llmCodexCli.ts";
 import {
@@ -173,13 +174,44 @@ function buildHarnessInvocation({
   };
 }
 
+/**
+ * Clanky's repo root, derived from this file's location. Used to resolve
+ * relative paths in `swarm.args` (e.g. `./mcp-servers/swarm-mcp/src/index.ts`)
+ * to absolute paths before the inline mcp-config is written, so the spawned
+ * worker can find swarm-mcp regardless of its own cwd (which is the target
+ * repo, not Clanky's).
+ */
+function clankyRepoRoot(): string {
+  return path.resolve(import.meta.dir, "..", "..");
+}
+
+/**
+ * Resolve any relative entries in `swarm.args` against Clanky's repo root.
+ * Absolute paths and non-path tokens (e.g. `run`) pass through unchanged.
+ *
+ * Exported for tests; production callers go through `buildClaudeMcpConfigJson`
+ * or `buildCodexConfigOverrides`.
+ */
+export function resolveSwarmArgs(args: string[]): string[] {
+  const repoRoot = clankyRepoRoot();
+  return args.map((arg) => {
+    const trimmed = String(arg || "");
+    if (!trimmed) return trimmed;
+    if (path.isAbsolute(trimmed)) return trimmed;
+    if (trimmed.startsWith("./") || trimmed.startsWith("../")) {
+      return path.resolve(repoRoot, trimmed);
+    }
+    return trimmed;
+  });
+}
+
 function buildClaudeMcpConfigJson(swarm: CodeAgentSwarmRuntimeConfig): string {
   if (!swarm?.command) return "";
   return JSON.stringify({
     [swarm.serverName]: {
       type: "stdio",
       command: swarm.command,
-      args: swarm.args,
+      args: resolveSwarmArgs(swarm.args),
       env: swarm.dbPath ? { SWARM_DB_PATH: swarm.dbPath } : {}
     }
   });
@@ -192,7 +224,7 @@ function buildCodexConfigOverrides(swarm: CodeAgentSwarmRuntimeConfig): string[]
     `[${values.map((value) => literalString(value)).join(", ")}]`;
   return [
     `mcp_servers.${swarm.serverName}.command=${literalString(swarm.command)}`,
-    `mcp_servers.${swarm.serverName}.args=${literalArray(swarm.args)}`
+    `mcp_servers.${swarm.serverName}.args=${literalArray(resolveSwarmArgs(swarm.args))}`
   ];
 }
 
