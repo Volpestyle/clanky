@@ -137,6 +137,153 @@ test("settingsFormModel emits a full replacement snapshot for dashboard saves", 
   assert.equal(snapshot.permissions.replies.maxMessagesPerHour, 20);
 });
 
+test("settingsFormModel preserves dashboard-hidden settings in full save snapshots", () => {
+  const effectiveSettings = normalizeSettings({
+    interaction: {
+      activity: {
+        replyCoalesceWindowSeconds: 17,
+        replyCoalesceMaxMessages: 11
+      },
+      replyGeneration: {
+        pricing: {
+          "custom-reply-model": {
+            input: 1,
+            output: 2
+          }
+        }
+      }
+    },
+    agentStack: {
+      overrides: {
+        voiceInterruptClassifier: {
+          mode: "dedicated_model",
+          model: {
+            provider: "anthropic",
+            model: "claude-haiku-4-5"
+          }
+        }
+      },
+      runtimeConfig: {
+        claudeOAuthSession: {
+          sessionScope: "channel",
+          inactivityTimeoutMs: 90_000,
+          contextPruningStrategy: "sliding_window",
+          maxPinnedStateChars: 32_000,
+          voiceToolPolicy: "full",
+          textToolPolicy: "fast_only"
+        }
+      }
+    },
+    memory: {
+      promptSlice: {
+        maxRecentMessages: 77
+      },
+      embeddingModel: "text-embedding-3-large",
+      reflection: {
+        enabled: false,
+        hour: 22,
+        minute: 15,
+        maxFactsPerReflection: 42
+      }
+    },
+    initiative: {
+      voice: {
+        execution: {
+          mode: "dedicated_model",
+          model: {
+            provider: "claude-oauth",
+            model: "claude-opus-4-6"
+          },
+          temperature: 0.7
+        }
+      }
+    },
+    voice: {
+      admission: {
+        wakeSignals: ["direct_address"]
+      }
+    },
+    media: {
+      videoContext: {
+        execution: {
+          mode: "dedicated_model",
+          model: {
+            provider: "openai",
+            model: "gpt-5-mini"
+          }
+        }
+      }
+    },
+    music: {
+      ducking: {
+        targetGain: 0.33,
+        fadeMs: 450
+      }
+    }
+  });
+  const form = settingsToForm(withResolved(effectiveSettings));
+  form.botName = "clanky-save-check";
+
+  const snapshot = formToSettingsSnapshot(form);
+
+  assert.equal(snapshot.identity.botName, "clanky-save-check");
+  assert.equal(snapshot.interaction.activity.replyCoalesceWindowSeconds, 17);
+  assert.equal(snapshot.interaction.activity.replyCoalesceMaxMessages, 11);
+  assert.deepEqual(snapshot.interaction.replyGeneration.pricing, {
+    "custom-reply-model": {
+      input: 1,
+      output: 2
+    }
+  });
+  assert.deepEqual(snapshot.agentStack.runtimeConfig.claudeOAuthSession, {
+    sessionScope: "channel",
+    inactivityTimeoutMs: 90_000,
+    contextPruningStrategy: "sliding_window",
+    maxPinnedStateChars: 32_000,
+    voiceToolPolicy: "full",
+    textToolPolicy: "fast_only"
+  });
+  assert.deepEqual(snapshot.memory, {
+    enabled: true,
+    promptSlice: {
+      maxRecentMessages: 77
+    },
+    embeddingModel: "text-embedding-3-large",
+    reflection: {
+      enabled: false,
+      hour: 22,
+      minute: 15,
+      maxFactsPerReflection: 42
+    }
+  });
+  assert.deepEqual(snapshot.initiative.voice.execution, {
+    mode: "dedicated_model",
+    model: {
+      provider: "claude-oauth",
+      model: "claude-opus-4-6"
+    },
+    temperature: 0.7
+  });
+  assert.deepEqual(snapshot.voice.admission.wakeSignals, ["direct_address"]);
+  assert.deepEqual(snapshot.media.videoContext.execution, {
+    mode: "dedicated_model",
+    model: {
+      provider: "openai",
+      model: "gpt-5-mini"
+    }
+  });
+  assert.deepEqual(snapshot.music.ducking, {
+    targetGain: 0.33,
+    fadeMs: 450
+  });
+
+  form.voiceInterruptLlmExplicit = false;
+  form.voiceInterruptLlmProvider = "claude-oauth";
+  form.voiceInterruptLlmModel = "claude-haiku-4-5";
+  const clearedSnapshot = formToSettingsSnapshot(form);
+  assert.equal(clearedSnapshot.agentStack.overrides.voiceInterruptClassifier, undefined);
+});
+
 test("settingsFormModel converts settings to form defaults and back to normalized patch", () => {
   const form = settingsToForm(withResolved(normalizeSettings({
     identity: {
@@ -541,6 +688,29 @@ test("getSettingsValidationError blocks blank browser numeric inputs even withou
   assert.deepEqual(getSettingsValidationError(form), {
     sectionId: "sec-browser",
     message: "Max browse calls per hour is required."
+  });
+});
+
+test("getSettingsValidationError blocks blank numeric inputs that do not have explicit range checks", () => {
+  const videoForm = settingsToForm(withResolved(normalizeSettings({})));
+  (videoForm as Record<string, unknown>).videoContextMaxChars = "";
+  assert.deepEqual(getSettingsValidationError(videoForm), {
+    sectionId: "sec-media",
+    message: "Video context max chars is required."
+  });
+
+  const streamWatchForm = settingsToForm(withResolved(normalizeSettings({})));
+  (streamWatchForm as Record<string, unknown>).voiceStreamWatchCommentaryIntervalSeconds = "";
+  assert.deepEqual(getSettingsValidationError(streamWatchForm), {
+    sectionId: "sec-voice",
+    message: "Voice stream watch commentary interval seconds is required."
+  });
+
+  const webSearchForm = settingsToForm(withResolved(normalizeSettings({})));
+  (webSearchForm as Record<string, unknown>).webSearchMaxPages = "";
+  assert.deepEqual(getSettingsValidationError(webSearchForm), {
+    sectionId: "sec-research",
+    message: "Web search max pages is required."
   });
 });
 

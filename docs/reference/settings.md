@@ -73,7 +73,7 @@ Current meanings:
 - `bindings`: resolved runtime helpers for display/debugging
 - `_meta`: version and save/apply metadata
 
-The dashboard edits `intent`. It uses `effective` and `bindings` as a runtime preview, but on save it materializes and submits the next full authored snapshot instead of sending a sparse intent patch.
+The dashboard edits `intent`. It uses `effective` and `bindings` as a runtime preview, but on save it materializes and submits the next full authored snapshot instead of sending a sparse intent patch. The form model starts from the normalized source settings and overlays dashboard-edited fields onto that baseline so settings the UI does not expose are preserved across ordinary dashboard saves.
 
 `PUT /api/settings` accepts:
 
@@ -83,7 +83,8 @@ The dashboard edits `intent`. It uses `effective` and `bindings` as a runtime pr
 Save semantics:
 
 - the request body replaces the full authored snapshot
-- omitted branches revert to defaults or inherited runtime behavior after normalization
+- dashboard saves preserve non-rendered settings from the form's source baseline unless a visible control edits or clears the related branch
+- branches omitted by direct API clients revert to defaults or inherited runtime behavior after normalization
 - this is not merge-patch behavior
 
 Current save guarantees:

@@ -44,6 +44,7 @@ import {
 import {
   OPENAI_REALTIME_SESSION_MODEL_OPTIONS
 } from "../../src/voice/realtimeProviderNormalization.ts";
+import { deepMerge } from "../../src/utils.ts";
 export const OPENAI_REALTIME_MODEL_OPTIONS = OPENAI_REALTIME_SESSION_MODEL_OPTIONS.slice(0, 3);
 
 export const OPENAI_REALTIME_VOICE_OPTIONS = Object.freeze([
@@ -89,6 +90,8 @@ const BROWSER_PROVIDER_MODEL_FALLBACKS = Object.freeze({
   openai: ["gpt-5-mini"]
 });
 
+const SETTINGS_FORM_BASE = Symbol("settingsFormBase");
+
 export const BROWSER_RUNTIME_SELECTION_OPTIONS = Object.freeze([
   "inherit",
   "local_browser_agent",
@@ -130,6 +133,20 @@ function resolveSettingsEnvelope(settings: unknown): DashboardSettingsEnvelope {
     return settings;
   }
   return buildDashboardSettingsEnvelope({ intent: settings || DEFAULT_SETTINGS });
+}
+
+function withSettingsFormBase<T extends object>(
+  form: T,
+  base: Settings
+): T & { [SETTINGS_FORM_BASE]: Settings } {
+  return {
+    ...form,
+    [SETTINGS_FORM_BASE]: base
+  };
+}
+
+function getSettingsFormBase(form: object): Settings | undefined {
+  return (form as { [SETTINGS_FORM_BASE]?: Settings })[SETTINGS_FORM_BASE];
 }
 
 function buildSettingsFormView(settings: unknown) {
@@ -474,7 +491,7 @@ export function settingsToForm(settings: unknown) {
   const defaultDiscovery = defaults.discovery;
   const activity = resolved.activity;
   const selectedVoiceProvider = resolved.voice.voiceProvider;
-  return {
+  const form = {
     stackPreset: resolved.agentStack.preset ?? DEFAULT_SETTINGS.agentStack.preset,
     stackAdvancedOverridesEnabled:
       resolved.agentStack.advancedOverridesEnabled ?? DEFAULT_SETTINGS.agentStack.advancedOverridesEnabled,
@@ -893,9 +910,16 @@ export function settingsToForm(settings: unknown) {
     blockedChannels: formatLineList(resolved?.permissions?.blockedChannelIds),
     blockedUsers: formatLineList(resolved?.permissions?.blockedUserIds)
   };
+  return withSettingsFormBase(form, envelope.effective);
 }
 
 type SettingsForm = ReturnType<typeof settingsToForm>;
+
+function mergeWithPreservedSettingsBase(form: SettingsForm, editedInput: SettingsInput): SettingsInput {
+  const base = getSettingsFormBase(form);
+  if (!base) return editedInput;
+  return deepMerge(base, editedInput) as SettingsInput;
+}
 
 export function getEffectiveBrowserRuntime(form: Record<string, unknown> | null | undefined) {
   const selection = normalizeBrowserRuntimeSelection(form?.browserRuntimeSelection);
@@ -968,6 +992,76 @@ function validateNumericField({
     };
   }
 
+  return null;
+}
+
+let numericFormKeys: string[] | null = null;
+
+function getNumericFormKeys() {
+  if (numericFormKeys) return numericFormKeys;
+  const defaults = settingsToForm({});
+  numericFormKeys = Object.entries(defaults)
+    .filter(([, value]) => typeof value === "number")
+    .map(([key]) => key);
+  return numericFormKeys;
+}
+
+function getNumericFieldSectionId(key: string) {
+  if (key.startsWith("voice")) return "sec-voice";
+  if (key.startsWith("webSearch") || key.startsWith("browser")) return "sec-research";
+  if (
+    key.startsWith("vision") ||
+    key.startsWith("videoContext") ||
+    key.startsWith("discovery") ||
+    key.startsWith("replyImage") ||
+    key.startsWith("replyVideo") ||
+    key === "maxImagesPerDay" ||
+    key === "maxVideosPerDay" ||
+    key === "maxGifsPerDay"
+  ) {
+    return "sec-media";
+  }
+  if (
+    key === "maxMessages" ||
+    key === "maxReactions" ||
+    key === "minGap" ||
+    key.startsWith("catchup")
+  ) {
+    return "sec-perms";
+  }
+  if (key.startsWith("textInitiative") || key.startsWith("minecraft")) return "sec-behavior";
+  return "sec-advanced";
+}
+
+function formatNumericFieldLabel(key: string) {
+  const label = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/\bllm\b/g, "LLM")
+    .replace(/\basr\b/g, "ASR")
+    .replace(/\btts\b/g, "TTS")
+    .replace(/\bai\b/g, "AI");
+  return label.replace(/^./, (first) => first.toUpperCase());
+}
+
+function getRequiredNumericFormValidationError(form: SettingsForm): SettingsFormValidationError | null {
+  const current = form as Record<string, unknown>;
+  for (const key of getNumericFormKeys()) {
+    const value = current[key];
+    const label = formatNumericFieldLabel(key);
+    if (isBlankNumericInput(value)) {
+      return {
+        sectionId: getNumericFieldSectionId(key),
+        message: `${label} is required.`
+      };
+    }
+    if (!Number.isFinite(Number(value))) {
+      return {
+        sectionId: getNumericFieldSectionId(key),
+        message: `${label} must be a valid number.`
+      };
+    }
+  }
   return null;
 }
 
@@ -1211,7 +1305,7 @@ export function getSettingsValidationError(form: SettingsForm): SettingsFormVali
     })
   ].filter((entry): entry is SettingsFormValidationError => entry !== null);
 
-  return validations[0] || null;
+  return validations[0] || getRequiredNumericFormValidationError(form);
 }
 
 function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
@@ -1455,7 +1549,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
           }
         }
       : undefined;
-  return {
+  const editedInput: SettingsInput = {
     identity: {
       botName: form.botName.trim(),
       botNameAliases: parseUniqueList(form.botNameAliases)
@@ -1916,6 +2010,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
       enabled: Boolean(form.automationsEnabled)
     }
   };
+  return mergeWithPreservedSettingsBase(form, editedInput);
 }
 
 export function formToSettingsPatch(form: SettingsForm): SettingsInput {
