@@ -73,7 +73,7 @@ function normalizeLabelToken(value: unknown, fallback: string) {
   return sanitized || fallback;
 }
 
-function buildSwarmLabel({
+export function buildSwarmLabel({
   provider,
   role,
   thread,
@@ -182,4 +182,42 @@ export function applyCodeAgentFirstTurnPreamble(input: string, preamble?: string
   if (!normalizedPreamble) return normalizedInput;
   if (!normalizedInput) return normalizedPreamble;
   return `${normalizedPreamble}\n\nTask:\n${normalizedInput}`;
+}
+
+/**
+ * Behavioral-only preamble for swarm-launcher workers. Their instance row is
+ * already reserved with `adopted=0` and the worker's swarm-mcp child auto-
+ * adopts via `SWARM_MCP_INSTANCE_ID` on boot — no `register` call needed. The
+ * preamble describes the coordination contract (claim → work → update_task)
+ * and the cooperative file-locking norms, no provisioning instructions.
+ *
+ * Phase 6 deletes the older `buildCodeAgentSwarmSessionConfig.firstTurnPreamble`
+ * (with-register variant) once the in-process session path is gone.
+ */
+export function buildSwarmLauncherFirstTurnPreamble({
+  serverName = "swarm",
+  taskId
+}: {
+  serverName?: string;
+  taskId?: string | null;
+} = {}): string {
+  const lines: string[] = [
+    `You are running as a swarm peer. Your identity has been reserved and your swarm-mcp server (\`${serverName}\`) auto-adopted you on boot — do not call \`register\`.`,
+    "",
+    "Coordination contract:"
+  ];
+  const trimmedTaskId = String(taskId || "").trim();
+  if (trimmedTaskId) {
+    lines.push(
+      `- Your task is reserved as id \`${trimmedTaskId}\`. Use \`claim_task\` on it before starting work, then complete the task below.`
+    );
+  } else {
+    lines.push("- Read the task below and execute it directly.");
+  }
+  lines.push(
+    "- When complete, call `update_task` on your assigned task with status=\"done\" and a `result` field containing the final output text. Include `metadata: { usage: { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens }, costUsd }` so Clanky can attribute cost.",
+    "- On unrecoverable error, call `update_task` with status=\"failed\" and a clear error message.",
+    "- Other peers in this scope are visible via `list_instances`. Use `lock_file` before editing shared files, `unlock_file` when done, and `annotate` hazards or progress notes that would help collaborators."
+  );
+  return lines.join("\n");
 }
