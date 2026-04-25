@@ -1,12 +1,19 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { bootstrapSwarmTestSchema } from "./__fixtures__/swarmTestSchema.ts";
 import { type CodeAgentSwarmRuntimeConfig } from "./codeAgentSwarm.ts";
-import { resolveSwarmArgs, spawnPeer, SwarmLauncherAdoptionTimeoutError } from "./swarmLauncher.ts";
+import {
+  buildClaudeMcpConfigJson,
+  clankySwarmIsAvailable,
+  loadProjectMcpServers,
+  resolveSwarmArgs,
+  spawnPeer,
+  SwarmLauncherAdoptionTimeoutError
+} from "./swarmLauncher.ts";
 import { SwarmReservationKeeper } from "./swarmReservationKeeper.ts";
 
 const FAKE_WORKER = path.resolve(__dirname, "__fixtures__/fakeSwarmWorker.ts");
@@ -271,4 +278,119 @@ test("resolveSwarmArgs leaves absolute paths and bare tokens unchanged", () => {
   const absolute = path.join(path.sep, "tmp", "swarm-mcp", "index.ts");
   const resolved = resolveSwarmArgs(["run", absolute, "--flag"]);
   expect(resolved).toEqual(["run", absolute, "--flag"]);
+});
+
+test("loadProjectMcpServers returns mcpServers block from project .mcp.json", () => {
+  const projectDir = mkdtempSync(path.join(tmpdir(), "clanky-project-"));
+  try {
+    writeFileSync(
+      path.join(projectDir, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          github: { type: "stdio", command: "github-mcp", args: [] },
+          sentry: { type: "stdio", command: "sentry-mcp", args: ["--workspace", "x"] }
+        }
+      })
+    );
+    const servers = loadProjectMcpServers(projectDir);
+    expect(Object.keys(servers).sort()).toEqual(["github", "sentry"]);
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
+test("loadProjectMcpServers returns empty when .mcp.json is absent or malformed", () => {
+  const projectDir = mkdtempSync(path.join(tmpdir(), "clanky-project-"));
+  try {
+    expect(loadProjectMcpServers(projectDir)).toEqual({});
+    writeFileSync(path.join(projectDir, ".mcp.json"), "not json");
+    expect(loadProjectMcpServers(projectDir)).toEqual({});
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
+test("clankySwarmIsAvailable detects missing vendored swarm-mcp", () => {
+  const missing: CodeAgentSwarmRuntimeConfig = {
+    enabled: true,
+    serverName: "swarm",
+    command: "bun",
+    args: ["run", "./mcp-servers/swarm-mcp-does-not-exist/src/index.ts"],
+    dbPath: "",
+    appendCoordinationPrompt: true
+  };
+  expect(clankySwarmIsAvailable(missing)).toBe(false);
+
+  const onPath: CodeAgentSwarmRuntimeConfig = {
+    enabled: true,
+    serverName: "swarm",
+    command: "swarm-mcp",
+    args: [],
+    dbPath: "",
+    appendCoordinationPrompt: true
+  };
+  // No path-like arg → trust the command resolves on PATH.
+  expect(clankySwarmIsAvailable(onPath)).toBe(true);
+});
+
+test("buildClaudeMcpConfigJson merges project MCPs and lets clanky's swarm win when vendored", () => {
+  const projectDir = mkdtempSync(path.join(tmpdir(), "clanky-project-"));
+  try {
+    writeFileSync(
+      path.join(projectDir, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          github: { type: "stdio", command: "github-mcp", args: [] },
+          swarm: { type: "stdio", command: "old-swarm", args: ["--legacy"] }
+        }
+      })
+    );
+    const swarm: CodeAgentSwarmRuntimeConfig = {
+      enabled: true,
+      serverName: "swarm",
+      command: "swarm-mcp",
+      args: [],
+      dbPath: "",
+      appendCoordinationPrompt: true
+    };
+    const json = JSON.parse(buildClaudeMcpConfigJson(swarm, projectDir));
+    expect(json.github.command).toBe("github-mcp");
+    // Clanky's vendored swarm overrides the project's stale entry.
+    expect(json.swarm.command).toBe("swarm-mcp");
+    expect(json.swarm.args).toEqual([]);
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
+test("buildClaudeMcpConfigJson falls back to project's swarm entry when clanky's vendor is missing", () => {
+  const projectDir = mkdtempSync(path.join(tmpdir(), "clanky-project-"));
+  try {
+    writeFileSync(
+      path.join(projectDir, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          swarm: {
+            type: "stdio",
+            command: "node",
+            args: ["/opt/project-swarm-mcp/dist/index.js"]
+          }
+        }
+      })
+    );
+    const swarm: CodeAgentSwarmRuntimeConfig = {
+      enabled: true,
+      serverName: "swarm",
+      command: "bun",
+      args: ["run", "./mcp-servers/swarm-mcp-does-not-exist/src/index.ts"],
+      dbPath: "",
+      appendCoordinationPrompt: true
+    };
+    const json = JSON.parse(buildClaudeMcpConfigJson(swarm, projectDir));
+    // Project's swarm entry wins because clanky's vendored path is absent.
+    expect(json.swarm.command).toBe("node");
+    expect(json.swarm.args).toEqual(["/opt/project-swarm-mcp/dist/index.js"]);
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true });
+  }
 });

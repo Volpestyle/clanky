@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { buildClaudeCodeAgentArgs } from "../llm/llmClaudeCode.ts";
 import { buildCodexCliCodeAgentArgs } from "../llm/llmCodexCli.ts";
@@ -205,20 +206,82 @@ export function resolveSwarmArgs(args: string[]): string[] {
   });
 }
 
-function buildClaudeMcpConfigJson(swarm: CodeAgentSwarmRuntimeConfig): string {
-  if (!swarm?.command) return "";
-  return JSON.stringify({
-    [swarm.serverName]: {
-      type: "stdio",
-      command: swarm.command,
-      args: resolveSwarmArgs(swarm.args),
-      env: swarm.dbPath ? { SWARM_DB_PATH: swarm.dbPath } : {}
-    }
-  });
+/**
+ * Read the worker-target repo's `.mcp.json` (Claude Code's project-scope MCP
+ * config). Returns the `mcpServers` map, or `{}` if the file is missing or
+ * malformed. Project-scope MCPs and skills are inherited by the worker by
+ * design — Clanky's injected config plays the role the operator's user-scope
+ * config would otherwise play, so user-scope is intentionally excluded.
+ */
+export function loadProjectMcpServers(workspaceCwd: string): Record<string, unknown> {
+  const file = path.join(workspaceCwd, ".mcp.json");
+  if (!existsSync(file)) return {};
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const servers = (parsed as Record<string, unknown>).mcpServers;
+    if (!servers || typeof servers !== "object" || Array.isArray(servers)) return {};
+    return servers as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Probe whether Clanky's vendored swarm-mcp can actually be spawned with the
+ * configured command/args. Looks for a path-like arg (typically the entry
+ * file) and checks for its existence. If `swarm.args` has no path-like entry
+ * (e.g. operator put the runtime on PATH), we trust the command is resolvable
+ * and return true.
+ */
+export function clankySwarmIsAvailable(swarm: CodeAgentSwarmRuntimeConfig): boolean {
+  if (!swarm?.command) return false;
+  const resolvedArgs = resolveSwarmArgs(swarm.args);
+  const pathLikeArg = resolvedArgs.find((arg) => path.isAbsolute(arg) && /\.(?:ts|js|mjs|cjs)$/.test(arg));
+  if (!pathLikeArg) return true;
+  return existsSync(pathLikeArg);
+}
+
+function clankySwarmServerEntry(swarm: CodeAgentSwarmRuntimeConfig): Record<string, unknown> | null {
+  if (!swarm?.command) return null;
+  return {
+    type: "stdio",
+    command: swarm.command,
+    args: resolveSwarmArgs(swarm.args),
+    env: swarm.dbPath ? { SWARM_DB_PATH: swarm.dbPath } : {}
+  };
+}
+
+/**
+ * Build the inline `--mcp-config` JSON for claude-code workers.
+ *
+ * Composition rules:
+ *   1. Start with project-scope MCP servers from `<cwd>/.mcp.json`.
+ *   2. Overlay Clanky's vendored swarm-mcp entry, but only if the vendored
+ *      path actually exists on disk. When it doesn't, the project's entry
+ *      (if any) keeps the swarm slot — that's the project-fallback behavior.
+ *   3. Pair with `--strict-mcp-config` at call time so user-scope MCPs are
+ *      ignored entirely. (Skills still load from project + user — Claude Code
+ *      doesn't expose a strict-skills flag — but project-scope skills are the
+ *      target experience and they always load based on cwd.)
+ */
+export function buildClaudeMcpConfigJson(swarm: CodeAgentSwarmRuntimeConfig, workspaceCwd: string): string {
+  const merged: Record<string, unknown> = { ...loadProjectMcpServers(workspaceCwd) };
+  const clankyEntry = clankySwarmServerEntry(swarm);
+  if (clankyEntry && clankySwarmIsAvailable(swarm)) {
+    merged[swarm.serverName] = clankyEntry;
+  }
+  if (Object.keys(merged).length === 0) return "";
+  return JSON.stringify(merged);
 }
 
 function buildCodexConfigOverrides(swarm: CodeAgentSwarmRuntimeConfig): string[] {
   if (!swarm?.command) return [];
+  // If clanky's vendored swarm-mcp is unavailable, omit the override and let
+  // codex resolve the swarm server from its own (project/user) config — the
+  // project-fallback path. The project's codex config can register a swarm
+  // entry under the same `serverName` and the worker will pick it up.
+  if (!clankySwarmIsAvailable(swarm)) return [];
   const literalString = (value: string) => `'${String(value || "").replace(/'/g, "''")}'`;
   const literalArray = (values: string[]) =>
     `[${values.map((value) => literalString(value)).join(", ")}]`;
@@ -278,7 +341,7 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
     workerMode: opts.workerMode ?? "one_shot"
   });
   const wrappedPrompt = applySwarmLauncherFirstTurnPreamble(opts.initialPrompt, preamble);
-  const mcpConfigJson = buildClaudeMcpConfigJson(opts.swarm);
+  const mcpConfigJson = buildClaudeMcpConfigJson(opts.swarm, workspace.cwd);
   const codexOverrides = buildCodexConfigOverrides(opts.swarm);
 
   const { command, args } = buildHarnessInvocation({
