@@ -132,6 +132,10 @@ import { SubAgentSessionManager } from "./agents/subAgentSession.ts";
 import { ClankySwarmPeerManager } from "./agents/swarmPeerManager.ts";
 import { SwarmReservationKeeper } from "./agents/swarmReservationKeeper.ts";
 import { getSwarmDbPath } from "./agents/swarmDbConnection.ts";
+import {
+  formatSwarmServerStatusLine,
+  getSwarmServerStatus
+} from "./agents/swarmServerStatus.ts";
 import { waitForTaskCompletion } from "./agents/swarmTaskWaiter.ts";
 import { spawnCodeWorker } from "./tools/spawnCodeWorker.ts";
 import {
@@ -363,6 +367,32 @@ export class ClankerBot {
         });
       }
     });
+
+    // Fire-and-forget swarm-server status probe so the operator sees one
+    // clear line on boot ("running ✓" or "not running ✗ — hint…"). When it's
+    // down, code workers still spawn — they just won't be visible/interactive
+    // in swarm-ui or swarm-ios.
+    void getSwarmServerStatus(swarmDbPath)
+      .then((status) => {
+        const line = formatSwarmServerStatusLine(status);
+        if (status.available) {
+          console.log(`[clanky] ${line}`);
+        } else {
+          console.warn(`[clanky] ${line}`);
+        }
+        this.store.logAction({
+          kind: "swarm_server_status",
+          content: status.available ? "swarm_server_running" : "swarm_server_unavailable",
+          metadata: {
+            available: status.available,
+            socketPath: status.socketPath,
+            hint: status.hint
+          }
+        });
+      })
+      .catch(() => {
+        // probing is best-effort — never let it crash boot
+      });
     this.imageCaptionCache = new ImageCaptionCache({
       maxEntries: 200,
       defaultTtlMs: 60 * 60 * 1000 // 1 hour

@@ -1,5 +1,6 @@
 import { SettingsSection } from "../SettingsSection";
 import { UserIdTagInput } from "../UserIdTagInput";
+import { SwarmServerStatusBadge } from "./SwarmServerStatusBadge";
 import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../../../src/settings/settingsConstraints.ts";
 
 function WorkerAuthBadge({ worker, form }: { worker: string; form: Record<string, unknown> }) {
@@ -35,6 +36,7 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
 
       {form.codeAgentEnabled && (
         <>
+          <SwarmServerStatusBadge />
           <UserIdTagInput
             id="code-agent-allowed-users"
             label="Allowed user IDs"

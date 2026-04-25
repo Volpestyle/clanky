@@ -847,6 +847,41 @@ button.sm {
   color: var(--success);
 }
 
+/* -- swarm-server status badge (Code Agent section) -- */
+
+.swarm-server-status-badge {
+  margin: 8px 0 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 0.84rem;
+  line-height: 1.35;
+  border: 1px solid transparent;
+}
+
+.swarm-server-status-badge--loading {
+  color: var(--ink-2);
+  border-color: var(--surface-border);
+  background: var(--surface-2);
+}
+
+.swarm-server-status-badge--ok {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 35%, transparent);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+}
+
+.swarm-server-status-badge--warn {
+  color: var(--ink-1);
+  border-color: color-mix(in srgb, var(--warning, var(--danger)) 40%, transparent);
+  background: color-mix(in srgb, var(--warning, var(--danger)) 10%, transparent);
+}
+
+.swarm-server-status-badge--error {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
 /* -- vertical stack helper -- */
 
 .stack {
