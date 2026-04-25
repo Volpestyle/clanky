@@ -112,11 +112,19 @@ export type SwarmLauncherWorkerMode = "one_shot" | "inbox_loop";
 export function buildSwarmLauncherFirstTurnPreamble({
   serverName = "swarm",
   taskId,
-  workerMode = "one_shot"
+  workerMode = "one_shot",
+  coordinationSkill = ""
 }: {
   serverName?: string;
   taskId?: string | null;
   workerMode?: SwarmLauncherWorkerMode;
+  /**
+   * Optional role-specific swarm-mcp skill (`SKILL.md` content) loaded from
+   * the vendored submodule. Appended after the coordination contract so the
+   * worker has the canonical guidance in-context from turn 1, regardless of
+   * whether the host harness's skill discovery would find it on disk.
+   */
+  coordinationSkill?: string;
 } = {}): string {
   const lines: string[] = [
     `You are running as a swarm peer. Your identity has been reserved and your swarm-mcp server (\`${serverName}\`) auto-adopted you on boot — do not call \`register\`.`,
@@ -145,6 +153,18 @@ export function buildSwarmLauncherFirstTurnPreamble({
       "- After `update_task(done)`, do not exit. Poll your inbox via `wait_for_activity` and `list_messages`.",
       "- Treat each `send_message` you receive as a follow-up instruction. Claim or create the appropriate follow-up task, execute, and report again with `update_task` + `annotate(kind=\"usage\")`.",
       "- Exit when you receive an explicit termination message in your inbox or when your idle timeout elapses."
+    );
+  }
+
+  const trimmedSkill = String(coordinationSkill || "").trim();
+  if (trimmedSkill) {
+    lines.push(
+      "",
+      "## Swarm coordination skill",
+      "",
+      "The canonical swarm-mcp skill for your role follows. Treat it as authoritative guidance for when and how to use the swarm tools.",
+      "",
+      trimmedSkill
     );
   }
 

@@ -187,6 +187,34 @@ function clankyRepoRoot(): string {
 }
 
 /**
+ * Load the role-specific swarm-mcp `SKILL.md` from the vendored submodule.
+ * Returns the file body (frontmatter included) or "" when the submodule is
+ * not initialized / the skill folder is missing. Mapping:
+ *
+ *   planner                         → swarm-planner/SKILL.md
+ *   implementer                     → swarm-implementer/SKILL.md
+ *   reviewer | researcher | other   → swarm-mcp/SKILL.md  (general)
+ */
+export function loadRoleCoordinationSkill(role: SwarmPeerRole): string {
+  const skillFolder =
+    role === "planner" ? "swarm-planner" :
+    role === "implementer" ? "swarm-implementer" :
+    "swarm-mcp";
+  const skillPath = path.resolve(
+    clankyRepoRoot(),
+    "mcp-servers/swarm-mcp/skills",
+    skillFolder,
+    "SKILL.md"
+  );
+  if (!existsSync(skillPath)) return "";
+  try {
+    return readFileSync(skillPath, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Resolve any relative entries in `swarm.args` against Clanky's repo root.
  * Absolute paths and non-path tokens (e.g. `run`) pass through unchanged.
  *
@@ -338,7 +366,8 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
   const preamble = buildSwarmLauncherFirstTurnPreamble({
     serverName: opts.swarm.serverName,
     taskId: opts.taskId,
-    workerMode: opts.workerMode ?? "one_shot"
+    workerMode: opts.workerMode ?? "one_shot",
+    coordinationSkill: loadRoleCoordinationSkill(opts.role)
   });
   const wrappedPrompt = applySwarmLauncherFirstTurnPreamble(opts.initialPrompt, preamble);
   const mcpConfigJson = buildClaudeMcpConfigJson(opts.swarm, workspace.cwd);

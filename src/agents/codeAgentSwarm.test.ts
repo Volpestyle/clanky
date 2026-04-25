@@ -69,3 +69,23 @@ test("buildSwarmLauncherFirstTurnPreamble omits the task-id line when none is pr
   assert.match(preamble, /Read the task below and execute it directly/);
   assert.doesNotMatch(preamble, /reserved as id/);
 });
+
+test("buildSwarmLauncherFirstTurnPreamble appends the role coordination skill when provided", () => {
+  const skillBody = "---\nname: swarm-implementer\n---\n\n# Swarm Implementer\n\nDo work.";
+  const preamble = buildSwarmLauncherFirstTurnPreamble({
+    taskId: "task-1",
+    coordinationSkill: skillBody
+  });
+  assert.match(preamble, /## Swarm coordination skill/);
+  assert.match(preamble, /authoritative guidance/);
+  assert.match(preamble, /name: swarm-implementer/);
+  assert.match(preamble, /Do work\./);
+});
+
+test("buildSwarmLauncherFirstTurnPreamble omits the skill block when skill content is empty", () => {
+  const preamble = buildSwarmLauncherFirstTurnPreamble({
+    taskId: "task-1",
+    coordinationSkill: ""
+  });
+  assert.doesNotMatch(preamble, /Swarm coordination skill/);
+});

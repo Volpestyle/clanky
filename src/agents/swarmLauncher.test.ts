@@ -10,6 +10,7 @@ import {
   buildClaudeMcpConfigJson,
   clankySwarmIsAvailable,
   loadProjectMcpServers,
+  loadRoleCoordinationSkill,
   resolveSwarmArgs,
   spawnPeer,
   SwarmLauncherAdoptionTimeoutError
@@ -393,4 +394,19 @@ test("buildClaudeMcpConfigJson falls back to project's swarm entry when clanky's
   } finally {
     rmSync(projectDir, { recursive: true, force: true });
   }
+});
+
+test("loadRoleCoordinationSkill loads role-specific SKILL.md from the submodule", () => {
+  const planner = loadRoleCoordinationSkill("planner");
+  expect(planner).toMatch(/name:\s*swarm-planner/);
+
+  const implementer = loadRoleCoordinationSkill("implementer");
+  expect(implementer).toMatch(/name:\s*swarm-implementer/);
+
+  const reviewer = loadRoleCoordinationSkill("reviewer");
+  // reviewer/researcher fall back to the general swarm-mcp skill.
+  expect(reviewer).toMatch(/name:\s*swarm-mcp/);
+
+  const researcher = loadRoleCoordinationSkill("researcher");
+  expect(researcher).toMatch(/name:\s*swarm-mcp/);
 });
