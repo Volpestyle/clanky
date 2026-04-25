@@ -1,14 +1,14 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import {
   buildSwarmLabel,
   buildSwarmLauncherFirstTurnPreamble,
-  applyCodeAgentFirstTurnPreamble,
-  type CodeAgentSwarmRuntimeConfig
+  applySwarmLauncherFirstTurnPreamble,
+  type CodeAgentSwarmRuntimeConfig,
+  type SwarmLauncherWorkerMode
 } from "./codeAgentSwarm.ts";
 import {
-  provisionCodeAgentWorkspace,
-  type CodeAgentWorkspaceLease
+  resolveCodeAgentWorkspace,
+  type CodeAgentWorkspace
 } from "./codeAgentWorkspace.ts";
 import { resolveSwarmDbPath } from "./swarmDbConnection.ts";
 import { type SwarmReservationKeeper } from "./swarmReservationKeeper.ts";
@@ -35,6 +35,12 @@ export type SpawnPeerOptions = {
   initialPrompt: string;
   /** Optional task id reserved upstream — embedded in the preamble. */
   taskId?: string | null;
+  /**
+   * One-shot (default) workers exit after `update_task(done)`. Inbox-loop
+   * workers stay alive after the initial task and treat further `send_message`
+   * calls from the orchestrator as follow-up instructions. Worker contract §2a.
+   */
+  workerMode?: SwarmLauncherWorkerMode;
   labelExtras?: { thread?: string | null; user?: string | null };
   /** Override the swarm-mcp scope (defaults to repoRoot). */
   scope?: string;
@@ -70,7 +76,7 @@ export type SpawnedPeer = {
   instanceId: string;
   scope: string;
   fileRoot: string;
-  workspace: CodeAgentWorkspaceLease;
+  workspace: CodeAgentWorkspace;
   child: ChildProcess;
   /** Resolves once swarm-mcp flips `adopted=1` on the reserved row. */
   adopted: Promise<void>;
@@ -202,12 +208,7 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
     throw new Error(`spawnPeer aborted before launch: ${opts.signal.reason || "cancelled"}`);
   }
 
-  const workspace = provisionCodeAgentWorkspace({
-    cwd: opts.cwd,
-    provider: opts.harness,
-    scopeKey: `swarm:${opts.harness}:${opts.trace.channelId || "dm"}:${randomUUID().slice(0, 8)}`,
-    mode: "shared_checkout"
-  });
+  const workspace = resolveCodeAgentWorkspace({ cwd: opts.cwd });
 
   const label = buildSwarmLabel({
     provider: opts.harness,
@@ -225,7 +226,6 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
       label
     });
   } catch (error) {
-    workspace.cleanup();
     throw error;
   }
 
@@ -241,9 +241,10 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
 
   const preamble = buildSwarmLauncherFirstTurnPreamble({
     serverName: opts.swarm.serverName,
-    taskId: opts.taskId
+    taskId: opts.taskId,
+    workerMode: opts.workerMode ?? "one_shot"
   });
-  const wrappedPrompt = applyCodeAgentFirstTurnPreamble(opts.initialPrompt, preamble);
+  const wrappedPrompt = applySwarmLauncherFirstTurnPreamble(opts.initialPrompt, preamble);
   const mcpConfigJson = buildClaudeMcpConfigJson(opts.swarm);
   const codexOverrides = buildCodexConfigOverrides(opts.swarm);
 
@@ -263,7 +264,6 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
     });
   } catch (error) {
     opts.reservationKeeper.release(reserved.id);
-    workspace.cleanup();
     throw error;
   }
 
@@ -304,7 +304,6 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
       // If the worker never adopted, drop the row; if it did adopt, the
       // reservation tracking is already off, so this is a cheap no-op.
       opts.reservationKeeper.release(reserved.id);
-      workspace.cleanup();
     }
   };
 

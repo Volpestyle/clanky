@@ -196,47 +196,318 @@ export const VIDEO_CONTEXT_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const CODE_TASK_SCHEMA: SharedToolSchema = {
-  name: "code_task",
-  description:
-    "Run, follow up, check status, or cancel a coding task. " +
-    "action=run (default) dispatches a new task or continues a session. " +
-    "action=followup sends additional instructions to a running background task. " +
-    "action=status checks a background task's progress. " +
-    "action=cancel stops a running background task.",
+export const SPAWN_CODE_WORKER_SCHEMA: SharedToolSchema = {
+  name: "spawn_code_worker",
+  description: "Spawn a swarm-backed coding worker and return the worker and task ids for coordination.",
   voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {
-      action: {
-        type: "string",
-        enum: ["run", "followup", "cancel", "status"],
-        description: "Action to perform. Defaults to run."
-      },
-      task: { type: "string", description: "Detailed instruction for the coding worker (required for run and followup)." },
+      task: { type: "string", description: "Detailed instruction for the coding worker." },
       role: {
         type: "string",
         enum: ["design", "implementation", "review", "research"],
-        description: "Optional worker role to target. Defaults to implementation. Only used with action=run."
+        description: "Optional worker role. Defaults to implementation."
       },
-      cwd: { type: "string", description: "Working directory. Defaults to configured project root. Only used with action=run." },
-      session_id: { type: "string", description: "Session ID for session continuation (run), or background task ID (followup, cancel, status)." }
+      harness: {
+        type: "string",
+        enum: ["claude-code", "codex-cli"],
+        description: "Optional worker harness override."
+      },
+      cwd: { type: "string", description: "Working directory. Defaults to the selected worker's configured project root." }
     },
-    anyOf: [
-      { required: ["task"] },
-      { required: ["session_id"] },
-      {
-        properties: {
-          action: {
-            enum: ["cancel", "status"]
-          }
-        },
-        required: ["action"]
-      }
-    ],
+    required: ["task"],
     additionalProperties: false
   }
 };
+
+export const REQUEST_TASK_SCHEMA: SharedToolSchema = {
+  name: "request_task",
+  description: "Create a swarm task in the current repo scope.",
+  parameters: {
+    type: "object",
+    properties: {
+      type: { type: "string" },
+      title: { type: "string" },
+      description: { type: "string" },
+      files: { type: "array", items: { type: "string" } },
+      assignee: { type: "string" },
+      priority: { type: "integer" },
+      depends_on: { type: "array", items: { type: "string" } },
+      idempotency_key: { type: "string" },
+      parent_task_id: { type: "string" },
+      approval_required: { type: "boolean" },
+      cwd: { type: "string" }
+    },
+    required: ["type", "title"],
+    additionalProperties: false
+  }
+};
+
+export const GET_TASK_SCHEMA: SharedToolSchema = {
+  name: "get_task",
+  description: "Read one swarm task by id.",
+  parameters: {
+    type: "object",
+    properties: {
+      task_id: { type: "string" },
+      cwd: { type: "string" }
+    },
+    required: ["task_id"],
+    additionalProperties: false
+  }
+};
+
+export const LIST_TASKS_SCHEMA: SharedToolSchema = {
+  name: "list_tasks",
+  description: "List swarm tasks in the current repo scope.",
+  parameters: {
+    type: "object",
+    properties: {
+      status: { type: "string" },
+      assignee: { type: "string" },
+      requester: { type: "string" },
+      cwd: { type: "string" }
+    },
+    additionalProperties: false
+  }
+};
+
+export const UPDATE_TASK_SCHEMA: SharedToolSchema = {
+  name: "update_task",
+  description: "Update a swarm task status or result.",
+  parameters: {
+    type: "object",
+    properties: {
+      task_id: { type: "string" },
+      status: { type: "string", enum: ["in_progress", "done", "failed", "cancelled"] },
+      result: { type: "string" },
+      metadata: { type: "object", additionalProperties: true },
+      cwd: { type: "string" }
+    },
+    required: ["task_id", "status"],
+    additionalProperties: false
+  }
+};
+
+export const CLAIM_TASK_SCHEMA: SharedToolSchema = {
+  name: "claim_task",
+  description: "Claim an open swarm task for Clanky's planner peer.",
+  parameters: {
+    type: "object",
+    properties: {
+      task_id: { type: "string" },
+      cwd: { type: "string" }
+    },
+    required: ["task_id"],
+    additionalProperties: false
+  }
+};
+
+export const SEND_MESSAGE_SCHEMA: SharedToolSchema = {
+  name: "send_message",
+  description: "Send a swarm message to a peer in the current repo scope.",
+  parameters: {
+    type: "object",
+    properties: {
+      recipient: { type: "string" },
+      content: { type: "string" },
+      cwd: { type: "string" }
+    },
+    required: ["recipient", "content"],
+    additionalProperties: false
+  }
+};
+
+export const BROADCAST_SCHEMA: SharedToolSchema = {
+  name: "broadcast",
+  description: "Broadcast a swarm message to peers in the current repo scope.",
+  parameters: {
+    type: "object",
+    properties: {
+      content: { type: "string" },
+      cwd: { type: "string" }
+    },
+    required: ["content"],
+    additionalProperties: false
+  }
+};
+
+export const WAIT_FOR_ACTIVITY_SCHEMA: SharedToolSchema = {
+  name: "wait_for_activity",
+  description: "Wait for swarm messages, task updates, instance changes, or a specific task to finish.",
+  voiceContinuationPolicy: "always",
+  parameters: {
+    type: "object",
+    properties: {
+      task_id: { type: "string" },
+      timeout_ms: { type: "integer" },
+      cwd: { type: "string" }
+    },
+    additionalProperties: false
+  }
+};
+
+export const ANNOTATE_SCHEMA: SharedToolSchema = {
+  name: "annotate",
+  description: "Add a swarm annotation, including progress notes, for a file or task id.",
+  parameters: {
+    type: "object",
+    properties: {
+      file: { type: "string" },
+      kind: { type: "string" },
+      content: { type: "string" },
+      cwd: { type: "string" }
+    },
+    required: ["file", "kind", "content"],
+    additionalProperties: false
+  }
+};
+
+export const LOCK_FILE_SCHEMA: SharedToolSchema = {
+  name: "lock_file",
+  description: "Lock a file in the swarm coordination DB before editing.",
+  parameters: {
+    type: "object",
+    properties: {
+      file: { type: "string" },
+      reason: { type: "string" },
+      cwd: { type: "string" }
+    },
+    required: ["file"],
+    additionalProperties: false
+  }
+};
+
+export const UNLOCK_FILE_SCHEMA: SharedToolSchema = {
+  name: "unlock_file",
+  description: "Release a file lock owned by Clanky's planner peer.",
+  parameters: {
+    type: "object",
+    properties: {
+      file: { type: "string" },
+      cwd: { type: "string" }
+    },
+    required: ["file"],
+    additionalProperties: false
+  }
+};
+
+export const CHECK_FILE_SCHEMA: SharedToolSchema = {
+  name: "check_file",
+  description: "Read swarm locks and annotations for a file.",
+  parameters: {
+    type: "object",
+    properties: {
+      file: { type: "string" },
+      cwd: { type: "string" }
+    },
+    required: ["file"],
+    additionalProperties: false
+  }
+};
+
+export const LIST_INSTANCES_SCHEMA: SharedToolSchema = {
+  name: "list_instances",
+  description: "List active swarm peers in the current repo scope.",
+  parameters: {
+    type: "object",
+    properties: {
+      label_contains: { type: "string" },
+      cwd: { type: "string" }
+    },
+    additionalProperties: false
+  }
+};
+
+export const WHOAMI_SCHEMA: SharedToolSchema = {
+  name: "whoami",
+  description: "Return Clanky's current planner peer identity.",
+  parameters: {
+    type: "object",
+    properties: {
+      cwd: { type: "string" }
+    },
+    additionalProperties: false
+  }
+};
+
+export const KV_GET_SCHEMA: SharedToolSchema = {
+  name: "kv_get",
+  description: "Read a value from the swarm scoped key-value store.",
+  parameters: {
+    type: "object",
+    properties: {
+      key: { type: "string" },
+      cwd: { type: "string" }
+    },
+    required: ["key"],
+    additionalProperties: false
+  }
+};
+
+export const KV_SET_SCHEMA: SharedToolSchema = {
+  name: "kv_set",
+  description: "Write a value to the swarm scoped key-value store.",
+  parameters: {
+    type: "object",
+    properties: {
+      key: { type: "string" },
+      value: { type: "string" },
+      cwd: { type: "string" }
+    },
+    required: ["key", "value"],
+    additionalProperties: false
+  }
+};
+
+export const KV_DELETE_SCHEMA: SharedToolSchema = {
+  name: "kv_delete",
+  description: "Delete a value from the swarm scoped key-value store.",
+  parameters: {
+    type: "object",
+    properties: {
+      key: { type: "string" },
+      cwd: { type: "string" }
+    },
+    required: ["key"],
+    additionalProperties: false
+  }
+};
+
+export const KV_LIST_SCHEMA: SharedToolSchema = {
+  name: "kv_list",
+  description: "List values from the swarm scoped key-value store.",
+  parameters: {
+    type: "object",
+    properties: {
+      prefix: { type: "string" },
+      cwd: { type: "string" }
+    },
+    additionalProperties: false
+  }
+};
+
+export const SWARM_TOOL_SCHEMAS: SharedToolSchema[] = [
+  REQUEST_TASK_SCHEMA,
+  GET_TASK_SCHEMA,
+  LIST_TASKS_SCHEMA,
+  UPDATE_TASK_SCHEMA,
+  CLAIM_TASK_SCHEMA,
+  SEND_MESSAGE_SCHEMA,
+  BROADCAST_SCHEMA,
+  WAIT_FOR_ACTIVITY_SCHEMA,
+  ANNOTATE_SCHEMA,
+  LOCK_FILE_SCHEMA,
+  UNLOCK_FILE_SCHEMA,
+  CHECK_FILE_SCHEMA,
+  LIST_INSTANCES_SCHEMA,
+  WHOAMI_SCHEMA,
+  KV_GET_SCHEMA,
+  KV_SET_SCHEMA,
+  KV_DELETE_SCHEMA,
+  KV_LIST_SCHEMA
+];
 
 export const MINECRAFT_TASK_SCHEMA: SharedToolSchema = {
   name: "minecraft_task",
@@ -366,7 +637,8 @@ const SHARED_TOOL_SCHEMAS: SharedToolSchema[] = [
   MEMORY_SEARCH_SCHEMA,
   MEMORY_WRITE_SCHEMA,
   CONVERSATION_SEARCH_SCHEMA,
-  CODE_TASK_SCHEMA
+  SPAWN_CODE_WORKER_SCHEMA,
+  ...SWARM_TOOL_SCHEMAS
 ];
 
 // ── Voice-only tool schemas ─────────────────────────────────────────

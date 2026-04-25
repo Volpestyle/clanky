@@ -53,6 +53,7 @@ When `isCancelIntent()` matches and the speaker has standing:
 ### Text
 1. Abort all active replies for this guild:channel scope (`activeReplies.abortAll()`)
 2. Abort active browser tasks (`activeBrowserTasks.abort()`)
+3. Cancel active code-orchestration swarm workers in scope: for each task with `requester=<this scope's planner peer>` not yet in a terminal status, update it to `status="cancelled"`. The `swarmActivityBridge` observes the transition and SIGTERMs the worker child.
 
 This all happens synchronously in ~1ms. The bot stops working immediately.
 

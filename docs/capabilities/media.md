@@ -89,6 +89,11 @@ fallback extraction rely on `ffmpeg`.
 Settings: `media.videoContext` controls enablement and extraction parameters
 (transcript length, keyframe interval, ASR fallback).
 
+Current tool surface: `video_context` is available to the text/reply-loop
+orchestrator. Voice prompts can still include video links and playback context,
+but provider-native realtime does not expose `video_context` until there is a
+voice executor for the extraction flow.
+
 ### Screen watch
 
 Core tool:

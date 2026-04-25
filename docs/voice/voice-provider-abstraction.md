@@ -206,9 +206,9 @@ Important runtime behavior:
 Tool ownership:
 
 - canonical local tool definitions come from `src/tools/toolRegistry.ts` and `src/tools/sharedToolSchemas.ts`
-- provider-native voice exports are assembled in `src/voice/voiceToolCallToolRegistry.ts`
+- provider-native voice exports are assembled in `src/voice/voiceToolCallToolRegistry.ts` from the same local registry, so only tools with realtime executors are mounted
 - execution is still centralized in `src/voice/voiceToolCallDispatch.ts`
-- full-brain replies use the shared orchestrator tool loop instead of provider-native replanning
+- full-brain replies use the shared orchestrator tool loop instead of provider-native replanning, then pass the exact per-turn tool list into the voice prompt
 - provider-native sessions emit `realtime_tool_call_*` events; brain/transport-only sessions emit `voice_brain_*` events
 
 Turn-context parity:

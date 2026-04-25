@@ -15,9 +15,7 @@ import { BrowserTaskRegistry } from "../tools/browserTaskRuntime.ts";
 import type { AgentContext } from "./botContext.ts";
 import {
   buildSubAgentSessionsRuntime,
-  createCodeAgentSession,
-  runModelRequestedBrowserBrowse,
-  runModelRequestedCodeTask
+  runModelRequestedBrowserBrowse
 } from "./agentTasks.ts";
 
 async function withTempAgentContext(
@@ -219,72 +217,6 @@ test("runModelRequestedBrowserBrowse uses OpenAI OAuth for hosted computer use w
       assert.equal(result.text, "Done via oauth.");
     }
   );
-});
-
-test("runModelRequestedCodeTask blocks users outside the dev-task allowlist", async () => {
-  await withTempAgentContext(async (ctx) => {
-    const settings = createTestSettings({
-      permissions: {
-        devTasks: {
-          allowedUserIds: ["allowed-1"]
-        }
-      },
-      agentStack: {
-        runtimeConfig: {
-          devTeam: {
-            codexCli: {
-              enabled: true
-            }
-          }
-        }
-      }
-    });
-
-    const result = await runModelRequestedCodeTask(ctx, {
-      settings,
-      task: "inspect repo status",
-      guildId: "guild-1",
-      channelId: "chan-1",
-      userId: "blocked-1"
-    });
-
-    assert.equal(result.blockedByPermission, true);
-    assert.equal(result.text, "");
-  });
-});
-
-test("createCodeAgentSession returns a code session when dev tasks are enabled", async () => {
-  await withTempAgentContext(async (ctx) => {
-    const settings = createTestSettings({
-      permissions: {
-        devTasks: {
-          allowedUserIds: ["user-1"]
-        }
-      },
-      agentStack: {
-        runtimeConfig: {
-          devTeam: {
-            codexCli: {
-              enabled: true,
-              maxParallelTasks: 2,
-              maxTasksPerHour: 5
-            }
-          }
-        }
-      }
-    });
-
-    const session = createCodeAgentSession(ctx, {
-      settings,
-      guildId: "guild-1",
-      channelId: "chan-1",
-      userId: "user-1"
-    });
-
-    assert.ok(session);
-    assert.equal(session?.type, "code");
-    session?.close();
-  });
 });
 
 test("buildSubAgentSessionsRuntime delegates browser session creation for local browser runtime", async () => {

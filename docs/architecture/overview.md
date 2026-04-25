@@ -45,7 +45,7 @@ Core runtime:
 - `src/voice/*`: session lifecycle, capture, turn processing, voice-side admission, tool dispatch, output, and ambient voice thought delivery
 - `src/voice/clankvox/*`: Rust media-plane subprocess for Discord voice transport, DAVE lifecycle, RTP/media parsing, and native screen-watch receive
 - `src/tools/*`: shared text/voice tool schemas and execution wrappers
-- `src/agents/*`: browser and code-agent runtimes
+- `src/agents/*`: browser runtime, code-task swarm launcher and peer, and Minecraft session glue
 - `src/dashboard.ts` and `dashboard/src/*`: REST control plane and dashboard UI
 
 Behaviorally, the selfbot is documented as one shared attention system with text and voice spokes. That attention layer is currently implemented across several modules rather than one single package: text reply admission and recent windows, initiative, voice reply admission, thought generation, and music/floor overlays.
@@ -81,7 +81,6 @@ Core shared conversational tools:
 - `web_search`
 - `web_scrape`
 - `browser_browse`
-- `code_task`
 - media generation tools
 
 Reply-loop conditional tools:
@@ -89,6 +88,7 @@ Reply-loop conditional tools:
 - `memory_search`
 - `image_lookup`
 - `start_screen_watch`
+- `spawn_code_worker` plus the swarm-mcp tool surface (`request_task`, `wait_for_activity`, `get_task`, `update_task`, `send_message`, `annotate`, `lock_file`, `kv_*`, …) — mounted only for callers in `permissions.devTasks.allowedUserIds` on dev-allowed channels. See [`../capabilities/code.md`](../capabilities/code.md).
 
 Voice-centric tools:
 
@@ -102,7 +102,7 @@ Core routing:
 - text: `src/tools/replyTools.ts`
 - voice: `src/voice/voiceToolCallInfra.ts` and `src/voice/voiceToolCallDispatch.ts`
 - browser tasks: `src/tools/browserTaskRuntime.ts`
-- code tasks: `src/agents/codeAgent.ts`
+- code tasks: `src/agents/swarmLauncher.ts` (worker spawn) and `src/agents/swarmPeer.ts` (Clanky's planner peer)
 
 Current voice dispatch modules:
 

@@ -345,9 +345,6 @@ export const DEFAULT_SETTINGS = {
         textToolPolicy: "full"
       },
       devTeam: {
-        workspace: {
-          mode: "auto"
-        },
         swarm: {
           enabled: false,
           serverName: "swarm",
@@ -364,16 +361,7 @@ export const DEFAULT_SETTINGS = {
           maxBufferBytes: 2 * 1024 * 1024,
           defaultCwd: "",
           maxTasksPerHour: 10,
-          maxParallelTasks: 2,
-          asyncDispatch: {
-            enabled: true,
-            thresholdMs: 0,
-            progressReports: {
-              enabled: true,
-              intervalMs: 60_000,
-              maxReportsPerTask: 5
-            }
-          }
+          maxParallelTasks: 2
         },
         claudeCode: {
           enabled: false,
@@ -383,16 +371,7 @@ export const DEFAULT_SETTINGS = {
           maxBufferBytes: 2 * 1024 * 1024,
           defaultCwd: "",
           maxTasksPerHour: 10,
-          maxParallelTasks: 2,
-          asyncDispatch: {
-            enabled: true,
-            thresholdMs: 0,
-            progressReports: {
-              enabled: true,
-              intervalMs: 60_000,
-              maxReportsPerTask: 5
-            }
-          }
+          maxParallelTasks: 2
         }
       },
       minecraft: {

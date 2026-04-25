@@ -1,7 +1,30 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { SubAgentSessionManager } from "../agents/subAgentSession.ts";
-import { buildReplyToolSet, executeReplyTool } from "./replyTools.ts";
+import { buildReplyToolSet, executeReplyTool, type ReplyToolRuntime } from "./replyTools.ts";
+import { buildVoiceRealtimeLocalToolSchemas } from "./toolRegistry.ts";
+
+function createMockVoiceSession(
+  overrides: Partial<NonNullable<ReplyToolRuntime["voiceSession"]>> = {}
+): NonNullable<ReplyToolRuntime["voiceSession"]> {
+  return {
+    async musicSearch() { throw new Error("not used"); },
+    async musicPlay() { throw new Error("not used"); },
+    async videoSearch() { throw new Error("not used"); },
+    async videoPlay() { throw new Error("not used"); },
+    async musicQueueAdd() { throw new Error("not used"); },
+    async musicQueueNext() { throw new Error("not used"); },
+    async musicStop() { throw new Error("not used"); },
+    async musicPause() { throw new Error("not used"); },
+    async musicResume() { throw new Error("not used"); },
+    async musicReplyHandoff() { throw new Error("not used"); },
+    async musicSkip() { throw new Error("not used"); },
+    async musicNowPlaying() { throw new Error("not used"); },
+    async playSoundboard() { throw new Error("not used"); },
+    async leaveVoiceChannel() { throw new Error("not used"); },
+    ...overrides
+  };
+}
 
 function createMockMinecraftSession({
   id,
@@ -131,7 +154,7 @@ test("buildReplyToolSet includes memory tools and conversation search when memor
   assert.equal(toolNames.includes("conversation_search"), true);
 });
 
-test("buildReplyToolSet includes code_task when dev task runtime and permissions are enabled", () => {
+test("buildReplyToolSet exposes swarm code tools when the caller is allowed", () => {
   const toolNames = buildReplyToolSet({
     browser: { enabled: false },
     webSearch: { enabled: false },
@@ -150,146 +173,13 @@ test("buildReplyToolSet includes code_task when dev task runtime and permissions
         }
       }
     }
+  }, {
+    swarmToolsAvailable: true
   }).map((tool) => tool.name);
 
-  assert.equal(toolNames.includes("code_task"), true);
-});
-
-test("executeReplyTool forwards code_task role to the code agent runtime", async () => {
-  const calls: Array<Record<string, unknown>> = [];
-
-  const result = await executeReplyTool(
-    "code_task",
-    { task: "review this patch", role: "review" },
-    {
-      codeAgent: {
-        async runTask(opts) {
-          calls.push(opts);
-          return {
-            text: "Reviewed.",
-            costUsd: 0.12
-          };
-        }
-      }
-    },
-    {
-      settings: {},
-      guildId: "guild-1",
-      channelId: "channel-1",
-      userId: "user-1",
-      sourceMessageId: "msg-1",
-      sourceText: "please review this",
-      trace: { source: "reply_message" }
-    }
-  );
-
-  assert.equal(result.isError, undefined);
-  assert.match(result.content, /Reviewed\./);
-  assert.deepEqual(calls, [{
-    settings: {},
-    task: "review this patch",
-    role: "review",
-    cwd: undefined,
-    guildId: "guild-1",
-    channelId: "channel-1",
-    userId: "user-1",
-    source: "reply_message",
-    signal: undefined
-  }]);
-});
-
-test("executeReplyTool dispatches async code_task when background runner is available", async () => {
-  const manager = new SubAgentSessionManager();
-  let runTurnCalled = false;
-  const dispatchedCalls: Array<Record<string, unknown>> = [];
-  const mockSession = {
-    id: "code:impl:1",
-    type: "code" as const,
-    createdAt: Date.now(),
-    ownerUserId: "user-1",
-    lastUsedAt: Date.now(),
-    status: "idle" as "idle" | "running" | "completed" | "error" | "cancelled",
-    async runTurn() {
-      runTurnCalled = true;
-      return {
-        text: "done",
-        costUsd: 0,
-        isError: false,
-        errorMessage: "",
-        usage: {
-          inputTokens: 0,
-          outputTokens: 0,
-          cacheWriteTokens: 0,
-          cacheReadTokens: 0
-        }
-      };
-    },
-    cancel() {
-      this.status = "cancelled";
-    },
-    close() {
-      this.status = "cancelled";
-    }
-  };
-
-  const result = await executeReplyTool(
-    "code_task",
-    { task: "refactor auth flow" },
-    {
-      subAgentSessions: {
-        manager,
-        createCodeSession() {
-          return mockSession;
-        },
-        createBrowserSession() {
-          return null;
-        }
-      },
-      backgroundCodeTasks: {
-        dispatch(args) {
-          dispatchedCalls.push(args as Record<string, unknown>);
-          return {
-            id: "code:impl:1",
-            sessionId: "code:impl:1",
-            progress: { events: [] }
-          };
-        }
-      }
-    },
-    {
-      settings: {
-        agentStack: {
-          runtimeConfig: {
-            devTeam: {
-              codexCli: {
-                enabled: true,
-                asyncDispatch: {
-                  enabled: true,
-                  thresholdMs: 0,
-                  progressReports: {
-                    enabled: true,
-                    intervalMs: 60_000,
-                    maxReportsPerTask: 5
-                  }
-                }
-              }
-            }
-          }
-        }
-      },
-      guildId: "guild-1",
-      channelId: "channel-1",
-      userId: "user-1",
-      sourceMessageId: "msg-1",
-      sourceText: "please run this task",
-      trace: { source: "reply_message" }
-    }
-  );
-
-  assert.equal(result.isError, false);
-  assert.match(result.content, /Code task dispatched\./);
-  assert.equal(dispatchedCalls.length, 1);
-  assert.equal(runTurnCalled, false);
+  assert.equal(toolNames.includes("spawn_code_worker"), true);
+  assert.equal(toolNames.includes("request_task"), true);
+  assert.equal(toolNames.includes("wait_for_activity"), true);
 });
 
 test("buildReplyToolSet includes note_context when voice tools are available", () => {
@@ -305,7 +195,23 @@ test("buildReplyToolSet includes note_context when voice tools are available", (
   assert.equal(toolNames.includes("note_context"), true);
   assert.equal(toolNames.includes("video_search"), true);
   assert.equal(toolNames.includes("video_play"), true);
+  assert.equal(toolNames.includes("stream_visualizer"), true);
   assert.equal(toolNames.includes("set_addressing"), false);
+});
+
+test("buildVoiceRealtimeLocalToolSchemas exposes only voice-executable local tools", () => {
+  const toolNames = buildVoiceRealtimeLocalToolSchemas({
+    browserAvailable: true,
+    minecraftAvailable: true,
+    memoryAvailable: true,
+    screenShareAvailable: true,
+    screenShareSnapshotAvailable: true,
+    soundboardAvailable: true,
+    webSearchAvailable: true
+  }).map((tool) => tool.name);
+
+  assert.equal(toolNames.includes("stream_visualizer"), true);
+  assert.equal(toolNames.includes("video_context"), false);
 });
 
 test("executeReplyTool delegates web_scrape to readPageSummary", async () => {
@@ -565,9 +471,6 @@ test("executeReplyTool omits session_id when a browser session completes itself"
     {
       subAgentSessions: {
         manager,
-        createCodeSession() {
-          return null;
-        },
         createBrowserSession() {
           return completedSession;
         }
@@ -604,9 +507,6 @@ test("executeReplyTool rejects unauthorized minecraft status access", async () =
     {
       subAgentSessions: {
         manager,
-        createCodeSession() {
-          return null;
-        },
         createBrowserSession() {
           return null;
         },
@@ -665,9 +565,6 @@ test("executeReplyTool reuses the caller's active minecraft session when no sess
     {
       subAgentSessions: {
         manager,
-        createCodeSession() {
-          return null;
-        },
         createBrowserSession() {
           return null;
         },
@@ -713,9 +610,6 @@ test("executeReplyTool blocks new minecraft control when another user already ow
     {
       subAgentSessions: {
         manager,
-        createCodeSession() {
-          return null;
-        },
         createBrowserSession() {
           return null;
         },
@@ -755,9 +649,6 @@ test("executeReplyTool cancels the caller's active minecraft session without req
     {
       subAgentSessions: {
         manager,
-        createCodeSession() {
-          return null;
-        },
         createBrowserSession() {
           return null;
         },
@@ -934,4 +825,34 @@ test("executeReplyTool delegates media_reply_handoff to the voice runtime", asyn
   assert.equal(result.isError, undefined);
   assert.deepEqual(calls, ["duck"]);
   assert.match(result.content, /"mode":"duck"/);
+});
+
+test("executeReplyTool delegates stream_visualizer to the voice runtime", async () => {
+  const calls: Array<string | null> = [];
+
+  const result = await executeReplyTool(
+    "stream_visualizer",
+    { mode: "waves" },
+    {
+      voiceSession: createMockVoiceSession({
+        async streamVisualizer(mode) {
+          calls.push(mode ?? null);
+          return { ok: true, mode };
+        }
+      })
+    },
+    {
+      settings: {},
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      sourceMessageId: "msg-1",
+      sourceText: "turn on the visualizer",
+      trace: { source: "voice_turn" }
+    }
+  );
+
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(calls, ["waves"]);
+  assert.match(result.content, /"mode":"waves"/);
 });

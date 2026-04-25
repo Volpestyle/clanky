@@ -7,7 +7,7 @@ This contract applies only to **Clanky-spawned workers**. Sessions launched thro
 Companion docs:
 
 - [`overview.md`](./overview.md) — runtime architecture
-- [`../capabilities/code.md`](../capabilities/code.md) — `code_task` capability surface
+- [`../capabilities/code.md`](../capabilities/code.md) — `spawn_code_worker` and swarm-tool capability surface
 - [`../tmp/swarm-launcher-redesign-plan.md`](../tmp/swarm-launcher-redesign-plan.md) — the redesign that introduces this contract
 - `swarm-mcp/docs/generic-AGENTS.md` — generic peer coordination rules
 
@@ -19,9 +19,9 @@ Workers do not call swarm-mcp's `register` tool by hand. Clanky pre-creates an u
 |---|---|
 | `SWARM_DB_PATH` | Path to the shared SQLite file. Defaults to `~/.swarm-mcp/swarm.db`. |
 | `SWARM_MCP_INSTANCE_ID` | The pre-reserved instance row's UUID. The MCP server flips `adopted=1` on boot via `tryAutoAdopt`. |
-| `SWARM_MCP_DIRECTORY` | Live working directory (the worker's actual cwd, e.g. a disposable worktree path). |
+| `SWARM_MCP_DIRECTORY` | Live working directory (the worker's resolved cwd inside the operator's checkout). |
 | `SWARM_MCP_SCOPE` | Canonical repo root used as the swarm membership boundary. Sessions in the same scope can see each other; different scopes are separate swarms. |
-| `SWARM_MCP_FILE_ROOT` | Canonical base path for resolving relative file paths in `annotate`, `lock_file`, `check_file`, and task `files`. May differ from `SWARM_MCP_DIRECTORY` when running in a disposable worktree. |
+| `SWARM_MCP_FILE_ROOT` | Canonical base path for resolving relative file paths in `annotate`, `lock_file`, `check_file`, and task `files`. Equal to `SWARM_MCP_DIRECTORY` because Clanky never spawns workers into disposable worktrees; the field is preserved for symmetry with swarm-mcp's schema and with non-Clanky peers that may run worktree-isolated. |
 | `SWARM_MCP_LABEL` | Machine-readable label tokens. Format: `origin:clanky provider:<harness> role:<role> thread:<channel> user:<user>`. |
 
 By the time the worker's first reasoning turn runs, the swarm-mcp server has already adopted the row (`adopted=1`, `pid=<worker pid>`, `heartbeat=now`). The worker may call `whoami` to confirm or skip straight to coordinated work.
@@ -30,7 +30,7 @@ If adoption fails (e.g. `SWARM_DB_PATH` unwritable, schema mismatch), the worker
 
 ## 2. Task lifecycle
 
-Every Clanky-spawned worker is associated with exactly one swarm task at spawn time. The task is created by Clanky's planner peer with `requester=<clanky-peer-id>` and `assignee=<worker-instance-id>`. The assigned task id is included in the first-turn preamble.
+Every Clanky-spawned worker is associated with one initial swarm task at spawn time. The task is created by Clanky's planner peer with `requester=<clanky-peer-id>` and `assignee=<worker-instance-id>`. The assigned task id is included in the first-turn preamble.
 
 Worker responsibilities, in order:
 
@@ -39,7 +39,16 @@ Worker responsibilities, in order:
 3. **Report progress** (optional but recommended for long tasks) — emit `annotate` calls (see §4) so the orchestrator can stream updates back to the user.
 4. **Complete on success** — call `update_task(task_id, status="done", result=<final output text>)`.
 5. **Complete on failure** — call `update_task(task_id, status="failed", result=<short error message>)`. Do not silently exit non-zero on recoverable errors — the task ledger is the source of truth.
-6. **Exit** — process exits 0 once the task reaches a terminal status. The MCP stale-heartbeat sweep (~30s) reclaims any tasks the worker abandoned.
+6. **Followup or exit** — see §2a below.
+
+### 2a. Followups: one-shot vs inbox-loop
+
+After completing the assigned task, a worker chooses one of two shapes per harness invocation. The first-turn preamble names which shape this run uses.
+
+- **One-shot (default)**: Process exits 0 once the assigned task reaches a terminal status. Followups are handled by the orchestrator spawning a fresh worker via `spawn_code_worker` (typically with `request_task({ parent_task_id: original })` to preserve traceability).
+- **Inbox-loop (opt-in via preamble)**: After `update_task(done)`, the worker continues running and polls its inbox via `wait_for_activity` / `list_messages`. When Clanky's orchestrator wants a followup, it calls `send_message(workerId, content)`; the worker treats the message body as a follow-up instruction, claims/creates a follow-up task as appropriate, executes, and reports again. The worker exits when it receives an explicit termination signal in its inbox or when its idle timeout (per harness config) elapses.
+
+The MCP stale-heartbeat sweep (~30s) reclaims tasks abandoned by either shape.
 
 Task statuses (from `swarm-protocol`): `open | claimed | in_progress | done | failed | cancelled | blocked | approval_required`.
 
@@ -96,7 +105,7 @@ Workers in the same scope discover each other via `list_instances` and may excha
 - `check_file(file)` — see who currently holds a lock and any outstanding annotations
 - `annotate(file, kind, content)` — durable per-file findings, hazards, or status notes other peers will see
 
-Workers must `lock_file` before mutating any path inside the shared scope, and `unlock_file` (or deregister) when finished. Clanky's launcher sets `SWARM_MCP_FILE_ROOT` to the canonical repo path even when the worker runs inside a disposable worktree, so locks point at the shared logical tree, not the transient worktree path.
+Workers must `lock_file` before mutating any path inside the shared scope, and `unlock_file` (or deregister) when finished. Clanky-spawned workers run directly in the operator's checkout, so `SWARM_MCP_FILE_ROOT` and `SWARM_MCP_DIRECTORY` resolve to the same path; locks point at the shared logical tree as a matter of course.
 
 ## 6. Exit semantics
 

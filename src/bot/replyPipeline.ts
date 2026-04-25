@@ -52,6 +52,7 @@ import {
   getVisionSettings,
   getVoiceSettings,
   isDevTaskEnabled,
+  isDevTaskUserAllowed,
   isMinecraftEnabled
 } from "../settings/agentStack.ts";
 import type { Settings } from "../settings/settingsSchema.ts";
@@ -60,7 +61,7 @@ import {
   type ContentBlock,
   type ContextMessage
 } from "../llm/serviceShared.ts";
-import { VOICE_TOOL_SCHEMAS } from "../tools/sharedToolSchemas.ts";
+import { SWARM_TOOL_SCHEMAS, VOICE_TOOL_SCHEMAS } from "../tools/sharedToolSchemas.ts";
 import type { ReplyPipelineRuntime } from "./botContext.ts";
 import {
   buildMinecraftSessionScopeKey,
@@ -444,8 +445,9 @@ function buildReplyToolAvailabilityState(
   {
     webSearch,
     browserBrowse,
-    imageLookup
-  }: Pick<ReplyPipelineContext, "webSearch" | "browserBrowse" | "imageLookup">
+    imageLookup,
+    userId
+  }: Pick<ReplyPipelineContext, "webSearch" | "browserBrowse" | "imageLookup"> & { userId: string | null | undefined }
 ): {
   tools: ReplyToolDefinition[];
   capabilities: {
@@ -454,7 +456,7 @@ function buildReplyToolAvailabilityState(
     browserBrowseAvailable?: boolean;
     memoryAvailable?: boolean;
     imageLookupAvailable?: boolean;
-    codeAgentAvailable?: boolean;
+    swarmToolsAvailable?: boolean;
     voiceToolsAvailable?: boolean;
   };
   includedTools: string[];
@@ -462,7 +464,7 @@ function buildReplyToolAvailabilityState(
 } {
   const memoryEnabled = Boolean(getMemorySettings(settings).enabled);
   const voiceEnabled = Boolean(getVoiceSettings(settings).enabled);
-  const codeAgentEnabled = isDevTaskEnabled(settings);
+  const codeAgentEnabled = isDevTaskEnabled(settings) && isDevTaskUserAllowed(settings, userId);
   const minecraftEnabled = isMinecraftEnabled(settings);
 
   const webSearchReason =
@@ -494,7 +496,7 @@ function buildReplyToolAvailabilityState(
         ? "lookup_error"
         : "no_history_images";
   const memoryReason = memoryEnabled ? "available" : "settings_disabled";
-  const codeTaskReason = codeAgentEnabled ? "available" : "settings_disabled";
+  const swarmToolsReason = codeAgentEnabled ? "available" : "settings_disabled";
   const voiceToolReason = voiceEnabled ? "available" : "settings_disabled";
 
   const videoContextEnabled = Boolean(getVideoContextSettings(settings).enabled);
@@ -507,7 +509,7 @@ function buildReplyToolAvailabilityState(
     memoryAvailable: memoryReason === "available",
     imageLookupAvailable: imageLookupReason === "available",
     videoContextAvailable: videoContextReason === "available",
-    codeAgentAvailable: codeTaskReason === "available",
+    swarmToolsAvailable: swarmToolsReason === "available",
     voiceToolsAvailable: voiceToolReason === "available",
     minecraftAvailable: minecraftEnabled
   };
@@ -521,7 +523,11 @@ function buildReplyToolAvailabilityState(
     { name: "memory_write", reason: memoryReason },
     { name: "conversation_search", reason: "available" },
     { name: "image_lookup", reason: imageLookupReason },
-    { name: "code_task", reason: codeTaskReason },
+    { name: "spawn_code_worker", reason: swarmToolsReason },
+    ...SWARM_TOOL_SCHEMAS.map((schema) => ({
+      name: schema.name,
+      reason: swarmToolsReason
+    })),
     { name: "minecraft_task", reason: minecraftEnabled ? "available" : "settings_disabled" },
     ...VOICE_TOOL_SCHEMAS.map((schema) => ({
       name: schema.name,
@@ -566,7 +572,7 @@ function logReplyToolAvailability(
       browserBrowseAvailable?: boolean;
       memoryAvailable?: boolean;
       imageLookupAvailable?: boolean;
-      codeAgentAvailable?: boolean;
+      swarmToolsAvailable?: boolean;
       voiceToolsAvailable?: boolean;
     };
   }
@@ -959,7 +965,8 @@ async function executeReplyLlm(
   const replyToolAvailability = buildReplyToolAvailabilityState(settings, {
     webSearch,
     browserBrowse,
-    imageLookup
+    imageLookup,
+    userId: message.author.id
   });
   const replyTools = replyToolAvailability.tools;
   logReplyToolAvailability(bot, {
@@ -1069,29 +1076,13 @@ async function executeReplyLlm(
         return browserBrowse;
       }
     },
-    codeAgent: {
-      runTask: async ({ settings: toolSettings, task, role, cwd, guildId, channelId, userId, source }) =>
-        await bot.runModelRequestedCodeTask({
-          settings: toolSettings,
-          task,
-          role,
-          cwd,
-          guildId,
-          channelId,
-          userId,
-          source,
-          signal
-        })
-    },
     memory: bot.memory,
     store: bot.store,
-    subAgentSessions,
-    backgroundCodeTasks: {
-      dispatch: (args) => bot.dispatchBackgroundCodeTask(args),
-      getTask: (taskId) => bot.backgroundTaskRunner.getTask(taskId),
-      queueFollowup: (taskId, input) => bot.backgroundTaskRunner.queueFollowup(taskId, input),
-      cancel: (taskId, reason) => bot.backgroundTaskRunner.cancel(taskId, reason)
+    swarm: {
+      peerManager: bot.swarmPeerManager,
+      reservationKeeper: bot.swarmReservationKeeper
     },
+    subAgentSessions,
     voiceSession: activeVoiceCallbacks || undefined,
     voiceJoin: Boolean(getVoiceSettings(settings).enabled) && bot.voiceSessionManager
       ? async () => {
@@ -1209,7 +1200,7 @@ async function executeReplyLlm(
     };
 
     // Separate sub-agent tools (can run concurrently) from sequential tools
-    const CONCURRENT_TOOL_NAMES = new Set(["code_task", "browser_browse"]);
+    const CONCURRENT_TOOL_NAMES = new Set(["spawn_code_worker", "browser_browse"]);
     const eligibleToolCalls = generation.toolCalls.slice(
       0,
       Math.max(0, REPLY_TOOL_LOOP_MAX_CALLS - replyTotalToolCalls)

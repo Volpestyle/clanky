@@ -38,7 +38,7 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
           <UserIdTagInput
             id="code-agent-allowed-users"
             label="Allowed user IDs"
-            hint="Discord user IDs that can trigger code_task."
+            hint="Discord user IDs that can trigger code workers."
             value={form.codeAgentAllowedUserIds}
             onChange={set("codeAgentAllowedUserIds")}
           />
@@ -162,94 +162,9 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
               placeholder="Leave empty for this repo root"
             />
             <p className="status-msg" role="status">
-              Local workers treat this as a git repo path. Shared checkout uses the live repo path, isolated worktree creates a disposable branch checkout, and auto uses shared checkout when swarm is enabled.
+              Local workers treat this as a git repo path. Clanky uses the live checkout and never creates disposable worktrees.
             </p>
           </div>
-
-          <div className="field">
-            <label htmlFor="code-agent-workspace-mode">Local workspace mode</label>
-            <select
-              id="code-agent-workspace-mode"
-              value={form.codeAgentWorkspaceMode}
-              onChange={set("codeAgentWorkspaceMode")}
-            >
-              <option value="auto">Auto</option>
-              <option value="shared_checkout">Shared checkout</option>
-              <option value="isolated_worktree">Isolated worktree</option>
-            </select>
-            <p className="status-msg" role="status">
-              Applies to local Claude Code and Codex CLI sessions. Auto uses a shared checkout for swarm-enabled sessions and isolated worktrees otherwise.
-            </p>
-          </div>
-
-          <h4 className="text-xs text-muted-foreground tracking-wider mt-4 mb-2">ASYNC DISPATCH</h4>
-          <div className="toggles">
-            <label>
-              <input
-                type="checkbox"
-                checked={Boolean(form.codeAgentAsyncDispatchEnabled)}
-                onChange={set("codeAgentAsyncDispatchEnabled")}
-              />
-              Enable async code task dispatch
-            </label>
-          </div>
-          {Boolean(form.codeAgentAsyncDispatchEnabled) && (
-            <>
-              <div className="field">
-                <label htmlFor="code-agent-async-threshold">Async threshold (ms)</label>
-                <input
-                  id="code-agent-async-threshold"
-                  type="number"
-                  min={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchThresholdMs.min}
-                  max={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchThresholdMs.max}
-                  step="1000"
-                  value={form.codeAgentAsyncDispatchThresholdMs}
-                  onChange={set("codeAgentAsyncDispatchThresholdMs")}
-                />
-                <p className="status-msg" role="status">
-                  Set to <code>0</code> to always dispatch in background.
-                </p>
-              </div>
-              <div className="toggles">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(form.codeAgentAsyncProgressReportsEnabled)}
-                    onChange={set("codeAgentAsyncProgressReportsEnabled")}
-                  />
-                  Enable periodic progress reports
-                </label>
-              </div>
-              {Boolean(form.codeAgentAsyncProgressReportsEnabled) && (
-                <div className="split">
-                  <div>
-                    <label htmlFor="code-agent-async-progress-interval">Progress interval (ms)</label>
-                    <input
-                      id="code-agent-async-progress-interval"
-                      type="number"
-                      min={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchProgressIntervalMs.min}
-                      max={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchProgressIntervalMs.max}
-                      step="1000"
-                      value={form.codeAgentAsyncProgressIntervalMs}
-                      onChange={set("codeAgentAsyncProgressIntervalMs")}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="code-agent-async-max-reports">Max reports per task</label>
-                    <input
-                      id="code-agent-async-max-reports"
-                      type="number"
-                      min={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.min}
-                      max={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.max}
-                      step="1"
-                      value={form.codeAgentAsyncMaxReportsPerTask}
-                      onChange={set("codeAgentAsyncMaxReportsPerTask")}
-                    />
-                  </div>
-                </div>
-              )}
-            </>
-          )}
 
           <h4 className="text-xs text-muted-foreground tracking-wider mt-4 mb-2">DEV TEAM ROLES</h4>
           <div className="split">

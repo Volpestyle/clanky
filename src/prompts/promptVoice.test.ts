@@ -72,3 +72,16 @@ test("buildVoiceTurnPrompt keeps direct-address ambiguity guidance for multi-use
   assert.doesNotMatch(prompt, /Use room continuity as context, not as a reason to force yourself into the turn\./);
   assert.doesNotMatch(prompt, /You are social and engaged|You are a good listener|You are fully social/);
 });
+
+test("buildVoiceTurnPrompt uses the selected per-turn tool list when provided", () => {
+  const prompt = buildVoiceTurnPrompt({
+    speakerName: "alice",
+    transcript: "hi",
+    inputKind: "transcript",
+    botName: "clanky",
+    availableToolNames: ["conversation_search", "music_play", "music_play"]
+  });
+
+  assert.match(prompt, /Tools: conversation_search, music_play\./);
+  assert.doesNotMatch(prompt, /join_voice_channel/);
+});

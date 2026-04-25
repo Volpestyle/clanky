@@ -121,14 +121,26 @@ function collectAvailableVoiceToolNames({
   browserBrowseAvailable,
   memoryAvailable,
   screenShareAvailable,
-  voiceToolsAvailable
+  voiceToolsAvailable,
+  selectedToolNames = null
 }: {
   webSearchAvailable: boolean;
   browserBrowseAvailable: boolean;
   memoryAvailable: boolean;
   screenShareAvailable: boolean;
   voiceToolsAvailable: boolean;
+  selectedToolNames?: unknown[] | null;
 }): string[] {
+  if (Array.isArray(selectedToolNames)) {
+    return [
+      ...new Set(
+        selectedToolNames
+          .map((name) => String(name || "").trim())
+          .filter(Boolean)
+      )
+    ];
+  }
+
   const names = new Set<string>(["conversation_search"]);
 
   if (webSearchAvailable) {
@@ -225,6 +237,7 @@ export function buildVoiceTurnPrompt({
   allowSoundboardToolCall = false,
   allowInlineSoundboardDirectives = false,
   allowVoiceToolCalls = false,
+  availableToolNames: selectedToolNames = null,
   musicContext = null,
   musicDisambiguation = null,
   hasDirectVisionFrame = false,
@@ -474,7 +487,8 @@ export function buildVoiceTurnPrompt({
     browserBrowseAvailable: browserBrowseToolAvailable,
     memoryAvailable: allowMemoryToolCalls,
     screenShareAvailable: allowScreenShareToolCall,
-    voiceToolsAvailable: allowVoiceToolCalls
+    voiceToolsAvailable: allowVoiceToolCalls,
+    selectedToolNames
   });
 
   if (normalizedInputKind === "event") {
@@ -755,7 +769,11 @@ export function buildVoiceTurnPrompt({
     );
   }
 
-  parts.push(`Tools: ${availableToolNames.join(", ")}.`);
+  parts.push(
+    availableToolNames.length
+      ? `Tools: ${availableToolNames.join(", ")}.`
+      : "Tools: none exposed for this turn."
+  );
 
   if (allowSoundboardToolCall && normalizedSoundboardCandidates.length) {
     const soundboardGuidance = buildVoiceSoundboardGuidanceLines(soundboardEagerness);

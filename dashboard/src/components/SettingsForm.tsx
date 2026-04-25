@@ -37,6 +37,7 @@ import { DiscoverySettingsSection } from "./settingsSections/DiscoverySettingsSe
 import { ChannelsPermissionsSettingsSection } from "./settingsSections/ChannelsPermissionsSettingsSection";
 import { SubAgentOrchestrationSettingsSection } from "./settingsSections/SubAgentOrchestrationSettingsSection";
 import { ProviderAuthSettingsSection } from "./settingsSections/ProviderAuthSettingsSection";
+import { ProviderAuthProvider } from "./settingsSections/LlmProviderOptions";
 
 const BEHAVIOR_FIELDS = new Set([
   "botName", "botNameAliases", "personaFlavor", "personaHardLimits",
@@ -594,6 +595,14 @@ export default function SettingsForm({
   }
 
   return (
+    <ProviderAuthProvider value={{
+      anthropic: Boolean(effectiveForm.providerAuthAnthropic),
+      openai: Boolean(effectiveForm.providerAuthOpenai),
+      claude_oauth: Boolean(effectiveForm.providerAuthClaudeOauth),
+      openai_oauth: Boolean(effectiveForm.providerAuthOpenaiOauth),
+      xai: Boolean(effectiveForm.providerAuthXai),
+      codex_cli: Boolean(effectiveForm.providerAuthCodexCli)
+    }}>
     <form className="panel settings-form" onSubmit={submit}>
       <h3 className="settings-title">Settings</h3>
       <div className="settings-layout">
@@ -931,5 +940,6 @@ export default function SettingsForm({
         )}
       </div>
     </form>
+    </ProviderAuthProvider>
   );
 }

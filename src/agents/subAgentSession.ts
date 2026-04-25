@@ -58,7 +58,7 @@ export const EMPTY_USAGE: SubAgentUsage = {
 
 export interface SubAgentSession {
   readonly id: string;
-  readonly type: "code" | "browser" | "minecraft";
+  readonly type: "browser" | "minecraft";
   readonly createdAt: number;
   /** The userId that created this session (for authorization checks). */
   readonly ownerUserId: string | null;

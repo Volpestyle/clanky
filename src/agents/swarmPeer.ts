@@ -183,6 +183,23 @@ export type SwarmMessage = {
   read: boolean;
 };
 
+export type SwarmContextEntry = {
+  id: string;
+  scope: string;
+  instanceId: string;
+  file: string;
+  type: string;
+  content: string;
+  createdAt: number;
+};
+
+export type SwarmKvEntry = {
+  scope: string;
+  key: string;
+  value: string;
+  updatedAt: number;
+};
+
 export type SwarmTask = {
   id: string;
   scope: string;
@@ -235,12 +252,19 @@ export type RequestTaskOpts = {
 export type UpdateTaskOpts = {
   status: Extract<SwarmTaskStatus, "in_progress" | "done" | "failed" | "cancelled">;
   result?: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type AnnotateOpts = {
   file: string;
   kind: string;
   content: string;
+};
+
+export type ListTasksOpts = {
+  status?: SwarmTaskStatus;
+  assignee?: string;
+  requester?: string;
 };
 
 type InstanceRow = {
@@ -264,6 +288,23 @@ type MessageRow = {
   content: string;
   created_at: number;
   read: number;
+};
+
+type ContextRow = {
+  id: string;
+  scope: string;
+  instance_id: string;
+  file: string;
+  type: string;
+  content: string;
+  created_at: number;
+};
+
+type KvRow = {
+  scope: string;
+  key: string;
+  value: string;
+  updated_at: number;
 };
 
 type TaskRow = {
@@ -437,6 +478,27 @@ function toMessage(row: MessageRow): SwarmMessage {
     content: row.content,
     createdAt: row.created_at,
     read: row.read !== 0
+  };
+}
+
+function toContextEntry(row: ContextRow): SwarmContextEntry {
+  return {
+    id: row.id,
+    scope: row.scope,
+    instanceId: row.instance_id,
+    file: row.file,
+    type: row.type,
+    content: row.content,
+    createdAt: row.created_at
+  };
+}
+
+function toKvEntry(row: KvRow): SwarmKvEntry {
+  return {
+    scope: row.scope,
+    key: row.key,
+    value: row.value,
+    updatedAt: row.updated_at
   };
 }
 
@@ -692,12 +754,39 @@ function getTaskById(db: Database, scope: string, id: string) {
   return row ? toTask(row) : null;
 }
 
-function listTasks(db: Database, scope: string) {
+function listTasks(db: Database, scope: string, filters: ListTasksOpts = {}) {
   prune(db);
+  const clauses = ["scope = ?"];
+  const params: Array<string | number | null> = [scope];
+  if (filters.status) {
+    clauses.push("status = ?");
+    params.push(filters.status);
+  }
+  if (filters.assignee) {
+    clauses.push("assignee = ?");
+    params.push(filters.assignee);
+  }
+  if (filters.requester) {
+    clauses.push("requester = ?");
+    params.push(filters.requester);
+  }
   const rows = db
-    .query("SELECT * FROM tasks WHERE scope = ? ORDER BY priority DESC, created_at ASC, id ASC")
-    .all(scope) as TaskRow[];
+    .query(`SELECT * FROM tasks WHERE ${clauses.join(" AND ")} ORDER BY priority DESC, created_at ASC, id ASC`)
+    .all(...params) as TaskRow[];
   return rows.map(toTask);
+}
+
+function bumpKvScope(db: Database, scope: string) {
+  const changedAt = stamp();
+  db.run(
+    `INSERT INTO kv_scope_updates (scope, changed_at) VALUES (?, ?)
+     ON CONFLICT(scope) DO UPDATE SET changed_at =
+       CASE
+         WHEN excluded.changed_at > kv_scope_updates.changed_at THEN excluded.changed_at
+         ELSE kv_scope_updates.changed_at + 1
+       END`,
+    [scope, changedAt]
+  );
 }
 
 function taskSnapshot(db: Database, scope: string): SwarmTaskSnapshot {
@@ -962,6 +1051,47 @@ export class ClankyPeer {
     return task;
   }
 
+  async listTasks(filters: ListTasksOpts = {}): Promise<SwarmTask[]> {
+    return withDb(this.dbPath, (db) => {
+      ensureSwarmSchema(db);
+      ensureActivePeer(db, this.instanceId, this.scope);
+      return listTasks(db, this.scope, filters);
+    });
+  }
+
+  async claimTask(taskId: string): Promise<SwarmTask> {
+    const normalizedTaskId = assertNonEmpty(String(taskId || ""), "taskId");
+    return withDb(this.dbPath, (db) => {
+      ensureSwarmSchema(db);
+      ensureActivePeer(db, this.instanceId, this.scope);
+
+      const task = getTaskById(db, this.scope, normalizedTaskId);
+      if (!task) throw new Error(`Task ${normalizedTaskId} not found.`);
+      if (task.assignee === this.instanceId && (task.status === "claimed" || task.status === "in_progress")) {
+        return task;
+      }
+      if (["done", "failed", "cancelled"].includes(task.status)) {
+        throw new Error(`Task ${normalizedTaskId} is already ${task.status}.`);
+      }
+      if (task.assignee && task.assignee !== this.instanceId) {
+        throw new Error(`Task ${normalizedTaskId} is assigned to ${task.assignee}.`);
+      }
+      if (task.status === "blocked" || task.status === "approval_required") {
+        throw new Error(`Task ${normalizedTaskId} is ${task.status} and cannot be claimed yet.`);
+      }
+
+      db.run(
+        "UPDATE tasks SET assignee = ?, status = 'claimed', updated_at = unixepoch(), changed_at = ? WHERE id = ? AND scope = ?",
+        [this.instanceId, stamp(), normalizedTaskId, this.scope]
+      );
+      emit(db, this.scope, "task.claimed", this.instanceId, normalizedTaskId, {});
+
+      const updated = getTaskById(db, this.scope, normalizedTaskId);
+      if (!updated) throw new Error(`Task ${normalizedTaskId} disappeared after claim.`);
+      return updated;
+    });
+  }
+
   async assignTask(taskId: string, assignee: string): Promise<SwarmTask> {
     const normalizedTaskId = assertNonEmpty(String(taskId || ""), "taskId");
     const normalizedAssignee = assertNonEmpty(String(assignee || ""), "assignee");
@@ -1044,6 +1174,12 @@ export class ClankyPeer {
         "UPDATE tasks SET status = ?, result = ?, updated_at = unixepoch(), changed_at = ? WHERE id = ? AND scope = ?",
         [opts.status, opts.result ?? null, stamp(), normalizedId, this.scope]
       );
+      if (opts.metadata && Object.keys(opts.metadata).length > 0) {
+        db.run(
+          "INSERT INTO context (id, scope, instance_id, file, type, content) VALUES (?, ?, ?, ?, ?, ?)",
+          [randomUUID(), this.scope, this.instanceId, normalizedId, "usage", JSON.stringify(opts.metadata)]
+        );
+      }
       emit(db, this.scope, "task.updated", this.instanceId, normalizedId, {
         status: opts.status,
         prior_status: task.status
@@ -1155,6 +1291,200 @@ export class ClankyPeer {
         annotation_type: kind,
         id
       });
+    });
+  }
+
+  async listInstances(labelContains?: string | null): Promise<SwarmInstance[]> {
+    return withDb(this.dbPath, (db) => {
+      ensureSwarmSchema(db);
+      ensureActivePeer(db, this.instanceId, this.scope);
+      return listActiveInstances(db, this.scope, String(labelContains || "").trim() || undefined);
+    });
+  }
+
+  async whoami(): Promise<SwarmInstance> {
+    return withDb(this.dbPath, (db) => {
+      ensureSwarmSchema(db);
+      ensureActivePeer(db, this.instanceId, this.scope);
+      const current = getInstance(db, this.instanceId);
+      if (!current) throw new Error(`Swarm peer ${this.instanceId} is not active.`);
+      return current;
+    });
+  }
+
+  async lockFile(file: string, content = "locked by Clanky planner"): Promise<SwarmContextEntry> {
+    const resolvedFile = this.resolvePeerFile(assertNonEmpty(String(file || ""), "file"));
+    const normalizedContent = String(content || "").trim() || "locked by Clanky planner";
+    return withDb(this.dbPath, (db) => {
+      ensureSwarmSchema(db);
+      ensureActivePeer(db, this.instanceId, this.scope);
+      const existing = db
+        .query("SELECT id, scope, instance_id, file, type, content, created_at FROM context WHERE scope = ? AND file = ? AND type = 'lock'")
+        .get(this.scope, resolvedFile) as ContextRow | null;
+      if (existing) {
+        if (existing.instance_id === this.instanceId) return toContextEntry(existing);
+        throw new Error(`File is already locked by ${existing.instance_id}: ${resolvedFile}`);
+      }
+      const id = randomUUID();
+      db.run(
+        "INSERT INTO context (id, scope, instance_id, file, type, content) VALUES (?, ?, ?, ?, 'lock', ?)",
+        [id, this.scope, this.instanceId, resolvedFile, normalizedContent]
+      );
+      emit(db, this.scope, "context.lock_acquired", this.instanceId, resolvedFile, { id });
+      const row = db
+        .query("SELECT id, scope, instance_id, file, type, content, created_at FROM context WHERE id = ?")
+        .get(id) as ContextRow | null;
+      if (!row) throw new Error(`Lock ${id} was created but could not be read back.`);
+      return toContextEntry(row);
+    });
+  }
+
+  async unlockFile(file: string): Promise<boolean> {
+    const resolvedFile = this.resolvePeerFile(assertNonEmpty(String(file || ""), "file"));
+    return withDb(this.dbPath, (db) => {
+      ensureSwarmSchema(db);
+      ensureActivePeer(db, this.instanceId, this.scope);
+      const result = db.run(
+        "DELETE FROM context WHERE scope = ? AND file = ? AND type = 'lock' AND instance_id = ?",
+        [this.scope, resolvedFile, this.instanceId]
+      );
+      if (Number(result.changes || 0) > 0) {
+        emit(db, this.scope, "context.lock_released", this.instanceId, resolvedFile, {});
+        return true;
+      }
+      return false;
+    });
+  }
+
+  async checkFile(file: string): Promise<SwarmContextEntry[]> {
+    const resolvedFile = this.resolvePeerFile(assertNonEmpty(String(file || ""), "file"));
+    return withDb(this.dbPath, (db) => {
+      ensureSwarmSchema(db);
+      ensureActivePeer(db, this.instanceId, this.scope);
+      const rows = db
+        .query(
+          `SELECT id, scope, instance_id, file, type, content, created_at
+           FROM context
+           WHERE scope = ? AND file = ?
+           ORDER BY created_at ASC, id ASC`
+        )
+        .all(this.scope, resolvedFile) as ContextRow[];
+      return rows.map(toContextEntry);
+    });
+  }
+
+  async searchContext(query: string): Promise<SwarmContextEntry[]> {
+    const normalizedQuery = assertNonEmpty(String(query || ""), "query");
+    return withDb(this.dbPath, (db) => {
+      ensureSwarmSchema(db);
+      ensureActivePeer(db, this.instanceId, this.scope);
+      const rows = db
+        .query(
+          `SELECT id, scope, instance_id, file, type, content, created_at
+           FROM context
+           WHERE scope = ? AND (file LIKE ? OR content LIKE ?)
+           ORDER BY created_at DESC, id DESC`
+        )
+        .all(this.scope, `%${normalizedQuery}%`, `%${normalizedQuery}%`) as ContextRow[];
+      return rows.map(toContextEntry);
+    });
+  }
+
+  async kvGet(key: string): Promise<SwarmKvEntry | null> {
+    const normalizedKey = assertNonEmpty(String(key || ""), "key");
+    return withDb(this.dbPath, (db) => {
+      ensureSwarmSchema(db);
+      ensureActivePeer(db, this.instanceId, this.scope);
+      const row = db
+        .query("SELECT scope, key, value, updated_at FROM kv WHERE scope = ? AND key = ?")
+        .get(this.scope, normalizedKey) as KvRow | null;
+      return row ? toKvEntry(row) : null;
+    });
+  }
+
+  async kvSet(key: string, value: string): Promise<SwarmKvEntry> {
+    const normalizedKey = assertNonEmpty(String(key || ""), "key");
+    const normalizedValue = String(value ?? "");
+    return withDb(this.dbPath, (db) => {
+      ensureSwarmSchema(db);
+      ensureActivePeer(db, this.instanceId, this.scope);
+      db.run(
+        `INSERT INTO kv (scope, key, value, updated_at)
+         VALUES (?, ?, ?, unixepoch())
+         ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value, updated_at = unixepoch()`,
+        [this.scope, normalizedKey, normalizedValue]
+      );
+      bumpKvScope(db, this.scope);
+      emit(db, this.scope, "kv.set", this.instanceId, normalizedKey, {});
+      const row = db
+        .query("SELECT scope, key, value, updated_at FROM kv WHERE scope = ? AND key = ?")
+        .get(this.scope, normalizedKey) as KvRow | null;
+      if (!row) throw new Error(`KV key ${normalizedKey} was written but could not be read back.`);
+      return toKvEntry(row);
+    });
+  }
+
+  async kvAppend(key: string, value: string): Promise<number> {
+    const normalizedKey = assertNonEmpty(String(key || ""), "key");
+    const normalizedValue = String(value ?? "");
+    const parsedValue = JSON.parse(normalizedValue) as unknown;
+    return withDb(this.dbPath, (db) => {
+      ensureSwarmSchema(db);
+      ensureActivePeer(db, this.instanceId, this.scope);
+      const existing = db
+        .query("SELECT value FROM kv WHERE scope = ? AND key = ?")
+        .get(this.scope, normalizedKey) as { value: string } | null;
+      let next: unknown[] = [];
+      if (existing) {
+        try {
+          const parsedExisting = JSON.parse(existing.value);
+          next = Array.isArray(parsedExisting) ? parsedExisting : [parsedExisting];
+        } catch {
+          next = [existing.value];
+        }
+      }
+      next.push(parsedValue);
+      const merged = JSON.stringify(next);
+      db.run(
+        `INSERT INTO kv (scope, key, value, updated_at)
+         VALUES (?, ?, ?, unixepoch())
+         ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value, updated_at = unixepoch()`,
+        [this.scope, normalizedKey, merged]
+      );
+      bumpKvScope(db, this.scope);
+      emit(db, this.scope, "kv.appended", this.instanceId, normalizedKey, { length: next.length });
+      return next.length;
+    });
+  }
+
+  async kvDelete(key: string): Promise<boolean> {
+    const normalizedKey = assertNonEmpty(String(key || ""), "key");
+    return withDb(this.dbPath, (db) => {
+      ensureSwarmSchema(db);
+      ensureActivePeer(db, this.instanceId, this.scope);
+      const result = db.run("DELETE FROM kv WHERE scope = ? AND key = ?", [this.scope, normalizedKey]);
+      if (Number(result.changes || 0) > 0) {
+        bumpKvScope(db, this.scope);
+        emit(db, this.scope, "kv.deleted", this.instanceId, normalizedKey, {});
+        return true;
+      }
+      return false;
+    });
+  }
+
+  async kvList(prefix?: string | null): Promise<SwarmKvEntry[]> {
+    const normalizedPrefix = String(prefix || "").trim();
+    return withDb(this.dbPath, (db) => {
+      ensureSwarmSchema(db);
+      ensureActivePeer(db, this.instanceId, this.scope);
+      const rows = normalizedPrefix
+        ? (db
+            .query("SELECT scope, key, value, updated_at FROM kv WHERE scope = ? AND key LIKE ? ORDER BY key ASC")
+            .all(this.scope, `${normalizedPrefix}%`) as KvRow[])
+        : (db
+            .query("SELECT scope, key, value, updated_at FROM kv WHERE scope = ? ORDER BY key ASC")
+            .all(this.scope) as KvRow[]);
+      return rows.map(toKvEntry);
     });
   }
 

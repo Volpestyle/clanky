@@ -4,7 +4,8 @@ import { MODEL_PROVIDER_KINDS } from "../../../../src/settings/settingsSchema.ts
 import {
   BROWSER_LLM_PROVIDER_OPTIONS,
   GENERAL_LLM_PROVIDER_OPTIONS,
-  VISION_LLM_PROVIDER_OPTIONS
+  VISION_LLM_PROVIDER_OPTIONS,
+  isProviderAuthAvailable
 } from "./LlmProviderOptions.tsx";
 
 test("general llm provider options match canonical settings providers", () => {
@@ -37,4 +38,27 @@ test("vision and browser provider options expose only supported subsets", () => 
   assert.ok(browserValues.includes("claude-oauth"));
   assert.ok(!browserValues.includes("xai"));
   assert.ok(!browserValues.includes("codex-cli"));
+});
+
+test("isProviderAuthAvailable treats null auth as fully available", () => {
+  for (const provider of MODEL_PROVIDER_KINDS) {
+    assert.equal(isProviderAuthAvailable(provider, null), true);
+  }
+});
+
+test("isProviderAuthAvailable gates oauth providers behind their flags", () => {
+  const noOauth = { claude_oauth: false, openai_oauth: false, anthropic: true, openai: true, xai: true, codex_cli: true };
+  assert.equal(isProviderAuthAvailable("claude-oauth", noOauth), false);
+  assert.equal(isProviderAuthAvailable("openai-oauth", noOauth), false);
+  assert.equal(isProviderAuthAvailable("openai", noOauth), true);
+  assert.equal(isProviderAuthAvailable("anthropic", noOauth), true);
+  assert.equal(isProviderAuthAvailable("ai_sdk_anthropic", noOauth), true);
+  assert.equal(isProviderAuthAvailable("xai", noOauth), true);
+});
+
+test("isProviderAuthAvailable maps codex variants to the codex_cli flag", () => {
+  const noCodex = { codex_cli: false, openai: true };
+  assert.equal(isProviderAuthAvailable("codex-cli", noCodex), false);
+  assert.equal(isProviderAuthAvailable("codex_cli_session", noCodex), false);
+  assert.equal(isProviderAuthAvailable("codex", noCodex), true);
 });

@@ -1,24 +1,31 @@
 # Code Agent Runtime
 
-This document describes the `code_task` capability.
+This document describes Clanky's code-orchestration capability. After the swarm-launcher redesign, code orchestration is not a single tool — it is a small Clanky-specific spawn tool plus the conditionally-mounted swarm-mcp tool surface. The orchestrator drives dispatches, followups, status, and cancellation by speaking swarm-mcp directly.
 
 ## Overview
 
-`code_task` is available in:
+The code-orchestration tool surface is available in:
 
 - text reply tool loop (`src/tools/replyTools.ts`)
 - voice text-mediated reply loop (`src/bot/voiceReplies.ts`)
-- voice realtime tool loop (`src/voice/voiceToolCallAgents.ts`)
+- voice realtime followups via the swarm activity bridge
 - `/clank code` slash subcommand (`src/bot.ts`, `handleClankCodeSlashCommand`)
+
+It is mounted only for callers in `permissions.devTasks.allowedUserIds` on dev-allowed channels. For everyone else, neither `spawn_code_worker` nor the swarm-mcp tool surface appears in the tool list at all. The old `code_task` tool is not registered.
 
 Core runtime files:
 
-- `src/agents/codeAgent.ts`
-- `src/agents/codexCliAgent.ts`
-- `src/agents/baseAgentSession.ts`
-- `src/agents/subAgentSession.ts`
-- `src/llm/llmClaudeCode.ts`
-- `src/llm/llmCodexCli.ts`
+- `src/tools/spawnCodeWorker.ts` — handler for the `spawn_code_worker` tool: gate, cwd resolution, reserve → spawn → adopt → assign
+- `src/agents/swarmLauncher.ts` — worker reserve/spawn/adopt mechanics
+- `src/agents/swarmPeer.ts` and `src/agents/swarmPeerManager.ts` — Clanky's per-scope planner peer (load-bearing for orchestrator-to-worker `send_message` and for `requester` identity on tasks)
+- `src/agents/swarmReservationKeeper.ts` — heartbeats unadopted instance rows until the worker adopts
+- `src/agents/swarmDb.ts` — direct `swarm.db` writes (mirrors swarm-ui's `writes.rs`)
+- `src/agents/swarmActivityBridge.ts` — runtime-side subscription that emits `code_task_progress` / `code_task_result` events into the reply pipeline and routes voice-realtime completions
+- `src/agents/swarmTaskWaiter.ts` — small `wait_for_activity` helper used by the slash command and by the conditional `wait_for_activity` tool
+- `src/agents/codeAgentSwarm.ts` — label builder and worker first-turn preamble
+- `src/agents/codeAgentSettings.ts` — `resolveCodeAgentConfig` and `isCodeAgentUserAllowed`
+- `src/agents/codeAgentWorkspace.ts` — `resolveCodeAgentWorkspace({ cwd })` (repo-root resolver only; no worktree creation)
+- `src/llm/llmClaudeCode.ts` and `src/llm/llmCodexCli.ts` — harness CLI arg builders
 
 ## Access Control
 
@@ -27,25 +34,27 @@ Access is settings-driven, not env-var-driven:
 - at least one coding worker must be enabled under `agentStack.runtimeConfig.devTeam.*`
 - caller Discord user ID must be present in `permissions.devTasks.allowedUserIds`
 
-Product-wise, `code_task` belongs to Clanky's trusted-collaborator tier, not the baseline community tier. Shared/community users can still talk to Clanky, search the web, or use other lower-trust capabilities, but code orchestration stays reserved for explicitly approved people and approved resources. The broader relationship model is documented in [`../architecture/relationship-model.md`](../architecture/relationship-model.md).
+Product-wise, code orchestration belongs to Clanky's trusted-collaborator tier, not the baseline community tier. Shared/community users can still talk to Clanky, search the web, or use other lower-trust capabilities, but code orchestration stays reserved for explicitly approved people and approved resources. The broader relationship model is documented in [`../architecture/relationship-model.md`](../architecture/relationship-model.md).
 
-Dashboard compatibility fields still flatten those controls into the `codeAgent*` form section, but the persisted source of truth is the preset-driven `agentStack` plus `permissions.devTasks`.
+The gate is enforced inside `spawn_code_worker` (the only operation that creates a child process) and at tool-mount time (the swarm-mcp tool surface is not mounted at all for non-dev users). `request_task` without a worker is harmless — it just adds a row no one will claim — so the swarm tools themselves do not need separate per-call gates.
+
+The dashboard exposes these controls in the Code Agent section, while the persisted source of truth is the preset-driven `agentStack` plus `permissions.devTasks`.
 
 The canonical persistence, preset, and save semantics for these fields live in [`../reference/settings.md`](../reference/settings.md).
 
-Guardrails:
+Guardrails enforced inside `spawn_code_worker`:
 
-- per-worker `maxTasksPerHour`
-- per-worker `maxParallelTasks`
+- per-harness `maxTasksPerHour` (rolling-window counter)
+- per-harness `maxParallelTasks` (counted by `swarmActivityBridge`-observed terminal events)
 - per-task timeout and output buffer limits
 
-If blocked, runtime returns deterministic errors (`restricted to allowed users`, rate-limit blocks, parallel-limit blocks).
+If blocked, runtime returns deterministic errors (`restricted to allowed users`, rate-limit blocks, parallel-limit blocks) before any swarm DB write.
 
 ## Providers
 
-`agentStack.devTeam.roles.*` selects which worker to spin up for design, implementation, review, and research tasks. The worker runtime config then supplies that worker's own model, limits, and target repository path.
+`agentStack.devTeam.roles.*` maps the optional `role` parameter on `spawn_code_worker` (`design`, `implementation`, `review`, `research`) to a harness. The worker runtime config then supplies that harness's own model, limits, and target repository path. The resolved harness becomes the swarm peer that runs the task. Callers can also pass `harness` directly to override the role-based mapping.
 
-The generic `code_task` path resolves through the implementation role first, then falls back to the enabled worker order when no explicit implementation worker is set.
+When `role` is omitted, the generic path resolves to the implementation role first, then falls back to the enabled worker order when no explicit implementation worker is set.
 
 Preset defaults are intentionally asymmetric:
 
@@ -53,7 +62,7 @@ Preset defaults are intentionally asymmetric:
 - `claude_*` presets keep `claude-code` as the primary implementation worker and `codex-cli` as the secondary local worker
 - review work can route to a different worker than implementation
 
-The dashboard-facing `codeAgent.provider` compatibility field supports:
+The dashboard provider selector supports:
 
 - `"claude-code"` — local Claude CLI runtime
 - `"codex-cli"` — local Codex CLI runtime
@@ -69,157 +78,128 @@ In product terms:
 - `claude-code` is the local Anthropic-side coding worker
 - `codex-cli` is the local OpenAI-side coding worker
 
-## Tool Contract
+## Tool Surface
 
-`code_task` accepts:
+`spawn_code_worker` is the only Clanky-specific tool. Everything else the orchestrator might do during a code-orchestration turn is a swarm-mcp tool, mounted from `swarm-mcp`'s own schema with thin per-scope-peer adapters.
 
-- `task` (required)
-- `role` (optional; `design`, `implementation`, `review`, or `research`)
-- `cwd` (optional)
-- `session_id` (optional; continue an existing code session)
+```ts
+spawn_code_worker({
+  task: string,                 // initial task description
+  role?: "design" | "implementation" | "review" | "research",
+  harness?: "claude-code" | "codex-cli",  // overrides role-based routing
+  cwd?: string,
+}) → { workerId, taskId, scope }
+```
 
-The same shared schema is used across text and voice tool registration (`src/tools/sharedToolSchemas.ts`).
+Swarm-mcp tools mounted alongside it (only for `devTasks`-allowed users):
 
-That shared schema stays intentionally concise. The tool description names the capability and its main options, while access control, worker routing, and session behavior are documented here instead of being packed into schema prose.
+- `request_task`, `get_task`, `list_tasks`, `update_task`, `claim_task`
+- `send_message`, `broadcast`, `wait_for_activity`
+- `annotate`, `lock_file`, `unlock_file`, `check_file`
+- `list_instances`, `whoami`
+- `kv_get`, `kv_set`, `kv_delete`, `kv_list`
 
-When `role` is omitted, the generic `code_task` path routes through the implementation role.
+Each tool resolves through Clanky's per-scope planner peer (`peerManager.ensurePeer(...)`), so a single peer identity speaks for the orchestrator across the whole reply turn. The planner-peer label is `origin:clanky role:planner thread:<thread> user:<user>`.
 
-## Actions
+The shared tool schema stays intentionally concise. Tool descriptions name each capability and its main options; access control, worker routing, and lifecycle behavior are documented here instead of being packed into schema prose.
 
-`code_task` supports an `action` parameter that controls behavior:
+## Lifecycle
 
-| Action | Required Params | Description |
-|--------|----------------|-------------|
-| `run` (default) | `task` | Dispatch a new task or continue an existing session via `session_id` |
-| `followup` | `task`, `session_id` | Queue a follow-up instruction for a running background task. Executes after the current turn completes. |
-| `status` | `session_id` | Check a background task's progress, files touched, and recent activity |
-| `cancel` | `session_id` | Cancel a running background task |
+A typical code dispatch is a chain of tool calls the orchestrator stitches together:
 
-The `followup` action enables the orchestrator LLM to steer a running sub-agent based on progress updates — adjusting instructions, narrowing scope, or redirecting work without cancelling and restarting. Follow-ups are queued and executed sequentially after the current turn finishes.
+1. `spawn_code_worker(task, role, cwd)` — Clanky reserves an instance row, builds harness env vars, spawns the worker (claude-code or codex-cli with `swarm-mcp` mounted), waits for auto-adopt, creates a swarm task, assigns the task to the worker, and returns `{ workerId, taskId, scope }`.
+2. `wait_for_activity(taskId)` — orchestrator blocks until the task reaches a terminal status. The activity event stream also surfaces `progress` annotations along the way.
+3. `get_task(taskId)` — orchestrator reads the final `result` text and the sibling `kind="usage"` annotation for cost/usage telemetry.
+4. Orchestrator composes the user-facing reply.
 
-## Session Model
+Variations the orchestrator can express directly:
 
-`code_task` supports both session continuation and one-shot execution:
+- **Status check**: `get_task(taskId)`, optionally `list_tasks(scope)` to see siblings.
+- **Cancel**: `update_task(taskId, status="cancelled")`. The `swarmActivityBridge` observes the transition and SIGTERMs the worker.
+- **Followup (existing worker)**: `send_message(workerId, content)` if the worker is a long-lived inbox-loop worker. The worker's first-turn preamble decides whether it loops on inbox after `update_task` or exits.
+- **Followup (fresh worker)**: `request_task({ parent_task_id: originalTaskId, ... })` followed by another `spawn_code_worker(...)`. Lets the orchestrator re-pick harness or `cwd`.
+- **Multi-worker fan-out**: multiple `spawn_code_worker` calls in one turn — e.g. a researcher and an implementer in parallel — with the orchestrator coordinating them via `send_message` and `lock_file`.
 
-1. If `session_id` is provided and valid, runtime continues that session with `runTurn(...)`.
-2. If no `session_id` is provided and session creation is available, runtime creates/registers a new code session and runs the first turn.
-3. If session creation is unavailable, runtime falls back to one-shot `runCodeAgent(...)`.
+There is no procedural action enum and no `session_id` plumbing in Clanky. The swarm `taskId` is the canonical identity for any in-flight or terminal piece of work. The orchestrator can pass it back into any swarm tool that needs it.
 
-Session manager:
+The behavioral contract every Clanky-spawned worker follows lives in [`../architecture/swarm-worker-contract.md`](../architecture/swarm-worker-contract.md).
 
-- `SubAgentSessionManager` with idle sweep and max concurrent session controls
-- owner checks prevent one user from continuing another user’s session
-- provider-specific session implementations for Claude Code and Codex CLI
-- all provider sessions extend `BaseAgentSession`, which owns shared `runTurn` lifecycle semantics (abort wiring, status transitions, cancel/close behavior, and lifecycle logging)
-- `runTurn` options support both `signal` and `onProgress` (for async background task progress emission)
+## Workspace
 
-## Workspace Mode
+Workers run in the operator's checkout. `spawn_code_worker` resolves `cwd` to a path inside a git repo via `resolveCodeAgentWorkspace({ cwd })` and pins the swarm `scope` to the repo root.
 
-`cwd` resolution:
+`cwd` resolution order:
 
 - explicit `cwd` argument if provided
 - otherwise the selected role worker's `defaultCwd`
 - otherwise fallback: the bot repo root (`process.cwd()`)
 
-For local workers (`claude-code`, `codex-cli`), that resolved path is treated as a target path inside a git repo, not just as a raw shell cwd. The runtime resolves a local workspace mode through `agentStack.runtimeConfig.devTeam.workspace.mode`:
+Important boundaries:
 
-- `auto`: default mode. Uses `shared_checkout` when swarm is enabled and `isolated_worktree` when swarm is disabled.
-- `shared_checkout`: run the worker directly in the live checkout at the requested repo path.
-- `shared_checkout`: follow-up turns in the same code session stay in that same live checkout.
-- `isolated_worktree`: create a disposable `git worktree` on a fresh `clanker/...` branch.
-- `isolated_worktree`: run the local worker inside the matching path within that worktree.
-- `isolated_worktree`: reuse the same worktree across follow-up turns in the same code session.
-- `isolated_worktree`: remove the worktree and throw away the branch when the session closes, times out, errors, or is cancelled.
+- Clanky does not create or manage `git worktree`s. Operators that want parallel-isolated workspaces should manage their own worktrees and aim `spawn_code_worker` at the appropriate cwd.
+- This is workspace selection, not host isolation. Workers run as the same OS user and keep normal machine access.
+- The resolved `cwd` must point inside a git repository; non-repo paths are rejected.
 
-Product-wise, `shared_checkout` is the more natural swarm-collaboration mode because every local worker sees the same live repo state. `isolated_worktree` remains the safer containment mode for non-swarm or higher-risk tasks.
+## Coordination Substrate
 
-Important boundary:
+`swarm-mcp` is the runtime substrate, not an opt-in feature. Every code worker runs as a swarm peer in the same SQLite-backed coordination DB.
 
-- this is workspace selection, not host isolation
-- local workers still run as the same OS user and keep normal machine access
-- the resolved `cwd` must point inside a git repository for local workers
+Roles in the swarm:
 
-## Swarm Coordination
+- Clanky's brain registers as one peer per active repo scope with label `origin:clanky role:planner thread:<thread> user:<user>`. The conditional swarm tools mounted into Clanky's reply loop call swarm-mcp from this peer. It heartbeats every 10 seconds, mirroring `swarm-mcp`'s own peer lifecycle.
+- Each spawned worker registers as a separate peer with label `origin:clanky provider:<harness> role:<role> thread:<channel> user:<user>`.
+- `role:` tokens are advisory. Anyone can read them via `list_instances`; nothing is enforced.
 
-Clanky can optionally mount `swarm-mcp` into local code workers as an internal coordination layer.
+Adoption happens through the env-var protocol. `spawn_code_worker` pre-creates an unadopted instance row in `swarm.db` (via `swarmDb.reserveInstance(...)`), heartbeats it through `swarmReservationKeeper` until the worker boots, and `swarm-mcp`'s `tryAutoAdopt` flips `adopted=1` when the worker connects. Workers do not call `register` themselves. Full details live in the [worker contract](../architecture/swarm-worker-contract.md).
 
-When `agentStack.runtimeConfig.devTeam.swarm.enabled` is true:
+DB location is `~/.swarm-mcp/swarm.db` by default. Override via `agentStack.runtimeConfig.devTeam.swarm.dbPath` (or the `SWARM_DB_PATH` env var). The same DB file is shared across `swarm-ui`, manually-launched workers, and Clanky-spawned workers running on the same host — single-host swarm scope is intentional.
 
-- local `codex-cli` and `claude-code` workers get a per-session swarm MCP config at launch time
-- the worker receives first-turn guidance to register itself into the shared swarm
-- the worker registers with a machine-readable label like `origin:clanky provider:codex-cli role:implementer`
-- `workspace.mode: auto` defaults those local workers to the shared checkout so the swarm naturally sees one live repo
-- when a session still uses `isolated_worktree`, registration uses the disposable worktree as the live `directory`, but uses the original requested repo path as `file_root`
-- swarm `scope` is pinned to the canonical repo root
+Live observation of the swarm — peer graph, active tasks, terminal binding, intervention — is owned by `swarm-ui` (desktop) and `swarm-ios` (mobile/remote). Both read the shared `swarm.db` directly. Clanky's own dashboard does not duplicate this surface.
 
-This matters because local workers can now run either in the shared checkout or in disposable git worktrees. Without the canonical `file_root` and repo-root `scope`, an isolated worker's file lock or annotation would point at its transient worktree path instead of the shared repo path that another worker should see.
+## Activity Bridge and Progress Delivery
 
-Role-bearing labels are advisory, not enforced schema. A session can omit the `role:` token entirely and be treated as a generalist by the shared swarm protocol.
+The orchestrator can call `wait_for_activity` directly to block on a task. For Discord-side delivery (text reply pipeline injection, voice realtime followups), there is also a runtime-side subscription that fires regardless of which tool the orchestrator is using.
 
-Operationally:
+`src/agents/swarmActivityBridge.ts` is registered once per active planner-peer scope and:
 
-- `agentStack.runtimeConfig.devTeam.swarm` configures how Clanky launches the swarm MCP server for local coding workers
-- the swarm command and args should normally use absolute paths so both Codex CLI and Claude Code can start the same server reliably
-- `dbPath` is optional and overrides the shared SQLite location via `SWARM_DB_PATH`
+- Watches all tasks where `requester` matches the local Clanky planner peer.
+- On `kind="progress"` annotations, injects synthetic `code_task_progress` messages into the reply pipeline via `enqueueReplyJob(..., forceRespond: true)`.
+- On terminal status (`done` / `failed` / `cancelled`), injects `code_task_result` for text/voice-text-mediated surfaces, or routes through `VoiceSessionManager.requestRealtimeCodeTaskFollowup(...)` for voice realtime.
+- Tracks per-harness active-worker counts for the `maxParallelTasks` bookkeeping read by `spawn_code_worker`.
+- On `cancelled` transitions, SIGTERMs the worker child if it is still running.
 
-## Async Dispatch
+The bridge subscription is set up alongside `peerManager` in `bot.ts` runtime construction. Orchestrators do not need to subscribe explicitly; the bridge is always running for the active planner peer.
 
-`code_task` supports async background dispatch for new code sessions.
-
-- worker-level routing is controlled by `agentStack.runtimeConfig.devTeam.<worker>.asyncDispatch`
-- when enabled and the worker threshold is met, `executeCodeTask` dispatches through `BackgroundTaskRunner` and returns immediately
-- the orchestrator LLM receives a normal tool result indicating dispatch and composes the user-facing acknowledgment
-- session continuation calls (`session_id` present) remain synchronous by design
-
-`BackgroundTaskRunner` (`src/agents/backgroundTaskRunner.ts`) handles:
-
-- in-flight async task lifecycle and retention cleanup
-- real-time progress accumulation from `SubAgentSession.runTurn(..., { onProgress })`
-- milestone callbacks for optional progress updates
-- completion/cancellation callbacks
-- scope cancellation via `buildCodeTaskScopeKey(...)` + `cancelByScope(...)`
-
-Delivery surfaces:
-
-- text and text-mediated voice use synthetic message events (`code_task_progress` / `code_task_result`) fed into `enqueueReplyJob(..., forceRespond: true)`
-- voice realtime tasks (`voice_realtime_tool_code_task`) deliver completion/cancellation back into the live realtime conversation via `VoiceSessionManager.requestRealtimeCodeTaskFollowup(...)`, then trigger spoken follow-up output
-
-Async background dispatch now lives in this runtime doc; there is no separate canonical design spec to keep in sync.
+The shared cancellation contract — keyword detection, speaker ownership, and the broader stop semantics — lives in [`../operations/cancellation.md`](../operations/cancellation.md).
 
 ## Logging
 
 Primary action kinds:
 
-- `code_agent_call`
-- `code_agent_error`
-- `sub_agent_session_lifecycle`
+- `code_agent_call` — `spawn_code_worker` returned successfully
+- `code_agent_error` — spawn failure, adoption timeout, or activity-bridge delivery failure
+- `swarm_worker_exit` — non-zero or unexpected worker exits, sourced from the launcher's stdout/stderr ring buffer
 
 Common metadata fields:
 
 - `provider` / `configuredProvider`
 - `model`
-- `sessionId` / `turnNumber` (session path)
+- `taskId` / `instanceId` (swarm identifiers)
 - `durationMs`
-- usage and cost where available
+- `usage` and `costUsd` from the worker's `kind="usage"` annotation
+
+Worker-internal events live in `swarm-mcp`'s own event log. Clanky tees worker stdout/stderr to a small ring buffer for crash diagnostics only; it is not parsed for results, cost, or progress.
 
 ## Settings Surface
 
 The cross-cutting settings contract lives in [`../reference/settings.md`](../reference/settings.md). The code-agent-specific knobs still live under `agentStack.runtimeConfig.devTeam` and `agentStack.overrides.devTeam`.
 
-Canonical persisted defaults live under `agentStack.runtimeConfig.devTeam` in `src/settings/settingsSchema.ts`:
+Canonical persisted defaults under `agentStack.runtimeConfig.devTeam` in `src/settings/settingsSchema.ts`:
 
 ```ts
 devTeam: {
-  workspace: {
-    mode: "auto"
-  },
   swarm: {
-    enabled: false,
-    serverName: "swarm",
-    command: "",
-    args: [],
-    dbPath: "",
-    appendCoordinationPrompt: true
+    dbPath: "" // overrides SWARM_DB_PATH
   },
   codexCli: {
     enabled: false,
@@ -229,16 +209,7 @@ devTeam: {
     maxBufferBytes: 2 * 1024 * 1024,
     defaultCwd: "",
     maxTasksPerHour: 10,
-    maxParallelTasks: 2,
-    asyncDispatch: {
-      enabled: true,
-      thresholdMs: 0,
-      progressReports: {
-        enabled: true,
-        intervalMs: 60_000,
-        maxReportsPerTask: 5
-      }
-    }
+    maxParallelTasks: 2
   },
   claudeCode: {
     enabled: false,
@@ -248,19 +219,20 @@ devTeam: {
     maxBufferBytes: 2 * 1024 * 1024,
     defaultCwd: "",
     maxTasksPerHour: 10,
-    maxParallelTasks: 2,
-    asyncDispatch: {
-      enabled: true,
-      thresholdMs: 0,
-      progressReports: {
-        enabled: true,
-        intervalMs: 60_000,
-        maxReportsPerTask: 5
-      }
-    }
+    maxParallelTasks: 2
+  },
+  roles: {
+    // role → harness mapping for spawn_code_worker's optional role param.
+    // Unchanged in shape from the pre-redesign schema.
   }
 }
 ```
 
-The selected worker order is controlled through `agentStack.overrides.devTeam.codingWorkers` when advanced overrides are enabled. The dashboard's `Auto` option leaves worker ordering on the preset/default path instead of pinning a specific worker override.
+Removed in the swarm-launcher redesign:
 
+- `devTeam.workspace.mode` — Clanky never creates worktrees; workers run in the operator's checkout.
+- `devTeam.swarm.enabled` / `serverName` / `command` / `args` / `appendCoordinationPrompt` — swarm is the substrate (not opt-in), and the worker first-turn preamble is built from `buildCodeAgentFirstTurnPreamble` rather than a settings string.
+- `devTeam.<worker>.asyncDispatch.*` — dispatch is always async via swarm; progress comes from worker `annotate` calls.
+- `devTeam.execution.mode` — there is no longer a procedural `code_task` to switch out from. The new tool surface is the only path.
+
+The selected worker order is controlled through `agentStack.overrides.devTeam.codingWorkers` when advanced overrides are enabled. The dashboard's `Auto` option leaves worker ordering on the preset/default path instead of pinning a specific worker override.

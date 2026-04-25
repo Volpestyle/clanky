@@ -1,8 +1,7 @@
 import type { ClankerBot } from "../bot.ts";
 import {
   buildSubAgentSessionsRuntime,
-  runModelRequestedBrowserBrowse,
-  runModelRequestedCodeTask
+  runModelRequestedBrowserBrowse
 } from "./agentTasks.ts";
 import {
   buildBrowserBrowseContext,
@@ -462,8 +461,8 @@ export function buildReplyPipelineRuntime(
     gifs: bot.gifs,
     search: bot.search,
     voiceSessionManager: bot.voiceSessionManager,
-    dispatchBackgroundCodeTask: (payload) => bot.dispatchBackgroundCodeTask(payload),
-    backgroundTaskRunner: bot.backgroundTaskRunner,
+    swarmPeerManager: bot.swarmPeerManager,
+    swarmReservationKeeper: bot.swarmReservationKeeper,
     getReplyAddressSignal: (settings, message, recentMessages = []) =>
       resolveReplyAddressSignal(
         bot,
@@ -522,7 +521,6 @@ export function buildReplyPipelineRuntime(
     getEmojiHints: (guild) => bot.getEmojiHints(guild),
     runModelRequestedBrowserBrowse: (payload) =>
       runModelRequestedBrowserBrowse(agentContext, payload),
-    runModelRequestedCodeTask: (payload) => runModelRequestedCodeTask(agentContext, payload),
     buildSubAgentSessionsRuntime: () => buildSubAgentSessionsRuntime(agentContext),
     runModelRequestedImageLookup: (payload) =>
       runModelRequestedImageLookup({
@@ -583,9 +581,8 @@ export function buildVoiceReplyRuntime(bot: ClankerBot): VoiceReplyRuntime {
       runModelRequestedBrowserBrowse(agentContext, payload),
     buildBrowserBrowseContext: (settings) =>
       buildBrowserBrowseContext(budgetContext, settings),
-    runModelRequestedCodeTask: (payload) => runModelRequestedCodeTask(agentContext, payload),
+    swarmPeerManager: bot.swarmPeerManager,
+    swarmReservationKeeper: bot.swarmReservationKeeper,
     buildSubAgentSessionsRuntime: () => buildSubAgentSessionsRuntime(agentContext),
-    dispatchBackgroundCodeTask: (payload) => bot.dispatchBackgroundCodeTask(payload),
-    backgroundTaskRunner: bot.backgroundTaskRunner
   };
 }

@@ -688,9 +688,6 @@ test("normalizeSettings preserves canonical dev-team swarm runtime config", () =
     agentStack: {
       runtimeConfig: {
         devTeam: {
-          workspace: {
-            mode: "shared_checkout"
-          },
           swarm: {
             enabled: true,
             serverName: "Swarm Bus",
@@ -704,9 +701,7 @@ test("normalizeSettings preserves canonical dev-team swarm runtime config", () =
     }
   });
 
-  assert.deepEqual(normalized.agentStack.runtimeConfig.devTeam.workspace, {
-    mode: "shared_checkout"
-  });
+  assert.equal((normalized.agentStack.runtimeConfig.devTeam as Record<string, unknown>).workspace, undefined);
   assert.deepEqual(normalized.agentStack.runtimeConfig.devTeam.swarm, {
     enabled: true,
     serverName: "swarm-bus",

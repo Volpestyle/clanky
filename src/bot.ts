@@ -19,12 +19,8 @@ import {
 } from "./selfbot/streamDiscovery.ts";
 import type { Settings } from "./settings/settingsSchema.ts";
 import {
-  runCodeAgent,
-  isCodeAgentUserAllowed,
-  normalizeCodeAgentRole,
-  resolveCodeAgentConfig,
-  getActiveCodeAgentTaskCount
-} from "./agents/codeAgent.ts";
+  normalizeCodeAgentRole
+} from "./agents/codeAgentSettings.ts";
 import { ImageCaptionCache } from "./vision/imageCaptionCache.ts";
 import {
   normalizeReactionEmojiToken
@@ -45,7 +41,6 @@ import {
 import type { ReplyPerformanceSeed } from "./bot/replyPipelineShared.ts";
 import {
   runModelRequestedBrowserBrowse,
-  runModelRequestedCodeTask,
   buildSubAgentSessionsRuntime,
   stopMinecraftMcpServer
 } from "./bot/agentTasks.ts";
@@ -134,19 +129,19 @@ import {
 import { isCancelIntent } from "./tools/cancelDetection.ts";
 import { maybeReplyToMessagePipeline } from "./bot/replyPipeline.ts";
 import { SubAgentSessionManager } from "./agents/subAgentSession.ts";
-import {
-  BackgroundTaskRunner,
-  buildCodeTaskScopeKey,
-  type BackgroundTask
-} from "./agents/backgroundTaskRunner.ts";
+import { ClankySwarmPeerManager } from "./agents/swarmPeerManager.ts";
+import { SwarmReservationKeeper } from "./agents/swarmReservationKeeper.ts";
+import { getSwarmDbPath } from "./agents/swarmDbConnection.ts";
+import { waitForTaskCompletion } from "./agents/swarmTaskWaiter.ts";
+import { spawnCodeWorker } from "./tools/spawnCodeWorker.ts";
 import {
   getMemorySettings,
   getBotName,
   getReplyPermissions,
   getActivitySettings,
-  isDevTaskEnabled
+  isDevTaskEnabled,
+  isDevTaskUserAllowed
 } from "./settings/agentStack.ts";
-import { buildCodeTaskResultPrompt } from "./prompts/promptText.ts";
 
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
 const TEXT_CANCEL_FALLBACK_REACTION = "🛑";
@@ -308,7 +303,8 @@ export class ClankerBot {
   activeReplies: ActiveReplyRegistry;
   activeBrowserTasks: BrowserTaskRegistry;
   subAgentSessions: SubAgentSessionManager;
-  backgroundTaskRunner: BackgroundTaskRunner;
+  swarmPeerManager: ClankySwarmPeerManager;
+  swarmReservationKeeper: SwarmReservationKeeper;
   imageCaptionCache: ImageCaptionCache;
   streamDiscovery: StreamDiscoveryState;
   private streamDiscoveryCleanup: (() => void) | null;
@@ -355,9 +351,17 @@ export class ClankerBot {
       maxSessions: Number(appConfig?.subAgentOrchestration?.maxConcurrentSessions) || 20
     });
     this.subAgentSessions.startSweep();
-    this.backgroundTaskRunner = new BackgroundTaskRunner({
-      store: this.store,
-      sessionManager: this.subAgentSessions
+    const swarmDbPath = getSwarmDbPath(this.store.getSettings());
+    this.swarmPeerManager = new ClankySwarmPeerManager({ dbPath: swarmDbPath });
+    this.swarmReservationKeeper = new SwarmReservationKeeper({
+      dbPath: swarmDbPath,
+      onError: (error) => {
+        this.store.logAction({
+          kind: "bot_error",
+          content: "swarm_reservation_keeper_error",
+          metadata: { error: String(error instanceof Error ? error.message : error) }
+        });
+      }
     });
     this.imageCaptionCache = new ImageCaptionCache({
       maxEntries: 200,
@@ -399,23 +403,7 @@ export class ClankerBot {
         startVoiceScreenWatch(this.toScreenShareRuntime(), payload)
     });
 
-    // Wire code agent hooks onto VoiceSessionManager so code_task is
-    // available on the voice_realtime surface (provider-native tool calls).
     const voiceAgentContext = this.toAgentContext();
-    this.voiceSessionManager.runModelRequestedCodeTask = (payload) =>
-      runModelRequestedCodeTask(voiceAgentContext, {
-        ...payload,
-        settings: payload.settings || this.store.getSettings()
-      });
-    this.voiceSessionManager.createCodeAgentSession = (opts) => {
-      const sessionsRuntime = buildSubAgentSessionsRuntime(voiceAgentContext);
-      return sessionsRuntime.createCodeSession({
-        ...opts,
-        settings: opts.settings || this.store.getSettings()
-      }) ?? null;
-    };
-    this.voiceSessionManager.dispatchBackgroundCodeTask = (payload) =>
-      this.dispatchBackgroundCodeTask(payload);
     this.voiceSessionManager.createMinecraftSession = (opts) => {
       const sessionsRuntime = buildSubAgentSessionsRuntime(voiceAgentContext);
       return sessionsRuntime.createMinecraftSession({
@@ -577,60 +565,38 @@ export class ClankerBot {
     const codeCwd = interaction.options.getString("cwd", false) || undefined;
 
     if (!isDevTaskEnabled(settings)) {
-      await interaction.editReply("Code agent is disabled in settings.");
+      await interaction.editReply("Code workers are disabled in settings.");
       return;
     }
-    if (!isCodeAgentUserAllowed(interaction.user.id, settings)) {
+    if (!isDevTaskUserAllowed(settings, interaction.user.id)) {
       await interaction.editReply("This capability is restricted to allowed users.");
       return;
     }
 
-    const codeAgentConfig = resolveCodeAgentConfig(settings, codeCwd, codeRole);
-    const maxParallel = codeAgentConfig.maxParallelTasks;
-    if (getActiveCodeAgentTaskCount() >= maxParallel) {
-      await interaction.editReply("Too many code agent tasks are already running. Try again shortly.");
-      return;
-    }
-    const maxPerHour = codeAgentConfig.maxTasksPerHour;
-    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const usedThisHour = this.store.countActionsSince("code_agent_call", since1h);
-    if (usedThisHour >= maxPerHour) {
-      await interaction.editReply("Code agent is currently blocked by hourly limits. Try again shortly.");
-      return;
-    }
-
     try {
-      const {
-        cwd,
-        swarm,
-        workspaceMode,
-        provider,
-        model,
-        codexCliModel,
-        maxTurns,
-        timeoutMs,
-        maxBufferBytes
-      } = codeAgentConfig;
-
-      const result = await runCodeAgent({
-        instruction: codeInstruction,
-        cwd,
-        swarm,
-        workspaceMode,
-        provider,
-        maxTurns,
-        timeoutMs,
-        maxBufferBytes,
-        model,
-        codexCliModel,
-        trace: {
+      const spawned = await spawnCodeWorker(
+        {
+          settings,
+          task: codeInstruction,
+          role: codeRole,
+          cwd: codeCwd,
           guildId: interaction.guildId,
           channelId: interaction.channelId,
           userId: interaction.user.id,
           source: "slash_command_clank_code",
-          role: codeRole
+          signal: undefined
         },
-        store: this.store
+        {
+          store: this.store,
+          peerManager: this.swarmPeerManager,
+          reservationKeeper: this.swarmReservationKeeper
+        }
+      );
+      await interaction.editReply(`Code worker started. task=${spawned.taskId} worker=${spawned.workerId}`);
+
+      const peer = this.swarmPeerManager.ensurePeer(spawned.scope, spawned.scope, spawned.scope);
+      const result = await waitForTaskCompletion(peer, spawned.taskId, {
+        dbPath: getSwarmDbPath(settings)
       });
 
       let responseText = result.text;
@@ -640,13 +606,13 @@ export class ClankerBot {
       if (responseText.length > 2000) {
         await interaction.editReply(responseText.substring(0, 1997) + "...");
       } else {
-        await interaction.editReply(responseText || "Code task completed with no output.");
+        await interaction.editReply(responseText || "Code worker completed with no output.");
       }
     } catch (error) {
       this.store.logAction({ kind: "bot_error", guildId: interaction.guildId, channelId: interaction.channelId, userId: interaction.user.id, content: "slash_command_code_error", metadata: { error: String(error instanceof Error ? error.message : error) } });
       const message = error instanceof Error ? error.message : String(error);
       try {
-        await interaction.editReply(`An error occurred while running code task: ${message}`);
+        await interaction.editReply(`An error occurred while running the code worker: ${message}`);
       } catch (replyError) {
          this.store.logAction({ kind: "bot_error", guildId: interaction.guildId, channelId: interaction.channelId, userId: interaction.user.id, content: "slash_command_code_error_reply_failed", metadata: { error: String(replyError instanceof Error ? replyError.message : replyError) } });
       }
@@ -1033,7 +999,8 @@ export class ClankerBot {
         console.warn("[ClankerBot] Failed to close browser sessions during shutdown:", error);
       }
     }
-    this.backgroundTaskRunner.close();
+    this.swarmReservationKeeper.shutdown();
+    this.swarmPeerManager.shutdown();
     await stopMinecraftMcpServer();
     await this.client.destroy();
   }
@@ -1249,234 +1216,6 @@ export class ClankerBot {
     return queue.length;
   }
 
-  dispatchBackgroundCodeTask({
-    session,
-    task,
-    role,
-    guildId,
-    channelId,
-    userId = null,
-    triggerMessageId = null,
-    source = "reply_tool_code_task",
-    progressReports
-  }: {
-    session: import("./agents/subAgentSession.ts").SubAgentSession;
-    task: string;
-    role: import("./agents/codeAgent.ts").CodeAgentRole;
-    guildId: string;
-    channelId: string;
-    userId?: string | null;
-    triggerMessageId?: string | null;
-    source?: string;
-    progressReports?: {
-      enabled?: boolean;
-      intervalMs?: number;
-      maxReportsPerTask?: number;
-    };
-  }) {
-    const scopeKey = buildCodeTaskScopeKey({ guildId, channelId });
-    return this.backgroundTaskRunner.dispatch({
-      session,
-      input: task,
-      role,
-      guildId,
-      channelId,
-      userId,
-      triggerMessageId,
-      scopeKey,
-      source,
-      progressReports: {
-        enabled: progressReports?.enabled !== false,
-        intervalMs: Number(progressReports?.intervalMs) || 60_000,
-        maxReportsPerTask: Number(progressReports?.maxReportsPerTask) || 5
-      },
-      onProgress: async (taskSnapshot, recentEvents) => {
-        await this.deliverAsyncTaskProgress(taskSnapshot, recentEvents);
-      },
-      onComplete: async (taskSnapshot) => {
-        await this.deliverAsyncTaskResult(taskSnapshot);
-      }
-    });
-  }
-
-  async deliverAsyncTaskResult(task: BackgroundTask) {
-    if (!task?.channelId || !task?.guildId) return false;
-    const mode = task.status === "cancelled" ? "cancelled" : "completion";
-    const durationMs = Math.max(0, Number(task.completedAt || Date.now()) - Number(task.startedAt || Date.now()));
-    const rawResultText = String(task.result?.text || "").trim();
-    const fallbackResultText = String(task.errorMessage || "").trim();
-    const resultText = (rawResultText || fallbackResultText || "Task finished with no text output.").slice(0, 6000);
-    const promptText = buildCodeTaskResultPrompt({
-      mode,
-      sessionId: task.sessionId,
-      role: task.role,
-      status: task.status,
-      durationMs,
-      costUsd: Number(task.result?.costUsd || 0),
-      resultText,
-      filesTouched: task.progress.fileEdits,
-      triggerMessageId: task.triggerMessageId
-    });
-    const source = String(task.source || "")
-      .trim()
-      .toLowerCase();
-    const fromVoiceRealtime = source.startsWith("voice_realtime_tool_code_task");
-    if (fromVoiceRealtime) {
-      const deliveredToVoiceRealtime = this.voiceSessionManager.requestRealtimeCodeTaskFollowup({
-        guildId: task.guildId,
-        channelId: task.channelId,
-        prompt: promptText,
-        userId: task.userId,
-        source:
-          mode === "cancelled"
-            ? "voice_realtime_code_task_cancelled_followup"
-            : "voice_realtime_code_task_result_followup"
-      });
-      if (deliveredToVoiceRealtime) {
-        return true;
-      }
-    }
-    return await this.enqueueCodeTaskSyntheticEvent({
-      task,
-      source: "code_task_result",
-      promptText,
-      forceRespond: true
-    });
-  }
-
-  async deliverAsyncTaskProgress(task: BackgroundTask, recentEvents: import("./agents/subAgentSession.ts").SubAgentProgressEvent[]) {
-    if (!task?.channelId || !task?.guildId) return false;
-    if (!Array.isArray(recentEvents) || recentEvents.length <= 0) return false;
-    const elapsedMs = Math.max(0, Date.now() - Number(task.startedAt || Date.now()));
-    const promptText = buildCodeTaskResultPrompt({
-      mode: "progress",
-      sessionId: task.sessionId,
-      role: task.role,
-      status: task.status,
-      durationMs: elapsedMs,
-      costUsd: Number(task.result?.costUsd || 0),
-      filesTouched: task.progress.fileEdits,
-      triggerMessageId: task.triggerMessageId,
-      recentEvents: recentEvents.map((event) => ({ summary: event.summary }))
-    });
-    return await this.enqueueCodeTaskSyntheticEvent({
-      task,
-      source: "code_task_progress",
-      promptText,
-      forceRespond: true
-    });
-  }
-
-  private async enqueueCodeTaskSyntheticEvent({
-    task,
-    source,
-    promptText,
-    forceRespond
-  }: {
-    task: BackgroundTask;
-    source: string;
-    promptText: string;
-    forceRespond: boolean;
-  }) {
-    const channel = this.client.channels.cache.get(String(task.channelId || ""));
-    if (!isSendableChannel(channel)) {
-      this.store.logAction({
-        kind: "bot_error",
-        guildId: task.guildId || null,
-        channelId: task.channelId || null,
-        userId: task.userId || null,
-        content: "code_task_synthetic_delivery_channel_unavailable",
-        metadata: {
-          taskId: task.id,
-          sessionId: task.sessionId,
-          source
-        }
-      });
-      return false;
-    }
-
-    const guild = this.client.guilds.cache.get(String(task.guildId || ""));
-    if (!guild) {
-      this.store.logAction({
-        kind: "bot_error",
-        guildId: task.guildId || null,
-        channelId: task.channelId || null,
-        userId: task.userId || null,
-        content: "code_task_synthetic_delivery_guild_unavailable",
-        metadata: {
-          taskId: task.id,
-          sessionId: task.sessionId,
-          source
-        }
-      });
-      return false;
-    }
-
-    const requesterUserId = String(task.userId || this.client.user?.id || "system").trim() || "system";
-    const requesterNameFromGuild = guild.members?.cache?.get(requesterUserId)?.displayName;
-    const requesterNameFromUser = this.client.users?.cache?.get(requesterUserId)?.username;
-    const requesterName = String(requesterNameFromGuild || requesterNameFromUser || "Requester");
-    const syntheticId = `${source}-${task.id}-${Date.now()}`;
-    const syntheticTimestamp = Date.now();
-
-    this.store.recordMessage({
-      messageId: syntheticId,
-      createdAt: syntheticTimestamp,
-      guildId: String(task.guildId || ""),
-      channelId: String(task.channelId || ""),
-      authorId: requesterUserId,
-      authorName: requesterName,
-      isBot: false,
-      content: promptText,
-      referencedMessageId: task.triggerMessageId || null
-    });
-
-    const syntheticMessage = {
-      id: syntheticId,
-      channelId: String(task.channelId || ""),
-      guildId: String(task.guildId || ""),
-      guild,
-      channel,
-      content: promptText,
-      createdTimestamp: syntheticTimestamp,
-      author: {
-        id: requesterUserId,
-        username: requesterName,
-        bot: false
-      },
-      member: {
-        displayName: requesterName
-      },
-      mentions: { users: new Map(), repliedUser: null },
-      reference: task.triggerMessageId
-        ? { messageId: task.triggerMessageId }
-        : null,
-      referencedMessage: null,
-      attachments: new Map()
-    };
-
-    const queued = this.enqueueReplyJob({
-      source,
-      message: syntheticMessage,
-      forceRespond
-    });
-    this.store.logAction({
-      kind: queued ? "text_runtime" : "bot_error",
-      guildId: String(task.guildId || ""),
-      channelId: String(task.channelId || ""),
-      userId: requesterUserId,
-      content: queued ? "code_task_synthetic_delivery_queued" : "code_task_synthetic_delivery_queue_rejected",
-      metadata: {
-        taskId: task.id,
-        sessionId: task.sessionId,
-        source,
-        forceRespond: Boolean(forceRespond),
-        syntheticMessageId: syntheticId
-      }
-    });
-    return queued;
-  }
-
   async acknowledgeTextCancellation({
     message,
     settings,
@@ -1583,20 +1322,11 @@ export class ClankerBot {
         browserScopeKey,
         "User requested cancellation via text"
       );
-      const codeTaskScopeKey = buildCodeTaskScopeKey({
-        guildId: message.guildId,
-        channelId: message.channelId
-      });
-      const cancelledBackgroundCodeTaskCount = this.backgroundTaskRunner.cancelByScope(
-        codeTaskScopeKey,
-        "User requested cancellation via text"
-      );
       const cancelledQueuedReplyCount = this.clearQueuedReplies(message.channelId);
       if (
         cancelledReplyCount > 0 ||
         cancelledQueuedReplyCount > 0 ||
-        browserCancelled ||
-        cancelledBackgroundCodeTaskCount > 0
+        browserCancelled
       ) {
         await this.acknowledgeTextCancellation({
           message,

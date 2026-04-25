@@ -1,5 +1,3 @@
-import type { CodeAgentWorkspaceLease } from "./codeAgentWorkspace.ts";
-
 export type CodeAgentSwarmRuntimeConfig = {
   enabled: boolean;
   serverName: string;
@@ -7,17 +5,6 @@ export type CodeAgentSwarmRuntimeConfig = {
   args: string[];
   dbPath: string;
   appendCoordinationPrompt: boolean;
-};
-
-export type CodeAgentSwarmSessionConfig = {
-  serverName: string;
-  scope: string;
-  fileRoot: string;
-  label: string;
-  env: Record<string, string>;
-  codexConfigOverrides: string[];
-  claudeMcpConfig: string;
-  firstTurnPreamble: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -37,14 +24,6 @@ function normalizeServerName(value: unknown, fallback = "swarm") {
 function normalizeStringArray(value: unknown) {
   if (!Array.isArray(value)) return [];
   return value.map((item) => String(item || "").trim()).filter(Boolean);
-}
-
-function tomlLiteralString(value: string) {
-  return `'${String(value || "").replace(/'/g, "''")}'`;
-}
-
-function tomlLiteralArray(values: string[]) {
-  return `[${values.map((value) => tomlLiteralString(value)).join(", ")}]`;
 }
 
 function normalizeSwarmRoleToken(role?: string | null) {
@@ -108,75 +87,7 @@ export function resolveCodeAgentSwarmRuntimeConfig(rawValue: unknown): CodeAgent
   };
 }
 
-export function buildCodeAgentSwarmSessionConfig({
-  runtime,
-  workspace,
-  provider,
-  role,
-  thread,
-  user
-}: {
-  runtime: CodeAgentSwarmRuntimeConfig | null;
-  workspace: CodeAgentWorkspaceLease;
-  provider: "claude-code" | "codex-cli";
-  role?: string | null;
-  thread?: string | null;
-  user?: string | null;
-}): CodeAgentSwarmSessionConfig | null {
-  if (!runtime?.enabled) return null;
-  if (!runtime.command) {
-    throw new Error("Code-agent swarm is enabled, but agentStack.runtimeConfig.devTeam.swarm.command is empty.");
-  }
-
-  const label = buildSwarmLabel({ provider, role, thread, user });
-  const env = runtime.dbPath
-    ? {
-        SWARM_DB_PATH: runtime.dbPath
-      }
-    : {};
-  const registerPayload = {
-    directory: workspace.cwd,
-    scope: workspace.repoRoot,
-    file_root: workspace.canonicalCwd,
-    label
-  };
-  const workspaceSummary =
-    workspace.mode === "shared_checkout"
-      ? "This session is running in the shared checkout. Register this live repo path before using other swarm tools so locks, annotations, and task file references point at the same workspace other local agents can see."
-      : "This session is running inside a disposable git worktree. Register against the canonical repo paths before using other swarm tools so locks, annotations, and task file references stay stable across worktrees.";
-  const firstTurnPreamble = runtime.appendCoordinationPrompt
-    ? [
-        `Swarm coordination is available through the MCP server \`${runtime.serverName}\`.`,
-        workspaceSummary,
-        "Use the swarm register tool with this payload:",
-        `\`\`\`json\n${JSON.stringify(registerPayload, null, 2)}\n\`\`\``,
-        "After registration, normal relative paths from your current working directory are valid for swarm file tools. When choosing collaborators, inspect swarm instance labels for machine-readable tokens like `role:planner`, `role:reviewer`, or `role:implementer`. If a session has no `role:` token, treat it as a generalist. Use swarm messages/tasks when collaboration is useful, lock files before editing, unlock them when finished, and annotate important findings or hazards when they would help other agents."
-      ].join("\n\n")
-    : "";
-
-  return {
-    serverName: runtime.serverName,
-    scope: workspace.repoRoot,
-    fileRoot: workspace.canonicalCwd,
-    label,
-    env,
-    codexConfigOverrides: [
-      `mcp_servers.${runtime.serverName}.command=${tomlLiteralString(runtime.command)}`,
-      `mcp_servers.${runtime.serverName}.args=${tomlLiteralArray(runtime.args)}`
-    ],
-    claudeMcpConfig: JSON.stringify({
-      [runtime.serverName]: {
-        type: "stdio",
-        command: runtime.command,
-        args: runtime.args,
-        env
-      }
-    }),
-    firstTurnPreamble
-  };
-}
-
-export function applyCodeAgentFirstTurnPreamble(input: string, preamble?: string | null) {
+export function applySwarmLauncherFirstTurnPreamble(input: string, preamble?: string | null) {
   const normalizedInput = String(input || "").trim();
   const normalizedPreamble = String(preamble || "").trim();
   if (!normalizedPreamble) return normalizedInput;
@@ -184,22 +95,28 @@ export function applyCodeAgentFirstTurnPreamble(input: string, preamble?: string
   return `${normalizedPreamble}\n\nTask:\n${normalizedInput}`;
 }
 
+export type SwarmLauncherWorkerMode = "one_shot" | "inbox_loop";
+
 /**
  * Behavioral-only preamble for swarm-launcher workers. Their instance row is
  * already reserved with `adopted=0` and the worker's swarm-mcp child auto-
- * adopts via `SWARM_MCP_INSTANCE_ID` on boot — no `register` call needed. The
- * preamble describes the coordination contract (claim → work → update_task)
- * and the cooperative file-locking norms, no provisioning instructions.
+ * adopts via `SWARM_MCP_INSTANCE_ID` on boot — no `register` call needed.
  *
- * Phase 6 deletes the older `buildCodeAgentSwarmSessionConfig.firstTurnPreamble`
- * (with-register variant) once the in-process session path is gone.
+ * Aligned with the worker contract at docs/architecture/swarm-worker-contract.md:
+ * - usage/cost telemetry travels as a sibling `annotate(kind="usage")` call,
+ *   not as `update_task.metadata`. The task waiter reads from the `context`
+ *   table, not from task metadata.
+ * - workerMode toggles §2a one-shot vs inbox-loop semantics. Default one-shot.
+ *
  */
 export function buildSwarmLauncherFirstTurnPreamble({
   serverName = "swarm",
-  taskId
+  taskId,
+  workerMode = "one_shot"
 }: {
   serverName?: string;
   taskId?: string | null;
+  workerMode?: SwarmLauncherWorkerMode;
 } = {}): string {
   const lines: string[] = [
     `You are running as a swarm peer. Your identity has been reserved and your swarm-mcp server (\`${serverName}\`) auto-adopted you on boot — do not call \`register\`.`,
@@ -215,9 +132,21 @@ export function buildSwarmLauncherFirstTurnPreamble({
     lines.push("- Read the task below and execute it directly.");
   }
   lines.push(
-    "- When complete, call `update_task` on your assigned task with status=\"done\" and a `result` field containing the final output text. Include `metadata: { usage: { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens }, costUsd }` so Clanky can attribute cost.",
-    "- On unrecoverable error, call `update_task` with status=\"failed\" and a clear error message.",
+    "- When complete, call `update_task` on your assigned task with status=\"done\" and a `result` field containing the final user-facing output text.",
+    "- Report cost/usage as a sibling annotation on the same task: `annotate(file=<task_id>, kind=\"usage\", content=JSON.stringify({ inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd }))`. Do not pack usage into `update_task.metadata` — Clanky reads it from the annotation.",
+    "- On unrecoverable error, call `update_task` with status=\"failed\" and a clear error message in `result`.",
     "- Other peers in this scope are visible via `list_instances`. Use `lock_file` before editing shared files, `unlock_file` when done, and `annotate` hazards or progress notes that would help collaborators."
   );
+
+  if (workerMode === "inbox_loop") {
+    lines.push(
+      "",
+      "Inbox-loop mode:",
+      "- After `update_task(done)`, do not exit. Poll your inbox via `wait_for_activity` and `list_messages`.",
+      "- Treat each `send_message` you receive as a follow-up instruction. Claim or create the appropriate follow-up task, execute, and report again with `update_task` + `annotate(kind=\"usage\")`.",
+      "- Exit when you receive an explicit termination message in your inbox or when your idle timeout elapses."
+    );
+  }
+
   return lines.join("\n");
 }

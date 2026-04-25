@@ -37,6 +37,8 @@ import {
   getReplyGenerationSettings,
   getResolvedOrchestratorBinding,
   getResolvedVoiceGenerationBinding,
+  isDevTaskEnabled,
+  isDevTaskUserAllowed,
   isMinecraftEnabled,
   getVoiceConversationPolicy,
   getVoiceSoundboardSettings,
@@ -98,6 +100,27 @@ const MAX_LEADING_REPLY_ADDRESSING_BUFFER_CHARS = 160;
 const STREAM_WATCH_STREAMING_MIN_SENTENCES = 3;
 const STREAM_WATCH_STREAMING_EAGER_FIRST_CHUNK_CHARS = 120;
 const STREAM_WATCH_STREAMING_MAX_BUFFER_CHARS = 420;
+const VOICE_MEDIA_TOOL_NAMES = new Set([
+  "music_search",
+  "music_play",
+  "video_search",
+  "video_play",
+  "music_queue_add",
+  "music_queue_next",
+  "media_stop",
+  "media_pause",
+  "media_resume",
+  "media_reply_handoff",
+  "media_skip",
+  "media_now_playing",
+  "stream_visualizer",
+  "stop_video_share"
+]);
+const VOICE_BROWSER_SHARE_TOOL_NAMES = new Set(["share_browser_session"]);
+const VOICE_MEDIA_TOOL_CUE_RE =
+  /\b(play|playing|song|music|track|album|artist|queue|queued|skip|pause|paused|resume|stop|stopped|youtube|video|soundcloud|visualizer|soundboard|listen|watch)\b|\b(now playing|what'?s playing|put on|throw on|pull up)\b/i;
+const VOICE_BROWSER_SHARE_TOOL_CUE_RE = /\b(browser|webpage|website|page|tab|share|show|go live|screen)\b/i;
+const VOICE_LEAVE_TOOL_CUE_RE = /\b(leave|disconnect|hop out|drop out|drop from|exit vc|get out|go away)\b/i;
 
 type SessionDurableContextCategory = "fact" | "plan" | "preference" | "relationship";
 type GeneratedVoiceAddressing = {
@@ -113,6 +136,104 @@ function appendUniqueStrings(target: string[], values: unknown[]) {
     if (!normalized || target.includes(normalized)) continue;
     target.push(normalized);
   }
+}
+
+function musicContextHasActiveState(musicContext: unknown): boolean {
+  if (!musicContext || typeof musicContext !== "object" || Array.isArray(musicContext)) return false;
+  const row = musicContext as Record<string, unknown>;
+  const playbackState = String(row.playbackState || "").trim().toLowerCase();
+  return Boolean(
+    playbackState === "playing" ||
+      playbackState === "paused" ||
+      playbackState === "stopped" ||
+      row.currentTrack ||
+      row.lastTrack ||
+      Number(row.queueLength) > 0 ||
+      row.lastAction ||
+      row.lastQuery
+  );
+}
+
+function shouldExposeVoiceMediaTools({
+  transcript,
+  musicContext,
+  musicDisambiguation
+}: {
+  transcript: string;
+  musicContext: unknown;
+  musicDisambiguation: unknown;
+}): boolean {
+  if (musicContextHasActiveState(musicContext)) return true;
+  if (musicDisambiguation && typeof musicDisambiguation === "object") {
+    const active = (musicDisambiguation as Record<string, unknown>).active;
+    if (active !== false) return true;
+  }
+  return VOICE_MEDIA_TOOL_CUE_RE.test(String(transcript || ""));
+}
+
+function shouldExposeVoiceBrowserShareTools({
+  transcript,
+  browserBrowseAvailable
+}: {
+  transcript: string;
+  browserBrowseAvailable: boolean;
+}): boolean {
+  if (!browserBrowseAvailable) return false;
+  return VOICE_BROWSER_SHARE_TOOL_CUE_RE.test(String(transcript || ""));
+}
+
+function shouldExposeVoiceLeaveTool({
+  transcript,
+  sessionTiming
+}: {
+  transcript: string;
+  sessionTiming: unknown;
+}): boolean {
+  if (VOICE_LEAVE_TOOL_CUE_RE.test(String(transcript || ""))) return true;
+  return Boolean(
+    sessionTiming &&
+      typeof sessionTiming === "object" &&
+      !Array.isArray(sessionTiming) &&
+      (sessionTiming as Record<string, unknown>).timeoutWarningActive
+  );
+}
+
+function filterVoiceReplyToolsForTurn<T extends { name?: string }>(
+  tools: T[],
+  {
+    transcript,
+    musicContext,
+    musicDisambiguation,
+    sessionTiming,
+    browserBrowseAvailable
+  }: {
+    transcript: string;
+    musicContext: unknown;
+    musicDisambiguation: unknown;
+    sessionTiming: unknown;
+    browserBrowseAvailable: boolean;
+  }
+): T[] {
+  const mediaToolsExposed = shouldExposeVoiceMediaTools({
+    transcript,
+    musicContext,
+    musicDisambiguation
+  });
+  const browserShareToolsExposed = shouldExposeVoiceBrowserShareTools({
+    transcript,
+    browserBrowseAvailable
+  });
+  const leaveToolExposed = shouldExposeVoiceLeaveTool({ transcript, sessionTiming });
+
+  return tools.filter((tool) => {
+    const name = String(tool?.name || "").trim();
+    if (!name) return false;
+    if (name === "join_voice_channel") return false;
+    if (name === "leave_voice_channel") return leaveToolExposed;
+    if (VOICE_MEDIA_TOOL_NAMES.has(name)) return mediaToolsExposed;
+    if (VOICE_BROWSER_SHARE_TOOL_NAMES.has(name)) return browserShareToolsExposed;
+    return true;
+  });
 }
 
 function isVoiceMemoryContextSession(value: unknown): value is VoiceMemoryContextSessionLike {
@@ -1231,6 +1352,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   const minecraftSessionHint = getMinecraftSessionPromptHint(activeMinecraftSession);
 
   const systemPrompt = buildVoiceSystemPrompt(settings);
+  let selectedVoiceToolNamesForPrompt: string[] | null = null;
   const buildVoiceUserPrompt = ({
     webSearchContext = webSearch,
     allowWebSearch = allowWebSearchToolCall,
@@ -1280,6 +1402,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       allowSoundboardToolCall,
       allowInlineSoundboardDirectives: allowSoundboardToolCall,
       allowVoiceToolCalls: allowVoiceTools,
+      availableToolNames: selectedVoiceToolNamesForPrompt,
       musicContext,
       musicDisambiguation,
       hasDirectVisionFrame: Boolean(streamWatchLatestFrame?.dataBase64),
@@ -1369,23 +1492,39 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       }
     });
 
-    const codeAgentRuntimeAvailable = typeof runtime.runModelRequestedCodeTask === "function";
-    const voiceReplyTools = buildReplyToolSet(settings as Record<string, unknown>, {
+    const swarmRuntimeAvailable = Boolean(runtime.swarmPeerManager && runtime.swarmReservationKeeper);
+    const swarmToolsRuntimeAvailable = Boolean(
+      swarmRuntimeAvailable &&
+      isDevTaskEnabled(settings) &&
+      isDevTaskUserAllowed(settings, userId)
+    );
+    const voiceReplyToolCandidates = buildReplyToolSet(settings as Record<string, unknown>, {
       webSearchAvailable: allowWebSearchToolCall && webSearchAvailableNow,
       webScrapeAvailable: allowWebSearchToolCall && webSearchAvailableNow,
       browserBrowseAvailable: allowBrowserBrowseToolCall && browserBrowseAvailableNow,
       memoryAvailable: allowMemoryToolCalls,
       imageLookupAvailable: false,
+      videoContextAvailable: false,
       screenShareAvailable: allowScreenShareToolCall,
       screenShareSnapshotAvailable: Boolean(
         activeVoiceSession?.streamWatch?.active &&
         String(activeVoiceSession?.streamWatch?.latestFrameDataBase64 || "").trim()
       ),
       soundboardAvailable: allowSoundboardToolCall,
-      codeAgentAvailable: codeAgentRuntimeAvailable,
+      swarmToolsAvailable: swarmToolsRuntimeAvailable,
       voiceToolsAvailable: Boolean(voiceToolCallbacks),
       minecraftAvailable: minecraftToolAvailable
     });
+    const voiceReplyTools = filterVoiceReplyToolsForTurn(voiceReplyToolCandidates, {
+      transcript: incomingTranscript,
+      musicContext,
+      musicDisambiguation,
+      sessionTiming,
+      browserBrowseAvailable: allowBrowserBrowseToolCall && browserBrowseAvailableNow
+    });
+    selectedVoiceToolNamesForPrompt = voiceReplyTools
+      .map((tool) => String(tool?.name || "").trim())
+      .filter(Boolean);
     const voiceToolRuntime: ReplyToolRuntime = {
       search: {
         searchAndRead: async ({ settings: toolSettings, query, trace, signal: toolSignal }) =>
@@ -1460,37 +1599,16 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       voiceSessionControl: {
         requestLeaveVoiceChannel: async () => ({ ok: true })
       },
-      codeAgent: runtime.runModelRequestedCodeTask ? {
-        runTask: async ({ settings: toolSettings, task, role, cwd, guildId, channelId, userId, source, signal: toolSignal }) =>
-          await runtime.runModelRequestedCodeTask({
-            settings: toolSettings,
-            task,
-            role,
-            cwd,
-            guildId,
-            channelId,
-            userId,
-            source,
-            signal: toolSignal
-          })
-      } : undefined,
       memory: runtime.memory,
       store: runtime.store,
-      subAgentSessions,
-      backgroundCodeTasks: runtime.dispatchBackgroundCodeTask
-        ? {
-            dispatch: (args) => runtime.dispatchBackgroundCodeTask!(args),
-            getTask: runtime.backgroundTaskRunner
-              ? (taskId) => runtime.backgroundTaskRunner!.getTask(taskId)
-              : () => null,
-            queueFollowup: runtime.backgroundTaskRunner
-              ? (taskId, input) => runtime.backgroundTaskRunner!.queueFollowup(taskId, input)
-              : () => false,
-            cancel: runtime.backgroundTaskRunner
-              ? (taskId, reason) => runtime.backgroundTaskRunner!.cancel(taskId, reason)
-              : () => false
+      swarm:
+        runtime.swarmPeerManager && runtime.swarmReservationKeeper
+          ? {
+              peerManager: runtime.swarmPeerManager,
+              reservationKeeper: runtime.swarmReservationKeeper
           }
-        : undefined,
+          : undefined,
+      subAgentSessions,
       voiceSessionManager: runtime.voiceSessionManager || undefined,
       voiceSession: voiceToolCallbacks || undefined
     };

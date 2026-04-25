@@ -22,8 +22,8 @@ beforeEach(() => {
   dbPath = path.join(tempDir, "swarm.db");
   workspaceDir = path.join(tempDir, "workspace");
   mkdirSync(workspaceDir, { recursive: true });
-  // provisionCodeAgentWorkspace calls `git rev-parse --show-toplevel`.
-  // Make the workspace a real git repo so shared_checkout mode succeeds.
+  // resolveCodeAgentWorkspace calls `git rev-parse --show-toplevel`.
+  // Make the workspace a real git repo so checkout resolution succeeds.
   spawnSync("git", ["init", "--quiet"], { cwd: workspaceDir });
   bootstrapSwarmTestSchema(dbPath);
   keeper = new SwarmReservationKeeper({ dbPath, heartbeatIntervalMs: 60_000 });

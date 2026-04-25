@@ -1,8 +1,10 @@
 import { afterEach, test } from "bun:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { openSwarmDbConnection } from "./swarmDbConnection.ts";
 import { ClankySwarmPeerManager } from "./swarmPeerManager.ts";
 import { ensureClankySwarmPeerSchema } from "./swarmPeer.ts";
@@ -73,6 +75,54 @@ function getInstanceRow(dbPath: string, id: string) {
   }
 }
 
+function getRegistrationParityRow(dbPath: string, id: string) {
+  const db = openSwarmDbConnection(dbPath);
+  try {
+    return db
+      .query("SELECT scope, directory, root, file_root, pid, label, adopted FROM instances WHERE id = ?")
+      .get(id) as {
+      scope: string;
+      directory: string;
+      root: string;
+      file_root: string;
+      pid: number;
+      label: string | null;
+      adopted: number;
+    } | null;
+  } finally {
+    db.close();
+  }
+}
+
+function registerWithSwarmMcpRegistry(fixture: ReturnType<typeof makeFixture>, label: string) {
+  const registryUrl = pathToFileURL(path.resolve(import.meta.dir, "../../../swarm-mcp/src/registry.ts")).href;
+  const script = `
+    const { register } = await import(${JSON.stringify(registryUrl)});
+    const instance = register(
+      process.env.CLANKY_PARITY_REPO_ROOT,
+      process.env.CLANKY_PARITY_LABEL,
+      process.env.CLANKY_PARITY_SCOPE,
+      process.env.CLANKY_PARITY_FILE_ROOT
+    );
+    console.log(JSON.stringify(instance));
+  `;
+  const result = spawnSync(process.execPath, ["-e", script], {
+    env: {
+      ...process.env,
+      SWARM_DB_PATH: fixture.dbPath,
+      CLANKY_PARITY_REPO_ROOT: fixture.repoRoot,
+      CLANKY_PARITY_FILE_ROOT: fixture.fileRoot,
+      CLANKY_PARITY_SCOPE: fixture.repoRoot,
+      CLANKY_PARITY_LABEL: label
+    },
+    encoding: "utf8"
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const line = result.stdout.trim().split(/\n/).at(-1);
+  assert.ok(line, "swarm-mcp registry helper did not print an instance.");
+  return JSON.parse(line) as { id: string };
+}
+
 test("peer registers, heartbeats, and deregisters cleanly", async () => {
   const fixture = makeFixture();
   const manager = track(new ClankySwarmPeerManager({ dbPath: fixture.dbPath, heartbeatIntervalMs: 50 }));
@@ -95,6 +145,41 @@ test("peer registers, heartbeats, and deregisters cleanly", async () => {
 
   manager.shutdown();
   assert.equal(getInstanceRow(fixture.dbPath, peer.instanceId), null);
+});
+
+test("peer registration row matches swarm-mcp register semantics", () => {
+  const fixture = makeFixture();
+  const label = "origin:clanky role:planner thread:dm user:anon";
+  const swarmMcpPeer = registerWithSwarmMcpRegistry(fixture, label);
+
+  const manager = track(new ClankySwarmPeerManager({ dbPath: fixture.dbPath }));
+  const clankyPeer = manager.ensurePeer(fixture.repoRoot, fixture.repoRoot, fixture.fileRoot);
+
+  const swarmMcpRow = getRegistrationParityRow(fixture.dbPath, swarmMcpPeer.id);
+  const clankyRow = getRegistrationParityRow(fixture.dbPath, clankyPeer.instanceId);
+  assert.ok(swarmMcpRow, "swarm-mcp registry row should exist.");
+  assert.ok(clankyRow, "clanky peer registry row should exist.");
+
+  assert.deepEqual(
+    {
+      scope: clankyRow.scope,
+      directory: clankyRow.directory,
+      root: clankyRow.root,
+      file_root: clankyRow.file_root,
+      label: clankyRow.label,
+      adopted: clankyRow.adopted
+    },
+    {
+      scope: swarmMcpRow.scope,
+      directory: swarmMcpRow.directory,
+      root: swarmMcpRow.root,
+      file_root: swarmMcpRow.file_root,
+      label: swarmMcpRow.label,
+      adopted: swarmMcpRow.adopted
+    }
+  );
+  assert.equal(clankyRow.pid, process.pid);
+  assert.ok(swarmMcpRow.pid > 0);
 });
 
 test("messages, tasks, annotations, and activity stay isolated by scope", async () => {

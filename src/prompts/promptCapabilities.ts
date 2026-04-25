@@ -45,7 +45,25 @@ const TEXT_TOOL_SUMMARIES: Record<string, string> = {
   memory_search: "Look up durable memory facts (speaker, guild, self, lore).",
   memory_write: "Store long-lived useful facts or standing guidance, never secrets or chatter. Write from your own perspective (use 'me'/'my', not your name).",
   image_lookup: "Find a previously shared image from message history by ref or description.",
-  code_task: "Run, follow up on, check status of, or cancel a coding task. Use action=followup with a session_id to steer a running background task.",
+  spawn_code_worker: "Spawn a swarm-backed coding worker and get task/worker IDs for follow-up coordination.",
+  request_task: "Create a swarm task in the current repo scope.",
+  get_task: "Read the current status and result for a swarm task.",
+  list_tasks: "List swarm tasks in the current repo scope.",
+  update_task: "Update or cancel a swarm task.",
+  claim_task: "Claim an open swarm task as Clanky's planner peer.",
+  send_message: "Send a direct swarm message to a peer.",
+  broadcast: "Broadcast a swarm message to all peers in scope.",
+  wait_for_activity: "Wait for swarm task, message, or peer activity.",
+  annotate: "Post progress or coordination notes for a file or task.",
+  lock_file: "Lock a file before editing in a multi-worker coding task.",
+  unlock_file: "Release a file lock held by Clanky's planner peer.",
+  check_file: "Inspect swarm locks and annotations for a file.",
+  list_instances: "List active swarm peers in the current repo scope.",
+  whoami: "Return Clanky's current swarm planner peer identity.",
+  kv_get: "Read from the swarm scoped key-value store.",
+  kv_set: "Write to the swarm scoped key-value store.",
+  kv_delete: "Delete from the swarm scoped key-value store.",
+  kv_list: "List swarm scoped key-value entries.",
   minecraft_task: "Hand off Minecraft intent or relevant context to your embodied in-world self; use action=status when you need current world state.",
   join_voice_channel: "Join the requesting user's current voice channel.",
   leave_voice_channel: "Leave the voice channel.",
@@ -86,7 +104,7 @@ function buildToolSummaryBlock(
     .filter(Boolean) as string[];
 
   if (!lines.length) return [];
-  return ["Available tools:", ...lines];
+  return ["Tool capability reference:", ...lines];
 }
 
 // ---------------------------------------------------------------------------
@@ -307,7 +325,7 @@ export function buildTextCapabilitiesDocs(
       "music_play", "music_search", "music_queue_add", "music_queue_next",
       "video_play", "video_search",
       "media_stop", "media_pause", "media_resume", "media_skip", "media_now_playing",
-      "media_reply_handoff", "play_soundboard", "note_context"
+      "media_reply_handoff", "stream_visualizer", "play_soundboard", "note_context"
     );
   }
   if (flags.voiceEnabled && flags.browserEnabled) availableToolNames.push("share_browser_session");

@@ -96,7 +96,7 @@ Recommended classes:
 Examples:
 
 - `web_search`, `web_scrape`, `music_*` -> usually `community`
-- `code_task`, richer async orchestration, private reminders -> usually `assistant`
+- `spawn_code_worker`, swarm code orchestration, private reminders -> usually `assistant`
 - future iPhone/mac node tools -> `owner`
 - permission changes, runtime resets, dangerous approvals -> `operator`
 

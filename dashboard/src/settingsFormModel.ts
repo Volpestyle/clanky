@@ -4,7 +4,6 @@ import {
   type Settings,
   type SettingsInput
 } from "../../src/settings/settingsSchema.ts";
-import { normalizeCodeAgentWorkspaceModeSetting } from "../../src/settings/codeAgentWorkspaceMode.ts";
 import {
   buildDashboardSettingsEnvelope,
   isDashboardSettingsEnvelope,
@@ -294,7 +293,6 @@ function buildSettingsFormView(settings: unknown) {
         Number(devTeam.claudeCode?.maxBufferBytes || 0)
       ),
       defaultCwd: String(devTeam.codexCli?.defaultCwd || devTeam.claudeCode?.defaultCwd || ""),
-      workspaceMode: String(devTeam.workspace?.mode || "auto"),
       maxTasksPerHour: Math.max(
         Number(devTeam.codexCli?.maxTasksPerHour || 0),
         Number(devTeam.claudeCode?.maxTasksPerHour || 0)
@@ -302,26 +300,6 @@ function buildSettingsFormView(settings: unknown) {
       maxParallelTasks: Math.max(
         Number(devTeam.codexCli?.maxParallelTasks || 0),
         Number(devTeam.claudeCode?.maxParallelTasks || 0)
-      ),
-      asyncDispatchEnabled: Boolean(
-        devTeam.codexCli?.asyncDispatch?.enabled ||
-        devTeam.claudeCode?.asyncDispatch?.enabled
-      ),
-      asyncDispatchThresholdMs: Math.max(
-        Number(devTeam.codexCli?.asyncDispatch?.thresholdMs || 0),
-        Number(devTeam.claudeCode?.asyncDispatch?.thresholdMs || 0)
-      ),
-      asyncProgressReportsEnabled: Boolean(
-        devTeam.codexCli?.asyncDispatch?.progressReports?.enabled ||
-        devTeam.claudeCode?.asyncDispatch?.progressReports?.enabled
-      ),
-      asyncProgressIntervalMs: Math.max(
-        Number(devTeam.codexCli?.asyncDispatch?.progressReports?.intervalMs || 0),
-        Number(devTeam.claudeCode?.asyncDispatch?.progressReports?.intervalMs || 0)
-      ),
-      asyncMaxReportsPerTask: Math.max(
-        Number(devTeam.codexCli?.asyncDispatch?.progressReports?.maxReportsPerTask || 0),
-        Number(devTeam.claudeCode?.asyncDispatch?.progressReports?.maxReportsPerTask || 0)
       ),
       allowedUserIds: devPermissions.allowedUserIds,
       roleDesign: String(resolvedStack?.devTeam?.roles?.design || ""),
@@ -333,7 +311,6 @@ function buildSettingsFormView(settings: unknown) {
         claudeCode: { ...devTeam.claudeCode }
       },
       nonWorkerRuntimeConfig: {
-        workspace: { ...valueOr(devTeam.workspace, d.agentStack.runtimeConfig.devTeam.workspace) },
         swarm: { ...valueOr(devTeam.swarm, d.agentStack.runtimeConfig.devTeam.swarm) }
       }
     },
@@ -586,19 +563,8 @@ export function settingsToForm(settings: unknown) {
     codeAgentTimeoutMs: resolved.codeAgent.timeoutMs ?? defaults.codeAgent.timeoutMs,
     codeAgentMaxBufferBytes: resolved.codeAgent.maxBufferBytes ?? defaults.codeAgent.maxBufferBytes,
     codeAgentDefaultCwd: resolved.codeAgent.defaultCwd ?? defaults.codeAgent.defaultCwd,
-    codeAgentWorkspaceMode: resolved.codeAgent.workspaceMode ?? defaults.codeAgent.workspaceMode,
     codeAgentMaxTasksPerHour: resolved.codeAgent.maxTasksPerHour ?? defaults.codeAgent.maxTasksPerHour,
     codeAgentMaxParallelTasks: resolved.codeAgent.maxParallelTasks ?? defaults.codeAgent.maxParallelTasks,
-    codeAgentAsyncDispatchEnabled:
-      resolved.codeAgent.asyncDispatchEnabled ?? defaults.codeAgent.asyncDispatchEnabled,
-    codeAgentAsyncDispatchThresholdMs:
-      resolved.codeAgent.asyncDispatchThresholdMs ?? defaults.codeAgent.asyncDispatchThresholdMs,
-    codeAgentAsyncProgressReportsEnabled:
-      resolved.codeAgent.asyncProgressReportsEnabled ?? defaults.codeAgent.asyncProgressReportsEnabled,
-    codeAgentAsyncProgressIntervalMs:
-      resolved.codeAgent.asyncProgressIntervalMs ?? defaults.codeAgent.asyncProgressIntervalMs,
-    codeAgentAsyncMaxReportsPerTask:
-      resolved.codeAgent.asyncMaxReportsPerTask ?? defaults.codeAgent.asyncMaxReportsPerTask,
     codeAgentAllowedUserIds: formatLineList(resolved.codeAgent.allowedUserIds ?? defaults.codeAgent.allowedUserIds),
     codeAgentRoleDesign: String(resolved.codeAgent.roleDesign ?? "claude_code"),
     codeAgentRoleImplementation: String(resolved.codeAgent.roleImplementation ?? "claude_code"),
@@ -1250,44 +1216,6 @@ export function getSettingsValidationError(form: SettingsForm): SettingsFormVali
       max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxBufferBytes.max
     }),
     validateNumericField({
-      enabled: Boolean(
-        form.stackAdvancedOverridesEnabled &&
-        form.codeAgentEnabled &&
-        form.codeAgentAsyncDispatchEnabled
-      ),
-      sectionId: "sec-code-agent",
-      label: "Async dispatch threshold (ms)",
-      value: form.codeAgentAsyncDispatchThresholdMs,
-      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchThresholdMs.min,
-      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchThresholdMs.max
-    }),
-    validateNumericField({
-      enabled: Boolean(
-        form.stackAdvancedOverridesEnabled &&
-        form.codeAgentEnabled &&
-        form.codeAgentAsyncDispatchEnabled &&
-        form.codeAgentAsyncProgressReportsEnabled
-      ),
-      sectionId: "sec-code-agent",
-      label: "Async progress interval (ms)",
-      value: form.codeAgentAsyncProgressIntervalMs,
-      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchProgressIntervalMs.min,
-      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchProgressIntervalMs.max
-    }),
-    validateNumericField({
-      enabled: Boolean(
-        form.stackAdvancedOverridesEnabled &&
-        form.codeAgentEnabled &&
-        form.codeAgentAsyncDispatchEnabled &&
-        form.codeAgentAsyncProgressReportsEnabled
-      ),
-      sectionId: "sec-code-agent",
-      label: "Async max progress reports per task",
-      value: form.codeAgentAsyncMaxReportsPerTask,
-      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.min,
-      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.max
-    }),
-    validateNumericField({
       enabled: Boolean(form.minecraftEnabled),
       sectionId: "sec-minecraft",
       label: "Minecraft narration eagerness",
@@ -1316,13 +1244,12 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
   const rawCodeAgentNonWorkerRuntimeConfig: Record<string, unknown> = isRecordLike(form.codeAgentNonWorkerRuntimeConfig)
     ? form.codeAgentNonWorkerRuntimeConfig
     : {};
+  const codeAgentSwarmRuntimeConfig = isRecordLike(rawCodeAgentNonWorkerRuntimeConfig.swarm)
+    ? { swarm: rawCodeAgentNonWorkerRuntimeConfig.swarm }
+    : {};
   const rawMinecraftRuntimeConfig: Record<string, unknown> = isRecordLike(form.minecraftRuntimeConfig)
     ? form.minecraftRuntimeConfig
     : {};
-  const normalizedCodeAgentWorkspaceMode = normalizeCodeAgentWorkspaceModeSetting(
-    form.codeAgentWorkspaceMode,
-    DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.workspace.mode
-  );
   const preservedCodeAgentWorkers = {
     codexCli: rawCodeAgentWorkerConfigs.codexCli,
     claudeCode: rawCodeAgentWorkerConfigs.claudeCode
@@ -1352,26 +1279,6 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
     maxParallelTasks: Math.max(
       Number(preservedCodeAgentWorkers.codexCli.maxParallelTasks || 0),
       Number(preservedCodeAgentWorkers.claudeCode.maxParallelTasks || 0)
-    ),
-    asyncDispatchEnabled: Boolean(
-      preservedCodeAgentWorkers.codexCli.asyncDispatch?.enabled ||
-      preservedCodeAgentWorkers.claudeCode.asyncDispatch?.enabled
-    ),
-    asyncDispatchThresholdMs: Math.max(
-      Number(preservedCodeAgentWorkers.codexCli.asyncDispatch?.thresholdMs || 0),
-      Number(preservedCodeAgentWorkers.claudeCode.asyncDispatch?.thresholdMs || 0)
-    ),
-    asyncProgressReportsEnabled: Boolean(
-      preservedCodeAgentWorkers.codexCli.asyncDispatch?.progressReports?.enabled ||
-      preservedCodeAgentWorkers.claudeCode.asyncDispatch?.progressReports?.enabled
-    ),
-    asyncProgressIntervalMs: Math.max(
-      Number(preservedCodeAgentWorkers.codexCli.asyncDispatch?.progressReports?.intervalMs || 0),
-      Number(preservedCodeAgentWorkers.claudeCode.asyncDispatch?.progressReports?.intervalMs || 0)
-    ),
-    asyncMaxReportsPerTask: Math.max(
-      Number(preservedCodeAgentWorkers.codexCli.asyncDispatch?.progressReports?.maxReportsPerTask || 0),
-      Number(preservedCodeAgentWorkers.claudeCode.asyncDispatch?.progressReports?.maxReportsPerTask || 0)
     )
   };
   const codeAgentSharedOverrides = {
@@ -1380,12 +1287,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
     maxBufferBytes: Number(form.codeAgentMaxBufferBytes),
     defaultCwd: String(form.codeAgentDefaultCwd || "").trim(),
     maxTasksPerHour: Number(form.codeAgentMaxTasksPerHour),
-    maxParallelTasks: Number(form.codeAgentMaxParallelTasks),
-    asyncDispatchEnabled: Boolean(form.codeAgentAsyncDispatchEnabled),
-    asyncDispatchThresholdMs: Number(form.codeAgentAsyncDispatchThresholdMs),
-    asyncProgressReportsEnabled: Boolean(form.codeAgentAsyncProgressReportsEnabled),
-    asyncProgressIntervalMs: Number(form.codeAgentAsyncProgressIntervalMs),
-    asyncMaxReportsPerTask: Number(form.codeAgentAsyncMaxReportsPerTask)
+    maxParallelTasks: Number(form.codeAgentMaxParallelTasks)
   };
   const shouldOverrideSharedCodeAgentField = (
     field: keyof typeof preservedCodeAgentAggregate
@@ -1409,7 +1311,6 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
   }) => {
     const preserved = preservedCodeAgentWorkers[workerKey];
     return {
-      ...preserved,
       enabled,
       model: String(model || fallbackModel).trim(),
       maxTurns: shouldOverrideSharedCodeAgentField("maxTurns")
@@ -1429,39 +1330,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
         : Number(preserved.maxTasksPerHour ?? codeAgentSharedOverrides.maxTasksPerHour),
       maxParallelTasks: shouldOverrideSharedCodeAgentField("maxParallelTasks")
         ? codeAgentSharedOverrides.maxParallelTasks
-        : Number(preserved.maxParallelTasks ?? codeAgentSharedOverrides.maxParallelTasks),
-      asyncDispatch: {
-        enabled: shouldOverrideSharedCodeAgentField("asyncDispatchEnabled")
-          ? codeAgentSharedOverrides.asyncDispatchEnabled
-          : Boolean(
-              preserved.asyncDispatch?.enabled ?? codeAgentSharedOverrides.asyncDispatchEnabled
-            ),
-        thresholdMs: shouldOverrideSharedCodeAgentField("asyncDispatchThresholdMs")
-          ? codeAgentSharedOverrides.asyncDispatchThresholdMs
-          : Number(
-              preserved.asyncDispatch?.thresholdMs ?? codeAgentSharedOverrides.asyncDispatchThresholdMs
-            ),
-        progressReports: {
-          enabled: shouldOverrideSharedCodeAgentField("asyncProgressReportsEnabled")
-            ? codeAgentSharedOverrides.asyncProgressReportsEnabled
-            : Boolean(
-                preserved.asyncDispatch?.progressReports?.enabled ??
-                codeAgentSharedOverrides.asyncProgressReportsEnabled
-              ),
-          intervalMs: shouldOverrideSharedCodeAgentField("asyncProgressIntervalMs")
-            ? codeAgentSharedOverrides.asyncProgressIntervalMs
-            : Number(
-                preserved.asyncDispatch?.progressReports?.intervalMs ??
-                codeAgentSharedOverrides.asyncProgressIntervalMs
-              ),
-          maxReportsPerTask: shouldOverrideSharedCodeAgentField("asyncMaxReportsPerTask")
-            ? codeAgentSharedOverrides.asyncMaxReportsPerTask
-            : Number(
-                preserved.asyncDispatch?.progressReports?.maxReportsPerTask ??
-                codeAgentSharedOverrides.asyncMaxReportsPerTask
-              )
-        }
-      }
+        : Number(preserved.maxParallelTasks ?? codeAgentSharedOverrides.maxParallelTasks)
     };
   };
   const normalizeCodeAgentRole = (value: unknown): "claude_code" | "codex_cli" => {
@@ -1766,13 +1635,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
           }
         },
         devTeam: {
-          ...rawCodeAgentNonWorkerRuntimeConfig,
-          workspace: {
-            ...(isRecordLike(rawCodeAgentNonWorkerRuntimeConfig.workspace)
-              ? rawCodeAgentNonWorkerRuntimeConfig.workspace
-              : {}),
-            mode: normalizedCodeAgentWorkspaceMode
-          },
+          ...codeAgentSwarmRuntimeConfig,
           codexCli: buildCodeAgentWorkerConfig({
             workerKey: "codexCli",
             enabled: Boolean(form.codeAgentEnabled) && codeAgentUsesCodexCli,

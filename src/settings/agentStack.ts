@@ -792,6 +792,13 @@ export function isDevTaskEnabled(settings: unknown): boolean {
   return hasWorkers && Array.isArray(permissions.allowedUserIds) && permissions.allowedUserIds.length > 0;
 }
 
+export function isDevTaskUserAllowed(settings: unknown, userId: unknown): boolean {
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) return false;
+  const permissions = getDevTaskPermissions(settings);
+  return Array.isArray(permissions.allowedUserIds) && permissions.allowedUserIds.includes(normalizedUserId);
+}
+
 // ── Minecraft ───────────────────────────────────────────────────────────────
 
 export type MinecraftKnownIdentity = {

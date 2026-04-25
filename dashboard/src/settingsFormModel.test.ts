@@ -742,15 +742,12 @@ test("settingsFormModel round-trips codex cli code agent fields", () => {
   assert.equal(effectivePatch.agentStack.runtimeConfig.devTeam.codexCli.model, "gpt-5.4");
 });
 
-test("settingsFormModel preserves code-agent workspace mode and swarm runtime config", () => {
+test("settingsFormModel preserves code-worker swarm runtime config", () => {
   const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {
       advancedOverridesEnabled: true,
       runtimeConfig: {
         devTeam: {
-          workspace: {
-            mode: "shared_checkout"
-          },
           swarm: {
             enabled: true,
             serverName: "swarm-bus",
@@ -768,10 +765,8 @@ test("settingsFormModel preserves code-agent workspace mode and swarm runtime co
     }
   })));
 
-  assert.equal(form.codeAgentWorkspaceMode, "shared_checkout");
-
   const { patch, effectivePatch } = serializeForm(form);
-  assert.equal(patch.agentStack.runtimeConfig.devTeam.workspace.mode, "shared_checkout");
+  assert.equal((patch.agentStack.runtimeConfig.devTeam as Record<string, unknown>).workspace, undefined);
   assert.deepEqual(effectivePatch.agentStack.runtimeConfig.devTeam.swarm, {
     enabled: true,
     serverName: "swarm-bus",
