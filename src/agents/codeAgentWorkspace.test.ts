@@ -41,7 +41,6 @@ test("resolveCodeAgentWorkspace resolves the shared checkout repo context", () =
   try {
     const workspace = resolveCodeAgentWorkspace({ cwd: fixture.nestedCwd });
 
-    assert.equal(workspace.mode, "shared_checkout");
     assert.equal(workspace.repoRoot, fixture.repoRoot);
     assert.equal(workspace.cwd, fixture.nestedCwd);
     assert.equal(workspace.canonicalCwd, fixture.nestedCwd);

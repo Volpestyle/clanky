@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { buildClaudeCodeAgentArgs } from "../llm/llmClaudeCode.ts";
+import { buildCodexCliCodeAgentArgs } from "../llm/llmCodexCli.ts";
 import {
   buildSwarmLabel,
   buildSwarmLauncherFirstTurnPreamble,
@@ -151,25 +153,24 @@ function buildHarnessInvocation({
     };
   }
   if (opts.harness === "claude-code") {
-    const args = [
-      "-p", prompt,
-      "--model", String(opts.model || "sonnet"),
-      "--max-turns", String(Math.max(1, Math.min(10000, Math.floor(opts.maxTurns)))),
-      "--output-format", "stream-json",
-      "--verbose",
-      "--no-session-persistence"
-    ];
-    if (mcpConfigJson) {
-      args.push("--strict-mcp-config", "--mcp-config", mcpConfigJson);
-    }
-    return { command: "claude", args };
+    return {
+      command: "claude",
+      args: buildClaudeCodeAgentArgs({
+        model: opts.model,
+        prompt,
+        maxTurns: opts.maxTurns,
+        mcpConfig: mcpConfigJson
+      })
+    };
   }
-  const args = ["exec", "-m", String(opts.model || "gpt-5.4")];
-  for (const override of codexOverrides) {
-    args.push("-c", override);
-  }
-  args.push(prompt);
-  return { command: "codex", args };
+  return {
+    command: "codex",
+    args: buildCodexCliCodeAgentArgs({
+      model: opts.model,
+      instruction: prompt,
+      configOverrides: codexOverrides
+    })
+  };
 }
 
 function buildClaudeMcpConfigJson(swarm: CodeAgentSwarmRuntimeConfig): string {

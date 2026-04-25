@@ -11,7 +11,7 @@ The code-orchestration tool surface is available in:
 - voice realtime followups via the swarm activity bridge
 - `/clank code` slash subcommand (`src/bot.ts`, `handleClankCodeSlashCommand`)
 
-It is mounted only for callers in `permissions.devTasks.allowedUserIds` on dev-allowed channels. For everyone else, neither `spawn_code_worker` nor the swarm-mcp tool surface appears in the tool list at all. The old `code_task` tool is not registered.
+It is mounted only for callers in `permissions.devTasks.allowedUserIds` on dev-allowed channels. For everyone else, neither `spawn_code_worker` nor the swarm-mcp tool surface appears in the tool list at all.
 
 Core runtime files:
 
@@ -227,12 +227,5 @@ devTeam: {
   }
 }
 ```
-
-Removed in the swarm-launcher redesign:
-
-- `devTeam.workspace.mode` — Clanky never creates worktrees; workers run in the operator's checkout.
-- `devTeam.swarm.enabled` / `serverName` / `command` / `args` / `appendCoordinationPrompt` — swarm is the substrate (not opt-in), and the worker first-turn preamble is built from `buildCodeAgentFirstTurnPreamble` rather than a settings string.
-- `devTeam.<worker>.asyncDispatch.*` — dispatch is always async via swarm; progress comes from worker `annotate` calls.
-- `devTeam.execution.mode` — there is no longer a procedural `code_task` to switch out from. The new tool surface is the only path.
 
 The selected worker order is controlled through `agentStack.overrides.devTeam.codingWorkers` when advanced overrides are enabled. The dashboard's `Auto` option leaves worker ordering on the preset/default path instead of pinning a specific worker override.

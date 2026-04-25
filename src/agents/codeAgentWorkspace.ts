@@ -3,7 +3,6 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 export type CodeAgentWorkspace = {
-  readonly mode: "shared_checkout";
   readonly repoRoot: string;
   readonly cwd: string;
   readonly canonicalCwd: string;
@@ -56,7 +55,6 @@ export function resolveCodeAgentWorkspace({ cwd }: ResolveCodeAgentWorkspaceOpti
   }
 
   return {
-    mode: "shared_checkout",
     repoRoot,
     cwd: resolvedRequestedCwd,
     canonicalCwd: resolvedRequestedCwd,
