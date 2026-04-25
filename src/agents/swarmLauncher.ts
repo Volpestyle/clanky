@@ -187,31 +187,41 @@ function clankyRepoRoot(): string {
 }
 
 /**
- * Load the role-specific swarm-mcp `SKILL.md` from the vendored submodule.
- * Returns the file body (frontmatter included) or "" when the submodule is
- * not initialized / the skill folder is missing. Mapping:
+ * Load the swarm-mcp coordination skill bundled with the vendored submodule.
  *
- *   planner                         → swarm-planner/SKILL.md
- *   implementer                     → swarm-implementer/SKILL.md
- *   reviewer | researcher | other   → swarm-mcp/SKILL.md  (general)
+ * Layout (post-`Simplify swarm MCP skill installation` upstream commit): one
+ * Claude Code skill at `skills/swarm-mcp/` with `SKILL.md` as the entry plus
+ * role-specific guidance under `references/<role>.md`. We inline both:
+ *
+ *   - `SKILL.md` — coordination contract, role-routing summary, when to use
+ *     swarm tools at all
+ *   - `references/<role>.md` — deep guidance for the worker's role
+ *     (planner / implementer / reviewer / researcher)
+ *
+ * Returns the concatenated body, or "" when the submodule is not initialized.
  */
 export function loadRoleCoordinationSkill(role: SwarmPeerRole): string {
-  const skillFolder =
-    role === "planner" ? "swarm-planner" :
-    role === "implementer" ? "swarm-implementer" :
-    "swarm-mcp";
-  const skillPath = path.resolve(
-    clankyRepoRoot(),
-    "mcp-servers/swarm-mcp/skills",
-    skillFolder,
-    "SKILL.md"
-  );
-  if (!existsSync(skillPath)) return "";
+  const skillRoot = path.resolve(clankyRepoRoot(), "mcp-servers/swarm-mcp/skills/swarm-mcp");
+  const skillEntry = path.join(skillRoot, "SKILL.md");
+  if (!existsSync(skillEntry)) return "";
+
+  const sections: string[] = [];
   try {
-    return readFileSync(skillPath, "utf8");
+    sections.push(readFileSync(skillEntry, "utf8"));
   } catch {
     return "";
   }
+
+  const roleReference = path.join(skillRoot, "references", `${role}.md`);
+  if (existsSync(roleReference)) {
+    try {
+      sections.push(`# Role reference: ${role}\n\n${readFileSync(roleReference, "utf8")}`);
+    } catch {
+      // ignore — we still have the SKILL.md entry
+    }
+  }
+
+  return sections.join("\n\n---\n\n");
 }
 
 /**

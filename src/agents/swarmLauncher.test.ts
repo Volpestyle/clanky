@@ -396,17 +396,12 @@ test("buildClaudeMcpConfigJson falls back to project's swarm entry when clanky's
   }
 });
 
-test("loadRoleCoordinationSkill loads role-specific SKILL.md from the submodule", () => {
-  const planner = loadRoleCoordinationSkill("planner");
-  expect(planner).toMatch(/name:\s*swarm-planner/);
-
-  const implementer = loadRoleCoordinationSkill("implementer");
-  expect(implementer).toMatch(/name:\s*swarm-implementer/);
-
-  const reviewer = loadRoleCoordinationSkill("reviewer");
-  // reviewer/researcher fall back to the general swarm-mcp skill.
-  expect(reviewer).toMatch(/name:\s*swarm-mcp/);
-
-  const researcher = loadRoleCoordinationSkill("researcher");
-  expect(researcher).toMatch(/name:\s*swarm-mcp/);
+test("loadRoleCoordinationSkill concatenates SKILL.md entry and role reference", () => {
+  for (const role of ["planner", "implementer", "reviewer", "researcher"] as const) {
+    const skill = loadRoleCoordinationSkill(role);
+    // SKILL.md frontmatter is always present.
+    expect(skill).toMatch(/name:\s*swarm-mcp/);
+    // The role-specific reference is appended under a header.
+    expect(skill).toMatch(new RegExp(`# Role reference: ${role}`));
+  }
 });
