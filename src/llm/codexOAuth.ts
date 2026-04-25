@@ -343,22 +343,34 @@ export function normalizeCodexResponsesBodyForOAuth(body: Record<string, unknown
     delete normalized.temperature;
     delete normalized.top_p;
 
-    if (isRecord(normalized.reasoning)) {
-      const reasoning = { ...normalized.reasoning };
-      const effort = String(reasoning.effort || "")
-        .trim()
-        .toLowerCase();
-      if (effort === "minimal") {
-        reasoning.effort = "low";
-      }
-      normalized.reasoning = reasoning;
+    const reasoning: Record<string, unknown> = isRecord(normalized.reasoning)
+      ? { ...normalized.reasoning }
+      : {};
+    const effort = String(reasoning.effort || "")
+      .trim()
+      .toLowerCase();
+    if (effort === "minimal") {
+      reasoning.effort = "low";
     }
+    if (reasoning.summary === undefined) {
+      reasoning.summary = "auto";
+    }
+    normalized.reasoning = reasoning;
 
     const topLevelReasoningEffort = String(normalized.reasoning_effort || "")
       .trim()
       .toLowerCase();
     if (topLevelReasoningEffort === "minimal") {
       normalized.reasoning_effort = "low";
+    }
+
+    const existingInclude = Array.isArray(normalized.include)
+      ? (normalized.include as unknown[]).map((value) => String(value || "").trim()).filter(Boolean)
+      : [];
+    if (!existingInclude.includes("reasoning.encrypted_content")) {
+      normalized.include = [...existingInclude, "reasoning.encrypted_content"];
+    } else {
+      normalized.include = existingInclude;
     }
   }
   delete normalized.max_output_tokens;

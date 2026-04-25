@@ -561,10 +561,13 @@ export async function callOpenAiResponsesStreaming(
   const stream = streamResponse;
   let finalResponse: OpenAiResponsesResponseLike | null = null;
   let streamErrorMessage = "";
+  let accumulatedDeltaText = "";
 
   for await (const event of stream) {
     if (event.type === "response.output_text.delta") {
-      callbacks.onTextDelta(String(event.delta || ""));
+      const delta = String(event.delta || "");
+      accumulatedDeltaText += delta;
+      callbacks.onTextDelta(delta);
       continue;
     }
     if (event.type === "response.function_call_arguments.delta") {
@@ -583,8 +586,12 @@ export async function callOpenAiResponsesStreaming(
     throw new Error(streamErrorMessage || "OpenAI response stream ended without a completed response.");
   }
 
+  // The chatgpt.com codex backend (OAuth path) streams text via output_text.delta
+  // events but ships an empty output[] in the final response.completed event, so
+  // fall back to the accumulated deltas when output[] yields no text.
+  const extractedText = extractOpenAiResponseText(finalResponse);
   const normalized = {
-    text: extractOpenAiResponseText(finalResponse),
+    text: extractedText || accumulatedDeltaText.trim(),
     toolCalls: extractOpenAiToolCalls(finalResponse),
     rawContent: finalResponse.output || null,
     stopReason: String(finalResponse.status || "").trim() || undefined,

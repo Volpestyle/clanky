@@ -2,7 +2,7 @@ export const PROVIDER_MODEL_FALLBACKS = {
   openai: ["gpt-5.4-mini", "gpt-5-mini", "gpt-5"],
   anthropic: ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-sonnet-4-0"],
   "claude-oauth": ["claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-0", "claude-haiku-4-5"],
-  "openai-oauth": ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex", "gpt-5.1-codex-mini"],
+  "openai-oauth": ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex", "gpt-5.1-codex-mini"],
   codex_cli_session: ["gpt-5.4", "gpt-5.3-codex", "gpt-5-codex"],
   xai: ["grok-3-mini-latest"],
   codex: ["gpt-5.4", "gpt-5-codex"],
