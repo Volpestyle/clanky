@@ -15,7 +15,7 @@ import { join, resolve } from "node:path";
 const SKILL_NAME = "swarm-mcp";
 const CLAUDE_REL_TARGET = "../../.agents/skills/swarm-mcp";
 
-export type SkillInstallScope = "global" | "workspace";
+export type SkillInstallScope = "user" | "workspace";
 
 export type SkillInstallRequest = {
   scope: SkillInstallScope;
@@ -100,7 +100,7 @@ export function installSwarmMcpSkill(
     };
   }
 
-  if (request.scope === "global") {
+  if (request.scope === "user") {
     const skillsDir = join(homedir(), ".claude", "skills");
     mkdirSync(skillsDir, { recursive: true });
     const linkPath = join(skillsDir, SKILL_NAME);

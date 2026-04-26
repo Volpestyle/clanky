@@ -36,8 +36,8 @@ export function attachMetricsRoutes(app: DashboardApp, deps: MetricsRouteDeps) {
   app.post("/api/swarm-mcp-skill-install", async (c) => {
     const body = await readDashboardBody(c);
     const scope = String(body.scope || "").trim() as SkillInstallScope;
-    if (scope !== "global" && scope !== "workspace") {
-      return c.json({ ok: false, reason: "scope must be 'global' or 'workspace'" }, 400);
+    if (scope !== "user" && scope !== "workspace") {
+      return c.json({ ok: false, reason: "scope must be 'user' or 'workspace'" }, 400);
     }
     const workspaceRoot = scope === "workspace" ? String(body.workspaceRoot || "").trim() : undefined;
     const settings = store.getSettings();

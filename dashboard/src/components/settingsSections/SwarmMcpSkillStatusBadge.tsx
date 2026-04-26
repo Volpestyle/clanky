@@ -2,15 +2,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 
 type SwarmMcpSkillCheck = {
-  scope: "global" | "workspace";
+  scope: "user" | "workspace";
   workspaceRoot: string | null;
-  path: string;
+  resolvedAt: string | null;
+  searched: string[];
   installed: boolean;
 };
 
 type SwarmMcpSkillStatus = {
   available: boolean;
-  globalInstalled: boolean;
+  userInstalled: boolean;
   checks: SwarmMcpSkillCheck[];
   missingWorkspaceRoots: string[];
   hint?: string;
@@ -24,23 +25,25 @@ type SkillInstallResult = {
   skipped: string[];
 };
 
+type InstallScope = "user" | "workspace";
+
 /**
  * Prompt above the code-agent enable toggle that shows whether the bundled
  * `swarm-mcp` skill is discoverable by Claude Code subagents. Renders before
  * the toggle (always visible) so operators install the skill before flipping
- * the code agent on. When missing, surfaces a one-click install button (uses
- * the vendored submodule at mcp-servers/swarm-mcp) and copy-pasteable symlink
- * commands.
+ * the code agent on.
  *
- * Skill install state only changes when an operator installs the skill (via
- * the button or `ln -s`), so this checks once on mount. A "Recheck" button
- * lets operators re-poll after a manual install.
+ * Discovery walks up each allowed workspace root to home, mirroring Claude
+ * Code's own skill resolution. When missing, the prompt presents a scope
+ * choice — install for the current user or for a specific workspace — backed
+ * by one-click symlink creation against the vendored mcp-servers/swarm-mcp
+ * submodule. Manual symlink commands are shown as a fallback.
  */
 export function SwarmMcpSkillStatusBadge() {
   const [status, setStatus] = useState<SwarmMcpSkillStatus | null>(null);
   const [error, setError] = useState<string>("");
   const [rechecking, setRechecking] = useState(false);
-  const [installing, setInstalling] = useState<null | "global" | string>(null);
+  const [installing, setInstalling] = useState<string | null>(null);
   const [installMessage, setInstallMessage] = useState<string>("");
   const cancelledRef = useRef(false);
 
@@ -63,8 +66,8 @@ export function SwarmMcpSkillStatusBadge() {
   }, []);
 
   const install = useCallback(
-    async (scope: "global" | "workspace", workspaceRoot?: string) => {
-      const key = scope === "global" ? "global" : workspaceRoot || "";
+    async (scope: InstallScope, workspaceRoot?: string) => {
+      const key = scope === "user" ? "user" : workspaceRoot || "";
       setInstalling(key);
       setInstallMessage("");
       try {
@@ -135,55 +138,73 @@ export function SwarmMcpSkillStatusBadge() {
   }
 
   if (status?.available) {
-    const installedPaths = status.checks
-      .filter((check) => check.installed)
-      .map((check) => check.path)
+    const resolved = status.checks
+      .filter((check) => check.installed && check.resolvedAt)
+      .map((check) => check.resolvedAt as string)
       .join(", ");
+    const summary = status.userInstalled
+      ? "user-level"
+      : "via workspace ancestor";
     return (
       <div
         className="swarm-server-status-badge swarm-server-status-badge--ok"
-        title={installedPaths}
+        title={resolved}
       >
-        ✓ swarm-mcp skill installed{status.globalInstalled ? " (global)" : ""}
+        ✓ swarm-mcp skill installed ({summary})
       </div>
     );
   }
 
   const installButtonStyle: React.CSSProperties = {
-    marginRight: 6,
-    padding: "3px 10px",
+    padding: "4px 10px",
     fontSize: "0.74rem",
     fontWeight: 600,
     cursor: "pointer"
   };
 
+  const missingRoots = status?.missingWorkspaceRoots || [];
+  const userBusy = installing === "user";
+
   return (
     <div className="swarm-server-status-badge swarm-server-status-badge--warn">
-      <strong>✗ swarm-mcp skill not installed.</strong> Install it before enabling
-      the code agent so spawned Claude Code subagents pick up the bundled
-      coordination playbook.
+      <strong>✗ swarm-mcp skill not installed.</strong> Not found at any allowed
+      workspace root, its ancestors, or the user-level skills directory. Install
+      it before enabling the code agent so spawned Claude Code subagents pick up
+      the bundled coordination playbook.
       {recheckButton}
-      <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
-        <button
-          type="button"
-          onClick={() => void install("global")}
-          disabled={installing !== null}
-          style={installButtonStyle}
-        >
-          {installing === "global" ? "Installing…" : "Install globally (~/.claude/skills/swarm-mcp)"}
-        </button>
-        {status?.missingWorkspaceRoots?.map((root) => (
+      <div style={{ marginTop: 10 }}>
+        <p style={{ fontSize: "0.76rem", margin: "0 0 6px", fontWeight: 600 }}>
+          Choose install scope:
+        </p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
           <button
-            key={root}
             type="button"
-            onClick={() => void install("workspace", root)}
+            onClick={() => void install("user")}
             disabled={installing !== null}
             style={installButtonStyle}
-            title={`Install symlinks at ${root}/.claude/skills and ${root}/.agents/skills`}
+            title="Symlink into ~/.claude/skills/swarm-mcp — applies to every project on this machine"
           >
-            {installing === root ? "Installing…" : `Install in ${root}`}
+            {userBusy ? "Installing…" : "User-level (~/.claude/skills/swarm-mcp)"}
           </button>
-        ))}
+          {missingRoots.map((root) => {
+            const busy = installing === root;
+            return (
+              <button
+                key={root}
+                type="button"
+                onClick={() => void install("workspace", root)}
+                disabled={installing !== null}
+                style={installButtonStyle}
+                title={`Symlink into ${root}/.claude/skills and ${root}/.agents/skills — applies only to that workspace`}
+              >
+                {busy ? "Installing…" : `Workspace (${root})`}
+              </button>
+            );
+          })}
+        </div>
+        <p style={{ fontSize: "0.72rem", marginTop: 6, opacity: 0.8 }}>
+          User-level applies everywhere. Workspace-level only applies to one root and its descendants.
+        </p>
       </div>
       {installMessage && (
         <p style={{ fontSize: "0.74rem", marginTop: 6 }}>{installMessage}</p>
@@ -203,11 +224,11 @@ export function SwarmMcpSkillStatusBadge() {
             wordBreak: "break-all"
           }}
         >
-{`# Global (one-time, applies to all projects)
+{`# User-level (one-time, applies to every project)
 mkdir -p ~/.claude/skills
 ln -s /absolute/path/to/swarm-mcp/skills/swarm-mcp ~/.claude/skills/swarm-mcp
 
-# Or per-workspace, run inside each allowed coding workspace root:
+# Or workspace-level, run inside the workspace root:
 mkdir -p .agents/skills .claude/skills
 ln -s /absolute/path/to/swarm-mcp/skills/swarm-mcp .agents/skills/swarm-mcp
 ln -s ../../.agents/skills/swarm-mcp .claude/skills/swarm-mcp`}
