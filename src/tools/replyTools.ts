@@ -1487,6 +1487,7 @@ async function executeSwarmTool(
       case "wait_for_activity": {
         const timeoutMs = Math.max(1000, Math.floor(Number(input?.timeout_ms) || 300_000));
         if (taskId) {
+          runtime.swarm?.activityBridge?.forgetTask?.(taskId);
           const result = await waitForTaskCompletion(peer, taskId, {
             dbPath: resolveSwarmDbPath(resolveCodeAgentConfig(context.settings).swarm?.dbPath || ""),
             timeoutMs,
