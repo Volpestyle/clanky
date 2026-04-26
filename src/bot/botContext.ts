@@ -198,6 +198,7 @@ type ReplyPipelineRuntimeMember =
   | "voiceSessionManager"
   | "swarmPeerManager"
   | "swarmReservationKeeper"
+  | "swarmActivityBridge"
   | "getReactionEmojiOptions"
   | "getEmojiHints"
   | "maybeHandleStructuredAutomationIntent"
@@ -410,5 +411,6 @@ export interface VoiceReplyRuntime extends BotContext {
   buildBrowserBrowseContext: StripFirstArg<BuildBrowserBrowseContextFn>;
   swarmPeerManager?: import("../agents/swarmPeerManager.ts").ClankySwarmPeerManager;
   swarmReservationKeeper?: import("../agents/swarmReservationKeeper.ts").SwarmReservationKeeper;
+  swarmActivityBridge?: import("../agents/swarmActivityBridge.ts").SwarmActivityBridge;
   buildSubAgentSessionsRuntime?: StripFirstArg<BuildSubAgentSessionsRuntimeFn>;
 }

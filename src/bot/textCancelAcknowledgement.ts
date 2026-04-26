@@ -42,7 +42,8 @@ export async function generateTextCancelAcknowledgement({
   cancelText = "",
   cancelledReplyCount = 0,
   cancelledQueuedReplyCount = 0,
-  browserCancelled = false
+  browserCancelled = false,
+  swarmCancelledCount = 0
 }: {
   llm?: TextCancelAcknowledgementLlm | null;
   settings: Record<string, unknown> | null;
@@ -55,6 +56,7 @@ export async function generateTextCancelAcknowledgement({
   cancelledReplyCount?: number;
   cancelledQueuedReplyCount?: number;
   browserCancelled?: boolean;
+  swarmCancelledCount?: number;
 }) {
   if (typeof llm?.generate !== "function") return null;
 
@@ -65,7 +67,8 @@ export async function generateTextCancelAcknowledgement({
   const interruptedSystems = [
     cancelledReplyCount > 0 ? `${Math.max(0, Math.floor(cancelledReplyCount))} active text ${cancelledReplyCount === 1 ? "reply" : "replies"}` : null,
     cancelledQueuedReplyCount > 0 ? `${Math.max(0, Math.floor(cancelledQueuedReplyCount))} queued ${cancelledQueuedReplyCount === 1 ? "reply" : "replies"}` : null,
-    browserCancelled ? "an active browser task" : null
+    browserCancelled ? "an active browser task" : null,
+    swarmCancelledCount > 0 ? `${Math.max(0, Math.floor(swarmCancelledCount))} running code ${swarmCancelledCount === 1 ? "task" : "tasks"}` : null
   ].filter(Boolean);
 
   try {

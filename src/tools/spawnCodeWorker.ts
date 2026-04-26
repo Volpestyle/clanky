@@ -29,6 +29,7 @@ export type SpawnCodeWorkerArgs = {
   guildId: string | null;
   channelId: string | null;
   userId: string | null;
+  triggerMessageId?: string | null;
   source?: string | null;
   signal?: AbortSignal;
 };
@@ -39,6 +40,26 @@ export type SpawnCodeWorkerDeps = {
   };
   peerManager: ClankySwarmPeerManager;
   reservationKeeper: SwarmReservationKeeper;
+  spawnPeer?: typeof spawnPeer;
+  /**
+   * Optional activity bridge. When supplied, the spawned task is registered
+   * so progress / terminal events route back to the originating Discord
+   * surface across reply turns. The orchestrator sees swarm tools directly,
+   * but the bridge is what fires async followups when a worker finishes
+   * after the orchestrator's turn has ended.
+   */
+  activityBridge?: {
+    trackTask: (peer: ClankyPeer, context: {
+      taskId: string;
+      workerId: string;
+      scope: string;
+      guildId: string | null;
+      channelId: string | null;
+      userId: string | null;
+      triggerMessageId: string | null;
+      source: string;
+    }) => void;
+  };
 };
 
 export type SpawnCodeWorkerResult = {
@@ -73,6 +94,8 @@ type PreparedWorkerLaunch = {
 };
 
 const activeWorkersByTaskId = new Map<string, ActiveSpawnedWorker>();
+const ACTIVE_WORKER_TASK_POLL_INTERVAL_MS = 1000;
+const TERMINAL_TASK_STATUSES = new Set(["done", "failed", "cancelled"]);
 
 function normalizeHarness(value: unknown): SpawnCodeWorkerHarness | null {
   const normalized = String(value || "").trim().toLowerCase();
@@ -110,6 +133,10 @@ function activeWorkerCount(harness: SpawnCodeWorkerHarness) {
     if (worker.harness === harness) count++;
   }
   return count;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(1, ms)));
 }
 
 function selectedHarnessConfig(
@@ -160,13 +187,59 @@ function trackActiveWorker(worker: ActiveSpawnedWorker) {
   void worker.spawned.exited.finally(() => {
     activeWorkersByTaskId.delete(worker.taskId);
   });
+  void untrackWhenTaskTerminal(worker);
+}
+
+async function untrackWhenTaskTerminal(worker: ActiveSpawnedWorker): Promise<void> {
+  if (typeof worker.peer.getTask !== "function") return;
+  while (activeWorkersByTaskId.get(worker.taskId) === worker) {
+    try {
+      const task = await worker.peer.getTask(worker.taskId);
+      if (task && TERMINAL_TASK_STATUSES.has(task.status)) {
+        activeWorkersByTaskId.delete(worker.taskId);
+        return;
+      }
+    } catch {
+      // Keep the process-exit watcher as the fallback cleanup path.
+    }
+    await sleep(ACTIVE_WORKER_TASK_POLL_INTERVAL_MS);
+  }
+}
+
+function isAlreadyTerminalTaskError(error: unknown): boolean {
+  const message = String((error as Error)?.message || error);
+  return /\bis already (done|failed|cancelled)\b/i.test(message);
+}
+
+async function markWorkerTaskCancelled(worker: ActiveSpawnedWorker, reason: string): Promise<void> {
+  try {
+    await worker.peer.updateTask(worker.taskId, {
+      status: "cancelled",
+      result: reason
+    });
+  } catch (error) {
+    if (!isAlreadyTerminalTaskError(error)) throw error;
+  }
 }
 
 export async function cancelSpawnedWorkerForTask(taskId: string, reason = "Task cancelled"): Promise<boolean> {
   const worker = activeWorkersByTaskId.get(String(taskId || "").trim());
   if (!worker) return false;
-  await worker.spawned.cancel(reason);
-  activeWorkersByTaskId.delete(worker.taskId);
+
+  const normalizedReason = String(reason || "").trim() || "Task cancelled";
+  let taskUpdateError: unknown = null;
+  try {
+    await markWorkerTaskCancelled(worker, normalizedReason);
+  } catch (error) {
+    taskUpdateError = error;
+  }
+
+  try {
+    await worker.spawned.cancel(normalizedReason);
+  } finally {
+    activeWorkersByTaskId.delete(worker.taskId);
+  }
+  if (taskUpdateError) throw taskUpdateError;
   return true;
 }
 
@@ -214,7 +287,7 @@ export async function spawnCodeWorker(
 
   let spawned: SpawnedPeer | null = null;
   try {
-    spawned = await spawnPeer({
+    spawned = await (deps.spawnPeer ?? spawnPeer)({
       harness: launch.harness,
       cwd: launch.cwd,
       role: roleToSwarmPeerRole(role),
@@ -249,6 +322,18 @@ export async function spawnCodeWorker(
       peer,
       spawned
     });
+    if (deps.activityBridge) {
+      deps.activityBridge.trackTask(peer, {
+        taskId: swarmTask.id,
+        workerId: spawned.instanceId,
+        scope: launch.scope,
+        guildId: args.guildId || null,
+        channelId: args.channelId || null,
+        userId: args.userId || null,
+        triggerMessageId: args.triggerMessageId || null,
+        source: args.source || "reply_tool_spawn_code_worker"
+      });
+    }
     deps.store.logAction({
       kind: "code_agent_call",
       guildId: args.guildId || null,
@@ -262,6 +347,8 @@ export async function spawnCodeWorker(
         model: launch.model,
         taskId: swarmTask.id,
         instanceId: spawned.instanceId,
+        launchMode: spawned.launchMode,
+        ptyId: spawned.ptyId ?? null,
         executionMode: "swarm_launcher"
       }
     });

@@ -118,6 +118,217 @@ test("spawnPeer reserves, adopts, and exits cleanly with adopt_then_exit fixture
   expect((exitLog?.metadata as Record<string, unknown>)?.exitCode).toBe(0);
 });
 
+test("spawnPeer routes through swarm-server PTY when direct spawn is supported", async () => {
+  const requests: Record<string, unknown>[] = [];
+  const instanceId = "server-instance-1";
+  const ptyId = "pty-server-1";
+  let ptyClosed = false;
+  const swarmServerClient = {
+    socketPath: "/tmp/fake-swarm-server.sock",
+    supportsDirectHarnessSpawn: async () => true,
+    spawnPty: async (body: Record<string, unknown>) => {
+      requests.push(body);
+      const db = new Database(dbPath);
+      try {
+        db.run(
+          `INSERT INTO instances (id, scope, directory, root, file_root, pid, label, adopted)
+           VALUES (?, ?, ?, ?, ?, 0, ?, 1)`,
+          [instanceId, body.scope, body.cwd, workspaceDir, body.cwd, body.label]
+        );
+      } finally {
+        db.close();
+      }
+      return {
+        v: 1,
+        pty: {
+          id: ptyId,
+          command: body.harness as string,
+          cwd: body.cwd as string,
+          started_at: Date.now(),
+          exit_code: null,
+          bound_instance_id: instanceId,
+          cols: 120,
+          rows: 40,
+          lease: null
+        }
+      };
+    },
+    closePty: async () => {
+      ptyClosed = true;
+    },
+    fetchState: async () => ({
+      ptys: ptyClosed
+        ? []
+        : [{
+          id: ptyId,
+          command: "claude",
+          cwd: workspaceDir,
+          started_at: Date.now(),
+          exit_code: null,
+          bound_instance_id: instanceId,
+          cols: 120,
+          rows: 40,
+          lease: null
+        }]
+    })
+  };
+
+  const spawned = await spawnPeer({
+    harness: "claude-code",
+    cwd: workspaceDir,
+    role: "implementer",
+    initialPrompt: "implement something",
+    maxTurns: 5,
+    timeoutMs: 30_000,
+    maxBufferBytes: 1024 * 1024,
+    model: "sonnet",
+    trace: { channelId: "channel-1", userId: "user-1", source: "test" },
+    store: makeStore(),
+    swarm: makeSwarmConfig(),
+    reservationKeeper: keeper!,
+    adoptionPollIntervalMs: 25,
+    adoptionTimeoutMs: 5_000,
+    swarmServerClient
+  });
+
+  await spawned.adopted;
+  expect(spawned.launchMode).toBe("swarm_server_pty");
+  expect(spawned.instanceId).toBe(instanceId);
+  expect(spawned.ptyId).toBe(ptyId);
+  expect(spawned.child).toBeUndefined();
+  expect(readInstance(instanceId)?.adopted).toBe(1);
+
+  const request = requests[0];
+  expect(request?.harness).toBe("claude");
+  expect(request?.args).toContain("--model");
+  expect(request?.args).not.toContain("-p");
+  expect(request?.args).not.toContain("--output-format");
+  expect(String(request?.initial_input || "")).toContain("implement something");
+  expect(String(request?.initial_input || "")).toContain("\u001b[200~");
+  expect((request?.env as Record<string, string>)?.SWARM_DB_PATH).toBe(dbPath);
+
+  await spawned.cancel("test cancel");
+  await spawned.exited;
+  expect(ptyClosed).toBe(true);
+});
+
+test("spawnPeer falls back to direct child when swarm-server's supportsDirectHarnessSpawn returns false", async () => {
+  const requests: Record<string, unknown>[] = [];
+  const swarmServerClient = {
+    socketPath: "/tmp/fake-swarm-server.sock",
+    supportsDirectHarnessSpawn: async () => false,
+    spawnPty: async (body: Record<string, unknown>) => {
+      requests.push(body);
+      throw new Error("should not be called when capability check fails");
+    },
+    closePty: async () => {},
+    fetchState: async () => ({ ptys: [] })
+  };
+
+  const spawned = await spawnPeer({
+    harness: "claude-code",
+    cwd: workspaceDir,
+    role: "implementer",
+    initialPrompt: "fallback test",
+    maxTurns: 5,
+    timeoutMs: 30_000,
+    maxBufferBytes: 1024 * 1024,
+    model: "sonnet",
+    trace: { channelId: "channel-1", userId: "user-1", source: "test" },
+    store: makeStore(),
+    swarm: makeSwarmConfig(),
+    reservationKeeper: keeper!,
+    harnessOverride: makeFakeHarnessOverride(),
+    swarmServerClient,
+    adoptionPollIntervalMs: 25,
+    adoptionTimeoutMs: 5_000
+  });
+
+  expect(spawned.launchMode).toBe("direct_child");
+  expect(spawned.child).toBeDefined();
+  expect(spawned.ptyId).toBeUndefined();
+  expect(requests.length).toBe(0);
+  await spawned.adopted;
+  await spawned.exited;
+});
+
+test("spawnPeer falls back to direct child when swarm-server's spawnPty rejects", async () => {
+  const swarmServerClient = {
+    socketPath: "/tmp/fake-swarm-server.sock",
+    supportsDirectHarnessSpawn: async () => true,
+    spawnPty: async () => {
+      throw new Error("simulated 500 from swarm-server /pty");
+    },
+    closePty: async () => {},
+    fetchState: async () => ({ ptys: [] })
+  };
+
+  const spawned = await spawnPeer({
+    harness: "claude-code",
+    cwd: workspaceDir,
+    role: "implementer",
+    initialPrompt: "fallback test",
+    maxTurns: 5,
+    timeoutMs: 30_000,
+    maxBufferBytes: 1024 * 1024,
+    model: "sonnet",
+    trace: { channelId: "channel-1", userId: "user-1", source: "test" },
+    store: makeStore(),
+    swarm: makeSwarmConfig(),
+    reservationKeeper: keeper!,
+    harnessOverride: makeFakeHarnessOverride(),
+    swarmServerClient,
+    adoptionPollIntervalMs: 25,
+    adoptionTimeoutMs: 5_000
+  });
+
+  expect(spawned.launchMode).toBe("direct_child");
+  await spawned.adopted;
+  await spawned.exited;
+
+  const fallbackLog = logEntries.find((entry) => entry.kind === "swarm_server_spawn_fallback");
+  expect(fallbackLog).toBeDefined();
+  expect(String((fallbackLog?.metadata as Record<string, unknown>)?.reason || "")).toMatch(/simulated 500/);
+});
+
+test("spawnPeer falls back to direct child when swarm-server health probe times out", async () => {
+  const swarmServerClient = {
+    socketPath: "/tmp/fake-swarm-server.sock",
+    // Mimics the real client's behavior when /health hangs: returns false
+    // after its own internal timeout. From the launcher's perspective this
+    // is indistinguishable from "capabilities don't include args/env."
+    supportsDirectHarnessSpawn: async () => false,
+    spawnPty: async () => {
+      throw new Error("should not be called when health probe times out");
+    },
+    closePty: async () => {},
+    fetchState: async () => ({ ptys: [] })
+  };
+
+  const spawned = await spawnPeer({
+    harness: "claude-code",
+    cwd: workspaceDir,
+    role: "implementer",
+    initialPrompt: "fallback test",
+    maxTurns: 5,
+    timeoutMs: 30_000,
+    maxBufferBytes: 1024 * 1024,
+    model: "sonnet",
+    trace: { channelId: "channel-1", userId: "user-1", source: "test" },
+    store: makeStore(),
+    swarm: makeSwarmConfig(),
+    reservationKeeper: keeper!,
+    harnessOverride: makeFakeHarnessOverride(),
+    swarmServerClient,
+    adoptionPollIntervalMs: 25,
+    adoptionTimeoutMs: 5_000
+  });
+
+  expect(spawned.launchMode).toBe("direct_child");
+  await spawned.adopted;
+  await spawned.exited;
+});
+
 test("spawnPeer surfaces adoption timeout when worker explicitly never adopts", async () => {
   const previousBehavior = process.env.FAKE_WORKER_BEHAVIOR;
   const previousHang = process.env.FAKE_WORKER_HANG_MS;

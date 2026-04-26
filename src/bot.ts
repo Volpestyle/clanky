@@ -136,6 +136,11 @@ import {
   formatSwarmServerStatusLine,
   getSwarmServerStatus
 } from "./agents/swarmServerStatus.ts";
+import {
+  SwarmActivityBridge,
+  type CodeTaskDispatchContext,
+  type CodeTaskTerminalEvent
+} from "./agents/swarmActivityBridge.ts";
 import { waitForTaskCompletion } from "./agents/swarmTaskWaiter.ts";
 import { spawnCodeWorker } from "./tools/spawnCodeWorker.ts";
 import {
@@ -309,6 +314,7 @@ export class ClankerBot {
   subAgentSessions: SubAgentSessionManager;
   swarmPeerManager: ClankySwarmPeerManager;
   swarmReservationKeeper: SwarmReservationKeeper;
+  swarmActivityBridge: SwarmActivityBridge;
   imageCaptionCache: ImageCaptionCache;
   streamDiscovery: StreamDiscoveryState;
   private streamDiscoveryCleanup: (() => void) | null;
@@ -364,6 +370,29 @@ export class ClankerBot {
           kind: "bot_error",
           content: "swarm_reservation_keeper_error",
           metadata: { error: String(error instanceof Error ? error.message : error) }
+        });
+      }
+    });
+    this.swarmActivityBridge = new SwarmActivityBridge({
+      logAction: (entry) => this.store.logAction(entry),
+      onTerminal: (event) => this.deliverSwarmTaskTerminal(event),
+      onProgress: (event) => {
+        // Progress events go to the action log only — Discord channel spam is
+        // mitigated by the recommended cadence (≤1/30s) in the worker contract.
+        // Surfacing them as Discord messages can be added later if useful.
+        this.store.logAction({
+          kind: "swarm_task_progress",
+          guildId: event.context.guildId,
+          channelId: event.context.channelId,
+          userId: event.context.userId,
+          metadata: {
+            taskId: event.context.taskId,
+            workerId: event.context.workerId,
+            scope: event.context.scope,
+            summary: event.summary,
+            annotationId: event.annotationId,
+            source: event.context.source
+          }
         });
       }
     });
@@ -1029,6 +1058,7 @@ export class ClankerBot {
         console.warn("[ClankerBot] Failed to close browser sessions during shutdown:", error);
       }
     }
+    this.swarmActivityBridge.shutdown();
     this.swarmReservationKeeper.shutdown();
     this.swarmPeerManager.shutdown();
     await stopMinecraftMcpServer();
@@ -1252,7 +1282,8 @@ export class ClankerBot {
     cancelText,
     cancelledReplyCount = 0,
     cancelledQueuedReplyCount = 0,
-    browserCancelled = false
+    browserCancelled = false,
+    swarmCancelledCount = 0
   }) {
     const acknowledgement = await generateTextCancelAcknowledgement({
       llm: this.llm,
@@ -1265,7 +1296,8 @@ export class ClankerBot {
       cancelText,
       cancelledReplyCount,
       cancelledQueuedReplyCount,
-      browserCancelled
+      browserCancelled,
+      swarmCancelledCount
     });
 
     if (acknowledgement) {
@@ -1352,11 +1384,19 @@ export class ClankerBot {
         browserScopeKey,
         "User requested cancellation via text"
       );
+      const swarmCancelledCount = await this.cancelSwarmWorkersInScope(
+        {
+          guildId: message.guildId ? String(message.guildId) : null,
+          channelId: message.channelId ? String(message.channelId) : null
+        },
+        "User requested cancellation via text"
+      );
       const cancelledQueuedReplyCount = this.clearQueuedReplies(message.channelId);
       if (
         cancelledReplyCount > 0 ||
         cancelledQueuedReplyCount > 0 ||
-        browserCancelled
+        browserCancelled ||
+        swarmCancelledCount > 0
       ) {
         await this.acknowledgeTextCancellation({
           message,
@@ -1364,7 +1404,8 @@ export class ClankerBot {
           cancelText: text,
           cancelledReplyCount,
           cancelledQueuedReplyCount,
-          browserCancelled
+          browserCancelled,
+          swarmCancelledCount
         });
         return;
       }
@@ -1948,6 +1989,105 @@ export class ClankerBot {
     const sentMessages = this.store.countActionsSince("sent_message", since);
     const initiativePosts = this.store.countActionsSince("initiative_post", since);
     return sentReplies + sentMessages + initiativePosts < maxPerHour;
+  }
+
+  /**
+   * Cancel every swarm code-task this Clanky planner peer dispatched into the
+   * given scope (guildId + channelId). Used by the keyword cancel handlers
+   * (text and voice). Sends `update_task(cancelled)` for each in-flight task,
+   * which the activity bridge will translate into a `closePty` (path A) or
+   * `child.kill("SIGTERM")` (fallback) on the backing worker. Returns the
+   * count cancelled — callers use it to decide whether to acknowledge.
+   */
+  async cancelSwarmWorkersInScope(
+    filter: { guildId?: string | null; channelId?: string | null },
+    reason: string
+  ): Promise<number> {
+    const contexts = this.swarmActivityBridge.contextsForScope(filter);
+    if (contexts.length === 0) return 0;
+    let cancelled = 0;
+    for (const ctx of contexts) {
+      try {
+        const peer = this.swarmPeerManager.ensurePeer(ctx.scope, ctx.scope, ctx.scope);
+        await peer.updateTask(ctx.taskId, {
+          status: "cancelled",
+          result: reason
+        });
+        cancelled++;
+      } catch (error) {
+        this.store.logAction({
+          kind: "swarm_task_cancel_error",
+          guildId: ctx.guildId,
+          channelId: ctx.channelId,
+          userId: ctx.userId,
+          metadata: {
+            taskId: ctx.taskId,
+            scope: ctx.scope,
+            error: String((error as Error)?.message || error)
+          }
+        });
+      }
+    }
+    return cancelled;
+  }
+
+  /**
+   * Deliver a swarm code-task terminal event back to its originating Discord
+   * channel. Posts a single follow-up message with the result text (or a
+   * brief notice on failure/cancel). Always logs a structured action so
+   * dashboard/audit trails show the dispatch closing out, even when the
+   * channel is unreachable.
+   */
+  async deliverSwarmTaskTerminal(event: CodeTaskTerminalEvent): Promise<void> {
+    const { context, status, result } = event;
+    this.store.logAction({
+      kind: "swarm_task_result",
+      guildId: context.guildId,
+      channelId: context.channelId,
+      userId: context.userId,
+      metadata: {
+        taskId: context.taskId,
+        workerId: context.workerId,
+        scope: context.scope,
+        status,
+        source: context.source,
+        triggerMessageId: context.triggerMessageId,
+        resultLength: result.length
+      }
+    });
+    const channelId = String(context.channelId || "").trim();
+    if (!channelId) return;
+    try {
+      const channel = this.client.channels.cache.get(channelId);
+      if (!channel || typeof channel.send !== "function") return;
+      const header =
+        status === "done"
+          ? `Code task \`${context.taskId.slice(0, 8)}\` finished.`
+          : status === "failed"
+            ? `Code task \`${context.taskId.slice(0, 8)}\` failed.`
+            : `Code task \`${context.taskId.slice(0, 8)}\` cancelled.`;
+      const body = result || (status === "done" ? "_(no result text)_" : "_(no error message)_");
+      const truncated = body.length > 1800 ? `${body.slice(0, 1800)}…` : body;
+      const replyTarget = String(context.triggerMessageId || "").trim();
+      const payload: Record<string, unknown> = {
+        content: `${header}\n\n${truncated}`
+      };
+      if (replyTarget) {
+        payload.reply = { messageReference: replyTarget, failIfNotExists: false };
+      }
+      await channel.send(payload);
+    } catch (error) {
+      this.store.logAction({
+        kind: "swarm_task_delivery_error",
+        guildId: context.guildId,
+        channelId: context.channelId,
+        userId: context.userId,
+        metadata: {
+          taskId: context.taskId,
+          error: String((error as Error)?.message || error)
+        }
+      });
+    }
   }
 
   isNonPrivateReplyEligibleChannel(channel) {

@@ -463,6 +463,7 @@ export function buildReplyPipelineRuntime(
     voiceSessionManager: bot.voiceSessionManager,
     swarmPeerManager: bot.swarmPeerManager,
     swarmReservationKeeper: bot.swarmReservationKeeper,
+    swarmActivityBridge: bot.swarmActivityBridge,
     getReplyAddressSignal: (settings, message, recentMessages = []) =>
       resolveReplyAddressSignal(
         bot,
@@ -583,6 +584,7 @@ export function buildVoiceReplyRuntime(bot: ClankerBot): VoiceReplyRuntime {
       buildBrowserBrowseContext(budgetContext, settings),
     swarmPeerManager: bot.swarmPeerManager,
     swarmReservationKeeper: bot.swarmReservationKeeper,
+    swarmActivityBridge: bot.swarmActivityBridge,
     buildSubAgentSessionsRuntime: () => buildSubAgentSessionsRuntime(agentContext),
   };
 }

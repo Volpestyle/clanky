@@ -1,8 +1,14 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { buildClaudeCodeAgentArgs } from "../llm/llmClaudeCode.ts";
-import { buildCodexCliCodeAgentArgs } from "../llm/llmCodexCli.ts";
+import {
+  buildClaudeCodeAgentArgs,
+  buildClaudeCodeInteractiveAgentArgs
+} from "../llm/llmClaudeCode.ts";
+import {
+  buildCodexCliCodeAgentArgs,
+  buildCodexCliInteractiveAgentArgs
+} from "../llm/llmCodexCli.ts";
 import {
   buildSwarmLabel,
   buildSwarmLauncherFirstTurnPreamble,
@@ -17,6 +23,7 @@ import {
 import { resolveSwarmDbPath } from "./swarmDbConnection.ts";
 import { type SwarmReservationKeeper } from "./swarmReservationKeeper.ts";
 import { isAdopted } from "./swarmDb.ts";
+import { SwarmServerClient } from "./swarmServerClient.ts";
 
 /** Roles emitted in the swarm label and used by the worker preamble. */
 export type SwarmPeerRole = "planner" | "implementer" | "reviewer" | "researcher";
@@ -31,6 +38,11 @@ export type SwarmLauncherTrace = {
 export type SwarmLauncherStore = {
   logAction: (entry: Record<string, unknown>) => void;
 };
+
+type SwarmServerClientLike = Pick<
+  SwarmServerClient,
+  "socketPath" | "supportsDirectHarnessSpawn" | "spawnPty" | "closePty" | "fetchState"
+>;
 
 export type SpawnPeerOptions = {
   harness: "claude-code" | "codex-cli";
@@ -74,14 +86,18 @@ export type SpawnPeerOptions = {
   harnessOverride?: { command: string; args?: string[] };
   /** Optional AbortSignal used to cancel the launch (kills the child + cleans reservation). */
   signal?: AbortSignal;
+  /** Optional client override used by tests for the swarm-server PTY route. */
+  swarmServerClient?: SwarmServerClientLike;
 };
 
 export type SpawnedPeer = {
   instanceId: string;
+  ptyId?: string;
+  launchMode: "direct_child" | "swarm_server_pty";
   scope: string;
   fileRoot: string;
   workspace: CodeAgentWorkspace;
-  child: ChildProcess;
+  child?: ChildProcess;
   /** Resolves once swarm-mcp flips `adopted=1` on the reserved row. */
   adopted: Promise<void>;
   /** Resolves once the harness child exits, with its exit signature. */
@@ -172,6 +188,52 @@ function buildHarnessInvocation({
       instruction: prompt,
       configOverrides: codexOverrides
     })
+  };
+}
+
+function sanitizeInitialPtyPrompt(value: string): string {
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+    .trim();
+}
+
+function buildBracketedPasteInput(value: string): string | null {
+  const prompt = sanitizeInitialPtyPrompt(value);
+  if (!prompt) return null;
+  return `\u001b[200~${prompt}\u001b[201~\r`;
+}
+
+function buildInteractiveHarnessInvocation({
+  opts,
+  workspace,
+  prompt,
+  mcpConfigJson,
+  codexOverrides
+}: {
+  opts: SpawnPeerOptions;
+  workspace: CodeAgentWorkspace;
+  prompt: string;
+  mcpConfigJson: string;
+  codexOverrides: string[];
+}): { args: string[]; initialInput: string | null } {
+  if (opts.harness === "claude-code") {
+    return {
+      args: buildClaudeCodeInteractiveAgentArgs({
+        model: opts.model,
+        mcpConfig: mcpConfigJson
+      }),
+      initialInput: buildBracketedPasteInput(prompt)
+    };
+  }
+  return {
+    args: buildCodexCliInteractiveAgentArgs({
+      model: opts.model,
+      cwd: workspace.cwd,
+      configOverrides: codexOverrides
+    }),
+    initialInput: buildBracketedPasteInput(prompt)
   };
 }
 
@@ -343,6 +405,7 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
   }
 
   const workspace = resolveCodeAgentWorkspace({ cwd: opts.cwd });
+  const scope = opts.scope || workspace.repoRoot;
 
   const label = buildSwarmLabel({
     provider: opts.harness,
@@ -351,28 +414,7 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
     user: opts.labelExtras?.user ?? opts.trace.userId ?? null
   });
 
-  let reserved;
-  try {
-    reserved = opts.reservationKeeper.reserve({
-      directory: workspace.cwd,
-      scope: opts.scope || workspace.repoRoot,
-      fileRoot: workspace.canonicalCwd,
-      label
-    });
-  } catch (error) {
-    throw error;
-  }
-
   const dbPath = resolveSwarmDbPath(opts.swarm.dbPath || "");
-  const childEnv: Record<string, string> = {
-    SWARM_DB_PATH: dbPath,
-    SWARM_MCP_INSTANCE_ID: reserved.id,
-    SWARM_MCP_DIRECTORY: workspace.cwd,
-    SWARM_MCP_SCOPE: reserved.scope,
-    SWARM_MCP_FILE_ROOT: workspace.canonicalCwd,
-    SWARM_MCP_LABEL: label
-  };
-
   const preamble = buildSwarmLauncherFirstTurnPreamble({
     serverName: opts.swarm.serverName,
     taskId: opts.taskId,
@@ -383,12 +425,66 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
   const mcpConfigJson = buildClaudeMcpConfigJson(opts.swarm, workspace.cwd);
   const codexOverrides = buildCodexConfigOverrides(opts.swarm);
 
-  const { command, args } = buildHarnessInvocation({
+  const directInvocation = buildHarnessInvocation({
     opts,
     prompt: wrappedPrompt,
     mcpConfigJson,
     codexOverrides
   });
+
+  // Try path A whenever a swarm-server client is reachable. `harnessOverride`
+  // alone (e.g. test fixtures) shouldn't skip path A — tests can exercise the
+  // fallback transition by passing a `swarmServerClient` that returns null
+  // from `supportsDirectHarnessSpawn` or throws on `spawnPty`. When neither
+  // a swarmServerClient nor a real socket is available, path A is naturally
+  // skipped (the default `new SwarmServerClient(...).supportsDirectHarnessSpawn()`
+  // returns false when the socket file is missing).
+  if (!opts.harnessOverride || opts.swarmServerClient) {
+    const interactiveInvocation = buildInteractiveHarnessInvocation({
+      opts,
+      workspace,
+      prompt: wrappedPrompt,
+      mcpConfigJson,
+      codexOverrides
+    });
+    const serverSpawned = await spawnPeerViaSwarmServer({
+      opts,
+      workspace,
+      scope,
+      label,
+      dbPath,
+      args: interactiveInvocation.args,
+      initialInput: interactiveInvocation.initialInput
+    });
+    if (serverSpawned) return serverSpawned;
+  }
+
+  const { command, args } = directInvocation;
+
+  if (opts.signal?.aborted) {
+    throw new Error(`spawnPeer aborted before launch: ${opts.signal.reason || "cancelled"}`);
+  }
+
+  let reserved;
+  try {
+    reserved = opts.reservationKeeper.reserve({
+      directory: workspace.cwd,
+      scope,
+      fileRoot: workspace.canonicalCwd,
+      label
+    });
+  } catch (error) {
+    throw error;
+  }
+
+  const childEnv: Record<string, string> = {
+    SWARM_DB_PATH: dbPath,
+    SWARM_MCP_INSTANCE_ID: reserved.id,
+    SWARM_MCP_DIRECTORY: workspace.cwd,
+    SWARM_MCP_SCOPE: reserved.scope,
+    SWARM_MCP_FILE_ROOT: workspace.canonicalCwd,
+    SWARM_MCP_LABEL: label
+  };
 
   let child: ChildProcess;
   try {
@@ -514,6 +610,7 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
 
   return {
     instanceId: reserved.id,
+    launchMode: "direct_child",
     scope: reserved.scope,
     fileRoot: workspace.canonicalCwd,
     workspace,
@@ -523,6 +620,204 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
     outputTail: () => tail.toString(),
     cancel
   };
+}
+
+function swarmServerHarness(harness: SpawnPeerOptions["harness"]): "claude" | "codex" {
+  return harness === "claude-code" ? "claude" : "codex";
+}
+
+async function spawnPeerViaSwarmServer({
+  opts,
+  workspace,
+  scope,
+  label,
+  dbPath,
+  args,
+  initialInput
+}: {
+  opts: SpawnPeerOptions;
+  workspace: CodeAgentWorkspace;
+  scope: string;
+  label: string;
+  dbPath: string;
+  args: string[];
+  initialInput: string | null;
+}): Promise<SpawnedPeer | null> {
+  const client = opts.swarmServerClient ?? new SwarmServerClient({ dbPath });
+  if (!(await client.supportsDirectHarnessSpawn())) {
+    return null;
+  }
+
+  let response;
+  try {
+    response = await client.spawnPty({
+      cwd: workspace.cwd,
+      harness: swarmServerHarness(opts.harness),
+      role: opts.role,
+      scope,
+      label,
+      name: null,
+      instance_id: null,
+      cols: null,
+      rows: null,
+      args,
+      env: {
+        SWARM_DB_PATH: dbPath
+      },
+      initial_input: initialInput
+    });
+  } catch (error) {
+    try {
+      opts.store.logAction({
+        kind: "swarm_server_spawn_fallback",
+        guildId: opts.trace.guildId || null,
+        channelId: opts.trace.channelId || null,
+        userId: opts.trace.userId || null,
+        metadata: {
+          harness: opts.harness,
+          socketPath: client.socketPath,
+          reason: String(error instanceof Error ? error.message : error),
+          source: opts.trace.source ?? null
+        }
+      });
+    } catch {
+      // ignore telemetry errors
+    }
+    return null;
+  }
+
+  const instanceId = String(response.pty.bound_instance_id || "").trim();
+  const ptyId = String(response.pty.id || "").trim();
+  if (!instanceId || !ptyId) {
+    throw new Error("swarm-server /pty response did not include a bound instance id.");
+  }
+
+  let cancelled = false;
+  let cancelReason = "";
+  const exited = waitForSwarmServerPtyExit({ client, ptyId });
+  const cancel = async (reason?: string) => {
+    if (cancelled) return;
+    cancelled = true;
+    cancelReason = String(reason || "cancelled");
+    try {
+      await client.closePty(ptyId, true);
+    } catch {
+      // The server may already have reaped the PTY.
+    }
+    await Promise.race([
+      exited,
+      new Promise<void>((resolve) => setTimeout(resolve, 1500))
+    ]);
+  };
+
+  if (opts.signal) {
+    if (opts.signal.aborted) {
+      await cancel(opts.signal.reason || "aborted");
+      throw new Error(`spawnPeer aborted: ${String(opts.signal.reason || "cancelled")}`);
+    }
+    opts.signal.addEventListener(
+      "abort",
+      () => {
+        void cancel(opts.signal?.reason || "aborted");
+      },
+      { once: true }
+    );
+  }
+
+  const adopted = waitForAdoption({
+    dbPath,
+    instanceId,
+    pollIntervalMs: opts.adoptionPollIntervalMs ?? DEFAULT_ADOPTION_POLL_INTERVAL_MS,
+    timeoutMs: opts.adoptionTimeoutMs ?? DEFAULT_ADOPTION_TIMEOUT_MS,
+    exited
+  }).catch(async (error) => {
+    if (error instanceof SwarmLauncherAdoptionTimeoutError) {
+      try {
+        opts.store.logAction({
+          kind: "swarm_worker_adoption_timeout",
+          guildId: opts.trace.guildId || null,
+          channelId: opts.trace.channelId || null,
+          userId: opts.trace.userId || null,
+          metadata: {
+            instanceId,
+            ptyId,
+            harness: opts.harness,
+            launchMode: "swarm_server_pty",
+            timeoutMs: error.timeoutMs,
+            tail: "",
+            source: opts.trace.source ?? null
+          }
+        });
+      } catch {
+        // ignore telemetry errors
+      }
+    }
+    await cancel("adoption timeout");
+    throw error;
+  });
+
+  exited.then((info) => {
+    try {
+      opts.store.logAction({
+        kind: "swarm_worker_exit",
+        guildId: opts.trace.guildId || null,
+        channelId: opts.trace.channelId || null,
+        userId: opts.trace.userId || null,
+        metadata: {
+          instanceId,
+          ptyId,
+          harness: opts.harness,
+          launchMode: "swarm_server_pty",
+          exitCode: info.code,
+          exitSignal: info.signal,
+          cancelled,
+          cancelReason: cancelled ? cancelReason : null,
+          tail: "",
+          source: opts.trace.source ?? null
+        }
+      });
+    } catch {
+      // ignore telemetry errors
+    }
+  });
+
+  return {
+    instanceId,
+    ptyId,
+    launchMode: "swarm_server_pty",
+    scope,
+    fileRoot: workspace.canonicalCwd,
+    workspace,
+    adopted,
+    exited,
+    outputTail: () => "",
+    cancel
+  };
+}
+
+async function waitForSwarmServerPtyExit({
+  client,
+  ptyId,
+  pollIntervalMs = 1000
+}: {
+  client: SwarmServerClientLike;
+  ptyId: string;
+  pollIntervalMs?: number;
+}): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  while (true) {
+    try {
+      const snapshot = await client.fetchState();
+      const pty = (Array.isArray(snapshot.ptys) ? snapshot.ptys : [])
+        .find((candidate) => candidate.id === ptyId);
+      if (!pty) return { code: null, signal: null };
+      if (pty.exit_code !== null && pty.exit_code !== undefined) {
+        return { code: Number(pty.exit_code), signal: null };
+      }
+    } catch {
+      return { code: null, signal: null };
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.max(100, pollIntervalMs)));
+  }
 }
 
 async function waitForAdoption({

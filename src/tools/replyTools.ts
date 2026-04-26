@@ -263,6 +263,18 @@ export type ReplyToolRuntime = {
   swarm?: {
     peerManager: ClankySwarmPeerManager;
     reservationKeeper: SwarmReservationKeeper;
+    activityBridge?: {
+      trackTask: (peer: import("../agents/swarmPeer.ts").ClankyPeer, context: {
+        taskId: string;
+        workerId: string;
+        scope: string;
+        guildId: string | null;
+        channelId: string | null;
+        userId: string | null;
+        triggerMessageId: string | null;
+        source: string;
+      }) => void;
+    };
   };
   voiceSessionManager?: BrowserStreamPublishManager & {
     stopMusicStreamPublish?: (opts: {
@@ -1227,13 +1239,15 @@ async function executeSpawnCodeWorker(
         guildId: context.guildId,
         channelId: context.channelId,
         userId: context.userId,
+        triggerMessageId: context.sourceMessageId,
         source: String(context.trace?.source || "reply_tool_spawn_code_worker"),
         signal: context.signal
       },
       {
         store: runtime.store,
         peerManager: runtime.swarm.peerManager,
-        reservationKeeper: runtime.swarm.reservationKeeper
+        reservationKeeper: runtime.swarm.reservationKeeper,
+        activityBridge: runtime.swarm.activityBridge
       }
     );
     return jsonToolResult(result);

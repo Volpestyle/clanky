@@ -1605,7 +1605,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         runtime.swarmPeerManager && runtime.swarmReservationKeeper
           ? {
               peerManager: runtime.swarmPeerManager,
-              reservationKeeper: runtime.swarmReservationKeeper
+              reservationKeeper: runtime.swarmReservationKeeper,
+              activityBridge: runtime.swarmActivityBridge
           }
           : undefined,
       subAgentSessions,

@@ -1080,7 +1080,8 @@ async function executeReplyLlm(
     store: bot.store,
     swarm: {
       peerManager: bot.swarmPeerManager,
-      reservationKeeper: bot.swarmReservationKeeper
+      reservationKeeper: bot.swarmReservationKeeper,
+      activityBridge: bot.swarmActivityBridge
     },
     subAgentSessions,
     voiceSession: activeVoiceCallbacks || undefined,
