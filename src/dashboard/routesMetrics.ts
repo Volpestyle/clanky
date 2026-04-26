@@ -5,6 +5,9 @@ import type { Store } from "../store/store.ts";
 import { parseBoundedInt } from "./shared.ts";
 import { getSwarmDbPath } from "../agents/swarmDbConnection.ts";
 import { getSwarmServerStatus } from "../agents/swarmServerStatus.ts";
+import { getSwarmMcpSkillStatus } from "../agents/swarmMcpSkillStatus.ts";
+import { installSwarmMcpSkill, type SkillInstallScope } from "../agents/swarmMcpSkillInstall.ts";
+import { readDashboardBody } from "./shared.ts";
 
 interface MetricsRouteDeps {
   store: Store;
@@ -21,6 +24,44 @@ export function attachMetricsRoutes(app: DashboardApp, deps: MetricsRouteDeps) {
     const dbPath = getSwarmDbPath(store.getSettings());
     const status = await getSwarmServerStatus(dbPath);
     return c.json(status);
+  });
+
+  app.get("/api/swarm-mcp-skill-status", (c) => {
+    const settings = store.getSettings();
+    const workspaceRoots = settings.permissions?.devTasks?.allowedWorkspaceRoots || [];
+    const status = getSwarmMcpSkillStatus(workspaceRoots);
+    return c.json(status);
+  });
+
+  app.post("/api/swarm-mcp-skill-install", async (c) => {
+    const body = await readDashboardBody(c);
+    const scope = String(body.scope || "").trim() as SkillInstallScope;
+    if (scope !== "global" && scope !== "workspace") {
+      return c.json({ ok: false, reason: "scope must be 'global' or 'workspace'" }, 400);
+    }
+    const workspaceRoot = scope === "workspace" ? String(body.workspaceRoot || "").trim() : undefined;
+    const settings = store.getSettings();
+    const allowedWorkspaceRoots = settings.permissions?.devTasks?.allowedWorkspaceRoots || [];
+    try {
+      const result = installSwarmMcpSkill({ scope, workspaceRoot }, allowedWorkspaceRoots);
+      store.logAction({
+        kind: "dashboard",
+        level: result.ok ? "info" : "warn",
+        content: result.ok ? "swarm_mcp_skill_install_ok" : "swarm_mcp_skill_install_failed",
+        metadata: { scope, workspaceRoot, created: result.created, skipped: result.skipped, reason: result.reason }
+      });
+      if (!result.ok) return c.json(result, 400);
+      return c.json(result);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      store.logAction({
+        kind: "dashboard",
+        level: "error",
+        content: "swarm_mcp_skill_install_error",
+        metadata: { scope, workspaceRoot, error: reason }
+      });
+      return c.json({ ok: false, reason }, 500);
+    }
   });
 
   app.get("/api/actions", (c) => {

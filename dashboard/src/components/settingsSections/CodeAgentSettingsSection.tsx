@@ -1,6 +1,7 @@
 import { SettingsSection } from "../SettingsSection";
 import { UserIdTagInput } from "../UserIdTagInput";
 import { SwarmServerStatusBadge } from "./SwarmServerStatusBadge";
+import { SwarmMcpSkillStatusBadge } from "./SwarmMcpSkillStatusBadge";
 import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../../../src/settings/settingsConstraints.ts";
 
 function WorkerAuthBadge({ worker, form }: { worker: string; form: Record<string, unknown> }) {
@@ -23,6 +24,7 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
 
   return (
     <SettingsSection id={id} title="Code Agent" active={form.codeAgentEnabled}>
+      <SwarmMcpSkillStatusBadge />
       <div className="toggles">
         <label>
           <input
