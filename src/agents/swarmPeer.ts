@@ -1209,6 +1209,38 @@ export class ClankyPeer {
     });
   }
 
+  async failRequestedTask(id: string, result: string): Promise<SwarmTask> {
+    const normalizedId = assertNonEmpty(String(id || ""), "id");
+    const normalizedResult = assertNonEmpty(String(result || ""), "result");
+    return withDb(this.dbPath, (db) => {
+      ensureSwarmSchema(db);
+      ensureActivePeer(db, this.instanceId, this.scope);
+
+      const task = getTaskById(db, this.scope, normalizedId);
+      if (!task) throw new Error(`Task ${normalizedId} not found.`);
+      if (["done", "failed", "cancelled"].includes(task.status)) {
+        throw new Error(`Task ${normalizedId} is already ${task.status}.`);
+      }
+      if (task.requester !== this.instanceId) {
+        throw new Error("Only the requester can mark this task failed from the controller side.");
+      }
+
+      db.run(
+        "UPDATE tasks SET status = 'failed', result = ?, updated_at = unixepoch(), changed_at = ? WHERE id = ? AND scope = ?",
+        [normalizedResult, stamp(), normalizedId, this.scope]
+      );
+      emit(db, this.scope, "task.updated", this.instanceId, normalizedId, {
+        status: "failed",
+        prior_status: task.status
+      });
+      processFailure(db, this.scope, normalizedId);
+
+      const updated = getTaskById(db, this.scope, normalizedId);
+      if (!updated) throw new Error(`Task ${normalizedId} disappeared after failure update.`);
+      return updated;
+    });
+  }
+
   async waitForActivity(opts: { timeoutMs?: number; pollIntervalMs?: number } = {}): Promise<SwarmActivity> {
     const timeoutMs = Math.max(0, opts.timeoutMs ?? 0);
     const pollIntervalMs = Math.max(25, opts.pollIntervalMs ?? DEFAULT_ACTIVITY_POLL_INTERVAL_MS);
@@ -1427,7 +1459,7 @@ export class ClankyPeer {
   async kvAppend(key: string, value: string): Promise<number> {
     const normalizedKey = assertNonEmpty(String(key || ""), "key");
     const normalizedValue = String(value ?? "");
-    const parsedValue = JSON.parse(normalizedValue) as unknown;
+    const parsedValue = JSON.parse(normalizedValue);
     return withDb(this.dbPath, (db) => {
       ensureSwarmSchema(db);
       ensureActivePeer(db, this.instanceId, this.scope);

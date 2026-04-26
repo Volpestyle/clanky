@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { SwarmActivityBridge, type CodeTaskDispatchContext } from "./swarmActivityBridge.ts";
 import type { ClankyPeer, SwarmContextEntry, SwarmMessage, SwarmTask, SwarmTaskStatus } from "./swarmPeer.ts";
 
@@ -75,7 +75,7 @@ afterEach(() => {
 });
 
 test("trackTask + pollOnce surfaces progress annotations once each", async () => {
-  let task: SwarmTask | null = makeTask({ id: "task-1", status: "in_progress" });
+  const task: SwarmTask | null = makeTask({ id: "task-1", status: "in_progress" });
   let annotations: SwarmContextEntry[] = [];
   const progress: string[] = [];
   bridge = new SwarmActivityBridge({
@@ -160,7 +160,7 @@ test("cancelled status invokes the cancel hook with the taskId", async () => {
 });
 
 test("cancelled status still cancels the worker when terminal delivery fails", async () => {
-  let task: SwarmTask | null = makeTask({ id: "task-1", status: "cancelled", result: "by user" });
+  const task: SwarmTask | null = makeTask({ id: "task-1", status: "cancelled", result: "by user" });
   const cancels: { taskId: string; reason?: string }[] = [];
   const errors: string[] = [];
   bridge = new SwarmActivityBridge({

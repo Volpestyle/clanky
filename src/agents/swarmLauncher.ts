@@ -118,6 +118,16 @@ const DEFAULT_ADOPTION_POLL_INTERVAL_MS = 100;
 const DEFAULT_ADOPTION_TIMEOUT_MS = 15_000;
 const OUTPUT_TAIL_BYTES = 2048;
 
+function normalizeOutputTailBytes(value: unknown): number {
+  const bytes = Math.floor(Number(value) || OUTPUT_TAIL_BYTES);
+  return Math.max(OUTPUT_TAIL_BYTES, Math.min(bytes, 10 * 1024 * 1024));
+}
+
+function normalizeWorkerTimeoutMs(value: unknown): number {
+  const timeoutMs = Math.floor(Number(value) || 0);
+  return Math.max(1000, timeoutMs);
+}
+
 class RingBuffer {
   private chunks: Buffer[];
   private bytes: number;
@@ -188,7 +198,12 @@ function sanitizeInitialPtyPrompt(value: string): string {
   return String(value || "")
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+    .split("")
+    .filter((char) => {
+      const code = char.charCodeAt(0);
+      return code === 9 || code === 10 || code === 13 || (code >= 32 && code !== 127);
+    })
+    .join("")
     .trim();
 }
 
@@ -459,17 +474,12 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
     throw new Error(`spawnPeer aborted before launch: ${opts.signal.reason || "cancelled"}`);
   }
 
-  let reserved;
-  try {
-    reserved = opts.reservationKeeper.reserve({
-      directory: workspace.cwd,
-      scope,
-      fileRoot: workspace.canonicalCwd,
-      label
-    });
-  } catch (error) {
-    throw error;
-  }
+  const reserved = opts.reservationKeeper.reserve({
+    directory: workspace.cwd,
+    scope,
+    fileRoot: workspace.canonicalCwd,
+    label
+  });
 
   const childEnv: Record<string, string> = {
     SWARM_DB_PATH: dbPath,
@@ -492,7 +502,7 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
     throw error;
   }
 
-  const tail = new RingBuffer(OUTPUT_TAIL_BYTES);
+  const tail = new RingBuffer(normalizeOutputTailBytes(opts.maxBufferBytes));
   child.stdout?.on("data", (chunk) => tail.push(chunk));
   child.stderr?.on("data", (chunk) => tail.push(chunk));
 
@@ -545,6 +555,12 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
       { once: true }
     );
   }
+
+  const workerTimeout = setTimeout(() => {
+    void cancel("timeout");
+  }, normalizeWorkerTimeoutMs(opts.timeoutMs));
+  workerTimeout.unref?.();
+  void exited.finally(() => clearTimeout(workerTimeout));
 
   const adopted = waitForAdoption({
     dbPath,
@@ -717,6 +733,12 @@ async function spawnPeerViaSwarmServer({
       { once: true }
     );
   }
+
+  const workerTimeout = setTimeout(() => {
+    void cancel("timeout");
+  }, normalizeWorkerTimeoutMs(opts.timeoutMs));
+  workerTimeout.unref?.();
+  void exited.finally(() => clearTimeout(workerTimeout));
 
   const adopted = waitForAdoption({
     dbPath,

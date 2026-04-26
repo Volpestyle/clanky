@@ -41,14 +41,13 @@ Worker responsibilities, in order:
 5. **Complete on failure** — call `update_task(task_id, status="failed", result=<short error message>)`. Do not silently exit non-zero on recoverable errors — the task ledger is the source of truth.
 6. **Followup or exit** — see §2a below.
 
-### 2a. Followups: one-shot vs inbox-loop
+### 2a. Followups: brief listen window
 
-After completing the assigned task, a worker chooses one of two shapes per harness invocation. The first-turn preamble names which shape this run uses.
+After completing the assigned task, every Clanky-spawned worker stays available briefly for follow-up coordination. There is no one-shot vs inbox-loop mode switch in settings or prompts.
 
-- **One-shot (default)**: The worker drives the assigned task to a terminal status. Direct child-process workers then exit 0. Swarm-server PTY workers may remain open for operator inspection or takeover; Clanky stops counting them against active-task capacity once the task is terminal. Followups are handled by the orchestrator spawning a fresh worker via `spawn_code_worker` (typically with `request_task({ parent_task_id: original })` to preserve traceability).
-- **Inbox-loop (opt-in via preamble)**: After `update_task(done)`, the worker continues running and polls its inbox via `wait_for_activity` / `list_messages`. When Clanky's orchestrator wants a followup, it calls `send_message(workerId, content)` or `send_message(session_key, content)`; the worker treats the message body as a follow-up instruction, claims/creates a follow-up task as appropriate, executes, and reports again. The worker exits when it receives an explicit termination signal in its inbox or when its idle timeout (per harness config) elapses.
+After `update_task(done)`, the worker continues running and polls its inbox via `wait_for_activity` / `list_messages` for roughly the configured follow-up window. When Clanky's orchestrator wants a followup, it calls `send_message(workerId, content)` or `send_message(session_key, content)`; the worker treats the message body as a follow-up instruction, claims or creates the appropriate follow-up task, executes, and reports again. The worker exits when it receives an explicit termination message or when the listen window elapses.
 
-For inbox-loop workers, `spawn_code_worker` persists the latest `{ workerId, taskId, scope, role, workerMode, cwd }` record into swarm KV under the returned `sessionKey`. This is a convenience pointer for Clanky's future reply turns; the worker still receives ordinary swarm messages and does not need to know the key exists.
+`spawn_code_worker` persists the latest `{ workerId, taskId, scope, role, cwd }` record into swarm KV under the returned `sessionKey`. This is a convenience pointer for Clanky's future reply turns; the worker still receives ordinary swarm messages and does not need to know the key exists.
 
 Clanky also writes its scoped controller peer id to `kv_get("clanky/controller")`. Planner workers use that pointer, with a `list_instances(label_contains="origin:clanky role:planner")` fallback, when they need to escalate a stranded open task.
 

@@ -510,6 +510,41 @@ test("spawnPeer.cancel kills a running worker and releases its workspace", async
   }
 }, 15_000);
 
+test("spawnPeer enforces the configured worker timeout", async () => {
+  const previousBehavior = process.env.FAKE_WORKER_BEHAVIOR;
+  const previousHang = process.env.FAKE_WORKER_HANG_MS;
+  process.env.FAKE_WORKER_BEHAVIOR = "hang";
+  process.env.FAKE_WORKER_HANG_MS = "10000";
+  try {
+    const spawned = await spawnPeer({
+      harness: "claude-code",
+      cwd: workspaceDir,
+      role: "implementer",
+      initialPrompt: "p",
+      maxTurns: 5,
+      timeoutMs: 100,
+      maxBufferBytes: 1024 * 1024,
+      model: "sonnet",
+      trace: { channelId: "channel-1", userId: "user-1", source: "test" },
+      store: makeStore(),
+      swarm: makeSwarmConfig(),
+      reservationKeeper: keeper!,
+      harnessOverride: makeFakeHarnessOverride(),
+      adoptionPollIntervalMs: 25,
+      adoptionTimeoutMs: 5_000
+    });
+
+    await spawned.adopted;
+    const exit = await spawned.exited;
+    expect(exit.code === null || exit.code !== 0 || exit.signal !== null).toBe(true);
+  } finally {
+    if (previousBehavior === undefined) delete process.env.FAKE_WORKER_BEHAVIOR;
+    else process.env.FAKE_WORKER_BEHAVIOR = previousBehavior;
+    if (previousHang === undefined) delete process.env.FAKE_WORKER_HANG_MS;
+    else process.env.FAKE_WORKER_HANG_MS = previousHang;
+  }
+}, 5_000);
+
 test("spawnPeer signal-aborted before launch tears down without leaking rows", async () => {
   const controller = new AbortController();
   controller.abort("test abort");

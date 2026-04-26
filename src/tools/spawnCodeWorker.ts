@@ -96,6 +96,7 @@ type ActiveSpawnedWorker = {
   userId: string | null;
   peer: ClankyPeer;
   spawned: SpawnedPeer;
+  store: SwarmLauncherStore;
   // Flipped to `true` once the worker's currently-assigned task hits a
   // terminal status. Idle workers stay tracked (so a follow-up turn can
   // reuse them via `peer.sendMessage`) but do not count against the
@@ -350,7 +351,29 @@ function selectedHarnessConfig(
 
 function trackActiveWorker(worker: ActiveSpawnedWorker) {
   activeWorkersByTaskId.set(worker.taskId, worker);
-  void worker.spawned.exited.finally(() => {
+  void worker.spawned.exited.then(async (info) => {
+    const taskId = worker.taskId;
+    if (activeWorkersByTaskId.get(taskId) !== worker) return;
+    try {
+      const task = await worker.peer.getTask(taskId);
+      if (!task || TERMINAL_TASK_STATUSES.has(task.status)) return;
+      await markRequestedTaskFailed(worker.peer, taskId, formatWorkerExitResult(info));
+    } catch (error) {
+      worker.store.logAction({
+        kind: "code_agent_error",
+        guildId: worker.guildId,
+        channelId: worker.channelId,
+        userId: worker.userId,
+        content: "code_worker_exit_task_failure_update_failed",
+        metadata: {
+          taskId,
+          instanceId: worker.workerId,
+          scope: worker.scope,
+          error: String((error as Error)?.message || error)
+        }
+      });
+    }
+  }).finally(() => {
     if (activeWorkersByTaskId.get(worker.taskId) === worker) {
       activeWorkersByTaskId.delete(worker.taskId);
     }
@@ -397,10 +420,28 @@ async function markNewWorkerTaskLaunchFailed(args: {
   error: unknown;
 }): Promise<void> {
   const message = String((args.error as Error)?.message || args.error || "unknown error").trim();
-  await args.peer.updateTask(args.taskId, {
+  await markRequestedTaskFailed(
+    args.peer,
+    args.taskId,
+    `spawn_code_worker failed before worker assignment: ${message || "unknown error"}`
+  );
+}
+
+async function markRequestedTaskFailed(peer: ClankyPeer, taskId: string, result: string): Promise<void> {
+  if (typeof peer.failRequestedTask === "function") {
+    await peer.failRequestedTask(taskId, result);
+    return;
+  }
+  await peer.updateTask(taskId, {
     status: "failed",
-    result: `spawn_code_worker failed before worker assignment: ${message || "unknown error"}`
+    result
   });
+}
+
+function formatWorkerExitResult(info: { code: number | null; signal: NodeJS.Signals | null }): string {
+  const code = info.code === null || info.code === undefined ? "null" : String(info.code);
+  const signal = info.signal ? String(info.signal) : "null";
+  return `Code worker exited before completing the task (code=${code}, signal=${signal}).`;
 }
 
 async function resolveExistingOpenTask(peer: ClankyPeer, taskId: string): Promise<SwarmTask> {
@@ -737,6 +778,7 @@ export async function spawnCodeWorker(
       userId: args.userId || null,
       peer,
       spawned,
+      store: deps.store,
       idle: false
     });
     // Persist session keys unconditionally so the orchestrator can drive

@@ -138,7 +138,6 @@ import {
 } from "./agents/swarmServerStatus.ts";
 import {
   SwarmActivityBridge,
-  type CodeTaskDispatchContext,
   type CodeTaskTerminalEvent,
   type SwarmSpawnRequestEvent
 } from "./agents/swarmActivityBridge.ts";

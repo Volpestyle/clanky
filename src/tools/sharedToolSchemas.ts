@@ -221,7 +221,7 @@ export const SPAWN_CODE_WORKER_SCHEMA: SharedToolSchema = {
       },
       review_after_completion: {
         type: "boolean",
-        description: "When true, wait for the implementation task, then spawn a one-shot review worker against the same cwd and return both results. Use sparingly."
+        description: "When true, wait for the implementation task, then spawn a review worker against the same cwd and return both results. Use sparingly."
       },
       review_harness: {
         type: "string",
@@ -323,12 +323,12 @@ export const CLAIM_TASK_SCHEMA: SharedToolSchema = {
 
 export const SEND_MESSAGE_SCHEMA: SharedToolSchema = {
   name: "send_message",
-  description: "Send a swarm message to a peer in the current repo scope. Pass recipient directly, or session_key from an inbox-loop spawn_code_worker result.",
+  description: "Send a swarm message to a peer in the current repo scope. Pass recipient directly, or session_key from a recent spawn_code_worker result.",
   parameters: {
     type: "object",
     properties: {
       recipient: { type: "string", description: "Target swarm peer id." },
-      session_key: { type: "string", description: "KV session key returned by spawn_code_worker for an inbox-loop worker." },
+      session_key: { type: "string", description: "KV session key returned by spawn_code_worker for a worker in its brief follow-up window." },
       content: { type: "string" },
       cwd: { type: "string" }
     },

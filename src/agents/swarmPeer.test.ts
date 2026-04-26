@@ -274,6 +274,23 @@ test("assignTask claims an open task for a newly registered worker", async () =>
   assert.match((await worker.pollMessages()).at(0)?.content || "", /assigned to you/);
 });
 
+test("requester can mark an unassigned launch task failed", async () => {
+  const fixture = makeFixture();
+  const manager = track(new ClankySwarmPeerManager({ dbPath: fixture.dbPath }));
+  const planner = manager.ensurePeer(fixture.repoRoot, fixture.repoRoot, fixture.fileRoot);
+
+  const openTask = await planner.requestTask({
+    type: "code",
+    title: "Launch-backed task"
+  });
+  assert.equal(openTask.status, "open");
+  assert.equal(openTask.assignee, null);
+
+  const failed = await planner.failRequestedTask(openTask.id, "worker launch failed");
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.result, "worker launch failed");
+});
+
 test("stale clanky peer rows are pruned before restart registration", () => {
   const fixture = makeFixture();
   ensureClankySwarmPeerSchema(fixture.dbPath);

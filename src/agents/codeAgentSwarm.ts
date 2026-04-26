@@ -119,8 +119,8 @@ export const SWARM_LAUNCHER_FOLLOWUP_LISTEN_SECONDS = 300;
  *   table, not from task metadata.
  * - every worker has a brief follow-up listen window after the assigned task
  *   completes. The orchestrator decides per-turn whether to follow up; the
- *   worker just stays available briefly. No upfront one-shot vs inbox-loop
- *   decision — if no follow-up arrives in the window, exit cleanly.
+ *   worker just stays available briefly. There is no worker-mode decision —
+ *   if no follow-up arrives in the window, exit cleanly.
  * - `appendCoordinationPrompt=false` disables only the inlined generic skill
  *   body. The Clanky-specific identity/task/result/follow-up overlays always
  *   remain, because workers need them to interoperate with the launcher.

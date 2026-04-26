@@ -269,6 +269,7 @@ export type ReplyToolRuntime = {
     reservationKeeper: SwarmReservationKeeper;
     activityBridge?: {
       watchControllerPeer?: (peer: import("../agents/swarmPeer.ts").ClankyPeer, context: { scope: string }) => void;
+      forgetTask?: (taskId: string) => void;
       trackTask: (peer: import("../agents/swarmPeer.ts").ClankyPeer, context: {
         taskId: string;
         workerId: string;
@@ -1366,6 +1367,7 @@ async function runCodeWorkerReviewAfterCompletion({
     initialResult.scope,
     initialResult.scope
   );
+  runtime.swarm.activityBridge?.forgetTask?.(initialResult.taskId);
   const timeoutMs = clampToolTimeoutMs(input?.wait_timeout_ms);
   const completion = await waitForTaskCompletion(peer, initialResult.taskId, {
     dbPath: resolveSwarmDbPath(resolveCodeAgentConfig(context.settings).swarm?.dbPath || ""),
@@ -1413,6 +1415,7 @@ async function runCodeWorkerReviewAfterCompletion({
     reviewResult.scope,
     reviewResult.scope
   );
+  runtime.swarm.activityBridge?.forgetTask?.(reviewResult.taskId);
   const reviewCompletion = await waitForTaskCompletion(reviewPeer, reviewResult.taskId, {
     dbPath: resolveSwarmDbPath(resolveCodeAgentConfig(context.settings).swarm?.dbPath || ""),
     timeoutMs,

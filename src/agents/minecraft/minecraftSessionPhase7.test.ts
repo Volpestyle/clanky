@@ -100,7 +100,7 @@ function createBrainSequence(actions: MinecraftBrainAction[], summary = "Acting.
 }
 
 function mockRuntime(session: ReturnType<typeof createMinecraftSession>) {
-  return session.runtime as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+  return session.runtime as Record<string, (...args: unknown[]) => Promise<unknown>>;
 }
 
 test("eat action dispatches to eatBestFood and reports food delta", async () => {
@@ -137,7 +137,7 @@ test("equip_offhand action equips the requested item", async () => {
     brain
   });
   const runtime = mockRuntime(session);
-  let equipCalls: Array<{ itemName: string }> = [];
+  const equipCalls: Array<{ itemName: string }> = [];
   runtime.connect = async () => ({ ok: true, output: createConnectedStatus() });
   runtime.status = async () => ({ ok: true, output: createConnectedStatus() });
   runtime.equipOffhand = async (itemName: unknown) => {
@@ -166,7 +166,7 @@ test("craft action dispatches with count and crafting-table flag", async () => {
     brain
   });
   const runtime = mockRuntime(session);
-  let craftArgs: Array<{ recipeName: string; count: number; useCraftingTable: boolean }> = [];
+  const craftArgs: Array<{ recipeName: string; count: number; useCraftingTable: boolean }> = [];
   runtime.connect = async () => ({ ok: true, output: createConnectedStatus() });
   runtime.status = async () => ({ ok: true, output: createConnectedStatus() });
   runtime.craftItem = async (recipeName: unknown, count: unknown, useCraftingTable: unknown) => {
@@ -236,7 +236,7 @@ test("place_block action dispatches to runtime.placeBlock", async () => {
     brain
   });
   const runtime = mockRuntime(session);
-  let placeArgs: Array<{ x: number; y: number; z: number; blockName: string }> = [];
+  const placeArgs: Array<{ x: number; y: number; z: number; blockName: string }> = [];
   runtime.connect = async () => ({ ok: true, output: createConnectedStatus() });
   runtime.status = async () => ({ ok: true, output: createConnectedStatus() });
   runtime.placeBlock = async (x: unknown, y: unknown, z: unknown, blockName: unknown) => {
@@ -666,7 +666,7 @@ test("build description auto-connects before deriving an origin", async () => {
   const runtime = mockRuntime(session);
   let connected = false;
   let connectCalls = 0;
-  runtime.connect = async (_options: unknown, signal?: AbortSignal) => {
+  runtime.connect = async (_options: unknown, _signal?: AbortSignal) => {
     connectCalls += 1;
     connected = true;
     return { ok: true, output: createConnectedStatus() };

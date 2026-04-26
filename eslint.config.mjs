@@ -10,6 +10,7 @@ export default tseslint.config(
       "node_modules/**",
       "memory/**",
       "data/**",
+      "mcp-servers/**",
       "src/voice/clankvox/target/**",
       "src/voice/clankvox/build_log.txt",
     ],

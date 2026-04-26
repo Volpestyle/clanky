@@ -20,7 +20,7 @@ class FakeLlm implements Pick<LLMService, "generate"> {
       model: "test",
       usage: { inputTokens: 10, outputTokens: 10 },
       costUsd: 0
-    } as unknown as Awaited<ReturnType<LLMService["generate"]>>;
+    } as Awaited<ReturnType<LLMService["generate"]>>;
   }
 }
 

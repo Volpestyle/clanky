@@ -1679,7 +1679,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
             eagerness: Number(form.minecraftNarrationEagerness),
             minSecondsBetweenPosts: Number(form.minecraftNarrationMinSecondsBetweenPosts)
           },
-          execution: Boolean(form.minecraftBrainUseTextModel)
+          execution: form.minecraftBrainUseTextModel
             ? {
                 mode: "inherit_orchestrator"
               }

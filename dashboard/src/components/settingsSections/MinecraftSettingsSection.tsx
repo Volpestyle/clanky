@@ -30,22 +30,23 @@ export function MinecraftSettingsSection({
   const knownIdentities: KnownIdentity[] = Array.isArray(form.minecraftKnownIdentities)
     ? (form.minecraftKnownIdentities as KnownIdentity[])
     : [];
+  const setKnownIdentities = (next: KnownIdentity[]) => {
+    set("minecraftKnownIdentities")({ target: { value: next } });
+  };
 
   const updateIdentity = (index: number, field: keyof KnownIdentity, value: string) => {
     const next = knownIdentities.map((entry, i) =>
       i === index ? { ...entry, [field]: value } : entry
     );
-    set("minecraftKnownIdentities")(next as unknown);
+    setKnownIdentities(next);
   };
 
   const addIdentity = () => {
-    set("minecraftKnownIdentities")([...knownIdentities, emptyIdentity()] as unknown);
+    setKnownIdentities([...knownIdentities, emptyIdentity()]);
   };
 
   const removeIdentity = (index: number) => {
-    set("minecraftKnownIdentities")(
-      knownIdentities.filter((_, i) => i !== index) as unknown
-    );
+    setKnownIdentities(knownIdentities.filter((_, i) => i !== index));
   };
 
   return (

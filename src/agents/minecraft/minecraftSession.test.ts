@@ -63,7 +63,7 @@ test("MinecraftSession normalizes snake_case constraints and downgrades guard to
     brain
   });
 
-  const runtime = session.runtime as unknown as {
+  const runtime = session.runtime as {
     connect: (options?: Record<string, unknown>, signal?: AbortSignal) => Promise<{ ok: true; output: McpStatusSnapshot }>;
     status: (signal?: AbortSignal) => Promise<{ ok: true; output: McpStatusSnapshot }>;
     followPlayer: (playerName: string, distance?: number, signal?: AbortSignal) => Promise<{ ok: true; output: { ok: true; playerName: string; distance: number } }>;
@@ -112,7 +112,7 @@ test("MinecraftSession uses max_distance to limit resource gathering range", asy
     brain
   });
 
-  const runtime = session.runtime as unknown as {
+  const runtime = session.runtime as {
     connect: (options?: Record<string, unknown>, signal?: AbortSignal) => Promise<{ ok: true; output: McpStatusSnapshot }>;
     status: (signal?: AbortSignal) => Promise<{ ok: true; output: McpStatusSnapshot }>;
     collectBlock: (blockName: string, count?: number, maxDistance?: number, signal?: AbortSignal) => Promise<{
@@ -226,7 +226,7 @@ test("MinecraftSession runs a bounded planner checkpoint loop and carries goal s
     brain
   });
 
-  const runtime = session.runtime as unknown as {
+  const runtime = session.runtime as {
     connect: (options?: Record<string, unknown>, signal?: AbortSignal) => Promise<{ ok: true; output: McpStatusSnapshot }>;
     status: (signal?: AbortSignal) => Promise<{ ok: true; output: McpStatusSnapshot }>;
     followPlayer: (playerName: string, distance?: number, signal?: AbortSignal) => Promise<{ ok: true; output: { ok: true; playerName: string; distance: number } }>;
@@ -331,7 +331,7 @@ test("MinecraftSession retries within the same turn after a failed follow and su
     brain
   });
 
-  const runtime = session.runtime as unknown as {
+  const runtime = session.runtime as {
     connect: (options?: Record<string, unknown>, signal?: AbortSignal) => Promise<{ ok: true; output: McpStatusSnapshot }>;
     status: (signal?: AbortSignal) => Promise<{ ok: true; output: McpStatusSnapshot }>;
     followPlayer: (playerName: string, distance?: number, signal?: AbortSignal) => Promise<{ ok: true; output: { ok: true; playerName: string; distance: number } }>;
@@ -395,7 +395,7 @@ test("MinecraftSession keeps explicit structured commands working when the brain
     knownIdentities: [{ mcUsername: "Steve", relationship: "friend" }]
   });
 
-  const runtime = session.runtime as unknown as {
+  const runtime = session.runtime as {
     connect: (options?: Record<string, unknown>, signal?: AbortSignal) => Promise<{ ok: true; output: McpStatusSnapshot }>;
     status: (signal?: AbortSignal) => Promise<{ ok: true; output: McpStatusSnapshot }>;
     stop: () => Promise<{ ok: true; output: { ok: true } }>;
@@ -441,7 +441,7 @@ test("MinecraftSession logs server target deltas when the brain rewrites the ser
     }
   });
 
-  const runtime = session.runtime as unknown as {
+  const runtime = session.runtime as {
     connect: (options?: Record<string, unknown>, signal?: AbortSignal) => Promise<{ ok: true; output: McpStatusSnapshot }>;
     status: (signal?: AbortSignal) => Promise<{ ok: true; output: McpStatusSnapshot }>;
     stop: () => Promise<{ ok: true; output: { ok: true } }>;
@@ -651,7 +651,7 @@ test("MinecraftSession queues in-game chat during cooldown and later flushes the
     brain
   });
 
-  const runtime = session.runtime as unknown as {
+  const runtime = session.runtime as {
     status: (signal?: AbortSignal) => Promise<{ ok: true; output: McpStatusSnapshot }>;
     chat: (message: string, signal?: AbortSignal) => Promise<{ ok: true; output: { ok: true; message: string } }>;
     stop: () => Promise<{ ok: true; output: { ok: true } }>;
@@ -665,9 +665,9 @@ test("MinecraftSession queues in-game chat during cooldown and later flushes the
   };
   runtime.stop = async () => ({ ok: true, output: { ok: true } });
 
-  (session as unknown as { lastChatReplyMs: number }).lastChatReplyMs = Date.now();
+  (session as { lastChatReplyMs: number }).lastChatReplyMs = Date.now();
 
-  await (session as unknown as {
+  await (session as {
     handleIncomingChat: (message: { sender: string; text: string; timestamp: string; isBot: boolean }) => Promise<void>;
   }).handleIncomingChat({
     sender: "Alice",
@@ -675,7 +675,7 @@ test("MinecraftSession queues in-game chat during cooldown and later flushes the
     timestamp: "2026-04-04T12:00:00Z",
     isBot: false
   });
-  await (session as unknown as {
+  await (session as {
     handleIncomingChat: (message: { sender: string; text: string; timestamp: string; isBot: boolean }) => Promise<void>;
   }).handleIncomingChat({
     sender: "Bob",
@@ -686,15 +686,15 @@ test("MinecraftSession queues in-game chat during cooldown and later flushes the
 
   assert.equal(seenChatContexts.length, 0);
   assert.deepEqual(
-    (session as unknown as { getPlannerStateSnapshot: () => { pendingInGameMessages: Array<{ text: string }> } })
+    (session as { getPlannerStateSnapshot: () => { pendingInGameMessages: Array<{ text: string }> } })
       .getPlannerStateSnapshot()
       .pendingInGameMessages
       .map((entry) => entry.text),
     ["hey clanky", "come here"]
   );
 
-  (session as unknown as { lastChatReplyMs: number }).lastChatReplyMs = 0;
-  await (session as unknown as { flushPendingInGameMessages: () => Promise<void> }).flushPendingInGameMessages();
+  (session as { lastChatReplyMs: number }).lastChatReplyMs = 0;
+  await (session as { flushPendingInGameMessages: () => Promise<void> }).flushPendingInGameMessages();
 
   assert.equal(seenChatContexts.length, 1);
   assert.deepEqual(seenChatContexts[0], {
@@ -704,7 +704,7 @@ test("MinecraftSession queues in-game chat during cooldown and later flushes the
   });
   assert.deepEqual(sentChats, ["caught up"]);
   assert.deepEqual(
-    (session as unknown as { getPlannerStateSnapshot: () => { pendingInGameMessages: Array<{ text: string }> } })
+    (session as { getPlannerStateSnapshot: () => { pendingInGameMessages: Array<{ text: string }> } })
       .getPlannerStateSnapshot()
       .pendingInGameMessages,
     []
@@ -753,7 +753,7 @@ test("MinecraftSession forwards typed game events and routes typed chat events i
     }
   });
 
-  const runtime = session.runtime as unknown as {
+  const runtime = session.runtime as {
     status: (signal?: AbortSignal) => Promise<{ ok: true; output: McpStatusSnapshot }>;
     stop: () => Promise<{ ok: true; output: { ok: true } }>;
   };
@@ -765,7 +765,7 @@ test("MinecraftSession forwards typed game events and routes typed chat events i
   runtime.status = async () => ({ ok: true, output: createConnectedStatus({ recentEvents }) });
   runtime.stop = async () => ({ ok: true, output: { ok: true } });
 
-  await (session as unknown as { tickReflexesAndEvents: () => Promise<void> }).tickReflexesAndEvents();
+  await (session as { tickReflexesAndEvents: () => Promise<void> }).tickReflexesAndEvents();
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.equal(seenGameEvents.length, 1);
@@ -812,7 +812,7 @@ test("MinecraftSession enriches planner world snapshots with visible block proje
     brain
   });
 
-  const runtime = session.runtime as unknown as {
+  const runtime = session.runtime as {
     status: (signal?: AbortSignal) => Promise<{ ok: true; output: McpStatusSnapshot }>;
     visibleBlocks: (maxDistance?: number, maxBlocks?: number, signal?: AbortSignal) => Promise<{ ok: true; output: MinecraftVisualScene }>;
     stop: () => Promise<{ ok: true; output: { ok: true } }>;
@@ -896,7 +896,7 @@ test("MinecraftSession lets the same planner capture a rendered glance and inspe
     brain
   });
 
-  const runtime = session.runtime as unknown as {
+  const runtime = session.runtime as {
     connect: (options?: Record<string, unknown>, signal?: AbortSignal) => Promise<{ ok: true; output: McpStatusSnapshot }>;
     status: (signal?: AbortSignal) => Promise<{ ok: true; output: McpStatusSnapshot }>;
     visibleBlocks: (maxDistance?: number, maxBlocks?: number, signal?: AbortSignal) => Promise<{ ok: false; output: never }>;

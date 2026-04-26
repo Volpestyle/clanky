@@ -43,7 +43,14 @@ export type ProviderAuthState = {
 const ProviderAuthContext = createContext<ProviderAuthState | null>(null);
 
 export function ProviderAuthProvider({ value, children }: { value: ProviderAuthState; children: React.ReactNode }) {
-  const memo = useMemo(() => value, [
+  const memo = useMemo(() => ({
+    anthropic: value.anthropic,
+    openai: value.openai,
+    claude_oauth: value.claude_oauth,
+    openai_oauth: value.openai_oauth,
+    xai: value.xai,
+    codex_cli: value.codex_cli
+  }), [
     value.anthropic, value.openai, value.claude_oauth, value.openai_oauth, value.xai, value.codex_cli
   ]);
   return <ProviderAuthContext.Provider value={memo}>{children}</ProviderAuthContext.Provider>;
