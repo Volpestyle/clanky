@@ -134,6 +134,19 @@ Deep dives:
 - [`browser.md`](browser.md)
 - [`../voice/discord-streaming.md`](../voice/discord-streaming.md)
 
+### Image history context
+
+Current-message image attachments can be sent directly to a vision-capable model
+as part of the reply turn. Recent image references from channel history are
+captioned in the background and cached so later turns can search or recall them
+without re-reading the image every time.
+
+For URL-backed images, including Discord CDN attachment URLs, Bun fetches the
+image bytes first and sends base64 image data to the vision model. Providers do
+not receive Discord CDN URLs to download server-side. If the runtime can no
+longer fetch the URL, the caption is skipped and the existing cached caption, if
+any, remains the available context.
+
 ## Autonomy Rules
 
 The brain should not follow a rigid ladder like:

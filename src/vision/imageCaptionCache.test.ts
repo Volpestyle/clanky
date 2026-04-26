@@ -2,6 +2,26 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { ImageCaptionCache } from "./imageCaptionCache.ts";
 
+async function withMockFetch(fetchImpl, callback) {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchImpl;
+    try {
+        return await callback();
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+function imageResponse(body = "image-bytes", contentType = "image/jpeg") {
+    return new Response(body, {
+        status: 200,
+        headers: {
+            "content-type": contentType,
+            "content-length": String(Buffer.byteLength(body))
+        }
+    });
+}
+
 
 // --- Basic cache behavior ---
 
@@ -164,10 +184,10 @@ describe("ImageCaptionCache getOrCaption", () => {
             }
         };
 
-        const result = await cache.getOrCaption({
+        const result = await withMockFetch(async () => imageResponse("sunset-bytes"), () => cache.getOrCaption({
             url: "https://example.com/sunset.jpg",
             llm
-        });
+        }));
 
         assert.ok(result);
         assert.equal(result.caption, "A fiery sunset over mountains");
@@ -201,10 +221,10 @@ describe("ImageCaptionCache getOrCaption", () => {
         };
 
         // Fire two requests concurrently
-        const [r1, r2] = await Promise.all([
+        const [r1, r2] = await withMockFetch(async () => imageResponse("car-bytes"), () => Promise.all([
             cache.getOrCaption({ url: "https://example.com/car.jpg", llm }),
             cache.getOrCaption({ url: "https://example.com/car.jpg", llm })
-        ]);
+        ]));
 
         assert.equal(generateCalls, 1); // Only one API call fired
         assert.equal(r1?.caption, "A red sports car");
@@ -219,10 +239,10 @@ describe("ImageCaptionCache getOrCaption", () => {
             generate: async () => ({ text: "" })
         };
 
-        const result = await cache.getOrCaption({
+        const result = await withMockFetch(async () => imageResponse("broken-bytes"), () => cache.getOrCaption({
             url: "https://example.com/broken.jpg",
             llm
-        });
+        }));
 
         assert.equal(result, null);
         // Should not cache a failed caption
@@ -265,23 +285,29 @@ describe("ImageCaptionCache hasOrInflight", () => {
             })
         };
 
-        // Start captioning but don't await — it's now in-flight
-        const captionPromise = cache.getOrCaption({
-            url: "https://example.com/inflight.jpg",
-            llm
+        await withMockFetch(async () => imageResponse("inflight-bytes"), async () => {
+            // Start captioning but don't await — it's now in-flight
+            const captionPromise = cache.getOrCaption({
+                url: "https://example.com/inflight.jpg",
+                llm
+            });
+
+            // While in-flight, hasOrInflight should return true
+            assert.equal(cache.hasOrInflight("https://example.com/inflight.jpg"), true);
+            // But has() should still return false (not yet cached)
+            assert.equal(cache.has("https://example.com/inflight.jpg"), false);
+
+            for (let attempt = 0; !resolveGenerate && attempt < 10; attempt += 1) {
+                await Promise.resolve();
+            }
+            assert.equal(typeof resolveGenerate, "function");
+            // Resolve and clean up
+            resolveGenerate({ text: "Done", provider: "anthropic", model: "claude-haiku-4-5" });
+            await captionPromise;
+
+            // Now both should be true (cached)
+            assert.equal(cache.hasOrInflight("https://example.com/inflight.jpg"), true);
+            assert.equal(cache.has("https://example.com/inflight.jpg"), true);
         });
-
-        // While in-flight, hasOrInflight should return true
-        assert.equal(cache.hasOrInflight("https://example.com/inflight.jpg"), true);
-        // But has() should still return false (not yet cached)
-        assert.equal(cache.has("https://example.com/inflight.jpg"), false);
-
-        // Resolve and clean up
-        resolveGenerate({ text: "Done", provider: "anthropic", model: "claude-haiku-4-5" });
-        await captionPromise;
-
-        // Now both should be true (cached)
-        assert.equal(cache.hasOrInflight("https://example.com/inflight.jpg"), true);
-        assert.equal(cache.has("https://example.com/inflight.jpg"), true);
     });
 });

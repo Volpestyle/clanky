@@ -123,7 +123,8 @@ export async function captionImage({
     const providerSettings = resolveVisionProviderSettings(llm, settings);
     if (!providerSettings) return null;
 
-    // Build image input — prefer dataBase64 if provided, otherwise use url
+    // Build image input — prefer caller-supplied bytes, otherwise fetch URL bytes locally.
+    // This avoids provider-side fetch failures for Discord CDN URLs that the bot can still reach.
     const normalizedBase64 = String(dataBase64 || "").trim();
     const normalizedUrl = String(url || "").trim();
     const normalizedMimeType = String(mimeType || "").trim().toLowerCase() || "image/jpeg";
@@ -135,8 +136,12 @@ export async function captionImage({
             dataBase64: normalizedBase64
         };
     } else if (normalizedUrl) {
-        // Pass url directly — the LLM providers handle URL-based image inputs
-        imageInput = { url: normalizedUrl };
+        const fetched = await fetchImageAsBase64(normalizedUrl);
+        if (!fetched?.dataBase64) return null;
+        imageInput = {
+            mediaType: fetched.mimeType || normalizedMimeType,
+            dataBase64: fetched.dataBase64
+        };
     } else {
         return null;
     }

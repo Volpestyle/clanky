@@ -7,6 +7,26 @@ import {
 } from "./captionImage.ts";
 import { createTestSettings } from "../testSettings.ts";
 
+async function withMockFetch(fetchImpl, callback) {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchImpl;
+    try {
+        return await callback();
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+}
+
+function imageResponse(body = "image-bytes", contentType = "image/jpeg") {
+    return new Response(body, {
+        status: 200,
+        headers: {
+            "content-type": contentType,
+            "content-length": String(Buffer.byteLength(body))
+        }
+    });
+}
+
 
 // --- resolveVisionProviderSettings ---
 
@@ -121,6 +141,7 @@ describe("captionImage", () => {
 
     test("captions image from url", async () => {
         let capturedCall = null;
+        let capturedFetchUrl = "";
         const llm = {
             isProviderConfigured: (provider) => provider === "anthropic",
             generate: async (params) => {
@@ -133,19 +154,43 @@ describe("captionImage", () => {
             }
         };
 
-        const result = await captionImage({
+        const result = await withMockFetch(async (requestedUrl) => {
+            capturedFetchUrl = String(requestedUrl || "");
+            return imageResponse("cat-bytes", "image/png");
+        }, () => captionImage({
             llm,
             url: "https://cdn.example.com/cat.jpg"
-        });
+        }));
 
         assert.ok(result);
         assert.equal(result.caption, "An orange tabby cat sitting on a mechanical keyboard");
         assert.equal(result.provider, "anthropic");
         assert.equal(result.model, "claude-haiku-4-5");
 
-        // Verify the image was passed as a url input
+        assert.equal(capturedFetchUrl, "https://cdn.example.com/cat.jpg");
         assert.equal(capturedCall.imageInputs.length, 1);
-        assert.equal(capturedCall.imageInputs[0].url, "https://cdn.example.com/cat.jpg");
+        assert.equal(capturedCall.imageInputs[0].url, undefined);
+        assert.equal(capturedCall.imageInputs[0].mediaType, "image/png");
+        assert.equal(capturedCall.imageInputs[0].dataBase64, Buffer.from("cat-bytes").toString("base64"));
+    });
+
+    test("returns null for unfetchable url without calling llm", async () => {
+        let generateCalled = false;
+        const llm = {
+            isProviderConfigured: (provider) => provider === "anthropic",
+            generate: async () => {
+                generateCalled = true;
+                return { text: "should not happen", provider: "anthropic", model: "claude-haiku-4-5" };
+            }
+        };
+
+        const result = await withMockFetch(async () => new Response("missing", { status: 404 }), () => captionImage({
+            llm,
+            url: "https://cdn.example.com/missing.jpg"
+        }));
+
+        assert.equal(result, null);
+        assert.equal(generateCalled, false);
     });
 
     test("captions image from base64 data", async () => {
@@ -186,7 +231,8 @@ describe("captionImage", () => {
 
         await captionImage({
             llm,
-            url: "https://example.com/img.jpg",
+            dataBase64: "aW1n",
+            mimeType: "image/jpeg",
             prompt: "What text is visible in this image?"
         });
 
@@ -199,7 +245,7 @@ describe("captionImage", () => {
             generate: async () => ({ text: "", provider: "anthropic", model: "claude-haiku-4-5" })
         };
 
-        const result = await captionImage({ llm, url: "https://example.com/img.jpg" });
+        const result = await captionImage({ llm, dataBase64: "aW1n", mimeType: "image/jpeg" });
         assert.equal(result, null);
     });
 
@@ -209,7 +255,7 @@ describe("captionImage", () => {
             generate: async () => { throw new Error("API error"); }
         };
 
-        const result = await captionImage({ llm, url: "https://example.com/img.jpg" });
+        const result = await captionImage({ llm, dataBase64: "aW1n", mimeType: "image/jpeg" });
         assert.equal(result, null);
     });
 
@@ -225,7 +271,8 @@ describe("captionImage", () => {
 
         await captionImage({
             llm,
-            url: "https://example.com/meme.jpg",
+            dataBase64: "aW1n",
+            mimeType: "image/jpeg",
             trace: { guildId: "g1", channelId: "c1", userId: "u1", source: "test_caption" }
         });
 
@@ -243,7 +290,7 @@ describe("captionImage", () => {
             }
         };
 
-        await captionImage({ llm, url: "https://example.com/img.jpg" });
+        await captionImage({ llm, dataBase64: "aW1n", mimeType: "image/jpeg" });
         assert.equal(capturedTrace.source, "image_caption");
     });
 });
