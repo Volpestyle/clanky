@@ -145,16 +145,17 @@ function buildHint({
   workspaceRoots: readonly string[];
   missingWorkspaceRoots: string[];
 }): string {
+  const userInstall =
+    "`mkdir -p ~/.agents/skills ~/.claude/skills && " +
+    "ln -s /absolute/path/to/swarm-mcp/skills/swarm-mcp ~/.agents/skills/swarm-mcp && " +
+    "ln -s ../../.agents/skills/swarm-mcp ~/.claude/skills/swarm-mcp`";
   if (workspaceRoots.length === 0) {
-    return (
-      "swarm-mcp skill not found. Install it for the current user so Claude Code subagents can discover it: " +
-      "`mkdir -p ~/.claude/skills && ln -s /absolute/path/to/swarm-mcp/skills/swarm-mcp ~/.claude/skills/swarm-mcp`."
-    );
+    return `swarm-mcp skill not found. Install it for the current user so Claude Code subagents can discover it: ${userInstall}.`;
   }
   const example = missingWorkspaceRoots[0] || workspaceRoots[0];
   return (
     "swarm-mcp skill not installed at any workspace root or ancestor. Pick a scope: " +
-    `user-level (\`mkdir -p ~/.claude/skills && ln -s /absolute/path/to/swarm-mcp/skills/swarm-mcp ~/.claude/skills/swarm-mcp\`) ` +
+    `user-level (${userInstall}) ` +
     `or project-level — e.g. inside ${example}: ` +
     "`mkdir -p .agents/skills .claude/skills && " +
     "ln -s /absolute/path/to/swarm-mcp/skills/swarm-mcp .agents/skills/swarm-mcp && " +

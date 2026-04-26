@@ -182,9 +182,9 @@ export function SwarmMcpSkillStatusBadge() {
             onClick={() => void install("user")}
             disabled={installing !== null}
             style={installButtonStyle}
-            title="Symlink into ~/.claude/skills/swarm-mcp — applies to every project on this machine"
+            title="Symlink into ~/.agents/skills/swarm-mcp and ~/.claude/skills/swarm-mcp — applies to every project on this machine"
           >
-            {userBusy ? "Installing…" : "User-level (~/.claude/skills/swarm-mcp)"}
+            {userBusy ? "Installing…" : "User-level (~/.agents/skills + ~/.claude/skills)"}
           </button>
           {missingRoots.map((root) => {
             const busy = installing === root;
@@ -225,8 +225,9 @@ export function SwarmMcpSkillStatusBadge() {
           }}
         >
 {`# User-level (one-time, applies to every project)
-mkdir -p ~/.claude/skills
-ln -s /absolute/path/to/swarm-mcp/skills/swarm-mcp ~/.claude/skills/swarm-mcp
+mkdir -p ~/.agents/skills ~/.claude/skills
+ln -s /absolute/path/to/swarm-mcp/skills/swarm-mcp ~/.agents/skills/swarm-mcp
+ln -s ../../.agents/skills/swarm-mcp ~/.claude/skills/swarm-mcp
 
 # Or workspace-level, run inside the workspace root:
 mkdir -p .agents/skills .claude/skills

@@ -101,11 +101,30 @@ export function installSwarmMcpSkill(
   }
 
   if (request.scope === "user") {
-    const skillsDir = join(homedir(), ".claude", "skills");
-    mkdirSync(skillsDir, { recursive: true });
-    const linkPath = join(skillsDir, SKILL_NAME);
-    const result = ensureSymlink(linkPath, source, created, skipped);
-    if (!result.ok) return { ok: false, source, created, skipped, reason: result.reason };
+    const home = homedir();
+    const agentsSkills = join(home, ".agents", "skills");
+    const claudeSkills = join(home, ".claude", "skills");
+    mkdirSync(agentsSkills, { recursive: true });
+    mkdirSync(claudeSkills, { recursive: true });
+
+    const agentsResult = ensureSymlink(
+      join(agentsSkills, SKILL_NAME),
+      source,
+      created,
+      skipped
+    );
+    if (!agentsResult.ok) {
+      return { ok: false, source, created, skipped, reason: agentsResult.reason };
+    }
+    const claudeResult = ensureSymlink(
+      join(claudeSkills, SKILL_NAME),
+      CLAUDE_REL_TARGET,
+      created,
+      skipped
+    );
+    if (!claudeResult.ok) {
+      return { ok: false, source, created, skipped, reason: claudeResult.reason };
+    }
     return { ok: true, source, created, skipped };
   }
 
