@@ -677,6 +677,12 @@ test("getCodeAgentValidationError requires allowed users when code agent is enab
   );
 
   form.codeAgentAllowedUserIds = "123456789";
+  assert.equal(
+    getCodeAgentValidationError(form),
+    "Add at least one allowed coding workspace root before enabling the code agent."
+  );
+
+  form.codeAgentAllowedWorkspaceRoots = "/Users/james/code";
   assert.equal(getCodeAgentValidationError(form), "");
 });
 
@@ -736,10 +742,15 @@ test("settingsFormModel round-trips codex cli code agent fields", () => {
 
   assert.equal(form.codeAgentProvider, "codex-cli");
   assert.equal(form.codeAgentCodexCliModel, "gpt-5.4");
+  form.codeAgentAllowedWorkspaceRoots = "/Users/james/code\n/Users/james/volpestyle";
 
   const { patch, effectivePatch } = serializeForm(form);
   assert.deepEqual(patch.agentStack.overrides.devTeam.codingWorkers, ["codex_cli"]);
   assert.equal(effectivePatch.agentStack.runtimeConfig.devTeam.codexCli.model, "gpt-5.4");
+  assert.deepEqual(effectivePatch.permissions.devTasks.allowedWorkspaceRoots, [
+    "/Users/james/code",
+    "/Users/james/volpestyle"
+  ]);
 });
 
 test("settingsFormModel preserves code-worker swarm runtime config", () => {
@@ -782,6 +793,7 @@ test("settingsFormModel enables role-selected coding workers even when provider 
   form.stackAdvancedOverridesEnabled = true;
   form.codeAgentEnabled = true;
   form.codeAgentAllowedUserIds = "123456789";
+  form.codeAgentAllowedWorkspaceRoots = "/Users/james/code";
   form.codeAgentProvider = "auto";
   form.codeAgentRoleDesign = "claude_code";
   form.codeAgentRoleImplementation = "codex_cli";

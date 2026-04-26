@@ -11,6 +11,7 @@ import type { SubAgentSessionManager, SubAgentSession, SubAgentTurnResult } from
 import {
   resolveCodeAgentConfig
 } from "../agents/codeAgentSettings.ts";
+import { assertCodeAgentCwdAllowed } from "../agents/codeAgentRepoResolver.ts";
 import {
   buildMinecraftSessionScopeKey,
   findConflictingMinecraftSession,
@@ -1283,6 +1284,7 @@ function resolveSwarmPlannerPeer(
   }
   const cwd = getStringInput(input, "cwd") || resolveCodeAgentConfig(context.settings, undefined, "implementation").cwd;
   const workspace = resolveCodeAgentWorkspace({ cwd });
+  assertCodeAgentCwdAllowed(context.settings, workspace.canonicalCwd);
   return runtime.swarm.peerManager.ensurePeer(workspace.repoRoot, workspace.repoRoot, workspace.canonicalCwd);
 }
 
@@ -1306,6 +1308,7 @@ async function executeSpawnCodeWorker(
         role: getStringInput(input, "role"),
         harness: getStringInput(input, "harness"),
         cwd,
+        githubUrl: getStringInput(input, "github_url") || getStringInput(input, "githubUrl"),
         guildId: context.guildId,
         channelId: context.channelId,
         userId: context.userId,
@@ -1390,7 +1393,7 @@ async function runCodeWorkerReviewAfterCompletion({
       task: reviewTask,
       role: "review",
       harness: getStringInput(input, "review_harness") || getStringInput(input, "harness"),
-      cwd,
+      cwd: cwd || initialResult.cwd,
       guildId: context.guildId,
       channelId: context.channelId,
       userId: context.userId,

@@ -164,7 +164,21 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
               placeholder="Leave empty for this repo root"
             />
             <p className="status-msg" role="status">
-              Local workers treat this as a git repo path. Clanky uses the live checkout and never creates disposable worktrees.
+              Optional fallback repo path when no GitHub URL or explicit cwd resolves the task.
+            </p>
+          </div>
+
+          <div className="field">
+            <label htmlFor="code-agent-workspace-roots">Allowed coding workspace roots</label>
+            <textarea
+              id="code-agent-workspace-roots"
+              rows={4}
+              value={form.codeAgentAllowedWorkspaceRoots}
+              onChange={set("codeAgentAllowedWorkspaceRoots")}
+              placeholder="/Users/james/code&#10;/Users/james.volpe/volpestyle"
+            />
+            <p className="status-msg" role="status">
+              One directory per line. Code workers can only run inside these roots, and GitHub issue URLs are matched to local clones under them.
             </p>
           </div>
 

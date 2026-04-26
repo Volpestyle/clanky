@@ -97,11 +97,16 @@ export function applySwarmLauncherFirstTurnPreamble(input: string, preamble?: st
 
 /**
  * Default seconds the worker should spend listening for follow-up messages
- * after `update_task(done)` before exiting. Short enough that idle workers
- * don't accumulate; long enough that the orchestrator's next reply turn
- * usually lands inside the window for natural multi-turn iteration.
+ * after `update_task(done)` before exiting. Sized to comfortably cover a
+ * typical Discord follow-up cadence (user reads result, reacts, asks a
+ * follow-up within a few minutes) so the orchestrator can reuse the live
+ * worker rather than re-spawning fresh each turn.
+ *
+ * Tradeoff: idle listening workers count against `maxParallelTasks` for
+ * the duration. Operators with tight worker-count budgets should either
+ * bump that cap or shorten this window.
  */
-export const SWARM_LAUNCHER_FOLLOWUP_LISTEN_SECONDS = 60;
+export const SWARM_LAUNCHER_FOLLOWUP_LISTEN_SECONDS = 300;
 
 /**
  * Behavioral-only preamble for swarm-launcher workers. Their instance row is

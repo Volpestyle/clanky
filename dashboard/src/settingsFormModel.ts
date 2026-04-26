@@ -302,6 +302,7 @@ function buildSettingsFormView(settings: unknown) {
         Number(devTeam.claudeCode?.maxParallelTasks || 0)
       ),
       allowedUserIds: devPermissions.allowedUserIds,
+      allowedWorkspaceRoots: devPermissions.allowedWorkspaceRoots,
       roleDesign: String(resolvedStack?.devTeam?.roles?.design || ""),
       roleImplementation: String(resolvedStack?.devTeam?.roles?.implementation || ""),
       roleReview: String(resolvedStack?.devTeam?.roles?.review || ""),
@@ -566,6 +567,8 @@ export function settingsToForm(settings: unknown) {
     codeAgentMaxTasksPerHour: resolved.codeAgent.maxTasksPerHour ?? defaults.codeAgent.maxTasksPerHour,
     codeAgentMaxParallelTasks: resolved.codeAgent.maxParallelTasks ?? defaults.codeAgent.maxParallelTasks,
     codeAgentAllowedUserIds: formatLineList(resolved.codeAgent.allowedUserIds ?? defaults.codeAgent.allowedUserIds),
+    codeAgentAllowedWorkspaceRoots:
+      formatLineList(resolved.codeAgent.allowedWorkspaceRoots ?? defaults.codeAgent.allowedWorkspaceRoots),
     codeAgentRoleDesign: String(resolved.codeAgent.roleDesign ?? "claude_code"),
     codeAgentRoleImplementation: String(resolved.codeAgent.roleImplementation ?? "claude_code"),
     codeAgentRoleReview: String(resolved.codeAgent.roleReview ?? "claude_code"),
@@ -899,9 +902,13 @@ export function getCodeAgentValidationError(form: SettingsForm): string {
     return "";
   }
   const patch = formToSettingsPatch(form);
-  return (patch.permissions?.devTasks?.allowedUserIds || []).length > 0
-    ? ""
-    : "Add at least one allowed user ID before enabling the code agent.";
+  if ((patch.permissions?.devTasks?.allowedUserIds || []).length === 0) {
+    return "Add at least one allowed user ID before enabling the code agent.";
+  }
+  if ((patch.permissions?.devTasks?.allowedWorkspaceRoots || []).length === 0) {
+    return "Add at least one allowed coding workspace root before enabling the code agent.";
+  }
+  return "";
 }
 
 type SettingsFormValidationError = {
@@ -1460,7 +1467,8 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
         maxReactionsPerHour: Number(form.maxReactions)
       },
       devTasks: {
-        allowedUserIds: parseUniqueList(form.codeAgentAllowedUserIds)
+        allowedUserIds: parseUniqueList(form.codeAgentAllowedUserIds),
+        allowedWorkspaceRoots: parseUniqueLineList(form.codeAgentAllowedWorkspaceRoots)
       }
     },
     interaction: {
@@ -1905,6 +1913,7 @@ const LIST_FORM_KEYS: ReadonlySet<string> = new Set([
   "discoveryRssFeeds",
   "discoveryXHandles",
   "codeAgentAllowedUserIds",
+  "codeAgentAllowedWorkspaceRoots",
   "replyChannels",
   "discoveryChannels",
   "allowedChannels",

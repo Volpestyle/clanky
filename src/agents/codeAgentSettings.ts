@@ -1,5 +1,7 @@
 import path from "node:path";
+import os from "node:os";
 import {
+  getDevTaskPermissions,
   getDevTeamRuntimeConfig,
   isDevTaskUserAllowed,
   resolveAgentStack
@@ -38,10 +40,34 @@ export function isCodeAgentUserAllowed(userId: string, settings: Record<string, 
   return isDevTaskUserAllowed(settings, userId);
 }
 
+function expandHomePath(value: string): string {
+  if (value === "~") return os.homedir();
+  if (value.startsWith(`~${path.sep}`) || value.startsWith("~/")) {
+    return path.join(os.homedir(), value.slice(2));
+  }
+  return value;
+}
+
 export function resolveCodeAgentCwd(settingsCwd: string, fallbackBaseDir: string): string {
   const raw = String(settingsCwd || "").trim();
-  if (raw) return path.resolve(fallbackBaseDir, raw);
+  if (raw) return path.resolve(fallbackBaseDir, expandHomePath(raw));
   return path.resolve(fallbackBaseDir);
+}
+
+export function resolveAllowedCodeWorkspaceRoots(settings: Record<string, unknown>): string[] {
+  const permissions = getDevTaskPermissions(settings);
+  const seen = new Set<string>();
+  const roots: string[] = [];
+  for (const value of permissions.allowedWorkspaceRoots || []) {
+    const raw = String(value || "").trim();
+    if (!raw) continue;
+    const resolved = path.resolve(process.cwd(), expandHomePath(raw));
+    const key = resolved.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    roots.push(resolved);
+  }
+  return roots;
 }
 
 export interface CodeAgentConfig {

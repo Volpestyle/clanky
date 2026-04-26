@@ -159,6 +159,39 @@ test("cancelled status invokes the cancel hook with the taskId", async () => {
   expect(cancels).toEqual([{ taskId: "task-1", reason: "swarm task cancelled" }]);
 });
 
+test("cancelled status still cancels the worker when terminal delivery fails", async () => {
+  let task: SwarmTask | null = makeTask({ id: "task-1", status: "cancelled", result: "by user" });
+  const cancels: { taskId: string; reason?: string }[] = [];
+  const errors: string[] = [];
+  bridge = new SwarmActivityBridge({
+    onTerminal: () => {
+      throw new Error("discord send failed");
+    },
+    cancelWorker: async (taskId, reason) => {
+      cancels.push({ taskId, reason });
+      return true;
+    },
+    logAction: (entry) => {
+      const metadata = entry.metadata && typeof entry.metadata === "object"
+        ? entry.metadata as { error?: unknown }
+        : null;
+      errors.push(String(metadata?.error || ""));
+    }
+  });
+  const peer = fakePeer({
+    scope: "/repo",
+    task: () => task,
+    annotations: () => []
+  });
+  bridge.trackTask(peer as ClankyPeer, makeContext());
+
+  await bridge.pollOnce("/repo");
+
+  expect(cancels).toEqual([{ taskId: "task-1", reason: "swarm task cancelled" }]);
+  expect(errors).toEqual(["discord send failed"]);
+  expect(bridge.size()).toBe(0);
+});
+
 test("contextsForScope filters by guildId and channelId", () => {
   bridge = new SwarmActivityBridge();
   const peerA = fakePeer({ scope: "/repoA", task: () => null, annotations: () => [] });

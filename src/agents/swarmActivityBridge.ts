@@ -359,10 +359,13 @@ export class SwarmActivityBridge {
     if (task.status === "done" || task.status === "failed" || task.status === "cancelled") {
       const status = task.status;
       const result = String(task.result || "").trim();
+      let terminalError: unknown = null;
       try {
         if (this.onTerminal) {
           await this.onTerminal({ context: ctx, status, result });
         }
+      } catch (error) {
+        terminalError = error;
       } finally {
         this.contexts.delete(ctx.taskId);
         this.seenProgressIds.delete(ctx.taskId);
@@ -373,6 +376,7 @@ export class SwarmActivityBridge {
         await this.cancelWorker(ctx.taskId, "swarm task cancelled").catch(() => false);
       }
       this.stopPollingIfEmpty(ctx.scope);
+      if (terminalError) throw terminalError;
     }
   }
 }

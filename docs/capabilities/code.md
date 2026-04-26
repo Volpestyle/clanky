@@ -24,6 +24,7 @@ Core runtime files:
 - `src/agents/swarmTaskWaiter.ts` — small `wait_for_activity` helper used by the slash command and by the conditional `wait_for_activity` tool
 - `src/agents/codeAgentSwarm.ts` — label builder and worker first-turn preamble
 - `src/agents/codeAgentSettings.ts` — `resolveCodeAgentConfig` and `isCodeAgentUserAllowed`
+- `src/agents/codeAgentRepoResolver.ts` — approved workspace-root enforcement and GitHub URL → local clone resolution
 - `src/agents/codeAgentWorkspace.ts` — `resolveCodeAgentWorkspace({ cwd })` (repo-root resolver only; no worktree creation)
 - `src/llm/llmClaudeCode.ts` and `src/llm/llmCodexCli.ts` — harness CLI arg builders
 
@@ -33,6 +34,7 @@ Access is settings-driven, not env-var-driven:
 
 - at least one coding worker must be enabled under `agentStack.runtimeConfig.devTeam.*`
 - caller Discord user ID must be present in `permissions.devTasks.allowedUserIds`
+- at least one local workspace root must be present in `permissions.devTasks.allowedWorkspaceRoots`
 
 Product-wise, code orchestration belongs to Clanky's trusted-collaborator tier, not the baseline community tier. Shared/community users can still talk to Clanky, search the web, or use other lower-trust capabilities, but code orchestration stays reserved for explicitly approved people and approved resources. The broader relationship model is documented in [`../architecture/relationship-model.md`](../architecture/relationship-model.md).
 
@@ -44,6 +46,7 @@ The canonical persistence, preset, and save semantics for these fields live in [
 
 Guardrails enforced inside `spawn_code_worker`:
 
+- resolved worker cwd must be inside one of `permissions.devTasks.allowedWorkspaceRoots`
 - per-harness `maxTasksPerHour` (rolling-window counter)
 - per-harness `maxParallelTasks` (counted by `swarmActivityBridge`-observed terminal events)
 - per-task timeout and output buffer limits
@@ -87,12 +90,12 @@ spawn_code_worker({
   task: string,                 // initial task description
   role?: "design" | "implementation" | "review" | "research",
   harness?: "claude-code" | "codex-cli",  // overrides role-based routing
-  cwd?: string,
-  worker_mode?: "one_shot" | "inbox_loop",
+  cwd?: string,                  // must be under an approved workspace root
+  github_url?: string,           // issue/PR/repo URL resolved to a local clone when cwd is omitted
   review_after_completion?: boolean,
   review_harness?: "claude-code" | "codex-cli",
   wait_timeout_ms?: number,
-}) → { workerId, taskId, scope, workerMode, sessionKey, persistedSession }
+}) → { workerId, taskId, scope, cwd, sessionKey, persistedSession }
 ```
 
 Swarm-mcp tools mounted alongside it (only for `devTasks`-allowed users):
@@ -105,7 +108,7 @@ Swarm-mcp tools mounted alongside it (only for `devTasks`-allowed users):
 
 Each tool resolves through Clanky's per-scope planner peer (`peerManager.ensurePeer(...)`), so a single peer identity speaks for the orchestrator across the whole reply turn. The planner-peer label is `origin:clanky role:planner thread:<thread> user:<user>`.
 
-`sessionKey` is non-null only for `worker_mode="inbox_loop"`. Clanky writes that key to swarm KV with the latest worker/task identity for the requesting guild/channel/user, and `send_message` can later target the same worker with either `recipient=<workerId>` or `session_key=<sessionKey>`.
+Clanky writes `sessionKey` to swarm KV with the latest worker/task identity for the requesting guild/channel/user, and `send_message` can later target the same worker with either `recipient=<workerId>` or `session_key=<sessionKey>` while the worker is still in its brief post-task follow-up window.
 
 Clanky also publishes its scoped controller peer id at `kv_get("clanky/controller")` whenever it spawns a code worker in that scope. Planner workers use this to ask Clanky for capacity when their delegated work is stranded.
 
@@ -115,7 +118,7 @@ The shared tool schema stays intentionally concise. Tool descriptions name each 
 
 A typical code dispatch is a chain of tool calls the orchestrator stitches together:
 
-1. `spawn_code_worker(task, role, cwd, worker_mode)` — Clanky reserves an instance row, builds harness env vars, spawns the worker (claude-code or codex-cli with `swarm-mcp` mounted), waits for auto-adopt, creates a swarm task, assigns the task to the worker, and returns `{ workerId, taskId, scope, workerMode, sessionKey }`.
+1. `spawn_code_worker(task, role, cwd)` — Clanky reserves an instance row, builds harness env vars, spawns the worker (claude-code or codex-cli with `swarm-mcp` mounted), waits for auto-adopt, creates a swarm task, assigns the task to the worker, and returns `{ workerId, taskId, scope, cwd, sessionKey }`.
 2. `wait_for_activity(taskId)` — orchestrator blocks until the task reaches a terminal status. The activity event stream also surfaces `progress` annotations along the way.
 3. `get_task(taskId)` — orchestrator reads the final `result` text and the sibling `kind="usage"` annotation for cost/usage telemetry.
 4. Orchestrator composes the user-facing reply.
@@ -124,24 +127,25 @@ Variations the orchestrator can express directly:
 
 - **Status check**: `get_task(taskId)`, optionally `list_tasks(scope)` to see siblings.
 - **Cancel**: `update_task(taskId, status="cancelled")`. Clanky marks the swarm task cancelled, then stops the backing worker — closing its swarm-server PTY when available or SIGTERMing the fallback child process.
-- **Followup (existing worker)**: `send_message(workerId, content)` or `send_message(session_key, content)` if the worker is a long-lived inbox-loop worker. The worker's first-turn preamble decides whether it loops on inbox after `update_task` or exits. If the peer is no longer active, the orchestrator spawns a fresh worker.
+- **Followup (existing worker)**: `send_message(workerId, content)` or `send_message(session_key, content)` while the worker is still in its post-task listen window. If the peer is no longer active, the orchestrator spawns a fresh worker.
 - **Followup (fresh worker)**: `request_task({ parent_task_id: originalTaskId, ... })` followed by another `spawn_code_worker(...)`. Lets the orchestrator re-pick harness or `cwd`.
 - **Multi-worker fan-out**: multiple `spawn_code_worker` calls in one turn — e.g. a researcher and an implementer in parallel — with the orchestrator coordinating them via `send_message` and `lock_file`.
 - **Quality verification**: `spawn_code_worker(..., review_after_completion=true)` waits for the implementation task, then spawns a one-shot `role="review"` worker against the same workspace. The tool returns the implementation completion and the review completion. The reviewer is instructed to avoid edits, inspect the diff and relevant files, and start with `APPROVED:` or `ISSUES:`.
-- **Long-lived planner**: `spawn_code_worker(role="design", worker_mode="inbox_loop")` creates a planner peer that can stay alive after its initial planning task. Clanky drives it with `send_message`, and the planner can create subtasks for implementers through swarm-mcp.
+- **Planner loop**: `spawn_code_worker(role="design")` creates a planner peer that can stay alive briefly after its initial planning task. Clanky drives it with `send_message` during that listen window, and respawns if the peer exits.
 - **Planner spawn escalation**: if a planner-created task remains open and unclaimed, the planner sends Clanky's controller peer `JSON.stringify({ v: 1, kind: "spawn_request", taskId, role, reason })`. The activity bridge validates the schema version, deduplicates repeated `(sender, kind, taskId)` requests for 60 seconds, rate-limits each sender, then asks Clanky's bot runtime to spawn or decline. The planner cannot choose `cwd` or `harness`; Clanky pins the spawn to the planner's own stored context and checks the original Discord requester's `devTasks` permission before creating a worker.
 
-There is no procedural action enum. The swarm `taskId` is the canonical identity for any in-flight or terminal piece of work. Inbox-loop workers additionally get a KV-backed `sessionKey` so later reply turns can target the same live worker without relying on Discord-visible memory of the raw worker id.
+There is no procedural action enum. The swarm `taskId` is the canonical identity for any in-flight or terminal piece of work. Workers additionally get a KV-backed `sessionKey` so later reply turns can target the same live worker without relying on Discord-visible memory of the raw worker id.
 
 The behavioral contract every Clanky-spawned worker follows lives in [`../architecture/swarm-worker-contract.md`](../architecture/swarm-worker-contract.md).
 
 ## Workspace
 
-Workers run in the operator's checkout. `spawn_code_worker` resolves `cwd` to a path inside a git repo via `resolveCodeAgentWorkspace({ cwd })` and pins the swarm `scope` to the repo root.
+Workers run in the operator's checkout. `spawn_code_worker` resolves `cwd` to a path inside a git repo via `resolveCodeAgentWorkspace({ cwd })`, verifies that path is under an approved coding workspace root, and pins the swarm `scope` to the repo root.
 
 `cwd` resolution order:
 
 - explicit `cwd` argument if provided
+- otherwise, a GitHub issue/PR/repo URL from `github_url` or the task text is matched to exactly one local clone under `permissions.devTasks.allowedWorkspaceRoots`
 - otherwise the selected role worker's `defaultCwd`
 - otherwise fallback: the bot repo root (`process.cwd()`)
 
@@ -150,6 +154,7 @@ Important boundaries:
 - Clanky does not create or manage `git worktree`s. Operators that want parallel-isolated workspaces should manage their own worktrees and aim `spawn_code_worker` at the appropriate cwd.
 - This is workspace selection, not host isolation. Workers run as the same OS user and keep normal machine access.
 - The resolved `cwd` must point inside a git repository; non-repo paths are rejected.
+- Clanky never auto-clones repositories from chat or voice. If GitHub URL resolution cannot find exactly one approved local clone, it returns a deterministic error and the operator must add the clone/root in settings or provide an approved `cwd`.
 
 ## Coordination Substrate
 

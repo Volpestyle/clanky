@@ -214,7 +214,11 @@ export const SPAWN_CODE_WORKER_SCHEMA: SharedToolSchema = {
         enum: ["claude-code", "codex-cli"],
         description: "Optional worker harness override."
       },
-      cwd: { type: "string", description: "Working directory. Defaults to the selected worker's configured project root." },
+      cwd: { type: "string", description: "Working directory. Must be inside an allowed coding workspace root. Defaults to GitHub repo URL resolution, then the selected worker's configured project root." },
+      github_url: {
+        type: "string",
+        description: "Optional GitHub issue, PR, or repo URL. When cwd is omitted, Clanky resolves this to a matching local clone under allowed coding workspace roots."
+      },
       review_after_completion: {
         type: "boolean",
         description: "When true, wait for the implementation task, then spawn a one-shot review worker against the same cwd and return both results. Use sparingly."

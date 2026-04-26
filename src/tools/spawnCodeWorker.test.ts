@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { SwarmTask, UpdateTaskOpts } from "../agents/swarmPeer.ts";
@@ -38,7 +38,8 @@ function makeSettings(workspaceDir: string, dbPath: string) {
   return createTestSettings({
     permissions: {
       devTasks: {
-        allowedUserIds: ["user-1"]
+        allowedUserIds: ["user-1"],
+        allowedWorkspaceRoots: [workspaceDir]
       }
     },
     agentStack: {
@@ -228,6 +229,67 @@ test("spawnCodeWorker persists a session record on every spawn so followups can 
     expect(workerSession).toBeDefined();
 
     await expect(cancelSpawnedWorkerForTask("task-inbox", "test cleanup")).resolves.toBe(true);
+  });
+});
+
+test("spawnCodeWorker resolves GitHub issue URLs to approved local clones", async () => {
+  await withTempWorkspace(async (workspaceDir, dbPath) => {
+    const repoDir = path.join(workspaceDir, "nested", "clanky");
+    mkdirSync(repoDir, { recursive: true });
+    spawnSync("git", ["init", "--quiet"], { cwd: repoDir });
+    spawnSync("git", ["remote", "add", "origin", "https://github.com/Volpestyle/clanky.git"], { cwd: repoDir });
+
+    const realRepoDir = realpathSync(repoDir);
+    const order: string[] = [];
+    const task = makeTask("task-github", realRepoDir);
+    const spawned = makeSpawnedPeer("worker-github", realRepoDir, order);
+    let capturedOptions: SpawnPeerOptions | null = null;
+    const peer = {
+      instanceId: "clanky-planner",
+      requestTask: async () => task,
+      assignTask: async (_taskId: string, assignee: string) => {
+        task.assignee = assignee;
+        return task;
+      },
+      getTask: async () => task,
+      kvSet: async (key: string, value: string) => ({
+        scope: realRepoDir,
+        key,
+        value,
+        updatedAt: Date.now()
+      }),
+      updateTask: async (_taskId: string, opts: UpdateTaskOpts) => {
+        task.status = opts.status;
+        task.result = opts.result ?? null;
+        return task;
+      }
+    };
+
+    const result = await spawnCodeWorker({
+      settings: makeSettings(workspaceDir, dbPath),
+      task: "Fix https://github.com/Volpestyle/clanky/issues/25",
+      guildId: null,
+      channelId: "channel-1",
+      userId: "user-1"
+    }, {
+      store: {
+        countActionsSince: () => 0,
+        logAction: () => {}
+      },
+      peerManager: {
+        ensurePeer: () => peer
+      } as never,
+      reservationKeeper: {} as never,
+      spawnPeer: async (opts: SpawnPeerOptions) => {
+        capturedOptions = opts;
+        return spawned;
+      }
+    });
+
+    expect(capturedOptions?.cwd).toBe(realRepoDir);
+    expect(result.cwd).toBe(realRepoDir);
+
+    await expect(cancelSpawnedWorkerForTask("task-github", "test cleanup")).resolves.toBe(true);
   });
 });
 

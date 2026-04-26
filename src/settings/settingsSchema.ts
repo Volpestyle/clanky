@@ -215,7 +215,8 @@ export const DEFAULT_SETTINGS = {
       maxReactionsPerHour: 24
     },
     devTasks: {
-      allowedUserIds: []
+      allowedUserIds: [],
+      allowedWorkspaceRoots: []
     }
   },
   interaction: {

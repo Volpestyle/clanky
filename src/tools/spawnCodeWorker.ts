@@ -5,6 +5,10 @@ import {
   resolveCodeAgentCwd,
   type CodeAgentRole
 } from "../agents/codeAgentSettings.ts";
+import {
+  assertCodeAgentCwdAllowed,
+  resolveGitHubRepoCwdForCodeTask
+} from "../agents/codeAgentRepoResolver.ts";
 import { resolveCodeAgentWorkspace } from "../agents/codeAgentWorkspace.ts";
 import {
   spawnPeer,
@@ -30,6 +34,7 @@ export type SpawnCodeWorkerArgs = {
   channelId: string | null;
   userId: string | null;
   triggerMessageId?: string | null;
+  githubUrl?: string | null;
   source?: string | null;
   existingTaskId?: string | null;
   signal?: AbortSignal;
@@ -68,6 +73,7 @@ export type SpawnCodeWorkerResult = {
   workerId: string;
   taskId: string;
   scope: string;
+  cwd: string;
   /**
    * KV key under which the live worker is recorded. Orchestrators use it on
    * later reply turns to drive `send_message` follow-ups against the same
@@ -271,6 +277,7 @@ function selectedHarnessConfig(
     ? resolveCodeAgentCwd(String(cwdOverride || selectedConfig.defaultCwd || ""), process.cwd())
     : base.cwd;
   const workspace = resolveCodeAgentWorkspace({ cwd });
+  assertCodeAgentCwdAllowed(settings, workspace.canonicalCwd);
   return {
     role,
     taskType: roleToTaskType(role),
@@ -402,7 +409,14 @@ export async function spawnCodeWorker(
   if (args.harness && !harnessOverride) {
     throw new Error("Invalid harness. Expected claude-code or codex-cli.");
   }
-  const launch = selectedHarnessConfig(args.settings, args.cwd, role, harnessOverride);
+  const repoResolution = args.cwd
+    ? null
+    : resolveGitHubRepoCwdForCodeTask({
+      settings: args.settings,
+      task,
+      githubUrl: args.githubUrl
+    });
+  const launch = selectedHarnessConfig(args.settings, args.cwd || repoResolution?.cwd, role, harnessOverride);
 
   await pruneTerminalActiveWorkers(launch.harness);
   if (activeWorkerCount(launch.harness) >= launch.maxParallelTasks) {
@@ -551,6 +565,7 @@ export async function spawnCodeWorker(
         model: launch.model,
         taskId: swarmTask.id,
         existingTaskId: existingTaskId || null,
+        githubRepo: repoResolution?.githubRepo || null,
         instanceId: spawned.instanceId,
         sessionKey,
         persistedSession,
@@ -563,6 +578,7 @@ export async function spawnCodeWorker(
       workerId: spawned.instanceId,
       taskId: swarmTask.id,
       scope: launch.scope,
+      cwd: launch.cwd,
       sessionKey,
       persistedSession
     };
