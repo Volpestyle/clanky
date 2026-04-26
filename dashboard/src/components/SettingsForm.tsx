@@ -769,8 +769,8 @@ export default function SettingsForm({
 
             <SettingsSection id="sec-stack" title="Stack Preset">
               <label htmlFor="stack-preset">Preset</label>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <select id="stack-preset" value={form.stackPreset} onChange={set("stackPreset")} style={{ flex: 1 }}>
+              <div className="settings-inline-action-row">
+                <select id="stack-preset" value={form.stackPreset} onChange={set("stackPreset")} style={{ flex: 1, minWidth: 0 }}>
                   {AGENT_STACK_PRESET_OPTIONS.map((preset) => (
                     <option key={preset.value} value={preset.value}>
                       {preset.label}
@@ -883,7 +883,7 @@ export default function SettingsForm({
             </button>
           </div>
         )}
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <div className="save-bar-actions">
           <button
             type="submit"
             className="cta"

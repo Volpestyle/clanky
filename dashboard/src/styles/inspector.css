@@ -500,8 +500,17 @@
 /* -- responsive -- */
 
 @media (max-width: 800px) {
+  .inspector-toolbar-left,
+  .inspector-toolbar-right {
+    width: 100%;
+  }
+  .inspector-toolbar-right {
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
   .inspector-body {
     grid-template-columns: 1fr;
+    min-height: 0;
   }
   .inspector-subjects {
     max-height: 200px;
@@ -518,6 +527,25 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .inspector-editor-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .inspector-facts-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .inspector-facts-controls {
+    gap: 8px;
+  }
+  .inspector-facts-table-wrap {
+    max-height: 62vh;
+  }
+  .inspector-table {
+    min-width: 620px;
+  }
+  .inspector-detail-grid {
     grid-template-columns: 1fr;
   }
 }

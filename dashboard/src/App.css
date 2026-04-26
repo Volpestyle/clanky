@@ -1654,6 +1654,10 @@ button.sm {
   .grid-main, .grid-secondary {
     grid-template-columns: 1fr;
   }
+  .grid-secondary > .panel {
+    height: auto;
+    min-height: 0;
+  }
   .memory-reflection-grid {
     grid-template-columns: 1fr;
   }
@@ -1669,8 +1673,49 @@ button.sm {
 }
 
 @media (max-width: 640px) {
+  html, body {
+    overflow-x: hidden;
+  }
+  html, body, #root {
+    font-size: 14px;
+  }
+  .shell {
+    width: min(100% - 20px, 1340px);
+    padding: 10px 0 32px;
+    gap: 10px;
+  }
+  .panel {
+    padding: 14px;
+    border-radius: var(--radius-sm);
+  }
+  input, textarea, select {
+    font-size: 16px;
+  }
+  button {
+    min-height: 36px;
+  }
+  button.sm {
+    min-height: 32px;
+  }
+  .runtime-banner {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 10px 14px;
+  }
+  .runtime-banner-left {
+    width: 100%;
+    min-width: 0;
+  }
   .metrics-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px;
+  }
+  .metric-tile {
+    padding: 9px 10px;
+  }
+  .metric-tile-label,
+  .metrics-extra-label {
+    letter-spacing: 0.06em;
   }
   .split, .split-3 {
     grid-template-columns: 1fr;
@@ -1681,14 +1726,50 @@ button.sm {
   .performance-summary-grid {
     grid-template-columns: 1fr;
   }
+  .performance-phase-table {
+    overflow-x: auto;
+  }
   .performance-phase-header,
   .performance-phase-row {
+    min-width: 460px;
     grid-template-columns: 1.2fr 0.8fr 0.8fr 0.8fr 0.5fr;
+  }
+  .main-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+    top: 8px;
+    padding: 4px;
+  }
+  .main-tab {
+    min-width: 0;
+    gap: 5px;
+    padding: 8px 4px;
+    font-size: 0.68rem;
+    letter-spacing: 0.055em;
+  }
+  .main-tab-icon svg {
+    width: 13px;
+    height: 13px;
   }
   .hero-strip {
     flex-direction: column;
     align-items: flex-start;
     gap: 10px;
+    padding: 12px 14px;
+  }
+  .hero-left {
+    width: 100%;
+  }
+  .hero-sigil {
+    width: 28px;
+    height: 28px;
+  }
+  .hero-tag {
+    white-space: normal;
+  }
+  .hero-label {
+    font-size: 0.66rem;
   }
   .hero-right {
     width: 100%;
@@ -1704,6 +1785,58 @@ button.sm {
   }
   .hero-guild-scope {
     min-width: min(100%, 280px);
+    flex: 1 1 180px;
+  }
+  .hero-status {
+    flex: 0 0 auto;
+  }
+  .token-dropdown {
+    padding: 10px 14px 12px;
+  }
+  .token-row {
+    align-items: stretch;
+  }
+  .token-row input,
+  #dashboard-token {
+    width: 100% !important;
+    flex: 1 1 100%;
+  }
+  .token-row button {
+    flex: 1 1 120px;
+  }
+  .panel-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .panel-head select {
+    width: 100%;
+    min-width: 0;
+  }
+  .memory-form-action .cta {
+    width: 100%;
+  }
+  .memory-style-sections {
+    grid-template-columns: 1fr;
+  }
+  .memory-style-section-head,
+  .memory-danger-modal-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .memory-reflection-summary {
+    padding: 12px 14px;
+  }
+  .memory-reflection-grid,
+  .memory-reflection-section {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .memory-reflection-meta,
+  .memory-reflection-usage {
+    grid-template-columns: 1fr;
+  }
+  .memory-danger-modal {
+    padding: 14px;
   }
 }
 

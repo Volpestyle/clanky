@@ -454,6 +454,9 @@
 /* ---- RESPONSIVE ---- */
 
 @media (max-width: 640px) {
+  .tt-container {
+    padding: 0;
+  }
   .tt-card-header {
     gap: 6px;
     padding: 6px 10px;
@@ -466,6 +469,11 @@
 
   .tt-addressing {
     padding: 6px 10px;
+  }
+
+  .tt-header-cost,
+  .tt-header-model {
+    margin-left: 0;
   }
 
   .ui-section-body {

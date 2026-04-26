@@ -275,6 +275,39 @@
   margin-top: 0;
 }
 
+.save-bar-actions,
+.settings-inline-action-row,
+.provider-auth-code-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.save-bar-actions {
+  flex-wrap: wrap;
+}
+
+.settings-inline-action-row {
+  gap: 8px;
+}
+
+.provider-auth-code-row {
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.provider-auth-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.provider-auth-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+  min-width: 520px;
+}
+
 /* -- unsaved changes dot -- */
 
 .unsaved-dot {
@@ -625,6 +658,100 @@
   }
   .vps-advanced-summary-copy {
     margin-left: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .settings-form {
+    gap: 8px;
+  }
+  .settings-title {
+    font-size: 0.95rem;
+  }
+  .settings-sidebar {
+    gap: 6px;
+    padding-bottom: 10px;
+  }
+  .settings-nav-item {
+    flex: 1 1 calc(50% - 6px);
+    min-height: 36px;
+    padding: 7px 10px;
+    text-align: center;
+  }
+  .sidebar-search-results {
+    max-height: 50vh;
+  }
+  .settings-content {
+    gap: 8px;
+  }
+  .settings-content[style] {
+    padding-bottom: 45vh !important;
+  }
+  .settings-section {
+    scroll-margin-top: 112px;
+  }
+  .section-header {
+    padding: 10px 12px 0;
+  }
+  .section-body {
+    padding: 2px 12px 12px;
+  }
+  .save-bar {
+    margin: 8px -14px 0;
+    padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+  }
+  .save-bar-actions {
+    align-items: stretch;
+  }
+  .save-bar-actions > button {
+    flex: 1 1 100% !important;
+    width: 100% !important;
+    justify-content: center;
+  }
+  .settings-inline-action-row,
+  .provider-auth-code-row,
+  .channel-checklist-toolbar,
+  .uid-tag-footer,
+  .vps-parallel-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .settings-inline-action-row > button,
+  .provider-auth-code-row > button,
+  .channel-checklist-toolbar > button {
+    flex: 1 1 auto !important;
+    width: 100%;
+  }
+  .provider-auth-table {
+    min-width: 460px;
+  }
+  .vps-pipeline-flow {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 4px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .vps-stage-panel-header,
+  .vps-advanced-summary,
+  .voice-subpanel-summary,
+  .ers-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .vps-stage-path-tag,
+  .ers-preset-badge {
+    margin-left: 0;
+  }
+  .ers-grid {
+    grid-template-columns: 1fr;
+  }
+  .rb-tool {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .rb-tool-name {
+    white-space: normal;
   }
 }
 

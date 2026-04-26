@@ -314,6 +314,17 @@ td .kind-badge + .kind-badge {
 .as-tool-badge-soundboard { background: rgba(251, 146, 60, 0.12); color: #fb923c; }
 
 @media (max-width: 640px) {
+  .table-wrap {
+    max-width: 100%;
+  }
+  .action-table th,
+  .action-table td {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .action-detail {
+    padding: 10px;
+  }
   .action-detail-grid {
     grid-template-columns: 1fr;
   }
