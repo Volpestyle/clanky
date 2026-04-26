@@ -450,3 +450,181 @@ test("cancelSpawnedWorkerForTask still stops the worker when the task is already
     expect(getActiveSpawnedWorkerCount("codex-cli")).toBe(0);
   });
 });
+
+test("spawnCodeWorker reuses an idle worker via send_message instead of spawning fresh", async () => {
+  await withTempWorkspace(async (workspaceDir, dbPath) => {
+    const order: string[] = [];
+    let nextTaskId = 1;
+    const tasks = new Map<string, SwarmTask>();
+    const makeFreshTask = () => {
+      const id = `task-${nextTaskId++}`;
+      const t = makeTask(id, workspaceDir);
+      tasks.set(id, t);
+      return t;
+    };
+
+    const spawned = makeSpawnedPeer("worker-reuse", workspaceDir, order);
+    let spawnPeerCalls = 0;
+    const sentMessages: Array<{ recipient: string; content: string }> = [];
+    const assignedTaskIds: string[] = [];
+
+    const peer = {
+      instanceId: "clanky-orchestrator",
+      requestTask: async () => makeFreshTask(),
+      getTask: async (taskId: string) => tasks.get(taskId) ?? null,
+      assignTask: async (taskId: string, assignee: string) => {
+        const t = tasks.get(taskId);
+        if (!t) throw new Error(`unknown task ${taskId}`);
+        t.assignee = assignee;
+        t.status = "claimed";
+        assignedTaskIds.push(taskId);
+        return t;
+      },
+      sendMessage: async (recipient: string, content: string) => {
+        sentMessages.push({ recipient, content });
+      },
+      kvSet: async (key: string, value: string) => ({
+        scope: workspaceDir,
+        key,
+        value,
+        updatedAt: Date.now()
+      }),
+      updateTask: async (taskId: string, opts: UpdateTaskOpts) => {
+        const t = tasks.get(taskId);
+        if (!t) throw new Error(`unknown task ${taskId}`);
+        order.push(`update:${taskId}:${opts.status}`);
+        t.status = opts.status;
+        t.result = opts.result ?? null;
+        return t;
+      }
+    };
+
+    const settings = makeSettings(workspaceDir, dbPath);
+    const baseArgs = {
+      settings,
+      role: "implementation" as const,
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1"
+    };
+    const deps = {
+      store: {
+        countActionsSince: () => 0,
+        logAction: () => {}
+      },
+      peerManager: { ensurePeer: () => peer } as never,
+      reservationKeeper: {} as never,
+      spawnPeer: async (_opts: SpawnPeerOptions) => {
+        spawnPeerCalls += 1;
+        return spawned;
+      }
+    };
+
+    const first = await spawnCodeWorker({ ...baseArgs, task: "First task" }, deps);
+    expect(spawnPeerCalls).toBe(1);
+    expect(first.taskId).toBe("task-1");
+    expect(first.workerId).toBe("worker-reuse");
+    expect(getActiveSpawnedWorkerCount("codex-cli")).toBe(1);
+
+    // Mark the first task done so the worker enters its idle listen window.
+    // The next spawn call's refresh pass will flip the worker's idle flag.
+    tasks.get("task-1")!.status = "done";
+
+    const second = await spawnCodeWorker({ ...baseArgs, task: "Follow-up task" }, deps);
+
+    expect(spawnPeerCalls).toBe(1);
+    expect(second.workerId).toBe("worker-reuse");
+    expect(second.taskId).toBe("task-2");
+    expect(assignedTaskIds).toEqual(["task-1", "task-2"]);
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0]?.recipient).toBe("worker-reuse");
+    expect(sentMessages[0]?.content).toContain("task-2");
+    expect(sentMessages[0]?.content).toContain("Follow-up task");
+    expect(getActiveSpawnedWorkerCount("codex-cli")).toBe(1);
+
+    await expect(cancelSpawnedWorkerForTask("task-2", "test cleanup")).resolves.toBe(true);
+    expect(getActiveSpawnedWorkerCount("codex-cli")).toBe(0);
+  });
+});
+
+test("spawnCodeWorker falls through to fresh spawn when reuse fails", async () => {
+  await withTempWorkspace(async (workspaceDir, dbPath) => {
+    const order: string[] = [];
+    let nextTaskId = 1;
+    const tasks = new Map<string, SwarmTask>();
+    const makeFreshTask = () => {
+      const id = `task-${nextTaskId++}`;
+      const t = makeTask(id, workspaceDir);
+      tasks.set(id, t);
+      return t;
+    };
+
+    const spawnedFirst = makeSpawnedPeer("worker-stale", workspaceDir, order);
+    const spawnedSecond = makeSpawnedPeer("worker-fresh", workspaceDir, order);
+    const spawnedQueue: SpawnedPeer[] = [spawnedFirst, spawnedSecond];
+    let spawnPeerCalls = 0;
+
+    const peer = {
+      instanceId: "clanky-orchestrator",
+      requestTask: async () => makeFreshTask(),
+      getTask: async (taskId: string) => tasks.get(taskId) ?? null,
+      assignTask: async (taskId: string, assignee: string) => {
+        const t = tasks.get(taskId);
+        if (!t) throw new Error(`unknown task ${taskId}`);
+        t.assignee = assignee;
+        t.status = "claimed";
+        return t;
+      },
+      sendMessage: async () => {
+        throw new Error("Instance worker-stale is not active in this scope.");
+      },
+      kvSet: async (key: string, value: string) => ({
+        scope: workspaceDir,
+        key,
+        value,
+        updatedAt: Date.now()
+      }),
+      updateTask: async (taskId: string, opts: UpdateTaskOpts) => {
+        const t = tasks.get(taskId);
+        if (!t) throw new Error(`unknown task ${taskId}`);
+        t.status = opts.status;
+        t.result = opts.result ?? null;
+        return t;
+      }
+    };
+
+    const settings = makeSettings(workspaceDir, dbPath);
+    const baseArgs = {
+      settings,
+      role: "implementation" as const,
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1"
+    };
+    const deps = {
+      store: {
+        countActionsSince: () => 0,
+        logAction: () => {}
+      },
+      peerManager: { ensurePeer: () => peer } as never,
+      reservationKeeper: {} as never,
+      spawnPeer: async (_opts: SpawnPeerOptions) => {
+        spawnPeerCalls += 1;
+        const next = spawnedQueue.shift();
+        if (!next) throw new Error("no more spawned peers queued");
+        return next;
+      }
+    };
+
+    await spawnCodeWorker({ ...baseArgs, task: "First task" }, deps);
+    tasks.get("task-1")!.status = "done";
+
+    const second = await spawnCodeWorker({ ...baseArgs, task: "Follow-up after stale" }, deps);
+
+    expect(spawnPeerCalls).toBe(2);
+    expect(second.workerId).toBe("worker-fresh");
+    expect(second.taskId).toBe("task-3");
+
+    await expect(cancelSpawnedWorkerForTask(second.taskId, "test cleanup")).resolves.toBe(true);
+  });
+});

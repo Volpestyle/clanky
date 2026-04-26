@@ -88,8 +88,19 @@ type ActiveSpawnedWorker = {
   taskId: string;
   workerId: string;
   harness: SpawnCodeWorkerHarness;
+  role: CodeAgentRole;
+  scope: string;
+  cwd: string;
+  guildId: string | null;
+  channelId: string | null;
+  userId: string | null;
   peer: ClankyPeer;
   spawned: SpawnedPeer;
+  // Flipped to `true` once the worker's currently-assigned task hits a
+  // terminal status. Idle workers stay tracked (so a follow-up turn can
+  // reuse them via `peer.sendMessage`) but do not count against the
+  // `maxParallelTasks` cap.
+  idle: boolean;
 };
 
 type PreparedWorkerLaunch = {
@@ -231,16 +242,25 @@ function activeWorkerCount(harness: SpawnCodeWorkerHarness) {
   return count;
 }
 
-async function pruneTerminalActiveWorkers(harness?: SpawnCodeWorkerHarness): Promise<void> {
+function busyWorkerCount(harness: SpawnCodeWorkerHarness) {
+  let count = 0;
+  for (const worker of activeWorkersByTaskId.values()) {
+    if (worker.harness === harness && !worker.idle) count++;
+  }
+  return count;
+}
+
+async function refreshTerminalWorkerStates(harness?: SpawnCodeWorkerHarness): Promise<void> {
   const checks: Promise<void>[] = [];
   for (const worker of activeWorkersByTaskId.values()) {
     if (harness && worker.harness !== harness) continue;
+    if (worker.idle) continue;
     if (typeof worker.peer.getTask !== "function") continue;
     checks.push((async () => {
       try {
         const task = await worker.peer.getTask(worker.taskId);
         if (task && TERMINAL_TASK_STATUSES.has(task.status)) {
-          activeWorkersByTaskId.delete(worker.taskId);
+          worker.idle = true;
         }
       } catch {
         // Keep the process-exit watcher as the fallback cleanup path.
@@ -248,6 +268,36 @@ async function pruneTerminalActiveWorkers(harness?: SpawnCodeWorkerHarness): Pro
     })());
   }
   await Promise.all(checks);
+}
+
+function findReusableIdleWorker(args: {
+  harness: SpawnCodeWorkerHarness;
+  role: CodeAgentRole;
+  scope: string;
+  guildId: string | null;
+  channelId: string | null;
+  userId: string | null;
+}): ActiveSpawnedWorker | null {
+  for (const worker of activeWorkersByTaskId.values()) {
+    if (!worker.idle) continue;
+    if (worker.harness !== args.harness) continue;
+    if (worker.role !== args.role) continue;
+    if (worker.scope !== args.scope) continue;
+    if (worker.guildId !== args.guildId) continue;
+    if (worker.channelId !== args.channelId) continue;
+    if (worker.userId !== args.userId) continue;
+    return worker;
+  }
+  return null;
+}
+
+function rekeyActiveWorker(worker: ActiveSpawnedWorker, oldTaskId: string, newTaskId: string) {
+  if (activeWorkersByTaskId.get(oldTaskId) === worker) {
+    activeWorkersByTaskId.delete(oldTaskId);
+  }
+  worker.taskId = newTaskId;
+  worker.idle = false;
+  activeWorkersByTaskId.set(newTaskId, worker);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -301,7 +351,9 @@ function selectedHarnessConfig(
 function trackActiveWorker(worker: ActiveSpawnedWorker) {
   activeWorkersByTaskId.set(worker.taskId, worker);
   void worker.spawned.exited.finally(() => {
-    activeWorkersByTaskId.delete(worker.taskId);
+    if (activeWorkersByTaskId.get(worker.taskId) === worker) {
+      activeWorkersByTaskId.delete(worker.taskId);
+    }
   });
   void untrackWhenTaskTerminal(worker);
 }
@@ -309,10 +361,11 @@ function trackActiveWorker(worker: ActiveSpawnedWorker) {
 async function untrackWhenTaskTerminal(worker: ActiveSpawnedWorker): Promise<void> {
   if (typeof worker.peer.getTask !== "function") return;
   while (activeWorkersByTaskId.get(worker.taskId) === worker) {
+    if (worker.idle) return;
     try {
       const task = await worker.peer.getTask(worker.taskId);
       if (task && TERMINAL_TASK_STATUSES.has(task.status)) {
-        activeWorkersByTaskId.delete(worker.taskId);
+        worker.idle = true;
         return;
       }
     } catch {
@@ -380,7 +433,9 @@ export async function cancelSpawnedWorkerForTask(taskId: string, reason = "Task 
   try {
     await worker.spawned.cancel(normalizedReason);
   } finally {
-    activeWorkersByTaskId.delete(worker.taskId);
+    if (activeWorkersByTaskId.get(worker.taskId) === worker) {
+      activeWorkersByTaskId.delete(worker.taskId);
+    }
   }
   if (taskUpdateError) throw taskUpdateError;
   return true;
@@ -389,6 +444,152 @@ export async function cancelSpawnedWorkerForTask(taskId: string, reason = "Task 
 export function getActiveSpawnedWorkerCount(harness?: SpawnCodeWorkerHarness): number {
   if (!harness) return activeWorkersByTaskId.size;
   return activeWorkerCount(harness);
+}
+
+async function reuseIdleWorkerForTask(input: {
+  worker: ActiveSpawnedWorker;
+  task: string;
+  launch: PreparedWorkerLaunch;
+  existingTaskId: string;
+  source: string;
+  args: SpawnCodeWorkerArgs;
+  deps: SpawnCodeWorkerDeps;
+}): Promise<SpawnCodeWorkerResult> {
+  const { worker, task, launch, existingTaskId, source, args, deps } = input;
+  const oldTaskId = worker.taskId;
+  const peer = worker.peer;
+
+  const swarmTask: SwarmTask = existingTaskId
+    ? await resolveExistingOpenTask(peer, existingTaskId)
+    : await peer.requestTask({
+      type: launch.taskType,
+      title: truncateSummary(task, 80) || "Code task",
+      description: task,
+      files: [],
+      priority: 0
+    });
+
+  try {
+    await peer.assignTask(swarmTask.id, worker.workerId);
+    const followupMessage =
+      `Follow-up task assigned: \`${swarmTask.id}\`. Treat this message as a new task instruction per your preamble — claim the task, execute it, then \`update_task(done)\` + \`annotate(kind="usage")\` and return to listening.\n\nTask:\n${task}`;
+    await peer.sendMessage(worker.workerId, followupMessage);
+  } catch (error) {
+    if (!existingTaskId) {
+      await markNewWorkerTaskLaunchFailed({
+        peer,
+        taskId: swarmTask.id,
+        error
+      }).catch((cleanupError) => {
+        deps.store.logAction({
+          kind: "code_agent_error",
+          guildId: args.guildId || null,
+          channelId: args.channelId || null,
+          userId: args.userId || null,
+          content: "code_worker_task_cleanup_failed",
+          metadata: {
+            source,
+            taskId: swarmTask.id,
+            error: String((cleanupError as Error)?.message || cleanupError)
+          }
+        });
+      });
+    }
+    throw error;
+  }
+
+  rekeyActiveWorker(worker, oldTaskId, swarmTask.id);
+  void untrackWhenTaskTerminal(worker);
+
+  const sessionKey = buildCodeWorkerSessionKey({
+    guildId: args.guildId,
+    channelId: args.channelId,
+    userId: args.userId
+  });
+  let persistedSession = false;
+  const record: CodeWorkerSessionRecord = {
+    workerId: worker.workerId,
+    taskId: swarmTask.id,
+    scope: launch.scope,
+    role: launch.role,
+    cwd: launch.cwd,
+    guildId: args.guildId || null,
+    channelId: args.channelId || null,
+    userId: args.userId || null,
+    triggerMessageId: args.triggerMessageId || null,
+    source,
+    updatedAt: new Date().toISOString()
+  };
+  try {
+    await peer.kvSet(sessionKey, JSON.stringify(record));
+    await peer.kvSet(buildCodeWorkerWorkerSessionKey(worker.workerId), JSON.stringify(record));
+    await peer.kvSet(buildCodeWorkerRoleSessionKey({
+      guildId: args.guildId,
+      channelId: args.channelId,
+      userId: args.userId,
+      role: launch.role
+    }), JSON.stringify(record));
+    persistedSession = true;
+  } catch (error) {
+    deps.store.logAction({
+      kind: "code_agent_error",
+      guildId: args.guildId || null,
+      channelId: args.channelId || null,
+      userId: args.userId || null,
+      content: "code_worker_session_persist_failed",
+      metadata: {
+        source,
+        taskId: swarmTask.id,
+        instanceId: worker.workerId,
+        sessionKey,
+        workerSessionKey: buildCodeWorkerWorkerSessionKey(worker.workerId),
+        error: String((error as Error)?.message || error)
+      }
+    });
+  }
+
+  if (deps.activityBridge) {
+    deps.activityBridge.watchControllerPeer?.(peer, { scope: launch.scope });
+    deps.activityBridge.trackTask(peer, {
+      taskId: swarmTask.id,
+      workerId: worker.workerId,
+      scope: launch.scope,
+      guildId: args.guildId || null,
+      channelId: args.channelId || null,
+      userId: args.userId || null,
+      triggerMessageId: args.triggerMessageId || null,
+      source
+    });
+  }
+
+  deps.store.logAction({
+    kind: "code_agent_call",
+    guildId: args.guildId || null,
+    channelId: args.channelId || null,
+    userId: args.userId || null,
+    content: truncateSummary(task, 200),
+    metadata: {
+      source,
+      role: launch.role,
+      provider: launch.harness,
+      model: launch.model,
+      taskId: swarmTask.id,
+      existingTaskId: existingTaskId || null,
+      instanceId: worker.workerId,
+      sessionKey,
+      persistedSession,
+      executionMode: "swarm_launcher_reuse"
+    }
+  });
+
+  return {
+    workerId: worker.workerId,
+    taskId: swarmTask.id,
+    scope: launch.scope,
+    cwd: launch.cwd,
+    sessionKey,
+    persistedSession
+  };
 }
 
 export async function spawnCodeWorker(
@@ -418,8 +619,16 @@ export async function spawnCodeWorker(
     });
   const launch = selectedHarnessConfig(args.settings, args.cwd || repoResolution?.cwd, role, harnessOverride);
 
-  await pruneTerminalActiveWorkers(launch.harness);
-  if (activeWorkerCount(launch.harness) >= launch.maxParallelTasks) {
+  await refreshTerminalWorkerStates(launch.harness);
+  const reusableWorker = findReusableIdleWorker({
+    harness: launch.harness,
+    role,
+    scope: launch.scope,
+    guildId: args.guildId || null,
+    channelId: args.channelId || null,
+    userId: args.userId || null
+  });
+  if (!reusableWorker && busyWorkerCount(launch.harness) >= launch.maxParallelTasks) {
     throw new Error("Too many code workers are already running.");
   }
   const used = deps.store.countActionsSince?.("code_agent_call", budgetWindowStart()) ?? 0;
@@ -439,6 +648,43 @@ export async function spawnCodeWorker(
     scope: launch.scope
   });
   const existingTaskId = String(args.existingTaskId || "").trim();
+
+  if (reusableWorker) {
+    try {
+      return await reuseIdleWorkerForTask({
+        worker: reusableWorker,
+        task,
+        launch,
+        existingTaskId,
+        source,
+        args,
+        deps
+      });
+    } catch (error) {
+      deps.store.logAction({
+        kind: "code_agent_error",
+        guildId: args.guildId || null,
+        channelId: args.channelId || null,
+        userId: args.userId || null,
+        content: "code_worker_reuse_failed",
+        metadata: {
+          source,
+          workerId: reusableWorker.workerId,
+          taskId: reusableWorker.taskId,
+          error: String((error as Error)?.message || error)
+        }
+      });
+      // The idle peer is no longer reachable (process gone, instance dropped
+      // from the swarm registry, etc.). Drop it from tracking and fall
+      // through to a fresh spawn.
+      if (activeWorkersByTaskId.get(reusableWorker.taskId) === reusableWorker) {
+        activeWorkersByTaskId.delete(reusableWorker.taskId);
+      }
+      if (busyWorkerCount(launch.harness) >= launch.maxParallelTasks) {
+        throw new Error("Too many code workers are already running.");
+      }
+    }
+  }
   const swarmTask: SwarmTask = existingTaskId
     ? await resolveExistingOpenTask(peer, existingTaskId)
     : await peer.requestTask({
@@ -483,8 +729,15 @@ export async function spawnCodeWorker(
       taskId: swarmTask.id,
       workerId: spawned.instanceId,
       harness: launch.harness,
+      role,
+      scope: launch.scope,
+      cwd: launch.cwd,
+      guildId: args.guildId || null,
+      channelId: args.channelId || null,
+      userId: args.userId || null,
       peer,
-      spawned
+      spawned,
+      idle: false
     });
     // Persist session keys unconditionally so the orchestrator can drive
     // follow-ups via send_message during the worker's post-task listen
