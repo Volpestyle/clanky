@@ -216,7 +216,7 @@ Ambient text delivery is owned by `src/bot/initiativeEngine.ts`.
 
 The runtime splits responsibility like this:
 
-- `permissions.replies.replyChannelIds`: canonical eligible initiative channel pool
+- `permissions.replies.discoveryChannelIds`: canonical eligible initiative channel pool
 - `initiative.text.*`: initiative cadence, budgets, and tool-loop limits
 - `initiative.discovery.*`: feed collection, self-curation, and media infrastructure
 - `src/services/discovery.ts`: gathers passive feed candidates

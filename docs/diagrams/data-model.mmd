@@ -34,8 +34,10 @@ erDiagram
         int id PK
         datetime created_at
         datetime updated_at
+        string scope
         string guild_id
         string channel_id
+        string user_id
         string subject
         string fact
         string fact_type
@@ -107,6 +109,25 @@ erDiagram
         string trigger_message_id PK
         int action_id
         datetime created_at
+    }
+
+    REFLECTION_CHECKPOINTS {
+        string date_key PK
+        string guild_id PK
+        datetime completed_at
+        string run_id
+    }
+
+    SESSION_SUMMARIES {
+        string session_id PK
+        datetime created_at
+        datetime updated_at
+        string guild_id
+        string channel_id
+        string modality
+        datetime started_at
+        datetime ended_at
+        text summary_text
     }
 
     MESSAGES ||--o{ ACTIONS : "message_id (context/trigger)"

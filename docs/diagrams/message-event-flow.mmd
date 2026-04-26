@@ -20,32 +20,41 @@ sequenceDiagram
       Memory->>Memory: queue MEMORY.md refresh + text micro-reflection
     end
 
-    Bot->>Memory: loadConversationContinuityContext()
-    Bot->>LLM: generate() structured reply + tool plan
-    LLM->>Store: logAction(llm_call or llm_error)
-    loop bounded reply tool loop
-      opt model emits tool call(s)
-        alt web_search / web_scrape
-          Bot->>Search: execute search or page read
-          Search->>Store: logAction(search_call or search_error)
-        else memory_search
-          Bot->>Memory: searchDurableFacts()
-        else image_lookup
-          Bot->>Store: getRecentMessages() for image candidates
-        else other reply tool
-          Bot->>Bot: execute tool and collect result
-        end
-        Bot->>LLM: generate() continuation from tool results
-        LLM->>Store: logAction(llm_call or llm_error)
-      end
-    end
+    Bot->>Bot: getReplyAddressSignal()
+    Bot->>Bot: evaluateReplyAdmissionDecision()
+    Bot->>Store: logAction(text_runtime reply_admission_decision)
 
-    opt structured output requests reaction
+    alt admitted for model turn
+      Bot->>Bot: enqueueReplyJob()
+      Bot->>Memory: loadConversationContinuityContext()
+      Bot->>LLM: generate() structured reply + tool plan
       LLM->>Store: logAction(llm_call or llm_error)
-      Bot->>Discord: message.react(emoji)
-      Bot->>Store: logAction(reacted)
-    end
+      loop bounded reply tool loop
+        opt model emits tool call(s)
+          alt web_search / web_scrape
+            Bot->>Search: execute search or page read
+            Search->>Store: logAction(search_call or search_error)
+          else memory_search
+            Bot->>Memory: searchDurableFacts()
+          else image_lookup
+            Bot->>Store: getRecentMessages() for image candidates
+          else other reply tool
+            Bot->>Bot: execute tool and collect result
+          end
+          Bot->>LLM: generate() continuation from tool results
+          LLM->>Store: logAction(llm_call or llm_error)
+        end
+      end
 
-    Bot->>Discord: reply() or send()
-    Bot->>Store: recordMessage(outgoing)
-    Bot->>Store: logAction(sent_reply or sent_message)
+      opt structured output requests reaction
+        LLM->>Store: logAction(llm_call or llm_error)
+        Bot->>Discord: message.react(emoji)
+        Bot->>Store: logAction(reacted)
+      end
+
+      Bot->>Discord: reply() or send()
+      Bot->>Store: recordMessage(outgoing)
+      Bot->>Store: logAction(sent_reply or sent_message)
+    else not admitted
+      Bot-->>Discord: no reply
+    end

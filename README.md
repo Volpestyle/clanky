@@ -79,7 +79,14 @@ Submodules vendored:
 ### Required
 
 - `DISCORD_TOKEN`
-- At least one model credential or refresh token: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `GOOGLE_API_KEY`, `ELEVENLABS_API_KEY`, `CLAUDE_OAUTH_REFRESH_TOKEN`, `OPENAI_OAUTH_REFRESH_TOKEN`, or the legacy alias `CODEX_OAUTH_REFRESH_TOKEN`
+
+### Model Providers
+
+Configure at least one text model provider for model-backed replies and tool reasoning:
+
+- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `CLAUDE_OAUTH_REFRESH_TOKEN`, `OPENAI_OAUTH_REFRESH_TOKEN`, or the legacy alias `CODEX_OAUTH_REFRESH_TOKEN`
+
+Voice-specific providers such as Gemini or ElevenLabs require their own credentials when those runtimes are enabled.
 
 ### Common Optional
 
