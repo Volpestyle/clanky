@@ -2,7 +2,7 @@ import {
   isCodeAgentUserAllowed,
   normalizeCodeAgentRole,
   resolveCodeAgentConfig,
-  resolveCodeAgentCwd,
+  resolveCodeAgentLaunchCwd,
   type CodeAgentRole
 } from "../agents/codeAgentSettings.ts";
 import {
@@ -133,6 +133,13 @@ type CodeWorkerSessionRecord = {
   triggerMessageId: string | null;
   source: string;
   updatedAt: string;
+  /**
+   * On the direct_child path, the on-disk worker log so swarm-ui can locate
+   * it without re-reading clanky's runtime log. Null on swarm_server_pty —
+   * use the PTY stream instead.
+   */
+  logPath: string | null;
+  launchMode: "direct_child" | "swarm_server_pty";
 };
 
 const activeWorkersByTaskId = new Map<string, ActiveSpawnedWorker>();
@@ -325,14 +332,14 @@ function selectedHarnessConfig(
   }
 
   const cwd = harnessOverride
-    ? resolveCodeAgentCwd(String(cwdOverride || selectedConfig.defaultCwd || ""), process.cwd())
+    ? resolveCodeAgentLaunchCwd(settings, cwdOverride, selectedConfig.defaultCwd)
     : base.cwd;
   const workspace = resolveCodeAgentWorkspace({ cwd });
   assertCodeAgentCwdAllowed(settings, workspace.canonicalCwd);
   return {
     role,
     taskType: roleToTaskType(role),
-    cwd,
+    cwd: workspace.canonicalCwd,
     harness,
     model: harness === "claude-code"
       ? String(runtime.claudeCode?.model || "sonnet").trim() || "sonnet"
@@ -559,7 +566,9 @@ async function reuseIdleWorkerForTask(input: {
     userId: args.userId || null,
     triggerMessageId: args.triggerMessageId || null,
     source,
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    logPath: worker.spawned.logPath ?? null,
+    launchMode: worker.spawned.launchMode
   };
   try {
     await peer.kvSet(sessionKey, JSON.stringify(record));
@@ -803,7 +812,9 @@ export async function spawnCodeWorker(
       userId: args.userId || null,
       triggerMessageId: args.triggerMessageId || null,
       source,
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      logPath: spawned.logPath ?? null,
+      launchMode: spawned.launchMode
     };
     try {
       await peer.kvSet(sessionKey, JSON.stringify(record));
@@ -866,6 +877,7 @@ export async function spawnCodeWorker(
         persistedSession,
         launchMode: spawned.launchMode,
         ptyId: spawned.ptyId ?? null,
+        logPath: spawned.logPath ?? null,
         executionMode: "swarm_launcher"
       }
     });

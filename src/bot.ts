@@ -298,6 +298,8 @@ type CodeWorkerSessionRecord = {
   userId: string | null;
   triggerMessageId: string | null;
   source: string;
+  logPath: string | null;
+  launchMode: "direct_child" | "swarm_server_pty" | null;
 };
 
 function readCodeWorkerSessionRecord(value: string, expectedWorkerId: string, expectedScope: string): CodeWorkerSessionRecord | null {
@@ -313,6 +315,7 @@ function readCodeWorkerSessionRecord(value: string, expectedWorkerId: string, ex
   const scope = String(record.scope || "").trim();
   if (!workerId || workerId !== expectedWorkerId) return null;
   if (!scope || scope !== expectedScope) return null;
+  const launchMode = String(record.launchMode || "").trim();
   return {
     workerId,
     taskId: String(record.taskId || "").trim(),
@@ -323,7 +326,9 @@ function readCodeWorkerSessionRecord(value: string, expectedWorkerId: string, ex
     channelId: record.channelId ? String(record.channelId) : null,
     userId: record.userId ? String(record.userId) : null,
     triggerMessageId: record.triggerMessageId ? String(record.triggerMessageId) : null,
-    source: String(record.source || "swarm_spawn_request").trim() || "swarm_spawn_request"
+    source: String(record.source || "swarm_spawn_request").trim() || "swarm_spawn_request",
+    logPath: record.logPath ? String(record.logPath) : null,
+    launchMode: launchMode === "direct_child" || launchMode === "swarm_server_pty" ? launchMode : null
   };
 }
 
@@ -2045,7 +2050,7 @@ export class ClankerBot {
   }
 
   /**
-   * Cancel every swarm code-task this Clanky planner peer dispatched into the
+   * Cancel every swarm code-task this Clanky controller peer dispatched into the
    * given scope (guildId + channelId). Used by the keyword cancel handlers
    * (text and voice). Sends `update_task(cancelled)` for each in-flight task,
    * which the activity bridge will translate into a `closePty` (path A) or

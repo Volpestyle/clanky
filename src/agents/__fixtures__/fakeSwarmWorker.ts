@@ -217,6 +217,11 @@ async function runBehavior(behavior: Behavior) {
 
   if (delayMs > 0) await sleep(delayMs);
 
+  const stdoutMarker = process.env.FAKE_WORKER_STDOUT_MARKER?.trim();
+  if (stdoutMarker) {
+    process.stdout.write(`${stdoutMarker}\n`);
+  }
+
   const db = openDb(dbPath);
   let scope: string;
   try {

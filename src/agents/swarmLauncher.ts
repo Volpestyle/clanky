@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, type WriteStream } from "node:fs";
 import path from "node:path";
 import {
   buildClaudeCodeAgentArgs,
@@ -97,6 +97,13 @@ export type SpawnedPeer = {
   exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
   /** Last 2KB of merged stdout/stderr — telemetry only, not parsed for results. */
   outputTail: () => string;
+  /**
+   * On the direct_child path, the on-disk file we tee stdout/stderr into so
+   * swarm-ui (or anyone else) can tail the worker even though no PTY exists.
+   * Undefined on the swarm_server_pty path — that PTY's stream is the source
+   * of truth instead.
+   */
+  logPath?: string;
   /** Convenience: kill the child and release the reservation if still unadopted. */
   cancel: (reason?: string) => Promise<void>;
 };
@@ -159,11 +166,13 @@ class RingBuffer {
 function buildHarnessInvocation({
   opts,
   prompt,
+  cwd,
   mcpConfigJson,
   codexOverrides
 }: {
   opts: SpawnPeerOptions;
   prompt: string;
+  cwd: string;
   mcpConfigJson: string;
   codexOverrides: string[];
 }): { command: string; args: string[] } {
@@ -188,6 +197,7 @@ function buildHarnessInvocation({
     command: "codex",
     args: buildCodexCliCodeAgentArgs({
       model: opts.model,
+      cwd,
       instruction: prompt,
       configOverrides: codexOverrides
     })
@@ -350,6 +360,19 @@ export function clankySwarmIsAvailable(swarm: CodeAgentSwarmRuntimeConfig): bool
   return existsSync(pathLikeArg);
 }
 
+function resolveSwarmServerCwd(swarm: CodeAgentSwarmRuntimeConfig): string | null {
+  const pathLikeArg = resolveSwarmArgs(swarm.args).find((arg) =>
+    path.isAbsolute(arg) && /\.(?:ts|js|mjs|cjs)$/.test(arg)
+  );
+  if (!pathLikeArg) return null;
+  const entryDir = path.dirname(pathLikeArg);
+  const entryParentName = path.basename(entryDir);
+  if (entryParentName === "src" || entryParentName === "dist") {
+    return path.dirname(entryDir);
+  }
+  return entryDir;
+}
+
 function clankySwarmServerEntry(swarm: CodeAgentSwarmRuntimeConfig): Record<string, unknown> | null {
   if (!swarm?.command) return null;
   return {
@@ -383,7 +406,10 @@ export function buildClaudeMcpConfigJson(swarm: CodeAgentSwarmRuntimeConfig, wor
   return JSON.stringify(merged);
 }
 
-function buildCodexConfigOverrides(swarm: CodeAgentSwarmRuntimeConfig): string[] {
+export function buildCodexConfigOverrides(
+  swarm: CodeAgentSwarmRuntimeConfig,
+  env: Record<string, string> = {}
+): string[] {
   if (!swarm?.command) return [];
   // If clanky's vendored swarm-mcp is unavailable, omit the override and let
   // codex resolve the swarm server from its own (project/user) config — the
@@ -393,10 +419,20 @@ function buildCodexConfigOverrides(swarm: CodeAgentSwarmRuntimeConfig): string[]
   const literalString = (value: string) => `'${String(value || "").replace(/'/g, "''")}'`;
   const literalArray = (values: string[]) =>
     `[${values.map((value) => literalString(value)).join(", ")}]`;
-  return [
+  const overrides = [
     `mcp_servers.${swarm.serverName}.command=${literalString(swarm.command)}`,
     `mcp_servers.${swarm.serverName}.args=${literalArray(resolveSwarmArgs(swarm.args))}`
   ];
+  const cwd = resolveSwarmServerCwd(swarm);
+  if (cwd) {
+    overrides.push(`mcp_servers.${swarm.serverName}.cwd=${literalString(cwd)}`);
+  }
+  for (const [key, value] of Object.entries(env).sort(([a], [b]) => a.localeCompare(b))) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    if (!String(value || "").trim()) continue;
+    overrides.push(`mcp_servers.${swarm.serverName}.env.${key}=${literalString(value)}`);
+  }
+  return overrides;
 }
 
 export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
@@ -433,13 +469,7 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
   const wrappedPrompt = applySwarmLauncherFirstTurnPreamble(opts.initialPrompt, preamble);
   const mcpConfigJson = buildClaudeMcpConfigJson(opts.swarm, workspace.cwd);
   const codexOverrides = buildCodexConfigOverrides(opts.swarm);
-
-  const directInvocation = buildHarnessInvocation({
-    opts,
-    prompt: wrappedPrompt,
-    mcpConfigJson,
-    codexOverrides
-  });
+  const allowDirectChildFallback = opts.swarm.allowDirectChildFallback === true;
 
   // Try path A whenever a swarm-server client is reachable. `harnessOverride`
   // alone (e.g. test fixtures) shouldn't skip path A — tests can exercise the
@@ -463,12 +493,19 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
       label,
       dbPath,
       args: interactiveInvocation.args,
-      initialInput: interactiveInvocation.initialInput
+      initialInput: interactiveInvocation.initialInput,
+      allowDirectChildFallback
     });
     if (serverSpawned) return serverSpawned;
   }
 
-  const { command, args } = directInvocation;
+  if (!allowDirectChildFallback) {
+    throw new Error(
+      "swarm-server PTY launch is required, but no compatible swarm-server PTY path was available. " +
+      "Start or restart the current swarm-ui/swarm-server so /health advertises pty.spawn.args, " +
+      "pty.spawn.env, and pty.spawn.initial_input, or enable direct-child fallback in Code Agent settings to allow headless workers."
+    );
+  }
 
   if (opts.signal?.aborted) {
     throw new Error(`spawnPeer aborted before launch: ${opts.signal.reason || "cancelled"}`);
@@ -489,6 +526,14 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
     SWARM_MCP_FILE_ROOT: workspace.canonicalCwd,
     SWARM_MCP_LABEL: label
   };
+  const directInvocation = buildHarnessInvocation({
+    opts,
+    prompt: wrappedPrompt,
+    cwd: workspace.cwd,
+    mcpConfigJson,
+    codexOverrides: buildCodexConfigOverrides(opts.swarm, childEnv)
+  });
+  const { command, args } = directInvocation;
 
   let child: ChildProcess;
   try {
@@ -503,8 +548,34 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
   }
 
   const tail = new RingBuffer(normalizeOutputTailBytes(opts.maxBufferBytes));
-  child.stdout?.on("data", (chunk) => tail.push(chunk));
-  child.stderr?.on("data", (chunk) => tail.push(chunk));
+
+  // Tee stdout/stderr to disk so swarm-ui (and `tail -f`) can replay the
+  // worker even though direct_child has no PTY for swarm-server to stream.
+  // Path is collocated with `swarm.db` so anyone holding `SWARM_DB_PATH`
+  // can derive it. Errors are swallowed: the tee is observability, not
+  // correctness — the harness keeps running if the disk write fails.
+  const logDir = path.join(path.dirname(dbPath), "worker-logs");
+  const logPath = path.join(logDir, `${reserved.id}.log`);
+  let logStream: WriteStream | null = null;
+  try {
+    mkdirSync(logDir, { recursive: true });
+    logStream = createWriteStream(logPath, { flags: "a" });
+    logStream.on("error", () => {
+      logStream?.destroy();
+      logStream = null;
+    });
+  } catch {
+    logStream = null;
+  }
+
+  child.stdout?.on("data", (chunk) => {
+    tail.push(chunk);
+    logStream?.write(chunk);
+  });
+  child.stderr?.on("data", (chunk) => {
+    tail.push(chunk);
+    logStream?.write(chunk);
+  });
 
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
     child.once("exit", (code, signal) => resolve({ code, signal }));
@@ -592,10 +663,35 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
     throw error;
   });
 
+  if (logStream) {
+    try {
+      opts.store.logAction({
+        kind: "swarm_worker_log_attached",
+        guildId: opts.trace.guildId || null,
+        channelId: opts.trace.channelId || null,
+        userId: opts.trace.userId || null,
+        metadata: {
+          instanceId: reserved.id,
+          taskId: opts.taskId ?? null,
+          harness: opts.harness,
+          path: logPath,
+          source: opts.trace.source ?? null
+        }
+      });
+    } catch {
+      // ignore telemetry errors
+    }
+  }
+
   // Telemetry on child exit so we can spot crashes-without-result distinct
   // from clean exits. Result/cost still come from worker self-report via
   // update_task; this is just process-level signal.
   exited.then((info) => {
+    try {
+      logStream?.end();
+    } catch {
+      // ignore close errors
+    }
     try {
       opts.store.logAction({
         kind: "swarm_worker_exit",
@@ -610,6 +706,7 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
           cancelled,
           cancelReason: cancelled ? cancelReason : null,
           tail: tail.toString().slice(-512),
+          logPath: logStream ? logPath : null,
           source: opts.trace.source ?? null
         }
       });
@@ -628,6 +725,7 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
     adopted,
     exited,
     outputTail: () => tail.toString(),
+    logPath: logStream ? logPath : undefined,
     cancel
   };
 }
@@ -643,7 +741,8 @@ async function spawnPeerViaSwarmServer({
   label,
   dbPath,
   args,
-  initialInput
+  initialInput,
+  allowDirectChildFallback
 }: {
   opts: SpawnPeerOptions;
   workspace: CodeAgentWorkspace;
@@ -652,9 +751,16 @@ async function spawnPeerViaSwarmServer({
   dbPath: string;
   args: string[];
   initialInput: string | null;
+  allowDirectChildFallback: boolean;
 }): Promise<SpawnedPeer | null> {
   const client = opts.swarmServerClient ?? new SwarmServerClient({ dbPath });
   if (!(await client.supportsDirectHarnessSpawn())) {
+    if (!allowDirectChildFallback) {
+      throw new Error(
+        `swarm-server PTY launch is required, but ${client.socketPath} is unavailable or does not advertise direct harness spawn capabilities. ` +
+        "Start or restart the current swarm-ui/swarm-server so /health advertises pty.spawn.args, pty.spawn.env, and pty.spawn.initial_input."
+      );
+    }
     return null;
   }
 
@@ -679,7 +785,7 @@ async function spawnPeerViaSwarmServer({
   } catch (error) {
     try {
       opts.store.logAction({
-        kind: "swarm_server_spawn_fallback",
+        kind: allowDirectChildFallback ? "swarm_server_spawn_fallback" : "swarm_server_spawn_failed",
         guildId: opts.trace.guildId || null,
         channelId: opts.trace.channelId || null,
         userId: opts.trace.userId || null,
@@ -692,6 +798,9 @@ async function spawnPeerViaSwarmServer({
       });
     } catch {
       // ignore telemetry errors
+    }
+    if (!allowDirectChildFallback) {
+      throw new Error(`swarm-server PTY spawn failed: ${String(error instanceof Error ? error.message : error)}`);
     }
     return null;
   }

@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { bootstrapSwarmTestSchema } from "./__fixtures__/swarmTestSchema.ts";
 import { type CodeAgentSwarmRuntimeConfig } from "./codeAgentSwarm.ts";
 import {
   buildClaudeMcpConfigJson,
+  buildCodexConfigOverrides,
   clankySwarmIsAvailable,
   loadProjectMcpServers,
   loadRoleCoordinationSkill,
@@ -30,9 +30,6 @@ beforeEach(() => {
   dbPath = path.join(tempDir, "swarm.db");
   workspaceDir = path.join(tempDir, "workspace");
   mkdirSync(workspaceDir, { recursive: true });
-  // resolveCodeAgentWorkspace calls `git rev-parse --show-toplevel`.
-  // Make the workspace a real git repo so checkout resolution succeeds.
-  spawnSync("git", ["init", "--quiet"], { cwd: workspaceDir });
   bootstrapSwarmTestSchema(dbPath);
   keeper = new SwarmReservationKeeper({ dbPath, heartbeatIntervalMs: 60_000 });
   logEntries = [];
@@ -51,7 +48,8 @@ function makeSwarmConfig(): CodeAgentSwarmRuntimeConfig {
     command: "bun",
     args: ["run", "/path/to/swarm-mcp/src/index.ts"],
     dbPath,
-    appendCoordinationPrompt: true
+    appendCoordinationPrompt: true,
+    allowDirectChildFallback: true
   };
 }
 
@@ -116,6 +114,53 @@ test("spawnPeer reserves, adopts, and exits cleanly with adopt_then_exit fixture
   const exitLog = logEntries.find((entry) => entry.kind === "swarm_worker_exit");
   expect(exitLog).toBeDefined();
   expect((exitLog?.metadata as Record<string, unknown>)?.exitCode).toBe(0);
+});
+
+test("spawnPeer tees direct_child stdout to <dbDir>/worker-logs/<id>.log", async () => {
+  const marker = "hello-from-worker-7c4e9";
+  const previous = process.env.FAKE_WORKER_STDOUT_MARKER;
+  process.env.FAKE_WORKER_STDOUT_MARKER = marker;
+  try {
+    const spawned = await spawnPeer({
+      harness: "claude-code",
+      cwd: workspaceDir,
+      role: "implementer",
+      initialPrompt: "implement something",
+      maxTurns: 5,
+      timeoutMs: 30_000,
+      maxBufferBytes: 1024 * 1024,
+      model: "sonnet",
+      trace: { channelId: "channel-2", userId: "user-2", source: "test" },
+      store: makeStore(),
+      swarm: makeSwarmConfig(),
+      reservationKeeper: keeper!,
+      harnessOverride: makeFakeHarnessOverride(),
+      adoptionPollIntervalMs: 25,
+      adoptionTimeoutMs: 5_000
+    });
+
+    await spawned.adopted;
+    await spawned.exited;
+
+    const expectedPath = path.join(path.dirname(dbPath), "worker-logs", `${spawned.instanceId}.log`);
+    expect(spawned.logPath).toBe(expectedPath);
+
+    const attachedLog = logEntries.find((entry) => entry.kind === "swarm_worker_log_attached");
+    expect(attachedLog).toBeDefined();
+    expect((attachedLog?.metadata as Record<string, unknown>)?.path).toBe(expectedPath);
+
+    const contents = readFileSync(expectedPath, "utf8");
+    expect(contents).toContain(marker);
+
+    const exitLog = logEntries.find((entry) => entry.kind === "swarm_worker_exit");
+    expect((exitLog?.metadata as Record<string, unknown>)?.logPath).toBe(expectedPath);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.FAKE_WORKER_STDOUT_MARKER;
+    } else {
+      process.env.FAKE_WORKER_STDOUT_MARKER = previous;
+    }
+  }
 });
 
 test("spawnPeer routes through swarm-server PTY when direct spawn is supported", async () => {
@@ -297,7 +342,7 @@ test("spawnPeer honors appendCoordinationPrompt=false while keeping Clanky overl
   await spawned.exited;
 });
 
-test("spawnPeer falls back to direct child when swarm-server's supportsDirectHarnessSpawn returns false", async () => {
+test("spawnPeer falls back to direct child when enabled and swarm-server's supportsDirectHarnessSpawn returns false", async () => {
   const requests: Record<string, unknown>[] = [];
   const swarmServerClient = {
     socketPath: "/tmp/fake-swarm-server.sock",
@@ -337,7 +382,44 @@ test("spawnPeer falls back to direct child when swarm-server's supportsDirectHar
   await spawned.exited;
 });
 
-test("spawnPeer falls back to direct child when swarm-server's spawnPty rejects", async () => {
+test("spawnPeer rejects when swarm-server PTY is unsupported and direct child fallback is disabled", async () => {
+  const requests: Record<string, unknown>[] = [];
+  const swarmServerClient = {
+    socketPath: "/tmp/fake-swarm-server.sock",
+    supportsDirectHarnessSpawn: async () => false,
+    spawnPty: async (body: Record<string, unknown>) => {
+      requests.push(body);
+      throw new Error("should not be called when capability check fails");
+    },
+    closePty: async () => {},
+    fetchState: async () => ({ ptys: [] })
+  };
+
+  await expect(
+    spawnPeer({
+      harness: "claude-code",
+      cwd: workspaceDir,
+      role: "implementer",
+      initialPrompt: "fallback disabled test",
+      maxTurns: 5,
+      timeoutMs: 30_000,
+      maxBufferBytes: 1024 * 1024,
+      model: "sonnet",
+      trace: { channelId: "channel-1", userId: "user-1", source: "test" },
+      store: makeStore(),
+      swarm: { ...makeSwarmConfig(), allowDirectChildFallback: false },
+      reservationKeeper: keeper!,
+      harnessOverride: makeFakeHarnessOverride(),
+      swarmServerClient,
+      adoptionPollIntervalMs: 25,
+      adoptionTimeoutMs: 5_000
+    })
+  ).rejects.toThrow(/PTY launch is required/i);
+
+  expect(requests.length).toBe(0);
+});
+
+test("spawnPeer falls back to direct child when enabled and swarm-server's spawnPty rejects", async () => {
   const swarmServerClient = {
     socketPath: "/tmp/fake-swarm-server.sock",
     supportsDirectHarnessSpawn: async () => true,
@@ -376,7 +458,43 @@ test("spawnPeer falls back to direct child when swarm-server's spawnPty rejects"
   expect(String((fallbackLog?.metadata as Record<string, unknown>)?.reason || "")).toMatch(/simulated 500/);
 });
 
-test("spawnPeer falls back to direct child when swarm-server health probe times out", async () => {
+test("spawnPeer rejects when swarm-server spawnPty rejects and direct child fallback is disabled", async () => {
+  const swarmServerClient = {
+    socketPath: "/tmp/fake-swarm-server.sock",
+    supportsDirectHarnessSpawn: async () => true,
+    spawnPty: async () => {
+      throw new Error("simulated 500 from swarm-server /pty");
+    },
+    closePty: async () => {},
+    fetchState: async () => ({ ptys: [] })
+  };
+
+  await expect(
+    spawnPeer({
+      harness: "claude-code",
+      cwd: workspaceDir,
+      role: "implementer",
+      initialPrompt: "fallback disabled test",
+      maxTurns: 5,
+      timeoutMs: 30_000,
+      maxBufferBytes: 1024 * 1024,
+      model: "sonnet",
+      trace: { channelId: "channel-1", userId: "user-1", source: "test" },
+      store: makeStore(),
+      swarm: { ...makeSwarmConfig(), allowDirectChildFallback: false },
+      reservationKeeper: keeper!,
+      harnessOverride: makeFakeHarnessOverride(),
+      swarmServerClient,
+      adoptionPollIntervalMs: 25,
+      adoptionTimeoutMs: 5_000
+    })
+  ).rejects.toThrow(/swarm-server PTY spawn failed: simulated 500/i);
+
+  const failureLog = logEntries.find((entry) => entry.kind === "swarm_server_spawn_failed");
+  expect(failureLog).toBeDefined();
+});
+
+test("spawnPeer falls back to direct child when enabled and swarm-server health probe times out", async () => {
   const swarmServerClient = {
     socketPath: "/tmp/fake-swarm-server.sock",
     // Mimics the real client's behavior when /health hangs: returns false
@@ -612,6 +730,34 @@ test("resolveSwarmArgs leaves absolute paths and bare tokens unchanged", () => {
   expect(resolved).toEqual(["run", absolute, "--flag"]);
 });
 
+test("buildCodexConfigOverrides pins swarm cwd and adoption env", () => {
+  const repoRoot = path.resolve(__dirname, "..", "..");
+  const swarm: CodeAgentSwarmRuntimeConfig = {
+    enabled: true,
+    serverName: "swarm",
+    command: "bun",
+    args: ["run", "./mcp-servers/swarm-mcp/src/index.ts"],
+    dbPath: "",
+    appendCoordinationPrompt: true,
+    allowDirectChildFallback: false
+  };
+
+  const overrides = buildCodexConfigOverrides(swarm, {
+    SWARM_MCP_INSTANCE_ID: "worker-1",
+    SWARM_MCP_SCOPE: "/tmp/scope",
+    BAD_KEY: "",
+    "bad-key": "ignored"
+  });
+
+  expect(overrides).toContain(
+    `mcp_servers.swarm.cwd='${path.resolve(repoRoot, "mcp-servers/swarm-mcp")}'`
+  );
+  expect(overrides).toContain("mcp_servers.swarm.env.SWARM_MCP_INSTANCE_ID='worker-1'");
+  expect(overrides).toContain("mcp_servers.swarm.env.SWARM_MCP_SCOPE='/tmp/scope'");
+  expect(overrides.some((value) => value.includes("bad-key"))).toBe(false);
+  expect(overrides.some((value) => value.includes("BAD_KEY"))).toBe(false);
+});
+
 test("loadProjectMcpServers returns mcpServers block from project .mcp.json", () => {
   const projectDir = mkdtempSync(path.join(tmpdir(), "clanky-project-"));
   try {
@@ -649,7 +795,8 @@ test("clankySwarmIsAvailable detects missing vendored swarm-mcp", () => {
     command: "bun",
     args: ["run", "./mcp-servers/swarm-mcp-does-not-exist/src/index.ts"],
     dbPath: "",
-    appendCoordinationPrompt: true
+    appendCoordinationPrompt: true,
+    allowDirectChildFallback: false
   };
   expect(clankySwarmIsAvailable(missing)).toBe(false);
 
@@ -659,7 +806,8 @@ test("clankySwarmIsAvailable detects missing vendored swarm-mcp", () => {
     command: "swarm-mcp",
     args: [],
     dbPath: "",
-    appendCoordinationPrompt: true
+    appendCoordinationPrompt: true,
+    allowDirectChildFallback: false
   };
   // No path-like arg → trust the command resolves on PATH.
   expect(clankySwarmIsAvailable(onPath)).toBe(true);
@@ -683,7 +831,8 @@ test("buildClaudeMcpConfigJson merges project MCPs and lets clanky's swarm win w
       command: "swarm-mcp",
       args: [],
       dbPath: "",
-      appendCoordinationPrompt: true
+      appendCoordinationPrompt: true,
+      allowDirectChildFallback: false
     };
     const json = JSON.parse(buildClaudeMcpConfigJson(swarm, projectDir));
     expect(json.github.command).toBe("github-mcp");
@@ -716,7 +865,8 @@ test("buildClaudeMcpConfigJson falls back to project's swarm entry when clanky's
       command: "bun",
       args: ["run", "./mcp-servers/swarm-mcp-does-not-exist/src/index.ts"],
       dbPath: "",
-      appendCoordinationPrompt: true
+      appendCoordinationPrompt: true,
+      allowDirectChildFallback: false
     };
     const json = JSON.parse(buildClaudeMcpConfigJson(swarm, projectDir));
     // Project's swarm entry wins because clanky's vendored path is absent.
