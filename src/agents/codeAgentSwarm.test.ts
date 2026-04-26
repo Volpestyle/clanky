@@ -41,7 +41,7 @@ test("applySwarmLauncherFirstTurnPreamble preserves the task body", () => {
   assert.equal(combined, "Use swarm first.\n\nTask:\nFix the failing tests.");
 });
 
-test("buildSwarmLauncherFirstTurnPreamble defaults to one-shot and reports usage via annotate", () => {
+test("buildSwarmLauncherFirstTurnPreamble emits the unified overlay block with annotate-based usage", () => {
   const preamble = buildSwarmLauncherFirstTurnPreamble({
     serverName: "swarm",
     taskId: "task-abc"
@@ -52,6 +52,11 @@ test("buildSwarmLauncherFirstTurnPreamble defaults to one-shot and reports usage
   assert.match(preamble, /annotate\(file=<task_id>, kind="usage"/);
   assert.match(preamble, /not in `update_task\.metadata`/);
   assert.match(preamble, /plain text — not structured JSON/);
+  // Single-mode listen-window stanza replaces the old inbox-loop branch.
+  assert.match(preamble, /Follow-up listen window/);
+  assert.match(preamble, /wait_for_activity/);
+  assert.match(preamble, /send_message/);
+  assert.match(preamble, /If no follow-up arrives in the window/);
   assert.doesNotMatch(preamble, /Inbox-loop mode/);
 });
 
@@ -60,17 +65,6 @@ test("buildSwarmLauncherFirstTurnPreamble does not duplicate SKILL-covered guida
   // SKILL.md is the source of truth for these — preamble shouldn't repeat them.
   assert.doesNotMatch(preamble, /Use `claim_task` on it before starting work/);
   assert.doesNotMatch(preamble, /lock_file before editing shared files/);
-});
-
-test("buildSwarmLauncherFirstTurnPreamble appends inbox-loop instructions when requested", () => {
-  const preamble = buildSwarmLauncherFirstTurnPreamble({
-    taskId: "task-xyz",
-    workerMode: "inbox_loop"
-  });
-  assert.match(preamble, /Inbox-loop mode/);
-  assert.match(preamble, /do not exit/);
-  assert.match(preamble, /wait_for_activity/);
-  assert.match(preamble, /send_message/);
 });
 
 test("buildSwarmLauncherFirstTurnPreamble omits the task-id line when none is provided", () => {

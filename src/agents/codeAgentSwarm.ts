@@ -95,7 +95,13 @@ export function applySwarmLauncherFirstTurnPreamble(input: string, preamble?: st
   return `${normalizedPreamble}\n\nTask:\n${normalizedInput}`;
 }
 
-export type SwarmLauncherWorkerMode = "one_shot" | "inbox_loop";
+/**
+ * Default seconds the worker should spend listening for follow-up messages
+ * after `update_task(done)` before exiting. Short enough that idle workers
+ * don't accumulate; long enough that the orchestrator's next reply turn
+ * usually lands inside the window for natural multi-turn iteration.
+ */
+export const SWARM_LAUNCHER_FOLLOWUP_LISTEN_SECONDS = 60;
 
 /**
  * Behavioral-only preamble for swarm-launcher workers. Their instance row is
@@ -106,18 +112,18 @@ export type SwarmLauncherWorkerMode = "one_shot" | "inbox_loop";
  * - usage/cost telemetry travels as a sibling `annotate(kind="usage")` call,
  *   not as `update_task.metadata`. The task waiter reads from the `context`
  *   table, not from task metadata.
- * - workerMode toggles §2a one-shot vs inbox-loop semantics. Default one-shot.
- *
+ * - every worker has a brief follow-up listen window after the assigned task
+ *   completes. The orchestrator decides per-turn whether to follow up; the
+ *   worker just stays available briefly. No upfront one-shot vs inbox-loop
+ *   decision — if no follow-up arrives in the window, exit cleanly.
  */
 export function buildSwarmLauncherFirstTurnPreamble({
   serverName = "swarm",
   taskId,
-  workerMode = "one_shot",
   coordinationSkill = ""
 }: {
   serverName?: string;
   taskId?: string | null;
-  workerMode?: SwarmLauncherWorkerMode;
   /**
    * Optional role-specific swarm-mcp skill (`SKILL.md` + role reference)
    * loaded from the vendored submodule. Appended after the Clanky-specific
@@ -154,15 +160,10 @@ export function buildSwarmLauncherFirstTurnPreamble({
     "   `annotate(file=<task_id>, kind=\"usage\", content=JSON.stringify({ inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd }))`",
     "   Clanky reads usage from this annotation; anything in `update_task.metadata` is ignored.",
     "",
-    "2. **Result format.** Post the final user-facing output text directly in `update_task(status=\"done\", result=<text>)` as plain text — not structured JSON. Clanky surfaces this verbatim to the requesting user."
+    "2. **Result format.** Post the final user-facing output text directly in `update_task(status=\"done\", result=<text>)` as plain text — not structured JSON. Clanky surfaces this verbatim to the requesting user.",
+    "",
+    `3. **Follow-up listen window.** After \`update_task(done)\`, wait roughly ${SWARM_LAUNCHER_FOLLOWUP_LISTEN_SECONDS}s for follow-up messages via \`wait_for_activity\` / \`list_messages\`. If a \`send_message\` arrives in that window, treat it as a follow-up instruction — claim or create the appropriate follow-up task, execute, and report again with \`update_task\` + \`annotate(kind="usage")\`, then return to listening. If no follow-up arrives in the window, or you receive an explicit termination message, exit cleanly. The orchestrator decides per-turn whether to drive more work; you just stay briefly available.`
   );
-
-  if (workerMode === "inbox_loop") {
-    lines.push(
-      "",
-      "**Inbox-loop mode.** After `update_task(done)`, do not exit. Poll your inbox via `wait_for_activity` and `list_messages`. Treat each `send_message` you receive as a follow-up instruction; claim or create the appropriate follow-up task, execute, and report again with `update_task` + `annotate(kind=\"usage\")`. Exit when you receive an explicit termination message or your idle timeout elapses."
-    );
-  }
 
   const trimmedSkill = String(coordinationSkill || "").trim();
   if (trimmedSkill) {

@@ -198,7 +198,7 @@ export const VIDEO_CONTEXT_SCHEMA: SharedToolSchema = {
 
 export const SPAWN_CODE_WORKER_SCHEMA: SharedToolSchema = {
   name: "spawn_code_worker",
-  description: "Spawn a swarm-backed coding worker and return the worker and task ids for coordination. Use worker_mode=inbox_loop for iterative followups or long-lived planner workers. Use review_after_completion only when the user asks for verification or the task is high-stakes.",
+  description: "Spawn a swarm-backed coding worker and return the worker and task ids for coordination. The spawned worker stays briefly available after its assigned task for send_message followups (sessionKey is returned and persisted in swarm KV); if no followup arrives in the listen window, it exits cleanly. Use review_after_completion only when the user asks for verification or the task is high-stakes.",
   voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
@@ -215,11 +215,6 @@ export const SPAWN_CODE_WORKER_SCHEMA: SharedToolSchema = {
         description: "Optional worker harness override."
       },
       cwd: { type: "string", description: "Working directory. Defaults to the selected worker's configured project root." },
-      worker_mode: {
-        type: "string",
-        enum: ["one_shot", "inbox_loop"],
-        description: "one_shot exits after the assigned task. inbox_loop stays alive for send_message followups and persists a session key in swarm KV. Defaults to one_shot."
-      },
       review_after_completion: {
         type: "boolean",
         description: "When true, wait for the implementation task, then spawn a one-shot review worker against the same cwd and return both results. Use sparingly."

@@ -1299,7 +1299,6 @@ async function executeSpawnCodeWorker(
   try {
     const task = normalizeDirectiveText(String(input?.task || ""), MAX_CODE_TASK_LEN);
     const cwd = getStringInput(input, "cwd") || undefined;
-    const workerMode = getStringInput(input, "worker_mode") || getStringInput(input, "workerMode") || undefined;
     const result = await spawnCodeWorker(
       {
         settings: context.settings,
@@ -1312,7 +1311,6 @@ async function executeSpawnCodeWorker(
         userId: context.userId,
         triggerMessageId: context.sourceMessageId,
         source: String(context.trace?.source || "reply_tool_spawn_code_worker"),
-        workerMode,
         signal: context.signal
       },
       {
@@ -1398,7 +1396,6 @@ async function runCodeWorkerReviewAfterCompletion({
       userId: context.userId,
       triggerMessageId: context.sourceMessageId,
       source: "reply_tool_spawn_code_worker_review",
-      workerMode: "one_shot",
       signal: context.signal
     },
     {

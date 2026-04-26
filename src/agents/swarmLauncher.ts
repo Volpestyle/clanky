@@ -13,8 +13,7 @@ import {
   buildSwarmLabel,
   buildSwarmLauncherFirstTurnPreamble,
   applySwarmLauncherFirstTurnPreamble,
-  type CodeAgentSwarmRuntimeConfig,
-  type SwarmLauncherWorkerMode
+  type CodeAgentSwarmRuntimeConfig
 } from "./codeAgentSwarm.ts";
 import {
   resolveCodeAgentWorkspace,
@@ -51,12 +50,6 @@ export type SpawnPeerOptions = {
   initialPrompt: string;
   /** Optional task id reserved upstream — embedded in the preamble. */
   taskId?: string | null;
-  /**
-   * One-shot (default) workers exit after `update_task(done)`. Inbox-loop
-   * workers stay alive after the initial task and treat further `send_message`
-   * calls from the orchestrator as follow-up instructions. Worker contract §2a.
-   */
-  workerMode?: SwarmLauncherWorkerMode;
   labelExtras?: { thread?: string | null; user?: string | null };
   /** Override the swarm-mcp scope (defaults to repoRoot). */
   scope?: string;
@@ -418,7 +411,6 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
   const preamble = buildSwarmLauncherFirstTurnPreamble({
     serverName: opts.swarm.serverName,
     taskId: opts.taskId,
-    workerMode: opts.workerMode ?? "one_shot",
     coordinationSkill: loadRoleCoordinationSkill(opts.role)
   });
   const wrappedPrompt = applySwarmLauncherFirstTurnPreamble(opts.initialPrompt, preamble);

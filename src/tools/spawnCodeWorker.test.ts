@@ -158,7 +158,7 @@ test("cancelSpawnedWorkerForTask marks the task cancelled before stopping the wo
   });
 });
 
-test("spawnCodeWorker can launch inbox-loop workers and persist their session", async () => {
+test("spawnCodeWorker persists a session record on every spawn so followups can find the live worker", async () => {
   await withTempWorkspace(async (workspaceDir, dbPath) => {
     const order: string[] = [];
     const task = makeTask("task-inbox", workspaceDir);
@@ -194,7 +194,6 @@ test("spawnCodeWorker can launch inbox-loop workers and persist their session", 
       settings: makeSettings(workspaceDir, dbPath),
       task: "Plan an implementation",
       role: "design",
-      workerMode: "inbox_loop",
       guildId: "guild-1",
       channelId: "channel-1",
       userId: "user-1",
@@ -214,9 +213,7 @@ test("spawnCodeWorker can launch inbox-loop workers and persist their session", 
       }
     });
 
-    expect(capturedOptions?.workerMode).toBe("inbox_loop");
     expect(capturedOptions?.role).toBe("planner");
-    expect(result.workerMode).toBe("inbox_loop");
     expect(result.sessionKey).toContain("clanky:code_worker_session:last:guild:guild-1:channel:channel-1:user:user-1");
     expect(result.persistedSession).toBe(true);
     expect(kvWrites.length).toBe(4);
@@ -226,7 +223,7 @@ test("spawnCodeWorker can launch inbox-loop workers and persist their session", 
     const sessionRecord = JSON.parse(String(lastSession?.value || "{}")) as Record<string, unknown>;
     expect(sessionRecord.workerId).toBe("worker-inbox");
     expect(sessionRecord.taskId).toBe("task-inbox");
-    expect(sessionRecord.workerMode).toBe("inbox_loop");
+    expect(sessionRecord.role).toBe("design");
     const workerSession = kvWrites.find((entry) => entry.key === "clanky:code_worker_session:worker:worker-inbox");
     expect(workerSession).toBeDefined();
 
@@ -293,6 +290,60 @@ test("spawnCodeWorker can assign an existing open swarm task instead of creating
     expect(result.workerId).toBe("worker-existing");
 
     await expect(cancelSpawnedWorkerForTask("existing-task", "test cleanup")).resolves.toBe(true);
+  });
+});
+
+test("spawnCodeWorker marks newly created tasks failed when worker launch fails", async () => {
+  await withTempWorkspace(async (workspaceDir, dbPath) => {
+    const task = makeTask("task-launch-failed", workspaceDir);
+    const updates: UpdateTaskOpts[] = [];
+    const peer = {
+      instanceId: "clanky-planner",
+      requestTask: async () => task,
+      kvSet: async (key: string, value: string) => ({
+        scope: workspaceDir,
+        key,
+        value,
+        updatedAt: Date.now()
+      }),
+      assignTask: async (_taskId: string, assignee: string) => {
+        task.assignee = assignee;
+        return task;
+      },
+      updateTask: async (_taskId: string, opts: UpdateTaskOpts) => {
+        updates.push(opts);
+        task.status = opts.status;
+        task.result = opts.result ?? null;
+        return task;
+      }
+    };
+
+    await expect(spawnCodeWorker({
+      settings: makeSettings(workspaceDir, dbPath),
+      task: "Implement thing",
+      guildId: null,
+      channelId: "channel-1",
+      userId: "user-1"
+    }, {
+      store: {
+        countActionsSince: () => 0,
+        logAction: () => {}
+      },
+      peerManager: {
+        ensurePeer: () => peer
+      } as never,
+      reservationKeeper: {} as never,
+      spawnPeer: async () => {
+        throw new Error("spawn exploded");
+      }
+    })).rejects.toThrow("spawn exploded");
+
+    expect(updates).toEqual([{
+      status: "failed",
+      result: "spawn_code_worker failed before worker assignment: spawn exploded"
+    }]);
+    expect(task.status).toBe("failed");
+    expect(task.result).toBe("spawn_code_worker failed before worker assignment: spawn exploded");
   });
 });
 

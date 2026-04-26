@@ -12,7 +12,6 @@ import {
   type SwarmLauncherStore,
   type SwarmPeerRole
 } from "../agents/swarmLauncher.ts";
-import type { SwarmLauncherWorkerMode } from "../agents/codeAgentSwarm.ts";
 import { ClankySwarmPeerManager } from "../agents/swarmPeerManager.ts";
 import type { ClankyPeer, SwarmTask } from "../agents/swarmPeer.ts";
 import { SwarmReservationKeeper } from "../agents/swarmReservationKeeper.ts";
@@ -32,7 +31,6 @@ export type SpawnCodeWorkerArgs = {
   userId: string | null;
   triggerMessageId?: string | null;
   source?: string | null;
-  workerMode?: SwarmLauncherWorkerMode | string | null;
   existingTaskId?: string | null;
   signal?: AbortSignal;
 };
@@ -70,7 +68,12 @@ export type SpawnCodeWorkerResult = {
   workerId: string;
   taskId: string;
   scope: string;
-  workerMode: SwarmLauncherWorkerMode;
+  /**
+   * KV key under which the live worker is recorded. Orchestrators use it on
+   * later reply turns to drive `send_message` follow-ups against the same
+   * worker if it's still in its post-task listen window. If the worker has
+   * exited by then, the orchestrator should spawn fresh instead.
+   */
   sessionKey: string | null;
   persistedSession: boolean;
 };
@@ -105,7 +108,6 @@ type CodeWorkerSessionRecord = {
   taskId: string;
   scope: string;
   role: CodeAgentRole;
-  workerMode: SwarmLauncherWorkerMode;
   cwd: string;
   guildId: string | null;
   channelId: string | null;
@@ -126,17 +128,6 @@ function normalizeHarness(value: unknown): SpawnCodeWorkerHarness | null {
   if (normalized === "claude-code") return "claude-code";
   if (normalized === "codex-cli") return "codex-cli";
   return null;
-}
-
-function normalizeWorkerMode(value: unknown): SwarmLauncherWorkerMode {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/-/g, "_");
-  if (!normalized) return "one_shot";
-  if (normalized === "one_shot") return "one_shot";
-  if (normalized === "inbox_loop") return "inbox_loop";
-  throw new Error("Invalid worker_mode. Expected one_shot or inbox_loop.");
 }
 
 function sessionKeyToken(value: unknown, fallback: string): string {
@@ -340,6 +331,18 @@ async function markWorkerTaskCancelled(worker: ActiveSpawnedWorker, reason: stri
   }
 }
 
+async function markNewWorkerTaskLaunchFailed(args: {
+  peer: ClankyPeer;
+  taskId: string;
+  error: unknown;
+}): Promise<void> {
+  const message = String((args.error as Error)?.message || args.error || "unknown error").trim();
+  await args.peer.updateTask(args.taskId, {
+    status: "failed",
+    result: `spawn_code_worker failed before worker assignment: ${message || "unknown error"}`
+  });
+}
+
 async function resolveExistingOpenTask(peer: ClankyPeer, taskId: string): Promise<SwarmTask> {
   const task = await peer.getTask(taskId);
   if (!task) throw new Error(`Swarm task ${taskId} was not found.`);
@@ -395,7 +398,6 @@ export async function spawnCodeWorker(
   }
 
   const role = normalizeCodeAgentRole(args.role, "implementation");
-  const workerMode = normalizeWorkerMode(args.workerMode);
   const harnessOverride = args.harness ? normalizeHarness(args.harness) : null;
   if (args.harness && !harnessOverride) {
     throw new Error("Invalid harness. Expected claude-code or codex-cli.");
@@ -441,7 +443,6 @@ export async function spawnCodeWorker(
       role: roleToSwarmPeerRole(role),
       initialPrompt: task,
       taskId: swarmTask.id,
-      workerMode,
       labelExtras: {
         thread: args.channelId,
         user: args.userId
@@ -471,56 +472,56 @@ export async function spawnCodeWorker(
       peer,
       spawned
     });
-    const sessionKey = workerMode === "inbox_loop"
-      ? buildCodeWorkerSessionKey({
+    // Persist session keys unconditionally so the orchestrator can drive
+    // follow-ups via send_message during the worker's post-task listen
+    // window. If the worker has already exited by then, send_message will
+    // surface an inactive-peer error and the orchestrator falls back to
+    // spawning fresh.
+    const sessionKey = buildCodeWorkerSessionKey({
+      guildId: args.guildId,
+      channelId: args.channelId,
+      userId: args.userId
+    });
+    let persistedSession = false;
+    const record: CodeWorkerSessionRecord = {
+      workerId: spawned.instanceId,
+      taskId: swarmTask.id,
+      scope: launch.scope,
+      role,
+      cwd: launch.cwd,
+      guildId: args.guildId || null,
+      channelId: args.channelId || null,
+      userId: args.userId || null,
+      triggerMessageId: args.triggerMessageId || null,
+      source,
+      updatedAt: new Date().toISOString()
+    };
+    try {
+      await peer.kvSet(sessionKey, JSON.stringify(record));
+      await peer.kvSet(buildCodeWorkerWorkerSessionKey(spawned.instanceId), JSON.stringify(record));
+      await peer.kvSet(buildCodeWorkerRoleSessionKey({
         guildId: args.guildId,
         channelId: args.channelId,
-        userId: args.userId
-      })
-      : null;
-    let persistedSession = false;
-    if (sessionKey) {
-      const record: CodeWorkerSessionRecord = {
-        workerId: spawned.instanceId,
-        taskId: swarmTask.id,
-        scope: launch.scope,
-        role,
-        workerMode,
-        cwd: launch.cwd,
+        userId: args.userId,
+        role
+      }), JSON.stringify(record));
+      persistedSession = true;
+    } catch (error) {
+      deps.store.logAction({
+        kind: "code_agent_error",
         guildId: args.guildId || null,
         channelId: args.channelId || null,
         userId: args.userId || null,
-        triggerMessageId: args.triggerMessageId || null,
-        source,
-        updatedAt: new Date().toISOString()
-      };
-      try {
-        await peer.kvSet(sessionKey, JSON.stringify(record));
-        await peer.kvSet(buildCodeWorkerWorkerSessionKey(spawned.instanceId), JSON.stringify(record));
-        await peer.kvSet(buildCodeWorkerRoleSessionKey({
-          guildId: args.guildId,
-          channelId: args.channelId,
-          userId: args.userId,
-          role
-        }), JSON.stringify(record));
-        persistedSession = true;
-      } catch (error) {
-        deps.store.logAction({
-          kind: "code_agent_error",
-          guildId: args.guildId || null,
-          channelId: args.channelId || null,
-          userId: args.userId || null,
-          content: "code_worker_session_persist_failed",
-          metadata: {
-            source: args.source || "reply_tool_spawn_code_worker",
-            taskId: swarmTask.id,
-            instanceId: spawned.instanceId,
-            sessionKey,
-            workerSessionKey: buildCodeWorkerWorkerSessionKey(spawned.instanceId),
-            error: String((error as Error)?.message || error)
-          }
-        });
-      }
+        content: "code_worker_session_persist_failed",
+        metadata: {
+          source: args.source || "reply_tool_spawn_code_worker",
+          taskId: swarmTask.id,
+          instanceId: spawned.instanceId,
+          sessionKey,
+          workerSessionKey: buildCodeWorkerWorkerSessionKey(spawned.instanceId),
+          error: String((error as Error)?.message || error)
+        }
+      });
     }
     if (deps.activityBridge) {
       deps.activityBridge.watchControllerPeer?.(peer, {
@@ -551,7 +552,6 @@ export async function spawnCodeWorker(
         taskId: swarmTask.id,
         existingTaskId: existingTaskId || null,
         instanceId: spawned.instanceId,
-        workerMode,
         sessionKey,
         persistedSession,
         launchMode: spawned.launchMode,
@@ -563,7 +563,6 @@ export async function spawnCodeWorker(
       workerId: spawned.instanceId,
       taskId: swarmTask.id,
       scope: launch.scope,
-      workerMode,
       sessionKey,
       persistedSession
     };
@@ -571,6 +570,27 @@ export async function spawnCodeWorker(
     if (spawned) {
       await spawned.cancel("spawn_code_worker failed").catch(() => null);
     }
+    if (!existingTaskId) {
+      await markNewWorkerTaskLaunchFailed({
+        peer,
+        taskId: swarmTask.id,
+        error
+      }).catch((cleanupError) => {
+        deps.store.logAction({
+          kind: "code_agent_error",
+          guildId: args.guildId || null,
+          channelId: args.channelId || null,
+          userId: args.userId || null,
+          content: "code_worker_task_cleanup_failed",
+          metadata: {
+            source,
+            taskId: swarmTask.id,
+            error: String((cleanupError as Error)?.message || cleanupError)
+          }
+        });
+      });
+    }
+    activeWorkersByTaskId.delete(swarmTask.id);
     throw error;
   }
 }

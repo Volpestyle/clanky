@@ -2226,8 +2226,7 @@ export class ClankerBot {
           userId: plannerSession.userId,
           triggerMessageId: plannerSession.triggerMessageId,
           source: "swarm_spawn_request",
-          existingTaskId: event.request.taskId,
-          workerMode: "one_shot"
+          existingTaskId: event.request.taskId
         },
         {
           store: this.store,
