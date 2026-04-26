@@ -1,12 +1,3 @@
-import {
-  type CodeAgentRole,
-  createCodeAgentSession as createCodeAgentSessionRuntime,
-  getActiveCodeAgentTaskCount,
-  isCodeAgentUserAllowed,
-  normalizeCodeAgentRole,
-  resolveCodeAgentConfig,
-  runCodeAgent
-} from "../agents/codeAgent.ts";
 import { BrowserAgentSession } from "../agents/browseAgent.ts";
 import { runOpenAiComputerUseTask } from "../tools/openAiComputerUseRuntime.ts";
 import { isAbortError } from "../tools/abortError.ts";
@@ -18,7 +9,6 @@ import { clamp } from "../utils.ts";
 import { MAX_BROWSER_BROWSE_QUERY_LEN, normalizeDirectiveText } from "./botHelpers.ts";
 import {
   getResolvedBrowserTaskConfig,
-  isDevTaskEnabled,
   isMinecraftEnabled,
   getMinecraftConfig,
   getMinecraftProjectActionBudget,
@@ -45,7 +35,6 @@ type AgentTaskTrace = {
   channelId?: string | null;
   userId?: string | null;
   source?: string | null;
-  role?: CodeAgentRole | null;
 };
 
 type RunModelRequestedBrowserBrowseOptions = {
@@ -61,28 +50,6 @@ type RunModelRequestedBrowserBrowseOptions = {
 
 type BrowserBrowseState = BrowserBrowseContextState;
 
-type RunModelRequestedCodeTaskOptions = {
-  settings: Record<string, unknown>;
-  task?: string;
-  role?: CodeAgentRole;
-  cwd?: string;
-  guildId?: string | null;
-  channelId?: string | null;
-  userId?: string | null;
-  source?: string;
-  signal?: AbortSignal;
-};
-
-type CreateCodeAgentSessionOptions = {
-  settings: Record<string, unknown>;
-  role?: CodeAgentRole;
-  cwd?: string;
-  guildId?: string | null;
-  channelId?: string | null;
-  userId?: string | null;
-  source?: string;
-};
-
 type CreateBrowserAgentSessionOptions = {
   settings: Record<string, unknown>;
   guildId?: string | null;
@@ -90,10 +57,6 @@ type CreateBrowserAgentSessionOptions = {
   userId?: string | null;
   source?: string;
 };
-
-function buildCodeAgentBudgetWindowStart() {
-  return new Date(Date.now() - 60 * 60 * 1000).toISOString();
-}
 
 function buildScopeKey({
   guildId,
@@ -259,155 +222,6 @@ export async function runModelRequestedBrowserBrowse(
     };
   } finally {
     ctx.activeBrowserTasks.clear(activeBrowserTask);
-  }
-}
-
-export async function runModelRequestedCodeTask(
-  ctx: AgentContext,
-  {
-    settings,
-    task,
-    role = "implementation",
-    cwd: cwdOverride,
-    guildId,
-    channelId = null,
-    userId = null,
-    source = "reply_message",
-    signal
-  }: RunModelRequestedCodeTaskOptions
-) {
-  if (!isDevTaskEnabled(settings)) {
-    return { text: "", error: "code_agent_disabled" };
-  }
-  if (userId && !isCodeAgentUserAllowed(userId, settings)) {
-    return { text: "", blockedByPermission: true };
-  }
-
-  const normalizedRole = normalizeCodeAgentRole(role);
-  const codeAgentConfig = resolveCodeAgentConfig(settings, cwdOverride, normalizedRole);
-  const maxParallel = codeAgentConfig.maxParallelTasks;
-  if (getActiveCodeAgentTaskCount() >= maxParallel) {
-    return { text: "", blockedByParallelLimit: true };
-  }
-
-  const maxPerHour = codeAgentConfig.maxTasksPerHour;
-  const used = ctx.store.countActionsSince("code_agent_call", buildCodeAgentBudgetWindowStart());
-  if (used >= maxPerHour) {
-    return { text: "", blockedByBudget: true };
-  }
-
-  const {
-    cwd,
-    swarm,
-    workspaceMode,
-    provider,
-    model,
-    codexCliModel,
-    maxTurns,
-    timeoutMs,
-    maxBufferBytes
-  } = codeAgentConfig;
-
-  try {
-    const result = await runCodeAgent({
-      instruction: task,
-      cwd,
-      swarm,
-      workspaceMode,
-      provider,
-      maxTurns,
-      timeoutMs,
-      maxBufferBytes,
-      model,
-      codexCliModel,
-      trace: buildTrace({
-        guildId,
-        channelId,
-        userId,
-        source,
-        role: normalizedRole
-      }),
-      store: ctx.store,
-      signal
-    });
-
-    return {
-      text: result.text,
-      isError: result.isError,
-      costUsd: result.costUsd,
-      error: result.isError ? result.errorMessage : null
-    };
-  } catch (error) {
-    return {
-      text: "",
-      error: String(error?.message || error)
-    };
-  }
-}
-
-export function createCodeAgentSession(
-  ctx: AgentContext,
-  {
-    settings,
-    role = "implementation",
-    cwd: cwdOverride,
-    guildId,
-    channelId = null,
-    userId = null,
-    source = "reply_session"
-  }: CreateCodeAgentSessionOptions
-) {
-  if (!isDevTaskEnabled(settings)) return null;
-  if (userId && !isCodeAgentUserAllowed(userId, settings)) return null;
-
-  const normalizedRole = normalizeCodeAgentRole(role);
-  const codeAgentConfig = resolveCodeAgentConfig(settings, cwdOverride, normalizedRole);
-  const maxParallel = codeAgentConfig.maxParallelTasks;
-  if (getActiveCodeAgentTaskCount() >= maxParallel) return null;
-
-  const maxPerHour = codeAgentConfig.maxTasksPerHour;
-  const used = ctx.store.countActionsSince("code_agent_call", buildCodeAgentBudgetWindowStart());
-  if (used >= maxPerHour) return null;
-
-  const {
-    cwd,
-    swarm,
-    workspaceMode,
-    provider,
-    model,
-    codexCliModel,
-    maxTurns,
-    timeoutMs,
-    maxBufferBytes
-  } = codeAgentConfig;
-
-  const scopeKey = buildScopeKey({
-    guildId,
-    channelId
-  });
-  try {
-    return createCodeAgentSessionRuntime({
-      scopeKey,
-      cwd,
-      swarm,
-      workspaceMode,
-      provider,
-      model,
-      codexCliModel,
-      maxTurns,
-      timeoutMs,
-      maxBufferBytes,
-      trace: buildTrace({
-        guildId,
-        channelId,
-        userId,
-        source,
-        role: normalizedRole
-      }),
-      store: ctx.store
-    });
-  } catch {
-    return null;
   }
 }
 
@@ -635,7 +449,6 @@ async function createMinecraftSession(
 export function buildSubAgentSessionsRuntime(ctx: AgentContext) {
   return {
     manager: ctx.subAgentSessions,
-    createCodeSession: (opts: CreateCodeAgentSessionOptions) => createCodeAgentSession(ctx, opts),
     createBrowserSession: (opts: CreateBrowserAgentSessionOptions) =>
       createBrowserAgentSession(ctx, opts),
     createMinecraftSession: (opts: CreateMinecraftSessionOptions) =>

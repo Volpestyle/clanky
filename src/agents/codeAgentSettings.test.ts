@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { resolveCodeAgentConfig, resolveCodeAgentCwd } from "./codeAgent.ts";
+import { resolveCodeAgentConfig, resolveCodeAgentCwd } from "./codeAgentSettings.ts";
 import { createTestSettings } from "../testSettings.ts";
 
 function normalizeExpectedPath(value: string) {
@@ -77,14 +77,12 @@ test("resolveCodeAgentConfig routes worker selection through the requested role"
   assert.equal(designConfig.provider, "claude-code");
   assert.equal(designConfig.cwd, normalizeExpectedPath("/tmp/claude-code"));
   assert.equal(designConfig.maxParallelTasks, 5);
-  assert.equal(designConfig.workspaceMode, "isolated_worktree");
 
   assert.equal(implementationConfig.role, "implementation");
   assert.equal(implementationConfig.worker, "codex_cli");
   assert.equal(implementationConfig.provider, "codex-cli");
   assert.equal(implementationConfig.cwd, normalizeExpectedPath("/tmp/codex-cli"));
   assert.equal(implementationConfig.maxParallelTasks, 3);
-  assert.equal(implementationConfig.workspaceMode, "isolated_worktree");
 
   assert.equal(reviewConfig.worker, "claude_code");
   assert.equal(reviewConfig.provider, "claude-code");
@@ -92,7 +90,7 @@ test("resolveCodeAgentConfig routes worker selection through the requested role"
   assert.equal(researchConfig.provider, "codex-cli");
 });
 
-test("resolveCodeAgentConfig defaults swarm-enabled local workers to the shared checkout", () => {
+test("resolveCodeAgentConfig preserves swarm runtime config for launcher workers", () => {
   const settings = createTestSettings({
     permissions: {
       devTasks: {
@@ -105,7 +103,7 @@ test("resolveCodeAgentConfig defaults swarm-enabled local workers to the shared 
           swarm: {
             enabled: true,
             command: "bun",
-            args: ["run", "C:/Users/volpe/swarm-mcp/src/index.ts"]
+            args: ["run", "swarm-mcp/src/index.ts"]
           },
           codexCli: {
             enabled: true,
@@ -118,39 +116,8 @@ test("resolveCodeAgentConfig defaults swarm-enabled local workers to the shared 
 
   const config = resolveCodeAgentConfig(settings, undefined, "implementation");
   assert.equal(config.provider, "codex-cli");
-  assert.equal(config.workspaceMode, "shared_checkout");
-});
-
-test("resolveCodeAgentConfig respects an explicit isolated workspace override even with swarm enabled", () => {
-  const settings = createTestSettings({
-    permissions: {
-      devTasks: {
-        allowedUserIds: ["user-1"]
-      }
-    },
-    agentStack: {
-      runtimeConfig: {
-        devTeam: {
-          workspace: {
-            mode: "isolated_worktree"
-          },
-          swarm: {
-            enabled: true,
-            command: "bun",
-            args: ["run", "C:/Users/volpe/swarm-mcp/src/index.ts"]
-          },
-          claudeCode: {
-            enabled: true,
-            defaultCwd: "/tmp/claude-code"
-          }
-        }
-      }
-    }
-  });
-
-  const config = resolveCodeAgentConfig(settings, undefined, "implementation");
-  assert.equal(config.provider, "claude-code");
-  assert.equal(config.workspaceMode, "isolated_worktree");
+  assert.equal(config.swarm?.enabled, true);
+  assert.equal(config.swarm?.command, "bun");
 });
 
 test("resolveCodeAgentCwd defaults to the provided repo root and normalizes relative paths", () => {

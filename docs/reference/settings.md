@@ -73,7 +73,7 @@ Current meanings:
 - `bindings`: resolved runtime helpers for display/debugging
 - `_meta`: version and save/apply metadata
 
-The dashboard edits `intent`. It uses `effective` and `bindings` as a runtime preview, but on save it materializes and submits the next full authored snapshot instead of sending a sparse intent patch.
+The dashboard edits `intent`. It uses `effective` and `bindings` as a runtime preview, but on save it materializes and submits the next full authored snapshot instead of sending a sparse intent patch. The form model starts from the normalized source settings and overlays dashboard-edited fields onto that baseline so settings the UI does not expose are preserved across ordinary dashboard saves.
 
 `PUT /api/settings` accepts:
 
@@ -83,7 +83,8 @@ The dashboard edits `intent`. It uses `effective` and `bindings` as a runtime pr
 Save semantics:
 
 - the request body replaces the full authored snapshot
-- omitted branches revert to defaults or inherited runtime behavior after normalization
+- dashboard saves preserve non-rendered settings from the form's source baseline unless a visible control edits or clears the related branch
+- branches omitted by direct API clients revert to defaults or inherited runtime behavior after normalization
 - this is not merge-patch behavior
 
 Current save guarantees:
@@ -199,9 +200,9 @@ Preset-specific default choices and product intent live in [`../architecture/pre
 
 - browser runtime knobs and behavior: [`../capabilities/browser.md`](../capabilities/browser.md)
 - code-agent knobs and behavior: [`../capabilities/code.md`](../capabilities/code.md)
+- `permissions.devTasks.allowedWorkspaceRoots` is the approved local filesystem boundary for code workers; GitHub issue/repo URLs are resolved only against local clones under these roots
 - Minecraft runtime knobs and brain binding: [`../capabilities/minecraft.md`](../capabilities/minecraft.md)
-- `agentStack.runtimeConfig.devTeam.workspace` controls whether local coding workers use the shared checkout or isolated worktrees; its behavioral contract lives in [`../capabilities/code.md`](../capabilities/code.md)
-- `agentStack.runtimeConfig.devTeam.swarm` is the optional MCP coordination wiring for local code workers; its behavioral contract also lives in [`../capabilities/code.md`](../capabilities/code.md)
+- `agentStack.runtimeConfig.devTeam.swarm` is the swarm-mcp coordination wiring for local code workers (the substrate, not an opt-in); its behavioral contract lives in [`../capabilities/code.md`](../capabilities/code.md)
 - `agentStack.runtimeConfig.minecraft.server` is the canonical preferred world/server target for embodied Minecraft sessions; its behavioral contract lives in [`../capabilities/minecraft.md`](../capabilities/minecraft.md)
 - voice transport and pipeline knobs: [`../voice/voice-provider-abstraction.md`](../voice/voice-provider-abstraction.md)
 - activity/attention-facing behavior knobs: [`../architecture/activity.md`](../architecture/activity.md)

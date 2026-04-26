@@ -825,7 +825,7 @@ export class LLMService {
     }
     if (provider === "openai-oauth") {
       return normalizeOpenAiOAuthModel(
-        normalizeDefaultModel(this.appConfig?.defaultOpenAiOAuthModel, "gpt-5.4")
+        normalizeDefaultModel(this.appConfig?.defaultOpenAiOAuthModel, "gpt-5.5")
       );
     }
     if (provider === "codex-cli" || provider === "codex_cli_session") {

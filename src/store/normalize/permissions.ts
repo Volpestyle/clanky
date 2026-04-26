@@ -40,7 +40,8 @@ export function normalizePermissionsSection(section: Settings["permissions"]): S
       )
     },
     devTasks: {
-      allowedUserIds: normalizeStringList(devTasks.allowedUserIds, 200, 60)
+      allowedUserIds: normalizeStringList(devTasks.allowedUserIds, 200, 60),
+      allowedWorkspaceRoots: normalizeStringList(devTasks.allowedWorkspaceRoots, 200, 500)
     }
   };
 }

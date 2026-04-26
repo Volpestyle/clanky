@@ -12,7 +12,6 @@ import {
   normalizeOpenAiRealtimeTranscriptionModel
 } from "../../voice/realtimeProviderNormalization.ts";
 import { normalizeVoiceRuntimeMode } from "../../voice/voiceModes.ts";
-import { normalizeCodeAgentWorkspaceModeSetting } from "../../settings/codeAgentWorkspaceMode.ts";
 import {
   isRecord,
   normalizeBoolean,
@@ -511,12 +510,6 @@ export function normalizeAgentStackSection(
         )
       },
       devTeam: {
-        workspace: {
-          mode: normalizeCodeAgentWorkspaceModeSetting(
-            devTeam.workspace?.mode,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.workspace.mode
-          )
-        },
         swarm: {
           enabled: normalizeBoolean(
             devTeam.swarm?.enabled,
@@ -591,37 +584,7 @@ export function normalizeAgentStackSection(
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.maxParallelTasks,
             SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxParallelTasks.min,
             SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxParallelTasks.max
-          ),
-          asyncDispatch: {
-            enabled: normalizeBoolean(
-              devTeam.codexCli.asyncDispatch?.enabled,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.asyncDispatch.enabled
-            ),
-            thresholdMs: normalizeInt(
-              devTeam.codexCli.asyncDispatch?.thresholdMs,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.asyncDispatch.thresholdMs,
-              SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchThresholdMs.min,
-              SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchThresholdMs.max
-            ),
-            progressReports: {
-              enabled: normalizeBoolean(
-                devTeam.codexCli.asyncDispatch?.progressReports?.enabled,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.asyncDispatch.progressReports.enabled
-              ),
-              intervalMs: normalizeInt(
-                devTeam.codexCli.asyncDispatch?.progressReports?.intervalMs,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.asyncDispatch.progressReports.intervalMs,
-                SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchProgressIntervalMs.min,
-                SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchProgressIntervalMs.max
-              ),
-              maxReportsPerTask: normalizeInt(
-                devTeam.codexCli.asyncDispatch?.progressReports?.maxReportsPerTask,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.asyncDispatch.progressReports.maxReportsPerTask,
-                SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.min,
-                SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.max
-              )
-            }
-          }
+          )
         },
         claudeCode: {
           enabled: normalizeBoolean(
@@ -668,37 +631,7 @@ export function normalizeAgentStackSection(
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.maxParallelTasks,
             SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxParallelTasks.min,
             SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxParallelTasks.max
-          ),
-          asyncDispatch: {
-            enabled: normalizeBoolean(
-              devTeam.claudeCode.asyncDispatch?.enabled,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.asyncDispatch.enabled
-            ),
-            thresholdMs: normalizeInt(
-              devTeam.claudeCode.asyncDispatch?.thresholdMs,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.asyncDispatch.thresholdMs,
-              SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchThresholdMs.min,
-              SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchThresholdMs.max
-            ),
-            progressReports: {
-              enabled: normalizeBoolean(
-                devTeam.claudeCode.asyncDispatch?.progressReports?.enabled,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.asyncDispatch.progressReports.enabled
-              ),
-              intervalMs: normalizeInt(
-                devTeam.claudeCode.asyncDispatch?.progressReports?.intervalMs,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.asyncDispatch.progressReports.intervalMs,
-                SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchProgressIntervalMs.min,
-                SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchProgressIntervalMs.max
-              ),
-              maxReportsPerTask: normalizeInt(
-                devTeam.claudeCode.asyncDispatch?.progressReports?.maxReportsPerTask,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.asyncDispatch.progressReports.maxReportsPerTask,
-                SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.min,
-                SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.max
-              )
-            }
-          }
+          )
         }
       },
       minecraft: {

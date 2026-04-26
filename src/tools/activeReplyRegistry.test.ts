@@ -38,7 +38,7 @@ test("ActiveReplyRegistry isolates voice scopes from text scopes", () => {
   const voiceScopeKey = buildVoiceReplyScopeKey("voice-session-1");
 
   registry.begin(textScopeKey, "text-reply");
-  registry.begin(voiceScopeKey, "voice-tool", ["code_task"]);
+  registry.begin(voiceScopeKey, "voice-tool", ["spawn_code_worker"]);
 
   assert.equal(registry.abortAll(voiceScopeKey, "cancel voice"), 1);
   assert.equal(registry.has(textScopeKey), true);

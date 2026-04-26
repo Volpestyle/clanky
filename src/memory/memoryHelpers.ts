@@ -89,7 +89,7 @@ export const REFLECTION_FACTS_JSON_SCHEMA = JSON.stringify({
           evidence: { type: "string", minLength: 1, maxLength: MEMORY_EVIDENCE_MAX_CHARS },
           supersedes: { type: "string", maxLength: 200 }
         },
-        required: ["subject", "subjectName", "fact", "type", "confidence", "evidence"]
+        required: ["subject", "subjectName", "fact", "type", "confidence", "evidence", "supersedes"]
       }
     }
   },

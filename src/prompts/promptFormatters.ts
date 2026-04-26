@@ -22,6 +22,7 @@ import {
   getVideoContextSettings,
   getVoiceStreamWatchSettings,
   isBrowserEnabled,
+  isDevTaskEnabled,
   isMinecraftEnabled,
   isResearchEnabled
 } from "../settings/agentStack.ts";
@@ -59,6 +60,7 @@ export function buildSystemPrompt(settings) {
     webSearchEnabled: isResearchEnabled(settings),
     browserEnabled: isBrowserEnabled(settings),
     memoryEnabled,
+    codeAgentEnabled: isDevTaskEnabled(settings),
     minecraftEnabled: isMinecraftEnabled(settings),
     mediaGenerationEnabled: Boolean(discovery.allowReplyImages || discovery.allowReplyVideos),
     gifsEnabled: Boolean(discovery.allowReplyGifs),

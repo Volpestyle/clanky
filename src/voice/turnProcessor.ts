@@ -392,6 +392,10 @@ interface TurnProcessorHost {
   getPendingRealtimeAssistantUtteranceCount: (session: VoiceSession) => number;
   clearPendingRealtimeAssistantUtterances: (session: VoiceSession, reason?: string) => number;
   clearVoiceCommandSession: (session: VoiceSession) => void;
+  cancelSwarmWorkersInScope?: (
+    filter: { guildId?: string | null; channelId?: string | null },
+    reason: string
+  ) => Promise<number>;
   runRealtimeBrainReply: (args: RunRealtimeBrainReplyArgs) => Promise<boolean>;
   hasCommittedInterruptedBridgeTurn: (args: {
     session: VoiceSession;
@@ -891,6 +895,17 @@ export class TurnProcessor {
       "voice_turn_cancel_intent"
     );
     this.host.clearVoiceCommandSession(session);
+    if (typeof this.host.cancelSwarmWorkersInScope === "function") {
+      void this.host
+        .cancelSwarmWorkersInScope(
+          {
+            guildId: session.guildId || null,
+            channelId: session.textChannelId || null
+          },
+          "User cancelled via voice"
+        )
+        .catch(() => 0);
+    }
     cancelAcknowledgementQueued = this.host.requestRealtimePromptUtterance({
       session,
       userId:

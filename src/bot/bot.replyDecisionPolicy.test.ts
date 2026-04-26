@@ -1365,6 +1365,11 @@ test("reply tool loop keeps remaining concurrent tool results when one concurren
       agentStack: {
         runtimeConfig: {
           devTeam: {
+            swarm: {
+              enabled: false,
+              command: "",
+              args: []
+            },
             codexCli: {
               enabled: true
             }
@@ -1395,7 +1400,7 @@ test("reply tool loop keeps remaining concurrent tool results when one concurren
                 },
                 {
                   id: "tc_code_1",
-                  name: "code_task",
+                  name: "spawn_code_worker",
                   input: { task: "inspect the repo status" }
                 }
               ],
@@ -1410,7 +1415,7 @@ test("reply tool loop keeps remaining concurrent tool results when one concurren
                 {
                   type: "tool_use",
                   id: "tc_code_1",
-                  name: "code_task",
+                  name: "spawn_code_worker",
                   input: { task: "inspect the repo status" }
                 }
               ],
@@ -1453,17 +1458,8 @@ test("reply tool loop keeps remaining concurrent tool results when one concurren
     const originalToReplyPipelineRuntime = bot.toReplyPipelineRuntime.bind(bot);
     bot.toReplyPipelineRuntime = () => ({
       ...originalToReplyPipelineRuntime(),
-      runModelRequestedCodeTask: async () => ({
-        text: "repo status inspected",
-        isError: false,
-        costUsd: 0,
-        error: null
-      }),
       buildSubAgentSessionsRuntime: () => ({
         manager: bot.subAgentSessions,
-        createCodeSession() {
-          return null;
-        },
         createBrowserSession() {
           throw new Error("browser session init exploded");
         }
@@ -1511,7 +1507,7 @@ test("reply tool loop keeps remaining concurrent tool results when one concurren
     assert.equal(llmCalls.length, 2);
     assert.equal(channelSendPayloads.length, 1);
     const followupContext = JSON.stringify(llmCalls[1]?.contextMessages || []);
-    assert.match(followupContext, /repo status inspected/);
+    assert.match(followupContext, /spawn_code_worker failed|Swarm worker runtime is not available/);
     assert.match(followupContext, /browser_browse failed: browser session init exploded/);
   });
 });

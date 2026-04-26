@@ -5,9 +5,10 @@ sequenceDiagram
     participant Store as Store
     participant Bot as ClankerBot
 
-    UI->>API: PUT settings snapshot + expectedUpdatedAt
-    API->>Store: patchSettingsWithVersion(snapshot, expectedUpdatedAt)
-    Store->>Store: mergeSettingsPatch + minimizeSettingsIntent + normalizeSettings
+    UI->>UI: overlay edited fields onto source baseline
+    UI->>API: PUT full settings snapshot + expectedUpdatedAt
+    API->>Store: replaceSettingsWithVersion(snapshot, expectedUpdatedAt)
+    Store->>Store: minimizeSettingsIntent + normalizeSettings
     alt settings changed since form load
         Store-->>API: conflict + latest settings envelope
         API-->>UI: 409 intent + effective + bindings + _meta

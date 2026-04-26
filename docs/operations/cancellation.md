@@ -53,6 +53,7 @@ When `isCancelIntent()` matches and the speaker has standing:
 ### Text
 1. Abort all active replies for this guild:channel scope (`activeReplies.abortAll()`)
 2. Abort active browser tasks (`activeBrowserTasks.abort()`)
+3. Cancel active code-orchestration swarm workers in scope: for each task with `requester=<this scope's planner peer>` not yet in a terminal status, update it to `status="cancelled"`. Clanky then stops the backing worker by closing its swarm-server PTY when available or SIGTERMing the fallback child process.
 
 This all happens synchronously in ~1ms. The bot stops working immediately.
 
@@ -103,7 +104,7 @@ If cancel intent is detected but **nothing is active to cancel:**
 - **Don't swallow the message.** Let it flow through to the LLM as a normal turn.
 - The user might be saying "stop" to someone else, or "nevermind" as part of a thought. The model should see it and respond naturally.
 
-Currently, text falls through correctly when nothing is active. Voice returns early regardless — this should be fixed to match.
+Text and voice both fall through correctly when nothing is active or when the voice speaker does not have standing to cancel current work.
 
 ## Cancel Boundaries
 
@@ -125,7 +126,5 @@ Currently, text falls through correctly when nothing is active. Voice returns ea
 
 ## Planned Improvements
 
-- Voice cancel now already checks speaker ownership/standing before firing in multi-speaker rooms.
-- Voice cancel now already passes cancel phrasing through as a normal turn when nothing cancelable is active.
 - **AbortSignal threading**: Thread signals through all tool execution paths. See archived design doc for implementation plan.
 - **AbortError distinction in tool output**: Return `{ cancelled: true }` instead of generic error when a tool is aborted, so the provider can skip retry.

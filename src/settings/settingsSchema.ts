@@ -2,7 +2,7 @@ export const PROVIDER_MODEL_FALLBACKS = {
   openai: ["gpt-5.4-mini", "gpt-5-mini", "gpt-5"],
   anthropic: ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-sonnet-4-0"],
   "claude-oauth": ["claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-0", "claude-haiku-4-5"],
-  "openai-oauth": ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex", "gpt-5.1-codex-mini"],
+  "openai-oauth": ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex", "gpt-5.1-codex-mini"],
   codex_cli_session: ["gpt-5.4", "gpt-5.3-codex", "gpt-5-codex"],
   xai: ["grok-3-mini-latest"],
   codex: ["gpt-5.4", "gpt-5-codex"],
@@ -215,7 +215,8 @@ export const DEFAULT_SETTINGS = {
       maxReactionsPerHour: 24
     },
     devTasks: {
-      allowedUserIds: []
+      allowedUserIds: [],
+      allowedWorkspaceRoots: []
     }
   },
   interaction: {
@@ -345,14 +346,11 @@ export const DEFAULT_SETTINGS = {
         textToolPolicy: "full"
       },
       devTeam: {
-        workspace: {
-          mode: "auto"
-        },
         swarm: {
-          enabled: false,
+          enabled: true,
           serverName: "swarm",
-          command: "",
-          args: [],
+          command: "bun",
+          args: ["run", "./mcp-servers/swarm-mcp/src/index.ts"],
           dbPath: "",
           appendCoordinationPrompt: true
         },
@@ -364,16 +362,7 @@ export const DEFAULT_SETTINGS = {
           maxBufferBytes: 2 * 1024 * 1024,
           defaultCwd: "",
           maxTasksPerHour: 10,
-          maxParallelTasks: 2,
-          asyncDispatch: {
-            enabled: true,
-            thresholdMs: 0,
-            progressReports: {
-              enabled: true,
-              intervalMs: 60_000,
-              maxReportsPerTask: 5
-            }
-          }
+          maxParallelTasks: 2
         },
         claudeCode: {
           enabled: false,
@@ -383,16 +372,7 @@ export const DEFAULT_SETTINGS = {
           maxBufferBytes: 2 * 1024 * 1024,
           defaultCwd: "",
           maxTasksPerHour: 10,
-          maxParallelTasks: 2,
-          asyncDispatch: {
-            enabled: true,
-            thresholdMs: 0,
-            progressReports: {
-              enabled: true,
-              intervalMs: 60_000,
-              maxReportsPerTask: 5
-            }
-          }
+          maxParallelTasks: 2
         }
       },
       minecraft: {

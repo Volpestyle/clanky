@@ -3,6 +3,8 @@ import type { DashboardPublicHttpsEntrypoint } from "../dashboard.ts";
 import type { DashboardApp, DashboardSseClient } from "./shared.ts";
 import type { Store } from "../store/store.ts";
 import { parseBoundedInt } from "./shared.ts";
+import { getSwarmDbPath } from "../agents/swarmDbConnection.ts";
+import { getSwarmServerStatus } from "../agents/swarmServerStatus.ts";
 
 interface MetricsRouteDeps {
   store: Store;
@@ -14,6 +16,12 @@ interface MetricsRouteDeps {
 
 export function attachMetricsRoutes(app: DashboardApp, deps: MetricsRouteDeps) {
   const { store, publicHttpsEntrypoint, getStatsPayload, activitySseClients, writeSseEvent } = deps;
+
+  app.get("/api/swarm-server-status", async (c) => {
+    const dbPath = getSwarmDbPath(store.getSettings());
+    const status = await getSwarmServerStatus(dbPath);
+    return c.json(status);
+  });
 
   app.get("/api/actions", (c) => {
     const limit = parseBoundedInt(c.req.query("limit"), 200, 1, 1000);

@@ -1,5 +1,3 @@
-import type { CodeAgentWorkspaceLease } from "./codeAgentWorkspace.ts";
-
 export type CodeAgentSwarmRuntimeConfig = {
   enabled: boolean;
   serverName: string;
@@ -7,17 +5,6 @@ export type CodeAgentSwarmRuntimeConfig = {
   args: string[];
   dbPath: string;
   appendCoordinationPrompt: boolean;
-};
-
-export type CodeAgentSwarmSessionConfig = {
-  serverName: string;
-  scope: string;
-  fileRoot: string;
-  label: string;
-  env: Record<string, string>;
-  codexConfigOverrides: string[];
-  claudeMcpConfig: string;
-  firstTurnPreamble: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -39,14 +26,6 @@ function normalizeStringArray(value: unknown) {
   return value.map((item) => String(item || "").trim()).filter(Boolean);
 }
 
-function tomlLiteralString(value: string) {
-  return `'${String(value || "").replace(/'/g, "''")}'`;
-}
-
-function tomlLiteralArray(values: string[]) {
-  return `[${values.map((value) => tomlLiteralString(value)).join(", ")}]`;
-}
-
 function normalizeSwarmRoleToken(role?: string | null) {
   const normalized = String(role || "")
     .trim()
@@ -63,18 +42,34 @@ function normalizeSwarmRoleToken(role?: string | null) {
   return sanitized || null;
 }
 
-function buildSwarmLabel({
+function normalizeLabelToken(value: unknown, fallback: string) {
+  const sanitized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+/g, "")
+    .replace(/-+$/g, "");
+  return sanitized || fallback;
+}
+
+export function buildSwarmLabel({
   provider,
-  role
+  role,
+  thread,
+  user
 }: {
   provider: "claude-code" | "codex-cli";
   role?: string | null;
+  thread?: string | null;
+  user?: string | null;
 }) {
   const tokens = [`origin:clanky`, `provider:${provider}`];
   const roleToken = normalizeSwarmRoleToken(role);
   if (roleToken) {
     tokens.push(`role:${roleToken}`);
   }
+  tokens.push(`thread:${normalizeLabelToken(thread, "dm")}`);
+  tokens.push(`user:${normalizeLabelToken(user, "anon")}`);
   return tokens.join(" ");
 }
 
@@ -92,74 +87,107 @@ export function resolveCodeAgentSwarmRuntimeConfig(rawValue: unknown): CodeAgent
   };
 }
 
-export function buildCodeAgentSwarmSessionConfig({
-  runtime,
-  workspace,
-  provider,
-  role
-}: {
-  runtime: CodeAgentSwarmRuntimeConfig | null;
-  workspace: CodeAgentWorkspaceLease;
-  provider: "claude-code" | "codex-cli";
-  role?: string | null;
-}): CodeAgentSwarmSessionConfig | null {
-  if (!runtime?.enabled) return null;
-  if (!runtime.command) {
-    throw new Error("Code-agent swarm is enabled, but agentStack.runtimeConfig.devTeam.swarm.command is empty.");
-  }
-
-  const label = buildSwarmLabel({ provider, role });
-  const env = runtime.dbPath
-    ? {
-        SWARM_DB_PATH: runtime.dbPath
-      }
-    : {};
-  const registerPayload = {
-    directory: workspace.cwd,
-    scope: workspace.repoRoot,
-    file_root: workspace.canonicalCwd,
-    label
-  };
-  const workspaceSummary =
-    workspace.mode === "shared_checkout"
-      ? "This session is running in the shared checkout. Register this live repo path before using other swarm tools so locks, annotations, and task file references point at the same workspace other local agents can see."
-      : "This session is running inside a disposable git worktree. Register against the canonical repo paths before using other swarm tools so locks, annotations, and task file references stay stable across worktrees.";
-  const firstTurnPreamble = runtime.appendCoordinationPrompt
-    ? [
-        `Swarm coordination is available through the MCP server \`${runtime.serverName}\`.`,
-        workspaceSummary,
-        "Use the swarm register tool with this payload:",
-        `\`\`\`json\n${JSON.stringify(registerPayload, null, 2)}\n\`\`\``,
-        "After registration, normal relative paths from your current working directory are valid for swarm file tools. When choosing collaborators, inspect swarm instance labels for machine-readable tokens like `role:planner`, `role:reviewer`, or `role:implementer`. If a session has no `role:` token, treat it as a generalist. Use swarm messages/tasks when collaboration is useful, lock files before editing, unlock them when finished, and annotate important findings or hazards when they would help other agents."
-      ].join("\n\n")
-    : "";
-
-  return {
-    serverName: runtime.serverName,
-    scope: workspace.repoRoot,
-    fileRoot: workspace.canonicalCwd,
-    label,
-    env,
-    codexConfigOverrides: [
-      `mcp_servers.${runtime.serverName}.command=${tomlLiteralString(runtime.command)}`,
-      `mcp_servers.${runtime.serverName}.args=${tomlLiteralArray(runtime.args)}`
-    ],
-    claudeMcpConfig: JSON.stringify({
-      [runtime.serverName]: {
-        type: "stdio",
-        command: runtime.command,
-        args: runtime.args,
-        env
-      }
-    }),
-    firstTurnPreamble
-  };
-}
-
-export function applyCodeAgentFirstTurnPreamble(input: string, preamble?: string | null) {
+export function applySwarmLauncherFirstTurnPreamble(input: string, preamble?: string | null) {
   const normalizedInput = String(input || "").trim();
   const normalizedPreamble = String(preamble || "").trim();
   if (!normalizedPreamble) return normalizedInput;
   if (!normalizedInput) return normalizedPreamble;
   return `${normalizedPreamble}\n\nTask:\n${normalizedInput}`;
+}
+
+/**
+ * Default seconds the worker should spend listening for follow-up messages
+ * after `update_task(done)` before exiting. Sized to comfortably cover a
+ * typical Discord follow-up cadence (user reads result, reacts, asks a
+ * follow-up within a few minutes) so the orchestrator can reuse the live
+ * worker rather than re-spawning fresh each turn.
+ *
+ * Tradeoff: idle listening workers count against `maxParallelTasks` for
+ * the duration. Operators with tight worker-count budgets should either
+ * bump that cap or shorten this window.
+ */
+export const SWARM_LAUNCHER_FOLLOWUP_LISTEN_SECONDS = 300;
+
+/**
+ * Behavioral preamble for swarm-launcher workers. Their instance row is already
+ * reserved with `adopted=0` and the worker's swarm-mcp child auto-adopts via
+ * `SWARM_MCP_INSTANCE_ID` on boot — no `register` call needed.
+ *
+ * Aligned with the worker contract at docs/architecture/swarm-worker-contract.md:
+ * - usage/cost telemetry travels as a sibling `annotate(kind="usage")` call,
+ *   not as `update_task.metadata`. The task waiter reads from the `context`
+ *   table, not from task metadata.
+ * - every worker has a brief follow-up listen window after the assigned task
+ *   completes. The orchestrator decides per-turn whether to follow up; the
+ *   worker just stays available briefly. There is no worker-mode decision —
+ *   if no follow-up arrives in the window, exit cleanly.
+ * - `appendCoordinationPrompt=false` disables only the inlined generic skill
+ *   body. The Clanky-specific identity/task/result/follow-up overlays always
+ *   remain, because workers need them to interoperate with the launcher.
+ */
+export function buildSwarmLauncherFirstTurnPreamble({
+  serverName = "swarm",
+  taskId,
+  coordinationSkill = ""
+}: {
+  serverName?: string;
+  taskId?: string | null;
+  /**
+   * Optional role-specific swarm-mcp skill (`SKILL.md` + role reference)
+   * loaded from the vendored submodule. Appended after the Clanky-specific
+   * overlays so the worker has the canonical playbook in-context from turn 1
+   * without relying on the host harness's on-disk skill discovery.
+   *
+   * The skill is the source of truth for general coordination patterns
+   * (when to register, claim, lock, annotate). The preamble keeps only the
+   * deltas Clanky imposes on top of that — auto-adoption, the assigned task
+   * id, the usage-annotation shape, and the plain-text result override.
+   */
+  coordinationSkill?: string;
+} = {}): string {
+  const lines: string[] = [
+    `You are running as a Clanky-spawned swarm peer. Your identity has been reserved and your swarm-mcp server (\`${serverName}\`) auto-adopted you on boot — do not call \`register\`.`
+  ];
+
+  const trimmedTaskId = String(taskId || "").trim();
+  if (trimmedTaskId) {
+    lines.push(
+      "",
+      `Your assigned task is \`${trimmedTaskId}\`. Read and follow the coordination playbook below, but the Clanky-specific rules in this preamble override any conflicting generic skill guidance.`
+    );
+  } else {
+    lines.push(
+      "",
+      "No task is pre-assigned. Read and follow the coordination playbook below, but the Clanky-specific rules in this preamble override any conflicting generic skill guidance."
+    );
+  }
+
+  lines.push(
+    "",
+    "1. **Registration override.** Do not call `register`, even if the generic swarm-mcp skill says to register early. Use `whoami` if you need to confirm identity; your MCP server already adopted the reserved row.",
+    "",
+    "2. **Cost/usage telemetry.** Report token/cost numbers as a sibling annotation, not in `update_task.metadata`:",
+    "   `annotate(file=<task_id>, kind=\"usage\", content=JSON.stringify({ inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd }))`",
+    "   Clanky reads usage from this annotation; anything in `update_task.metadata` is ignored.",
+    "",
+    "3. **Result format override.** Post the final user-facing output text directly in `update_task(status=\"done\", result=<text>)` as plain text — not structured JSON — even if the generic skill prefers JSON results. Clanky uses this text as input to its final synthesis step.",
+    "",
+    "4. **Git authority.** Do not commit, push, create pull requests, or rewrite git history unless the user explicitly asked for that in the task. You may inspect git status/diff and leave changes in the working tree.",
+    "",
+    `5. **Follow-up listen window.** After \`update_task(done)\`, wait roughly ${SWARM_LAUNCHER_FOLLOWUP_LISTEN_SECONDS}s for follow-up messages via \`wait_for_activity\` / \`list_messages\`. If a \`send_message\` arrives in that window, treat it as a follow-up instruction — claim or create the appropriate follow-up task, execute, and report again with \`update_task\` + \`annotate(kind="usage")\`, then return to listening. If no follow-up arrives in the window, or you receive an explicit termination message, exit cleanly. The orchestrator decides per-turn whether to drive more work; you just stay briefly available.`
+  );
+
+  const trimmedSkill = String(coordinationSkill || "").trim();
+  if (trimmedSkill) {
+    lines.push(
+      "",
+      "---",
+      "",
+      "## Swarm coordination skill",
+      "",
+      trimmedSkill
+    );
+  }
+
+  return lines.join("\n");
 }

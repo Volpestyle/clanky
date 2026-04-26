@@ -369,11 +369,6 @@ export class VoiceSessionManager {
   onVoiceStateUpdate;
   onVoiceChannelEffectSend;
 
-  // Code agent hooks — wired post-construction by bot.ts so code_task
-  // is available on the voice_realtime surface.
-  createCodeAgentSession: VoiceToolCallManager["createCodeAgentSession"];
-  runModelRequestedCodeTask: VoiceToolCallManager["runModelRequestedCodeTask"];
-  dispatchBackgroundCodeTask: VoiceToolCallManager["dispatchBackgroundCodeTask"];
   createMinecraftSession: VoiceToolCallManager["createMinecraftSession"];
   subAgentSessions: VoiceToolCallManager["subAgentSessions"];
 
@@ -408,9 +403,6 @@ export class VoiceSessionManager {
     this.startVoiceScreenWatchHook =
       typeof startVoiceScreenWatch === "function" ? startVoiceScreenWatch : null;
     this.streamDiscovery = streamDiscovery || null;
-    this.createCodeAgentSession = null;
-    this.runModelRequestedCodeTask = null;
-    this.dispatchBackgroundCodeTask = null;
     this.createMinecraftSession = null;
     this.subAgentSessions = null;
     this.sessions = new Map();
@@ -7704,6 +7696,13 @@ export class VoiceSessionManager {
         executeLocalVoiceToolCall(this, { session, settings, toolName: "media_skip", args: {} }),
       musicNowPlaying: () =>
         executeLocalVoiceToolCall(this, { session, settings, toolName: "media_now_playing", args: {} }),
+      streamVisualizer: (mode?: string | null) =>
+        executeLocalVoiceToolCall(this, {
+          session,
+          settings,
+          toolName: "stream_visualizer",
+          args: { mode }
+        }),
       stopVideoShare: () =>
         executeLocalVoiceToolCall(this, { session, settings, toolName: "stop_video_share", args: {} }),
       playSoundboard: async (refs: string[], transcript: string) => {

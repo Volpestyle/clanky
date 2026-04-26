@@ -1,7 +1,6 @@
 import { clamp } from "../utils.ts";
 import {
   executeVoiceBrowserBrowseTool,
-  executeVoiceCodeTaskTool,
   executeVoiceMinecraftTaskTool,
   executeVoiceShareBrowserSessionTool,
   executeVoiceStopVideoShareTool
@@ -281,13 +280,6 @@ const LOCAL_VOICE_TOOL_HANDLERS: Record<
     }),
   stop_video_share: async (manager, opts) =>
     await executeVoiceStopVideoShareTool(manager, {
-      session: opts.session,
-      settings: opts.settings,
-      args: opts.args,
-      signal: opts.signal
-    }),
-  code_task: async (manager, opts) =>
-    await executeVoiceCodeTaskTool(manager, {
       session: opts.session,
       settings: opts.settings,
       args: opts.args,

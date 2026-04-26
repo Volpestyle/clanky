@@ -2,6 +2,7 @@
 // Last updated: 2026-03-18.
 const DEFAULT_PRICING = {
   openai: {
+    "gpt-5.5": { inputPer1M: 5.0, cacheReadPer1M: 0.5, outputPer1M: 30.0 },
     "gpt-5.2": { inputPer1M: 1.75, cacheReadPer1M: 0.175, outputPer1M: 14.0 },
     "gpt-5.1": { inputPer1M: 1.25, cacheReadPer1M: 0.125, outputPer1M: 10.0 },
     "gpt-5.4": { inputPer1M: 1.25, cacheReadPer1M: 0.125, outputPer1M: 10.0 },
@@ -178,6 +179,7 @@ const DEFAULT_PRICING = {
     "claude-opus-4-5": { inputPer1M: 0, outputPer1M: 0 }
   },
   "openai-oauth": {
+    "gpt-5.5": { inputPer1M: 0, outputPer1M: 0 },
     "gpt-5.4": { inputPer1M: 0, outputPer1M: 0 },
     "gpt-5.4-mini": { inputPer1M: 0, outputPer1M: 0 },
     "gpt-5.4-nano": { inputPer1M: 0, outputPer1M: 0 },

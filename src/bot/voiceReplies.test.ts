@@ -24,6 +24,17 @@ function countOccurrences(haystack: string, needle: string) {
   return haystack.split(needle).length - 1;
 }
 
+function firstGenerationToolNames(generationPayloads: Array<Record<string, unknown>>): string[] {
+  const tools = Array.isArray(generationPayloads[0]?.tools) ? generationPayloads[0].tools : [];
+  return tools.map((tool) => String((tool as Record<string, unknown>)?.name || ""));
+}
+
+function firstGenerationToolsLine(generationPayloads: Array<Record<string, unknown>>): string {
+  return String(generationPayloads[0]?.userPrompt || "")
+    .split("\n")
+    .find((line) => line.startsWith("Tools:")) || "";
+}
+
 function baseSettings(overrides = {}) {
   const raw = isRecord(overrides) ? overrides : {};
   const llm = isRecord(raw.llm) ? raw.llm : {};
@@ -342,9 +353,6 @@ function createVoiceBot({
           },
           register() {},
           remove() {}
-        },
-        createCodeSession() {
-          return null;
         },
         createBrowserSession() {
           return null;
@@ -1585,9 +1593,6 @@ test("generateVoiceTurnReply uses browser sub-agent sessions before one-shot bro
         removedSessions.push(sessionId);
       }
     },
-    createCodeSession() {
-      return null;
-    },
     createBrowserSession() {
       return {
         id: "browser-session-1",
@@ -1756,9 +1761,6 @@ test("generateVoiceTurnReply forwards voiceSessionManager into share_browser_ses
       },
       register() {},
       remove() {}
-    },
-    createCodeSession() {
-      return null;
     },
     createBrowserSession() {
       return null;
@@ -2326,7 +2328,7 @@ test("generateVoiceTurnReply keeps the main reply model for direct replies durin
 test("generateVoiceTurnReply advertises tool runtimes only when the capability exists", async () => {
   const cases = [
     {
-      name: "missing_code_task_runtime",
+      name: "missing_swarm_runtime",
       transcript: "can you patch that file?",
       settings: baseSettings({
         codeAgent: {
@@ -2335,23 +2337,8 @@ test("generateVoiceTurnReply advertises tool runtimes only when the capability e
         }
       }),
       configure() {},
-      expectedToolName: "code_task",
+      expectedToolName: "spawn_code_worker",
       expectedPresent: false
-    },
-    {
-      name: "present_code_task_runtime",
-      transcript: "can you patch that file?",
-      settings: baseSettings({
-        codeAgent: {
-          provider: "claude-code",
-          allowedUserIds: ["user-1"]
-        }
-      }),
-      configure(bot) {
-        bot.runModelRequestedCodeTask = async () => ({ text: "done", isError: false, costUsd: 0, error: null });
-      },
-      expectedToolName: "code_task",
-      expectedPresent: true
     },
     {
       name: "present_browser_runtime",
@@ -2407,6 +2394,77 @@ test("generateVoiceTurnReply advertises tool runtimes only when the capability e
     const toolNames = firstTools.map((entry) => String(entry?.name || ""));
     assert.equal(toolNames.includes(row.expectedToolName), row.expectedPresent, row.name);
   }
+});
+
+test("generateVoiceTurnReply prunes voice-control and media tools from casual turns", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "not much"
+    })
+  });
+
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "how's it going",
+    voiceToolCallbacks: {}
+  });
+
+  const toolNames = firstGenerationToolNames(generationPayloads);
+  assert.equal(toolNames.includes("music_play"), false);
+  assert.equal(toolNames.includes("stream_visualizer"), false);
+  assert.equal(toolNames.includes("join_voice_channel"), false);
+  assert.equal(toolNames.includes("leave_voice_channel"), false);
+  assert.equal(toolNames.includes("video_context"), false);
+  assert.equal(firstGenerationToolsLine(generationPayloads).includes("music_play"), false);
+});
+
+test("generateVoiceTurnReply exposes media tools on media-cued turns", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "putting some on"
+    })
+  });
+
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "play some jazz",
+    voiceToolCallbacks: {}
+  });
+
+  const toolNames = firstGenerationToolNames(generationPayloads);
+  assert.equal(toolNames.includes("music_play"), true);
+  assert.equal(toolNames.includes("music_search"), true);
+  assert.equal(toolNames.includes("stream_visualizer"), true);
+  assert.equal(toolNames.includes("join_voice_channel"), false);
+  assert.equal(firstGenerationToolsLine(generationPayloads).includes("stream_visualizer"), true);
+});
+
+test("generateVoiceTurnReply exposes leave voice only on session-exit cues", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "i'll hop out"
+    })
+  });
+
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "clanky leave the call",
+    voiceToolCallbacks: {}
+  });
+
+  const toolNames = firstGenerationToolNames(generationPayloads);
+  assert.equal(toolNames.includes("leave_voice_channel"), true);
+  assert.equal(toolNames.includes("join_voice_channel"), false);
+  assert.equal(firstGenerationToolsLine(generationPayloads).includes("leave_voice_channel"), true);
 });
 
 test("generateVoiceTurnReply runs web lookup follow-up via tool calls", async () => {
@@ -2828,9 +2886,6 @@ test("generateVoiceTurnReply includes Minecraft docs, tool exposure, and active 
       },
       register() {},
       remove() {}
-    },
-    createCodeSession() {
-      return null;
     },
     createBrowserSession() {
       return null;

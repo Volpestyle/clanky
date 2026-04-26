@@ -1,6 +1,42 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { MemoryManager, __memoryTestables } from "./memoryManager.ts";
+import { REFLECTION_FACTS_JSON_SCHEMA } from "./memoryHelpers.ts";
+
+type StrictSchemaNode = {
+  additionalProperties?: boolean;
+  items?: StrictSchemaNode;
+  properties?: Record<string, StrictSchemaNode>;
+  required?: string[];
+};
+
+function collectStrictSchemaRequiredPropertyGaps(schema: StrictSchemaNode, path = "$"): string[] {
+  const gaps: string[] = [];
+  if (schema.additionalProperties === false && schema.properties) {
+    const required = new Set(schema.required || []);
+    for (const propertyName of Object.keys(schema.properties)) {
+      if (!required.has(propertyName)) {
+        gaps.push(`${path}.${propertyName}`);
+      }
+    }
+  }
+
+  if (schema.properties) {
+    for (const [propertyName, propertySchema] of Object.entries(schema.properties)) {
+      gaps.push(...collectStrictSchemaRequiredPropertyGaps(propertySchema, `${path}.${propertyName}`));
+    }
+  }
+  if (schema.items) {
+    gaps.push(...collectStrictSchemaRequiredPropertyGaps(schema.items, `${path}[]`));
+  }
+
+  return gaps;
+}
+
+test("reflection facts schema is valid for OpenAI strict structured outputs", () => {
+  const schema: StrictSchemaNode = JSON.parse(REFLECTION_FACTS_JSON_SCHEMA);
+  assert.deepEqual(collectStrictSchemaRequiredPropertyGaps(schema), []);
+});
 
 test("instruction-like memory filter rejects abusive future-behavior requests", () => {
   assert.equal(

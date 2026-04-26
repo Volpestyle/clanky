@@ -293,6 +293,9 @@
 /* ---- RESPONSIVE ---- */
 
 @media (max-width: 640px) {
+  .ag-container {
+    padding: 0;
+  }
   .ag-card-summary {
     gap: 6px;
     padding: 6px 10px;
@@ -305,5 +308,9 @@
   .ag-duration,
   .ag-steps-count {
     display: none;
+  }
+  .ag-instruction-preview {
+    flex-basis: 100%;
+    min-width: 0;
   }
 }

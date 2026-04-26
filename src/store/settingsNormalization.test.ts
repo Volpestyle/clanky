@@ -169,6 +169,11 @@ test("normalizeSettings clamps and canonicalizes complex settings payloads", () 
         targetGain: -2,
         fadeMs: 99999
       }
+    },
+    permissions: {
+      devTasks: {
+        allowedWorkspaceRoots: ["/Users/james/code", "/Users/james/code", "  ", "/Users/james/volpestyle"]
+      }
     }
   });
 
@@ -191,6 +196,10 @@ test("normalizeSettings clamps and canonicalizes complex settings payloads", () 
     normalized.identity.botNameAliases,
     ["clank", "conk", "alias-alias-alias-alias-alias-alias-alias-alias-al"]
   );
+  assert.deepEqual(normalized.permissions.devTasks.allowedWorkspaceRoots, [
+    "/Users/james/code",
+    "/Users/james/volpestyle"
+  ]);
 
   assert.deepEqual(normalized.agentStack.overrides.orchestrator, {
     provider: "xai",
@@ -688,9 +697,6 @@ test("normalizeSettings preserves canonical dev-team swarm runtime config", () =
     agentStack: {
       runtimeConfig: {
         devTeam: {
-          workspace: {
-            mode: "shared_checkout"
-          },
           swarm: {
             enabled: true,
             serverName: "Swarm Bus",
@@ -704,9 +710,7 @@ test("normalizeSettings preserves canonical dev-team swarm runtime config", () =
     }
   });
 
-  assert.deepEqual(normalized.agentStack.runtimeConfig.devTeam.workspace, {
-    mode: "shared_checkout"
-  });
+  assert.equal((normalized.agentStack.runtimeConfig.devTeam as Record<string, unknown>).workspace, undefined);
   assert.deepEqual(normalized.agentStack.runtimeConfig.devTeam.swarm, {
     enabled: true,
     serverName: "swarm-bus",

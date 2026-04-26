@@ -347,6 +347,8 @@ Likewise, being active in text can inform VC continuity without automatically gr
 
 Text and voice share most of the same conversational tool surface, but voice keeps durable-memory search automatic rather than model-invoked. The tools are capabilities the model may choose when they help.
 
+Voice exposes the actual per-turn tool set in the turn prompt. The static capability text is only a reference; the `Tools:` line names the schemas mounted for that specific LLM call. Full-brain voice turns keep ordinary recall/research/browser tools available when their runtimes exist, but prune media/control tools from casual turns unless the transcript, active playback state, pending media choice, or session-ending context makes them relevant. Provider-native realtime sessions use the same local registry for executable realtime tools. Tools without a voice executor, such as `video_context`, stay on the text/reply-loop surface until voice execution is wired.
+
 Core shared conversational tools include:
 
 - `conversation_search`
@@ -354,7 +356,7 @@ Core shared conversational tools include:
 - `web_search`
 - `web_scrape`
 - `browser_browse`
-- `code_task`
+- `spawn_code_worker`
 
 Reply-loop conditional tools include:
 

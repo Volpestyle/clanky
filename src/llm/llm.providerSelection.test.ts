@@ -990,6 +990,49 @@ test("callChatModelStreaming supports OpenAI Responses streaming", async () => {
   ]);
 });
 
+test("callChatModelStreaming recovers OpenAI text from done-only events", async () => {
+  const service = createService({ openaiApiKey: "test-openai-key" });
+  service.openai = {
+    responses: {
+      async create() {
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "response.output_text.done", text: "{\"text\":\"try what exactly?\",\"skip\":false}" };
+            yield {
+              type: "response.completed",
+              response: {
+                status: "completed",
+                output: [],
+                usage: {
+                  input_tokens: 11,
+                  output_tokens: 6
+                }
+              }
+            };
+          }
+        };
+      }
+    }
+  };
+
+  const deltas: string[] = [];
+  const result = await service.callChatModelStreaming("openai", {
+    model: "gpt-5-mini",
+    systemPrompt: "system",
+    userPrompt: "user",
+    contextMessages: [],
+    temperature: 0.2,
+    maxOutputTokens: 64
+  }, {
+    onTextDelta(delta) {
+      deltas.push(delta);
+    }
+  });
+
+  assert.deepEqual(deltas, []);
+  assert.equal(result.text, "{\"text\":\"try what exactly?\",\"skip\":false}");
+});
+
 test("generateStreaming falls back to batch generation for non-streaming providers", async () => {
   const service = createService({ xaiApiKey: "test-xai-key" });
   service.callChatModel = async () => ({

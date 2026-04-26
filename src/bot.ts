@@ -19,12 +19,8 @@ import {
 } from "./selfbot/streamDiscovery.ts";
 import type { Settings } from "./settings/settingsSchema.ts";
 import {
-  runCodeAgent,
-  isCodeAgentUserAllowed,
-  normalizeCodeAgentRole,
-  resolveCodeAgentConfig,
-  getActiveCodeAgentTaskCount
-} from "./agents/codeAgent.ts";
+  normalizeCodeAgentRole
+} from "./agents/codeAgentSettings.ts";
 import { ImageCaptionCache } from "./vision/imageCaptionCache.ts";
 import {
   normalizeReactionEmojiToken
@@ -45,7 +41,6 @@ import {
 import type { ReplyPerformanceSeed } from "./bot/replyPipelineShared.ts";
 import {
   runModelRequestedBrowserBrowse,
-  runModelRequestedCodeTask,
   buildSubAgentSessionsRuntime,
   stopMinecraftMcpServer
 } from "./bot/agentTasks.ts";
@@ -134,17 +129,30 @@ import {
 import { isCancelIntent } from "./tools/cancelDetection.ts";
 import { maybeReplyToMessagePipeline } from "./bot/replyPipeline.ts";
 import { SubAgentSessionManager } from "./agents/subAgentSession.ts";
+import { ClankySwarmPeerManager } from "./agents/swarmPeerManager.ts";
+import { SwarmReservationKeeper } from "./agents/swarmReservationKeeper.ts";
+import { getSwarmDbPath } from "./agents/swarmDbConnection.ts";
 import {
-  BackgroundTaskRunner,
-  buildCodeTaskScopeKey,
-  type BackgroundTask
-} from "./agents/backgroundTaskRunner.ts";
+  formatSwarmServerStatusLine,
+  getSwarmServerStatus
+} from "./agents/swarmServerStatus.ts";
+import {
+  SwarmActivityBridge,
+  type CodeTaskTerminalEvent,
+  type SwarmSpawnRequestEvent
+} from "./agents/swarmActivityBridge.ts";
+import { waitForTaskCompletion } from "./agents/swarmTaskWaiter.ts";
+import {
+  buildCodeWorkerWorkerSessionKey,
+  spawnCodeWorker
+} from "./tools/spawnCodeWorker.ts";
 import {
   getMemorySettings,
   getBotName,
   getReplyPermissions,
   getActivitySettings,
-  isDevTaskEnabled
+  isDevTaskEnabled,
+  isDevTaskUserAllowed
 } from "./settings/agentStack.ts";
 import { buildCodeTaskResultPrompt } from "./prompts/promptText.ts";
 
@@ -156,9 +164,17 @@ const AUTOMATION_TICK_MS = 30_000;
 const GATEWAY_WATCHDOG_TICK_MS = 30_000;
 const REFLECTION_TICK_MS = 60_000;
 const UNSOLICITED_REPLY_CONTEXT_WINDOW = 5;
+const CODE_TASK_RESULT_SYNTHESIS_MAX_CHARS = 6_000;
 const IS_TEST_PROCESS = /\.test\.[cm]?[jt]sx?$/i.test(String(process.argv?.[1] || "")) ||
   process.execArgv.includes("--test") ||
   process.argv.includes("--test");
+
+function truncateCodeTaskResultForSynthesis(value: string): string {
+  const text = String(value || "").trim();
+  if (text.length <= CODE_TASK_RESULT_SYNTHESIS_MAX_CHARS) return text;
+  return `${text.slice(0, CODE_TASK_RESULT_SYNTHESIS_MAX_CHARS - 32).trim()}\n\n[truncated for synthesis]`;
+}
+
 export type ReplyAttemptOptions = {
   recentMessages?: Array<Record<string, unknown>>;
   addressSignal?: {
@@ -271,6 +287,46 @@ function isAppCommandInvocationMessage(message: { type?: number | null } | null 
     message?.type === MessageType.ContextMenuCommand;
 }
 
+type CodeWorkerSessionRecord = {
+  workerId: string;
+  taskId: string;
+  scope: string;
+  role: string;
+  cwd: string;
+  guildId: string | null;
+  channelId: string | null;
+  userId: string | null;
+  triggerMessageId: string | null;
+  source: string;
+};
+
+function readCodeWorkerSessionRecord(value: string, expectedWorkerId: string, expectedScope: string): CodeWorkerSessionRecord | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(String(value || ""));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  const workerId = String(record.workerId || "").trim();
+  const scope = String(record.scope || "").trim();
+  if (!workerId || workerId !== expectedWorkerId) return null;
+  if (!scope || scope !== expectedScope) return null;
+  return {
+    workerId,
+    taskId: String(record.taskId || "").trim(),
+    scope,
+    role: String(record.role || "").trim(),
+    cwd: String(record.cwd || scope).trim() || scope,
+    guildId: record.guildId ? String(record.guildId) : null,
+    channelId: record.channelId ? String(record.channelId) : null,
+    userId: record.userId ? String(record.userId) : null,
+    triggerMessageId: record.triggerMessageId ? String(record.triggerMessageId) : null,
+    source: String(record.source || "swarm_spawn_request").trim() || "swarm_spawn_request"
+  };
+}
+
 export class ClankerBot {
   appConfig;
   store;
@@ -308,7 +364,9 @@ export class ClankerBot {
   activeReplies: ActiveReplyRegistry;
   activeBrowserTasks: BrowserTaskRegistry;
   subAgentSessions: SubAgentSessionManager;
-  backgroundTaskRunner: BackgroundTaskRunner;
+  swarmPeerManager: ClankySwarmPeerManager;
+  swarmReservationKeeper: SwarmReservationKeeper;
+  swarmActivityBridge: SwarmActivityBridge;
   imageCaptionCache: ImageCaptionCache;
   streamDiscovery: StreamDiscoveryState;
   private streamDiscoveryCleanup: (() => void) | null;
@@ -355,10 +413,68 @@ export class ClankerBot {
       maxSessions: Number(appConfig?.subAgentOrchestration?.maxConcurrentSessions) || 20
     });
     this.subAgentSessions.startSweep();
-    this.backgroundTaskRunner = new BackgroundTaskRunner({
-      store: this.store,
-      sessionManager: this.subAgentSessions
+    const swarmDbPath = getSwarmDbPath(this.store.getSettings());
+    this.swarmPeerManager = new ClankySwarmPeerManager({ dbPath: swarmDbPath });
+    this.swarmReservationKeeper = new SwarmReservationKeeper({
+      dbPath: swarmDbPath,
+      onError: (error) => {
+        this.store.logAction({
+          kind: "bot_error",
+          content: "swarm_reservation_keeper_error",
+          metadata: { error: String(error instanceof Error ? error.message : error) }
+        });
+      }
     });
+    this.swarmActivityBridge = new SwarmActivityBridge({
+      logAction: (entry) => this.store.logAction(entry),
+      onTerminal: (event) => this.deliverSwarmTaskTerminal(event),
+      onSpawnRequest: (event) => this.handleSwarmSpawnRequest(event),
+      onProgress: (event) => {
+        // Progress events go to the action log only — Discord channel spam is
+        // mitigated by the recommended cadence (≤1/30s) in the worker contract.
+        // Surfacing them as Discord messages can be added later if useful.
+        this.store.logAction({
+          kind: "swarm_task_progress",
+          guildId: event.context.guildId,
+          channelId: event.context.channelId,
+          userId: event.context.userId,
+          metadata: {
+            taskId: event.context.taskId,
+            workerId: event.context.workerId,
+            scope: event.context.scope,
+            summary: event.summary,
+            annotationId: event.annotationId,
+            source: event.context.source
+          }
+        });
+      }
+    });
+
+    // Fire-and-forget swarm-server status probe so the operator sees one
+    // clear line on boot ("running ✓" or "not running ✗ — hint…"). When it's
+    // down, code workers still spawn — they just won't be visible/interactive
+    // in swarm-ui or swarm-ios.
+    void getSwarmServerStatus(swarmDbPath)
+      .then((status) => {
+        const line = formatSwarmServerStatusLine(status);
+        if (status.available) {
+          console.log(`[clanky] ${line}`);
+        } else {
+          console.warn(`[clanky] ${line}`);
+        }
+        this.store.logAction({
+          kind: "swarm_server_status",
+          content: status.available ? "swarm_server_running" : "swarm_server_unavailable",
+          metadata: {
+            available: status.available,
+            socketPath: status.socketPath,
+            hint: status.hint
+          }
+        });
+      })
+      .catch(() => {
+        // probing is best-effort — never let it crash boot
+      });
     this.imageCaptionCache = new ImageCaptionCache({
       maxEntries: 200,
       defaultTtlMs: 60 * 60 * 1000 // 1 hour
@@ -399,23 +515,7 @@ export class ClankerBot {
         startVoiceScreenWatch(this.toScreenShareRuntime(), payload)
     });
 
-    // Wire code agent hooks onto VoiceSessionManager so code_task is
-    // available on the voice_realtime surface (provider-native tool calls).
     const voiceAgentContext = this.toAgentContext();
-    this.voiceSessionManager.runModelRequestedCodeTask = (payload) =>
-      runModelRequestedCodeTask(voiceAgentContext, {
-        ...payload,
-        settings: payload.settings || this.store.getSettings()
-      });
-    this.voiceSessionManager.createCodeAgentSession = (opts) => {
-      const sessionsRuntime = buildSubAgentSessionsRuntime(voiceAgentContext);
-      return sessionsRuntime.createCodeSession({
-        ...opts,
-        settings: opts.settings || this.store.getSettings()
-      }) ?? null;
-    };
-    this.voiceSessionManager.dispatchBackgroundCodeTask = (payload) =>
-      this.dispatchBackgroundCodeTask(payload);
     this.voiceSessionManager.createMinecraftSession = (opts) => {
       const sessionsRuntime = buildSubAgentSessionsRuntime(voiceAgentContext);
       return sessionsRuntime.createMinecraftSession({
@@ -577,60 +677,38 @@ export class ClankerBot {
     const codeCwd = interaction.options.getString("cwd", false) || undefined;
 
     if (!isDevTaskEnabled(settings)) {
-      await interaction.editReply("Code agent is disabled in settings.");
+      await interaction.editReply("Code workers are disabled in settings.");
       return;
     }
-    if (!isCodeAgentUserAllowed(interaction.user.id, settings)) {
+    if (!isDevTaskUserAllowed(settings, interaction.user.id)) {
       await interaction.editReply("This capability is restricted to allowed users.");
       return;
     }
 
-    const codeAgentConfig = resolveCodeAgentConfig(settings, codeCwd, codeRole);
-    const maxParallel = codeAgentConfig.maxParallelTasks;
-    if (getActiveCodeAgentTaskCount() >= maxParallel) {
-      await interaction.editReply("Too many code agent tasks are already running. Try again shortly.");
-      return;
-    }
-    const maxPerHour = codeAgentConfig.maxTasksPerHour;
-    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const usedThisHour = this.store.countActionsSince("code_agent_call", since1h);
-    if (usedThisHour >= maxPerHour) {
-      await interaction.editReply("Code agent is currently blocked by hourly limits. Try again shortly.");
-      return;
-    }
-
     try {
-      const {
-        cwd,
-        swarm,
-        workspaceMode,
-        provider,
-        model,
-        codexCliModel,
-        maxTurns,
-        timeoutMs,
-        maxBufferBytes
-      } = codeAgentConfig;
-
-      const result = await runCodeAgent({
-        instruction: codeInstruction,
-        cwd,
-        swarm,
-        workspaceMode,
-        provider,
-        maxTurns,
-        timeoutMs,
-        maxBufferBytes,
-        model,
-        codexCliModel,
-        trace: {
+      const spawned = await spawnCodeWorker(
+        {
+          settings,
+          task: codeInstruction,
+          role: codeRole,
+          cwd: codeCwd,
           guildId: interaction.guildId,
           channelId: interaction.channelId,
           userId: interaction.user.id,
           source: "slash_command_clank_code",
-          role: codeRole
+          signal: undefined
         },
-        store: this.store
+        {
+          store: this.store,
+          peerManager: this.swarmPeerManager,
+          reservationKeeper: this.swarmReservationKeeper
+        }
+      );
+      await interaction.editReply(`Code worker started. task=${spawned.taskId} worker=${spawned.workerId}`);
+
+      const peer = this.swarmPeerManager.ensurePeer(spawned.scope, spawned.scope, spawned.scope);
+      const result = await waitForTaskCompletion(peer, spawned.taskId, {
+        dbPath: getSwarmDbPath(settings)
       });
 
       let responseText = result.text;
@@ -640,13 +718,13 @@ export class ClankerBot {
       if (responseText.length > 2000) {
         await interaction.editReply(responseText.substring(0, 1997) + "...");
       } else {
-        await interaction.editReply(responseText || "Code task completed with no output.");
+        await interaction.editReply(responseText || "Code worker completed with no output.");
       }
     } catch (error) {
       this.store.logAction({ kind: "bot_error", guildId: interaction.guildId, channelId: interaction.channelId, userId: interaction.user.id, content: "slash_command_code_error", metadata: { error: String(error instanceof Error ? error.message : error) } });
       const message = error instanceof Error ? error.message : String(error);
       try {
-        await interaction.editReply(`An error occurred while running code task: ${message}`);
+        await interaction.editReply(`An error occurred while running the code worker: ${message}`);
       } catch (replyError) {
          this.store.logAction({ kind: "bot_error", guildId: interaction.guildId, channelId: interaction.channelId, userId: interaction.user.id, content: "slash_command_code_error_reply_failed", metadata: { error: String(replyError instanceof Error ? replyError.message : replyError) } });
       }
@@ -1033,7 +1111,9 @@ export class ClankerBot {
         console.warn("[ClankerBot] Failed to close browser sessions during shutdown:", error);
       }
     }
-    this.backgroundTaskRunner.close();
+    this.swarmActivityBridge.shutdown();
+    this.swarmReservationKeeper.shutdown();
+    this.swarmPeerManager.shutdown();
     await stopMinecraftMcpServer();
     await this.client.destroy();
   }
@@ -1249,241 +1329,14 @@ export class ClankerBot {
     return queue.length;
   }
 
-  dispatchBackgroundCodeTask({
-    session,
-    task,
-    role,
-    guildId,
-    channelId,
-    userId = null,
-    triggerMessageId = null,
-    source = "reply_tool_code_task",
-    progressReports
-  }: {
-    session: import("./agents/subAgentSession.ts").SubAgentSession;
-    task: string;
-    role: import("./agents/codeAgent.ts").CodeAgentRole;
-    guildId: string;
-    channelId: string;
-    userId?: string | null;
-    triggerMessageId?: string | null;
-    source?: string;
-    progressReports?: {
-      enabled?: boolean;
-      intervalMs?: number;
-      maxReportsPerTask?: number;
-    };
-  }) {
-    const scopeKey = buildCodeTaskScopeKey({ guildId, channelId });
-    return this.backgroundTaskRunner.dispatch({
-      session,
-      input: task,
-      role,
-      guildId,
-      channelId,
-      userId,
-      triggerMessageId,
-      scopeKey,
-      source,
-      progressReports: {
-        enabled: progressReports?.enabled !== false,
-        intervalMs: Number(progressReports?.intervalMs) || 60_000,
-        maxReportsPerTask: Number(progressReports?.maxReportsPerTask) || 5
-      },
-      onProgress: async (taskSnapshot, recentEvents) => {
-        await this.deliverAsyncTaskProgress(taskSnapshot, recentEvents);
-      },
-      onComplete: async (taskSnapshot) => {
-        await this.deliverAsyncTaskResult(taskSnapshot);
-      }
-    });
-  }
-
-  async deliverAsyncTaskResult(task: BackgroundTask) {
-    if (!task?.channelId || !task?.guildId) return false;
-    const mode = task.status === "cancelled" ? "cancelled" : "completion";
-    const durationMs = Math.max(0, Number(task.completedAt || Date.now()) - Number(task.startedAt || Date.now()));
-    const rawResultText = String(task.result?.text || "").trim();
-    const fallbackResultText = String(task.errorMessage || "").trim();
-    const resultText = (rawResultText || fallbackResultText || "Task finished with no text output.").slice(0, 6000);
-    const promptText = buildCodeTaskResultPrompt({
-      mode,
-      sessionId: task.sessionId,
-      role: task.role,
-      status: task.status,
-      durationMs,
-      costUsd: Number(task.result?.costUsd || 0),
-      resultText,
-      filesTouched: task.progress.fileEdits,
-      triggerMessageId: task.triggerMessageId
-    });
-    const source = String(task.source || "")
-      .trim()
-      .toLowerCase();
-    const fromVoiceRealtime = source.startsWith("voice_realtime_tool_code_task");
-    if (fromVoiceRealtime) {
-      const deliveredToVoiceRealtime = this.voiceSessionManager.requestRealtimeCodeTaskFollowup({
-        guildId: task.guildId,
-        channelId: task.channelId,
-        prompt: promptText,
-        userId: task.userId,
-        source:
-          mode === "cancelled"
-            ? "voice_realtime_code_task_cancelled_followup"
-            : "voice_realtime_code_task_result_followup"
-      });
-      if (deliveredToVoiceRealtime) {
-        return true;
-      }
-    }
-    return await this.enqueueCodeTaskSyntheticEvent({
-      task,
-      source: "code_task_result",
-      promptText,
-      forceRespond: true
-    });
-  }
-
-  async deliverAsyncTaskProgress(task: BackgroundTask, recentEvents: import("./agents/subAgentSession.ts").SubAgentProgressEvent[]) {
-    if (!task?.channelId || !task?.guildId) return false;
-    if (!Array.isArray(recentEvents) || recentEvents.length <= 0) return false;
-    const elapsedMs = Math.max(0, Date.now() - Number(task.startedAt || Date.now()));
-    const promptText = buildCodeTaskResultPrompt({
-      mode: "progress",
-      sessionId: task.sessionId,
-      role: task.role,
-      status: task.status,
-      durationMs: elapsedMs,
-      costUsd: Number(task.result?.costUsd || 0),
-      filesTouched: task.progress.fileEdits,
-      triggerMessageId: task.triggerMessageId,
-      recentEvents: recentEvents.map((event) => ({ summary: event.summary }))
-    });
-    return await this.enqueueCodeTaskSyntheticEvent({
-      task,
-      source: "code_task_progress",
-      promptText,
-      forceRespond: true
-    });
-  }
-
-  private async enqueueCodeTaskSyntheticEvent({
-    task,
-    source,
-    promptText,
-    forceRespond
-  }: {
-    task: BackgroundTask;
-    source: string;
-    promptText: string;
-    forceRespond: boolean;
-  }) {
-    const channel = this.client.channels.cache.get(String(task.channelId || ""));
-    if (!isSendableChannel(channel)) {
-      this.store.logAction({
-        kind: "bot_error",
-        guildId: task.guildId || null,
-        channelId: task.channelId || null,
-        userId: task.userId || null,
-        content: "code_task_synthetic_delivery_channel_unavailable",
-        metadata: {
-          taskId: task.id,
-          sessionId: task.sessionId,
-          source
-        }
-      });
-      return false;
-    }
-
-    const guild = this.client.guilds.cache.get(String(task.guildId || ""));
-    if (!guild) {
-      this.store.logAction({
-        kind: "bot_error",
-        guildId: task.guildId || null,
-        channelId: task.channelId || null,
-        userId: task.userId || null,
-        content: "code_task_synthetic_delivery_guild_unavailable",
-        metadata: {
-          taskId: task.id,
-          sessionId: task.sessionId,
-          source
-        }
-      });
-      return false;
-    }
-
-    const requesterUserId = String(task.userId || this.client.user?.id || "system").trim() || "system";
-    const requesterNameFromGuild = guild.members?.cache?.get(requesterUserId)?.displayName;
-    const requesterNameFromUser = this.client.users?.cache?.get(requesterUserId)?.username;
-    const requesterName = String(requesterNameFromGuild || requesterNameFromUser || "Requester");
-    const syntheticId = `${source}-${task.id}-${Date.now()}`;
-    const syntheticTimestamp = Date.now();
-
-    this.store.recordMessage({
-      messageId: syntheticId,
-      createdAt: syntheticTimestamp,
-      guildId: String(task.guildId || ""),
-      channelId: String(task.channelId || ""),
-      authorId: requesterUserId,
-      authorName: requesterName,
-      isBot: false,
-      content: promptText,
-      referencedMessageId: task.triggerMessageId || null
-    });
-
-    const syntheticMessage = {
-      id: syntheticId,
-      channelId: String(task.channelId || ""),
-      guildId: String(task.guildId || ""),
-      guild,
-      channel,
-      content: promptText,
-      createdTimestamp: syntheticTimestamp,
-      author: {
-        id: requesterUserId,
-        username: requesterName,
-        bot: false
-      },
-      member: {
-        displayName: requesterName
-      },
-      mentions: { users: new Map(), repliedUser: null },
-      reference: task.triggerMessageId
-        ? { messageId: task.triggerMessageId }
-        : null,
-      referencedMessage: null,
-      attachments: new Map()
-    };
-
-    const queued = this.enqueueReplyJob({
-      source,
-      message: syntheticMessage,
-      forceRespond
-    });
-    this.store.logAction({
-      kind: queued ? "text_runtime" : "bot_error",
-      guildId: String(task.guildId || ""),
-      channelId: String(task.channelId || ""),
-      userId: requesterUserId,
-      content: queued ? "code_task_synthetic_delivery_queued" : "code_task_synthetic_delivery_queue_rejected",
-      metadata: {
-        taskId: task.id,
-        sessionId: task.sessionId,
-        source,
-        forceRespond: Boolean(forceRespond),
-        syntheticMessageId: syntheticId
-      }
-    });
-    return queued;
-  }
-
   async acknowledgeTextCancellation({
     message,
     settings,
     cancelText,
     cancelledReplyCount = 0,
     cancelledQueuedReplyCount = 0,
-    browserCancelled = false
+    browserCancelled = false,
+    swarmCancelledCount = 0
   }) {
     const acknowledgement = await generateTextCancelAcknowledgement({
       llm: this.llm,
@@ -1496,7 +1349,8 @@ export class ClankerBot {
       cancelText,
       cancelledReplyCount,
       cancelledQueuedReplyCount,
-      browserCancelled
+      browserCancelled,
+      swarmCancelledCount
     });
 
     if (acknowledgement) {
@@ -1583,12 +1437,11 @@ export class ClankerBot {
         browserScopeKey,
         "User requested cancellation via text"
       );
-      const codeTaskScopeKey = buildCodeTaskScopeKey({
-        guildId: message.guildId,
-        channelId: message.channelId
-      });
-      const cancelledBackgroundCodeTaskCount = this.backgroundTaskRunner.cancelByScope(
-        codeTaskScopeKey,
+      const swarmCancelledCount = await this.cancelSwarmWorkersInScope(
+        {
+          guildId: message.guildId ? String(message.guildId) : null,
+          channelId: message.channelId ? String(message.channelId) : null
+        },
         "User requested cancellation via text"
       );
       const cancelledQueuedReplyCount = this.clearQueuedReplies(message.channelId);
@@ -1596,7 +1449,7 @@ export class ClankerBot {
         cancelledReplyCount > 0 ||
         cancelledQueuedReplyCount > 0 ||
         browserCancelled ||
-        cancelledBackgroundCodeTaskCount > 0
+        swarmCancelledCount > 0
       ) {
         await this.acknowledgeTextCancellation({
           message,
@@ -1604,7 +1457,8 @@ export class ClankerBot {
           cancelText: text,
           cancelledReplyCount,
           cancelledQueuedReplyCount,
-          browserCancelled
+          browserCancelled,
+          swarmCancelledCount
         });
         return;
       }
@@ -2188,6 +2042,378 @@ export class ClankerBot {
     const sentMessages = this.store.countActionsSince("sent_message", since);
     const initiativePosts = this.store.countActionsSince("initiative_post", since);
     return sentReplies + sentMessages + initiativePosts < maxPerHour;
+  }
+
+  /**
+   * Cancel every swarm code-task this Clanky planner peer dispatched into the
+   * given scope (guildId + channelId). Used by the keyword cancel handlers
+   * (text and voice). Sends `update_task(cancelled)` for each in-flight task,
+   * which the activity bridge will translate into a `closePty` (path A) or
+   * `child.kill("SIGTERM")` (fallback) on the backing worker. Returns the
+   * count cancelled — callers use it to decide whether to acknowledge.
+   */
+  async cancelSwarmWorkersInScope(
+    filter: { guildId?: string | null; channelId?: string | null },
+    reason: string
+  ): Promise<number> {
+    const contexts = this.swarmActivityBridge.contextsForScope(filter);
+    if (contexts.length === 0) return 0;
+    let cancelled = 0;
+    for (const ctx of contexts) {
+      try {
+        const peer = this.swarmPeerManager.ensurePeer(ctx.scope, ctx.scope, ctx.scope);
+        await peer.updateTask(ctx.taskId, {
+          status: "cancelled",
+          result: reason
+        });
+        cancelled++;
+      } catch (error) {
+        this.store.logAction({
+          kind: "swarm_task_cancel_error",
+          guildId: ctx.guildId,
+          channelId: ctx.channelId,
+          userId: ctx.userId,
+          metadata: {
+            taskId: ctx.taskId,
+            scope: ctx.scope,
+            error: String((error as Error)?.message || error)
+          }
+        });
+      }
+    }
+    return cancelled;
+  }
+
+  async respondToSwarmSpawnRequest(
+    event: SwarmSpawnRequestEvent,
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    try {
+      await event.controllerPeer.sendMessage(event.message.sender, JSON.stringify({
+        v: 1,
+        kind: "spawn_response",
+        taskId: event.request.taskId,
+        ...payload
+      }));
+    } catch (error) {
+      this.store.logAction({
+        kind: "swarm_spawn_request_response_error",
+        metadata: {
+          scope: event.scope,
+          sender: event.message.sender,
+          taskId: event.request.taskId,
+          error: String((error as Error)?.message || error)
+        }
+      });
+    }
+  }
+
+  async declineSwarmSpawnRequest(
+    event: SwarmSpawnRequestEvent,
+    reason: string,
+    metadata: Record<string, unknown> = {}
+  ): Promise<void> {
+    this.store.logAction({
+      kind: "swarm_spawn_request_declined",
+      content: reason,
+      metadata: {
+        scope: event.scope,
+        sender: event.message.sender,
+        taskId: event.request.taskId,
+        role: event.request.role,
+        requestReason: event.request.reason,
+        ...metadata
+      }
+    });
+    await this.respondToSwarmSpawnRequest(event, {
+      status: "declined",
+      reason
+    });
+  }
+
+  buildSwarmSpawnRequestPrompt(event: SwarmSpawnRequestEvent, task: { title?: string | null; description?: string | null; type?: string | null; files?: string[] | null }): string {
+    const files = Array.isArray(task.files) && task.files.length
+      ? task.files.map((file) => String(file || "").trim()).filter(Boolean).join(", ")
+      : "(none listed)";
+    return [
+      `A planner worker escalated existing swarm task ${event.request.taskId} because no suitable peer claimed it.`,
+      "Claim and complete the assigned task; do not create a duplicate replacement task unless this task itself requires follow-up work.",
+      `Planner reason: ${event.request.reason || "no reason provided"}`,
+      `Task type: ${String(task.type || event.request.role || "implement")}`,
+      `Task title: ${String(task.title || "Untitled task")}`,
+      `Relevant files: ${files}`,
+      "",
+      String(task.description || "").trim() || "No task description was provided. Inspect the swarm task and ask the planner for clarification if needed."
+    ].join("\n");
+  }
+
+  async handleSwarmSpawnRequest(event: SwarmSpawnRequestEvent): Promise<void> {
+    const settings = this.store.getSettings();
+    this.store.logAction({
+      kind: "swarm_spawn_request_received",
+      metadata: {
+        scope: event.scope,
+        sender: event.message.sender,
+        taskId: event.request.taskId,
+        role: event.request.role,
+        reason: event.request.reason,
+        priority: event.request.priority
+      }
+    });
+
+    const sessionEntry = await event.controllerPeer
+      .kvGet(buildCodeWorkerWorkerSessionKey(event.message.sender))
+      .catch(() => null);
+    const plannerSession = sessionEntry
+      ? readCodeWorkerSessionRecord(sessionEntry.value, event.message.sender, event.scope)
+      : null;
+    if (!plannerSession) {
+      await this.declineSwarmSpawnRequest(event, "planner_context_unavailable");
+      return;
+    }
+    if (!isDevTaskEnabled(settings)) {
+      await this.declineSwarmSpawnRequest(event, "dev_tasks_disabled", {
+        guildId: plannerSession.guildId,
+        channelId: plannerSession.channelId,
+        userId: plannerSession.userId
+      });
+      return;
+    }
+    if (!plannerSession.userId || !isDevTaskUserAllowed(settings, plannerSession.userId)) {
+      await this.declineSwarmSpawnRequest(event, "original_requester_not_allowed", {
+        guildId: plannerSession.guildId,
+        channelId: plannerSession.channelId,
+        userId: plannerSession.userId
+      });
+      return;
+    }
+
+    const task = await event.controllerPeer.getTask(event.request.taskId).catch(() => null);
+    if (!task) {
+      await this.declineSwarmSpawnRequest(event, "task_not_found", {
+        guildId: plannerSession.guildId,
+        channelId: plannerSession.channelId,
+        userId: plannerSession.userId
+      });
+      return;
+    }
+    if (task.scope !== event.scope) {
+      await this.declineSwarmSpawnRequest(event, "task_scope_mismatch", {
+        taskScope: task.scope,
+        requestScope: event.scope
+      });
+      return;
+    }
+    if (task.assignee || task.status !== "open") {
+      this.store.logAction({
+        kind: "swarm_spawn_request_noop",
+        metadata: {
+          scope: event.scope,
+          sender: event.message.sender,
+          taskId: event.request.taskId,
+          taskStatus: task.status,
+          assignee: task.assignee || null
+        }
+      });
+      await this.respondToSwarmSpawnRequest(event, {
+        status: "no_spawn_needed",
+        reason: task.assignee ? "task_already_assigned" : `task_${task.status}`
+      });
+      return;
+    }
+
+    try {
+      const spawned = await spawnCodeWorker(
+        {
+          settings,
+          task: this.buildSwarmSpawnRequestPrompt(event, task),
+          role: event.request.role,
+          cwd: plannerSession.cwd || event.scope,
+          guildId: plannerSession.guildId,
+          channelId: plannerSession.channelId,
+          userId: plannerSession.userId,
+          triggerMessageId: plannerSession.triggerMessageId,
+          source: "swarm_spawn_request",
+          existingTaskId: event.request.taskId
+        },
+        {
+          store: this.store,
+          peerManager: this.swarmPeerManager,
+          reservationKeeper: this.swarmReservationKeeper,
+          activityBridge: this.swarmActivityBridge
+        }
+      );
+      this.store.logAction({
+        kind: "swarm_spawn_request_accepted",
+        guildId: plannerSession.guildId,
+        channelId: plannerSession.channelId,
+        userId: plannerSession.userId,
+        metadata: {
+          scope: event.scope,
+          sender: event.message.sender,
+          taskId: event.request.taskId,
+          workerId: spawned.workerId,
+          role: event.request.role,
+          reason: event.request.reason
+        }
+      });
+      await this.respondToSwarmSpawnRequest(event, {
+        status: "spawned",
+        workerId: spawned.workerId,
+        role: event.request.role
+      });
+    } catch (error) {
+      await this.declineSwarmSpawnRequest(event, String((error as Error)?.message || error), {
+        guildId: plannerSession.guildId,
+        channelId: plannerSession.channelId,
+        userId: plannerSession.userId
+      });
+    }
+  }
+
+  /**
+   * Deliver a swarm code-task terminal event back to its originating Discord
+   * channel. The normal reply pipeline synthesizes the user-facing follow-up
+   * so Clanky remains the final arbiter; raw relay is only a delivery fallback.
+   * Always logs a structured action so dashboard/audit trails show the dispatch
+   * closing out, even when the channel is unreachable.
+   */
+  async deliverSwarmTaskTerminal(event: CodeTaskTerminalEvent): Promise<void> {
+    const { context, status, result } = event;
+    this.store.logAction({
+      kind: "swarm_task_result",
+      guildId: context.guildId,
+      channelId: context.channelId,
+      userId: context.userId,
+      metadata: {
+        taskId: context.taskId,
+        workerId: context.workerId,
+        scope: context.scope,
+        status,
+        source: context.source,
+        triggerMessageId: context.triggerMessageId,
+        resultLength: result.length
+      }
+    });
+
+    const enqueued = this.enqueueSwarmTaskTerminalSynthesis(event);
+    if (enqueued) return;
+
+    await this.sendRawSwarmTaskTerminalFallback(event);
+  }
+
+  enqueueSwarmTaskTerminalSynthesis(event: CodeTaskTerminalEvent): boolean {
+    const { context, status, result } = event;
+    const channelId = String(context.channelId || "").trim();
+    if (!channelId) return false;
+    const channel = this.client.channels.cache.get(channelId);
+    if (!channel || typeof channel.send !== "function") return false;
+
+    const syntheticId = `code-task-${context.taskId}-${status}-${Date.now()}`;
+    const authorId = context.userId || this.client.user?.id || "code-task";
+    const content = buildCodeTaskResultPrompt({
+      mode: status === "cancelled" ? "cancelled" : "completion",
+      sessionId: context.taskId,
+      role: "implementation",
+      status,
+      resultText: truncateCodeTaskResultForSynthesis(result),
+      triggerMessageId: context.triggerMessageId
+    });
+
+    this.store.recordMessage({
+      messageId: syntheticId,
+      createdAt: Date.now(),
+      guildId: context.guildId,
+      channelId,
+      authorId,
+      authorName: "Code task",
+      isBot: false,
+      content,
+      referencedMessageId: context.triggerMessageId || null
+    });
+
+    const syntheticMessage = {
+      id: syntheticId,
+      channelId,
+      guildId: context.guildId,
+      guild: "guild" in channel ? channel.guild : null,
+      channel,
+      content,
+      createdTimestamp: Date.now(),
+      author: {
+        id: authorId,
+        username: "Code task",
+        bot: false
+      },
+      member: null,
+      mentions: { users: new Map(), repliedUser: null },
+      reference: context.triggerMessageId ? { messageId: context.triggerMessageId } : null,
+      referencedMessage: context.triggerMessageId ? { id: context.triggerMessageId } : null,
+      attachments: new Map(),
+      react: async () => null,
+      reply: async (payload: Record<string, unknown>) => {
+        const replyTarget = String(context.triggerMessageId || "").trim();
+        const finalPayload = replyTarget
+          ? {
+              ...payload,
+              reply: { messageReference: replyTarget, failIfNotExists: false }
+            }
+          : payload;
+        return await channel.send(finalPayload);
+      }
+    };
+
+    return this.enqueueReplyJob({
+      source: "swarm_task_result_synthesis",
+      message: syntheticMessage,
+      forceRespond: true,
+      addressSignal: {
+        direct: true,
+        inferred: false,
+        triggered: true,
+        reason: "code_task_terminal",
+        confidence: 1,
+        threshold: 0.62,
+        confidenceSource: "direct"
+      }
+    });
+  }
+
+  async sendRawSwarmTaskTerminalFallback(event: CodeTaskTerminalEvent): Promise<void> {
+    const { context, status, result } = event;
+    const channelId = String(context.channelId || "").trim();
+    if (!channelId) return;
+    try {
+      const channel = this.client.channels.cache.get(channelId);
+      if (!channel || typeof channel.send !== "function") return;
+      const header =
+        status === "done"
+          ? `Code task \`${context.taskId.slice(0, 8)}\` finished.`
+          : status === "failed"
+            ? `Code task \`${context.taskId.slice(0, 8)}\` failed.`
+            : `Code task \`${context.taskId.slice(0, 8)}\` cancelled.`;
+      const body = result || (status === "done" ? "_(no result text)_" : "_(no error message)_");
+      const truncated = body.length > 1800 ? `${body.slice(0, 1800)}…` : body;
+      const replyTarget = String(context.triggerMessageId || "").trim();
+      const payload: Record<string, unknown> = {
+        content: `${header}\n\n${truncated}`
+      };
+      if (replyTarget) {
+        payload.reply = { messageReference: replyTarget, failIfNotExists: false };
+      }
+      await channel.send(payload);
+    } catch (error) {
+      this.store.logAction({
+        kind: "swarm_task_delivery_error",
+        guildId: context.guildId,
+        channelId: context.channelId,
+        userId: context.userId,
+        metadata: {
+          taskId: context.taskId,
+          error: String((error as Error)?.message || error)
+        }
+      });
+    }
   }
 
   isNonPrivateReplyEligibleChannel(channel) {

@@ -122,7 +122,7 @@ function buildMicroReflectionPrompts({
     `Use subject=bot only for explicit durable facts about ${botName} that were USER-ASSIGNED (e.g. nicknames, personality traits the user told it to adopt, or identity changes). Do NOT extract facts describing the bot's built-in capabilities or default behavior (responding to requests, playing music, answering questions, etc.) — those are inherent, not durable memories.`,
     "Use subject=lore for stable shared context not tied to one person.",
     `Write all fact text from first-person perspective — use "me", "I", "my" instead of referring to ${botName} by name. Example: "CURSED conk told me to be more nonchalant" not "CURSED conk told ${botName} to be more nonchalant".`,
-    `Return strict JSON only: {"facts":[{"subject":"author|bot|lore","subjectName":"<author display name if subject=author, empty otherwise>","fact":"...","type":"preference|profile|relationship|project|other","confidence":0.0-1.0,"evidence":"short quote or excerpt"}]}.`,
+    `Return strict JSON only: {"facts":[{"subject":"author|bot|lore","subjectName":"<author display name if subject=author, empty otherwise>","fact":"...","type":"preference|profile|relationship|project|other","confidence":0.0-1.0,"evidence":"short quote or excerpt","supersedes":"exact existing fact text being replaced, or empty string"}]}.`,
     "If nothing should be saved, return {\"facts\":[]}."
   ].join("\n");
 

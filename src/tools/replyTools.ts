@@ -7,12 +7,11 @@ import {
   executeSharedMemoryToolWrite
 } from "../memory/memoryToolRuntime.ts";
 import { formatConversationWindows } from "../prompts/promptFormatters.ts";
-import type { SubAgentSessionManager, SubAgentSession } from "../agents/subAgentSession.ts";
+import type { SubAgentSessionManager, SubAgentSession, SubAgentTurnResult } from "../agents/subAgentSession.ts";
 import {
-  normalizeCodeAgentRole,
-  resolveCodeAgentConfig,
-  type CodeAgentRole
-} from "../agents/codeAgent.ts";
+  resolveCodeAgentConfig
+} from "../agents/codeAgentSettings.ts";
+import { assertCodeAgentCwdAllowed } from "../agents/codeAgentRepoResolver.ts";
 import {
   buildMinecraftSessionScopeKey,
   findConflictingMinecraftSession,
@@ -31,10 +30,17 @@ import {
   isBrowserEnabled,
   getMemorySettings
 } from "../settings/agentStack.ts";
-import type { SubAgentProgressEvent } from "../agents/subAgentSession.ts";
-import type { BackgroundTask } from "../agents/backgroundTaskRunner.ts";
-
-type BackgroundTaskSnapshot = BackgroundTask;
+import { resolveCodeAgentWorkspace } from "../agents/codeAgentWorkspace.ts";
+import { waitForTaskCompletion } from "../agents/swarmTaskWaiter.ts";
+import { resolveSwarmDbPath } from "../agents/swarmDbConnection.ts";
+import type { ClankyPeer, SwarmTaskStatus, UpdateTaskOpts } from "../agents/swarmPeer.ts";
+import type { ClankySwarmPeerManager } from "../agents/swarmPeerManager.ts";
+import type { SwarmReservationKeeper } from "../agents/swarmReservationKeeper.ts";
+import {
+  cancelSpawnedWorkerForTask,
+  spawnCodeWorker,
+  type SpawnCodeWorkerResult
+} from "./spawnCodeWorker.ts";
 
 // Default text budget for free-form tool queries unless a tool has stricter needs.
 const MAX_TOOL_QUERY_LEN = 220;
@@ -47,6 +53,8 @@ const MAX_BROWSER_BROWSE_QUERY_LEN = 500;
 
 // Agent execution/request payload guards.
 const MAX_CODE_TASK_LEN = 2000;
+const MAX_REVIEW_SECTION_LEN = 900;
+const MAX_CODE_REVIEW_WAIT_MS = 1_800_000;
 
 // Voice/music/soundboard-specific payload bounds.
 const MAX_VOICE_MUSIC_QUERY_LEN = 180;
@@ -54,10 +62,6 @@ const MAX_SCREEN_WATCH_TARGET_LEN = 120;
 const MAX_SOUNDBOARD_REF_LEN = 180;
 const MAX_SOUNDBOARD_REF_COUNT = 10;
 const MAX_VIDEO_LOOKUP_REF_COUNT = 8;
-
-// Background task summaries shown inline in reply-tool responses.
-const MAX_BACKGROUND_TASK_EVENT_COUNT = 5;
-const MAX_BACKGROUND_TASK_RESULT_PREVIEW_CHARS = 500;
 
 // Music tool input clamps and defaults.
 const MAX_MUSIC_PLATFORM_LEN = 32;
@@ -102,31 +106,6 @@ function maybeRemoveCompletedSession(manager: Pick<SubAgentSessionManager, "remo
 
 function buildMinecraftBusyMessage(conflictingSessionId: string): string {
   return `Minecraft companion is already active in session '${conflictingSessionId}' for another user.`;
-}
-
-function shouldDispatchAsyncCodeTask({
-  settings,
-  role,
-  cwd,
-  guildId,
-  channelId,
-  hasBackgroundDispatcher
-}: {
-  settings: Record<string, unknown>;
-  role: CodeAgentRole;
-  cwd?: string;
-  guildId: string;
-  channelId: string | null;
-  hasBackgroundDispatcher: boolean;
-}) {
-  if (!hasBackgroundDispatcher) return false;
-  if (!String(guildId || "").trim()) return false;
-  if (!String(channelId || "").trim()) return false;
-  const config = resolveCodeAgentConfig(settings, cwd, role);
-  if (!config.asyncDispatch.enabled) return false;
-  if (config.asyncDispatch.thresholdMs <= 0) return true;
-  // We only have a coarse estimate at dispatch time. Use timeout as an upper bound.
-  return config.timeoutMs >= config.asyncDispatch.thresholdMs;
 }
 
 interface ReplyToolDefinition {
@@ -216,27 +195,6 @@ export type ReplyToolRuntime = {
   voiceSessionControl?: {
     requestLeaveVoiceChannel?: () => Promise<{ ok: boolean }>;
   };
-  codeAgent?: {
-    runTask: (opts: {
-      settings: Record<string, unknown>;
-      task: string;
-      role?: CodeAgentRole;
-      cwd?: string;
-      guildId: string;
-      channelId: string | null;
-      userId: string | null;
-      source: string;
-      signal?: AbortSignal;
-    }) => Promise<{
-      text?: string;
-      isError?: boolean;
-      costUsd?: number;
-      error?: string | null;
-      blockedByBudget?: boolean;
-      blockedByPermission?: boolean;
-      blockedByParallelLimit?: boolean;
-    }>;
-  };
   memory?: {
     searchDurableFacts: (opts: {
       guildId?: string | null;
@@ -291,15 +249,6 @@ export type ReplyToolRuntime = {
   };
   subAgentSessions?: {
     manager: SubAgentSessionManager;
-    createCodeSession: (opts: {
-      settings: Record<string, unknown>;
-      role?: CodeAgentRole;
-      cwd?: string;
-      guildId: string;
-      channelId: string | null;
-      userId: string | null;
-      source: string;
-    }) => SubAgentSession | null;
     createBrowserSession: (opts: {
       settings: Record<string, unknown>;
       guildId: string;
@@ -315,31 +264,23 @@ export type ReplyToolRuntime = {
       source?: string;
     }) => Promise<SubAgentSession | null> | SubAgentSession | null;
   };
-  backgroundCodeTasks?: {
-    dispatch: (args: {
-      session: SubAgentSession;
-      task: string;
-      role: CodeAgentRole;
-      guildId: string;
-      channelId: string;
-      userId?: string | null;
-      triggerMessageId?: string | null;
-      source?: string;
-      progressReports?: {
-        enabled?: boolean;
-        intervalMs?: number;
-        maxReportsPerTask?: number;
-      };
-    }) => {
-      id: string;
-      sessionId: string;
-      progress: {
-        events: SubAgentProgressEvent[];
-      };
+  swarm?: {
+    peerManager: ClankySwarmPeerManager;
+    reservationKeeper: SwarmReservationKeeper;
+    activityBridge?: {
+      watchControllerPeer?: (peer: import("../agents/swarmPeer.ts").ClankyPeer, context: { scope: string }) => void;
+      forgetTask?: (taskId: string) => void;
+      trackTask: (peer: import("../agents/swarmPeer.ts").ClankyPeer, context: {
+        taskId: string;
+        workerId: string;
+        scope: string;
+        guildId: string | null;
+        channelId: string | null;
+        userId: string | null;
+        triggerMessageId: string | null;
+        source: string;
+      }) => void;
     };
-    getTask: (taskId: string) => BackgroundTaskSnapshot | null;
-    queueFollowup: (taskId: string, input: string) => boolean;
-    cancel: (taskId: string, reason?: string) => boolean;
   };
   voiceSessionManager?: BrowserStreamPublishManager & {
     stopMusicStreamPublish?: (opts: {
@@ -373,6 +314,7 @@ export type ReplyToolRuntime = {
     musicReplyHandoff: (mode: "pause" | "duck" | "none") => Promise<Record<string, unknown>>;
     musicSkip: () => Promise<Record<string, unknown>>;
     musicNowPlaying: () => Promise<Record<string, unknown>>;
+    streamVisualizer?: (mode?: string | null) => Promise<Record<string, unknown>>;
     stopVideoShare?: () => Promise<Record<string, unknown>>;
     playSoundboard: (refs: string[], transcript: string) => Promise<Record<string, unknown>>;
     leaveVoiceChannel: () => Promise<Record<string, unknown>>;
@@ -441,7 +383,25 @@ const REPLY_TOOL_HANDLERS: Record<
 
   join_voice_channel: async (_input, runtime, context) => await executeJoinVoiceChannel(runtime, context),
   leave_voice_channel: async (_input, runtime, context) => await executeLeaveVoiceChannel(runtime, context.signal),
-  code_task: executeCodeTask,
+  spawn_code_worker: executeSpawnCodeWorker,
+  request_task: async (input, runtime, context) => await executeSwarmTool("request_task", input, runtime, context),
+  get_task: async (input, runtime, context) => await executeSwarmTool("get_task", input, runtime, context),
+  list_tasks: async (input, runtime, context) => await executeSwarmTool("list_tasks", input, runtime, context),
+  update_task: async (input, runtime, context) => await executeSwarmTool("update_task", input, runtime, context),
+  claim_task: async (input, runtime, context) => await executeSwarmTool("claim_task", input, runtime, context),
+  send_message: async (input, runtime, context) => await executeSwarmTool("send_message", input, runtime, context),
+  broadcast: async (input, runtime, context) => await executeSwarmTool("broadcast", input, runtime, context),
+  wait_for_activity: async (input, runtime, context) => await executeSwarmTool("wait_for_activity", input, runtime, context),
+  annotate: async (input, runtime, context) => await executeSwarmTool("annotate", input, runtime, context),
+  lock_file: async (input, runtime, context) => await executeSwarmTool("lock_file", input, runtime, context),
+  unlock_file: async (input, runtime, context) => await executeSwarmTool("unlock_file", input, runtime, context),
+  check_file: async (input, runtime, context) => await executeSwarmTool("check_file", input, runtime, context),
+  list_instances: async (input, runtime, context) => await executeSwarmTool("list_instances", input, runtime, context),
+  whoami: async (input, runtime, context) => await executeSwarmTool("whoami", input, runtime, context),
+  kv_get: async (input, runtime, context) => await executeSwarmTool("kv_get", input, runtime, context),
+  kv_set: async (input, runtime, context) => await executeSwarmTool("kv_set", input, runtime, context),
+  kv_delete: async (input, runtime, context) => await executeSwarmTool("kv_delete", input, runtime, context),
+  kv_list: async (input, runtime, context) => await executeSwarmTool("kv_list", input, runtime, context),
   minecraft_task: executeMinecraftTask,
   music_search: async (input, runtime, context) => await executeVoiceTool("music_search", input, runtime, context),
   music_play: async (input, runtime, context) => await executeVoiceTool("music_play", input, runtime, context),
@@ -455,6 +415,7 @@ const REPLY_TOOL_HANDLERS: Record<
   media_reply_handoff: async (input, runtime, context) => await executeVoiceTool("media_reply_handoff", input, runtime, context),
   media_skip: async (input, runtime, context) => await executeVoiceTool("media_skip", input, runtime, context),
   media_now_playing: async (input, runtime, context) => await executeVoiceTool("media_now_playing", input, runtime, context),
+  stream_visualizer: async (input, runtime, context) => await executeVoiceTool("stream_visualizer", input, runtime, context),
   stop_video_share: async (input, runtime, context) => await executeVoiceTool("stop_video_share", input, runtime, context)
 };
 
@@ -1230,251 +1191,341 @@ async function executeLeaveVoiceChannel(
   }
 }
 
-function formatBackgroundTaskStatus(task: BackgroundTaskSnapshot): string {
-  const elapsedMs = Math.max(0, (task.completedAt || Date.now()) - task.startedAt);
-  const elapsedSec = Math.round(elapsedMs / 1000);
-  const lines: string[] = [
-    `Session: ${task.sessionId}`,
-    `Status: ${task.status}`,
-    `Role: ${task.role}`,
-    `Duration: ${elapsedSec}s`
-  ];
-  if (task.progress.fileEdits.length > 0) {
-    lines.push(`Files touched: ${task.progress.fileEdits.join(", ")}`);
-  }
-  if (task.progress.turnNumber > 1) {
-    lines.push(`Turn: ${task.progress.turnNumber}${task.progress.totalTurns ? ` of ${task.progress.totalTurns}` : ""}`);
-  }
-  const recentEvents = task.progress.events.slice(-MAX_BACKGROUND_TASK_EVENT_COUNT);
-  if (recentEvents.length > 0) {
-    lines.push("Recent activity:");
-    for (const event of recentEvents) {
-      lines.push(`- ${event.summary}`);
-    }
-  }
-  if (task.result?.text) {
-    const preview = task.result.text.trim().slice(0, MAX_BACKGROUND_TASK_RESULT_PREVIEW_CHARS);
-    lines.push(`\nResult preview:\n${preview}`);
-  }
-  if (task.errorMessage) {
-    lines.push(`Error: ${task.errorMessage}`);
-  }
-  return lines.join("\n");
+function jsonToolResult(value: unknown): ReplyToolResult {
+  return { content: JSON.stringify(value, null, 2) };
 }
 
-async function executeCodeTask(
+function getStringInput(input: ReplyToolCallInput, key: string): string {
+  return typeof input?.[key] === "string" ? String(input[key]).trim() : "";
+}
+
+function getStringArrayInput(input: ReplyToolCallInput, key: string): string[] {
+  const value = input?.[key];
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item || "").trim()).filter(Boolean);
+}
+
+function getObjectInput(input: ReplyToolCallInput, key: string): Record<string, unknown> | undefined {
+  const value = input?.[key];
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+function getBooleanInput(input: ReplyToolCallInput, key: string): boolean {
+  return input?.[key] === true;
+}
+
+function clampToolTimeoutMs(value: unknown, fallbackMs = 300_000): number {
+  const raw = Math.floor(Number(value) || fallbackMs);
+  return Math.max(1_000, Math.min(MAX_CODE_REVIEW_WAIT_MS, raw));
+}
+
+function truncateReviewSection(value: unknown): string {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= MAX_REVIEW_SECTION_LEN) return text;
+  return `${text.slice(0, MAX_REVIEW_SECTION_LEN - 3).trim()}...`;
+}
+
+function buildCodeReviewTaskPrompt(args: {
+  originalTask: string;
+  implementationTaskId: string;
+  implementationWorkerId: string;
+  implementationResult: string;
+}): string {
+  return [
+    "Review the completed coding task for quality. Do not modify files.",
+    "Inspect the current git diff and relevant files in the working tree. Verify claimed tests or builds only when feasible from the repository context.",
+    "Start the result with APPROVED: if there are no blocking issues, or ISSUES: if you find problems. Include concise file/line references when possible.",
+    "",
+    `Original task: ${truncateReviewSection(args.originalTask)}`,
+    `Implementation task id: ${args.implementationTaskId}`,
+    `Implementation worker id: ${args.implementationWorkerId}`,
+    `Implementation result: ${truncateReviewSection(args.implementationResult)}`
+  ].join("\n");
+}
+
+function parseCodeWorkerSessionWorkerId(rawValue: string): string {
+  const trimmed = String(rawValue || "").trim();
+  if (!trimmed) return "";
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "";
+    const record = parsed as Record<string, unknown>;
+    return String(record.workerId || record.instanceId || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+async function resolveSendMessageRecipient(input: ReplyToolCallInput, peer: ClankyPeer): Promise<string> {
+  const recipient = getStringInput(input, "recipient");
+  if (recipient) return recipient;
+  const sessionKey = getStringInput(input, "session_key");
+  if (!sessionKey) {
+    throw new Error("send_message requires recipient or session_key.");
+  }
+  const session = await peer.kvGet(sessionKey);
+  if (!session) {
+    throw new Error(`No code worker session found for session_key ${sessionKey}.`);
+  }
+  const workerId = parseCodeWorkerSessionWorkerId(session.value);
+  if (!workerId) {
+    throw new Error(`Code worker session ${sessionKey} does not contain a workerId.`);
+  }
+  return workerId;
+}
+
+function resolveSwarmPlannerPeer(
+  input: ReplyToolCallInput,
+  runtime: ReplyToolRuntime,
+  context: ReplyToolContext
+): ClankyPeer {
+  if (!runtime.swarm?.peerManager) {
+    throw new Error("Swarm runtime is not available.");
+  }
+  const cwd = getStringInput(input, "cwd") || resolveCodeAgentConfig(context.settings, undefined, "implementation").cwd;
+  const workspace = resolveCodeAgentWorkspace({ cwd });
+  assertCodeAgentCwdAllowed(context.settings, workspace.canonicalCwd);
+  return runtime.swarm.peerManager.ensurePeer(workspace.repoRoot, workspace.repoRoot, workspace.canonicalCwd);
+}
+
+async function executeSpawnCodeWorker(
   input: ReplyToolCallInput,
   runtime: ReplyToolRuntime,
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
   throwIfAborted(context.signal, "Reply tool cancelled");
-  const action = String(input?.action || "run").trim().toLowerCase();
-  const sessionId = typeof input?.session_id === "string" ? String(input.session_id).trim() : "";
-
-  // --- action: status ---
-  if (action === "status") {
-    if (!sessionId) {
-      return { content: "Missing session_id for status check.", isError: true };
-    }
-    const task = runtime.backgroundCodeTasks?.getTask(sessionId);
-    if (!task) {
-      return { content: `No background task found with session ID '${sessionId}'.`, isError: true };
-    }
-    return { content: formatBackgroundTaskStatus(task) };
-  }
-
-  // --- action: cancel ---
-  if (action === "cancel") {
-    if (!sessionId) {
-      return { content: "Missing session_id for cancellation.", isError: true };
-    }
-    const cancelled = runtime.backgroundCodeTasks?.cancel(sessionId, "Cancelled by orchestrator via code_task action");
-    if (!cancelled) {
-      return { content: `No running background task found with session ID '${sessionId}'. It may have already completed.`, isError: true };
-    }
-    return { content: `Background code task '${sessionId}' cancelled.` };
-  }
-
-  // --- action: followup ---
-  if (action === "followup") {
-    const followupText = normalizeDirectiveText(String(input?.task || ""), MAX_CODE_TASK_LEN);
-    if (!followupText) {
-      return { content: "Missing or empty follow-up instruction. Provide a task.", isError: true };
-    }
-    if (!sessionId) {
-      return { content: "Missing session_id for follow-up. Provide the background task's session ID.", isError: true };
-    }
-    const queued = runtime.backgroundCodeTasks?.queueFollowup(sessionId, followupText);
-    if (!queued) {
-      return {
-        content: `Could not queue follow-up for session '${sessionId}'. The task may have already completed or no background dispatcher is available.`,
-        isError: true
-      };
-    }
-    return {
-      content: `Follow-up instruction queued for background task '${sessionId}'. ` +
-        "The coding worker will execute it after the current turn completes."
-    };
-  }
-
-  // --- action: run (default) ---
-  const task = normalizeDirectiveText(
-    String(input?.task || ""),
-    MAX_CODE_TASK_LEN
-  );
-  const role = normalizeCodeAgentRole(input?.role, "implementation");
-  if (!task) {
-    return { content: "Missing or empty code task instruction.", isError: true };
-  }
-
-  const resolvedCwd = typeof input?.cwd === "string" ? String(input.cwd).trim() : undefined;
-
-  // --- Multi-turn session continuation ---
-  if (sessionId && runtime.subAgentSessions) {
-    const session = runtime.subAgentSessions.manager.get(sessionId);
-    if (!session) {
-      return { content: `Code session '${sessionId}' not found or expired.`, isError: true };
-    }
-    // Verify the caller owns this session
-    if (session.ownerUserId && session.ownerUserId !== context.userId) {
-      return { content: `Not authorized to continue code session '${sessionId}'.`, isError: true };
-    }
-    try {
-      const turnResult = await session.runTurn(task, { signal: context.signal });
-      maybeRemoveCompletedSession(runtime.subAgentSessions.manager, session.id, turnResult.sessionCompleted);
-      const costNote = turnResult.costUsd ? ` (cost: $${turnResult.costUsd.toFixed(4)})` : "";
-      const sessionNote = buildSessionNote(session.id, turnResult.sessionCompleted);
-      if (turnResult.isError) {
-        return { content: `Code task failed: ${turnResult.errorMessage}${costNote}${sessionNote}`, isError: true };
-      }
-      const text = turnResult.text.trim();
-      return {
-        content: (text ? `${text}${costNote}` : `Code task completed with no text result.${costNote}`) + sessionNote
-      };
-    } catch (error) {
-      return { content: `Code task session failed: ${String((error as Error)?.message || error)}`, isError: true };
-    }
-  }
-
-  // --- New interactive session (if session manager is available) ---
-  if (runtime.subAgentSessions?.createCodeSession) {
-    const session = runtime.subAgentSessions.createCodeSession({
-      settings: context.settings,
-      role,
-      cwd: resolvedCwd,
-      guildId: context.guildId,
-      channelId: context.channelId,
-      userId: context.userId,
-      source: String(context.trace?.source || "reply_tool_code_task")
-    });
-
-    if (session) {
-      runtime.subAgentSessions.manager.register(session);
-      const canDispatchAsync = shouldDispatchAsyncCodeTask({
-        settings: context.settings,
-        role,
-        cwd: resolvedCwd,
-        guildId: context.guildId,
-        channelId: context.channelId,
-        hasBackgroundDispatcher: Boolean(runtime.backgroundCodeTasks?.dispatch)
-      });
-
-      if (canDispatchAsync && runtime.backgroundCodeTasks?.dispatch) {
-        try {
-          const codeConfig = resolveCodeAgentConfig(context.settings, resolvedCwd, role);
-          const dispatchedTask = runtime.backgroundCodeTasks.dispatch({
-            session,
-            task,
-            role,
-            guildId: context.guildId,
-            channelId: String(context.channelId || ""),
-            userId: context.userId,
-            triggerMessageId: context.sourceMessageId,
-            source: String(context.trace?.source || "reply_tool_code_task"),
-            progressReports: {
-              enabled: codeConfig.asyncDispatch.progressReports.enabled,
-              intervalMs: codeConfig.asyncDispatch.progressReports.intervalMs,
-              maxReportsPerTask: codeConfig.asyncDispatch.progressReports.maxReportsPerTask
-            }
-          });
-          const maxRuntimeMinutes = Math.max(1, Math.ceil(Number(codeConfig.timeoutMs || 0) / 60_000));
-          return {
-            content:
-              `Code task dispatched. Background session ${dispatchedTask.sessionId} is running.\n` +
-              `The task will run for up to ${maxRuntimeMinutes} minute${maxRuntimeMinutes === 1 ? "" : "s"}.\n` +
-              "A follow-up will be posted in this channel when it completes.\n" +
-              "You can acknowledge this to the user now.",
-            isError: false
-          };
-        } catch (error) {
-          runtime.subAgentSessions.manager.remove(session.id);
-          return {
-            content: `Code task dispatch failed: ${String((error as Error)?.message || error)}`,
-            isError: true
-          };
-        }
-      }
-
-      try {
-        const turnResult = await session.runTurn(task, { signal: context.signal });
-        maybeRemoveCompletedSession(runtime.subAgentSessions.manager, session.id, turnResult.sessionCompleted);
-        const costNote = turnResult.costUsd ? ` (cost: $${turnResult.costUsd.toFixed(4)})` : "";
-        const sessionNote = buildSessionNote(session.id, turnResult.sessionCompleted);
-        if (turnResult.isError) {
-          return { content: `Code task failed: ${turnResult.errorMessage}${costNote}${sessionNote}`, isError: true };
-        }
-        const text = turnResult.text.trim();
-        return {
-          content: (text ? `${text}${costNote}` : `Code task completed with no text result.${costNote}`) + sessionNote
-        };
-      } catch (error) {
-        return { content: `Code task failed: ${String((error as Error)?.message || error)}`, isError: true };
-      }
-    }
-    // Fallback to one-shot if session creation returned null (e.g. blocked)
-  }
-
-  // --- One-shot fallback when session orchestration is unavailable ---
-  if (!runtime.codeAgent?.runTask) {
-    return { content: "Code agent is not available.", isError: true };
+  if (!runtime.swarm?.peerManager || !runtime.swarm?.reservationKeeper || !runtime.store?.logAction) {
+    return { content: "Swarm worker runtime is not available.", isError: true };
   }
 
   try {
-    const result = await runtime.codeAgent.runTask({
+    const task = normalizeDirectiveText(String(input?.task || ""), MAX_CODE_TASK_LEN);
+    const cwd = getStringInput(input, "cwd") || undefined;
+    const result = await spawnCodeWorker(
+      {
+        settings: context.settings,
+        task,
+        role: getStringInput(input, "role"),
+        harness: getStringInput(input, "harness"),
+        cwd,
+        githubUrl: getStringInput(input, "github_url") || getStringInput(input, "githubUrl"),
+        guildId: context.guildId,
+        channelId: context.channelId,
+        userId: context.userId,
+        triggerMessageId: context.sourceMessageId,
+        source: String(context.trace?.source || "reply_tool_spawn_code_worker"),
+        signal: context.signal
+      },
+      {
+        store: runtime.store,
+        peerManager: runtime.swarm.peerManager,
+        reservationKeeper: runtime.swarm.reservationKeeper,
+        activityBridge: runtime.swarm.activityBridge
+      }
+    );
+    if (getBooleanInput(input, "review_after_completion")) {
+      return jsonToolResult(await runCodeWorkerReviewAfterCompletion({
+        input,
+        runtime,
+        context,
+        initialResult: result,
+        originalTask: task,
+        cwd
+      }));
+    }
+    return jsonToolResult(result);
+  } catch (error) {
+    return { content: `spawn_code_worker failed: ${String((error as Error)?.message || error)}`, isError: true };
+  }
+}
+
+async function runCodeWorkerReviewAfterCompletion({
+  input,
+  runtime,
+  context,
+  initialResult,
+  originalTask,
+  cwd
+}: {
+  input: ReplyToolCallInput;
+  runtime: ReplyToolRuntime;
+  context: ReplyToolContext;
+  initialResult: SpawnCodeWorkerResult;
+  originalTask: string;
+  cwd?: string;
+}): Promise<SpawnCodeWorkerResult & {
+  completion: SubAgentTurnResult;
+  review: null | (SpawnCodeWorkerResult & { completion: SubAgentTurnResult });
+  reviewSkippedReason?: string;
+}> {
+  if (!runtime.swarm?.peerManager || !runtime.swarm?.reservationKeeper || !runtime.store?.logAction) {
+    throw new Error("Swarm worker runtime is not available.");
+  }
+  const peer = runtime.swarm.peerManager.ensurePeer(
+    initialResult.scope,
+    initialResult.scope,
+    initialResult.scope
+  );
+  runtime.swarm.activityBridge?.forgetTask?.(initialResult.taskId);
+  const timeoutMs = clampToolTimeoutMs(input?.wait_timeout_ms);
+  const completion = await waitForTaskCompletion(peer, initialResult.taskId, {
+    dbPath: resolveSwarmDbPath(resolveCodeAgentConfig(context.settings).swarm?.dbPath || ""),
+    timeoutMs,
+    signal: context.signal
+  });
+  if (completion.isError) {
+    return {
+      ...initialResult,
+      completion,
+      review: null,
+      reviewSkippedReason: "implementation_not_done"
+    };
+  }
+
+  const reviewTask = buildCodeReviewTaskPrompt({
+    originalTask,
+    implementationTaskId: initialResult.taskId,
+    implementationWorkerId: initialResult.workerId,
+    implementationResult: completion.text
+  });
+  const reviewResult = await spawnCodeWorker(
+    {
       settings: context.settings,
-      task,
-      role,
-      cwd: resolvedCwd,
+      task: reviewTask,
+      role: "review",
+      harness: getStringInput(input, "review_harness") || getStringInput(input, "harness"),
+      cwd: cwd || initialResult.cwd,
       guildId: context.guildId,
       channelId: context.channelId,
       userId: context.userId,
-      source: String(context.trace?.source || "reply_tool_code_task"),
+      triggerMessageId: context.sourceMessageId,
+      source: "reply_tool_spawn_code_worker_review",
       signal: context.signal
-    });
+    },
+    {
+      store: runtime.store,
+      peerManager: runtime.swarm.peerManager,
+      reservationKeeper: runtime.swarm.reservationKeeper,
+      activityBridge: runtime.swarm.activityBridge
+    }
+  );
+  const reviewPeer = runtime.swarm.peerManager.ensurePeer(
+    reviewResult.scope,
+    reviewResult.scope,
+    reviewResult.scope
+  );
+  runtime.swarm.activityBridge?.forgetTask?.(reviewResult.taskId);
+  const reviewCompletion = await waitForTaskCompletion(reviewPeer, reviewResult.taskId, {
+    dbPath: resolveSwarmDbPath(resolveCodeAgentConfig(context.settings).swarm?.dbPath || ""),
+    timeoutMs,
+    signal: context.signal
+  });
+  return {
+    ...initialResult,
+    completion,
+    review: {
+      ...reviewResult,
+      completion: reviewCompletion
+    }
+  };
+}
 
-    if (result?.blockedByPermission) {
-      return { content: "This capability is restricted to allowed users.", isError: true };
+async function executeSwarmTool(
+  toolName: string,
+  input: ReplyToolCallInput,
+  runtime: ReplyToolRuntime,
+  context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
+  try {
+    const peer = resolveSwarmPlannerPeer(input, runtime, context);
+    const taskId = getStringInput(input, "task_id");
+    switch (toolName) {
+      case "request_task":
+        return jsonToolResult(await peer.requestTask({
+          type: getStringInput(input, "type") || "other",
+          title: getStringInput(input, "title"),
+          description: getStringInput(input, "description") || undefined,
+          files: getStringArrayInput(input, "files"),
+          assignee: getStringInput(input, "assignee") || undefined,
+          priority: Math.floor(Number(input?.priority) || 0),
+          dependsOn: getStringArrayInput(input, "depends_on"),
+          idempotencyKey: getStringInput(input, "idempotency_key") || undefined,
+          parentTaskId: getStringInput(input, "parent_task_id") || undefined,
+          approvalRequired: Boolean(input?.approval_required)
+        }));
+      case "get_task":
+        return jsonToolResult(await peer.getTask(taskId));
+      case "list_tasks": {
+        const statusInput = getStringInput(input, "status");
+        return jsonToolResult(await peer.listTasks({
+          status: statusInput ? (statusInput as SwarmTaskStatus) : undefined,
+          assignee: getStringInput(input, "assignee") || undefined,
+          requester: getStringInput(input, "requester") || undefined
+        }));
+      }
+      case "update_task": {
+        const status = getStringInput(input, "status") as UpdateTaskOpts["status"];
+        const updated = await peer.updateTask(taskId, {
+          status,
+          result: getStringInput(input, "result") || undefined,
+          metadata: getObjectInput(input, "metadata")
+        });
+        if (status === "cancelled") {
+          await cancelSpawnedWorkerForTask(taskId, "Cancelled by orchestrator via update_task").catch(() => false);
+        }
+        return jsonToolResult(updated);
+      }
+      case "claim_task":
+        return jsonToolResult(await peer.claimTask(taskId));
+      case "send_message":
+        await peer.sendMessage(await resolveSendMessageRecipient(input, peer), getStringInput(input, "content"));
+        return jsonToolResult({ ok: true });
+      case "broadcast":
+        return jsonToolResult({ recipients: await peer.broadcast(getStringInput(input, "content")) });
+      case "wait_for_activity": {
+        const timeoutMs = Math.max(1000, Math.floor(Number(input?.timeout_ms) || 300_000));
+        if (taskId) {
+          const result = await waitForTaskCompletion(peer, taskId, {
+            dbPath: resolveSwarmDbPath(resolveCodeAgentConfig(context.settings).swarm?.dbPath || ""),
+            timeoutMs,
+            signal: context.signal
+          });
+          return jsonToolResult(result);
+        }
+        return jsonToolResult(await peer.waitForActivity({ timeoutMs }));
+      }
+      case "annotate":
+        await peer.annotate({
+          file: getStringInput(input, "file"),
+          kind: getStringInput(input, "kind"),
+          content: getStringInput(input, "content")
+        });
+        return jsonToolResult({ ok: true });
+      case "lock_file":
+        return jsonToolResult(await peer.lockFile(getStringInput(input, "file"), getStringInput(input, "reason")));
+      case "unlock_file":
+        return jsonToolResult({ unlocked: await peer.unlockFile(getStringInput(input, "file")) });
+      case "check_file":
+        return jsonToolResult(await peer.checkFile(getStringInput(input, "file")));
+      case "list_instances":
+        return jsonToolResult(await peer.listInstances(getStringInput(input, "label_contains")));
+      case "whoami":
+        return jsonToolResult(await peer.whoami());
+      case "kv_get":
+        return jsonToolResult(await peer.kvGet(getStringInput(input, "key")));
+      case "kv_set":
+        return jsonToolResult(await peer.kvSet(getStringInput(input, "key"), String(input?.value ?? "")));
+      case "kv_delete":
+        return jsonToolResult({ deleted: await peer.kvDelete(getStringInput(input, "key")) });
+      case "kv_list":
+        return jsonToolResult(await peer.kvList(getStringInput(input, "prefix")));
+      default:
+        return { content: `Unknown swarm tool: ${toolName}`, isError: true };
     }
-    if (result?.blockedByBudget) {
-      return { content: "Code agent is currently blocked by rate limits.", isError: true };
-    }
-    if (result?.blockedByParallelLimit) {
-      return { content: "Too many code agent tasks are already running. Try again shortly.", isError: true };
-    }
-    if (result?.error) {
-      return { content: `Code task failed: ${String(result.error)}`, isError: true };
-    }
-
-    const text = String(result?.text || "").trim();
-    const costNote = result?.costUsd ? ` (cost: $${result.costUsd.toFixed(4)})` : "";
-    return {
-      content: text ? `${text}${costNote}` : `Code task completed with no text result.${costNote}`
-    };
   } catch (error) {
-    return {
-      content: `Code task failed: ${String((error as Error)?.message || error)}`,
-      isError: true
-    };
+    return { content: `${toolName} failed: ${String((error as Error)?.message || error)}`, isError: true };
   }
 }
 
@@ -1624,6 +1675,15 @@ async function executeVoiceTool(
         throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicNowPlaying();
         break;
+      case "stream_visualizer": {
+        throwIfAborted(context.signal, "Reply tool cancelled");
+        if (typeof runtime.voiceSession.streamVisualizer !== "function") {
+          return { content: "Stream visualizer is not available.", isError: true };
+        }
+        const modeArg = String(input?.mode || "").trim().slice(0, 32) || null;
+        result = await runtime.voiceSession.streamVisualizer(modeArg);
+        break;
+      }
       case "stop_video_share":
         throwIfAborted(context.signal, "Reply tool cancelled");
         if (typeof runtime.voiceSession.stopVideoShare !== "function") {

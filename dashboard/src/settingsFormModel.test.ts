@@ -137,6 +137,153 @@ test("settingsFormModel emits a full replacement snapshot for dashboard saves", 
   assert.equal(snapshot.permissions.replies.maxMessagesPerHour, 20);
 });
 
+test("settingsFormModel preserves dashboard-hidden settings in full save snapshots", () => {
+  const effectiveSettings = normalizeSettings({
+    interaction: {
+      activity: {
+        replyCoalesceWindowSeconds: 17,
+        replyCoalesceMaxMessages: 11
+      },
+      replyGeneration: {
+        pricing: {
+          "custom-reply-model": {
+            input: 1,
+            output: 2
+          }
+        }
+      }
+    },
+    agentStack: {
+      overrides: {
+        voiceInterruptClassifier: {
+          mode: "dedicated_model",
+          model: {
+            provider: "anthropic",
+            model: "claude-haiku-4-5"
+          }
+        }
+      },
+      runtimeConfig: {
+        claudeOAuthSession: {
+          sessionScope: "channel",
+          inactivityTimeoutMs: 90_000,
+          contextPruningStrategy: "sliding_window",
+          maxPinnedStateChars: 32_000,
+          voiceToolPolicy: "full",
+          textToolPolicy: "fast_only"
+        }
+      }
+    },
+    memory: {
+      promptSlice: {
+        maxRecentMessages: 77
+      },
+      embeddingModel: "text-embedding-3-large",
+      reflection: {
+        enabled: false,
+        hour: 22,
+        minute: 15,
+        maxFactsPerReflection: 42
+      }
+    },
+    initiative: {
+      voice: {
+        execution: {
+          mode: "dedicated_model",
+          model: {
+            provider: "claude-oauth",
+            model: "claude-opus-4-6"
+          },
+          temperature: 0.7
+        }
+      }
+    },
+    voice: {
+      admission: {
+        wakeSignals: ["direct_address"]
+      }
+    },
+    media: {
+      videoContext: {
+        execution: {
+          mode: "dedicated_model",
+          model: {
+            provider: "openai",
+            model: "gpt-5-mini"
+          }
+        }
+      }
+    },
+    music: {
+      ducking: {
+        targetGain: 0.33,
+        fadeMs: 450
+      }
+    }
+  });
+  const form = settingsToForm(withResolved(effectiveSettings));
+  form.botName = "clanky-save-check";
+
+  const snapshot = formToSettingsSnapshot(form);
+
+  assert.equal(snapshot.identity.botName, "clanky-save-check");
+  assert.equal(snapshot.interaction.activity.replyCoalesceWindowSeconds, 17);
+  assert.equal(snapshot.interaction.activity.replyCoalesceMaxMessages, 11);
+  assert.deepEqual(snapshot.interaction.replyGeneration.pricing, {
+    "custom-reply-model": {
+      input: 1,
+      output: 2
+    }
+  });
+  assert.deepEqual(snapshot.agentStack.runtimeConfig.claudeOAuthSession, {
+    sessionScope: "channel",
+    inactivityTimeoutMs: 90_000,
+    contextPruningStrategy: "sliding_window",
+    maxPinnedStateChars: 32_000,
+    voiceToolPolicy: "full",
+    textToolPolicy: "fast_only"
+  });
+  assert.deepEqual(snapshot.memory, {
+    enabled: true,
+    promptSlice: {
+      maxRecentMessages: 77
+    },
+    embeddingModel: "text-embedding-3-large",
+    reflection: {
+      enabled: false,
+      hour: 22,
+      minute: 15,
+      maxFactsPerReflection: 42
+    }
+  });
+  assert.deepEqual(snapshot.initiative.voice.execution, {
+    mode: "dedicated_model",
+    model: {
+      provider: "claude-oauth",
+      model: "claude-opus-4-6"
+    },
+    temperature: 0.7
+  });
+  assert.deepEqual(snapshot.voice.admission.wakeSignals, ["direct_address"]);
+  assert.deepEqual(snapshot.media.videoContext.execution, {
+    mode: "dedicated_model",
+    model: {
+      provider: "openai",
+      model: "gpt-5-mini"
+    }
+  });
+  assert.deepEqual(snapshot.music.ducking, {
+    targetGain: 0.33,
+    fadeMs: 450
+  });
+
+  form.voiceInterruptLlmExplicit = false;
+  form.voiceInterruptLlmProvider = "claude-oauth";
+  form.voiceInterruptLlmModel = "claude-haiku-4-5";
+  const clearedSnapshot = formToSettingsSnapshot(form);
+  assert.equal(clearedSnapshot.agentStack.overrides.voiceInterruptClassifier, undefined);
+});
+
 test("settingsFormModel converts settings to form defaults and back to normalized patch", () => {
   const form = settingsToForm(withResolved(normalizeSettings({
     identity: {
@@ -530,6 +677,12 @@ test("getCodeAgentValidationError requires allowed users when code agent is enab
   );
 
   form.codeAgentAllowedUserIds = "123456789";
+  assert.equal(
+    getCodeAgentValidationError(form),
+    "Add at least one allowed coding workspace root before enabling the code agent."
+  );
+
+  form.codeAgentAllowedWorkspaceRoots = "/Users/james/code";
   assert.equal(getCodeAgentValidationError(form), "");
 });
 
@@ -541,6 +694,29 @@ test("getSettingsValidationError blocks blank browser numeric inputs even withou
   assert.deepEqual(getSettingsValidationError(form), {
     sectionId: "sec-browser",
     message: "Max browse calls per hour is required."
+  });
+});
+
+test("getSettingsValidationError blocks blank numeric inputs that do not have explicit range checks", () => {
+  const videoForm = settingsToForm(withResolved(normalizeSettings({})));
+  (videoForm as Record<string, unknown>).videoContextMaxChars = "";
+  assert.deepEqual(getSettingsValidationError(videoForm), {
+    sectionId: "sec-media",
+    message: "Video context max chars is required."
+  });
+
+  const streamWatchForm = settingsToForm(withResolved(normalizeSettings({})));
+  (streamWatchForm as Record<string, unknown>).voiceStreamWatchCommentaryIntervalSeconds = "";
+  assert.deepEqual(getSettingsValidationError(streamWatchForm), {
+    sectionId: "sec-voice",
+    message: "Voice stream watch commentary interval seconds is required."
+  });
+
+  const webSearchForm = settingsToForm(withResolved(normalizeSettings({})));
+  (webSearchForm as Record<string, unknown>).webSearchMaxPages = "";
+  assert.deepEqual(getSettingsValidationError(webSearchForm), {
+    sectionId: "sec-research",
+    message: "Web search max pages is required."
   });
 });
 
@@ -566,21 +742,23 @@ test("settingsFormModel round-trips codex cli code agent fields", () => {
 
   assert.equal(form.codeAgentProvider, "codex-cli");
   assert.equal(form.codeAgentCodexCliModel, "gpt-5.4");
+  form.codeAgentAllowedWorkspaceRoots = "/Users/james/code\n/Users/james/volpestyle";
 
   const { patch, effectivePatch } = serializeForm(form);
   assert.deepEqual(patch.agentStack.overrides.devTeam.codingWorkers, ["codex_cli"]);
   assert.equal(effectivePatch.agentStack.runtimeConfig.devTeam.codexCli.model, "gpt-5.4");
+  assert.deepEqual(effectivePatch.permissions.devTasks.allowedWorkspaceRoots, [
+    "/Users/james/code",
+    "/Users/james/volpestyle"
+  ]);
 });
 
-test("settingsFormModel preserves code-agent workspace mode and swarm runtime config", () => {
+test("settingsFormModel preserves code-worker swarm runtime config", () => {
   const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {
       advancedOverridesEnabled: true,
       runtimeConfig: {
         devTeam: {
-          workspace: {
-            mode: "shared_checkout"
-          },
           swarm: {
             enabled: true,
             serverName: "swarm-bus",
@@ -598,10 +776,8 @@ test("settingsFormModel preserves code-agent workspace mode and swarm runtime co
     }
   })));
 
-  assert.equal(form.codeAgentWorkspaceMode, "shared_checkout");
-
   const { patch, effectivePatch } = serializeForm(form);
-  assert.equal(patch.agentStack.runtimeConfig.devTeam.workspace.mode, "shared_checkout");
+  assert.equal((patch.agentStack.runtimeConfig.devTeam as Record<string, unknown>).workspace, undefined);
   assert.deepEqual(effectivePatch.agentStack.runtimeConfig.devTeam.swarm, {
     enabled: true,
     serverName: "swarm-bus",
@@ -617,6 +793,7 @@ test("settingsFormModel enables role-selected coding workers even when provider 
   form.stackAdvancedOverridesEnabled = true;
   form.codeAgentEnabled = true;
   form.codeAgentAllowedUserIds = "123456789";
+  form.codeAgentAllowedWorkspaceRoots = "/Users/james/code";
   form.codeAgentProvider = "auto";
   form.codeAgentRoleDesign = "claude_code";
   form.codeAgentRoleImplementation = "codex_cli";

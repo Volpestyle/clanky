@@ -5,6 +5,7 @@
   "type": "module",
   "main": "src/app.ts",
   "scripts": {
+    "postinstall": "bun scripts/install-submodule-deps.mjs",
     "prestart": "bun run build:ui && bun run build:voice",
     "start": "bun src/app.ts",
     "predev": "bun run build:ui",

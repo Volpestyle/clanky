@@ -1,6 +1,5 @@
 import {
   BROWSER_BROWSE_SCHEMA,
-  CODE_TASK_SCHEMA,
   MINECRAFT_TASK_SCHEMA,
   CONVERSATION_SEARCH_SCHEMA,
   IMAGE_LOOKUP_SCHEMA,
@@ -11,6 +10,8 @@ import {
   START_SCREEN_WATCH_SCHEMA,
   STOP_VIDEO_SHARE_SCHEMA,
   PLAY_SOUNDBOARD_SCHEMA,
+  SPAWN_CODE_WORKER_SCHEMA,
+  SWARM_TOOL_SCHEMAS,
   VIDEO_CONTEXT_SCHEMA,
   VOICE_TOOL_SCHEMAS,
   WEB_SCRAPE_SCHEMA,
@@ -38,14 +39,13 @@ export type ReplyToolAvailability = {
   screenShareAvailable?: boolean;
   screenShareSnapshotAvailable?: boolean;
   soundboardAvailable?: boolean;
-  codeAgentAvailable?: boolean;
+  swarmToolsAvailable?: boolean;
   voiceToolsAvailable?: boolean;
   minecraftAvailable?: boolean;
 };
 
 type VoiceRealtimeLocalToolAvailability = {
   browserAvailable: boolean;
-  codeAgentAvailable: boolean;
   minecraftAvailable?: boolean;
   memoryAvailable: boolean;
   screenShareAvailable: boolean;
@@ -70,6 +70,10 @@ type LocalToolRegistryEntry = {
   isVoiceRealtimeAvailable?: (context: VoiceRealtimeToolResolverContext) => boolean;
 };
 
+function areSwarmToolsAvailable(settings: Record<string, unknown>, capabilities: ReplyToolAvailability): boolean {
+  return capabilities.swarmToolsAvailable === true && isDevTaskEnabled(settings);
+}
+
 const TOOL_SCHEMA_BY_NAME = new Map(
   [
     WEB_SEARCH_SCHEMA,
@@ -80,7 +84,8 @@ const TOOL_SCHEMA_BY_NAME = new Map(
     CONVERSATION_SEARCH_SCHEMA,
     IMAGE_LOOKUP_SCHEMA,
     VIDEO_CONTEXT_SCHEMA,
-    CODE_TASK_SCHEMA,
+    SPAWN_CODE_WORKER_SCHEMA,
+    ...SWARM_TOOL_SCHEMAS,
     MINECRAFT_TASK_SCHEMA,
     START_SCREEN_WATCH_SCHEMA,
     SEE_SCREENSHARE_SNAPSHOT_SCHEMA,
@@ -153,10 +158,9 @@ const LOCAL_TOOL_REGISTRY: LocalToolRegistryEntry[] = [
   },
   {
     name: "video_context",
-    surfaces: ["reply", "voice_realtime"],
+    surfaces: ["reply"],
     isReplyAvailable: ({ settings, capabilities }) =>
-      capabilities.videoContextAvailable !== false && Boolean(getVideoContextSettings(settings).enabled),
-    isVoiceRealtimeAvailable: () => true
+      capabilities.videoContextAvailable !== false && Boolean(getVideoContextSettings(settings).enabled)
   },
   {
     name: "start_screen_watch",
@@ -184,12 +188,15 @@ const LOCAL_TOOL_REGISTRY: LocalToolRegistryEntry[] = [
     isVoiceRealtimeAvailable: () => true
   },
   {
-    name: "code_task",
-    surfaces: ["reply", "voice_realtime"],
-    isReplyAvailable: ({ settings, capabilities }) =>
-      capabilities.codeAgentAvailable !== false && isDevTaskEnabled(settings),
-    isVoiceRealtimeAvailable: ({ capabilities }) => capabilities.codeAgentAvailable
+    name: "spawn_code_worker",
+    surfaces: ["reply"],
+    isReplyAvailable: ({ settings, capabilities }) => areSwarmToolsAvailable(settings, capabilities)
   },
+  ...SWARM_TOOL_SCHEMAS.map((schema): LocalToolRegistryEntry => ({
+    name: schema.name,
+    surfaces: ["reply"],
+    isReplyAvailable: ({ settings, capabilities }) => areSwarmToolsAvailable(settings, capabilities)
+  })),
   {
     name: "minecraft_task",
     surfaces: ["reply", "voice_realtime"],
@@ -264,6 +271,12 @@ const LOCAL_TOOL_REGISTRY: LocalToolRegistryEntry[] = [
   },
   {
     name: "media_now_playing",
+    surfaces: ["reply", "voice_realtime"],
+    isReplyAvailable: ({ capabilities }) => Boolean(capabilities.voiceToolsAvailable),
+    isVoiceRealtimeAvailable: () => true
+  },
+  {
+    name: "stream_visualizer",
     surfaces: ["reply", "voice_realtime"],
     isReplyAvailable: ({ capabilities }) => Boolean(capabilities.voiceToolsAvailable),
     isVoiceRealtimeAvailable: () => true

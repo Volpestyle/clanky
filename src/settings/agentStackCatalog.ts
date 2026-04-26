@@ -224,7 +224,7 @@ const AGENT_STACK_PRESET_DEFINITIONS = {
     harness: "internal",
     orchestrator: {
       provider: "openai-oauth",
-      model: "gpt-5.4"
+      model: "gpt-5.5"
     },
     researchRuntime: "local_external_search",
     browserRuntime: "local_browser_agent",
@@ -248,12 +248,12 @@ const AGENT_STACK_PRESET_DEFINITIONS = {
     },
     visionFallback: {
       provider: "openai-oauth",
-      model: "gpt-5.4"
+      model: "gpt-5.5"
     },
     devTeam: {
       orchestrator: {
         provider: "openai-oauth",
-        model: "gpt-5.4"
+        model: "gpt-5.5"
       },
       roles: {
         design: "codex_cli",

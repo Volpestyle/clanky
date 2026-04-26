@@ -1892,7 +1892,7 @@ export class MinecraftSession extends BaseAgentSession {
 
     const task = parsed.task || "";
     let command: ParsedCommand | null = parsed.command ? parseStructuredCommand(parsed.command) : null;
-    let costUsd = 0;
+    const costUsd = 0;
     if (!command && !task) {
       // No task and no recognizable structured command — default to a status read.
       command = { kind: "status" };

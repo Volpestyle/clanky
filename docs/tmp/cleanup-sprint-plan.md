@@ -15,7 +15,7 @@ Organized into phases by dependency order and risk. Each phase is independently 
   - Decomposed `VoiceDebugger.tsx` by extracting `TurnReconstructor`, `AnomalyDetection`, `FlightLog`, and shared debugger types to `dashboard/src/components/voiceDebugger/`
   - Decomposed `VoiceMonitor.tsx` into focused modules under `dashboard/src/components/voiceMonitor/` (`SessionCard`, `ParticipantList`, `MusicDetail`, `StreamWatchDetail`, `LatencyPanel`, `McpPanel`, `ToolCallLog`, `ConversationContext`, `PromptStateViewer`, and shared helpers)
 
-> **Sequencing constraint:** The [code runtime async-dispatch design](../capabilities/code.md#async-dispatch) modifies all four agent session classes, `replyTools.ts`, `bot.ts`, `SubAgentSession`, and adds a new `BackgroundTaskRunner`. Phases 1-5 and 7.1 of this cleanup should land **before** async dispatch work begins, so the new code doesn't perpetuate the duplication and patterns we're removing. See [Sequencing with Async Code Task Work](#sequencing-with-async-code-task-work) at the end.
+> **Superseded sequencing note (2026-04):** The original sequencing constraint here referenced the async code-task design (`BackgroundTaskRunner`, `onProgress` on `SubAgentSession`, etc.). That design has been replaced by the [swarm-launcher redesign](./swarm-launcher-redesign-plan.md), which deletes `codeAgent.ts`, `codexCliAgent.ts`, `backgroundTaskRunner.ts`, and most of the in-process session machinery for code work outright. Phases of this plan that targeted those files (notably 2.4 and 7.1) are partially or fully moot — see inline notes on each.
 
 ---
 
@@ -75,10 +75,12 @@ Canonical source: `src/store/normalize/primitives.ts` exports `isRecord`. Update
 
 ### 2.4 Consolidate `EMPTY_USAGE`
 Export from `src/agents/subAgentSession.ts`. Remove local declarations in:
-- `src/agents/codeAgent.ts`
-- `src/agents/codexAgent.ts`
-- `src/agents/codexCliAgent.ts`
+- ~~`src/agents/codeAgent.ts`~~ — file deleted by swarm-launcher redesign
+- ~~`src/agents/codexCliAgent.ts`~~ — file deleted by swarm-launcher redesign
+- `src/agents/codexAgent.ts` (if still present)
 - `src/agents/browseAgent.ts`
+
+After the swarm-launcher redesign lands, this phase reduces to consolidating the remaining browse/codex-API declarations against the single `subAgentSession.ts` export.
 
 ### 2.5 Consolidate `ErrorWithAttempts`
 - `src/video/videoContextService.ts` should import from `src/retry.ts` instead of redeclaring locally
@@ -198,17 +200,15 @@ Remove bloat, fix brittle patterns.
 
 These are the bigger wins but require more careful execution. Each is independently valuable.
 
-### 7.1 Extract BaseAgentSession (**prerequisite for async code task work**)
-Create `src/agents/baseAgentSession.ts` with shared lifecycle:
-- Common constructor pattern (store, sessionId, workspaceDir, abortController)
-- Shared `runTurn` wrapper with abort/timeout/error handling
-- Shared `cancel()` and `close()` lifecycle
-- Shared logging via `store.logAction`
-- **Design for `onProgress` from the start.** The async code task design adds an `onProgress` callback to `runTurn`. If this callback lives in the base class, the async dispatch work adds it in one place. If we skip this refactor, the async work duplicates progress handling across all 4 sessions.
+### 7.1 Extract BaseAgentSession (**scope reduced by swarm-launcher redesign**)
+Original framing: a shared base class for all four agent sessions, sized to support an `onProgress` callback for async code-task work.
 
-Then `CodeAgentSession`, `CodexAgentSession`, `CodexCliAgentSession`, and `BrowserAgentSession` extend it, only implementing their specific execution logic (an `executeWork()` or similar abstract method).
+After the swarm-launcher redesign, `CodeAgentSession` and `CodexCliAgentSession` are deleted along with the in-process session machinery for code work. `onProgress` is no longer needed (progress comes through swarm `annotate(kind="progress")` events). The remaining `BaseAgentSession` need is:
 
-**Estimated savings: ~400 lines**
+- `BrowserAgentSession` (and possibly `CodexAgentSession` if the OpenAI Codex API agent still uses session shape)
+- `MinecraftAgentSession` (if it lives on the same framework)
+
+Recommendation: defer until the swarm-launcher redesign lands, then re-evaluate whether the remaining 1–2 sessions justify a base class at all, or whether inlining the lifecycle into each is simpler. Estimated savings drop from ~400 lines to ~100–150 lines.
 
 ### 7.2 Decompose VoiceMonitor.tsx and VoiceDebugger.tsx
 Split each into focused sub-components:
@@ -274,58 +274,14 @@ Phases 1-4 are independent and can be done in parallel or any order. Total estim
 
 ---
 
-## Sequencing with Async Code Task Work
+## Sequencing with Async Code Task Work (superseded)
 
-The [code runtime async-dispatch design](../capabilities/code.md#async-dispatch) touches a large cross-section of the files this cleanup targets. The two efforts must be sequenced carefully or the async work will perpetuate the exact problems we're cleaning up.
+This section originally laid out how cleanup phases should interleave with the async code-task design. That design no longer exists — the [swarm-launcher redesign](./swarm-launcher-redesign-plan.md) replaces it by deleting the in-process code-session path entirely (`codeAgent.ts`, `codexCliAgent.ts`, `backgroundTaskRunner.ts`, and the `asyncDispatch` settings tree all go away).
 
-### Files touched by both efforts
+Practical implications for this cleanup plan:
 
-| Cleanup Phase | Async Design Phase | Shared File(s) | Conflict |
-|---|---|---|---|
-| 2.4 (EMPTY_USAGE) | 2a (onProgress on SubAgentSession) | All 4 agent session files | Async adds code to the same files where EMPTY_USAGE is duplicated. Clean first or it stays. |
-| 4.1 (import aliases) | 1c-1d (deliverAsyncTaskResult on bot.ts) | `src/bot.ts` | New method + wiring would be written with aliased imports if cleanup hasn't landed. |
-| 5.6 (replyTools constants) | 1b (async dispatch in executeCodeTask) | `src/tools/replyTools.ts` | Both modify the same file. Clean first to avoid merge conflicts. |
-| 7.1 (BaseAgentSession) | 2a-2c (onProgress callback) | All agent session files + subAgentSession.ts | **Critical.** If BaseAgentSession exists, onProgress goes in the base class once. If not, progress handling is duplicated across 4 sessions. |
-| 7.3 (slim runtime factories) | 1c-1d (BackgroundTaskRunner wiring) | `src/bot.ts`, `src/bot/botRuntimeFactories.ts` | New component should follow the simplified pattern, not the over-engineered one. |
+- Phase 2.4 (`EMPTY_USAGE` consolidation) shrinks: two of its target files are deleted by the redesign.
+- Phase 7.1 (`BaseAgentSession` extraction) loses most of its rationale: only browse / minecraft sessions remain on the framework. Defer until the redesign lands and re-scope from there.
+- Other cleanup phases (1, 3, 4, 5, 6, 7.2, 7.4, 7.5) are independent of the redesign and can land on either side of it.
 
-### Recommended ordering
-
-```
- CLEANUP                              ASYNC CODE TASK
- ───────                              ───────────────
- Phase 1 (Dead Code)         ─┐
- Phase 2 (Type Dedup)         │
- Phase 3 (Dashboard Hygiene)  ├─ parallel, no deps
- Phase 4 (Import Aliases)     │
-                              │
- Phase 5 (Logic Dedup)       ─┤
- Phase 6 (Test Cleanup)       │
-                              │
- Phase 7.1 (BaseAgentSession) ┘
-   - Design with onProgress
-     callback placeholder
-   -- run tests, verify --
-                                      Phase 1a-1d (BackgroundTaskRunner,
- Phase 7.3 (Slim runtime factories) ──  async dispatch, delivery,
-                                        bot wiring)
-   -- run tests, verify --
-                                      Phase 2a-2c (Progress streaming,
-                                        stream parsing changes)
-
-                                      Phase 3a-3d (Polish: milestone
-                                        reports, voice, dashboard,
-                                        cancellation)
- Phase 7.2 (Dashboard decomp) ───────  (can run in parallel with
- Phase 7.4 (VoiceSession index sig)     async Phase 3)
- Phase 7.5 (Magic numbers)
-```
-
-### Guidelines for async code task implementation
-
-To avoid re-introducing the patterns we're cleaning up, the async implementation should:
-
-1. **`BackgroundTaskRunner`** should NOT use `ForModuleName` import aliases, should NOT duplicate types locally, and should NOT become a god object. Keep it focused: dispatch, track, deliver.
-2. **`onProgress` callback** should be defined on `BaseAgentSession` (if 7.1 has landed) or on the `SubAgentSession` interface. Not duplicated across each concrete session.
-3. **`deliverAsyncTaskResult` on bot.ts** should be a thin method that delegates to a dedicated delivery function (not 200 lines inline on the god class).
-4. **New settings** (`asyncDispatch` under `agentStack.runtimeConfig.devTeam.<worker>`) should flow through the existing normalization pipeline. Add a normalizer in `src/store/normalize/agentStack.ts` rather than ad-hoc parsing.
-5. **New prompt builder** (`buildCodeTaskResultPrompt` in `promptText.ts`) is fine as a new function. Keep it focused; don't let it grow to 300+ lines like `buildReplyPrompt`.
+If you need a sequencing diagram, work it against the [swarm-launcher parallel-execution plan](./swarm-launcher-redesign-parallel-execution.md) instead of this section.

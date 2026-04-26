@@ -913,6 +913,6 @@ export function buildCodeTaskResultPrompt({
   }
   lines.push("");
   lines.push("This is an async code task completion event, not a chat message.");
-  lines.push("Compose a natural follow-up for the user who requested this task.");
+  lines.push("Compose a natural follow-up for the user who requested this task. Do not output [SKIP].");
   return lines.join("\n");
 }

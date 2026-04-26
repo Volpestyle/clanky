@@ -2,9 +2,14 @@ sequenceDiagram
     autonumber
     participant Proc as Bun Process
     participant Store as Store (SQLite)
+    participant Log as RuntimeActionLogger
     participant Memory as MemoryManager
     participant LLM as LLMService
     participant Disc as DiscoveryService
+    participant Gif as GifService
+    participant Search as WebSearchService
+    participant Video as VideoContextService
+    participant Browser as BrowserManager
     participant Bot as ClankerBot
     participant Dash as DashboardServer
     participant Pub as PublicHttpsEntrypoint
@@ -12,9 +17,15 @@ sequenceDiagram
     participant Discord as Discord API
 
     Proc->>Store: init() (create tables + default settings)
+    Proc->>Log: new RuntimeActionLogger() + attachToStore()
     Proc->>LLM: new LLMService()
     Proc->>Disc: new DiscoveryService()
+    Proc->>Gif: new GifService()
+    Proc->>Search: new WebSearchService()
+    Proc->>Video: new VideoContextService()
     Proc->>Memory: refreshMemoryMarkdown() (curation pass)
+    Proc->>LLM: warmup()
+    Proc->>Browser: new BrowserManager()
     Proc->>Bot: new ClankerBot(...)
     Proc->>Pub: new PublicHttpsEntrypoint()
     Proc->>Scr: initialize tokenized share-session manager

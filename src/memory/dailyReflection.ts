@@ -222,7 +222,7 @@ function buildReflectionOnePassPrompts({
     "Use confidence to signal how sure you are: 0.9+ for stuff they clearly said or typed, lower for things you're inferring or that came from noisy voice transcripts.",
     "Evidence should be a short quote or excerpt from the journal that best supports the fact.",
     "",
-    `Return strict JSON only: {"facts":[{"subject":"author|bot|lore","subjectName":"<display name if author, empty otherwise>","fact":"...","type":"preference|profile|relationship|project|other","confidence":0.0-1.0,"evidence":"short quote or excerpt"}]}.`,
+    `Return strict JSON only: {"facts":[{"subject":"author|bot|lore","subjectName":"<display name if author, empty otherwise>","fact":"...","type":"preference|profile|relationship|project|other","confidence":0.0-1.0,"evidence":"short quote or excerpt","supersedes":"exact existing fact text being replaced, or empty string"}]}.`,
     "If nothing worth remembering happened today, return {\"facts\":[]}. That's fine — not every day is memorable."
   ].filter(Boolean).join("\n");
 

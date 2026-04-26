@@ -225,7 +225,7 @@ test("browser_browse stays available for hosted computer use when OpenAI OAuth i
   assert.ok(names.includes("browser_browse"), "browser_browse should be included");
 });
 
-test("code_task excluded when code agent is enabled but runtime hooks are unavailable", () => {
+test("swarm code tools are not exposed as realtime-local voice tools", () => {
   const { manager } = createManager();
   const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
@@ -243,34 +243,8 @@ test("code_task excluded when code agent is enabled but runtime hooks are unavai
   });
 
   const names = tools.map((t: { name: string }) => t.name);
-  assert.ok(!names.includes("code_task"), "code_task should be excluded without executable hooks");
-});
-
-test("code_task included when code agent is enabled and one-shot runtime hook is available", () => {
-  const { manager } = createManager();
-  manager.runModelRequestedCodeTask = async () => ({ text: "ok" });
-  const tools = resolveVoiceRealtimeToolDescriptors(manager, {
-    session: null,
-    settings: createTestSettings({
-      permissions: {
-        devTasks: {
-          allowedUserIds: ["user-1"]
-        }
-      },
-      agentStack: {
-        runtimeConfig: {
-          devTeam: {
-            claudeCode: {
-              enabled: true
-            }
-          }
-        }
-      }
-    })
-  });
-
-  const names = tools.map((t: { name: string }) => t.name);
-  assert.ok(names.includes("code_task"), "code_task should be included when runtime hook is available");
+  assert.ok(!names.includes("spawn_code_worker"), "spawn_code_worker should stay on the reply tool surface");
+  assert.ok(!names.includes("request_task"), "swarm task tools should stay on the reply tool surface");
 });
 
 test("voice minecraft_task tool is included when Minecraft is enabled and session hooks are available", () => {

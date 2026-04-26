@@ -158,6 +158,7 @@ After a voice session ends or a text thread goes quiet, a lightweight reflection
 
 - catches facts not saved in the moment
 - stays narrow to the recent session or quiet text window
+- can supersede an existing fact by returning the exact older fact text alongside the replacement
 - uses the same durable write path as direct writes
 
 This is especially important in voice, where the model is often focused on responding rather than filing memory in real time.
@@ -177,6 +178,7 @@ A broader reflection pass reviews the day journal and distills durable facts.
 
 - sees larger patterns across multiple sessions
 - merges near-duplicates against existing memory
+- emits a `supersedes` value for each candidate fact, using the exact existing fact text when replacing memory and an empty value otherwise
 - writes through the same validation, dedupe, and archival path
 
 This turns raw journal history into longer-lived memory.

@@ -4,7 +4,6 @@ import {
   getResolvedBrowserTaskConfig,
   getVoiceSoundboardSettings,
   isBrowserEnabled,
-  isDevTaskEnabled,
   isMinecraftEnabled,
   isResearchEnabled
 } from "../settings/agentStack.ts";
@@ -221,9 +220,6 @@ export function resolveVoiceRealtimeToolDescriptors(
       manager.browserManager &&
       (browserTaskConfig.runtime !== "openai_computer_use" || computerUseClient?.client)
   );
-  const includeCodeAgent = Boolean(
-    isDevTaskEnabled(settings) && ((manager.createCodeAgentSession && manager.subAgentSessions) || manager.runModelRequestedCodeTask)
-  );
   const includeMinecraft = Boolean(
     isMinecraftEnabled(settings) && manager.createMinecraftSession && manager.subAgentSessions
   );
@@ -240,7 +236,6 @@ export function resolveVoiceRealtimeToolDescriptors(
   );
   const localTools = buildVoiceRealtimeLocalToolSchemas({
     browserAvailable: includeBrowser,
-    codeAgentAvailable: includeCodeAgent,
     minecraftAvailable: includeMinecraft,
     memoryAvailable: includeMemory,
     screenShareAvailable: includeScreenShare,

@@ -24,7 +24,7 @@ Ask it to check your GitHub issues? It can browse the page and summarize them. A
 - Image generation (GPT Image, Grok Imagine)
 - Video generation (Grok Imagine Video)
 - GIF search (GIPHY)
-- Claude Code/Codex agents for coding tasks (file editing, git, PRs) — allowed users only, with local workers running in disposable git worktrees
+- Claude Code/Codex agents for coding tasks (file editing, git, PRs) — allowed users only, coordinated through `swarm-mcp` so workers can lock files, share annotations, and report progress back into the chat
 - Music playback with queue management (yt-dlp + ffmpeg)
 - MCP servers for extensibility
 
@@ -58,14 +58,35 @@ Ask it to check your GitHub issues? It can browse the page and summarize them. A
 ## Setup
 
 ```bash
+git clone --recurse-submodules https://github.com/Volpestyle/clanky.git
+cd clanky
 cp .env.example .env
 bun install
 ```
 
+If you already cloned without `--recurse-submodules`:
+
+```bash
+git submodule update --init --recursive
+bun install
+```
+
+Submodules vendored:
+
+- `src/voice/clankvox` — Rust media plane for Discord voice
+- `mcp-servers/swarm-mcp` — coordination substrate for code workers (auto-installed by `bun install`'s postinstall)
+
 ### Required
 
 - `DISCORD_TOKEN`
-- At least one model credential or refresh token: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `GOOGLE_API_KEY`, `ELEVENLABS_API_KEY`, `CLAUDE_OAUTH_REFRESH_TOKEN`, `OPENAI_OAUTH_REFRESH_TOKEN`, or the legacy alias `CODEX_OAUTH_REFRESH_TOKEN`
+
+### Model Providers
+
+Configure at least one text model provider for model-backed replies and tool reasoning:
+
+- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `CLAUDE_OAUTH_REFRESH_TOKEN`, `OPENAI_OAUTH_REFRESH_TOKEN`, or the legacy alias `CODEX_OAUTH_REFRESH_TOKEN`
+
+Voice-specific providers such as Gemini or ElevenLabs require their own credentials when those runtimes are enabled.
 
 ### Common Optional
 
@@ -84,8 +105,7 @@ bun install
 | `STREAM_LINK_FALLBACK` | Keep share-link screen-watch fallback enabled (default `true`) |
 
 For voice features, install `ffmpeg` and `yt-dlp` on the host.
-For optional local code-agent runtimes, ensure `claude` and/or `codex` CLI is on `PATH`.
-Point the code-agent working directory at a git repo root or subdirectory; local workers execute inside disposable worktree branches instead of the live checkout.
+For optional local code-agent runtimes, ensure `claude` and/or `codex` CLI is on `PATH`. Code workers run as swarm peers via the vendored `swarm-mcp` submodule (the `bun install` postinstall installs its dependencies automatically). Workers run in the operator's checkout — Clanky does not create or manage `git worktree`s; if you want isolated workspaces, manage your own worktrees and set the working directory accordingly.
 See [.env.example](.env.example) for the full env surface, including public-tunnel, logging, and E2E test variables.
 
 ### Browser Profile (Authenticated Browsing)

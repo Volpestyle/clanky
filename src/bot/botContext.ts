@@ -123,9 +123,7 @@ type GetVoiceScreenWatchCapabilityFn = typeof import("./screenShare.ts").getVoic
 type StartVoiceScreenWatchFn = typeof import("./screenShare.ts").startVoiceScreenWatch;
 type MaybeHandleScreenWatchIntentFn = typeof import("./screenShare.ts").maybeHandleScreenWatchIntent;
 type RunModelRequestedBrowserBrowseFn = typeof import("./agentTasks.ts").runModelRequestedBrowserBrowse;
-type RunModelRequestedCodeTaskFn = typeof import("./agentTasks.ts").runModelRequestedCodeTask;
 type BuildSubAgentSessionsRuntimeFn = typeof import("./agentTasks.ts").buildSubAgentSessionsRuntime;
-type DispatchBackgroundCodeTaskFn = ClankerBot["dispatchBackgroundCodeTask"];
 type ResolveMediaAttachmentFn = typeof import("./mediaAttachment.ts").resolveMediaAttachment;
 type MaybeAttachReplyGifFn = typeof import("./mediaAttachment.ts").maybeAttachReplyGif;
 type MaybeAttachGeneratedImageFn = typeof import("./mediaAttachment.ts").maybeAttachGeneratedImage;
@@ -198,8 +196,9 @@ type ReplyPipelineRuntimeMember =
   | "gifs"
   | "search"
   | "voiceSessionManager"
-  | "dispatchBackgroundCodeTask"
-  | "backgroundTaskRunner"
+  | "swarmPeerManager"
+  | "swarmReservationKeeper"
+  | "swarmActivityBridge"
   | "getReactionEmojiOptions"
   | "getEmojiHints"
   | "maybeHandleStructuredAutomationIntent"
@@ -233,9 +232,7 @@ export interface ReplyPipelineRuntime extends BotContext, Pick<ClankerBot, Reply
   captionRecentHistoryImages: CaptionRecentHistoryImagesRuntimeFn;
   getVoiceScreenWatchCapability: StripFirstArg<GetVoiceScreenWatchCapabilityFn>;
   runModelRequestedBrowserBrowse: StripFirstArg<RunModelRequestedBrowserBrowseFn>;
-  runModelRequestedCodeTask: StripFirstArg<RunModelRequestedCodeTaskFn>;
   buildSubAgentSessionsRuntime: StripFirstArg<BuildSubAgentSessionsRuntimeFn>;
-  dispatchBackgroundCodeTask: DispatchBackgroundCodeTaskFn;
   runModelRequestedImageLookup: RunModelRequestedImageLookupRuntimeFn;
   mergeImageInputs: MergeImageInputsFn;
   maybeHandleScreenWatchIntent: MaybeHandleScreenWatchIntentRuntimeFn;
@@ -412,9 +409,8 @@ export interface VoiceReplyRuntime extends BotContext {
   startVoiceScreenWatch: StripFirstArg<StartVoiceScreenWatchFn>;
   runModelRequestedBrowserBrowse: StripFirstArg<RunModelRequestedBrowserBrowseFn>;
   buildBrowserBrowseContext: StripFirstArg<BuildBrowserBrowseContextFn>;
-  runModelRequestedCodeTask: StripFirstArg<RunModelRequestedCodeTaskFn>;
+  swarmPeerManager?: import("../agents/swarmPeerManager.ts").ClankySwarmPeerManager;
+  swarmReservationKeeper?: import("../agents/swarmReservationKeeper.ts").SwarmReservationKeeper;
+  swarmActivityBridge?: import("../agents/swarmActivityBridge.ts").SwarmActivityBridge;
   buildSubAgentSessionsRuntime?: StripFirstArg<BuildSubAgentSessionsRuntimeFn>;
-  dispatchBackgroundCodeTask?: DispatchBackgroundCodeTaskFn;
-  backgroundTaskRunner?: import("../agents/backgroundTaskRunner.ts").BackgroundTaskRunner | null;
 }
-

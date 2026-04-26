@@ -4,7 +4,6 @@ import {
   type Settings,
   type SettingsInput
 } from "../../src/settings/settingsSchema.ts";
-import { normalizeCodeAgentWorkspaceModeSetting } from "../../src/settings/codeAgentWorkspaceMode.ts";
 import {
   buildDashboardSettingsEnvelope,
   isDashboardSettingsEnvelope,
@@ -44,6 +43,7 @@ import {
 import {
   OPENAI_REALTIME_SESSION_MODEL_OPTIONS
 } from "../../src/voice/realtimeProviderNormalization.ts";
+import { deepMerge } from "../../src/utils.ts";
 export const OPENAI_REALTIME_MODEL_OPTIONS = OPENAI_REALTIME_SESSION_MODEL_OPTIONS.slice(0, 3);
 
 export const OPENAI_REALTIME_VOICE_OPTIONS = Object.freeze([
@@ -89,6 +89,8 @@ const BROWSER_PROVIDER_MODEL_FALLBACKS = Object.freeze({
   openai: ["gpt-5-mini"]
 });
 
+const SETTINGS_FORM_BASE = Symbol("settingsFormBase");
+
 export const BROWSER_RUNTIME_SELECTION_OPTIONS = Object.freeze([
   "inherit",
   "local_browser_agent",
@@ -130,6 +132,20 @@ function resolveSettingsEnvelope(settings: unknown): DashboardSettingsEnvelope {
     return settings;
   }
   return buildDashboardSettingsEnvelope({ intent: settings || DEFAULT_SETTINGS });
+}
+
+function withSettingsFormBase<T extends object>(
+  form: T,
+  base: Settings
+): T & { [SETTINGS_FORM_BASE]: Settings } {
+  return {
+    ...form,
+    [SETTINGS_FORM_BASE]: base
+  };
+}
+
+function getSettingsFormBase(form: object): Settings | undefined {
+  return (form as { [SETTINGS_FORM_BASE]?: Settings })[SETTINGS_FORM_BASE];
 }
 
 function buildSettingsFormView(settings: unknown) {
@@ -277,7 +293,6 @@ function buildSettingsFormView(settings: unknown) {
         Number(devTeam.claudeCode?.maxBufferBytes || 0)
       ),
       defaultCwd: String(devTeam.codexCli?.defaultCwd || devTeam.claudeCode?.defaultCwd || ""),
-      workspaceMode: String(devTeam.workspace?.mode || "auto"),
       maxTasksPerHour: Math.max(
         Number(devTeam.codexCli?.maxTasksPerHour || 0),
         Number(devTeam.claudeCode?.maxTasksPerHour || 0)
@@ -286,27 +301,8 @@ function buildSettingsFormView(settings: unknown) {
         Number(devTeam.codexCli?.maxParallelTasks || 0),
         Number(devTeam.claudeCode?.maxParallelTasks || 0)
       ),
-      asyncDispatchEnabled: Boolean(
-        devTeam.codexCli?.asyncDispatch?.enabled ||
-        devTeam.claudeCode?.asyncDispatch?.enabled
-      ),
-      asyncDispatchThresholdMs: Math.max(
-        Number(devTeam.codexCli?.asyncDispatch?.thresholdMs || 0),
-        Number(devTeam.claudeCode?.asyncDispatch?.thresholdMs || 0)
-      ),
-      asyncProgressReportsEnabled: Boolean(
-        devTeam.codexCli?.asyncDispatch?.progressReports?.enabled ||
-        devTeam.claudeCode?.asyncDispatch?.progressReports?.enabled
-      ),
-      asyncProgressIntervalMs: Math.max(
-        Number(devTeam.codexCli?.asyncDispatch?.progressReports?.intervalMs || 0),
-        Number(devTeam.claudeCode?.asyncDispatch?.progressReports?.intervalMs || 0)
-      ),
-      asyncMaxReportsPerTask: Math.max(
-        Number(devTeam.codexCli?.asyncDispatch?.progressReports?.maxReportsPerTask || 0),
-        Number(devTeam.claudeCode?.asyncDispatch?.progressReports?.maxReportsPerTask || 0)
-      ),
       allowedUserIds: devPermissions.allowedUserIds,
+      allowedWorkspaceRoots: devPermissions.allowedWorkspaceRoots,
       roleDesign: String(resolvedStack?.devTeam?.roles?.design || ""),
       roleImplementation: String(resolvedStack?.devTeam?.roles?.implementation || ""),
       roleReview: String(resolvedStack?.devTeam?.roles?.review || ""),
@@ -316,7 +312,6 @@ function buildSettingsFormView(settings: unknown) {
         claudeCode: { ...devTeam.claudeCode }
       },
       nonWorkerRuntimeConfig: {
-        workspace: { ...valueOr(devTeam.workspace, d.agentStack.runtimeConfig.devTeam.workspace) },
         swarm: { ...valueOr(devTeam.swarm, d.agentStack.runtimeConfig.devTeam.swarm) }
       }
     },
@@ -474,7 +469,7 @@ export function settingsToForm(settings: unknown) {
   const defaultDiscovery = defaults.discovery;
   const activity = resolved.activity;
   const selectedVoiceProvider = resolved.voice.voiceProvider;
-  return {
+  const form = {
     stackPreset: resolved.agentStack.preset ?? DEFAULT_SETTINGS.agentStack.preset,
     stackAdvancedOverridesEnabled:
       resolved.agentStack.advancedOverridesEnabled ?? DEFAULT_SETTINGS.agentStack.advancedOverridesEnabled,
@@ -569,20 +564,11 @@ export function settingsToForm(settings: unknown) {
     codeAgentTimeoutMs: resolved.codeAgent.timeoutMs ?? defaults.codeAgent.timeoutMs,
     codeAgentMaxBufferBytes: resolved.codeAgent.maxBufferBytes ?? defaults.codeAgent.maxBufferBytes,
     codeAgentDefaultCwd: resolved.codeAgent.defaultCwd ?? defaults.codeAgent.defaultCwd,
-    codeAgentWorkspaceMode: resolved.codeAgent.workspaceMode ?? defaults.codeAgent.workspaceMode,
     codeAgentMaxTasksPerHour: resolved.codeAgent.maxTasksPerHour ?? defaults.codeAgent.maxTasksPerHour,
     codeAgentMaxParallelTasks: resolved.codeAgent.maxParallelTasks ?? defaults.codeAgent.maxParallelTasks,
-    codeAgentAsyncDispatchEnabled:
-      resolved.codeAgent.asyncDispatchEnabled ?? defaults.codeAgent.asyncDispatchEnabled,
-    codeAgentAsyncDispatchThresholdMs:
-      resolved.codeAgent.asyncDispatchThresholdMs ?? defaults.codeAgent.asyncDispatchThresholdMs,
-    codeAgentAsyncProgressReportsEnabled:
-      resolved.codeAgent.asyncProgressReportsEnabled ?? defaults.codeAgent.asyncProgressReportsEnabled,
-    codeAgentAsyncProgressIntervalMs:
-      resolved.codeAgent.asyncProgressIntervalMs ?? defaults.codeAgent.asyncProgressIntervalMs,
-    codeAgentAsyncMaxReportsPerTask:
-      resolved.codeAgent.asyncMaxReportsPerTask ?? defaults.codeAgent.asyncMaxReportsPerTask,
     codeAgentAllowedUserIds: formatLineList(resolved.codeAgent.allowedUserIds ?? defaults.codeAgent.allowedUserIds),
+    codeAgentAllowedWorkspaceRoots:
+      formatLineList(resolved.codeAgent.allowedWorkspaceRoots ?? defaults.codeAgent.allowedWorkspaceRoots),
     codeAgentRoleDesign: String(resolved.codeAgent.roleDesign ?? "claude_code"),
     codeAgentRoleImplementation: String(resolved.codeAgent.roleImplementation ?? "claude_code"),
     codeAgentRoleReview: String(resolved.codeAgent.roleReview ?? "claude_code"),
@@ -893,9 +879,16 @@ export function settingsToForm(settings: unknown) {
     blockedChannels: formatLineList(resolved?.permissions?.blockedChannelIds),
     blockedUsers: formatLineList(resolved?.permissions?.blockedUserIds)
   };
+  return withSettingsFormBase(form, envelope.effective);
 }
 
 type SettingsForm = ReturnType<typeof settingsToForm>;
+
+function mergeWithPreservedSettingsBase(form: SettingsForm, editedInput: SettingsInput): SettingsInput {
+  const base = getSettingsFormBase(form);
+  if (!base) return editedInput;
+  return deepMerge(base, editedInput) as SettingsInput;
+}
 
 export function getEffectiveBrowserRuntime(form: Record<string, unknown> | null | undefined) {
   const selection = normalizeBrowserRuntimeSelection(form?.browserRuntimeSelection);
@@ -909,9 +902,13 @@ export function getCodeAgentValidationError(form: SettingsForm): string {
     return "";
   }
   const patch = formToSettingsPatch(form);
-  return (patch.permissions?.devTasks?.allowedUserIds || []).length > 0
-    ? ""
-    : "Add at least one allowed user ID before enabling the code agent.";
+  if ((patch.permissions?.devTasks?.allowedUserIds || []).length === 0) {
+    return "Add at least one allowed user ID before enabling the code agent.";
+  }
+  if ((patch.permissions?.devTasks?.allowedWorkspaceRoots || []).length === 0) {
+    return "Add at least one allowed coding workspace root before enabling the code agent.";
+  }
+  return "";
 }
 
 type SettingsFormValidationError = {
@@ -968,6 +965,76 @@ function validateNumericField({
     };
   }
 
+  return null;
+}
+
+let numericFormKeys: string[] | null = null;
+
+function getNumericFormKeys() {
+  if (numericFormKeys) return numericFormKeys;
+  const defaults = settingsToForm({});
+  numericFormKeys = Object.entries(defaults)
+    .filter(([, value]) => typeof value === "number")
+    .map(([key]) => key);
+  return numericFormKeys;
+}
+
+function getNumericFieldSectionId(key: string) {
+  if (key.startsWith("voice")) return "sec-voice";
+  if (key.startsWith("webSearch") || key.startsWith("browser")) return "sec-research";
+  if (
+    key.startsWith("vision") ||
+    key.startsWith("videoContext") ||
+    key.startsWith("discovery") ||
+    key.startsWith("replyImage") ||
+    key.startsWith("replyVideo") ||
+    key === "maxImagesPerDay" ||
+    key === "maxVideosPerDay" ||
+    key === "maxGifsPerDay"
+  ) {
+    return "sec-media";
+  }
+  if (
+    key === "maxMessages" ||
+    key === "maxReactions" ||
+    key === "minGap" ||
+    key.startsWith("catchup")
+  ) {
+    return "sec-perms";
+  }
+  if (key.startsWith("textInitiative") || key.startsWith("minecraft")) return "sec-behavior";
+  return "sec-advanced";
+}
+
+function formatNumericFieldLabel(key: string) {
+  const label = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/\bllm\b/g, "LLM")
+    .replace(/\basr\b/g, "ASR")
+    .replace(/\btts\b/g, "TTS")
+    .replace(/\bai\b/g, "AI");
+  return label.replace(/^./, (first) => first.toUpperCase());
+}
+
+function getRequiredNumericFormValidationError(form: SettingsForm): SettingsFormValidationError | null {
+  const current = form as Record<string, unknown>;
+  for (const key of getNumericFormKeys()) {
+    const value = current[key];
+    const label = formatNumericFieldLabel(key);
+    if (isBlankNumericInput(value)) {
+      return {
+        sectionId: getNumericFieldSectionId(key),
+        message: `${label} is required.`
+      };
+    }
+    if (!Number.isFinite(Number(value))) {
+      return {
+        sectionId: getNumericFieldSectionId(key),
+        message: `${label} must be a valid number.`
+      };
+    }
+  }
   return null;
 }
 
@@ -1156,44 +1223,6 @@ export function getSettingsValidationError(form: SettingsForm): SettingsFormVali
       max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxBufferBytes.max
     }),
     validateNumericField({
-      enabled: Boolean(
-        form.stackAdvancedOverridesEnabled &&
-        form.codeAgentEnabled &&
-        form.codeAgentAsyncDispatchEnabled
-      ),
-      sectionId: "sec-code-agent",
-      label: "Async dispatch threshold (ms)",
-      value: form.codeAgentAsyncDispatchThresholdMs,
-      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchThresholdMs.min,
-      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchThresholdMs.max
-    }),
-    validateNumericField({
-      enabled: Boolean(
-        form.stackAdvancedOverridesEnabled &&
-        form.codeAgentEnabled &&
-        form.codeAgentAsyncDispatchEnabled &&
-        form.codeAgentAsyncProgressReportsEnabled
-      ),
-      sectionId: "sec-code-agent",
-      label: "Async progress interval (ms)",
-      value: form.codeAgentAsyncProgressIntervalMs,
-      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchProgressIntervalMs.min,
-      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchProgressIntervalMs.max
-    }),
-    validateNumericField({
-      enabled: Boolean(
-        form.stackAdvancedOverridesEnabled &&
-        form.codeAgentEnabled &&
-        form.codeAgentAsyncDispatchEnabled &&
-        form.codeAgentAsyncProgressReportsEnabled
-      ),
-      sectionId: "sec-code-agent",
-      label: "Async max progress reports per task",
-      value: form.codeAgentAsyncMaxReportsPerTask,
-      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.min,
-      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.asyncDispatchMaxReportsPerTask.max
-    }),
-    validateNumericField({
       enabled: Boolean(form.minecraftEnabled),
       sectionId: "sec-minecraft",
       label: "Minecraft narration eagerness",
@@ -1211,7 +1240,7 @@ export function getSettingsValidationError(form: SettingsForm): SettingsFormVali
     })
   ].filter((entry): entry is SettingsFormValidationError => entry !== null);
 
-  return validations[0] || null;
+  return validations[0] || getRequiredNumericFormValidationError(form);
 }
 
 function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
@@ -1222,13 +1251,12 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
   const rawCodeAgentNonWorkerRuntimeConfig: Record<string, unknown> = isRecordLike(form.codeAgentNonWorkerRuntimeConfig)
     ? form.codeAgentNonWorkerRuntimeConfig
     : {};
+  const codeAgentSwarmRuntimeConfig = isRecordLike(rawCodeAgentNonWorkerRuntimeConfig.swarm)
+    ? { swarm: rawCodeAgentNonWorkerRuntimeConfig.swarm }
+    : {};
   const rawMinecraftRuntimeConfig: Record<string, unknown> = isRecordLike(form.minecraftRuntimeConfig)
     ? form.minecraftRuntimeConfig
     : {};
-  const normalizedCodeAgentWorkspaceMode = normalizeCodeAgentWorkspaceModeSetting(
-    form.codeAgentWorkspaceMode,
-    DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.workspace.mode
-  );
   const preservedCodeAgentWorkers = {
     codexCli: rawCodeAgentWorkerConfigs.codexCli,
     claudeCode: rawCodeAgentWorkerConfigs.claudeCode
@@ -1258,26 +1286,6 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
     maxParallelTasks: Math.max(
       Number(preservedCodeAgentWorkers.codexCli.maxParallelTasks || 0),
       Number(preservedCodeAgentWorkers.claudeCode.maxParallelTasks || 0)
-    ),
-    asyncDispatchEnabled: Boolean(
-      preservedCodeAgentWorkers.codexCli.asyncDispatch?.enabled ||
-      preservedCodeAgentWorkers.claudeCode.asyncDispatch?.enabled
-    ),
-    asyncDispatchThresholdMs: Math.max(
-      Number(preservedCodeAgentWorkers.codexCli.asyncDispatch?.thresholdMs || 0),
-      Number(preservedCodeAgentWorkers.claudeCode.asyncDispatch?.thresholdMs || 0)
-    ),
-    asyncProgressReportsEnabled: Boolean(
-      preservedCodeAgentWorkers.codexCli.asyncDispatch?.progressReports?.enabled ||
-      preservedCodeAgentWorkers.claudeCode.asyncDispatch?.progressReports?.enabled
-    ),
-    asyncProgressIntervalMs: Math.max(
-      Number(preservedCodeAgentWorkers.codexCli.asyncDispatch?.progressReports?.intervalMs || 0),
-      Number(preservedCodeAgentWorkers.claudeCode.asyncDispatch?.progressReports?.intervalMs || 0)
-    ),
-    asyncMaxReportsPerTask: Math.max(
-      Number(preservedCodeAgentWorkers.codexCli.asyncDispatch?.progressReports?.maxReportsPerTask || 0),
-      Number(preservedCodeAgentWorkers.claudeCode.asyncDispatch?.progressReports?.maxReportsPerTask || 0)
     )
   };
   const codeAgentSharedOverrides = {
@@ -1286,12 +1294,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
     maxBufferBytes: Number(form.codeAgentMaxBufferBytes),
     defaultCwd: String(form.codeAgentDefaultCwd || "").trim(),
     maxTasksPerHour: Number(form.codeAgentMaxTasksPerHour),
-    maxParallelTasks: Number(form.codeAgentMaxParallelTasks),
-    asyncDispatchEnabled: Boolean(form.codeAgentAsyncDispatchEnabled),
-    asyncDispatchThresholdMs: Number(form.codeAgentAsyncDispatchThresholdMs),
-    asyncProgressReportsEnabled: Boolean(form.codeAgentAsyncProgressReportsEnabled),
-    asyncProgressIntervalMs: Number(form.codeAgentAsyncProgressIntervalMs),
-    asyncMaxReportsPerTask: Number(form.codeAgentAsyncMaxReportsPerTask)
+    maxParallelTasks: Number(form.codeAgentMaxParallelTasks)
   };
   const shouldOverrideSharedCodeAgentField = (
     field: keyof typeof preservedCodeAgentAggregate
@@ -1315,7 +1318,6 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
   }) => {
     const preserved = preservedCodeAgentWorkers[workerKey];
     return {
-      ...preserved,
       enabled,
       model: String(model || fallbackModel).trim(),
       maxTurns: shouldOverrideSharedCodeAgentField("maxTurns")
@@ -1335,39 +1337,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
         : Number(preserved.maxTasksPerHour ?? codeAgentSharedOverrides.maxTasksPerHour),
       maxParallelTasks: shouldOverrideSharedCodeAgentField("maxParallelTasks")
         ? codeAgentSharedOverrides.maxParallelTasks
-        : Number(preserved.maxParallelTasks ?? codeAgentSharedOverrides.maxParallelTasks),
-      asyncDispatch: {
-        enabled: shouldOverrideSharedCodeAgentField("asyncDispatchEnabled")
-          ? codeAgentSharedOverrides.asyncDispatchEnabled
-          : Boolean(
-              preserved.asyncDispatch?.enabled ?? codeAgentSharedOverrides.asyncDispatchEnabled
-            ),
-        thresholdMs: shouldOverrideSharedCodeAgentField("asyncDispatchThresholdMs")
-          ? codeAgentSharedOverrides.asyncDispatchThresholdMs
-          : Number(
-              preserved.asyncDispatch?.thresholdMs ?? codeAgentSharedOverrides.asyncDispatchThresholdMs
-            ),
-        progressReports: {
-          enabled: shouldOverrideSharedCodeAgentField("asyncProgressReportsEnabled")
-            ? codeAgentSharedOverrides.asyncProgressReportsEnabled
-            : Boolean(
-                preserved.asyncDispatch?.progressReports?.enabled ??
-                codeAgentSharedOverrides.asyncProgressReportsEnabled
-              ),
-          intervalMs: shouldOverrideSharedCodeAgentField("asyncProgressIntervalMs")
-            ? codeAgentSharedOverrides.asyncProgressIntervalMs
-            : Number(
-                preserved.asyncDispatch?.progressReports?.intervalMs ??
-                codeAgentSharedOverrides.asyncProgressIntervalMs
-              ),
-          maxReportsPerTask: shouldOverrideSharedCodeAgentField("asyncMaxReportsPerTask")
-            ? codeAgentSharedOverrides.asyncMaxReportsPerTask
-            : Number(
-                preserved.asyncDispatch?.progressReports?.maxReportsPerTask ??
-                codeAgentSharedOverrides.asyncMaxReportsPerTask
-              )
-        }
-      }
+        : Number(preserved.maxParallelTasks ?? codeAgentSharedOverrides.maxParallelTasks)
     };
   };
   const normalizeCodeAgentRole = (value: unknown): "claude_code" | "codex_cli" => {
@@ -1455,7 +1425,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
           }
         }
       : undefined;
-  return {
+  const editedInput: SettingsInput = {
     identity: {
       botName: form.botName.trim(),
       botNameAliases: parseUniqueList(form.botNameAliases)
@@ -1497,7 +1467,8 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
         maxReactionsPerHour: Number(form.maxReactions)
       },
       devTasks: {
-        allowedUserIds: parseUniqueList(form.codeAgentAllowedUserIds)
+        allowedUserIds: parseUniqueList(form.codeAgentAllowedUserIds),
+        allowedWorkspaceRoots: parseUniqueLineList(form.codeAgentAllowedWorkspaceRoots)
       }
     },
     interaction: {
@@ -1672,13 +1643,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
           }
         },
         devTeam: {
-          ...rawCodeAgentNonWorkerRuntimeConfig,
-          workspace: {
-            ...(isRecordLike(rawCodeAgentNonWorkerRuntimeConfig.workspace)
-              ? rawCodeAgentNonWorkerRuntimeConfig.workspace
-              : {}),
-            mode: normalizedCodeAgentWorkspaceMode
-          },
+          ...codeAgentSwarmRuntimeConfig,
           codexCli: buildCodeAgentWorkerConfig({
             workerKey: "codexCli",
             enabled: Boolean(form.codeAgentEnabled) && codeAgentUsesCodexCli,
@@ -1714,7 +1679,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
             eagerness: Number(form.minecraftNarrationEagerness),
             minSecondsBetweenPosts: Number(form.minecraftNarrationMinSecondsBetweenPosts)
           },
-          execution: Boolean(form.minecraftBrainUseTextModel)
+          execution: form.minecraftBrainUseTextModel
             ? {
                 mode: "inherit_orchestrator"
               }
@@ -1916,6 +1881,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
       enabled: Boolean(form.automationsEnabled)
     }
   };
+  return mergeWithPreservedSettingsBase(form, editedInput);
 }
 
 export function formToSettingsPatch(form: SettingsForm): SettingsInput {
@@ -1947,6 +1913,7 @@ const LIST_FORM_KEYS: ReadonlySet<string> = new Set([
   "discoveryRssFeeds",
   "discoveryXHandles",
   "codeAgentAllowedUserIds",
+  "codeAgentAllowedWorkspaceRoots",
   "replyChannels",
   "discoveryChannels",
   "allowedChannels",

@@ -26,7 +26,8 @@ test("normalizeCodexResponsesBodyForOAuth enforces Codex-compatible body default
   assert.equal(Object.prototype.hasOwnProperty.call(normalized, "max_output_tokens"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(normalized, "temperature"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(normalized, "top_p"), false);
-  assert.deepEqual(normalized.reasoning, { effort: "low" });
+  assert.deepEqual(normalized.reasoning, { effort: "low", summary: "auto" });
+  assert.deepEqual(normalized.include, ["reasoning.encrypted_content"]);
 });
 
 test("createCodexOAuthFetch rewrites responses requests and injects codex headers", async () => {

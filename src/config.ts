@@ -35,7 +35,7 @@ export const appConfig = {
   defaultAnthropicModel: process.env.DEFAULT_MODEL_ANTHROPIC ?? "claude-haiku-4-5",
   defaultXaiModel: process.env.DEFAULT_MODEL_XAI ?? "grok-3-mini-latest",
   defaultClaudeOAuthModel: process.env.DEFAULT_MODEL_CLAUDE_OAUTH ?? "claude-sonnet-4-6",
-  defaultOpenAiOAuthModel: process.env.DEFAULT_MODEL_OPENAI_OAUTH ?? process.env.DEFAULT_MODEL_CODEX_OAUTH ?? "gpt-5.4",
+  defaultOpenAiOAuthModel: process.env.DEFAULT_MODEL_OPENAI_OAUTH ?? process.env.DEFAULT_MODEL_CODEX_OAUTH ?? "gpt-5.5",
   defaultCodexCliModel: process.env.DEFAULT_MODEL_CODEX_CLI ?? "gpt-5.4",
   defaultMemoryEmbeddingModel: process.env.DEFAULT_MEMORY_EMBEDDING_MODEL ?? "text-embedding-3-small",
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? "",

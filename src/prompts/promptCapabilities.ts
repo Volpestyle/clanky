@@ -45,7 +45,25 @@ const TEXT_TOOL_SUMMARIES: Record<string, string> = {
   memory_search: "Look up durable memory facts (speaker, guild, self, lore).",
   memory_write: "Store long-lived useful facts or standing guidance, never secrets or chatter. Write from your own perspective (use 'me'/'my', not your name).",
   image_lookup: "Find a previously shared image from message history by ref or description.",
-  code_task: "Run, follow up on, check status of, or cancel a coding task. Use action=followup with a session_id to steer a running background task.",
+  spawn_code_worker: "Spawn a swarm-backed coding worker and get task/worker IDs for follow-up coordination.",
+  request_task: "Create a swarm task in the current repo scope.",
+  get_task: "Read the current status and result for a swarm task.",
+  list_tasks: "List swarm tasks in the current repo scope.",
+  update_task: "Update or cancel a swarm task.",
+  claim_task: "Claim an open swarm task as Clanky's planner peer.",
+  send_message: "Send a direct swarm message to a peer.",
+  broadcast: "Broadcast a swarm message to all peers in scope.",
+  wait_for_activity: "Wait for swarm task, message, or peer activity.",
+  annotate: "Post progress or coordination notes for a file or task.",
+  lock_file: "Lock a file before editing in a multi-worker coding task.",
+  unlock_file: "Release a file lock held by Clanky's planner peer.",
+  check_file: "Inspect swarm locks and annotations for a file.",
+  list_instances: "List active swarm peers in the current repo scope.",
+  whoami: "Return Clanky's current swarm planner peer identity.",
+  kv_get: "Read from the swarm scoped key-value store.",
+  kv_set: "Write to the swarm scoped key-value store.",
+  kv_delete: "Delete from the swarm scoped key-value store.",
+  kv_list: "List swarm scoped key-value entries.",
   minecraft_task: "Hand off Minecraft intent or relevant context to your embodied in-world self; use action=status when you need current world state.",
   join_voice_channel: "Join the requesting user's current voice channel.",
   leave_voice_channel: "Leave the voice channel.",
@@ -86,7 +104,7 @@ function buildToolSummaryBlock(
     .filter(Boolean) as string[];
 
   if (!lines.length) return [];
-  return ["Available tools:", ...lines];
+  return ["Tool capability reference:", ...lines];
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +240,21 @@ function buildMinecraftDocs(): string[] {
   ];
 }
 
+function buildCodeAgentDocs(): string[] {
+  return [
+    "=== CODE AGENT SWARM ===",
+    "Use spawn_code_worker for coding work that should run in a local checkout. Keep ordinary conversational coding explanations in your own reply unless the user wants files changed or a real repo task handled.",
+    "Code workers can only run inside coding workspace roots approved in settings. If a user gives a GitHub issue/PR/repo URL, pass it as github_url (or include it in the task) and omit cwd unless the user explicitly picked a local clone.",
+    "When GitHub repo resolution cannot find exactly one approved local clone, report that the operator needs to add the clone/root in settings or provide an approved cwd; do not silently fall back to an unrelated repo.",
+    "Every spawned worker stays briefly available after completing its assigned task — it listens for follow-up `send_message` for ~5 minutes before exiting. spawn_code_worker returns a sessionKey and persists the live worker in swarm KV. On a later turn, decide per-turn whether to drive more work: if you do, send_message with the session_key (or worker_id) to prompt the same worker. If send_message reports the peer is inactive, the listen window already elapsed — spawn a fresh worker instead. There is no upfront 'one_shot vs inbox_loop' decision; the orchestrator drives followups when it wants them, the worker just stays available briefly.",
+    "For a long-lived planner pattern, spawn role=design and continuously drive it with send_message during its listen windows. The planner can request its own subtasks through swarm-mcp.",
+    "For high-stakes code work, or when the user asks for verification, set review_after_completion=true or spawn a role=review worker after the implementation completes. Treat reviewer output as findings to resolve or report, not as a decorative summary.",
+    "Do not ask workers to commit, push, create pull requests, or rewrite git history unless the user explicitly asked for that. Treat Clanky as the final arbiter: inspect worker/reviewer results, resolve conflicts, and only report completion after adequate verification or a clear blocker.",
+    "Important — request_task vs spawn_code_worker: spawn_code_worker is the only call that actually creates a worker process. request_task alone only writes a row in the swarm task ledger; nothing claims it unless an existing peer matches and picks it up. Do not call request_task standalone expecting a worker to materialize from nowhere.",
+    "When delegating swarm work, the swarm can include peers other than your own spawned workers — e.g. a human-launched claude-code or codex session that registered itself via the swarm-mcp skill. Before spawning a fresh worker, you may consult list_instances to see if a matching role:implementer / role:reviewer / role:researcher peer is already active in the scope. If one is, request_task with assignee=<that-peer-id> delegates the work to them instead of starting a new process. Use spawn_code_worker when no suitable peer exists, when the existing peers are busy, or when you specifically want a fresh sandboxed worker."
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // Conversation search
 // ---------------------------------------------------------------------------
@@ -279,6 +312,7 @@ export type TextSystemCapabilityFlags = {
   webSearchEnabled: boolean;
   browserEnabled: boolean;
   memoryEnabled: boolean;
+  codeAgentEnabled: boolean;
   minecraftEnabled: boolean;
   mediaGenerationEnabled: boolean;
   gifsEnabled: boolean;
@@ -300,6 +334,12 @@ export function buildTextCapabilitiesDocs(
   if (flags.browserEnabled) availableToolNames.push("browser_browse");
   if (flags.memoryEnabled) availableToolNames.push("memory_search", "memory_write");
   availableToolNames.push("image_lookup");
+  if (flags.codeAgentEnabled) {
+    availableToolNames.push(
+      "spawn_code_worker", "request_task", "get_task", "list_tasks", "update_task",
+      "send_message", "wait_for_activity", "list_instances", "kv_get", "kv_set", "kv_list"
+    );
+  }
   if (flags.minecraftEnabled) availableToolNames.push("minecraft_task");
   if (flags.voiceEnabled) {
     availableToolNames.push(
@@ -307,7 +347,7 @@ export function buildTextCapabilitiesDocs(
       "music_play", "music_search", "music_queue_add", "music_queue_next",
       "video_play", "video_search",
       "media_stop", "media_pause", "media_resume", "media_skip", "media_now_playing",
-      "media_reply_handoff", "play_soundboard", "note_context"
+      "media_reply_handoff", "stream_visualizer", "play_soundboard", "note_context"
     );
   }
   if (flags.voiceEnabled && flags.browserEnabled) availableToolNames.push("share_browser_session");
@@ -330,6 +370,10 @@ export function buildTextCapabilitiesDocs(
 
   if (flags.memoryEnabled) {
     sections.push(...buildMemoryLookupDocs());
+  }
+
+  if (flags.codeAgentEnabled) {
+    sections.push(...buildCodeAgentDocs());
   }
 
   // Image lookup works on message history, not durable memory — always include docs

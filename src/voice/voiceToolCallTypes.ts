@@ -1,6 +1,5 @@
 import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 import type { VoiceRealtimeToolSettings } from "./voiceSessionTypes.ts";
-import type { CodeAgentRole } from "../agents/codeAgent.ts";
 import type { SubAgentSession } from "../agents/subAgentSession.ts";
 
 export type VoiceToolCallManager = Pick<
@@ -62,51 +61,6 @@ export type VoiceToolCallManager = Pick<
     userId: string | null;
     source: string;
   }) => SubAgentInteractiveSession | null | undefined) | null;
-  createCodeAgentSession?: ((args: {
-    settings?: VoiceRealtimeToolSettings | null;
-    role?: CodeAgentRole;
-    cwd?: string;
-    guildId: string;
-    channelId: string;
-    userId: string | null;
-    source: string;
-  }) => SubAgentSession | null | undefined) | null;
-  dispatchBackgroundCodeTask?: ((args: {
-    session: SubAgentSession;
-    task: string;
-    role: CodeAgentRole;
-    guildId: string;
-    channelId: string;
-    userId?: string | null;
-    triggerMessageId?: string | null;
-    source?: string;
-    progressReports?: {
-      enabled?: boolean;
-      intervalMs?: number;
-      maxReportsPerTask?: number;
-    };
-  }) => {
-    id: string;
-    sessionId: string;
-  }) | null;
-  runModelRequestedCodeTask?: ((args: {
-    settings?: VoiceRealtimeToolSettings | null;
-    task: string;
-    role?: CodeAgentRole;
-    cwd?: string;
-    guildId: string;
-    channelId: string;
-    userId: string | null;
-    source: string;
-    signal?: AbortSignal;
-  }) => Promise<{
-    text?: string;
-    costUsd?: number;
-    error?: unknown;
-    blockedByPermission?: boolean;
-    blockedByBudget?: boolean;
-    blockedByParallelLimit?: boolean;
-  }>) | null;
   createMinecraftSession?: ((args: {
     settings?: VoiceRealtimeToolSettings | null;
     guildId: string;

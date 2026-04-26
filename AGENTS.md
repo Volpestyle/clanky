@@ -38,7 +38,6 @@ We do not hardcode behaviors for the agent. We give it rich context — conversa
 - Always update canonical documentation of related feature when updating code. Prefer to avoid 'past tense' language, stating a canonical truth rather than a redesign or migration plan, unless explicitly asked for plan.
 - Build modular, composable, and easily testable components. Avoid monolithic architecture.
 ##### Tests
-- When I report a bug, don't start by trying to fix it. Instead, start by writing a test that reproduces the bug. Then, have subagents try to fix the bug and prove it with a passing test.
 - Be conservative when creating tests. This can lead to bloat and heavy tech debt. Tests should only test critical business logic paths and edge cases.
 - If you find tests that seem to be adding useless bloat, testing legacy things, or are redundant, please remove them.
 - If you come across code that seems to be latent or dead, please remove.

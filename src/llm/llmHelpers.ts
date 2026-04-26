@@ -165,7 +165,7 @@ export function defaultModelForLlmProvider(provider) {
   if (provider === "anthropic") return "claude-haiku-4-5";
   if (provider === "ai_sdk_anthropic") return "claude-haiku-4-5";
   if (provider === "claude-oauth") return "claude-sonnet-4-6";
-  if (provider === "openai-oauth") return "gpt-5.4";
+  if (provider === "openai-oauth") return "gpt-5.5";
   if (provider === "codex_cli_session") return "gpt-5.4";
   if (provider === "xai") return "grok-3-mini-latest";
   if (provider === "codex") return "gpt-5.4";
@@ -185,9 +185,9 @@ export function resolveProviderFallbackOrder(provider) {
   return ["openai", "openai-oauth", "anthropic", "xai", "claude-oauth"];
 }
 
-export function normalizeOpenAiOAuthModel(model, fallback = "gpt-5.4") {
+export function normalizeOpenAiOAuthModel(model, fallback = "gpt-5.5") {
   const normalized = String(model || "").trim();
-  return normalized || String(fallback || "gpt-5.4").trim() || "gpt-5.4";
+  return normalized || String(fallback || "gpt-5.5").trim() || "gpt-5.5";
 }
 
 export function normalizeDefaultModel(value, fallback) {

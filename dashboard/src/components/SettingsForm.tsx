@@ -37,6 +37,7 @@ import { DiscoverySettingsSection } from "./settingsSections/DiscoverySettingsSe
 import { ChannelsPermissionsSettingsSection } from "./settingsSections/ChannelsPermissionsSettingsSection";
 import { SubAgentOrchestrationSettingsSection } from "./settingsSections/SubAgentOrchestrationSettingsSection";
 import { ProviderAuthSettingsSection } from "./settingsSections/ProviderAuthSettingsSection";
+import { ProviderAuthProvider } from "./settingsSections/LlmProviderOptions";
 
 const BEHAVIOR_FIELDS = new Set([
   "botName", "botNameAliases", "personaFlavor", "personaHardLimits",
@@ -594,6 +595,14 @@ export default function SettingsForm({
   }
 
   return (
+    <ProviderAuthProvider value={{
+      anthropic: Boolean(effectiveForm.providerAuthAnthropic),
+      openai: Boolean(effectiveForm.providerAuthOpenai),
+      claude_oauth: Boolean(effectiveForm.providerAuthClaudeOauth),
+      openai_oauth: Boolean(effectiveForm.providerAuthOpenaiOauth),
+      xai: Boolean(effectiveForm.providerAuthXai),
+      codex_cli: Boolean(effectiveForm.providerAuthCodexCli)
+    }}>
     <form className="panel settings-form" onSubmit={submit}>
       <h3 className="settings-title">Settings</h3>
       <div className="settings-layout">
@@ -760,8 +769,8 @@ export default function SettingsForm({
 
             <SettingsSection id="sec-stack" title="Stack Preset">
               <label htmlFor="stack-preset">Preset</label>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <select id="stack-preset" value={form.stackPreset} onChange={set("stackPreset")} style={{ flex: 1 }}>
+              <div className="settings-inline-action-row">
+                <select id="stack-preset" value={form.stackPreset} onChange={set("stackPreset")} style={{ flex: 1, minWidth: 0 }}>
                   {AGENT_STACK_PRESET_OPTIONS.map((preset) => (
                     <option key={preset.value} value={preset.value}>
                       {preset.label}
@@ -874,7 +883,7 @@ export default function SettingsForm({
             </button>
           </div>
         )}
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <div className="save-bar-actions">
           <button
             type="submit"
             className="cta"
@@ -931,5 +940,6 @@ export default function SettingsForm({
         )}
       </div>
     </form>
+    </ProviderAuthProvider>
   );
 }
