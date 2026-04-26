@@ -411,7 +411,9 @@ export async function spawnPeer(opts: SpawnPeerOptions): Promise<SpawnedPeer> {
   const preamble = buildSwarmLauncherFirstTurnPreamble({
     serverName: opts.swarm.serverName,
     taskId: opts.taskId,
-    coordinationSkill: loadRoleCoordinationSkill(opts.role)
+    coordinationSkill: opts.swarm.appendCoordinationPrompt === false
+      ? ""
+      : loadRoleCoordinationSkill(opts.role)
   });
   const wrappedPrompt = applySwarmLauncherFirstTurnPreamble(opts.initialPrompt, preamble);
   const mcpConfigJson = buildClaudeMcpConfigJson(opts.swarm, workspace.cwd);

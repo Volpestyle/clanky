@@ -48,10 +48,12 @@ test("buildSwarmLauncherFirstTurnPreamble emits the unified overlay block with a
   });
   assert.match(preamble, /auto-adopted you on boot/);
   assert.match(preamble, /Your assigned task is `task-abc`/);
-  assert.match(preamble, /Clanky-specific overlays/);
+  assert.match(preamble, /override any conflicting generic skill guidance/);
+  assert.match(preamble, /Do not call `register`/);
   assert.match(preamble, /annotate\(file=<task_id>, kind="usage"/);
   assert.match(preamble, /not in `update_task\.metadata`/);
   assert.match(preamble, /plain text — not structured JSON/);
+  assert.match(preamble, /Do not commit, push, create pull requests/);
   // Single-mode listen-window stanza replaces the old inbox-loop branch.
   assert.match(preamble, /Follow-up listen window/);
   assert.match(preamble, /wait_for_activity/);

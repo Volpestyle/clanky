@@ -204,12 +204,97 @@ test("spawnPeer routes through swarm-server PTY when direct spawn is supported",
   expect(request?.args).not.toContain("-p");
   expect(request?.args).not.toContain("--output-format");
   expect(String(request?.initial_input || "")).toContain("implement something");
+  expect(String(request?.initial_input || "")).toContain("## Swarm coordination skill");
   expect(String(request?.initial_input || "")).toContain("\u001b[200~");
   expect((request?.env as Record<string, string>)?.SWARM_DB_PATH).toBe(dbPath);
 
   await spawned.cancel("test cancel");
   await spawned.exited;
   expect(ptyClosed).toBe(true);
+});
+
+test("spawnPeer honors appendCoordinationPrompt=false while keeping Clanky overlays", async () => {
+  const requests: Record<string, unknown>[] = [];
+  const instanceId = "server-instance-no-skill";
+  const ptyId = "pty-no-skill";
+  let ptyClosed = false;
+  const swarmServerClient = {
+    socketPath: "/tmp/fake-swarm-server.sock",
+    supportsDirectHarnessSpawn: async () => true,
+    spawnPty: async (body: Record<string, unknown>) => {
+      requests.push(body);
+      const db = new Database(dbPath);
+      try {
+        db.run(
+          `INSERT INTO instances (id, scope, directory, root, file_root, pid, label, adopted)
+           VALUES (?, ?, ?, ?, ?, 0, ?, 1)`,
+          [instanceId, body.scope, body.cwd, workspaceDir, body.cwd, body.label]
+        );
+      } finally {
+        db.close();
+      }
+      return {
+        v: 1,
+        pty: {
+          id: ptyId,
+          command: body.harness as string,
+          cwd: body.cwd as string,
+          started_at: Date.now(),
+          exit_code: null,
+          bound_instance_id: instanceId,
+          cols: 120,
+          rows: 40,
+          lease: null
+        }
+      };
+    },
+    closePty: async () => {
+      ptyClosed = true;
+    },
+    fetchState: async () => ({
+      ptys: ptyClosed
+        ? []
+        : [{
+          id: ptyId,
+          command: "claude",
+          cwd: workspaceDir,
+          started_at: Date.now(),
+          exit_code: null,
+          bound_instance_id: instanceId,
+          cols: 120,
+          rows: 40,
+          lease: null
+        }]
+    })
+  };
+
+  const swarm = { ...makeSwarmConfig(), appendCoordinationPrompt: false };
+  const spawned = await spawnPeer({
+    harness: "claude-code",
+    cwd: workspaceDir,
+    role: "implementer",
+    initialPrompt: "implement without generic skill",
+    maxTurns: 5,
+    timeoutMs: 30_000,
+    maxBufferBytes: 1024 * 1024,
+    model: "sonnet",
+    trace: { channelId: "channel-1", userId: "user-1", source: "test" },
+    store: makeStore(),
+    swarm,
+    reservationKeeper: keeper!,
+    adoptionPollIntervalMs: 25,
+    adoptionTimeoutMs: 5_000,
+    swarmServerClient
+  });
+
+  await spawned.adopted;
+  const initialInput = String(requests[0]?.initial_input || "");
+  expect(initialInput).toContain("Do not call `register`");
+  expect(initialInput).toContain("implement without generic skill");
+  expect(initialInput).not.toContain("## Swarm coordination skill");
+
+  await spawned.cancel("test cancel");
+  await spawned.exited;
 });
 
 test("spawnPeer falls back to direct child when swarm-server's supportsDirectHarnessSpawn returns false", async () => {

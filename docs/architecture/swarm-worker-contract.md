@@ -60,7 +60,7 @@ Task types: `review | implement | fix | test | research | other`.
 
 ## 3. Result reporting
 
-The `result` column in the `tasks` table is opaque text. By convention, Clanky-spawned workers post the **final user-facing output text** there — this is what surfaces in Discord (or voice TTS) when Clanky's `swarmTaskWaiter` resolves the turn.
+The `result` column in the `tasks` table is opaque text. By convention, Clanky-spawned workers post the **final user-facing output text** there as plain text, not structured JSON. Clanky's `swarmTaskWaiter` returns that text for synchronous tool waits. For async terminal events, Clanky feeds the text into its normal reply pipeline so the top-level agent remains the final arbiter before a Discord follow-up is posted.
 
 Cost and usage telemetry travel as a separate `annotate` call:
 
@@ -94,7 +94,7 @@ annotate(
 )
 ```
 
-Clanky subscribes to swarm activity events for the assigned task and forwards these to the originating Discord context (text reply pipeline or voice realtime session). Recommended cadence: at most one progress annotation every 30 seconds, or whenever a notable file edit / subtask transition occurs.
+Clanky subscribes to swarm activity events for the assigned task and logs these against the originating Discord context. Recommended cadence: at most one progress annotation every 30 seconds, or whenever a notable file edit / subtask transition occurs.
 
 Workers should not abuse `annotate` for high-frequency updates. The events table is bounded; flooding it slows the whole swarm.
 
@@ -110,6 +110,8 @@ Workers in the same scope discover each other via `list_instances` and may excha
 - `annotate(file, kind, content)` — durable per-file findings, hazards, or status notes other peers will see
 
 Workers must `lock_file` before mutating any path inside the shared scope, and `unlock_file` (or deregister) when finished. Clanky-spawned workers run directly in the operator's checkout, so `SWARM_MCP_FILE_ROOT` and `SWARM_MCP_DIRECTORY` resolve to the same path; locks point at the shared logical tree as a matter of course.
+
+Workers may inspect git state, but they do not commit, push, create pull requests, or rewrite git history unless the user's task explicitly authorizes that action.
 
 ## 6. Exit semantics
 

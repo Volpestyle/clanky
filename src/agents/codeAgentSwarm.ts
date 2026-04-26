@@ -109,9 +109,9 @@ export function applySwarmLauncherFirstTurnPreamble(input: string, preamble?: st
 export const SWARM_LAUNCHER_FOLLOWUP_LISTEN_SECONDS = 300;
 
 /**
- * Behavioral-only preamble for swarm-launcher workers. Their instance row is
- * already reserved with `adopted=0` and the worker's swarm-mcp child auto-
- * adopts via `SWARM_MCP_INSTANCE_ID` on boot — no `register` call needed.
+ * Behavioral preamble for swarm-launcher workers. Their instance row is already
+ * reserved with `adopted=0` and the worker's swarm-mcp child auto-adopts via
+ * `SWARM_MCP_INSTANCE_ID` on boot — no `register` call needed.
  *
  * Aligned with the worker contract at docs/architecture/swarm-worker-contract.md:
  * - usage/cost telemetry travels as a sibling `annotate(kind="usage")` call,
@@ -121,6 +121,9 @@ export const SWARM_LAUNCHER_FOLLOWUP_LISTEN_SECONDS = 300;
  *   completes. The orchestrator decides per-turn whether to follow up; the
  *   worker just stays available briefly. No upfront one-shot vs inbox-loop
  *   decision — if no follow-up arrives in the window, exit cleanly.
+ * - `appendCoordinationPrompt=false` disables only the inlined generic skill
+ *   body. The Clanky-specific identity/task/result/follow-up overlays always
+ *   remain, because workers need them to interoperate with the launcher.
  */
 export function buildSwarmLauncherFirstTurnPreamble({
   serverName = "swarm",
@@ -150,24 +153,28 @@ export function buildSwarmLauncherFirstTurnPreamble({
   if (trimmedTaskId) {
     lines.push(
       "",
-      `Your assigned task is \`${trimmedTaskId}\`. The full coordination playbook follows in the swarm-mcp skill below — read and follow it. Two Clanky-specific overlays apply on top of the skill:`
+      `Your assigned task is \`${trimmedTaskId}\`. Read and follow the coordination playbook below, but the Clanky-specific rules in this preamble override any conflicting generic skill guidance.`
     );
   } else {
     lines.push(
       "",
-      "No task is pre-assigned. The full coordination playbook follows in the swarm-mcp skill below — read and follow it. Two Clanky-specific overlays apply on top of the skill:"
+      "No task is pre-assigned. Read and follow the coordination playbook below, but the Clanky-specific rules in this preamble override any conflicting generic skill guidance."
     );
   }
 
   lines.push(
     "",
-    "1. **Cost/usage telemetry.** Report token/cost numbers as a sibling annotation, not in `update_task.metadata`:",
+    "1. **Registration override.** Do not call `register`, even if the generic swarm-mcp skill says to register early. Use `whoami` if you need to confirm identity; your MCP server already adopted the reserved row.",
+    "",
+    "2. **Cost/usage telemetry.** Report token/cost numbers as a sibling annotation, not in `update_task.metadata`:",
     "   `annotate(file=<task_id>, kind=\"usage\", content=JSON.stringify({ inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd }))`",
     "   Clanky reads usage from this annotation; anything in `update_task.metadata` is ignored.",
     "",
-    "2. **Result format.** Post the final user-facing output text directly in `update_task(status=\"done\", result=<text>)` as plain text — not structured JSON. Clanky surfaces this verbatim to the requesting user.",
+    "3. **Result format override.** Post the final user-facing output text directly in `update_task(status=\"done\", result=<text>)` as plain text — not structured JSON — even if the generic skill prefers JSON results. Clanky uses this text as input to its final synthesis step.",
     "",
-    `3. **Follow-up listen window.** After \`update_task(done)\`, wait roughly ${SWARM_LAUNCHER_FOLLOWUP_LISTEN_SECONDS}s for follow-up messages via \`wait_for_activity\` / \`list_messages\`. If a \`send_message\` arrives in that window, treat it as a follow-up instruction — claim or create the appropriate follow-up task, execute, and report again with \`update_task\` + \`annotate(kind="usage")\`, then return to listening. If no follow-up arrives in the window, or you receive an explicit termination message, exit cleanly. The orchestrator decides per-turn whether to drive more work; you just stay briefly available.`
+    "4. **Git authority.** Do not commit, push, create pull requests, or rewrite git history unless the user explicitly asked for that in the task. You may inspect git status/diff and leave changes in the working tree.",
+    "",
+    `5. **Follow-up listen window.** After \`update_task(done)\`, wait roughly ${SWARM_LAUNCHER_FOLLOWUP_LISTEN_SECONDS}s for follow-up messages via \`wait_for_activity\` / \`list_messages\`. If a \`send_message\` arrives in that window, treat it as a follow-up instruction — claim or create the appropriate follow-up task, execute, and report again with \`update_task\` + \`annotate(kind="usage")\`, then return to listening. If no follow-up arrives in the window, or you receive an explicit termination message, exit cleanly. The orchestrator decides per-turn whether to drive more work; you just stay briefly available.`
   );
 
   const trimmedSkill = String(coordinationSkill || "").trim();

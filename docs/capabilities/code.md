@@ -121,7 +121,7 @@ A typical code dispatch is a chain of tool calls the orchestrator stitches toget
 1. `spawn_code_worker(task, role, cwd)` — Clanky reserves an instance row, builds harness env vars, spawns the worker (claude-code or codex-cli with `swarm-mcp` mounted), waits for auto-adopt, creates a swarm task, assigns the task to the worker, and returns `{ workerId, taskId, scope, cwd, sessionKey }`.
 2. `wait_for_activity(taskId)` — orchestrator blocks until the task reaches a terminal status. The activity event stream also surfaces `progress` annotations along the way.
 3. `get_task(taskId)` — orchestrator reads the final `result` text and the sibling `kind="usage"` annotation for cost/usage telemetry.
-4. Orchestrator composes the user-facing reply.
+4. Orchestrator composes the user-facing reply. Async completions are re-fed through Clanky's normal reply pipeline so Clanky remains the final arbiter; direct result relay is only a fallback when the reply pipeline cannot enqueue the synthetic completion event.
 
 Variations the orchestrator can express directly:
 
@@ -130,7 +130,7 @@ Variations the orchestrator can express directly:
 - **Followup (existing worker)**: `send_message(workerId, content)` or `send_message(session_key, content)` while the worker is still in its post-task listen window. If the peer is no longer active, the orchestrator spawns a fresh worker.
 - **Followup (fresh worker)**: `request_task({ parent_task_id: originalTaskId, ... })` followed by another `spawn_code_worker(...)`. Lets the orchestrator re-pick harness or `cwd`.
 - **Multi-worker fan-out**: multiple `spawn_code_worker` calls in one turn — e.g. a researcher and an implementer in parallel — with the orchestrator coordinating them via `send_message` and `lock_file`.
-- **Quality verification**: `spawn_code_worker(..., review_after_completion=true)` waits for the implementation task, then spawns a one-shot `role="review"` worker against the same workspace. The tool returns the implementation completion and the review completion. The reviewer is instructed to avoid edits, inspect the diff and relevant files, and start with `APPROVED:` or `ISSUES:`.
+- **Quality verification**: `spawn_code_worker(..., review_after_completion=true)` waits for the implementation task, then spawns a one-shot `role="review"` worker against the same workspace. The tool returns the implementation completion and the review completion. The reviewer is instructed to avoid edits, inspect the diff and relevant files, and start with `APPROVED:` or `ISSUES:`. Clanky treats reviewer output as findings to resolve or report, not as a decorative summary.
 - **Planner loop**: `spawn_code_worker(role="design")` creates a planner peer that can stay alive briefly after its initial planning task. Clanky drives it with `send_message` during that listen window, and respawns if the peer exits.
 - **Planner spawn escalation**: if a planner-created task remains open and unclaimed, the planner sends Clanky's controller peer `JSON.stringify({ v: 1, kind: "spawn_request", taskId, role, reason })`. The activity bridge validates the schema version, deduplicates repeated `(sender, kind, taskId)` requests for 60 seconds, rate-limits each sender, then asks Clanky's bot runtime to spawn or decline. The planner cannot choose `cwd` or `harness`; Clanky pins the spawn to the planner's own stored context and checks the original Discord requester's `devTasks` permission before creating a worker.
 
@@ -168,6 +168,8 @@ Roles in the swarm:
 
 Adoption happens through the env-var protocol. If `swarm-server` is running and advertises direct PTY spawn support, `spawn_code_worker` asks it to create the PTY and pending instance row so the worker is visible and attachable in `swarm-ui`. That path launches the harness in interactive mode and submits Clanky's first-turn preamble/task through the PTY so an operator can intervene mid-run. If `swarm-server` is unavailable, Clanky falls back to the older direct child-process path: it pre-creates an unadopted instance row in `swarm.db` (via `swarmDb.reserveInstance(...)`), heartbeats it through `swarmReservationKeeper` until the worker boots, and `swarm-mcp`'s `tryAutoAdopt` flips `adopted=1` when the worker connects. Workers do not call `register` themselves. Full details live in the [worker contract](../architecture/swarm-worker-contract.md).
 
+`agentStack.runtimeConfig.devTeam.swarm.appendCoordinationPrompt` controls whether Clanky appends the vendored generic `swarm-mcp` skill body to the worker's first-turn prompt. It does not disable the Clanky-specific launcher overlays: auto-adoption, assigned task ID, plain-text result reporting, usage annotations, git authority, and the follow-up listen window always remain in the preamble.
+
 DB location is `~/.swarm-mcp/swarm.db` by default. Override via `agentStack.runtimeConfig.devTeam.swarm.dbPath` (or the `SWARM_DB_PATH` env var). The same DB file is shared across `swarm-ui`, manually-launched workers, and Clanky-spawned workers running on the same host — single-host swarm scope is intentional.
 
 Live observation of the swarm — peer graph, active tasks, terminal binding, intervention — is owned by `swarm-ui` (desktop) and `swarm-ios` (mobile/remote). When workers launch through `swarm-server`, their PTYs are attachable there. Fallback direct-spawn workers still appear as peers/tasks in the shared DB, but they do not have a terminal binding. Clanky's own dashboard does not duplicate this surface.
@@ -179,8 +181,8 @@ The orchestrator can call `wait_for_activity` directly to block on a task. For D
 `src/agents/swarmActivityBridge.ts` is registered once per active planner-peer scope and:
 
 - Watches all tasks where `requester` matches the local Clanky planner peer.
-- On `kind="progress"` annotations, injects synthetic `code_task_progress` messages into the reply pipeline via `enqueueReplyJob(..., forceRespond: true)`.
-- On terminal status (`done` / `failed` / `cancelled`), injects `code_task_result` for text/voice-text-mediated surfaces, or routes through `VoiceSessionManager.requestRealtimeCodeTaskFollowup(...)` for voice realtime.
+- On `kind="progress"` annotations, writes progress to the action log at the worker-contract cadence.
+- On terminal status (`done` / `failed` / `cancelled`), injects a synthetic completion event into the normal reply pipeline with `forceRespond: true`. The model sees the worker result and composes the user-facing follow-up. If the synthetic event cannot be queued, Clanky falls back to a direct truncated result post.
 - Tracks per-harness active-worker counts for the `maxParallelTasks` bookkeeping read by `spawn_code_worker`; PTY-backed workers stop counting once their assigned task is terminal, even if the terminal session remains open for inspection.
 - On `cancelled` transitions, stops the backing worker if it is still running: swarm-server PTY close for attachable workers, SIGTERM for fallback child-process workers.
 

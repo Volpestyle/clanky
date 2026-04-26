@@ -155,6 +155,7 @@ import {
   isDevTaskEnabled,
   isDevTaskUserAllowed
 } from "./settings/agentStack.ts";
+import { buildCodeTaskResultPrompt } from "./prompts/promptText.ts";
 
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
 const TEXT_CANCEL_FALLBACK_REACTION = "🛑";
@@ -164,9 +165,17 @@ const AUTOMATION_TICK_MS = 30_000;
 const GATEWAY_WATCHDOG_TICK_MS = 30_000;
 const REFLECTION_TICK_MS = 60_000;
 const UNSOLICITED_REPLY_CONTEXT_WINDOW = 5;
+const CODE_TASK_RESULT_SYNTHESIS_MAX_CHARS = 6_000;
 const IS_TEST_PROCESS = /\.test\.[cm]?[jt]sx?$/i.test(String(process.argv?.[1] || "")) ||
   process.execArgv.includes("--test") ||
   process.argv.includes("--test");
+
+function truncateCodeTaskResultForSynthesis(value: string): string {
+  const text = String(value || "").trim();
+  if (text.length <= CODE_TASK_RESULT_SYNTHESIS_MAX_CHARS) return text;
+  return `${text.slice(0, CODE_TASK_RESULT_SYNTHESIS_MAX_CHARS - 32).trim()}\n\n[truncated for synthesis]`;
+}
+
 export type ReplyAttemptOptions = {
   recentMessages?: Array<Record<string, unknown>>;
   addressSignal?: {
@@ -2265,10 +2274,10 @@ export class ClankerBot {
 
   /**
    * Deliver a swarm code-task terminal event back to its originating Discord
-   * channel. Posts a single follow-up message with the result text (or a
-   * brief notice on failure/cancel). Always logs a structured action so
-   * dashboard/audit trails show the dispatch closing out, even when the
-   * channel is unreachable.
+   * channel. The normal reply pipeline synthesizes the user-facing follow-up
+   * so Clanky remains the final arbiter; raw relay is only a delivery fallback.
+   * Always logs a structured action so dashboard/audit trails show the dispatch
+   * closing out, even when the channel is unreachable.
    */
   async deliverSwarmTaskTerminal(event: CodeTaskTerminalEvent): Promise<void> {
     const { context, status, result } = event;
@@ -2287,6 +2296,92 @@ export class ClankerBot {
         resultLength: result.length
       }
     });
+
+    const enqueued = this.enqueueSwarmTaskTerminalSynthesis(event);
+    if (enqueued) return;
+
+    await this.sendRawSwarmTaskTerminalFallback(event);
+  }
+
+  enqueueSwarmTaskTerminalSynthesis(event: CodeTaskTerminalEvent): boolean {
+    const { context, status, result } = event;
+    const channelId = String(context.channelId || "").trim();
+    if (!channelId) return false;
+    const channel = this.client.channels.cache.get(channelId);
+    if (!channel || typeof channel.send !== "function") return false;
+
+    const syntheticId = `code-task-${context.taskId}-${status}-${Date.now()}`;
+    const authorId = context.userId || this.client.user?.id || "code-task";
+    const content = buildCodeTaskResultPrompt({
+      mode: status === "cancelled" ? "cancelled" : "completion",
+      sessionId: context.taskId,
+      role: "implementation",
+      status,
+      resultText: truncateCodeTaskResultForSynthesis(result),
+      triggerMessageId: context.triggerMessageId
+    });
+
+    this.store.recordMessage({
+      messageId: syntheticId,
+      createdAt: Date.now(),
+      guildId: context.guildId,
+      channelId,
+      authorId,
+      authorName: "Code task",
+      isBot: false,
+      content,
+      referencedMessageId: context.triggerMessageId || null
+    });
+
+    const syntheticMessage = {
+      id: syntheticId,
+      channelId,
+      guildId: context.guildId,
+      guild: "guild" in channel ? channel.guild : null,
+      channel,
+      content,
+      createdTimestamp: Date.now(),
+      author: {
+        id: authorId,
+        username: "Code task",
+        bot: false
+      },
+      member: null,
+      mentions: { users: new Map(), repliedUser: null },
+      reference: context.triggerMessageId ? { messageId: context.triggerMessageId } : null,
+      referencedMessage: context.triggerMessageId ? { id: context.triggerMessageId } : null,
+      attachments: new Map(),
+      react: async () => null,
+      reply: async (payload: Record<string, unknown>) => {
+        const replyTarget = String(context.triggerMessageId || "").trim();
+        const finalPayload = replyTarget
+          ? {
+              ...payload,
+              reply: { messageReference: replyTarget, failIfNotExists: false }
+            }
+          : payload;
+        return await channel.send(finalPayload);
+      }
+    };
+
+    return this.enqueueReplyJob({
+      source: "swarm_task_result_synthesis",
+      message: syntheticMessage,
+      forceRespond: true,
+      addressSignal: {
+        direct: true,
+        inferred: false,
+        triggered: true,
+        reason: "code_task_terminal",
+        confidence: 1,
+        threshold: 0.62,
+        confidenceSource: "direct"
+      }
+    });
+  }
+
+  async sendRawSwarmTaskTerminalFallback(event: CodeTaskTerminalEvent): Promise<void> {
+    const { context, status, result } = event;
     const channelId = String(context.channelId || "").trim();
     if (!channelId) return;
     try {
