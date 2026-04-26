@@ -240,6 +240,18 @@ function buildMinecraftDocs(): string[] {
   ];
 }
 
+function buildCodeAgentDocs(): string[] {
+  return [
+    "=== CODE AGENT SWARM ===",
+    "Use spawn_code_worker for coding work that should run in a local checkout. Keep ordinary conversational coding explanations in your own reply unless the user wants files changed or a real repo task handled.",
+    "Use worker_mode=one_shot for bounded tasks. Use worker_mode=inbox_loop for iterative tasks where you expect follow-up instructions, and for long-lived planner workers.",
+    "For an inbox-loop worker, spawn_code_worker returns a sessionKey and also writes that session into swarm KV. On later turns, use send_message with session_key to prompt the same live worker; if send_message says the peer is inactive, spawn a fresh worker instead.",
+    "For a long-lived planner, use role=design with worker_mode=inbox_loop, then drive it with send_message. The planner can request its own subtasks through swarm-mcp.",
+    "For high-stakes code work, or when the user asks for verification, set review_after_completion=true or spawn a role=review worker after the implementation completes. Treat reviewer output as findings to resolve or report, not as a decorative summary.",
+    "Important — request_task vs spawn_code_worker: spawn_code_worker is the only call that actually creates a worker process. request_task alone only writes a row in the swarm task ledger; nothing claims it unless an existing peer matches and picks it up. Do not call request_task standalone expecting a worker to materialize. Use it only to delegate to a peer you already know is running (visible in list_instances), or to record a sub-task chained off a parent task. For fresh dispatches, always use spawn_code_worker."
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // Conversation search
 // ---------------------------------------------------------------------------
@@ -297,6 +309,7 @@ export type TextSystemCapabilityFlags = {
   webSearchEnabled: boolean;
   browserEnabled: boolean;
   memoryEnabled: boolean;
+  codeAgentEnabled: boolean;
   minecraftEnabled: boolean;
   mediaGenerationEnabled: boolean;
   gifsEnabled: boolean;
@@ -318,6 +331,12 @@ export function buildTextCapabilitiesDocs(
   if (flags.browserEnabled) availableToolNames.push("browser_browse");
   if (flags.memoryEnabled) availableToolNames.push("memory_search", "memory_write");
   availableToolNames.push("image_lookup");
+  if (flags.codeAgentEnabled) {
+    availableToolNames.push(
+      "spawn_code_worker", "request_task", "get_task", "list_tasks", "update_task",
+      "send_message", "wait_for_activity", "list_instances", "kv_get", "kv_set", "kv_list"
+    );
+  }
   if (flags.minecraftEnabled) availableToolNames.push("minecraft_task");
   if (flags.voiceEnabled) {
     availableToolNames.push(
@@ -348,6 +367,10 @@ export function buildTextCapabilitiesDocs(
 
   if (flags.memoryEnabled) {
     sections.push(...buildMemoryLookupDocs());
+  }
+
+  if (flags.codeAgentEnabled) {
+    sections.push(...buildCodeAgentDocs());
   }
 
   // Image lookup works on message history, not durable memory — always include docs
