@@ -21,9 +21,5 @@ tests/fixtures/*.pcm
 mcp-servers/*/dist/
 mcp-servers/*/node_modules/
 
-# Operator-managed skill installs (typically symlinks with machine-specific absolute paths)
-.claude/skills/
-.agents/skills/
-
 # Xcode derived data
 .deriveddata-ios-setup-refresh/
