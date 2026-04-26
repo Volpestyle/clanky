@@ -1365,6 +1365,11 @@ test("reply tool loop keeps remaining concurrent tool results when one concurren
       agentStack: {
         runtimeConfig: {
           devTeam: {
+            swarm: {
+              enabled: false,
+              command: "",
+              args: []
+            },
             codexCli: {
               enabled: true
             }

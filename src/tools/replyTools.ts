@@ -7,7 +7,7 @@ import {
   executeSharedMemoryToolWrite
 } from "../memory/memoryToolRuntime.ts";
 import { formatConversationWindows } from "../prompts/promptFormatters.ts";
-import type { SubAgentSessionManager, SubAgentSession } from "../agents/subAgentSession.ts";
+import type { SubAgentSessionManager, SubAgentSession, SubAgentTurnResult } from "../agents/subAgentSession.ts";
 import {
   resolveCodeAgentConfig
 } from "../agents/codeAgentSettings.ts";
@@ -37,7 +37,8 @@ import type { ClankySwarmPeerManager } from "../agents/swarmPeerManager.ts";
 import type { SwarmReservationKeeper } from "../agents/swarmReservationKeeper.ts";
 import {
   cancelSpawnedWorkerForTask,
-  spawnCodeWorker
+  spawnCodeWorker,
+  type SpawnCodeWorkerResult
 } from "./spawnCodeWorker.ts";
 
 // Default text budget for free-form tool queries unless a tool has stricter needs.
@@ -51,6 +52,8 @@ const MAX_BROWSER_BROWSE_QUERY_LEN = 500;
 
 // Agent execution/request payload guards.
 const MAX_CODE_TASK_LEN = 2000;
+const MAX_REVIEW_SECTION_LEN = 900;
+const MAX_CODE_REVIEW_WAIT_MS = 1_800_000;
 
 // Voice/music/soundboard-specific payload bounds.
 const MAX_VOICE_MUSIC_QUERY_LEN = 180;
@@ -264,6 +267,7 @@ export type ReplyToolRuntime = {
     peerManager: ClankySwarmPeerManager;
     reservationKeeper: SwarmReservationKeeper;
     activityBridge?: {
+      watchControllerPeer?: (peer: import("../agents/swarmPeer.ts").ClankyPeer, context: { scope: string }) => void;
       trackTask: (peer: import("../agents/swarmPeer.ts").ClankyPeer, context: {
         taskId: string;
         workerId: string;
@@ -1205,6 +1209,70 @@ function getObjectInput(input: ReplyToolCallInput, key: string): Record<string, 
   return value as Record<string, unknown>;
 }
 
+function getBooleanInput(input: ReplyToolCallInput, key: string): boolean {
+  return input?.[key] === true;
+}
+
+function clampToolTimeoutMs(value: unknown, fallbackMs = 300_000): number {
+  const raw = Math.floor(Number(value) || fallbackMs);
+  return Math.max(1_000, Math.min(MAX_CODE_REVIEW_WAIT_MS, raw));
+}
+
+function truncateReviewSection(value: unknown): string {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= MAX_REVIEW_SECTION_LEN) return text;
+  return `${text.slice(0, MAX_REVIEW_SECTION_LEN - 3).trim()}...`;
+}
+
+function buildCodeReviewTaskPrompt(args: {
+  originalTask: string;
+  implementationTaskId: string;
+  implementationWorkerId: string;
+  implementationResult: string;
+}): string {
+  return [
+    "Review the completed coding task for quality. Do not modify files.",
+    "Inspect the current git diff and relevant files in the working tree. Verify claimed tests or builds only when feasible from the repository context.",
+    "Start the result with APPROVED: if there are no blocking issues, or ISSUES: if you find problems. Include concise file/line references when possible.",
+    "",
+    `Original task: ${truncateReviewSection(args.originalTask)}`,
+    `Implementation task id: ${args.implementationTaskId}`,
+    `Implementation worker id: ${args.implementationWorkerId}`,
+    `Implementation result: ${truncateReviewSection(args.implementationResult)}`
+  ].join("\n");
+}
+
+function parseCodeWorkerSessionWorkerId(rawValue: string): string {
+  const trimmed = String(rawValue || "").trim();
+  if (!trimmed) return "";
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "";
+    const record = parsed as Record<string, unknown>;
+    return String(record.workerId || record.instanceId || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+async function resolveSendMessageRecipient(input: ReplyToolCallInput, peer: ClankyPeer): Promise<string> {
+  const recipient = getStringInput(input, "recipient");
+  if (recipient) return recipient;
+  const sessionKey = getStringInput(input, "session_key");
+  if (!sessionKey) {
+    throw new Error("send_message requires recipient or session_key.");
+  }
+  const session = await peer.kvGet(sessionKey);
+  if (!session) {
+    throw new Error(`No code worker session found for session_key ${sessionKey}.`);
+  }
+  const workerId = parseCodeWorkerSessionWorkerId(session.value);
+  if (!workerId) {
+    throw new Error(`Code worker session ${sessionKey} does not contain a workerId.`);
+  }
+  return workerId;
+}
+
 function resolveSwarmPlannerPeer(
   input: ReplyToolCallInput,
   runtime: ReplyToolRuntime,
@@ -1229,18 +1297,22 @@ async function executeSpawnCodeWorker(
   }
 
   try {
+    const task = normalizeDirectiveText(String(input?.task || ""), MAX_CODE_TASK_LEN);
+    const cwd = getStringInput(input, "cwd") || undefined;
+    const workerMode = getStringInput(input, "worker_mode") || getStringInput(input, "workerMode") || undefined;
     const result = await spawnCodeWorker(
       {
         settings: context.settings,
-        task: normalizeDirectiveText(String(input?.task || ""), MAX_CODE_TASK_LEN),
+        task,
         role: getStringInput(input, "role"),
         harness: getStringInput(input, "harness"),
-        cwd: getStringInput(input, "cwd") || undefined,
+        cwd,
         guildId: context.guildId,
         channelId: context.channelId,
         userId: context.userId,
         triggerMessageId: context.sourceMessageId,
         source: String(context.trace?.source || "reply_tool_spawn_code_worker"),
+        workerMode,
         signal: context.signal
       },
       {
@@ -1250,10 +1322,110 @@ async function executeSpawnCodeWorker(
         activityBridge: runtime.swarm.activityBridge
       }
     );
+    if (getBooleanInput(input, "review_after_completion")) {
+      return jsonToolResult(await runCodeWorkerReviewAfterCompletion({
+        input,
+        runtime,
+        context,
+        initialResult: result,
+        originalTask: task,
+        cwd
+      }));
+    }
     return jsonToolResult(result);
   } catch (error) {
     return { content: `spawn_code_worker failed: ${String((error as Error)?.message || error)}`, isError: true };
   }
+}
+
+async function runCodeWorkerReviewAfterCompletion({
+  input,
+  runtime,
+  context,
+  initialResult,
+  originalTask,
+  cwd
+}: {
+  input: ReplyToolCallInput;
+  runtime: ReplyToolRuntime;
+  context: ReplyToolContext;
+  initialResult: SpawnCodeWorkerResult;
+  originalTask: string;
+  cwd?: string;
+}): Promise<SpawnCodeWorkerResult & {
+  completion: SubAgentTurnResult;
+  review: null | (SpawnCodeWorkerResult & { completion: SubAgentTurnResult });
+  reviewSkippedReason?: string;
+}> {
+  if (!runtime.swarm?.peerManager || !runtime.swarm?.reservationKeeper || !runtime.store?.logAction) {
+    throw new Error("Swarm worker runtime is not available.");
+  }
+  const peer = runtime.swarm.peerManager.ensurePeer(
+    initialResult.scope,
+    initialResult.scope,
+    initialResult.scope
+  );
+  const timeoutMs = clampToolTimeoutMs(input?.wait_timeout_ms);
+  const completion = await waitForTaskCompletion(peer, initialResult.taskId, {
+    dbPath: resolveSwarmDbPath(resolveCodeAgentConfig(context.settings).swarm?.dbPath || ""),
+    timeoutMs,
+    signal: context.signal
+  });
+  if (completion.isError) {
+    return {
+      ...initialResult,
+      completion,
+      review: null,
+      reviewSkippedReason: "implementation_not_done"
+    };
+  }
+
+  const reviewTask = buildCodeReviewTaskPrompt({
+    originalTask,
+    implementationTaskId: initialResult.taskId,
+    implementationWorkerId: initialResult.workerId,
+    implementationResult: completion.text
+  });
+  const reviewResult = await spawnCodeWorker(
+    {
+      settings: context.settings,
+      task: reviewTask,
+      role: "review",
+      harness: getStringInput(input, "review_harness") || getStringInput(input, "harness"),
+      cwd,
+      guildId: context.guildId,
+      channelId: context.channelId,
+      userId: context.userId,
+      triggerMessageId: context.sourceMessageId,
+      source: "reply_tool_spawn_code_worker_review",
+      workerMode: "one_shot",
+      signal: context.signal
+    },
+    {
+      store: runtime.store,
+      peerManager: runtime.swarm.peerManager,
+      reservationKeeper: runtime.swarm.reservationKeeper,
+      activityBridge: runtime.swarm.activityBridge
+    }
+  );
+  const reviewPeer = runtime.swarm.peerManager.ensurePeer(
+    reviewResult.scope,
+    reviewResult.scope,
+    reviewResult.scope
+  );
+  const reviewCompletion = await waitForTaskCompletion(reviewPeer, reviewResult.taskId, {
+    dbPath: resolveSwarmDbPath(resolveCodeAgentConfig(context.settings).swarm?.dbPath || ""),
+    timeoutMs,
+    signal: context.signal
+  });
+  return {
+    ...initialResult,
+    completion,
+    review: {
+      ...reviewResult,
+      completion: reviewCompletion
+    }
+  };
 }
 
 async function executeSwarmTool(
@@ -1305,7 +1477,7 @@ async function executeSwarmTool(
       case "claim_task":
         return jsonToolResult(await peer.claimTask(taskId));
       case "send_message":
-        await peer.sendMessage(getStringInput(input, "recipient"), getStringInput(input, "content"));
+        await peer.sendMessage(await resolveSendMessageRecipient(input, peer), getStringInput(input, "content"));
         return jsonToolResult({ ok: true });
       case "broadcast":
         return jsonToolResult({ recipients: await peer.broadcast(getStringInput(input, "content")) });

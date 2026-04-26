@@ -86,6 +86,20 @@ export function buildClaudeCodeAgentArgs({ model, prompt = "", maxTurns = 30, mc
   return args;
 }
 
+export function buildClaudeCodeInteractiveAgentArgs({ model, mcpConfig = "" }: {
+  model: string;
+  mcpConfig?: string;
+}) {
+  const args = [
+    "--model", String(model || "sonnet")
+  ];
+  const normalizedMcpConfig = String(mcpConfig || "").trim();
+  if (normalizedMcpConfig) {
+    args.push("--strict-mcp-config", "--mcp-config", normalizedMcpConfig);
+  }
+  return args;
+}
+
 export function buildClaudeCodeFallbackPrompt({
   contextMessages = [],
   userPrompt = "",

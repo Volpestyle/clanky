@@ -320,9 +320,15 @@ type OpenAiResponsesResponseLike = {
 type OpenAiResponsesStreamEvent = {
   type: string;
   delta?: string;
+  text?: string;
   item_id?: string;
   output_index?: number;
   item?: OpenAiResponsesOutputItem;
+  part?: {
+    type?: string;
+    text?: string;
+    refusal?: string;
+  };
   response?: OpenAiResponsesResponseLike;
   error?: { message?: string } | string | null;
 };
@@ -568,6 +574,13 @@ export async function callOpenAiResponsesStreaming(
       const delta = String(event.delta || "");
       accumulatedDeltaText += delta;
       callbacks.onTextDelta(delta);
+      continue;
+    }
+    if (event.type === "response.output_text.done" || event.type === "response.content_part.done") {
+      const completedText = String(event.text || event.part?.text || "");
+      if (completedText && !accumulatedDeltaText.trim()) {
+        accumulatedDeltaText = completedText.trim();
+      }
       continue;
     }
     if (event.type === "response.function_call_arguments.delta") {

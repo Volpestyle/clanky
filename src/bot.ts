@@ -139,10 +139,14 @@ import {
 import {
   SwarmActivityBridge,
   type CodeTaskDispatchContext,
-  type CodeTaskTerminalEvent
+  type CodeTaskTerminalEvent,
+  type SwarmSpawnRequestEvent
 } from "./agents/swarmActivityBridge.ts";
 import { waitForTaskCompletion } from "./agents/swarmTaskWaiter.ts";
-import { spawnCodeWorker } from "./tools/spawnCodeWorker.ts";
+import {
+  buildCodeWorkerWorkerSessionKey,
+  spawnCodeWorker
+} from "./tools/spawnCodeWorker.ts";
 import {
   getMemorySettings,
   getBotName,
@@ -275,6 +279,46 @@ function isAppCommandInvocationMessage(message: { type?: number | null } | null 
     message?.type === MessageType.ContextMenuCommand;
 }
 
+type CodeWorkerSessionRecord = {
+  workerId: string;
+  taskId: string;
+  scope: string;
+  role: string;
+  cwd: string;
+  guildId: string | null;
+  channelId: string | null;
+  userId: string | null;
+  triggerMessageId: string | null;
+  source: string;
+};
+
+function readCodeWorkerSessionRecord(value: string, expectedWorkerId: string, expectedScope: string): CodeWorkerSessionRecord | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(String(value || ""));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  const workerId = String(record.workerId || "").trim();
+  const scope = String(record.scope || "").trim();
+  if (!workerId || workerId !== expectedWorkerId) return null;
+  if (!scope || scope !== expectedScope) return null;
+  return {
+    workerId,
+    taskId: String(record.taskId || "").trim(),
+    scope,
+    role: String(record.role || "").trim(),
+    cwd: String(record.cwd || scope).trim() || scope,
+    guildId: record.guildId ? String(record.guildId) : null,
+    channelId: record.channelId ? String(record.channelId) : null,
+    userId: record.userId ? String(record.userId) : null,
+    triggerMessageId: record.triggerMessageId ? String(record.triggerMessageId) : null,
+    source: String(record.source || "swarm_spawn_request").trim() || "swarm_spawn_request"
+  };
+}
+
 export class ClankerBot {
   appConfig;
   store;
@@ -376,6 +420,7 @@ export class ClankerBot {
     this.swarmActivityBridge = new SwarmActivityBridge({
       logAction: (entry) => this.store.logAction(entry),
       onTerminal: (event) => this.deliverSwarmTaskTerminal(event),
+      onSpawnRequest: (event) => this.handleSwarmSpawnRequest(event),
       onProgress: (event) => {
         // Progress events go to the action log only — Discord channel spam is
         // mitigated by the recommended cadence (≤1/30s) in the worker contract.
@@ -2029,6 +2074,194 @@ export class ClankerBot {
       }
     }
     return cancelled;
+  }
+
+  async respondToSwarmSpawnRequest(
+    event: SwarmSpawnRequestEvent,
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    try {
+      await event.controllerPeer.sendMessage(event.message.sender, JSON.stringify({
+        v: 1,
+        kind: "spawn_response",
+        taskId: event.request.taskId,
+        ...payload
+      }));
+    } catch (error) {
+      this.store.logAction({
+        kind: "swarm_spawn_request_response_error",
+        metadata: {
+          scope: event.scope,
+          sender: event.message.sender,
+          taskId: event.request.taskId,
+          error: String((error as Error)?.message || error)
+        }
+      });
+    }
+  }
+
+  async declineSwarmSpawnRequest(
+    event: SwarmSpawnRequestEvent,
+    reason: string,
+    metadata: Record<string, unknown> = {}
+  ): Promise<void> {
+    this.store.logAction({
+      kind: "swarm_spawn_request_declined",
+      content: reason,
+      metadata: {
+        scope: event.scope,
+        sender: event.message.sender,
+        taskId: event.request.taskId,
+        role: event.request.role,
+        requestReason: event.request.reason,
+        ...metadata
+      }
+    });
+    await this.respondToSwarmSpawnRequest(event, {
+      status: "declined",
+      reason
+    });
+  }
+
+  buildSwarmSpawnRequestPrompt(event: SwarmSpawnRequestEvent, task: { title?: string | null; description?: string | null; type?: string | null; files?: string[] | null }): string {
+    const files = Array.isArray(task.files) && task.files.length
+      ? task.files.map((file) => String(file || "").trim()).filter(Boolean).join(", ")
+      : "(none listed)";
+    return [
+      `A planner worker escalated existing swarm task ${event.request.taskId} because no suitable peer claimed it.`,
+      "Claim and complete the assigned task; do not create a duplicate replacement task unless this task itself requires follow-up work.",
+      `Planner reason: ${event.request.reason || "no reason provided"}`,
+      `Task type: ${String(task.type || event.request.role || "implement")}`,
+      `Task title: ${String(task.title || "Untitled task")}`,
+      `Relevant files: ${files}`,
+      "",
+      String(task.description || "").trim() || "No task description was provided. Inspect the swarm task and ask the planner for clarification if needed."
+    ].join("\n");
+  }
+
+  async handleSwarmSpawnRequest(event: SwarmSpawnRequestEvent): Promise<void> {
+    const settings = this.store.getSettings();
+    this.store.logAction({
+      kind: "swarm_spawn_request_received",
+      metadata: {
+        scope: event.scope,
+        sender: event.message.sender,
+        taskId: event.request.taskId,
+        role: event.request.role,
+        reason: event.request.reason,
+        priority: event.request.priority
+      }
+    });
+
+    const sessionEntry = await event.controllerPeer
+      .kvGet(buildCodeWorkerWorkerSessionKey(event.message.sender))
+      .catch(() => null);
+    const plannerSession = sessionEntry
+      ? readCodeWorkerSessionRecord(sessionEntry.value, event.message.sender, event.scope)
+      : null;
+    if (!plannerSession) {
+      await this.declineSwarmSpawnRequest(event, "planner_context_unavailable");
+      return;
+    }
+    if (!isDevTaskEnabled(settings)) {
+      await this.declineSwarmSpawnRequest(event, "dev_tasks_disabled", {
+        guildId: plannerSession.guildId,
+        channelId: plannerSession.channelId,
+        userId: plannerSession.userId
+      });
+      return;
+    }
+    if (!plannerSession.userId || !isDevTaskUserAllowed(settings, plannerSession.userId)) {
+      await this.declineSwarmSpawnRequest(event, "original_requester_not_allowed", {
+        guildId: plannerSession.guildId,
+        channelId: plannerSession.channelId,
+        userId: plannerSession.userId
+      });
+      return;
+    }
+
+    const task = await event.controllerPeer.getTask(event.request.taskId).catch(() => null);
+    if (!task) {
+      await this.declineSwarmSpawnRequest(event, "task_not_found", {
+        guildId: plannerSession.guildId,
+        channelId: plannerSession.channelId,
+        userId: plannerSession.userId
+      });
+      return;
+    }
+    if (task.scope !== event.scope) {
+      await this.declineSwarmSpawnRequest(event, "task_scope_mismatch", {
+        taskScope: task.scope,
+        requestScope: event.scope
+      });
+      return;
+    }
+    if (task.assignee || task.status !== "open") {
+      this.store.logAction({
+        kind: "swarm_spawn_request_noop",
+        metadata: {
+          scope: event.scope,
+          sender: event.message.sender,
+          taskId: event.request.taskId,
+          taskStatus: task.status,
+          assignee: task.assignee || null
+        }
+      });
+      await this.respondToSwarmSpawnRequest(event, {
+        status: "no_spawn_needed",
+        reason: task.assignee ? "task_already_assigned" : `task_${task.status}`
+      });
+      return;
+    }
+
+    try {
+      const spawned = await spawnCodeWorker(
+        {
+          settings,
+          task: this.buildSwarmSpawnRequestPrompt(event, task),
+          role: event.request.role,
+          cwd: plannerSession.cwd || event.scope,
+          guildId: plannerSession.guildId,
+          channelId: plannerSession.channelId,
+          userId: plannerSession.userId,
+          triggerMessageId: plannerSession.triggerMessageId,
+          source: "swarm_spawn_request",
+          existingTaskId: event.request.taskId,
+          workerMode: "one_shot"
+        },
+        {
+          store: this.store,
+          peerManager: this.swarmPeerManager,
+          reservationKeeper: this.swarmReservationKeeper,
+          activityBridge: this.swarmActivityBridge
+        }
+      );
+      this.store.logAction({
+        kind: "swarm_spawn_request_accepted",
+        guildId: plannerSession.guildId,
+        channelId: plannerSession.channelId,
+        userId: plannerSession.userId,
+        metadata: {
+          scope: event.scope,
+          sender: event.message.sender,
+          taskId: event.request.taskId,
+          workerId: spawned.workerId,
+          role: event.request.role,
+          reason: event.request.reason
+        }
+      });
+      await this.respondToSwarmSpawnRequest(event, {
+        status: "spawned",
+        workerId: spawned.workerId,
+        role: event.request.role
+      });
+    } catch (error) {
+      await this.declineSwarmSpawnRequest(event, String((error as Error)?.message || error), {
+        guildId: plannerSession.guildId,
+        channelId: plannerSession.channelId,
+        userId: plannerSession.userId
+      });
+    }
   }
 
   /**

@@ -1,5 +1,5 @@
 import { cancelSpawnedWorkerForTask } from "../tools/spawnCodeWorker.ts";
-import type { ClankyPeer, SwarmContextEntry, SwarmTaskStatus } from "./swarmPeer.ts";
+import type { ClankyPeer, SwarmContextEntry, SwarmMessage, SwarmTaskStatus } from "./swarmPeer.ts";
 
 /**
  * Per-dispatch routing context. The bridge keeps this so progress and
@@ -30,11 +30,34 @@ export type CodeTaskTerminalEvent = {
   result: string;
 };
 
+export type SwarmSpawnRequestRole = "implementation" | "review" | "research";
+
+export type SwarmSpawnRequest = {
+  v: 1;
+  kind: "spawn_request";
+  taskId: string;
+  role: SwarmSpawnRequestRole;
+  reason: string;
+  priority: number | null;
+};
+
+export type SwarmSpawnRequestEvent = {
+  scope: string;
+  controllerPeer: ClankyPeer;
+  message: SwarmMessage;
+  request: SwarmSpawnRequest;
+};
+
 export type SwarmActivityBridgeOptions = {
   onProgress?: (event: CodeTaskProgressEvent) => void | Promise<void>;
   onTerminal?: (event: CodeTaskTerminalEvent) => void | Promise<void>;
+  onSpawnRequest?: (event: SwarmSpawnRequestEvent) => void | Promise<void>;
   /** Polling interval per scope. Defaults to 1500ms. */
   pollIntervalMs?: number;
+  /** Duplicate spawn_request suppression window. Defaults to 60s. */
+  spawnRequestDedupMs?: number;
+  /** Maximum accepted spawn_requests per sender per minute. Defaults to 5. */
+  spawnRequestRateLimitPerMinute?: number;
   /**
    * Override the cancel hook so tests don't reach into spawnCodeWorker's
    * shared map. Production callers leave this unset; the bridge defaults
@@ -44,6 +67,44 @@ export type SwarmActivityBridgeOptions = {
   /** Action-log sink for telemetry. */
   logAction?: (entry: Record<string, unknown>) => void;
 };
+
+function normalizeSpawnRequestRole(value: unknown): SwarmSpawnRequestRole | null {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, "_");
+  if (normalized === "implementation" || normalized === "implement" || normalized === "implementer" || normalized === "fix") {
+    return "implementation";
+  }
+  if (normalized === "review" || normalized === "reviewer") return "review";
+  if (normalized === "research" || normalized === "researcher") return "research";
+  return null;
+}
+
+function parseSpawnRequestMessage(content: string): SwarmSpawnRequest | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(String(content || ""));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  if (record.v !== 1 || record.kind !== "spawn_request") return null;
+  const taskId = String(record.taskId || record.task_id || "").trim();
+  const role = normalizeSpawnRequestRole(record.role);
+  if (!taskId || !role) return null;
+  const reason = String(record.reason || "").trim().slice(0, 500);
+  const rawPriority = Number(record.priority);
+  return {
+    v: 1,
+    kind: "spawn_request",
+    taskId,
+    role,
+    reason,
+    priority: Number.isFinite(rawPriority) ? Math.max(-100, Math.min(100, Math.floor(rawPriority))) : null
+  };
+}
 
 /**
  * Long-running subscription that watches swarm activity for tasks Clanky
@@ -67,21 +128,42 @@ export class SwarmActivityBridge {
   private readonly peers: Map<string, ClankyPeer> = new Map();
   private readonly contexts: Map<string, CodeTaskDispatchContext> = new Map();
   private readonly seenProgressIds: Map<string, Set<string>> = new Map();
+  private readonly controllerScopes: Set<string> = new Set();
+  private readonly seenSpawnRequestKeys: Map<string, number> = new Map();
+  private readonly spawnRequestSenderHits: Map<string, number[]> = new Map();
   private readonly polling: Map<string, ReturnType<typeof setInterval>> = new Map();
   private readonly pollIntervalMs: number;
+  private readonly spawnRequestDedupMs: number;
+  private readonly spawnRequestRateLimitPerMinute: number;
   private readonly onProgress?: SwarmActivityBridgeOptions["onProgress"];
   private readonly onTerminal?: SwarmActivityBridgeOptions["onTerminal"];
+  private readonly onSpawnRequest?: SwarmActivityBridgeOptions["onSpawnRequest"];
   private readonly cancelWorker: NonNullable<SwarmActivityBridgeOptions["cancelWorker"]>;
   private readonly logAction?: SwarmActivityBridgeOptions["logAction"];
   private closed = false;
 
   constructor(opts: SwarmActivityBridgeOptions = {}) {
     this.pollIntervalMs = Math.max(250, Math.floor(Number(opts.pollIntervalMs) || 1500));
+    this.spawnRequestDedupMs = Math.max(1_000, Math.floor(Number(opts.spawnRequestDedupMs) || 60_000));
+    this.spawnRequestRateLimitPerMinute = Math.max(1, Math.floor(Number(opts.spawnRequestRateLimitPerMinute) || 5));
     this.onProgress = opts.onProgress;
     this.onTerminal = opts.onTerminal;
+    this.onSpawnRequest = opts.onSpawnRequest;
     this.cancelWorker = opts.cancelWorker ?? ((taskId, reason) =>
       cancelSpawnedWorkerForTask(taskId, reason));
     this.logAction = opts.logAction;
+  }
+
+  /** Watch this Clanky planner peer's inbox for controller messages such as planner spawn_request escalations. */
+  watchControllerPeer(peer: ClankyPeer, context: { scope: string }): void {
+    if (this.closed) return;
+    const scope = String(context.scope || peer.scope || "").trim();
+    if (!scope) return;
+    this.peers.set(scope, peer);
+    this.controllerScopes.add(scope);
+    if (!this.polling.has(scope)) {
+      this.startPolling(scope);
+    }
   }
 
   /** Register a freshly-dispatched task. The peer is the planner peer for the scope. */
@@ -131,6 +213,9 @@ export class SwarmActivityBridge {
     this.peers.clear();
     this.contexts.clear();
     this.seenProgressIds.clear();
+    this.controllerScopes.clear();
+    this.seenSpawnRequestKeys.clear();
+    this.spawnRequestSenderHits.clear();
   }
 
   /** Force a poll cycle now. Exposed for tests. */
@@ -138,7 +223,7 @@ export class SwarmActivityBridge {
     if (this.closed) return;
     const scopes = scope ? [scope] : [...this.peers.keys()];
     for (const s of scopes) {
-      await this.pollScope(s).catch(() => {});
+      await this.pollScope(s);
     }
   }
 
@@ -151,7 +236,7 @@ export class SwarmActivityBridge {
 
   private stopPollingIfEmpty(scope: string) {
     const stillTracked = [...this.contexts.values()].some((ctx) => ctx.scope === scope);
-    if (stillTracked) return;
+    if (stillTracked || this.controllerScopes.has(scope)) return;
     const handle = this.polling.get(scope);
     if (handle) clearInterval(handle);
     this.polling.delete(scope);
@@ -162,6 +247,18 @@ export class SwarmActivityBridge {
     if (this.closed) return;
     const peer = this.peers.get(scope);
     if (!peer) return;
+    if (this.controllerScopes.has(scope)) {
+      await this.processControllerInbox(peer, scope).catch((error) => {
+        this.logAction?.({
+          kind: "swarm_activity_bridge_error",
+          content: "controller_inbox_poll_failure",
+          metadata: {
+            scope,
+            error: String((error as Error)?.message || error)
+          }
+        });
+      });
+    }
     const tasks = [...this.contexts.values()].filter((ctx) => ctx.scope === scope);
     if (tasks.length === 0) {
       this.stopPollingIfEmpty(scope);
@@ -180,6 +277,60 @@ export class SwarmActivityBridge {
         });
       });
     }
+  }
+
+  private async processControllerInbox(peer: ClankyPeer, scope: string): Promise<void> {
+    if (!this.onSpawnRequest) return;
+    const messages = await peer.pollMessages(50);
+    for (const message of messages) {
+      const request = parseSpawnRequestMessage(message.content);
+      if (!request) continue;
+      if (this.isDuplicateSpawnRequest(message, request)) continue;
+      if (!this.acceptSpawnRequestRate(message, request, scope)) continue;
+      await this.onSpawnRequest({
+        scope,
+        controllerPeer: peer,
+        message,
+        request
+      });
+    }
+  }
+
+  private isDuplicateSpawnRequest(message: SwarmMessage, request: SwarmSpawnRequest): boolean {
+    const now = Date.now();
+    const cutoff = now - this.spawnRequestDedupMs;
+    for (const [key, seenAt] of this.seenSpawnRequestKeys.entries()) {
+      if (seenAt < cutoff) this.seenSpawnRequestKeys.delete(key);
+    }
+    const key = `${message.sender}:${request.kind}:${request.taskId}`;
+    const seenAt = this.seenSpawnRequestKeys.get(key);
+    if (seenAt && seenAt >= cutoff) return true;
+    this.seenSpawnRequestKeys.set(key, now);
+    return false;
+  }
+
+  private acceptSpawnRequestRate(message: SwarmMessage, request: SwarmSpawnRequest, scope: string): boolean {
+    const now = Date.now();
+    const cutoff = now - 60_000;
+    const sender = String(message.sender || "").trim() || "unknown";
+    const hits = (this.spawnRequestSenderHits.get(sender) || []).filter((stamp) => stamp >= cutoff);
+    if (hits.length >= this.spawnRequestRateLimitPerMinute) {
+      this.spawnRequestSenderHits.set(sender, hits);
+      this.logAction?.({
+        kind: "swarm_spawn_request_rate_limited",
+        content: "spawn_request_rate_limited",
+        metadata: {
+          scope,
+          sender,
+          taskId: request.taskId,
+          limitPerMinute: this.spawnRequestRateLimitPerMinute
+        }
+      });
+      return false;
+    }
+    hits.push(now);
+    this.spawnRequestSenderHits.set(sender, hits);
+    return true;
   }
 
   private async processTask(peer: ClankyPeer, ctx: CodeTaskDispatchContext): Promise<void> {

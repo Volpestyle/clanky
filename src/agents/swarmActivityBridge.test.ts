@@ -1,22 +1,25 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { SwarmActivityBridge, type CodeTaskDispatchContext } from "./swarmActivityBridge.ts";
-import type { ClankyPeer, SwarmContextEntry, SwarmTask, SwarmTaskStatus } from "./swarmPeer.ts";
+import type { ClankyPeer, SwarmContextEntry, SwarmMessage, SwarmTask, SwarmTaskStatus } from "./swarmPeer.ts";
 
-type FakePeer = Pick<ClankyPeer, "getTask" | "checkFile" | "scope">;
+type FakePeer = Pick<ClankyPeer, "getTask" | "checkFile" | "pollMessages" | "scope">;
 
 function fakePeer({
   scope,
   task,
-  annotations
+  annotations,
+  messages
 }: {
   scope: string;
   task: () => SwarmTask | null;
   annotations: () => SwarmContextEntry[];
+  messages?: () => SwarmMessage[];
 }): FakePeer {
   return {
     scope,
     getTask: async () => task(),
-    checkFile: async () => annotations()
+    checkFile: async () => annotations(),
+    pollMessages: async () => messages?.() ?? []
   } as FakePeer;
 }
 
@@ -182,4 +185,90 @@ test("shutdown clears intervals and tracked state", () => {
   // Subsequent trackTask should be ignored.
   bridge.trackTask(peer as ClankyPeer, makeContext({ taskId: "t-ignored" }));
   expect(bridge.size()).toBe(0);
+});
+
+test("watchControllerPeer routes versioned spawn_request messages once", async () => {
+  const requests: Array<{ taskId: string; role: string; sender: string }> = [];
+  const messages: SwarmMessage[] = [
+    {
+      id: 1,
+      scope: "/repo",
+      sender: "planner-1",
+      recipient: "clanky",
+      content: JSON.stringify({ v: 1, kind: "spawn_request", taskId: "task-open", role: "implementer", reason: "unclaimed" }),
+      createdAt: 1,
+      read: false
+    },
+    {
+      id: 2,
+      scope: "/repo",
+      sender: "planner-1",
+      recipient: "clanky",
+      content: JSON.stringify({ v: 1, kind: "spawn_request", taskId: "task-open", role: "implementer", reason: "duplicate" }),
+      createdAt: 2,
+      read: false
+    },
+    {
+      id: 3,
+      scope: "/repo",
+      sender: "planner-1",
+      recipient: "clanky",
+      content: JSON.stringify({ v: 2, kind: "spawn_request", taskId: "ignored", role: "implementer" }),
+      createdAt: 3,
+      read: false
+    }
+  ];
+  bridge = new SwarmActivityBridge({
+    onSpawnRequest: (event) => {
+      requests.push({
+        taskId: event.request.taskId,
+        role: event.request.role,
+        sender: event.message.sender
+      });
+    }
+  });
+  const peer = fakePeer({
+    scope: "/repo",
+    task: () => null,
+    annotations: () => [],
+    messages: () => messages.splice(0)
+  });
+
+  bridge.watchControllerPeer(peer as ClankyPeer, { scope: "/repo" });
+  await bridge.pollOnce("/repo");
+
+  expect(requests).toEqual([{ taskId: "task-open", role: "implementation", sender: "planner-1" }]);
+});
+
+test("watchControllerPeer rate-limits repeated spawn_requests per sender", async () => {
+  const logs: Record<string, unknown>[] = [];
+  const requests: string[] = [];
+  const messages: SwarmMessage[] = ["a", "b", "c"].map((suffix, index) => ({
+    id: index + 1,
+    scope: "/repo",
+    sender: "planner-loop",
+    recipient: "clanky",
+    content: JSON.stringify({ v: 1, kind: "spawn_request", taskId: `task-${suffix}`, role: "implementation" }),
+    createdAt: index + 1,
+    read: false
+  }));
+  bridge = new SwarmActivityBridge({
+    spawnRequestRateLimitPerMinute: 2,
+    logAction: (entry) => logs.push(entry),
+    onSpawnRequest: (event) => {
+      requests.push(event.request.taskId);
+    }
+  });
+  const peer = fakePeer({
+    scope: "/repo",
+    task: () => null,
+    annotations: () => [],
+    messages: () => messages.splice(0)
+  });
+
+  bridge.watchControllerPeer(peer as ClankyPeer, { scope: "/repo" });
+  await bridge.pollOnce("/repo");
+
+  expect(requests).toEqual(["task-a", "task-b"]);
+  expect(logs.some((entry) => entry.kind === "swarm_spawn_request_rate_limited")).toBe(true);
 });

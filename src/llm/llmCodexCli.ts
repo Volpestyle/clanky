@@ -663,6 +663,25 @@ export function buildCodexCliCodeAgentArgs({ model, cwd = "", instruction = "", 
   return args;
 }
 
+export function buildCodexCliInteractiveAgentArgs({ model, cwd = "", configOverrides = [] }: {
+  model: string;
+  cwd?: string;
+  configOverrides?: string[];
+}) {
+  const args = [
+    "-m", String(model || "gpt-5.4"),
+    "-s", "workspace-write",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "--no-alt-screen"
+  ];
+  const normalizedCwd = String(cwd || "").trim();
+  if (normalizedCwd) {
+    args.push("-C", normalizedCwd);
+  }
+  appendCodexConfigOverrides(args, configOverrides);
+  return args;
+}
+
 export function buildCodexCliResumeArgs({ model, threadId, prompt = "", outputSchemaPath = "", configOverrides = [] }: {
   model: string;
   threadId: string;
@@ -728,5 +747,4 @@ export function normalizeCodexCliError(
       : `codex-cli error: ${typedError?.message || error}`
   };
 }
-
 
