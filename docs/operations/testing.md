@@ -5,6 +5,8 @@
 ## Default Test Commands
 
 - `bun run test` runs the default unit and integration suite and excludes `.live.test.ts` files.
+- `bun run verify` runs the safe local quality gate: lint, typecheck, default tests, docs link check, backend import check, and dashboard production build.
+- `bun run check` aliases `bun run verify`.
 - `bun run test:e2e` runs all Discord E2E files under `tests/e2e/`, subject to each suite's env/config guards.
 - `bun run test:e2e:voice` runs the physical voice harness convenience target (`tests/e2e/voicePhysicalHarness.test.ts`) and sets `RUN_E2E_VOICE_PHYSICAL=1` for its explicit smoke check.
 - `bun run test:e2e:text` runs the text E2E suite and sets `RUN_E2E_TEXT=1`.
