@@ -44,22 +44,38 @@ We do not hardcode behaviors for the agent. We give it rich context — conversa
 
 #### Submodules
 
-`src/voice/clankvox` is a git submodule pointing to `Volpestyle/clankvox`. When you make changes inside `src/voice/clankvox/`, the submodule HEAD moves and clanky's tree records the new commit hash. Both repos must be committed together:
+This repo vendors code through git submodules, including `src/voice/clankvox` and `mcp-servers/swarm-mcp`. `mcp-servers/swarm-mcp` also contains nested submodules such as `apps/swarm-ui` and `apps/swarm-ios`.
 
-1. Commit and push inside the submodule first:
+Submodules are real working trees, not symlinks. You can edit directly inside them and local dev will see the changes immediately, but each repo still needs its own commit and push.
+
+Commit from the inside out:
+
+1. Commit and push the deepest changed submodule first.
    ```sh
-   cd src/voice/clankvox
+   cd mcp-servers/swarm-mcp/apps/swarm-ui
    git add -A && git commit -m "your message"
-   git push origin master
+   git push
    ```
-2. Then back in clanky, the submodule pointer is a staged change. Include it in the clanky commit:
+2. Commit and push the parent submodule pointer.
    ```sh
-   cd ../../../  # back to clanky root
-   git add src/voice/clankvox
-   # stage any other clanky changes, then commit
+   cd ../..
+   git add apps/swarm-ui
+   git commit -m "Bump swarm-ui"
+   git push
+   ```
+3. Commit and push the clanky pointer.
+   ```sh
+   cd ../..
+   git add mcp-servers/swarm-mcp
+   git commit -m "Bump swarm-mcp"
+   git push
    ```
 
-If you forget step 2, clanky's tree still points at the old clankvox commit and anyone who clones or pulls will get stale code. Always verify `git status` shows no dirty submodule pointer before pushing clanky.
+For a one-level submodule like `src/voice/clankvox`, do steps 1 and 3 only: commit/push inside `src/voice/clankvox`, then commit the updated `src/voice/clankvox` pointer in clanky.
+
+If you do work in a standalone clone, still update the vendored submodule checkout and commit the clanky pointer. If you forget the parent pointer commit, clanky still points at the old submodule commit and other clones get stale code.
+
+Before pushing clanky, run `git status` and `git submodule status --recursive`. There should be no dirty submodule markers (`+`, `-`, or `m`) unless you intentionally have uncommitted nested work.
 
 #### Process
 - Runtime/package manager standard: use Bun (`bun`, `bun run`, `bunx`) over Node/NPM (`node`, `npm`, `npx`) unless explicitly requested.
