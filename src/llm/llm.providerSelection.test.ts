@@ -148,12 +148,14 @@ test("media generation capability helpers select configured provider/model targe
   });
 
   const settings = {
-    discovery: {
-      simpleImageModel: "gpt-image-1.5",
-      complexImageModel: "grok-imagine-image",
-      videoModel: "grok-imagine-video",
-      allowedImageModels: ["gpt-image-1.5", "grok-imagine-image"],
-      allowedVideoModels: ["grok-imagine-video", "gpt-video-1"]
+    initiative: {
+      discovery: {
+        simpleImageModel: "gpt-image-1.5",
+        complexImageModel: "grok-imagine-image",
+        videoModel: "grok-imagine-video",
+        allowedImageModels: ["gpt-image-1.5", "grok-imagine-image"],
+        allowedVideoModels: ["grok-imagine-video", "gpt-video-1"]
+      }
     }
   };
 

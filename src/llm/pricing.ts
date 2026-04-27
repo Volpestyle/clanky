@@ -43,6 +43,11 @@ const DEFAULT_PRICING = {
     "text-embedding-ada-002": { inputPer1M: 0.1, outputPer1M: 0 }
   },
   openaiImages: {
+    "gpt-image-2": {
+      "1024x1024": 0.053,
+      "1024x1536": 0.041,
+      "1536x1024": 0.041
+    },
     "gpt-image-1.5": {
       "1024x1024": 0.04
     }
