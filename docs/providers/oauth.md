@@ -145,6 +145,7 @@ Use it for the general-purpose OpenAI orchestrator, voice admission, and voice g
 When the `openai_oauth` preset is used, the expected split is:
 
 - general brain/orchestrator work runs on OpenAI OAuth (`openai-oauth`)
+- interactive browser work defaults to `openai_computer_use`
 - implementation defaults to the local `codex-cli` worker
 - `claude-code` can still be used as an optional local coding worker
 

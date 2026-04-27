@@ -86,7 +86,7 @@ Current runtime values:
 - `local_browser_agent`
 - `openai_computer_use`
 
-The `openai_native_realtime` preset defaults to `openai_computer_use`. Other presets currently default to the local browser agent unless explicitly overridden.
+The `openai_native_realtime` and `openai_oauth` presets default to `openai_computer_use`. Other presets currently default to the local browser agent unless explicitly overridden.
 The dashboard Browser section can override that preset default directly, so a Claude preset can still route `browser_browse` through OpenAI computer use.
 
 ### 3. Local runtime: `local_browser_agent`

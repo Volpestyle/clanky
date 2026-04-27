@@ -9,7 +9,7 @@ import {
   readBrowserCurrentUrl
 } from "./browserTaskRuntime.ts";
 
-const COMPUTER_USE_DEFAULT_MODEL = "gpt-5.4";
+const COMPUTER_USE_DEFAULT_MODEL = "gpt-5.5";
 const COMPUTER_USE_DEFAULT_START_URL = "https://example.com";
 const COMPUTER_USE_DISPLAY_WIDTH = 1024;
 const COMPUTER_USE_DISPLAY_HEIGHT = 768;

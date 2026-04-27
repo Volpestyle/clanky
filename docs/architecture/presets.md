@@ -51,6 +51,7 @@ Each preset sets defaults for:
 Current preset intent:
 
 - `openai_oauth`, `openai_api`, and `openai_native_realtime` use `codex-cli` as the default implementation worker, with `claude-code` also available as a local worker
+- `openai_oauth` and `openai_native_realtime` default browser work to `openai_computer_use`; other presets default browser work to `local_browser_agent` unless overridden
 - `claude_oauth` and `claude_api` use `claude-code` as the default implementation worker, with `codex-cli` also available as a local worker
 - `claude_oauth` defaults both the voice reply classifier and the brain-path voice generation model to `claude-sonnet-4-6`
 

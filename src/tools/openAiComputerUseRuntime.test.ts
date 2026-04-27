@@ -141,7 +141,7 @@ test("runOpenAiComputerUseTask uses the GA computer tool and executes batched ac
       profile: undefined
     }
   }]);
-  assert.equal(requests[0]?.model, "gpt-5.4");
+  assert.equal(requests[0]?.model, "gpt-5.5");
   assert.deepEqual(requests[0]?.tools, [{
     type: "computer",
     display_width: 1024,
@@ -174,7 +174,7 @@ test("runOpenAiComputerUseTask uses the GA computer tool and executes batched ac
     "close"
   ]);
   assert.equal(logs.length, 1);
-  assert.equal(logs[0]?.usdCost, 0.0005);
+  assert.equal(logs[0]?.usdCost, 0.00165);
   assert.equal((logs[0]?.metadata as Record<string, unknown>)?.sessionKey, "session-1");
 });
 

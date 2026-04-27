@@ -227,7 +227,7 @@ const AGENT_STACK_PRESET_DEFINITIONS = {
       model: "gpt-5.5"
     },
     researchRuntime: "local_external_search",
-    browserRuntime: "local_browser_agent",
+    browserRuntime: "openai_computer_use",
     voiceRuntime: "openai_realtime",
     voiceReplyPath: "brain",
     voiceTtsMode: "realtime",
