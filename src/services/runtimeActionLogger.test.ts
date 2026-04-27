@@ -10,11 +10,14 @@ test("normalizeRuntimeActionEvent redacts secrets but keeps operational keys", (
       apiKey: "secret-key-value",
       nested: {
         authorization: "Bearer abc",
+        refreshToken: "refresh-secret",
         ok: "safe"
       },
       rows: [{ token: "xyz" }],
       sessionId: "sess-123",
-      tokens: 245
+      tokens: 245,
+      input_tokens: 1024,
+      publicApiToken: "api-token-secret"
     }
   });
 
@@ -22,10 +25,13 @@ test("normalizeRuntimeActionEvent redacts secrets but keeps operational keys", (
   assert.equal(event.agent, "voice");
   assert.equal(event.metadata.apiKey, "[REDACTED]");
   assert.equal(event.metadata.nested.authorization, "[REDACTED]");
+  assert.equal(event.metadata.nested.refreshToken, "[REDACTED]");
   assert.equal(event.metadata.nested.ok, "safe");
-  assert.equal(event.metadata.rows[0].token, "xyz");
+  assert.equal(event.metadata.rows[0].token, "[REDACTED]");
   assert.equal(event.metadata.sessionId, "sess-123");
   assert.equal(event.metadata.tokens, 245);
+  assert.equal(event.metadata.input_tokens, 1024);
+  assert.equal(event.metadata.publicApiToken, "[REDACTED]");
 });
 
 test("RuntimeActionLogger.attachToStore preserves prior listener and emits JSON line", () => {

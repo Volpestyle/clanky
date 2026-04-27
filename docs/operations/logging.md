@@ -20,7 +20,7 @@ Runtime action logs are produced from `Store.onActionLogged` and include:
 - `content`
 - `metadata`
 
-Sensitive metadata keys are redacted (`apiKey`, `token`, `authorization`, `secret`, etc.).
+Sensitive metadata keys are redacted (`apiKey`, `token`, `accessToken`, `refreshToken`, `authorization`, `secret`, etc.). Operational counters such as `tokens` and `input_tokens` remain visible.
 
 Prompt logs for turn-level debugging are attached under `metadata.replyPrompts`
 and stay hidden by default in the dashboard Action Stream.

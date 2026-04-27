@@ -188,6 +188,8 @@ Optionally, drop full prompt captures into `docs/log-dives/prompt-snapshots/<dat
 | LLM returned tokens but no parsed reply | `llm_call.responseShape`, `rawContentSummary`, `responseDiagnostics` | `invalid_structured_output` events |
 | OpenAI streamed a tool but final output was empty | `responseDiagnostics.streamFunctionArgumentDeltaEventCount`, `streamFunctionCallDraftCount`, `streamRecoveredToolCallCount` | `rawContentSummary.functionCallCount`, tool-loop events, `invalid_structured_output` |
 | Startup catchup oddity | `startup_catchup_begin`, `startup_catchup_channel_scanned`, `startup_catchup_complete` | per-channel admission events that follow |
+| Code worker (swarm) stalled, never adopted, or spawned and exited | `swarm_worker_adoption_timeout`, `swarm_worker_exit`, `swarm_worker_log_attached`, `swarm_server_spawn_failed`, `swarm_server_spawn_fallback` | swarm-mcp instance row state via `swarm-deepdive`; pair with the worker's `cwd` / harness from the spawn payload |
+| Bot misread or skipped an image / GIF / video attachment | `reply_tool_availability` (confirm `video_context` and/or `image_lookup` are in `includedTools`), `video_context_call`, `video_context_tool_result`, `video_context_error`, `video_context_dependency_status` | upstream media events on the trigger message, replyPipeline GIF/video branch, ffmpeg/yt-dlp dependency status |
 
 ## Cardinal rules
 

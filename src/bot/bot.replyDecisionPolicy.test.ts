@@ -254,6 +254,79 @@ function applyBaselineSettings(store, channelId) {
   });
 }
 
+test("reply admission logs channel eligibility as a boolean", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "reply-chan-1";
+    applyBaselineSettings(store, channelId);
+    patchTestSettings(store, {
+      permissions: {
+        replies: {
+          replyChannelIds: [channelId]
+        }
+      }
+    });
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate() {
+          return {
+            text: JSON.stringify({
+              text: "[SKIP]",
+              skip: true,
+              reactionEmoji: null,
+              media: null,
+              webSearchQuery: null,
+              memoryLookupQuery: null,
+              memoryLine: null,
+              automationAction: { operation: "none" },
+              voiceIntent: { intent: "none", confidence: 0, reason: null },
+              screenWatchIntent: { action: "none", confidence: 0, reason: null }
+            }),
+            provider: "test",
+            model: "test-model",
+            usage: null,
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanky",
+      tag: "clanky#0001"
+    };
+
+    const guild = buildGuild();
+    const replyPayloads = [];
+    const channelSendPayloads = [];
+    const typingCallsRef = { count: 0 };
+    const channel = buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef });
+    const incoming = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "reply-admission-meta-1",
+      content: "ambient chatter in a configured reply channel",
+      replyPayloads
+    });
+
+    await bot.handleMessage(incoming);
+
+    const admission = store.getRecentActions(12).find(
+      (row) => row.kind === "text_runtime" && row.content === "reply_admission_decision"
+    );
+    assert.equal(admission?.metadata?.isReplyChannel, true);
+    assert.equal(typeof admission?.metadata?.isReplyChannel, "boolean");
+  });
+});
+
 test("same-author active follow-up turn can still post when model contributes value", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";

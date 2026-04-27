@@ -12,7 +12,7 @@ const OMISSION_VALUE = "[OMITTED]";
 const CIRCULAR_VALUE = "[CIRCULAR]";
 const TRUNCATED_VALUE = "[TRUNCATED]";
 const SENSITIVE_KEY_PATTERN =
-  /(api[-_]?key|secret|authorization|password|bearer|private[-_]?key)/i;
+  /(api[-_]?key|secret|authorization|password|bearer|private[-_]?key|token$)/i;
 
 // ── ANSI helpers ───────────────────────────────────────────────────────
 const RESET = "\x1b[0m";

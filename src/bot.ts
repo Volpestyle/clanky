@@ -1548,7 +1548,7 @@ export class ClankerBot {
           allow: replyAdmissionDecision.allow,
           reason: replyAdmissionDecision.reason
         }),
-        isReplyChannel,
+        isReplyChannel: replyChannelEligible,
         allowUnsolicitedReplies: replyAdmissionDecision.allowUnsolicitedReplies,
         ambientReplyEagerness: Number(settings?.interaction?.activity?.ambientReplyEagerness || 0),
         addressSignal: {
@@ -1717,7 +1717,7 @@ export class ClankerBot {
       metadata: {
         allow: replyAdmissionDecision.allow,
         reason: replyAdmissionDecision.reason,
-        isReplyChannel,
+        isReplyChannel: replyChannelEligible,
         syntheticId
       }
     });
