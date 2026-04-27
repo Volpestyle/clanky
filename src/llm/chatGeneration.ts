@@ -10,7 +10,8 @@ import {
 import {
   extractOpenAiResponseText,
   extractOpenAiResponseUsage,
-  extractOpenAiToolCalls
+  extractOpenAiToolCalls,
+  normalizeInlineText
 } from "./llmHelpers.ts";
 import {
   addAnthropicCacheBreakpointToLastItem,
@@ -21,10 +22,12 @@ import {
   buildOpenAiReasoningParam,
   buildOpenAiToolLoopInput,
   buildOpenAiTemperatureParam,
+  summarizeProviderRawContent,
   type ContentBlock,
   type ChatModelStreamCallbacks,
   type ChatModelRequest,
   type ImageInput,
+  type LlmToolCall,
   type ToolLoopContentBlock,
   type ToolLoopMessage
 } from "./serviceShared.ts";
@@ -320,10 +323,14 @@ type OpenAiResponsesResponseLike = {
 type OpenAiResponsesStreamEvent = {
   type: string;
   delta?: string;
+  arguments?: string;
+  call_id?: string;
+  name?: string;
   text?: string;
   item_id?: string;
   output_index?: number;
   item?: OpenAiResponsesOutputItem;
+  output_item?: OpenAiResponsesOutputItem;
   part?: {
     type?: string;
     text?: string;
@@ -332,6 +339,132 @@ type OpenAiResponsesStreamEvent = {
   response?: OpenAiResponsesResponseLike;
   error?: { message?: string } | string | null;
 };
+
+type OpenAiStreamToolCallDraft = {
+  key: string;
+  id: string;
+  name: string;
+  argumentsText: string;
+};
+
+const OPENAI_STREAM_TOOL_ARGUMENTS_MAX_CHARS = 20_000;
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function getOpenAiStreamItem(event: OpenAiResponsesStreamEvent): OpenAiResponsesOutputItem | null {
+  return isObjectRecord(event.item)
+    ? event.item
+    : isObjectRecord(event.output_item)
+      ? event.output_item
+      : null;
+}
+
+function isOpenAiStreamFunctionCallEvent(event: OpenAiResponsesStreamEvent): boolean {
+  const eventType = String(event.type || "").trim();
+  if (eventType === "response.function_call_arguments.delta" || eventType === "response.function_call_arguments.done") {
+    return true;
+  }
+  const item = getOpenAiStreamItem(event);
+  return Boolean(item && String(item.type || "").trim() === "function_call");
+}
+
+function resolveOpenAiStreamToolKey(event: OpenAiResponsesStreamEvent, fallbackKey = ""): string {
+  const item = getOpenAiStreamItem(event);
+  return normalizeInlineText(
+    event.item_id ||
+      item?.id ||
+      event.call_id ||
+      item?.call_id ||
+      (Number.isFinite(Number(event.output_index)) ? `output_index:${Number(event.output_index)}` : "") ||
+      fallbackKey,
+    180
+  );
+}
+
+function getOrCreateOpenAiStreamToolCallDraft(
+  drafts: Map<string, OpenAiStreamToolCallDraft>,
+  event: OpenAiResponsesStreamEvent,
+  fallbackKey = ""
+): OpenAiStreamToolCallDraft {
+  const key = resolveOpenAiStreamToolKey(event, fallbackKey) || `stream_tool:${drafts.size + 1}`;
+  const item = getOpenAiStreamItem(event);
+  const existing = drafts.get(key);
+  if (existing) {
+    const id = normalizeInlineText(event.call_id || item?.call_id || item?.id, 180);
+    const name = normalizeInlineText(event.name || item?.name, 120);
+    if (id) existing.id = id;
+    if (name) existing.name = name;
+    return existing;
+  }
+
+  const draft: OpenAiStreamToolCallDraft = {
+    key,
+    id: normalizeInlineText(event.call_id || item?.call_id || item?.id || key, 180),
+    name: normalizeInlineText(event.name || item?.name, 120),
+    argumentsText: typeof item?.arguments === "string" ? item.arguments.slice(0, OPENAI_STREAM_TOOL_ARGUMENTS_MAX_CHARS) : ""
+  };
+  drafts.set(key, draft);
+  return draft;
+}
+
+function parseOpenAiStreamToolInput(argumentsText: string): Record<string, unknown> {
+  const parsed = safeJsonParse(argumentsText, null);
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : {};
+}
+
+function buildOpenAiStreamToolCalls(drafts: Map<string, OpenAiStreamToolCallDraft>): LlmToolCall[] {
+  const toolCalls: LlmToolCall[] = [];
+  for (const draft of drafts.values()) {
+    const name = normalizeInlineText(draft.name, 120);
+    if (!name) continue;
+    toolCalls.push({
+      id: normalizeInlineText(draft.id || draft.key, 180),
+      name,
+      input: parseOpenAiStreamToolInput(draft.argumentsText)
+    });
+  }
+  return toolCalls;
+}
+
+function buildOpenAiStreamFunctionCallOutput(drafts: Map<string, OpenAiStreamToolCallDraft>): OpenAiResponsesOutputItem[] {
+  const output: OpenAiResponsesOutputItem[] = [];
+  for (const draft of drafts.values()) {
+    const name = normalizeInlineText(draft.name, 120);
+    if (!name) continue;
+    const callId = normalizeInlineText(draft.id || draft.key, 180);
+    output.push({
+      id: callId,
+      type: "function_call",
+      call_id: callId,
+      name,
+      arguments: draft.argumentsText
+    });
+  }
+  return output;
+}
+
+function buildOpenAiResponseDiagnostics(
+  response: OpenAiResponsesResponseLike,
+  extras: Record<string, unknown> = {}
+): Record<string, unknown> {
+  const output = Array.isArray(response.output) ? response.output : [];
+  const outputSummary = summarizeProviderRawContent(output);
+  return {
+    ...extras,
+    finalStatus: String(response.status || "").trim() || null,
+    finalOutputItemCount: output.length,
+    finalOutputItemTypes: outputSummary.itemTypes || null,
+    finalContentPartTypes: outputSummary.contentPartTypes || null,
+    finalFunctionCallCount: outputSummary.functionCallCount || 0,
+    finalFunctionCallArgumentChars: outputSummary.functionCallArgumentChars || 0,
+    finalFunctionCallArgumentPresent: Boolean(outputSummary.functionCallArgumentPresent),
+    finalOutputTextChars: String(response.output_text || "").length
+  };
+}
 
 function buildOpenAiImageParts(imageInputs: ChatModelRequest["imageInputs"] = []) {
   return imageInputs
@@ -538,6 +671,10 @@ export async function callOpenAiResponses(
     text,
     toolCalls,
     rawContent: responseWithOutput.output || null,
+    responseDiagnostics: buildOpenAiResponseDiagnostics(responseWithOutput, {
+      transport: "openai_responses_batch",
+      extractedTextChars: text.length
+    }),
     stopReason: String(responseWithOutput.status || "").trim() || undefined,
     usage: extractOpenAiResponseUsage(response)
   };
@@ -568,22 +705,77 @@ export async function callOpenAiResponsesStreaming(
   let finalResponse: OpenAiResponsesResponseLike | null = null;
   let streamErrorMessage = "";
   let accumulatedDeltaText = "";
+  let outputTextDeltaEventCount = 0;
+  let outputTextDoneEventCount = 0;
+  let contentPartDoneEventCount = 0;
+  let streamDoneTextChars = 0;
+  let functionCallArgumentDeltaEventCount = 0;
+  let functionCallArgumentDeltaChars = 0;
+  let functionCallArgumentsDoneEventCount = 0;
+  let functionCallItemAddedCount = 0;
+  let functionCallItemDoneCount = 0;
+  let latestStreamToolCallKey = "";
+  const streamToolCallDrafts = new Map<string, OpenAiStreamToolCallDraft>();
 
   for await (const event of stream) {
     if (event.type === "response.output_text.delta") {
       const delta = String(event.delta || "");
+      outputTextDeltaEventCount += 1;
       accumulatedDeltaText += delta;
       callbacks.onTextDelta(delta);
       continue;
     }
     if (event.type === "response.output_text.done" || event.type === "response.content_part.done") {
       const completedText = String(event.text || event.part?.text || "");
+      if (event.type === "response.output_text.done") {
+        outputTextDoneEventCount += 1;
+      } else {
+        contentPartDoneEventCount += 1;
+      }
+      streamDoneTextChars += completedText.length;
       if (completedText && !accumulatedDeltaText.trim()) {
         accumulatedDeltaText = completedText.trim();
       }
       continue;
     }
+    if ((event.type === "response.output_item.added" || event.type === "response.output_item.done") && isOpenAiStreamFunctionCallEvent(event)) {
+      const draft = getOrCreateOpenAiStreamToolCallDraft(streamToolCallDrafts, event, latestStreamToolCallKey);
+      const item = getOpenAiStreamItem(event);
+      if (typeof item?.arguments === "string") {
+        draft.argumentsText = item.arguments.slice(0, OPENAI_STREAM_TOOL_ARGUMENTS_MAX_CHARS);
+      }
+      latestStreamToolCallKey = draft.key;
+      if (event.type === "response.output_item.added") {
+        functionCallItemAddedCount += 1;
+      } else {
+        functionCallItemDoneCount += 1;
+      }
+      continue;
+    }
     if (event.type === "response.function_call_arguments.delta") {
+      const delta = String(event.delta || "");
+      functionCallArgumentDeltaEventCount += 1;
+      functionCallArgumentDeltaChars += delta.length;
+      const draft = getOrCreateOpenAiStreamToolCallDraft(streamToolCallDrafts, event, latestStreamToolCallKey);
+      if (delta) {
+        draft.argumentsText = `${draft.argumentsText}${delta}`.slice(0, OPENAI_STREAM_TOOL_ARGUMENTS_MAX_CHARS);
+      }
+      latestStreamToolCallKey = draft.key;
+      continue;
+    }
+    if (event.type === "response.function_call_arguments.done") {
+      functionCallArgumentsDoneEventCount += 1;
+      const draft = getOrCreateOpenAiStreamToolCallDraft(streamToolCallDrafts, event, latestStreamToolCallKey);
+      const item = getOpenAiStreamItem(event);
+      const finalArguments = typeof event.arguments === "string"
+        ? event.arguments
+        : typeof item?.arguments === "string"
+          ? item.arguments
+          : "";
+      if (finalArguments) {
+        draft.argumentsText = finalArguments.slice(0, OPENAI_STREAM_TOOL_ARGUMENTS_MAX_CHARS);
+      }
+      latestStreamToolCallKey = draft.key;
       continue;
     }
     if (event.type === "response.completed") {
@@ -603,15 +795,42 @@ export async function callOpenAiResponsesStreaming(
   // events but ships an empty output[] in the final response.completed event, so
   // fall back to the accumulated deltas when output[] yields no text.
   const extractedText = extractOpenAiResponseText(finalResponse);
+  const finalOutput = Array.isArray(finalResponse.output) ? finalResponse.output : [];
+  const finalToolCalls = extractOpenAiToolCalls(finalResponse);
+  const streamedToolCalls = buildOpenAiStreamToolCalls(streamToolCallDrafts);
+  const streamedFunctionCallOutput = buildOpenAiStreamFunctionCallOutput(streamToolCallDrafts);
+  const recoveredToolCalls = finalToolCalls.length > 0 ? [] : streamedToolCalls;
+  const rawContent = finalToolCalls.length > 0 || streamedFunctionCallOutput.length === 0
+    ? finalResponse.output || null
+    : [...finalOutput, ...streamedFunctionCallOutput];
+  const toolCalls = finalToolCalls.length > 0 ? finalToolCalls : recoveredToolCalls;
   const normalized = {
     text: extractedText || accumulatedDeltaText.trim(),
-    toolCalls: extractOpenAiToolCalls(finalResponse),
-    rawContent: finalResponse.output || null,
+    toolCalls,
+    rawContent,
+    responseDiagnostics: buildOpenAiResponseDiagnostics(finalResponse, {
+      transport: "openai_responses_stream",
+      streamDeltaTextChars: accumulatedDeltaText.length,
+      streamOutputTextDeltaEventCount: outputTextDeltaEventCount,
+      streamDoneTextChars,
+      streamOutputTextDoneEventCount: outputTextDoneEventCount,
+      streamContentPartDoneEventCount: contentPartDoneEventCount,
+      streamFunctionArgumentDeltaEventCount: functionCallArgumentDeltaEventCount,
+      streamFunctionArgumentDeltaChars: functionCallArgumentDeltaChars,
+      streamFunctionArgumentsDoneEventCount: functionCallArgumentsDoneEventCount,
+      streamFunctionCallItemAddedCount: functionCallItemAddedCount,
+      streamFunctionCallItemDoneCount: functionCallItemDoneCount,
+      streamFunctionCallDraftCount: streamToolCallDrafts.size,
+      streamRecoveredToolCallCount: recoveredToolCalls.length,
+      streamRecoveredToolCallNames: recoveredToolCalls.length ? recoveredToolCalls.map((toolCall) => toolCall.name) : null,
+      extractedTextChars: extractedText.length,
+      fallbackTextUsed: !extractedText && accumulatedDeltaText.trim().length > 0
+    }),
     stopReason: String(finalResponse.status || "").trim() || undefined,
     usage: extractOpenAiResponseUsage(finalResponse)
   };
   if (typeof callbacks.onContentBlockComplete === "function") {
-    const completedBlocks = buildContextContentBlocks(finalResponse.output || null, normalized.text);
+    const completedBlocks = buildContextContentBlocks(rawContent, normalized.text);
     for (const block of completedBlocks) {
       if (block.type === "text" || block.type === "tool_use") {
         callbacks.onContentBlockComplete(block);

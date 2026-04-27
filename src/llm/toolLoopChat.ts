@@ -10,6 +10,8 @@ import {
   buildOpenAiTemperatureParam,
   buildOpenAiToolLoopInput,
   buildToolLoopContentFromOpenAiOutput,
+  formatProviderResponseShape,
+  summarizeProviderRawContent,
   type LlmActionStore,
   type LlmTrace,
   type ToolLoopContentBlock,
@@ -89,6 +91,8 @@ export async function chatWithTools(
     cacheWriteTokens: 0,
     cacheReadTokens: 0
   };
+  let rawContent: unknown = null;
+  let responseDiagnostics: Record<string, unknown> | null = null;
 
   if (resolvedProvider === "anthropic" || resolvedProvider === "claude-oauth") {
     const anthropicClient = resolvedProvider === "claude-oauth" ? deps.claudeOAuthClient : deps.anthropic;
@@ -145,6 +149,7 @@ export async function chatWithTools(
       }
     }
     content = nextContent;
+    rawContent = response.content;
     stopReason = response.stop_reason || "end_turn";
     usage = {
       inputTokens: Number(response.usage?.input_tokens || 0),
@@ -181,6 +186,11 @@ export async function chatWithTools(
     const responseWithOutput = response as { output?: unknown };
 
     content = buildToolLoopContentFromOpenAiOutput(responseWithOutput.output);
+    rawContent = responseWithOutput.output || null;
+    responseDiagnostics = {
+      transport: "openai_responses_batch",
+      finalOutputItemCount: Array.isArray(responseWithOutput.output) ? responseWithOutput.output.length : null
+    };
     usage = extractOpenAiResponseUsage(response);
   } else if (resolvedProvider === "xai") {
     if (!deps.xai) {
@@ -291,6 +301,7 @@ export async function chatWithTools(
       });
     }
     content = nextContent;
+    rawContent = choice?.message || null;
     stopReason = String(choice?.finish_reason || "").trim() || "end_turn";
     usage = {
       inputTokens: Number(response.usage?.prompt_tokens || 0),
@@ -333,6 +344,8 @@ export async function chatWithTools(
           })
           .join("\n")
       : null;
+  const rawContentSummary = summarizeProviderRawContent(rawContent);
+  const responseShape = formatProviderResponseShape(rawContentSummary, responseDiagnostics);
 
   deps.store.logAction({
     kind: "llm_tool_call",
@@ -346,6 +359,9 @@ export async function chatWithTools(
       usage,
       source: trace.source || null,
       stopReason,
+      responseShape,
+      rawContentSummary,
+      responseDiagnostics,
       systemPrompt: systemPrompt || null,
       messageCount: messages.length,
       lastUserContent: lastUserContent || null,

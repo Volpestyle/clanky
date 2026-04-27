@@ -1126,6 +1126,243 @@ test("generateStreaming logs returned text, tool names, and stop reason for runt
   assert.equal(llmLog.metadata?.transcriptSource, "output");
 });
 
+test("generateStreaming logs compact provider response shape for silent-output debugging", async () => {
+  const logs = [];
+  const service = createService({ xaiApiKey: "test-xai-key" }, { logs });
+  service.callChatModel = async () => ({
+    text: "",
+    toolCalls: [],
+    rawContent: [],
+    responseDiagnostics: {
+      transport: "openai_responses_stream",
+      streamDeltaTextChars: 0,
+      streamDoneTextChars: 0,
+      extractedTextChars: 0,
+      finalOutputItemCount: 0
+    },
+    stopReason: "completed",
+    usage: {
+      inputTokens: 9,
+      outputTokens: 122,
+      cacheWriteTokens: 0,
+      cacheReadTokens: 0
+    }
+  });
+
+  await service.generateStreaming({
+    settings: {
+      agentStack: {
+        overrides: {
+          orchestrator: {
+            provider: "xai",
+            model: "grok-3-mini-latest"
+          }
+        }
+      }
+    },
+    systemPrompt: "system",
+    userPrompt: "user",
+    contextMessages: [],
+    trace: {
+      source: "message_event",
+      messageId: "msg_1"
+    },
+    onTextDelta() {}
+  });
+
+  const llmLog = logs.find((entry) => entry?.kind === "llm_call");
+  assert.ok(llmLog);
+  assert.equal(llmLog.metadata?.responseChars, 0);
+  assert.equal(llmLog.metadata?.responseShape, "raw=array[0] delta=0 done=0 extracted=0 finalOut=0");
+  assert.deepEqual(llmLog.metadata?.rawContentSummary, {
+    shape: "array",
+    length: 0,
+    messageCount: 0,
+    functionCallCount: 0,
+    functionCallArgumentChars: 0,
+    functionCallArgumentPresent: false,
+    textChars: 0
+  });
+  assert.deepEqual(llmLog.metadata?.responseDiagnostics, {
+    transport: "openai_responses_stream",
+    streamDeltaTextChars: 0,
+    streamDoneTextChars: 0,
+    extractedTextChars: 0,
+    finalOutputItemCount: 0
+  });
+});
+
+test("callChatModelStreaming records OpenAI stream extraction diagnostics", async () => {
+  const service = createService({ openaiApiKey: "test-openai-key" });
+  service.openai = {
+    responses: {
+      async create() {
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "response.output_text.delta", delta: "hello " };
+            yield { type: "response.output_text.done", text: "hello world" };
+            yield { type: "response.function_call_arguments.delta", delta: "{\"task\":\"x\"}" };
+            yield {
+              type: "response.completed",
+              response: {
+                status: "completed",
+                output_text: "",
+                output: [],
+                usage: {
+                  input_tokens: 11,
+                  output_tokens: 6
+                }
+              }
+            };
+          }
+        };
+      }
+    }
+  };
+
+  const result = await service.callChatModelStreaming("openai", {
+    model: "gpt-5-mini",
+    systemPrompt: "system",
+    userPrompt: "user",
+    contextMessages: [],
+    temperature: 0.2,
+    maxOutputTokens: 64
+  }, {
+    onTextDelta() {}
+  });
+
+  assert.equal(result.text, "hello");
+  assert.deepEqual(result.responseDiagnostics, {
+    transport: "openai_responses_stream",
+    streamDeltaTextChars: 6,
+    streamOutputTextDeltaEventCount: 1,
+    streamDoneTextChars: 11,
+    streamOutputTextDoneEventCount: 1,
+    streamContentPartDoneEventCount: 0,
+    streamFunctionArgumentDeltaEventCount: 1,
+    streamFunctionArgumentDeltaChars: 12,
+    streamFunctionArgumentsDoneEventCount: 0,
+    streamFunctionCallItemAddedCount: 0,
+    streamFunctionCallItemDoneCount: 0,
+    streamFunctionCallDraftCount: 1,
+    streamRecoveredToolCallCount: 0,
+    streamRecoveredToolCallNames: null,
+    extractedTextChars: 0,
+    fallbackTextUsed: true,
+    finalStatus: "completed",
+    finalOutputItemCount: 0,
+    finalOutputItemTypes: null,
+    finalContentPartTypes: null,
+    finalFunctionCallCount: 0,
+    finalFunctionCallArgumentChars: 0,
+    finalFunctionCallArgumentPresent: false,
+    finalOutputTextChars: 0
+  });
+});
+
+test("callChatModelStreaming recovers OpenAI streamed tool calls when final output is empty", async () => {
+  const service = createService({ openaiApiKey: "test-openai-key" });
+  service.openai = {
+    responses: {
+      async create() {
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield {
+              type: "response.output_item.added",
+              item: {
+                id: "fc_1",
+                type: "function_call",
+                call_id: "call_spawn",
+                name: "spawn_code_worker",
+                arguments: ""
+              }
+            };
+            yield {
+              type: "response.function_call_arguments.delta",
+              item_id: "fc_1",
+              delta: "{\"task\":\"create "
+            };
+            yield {
+              type: "response.function_call_arguments.delta",
+              item_id: "fc_1",
+              delta: "todo app\"}"
+            };
+            yield {
+              type: "response.output_item.done",
+              item: {
+                id: "fc_1",
+                type: "function_call",
+                call_id: "call_spawn",
+                name: "spawn_code_worker"
+              }
+            };
+            yield {
+              type: "response.completed",
+              response: {
+                status: "completed",
+                output_text: "",
+                output: [],
+                usage: {
+                  input_tokens: 11,
+                  output_tokens: 6
+                }
+              }
+            };
+          }
+        };
+      }
+    }
+  };
+
+  const blocks: Array<Record<string, unknown>> = [];
+  const result = await service.callChatModelStreaming("openai", {
+    model: "gpt-5-mini",
+    systemPrompt: "system",
+    userPrompt: "user",
+    contextMessages: [],
+    temperature: 0.2,
+    maxOutputTokens: 64
+  }, {
+    onTextDelta() {},
+    onContentBlockComplete(block) {
+      blocks.push(block);
+    }
+  });
+
+  assert.equal(result.text, "");
+  assert.deepEqual(result.toolCalls, [
+    {
+      id: "call_spawn",
+      name: "spawn_code_worker",
+      input: {
+        task: "create todo app"
+      }
+    }
+  ]);
+  assert.deepEqual(result.rawContent, [
+    {
+      id: "call_spawn",
+      type: "function_call",
+      call_id: "call_spawn",
+      name: "spawn_code_worker",
+      arguments: "{\"task\":\"create todo app\"}"
+    }
+  ]);
+  assert.deepEqual(blocks, [
+    {
+      type: "tool_use",
+      id: "call_spawn",
+      name: "spawn_code_worker",
+      input: {
+        task: "create todo app"
+      }
+    }
+  ]);
+  assert.equal(result.responseDiagnostics?.streamRecoveredToolCallCount, 1);
+  assert.deepEqual(result.responseDiagnostics?.streamRecoveredToolCallNames, ["spawn_code_worker"]);
+  assert.equal(result.responseDiagnostics?.finalOutputItemCount, 0);
+});
+
 test("chatWithTools supports OpenAI function-call loops", async () => {
   const logs = [];
   const service = createService(

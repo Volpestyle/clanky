@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import {
   buildOpenAiToolLoopInput,
   buildOpenAiReasoningParam,
-  buildOpenAiTemperatureParam
+  buildOpenAiTemperatureParam,
+  formatProviderResponseShape,
+  summarizeProviderRawContent
 } from "./serviceShared.ts";
 
 test("buildOpenAiTemperatureParam omits temperature for gpt-5 dot-version models", () => {
@@ -73,4 +75,69 @@ test("buildOpenAiToolLoopInput omits synthetic assistant ids for OpenAI response
 
   assert.equal(input[2]?.type, "function_call");
   assert.equal(Object.prototype.hasOwnProperty.call(input[2] || {}, "id"), false);
+});
+
+test("summarizeProviderRawContent captures OpenAI response output shape without raw text", () => {
+  const summary = summarizeProviderRawContent([
+    {
+      id: "msg_1",
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [
+        {
+          type: "output_text",
+          text: "done"
+        }
+      ]
+    },
+    {
+      id: "fc_1",
+      type: "function_call",
+      name: "spawn_code_worker",
+      arguments: "{\"task\":\"create a todo app\"}",
+      status: "completed"
+    }
+  ]);
+
+  assert.equal(summary.shape, "array");
+  assert.equal(summary.length, 2);
+  assert.deepEqual(summary.itemTypes, { message: 1, function_call: 1 });
+  assert.deepEqual(summary.contentPartTypes, { output_text: 1 });
+  assert.equal(summary.functionCallCount, 1);
+  assert.deepEqual(summary.functionCallNames, ["spawn_code_worker"]);
+  assert.equal(summary.functionCallArgumentPresent, true);
+  assert.equal(summary.textChars, 4);
+});
+
+test("formatProviderResponseShape includes concise stream extraction diagnostics", () => {
+  const summary = summarizeProviderRawContent([]);
+  const shape = formatProviderResponseShape(summary, {
+    streamDeltaTextChars: 0,
+    streamDoneTextChars: 0,
+    extractedTextChars: 0,
+    finalOutputItemCount: 0
+  });
+
+  assert.equal(shape, "raw=array[0] delta=0 done=0 extracted=0 finalOut=0");
+});
+
+test("formatProviderResponseShape includes recovered streamed tool calls", () => {
+  const summary = summarizeProviderRawContent([
+    {
+      id: "fc_1",
+      type: "function_call",
+      name: "spawn_code_worker",
+      arguments: "{\"task\":\"create a todo app\"}"
+    }
+  ]);
+  const shape = formatProviderResponseShape(summary, {
+    streamDeltaTextChars: 0,
+    streamDoneTextChars: 0,
+    extractedTextChars: 0,
+    finalOutputItemCount: 0,
+    streamRecoveredToolCallCount: 1
+  });
+
+  assert.equal(shape.includes("streamTools=1"), true);
 });

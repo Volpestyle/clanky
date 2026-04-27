@@ -80,6 +80,7 @@ export type ChatModelResponse = {
   thinkingText?: string;
   toolCalls?: LlmToolCall[];
   rawContent?: unknown;
+  responseDiagnostics?: Record<string, unknown>;
   stopReason?: string;
   usage: UsageMetrics;
   costUsd?: number;
@@ -147,6 +148,25 @@ export type ToolLoopContentBlock = ToolLoopTextBlock | ToolLoopToolCall | ToolLo
 export type ToolLoopMessage = {
   role: "user" | "assistant";
   content: string | ToolLoopContentBlock[];
+};
+
+export type ProviderRawContentSummary = {
+  shape: string;
+  length?: number;
+  keys?: string[];
+  itemTypes?: Record<string, number>;
+  itemStatuses?: Record<string, number>;
+  contentPartTypes?: Record<string, number>;
+  messageCount?: number;
+  functionCallCount?: number;
+  functionCallNames?: string[];
+  functionCallArgumentChars?: number;
+  functionCallArgumentPresent?: boolean;
+  textChars?: number;
+  outputTextChars?: number;
+  choicesLength?: number;
+  contentLength?: number;
+  valueType?: string;
 };
 
 type XaiJsonPrimitive = string | number | boolean | null;
@@ -307,6 +327,160 @@ export function buildContextContentBlocks(rawContent: unknown, fallbackText = ""
 
   const text = normalizeContextText(fallbackText);
   return text ? [{ type: "text", text }] : [];
+}
+
+function addCount(target: Record<string, number>, value: unknown) {
+  const key = String(value ?? "").trim() || "(missing)";
+  target[key] = (target[key] || 0) + 1;
+}
+
+function compactCounts(values: unknown[], maxItems = 10): Record<string, number> | undefined {
+  const counts: Record<string, number> = {};
+  for (const value of values) {
+    addCount(counts, value);
+  }
+  const entries = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, maxItems);
+  if (!entries.length) return undefined;
+  return Object.fromEntries(entries);
+}
+
+function collectTextChars(value: unknown): number {
+  if (typeof value === "string") return value.length;
+  if (Array.isArray(value)) {
+    return value.reduce((sum, item) => sum + collectTextChars(item), 0);
+  }
+  if (!isRecord(value)) return 0;
+
+  let total = 0;
+  const text = value.text;
+  const refusal = value.refusal;
+  const content = value.content;
+  if (typeof text === "string") total += text.length;
+  if (typeof refusal === "string") total += refusal.length;
+  if (Array.isArray(content)) total += collectTextChars(content);
+  return total;
+}
+
+function summarizeRawContentArray(value: unknown[]): ProviderRawContentSummary {
+  const items = value.filter(isRecord);
+  const functionCallItems = items.filter((item) =>
+    String(item.type || "").trim() === "function_call" ||
+    String(item.type || "").trim() === "tool_use" ||
+    Boolean(item.function)
+  );
+  const functionCallNames = functionCallItems
+    .map((item) => String(item.name || (isRecord(item.function) ? item.function.name : "") || "").trim())
+    .filter(Boolean)
+    .slice(0, 12);
+  const functionCallArgumentChars = functionCallItems.reduce((sum, item) => {
+    const args = item.arguments ?? (isRecord(item.function) ? item.function.arguments : null);
+    return typeof args === "string" ? sum + args.length : sum;
+  }, 0);
+  const contentArrays = items
+    .map((item) => item.content)
+    .filter(Array.isArray);
+  const contentParts = contentArrays.flat().filter(isRecord);
+
+  return {
+    shape: "array",
+    length: value.length,
+    ...(items.length ? { itemTypes: compactCounts(items.map((item) => item.type)) } : {}),
+    ...(items.length ? { itemStatuses: compactCounts(items.map((item) => item.status)) } : {}),
+    ...(contentParts.length ? { contentPartTypes: compactCounts(contentParts.map((part) => part.type)) } : {}),
+    messageCount: items.filter((item) => String(item.type || "").trim() === "message").length,
+    functionCallCount: functionCallItems.length,
+    ...(functionCallNames.length ? { functionCallNames: [...new Set(functionCallNames)] } : {}),
+    functionCallArgumentChars,
+    functionCallArgumentPresent: functionCallArgumentChars > 0,
+    textChars: collectTextChars(value)
+  };
+}
+
+export function summarizeProviderRawContent(rawContent: unknown): ProviderRawContentSummary {
+  if (rawContent === null || rawContent === undefined) {
+    return { shape: "null" };
+  }
+  if (Array.isArray(rawContent)) {
+    return summarizeRawContentArray(rawContent);
+  }
+  if (typeof rawContent === "string") {
+    return { shape: "string", length: rawContent.length, textChars: rawContent.length };
+  }
+  if (!isRecord(rawContent)) {
+    return { shape: "primitive", valueType: typeof rawContent };
+  }
+
+  const keys = Object.keys(rawContent).slice(0, 16);
+  const summary: ProviderRawContentSummary = {
+    shape: "object",
+    keys,
+    textChars: collectTextChars(rawContent)
+  };
+  if (typeof rawContent.output_text === "string") {
+    summary.outputTextChars = rawContent.output_text.length;
+  }
+  if (Array.isArray(rawContent.output)) {
+    const outputSummary = summarizeRawContentArray(rawContent.output);
+    summary.length = outputSummary.length;
+    summary.itemTypes = outputSummary.itemTypes;
+    summary.itemStatuses = outputSummary.itemStatuses;
+    summary.contentPartTypes = outputSummary.contentPartTypes;
+    summary.messageCount = outputSummary.messageCount;
+    summary.functionCallCount = outputSummary.functionCallCount;
+    summary.functionCallNames = outputSummary.functionCallNames;
+    summary.functionCallArgumentChars = outputSummary.functionCallArgumentChars;
+    summary.functionCallArgumentPresent = outputSummary.functionCallArgumentPresent;
+  }
+  if (Array.isArray(rawContent.choices)) {
+    summary.choicesLength = rawContent.choices.length;
+  }
+  if (Array.isArray(rawContent.content)) {
+    summary.contentLength = rawContent.content.length;
+    summary.contentPartTypes = compactCounts(rawContent.content.filter(isRecord).map((part) => part.type));
+  }
+  return summary;
+}
+
+function formatCountKeys(counts: Record<string, number> | undefined, maxItems = 3): string {
+  if (!counts) return "";
+  return Object.entries(counts)
+    .slice(0, maxItems)
+    .map(([key, count]) => `${key}:${count}`)
+    .join(",");
+}
+
+export function formatProviderResponseShape(
+  summary: ProviderRawContentSummary,
+  diagnostics: Record<string, unknown> | null = null
+): string {
+  const shape = String(summary?.shape || "unknown");
+  const length = Number(summary?.length);
+  const base = Number.isFinite(length) ? `raw=${shape}[${length}]` : `raw=${shape}`;
+  const parts = [base];
+  const itemTypes = formatCountKeys(summary.itemTypes);
+  if (itemTypes) parts.push(`items=${itemTypes}`);
+  const partTypes = formatCountKeys(summary.contentPartTypes);
+  if (partTypes) parts.push(`parts=${partTypes}`);
+  if (Number(summary.functionCallCount) > 0) parts.push(`tools=${summary.functionCallCount}`);
+
+  if (isRecord(diagnostics)) {
+    const deltaChars = Number(diagnostics.streamDeltaTextChars);
+    const doneChars = Number(diagnostics.streamDoneTextChars);
+    const extractedChars = Number(diagnostics.extractedTextChars);
+    const finalOutputItems = Number(diagnostics.finalOutputItemCount);
+    const streamedToolCalls = Number(diagnostics.streamRecoveredToolCallCount);
+    if (Number.isFinite(streamedToolCalls) && streamedToolCalls > 0) {
+      parts.push(`streamTools=${streamedToolCalls}`);
+    }
+    if (Number.isFinite(deltaChars)) parts.push(`delta=${deltaChars}`);
+    if (Number.isFinite(doneChars)) parts.push(`done=${doneChars}`);
+    if (Number.isFinite(extractedChars)) parts.push(`extracted=${extractedChars}`);
+    if (Number.isFinite(finalOutputItems)) parts.push(`finalOut=${finalOutputItems}`);
+  }
+
+  return parts.join(" ").slice(0, 80);
 }
 
 export function buildOpenAiTemperatureParam(model: string, temperature: number) {

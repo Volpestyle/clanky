@@ -64,6 +64,8 @@ import {
   type LLMAppConfig,
   type LlmActionStore,
   type LlmTrace,
+  formatProviderResponseShape,
+  summarizeProviderRawContent,
   type XaiJsonRequestOptions,
   XAI_REQUEST_TIMEOUT_MS
 } from "./llm/serviceShared.ts";
@@ -528,6 +530,9 @@ export class LLMService {
       const stopReason = String(response.stopReason || "").trim() || null;
       const responseText = String(response.text || "");
       const toolNames = summarizeToolCallNames(toolCalls);
+      const rawContentSummary = summarizeProviderRawContent(rawContent);
+      const responseDiagnostics = response.responseDiagnostics || null;
+      const responseShape = formatProviderResponseShape(rawContentSummary, responseDiagnostics);
 
       const costUsd = estimateUsdCost({
         provider,
@@ -554,6 +559,9 @@ export class LLMService {
           toolNames,
           stopReason,
           responseChars: responseText.length,
+          responseShape,
+          rawContentSummary,
+          responseDiagnostics,
           transcript: responseText || null,
           transcriptSource: "output",
           source: normalizedTrace.source || null,
