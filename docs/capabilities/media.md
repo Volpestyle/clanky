@@ -69,22 +69,30 @@ Core tool:
 - `video_context`
 
 Agent-initiated tool for extracting metadata, transcripts, and keyframe images
-from video URLs. Supports YouTube (custom scraper, no external deps), plus
-TikTok, X/Twitter, Reddit, Twitch, Streamable, and any other yt-dlp-supported
-source when yt-dlp and ffmpeg are available on the host.
+from video URLs and animated GIFs. Supports YouTube (custom scraper, no
+external deps), plus TikTok, X/Twitter, Reddit, Twitch, Streamable, Tenor/Giphy
+GIF pages, and any other yt-dlp-supported source when yt-dlp and ffmpeg are
+available on the host.
 
 The agent decides when to call this tool. It is preferred over `web_scrape` or
 `browser_browse` when the goal is video-specific content like transcripts or
 metadata. For pages requiring JS rendering or interaction, the agent falls back
 to `browser_browse`.
 
-Current-message Discord video uploads are surfaced to the model as `VID n`
-references in prompt context. The model may call `video_context` with a direct
-`url` or with a `videoRef` like `VID 1`.
+Current-turn Discord video uploads, animated GIF uploads, and coalesced
+video/GIF links are surfaced to the model as `VID n` references in prompt
+context. The model may call `video_context` with a direct `url` or with a
+`videoRef` like `VID 1`.
 
-Direct video URLs (for example Discord CDN `.mp4`/`.webm`) are processed without
-`yt-dlp`. Non-direct hosts can use `yt-dlp` when available. Keyframe and ASR
-fallback extraction rely on `ffmpeg`.
+When a user explicitly asks what is in a GIF/video and a current-turn `VID n`
+reference exists, the reply pipeline pre-inspects the media with
+`video_context` and attaches sampled keyframes before the first reply model
+call. If extraction is unavailable or fails, the prompt says that no visual
+evidence is available so the model should not bluff from the URL or filename.
+
+Direct video URLs (for example Discord CDN `.mp4`/`.webm`) and direct `.gif`
+URLs are processed without `yt-dlp`. Non-direct hosts can use `yt-dlp` when
+available. Keyframe and ASR fallback extraction rely on `ffmpeg`.
 
 Settings: `media.videoContext` controls enablement and extraction parameters
 (transcript length, keyframe interval, ASR fallback).
@@ -136,8 +144,10 @@ Deep dives:
 
 ### Image history context
 
-Current-message image attachments can be sent directly to a vision-capable model
-as part of the reply turn. Recent image references from channel history are
+Current-message image attachments and current-turn direct image links can be
+sent directly to a vision-capable model as part of the reply turn. Animated
+GIFs are treated as motion media instead of still images so the video-context
+path can sample frames. Recent image references from channel history are
 captioned in the background and cached so later turns can search or recall them
 without re-reading the image every time.
 

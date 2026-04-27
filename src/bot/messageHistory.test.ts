@@ -212,6 +212,27 @@ test("getImageInputs keeps only images and caps the list at three", () => {
   ]);
 });
 
+test("GIF attachments route through video inputs instead of still-image inputs", () => {
+  const message = {
+    attachments: createAttachmentCollection([
+      {
+        url: "https://cdn.example.com/spin.gif",
+        name: "spin.gif",
+        contentType: "image/gif"
+      }
+    ])
+  };
+
+  assert.deepEqual(getImageInputs(message), []);
+  assert.deepEqual(getVideoInputs(message), [
+    {
+      url: "https://cdn.example.com/spin.gif",
+      filename: "spin.gif",
+      contentType: "image/gif"
+    }
+  ]);
+});
+
 test("getVideoInputs keeps only videos and caps the list at three", () => {
   const videos = getVideoInputs({
     attachments: createAttachmentCollection([

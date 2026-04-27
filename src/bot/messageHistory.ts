@@ -10,6 +10,7 @@ import {
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
 const VIDEO_EXT_RE = /\.(mp4|m4v|mov|webm|mkv|avi|mpeg|mpg)$/i;
+const ANIMATED_IMAGE_EXT_RE = /\.gif$/i;
 const MAX_IMAGE_INPUTS = 3;
 const MAX_VIDEO_INPUTS = 3;
 
@@ -183,9 +184,10 @@ export function getImageInputs(message: HistoryMessage) {
     const filename = String(attachment.name || "").trim();
     const contentType = String(attachment.contentType || "").toLowerCase();
     const urlPath = url.split("?")[0];
+    const isAnimatedImage = contentType === "image/gif" || ANIMATED_IMAGE_EXT_RE.test(filename) || ANIMATED_IMAGE_EXT_RE.test(urlPath);
     const isImage =
       contentType.startsWith("image/") || IMAGE_EXT_RE.test(filename) || IMAGE_EXT_RE.test(urlPath);
-    if (!isImage) continue;
+    if (!isImage || isAnimatedImage) continue;
 
     images.push({ url, filename, contentType });
   }
@@ -220,8 +222,11 @@ function isLikelyVideoAttachment({
   const urlPath = String(url || "").split("?")[0];
   return (
     String(contentType || "").startsWith("video/") ||
+    String(contentType || "").toLowerCase() === "image/gif" ||
     VIDEO_EXT_RE.test(String(filename || "")) ||
-    VIDEO_EXT_RE.test(urlPath)
+    VIDEO_EXT_RE.test(urlPath) ||
+    ANIMATED_IMAGE_EXT_RE.test(String(filename || "")) ||
+    ANIMATED_IMAGE_EXT_RE.test(urlPath)
   );
 }
 

@@ -1,9 +1,13 @@
 import { normalizeDiscoveryUrl } from "../services/discovery.ts";
 
 const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
-const VIDEO_EXT_RE = /\.(mp4|m4v|mov|webm|mkv|avi|mpeg|mpg)$/i;
+const VIDEO_EXT_RE = /\.(mp4|m4v|mov|webm|mkv|avi|mpeg|mpg|gif)$/i;
 const DISCORD_CDN_HOST_RE = /(?:^|\.)discordapp\.(?:com|net)$/i;
 const VIDEO_HOST_HINTS = new Set([
+  "giphy.com",
+  "media.giphy.com",
+  "media.tenor.com",
+  "tenor.com",
   "v.redd.it",
   "streamable.com",
   "clips.twitch.tv",

@@ -157,6 +157,7 @@ export function buildReplyPrompt({
   minecraftSessionHint = "",
   memoryLookup = null,
   imageLookup = null,
+  visualMediaContext = "",
   allowMemoryDirective: _allowMemoryDirective = false,
   allowAutomationDirective = false,
   automationTimeZoneLabel = "",
@@ -185,7 +186,7 @@ export function buildReplyPrompt({
   if (imageInputs?.length) {
     parts.push(
       [
-        "Current message attachments:",
+        "Current turn image attachments/links:",
         ...imageInputs.map((image) => {
           const name = image.filename || "(unnamed)";
           const type = image.contentType || "unknown";
@@ -197,7 +198,7 @@ export function buildReplyPrompt({
   if (Array.isArray(videoInputs) && videoInputs.length) {
     parts.push(
       [
-        "Current message video attachments:",
+        "Current turn video/GIF refs:",
         ...videoInputs.map((video, index) => {
           const ref = String(video?.videoRef || `VID ${index + 1}`).trim();
           const name = String(video?.filename || "(unnamed)").trim() || "(unnamed)";
@@ -209,6 +210,14 @@ export function buildReplyPrompt({
         })
       ].join("\n")
     );
+    parts.push(
+      "Video/GIF refs are links, not visual evidence by themselves. If the user asks what is in one, use attached keyframes or call video_context before describing visual details. If inspection is unavailable or fails, say you can't inspect it instead of guessing from the URL."
+    );
+  }
+  const visualContextText = String(visualMediaContext || "").trim();
+  if (visualContextText) {
+    parts.push("=== VISUAL MEDIA CONTEXT ===");
+    parts.push(visualContextText);
   }
   parts.push("=== RECENT MESSAGES ===");
   parts.push(formatRecentChat(recentMessages, { imageCandidates: imageLookup?.candidates }));

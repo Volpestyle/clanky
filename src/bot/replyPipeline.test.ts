@@ -837,12 +837,188 @@ test("maybeReplyToMessagePipeline includes current message video attachments wit
     const sentPayload = replyPayloads[0] || channelSendPayloads[0];
     assert.ok(sentPayload, "expected a sent reply payload");
     assert.equal(sentPayload.content, "I can check that clip if needed.");
-    assert.match(llmCalls[0]?.userPrompt || "", /Current message video attachments:/);
+    assert.match(llmCalls[0]?.userPrompt || "", /Current turn video\/GIF refs:/);
     assert.match(llmCalls[0]?.userPrompt || "", /VID 1: demo\.mp4 \(video\/mp4\)/);
     assert.match(
       llmCalls[0]?.userPrompt || "",
       /https:\/\/cdn\.discordapp\.com\/attachments\/1\/2\/demo\.mp4/
     );
+  });
+});
+
+test("maybeReplyToMessagePipeline inspects coalesced GIF video links before answering visual questions", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+    store.patchSettings({
+      media: {
+        videoContext: {
+          enabled: true,
+          maxLookupsPerHour: 12,
+          maxVideosPerMessage: 2,
+          keyframeIntervalSeconds: 1,
+          maxKeyframesPerVideo: 2
+        }
+      }
+    });
+
+    const llmCalls: Array<{ userPrompt: string; imageInputs: Array<Record<string, unknown>> }> = [];
+    const replyPayloads: Array<Record<string, unknown>> = [];
+    const channelSendPayloads: Array<Record<string, unknown>> = [];
+    const typingCallsRef = { count: 0 };
+    const fetchedTargets: string[] = [];
+    const video = {
+      extractVideoTargets(url: string) {
+        return [
+          {
+            key: `direct:${url}`,
+            url,
+            kind: "direct",
+            videoId: null,
+            forceDirect: true
+          }
+        ];
+      },
+      async fetchContexts(payload: { targets: Array<{ url: string }> }) {
+        fetchedTargets.push(...payload.targets.map((target) => String(target.url || "")));
+        return {
+          videos: payload.targets.map((target) => ({
+            provider: "direct",
+            title: "wow taiko",
+            url: target.url,
+            frameImages: [
+              {
+                filename: "frame-001.jpg",
+                contentType: "image/jpeg",
+                mediaType: "image/jpeg",
+                dataBase64: "ZnJhbWU="
+              }
+            ],
+            keyframeCount: 1,
+            keyframeError: null,
+            transcript: ""
+          })),
+          errors: []
+        };
+      }
+    };
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate(payload) {
+          llmCalls.push({
+            userPrompt: String(payload.userPrompt || ""),
+            imageInputs: Array.isArray(payload.imageInputs) ? payload.imageInputs : []
+          });
+          return {
+            text: JSON.stringify({
+              text: "it is spinning and licking the air",
+              skip: false,
+              reactionEmoji: null,
+              media: null,
+              automationAction: {
+                operation: "none",
+                title: null,
+                instruction: null,
+                schedule: null,
+                targetQuery: null,
+                automationId: null,
+                runImmediately: false,
+                targetChannelId: null
+              },
+              screenWatchIntent: {
+                action: "none",
+                confidence: 0,
+                reason: null
+              }
+            }),
+            toolCalls: [],
+            rawContent: null,
+            provider: "claude-oauth",
+            model: "claude-opus-4-6",
+            usage: {
+              inputTokens: 10,
+              outputTokens: 10,
+              cacheWriteTokens: 0,
+              cacheReadTokens: 0
+            },
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanky",
+      tag: "clanky#0001"
+    };
+
+    const guild = buildGuild();
+    const channel = buildChannel({
+      guild,
+      channelId,
+      channelSendPayloads,
+      typingCallsRef
+    });
+    const message = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-gif-question",
+      content: "clanky, tell me what is the main point of this gif",
+      replyPayloads
+    });
+
+    const settings = store.getSettings();
+    const runtime = buildReplyPipelineRuntime(bot, {
+      captionTimestamps: [],
+      unsolicitedReplyContextWindow: 2
+    });
+    const recentMessages = [
+      {
+        message_id: "msg-gif-link",
+        author_name: "alice",
+        content: "https://tenor.com/view/wow-taiko-spin-cute-lick-gif-25795014 https://media.tenor.com/rAWXcy9O6XUAAAPo/wow-taiko.mp4",
+        created_at: new Date().toISOString(),
+        is_bot: false
+      },
+      {
+        message_id: "msg-gif-question",
+        author_name: "alice",
+        content: "clanky, tell me what is the main point of this gif",
+        created_at: new Date().toISOString(),
+        is_bot: false
+      }
+    ];
+
+    const handled = await maybeReplyToMessagePipeline(runtime, message as never, settings, {
+      source: "message_event_coalesced",
+      forceDecisionLoop: true,
+      forceRespond: true,
+      recentMessages,
+      triggerMessageIds: ["msg-gif-link", String(message.id || "")],
+      addressSignal: {
+        direct: true,
+        inferred: true,
+        triggered: true,
+        reason: "name_exact"
+      }
+    });
+
+    assert.equal(handled, true);
+    assert.deepEqual(fetchedTargets, ["https://media.tenor.com/rAWXcy9O6XUAAAPo/wow-taiko.mp4"]);
+    assert.equal(llmCalls[0]?.imageInputs.length, 1);
+    assert.match(llmCalls[0]?.userPrompt || "", /Current turn video\/GIF refs:/);
+    assert.match(llmCalls[0]?.userPrompt || "", /VID 1: wow-taiko\.mp4 \(video\/mp4\)/);
+    assert.match(llmCalls[0]?.userPrompt || "", /VISUAL MEDIA CONTEXT/);
+    assert.match(llmCalls[0]?.userPrompt || "", /keyframes attached: 1/);
   });
 });
 

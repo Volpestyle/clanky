@@ -12,7 +12,8 @@ import {
   pickReplyMediaDirective,
   resolveMaxMediaPromptLen,
   normalizeSkipSentinel,
-  splitDiscordMessage
+  splitDiscordMessage,
+  extractUrlsFromText
 } from "./botHelpers.ts";
 import { getLocalTimeZoneLabel } from "./automation.ts";
 import { buildReplyToolSet, executeReplyTool } from "../tools/replyTools.ts";
@@ -68,6 +69,15 @@ import {
   findReusableMinecraftSession,
   getMinecraftSessionPromptHint
 } from "../agents/minecraft/minecraftSessionAccess.ts";
+import {
+  isLikelyImageUrl,
+  parseHistoryImageReference
+} from "./messageHistory.ts";
+import {
+  isLikelyDirectVideoUrl,
+  parseVideoTarget,
+  type VideoTarget
+} from "../video/videoTargets.ts";
 
 type ReplyPipelineAttachment = {
   url?: string;
@@ -229,6 +239,350 @@ type ReplyScreenShareOffer = Awaited<ReturnType<ReplyPipelineRuntime["maybeHandl
 type ReplyWebSearchState = ReturnType<ReplyPipelineRuntime["buildWebSearchContext"]> & {
   summaryText?: string | null;
 };
+type TurnScopedUrlMediaInputs = {
+  imageInputs: ReplyImageInput[];
+  videoInputs: ReplyVideoInput[];
+};
+type TurnVisualMediaInspection = {
+  imageInputs: ReplyImageInput[];
+  promptText: string;
+};
+
+const MAX_TURN_SCOPED_URL_IMAGES = MAX_MODEL_IMAGE_INPUTS;
+const MAX_TURN_SCOPED_URL_VIDEOS = 3;
+const VISUAL_MEDIA_REQUEST_RE = /\b(?:what|what's|whats|happen(?:s|ing)?|main\s+point|point\s+of|describe|break\s+down|look(?:ing)?|watch(?:ing)?|see(?:ing)?|view(?:ed|ing)?|understand(?:s|ing)?|process(?:ed|ing)?)\b/i;
+const VISUAL_MEDIA_SUBJECT_RE = /\b(?:gif|video|clip|animation|motion|frames?|this|that|it)\b/i;
+
+function isVisualMediaInspectionRequest(text: string) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  return VISUAL_MEDIA_REQUEST_RE.test(normalized) && VISUAL_MEDIA_SUBJECT_RE.test(normalized);
+}
+
+function getRecentMessageId(row: Record<string, unknown> | null | undefined) {
+  return String(row?.message_id || row?.messageId || row?.id || "").trim();
+}
+
+function getTurnScopedTextEntries({
+  message,
+  recentMessages,
+  triggerMessageIds
+}: {
+  message: ReplyPipelineMessage;
+  recentMessages: ReplyRecentMessage[];
+  triggerMessageIds: string[];
+}) {
+  const triggerSet = new Set(
+    [...triggerMessageIds, String(message.id || "")]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  );
+  const rowsById = new Map<string, ReplyRecentMessage>();
+  for (const row of Array.isArray(recentMessages) ? recentMessages : []) {
+    const id = getRecentMessageId(row);
+    if (!id || !triggerSet.has(id)) continue;
+    rowsById.set(id, row);
+  }
+
+  const entries: Array<{ id: string | null; content: string }> = [];
+  const seen = new Set<string>();
+  const pushEntry = (id: string | null, content: string) => {
+    const normalizedContent = String(content || "").trim();
+    if (!normalizedContent) return;
+    const key = id ? `id:${id}` : `content:${normalizedContent}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push({ id, content: normalizedContent });
+  };
+
+  for (const id of triggerMessageIds) {
+    const row = rowsById.get(String(id || "").trim());
+    if (row) pushEntry(getRecentMessageId(row) || null, String(row.content || ""));
+  }
+  pushEntry(String(message.id || "").trim() || null, String(message.content || ""));
+
+  return entries;
+}
+
+function deriveFilenameFromUrl(url: string, fallback = "(linked media)") {
+  const normalized = String(url || "").trim();
+  if (!normalized) return fallback;
+  try {
+    const parsed = new URL(normalized);
+    const segment = parsed.pathname.split("/").filter(Boolean).at(-1) || "";
+    return decodeURIComponent(segment).trim() || fallback;
+  } catch {
+    const segment = normalized.split("?")[0].split("/").filter(Boolean).at(-1) || "";
+    return decodeURIComponent(segment).trim() || fallback;
+  }
+}
+
+function inferMotionContentTypeFromUrl(url: string) {
+  const filename = deriveFilenameFromUrl(url, "").toLowerCase();
+  if (filename.endsWith(".gif")) return "image/gif";
+  if (filename.endsWith(".mp4") || filename.endsWith(".m4v")) return "video/mp4";
+  if (filename.endsWith(".mov")) return "video/quicktime";
+  if (filename.endsWith(".webm")) return "video/webm";
+  if (filename.endsWith(".mkv")) return "video/x-matroska";
+  if (filename.endsWith(".avi")) return "video/x-msvideo";
+  if (filename.endsWith(".mpeg") || filename.endsWith(".mpg")) return "video/mpeg";
+  return "";
+}
+
+function isLikelyAnimatedImageUrl(url: string) {
+  const text = String(url || "").trim();
+  if (!text) return false;
+  try {
+    const parsed = new URL(text);
+    const pathname = String(parsed.pathname || "").toLowerCase();
+    if (pathname.endsWith(".gif")) return true;
+    return String(parsed.searchParams.get("format") || "").trim().toLowerCase() === "gif";
+  } catch {
+    return false;
+  }
+}
+
+function safeHostname(url: string) {
+  try {
+    return new URL(String(url || "")).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function isLikelyMotionMediaUrl(url: string) {
+  return isLikelyDirectVideoUrl(url) || isLikelyAnimatedImageUrl(url);
+}
+
+function normalizeVideoInput(input: ReplyVideoInput): ReplyVideoInput | null {
+  const url = String(input?.url || "").trim();
+  if (!url) return null;
+  return {
+    url,
+    filename: String(input?.filename || deriveFilenameFromUrl(url)).trim() || "(linked media)",
+    contentType: String(input?.contentType || inferMotionContentTypeFromUrl(url)).trim()
+  };
+}
+
+function mergeVideoInputs(inputs: ReplyVideoInput[], maxInputs = MAX_TURN_SCOPED_URL_VIDEOS) {
+  const out: ReplyVideoInput[] = [];
+  const seen = new Set<string>();
+  for (const input of inputs) {
+    if (out.length >= maxInputs) break;
+    const normalized = normalizeVideoInput(input);
+    if (!normalized?.url || seen.has(normalized.url)) continue;
+    seen.add(normalized.url);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function collectTurnScopedUrlMediaInputs({
+  message,
+  recentMessages,
+  triggerMessageIds,
+  existingImageUrls,
+  existingVideoUrls
+}: {
+  message: ReplyPipelineMessage;
+  recentMessages: ReplyRecentMessage[];
+  triggerMessageIds: string[];
+  existingImageUrls?: string[];
+  existingVideoUrls?: string[];
+}): TurnScopedUrlMediaInputs {
+  const imageInputs: ReplyImageInput[] = [];
+  const videoInputs: ReplyVideoInput[] = [];
+  const seenImages = new Set((existingImageUrls || []).map((url) => String(url || "").trim()).filter(Boolean));
+  const seenVideos = new Set((existingVideoUrls || []).map((url) => String(url || "").trim()).filter(Boolean));
+  const addImageUrl = (url: string) => {
+    const normalizedUrl = String(url || "").trim();
+    if (!normalizedUrl || seenImages.has(normalizedUrl) || imageInputs.length >= MAX_TURN_SCOPED_URL_IMAGES) return;
+    if (isLikelyAnimatedImageUrl(normalizedUrl) || !isLikelyImageUrl(normalizedUrl)) return;
+    const parsed = parseHistoryImageReference(normalizedUrl);
+    seenImages.add(normalizedUrl);
+    imageInputs.push({
+      url: normalizedUrl,
+      filename: parsed.filename,
+      contentType: parsed.contentType,
+      mediaType: parsed.contentType
+    });
+  };
+  const addVideoUrl = (url: string) => {
+    const normalizedUrl = String(url || "").trim();
+    if (!normalizedUrl || seenVideos.has(normalizedUrl) || videoInputs.length >= MAX_TURN_SCOPED_URL_VIDEOS) return;
+    seenVideos.add(normalizedUrl);
+    videoInputs.push({
+      url: normalizedUrl,
+      filename: deriveFilenameFromUrl(normalizedUrl),
+      contentType: inferMotionContentTypeFromUrl(normalizedUrl)
+    });
+  };
+
+  for (const entry of getTurnScopedTextEntries({ message, recentMessages, triggerMessageIds })) {
+    const urls = extractUrlsFromText(entry.content)
+      .map((url) => String(url || "").trim())
+      .filter(Boolean);
+    if (!urls.length) continue;
+
+    const hasDirectMotion = urls.some((url) => isLikelyMotionMediaUrl(url));
+    for (const url of urls) {
+      if (isLikelyMotionMediaUrl(url)) {
+        addVideoUrl(url);
+      } else {
+        addImageUrl(url);
+      }
+    }
+    if (hasDirectMotion) continue;
+
+    for (const url of urls) {
+      if (videoInputs.length >= MAX_TURN_SCOPED_URL_VIDEOS) break;
+      if (parseVideoTarget(url)) addVideoUrl(url);
+    }
+  }
+
+  return { imageInputs, videoInputs };
+}
+
+function buildFallbackVideoTarget(url: string): VideoTarget {
+  return {
+    key: `generic:${url}`,
+    url,
+    kind: "generic",
+    videoId: null
+  };
+}
+
+async function inspectTurnVisualMedia({
+  bot,
+  message,
+  settings,
+  videoInputs,
+  shouldInspect,
+  source
+}: {
+  bot: ReplyPipelineRuntime;
+  message: ReplyPipelineMessage;
+  settings: Settings;
+  videoInputs: ReplyVideoInput[];
+  shouldInspect: boolean;
+  source: string;
+}): Promise<TurnVisualMediaInspection> {
+  if (!shouldInspect || !videoInputs.length) return { imageInputs: [], promptText: "" };
+
+  const videoContextSettings = getVideoContextSettings(settings);
+  if (!videoContextSettings.enabled || !bot.video || typeof bot.video.fetchContexts !== "function") {
+    return {
+      imageInputs: [],
+      promptText: "GIF/video refs are present, but video context extraction is unavailable for this turn. Do not claim visual details from the URL or filename; say you cannot inspect it if visual specifics are needed."
+    };
+  }
+
+  const maxVideos = clamp(
+    Number(videoContextSettings.maxVideosPerMessage) || 1,
+    1,
+    MAX_TURN_SCOPED_URL_VIDEOS
+  );
+  const selectedVideos = videoInputs.slice(0, maxVideos);
+  const isGifInspection = /\bgif\b/i.test(String(message.content || "")) ||
+    selectedVideos.some((video) => {
+      const url = String(video.url || "");
+      const type = String(video.contentType || "").toLowerCase();
+      return type === "image/gif" || isLikelyAnimatedImageUrl(url) || /(?:^|\.)giphy\.com$/i.test(safeHostname(url)) || /(?:^|\.)tenor\.com$/i.test(safeHostname(url));
+    });
+  const keyframeIntervalSeconds = isGifInspection
+    ? 1
+    : Number(videoContextSettings.keyframeIntervalSeconds) || 0;
+  const maxKeyframesPerVideo = isGifInspection
+    ? Math.max(4, Number(videoContextSettings.maxKeyframesPerVideo) || 0)
+    : Number(videoContextSettings.maxKeyframesPerVideo) || 0;
+  const targets = selectedVideos.map((video) => {
+    const url = String(video.url || "").trim();
+    const target = bot.video.extractVideoTargets(url, 1)?.[0] || parseVideoTarget(url) || buildFallbackVideoTarget(url);
+    return target;
+  });
+
+  try {
+    const result = await bot.video.fetchContexts({
+      targets,
+      maxTranscriptChars: Number(videoContextSettings.maxTranscriptChars) || 1200,
+      keyframeIntervalSeconds,
+      maxKeyframesPerVideo,
+      allowAsrFallback: Boolean(videoContextSettings.allowAsrFallback),
+      maxAsrSeconds: Number(videoContextSettings.maxAsrSeconds) || 120,
+      trace: {
+        guildId: message.guildId,
+        channelId: message.channelId,
+        userId: message.author.id,
+        source: "reply_pipeline_visual_media_inspection"
+      }
+    });
+    const videos = Array.isArray(result?.videos) ? result.videos : [];
+    const imageInputs: ReplyImageInput[] = [];
+    const lines = [
+      "GIF/video visual inspection was run for this visual question. Attached keyframe images are visual evidence for the refs below."
+    ];
+
+    selectedVideos.forEach((input, index) => {
+      const ref = String(input.videoRef || `VID ${index + 1}`).trim();
+      const video = videos[index] as Record<string, unknown> | undefined;
+      if (!video) {
+        lines.push(`${ref}: inspection returned no usable context.`);
+        return;
+      }
+      const title = String(video.title || input.filename || "linked media").trim();
+      const frameImages = Array.isArray(video.frameImages) ? video.frameImages as ReplyImageInput[] : [];
+      imageInputs.push(...frameImages);
+      const transcript = String(video.transcript || "").trim();
+      const keyframeError = String(video.keyframeError || "").trim();
+      lines.push(`${ref}: ${title}; keyframes attached: ${frameImages.length}.`);
+      if (transcript) lines.push(`${ref} transcript: ${transcript.slice(0, 500)}`);
+      if (keyframeError) lines.push(`${ref} keyframe error: ${keyframeError.slice(0, 240)}`);
+    });
+
+    const errorCount = Array.isArray(result?.errors) ? result.errors.length : 0;
+    if (!imageInputs.length) {
+      lines.push("No keyframe pixels were attached. Do not describe visual specifics unless metadata/transcript above supports them.");
+    }
+    bot.store.logAction({
+      kind: "runtime",
+      guildId: message.guildId,
+      channelId: message.channelId,
+      messageId: message.id,
+      userId: message.author.id,
+      content: "turn_visual_media_inspection",
+      metadata: {
+        source,
+        videoRefs: selectedVideos.map((video, index) => String(video.videoRef || `VID ${index + 1}`)),
+        targetCount: targets.length,
+        keyframeCount: imageInputs.length,
+        errorCount
+      }
+    });
+
+    return {
+      imageInputs,
+      promptText: lines.join("\n")
+    };
+  } catch (error) {
+    const errorMessage = String(error instanceof Error ? error.message : error);
+    bot.store.logAction({
+      kind: "bot_error",
+      guildId: message.guildId,
+      channelId: message.channelId,
+      messageId: message.id,
+      userId: message.author.id,
+      content: "turn_visual_media_inspection_failed",
+      metadata: {
+        source,
+        error: errorMessage.slice(0, 500)
+      }
+    });
+    return {
+      imageInputs: [],
+      promptText: `GIF/video inspection failed: ${errorMessage.slice(0, 300)}. Do not claim visual details from the URL or filename; say you cannot inspect it if visual specifics are needed.`
+    };
+  }
+}
 
 type ReplyPipelineContext = {
   shouldRun: true;
@@ -250,6 +604,7 @@ type ReplyPipelineContext = {
   attachmentImageInputs: ReplyImageInput[];
   attachmentVideoInputs: ReplyVideoInput[];
   videoLookupRefs: Record<string, string>;
+  visualMediaContext: string;
   imageBudget: ReturnType<ReplyPipelineRuntime["getImageBudgetState"]>;
   videoBudget: ReturnType<ReplyPipelineRuntime["getVideoGenerationBudgetState"]>;
   mediaCapabilities: ReturnType<ReplyPipelineRuntime["getMediaGenerationCapabilities"]>;
@@ -518,6 +873,7 @@ function buildReplyToolAvailabilityState(
   const candidates: Array<{ name: string; reason: string }> = [
     { name: "web_search", reason: webSearchReason },
     { name: "web_scrape", reason: webSearchReason },
+    { name: "video_context", reason: videoContextReason },
     { name: "browser_browse", reason: browserBrowseReason },
     { name: "memory_search", reason: memoryReason },
     { name: "memory_write", reason: memoryReason },
@@ -739,8 +1095,24 @@ async function buildReplyContext(
     userFacts: memorySlice.userFacts,
     relevantFacts: memorySlice.relevantFacts
   });
-  const attachmentImageInputs: ReplyImageInput[] = bot.getImageInputs(message);
-  const attachmentVideoInputs: ReplyVideoInput[] = (bot.getVideoInputs(message) || [])
+  const directAttachmentImageInputs: ReplyImageInput[] = bot.getImageInputs(message);
+  const directAttachmentVideoInputs: ReplyVideoInput[] = bot.getVideoInputs(message) || [];
+  const turnScopedUrlMedia = collectTurnScopedUrlMediaInputs({
+    message,
+    recentMessages,
+    triggerMessageIds,
+    existingImageUrls: directAttachmentImageInputs.map((image) => String(image?.url || "").trim()),
+    existingVideoUrls: directAttachmentVideoInputs.map((video) => String(video?.url || "").trim())
+  });
+  const attachmentImageInputs: ReplyImageInput[] = bot.mergeImageInputs({
+    baseInputs: directAttachmentImageInputs,
+    extraInputs: turnScopedUrlMedia.imageInputs,
+    maxInputs: MAX_MODEL_IMAGE_INPUTS
+  });
+  const attachmentVideoInputs: ReplyVideoInput[] = mergeVideoInputs([
+    ...directAttachmentVideoInputs,
+    ...turnScopedUrlMedia.videoInputs
+  ])
     .map((video, index) => ({
       ...video,
       videoRef: `VID ${index + 1}`
@@ -774,9 +1146,19 @@ async function buildReplyContext(
         })
       : [];
   const memoryLookup = bot.buildMemoryLookupContext({ settings });
-  const modelImageInputs: ReplyImageInput[] = [
-    ...attachmentImageInputs
-  ].slice(0, MAX_MODEL_IMAGE_INPUTS);
+  const visualMediaContext = await inspectTurnVisualMedia({
+    bot,
+    message,
+    settings,
+    videoInputs: attachmentVideoInputs,
+    shouldInspect: isVisualMediaInspectionRequest(message.content),
+    source
+  });
+  const modelImageInputs: ReplyImageInput[] = bot.mergeImageInputs({
+    baseInputs: attachmentImageInputs,
+    extraInputs: visualMediaContext.imageInputs,
+    maxInputs: MAX_MODEL_IMAGE_INPUTS
+  });
   const imageLookup = bot.buildImageLookupContext({
     recentMessages,
     excludedUrls: modelImageInputs.map((image) => String(image?.url || "").trim())
@@ -908,6 +1290,7 @@ async function buildReplyContext(
     recentVoiceSessionContext,
     minecraftSessionHint,
     screenShare: screenShareCapability,
+    visualMediaContext: visualMediaContext.promptText,
     channelMode: isReplyChannel
       ? "reply_channel"
       : bot.isDiscoveryChannel(settings, message.channelId)
@@ -936,7 +1319,7 @@ async function buildReplyContext(
     recentMessages, addressSignal, triggerMessageIds, addressed, reactivity,
     isReplyChannel, ambientReplyEagerness, responseWindowEagerness, recentReplyWindowActive,
     reactionEmojiOptions, source, performance,
-    memorySlice, replyMediaMemoryFacts, attachmentImageInputs, attachmentVideoInputs, videoLookupRefs, imageBudget, videoBudget,
+    memorySlice, replyMediaMemoryFacts, attachmentImageInputs, attachmentVideoInputs, videoLookupRefs, visualMediaContext: visualMediaContext.promptText, imageBudget, videoBudget,
     mediaCapabilities, simpleImageCapabilityReady, complexImageCapabilityReady, imageCapabilityReady,
     videoCapabilityReady, gifBudget, gifsConfigured, webSearch, browserBrowse, recentConversationHistory, recentVoiceSessionContext, memoryLookup,
     modelImageInputs, imageLookup, subAgentSessions, replyTrace, screenShareCapability,
