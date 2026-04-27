@@ -886,7 +886,7 @@ export function settingsToForm(settings: unknown) {
   return withSettingsFormBase(form, envelope.effective);
 }
 
-type SettingsForm = ReturnType<typeof settingsToForm>;
+export type SettingsForm = ReturnType<typeof settingsToForm>;
 
 function mergeWithPreservedSettingsBase(form: SettingsForm, editedInput: SettingsInput): SettingsInput {
   const base = getSettingsFormBase(form);
@@ -1948,6 +1948,60 @@ export function settingsToFormPreserving(
     }
   }
   return result;
+}
+
+export function resolveIncomingSettingsDraftState({
+  settings,
+  currentForm,
+  savedFormSerialized,
+  preserveListFormatting = true
+}: {
+  settings: unknown;
+  currentForm: SettingsForm | null | undefined;
+  savedFormSerialized: string | null | undefined;
+  preserveListFormatting?: boolean;
+}) {
+  const incomingForm = preserveListFormatting
+    ? settingsToFormPreserving(settings, currentForm)
+    : settingsToForm(settings);
+  const incomingSerialized = JSON.stringify(incomingForm);
+  const normalizedSavedSerialized = String(savedFormSerialized || "");
+  const currentSerialized = currentForm ? JSON.stringify(currentForm) : "";
+  const isDirty = Boolean(
+    currentForm &&
+    normalizedSavedSerialized &&
+    currentSerialized !== normalizedSavedSerialized
+  );
+
+  if (!isDirty) {
+    return {
+      action: "apply" as const,
+      form: incomingForm,
+      serialized: incomingSerialized
+    };
+  }
+
+  if (incomingSerialized === normalizedSavedSerialized) {
+    return {
+      action: "ignore" as const,
+      form: incomingForm,
+      serialized: incomingSerialized
+    };
+  }
+
+  if (incomingSerialized === currentSerialized) {
+    return {
+      action: "apply" as const,
+      form: incomingForm,
+      serialized: incomingSerialized
+    };
+  }
+
+  return {
+    action: "hold" as const,
+    form: incomingForm,
+    serialized: incomingSerialized
+  };
 }
 
 export function resolveProviderModelOptions(modelCatalog: Record<string, unknown> | null | undefined, provider: unknown) {

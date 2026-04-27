@@ -15,10 +15,10 @@ import {
   resolvePresetModelSelection,
   resolveProviderModelOptions,
   sanitizeAliasListInput,
-  settingsToForm,
-  settingsToFormPreserving
+  settingsToForm
 } from "../settingsFormModel";
 import { useActiveSection } from "../hooks/useActiveSection";
+import { useSettingsDraft } from "../hooks/useSettingsDraft";
 import { AGENT_STACK_PRESET_OPTIONS } from "../../../src/settings/agentStackCatalog.ts";
 import { SettingsSection } from "./SettingsSection";
 import { EffectiveRuntimeSummary } from "./EffectiveRuntimeSummary";
@@ -125,15 +125,6 @@ function buildImpactSummary(dirty: Set<string>): string {
     : `${changed} changed. Save to apply.`;
 }
 
-export function applyFormDraftUpdate<T>(
-  current: T,
-  updater: T | ((draft: T) => T)
-): T {
-  return typeof updater === "function"
-    ? (updater as (draft: T) => T)(current)
-    : updater;
-}
-
 export default function SettingsForm({
   settings,
   modelCatalog,
@@ -146,42 +137,37 @@ export default function SettingsForm({
   refreshRuntimeBusy = false,
   toast
 }) {
-  const [form, setForm] = useState(() => (settings ? settingsToForm(settings) : null));
-  const [savedForm, setSavedForm] = useState(() => (settings ? settingsToForm(settings) : null));
   const [presetLoadBusy, setPresetLoadBusy] = useState(false);
   const [presetStatus, setPresetStatus] = useState({ text: "", type: "" });
-  const savedFormRef = useRef<string>("");
   const presetRequestIdRef = useRef(0);
-  const formRevisionRef = useRef(0);
-  const defaultForm = useMemo(() => settingsToForm({}), []);
-  const effectiveForm = form ?? defaultForm;
-  const formRef = useRef(form);
-  formRef.current = form;
 
-  function updateForm(updater) {
-    const current = formRef.current;
-    const next = applyFormDraftUpdate(current, updater);
-    if (next !== current) {
-      formRevisionRef.current += 1;
-    }
-    formRef.current = next;
-    setForm(next);
-  }
+  const clearPresetStatus = useCallback(() => {
+    setPresetStatus({ text: "", type: "" });
+  }, []);
+
+  const {
+    form,
+    savedForm,
+    defaultForm,
+    effectiveForm,
+    formRef,
+    formRevisionRef,
+    updateForm,
+    loadLatestSavedSettings,
+    isDirty,
+    sectionDirty,
+    hasPendingServerSettings
+  } = useSettingsDraft({
+    settings,
+    saveConflictText,
+    onReloadServerSettings,
+    onSavedSettingsApplied: clearPresetStatus,
+    getFieldNavSection
+  });
 
   function clearPresetWarning() {
     setPresetStatus((current) => (current.type === "warning" ? { text: "", type: "" } : current));
   }
-
-  useEffect(() => {
-    if (!settings) return;
-    const next = settingsToFormPreserving(settings, formRef.current);
-    formRef.current = next;
-    setForm(next);
-    setSavedForm(next);
-    savedFormRef.current = JSON.stringify(next);
-    formRevisionRef.current += 1;
-    setPresetStatus({ text: "", type: "" });
-  }, [settings]);
 
   const [sidebarSearch, setSidebarSearch] = useState("");
   const [searchHighlight, setSearchHighlight] = useState(0);
@@ -214,24 +200,6 @@ export default function SettingsForm({
     document.getElementById(entry.scrollTo)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [setClickedId]);
 
-  const isDirty = useMemo(() => {
-    if (!form || !savedFormRef.current) return false;
-    return JSON.stringify(form) !== savedFormRef.current;
-  }, [form]);
-
-  const sectionDirty = useMemo(() => {
-    const dirty = new Set<string>();
-    if (!form || !savedFormRef.current) return dirty;
-    let saved: Record<string, unknown>;
-    try { saved = JSON.parse(savedFormRef.current); } catch { return dirty; }
-    for (const key of Object.keys(form)) {
-      if (JSON.stringify((form as Record<string, unknown>)[key]) !== JSON.stringify(saved[key])) {
-        dirty.add(getFieldNavSection(key));
-      }
-    }
-    return dirty;
-  }, [form]);
-
   const codeAgentValidationError = useMemo(() => getCodeAgentValidationError(effectiveForm), [effectiveForm]);
   const validationError = useMemo(() => getSettingsValidationError(effectiveForm), [effectiveForm]);
   const sectionErrors = useMemo(() => {
@@ -262,9 +230,9 @@ export default function SettingsForm({
     return errors;
   }, [validationError, codeAgentValidationError]);
 
-  const saveDisabled = saveBusy || presetLoadBusy || Boolean(saveConflictText) || Boolean(validationError);
+  const saveDisabled = saveBusy || presetLoadBusy || hasPendingServerSettings || Boolean(saveConflictText) || Boolean(validationError);
   const applySavedDisabled =
-    refreshRuntimeBusy || saveBusy || presetLoadBusy || reloadServerSettingsBusy || isDirty || Boolean(saveConflictText);
+    refreshRuntimeBusy || saveBusy || presetLoadBusy || reloadServerSettingsBusy || hasPendingServerSettings || isDirty || Boolean(saveConflictText);
 
   async function loadPresetDefaults(preset: string) {
     const requestId = ++presetRequestIdRef.current;
@@ -287,9 +255,7 @@ export default function SettingsForm({
         return;
       }
       const next = settingsToForm(settings);
-      formRef.current = next;
-      setForm(next);
-      formRevisionRef.current += 1;
+      updateForm(next);
       setPresetStatus({
         text: "Preset defaults loaded into the draft. Save settings to apply them to the bot.",
         type: "ok"
@@ -457,7 +423,8 @@ export default function SettingsForm({
     selectedVoiceMusicBrainPresetModel,
     selectedVisionPresetModel,
     selectedStreamWatchNotePresetModel,
-    selectedStreamWatchCommentaryPresetModel
+    selectedStreamWatchCommentaryPresetModel,
+    updateForm
   ]);
 
   if (!form) return null;
@@ -876,10 +843,30 @@ export default function SettingsForm({
                 fontSize: "0.76rem",
                 fontWeight: 600
               }}
-              onClick={onReloadServerSettings}
+              onClick={loadLatestSavedSettings}
               disabled={reloadServerSettingsBusy || saveBusy || presetLoadBusy}
             >
               {reloadServerSettingsBusy ? "Reloading latest settings\u2026" : "Reload latest saved settings"}
+            </button>
+          </div>
+        )}
+        {hasPendingServerSettings && !saveConflictText && (
+          <div style={{ marginBottom: 10 }}>
+            <p className="status-msg warning" role="status">
+              Saved settings changed while you were editing. Load the latest saved settings before saving so this draft does not overwrite another change.
+            </p>
+            <button
+              type="button"
+              style={{
+                marginTop: 6,
+                padding: "6px 10px",
+                fontSize: "0.76rem",
+                fontWeight: 600
+              }}
+              onClick={loadLatestSavedSettings}
+              disabled={reloadServerSettingsBusy || saveBusy || presetLoadBusy}
+            >
+              Discard draft and load latest settings
             </button>
           </div>
         )}

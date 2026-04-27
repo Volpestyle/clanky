@@ -5,6 +5,7 @@ import {
   formToSettingsSnapshot,
   getCodeAgentValidationError,
   getSettingsValidationError,
+  resolveIncomingSettingsDraftState,
   resolveBrowserProviderModelOptions,
   resolveModelOptionsFromText,
   resolvePresetModelSelection,
@@ -1194,4 +1195,75 @@ test("settingsToFormPreserving preserves newline format when user prefers it", (
     currentForm
   );
   assert.equal(preserved.botNameAliases, "a\nb");
+});
+
+test("resolveIncomingSettingsDraftState ignores unchanged server settings while draft is dirty", () => {
+  const original = withResolved(normalizeSettings({
+    identity: {
+      botName: "Clanky"
+    }
+  }));
+  const currentForm = settingsToForm(original);
+  const savedFormSerialized = JSON.stringify(currentForm);
+  currentForm.botName = "Draft Name";
+
+  const decision = resolveIncomingSettingsDraftState({
+    settings: original,
+    currentForm,
+    savedFormSerialized
+  });
+
+  assert.equal(decision.action, "ignore");
+  assert.equal(currentForm.botName, "Draft Name");
+});
+
+test("resolveIncomingSettingsDraftState holds external server changes while draft is dirty", () => {
+  const original = withResolved(normalizeSettings({
+    identity: {
+      botName: "Clanky"
+    }
+  }));
+  const updated = withResolved(normalizeSettings({
+    identity: {
+      botName: "Server Name"
+    }
+  }));
+  const currentForm = settingsToForm(original);
+  const savedFormSerialized = JSON.stringify(currentForm);
+  currentForm.botName = "Draft Name";
+
+  const decision = resolveIncomingSettingsDraftState({
+    settings: updated,
+    currentForm,
+    savedFormSerialized
+  });
+
+  assert.equal(decision.action, "hold");
+  assert.equal(decision.form.botName, "Server Name");
+  assert.equal(currentForm.botName, "Draft Name");
+});
+
+test("resolveIncomingSettingsDraftState applies incoming settings that match the dirty draft after save", () => {
+  const original = withResolved(normalizeSettings({
+    identity: {
+      botName: "Clanky"
+    }
+  }));
+  const savedDraft = withResolved(normalizeSettings({
+    identity: {
+      botName: "Draft Name"
+    }
+  }));
+  const currentForm = settingsToForm(original);
+  const savedFormSerialized = JSON.stringify(currentForm);
+  currentForm.botName = "Draft Name";
+
+  const decision = resolveIncomingSettingsDraftState({
+    settings: savedDraft,
+    currentForm,
+    savedFormSerialized
+  });
+
+  assert.equal(decision.action, "apply");
+  assert.equal(decision.form.botName, "Draft Name");
 });

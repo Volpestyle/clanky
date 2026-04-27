@@ -75,6 +75,8 @@ Current meanings:
 
 The dashboard edits `intent`. It uses `effective` and `bindings` as a runtime preview, but on save it materializes and submits the next full authored snapshot instead of sending a sparse intent patch. The form model starts from the normalized source settings and overlays dashboard-edited fields onto that baseline so settings the UI does not expose are preserved across ordinary dashboard saves.
 
+If the saved settings snapshot changes while the dashboard form has unsaved edits, the form keeps the operator's draft and surfaces an inline warning. Saving stays disabled until the operator discards the draft and loads the latest saved settings, or until the incoming snapshot matches the draft after a successful save.
+
 `PUT /api/settings` accepts:
 
 - the next full authored `intent` snapshot in the request body

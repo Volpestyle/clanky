@@ -847,6 +847,10 @@ button.sm {
   color: var(--success);
 }
 
+.status-msg.warning {
+  color: var(--warning);
+}
+
 /* -- swarm-server status badge (Code Agent section) -- */
 
 .swarm-server-status-badge {
