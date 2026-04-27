@@ -70,6 +70,20 @@ export function resolveAllowedCodeWorkspaceRoots(settings: Record<string, unknow
   return roots;
 }
 
+export function resolveCodeAgentLaunchCwd(
+  settings: Record<string, unknown>,
+  cwdOverride: string | undefined,
+  configuredDefaultCwd: unknown
+): string {
+  const rawDefaultCwd = String(configuredDefaultCwd || "").trim();
+  const fallbackBaseDir = rawDefaultCwd
+    ? resolveCodeAgentCwd(rawDefaultCwd, process.cwd())
+    : resolveAllowedCodeWorkspaceRoots(settings)[0] || process.cwd();
+  const rawOverride = String(cwdOverride || "").trim();
+  if (rawOverride) return resolveCodeAgentCwd(rawOverride, fallbackBaseDir);
+  return fallbackBaseDir;
+}
+
 export interface CodeAgentConfig {
   role: CodeAgentRole;
   worker: "codex_cli" | "claude_code";
@@ -114,10 +128,7 @@ export function resolveCodeAgentConfig(
     preferredWorker === "codex_cli"
       ? devRuntime.codexCli
       : devRuntime.claudeCode;
-  const cwd = resolveCodeAgentCwd(
-    String(cwdOverride || primaryWorkerConfig?.defaultCwd || ""),
-    process.cwd()
-  );
+  const cwd = resolveCodeAgentLaunchCwd(settings, cwdOverride, primaryWorkerConfig?.defaultCwd);
   const swarm = resolveCodeAgentSwarmRuntimeConfig(devRuntime.swarm);
   const provider = normalizeCodeAgentProvider(
     preferredWorker === "codex_cli"

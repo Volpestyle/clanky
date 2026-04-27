@@ -3,6 +3,7 @@ import { api } from "../../api";
 
 type SwarmServerStatus = {
   available: boolean;
+  directSpawnSupported: boolean;
   socketPath: string;
   hint?: string;
 };
@@ -14,9 +15,8 @@ const POLL_INTERVAL_MS = 30_000;
  * with `swarm-mcp`) is reachable. swarm-server is what gives Clanky-spawned
  * workers terminal visibility / takeover in `swarm-ui` and `swarm-ios`.
  *
- * When down, code workers still run — they just spawn headless. Operators
- * fix it by opening swarm-ui (which auto-starts the daemon) or running
- * `swarm-server` directly.
+ * When down or missing direct-spawn capabilities, code workers fail fast unless
+ * the operator explicitly enables headless direct-child fallback.
  */
 export function SwarmServerStatusBadge() {
   const [status, setStatus] = useState<SwarmServerStatus | null>(null);
@@ -64,13 +64,26 @@ export function SwarmServerStatusBadge() {
     );
   }
 
-  if (status?.available) {
+  if (status?.available && status.directSpawnSupported) {
     return (
       <div
         className="swarm-server-status-badge swarm-server-status-badge--ok"
         title={status.socketPath}
       >
         ✓ swarm-server running — code workers will be interactive in swarm-ui / swarm-ios
+      </div>
+    );
+  }
+
+  if (status?.available && !status.directSpawnSupported) {
+    return (
+      <div
+        className="swarm-server-status-badge swarm-server-status-badge--warn"
+        title={status.socketPath}
+      >
+        <strong>✗ swarm-server lacks PTY spawn support.</strong>{" "}
+        {status.hint ||
+          "Restart or rebuild swarm-ui/swarm-server before spawning code workers."}
       </div>
     );
   }

@@ -490,6 +490,7 @@ test("resolveAgentStack routes implementation through available workers", () => 
   });
 
   const resolved = resolveAgentStack(normalized);
+  assert.equal(resolved.browserRuntime, "openai_computer_use");
   assert.deepEqual(resolved.devTeam.codingWorkers, ["codex_cli", "claude_code"]);
   assert.deepEqual(resolved.devTeam.roles, {
     design: "codex_cli",
@@ -703,7 +704,8 @@ test("normalizeSettings preserves canonical dev-team swarm runtime config", () =
             command: "bun",
             args: ["run", "C:/Users/volpe/swarm-mcp/src/index.ts"],
             dbPath: "C:/shared/swarm.db",
-            appendCoordinationPrompt: false
+            appendCoordinationPrompt: false,
+            allowDirectChildFallback: true
           }
         }
       }
@@ -717,7 +719,8 @@ test("normalizeSettings preserves canonical dev-team swarm runtime config", () =
     command: "bun",
     args: ["run", "C:/Users/volpe/swarm-mcp/src/index.ts"],
     dbPath: "C:/shared/swarm.db",
-    appendCoordinationPrompt: false
+    appendCoordinationPrompt: false,
+    allowDirectChildFallback: true
   });
 });
 

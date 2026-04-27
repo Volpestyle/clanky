@@ -784,7 +784,8 @@ test("settingsFormModel preserves code-worker swarm runtime config", () => {
     command: "bun",
     args: ["run", "C:/Users/volpe/swarm-mcp/src/index.ts"],
     dbPath: "C:/shared/swarm.db",
-    appendCoordinationPrompt: false
+    appendCoordinationPrompt: false,
+    allowDirectChildFallback: false
   });
 });
 

@@ -1,5 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { resolveCodeAgentConfig, resolveCodeAgentCwd } from "./codeAgentSettings.ts";
 import { createTestSettings } from "../testSettings.ts";
@@ -127,4 +129,66 @@ test("resolveCodeAgentCwd defaults to the provided repo root and normalizes rela
     normalizeExpectedPath("/tmp/project/packages/app")
   );
   assert.equal(resolveCodeAgentCwd("/var/tmp/repo", "/tmp/project"), normalizeExpectedPath("/var/tmp/repo"));
+});
+
+test("resolveCodeAgentConfig anchors relative cwd overrides to the configured worker cwd", () => {
+  const tempDir = mkdtempSync(path.join(tmpdir(), "clanky-code-agent-settings-"));
+  try {
+    const settings = createTestSettings({
+      permissions: {
+        devTasks: {
+          allowedUserIds: ["user-1"],
+          allowedWorkspaceRoots: [tempDir]
+        }
+      },
+      agentStack: {
+        runtimeConfig: {
+          devTeam: {
+            codexCli: {
+              enabled: true,
+              defaultCwd: tempDir
+            }
+          }
+        }
+      }
+    });
+
+    const config = resolveCodeAgentConfig(settings, "swarm-test", "implementation");
+
+    assert.equal(config.cwd, path.join(path.resolve(tempDir), "swarm-test"));
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveCodeAgentConfig uses the first allowed workspace root when default cwd is unset", () => {
+  const tempDir = mkdtempSync(path.join(tmpdir(), "clanky-code-agent-allowed-root-"));
+  try {
+    const settings = createTestSettings({
+      permissions: {
+        devTasks: {
+          allowedUserIds: ["user-1"],
+          allowedWorkspaceRoots: [tempDir]
+        }
+      },
+      agentStack: {
+        runtimeConfig: {
+          devTeam: {
+            codexCli: {
+              enabled: true,
+              defaultCwd: ""
+            }
+          }
+        }
+      }
+    });
+
+    assert.equal(resolveCodeAgentConfig(settings, undefined, "implementation").cwd, path.resolve(tempDir));
+    assert.equal(
+      resolveCodeAgentConfig(settings, "swarm-test", "implementation").cwd,
+      path.join(path.resolve(tempDir), "swarm-test")
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });

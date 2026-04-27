@@ -30,7 +30,8 @@ Pretty stdout rules:
 - actual delivered speech/transcripts stay emphasized in pretty stdout when the log carries `metadata.transcript` or `metadata.incomingTranscript`
 - output delivery stays labeled as `said` when `metadata.transcriptSource=output`
 - request-time `metadata.replyText` stays visible in pretty stdout, but it is not rendered with the same bold speech emphasis as delivered transcripts
-- `llm_call` runtime lines now summarize the returned model text the same way, plus `toolNames`, `toolCallCount`, `responseChars`, and `stopReason` when the provider reports one
+- `llm_call` runtime lines now summarize the returned model text the same way, plus `toolNames`, `toolCallCount`, `responseChars`, `responseShape`, and `stopReason` when the provider reports one
+- `metadata.rawContentSummary` and `metadata.responseDiagnostics` capture compact provider response shape for silent-output debugging: output item types, content part types, tool-call argument presence/counts, streamed delta/done text character counts, streamed function-call item/delta counts, recovered streamed tool-call counts/names, final output item count, and final provider status. These fields intentionally avoid logging full raw provider payloads.
 - normal-operation reply admission / bridge handoff logs now carry transcript character counts instead of duplicating full text; use ASR segment logs and final assistant transcript logs when you need exact wording
 
 Canonical prompt-log coverage:
@@ -290,6 +291,8 @@ Key `llm_call` metadata for voice latency triage:
 - `usage.inputTokens`, `usage.outputTokens` — token counts
 - `usage.cacheReadTokens`, `usage.cacheWriteTokens` — prompt cache hit rate
 - `responseChars` — output length
+- `responseShape` — compact stdout-friendly provider response shape summary, for example `raw=array[0] delta=0 done=0 extracted=0 finalOut=0`
+- `rawContentSummary` / `responseDiagnostics` — structured provider output-shape diagnostics used when token usage is nonzero but the parsed reply text or tool calls are empty. OpenAI Responses streaming also records streamed function-call deltas; when a completed response omits `output[]`, the runtime can recover named streamed calls into the normal tool-call path and reports that as `streamRecoveredToolCallCount`.
 - `stopReason` — `end_turn`, `tool_use`, `max_tokens`
 - `streaming` — whether streaming transport was used
 - `sessionId` — voice session correlation key

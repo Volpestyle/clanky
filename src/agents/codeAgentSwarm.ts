@@ -5,6 +5,7 @@ export type CodeAgentSwarmRuntimeConfig = {
   args: string[];
   dbPath: string;
   appendCoordinationPrompt: boolean;
+  allowDirectChildFallback: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -83,7 +84,8 @@ export function resolveCodeAgentSwarmRuntimeConfig(rawValue: unknown): CodeAgent
     command: String(rawValue.command || "").trim(),
     args: normalizeStringArray(rawValue.args),
     dbPath: String(rawValue.dbPath || "").trim(),
-    appendCoordinationPrompt: rawValue.appendCoordinationPrompt !== false
+    appendCoordinationPrompt: rawValue.appendCoordinationPrompt !== false,
+    allowDirectChildFallback: rawValue.allowDirectChildFallback === true
   };
 }
 
@@ -121,29 +123,43 @@ export const SWARM_LAUNCHER_FOLLOWUP_LISTEN_SECONDS = 300;
  *   completes. The orchestrator decides per-turn whether to follow up; the
  *   worker just stays available briefly. There is no worker-mode decision —
  *   if no follow-up arrives in the window, exit cleanly.
- * - `appendCoordinationPrompt=false` disables only the inlined generic skill
- *   body. The Clanky-specific identity/task/result/follow-up overlays always
- *   remain, because workers need them to interoperate with the launcher.
+ * - `appendCoordinationPrompt=false` disables both installed-skill discovery
+ *   and the inlined generic skill fallback. The Clanky-specific
+ *   identity/task/result/follow-up overlays always remain, because workers
+ *   need them to interoperate with the launcher.
  */
 export function buildSwarmLauncherFirstTurnPreamble({
   serverName = "swarm",
   taskId,
-  coordinationSkill = ""
+  coordinationSkill = "",
+  skillReachableAt = null
 }: {
   serverName?: string;
   taskId?: string | null;
   /**
-   * Optional role-specific swarm-mcp skill (`SKILL.md` + role reference)
-   * loaded from the vendored submodule. Appended after the Clanky-specific
-   * overlays so the worker has the canonical playbook in-context from turn 1
-   * without relying on the host harness's on-disk skill discovery.
+   * Inlined role-specific swarm-mcp skill (`SKILL.md` + role reference) loaded
+   * from the vendored submodule. Used as a fallback ONLY when the skill isn't
+   * reachable on disk for the worker harness's discovery (see
+   * `skillReachableAt`). When set, the full text is appended so the worker
+   * has the canonical playbook in-context from turn 1.
    *
-   * The skill is the source of truth for general coordination patterns
-   * (when to register, claim, lock, annotate). The preamble keeps only the
-   * deltas Clanky imposes on top of that — auto-adoption, the assigned task
-   * id, the usage-annotation shape, and the plain-text result override.
+   * Prefer leaving this empty and providing `skillReachableAt` instead — the
+   * harness will auto-load the on-disk skill, saving ~3 KB of preamble tokens.
+   *
+   * The skill is the source of truth for general coordination patterns (when
+   * to register, claim, lock, annotate). The preamble keeps only the deltas
+   * Clanky imposes on top of that — auto-adoption, the assigned task id, the
+   * usage-annotation shape, and the plain-text result override.
    */
   coordinationSkill?: string;
+  /**
+   * Path where the swarm-mcp skill is installed on disk (e.g.
+   * `~/.agents/skills/swarm-mcp` or `<workspace>/.claude/skills/swarm-mcp`).
+   * When set AND `coordinationSkill` is empty, the preamble emits a short
+   * directive pointing the worker at on-disk discovery instead of inlining
+   * the full skill text.
+   */
+  skillReachableAt?: string | null;
 } = {}): string {
   const lines: string[] = [
     `You are running as a Clanky-spawned swarm peer. Your identity has been reserved and your swarm-mcp server (\`${serverName}\`) auto-adopted you on boot — do not call \`register\`.`
@@ -178,7 +194,10 @@ export function buildSwarmLauncherFirstTurnPreamble({
   );
 
   const trimmedSkill = String(coordinationSkill || "").trim();
+  const trimmedSkillPath = String(skillReachableAt || "").trim();
   if (trimmedSkill) {
+    // Fallback path: skill not reachable on disk for the harness — inline the
+    // full text so the worker still has the playbook from turn 1.
     lines.push(
       "",
       "---",
@@ -186,6 +205,17 @@ export function buildSwarmLauncherFirstTurnPreamble({
       "## Swarm coordination skill",
       "",
       trimmedSkill
+    );
+  } else if (trimmedSkillPath) {
+    // Discovery path: skill is installed on disk and the harness should
+    // surface it as the `swarm-mcp` skill. Tiny directive instead of ~3 KB
+    // of inlined text. The Clanky overrides above still take precedence
+    // over any conflicting generic guidance in the skill.
+    lines.push(
+      "",
+      "---",
+      "",
+      `**Coordination playbook.** The swarm-mcp skill is installed at \`${trimmedSkillPath}\`. Load it on your first turn via your harness's skill mechanism (e.g. \`/skills swarm-mcp\` in Claude Code, or read \`SKILL.md\` and the matching \`references/<role>.md\` directly with your file-read tool). The Clanky-specific overrides above take precedence over any conflicting generic guidance in the skill.`
     );
   }
 

@@ -132,7 +132,7 @@ test("peer registers, heartbeats, and deregisters cleanly", async () => {
   assert.equal(registered?.adopted, 1);
   assert.equal(registered?.pid, process.pid);
   assert.match(registered?.label || "", /origin:clanky/);
-  assert.match(registered?.label || "", /role:planner/);
+  assert.equal(registered?.label, "origin:clanky role:controller");
 
   const db = openSwarmDbConnection(fixture.dbPath);
   try {
@@ -149,7 +149,7 @@ test("peer registers, heartbeats, and deregisters cleanly", async () => {
 
 test("peer registration row matches swarm-mcp register semantics", () => {
   const fixture = makeFixture();
-  const label = "origin:clanky role:planner thread:dm user:anon";
+  const label = "origin:clanky role:controller";
   const swarmMcpPeer = registerWithSwarmMcpRegistry(fixture, label);
 
   const manager = track(new ClankySwarmPeerManager({ dbPath: fixture.dbPath }));
@@ -308,7 +308,7 @@ test("stale clanky peer rows are pruned before restart registration", () => {
         fixture.repoRoot,
         fixture.fileRoot,
         process.pid,
-        "origin:clanky role:planner thread:dm user:anon",
+        "origin:clanky role:controller",
         Math.floor(Date.now() / 1000) - 60
       ]
     );

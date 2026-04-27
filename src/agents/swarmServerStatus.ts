@@ -1,12 +1,17 @@
 import { existsSync } from "node:fs";
-import { SwarmServerClient, resolveSwarmServerSocketPath } from "./swarmServerClient.ts";
+import {
+  SwarmServerClient,
+  healthSupportsDirectHarnessSpawn,
+  resolveSwarmServerSocketPath
+} from "./swarmServerClient.ts";
 
 /**
  * Operator-facing observability for `swarm-server`, the Rust control-plane
  * daemon shipped with `swarm-mcp`. swarm-server is what gives Clanky-spawned
  * coding workers terminal visibility / takeover / replay in `swarm-ui` and
- * `swarm-ios`. When it isn't running, workers still function — they just
- * spawn as plain child processes that no UI can attach to.
+ * `swarm-ios`. When it is down or missing direct-spawn capabilities, Clanky
+ * fails fast unless the operator explicitly enables headless direct-child
+ * fallback.
  *
  * This module is the cheap "is it up?" surface for the bot startup log and
  * the dashboard widget. The richer client capabilities (spawn / close /
@@ -15,6 +20,7 @@ import { SwarmServerClient, resolveSwarmServerSocketPath } from "./swarmServerCl
 
 export type SwarmServerStatus = {
   available: boolean;
+  directSpawnSupported: boolean;
   socketPath: string;
   /** Operator-facing hint when the daemon is unreachable. */
   hint?: string;
@@ -42,20 +48,33 @@ export async function getSwarmServerStatus(dbPath?: string | null): Promise<Swar
   if (!swarmServerSocketExists(dbPath)) {
     return {
       available: false,
+      directSpawnSupported: false,
       socketPath,
       hint:
-        "swarm-server is not running. Code workers will spawn headless — operators won't see them in swarm-ui or swarm-ios. " +
+        "swarm-server is not running. Code workers require swarm-server PTY launch unless direct-child fallback is enabled. " +
         "Open swarm-ui (auto-starts the daemon) or run `swarm-server` directly to enable terminal visibility."
     };
   }
 
   try {
-    const ok = await client.isAvailable();
-    if (ok) {
-      return { available: true, socketPath };
+    const health = await client.getHealth();
+    if (health?.ok === true && Number(health.v) === 1) {
+      const directSpawnSupported = healthSupportsDirectHarnessSpawn(health);
+      if (directSpawnSupported) {
+        return { available: true, directSpawnSupported: true, socketPath };
+      }
+      return {
+        available: true,
+        directSpawnSupported: false,
+        socketPath,
+        hint:
+          "swarm-server is running, but it does not advertise direct PTY spawn capabilities. " +
+          "Restart/rebuild the current swarm-ui/swarm-server so /health includes pty.spawn.args, pty.spawn.env, and pty.spawn.initial_input."
+      };
     }
     return {
       available: false,
+      directSpawnSupported: false,
       socketPath,
       hint:
         `Socket ${socketPath} exists but the daemon did not respond with a healthy /health. ` +
@@ -64,8 +83,11 @@ export async function getSwarmServerStatus(dbPath?: string | null): Promise<Swar
   } catch {
     return {
       available: false,
+      directSpawnSupported: false,
       socketPath,
-      hint: `Socket ${socketPath} exists but probing it failed.`
+      hint:
+        `Socket ${socketPath} exists but the daemon did not respond with a healthy /health. ` +
+        "Stale socket from a crashed or incompatible swarm-server? Try restarting it."
     };
   }
 }
@@ -75,7 +97,10 @@ export async function getSwarmServerStatus(dbPath?: string | null): Promise<Swar
  */
 export function formatSwarmServerStatusLine(status: SwarmServerStatus): string {
   if (status.available) {
-    return "swarm-server: running ✓ — code workers will be visible/interactive in swarm-ui/swarm-ios";
+    if (status.directSpawnSupported) {
+      return "swarm-server: running ✓ — code workers will be visible/interactive in swarm-ui/swarm-ios";
+    }
+    return `swarm-server: running but not PTY-spawn capable ✗ — ${status.hint || "restart/rebuild swarm-ui or swarm-server"}`;
   }
-  return `swarm-server: not running ✗ — ${status.hint || "code workers will spawn headless"}`;
+  return `swarm-server: not running ✗ — ${status.hint || "code workers require swarm-server PTY launch"}`;
 }

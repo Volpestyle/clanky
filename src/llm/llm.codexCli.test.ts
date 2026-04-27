@@ -25,6 +25,8 @@ test("buildCodexCliBrainArgs includes json ephemeral flags", () => {
 test("buildCodexCliCodeAgentArgs includes cwd and workspace sandbox", () => {
   const args = buildCodexCliCodeAgentArgs({ model: "gpt-5.4", cwd: "/tmp/project", instruction: "fix it" });
   assert.equal(args.includes("--json"), true);
+  assert.equal(args.includes("--ignore-user-config"), true);
+  assert.equal(args.includes("--skip-git-repo-check"), true);
   assert.equal(args.includes("-s"), true);
   assert.equal(args[args.indexOf("-s") + 1], "workspace-write");
   assert.equal(args.includes("-C"), true);

@@ -178,7 +178,7 @@ export const IMAGE_LOOKUP_SCHEMA: SharedToolSchema = {
 
 export const VIDEO_CONTEXT_SCHEMA: SharedToolSchema = {
   name: "video_context",
-  description: "Extract metadata, transcript, and keyframes from a video URL (YouTube, TikTok, X/Twitter, Reddit, Twitch, Streamable, or any yt-dlp-supported source). Returns structured data including title, channel, duration, transcript text, and optional keyframe images. Prefer this over web_scrape or browser_browse when you want video-specific content like transcripts.",
+  description: "Extract metadata, transcript, and keyframes from a video URL (YouTube, TikTok, X/Twitter, Reddit, Twitch, Streamable, or any yt-dlp-supported source). Returns structured data including title, channel, duration, transcript text, and optional keyframe images. Prefer this over web_scrape or browser_browse when you want video-specific content like transcripts. If the result says ffmpeg or yt-dlp is missing, no video pixels were inspected; tell the user it is a local runtime dependency issue instead of guessing visual details.",
   voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
@@ -214,7 +214,7 @@ export const SPAWN_CODE_WORKER_SCHEMA: SharedToolSchema = {
         enum: ["claude-code", "codex-cli"],
         description: "Optional worker harness override."
       },
-      cwd: { type: "string", description: "Working directory. Must be inside an allowed coding workspace root. Defaults to GitHub repo URL resolution, then the selected worker's configured project root." },
+      cwd: { type: "string", description: "Optional working directory. Must be inside an allowed coding workspace root. Relative values resolve from the selected worker's configured default cwd, then the first allowed workspace root. Omit this for package names unless the user gave a clear filesystem path." },
       github_url: {
         type: "string",
         description: "Optional GitHub issue, PR, or repo URL. When cwd is omitted, Clanky resolves this to a matching local clone under allowed coding workspace roots."
@@ -309,7 +309,7 @@ export const UPDATE_TASK_SCHEMA: SharedToolSchema = {
 
 export const CLAIM_TASK_SCHEMA: SharedToolSchema = {
   name: "claim_task",
-  description: "Claim an open swarm task for Clanky's planner peer.",
+  description: "Claim an open swarm task for Clanky's controller peer.",
   parameters: {
     type: "object",
     properties: {
@@ -399,7 +399,7 @@ export const LOCK_FILE_SCHEMA: SharedToolSchema = {
 
 export const UNLOCK_FILE_SCHEMA: SharedToolSchema = {
   name: "unlock_file",
-  description: "Release a file lock owned by Clanky's planner peer.",
+  description: "Release a file lock owned by Clanky's controller peer.",
   parameters: {
     type: "object",
     properties: {
@@ -440,7 +440,7 @@ export const LIST_INSTANCES_SCHEMA: SharedToolSchema = {
 
 export const WHOAMI_SCHEMA: SharedToolSchema = {
   name: "whoami",
-  description: "Return Clanky's current planner peer identity.",
+  description: "Return Clanky's current controller peer identity.",
   parameters: {
     type: "object",
     properties: {

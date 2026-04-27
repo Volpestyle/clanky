@@ -13,12 +13,12 @@ Companion docs:
 
 ## 1. Identity and adoption
 
-Workers do not call swarm-mcp's `register` tool by hand. Clanky either asks `swarm-server` to create a PTY-backed pending instance row, or falls back to pre-creating the unadopted row directly in `swarm.db`. In both modes, the launched worker receives these env vars:
+Workers do not call swarm-mcp's `register` tool by hand. Clanky normally asks `swarm-server` to create an interactive PTY-backed worker. For Codex PTY launches and direct-child fallback launches, Clanky creates the worker's swarm identity row in `swarm.db` before starting the process so it can put the same ID into the harness environment and Codex MCP child config. This reserves an identity, not a terminal slot. In every mode, the launched worker receives these env vars:
 
 | Variable | Purpose |
 |---|---|
 | `SWARM_DB_PATH` | Path to the shared SQLite file. Defaults to `~/.swarm-mcp/swarm.db`. |
-| `SWARM_MCP_INSTANCE_ID` | The pre-reserved instance row's UUID. The MCP server flips `adopted=1` on boot via `tryAutoAdopt`. |
+| `SWARM_MCP_INSTANCE_ID` | The worker identity row's UUID. The MCP server flips `adopted=1` on boot via `tryAutoAdopt`. |
 | `SWARM_MCP_DIRECTORY` | Live working directory (the worker's resolved cwd inside the operator's checkout). |
 | `SWARM_MCP_SCOPE` | Canonical repo root used as the swarm membership boundary. Sessions in the same scope can see each other; different scopes are separate swarms. |
 | `SWARM_MCP_FILE_ROOT` | Canonical base path for resolving relative file paths in `annotate`, `lock_file`, `check_file`, and task `files`. Equal to `SWARM_MCP_DIRECTORY` because Clanky never spawns workers into disposable worktrees; the field is preserved for symmetry with swarm-mcp's schema and with non-Clanky peers that may run worktree-isolated. |
@@ -26,11 +26,15 @@ Workers do not call swarm-mcp's `register` tool by hand. Clanky either asks `swa
 
 By the time the worker's first reasoning turn runs, the worker's swarm-mcp server has already adopted the row (`adopted=1`, `pid=<worker pid>`, `heartbeat=now`). The worker may call `whoami` to confirm or skip straight to coordinated work.
 
+For Codex, Clanky provides the same identity twice: as process env on the harness itself and as explicit MCP server env in the Codex `mcp_servers.<name>.env.*` overrides. This applies to both interactive PTY launches and direct child-process fallback. Codex's stdio MCP child process should not depend on user-scope config inheritance for `SWARM_MCP_INSTANCE_ID` or the workspace/scoping fields. Claude PTY launches use `swarm-server`'s native pending-row/env injection path and receive the first-turn prompt through deferred PTY `initial_input`; Codex PTY launches receive the first-turn prompt as a CLI argument with `initial_input=null`.
+
+The first-turn preamble always includes Clanky's launcher-specific rules: do not call `register`, use the assigned task id, write plain-text results, report usage via annotations, keep git authority with the user, and stay briefly available for follow-ups. The generic swarm coordination playbook may arrive in one of two ways. If the `swarm-mcp` skill is installed somewhere the harness can reach, the preamble includes a short directive pointing at that on-disk skill path. If the skill is not reachable, Clanky inlines the vendored skill text as a fallback. The launcher-specific rules take precedence over any conflicting generic skill guidance.
+
 If adoption fails (e.g. `SWARM_DB_PATH` unwritable, schema mismatch), the worker should surface the failure on stderr and exit non-zero. Clanky's launcher polls for `adopted=1` and treats a missed timeout as a launch error, closing the `swarm-server` PTY when present or cleaning up the directly reserved row otherwise.
 
 ## 2. Task lifecycle
 
-Every Clanky-spawned worker is associated with one initial swarm task at spawn time. The task is created by Clanky's planner peer with `requester=<clanky-peer-id>` and `assignee=<worker-instance-id>`. The assigned task id is included in the first-turn preamble.
+Every Clanky-spawned worker is associated with one initial swarm task at spawn time. The task is created by Clanky's controller peer with `requester=<clanky-peer-id>` and `assignee=<worker-instance-id>`. The assigned task id is included in the first-turn preamble.
 
 Worker responsibilities, in order:
 
@@ -49,7 +53,7 @@ After `update_task(done)`, the worker continues running and polls its inbox via 
 
 `spawn_code_worker` persists the latest `{ workerId, taskId, scope, role, cwd }` record into swarm KV under the returned `sessionKey`. This is a convenience pointer for Clanky's future reply turns; the worker still receives ordinary swarm messages and does not need to know the key exists.
 
-Clanky also writes its scoped controller peer id to `kv_get("clanky/controller")`. Planner workers use that pointer, with a `list_instances(label_contains="origin:clanky role:planner")` fallback, when they need to escalate a stranded open task.
+Clanky also writes its scoped controller peer id to `kv_get("clanky/controller")`. Planner workers use that pointer, with a `list_instances(label_contains="origin:clanky role:controller")` fallback, when they need to escalate a stranded open task.
 
 The MCP stale-heartbeat sweep (~30s) reclaims tasks abandoned by either shape.
 

@@ -200,9 +200,9 @@ Preset-specific default choices and product intent live in [`../architecture/pre
 
 - browser runtime knobs and behavior: [`../capabilities/browser.md`](../capabilities/browser.md)
 - code-agent knobs and behavior: [`../capabilities/code.md`](../capabilities/code.md)
-- `permissions.devTasks.allowedWorkspaceRoots` is the approved local filesystem boundary for code workers; GitHub issue/repo URLs are resolved only against local clones under these roots
+- `permissions.devTasks.allowedWorkspaceRoots` is the approved local filesystem boundary for code workers; when a worker `defaultCwd` is unset, the first root also becomes the default cwd, and GitHub issue/repo URLs are resolved only against local clones under these roots
 - Minecraft runtime knobs and brain binding: [`../capabilities/minecraft.md`](../capabilities/minecraft.md)
-- `agentStack.runtimeConfig.devTeam.swarm` is the swarm-mcp coordination wiring for local code workers (the substrate, not an opt-in); its behavioral contract lives in [`../capabilities/code.md`](../capabilities/code.md)
+- `agentStack.runtimeConfig.devTeam.swarm` is the swarm-mcp coordination wiring for local code workers (the substrate, not an opt-in); `allowDirectChildFallback` defaults to `false` so workers require attachable swarm-server PTYs unless the operator explicitly permits headless fallback. Its behavioral contract lives in [`../capabilities/code.md`](../capabilities/code.md)
 - `agentStack.runtimeConfig.minecraft.server` is the canonical preferred world/server target for embodied Minecraft sessions; its behavioral contract lives in [`../capabilities/minecraft.md`](../capabilities/minecraft.md)
 - voice transport and pipeline knobs: [`../voice/voice-provider-abstraction.md`](../voice/voice-provider-abstraction.md)
 - activity/attention-facing behavior knobs: [`../architecture/activity.md`](../architecture/activity.md)

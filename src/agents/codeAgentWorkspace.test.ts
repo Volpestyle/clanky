@@ -51,13 +51,17 @@ test("resolveCodeAgentWorkspace resolves the shared checkout repo context", () =
   }
 });
 
-test("resolveCodeAgentWorkspace rejects non-git directories", () => {
+test("resolveCodeAgentWorkspace scopes non-git directories to themselves", () => {
   const root = mkdtempSync(path.join(tmpdir(), "clanker-code-agent-non-git-test-"));
+  const scratch = path.join(root, "scratch");
+  mkdirSync(scratch, { recursive: true });
   try {
-    assert.throws(
-      () => resolveCodeAgentWorkspace({ cwd: root }),
-      /not inside a git repo/i
-    );
+    const workspace = resolveCodeAgentWorkspace({ cwd: scratch });
+
+    assert.equal(workspace.repoRoot, realpathSync(scratch));
+    assert.equal(workspace.cwd, realpathSync(scratch));
+    assert.equal(workspace.canonicalCwd, realpathSync(scratch));
+    assert.equal(workspace.relativeCwd, "");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

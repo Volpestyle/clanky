@@ -362,16 +362,6 @@ function normalizePath(value: string) {
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
-function normalizeLabelToken(value: unknown, fallback: string) {
-  const sanitized = String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-+/g, "")
-    .replace(/-+$/g, "");
-  return sanitized || fallback;
-}
-
 function readJsonStringArray(raw: string | null): string[] {
   if (!raw) return [];
   try {
@@ -859,13 +849,8 @@ function pollMessagesFromDb(db: Database, instanceId: string, scope: string, lim
   return rows.map(toMessage);
 }
 
-function buildPlannerLabel(thread?: string | null, user?: string | null) {
-  return [
-    "origin:clanky",
-    "role:planner",
-    `thread:${normalizeLabelToken(thread, "dm")}`,
-    `user:${normalizeLabelToken(user, "anon")}`
-  ].join(" ");
+function buildControllerLabel() {
+  return ["origin:clanky", "role:controller"].join(" ");
 }
 
 function assertNonEmpty(value: string, label: string) {
@@ -892,8 +877,6 @@ export type ClankyPeerOptions = {
   scope: string;
   repoRoot: string;
   fileRoot: string;
-  thread?: string | null;
-  user?: string | null;
   heartbeatIntervalMs?: number;
 };
 
@@ -916,7 +899,7 @@ export class ClankyPeer {
     this.directory = normalizePath(assertNonEmpty(options.repoRoot, "repoRoot"));
     this.root = this.directory;
     this.fileRoot = normalizePath(assertNonEmpty(options.fileRoot, "fileRoot"));
-    this.label = buildPlannerLabel(options.thread, options.user);
+    this.label = buildControllerLabel();
     this.heartbeatIntervalMs = Math.max(100, options.heartbeatIntervalMs ?? 10_000);
     this.instanceId = randomUUID();
 

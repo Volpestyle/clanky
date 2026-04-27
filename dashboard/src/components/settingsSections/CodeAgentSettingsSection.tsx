@@ -39,6 +39,20 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
       {form.codeAgentEnabled && (
         <>
           <SwarmServerStatusBadge />
+          <div className="toggles">
+            <label>
+              <input
+                type="checkbox"
+                checked={form.codeAgentAllowDirectChildFallback}
+                onChange={set("codeAgentAllowDirectChildFallback")}
+              />
+              Allow direct-child fallback (headless)
+            </label>
+          </div>
+          <p className="status-msg" role="status">
+            Off by default. When off, code-worker spawns fail instead of silently
+            running without a swarm-ui terminal if swarm-server PTY launch is unavailable.
+          </p>
           <UserIdTagInput
             id="code-agent-allowed-users"
             label="Allowed user IDs"

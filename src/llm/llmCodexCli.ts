@@ -647,7 +647,9 @@ export function buildCodexCliCodeAgentArgs({ model, cwd = "", instruction = "", 
     "exec",
     "--json",
     "--ephemeral",
+    "--ignore-user-config",
     "-m", String(model || "gpt-5.4"),
+    "--skip-git-repo-check",
     "-s", "workspace-write",
     "--dangerously-bypass-approvals-and-sandbox"
   ];
@@ -747,4 +749,3 @@ export function normalizeCodexCliError(
       : `codex-cli error: ${typedError?.message || error}`
   };
 }
-

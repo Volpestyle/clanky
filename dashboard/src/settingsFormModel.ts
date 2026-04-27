@@ -307,6 +307,7 @@ function buildSettingsFormView(settings: unknown) {
       roleImplementation: String(resolvedStack?.devTeam?.roles?.implementation || ""),
       roleReview: String(resolvedStack?.devTeam?.roles?.review || ""),
       roleResearch: String(resolvedStack?.devTeam?.roles?.research || ""),
+      allowDirectChildFallback: Boolean(devTeam.swarm?.allowDirectChildFallback),
       workerConfigs: {
         codexCli: { ...devTeam.codexCli },
         claudeCode: { ...devTeam.claudeCode }
@@ -573,6 +574,9 @@ export function settingsToForm(settings: unknown) {
     codeAgentRoleImplementation: String(resolved.codeAgent.roleImplementation ?? "claude_code"),
     codeAgentRoleReview: String(resolved.codeAgent.roleReview ?? "claude_code"),
     codeAgentRoleResearch: String(resolved.codeAgent.roleResearch ?? "claude_code"),
+    codeAgentAllowDirectChildFallback: Boolean(
+      resolved.codeAgent.allowDirectChildFallback ?? defaults.codeAgent.allowDirectChildFallback
+    ),
     providerAuthClaudeCode: Boolean(resolved.providerAuth?.claude_code),
     providerAuthCodexCli: Boolean(resolved.providerAuth?.codex_cli),
     providerAuthAnthropic: Boolean(resolved.providerAuth?.anthropic),
@@ -1251,9 +1255,14 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
   const rawCodeAgentNonWorkerRuntimeConfig: Record<string, unknown> = isRecordLike(form.codeAgentNonWorkerRuntimeConfig)
     ? form.codeAgentNonWorkerRuntimeConfig
     : {};
-  const codeAgentSwarmRuntimeConfig = isRecordLike(rawCodeAgentNonWorkerRuntimeConfig.swarm)
-    ? { swarm: rawCodeAgentNonWorkerRuntimeConfig.swarm }
-    : {};
+  const codeAgentSwarmRuntimeConfig = {
+    swarm: {
+      ...(isRecordLike(rawCodeAgentNonWorkerRuntimeConfig.swarm)
+        ? rawCodeAgentNonWorkerRuntimeConfig.swarm
+        : {}),
+      allowDirectChildFallback: Boolean(form.codeAgentAllowDirectChildFallback)
+    }
+  };
   const rawMinecraftRuntimeConfig: Record<string, unknown> = isRecordLike(form.minecraftRuntimeConfig)
     ? form.minecraftRuntimeConfig
     : {};

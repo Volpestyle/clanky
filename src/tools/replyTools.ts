@@ -1275,7 +1275,7 @@ async function resolveSendMessageRecipient(input: ReplyToolCallInput, peer: Clan
   return workerId;
 }
 
-function resolveSwarmPlannerPeer(
+function resolveSwarmControllerPeer(
   input: ReplyToolCallInput,
   runtime: ReplyToolRuntime,
   context: ReplyToolContext
@@ -1439,7 +1439,7 @@ async function executeSwarmTool(
 ): Promise<ReplyToolResult> {
   throwIfAborted(context.signal, "Reply tool cancelled");
   try {
-    const peer = resolveSwarmPlannerPeer(input, runtime, context);
+    const peer = resolveSwarmControllerPeer(input, runtime, context);
     const taskId = getStringInput(input, "task_id");
     switch (toolName) {
       case "request_task":

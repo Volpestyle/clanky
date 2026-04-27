@@ -258,6 +258,266 @@ test("spawnPeer routes through swarm-server PTY when direct spawn is supported",
   expect(ptyClosed).toBe(true);
 });
 
+test("spawnPeer passes codex PTY prompt as argv instead of initial_input", async () => {
+  const requests: Record<string, unknown>[] = [];
+  const instanceId = "server-codex-instance-1";
+  const ptyId = "pty-codex-1";
+  let ptyClosed = false;
+  const swarmServerClient = {
+    socketPath: "/tmp/fake-swarm-server.sock",
+    supportsDirectHarnessSpawn: async () => true,
+    spawnPty: async (body: Record<string, unknown>) => {
+      requests.push(body);
+      const boundInstanceId = String(body.instance_id || instanceId);
+      const db = new Database(dbPath);
+      try {
+        if (body.instance_id) {
+          db.run("UPDATE instances SET adopted = 1, pid = 123 WHERE id = ?", [boundInstanceId]);
+        } else {
+          db.run(
+            `INSERT INTO instances (id, scope, directory, root, file_root, pid, label, adopted)
+             VALUES (?, ?, ?, ?, ?, 0, ?, 1)`,
+            [boundInstanceId, body.scope, body.cwd, workspaceDir, body.cwd, body.label]
+          );
+        }
+      } finally {
+        db.close();
+      }
+      return {
+        v: 1,
+        pty: {
+          id: ptyId,
+          command: body.harness as string,
+          cwd: body.cwd as string,
+          started_at: Date.now(),
+          exit_code: null,
+          bound_instance_id: boundInstanceId,
+          cols: 120,
+          rows: 40,
+          lease: null
+        }
+      };
+    },
+    closePty: async () => {
+      ptyClosed = true;
+    },
+    fetchState: async () => ({
+      ptys: ptyClosed
+        ? []
+        : [{
+          id: ptyId,
+          command: "codex",
+          cwd: workspaceDir,
+          started_at: Date.now(),
+          exit_code: null,
+          bound_instance_id: String(requests[0]?.instance_id || instanceId),
+          cols: 120,
+          rows: 40,
+          lease: null
+        }]
+    })
+  };
+
+  const spawned = await spawnPeer({
+    harness: "codex-cli",
+    cwd: workspaceDir,
+    role: "implementer",
+    initialPrompt: "implement with codex",
+    maxTurns: 5,
+    timeoutMs: 30_000,
+    maxBufferBytes: 1024 * 1024,
+    model: "gpt-5.5",
+    trace: { channelId: "channel-1", userId: "user-1", source: "test" },
+    store: makeStore(),
+    swarm: { ...makeSwarmConfig(), args: [] },
+    reservationKeeper: keeper!,
+    adoptionPollIntervalMs: 25,
+    adoptionTimeoutMs: 5_000,
+    swarmServerClient
+  });
+
+  await spawned.adopted;
+  expect(spawned.launchMode).toBe("swarm_server_pty");
+  expect(spawned.instanceId).toBe(String(requests[0]?.instance_id || ""));
+
+  const request = requests[0];
+  const args = request?.args as string[];
+  expect(request?.harness).toBe("codex");
+  expect(String(request?.instance_id || "")).toBeTruthy();
+  expect(request?.initial_input).toBeNull();
+  expect(args).toContain("--no-alt-screen");
+  expect(args.join("\n")).toContain("implement with codex");
+  expect(args.join("\n")).toContain("## Swarm coordination skill");
+  expect(args.join("\n")).toContain("mcp_servers.swarm.env.SWARM_MCP_INSTANCE_ID");
+  expect(args).not.toContain("exec");
+  const requestEnv = request?.env as Record<string, string>;
+  expect(requestEnv?.SWARM_DB_PATH).toBe(dbPath);
+  expect(requestEnv?.SWARM_MCP_INSTANCE_ID).toBe(request?.instance_id);
+  expect(requestEnv?.SWARM_MCP_SCOPE).toBe(request?.scope);
+
+  await spawned.cancel("test cancel");
+  await spawned.exited;
+  expect(ptyClosed).toBe(true);
+});
+
+test("spawnPeer logs swarm-server PTY replay when a worker exits before adoption", async () => {
+  const instanceId = "server-early-exit-instance-1";
+  const ptyId = "pty-early-exit-1";
+  const replay = "Reading additional input from stdin...\ntransport channel closed before register\n";
+  let ptyClosed = false;
+  const swarmServerClient = {
+    socketPath: "/tmp/fake-swarm-server.sock",
+    supportsDirectHarnessSpawn: async () => true,
+    spawnPty: async (body: Record<string, unknown>) => ({
+      v: 1,
+      pty: {
+        id: ptyId,
+        command: body.harness as string,
+        cwd: body.cwd as string,
+        started_at: Date.now(),
+        exit_code: null,
+        bound_instance_id: instanceId,
+        cols: 120,
+        rows: 40,
+        lease: null
+      }
+    }),
+    closePty: async () => {
+      ptyClosed = true;
+    },
+    fetchState: async () => ({
+      ptys: [{
+        id: ptyId,
+        command: "codex",
+        cwd: workspaceDir,
+        started_at: Date.now(),
+        exit_code: 1,
+        bound_instance_id: instanceId,
+        cols: 120,
+        rows: 40,
+        lease: null
+      }]
+    }),
+    fetchPtyReplay: async (requestedPtyId: string) => requestedPtyId === ptyId ? replay : ""
+  };
+
+  const spawned = await spawnPeer({
+    harness: "codex-cli",
+    cwd: workspaceDir,
+    role: "implementer",
+    initialPrompt: "implement with codex",
+    maxTurns: 5,
+    timeoutMs: 30_000,
+    maxBufferBytes: 1024 * 1024,
+    model: "gpt-5.5",
+    trace: { channelId: "channel-1", userId: "user-1", source: "test" },
+    store: makeStore(),
+    swarm: makeSwarmConfig(),
+    reservationKeeper: keeper!,
+    adoptionPollIntervalMs: 25,
+    adoptionTimeoutMs: 5_000,
+    swarmServerClient
+  });
+
+  await expect(spawned.adopted).rejects.toThrow(/exited before adoption/i);
+  await spawned.exited;
+
+  const adoptionLog = logEntries.find(
+    (entry) => entry.kind === "swarm_worker_adoption_timeout"
+  );
+  expect(String((adoptionLog?.metadata as Record<string, unknown>)?.tail || ""))
+    .toContain("transport channel closed before register");
+  expect(spawned.outputTail()).toContain("transport channel closed before register");
+  expect(ptyClosed).toBe(true);
+});
+
+test("spawnPeer does not treat a stale initial PTY state snapshot as exit", async () => {
+  const requests: Record<string, unknown>[] = [];
+  const instanceId = "server-delayed-state-instance-1";
+  const ptyId = "pty-delayed-state-1";
+  let ptyClosed = false;
+  let fetchStateCalls = 0;
+  const swarmServerClient = {
+    socketPath: "/tmp/fake-swarm-server.sock",
+    supportsDirectHarnessSpawn: async () => true,
+    spawnPty: async (body: Record<string, unknown>) => {
+      requests.push(body);
+      const boundInstanceId = String(body.instance_id || instanceId);
+      setTimeout(() => {
+        const db = new Database(dbPath);
+        try {
+          db.run("UPDATE instances SET adopted = 1, pid = 123 WHERE id = ?", [boundInstanceId]);
+        } finally {
+          db.close();
+        }
+      }, 150);
+      return {
+        v: 1,
+        pty: {
+          id: ptyId,
+          command: body.harness as string,
+          cwd: body.cwd as string,
+          started_at: Date.now(),
+          exit_code: null,
+          bound_instance_id: boundInstanceId,
+          cols: 120,
+          rows: 40,
+          lease: null
+        }
+      };
+    },
+    closePty: async () => {
+      ptyClosed = true;
+    },
+    fetchState: async () => {
+      fetchStateCalls += 1;
+      if (ptyClosed) return { ptys: [] };
+      if (fetchStateCalls <= 2) return { ptys: [] };
+      return {
+        ptys: [{
+          id: ptyId,
+          command: "codex",
+          cwd: workspaceDir,
+          started_at: Date.now(),
+          exit_code: null,
+          bound_instance_id: String(requests[0]?.instance_id || instanceId),
+          cols: 120,
+          rows: 40,
+          lease: null
+        }]
+      };
+    },
+    fetchPtyReplay: async () => "startup probes only"
+  };
+
+  const spawned = await spawnPeer({
+    harness: "codex-cli",
+    cwd: workspaceDir,
+    role: "implementer",
+    initialPrompt: "implement with codex",
+    maxTurns: 5,
+    timeoutMs: 30_000,
+    maxBufferBytes: 1024 * 1024,
+    model: "gpt-5.5",
+    trace: { channelId: "channel-1", userId: "user-1", source: "test" },
+    store: makeStore(),
+    swarm: makeSwarmConfig(),
+    reservationKeeper: keeper!,
+    adoptionPollIntervalMs: 25,
+    adoptionTimeoutMs: 2_000,
+    swarmServerClient
+  });
+
+  await spawned.adopted;
+  expect(fetchStateCalls).toBeGreaterThan(0);
+  expect(logEntries.find((entry) => entry.kind === "swarm_worker_adoption_timeout")).toBeUndefined();
+
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  await spawned.cancel("test cancel");
+  await spawned.exited;
+  expect(ptyClosed).toBe(true);
+});
+
 test("spawnPeer honors appendCoordinationPrompt=false while keeping Clanky overlays", async () => {
   const requests: Record<string, unknown>[] = [];
   const instanceId = "server-instance-no-skill";

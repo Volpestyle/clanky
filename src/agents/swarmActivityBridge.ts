@@ -154,7 +154,7 @@ export class SwarmActivityBridge {
     this.logAction = opts.logAction;
   }
 
-  /** Watch this Clanky planner peer's inbox for controller messages such as planner spawn_request escalations. */
+  /** Watch this Clanky controller peer's inbox for planner spawn_request escalations. */
   watchControllerPeer(peer: ClankyPeer, context: { scope: string }): void {
     if (this.closed) return;
     const scope = String(context.scope || peer.scope || "").trim();
@@ -166,7 +166,7 @@ export class SwarmActivityBridge {
     }
   }
 
-  /** Register a freshly-dispatched task. The peer is the planner peer for the scope. */
+  /** Register a freshly-dispatched task. The peer is the controller peer for the scope. */
   trackTask(peer: ClankyPeer, context: CodeTaskDispatchContext): void {
     if (this.closed) return;
     const taskId = String(context.taskId || "").trim();

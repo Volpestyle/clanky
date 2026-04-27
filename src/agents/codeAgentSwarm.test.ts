@@ -12,6 +12,24 @@ test("resolveCodeAgentSwarmRuntimeConfig returns null when swarm is disabled", (
   assert.equal(resolveCodeAgentSwarmRuntimeConfig(null), null);
 });
 
+test("resolveCodeAgentSwarmRuntimeConfig defaults direct child fallback off", () => {
+  assert.deepEqual(resolveCodeAgentSwarmRuntimeConfig({
+    enabled: true,
+    serverName: "swarm",
+    command: "bun",
+    args: [],
+    dbPath: ""
+  }), {
+    enabled: true,
+    serverName: "swarm",
+    command: "bun",
+    args: [],
+    dbPath: "",
+    appendCoordinationPrompt: true,
+    allowDirectChildFallback: false
+  });
+});
+
 test("buildSwarmLabel emits stable role, thread, and user tokens", () => {
   assert.equal(
     buildSwarmLabel({
@@ -92,4 +110,31 @@ test("buildSwarmLauncherFirstTurnPreamble omits the skill block when skill conte
     coordinationSkill: ""
   });
   assert.doesNotMatch(preamble, /Swarm coordination skill/);
+});
+
+test("buildSwarmLauncherFirstTurnPreamble emits a discovery directive when skillReachableAt is set", () => {
+  const preamble = buildSwarmLauncherFirstTurnPreamble({
+    taskId: "task-1",
+    coordinationSkill: "",
+    skillReachableAt: "/Users/me/.agents/skills/swarm-mcp"
+  });
+  // Discovery directive points the harness at the on-disk skill.
+  assert.match(preamble, /Coordination playbook/);
+  assert.match(preamble, /\/Users\/me\/\.agents\/skills\/swarm-mcp/);
+  assert.match(preamble, /Load it on your first turn/);
+  // Full skill text is NOT inlined — that's the whole point of discovery.
+  assert.doesNotMatch(preamble, /## Swarm coordination skill/);
+});
+
+test("buildSwarmLauncherFirstTurnPreamble prefers inlined skill over discovery directive when both are provided", () => {
+  // Defensive: if a caller (e.g. a test, or a future bug) passes both, the
+  // inlined fallback wins so the worker is never left without the playbook.
+  const preamble = buildSwarmLauncherFirstTurnPreamble({
+    taskId: "task-1",
+    coordinationSkill: "FALLBACK SKILL CONTENT",
+    skillReachableAt: "/some/path"
+  });
+  assert.match(preamble, /## Swarm coordination skill/);
+  assert.match(preamble, /FALLBACK SKILL CONTENT/);
+  assert.doesNotMatch(preamble, /Coordination playbook/);
 });

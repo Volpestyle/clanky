@@ -42,7 +42,7 @@ function resolveRepoRoot(targetCwd: string): string {
   if (!result.error && result.status === 0 && result.stdout) {
     return realpathSync(result.stdout);
   }
-  throw new Error(`Code workers require a git repository checkout. '${resolvedTargetCwd}' is not inside a git repo.`);
+  return resolvedTargetCwd;
 }
 
 export function resolveCodeAgentWorkspace({ cwd }: ResolveCodeAgentWorkspaceOptions): CodeAgentWorkspace {

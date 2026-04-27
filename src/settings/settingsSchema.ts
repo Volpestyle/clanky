@@ -352,7 +352,8 @@ export const DEFAULT_SETTINGS = {
           command: "bun",
           args: ["run", "./mcp-servers/swarm-mcp/src/index.ts"],
           dbPath: "",
-          appendCoordinationPrompt: true
+          appendCoordinationPrompt: true,
+          allowDirectChildFallback: false
         },
         codexCli: {
           enabled: false,

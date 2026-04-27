@@ -537,6 +537,10 @@ export function normalizeAgentStackSection(
           appendCoordinationPrompt: normalizeBoolean(
             devTeam.swarm?.appendCoordinationPrompt,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.swarm.appendCoordinationPrompt
+          ),
+          allowDirectChildFallback: normalizeBoolean(
+            devTeam.swarm?.allowDirectChildFallback,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.swarm.allowDirectChildFallback
           )
         },
         codexCli: {

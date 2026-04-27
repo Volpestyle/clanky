@@ -102,7 +102,7 @@ Core routing:
 - text: `src/tools/replyTools.ts`
 - voice: `src/voice/voiceToolCallInfra.ts` and `src/voice/voiceToolCallDispatch.ts`
 - browser tasks: `src/tools/browserTaskRuntime.ts`
-- code tasks: `src/agents/swarmLauncher.ts` (worker spawn) and `src/agents/swarmPeer.ts` (Clanky's planner peer)
+- code tasks: `src/agents/swarmLauncher.ts` (worker spawn) and `src/agents/swarmPeer.ts` (Clanky's controller peer)
 
 Current voice dispatch modules:
 

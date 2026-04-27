@@ -293,6 +293,80 @@ test("spawnCodeWorker resolves GitHub issue URLs to approved local clones", asyn
   });
 });
 
+test("spawnCodeWorker resolves bare cwd under the configured root and allows non-git workspaces", async () => {
+  const tempDir = mkdtempSync(path.join(tmpdir(), "clanky-spawn-code-worker-non-git-"));
+  const workspaceRoot = path.join(tempDir, "volpestyle");
+  const packageDir = path.join(workspaceRoot, "swarm-test");
+  mkdirSync(packageDir, { recursive: true });
+  try {
+    const realPackageDir = realpathSync(packageDir);
+    const order: string[] = [];
+    const task = makeTask("task-non-git", realPackageDir);
+    const spawned = makeSpawnedPeer("worker-non-git", realPackageDir, order);
+    let capturedOptions: SpawnPeerOptions | null = null;
+    let capturedPeerScope = "";
+    let capturedPeerRepoRoot = "";
+    let capturedPeerFileRoot = "";
+    const peer = {
+      instanceId: "clanky-planner",
+      requestTask: async () => task,
+      assignTask: async (_taskId: string, assignee: string) => {
+        task.assignee = assignee;
+        return task;
+      },
+      kvSet: async (key: string, value: string) => ({
+        scope: realPackageDir,
+        key,
+        value,
+        updatedAt: Date.now()
+      }),
+      updateTask: async (_taskId: string, opts: UpdateTaskOpts) => {
+        task.status = opts.status;
+        task.result = opts.result ?? null;
+        return task;
+      }
+    };
+
+    const result = await spawnCodeWorker({
+      settings: makeSettings(workspaceRoot, path.join(tempDir, "swarm.db")),
+      task: "Create a short todo app in this package",
+      cwd: "swarm-test",
+      guildId: null,
+      channelId: "channel-1",
+      userId: "user-1"
+    }, {
+      store: {
+        countActionsSince: () => 0,
+        logAction: () => {}
+      },
+      peerManager: {
+        ensurePeer: (scope: string, repoRoot: string, fileRoot: string) => {
+          capturedPeerScope = scope;
+          capturedPeerRepoRoot = repoRoot;
+          capturedPeerFileRoot = fileRoot;
+          return peer;
+        }
+      } as never,
+      reservationKeeper: {} as never,
+      spawnPeer: async (opts: SpawnPeerOptions) => {
+        capturedOptions = opts;
+        return spawned;
+      }
+    });
+
+    expect(capturedOptions?.cwd).toBe(realPackageDir);
+    expect(capturedPeerScope).toBe(realPackageDir);
+    expect(capturedPeerRepoRoot).toBe(realPackageDir);
+    expect(capturedPeerFileRoot).toBe(realPackageDir);
+    expect(result.cwd).toBe(realPackageDir);
+    expect(result.scope).toBe(realPackageDir);
+
+    await expect(cancelSpawnedWorkerForTask("task-non-git", "test cleanup")).resolves.toBe(true);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("spawnCodeWorker can assign an existing open swarm task instead of creating a duplicate", async () => {
   await withTempWorkspace(async (workspaceDir, dbPath) => {
     const order: string[] = [];
