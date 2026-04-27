@@ -80,3 +80,68 @@ test("fetchContexts aggregates successes and isolates per-target errors", async 
   assert.equal(logs.some((entry) => entry.kind === "video_context_call"), true);
   assert.equal(logs.some((entry) => entry.kind === "video_context_error"), true);
 });
+
+test("fetchContexts reports missing ffmpeg as a local dependency blocker for direct video frames", async () => {
+  const { service, logs } = createService();
+  service.getToolAvailability = async () => ({ ffmpeg: false, ytDlp: true });
+
+  const result = await service.fetchContexts({
+    targets: [
+      {
+        key: "direct:https://media.tenor.com/example.mp4",
+        kind: "direct",
+        url: "https://media.tenor.com/example.mp4",
+        forceDirect: true
+      }
+    ],
+    keyframeIntervalSeconds: 1,
+    maxKeyframesPerVideo: 1
+  });
+
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.videos.length, 1);
+  assert.match(result.videos[0]?.keyframeError || "", /Local runtime dependency missing: ffmpeg/);
+  assert.equal(result.videos[0]?.keyframeErrorCode, "missing_ffmpeg");
+  assert.deepEqual(result.videos[0]?.missingDependencies, ["ffmpeg"]);
+
+  const callLog = logs.find((entry) => entry.kind === "video_context_call");
+  assert.deepEqual(callLog?.metadata?.missingDependencies, ["ffmpeg"]);
+  assert.equal(callLog?.metadata?.keyframeErrorCode, "missing_ffmpeg");
+});
+
+test("fetchContexts reports missing yt-dlp as a local dependency blocker for hosted video pages", async () => {
+  const { service } = createService();
+  service.getToolAvailability = async () => ({ ffmpeg: true, ytDlp: false });
+  service.fetchBaseSummary = async ({ target }) => ({
+    provider: "generic",
+    kind: target.kind,
+    videoId: null,
+    url: target.url,
+    title: "Tenor GIF page",
+    channel: "tenor.com",
+    publishedAt: null,
+    durationSeconds: null,
+    viewCount: null,
+    description: "",
+    transcript: "",
+    transcriptSource: "",
+    transcriptError: null
+  });
+
+  const result = await service.fetchContexts({
+    targets: [
+      {
+        key: "generic:https://tenor.com/view/example",
+        kind: "generic",
+        url: "https://tenor.com/view/example"
+      }
+    ],
+    keyframeIntervalSeconds: 1,
+    maxKeyframesPerVideo: 1
+  });
+
+  assert.equal(result.errors.length, 0);
+  assert.match(result.videos[0]?.keyframeError || "", /Local runtime dependency missing: yt-dlp/);
+  assert.equal(result.videos[0]?.keyframeErrorCode, "missing_yt_dlp");
+  assert.deepEqual(result.videos[0]?.missingDependencies, ["yt-dlp"]);
+});

@@ -1022,6 +1022,173 @@ test("maybeReplyToMessagePipeline inspects coalesced GIF video links before answ
   });
 });
 
+test("maybeReplyToMessagePipeline calls out missing video dependencies when GIF frames cannot be sampled", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+    store.patchSettings({
+      media: {
+        videoContext: {
+          enabled: true,
+          maxLookupsPerHour: 12,
+          maxVideosPerMessage: 2,
+          keyframeIntervalSeconds: 1,
+          maxKeyframesPerVideo: 2
+        }
+      }
+    });
+
+    const llmCalls: Array<{ userPrompt: string; imageInputs: Array<Record<string, unknown>> }> = [];
+    const replyPayloads: Array<Record<string, unknown>> = [];
+    const channelSendPayloads: Array<Record<string, unknown>> = [];
+    const typingCallsRef = { count: 0 };
+    const video = {
+      extractVideoTargets(url: string) {
+        return [
+          {
+            key: `direct:${url}`,
+            url,
+            kind: "direct",
+            videoId: null,
+            forceDirect: true
+          }
+        ];
+      },
+      async fetchContexts(payload: { targets: Array<{ url: string }> }) {
+        return {
+          videos: payload.targets.map((target) => ({
+            provider: "direct",
+            title: "wow taiko",
+            url: target.url,
+            frameImages: [],
+            keyframeCount: 0,
+            keyframeError: "Local runtime dependency missing: ffmpeg is required to sample frames from GIF/video media. Install ffmpeg and restart the bot.",
+            keyframeErrorCode: "missing_ffmpeg",
+            missingDependencies: ["ffmpeg"],
+            transcript: ""
+          })),
+          errors: []
+        };
+      }
+    };
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate(payload) {
+          llmCalls.push({
+            userPrompt: String(payload.userPrompt || ""),
+            imageInputs: Array.isArray(payload.imageInputs) ? payload.imageInputs : []
+          });
+          return {
+            text: JSON.stringify({
+              text: "I cannot inspect the pixels until ffmpeg is installed.",
+              skip: false,
+              reactionEmoji: null,
+              media: null,
+              automationAction: {
+                operation: "none",
+                title: null,
+                instruction: null,
+                schedule: null,
+                targetQuery: null,
+                automationId: null,
+                runImmediately: false,
+                targetChannelId: null
+              },
+              screenWatchIntent: {
+                action: "none",
+                confidence: 0,
+                reason: null
+              }
+            }),
+            toolCalls: [],
+            rawContent: null,
+            provider: "claude-oauth",
+            model: "claude-opus-4-6",
+            usage: {
+              inputTokens: 10,
+              outputTokens: 10,
+              cacheWriteTokens: 0,
+              cacheReadTokens: 0
+            },
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanky",
+      tag: "clanky#0001"
+    };
+
+    const guild = buildGuild();
+    const channel = buildChannel({
+      guild,
+      channelId,
+      channelSendPayloads,
+      typingCallsRef
+    });
+    const message = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-gif-question",
+      content: "clanky, what is this gif showing?",
+      replyPayloads
+    });
+
+    const settings = store.getSettings();
+    const runtime = buildReplyPipelineRuntime(bot, {
+      captionTimestamps: [],
+      unsolicitedReplyContextWindow: 2
+    });
+    const recentMessages = [
+      {
+        message_id: "msg-gif-link",
+        author_name: "alice",
+        content: "https://media.tenor.com/rAWXcy9O6XUAAAPo/wow-taiko.mp4",
+        created_at: new Date().toISOString(),
+        is_bot: false
+      },
+      {
+        message_id: "msg-gif-question",
+        author_name: "alice",
+        content: "clanky, what is this gif showing?",
+        created_at: new Date().toISOString(),
+        is_bot: false
+      }
+    ];
+
+    const handled = await maybeReplyToMessagePipeline(runtime, message as never, settings, {
+      source: "message_event_coalesced",
+      forceDecisionLoop: true,
+      forceRespond: true,
+      recentMessages,
+      triggerMessageIds: ["msg-gif-link", String(message.id || "")],
+      addressSignal: {
+        direct: true,
+        inferred: true,
+        triggered: true,
+        reason: "name_exact"
+      }
+    });
+
+    assert.equal(handled, true);
+    assert.equal(llmCalls[0]?.imageInputs.length, 0);
+    assert.match(llmCalls[0]?.userPrompt || "", /Local runtime dependency missing \(ffmpeg\)/);
+    assert.match(llmCalls[0]?.userPrompt || "", /No GIF\/video pixels were inspected/);
+    assert.match(llmCalls[0]?.userPrompt || "", /operator setup issue/);
+  });
+});
+
 test("maybeReplyToMessagePipeline includes Minecraft docs, tool exposure, and active session hint", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-mc-1";

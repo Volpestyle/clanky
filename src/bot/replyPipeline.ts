@@ -452,6 +452,43 @@ function buildFallbackVideoTarget(url: string): VideoTarget {
   };
 }
 
+function normalizeVideoDependencyName(value: unknown): string {
+  const name = String(value || "").trim();
+  return name === "ffmpeg" || name === "yt-dlp" ? name : "";
+}
+
+function getVideoMissingDependencies(video: Record<string, unknown> | null | undefined): string[] {
+  if (!video) return [];
+  const dependencies = new Set<string>();
+  const rawDependencies = Array.isArray(video.missingDependencies) ? video.missingDependencies : [];
+  for (const dependency of rawDependencies) {
+    const normalized = normalizeVideoDependencyName(dependency);
+    if (normalized) dependencies.add(normalized);
+  }
+
+  const codes = [video.keyframeErrorCode, video.transcriptErrorCode].map((value) => String(value || ""));
+  if (codes.includes("missing_ffmpeg")) dependencies.add("ffmpeg");
+  if (codes.includes("missing_yt_dlp")) dependencies.add("yt-dlp");
+
+  const errorText = [video.keyframeError, video.transcriptError]
+    .map((value) => String(value || "").toLowerCase())
+    .join("\n");
+  if (errorText.includes("local runtime dependency missing") || errorText.includes("not installed")) {
+    if (errorText.includes("ffmpeg")) dependencies.add("ffmpeg");
+    if (errorText.includes("yt-dlp")) dependencies.add("yt-dlp");
+  }
+
+  return Array.from(dependencies);
+}
+
+function buildVideoDependencyFailureLine(dependencies: string[]): string {
+  const list = dependencies.join(", ");
+  const installList = dependencies.length === 1
+    ? dependencies[0]
+    : `${dependencies.slice(0, -1).join(", ")} and ${dependencies.at(-1)}`;
+  return `Local runtime dependency missing (${list}). No GIF/video pixels were inspected; tell the user this is an operator setup issue and the bot needs ${installList} installed before visual details are available.`;
+}
+
 async function inspectTurnVisualMedia({
   bot,
   message,
@@ -518,8 +555,10 @@ async function inspectTurnVisualMedia({
     });
     const videos = Array.isArray(result?.videos) ? result.videos : [];
     const imageInputs: ReplyImageInput[] = [];
+    const missingDependencySet = new Set<string>();
+    let keyframeErrorCount = 0;
     const lines = [
-      "GIF/video visual inspection was run for this visual question. Attached keyframe images are visual evidence for the refs below."
+      "GIF/video visual inspection was attempted for this visual question. Only attached keyframe images are visual evidence; metadata and error lines are not pixels."
     ];
 
     selectedVideos.forEach((input, index) => {
@@ -534,14 +573,24 @@ async function inspectTurnVisualMedia({
       imageInputs.push(...frameImages);
       const transcript = String(video.transcript || "").trim();
       const keyframeError = String(video.keyframeError || "").trim();
+      const missingDependencies = getVideoMissingDependencies(video);
+      for (const dependency of missingDependencies) missingDependencySet.add(dependency);
+      if (keyframeError) keyframeErrorCount += 1;
       lines.push(`${ref}: ${title}; keyframes attached: ${frameImages.length}.`);
       if (transcript) lines.push(`${ref} transcript: ${transcript.slice(0, 500)}`);
       if (keyframeError) lines.push(`${ref} keyframe error: ${keyframeError.slice(0, 240)}`);
+      if (missingDependencies.length && !frameImages.length) {
+        lines.push(`${ref}: ${buildVideoDependencyFailureLine(missingDependencies)}`);
+      }
     });
 
     const errorCount = Array.isArray(result?.errors) ? result.errors.length : 0;
+    const missingDependencies = Array.from(missingDependencySet);
     if (!imageInputs.length) {
       lines.push("No keyframe pixels were attached. Do not describe visual specifics unless metadata/transcript above supports them.");
+      if (missingDependencies.length) {
+        lines.push(buildVideoDependencyFailureLine(missingDependencies));
+      }
     }
     bot.store.logAction({
       kind: "runtime",
@@ -555,6 +604,8 @@ async function inspectTurnVisualMedia({
         videoRefs: selectedVideos.map((video, index) => String(video.videoRef || `VID ${index + 1}`)),
         targetCount: targets.length,
         keyframeCount: imageInputs.length,
+        keyframeErrorCount,
+        missingDependencies,
         errorCount
       }
     });
@@ -1415,6 +1466,10 @@ async function executeReplyLlm(
         if (video.transcriptError) lines.push(`Transcript error: ${video.transcriptError}`);
         if (video.keyframeError) lines.push(`Keyframe error: ${video.keyframeError}`);
         const frameImages = video.frameImages || [];
+        const missingDependencies = getVideoMissingDependencies(video as Record<string, unknown>);
+        if (missingDependencies.length && !frameImages.length) {
+          lines.push(buildVideoDependencyFailureLine(missingDependencies));
+        }
         if (frameImages.length) lines.push(`Keyframes: ${frameImages.length} frame(s) attached`);
         const toolResultText = lines.join("\n");
         const frameImageBytes = frameImages.reduce((sum, img) => sum + (img.dataBase64 ? Math.ceil(img.dataBase64.length * 3 / 4) : 0), 0);
@@ -1434,6 +1489,9 @@ async function executeReplyLlm(
             keyframeCount: frameImages.length,
             keyframePayloadBytes: frameImageBytes,
             keyframeError: video.keyframeError || null,
+            keyframeErrorCode: video.keyframeErrorCode || null,
+            transcriptErrorCode: video.transcriptErrorCode || null,
+            missingDependencies,
             toolResultChars: toolResultText.length,
             toolResultPreview: toolResultText.slice(0, 300)
           }

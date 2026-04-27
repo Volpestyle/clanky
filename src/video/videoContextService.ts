@@ -70,6 +70,28 @@ type VideoTrace = {
   source?: string;
 };
 
+type VideoContextDependencyName = "ffmpeg" | "yt-dlp";
+type VideoContextDependencyCode = "missing_ffmpeg" | "missing_yt_dlp";
+type VideoContextDependencyFailure = {
+  dependency: VideoContextDependencyName;
+  code: VideoContextDependencyCode;
+};
+
+class VideoContextDependencyError extends Error {
+  readonly dependency: VideoContextDependencyName;
+  readonly code: VideoContextDependencyCode;
+
+  constructor({ dependency, detail }: { dependency: VideoContextDependencyName; detail: string }) {
+    super(
+      `Local runtime dependency missing: ${dependency} is required to ${detail}. ` +
+      `Install ${dependency} and restart the bot.`
+    );
+    this.name = "VideoContextDependencyError";
+    this.dependency = dependency;
+    this.code = dependency === "ffmpeg" ? "missing_ffmpeg" : "missing_yt_dlp";
+  }
+}
+
 export class VideoContextService {
   store;
   llm;
@@ -216,15 +238,21 @@ export class VideoContextService {
             transcriptError: context.transcriptError || null,
             keyframeCount: Number(context.keyframeCount || 0),
             keyframeError: context.keyframeError || null,
+            keyframeErrorCode: context.keyframeErrorCode || null,
+            transcriptErrorCode: context.transcriptErrorCode || null,
+            missingDependencies: Array.isArray(context.missingDependencies) ? context.missingDependencies : [],
             cacheHit: Boolean(context.cacheHit)
           }
         });
       } catch (error) {
         const message = String(error?.message || error);
+        const dependencyFailure = getDependencyFailure(error);
         errors.push({
           key: target.key,
           url: target.url,
-          error: message
+          error: message,
+          errorCode: dependencyFailure?.code || null,
+          missingDependency: dependencyFailure?.dependency || null
         });
         this.store.logAction({
           kind: "video_context_error",
@@ -237,6 +265,8 @@ export class VideoContextService {
             kind: target.kind,
             key: target.key,
             url: target.url,
+            errorCode: dependencyFailure?.code || null,
+            missingDependency: dependencyFailure?.dependency || null,
             attempts: Number(error?.attempts || 1)
           }
         });
@@ -299,24 +329,38 @@ export class VideoContextService {
       ...base,
       keyframeCount: 0,
       keyframeError: null,
+      keyframeErrorCode: null,
+      transcriptErrorCode: null,
+      missingDependencies: [] as VideoContextDependencyName[],
       frameImages: []
     };
     if (!needKeyframes && !shouldAsr) return context;
 
     let media = null;
     let mediaError = null;
+    let mediaFailure: unknown = null;
     try {
       media = await this.resolveMediaInput(target.url, target.forceDirect);
     } catch (error) {
+      mediaFailure = error;
       mediaError = String(error?.message || error);
     }
 
     if (mediaError) {
+      const dependencyFailure = getDependencyFailure(mediaFailure || mediaError);
       if (needKeyframes) {
         context.keyframeError = mediaError;
+        if (dependencyFailure) {
+          context.keyframeErrorCode = dependencyFailure.code;
+          addMissingDependency(context, dependencyFailure.dependency);
+        }
       }
       if (shouldAsr && !context.transcriptError) {
         context.transcriptError = mediaError;
+        if (dependencyFailure) {
+          context.transcriptErrorCode = dependencyFailure.code;
+          addMissingDependency(context, dependencyFailure.dependency);
+        }
       }
       return context;
     }
@@ -333,6 +377,11 @@ export class VideoContextService {
           context.keyframeCount = frames.length;
         } catch (error) {
           context.keyframeError = String(error?.message || error);
+          const dependencyFailure = getDependencyFailure(error);
+          if (dependencyFailure) {
+            context.keyframeErrorCode = dependencyFailure.code;
+            addMissingDependency(context, dependencyFailure.dependency);
+          }
         }
       }
 
@@ -352,6 +401,11 @@ export class VideoContextService {
         } catch (error) {
           if (!context.transcriptError) {
             context.transcriptError = String(error?.message || error);
+          }
+          const dependencyFailure = getDependencyFailure(error);
+          if (dependencyFailure) {
+            context.transcriptErrorCode = dependencyFailure.code;
+            addMissingDependency(context, dependencyFailure.dependency);
           }
         }
       }
@@ -475,7 +529,10 @@ export class VideoContextService {
 
   async fetchYtDlpInfo(url) {
     if (!(await this.hasYtDlp())) {
-      throw new Error("yt-dlp is not installed.");
+      throw new VideoContextDependencyError({
+        dependency: "yt-dlp",
+        detail: "extract metadata from yt-dlp-supported video pages"
+      });
     }
     const { stdout } = await runCommand({
       command: "yt-dlp",
@@ -614,7 +671,10 @@ export class VideoContextService {
     }
 
     if (!(await this.hasYtDlp())) {
-      throw new Error("yt-dlp is required for this video source.");
+      throw new VideoContextDependencyError({
+        dependency: "yt-dlp",
+        detail: "download hosted video/GIF pages before frame extraction"
+      });
     }
 
     return this.downloadMediaWithYtDlp(url);
@@ -680,7 +740,10 @@ export class VideoContextService {
 
   async extractKeyframesFromInput({ input, keyframeIntervalSeconds, maxKeyframesPerVideo }) {
     if (!(await this.hasFfmpeg())) {
-      throw new Error("ffmpeg is not installed.");
+      throw new VideoContextDependencyError({
+        dependency: "ffmpeg",
+        detail: "sample frames from GIF/video media"
+      });
     }
 
     const interval = clamp(
@@ -770,7 +833,10 @@ export class VideoContextService {
     trace?: VideoTrace;
   }) {
     if (!(await this.hasFfmpeg())) {
-      throw new Error("ffmpeg is not installed.");
+      throw new VideoContextDependencyError({
+        dependency: "ffmpeg",
+        detail: "extract audio for ASR fallback"
+      });
     }
     if (!this.llm?.isAsrReady?.()) {
       throw new Error("ASR fallback requires OPENAI_API_KEY.");
@@ -839,6 +905,24 @@ export class VideoContextService {
     ])
       .then(([ffmpeg, ytDlp]) => {
         console.log(`[VideoContextService] tool_availability  ffmpeg=${ffmpeg}  ytDlp=${ytDlp}`);
+        const missingDependencies: VideoContextDependencyName[] = [];
+        if (!ffmpeg) missingDependencies.push("ffmpeg");
+        if (!ytDlp) missingDependencies.push("yt-dlp");
+        if (missingDependencies.length) {
+          try {
+            this.store.logAction({
+              kind: "runtime",
+              content: "video_context_dependency_status",
+              metadata: {
+                ffmpegAvailable: ffmpeg,
+                ytDlpAvailable: ytDlp,
+                missingDependencies
+              }
+            });
+          } catch {
+            // Console availability already logged above; never fail media handling on diagnostics.
+          }
+        }
         return { ffmpeg, ytDlp };
       })
       .catch((error) => {
@@ -874,6 +958,46 @@ export class VideoContextService {
       return false;
     }
   }
+}
+
+function getDependencyFailure(error: unknown): VideoContextDependencyFailure | null {
+  if (error instanceof VideoContextDependencyError) {
+    return {
+      dependency: error.dependency,
+      code: error.code
+    };
+  }
+
+  const message = String(error instanceof Error ? error.message : error || "");
+  if (!message) return null;
+  const lower = message.toLowerCase();
+  const isDependencyMessage =
+    lower.includes("local runtime dependency missing") ||
+    lower.includes("not installed") ||
+    lower.includes("is required");
+  if (!isDependencyMessage) return null;
+  if (lower.includes("ffmpeg")) {
+    return {
+      dependency: "ffmpeg",
+      code: "missing_ffmpeg"
+    };
+  }
+  if (lower.includes("yt-dlp")) {
+    return {
+      dependency: "yt-dlp",
+      code: "missing_yt_dlp"
+    };
+  }
+  return null;
+}
+
+function addMissingDependency(
+  context: { missingDependencies?: VideoContextDependencyName[] },
+  dependency: VideoContextDependencyName
+) {
+  const dependencies = Array.isArray(context.missingDependencies) ? context.missingDependencies : [];
+  if (!dependencies.includes(dependency)) dependencies.push(dependency);
+  context.missingDependencies = dependencies;
 }
 
 function summarizeYouTubeVideo({ videoId, url, playerResponse }) {

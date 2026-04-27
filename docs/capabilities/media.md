@@ -94,6 +94,12 @@ Direct video URLs (for example Discord CDN `.mp4`/`.webm`) and direct `.gif`
 URLs are processed without `yt-dlp`. Non-direct hosts can use `yt-dlp` when
 available. Keyframe and ASR fallback extraction rely on `ffmpeg`.
 
+Missing `ffmpeg` or `yt-dlp` is reported as a local runtime dependency blocker,
+not as weak visual evidence. The context payload and logs include
+`missingDependencies` plus `keyframeErrorCode` / `transcriptErrorCode`, and the
+prompt/tool result says that no GIF/video pixels were inspected until the
+operator installs the dependency and restarts the bot.
+
 Settings: `media.videoContext` controls enablement and extraction parameters
 (transcript length, keyframe interval, ASR fallback).
 
