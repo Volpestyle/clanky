@@ -94,6 +94,15 @@ Direct video URLs (for example Discord CDN `.mp4`/`.webm`) and direct `.gif`
 URLs are processed without `yt-dlp`. Non-direct hosts can use `yt-dlp` when
 available. Keyframe and ASR fallback extraction rely on `ffmpeg`.
 
+Keyframe sampling is duration-aware. Before running `ffmpeg`, the service
+probes clip duration with `ffprobe`; if the clip is shorter than
+`keyframeIntervalSeconds × maxKeyframesPerVideo` the interval is compressed to
+`duration / maxKeyframesPerVideo` (floored at ~1/15s) so a short looping GIF
+still yields up to `maxKeyframesPerVideo` evenly-spaced frames instead of one.
+The probed duration also backfills `durationSeconds` on direct sources whose
+summary path doesn't expose it, so logs and prompts no longer report
+`durationSeconds: null` for Tenor/Giphy MP4s once frames are extracted.
+
 Missing `ffmpeg` or `yt-dlp` is reported as a local runtime dependency blocker,
 not as weak visual evidence. The context payload and logs include
 `missingDependencies` plus `keyframeErrorCode` / `transcriptErrorCode`, and the

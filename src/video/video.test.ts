@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { VideoContextService } from "./videoContextService.ts";
+import { VideoContextService, computeEffectiveKeyframeInterval } from "./videoContextService.ts";
 
 function createService() {
   const logs = [];
@@ -144,4 +144,34 @@ test("fetchContexts reports missing yt-dlp as a local dependency blocker for hos
   assert.match(result.videos[0]?.keyframeError || "", /Local runtime dependency missing: yt-dlp/);
   assert.equal(result.videos[0]?.keyframeErrorCode, "missing_yt_dlp");
   assert.deepEqual(result.videos[0]?.missingDependencies, ["yt-dlp"]);
+});
+
+test("computeEffectiveKeyframeInterval keeps configured interval when duration is unknown or long", () => {
+  // Unknown duration: trust the configured interval; can't second-guess.
+  assert.equal(computeEffectiveKeyframeInterval(1, 4, null), 1);
+  assert.equal(computeEffectiveKeyframeInterval(1, 4, undefined), 1);
+  assert.equal(computeEffectiveKeyframeInterval(1, 4, 0), 1);
+  assert.equal(computeEffectiveKeyframeInterval(1, 4, -5), 1);
+  assert.equal(computeEffectiveKeyframeInterval(1, 4, Number.NaN), 1);
+
+  // Duration ≥ configuredInterval × maxFrames: configured interval already
+  // produces (or exceeds) maxFrames samples; do not change it.
+  assert.equal(computeEffectiveKeyframeInterval(1, 4, 4), 1);
+  assert.equal(computeEffectiveKeyframeInterval(1, 4, 30), 1);
+  assert.equal(computeEffectiveKeyframeInterval(2, 3, 6), 2);
+});
+
+test("computeEffectiveKeyframeInterval compresses interval to spread maxFrames over short clips", () => {
+  // 0.6s loop with interval=1, maxFrames=4 → effective 0.15 (≈ 6.67 fps)
+  // so ffmpeg emits 4 evenly spaced frames instead of one.
+  const shortLoop = computeEffectiveKeyframeInterval(1, 4, 0.6);
+  assert.ok(Math.abs(shortLoop - 0.15) < 1e-9, `expected ~0.15, got ${shortLoop}`);
+
+  // 2s clip with interval=1, maxFrames=4 → effective 0.5 (=2 fps), four frames over 2s.
+  assert.equal(computeEffectiveKeyframeInterval(1, 4, 2), 0.5);
+
+  // Sub-frame clip: floor at MIN_EFFECTIVE_KEYFRAME_INTERVAL_SECONDS = 1/15 to
+  // avoid asking ffmpeg for absurd sampling rates on a near-zero clip.
+  const subFrame = computeEffectiveKeyframeInterval(1, 4, 0.05);
+  assert.ok(Math.abs(subFrame - 1 / 15) < 1e-9, `expected ~1/15, got ${subFrame}`);
 });

@@ -34,6 +34,7 @@ const CACHE_TTL_MS = 30 * 60 * 1000;
 // External tool execution timeouts and log-capture bounds.
 const YT_DLP_TIMEOUT_MS = 50_000;
 const FFMPEG_TIMEOUT_MS = 45_000;
+const FFPROBE_TIMEOUT_MS = 8_000;
 const MAX_COMMAND_OUTPUT_BYTES = 8 * 1024 * 1024;
 const MAX_LOG_CONTENT_CHARS = 2000;
 
@@ -43,6 +44,9 @@ const MIN_MAX_TRANSCRIPT_CHARS = 200;
 const MAX_MAX_TRANSCRIPT_CHARS = 4000;
 const DEFAULT_KEYFRAME_INTERVAL_SECONDS = 0;
 const MAX_KEYFRAME_INTERVAL_SECONDS = 120;
+// Floor for adaptive sampling on very short clips: ~15 fps is dense enough to
+// catch any meaningful motion in a sub-second loop without flooding the model.
+const MIN_EFFECTIVE_KEYFRAME_INTERVAL_SECONDS = 1 / 15;
 const DEFAULT_MAX_ASR_SECONDS = 120;
 const MIN_MAX_ASR_SECONDS = 15;
 const MAX_MAX_ASR_SECONDS = 600;
@@ -368,13 +372,22 @@ export class VideoContextService {
     try {
       if (needKeyframes && media) {
         try {
-          const frames = await this.extractKeyframesFromInput({
+          const { frames, durationSeconds: probedDurationSeconds } = await this.extractKeyframesFromInput({
             input: media.input,
             keyframeIntervalSeconds,
             maxKeyframesPerVideo
           });
           context.frameImages = frames;
           context.keyframeCount = frames.length;
+          // Direct/Tenor sources don't surface duration through their summary
+          // path; fill it in from the ffprobe sidecar so downstream logs and
+          // the model prompt stop reporting `durationSeconds: null`.
+          if (
+            (context.durationSeconds == null || !Number.isFinite(Number(context.durationSeconds)) || Number(context.durationSeconds) <= 0) &&
+            probedDurationSeconds != null
+          ) {
+            context.durationSeconds = probedDurationSeconds;
+          }
         } catch (error) {
           context.keyframeError = String(error?.message || error);
           const dependencyFailure = getDependencyFailure(error);
@@ -738,6 +751,31 @@ export class VideoContextService {
     }
   }
 
+  async probeMediaDuration(input: string): Promise<number | null> {
+    try {
+      const { stdout } = await runCommand({
+        command: "ffprobe",
+        args: [
+          "-v",
+          "error",
+          "-show_entries",
+          "format=duration",
+          "-of",
+          "default=noprint_wrappers=1:nokey=1",
+          String(input)
+        ],
+        timeoutMs: FFPROBE_TIMEOUT_MS
+      });
+      const value = Number(String(stdout || "").trim());
+      return Number.isFinite(value) && value > 0 ? value : null;
+    } catch (error) {
+      console.warn(
+        `[VideoContextService] ffprobe_duration_failed  input=${String(input).slice(0, 120)}  error=${error instanceof Error ? error.message : String(error)}`
+      );
+      return null;
+    }
+  }
+
   async extractKeyframesFromInput({ input, keyframeIntervalSeconds, maxKeyframesPerVideo }) {
     if (!(await this.hasFfmpeg())) {
       throw new VideoContextDependencyError({
@@ -746,12 +784,22 @@ export class VideoContextService {
       });
     }
 
-    const interval = clamp(
+    const configuredInterval = clamp(
       Number(keyframeIntervalSeconds) || DEFAULT_KEYFRAME_INTERVAL_SECONDS,
       1,
       MAX_KEYFRAME_INTERVAL_SECONDS
     );
     const maxFrames = clamp(Number(maxKeyframesPerVideo) || 0, 1, 8);
+    // Looping GIFs and other short clips are sub-second; fixed `fps=1/1`
+    // sampling collapses to a single frame and the maxFrames cap never bites.
+    // Probe duration first so we can compress the interval into the clip's
+    // actual length when needed.
+    const probedDurationSeconds = await this.probeMediaDuration(String(input));
+    const effectiveInterval = computeEffectiveKeyframeInterval(
+      configuredInterval,
+      maxFrames,
+      probedDurationSeconds
+    );
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-frames-"));
     const outputPattern = path.join(tempDir, "frame-%03d.jpg");
 
@@ -765,7 +813,7 @@ export class VideoContextService {
         "-i",
         String(input),
         "-vf",
-        `fps=1/${interval}`,
+        `fps=1/${effectiveInterval}`,
         "-frames:v",
         String(maxFrames),
         "-q:v",
@@ -801,14 +849,16 @@ export class VideoContextService {
       console.log(
         `[VideoContextService] keyframe_extraction_complete` +
         `  input=${String(input).slice(0, 120)}` +
-        `  intervalSeconds=${interval}` +
+        `  configuredIntervalSeconds=${configuredInterval}` +
+        `  effectiveIntervalSeconds=${effectiveInterval}` +
+        `  probedDurationSeconds=${probedDurationSeconds ?? "null"}` +
         `  maxFrames=${maxFrames}` +
         `  extractedFrames=${images.length}` +
         `  frameSizesBytes=[${frameSizes.join(",")}]` +
         `  totalBytes=${totalBytes}` +
         `  ffmpegDurationMs=${ffmpegDurationMs}`
       );
-      return images;
+      return { frames: images, durationSeconds: probedDurationSeconds };
     } finally {
       try {
         await fs.rm(tempDir, { recursive: true, force: true });
@@ -958,6 +1008,31 @@ export class VideoContextService {
       return false;
     }
   }
+}
+
+// Pick a sampling interval that still yields up to `maxFrames` evenly-spaced
+// keyframes when the clip is shorter than `configuredInterval × maxFrames`.
+// Returns the configured interval unchanged when duration is unknown or long
+// enough that fixed-interval sampling already produces the requested count.
+export function computeEffectiveKeyframeInterval(
+  configuredInterval: number,
+  maxFrames: number,
+  durationSeconds: number | null | undefined
+): number {
+  const interval = Number(configuredInterval);
+  const frames = Number(maxFrames);
+  if (!Number.isFinite(interval) || interval <= 0 || !Number.isFinite(frames) || frames <= 0) {
+    return interval;
+  }
+  if (
+    durationSeconds == null ||
+    !Number.isFinite(Number(durationSeconds)) ||
+    Number(durationSeconds) <= 0 ||
+    Number(durationSeconds) >= interval * frames
+  ) {
+    return interval;
+  }
+  return Math.max(Number(durationSeconds) / frames, MIN_EFFECTIVE_KEYFRAME_INTERVAL_SECONDS);
 }
 
 function getDependencyFailure(error: unknown): VideoContextDependencyFailure | null {
