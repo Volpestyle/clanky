@@ -21,8 +21,19 @@ export interface SubAgentTurnResult {
   errorMessage: string;
   /** True when the sub-agent intentionally ended the session during this turn. */
   sessionCompleted?: boolean;
+  /** Parent-readable task outcome material. This is raw handoff context, not durable memory by itself. */
+  handoff?: SubAgentTaskHandoff | null;
   usage: SubAgentUsage;
 }
+
+export type SubAgentTaskHandoff = {
+  summary: string;
+  changedFiles: string[];
+  tests: string[];
+  decisions: string[];
+  blockers: string[];
+  followUps: string[];
+};
 
 export type SubAgentProgressEvent = {
   kind?: string;

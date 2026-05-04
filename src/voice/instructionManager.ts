@@ -15,7 +15,7 @@ import {
   MUSIC_ACTIVE_AUTONOMY_POLICY_LINE,
   MUSIC_REPLY_HANDOFF_POLICY_LINE
 } from "../prompts/voiceLivePolicy.ts";
-import { buildSingleTurnPromptLog } from "../promptLogging.ts";
+import { buildSingleTurnPromptLog, buildStandardPromptTiers } from "../promptLogging.ts";
 import {
   loadSharedVoiceMemoryContext
 } from "./voiceMemoryContext.ts";
@@ -78,6 +78,55 @@ interface InstructionStoreLike {
     before?: number;
     after?: number;
   }) => Promise<unknown[]> | unknown[];
+}
+
+function countPromptRows(value: unknown) {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function buildRealtimeInstructionPromptTiers({
+  instructions,
+  memorySlice,
+  sharedTurnContext,
+  transcript,
+  speakerUserId,
+  toolCount = 0
+}: {
+  instructions: string;
+  memorySlice?: RealtimeInstructionMemorySlice | null;
+  sharedTurnContext?: SharedVoiceTurnContext | null;
+  transcript?: string | null;
+  speakerUserId?: string | null;
+  toolCount?: number;
+}) {
+  const structuredFactCount = [
+    memorySlice?.participantProfiles,
+    memorySlice?.selfFacts,
+    memorySlice?.loreFacts,
+    memorySlice?.guidanceFacts,
+    memorySlice?.behavioralFacts
+  ].reduce<number>((sum, rows) => sum + countPromptRows(rows), 0);
+  const retrievedHistoryCount = countPromptRows(memorySlice?.recentConversationHistory) +
+    (sharedTurnContext?.compactedSessionSummary?.text ? 1 : 0);
+  const hasCurrentInput = Boolean(String(transcript || "").trim() || String(speakerUserId || "").trim());
+
+  return buildStandardPromptTiers({
+    identity: true,
+    baseMode: true,
+    curatedMemory: /Curated always-on memory:/i.test(instructions),
+    structuredFacts: structuredFactCount > 0,
+    retrievedHistory: retrievedHistoryCount > 0,
+    capabilitiesTools: toolCount > 0,
+    currentInput: hasCurrentInput,
+    outputContract: true,
+    systemPromptChars: instructions.length,
+    toolCount,
+    details: {
+      structured_facts: { renderedRowCount: structuredFactCount },
+      retrieved_history: { renderedRowCount: retrievedHistoryCount },
+      current_input: { surface: "realtime_voice_instruction" }
+    }
+  });
 }
 
 interface StreamWatchPromptContext {
@@ -615,7 +664,17 @@ export class InstructionManager {
           instructionsChars: instructions.length,
           replyPrompts: buildSingleTurnPromptLog({
             systemPrompt: instructions,
-            userPrompt: ""
+            userPrompt: "",
+            promptTiers: buildRealtimeInstructionPromptTiers({
+              instructions,
+              memorySlice: effectiveMemorySlice,
+              sharedTurnContext,
+              transcript,
+              speakerUserId,
+              toolCount: Array.isArray(session.realtimeToolDefinitions)
+                ? session.realtimeToolDefinitions.length
+                : 0
+            })
           })
         }
       });

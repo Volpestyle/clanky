@@ -6,6 +6,7 @@ import path from "node:path";
 import { MemoryManager } from "./memoryManager.ts";
 import { Store } from "../store/store.ts";
 import { rmTempDir } from "../testHelpers.ts";
+import { createTestSettings } from "../testSettings.ts";
 
 function createMemoryForIngestTests(storeOverrides = {}) {
   return new MemoryManager({
@@ -158,6 +159,205 @@ test("voice transcript ingest preserves bot-authored message rows", async () => 
   memory.ingestWorkerActive = false;
   await memory.runIngestWorker();
   assert.equal(await ingestPromise, true);
+});
+
+test("ingestMessage skips non-durable lifecycle turns before record or queue", async () => {
+  const recorded: Array<Record<string, unknown>> = [];
+  const logActions: Array<Record<string, unknown>> = [];
+  const memory = createMemoryForIngestTests({
+    recordMessage(row: Record<string, unknown>) {
+      recorded.push(row);
+    },
+    logAction(row: Record<string, unknown>) {
+      logActions.push(row);
+    }
+  });
+  memory.ingestWorkerActive = true;
+  let processed = 0;
+  memory.processIngestMessage = async () => {
+    processed += 1;
+  };
+
+  const result = await memory.ingestMessage({
+    messageId: "voice-guild-1-interrupted-123456",
+    authorId: "bot-1",
+    authorName: "clanky",
+    content: "[interrupted] this was only half delivered",
+    isBot: true,
+    settings: {},
+    lifecycle: {
+      status: "interrupted"
+    },
+    trace: {
+      guildId: "guild-1",
+      channelId: "chan-1",
+      userId: "bot-1",
+      source: "voice_assistant_timeline_ingest"
+    }
+  });
+
+  assert.equal(result, false);
+  assert.equal(recorded.length, 0);
+  assert.equal(processed, 0);
+  assert.equal(
+    logActions.some((entry) => entry.content === "memory_turn_sync_skipped"),
+    true
+  );
+});
+
+test("ingestMessage treats capture reason as diagnostic when lifecycle completed", async () => {
+  const recorded: Array<Record<string, unknown>> = [];
+  const memory = createMemoryForIngestTests({
+    recordMessage(row: Record<string, unknown>) {
+      recorded.push(row);
+    }
+  });
+  memory.ingestWorkerActive = true;
+  let processedJob: Record<string, unknown> | null = null;
+  memory.processIngestMessage = async (job: Record<string, unknown>) => {
+    processedJob = job;
+  };
+
+  const ingestPromise = memory.ingestMessage({
+    messageId: "voice-guild-1-idle-timeout-123456",
+    authorId: "user-1",
+    authorName: "Alice",
+    content: "remember i usually troubleshoot deploys from logs first",
+    settings: {},
+    lifecycle: {
+      status: "completed",
+      captureReason: "idle_timeout"
+    },
+    trace: {
+      guildId: "guild-1",
+      channelId: "chan-1",
+      userId: "user-1",
+      source: "voice_realtime_ingest"
+    }
+  });
+
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0]?.content, "remember i usually troubleshoot deploys from logs first");
+
+  memory.ingestWorkerActive = false;
+  await memory.runIngestWorker();
+  assert.equal(await ingestPromise, true);
+  assert.equal((processedJob?.lifecycle as Record<string, unknown>)?.status, "completed");
+  assert.equal((processedJob?.lifecycle as Record<string, unknown>)?.captureReason, "idle_timeout");
+});
+
+test("ingestMessage skips idle_timeout only when lifecycle marks it partial", async () => {
+  const recorded: Array<Record<string, unknown>> = [];
+  const logActions: Array<Record<string, unknown>> = [];
+  const memory = createMemoryForIngestTests({
+    recordMessage(row: Record<string, unknown>) {
+      recorded.push(row);
+    },
+    logAction(row: Record<string, unknown>) {
+      logActions.push(row);
+    }
+  });
+  memory.ingestWorkerActive = true;
+  let processed = 0;
+  memory.processIngestMessage = async () => {
+    processed += 1;
+  };
+
+  const result = await memory.ingestMessage({
+    messageId: "voice-guild-1-idle-partial-123456",
+    authorId: "user-1",
+    authorName: "Alice",
+    content: "this partial timeout should stay out of durable memory",
+    settings: {},
+    lifecycle: {
+      status: "partial",
+      captureReason: "idle_timeout"
+    },
+    trace: {
+      guildId: "guild-1",
+      channelId: "chan-1",
+      userId: "user-1",
+      source: "voice_realtime_ingest"
+    }
+  });
+
+  assert.equal(result, false);
+  assert.equal(recorded.length, 0);
+  assert.equal(processed, 0);
+  assert.equal(
+    logActions.some((entry) =>
+      entry.content === "memory_turn_sync_skipped" &&
+      (entry.metadata as Record<string, unknown>)?.reason === "lifecycle_partial" &&
+      (entry.metadata as Record<string, unknown>)?.captureReason === "idle_timeout"
+    ),
+    true
+  );
+});
+
+test("voice session micro-reflection excludes interrupted assistant turns", async () => {
+  let reflectedPrompt = "";
+  const memory = new MemoryManager({
+    store: {
+      getFactProfileRows() {
+        return [];
+      },
+      logAction() {
+        return undefined;
+      }
+    },
+    llm: {
+      async callChatModel(_provider: string, payload: { userPrompt: string }) {
+        reflectedPrompt = payload.userPrompt;
+        return { text: '{"facts":[]}' };
+      }
+    },
+    memoryFilePath: "memory/MEMORY.md"
+  });
+
+  const result = await memory.runVoiceSessionMicroReflection({
+    guildId: "guild-1",
+    channelId: "chan-1",
+    sessionId: "session-1",
+    settings: createTestSettings({
+      memory: {
+        enabled: true,
+        reflection: {
+          enabled: true
+        }
+      }
+    }),
+    transcriptTurns: [
+      {
+        kind: "speech",
+        role: "user",
+        userId: "user-1",
+        speakerName: "Alice",
+        text: "I am keeping a durable note that I prefer compact explanations when we are debugging production issues.",
+        at: Date.now() - 20_000
+      },
+      {
+        kind: "speech",
+        role: "assistant",
+        userId: "bot-1",
+        speakerName: "clanky",
+        text: "[interrupted] this half delivered assistant sentence should not become memory evidence",
+        lifecycleStatus: "interrupted",
+        at: Date.now() - 10_000
+      },
+      {
+        kind: "speech",
+        role: "user",
+        userId: "user-1",
+        speakerName: "Alice",
+        text: "Also remember that my deploy troubleshooting usually starts with logs before dashboards or guesses.",
+        at: Date.now()
+      }
+    ]
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(reflectedPrompt.includes("half delivered assistant"), false);
+  assert.equal(reflectedPrompt.includes("deploy troubleshooting"), true);
 });
 
 test("appendDailyLogEntry dedupes repeated message ids", async () => {

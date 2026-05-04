@@ -324,6 +324,49 @@ test("assistant voice turns are persisted into searchable message history", () =
   assert.equal(recordedMessages[0]?.content, "nvda was around 181 earlier");
 });
 
+test("interrupted assistant voice turns stay session-local and are not durable", () => {
+  const ingested: Array<Record<string, unknown>> = [];
+  const { manager, recordedMessages, logs } = createManager({
+    memory: {
+      async ingestMessage(payload: Record<string, unknown>) {
+        ingested.push(payload);
+      }
+    }
+  });
+  const session = {
+    id: "session-1",
+    guildId: "guild-1",
+    textChannelId: "text-1",
+    ending: false,
+    settingsSnapshot: createTestSettings({
+      identity: {
+        botName: "clanky"
+      },
+      memory: {
+        enabled: true
+      }
+    }),
+    recentVoiceTurns: [],
+    transcriptTurns: []
+  };
+
+  manager.recordVoiceTurn(session, {
+    role: "assistant",
+    text: "[interrupted] only part of this reply played",
+    lifecycleStatus: "interrupted"
+  });
+
+  assert.equal(recordedMessages.length, 0);
+  assert.equal(ingested.length, 0);
+  const transcriptTurns = session.transcriptTurns as Array<Record<string, unknown>>;
+  assert.equal(transcriptTurns.length, 1);
+  assert.equal(transcriptTurns[0]?.lifecycleStatus, "interrupted");
+  assert.equal(
+    logs.some((entry) => (entry as Record<string, unknown>).content === "voice_assistant_turn_sync_skipped"),
+    true
+  );
+});
+
 // --- Fix 3: Pending ingestion awaited before memory slice ---
 
 test("pending ingestion clears itself after completion", async () => {

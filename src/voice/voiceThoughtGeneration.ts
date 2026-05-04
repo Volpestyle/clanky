@@ -8,6 +8,10 @@ import {
 } from "../settings/agentStack.ts";
 import { buildVoiceToneGuardrails } from "../prompts/promptCore.ts";
 import { buildSystemPrompt } from "../prompts/promptFormatters.ts";
+import {
+  buildCuratedMemoryLogMetadata,
+  loadCuratedPromptMemory
+} from "../memory/curatedMemory.ts";
 import { normalizeLlmProvider } from "../llm/llmHelpers.ts";
 import {
   parseVoiceThoughtDecisionContract
@@ -155,6 +159,37 @@ interface VoiceThoughtGenerationHost {
   }) => void;
 }
 
+function loadVoiceThoughtCuratedMemory(
+  host: VoiceThoughtGenerationHost,
+  session: VoiceSession,
+  {
+    source,
+    metadata = {}
+  }: {
+    source: string;
+    metadata?: Record<string, unknown>;
+  }
+) {
+  const curatedMemory = loadCuratedPromptMemory({
+    mode: "voice",
+    ownerPrivate: false
+  });
+  host.store.logAction({
+    kind: "memory_runtime",
+    guildId: session.guildId,
+    channelId: session.textChannelId,
+    userId: host.client.user?.id || null,
+    content: "curated_prompt_memory_loaded",
+    metadata: {
+      source,
+      sessionId: session.id,
+      ...metadata,
+      ...buildCuratedMemoryLogMetadata(curatedMemory)
+    }
+  });
+  return curatedMemory;
+}
+
 function collectSessionGuidanceFacts(session: VoiceSession) {
   const guildGuidance = Array.isArray(session?.guildFactProfile?.guidanceFacts)
     ? session.guildFactProfile.guidanceFacts
@@ -263,8 +298,12 @@ export async function generateVoiceThoughtCandidate(
       invalidatedAt: Number(pendingThought.invalidatedAt || 0) || null
     }
     : null;
+  const curatedMemory = loadVoiceThoughtCuratedMemory(host, session, {
+    source: "voice_thought_generation",
+    metadata: { trigger: String(trigger || "timer") }
+  });
   const systemPrompt = [
-    buildSystemPrompt(settings),
+    buildSystemPrompt(settings, { curatedMemory }),
     "You are speaking in live Discord voice chat.",
     ...buildVoiceToneGuardrails(),
     "=== AUTONOMOUS THOUGHT MODE ===",
@@ -485,8 +524,11 @@ export async function evaluateVoiceThoughtDecision(
     }
     : null;
 
+  const curatedMemory = loadVoiceThoughtCuratedMemory(host, session, {
+    source: "voice_thought_decision"
+  });
   const systemPrompt = [
-    buildSystemPrompt(settings),
+    buildSystemPrompt(settings, { curatedMemory }),
     "You are speaking in live Discord voice chat.",
     ...buildVoiceToneGuardrails(),
     "=== THOUGHT QUEUE MODE ===",

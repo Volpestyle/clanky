@@ -42,7 +42,7 @@ const TEXT_TOOL_SUMMARIES: Record<string, string> = {
   web_search: "Fresh discovery or current facts when accuracy depends on live web info.",
   web_scrape: "Read a known URL's text, including one you just got from web_search.",
   browser_browse: "JS rendering, visual layout, screenshots, navigation, or interaction.",
-  memory_search: "Look up durable memory facts (speaker, guild, self, lore).",
+  memory_search: "Look up durable memory facts (speaker, guild, self, lore, explicit work scopes).",
   memory_write: "Store long-lived useful facts or standing guidance, never secrets or chatter. Write from your own perspective (use 'me'/'my', not your name).",
   image_lookup: "Find a previously shared image from message history by ref or description.",
   spawn_code_worker: "Spawn a swarm-backed coding worker and get task/worker IDs for follow-up coordination.",
@@ -436,7 +436,7 @@ function buildVoiceToolUsageDocs(): string[] {
 function buildVoiceMemoryToolDocs(): string[] {
   return [
     "note_context: session-scoped facts, preferences, or plans for this conversation.",
-    "memory_write: long-term durable facts only (namespace=speaker/guild/self, type=preference/profile/relationship/guidance/behavioral/other). Don't save chatter, prompt instructions, or session-only info. Write facts from your own perspective — use 'me'/'my' instead of your name."
+    "memory_write: long-term durable facts only (namespace=speaker/guild/self/project:<key>/task:<id>/swarm/collaborator:<id>, type=preference/profile/relationship/project/guidance/behavioral/other). Don't save chatter, prompt instructions, or session-only info. Write facts from your own perspective — use 'me'/'my' instead of your name."
   ];
 }
 

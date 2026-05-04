@@ -119,6 +119,9 @@ export const SWARM_LAUNCHER_FOLLOWUP_LISTEN_SECONDS = 300;
  * - usage/cost telemetry travels as a sibling `annotate(kind="usage")` call,
  *   not as `update_task.metadata`. The task waiter reads from the `context`
  *   table, not from task metadata.
+ * - task outcome handoff material travels as `annotate(kind="handoff")` so
+ *   Clanky's parent process can decide what, if anything, becomes task or
+ *   project memory without breaking the plain-text result contract.
  * - every worker has a brief follow-up listen window after the assigned task
  *   completes. The orchestrator decides per-turn whether to follow up; the
  *   worker just stays available briefly. There is no worker-mode decision —
@@ -186,11 +189,15 @@ export function buildSwarmLauncherFirstTurnPreamble({
     "   `annotate(file=<task_id>, kind=\"usage\", content=JSON.stringify({ inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd }))`",
     "   Clanky reads usage from this annotation; anything in `update_task.metadata` is ignored.",
     "",
-    "3. **Result format override.** Post the final user-facing output text directly in `update_task(status=\"done\", result=<text>)` as plain text — not structured JSON — even if the generic skill prefers JSON results. Clanky uses this text as input to its final synthesis step.",
+    "3. **Structured handoff annotation.** Before `update_task(done)`, post a compact parent-readable handoff as a sibling annotation:",
+    "   `annotate(file=<task_id>, kind=\"handoff\", content=JSON.stringify({ summary, changedFiles, tests, decisions, blockers, followUps }))`",
+    "   Keep each field small. Use arrays of short strings for changedFiles/tests/decisions/blockers/followUps. This is raw task context for Clanky to review later, not a direct write to broad social memory.",
     "",
-    "4. **Git authority.** Do not commit, push, create pull requests, or rewrite git history unless the user explicitly asked for that in the task. You may inspect git status/diff and leave changes in the working tree.",
+    "4. **Result format override.** Post the final user-facing output text directly in `update_task(status=\"done\", result=<text>)` as plain text — not structured JSON — even if the generic skill prefers JSON results. Clanky uses this text as input to its final synthesis step.",
     "",
-    `5. **Follow-up listen window.** After \`update_task(done)\`, wait roughly ${SWARM_LAUNCHER_FOLLOWUP_LISTEN_SECONDS}s for follow-up messages via \`wait_for_activity\` / \`list_messages\`. If a \`send_message\` arrives in that window, treat it as a follow-up instruction — claim or create the appropriate follow-up task, execute, and report again with \`update_task\` + \`annotate(kind="usage")\`, then return to listening. If no follow-up arrives in the window, or you receive an explicit termination message, exit cleanly. The orchestrator decides per-turn whether to drive more work; you just stay briefly available.`
+    "5. **Git authority.** Do not commit, push, create pull requests, or rewrite git history unless the user explicitly asked for that in the task. You may inspect git status/diff and leave changes in the working tree.",
+    "",
+    `6. **Follow-up listen window.** After \`update_task(done)\`, wait roughly ${SWARM_LAUNCHER_FOLLOWUP_LISTEN_SECONDS}s for follow-up messages via \`wait_for_activity\` / \`list_messages\`. If a \`send_message\` arrives in that window, treat it as a follow-up instruction — claim or create the appropriate follow-up task, execute, and report again with \`update_task\` + \`annotate(kind="usage")\` + \`annotate(kind="handoff")\`, then return to listening. If no follow-up arrives in the window, or you receive an explicit termination message, exit cleanly. The orchestrator decides per-turn whether to drive more work; you just stay briefly available.`
   );
 
   const trimmedSkill = String(coordinationSkill || "").trim();

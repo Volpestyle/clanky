@@ -705,6 +705,7 @@ export class ClankerBot {
         },
         {
           store: this.store,
+          memory: this.memory,
           peerManager: this.swarmPeerManager,
           reservationKeeper: this.swarmReservationKeeper
         }
@@ -715,6 +716,34 @@ export class ClankerBot {
       const result = await waitForTaskCompletion(peer, spawned.taskId, {
         dbPath: getSwarmDbPath(settings)
       });
+      if (!result.isError && result.handoff && typeof this.memory?.persistSwarmTaskHandoff === "function") {
+        await this.memory.persistSwarmTaskHandoff({
+          taskId: spawned.taskId,
+          workerId: spawned.workerId,
+          projectKey: spawned.scope,
+          status: "done",
+          resultText: result.text,
+          handoff: result.handoff,
+          guildId: interaction.guildId,
+          channelId: interaction.channelId,
+          userId: interaction.user.id,
+          source: "slash_command_clank_code"
+        }).catch((error) => {
+          this.store.logAction({
+            kind: "memory_runtime",
+            guildId: interaction.guildId,
+            channelId: interaction.channelId,
+            userId: interaction.user.id,
+            content: "swarm_task_handoff_persist_failed",
+            metadata: {
+              taskId: spawned.taskId,
+              workerId: spawned.workerId,
+              scope: spawned.scope,
+              error: String((error as Error)?.message || error)
+            }
+          });
+        });
+      }
 
       let responseText = result.text;
       if (result.costUsd > 0) {
@@ -2243,6 +2272,7 @@ export class ClankerBot {
         },
         {
           store: this.store,
+          memory: this.memory,
           peerManager: this.swarmPeerManager,
           reservationKeeper: this.swarmReservationKeeper,
           activityBridge: this.swarmActivityBridge
@@ -2297,9 +2327,39 @@ export class ClankerBot {
         status,
         source: context.source,
         triggerMessageId: context.triggerMessageId,
-        resultLength: result.length
+        resultLength: result.length,
+        hasHandoff: Boolean(event.handoff)
       }
     });
+
+    if (status === "done" && event.handoff && typeof this.memory?.persistSwarmTaskHandoff === "function") {
+      await this.memory.persistSwarmTaskHandoff({
+        taskId: context.taskId,
+        workerId: context.workerId,
+        projectKey: context.scope,
+        status,
+        resultText: result,
+        handoff: event.handoff,
+        guildId: context.guildId,
+        channelId: context.channelId,
+        userId: context.userId,
+        source: context.source
+      }).catch((error) => {
+        this.store.logAction({
+          kind: "memory_runtime",
+          guildId: context.guildId,
+          channelId: context.channelId,
+          userId: context.userId,
+          content: "swarm_task_handoff_persist_failed",
+          metadata: {
+            taskId: context.taskId,
+            workerId: context.workerId,
+            scope: context.scope,
+            error: String((error as Error)?.message || error)
+          }
+        });
+      });
+    }
 
     const enqueued = this.enqueueSwarmTaskTerminalSynthesis(event);
     if (enqueued) return;

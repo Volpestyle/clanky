@@ -148,6 +148,7 @@ export type VoiceTimelineTurn = {
     text: string;
     at: number;
     addressing?: VoiceAddressingAnnotation;
+    lifecycleStatus?: "completed" | "interrupted" | "cancelled" | "partial" | "stale" | "superseded";
 };
 
 export type VoiceTimelineMembershipEntry = {

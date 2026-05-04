@@ -31,7 +31,7 @@ import { wasLinkSharedSince, recordSharedLink } from "./storeLookups.ts";
 import { getRecentVoiceSessions, getVoiceSessionEvents } from "./storeVoice.ts";
 import { getReplyPerformanceStats, getStats } from "./storeStats.ts";
 import { createAutomation, getAutomationById, countAutomations, listAutomations, getMostRecentAutomations, findAutomationsByQuery, setAutomationStatus, claimDueAutomations, finalizeAutomationRun, recordAutomationRun, getAutomationRuns } from "./storeAutomation.ts";
-import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactById, getMemoryFactBySubjectAndFact, updateMemoryFact, deleteMemoryFact, deleteMemoryFactsForGuild, cleanupLegacyMemoryFacts, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject, searchMemoryFactsLexical, searchMemoryFactsByEmbedding } from "./storeMemory.ts";
+import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactById, getMemoryFactBySubjectAndFact, updateMemoryFact, deleteMemoryFact, deleteMemoryFactsForGuild, cleanupLegacyMemoryFacts, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject, searchMemoryFactsLexical, searchMemoryFactsByEmbedding, type MemoryFactScope } from "./storeMemory.ts";
 import { deleteSessionSummariesForGuild, getRecentSessionSummaries, pruneExpiredSessionSummaries, upsertSessionSummary } from "./storeSessionSummaries.ts";
 
 export const SETTINGS_KEY = "runtime_settings";
@@ -836,13 +836,13 @@ export class Store {
     return getFactsForSubjects(this, subjects, limit, scope);
   }
 
-  getFactProfileRows(opts: { guildId?; scope?: "user" | "guild" | "owner" | null; subjects?; limit? } = {}) {
+  getFactProfileRows(opts: { guildId?; scope?: MemoryFactScope | null; subjects?; limit? } = {}) {
     return getFactProfileRows(this, opts);
   }
 
   getFactsForScope(opts: {
     guildId?;
-      scope?: "user" | "guild" | "owner" | null;
+      scope?: MemoryFactScope | null;
     limit?;
     subjectIds?;
     factTypes?;
@@ -855,7 +855,7 @@ export class Store {
 
   searchMemoryFactsLexical(opts: {
     guildId?;
-      scope?: "user" | "guild" | "owner" | null;
+      scope?: MemoryFactScope | null;
     subjectIds?;
     factTypes?;
     queryText?;
@@ -867,7 +867,7 @@ export class Store {
 
   searchMemoryFactsByEmbedding(opts: {
     guildId?;
-      scope?: "user" | "guild" | "owner" | null;
+      scope?: MemoryFactScope | null;
     subjectIds?;
     factTypes?;
     model;
@@ -879,7 +879,7 @@ export class Store {
 
   getFactsForSubjectsScoped(opts: {
     guildId?;
-      scope?: "user" | "guild" | "owner" | null;
+      scope?: MemoryFactScope | null;
     subjectIds?;
     perSubjectLimit?;
     totalLimit?;
@@ -889,7 +889,7 @@ export class Store {
 
   getMemoryFactBySubjectAndFact(opts: {
     guildId?: string | null;
-    scope?: "user" | "guild" | "owner" | null;
+    scope?: MemoryFactScope | null;
     userId?: string | null;
     subject: string;
     fact: string;
@@ -897,13 +897,13 @@ export class Store {
     return getMemoryFactBySubjectAndFact(this, opts);
   }
 
-  getMemoryFactById(factId, guildId = null, scope: "user" | "guild" | "owner" | null = null) {
+  getMemoryFactById(factId, guildId = null, scope: MemoryFactScope | null = null) {
     return getMemoryFactById(this, factId, guildId, scope);
   }
 
   updateMemoryFact(opts: {
     guildId?;
-      scope?: "user" | "guild" | "owner" | null;
+      scope?: MemoryFactScope | null;
     userId?;
     factId;
     subject;
@@ -917,7 +917,7 @@ export class Store {
 
   deleteMemoryFact(opts: {
     guildId?;
-      scope?: "user" | "guild" | "owner" | null;
+      scope?: MemoryFactScope | null;
     userId?;
     factId;
   }) {
@@ -975,13 +975,13 @@ export class Store {
     return getMemoryFactVectorNativeScores(this, opts);
   }
 
-  getMemorySubjects(limit = 80, scope: { guildId?: string | null; scope?: "user" | "guild" | "owner" | null; includePortableUserScope?: boolean; includeOwnerScope?: boolean } | null = null) {
+  getMemorySubjects(limit = 80, scope: { guildId?: string | null; scope?: MemoryFactScope | null; includePortableUserScope?: boolean; includeOwnerScope?: boolean } | null = null) {
     return getMemorySubjects(this, limit, scope);
   }
 
   archiveOldFactsForSubject(opts: {
     guildId?;
-      scope?: "user" | "guild" | "owner" | null;
+      scope?: MemoryFactScope | null;
     userId?;
     subject;
     factType?;

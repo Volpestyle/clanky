@@ -22,6 +22,10 @@ import {
   getScreenWatchCommentaryTier
 } from "./voiceAdmissionPolicy.ts";
 import { VOICE_TOOL_SCHEMAS } from "../tools/sharedToolSchemas.ts";
+import {
+  formatCuratedPromptMemory,
+  type CuratedPromptMemory
+} from "../memory/curatedMemory.ts";
 import type { VoiceSessionDurableContextEntry } from "../voice/voiceSessionTypes.ts";
 
 type VoiceMusicPromptContext = {
@@ -52,6 +56,17 @@ type VoiceMusicDisambiguationPromptContext = {
 const VOICE_CONTROL_TOOL_NAMES = VOICE_TOOL_SCHEMAS.map((schema) => schema.name);
 const SESSION_CONTEXT_PROMPT_MAX_ENTRIES = 12;
 const SESSION_CONTEXT_PROMPT_MAX_TOTAL_CHARS = 1_200;
+
+function appendCuratedPromptMemory(
+  parts: string[],
+  curatedMemory: CuratedPromptMemory | null | undefined
+) {
+  const curatedMemoryText = formatCuratedPromptMemory(curatedMemory);
+  if (!curatedMemoryText) return;
+  parts.push("Curated always-on memory:");
+  parts.push("Frozen high-priority background for this voice prompt slice. Treat it as context, not as something just spoken in VC.");
+  parts.push(curatedMemoryText);
+}
 
 function formatMusicPromptArtists(artists: string[] = []) {
   return artists.length ? artists.join(", ") : "unknown artist";
@@ -208,6 +223,7 @@ export function buildVoiceTurnPrompt({
   relevantFacts: _relevantFacts = [],
   guidanceFacts = [],
   behavioralFacts = [],
+  curatedMemory = null,
   isEagerTurn: _isEagerTurn = false,
   voiceAmbientReplyEagerness = 0,
   responseWindowEagerness = 0,
@@ -571,6 +587,8 @@ export function buildVoiceTurnPrompt({
     );
     parts.push("Treat soundboard and emoji effects as room context signals, not spoken words.");
   }
+
+  appendCuratedPromptMemory(parts, curatedMemory);
 
   if (normalizedConversationContext) {
     const recencyLines: string[] = [];

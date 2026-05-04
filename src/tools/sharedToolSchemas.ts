@@ -69,7 +69,7 @@ export const BROWSER_BROWSE_SCHEMA: SharedToolSchema = {
 
 export const MEMORY_SEARCH_SCHEMA: SharedToolSchema = {
   name: "memory_search",
-  description: "Search durable memory facts. Namespace can target speaker/user, bot self, guild lore, or a specific user.",
+  description: "Search durable memory facts. Namespace can target speaker/user, bot self, guild lore, work memory, or a specific user.",
   voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
@@ -78,7 +78,7 @@ export const MEMORY_SEARCH_SCHEMA: SharedToolSchema = {
       top_k: { type: "integer", minimum: 1, maximum: 20 },
       namespace: {
         type: "string",
-        description: "Optional. Examples: `speaker`, `self`, `guild`, `lore`, `user:<discord_user_id>`."
+        description: "Optional. Examples: `speaker`, `self`, `guild`, `lore`, `user:<discord_user_id>`, `project:<key>`, `task:<id>`, `swarm`, `collaborator:<discord_user_id>`."
       },
       filters: {
         type: "object",

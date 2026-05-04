@@ -85,3 +85,37 @@ test("buildVoiceTurnPrompt uses the selected per-turn tool list when provided", 
   assert.match(prompt, /Tools: conversation_search, music_play\./);
   assert.doesNotMatch(prompt, /join_voice_channel/);
 });
+
+test("buildVoiceTurnPrompt renders curated memory as voice background context", () => {
+  const prompt = buildVoiceTurnPrompt({
+    speakerName: "alice",
+    transcript: "what now?",
+    inputKind: "transcript",
+    botName: "clanky",
+    curatedMemory: {
+      mode: "voice",
+      loadedAt: "2026-01-01T00:00:00.000Z",
+      ownerPrivate: false,
+      collaborationContext: false,
+      sections: [
+        {
+          key: "core",
+          title: "Core Memory",
+          fileName: "CORE.md",
+          filePath: "memory/CORE.md",
+          content: "Keep replies direct and socially natural.",
+          missing: false,
+          blocked: false,
+          warningIds: [],
+          chars: 41,
+          mtimeMs: 1,
+          size: 41
+        }
+      ]
+    }
+  });
+
+  assert.match(prompt, /Curated always-on memory:/u);
+  assert.match(prompt, /not as something just spoken in VC/u);
+  assert.match(prompt, /Keep replies direct and socially natural/u);
+});

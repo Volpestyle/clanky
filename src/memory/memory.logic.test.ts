@@ -698,3 +698,51 @@ test("strict validation still saves paraphrased facts from non-reflection paths"
     "Today, uh, my girlfriend was over, we were hanging out, uh, she slept over."
   );
 });
+
+test("persistSwarmTaskHandoff writes isolated task project swarm and collaborator facts", async () => {
+  const insertedFacts: Array<Record<string, unknown>> = [];
+  const logs: Array<Record<string, unknown>> = [];
+  const memory = new MemoryManager({
+    store: {
+      addMemoryFact(fact) {
+        insertedFacts.push(fact);
+        return true;
+      },
+      getMemoryFactBySubjectAndFact() { return null; },
+      logAction(entry) { logs.push(entry); },
+      archiveOldFactsForSubject() { return 0; }
+    },
+    llm: {},
+    memoryFilePath: "memory/MEMORY.md"
+  });
+  memory.queueMemoryRefresh = () => undefined;
+  memory.ensureFactVector = async () => null;
+
+  const result = await memory.persistSwarmTaskHandoff({
+    taskId: "task-123",
+    workerId: "worker-1",
+    projectKey: "repo-a",
+    status: "done",
+    resultText: "Implemented the change.",
+    handoff: {
+      summary: "Implemented the worker memory bundle.",
+      changedFiles: ["src/tools/spawnCodeWorker.ts"],
+      tests: ["bun test src/tools/spawnCodeWorker.test.ts"],
+      decisions: ["Kept work memory scoped outside guild prompts."],
+      blockers: [],
+      followUps: ["Run full typecheck."]
+    },
+    guildId: "guild-1",
+    channelId: "chan-1",
+    userId: "user-1",
+    source: "test"
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(insertedFacts.some((fact) => fact.scope === "task" && fact.subject === "task-123"), true);
+  assert.equal(insertedFacts.some((fact) => fact.scope === "project" && fact.subject === "repo-a"), true);
+  assert.equal(insertedFacts.some((fact) => fact.scope === "swarm" && fact.subject === "__swarm__"), true);
+  assert.equal(insertedFacts.some((fact) => fact.scope === "collaborator" && fact.subject === "user-1"), true);
+  assert.equal(insertedFacts.every((fact) => fact.guildId === null), true);
+  assert.equal(logs.some((entry) => entry.content === "swarm_task_handoff_persisted"), true);
+});

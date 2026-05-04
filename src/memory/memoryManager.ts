@@ -7,6 +7,7 @@ import {
   LORE_SUBJECT,
   OWNER_SUBJECT,
   SELF_SUBJECT,
+  SWARM_SUBJECT,
   buildFactEmbeddingPayload,
   buildHighlightsSection,
   cleanDailyEntryContent,
@@ -25,7 +26,9 @@ import {
   normalizeHighlightText,
   normalizeLoreFactForDisplay,
   normalizeMemoryLineInput,
+  normalizeWorkMemorySubject,
   normalizeQueryEmbeddingText,
+  prepareDurableMemoryTurnInput,
   normalizeStoredFactText,
   normalizeSelfFactForDisplay,
   parseDailyEntryLineWithScope,
@@ -36,7 +39,8 @@ import {
 } from "./memoryHelpers.ts";
 import { runDailyReflection } from "./dailyReflection.ts";
 import { runMicroReflection } from "./microReflection.ts";
-import type { MemoryFactRow } from "../store/storeMemory.ts";
+import type { MemoryFactRow, MemoryFactScope } from "../store/storeMemory.ts";
+import type { SubAgentTaskHandoff } from "../agents/subAgentSession.ts";
 
 // Daily transcript journals are stored as YYYY-MM-DD.md files.
 const DAILY_FILE_PATTERN = /^\d{4}-\d{2}-\d{2}\.md$/;
@@ -83,6 +87,21 @@ const MAX_BEHAVIORAL_QUERY_CHARS = 420;
 const MAX_SECTION_FACTS = 6;
 const MAX_PEOPLE_FACTS_PER_SUBJECT = 6;
 const MAX_DIRECTIVE_EVIDENCE_CHARS = 220;
+const WORK_HANDOFF_FACT_LIMIT = 24;
+
+type DurableFactSearchScope = MemoryFactScope | "owner_private" | "all";
+
+const DURABLE_FACT_SEARCH_SCOPE_SET = new Set<string>([
+  "user",
+  "guild",
+  "owner",
+  "project",
+  "task",
+  "swarm",
+  "collaborator",
+  "owner_private",
+  "all"
+]);
 
 // Ingest worker backpressure and shutdown drain behavior.
 const MAX_INGEST_QUEUE_SIZE = 400;
@@ -244,10 +263,22 @@ export class MemoryManager {
     content,
     isBot = false,
     settings,
+    lifecycle = null,
     trace = { guildId: null, channelId: null, userId: null, source: null }
   }) {
     const normalizedMessageId = String(messageId || "").trim();
     if (!normalizedMessageId) return false;
+
+    const preparedTurn = prepareDurableMemoryTurnInput({ content, lifecycle, trace });
+    if (!preparedTurn.ok) {
+      this.logMemoryTurnSyncSkipped({
+        messageId: normalizedMessageId,
+        authorId,
+        trace,
+        result: preparedTurn
+      });
+      return false;
+    }
 
     const existingJob = this.ingestQueuedJobs.get(normalizedMessageId);
     if (existingJob?.promise) {
@@ -258,7 +289,7 @@ export class MemoryManager {
       messageId: normalizedMessageId,
       authorId,
       authorName,
-      content,
+      content: preparedTurn.content,
       isBot,
       trace
     });
@@ -285,9 +316,13 @@ export class MemoryManager {
       messageId: normalizedMessageId,
       authorId: String(authorId || "").trim(),
       authorName: String(authorName || "unknown"),
-      content,
+      content: preparedTurn.content,
       isBot: Boolean(isBot),
       settings,
+      lifecycle: {
+        status: preparedTurn.lifecycleStatus || "completed",
+        captureReason: preparedTurn.captureReason || null
+      },
       trace,
       resolve: resolveJob,
       promise
@@ -367,10 +402,20 @@ export class MemoryManager {
     content,
     isBot = false,
     settings = null,
+    lifecycle = null,
     trace = { guildId: null, channelId: null, userId: null, source: null }
   }) {
-    const cleanedContent = cleanDailyEntryContent(content);
-    if (!cleanedContent) return;
+    const preparedTurn = prepareDurableMemoryTurnInput({ content, lifecycle, trace });
+    if (!preparedTurn.ok) {
+      this.logMemoryTurnSyncSkipped({
+        messageId,
+        authorId,
+        trace,
+        result: preparedTurn
+      });
+      return;
+    }
+    const cleanedContent = preparedTurn.content;
     const scopeGuildId = String(trace?.guildId || "").trim();
     const scopeChannelId = String(trace?.channelId || "").trim();
 
@@ -1055,16 +1100,24 @@ export class MemoryManager {
         const kind = String(turn?.kind || "speech").trim();
         return kind === "speech" || !kind;
       })
-      .map((turn) => ({
-        timestampIso: Number.isFinite(Number(turn?.at))
-          ? new Date(Number(turn.at)).toISOString()
-          : "",
-        timestampMs: Number(turn?.at) || 0,
-        author: String(turn?.speakerName || "unknown").trim() || "unknown",
-        authorId: String(turn?.userId || "").trim() || null,
-        isBot: String(turn?.role || "").trim() === "assistant",
-        content: String(turn?.text || "").trim()
-      }))
+      .map((turn) => {
+        const preparedTurn = prepareDurableMemoryTurnInput({
+          content: turn?.text,
+          lifecycle: {
+            status: String(turn?.lifecycleStatus || "completed").trim() || "completed"
+          }
+        });
+        return {
+          timestampIso: Number.isFinite(Number(turn?.at))
+            ? new Date(Number(turn.at)).toISOString()
+            : "",
+          timestampMs: Number(turn?.at) || 0,
+          author: String(turn?.speakerName || "unknown").trim() || "unknown",
+          authorId: String(turn?.userId || "").trim() || null,
+          isBot: String(turn?.role || "").trim() === "assistant",
+          content: preparedTurn.ok ? preparedTurn.content : ""
+        };
+      })
       .filter((entry) => entry.content);
     if (!normalizedEntries.length) {
       return { ok: false, reason: "no_entries" };
@@ -1126,16 +1179,24 @@ export class MemoryManager {
         const kind = String(turn?.kind || "speech").trim();
         return kind === "speech" || !kind;
       })
-      .map((turn) => ({
-        timestampIso: Number.isFinite(Number(turn?.at))
-          ? new Date(Number(turn.at)).toISOString()
-          : "",
-        timestampMs: Number(turn?.at) || 0,
-        author: String(turn?.speakerName || "unknown").trim() || "unknown",
-        authorId: String(turn?.userId || "").trim() || null,
-        isBot: String(turn?.role || "").trim() === "assistant",
-        content: String(turn?.text || "").trim()
-      }))
+      .map((turn) => {
+        const preparedTurn = prepareDurableMemoryTurnInput({
+          content: turn?.text,
+          lifecycle: {
+            status: String(turn?.lifecycleStatus || "completed").trim() || "completed"
+          }
+        });
+        return {
+          timestampIso: Number.isFinite(Number(turn?.at))
+            ? new Date(Number(turn.at)).toISOString()
+            : "",
+          timestampMs: Number(turn?.at) || 0,
+          author: String(turn?.speakerName || "unknown").trim() || "unknown",
+          authorId: String(turn?.userId || "").trim() || null,
+          isBot: String(turn?.role || "").trim() === "assistant",
+          content: preparedTurn.ok ? preparedTurn.content : ""
+        };
+      })
       .filter((entry) => entry.content);
     if (!normalizedEntries.length) {
       return { ok: false, reason: "no_entries" };
@@ -1275,7 +1336,7 @@ export class MemoryManager {
     limit = HYBRID_FACT_LIMIT
   }: {
     guildId?: string | null;
-    scope?: "user" | "guild" | "owner" | "owner_private" | "all";
+    scope?: DurableFactSearchScope;
     channelId?: string | null;
     queryText: string;
     subjectIds?: string[] | null;
@@ -1286,9 +1347,7 @@ export class MemoryManager {
   }) {
     const scopeGuildId = String(guildId || "").trim() || null;
     const rawScopeMode = String(scope || "all").trim().toLowerCase();
-    const scopeMode = rawScopeMode === "user" || rawScopeMode === "guild" || rawScopeMode === "owner" || rawScopeMode === "owner_private" || rawScopeMode === "all"
-      ? rawScopeMode
-      : "all";
+    const scopeMode = (DURABLE_FACT_SEARCH_SCOPE_SET.has(rawScopeMode) ? rawScopeMode : "all") as DurableFactSearchScope;
     const normalizedTrace =
       trace && typeof trace === "object"
         ? trace as Record<string, unknown>
@@ -1302,13 +1361,24 @@ export class MemoryManager {
     ];
     const hasSubjectFilter = normalizedSubjectIds.length > 0;
     const scopedSubjectIds = normalizedSubjectIds.length ? normalizedSubjectIds : null;
-    const includeUserScope =
+    const factScopes: MemoryFactScope[] = [];
+    if (
       scopeMode === "user" ||
       scopeMode === "owner_private" ||
-      (scopeMode === "all" && (!scopeGuildId || hasSubjectFilter));
-    const includeGuildScope = (scopeMode === "all" || scopeMode === "guild" || scopeMode === "owner_private") && Boolean(scopeGuildId);
-    const includeOwnerScope = scopeMode === "owner" || scopeMode === "owner_private";
-    if (!includeUserScope && !includeGuildScope && !includeOwnerScope) return [];
+      (scopeMode === "all" && (!scopeGuildId || hasSubjectFilter))
+    ) {
+      factScopes.push("user");
+    }
+    if ((scopeMode === "all" || scopeMode === "guild" || scopeMode === "owner_private") && scopeGuildId) {
+      factScopes.push("guild");
+    }
+    if (scopeMode === "owner" || scopeMode === "owner_private") {
+      factScopes.push("owner");
+    }
+    if (scopeMode === "project" || scopeMode === "task" || scopeMode === "swarm" || scopeMode === "collaborator") {
+      factScopes.push(scopeMode);
+    }
+    if (!factScopes.length) return [];
 
     const isFullMemoryQuery = queryText === "__ALL__";
     const boundedLimit = isFullMemoryQuery
@@ -1317,31 +1387,13 @@ export class MemoryManager {
 
     if (isFullMemoryQuery) {
       const rows = mergeUniqueFactCandidates(
-        includeUserScope
-          ? this.store.getFactsForScope?.({
-            scope: "user",
-            subjectIds: scopedSubjectIds,
-            factTypes,
-            limit: Math.max(boundedLimit, 24)
-          }) || []
-          : [],
-        includeGuildScope
-          ? this.store.getFactsForScope?.({
-            scope: "guild",
-            guildId: scopeGuildId,
-            subjectIds: scopedSubjectIds,
-            factTypes,
-            limit: Math.max(boundedLimit, 24)
-          }) || []
-          : [],
-        includeOwnerScope
-          ? this.store.getFactsForScope?.({
-            scope: "owner",
-            subjectIds: scopedSubjectIds,
-            factTypes,
-            limit: Math.max(boundedLimit, 24)
-          }) || []
-          : []
+        ...factScopes.map((factScope) => this.store.getFactsForScope?.({
+          scope: factScope,
+          guildId: factScope === "guild" ? scopeGuildId : null,
+          subjectIds: scopedSubjectIds,
+          factTypes,
+          limit: Math.max(boundedLimit, 24)
+        }) || [])
       );
       const sortedRows = sortProfileFacts(rows);
       return sortedRows.map((row) => ({
@@ -1391,7 +1443,7 @@ export class MemoryManager {
         }).catch(() => null)
         : null;
 
-    const collectScopeCandidates = (factScope: "user" | "guild" | "owner") => {
+    const collectScopeCandidates = (factScope: MemoryFactScope) => {
       if (factScope === "guild" && !scopeGuildId) return;
       const scopeGuild = factScope === "guild" ? scopeGuildId : null;
       const recentRows = this.store.getFactsForScope?.({
@@ -1428,9 +1480,7 @@ export class MemoryManager {
       }
     };
 
-    if (includeUserScope) collectScopeCandidates("user");
-    if (includeGuildScope) collectScopeCandidates("guild");
-    if (includeOwnerScope) collectScopeCandidates("owner");
+    for (const factScope of factScopes) collectScopeCandidates(factScope);
 
     const candidates = mergeUniqueFactCandidates(
       semanticCandidates,
@@ -2036,6 +2086,143 @@ export class MemoryManager {
     return durableLoreLines.slice(0, Math.max(1, maxItems));
   }
 
+  async persistSwarmTaskHandoff({
+    taskId,
+    workerId = null,
+    projectKey = null,
+    status = "done",
+    resultText = "",
+    handoff = null,
+    guildId = null,
+    channelId = null,
+    userId = null,
+    source = "swarm_task_handoff"
+  }: {
+    taskId?: string | null;
+    workerId?: string | null;
+    projectKey?: string | null;
+    status?: string | null;
+    resultText?: string | null;
+    handoff?: SubAgentTaskHandoff | null;
+    guildId?: string | null;
+    channelId?: string | null;
+    userId?: string | null;
+    source?: string | null;
+  }) {
+    const normalizedStatus = String(status || "done").trim().toLowerCase();
+    if (normalizedStatus !== "done") {
+      return { ok: false, reason: "terminal_status_not_persisted", written: 0, skipped: 0 } as const;
+    }
+
+    const normalizedTaskId = normalizeWorkMemorySubject(taskId, "task");
+    const normalizedProject = normalizeWorkMemorySubject(projectKey || "project", "project");
+    const normalizedWorkerId = sanitizeInline(workerId || "unknown", 80) || "unknown";
+    const normalizedUserId = normalizeWorkMemorySubject(userId || "", "");
+    const summary = sanitizeInline(handoff?.summary || resultText || "", 150);
+    const changedFiles = Array.isArray(handoff?.changedFiles) ? handoff.changedFiles : [];
+    const tests = Array.isArray(handoff?.tests) ? handoff.tests : [];
+    const decisions = Array.isArray(handoff?.decisions) ? handoff.decisions : [];
+    const blockers = Array.isArray(handoff?.blockers) ? handoff.blockers : [];
+    const followUps = Array.isArray(handoff?.followUps) ? handoff.followUps : [];
+    const writes: Array<{
+      scope: "project" | "task" | "swarm" | "collaborator";
+      subject: string;
+      line: string;
+      factType: string;
+    }> = [];
+    const addWrite = (
+      scope: "project" | "task" | "swarm" | "collaborator",
+      subject: string,
+      line: string,
+      factType = scope === "project" || scope === "collaborator" ? "project" : "other"
+    ) => {
+      const cleanLine = sanitizeInline(line, 170);
+      const cleanSubject = normalizeWorkMemorySubject(subject, "");
+      if (!cleanLine || !cleanSubject) return;
+      if (writes.length >= WORK_HANDOFF_FACT_LIMIT) return;
+      writes.push({ scope, subject: cleanSubject, line: cleanLine, factType });
+    };
+
+    if (summary) {
+      addWrite("task", normalizedTaskId, `Task ${normalizedTaskId} completed: ${summary}`);
+      addWrite("project", normalizedProject, `Task ${normalizedTaskId} completed: ${summary}`);
+      addWrite("swarm", SWARM_SUBJECT, `Worker ${normalizedWorkerId} completed task ${normalizedTaskId}: ${summary}`);
+      if (normalizedUserId) {
+        addWrite("collaborator", normalizedUserId, `Collaborator ${normalizedUserId} drove task ${normalizedTaskId}: ${summary}`);
+      }
+    }
+
+    const compactFiles = changedFiles.map((value) => sanitizeInline(value, 80)).filter(Boolean).slice(0, 12);
+    if (compactFiles.length) {
+      addWrite("task", normalizedTaskId, `Changed files for task ${normalizedTaskId}: ${compactFiles.join(", ")}`);
+      addWrite("project", normalizedProject, `Task ${normalizedTaskId} changed files: ${compactFiles.join(", ")}`);
+    }
+
+    for (const decision of decisions.map((value) => sanitizeInline(value, 130)).filter(Boolean).slice(0, 5)) {
+      addWrite("task", normalizedTaskId, `Decision in task ${normalizedTaskId}: ${decision}`, "project");
+      addWrite("project", normalizedProject, `Decision from task ${normalizedTaskId}: ${decision}`, "project");
+      if (normalizedUserId) addWrite("collaborator", normalizedUserId, `Decision from task ${normalizedTaskId}: ${decision}`, "project");
+    }
+
+    for (const testLine of tests.map((value) => sanitizeInline(value, 130)).filter(Boolean).slice(0, 5)) {
+      addWrite("task", normalizedTaskId, `Verification for task ${normalizedTaskId}: ${testLine}`);
+      addWrite("project", normalizedProject, `Task ${normalizedTaskId} verification: ${testLine}`);
+    }
+
+    for (const followUp of followUps.map((value) => sanitizeInline(value, 130)).filter(Boolean).slice(0, 5)) {
+      addWrite("task", normalizedTaskId, `Follow-up from task ${normalizedTaskId}: ${followUp}`, "project");
+      addWrite("project", normalizedProject, `Follow-up from task ${normalizedTaskId}: ${followUp}`, "project");
+    }
+
+    for (const blocker of blockers.map((value) => sanitizeInline(value, 130)).filter(Boolean).slice(0, 3)) {
+      addWrite("task", normalizedTaskId, `Blocker noted for task ${normalizedTaskId}: ${blocker}`);
+    }
+
+    if (!writes.length) return { ok: false, reason: "empty_handoff", written: 0, skipped: 0 } as const;
+
+    const evidenceText = sanitizeInline(`swarm handoff from worker ${normalizedWorkerId} for task ${normalizedTaskId}`, MAX_DIRECTIVE_EVIDENCE_CHARS);
+    let written = 0;
+    let skipped = 0;
+    for (const [index, item] of writes.entries()) {
+      const result = await this.rememberDirectiveLineDetailed({
+        line: item.line,
+        sourceMessageId: `swarm-handoff-${normalizedTaskId}-${item.scope}-${index + 1}`,
+        userId: String(userId || ""),
+        guildId,
+        channelId,
+        sourceText: evidenceText,
+        scope: item.scope,
+        subjectOverride: item.subject,
+        factType: item.factType,
+        confidence: 0.78,
+        validationMode: "minimal",
+        evidenceText
+      });
+      if (result?.ok) {
+        written += 1;
+      } else {
+        skipped += 1;
+      }
+    }
+
+    this.store.logAction?.({
+      kind: "memory_runtime",
+      guildId,
+      channelId,
+      userId,
+      content: "swarm_task_handoff_persisted",
+      metadata: {
+        source,
+        taskId: normalizedTaskId,
+        workerId: normalizedWorkerId,
+        projectKey: normalizedProject,
+        written,
+        skipped
+      }
+    });
+    return { ok: written > 0, reason: written > 0 ? "persisted" : "all_skipped", written, skipped } as const;
+  }
+
   async rememberDirectiveLineDetailed({
     line,
     sourceMessageId,
@@ -2067,7 +2254,12 @@ export class MemoryManager {
   }) {
     const scopeGuildId = String(guildId || "").trim() || null;
     const scopeConfig = resolveDirectiveScopeConfig(scope);
-    const memoryScope = scopeConfig.scope === "lore" ? "guild" : scopeConfig.scope === "owner" ? "owner" : "user";
+    const memoryScope: MemoryFactScope =
+      scopeConfig.scope === "lore"
+        ? "guild"
+        : scopeConfig.scope === "self"
+          ? "user"
+          : scopeConfig.scope;
     if (memoryScope === "guild" && !scopeGuildId) {
       return {
         ok: false,
@@ -2084,7 +2276,7 @@ export class MemoryManager {
       };
     }
     const scopedUserId =
-      (memoryScope === "user" || memoryScope === "owner") && subject !== SELF_SUBJECT
+      (memoryScope === "user" || memoryScope === "owner" || memoryScope === "collaborator") && subject !== SELF_SUBJECT
         ? String(subjectOverride || userId || subject).trim() || null
         : null;
 
@@ -2513,6 +2705,29 @@ export class MemoryManager {
 
     entries.sort((a, b) => b.timestampMs - a.timestampMs);
     return entries.slice(0, Math.max(1, maxEntries));
+  }
+
+  logMemoryTurnSyncSkipped({ messageId = "", authorId = "", trace = null, result = null } = {}) {
+    if (!result || result.reason === "empty_content") return;
+    try {
+      this.store.logAction?.({
+        kind: "memory_runtime",
+        guildId: String(trace?.guildId || "").trim() || null,
+        channelId: String(trace?.channelId || "").trim() || null,
+        userId: String(authorId || trace?.userId || "").trim() || null,
+        messageId: String(messageId || "").trim() || null,
+        content: "memory_turn_sync_skipped",
+        metadata: {
+          reason: result.reason || "unknown",
+          lifecycleStatus: result.lifecycleStatus || null,
+          captureReason: result.captureReason || null,
+          source: String(trace?.source || "").trim() || null,
+          contentChars: String(result.content || "").length
+        }
+      });
+    } catch {
+      // Avoid cascading failures while skipping non-durable turn sync.
+    }
   }
 
   logMemoryError(scope, error, metadata = null) {

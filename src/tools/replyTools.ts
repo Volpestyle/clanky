@@ -198,7 +198,7 @@ export type ReplyToolRuntime = {
   memory?: {
     searchDurableFacts: (opts: {
       guildId?: string | null;
-      scope?: "user" | "guild" | "all";
+      scope?: "user" | "guild" | "owner" | "project" | "task" | "swarm" | "collaborator" | "owner_private" | "all";
       channelId: string | null;
       queryText: string;
       subjectIds?: string[] | null;
@@ -225,7 +225,7 @@ export type ReplyToolRuntime = {
       guildId?: string | null;
       channelId: string | null;
       sourceText: string;
-      scope: "lore" | "self" | "user";
+      scope: "lore" | "self" | "user" | "owner" | "project" | "task" | "swarm" | "collaborator";
       subjectOverride?: string;
       factType?: string | null;
       validationMode?: "strict" | "minimal";
@@ -234,6 +234,18 @@ export type ReplyToolRuntime = {
       reason?: string;
       factText?: string;
     }>;
+    persistSwarmTaskHandoff?: (opts: {
+      taskId?: string | null;
+      workerId?: string | null;
+      projectKey?: string | null;
+      status?: string | null;
+      resultText?: string | null;
+      handoff?: SubAgentTurnResult["handoff"];
+      guildId?: string | null;
+      channelId?: string | null;
+      userId?: string | null;
+      source?: string | null;
+    }) => Promise<Record<string, unknown>>;
   };
   store?: {
     logAction: (opts: Record<string, unknown>) => void;
@@ -1319,6 +1331,7 @@ async function executeSpawnCodeWorker(
       },
       {
         store: runtime.store,
+        memory: runtime.memory,
         peerManager: runtime.swarm.peerManager,
         reservationKeeper: runtime.swarm.reservationKeeper,
         activityBridge: runtime.swarm.activityBridge
@@ -1338,6 +1351,48 @@ async function executeSpawnCodeWorker(
   } catch (error) {
     return { content: `spawn_code_worker failed: ${String((error as Error)?.message || error)}`, isError: true };
   }
+}
+
+async function persistCodeWorkerCompletionHandoff({
+  runtime,
+  context,
+  result,
+  completion,
+  source
+}: {
+  runtime: ReplyToolRuntime;
+  context: ReplyToolContext;
+  result: SpawnCodeWorkerResult;
+  completion: SubAgentTurnResult;
+  source: string;
+}) {
+  if (completion.isError || !completion.handoff || typeof runtime.memory?.persistSwarmTaskHandoff !== "function") return;
+  await runtime.memory.persistSwarmTaskHandoff({
+    taskId: result.taskId,
+    workerId: result.workerId,
+    projectKey: result.scope,
+    status: "done",
+    resultText: completion.text,
+    handoff: completion.handoff,
+    guildId: context.guildId,
+    channelId: context.channelId,
+    userId: context.userId,
+    source
+  }).catch((error) => {
+    runtime.store?.logAction?.({
+      kind: "memory_runtime",
+      guildId: context.guildId,
+      channelId: context.channelId,
+      userId: context.userId,
+      content: "swarm_task_handoff_persist_failed",
+      metadata: {
+        taskId: result.taskId,
+        workerId: result.workerId,
+        scope: result.scope,
+        error: String((error as Error)?.message || error)
+      }
+    });
+  });
 }
 
 async function runCodeWorkerReviewAfterCompletion({
@@ -1374,6 +1429,13 @@ async function runCodeWorkerReviewAfterCompletion({
     timeoutMs,
     signal: context.signal
   });
+  await persistCodeWorkerCompletionHandoff({
+    runtime,
+    context,
+    result: initialResult,
+    completion,
+    source: "reply_tool_spawn_code_worker_completion"
+  });
   if (completion.isError) {
     return {
       ...initialResult,
@@ -1405,6 +1467,7 @@ async function runCodeWorkerReviewAfterCompletion({
     },
     {
       store: runtime.store,
+      memory: runtime.memory,
       peerManager: runtime.swarm.peerManager,
       reservationKeeper: runtime.swarm.reservationKeeper,
       activityBridge: runtime.swarm.activityBridge
@@ -1420,6 +1483,13 @@ async function runCodeWorkerReviewAfterCompletion({
     dbPath: resolveSwarmDbPath(resolveCodeAgentConfig(context.settings).swarm?.dbPath || ""),
     timeoutMs,
     signal: context.signal
+  });
+  await persistCodeWorkerCompletionHandoff({
+    runtime,
+    context,
+    result: reviewResult,
+    completion: reviewCompletion,
+    source: "reply_tool_spawn_code_worker_review_completion"
   });
   return {
     ...initialResult,
@@ -1492,6 +1562,20 @@ async function executeSwarmTool(
             dbPath: resolveSwarmDbPath(resolveCodeAgentConfig(context.settings).swarm?.dbPath || ""),
             timeoutMs,
             signal: context.signal
+          });
+          await persistCodeWorkerCompletionHandoff({
+            runtime,
+            context,
+            result: {
+              workerId: "",
+              taskId,
+              scope: peer.scope,
+              cwd: peer.scope,
+              sessionKey: null,
+              persistedSession: false
+            },
+            completion: result,
+            source: "reply_tool_swarm_wait_for_activity"
           });
           return jsonToolResult(result);
         }

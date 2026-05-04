@@ -1,5 +1,7 @@
 import { cancelSpawnedWorkerForTask } from "../tools/spawnCodeWorker.ts";
 import type { ClankyPeer, SwarmContextEntry, SwarmMessage, SwarmTaskStatus } from "./swarmPeer.ts";
+import type { SubAgentTaskHandoff } from "./subAgentSession.ts";
+import { parseHandoffAnnotation } from "./swarmTaskWaiter.ts";
 
 /**
  * Per-dispatch routing context. The bridge keeps this so progress and
@@ -28,6 +30,7 @@ export type CodeTaskTerminalEvent = {
   context: CodeTaskDispatchContext;
   status: Extract<SwarmTaskStatus, "done" | "failed" | "cancelled">;
   result: string;
+  handoff?: SubAgentTaskHandoff | null;
 };
 
 export type SwarmSpawnRequestRole = "implementation" | "review" | "research";
@@ -339,20 +342,24 @@ export class SwarmActivityBridge {
 
     // Progress: emit one event per new `kind="progress"` annotation.
     const annotations = await peer.checkFile(ctx.taskId).catch(() => [] as SwarmContextEntry[]);
+    let handoff: SubAgentTaskHandoff | null = null;
     const seen = this.seenProgressIds.get(ctx.taskId);
-    if (seen) {
-      for (const ann of annotations) {
-        if (ann.type !== "progress") continue;
-        if (seen.has(ann.id)) continue;
-        seen.add(ann.id);
-        if (this.onProgress) {
-          await this.onProgress({
-            context: ctx,
-            annotationId: ann.id,
-            summary: String(ann.content || "").trim(),
-            createdAt: Number(ann.createdAt) || Date.now()
-          });
-        }
+    for (const ann of annotations) {
+      if (ann.type === "handoff") {
+        const parsed = parseHandoffAnnotation(ann.content);
+        if (parsed) handoff = parsed;
+        continue;
+      }
+      if (ann.type !== "progress" || !seen) continue;
+      if (seen.has(ann.id)) continue;
+      seen.add(ann.id);
+      if (this.onProgress) {
+        await this.onProgress({
+          context: ctx,
+          annotationId: ann.id,
+          summary: String(ann.content || "").trim(),
+          createdAt: Number(ann.createdAt) || Date.now()
+        });
       }
     }
 
@@ -362,7 +369,7 @@ export class SwarmActivityBridge {
       let terminalError: unknown = null;
       try {
         if (this.onTerminal) {
-          await this.onTerminal({ context: ctx, status, result });
+          await this.onTerminal({ context: ctx, status, result, handoff });
         }
       } catch (error) {
         terminalError = error;

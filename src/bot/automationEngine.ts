@@ -28,6 +28,18 @@ import {
 } from "../llm/serviceShared.ts";
 import type { BotContext } from "./botContext.ts";
 import { loadBehavioralMemoryFacts } from "./memorySlice.ts";
+import {
+  buildCuratedMemoryLogMetadata,
+  loadCuratedPromptMemory
+} from "../memory/curatedMemory.ts";
+import {
+  appendPromptFollowup,
+  buildLoggedPromptBundle,
+  buildStandardPromptTiers,
+  createPromptCapture,
+  type LoggedPromptBundle,
+  type PromptCapturedTool
+} from "../promptLogging.ts";
 
 const MAX_AUTOMATION_RUNS_PER_TICK = 4;
 
@@ -35,6 +47,34 @@ type AutomationMemorySlice = {
   userFacts: Array<Record<string, unknown>>;
   relevantFacts: Array<Record<string, unknown>>;
   guidanceFacts: Array<Record<string, unknown>>;
+};
+
+type AutomationGenerationResult = {
+  skip: true;
+  summary: string;
+  text: string;
+  payload: null;
+  media: unknown;
+  llm: {
+    provider: string | null;
+    model: string | null;
+    usage: unknown;
+    costUsd: number | null;
+  } | null;
+  replyPrompts: LoggedPromptBundle | null;
+} | {
+  skip: false;
+  summary: string;
+  text: string;
+  payload: { content: string; files?: unknown[] };
+  media: unknown;
+  llm: {
+    provider: string | null;
+    model: string | null;
+    usage: unknown;
+    costUsd: number | null;
+  } | null;
+  replyPrompts: LoggedPromptBundle | null;
 };
 
 type AutomationChannelLike = {
@@ -156,6 +196,78 @@ function isSendableChannel(
     typeof channel.sendTyping === "function";
 }
 
+function countPromptRows(value: unknown) {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function hasCuratedPromptMemoryContent(memory: unknown) {
+  const sections = Array.isArray((memory as { sections?: unknown[] } | null)?.sections)
+    ? (memory as { sections: unknown[] }).sections
+    : [];
+  return sections.some((section) => String((section as { content?: unknown })?.content || "").trim());
+}
+
+function captureAutomationTool(tool: unknown): PromptCapturedTool | null {
+  if (!tool || typeof tool !== "object") return null;
+  const record = tool as Record<string, unknown>;
+  const name = String(record.name || "").trim();
+  if (!name) return null;
+  return {
+    name,
+    description: String(record.description || ""),
+    parameters: record.input_schema && typeof record.input_schema === "object"
+      ? record.input_schema as Record<string, unknown>
+      : null
+  };
+}
+
+function buildAutomationPromptTiers({
+  systemPrompt,
+  userPrompt,
+  promptBase,
+  recentMessages,
+  toolCount = 0
+}: {
+  systemPrompt: string;
+  userPrompt: string;
+  promptBase: {
+    userFacts?: unknown;
+    relevantFacts?: unknown;
+    guidanceFacts?: unknown;
+    behavioralFacts?: unknown;
+    curatedMemory?: unknown;
+  };
+  recentMessages?: unknown;
+  toolCount?: number;
+}) {
+  const structuredFactCount = [
+    promptBase.userFacts,
+    promptBase.relevantFacts,
+    promptBase.guidanceFacts,
+    promptBase.behavioralFacts
+  ].reduce<number>((sum, rows) => sum + countPromptRows(rows), 0);
+  const retrievedHistoryCount = countPromptRows(recentMessages);
+
+  return buildStandardPromptTiers({
+    identity: true,
+    baseMode: true,
+    curatedMemory: hasCuratedPromptMemoryContent(promptBase.curatedMemory),
+    structuredFacts: structuredFactCount > 0,
+    retrievedHistory: retrievedHistoryCount > 0,
+    capabilitiesTools: true,
+    currentInput: true,
+    outputContract: true,
+    systemPromptChars: systemPrompt.length,
+    userPromptChars: userPrompt.length,
+    toolCount,
+    details: {
+      structured_facts: { renderedRowCount: structuredFactCount },
+      retrieved_history: { renderedRowCount: retrievedHistoryCount },
+      current_input: { surface: "automation_run" }
+    }
+  });
+}
+
 export async function maybeRunAutomationCycle(runtime: AutomationEngineRuntime) {
   const settings = runtime.store.getSettings();
   if (!getAutomationsSettings(settings).enabled) return;
@@ -197,6 +309,7 @@ async function runAutomationJob(
   let errorText = "";
   let sentMessageId = null;
   let retrySoon = false;
+  let runReplyPrompts: LoggedPromptBundle | null = null;
 
   try {
     if (!runtime.isChannelAllowed(settings, channelId)) {
@@ -221,6 +334,7 @@ async function runAutomationJob(
           settings,
           channel
         });
+        runReplyPrompts = generationResult.replyPrompts || null;
 
         if (generationResult.skip) {
           runStatus = "skipped";
@@ -283,6 +397,7 @@ async function runAutomationJob(
             metadata: {
               automationId,
               media: generationResult.media || null,
+              replyPrompts: generationResult.replyPrompts || null,
               llm: generationResult.llm || null
             }
           });
@@ -348,7 +463,8 @@ async function runAutomationJob(
       automationId,
       runStatus,
       statusAfterRun: finalized?.status || status,
-      nextRunAt
+      nextRunAt,
+      replyPrompts: runReplyPrompts
     }
   });
 }
@@ -364,7 +480,7 @@ async function generateAutomationPayload(
     settings: Record<string, unknown>;
     channel: AutomationChannelLike;
   }
-) {
+): Promise<AutomationGenerationResult> {
   const memory = getMemorySettings(settings);
   const discovery = getDiscoverySettings(settings);
   if (!runtime.llm?.generate) {
@@ -375,7 +491,8 @@ async function generateAutomationPayload(
       text: fallback,
       payload: { content: fallback },
       media: null,
-      llm: null
+      llm: null,
+      replyPrompts: null
     };
   }
 
@@ -422,6 +539,22 @@ async function generateAutomationPayload(
     relevantFacts: memorySlice.relevantFacts
   });
   const memoryLookup = runtime.buildMemoryLookupContext({ settings });
+  const curatedMemory = loadCuratedPromptMemory({
+    mode: "automation",
+    ownerPrivate: false
+  });
+  runtime.store.logAction({
+    kind: "memory_runtime",
+    guildId: automation.guild_id || null,
+    channelId: automation.channel_id || null,
+    userId: runtime.client.user?.id || null,
+    content: "curated_prompt_memory_loaded",
+    metadata: {
+      source: "automation_run",
+      automationId: automation.id || null,
+      ...buildCuratedMemoryLogMetadata(curatedMemory)
+    }
+  });
   const promptBase = {
     instruction: automation.instruction,
     channelName: channel.name || "channel",
@@ -430,6 +563,7 @@ async function generateAutomationPayload(
     relevantFacts: memorySlice.relevantFacts,
     guidanceFacts: memorySlice.guidanceFacts,
     behavioralFacts,
+    curatedMemory,
     allowSimpleImagePosts:
       discovery.allowImagePosts && mediaCapabilities.simpleImageReady && imageBudget.canGenerate,
     allowComplexImagePosts:
@@ -447,7 +581,7 @@ async function generateAutomationPayload(
     ...promptBase,
     memoryLookup
   });
-  const automationSystemPrompt = buildSystemPrompt(settings);
+  const automationSystemPrompt = buildSystemPrompt(settings, { curatedMemory });
 
   const automationTrace = {
     guildId: automation.guild_id,
@@ -464,6 +598,20 @@ async function generateAutomationPayload(
     browserBrowseAvailable: false,
     memoryAvailable: memory.enabled,
     imageLookupAvailable: false
+  });
+  const automationPromptCapture = createPromptCapture({
+    systemPrompt: automationSystemPrompt,
+    initialUserPrompt: userPrompt,
+    tools: automationReplyTools
+      .map((tool) => captureAutomationTool(tool))
+      .filter((tool): tool is PromptCapturedTool => tool !== null),
+    promptTiers: buildAutomationPromptTiers({
+      systemPrompt: automationSystemPrompt,
+      userPrompt,
+      promptBase,
+      recentMessages,
+      toolCount: automationReplyTools.length
+    })
   });
   const automationToolRuntime: ReplyToolRuntime = {
     search: runtime.search,
@@ -548,7 +696,10 @@ async function generateAutomationPayload(
       }
     });
     automationToolLoopSteps += 1;
+    appendPromptFollowup(automationPromptCapture, "");
   }
+
+  const replyPrompts = buildLoggedPromptBundle(automationPromptCapture, automationToolLoopSteps);
 
   const directive = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
 
@@ -564,7 +715,8 @@ async function generateAutomationPayload(
         model: generation.model,
         usage: generation.usage,
         costUsd: generation.costUsd
-      }
+      },
+      replyPrompts
     };
   }
 
@@ -585,7 +737,8 @@ async function generateAutomationPayload(
         model: generation.model,
         usage: generation.usage,
         costUsd: generation.costUsd
-      }
+      },
+      replyPrompts
     };
   }
 
@@ -643,6 +796,7 @@ async function generateAutomationPayload(
       model: generation.model,
       usage: generation.usage,
       costUsd: generation.costUsd
-    }
+    },
+    replyPrompts
   };
 }

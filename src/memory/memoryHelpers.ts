@@ -6,7 +6,8 @@ import { normalizeInlineText, parseMemoryExtractionJson } from "../llm/llmHelper
 export const LORE_SUBJECT = "__lore__";
 export const SELF_SUBJECT = "__self__";
 export const OWNER_SUBJECT = "__owner__";
-type DirectiveScope = "lore" | "self" | "user" | "owner";
+export const SWARM_SUBJECT = "__swarm__";
+type DirectiveScope = "lore" | "self" | "user" | "owner" | "project" | "task" | "swarm" | "collaborator";
 
 type DirectiveScopeConfig = {
   scope: DirectiveScope;
@@ -36,6 +37,16 @@ const HIGHLIGHT_ENTRY_MAX_CHARS = 220;
 const QUERY_EMBEDDING_MAX_CHARS = 420;
 const DAILY_ENTRY_CONTENT_MAX_CHARS = 640;
 const SANITIZE_INLINE_DEFAULT_MAX_LEN = 120;
+
+const DURABLE_TURN_BLOCKED_STATUSES = new Set([
+  "aborted",
+  "cancelled",
+  "canceled",
+  "interrupted",
+  "partial",
+  "stale",
+  "superseded"
+]);
 
 // Fact types accepted by normalization; unrecognized types become "other".
 const ALLOWED_FACT_TYPES = new Set(["preference", "profile", "relationship", "project", "guidance", "behavioral", "other"]);
@@ -70,6 +81,103 @@ type NormalizedReflectionFact = {
   evidence: string;
   supersedes?: string;
 };
+
+type DurableTurnLifecycle = Record<string, unknown> | null | undefined;
+
+function getLifecycleFlag(lifecycle: DurableTurnLifecycle, key: string) {
+  if (!lifecycle || typeof lifecycle !== "object" || !Object.prototype.hasOwnProperty.call(lifecycle, key)) {
+    return null;
+  }
+  return lifecycle[key];
+}
+
+function normalizeLifecycleStatus(lifecycle: DurableTurnLifecycle) {
+  if (!lifecycle || typeof lifecycle !== "object") return "";
+  return String(lifecycle.status || lifecycle.state || "")
+    .trim()
+    .toLowerCase();
+}
+
+export function prepareDurableMemoryTurnInput({
+  content,
+  lifecycle = null,
+  trace = null
+}: {
+  content?: unknown;
+  lifecycle?: DurableTurnLifecycle;
+  trace?: Record<string, unknown> | null;
+}) {
+  const cleanContent = cleanDailyEntryContent(content);
+  const status = normalizeLifecycleStatus(lifecycle);
+  const captureReason = String(
+    (lifecycle && typeof lifecycle === "object" ? lifecycle.captureReason : "") ||
+    (trace && typeof trace === "object" ? trace.captureReason : "") ||
+    ""
+  )
+    .trim()
+    .toLowerCase();
+
+  if (!cleanContent) {
+    return {
+      ok: false as const,
+      reason: "empty_content" as const,
+      content: "",
+      lifecycleStatus: status || null,
+      captureReason: captureReason || null
+    };
+  }
+
+  if (DURABLE_TURN_BLOCKED_STATUSES.has(status)) {
+    return {
+      ok: false as const,
+      reason: `lifecycle_${status}`,
+      content: cleanContent,
+      lifecycleStatus: status,
+      captureReason: captureReason || null
+    };
+  }
+
+  const completed = getLifecycleFlag(lifecycle, "completed");
+  if (completed === false) {
+    return {
+      ok: false as const,
+      reason: "lifecycle_incomplete" as const,
+      content: cleanContent,
+      lifecycleStatus: status || null,
+      captureReason: captureReason || null
+    };
+  }
+
+  const complete = getLifecycleFlag(lifecycle, "complete");
+  if (complete === false) {
+    return {
+      ok: false as const,
+      reason: "lifecycle_incomplete" as const,
+      content: cleanContent,
+      lifecycleStatus: status || null,
+      captureReason: captureReason || null
+    };
+  }
+
+  const delivered = getLifecycleFlag(lifecycle, "delivered");
+  if (delivered === false) {
+    return {
+      ok: false as const,
+      reason: "lifecycle_not_delivered" as const,
+      content: cleanContent,
+      lifecycleStatus: status || null,
+      captureReason: captureReason || null
+    };
+  }
+
+  return {
+    ok: true as const,
+    reason: "completed" as const,
+    content: cleanContent,
+    lifecycleStatus: status || "completed",
+    captureReason: captureReason || null
+  };
+}
 
 export const REFLECTION_FACTS_JSON_SCHEMA = JSON.stringify({
   type: "object",
@@ -457,6 +565,46 @@ export function resolveDirectiveScopeConfig(scope: string | null | undefined): D
     };
   }
 
+  if (normalizedScope === "project") {
+    return {
+      scope: "project",
+      subject: null,
+      defaultFactType: "project",
+      keep: 180,
+      traceSource: "memory_project_ingest"
+    };
+  }
+
+  if (normalizedScope === "task") {
+    return {
+      scope: "task",
+      subject: null,
+      defaultFactType: "other",
+      keep: 120,
+      traceSource: "memory_task_ingest"
+    };
+  }
+
+  if (normalizedScope === "swarm") {
+    return {
+      scope: "swarm",
+      subject: SWARM_SUBJECT,
+      defaultFactType: "other",
+      keep: 180,
+      traceSource: "memory_swarm_ingest"
+    };
+  }
+
+  if (normalizedScope === "collaborator") {
+    return {
+      scope: "collaborator",
+      subject: null,
+      defaultFactType: "project",
+      keep: 120,
+      traceSource: "memory_collaborator_ingest"
+    };
+  }
+
   return {
     scope: "lore",
     subject: LORE_SUBJECT,
@@ -464,6 +612,14 @@ export function resolveDirectiveScopeConfig(scope: string | null | undefined): D
     keep: 120,
     traceSource: "memory_lore_ingest"
   };
+}
+
+export function normalizeWorkMemorySubject(value: unknown, fallback = "") {
+  const normalized = String(value || fallback || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  return normalized || String(fallback || "").replace(/\s+/g, " ").trim().slice(0, 120);
 }
 
 export function normalizeMemoryLineInput(input) {

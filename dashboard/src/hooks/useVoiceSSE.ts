@@ -47,6 +47,13 @@ export type PromptLogBundle = {
   followupUserPrompts?: string[];
   followupSteps?: number;
   tools?: { name: string; description: string; parameters?: Record<string, unknown> | null }[];
+  promptTiers?: {
+    key: string;
+    label: string;
+    present: boolean;
+    sources: string[];
+    details?: Record<string, unknown> | null;
+  }[];
 } | null;
 
 export type PromptSnapshot = {

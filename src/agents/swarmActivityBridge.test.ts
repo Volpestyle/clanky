@@ -111,16 +111,17 @@ test("trackTask + pollOnce surfaces progress annotations once each", async () =>
 
 test("terminal status fires onTerminal exactly once and clears tracking", async () => {
   let task: SwarmTask | null = makeTask({ id: "task-1", status: "in_progress" });
-  const terminals: { status: string; result: string }[] = [];
+  let annotations: SwarmContextEntry[] = [];
+  const terminals: { status: string; result: string; handoffSummary: string }[] = [];
   bridge = new SwarmActivityBridge({
     onTerminal: (event) => {
-      terminals.push({ status: event.status, result: event.result });
+      terminals.push({ status: event.status, result: event.result, handoffSummary: String(event.handoff?.summary || "") });
     }
   });
   const peer = fakePeer({
     scope: "/repo",
     task: () => task,
-    annotations: () => []
+    annotations: () => annotations
   });
   bridge.trackTask(peer as ClankyPeer, makeContext());
 
@@ -129,8 +130,11 @@ test("terminal status fires onTerminal exactly once and clears tracking", async 
   expect(bridge.size()).toBe(1);
 
   task = makeTask({ id: "task-1", status: "done", result: "all good" });
+  annotations = [
+    { id: "h1", scope: "/repo", instanceId: "worker-1", file: "task-1", type: "handoff", content: JSON.stringify({ summary: "handoff complete" }), createdAt: 2 }
+  ];
   await bridge.pollOnce("/repo");
-  expect(terminals).toEqual([{ status: "done", result: "all good" }]);
+  expect(terminals).toEqual([{ status: "done", result: "all good", handoffSummary: "handoff complete" }]);
   expect(bridge.size()).toBe(0);
 
   // After clearing tracking, further polls don't refire.

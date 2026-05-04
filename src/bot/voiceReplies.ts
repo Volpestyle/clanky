@@ -72,6 +72,11 @@ import {
   normalizeVoiceScreenWatchCapability,
   type SharedVoiceTurnContextHost
 } from "../voice/voiceTurnContext.ts";
+import { isOwnerPrivateContext } from "../memory/memoryContext.ts";
+import {
+  buildCuratedMemoryLogMetadata,
+  loadCuratedPromptMemory
+} from "../memory/curatedMemory.ts";
 import {
   summarizeVoiceToolError,
   summarizeVoiceToolResult
@@ -81,6 +86,7 @@ import { MAX_MODEL_IMAGE_INPUTS } from "./replyPipelineShared.ts";
 import {
   appendPromptFollowup,
   buildLoggedPromptBundle,
+  buildStandardPromptTiers,
   createPromptCapture
 } from "../promptLogging.ts";
 import type { VoiceOutputLeaseMode, VoiceSession } from "../voice/voiceSessionTypes.ts";
@@ -116,6 +122,66 @@ const VOICE_MEDIA_TOOL_NAMES = new Set([
   "stream_visualizer",
   "stop_video_share"
 ]);
+
+function countPromptRows(value: unknown) {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function hasCuratedPromptMemoryContent(memory: unknown) {
+  const sections = Array.isArray((memory as { sections?: unknown[] } | null)?.sections)
+    ? (memory as { sections: unknown[] }).sections
+    : [];
+  return sections.some((section) => String((section as { content?: unknown })?.content || "").trim());
+}
+
+function buildVoiceReplyPromptTiers({
+  systemPrompt,
+  initialUserPrompt,
+  curatedMemory,
+  promptMemorySlice,
+  behavioralFacts,
+  durableContext,
+  recentConversationHistory,
+  toolCount = 0
+}: {
+  systemPrompt: string;
+  initialUserPrompt: string;
+  curatedMemory: unknown;
+  promptMemorySlice: Record<string, unknown> | null | undefined;
+  behavioralFacts: unknown;
+  durableContext: unknown;
+  recentConversationHistory: unknown;
+  toolCount?: number;
+}) {
+  const structuredFactCount = [
+    promptMemorySlice?.participantProfiles,
+    promptMemorySlice?.selfFacts,
+    promptMemorySlice?.loreFacts,
+    promptMemorySlice?.guidanceFacts,
+    behavioralFacts,
+    durableContext
+  ].reduce<number>((sum, rows) => sum + countPromptRows(rows), 0);
+  const retrievedHistoryCount = countPromptRows(recentConversationHistory);
+
+  return buildStandardPromptTiers({
+    identity: true,
+    baseMode: true,
+    curatedMemory: hasCuratedPromptMemoryContent(curatedMemory),
+    structuredFacts: structuredFactCount > 0,
+    retrievedHistory: retrievedHistoryCount > 0,
+    capabilitiesTools: true,
+    currentInput: true,
+    outputContract: true,
+    systemPromptChars: systemPrompt.length,
+    userPromptChars: initialUserPrompt.length,
+    toolCount,
+    details: {
+      structured_facts: { renderedRowCount: structuredFactCount },
+      retrieved_history: { renderedRowCount: retrievedHistoryCount },
+      current_input: { surface: "discord_voice_reply" }
+    }
+  });
+}
 const VOICE_BROWSER_SHARE_TOOL_NAMES = new Set(["share_browser_session"]);
 const VOICE_MEDIA_TOOL_CUE_RE =
   /\b(play|playing|song|music|track|album|artist|queue|queued|skip|pause|paused|resume|stop|stopped|youtube|video|soundcloud|visualizer|soundboard|listen|watch)\b|\b(now playing|what'?s playing|put on|throw on|pull up)\b/i;
@@ -1351,7 +1417,26 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     : null;
   const minecraftSessionHint = getMinecraftSessionPromptHint(activeMinecraftSession);
 
-  const systemPrompt = buildVoiceSystemPrompt(settings);
+  const curatedMemory = loadCuratedPromptMemory({
+    mode: "voice",
+    ownerPrivate: isOwnerPrivateContext({
+      guildId,
+      actorUserId: userId
+    })
+  });
+  runtime.store.logAction({
+    kind: "memory_runtime",
+    guildId,
+    channelId,
+    userId,
+    content: "curated_prompt_memory_loaded",
+    metadata: {
+      source: "voice_generation",
+      sessionId: sessionId || null,
+      ...buildCuratedMemoryLogMetadata(curatedMemory)
+    }
+  });
+  const systemPrompt = buildVoiceSystemPrompt(settings, { curatedMemory });
   let selectedVoiceToolNamesForPrompt: string[] | null = null;
   const buildVoiceUserPrompt = ({
     webSearchContext = webSearch,
@@ -1370,6 +1455,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       relevantFacts: promptMemorySlice.relevantFacts,
       guidanceFacts: promptMemorySlice.guidanceFacts,
       behavioralFacts,
+      curatedMemory,
       isEagerTurn,
       voiceAmbientReplyEagerness,
       responseWindowEagerness: Number(getActivitySettings(settings).responseWindowEagerness) || 0,
@@ -1629,7 +1715,17 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     const promptCapture = createPromptCapture({
       systemPrompt,
       initialUserPrompt,
-      tools: voiceReplyTools.map((t) => ({ name: t.name, description: t.description, parameters: t.input_schema || null }))
+      tools: voiceReplyTools.map((t) => ({ name: t.name, description: t.description, parameters: t.input_schema || null })),
+      promptTiers: buildVoiceReplyPromptTiers({
+        systemPrompt,
+        initialUserPrompt,
+        curatedMemory,
+        promptMemorySlice: promptMemorySlice as Record<string, unknown>,
+        behavioralFacts,
+        durableContext: Array.isArray(activeVoiceSession?.durableContext) ? activeVoiceSession.durableContext : [],
+        recentConversationHistory,
+        toolCount: voiceReplyTools.length
+      })
     });
     let voiceContextMessages: ContextMessage[] = [
       ...normalizedContextMessages

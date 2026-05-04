@@ -103,6 +103,53 @@ test("memory facts support owner scope", async () => {
   });
 });
 
+test("memory facts isolate explicit work scopes", async () => {
+  await withTempStore(async (store) => {
+    store.addMemoryFact({
+      scope: "project",
+      subject: "repo-a",
+      fact: "Repo A uses Bun for scripts.",
+      factType: "project",
+      sourceMessageId: "project-1",
+      confidence: 0.8
+    });
+    store.addMemoryFact({
+      scope: "task",
+      subject: "task-1",
+      fact: "Task 1 fixed the launch prompt.",
+      factType: "project",
+      sourceMessageId: "task-1",
+      confidence: 0.8
+    });
+    store.addMemoryFact({
+      scope: "swarm",
+      subject: "__swarm__",
+      fact: "Workers report handoffs as annotations.",
+      factType: "other",
+      sourceMessageId: "swarm-1",
+      confidence: 0.8
+    });
+    store.addMemoryFact({
+      scope: "collaborator",
+      userId: "user-1",
+      subject: "user-1",
+      fact: "User 1 prefers review after implementation.",
+      factType: "project",
+      sourceMessageId: "collab-1",
+      confidence: 0.8
+    });
+
+    assert.equal(store.getFactsForScope({ scope: "project", subjectIds: ["repo-a"], limit: 10 }).length, 1);
+    assert.equal(store.getFactsForScope({ scope: "task", subjectIds: ["task-1"], limit: 10 }).length, 1);
+    assert.equal(store.getFactsForScope({ scope: "swarm", subjectIds: ["__swarm__"], limit: 10 }).length, 1);
+    const collaboratorRows = store.getFactsForScope({ scope: "collaborator", subjectIds: ["user-1"], limit: 10 });
+    assert.equal(collaboratorRows.length, 1);
+    assert.equal(collaboratorRows[0]?.user_id, "user-1");
+    assert.equal(store.getFactsForScope({ scope: "guild", guildId: "guild-a", limit: 10 }).length, 0);
+    assert.equal(store.getFactsForScope({ scope: "user", subjectIds: ["user-1"], limit: 10 }).length, 0);
+  });
+});
+
 test("session summaries persist, filter by channel, and order by most recent end time", async () => {
   await withTempStore(async (store) => {
     const now = Date.now();

@@ -329,6 +329,7 @@ interface TurnProcessorHost {
       role: "assistant" | "user";
       userId?: string | null;
       text: string;
+      lifecycleStatus?: "completed" | "interrupted" | "cancelled" | "partial" | "stale" | "superseded";
     }
   ) => void;
   queueVoiceMemoryIngest: (args: QueueVoiceMemoryIngestArgs) => void;
@@ -2670,24 +2671,15 @@ export class TurnProcessor {
       settings,
       transcript
     });
-    if (persistFileAsrTranscriptTurn) {
-      this.host.recordVoiceTurn(session, {
-        role: "user",
-        userId,
-        text: transcript
-      });
-
-      this.host.queueVoiceMemoryIngest({
-        session,
-        settings,
-        userId,
-        transcript,
-        source: "voice_file_asr_ingest",
-        captureReason,
-        errorPrefix: "voice_file_asr_memory_ingest_failed"
-      });
-    }
     if (staleTurn) {
+      if (persistFileAsrTranscriptTurn) {
+        this.host.recordVoiceTurn(session, {
+          role: "user",
+          userId,
+          text: transcript,
+          lifecycleStatus: "stale"
+        });
+      }
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
@@ -2704,6 +2696,23 @@ export class TurnProcessor {
         }
       });
       return;
+    }
+    if (persistFileAsrTranscriptTurn) {
+      this.host.recordVoiceTurn(session, {
+        role: "user",
+        userId,
+        text: transcript
+      });
+
+      this.host.queueVoiceMemoryIngest({
+        session,
+        settings,
+        userId,
+        transcript,
+        source: "voice_file_asr_ingest",
+        captureReason,
+        errorPrefix: "voice_file_asr_memory_ingest_failed"
+      });
     }
 
     await this.handleResolvedVoiceTurn({

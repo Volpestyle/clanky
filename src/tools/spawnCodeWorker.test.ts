@@ -165,6 +165,7 @@ test("spawnCodeWorker persists a session record on every spawn so followups can 
     const task = makeTask("task-inbox", workspaceDir);
     const spawned = makeSpawnedPeer("worker-inbox", workspaceDir, order);
     const kvWrites: Array<{ key: string; value: string }> = [];
+    const actions: Array<Record<string, unknown>> = [];
     let capturedOptions: SpawnPeerOptions | null = null;
     const peer = {
       instanceId: "clanky-planner",
@@ -202,7 +203,9 @@ test("spawnCodeWorker persists a session record on every spawn so followups can 
     }, {
       store: {
         countActionsSince: () => 0,
-        logAction: () => {}
+        logAction: (entry: Record<string, unknown>) => {
+          actions.push(entry);
+        }
       },
       peerManager: {
         ensurePeer: () => peer
@@ -227,8 +230,91 @@ test("spawnCodeWorker persists a session record on every spawn so followups can 
     expect(sessionRecord.role).toBe("design");
     const workerSession = kvWrites.find((entry) => entry.key === "clanky:code_worker_session:worker:worker-inbox");
     expect(workerSession).toBeDefined();
+    const codeAgentCall = actions.find((entry) => entry.kind === "code_agent_call");
+    const replyPrompts = (codeAgentCall?.metadata as Record<string, unknown> | undefined)?.replyPrompts as Record<string, unknown> | undefined;
+    expect(replyPrompts?.hiddenByDefault).toBe(true);
+    expect(String(replyPrompts?.initialUserPrompt || "")).toContain("Plan an implementation");
+    const promptTiers = Array.isArray(replyPrompts?.promptTiers) ? replyPrompts.promptTiers : [];
+    expect(promptTiers.some((tier) =>
+      String((tier as Record<string, unknown>).key) === "current_input" &&
+      (tier as Record<string, unknown>).present === true
+    )).toBe(true);
 
     await expect(cancelSpawnedWorkerForTask("task-inbox", "test cleanup")).resolves.toBe(true);
+  });
+});
+
+test("spawnCodeWorker includes scoped durable work memory in the launch prompt", async () => {
+  await withTempWorkspace(async (workspaceDir, dbPath) => {
+    const order: string[] = [];
+    const task = makeTask("task-memory", workspaceDir);
+    const spawned = makeSpawnedPeer("worker-memory", workspaceDir, order);
+    const memoryCalls: Array<Record<string, unknown>> = [];
+    const actions: Array<Record<string, unknown>> = [];
+    let capturedOptions: SpawnPeerOptions | null = null;
+    const peer = {
+      instanceId: "clanky-planner",
+      requestTask: async () => task,
+      assignTask: async (_taskId: string, assignee: string) => {
+        task.assignee = assignee;
+        return task;
+      },
+      getTask: async () => task,
+      kvSet: async (key: string, value: string) => ({
+        scope: workspaceDir,
+        key,
+        value,
+        updatedAt: Date.now()
+      }),
+      updateTask: async (_taskId: string, opts: UpdateTaskOpts) => {
+        task.status = opts.status;
+        task.result = opts.result ?? null;
+        return task;
+      }
+    };
+
+    const result = await spawnCodeWorker({
+      settings: makeSettings(workspaceDir, dbPath),
+      task: "Implement the prompt memory bundle",
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1"
+    }, {
+      store: {
+        countActionsSince: () => 0,
+        logAction: (entry: Record<string, unknown>) => actions.push(entry)
+      },
+      memory: {
+        async searchDurableFacts(opts) {
+          memoryCalls.push(opts as Record<string, unknown>);
+          if (opts.scope === "project") {
+            return [{ fact: "Prior decision: keep work memory out of guild prompts.", subject: opts.subjectIds?.[0], fact_type: "project" }];
+          }
+          return [];
+        }
+      },
+      peerManager: {
+        ensurePeer: () => peer
+      } as never,
+      reservationKeeper: {} as never,
+      spawnPeer: async (opts: SpawnPeerOptions) => {
+        capturedOptions = opts;
+        return spawned;
+      }
+    });
+
+    try {
+      expect(String(capturedOptions?.initialPrompt || "")).toContain("## Durable Work Memory");
+      expect(String(capturedOptions?.initialPrompt || "")).toContain("Prior decision: keep work memory out of guild prompts.");
+      expect(memoryCalls.some((call) => call.scope === "project" && Array.isArray(call.subjectIds) && call.subjectIds[0] === result.scope)).toBe(true);
+      expect(memoryCalls.some((call) => call.scope === "task" && Array.isArray(call.subjectIds) && call.subjectIds[0] === "task-memory")).toBe(true);
+      expect(memoryCalls.some((call) => call.scope === "swarm" && Array.isArray(call.subjectIds) && call.subjectIds[0] === "__swarm__")).toBe(true);
+      expect(memoryCalls.some((call) => call.scope === "collaborator" && Array.isArray(call.subjectIds) && call.subjectIds[0] === "user-1")).toBe(true);
+      const memoryLog = actions.find((entry) => entry.kind === "memory_runtime" && entry.content === "curated_prompt_memory_loaded");
+      expect((memoryLog?.metadata as Record<string, unknown> | undefined)?.workMemoryCounts).toBeDefined();
+    } finally {
+      await cancelSpawnedWorkerForTask("task-memory", "test cleanup");
+    }
   });
 });
 

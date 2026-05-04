@@ -30,7 +30,17 @@ export interface MemoryFactRow {
   semantic_score?: number | null;
 }
 
-export type MemoryFactScope = "user" | "guild" | "owner";
+export type MemoryFactScope = "user" | "guild" | "owner" | "project" | "task" | "swarm" | "collaborator";
+
+const MEMORY_FACT_SCOPE_SET = new Set<MemoryFactScope>([
+  "user",
+  "guild",
+  "owner",
+  "project",
+  "task",
+  "swarm",
+  "collaborator"
+]);
 
 const LEGACY_FACT_TYPE_MAP: Record<string, string> = {
   lore: "other",
@@ -226,12 +236,7 @@ function normalizeMemoryFactScope(
   const normalized = String(value || "")
     .trim()
     .toLowerCase();
-  if (normalized === "user" || normalized === "guild") {
-    return normalized;
-  }
-  if (normalized === "owner") {
-    return normalized;
-  }
+  if (MEMORY_FACT_SCOPE_SET.has(normalized as MemoryFactScope)) return normalized as MemoryFactScope;
   return fallback;
 }
 
@@ -321,7 +326,7 @@ const normalizedUserId =
       const requestedUserId = String(fact.userId || "").trim();
       return requestedUserId || normalizedSubject;
     })()
-    : normalizedScope === "owner"
+    : normalizedScope === "owner" || normalizedScope === "collaborator"
       ? String(fact.userId || "").trim() || null
       : null;
 const result = store.db
@@ -897,7 +902,7 @@ if (!normalizedFact) return { ok: false, reason: "fact_required" } as const;
 const existing = getMemoryFactById(store, factIdInt, normalizedGuildId || null, normalizedScope);
 if (!existing) return { ok: false, reason: "not_found" } as const;
   const normalizedUserId =
-    normalizedScope === "user" || normalizedScope === "owner"
+    normalizedScope === "user" || normalizedScope === "owner" || normalizedScope === "collaborator"
       ? String(userId || existing.user_id || "").trim() || null
       : null;
 
@@ -1109,7 +1114,7 @@ export function cleanupLegacyMemoryFacts(store: MemoryStore) {
 
       const targetScope = shouldPromotePortableUser ? "user" : row.scope;
       const targetGuildId = shouldPromotePortableUser ? null : row.guild_id;
-      const targetUserId = (targetScope === "user" || targetScope === "owner") && row.subject !== "__self__"
+      const targetUserId = (targetScope === "user" || targetScope === "owner" || targetScope === "collaborator") && row.subject !== "__self__"
         ? String(row.user_id || row.subject || "").trim() || null
         : null;
 
@@ -1345,7 +1350,7 @@ export function archiveOldFactsForSubject(store: MemoryStore, {
 const normalizedGuildId = String(guildId || "").trim();
 const normalizedScope = normalizeMemoryFactScope(scope, normalizedGuildId ? "guild" : "user");
   const normalizedUserId =
-    normalizedScope === "user" || normalizedScope === "owner"
+    normalizedScope === "user" || normalizedScope === "owner" || normalizedScope === "collaborator"
       ? String(userId || "").trim() || null
       : null;
 const normalizedSubject = String(subject || "").trim();

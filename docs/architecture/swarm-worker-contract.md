@@ -30,6 +30,10 @@ For Codex, Clanky provides the same identity twice: as process env on the harnes
 
 The first-turn preamble always includes Clanky's launcher-specific rules: do not call `register`, use the assigned task id, write plain-text results, report usage via annotations, keep git authority with the user, and stay briefly available for follow-ups. The generic swarm coordination playbook may arrive in one of two ways. If the `swarm-mcp` skill is installed somewhere the harness can reach, the preamble includes a short directive pointing at that on-disk skill path. If the skill is not reachable, Clanky inlines the vendored skill text as a fallback. The launcher-specific rules take precedence over any conflicting generic skill guidance.
 
+Clanky may prepend a bounded task memory bundle to the worker's assignment. That bundle is background context from curated task/collaboration memory plus explicit project/task/swarm/collaborator durable facts, not user-authored task text. Workers should use it when relevant, but it does not change the rules above and it never changes the plain-text result contract.
+
+Workers also emit a parent-readable handoff annotation before completing successful work. This is raw task context for Clanky to inspect and promote from the parent side into task/project/swarm/collaborator memory. It is not a direct worker memory write, and it does not load into ordinary social prompts by itself.
+
 If adoption fails (e.g. `SWARM_DB_PATH` unwritable, schema mismatch), the worker should surface the failure on stderr and exit non-zero. Clanky's launcher polls for `adopted=1` and treats a missed timeout as a launch error, closing the `swarm-server` PTY when present or cleaning up the directly reserved row otherwise.
 
 ## 2. Task lifecycle
@@ -85,6 +89,25 @@ Why a sibling annotation rather than packing JSON into `result`: keeps `result` 
 
 If the worker can't compute usage (older harness, parse failure), it omits the `kind="usage"` annotation. Clanky's waiter falls back to zero-usage and surfaces a `usage_unreported` flag in its action log.
 
+Structured task handoff material also travels as a sibling annotation before `update_task(done)`:
+
+```
+annotate(
+  file=task_id,
+  kind="handoff",
+  content=JSON.stringify({
+    summary: "short implementation outcome",
+    changedFiles: ["src/example.ts"],
+    tests: ["bun test src/example.test.ts"],
+    decisions: ["kept the fix local to the parser"],
+    blockers: [],
+    followUps: ["consider adding an e2e case later"]
+  })
+)
+```
+
+Why a sibling handoff annotation rather than structured JSON in `result`: `result` remains user-facing plain text for Clanky's final response synthesis, while `handoff` gives the parent process bounded project/task outcome material. On successful completion, Clanky promotes stable handoff material into explicit work-memory scopes. Failed, cancelled, interrupted, and timed-out tasks do not write broad durable work memory by default.
+
 ## 4. Progress reporting
 
 For long-running tasks, workers emit periodic progress annotations:
@@ -134,6 +157,7 @@ Worker telemetry goes through swarm primitives, not stdout:
 
 - Final output → `tasks.result`
 - Usage / cost → `annotate(kind="usage")`
+- Parent-readable task outcome → `annotate(kind="handoff")`, then parent-side scoped work-memory persistence on success
 - Progress → `annotate(kind="progress")`
 - Subtask spawn → `request_task(parent_task_id=<self>)`
 - Inbox-loop resume pointer → swarm KV record returned as `sessionKey`

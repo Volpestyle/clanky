@@ -42,6 +42,11 @@ import {
 } from "./replyAdmission.ts";
 import { loadConversationContinuityContext } from "./conversationContinuity.ts";
 import { loadBehavioralMemoryFacts } from "./memorySlice.ts";
+import { isOwnerPrivateContext } from "../memory/memoryContext.ts";
+import {
+  buildCuratedMemoryLogMetadata,
+  loadCuratedPromptMemory
+} from "../memory/curatedMemory.ts";
 import {
   getActivitySettings,
   getAutomationsSettings,
@@ -62,6 +67,7 @@ import {
   type ContentBlock,
   type ContextMessage
 } from "../llm/serviceShared.ts";
+import { buildStandardPromptTiers } from "../promptLogging.ts";
 import { SWARM_TOOL_SCHEMAS, VOICE_TOOL_SCHEMAS } from "../tools/sharedToolSchemas.ts";
 import type { ReplyPipelineRuntime } from "./botContext.ts";
 import {
@@ -243,6 +249,61 @@ type TurnScopedUrlMediaInputs = {
   imageInputs: ReplyImageInput[];
   videoInputs: ReplyVideoInput[];
 };
+
+function countPromptRows(value: unknown) {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function hasCuratedPromptMemoryContent(memory: unknown) {
+  const sections = Array.isArray((memory as { sections?: unknown[] } | null)?.sections)
+    ? (memory as { sections: unknown[] }).sections
+    : [];
+  return sections.some((section) => String((section as { content?: unknown })?.content || "").trim());
+}
+
+function buildTextReplyPromptTiers({
+  systemPrompt,
+  initialUserPrompt,
+  promptBase,
+  toolCount = 0
+}: {
+  systemPrompt: string;
+  initialUserPrompt: string;
+  promptBase: ReplyPromptBase;
+  toolCount?: number;
+}) {
+  const structuredFactCount = [
+    promptBase.participantProfiles,
+    promptBase.selfFacts,
+    promptBase.loreFacts,
+    promptBase.guidanceFacts,
+    promptBase.behavioralFacts
+  ].reduce<number>((sum, rows) => sum + countPromptRows(rows), 0);
+  const retrievedHistoryCount = [
+    promptBase.recentMessages,
+    promptBase.recentConversationHistory,
+    promptBase.recentVoiceSessionContext
+  ].reduce<number>((sum, rows) => sum + countPromptRows(rows), 0);
+
+  return buildStandardPromptTiers({
+    identity: true,
+    baseMode: true,
+    curatedMemory: hasCuratedPromptMemoryContent(promptBase.curatedMemory),
+    structuredFacts: structuredFactCount > 0,
+    retrievedHistory: retrievedHistoryCount > 0,
+    capabilitiesTools: true,
+    currentInput: true,
+    outputContract: true,
+    systemPromptChars: systemPrompt.length,
+    userPromptChars: initialUserPrompt.length,
+    toolCount,
+    details: {
+      structured_facts: { renderedRowCount: structuredFactCount },
+      retrieved_history: { renderedRowCount: retrievedHistoryCount },
+      current_input: { surface: "discord_text_reply" }
+    }
+  });
+}
 type TurnVisualMediaInspection = {
   imageInputs: ReplyImageInput[];
   promptText: string;
@@ -1276,7 +1337,25 @@ async function buildReplyContext(
   });
   const minecraftSessionHint = getMinecraftSessionPromptHint(activeMinecraftSession);
 
-  const systemPrompt = buildSystemPrompt(settings);
+  const curatedMemory = loadCuratedPromptMemory({
+    mode: "text",
+    ownerPrivate: isOwnerPrivateContext({
+      guildId: message.guildId,
+      actorUserId: message.author.id
+    })
+  });
+  bot.store.logAction({
+    kind: "memory_runtime",
+    guildId: message.guildId,
+    channelId: message.channelId,
+    userId: message.author.id,
+    content: "curated_prompt_memory_loaded",
+    metadata: {
+      source: "reply_pipeline",
+      ...buildCuratedMemoryLogMetadata(curatedMemory)
+    }
+  });
+  const systemPrompt = buildSystemPrompt(settings, { curatedMemory });
   const replyPromptBase: ReplyPromptBase = {
     message: {
       authorName: message.member?.displayName || message.author.username,
@@ -1342,6 +1421,7 @@ async function buildReplyContext(
     minecraftSessionHint,
     screenShare: screenShareCapability,
     visualMediaContext: visualMediaContext.promptText,
+    curatedMemory,
     channelMode: isReplyChannel
       ? "reply_channel"
       : bot.isDiscoveryChannel(settings, message.channelId)
@@ -1361,7 +1441,12 @@ async function buildReplyContext(
   });
   const replyPromptCapture = createReplyPromptCapture({
     systemPrompt,
-    initialUserPrompt
+    initialUserPrompt,
+    promptTiers: buildTextReplyPromptTiers({
+      systemPrompt,
+      initialUserPrompt,
+      promptBase: replyPromptBase
+    })
   });
   const replyPrompts = buildLoggedReplyPrompts(replyPromptCapture, 0);
 
@@ -1389,7 +1474,7 @@ async function executeReplyLlm(
 ): Promise<ReplyLlmResult> {
   const {
     addressSignal, triggerMessageIds, source, performance, signal,
-    replyTrace, systemPrompt, initialUserPrompt, replyPromptCapture,
+    replyTrace, systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture,
     activeVoiceSession, inVoiceChannelNow, videoLookupRefs
   } = ctx;
   const { memoryLookup } = ctx;
@@ -1403,6 +1488,18 @@ async function executeReplyLlm(
     userId: message.author.id
   });
   const replyTools = replyToolAvailability.tools;
+  replyPromptCapture.tools = replyTools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.input_schema || null
+  }));
+  replyPromptCapture.promptTiers = buildTextReplyPromptTiers({
+    systemPrompt,
+    initialUserPrompt,
+    promptBase: replyPromptBase,
+    toolCount: replyTools.length
+  });
+  replyPrompts = buildLoggedReplyPrompts(replyPromptCapture, 0);
   logReplyToolAvailability(bot, {
     message,
     options,

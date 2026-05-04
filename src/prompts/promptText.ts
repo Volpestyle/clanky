@@ -20,6 +20,21 @@ import {
 import {
   buildActiveCuriosityCapabilityLine
 } from "./toolPolicy.ts";
+import {
+  formatCuratedPromptMemory,
+  type CuratedPromptMemory
+} from "../memory/curatedMemory.ts";
+
+function appendCuratedPromptMemory(
+  parts: string[],
+  curatedMemory: CuratedPromptMemory | null | undefined
+) {
+  const curatedMemoryText = formatCuratedPromptMemory(curatedMemory);
+  if (!curatedMemoryText) return;
+  parts.push("=== CURATED ALWAYS-ON MEMORY ===");
+  parts.push("Frozen high-priority background for this prompt slice. Treat it as context, not as a new user message.");
+  parts.push(curatedMemoryText);
+}
 
 function buildWebSearchStateLine(webSearch: unknown): string {
   const ws = webSearch as Record<string, unknown> | null;
@@ -158,6 +173,7 @@ export function buildReplyPrompt({
   memoryLookup = null,
   imageLookup = null,
   visualMediaContext = "",
+  curatedMemory = null,
   allowMemoryDirective: _allowMemoryDirective = false,
   allowAutomationDirective = false,
   automationTimeZoneLabel = "",
@@ -219,6 +235,7 @@ export function buildReplyPrompt({
     parts.push("=== VISUAL MEDIA CONTEXT ===");
     parts.push(visualContextText);
   }
+  appendCuratedPromptMemory(parts, curatedMemory);
   parts.push("=== RECENT MESSAGES ===");
   parts.push(formatRecentChat(recentMessages, { imageCandidates: imageLookup?.candidates }));
 
@@ -526,6 +543,7 @@ export function buildInitiativePrompt({
   relevantFacts = [],
   guidanceFacts = [],
   behavioralFacts = [],
+  curatedMemory = null,
   allowActiveCuriosity = false,
   allowWebSearch = false,
   allowWebScrape = false,
@@ -550,6 +568,8 @@ export function buildInitiativePrompt({
   parts.push("Some recent lines may be marked [vc], meaning they are transcripts from voice chat linked to that text channel. Use them as room context, but the action you choose here is still a text post in the linked text channel.");
   parts.push(`Persona: ${String(persona || "").trim() || "playful slang, open, honest, exploratory"}`);
   parts.push(`Social mode: ${describeInitiativeEagerness(initiativeEagerness)} (ambient text eagerness ${Math.max(0, Math.min(100, Number(initiativeEagerness) || 0))}/100)`);
+
+  appendCuratedPromptMemory(parts, curatedMemory);
 
   if (pendingThought && typeof pendingThought === "object" && String(pendingThought.currentText || "").trim()) {
     parts.push("=== YOUR CURRENT THOUGHT ===");
@@ -673,6 +693,7 @@ export function buildMinecraftNarrationPrompt({
   channelName = "channel",
   serverLabel = null,
   narrationEagerness = 0,
+  curatedMemory = null,
   recentMessages = [],
   recentMcChat = [],
   botUsername = null,
@@ -699,6 +720,8 @@ export function buildMinecraftNarrationPrompt({
   parts.push(`Narration eagerness: ${Math.max(0, Math.min(100, Number(narrationEagerness) || 0))}/100.`);
   parts.push("This is proactive ambient narration, not a direct reply request.");
   parts.push("Only speak up if the event is genuinely worth surfacing to the room right now.");
+
+  appendCuratedPromptMemory(parts, curatedMemory);
 
   parts.push("=== RECENT DISCORD CONTEXT ===");
   parts.push(formatRecentChat(recentMessages));
@@ -745,6 +768,7 @@ export function buildAutomationPrompt({
   relevantFacts = [],
   guidanceFacts = [],
   behavioralFacts = [],
+  curatedMemory = null,
   memoryLookup = null,
   allowSimpleImagePosts = false,
   allowComplexImagePosts = false,
@@ -768,6 +792,7 @@ export function buildAutomationPrompt({
   parts.push(`Target channel: #${String(channelName || "channel").trim() || "channel"}.`);
   parts.push(`Task instruction: ${taskInstruction || "(missing instruction)"}`);
   parts.push("Keep the output in normal persona voice. No robotic framing.");
+  appendCuratedPromptMemory(parts, curatedMemory);
   parts.push("=== RECENT MESSAGES ===");
   parts.push(formatRecentChat(recentMessages));
   if (userFacts?.length) {
