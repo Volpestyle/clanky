@@ -20,7 +20,7 @@ Ask it to check your GitHub issues? It can browse the page and summarize them. A
 **Tools the Brain Can Use**
 - Web search (Brave, SerpApi) with page inspection
 - Headless browser agents for navigating and interacting with websites (with optional persistent profile for authenticated browsing)
-- Persistent memory system (append-only journals + curated facts + vector search)
+- Layered memory system (curated prompt memory + durable facts + vector search)
 - Image generation (GPT Image, Grok Imagine)
 - Video generation (Grok Imagine Video)
 - GIF search (GIPHY)
