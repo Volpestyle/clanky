@@ -106,7 +106,7 @@ annotate(
 )
 ```
 
-Why a sibling handoff annotation rather than structured JSON in `result`: `result` remains user-facing plain text for Clanky's final response synthesis, while `handoff` gives the parent process bounded project/task outcome material. On successful completion, Clanky promotes stable handoff material into explicit work-memory scopes. Failed, cancelled, interrupted, and timed-out tasks do not write broad durable work memory by default.
+Why a sibling handoff annotation rather than structured JSON in `result`: `result` remains user-facing plain text for Clanky's final response synthesis, while `handoff` gives the parent process bounded project/task outcome material. On successful completion, Clanky promotes stable handoff material into explicit work-memory scopes after the same unsafe/instruction-like filtering used for other durable memory writes. Failed, cancelled, interrupted, and timed-out tasks do not write broad durable work memory by default.
 
 ## 4. Progress reporting
 
@@ -143,7 +143,7 @@ Workers may inspect git state, but they do not commit, push, create pull request
 
 | Situation | Worker action | Clanky's view |
 |---|---|---|
-| Task succeeded | `update_task(done)`, then exit or remain idle in the PTY | Waiter returns `SubAgentTurnResult` with the result text and any `kind="usage"` annotation. |
+| Task succeeded | `annotate(kind="usage")`, `annotate(kind="handoff")`, then `update_task(done)` and exit or remain idle in the PTY | Waiter returns `SubAgentTurnResult` with the result text and any accepted sibling annotations. |
 | Task failed (recoverable, with message) | `update_task(failed, result=<error>)`, then exit or remain idle in the PTY | Waiter returns `isError=true`, error text from `result`. |
 | Task failed (uncaught exception, not yet reported) | best-effort `update_task(failed)`, then exit non-zero | Waiter returns `isError=true`. If `update_task` never landed, sees task stuck `claimed`/`in_progress` and translates timeout into a synthetic error. |
 | Process killed externally (SIGTERM from launcher cancel) | no `update_task` required | Clanky already marked the task `cancelled` before signalling. Waiter has resolved with `cancelled`. |
@@ -157,7 +157,7 @@ Worker telemetry goes through swarm primitives, not stdout:
 
 - Final output → `tasks.result`
 - Usage / cost → `annotate(kind="usage")`
-- Parent-readable task outcome → `annotate(kind="handoff")`, then parent-side scoped work-memory persistence on success
+- Parent-readable task outcome → `annotate(kind="handoff")` before `update_task(done)`, then parent-side scoped work-memory persistence on success
 - Progress → `annotate(kind="progress")`
 - Subtask spawn → `request_task(parent_task_id=<self>)`
 - Inbox-loop resume pointer → swarm KV record returned as `sessionKey`

@@ -3,6 +3,8 @@ import type { ClankyPeer, SwarmContextEntry, SwarmMessage, SwarmTaskStatus } fro
 import type { SubAgentTaskHandoff } from "./subAgentSession.ts";
 import { parseHandoffAnnotation } from "./swarmTaskWaiter.ts";
 
+const TERMINAL_HANDOFF_GRACE_MS = 350;
+
 /**
  * Per-dispatch routing context. The bridge keeps this so progress and
  * terminal events can be routed back to the surface that triggered the
@@ -70,6 +72,20 @@ export type SwarmActivityBridgeOptions = {
   /** Action-log sink for telemetry. */
   logAction?: (entry: Record<string, unknown>) => void;
 };
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function findLatestHandoff(annotations: SwarmContextEntry[]) {
+  let handoff: SubAgentTaskHandoff | null = null;
+  for (const ann of annotations) {
+    if (ann.type !== "handoff") continue;
+    const parsed = parseHandoffAnnotation(ann.content);
+    if (parsed) handoff = parsed;
+  }
+  return handoff;
+}
 
 function normalizeSpawnRequestRole(value: unknown): SwarmSpawnRequestRole | null {
   const normalized = String(value || "")
@@ -342,14 +358,10 @@ export class SwarmActivityBridge {
 
     // Progress: emit one event per new `kind="progress"` annotation.
     const annotations = await peer.checkFile(ctx.taskId).catch(() => [] as SwarmContextEntry[]);
-    let handoff: SubAgentTaskHandoff | null = null;
+    let handoff = findLatestHandoff(annotations);
     const seen = this.seenProgressIds.get(ctx.taskId);
     for (const ann of annotations) {
-      if (ann.type === "handoff") {
-        const parsed = parseHandoffAnnotation(ann.content);
-        if (parsed) handoff = parsed;
-        continue;
-      }
+      if (ann.type === "handoff") continue;
       if (ann.type !== "progress" || !seen) continue;
       if (seen.has(ann.id)) continue;
       seen.add(ann.id);
@@ -368,6 +380,11 @@ export class SwarmActivityBridge {
       const result = String(task.result || "").trim();
       let terminalError: unknown = null;
       try {
+        if (!handoff) {
+          await sleep(TERMINAL_HANDOFF_GRACE_MS);
+          const lateAnnotations = await peer.checkFile(ctx.taskId).catch(() => [] as SwarmContextEntry[]);
+          handoff = findLatestHandoff(lateAnnotations);
+        }
         if (this.onTerminal) {
           await this.onTerminal({ context: ctx, status, result, handoff });
         }

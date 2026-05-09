@@ -167,7 +167,7 @@ Examples:
 - follow-through on a longer-running shared task
 - shared-resource notes that should help future collaboration without exposing owner-private context
 
-The runtime has both file-backed collaboration memory for coding/subagent prompts and durable database scopes for shared work. Clanky-spawned swarm workers provide parent-readable `handoff` annotations. On successful completion, the parent process promotes stable handoff material into `task`, `project`, `swarm`, and when applicable `collaborator` facts. Failed, cancelled, interrupted, or timed-out work does not become durable work memory by default.
+The runtime has both file-backed collaboration memory for coding/subagent prompts and durable database scopes for shared work. Clanky-spawned swarm workers provide parent-readable `handoff` annotations before marking tasks done. On successful completion, the parent process promotes stable handoff material into `task`, `project`, `swarm`, and when applicable `collaborator` facts after durable-memory safety validation. Failed, cancelled, interrupted, or timed-out work does not become durable work memory by default.
 
 ### Owner-private assistant memory
 

@@ -2195,7 +2195,7 @@ export class MemoryManager {
         subjectOverride: item.subject,
         factType: item.factType,
         confidence: 0.78,
-        validationMode: "minimal",
+        validationMode: "strict",
         evidenceText
       });
       if (result?.ok) {

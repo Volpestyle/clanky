@@ -10,6 +10,7 @@ import {
 
 const DEFAULT_WAIT_TIMEOUT_MS = 300_000;
 const DEFAULT_ACTIVITY_POLL_MS = 1000;
+const TERMINAL_HANDOFF_GRACE_MS = 350;
 
 type SwarmTaskWaiterPeer = Pick<ClankyPeer, "getTask" | "waitForActivity" | "scope">;
 
@@ -230,6 +231,13 @@ export async function waitForTaskCompletion(
     }
     if (task.status === "done" || task.status === "failed" || task.status === "cancelled") {
       consumeContextRows();
+      if (!handoff) {
+        const graceMs = Math.min(TERMINAL_HANDOFF_GRACE_MS, Math.max(0, deadline - Date.now()));
+        if (graceMs > 0) {
+          await sleep(graceMs, opts.signal);
+          consumeContextRows();
+        }
+      }
       return buildResultFromTask(task, usage, costUsd, handoff);
     }
 

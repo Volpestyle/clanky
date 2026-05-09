@@ -233,7 +233,8 @@ test("spawnCodeWorker persists a session record on every spawn so followups can 
     const codeAgentCall = actions.find((entry) => entry.kind === "code_agent_call");
     const replyPrompts = (codeAgentCall?.metadata as Record<string, unknown> | undefined)?.replyPrompts as Record<string, unknown> | undefined;
     expect(replyPrompts?.hiddenByDefault).toBe(true);
-    expect(String(replyPrompts?.initialUserPrompt || "")).toContain("Plan an implementation");
+    expect(String(replyPrompts?.initialUserPrompt || "")).toContain("Code worker prompt redacted");
+    expect(String(replyPrompts?.initialUserPrompt || "")).not.toContain("Plan an implementation");
     const promptTiers = Array.isArray(replyPrompts?.promptTiers) ? replyPrompts.promptTiers : [];
     expect(promptTiers.some((tier) =>
       String((tier as Record<string, unknown>).key) === "current_input" &&
@@ -314,6 +315,70 @@ test("spawnCodeWorker includes scoped durable work memory in the launch prompt",
       expect((memoryLog?.metadata as Record<string, unknown> | undefined)?.workMemoryCounts).toBeDefined();
     } finally {
       await cancelSpawnedWorkerForTask("task-memory", "test cleanup");
+    }
+  });
+});
+
+test("spawnCodeWorker treats durable work memory lookup as best-effort", async () => {
+  await withTempWorkspace(async (workspaceDir, dbPath) => {
+    const order: string[] = [];
+    const task = makeTask("task-memory-fallback", workspaceDir);
+    const spawned = makeSpawnedPeer("worker-memory-fallback", workspaceDir, order);
+    const actions: Array<Record<string, unknown>> = [];
+    let capturedOptions: SpawnPeerOptions | null = null;
+    const peer = {
+      instanceId: "clanky-planner",
+      requestTask: async () => task,
+      assignTask: async (_taskId: string, assignee: string) => {
+        task.assignee = assignee;
+        return task;
+      },
+      getTask: async () => task,
+      kvSet: async (key: string, value: string) => ({
+        scope: workspaceDir,
+        key,
+        value,
+        updatedAt: Date.now()
+      }),
+      updateTask: async (_taskId: string, opts: UpdateTaskOpts) => {
+        task.status = opts.status;
+        task.result = opts.result ?? null;
+        return task;
+      }
+    };
+
+    const result = await spawnCodeWorker({
+      settings: makeSettings(workspaceDir, dbPath),
+      task: "Implement despite memory outage",
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1"
+    }, {
+      store: {
+        countActionsSince: () => 0,
+        logAction: (entry: Record<string, unknown>) => actions.push(entry)
+      },
+      memory: {
+        async searchDurableFacts() {
+          throw new Error("memory database unavailable");
+        }
+      },
+      peerManager: {
+        ensurePeer: () => peer
+      } as never,
+      reservationKeeper: {} as never,
+      spawnPeer: async (opts: SpawnPeerOptions) => {
+        capturedOptions = opts;
+        return spawned;
+      }
+    });
+
+    try {
+      expect(result.taskId).toBe("task-memory-fallback");
+      expect(String(capturedOptions?.initialPrompt || "")).toContain("Implement despite memory outage");
+      expect(actions.some((entry) => entry.content === "code_worker_work_memory_lookup_failed")).toBe(true);
+    } finally {
+      await cancelSpawnedWorkerForTask("task-memory-fallback", "test cleanup");
     }
   });
 });

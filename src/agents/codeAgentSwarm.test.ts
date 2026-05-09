@@ -78,7 +78,7 @@ test("buildSwarmLauncherFirstTurnPreamble emits the unified overlay block with a
   assert.match(preamble, /Follow-up listen window/);
   assert.match(preamble, /wait_for_activity/);
   assert.match(preamble, /send_message/);
-  assert.match(preamble, /annotate\(kind="handoff"\)/);
+  assert.match(preamble, /annotate `usage` and `handoff`, then call `update_task\(done\)`/);
   assert.match(preamble, /If no follow-up arrives in the window/);
   assert.doesNotMatch(preamble, /Inbox-loop mode/);
 });

@@ -197,7 +197,7 @@ export function buildSwarmLauncherFirstTurnPreamble({
     "",
     "5. **Git authority.** Do not commit, push, create pull requests, or rewrite git history unless the user explicitly asked for that in the task. You may inspect git status/diff and leave changes in the working tree.",
     "",
-    `6. **Follow-up listen window.** After \`update_task(done)\`, wait roughly ${SWARM_LAUNCHER_FOLLOWUP_LISTEN_SECONDS}s for follow-up messages via \`wait_for_activity\` / \`list_messages\`. If a \`send_message\` arrives in that window, treat it as a follow-up instruction — claim or create the appropriate follow-up task, execute, and report again with \`update_task\` + \`annotate(kind="usage")\` + \`annotate(kind="handoff")\`, then return to listening. If no follow-up arrives in the window, or you receive an explicit termination message, exit cleanly. The orchestrator decides per-turn whether to drive more work; you just stay briefly available.`
+    `6. **Follow-up listen window.** After \`update_task(done)\`, wait roughly ${SWARM_LAUNCHER_FOLLOWUP_LISTEN_SECONDS}s for follow-up messages via \`wait_for_activity\` / \`list_messages\`. If a \`send_message\` arrives in that window, treat it as a follow-up instruction — claim or create the appropriate follow-up task, execute, annotate \`usage\` and \`handoff\`, then call \`update_task(done)\` and return to listening. If no follow-up arrives in the window, or you receive an explicit termination message, exit cleanly. The orchestrator decides per-turn whether to drive more work; you just stay briefly available.`
   );
 
   const trimmedSkill = String(coordinationSkill || "").trim();

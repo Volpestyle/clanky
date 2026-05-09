@@ -279,13 +279,20 @@ function buildCodeWorkerPromptLog({
   surface: "code_worker_spawn" | "code_worker_reuse";
 }) {
   const normalizedPrompt = String(prompt || "");
+  const hasCuratedMemory = /Relevant task memory bundle:|Durable Work Memory|Curated always-on memory:/i.test(normalizedPrompt);
+  const redactedPrompt = [
+    "Code worker prompt redacted from action metadata.",
+    `Surface: ${surface}.`,
+    `Prompt chars: ${normalizedPrompt.length}.`,
+    `Memory context attached: ${hasCuratedMemory ? "yes" : "no"}.`
+  ].join("\n");
   return buildLoggedPromptBundle(createPromptCapture({
     systemPrompt: "",
-    initialUserPrompt: normalizedPrompt,
+    initialUserPrompt: redactedPrompt,
     promptTiers: buildStandardPromptTiers({
       identity: true,
       baseMode: true,
-      curatedMemory: /Relevant task memory bundle:/i.test(normalizedPrompt),
+      curatedMemory: hasCuratedMemory,
       structuredFacts: false,
       retrievedHistory: false,
       capabilitiesTools: true,
@@ -320,7 +327,8 @@ async function loadCodeWorkerWorkMemoryBundle({
   projectKey,
   collaboratorUserId,
   channelId,
-  trace
+  trace,
+  logLookupError = null
 }: {
   memory?: CodeWorkerMemoryRuntime | null;
   settings: Record<string, unknown>;
@@ -330,6 +338,7 @@ async function loadCodeWorkerWorkMemoryBundle({
   collaboratorUserId?: string | null;
   channelId?: string | null;
   trace: Record<string, unknown>;
+  logLookupError?: ((metadata: Record<string, unknown>) => void) | null;
 }): Promise<CodeWorkerWorkMemoryBundle> {
   const normalizedProjectKey = normalizeWorkMemorySubject(projectKey, "project");
   const normalizedTaskId = normalizeWorkMemorySubject(taskId, "task");
@@ -348,27 +357,36 @@ async function loadCodeWorkerWorkMemoryBundle({
     limit: number,
     fallbackAll = false
   ) => {
-    const rows = await memory.searchDurableFacts?.({
-      scope,
-      guildId: null,
-      channelId: channelId || null,
-      queryText,
-      subjectIds: [subject],
-      settings,
-      trace,
-      limit
-    }) || [];
-    if (rows.length || !fallbackAll) return rows;
-    return await memory.searchDurableFacts?.({
-      scope,
-      guildId: null,
-      channelId: channelId || null,
-      queryText: "__ALL__",
-      subjectIds: [subject],
-      settings,
-      trace,
-      limit: Math.min(limit, 4)
-    }) || [];
+    try {
+      const rows = await memory.searchDurableFacts?.({
+        scope,
+        guildId: null,
+        channelId: channelId || null,
+        queryText,
+        subjectIds: [subject],
+        settings,
+        trace,
+        limit
+      }) || [];
+      if (rows.length || !fallbackAll) return rows;
+      return await memory.searchDurableFacts?.({
+        scope,
+        guildId: null,
+        channelId: channelId || null,
+        queryText: "__ALL__",
+        subjectIds: [subject],
+        settings,
+        trace,
+        limit: Math.min(limit, 4)
+      }) || [];
+    } catch (error) {
+      logLookupError?.({
+        scope,
+        subject,
+        error: String((error as Error)?.message || error)
+      });
+      return [];
+    }
   };
 
   const [projectRows, taskRows, swarmRows, collaboratorRows] = await Promise.all([
@@ -724,14 +742,22 @@ async function reuseIdleWorkerForTask(input: {
       channelId: args.channelId,
       userId: args.userId,
       source: `${source}:reuse_work_memory`
-    }
+    },
+    logLookupError: (metadata) => deps.store.logAction({
+      kind: "memory_runtime",
+      guildId: args.guildId || null,
+      channelId: args.channelId || null,
+      userId: args.userId || null,
+      content: "code_worker_work_memory_lookup_failed",
+      metadata: { source: `${source}:reuse_work_memory`, taskId: swarmTask.id, ...metadata }
+    })
   });
   const workerTaskPrompt = appendWorkMemoryToWorkerPrompt(buildCodeWorkerCuratedMemoryPrompt({
     task,
     curatedMemory
   }), workMemory);
   const followupMessage =
-    `Follow-up task assigned: \`${swarmTask.id}\`. Treat this message as a new task instruction per your preamble — claim the task, execute it, then \`update_task(done)\` + \`annotate(kind="usage")\` + \`annotate(kind="handoff")\` and return to listening.\n\nTask:\n${workerTaskPrompt}`;
+    `Follow-up task assigned: \`${swarmTask.id}\`. Treat this message as a new task instruction per your preamble — claim the task, execute it, annotate(kind="usage") and annotate(kind="handoff"), then update_task(done) and return to listening.\n\nTask:\n${workerTaskPrompt}`;
   const replyPrompts = buildCodeWorkerPromptLog({
     prompt: followupMessage,
     surface: "code_worker_reuse"
@@ -1000,7 +1026,15 @@ export async function spawnCodeWorker(
       channelId: args.channelId,
       userId: args.userId,
       source: `${source}:spawn_work_memory`
-    }
+    },
+    logLookupError: (metadata) => deps.store.logAction({
+      kind: "memory_runtime",
+      guildId: args.guildId || null,
+      channelId: args.channelId || null,
+      userId: args.userId || null,
+      content: "code_worker_work_memory_lookup_failed",
+      metadata: { source: `${source}:spawn_work_memory`, taskId: swarmTask.id, ...metadata }
+    })
   });
   const workerTaskPrompt = appendWorkMemoryToWorkerPrompt(buildCodeWorkerCuratedMemoryPrompt({
     task,
