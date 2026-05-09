@@ -100,8 +100,6 @@ export interface DashboardMemory {
     conversationVectorsDeleted?: number;
     reflectionEventsDeleted?: number;
     sessionSummariesDeleted?: number;
-    journalEntriesDeleted?: number;
-    journalFilesTouched?: number;
     summaryRefreshed?: boolean;
   }>;
   loadFactProfile?(payload: {

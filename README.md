@@ -199,6 +199,6 @@ Historical or point-in-time material lives under `docs/archive/`, `docs/tmp/`, `
 ## Notes
 
 - Runtime data stored in `./data/clanker.db`
-- Memory journals: `memory/YYYY-MM-DD.md` (append-only)
-- Curated memory: `memory/MEMORY.md` (periodically distilled from journals)
+- Durable memory, message history, vectors, and reflection runs are stored in SQLite
+- Curated prompt memory and generated operator snapshots live in `memory/*.md`
 - English-only heuristic fast paths exist for specific detections (wake words, music intents, memory cleanup) — core LLM routing handles any language

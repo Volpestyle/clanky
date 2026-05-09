@@ -231,20 +231,20 @@ function buildAutomationPromptTiers({
   systemPrompt: string;
   userPrompt: string;
   promptBase: {
-    userFacts?: unknown;
-    relevantFacts?: unknown;
-    guidanceFacts?: unknown;
-    behavioralFacts?: unknown;
+    memorySlice?: unknown;
     curatedMemory?: unknown;
   };
   recentMessages?: unknown;
   toolCount?: number;
 }) {
+  const promptMemory = promptBase.memorySlice && typeof promptBase.memorySlice === "object"
+    ? promptBase.memorySlice as Record<string, unknown>
+    : {};
   const structuredFactCount = [
-    promptBase.userFacts,
-    promptBase.relevantFacts,
-    promptBase.guidanceFacts,
-    promptBase.behavioralFacts
+    promptMemory.userFacts,
+    promptMemory.relevantFacts,
+    promptMemory.guidanceFacts,
+    promptMemory.behavioralFacts
   ].reduce<number>((sum, rows) => sum + countPromptRows(rows), 0);
   const retrievedHistoryCount = countPromptRows(recentMessages);
 
@@ -559,10 +559,10 @@ async function generateAutomationPayload(
     instruction: automation.instruction,
     channelName: channel.name || "channel",
     recentMessages,
-    userFacts: memorySlice.userFacts,
-    relevantFacts: memorySlice.relevantFacts,
-    guidanceFacts: memorySlice.guidanceFacts,
-    behavioralFacts,
+    memorySlice: {
+      ...memorySlice,
+      behavioralFacts
+    },
     curatedMemory,
     allowSimpleImagePosts:
       discovery.allowImagePosts && mediaCapabilities.simpleImageReady && imageBudget.canGenerate,

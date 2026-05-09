@@ -153,12 +153,15 @@ function buildVoiceReplyPromptTiers({
   recentConversationHistory: unknown;
   toolCount?: number;
 }) {
+  const promptMemory = promptMemorySlice && typeof promptMemorySlice === "object"
+    ? promptMemorySlice as Record<string, unknown>
+    : {};
   const structuredFactCount = [
-    promptMemorySlice?.participantProfiles,
-    promptMemorySlice?.selfFacts,
-    promptMemorySlice?.loreFacts,
-    promptMemorySlice?.guidanceFacts,
-    behavioralFacts,
+    promptMemory.participantProfiles,
+    promptMemory.selfFacts,
+    promptMemory.loreFacts,
+    promptMemory.guidanceFacts,
+    promptMemory.behavioralFacts ?? behavioralFacts,
     durableContext
   ].reduce<number>((sum, rows) => sum + countPromptRows(rows), 0);
   const retrievedHistoryCount = countPromptRows(recentConversationHistory);
@@ -1448,13 +1451,10 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       speakerName,
       transcript: incomingTranscript,
       directAddressed,
-      participantProfiles: promptMemorySlice.participantProfiles,
-      selfFacts: promptMemorySlice.selfFacts,
-      loreFacts: promptMemorySlice.loreFacts,
-      userFacts: promptMemorySlice.userFacts,
-      relevantFacts: promptMemorySlice.relevantFacts,
-      guidanceFacts: promptMemorySlice.guidanceFacts,
-      behavioralFacts,
+      memorySlice: {
+        ...promptMemorySlice,
+        behavioralFacts
+      },
       curatedMemory,
       isEagerTurn,
       voiceAmbientReplyEagerness,
@@ -1720,8 +1720,11 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         systemPrompt,
         initialUserPrompt,
         curatedMemory,
-        promptMemorySlice: promptMemorySlice as Record<string, unknown>,
-        behavioralFacts,
+        promptMemorySlice: {
+          ...promptMemorySlice,
+          behavioralFacts
+        },
+        behavioralFacts: [],
         durableContext: Array.isArray(activeVoiceSession?.durableContext) ? activeVoiceSession.durableContext : [],
         recentConversationHistory,
         toolCount: voiceReplyTools.length

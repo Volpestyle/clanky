@@ -16,7 +16,6 @@ import {
   computeRecencyScore,
   computeTemporalDecayMultiplier,
   extractStableTokens,
-  formatDateLocal,
   formatTypedFactForMemory,
   isBehavioralDirectiveLikeFactText,
   isUnsafeMemoryFactText,
@@ -31,19 +30,14 @@ import {
   prepareDurableMemoryTurnInput,
   normalizeStoredFactText,
   normalizeSelfFactForDisplay,
-  parseDailyEntryLineWithScope,
   passesHybridRelevanceGate,
   rerankWithMmr,
   resolveDirectiveScopeConfig,
   sanitizeInline,
 } from "./memoryHelpers.ts";
-import { runDailyReflection } from "./dailyReflection.ts";
 import { runMicroReflection } from "./microReflection.ts";
 import type { MemoryFactRow, MemoryFactScope } from "../store/storeMemory.ts";
 import type { SubAgentTaskHandoff } from "../agents/subAgentSession.ts";
-
-// Daily transcript journals are stored as YYYY-MM-DD.md files.
-const DAILY_FILE_PATTERN = /^\d{4}-\d{2}-\d{2}\.md$/;
 
 // Hybrid memory retrieval tuning: controls candidate breadth vs ranking cost.
 const HYBRID_FACT_LIMIT = 10;
@@ -113,10 +107,7 @@ const INGEST_QUEUE_POLL_INTERVAL_MS = 25;
 const FACT_PROFILE_LOAD_LIMIT = 120;
 const REFLECTION_EXISTING_FACT_LIMIT = 200;
 const MEMORY_MARKDOWN_REFRESH_DEBOUNCE_MS = 1000;
-const MARKDOWN_RECENT_DAILY_DAYS = 3;
-const MARKDOWN_RECENT_DAILY_MAX_ENTRIES = 120;
 const MARKDOWN_HIGHLIGHT_MAX_ITEMS = 24;
-const MARKDOWN_RECENT_DAILY_FILES = 5;
 const MAX_MEMORY_SUBJECTS = 80;
 const PEOPLE_FACT_TOTAL_LIMIT_MIN = 200;
 const PEOPLE_FACT_TOTAL_LIMIT_MAX = 1200;
@@ -225,14 +216,12 @@ export class MemoryManager {
   memoryFilePath;
   memoryDirPath;
   pendingWrite;
-  initializedDailyFiles;
   ingestQueue;
   ingestQueuedJobs;
   ingestWorkerActive;
   maxIngestQueue;
   queryEmbeddingCache;
   queryEmbeddingInFlight;
-  dailyLogMessageIds;
   textMicroReflectionTimers;
   textMicroReflectionState;
   microReflectionInFlight;
@@ -243,14 +232,12 @@ export class MemoryManager {
     this.memoryFilePath = memoryFilePath;
     this.memoryDirPath = path.dirname(memoryFilePath);
     this.pendingWrite = false;
-    this.initializedDailyFiles = new Set();
     this.ingestQueue = [];
     this.ingestQueuedJobs = new Map();
     this.ingestWorkerActive = false;
     this.maxIngestQueue = MAX_INGEST_QUEUE_SIZE;
     this.queryEmbeddingCache = new Map();
     this.queryEmbeddingInFlight = new Map();
-    this.dailyLogMessageIds = new Map();
     this.textMicroReflectionTimers = new Map();
     this.textMicroReflectionState = new Map();
     this.microReflectionInFlight = new Set();
@@ -398,7 +385,7 @@ export class MemoryManager {
   async processIngestMessage({
     messageId,
     authorId,
-    authorName,
+    authorName: _authorName,
     content,
     isBot = false,
     settings = null,
@@ -419,20 +406,7 @@ export class MemoryManager {
     const scopeGuildId = String(trace?.guildId || "").trim();
     const scopeChannelId = String(trace?.channelId || "").trim();
 
-    const source = String(trace?.source || "").trim();
-    const isVoice = source.startsWith("voice");
-
     try {
-      await this.appendDailyLogEntry({
-        messageId,
-        authorId,
-        authorName,
-        guildId: scopeGuildId,
-        channelId: scopeChannelId,
-        content: cleanedContent,
-        isVoice
-      });
-      this.queueMemoryRefresh();
       void this.ensureConversationMessageVector({
         messageId,
         content: cleanedContent,
@@ -448,7 +422,7 @@ export class MemoryManager {
         });
       }
     } catch (error) {
-      this.logMemoryError("daily_log_write", error, { messageId, userId: authorId });
+      this.logMemoryError("ingest_process", error, { messageId, userId: authorId });
     }
   }
 
@@ -1816,17 +1790,17 @@ export class MemoryManager {
     const peopleSection = this.buildPeopleSection(normalizedGuildId);
     const selfSection = this.buildSelfSection(MAX_SECTION_FACTS, normalizedGuildId);
     const ownerSection = normalizedGuildId ? [] : this.buildOwnerSection(MAX_SECTION_FACTS);
-    const recentDailyEntries = await this.getRecentDailyEntries({
-      days: MARKDOWN_RECENT_DAILY_DAYS,
-      maxEntries: MARKDOWN_RECENT_DAILY_MAX_ENTRIES,
-      guildId: normalizedGuildId
-    });
-    const highlightsSection = buildHighlightsSection(recentDailyEntries, MARKDOWN_HIGHLIGHT_MAX_ITEMS);
+    const recentMessageRows = normalizedGuildId && typeof this.store?.getRecentMessagesAcrossGuild === "function"
+      ? this.store.getRecentMessagesAcrossGuild(normalizedGuildId, 120)
+      : [];
+    const highlightsSection = buildHighlightsSection(
+      recentMessageRows.map((row) => ({
+        author: row.authorName || row.author_name || "unknown",
+        text: row.content || ""
+      })),
+      MARKDOWN_HIGHLIGHT_MAX_ITEMS
+    );
     const loreSection = this.buildLoreSection(MAX_SECTION_FACTS, normalizedGuildId);
-    const dailyFiles = await this.getRecentDailyFiles(MARKDOWN_RECENT_DAILY_FILES);
-    const dailyFilesLine = dailyFiles.length
-      ? dailyFiles.map((filePath) => `memory/${path.basename(filePath)}`).join(", ")
-      : "(No daily files yet.)";
     const scopeLine = normalizedGuildId
       ? `_Operator-facing summary for guild \`${normalizedGuildId}\`. Runtime prompts use indexed durable facts + retrieval, not this markdown file directly._`
       : "_Operator-facing summary. Runtime prompts use indexed durable facts + retrieval, not this markdown file directly._";
@@ -1853,11 +1827,8 @@ export class MemoryManager {
       "## Recent Journal Highlights",
       ...(highlightsSection.length ? highlightsSection : ["- (No recent highlights yet.)"]),
       "",
-      "## Source Daily Logs",
-      "- Daily logs are append-only in `memory/YYYY-MM-DD.md`.",
-      normalizedGuildId
-        ? `- Recent files: ${dailyFilesLine} (entries filtered to guild \`${normalizedGuildId}\`).`
-        : `- Recent files: ${dailyFilesLine}`
+      "## Source Data",
+      "- Durable facts, conversation messages, vectors, and reflection runs live in SQLite. Markdown is a generated operator snapshot only."
     ].join("\n");
   }
 
@@ -1887,8 +1858,6 @@ export class MemoryManager {
       conversationVectorsDeleted: 0,
       reflectionEventsDeleted: 0,
       sessionSummariesDeleted: 0,
-      journalEntriesDeleted: 0,
-      journalFilesTouched: 0,
       summaryRefreshed: false
       } as const;
     }
@@ -1919,8 +1888,6 @@ export class MemoryManager {
       typeof this.store?.deleteSessionSummariesForGuild === "function"
         ? this.store.deleteSessionSummariesForGuild(normalizedGuildId)
         : { deleted: 0 };
-    const journalResult = await this.purgeGuildEntriesFromDailyLogs(normalizedGuildId);
-
     let summaryRefreshed = false;
     try {
       await this.refreshMemoryMarkdown();
@@ -1939,8 +1906,6 @@ export class MemoryManager {
       conversationVectorsDeleted: Number(messageResult?.vectorsDeleted || 0),
       reflectionEventsDeleted: Number(reflectionResult?.deleted || 0),
       sessionSummariesDeleted: Number(sessionSummaryResult?.deleted || 0),
-      journalEntriesDeleted: Number(journalResult?.entriesDeleted || 0),
-      journalFilesTouched: Number(journalResult?.filesTouched || 0),
       summaryRefreshed
     } as const;
   }
@@ -2480,43 +2445,6 @@ export class MemoryManager {
     };
   }
 
-  async rememberDirectiveLine(args) {
-    const result = await this.rememberDirectiveLineDetailed(args);
-    return Boolean(result?.ok);
-  }
-
-  async appendDailyLogEntry({ messageId = "", authorId, authorName, guildId = "", channelId = "", content, isVoice = false }) {
-    const now = new Date();
-    const dateKey = formatDateLocal(now);
-    const dailyFilePath = path.join(this.memoryDirPath, `${dateKey}.md`);
-    const safeAuthorName = sanitizeInline(authorName || "unknown", 80);
-    const safeAuthorId = sanitizeInline(authorId || "unknown", 40);
-    const safeMessageId = sanitizeInline(messageId || "", 40);
-    const safeGuildId = sanitizeInline(guildId || "", 40);
-    const safeChannelId = sanitizeInline(channelId || "", 40);
-    const scopeFragment = [
-      safeGuildId ? `guild:${safeGuildId}` : "",
-      safeChannelId ? `channel:${safeChannelId}` : "",
-      safeMessageId ? `message:${safeMessageId}` : "",
-      isVoice ? "voice" : ""
-    ]
-      .filter(Boolean)
-      .join(" ");
-    const scopedContent = scopeFragment ? `[${scopeFragment}] ${content}` : content;
-    const line = `- ${now.toISOString()} | ${safeAuthorName} (${safeAuthorId}) | ${scopedContent}`;
-
-    await fs.mkdir(this.memoryDirPath, { recursive: true });
-    await this.ensureDailyLogHeader(dailyFilePath, dateKey);
-    if (safeMessageId) {
-      const knownMessageIds = await this.getDailyLogMessageIds(dailyFilePath);
-      if (knownMessageIds.has(safeMessageId)) return;
-      await fs.appendFile(dailyFilePath, `${line}\n`, "utf8");
-      knownMessageIds.add(safeMessageId);
-      return;
-    }
-    await fs.appendFile(dailyFilePath, `${line}\n`, "utf8");
-  }
-
   clearScheduledTextMicroReflectionsForGuild(guildId: string) {
     const normalizedGuildId = String(guildId || "").trim();
     if (!normalizedGuildId) return;
@@ -2555,158 +2483,6 @@ export class MemoryManager {
     }
   }
 
-  async getDailyLogMessageIds(dailyFilePath) {
-    const cacheKey = String(dailyFilePath || "").trim();
-    if (!cacheKey) return new Set();
-    const cached = this.dailyLogMessageIds.get(cacheKey);
-    if (cached) return cached;
-
-    const messageIds = new Set();
-    try {
-      const existing = await fs.readFile(cacheKey, "utf8");
-      for (const line of existing.split("\n")) {
-        const match = line.match(/\bmessage:([^\]\s]+)/u);
-        if (match?.[1]) {
-          messageIds.add(String(match[1]).trim());
-        }
-      }
-    } catch {
-      // Ignore missing/unreadable daily file and bootstrap with an empty index.
-    }
-    this.dailyLogMessageIds.set(cacheKey, messageIds);
-    return messageIds;
-  }
-
-  async ensureDailyLogHeader(dailyFilePath, dateKey) {
-    if (this.initializedDailyFiles.has(dailyFilePath)) return;
-
-    try {
-      await fs.access(dailyFilePath);
-    } catch {
-      const header = [
-        `# Daily Memory Log ${dateKey}`,
-        "",
-        "- Append-only chat journal used to distill `memory/MEMORY.md`.",
-        "",
-        "## Entries",
-        ""
-      ].join("\n");
-
-      try {
-        await fs.writeFile(dailyFilePath, header, { encoding: "utf8", flag: "wx" });
-      } catch (error) {
-        if (error?.code !== "EEXIST") throw error;
-      }
-    }
-
-    this.initializedDailyFiles.add(dailyFilePath);
-  }
-
-  async purgeGuildEntriesFromDailyLogs(guildId: string) {
-    const normalizedGuildId = String(guildId || "").trim();
-    if (!normalizedGuildId) {
-      return {
-        entriesDeleted: 0,
-        filesTouched: 0
-      };
-    }
-
-    let dailyFileNames: string[] = [];
-    try {
-      dailyFileNames = (await fs.readdir(this.memoryDirPath))
-        .filter((name) => DAILY_FILE_PATTERN.test(name))
-        .sort();
-    } catch {
-      return {
-        entriesDeleted: 0,
-        filesTouched: 0
-      };
-    }
-
-    let entriesDeleted = 0;
-    let filesTouched = 0;
-    for (const fileName of dailyFileNames) {
-      const dailyFilePath = path.join(this.memoryDirPath, fileName);
-      let text = "";
-      try {
-        text = await fs.readFile(dailyFilePath, "utf8");
-      } catch {
-        continue;
-      }
-
-      const lines = text.split("\n");
-      const keptLines: string[] = [];
-      let fileRemovedCount = 0;
-      for (const line of lines) {
-        const parsed = parseDailyEntryLineWithScope(line);
-        if (parsed && String(parsed.guildId || "").trim() === normalizedGuildId) {
-          fileRemovedCount += 1;
-          continue;
-        }
-        keptLines.push(line);
-      }
-
-      if (!fileRemovedCount) continue;
-
-      while (keptLines.length > 0 && keptLines[keptLines.length - 1] === "") {
-        keptLines.pop();
-      }
-      await fs.writeFile(dailyFilePath, `${keptLines.join("\n")}\n`, "utf8");
-      this.dailyLogMessageIds.delete(dailyFilePath);
-      this.initializedDailyFiles.add(dailyFilePath);
-      entriesDeleted += fileRemovedCount;
-      filesTouched += 1;
-    }
-
-    return {
-      entriesDeleted,
-      filesTouched
-    };
-  }
-
-  async getRecentDailyFiles(limit = 5) {
-    try {
-      const entries = await fs.readdir(this.memoryDirPath);
-      return entries
-        .filter((name) => DAILY_FILE_PATTERN.test(name))
-        .sort()
-        .reverse()
-        .slice(0, Math.max(1, limit))
-        .map((name) => path.join(this.memoryDirPath, name));
-    } catch {
-      return [];
-    }
-  }
-
-  async getRecentDailyEntries({ days = 3, maxEntries = 120, guildId = null } = {}) {
-    const files = await this.getRecentDailyFiles(days);
-    const normalizedGuildId = String(guildId || "").trim() || null;
-    const entries = [];
-
-    for (const filePath of files) {
-      let text = "";
-      try {
-        text = await fs.readFile(filePath, "utf8");
-      } catch {
-        continue;
-      }
-
-      for (const line of text.split("\n")) {
-        const parsed = parseDailyEntryLineWithScope(line);
-        if (!parsed) continue;
-        if (normalizedGuildId && String(parsed.guildId || "").trim() !== normalizedGuildId) continue;
-        entries.push({
-          author: parsed.author,
-          text: parsed.content,
-          timestampMs: parsed.timestampMs
-        });
-      }
-    }
-
-    entries.sort((a, b) => b.timestampMs - a.timestampMs);
-    return entries.slice(0, Math.max(1, maxEntries));
-  }
-
   logMemoryTurnSyncSkipped({ messageId = "", authorId = "", trace = null, result = null } = {}) {
     if (!result || result.reason === "empty_content") return;
     try {
@@ -2742,15 +2518,6 @@ export class MemoryManager {
     }
   }
 
-  async runDailyReflection(settings) {
-    if (!settings?.memory?.enabled || !settings?.memory?.reflection?.enabled) return;
-    return await runDailyReflection({
-      memory: this,
-      store: this.store,
-      llm: this.llm,
-      settings
-    });
-  }
 }
 
 

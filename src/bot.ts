@@ -25,10 +25,6 @@ import { ImageCaptionCache } from "./vision/imageCaptionCache.ts";
 import {
   normalizeReactionEmojiToken
 } from "./bot/botHelpers.ts";
-import {
-  resolveFollowingNextRunAt,
-  resolveInitialNextRunAt
-} from "./bot/automation.ts";
 import { chance } from "./utils.ts";
 import {
   applyAutomationControlAction,
@@ -162,7 +158,6 @@ const STARTUP_TASK_DELAY_MS = 4500;
 const INITIATIVE_TICK_MS = 60_000;
 const AUTOMATION_TICK_MS = 30_000;
 const GATEWAY_WATCHDOG_TICK_MS = 30_000;
-const REFLECTION_TICK_MS = 60_000;
 const UNSOLICITED_REPLY_CONTEXT_WINDOW = 5;
 const CODE_TASK_RESULT_SYNTHESIS_MAX_CHARS = 6_000;
 const IS_TEST_PROCESS = /\.test\.[cm]?[jt]sx?$/i.test(String(process.argv?.[1] || "")) ||
@@ -360,8 +355,6 @@ export class ClankerBot {
   replyQueues;
   replyQueueWorkers;
   replyQueuedMessageIds: Set<string>;
-  reflectionTimer;
-  nextReflectionRunAt: string | null;
   screenShareSessionManager: ScreenShareSessionManagerLike | null;
   client: DiscordClientLike;
   voiceSessionManager: VoiceSessionManager;
@@ -408,8 +401,6 @@ export class ClankerBot {
     this.replyQueues = new Map();
     this.replyQueueWorkers = new Set();
     this.replyQueuedMessageIds = new Set();
-    this.reflectionTimer = null;
-    this.nextReflectionRunAt = null;
     this.screenShareSessionManager = null;
     this.activeReplies = new ActiveReplyRegistry();
     this.activeBrowserTasks = new BrowserTaskRegistry();
@@ -1087,15 +1078,6 @@ export class ClankerBot {
         });
       });
     }, GATEWAY_WATCHDOG_TICK_MS);
-    this.reflectionTimer = setInterval(() => {
-      this.maybeRunReflection().catch((error) => {
-        this.store.logAction({
-          kind: "bot_error",
-          content: `reflection_cycle: ${String(error?.message || error)}`
-        });
-      });
-    }, REFLECTION_TICK_MS);
-
     this.startupTimeout = setTimeout(() => {
       if (this.isStopping) return;
       this.runStartupTasks().catch((error) => {
@@ -1114,11 +1096,9 @@ export class ClankerBot {
     if (this.initiativeTimer) clearInterval(this.initiativeTimer);
     if (this.automationTimer) clearInterval(this.automationTimer);
     if (this.gatewayWatchdogTimer) clearInterval(this.gatewayWatchdogTimer);
-    if (this.reflectionTimer) clearInterval(this.reflectionTimer);
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
     this.initiativeTimer = null;
     this.gatewayWatchdogTimer = null;
-    this.reflectionTimer = null;
     this.automationTimer = null;
     this.reconnectTimeout = null;
     this.startupTimeout = null;
@@ -2536,38 +2516,6 @@ export class ClankerBot {
     // Run an ambient initiative cycle on startup to catch unanswered conversations
     await maybeRunInitiativeCycle(this.toInitiativeRuntime());
 
-    // Catch up on any missed reflections from past days
-    const startupSettings = this.store.getSettings();
-    const startupMemory = getMemorySettings(startupSettings);
-    if (startupMemory.enabled && startupMemory.reflection?.enabled) {
-      await this.memory.runDailyReflection(startupSettings);
-    }
-  }
-
-  async maybeRunReflection() {
-    const settings = this.store.getSettings();
-    const memory = getMemorySettings(settings);
-    if (!memory.enabled || !memory.reflection?.enabled) return;
-
-    const hour = Number(memory.reflection.hour ?? 4);
-    const minute = Number(memory.reflection.minute ?? 0);
-    const schedule = { kind: "daily" as const, hour, minute };
-
-    if (!this.nextReflectionRunAt) {
-      this.nextReflectionRunAt = resolveInitialNextRunAt({ schedule, nowMs: Date.now() });
-    }
-    if (!this.nextReflectionRunAt) return;
-
-    if (Date.now() < Date.parse(this.nextReflectionRunAt)) return;
-
-    try {
-      await this.memory.runDailyReflection(settings);
-    } finally {
-      this.nextReflectionRunAt = resolveFollowingNextRunAt({
-        schedule,
-        runFinishedMs: Date.now()
-      });
-    }
   }
 
   getStartupScanChannels(settings) {

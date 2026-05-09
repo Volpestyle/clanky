@@ -138,8 +138,6 @@ export async function withDashboardServer<T>(
         conversationMessagesDeleted: 0,
         conversationVectorsDeleted: 0,
         reflectionEventsDeleted: 0,
-        journalEntriesDeleted: 0,
-        journalFilesTouched: 0,
         summaryRefreshed: true
       };
     },

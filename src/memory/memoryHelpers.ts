@@ -482,46 +482,6 @@ export function normalizeHighlightText(text) {
     .trim();
 }
 
-// Scope fragment format appended by the ingest pipeline in daily markdown lines.
-const SCOPE_FRAGMENT_RE = /\[guild:(\S+)\s+channel:(\S+)\s+message:(\S+)(?:\s+(voice))?\]/;
-// Author IDs are serialized as trailing "(123456789)" in daily lines.
-const AUTHOR_ID_RE = /\((\d+)\)$/;
-
-export function parseDailyEntryLineWithScope(line) {
-  if (!String(line).startsWith("- ")) return null;
-  const payload = line.slice(2).trim();
-  const parts = payload.split(" | ");
-  if (parts.length < 3) return null;
-
-  const [timestampIso, authorPart, ...textParts] = parts;
-  const rawText = textParts.join(" | ").trim();
-  const author = authorPart.replace(/\s*\([^)]+\)\s*$/, "").trim();
-  if (!timestampIso || !author || !rawText) return null;
-
-  const timestampMs = Date.parse(timestampIso);
-  const authorIdMatch = authorPart.trim().match(AUTHOR_ID_RE);
-  const authorId = authorIdMatch ? authorIdMatch[1] : null;
-
-  const scopeMatch = rawText.match(SCOPE_FRAGMENT_RE);
-  const guildId = scopeMatch ? scopeMatch[1] : null;
-  const channelId = scopeMatch ? scopeMatch[2] : null;
-  const messageId = scopeMatch ? scopeMatch[3] : null;
-  const isVoice = scopeMatch ? scopeMatch[4] === "voice" : false;
-  const content = scopeMatch ? rawText.slice(scopeMatch.index + scopeMatch[0].length).trim() : rawText;
-
-  return {
-    timestampIso,
-    timestampMs: Number.isFinite(timestampMs) ? timestampMs : 0,
-    author,
-    authorId,
-    guildId,
-    channelId,
-    messageId,
-    isVoice,
-    content
-  };
-}
-
 export function normalizeLoreFactForDisplay(rawFact) {
   return cleanFactForMemory(rawFact);
 }
@@ -696,11 +656,4 @@ export function sanitizeInline(value, maxLen = SANITIZE_INLINE_DEFAULT_MAX_LEN) 
     maxLen,
     replacements: [{ pattern: /[\r\n|]/g, replacement: " " }]
   });
-}
-
-export function formatDateLocal(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
 }

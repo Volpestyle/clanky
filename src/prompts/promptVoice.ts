@@ -68,6 +68,19 @@ function appendCuratedPromptMemory(
   parts.push(curatedMemoryText);
 }
 
+function normalizePromptMemorySlice(memorySlice: unknown) {
+  const value = memorySlice && typeof memorySlice === "object" && !Array.isArray(memorySlice)
+    ? memorySlice as Record<string, unknown>
+    : {};
+  return {
+    participantProfiles: Array.isArray(value.participantProfiles) ? value.participantProfiles : [],
+    selfFacts: Array.isArray(value.selfFacts) ? value.selfFacts : [],
+    loreFacts: Array.isArray(value.loreFacts) ? value.loreFacts : [],
+    guidanceFacts: Array.isArray(value.guidanceFacts) ? value.guidanceFacts : [],
+    behavioralFacts: Array.isArray(value.behavioralFacts) ? value.behavioralFacts : []
+  };
+}
+
 function formatMusicPromptArtists(artists: string[] = []) {
   return artists.length ? artists.join(", ") : "unknown artist";
 }
@@ -216,13 +229,7 @@ export function buildVoiceTurnPrompt({
   transcript = "",
   inputKind = "transcript",
   directAddressed = false,
-  participantProfiles = [],
-  selfFacts = [],
-  loreFacts = [],
-  userFacts: _userFacts = [],
-  relevantFacts: _relevantFacts = [],
-  guidanceFacts = [],
-  behavioralFacts = [],
+  memorySlice = null,
   curatedMemory = null,
   isEagerTurn: _isEagerTurn = false,
   voiceAmbientReplyEagerness = 0,
@@ -262,6 +269,7 @@ export function buildVoiceTurnPrompt({
   recentToolOutcomes = []
 }) {
   const parts = [];
+  const promptMemory = normalizePromptMemorySlice(memorySlice);
   const speaker = String(speakerName || "unknown").trim() || "unknown";
   const normalizedInputKind = String(inputKind || "").trim().toLowerCase() === "event"
     ? "event"
@@ -755,23 +763,23 @@ export function buildVoiceTurnPrompt({
     parts.push(`Session ending soon (${reason}). You may call leave_voice_channel if this feels wrapped up.`);
   }
 
-  if (participantProfiles?.length || selfFacts?.length || loreFacts?.length) {
+  if (promptMemory.participantProfiles.length || promptMemory.selfFacts.length || promptMemory.loreFacts.length) {
     parts.push("People in this conversation:");
     parts.push(
       formatConversationParticipantMemory({
-        participantProfiles,
-        selfFacts,
-        loreFacts
+        participantProfiles: promptMemory.participantProfiles,
+        selfFacts: promptMemory.selfFacts,
+        loreFacts: promptMemory.loreFacts
       })
     );
   }
 
-  if (guidanceFacts?.length) {
-    parts.push("Behavior guidance:\n" + formatBehaviorMemoryFacts(guidanceFacts, 10));
+  if (promptMemory.guidanceFacts.length) {
+    parts.push("Behavior guidance:\n" + formatBehaviorMemoryFacts(promptMemory.guidanceFacts, 10));
   }
 
-  if (behavioralFacts?.length) {
-    parts.push("Behavioral memory (follow when relevant):\n" + formatBehaviorMemoryFacts(behavioralFacts, 8));
+  if (promptMemory.behavioralFacts.length) {
+    parts.push("Behavioral memory (follow when relevant):\n" + formatBehaviorMemoryFacts(promptMemory.behavioralFacts, 8));
   }
 
   const normalizedRecentToolOutcomes = (Array.isArray(recentToolOutcomes) ? recentToolOutcomes : [])

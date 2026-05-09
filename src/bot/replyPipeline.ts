@@ -272,12 +272,15 @@ function buildTextReplyPromptTiers({
   promptBase: ReplyPromptBase;
   toolCount?: number;
 }) {
+  const promptMemory = promptBase.memorySlice && typeof promptBase.memorySlice === "object"
+    ? promptBase.memorySlice as Record<string, unknown>
+    : {};
   const structuredFactCount = [
-    promptBase.participantProfiles,
-    promptBase.selfFacts,
-    promptBase.loreFacts,
-    promptBase.guidanceFacts,
-    promptBase.behavioralFacts
+    promptMemory.participantProfiles,
+    promptMemory.selfFacts,
+    promptMemory.loreFacts,
+    promptMemory.guidanceFacts,
+    promptMemory.behavioralFacts
   ].reduce<number>((sum, rows) => sum + countPromptRows(rows), 0);
   const retrievedHistoryCount = [
     promptBase.recentMessages,
@@ -1356,6 +1359,10 @@ async function buildReplyContext(
     }
   });
   const systemPrompt = buildSystemPrompt(settings, { curatedMemory });
+  const promptMemorySlice = {
+    ...memorySlice,
+    behavioralFacts
+  };
   const replyPromptBase: ReplyPromptBase = {
     message: {
       authorName: message.member?.displayName || message.author.username,
@@ -1364,13 +1371,7 @@ async function buildReplyContext(
     triggerMessageIds,
     imageInputs: modelImageInputs,
     recentMessages,
-    participantProfiles: memorySlice.participantProfiles,
-    selfFacts: memorySlice.selfFacts,
-    loreFacts: memorySlice.loreFacts,
-    guidanceFacts: Array.isArray(memorySlice.guidanceFacts) ? memorySlice.guidanceFacts : [],
-    behavioralFacts,
-    userFacts: memorySlice.userFacts,
-    relevantFacts: memorySlice.relevantFacts,
+    memorySlice: promptMemorySlice,
     emojiHints: bot.getEmojiHints(message.guild),
     reactionEmojiOptions,
     allowReplySimpleImages:

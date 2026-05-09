@@ -776,9 +776,7 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
         durableFactVectors: Number(result?.durableFactVectorsDeleted || 0),
         conversationMessages: Number(result?.conversationMessagesDeleted || 0),
         conversationVectors: Number(result?.conversationVectorsDeleted || 0),
-        reflectionEvents: Number(result?.reflectionEventsDeleted || 0),
-        journalEntries: Number(result?.journalEntriesDeleted || 0),
-        journalFilesTouched: Number(result?.journalFilesTouched || 0)
+        reflectionEvents: Number(result?.reflectionEventsDeleted || 0)
       },
       summaryRefreshed: Boolean(result?.summaryRefreshed)
     });

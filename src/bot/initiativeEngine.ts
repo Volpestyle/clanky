@@ -570,9 +570,7 @@ function buildInitiativePromptTiers({
   systemPrompt,
   userPrompt,
   curatedMemory,
-  relevantFacts,
-  guidanceFacts,
-  behavioralFacts,
+  memorySlice,
   communityInterestFacts,
   channelSummaries,
   discoveryCandidates,
@@ -581,18 +579,19 @@ function buildInitiativePromptTiers({
   systemPrompt: string;
   userPrompt: string;
   curatedMemory: unknown;
-  relevantFacts?: unknown;
-  guidanceFacts?: unknown;
-  behavioralFacts?: unknown;
+  memorySlice?: unknown;
   communityInterestFacts?: unknown;
   channelSummaries?: unknown;
   discoveryCandidates?: unknown;
   toolCount?: number;
 }) {
+  const promptMemory = memorySlice && typeof memorySlice === "object"
+    ? memorySlice as Record<string, unknown>
+    : {};
   const structuredFactCount = [
-    relevantFacts,
-    guidanceFacts,
-    behavioralFacts,
+    promptMemory.relevantFacts,
+    promptMemory.guidanceFacts,
+    promptMemory.behavioralFacts,
     communityInterestFacts
   ].reduce<number>((sum, rows) => sum + countPromptRows(rows), 0);
   const retrievedHistoryCount = [
@@ -1408,9 +1407,11 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
       discoveryCandidates: discoveryResult.candidates,
       sourcePerformance,
       communityInterestFacts,
-      relevantFacts: memoryFacts,
-      guidanceFacts: Array.isArray(guildProfile?.guidanceFacts) ? guildProfile.guidanceFacts : [],
-      behavioralFacts,
+      memorySlice: {
+        relevantFacts: memoryFacts,
+        guidanceFacts: Array.isArray(guildProfile?.guidanceFacts) ? guildProfile.guidanceFacts : [],
+        behavioralFacts
+      },
       curatedMemory,
       allowActiveCuriosity,
       allowWebSearch: webSearchToolAvailable,
@@ -1454,9 +1455,11 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
         systemPrompt,
         userPrompt,
         curatedMemory,
-        relevantFacts: memoryFacts,
-        guidanceFacts: guildProfile?.guidanceFacts,
-        behavioralFacts,
+        memorySlice: {
+          relevantFacts: memoryFacts,
+          guidanceFacts: guildProfile?.guidanceFacts,
+          behavioralFacts
+        },
         communityInterestFacts,
         channelSummaries: guildChannels,
         discoveryCandidates: discoveryResult.candidates,

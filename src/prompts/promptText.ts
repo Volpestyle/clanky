@@ -36,6 +36,22 @@ function appendCuratedPromptMemory(
   parts.push(curatedMemoryText);
 }
 
+function normalizePromptMemorySlice(memorySlice: unknown) {
+  const value = memorySlice && typeof memorySlice === "object" && !Array.isArray(memorySlice)
+    ? memorySlice as Record<string, unknown>
+    : {};
+  return {
+    participantProfiles: Array.isArray(value.participantProfiles) ? value.participantProfiles : [],
+    selfFacts: Array.isArray(value.selfFacts) ? value.selfFacts : [],
+    loreFacts: Array.isArray(value.loreFacts) ? value.loreFacts : [],
+    ownerFacts: Array.isArray(value.ownerFacts) ? value.ownerFacts : [],
+    userFacts: Array.isArray(value.userFacts) ? value.userFacts : [],
+    relevantFacts: Array.isArray(value.relevantFacts) ? value.relevantFacts : [],
+    guidanceFacts: Array.isArray(value.guidanceFacts) ? value.guidanceFacts : [],
+    behavioralFacts: Array.isArray(value.behavioralFacts) ? value.behavioralFacts : []
+  };
+}
+
 function buildWebSearchStateLine(webSearch: unknown): string {
   const ws = webSearch as Record<string, unknown> | null;
   if (ws?.optedOutByUser) return "Web search: unavailable (user opted out this turn).";
@@ -140,13 +156,7 @@ export function buildReplyPrompt({
   imageInputs,
   videoInputs = [],
   recentMessages,
-  userFacts: _userFacts,
-  relevantFacts: _relevantFacts,
-  participantProfiles = [],
-  selfFacts = [],
-  loreFacts = [],
-  guidanceFacts = [],
-  behavioralFacts = [],
+  memorySlice = null,
   emojiHints,
   reactionEmojiOptions = [],
   allowReplySimpleImages = false,
@@ -184,6 +194,7 @@ export function buildReplyPrompt({
   mediaPromptCraftGuidance: _mediaPromptCraftGuidance = null
 }) {
   const parts = [];
+  const promptMemory = normalizePromptMemorySlice(memorySlice);
   const normalizedChannelMode = channelMode === "reply_channel"
     ? "reply_channel"
     : channelMode === "discovery_channel"
@@ -260,27 +271,27 @@ export function buildReplyPrompt({
     parts.push(normalizedMinecraftSessionHint);
   }
 
-  if (participantProfiles?.length || selfFacts?.length || loreFacts?.length) {
+  if (promptMemory.participantProfiles.length || promptMemory.selfFacts.length || promptMemory.loreFacts.length) {
     parts.push("=== PEOPLE IN THIS CONVERSATION ===");
     parts.push(
       formatConversationParticipantMemory({
-        participantProfiles,
-        selfFacts,
-        loreFacts
+        participantProfiles: promptMemory.participantProfiles,
+        selfFacts: promptMemory.selfFacts,
+        loreFacts: promptMemory.loreFacts
       })
     );
   }
 
-  if (guidanceFacts?.length) {
+  if (promptMemory.guidanceFacts.length) {
     parts.push("=== BEHAVIOR GUIDANCE ===");
     parts.push("Standing guidance memory that should shape how you act in this conversation:");
-    parts.push(formatBehaviorMemoryFacts(guidanceFacts, 10));
+    parts.push(formatBehaviorMemoryFacts(promptMemory.guidanceFacts, 10));
   }
 
-  if (behavioralFacts?.length) {
+  if (promptMemory.behavioralFacts.length) {
     parts.push("=== RELEVANT BEHAVIORAL MEMORY ===");
     parts.push("These behavior memories were retrieved because they match this turn. Follow them when relevant.");
-    parts.push(formatBehaviorMemoryFacts(behavioralFacts, 8));
+    parts.push(formatBehaviorMemoryFacts(promptMemory.behavioralFacts, 8));
   }
 
   if (emojiHints?.length) {
@@ -540,9 +551,7 @@ export function buildInitiativePrompt({
   discoveryCandidates = [],
   sourcePerformance = [],
   communityInterestFacts = [],
-  relevantFacts = [],
-  guidanceFacts = [],
-  behavioralFacts = [],
+  memorySlice = null,
   curatedMemory = null,
   allowActiveCuriosity = false,
   allowWebSearch = false,
@@ -561,6 +570,7 @@ export function buildInitiativePrompt({
 }) {
   const parts = [];
   const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance(null);
+  const promptMemory = normalizePromptMemorySlice(memorySlice);
 
   parts.push("=== AMBIENT TEXT MODE ===");
   parts.push(`You are ${String(botName || "the bot").trim() || "the bot"}. You have a moment to look around your Discord channels and decide whether you want to surface an ambient text thought.`);
@@ -607,19 +617,19 @@ export function buildInitiativePrompt({
   parts.push("=== WHAT THIS COMMUNITY IS INTO ===");
   parts.push(formatInitiativeInterestFacts(communityInterestFacts));
 
-  if (relevantFacts?.length) {
+  if (promptMemory.relevantFacts.length) {
     parts.push("=== MEMORY ===");
-    parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: true, maxItems: 10 }));
+    parts.push(formatMemoryFacts(promptMemory.relevantFacts, { includeType: true, includeProvenance: true, maxItems: 10 }));
   }
 
-  if (guidanceFacts?.length) {
+  if (promptMemory.guidanceFacts.length) {
     parts.push("=== BEHAVIOR GUIDANCE ===");
-    parts.push(formatBehaviorMemoryFacts(guidanceFacts, 8));
+    parts.push(formatBehaviorMemoryFacts(promptMemory.guidanceFacts, 8));
   }
 
-  if (behavioralFacts?.length) {
+  if (promptMemory.behavioralFacts.length) {
     parts.push("=== RELEVANT BEHAVIORAL MEMORY ===");
-    parts.push(formatBehaviorMemoryFacts(behavioralFacts, 6));
+    parts.push(formatBehaviorMemoryFacts(promptMemory.behavioralFacts, 6));
   }
 
   parts.push("=== CAPABILITIES ===");
@@ -764,10 +774,7 @@ export function buildAutomationPrompt({
   instruction,
   channelName = "channel",
   recentMessages = [],
-  userFacts = [],
-  relevantFacts = [],
-  guidanceFacts = [],
-  behavioralFacts = [],
+  memorySlice = null,
   curatedMemory = null,
   memoryLookup = null,
   allowSimpleImagePosts = false,
@@ -782,6 +789,7 @@ export function buildAutomationPrompt({
 }) {
   const parts = [];
   const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance(null);
+  const promptMemory = normalizePromptMemorySlice(memorySlice);
   const taskInstruction = String(instruction || "")
     .replace(/\s+/g, " ")
     .trim()
@@ -795,21 +803,21 @@ export function buildAutomationPrompt({
   appendCuratedPromptMemory(parts, curatedMemory);
   parts.push("=== RECENT MESSAGES ===");
   parts.push(formatRecentChat(recentMessages));
-  if (userFacts?.length) {
+  if (promptMemory.userFacts.length) {
     parts.push("=== USER FACTS ===");
-    parts.push(formatMemoryFacts(userFacts, { includeType: false, includeProvenance: true, maxItems: 8 }));
+    parts.push(formatMemoryFacts(promptMemory.userFacts, { includeType: false, includeProvenance: true, maxItems: 8 }));
   }
-  if (relevantFacts?.length) {
+  if (promptMemory.relevantFacts.length) {
     parts.push("=== DURABLE MEMORY ===");
-    parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: true, maxItems: 10 }));
+    parts.push(formatMemoryFacts(promptMemory.relevantFacts, { includeType: true, includeProvenance: true, maxItems: 10 }));
   }
-  if (guidanceFacts?.length) {
+  if (promptMemory.guidanceFacts.length) {
     parts.push("=== BEHAVIOR GUIDANCE ===");
-    parts.push(formatBehaviorMemoryFacts(guidanceFacts, 8));
+    parts.push(formatBehaviorMemoryFacts(promptMemory.guidanceFacts, 8));
   }
-  if (behavioralFacts?.length) {
+  if (promptMemory.behavioralFacts.length) {
     parts.push("=== RELEVANT BEHAVIORAL MEMORY ===");
-    parts.push(formatBehaviorMemoryFacts(behavioralFacts, 6));
+    parts.push(formatBehaviorMemoryFacts(promptMemory.behavioralFacts, 6));
   }
   parts.push("When the task references a person (like 'me'), use durable memory facts if they are relevant.");
   if (!memoryLookup?.enabled) {

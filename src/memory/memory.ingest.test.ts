@@ -360,50 +360,8 @@ test("voice session micro-reflection excludes interrupted assistant turns", asyn
   assert.equal(reflectedPrompt.includes("deploy troubleshooting"), true);
 });
 
-test("appendDailyLogEntry dedupes repeated message ids", async () => {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-memory-log-"));
-  try {
-    const memory = new MemoryManager({
-      store: {
-        logAction() {
-          return undefined;
-        }
-      },
-      llm: {},
-      memoryFilePath: path.join(tempDir, "MEMORY.md")
-    });
-
-    await memory.appendDailyLogEntry({
-      messageId: "voice-guild-1-dup-1",
-      authorId: "user-1",
-      authorName: "Alice",
-      guildId: "guild-1",
-      channelId: "chan-1",
-      content: "hello from vc"
-    });
-    await memory.appendDailyLogEntry({
-      messageId: "voice-guild-1-dup-1",
-      authorId: "user-1",
-      authorName: "Alice",
-      guildId: "guild-1",
-      channelId: "chan-1",
-      content: "hello from vc"
-    });
-
-    const date = new Date();
-    const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-    const dailyFilePath = path.join(tempDir, `${dateKey}.md`);
-    const text = await fs.readFile(dailyFilePath, "utf8");
-    const matches = text.match(/message:voice-guild-1-dup-1/gu) || [];
-    assert.equal(matches.length, 1);
-  } finally {
-    await rmTempDir(tempDir);
-  }
-});
-
-test("processIngestMessage writes daily log without auto-extracting facts", async () => {
-  let dailyLogCalled = false;
-  let refreshCalled = false;
+test("processIngestMessage indexes conversation text without auto-extracting facts", async () => {
+  let vectorPayload = "";
   const memory = new MemoryManager({
     store: {
       logAction() {
@@ -417,12 +375,11 @@ test("processIngestMessage writes daily log without auto-extracting facts", asyn
     },
     memoryFilePath: "memory/MEMORY.md"
   });
-  memory.appendDailyLogEntry = async () => {
-    dailyLogCalled = true;
+  memory.ensureConversationMessageVector = async ({ content }) => {
+    vectorPayload = String(content || "");
+    return null;
   };
-  memory.queueMemoryRefresh = () => {
-    refreshCalled = true;
-  };
+  memory.scheduleTextChannelMicroReflection = () => undefined;
 
   await memory.processIngestMessage({
     messageId: "msg-1",
@@ -436,15 +393,12 @@ test("processIngestMessage writes daily log without auto-extracting facts", asyn
     }
   });
 
-  assert.equal(dailyLogCalled, true);
-  assert.equal(refreshCalled, true);
+  assert.equal(vectorPayload, "I am Alex and I love pizza.");
 });
 
 test("processIngestMessage skips text micro-reflection scheduling for bot-authored messages", async () => {
   let scheduled = false;
   const memory = createMemoryForIngestTests();
-  memory.appendDailyLogEntry = async () => undefined;
-  memory.queueMemoryRefresh = () => undefined;
   memory.ensureConversationMessageVector = async () => null;
   memory.scheduleTextChannelMicroReflection = () => {
     scheduled = true;
@@ -863,23 +817,6 @@ test("purgeGuildMemory removes only the selected guild's stored memory artifacts
       }
     });
 
-    await memory.appendDailyLogEntry({
-      messageId: "journal-g1",
-      authorId: "user-1",
-      authorName: "Alice",
-      guildId: "guild-1",
-      channelId: "chan-1",
-      content: "journal entry for guild one"
-    });
-    await memory.appendDailyLogEntry({
-      messageId: "journal-g2",
-      authorId: "user-2",
-      authorName: "Bob",
-      guildId: "guild-2",
-      channelId: "chan-2",
-      content: "journal entry for guild two"
-    });
-
     const fakeTimer = setTimeout(() => undefined, 60_000);
     memory.textMicroReflectionTimers.set("guild-1:chan-1", fakeTimer);
     memory.textMicroReflectionState.set("guild-1:chan-1", {
@@ -896,8 +833,6 @@ test("purgeGuildMemory removes only the selected guild's stored memory artifacts
     assert.equal(result.conversationMessagesDeleted, 1);
     assert.equal(result.conversationVectorsDeleted, 1);
     assert.equal(result.reflectionEventsDeleted, 2);
-    assert.equal(result.journalEntriesDeleted, 1);
-    assert.equal(result.journalFilesTouched, 1);
     assert.equal(memory.textMicroReflectionTimers.has("guild-1:chan-1"), false);
     assert.equal(memory.textMicroReflectionState.has("guild-1:chan-1"), false);
 
@@ -921,11 +856,8 @@ test("purgeGuildMemory removes only the selected guild's stored memory artifacts
     assert.equal(factVectorCount, 1);
     assert.equal(messageVectorCount, 1);
 
-    const date = new Date();
-    const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-    const dailyFileText = await fs.readFile(path.join(tempDir, `${dateKey}.md`), "utf8");
-    assert.equal(dailyFileText.includes("guild:guild-1"), false);
-    assert.equal(dailyFileText.includes("journal entry for guild two"), true);
+    const memoryDirEntries = await fs.readdir(tempDir);
+    assert.equal(memoryDirEntries.some((name) => /^\d{4}-\d{2}-\d{2}\.md$/u.test(name)), false);
   } finally {
     store.close();
     await rmTempDir(tempDir);

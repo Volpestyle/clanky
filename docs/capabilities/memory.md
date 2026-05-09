@@ -42,7 +42,6 @@ Clanky uses a tiered hybrid memory model:
 Supporting artifacts:
 
 - Recent voice session summaries in SQLite (`session_summaries`)
-- Daily journals in `memory/YYYY-MM-DD.md`
 - Operator snapshot in `memory/MEMORY.md`
 - Dashboard runtime snapshot for inspecting the effective prompt slice
 
@@ -190,7 +189,7 @@ Clanky builds durable memory through three complementary paths:
 
 Durable sync uses the clean conversational input, not prompt-expanded context. Retrieved memory, provider-added background, tool results, and prompt scaffolding are not treated as if the user said them.
 
-Before a text or voice turn is written to `messages`, daily journals, conversation vectors, or reflection input, the runtime checks that the turn is complete enough to be durable conversational truth.
+Before a text or voice turn is written to `messages`, conversation vectors, or reflection input, the runtime checks that the turn is complete enough to be durable conversational truth.
 
 - completed Discord text messages and successfully sent bot replies are eligible
 - completed voice transcripts and fully delivered assistant voice replies are eligible
@@ -237,17 +236,6 @@ Long voice sessions flush a lighter reflection pass before old transcript turns 
 - runs on the exact batch about to be compacted
 - extracts a small number of durable facts without blocking compaction
 - reduces the chance that early-session details disappear before the session-end reflection sees them
-
-### Daily reflection
-
-A broader reflection pass reviews the day journal and distills durable facts.
-
-- sees larger patterns across multiple sessions
-- merges near-duplicates against existing memory
-- emits a `supersedes` value for each candidate fact, using the exact existing fact text when replacing memory and an empty value otherwise
-- writes through the same validation, dedupe, and archival path
-
-This turns raw journal history into longer-lived memory.
 
 ## How memory is surfaced today
 
@@ -380,18 +368,7 @@ Notes:
 - lexical fact recall uses SQLite FTS5/BM25 instead of tokenized `LIKE` scoring
 - embeddings support hybrid semantic + lexical ranking for both fact search and conversation recall
 
-## Journals and snapshots
-
-### Daily journals
-
-`memory/YYYY-MM-DD.md` is the append-only raw journal.
-
-- stores ingested text messages and voice transcripts
-- stores only completed durable turns, not interrupted or partial assistant output
-- provides source material for reflection
-- keeps message/guild/channel provenance visible for operators
-
-### Operator snapshot
+## Snapshots
 
 `memory/MEMORY.md` is a generated operator-facing summary.
 
@@ -399,6 +376,7 @@ Notes:
 - not the runtime source of truth
 - dashboard can also render a scoped runtime snapshot without changing the file on disk
 - the global snapshot now includes an `Owner Private` section so operators can inspect the private assistant layer separately from person/community memory
+- raw durable turn history, vectors, facts, and reflection runs live in SQLite rather than parallel markdown journals
 
 ## Safety and quality guards
 

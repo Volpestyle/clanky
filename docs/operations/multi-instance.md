@@ -54,7 +54,7 @@ Instance-specific files (`data/`, `memory/`, `.env`) are gitignored and untouche
 | Resource | Path (relative to clone root) | Why it matters |
 |----------|-------------------------------|----------------|
 | SQLite database | `data/clanker.db` | Settings, permissions, presets, personas, action logs |
-| Memory | `memory/MEMORY.md`, `memory/YYYY-MM-DD.md` | Curated facts and daily journals |
+| Memory | `memory/*.md` | Curated prompt-memory files and generated operator snapshots |
 | Runtime logs | `data/logs/runtime-actions.ndjson` | Structured ndjson for Promtail/Loki |
 | OAuth token caches | `data/claude-oauth-tokens.json`, `data/openai-oauth-tokens.json` | Refresh token rotation |
 | Browser profile | `~/.clanky/browser-profile` (shared by default) | Override via dashboard settings if needed |
