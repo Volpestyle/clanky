@@ -215,7 +215,9 @@ export function VoiceModeSettingsSection({
   selectVoiceMusicBrainPresetModel,
   voiceMusicBrainModelOptions,
   selectedVoiceMusicBrainPresetModel,
+  xAiModelOptions,
   xAiVoiceOptions,
+  xAiAudioFormatOptions,
   openAiRealtimeModelOptions,
   openAiRealtimeVoiceOptions,
   openAiTranscriptionModelOptions,
@@ -1280,6 +1282,16 @@ export function VoiceModeSettingsSection({
               <>
                 <div className="split">
                   <div>
+                    <label htmlFor="voice-xai-model">xAI voice model</label>
+                    <select id="voice-xai-model" value={form.voiceXaiModel} onChange={set("voiceXaiModel")}>
+                      {xAiModelOptions.map((modelId) => (
+                        <option key={modelId} value={modelId}>
+                          {modelId}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
                     <label htmlFor="voice-xai-voice">xAI voice</label>
                     <select id="voice-xai-voice" value={form.voiceXaiVoice} onChange={set("voiceXaiVoice")}>
                       {xAiVoiceOptions.map((voiceName) => (
@@ -1289,21 +1301,22 @@ export function VoiceModeSettingsSection({
                       ))}
                     </select>
                   </div>
-                  <div>
-                    <label htmlFor="voice-xai-region">xAI region</label>
-                    <input id="voice-xai-region" type="text" value={form.voiceXaiRegion} onChange={set("voiceXaiRegion")} />
-                  </div>
                 </div>
 
                 <div className="split">
                   <div>
                     <label htmlFor="voice-xai-audio-format">xAI audio format</label>
-                    <input
+                    <select
                       id="voice-xai-audio-format"
-                      type="text"
                       value={form.voiceXaiAudioFormat}
                       onChange={set("voiceXaiAudioFormat")}
-                    />
+                    >
+                      {xAiAudioFormatOptions.map((format) => (
+                        <option key={format} value={format}>
+                          {format}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <label htmlFor="voice-xai-sample-rate">xAI sample rate (Hz)</label>

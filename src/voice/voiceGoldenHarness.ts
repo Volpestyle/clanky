@@ -606,10 +606,10 @@ function buildHarnessSettings({
         model: deciderModel
       },
       xai: {
-        voice: "Rex",
+        model: "grok-voice-think-fast-1.0",
+        voice: "rex",
         audioFormat: "audio/pcm",
-        sampleRateHz: 24000,
-        region: "us-east-1"
+        sampleRateHz: 24000
       },
       openaiRealtime: {
         model: "gpt-realtime",

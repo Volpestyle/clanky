@@ -183,7 +183,7 @@ Full Realtime API: `session.update`, `input_audio_buffer.append/commit`, `respon
 
 ### xAI
 
-Similar protocol to OpenAI but simpler. Uses boolean `_responseInProgress` instead of response ID tracking.
+Grok Voice Agent connects to `wss://api.x.ai/v1/realtime?model=grok-voice-think-fast-1.0` by default. The session update sends `voice`, `instructions`, nested `audio.input` / `audio.output` format descriptors, manual `turn_detection`, and provider-native function tools when the reply path owns tools in the realtime loop. Response creation uses the documented bare `response.create`; audio arrives on `response.output_audio.delta`, and text output arrives on `response.text.*` events.
 
 ### Gemini
 
@@ -206,7 +206,7 @@ TTS-only WebSocket client. Connects to `wss://api.elevenlabs.io/v1/text-to-speec
 | Client → Subprocess | Audio for Discord playback | `voxClient.appendTtsAudio()` |
 | Instruction Mgr → Client | Updated instructions/tools | `realtimeClient.updateInstructions()`, `session.update` with tools |
 
-Providers expose the same two logical text paths even when the wire protocol differs. Forwarded user transcripts use the normal conversation flow so the realtime brain can reason over conversation state and call tools. Exact-line playback for already-generated bot speech goes through `requestPlaybackUtterance()` so playback does not re-enter tool planning or duplicate upstream work. OpenAI implements that as an out-of-band audio response with tools disabled; xAI currently uses a constrained text turn on the normal response lane.
+Providers expose the same two logical text paths even when the wire protocol differs. Forwarded user transcripts use the normal conversation flow so the realtime brain can reason over conversation state and call tools. Exact-line playback for already-generated bot speech goes through `requestPlaybackUtterance()` so playback does not re-enter tool planning or duplicate upstream work. OpenAI implements that as an out-of-band audio response with tools disabled; xAI uses the normal conversation lane because the current xAI voice docs only define session-level tools.
 
 ## 9. Incident Debugging (Client)
 

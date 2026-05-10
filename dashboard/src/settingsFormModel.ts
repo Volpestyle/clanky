@@ -41,7 +41,10 @@ import {
   resolveVoiceRuntimeSelectionFromMode
 } from "../../src/settings/voiceDashboardMappings.ts";
 import {
-  OPENAI_REALTIME_SESSION_MODEL_OPTIONS
+  OPENAI_REALTIME_SESSION_MODEL_OPTIONS,
+  XAI_REALTIME_AUDIO_FORMAT_OPTIONS,
+  XAI_REALTIME_MODEL_OPTIONS,
+  XAI_REALTIME_VOICE_OPTIONS
 } from "../../src/voice/realtimeProviderNormalization.ts";
 import { deepMerge } from "../../src/utils.ts";
 export const OPENAI_REALTIME_MODEL_OPTIONS = OPENAI_REALTIME_SESSION_MODEL_OPTIONS.slice(0, 3);
@@ -75,13 +78,9 @@ export const GEMINI_REALTIME_MODEL_OPTIONS = Object.freeze([
   "gemini-2.5-flash"
 ]);
 
-export const XAI_VOICE_OPTIONS = Object.freeze([
-  "Ara",
-  "Rex",
-  "Sal",
-  "Eve",
-  "Leo"
-]);
+export const XAI_MODEL_OPTIONS = XAI_REALTIME_MODEL_OPTIONS;
+export const XAI_VOICE_OPTIONS = XAI_REALTIME_VOICE_OPTIONS;
+export const XAI_AUDIO_FORMAT_OPTIONS = XAI_REALTIME_AUDIO_FORMAT_OPTIONS;
 
 const BROWSER_PROVIDER_MODEL_FALLBACKS = Object.freeze({
   anthropic: ["claude-sonnet-4-5-20250929"],
@@ -700,10 +699,10 @@ export function settingsToForm(settings: unknown) {
     voiceAllowedChannelIds: formatLineList(resolved?.voice?.allowedVoiceChannelIds),
     voiceBlockedChannelIds: formatLineList(resolved?.voice?.blockedVoiceChannelIds),
     voiceBlockedUserIds: formatLineList(resolved?.voice?.blockedVoiceUserIds),
+    voiceXaiModel: resolved?.voice?.xai?.model ?? defaultVoiceXai.model,
     voiceXaiVoice: resolved?.voice?.xai?.voice ?? defaultVoiceXai.voice,
     voiceXaiAudioFormat: resolved?.voice?.xai?.audioFormat ?? defaultVoiceXai.audioFormat,
     voiceXaiSampleRateHz: resolved?.voice?.xai?.sampleRateHz ?? defaultVoiceXai.sampleRateHz,
-    voiceXaiRegion: resolved?.voice?.xai?.region ?? defaultVoiceXai.region,
     voiceOpenAiRealtimeModel: resolved?.voice?.openaiRealtime?.model ?? defaultVoiceOpenAiRealtime.model,
     voiceOpenAiRealtimeVoice: resolved?.voice?.openaiRealtime?.voice ?? defaultVoiceOpenAiRealtime.voice,
     voiceOpenAiRealtimeTranscriptionMethod:
@@ -1625,10 +1624,10 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
                 }
               },
           xai: {
+            model: String(form.voiceXaiModel || "").trim(),
             voice: String(form.voiceXaiVoice || "").trim(),
             audioFormat: String(form.voiceXaiAudioFormat || "").trim(),
-            sampleRateHz: Number(form.voiceXaiSampleRateHz),
-            region: String(form.voiceXaiRegion || "").trim()
+            sampleRateHz: Number(form.voiceXaiSampleRateHz)
           },
           elevenLabsRealtime: {
             voiceId: String(form.voiceElevenLabsRealtimeVoiceId || "").trim(),

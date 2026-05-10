@@ -21,6 +21,41 @@ const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
   "gpt-4o-mini-transcribe"
 ]);
 
+export const XAI_REALTIME_DEFAULT_MODEL = "grok-voice-think-fast-1.0";
+export const XAI_REALTIME_MODEL_OPTIONS = Object.freeze([
+  "grok-voice-think-fast-1.0",
+  "grok-voice-fast-1.0"
+]);
+const XAI_REALTIME_SUPPORTED_MODELS: ReadonlySet<string> = new Set(XAI_REALTIME_MODEL_OPTIONS);
+
+export const XAI_REALTIME_DEFAULT_VOICE = "eve";
+export const XAI_REALTIME_VOICE_OPTIONS = Object.freeze([
+  "eve",
+  "ara",
+  "rex",
+  "sal",
+  "leo"
+]);
+const XAI_REALTIME_BUILT_IN_VOICES: ReadonlySet<string> = new Set(XAI_REALTIME_VOICE_OPTIONS);
+
+export const XAI_REALTIME_AUDIO_FORMAT_OPTIONS = Object.freeze([
+  "audio/pcm",
+  "audio/pcmu",
+  "audio/pcma"
+]);
+const XAI_REALTIME_SUPPORTED_AUDIO_FORMATS: ReadonlySet<string> = new Set(XAI_REALTIME_AUDIO_FORMAT_OPTIONS);
+
+export const XAI_REALTIME_PCM_SAMPLE_RATE_OPTIONS = Object.freeze([
+  8000,
+  16000,
+  22050,
+  24000,
+  32000,
+  44100,
+  48000
+]);
+const XAI_REALTIME_SUPPORTED_PCM_SAMPLE_RATES: ReadonlySet<number> = new Set(XAI_REALTIME_PCM_SAMPLE_RATE_OPTIONS);
+
 export function normalizeOpenAiBaseUrl(value: unknown) {
   const raw = String(value || DEFAULT_OPENAI_BASE_URL).trim();
   const normalized = raw || DEFAULT_OPENAI_BASE_URL;
@@ -47,6 +82,57 @@ export function normalizeOpenAiRealtimeSessionModel(
   return OPENAI_REALTIME_SUPPORTED_SESSION_MODELS.has(normalized)
     ? normalized
     : OPENAI_REALTIME_DEFAULT_SESSION_MODEL;
+}
+
+export function normalizeXaiRealtimeModel(
+  value: unknown,
+  fallback = XAI_REALTIME_DEFAULT_MODEL
+) {
+  const normalized =
+    String(value || "").trim() || String(fallback || "").trim() || XAI_REALTIME_DEFAULT_MODEL;
+  return XAI_REALTIME_SUPPORTED_MODELS.has(normalized)
+    ? normalized
+    : XAI_REALTIME_DEFAULT_MODEL;
+}
+
+export function normalizeXaiRealtimeVoice(
+  value: unknown,
+  fallback = XAI_REALTIME_DEFAULT_VOICE
+) {
+  const normalized =
+    String(value || "").trim() || String(fallback || "").trim() || XAI_REALTIME_DEFAULT_VOICE;
+  const builtIn = normalized.toLowerCase();
+  return XAI_REALTIME_BUILT_IN_VOICES.has(builtIn)
+    ? builtIn
+    : normalized.slice(0, 200);
+}
+
+export function normalizeXaiRealtimeAudioFormat(
+  value: unknown,
+  fallback = "audio/pcm"
+) {
+  const normalized =
+    String(value || "").trim().toLowerCase() || String(fallback || "").trim().toLowerCase() || "audio/pcm";
+  return XAI_REALTIME_SUPPORTED_AUDIO_FORMATS.has(normalized)
+    ? normalized
+    : "audio/pcm";
+}
+
+export function normalizeXaiRealtimeSampleRateHz(
+  value: unknown,
+  fallback = 24000,
+  audioFormat: unknown = "audio/pcm"
+) {
+  const normalizedAudioFormat = normalizeXaiRealtimeAudioFormat(audioFormat);
+  if (normalizedAudioFormat !== "audio/pcm") return 8000;
+
+  const numeric = Math.floor(Number(value));
+  if (XAI_REALTIME_SUPPORTED_PCM_SAMPLE_RATES.has(numeric)) return numeric;
+
+  const fallbackNumeric = Math.floor(Number(fallback));
+  return XAI_REALTIME_SUPPORTED_PCM_SAMPLE_RATES.has(fallbackNumeric)
+    ? fallbackNumeric
+    : 24000;
 }
 
 export function normalizeGeminiBaseUrl(value: unknown) {

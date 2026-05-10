@@ -36,7 +36,11 @@ import {
   OPENAI_REALTIME_DEFAULT_SESSION_MODEL,
   OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
   normalizeOpenAiRealtimeSessionModel,
-  normalizeOpenAiRealtimeTranscriptionModel
+  normalizeOpenAiRealtimeTranscriptionModel,
+  normalizeXaiRealtimeAudioFormat,
+  normalizeXaiRealtimeModel,
+  normalizeXaiRealtimeSampleRateHz,
+  normalizeXaiRealtimeVoice
 } from "./realtimeProviderNormalization.ts";
 import {
   getVoiceChannelPolicy,
@@ -628,14 +632,20 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         });
 
         const xaiSettings = voiceRuntime.xai;
-        realtimeInputSampleRateHz = Number(xaiSettings?.sampleRateHz) || 24000;
-        realtimeOutputSampleRateHz = Number(xaiSettings?.sampleRateHz) || 24000;
+        const xaiAudioFormat = normalizeXaiRealtimeAudioFormat(xaiSettings?.audioFormat);
+        const xaiSampleRateHz = normalizeXaiRealtimeSampleRateHz(
+          xaiSettings?.sampleRateHz,
+          24000,
+          xaiAudioFormat
+        );
+        realtimeInputSampleRateHz = xaiSampleRateHz;
+        realtimeOutputSampleRateHz = xaiSampleRateHz;
         await realtimeClient.connect({
-          voice: xaiSettings?.voice || "Rex",
+          model: normalizeXaiRealtimeModel(xaiSettings?.model),
+          voice: normalizeXaiRealtimeVoice(xaiSettings?.voice),
           instructions: baseVoiceInstructions,
-          region: xaiSettings?.region || "us-east-1",
-          inputAudioFormat: xaiSettings?.audioFormat || "audio/pcm",
-          outputAudioFormat: xaiSettings?.audioFormat || "audio/pcm",
+          inputAudioFormat: xaiAudioFormat,
+          outputAudioFormat: xaiAudioFormat,
           inputSampleRateHz: realtimeInputSampleRateHz,
           outputSampleRateHz: realtimeOutputSampleRateHz,
           tools:
@@ -645,8 +655,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
                 settings,
                 target: runtimeMode
               })
-              : [],
-          toolChoice: "auto"
+              : []
         });
       } else if (runtimeMode === "openai_realtime") {
         realtimeClient = new OpenAiRealtimeClient({
