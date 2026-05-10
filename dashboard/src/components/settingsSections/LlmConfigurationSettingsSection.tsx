@@ -134,7 +134,7 @@ export function LlmConfigurationSettingsSection({
 
       <h4>Memory LLM</h4>
       <p>
-        Used for daily reflection and memory-adjacent background work.
+        Used for micro-reflections, durable fact extraction, embeddings-adjacent synthesis, and other memory background work.
       </p>
       <div className="toggles">
         <label>

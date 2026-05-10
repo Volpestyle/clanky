@@ -249,7 +249,7 @@ test("spawnPeer routes through swarm-server PTY when direct spawn is supported",
   expect(request?.args).not.toContain("-p");
   expect(request?.args).not.toContain("--output-format");
   expect(String(request?.initial_input || "")).toContain("implement something");
-  expect(String(request?.initial_input || "")).toContain("## Swarm coordination skill");
+  expect(String(request?.initial_input || "")).toContain("Coordination playbook");
   expect(String(request?.initial_input || "")).toContain("\u001b[200~");
   expect((request?.env as Record<string, string>)?.SWARM_DB_PATH).toBe(dbPath);
 
@@ -347,7 +347,7 @@ test("spawnPeer passes codex PTY prompt as argv instead of initial_input", async
   expect(request?.initial_input).toBeNull();
   expect(args).toContain("--no-alt-screen");
   expect(args.join("\n")).toContain("implement with codex");
-  expect(args.join("\n")).toContain("## Swarm coordination skill");
+  expect(args.join("\n")).toContain("Coordination playbook");
   expect(args.join("\n")).toContain("mcp_servers.swarm.env.SWARM_MCP_INSTANCE_ID");
   expect(args).not.toContain("exec");
   const requestEnv = request?.env as Record<string, string>;

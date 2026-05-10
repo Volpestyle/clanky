@@ -1,7 +1,7 @@
 import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Skeleton from "./Skeleton";
 import { CopyButton, PanelHead } from "./ui";
-import { normalizeFollowupPrompts, normalizePromptText } from "../utils/voiceHelpers";
+import { normalizeFollowupPrompts, normalizePromptText, normalizePromptTiers } from "../utils/voiceHelpers";
 
 const STORAGE_KEY = "actionStreamColWidths";
 const COLUMNS = ["time", "kind", "channel", "content", "cost"] as const;
@@ -91,6 +91,7 @@ function getReplyPrompts(metadata: unknown) {
     initialUserPrompt?: unknown;
     followupUserPrompts?: unknown;
     followupSteps?: unknown;
+    promptTiers?: unknown;
   };
 }
 
@@ -313,6 +314,7 @@ export default function ActionStream({ actions }) {
               const initialUserPrompt = normalizePromptText(replyPrompts?.initialUserPrompt);
               const followupUserPrompts = normalizeFollowupPrompts(replyPrompts?.followupUserPrompts);
               const followupSteps = Math.max(0, Math.floor(Number(replyPrompts?.followupSteps) || 0));
+              const promptTiers = normalizePromptTiers(replyPrompts?.promptTiers);
               const hasPromptLog = Boolean(replyPrompts);
 
               return (
@@ -406,6 +408,12 @@ export default function ActionStream({ actions }) {
                                 <h4>Initial User Prompt</h4>
                                 <pre>{initialUserPrompt || "(empty)"}</pre>
                               </div>
+                              {promptTiers.length > 0 && (
+                                <div className="action-detail-block">
+                                  <h4>Prompt Tiers</h4>
+                                  <pre>{JSON.stringify(promptTiers, null, 2)}</pre>
+                                </div>
+                              )}
                               <div className="action-detail-block">
                                 <h4>Follow-up User Prompts ({Math.max(followupSteps, followupUserPrompts.length)})</h4>
                                 {followupUserPrompts.length === 0 ? (

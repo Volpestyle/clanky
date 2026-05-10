@@ -1,4 +1,5 @@
 import { PermissionFlagsBits, type ChatInputCommandInteraction, type VoiceChannelEffect } from "discord.js";
+import { prepareDurableMemoryTurnInput } from "../memory/memoryHelpers.ts";
 import { resolveMemoryToolNamespaceScope } from "../memory/memoryToolRuntime.ts";
 import {
   getVoiceConversationPolicy,
@@ -5741,6 +5742,10 @@ export class VoiceSessionManager {
         content: normalizedTranscript,
         isBot: false,
         settings,
+        lifecycle: {
+          status: "completed",
+          captureReason
+        },
         trace: {
           guildId: session.guildId,
           channelId: session.textChannelId,
@@ -6075,13 +6080,42 @@ export class VoiceSessionManager {
     return Boolean(normalizedTranscript);
   }
 
-  persistAssistantVoiceTimelineTurn(session, text = "", createdAtMs = Date.now()) {
+  persistAssistantVoiceTimelineTurn(session, text = "", createdAtMs = Date.now(), lifecycleStatus = "completed") {
     if (!session || session.ending) return;
     if (!this.store || typeof this.store.recordMessage !== "function") return;
     const normalizedText = normalizeVoiceText(text, STT_REPLY_MAX_CHARS);
     const normalizedChannelId = String(session.textChannelId || "").trim();
     const botUserId = String(this.client.user?.id || "").trim();
     if (!normalizedText || !normalizedChannelId || !botUserId) return;
+
+    const durableTurn = prepareDurableMemoryTurnInput({
+      content: normalizedText,
+      lifecycle: {
+        status: String(lifecycleStatus || "completed").trim() || "completed"
+      },
+      trace: {
+        guildId: String(session.guildId || "").trim() || null,
+        channelId: normalizedChannelId,
+        userId: botUserId,
+        source: "voice_assistant_timeline_ingest"
+      }
+    });
+    if (!durableTurn.ok) {
+      this.store.logAction?.({
+        kind: "memory_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: botUserId || null,
+        content: "voice_assistant_turn_sync_skipped",
+        metadata: {
+          sessionId: session.id,
+          reason: durableTurn.reason,
+          lifecycleStatus: durableTurn.lifecycleStatus || null,
+          contentChars: normalizedText.length
+        }
+      });
+      return;
+    }
 
     const messageId = `voice-assistant-${String(session.id || "session")}-${String(createdAtMs)}`;
     const botName = getPromptBotName(session.settingsSnapshot || this.store.getSettings());
@@ -6106,6 +6140,9 @@ export class VoiceSessionManager {
         content: normalizedText,
         isBot: true,
         settings: session.settingsSnapshot || this.store.getSettings(),
+        lifecycle: {
+          status: String(lifecycleStatus || "completed").trim() || "completed"
+        },
         trace: {
           guildId: String(session.guildId || "").trim() || null,
           channelId: normalizedChannelId,
@@ -6134,7 +6171,7 @@ export class VoiceSessionManager {
     ].slice(-VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS);
   }
 
-  recordVoiceTurn(session, { role = "user", userId = null, text = "", addressing = null } = {}) {
+  recordVoiceTurn(session, { role = "user", userId = null, text = "", addressing = null, lifecycleStatus = "completed" } = {}) {
     if (!session || session.ending) return;
     const normalizedContextText = normalizeVoiceText(text, VOICE_DECIDER_HISTORY_MAX_CHARS);
     const normalizedTranscriptText = normalizeVoiceText(text, STT_TRANSCRIPT_MAX_CHARS);
@@ -6142,6 +6179,20 @@ export class VoiceSessionManager {
 
     const normalizedRole = role === "assistant" ? "assistant" : "user";
     const normalizedUserId = String(userId || "").trim() || null;
+    const normalizedLifecycleStatus = ((): VoiceTimelineTurn["lifecycleStatus"] => {
+      const explicitStatus = String(lifecycleStatus || "").trim().toLowerCase();
+      if (
+        explicitStatus === "interrupted" ||
+        explicitStatus === "cancelled" ||
+        explicitStatus === "partial" ||
+        explicitStatus === "stale" ||
+        explicitStatus === "superseded"
+      ) {
+        return explicitStatus;
+      }
+      if (/^\s*\[interrupted\]/i.test(normalizedTranscriptText)) return "interrupted";
+      return "completed";
+    })();
     const turns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
     const speakerName =
       normalizedRole === "assistant"
@@ -6168,7 +6219,8 @@ export class VoiceSessionManager {
       userId: normalizedUserId,
       speakerName: normalizedSpeakerName,
       text: normalizedContextText,
-      at: nextAt
+      at: nextAt,
+      lifecycleStatus: normalizedLifecycleStatus
     };
     if (normalizedAddressing) {
       modelTurnEntry.addressing = normalizedAddressing;
@@ -6179,7 +6231,8 @@ export class VoiceSessionManager {
       userId: normalizedUserId,
       speakerName: normalizedSpeakerName,
       text: normalizedTranscriptText,
-      at: nextAt
+      at: nextAt,
+      lifecycleStatus: normalizedLifecycleStatus
     };
     if (normalizedAddressing) {
       transcriptTurnEntry.addressing = normalizedAddressing;
@@ -6197,7 +6250,7 @@ export class VoiceSessionManager {
       });
     }
     if (normalizedRole === "assistant") {
-      this.persistAssistantVoiceTimelineTurn(session, normalizedTranscriptText, nextAt);
+      this.persistAssistantVoiceTimelineTurn(session, normalizedTranscriptText, nextAt, normalizedLifecycleStatus);
     }
   }
 

@@ -7,6 +7,7 @@ import {
   LORE_SUBJECT,
   OWNER_SUBJECT,
   SELF_SUBJECT,
+  SWARM_SUBJECT,
   buildFactEmbeddingPayload,
   buildHighlightsSection,
   cleanDailyEntryContent,
@@ -15,7 +16,6 @@ import {
   computeRecencyScore,
   computeTemporalDecayMultiplier,
   extractStableTokens,
-  formatDateLocal,
   formatTypedFactForMemory,
   isBehavioralDirectiveLikeFactText,
   isUnsafeMemoryFactText,
@@ -25,21 +25,19 @@ import {
   normalizeHighlightText,
   normalizeLoreFactForDisplay,
   normalizeMemoryLineInput,
+  normalizeWorkMemorySubject,
   normalizeQueryEmbeddingText,
+  prepareDurableMemoryTurnInput,
   normalizeStoredFactText,
   normalizeSelfFactForDisplay,
-  parseDailyEntryLineWithScope,
   passesHybridRelevanceGate,
   rerankWithMmr,
   resolveDirectiveScopeConfig,
   sanitizeInline,
 } from "./memoryHelpers.ts";
-import { runDailyReflection } from "./dailyReflection.ts";
 import { runMicroReflection } from "./microReflection.ts";
-import type { MemoryFactRow } from "../store/storeMemory.ts";
-
-// Daily transcript journals are stored as YYYY-MM-DD.md files.
-const DAILY_FILE_PATTERN = /^\d{4}-\d{2}-\d{2}\.md$/;
+import type { MemoryFactRow, MemoryFactScope } from "../store/storeMemory.ts";
+import type { SubAgentTaskHandoff } from "../agents/subAgentSession.ts";
 
 // Hybrid memory retrieval tuning: controls candidate breadth vs ranking cost.
 const HYBRID_FACT_LIMIT = 10;
@@ -83,6 +81,21 @@ const MAX_BEHAVIORAL_QUERY_CHARS = 420;
 const MAX_SECTION_FACTS = 6;
 const MAX_PEOPLE_FACTS_PER_SUBJECT = 6;
 const MAX_DIRECTIVE_EVIDENCE_CHARS = 220;
+const WORK_HANDOFF_FACT_LIMIT = 24;
+
+type DurableFactSearchScope = MemoryFactScope | "owner_private" | "all";
+
+const DURABLE_FACT_SEARCH_SCOPE_SET = new Set<string>([
+  "user",
+  "guild",
+  "owner",
+  "project",
+  "task",
+  "swarm",
+  "collaborator",
+  "owner_private",
+  "all"
+]);
 
 // Ingest worker backpressure and shutdown drain behavior.
 const MAX_INGEST_QUEUE_SIZE = 400;
@@ -94,15 +107,14 @@ const INGEST_QUEUE_POLL_INTERVAL_MS = 25;
 const FACT_PROFILE_LOAD_LIMIT = 120;
 const REFLECTION_EXISTING_FACT_LIMIT = 200;
 const MEMORY_MARKDOWN_REFRESH_DEBOUNCE_MS = 1000;
-const MARKDOWN_RECENT_DAILY_DAYS = 3;
-const MARKDOWN_RECENT_DAILY_MAX_ENTRIES = 120;
 const MARKDOWN_HIGHLIGHT_MAX_ITEMS = 24;
-const MARKDOWN_RECENT_DAILY_FILES = 5;
 const MAX_MEMORY_SUBJECTS = 80;
 const PEOPLE_FACT_TOTAL_LIMIT_MIN = 200;
 const PEOPLE_FACT_TOTAL_LIMIT_MAX = 1200;
 const PEOPLE_FACT_TOTAL_LIMIT_MULTIPLIER = 10;
 const FACT_SECTION_SUBJECT_FETCH_LIMIT = 32;
+const PEOPLE_SUMMARY_SCOPES: MemoryFactScope[] = ["guild", "user"];
+const GUILD_PEOPLE_SUMMARY_SCOPES: MemoryFactScope[] = ["guild"];
 
 // Settling delay before micro-reflection runs after queued text events.
 const DEFAULT_MICRO_REFLECTION_SETTLE_TIMEOUT_MS = 8_000;
@@ -200,20 +212,24 @@ function mergeUniqueFactCandidates(...groups: Array<Array<MemoryFactRow> | null 
   return [...merged.values()];
 }
 
+function isPeopleSummarySubject(subjectRow: { scope?: string | null; subject?: string | null } | null | undefined) {
+  const scope = String(subjectRow?.scope || "guild").trim().toLowerCase();
+  const subject = String(subjectRow?.subject || "").trim();
+  return Boolean(subject) && (scope === "guild" || scope === "user") && subject !== LORE_SUBJECT && subject !== SELF_SUBJECT;
+}
+
 export class MemoryManager {
   store;
   llm;
   memoryFilePath;
   memoryDirPath;
   pendingWrite;
-  initializedDailyFiles;
   ingestQueue;
   ingestQueuedJobs;
   ingestWorkerActive;
   maxIngestQueue;
   queryEmbeddingCache;
   queryEmbeddingInFlight;
-  dailyLogMessageIds;
   textMicroReflectionTimers;
   textMicroReflectionState;
   microReflectionInFlight;
@@ -224,14 +240,12 @@ export class MemoryManager {
     this.memoryFilePath = memoryFilePath;
     this.memoryDirPath = path.dirname(memoryFilePath);
     this.pendingWrite = false;
-    this.initializedDailyFiles = new Set();
     this.ingestQueue = [];
     this.ingestQueuedJobs = new Map();
     this.ingestWorkerActive = false;
     this.maxIngestQueue = MAX_INGEST_QUEUE_SIZE;
     this.queryEmbeddingCache = new Map();
     this.queryEmbeddingInFlight = new Map();
-    this.dailyLogMessageIds = new Map();
     this.textMicroReflectionTimers = new Map();
     this.textMicroReflectionState = new Map();
     this.microReflectionInFlight = new Set();
@@ -244,10 +258,22 @@ export class MemoryManager {
     content,
     isBot = false,
     settings,
+    lifecycle = null,
     trace = { guildId: null, channelId: null, userId: null, source: null }
   }) {
     const normalizedMessageId = String(messageId || "").trim();
     if (!normalizedMessageId) return false;
+
+    const preparedTurn = prepareDurableMemoryTurnInput({ content, lifecycle, trace });
+    if (!preparedTurn.ok) {
+      this.logMemoryTurnSyncSkipped({
+        messageId: normalizedMessageId,
+        authorId,
+        trace,
+        result: preparedTurn
+      });
+      return false;
+    }
 
     const existingJob = this.ingestQueuedJobs.get(normalizedMessageId);
     if (existingJob?.promise) {
@@ -258,7 +284,7 @@ export class MemoryManager {
       messageId: normalizedMessageId,
       authorId,
       authorName,
-      content,
+      content: preparedTurn.content,
       isBot,
       trace
     });
@@ -285,9 +311,13 @@ export class MemoryManager {
       messageId: normalizedMessageId,
       authorId: String(authorId || "").trim(),
       authorName: String(authorName || "unknown"),
-      content,
+      content: preparedTurn.content,
       isBot: Boolean(isBot),
       settings,
+      lifecycle: {
+        status: preparedTurn.lifecycleStatus || "completed",
+        captureReason: preparedTurn.captureReason || null
+      },
       trace,
       resolve: resolveJob,
       promise
@@ -363,31 +393,28 @@ export class MemoryManager {
   async processIngestMessage({
     messageId,
     authorId,
-    authorName,
+    authorName: _authorName,
     content,
     isBot = false,
     settings = null,
+    lifecycle = null,
     trace = { guildId: null, channelId: null, userId: null, source: null }
   }) {
-    const cleanedContent = cleanDailyEntryContent(content);
-    if (!cleanedContent) return;
+    const preparedTurn = prepareDurableMemoryTurnInput({ content, lifecycle, trace });
+    if (!preparedTurn.ok) {
+      this.logMemoryTurnSyncSkipped({
+        messageId,
+        authorId,
+        trace,
+        result: preparedTurn
+      });
+      return;
+    }
+    const cleanedContent = preparedTurn.content;
     const scopeGuildId = String(trace?.guildId || "").trim();
     const scopeChannelId = String(trace?.channelId || "").trim();
 
-    const source = String(trace?.source || "").trim();
-    const isVoice = source.startsWith("voice");
-
     try {
-      await this.appendDailyLogEntry({
-        messageId,
-        authorId,
-        authorName,
-        guildId: scopeGuildId,
-        channelId: scopeChannelId,
-        content: cleanedContent,
-        isVoice
-      });
-      this.queueMemoryRefresh();
       void this.ensureConversationMessageVector({
         messageId,
         content: cleanedContent,
@@ -403,7 +430,7 @@ export class MemoryManager {
         });
       }
     } catch (error) {
-      this.logMemoryError("daily_log_write", error, { messageId, userId: authorId });
+      this.logMemoryError("ingest_process", error, { messageId, userId: authorId });
     }
   }
 
@@ -1055,16 +1082,24 @@ export class MemoryManager {
         const kind = String(turn?.kind || "speech").trim();
         return kind === "speech" || !kind;
       })
-      .map((turn) => ({
-        timestampIso: Number.isFinite(Number(turn?.at))
-          ? new Date(Number(turn.at)).toISOString()
-          : "",
-        timestampMs: Number(turn?.at) || 0,
-        author: String(turn?.speakerName || "unknown").trim() || "unknown",
-        authorId: String(turn?.userId || "").trim() || null,
-        isBot: String(turn?.role || "").trim() === "assistant",
-        content: String(turn?.text || "").trim()
-      }))
+      .map((turn) => {
+        const preparedTurn = prepareDurableMemoryTurnInput({
+          content: turn?.text,
+          lifecycle: {
+            status: String(turn?.lifecycleStatus || "completed").trim() || "completed"
+          }
+        });
+        return {
+          timestampIso: Number.isFinite(Number(turn?.at))
+            ? new Date(Number(turn.at)).toISOString()
+            : "",
+          timestampMs: Number(turn?.at) || 0,
+          author: String(turn?.speakerName || "unknown").trim() || "unknown",
+          authorId: String(turn?.userId || "").trim() || null,
+          isBot: String(turn?.role || "").trim() === "assistant",
+          content: preparedTurn.ok ? preparedTurn.content : ""
+        };
+      })
       .filter((entry) => entry.content);
     if (!normalizedEntries.length) {
       return { ok: false, reason: "no_entries" };
@@ -1126,16 +1161,24 @@ export class MemoryManager {
         const kind = String(turn?.kind || "speech").trim();
         return kind === "speech" || !kind;
       })
-      .map((turn) => ({
-        timestampIso: Number.isFinite(Number(turn?.at))
-          ? new Date(Number(turn.at)).toISOString()
-          : "",
-        timestampMs: Number(turn?.at) || 0,
-        author: String(turn?.speakerName || "unknown").trim() || "unknown",
-        authorId: String(turn?.userId || "").trim() || null,
-        isBot: String(turn?.role || "").trim() === "assistant",
-        content: String(turn?.text || "").trim()
-      }))
+      .map((turn) => {
+        const preparedTurn = prepareDurableMemoryTurnInput({
+          content: turn?.text,
+          lifecycle: {
+            status: String(turn?.lifecycleStatus || "completed").trim() || "completed"
+          }
+        });
+        return {
+          timestampIso: Number.isFinite(Number(turn?.at))
+            ? new Date(Number(turn.at)).toISOString()
+            : "",
+          timestampMs: Number(turn?.at) || 0,
+          author: String(turn?.speakerName || "unknown").trim() || "unknown",
+          authorId: String(turn?.userId || "").trim() || null,
+          isBot: String(turn?.role || "").trim() === "assistant",
+          content: preparedTurn.ok ? preparedTurn.content : ""
+        };
+      })
       .filter((entry) => entry.content);
     if (!normalizedEntries.length) {
       return { ok: false, reason: "no_entries" };
@@ -1275,7 +1318,7 @@ export class MemoryManager {
     limit = HYBRID_FACT_LIMIT
   }: {
     guildId?: string | null;
-    scope?: "user" | "guild" | "owner" | "owner_private" | "all";
+    scope?: DurableFactSearchScope;
     channelId?: string | null;
     queryText: string;
     subjectIds?: string[] | null;
@@ -1286,9 +1329,7 @@ export class MemoryManager {
   }) {
     const scopeGuildId = String(guildId || "").trim() || null;
     const rawScopeMode = String(scope || "all").trim().toLowerCase();
-    const scopeMode = rawScopeMode === "user" || rawScopeMode === "guild" || rawScopeMode === "owner" || rawScopeMode === "owner_private" || rawScopeMode === "all"
-      ? rawScopeMode
-      : "all";
+    const scopeMode = (DURABLE_FACT_SEARCH_SCOPE_SET.has(rawScopeMode) ? rawScopeMode : "all") as DurableFactSearchScope;
     const normalizedTrace =
       trace && typeof trace === "object"
         ? trace as Record<string, unknown>
@@ -1302,13 +1343,24 @@ export class MemoryManager {
     ];
     const hasSubjectFilter = normalizedSubjectIds.length > 0;
     const scopedSubjectIds = normalizedSubjectIds.length ? normalizedSubjectIds : null;
-    const includeUserScope =
+    const factScopes: MemoryFactScope[] = [];
+    if (
       scopeMode === "user" ||
       scopeMode === "owner_private" ||
-      (scopeMode === "all" && (!scopeGuildId || hasSubjectFilter));
-    const includeGuildScope = (scopeMode === "all" || scopeMode === "guild" || scopeMode === "owner_private") && Boolean(scopeGuildId);
-    const includeOwnerScope = scopeMode === "owner" || scopeMode === "owner_private";
-    if (!includeUserScope && !includeGuildScope && !includeOwnerScope) return [];
+      (scopeMode === "all" && (!scopeGuildId || hasSubjectFilter))
+    ) {
+      factScopes.push("user");
+    }
+    if ((scopeMode === "all" || scopeMode === "guild" || scopeMode === "owner_private") && scopeGuildId) {
+      factScopes.push("guild");
+    }
+    if (scopeMode === "owner" || scopeMode === "owner_private") {
+      factScopes.push("owner");
+    }
+    if (scopeMode === "project" || scopeMode === "task" || scopeMode === "swarm" || scopeMode === "collaborator") {
+      factScopes.push(scopeMode);
+    }
+    if (!factScopes.length) return [];
 
     const isFullMemoryQuery = queryText === "__ALL__";
     const boundedLimit = isFullMemoryQuery
@@ -1317,31 +1369,13 @@ export class MemoryManager {
 
     if (isFullMemoryQuery) {
       const rows = mergeUniqueFactCandidates(
-        includeUserScope
-          ? this.store.getFactsForScope?.({
-            scope: "user",
-            subjectIds: scopedSubjectIds,
-            factTypes,
-            limit: Math.max(boundedLimit, 24)
-          }) || []
-          : [],
-        includeGuildScope
-          ? this.store.getFactsForScope?.({
-            scope: "guild",
-            guildId: scopeGuildId,
-            subjectIds: scopedSubjectIds,
-            factTypes,
-            limit: Math.max(boundedLimit, 24)
-          }) || []
-          : [],
-        includeOwnerScope
-          ? this.store.getFactsForScope?.({
-            scope: "owner",
-            subjectIds: scopedSubjectIds,
-            factTypes,
-            limit: Math.max(boundedLimit, 24)
-          }) || []
-          : []
+        ...factScopes.map((factScope) => this.store.getFactsForScope?.({
+          scope: factScope,
+          guildId: factScope === "guild" ? scopeGuildId : null,
+          subjectIds: scopedSubjectIds,
+          factTypes,
+          limit: Math.max(boundedLimit, 24)
+        }) || [])
       );
       const sortedRows = sortProfileFacts(rows);
       return sortedRows.map((row) => ({
@@ -1391,7 +1425,7 @@ export class MemoryManager {
         }).catch(() => null)
         : null;
 
-    const collectScopeCandidates = (factScope: "user" | "guild" | "owner") => {
+    const collectScopeCandidates = (factScope: MemoryFactScope) => {
       if (factScope === "guild" && !scopeGuildId) return;
       const scopeGuild = factScope === "guild" ? scopeGuildId : null;
       const recentRows = this.store.getFactsForScope?.({
@@ -1428,9 +1462,7 @@ export class MemoryManager {
       }
     };
 
-    if (includeUserScope) collectScopeCandidates("user");
-    if (includeGuildScope) collectScopeCandidates("guild");
-    if (includeOwnerScope) collectScopeCandidates("owner");
+    for (const factScope of factScopes) collectScopeCandidates(factScope);
 
     const candidates = mergeUniqueFactCandidates(
       semanticCandidates,
@@ -1766,17 +1798,17 @@ export class MemoryManager {
     const peopleSection = this.buildPeopleSection(normalizedGuildId);
     const selfSection = this.buildSelfSection(MAX_SECTION_FACTS, normalizedGuildId);
     const ownerSection = normalizedGuildId ? [] : this.buildOwnerSection(MAX_SECTION_FACTS);
-    const recentDailyEntries = await this.getRecentDailyEntries({
-      days: MARKDOWN_RECENT_DAILY_DAYS,
-      maxEntries: MARKDOWN_RECENT_DAILY_MAX_ENTRIES,
-      guildId: normalizedGuildId
-    });
-    const highlightsSection = buildHighlightsSection(recentDailyEntries, MARKDOWN_HIGHLIGHT_MAX_ITEMS);
+    const recentMessageRows = normalizedGuildId && typeof this.store?.getRecentMessagesAcrossGuild === "function"
+      ? this.store.getRecentMessagesAcrossGuild(normalizedGuildId, 120)
+      : [];
+    const highlightsSection = buildHighlightsSection(
+      recentMessageRows.map((row) => ({
+        author: row.authorName || row.author_name || "unknown",
+        text: row.content || ""
+      })),
+      MARKDOWN_HIGHLIGHT_MAX_ITEMS
+    );
     const loreSection = this.buildLoreSection(MAX_SECTION_FACTS, normalizedGuildId);
-    const dailyFiles = await this.getRecentDailyFiles(MARKDOWN_RECENT_DAILY_FILES);
-    const dailyFilesLine = dailyFiles.length
-      ? dailyFiles.map((filePath) => `memory/${path.basename(filePath)}`).join(", ")
-      : "(No daily files yet.)";
     const scopeLine = normalizedGuildId
       ? `_Operator-facing summary for guild \`${normalizedGuildId}\`. Runtime prompts use indexed durable facts + retrieval, not this markdown file directly._`
       : "_Operator-facing summary. Runtime prompts use indexed durable facts + retrieval, not this markdown file directly._";
@@ -1803,11 +1835,8 @@ export class MemoryManager {
       "## Recent Journal Highlights",
       ...(highlightsSection.length ? highlightsSection : ["- (No recent highlights yet.)"]),
       "",
-      "## Source Daily Logs",
-      "- Daily logs are append-only in `memory/YYYY-MM-DD.md`.",
-      normalizedGuildId
-        ? `- Recent files: ${dailyFilesLine} (entries filtered to guild \`${normalizedGuildId}\`).`
-        : `- Recent files: ${dailyFilesLine}`
+      "## Source Data",
+      "- Durable facts, conversation messages, vectors, and reflection runs live in SQLite. Markdown is a generated operator snapshot only."
     ].join("\n");
   }
 
@@ -1837,8 +1866,6 @@ export class MemoryManager {
       conversationVectorsDeleted: 0,
       reflectionEventsDeleted: 0,
       sessionSummariesDeleted: 0,
-      journalEntriesDeleted: 0,
-      journalFilesTouched: 0,
       summaryRefreshed: false
       } as const;
     }
@@ -1869,8 +1896,6 @@ export class MemoryManager {
       typeof this.store?.deleteSessionSummariesForGuild === "function"
         ? this.store.deleteSessionSummariesForGuild(normalizedGuildId)
         : { deleted: 0 };
-    const journalResult = await this.purgeGuildEntriesFromDailyLogs(normalizedGuildId);
-
     let summaryRefreshed = false;
     try {
       await this.refreshMemoryMarkdown();
@@ -1889,8 +1914,6 @@ export class MemoryManager {
       conversationVectorsDeleted: Number(messageResult?.vectorsDeleted || 0),
       reflectionEventsDeleted: Number(reflectionResult?.deleted || 0),
       sessionSummariesDeleted: Number(sessionSummaryResult?.deleted || 0),
-      journalEntriesDeleted: Number(journalResult?.entriesDeleted || 0),
-      journalFilesTouched: Number(journalResult?.filesTouched || 0),
       summaryRefreshed
     } as const;
   }
@@ -1898,8 +1921,13 @@ export class MemoryManager {
   buildPeopleSection(guildId: string | null = null) {
     const normalizedGuildId = String(guildId || "").trim() || null;
     const subjects = this.store
-      .getMemorySubjects(MAX_MEMORY_SUBJECTS, normalizedGuildId ? { guildId: normalizedGuildId } : null)
-      .filter((subjectRow) => subjectRow.subject !== LORE_SUBJECT && subjectRow.subject !== SELF_SUBJECT);
+      .getMemorySubjects(
+        MAX_MEMORY_SUBJECTS,
+        normalizedGuildId
+          ? { guildId: normalizedGuildId, scopes: GUILD_PEOPLE_SUMMARY_SCOPES }
+          : { scopes: PEOPLE_SUMMARY_SCOPES }
+      )
+      .filter(isPeopleSummarySubject);
     const factsByScopedSubject = this.getPeopleFactsByScopedSubject(subjects);
     const peopleLines = [];
 
@@ -1932,6 +1960,7 @@ export class MemoryManager {
   getPeopleFactsByScopedSubject(subjectRows = []) {
     const subjectsByScope = new Map();
     for (const subjectRow of subjectRows) {
+      if (!isPeopleSummarySubject(subjectRow)) continue;
       const scope = String(subjectRow?.scope || "guild").trim().toLowerCase();
       const guildId = String(subjectRow?.guild_id || "").trim();
       const subjectId = String(subjectRow?.subject || "").trim();
@@ -2036,6 +2065,143 @@ export class MemoryManager {
     return durableLoreLines.slice(0, Math.max(1, maxItems));
   }
 
+  async persistSwarmTaskHandoff({
+    taskId,
+    workerId = null,
+    projectKey = null,
+    status = "done",
+    resultText = "",
+    handoff = null,
+    guildId = null,
+    channelId = null,
+    userId = null,
+    source = "swarm_task_handoff"
+  }: {
+    taskId?: string | null;
+    workerId?: string | null;
+    projectKey?: string | null;
+    status?: string | null;
+    resultText?: string | null;
+    handoff?: SubAgentTaskHandoff | null;
+    guildId?: string | null;
+    channelId?: string | null;
+    userId?: string | null;
+    source?: string | null;
+  }) {
+    const normalizedStatus = String(status || "done").trim().toLowerCase();
+    if (normalizedStatus !== "done") {
+      return { ok: false, reason: "terminal_status_not_persisted", written: 0, skipped: 0 } as const;
+    }
+
+    const normalizedTaskId = normalizeWorkMemorySubject(taskId, "task");
+    const normalizedProject = normalizeWorkMemorySubject(projectKey || "project", "project");
+    const normalizedWorkerId = sanitizeInline(workerId || "unknown", 80) || "unknown";
+    const normalizedUserId = normalizeWorkMemorySubject(userId || "", "");
+    const summary = sanitizeInline(handoff?.summary || resultText || "", 150);
+    const changedFiles = Array.isArray(handoff?.changedFiles) ? handoff.changedFiles : [];
+    const tests = Array.isArray(handoff?.tests) ? handoff.tests : [];
+    const decisions = Array.isArray(handoff?.decisions) ? handoff.decisions : [];
+    const blockers = Array.isArray(handoff?.blockers) ? handoff.blockers : [];
+    const followUps = Array.isArray(handoff?.followUps) ? handoff.followUps : [];
+    const writes: Array<{
+      scope: "project" | "task" | "swarm" | "collaborator";
+      subject: string;
+      line: string;
+      factType: string;
+    }> = [];
+    const addWrite = (
+      scope: "project" | "task" | "swarm" | "collaborator",
+      subject: string,
+      line: string,
+      factType = scope === "project" || scope === "collaborator" ? "project" : "other"
+    ) => {
+      const cleanLine = sanitizeInline(line, 170);
+      const cleanSubject = normalizeWorkMemorySubject(subject, "");
+      if (!cleanLine || !cleanSubject) return;
+      if (writes.length >= WORK_HANDOFF_FACT_LIMIT) return;
+      writes.push({ scope, subject: cleanSubject, line: cleanLine, factType });
+    };
+
+    if (summary) {
+      addWrite("task", normalizedTaskId, `Task ${normalizedTaskId} completed: ${summary}`);
+      addWrite("project", normalizedProject, `Task ${normalizedTaskId} completed: ${summary}`);
+      addWrite("swarm", SWARM_SUBJECT, `Worker ${normalizedWorkerId} completed task ${normalizedTaskId}: ${summary}`);
+      if (normalizedUserId) {
+        addWrite("collaborator", normalizedUserId, `Collaborator ${normalizedUserId} drove task ${normalizedTaskId}: ${summary}`);
+      }
+    }
+
+    const compactFiles = changedFiles.map((value) => sanitizeInline(value, 80)).filter(Boolean).slice(0, 12);
+    if (compactFiles.length) {
+      addWrite("task", normalizedTaskId, `Changed files for task ${normalizedTaskId}: ${compactFiles.join(", ")}`);
+      addWrite("project", normalizedProject, `Task ${normalizedTaskId} changed files: ${compactFiles.join(", ")}`);
+    }
+
+    for (const decision of decisions.map((value) => sanitizeInline(value, 130)).filter(Boolean).slice(0, 5)) {
+      addWrite("task", normalizedTaskId, `Decision in task ${normalizedTaskId}: ${decision}`, "project");
+      addWrite("project", normalizedProject, `Decision from task ${normalizedTaskId}: ${decision}`, "project");
+      if (normalizedUserId) addWrite("collaborator", normalizedUserId, `Decision from task ${normalizedTaskId}: ${decision}`, "project");
+    }
+
+    for (const testLine of tests.map((value) => sanitizeInline(value, 130)).filter(Boolean).slice(0, 5)) {
+      addWrite("task", normalizedTaskId, `Verification for task ${normalizedTaskId}: ${testLine}`);
+      addWrite("project", normalizedProject, `Task ${normalizedTaskId} verification: ${testLine}`);
+    }
+
+    for (const followUp of followUps.map((value) => sanitizeInline(value, 130)).filter(Boolean).slice(0, 5)) {
+      addWrite("task", normalizedTaskId, `Follow-up from task ${normalizedTaskId}: ${followUp}`, "project");
+      addWrite("project", normalizedProject, `Follow-up from task ${normalizedTaskId}: ${followUp}`, "project");
+    }
+
+    for (const blocker of blockers.map((value) => sanitizeInline(value, 130)).filter(Boolean).slice(0, 3)) {
+      addWrite("task", normalizedTaskId, `Blocker noted for task ${normalizedTaskId}: ${blocker}`);
+    }
+
+    if (!writes.length) return { ok: false, reason: "empty_handoff", written: 0, skipped: 0 } as const;
+
+    const evidenceText = sanitizeInline(`swarm handoff from worker ${normalizedWorkerId} for task ${normalizedTaskId}`, MAX_DIRECTIVE_EVIDENCE_CHARS);
+    let written = 0;
+    let skipped = 0;
+    for (const [index, item] of writes.entries()) {
+      const result = await this.rememberDirectiveLineDetailed({
+        line: item.line,
+        sourceMessageId: `swarm-handoff-${normalizedTaskId}-${item.scope}-${index + 1}`,
+        userId: String(userId || ""),
+        guildId,
+        channelId,
+        sourceText: evidenceText,
+        scope: item.scope,
+        subjectOverride: item.subject,
+        factType: item.factType,
+        confidence: 0.78,
+        validationMode: "strict",
+        evidenceText
+      });
+      if (result?.ok) {
+        written += 1;
+      } else {
+        skipped += 1;
+      }
+    }
+
+    this.store.logAction?.({
+      kind: "memory_runtime",
+      guildId,
+      channelId,
+      userId,
+      content: "swarm_task_handoff_persisted",
+      metadata: {
+        source,
+        taskId: normalizedTaskId,
+        workerId: normalizedWorkerId,
+        projectKey: normalizedProject,
+        written,
+        skipped
+      }
+    });
+    return { ok: written > 0, reason: written > 0 ? "persisted" : "all_skipped", written, skipped } as const;
+  }
+
   async rememberDirectiveLineDetailed({
     line,
     sourceMessageId,
@@ -2067,7 +2233,12 @@ export class MemoryManager {
   }) {
     const scopeGuildId = String(guildId || "").trim() || null;
     const scopeConfig = resolveDirectiveScopeConfig(scope);
-    const memoryScope = scopeConfig.scope === "lore" ? "guild" : scopeConfig.scope === "owner" ? "owner" : "user";
+    const memoryScope: MemoryFactScope =
+      scopeConfig.scope === "lore"
+        ? "guild"
+        : scopeConfig.scope === "self"
+          ? "user"
+          : scopeConfig.scope;
     if (memoryScope === "guild" && !scopeGuildId) {
       return {
         ok: false,
@@ -2084,7 +2255,7 @@ export class MemoryManager {
       };
     }
     const scopedUserId =
-      (memoryScope === "user" || memoryScope === "owner") && subject !== SELF_SUBJECT
+      (memoryScope === "user" || memoryScope === "owner" || memoryScope === "collaborator") && subject !== SELF_SUBJECT
         ? String(subjectOverride || userId || subject).trim() || null
         : null;
 
@@ -2288,43 +2459,6 @@ export class MemoryManager {
     };
   }
 
-  async rememberDirectiveLine(args) {
-    const result = await this.rememberDirectiveLineDetailed(args);
-    return Boolean(result?.ok);
-  }
-
-  async appendDailyLogEntry({ messageId = "", authorId, authorName, guildId = "", channelId = "", content, isVoice = false }) {
-    const now = new Date();
-    const dateKey = formatDateLocal(now);
-    const dailyFilePath = path.join(this.memoryDirPath, `${dateKey}.md`);
-    const safeAuthorName = sanitizeInline(authorName || "unknown", 80);
-    const safeAuthorId = sanitizeInline(authorId || "unknown", 40);
-    const safeMessageId = sanitizeInline(messageId || "", 40);
-    const safeGuildId = sanitizeInline(guildId || "", 40);
-    const safeChannelId = sanitizeInline(channelId || "", 40);
-    const scopeFragment = [
-      safeGuildId ? `guild:${safeGuildId}` : "",
-      safeChannelId ? `channel:${safeChannelId}` : "",
-      safeMessageId ? `message:${safeMessageId}` : "",
-      isVoice ? "voice" : ""
-    ]
-      .filter(Boolean)
-      .join(" ");
-    const scopedContent = scopeFragment ? `[${scopeFragment}] ${content}` : content;
-    const line = `- ${now.toISOString()} | ${safeAuthorName} (${safeAuthorId}) | ${scopedContent}`;
-
-    await fs.mkdir(this.memoryDirPath, { recursive: true });
-    await this.ensureDailyLogHeader(dailyFilePath, dateKey);
-    if (safeMessageId) {
-      const knownMessageIds = await this.getDailyLogMessageIds(dailyFilePath);
-      if (knownMessageIds.has(safeMessageId)) return;
-      await fs.appendFile(dailyFilePath, `${line}\n`, "utf8");
-      knownMessageIds.add(safeMessageId);
-      return;
-    }
-    await fs.appendFile(dailyFilePath, `${line}\n`, "utf8");
-  }
-
   clearScheduledTextMicroReflectionsForGuild(guildId: string) {
     const normalizedGuildId = String(guildId || "").trim();
     if (!normalizedGuildId) return;
@@ -2363,156 +2497,27 @@ export class MemoryManager {
     }
   }
 
-  async getDailyLogMessageIds(dailyFilePath) {
-    const cacheKey = String(dailyFilePath || "").trim();
-    if (!cacheKey) return new Set();
-    const cached = this.dailyLogMessageIds.get(cacheKey);
-    if (cached) return cached;
-
-    const messageIds = new Set();
+  logMemoryTurnSyncSkipped({ messageId = "", authorId = "", trace = null, result = null } = {}) {
+    if (!result || result.reason === "empty_content") return;
     try {
-      const existing = await fs.readFile(cacheKey, "utf8");
-      for (const line of existing.split("\n")) {
-        const match = line.match(/\bmessage:([^\]\s]+)/u);
-        if (match?.[1]) {
-          messageIds.add(String(match[1]).trim());
+      this.store.logAction?.({
+        kind: "memory_runtime",
+        guildId: String(trace?.guildId || "").trim() || null,
+        channelId: String(trace?.channelId || "").trim() || null,
+        userId: String(authorId || trace?.userId || "").trim() || null,
+        messageId: String(messageId || "").trim() || null,
+        content: "memory_turn_sync_skipped",
+        metadata: {
+          reason: result.reason || "unknown",
+          lifecycleStatus: result.lifecycleStatus || null,
+          captureReason: result.captureReason || null,
+          source: String(trace?.source || "").trim() || null,
+          contentChars: String(result.content || "").length
         }
-      }
+      });
     } catch {
-      // Ignore missing/unreadable daily file and bootstrap with an empty index.
+      // Avoid cascading failures while skipping non-durable turn sync.
     }
-    this.dailyLogMessageIds.set(cacheKey, messageIds);
-    return messageIds;
-  }
-
-  async ensureDailyLogHeader(dailyFilePath, dateKey) {
-    if (this.initializedDailyFiles.has(dailyFilePath)) return;
-
-    try {
-      await fs.access(dailyFilePath);
-    } catch {
-      const header = [
-        `# Daily Memory Log ${dateKey}`,
-        "",
-        "- Append-only chat journal used to distill `memory/MEMORY.md`.",
-        "",
-        "## Entries",
-        ""
-      ].join("\n");
-
-      try {
-        await fs.writeFile(dailyFilePath, header, { encoding: "utf8", flag: "wx" });
-      } catch (error) {
-        if (error?.code !== "EEXIST") throw error;
-      }
-    }
-
-    this.initializedDailyFiles.add(dailyFilePath);
-  }
-
-  async purgeGuildEntriesFromDailyLogs(guildId: string) {
-    const normalizedGuildId = String(guildId || "").trim();
-    if (!normalizedGuildId) {
-      return {
-        entriesDeleted: 0,
-        filesTouched: 0
-      };
-    }
-
-    let dailyFileNames: string[] = [];
-    try {
-      dailyFileNames = (await fs.readdir(this.memoryDirPath))
-        .filter((name) => DAILY_FILE_PATTERN.test(name))
-        .sort();
-    } catch {
-      return {
-        entriesDeleted: 0,
-        filesTouched: 0
-      };
-    }
-
-    let entriesDeleted = 0;
-    let filesTouched = 0;
-    for (const fileName of dailyFileNames) {
-      const dailyFilePath = path.join(this.memoryDirPath, fileName);
-      let text = "";
-      try {
-        text = await fs.readFile(dailyFilePath, "utf8");
-      } catch {
-        continue;
-      }
-
-      const lines = text.split("\n");
-      const keptLines: string[] = [];
-      let fileRemovedCount = 0;
-      for (const line of lines) {
-        const parsed = parseDailyEntryLineWithScope(line);
-        if (parsed && String(parsed.guildId || "").trim() === normalizedGuildId) {
-          fileRemovedCount += 1;
-          continue;
-        }
-        keptLines.push(line);
-      }
-
-      if (!fileRemovedCount) continue;
-
-      while (keptLines.length > 0 && keptLines[keptLines.length - 1] === "") {
-        keptLines.pop();
-      }
-      await fs.writeFile(dailyFilePath, `${keptLines.join("\n")}\n`, "utf8");
-      this.dailyLogMessageIds.delete(dailyFilePath);
-      this.initializedDailyFiles.add(dailyFilePath);
-      entriesDeleted += fileRemovedCount;
-      filesTouched += 1;
-    }
-
-    return {
-      entriesDeleted,
-      filesTouched
-    };
-  }
-
-  async getRecentDailyFiles(limit = 5) {
-    try {
-      const entries = await fs.readdir(this.memoryDirPath);
-      return entries
-        .filter((name) => DAILY_FILE_PATTERN.test(name))
-        .sort()
-        .reverse()
-        .slice(0, Math.max(1, limit))
-        .map((name) => path.join(this.memoryDirPath, name));
-    } catch {
-      return [];
-    }
-  }
-
-  async getRecentDailyEntries({ days = 3, maxEntries = 120, guildId = null } = {}) {
-    const files = await this.getRecentDailyFiles(days);
-    const normalizedGuildId = String(guildId || "").trim() || null;
-    const entries = [];
-
-    for (const filePath of files) {
-      let text = "";
-      try {
-        text = await fs.readFile(filePath, "utf8");
-      } catch {
-        continue;
-      }
-
-      for (const line of text.split("\n")) {
-        const parsed = parseDailyEntryLineWithScope(line);
-        if (!parsed) continue;
-        if (normalizedGuildId && String(parsed.guildId || "").trim() !== normalizedGuildId) continue;
-        entries.push({
-          author: parsed.author,
-          text: parsed.content,
-          timestampMs: parsed.timestampMs
-        });
-      }
-    }
-
-    entries.sort((a, b) => b.timestampMs - a.timestampMs);
-    return entries.slice(0, Math.max(1, maxEntries));
   }
 
   logMemoryError(scope, error, metadata = null) {
@@ -2527,15 +2532,6 @@ export class MemoryManager {
     }
   }
 
-  async runDailyReflection(settings) {
-    if (!settings?.memory?.enabled || !settings?.memory?.reflection?.enabled) return;
-    return await runDailyReflection({
-      memory: this,
-      store: this.store,
-      llm: this.llm,
-      settings
-    });
-  }
 }
 
 

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { PromptSnapshot, VoiceSession } from "../../hooks/useVoiceSSE";
 import { CopyButton, Section } from "../ui";
-import { normalizeFollowupPrompts, normalizePromptText } from "../../utils/voiceHelpers";
+import { normalizeFollowupPrompts, normalizePromptText, normalizePromptTiers } from "../../utils/voiceHelpers";
 import {
   formatPromptBundleForCopy,
   hasPromptSnapshot,
@@ -22,6 +22,7 @@ function PromptSnapshotCard({
   const followups = normalizeFollowupPrompts(bundle?.followupUserPrompts);
   const followupSteps = Math.max(0, Math.floor(Number(bundle?.followupSteps) || followups.length));
   const tools = Array.isArray(bundle?.tools) ? bundle.tools.filter((t) => t.name) : [];
+  const promptTiers = normalizePromptTiers(bundle?.promptTiers);
   const [selectedTool, setSelectedTool] = useState<string | null>(null);
   const activeTool = tools.find((t) => t.name === selectedTool) || null;
   const hasData = hasPromptSnapshot(snapshot);
@@ -38,6 +39,23 @@ function PromptSnapshotCard({
         </div>
 
         <div className="vm-prompt-body">
+          {promptTiers.length > 0 && (
+            <div className="vm-prompt-block">
+              <span className="vm-mini-label">Prompt Tiers</span>
+              <div className="vm-tools-list">
+                {promptTiers.map((tier) => (
+                  <span
+                    key={tier.key}
+                    className={`vm-tool-chip vm-tool-fn${tier.present ? " vm-tool-chip-active" : ""}`}
+                    title={`${tier.sources.join(", ") || "unknown"}${tier.details ? ` ${JSON.stringify(tier.details)}` : ""}`}
+                  >
+                    {tier.label}: {tier.present ? "in" : "out"}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="vm-prompt-block">
             <div className="vm-prompt-block-header">
               <span className="vm-mini-label">System Prompt</span>

@@ -3,12 +3,14 @@ import type { ClankyPeer, SwarmTask } from "./swarmPeer.ts";
 import {
   EMPTY_USAGE,
   type SubAgentProgressEvent,
+  type SubAgentTaskHandoff,
   type SubAgentTurnResult,
   type SubAgentUsage
 } from "./subAgentSession.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 300_000;
 const DEFAULT_ACTIVITY_POLL_MS = 1000;
+const TERMINAL_HANDOFF_GRACE_MS = 350;
 
 type SwarmTaskWaiterPeer = Pick<ClankyPeer, "getTask" | "waitForActivity" | "scope">;
 
@@ -75,6 +77,47 @@ function parseUsageAnnotation(content: string): { usage: SubAgentUsage; costUsd:
   }
 }
 
+function normalizeStringList(value: unknown, maxItems = 12): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item || "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, Math.max(1, maxItems));
+}
+
+export function parseHandoffAnnotation(content: string): SubAgentTaskHandoff | null {
+  try {
+    const parsed: unknown = JSON.parse(String(content || "{}"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const record = parsed as Record<string, unknown>;
+    const summary = String(record.summary || record.resultSummary || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 600);
+    const handoff: SubAgentTaskHandoff = {
+      summary,
+      changedFiles: normalizeStringList(record.changedFiles ?? record.filesChanged ?? record.files, 40),
+      tests: normalizeStringList(record.tests, 20),
+      decisions: normalizeStringList(record.decisions, 20),
+      blockers: normalizeStringList(record.blockers, 20),
+      followUps: normalizeStringList(record.followUps ?? record.followups ?? record.follow_up_recommendations, 20)
+    };
+    if (
+      !handoff.summary &&
+      handoff.changedFiles.length === 0 &&
+      handoff.tests.length === 0 &&
+      handoff.decisions.length === 0 &&
+      handoff.blockers.length === 0 &&
+      handoff.followUps.length === 0
+    ) {
+      return null;
+    }
+    return handoff;
+  } catch {
+    return null;
+  }
+}
+
 function readTaskContextRows({
   dbPath,
   scope,
@@ -103,7 +146,12 @@ function readTaskContextRows({
   }
 }
 
-function buildResultFromTask(task: SwarmTask, usage: SubAgentUsage, costUsd: number): SubAgentTurnResult {
+function buildResultFromTask(
+  task: SwarmTask,
+  usage: SubAgentUsage,
+  costUsd: number,
+  handoff: SubAgentTaskHandoff | null = null
+): SubAgentTurnResult {
   const text = String(task.result || "").trim();
   const isError = task.status === "failed" || task.status === "cancelled";
   const fallbackText =
@@ -118,6 +166,7 @@ function buildResultFromTask(task: SwarmTask, usage: SubAgentUsage, costUsd: num
     isError,
     errorMessage: isError ? (text || fallbackText) : "",
     sessionCompleted: true,
+    handoff,
     usage
   };
 }
@@ -134,6 +183,7 @@ export async function waitForTaskCompletion(
   let lastContextCreatedAt = 0;
   let usage = { ...EMPTY_USAGE };
   let costUsd = 0;
+  let handoff: SubAgentTaskHandoff | null = null;
 
   const consumeContextRows = () => {
     const rows = readTaskContextRows({
@@ -148,6 +198,11 @@ export async function waitForTaskCompletion(
         const parsed = parseUsageAnnotation(row.content);
         usage = parsed.usage;
         costUsd = parsed.costUsd;
+        continue;
+      }
+      if (row.type === "handoff") {
+        const parsed = parseHandoffAnnotation(row.content);
+        if (parsed) handoff = parsed;
         continue;
       }
       if (row.type === "progress" && !seenProgressIds.has(row.id)) {
@@ -176,7 +231,14 @@ export async function waitForTaskCompletion(
     }
     if (task.status === "done" || task.status === "failed" || task.status === "cancelled") {
       consumeContextRows();
-      return buildResultFromTask(task, usage, costUsd);
+      if (!handoff) {
+        const graceMs = Math.min(TERMINAL_HANDOFF_GRACE_MS, Math.max(0, deadline - Date.now()));
+        if (graceMs > 0) {
+          await sleep(graceMs, opts.signal);
+          consumeContextRows();
+        }
+      }
+      return buildResultFromTask(task, usage, costUsd, handoff);
     }
 
     const remainingMs = deadline - Date.now();
@@ -199,6 +261,7 @@ export async function waitForTaskCompletion(
       ? `Swarm task ${taskId} timed out while ${latestTask.status}.`
       : `Swarm task ${taskId} timed out and could not be read.`,
     sessionCompleted: true,
+    handoff,
     usage
   };
 }

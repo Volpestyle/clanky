@@ -36,7 +36,7 @@ export function StreamWatchDetail({ session }: { session: VoiceSession }) {
         {sw.lastNoteAt && <Stat label="Last Screen Note" value={relativeTime(sw.lastNoteAt)} />}
         <Stat label="Screen Notes" value={Number(sw.noteCount || visualFeed.length)} />
         {(sw.lastMemoryRecapText || sw.lastMemoryRecapAt) && (
-          <Stat label="Recap Saved" value={sw.lastMemoryRecapDurableSaved ? "durable" : "journal only"} />
+          <Stat label="Recap Saved" value={sw.lastMemoryRecapDurableSaved ? "durable fact" : "transient recap"} />
         )}
         {(sw.lastNoteProvider || sw.lastNoteModel) && (
           <Stat
@@ -68,7 +68,7 @@ export function StreamWatchDetail({ session }: { session: VoiceSession }) {
               {sw.lastMemoryRecapAt && <span className="vm-convo-time">{relativeTime(sw.lastMemoryRecapAt)}</span>}
               {sw.lastMemoryRecapReason && <span className="vm-convo-time">{sw.lastMemoryRecapReason}</span>}
               <span className="vm-convo-time">
-                {sw.lastMemoryRecapDurableSaved ? "durable fact saved" : "journaled only"}
+                {sw.lastMemoryRecapDurableSaved ? "durable fact saved" : "not promoted to durable memory"}
               </span>
             </div>
             <div className="vm-convo-text">{sw.lastMemoryRecapText || "(no recap text)"}</div>

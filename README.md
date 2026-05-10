@@ -20,7 +20,7 @@ Ask it to check your GitHub issues? It can browse the page and summarize them. A
 **Tools the Brain Can Use**
 - Web search (Brave, SerpApi) with page inspection
 - Headless browser agents for navigating and interacting with websites (with optional persistent profile for authenticated browsing)
-- Persistent memory system (append-only journals + curated facts + vector search)
+- Layered memory system (curated prompt memory + durable facts + vector search)
 - Image generation (GPT Image, Grok Imagine)
 - Video generation (Grok Imagine Video)
 - GIF search (GIPHY)
@@ -199,6 +199,6 @@ Historical or point-in-time material lives under `docs/archive/`, `docs/tmp/`, `
 ## Notes
 
 - Runtime data stored in `./data/clanker.db`
-- Memory journals: `memory/YYYY-MM-DD.md` (append-only)
-- Curated memory: `memory/MEMORY.md` (periodically distilled from journals)
+- Durable memory, message history, vectors, and reflection runs are stored in SQLite
+- Curated prompt memory and generated operator snapshots live in `memory/*.md`
 - English-only heuristic fast paths exist for specific detections (wake words, music intents, memory cleanup) — core LLM routing handles any language

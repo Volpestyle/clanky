@@ -32,6 +32,7 @@ interface ReflectionRun {
   model?: string | null;
   usdCost?: number;
   maxFacts?: number | null;
+  entryCount?: number | null;
   journalEntryCount?: number | null;
   authorCount?: number | null;
   factsExtracted?: number;
@@ -133,7 +134,7 @@ export default function MemoryReflections() {
 
   return (
     <div>
-      <PanelHead title="Daily Reflections">
+      <PanelHead title="Memory Reflections">
         <div className="memory-reflection-controls">
           <label>
             Runs
@@ -153,7 +154,7 @@ export default function MemoryReflections() {
       </PanelHead>
 
       <p className="memory-reflection-copy">
-        Review each daily reflection run, what the model extracted, and which facts were actually persisted into durable memory.
+        Review micro-reflection runs, what the model extracted, and which facts were actually persisted into durable memory.
       </p>
 
       {error ? (
@@ -165,7 +166,7 @@ export default function MemoryReflections() {
       ) : null}
 
       {runs !== null && runs.length === 0 ? (
-        <div className="memory-box">No daily reflection runs yet.</div>
+        <div className="memory-box">No memory reflection runs yet.</div>
       ) : null}
 
       {Array.isArray(runs) && runs.length > 0 ? (
@@ -222,7 +223,7 @@ export default function MemoryReflections() {
                       <span>Model</span>
                       <strong>{run.provider || "unknown"}:{run.model || "unknown"}</strong>
                     </div>
-                    <div><span>Journal entries</span><strong>{run.journalEntryCount ?? "n/a"}</strong></div>
+                    <div><span>Entries</span><strong>{run.entryCount ?? run.journalEntryCount ?? "n/a"}</strong></div>
                     <div><span>Authors</span><strong>{run.authorCount ?? "n/a"}</strong></div>
                     <div><span>Max facts</span><strong>{run.maxFacts ?? "n/a"}</strong></div>
                   </div>

@@ -505,6 +505,10 @@ export function CoreBehaviorSettingsSection({ id, form, savedForm, set, onSaniti
           Automations enabled
         </label>
       </div>
+      <p>
+        Durable memory controls saved facts, conversation recall, and reflection-based extraction. Curated prompt memory lives in local
+        `memory/*.md` files, and scoped work memory is only available to approved code-agent users.
+      </p>
 
       {form.textInitiativeEnabled && (
         <div className="split">

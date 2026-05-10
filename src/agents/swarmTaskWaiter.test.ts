@@ -64,6 +64,18 @@ test("waitForTaskCompletion returns task result, usage, and progress annotations
       costUsd: 0.123
     })
   });
+  await peer.annotate({
+    file: task.id,
+    kind: "handoff",
+    content: JSON.stringify({
+      summary: "Wired waiter completion parsing.",
+      changedFiles: ["src/agents/swarmTaskWaiter.ts"],
+      tests: ["bun test src/agents/swarmTaskWaiter.test.ts"],
+      decisions: ["Kept task result plain text and parsed handoff from annotations."],
+      blockers: [],
+      followUps: ["Use parent-side extraction before promoting to memory."]
+    })
+  });
   await peer.updateTask(task.id, {
     status: "done",
     result: "waiter complete"
@@ -86,6 +98,14 @@ test("waitForTaskCompletion returns task result, usage, and progress annotations
     outputTokens: 4,
     cacheWriteTokens: 2,
     cacheReadTokens: 1
+  });
+  assert.deepEqual(result.handoff, {
+    summary: "Wired waiter completion parsing.",
+    changedFiles: ["src/agents/swarmTaskWaiter.ts"],
+    tests: ["bun test src/agents/swarmTaskWaiter.test.ts"],
+    decisions: ["Kept task result plain text and parsed handoff from annotations."],
+    blockers: [],
+    followUps: ["Use parent-side extraction before promoting to memory."]
   });
   assert.deepEqual(progress, ["editing src/agents/swarmTaskWaiter.ts"]);
 });

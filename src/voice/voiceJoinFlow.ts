@@ -46,6 +46,10 @@ import {
   getVoiceSettings
 } from "../settings/agentStack.ts";
 import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
+import {
+  buildCuratedMemoryLogMetadata,
+  loadCuratedPromptMemory
+} from "../memory/curatedMemory.ts";
 
 const MIN_MAX_SESSION_MINUTES = 1;
 const MAX_MAX_SESSION_MINUTES = 120;
@@ -591,8 +595,24 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       const initialSoundboardCandidates = Array.isArray(initialSoundboardCandidateInfo?.candidates)
         ? initialSoundboardCandidateInfo.candidates
         : [];
+      const curatedMemory = loadCuratedPromptMemory({
+        mode: "realtime_voice",
+        ownerPrivate: false
+      });
+      manager.store.logAction({
+        kind: "memory_runtime",
+        guildId,
+        channelId: message.channelId,
+        userId,
+        content: "curated_prompt_memory_loaded",
+        metadata: {
+          source: "voice_join_realtime_base",
+          ...buildCuratedMemoryLogMetadata(curatedMemory)
+        }
+      });
       const baseVoiceInstructions = buildVoiceInstructions(settings, {
-        soundboardCandidates: initialSoundboardCandidates
+        soundboardCandidates: initialSoundboardCandidates,
+        curatedMemory
       });
       const realtimeRuntimeLogger = createRealtimeRuntimeLogger(manager, {
         guildId,

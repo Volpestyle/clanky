@@ -100,8 +100,6 @@ export interface DashboardMemory {
     conversationVectorsDeleted?: number;
     reflectionEventsDeleted?: number;
     sessionSummariesDeleted?: number;
-    journalEntriesDeleted?: number;
-    journalFilesTouched?: number;
     summaryRefreshed?: boolean;
   }>;
   loadFactProfile?(payload: {
@@ -146,7 +144,7 @@ export interface DashboardMemory {
   }): Promise<unknown[]>;
   searchDurableFacts(payload: {
     guildId?: string | null;
-    scope?: "user" | "guild" | "owner" | "owner_private" | "all";
+    scope?: "user" | "guild" | "owner" | "project" | "task" | "swarm" | "collaborator" | "owner_private" | "all";
     queryText: string;
     settings?: Record<string, unknown>;
     channelId?: string | null;

@@ -24,6 +24,7 @@ Sensitive metadata keys are redacted (`apiKey`, `token`, `accessToken`, `refresh
 
 Prompt logs for turn-level debugging are attached under `metadata.replyPrompts`
 and stay hidden by default in the dashboard Action Stream.
+Code-worker prompt logs are structural and redacted: the worker still receives curated/durable memory in its real prompt, but `metadata.replyPrompts.initialUserPrompt` records only surface, size, and memory-presence metadata so durable memories are not copied into action-log storage.
 
 Pretty stdout rules:
 
@@ -49,6 +50,7 @@ Canonical prompt-log coverage:
 - `initialUserPrompt`
 - `followupUserPrompts`
 - `followupSteps`
+- `promptTiers`
 
 The Voice tab complements these per-event logs with a live SSE snapshot view:
 

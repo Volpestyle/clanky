@@ -19,7 +19,7 @@ Use the docs in this order:
 - [`capabilities/browser.md`](capabilities/browser.md) — browser runtime behavior, `browser_browse`, persistent profiles for authenticated browsing, session continuation, cancellation, and headless visual capture
 - [`capabilities/code.md`](capabilities/code.md) — code agent runtime and worker model
 - [`capabilities/minecraft.md`](capabilities/minecraft.md) — embodied Minecraft runtime, session brain ownership, server selection, and current capability limits
-- [`capabilities/memory.md`](capabilities/memory.md) — durable memory, journals, fact extraction, and retrieval
+- [`capabilities/memory.md`](capabilities/memory.md) — curated prompt memory, durable facts, fact extraction, and retrieval
 
 ## Voice Deep Dives
 

@@ -1069,7 +1069,8 @@ export async function runVoiceReplyPipeline(
         role: "assistant",
         userId: host.client.user?.id || null,
         text: `[interrupted] ${playbackPlan.spokenText}`,
-        addressing: generatedVoiceAddressing
+        addressing: generatedVoiceAddressing,
+        lifecycleStatus: "interrupted"
       });
     }
     host.maybeClearActiveReplyInterruptionPolicy(session);

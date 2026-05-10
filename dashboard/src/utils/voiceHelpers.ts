@@ -34,3 +34,37 @@ export function normalizeFollowupPrompts(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((entry) => normalizePromptText(entry));
 }
+
+export type PromptTierSnapshot = {
+  key: string;
+  label: string;
+  present: boolean;
+  sources: string[];
+  details: Record<string, unknown> | null;
+};
+
+export function normalizePromptTiers(value: unknown): PromptTierSnapshot[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+      const record = entry as Record<string, unknown>;
+      const key = String(record.key || "").trim();
+      if (!key) return null;
+      const label = String(record.label || key).trim() || key;
+      const sources = Array.isArray(record.sources)
+        ? record.sources.map((source) => String(source || "").trim()).filter(Boolean)
+        : [];
+      const details = record.details && typeof record.details === "object" && !Array.isArray(record.details)
+        ? record.details as Record<string, unknown>
+        : null;
+      return {
+        key,
+        label,
+        present: record.present !== false,
+        sources,
+        details
+      } satisfies PromptTierSnapshot;
+    })
+    .filter((entry): entry is PromptTierSnapshot => entry !== null);
+}

@@ -15,6 +15,10 @@ import {
 } from "./promptCore.ts";
 import { buildTextCapabilitiesDocs, buildVoiceCapabilitiesDocs, type TextSystemCapabilityFlags, type VoiceSystemCapabilityFlags } from "./promptCapabilities.ts";
 import {
+  formatCuratedIdentity,
+  type CuratedPromptMemory
+} from "../memory/curatedMemory.ts";
+import {
   getMemorySettings,
   getVoiceSettings,
   getAutomationsSettings,
@@ -48,10 +52,18 @@ export function formatBehaviorMemoryFacts(facts, maxItems = 8) {
     .join("\n");
 }
 
-export function buildSystemPrompt(settings) {
+export function buildSystemPrompt(
+  settings,
+  {
+    curatedMemory = null
+  }: {
+    curatedMemory?: CuratedPromptMemory | null;
+  } = {}
+) {
   const memoryEnabled = Boolean(getMemorySettings(settings).enabled);
   const textGuidance = getPromptTextGuidance(settings, DEFAULT_PROMPT_TEXT_GUIDANCE);
   const discovery = getDiscoverySettings(settings);
+  const curatedIdentity = formatCuratedIdentity(curatedMemory);
 
   const maxMediaPromptChars = Math.max(100, Math.floor(Number(discovery.maxMediaPromptChars) || 900));
 
@@ -70,11 +82,24 @@ export function buildSystemPrompt(settings) {
     maxMediaPromptChars
   };
 
+  const personaLines = curatedIdentity
+    ? [
+        `=== IDENTITY ===`,
+        curatedIdentity,
+        `=== BASE TEXT MODE ===`,
+        `Settings fallback identity: ${getPromptBotName(settings)}, a real-feeling regular in a Discord server.`,
+        `Style: ${getPromptStyle(settings)}.`,
+        ...textGuidance
+      ]
+    : [
+        `=== PERSONA ===`,
+        `You are ${getPromptBotName(settings)}, a real-feeling regular in a Discord server.`,
+        `Style: ${getPromptStyle(settings)}.`,
+        ...textGuidance
+      ];
+
   return [
-    `=== PERSONA ===`,
-    `You are ${getPromptBotName(settings)}, a real-feeling regular in a Discord server.`,
-    `Style: ${getPromptStyle(settings)}.`,
-    ...textGuidance,
+    ...personaLines,
     `=== CAPABILITIES ===`,
     getPromptCapabilityHonestyLine(settings),
     memoryEnabled
@@ -92,9 +117,17 @@ export function buildSystemPrompt(settings) {
   ].join("\n");
 }
 
-export function buildVoiceSystemPrompt(settings) {
+export function buildVoiceSystemPrompt(
+  settings,
+  {
+    curatedMemory = null
+  }: {
+    curatedMemory?: CuratedPromptMemory | null;
+  } = {}
+) {
   const memoryEnabled = Boolean(getMemorySettings(settings).enabled);
   const voiceGuidance = getPromptVoiceGuidance(settings, DEFAULT_PROMPT_VOICE_GUIDANCE);
+  const curatedIdentity = formatCuratedIdentity(curatedMemory);
 
   const capabilityFlags: VoiceSystemCapabilityFlags = {
     webSearchEnabled: isResearchEnabled(settings),
@@ -104,12 +137,26 @@ export function buildVoiceSystemPrompt(settings) {
     screenShareEnabled: Boolean(getVoiceStreamWatchSettings(settings).enabled)
   };
 
+  const personaLines = curatedIdentity
+    ? [
+        `=== IDENTITY ===`,
+        curatedIdentity,
+        `=== BASE VOICE MODE ===`,
+        `Settings fallback identity: ${getPromptBotName(settings)}, a real-feeling regular in a Discord server speaking in live voice chat.`,
+        `Style: ${getPromptStyle(settings)}.`,
+        ...voiceGuidance,
+        ...buildVoiceToneGuardrails()
+      ]
+    : [
+        `=== PERSONA ===`,
+        `You are ${getPromptBotName(settings)}, a real-feeling regular in a Discord server speaking in live voice chat.`,
+        `Style: ${getPromptStyle(settings)}.`,
+        ...voiceGuidance,
+        ...buildVoiceToneGuardrails()
+      ];
+
   return [
-    `=== PERSONA ===`,
-    `You are ${getPromptBotName(settings)}, a real-feeling regular in a Discord server speaking in live voice chat.`,
-    `Style: ${getPromptStyle(settings)}.`,
-    ...voiceGuidance,
-    ...buildVoiceToneGuardrails(),
+    ...personaLines,
     `=== CAPABILITIES ===`,
     getPromptCapabilityHonestyLine(settings),
     memoryEnabled

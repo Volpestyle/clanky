@@ -7,6 +7,7 @@ import type {
 } from "../../hooks/useVoiceSSE";
 import {
   normalizeFollowupPrompts,
+  normalizePromptTiers,
   normalizePromptText
 } from "../../utils/voiceHelpers";
 
@@ -164,6 +165,14 @@ export function formatPromptBundleForCopy(bundle: Exclude<PromptLogBundle, null>
     `System Prompt:\n${normalizePromptText(bundle.systemPrompt) || "(empty)"}`,
     `Initial User Prompt:\n${normalizePromptText(bundle.initialUserPrompt) || "(empty)"}`
   ];
+  const promptTiers = normalizePromptTiers(bundle.promptTiers);
+  if (promptTiers.length > 0) {
+    parts.push(
+      `Prompt Tiers:\n${promptTiers
+        .map((tier) => `${tier.present ? "IN" : "OUT"} ${tier.label} (${tier.sources.join(", ") || "unknown"})`)
+        .join("\n")}`
+    );
+  }
   const followups = normalizeFollowupPrompts(bundle.followupUserPrompts);
   if (followups.length > 0) {
     parts.push(

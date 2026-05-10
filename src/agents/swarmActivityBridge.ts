@@ -1,5 +1,9 @@
 import { cancelSpawnedWorkerForTask } from "../tools/spawnCodeWorker.ts";
 import type { ClankyPeer, SwarmContextEntry, SwarmMessage, SwarmTaskStatus } from "./swarmPeer.ts";
+import type { SubAgentTaskHandoff } from "./subAgentSession.ts";
+import { parseHandoffAnnotation } from "./swarmTaskWaiter.ts";
+
+const TERMINAL_HANDOFF_GRACE_MS = 350;
 
 /**
  * Per-dispatch routing context. The bridge keeps this so progress and
@@ -28,6 +32,7 @@ export type CodeTaskTerminalEvent = {
   context: CodeTaskDispatchContext;
   status: Extract<SwarmTaskStatus, "done" | "failed" | "cancelled">;
   result: string;
+  handoff?: SubAgentTaskHandoff | null;
 };
 
 export type SwarmSpawnRequestRole = "implementation" | "review" | "research";
@@ -67,6 +72,20 @@ export type SwarmActivityBridgeOptions = {
   /** Action-log sink for telemetry. */
   logAction?: (entry: Record<string, unknown>) => void;
 };
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function findLatestHandoff(annotations: SwarmContextEntry[]) {
+  let handoff: SubAgentTaskHandoff | null = null;
+  for (const ann of annotations) {
+    if (ann.type !== "handoff") continue;
+    const parsed = parseHandoffAnnotation(ann.content);
+    if (parsed) handoff = parsed;
+  }
+  return handoff;
+}
 
 function normalizeSpawnRequestRole(value: unknown): SwarmSpawnRequestRole | null {
   const normalized = String(value || "")
@@ -339,20 +358,20 @@ export class SwarmActivityBridge {
 
     // Progress: emit one event per new `kind="progress"` annotation.
     const annotations = await peer.checkFile(ctx.taskId).catch(() => [] as SwarmContextEntry[]);
+    let handoff = findLatestHandoff(annotations);
     const seen = this.seenProgressIds.get(ctx.taskId);
-    if (seen) {
-      for (const ann of annotations) {
-        if (ann.type !== "progress") continue;
-        if (seen.has(ann.id)) continue;
-        seen.add(ann.id);
-        if (this.onProgress) {
-          await this.onProgress({
-            context: ctx,
-            annotationId: ann.id,
-            summary: String(ann.content || "").trim(),
-            createdAt: Number(ann.createdAt) || Date.now()
-          });
-        }
+    for (const ann of annotations) {
+      if (ann.type === "handoff") continue;
+      if (ann.type !== "progress" || !seen) continue;
+      if (seen.has(ann.id)) continue;
+      seen.add(ann.id);
+      if (this.onProgress) {
+        await this.onProgress({
+          context: ctx,
+          annotationId: ann.id,
+          summary: String(ann.content || "").trim(),
+          createdAt: Number(ann.createdAt) || Date.now()
+        });
       }
     }
 
@@ -361,8 +380,13 @@ export class SwarmActivityBridge {
       const result = String(task.result || "").trim();
       let terminalError: unknown = null;
       try {
+        if (!handoff) {
+          await sleep(TERMINAL_HANDOFF_GRACE_MS);
+          const lateAnnotations = await peer.checkFile(ctx.taskId).catch(() => [] as SwarmContextEntry[]);
+          handoff = findLatestHandoff(lateAnnotations);
+        }
         if (this.onTerminal) {
-          await this.onTerminal({ context: ctx, status, result });
+          await this.onTerminal({ context: ctx, status, result, handoff });
         }
       } catch (error) {
         terminalError = error;

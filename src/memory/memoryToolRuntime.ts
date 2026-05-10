@@ -1,12 +1,15 @@
 import { clamp } from "../utils.ts";
 import { isConfiguredOwnerUserId } from "../config.ts";
+import { isCodeAgentUserAllowed } from "../agents/codeAgentSettings.ts";
 import { isOwnerPrivateContext } from "./memoryContext.ts";
 import {
+  SWARM_SUBJECT,
   isBehavioralDirectiveLikeFactText,
   isUnsafeMemoryFactText,
   isInstructionLikeFactText,
   normalizeFactType,
-  normalizeMemoryLineInput
+  normalizeMemoryLineInput,
+  normalizeWorkMemorySubject
 } from "./memoryHelpers.ts";
 
 type MemoryToolNamespaceScope = {
@@ -16,8 +19,8 @@ type MemoryToolNamespaceScope = {
   guildId?: string | null;
   subject?: string | null;
   subjectIds?: string[] | null;
-  searchScope?: "user" | "guild" | "owner" | "owner_private" | "all";
-  directiveScope?: "lore" | "self" | "user" | "owner";
+  searchScope?: "user" | "guild" | "owner" | "project" | "task" | "swarm" | "collaborator" | "owner_private" | "all";
+  directiveScope?: "lore" | "self" | "user" | "owner" | "project" | "task" | "swarm" | "collaborator";
 };
 
 type MemorySearchRow = {
@@ -34,7 +37,7 @@ type SharedMemoryRuntime = {
   memory: {
     searchDurableFacts: (opts: {
       guildId?: string | null;
-      scope?: "user" | "guild" | "owner" | "owner_private" | "all";
+      scope?: "user" | "guild" | "owner" | "project" | "task" | "swarm" | "collaborator" | "owner_private" | "all";
       channelId: string | null;
       queryText: string;
       subjectIds?: string[] | null;
@@ -50,7 +53,7 @@ type SharedMemoryRuntime = {
       guildId?: string | null;
       channelId: string | null;
       sourceText: string;
-      scope: "lore" | "self" | "user" | "owner";
+      scope: "lore" | "self" | "user" | "owner" | "project" | "task" | "swarm" | "collaborator";
       subjectOverride?: string;
       factType?: string | null;
       validationMode?: "strict" | "minimal";
@@ -71,6 +74,7 @@ type ResolveScopeArgs = {
   namespace?: unknown;
   operation?: "search" | "write";
   ownerPrivateContext?: boolean;
+  settings?: Record<string, unknown>;
 };
 
 type SearchArgs = {
@@ -104,6 +108,9 @@ type WriteArgs = {
 
 const MEMORY_NAMESPACE_USER_RE = /^user:(.+)$/i;
 const MEMORY_NAMESPACE_GUILD_RE = /^guild:(.+)$/i;
+const MEMORY_NAMESPACE_PROJECT_RE = /^project:(.+)$/i;
+const MEMORY_NAMESPACE_TASK_RE = /^task:(.+)$/i;
+const MEMORY_NAMESPACE_COLLABORATOR_RE = /^collaborator:(.+)$/i;
 const USER_NAMESPACE_ALIASES = new Set(["speaker", "user", "me", "current_user", "current-speaker"]);
 const GUILD_NAMESPACE_ALIASES = new Set(["guild", "lore", "shared"]);
 const SELF_NAMESPACE_ALIASES = new Set(["self", "bot", "assistant"]);
@@ -137,13 +144,17 @@ export function resolveMemoryToolNamespaceScope({
   actorUserId,
   namespace = "",
   operation = "search",
-  ownerPrivateContext
+  ownerPrivateContext,
+  settings = {}
 }: ResolveScopeArgs): MemoryToolNamespaceScope {
   const normalizedGuildId = String(guildId || "").trim() || null;
   const normalizedActorUserId = String(actorUserId || "").trim() || null;
   const normalizedOperation = operation === "write" ? "write" : "search";
   const hasGuildContext = Boolean(normalizedGuildId);
   const actorIsOwner = isConfiguredOwnerUserId(normalizedActorUserId);
+  const actorCanUseWorkMemory = Boolean(
+    actorIsOwner || (normalizedActorUserId && isCodeAgentUserAllowed(normalizedActorUserId, settings))
+  );
   const inOwnerPrivateContext = Boolean(
     ownerPrivateContext ??
     isOwnerPrivateContext({
@@ -151,9 +162,16 @@ export function resolveMemoryToolNamespaceScope({
       actorUserId: normalizedActorUserId
     })
   );
-  const normalizedNamespace = String(namespace || "")
-    .trim()
-    .toLowerCase();
+  const rawNamespace = String(namespace || "").trim();
+  const normalizedNamespace = rawNamespace.toLowerCase();
+
+  const requireWorkMemoryAccess = () => {
+    if (actorCanUseWorkMemory) return null;
+    return {
+      ok: false,
+      reason: "work_memory_permission_required"
+    } as MemoryToolNamespaceScope;
+  };
 
   if (!normalizedNamespace) {
     if (normalizedOperation === "write") {
@@ -297,8 +315,8 @@ export function resolveMemoryToolNamespaceScope({
     };
   }
 
-  if (MEMORY_NAMESPACE_GUILD_RE.test(normalizedNamespace)) {
-    const namespaceGuildId = normalizedNamespace.match(MEMORY_NAMESPACE_GUILD_RE)?.[1]?.trim() || "";
+  if (MEMORY_NAMESPACE_GUILD_RE.test(rawNamespace)) {
+    const namespaceGuildId = rawNamespace.match(MEMORY_NAMESPACE_GUILD_RE)?.[1]?.trim() || "";
     if (!namespaceGuildId) {
       return {
         ok: false,
@@ -328,8 +346,8 @@ export function resolveMemoryToolNamespaceScope({
     };
   }
 
-  if (MEMORY_NAMESPACE_USER_RE.test(normalizedNamespace)) {
-    const namespaceUserId = normalizedNamespace.match(MEMORY_NAMESPACE_USER_RE)?.[1]?.trim() || "";
+  if (MEMORY_NAMESPACE_USER_RE.test(rawNamespace)) {
+    const namespaceUserId = rawNamespace.match(MEMORY_NAMESPACE_USER_RE)?.[1]?.trim() || "";
     if (!namespaceUserId) {
       return {
         ok: false,
@@ -344,6 +362,90 @@ export function resolveMemoryToolNamespaceScope({
       subjectIds: [namespaceUserId],
       searchScope: "user",
       directiveScope: "user"
+    };
+  }
+
+  if (MEMORY_NAMESPACE_PROJECT_RE.test(rawNamespace)) {
+    const blocked = requireWorkMemoryAccess();
+    if (blocked) return blocked;
+    const projectKey = normalizeWorkMemorySubject(rawNamespace.match(MEMORY_NAMESPACE_PROJECT_RE)?.[1], "");
+    if (!projectKey) {
+      return {
+        ok: false,
+        reason: "invalid_project_namespace"
+      };
+    }
+    return {
+      ok: true,
+      namespace: `project:${projectKey}`,
+      guildId: null,
+      subject: projectKey,
+      subjectIds: [projectKey],
+      searchScope: "project",
+      directiveScope: "project"
+    };
+  }
+
+  if (MEMORY_NAMESPACE_TASK_RE.test(rawNamespace)) {
+    const blocked = requireWorkMemoryAccess();
+    if (blocked) return blocked;
+    const taskId = normalizeWorkMemorySubject(rawNamespace.match(MEMORY_NAMESPACE_TASK_RE)?.[1], "");
+    if (!taskId) {
+      return {
+        ok: false,
+        reason: "invalid_task_namespace"
+      };
+    }
+    return {
+      ok: true,
+      namespace: `task:${taskId}`,
+      guildId: null,
+      subject: taskId,
+      subjectIds: [taskId],
+      searchScope: "task",
+      directiveScope: "task"
+    };
+  }
+
+  if (normalizedNamespace === "swarm") {
+    const blocked = requireWorkMemoryAccess();
+    if (blocked) return blocked;
+    return {
+      ok: true,
+      namespace: "swarm",
+      guildId: null,
+      subject: SWARM_SUBJECT,
+      subjectIds: [SWARM_SUBJECT],
+      searchScope: "swarm",
+      directiveScope: "swarm"
+    };
+  }
+
+  if (MEMORY_NAMESPACE_COLLABORATOR_RE.test(rawNamespace)) {
+    const blocked = requireWorkMemoryAccess();
+    if (blocked) return blocked;
+    const collaboratorId = normalizeWorkMemorySubject(rawNamespace.match(MEMORY_NAMESPACE_COLLABORATOR_RE)?.[1], "");
+    if (!collaboratorId) {
+      return {
+        ok: false,
+        reason: "invalid_collaborator_namespace"
+      };
+    }
+    const canAccessCollaborator = collaboratorId === normalizedActorUserId || (actorIsOwner && inOwnerPrivateContext);
+    if (!canAccessCollaborator) {
+      return {
+        ok: false,
+        reason: "collaborator_namespace_forbidden"
+      };
+    }
+    return {
+      ok: true,
+      namespace: `collaborator:${collaboratorId}`,
+      guildId: null,
+      subject: collaboratorId,
+      subjectIds: [collaboratorId],
+      searchScope: "collaborator",
+      directiveScope: "collaborator"
     };
   }
 
@@ -392,7 +494,8 @@ export async function executeSharedMemoryToolSearch({
     guildId,
     actorUserId,
     namespace,
-    operation: "search"
+    operation: "search",
+    settings
   });
   if (!scope.ok || !scope.searchScope) {
     return {
@@ -469,7 +572,8 @@ export async function executeSharedMemoryToolWrite({
     guildId,
     actorUserId,
     namespace,
-    operation: "write"
+    operation: "write",
+    settings
   });
   if (!scope.ok || !scope.directiveScope) {
     return {
@@ -501,7 +605,11 @@ export async function executeSharedMemoryToolWrite({
   const written = [];
   const skipped = [];
   const resolvedDedupeThreshold = clamp(Number(dedupeThreshold) || 0.9, 0, 1);
-  const writeSearchScope = scope.directiveScope === "lore" ? "guild" : scope.directiveScope === "owner" ? "owner" : "user";
+  const writeSearchScope = scope.directiveScope === "lore"
+    ? "guild"
+    : scope.directiveScope === "self"
+      ? "user"
+      : scope.directiveScope;
 
   for (const [index, item] of normalizedItems.entries()) {
     const factType = String(item.factType || "").trim().toLowerCase();
@@ -561,7 +669,11 @@ export async function executeSharedMemoryToolWrite({
       sourceText: sourceText || item.text,
       scope: scope.directiveScope,
       factType: item.factType,
-      ...((scope.directiveScope === "user" || scope.directiveScope === "owner") && scope.subject ? { subjectOverride: scope.subject } : {})
+      ...(
+        scope.directiveScope !== "lore" && scope.directiveScope !== "self" && scope.subject
+          ? { subjectOverride: scope.subject }
+          : {}
+      )
     });
     if (!result?.ok) {
       skipped.push({

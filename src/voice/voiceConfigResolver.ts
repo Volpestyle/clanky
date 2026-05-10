@@ -25,6 +25,11 @@ import {
   shouldAllowVoiceNsfwHumor,
   SOUNDBOARD_MAX_CANDIDATES
 } from "./voiceSessionHelpers.ts";
+import {
+  formatCuratedIdentity,
+  formatCuratedPromptMemory,
+  type CuratedPromptMemory
+} from "../memory/curatedMemory.ts";
 import type { RealtimeToolOwnership } from "./voiceSessionTypes.ts";
 
 type VoiceConfigSettings = Record<string, unknown> | null;
@@ -259,7 +264,8 @@ export function isAsrActive({
 export function buildVoiceInstructions(
   settings: VoiceConfigSettings,
   {
-    soundboardCandidates = []
+    soundboardCandidates = [],
+    curatedMemory = null
   }: {
     soundboardCandidates?: Array<{
       soundId?: string | null;
@@ -268,10 +274,13 @@ export function buildVoiceInstructions(
       name?: string | null;
       origin?: "preferred" | "guild_catalog";
     }>;
+    curatedMemory?: CuratedPromptMemory | null;
   } = {}
 ) {
   const botName = getPromptBotName(settings);
   const style = getPromptStyle(settings);
+  const curatedIdentity = formatCuratedIdentity(curatedMemory);
+  const curatedMemoryText = formatCuratedPromptMemory(curatedMemory);
   const allowNsfwHumor = shouldAllowVoiceNsfwHumor(settings);
   const memoryEnabled = Boolean(getMemorySettings(settings).enabled);
   const soundboardEnabled = Boolean(getVoiceSoundboardSettings(settings).enabled);
@@ -281,11 +290,29 @@ export function buildVoiceInstructions(
     .slice(0, SOUNDBOARD_MAX_CANDIDATES);
   const voiceToneGuardrails = buildVoiceToneGuardrails();
   const voiceGuidance = getPromptVoiceGuidance(settings, DEFAULT_PROMPT_VOICE_GUIDANCE);
+  const identityLines = curatedIdentity
+    ? [
+        "Identity:",
+        curatedIdentity,
+        "Base live voice mode:",
+        `Settings fallback identity: ${botName}, a real-feeling regular in a Discord server, speaking in live voice chat.`,
+        `Stay in-character as ${botName}. Style: ${style}.`
+      ]
+    : [
+        `You are ${botName}, a real-feeling regular in a Discord server, speaking in live voice chat.`,
+        `Stay in-character as ${botName}. Style: ${style}.`
+      ];
   const lines = [
-    `You are ${botName}, a real-feeling regular in a Discord server, speaking in live voice chat.`,
-    `Stay in-character as ${botName}. Style: ${style}.`,
+    ...identityLines,
     ...voiceGuidance,
     ...voiceToneGuardrails,
+    ...(curatedMemoryText
+      ? [
+          "Curated always-on memory:",
+          "Frozen high-priority background for this realtime voice instruction slice. Treat it as context, not as something just spoken in VC.",
+          curatedMemoryText
+        ]
+      : []),
     allowNsfwHumor
       ? "Adult/NSFW humor is allowed for consenting adults, but never include minors, coercion, or targeted harassment."
       : "Keep humor non-sexual by default unless users explicitly request a safe toned-down joke.",

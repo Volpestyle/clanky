@@ -3,6 +3,7 @@ import {
   buildLoggedPromptBundle,
   createPromptCapture,
   type LoggedPromptBundle,
+  type PromptTierSnapshot,
   type PromptCapture
 } from "../promptLogging.ts";
 
@@ -85,14 +86,17 @@ export function createReplyPerformanceTracker({
 
 export function createReplyPromptCapture({
   systemPrompt = "",
-  initialUserPrompt = ""
+  initialUserPrompt = "",
+  promptTiers = []
 }: {
   systemPrompt?: string;
   initialUserPrompt?: string;
+  promptTiers?: PromptTierSnapshot[];
 } = {}): ReplyPromptCapture {
   return createPromptCapture({
     systemPrompt,
-    initialUserPrompt
+    initialUserPrompt,
+    promptTiers
   });
 }
 

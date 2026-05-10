@@ -1,10 +1,34 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { appConfig } from "../config.ts";
+import { createTestSettings } from "../testSettings.ts";
 import {
   executeSharedMemoryToolSearch,
   executeSharedMemoryToolWrite
 } from "./memoryToolRuntime.ts";
+
+function createWorkMemorySettings() {
+  return createTestSettings({
+    permissions: {
+      devTasks: {
+        allowedUserIds: ["user-1"],
+        allowedWorkspaceRoots: ["/tmp"]
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        devTeam: {
+          codexCli: {
+            enabled: true
+          },
+          claudeCode: {
+            enabled: false
+          }
+        }
+      }
+    }
+  });
+}
 
 test("executeSharedMemoryToolSearch forwards namespace subject and fact-type filters", async () => {
   const calls: Array<Record<string, unknown>> = [];
@@ -378,4 +402,105 @@ test("executeSharedMemoryToolWrite rejects owner-private namespace outside owner
   } finally {
     appConfig.ownerUserIds.splice(0, appConfig.ownerUserIds.length, ...originalOwnerIds);
   }
+});
+
+test("executeSharedMemoryToolSearch forwards explicit project work-memory namespace", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const settings = createWorkMemorySettings();
+
+  const result = await executeSharedMemoryToolSearch({
+    runtime: {
+      memory: {
+        async searchDurableFacts(opts) {
+          calls.push(opts as Record<string, unknown>);
+          return [{ id: "work-1", subject: "repo-a", fact: "Repo A uses Bun for scripts.", fact_type: "project", score: 0.8 }];
+        },
+        async rememberDirectiveLineDetailed() {
+          throw new Error("not used");
+        }
+      }
+    },
+    settings,
+    guildId: "guild-1",
+    channelId: "chan-1",
+    actorUserId: "user-1",
+    namespace: "project:repo-a",
+    queryText: "scripts",
+    limit: 3
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.namespace, "project:repo-a");
+  assert.deepEqual(calls, [{
+    guildId: null,
+    scope: "project",
+    channelId: "chan-1",
+    queryText: "scripts",
+    subjectIds: ["repo-a"],
+    factTypes: null,
+    settings,
+    trace: {},
+    limit: 6
+  }]);
+  assert.equal(result.matches[0]?.text, "Repo A uses Bun for scripts.");
+});
+
+test("executeSharedMemoryToolWrite forwards explicit task work-memory namespace", async () => {
+  const searchCalls: Array<Record<string, unknown>> = [];
+  const writeCalls: Array<Record<string, unknown>> = [];
+  const settings = createWorkMemorySettings();
+
+  const result = await executeSharedMemoryToolWrite({
+    runtime: {
+      memory: {
+        async searchDurableFacts(opts) {
+          searchCalls.push(opts as Record<string, unknown>);
+          return [];
+        },
+        async rememberDirectiveLineDetailed(opts) {
+          writeCalls.push(opts as Record<string, unknown>);
+          return { ok: true, reason: "added_new", factText: String(opts.line || ""), subject: String(opts.subjectOverride || "") };
+        }
+      }
+    },
+    settings,
+    guildId: "guild-1",
+    channelId: "chan-1",
+    actorUserId: "user-1",
+    namespace: "task:task-123",
+    items: [{ text: "Task 123 verified the dashboard build.", type: "project" }]
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(searchCalls[0]?.scope, "task");
+  assert.equal(searchCalls[0]?.guildId, null);
+  assert.deepEqual(searchCalls[0]?.subjectIds, ["task-123"]);
+  assert.equal(writeCalls[0]?.scope, "task");
+  assert.equal(writeCalls[0]?.guildId, null);
+  assert.equal(writeCalls[0]?.subjectOverride, "task-123");
+  assert.equal(writeCalls[0]?.factType, "project");
+});
+
+test("executeSharedMemoryToolSearch rejects collaborator namespace for another user", async () => {
+  const result = await executeSharedMemoryToolSearch({
+    runtime: {
+      memory: {
+        async searchDurableFacts() {
+          return [];
+        },
+        async rememberDirectiveLineDetailed() {
+          throw new Error("not used");
+        }
+      }
+    },
+    settings: createWorkMemorySettings(),
+    guildId: "guild-1",
+    channelId: "chan-1",
+    actorUserId: "user-1",
+    namespace: "collaborator:user-2",
+    queryText: "recent work"
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "collaborator_namespace_forbidden");
 });

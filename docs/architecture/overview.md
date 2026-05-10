@@ -138,8 +138,7 @@ At a high level:
 Main runtime stores:
 
 - `data/clanker.db`: SQLite database
-- `memory/YYYY-MM-DD.md`: append-only daily logs
-- `memory/MEMORY.md`: operator-facing memory snapshot
+- `memory/*.md`: curated prompt-memory files plus generated operator-facing memory snapshot
 
 Important tables:
 

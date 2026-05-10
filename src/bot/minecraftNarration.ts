@@ -12,6 +12,10 @@ import {
 import { sanitizeBotText, sleep } from "../utils.ts";
 import { normalizeSkipSentinel, splitDiscordMessage } from "./botHelpers.ts";
 import type { BotContext } from "./botContext.ts";
+import {
+  buildCuratedMemoryLogMetadata,
+  loadCuratedPromptMemory
+} from "../memory/curatedMemory.ts";
 
 const MINECRAFT_NARRATION_JSON_SCHEMA = `{
   "skip": false,
@@ -416,11 +420,28 @@ export async function maybePostMinecraftNarration(
     MINECRAFT_NARRATION_CONTEXT_MESSAGE_LIMIT
   ) as StoredMessageLike[];
   const botName = getBotName(settings);
+  const curatedMemory = loadCuratedPromptMemory({
+    mode: "initiative",
+    ownerPrivate: false
+  });
+  runtime.store.logAction({
+    kind: "memory_runtime",
+    guildId: normalizedGuildId,
+    channelId: normalizedChannelId,
+    userId: ownerUserId,
+    content: "curated_prompt_memory_loaded",
+    metadata: {
+      source: "minecraft_narration",
+      scopeKey,
+      ...buildCuratedMemoryLogMetadata(curatedMemory)
+    }
+  });
   const userPrompt = buildMinecraftNarrationPrompt({
     botName,
     channelName: String(channel?.name || "channel").trim() || "channel",
     serverLabel,
     narrationEagerness: normalizedEagerness,
+    curatedMemory,
     recentMessages,
     recentMcChat: Array.isArray(chatHistory) ? chatHistory : [],
     botUsername: botName,
@@ -428,7 +449,7 @@ export async function maybePostMinecraftNarration(
   });
   const generation = await runtime.llm.generate({
     settings: buildNarrationSettings(settings),
-    systemPrompt: buildSystemPrompt(settings),
+    systemPrompt: buildSystemPrompt(settings, { curatedMemory }),
     userPrompt,
     jsonSchema: MINECRAFT_NARRATION_JSON_SCHEMA,
     trace: {

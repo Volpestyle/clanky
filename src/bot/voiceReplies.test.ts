@@ -222,7 +222,6 @@ function createVoiceBot({
 } = {}) {
   const logs = [];
   const ingests = [];
-  const remembers = [];
   const webSearchCalls = [];
   const webScrapeCalls = [];
   const screenShareCalls = [];
@@ -293,9 +292,6 @@ function createVoiceBot({
     memory: {
       async ingestMessage(payload) {
         ingests.push(payload);
-      },
-      async rememberDirectiveLine(payload) {
-        remembers.push(payload);
       }
     },
     store: {
@@ -442,7 +438,6 @@ function createVoiceBot({
     bot,
     logs,
     ingests,
-    remembers,
     webSearchCalls,
     webScrapeCalls,
     screenShareCalls,

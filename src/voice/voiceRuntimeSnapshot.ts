@@ -1,4 +1,4 @@
-import { buildSingleTurnPromptLog } from "../promptLogging.ts";
+import { buildSingleTurnPromptLog, buildStandardPromptTiers, normalizePromptTiers } from "../promptLogging.ts";
 import { clamp } from "../utils.ts";
 import {
   OPENAI_ASR_SESSION_IDLE_TTL_MS,
@@ -58,6 +58,44 @@ type VoiceRuntimeSnapshotDurableContextEntry = {
   category: VoiceSessionDurableContextCategory;
   at: string | null;
 };
+
+function countPromptRows(value: unknown) {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function buildRealtimeSnapshotPromptTiers(session: VoiceSession, instructions: string) {
+  const memorySlice = session.lastRealtimeMemorySlice || null;
+  const structuredFactCount = [
+    memorySlice?.participantProfiles,
+    memorySlice?.selfFacts,
+    memorySlice?.loreFacts,
+    memorySlice?.guidanceFacts,
+    memorySlice?.behavioralFacts
+  ].reduce<number>((sum, rows) => sum + countPromptRows(rows), 0);
+  const retrievedHistoryCount = countPromptRows(memorySlice?.recentConversationHistory) +
+    (session.modelContextSummary?.generation || session.modelContextSummary?.decider ? 1 : 0);
+  const toolCount = Array.isArray(session.realtimeToolDefinitions)
+    ? session.realtimeToolDefinitions.length
+    : 0;
+
+  return buildStandardPromptTiers({
+    identity: true,
+    baseMode: true,
+    curatedMemory: /Curated always-on memory:/i.test(instructions),
+    structuredFacts: structuredFactCount > 0,
+    retrievedHistory: retrievedHistoryCount > 0,
+    capabilitiesTools: toolCount > 0,
+    currentInput: false,
+    outputContract: true,
+    systemPromptChars: instructions.length,
+    toolCount,
+    details: {
+      structured_facts: { renderedRowCount: structuredFactCount },
+      retrieved_history: { renderedRowCount: retrievedHistoryCount },
+      current_input: { surface: "realtime_voice_instruction_snapshot" }
+    }
+  });
+}
 
 interface VoiceRuntimeSnapshotDeps {
   client?: RuntimeSnapshotClientLike;
@@ -132,7 +170,8 @@ function normalizeLoggedPromptBundle(value: unknown) {
     followupSteps: Number.isFinite(followupSteps)
       ? Math.max(0, Math.floor(followupSteps))
       : followupUserPrompts.length,
-    tools
+    tools,
+    promptTiers: normalizePromptTiers((bundle as Record<string, unknown>).promptTiers)
   };
 }
 
@@ -499,7 +538,8 @@ export function buildVoiceRuntimeSnapshot(
           replyPrompts: normalizeLoggedPromptBundle(
             buildSingleTurnPromptLog({
               systemPrompt: activeRealtimeInstructions,
-              userPrompt: ""
+              userPrompt: "",
+              promptTiers: buildRealtimeSnapshotPromptTiers(session, activeRealtimeInstructions)
             })
           )
         }

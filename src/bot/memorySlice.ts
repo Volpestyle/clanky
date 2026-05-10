@@ -13,7 +13,7 @@ type MemorySettings = {
   };
 } & Record<string, unknown>;
 
-type FactProfileSlice = {
+export type PromptMemorySlice = {
   participantProfiles: Array<Record<string, unknown>>;
   selfFacts: Array<Record<string, unknown>>;
   loreFacts: Array<Record<string, unknown>>;
@@ -21,6 +21,7 @@ type FactProfileSlice = {
   userFacts: Array<Record<string, unknown>>;
   relevantFacts: Array<Record<string, unknown>>;
   guidanceFacts: Array<Record<string, unknown>>;
+  behavioralFacts: Array<Record<string, unknown>>;
 };
 
 type LoadFactProfileOptions = {
@@ -34,7 +35,7 @@ type LoadFactProfileOptions = {
   source?: string;
 };
 
-export function emptyFactProfileSlice(): FactProfileSlice {
+export function emptyFactProfileSlice(): PromptMemorySlice {
   return {
     participantProfiles: [],
     selfFacts: [],
@@ -42,11 +43,12 @@ export function emptyFactProfileSlice(): FactProfileSlice {
     ownerFacts: [],
     userFacts: [],
     relevantFacts: [],
-    guidanceFacts: []
+    guidanceFacts: [],
+    behavioralFacts: []
   };
 }
 
-export function normalizeFactProfileSlice(slice: unknown): FactProfileSlice {
+export function normalizeFactProfileSlice(slice: unknown): PromptMemorySlice {
   const value = slice && typeof slice === "object" && !Array.isArray(slice)
     ? slice as Record<string, unknown>
     : {};
@@ -59,7 +61,8 @@ export function normalizeFactProfileSlice(slice: unknown): FactProfileSlice {
     ownerFacts: Array.isArray(value.ownerFacts) ? value.ownerFacts as Array<Record<string, unknown>> : [],
     userFacts: Array.isArray(value.userFacts) ? value.userFacts as Array<Record<string, unknown>> : [],
     relevantFacts: Array.isArray(value.relevantFacts) ? value.relevantFacts as Array<Record<string, unknown>> : [],
-    guidanceFacts: Array.isArray(value.guidanceFacts) ? value.guidanceFacts as Array<Record<string, unknown>> : []
+    guidanceFacts: Array.isArray(value.guidanceFacts) ? value.guidanceFacts as Array<Record<string, unknown>> : [],
+    behavioralFacts: Array.isArray(value.behavioralFacts) ? value.behavioralFacts as Array<Record<string, unknown>> : []
   };
 }
 

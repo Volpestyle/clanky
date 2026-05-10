@@ -185,7 +185,8 @@ test("loadFactProfile logs and returns empty slice when memory manager throws", 
       ownerFacts: [],
       userFacts: [],
       relevantFacts: [],
-      guidanceFacts: []
+      guidanceFacts: [],
+      behavioralFacts: []
     });
 
     const action = getLastLoggedAction(ctx.store);

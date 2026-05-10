@@ -35,6 +35,10 @@ export default function MemoryTab({ markdown, onRefresh, notify }: Props) {
 
   return (
     <section className="panel">
+      <div className="memory-box">
+        Memory is layered: curated prompt files shape identity and standing context, durable facts store long-lived social and
+        owner-private knowledge, conversation recall retrieves prior exchanges, and scoped work memory stays isolated for approved coding tasks.
+      </div>
       <FilterPills
         items={MEMORY_SUB_TABS}
         active={subTab}

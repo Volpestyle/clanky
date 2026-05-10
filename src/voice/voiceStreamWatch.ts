@@ -1503,6 +1503,9 @@ async function persistStreamWatchRecapToMemory(manager: StreamWatchManager, {
       content: logContent,
       isBot: true,
       settings,
+      lifecycle: {
+        status: "completed"
+      },
       trace: {
         guildId: session.guildId,
         channelId: session.textChannelId,

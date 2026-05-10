@@ -110,8 +110,6 @@ test("dashboard guild memory purge requires exact guild-name confirmation", asyn
             conversationMessagesDeleted: 17,
             conversationVectorsDeleted: 17,
             reflectionEventsDeleted: 2,
-            journalEntriesDeleted: 9,
-            journalFilesTouched: 3,
             summaryRefreshed: true
           };
         }
@@ -151,8 +149,8 @@ test("dashboard guild memory purge requires exact guild-name confirmation", asyn
       assert.equal(json.deleted.durableFacts, 4);
       assert.equal(json.deleted.conversationMessages, 17);
       assert.equal(json.deleted.reflectionEvents, 2);
-      assert.equal(json.deleted.journalEntries, 9);
-      assert.equal(json.deleted.journalFilesTouched, 3);
+      assert.equal("journalEntries" in json.deleted, false);
+      assert.equal("journalFilesTouched" in json.deleted, false);
       assert.equal(json.summaryRefreshed, true);
       assert.deepEqual(purgeCalls, ["guild-1"]);
       assert.deepEqual(runtimePurgeCalls, ["guild-1"]);

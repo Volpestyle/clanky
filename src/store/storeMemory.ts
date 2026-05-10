@@ -30,7 +30,17 @@ export interface MemoryFactRow {
   semantic_score?: number | null;
 }
 
-export type MemoryFactScope = "user" | "guild" | "owner";
+export type MemoryFactScope = "user" | "guild" | "owner" | "project" | "task" | "swarm" | "collaborator";
+
+const MEMORY_FACT_SCOPE_SET = new Set<MemoryFactScope>([
+  "user",
+  "guild",
+  "owner",
+  "project",
+  "task",
+  "swarm",
+  "collaborator"
+]);
 
 const LEGACY_FACT_TYPE_MAP: Record<string, string> = {
   lore: "other",
@@ -83,6 +93,14 @@ interface MemorySubjectRow {
   subject: string;
   last_seen_at: string;
   fact_count: number;
+}
+
+export interface MemorySubjectQueryScope {
+  guildId?: string | null;
+  scope?: MemoryFactScope | null;
+  scopes?: MemoryFactScope[] | null;
+  includePortableUserScope?: boolean;
+  includeOwnerScope?: boolean;
 }
 
 function isPortableUserSubject(value: unknown) {
@@ -226,13 +244,19 @@ function normalizeMemoryFactScope(
   const normalized = String(value || "")
     .trim()
     .toLowerCase();
-  if (normalized === "user" || normalized === "guild") {
-    return normalized;
-  }
-  if (normalized === "owner") {
-    return normalized;
-  }
+  if (MEMORY_FACT_SCOPE_SET.has(normalized as MemoryFactScope)) return normalized as MemoryFactScope;
   return fallback;
+}
+
+function normalizeMemoryFactScopes(values: unknown): MemoryFactScope[] {
+  if (!Array.isArray(values)) return [];
+  return [
+    ...new Set(
+      values
+        .map((value) => normalizeMemoryFactScope(value))
+        .filter((value): value is MemoryFactScope => Boolean(value))
+    )
+  ];
 }
 
 function buildScopedFactWhereClause({
@@ -321,7 +345,7 @@ const normalizedUserId =
       const requestedUserId = String(fact.userId || "").trim();
       return requestedUserId || normalizedSubject;
     })()
-    : normalizedScope === "owner"
+    : normalizedScope === "owner" || normalizedScope === "collaborator"
       ? String(fact.userId || "").trim() || null
       : null;
 const result = store.db
@@ -897,7 +921,7 @@ if (!normalizedFact) return { ok: false, reason: "fact_required" } as const;
 const existing = getMemoryFactById(store, factIdInt, normalizedGuildId || null, normalizedScope);
 if (!existing) return { ok: false, reason: "not_found" } as const;
   const normalizedUserId =
-    normalizedScope === "user" || normalizedScope === "owner"
+    normalizedScope === "user" || normalizedScope === "owner" || normalizedScope === "collaborator"
       ? String(userId || existing.user_id || "").trim() || null
       : null;
 
@@ -1109,7 +1133,7 @@ export function cleanupLegacyMemoryFacts(store: MemoryStore) {
 
       const targetScope = shouldPromotePortableUser ? "user" : row.scope;
       const targetGuildId = shouldPromotePortableUser ? null : row.guild_id;
-      const targetUserId = (targetScope === "user" || targetScope === "owner") && row.subject !== "__self__"
+      const targetUserId = (targetScope === "user" || targetScope === "owner" || targetScope === "collaborator") && row.subject !== "__self__"
         ? String(row.user_id || row.subject || "").trim() || null
         : null;
 
@@ -1295,16 +1319,28 @@ try {
 }
 }
 
-export function getMemorySubjects(store: MemoryStore, limit = 80, scope = null) {
+export function getMemorySubjects(store: MemoryStore, limit = 80, scope: MemorySubjectQueryScope | null = null) {
 const where = ["is_active = 1"];
 const args: Array<string | number> = [];
   const normalizedScope = normalizeMemoryFactScope(scope?.scope);
+  const normalizedScopes = normalizedScope ? [] : normalizeMemoryFactScopes(scope?.scopes);
   const normalizedGuildId = String(scope?.guildId || "").trim();
   const includePortableUserScope = scope?.includePortableUserScope === true;
   const includeOwnerScope = scope?.includeOwnerScope === true;
   if (normalizedScope) {
     where.push("scope = ?");
     args.push(normalizedScope);
+    if (normalizedGuildId) {
+      where.push("guild_id = ?");
+      args.push(normalizedGuildId);
+    }
+  } else if (normalizedScopes.length) {
+    where.push(`scope IN (${normalizedScopes.map(() => "?").join(", ")})`);
+    args.push(...normalizedScopes);
+    if (normalizedGuildId) {
+      where.push("guild_id = ?");
+      args.push(normalizedGuildId);
+    }
   } else if (normalizedGuildId && (includePortableUserScope || includeOwnerScope)) {
     const clauses = ["(scope = 'guild' AND guild_id = ?)"];
     if (includePortableUserScope) clauses.push("scope = 'user'");
@@ -1345,7 +1381,7 @@ export function archiveOldFactsForSubject(store: MemoryStore, {
 const normalizedGuildId = String(guildId || "").trim();
 const normalizedScope = normalizeMemoryFactScope(scope, normalizedGuildId ? "guild" : "user");
   const normalizedUserId =
-    normalizedScope === "user" || normalizedScope === "owner"
+    normalizedScope === "user" || normalizedScope === "owner" || normalizedScope === "collaborator"
       ? String(userId || "").trim() || null
       : null;
 const normalizedSubject = String(subject || "").trim();

@@ -27,6 +27,10 @@ import {
 } from "../settings/agentStack.ts";
 import { loadBehavioralMemoryFacts } from "./memorySlice.ts";
 import {
+  buildCuratedMemoryLogMetadata,
+  loadCuratedPromptMemory
+} from "../memory/curatedMemory.ts";
+import {
   buildContextContentBlocks,
   type ContentBlock,
   type ContextMessage
@@ -45,6 +49,13 @@ import {
 } from "../tools/sharedToolSchemas.ts";
 import { normalizeDiscoveryUrl } from "../services/discovery.ts";
 import type { BotContext } from "./botContext.ts";
+import {
+  appendPromptFollowup,
+  buildLoggedPromptBundle,
+  buildStandardPromptTiers,
+  createPromptCapture,
+  type PromptCapturedTool
+} from "../promptLogging.ts";
 
 const INITIATIVE_TICK_MAX_RUNTIME_MS = 30_000;
 const INITIATIVE_SOURCE_STATS_WINDOW_DAYS = 14;
@@ -528,6 +539,84 @@ function buildInitiativeGenerationSettings(settings: Record<string, unknown>) {
 
 function countRecentActions(store: InitiativeRuntime["store"], kind: string, sinceIso: string) {
   return Number(store.countActionsSince(kind, sinceIso) || 0);
+}
+
+function countPromptRows(value: unknown) {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function hasCuratedPromptMemoryContent(memory: unknown) {
+  const sections = Array.isArray((memory as { sections?: unknown[] } | null)?.sections)
+    ? (memory as { sections: unknown[] }).sections
+    : [];
+  return sections.some((section) => String((section as { content?: unknown })?.content || "").trim());
+}
+
+function captureInitiativeTool(tool: unknown): PromptCapturedTool | null {
+  if (!tool || typeof tool !== "object") return null;
+  const record = tool as Record<string, unknown>;
+  const name = String(record.name || "").trim();
+  if (!name) return null;
+  return {
+    name,
+    description: String(record.description || ""),
+    parameters: record.input_schema && typeof record.input_schema === "object"
+      ? record.input_schema as Record<string, unknown>
+      : null
+  };
+}
+
+function buildInitiativePromptTiers({
+  systemPrompt,
+  userPrompt,
+  curatedMemory,
+  memorySlice,
+  communityInterestFacts,
+  channelSummaries,
+  discoveryCandidates,
+  toolCount = 0
+}: {
+  systemPrompt: string;
+  userPrompt: string;
+  curatedMemory: unknown;
+  memorySlice?: unknown;
+  communityInterestFacts?: unknown;
+  channelSummaries?: unknown;
+  discoveryCandidates?: unknown;
+  toolCount?: number;
+}) {
+  const promptMemory = memorySlice && typeof memorySlice === "object"
+    ? memorySlice as Record<string, unknown>
+    : {};
+  const structuredFactCount = [
+    promptMemory.relevantFacts,
+    promptMemory.guidanceFacts,
+    promptMemory.behavioralFacts,
+    communityInterestFacts
+  ].reduce<number>((sum, rows) => sum + countPromptRows(rows), 0);
+  const retrievedHistoryCount = [
+    channelSummaries,
+    discoveryCandidates
+  ].reduce<number>((sum, rows) => sum + countPromptRows(rows), 0);
+
+  return buildStandardPromptTiers({
+    identity: true,
+    baseMode: true,
+    curatedMemory: hasCuratedPromptMemoryContent(curatedMemory),
+    structuredFacts: structuredFactCount > 0,
+    retrievedHistory: retrievedHistoryCount > 0,
+    capabilitiesTools: true,
+    currentInput: true,
+    outputContract: true,
+    systemPromptChars: systemPrompt.length,
+    userPromptChars: userPrompt.length,
+    toolCount,
+    details: {
+      structured_facts: { renderedRowCount: structuredFactCount },
+      retrieved_history: { renderedRowCount: retrievedHistoryCount },
+      current_input: { surface: "initiative_cycle" }
+    }
+  });
 }
 
 export function getEligibleInitiativeChannelIds(settings: Record<string, unknown>) {
@@ -1282,7 +1371,22 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
     const allowSelfCuration = Boolean(discoverySettings.allowSelfCuration);
     const botName = getBotName(settings);
     const persona = getPromptStyle(settings);
-    const systemPrompt = buildSystemPrompt(settings);
+    const curatedMemory = loadCuratedPromptMemory({
+      mode: "initiative",
+      ownerPrivate: false
+    });
+    runtime.store.logAction({
+      kind: "memory_runtime",
+      guildId,
+      channelId: guildChannels[0].channelId,
+      userId: runtime.client.user?.id || null,
+      content: "curated_prompt_memory_loaded",
+      metadata: {
+        source: "initiative_engine",
+        ...buildCuratedMemoryLogMetadata(curatedMemory)
+      }
+    });
+    const systemPrompt = buildSystemPrompt(settings, { curatedMemory });
     const userPrompt = buildInitiativePrompt({
       botName,
       persona,
@@ -1303,9 +1407,12 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
       discoveryCandidates: discoveryResult.candidates,
       sourcePerformance,
       communityInterestFacts,
-      relevantFacts: memoryFacts,
-      guidanceFacts: Array.isArray(guildProfile?.guidanceFacts) ? guildProfile.guidanceFacts : [],
-      behavioralFacts,
+      memorySlice: {
+        relevantFacts: memoryFacts,
+        guidanceFacts: Array.isArray(guildProfile?.guidanceFacts) ? guildProfile.guidanceFacts : [],
+        behavioralFacts
+      },
+      curatedMemory,
       allowActiveCuriosity,
       allowWebSearch: webSearchToolAvailable,
       allowWebScrape: webSearchToolAvailable,
@@ -1337,6 +1444,27 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
       allowWebScrape: webSearchToolAvailable,
       allowBrowserBrowse: browserBrowseToolAvailable,
       allowSelfCuration
+    });
+    const promptCapture = createPromptCapture({
+      systemPrompt,
+      initialUserPrompt: userPrompt,
+      tools: tools
+        .map((tool) => captureInitiativeTool(tool))
+        .filter((tool): tool is PromptCapturedTool => tool !== null),
+      promptTiers: buildInitiativePromptTiers({
+        systemPrompt,
+        userPrompt,
+        curatedMemory,
+        memorySlice: {
+          relevantFacts: memoryFacts,
+          guidanceFacts: guildProfile?.guidanceFacts,
+          behavioralFacts
+        },
+        communityInterestFacts,
+        channelSummaries: guildChannels,
+        discoveryCandidates: discoveryResult.candidates,
+        toolCount: tools.length
+      })
     });
     const trace = {
       guildId,
@@ -1417,7 +1545,9 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
         }
       });
       toolLoopSteps += 1;
+      appendPromptFollowup(promptCapture, "");
     }
+    const replyPrompts = buildLoggedPromptBundle(promptCapture, toolLoopSteps);
 
     const decision = parseStructuredInitiativeOutput(
       generation.text,
@@ -1435,7 +1565,8 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
           reason: decision.reason || null,
           contractViolation: decision.contractViolation,
           contractViolationReason: decision.contractViolationReason,
-          pendingThoughtId: pendingThought?.id || null
+          pendingThoughtId: pendingThought?.id || null,
+          replyPrompts
         }
       });
       return;
@@ -1457,7 +1588,8 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
           content: decision.reason || "skip",
           metadata: {
             parseState: decision.parseState,
-            reason: decision.reason || null
+            reason: decision.reason || null,
+            replyPrompts
           }
         });
       }
@@ -1611,6 +1743,7 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
             .filter(Boolean)
         )],
         urls: includedUrls,
+        replyPrompts,
         llm: {
           provider: generation.provider,
           model: generation.model,

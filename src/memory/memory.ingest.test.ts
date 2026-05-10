@@ -6,6 +6,7 @@ import path from "node:path";
 import { MemoryManager } from "./memoryManager.ts";
 import { Store } from "../store/store.ts";
 import { rmTempDir } from "../testHelpers.ts";
+import { createTestSettings } from "../testSettings.ts";
 
 function createMemoryForIngestTests(storeOverrides = {}) {
   return new MemoryManager({
@@ -160,50 +161,207 @@ test("voice transcript ingest preserves bot-authored message rows", async () => 
   assert.equal(await ingestPromise, true);
 });
 
-test("appendDailyLogEntry dedupes repeated message ids", async () => {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-memory-log-"));
-  try {
-    const memory = new MemoryManager({
-      store: {
-        logAction() {
-          return undefined;
-        }
-      },
-      llm: {},
-      memoryFilePath: path.join(tempDir, "MEMORY.md")
-    });
+test("ingestMessage skips non-durable lifecycle turns before record or queue", async () => {
+  const recorded: Array<Record<string, unknown>> = [];
+  const logActions: Array<Record<string, unknown>> = [];
+  const memory = createMemoryForIngestTests({
+    recordMessage(row: Record<string, unknown>) {
+      recorded.push(row);
+    },
+    logAction(row: Record<string, unknown>) {
+      logActions.push(row);
+    }
+  });
+  memory.ingestWorkerActive = true;
+  let processed = 0;
+  memory.processIngestMessage = async () => {
+    processed += 1;
+  };
 
-    await memory.appendDailyLogEntry({
-      messageId: "voice-guild-1-dup-1",
-      authorId: "user-1",
-      authorName: "Alice",
+  const result = await memory.ingestMessage({
+    messageId: "voice-guild-1-interrupted-123456",
+    authorId: "bot-1",
+    authorName: "clanky",
+    content: "[interrupted] this was only half delivered",
+    isBot: true,
+    settings: {},
+    lifecycle: {
+      status: "interrupted"
+    },
+    trace: {
       guildId: "guild-1",
       channelId: "chan-1",
-      content: "hello from vc"
-    });
-    await memory.appendDailyLogEntry({
-      messageId: "voice-guild-1-dup-1",
-      authorId: "user-1",
-      authorName: "Alice",
-      guildId: "guild-1",
-      channelId: "chan-1",
-      content: "hello from vc"
-    });
+      userId: "bot-1",
+      source: "voice_assistant_timeline_ingest"
+    }
+  });
 
-    const date = new Date();
-    const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-    const dailyFilePath = path.join(tempDir, `${dateKey}.md`);
-    const text = await fs.readFile(dailyFilePath, "utf8");
-    const matches = text.match(/message:voice-guild-1-dup-1/gu) || [];
-    assert.equal(matches.length, 1);
-  } finally {
-    await rmTempDir(tempDir);
-  }
+  assert.equal(result, false);
+  assert.equal(recorded.length, 0);
+  assert.equal(processed, 0);
+  assert.equal(
+    logActions.some((entry) => entry.content === "memory_turn_sync_skipped"),
+    true
+  );
 });
 
-test("processIngestMessage writes daily log without auto-extracting facts", async () => {
-  let dailyLogCalled = false;
-  let refreshCalled = false;
+test("ingestMessage treats capture reason as diagnostic when lifecycle completed", async () => {
+  const recorded: Array<Record<string, unknown>> = [];
+  const memory = createMemoryForIngestTests({
+    recordMessage(row: Record<string, unknown>) {
+      recorded.push(row);
+    }
+  });
+  memory.ingestWorkerActive = true;
+  let processedJob: Record<string, unknown> | null = null;
+  memory.processIngestMessage = async (job: Record<string, unknown>) => {
+    processedJob = job;
+  };
+
+  const ingestPromise = memory.ingestMessage({
+    messageId: "voice-guild-1-idle-timeout-123456",
+    authorId: "user-1",
+    authorName: "Alice",
+    content: "remember i usually troubleshoot deploys from logs first",
+    settings: {},
+    lifecycle: {
+      status: "completed",
+      captureReason: "idle_timeout"
+    },
+    trace: {
+      guildId: "guild-1",
+      channelId: "chan-1",
+      userId: "user-1",
+      source: "voice_realtime_ingest"
+    }
+  });
+
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0]?.content, "remember i usually troubleshoot deploys from logs first");
+
+  memory.ingestWorkerActive = false;
+  await memory.runIngestWorker();
+  assert.equal(await ingestPromise, true);
+  assert.equal((processedJob?.lifecycle as Record<string, unknown>)?.status, "completed");
+  assert.equal((processedJob?.lifecycle as Record<string, unknown>)?.captureReason, "idle_timeout");
+});
+
+test("ingestMessage skips idle_timeout only when lifecycle marks it partial", async () => {
+  const recorded: Array<Record<string, unknown>> = [];
+  const logActions: Array<Record<string, unknown>> = [];
+  const memory = createMemoryForIngestTests({
+    recordMessage(row: Record<string, unknown>) {
+      recorded.push(row);
+    },
+    logAction(row: Record<string, unknown>) {
+      logActions.push(row);
+    }
+  });
+  memory.ingestWorkerActive = true;
+  let processed = 0;
+  memory.processIngestMessage = async () => {
+    processed += 1;
+  };
+
+  const result = await memory.ingestMessage({
+    messageId: "voice-guild-1-idle-partial-123456",
+    authorId: "user-1",
+    authorName: "Alice",
+    content: "this partial timeout should stay out of durable memory",
+    settings: {},
+    lifecycle: {
+      status: "partial",
+      captureReason: "idle_timeout"
+    },
+    trace: {
+      guildId: "guild-1",
+      channelId: "chan-1",
+      userId: "user-1",
+      source: "voice_realtime_ingest"
+    }
+  });
+
+  assert.equal(result, false);
+  assert.equal(recorded.length, 0);
+  assert.equal(processed, 0);
+  assert.equal(
+    logActions.some((entry) =>
+      entry.content === "memory_turn_sync_skipped" &&
+      (entry.metadata as Record<string, unknown>)?.reason === "lifecycle_partial" &&
+      (entry.metadata as Record<string, unknown>)?.captureReason === "idle_timeout"
+    ),
+    true
+  );
+});
+
+test("voice session micro-reflection excludes interrupted assistant turns", async () => {
+  let reflectedPrompt = "";
+  const memory = new MemoryManager({
+    store: {
+      getFactProfileRows() {
+        return [];
+      },
+      logAction() {
+        return undefined;
+      }
+    },
+    llm: {
+      async callChatModel(_provider: string, payload: { userPrompt: string }) {
+        reflectedPrompt = payload.userPrompt;
+        return { text: '{"facts":[]}' };
+      }
+    },
+    memoryFilePath: "memory/MEMORY.md"
+  });
+
+  const result = await memory.runVoiceSessionMicroReflection({
+    guildId: "guild-1",
+    channelId: "chan-1",
+    sessionId: "session-1",
+    settings: createTestSettings({
+      memory: {
+        enabled: true,
+        reflection: {
+          enabled: true
+        }
+      }
+    }),
+    transcriptTurns: [
+      {
+        kind: "speech",
+        role: "user",
+        userId: "user-1",
+        speakerName: "Alice",
+        text: "I am keeping a durable note that I prefer compact explanations when we are debugging production issues.",
+        at: Date.now() - 20_000
+      },
+      {
+        kind: "speech",
+        role: "assistant",
+        userId: "bot-1",
+        speakerName: "clanky",
+        text: "[interrupted] this half delivered assistant sentence should not become memory evidence",
+        lifecycleStatus: "interrupted",
+        at: Date.now() - 10_000
+      },
+      {
+        kind: "speech",
+        role: "user",
+        userId: "user-1",
+        speakerName: "Alice",
+        text: "Also remember that my deploy troubleshooting usually starts with logs before dashboards or guesses.",
+        at: Date.now()
+      }
+    ]
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(reflectedPrompt.includes("half delivered assistant"), false);
+  assert.equal(reflectedPrompt.includes("deploy troubleshooting"), true);
+});
+
+test("processIngestMessage indexes conversation text without auto-extracting facts", async () => {
+  let vectorPayload = "";
   const memory = new MemoryManager({
     store: {
       logAction() {
@@ -217,12 +375,11 @@ test("processIngestMessage writes daily log without auto-extracting facts", asyn
     },
     memoryFilePath: "memory/MEMORY.md"
   });
-  memory.appendDailyLogEntry = async () => {
-    dailyLogCalled = true;
+  memory.ensureConversationMessageVector = async ({ content }) => {
+    vectorPayload = String(content || "");
+    return null;
   };
-  memory.queueMemoryRefresh = () => {
-    refreshCalled = true;
-  };
+  memory.scheduleTextChannelMicroReflection = () => undefined;
 
   await memory.processIngestMessage({
     messageId: "msg-1",
@@ -236,15 +393,12 @@ test("processIngestMessage writes daily log without auto-extracting facts", asyn
     }
   });
 
-  assert.equal(dailyLogCalled, true);
-  assert.equal(refreshCalled, true);
+  assert.equal(vectorPayload, "I am Alex and I love pizza.");
 });
 
 test("processIngestMessage skips text micro-reflection scheduling for bot-authored messages", async () => {
   let scheduled = false;
   const memory = createMemoryForIngestTests();
-  memory.appendDailyLogEntry = async () => undefined;
-  memory.queueMemoryRefresh = () => undefined;
   memory.ensureConversationMessageVector = async () => null;
   memory.scheduleTextChannelMicroReflection = () => {
     scheduled = true;
@@ -663,23 +817,6 @@ test("purgeGuildMemory removes only the selected guild's stored memory artifacts
       }
     });
 
-    await memory.appendDailyLogEntry({
-      messageId: "journal-g1",
-      authorId: "user-1",
-      authorName: "Alice",
-      guildId: "guild-1",
-      channelId: "chan-1",
-      content: "journal entry for guild one"
-    });
-    await memory.appendDailyLogEntry({
-      messageId: "journal-g2",
-      authorId: "user-2",
-      authorName: "Bob",
-      guildId: "guild-2",
-      channelId: "chan-2",
-      content: "journal entry for guild two"
-    });
-
     const fakeTimer = setTimeout(() => undefined, 60_000);
     memory.textMicroReflectionTimers.set("guild-1:chan-1", fakeTimer);
     memory.textMicroReflectionState.set("guild-1:chan-1", {
@@ -696,8 +833,6 @@ test("purgeGuildMemory removes only the selected guild's stored memory artifacts
     assert.equal(result.conversationMessagesDeleted, 1);
     assert.equal(result.conversationVectorsDeleted, 1);
     assert.equal(result.reflectionEventsDeleted, 2);
-    assert.equal(result.journalEntriesDeleted, 1);
-    assert.equal(result.journalFilesTouched, 1);
     assert.equal(memory.textMicroReflectionTimers.has("guild-1:chan-1"), false);
     assert.equal(memory.textMicroReflectionState.has("guild-1:chan-1"), false);
 
@@ -721,11 +856,8 @@ test("purgeGuildMemory removes only the selected guild's stored memory artifacts
     assert.equal(factVectorCount, 1);
     assert.equal(messageVectorCount, 1);
 
-    const date = new Date();
-    const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-    const dailyFileText = await fs.readFile(path.join(tempDir, `${dateKey}.md`), "utf8");
-    assert.equal(dailyFileText.includes("guild:guild-1"), false);
-    assert.equal(dailyFileText.includes("journal entry for guild two"), true);
+    const memoryDirEntries = await fs.readdir(tempDir);
+    assert.equal(memoryDirEntries.some((name) => /^\d{4}-\d{2}-\d{2}\.md$/u.test(name)), false);
   } finally {
     store.close();
     await rmTempDir(tempDir);
