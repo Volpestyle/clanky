@@ -31,7 +31,7 @@ import { wasLinkSharedSince, recordSharedLink } from "./storeLookups.ts";
 import { getRecentVoiceSessions, getVoiceSessionEvents } from "./storeVoice.ts";
 import { getReplyPerformanceStats, getStats } from "./storeStats.ts";
 import { createAutomation, getAutomationById, countAutomations, listAutomations, getMostRecentAutomations, findAutomationsByQuery, setAutomationStatus, claimDueAutomations, finalizeAutomationRun, recordAutomationRun, getAutomationRuns } from "./storeAutomation.ts";
-import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactById, getMemoryFactBySubjectAndFact, updateMemoryFact, deleteMemoryFact, deleteMemoryFactsForGuild, cleanupLegacyMemoryFacts, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject, searchMemoryFactsLexical, searchMemoryFactsByEmbedding, type MemoryFactScope } from "./storeMemory.ts";
+import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactById, getMemoryFactBySubjectAndFact, updateMemoryFact, deleteMemoryFact, deleteMemoryFactsForGuild, cleanupLegacyMemoryFacts, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject, searchMemoryFactsLexical, searchMemoryFactsByEmbedding, type MemoryFactScope, type MemorySubjectQueryScope } from "./storeMemory.ts";
 import { deleteSessionSummariesForGuild, getRecentSessionSummaries, pruneExpiredSessionSummaries, upsertSessionSummary } from "./storeSessionSummaries.ts";
 
 export const SETTINGS_KEY = "runtime_settings";
@@ -975,7 +975,7 @@ export class Store {
     return getMemoryFactVectorNativeScores(this, opts);
   }
 
-  getMemorySubjects(limit = 80, scope: { guildId?: string | null; scope?: MemoryFactScope | null; includePortableUserScope?: boolean; includeOwnerScope?: boolean } | null = null) {
+  getMemorySubjects(limit = 80, scope: MemorySubjectQueryScope | null = null) {
     return getMemorySubjects(this, limit, scope);
   }
 

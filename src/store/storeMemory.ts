@@ -95,6 +95,14 @@ interface MemorySubjectRow {
   fact_count: number;
 }
 
+export interface MemorySubjectQueryScope {
+  guildId?: string | null;
+  scope?: MemoryFactScope | null;
+  scopes?: MemoryFactScope[] | null;
+  includePortableUserScope?: boolean;
+  includeOwnerScope?: boolean;
+}
+
 function isPortableUserSubject(value: unknown) {
   const normalized = String(value || "").trim();
   return Boolean(normalized) && /^[0-9]+$/.test(normalized);
@@ -238,6 +246,17 @@ function normalizeMemoryFactScope(
     .toLowerCase();
   if (MEMORY_FACT_SCOPE_SET.has(normalized as MemoryFactScope)) return normalized as MemoryFactScope;
   return fallback;
+}
+
+function normalizeMemoryFactScopes(values: unknown): MemoryFactScope[] {
+  if (!Array.isArray(values)) return [];
+  return [
+    ...new Set(
+      values
+        .map((value) => normalizeMemoryFactScope(value))
+        .filter((value): value is MemoryFactScope => Boolean(value))
+    )
+  ];
 }
 
 function buildScopedFactWhereClause({
@@ -1300,16 +1319,28 @@ try {
 }
 }
 
-export function getMemorySubjects(store: MemoryStore, limit = 80, scope = null) {
+export function getMemorySubjects(store: MemoryStore, limit = 80, scope: MemorySubjectQueryScope | null = null) {
 const where = ["is_active = 1"];
 const args: Array<string | number> = [];
   const normalizedScope = normalizeMemoryFactScope(scope?.scope);
+  const normalizedScopes = normalizedScope ? [] : normalizeMemoryFactScopes(scope?.scopes);
   const normalizedGuildId = String(scope?.guildId || "").trim();
   const includePortableUserScope = scope?.includePortableUserScope === true;
   const includeOwnerScope = scope?.includeOwnerScope === true;
   if (normalizedScope) {
     where.push("scope = ?");
     args.push(normalizedScope);
+    if (normalizedGuildId) {
+      where.push("guild_id = ?");
+      args.push(normalizedGuildId);
+    }
+  } else if (normalizedScopes.length) {
+    where.push(`scope IN (${normalizedScopes.map(() => "?").join(", ")})`);
+    args.push(...normalizedScopes);
+    if (normalizedGuildId) {
+      where.push("guild_id = ?");
+      args.push(normalizedGuildId);
+    }
   } else if (normalizedGuildId && (includePortableUserScope || includeOwnerScope)) {
     const clauses = ["(scope = 'guild' AND guild_id = ?)"];
     if (includePortableUserScope) clauses.push("scope = 'user'");

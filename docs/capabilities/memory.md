@@ -375,6 +375,7 @@ Notes:
 - useful for inspection and debugging
 - not the runtime source of truth
 - dashboard can also render a scoped runtime snapshot without changing the file on disk
+- the `People` section is limited to `user` and `guild` facts; project, task, swarm, and collaborator work facts stay in work-memory surfaces
 - the global snapshot now includes an `Owner Private` section so operators can inspect the private assistant layer separately from person/community memory
 - raw durable turn history, vectors, facts, and reflection runs live in SQLite rather than parallel markdown journals
 

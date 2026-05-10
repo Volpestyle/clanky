@@ -113,6 +113,8 @@ const PEOPLE_FACT_TOTAL_LIMIT_MIN = 200;
 const PEOPLE_FACT_TOTAL_LIMIT_MAX = 1200;
 const PEOPLE_FACT_TOTAL_LIMIT_MULTIPLIER = 10;
 const FACT_SECTION_SUBJECT_FETCH_LIMIT = 32;
+const PEOPLE_SUMMARY_SCOPES: MemoryFactScope[] = ["guild", "user"];
+const GUILD_PEOPLE_SUMMARY_SCOPES: MemoryFactScope[] = ["guild"];
 
 // Settling delay before micro-reflection runs after queued text events.
 const DEFAULT_MICRO_REFLECTION_SETTLE_TIMEOUT_MS = 8_000;
@@ -208,6 +210,12 @@ function mergeUniqueFactCandidates(...groups: Array<Array<MemoryFactRow> | null 
     }
   }
   return [...merged.values()];
+}
+
+function isPeopleSummarySubject(subjectRow: { scope?: string | null; subject?: string | null } | null | undefined) {
+  const scope = String(subjectRow?.scope || "guild").trim().toLowerCase();
+  const subject = String(subjectRow?.subject || "").trim();
+  return Boolean(subject) && (scope === "guild" || scope === "user") && subject !== LORE_SUBJECT && subject !== SELF_SUBJECT;
 }
 
 export class MemoryManager {
@@ -1913,8 +1921,13 @@ export class MemoryManager {
   buildPeopleSection(guildId: string | null = null) {
     const normalizedGuildId = String(guildId || "").trim() || null;
     const subjects = this.store
-      .getMemorySubjects(MAX_MEMORY_SUBJECTS, normalizedGuildId ? { guildId: normalizedGuildId } : null)
-      .filter((subjectRow) => subjectRow.subject !== LORE_SUBJECT && subjectRow.subject !== SELF_SUBJECT);
+      .getMemorySubjects(
+        MAX_MEMORY_SUBJECTS,
+        normalizedGuildId
+          ? { guildId: normalizedGuildId, scopes: GUILD_PEOPLE_SUMMARY_SCOPES }
+          : { scopes: PEOPLE_SUMMARY_SCOPES }
+      )
+      .filter(isPeopleSummarySubject);
     const factsByScopedSubject = this.getPeopleFactsByScopedSubject(subjects);
     const peopleLines = [];
 
@@ -1947,6 +1960,7 @@ export class MemoryManager {
   getPeopleFactsByScopedSubject(subjectRows = []) {
     const subjectsByScope = new Map();
     for (const subjectRow of subjectRows) {
+      if (!isPeopleSummarySubject(subjectRow)) continue;
       const scope = String(subjectRow?.scope || "guild").trim().toLowerCase();
       const guildId = String(subjectRow?.guild_id || "").trim();
       const subjectId = String(subjectRow?.subject || "").trim();
