@@ -135,9 +135,9 @@ It is throttled only by natural backpressure and its own cooldowns:
 
 Every successful note run appends one note (~40 words max, 256 output tokens) into the rolling note buffer. Notes are private model context, not spoken output. The note prompt biases toward: readable on-screen text, salient entities, change from the previous frame, and explicit uncertainty when the frame is ambiguous.
 
-### Commentary turns
+### Legacy Commentary Turns
 
-The commentary loop is the proactive speech path. It uses the same visual-change metrics as the note loop, but commentary is still gated like optional voice speech:
+The shipped commentary loop is the legacy proactive speech path. It uses the same Bun-side visual-change metrics as the note loop, then routes through the voice brain with the latest frame attached:
 
 - first frame (`share_start`)
 - interval (`commentaryIntervalSeconds`)
@@ -146,6 +146,8 @@ The commentary loop is the proactive speech path. It uses the same visual-change
 - no pending voice work
 - no active playback
 - `autonomousCommentaryEnabled`
+
+The next proactive-stream design replaces this with clankvox scene-change IPC events and a `stream_visual_event` thought-engine trigger. That design keeps cost/eagerness gates but intentionally removes the deterministic audio quiet-window requirement. See [`proactive-stream-commentary.md`](proactive-stream-commentary.md).
 
 When interval and visual-change triggers are both true on the same frame, runtime labels the request as `change_detected` so logs and downstream prompt context reflect the on-screen event that caused the turn.
 

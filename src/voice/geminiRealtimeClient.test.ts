@@ -60,19 +60,6 @@ test("GeminiRealtimeClient append/commit audio emits start, media, and end event
   });
 });
 
-test("GeminiRealtimeClient requestVideoCommentary sends user turn and tracks active response", () => {
-  const client = new GeminiRealtimeClient({ apiKey: "gem-key" });
-  const outbound = [];
-  client.send = (payload) => {
-    outbound.push(payload);
-  };
-
-  client.requestVideoCommentary("what is on screen?");
-  assert.equal(client.isResponseInProgress(), true);
-  assert.equal(outbound.length, 1);
-  assert.equal(outbound[0]?.clientContent?.turns?.[0]?.parts?.[0]?.text, "what is on screen?");
-});
-
 test("GeminiRealtimeClient cancelActiveResponse is a no-op", () => {
   const client = new GeminiRealtimeClient({ apiKey: "gem-key" });
   client.pendingResponseActive = true;

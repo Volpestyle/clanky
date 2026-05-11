@@ -119,8 +119,7 @@ function createSession(overrides = {}) {
       }
     },
     realtimeClient: {
-      appendInputVideoFrame() {},
-      requestVideoCommentary() {}
+      appendInputVideoFrame() {}
     },
     ...overrides
   };

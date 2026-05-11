@@ -25,7 +25,6 @@ import {
 import type { RealtimeInterruptAcceptanceMode } from "./realtimeInterruptAcceptance.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
 
-const COMMENTARY_RESPONSE_STALE_MS = 30_000;
 const REPLY_ADDRESSING_SOURCE = "reply_addressing";
 const PLAYBACK_RESPONSE_INSTRUCTIONS = [
   "You are rendering prewritten speech audio.",
@@ -79,11 +78,8 @@ export class OpenAiRealtimeClient extends EventEmitter {
   sessionConfig;
   activeResponseId;
   activeResponseStatus;
-  pendingCommentaryResponseId: string | null;
-  pendingCommentaryRequestedAt: number;
   pendingReplyAddressingRequestsByCorrelationId: Map<string, PendingReplyAddressingRequest>;
   pendingReplyAddressingRequestsByResponseId: Map<string, PendingReplyAddressingRequest>;
-  latestVideoFrame;
   audioBase64Buffer: Buffer | null;
   supportsFunctionCallOutputImages: boolean;
 
@@ -106,11 +102,8 @@ export class OpenAiRealtimeClient extends EventEmitter {
     this.sessionConfig = null;
     this.activeResponseId = null;
     this.activeResponseStatus = null;
-    this.pendingCommentaryResponseId = null;
-    this.pendingCommentaryRequestedAt = 0;
     this.pendingReplyAddressingRequestsByCorrelationId = new Map();
     this.pendingReplyAddressingRequestsByResponseId = new Map();
-    this.latestVideoFrame = null;
     this.audioBase64Buffer = null;
     this.supportsFunctionCallOutputImages = true;
   }
@@ -184,8 +177,6 @@ export class OpenAiRealtimeClient extends EventEmitter {
         logEvent: "openai_realtime_ws_closed",
         onClose: () => {
           this.clearActiveResponse();
-          this.pendingCommentaryResponseId = null;
-          this.pendingCommentaryRequestedAt = 0;
           this.pendingReplyAddressingRequestsByCorrelationId.clear();
           this.pendingReplyAddressingRequestsByResponseId.clear();
         }
@@ -205,7 +196,6 @@ export class OpenAiRealtimeClient extends EventEmitter {
       tools: resolvedTools,
       toolChoice: resolvedToolChoice
     };
-    this.latestVideoFrame = null;
     this.sendSessionUpdate();
 
     return this.getState();
@@ -306,11 +296,6 @@ export class OpenAiRealtimeClient extends EventEmitter {
       }
 
       this.emit("event", event);
-      if (response?.metadata?.source === "stream_watch_commentary") {
-        this.pendingCommentaryResponseId = responseId || this.pendingCommentaryResponseId;
-        return;
-      }
-
       this.setActiveResponse(responseId, status);
       return;
     }
@@ -378,13 +363,6 @@ export class OpenAiRealtimeClient extends EventEmitter {
       }
 
       this.emit("event", event);
-      if (response?.metadata?.source === "stream_watch_commentary") {
-        this.pendingCommentaryResponseId = null;
-        this.pendingCommentaryRequestedAt = 0;
-        this.emit("response_done", event);
-        return;
-      }
-
       this.finishActiveResponse(responseId, status);
       this.emit("response_done", event);
     }
@@ -481,61 +459,6 @@ export class OpenAiRealtimeClient extends EventEmitter {
       audio_end_ms: normalizedAudioEndMs
     });
     return true;
-  }
-
-  appendInputVideoFrame({ mimeType = "image/jpeg", dataBase64 }) {
-    const normalizedFrame = String(dataBase64 || "").trim();
-    if (!normalizedFrame) return;
-    this.latestVideoFrame = {
-      mimeType: normalizeImageMimeType(mimeType),
-      dataBase64: normalizedFrame,
-      at: Date.now()
-    };
-  }
-
-  requestVideoCommentary(promptText) {
-    const prompt = String(promptText || "").trim();
-    if (!prompt) return;
-    const frame = this.latestVideoFrame;
-    if (!frame?.dataBase64) {
-      throw new Error("No stream-watch frame buffered for OpenAI realtime commentary.");
-    }
-
-    if (this.pendingCommentaryResponseId) {
-      const age = Date.now() - this.pendingCommentaryRequestedAt;
-      if (age < COMMENTARY_RESPONSE_STALE_MS) return;
-      this.pendingCommentaryResponseId = null;
-      this.pendingCommentaryRequestedAt = 0;
-    }
-
-    this.pendingCommentaryResponseId = `pending_commentary_${Date.now()}`;
-    this.pendingCommentaryRequestedAt = Date.now();
-
-    const imageUrl = `data:${frame.mimeType};base64,${frame.dataBase64}`;
-    this.send({
-      type: "response.create",
-      response: {
-        conversation: "none",
-        metadata: { source: "stream_watch_commentary" },
-        output_modalities: ["audio"],
-        input: [
-          {
-            type: "message",
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: prompt
-              },
-              {
-                type: "input_image",
-                image_url: imageUrl
-              }
-            ]
-          }
-        ]
-      }
-    });
   }
 
   requestReplyAddressingClassification({
@@ -783,10 +706,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
     await closeRealtimeSocket(this.ws);
 
     this.ws = null;
-    this.latestVideoFrame = null;
     this.clearActiveResponse();
-    this.pendingCommentaryResponseId = null;
-    this.pendingCommentaryRequestedAt = 0;
     this.pendingReplyAddressingRequestsByCorrelationId.clear();
     this.pendingReplyAddressingRequestsByResponseId.clear();
   }
@@ -795,8 +715,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
     return {
       ...buildCommonRealtimeState(this),
       activeResponseId: this.activeResponseId || null,
-      activeResponseStatus: this.activeResponseStatus || null,
-      bufferedVideoFrameAt: this.latestVideoFrame?.at ? new Date(this.latestVideoFrame.at).toISOString() : null
+      activeResponseStatus: this.activeResponseStatus || null
     };
   }
 
@@ -807,10 +726,6 @@ export class OpenAiRealtimeClient extends EventEmitter {
     if (TERMINAL_RESPONSE_STATUSES.has(status)) return false;
     if (status === "in_progress") return true;
     return Boolean(this.activeResponseId);
-  }
-
-  isCommentaryResponsePending() {
-    return Boolean(this.pendingCommentaryResponseId);
   }
 
   log(level, event, metadata = null) {

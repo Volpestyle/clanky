@@ -325,28 +325,6 @@ export class GeminiRealtimeClient extends EventEmitter {
     return "local_cut_async_confirmation";
   }
 
-  requestVideoCommentary(promptText) {
-    const prompt = String(promptText || "").trim();
-    if (!prompt) return;
-
-    this.pendingResponseActive = true;
-    this.send({
-      clientContent: {
-        turns: [
-          {
-            role: "user",
-            parts: [
-              {
-                text: prompt
-              }
-            ]
-          }
-        ],
-        turnComplete: true
-      }
-    });
-  }
-
   requestTextUtterance(promptText) {
     const prompt = String(promptText || "").trim();
     if (!prompt) return;

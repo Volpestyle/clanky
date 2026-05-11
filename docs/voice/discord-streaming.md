@@ -509,7 +509,8 @@ There is no separate standalone settings block for outbound native publish. Musi
 
 - Every admitted frame updates the latest-frame buffer.
 - A separate note loop keeps rolling screen notes fresh with `noteProvider`, `noteModel`, `noteIntervalSeconds`, `noteIdleIntervalSeconds`, `staticFloor`, `changeThreshold`, and `changeMinIntervalSeconds`.
-- Proactive commentary uses `commentaryIntervalSeconds` plus the normal voice quiet-window gates, and can optionally override the voice model with `commentaryProvider` / `commentaryModel`.
+- The shipped legacy proactive commentary loop uses `commentaryIntervalSeconds` plus the normal voice quiet-window gates, and can optionally override the voice model with `commentaryProvider` / `commentaryModel`.
+- The next stream-commentary design moves visual-event detection into clankvox and routes through the voice thought engine without a hard silence requirement. See [`proactive-stream-commentary.md`](proactive-stream-commentary.md).
 - Raw frames are attached only for commentary turns and direct screen questions. Normal conversation turns rely on the rolling notes.
 
 The full product-level behavior and settings contract live in [`screen-share-system.md`](screen-share-system.md).
