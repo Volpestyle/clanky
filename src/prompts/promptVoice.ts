@@ -711,7 +711,7 @@ export function buildVoiceTurnPrompt({
         ? "Receiving frames. You are already watching — do not call start_screen_watch again."
         : "Waiting for the first frame. Do not call start_screen_watch again — it is already running.",
       screenShareSnapshotAvailable
-        ? "Use see_screenshare_snapshot to inspect the current frame directly."
+        ? "Use look_at_screen to inspect the current frame directly."
         : null
     ].filter(Boolean);
     parts.push(frameParts.join(" "));
@@ -749,7 +749,7 @@ export function buildVoiceTurnPrompt({
         ...normalizedStreamWatchNotes.notes.map((note) => `- ${note}`),
         "- These are sampled frame snapshots. Avoid overclaiming continuity between samples.",
         screenShareSnapshotAvailable
-          ? "- If these notes are insufficient or you need to inspect the screen directly, use see_screenshare_snapshot."
+          ? "- If these notes are insufficient or you need to inspect the screen directly, use look_at_screen."
           : null
       ]
         .filter(Boolean)

@@ -1,0 +1,14 @@
+flowchart TD
+    A["clankvox decoded frame"] --> B["Scene-change detector<br/>perceptual hash / cheap diff"]
+    B -->|confidence + metadata| C["IPC visual event"]
+    C --> D["Voice runtime subscriber<br/>resolve session + stream target"]
+    D --> E["Freeze latest admitted frame"]
+    E --> F["ThoughtEngine trigger<br/>stream_visual_event"]
+    F --> G{"Eagerness + cost gates"}
+    G -->|skip attempt| H["Log visual-event skip"]
+    G -->|attempt| I["Thought generation<br/>frame + room context + persona"]
+    I --> J{"Native route mode"}
+    J -->|context_only| K["conversation.item.create<br/>input_text + input_image"]
+    J -->|force_turn| L["conversation.item.create<br/>then response.create"]
+    I --> M["wait_for_user / [SKIP]<br/>explicit silence"]
+    I --> N["Spoken reaction"]

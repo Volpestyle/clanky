@@ -172,43 +172,6 @@ test("OpenAiRealtimeClient truncateConversationItem emits truncate event", () =>
   assert.equal(outbound.audio_end_ms, 1450);
 });
 
-test("OpenAiRealtimeClient stream-watch commentary sends out-of-band image input", () => {
-  const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
-  let outbound = null;
-  client.send = (payload) => {
-    outbound = payload;
-  };
-
-  client.appendInputVideoFrame({
-    mimeType: "image/jpg",
-    dataBase64: "Zm9v"
-  });
-  client.requestVideoCommentary("one short line");
-
-  assert.ok(outbound);
-  assert.equal(outbound.type, "response.create");
-  assert.equal(outbound.response.conversation, "none");
-  assert.deepEqual(outbound.response.output_modalities, ["audio"]);
-  assert.equal(outbound.response.input?.[0]?.type, "message");
-  assert.equal(outbound.response.input?.[0]?.role, "user");
-  assert.equal(outbound.response.input?.[0]?.content?.[0]?.type, "input_text");
-  assert.equal(outbound.response.input?.[0]?.content?.[0]?.text, "one short line");
-  assert.equal(outbound.response.input?.[0]?.content?.[1]?.type, "input_image");
-  assert.equal(outbound.response.input?.[0]?.content?.[1]?.image_url, "data:image/jpeg;base64,Zm9v");
-});
-
-test("OpenAiRealtimeClient stream-watch commentary requires a buffered frame", () => {
-  const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
-  client.send = () => {
-    throw new Error("send should not be called");
-  };
-
-  assert.throws(
-    () => client.requestVideoCommentary("one short line"),
-    /No stream-watch frame buffered/
-  );
-});
-
 test("OpenAiRealtimeClient requestTextUtterance adds a user message and creates a normal audio response", () => {
   const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
   const outbound = [];
@@ -344,6 +307,35 @@ test("OpenAiRealtimeClient sendFunctionCallOutput emits function_call_output ite
   assert.equal(outbound.item?.type, "function_call_output");
   assert.equal(outbound.item?.call_id, "call_123");
   assert.equal(outbound.item?.output, JSON.stringify({ ok: true, items: 2 }));
+});
+
+test("OpenAiRealtimeClient sendFunctionCallOutput can attach an input image", () => {
+  const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
+  const outbound = [];
+  client.send = (payload) => {
+    outbound.push(payload);
+  };
+
+  client.sendFunctionCallOutput({
+    callId: "call_screen_1",
+    output: {
+      ok: true,
+      imageAttached: true
+    },
+    inputImage: {
+      mimeType: "image/jpeg",
+      dataBase64: "Zm9v",
+      text: "look_at_screen result"
+    }
+  });
+
+  assert.equal(outbound.length, 2);
+  assert.equal(outbound[0]?.item?.type, "function_call_output");
+  assert.equal(outbound[1]?.type, "conversation.item.create");
+  assert.equal(outbound[1]?.item?.type, "message");
+  assert.equal(outbound[1]?.item?.content?.[0]?.type, "input_text");
+  assert.equal(outbound[1]?.item?.content?.[1]?.type, "input_image");
+  assert.equal(outbound[1]?.item?.content?.[1]?.image_url, "data:image/jpeg;base64,Zm9v");
 });
 
 test("OpenAiRealtimeClient side-channel reply addressing stays off the normal transcript lane", () => {

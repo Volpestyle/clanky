@@ -281,6 +281,7 @@ export type VoiceToolRuntimeSessionLike = {
     toolCallEvents?: VoiceToolCallEvent[];
     musicQueueState?: Record<string, unknown> | null;
     soundboard?: VoiceSessionSoundboardState | null;
+    streamWatch?: Partial<VoiceSessionStreamWatchState> | null;
     recentVoiceTurns?: Array<Record<string, unknown>>;
     lastRealtimeToolCallerUserId?: string | null;
     awaitingToolOutputs?: boolean;

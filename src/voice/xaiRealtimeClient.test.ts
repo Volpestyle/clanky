@@ -18,7 +18,57 @@ test("XaiRealtimeClient requestTextUtterance sends text item then audio response
   assert.equal(outbound[0]?.item?.content?.[0]?.type, "input_text");
   assert.equal(outbound[0]?.item?.content?.[0]?.text, "say this");
   assert.equal(outbound[1]?.type, "response.create");
-  assert.deepEqual(outbound[1]?.response?.modalities, ["audio", "text"]);
+  assert.equal(outbound[1]?.response, undefined);
+});
+
+test("XaiRealtimeClient builds latest model query URL", () => {
+  const client = new XaiRealtimeClient({ apiKey: "test-key" });
+
+  assert.equal(
+    client.buildRealtimeUrl("grok-voice-fast-1.0"),
+    "wss://api.x.ai/v1/realtime?model=grok-voice-fast-1.0"
+  );
+  assert.equal(
+    client.buildRealtimeUrl("unknown-model"),
+    "wss://api.x.ai/v1/realtime?model=grok-voice-think-fast-1.0"
+  );
+});
+
+test("XaiRealtimeClient connect sends latest session.update shape", async () => {
+  const client = new XaiRealtimeClient({ apiKey: "test-key" });
+  const outbound = [];
+  let openedUrl = "";
+  client.openSocket = async (url) => {
+    openedUrl = String(url || "");
+    return {
+      readyState: 1,
+      on() {},
+      send(raw) {
+        outbound.push(JSON.parse(String(raw)));
+      }
+    };
+  };
+
+  await client.connect({
+    model: "grok-voice-fast-1.0",
+    voice: "Rex",
+    instructions: "brief",
+    inputAudioFormat: "audio/pcm",
+    outputAudioFormat: "audio/pcm",
+    inputSampleRateHz: 48000,
+    outputSampleRateHz: 16000
+  });
+
+  assert.equal(openedUrl, "wss://api.x.ai/v1/realtime?model=grok-voice-fast-1.0");
+  assert.equal(outbound.length, 1);
+  assert.equal(outbound[0]?.type, "session.update");
+  assert.equal(outbound[0]?.session?.voice, "rex");
+  assert.equal(outbound[0]?.session?.instructions, "brief");
+  assert.deepEqual(outbound[0]?.session?.turn_detection, { type: null });
+  assert.deepEqual(outbound[0]?.session?.audio?.input?.format, { type: "audio/pcm", rate: 48000 });
+  assert.deepEqual(outbound[0]?.session?.audio?.output?.format, { type: "audio/pcm", rate: 16000 });
+  assert.equal(outbound[0]?.session?.region, undefined);
+  assert.equal(outbound[0]?.session?.modalities, undefined);
 });
 
 test("XaiRealtimeClient requestPlaybackUtterance sends exact-line prompt through the same playback lane", () => {
@@ -75,17 +125,15 @@ test("XaiRealtimeClient updateTools sends provider-native tools via session.upda
     outbound.push(payload);
   };
   client.sessionConfig = {
-    voice: "Rex",
+    model: "grok-voice-think-fast-1.0",
+    voice: "rex",
     instructions: "brief",
-    region: "us-east-1",
     audio: {
       input: { format: { type: "audio/pcm", rate: 24000 } },
       output: { format: { type: "audio/pcm", rate: 24000 } }
     },
     turn_detection: { type: null },
-    modalities: ["audio", "text"],
-    tools: [],
-    toolChoice: "auto"
+    tools: []
   };
 
   client.updateTools({
@@ -96,8 +144,7 @@ test("XaiRealtimeClient updateTools sends provider-native tools via session.upda
         description: "Lookup docs",
         parameters: { type: "object", properties: {} }
       }
-    ],
-    toolChoice: "auto"
+    ]
   });
 
   assert.equal(outbound.length, 1);
@@ -149,6 +196,12 @@ test("XaiRealtimeClient handleIncoming emits audio, transcript, response_done, a
   client.handleIncoming(
     JSON.stringify({
       type: "response.audio.delta",
+      delta: "IGNORED_OLD_AUDIO_BASE64"
+    })
+  );
+  client.handleIncoming(
+    JSON.stringify({
+      type: "response.output_audio.delta",
       delta: "AUDIO_BASE64"
     })
   );
@@ -211,12 +264,7 @@ test("XaiRealtimeClient send records outbound state and requires open socket", (
       sentPayload = JSON.parse(raw);
     }
   };
-  client.send({
-    type: "response.create",
-    response: {
-      modalities: ["audio", "text"]
-    }
-  });
+  client.send({ type: "response.create" });
 
   assert.equal(sentPayload?.type, "response.create");
   assert.equal(client.lastOutboundEventType, "response.create");

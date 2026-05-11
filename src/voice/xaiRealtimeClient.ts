@@ -13,29 +13,27 @@ import {
   sendRealtimePayload
 } from "./realtimeClientCore.ts";
 import type { RealtimeInterruptAcceptanceMode } from "./realtimeInterruptAcceptance.ts";
+import {
+  XAI_REALTIME_DEFAULT_MODEL,
+  XAI_REALTIME_DEFAULT_VOICE,
+  normalizeXaiRealtimeAudioFormat,
+  normalizeXaiRealtimeModel,
+  normalizeXaiRealtimeSampleRateHz,
+  normalizeXaiRealtimeVoice
+} from "./realtimeProviderNormalization.ts";
 
 const XAI_REALTIME_URL = "wss://api.x.ai/v1/realtime";
 
 const AUDIO_DELTA_TYPES = new Set([
-  "response.audio.delta",
-  "response.output_audio.delta",
-  "output_audio.delta",
-  "audio.delta",
-  "response.audio.chunk",
-  "response.output_audio.chunk"
+  "response.output_audio.delta"
 ]);
 
 const TRANSCRIPT_TYPES = new Set([
   "conversation.item.input_audio_transcription.completed",
   "response.output_audio_transcript.delta",
   "response.output_audio_transcript.done",
-  "response.audio_transcript.done",
-  "response.audio_transcript.completed",
   "response.text.delta",
-  "response.text.done",
-  "response.output_text.delta",
-  "response.output_text.done",
-  "transcript.completed"
+  "response.text.done"
 ]);
 
 export class XaiRealtimeClient extends EventEmitter {
@@ -79,15 +77,14 @@ export class XaiRealtimeClient extends EventEmitter {
   }
 
   async connect({
-    voice = "Rex",
+    model = XAI_REALTIME_DEFAULT_MODEL,
+    voice = XAI_REALTIME_DEFAULT_VOICE,
     instructions = "",
-    region = "us-east-1",
     inputAudioFormat = "audio/pcm",
     outputAudioFormat = "audio/pcm",
     inputSampleRateHz = 24000,
     outputSampleRateHz = 24000,
-    tools = [],
-    toolChoice = "auto"
+    tools = []
   } = {}) {
     if (!this.apiKey) {
       throw new Error("Missing XAI_API_KEY for realtime voice runtime.");
@@ -97,7 +94,20 @@ export class XaiRealtimeClient extends EventEmitter {
       return this.getState();
     }
 
-    const ws = await this.openSocket();
+    const resolvedModel = normalizeXaiRealtimeModel(model);
+    const resolvedVoice = normalizeXaiRealtimeVoice(voice);
+    const resolvedInputAudioFormat = normalizeXaiRealtimeAudioFormat(inputAudioFormat);
+    const resolvedOutputAudioFormat = normalizeXaiRealtimeAudioFormat(outputAudioFormat);
+    const resolvedInputSampleRateHz = normalizeXaiRealtimeSampleRateHz(
+      inputSampleRateHz,
+      24000
+    );
+    const resolvedOutputSampleRateHz = normalizeXaiRealtimeSampleRateHz(
+      outputSampleRateHz,
+      24000
+    );
+
+    const ws = await this.openSocket(this.buildRealtimeUrl(resolvedModel));
     markRealtimeConnected(this, ws);
 
     ws.on("message", (payload) => {
@@ -118,38 +128,34 @@ export class XaiRealtimeClient extends EventEmitter {
     });
 
     this.sessionConfig = {
-      voice: String(voice || "Rex").trim() || "Rex",
+      model: resolvedModel,
+      voice: resolvedVoice,
       instructions: String(instructions || ""),
-      region: String(region || "us-east-1").trim() || "us-east-1",
-      audio: {
-        input: {
-          format: {
-            type: String(inputAudioFormat || "audio/pcm").trim() || "audio/pcm",
-            rate: Number(inputSampleRateHz) || 24000
-          }
-        },
-        output: {
-          format: {
-            type: String(outputAudioFormat || "audio/pcm").trim() || "audio/pcm",
-            rate: Number(outputSampleRateHz) || 24000
-          }
-        }
-      },
+      audio: buildXaiRealtimeAudioConfig({
+        inputAudioFormat: resolvedInputAudioFormat,
+        inputSampleRateHz: resolvedInputSampleRateHz,
+        outputAudioFormat: resolvedOutputAudioFormat,
+        outputSampleRateHz: resolvedOutputSampleRateHz
+      }),
       turn_detection: {
         type: null
       },
-      modalities: ["audio", "text"],
-      tools: normalizeXaiRealtimeTools(tools),
-      toolChoice: normalizeXaiRealtimeToolChoice(toolChoice)
+      tools: normalizeXaiRealtimeTools(tools)
     };
     this.sendSessionUpdate();
 
     return this.getState();
   }
 
-  async openSocket(): Promise<WebSocket> {
+  buildRealtimeUrl(model = XAI_REALTIME_DEFAULT_MODEL) {
+    const url = new URL(XAI_REALTIME_URL);
+    url.searchParams.set("model", normalizeXaiRealtimeModel(model));
+    return url.toString();
+  }
+
+  async openSocket(url = this.buildRealtimeUrl()): Promise<WebSocket> {
     return await openRealtimeSocket({
-      url: XAI_REALTIME_URL,
+      url,
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${this.apiKey}`
@@ -301,10 +307,7 @@ export class XaiRealtimeClient extends EventEmitter {
     this._responseInProgress = true;
     this.activeResponseStatus = "in_progress";
     this.send({
-      type: "response.create",
-      response: {
-        modalities: ["audio", "text"]
-      }
+      type: "response.create"
     });
   }
 
@@ -353,19 +356,16 @@ export class XaiRealtimeClient extends EventEmitter {
   }
 
   updateTools({
-    tools = [],
-    toolChoice = "auto"
+    tools = []
   }: {
     tools?: Array<{ type: string; name: string; description: string; parameters: object }>;
-    toolChoice?: string;
   } = {}) {
     if (!this.sessionConfig || typeof this.sessionConfig !== "object") {
       throw new Error("xAI realtime session config is not initialized.");
     }
     this.sessionConfig = {
       ...this.sessionConfig,
-      tools: normalizeXaiRealtimeTools(tools),
-      toolChoice: normalizeXaiRealtimeToolChoice(toolChoice)
+      tools: normalizeXaiRealtimeTools(tools)
     };
     this.sendSessionUpdate();
   }
@@ -453,8 +453,6 @@ export class XaiRealtimeClient extends EventEmitter {
         instructions: this.sessionConfig.instructions,
         audio: this.sessionConfig.audio,
         turn_detection: this.sessionConfig.turn_detection,
-        region: this.sessionConfig.region,
-        modalities: this.sessionConfig.modalities,
         tools: this.sessionConfig.tools
       })
     });
@@ -534,9 +532,26 @@ function normalizeXaiRealtimeTools(tools) {
     .filter(Boolean);
 }
 
-function normalizeXaiRealtimeToolChoice(toolChoice) {
-  const normalized = String(toolChoice || "auto").trim().toLowerCase();
-  return normalized === "none" ? "none" : "auto";
+function buildXaiRealtimeAudioConfig({
+  inputAudioFormat,
+  inputSampleRateHz,
+  outputAudioFormat,
+  outputSampleRateHz
+}) {
+  return {
+    input: {
+      format: compactObject({
+        type: inputAudioFormat,
+        rate: inputAudioFormat === "audio/pcm" ? inputSampleRateHz : undefined
+      })
+    },
+    output: {
+      format: compactObject({
+        type: outputAudioFormat,
+        rate: outputAudioFormat === "audio/pcm" ? outputSampleRateHz : undefined
+      })
+    }
+  };
 }
 
 function summarizeOutboundPayload(payload) {
@@ -552,15 +567,7 @@ function summarizeOutboundPayload(payload) {
   }
 
   if (type === "input_audio_buffer.commit" || type === "response.create") {
-    const response = payload.response && typeof payload.response === "object" ? payload.response : null;
-    return compactObject({
-      type,
-      response: response
-        ? {
-          modalities: Array.isArray(response.modalities) ? response.modalities.slice(0, 4) : null
-        }
-        : null
-    });
+    return compactObject({ type });
   }
 
   if (type === "session.update") {
@@ -568,8 +575,6 @@ function summarizeOutboundPayload(payload) {
     return compactObject({
       type,
       voice: session.voice || null,
-      region: session.region || null,
-      modalities: Array.isArray(session.modalities) ? session.modalities.slice(0, 4) : null,
       inputAudioType: session?.audio?.input?.format?.type || null,
       inputAudioRate: Number(session?.audio?.input?.format?.rate) || null,
       outputAudioType: session?.audio?.output?.format?.type || null,

@@ -904,6 +904,23 @@ const LEAVE_VOICE_CHANNEL_SCHEMA: SharedToolSchema = {
   parameters: { type: "object", properties: {}, required: [], additionalProperties: false }
 };
 
+const WAIT_FOR_USER_SCHEMA: SharedToolSchema = {
+  name: "wait_for_user",
+  description: "Choose silence for now and wait for the next user turn or event. Use this instead of speaking filler when nothing is worth saying.",
+  voiceContinuationPolicy: "fire_and_forget",
+  parameters: {
+    type: "object",
+    properties: {
+      reason: {
+        type: "string",
+        description: "Optional short note for logs explaining why silence fits. Do not include secrets."
+      }
+    },
+    required: [],
+    additionalProperties: false
+  }
+};
+
 export const START_SCREEN_WATCH_SCHEMA: SharedToolSchema = {
   name: "start_screen_watch",
   description: "Start watching the most relevant active stream using the best available runtime path. Optionally specify a target name or Discord user id when you want a specific sharer. The runtime may bind to an already-live Discord sharer or fall back to a capture-link flow.",
@@ -921,9 +938,9 @@ export const START_SCREEN_WATCH_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const SEE_SCREENSHARE_SNAPSHOT_SCHEMA: SharedToolSchema = {
-  name: "see_screenshare_snapshot",
-  description: "Retrieve the latest frame from the active screen share so you can see what is on screen right now. Use this when your screen-watch notes are insufficient to answer a question or when you want to inspect the current visual state directly.",
+export const LOOK_AT_SCREEN_SCHEMA: SharedToolSchema = {
+  name: "look_at_screen",
+  description: "Look at the latest frame from the active screen watch. Use this when current visual context would help, when screen-watch notes are insufficient, or when someone asks about what is on screen right now.",
   voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
@@ -1038,14 +1055,15 @@ export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
   PLAY_SOUNDBOARD_SCHEMA,
   NOTE_CONTEXT_SCHEMA,
   JOIN_VOICE_CHANNEL_SCHEMA,
-  LEAVE_VOICE_CHANNEL_SCHEMA
+  LEAVE_VOICE_CHANNEL_SCHEMA,
+  WAIT_FOR_USER_SCHEMA
 ];
 
 const LOCAL_VOICE_CONTINUATION_SCHEMAS: SharedToolSchema[] = [
   ...SHARED_TOOL_SCHEMAS,
   ...VOICE_TOOL_SCHEMAS,
   START_SCREEN_WATCH_SCHEMA,
-  SEE_SCREENSHARE_SNAPSHOT_SCHEMA,
+  LOOK_AT_SCREEN_SCHEMA,
   SHARE_BROWSER_SESSION_SCHEMA,
   STOP_VIDEO_SHARE_SCHEMA,
   STREAM_VISUALIZER_SCHEMA

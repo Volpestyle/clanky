@@ -950,17 +950,19 @@ export class InstructionManager {
 
     const configuredTools = Array.isArray(session.realtimeToolDefinitions) ? session.realtimeToolDefinitions : [];
     if (shouldHandleRealtimeFunctionCalls({ session, settings }) && configuredTools.length > 0) {
-      const localToolNames = configuredTools
+      const allLocalToolNames = configuredTools
         .filter((tool) => tool?.toolType !== "mcp")
         .map((tool) => String(tool?.name || "").trim())
-        .filter(Boolean)
-        .slice(0, 16);
-      const localToolNameSet = new Set(localToolNames);
+        .filter(Boolean);
+      const localToolNames = allLocalToolNames.slice(0, 16);
+      const localToolNameSet = new Set(allLocalToolNames);
       const hasWebSearchTool = localToolNameSet.has("web_search");
       const hasWebScrapeTool = localToolNameSet.has("web_scrape");
       const hasBrowserBrowseTool = localToolNameSet.has("browser_browse");
       const hasConversationSearchTool = localToolNameSet.has("conversation_search");
+      const hasLookAtScreenTool = localToolNameSet.has("look_at_screen");
       const hasMemoryWriteTool = localToolNameSet.has("memory_write");
+      const hasWaitForUserTool = localToolNameSet.has("wait_for_user");
       const mcpToolNames = configuredTools
         .filter((tool) => tool?.toolType === "mcp")
         .map((tool) => String(tool?.name || "").trim())
@@ -980,6 +982,12 @@ export class InstructionManager {
           hasBrowserBrowseTool ? `- ${BROWSER_SCREENSHOT_POLICY_LINE}` : null,
           hasWebSearchTool ? `- ${IMMEDIATE_WEB_SEARCH_POLICY_LINE} Do not respond with only audio saying you will search.` : null,
           hasConversationSearchTool ? `- ${CONVERSATION_SEARCH_POLICY_LINE}` : null,
+          hasLookAtScreenTool
+            ? "- Use look_at_screen when current visual context would help. It attaches one sampled frame from the active screen watch; do not imply continuous video beyond that frame."
+            : null,
+          hasWaitForUserTool
+            ? "- Use wait_for_user when silence is the right response. Do not say filler like 'I'll wait' unless that is socially useful."
+            : null,
           hasMemoryWriteTool ? "- For memory writes, only store concise durable facts and avoid secrets. Write facts from your own perspective — use 'me'/'my' instead of your name." : null,
           "- For music controls, use music_play to start or replace playback now. It searches internally and may return disambiguation options.",
           "- If music_play returns choices, ask which one they want and then call music_play again with selection_id.",

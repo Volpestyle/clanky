@@ -725,6 +725,8 @@ test("requestJoin omits provider-native realtime tools at connect for xAI brain 
 
     assert.equal(result, true);
     assert.equal(connectCalls.length, 1);
+    assert.equal(connectCalls[0]?.model, "grok-voice-think-fast-1.0");
+    assert.equal(connectCalls[0]?.voice, "eve");
     assert.deepEqual(connectCalls[0]?.tools, []);
     const session = manager.sessions.get("guild-1");
     assert.equal(session?.realtimeToolOwnership, "transport_only");
@@ -819,6 +821,8 @@ test("requestJoin includes xAI realtime tools at connect for bridge sessions", a
 
     assert.equal(result, true);
     assert.equal(connectCalls.length, 1);
+    assert.equal(connectCalls[0]?.model, "grok-voice-think-fast-1.0");
+    assert.equal(connectCalls[0]?.voice, "eve");
     assert.equal(Array.isArray(connectCalls[0]?.tools), true);
     assert.equal((connectCalls[0]?.tools || []).length > 0, true);
     const session = manager.sessions.get("guild-1");

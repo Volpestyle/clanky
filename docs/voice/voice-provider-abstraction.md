@@ -153,8 +153,14 @@ Canonical runtime transport/transcription settings:
 - `agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod`
 - `agentStack.runtimeConfig.voice.openaiRealtime.inputTranscriptionModel`
 - `agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge`
+- `agentStack.runtimeConfig.voice.xai.model`
+- `agentStack.runtimeConfig.voice.xai.voice`
+- `agentStack.runtimeConfig.voice.xai.audioFormat`
+- `agentStack.runtimeConfig.voice.xai.sampleRateHz`
 
 These runtime settings configure bridge and file-turn transcription behavior. OpenAI transport maps configured audio formats onto the nested realtime media descriptors used in `session.update` payloads: `pcm16` becomes `audio/pcm`, `g711_ulaw` becomes `audio/pcmu`, and `g711_alaw` becomes `audio/pcma`.
+
+xAI `voice_agent` transport connects to `wss://api.x.ai/v1/realtime?model=<model>`, then sends `session.update` with `voice`, `instructions`, nested `audio.input` / `audio.output` descriptors, manual turn detection, and any provider-native function tools mounted by the shared voice tool registry.
 
 ### Stage 2: Turn Promotion And Noise Rejection
 
@@ -317,6 +323,7 @@ Implementation note:
 Dashboard placement note:
 
 - Voice thinking controls are shown in `Voice Mode -> Output -> Brain` and only when the active Brain provider resolves to an Anthropic/Claude-style lane (`anthropic`, `claude-oauth`, `ai_sdk_anthropic`).
+- The OpenAI realtime reasoning-effort control is shown next to the realtime model/voice selectors and only when `runtimeMode = openai_realtime` AND the resolved realtime model is reasoning-capable (currently `gpt-realtime-2`).
 
 ### Soundboard Policy
 
@@ -351,11 +358,16 @@ Classifier provider/model are resolved from preset defaults or `agentStack.overr
 | `agentStack.runtimeConfig.voice.runtimeMode` | `"openai_realtime"` | Realtime runtime family |
 | `agentStack.runtimeConfig.voice.openaiRealtime.model` | `"gpt-realtime"` | OpenAI realtime model |
 | `agentStack.runtimeConfig.voice.openaiRealtime.voice` | `"ash"` | OpenAI realtime voice |
+| `agentStack.runtimeConfig.voice.openaiRealtime.reasoningEffort` | `""` | Reasoning planner effort for `gpt-realtime-2`. Empty defers to OpenAI's API default; supported values are `minimal`, `low`, `medium`, `high`, `xhigh`. Ignored on non-reasoning models. |
 | `agentStack.runtimeConfig.voice.openaiRealtime.inputAudioFormat` | `"pcm16"` | OpenAI realtime input transport format |
 | `agentStack.runtimeConfig.voice.openaiRealtime.outputAudioFormat` | `"pcm16"` | OpenAI realtime output transport format |
 | `agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod` | `"realtime_bridge"` | Bridge vs file-turn transcription mode |
 | `agentStack.runtimeConfig.voice.openaiRealtime.inputTranscriptionModel` | `"gpt-4o-mini-transcribe"` | Realtime ASR model |
 | `agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge` | `true` | Per-speaker bridge mode |
+| `agentStack.runtimeConfig.voice.xai.model` | `"grok-voice-think-fast-1.0"` | xAI Voice Agent model passed as the realtime WebSocket `model` query parameter |
+| `agentStack.runtimeConfig.voice.xai.voice` | `"eve"` | xAI built-in voice (`eve`, `ara`, `rex`, `sal`, `leo`) or custom voice ID |
+| `agentStack.runtimeConfig.voice.xai.audioFormat` | `"audio/pcm"` | xAI input/output audio format. Only `audio/pcm` is wired up; xAI also accepts `audio/pcmu` and `audio/pcma` but Clanky has no G.711 encode/decode yet. |
+| `agentStack.runtimeConfig.voice.xai.sampleRateHz` | `24000` | xAI PCM sample rate |
 | `agentStack.runtimeConfig.voice.openaiAudioApi.ttsModel` | `"gpt-4o-mini-tts"` | API TTS model |
 | `agentStack.runtimeConfig.voice.openaiAudioApi.ttsVoice` | `"alloy"` | API TTS voice |
 | `agentStack.runtimeConfig.voice.openaiAudioApi.ttsSpeed` | `1` | API TTS speed |

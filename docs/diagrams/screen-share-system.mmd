@@ -14,8 +14,10 @@ flowchart TD
     J --> K["Prompt note payload<br/>streamWatch.notePayload"]
 
     H --> L["Commentary trigger check<br/>share start / interval / change"]
+    H --> P["look_at_screen tool<br/>model-requested frame"]
     K --> M["Voice brain turn"]
     H -->|commentary or screen question| M
+    P --> M
     L -->|quiet-window gates pass| M
 
     J --> N["Context compaction<br/>pendingCompactionNotes"]

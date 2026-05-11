@@ -3,9 +3,9 @@ import {
   MINECRAFT_TASK_SCHEMA,
   CONVERSATION_SEARCH_SCHEMA,
   IMAGE_LOOKUP_SCHEMA,
+  LOOK_AT_SCREEN_SCHEMA,
   MEMORY_SEARCH_SCHEMA,
   MEMORY_WRITE_SCHEMA,
-  SEE_SCREENSHARE_SNAPSHOT_SCHEMA,
   SHARE_BROWSER_SESSION_SCHEMA,
   START_SCREEN_WATCH_SCHEMA,
   STOP_VIDEO_SHARE_SCHEMA,
@@ -88,7 +88,7 @@ const TOOL_SCHEMA_BY_NAME = new Map(
     ...SWARM_TOOL_SCHEMAS,
     MINECRAFT_TASK_SCHEMA,
     START_SCREEN_WATCH_SCHEMA,
-    SEE_SCREENSHARE_SNAPSHOT_SCHEMA,
+    LOOK_AT_SCREEN_SCHEMA,
     SHARE_BROWSER_SESSION_SCHEMA,
     STOP_VIDEO_SHARE_SCHEMA,
     PLAY_SOUNDBOARD_SCHEMA,
@@ -169,7 +169,7 @@ const LOCAL_TOOL_REGISTRY: LocalToolRegistryEntry[] = [
     isVoiceRealtimeAvailable: ({ capabilities }) => capabilities.screenShareAvailable
   },
   {
-    name: "see_screenshare_snapshot",
+    name: "look_at_screen",
     surfaces: ["reply", "voice_realtime"],
     isReplyAvailable: ({ capabilities }) => Boolean(capabilities.screenShareSnapshotAvailable),
     isVoiceRealtimeAvailable: ({ capabilities }) => Boolean(capabilities.screenShareSnapshotAvailable)
@@ -302,6 +302,11 @@ const LOCAL_TOOL_REGISTRY: LocalToolRegistryEntry[] = [
     name: "leave_voice_channel",
     surfaces: ["reply", "voice_realtime"],
     isReplyAvailable: ({ capabilities }) => Boolean(capabilities.voiceToolsAvailable),
+    isVoiceRealtimeAvailable: () => true
+  },
+  {
+    name: "wait_for_user",
+    surfaces: ["voice_realtime"],
     isVoiceRealtimeAvailable: () => true
   }
 ];

@@ -215,9 +215,12 @@ export function VoiceModeSettingsSection({
   selectVoiceMusicBrainPresetModel,
   voiceMusicBrainModelOptions,
   selectedVoiceMusicBrainPresetModel,
+  xAiModelOptions,
   xAiVoiceOptions,
+  xAiAudioFormatOptions,
   openAiRealtimeModelOptions,
   openAiRealtimeVoiceOptions,
+  openAiRealtimeReasoningEffortOptions = [],
   openAiTranscriptionModelOptions,
   geminiRealtimeModelOptions,
   setStreamWatchNoteProvider,
@@ -1280,6 +1283,16 @@ export function VoiceModeSettingsSection({
               <>
                 <div className="split">
                   <div>
+                    <label htmlFor="voice-xai-model">xAI voice model</label>
+                    <select id="voice-xai-model" value={form.voiceXaiModel} onChange={set("voiceXaiModel")}>
+                      {xAiModelOptions.map((modelId) => (
+                        <option key={modelId} value={modelId}>
+                          {modelId}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
                     <label htmlFor="voice-xai-voice">xAI voice</label>
                     <select id="voice-xai-voice" value={form.voiceXaiVoice} onChange={set("voiceXaiVoice")}>
                       {xAiVoiceOptions.map((voiceName) => (
@@ -1289,21 +1302,22 @@ export function VoiceModeSettingsSection({
                       ))}
                     </select>
                   </div>
-                  <div>
-                    <label htmlFor="voice-xai-region">xAI region</label>
-                    <input id="voice-xai-region" type="text" value={form.voiceXaiRegion} onChange={set("voiceXaiRegion")} />
-                  </div>
                 </div>
 
                 <div className="split">
                   <div>
                     <label htmlFor="voice-xai-audio-format">xAI audio format</label>
-                    <input
+                    <select
                       id="voice-xai-audio-format"
-                      type="text"
                       value={form.voiceXaiAudioFormat}
                       onChange={set("voiceXaiAudioFormat")}
-                    />
+                    >
+                      {xAiAudioFormatOptions.map((format) => (
+                        <option key={format} value={format}>
+                          {format}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <label htmlFor="voice-xai-sample-rate">xAI sample rate (Hz)</label>
@@ -1352,6 +1366,30 @@ export function VoiceModeSettingsSection({
                     </select>
                   </div>
                 </div>
+
+                {String(form.voiceOpenAiRealtimeModel || "").trim() === "gpt-realtime-2" && (
+                  <div className="split">
+                    <div>
+                      <label htmlFor="voice-openai-realtime-reasoning-effort">Reasoning effort</label>
+                      <select
+                        id="voice-openai-realtime-reasoning-effort"
+                        value={form.voiceOpenAiRealtimeReasoningEffort || ""}
+                        onChange={set("voiceOpenAiRealtimeReasoningEffort")}
+                      >
+                        {openAiRealtimeReasoningEffortOptions.map((effort) => (
+                          <option key={effort || "default"} value={effort}>
+                            {effort || "(default)"}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="hint">
+                        Soft guidance to gpt-realtime-2's planner. Leave empty to let OpenAI choose; "low" is the
+                        recommended default for production voice agents. Raise only when complex tool reasoning is
+                        failing.
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 <p>Audio transport is fixed to `pcm16` for stable Discord playback.</p>
               </>

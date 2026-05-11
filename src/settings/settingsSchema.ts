@@ -1,3 +1,8 @@
+import {
+  XAI_REALTIME_DEFAULT_MODEL,
+  XAI_REALTIME_DEFAULT_VOICE
+} from "../voice/realtimeProviderNormalization.ts";
+
 export const PROVIDER_MODEL_FALLBACKS = {
   openai: ["gpt-5.4-mini", "gpt-5-mini", "gpt-5"],
   anthropic: ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-sonnet-4-0"],
@@ -294,6 +299,7 @@ export const DEFAULT_SETTINGS = {
         openaiRealtime: {
           model: "gpt-realtime",
           voice: "ash",
+          reasoningEffort: "",
           inputAudioFormat: "pcm16",
           outputAudioFormat: "pcm16",
           transcriptionMethod: "realtime_bridge",
@@ -301,10 +307,10 @@ export const DEFAULT_SETTINGS = {
           usePerUserAsrBridge: true
         },
         xai: {
-          voice: "Rex",
+          model: XAI_REALTIME_DEFAULT_MODEL,
+          voice: XAI_REALTIME_DEFAULT_VOICE,
           audioFormat: "audio/pcm",
-          sampleRateHz: 24000,
-          region: "us-east-1"
+          sampleRateHz: 24000
         },
         elevenLabsRealtime: {
           voiceId: "",

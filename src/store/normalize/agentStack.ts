@@ -9,7 +9,12 @@ import {
 import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../settings/settingsConstraints.ts";
 import {
   OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
-  normalizeOpenAiRealtimeTranscriptionModel
+  normalizeOpenAiRealtimeReasoningEffort,
+  normalizeOpenAiRealtimeTranscriptionModel,
+  normalizeXaiRealtimeAudioFormat,
+  normalizeXaiRealtimeModel,
+  normalizeXaiRealtimeSampleRateHz,
+  normalizeXaiRealtimeVoice
 } from "../../voice/realtimeProviderNormalization.ts";
 import { normalizeVoiceRuntimeMode } from "../../voice/voiceModes.ts";
 import {
@@ -331,6 +336,10 @@ export function normalizeAgentStackSection(
             DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.voice,
             120
           ),
+          reasoningEffort: normalizeOpenAiRealtimeReasoningEffort(
+            voice.openaiRealtime.reasoningEffort,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.reasoningEffort
+          ),
           inputAudioFormat: normalizeString(
             normalizeOpenAiRealtimeAudioFormat(
               voice.openaiRealtime.inputAudioFormat,
@@ -360,29 +369,27 @@ export function normalizeAgentStackSection(
             DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge
           )
         },
-        xai: {
-          voice: normalizeString(
-            voice.xai.voice,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.xai.voice,
-            120
-          ),
-          audioFormat: normalizeString(
+        xai: (() => {
+          const audioFormat = normalizeXaiRealtimeAudioFormat(
             voice.xai.audioFormat,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.xai.audioFormat,
-            120
-          ),
-          sampleRateHz: normalizeInt(
-            voice.xai.sampleRateHz,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.xai.sampleRateHz,
-            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.min,
-            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.max
-          ),
-          region: normalizeString(
-            voice.xai.region,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.xai.region,
-            120
-          )
-        },
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.xai.audioFormat
+          );
+          return {
+            model: normalizeXaiRealtimeModel(
+              voice.xai.model,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.xai.model
+            ),
+            voice: normalizeXaiRealtimeVoice(
+              voice.xai.voice,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.xai.voice
+            ),
+            audioFormat,
+            sampleRateHz: normalizeXaiRealtimeSampleRateHz(
+              voice.xai.sampleRateHz,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.xai.sampleRateHz
+            )
+          };
+        })(),
         elevenLabsRealtime: {
           voiceId: normalizeString(
             voice.elevenLabsRealtime.voiceId,

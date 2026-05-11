@@ -151,10 +151,10 @@ const AGENT_STACK_PRESET_DEFINITIONS = {
     researchRuntime: "openai_native_web_search",
     browserRuntime: "openai_computer_use",
     voiceRuntime: "openai_realtime",
-    voiceReplyPath: "bridge",
+    voiceReplyPath: "native",
     voiceTtsMode: "realtime",
     voiceAdmissionPolicy: {
-      mode: "classifier_gate"
+      mode: "generation_decides"
     },
     voiceAdmissionClassifier: {
       provider: "openai",

@@ -3,8 +3,11 @@ import { api } from "../api";
 import {
   GEMINI_REALTIME_MODEL_OPTIONS,
   OPENAI_REALTIME_MODEL_OPTIONS,
+  OPENAI_REALTIME_REASONING_EFFORT_OPTIONS,
   OPENAI_REALTIME_VOICE_OPTIONS,
   OPENAI_TRANSCRIPTION_MODEL_OPTIONS,
+  XAI_AUDIO_FORMAT_OPTIONS,
+  XAI_MODEL_OPTIONS,
   XAI_VOICE_OPTIONS,
   formToSettingsSnapshot,
   getCodeAgentValidationError,
@@ -346,6 +349,10 @@ export default function SettingsForm({
     OPENAI_REALTIME_VOICE_OPTIONS,
     effectiveForm.voiceOpenAiRealtimeVoice
   );
+  const xAiModelOptions = resolveModelOptions(
+    XAI_MODEL_OPTIONS,
+    effectiveForm.voiceXaiModel
+  );
   const xAiVoiceOptions = resolveModelOptions(
     XAI_VOICE_OPTIONS,
     effectiveForm.voiceXaiVoice
@@ -669,9 +676,12 @@ export default function SettingsForm({
             selectVoiceMusicBrainPresetModel={selectVoiceMusicBrainPresetModel}
             voiceMusicBrainModelOptions={voiceMusicBrainModelOptions}
             selectedVoiceMusicBrainPresetModel={selectedVoiceMusicBrainPresetModel}
+            xAiModelOptions={xAiModelOptions}
             xAiVoiceOptions={xAiVoiceOptions}
+            xAiAudioFormatOptions={XAI_AUDIO_FORMAT_OPTIONS}
             openAiRealtimeModelOptions={openAiRealtimeModelOptions}
             openAiRealtimeVoiceOptions={openAiRealtimeVoiceOptions}
+            openAiRealtimeReasoningEffortOptions={[...OPENAI_REALTIME_REASONING_EFFORT_OPTIONS]}
             openAiTranscriptionModelOptions={openAiTranscriptionModelOptions}
             geminiRealtimeModelOptions={geminiRealtimeModelOptions}
             setStreamWatchNoteProvider={setStreamWatchNoteProvider}

@@ -131,6 +131,29 @@ function summarizeVoiceToolPayload(
     };
   }
 
+  if (name === "look_at_screen") {
+    return {
+      ok: payload.ok ?? null,
+      streamerName: normalizeInlineText(payload.streamerName, 80) || null,
+      streamerUserId: normalizeInlineText(payload.streamerUserId, 80) || null,
+      frameAgeMs: Number.isFinite(Number(payload.frameAgeMs))
+        ? Math.max(0, Math.round(Number(payload.frameAgeMs)))
+        : null,
+      mimeType: normalizeInlineText(payload.mimeType, 40) || null,
+      imageAttached: payload.imageAttached ?? null,
+      error: normalizeInlineText(payload.error, 200) || null
+    };
+  }
+
+  if (name === "wait_for_user") {
+    return {
+      ok: payload.ok ?? null,
+      waiting: payload.waiting ?? null,
+      reason: normalizeInlineText(payload.reason, 120) || null,
+      error: normalizeInlineText(payload.error, 200) || null
+    };
+  }
+
   const genericSummary = {
     ok: payload.ok ?? null,
     status: normalizeInlineText(payload.status, 60) || null,

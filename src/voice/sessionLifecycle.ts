@@ -133,6 +133,8 @@ const OPENAI_REALTIME_ASSISTANT_OUTPUT_EVENT_TYPES = new Set([
   "response.output_audio.done",
   "response.output_audio_transcript.delta",
   "response.output_audio_transcript.done",
+  "response.text.delta",
+  "response.text.done",
   "response.output_text.delta",
   "response.output_text.done"
 ]);
