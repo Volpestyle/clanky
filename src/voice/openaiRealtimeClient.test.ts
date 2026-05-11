@@ -346,6 +346,35 @@ test("OpenAiRealtimeClient sendFunctionCallOutput emits function_call_output ite
   assert.equal(outbound.item?.output, JSON.stringify({ ok: true, items: 2 }));
 });
 
+test("OpenAiRealtimeClient sendFunctionCallOutput can attach an input image", () => {
+  const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
+  const outbound = [];
+  client.send = (payload) => {
+    outbound.push(payload);
+  };
+
+  client.sendFunctionCallOutput({
+    callId: "call_screen_1",
+    output: {
+      ok: true,
+      imageAttached: true
+    },
+    inputImage: {
+      mimeType: "image/jpeg",
+      dataBase64: "Zm9v",
+      text: "look_at_screen result"
+    }
+  });
+
+  assert.equal(outbound.length, 2);
+  assert.equal(outbound[0]?.item?.type, "function_call_output");
+  assert.equal(outbound[1]?.type, "conversation.item.create");
+  assert.equal(outbound[1]?.item?.type, "message");
+  assert.equal(outbound[1]?.item?.content?.[0]?.type, "input_text");
+  assert.equal(outbound[1]?.item?.content?.[1]?.type, "input_image");
+  assert.equal(outbound[1]?.item?.content?.[1]?.image_url, "data:image/jpeg;base64,Zm9v");
+});
+
 test("OpenAiRealtimeClient side-channel reply addressing stays off the normal transcript lane", () => {
   const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
   const outbound = [];

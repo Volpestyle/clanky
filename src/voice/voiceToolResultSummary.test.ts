@@ -84,3 +84,15 @@ test("formatVoiceToolResultSummary serializes structured summaries compactly", (
   assert.equal(rendered?.includes("\"resultCount\":2"), true);
   assert.equal(rendered?.includes("\"resultTitles\""), true);
 });
+
+test("summarizeVoiceToolResult captures wait_for_user silence", () => {
+  const summary = summarizeVoiceToolResult("wait_for_user", {
+    ok: true,
+    waiting: true,
+    reason: "nothing useful"
+  });
+
+  assert.equal(typeof summary, "object");
+  assert.equal((summary as Record<string, unknown>)?.waiting, true);
+  assert.equal((summary as Record<string, unknown>)?.reason, "nothing useful");
+});

@@ -229,8 +229,10 @@ export function resolveVoiceRealtimeToolDescriptors(
       session?.guildId &&
       (screenShareCapability?.nativeAvailable || session?.textChannelId)
   );
-  const sessionStreamWatch = (session as { streamWatch?: { active?: boolean; latestFrameDataBase64?: string } } | null)?.streamWatch;
+  const sessionStreamWatch = session?.streamWatch;
+  const canAttachScreenFrameToRealtimeToolResult = exportTarget === "openai_realtime";
   const includeScreenShareSnapshot = Boolean(
+    canAttachScreenFrameToRealtimeToolResult &&
     sessionStreamWatch?.active &&
     String(sessionStreamWatch?.latestFrameDataBase64 || "").trim()
   );

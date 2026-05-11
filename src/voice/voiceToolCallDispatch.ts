@@ -221,15 +221,9 @@ const LOCAL_VOICE_TOOL_HANDLERS: Record<
       args: opts.args
     });
   },
-  see_screenshare_snapshot: async (_manager, opts) => {
+  look_at_screen: async (manager, opts) => {
     throwIfAborted(opts.signal, "Voice tool cancelled");
-    const sw = (opts.session as { streamWatch?: {
-      active?: boolean;
-      latestFrameDataBase64?: string;
-      latestFrameMimeType?: string;
-      latestFrameAt?: number;
-      targetUserId?: string;
-    } } | null)?.streamWatch;
+    const sw = opts.session?.streamWatch;
     if (!sw?.active) {
       return { ok: false, error: "No active screen watch." };
     }
@@ -237,9 +231,14 @@ const LOCAL_VOICE_TOOL_HANDLERS: Record<
     if (!dataBase64) {
       return { ok: false, error: "No recent frame available." };
     }
+    const streamerUserId = normalizeInlineText(sw.targetUserId, 80) || null;
+    const streamerName = streamerUserId && opts.session
+      ? normalizeInlineText(manager.resolveVoiceSpeakerName(opts.session, streamerUserId), 80) || streamerUserId
+      : null;
     return {
       ok: true,
-      streamerName: sw.targetUserId || null,
+      streamerName,
+      streamerUserId,
       frameAgeMs: Math.max(0, Date.now() - Number(sw.latestFrameAt || 0)),
       mimeType: String(sw.latestFrameMimeType || "image/jpeg"),
       dataBase64
@@ -299,6 +298,14 @@ const LOCAL_VOICE_TOOL_HANDLERS: Record<
       settings: opts.settings
     });
     return { ok: true, status: "leaving" };
+  },
+  wait_for_user: async (_manager, opts) => {
+    throwIfAborted(opts.signal, "Voice tool cancelled");
+    return {
+      ok: true,
+      waiting: true,
+      reason: normalizeInlineText(opts.args?.reason, 180) || null
+    };
   }
 };
 

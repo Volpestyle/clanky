@@ -1,5 +1,5 @@
 import { shouldRegisterRealtimeTools } from "./voiceConfigResolver.ts";
-import { resolveVoiceSettingsSnapshot } from "./voiceSessionHelpers.ts";
+import { normalizeInlineText, resolveVoiceSettingsSnapshot } from "./voiceSessionHelpers.ts";
 import type { VoiceMcpServerStatus, VoicePendingToolCallState, VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 import {
@@ -19,7 +19,18 @@ import { shouldRequestVoiceToolFollowup } from "../tools/sharedToolSchemas.ts";
 type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
 
 type RealtimeFunctionOutputClient = NonNullable<VoiceSession["realtimeClient"]> & {
-  sendFunctionCallOutput?: (payload: { callId: string; output: string }) => void;
+  supportsFunctionCallOutputImages?: boolean;
+  sendFunctionCallOutput?: (payload: {
+    callId: string;
+    output: string;
+    inputImage?: RealtimeToolInputImage | null;
+  }) => void;
+};
+
+type RealtimeToolInputImage = {
+  mimeType: string;
+  dataBase64: string;
+  text: string;
 };
 
 type ToolExecutionSession = ToolRuntimeSession & {
@@ -45,6 +56,36 @@ function normalizeRealtimeToolOutputForModel(output: unknown, success: boolean) 
     ok: false,
     is_error: true,
     result: output == null ? null : String(output)
+  };
+}
+
+function extractRealtimeToolInputImage(toolName: string, output: unknown): RealtimeToolInputImage | null {
+  if (String(toolName || "").trim().toLowerCase() !== "look_at_screen") return null;
+  if (!isToolOutputRecord(output) || output.ok === false) return null;
+
+  const dataBase64 = String(output.dataBase64 || "").trim();
+  if (!dataBase64) return null;
+  const mimeType = normalizeInlineText(output.mimeType, 80) || "image/jpeg";
+  const streamerName = normalizeInlineText(output.streamerName, 80) || "the active screen watch";
+  const frameAgeMs = Number.isFinite(Number(output.frameAgeMs))
+    ? Math.max(0, Math.round(Number(output.frameAgeMs)))
+    : null;
+  const ageText = frameAgeMs == null ? "" : ` (${frameAgeMs}ms old)`;
+
+  return {
+    mimeType,
+    dataBase64,
+    text: `look_at_screen result: latest sampled frame from ${streamerName}${ageText}. Use this attached image as the current screen snapshot.`
+  };
+}
+
+function stripRealtimeToolInlineImage(output: unknown, imageAttached: boolean) {
+  if (!isToolOutputRecord(output)) return output;
+  const { dataBase64: _dataBase64, ...rest } = output;
+  return {
+    ...rest,
+    imageAttached,
+    imageTransport: imageAttached ? "input_image" : "unsupported"
   };
 }
 
@@ -134,7 +175,12 @@ export async function executeRealtimeFunctionCall(
 
   const runtimeMs = Math.max(0, Date.now() - startedAtMs);
   const normalizedOutput = normalizeRealtimeToolOutputForModel(output, success);
-  const outputSummary = summarizeVoiceToolOutput(manager, resolvedToolName, normalizedOutput);
+  const inputImage = extractRealtimeToolInputImage(resolvedToolName, normalizedOutput);
+  const canAttachInputImage = Boolean(inputImage && runtimeSession.realtimeClient?.supportsFunctionCallOutputImages);
+  const modelOutput = inputImage
+    ? stripRealtimeToolInlineImage(normalizedOutput, canAttachInputImage)
+    : normalizedOutput;
+  const outputSummary = summarizeVoiceToolOutput(manager, resolvedToolName, modelOutput);
   const responseHadAssistantOutput =
     typeof manager.hasRealtimeAssistantOutputForResponse === "function" &&
     pendingCall.responseId
@@ -175,12 +221,16 @@ export async function executeRealtimeFunctionCall(
         serializedOutput = normalizedOutput;
       } else {
         try {
-          serializedOutput = JSON.stringify(normalizedOutput ?? null);
+          serializedOutput = JSON.stringify(modelOutput ?? null);
         } catch {
-          serializedOutput = String(normalizedOutput ?? "");
+          serializedOutput = String(modelOutput ?? "");
         }
       }
-      runtimeSession.realtimeClient.sendFunctionCallOutput({ callId, output: serializedOutput });
+      runtimeSession.realtimeClient.sendFunctionCallOutput({
+        callId,
+        output: serializedOutput,
+        inputImage: canAttachInputImage ? inputImage : null
+      });
     }
   } catch (sendError) {
     manager.store.logAction({

@@ -85,6 +85,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
   pendingReplyAddressingRequestsByResponseId: Map<string, PendingReplyAddressingRequest>;
   latestVideoFrame;
   audioBase64Buffer: Buffer | null;
+  supportsFunctionCallOutputImages: boolean;
 
   constructor({ apiKey, baseUrl = DEFAULT_OPENAI_BASE_URL, logger = null }) {
     super();
@@ -111,6 +112,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
     this.pendingReplyAddressingRequestsByResponseId = new Map();
     this.latestVideoFrame = null;
     this.audioBase64Buffer = null;
+    this.supportsFunctionCallOutputImages = true;
   }
 
   async connect({
@@ -675,7 +677,8 @@ export class OpenAiRealtimeClient extends EventEmitter {
 
   sendFunctionCallOutput({
     callId = "",
-    output = ""
+    output = "",
+    inputImage = null
   } = {}) {
     const normalizedCallId = String(callId || "").trim();
     if (!normalizedCallId) {
@@ -699,6 +702,34 @@ export class OpenAiRealtimeClient extends EventEmitter {
         type: "function_call_output",
         call_id: normalizedCallId,
         output: normalizedOutput
+      }
+    });
+
+    const image = inputImage && typeof inputImage === "object" ? inputImage : null;
+    const dataBase64 = String(image?.dataBase64 || "").trim();
+    if (!dataBase64) return;
+
+    const mimeType = normalizeImageMimeType(image?.mimeType);
+    const text = normalizeInlineText(
+      image?.text,
+      1200
+    ) || "Latest screen-watch frame attached for visual inspection.";
+
+    this.send({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text
+          },
+          {
+            type: "input_image",
+            image_url: `data:${mimeType};base64,${dataBase64}`
+          }
+        ]
       }
     });
   }
@@ -1144,11 +1175,16 @@ function summarizeOutboundPayload(payload) {
         if (String(entry.type || "").trim().toLowerCase() !== "input_text") return sum;
         return sum + String(entry.text || "").length;
       }, 0);
+      const hasInputImage = content.some((entry) => {
+        if (!entry || typeof entry !== "object") return false;
+        return String(entry.type || "").trim().toLowerCase() === "input_image";
+      });
       return compactObject({
         type,
         itemType,
         role: String(item.role || "").trim() || null,
-        inputTextChars
+        inputTextChars,
+        hasInputImage
       });
     }
     return compactObject({

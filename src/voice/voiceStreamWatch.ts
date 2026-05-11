@@ -214,6 +214,15 @@ export type StreamWatchManager = {
   deferredActionQueue?: {
     getDeferredQueuedUserTurns?: (session: StreamWatchSession) => unknown[] | null;
   } | null;
+  instructionManager?: {
+    scheduleRealtimeInstructionRefresh?: (payload: {
+      session: StreamWatchSession;
+      settings?: Record<string, unknown> | null;
+      reason?: string;
+      speakerUserId?: string | null;
+      transcript?: string;
+    }) => void;
+  } | null;
   getOutputChannelState?: (session: StreamWatchSession) => { locked?: boolean } | null;
   runRealtimeBrainReply?: (payload: {
     session: StreamWatchSession;
@@ -2179,6 +2188,7 @@ export async function ingestStreamFrame(manager: StreamWatchManager, {
 
   const realtimeClient = session.realtimeClient;
   const resolvedMimeType = normalizedMimeType === "image/jpg" ? "image/jpeg" : normalizedMimeType;
+  const hadBufferedFrame = Boolean(String(streamWatch.latestFrameDataBase64 || "").trim());
   if (realtimeClient && typeof realtimeClient.appendInputVideoFrame === "function") {
     try {
       realtimeClient.appendInputVideoFrame({
@@ -2216,6 +2226,14 @@ export async function ingestStreamFrame(manager: StreamWatchManager, {
   streamWatch.acceptedFrameCountInWindow = Number(streamWatch.acceptedFrameCountInWindow || 0) + 1;
   manager.touchActivity(session.guildId, resolvedSettings);
 
+  if (!hadBufferedFrame) {
+    manager.instructionManager?.scheduleRealtimeInstructionRefresh?.({
+      session,
+      settings: resolvedSettings,
+      reason: "stream_watch_first_frame"
+    });
+  }
+
   manager.store.logAction({
     kind: "voice_runtime",
     guildId: session.guildId,
@@ -2227,7 +2245,8 @@ export async function ingestStreamFrame(manager: StreamWatchManager, {
       source: String(source || "api_stream_ingest"),
       mimeType: resolvedMimeType,
       frameBytes: approxBytes,
-      totalFrames: streamWatch.ingestedFrameCount
+      totalFrames: streamWatch.ingestedFrameCount,
+      firstBufferedFrame: !hadBufferedFrame
     }
   });
 

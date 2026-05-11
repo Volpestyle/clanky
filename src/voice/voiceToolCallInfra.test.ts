@@ -548,6 +548,122 @@ test("handleRealtimeFunctionCallEvent executes start_screen_watch and sends func
   assert.equal(outputPayload?.linkUrl, "https://screen.example/session/abc");
 });
 
+test("handleRealtimeFunctionCallEvent executes look_at_screen with an OpenAI image attachment", async () => {
+  const manager = createVoiceTestManager();
+  manager.scheduleRealtimeToolFollowupResponse = () => {};
+
+  const sentFunctionOutputs = [];
+  const session = {
+    id: "session-openai-tool-call-look-screen-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeToolOwnership: "provider_native",
+    streamWatch: {
+      active: true,
+      targetUserId: "speaker-2",
+      latestFrameDataBase64: "AAAA",
+      latestFrameMimeType: "image/jpeg",
+      latestFrameAt: Date.now() - 42
+    },
+    realtimeClient: {
+      supportsFunctionCallOutputImages: true,
+      sendFunctionCallOutput(payload) {
+        sentFunctionOutputs.push(payload);
+      }
+    }
+  };
+
+  session.realtimeToolDefinitions = buildRealtimeFunctionTools(manager, {
+    session,
+    settings: createVoiceTestSettings()
+  });
+  const toolNames = session.realtimeToolDefinitions.map((entry) => entry.name);
+  assert.equal(toolNames.includes("look_at_screen"), true);
+
+  await manager.handleRealtimeFunctionCallEvent({
+    session,
+    settings: createVoiceTestSettings(),
+    event: {
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        call_id: "call_look_screen_1",
+        name: "look_at_screen",
+        arguments: "{}"
+      }
+    }
+  });
+
+  assert.equal(sentFunctionOutputs.length, 1);
+  assert.equal(sentFunctionOutputs[0]?.callId, "call_look_screen_1");
+  assert.equal(sentFunctionOutputs[0]?.inputImage?.mimeType, "image/jpeg");
+  assert.equal(sentFunctionOutputs[0]?.inputImage?.dataBase64, "AAAA");
+  const outputPayload = JSON.parse(String(sentFunctionOutputs[0]?.output || "{}"));
+  assert.equal(outputPayload?.ok, true);
+  assert.equal(outputPayload?.streamerName, "speaker 2");
+  assert.equal(outputPayload?.streamerUserId, "speaker-2");
+  assert.equal(outputPayload?.imageAttached, true);
+  assert.equal(outputPayload?.imageTransport, "input_image");
+  assert.equal(Object.hasOwn(outputPayload, "dataBase64"), false);
+});
+
+test("handleRealtimeFunctionCallEvent executes wait_for_user without requesting followup", async () => {
+  const manager = createVoiceTestManager();
+  const followupRequests = [];
+  manager.scheduleRealtimeToolFollowupResponse = (payload) => {
+    followupRequests.push(payload);
+  };
+
+  const sentFunctionOutputs = [];
+  const session = {
+    id: "session-openai-tool-call-wait-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeToolOwnership: "provider_native",
+    realtimeClient: {
+      sendFunctionCallOutput(payload) {
+        sentFunctionOutputs.push(payload);
+      }
+    }
+  };
+
+  session.realtimeToolDefinitions = buildRealtimeFunctionTools(manager, {
+    session,
+    settings: createVoiceTestSettings()
+  });
+  const toolNames = session.realtimeToolDefinitions.map((entry) => entry.name);
+  assert.equal(toolNames.includes("wait_for_user"), true);
+
+  await manager.handleRealtimeFunctionCallEvent({
+    session,
+    settings: createVoiceTestSettings(),
+    event: {
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        call_id: "call_wait_1",
+        name: "wait_for_user",
+        arguments: JSON.stringify({ reason: "nothing worth adding" })
+      }
+    }
+  });
+
+  assert.equal(sentFunctionOutputs.length, 1);
+  const outputPayload = JSON.parse(String(sentFunctionOutputs[0]?.output || "{}"));
+  assert.equal(outputPayload?.ok, true);
+  assert.equal(outputPayload?.waiting, true);
+  assert.equal(outputPayload?.reason, "nothing worth adding");
+  assert.equal(followupRequests.length, 1);
+  assert.equal(followupRequests[0]?.requestFollowup, false);
+  assert.equal(followupRequests[0]?.toolName, "wait_for_user");
+});
+
 test("handleRealtimeFunctionCallEvent sends cancelled tool output when a voice tool is aborted", async () => {
   const manager = createVoiceTestManager();
   manager.scheduleRealtimeToolFollowupResponse = () => {};

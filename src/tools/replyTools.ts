@@ -388,7 +388,7 @@ const REPLY_TOOL_HANDLERS: Record<
   conversation_search: executeConversationSearch,
   image_lookup: async (input, runtime, context) => await executeImageLookup(input, runtime, context),
   start_screen_watch: async (input, runtime, context) => await executeStartScreenWatch(input, runtime, context),
-  see_screenshare_snapshot: async (_input, runtime, context) => await executeSeeScreenshareSnapshot(runtime, context),
+  look_at_screen: async (_input, runtime, context) => await executeLookAtScreen(runtime, context),
   share_browser_session: async (input, runtime, context) => await executeShareBrowserSession(input, runtime, context),
   play_soundboard: executePlaySoundboard,
 
@@ -1038,7 +1038,7 @@ async function executeStartScreenWatch(
   }
 }
 
-async function executeSeeScreenshareSnapshot(
+async function executeLookAtScreen(
   runtime: ReplyToolRuntime,
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {

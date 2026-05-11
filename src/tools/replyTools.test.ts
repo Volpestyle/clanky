@@ -211,6 +211,8 @@ test("buildVoiceRealtimeLocalToolSchemas exposes only voice-executable local too
   }).map((tool) => tool.name);
 
   assert.equal(toolNames.includes("stream_visualizer"), true);
+  assert.equal(toolNames.includes("look_at_screen"), true);
+  assert.equal(toolNames.includes("wait_for_user"), true);
   assert.equal(toolNames.includes("video_context"), false);
 });
 

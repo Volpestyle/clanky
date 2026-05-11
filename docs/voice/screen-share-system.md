@@ -5,6 +5,7 @@ Complete documentation of the screen-watch pipeline: session lifecycle, transpor
 Canonical media hub: [`../capabilities/media.md`](../capabilities/media.md)
 See also: [`../operations/public-https.md`](../operations/public-https.md) (public URL gating).
 Native Discord receive status: [`discord-streaming.md`](discord-streaming.md)
+Proactive visual-event commentary design: [`proactive-stream-commentary.md`](proactive-stream-commentary.md)
 Direct selfbot stream-watch plan: [`../archive/selfbot-stream-watch.md`](../archive/selfbot-stream-watch.md)
 Cross-cutting settings contract: [`../reference/settings.md`](../reference/settings.md)
 
@@ -28,7 +29,7 @@ Screen watch now follows that same shape with one pipeline:
 - Every admitted frame refreshes the latest-frame buffer
 - A separate note loop keeps rolling screen notes fresh
 - Proactive commentary uses those notes plus the latest frame
-- Normal voice turns use the notes without paying image cost unless the turn is explicitly about the screen
+- Normal voice turns use the notes without paying image cost; native OpenAI realtime can call `look_at_screen` when current pixels would help
 
 There is no longer a direct-vs-scanner mode switch. The only runtime behavior is the note loop plus commentary loop.
 
@@ -97,7 +98,7 @@ Discord VC user says "share my screen" / turns on webcam
 │                    VOICE BRAIN                       │
 │                                                      │
 │  Normal turns: rolling notes only                    │
-│    + see_screenshare_snapshot tool (on-demand frame) │
+│    + look_at_screen tool (model-requested frame)     │
 │  Commentary turns: rolling notes + current frame     │
 │  Screen questions: rolling notes + current frame     │
 │                                                      │
@@ -162,11 +163,11 @@ The model still decides whether to speak or `[SKIP]`. Commentary can also emit `
 
 Normal user-driven voice turns do not carry a frame by default. They see the rolling notes, persistent streamer identity ("Screen watch active — viewing alice's screen"), and the rest of the conversation context.
 
-If the turn is directly about the screen (heuristic match via `isScreenWatchQuestion`), the current frame is re-attached for that reply. This keeps screen answers grounded without paying image cost on every unrelated turn.
+On the native OpenAI realtime reply path, current pixels are model-driven: when the model decides visual context would help, it calls `look_at_screen`. Runtime returns concise tool metadata and attaches the latest buffered frame as an OpenAI `input_image` conversation item before the follow-up response.
 
-For cases where the heuristic doesn't match but the agent still needs visual context, the `see_screenshare_snapshot` tool is available. This tool returns the latest buffered frame as an image input, letting the agent inspect the screen on demand. It uses `voiceContinuationPolicy: "always"`, meaning the model calls the tool and then gets a second LLM call to speak about what it saw (one extra round trip, ~500ms-3s). The tool is only registered when screen watch is active and a recent frame exists.
+On the brain reply path, direct screen questions can still attach the current frame as a fast path. For cases where that heuristic does not match but the agent still needs visual context, `look_at_screen` is available. The tool uses `voiceContinuationPolicy: "always"`, meaning the model calls the tool and then gets a second LLM call to speak about what it saw (one extra round trip, ~500ms-3s). The tool is only registered when screen watch is active and a recent frame exists.
 
-This follows the standard design pattern: thin heuristic for the fast/cheap common case, agentic tool fallback for everything else.
+This follows the autonomy pattern for the realtime model: Clanky maintains the latest-frame buffer and safety gates, while the model decides when a glance is useful.
 
 ## Note Lifecycle And Compaction
 
