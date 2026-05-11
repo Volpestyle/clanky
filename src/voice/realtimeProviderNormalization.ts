@@ -4,13 +4,34 @@ export const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 
 export const OPENAI_REALTIME_DEFAULT_SESSION_MODEL = "gpt-realtime";
 export const OPENAI_REALTIME_SESSION_MODEL_OPTIONS = Object.freeze([
+  "gpt-realtime-2",
   "gpt-realtime",
   "gpt-realtime-1.5",
   "gpt-realtime-mini",
   "gpt-4o-realtime-preview",
   "gpt-4o-mini-realtime-preview"
 ]);
-const OPENAI_REALTIME_SUPPORTED_SESSION_MODELS = new Set(OPENAI_REALTIME_SESSION_MODEL_OPTIONS);
+const OPENAI_REALTIME_SUPPORTED_SESSION_MODELS: ReadonlySet<string> = new Set(OPENAI_REALTIME_SESSION_MODEL_OPTIONS);
+
+const OPENAI_REALTIME_REASONING_CAPABLE_MODELS: ReadonlySet<string> = new Set([
+  "gpt-realtime-2"
+]);
+
+export const OPENAI_REALTIME_REASONING_EFFORT_OPTIONS = Object.freeze([
+  "",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh"
+]);
+const OPENAI_REALTIME_SUPPORTED_REASONING_EFFORTS: ReadonlySet<string> = new Set([
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh"
+]);
 
 export const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
@@ -82,6 +103,24 @@ export function normalizeOpenAiRealtimeSessionModel(
   return OPENAI_REALTIME_SUPPORTED_SESSION_MODELS.has(normalized)
     ? normalized
     : OPENAI_REALTIME_DEFAULT_SESSION_MODEL;
+}
+
+export function realtimeModelSupportsReasoningEffort(model: unknown) {
+  const normalized = String(model || "").trim();
+  if (!normalized) return false;
+  return OPENAI_REALTIME_REASONING_CAPABLE_MODELS.has(normalized);
+}
+
+export function normalizeOpenAiRealtimeReasoningEffort(value: unknown, fallback: unknown = "") {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized && OPENAI_REALTIME_SUPPORTED_REASONING_EFFORTS.has(normalized)) {
+    return normalized;
+  }
+  const normalizedFallback = String(fallback ?? "").trim().toLowerCase();
+  if (normalizedFallback && OPENAI_REALTIME_SUPPORTED_REASONING_EFFORTS.has(normalizedFallback)) {
+    return normalizedFallback;
+  }
+  return "";
 }
 
 export function normalizeXaiRealtimeModel(

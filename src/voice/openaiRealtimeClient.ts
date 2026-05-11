@@ -16,9 +16,11 @@ import {
   DEFAULT_OPENAI_BASE_URL,
   OPENAI_REALTIME_DEFAULT_SESSION_MODEL,
   OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
+  normalizeOpenAiRealtimeReasoningEffort,
   normalizeOpenAiRealtimeSessionModel,
   normalizeOpenAiBaseUrl,
-  normalizeOpenAiRealtimeTranscriptionModel
+  normalizeOpenAiRealtimeTranscriptionModel,
+  realtimeModelSupportsReasoningEffort
 } from "./realtimeProviderNormalization.ts";
 import type { RealtimeInterruptAcceptanceMode } from "./realtimeInterruptAcceptance.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
@@ -115,6 +117,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
     model = OPENAI_REALTIME_DEFAULT_SESSION_MODEL,
     voice = "",
     instructions = "",
+    reasoningEffort = "",
     inputAudioFormat = "pcm16",
     outputAudioFormat = "pcm16",
     inputTranscriptionModel = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
@@ -155,6 +158,9 @@ export class OpenAiRealtimeClient extends EventEmitter {
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 280);
+    const resolvedReasoningEffort = realtimeModelSupportsReasoningEffort(resolvedModel)
+      ? normalizeOpenAiRealtimeReasoningEffort(reasoningEffort)
+      : "";
     const resolvedToolChoice = normalizeRealtimeToolChoice(toolChoice);
     const resolvedTools = normalizeRealtimeTools(tools);
     const ws = await this.openSocket(this.buildRealtimeUrl(resolvedModel));
@@ -188,6 +194,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
       model: resolvedModel,
       voice: resolvedVoice,
       instructions: String(instructions || ""),
+      reasoningEffort: resolvedReasoningEffort,
       inputAudioFormat: resolvedInputAudioFormat,
       outputAudioFormat: resolvedOutputAudioFormat,
       inputTranscriptionModel: resolvedInputTranscriptionModel,
@@ -887,9 +894,14 @@ export class OpenAiRealtimeClient extends EventEmitter {
         prompt: String(session.inputTranscriptionPrompt || "").trim() || null
       })
     };
+    const resolvedSessionModel =
+      String(session.model || OPENAI_REALTIME_DEFAULT_SESSION_MODEL).trim() || OPENAI_REALTIME_DEFAULT_SESSION_MODEL;
+    const reasoningEffort = realtimeModelSupportsReasoningEffort(resolvedSessionModel)
+      ? normalizeOpenAiRealtimeReasoningEffort(session.reasoningEffort)
+      : "";
     const sessionPayload: Record<string, unknown> = compactObject({
       type: "realtime",
-      model: String(session.model || OPENAI_REALTIME_DEFAULT_SESSION_MODEL).trim() || OPENAI_REALTIME_DEFAULT_SESSION_MODEL,
+      model: resolvedSessionModel,
       output_modalities: ["audio"],
       instructions: String(session.instructions || ""),
       audio: compactObject({
@@ -899,6 +911,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
           voice: resolvedVoice
         })
       }),
+      reasoning: reasoningEffort ? { effort: reasoningEffort } : undefined,
       tools: normalizedTools.length ? normalizedTools : undefined,
       tool_choice: normalizedTools.length ? normalizeRealtimeToolChoice(session.toolChoice) : undefined
     });
@@ -1166,6 +1179,7 @@ function summarizeOutboundPayload(payload) {
       type,
       sessionType: session.type || null,
       model: session.model || null,
+      reasoningEffort: session?.reasoning?.effort || null,
       outputModalities: Array.isArray(session.output_modalities) ? session.output_modalities : null,
       inputAudioFormat: audio?.input?.format || null,
       outputAudioFormat: audio?.output?.format || null,

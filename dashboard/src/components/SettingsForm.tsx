@@ -3,6 +3,7 @@ import { api } from "../api";
 import {
   GEMINI_REALTIME_MODEL_OPTIONS,
   OPENAI_REALTIME_MODEL_OPTIONS,
+  OPENAI_REALTIME_REASONING_EFFORT_OPTIONS,
   OPENAI_REALTIME_VOICE_OPTIONS,
   OPENAI_TRANSCRIPTION_MODEL_OPTIONS,
   XAI_AUDIO_FORMAT_OPTIONS,
@@ -680,6 +681,7 @@ export default function SettingsForm({
             xAiAudioFormatOptions={XAI_AUDIO_FORMAT_OPTIONS}
             openAiRealtimeModelOptions={openAiRealtimeModelOptions}
             openAiRealtimeVoiceOptions={openAiRealtimeVoiceOptions}
+            openAiRealtimeReasoningEffortOptions={[...OPENAI_REALTIME_REASONING_EFFORT_OPTIONS]}
             openAiTranscriptionModelOptions={openAiTranscriptionModelOptions}
             geminiRealtimeModelOptions={geminiRealtimeModelOptions}
             setStreamWatchNoteProvider={setStreamWatchNoteProvider}

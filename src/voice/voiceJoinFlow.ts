@@ -672,6 +672,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           ),
           voice: String(openAiRealtimeSettings?.voice || "alloy").trim() || "alloy",
           instructions: baseVoiceInstructions,
+          reasoningEffort: String(openAiRealtimeSettings?.reasoningEffort || "").trim(),
           inputAudioFormat: String(openAiRealtimeSettings?.inputAudioFormat || "pcm16").trim() || "pcm16",
           outputAudioFormat: String(openAiRealtimeSettings?.outputAudioFormat || "pcm16").trim() || "pcm16",
           inputTranscriptionModel:

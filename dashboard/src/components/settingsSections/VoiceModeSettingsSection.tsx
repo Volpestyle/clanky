@@ -220,6 +220,7 @@ export function VoiceModeSettingsSection({
   xAiAudioFormatOptions,
   openAiRealtimeModelOptions,
   openAiRealtimeVoiceOptions,
+  openAiRealtimeReasoningEffortOptions = [],
   openAiTranscriptionModelOptions,
   geminiRealtimeModelOptions,
   setStreamWatchNoteProvider,
@@ -1365,6 +1366,30 @@ export function VoiceModeSettingsSection({
                     </select>
                   </div>
                 </div>
+
+                {String(form.voiceOpenAiRealtimeModel || "").trim() === "gpt-realtime-2" && (
+                  <div className="split">
+                    <div>
+                      <label htmlFor="voice-openai-realtime-reasoning-effort">Reasoning effort</label>
+                      <select
+                        id="voice-openai-realtime-reasoning-effort"
+                        value={form.voiceOpenAiRealtimeReasoningEffort || ""}
+                        onChange={set("voiceOpenAiRealtimeReasoningEffort")}
+                      >
+                        {openAiRealtimeReasoningEffortOptions.map((effort) => (
+                          <option key={effort || "default"} value={effort}>
+                            {effort || "(default)"}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="hint">
+                        Soft guidance to gpt-realtime-2's planner. Leave empty to let OpenAI choose; "low" is the
+                        recommended default for production voice agents. Raise only when complex tool reasoning is
+                        failing.
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 <p>Audio transport is fixed to `pcm16` for stable Discord playback.</p>
               </>

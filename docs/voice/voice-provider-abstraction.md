@@ -323,6 +323,7 @@ Implementation note:
 Dashboard placement note:
 
 - Voice thinking controls are shown in `Voice Mode -> Output -> Brain` and only when the active Brain provider resolves to an Anthropic/Claude-style lane (`anthropic`, `claude-oauth`, `ai_sdk_anthropic`).
+- The OpenAI realtime reasoning-effort control is shown next to the realtime model/voice selectors and only when `runtimeMode = openai_realtime` AND the resolved realtime model is reasoning-capable (currently `gpt-realtime-2`).
 
 ### Soundboard Policy
 
@@ -357,6 +358,7 @@ Classifier provider/model are resolved from preset defaults or `agentStack.overr
 | `agentStack.runtimeConfig.voice.runtimeMode` | `"openai_realtime"` | Realtime runtime family |
 | `agentStack.runtimeConfig.voice.openaiRealtime.model` | `"gpt-realtime"` | OpenAI realtime model |
 | `agentStack.runtimeConfig.voice.openaiRealtime.voice` | `"ash"` | OpenAI realtime voice |
+| `agentStack.runtimeConfig.voice.openaiRealtime.reasoningEffort` | `""` | Reasoning planner effort for `gpt-realtime-2`. Empty defers to OpenAI's API default; supported values are `minimal`, `low`, `medium`, `high`, `xhigh`. Ignored on non-reasoning models. |
 | `agentStack.runtimeConfig.voice.openaiRealtime.inputAudioFormat` | `"pcm16"` | OpenAI realtime input transport format |
 | `agentStack.runtimeConfig.voice.openaiRealtime.outputAudioFormat` | `"pcm16"` | OpenAI realtime output transport format |
 | `agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod` | `"realtime_bridge"` | Bridge vs file-turn transcription mode |

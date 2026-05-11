@@ -9,6 +9,7 @@ import {
 import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../settings/settingsConstraints.ts";
 import {
   OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
+  normalizeOpenAiRealtimeReasoningEffort,
   normalizeOpenAiRealtimeTranscriptionModel,
   normalizeXaiRealtimeAudioFormat,
   normalizeXaiRealtimeModel,
@@ -334,6 +335,10 @@ export function normalizeAgentStackSection(
             voice.openaiRealtime.voice,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.voice,
             120
+          ),
+          reasoningEffort: normalizeOpenAiRealtimeReasoningEffort(
+            voice.openaiRealtime.reasoningEffort,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.reasoningEffort
           ),
           inputAudioFormat: normalizeString(
             normalizeOpenAiRealtimeAudioFormat(

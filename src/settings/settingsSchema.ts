@@ -299,6 +299,7 @@ export const DEFAULT_SETTINGS = {
         openaiRealtime: {
           model: "gpt-realtime",
           voice: "ash",
+          reasoningEffort: "",
           inputAudioFormat: "pcm16",
           outputAudioFormat: "pcm16",
           transcriptionMethod: "realtime_bridge",

@@ -41,6 +41,7 @@ import {
   resolveVoiceRuntimeSelectionFromMode
 } from "../../src/settings/voiceDashboardMappings.ts";
 import {
+  OPENAI_REALTIME_REASONING_EFFORT_OPTIONS,
   OPENAI_REALTIME_SESSION_MODEL_OPTIONS,
   XAI_REALTIME_AUDIO_FORMAT_OPTIONS,
   XAI_REALTIME_MODEL_OPTIONS,
@@ -48,6 +49,8 @@ import {
 } from "../../src/voice/realtimeProviderNormalization.ts";
 import { deepMerge } from "../../src/utils.ts";
 export const OPENAI_REALTIME_MODEL_OPTIONS = OPENAI_REALTIME_SESSION_MODEL_OPTIONS.slice(0, 3);
+
+export { OPENAI_REALTIME_REASONING_EFFORT_OPTIONS };
 
 export const OPENAI_REALTIME_VOICE_OPTIONS = Object.freeze([
   "alloy",
@@ -705,6 +708,8 @@ export function settingsToForm(settings: unknown) {
     voiceXaiSampleRateHz: resolved?.voice?.xai?.sampleRateHz ?? defaultVoiceXai.sampleRateHz,
     voiceOpenAiRealtimeModel: resolved?.voice?.openaiRealtime?.model ?? defaultVoiceOpenAiRealtime.model,
     voiceOpenAiRealtimeVoice: resolved?.voice?.openaiRealtime?.voice ?? defaultVoiceOpenAiRealtime.voice,
+    voiceOpenAiRealtimeReasoningEffort:
+      resolved?.voice?.openaiRealtime?.reasoningEffort ?? defaultVoiceOpenAiRealtime.reasoningEffort ?? "",
     voiceOpenAiRealtimeTranscriptionMethod:
       resolved?.voice?.openaiRealtime?.transcriptionMethod ?? defaultVoiceOpenAiRealtime.transcriptionMethod,
     voiceOpenAiRealtimeInputTranscriptionModel:
@@ -1592,6 +1597,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
           openaiRealtime: {
             model: String(form.voiceOpenAiRealtimeModel || "").trim(),
             voice: String(form.voiceOpenAiRealtimeVoice || "").trim(),
+            reasoningEffort: String(form.voiceOpenAiRealtimeReasoningEffort || "").trim().toLowerCase(),
             inputAudioFormat: "pcm16",
             outputAudioFormat: "pcm16",
             transcriptionMethod:
@@ -1622,7 +1628,7 @@ function buildSettingsInputFromForm(form: SettingsForm): SettingsInput {
                   provider: String(form.voiceGenerationLlmProvider || "").trim(),
                   model: String(form.voiceGenerationLlmModel || "").trim()
                 }
-              },
+          },
           xai: {
             model: String(form.voiceXaiModel || "").trim(),
             voice: String(form.voiceXaiVoice || "").trim(),

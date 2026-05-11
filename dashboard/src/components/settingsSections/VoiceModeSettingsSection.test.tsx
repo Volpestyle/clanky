@@ -103,6 +103,7 @@ function buildProps(mode: unknown, formOverrides: Record<string, unknown> = {}) 
     xAiAudioFormatOptions: ["audio/pcm"],
     openAiRealtimeModelOptions: ["gpt-realtime"],
     openAiRealtimeVoiceOptions: ["alloy"],
+    openAiRealtimeReasoningEffortOptions: ["", "minimal", "low", "medium", "high", "xhigh"],
     openAiTranscriptionModelOptions: ["gpt-4o-mini-transcribe"],
     geminiRealtimeModelOptions: ["gemini-2.5-flash"],
     setStreamWatchNoteProvider: noop,
