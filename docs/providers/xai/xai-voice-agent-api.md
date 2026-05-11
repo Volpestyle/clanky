@@ -99,6 +99,8 @@ Send `session.update` after the WebSocket opens.
 
 Supported PCM sample rates are `8000`, `16000`, `22050`, `24000`, `32000`, `44100`, and `48000` Hz. G.711 mu-law (`audio/pcmu`) and A-law (`audio/pcma`) use 8000 Hz.
 
+Clanky's xAI bridge only sends and receives `audio/pcm` today. The bridge would advertise the codec on `session.update` but `XaiRealtimeClient.appendInputAudioPcm` and the playback path still operate on PCM16 — until G.711 encode/decode is added, the `audio/pcmu` and `audio/pcma` formats stay out of the user-selectable list to avoid corrupting voice audio.
+
 Clanky uses manual turn detection for its Discord runtime because local capture, admission, barge-in, and output locking decide when audio is eligible to commit.
 
 ## Voices

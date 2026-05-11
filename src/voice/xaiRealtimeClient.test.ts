@@ -53,7 +53,7 @@ test("XaiRealtimeClient connect sends latest session.update shape", async () => 
     model: "grok-voice-fast-1.0",
     voice: "Rex",
     instructions: "brief",
-    inputAudioFormat: "audio/pcmu",
+    inputAudioFormat: "audio/pcm",
     outputAudioFormat: "audio/pcm",
     inputSampleRateHz: 48000,
     outputSampleRateHz: 16000
@@ -65,7 +65,7 @@ test("XaiRealtimeClient connect sends latest session.update shape", async () => 
   assert.equal(outbound[0]?.session?.voice, "rex");
   assert.equal(outbound[0]?.session?.instructions, "brief");
   assert.deepEqual(outbound[0]?.session?.turn_detection, { type: null });
-  assert.deepEqual(outbound[0]?.session?.audio?.input?.format, { type: "audio/pcmu" });
+  assert.deepEqual(outbound[0]?.session?.audio?.input?.format, { type: "audio/pcm", rate: 48000 });
   assert.deepEqual(outbound[0]?.session?.audio?.output?.format, { type: "audio/pcm", rate: 16000 });
   assert.equal(outbound[0]?.session?.region, undefined);
   assert.equal(outbound[0]?.session?.modalities, undefined);

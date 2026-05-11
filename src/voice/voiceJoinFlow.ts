@@ -635,8 +635,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         const xaiAudioFormat = normalizeXaiRealtimeAudioFormat(xaiSettings?.audioFormat);
         const xaiSampleRateHz = normalizeXaiRealtimeSampleRateHz(
           xaiSettings?.sampleRateHz,
-          24000,
-          xaiAudioFormat
+          24000
         );
         realtimeInputSampleRateHz = xaiSampleRateHz;
         realtimeOutputSampleRateHz = xaiSampleRateHz;

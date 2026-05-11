@@ -60,9 +60,7 @@ export const XAI_REALTIME_VOICE_OPTIONS = Object.freeze([
 const XAI_REALTIME_BUILT_IN_VOICES: ReadonlySet<string> = new Set(XAI_REALTIME_VOICE_OPTIONS);
 
 export const XAI_REALTIME_AUDIO_FORMAT_OPTIONS = Object.freeze([
-  "audio/pcm",
-  "audio/pcmu",
-  "audio/pcma"
+  "audio/pcm"
 ]);
 const XAI_REALTIME_SUPPORTED_AUDIO_FORMATS: ReadonlySet<string> = new Set(XAI_REALTIME_AUDIO_FORMAT_OPTIONS);
 
@@ -159,12 +157,8 @@ export function normalizeXaiRealtimeAudioFormat(
 
 export function normalizeXaiRealtimeSampleRateHz(
   value: unknown,
-  fallback = 24000,
-  audioFormat: unknown = "audio/pcm"
+  fallback = 24000
 ) {
-  const normalizedAudioFormat = normalizeXaiRealtimeAudioFormat(audioFormat);
-  if (normalizedAudioFormat !== "audio/pcm") return 8000;
-
   const numeric = Math.floor(Number(value));
   if (XAI_REALTIME_SUPPORTED_PCM_SAMPLE_RATES.has(numeric)) return numeric;
 

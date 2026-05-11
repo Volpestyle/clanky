@@ -366,8 +366,8 @@ Classifier provider/model are resolved from preset defaults or `agentStack.overr
 | `agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge` | `true` | Per-speaker bridge mode |
 | `agentStack.runtimeConfig.voice.xai.model` | `"grok-voice-think-fast-1.0"` | xAI Voice Agent model passed as the realtime WebSocket `model` query parameter |
 | `agentStack.runtimeConfig.voice.xai.voice` | `"eve"` | xAI built-in voice (`eve`, `ara`, `rex`, `sal`, `leo`) or custom voice ID |
-| `agentStack.runtimeConfig.voice.xai.audioFormat` | `"audio/pcm"` | xAI input/output audio format (`audio/pcm`, `audio/pcmu`, `audio/pcma`) |
-| `agentStack.runtimeConfig.voice.xai.sampleRateHz` | `24000` | xAI PCM sample rate; non-PCM formats normalize to 8000 Hz |
+| `agentStack.runtimeConfig.voice.xai.audioFormat` | `"audio/pcm"` | xAI input/output audio format. Only `audio/pcm` is wired up; xAI also accepts `audio/pcmu` and `audio/pcma` but Clanky has no G.711 encode/decode yet. |
+| `agentStack.runtimeConfig.voice.xai.sampleRateHz` | `24000` | xAI PCM sample rate |
 | `agentStack.runtimeConfig.voice.openaiAudioApi.ttsModel` | `"gpt-4o-mini-tts"` | API TTS model |
 | `agentStack.runtimeConfig.voice.openaiAudioApi.ttsVoice` | `"alloy"` | API TTS voice |
 | `agentStack.runtimeConfig.voice.openaiAudioApi.ttsSpeed` | `1` | API TTS speed |

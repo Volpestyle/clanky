@@ -100,13 +100,11 @@ export class XaiRealtimeClient extends EventEmitter {
     const resolvedOutputAudioFormat = normalizeXaiRealtimeAudioFormat(outputAudioFormat);
     const resolvedInputSampleRateHz = normalizeXaiRealtimeSampleRateHz(
       inputSampleRateHz,
-      24000,
-      resolvedInputAudioFormat
+      24000
     );
     const resolvedOutputSampleRateHz = normalizeXaiRealtimeSampleRateHz(
       outputSampleRateHz,
-      24000,
-      resolvedOutputAudioFormat
+      24000
     );
 
     const ws = await this.openSocket(this.buildRealtimeUrl(resolvedModel));

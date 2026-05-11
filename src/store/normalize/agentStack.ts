@@ -386,8 +386,7 @@ export function normalizeAgentStackSection(
             audioFormat,
             sampleRateHz: normalizeXaiRealtimeSampleRateHz(
               voice.xai.sampleRateHz,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.xai.sampleRateHz,
-              audioFormat
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.xai.sampleRateHz
             )
           };
         })(),
