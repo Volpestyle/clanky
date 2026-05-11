@@ -591,7 +591,7 @@ test("settingsFormModel preserves a full-brain reply-path override on the openai
   }));
   const form = settingsToForm(presetEnvelope);
 
-  assert.equal(form.voiceReplyPath, "bridge");
+  assert.equal(form.voiceReplyPath, "native");
 
   form.voiceReplyPath = "brain";
   const { patch, effectivePatch } = serializeForm(form);

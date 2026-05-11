@@ -12,15 +12,15 @@ Six named presets. Each is a coherent combination of orchestrator, voice pipelin
 |---|---|---|---|---|---|---|
 | `claude_oauth` | OAuth token | claude-oauth/claude-opus-4-6 | brain | openai_realtime | transport_only | zero (subscription) |
 | `claude_api` | API key | anthropic/claude-sonnet-4-6 | brain | openai_realtime | transport_only | pay-per-token |
-| `openai_native_realtime` | API key | openai/gpt-5 | bridge | openai_realtime | provider_native | pay-per-token |
+| `openai_native_realtime` | API key | openai/gpt-5 | native | openai_realtime | provider_native | pay-per-token |
 | `openai_api` | API key | openai/gpt-5 | brain | openai_realtime | transport_only | pay-per-token |
 | `openai_oauth` | OAuth token | OpenAI OAuth (`openai-oauth`)/gpt-5.4 | brain | openai_realtime | transport_only | subscription-limited |
 | `grok_native_agent` | API key | xai/grok-4-latest | native | voice_agent | provider_native | pay-per-token |
 
 ### Voice Reply Paths
 
-- **native** — Audio in → realtime model → audio out. Model handles everything including tool calls. Used by `grok_native_agent`.
-- **bridge** — Audio in → ASR transcript → realtime model (text) → audio out. Realtime model handles tool calls. Used by `openai_native_realtime`.
+- **native** — Audio in → realtime model → audio out. Model handles everything including tool calls. Used by `openai_native_realtime` and `grok_native_agent`.
+- **bridge** — Audio in → ASR transcript → realtime model (text) → audio out. Realtime model handles tool calls. Available as a per-setting override; no preset uses it as the default today.
 - **brain** — Audio in → ASR transcript → text LLM → TTS → audio out. Text LLM handles tool calls via internal orchestrator. Used by `claude_oauth`, `claude_api`, `openai_api`, `openai_oauth`.
 
 ### Tool Ownership
@@ -78,7 +78,7 @@ The preview is local-only. The dirty indicator stays on until the user clicks Sa
 
 A "Reset to preset defaults" button next to the preset dropdown loads a preview envelope for the selected preset. It resolves the selected preset through canonical normalization and preserves only server-specific channel permissions and voice channel policy. Save is still required before those defaults affect the live bot.
 
-For `openai_native_realtime`, saving the reset form preserves the preset's `classifier_gate` voice admission mode on the bridge reply path so the OpenAI classifier binding stays attached to `openai/gpt-5-mini`.
+For `openai_native_realtime`, the realtime model owns the conversational loop directly: tools, planning, and turn taking happen inside the realtime session. Admission resolves to `generation_decides` on the native reply path. The preset still ships an `openai/gpt-5-mini` voice admission classifier binding so operators who switch to bridge get a sane default; on the default native path the binding is unused. The realtime session model and reasoning effort are operator selections from `Voice Mode → Output → Realtime` — the preset doesn't pin a specific realtime model, so operators on tier-gated `gpt-realtime-2` can opt in via the dropdown (with the reasoning-effort dropdown surfacing only for that model).
 
 The dashboard form round-trips raw worker configs and voice session concurrency instead of collapsing them into max-only aggregates. Saving the form preserves per-worker code-agent limits unless the user actually edits a shared field.
 
