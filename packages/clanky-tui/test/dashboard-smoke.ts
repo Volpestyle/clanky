@@ -5,20 +5,7 @@ import { type AuthSetApiKeyResult, type AuthStatusResult, requestGateway, startG
 import { dashboardSessionIdForKey, renderDashboard } from "../src/dashboard.ts";
 
 const homeDir = await mkdtemp(join(tmpdir(), "clanky-dashboard-"));
-const previousEnv = captureEnv(
-	"CLANKY_SWARM_ENABLED",
-	"CLANKY_SWARM_COMMAND",
-	"CLANKY_SWARM_ARGS_JSON",
-	"AGENT_IDENTITY",
-	"OPENAI_API_KEY",
-);
-process.env.CLANKY_SWARM_ENABLED = "1";
-process.env.CLANKY_SWARM_COMMAND = process.execPath;
-process.env.CLANKY_SWARM_ARGS_JSON = JSON.stringify([
-	"--import",
-	"tsx",
-	"packages/clanky-swarm/test/faux-swarm-mcp.ts",
-]);
+const previousEnv = captureEnv("AGENT_IDENTITY", "OPENAI_API_KEY");
 process.env.AGENT_IDENTITY = "dashboard-smoke";
 delete process.env.OPENAI_API_KEY;
 const server = await startGatewayServer({ homeDir });
@@ -83,13 +70,6 @@ try {
 		"Cron",
 		job.id.slice(0, 8),
 		"in ",
-		"Swarm",
-		"peer clanky-f",
-		"worker role:implementer",
-		"locks: held=1 blocking=1 warnings=0",
-		"owned-file.ts",
-		"locked-file.ts",
-		"Faux task",
 	]) {
 		if (!dashboard.includes(expected)) {
 			throw new Error(`Dashboard output missing ${expected}\n${dashboard}`);

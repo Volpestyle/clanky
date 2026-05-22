@@ -67,20 +67,19 @@ try {
 	await waitFor(() => output.stdout.includes(session.id.slice(0, 8)));
 
 	const task = await server.registry.createTask({
-		title: "Dashboard watch swarm refresh task",
+		title: "Dashboard watch cron refresh task",
 		status: "in_progress",
 		priority: "high",
 		sessionId: session.id,
 	});
 	server.events.publish(
 		gatewayEvent({
-			type: "swarm.activity",
-			changes: ["task.changed"],
-			activity: { task_id: task.id },
-			instanceId: "dashboard-watch-faux-swarm",
+			type: "cron.changed",
+			action: "add",
+			jobId: task.id,
 		}),
 	);
-	await waitFor(() => output.stdout.includes("Dashboard watch swarm refresh task"));
+	await waitFor(() => output.stdout.includes("Dashboard watch cron refresh task"));
 	spawned.kill("SIGTERM");
 	const close = await waitForClose(spawned);
 	if (close.code !== 0 && close.signal !== "SIGTERM") {

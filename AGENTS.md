@@ -20,13 +20,12 @@
 - Use pnpm only. Do not add npm lockfiles or npm scripts.
 - Keep the workspace `minimumReleaseAge`, `strictPeerDependencies`, `verifyStoreIntegrity`, and explicit `onlyBuiltDependencies` pnpm guards enabled unless the user explicitly approves changing supply-chain policy.
 - Keep package boundaries clean:
-  - `clanky-core` owns Pi integration, sessions, cron, skills, state, Linear stores, and model-facing tools.
+  - `clanky-core` owns Pi integration, sessions, cron, skills, state, memory, Linear stores, and model-facing tools.
   - `clanky-gateway` owns HTTP, MCP, WebSocket, UDS gateway dispatch, and external MCP subprocesses.
-  - `clanky-swarm` owns `swarm-mcp` lifecycle, dispatch, message, complete, snapshot, and lock semantics.
+  - `clanky-messaging` owns Telegram/Discord adapters, the streaming broker, pairing, mirror, footer, sticker cache, and hook registry.
   - `clanky-tui` owns dashboard/chat clients over the daemon socket.
   - `clanky-cli` is a thin command surface over gateway/core operations.
 - Do not patch or vendor Pi. Use published `@earendil-works/pi-*` packages and exported APIs.
-- Do not reinvent `swarm-mcp`; consume its public stdio MCP tool surface.
 
 ## Verification
 
@@ -39,7 +38,7 @@
 ## Live Gates
 
 - Do not retry launchd bootstrap for `com.clanky.daemon` without explicit user approval.
-- Model, Linear, calendar, default swarm service env, and launchd-managed profile-daemon checks remain live gates requiring credentials, service installation, or user approval. Claude Code MCP mount evidence is captured on this machine; rerun it only for revalidation.
+- Model, Linear, calendar, messaging tokens, and launchd-managed profile-daemon checks remain live gates requiring credentials, service installation, or user approval. Claude Code MCP mount evidence is captured on this machine; rerun it only for revalidation.
 - Use `pnpm clanky doctor --home ~/.clanky` for non-mutating live-gate preflight.
 
 ## State Safety

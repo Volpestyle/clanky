@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, join } from "node:path";
 import type { Platform } from "./types.ts";
 
@@ -105,7 +105,7 @@ export class StickerCache {
 		await writeFile(tmp, `${JSON.stringify({ version: 1, entries: [...this.index.values()] }, null, "\t")}\n`, {
 			mode: 0o600,
 		});
-		await (await import("node:fs/promises")).rename(tmp, file);
+		await rename(tmp, file);
 	}
 }
 

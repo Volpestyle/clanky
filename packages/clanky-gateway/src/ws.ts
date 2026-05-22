@@ -46,39 +46,6 @@ export type GatewayEvent =
 			error?: string;
 	  }
 	| {
-			type: "swarm.booted";
-			timestamp: string;
-			instanceId: string;
-			scope: string;
-			label: string;
-	  }
-	| {
-			type: "swarm.activity";
-			timestamp: string;
-			changes: string[];
-			activity: unknown;
-			instanceId?: string;
-	  }
-	| {
-			type: "swarm.task_changed";
-			timestamp: string;
-			changes: string[];
-			activity: unknown;
-			instanceId?: string;
-	  }
-	| {
-			type: "swarm.message";
-			timestamp: string;
-			changes: string[];
-			activity: unknown;
-			instanceId?: string;
-	  }
-	| {
-			type: "swarm.error";
-			timestamp: string;
-			error: string;
-	  }
-	| {
 			type: "messaging.received";
 			timestamp: string;
 			platform: "telegram" | "discord";
@@ -190,15 +157,7 @@ function gatewayCompatibilityEvents(event: GatewayEvent): GatewayEvent[] {
 		};
 		return [fired];
 	}
-	if (event.type !== "swarm.activity") return [];
-	const aliases: GatewayEvent[] = [];
-	if (event.changes.includes("task.changed") || event.changes.includes("task_updates")) {
-		aliases.push({ ...event, type: "swarm.task_changed" });
-	}
-	if (event.changes.includes("new_messages")) {
-		aliases.push({ ...event, type: "swarm.message" });
-	}
-	return aliases;
+	return [];
 }
 
 function shouldSendEvent(event: GatewayEvent, subscription: GatewayEventSubscription): boolean {

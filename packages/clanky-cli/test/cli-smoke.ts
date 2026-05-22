@@ -22,7 +22,7 @@ for (const expected of [
 	"clanky memory status|search|remember|forget|export|consent",
 	"clanky task list|add|update",
 	"clanky linear list|create|link|outbox|flush",
-	"clanky swarm status|peers|tasks|snapshot|lock|message|complete|dispatch",
+	"clanky messaging status|sessions|reset",
 	"clanky profile list|new|use",
 	"clanky install",
 	"clanky uninstall",
@@ -39,8 +39,7 @@ for (const expected of [
 	"clanky stop",
 	"--provider <provider>",
 	"--model <model>",
-	"--deliver stdout|file|session:<id>|swarm:<peer>|linear:<issue>",
-	"--files <paths>",
+	"--deliver stdout|file|session:<id>|linear:<issue>",
 	"--http [host:port]",
 	"--bind [host:port]",
 	"--enable",
@@ -280,19 +279,12 @@ async function verifyProfileDetachedStart(): Promise<void> {
 async function verifyForegroundSignalShutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
 	const signalHome = await mkdtemp(join(tmpdir(), `clanky-cli-${signal.toLowerCase()}-`));
 	const paths = resolveClankyPaths({ homeDir: signalHome });
-	const swarmCallsFile = join(signalHome, "swarm-calls.txt");
 	const child = spawn(
 		process.execPath,
 		["--import", "tsx", "packages/clanky-cli/src/bin.ts", "start", "--home", signalHome],
 		{
 			cwd: process.cwd(),
-			env: {
-				...process.env,
-				CLANKY_SWARM_ENABLED: "1",
-				CLANKY_SWARM_COMMAND: process.execPath,
-				CLANKY_SWARM_ARGS_JSON: JSON.stringify(["--import", "tsx", "packages/clanky-swarm/test/faux-swarm-mcp.ts"]),
-				SWARM_HARNESS_FAUX_SWARM_CALLS_FILE: swarmCallsFile,
-			},
+			env: { ...process.env },
 			stdio: ["ignore", "pipe", "pipe"],
 		},
 	);
@@ -323,8 +315,6 @@ async function verifyForegroundSignalShutdown(signal: "SIGTERM" | "SIGINT"): Pro
 		}, "foreground daemon stopped status");
 		if (await fileExists(paths.socketFile)) throw new Error(`Foreground ${signal} did not remove the daemon socket`);
 		if (await fileExists(paths.daemonLockFile)) throw new Error(`Foreground ${signal} did not release the daemon lock`);
-		const swarmCalls = await readFile(swarmCallsFile, "utf8");
-		assertIncludes(swarmCalls, "deregister");
 	} finally {
 		if (!closed) child.kill("SIGTERM");
 		await rm(signalHome, { force: true, recursive: true });

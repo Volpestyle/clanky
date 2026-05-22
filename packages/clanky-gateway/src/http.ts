@@ -1,5 +1,4 @@
 import type { CronScheduler, SessionRegistry } from "@clanky/core";
-import type { SwarmLeader } from "@clanky/swarm";
 import type { ServerType } from "@hono/node-server";
 import { serve, upgradeWebSocket } from "@hono/node-server";
 import { Hono } from "hono";
@@ -46,7 +45,6 @@ import {
 } from "./protocol.ts";
 import { registerCronRoutes } from "./routes/cron.ts";
 import { registerSessionRoutes } from "./routes/sessions.ts";
-import { registerSwarmRoutes } from "./routes/swarm.ts";
 import type { GatewayEventHub } from "./ws.ts";
 
 export interface HttpGatewayOptions {
@@ -66,7 +64,6 @@ export interface HttpGatewayServer {
 export function startHttpGateway(
 	registry: SessionRegistry,
 	cron: CronScheduler,
-	swarm: SwarmLeader,
 	externalMcp: ExternalMcpManager,
 	events: GatewayEventHub,
 	options: HttpGatewayOptions,
@@ -84,7 +81,7 @@ export function startHttpGateway(
 	});
 
 	app.get("/status", async (context) =>
-		context.json(await getStatus(registry, cron, swarm, externalMcp, options.socketFile, options.startedAt)),
+		context.json(await getStatus(registry, cron, externalMcp, options.socketFile, options.startedAt)),
 	);
 
 	app.get("/memory/status", async (context) => context.json(await getMemoryStatus(registry)));
@@ -257,8 +254,6 @@ export function startHttpGateway(
 			return context.json({ error: message }, 400);
 		}
 	});
-
-	registerSwarmRoutes(app, { registry, swarm });
 
 	app.get(
 		"/events",

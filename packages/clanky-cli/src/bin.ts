@@ -46,13 +46,6 @@ import {
 	type SkillRemoveResult,
 	type SkillUsageResult,
 	type StatusResult,
-	type SwarmCompleteGatewayResult,
-	type SwarmDispatchGatewayResult,
-	type SwarmFileLockGatewayResult,
-	type SwarmMessageGatewayResult,
-	type SwarmQueryGatewayResult,
-	type SwarmSnapshotGatewayResult,
-	type SwarmStatusResult,
 	startGatewayServer,
 	startMcpServer,
 	type TaskAddResult,
@@ -85,7 +78,7 @@ export interface ParsedArgs {
 	chatId?: string;
 	threadId?: string;
 	userId?: string;
-	swarmType?: string;
+	memoryType?: string;
 	status?: string;
 	priority?: string;
 	limit?: number;
@@ -131,7 +124,6 @@ function usage(): string {
 		"  clanky memory status|search|remember|forget|export|consent [--profile <name>] [--home <path>] [--scope user|dm|guild|channel|project|agent] [--subject <id>] [--type preference|fact|decision|commitment|lesson|skill_hint] [--sensitivity public|personal|sensitive|secret] [--confidence <0..1>] [--ttl-days <n>] [args...]",
 		"  clanky task list|add|update [--profile <name>] [--home <path>] [--session <id>] [--linear-issue <id>] [--status open|in_progress|done|cancelled] [--priority low|normal|high] [--limit <n>] [--description <text>] [id] [title]",
 		"  clanky linear list|create|link|outbox|flush [--profile <name>] [--home <path>] [--session <id>] [--task <id>] [--description <note>] [team-id title|issue-id]",
-		"  clanky swarm status|peers|tasks|snapshot|lock|message|complete|dispatch [--profile <name>] [--home <path>] [--type implement|fix|review|research] [--status done|failed|cancelled] [--file <path> | --files <paths>] [--description <text>] [--provider <provider>] [--model <model>] [--linear-issue <id>] [--task <id>] [--wait] [--no-spawn] [--idempotency-key <key>] [args...]",
 		"  clanky messaging status|sessions|reset [--profile <name>] [--home <path>] [--platform telegram|discord] [--chat <chat-id>] [--thread <thread-id>] [--user <user-id>]",
 		"  clanky profile list|new|use [--home <path>] [name]",
 		"  clanky install [--launchd | --systemd] [--profile <name>] [--home <path>] [--http [host:port]] [--env NAME=value] [--env-from-current NAME] [--output <path>] [--print] [--enable]",
@@ -139,7 +131,7 @@ function usage(): string {
 		"  clanky mcp [config] [--profile <name>] [--home <path>]",
 		"  clanky tui [--profile <name>] [--home <path>] [--watch] [--http <host:port>] [--session <id>]",
 		"  clanky cron list [--profile <name>] [--home <path>]",
-		"  clanky cron add [--profile <name>] [--home <path>] [--cwd <path>] [--deliver stdout|file|session:<id>|swarm:<peer>|linear:<issue>] [--skill <name>] [--provider <provider>] [--model <model>] [--idempotency-key <key>] [--timeout <seconds>] <schedule> <prompt>",
+		"  clanky cron add [--profile <name>] [--home <path>] [--cwd <path>] [--deliver stdout|file|session:<id>|linear:<issue>] [--skill <name>] [--provider <provider>] [--model <model>] [--idempotency-key <key>] [--timeout <seconds>] <schedule> <prompt>",
 		"  clanky cron rm|enable|disable|run-now [--profile <name>] [--home <path>] <job-id>",
 		"  clanky status [--profile <name>] [--home <path>] [--http <host:port>]",
 		"  clanky doctor [--profile <name>] [--home <path>] [--json]",
@@ -260,7 +252,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 			parsed.userId = readFlagValue(rest, index, arg);
 			index += 1;
 		} else if (arg === "--type") {
-			parsed.swarmType = readFlagValue(rest, index, arg);
+			parsed.memoryType = readFlagValue(rest, index, arg);
 			index += 1;
 		} else if (arg === "--status") {
 			parsed.status = readFlagValue(rest, index, arg);
@@ -513,10 +505,6 @@ function printStatus(status: StatusResult): void {
 	console.log(`linear_outbox_pending: ${status.linearOutboxPending}`);
 	console.log(`cron_jobs: ${status.cronJobs}`);
 	console.log(`enabled_cron_jobs: ${status.enabledCronJobs}`);
-	console.log(`swarm_state: ${status.swarm.state}`);
-	console.log(`swarm_enabled: ${status.swarm.enabled}`);
-	console.log(`swarm_peers: ${status.swarmPeers}`);
-	console.log(`swarm_tasks: ${status.swarmTasks}`);
 	console.log(`external_mcp_servers: ${status.externalMcpServers.length}`);
 	console.log(`external_mcp_booted: ${status.externalMcpServers.filter((server) => server.state === "booted").length}`);
 	for (const warning of status.warnings) console.log(`warning: ${warning}`);
@@ -564,30 +552,6 @@ export async function runDoctor(args: ParsedArgs): Promise<void> {
 	if (calendarTooling.error !== undefined) add("calendar_tooling_error", calendarTooling.error);
 	const linearConfigured = linearCredentialsConfigured();
 	add("linear_credentials", linearConfigured ? "set" : "missing");
-	const swarmEnabled = isTruthyEnv(process.env.CLANKY_SWARM_ENABLED);
-	const swarmCommand = normalizedEnv(process.env.CLANKY_SWARM_COMMAND);
-	const swarmCommandFound = swarmCommand === undefined ? false : await commandExists(swarmCommand);
-	add("swarm_enabled", String(swarmEnabled));
-	add("swarm_command", swarmCommand ?? "missing");
-	if (swarmCommand !== undefined) add("swarm_command_absolute", String(swarmCommand.includes("/")));
-	add("swarm_command_found", String(swarmCommandFound));
-	if (swarmEnabled && swarmCommand !== undefined && !swarmCommand.includes("/")) {
-		addWarning("launchd services should set CLANKY_SWARM_COMMAND to an absolute executable path");
-	}
-	const swarmArgs = readSwarmArgsStatus(process.env.CLANKY_SWARM_ARGS_JSON);
-	add("swarm_args_json", swarmArgs.state);
-	if (swarmArgs.error !== undefined) add("swarm_args_error", swarmArgs.error);
-	for (const file of swarmArgs.files) {
-		const fileState = (await pathExists(file)) ? "present" : "missing";
-		add("swarm_args_file", `${file}\t${fileState}`);
-		addJson("swarm_args_file_path", file);
-		addJson("swarm_args_file_state", fileState);
-	}
-	const localSwarmDist = "/Users/jamesvolpe/web/swarm-mcp/dist/index.js";
-	const localSwarmDistState = (await pathExists(localSwarmDist)) ? "present" : "missing";
-	add("swarm_mcp_dist", `${localSwarmDist}\t${localSwarmDistState}`);
-	addJson("swarm_mcp_dist_path", localSwarmDist);
-	addJson("swarm_mcp_dist_state", localSwarmDistState);
 	add("herdr", (await findExecutable("herdr")) ?? "missing");
 	const herdrPaneId = normalizedEnv(process.env.HERDR_PANE_ID);
 	add("herdr_pane_id", herdrPaneId ?? "missing");
@@ -630,7 +594,6 @@ export async function runDoctor(args: ParsedArgs): Promise<void> {
 					: "approval_required",
 		model_calendar: modelCalendarGate(modelStatus.configured, calendarTooling),
 		linear_cron: linearConfigured ? "ready_credentials" : "blocked_credentials",
-		swarm_mcp: swarmMcpGate(swarmEnabled, swarmCommand, swarmCommandFound, swarmArgs),
 		claude_code_mcp: claudeMcpMount.mounted ? "mounted" : "requires_client_mount",
 		profile_daemons: profileDaemonStates.gate,
 		messaging_telegram: telegramToken === undefined ? "blocked_credentials" : "ready_credentials",
@@ -639,7 +602,6 @@ export async function runDoctor(args: ParsedArgs): Promise<void> {
 	add("live_gate_launchd_restart", liveGates.launchd_restart);
 	add("live_gate_model_calendar", liveGates.model_calendar);
 	add("live_gate_linear_cron", liveGates.linear_cron);
-	add("live_gate_swarm_mcp", liveGates.swarm_mcp);
 	add("live_gate_claude_code_mcp", liveGates.claude_code_mcp);
 	add("live_gate_profile_daemons", liveGates.profile_daemons);
 	add("live_gate_messaging_telegram", liveGates.messaging_telegram);
@@ -659,7 +621,6 @@ interface DoctorLiveGates {
 	launchd_restart: string;
 	model_calendar: string;
 	linear_cron: string;
-	swarm_mcp: string;
 	claude_code_mcp: string;
 	profile_daemons: string;
 	messaging_telegram: string;
@@ -670,7 +631,6 @@ const doctorLiveGateNames = [
 	"launchd_restart",
 	"model_calendar",
 	"linear_cron",
-	"swarm_mcp",
 	"claude_code_mcp",
 	"profile_daemons",
 	"messaging_telegram",
@@ -1261,114 +1221,6 @@ export async function runLinear(args: ParsedArgs): Promise<void> {
 	throw new Error("Usage: clanky linear list|create|link|outbox|flush");
 }
 
-export async function runSwarm(args: ParsedArgs): Promise<void> {
-	const subcommand = args.positional[0];
-	if (subcommand === "status") {
-		const status = (await requestGateway({
-			socketFile: resolveSocketFile(args),
-			method: "swarm.status",
-		})) as SwarmStatusResult;
-		printSwarmStatus(status);
-		return;
-	}
-	if (subcommand === "peers") {
-		const result = (await requestGateway({
-			socketFile: resolveSocketFile(args),
-			method: "swarm.peers",
-		})) as SwarmQueryGatewayResult;
-		printJson(result);
-		if (!result.ok) process.exitCode = 1;
-		return;
-	}
-	if (subcommand === "tasks") {
-		const result = (await requestGateway({
-			socketFile: resolveSocketFile(args),
-			method: "swarm.tasks",
-		})) as SwarmQueryGatewayResult;
-		printJson(result);
-		if (!result.ok) process.exitCode = 1;
-		return;
-	}
-	if (subcommand === "snapshot") {
-		const result = (await requestGateway({
-			socketFile: resolveSocketFile(args),
-			method: "swarm.snapshot",
-		})) as SwarmSnapshotGatewayResult;
-		printJson(result);
-		if (!result.ok) process.exitCode = 1;
-		return;
-	}
-	if (subcommand === "lock" || subcommand === "file-lock") {
-		const file = args.positional[1] ?? args.files[0];
-		if (file === undefined) throw new Error("Usage: clanky swarm lock <path>");
-		const result = (await requestGateway({
-			socketFile: resolveSocketFile(args),
-			method: "swarm.file_lock",
-			params: { file },
-		})) as SwarmFileLockGatewayResult;
-		printSwarmFileLock(result);
-		if (result.blocked || !result.ok) process.exitCode = 1;
-		return;
-	}
-	if (subcommand === "message") {
-		const recipient = args.positional[1];
-		const message = args.positional.slice(2).join(" ").trim();
-		if (recipient === undefined || message.length === 0) {
-			throw new Error("Usage: clanky swarm message <peer-id> <message>");
-		}
-		const result = (await requestGateway({
-			socketFile: resolveSocketFile(args),
-			method: "swarm.message",
-			params: buildSwarmMessageParams(args, recipient, message),
-		})) as SwarmMessageGatewayResult;
-		console.log(`ok: ${result.ok}`);
-		console.log(`state: ${result.state}`);
-		console.log(`recipient: ${result.request.recipient}`);
-		console.log(`message: ${result.message}`);
-		if (!result.ok) process.exitCode = 1;
-		return;
-	}
-	if (subcommand === "complete") {
-		const taskId = args.positional[1];
-		const summary = args.description ?? args.positional.slice(2).join(" ").trim();
-		if (taskId === undefined || summary.length === 0) {
-			throw new Error("Usage: clanky swarm complete <task-id> --description <summary>");
-		}
-		const result = (await requestGateway({
-			socketFile: resolveSocketFile(args),
-			method: "swarm.complete",
-			params: buildSwarmCompleteParams(args, taskId, summary),
-		})) as SwarmCompleteGatewayResult;
-		console.log(`ok: ${result.ok}`);
-		console.log(`state: ${result.state}`);
-		console.log(`task_id: ${result.request.taskId}`);
-		console.log(`status: ${result.request.status}`);
-		console.log(`message: ${result.message}`);
-		if (!result.ok) process.exitCode = 1;
-		return;
-	}
-	if (subcommand === "dispatch") {
-		const title = args.positional.slice(1).join(" ").trim();
-		if (title.length === 0 || args.swarmType === undefined) {
-			throw new Error("Usage: clanky swarm dispatch --type implement|fix|review|research <title>");
-		}
-		const result = (await requestGateway({
-			socketFile: resolveSocketFile(args),
-			method: "swarm.dispatch",
-			params: buildSwarmDispatchParams(args, title),
-			timeoutMs: 10 * 60 * 1000,
-		})) as SwarmDispatchGatewayResult;
-		console.log(`ok: ${result.ok}`);
-		console.log(`state: ${result.state}`);
-		if (result.taskId !== undefined) console.log(`task_id: ${result.taskId}`);
-		if (result.dispatchStatus !== undefined) console.log(`dispatch_status: ${result.dispatchStatus}`);
-		console.log(`message: ${result.message}`);
-		if (!result.ok) process.exitCode = 1;
-		return;
-	}
-	throw new Error("Usage: clanky swarm status|peers|tasks|snapshot|lock|message|complete|dispatch");
-}
-
 export async function runMessaging(args: ParsedArgs): Promise<void> {
 	const subcommand = args.positional[0] ?? "status";
 	if (subcommand === "status") {
@@ -1603,35 +1455,6 @@ function buildCronAddParams(args: ParsedArgs, schedule: string, prompt: string):
 	return params;
 }
 
-function buildSwarmDispatchParams(args: ParsedArgs, title: string): Record<string, unknown> {
-	const params: Record<string, unknown> = {
-		title,
-		type: args.swarmType,
-		description: args.description ?? title,
-	};
-	if (args.files.length > 0) params.files = args.files;
-	if (!args.spawn) params.spawn = false;
-	if (args.wait) params.waitForCompletion = true;
-	if (args.provider !== undefined) params.provider = args.provider;
-	if (args.model !== undefined) params.model = args.model;
-	if (args.linearIssue !== undefined) params.linearIssue = args.linearIssue;
-	if (args.idempotencyKey !== undefined) params.idempotencyKey = args.idempotencyKey;
-	return params;
-}
-
-function buildSwarmMessageParams(args: ParsedArgs, recipient: string, message: string): Record<string, unknown> {
-	const params: Record<string, unknown> = { recipient, message };
-	if (args.taskId !== undefined) params.taskId = args.taskId;
-	return params;
-}
-
-function buildSwarmCompleteParams(args: ParsedArgs, taskId: string, summary: string): Record<string, unknown> {
-	const params: Record<string, unknown> = { taskId, summary };
-	if (args.status !== undefined) params.status = args.status;
-	if (args.files.length > 0) params.filesChanged = args.files;
-	return params;
-}
-
 function buildSessionForkParams(args: ParsedArgs, sourceSessionId: string): Record<string, unknown> {
 	const params: Record<string, unknown> = { sourceSessionId };
 	if (args.cwd !== undefined) params.cwd = args.cwd;
@@ -1663,7 +1486,7 @@ function buildMemoryRememberParams(args: ParsedArgs, claim: string): Record<stri
 	};
 	if (args.scope !== undefined) params.scope = args.scope;
 	if (args.subjectId !== undefined) params.subjectId = args.subjectId;
-	if (args.swarmType !== undefined) params.type = args.swarmType;
+	if (args.memoryType !== undefined) params.type = args.memoryType;
 	if (args.sensitivity !== undefined) params.sensitivity = args.sensitivity;
 	if (args.confidence !== undefined) params.confidence = args.confidence;
 	if (args.ttlDays !== undefined) params.ttlDays = args.ttlDays;
@@ -1749,42 +1572,6 @@ function buildCronJobIdParams(args: ParsedArgs): { jobId: string } {
 	const jobId = args.positional[1];
 	if (!jobId) throw new Error("Missing cron job id");
 	return { jobId };
-}
-
-function printSwarmStatus(status: SwarmStatusResult): void {
-	console.log(`enabled: ${status.enabled}`);
-	console.log(`state: ${status.state}`);
-	console.log(`profile: ${status.profile}`);
-	console.log(`identity: ${status.identity}`);
-	console.log(`cwd: ${status.cwd}`);
-	console.log(`database: ${status.databasePath}`);
-	if (status.command !== undefined) console.log(`command: ${status.command}`);
-	if (status.args.length > 0) console.log(`args: ${status.args.join(" ")}`);
-	if (status.instanceId !== undefined) console.log(`instance_id: ${status.instanceId}`);
-	if (status.bootedAt !== undefined) console.log(`booted_at: ${status.bootedAt}`);
-	if (status.scope !== undefined) console.log(`scope: ${status.scope}`);
-	if (status.label !== undefined) console.log(`label: ${status.label}`);
-	if (status.workspaceHandle !== undefined) {
-		console.log(`workspace_backend: ${status.workspaceHandle.backend}`);
-		console.log(`workspace_handle_kind: ${status.workspaceHandle.handle_kind}`);
-		console.log(`workspace_handle: ${status.workspaceHandle.handle}`);
-		if (status.workspaceHandle.socket_path !== undefined) {
-			console.log(`workspace_socket: ${status.workspaceHandle.socket_path}`);
-		}
-	}
-	if (status.error !== undefined) console.log(`error: ${status.error}`);
-	console.log(`message: ${status.message}`);
-}
-
-function printSwarmFileLock(result: SwarmFileLockGatewayResult): void {
-	console.log(`ok: ${result.ok}`);
-	console.log(`state: ${result.state}`);
-	console.log(`file: ${result.file}`);
-	console.log(`blocked: ${result.blocked}`);
-	if (result.ownerId !== undefined) console.log(`owner_id: ${result.ownerId}`);
-	if (result.ownerLabel !== undefined) console.log(`owner_label: ${result.ownerLabel}`);
-	if (result.reason !== undefined) console.log(`reason: ${result.reason}`);
-	console.log(`message: ${result.message}`);
 }
 
 function printSessionSearchResults(results: SessionSearchResult[]): void {
@@ -2199,43 +1986,6 @@ function normalizedEnv(value: string | undefined): string | undefined {
 	return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed;
 }
 
-interface SwarmArgsStatus {
-	files: string[];
-	state: "missing" | "valid" | "invalid";
-	error?: string;
-}
-
-function readSwarmArgsStatus(value: string | undefined): SwarmArgsStatus {
-	const normalized = normalizedEnv(value);
-	if (normalized === undefined) return { files: [], state: "missing" };
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(normalized);
-	} catch {
-		return { files: [], state: "invalid", error: "CLANKY_SWARM_ARGS_JSON must be a JSON string array" };
-	}
-	if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
-		return { files: [], state: "invalid", error: "CLANKY_SWARM_ARGS_JSON must be a JSON string array" };
-	}
-	return {
-		files: parsed.filter((item) => item.startsWith("/")),
-		state: "valid",
-	};
-}
-
-function swarmMcpGate(
-	enabled: boolean,
-	command: string | undefined,
-	commandFound: boolean,
-	args: SwarmArgsStatus,
-): string {
-	if (!enabled) return "disabled";
-	if (command === undefined) return "blocked_command_missing";
-	if (!commandFound) return "blocked_command_not_found";
-	if (args.state === "invalid") return "blocked_args_config";
-	return "ready_preflight";
-}
-
 function herdrContext(paneId: string | undefined, socketPath: string | undefined, socketFile: string): string {
 	if (paneId === undefined) return "missing_pane";
 	if (socketPath === undefined) return "missing_socket";
@@ -2579,10 +2329,6 @@ async function main(): Promise<void> {
 	}
 	if (parsed.command === "linear") {
 		await runLinear(parsed);
-		return;
-	}
-	if (parsed.command === "swarm") {
-		await runSwarm(parsed);
 		return;
 	}
 	if (parsed.command === "messaging") {

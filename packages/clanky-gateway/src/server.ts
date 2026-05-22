@@ -14,7 +14,6 @@ import {
 	MessagingManager,
 	type MessagingManagerEvents,
 } from "@clanky/messaging";
-import { SwarmLeader, type SwarmLeaderEvent } from "@clanky/swarm";
 import { ExternalMcpManager } from "./external-mcp.ts";
 import { type HttpGatewayOptions, type HttpGatewayServer, startHttpGateway } from "./http.ts";
 import { ensureHttpToken, rotateHttpToken } from "./http-token.ts";
@@ -23,10 +22,8 @@ import {
 	addSkill,
 	addTask,
 	callExternalMcpTool,
-	completeSwarm,
 	createLinearIssue,
 	disableCronJob,
-	dispatchSwarm,
 	enableCronJob,
 	exportMemory,
 	flushLinearOutbox,
@@ -36,9 +33,6 @@ import {
 	getMemoryStatus,
 	getMessagingStatus,
 	getStatus,
-	getSwarmFileLock,
-	getSwarmSnapshot,
-	getSwarmStatus,
 	linkLinearIssue,
 	listCronJobs,
 	listExternalMcpServers,
@@ -48,11 +42,7 @@ import {
 	listSessions,
 	listSkills,
 	listSkillUsage,
-	listSwarmPeers,
-	listSwarmTasks,
 	listTasks,
-	messageSwarm,
-	mirrorSwarmActivityToLinear,
 	readMessagingResetParams,
 	readMessagingSessionsParams,
 	rememberMemory,
@@ -90,10 +80,6 @@ import {
 	readSessionSearchParams,
 	readSkillAddParams,
 	readSkillRemoveParams,
-	readSwarmCompleteParams,
-	readSwarmDispatchParams,
-	readSwarmFileLockParams,
-	readSwarmMessageParams,
 	readTaskAddParams,
 	readTaskListParams,
 	readTaskUpdateParams,
@@ -112,7 +98,6 @@ export interface StartGatewayServerOptions extends SessionRegistryOptions {
 export interface GatewayServer {
 	registry: SessionRegistry;
 	cron: CronScheduler;
-	swarm: SwarmLeader;
 	externalMcp: ExternalMcpManager;
 	messaging: MessagingManager;
 	events: GatewayEventHub;
@@ -126,7 +111,6 @@ export async function startGatewayServer(options: StartGatewayServerOptions = {}
 	const startedAt = Date.now();
 	const registry = new SessionRegistry(options);
 	await registry.start();
-	const swarm = new SwarmLeader(swarmLeaderOptions(registry, options));
 	const externalMcp = ExternalMcpManager.fromEnv({ cwd: options.cwd ?? process.cwd() });
 	const events = new GatewayEventHub();
 	const messagingEvents: MessagingManagerEvents = {
@@ -243,36 +227,12 @@ export async function startGatewayServer(options: StartGatewayServerOptions = {}
 			if (result.error !== undefined) eventInput.error = result.error;
 			events.publish(gatewayEvent(eventInput));
 		},
-		swarmDelivery: async (input) => {
-			const result = await swarm.deliverCronOutput(input.target, input.message);
-			if (!result.ok) throw new Error(result.message);
-			return { deliveredTo: `swarm:${input.target}`, response: result };
-		},
 	});
 	registry.setAgentToolHandlers({
 		scheduleCron: async (input) => await addCronJob(cron, readCronAddParams(input), events),
-		swarmDispatch: async (input) => await dispatchSwarm(swarm, input, registry),
-		swarmFileLock: async (input) => await swarm.getFileLock(input.path),
-		swarmMessage: async (input) => await messageSwarm(swarm, input),
-		swarmComplete: async (input) => await completeSwarm(swarm, input, registry),
-		swarmSnapshotForPrompt: async () => await getSwarmSnapshot(swarm),
 		externalMcpCall: async (input) => await callExternalMcpTool(externalMcp, readExternalMcpCallParams(input)),
 		externalMcpStatus: async () => listExternalMcpServers(externalMcp),
 		listCron: async () => await listCronJobs(cron),
-		checkSwarmFileLock: async (input) => {
-			const result = await swarm.getFileLock(input.path);
-			if (result.reason === undefined) return { blocked: result.blocked };
-			return { blocked: result.blocked, reason: result.reason };
-		},
-		swarmStatus: async () => getSwarmStatus(swarm),
-	});
-	const unsubscribeSwarmEvents = swarm.subscribe((event) => {
-		publishSwarmEvent(events, event);
-		void mirrorSwarmActivityToLinear(registry, event).catch((error: unknown) => {
-			const message = error instanceof Error ? error.message : String(error);
-			events.publish(gatewayEvent({ type: "swarm.error", error: message }));
-			console.error(message);
-		});
 	});
 	const socketFile = options.socketFile ?? registry.paths.socketFile;
 	await mkdir(dirname(socketFile), { recursive: true, mode: 0o700 });
@@ -285,13 +245,10 @@ export async function startGatewayServer(options: StartGatewayServerOptions = {}
 	try {
 		releaseLock = await acquireDaemonLock(registry.paths.daemonLockFile);
 		await removeStaleSocket(socketFile);
-		await swarm.start();
 		await externalMcp.start();
 		await messaging.start();
 	} catch (error) {
-		unsubscribeSwarmEvents();
 		await messaging.close();
-		await swarm.close();
 		await externalMcp.close();
 		await registry.dispose();
 		await releaseDaemonLock();
@@ -299,25 +256,16 @@ export async function startGatewayServer(options: StartGatewayServerOptions = {}
 	}
 
 	const server = createServer((socket) => {
-		handleSocket(
-			socket,
-			registry,
-			cron,
-			swarm,
-			externalMcp,
-			messaging,
-			events,
-			socketFile,
-			startedAt,
-			closeGateway,
-		).catch((error: unknown) => {
-			writeResponse(socket, {
-				id: "unknown",
-				ok: false,
-				error: error instanceof Error ? error.message : String(error),
-			});
-			socket.end();
-		});
+		handleSocket(socket, registry, cron, externalMcp, messaging, events, socketFile, startedAt, closeGateway).catch(
+			(error: unknown) => {
+				writeResponse(socket, {
+					id: "unknown",
+					ok: false,
+					error: error instanceof Error ? error.message : String(error),
+				});
+				socket.end();
+			},
+		);
 	});
 	const closed = new Promise<void>((resolve) => {
 		server.once("close", resolve);
@@ -329,9 +277,7 @@ export async function startGatewayServer(options: StartGatewayServerOptions = {}
 		closedGateway = true;
 		cron.stop();
 		events.close();
-		unsubscribeSwarmEvents();
 		await messaging.close();
-		await swarm.close();
 		await externalMcp.close();
 		await registry.drainSessions();
 		await http?.close();
@@ -360,7 +306,7 @@ export async function startGatewayServer(options: StartGatewayServerOptions = {}
 			const token = options.newHttpToken
 				? await rotateHttpToken(registry.paths.httpTokenFile)
 				: await ensureHttpToken(registry.paths.httpTokenFile);
-			http = startHttpGateway(registry, cron, swarm, externalMcp, events, {
+			http = startHttpGateway(registry, cron, externalMcp, events, {
 				hostname: options.http.hostname,
 				port: options.http.port,
 				socketFile,
@@ -376,7 +322,6 @@ export async function startGatewayServer(options: StartGatewayServerOptions = {}
 	const result: GatewayServer = {
 		registry,
 		cron,
-		swarm,
 		externalMcp,
 		messaging,
 		events,
@@ -392,7 +337,6 @@ async function handleSocket(
 	socket: Socket,
 	registry: SessionRegistry,
 	cron: CronScheduler,
-	swarm: SwarmLeader,
 	externalMcp: ExternalMcpManager,
 	messaging: MessagingManager,
 	events: GatewayEventHub,
@@ -421,7 +365,6 @@ async function handleSocket(
 					socket,
 					registry,
 					cron,
-					swarm,
 					externalMcp,
 					messaging,
 					events,
@@ -440,7 +383,6 @@ function handleFirstLine(
 	socket: Socket,
 	registry: SessionRegistry,
 	cron: CronScheduler,
-	swarm: SwarmLeader,
 	externalMcp: ExternalMcpManager,
 	messaging: MessagingManager,
 	events: GatewayEventHub,
@@ -462,7 +404,6 @@ function handleFirstLine(
 			socket,
 			registry,
 			cron,
-			swarm,
 			externalMcp,
 			messaging,
 			events,
@@ -487,7 +428,6 @@ async function handleGatewayRequest(
 	socket: Socket,
 	registry: SessionRegistry,
 	cron: CronScheduler,
-	swarm: SwarmLeader,
 	externalMcp: ExternalMcpManager,
 	messaging: MessagingManager,
 	events: GatewayEventHub,
@@ -501,7 +441,6 @@ async function handleGatewayRequest(
 			request,
 			registry,
 			cron,
-			swarm,
 			externalMcp,
 			messaging,
 			events,
@@ -520,7 +459,6 @@ async function dispatch(
 	request: GatewayRequest,
 	registry: SessionRegistry,
 	cron: CronScheduler,
-	swarm: SwarmLeader,
 	externalMcp: ExternalMcpManager,
 	messaging: MessagingManager,
 	events: GatewayEventHub,
@@ -529,7 +467,7 @@ async function dispatch(
 	closeGateway: () => Promise<void>,
 ): Promise<unknown> {
 	if (request.method === "status") {
-		return await getStatus(registry, cron, swarm, externalMcp, socketFile, startedAt);
+		return await getStatus(registry, cron, externalMcp, socketFile, startedAt);
 	}
 
 	if (request.method === "auth.status") {
@@ -681,52 +619,8 @@ async function dispatch(
 		return await runCronJobNow(cron, readCronJobIdParams(request.params), events);
 	}
 
-	if (request.method === "swarm.status") {
-		return getSwarmStatus(swarm);
-	}
-
-	if (request.method === "swarm.dispatch") {
-		return await dispatchSwarm(swarm, readSwarmDispatchParams(request.params), registry);
-	}
-
-	if (request.method === "swarm.peers") {
-		return await listSwarmPeers(swarm);
-	}
-
-	if (request.method === "swarm.tasks") {
-		return await listSwarmTasks(swarm);
-	}
-
-	if (request.method === "swarm.snapshot") {
-		return await getSwarmSnapshot(swarm);
-	}
-
-	if (request.method === "swarm.file_lock") {
-		return await getSwarmFileLock(swarm, readSwarmFileLockParams(request.params).file);
-	}
-
-	if (request.method === "swarm.message") {
-		return await messageSwarm(swarm, readSwarmMessageParams(request.params));
-	}
-
-	if (request.method === "swarm.complete") {
-		return await completeSwarm(swarm, readSwarmCompleteParams(request.params), registry);
-	}
-
 	const params = readSendParams(request.params);
 	return await sendPrompt(registry, params, events);
-}
-
-function swarmLeaderOptions(
-	registry: SessionRegistry,
-	options: StartGatewayServerOptions,
-): ConstructorParameters<typeof SwarmLeader>[0] {
-	const result: ConstructorParameters<typeof SwarmLeader>[0] = {
-		profile: registry.paths.profile,
-		profileDir: registry.paths.profileDir,
-	};
-	if (options.cwd !== undefined) result.cwd = options.cwd;
-	return result;
 }
 
 interface MessagingResetKey {
@@ -886,10 +780,6 @@ async function messagingDeferredAbort(
 	} catch {
 		// ignore
 	}
-}
-
-function publishSwarmEvent(events: GatewayEventHub, event: SwarmLeaderEvent): void {
-	events.publish(gatewayEvent(event));
 }
 
 function writeResponse(socket: Socket, response: GatewayResponse): void {

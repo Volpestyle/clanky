@@ -176,17 +176,9 @@ const swarmDeliveryRegistry = new SessionRegistry({
 	},
 });
 const swarmDeliveryStore = new CronJobStore(swarmDeliveryRegistry.paths);
-const swarmDeliveryCalls: Parameters<NonNullable<CronSchedulerOptions["swarmDelivery"]>>[0][] = [];
 const swarmDeliveryScheduler = new CronScheduler({
 	registry: swarmDeliveryRegistry,
 	store: swarmDeliveryStore,
-	swarmDelivery: async (input) => {
-		swarmDeliveryCalls.push(input);
-		return {
-			deliveredTo: `swarm:${input.target}`,
-			response: { accepted: true, jobId: input.jobId },
-		};
-	},
 });
 const noAuthHomeDir = await mkdtemp(join(tmpdir(), "clanky-cron-noauth-"));
 const noAuthProvider = "openai";
@@ -489,62 +481,6 @@ try {
 	}
 
 	await swarmDeliveryRegistry.start();
-	const swarmDeliveryJob = await swarmDeliveryStore.add(
-		{
-			schedule: "2026-01-01T00:00:01.000Z",
-			prompt: "This cron job should deliver to a swarm peer.",
-			deliver: "swarm:peer-1",
-			provider: swarmDeliveryProvider,
-			model: swarmDeliveryModel,
-		},
-		new Date("2026-01-01T00:00:00.000Z"),
-	);
-	const swarmDeliveryTick = await swarmDeliveryScheduler.tick(new Date("2026-01-01T00:00:02.000Z"));
-	const swarmDeliveryRun = swarmDeliveryTick.ran[0];
-	if (
-		swarmDeliveryTick.skipped ||
-		swarmDeliveryTick.ran.length !== 1 ||
-		swarmDeliveryRun === undefined ||
-		!swarmDeliveryRun.ok ||
-		swarmDeliveryRun.text !== swarmDeliveryText ||
-		swarmDeliveryRun.deliveredTo !== "swarm:peer-1" ||
-		swarmDeliveryRun.outputFile === undefined
-	) {
-		throw new Error(`Cron swarm delivery returned unexpected result: ${JSON.stringify(swarmDeliveryTick)}`);
-	}
-	if ((await readFile(swarmDeliveryRun.outputFile, "utf8")) !== swarmDeliveryText) {
-		throw new Error("Cron swarm delivery output file did not contain the model response");
-	}
-	const swarmDeliveryResponse = swarmDeliveryRun.swarmResponse;
-	if (
-		typeof swarmDeliveryResponse !== "object" ||
-		swarmDeliveryResponse === null ||
-		Array.isArray(swarmDeliveryResponse) ||
-		(swarmDeliveryResponse as Record<string, unknown>).accepted !== true ||
-		(swarmDeliveryResponse as Record<string, unknown>).jobId !== swarmDeliveryJob.id
-	) {
-		throw new Error(`Cron swarm delivery did not preserve the handler response: ${JSON.stringify(swarmDeliveryRun)}`);
-	}
-	const [swarmDeliveryCall] = swarmDeliveryCalls;
-	if (
-		swarmDeliveryCalls.length !== 1 ||
-		swarmDeliveryCall === undefined ||
-		swarmDeliveryCall.target !== "peer-1" ||
-		swarmDeliveryCall.jobId !== swarmDeliveryJob.id ||
-		swarmDeliveryCall.outputFile !== swarmDeliveryRun.outputFile ||
-		!swarmDeliveryCall.message.includes(swarmDeliveryText)
-	) {
-		throw new Error(
-			`Cron swarm delivery handler was not called with the expected payload: ${JSON.stringify(swarmDeliveryCalls)}`,
-		);
-	}
-	const [updatedSwarmDeliveryJob] = await swarmDeliveryStore.list();
-	if (updatedSwarmDeliveryJob?.id !== swarmDeliveryJob.id || updatedSwarmDeliveryJob.enabled) {
-		throw new Error(`Cron swarm delivery job was not advanced cleanly: ${JSON.stringify(updatedSwarmDeliveryJob)}`);
-	}
-	if (swarmDeliveryState.callCount !== 1) {
-		throw new Error(`Cron swarm delivery should have called the faux model once, got ${swarmDeliveryState.callCount}`);
-	}
 	const fileDeliveryJob = await swarmDeliveryStore.add(
 		{
 			schedule: "2026-01-01T00:00:03.000Z",
@@ -577,9 +513,9 @@ try {
 	if (updatedFileDeliveryJob?.id !== fileDeliveryJob.id || updatedFileDeliveryJob.enabled) {
 		throw new Error(`Cron file delivery job was not advanced cleanly: ${JSON.stringify(updatedFileDeliveryJob)}`);
 	}
-	if (Number(swarmDeliveryState.callCount) !== 2) {
+	if (Number(swarmDeliveryState.callCount) !== 1) {
 		throw new Error(
-			`Cron file delivery should have made the second faux model call, got ${swarmDeliveryState.callCount}`,
+			`Cron file delivery should have made the first faux model call, got ${swarmDeliveryState.callCount}`,
 		);
 	}
 	const stdoutDeliveryJob = await swarmDeliveryStore.add(
@@ -627,9 +563,9 @@ try {
 	if (updatedStdoutDeliveryJob?.id !== stdoutDeliveryJob.id || updatedStdoutDeliveryJob.enabled) {
 		throw new Error(`Cron stdout delivery job was not advanced cleanly: ${JSON.stringify(updatedStdoutDeliveryJob)}`);
 	}
-	if (Number(swarmDeliveryState.callCount) !== 3) {
+	if (Number(swarmDeliveryState.callCount) !== 2) {
 		throw new Error(
-			`Cron stdout delivery should have made the third faux model call, got ${swarmDeliveryState.callCount}`,
+			`Cron stdout delivery should have made the second faux model call, got ${swarmDeliveryState.callCount}`,
 		);
 	}
 
@@ -691,7 +627,6 @@ try {
 			manualJobId: manualJob.id,
 			bootReplayJobId: bootReplayJob.id,
 			intervalJobId: intervalJob.id,
-			swarmDeliveryJobId: swarmDeliveryJob.id,
 			fileDeliveryJobId: fileDeliveryJob.id,
 			stdoutDeliveryJobId: stdoutDeliveryJob.id,
 			noAuthJobId: noAuthJob.id,

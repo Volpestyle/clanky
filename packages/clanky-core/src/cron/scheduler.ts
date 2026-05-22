@@ -2,7 +2,7 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { SessionRegistry } from "../session-registry.ts";
 import { formatSkillPrompt } from "../skills/injector.ts";
-import { type CronSwarmDeliveryHandler, deliverCronOutput } from "./delivery.ts";
+import { deliverCronOutput } from "./delivery.ts";
 import { buildCronIdempotencyKey, type CreateCronJobInput, type CronJob, CronJobStore } from "./jobs.ts";
 
 export interface CronRunResult {
@@ -16,7 +16,6 @@ export interface CronRunResult {
 	outputFile?: string;
 	deliveredTo?: string;
 	linearOutboxId?: string;
-	swarmResponse?: unknown;
 	idempotencyKey?: string;
 	skipped?: boolean;
 	error?: string;
@@ -31,7 +30,6 @@ export interface CronSchedulerOptions {
 	registry: SessionRegistry;
 	store?: CronJobStore;
 	tickIntervalMs?: number;
-	swarmDelivery?: CronSwarmDeliveryHandler;
 	onTickRun?: (result: CronRunResult) => void;
 }
 
@@ -42,7 +40,6 @@ export class CronScheduler {
 
 	private readonly registry: SessionRegistry;
 	private readonly tickIntervalMs: number;
-	private readonly swarmDelivery: CronSwarmDeliveryHandler | undefined;
 	private readonly onTickRun: ((result: CronRunResult) => void) | undefined;
 	private readonly runningJobs = new Set<string>();
 	private timer: ReturnType<typeof setInterval> | undefined;
@@ -51,7 +48,6 @@ export class CronScheduler {
 		this.registry = options.registry;
 		this.store = options.store ?? new CronJobStore(options.registry.paths);
 		this.tickIntervalMs = options.tickIntervalMs ?? DEFAULT_CRON_TICK_INTERVAL_MS;
-		this.swarmDelivery = options.swarmDelivery;
 		this.onTickRun = options.onTickRun;
 	}
 
@@ -222,7 +218,6 @@ export class CronScheduler {
 				output: text,
 				finishedAt,
 			};
-			if (this.swarmDelivery !== undefined) deliveryOptions.swarmDelivery = this.swarmDelivery;
 			const delivery = await deliverCronOutput(deliveryOptions);
 			if (idempotencyKey !== undefined) await this.store.recordIdempotencyKey(idempotencyKey, job.id, finishedAt);
 			await this.store.recordRun(job.id, {
@@ -244,7 +239,6 @@ export class CronScheduler {
 			if (idempotencyKey !== undefined) result.idempotencyKey = idempotencyKey;
 			if (registered.sessionFile !== undefined) result.sessionFile = registered.sessionFile;
 			if (delivery.linearOutboxId !== undefined) result.linearOutboxId = delivery.linearOutboxId;
-			if (delivery.swarmResponse !== undefined) result.swarmResponse = delivery.swarmResponse;
 			return result;
 		} catch (error) {
 			const finishedAt = new Date();

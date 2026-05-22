@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ClankyPaths } from "../paths.ts";
 import { CronRunLedger } from "../state/index-db.ts";
 
-export type CronDelivery = "stdout" | "file" | `session:${string}` | `swarm:${string}` | `linear:${string}`;
+export type CronDelivery = "stdout" | "file" | `session:${string}` | `linear:${string}`;
 
 export type CronRunStatus = "ok" | "error";
 
@@ -436,7 +436,6 @@ function isCronDelivery(value: string): value is CronDelivery {
 		value === "stdout" ||
 		value === "file" ||
 		value.startsWith("session:") ||
-		value.startsWith("swarm:") ||
 		value.startsWith("linear:")
 	);
 }

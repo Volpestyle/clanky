@@ -28,21 +28,6 @@ import type {
 	SkillUsageRecord,
 	UpdateClankyTaskInput,
 } from "@clanky/core";
-import {
-	isSwarmCompleteStatus,
-	isSwarmCompleteTestStatus,
-	isSwarmDispatchType,
-	type SwarmCompleteInput,
-	type SwarmCompleteResult,
-	type SwarmDispatchInput,
-	type SwarmDispatchResult,
-	type SwarmFileLockResult,
-	type SwarmLeaderStatus,
-	type SwarmMessageInput,
-	type SwarmMessageResult,
-	type SwarmQueryResult,
-	type SwarmSnapshotResult,
-} from "@clanky/swarm";
 
 export type GatewayMethod =
 	| "status"
@@ -79,14 +64,6 @@ export type GatewayMethod =
 	| "cron.enable"
 	| "cron.disable"
 	| "cron.run_now"
-	| "swarm.status"
-	| "swarm.dispatch"
-	| "swarm.peers"
-	| "swarm.tasks"
-	| "swarm.snapshot"
-	| "swarm.file_lock"
-	| "swarm.message"
-	| "swarm.complete"
 	| "messaging.status"
 	| "messaging.sessions"
 	| "messaging.reset"
@@ -139,9 +116,6 @@ export interface StatusResult {
 	linearOutboxPending: number;
 	cronJobs: number;
 	enabledCronJobs: number;
-	swarm: SwarmLeaderStatus;
-	swarmPeers: number;
-	swarmTasks: number;
 	externalMcpServers: ExternalMcpServerStatus[];
 	warnings: string[];
 	uptimeMs: number;
@@ -333,33 +307,6 @@ export interface CronRunNowResult {
 	result: CronRunResult;
 }
 
-export type SwarmStatusResult = SwarmLeaderStatus;
-
-export type SwarmDispatchParams = SwarmDispatchInput;
-
-export type SwarmDispatchGatewayResult = SwarmDispatchResult;
-
-export type SwarmQueryGatewayResult = SwarmQueryResult;
-
-export type SwarmSnapshotGatewayResult = SwarmSnapshotResult;
-
-export interface SwarmFileLockParams {
-	file: string;
-}
-
-export type SwarmFileLockGatewayResult = SwarmFileLockResult;
-
-export type SwarmMessageParams = SwarmMessageInput;
-
-export type SwarmMessageGatewayResult = SwarmMessageResult;
-
-export type SwarmCompleteParams = SwarmCompleteInput;
-
-export interface SwarmCompleteGatewayResult extends SwarmCompleteResult {
-	linearOutboxEntries?: LinearOutboxEntry[];
-	linearFlush?: LinearFlushResult;
-}
-
 export interface CronJobIdParams {
 	jobId: string;
 }
@@ -403,14 +350,9 @@ export function isGatewayRequest(value: unknown): value is GatewayRequest {
 		candidate.method === "cron.enable" ||
 		candidate.method === "cron.disable" ||
 		candidate.method === "cron.run_now" ||
-		candidate.method === "swarm.status" ||
-		candidate.method === "swarm.dispatch" ||
-		candidate.method === "swarm.peers" ||
-		candidate.method === "swarm.tasks" ||
-		candidate.method === "swarm.snapshot" ||
-		candidate.method === "swarm.file_lock" ||
-		candidate.method === "swarm.message" ||
-		candidate.method === "swarm.complete" ||
+		candidate.method === "messaging.status" ||
+		candidate.method === "messaging.sessions" ||
+		candidate.method === "messaging.reset" ||
 		candidate.method === "shutdown"
 	);
 }
@@ -984,186 +926,6 @@ export function readCronJobIdParams(value: unknown): CronJobIdParams {
 	return { jobId };
 }
 
-export function readSwarmDispatchParams(value: unknown): SwarmDispatchParams {
-	if (typeof value !== "object" || value === null) {
-		throw new Error("swarm dispatch params must be an object");
-	}
-	const candidate = value as Record<string, unknown>;
-	if (typeof candidate.title !== "string" || candidate.title.trim().length === 0) {
-		throw new Error("swarm dispatch params require a non-empty title");
-	}
-	if (!isSwarmDispatchType(candidate.type)) {
-		throw new Error("swarm dispatch type must be one of: implement, fix, review, research");
-	}
-	if (typeof candidate.description !== "string" || candidate.description.trim().length === 0) {
-		throw new Error("swarm dispatch params require a non-empty description");
-	}
-	const params: SwarmDispatchParams = {
-		title: candidate.title,
-		type: candidate.type,
-		description: candidate.description,
-	};
-	if (candidate.files !== undefined) {
-		if (!Array.isArray(candidate.files) || !candidate.files.every((file) => typeof file === "string")) {
-			throw new Error("swarm dispatch files must be an array of strings");
-		}
-		params.files = candidate.files;
-	}
-	const waitForCompletion = candidate.waitForCompletion ?? candidate.wait_for_completion;
-	if (waitForCompletion !== undefined) {
-		if (typeof waitForCompletion !== "boolean") {
-			throw new Error("swarm dispatch waitForCompletion must be a boolean");
-		}
-		params.waitForCompletion = waitForCompletion;
-	}
-	if (candidate.provider !== undefined) {
-		if (typeof candidate.provider !== "string" || candidate.provider.trim().length === 0) {
-			throw new Error("swarm dispatch provider must be a non-empty string");
-		}
-		params.provider = candidate.provider;
-	}
-	if (candidate.model !== undefined) {
-		if (typeof candidate.model !== "string" || candidate.model.trim().length === 0) {
-			throw new Error("swarm dispatch model must be a non-empty string");
-		}
-		params.model = candidate.model;
-	}
-	if (candidate.spawn !== undefined) {
-		if (typeof candidate.spawn !== "boolean") {
-			throw new Error("swarm dispatch spawn must be a boolean");
-		}
-		params.spawn = candidate.spawn;
-	}
-	const linearIssue = candidate.linearIssue ?? candidate.linear_issue;
-	if (linearIssue !== undefined) {
-		if (typeof linearIssue !== "string" || linearIssue.trim().length === 0) {
-			throw new Error("swarm dispatch linearIssue must be a non-empty string");
-		}
-		params.linearIssue = linearIssue;
-	}
-	const swarmIdempotencyKey = candidate.idempotencyKey ?? candidate.idempotency_key;
-	if (swarmIdempotencyKey !== undefined) {
-		if (typeof swarmIdempotencyKey !== "string" || swarmIdempotencyKey.trim().length === 0) {
-			throw new Error("swarm dispatch idempotencyKey must be a non-empty string");
-		}
-		params.idempotencyKey = swarmIdempotencyKey;
-	}
-	return params;
-}
-
-export function readSwarmFileLockParams(value: unknown): SwarmFileLockParams {
-	if (typeof value !== "object" || value === null) {
-		throw new Error("swarm file lock params must be an object");
-	}
-	const candidate = value as Record<string, unknown>;
-	const file = candidate.file ?? candidate.path;
-	if (typeof file !== "string" || file.trim().length === 0) {
-		throw new Error("swarm file lock params require a non-empty file");
-	}
-	return { file: file.trim() };
-}
-
-export function readSwarmMessageParams(value: unknown): SwarmMessageParams {
-	if (typeof value !== "object" || value === null) {
-		throw new Error("swarm message params must be an object");
-	}
-	const candidate = value as Record<string, unknown>;
-	if (typeof candidate.recipient !== "string" || candidate.recipient.trim().length === 0) {
-		throw new Error("swarm message params require a non-empty recipient");
-	}
-	if (typeof candidate.message !== "string" || candidate.message.trim().length === 0) {
-		throw new Error("swarm message params require a non-empty message");
-	}
-	const params: SwarmMessageParams = {
-		recipient: candidate.recipient,
-		message: candidate.message,
-	};
-	const taskId = candidate.taskId ?? candidate.task_id;
-	if (taskId !== undefined) {
-		if (typeof taskId !== "string" || taskId.trim().length === 0) {
-			throw new Error("swarm message taskId must be a non-empty string");
-		}
-		params.taskId = taskId;
-	}
-	if (candidate.nudge !== undefined) {
-		if (typeof candidate.nudge !== "boolean") throw new Error("swarm message nudge must be a boolean");
-		params.nudge = candidate.nudge;
-	}
-	if (candidate.force !== undefined) {
-		if (typeof candidate.force !== "boolean") throw new Error("swarm message force must be a boolean");
-		params.force = candidate.force;
-	}
-	return params;
-}
-
-export function readSwarmCompleteParams(value: unknown): SwarmCompleteParams {
-	if (typeof value !== "object" || value === null) {
-		throw new Error("swarm complete params must be an object");
-	}
-	const candidate = value as Record<string, unknown>;
-	const taskId = candidate.taskId ?? candidate.task_id;
-	if (typeof taskId !== "string" || taskId.trim().length === 0) {
-		throw new Error("swarm complete params require a non-empty taskId");
-	}
-	const summary = candidate.summary;
-	if (typeof summary !== "string" || summary.trim().length === 0) {
-		throw new Error("swarm complete params require a non-empty summary");
-	}
-	const params: SwarmCompleteParams = { taskId, summary };
-	if (candidate.status !== undefined) {
-		if (!isSwarmCompleteStatus(candidate.status)) {
-			throw new Error("swarm complete status must be one of: done, failed, cancelled");
-		}
-		params.status = candidate.status;
-	}
-	const filesChanged = candidate.filesChanged ?? candidate.files_changed;
-	if (filesChanged !== undefined) params.filesChanged = readStringArray(filesChanged, "swarm complete filesChanged");
-	if (candidate.tests !== undefined) params.tests = readSwarmCompleteTests(candidate.tests);
-	const trackerUpdate = candidate.trackerUpdate ?? candidate.tracker_update;
-	if (trackerUpdate !== undefined) {
-		if (!isTrackerPayload(trackerUpdate)) throw new Error("swarm complete trackerUpdate must be an object or string");
-		params.trackerUpdate = trackerUpdate;
-	}
-	const trackerUpdateSkipped = candidate.trackerUpdateSkipped ?? candidate.tracker_update_skipped;
-	if (trackerUpdateSkipped !== undefined) {
-		if (!isTrackerPayload(trackerUpdateSkipped)) {
-			throw new Error("swarm complete trackerUpdateSkipped must be an object or string");
-		}
-		params.trackerUpdateSkipped = trackerUpdateSkipped;
-	}
-	if (candidate.followups !== undefined) {
-		params.followups = readStringArray(candidate.followups, "swarm complete followups");
-	}
-	return params;
-}
-
-function readSwarmCompleteTests(value: unknown): NonNullable<SwarmCompleteParams["tests"]> {
-	if (!Array.isArray(value)) throw new Error("swarm complete tests must be an array");
-	return value.map((item) => {
-		if (typeof item !== "object" || item === null || Array.isArray(item)) {
-			throw new Error("swarm complete tests entries must be objects");
-		}
-		const candidate = item as Record<string, unknown>;
-		if (!isSwarmCompleteTestStatus(candidate.status)) {
-			throw new Error("swarm complete test status must be one of: passed, failed, skipped, unknown");
-		}
-		const result: NonNullable<SwarmCompleteParams["tests"]>[number] = { status: candidate.status };
-		if (candidate.command !== undefined) {
-			if (typeof candidate.command !== "string" || candidate.command.trim().length === 0) {
-				throw new Error("swarm complete test command must be a non-empty string");
-			}
-			result.command = candidate.command;
-		}
-		if (candidate.notes !== undefined) {
-			if (typeof candidate.notes !== "string" || candidate.notes.trim().length === 0) {
-				throw new Error("swarm complete test notes must be a non-empty string");
-			}
-			result.notes = candidate.notes;
-		}
-		return result;
-	});
-}
-
 function readStringArray(value: unknown, label: string): string[] {
 	if (!Array.isArray(value) || !value.every((item) => typeof item === "string" && item.trim().length > 0)) {
 		throw new Error(`${label} must be an array of non-empty strings`);
@@ -1201,8 +963,4 @@ function readTaskStatus(value: unknown): NonNullable<CreateClankyTaskInput["stat
 function readTaskPriority(value: unknown): NonNullable<CreateClankyTaskInput["priority"]> {
 	if (value === "low" || value === "normal" || value === "high") return value;
 	throw new Error("task priority must be one of: low, normal, high");
-}
-
-function isTrackerPayload(value: unknown): boolean {
-	return typeof value === "string" || (typeof value === "object" && value !== null && !Array.isArray(value));
 }

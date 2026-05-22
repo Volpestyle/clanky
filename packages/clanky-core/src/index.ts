@@ -41,10 +41,6 @@ export {
 	type MemoryRememberToolInput,
 	type MemorySearchToolInput,
 	type ScheduleCronToolInput,
-	type SwarmCompleteToolInput,
-	type SwarmDispatchToolInput,
-	type SwarmFileLockToolInput,
-	type SwarmMessageToolInput,
 	type TaskCreateToolInput,
 } from "./extension/clanky-ext.ts";
 export {

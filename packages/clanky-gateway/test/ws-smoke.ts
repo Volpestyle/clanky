@@ -139,45 +139,6 @@ try {
 		}
 	}
 
-	const swarmPromise = nextEvent(
-		socket,
-		(event) =>
-			property(event, "type") === "swarm.activity" && stringArrayProperty(event, "changes").includes("task.changed"),
-	);
-	const swarmTaskChangedPromise = nextEvent(
-		socket,
-		(event) =>
-			property(event, "type") === "swarm.task_changed" &&
-			stringArrayProperty(event, "changes").includes("task.changed"),
-	);
-	const swarmMessagePromise = nextEvent(
-		socket,
-		(event) =>
-			property(event, "type") === "swarm.message" && stringArrayProperty(event, "changes").includes("new_messages"),
-	);
-	server.events.publish(
-		gatewayEvent({
-			type: "swarm.activity",
-			changes: ["task.changed", "new_messages"],
-			activity: {
-				task_id: "task-ws",
-				messages: [{ content: "plan-named websocket message alias" }],
-			},
-			instanceId: "clanky-ws-faux-gateway",
-		}),
-	);
-	const swarm = await swarmPromise;
-	const swarmTaskChanged = await swarmTaskChangedPromise;
-	const swarmMessage = await swarmMessagePromise;
-	if (property(swarm, "instanceId") !== "clanky-ws-faux-gateway") {
-		throw new Error(`WebSocket swarm.activity event had unexpected payload: ${JSON.stringify(swarm)}`);
-	}
-	for (const event of [swarmTaskChanged, swarmMessage]) {
-		if (property(event, "instanceId") !== "clanky-ws-faux-gateway") {
-			throw new Error(`WebSocket swarm compatibility event had unexpected payload: ${JSON.stringify(event)}`);
-		}
-	}
-
 	filteredSocket = new WebSocket(
 		`ws://127.0.0.1:${port}/events?token=${encodeURIComponent(token)}&sessionId=${encodeURIComponent(sentSessionId)}`,
 	);
@@ -214,7 +175,6 @@ try {
 		JSON.stringify({
 			cronEvent: property(changed, "type"),
 			sessionEvent: property(completed, "type"),
-			swarmEvent: property(swarm, "type"),
 			jobId: createdJob.id,
 			sessionId: sentSessionId,
 			jobs: jobs.length,

@@ -8,7 +8,6 @@ import {
 	requestGateway,
 	type SessionListResult,
 	type StatusResult,
-	type SwarmSnapshotGatewayResult,
 	type TaskListResult,
 } from "@clanky/gateway";
 import {
@@ -22,7 +21,6 @@ import {
 } from "@earendil-works/pi-tui";
 import { WebSocket } from "ws";
 import { runChat } from "./chat.ts";
-import { renderSwarmView } from "./views/swarm.ts";
 
 export interface RunDashboardOptions {
 	socketFile: string;
@@ -37,7 +35,6 @@ interface DashboardData {
 	sessions: SessionListResult;
 	tasks: TaskListResult;
 	cron: CronListResult;
-	swarm: SwarmSnapshotGatewayResult;
 }
 
 const DEFAULT_INTERVAL_MS = 3000;
@@ -259,21 +256,18 @@ function renderDashboardData(data: DashboardData): string {
 		renderTasks(data.tasks),
 		"",
 		renderCron(data.cron),
-		"",
-		renderSwarmView(data.swarm),
 	].join("\n");
 }
 
 async function fetchDashboardData(socketFile: string): Promise<DashboardData> {
-	const [auth, status, sessions, tasks, cron, swarm] = await Promise.all([
+	const [auth, status, sessions, tasks, cron] = await Promise.all([
 		requestGateway({ socketFile, method: "auth.status" }) as Promise<AuthStatusResult>,
 		requestGateway({ socketFile, method: "status" }) as Promise<StatusResult>,
 		requestGateway({ socketFile, method: "session.list" }) as Promise<SessionListResult>,
 		requestGateway({ socketFile, method: "task.list", params: { limit: 8 } }) as Promise<TaskListResult>,
 		requestGateway({ socketFile, method: "cron.list" }) as Promise<CronListResult>,
-		requestGateway({ socketFile, method: "swarm.snapshot" }) as Promise<SwarmSnapshotGatewayResult>,
 	]);
-	return { auth, status, sessions, tasks, cron, swarm };
+	return { auth, status, sessions, tasks, cron };
 }
 
 function renderStatus(status: StatusResult): string {
@@ -284,7 +278,6 @@ function renderStatus(status: StatusResult): string {
 		`Sessions: ${status.liveSessions} live`,
 		`Linear: configured=${status.linearConfigured} outbox_pending=${status.linearOutboxPending}`,
 		`Cron: ${status.enabledCronJobs}/${status.cronJobs} enabled`,
-		`Swarm: ${status.swarm.state} enabled=${status.swarm.enabled} peers=${status.swarmPeers} tasks=${status.swarmTasks}`,
 		...status.warnings.map((warning) => `Warning: ${warning}`),
 	].join("\n");
 }

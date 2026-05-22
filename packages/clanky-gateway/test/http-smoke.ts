@@ -57,13 +57,7 @@ try {
 	if (token.length === 0) throw new Error("HTTP token file was empty");
 
 	const status = await fetchJson(`${baseUrl}/status`, token);
-	if (
-		!isRecord(status) ||
-		status.running !== true ||
-		status.profile !== "default" ||
-		status.swarmPeers !== 0 ||
-		status.swarmTasks !== 0
-	) {
+	if (!isRecord(status) || status.running !== true || status.profile !== "default") {
 		throw new Error("HTTP /status returned unexpected payload");
 	}
 

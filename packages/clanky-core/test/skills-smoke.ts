@@ -11,7 +11,7 @@ try {
 
 	const initial = registry.loadSkills();
 	const initialNames = new Set(initial.skills.map((skill) => skill.name));
-	for (const name of ["swarm-leader", "daily-digest", "linear-bridge", "pi-tui-coder"]) {
+	for (const name of ["daily-digest", "linear-bridge", "pi-tui-coder"]) {
 		if (!initialNames.has(name)) throw new Error(`Bundled skill ${name} was not loaded`);
 	}
 	for (const skill of initial.skills.filter((candidate) => initialNames.has(candidate.name))) {
@@ -43,20 +43,7 @@ try {
 		throw new Error("Created profile skill was not visible to the loader");
 	}
 
-	registry.setAgentToolHandlers({
-		swarmDispatch: async () => ({ ok: true }),
-		swarmComplete: async () => ({ ok: true }),
-	});
 	const activeSession = await registry.createSession({ noTools: "all" });
-	const systemPrompt = activeSession.session.systemPrompt;
-	if (
-		!systemPrompt.includes('<clanky_gateway_skill name="swarm-leader"') ||
-		!systemPrompt.includes("Prefer `swarm_dispatch` over native subagents") ||
-		!systemPrompt.includes("use `linear_link` to bind") ||
-		!systemPrompt.includes("must include either `tracker_update` or `tracker_update_skipped`")
-	) {
-		throw new Error("Gateway session did not auto-load the swarm-leader skill instructions");
-	}
 	await activeSession.session.prompt("/skill add command-skill");
 	await waitForSessionSkill(activeSession, "command-skill");
 	if (!registry.loadSkills().skills.some((skill) => skill.name === "command-skill")) {

@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { access, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
@@ -12,7 +11,6 @@ import {
 	SessionManager,
 	SettingsManager,
 	type Skill,
-	stripFrontmatter,
 } from "@earendil-works/pi-coding-agent";
 import {
 	type ClankyAgentToolHandlers,
@@ -190,7 +188,6 @@ export const DEFAULT_SESSION_IDLE_TTL_MS = 60 * 60 * 1000;
 export const DEFAULT_MAX_LIVE_SESSIONS = 128;
 const DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
 const DEFAULT_DRAIN_POLL_INTERVAL_MS = 50;
-const AUTO_GATEWAY_SKILL_NAME = "swarm-leader";
 
 export class SessionRegistry {
 	readonly paths: ClankyPaths;
@@ -566,8 +563,6 @@ export class SessionRegistry {
 			cwd,
 			agentDir: this.paths.profileDir,
 			extensionFactories: createClankyExtensionFactories(this.agentToolHandlers),
-			appendSystemPromptOverride: (current) =>
-				appendGatewaySkillPrompt(current, this.agentToolHandlers, () => this.loadSkills()),
 			skillsOverride: (current) => {
 				const loadOptions: LoadClankySkillsOptions = { paths: this.paths };
 				if (this.bundledSkillsDir !== undefined) loadOptions.bundledSkillsDir = this.bundledSkillsDir;
@@ -846,38 +841,6 @@ export class SessionRegistry {
 		};
 		await writeFile(sessionFile, `${JSON.stringify(header)}\n${JSON.stringify(entry)}\n`, { mode: 0o600 });
 		await unlink(file).catch(() => undefined);
-	}
-}
-
-function appendGatewaySkillPrompt(
-	current: string[],
-	handlers: ClankyAgentToolHandlers,
-	loadSkills: () => LoadSkillsResult,
-): string[] {
-	if (!hasSwarmGatewayHandlers(handlers)) return current;
-	const autoPrompt = gatewaySkillPrompt(loadSkills());
-	return autoPrompt === undefined ? current : [...current, autoPrompt];
-}
-
-function hasSwarmGatewayHandlers(handlers: ClankyAgentToolHandlers): boolean {
-	return handlers.swarmDispatch !== undefined || handlers.swarmComplete !== undefined;
-}
-
-function gatewaySkillPrompt(skills: LoadSkillsResult): string | undefined {
-	const skill = skills.skills.find((candidate) => candidate.name === AUTO_GATEWAY_SKILL_NAME);
-	if (skill === undefined) return undefined;
-	try {
-		const body = stripFrontmatter(readFileSync(skill.filePath, "utf8")).trim();
-		if (body.length === 0) return undefined;
-		return [
-			`<clanky_gateway_skill name="${AUTO_GATEWAY_SKILL_NAME}" location="${skill.filePath}">`,
-			"These instructions are loaded automatically for Clanky gateway sessions.",
-			"",
-			body,
-			"</clanky_gateway_skill>",
-		].join("\n");
-	} catch {
-		return undefined;
 	}
 }
 

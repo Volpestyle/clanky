@@ -6,23 +6,7 @@ export interface CronDeliveryResult {
 	deliveredTo: string;
 	outputFile: string;
 	linearOutboxId?: string;
-	swarmResponse?: unknown;
 }
-
-export interface CronSwarmDeliveryInput {
-	target: string;
-	message: string;
-	jobId: string;
-	outputFile: string;
-	finishedAt: string;
-}
-
-export interface CronSwarmDeliveryResult {
-	deliveredTo?: string;
-	response?: unknown;
-}
-
-export type CronSwarmDeliveryHandler = (input: CronSwarmDeliveryInput) => Promise<CronSwarmDeliveryResult>;
 
 export interface DeliverCronOutputOptions {
 	registry: SessionRegistry;
@@ -30,7 +14,6 @@ export interface DeliverCronOutputOptions {
 	job: CronJob;
 	output: string;
 	finishedAt: Date;
-	swarmDelivery?: CronSwarmDeliveryHandler;
 }
 
 export async function deliverCronOutput(options: DeliverCronOutputOptions): Promise<CronDeliveryResult> {
@@ -65,26 +48,6 @@ export async function deliverCronOutput(options: DeliverCronOutputOptions): Prom
 		});
 		if (hasLinearCredentials()) await options.registry.flushLinearOutbox({ entryIds: [entry.id] });
 		return { deliveredTo: options.job.deliver, outputFile, linearOutboxId: entry.id };
-	}
-	if (options.job.deliver.startsWith("swarm:")) {
-		const target = options.job.deliver.slice("swarm:".length);
-		if (!target) throw new Error("Cron swarm delivery requires a target peer id");
-		if (options.swarmDelivery === undefined) {
-			throw new Error("Cron swarm delivery requires a configured swarm delivery handler");
-		}
-		const message = `Cron job ${options.job.id} completed:\n\n${options.output}`;
-		const result = await options.swarmDelivery({
-			target,
-			message,
-			jobId: options.job.id,
-			outputFile,
-			finishedAt: options.finishedAt.toISOString(),
-		});
-		return {
-			deliveredTo: result.deliveredTo ?? options.job.deliver,
-			outputFile,
-			...(result.response === undefined ? {} : { swarmResponse: result.response }),
-		};
 	}
 	throw new Error(`Unsupported cron delivery target: ${options.job.deliver}`);
 }

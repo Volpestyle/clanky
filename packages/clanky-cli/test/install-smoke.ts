@@ -4,16 +4,14 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
 const homeDir = await mkdtemp(join(tmpdir(), "clanky-install-"));
-const previousSwarmArgs = process.env.CLANKY_SWARM_ARGS_JSON;
-process.env.CLANKY_SWARM_ARGS_JSON = JSON.stringify(["/tmp/swarm-mcp.js"]);
+const previousMessagingArgs = process.env.CLANKY_MCP_SERVERS_JSON;
+process.env.CLANKY_MCP_SERVERS_JSON = JSON.stringify([]);
 
 const installEnvArgs = [
 	"--env",
-	"CLANKY_SWARM_ENABLED=1",
+	"CLANKY_MCP_SERVERS_JSON=[]",
 	"--env",
-	"CLANKY_SWARM_COMMAND=node",
-	"--env-from-current",
-	"CLANKY_SWARM_ARGS_JSON",
+	"AGENT_IDENTITY=install-smoke",
 ];
 
 let launchd: CommandResult;
@@ -44,10 +42,10 @@ try {
 		"--print",
 	]);
 } finally {
-	if (previousSwarmArgs === undefined) {
-		delete process.env.CLANKY_SWARM_ARGS_JSON;
+	if (previousMessagingArgs === undefined) {
+		delete process.env.CLANKY_MCP_SERVERS_JSON;
 	} else {
-		process.env.CLANKY_SWARM_ARGS_JSON = previousSwarmArgs;
+		process.env.CLANKY_MCP_SERVERS_JSON = previousMessagingArgs;
 	}
 }
 
@@ -59,25 +57,17 @@ assertIncludes(launchd.stdout, "<string>--home</string>", "launchd plist should 
 assertIncludes(launchd.stdout, "<key>KeepAlive</key>", "launchd plist should include KeepAlive");
 assertIncludes(launchd.stdout, "<key>SuccessfulExit</key>", "launchd plist should gate restart on failed exits");
 assertIncludes(launchd.stdout, "<false/>", "launchd plist should not restart successful exits");
-assertIncludes(launchd.stdout, "<key>CLANKY_SWARM_ENABLED</key>", "launchd plist should include service env");
-assertIncludes(launchd.stdout, "<string>1</string>", "launchd plist should include service env values");
+assertIncludes(launchd.stdout, "<key>AGENT_IDENTITY</key>", "launchd plist should include service env");
 assertIncludes(launchd.stdout, "<key>CLANKY_HOME</key>", "launchd plist should include CLANKY_HOME");
 assertIncludes(launchd.stdout, `<string>${homeDir}</string>`, "launchd plist should include the requested home");
 assertIncludes(launchd.stdout, "clanky.out.log", "default launchd plist should use the default stdout log");
 assertIncludes(launchd.stdout, "clanky.err.log", "default launchd plist should use the default stderr log");
-assertIncludes(
-	launchd.stdout,
-	"<key>CLANKY_SWARM_ARGS_JSON</key>",
-	"launchd plist should include env copied from current process",
-);
 assertNoLiveGateCredentialEnv(launchd.stdout, "launchd print");
 assertIncludes(systemd.stdout, "Restart=on-failure", "systemd unit should restart failed exits");
 assertIncludes(systemd.stdout, "WantedBy=default.target", "systemd unit should install into the user target");
 assertIncludes(systemd.stdout, "clanky start --home", "systemd unit should start the daemon through clanky");
 assertIncludes(systemd.stdout, `Environment=CLANKY_HOME=${homeDir}`, "systemd unit should include CLANKY_HOME");
-assertIncludes(systemd.stdout, "Environment=CLANKY_SWARM_ENABLED=1", "systemd unit should include service env");
-assertIncludes(systemd.stdout, "CLANKY_SWARM_ARGS_JSON", "systemd unit should include env copied from current process");
-assertIncludes(systemd.stdout, "/tmp/swarm-mcp.js", "systemd unit should include copied env value");
+assertIncludes(systemd.stdout, "Environment=AGENT_IDENTITY=install-smoke", "systemd unit should include service env");
 assertNoLiveGateCredentialEnv(systemd.stdout, "systemd print");
 assertIncludes(
 	profileLaunchd.stdout,

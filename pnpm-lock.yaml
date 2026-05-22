@@ -66,9 +66,6 @@ importers:
       '@clanky/messaging':
         specifier: workspace:*
         version: link:../clanky-messaging
-      '@clanky/swarm':
-        specifier: workspace:*
-        version: link:../clanky-swarm
       '@earendil-works/pi-coding-agent':
         specifier: ^0.75.4
         version: 0.75.4(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.1)(zod@4.4.3)
@@ -110,15 +107,6 @@ importers:
       '@earendil-works/pi-ai':
         specifier: ^0.75.4
         version: 0.75.4(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.1)(zod@4.4.3)
-
-  packages/clanky-swarm:
-    dependencies:
-      '@modelcontextprotocol/sdk':
-        specifier: ^1.29.0
-        version: 1.29.0(zod@4.4.3)
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
 
   packages/clanky-tui:
     dependencies:

@@ -2,7 +2,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveClankyPaths, SessionRegistry } from "@clanky/core";
-import { SwarmLeader } from "@clanky/swarm";
 
 const homeDir = await mkdtemp(join(tmpdir(), "clanky-profile-isolation-"));
 const work = new SessionRegistry({ homeDir, profile: "work" });
@@ -142,26 +141,6 @@ try {
 		personal.paths.daemonLockFile,
 		join(homeDir, "profiles", "personal", ".daemon.lock"),
 		"personal daemon lock",
-	);
-
-	const workSwarm = new SwarmLeader({
-		profile: work.paths.profile,
-		profileDir: work.paths.profileDir,
-		env: {},
-	});
-	const personalSwarm = new SwarmLeader({
-		profile: personal.paths.profile,
-		profileDir: personal.paths.profileDir,
-		env: {},
-	});
-	assertDifferent(workSwarm.status().databasePath, personalSwarm.status().databasePath, "swarm database paths");
-	assert(workSwarm.status().identity === "work", "work swarm identity did not default to the profile name");
-	assert(personalSwarm.status().identity === "personal", "personal swarm identity did not default to the profile name");
-	assertPath(workSwarm.status().databasePath, join(work.paths.profileDir, "swarm", "swarm.db"), "work swarm DB");
-	assertPath(
-		personalSwarm.status().databasePath,
-		join(personal.paths.profileDir, "swarm", "swarm.db"),
-		"personal swarm DB",
 	);
 
 	process.env.CLANKY_HOME = homeDir;

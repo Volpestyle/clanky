@@ -11,7 +11,7 @@ export type MessagingHook = (event: MessagingHookEvent) => Promise<void> | void;
 
 export interface HookRegistryOptions {
 	hooksDir: string;
-	dynamicImport?: (file: string) => Promise<{ default?: MessagingHook }>;
+	dynamicImport: (file: string) => Promise<{ default?: MessagingHook }>;
 }
 
 export class HookRegistry {
@@ -22,7 +22,7 @@ export class HookRegistry {
 
 	constructor(options: HookRegistryOptions) {
 		this.hooksDir = options.hooksDir;
-		this.dynamicImport = options.dynamicImport ?? defaultDynamicImport;
+		this.dynamicImport = options.dynamicImport;
 	}
 
 	async load(): Promise<void> {
@@ -86,18 +86,6 @@ function markProgrammaticHook(hook: MessagingHook): void {
 
 function isProgrammaticHook(hook: MessagingHook): boolean {
 	return (hook as MessagingHook & { [PROGRAMMATIC_HOOK_MARKER]?: true })[PROGRAMMATIC_HOOK_MARKER] === true;
-}
-
-async function defaultDynamicImport(file: string): Promise<{ default?: MessagingHook }> {
-	const url = file.startsWith("file://") ? file : `file://${file}`;
-	const imported: unknown = await import(url);
-	if (typeof imported === "object" && imported !== null) {
-		const record = imported as Record<string, unknown>;
-		if (typeof record.default === "function") {
-			return { default: record.default as MessagingHook };
-		}
-	}
-	return {};
 }
 
 async function readSample(dir: string, name: string | undefined): Promise<string | undefined> {

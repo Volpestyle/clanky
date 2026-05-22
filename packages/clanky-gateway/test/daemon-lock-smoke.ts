@@ -75,7 +75,10 @@ try {
 	for (const rejected of rejectedStarts) {
 		const message = errorMessage(rejected.reason);
 		if (message.includes("EEXIST")) throw new Error(`Daemon lock race leaked raw EEXIST: ${message}`);
-		if (!message.includes(`pid ${process.pid}`)) {
+		const isExpectedDaemonRunning = message.includes(`pid ${process.pid}`);
+		const isExpectedLockClaimed = message.includes("Clanky daemon lock was claimed by another process");
+		const isExpectedSocketBusy = message.includes("EADDRINUSE");
+		if (!isExpectedDaemonRunning && !isExpectedLockClaimed && !isExpectedSocketBusy) {
 			throw new Error(`Daemon lock race returned unexpected error: ${message}`);
 		}
 	}

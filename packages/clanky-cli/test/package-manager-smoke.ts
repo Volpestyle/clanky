@@ -126,10 +126,9 @@ assertIncludes(
 	"AGENTS.md must forbid npm commands",
 );
 assertIncludes(agentInstructions, "Do not patch or vendor Pi", "AGENTS.md must preserve the Pi package boundary");
-assertIncludes(agentInstructions, "Do not reinvent `swarm-mcp`", "AGENTS.md must preserve the swarm boundary");
 assertIncludes(agentInstructions, "`clanky-core` owns Pi integration", "AGENTS.md must document core ownership");
 assertIncludes(agentInstructions, "`clanky-gateway` owns HTTP", "AGENTS.md must document gateway ownership");
-assertIncludes(agentInstructions, "`clanky-swarm` owns `swarm-mcp`", "AGENTS.md must document swarm ownership");
+assertIncludes(agentInstructions, "`clanky-messaging` owns Telegram", "AGENTS.md must document messaging ownership");
 assertIncludes(agentInstructions, "After code changes, run `pnpm check`.", "AGENTS.md must document check gate");
 assertIncludes(
 	agentInstructions,
@@ -145,7 +144,6 @@ const expectedPlanModules = new Map([
 	["packages/clanky-cli/src/commands/send.ts", "runSend"],
 	["packages/clanky-cli/src/commands/cron.ts", "runCron"],
 	["packages/clanky-cli/src/commands/session.ts", "runSession"],
-	["packages/clanky-cli/src/commands/swarm.ts", "runSwarm"],
 	["packages/clanky-cli/src/commands/skill.ts", "runSkill"],
 	["packages/clanky-cli/src/commands/task.ts", "runTask"],
 	["packages/clanky-cli/src/commands/linear.ts", "runLinear"],
@@ -169,23 +167,11 @@ const expectedPlanModules = new Map([
 	["packages/clanky-gateway/src/mcp.ts", "startMcpServer"],
 	["packages/clanky-gateway/src/routes/sessions.ts", "registerSessionRoutes"],
 	["packages/clanky-gateway/src/routes/cron.ts", "registerCronRoutes"],
-	["packages/clanky-gateway/src/routes/swarm.ts", "registerSwarmRoutes"],
 	["packages/clanky-gateway/src/ws.ts", "GatewayEventHub"],
-	["packages/clanky-swarm/src/client.ts", "SwarmMcpClient"],
-	["packages/clanky-swarm/src/complete.ts", "normalizeSwarmCompleteInput"],
-	["packages/clanky-swarm/src/dispatch.ts", "normalizeSwarmDispatchInput"],
-	["packages/clanky-swarm/src/lifecycle.ts", "SwarmLeader"],
-	["packages/clanky-swarm/src/linear.ts", "withLinearTrackerFallback"],
-	["packages/clanky-swarm/src/lock-hook.ts", "decideSwarmFileLock"],
-	["packages/clanky-swarm/src/message.ts", "normalizeSwarmMessageInput"],
-	["packages/clanky-swarm/src/poller.ts", "swarmActivityChanges"],
-	["packages/clanky-swarm/src/snapshot.ts", "SwarmSnapshotResult"],
-	["packages/clanky-swarm/src/skill/SOUL.md", "swarm_dispatch"],
 	["packages/clanky-tui/src/main.ts", "runDashboard"],
 	["packages/clanky-tui/src/rpc-client.ts", "RpcChatClient"],
 	["packages/clanky-tui/src/views/chat.ts", "runChat"],
 	["packages/clanky-tui/src/views/dashboard.ts", "renderDashboard"],
-	["packages/clanky-tui/src/views/swarm.ts", "renderSwarmView"],
 ]);
 for (const [relativePath, expectedContent] of expectedPlanModules) {
 	const absolutePath = join(rootDir, relativePath);
@@ -208,13 +194,6 @@ assertIncludes(
 	gatewayMcpSource,
 	"StdioServerTransport",
 	"Gateway MCP entrypoint must use the MCP SDK stdio server transport",
-);
-const swarmMcpClientSource = await readFile(join(rootDir, "packages/clanky-swarm/src/client.ts"), "utf8");
-assertIncludes(swarmMcpClientSource, "Client", "Swarm MCP client must use the MCP SDK client");
-assertIncludes(
-	swarmMcpClientSource,
-	"StdioClientTransport",
-	"Swarm MCP client must use the MCP SDK stdio client transport",
 );
 const pathsSource = await readFile(join(rootDir, "packages/clanky-core/src/paths.ts"), "utf8");
 assertIncludes(pathsSource, "profile?: string", "Path resolution must expose profile as the tenancy dimension");
@@ -248,7 +227,8 @@ for (const sourceFile of sourceFiles) {
 	}
 	const isAllowedRpcTypeImport =
 		sourceFile.endsWith("packages/clanky-gateway/src/pi-rpc.ts") ||
-		sourceFile.endsWith("packages/clanky-tui/src/rpc-client.ts");
+		sourceFile.endsWith("packages/clanky-tui/src/rpc-client.ts") ||
+		sourceFile.endsWith("packages/clanky-messaging/src/broker.ts");
 	const hasPiCodingAgentValueImport =
 		/(?:^|\n)\s*import\s+(?!type\b)[^;]*\s+from\s+["']@earendil-works\/pi-coding-agent["'];/.test(source) ||
 		/(?:^|\n)\s*import\s+["']@earendil-works\/pi-coding-agent["'];/.test(source);
@@ -272,7 +252,7 @@ for (const sourceFile of bundledSkillFiles) {
 const expectedPackages = new Map([
 	["@clanky/core", "packages/clanky-core"],
 	["@clanky/gateway", "packages/clanky-gateway"],
-	["@clanky/swarm", "packages/clanky-swarm"],
+	["@clanky/messaging", "packages/clanky-messaging"],
 	["@clanky/tui", "packages/clanky-tui"],
 	["@clanky/cli", "packages/clanky-cli"],
 ]);
@@ -287,23 +267,24 @@ const forbiddenV1Packages = new Map([
 ]);
 const allowedWorkspaceDependencies = new Map([
 	["@clanky/core", new Set<string>()],
-	["@clanky/swarm", new Set<string>()],
-	["@clanky/gateway", new Set(["@clanky/core", "@clanky/swarm"])],
+	["@clanky/messaging", new Set(["@clanky/core"])],
+	["@clanky/gateway", new Set(["@clanky/core", "@clanky/messaging"])],
 	["@clanky/tui", new Set(["@clanky/gateway"])],
 	["@clanky/cli", new Set(["@clanky/core", "@clanky/gateway", "@clanky/tui"])],
 ]);
 const requiredPiDependencies = new Map([
 	["@clanky/core", new Set(["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent"])],
 	["@clanky/gateway", new Set(["@earendil-works/pi-coding-agent"])],
+	["@clanky/messaging", new Set(["@earendil-works/pi-coding-agent"])],
 	["@clanky/tui", new Set(["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"])],
 ]);
 const requiredDevPiDependencies = new Map([
 	["@clanky/cli", new Set(["@earendil-works/pi-ai"])],
 	["@clanky/gateway", new Set(["@earendil-works/pi-ai"])],
+	["@clanky/messaging", new Set(["@earendil-works/pi-ai"])],
 ]);
 const requiredMcpDependencies = new Map([
 	["@clanky/gateway", new Set(["@modelcontextprotocol/sdk"])],
-	["@clanky/swarm", new Set(["@modelcontextprotocol/sdk"])],
 ]);
 const requiredPlanRuntimeDependencies = new Map([
 	["@clanky/core", new Set(["chokidar"])],

@@ -9,9 +9,5 @@ export {
 	type MemoryRememberToolInput,
 	type MemorySearchToolInput,
 	type ScheduleCronToolInput,
-	type SwarmCompleteToolInput,
-	type SwarmDispatchToolInput,
-	type SwarmFileLockToolInput,
-	type SwarmMessageToolInput,
 	type TaskCreateToolInput,
 } from "../agent-tools.ts";
