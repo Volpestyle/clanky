@@ -1,0 +1,11 @@
+packages:
+  - "packages/*"
+
+minimumReleaseAge: 1440
+strictPeerDependencies: true
+verifyStoreIntegrity: true
+onlyBuiltDependencies:
+  - "@google/genai"
+  - esbuild
+  - koffi
+  - protobufjs

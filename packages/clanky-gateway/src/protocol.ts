@@ -1,0 +1,964 @@
+import type {
+	ClankyTask,
+	LinearCreateIssueResult as CoreLinearCreateIssueResult,
+	CreateClankySkillInput,
+	CreateClankyTaskInput,
+	CreateCronJobInput,
+	CreateLinearLinkInput,
+	CronDelivery,
+	CronJob,
+	CronRunResult,
+	FlushLinearOutboxResult,
+	LinearCreateIssueInput,
+	LinearLink,
+	LinearOutboxEntry,
+	ListClankyTasksOptions,
+	SessionSearchResult,
+	SkillUsageRecord,
+	UpdateClankyTaskInput,
+} from "@clanky/core";
+import {
+	isSwarmCompleteStatus,
+	isSwarmCompleteTestStatus,
+	isSwarmDispatchType,
+	type SwarmCompleteInput,
+	type SwarmCompleteResult,
+	type SwarmDispatchInput,
+	type SwarmDispatchResult,
+	type SwarmFileLockResult,
+	type SwarmLeaderStatus,
+	type SwarmMessageInput,
+	type SwarmMessageResult,
+	type SwarmQueryResult,
+	type SwarmSnapshotResult,
+} from "@clanky/swarm";
+
+export type GatewayMethod =
+	| "status"
+	| "send"
+	| "session.list"
+	| "session.fork"
+	| "session.search"
+	| "skill.list"
+	| "skill.usage"
+	| "skill.add"
+	| "skill.remove"
+	| "task.list"
+	| "task.add"
+	| "task.update"
+	| "mcp.list"
+	| "mcp.call"
+	| "linear.list"
+	| "linear.create"
+	| "linear.link"
+	| "linear.outbox"
+	| "linear.flush"
+	| "cron.list"
+	| "cron.add"
+	| "cron.remove"
+	| "cron.enable"
+	| "cron.disable"
+	| "cron.run_now"
+	| "swarm.status"
+	| "swarm.dispatch"
+	| "swarm.peers"
+	| "swarm.tasks"
+	| "swarm.snapshot"
+	| "swarm.file_lock"
+	| "swarm.message"
+	| "swarm.complete"
+	| "shutdown";
+
+export interface GatewayRequest {
+	id: string;
+	method: GatewayMethod;
+	params?: unknown;
+}
+
+export type GatewayResponse =
+	| {
+			id: string;
+			ok: true;
+			result: unknown;
+	  }
+	| {
+			id: string;
+			ok: false;
+			error: string;
+	  };
+
+export interface SendParams {
+	prompt: string;
+	sessionId?: string;
+	skill?: string;
+	provider?: string;
+	model?: string;
+}
+
+export interface SendResult {
+	sessionId: string;
+	sessionFile: string | undefined;
+	text: string;
+}
+
+export interface StatusResult {
+	ok: true;
+	running: true;
+	pid: number;
+	profile: string;
+	homeDir: string;
+	profileDir: string;
+	socketFile: string;
+	daemonLockFile: string;
+	liveSessions: number;
+	sessionIds: string[];
+	linearConfigured: boolean;
+	linearOutboxPending: number;
+	cronJobs: number;
+	enabledCronJobs: number;
+	swarm: SwarmLeaderStatus;
+	swarmPeers: number;
+	swarmTasks: number;
+	externalMcpServers: ExternalMcpServerStatus[];
+	warnings: string[];
+	uptimeMs: number;
+}
+
+export interface SessionListResult {
+	sessions: Array<{
+		id: string;
+		cwd: string;
+		sessionFile: string | undefined;
+		live: boolean;
+		messageCount?: number;
+		firstMessage?: string;
+		name?: string;
+	}>;
+}
+
+export interface SessionForkParams {
+	sourceSessionId: string;
+	cwd?: string;
+}
+
+export interface SessionForkResult {
+	sourceSessionId: string;
+	sourceSessionFile: string;
+	sessionId: string;
+	sessionFile: string | undefined;
+	cwd: string;
+}
+
+export interface SessionSearchParams {
+	query: string;
+	limit?: number;
+}
+
+export interface SessionSearchGatewayResult {
+	query: string;
+	results: SessionSearchResult[];
+}
+
+export interface CronListResult {
+	jobs: CronJob[];
+}
+
+export interface SkillListResult {
+	skills: Array<{
+		name: string;
+		description: string;
+		filePath: string;
+	}>;
+	diagnostics: string[];
+}
+
+export interface SkillUsageResult {
+	usage: SkillUsageRecord[];
+}
+
+export interface SkillAddResult {
+	skill: {
+		name: string;
+		filePath: string;
+	};
+}
+
+export interface SkillRemoveParams {
+	name: string;
+}
+
+export interface SkillRemoveResult {
+	removed: boolean;
+	skill?: {
+		name: string;
+		filePath: string;
+	};
+}
+
+export interface TaskListResult {
+	tasks: ClankyTask[];
+}
+
+export interface TaskAddResult {
+	task: ClankyTask;
+}
+
+export interface TaskUpdateResult {
+	updated: boolean;
+	task?: ClankyTask;
+}
+
+export interface LinearListResult {
+	links: LinearLink[];
+}
+
+export interface LinearLinkResult {
+	link: LinearLink;
+}
+
+export interface LinearCreateResult {
+	issue: CoreLinearCreateIssueResult;
+}
+
+export interface ExternalMcpToolSummary {
+	name: string;
+	description?: string;
+}
+
+export interface ExternalMcpServerStatus {
+	name: string;
+	state: "booted" | "error";
+	command: string;
+	args: string[];
+	cwd: string;
+	tools: ExternalMcpToolSummary[];
+	error?: string;
+}
+
+export interface ExternalMcpListResult {
+	servers: ExternalMcpServerStatus[];
+}
+
+export interface ExternalMcpCallParams {
+	server: string;
+	tool: string;
+	arguments?: Record<string, unknown>;
+}
+
+export interface ExternalMcpCallResult {
+	server: string;
+	tool: string;
+	result: unknown;
+}
+
+export interface LinearOutboxResult {
+	entries: LinearOutboxEntry[];
+}
+
+export interface LinearFlushParams {
+	limit?: number;
+}
+
+export type LinearFlushResult = FlushLinearOutboxResult;
+
+export interface CronAddResult {
+	job: CronJob;
+}
+
+export interface CronJobResult {
+	job: CronJob;
+}
+
+export interface CronRemoveResult {
+	removed: boolean;
+}
+
+export interface CronRunNowResult {
+	result: CronRunResult;
+}
+
+export type SwarmStatusResult = SwarmLeaderStatus;
+
+export type SwarmDispatchParams = SwarmDispatchInput;
+
+export type SwarmDispatchGatewayResult = SwarmDispatchResult;
+
+export type SwarmQueryGatewayResult = SwarmQueryResult;
+
+export type SwarmSnapshotGatewayResult = SwarmSnapshotResult;
+
+export interface SwarmFileLockParams {
+	file: string;
+}
+
+export type SwarmFileLockGatewayResult = SwarmFileLockResult;
+
+export type SwarmMessageParams = SwarmMessageInput;
+
+export type SwarmMessageGatewayResult = SwarmMessageResult;
+
+export type SwarmCompleteParams = SwarmCompleteInput;
+
+export interface SwarmCompleteGatewayResult extends SwarmCompleteResult {
+	linearOutboxEntries?: LinearOutboxEntry[];
+	linearFlush?: LinearFlushResult;
+}
+
+export interface CronJobIdParams {
+	jobId: string;
+}
+
+export function isGatewayRequest(value: unknown): value is GatewayRequest {
+	if (typeof value !== "object" || value === null) return false;
+	const candidate = value as Record<string, unknown>;
+	if (typeof candidate.id !== "string") return false;
+	return (
+		candidate.method === "status" ||
+		candidate.method === "send" ||
+		candidate.method === "session.list" ||
+		candidate.method === "session.fork" ||
+		candidate.method === "session.search" ||
+		candidate.method === "skill.list" ||
+		candidate.method === "skill.usage" ||
+		candidate.method === "skill.add" ||
+		candidate.method === "skill.remove" ||
+		candidate.method === "task.list" ||
+		candidate.method === "task.add" ||
+		candidate.method === "task.update" ||
+		candidate.method === "mcp.list" ||
+		candidate.method === "mcp.call" ||
+		candidate.method === "linear.list" ||
+		candidate.method === "linear.create" ||
+		candidate.method === "linear.link" ||
+		candidate.method === "linear.outbox" ||
+		candidate.method === "linear.flush" ||
+		candidate.method === "cron.list" ||
+		candidate.method === "cron.add" ||
+		candidate.method === "cron.remove" ||
+		candidate.method === "cron.enable" ||
+		candidate.method === "cron.disable" ||
+		candidate.method === "cron.run_now" ||
+		candidate.method === "swarm.status" ||
+		candidate.method === "swarm.dispatch" ||
+		candidate.method === "swarm.peers" ||
+		candidate.method === "swarm.tasks" ||
+		candidate.method === "swarm.snapshot" ||
+		candidate.method === "swarm.file_lock" ||
+		candidate.method === "swarm.message" ||
+		candidate.method === "swarm.complete" ||
+		candidate.method === "shutdown"
+	);
+}
+
+export function readSendParams(value: unknown): SendParams {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("send params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	if (typeof candidate.prompt !== "string" || candidate.prompt.trim().length === 0) {
+		throw new Error("send params require a non-empty prompt");
+	}
+	const params: SendParams = { prompt: candidate.prompt };
+	const sessionId = candidate.sessionId ?? candidate.session_id;
+	if (sessionId !== undefined) {
+		if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
+			throw new Error("sessionId must be a non-empty string");
+		}
+		params.sessionId = sessionId;
+	}
+	if (candidate.skill !== undefined) {
+		if (typeof candidate.skill !== "string" || candidate.skill.trim().length === 0) {
+			throw new Error("skill must be a non-empty string");
+		}
+		params.skill = candidate.skill;
+	}
+	if (candidate.provider !== undefined) {
+		if (typeof candidate.provider !== "string" || candidate.provider.trim().length === 0) {
+			throw new Error("provider must be a non-empty string");
+		}
+		params.provider = candidate.provider;
+	}
+	if (candidate.model !== undefined) {
+		if (typeof candidate.model !== "string" || candidate.model.trim().length === 0) {
+			throw new Error("model must be a non-empty string");
+		}
+		params.model = candidate.model;
+	}
+	return params;
+}
+
+export function readSessionForkParams(value: unknown): SessionForkParams {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("session fork params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	const sourceSessionId = candidate.sourceSessionId ?? candidate.source_session_id;
+	if (typeof sourceSessionId !== "string" || sourceSessionId.trim().length === 0) {
+		throw new Error("session fork params require a non-empty sourceSessionId");
+	}
+	const params: SessionForkParams = { sourceSessionId };
+	if (candidate.cwd !== undefined) {
+		if (typeof candidate.cwd !== "string" || candidate.cwd.trim().length === 0) {
+			throw new Error("session fork cwd must be a non-empty string");
+		}
+		params.cwd = candidate.cwd;
+	}
+	return params;
+}
+
+export function readSessionSearchParams(value: unknown): SessionSearchParams {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("session search params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	const query = candidate.query ?? candidate.q;
+	if (typeof query !== "string" || query.trim().length === 0) {
+		throw new Error("session search params require a non-empty query");
+	}
+	const params: SessionSearchParams = { query };
+	if (candidate.limit !== undefined) {
+		const limit = typeof candidate.limit === "string" ? Number.parseInt(candidate.limit, 10) : candidate.limit;
+		if (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0) {
+			throw new Error("session search limit must be a positive integer");
+		}
+		params.limit = limit;
+	}
+	return params;
+}
+
+export function readSkillAddParams(value: unknown): CreateClankySkillInput {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("skill add params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	if (typeof candidate.name !== "string" || candidate.name.trim().length === 0) {
+		throw new Error("skill add params require a non-empty name");
+	}
+	const params: CreateClankySkillInput = { name: candidate.name };
+	if (candidate.description !== undefined) {
+		if (typeof candidate.description !== "string" || candidate.description.trim().length === 0) {
+			throw new Error("skill description must be a non-empty string");
+		}
+		params.description = candidate.description;
+	}
+	if (candidate.body !== undefined) {
+		if (typeof candidate.body !== "string" || candidate.body.trim().length === 0) {
+			throw new Error("skill body must be a non-empty string");
+		}
+		params.body = candidate.body;
+	}
+	return params;
+}
+
+export function readSkillRemoveParams(value: unknown): SkillRemoveParams {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("skill remove params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	if (typeof candidate.name !== "string" || candidate.name.trim().length === 0) {
+		throw new Error("skill remove params require a non-empty name");
+	}
+	return { name: candidate.name };
+}
+
+export function readTaskAddParams(value: unknown): CreateClankyTaskInput {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("task add params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	if (typeof candidate.title !== "string" || candidate.title.trim().length === 0) {
+		throw new Error("task add params require a non-empty title");
+	}
+	const params: CreateClankyTaskInput = { title: candidate.title };
+	addOptionalTaskStringParam(params, "description", candidate.description, "task description");
+	addOptionalTaskStringParam(params, "sessionId", candidate.sessionId ?? candidate.session_id, "task sessionId");
+	addOptionalTaskStringParam(
+		params,
+		"linearIssue",
+		candidate.linearIssue ?? candidate.linear_issue,
+		"task linearIssue",
+	);
+	addOptionalTaskStringParam(params, "source", candidate.source, "task source");
+	if (candidate.status !== undefined) params.status = readTaskStatus(candidate.status);
+	if (candidate.priority !== undefined) params.priority = readTaskPriority(candidate.priority);
+	return params;
+}
+
+export function readTaskListParams(value: unknown): ListClankyTasksOptions {
+	if (value === undefined) return {};
+	if (typeof value !== "object" || value === null) {
+		throw new Error("task list params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	const params: ListClankyTasksOptions = {};
+	const sessionId = candidate.sessionId ?? candidate.session_id;
+	if (sessionId !== undefined) {
+		if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
+			throw new Error("task list sessionId must be a non-empty string");
+		}
+		params.sessionId = sessionId;
+	}
+	const linearIssue = candidate.linearIssue ?? candidate.linear_issue;
+	if (linearIssue !== undefined) {
+		if (typeof linearIssue !== "string" || linearIssue.trim().length === 0) {
+			throw new Error("task list linearIssue must be a non-empty string");
+		}
+		params.linearIssue = linearIssue;
+	}
+	if (candidate.status !== undefined) params.status = readTaskStatus(candidate.status);
+	if (candidate.priority !== undefined) params.priority = readTaskPriority(candidate.priority);
+	if (candidate.limit !== undefined) {
+		const limit = typeof candidate.limit === "string" ? Number.parseInt(candidate.limit, 10) : candidate.limit;
+		if (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0) {
+			throw new Error("task list limit must be a positive integer");
+		}
+		params.limit = limit;
+	}
+	return params;
+}
+
+export function readTaskUpdateParams(value: unknown): UpdateClankyTaskInput {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("task update params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	if (typeof candidate.id !== "string" || candidate.id.trim().length === 0) {
+		throw new Error("task update params require a non-empty id");
+	}
+	const params: UpdateClankyTaskInput = { id: candidate.id };
+	if (candidate.title !== undefined) {
+		if (typeof candidate.title !== "string" || candidate.title.trim().length === 0) {
+			throw new Error("task title must be a non-empty string");
+		}
+		params.title = candidate.title;
+	}
+	addOptionalTaskStringParam(params, "description", candidate.description, "task description");
+	addOptionalTaskStringParam(params, "sessionId", candidate.sessionId ?? candidate.session_id, "task sessionId");
+	addOptionalTaskStringParam(
+		params,
+		"linearIssue",
+		candidate.linearIssue ?? candidate.linear_issue,
+		"task linearIssue",
+	);
+	addOptionalTaskStringParam(params, "source", candidate.source, "task source");
+	if (candidate.status !== undefined) params.status = readTaskStatus(candidate.status);
+	if (candidate.priority !== undefined) params.priority = readTaskPriority(candidate.priority);
+	if (Object.keys(params).length === 1) throw new Error("task update params require at least one field");
+	return params;
+}
+
+export function readExternalMcpCallParams(value: unknown): ExternalMcpCallParams {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("mcp call params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	if (typeof candidate.server !== "string" || candidate.server.trim().length === 0) {
+		throw new Error("mcp call params require a non-empty server");
+	}
+	if (typeof candidate.tool !== "string" || candidate.tool.trim().length === 0) {
+		throw new Error("mcp call params require a non-empty tool");
+	}
+	const params: ExternalMcpCallParams = { server: candidate.server, tool: candidate.tool };
+	const args = candidate.arguments ?? candidate.args;
+	if (args !== undefined) {
+		if (typeof args !== "object" || args === null || Array.isArray(args)) {
+			throw new Error("mcp call arguments must be an object");
+		}
+		params.arguments = args as Record<string, unknown>;
+	}
+	return params;
+}
+
+export function readLinearFlushParams(value: unknown): LinearFlushParams {
+	if (value === undefined) return {};
+	if (typeof value !== "object" || value === null) {
+		throw new Error("linear flush params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	const params: LinearFlushParams = {};
+	if (candidate.limit !== undefined) {
+		const limit = typeof candidate.limit === "string" ? Number.parseInt(candidate.limit, 10) : candidate.limit;
+		if (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0) {
+			throw new Error("linear flush limit must be a positive integer");
+		}
+		params.limit = limit;
+	}
+	return params;
+}
+
+export function readLinearCreateParams(value: unknown): LinearCreateIssueInput {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("linear create params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	const teamId = candidate.teamId ?? candidate.team_id;
+	if (typeof teamId !== "string" || teamId.trim().length === 0) {
+		throw new Error("linear create params require a non-empty teamId");
+	}
+	if (typeof candidate.title !== "string" || candidate.title.trim().length === 0) {
+		throw new Error("linear create params require a non-empty title");
+	}
+	const params: LinearCreateIssueInput = { teamId, title: candidate.title };
+	addOptionalLinearCreateStringParam(params, "description", candidate.description, "linear create description");
+	addOptionalLinearCreateStringParam(
+		params,
+		"assigneeId",
+		candidate.assigneeId ?? candidate.assignee_id,
+		"linear create assigneeId",
+	);
+	addOptionalLinearCreateStringParam(
+		params,
+		"projectId",
+		candidate.projectId ?? candidate.project_id,
+		"linear create projectId",
+	);
+	addOptionalLinearCreateStringParam(
+		params,
+		"stateId",
+		candidate.stateId ?? candidate.state_id,
+		"linear create stateId",
+	);
+	if (candidate.priority !== undefined) {
+		if (typeof candidate.priority !== "number" || !Number.isInteger(candidate.priority)) {
+			throw new Error("linear create priority must be an integer");
+		}
+		params.priority = candidate.priority;
+	}
+	const labelIds = candidate.labelIds ?? candidate.label_ids;
+	if (labelIds !== undefined) params.labelIds = readStringArray(labelIds, "linear create labelIds");
+	return params;
+}
+
+export function readLinearLinkParams(value: unknown): CreateLinearLinkInput {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("linear link params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	const issueId = candidate.issueId ?? candidate.issue_id;
+	if (typeof issueId !== "string" || issueId.trim().length === 0) {
+		throw new Error("linear link params require a non-empty issueId");
+	}
+	const params: CreateLinearLinkInput = { issueId };
+	const sessionId = candidate.sessionId ?? candidate.session_id;
+	if (sessionId !== undefined) {
+		if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
+			throw new Error("linear link sessionId must be a non-empty string");
+		}
+		params.sessionId = sessionId;
+	}
+	const taskId = candidate.taskId ?? candidate.task_id;
+	if (taskId !== undefined) {
+		if (typeof taskId !== "string" || taskId.trim().length === 0) {
+			throw new Error("linear link taskId must be a non-empty string");
+		}
+		params.taskId = taskId;
+	}
+	if (candidate.note !== undefined) {
+		if (typeof candidate.note !== "string" || candidate.note.trim().length === 0) {
+			throw new Error("linear link note must be a non-empty string");
+		}
+		params.note = candidate.note;
+	}
+	return params;
+}
+
+export function readCronAddParams(value: unknown): CreateCronJobInput {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("cron add params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	if (typeof candidate.schedule !== "string" || candidate.schedule.trim().length === 0) {
+		throw new Error("cron add params require a non-empty schedule");
+	}
+	if (typeof candidate.prompt !== "string" || candidate.prompt.trim().length === 0) {
+		throw new Error("cron add params require a non-empty prompt");
+	}
+	const params: CreateCronJobInput = {
+		schedule: candidate.schedule,
+		prompt: candidate.prompt,
+	};
+	if (candidate.deliver !== undefined) {
+		if (typeof candidate.deliver !== "string" || candidate.deliver.trim().length === 0) {
+			throw new Error("cron delivery target must be a non-empty string");
+		}
+		params.deliver = candidate.deliver as CronDelivery;
+	}
+	if (candidate.enabled !== undefined) {
+		if (typeof candidate.enabled !== "boolean") throw new Error("cron enabled must be a boolean");
+		params.enabled = candidate.enabled;
+	}
+	const timeoutSeconds = candidate.timeoutSeconds ?? candidate.timeout_seconds;
+	if (timeoutSeconds !== undefined) {
+		if (typeof timeoutSeconds !== "number" || !Number.isInteger(timeoutSeconds)) {
+			throw new Error("cron timeoutSeconds must be an integer");
+		}
+		params.timeoutSeconds = timeoutSeconds;
+	}
+	if (candidate.skill !== undefined) {
+		if (typeof candidate.skill !== "string" || candidate.skill.trim().length === 0) {
+			throw new Error("cron skill must be a non-empty string");
+		}
+		params.skill = candidate.skill;
+	}
+	if (candidate.provider !== undefined) {
+		if (typeof candidate.provider !== "string" || candidate.provider.trim().length === 0) {
+			throw new Error("cron provider must be a non-empty string");
+		}
+		params.provider = candidate.provider;
+	}
+	if (candidate.model !== undefined) {
+		if (typeof candidate.model !== "string" || candidate.model.trim().length === 0) {
+			throw new Error("cron model must be a non-empty string");
+		}
+		params.model = candidate.model;
+	}
+	if (candidate.workdir !== undefined) {
+		if (typeof candidate.workdir !== "string" || candidate.workdir.trim().length === 0) {
+			throw new Error("cron workdir must be a non-empty string");
+		}
+		params.workdir = candidate.workdir;
+	}
+	const idempotencyKey = candidate.idempotencyKey ?? candidate.idempotency_key;
+	if (idempotencyKey !== undefined) {
+		if (typeof idempotencyKey !== "string" || idempotencyKey.trim().length === 0) {
+			throw new Error("cron idempotencyKey must be a non-empty string");
+		}
+		params.idempotencyKey = idempotencyKey;
+	}
+	return params;
+}
+
+export function readCronJobIdParams(value: unknown): CronJobIdParams {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("cron job params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	const jobId = candidate.jobId ?? candidate.job_id;
+	if (typeof jobId !== "string" || jobId.trim().length === 0) {
+		throw new Error("cron job params require a non-empty jobId");
+	}
+	return { jobId };
+}
+
+export function readSwarmDispatchParams(value: unknown): SwarmDispatchParams {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("swarm dispatch params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	if (typeof candidate.title !== "string" || candidate.title.trim().length === 0) {
+		throw new Error("swarm dispatch params require a non-empty title");
+	}
+	if (!isSwarmDispatchType(candidate.type)) {
+		throw new Error("swarm dispatch type must be one of: implement, fix, review, research");
+	}
+	if (typeof candidate.description !== "string" || candidate.description.trim().length === 0) {
+		throw new Error("swarm dispatch params require a non-empty description");
+	}
+	const params: SwarmDispatchParams = {
+		title: candidate.title,
+		type: candidate.type,
+		description: candidate.description,
+	};
+	if (candidate.files !== undefined) {
+		if (!Array.isArray(candidate.files) || !candidate.files.every((file) => typeof file === "string")) {
+			throw new Error("swarm dispatch files must be an array of strings");
+		}
+		params.files = candidate.files;
+	}
+	const waitForCompletion = candidate.waitForCompletion ?? candidate.wait_for_completion;
+	if (waitForCompletion !== undefined) {
+		if (typeof waitForCompletion !== "boolean") {
+			throw new Error("swarm dispatch waitForCompletion must be a boolean");
+		}
+		params.waitForCompletion = waitForCompletion;
+	}
+	if (candidate.provider !== undefined) {
+		if (typeof candidate.provider !== "string" || candidate.provider.trim().length === 0) {
+			throw new Error("swarm dispatch provider must be a non-empty string");
+		}
+		params.provider = candidate.provider;
+	}
+	if (candidate.model !== undefined) {
+		if (typeof candidate.model !== "string" || candidate.model.trim().length === 0) {
+			throw new Error("swarm dispatch model must be a non-empty string");
+		}
+		params.model = candidate.model;
+	}
+	if (candidate.spawn !== undefined) {
+		if (typeof candidate.spawn !== "boolean") {
+			throw new Error("swarm dispatch spawn must be a boolean");
+		}
+		params.spawn = candidate.spawn;
+	}
+	const linearIssue = candidate.linearIssue ?? candidate.linear_issue;
+	if (linearIssue !== undefined) {
+		if (typeof linearIssue !== "string" || linearIssue.trim().length === 0) {
+			throw new Error("swarm dispatch linearIssue must be a non-empty string");
+		}
+		params.linearIssue = linearIssue;
+	}
+	const swarmIdempotencyKey = candidate.idempotencyKey ?? candidate.idempotency_key;
+	if (swarmIdempotencyKey !== undefined) {
+		if (typeof swarmIdempotencyKey !== "string" || swarmIdempotencyKey.trim().length === 0) {
+			throw new Error("swarm dispatch idempotencyKey must be a non-empty string");
+		}
+		params.idempotencyKey = swarmIdempotencyKey;
+	}
+	return params;
+}
+
+export function readSwarmFileLockParams(value: unknown): SwarmFileLockParams {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("swarm file lock params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	const file = candidate.file ?? candidate.path;
+	if (typeof file !== "string" || file.trim().length === 0) {
+		throw new Error("swarm file lock params require a non-empty file");
+	}
+	return { file: file.trim() };
+}
+
+export function readSwarmMessageParams(value: unknown): SwarmMessageParams {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("swarm message params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	if (typeof candidate.recipient !== "string" || candidate.recipient.trim().length === 0) {
+		throw new Error("swarm message params require a non-empty recipient");
+	}
+	if (typeof candidate.message !== "string" || candidate.message.trim().length === 0) {
+		throw new Error("swarm message params require a non-empty message");
+	}
+	const params: SwarmMessageParams = {
+		recipient: candidate.recipient,
+		message: candidate.message,
+	};
+	const taskId = candidate.taskId ?? candidate.task_id;
+	if (taskId !== undefined) {
+		if (typeof taskId !== "string" || taskId.trim().length === 0) {
+			throw new Error("swarm message taskId must be a non-empty string");
+		}
+		params.taskId = taskId;
+	}
+	if (candidate.nudge !== undefined) {
+		if (typeof candidate.nudge !== "boolean") throw new Error("swarm message nudge must be a boolean");
+		params.nudge = candidate.nudge;
+	}
+	if (candidate.force !== undefined) {
+		if (typeof candidate.force !== "boolean") throw new Error("swarm message force must be a boolean");
+		params.force = candidate.force;
+	}
+	return params;
+}
+
+export function readSwarmCompleteParams(value: unknown): SwarmCompleteParams {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("swarm complete params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	const taskId = candidate.taskId ?? candidate.task_id;
+	if (typeof taskId !== "string" || taskId.trim().length === 0) {
+		throw new Error("swarm complete params require a non-empty taskId");
+	}
+	const summary = candidate.summary;
+	if (typeof summary !== "string" || summary.trim().length === 0) {
+		throw new Error("swarm complete params require a non-empty summary");
+	}
+	const params: SwarmCompleteParams = { taskId, summary };
+	if (candidate.status !== undefined) {
+		if (!isSwarmCompleteStatus(candidate.status)) {
+			throw new Error("swarm complete status must be one of: done, failed, cancelled");
+		}
+		params.status = candidate.status;
+	}
+	const filesChanged = candidate.filesChanged ?? candidate.files_changed;
+	if (filesChanged !== undefined) params.filesChanged = readStringArray(filesChanged, "swarm complete filesChanged");
+	if (candidate.tests !== undefined) params.tests = readSwarmCompleteTests(candidate.tests);
+	const trackerUpdate = candidate.trackerUpdate ?? candidate.tracker_update;
+	if (trackerUpdate !== undefined) {
+		if (!isTrackerPayload(trackerUpdate)) throw new Error("swarm complete trackerUpdate must be an object or string");
+		params.trackerUpdate = trackerUpdate;
+	}
+	const trackerUpdateSkipped = candidate.trackerUpdateSkipped ?? candidate.tracker_update_skipped;
+	if (trackerUpdateSkipped !== undefined) {
+		if (!isTrackerPayload(trackerUpdateSkipped)) {
+			throw new Error("swarm complete trackerUpdateSkipped must be an object or string");
+		}
+		params.trackerUpdateSkipped = trackerUpdateSkipped;
+	}
+	if (candidate.followups !== undefined) {
+		params.followups = readStringArray(candidate.followups, "swarm complete followups");
+	}
+	return params;
+}
+
+function readSwarmCompleteTests(value: unknown): NonNullable<SwarmCompleteParams["tests"]> {
+	if (!Array.isArray(value)) throw new Error("swarm complete tests must be an array");
+	return value.map((item) => {
+		if (typeof item !== "object" || item === null || Array.isArray(item)) {
+			throw new Error("swarm complete tests entries must be objects");
+		}
+		const candidate = item as Record<string, unknown>;
+		if (!isSwarmCompleteTestStatus(candidate.status)) {
+			throw new Error("swarm complete test status must be one of: passed, failed, skipped, unknown");
+		}
+		const result: NonNullable<SwarmCompleteParams["tests"]>[number] = { status: candidate.status };
+		if (candidate.command !== undefined) {
+			if (typeof candidate.command !== "string" || candidate.command.trim().length === 0) {
+				throw new Error("swarm complete test command must be a non-empty string");
+			}
+			result.command = candidate.command;
+		}
+		if (candidate.notes !== undefined) {
+			if (typeof candidate.notes !== "string" || candidate.notes.trim().length === 0) {
+				throw new Error("swarm complete test notes must be a non-empty string");
+			}
+			result.notes = candidate.notes;
+		}
+		return result;
+	});
+}
+
+function readStringArray(value: unknown, label: string): string[] {
+	if (!Array.isArray(value) || !value.every((item) => typeof item === "string" && item.trim().length > 0)) {
+		throw new Error(`${label} must be an array of non-empty strings`);
+	}
+	return value;
+}
+
+function addOptionalLinearCreateStringParam(
+	target: LinearCreateIssueInput,
+	key: "description" | "assigneeId" | "projectId" | "stateId",
+	value: unknown,
+	label: string,
+): void {
+	if (value === undefined) return;
+	if (typeof value !== "string" || value.trim().length === 0) throw new Error(`${label} must be a non-empty string`);
+	target[key] = value;
+}
+
+function addOptionalTaskStringParam(
+	target: CreateClankyTaskInput | UpdateClankyTaskInput,
+	key: "description" | "sessionId" | "linearIssue" | "source",
+	value: unknown,
+	label: string,
+): void {
+	if (value === undefined) return;
+	if (typeof value !== "string" || value.trim().length === 0) throw new Error(`${label} must be a non-empty string`);
+	target[key] = value;
+}
+
+function readTaskStatus(value: unknown): NonNullable<CreateClankyTaskInput["status"]> {
+	if (value === "open" || value === "in_progress" || value === "done" || value === "cancelled") return value;
+	throw new Error("task status must be one of: open, in_progress, done, cancelled");
+}
+
+function readTaskPriority(value: unknown): NonNullable<CreateClankyTaskInput["priority"]> {
+	if (value === "low" || value === "normal" || value === "high") return value;
+	throw new Error("task priority must be one of: low, normal, high");
+}
+
+function isTrackerPayload(value: unknown): boolean {
+	return typeof value === "string" || (typeof value === "object" && value !== null && !Array.isArray(value));
+}

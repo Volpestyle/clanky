@@ -1,0 +1,763 @@
+import {
+	type AgentToolResult,
+	type BeforeAgentStartEvent,
+	type BeforeProviderRequestEvent,
+	defineTool,
+	type ExtensionContext,
+	type ExtensionFactory,
+	type ToolCallEvent,
+	type ToolDefinition,
+	type ToolResultEvent,
+} from "@earendil-works/pi-coding-agent";
+import { type Static, Type } from "typebox";
+import type { LinearCreateIssueInput } from "./linear/client.ts";
+import type { CreateLinearLinkInput } from "./linear/links.ts";
+import type { CreateClankySkillInput } from "./skills/loader.ts";
+import { extractIndexableMessageText, type SessionIndexMessageInput } from "./state/index-db.ts";
+
+type ClankyMessageEndEvent = {
+	message: Parameters<typeof extractIndexableMessageText>[0];
+};
+
+const scheduleCronSchema = Type.Object({
+	schedule: Type.String(),
+	prompt: Type.String(),
+	deliver: Type.Optional(Type.String()),
+	skill: Type.Optional(Type.String()),
+	provider: Type.Optional(Type.String()),
+	model: Type.Optional(Type.String()),
+	timeoutSeconds: Type.Optional(Type.Number()),
+	timeout_seconds: Type.Optional(Type.Number()),
+	workdir: Type.Optional(Type.String()),
+	idempotencyKey: Type.Optional(Type.String()),
+	idempotency_key: Type.Optional(Type.String()),
+});
+
+const swarmDispatchSchema = Type.Object({
+	title: Type.String(),
+	type: Type.Union([Type.Literal("implement"), Type.Literal("fix"), Type.Literal("review"), Type.Literal("research")]),
+	description: Type.String(),
+	files: Type.Optional(Type.Array(Type.String())),
+	spawn: Type.Optional(Type.Boolean()),
+	waitForCompletion: Type.Optional(Type.Boolean()),
+	wait_for_completion: Type.Optional(Type.Boolean()),
+	provider: Type.Optional(Type.String()),
+	model: Type.Optional(Type.String()),
+	linearIssue: Type.Optional(Type.String()),
+	linear_issue: Type.Optional(Type.String()),
+	idempotencyKey: Type.Optional(Type.String()),
+	idempotency_key: Type.Optional(Type.String()),
+});
+
+const linearLinkSchema = Type.Object({
+	issueId: Type.Optional(Type.String()),
+	issue_id: Type.Optional(Type.String()),
+	sessionId: Type.Optional(Type.String()),
+	session_id: Type.Optional(Type.String()),
+	taskId: Type.Optional(Type.String()),
+	task_id: Type.Optional(Type.String()),
+	note: Type.Optional(Type.String()),
+});
+
+const linearCreateIssueSchema = Type.Object({
+	teamId: Type.Optional(Type.String()),
+	team_id: Type.Optional(Type.String()),
+	title: Type.String(),
+	description: Type.Optional(Type.String()),
+	assigneeId: Type.Optional(Type.String()),
+	assignee_id: Type.Optional(Type.String()),
+	projectId: Type.Optional(Type.String()),
+	project_id: Type.Optional(Type.String()),
+	stateId: Type.Optional(Type.String()),
+	state_id: Type.Optional(Type.String()),
+	priority: Type.Optional(Type.Number()),
+	labelIds: Type.Optional(Type.Array(Type.String())),
+	label_ids: Type.Optional(Type.Array(Type.String())),
+});
+
+const externalMcpCallSchema = Type.Object({
+	server: Type.String(),
+	tool: Type.String(),
+	arguments: Type.Optional(Type.Unknown()),
+});
+
+const taskCreateSchema = Type.Object({
+	title: Type.String(),
+	description: Type.Optional(Type.String()),
+	status: Type.Optional(
+		Type.Union([Type.Literal("open"), Type.Literal("in_progress"), Type.Literal("done"), Type.Literal("cancelled")]),
+	),
+	priority: Type.Optional(Type.Union([Type.Literal("low"), Type.Literal("normal"), Type.Literal("high")])),
+	sessionId: Type.Optional(Type.String()),
+	session_id: Type.Optional(Type.String()),
+	linearIssue: Type.Optional(Type.String()),
+	linear_issue: Type.Optional(Type.String()),
+});
+
+const swarmFileLockSchema = Type.Object({
+	path: Type.String(),
+});
+
+const swarmMessageSchema = Type.Object({
+	recipient: Type.String(),
+	message: Type.String(),
+	taskId: Type.Optional(Type.String()),
+	task_id: Type.Optional(Type.String()),
+	nudge: Type.Optional(Type.Boolean()),
+	force: Type.Optional(Type.Boolean()),
+});
+
+const swarmCompleteSchema = Type.Object({
+	taskId: Type.Optional(Type.String()),
+	task_id: Type.Optional(Type.String()),
+	status: Type.Optional(Type.Union([Type.Literal("done"), Type.Literal("failed"), Type.Literal("cancelled")])),
+	summary: Type.String(),
+	filesChanged: Type.Optional(Type.Array(Type.String())),
+	files_changed: Type.Optional(Type.Array(Type.String())),
+	tests: Type.Optional(
+		Type.Array(
+			Type.Object({
+				command: Type.Optional(Type.String()),
+				status: Type.Union([
+					Type.Literal("passed"),
+					Type.Literal("failed"),
+					Type.Literal("skipped"),
+					Type.Literal("unknown"),
+				]),
+				notes: Type.Optional(Type.String()),
+			}),
+		),
+	),
+	trackerUpdate: Type.Optional(Type.Unknown()),
+	tracker_update: Type.Optional(Type.Unknown()),
+	trackerUpdateSkipped: Type.Optional(Type.Unknown()),
+	tracker_update_skipped: Type.Optional(Type.Unknown()),
+	followups: Type.Optional(Type.Array(Type.String())),
+});
+
+export type ScheduleCronToolInput = Static<typeof scheduleCronSchema>;
+export type SwarmDispatchToolInput = Static<typeof swarmDispatchSchema>;
+export type LinearCreateIssueToolInput = Static<typeof linearCreateIssueSchema>;
+export type LinearLinkToolInput = Static<typeof linearLinkSchema>;
+export type ExternalMcpCallToolInput = Static<typeof externalMcpCallSchema>;
+export type SwarmFileLockToolInput = Static<typeof swarmFileLockSchema>;
+export type SwarmMessageToolInput = Static<typeof swarmMessageSchema>;
+export type SwarmCompleteToolInput = Static<typeof swarmCompleteSchema>;
+export type TaskCreateToolInput = Static<typeof taskCreateSchema>;
+
+export type NormalizedSwarmCompleteToolInput = Omit<
+	SwarmCompleteToolInput,
+	"taskId" | "task_id" | "files_changed" | "tracker_update" | "tracker_update_skipped"
+> & {
+	taskId: string;
+	filesChanged?: string[];
+	trackerUpdate?: unknown;
+	trackerUpdateSkipped?: unknown;
+};
+
+export interface SwarmFileLockCheckInput {
+	path: string;
+	toolName: "edit" | "write";
+}
+
+export interface SwarmFileLockCheckResult {
+	blocked: boolean;
+	reason?: string;
+}
+
+export interface SwarmSnapshotPromptInput {
+	sessionId: string;
+	prompt: string;
+}
+
+export interface ClankyToolResultMirrorInput {
+	sessionId: string;
+	toolName: string;
+	toolCallId: string;
+	input: Record<string, unknown>;
+	details: unknown;
+	isError: boolean;
+}
+
+export interface ClankyBeforeProviderRequestInput {
+	sessionId: string;
+	payload: BeforeProviderRequestEvent["payload"];
+}
+
+export interface ClankyAgentToolHandlers {
+	scheduleCron?: (input: ScheduleCronToolInput) => Promise<unknown>;
+	swarmDispatch?: (input: SwarmDispatchToolInput) => Promise<unknown>;
+	swarmStatus?: () => Promise<unknown>;
+	swarmFileLock?: (input: SwarmFileLockToolInput) => Promise<unknown>;
+	swarmMessage?: (input: SwarmMessageToolInput) => Promise<unknown>;
+	swarmComplete?: (input: NormalizedSwarmCompleteToolInput) => Promise<unknown>;
+	checkSwarmFileLock?: (input: SwarmFileLockCheckInput) => Promise<SwarmFileLockCheckResult>;
+	linearCreateIssue?: (input: LinearCreateIssueInput) => Promise<unknown>;
+	linearLink?: (input: CreateLinearLinkInput) => Promise<unknown>;
+	externalMcpCall?: (input: ExternalMcpCallToolInput) => Promise<unknown>;
+	taskCreate?: (input: TaskCreateToolInput) => Promise<unknown>;
+	swarmSnapshotForPrompt?: (input: SwarmSnapshotPromptInput) => Promise<unknown>;
+	mirrorToolResult?: (input: ClankyToolResultMirrorInput) => Promise<unknown>;
+	beforeProviderRequest?: (input: ClankyBeforeProviderRequestInput) => Promise<unknown | undefined>;
+	indexMessage?: (input: SessionIndexMessageInput) => Promise<void>;
+	listCron?: () => Promise<unknown>;
+	externalMcpStatus?: () => Promise<unknown>;
+	listSkills?: () => Promise<unknown>;
+	createSkill?: (input: CreateClankySkillInput) => Promise<unknown>;
+	profileStatus?: () => Promise<unknown>;
+}
+
+const CLANKY_SWARM_SNAPSHOT_MESSAGE = "clanky.swarm_snapshot";
+const CLANKY_SWARM_TASK_ENTRY = "clanky.swarm_task";
+
+export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers): ExtensionFactory[] {
+	const checkSwarmFileLock = handlers.checkSwarmFileLock;
+	const indexMessage = handlers.indexMessage;
+	const swarmSnapshotForPrompt = handlers.swarmSnapshotForPrompt;
+	const mirrorToolResult = handlers.mirrorToolResult;
+	const beforeProviderRequest = handlers.beforeProviderRequest;
+	const hasSwarmTaskEntryTools =
+		handlers.swarmDispatch !== undefined ||
+		handlers.swarmMessage !== undefined ||
+		handlers.swarmComplete !== undefined ||
+		handlers.linearLink !== undefined;
+	const hasCommands =
+		handlers.swarmStatus !== undefined ||
+		handlers.listCron !== undefined ||
+		handlers.externalMcpStatus !== undefined ||
+		handlers.listSkills !== undefined ||
+		handlers.createSkill !== undefined ||
+		handlers.profileStatus !== undefined;
+	if (
+		checkSwarmFileLock === undefined &&
+		indexMessage === undefined &&
+		swarmSnapshotForPrompt === undefined &&
+		mirrorToolResult === undefined &&
+		beforeProviderRequest === undefined &&
+		!hasSwarmTaskEntryTools &&
+		!hasCommands
+	) {
+		return [];
+	}
+	return [
+		(pi) => {
+			registerClankyCommands(pi, handlers);
+			if (swarmSnapshotForPrompt !== undefined) {
+				pi.on("before_agent_start", async (event, ctx) => {
+					if (!shouldInjectSwarmSnapshot(event)) return undefined;
+					const snapshot = await swarmSnapshotForPrompt({
+						sessionId: ctx.sessionManager.getSessionId(),
+						prompt: event.prompt,
+					});
+					return {
+						message: {
+							customType: CLANKY_SWARM_SNAPSHOT_MESSAGE,
+							content: `Clanky swarm snapshot:\n\n${JSON.stringify(snapshot, null, "\t")}`,
+							display: false,
+							details: snapshot,
+						},
+					};
+				});
+			}
+			if (indexMessage !== undefined) {
+				pi.on("message_end", async (event, ctx) => {
+					const input = buildMessageIndexInput(event, ctx);
+					if (input === undefined) return undefined;
+					try {
+						await indexMessage(input);
+					} catch (error) {
+						if (ctx.hasUI) {
+							const message = error instanceof Error ? error.message : String(error);
+							ctx.ui.notify(`Clanky session index failed: ${message}`, "warning");
+						}
+					}
+					return undefined;
+				});
+			}
+			if (mirrorToolResult !== undefined || hasSwarmTaskEntryTools) {
+				pi.on("tool_result", async (event, ctx) => {
+					const taskIds = touchedSwarmTaskIds(event);
+					for (const taskId of taskIds) {
+						pi.appendEntry(CLANKY_SWARM_TASK_ENTRY, {
+							taskId,
+							toolName: event.toolName,
+							toolCallId: event.toolCallId,
+							sessionId: ctx.sessionManager.getSessionId(),
+							timestamp: new Date().toISOString(),
+						});
+					}
+					if (mirrorToolResult === undefined) return undefined;
+					await mirrorToolResult({
+						sessionId: ctx.sessionManager.getSessionId(),
+						toolName: event.toolName,
+						toolCallId: event.toolCallId,
+						input: event.input,
+						details: event.details,
+						isError: event.isError,
+					});
+					return undefined;
+				});
+			}
+			if (beforeProviderRequest !== undefined) {
+				pi.on("before_provider_request", async (event, ctx) => {
+					return await beforeProviderRequest({
+						sessionId: ctx.sessionManager.getSessionId(),
+						payload: event.payload,
+					});
+				});
+			}
+			if (checkSwarmFileLock !== undefined) {
+				pi.on("tool_call", async (event) => {
+					const fileMutation = extractFileMutation(event);
+					if (fileMutation === undefined) return undefined;
+					try {
+						const result = await checkSwarmFileLock(fileMutation);
+						if (!result.blocked) return undefined;
+						return {
+							block: true,
+							reason: result.reason ?? `Swarm file lock blocked ${fileMutation.toolName} for ${fileMutation.path}`,
+						};
+					} catch (error) {
+						const message = error instanceof Error ? error.message : String(error);
+						return {
+							block: true,
+							reason: `Swarm file lock check failed for ${fileMutation.path}: ${message}`,
+						};
+					}
+				});
+			}
+		},
+	];
+}
+
+function shouldInjectSwarmSnapshot(event: BeforeAgentStartEvent): boolean {
+	if (event.systemPromptOptions.skills?.some((skill) => skill.name === "swarm-leader") === true) return true;
+	const prompt = event.prompt.toLowerCase();
+	return prompt.includes("swarm") || prompt.includes("delegate") || prompt.includes("worker");
+}
+
+function registerClankyCommands(pi: Parameters<ExtensionFactory>[0], handlers: ClankyAgentToolHandlers): void {
+	if (handlers.swarmStatus !== undefined) {
+		pi.registerCommand("swarm", {
+			description: "Show Clanky swarm status",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(formatCommandResult("Swarm", await handlers.swarmStatus?.()));
+			},
+		});
+	}
+	if (handlers.listCron !== undefined) {
+		pi.registerCommand("cron", {
+			description: "Show Clanky cron jobs",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(formatCommandResult("Cron", await handlers.listCron?.()));
+			},
+		});
+	}
+	if (handlers.listSkills !== undefined) {
+		pi.registerCommand("skills", {
+			description: "Show Clanky skills",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(formatCommandResult("Skills", await handlers.listSkills?.()));
+			},
+		});
+	}
+	if (handlers.listSkills !== undefined || handlers.createSkill !== undefined) {
+		pi.registerCommand("skill", {
+			description: "List or create Clanky skills",
+			handler: async (args, ctx) => {
+				const trimmed = args.trim();
+				if (trimmed === "" || trimmed === "list") {
+					if (handlers.listSkills === undefined) {
+						ctx.ui.notify("Skill\nNo skill list handler is configured.");
+						return;
+					}
+					ctx.ui.notify(formatCommandResult("Skill", await handlers.listSkills()));
+					return;
+				}
+				if (trimmed.startsWith("add ")) {
+					if (handlers.createSkill === undefined) {
+						ctx.ui.notify("Skill\nNo skill create handler is configured.");
+						return;
+					}
+					const [name] = trimmed.slice("add ".length).trim().split(/\s+/, 1);
+					if (name === undefined || name.length === 0) {
+						ctx.ui.notify("Skill\nUsage: /skill add <name>");
+						return;
+					}
+					const skill = await handlers.createSkill({ name });
+					await ctx.reload();
+					ctx.ui.notify(formatCommandResult("Skill", { created: skill, invoke: `/skill:${name}` }));
+					return;
+				}
+				ctx.ui.notify("Skill\nUsage: /skill list | /skill add <name>\nInvoke loaded skills with /skill:<name>.");
+			},
+		});
+	}
+	if (handlers.externalMcpStatus !== undefined) {
+		pi.registerCommand("mcp", {
+			description: "Show configured external Clanky MCP servers",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(formatCommandResult("MCP", await handlers.externalMcpStatus?.()));
+			},
+		});
+	}
+	if (handlers.profileStatus !== undefined) {
+		pi.registerCommand("profile", {
+			description: "Show Clanky profile paths",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(formatCommandResult("Profile", await handlers.profileStatus?.()));
+			},
+		});
+	}
+}
+
+function buildMessageIndexInput(
+	event: ClankyMessageEndEvent,
+	ctx: ExtensionContext,
+): SessionIndexMessageInput | undefined {
+	const extracted = extractIndexableMessageText(event.message);
+	if (extracted === undefined) return undefined;
+	const entry = ctx.sessionManager.getLeafEntry();
+	const input: SessionIndexMessageInput = {
+		sessionId: ctx.sessionManager.getSessionId(),
+		role: extracted.role,
+		text: extracted.text,
+		cwd: ctx.cwd,
+		createdAt: entry?.type === "message" ? entry.timestamp : messageTimestamp(event.message),
+	};
+	const sessionFile = ctx.sessionManager.getSessionFile();
+	if (sessionFile !== undefined) input.sessionFile = sessionFile;
+	if (entry?.type === "message") input.messageKey = `${input.sessionId}:${entry.id}`;
+	return input;
+}
+
+function messageTimestamp(message: ClankyMessageEndEvent["message"]): string {
+	if (typeof message === "object" && message !== null && "timestamp" in message) {
+		const timestamp = message.timestamp;
+		if (typeof timestamp === "number" && Number.isFinite(timestamp)) return new Date(timestamp).toISOString();
+	}
+	return new Date().toISOString();
+}
+
+export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): ToolDefinition[] {
+	const tools: ToolDefinition[] = [];
+	const scheduleCron = handlers.scheduleCron;
+	if (scheduleCron !== undefined) {
+		tools.push(
+			defineTool({
+				name: "schedule_cron",
+				label: "Schedule Cron",
+				description: "Create a Clanky cron job for a prompt that should run later or on a schedule.",
+				promptSnippet: "schedule_cron: schedule a prompt to run later or repeatedly through the Clanky daemon.",
+				promptGuidelines: [
+					"Set provider/model only when the user asks for a specific model for the scheduled cron prompt.",
+				],
+				parameters: scheduleCronSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await scheduleCron(normalizeScheduleCronToolInput(params)));
+				},
+			}),
+		);
+	}
+	const swarmDispatch = handlers.swarmDispatch;
+	if (swarmDispatch !== undefined) {
+		tools.push(
+			defineTool({
+				name: "swarm_dispatch",
+				label: "Swarm Dispatch",
+				description: "Delegate implementation, fix, review, or research work to the Clanky swarm leader.",
+				promptSnippet: "swarm_dispatch: delegate non-trivial coding or research work to a swarm worker.",
+				promptGuidelines: [
+					"Use swarm_dispatch for parallelizable work with clear ownership and file scope.",
+					"Set provider/model only when the user asks for a specific model for the dispatched task.",
+				],
+				parameters: swarmDispatchSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await swarmDispatch(normalizeSwarmDispatchToolInput(params)));
+				},
+			}),
+		);
+	}
+	const swarmStatus = handlers.swarmStatus;
+	if (swarmStatus !== undefined) {
+		tools.push(
+			defineTool({
+				name: "swarm_status",
+				label: "Swarm Status",
+				description: "Return the Clanky swarm leader lifecycle state.",
+				promptSnippet: "swarm_status: inspect whether the Clanky swarm leader is enabled and booted.",
+				parameters: Type.Object({}),
+				async execute() {
+					return toolResult(await swarmStatus());
+				},
+			}),
+		);
+	}
+	const swarmFileLock = handlers.swarmFileLock;
+	if (swarmFileLock !== undefined) {
+		tools.push(
+			defineTool({
+				name: "swarm_file_lock",
+				label: "Swarm File Lock",
+				description: "Inspect the active swarm edit lock for a file path.",
+				promptSnippet: "swarm_file_lock: check whether a swarm peer currently holds an edit lock for a file.",
+				parameters: swarmFileLockSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await swarmFileLock(params));
+				},
+			}),
+		);
+	}
+	const swarmMessage = handlers.swarmMessage;
+	if (swarmMessage !== undefined) {
+		tools.push(
+			defineTool({
+				name: "swarm_message",
+				label: "Swarm Message",
+				description: "Send a durable message to a swarm peer and optionally wake its workspace.",
+				promptSnippet: "swarm_message: send a durable update or request to a specific swarm peer.",
+				promptGuidelines: [
+					"Use swarm_message for coordination with an existing peer before interrupting or duplicating work.",
+				],
+				parameters: swarmMessageSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await swarmMessage(normalizeSwarmMessageToolInput(params)));
+				},
+			}),
+		);
+	}
+	const swarmComplete = handlers.swarmComplete;
+	if (swarmComplete !== undefined) {
+		tools.push(
+			defineTool({
+				name: "swarm_complete",
+				label: "Swarm Complete",
+				description: "Complete a claimed swarm task with structured handoff details.",
+				promptSnippet: "swarm_complete: mark a claimed swarm task done, failed, or cancelled with a concise handoff.",
+				promptGuidelines: [
+					"Use swarm_complete when finishing delegated swarm work so locks release and the requester gets a durable summary.",
+				],
+				parameters: swarmCompleteSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await swarmComplete(normalizeSwarmCompleteToolInput(params)));
+				},
+			}),
+		);
+	}
+	const linearLink = handlers.linearLink;
+	const linearCreateIssue = handlers.linearCreateIssue;
+	const externalMcpCall = handlers.externalMcpCall;
+	if (externalMcpCall !== undefined) {
+		tools.push(
+			defineTool({
+				name: "mcp_call",
+				label: "MCP Call",
+				description: "Call a tool on an external MCP server configured in the Clanky daemon.",
+				promptSnippet: "mcp_call: call a configured external MCP server tool by server and tool name.",
+				promptGuidelines: [
+					"Use mcp_call only for MCP servers listed in Clanky status or the /mcp command.",
+					"Pass arguments as a JSON object matching the target tool schema.",
+				],
+				parameters: externalMcpCallSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await externalMcpCall(params));
+				},
+			}),
+		);
+	}
+	if (linearCreateIssue !== undefined) {
+		tools.push(
+			defineTool({
+				name: "linear_create_issue",
+				label: "Linear Create Issue",
+				description: "Create a Linear issue in a known team using configured Linear credentials.",
+				promptSnippet: "linear_create_issue: create a Linear issue when new tracked work needs to be filed.",
+				promptGuidelines: [
+					"Use linear_link after creating an issue if the current Clanky session or swarm task should stay bound to it.",
+				],
+				parameters: linearCreateIssueSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await linearCreateIssue(normalizeLinearCreateIssueToolInput(params)));
+				},
+			}),
+		);
+	}
+	if (linearLink !== undefined) {
+		tools.push(
+			defineTool({
+				name: "linear_link",
+				label: "Linear Link",
+				description: "Persist a link between a Linear issue and a Clanky session or swarm task.",
+				promptSnippet: "linear_link: bind a Linear issue to the current session or a swarm task.",
+				parameters: linearLinkSchema,
+				async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+					const input = normalizeLinearLinkToolInput(params, ctx.sessionManager.getSessionId());
+					return toolResult(await linearLink(input));
+				},
+			}),
+		);
+	}
+	const taskCreate = handlers.taskCreate;
+	if (taskCreate !== undefined) {
+		tools.push(
+			defineTool({
+				name: "task_create",
+				label: "Task Create",
+				description: "Create a lightweight Clanky task record tied to the current session and optional Linear issue.",
+				promptSnippet: "task_create: record a local Clanky task for follow-up or lightweight work tracking.",
+				parameters: taskCreateSchema,
+				async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+					const input = normalizeTaskCreateToolInput(params, ctx.sessionManager.getSessionId());
+					return toolResult(await taskCreate(input));
+				},
+			}),
+		);
+	}
+	return tools;
+}
+
+function formatCommandResult(title: string, details: unknown): string {
+	return `${title}\n${JSON.stringify(details ?? null, null, "\t")}`;
+}
+
+function extractFileMutation(event: ToolCallEvent): SwarmFileLockCheckInput | undefined {
+	if (event.toolName !== "edit" && event.toolName !== "write") return undefined;
+	const pathValue = event.input.path;
+	if (typeof pathValue !== "string") return undefined;
+	const path = pathValue.trim();
+	if (path.length === 0) return undefined;
+	return { path, toolName: event.toolName };
+}
+
+function touchedSwarmTaskIds(event: ToolResultEvent): string[] {
+	if (!isSwarmTaskTool(event.toolName)) return [];
+	const ids = new Set<string>();
+	addTaskId(ids, event.input);
+	addTaskId(ids, recordProperty(event.details, "request"));
+	addTaskId(ids, recordProperty(event.details, "response"));
+	addTaskId(ids, recordProperty(event.details, "link"));
+	addTaskId(ids, recordOrUndefined(event.details));
+	return [...ids];
+}
+
+function isSwarmTaskTool(toolName: string): boolean {
+	return (
+		toolName === "swarm_dispatch" ||
+		toolName === "swarm_message" ||
+		toolName === "swarm_complete" ||
+		toolName === "linear_link"
+	);
+}
+
+function normalizeScheduleCronToolInput(input: ScheduleCronToolInput): ScheduleCronToolInput {
+	const output: ScheduleCronToolInput = { ...input };
+	if (output.timeoutSeconds === undefined && input.timeout_seconds !== undefined) {
+		output.timeoutSeconds = input.timeout_seconds;
+	}
+	if (output.idempotencyKey === undefined && input.idempotency_key !== undefined) {
+		output.idempotencyKey = input.idempotency_key;
+	}
+	return output;
+}
+
+function normalizeSwarmDispatchToolInput(input: SwarmDispatchToolInput): SwarmDispatchToolInput {
+	const output: SwarmDispatchToolInput = { ...input };
+	if (output.waitForCompletion === undefined && input.wait_for_completion !== undefined) {
+		output.waitForCompletion = input.wait_for_completion;
+	}
+	if (output.linearIssue === undefined && input.linear_issue !== undefined) {
+		output.linearIssue = input.linear_issue;
+	}
+	if (output.idempotencyKey === undefined && input.idempotency_key !== undefined) {
+		output.idempotencyKey = input.idempotency_key;
+	}
+	return output;
+}
+
+function normalizeSwarmMessageToolInput(input: SwarmMessageToolInput): SwarmMessageToolInput {
+	const output: SwarmMessageToolInput = { ...input };
+	if (output.taskId === undefined && input.task_id !== undefined) output.taskId = input.task_id;
+	return output;
+}
+
+function normalizeSwarmCompleteToolInput(input: SwarmCompleteToolInput): NormalizedSwarmCompleteToolInput {
+	const taskId = input.taskId ?? input.task_id;
+	if (taskId === undefined || taskId.trim().length === 0) {
+		throw new Error("swarm_complete requires taskId or task_id");
+	}
+	const output: NormalizedSwarmCompleteToolInput = { ...input, taskId };
+	if (output.filesChanged === undefined && input.files_changed !== undefined) output.filesChanged = input.files_changed;
+	if (output.trackerUpdate === undefined && input.tracker_update !== undefined) {
+		output.trackerUpdate = input.tracker_update;
+	}
+	if (output.trackerUpdateSkipped === undefined && input.tracker_update_skipped !== undefined) {
+		output.trackerUpdateSkipped = input.tracker_update_skipped;
+	}
+	return output;
+}
+
+function normalizeLinearCreateIssueToolInput(input: LinearCreateIssueToolInput): LinearCreateIssueInput {
+	const teamId = input.teamId ?? input.team_id;
+	if (teamId === undefined || teamId.trim().length === 0) {
+		throw new Error("linear_create_issue requires teamId or team_id");
+	}
+	const output: LinearCreateIssueInput = { teamId, title: input.title };
+	if (input.description !== undefined) output.description = input.description;
+	const assigneeId = input.assigneeId ?? input.assignee_id;
+	if (assigneeId !== undefined) output.assigneeId = assigneeId;
+	const projectId = input.projectId ?? input.project_id;
+	if (projectId !== undefined) output.projectId = projectId;
+	const stateId = input.stateId ?? input.state_id;
+	if (stateId !== undefined) output.stateId = stateId;
+	if (input.priority !== undefined) output.priority = input.priority;
+	const labelIds = input.labelIds ?? input.label_ids;
+	if (labelIds !== undefined) output.labelIds = labelIds;
+	return output;
+}
+
+function normalizeLinearLinkToolInput(input: LinearLinkToolInput, defaultSessionId: string): CreateLinearLinkInput {
+	const issueId = input.issueId ?? input.issue_id;
+	if (issueId === undefined || issueId.trim().length === 0) {
+		throw new Error("linear_link requires issueId or issue_id");
+	}
+	const output: CreateLinearLinkInput = { issueId };
+	const sessionId = input.sessionId ?? input.session_id;
+	const taskId = input.taskId ?? input.task_id;
+	if (sessionId !== undefined) output.sessionId = sessionId;
+	if (taskId !== undefined) output.taskId = taskId;
+	if (output.sessionId === undefined && output.taskId === undefined) output.sessionId = defaultSessionId;
+	if (input.note !== undefined) output.note = input.note;
+	return output;
+}
+
+function normalizeTaskCreateToolInput(input: TaskCreateToolInput, defaultSessionId: string): TaskCreateToolInput {
+	const output: TaskCreateToolInput = { ...input };
+	if (output.sessionId === undefined) output.sessionId = input.session_id ?? defaultSessionId;
+	if (output.linearIssue === undefined && input.linear_issue !== undefined) output.linearIssue = input.linear_issue;
+	return output;
+}
+
+function addTaskId(ids: Set<string>, record: Record<string, unknown> | undefined): void {
+	if (record === undefined) return;
+	for (const key of ["taskId", "task_id", "id"]) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim().length > 0) ids.add(value.trim());
+	}
+}
+
+function recordProperty(value: unknown, key: string): Record<string, unknown> | undefined {
+	return recordOrUndefined(recordOrUndefined(value)?.[key]);
+}
+
+function recordOrUndefined(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+function toolResult(details: unknown): AgentToolResult<unknown> {
+	return {
+		content: [{ type: "text", text: JSON.stringify(details ?? null, null, "\t") }],
+		details,
+	};
+}

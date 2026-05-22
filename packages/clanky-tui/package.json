@@ -1,0 +1,18 @@
+{
+	"name": "@clanky/tui",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"import": "./src/index.ts"
+		}
+	},
+	"dependencies": {
+		"@clanky/gateway": "workspace:*",
+		"@earendil-works/pi-coding-agent": "^0.75.4",
+		"@earendil-works/pi-tui": "^0.75.4",
+		"ws": "^8.20.1"
+	}
+}
