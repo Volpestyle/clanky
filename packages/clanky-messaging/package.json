@@ -1,5 +1,5 @@
 {
-	"name": "@clanky/gateway",
+	"name": "@clanky/messaging",
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
@@ -11,14 +11,9 @@
 	},
 	"dependencies": {
 		"@clanky/core": "workspace:*",
-		"@clanky/messaging": "workspace:*",
-		"@clanky/swarm": "workspace:*",
 		"@earendil-works/pi-coding-agent": "^0.75.4",
-		"@hono/node-server": "^2.0.3",
-		"@modelcontextprotocol/sdk": "^1.29.0",
-		"hono": "^4.12.21",
-		"ws": "^8.20.1",
-		"zod": "^4.4.3"
+		"discord.js": "^14.17.0",
+		"grammy": "^1.36.0"
 	},
 	"devDependencies": {
 		"@earendil-works/pi-ai": "^0.75.4"

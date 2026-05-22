@@ -27,6 +27,30 @@ import {
 } from "./linear/client.ts";
 import { type CreateLinearLinkInput, type LinearLink, LinearLinkStore } from "./linear/links.ts";
 import { type CreateLinearOutboxEntryInput, type LinearOutboxEntry, LinearOutboxStore } from "./linear/outbox.ts";
+import {
+	type ForgetMemoryInput,
+	type MemoryConsent,
+	type MemoryEvent,
+	type MemoryEventInput,
+	type MemoryExport,
+	type MemoryForgetResult,
+	type MemoryPacket,
+	type MemoryPacketInput,
+	type MemorySearchOptions,
+	type MemorySearchResult,
+	type MemoryStatus,
+	MemoryStore,
+	type MemoryWriteResult,
+	type RememberMemoryInput,
+	type SetMemoryConsentInput,
+} from "./memory/store.ts";
+import {
+	getModelAuthStatus,
+	type ModelAuthMutationResult,
+	type ModelAuthStatus,
+	removeStoredModelAuth,
+	setStoredModelApiKey,
+} from "./model-status.ts";
 import { type ClankyPaths, resolveClankyPaths } from "./paths.ts";
 import {
 	type ClankySkillMutationResult,
@@ -181,6 +205,7 @@ export class SessionRegistry {
 	private readonly linearOutbox: LinearOutboxStore;
 	private readonly sessionIndex: SessionIndexStore;
 	private readonly skillUsage: SkillUsageStore;
+	private readonly memoryStore: MemoryStore;
 	private readonly sessions = new Map<string, MutableRegisteredSession>();
 	private agentToolHandlers: ClankyAgentToolHandlers;
 	private skillWatcher: ClankySkillWatcher | undefined;
@@ -198,12 +223,14 @@ export class SessionRegistry {
 		this.linearOutbox = new LinearOutboxStore(this.paths);
 		this.sessionIndex = new SessionIndexStore(this.paths);
 		this.skillUsage = new SkillUsageStore(this.paths);
+		this.memoryStore = new MemoryStore(this.paths);
 		this.agentToolHandlers = this.withDefaultAgentToolHandlers(options.agentToolHandlers);
 	}
 
 	async start(): Promise<void> {
 		if (this.started) return;
 		await mkdir(this.paths.sessionsDir, { recursive: true, mode: 0o700 });
+		await this.memoryStore.ensure();
 		await this.recoverPendingPrompts();
 		this.started = true;
 		if (this.watchSkills) await this.startSkillWatcher();
@@ -451,8 +478,77 @@ export class SessionRegistry {
 		return await this.sessionIndex.search(options);
 	}
 
+	async memoryStatus(): Promise<MemoryStatus> {
+		return await this.memoryStore.status();
+	}
+
+	async rememberMemory(input: RememberMemoryInput): Promise<MemoryWriteResult> {
+		return await this.memoryStore.remember(input, { scope: "project", subjectId: this.cwd });
+	}
+
+	async recordMemoryEvent(input: MemoryEventInput): Promise<MemoryEvent> {
+		return await this.memoryStore.recordEvent(input);
+	}
+
+	async searchMemory(options: MemorySearchOptions): Promise<MemorySearchResult> {
+		return await this.memoryStore.search(options);
+	}
+
+	async forgetMemory(input: ForgetMemoryInput): Promise<MemoryForgetResult> {
+		return await this.memoryStore.forget(input);
+	}
+
+	async setMemoryConsent(input: SetMemoryConsentInput): Promise<MemoryConsent> {
+		return await this.memoryStore.setConsent(input);
+	}
+
+	async exportMemory(): Promise<MemoryExport> {
+		return await this.memoryStore.export();
+	}
+
+	async readSelfMemory(): Promise<string> {
+		return await this.memoryStore.readSelfMemory();
+	}
+
+	async writeSelfMemory(content: string): Promise<string> {
+		return await this.memoryStore.writeSelfMemory(content);
+	}
+
+	async memoryPacket(input: MemoryPacketInput): Promise<MemoryPacket> {
+		return await this.memoryStore.packet(input);
+	}
+
+	modelAuthStatus(): ModelAuthStatus {
+		return getModelAuthStatus({ homeDir: this.paths.homeDir, profile: this.paths.profile });
+	}
+
+	setModelApiKey(provider: string, apiKey: string): ModelAuthMutationResult {
+		const result = setStoredModelApiKey(
+			{ homeDir: this.paths.homeDir, profile: this.paths.profile },
+			{ provider, apiKey },
+		);
+		this.refreshLiveModelAuth();
+		return result;
+	}
+
+	removeModelAuth(provider: string): ModelAuthMutationResult {
+		const result = removeStoredModelAuth({ homeDir: this.paths.homeDir, profile: this.paths.profile }, provider);
+		this.refreshLiveModelAuth();
+		return result;
+	}
+
 	setAgentToolHandlers(handlers: ClankyAgentToolHandlers): void {
 		this.agentToolHandlers = this.withDefaultAgentToolHandlers(handlers);
+	}
+
+	private refreshLiveModelAuth(): void {
+		for (const registered of this.sessions.values()) {
+			registered.session.modelRegistry.authStorage.reload();
+			registered.session.modelRegistry.refresh();
+			registered.hasUsableModel = registered.session.model
+				? registered.session.modelRegistry.hasConfiguredAuth(registered.session.model)
+				: false;
+		}
 	}
 
 	private async createRegisteredSession(
@@ -526,6 +622,13 @@ export class SessionRegistry {
 			beforeProviderRequest: handlers.beforeProviderRequest ?? (async (input) => input.payload),
 			listSkills: handlers.listSkills ?? (async () => this.loadSkills()),
 			createSkill: handlers.createSkill ?? ((input) => this.createSkill(input)),
+			memoryPacket: handlers.memoryPacket ?? ((input) => this.memoryPacket(input)),
+			memoryRemember: handlers.memoryRemember ?? ((input) => this.rememberMemory(input)),
+			memorySearch: handlers.memorySearch ?? ((input) => this.searchMemory(input)),
+			memoryForget: handlers.memoryForget ?? ((input) => this.forgetMemory(input)),
+			memoryExport: handlers.memoryExport ?? (() => this.exportMemory()),
+			memoryConsent: handlers.memoryConsent ?? ((input) => this.setMemoryConsent(input)),
+			selfMemory: handlers.selfMemory ?? (() => this.readSelfMemory()),
 			profileStatus:
 				handlers.profileStatus ??
 				(async () => ({
@@ -627,6 +730,7 @@ export class SessionRegistry {
 		}
 		this.sessions.clear();
 		this.sessionIndex.close();
+		this.memoryStore.close();
 		this.started = false;
 	}
 

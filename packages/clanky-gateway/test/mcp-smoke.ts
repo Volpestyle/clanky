@@ -94,6 +94,12 @@ try {
 		"linear.outbox",
 		"mcp.call",
 		"mcp.list",
+		"memory.consent",
+		"memory.export",
+		"memory.forget",
+		"memory.remember",
+		"memory.search",
+		"memory.status",
 		"session.fork",
 		"session.list",
 		"session.search",
@@ -133,6 +139,70 @@ try {
 	const status = resultJson(await client.callTool({ name: "clanky.status", arguments: {} }));
 	if (!isRecord(status) || status.running !== true || status.profile !== "default") {
 		throw new Error("MCP clanky.status returned unexpected payload");
+	}
+
+	const memoryStatus = resultRecord(await client.callTool({ name: "memory.status", arguments: {} }));
+	if (memoryStatus.atoms !== 0 || typeof memoryStatus.selfFile !== "string") {
+		throw new Error(`MCP memory.status returned unexpected payload: ${JSON.stringify(memoryStatus)}`);
+	}
+	const memoryConsent = resultRecord(
+		await client.callTool({
+			name: "memory.consent",
+			arguments: {
+				scope: "channel",
+				subject_id: "mcp-channel",
+				enabled: true,
+				mode: "channel",
+			},
+		}),
+	);
+	if (memoryConsent.enabled !== true || memoryConsent.scope !== "channel") {
+		throw new Error(`MCP memory.consent returned unexpected payload: ${JSON.stringify(memoryConsent)}`);
+	}
+	const memoryRemember = resultRecord(
+		await client.callTool({
+			name: "memory.remember",
+			arguments: {
+				scope: "project",
+				subject_id: process.cwd(),
+				type: "decision",
+				claim: "MCP memory smoke stores source-grounded decisions.",
+				source_text: "MCP memory smoke stores source-grounded decisions.",
+				confirmed: true,
+				confidence: 0.87,
+			},
+		}),
+	);
+	const memoryAtom = recordProperty(memoryRemember, "atom");
+	const memoryId = stringProperty(memoryAtom, "id");
+	if (memoryRemember.saved !== true || memoryId === undefined) {
+		throw new Error(`MCP memory.remember returned unexpected payload: ${JSON.stringify(memoryRemember)}`);
+	}
+	const memorySearch = resultRecord(
+		await client.callTool({
+			name: "memory.search",
+			arguments: {
+				q: "source-grounded decisions",
+				scope: "project",
+				subject_id: process.cwd(),
+			},
+		}),
+	);
+	if (!hasIdItem(arrayProperty(memorySearch, "atoms"), memoryId)) {
+		throw new Error(`MCP memory.search did not include stored memory: ${JSON.stringify(memorySearch)}`);
+	}
+	const memoryExport = resultRecord(await client.callTool({ name: "memory.export", arguments: {} }));
+	if (!hasIdItem(arrayProperty(memoryExport, "atoms"), memoryId)) {
+		throw new Error(`MCP memory.export missed stored memory: ${JSON.stringify(memoryExport)}`);
+	}
+	const memoryForget = resultRecord(
+		await client.callTool({
+			name: "memory.forget",
+			arguments: { id: memoryId },
+		}),
+	);
+	if (memoryForget.forgotten !== 1) {
+		throw new Error(`MCP memory.forget returned unexpected payload: ${JSON.stringify(memoryForget)}`);
 	}
 
 	const sessions = resultJson(await client.callTool({ name: "session.list", arguments: {} }));

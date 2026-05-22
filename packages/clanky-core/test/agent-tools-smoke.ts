@@ -8,6 +8,10 @@ import {
 	type ExternalMcpCallToolInput,
 	type LinearCreateIssueToolInput,
 	type LinearLinkToolInput,
+	type MemoryAtom,
+	type MemoryForgetToolInput,
+	type MemoryRememberToolInput,
+	type MemorySearchToolInput,
 	type ScheduleCronToolInput,
 	type SessionIndexMessageInput,
 	SessionRegistry,
@@ -47,6 +51,20 @@ type TestMessageEndHandler = (event: TestMessageEndEvent, ctx: ExtensionContext)
 const calls: string[] = [];
 const indexedMessages: SessionIndexMessageInput[] = [];
 const providerPayloads: unknown[] = [];
+const baseMemoryAtom: MemoryAtom = {
+	id: "memory-tool",
+	scope: "project",
+	subjectId: process.cwd(),
+	type: "fact",
+	claim: "Project uses source-grounded memory atoms.",
+	sourceEventIds: ["event-tool"],
+	confidence: 0.9,
+	sensitivity: "public",
+	createdAt: "2026-01-01T00:00:00.000Z",
+	updatedAt: "2026-01-01T00:00:00.000Z",
+	lexicalIndexTerms: ["project", "memory"],
+};
+const memoryAtoms: MemoryAtom[] = [baseMemoryAtom];
 const handlers: ClankyAgentToolHandlers = {
 	scheduleCron: async (input) => {
 		calls.push(`schedule:${input.schedule}:${input.prompt}`);
@@ -87,6 +105,39 @@ const handlers: ClankyAgentToolHandlers = {
 	taskCreate: async (input) => {
 		calls.push(`task:${input.title}:${input.sessionId ?? "none"}`);
 		return { task: { id: "task-created", ...input } };
+	},
+	memoryPacket: async (input) => {
+		calls.push(`memory-packet:${input.sessionId}:${input.prompt}`);
+		return {
+			self: "Self memory smoke.",
+			text: "Relevant memory:\n1. [fact, project, confidence 0.90] Project uses source-grounded memory atoms.",
+			atoms: [...memoryAtoms],
+		};
+	},
+	memoryRemember: async (input) => {
+		calls.push(`memory-remember:${input.claim}:${input.confirmed === true}`);
+		return { saved: true, atom: { ...baseMemoryAtom, claim: input.claim } };
+	},
+	memorySearch: async (input) => {
+		calls.push(`memory-search:${input.query ?? "all"}:${input.subjectId ?? "none"}`);
+		const result = { atoms: [...memoryAtoms] };
+		return input.query === undefined ? result : { ...result, query: input.query };
+	},
+	memoryForget: async (input) => {
+		calls.push(`memory-forget:${input.id ?? `${input.scope}:${input.subjectId}`}`);
+		return { forgotten: 1 };
+	},
+	memoryExport: async () => {
+		calls.push("memory-export");
+		return { self: "Self memory smoke.", atoms: [...memoryAtoms], events: [], consent: [] };
+	},
+	memoryConsent: async (input) => {
+		calls.push(`memory-consent:${input.scope}:${input.subjectId}:${input.enabled}`);
+		return input;
+	},
+	selfMemory: async () => {
+		calls.push("self-memory");
+		return "Self memory smoke.";
 	},
 	swarmSnapshotForPrompt: async (input) => {
 		calls.push(`snapshot:${input.sessionId}`);
@@ -143,6 +194,9 @@ assertToolNames(tools, [
 	"linear_create_issue",
 	"linear_link",
 	"task_create",
+	"memory_remember",
+	"memory_search",
+	"memory_forget",
 ]);
 
 const scheduleDetails = await executeTool(tools, "schedule_cron", {
@@ -235,6 +289,38 @@ const task = recordProperty(taskDetails, "task");
 if (task.sessionId !== "session-tool" || task.linearIssue !== "PROJ-987") {
 	throw new Error(`task_create did not normalize/default tracking fields: ${JSON.stringify(taskDetails)}`);
 }
+const memoryRememberDetails = await executeTool(tools, "memory_remember", {
+	scope: "user",
+	subject_id: "local",
+	type: "preference",
+	claim: "User prefers source-grounded memory.",
+	source_text: "Remember that I prefer source-grounded memory.",
+	confirmed: true,
+} satisfies MemoryRememberToolInput);
+if (!isRecord(memoryRememberDetails) || memoryRememberDetails.saved !== true) {
+	throw new Error(`memory_remember returned unexpected details: ${JSON.stringify(memoryRememberDetails)}`);
+}
+const memorySearchDetails = await executeTool(tools, "memory_search", {
+	q: "source-grounded",
+	subject_id: process.cwd(),
+} satisfies MemorySearchToolInput);
+if (!isRecord(memorySearchDetails) || !Array.isArray(memorySearchDetails.atoms)) {
+	throw new Error(`memory_search returned unexpected details: ${JSON.stringify(memorySearchDetails)}`);
+}
+const memoryForgetDetails = await executeTool(tools, "memory_forget", {
+	id: "memory-tool",
+} satisfies MemoryForgetToolInput);
+if (!isRecord(memoryForgetDetails) || memoryForgetDetails.forgotten !== 1) {
+	throw new Error(`memory_forget returned unexpected details: ${JSON.stringify(memoryForgetDetails)}`);
+}
+for (const expected of [
+	"memory-remember:User prefers source-grounded memory.:true",
+	"memory-search:source-grounded:",
+	"memory-forget:memory-tool",
+]) {
+	if (!calls.some((call) => call.startsWith(expected)))
+		throw new Error(`Memory tool handler was not invoked: ${expected}`);
+}
 
 const toolCallHandlers: Array<ExtensionHandler<ToolCallEvent, ToolCallEventResult>> = [];
 const beforeAgentStartHandlers: Array<ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>> = [];
@@ -274,14 +360,36 @@ const fakeApi = {
 } as unknown as ExtensionAPI;
 
 for (const factory of createClankyExtensionFactories(handlers)) await factory(fakeApi);
-for (const expected of ["swarm", "cron", "mcp", "skill", "skills", "profile"]) {
+for (const expected of [
+	"swarm",
+	"cron",
+	"mcp",
+	"skill",
+	"skills",
+	"memory",
+	"what_do_you_remember",
+	"forget_me",
+	"forget_this_channel",
+	"memory_export",
+	"memory_off",
+	"who_are_you",
+	"why_did_you_say_that",
+	"privacy",
+	"profile",
+]) {
 	if (!commandRegistrations.has(expected)) throw new Error(`Missing registered command: ${expected}`);
 }
 const commandNotifications: string[] = [];
-for (const name of ["swarm", "cron", "mcp", "skills", "profile"]) {
+for (const name of ["swarm", "cron", "mcp", "skills", "profile", "who_are_you", "why_did_you_say_that", "privacy"]) {
 	await invokeCommand(commandRegistrations, name, commandNotifications);
 }
 await invokeCommand(commandRegistrations, "skill", commandNotifications, "add review-notes");
+await invokeCommand(commandRegistrations, "memory", commandNotifications, "remember project memory command");
+await invokeCommand(commandRegistrations, "what_do_you_remember", commandNotifications, "project memory");
+await invokeCommand(commandRegistrations, "forget_me", commandNotifications);
+await invokeCommand(commandRegistrations, "forget_this_channel", commandNotifications, "channel-tool");
+await invokeCommand(commandRegistrations, "memory_export", commandNotifications);
+await invokeCommand(commandRegistrations, "memory_off", commandNotifications);
 for (const expected of ["Swarm", "Cron", "MCP", "Skills", "Profile"]) {
 	if (!commandNotifications.some((notification) => notification.includes(expected))) {
 		throw new Error(`Command ${expected} did not notify a result: ${JSON.stringify(commandNotifications)}`);
@@ -289,6 +397,9 @@ for (const expected of ["Swarm", "Cron", "MCP", "Skills", "Profile"]) {
 }
 if (!commandNotifications.some((notification) => notification.includes("/skill:review-notes"))) {
 	throw new Error(`Skill add command did not report the Pi invocation form: ${JSON.stringify(commandNotifications)}`);
+}
+if (!commandNotifications.some((notification) => notification.includes("Relevant memory"))) {
+	throw new Error(`Why command did not report the latest memory packet: ${JSON.stringify(commandNotifications)}`);
 }
 const createSkillHandler = handlers.createSkill;
 if (createSkillHandler === undefined) throw new Error("Expected createSkill handler in agent-tools smoke");
@@ -315,14 +426,25 @@ for (const expected of [
 	"mcp-command",
 	"skills-command",
 	"skill-create:review-notes",
+	"memory-remember:project memory command:true",
+	"memory-forget:user:local",
+	"memory-forget:channel:channel-tool",
+	"memory-export",
+	"memory-consent:user:local:false",
+	"self-memory",
 	"profile-command",
 ]) {
 	if (!calls.includes(expected)) throw new Error(`Command handler was not invoked: ${expected}`);
+}
+if (!calls.some((call) => call.startsWith("memory-search:project memory:"))) {
+	throw new Error(`Memory search command handler was not invoked: ${JSON.stringify(calls)}`);
 }
 const [toolCallHandler] = toolCallHandlers;
 if (toolCallHandler === undefined) throw new Error("Expected tool_call hook to be registered");
 const [beforeAgentStartHandler] = beforeAgentStartHandlers;
 if (beforeAgentStartHandler === undefined) throw new Error("Expected before_agent_start hook to be registered");
+const memoryBeforeAgentStartHandler = beforeAgentStartHandlers[1];
+if (memoryBeforeAgentStartHandler === undefined) throw new Error("Expected memory before_agent_start hook");
 const [beforeProviderRequestHandler] = beforeProviderRequestHandlers;
 if (beforeProviderRequestHandler === undefined)
 	throw new Error("Expected before_provider_request hook to be registered");
@@ -354,6 +476,26 @@ const swarmSnapshot = await beforeAgentStartHandler(
 );
 if (swarmSnapshot?.message?.customType !== "clanky.swarm_snapshot") {
 	throw new Error(`Expected swarm snapshot custom message: ${JSON.stringify(swarmSnapshot)}`);
+}
+
+const memoryStart = await memoryBeforeAgentStartHandler(
+	{
+		type: "before_agent_start",
+		prompt: "use memory",
+		systemPrompt: "Base system prompt.",
+		systemPromptOptions: {
+			cwd: process.cwd(),
+			skills: [],
+		},
+	},
+	context(),
+);
+if (
+	memoryStart?.message?.customType !== "clanky.memory_packet" ||
+	memoryStart.systemPrompt?.includes("<clanky_self_memory>") !== true ||
+	memoryStart.systemPrompt.includes("Project uses source-grounded memory atoms.") !== true
+) {
+	throw new Error(`Expected memory packet system prompt injection: ${JSON.stringify(memoryStart)}`);
 }
 
 const providerPayload = { messages: [{ role: "user", content: "hello provider" }] };
@@ -578,6 +720,17 @@ function commandContext(notifications: string[]): ExtensionCommandContext {
 	return {
 		sessionManager: {
 			getSessionId: () => "session-tool",
+			getEntries: () => [
+				{
+					type: "custom_message",
+					id: "memory-packet-entry",
+					parentId: null,
+					timestamp: "2026-01-01T00:00:00.000Z",
+					customType: "clanky.memory_packet",
+					content: "Relevant memory:\n1. Project uses source-grounded memory atoms.",
+					display: false,
+				},
+			],
 		},
 		ui: {
 			notify: (message: string) => {

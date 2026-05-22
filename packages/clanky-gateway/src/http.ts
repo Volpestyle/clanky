@@ -11,7 +11,10 @@ import {
 	addTask,
 	callExternalMcpTool,
 	createLinearIssue,
+	exportMemory,
 	flushLinearOutbox,
+	forgetMemory,
+	getMemoryStatus,
 	getStatus,
 	linkLinearIssue,
 	listExternalMcpServers,
@@ -20,7 +23,10 @@ import {
 	listSkills,
 	listSkillUsage,
 	listTasks,
+	rememberMemory,
 	removeSkill,
+	searchMemory,
+	setMemoryConsent,
 	updateTask,
 } from "./operations.ts";
 import {
@@ -28,6 +34,10 @@ import {
 	readLinearCreateParams,
 	readLinearFlushParams,
 	readLinearLinkParams,
+	readMemoryConsentParams,
+	readMemoryForgetParams,
+	readMemoryRememberParams,
+	readMemorySearchParams,
 	readSkillAddParams,
 	readSkillRemoveParams,
 	readTaskAddParams,
@@ -76,6 +86,58 @@ export function startHttpGateway(
 	app.get("/status", async (context) =>
 		context.json(await getStatus(registry, cron, swarm, externalMcp, options.socketFile, options.startedAt)),
 	);
+
+	app.get("/memory/status", async (context) => context.json(await getMemoryStatus(registry)));
+
+	app.get("/memory", async (context) => {
+		try {
+			return context.json(
+				await searchMemory(
+					registry,
+					readMemorySearchParams({
+						query: context.req.query("query") ?? context.req.query("q"),
+						scope: context.req.query("scope"),
+						subjectId: context.req.query("subjectId") ?? context.req.query("subject_id"),
+						limit: context.req.query("limit"),
+					}),
+				),
+			);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return context.json({ error: message }, 400);
+		}
+	});
+
+	app.post("/memory", async (context) => {
+		try {
+			const body = await context.req.json().catch(() => undefined);
+			return context.json(await rememberMemory(registry, readMemoryRememberParams(body)));
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return context.json({ error: message }, 400);
+		}
+	});
+
+	app.delete("/memory/:id", async (context) => {
+		try {
+			return context.json(await forgetMemory(registry, readMemoryForgetParams({ id: context.req.param("id") })));
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return context.json({ error: message }, 400);
+		}
+	});
+
+	app.get("/memory/export", async (context) => context.json(await exportMemory(registry)));
+
+	app.put("/memory/consent", async (context) => {
+		try {
+			const body = await context.req.json().catch(() => undefined);
+			return context.json(await setMemoryConsent(registry, readMemoryConsentParams(body)));
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return context.json({ error: message }, 400);
+		}
+	});
 
 	registerSessionRoutes(app, { registry, events });
 

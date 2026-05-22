@@ -5,14 +5,31 @@ import type {
 	CreateCronJobInput,
 	CreateLinearLinkInput,
 	CronScheduler,
+	ForgetMemoryInput,
 	LinearCreateIssueInput,
 	LinearOutboxEntry,
 	ListClankyTasksOptions,
+	MemoryExport,
+	MemoryForgetResult,
+	MemorySearchOptions,
+	MemorySearchResult,
+	MemoryStatus,
+	MemoryWriteResult,
+	ModelAuthMutationResult,
+	ModelAuthStatus,
 	RegisteredSession,
+	RememberMemoryInput,
 	SessionRegistry,
+	SetMemoryConsentInput,
 	UpdateClankyTaskInput,
 } from "@clanky/core";
 import { formatSkillPrompt, hasLinearCredentials } from "@clanky/core";
+import type {
+	ChatSessionMapping,
+	MessagingManager,
+	Platform as MessagingPlatform,
+	MessagingStatus,
+} from "@clanky/messaging";
 import type {
 	SwarmCompleteInput,
 	SwarmDispatchInput,
@@ -35,6 +52,8 @@ import {
 } from "@clanky/swarm";
 import type { ExternalMcpManager } from "./external-mcp.ts";
 import type {
+	AuthRemoveParams,
+	AuthSetApiKeyParams,
 	CronAddResult,
 	CronJobIdParams,
 	CronJobResult,
@@ -77,6 +96,48 @@ export interface MirrorSwarmActivityResult {
 }
 
 const CLANKY_SWARM_MESSAGE_ENTRY = "clanky.swarm_message";
+
+export function getAuthStatus(registry: SessionRegistry): ModelAuthStatus {
+	return registry.modelAuthStatus();
+}
+
+export function setAuthApiKey(registry: SessionRegistry, params: AuthSetApiKeyParams): ModelAuthMutationResult {
+	return registry.setModelApiKey(params.provider, params.apiKey);
+}
+
+export function removeAuth(registry: SessionRegistry, params: AuthRemoveParams): ModelAuthMutationResult {
+	return registry.removeModelAuth(params.provider);
+}
+
+export async function getMemoryStatus(registry: SessionRegistry): Promise<MemoryStatus> {
+	return await registry.memoryStatus();
+}
+
+export async function searchMemory(
+	registry: SessionRegistry,
+	params: MemorySearchOptions,
+): Promise<MemorySearchResult> {
+	return await registry.searchMemory(params);
+}
+
+export async function rememberMemory(
+	registry: SessionRegistry,
+	params: RememberMemoryInput,
+): Promise<MemoryWriteResult> {
+	return await registry.rememberMemory(params);
+}
+
+export async function forgetMemory(registry: SessionRegistry, params: ForgetMemoryInput): Promise<MemoryForgetResult> {
+	return await registry.forgetMemory(params);
+}
+
+export async function exportMemory(registry: SessionRegistry): Promise<MemoryExport> {
+	return await registry.exportMemory();
+}
+
+export async function setMemoryConsent(registry: SessionRegistry, params: SetMemoryConsentInput): Promise<unknown> {
+	return await registry.setMemoryConsent(params);
+}
 
 export async function getStatus(
 	registry: SessionRegistry,
@@ -285,6 +346,81 @@ export async function mirrorSwarmActivityToLinear(
 	};
 	if (sessionMessages !== 0) result.sessionMessages = sessionMessages;
 	return result;
+}
+
+export interface MessagingStatusGatewayResult extends MessagingStatus {
+	configured: boolean;
+}
+
+export interface MessagingSessionsResult {
+	mappings: ChatSessionMapping[];
+}
+
+export interface MessagingResetParams {
+	platform: MessagingPlatform;
+	chatId: string;
+	threadId?: string;
+	userId?: string;
+}
+
+export interface MessagingResetResult {
+	ok: true;
+}
+
+export function getMessagingStatus(messaging: MessagingManager): MessagingStatusGatewayResult {
+	const status = messaging.status();
+	return {
+		...status,
+		configured: status.telegram.enabled || status.discord.enabled,
+	};
+}
+
+export async function listMessagingSessions(
+	messaging: MessagingManager,
+	platform?: MessagingPlatform,
+): Promise<MessagingSessionsResult> {
+	return { mappings: await messaging.broker.listMappings(platform) };
+}
+
+export async function resetMessagingSession(
+	messaging: MessagingManager,
+	params: MessagingResetParams,
+): Promise<MessagingResetResult> {
+	const key: Parameters<typeof messaging.broker.resetMapping>[0] = {
+		platform: params.platform,
+		chatId: params.chatId,
+	};
+	if (params.threadId !== undefined) key.threadId = params.threadId;
+	if (params.userId !== undefined) key.userId = params.userId;
+	await messaging.broker.resetMapping(key);
+	return { ok: true };
+}
+
+export function readMessagingResetParams(value: unknown): MessagingResetParams {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		throw new Error("messaging.reset params must be an object");
+	}
+	const record = value as Record<string, unknown>;
+	const platform = record.platform;
+	if (platform !== "telegram" && platform !== "discord") {
+		throw new Error("messaging.reset platform must be 'telegram' or 'discord'");
+	}
+	const chatId = record.chatId;
+	if (typeof chatId !== "string" || chatId.length === 0) {
+		throw new Error("messaging.reset chatId must be a non-empty string");
+	}
+	const params: MessagingResetParams = { platform, chatId };
+	if (typeof record.threadId === "string" && record.threadId.length > 0) params.threadId = record.threadId;
+	if (typeof record.userId === "string" && record.userId.length > 0) params.userId = record.userId;
+	return params;
+}
+
+export function readMessagingSessionsParams(value: unknown): MessagingPlatform | undefined {
+	if (value === undefined || value === null) return undefined;
+	if (typeof value !== "object" || Array.isArray(value)) return undefined;
+	const platform = (value as Record<string, unknown>).platform;
+	if (platform === "telegram" || platform === "discord") return platform;
+	return undefined;
 }
 
 export async function listSessions(registry: SessionRegistry): Promise<SessionListResult> {

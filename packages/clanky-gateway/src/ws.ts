@@ -77,6 +77,46 @@ export type GatewayEvent =
 			type: "swarm.error";
 			timestamp: string;
 			error: string;
+	  }
+	| {
+			type: "messaging.received";
+			timestamp: string;
+			platform: "telegram" | "discord";
+			chatId: string;
+			threadId?: string;
+			userId: string;
+			sessionId: string;
+			text: string;
+			command?: string;
+	  }
+	| {
+			type: "messaging.sent";
+			timestamp: string;
+			platform: "telegram" | "discord";
+			chatId: string;
+			threadId?: string;
+			sessionId: string;
+			messageIds: string[];
+			chunks: number;
+			floodFallback: boolean;
+			durationMs: number;
+	  }
+	| {
+			type: "messaging.error";
+			timestamp: string;
+			platform: "telegram" | "discord";
+			chatId: string;
+			sessionId?: string;
+			error: string;
+	  }
+	| {
+			type: "messaging.policy";
+			timestamp: string;
+			platform: "telegram" | "discord";
+			chatId: string;
+			userId: string;
+			decision: string;
+			reason?: string;
 	  };
 
 type WithoutTimestamp<T> = T extends unknown ? Omit<T, "timestamp"> : never;

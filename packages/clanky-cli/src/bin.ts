@@ -31,6 +31,12 @@ import {
 	type LinearLinkResult,
 	type LinearListResult,
 	type LinearOutboxResult,
+	type MemoryConsentParams,
+	type MemoryExportResult,
+	type MemoryForgetGatewayResult,
+	type MemoryRememberResult,
+	type MemorySearchGatewayResult,
+	type MemoryStatusResult,
 	requestGateway,
 	type SendResult,
 	type SessionForkResult,
@@ -72,10 +78,19 @@ export interface ParsedArgs {
 	description?: string;
 	linearIssue?: string;
 	taskId?: string;
+	scope?: string;
+	subjectId?: string;
+	sensitivity?: string;
+	platform?: string;
+	chatId?: string;
+	threadId?: string;
+	userId?: string;
 	swarmType?: string;
 	status?: string;
 	priority?: string;
 	limit?: number;
+	confidence?: number;
+	ttlDays?: number;
 	timeoutSeconds?: number;
 	prompt?: string;
 	sessionId?: string;
@@ -113,9 +128,11 @@ function usage(): string {
 		"  clanky session search [--profile <name>] [--home <path>] <query>",
 		"  clanky session export [--profile <name>] [--home <path>] [--output <path> | --html <path>] <id>",
 		"  clanky skill list|usage|add|remove [--profile <name>] [--home <path>] [--description <text>] [--prompt <markdown>] [name]",
+		"  clanky memory status|search|remember|forget|export|consent [--profile <name>] [--home <path>] [--scope user|dm|guild|channel|project|agent] [--subject <id>] [--type preference|fact|decision|commitment|lesson|skill_hint] [--sensitivity public|personal|sensitive|secret] [--confidence <0..1>] [--ttl-days <n>] [args...]",
 		"  clanky task list|add|update [--profile <name>] [--home <path>] [--session <id>] [--linear-issue <id>] [--status open|in_progress|done|cancelled] [--priority low|normal|high] [--limit <n>] [--description <text>] [id] [title]",
 		"  clanky linear list|create|link|outbox|flush [--profile <name>] [--home <path>] [--session <id>] [--task <id>] [--description <note>] [team-id title|issue-id]",
 		"  clanky swarm status|peers|tasks|snapshot|lock|message|complete|dispatch [--profile <name>] [--home <path>] [--type implement|fix|review|research] [--status done|failed|cancelled] [--file <path> | --files <paths>] [--description <text>] [--provider <provider>] [--model <model>] [--linear-issue <id>] [--task <id>] [--wait] [--no-spawn] [--idempotency-key <key>] [args...]",
+		"  clanky messaging status|sessions|reset [--profile <name>] [--home <path>] [--platform telegram|discord] [--chat <chat-id>] [--thread <thread-id>] [--user <user-id>]",
 		"  clanky profile list|new|use [--home <path>] [name]",
 		"  clanky install [--launchd | --systemd] [--profile <name>] [--home <path>] [--http [host:port]] [--env NAME=value] [--env-from-current NAME] [--output <path>] [--print] [--enable]",
 		"  clanky uninstall [--launchd | --systemd] [--profile <name>] [--home <path>] [--output <path>] [--print]",
@@ -221,6 +238,27 @@ function parseArgs(argv: string[]): ParsedArgs {
 		} else if (arg === "--task") {
 			parsed.taskId = readFlagValue(rest, index, arg);
 			index += 1;
+		} else if (arg === "--scope") {
+			parsed.scope = readFlagValue(rest, index, arg);
+			index += 1;
+		} else if (arg === "--subject" || arg === "--subject-id") {
+			parsed.subjectId = readFlagValue(rest, index, arg);
+			index += 1;
+		} else if (arg === "--sensitivity") {
+			parsed.sensitivity = readFlagValue(rest, index, arg);
+			index += 1;
+		} else if (arg === "--platform") {
+			parsed.platform = readFlagValue(rest, index, arg);
+			index += 1;
+		} else if (arg === "--chat" || arg === "--chat-id") {
+			parsed.chatId = readFlagValue(rest, index, arg);
+			index += 1;
+		} else if (arg === "--thread" || arg === "--thread-id") {
+			parsed.threadId = readFlagValue(rest, index, arg);
+			index += 1;
+		} else if (arg === "--user" || arg === "--user-id") {
+			parsed.userId = readFlagValue(rest, index, arg);
+			index += 1;
 		} else if (arg === "--type") {
 			parsed.swarmType = readFlagValue(rest, index, arg);
 			index += 1;
@@ -234,6 +272,16 @@ function parseArgs(argv: string[]): ParsedArgs {
 			const value = Number.parseInt(readFlagValue(rest, index, arg), 10);
 			if (!Number.isInteger(value) || value <= 0) throw new Error("--limit must be a positive integer");
 			parsed.limit = value;
+			index += 1;
+		} else if (arg === "--confidence") {
+			const value = Number.parseFloat(readFlagValue(rest, index, arg));
+			if (!Number.isFinite(value) || value < 0 || value > 1) throw new Error("--confidence must be between 0 and 1");
+			parsed.confidence = value;
+			index += 1;
+		} else if (arg === "--ttl-days") {
+			const value = Number.parseInt(readFlagValue(rest, index, arg), 10);
+			if (!Number.isInteger(value) || value <= 0) throw new Error("--ttl-days must be a positive integer");
+			parsed.ttlDays = value;
 			index += 1;
 		} else if (arg === "--file") {
 			parsed.files.push(readFlagValue(rest, index, arg));
@@ -569,6 +617,10 @@ export async function runDoctor(args: ParsedArgs): Promise<void> {
 	);
 	addJson("profile_daemon_personal_plist_path", profileDaemonStates.personalPlist);
 	addJson("profile_daemon_personal_plist_state", profileDaemonStates.personalPlistState);
+	const telegramToken = normalizedEnv(process.env.TELEGRAM_BOT_TOKEN ?? process.env.CLANKY_TELEGRAM_BOT_TOKEN);
+	const discordToken = normalizedEnv(process.env.DISCORD_BOT_TOKEN ?? process.env.CLANKY_DISCORD_BOT_TOKEN);
+	add("messaging_telegram_token", telegramToken === undefined ? "missing" : "set");
+	add("messaging_discord_token", discordToken === undefined ? "missing" : "set");
 	const liveGates: DoctorLiveGates = {
 		launchd_restart:
 			launchdState === "installed"
@@ -581,6 +633,8 @@ export async function runDoctor(args: ParsedArgs): Promise<void> {
 		swarm_mcp: swarmMcpGate(swarmEnabled, swarmCommand, swarmCommandFound, swarmArgs),
 		claude_code_mcp: claudeMcpMount.mounted ? "mounted" : "requires_client_mount",
 		profile_daemons: profileDaemonStates.gate,
+		messaging_telegram: telegramToken === undefined ? "blocked_credentials" : "ready_credentials",
+		messaging_discord: discordToken === undefined ? "blocked_credentials" : "ready_credentials",
 	};
 	add("live_gate_launchd_restart", liveGates.launchd_restart);
 	add("live_gate_model_calendar", liveGates.model_calendar);
@@ -588,6 +642,8 @@ export async function runDoctor(args: ParsedArgs): Promise<void> {
 	add("live_gate_swarm_mcp", liveGates.swarm_mcp);
 	add("live_gate_claude_code_mcp", liveGates.claude_code_mcp);
 	add("live_gate_profile_daemons", liveGates.profile_daemons);
+	add("live_gate_messaging_telegram", liveGates.messaging_telegram);
+	add("live_gate_messaging_discord", liveGates.messaging_discord);
 	if (args.json) {
 		json.live_gates = liveGates;
 		json.live_gate_blockers = blockedLiveGates(liveGates);
@@ -606,6 +662,8 @@ interface DoctorLiveGates {
 	swarm_mcp: string;
 	claude_code_mcp: string;
 	profile_daemons: string;
+	messaging_telegram: string;
+	messaging_discord: string;
 }
 
 const doctorLiveGateNames = [
@@ -615,6 +673,8 @@ const doctorLiveGateNames = [
 	"swarm_mcp",
 	"claude_code_mcp",
 	"profile_daemons",
+	"messaging_telegram",
+	"messaging_discord",
 ] as const satisfies readonly (keyof DoctorLiveGates)[];
 
 type DoctorLiveGateBlockers = Partial<Record<keyof DoctorLiveGates, string>>;
@@ -964,6 +1024,94 @@ export async function runSkill(args: ParsedArgs): Promise<void> {
 	throw new Error("Usage: clanky skill list|usage|add|remove");
 }
 
+export async function runMemory(args: ParsedArgs): Promise<void> {
+	const subcommand = args.positional[0];
+	if (subcommand === "status") {
+		const result = (await requestGateway({
+			socketFile: resolveSocketFile(args),
+			method: "memory.status",
+		})) as MemoryStatusResult;
+		console.log(`self_file: ${result.selfFile}`);
+		console.log(`atoms: ${result.atoms}`);
+		console.log(`events: ${result.events}`);
+		console.log(`consent: ${result.consent.length}`);
+		return;
+	}
+
+	if (subcommand === "search" || subcommand === "list") {
+		const result = (await requestGateway({
+			socketFile: resolveSocketFile(args),
+			method: "memory.search",
+			params: buildMemorySearchParams(args),
+		})) as MemorySearchGatewayResult;
+		if (result.atoms.length === 0) {
+			console.log("No memories.");
+			return;
+		}
+		for (const atom of result.atoms) {
+			console.log(`${atom.id}\t${atom.scope}:${atom.subjectId}\t${atom.type}\t${atom.confidence}\t${atom.claim}`);
+		}
+		return;
+	}
+
+	if (subcommand === "remember") {
+		const claim = args.positional.slice(1).join(" ").trim();
+		if (claim.length === 0) throw new Error("Usage: clanky memory remember <claim>");
+		const result = (await requestGateway({
+			socketFile: resolveSocketFile(args),
+			method: "memory.remember",
+			params: buildMemoryRememberParams(args, claim),
+		})) as MemoryRememberResult;
+		if (!result.saved) {
+			console.log(`saved: false`);
+			if (result.needsConfirmation === true) console.log("needs_confirmation: true");
+			if (result.rejectedReason !== undefined) console.log(`reason: ${result.rejectedReason}`);
+			return;
+		}
+		console.log(`memory: ${result.atom.id}`);
+		console.log(`scope: ${result.atom.scope}:${result.atom.subjectId}`);
+		console.log(`type: ${result.atom.type}`);
+		return;
+	}
+
+	if (subcommand === "forget") {
+		const id = args.positional[1];
+		if (id === undefined && (args.scope === undefined || args.subjectId === undefined)) {
+			throw new Error("Usage: clanky memory forget <id> or --scope <scope> --subject <id>");
+		}
+		const result = (await requestGateway({
+			socketFile: resolveSocketFile(args),
+			method: "memory.forget",
+			params: buildMemoryForgetParams(args, id),
+		})) as MemoryForgetGatewayResult;
+		console.log(`forgotten: ${result.forgotten}`);
+		return;
+	}
+
+	if (subcommand === "export") {
+		const result = (await requestGateway({
+			socketFile: resolveSocketFile(args),
+			method: "memory.export",
+		})) as MemoryExportResult;
+		printJson(result);
+		return;
+	}
+
+	if (subcommand === "consent") {
+		const state = args.positional[1];
+		if (state !== "on" && state !== "off") throw new Error("Usage: clanky memory consent on|off");
+		const result = await requestGateway({
+			socketFile: resolveSocketFile(args),
+			method: "memory.consent",
+			params: buildMemoryConsentParams(args, state === "on"),
+		});
+		printJson(result);
+		return;
+	}
+
+	throw new Error("Usage: clanky memory status|search|remember|forget|export|consent");
+}
+
 export async function runTask(args: ParsedArgs): Promise<void> {
 	const subcommand = args.positional[0];
 	if (subcommand === "list") {
@@ -1221,6 +1369,52 @@ export async function runSwarm(args: ParsedArgs): Promise<void> {
 	throw new Error("Usage: clanky swarm status|peers|tasks|snapshot|lock|message|complete|dispatch");
 }
 
+export async function runMessaging(args: ParsedArgs): Promise<void> {
+	const subcommand = args.positional[0] ?? "status";
+	if (subcommand === "status") {
+		const result = await requestGateway({
+			socketFile: resolveSocketFile(args),
+			method: "messaging.status",
+		});
+		printJson(result);
+		return;
+	}
+	if (subcommand === "sessions") {
+		const platform = parseMessagingPlatform(args.platform);
+		const params = platform === undefined ? {} : { platform };
+		const result = await requestGateway({
+			socketFile: resolveSocketFile(args),
+			method: "messaging.sessions",
+			params,
+		});
+		printJson(result);
+		return;
+	}
+	if (subcommand === "reset") {
+		const platform = parseMessagingPlatform(args.platform);
+		if (platform === undefined)
+			throw new Error("Usage: clanky messaging reset --platform telegram|discord --chat <id>");
+		if (args.chatId === undefined) throw new Error("Usage: clanky messaging reset --platform <p> --chat <id>");
+		const params: Record<string, string> = { platform, chatId: args.chatId };
+		if (args.threadId !== undefined) params.threadId = args.threadId;
+		if (args.userId !== undefined) params.userId = args.userId;
+		const result = await requestGateway({
+			socketFile: resolveSocketFile(args),
+			method: "messaging.reset",
+			params,
+		});
+		printJson(result);
+		return;
+	}
+	throw new Error("Usage: clanky messaging status|sessions|reset [--platform telegram|discord] [--chat <id>]");
+}
+
+function parseMessagingPlatform(value: string | undefined): "telegram" | "discord" | undefined {
+	if (value === undefined) return undefined;
+	if (value === "telegram" || value === "discord") return value;
+	throw new Error(`Invalid --platform value: ${value}. Must be 'telegram' or 'discord'.`);
+}
+
 export async function runProfile(args: ParsedArgs): Promise<void> {
 	const subcommand = args.positional[0];
 	const homeDir = resolveHomeDir(args);
@@ -1449,6 +1643,61 @@ function buildSkillAddParams(args: ParsedArgs, name: string): Record<string, unk
 	if (args.description !== undefined) params.description = args.description;
 	if (args.prompt !== undefined) params.body = args.prompt;
 	return params;
+}
+
+function buildMemorySearchParams(args: ParsedArgs): Record<string, unknown> {
+	const query = args.positional.slice(1).join(" ").trim();
+	const params: Record<string, unknown> = {};
+	if (query.length > 0) params.query = query;
+	if (args.scope !== undefined) params.scope = args.scope;
+	if (args.subjectId !== undefined) params.subjectId = args.subjectId;
+	if (args.limit !== undefined) params.limit = args.limit;
+	return params;
+}
+
+function buildMemoryRememberParams(args: ParsedArgs, claim: string): Record<string, unknown> {
+	const params: Record<string, unknown> = {
+		claim,
+		confirmed: true,
+		sourceText: claim,
+	};
+	if (args.scope !== undefined) params.scope = args.scope;
+	if (args.subjectId !== undefined) params.subjectId = args.subjectId;
+	if (args.swarmType !== undefined) params.type = args.swarmType;
+	if (args.sensitivity !== undefined) params.sensitivity = args.sensitivity;
+	if (args.confidence !== undefined) params.confidence = args.confidence;
+	if (args.ttlDays !== undefined) params.ttlDays = args.ttlDays;
+	return params;
+}
+
+function buildMemoryForgetParams(args: ParsedArgs, id: string | undefined): Record<string, unknown> {
+	const params: Record<string, unknown> = {};
+	if (id !== undefined) params.id = id;
+	if (args.scope !== undefined) params.scope = args.scope;
+	if (args.subjectId !== undefined) params.subjectId = args.subjectId;
+	return params;
+}
+
+function buildMemoryConsentParams(args: ParsedArgs, enabled: boolean): MemoryConsentParams {
+	return {
+		scope: memoryScopeArg(args.scope ?? "user"),
+		subjectId: args.subjectId ?? "local",
+		enabled,
+	};
+}
+
+function memoryScopeArg(value: string): MemoryConsentParams["scope"] {
+	if (
+		value === "user" ||
+		value === "dm" ||
+		value === "guild" ||
+		value === "channel" ||
+		value === "project" ||
+		value === "agent"
+	) {
+		return value;
+	}
+	throw new Error(`Invalid memory scope: ${value}`);
 }
 
 function buildTaskListParams(args: ParsedArgs): Record<string, unknown> {
@@ -2320,6 +2569,10 @@ async function main(): Promise<void> {
 		await runSkill(parsed);
 		return;
 	}
+	if (parsed.command === "memory") {
+		await runMemory(parsed);
+		return;
+	}
 	if (parsed.command === "task") {
 		await runTask(parsed);
 		return;
@@ -2330,6 +2583,10 @@ async function main(): Promise<void> {
 	}
 	if (parsed.command === "swarm") {
 		await runSwarm(parsed);
+		return;
+	}
+	if (parsed.command === "messaging") {
+		await runMessaging(parsed);
 		return;
 	}
 	if (parsed.command === "profile") {

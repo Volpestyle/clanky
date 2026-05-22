@@ -3,6 +3,11 @@ export { ExternalMcpManager, type ExternalMcpServerConfig, type ExternalMcpServe
 export { type HttpGatewayOptions, type HttpGatewayServer, startHttpGateway } from "./http.ts";
 export { type StartMcpServerOptions, startMcpServer } from "./mcp.ts";
 export type {
+	AuthRemoveParams,
+	AuthRemoveResult,
+	AuthSetApiKeyParams,
+	AuthSetApiKeyResult,
+	AuthStatusResult,
 	CronAddResult,
 	CronJobIdParams,
 	CronJobResult,
@@ -20,6 +25,15 @@ export type {
 	LinearLinkResult,
 	LinearListResult,
 	LinearOutboxResult,
+	MemoryConsentParams,
+	MemoryExportResult,
+	MemoryForgetGatewayResult,
+	MemoryForgetParams,
+	MemoryRememberParams,
+	MemoryRememberResult,
+	MemorySearchGatewayResult,
+	MemorySearchParams,
+	MemoryStatusResult,
 	SendResult,
 	SessionForkParams,
 	SessionForkResult,

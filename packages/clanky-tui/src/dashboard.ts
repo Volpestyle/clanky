@@ -1,4 +1,9 @@
+import { stdin as input, stdout as output } from "node:process";
+import { createInterface } from "node:readline/promises";
 import {
+	type AuthRemoveResult,
+	type AuthSetApiKeyResult,
+	type AuthStatusResult,
 	type CronListResult,
 	requestGateway,
 	type SessionListResult,
@@ -27,6 +32,7 @@ export interface RunDashboardOptions {
 }
 
 interface DashboardData {
+	auth: AuthStatusResult;
 	status: StatusResult;
 	sessions: SessionListResult;
 	tasks: TaskListResult;
@@ -38,6 +44,16 @@ const DEFAULT_INTERVAL_MS = 3000;
 const DASHBOARD_SESSION_LIMIT = 8;
 const DASHBOARD_RESUME_KEYS: readonly KeyId[] = ["1", "2", "3", "4", "5", "6", "7", "8"];
 const DASHBOARD_QUIT_KEYS: readonly KeyId[] = ["ctrl+c", "q"];
+const DASHBOARD_OPENAI_AUTH_KEYS: readonly KeyId[] = ["a"];
+
+type DashboardAction =
+	| {
+			type: "openai-auth";
+	  }
+	| {
+			sessionId: string;
+			type: "resume-session";
+	  };
 
 export async function runDashboard(options: RunDashboardOptions): Promise<void> {
 	if (process.stdin.isTTY && process.stdout.isTTY) {
@@ -81,7 +97,7 @@ async function runInteractiveDashboard(options: RunDashboardOptions): Promise<vo
 	let interval: NodeJS.Timeout | undefined;
 	let stopped = false;
 	let latestSessions: SessionListResult | undefined = initialData.sessions;
-	let resumeSessionId: string | undefined;
+	let nextAction: DashboardAction | undefined;
 
 	const redraw = async () => {
 		try {
@@ -97,10 +113,10 @@ async function runInteractiveDashboard(options: RunDashboardOptions): Promise<vo
 	};
 
 	await new Promise<void>((resolve) => {
-		const stopDashboard = (nextSessionId?: string) => {
+		const stopDashboard = (action?: DashboardAction) => {
 			if (stopped) return;
 			stopped = true;
-			resumeSessionId = nextSessionId;
+			nextAction = action;
 			if (interval !== undefined) clearInterval(interval);
 			webSocket?.close();
 			tui.stop();
@@ -116,9 +132,13 @@ async function runInteractiveDashboard(options: RunDashboardOptions): Promise<vo
 				stopDashboard();
 				return { consume: true };
 			}
+			if (matchesDashboardKey(data, DASHBOARD_OPENAI_AUTH_KEYS)) {
+				stopDashboard({ type: "openai-auth" });
+				return { consume: true };
+			}
 			const sessionId = dashboardSessionIdForKey(latestSessions, data);
 			if (sessionId !== undefined) {
-				stopDashboard(sessionId);
+				stopDashboard({ type: "resume-session", sessionId });
 				return { consume: true };
 			}
 			return undefined;
@@ -141,10 +161,17 @@ async function runInteractiveDashboard(options: RunDashboardOptions): Promise<vo
 		}
 	});
 
-	if (resumeSessionId !== undefined) {
-		const chatOptions: Parameters<typeof runChat>[0] = { socketFile: options.socketFile, sessionId: resumeSessionId };
+	if (nextAction?.type === "resume-session") {
+		const chatOptions: Parameters<typeof runChat>[0] = {
+			socketFile: options.socketFile,
+			sessionId: nextAction.sessionId,
+		};
 		if (options.eventStreamUrl !== undefined) chatOptions.eventStreamUrl = options.eventStreamUrl;
 		await runChat(chatOptions);
+	}
+	if (nextAction?.type === "openai-auth") {
+		await runOpenAiAuthSetup(options.socketFile);
+		await runInteractiveDashboard(options);
 	}
 }
 
@@ -221,7 +248,11 @@ function renderDashboardData(data: DashboardData): string {
 		"Clanky Dashboard",
 		"================",
 		"",
+		"Actions: [a] OpenAI auth  [1-8] resume  [q] quit",
+		"",
 		renderStatus(data.status),
+		"",
+		renderAuth(data.auth),
 		"",
 		renderSessions(data.sessions),
 		"",
@@ -234,14 +265,15 @@ function renderDashboardData(data: DashboardData): string {
 }
 
 async function fetchDashboardData(socketFile: string): Promise<DashboardData> {
-	const [status, sessions, tasks, cron, swarm] = await Promise.all([
+	const [auth, status, sessions, tasks, cron, swarm] = await Promise.all([
+		requestGateway({ socketFile, method: "auth.status" }) as Promise<AuthStatusResult>,
 		requestGateway({ socketFile, method: "status" }) as Promise<StatusResult>,
 		requestGateway({ socketFile, method: "session.list" }) as Promise<SessionListResult>,
 		requestGateway({ socketFile, method: "task.list", params: { limit: 8 } }) as Promise<TaskListResult>,
 		requestGateway({ socketFile, method: "cron.list" }) as Promise<CronListResult>,
 		requestGateway({ socketFile, method: "swarm.snapshot" }) as Promise<SwarmSnapshotGatewayResult>,
 	]);
-	return { status, sessions, tasks, cron, swarm };
+	return { auth, status, sessions, tasks, cron, swarm };
 }
 
 function renderStatus(status: StatusResult): string {
@@ -255,6 +287,108 @@ function renderStatus(status: StatusResult): string {
 		`Swarm: ${status.swarm.state} enabled=${status.swarm.enabled} peers=${status.swarmPeers} tasks=${status.swarmTasks}`,
 		...status.warnings.map((warning) => `Warning: ${warning}`),
 	].join("\n");
+}
+
+function renderAuth(auth: AuthStatusResult): string {
+	const openAi = auth.providers.find((provider) => provider.provider === "openai");
+	const authProviders = auth.authProviders.length === 0 ? "none" : auth.authProviders.join(",");
+	const availableProviders = auth.availableProviders.length === 0 ? "none" : auth.availableProviders.join(",");
+	return [
+		"Model Auth",
+		`  credentials=${auth.configured ? "set" : "missing"} available_models=${auth.availableModels} available_providers=${availableProviders}`,
+		`  stored_providers=${authProviders}`,
+		`  OpenAI: ${formatProviderAuth(openAi)}`,
+		`  auth_file=${auth.authFile}`,
+	].join("\n");
+}
+
+function formatProviderAuth(provider: AuthStatusResult["providers"][number] | undefined): string {
+	if (provider === undefined || !provider.configured) return "missing";
+	if (provider.source === "environment" && provider.label !== undefined) return `environment:${provider.label}`;
+	if (provider.source === "stored") return "stored";
+	return provider.source ?? "configured";
+}
+
+async function runOpenAiAuthSetup(socketFile: string): Promise<void> {
+	const auth = (await requestGateway({ socketFile, method: "auth.status" })) as AuthStatusResult;
+	output.write("\nOpenAI Auth\n===========\n");
+	output.write(`Profile auth file: ${auth.authFile}\n`);
+	output.write(
+		`Current OpenAI status: ${formatProviderAuth(auth.providers.find((provider) => provider.provider === "openai"))}\n`,
+	);
+	output.write("Enter a new OpenAI API key to store it. Enter '-' to remove stored OpenAI auth.\n");
+	const secret = await readSecretLine("OPENAI_API_KEY: ");
+	const value = secret?.trim();
+	if (value === undefined || value.length === 0) {
+		output.write("OpenAI auth unchanged.\n\n");
+		return;
+	}
+	if (value === "-") {
+		const result = (await requestGateway({
+			socketFile,
+			method: "auth.remove",
+			params: { provider: "openai" },
+		})) as AuthRemoveResult;
+		output.write(`Removed stored OpenAI auth. available_models=${result.status.availableModels}\n\n`);
+		return;
+	}
+	const result = (await requestGateway({
+		socketFile,
+		method: "auth.set_api_key",
+		params: { provider: "openai", apiKey: value },
+	})) as AuthSetApiKeyResult;
+	output.write(`Stored OpenAI auth. available_models=${result.status.availableModels}\n\n`);
+}
+
+async function readSecretLine(prompt: string): Promise<string | undefined> {
+	if (!input.isTTY || !output.isTTY || input.setRawMode === undefined) {
+		const reader = createInterface({ input, output });
+		try {
+			return await reader.question(prompt);
+		} finally {
+			reader.close();
+		}
+	}
+
+	output.write(prompt);
+	const wasRaw = input.isRaw;
+	return await new Promise<string | undefined>((resolve) => {
+		let value = "";
+		const cleanup = () => {
+			input.off("data", onData);
+			if (!wasRaw) input.setRawMode(false);
+			input.pause();
+		};
+		const finish = (result: string | undefined) => {
+			cleanup();
+			output.write("\n");
+			resolve(result);
+		};
+		const onData = (chunk: Buffer) => {
+			for (const char of chunk.toString("utf8")) {
+				if (char === "\u0003") {
+					finish(undefined);
+					return;
+				}
+				if (char === "\r" || char === "\n") {
+					finish(value);
+					return;
+				}
+				if (char === "\u007f" || char === "\b") {
+					value = value.slice(0, -1);
+					continue;
+				}
+				if (char === "\u0015") {
+					value = "";
+					continue;
+				}
+				if (char >= " " && char !== "\u007f") value += char;
+			}
+		};
+		input.setRawMode(true);
+		input.resume();
+		input.on("data", onData);
+	});
 }
 
 function renderSessions(result: SessionListResult): string {

@@ -283,6 +283,76 @@ try {
 	assertCommandSucceeded("skill list after remove", skillListAfterRemove);
 	assertNotIncludes(skillListAfterRemove.stdout, `${skillName}\tUse for release note drafting.`);
 
+	const memoryStatus = await runClanky(["memory", "status", "--home", homeDir]);
+	assertCommandSucceeded("memory status", memoryStatus);
+	assertIncludes(memoryStatus.stdout, "self_file:");
+	assertIncludes(memoryStatus.stdout, "atoms: 0");
+	const memoryConsent = await runClanky([
+		"memory",
+		"consent",
+		"--home",
+		homeDir,
+		"--scope",
+		"channel",
+		"--subject",
+		"cli-channel",
+		"on",
+	]);
+	assertCommandSucceeded("memory consent", memoryConsent);
+	assertIncludes(memoryConsent.stdout, `"enabled": true`);
+	const memoryRemember = await runClanky([
+		"memory",
+		"remember",
+		"--home",
+		homeDir,
+		"--scope",
+		"project",
+		"--subject",
+		process.cwd(),
+		"--type",
+		"decision",
+		"--confidence",
+		"0.86",
+		"CLI gateway memory smoke stores source-grounded decisions.",
+	]);
+	assertCommandSucceeded("memory remember", memoryRemember);
+	assertIncludes(memoryRemember.stdout, "memory:");
+	assertIncludes(memoryRemember.stdout, "type: decision");
+	const memoryId = extractLineValue(memoryRemember.stdout, "memory");
+	const memorySearch = await runClanky([
+		"memory",
+		"search",
+		"--home",
+		homeDir,
+		"--scope",
+		"project",
+		"--subject",
+		process.cwd(),
+		"source-grounded decisions",
+	]);
+	assertCommandSucceeded("memory search", memorySearch);
+	assertIncludes(memorySearch.stdout, memoryId);
+	const memoryExport = await runClanky(["memory", "export", "--home", homeDir]);
+	assertCommandSucceeded("memory export", memoryExport);
+	assertIncludes(memoryExport.stdout, memoryId);
+	assertIncludes(memoryExport.stdout, "Clanky Self");
+	const memoryForget = await runClanky(["memory", "forget", "--home", homeDir, memoryId]);
+	assertCommandSucceeded("memory forget", memoryForget);
+	assertIncludes(memoryForget.stdout, "forgotten: 1");
+	const memorySearchAfterForget = await runClanky([
+		"memory",
+		"search",
+		"--home",
+		homeDir,
+		"--scope",
+		"project",
+		"--subject",
+		process.cwd(),
+		"source-grounded decisions",
+	]);
+	assertCommandSucceeded("memory search after forget", memorySearchAfterForget);
+	assertNotIncludes(memorySearchAfterForget.stdout, memoryId);
+
 	const taskAdd = await runClanky([
 		"task",
 		"add",

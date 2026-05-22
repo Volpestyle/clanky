@@ -16,6 +16,8 @@ export interface ClankyPaths {
 	skillsDir: string;
 	profileSkillsDir: string;
 	skillUsageFile: string;
+	memoryDir: string;
+	selfMemoryFile: string;
 	linearDir: string;
 	linearLinksFile: string;
 	linearOutboxFile: string;
@@ -47,6 +49,8 @@ export function resolveClankyPaths(options: ResolveClankyPathsOptions = {}): Cla
 		skillsDir: join(homeDir, "skills"),
 		profileSkillsDir: join(profileDir, "skills"),
 		skillUsageFile: join(profileDir, "skills", ".usage.json"),
+		memoryDir: join(profileDir, "memory"),
+		selfMemoryFile: join(profileDir, "SELF.md"),
 		linearDir: join(profileDir, "linear"),
 		linearLinksFile: join(profileDir, "linear", "links.json"),
 		linearOutboxFile: join(profileDir, "linear", "outbox.json"),

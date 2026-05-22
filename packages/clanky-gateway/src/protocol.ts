@@ -9,11 +9,22 @@ import type {
 	CronJob,
 	CronRunResult,
 	FlushLinearOutboxResult,
+	ForgetMemoryInput,
 	LinearCreateIssueInput,
 	LinearLink,
 	LinearOutboxEntry,
 	ListClankyTasksOptions,
+	MemoryExport,
+	MemoryForgetResult,
+	MemorySearchOptions,
+	MemorySearchResult,
+	MemoryStatus,
+	MemoryWriteResult,
+	ModelAuthMutationResult,
+	ModelAuthStatus,
+	RememberMemoryInput,
 	SessionSearchResult,
+	SetMemoryConsentInput,
 	SkillUsageRecord,
 	UpdateClankyTaskInput,
 } from "@clanky/core";
@@ -35,6 +46,15 @@ import {
 
 export type GatewayMethod =
 	| "status"
+	| "auth.status"
+	| "auth.set_api_key"
+	| "auth.remove"
+	| "memory.status"
+	| "memory.search"
+	| "memory.remember"
+	| "memory.forget"
+	| "memory.export"
+	| "memory.consent"
 	| "send"
 	| "session.list"
 	| "session.fork"
@@ -67,6 +87,9 @@ export type GatewayMethod =
 	| "swarm.file_lock"
 	| "swarm.message"
 	| "swarm.complete"
+	| "messaging.status"
+	| "messaging.sessions"
+	| "messaging.reset"
 	| "shutdown";
 
 export interface GatewayRequest {
@@ -123,6 +146,39 @@ export interface StatusResult {
 	warnings: string[];
 	uptimeMs: number;
 }
+
+export type AuthStatusResult = ModelAuthStatus;
+
+export interface AuthSetApiKeyParams {
+	apiKey: string;
+	provider: string;
+}
+
+export interface AuthRemoveParams {
+	provider: string;
+}
+
+export type AuthSetApiKeyResult = ModelAuthMutationResult;
+
+export type AuthRemoveResult = ModelAuthMutationResult;
+
+export type MemoryStatusResult = MemoryStatus;
+
+export type MemorySearchParams = MemorySearchOptions;
+
+export type MemorySearchGatewayResult = MemorySearchResult;
+
+export type MemoryRememberParams = RememberMemoryInput;
+
+export type MemoryRememberResult = MemoryWriteResult;
+
+export type MemoryForgetParams = ForgetMemoryInput;
+
+export type MemoryForgetGatewayResult = MemoryForgetResult;
+
+export type MemoryExportResult = MemoryExport;
+
+export type MemoryConsentParams = SetMemoryConsentInput;
 
 export interface SessionListResult {
 	sessions: Array<{
@@ -314,6 +370,15 @@ export function isGatewayRequest(value: unknown): value is GatewayRequest {
 	if (typeof candidate.id !== "string") return false;
 	return (
 		candidate.method === "status" ||
+		candidate.method === "auth.status" ||
+		candidate.method === "auth.set_api_key" ||
+		candidate.method === "auth.remove" ||
+		candidate.method === "memory.status" ||
+		candidate.method === "memory.search" ||
+		candidate.method === "memory.remember" ||
+		candidate.method === "memory.forget" ||
+		candidate.method === "memory.export" ||
+		candidate.method === "memory.consent" ||
 		candidate.method === "send" ||
 		candidate.method === "session.list" ||
 		candidate.method === "session.fork" ||
@@ -348,6 +413,185 @@ export function isGatewayRequest(value: unknown): value is GatewayRequest {
 		candidate.method === "swarm.complete" ||
 		candidate.method === "shutdown"
 	);
+}
+
+export function readMemorySearchParams(value: unknown): MemorySearchParams {
+	if (value === undefined) return {};
+	if (typeof value !== "object" || value === null) {
+		throw new Error("memory search params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	const params: MemorySearchParams = {};
+	const query = candidate.query ?? candidate.q;
+	if (query !== undefined) {
+		if (typeof query !== "string" || query.trim().length === 0) {
+			throw new Error("memory search query must be a non-empty string");
+		}
+		params.query = query;
+	}
+	const scope = candidate.scope;
+	if (scope !== undefined) params.scope = readMemoryScope(scope);
+	const subjectId = candidate.subjectId ?? candidate.subject_id;
+	if (subjectId !== undefined) params.subjectId = readNonEmptyString(subjectId, "memory search subjectId");
+	if (candidate.limit !== undefined) params.limit = readPositiveInteger(candidate.limit, "memory search limit");
+	return params;
+}
+
+export function readMemoryRememberParams(value: unknown): MemoryRememberParams {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("memory remember params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	const claim = readNonEmptyString(candidate.claim, "memory remember claim");
+	const params: MemoryRememberParams = { claim };
+	if (candidate.scope !== undefined) params.scope = readMemoryScope(candidate.scope);
+	const subjectId = candidate.subjectId ?? candidate.subject_id;
+	if (subjectId !== undefined) params.subjectId = readNonEmptyString(subjectId, "memory remember subjectId");
+	if (candidate.type !== undefined) params.type = readMemoryType(candidate.type);
+	const sourceEventIds = candidate.sourceEventIds ?? candidate.source_event_ids;
+	if (sourceEventIds !== undefined) params.sourceEventIds = readStringArray(sourceEventIds, "memory sourceEventIds");
+	const sourceText = candidate.sourceText ?? candidate.source_text;
+	if (sourceText !== undefined) {
+		params.source = {
+			scope: params.scope ?? "project",
+			subjectId: params.subjectId ?? "gateway",
+			source: "gateway",
+			text: readNonEmptyString(sourceText, "memory sourceText"),
+		};
+	}
+	if (candidate.confidence !== undefined)
+		params.confidence = readFiniteNumber(candidate.confidence, "memory confidence");
+	if (candidate.sensitivity !== undefined) params.sensitivity = readMemorySensitivity(candidate.sensitivity);
+	if (candidate.ttlDays !== undefined || candidate.ttl_days !== undefined) {
+		params.ttlDays = readPositiveInteger(candidate.ttlDays ?? candidate.ttl_days, "memory ttlDays");
+	}
+	if (candidate.confirmed !== undefined) {
+		if (typeof candidate.confirmed !== "boolean") throw new Error("memory confirmed must be boolean");
+		params.confirmed = candidate.confirmed;
+	}
+	return params;
+}
+
+export function readMemoryForgetParams(value: unknown): MemoryForgetParams {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("memory forget params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	const params: MemoryForgetParams = {};
+	if (candidate.id !== undefined) params.id = readNonEmptyString(candidate.id, "memory id");
+	if (candidate.scope !== undefined) params.scope = readMemoryScope(candidate.scope);
+	const subjectId = candidate.subjectId ?? candidate.subject_id;
+	if (subjectId !== undefined) params.subjectId = readNonEmptyString(subjectId, "memory subjectId");
+	return params;
+}
+
+export function readMemoryConsentParams(value: unknown): MemoryConsentParams {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("memory consent params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	const enabled = candidate.enabled;
+	if (typeof enabled !== "boolean") throw new Error("memory consent enabled must be boolean");
+	const params: MemoryConsentParams = {
+		scope: readMemoryScope(candidate.scope),
+		subjectId: readNonEmptyString(candidate.subjectId ?? candidate.subject_id, "memory consent subjectId"),
+		enabled,
+	};
+	if (candidate.mode !== undefined) params.mode = readMemoryConsentMode(candidate.mode);
+	if (candidate.retentionDays !== undefined || candidate.retention_days !== undefined) {
+		params.retentionDays = readPositiveInteger(
+			candidate.retentionDays ?? candidate.retention_days,
+			"memory retentionDays",
+		);
+	}
+	if (candidate.notice !== undefined) params.notice = readNonEmptyString(candidate.notice, "memory consent notice");
+	return params;
+}
+
+export function readAuthSetApiKeyParams(value: unknown): AuthSetApiKeyParams {
+	if (typeof value !== "object" || value === null) {
+		throw new Error("auth set params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	const provider = readAuthProvider(candidate.provider ?? "openai");
+	const apiKey = candidate.apiKey ?? candidate.api_key;
+	if (typeof apiKey !== "string" || apiKey.trim().length === 0) {
+		throw new Error("auth set params require a non-empty apiKey");
+	}
+	return { provider, apiKey };
+}
+
+function readMemoryScope(value: unknown): NonNullable<MemorySearchOptions["scope"]> {
+	if (
+		value === "user" ||
+		value === "dm" ||
+		value === "guild" ||
+		value === "channel" ||
+		value === "project" ||
+		value === "agent"
+	) {
+		return value;
+	}
+	throw new Error("invalid memory scope");
+}
+
+function readMemoryType(value: unknown): NonNullable<MemoryRememberParams["type"]> {
+	if (
+		value === "preference" ||
+		value === "fact" ||
+		value === "decision" ||
+		value === "commitment" ||
+		value === "lesson" ||
+		value === "skill_hint"
+	) {
+		return value;
+	}
+	throw new Error("invalid memory type");
+}
+
+function readMemorySensitivity(value: unknown): NonNullable<MemoryRememberParams["sensitivity"]> {
+	if (value === "public" || value === "personal" || value === "sensitive" || value === "secret") return value;
+	throw new Error("invalid memory sensitivity");
+}
+
+function readMemoryConsentMode(value: unknown): NonNullable<MemoryConsentParams["mode"]> {
+	if (value === "mention" || value === "dm" || value === "channel" || value === "server" || value === "off")
+		return value;
+	throw new Error("invalid memory consent mode");
+}
+
+function readNonEmptyString(value: unknown, label: string): string {
+	if (typeof value !== "string" || value.trim().length === 0) throw new Error(`${label} must be a non-empty string`);
+	return value;
+}
+
+function readFiniteNumber(value: unknown, label: string): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${label} must be finite`);
+	return value;
+}
+
+function readPositiveInteger(value: unknown, label: string): number {
+	const parsed = typeof value === "string" ? Number.parseInt(value, 10) : value;
+	if (typeof parsed !== "number" || !Number.isInteger(parsed) || parsed <= 0) {
+		throw new Error(`${label} must be a positive integer`);
+	}
+	return parsed;
+}
+
+export function readAuthRemoveParams(value: unknown): AuthRemoveParams {
+	if (value === undefined) return { provider: "openai" };
+	if (typeof value !== "object" || value === null) {
+		throw new Error("auth remove params must be an object");
+	}
+	const candidate = value as Record<string, unknown>;
+	return { provider: readAuthProvider(candidate.provider ?? "openai") };
+}
+
+function readAuthProvider(value: unknown): string {
+	if (typeof value !== "string" || value.trim().length === 0) {
+		throw new Error("auth provider must be a non-empty string");
+	}
+	return value;
 }
 
 export function readSendParams(value: unknown): SendParams {

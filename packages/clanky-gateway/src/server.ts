@@ -2,6 +2,18 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
 import { CronScheduler, SessionRegistry, type SessionRegistryOptions } from "@clanky/core";
+import {
+	type AdapterFactory,
+	type ChatSessionMapping,
+	createDiscordAdapterFactory,
+	createTelegramAdapterFactory,
+	loadMessagingConfigFromEnv,
+	type MemoryRetriever,
+	type MemoryWriter,
+	type MessageEvent,
+	MessagingManager,
+	type MessagingManagerEvents,
+} from "@clanky/messaging";
 import { SwarmLeader, type SwarmLeaderEvent } from "@clanky/swarm";
 import { ExternalMcpManager } from "./external-mcp.ts";
 import { type HttpGatewayOptions, type HttpGatewayServer, startHttpGateway } from "./http.ts";
@@ -16,8 +28,13 @@ import {
 	disableCronJob,
 	dispatchSwarm,
 	enableCronJob,
+	exportMemory,
 	flushLinearOutbox,
+	forgetMemory,
 	forkSession,
+	getAuthStatus,
+	getMemoryStatus,
+	getMessagingStatus,
 	getStatus,
 	getSwarmFileLock,
 	getSwarmSnapshot,
@@ -27,6 +44,7 @@ import {
 	listExternalMcpServers,
 	listLinearLinks,
 	listLinearOutbox,
+	listMessagingSessions,
 	listSessions,
 	listSkills,
 	listSkillUsage,
@@ -35,11 +53,19 @@ import {
 	listTasks,
 	messageSwarm,
 	mirrorSwarmActivityToLinear,
+	readMessagingResetParams,
+	readMessagingSessionsParams,
+	rememberMemory,
+	removeAuth,
 	removeCronJob,
 	removeSkill,
+	resetMessagingSession,
 	runCronJobNow,
+	searchMemory,
 	searchSessions,
 	sendPrompt,
+	setAuthApiKey,
+	setMemoryConsent,
 	updateTask,
 } from "./operations.ts";
 import { isRpcInput, PiRpcSocket } from "./pi-rpc.ts";
@@ -47,12 +73,18 @@ import {
 	type GatewayRequest,
 	type GatewayResponse,
 	isGatewayRequest,
+	readAuthRemoveParams,
+	readAuthSetApiKeyParams,
 	readCronAddParams,
 	readCronJobIdParams,
 	readExternalMcpCallParams,
 	readLinearCreateParams,
 	readLinearFlushParams,
 	readLinearLinkParams,
+	readMemoryConsentParams,
+	readMemoryForgetParams,
+	readMemoryRememberParams,
+	readMemorySearchParams,
 	readSendParams,
 	readSessionForkParams,
 	readSessionSearchParams,
@@ -72,6 +104,9 @@ export interface StartGatewayServerOptions extends SessionRegistryOptions {
 	socketFile?: string;
 	http?: Pick<HttpGatewayOptions, "hostname" | "port">;
 	newHttpToken?: boolean;
+	messagingAdapterFactories?: Partial<Record<"telegram" | "discord", AdapterFactory>>;
+	messagingProvider?: string;
+	messagingModel?: string;
 }
 
 export interface GatewayServer {
@@ -79,6 +114,7 @@ export interface GatewayServer {
 	cron: CronScheduler;
 	swarm: SwarmLeader;
 	externalMcp: ExternalMcpManager;
+	messaging: MessagingManager;
 	events: GatewayEventHub;
 	socketFile: string;
 	closed: Promise<void>;
@@ -93,6 +129,109 @@ export async function startGatewayServer(options: StartGatewayServerOptions = {}
 	const swarm = new SwarmLeader(swarmLeaderOptions(registry, options));
 	const externalMcp = ExternalMcpManager.fromEnv({ cwd: options.cwd ?? process.cwd() });
 	const events = new GatewayEventHub();
+	const messagingEvents: MessagingManagerEvents = {
+		onReceived: (event) => {
+			const payload: Parameters<typeof gatewayEvent>[0] = {
+				type: "messaging.received",
+				platform: event.platform,
+				chatId: event.chatId,
+				userId: event.userId,
+				sessionId: event.sessionId,
+				text: event.text,
+			};
+			if (event.threadId !== undefined) payload.threadId = event.threadId;
+			if (event.command !== undefined) payload.command = event.command;
+			events.publish(gatewayEvent(payload));
+		},
+		onSent: (event) => {
+			const payload: Parameters<typeof gatewayEvent>[0] = {
+				type: "messaging.sent",
+				platform: event.platform,
+				chatId: event.chatId,
+				sessionId: event.sessionId,
+				messageIds: event.messageIds,
+				chunks: event.chunks,
+				floodFallback: event.floodFallback,
+				durationMs: event.durationMs,
+			};
+			if (event.threadId !== undefined) payload.threadId = event.threadId;
+			events.publish(gatewayEvent(payload));
+		},
+		onError: (event) => {
+			const payload: Parameters<typeof gatewayEvent>[0] = {
+				type: "messaging.error",
+				platform: event.platform,
+				chatId: event.chatId,
+				error: event.error,
+			};
+			if (event.sessionId !== undefined) payload.sessionId = event.sessionId;
+			events.publish(gatewayEvent(payload));
+		},
+		onPolicy: (event) => {
+			const payload: Parameters<typeof gatewayEvent>[0] = {
+				type: "messaging.policy",
+				platform: event.platform,
+				chatId: event.chatId,
+				userId: event.userId,
+				decision: event.decision.type,
+			};
+			if (event.decision.type === "ignore" || event.decision.type === "reject") payload.reason = event.decision.reason;
+			events.publish(gatewayEvent(payload));
+		},
+	};
+	const messagingConfig = loadMessagingConfigFromEnv();
+	const messagingManagerOptions: ConstructorParameters<typeof MessagingManager>[0] = {
+		registry,
+		clankyPaths: registry.paths,
+		config: messagingConfig,
+		events: messagingEvents,
+		memory: createMessagingMemoryWriter(registry),
+		retriever: createMessagingMemoryRetriever(registry),
+	};
+	const adapterFactories: Partial<Record<"telegram" | "discord", AdapterFactory>> = {
+		...(options.messagingAdapterFactories ?? {}),
+	};
+	if (adapterFactories.telegram === undefined && messagingConfig.telegram.enabled) {
+		adapterFactories.telegram = createTelegramAdapterFactory({
+			deps: {
+				resetChatSession: async (chatId: string, threadId?: string, userId?: string) => {
+					const key: MessagingResetKey = { platform: "telegram", chatId };
+					if (threadId !== undefined) key.threadId = threadId;
+					if (userId !== undefined) key.userId = userId;
+					await messagingDeferredReset(messagingHolder, key);
+				},
+				abortChatSession: async (chatId: string, threadId?: string, userId?: string) => {
+					const key: MessagingResetKey = { platform: "telegram", chatId };
+					if (threadId !== undefined) key.threadId = threadId;
+					if (userId !== undefined) key.userId = userId;
+					await messagingDeferredAbort(messagingHolder, registry, key);
+				},
+			},
+		});
+	}
+	if (adapterFactories.discord === undefined && messagingConfig.discord.enabled) {
+		adapterFactories.discord = createDiscordAdapterFactory({
+			deps: {
+				resetChatSession: async (chatId: string, threadId?: string, userId?: string) => {
+					const key: MessagingResetKey = { platform: "discord", chatId };
+					if (threadId !== undefined) key.threadId = threadId;
+					if (userId !== undefined) key.userId = userId;
+					await messagingDeferredReset(messagingHolder, key);
+				},
+				abortChatSession: async (chatId: string, threadId?: string, userId?: string) => {
+					const key: MessagingResetKey = { platform: "discord", chatId };
+					if (threadId !== undefined) key.threadId = threadId;
+					if (userId !== undefined) key.userId = userId;
+					await messagingDeferredAbort(messagingHolder, registry, key);
+				},
+			},
+		});
+	}
+	messagingManagerOptions.adapterFactories = adapterFactories;
+	if (options.messagingProvider !== undefined) messagingManagerOptions.provider = options.messagingProvider;
+	if (options.messagingModel !== undefined) messagingManagerOptions.model = options.messagingModel;
+	const messaging = new MessagingManager(messagingManagerOptions);
+	const messagingHolder: { current: MessagingManager } = { current: messaging };
 	const cron = new CronScheduler({
 		registry,
 		onTickRun: (result) => {
@@ -148,8 +287,10 @@ export async function startGatewayServer(options: StartGatewayServerOptions = {}
 		await removeStaleSocket(socketFile);
 		await swarm.start();
 		await externalMcp.start();
+		await messaging.start();
 	} catch (error) {
 		unsubscribeSwarmEvents();
+		await messaging.close();
 		await swarm.close();
 		await externalMcp.close();
 		await registry.dispose();
@@ -158,16 +299,25 @@ export async function startGatewayServer(options: StartGatewayServerOptions = {}
 	}
 
 	const server = createServer((socket) => {
-		handleSocket(socket, registry, cron, swarm, externalMcp, events, socketFile, startedAt, closeGateway).catch(
-			(error: unknown) => {
-				writeResponse(socket, {
-					id: "unknown",
-					ok: false,
-					error: error instanceof Error ? error.message : String(error),
-				});
-				socket.end();
-			},
-		);
+		handleSocket(
+			socket,
+			registry,
+			cron,
+			swarm,
+			externalMcp,
+			messaging,
+			events,
+			socketFile,
+			startedAt,
+			closeGateway,
+		).catch((error: unknown) => {
+			writeResponse(socket, {
+				id: "unknown",
+				ok: false,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			socket.end();
+		});
 	});
 	const closed = new Promise<void>((resolve) => {
 		server.once("close", resolve);
@@ -180,6 +330,7 @@ export async function startGatewayServer(options: StartGatewayServerOptions = {}
 		cron.stop();
 		events.close();
 		unsubscribeSwarmEvents();
+		await messaging.close();
 		await swarm.close();
 		await externalMcp.close();
 		await registry.drainSessions();
@@ -227,6 +378,7 @@ export async function startGatewayServer(options: StartGatewayServerOptions = {}
 		cron,
 		swarm,
 		externalMcp,
+		messaging,
 		events,
 		socketFile,
 		closed,
@@ -242,6 +394,7 @@ async function handleSocket(
 	cron: CronScheduler,
 	swarm: SwarmLeader,
 	externalMcp: ExternalMcpManager,
+	messaging: MessagingManager,
 	events: GatewayEventHub,
 	socketFile: string,
 	startedAt: number,
@@ -270,6 +423,7 @@ async function handleSocket(
 					cron,
 					swarm,
 					externalMcp,
+					messaging,
 					events,
 					socketFile,
 					startedAt,
@@ -288,6 +442,7 @@ function handleFirstLine(
 	cron: CronScheduler,
 	swarm: SwarmLeader,
 	externalMcp: ExternalMcpManager,
+	messaging: MessagingManager,
 	events: GatewayEventHub,
 	socketFile: string,
 	startedAt: number,
@@ -309,6 +464,7 @@ function handleFirstLine(
 			cron,
 			swarm,
 			externalMcp,
+			messaging,
 			events,
 			socketFile,
 			startedAt,
@@ -333,6 +489,7 @@ async function handleGatewayRequest(
 	cron: CronScheduler,
 	swarm: SwarmLeader,
 	externalMcp: ExternalMcpManager,
+	messaging: MessagingManager,
 	events: GatewayEventHub,
 	socketFile: string,
 	startedAt: number,
@@ -346,6 +503,7 @@ async function handleGatewayRequest(
 			cron,
 			swarm,
 			externalMcp,
+			messaging,
 			events,
 			socketFile,
 			startedAt,
@@ -364,6 +522,7 @@ async function dispatch(
 	cron: CronScheduler,
 	swarm: SwarmLeader,
 	externalMcp: ExternalMcpManager,
+	messaging: MessagingManager,
 	events: GatewayEventHub,
 	socketFile: string,
 	startedAt: number,
@@ -371,6 +530,54 @@ async function dispatch(
 ): Promise<unknown> {
 	if (request.method === "status") {
 		return await getStatus(registry, cron, swarm, externalMcp, socketFile, startedAt);
+	}
+
+	if (request.method === "auth.status") {
+		return getAuthStatus(registry);
+	}
+
+	if (request.method === "auth.set_api_key") {
+		return setAuthApiKey(registry, readAuthSetApiKeyParams(request.params));
+	}
+
+	if (request.method === "auth.remove") {
+		return removeAuth(registry, readAuthRemoveParams(request.params));
+	}
+
+	if (request.method === "memory.status") {
+		return await getMemoryStatus(registry);
+	}
+
+	if (request.method === "memory.search") {
+		return await searchMemory(registry, readMemorySearchParams(request.params));
+	}
+
+	if (request.method === "memory.remember") {
+		return await rememberMemory(registry, readMemoryRememberParams(request.params));
+	}
+
+	if (request.method === "memory.forget") {
+		return await forgetMemory(registry, readMemoryForgetParams(request.params));
+	}
+
+	if (request.method === "memory.export") {
+		return await exportMemory(registry);
+	}
+
+	if (request.method === "memory.consent") {
+		return await setMemoryConsent(registry, readMemoryConsentParams(request.params));
+	}
+
+	if (request.method === "messaging.status") {
+		return getMessagingStatus(messaging);
+	}
+
+	if (request.method === "messaging.sessions") {
+		return await listMessagingSessions(messaging, readMessagingSessionsParams(request.params));
+	}
+
+	if (request.method === "messaging.reset") {
+		return await resetMessagingSession(messaging, readMessagingResetParams(request.params));
 	}
 
 	if (request.method === "shutdown") {
@@ -520,6 +727,165 @@ function swarmLeaderOptions(
 	};
 	if (options.cwd !== undefined) result.cwd = options.cwd;
 	return result;
+}
+
+interface MessagingResetKey {
+	platform: "telegram" | "discord";
+	chatId: string;
+	threadId?: string;
+	userId?: string;
+}
+
+function createMessagingMemoryWriter(registry: SessionRegistry): MemoryWriter {
+	return {
+		recordInbound: async ({ event, mapping }) => {
+			if (!shouldUseMessagingMemory(event, mapping)) return;
+			if (event.text.trim().length === 0) return;
+			const subject = messagingSourceSubject(event, mapping);
+			await registry.recordMemoryEvent({
+				...subject,
+				source: event.platform,
+				sourceId: event.platformMessageId,
+				text: event.text,
+				metadata: messagingEventMetadata(event, mapping, "inbound"),
+				createdAt: new Date(event.timestamp).toISOString(),
+			});
+		},
+		recordOutbound: async ({ event, mapping, replyText, replyMessageIds, durationMs }) => {
+			if (!shouldUseMessagingMemory(event, mapping)) return;
+			if (replyText.trim().length === 0) return;
+			const subject = messagingSourceSubject(event, mapping);
+			const sourceId = replyMessageIds.length === 0 ? undefined : replyMessageIds.join(",");
+			await registry.recordMemoryEvent({
+				...subject,
+				source: event.platform,
+				text: replyText,
+				metadata: {
+					...messagingEventMetadata(event, mapping, "outbound"),
+					replyMessageIds,
+					durationMs,
+				},
+				...(sourceId === undefined ? {} : { sourceId }),
+			});
+		},
+	};
+}
+
+function createMessagingMemoryRetriever(registry: SessionRegistry): MemoryRetriever {
+	return {
+		buildContext: async (event, mapping) => {
+			if (!shouldUseMessagingMemory(event, mapping)) return undefined;
+			const packet = await registry.memoryPacket({
+				sessionId: mapping.sessionId,
+				prompt: event.text,
+				cwd: registry.paths.profileDir,
+				scopes: messagingMemoryScopes(registry, event, mapping),
+			});
+			return packet.text;
+		},
+	};
+}
+
+function shouldUseMessagingMemory(event: MessageEvent, mapping: ChatSessionMapping): boolean {
+	return event.chatType === "dm" || event.mentionsBot || event.command !== undefined || mapping.mode !== "mention";
+}
+
+function messagingSourceSubject(
+	event: MessageEvent,
+	mapping: ChatSessionMapping,
+): { scope: "user" | "dm" | "channel"; subjectId: string } {
+	if (event.chatType === "dm") return { scope: "user", subjectId: messagingUserSubject(event.userId, event.platform) };
+	if (mapping.mode === "dm_relationship" && mapping.userId !== undefined) {
+		return { scope: "user", subjectId: messagingUserSubject(mapping.userId, event.platform) };
+	}
+	return { scope: "channel", subjectId: messagingChatSubject(event) };
+}
+
+function messagingMemoryScopes(
+	registry: SessionRegistry,
+	event: MessageEvent,
+	mapping: ChatSessionMapping,
+): Array<{ scope: "agent" | "user" | "dm" | "channel"; subjectId: string }> {
+	const scopes: Array<{ scope: "agent" | "user" | "dm" | "channel"; subjectId: string }> = [
+		{ scope: "agent", subjectId: registry.paths.profile },
+		{ scope: "user", subjectId: messagingUserSubject(event.userId, event.platform) },
+		{ scope: "channel", subjectId: messagingChatSubject(event) },
+	];
+	if (mapping.userId !== undefined && mapping.userId !== event.userId) {
+		scopes.push({ scope: "user", subjectId: messagingUserSubject(mapping.userId, event.platform) });
+	}
+	if (event.chatType === "dm") scopes.push({ scope: "dm", subjectId: messagingChatSubject(event) });
+	return uniqueMessagingScopes(scopes);
+}
+
+function messagingEventMetadata(
+	event: MessageEvent,
+	mapping: ChatSessionMapping,
+	direction: "inbound" | "outbound",
+): Record<string, unknown> {
+	return {
+		direction,
+		platform: event.platform,
+		chatId: event.chatId,
+		chatType: event.chatType,
+		userId: event.userId,
+		sessionId: mapping.sessionId,
+		mentionsBot: event.mentionsBot,
+		...(event.threadId === undefined ? {} : { threadId: event.threadId }),
+		...(event.command === undefined ? {} : { command: event.command }),
+		...(event.commandArgs === undefined ? {} : { commandArgs: event.commandArgs }),
+	};
+}
+
+function messagingUserSubject(userId: string, platform: MessageEvent["platform"]): string {
+	return `${platform}:user:${userId}`;
+}
+
+function messagingChatSubject(event: MessageEvent): string {
+	const thread = event.threadId === undefined ? "" : `:thread:${event.threadId}`;
+	return `${event.platform}:chat:${event.chatId}${thread}`;
+}
+
+function uniqueMessagingScopes<T extends { scope: string; subjectId: string }>(scopes: T[]): T[] {
+	const seen = new Set<string>();
+	const result: T[] = [];
+	for (const scope of scopes) {
+		const key = `${scope.scope}:${scope.subjectId}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		result.push(scope);
+	}
+	return result;
+}
+
+async function messagingDeferredReset(holder: { current: MessagingManager }, key: MessagingResetKey): Promise<void> {
+	try {
+		await holder.current.broker.resetMapping(key);
+	} catch {
+		// ignore
+	}
+}
+
+async function messagingDeferredAbort(
+	holder: { current: MessagingManager },
+	registry: SessionRegistry,
+	key: MessagingResetKey,
+): Promise<void> {
+	const mapping = await holder.current.broker.listMappings(key.platform).catch(() => []);
+	const candidate = mapping.find(
+		(entry) =>
+			entry.chatId === key.chatId &&
+			(entry.threadId ?? undefined) === key.threadId &&
+			(entry.userId ?? undefined) === key.userId,
+	);
+	if (candidate === undefined) return;
+	const live = registry.get(candidate.sessionId);
+	if (live === undefined) return;
+	try {
+		await live.session.abort();
+	} catch {
+		// ignore
+	}
 }
 
 function publishSwarmEvent(events: GatewayEventHub, event: SwarmLeaderEvent): void {

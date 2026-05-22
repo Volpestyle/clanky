@@ -27,6 +27,147 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 	);
 
 	server.registerTool(
+		"memory.status",
+		{
+			title: "Memory Status",
+			description: "Return Clanky memory counts, consent state, and self-memory file path.",
+		},
+		async () => toToolResult(await callGateway(options, "memory.status")),
+	);
+
+	server.registerTool(
+		"memory.search",
+		{
+			title: "Search Memory",
+			description: "Search source-grounded Clanky memory atoms.",
+			inputSchema: {
+				query: z.string().min(1).optional(),
+				q: z.string().min(1).optional(),
+				scope: z.enum(["user", "dm", "guild", "channel", "project", "agent"]).optional(),
+				subjectId: z.string().min(1).optional(),
+				subject_id: z.string().min(1).optional(),
+				limit: z.number().int().positive().optional(),
+			},
+		},
+		async (args) =>
+			toToolResult(
+				await callGateway(options, "memory.search", {
+					...optionalProperties({
+						query: args.query ?? args.q,
+						scope: args.scope,
+						subjectId: args.subjectId ?? args.subject_id,
+						limit: args.limit,
+					}),
+				}),
+			),
+	);
+
+	server.registerTool(
+		"memory.remember",
+		{
+			title: "Remember Memory",
+			description: "Store a source-grounded Clanky memory atom when policy and confirmation allow it.",
+			inputSchema: {
+				scope: z.enum(["user", "dm", "guild", "channel", "project", "agent"]).optional(),
+				subjectId: z.string().min(1).optional(),
+				subject_id: z.string().min(1).optional(),
+				type: z.enum(["preference", "fact", "decision", "commitment", "lesson", "skill_hint"]).optional(),
+				claim: z.string().min(1),
+				sourceEventIds: z.array(z.string().min(1)).optional(),
+				source_event_ids: z.array(z.string().min(1)).optional(),
+				sourceText: z.string().min(1).optional(),
+				source_text: z.string().min(1).optional(),
+				confidence: z.number().min(0).max(1).optional(),
+				sensitivity: z.enum(["public", "personal", "sensitive", "secret"]).optional(),
+				ttlDays: z.number().int().positive().optional(),
+				ttl_days: z.number().int().positive().optional(),
+				confirmed: z.boolean().optional(),
+			},
+		},
+		async (args) =>
+			toToolResult(
+				await callGateway(options, "memory.remember", {
+					claim: args.claim,
+					...optionalProperties({
+						scope: args.scope,
+						subjectId: args.subjectId ?? args.subject_id,
+						type: args.type,
+						sourceEventIds: args.sourceEventIds ?? args.source_event_ids,
+						sourceText: args.sourceText ?? args.source_text,
+						confidence: args.confidence,
+						sensitivity: args.sensitivity,
+						ttlDays: args.ttlDays ?? args.ttl_days,
+						confirmed: args.confirmed,
+					}),
+				}),
+			),
+	);
+
+	server.registerTool(
+		"memory.forget",
+		{
+			title: "Forget Memory",
+			description: "Delete a Clanky memory atom by id or clear a subject scope.",
+			inputSchema: {
+				id: z.string().min(1).optional(),
+				scope: z.enum(["user", "dm", "guild", "channel", "project", "agent"]).optional(),
+				subjectId: z.string().min(1).optional(),
+				subject_id: z.string().min(1).optional(),
+			},
+		},
+		async (args) =>
+			toToolResult(
+				await callGateway(options, "memory.forget", {
+					...optionalProperties({
+						id: args.id,
+						scope: args.scope,
+						subjectId: args.subjectId ?? args.subject_id,
+					}),
+				}),
+			),
+	);
+
+	server.registerTool(
+		"memory.export",
+		{
+			title: "Export Memory",
+			description: "Export Clanky self memory, atoms, events, and consent state.",
+		},
+		async () => toToolResult(await callGateway(options, "memory.export")),
+	);
+
+	server.registerTool(
+		"memory.consent",
+		{
+			title: "Set Memory Consent",
+			description: "Enable or disable memory for a subject scope.",
+			inputSchema: {
+				scope: z.enum(["user", "dm", "guild", "channel", "project", "agent"]),
+				subjectId: z.string().min(1).optional(),
+				subject_id: z.string().min(1).optional(),
+				enabled: z.boolean(),
+				mode: z.enum(["mention", "dm", "channel", "server", "off"]).optional(),
+				retentionDays: z.number().int().positive().optional(),
+				retention_days: z.number().int().positive().optional(),
+				notice: z.string().min(1).optional(),
+			},
+		},
+		async (args) =>
+			toToolResult(
+				await callGateway(options, "memory.consent", {
+					scope: args.scope,
+					enabled: args.enabled,
+					...optionalProperties({
+						subjectId: args.subjectId ?? args.subject_id,
+						mode: args.mode,
+						retentionDays: args.retentionDays ?? args.retention_days,
+						notice: args.notice,
+					}),
+				}),
+			),
+	);
+
+	server.registerTool(
 		"session.send",
 		{
 			title: "Send Session Prompt",

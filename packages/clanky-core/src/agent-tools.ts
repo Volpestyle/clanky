@@ -3,6 +3,7 @@ import {
 	type BeforeAgentStartEvent,
 	type BeforeProviderRequestEvent,
 	defineTool,
+	type ExtensionCommandContext,
 	type ExtensionContext,
 	type ExtensionFactory,
 	type ToolCallEvent,
@@ -12,6 +13,17 @@ import {
 import { type Static, Type } from "typebox";
 import type { LinearCreateIssueInput } from "./linear/client.ts";
 import type { CreateLinearLinkInput } from "./linear/links.ts";
+import type {
+	ForgetMemoryInput,
+	MemoryExport,
+	MemoryPacket,
+	MemoryPacketInput,
+	MemorySearchOptions,
+	MemorySearchResult,
+	MemoryWriteResult,
+	RememberMemoryInput,
+	SetMemoryConsentInput,
+} from "./memory/store.ts";
 import type { CreateClankySkillInput } from "./skills/loader.ts";
 import { extractIndexableMessageText, type SessionIndexMessageInput } from "./state/index-db.ts";
 
@@ -135,6 +147,64 @@ const swarmCompleteSchema = Type.Object({
 	followups: Type.Optional(Type.Array(Type.String())),
 });
 
+const memoryScopeSchema = Type.Union([
+	Type.Literal("user"),
+	Type.Literal("dm"),
+	Type.Literal("guild"),
+	Type.Literal("channel"),
+	Type.Literal("project"),
+	Type.Literal("agent"),
+]);
+
+const memoryAtomTypeSchema = Type.Union([
+	Type.Literal("preference"),
+	Type.Literal("fact"),
+	Type.Literal("decision"),
+	Type.Literal("commitment"),
+	Type.Literal("lesson"),
+	Type.Literal("skill_hint"),
+]);
+
+const memorySensitivitySchema = Type.Union([
+	Type.Literal("public"),
+	Type.Literal("personal"),
+	Type.Literal("sensitive"),
+	Type.Literal("secret"),
+]);
+
+const memoryRememberSchema = Type.Object({
+	scope: Type.Optional(memoryScopeSchema),
+	subjectId: Type.Optional(Type.String()),
+	subject_id: Type.Optional(Type.String()),
+	type: Type.Optional(memoryAtomTypeSchema),
+	claim: Type.String(),
+	sourceEventIds: Type.Optional(Type.Array(Type.String())),
+	source_event_ids: Type.Optional(Type.Array(Type.String())),
+	sourceText: Type.Optional(Type.String()),
+	source_text: Type.Optional(Type.String()),
+	confidence: Type.Optional(Type.Number()),
+	sensitivity: Type.Optional(memorySensitivitySchema),
+	ttlDays: Type.Optional(Type.Number()),
+	ttl_days: Type.Optional(Type.Number()),
+	confirmed: Type.Optional(Type.Boolean()),
+});
+
+const memorySearchSchema = Type.Object({
+	query: Type.Optional(Type.String()),
+	q: Type.Optional(Type.String()),
+	scope: Type.Optional(memoryScopeSchema),
+	subjectId: Type.Optional(Type.String()),
+	subject_id: Type.Optional(Type.String()),
+	limit: Type.Optional(Type.Number()),
+});
+
+const memoryForgetSchema = Type.Object({
+	id: Type.Optional(Type.String()),
+	scope: Type.Optional(memoryScopeSchema),
+	subjectId: Type.Optional(Type.String()),
+	subject_id: Type.Optional(Type.String()),
+});
+
 export type ScheduleCronToolInput = Static<typeof scheduleCronSchema>;
 export type SwarmDispatchToolInput = Static<typeof swarmDispatchSchema>;
 export type LinearCreateIssueToolInput = Static<typeof linearCreateIssueSchema>;
@@ -144,6 +214,9 @@ export type SwarmFileLockToolInput = Static<typeof swarmFileLockSchema>;
 export type SwarmMessageToolInput = Static<typeof swarmMessageSchema>;
 export type SwarmCompleteToolInput = Static<typeof swarmCompleteSchema>;
 export type TaskCreateToolInput = Static<typeof taskCreateSchema>;
+export type MemoryRememberToolInput = Static<typeof memoryRememberSchema>;
+export type MemorySearchToolInput = Static<typeof memorySearchSchema>;
+export type MemoryForgetToolInput = Static<typeof memoryForgetSchema>;
 
 export type NormalizedSwarmCompleteToolInput = Omit<
 	SwarmCompleteToolInput,
@@ -200,6 +273,13 @@ export interface ClankyAgentToolHandlers {
 	mirrorToolResult?: (input: ClankyToolResultMirrorInput) => Promise<unknown>;
 	beforeProviderRequest?: (input: ClankyBeforeProviderRequestInput) => Promise<unknown | undefined>;
 	indexMessage?: (input: SessionIndexMessageInput) => Promise<void>;
+	memoryPacket?: (input: MemoryPacketInput) => Promise<MemoryPacket>;
+	memoryRemember?: (input: RememberMemoryInput) => Promise<MemoryWriteResult>;
+	memorySearch?: (input: MemorySearchOptions) => Promise<MemorySearchResult>;
+	memoryForget?: (input: ForgetMemoryInput) => Promise<unknown>;
+	memoryExport?: () => Promise<MemoryExport>;
+	memoryConsent?: (input: SetMemoryConsentInput) => Promise<unknown>;
+	selfMemory?: () => Promise<string>;
 	listCron?: () => Promise<unknown>;
 	externalMcpStatus?: () => Promise<unknown>;
 	listSkills?: () => Promise<unknown>;
@@ -209,6 +289,7 @@ export interface ClankyAgentToolHandlers {
 
 const CLANKY_SWARM_SNAPSHOT_MESSAGE = "clanky.swarm_snapshot";
 const CLANKY_SWARM_TASK_ENTRY = "clanky.swarm_task";
+const CLANKY_MEMORY_PACKET_MESSAGE = "clanky.memory_packet";
 
 export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers): ExtensionFactory[] {
 	const checkSwarmFileLock = handlers.checkSwarmFileLock;
@@ -216,6 +297,7 @@ export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers
 	const swarmSnapshotForPrompt = handlers.swarmSnapshotForPrompt;
 	const mirrorToolResult = handlers.mirrorToolResult;
 	const beforeProviderRequest = handlers.beforeProviderRequest;
+	const memoryPacket = handlers.memoryPacket;
 	const hasSwarmTaskEntryTools =
 		handlers.swarmDispatch !== undefined ||
 		handlers.swarmMessage !== undefined ||
@@ -227,6 +309,12 @@ export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers
 		handlers.externalMcpStatus !== undefined ||
 		handlers.listSkills !== undefined ||
 		handlers.createSkill !== undefined ||
+		handlers.memoryRemember !== undefined ||
+		handlers.memorySearch !== undefined ||
+		handlers.memoryForget !== undefined ||
+		handlers.memoryExport !== undefined ||
+		handlers.memoryConsent !== undefined ||
+		handlers.selfMemory !== undefined ||
 		handlers.profileStatus !== undefined;
 	if (
 		checkSwarmFileLock === undefined &&
@@ -234,6 +322,7 @@ export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers
 		swarmSnapshotForPrompt === undefined &&
 		mirrorToolResult === undefined &&
 		beforeProviderRequest === undefined &&
+		memoryPacket === undefined &&
 		!hasSwarmTaskEntryTools &&
 		!hasCommands
 	) {
@@ -304,6 +393,26 @@ export function createClankyExtensionFactories(handlers: ClankyAgentToolHandlers
 						sessionId: ctx.sessionManager.getSessionId(),
 						payload: event.payload,
 					});
+				});
+			}
+			if (memoryPacket !== undefined) {
+				pi.on("before_agent_start", async (event, ctx) => {
+					const packet = await memoryPacket({
+						sessionId: ctx.sessionManager.getSessionId(),
+						prompt: event.prompt,
+						cwd: ctx.cwd,
+					});
+					return {
+						systemPrompt: appendMemoryToSystemPrompt(event.systemPrompt, packet),
+						message: {
+							customType: CLANKY_MEMORY_PACKET_MESSAGE,
+							content: packet.text,
+							display: false,
+							details: {
+								atomIds: packet.atoms.map((atom) => atom.id),
+							},
+						},
+					};
 				});
 			}
 			if (checkSwarmFileLock !== undefined) {
@@ -393,6 +502,16 @@ function registerClankyCommands(pi: Parameters<ExtensionFactory>[0], handlers: C
 			},
 		});
 	}
+	if (
+		handlers.memorySearch !== undefined ||
+		handlers.memoryRemember !== undefined ||
+		handlers.memoryForget !== undefined ||
+		handlers.memoryExport !== undefined ||
+		handlers.memoryConsent !== undefined ||
+		handlers.selfMemory !== undefined
+	) {
+		registerMemoryCommands(pi, handlers);
+	}
 	if (handlers.externalMcpStatus !== undefined) {
 		pi.registerCommand("mcp", {
 			description: "Show configured external Clanky MCP servers",
@@ -409,6 +528,151 @@ function registerClankyCommands(pi: Parameters<ExtensionFactory>[0], handlers: C
 			},
 		});
 	}
+}
+
+function registerMemoryCommands(pi: Parameters<ExtensionFactory>[0], handlers: ClankyAgentToolHandlers): void {
+	if (handlers.selfMemory !== undefined) {
+		pi.registerCommand("who_are_you", {
+			description: "Show Clanky's self memory",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(`Self Memory\n${await handlers.selfMemory?.()}`);
+			},
+		});
+		pi.registerCommand("privacy", {
+			description: "Show Clanky's memory privacy policy",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(
+					"Privacy\nClanky stores source-grounded memories only when consent or explicit confirmation allows it. Personal memories require confirmation; sensitive data and secrets are rejected.",
+				);
+			},
+		});
+		pi.registerCommand("why_did_you_say_that", {
+			description: "Show the latest memory packet used for a response",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(latestMemoryExplanation(ctx));
+			},
+		});
+	}
+	if (handlers.memorySearch !== undefined) {
+		pi.registerCommand("what_do_you_remember", {
+			description: "Search Clanky memory",
+			handler: async (args, ctx) => {
+				ctx.ui.notify(formatCommandResult("Memory", await handlers.memorySearch?.(memoryCommandSearch(args, ctx.cwd))));
+			},
+		});
+	}
+	if (handlers.memoryForget !== undefined) {
+		pi.registerCommand("forget_me", {
+			description: "Forget local user-scoped memories",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(
+					formatCommandResult("Forget Me", await handlers.memoryForget?.({ scope: "user", subjectId: "local" })),
+				);
+			},
+		});
+		pi.registerCommand("forget_this_channel", {
+			description: "Forget memories for a channel subject id",
+			handler: async (args, ctx) => {
+				const subjectId = args.trim();
+				if (subjectId.length === 0) {
+					ctx.ui.notify("Forget Channel\nUsage: /forget_this_channel <channel-id>");
+					return;
+				}
+				ctx.ui.notify(
+					formatCommandResult("Forget Channel", await handlers.memoryForget?.({ scope: "channel", subjectId })),
+				);
+			},
+		});
+	}
+	pi.registerCommand("memory", {
+		description: "View, remember, forget, export, or configure Clanky memory",
+		handler: async (args, ctx) => {
+			ctx.ui.notify(await runMemoryCommand(args, ctx, handlers));
+		},
+	});
+	if (handlers.memoryExport !== undefined) {
+		pi.registerCommand("memory_export", {
+			description: "Export Clanky memory",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(formatCommandResult("Memory Export", await handlers.memoryExport?.()));
+			},
+		});
+	}
+	if (handlers.memoryConsent !== undefined) {
+		pi.registerCommand("memory_off", {
+			description: "Disable local user memory",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(
+					formatCommandResult(
+						"Memory Off",
+						await handlers.memoryConsent?.({ scope: "user", subjectId: "local", enabled: false }),
+					),
+				);
+			},
+		});
+	}
+}
+
+async function runMemoryCommand(
+	args: string,
+	ctx: ExtensionCommandContext,
+	handlers: ClankyAgentToolHandlers,
+): Promise<string> {
+	const trimmed = args.trim();
+	if (trimmed === "" || trimmed === "view") {
+		if (handlers.memorySearch === undefined) return "Memory\nNo memory search handler is configured.";
+		return formatCommandResult("Memory", await handlers.memorySearch(memoryCommandSearch("", ctx.cwd)));
+	}
+	if (trimmed.startsWith("view ")) {
+		if (handlers.memorySearch === undefined) return "Memory\nNo memory search handler is configured.";
+		return formatCommandResult("Memory", await handlers.memorySearch(memoryCommandSearch(trimmed.slice(5), ctx.cwd)));
+	}
+	if (trimmed.startsWith("remember ")) {
+		if (handlers.memoryRemember === undefined) return "Memory\nNo memory remember handler is configured.";
+		const claim = trimmed.slice("remember ".length).trim();
+		if (claim.length === 0) return "Memory\nUsage: /memory remember <claim>";
+		return formatCommandResult(
+			"Memory",
+			await handlers.memoryRemember({
+				scope: "project",
+				subjectId: ctx.cwd,
+				type: "fact",
+				claim,
+				confirmed: true,
+				source: {
+					scope: "project",
+					subjectId: ctx.cwd,
+					source: "manual",
+					text: claim,
+				},
+			}),
+		);
+	}
+	if (trimmed.startsWith("forget ")) {
+		if (handlers.memoryForget === undefined) return "Memory\nNo memory forget handler is configured.";
+		const id = trimmed.slice("forget ".length).trim();
+		if (id.length === 0) return "Memory\nUsage: /memory forget <memory-id>";
+		return formatCommandResult("Memory", await handlers.memoryForget({ id }));
+	}
+	if (trimmed === "export") {
+		if (handlers.memoryExport === undefined) return "Memory\nNo memory export handler is configured.";
+		return formatCommandResult("Memory Export", await handlers.memoryExport());
+	}
+	if (trimmed === "off") {
+		if (handlers.memoryConsent === undefined) return "Memory\nNo memory consent handler is configured.";
+		return formatCommandResult(
+			"Memory",
+			await handlers.memoryConsent({ scope: "user", subjectId: "local", enabled: false }),
+		);
+	}
+	if (trimmed === "on") {
+		if (handlers.memoryConsent === undefined) return "Memory\nNo memory consent handler is configured.";
+		return formatCommandResult(
+			"Memory",
+			await handlers.memoryConsent({ scope: "user", subjectId: "local", enabled: true, mode: "dm" }),
+		);
+	}
+	return "Memory\nUsage: /memory view [query] | remember <claim> | forget <id> | export | on | off";
 }
 
 function buildMessageIndexInput(
@@ -613,11 +877,101 @@ export function createClankyToolDefinitions(handlers: ClankyAgentToolHandlers): 
 			}),
 		);
 	}
+	const memoryRemember = handlers.memoryRemember;
+	if (memoryRemember !== undefined) {
+		tools.push(
+			defineTool({
+				name: "memory_remember",
+				label: "Memory Remember",
+				description: "Store a source-grounded Clanky memory atom when policy and user confirmation allow it.",
+				promptSnippet:
+					"memory_remember: save an explicit preference, fact, decision, commitment, lesson, or skill hint.",
+				promptGuidelines: [
+					"Use only when the user explicitly asks you to remember something or confirms a proposed memory.",
+					"Do not store secrets, credentials, sensitive traits, relationship inferences, or unsupported guesses.",
+					"Set confirmed=true only when the user explicitly asked for the memory to be saved.",
+				],
+				parameters: memoryRememberSchema,
+				async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+					return toolResult(await memoryRemember(normalizeMemoryRememberToolInput(params, ctx.cwd)));
+				},
+			}),
+		);
+	}
+	const memorySearch = handlers.memorySearch;
+	if (memorySearch !== undefined) {
+		tools.push(
+			defineTool({
+				name: "memory_search",
+				label: "Memory Search",
+				description: "Search source-grounded Clanky memory atoms for the current profile.",
+				promptSnippet: "memory_search: retrieve relevant memories before claiming recall.",
+				parameters: memorySearchSchema,
+				async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+					return toolResult(await memorySearch(normalizeMemorySearchToolInput(params, ctx.cwd)));
+				},
+			}),
+		);
+	}
+	const memoryForget = handlers.memoryForget;
+	if (memoryForget !== undefined) {
+		tools.push(
+			defineTool({
+				name: "memory_forget",
+				label: "Memory Forget",
+				description: "Delete a Clanky memory atom by id or clear a subject scope.",
+				promptSnippet: "memory_forget: remove memories when the user asks to forget or correct them.",
+				parameters: memoryForgetSchema,
+				async execute(_toolCallId, params) {
+					return toolResult(await memoryForget(normalizeMemoryForgetToolInput(params)));
+				},
+			}),
+		);
+	}
 	return tools;
+}
+
+function appendMemoryToSystemPrompt(systemPrompt: string, packet: MemoryPacket): string {
+	const sections = [
+		systemPrompt,
+		"<clanky_self_memory>",
+		packet.self.trim(),
+		"</clanky_self_memory>",
+		"<clanky_retrieved_memory>",
+		packet.text,
+		"</clanky_retrieved_memory>",
+	];
+	return sections.filter((section) => section.trim().length > 0).join("\n\n");
+}
+
+function memoryCommandSearch(args: string, cwd: string): MemorySearchOptions {
+	const query = args.trim();
+	const options: MemorySearchOptions = {
+		scope: "project",
+		subjectId: cwd,
+		limit: 12,
+	};
+	if (query.length > 0) options.query = query;
+	return options;
 }
 
 function formatCommandResult(title: string, details: unknown): string {
 	return `${title}\n${JSON.stringify(details ?? null, null, "\t")}`;
+}
+
+function latestMemoryExplanation(ctx: ExtensionCommandContext): string {
+	const entries = ctx.sessionManager.getEntries();
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index];
+		if (entry?.type !== "custom_message" || entry.customType !== CLANKY_MEMORY_PACKET_MESSAGE) continue;
+		return [
+			"Why",
+			"I answered from the active system prompt, the current conversation, tool results, and this retrieved memory packet. Memories are source-grounded claims, not instructions.",
+			"",
+			typeof entry.content === "string" ? entry.content : JSON.stringify(entry.content, null, "\t"),
+		].join("\n");
+	}
+	return "Why\nNo retrieved memory packet is recorded for the current session yet.";
 }
 
 function extractFileMutation(event: ToolCallEvent): SwarmFileLockCheckInput | undefined {
@@ -734,6 +1088,53 @@ function normalizeTaskCreateToolInput(input: TaskCreateToolInput, defaultSession
 	const output: TaskCreateToolInput = { ...input };
 	if (output.sessionId === undefined) output.sessionId = input.session_id ?? defaultSessionId;
 	if (output.linearIssue === undefined && input.linear_issue !== undefined) output.linearIssue = input.linear_issue;
+	return output;
+}
+
+function normalizeMemoryRememberToolInput(input: MemoryRememberToolInput, cwd: string): RememberMemoryInput {
+	const subjectId = input.subjectId ?? input.subject_id ?? cwd;
+	const output: RememberMemoryInput = {
+		scope: input.scope ?? "project",
+		subjectId,
+		type: input.type ?? "fact",
+		claim: input.claim,
+	};
+	if (input.confirmed !== undefined) output.confirmed = input.confirmed;
+	const sourceEventIds = input.sourceEventIds ?? input.source_event_ids;
+	if (sourceEventIds !== undefined) output.sourceEventIds = sourceEventIds;
+	const sourceText = input.sourceText ?? input.source_text ?? input.claim;
+	if (sourceText !== undefined) {
+		output.source = {
+			scope: output.scope ?? "project",
+			subjectId,
+			source: "agent",
+			text: sourceText,
+		};
+	}
+	if (input.confidence !== undefined) output.confidence = input.confidence;
+	if (input.sensitivity !== undefined) output.sensitivity = input.sensitivity;
+	const ttlDays = input.ttlDays ?? input.ttl_days;
+	if (ttlDays !== undefined) output.ttlDays = ttlDays;
+	return output;
+}
+
+function normalizeMemorySearchToolInput(input: MemorySearchToolInput, cwd: string): MemorySearchOptions {
+	const output: MemorySearchOptions = {
+		scope: input.scope ?? "project",
+		subjectId: input.subjectId ?? input.subject_id ?? cwd,
+	};
+	const query = input.query ?? input.q;
+	if (query !== undefined) output.query = query;
+	if (input.limit !== undefined) output.limit = input.limit;
+	return output;
+}
+
+function normalizeMemoryForgetToolInput(input: MemoryForgetToolInput): ForgetMemoryInput {
+	const output: ForgetMemoryInput = {};
+	if (input.id !== undefined) output.id = input.id;
+	if (input.scope !== undefined) output.scope = input.scope;
+	const subjectId = input.subjectId ?? input.subject_id;
+	if (subjectId !== undefined) output.subjectId = subjectId;
 	return output;
 }
 

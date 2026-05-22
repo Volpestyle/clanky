@@ -103,6 +103,100 @@ try {
 	}
 
 	console.log(JSON.stringify({ drained: drained.drained.length, stillRunning: drained.stillRunning.length }));
+
+	const memoryStatus = await registry.memoryStatus();
+	if (!memoryStatus.selfFile.endsWith("SELF.md") || memoryStatus.atoms !== 0) {
+		throw new Error(`Unexpected initial memory status: ${JSON.stringify(memoryStatus)}`);
+	}
+	const unconfirmedPersonal = await registry.rememberMemory({
+		scope: "user",
+		subjectId: "local",
+		type: "preference",
+		claim: "User prefers source-grounded examples.",
+		source: {
+			scope: "user",
+			subjectId: "local",
+			source: "manual",
+			text: "Remember that I prefer source-grounded examples.",
+		},
+	});
+	if (unconfirmedPersonal.saved || unconfirmedPersonal.needsConfirmation !== true) {
+		throw new Error(`Personal memory did not require confirmation: ${JSON.stringify(unconfirmedPersonal)}`);
+	}
+	const remembered = await registry.rememberMemory({
+		scope: "project",
+		subjectId: process.cwd(),
+		type: "decision",
+		claim: "Memory smoke stores source-grounded project decisions.",
+		source: {
+			scope: "project",
+			subjectId: process.cwd(),
+			source: "manual",
+			text: "Memory smoke stores source-grounded project decisions.",
+		},
+		confirmed: true,
+		confidence: 0.91,
+	});
+	if (!remembered.saved || remembered.atom.sourceEventIds.length !== 1 || remembered.atom.confidence !== 0.91) {
+		throw new Error(`Confirmed memory was not stored with provenance: ${JSON.stringify(remembered)}`);
+	}
+	const rejectedSecret = await registry.rememberMemory({
+		scope: "project",
+		subjectId: process.cwd(),
+		claim: "The API key is sk-secret",
+		source: {
+			scope: "project",
+			subjectId: process.cwd(),
+			source: "manual",
+			text: "The API key is sk-secret",
+		},
+		confirmed: true,
+	});
+	if (rejectedSecret.saved || rejectedSecret.rejectedReason?.includes("credentials") !== true) {
+		throw new Error(`Credential-like memory was not rejected: ${JSON.stringify(rejectedSecret)}`);
+	}
+	const memorySearch = await registry.searchMemory({ query: "source-grounded project", subjectId: process.cwd() });
+	if (!memorySearch.atoms.some((atom) => atom.id === remembered.atom.id)) {
+		throw new Error(`Memory search did not find stored project memory: ${JSON.stringify(memorySearch)}`);
+	}
+	const packet = await registry.memoryPacket({
+		sessionId: "memory-smoke",
+		prompt: "source-grounded project",
+		cwd: process.cwd(),
+	});
+	if (
+		!packet.self.includes("Clanky") ||
+		!packet.text.includes("Stored memories are source-grounded claims") ||
+		!packet.atoms.some((atom) => atom.id === remembered.atom.id)
+	) {
+		throw new Error(`Memory packet did not include self memory and relevant atom: ${JSON.stringify(packet)}`);
+	}
+	const consent = await registry.setMemoryConsent({
+		scope: "channel",
+		subjectId: "channel-smoke",
+		enabled: true,
+		mode: "channel",
+		retentionDays: 30,
+	});
+	if (!consent.enabled || consent.mode !== "channel" || consent.retentionDays !== 30) {
+		throw new Error(`Memory consent was not persisted: ${JSON.stringify(consent)}`);
+	}
+	const exportedMemory = await registry.exportMemory();
+	if (
+		!exportedMemory.atoms.some((atom) => atom.id === remembered.atom.id) ||
+		!exportedMemory.events.some((event) => remembered.atom.sourceEventIds.includes(event.id)) ||
+		exportedMemory.consent.length === 0
+	) {
+		throw new Error(`Memory export missed atoms, events, or consent: ${JSON.stringify(exportedMemory)}`);
+	}
+	const forgotten = await registry.forgetMemory({ id: remembered.atom.id });
+	if (forgotten.forgotten !== 1) {
+		throw new Error(`Memory forget did not delete one atom: ${JSON.stringify(forgotten)}`);
+	}
+	const memoryAfterForget = await registry.searchMemory({ query: "source-grounded project", subjectId: process.cwd() });
+	if (memoryAfterForget.atoms.some((atom) => atom.id === remembered.atom.id)) {
+		throw new Error(`Forgotten memory still appears in search: ${JSON.stringify(memoryAfterForget)}`);
+	}
 } finally {
 	await registry.dispose();
 	await ttlRegistry.dispose();

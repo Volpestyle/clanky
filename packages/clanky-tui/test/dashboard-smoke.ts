@@ -1,7 +1,7 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startGatewayServer } from "@clanky/gateway";
+import { type AuthSetApiKeyResult, type AuthStatusResult, requestGateway, startGatewayServer } from "@clanky/gateway";
 import { dashboardSessionIdForKey, renderDashboard } from "../src/dashboard.ts";
 
 const homeDir = await mkdtemp(join(tmpdir(), "clanky-dashboard-"));
@@ -10,6 +10,7 @@ const previousEnv = captureEnv(
 	"CLANKY_SWARM_COMMAND",
 	"CLANKY_SWARM_ARGS_JSON",
 	"AGENT_IDENTITY",
+	"OPENAI_API_KEY",
 );
 process.env.CLANKY_SWARM_ENABLED = "1";
 process.env.CLANKY_SWARM_COMMAND = process.execPath;
@@ -19,6 +20,7 @@ process.env.CLANKY_SWARM_ARGS_JSON = JSON.stringify([
 	"packages/clanky-swarm/test/faux-swarm-mcp.ts",
 ]);
 process.env.AGENT_IDENTITY = "dashboard-smoke";
+delete process.env.OPENAI_API_KEY;
 const server = await startGatewayServer({ homeDir });
 
 try {
@@ -64,7 +66,10 @@ try {
 	const dashboard = await renderDashboard(server.socketFile);
 	for (const expected of [
 		"Clanky Dashboard",
+		"Actions: [a] OpenAI auth  [1-8] resume  [q] quit",
 		"Daemon: running",
+		"Model Auth",
+		"OpenAI: missing",
 		"Sessions",
 		session.id.slice(0, 8),
 		`[-] ${session.id.slice(0, 8)}`,
@@ -89,6 +94,43 @@ try {
 		if (!dashboard.includes(expected)) {
 			throw new Error(`Dashboard output missing ${expected}\n${dashboard}`);
 		}
+	}
+	const authResult = (await requestGateway({
+		socketFile: server.socketFile,
+		method: "auth.set_api_key",
+		params: { provider: "openai", apiKey: "sk-dashboard-openai-smoke" },
+	})) as AuthSetApiKeyResult;
+	if (authResult.provider !== "openai" || !authResult.status.authProviders.includes("openai")) {
+		throw new Error(`auth.set_api_key returned unexpected status: ${JSON.stringify(authResult)}`);
+	}
+	const authFile = await readFile(authResult.status.authFile, "utf8");
+	if (!authFile.includes("sk-dashboard-openai-smoke")) {
+		throw new Error("OpenAI key was not persisted to profile auth.json");
+	}
+	if (!session.session.modelRegistry.getAvailable().some((model) => model.provider === "openai")) {
+		throw new Error("Live dashboard session did not refresh OpenAI auth");
+	}
+	const authedDashboard = await renderDashboard(server.socketFile);
+	for (const expected of ["Model Auth", "credentials=set", "stored_providers=openai", "OpenAI: stored"]) {
+		if (!authedDashboard.includes(expected)) {
+			throw new Error(`Authed dashboard output missing ${expected}\n${authedDashboard}`);
+		}
+	}
+	if (authedDashboard.includes("sk-dashboard-openai-smoke")) {
+		throw new Error("Dashboard leaked the stored OpenAI API key");
+	}
+	await requestGateway({
+		socketFile: server.socketFile,
+		method: "auth.remove",
+		params: { provider: "openai" },
+	});
+	const removedAuth = (await requestGateway({
+		socketFile: server.socketFile,
+		method: "auth.status",
+	})) as AuthStatusResult;
+	const openAi = removedAuth.providers.find((provider) => provider.provider === "openai");
+	if (openAi?.configured) {
+		throw new Error(`auth.remove did not clear OpenAI auth: ${JSON.stringify(openAi)}`);
 	}
 	const selectedSessionId = dashboardSessionIdForKey(
 		{

@@ -19,6 +19,7 @@ for (const expected of [
 	"clanky session search",
 	"clanky session export",
 	"clanky skill list|usage|add|remove",
+	"clanky memory status|search|remember|forget|export|consent",
 	"clanky task list|add|update",
 	"clanky linear list|create|link|outbox|flush",
 	"clanky swarm status|peers|tasks|snapshot|lock|message|complete|dispatch",

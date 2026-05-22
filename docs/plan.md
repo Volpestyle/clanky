@@ -2,6 +2,15 @@
 
 An always-on agent harness built on **Pi**, modeled on **hermes-agent**, capable of acting as the **gateway/leader** of **swarm-mcp**.
 
+**Current status (2026-05-22):** the local v1 implementation is substantially built and covered by `pnpm check`, `pnpm smoke`, and `pnpm audit --prod`. The authoritative evidence map is `docs/v1-audit.md`; the approval-safe live-gate runbook is `docs/live-gates.md`. Do not treat v1 as complete until the remaining live gates have either been run successfully or explicitly waived.
+
+Remaining external gates:
+- launchd-managed default daemon restart/logout survival.
+- model/calendar credentials and a live calendar-backed `clanky send` answer with resumable TUI evidence.
+- unattended real Linear cron delivery.
+- launchd-managed `work` and `personal` profile daemon isolation.
+- default or managed-service swarm environment configuration. Direct real swarm/herdr dispatch and Claude Code MCP mounted-client dispatch have been captured, but the default doctor state remains disabled unless that environment is supplied.
+
 ---
 
 ## 1. Goal & framing
@@ -498,18 +507,20 @@ Total: ~3 weeks of focused work; usable end of Phase 5 (~2 weeks).
 
 ---
 
-## 15. Open decisions to make before Phase 1
+## 15. Implementation decisions
 
-| Decision | Options | Default recommendation |
-|---|---|---|
-| Embed Pi as published packages or git submodule? | published pkg / git submodule / monorepo fork | **Published packages** — clean upgrades, less coupling |
-| TS runtime for daemon | Node 22 / Bun | **Node 22** — Pi is already Node-native, fewer surprises |
-| Daemon process supervision in dev | manual / `tsx watch` / `pm2` | **`tsx watch`** for dev, launchd/systemd for prod |
-| HTTP framework | Hono / Fastify / raw http | **Hono** — small, TS-first, MCP-friendly |
-| SQLite driver | better-sqlite3 / node:sqlite (Node 22) | **node:sqlite** if it has FTS5 in your runtime; else better-sqlite3 |
-| MCP SDK | `@modelcontextprotocol/sdk` | **yes** — both as client (to swarm) and server (to Claude Code) |
-| Skill activation default for cron | implicit allowlist / explicit per-job | **explicit per-job `skill:` field** |
-| Multi-tenancy on the gateway | none / per-profile / per-user | **per-profile only** (single user, multiple identities) |
+These decisions are resolved for the current implementation. Change them only with an explicit reason and matching smoke coverage.
+
+| Decision | Resolution |
+|---|---|
+| Embed Pi | Published `@earendil-works/pi-*` packages; no fork, submodule, vendored tree, or local path dependency |
+| TypeScript runtime | Node 22+ with strict, erasable TypeScript; Bun runtime artifacts are rejected |
+| Daemon supervision in dev | `tsx watch`; launchd/systemd templates for managed services |
+| HTTP framework | Hono with the Node server adapter and WebSocket upgrade path |
+| SQLite driver | `node:sqlite` with WAL and FTS5; no direct `better-sqlite3` runtime dependency |
+| MCP SDK | `@modelcontextprotocol/sdk` for public MCP server and swarm/external MCP stdio clients |
+| Cron skill activation | Explicit per-job `skill:` field using Pi's `/skill:<name> ` command form |
+| Multi-tenancy | Per-profile only; no per-user tenant model |
 
 ---
 
@@ -537,6 +548,17 @@ Total: ~3 weeks of focused work; usable end of Phase 5 (~2 weeks).
 5. Two clanky daemons under different profiles (`work` / `personal`) cannot see each other's tasks or sessions.
 6. Killing the daemon mid-task does not corrupt JSONL or SQLite; restart resumes cleanly and a re-dispatched task with the same `idempotency_key` is a no-op if already done.
 
+Current audit status:
+
+| Criterion | Status |
+|---|---|
+| launchd daemon survives logout/restarts on crash | Install templates and local daemon crash behavior are covered; actual launchd bootstrap, crash restart, logout/login survival, and cleanup remain approval-gated |
+| calendar send + TUI resume | Faux-provider send, session persistence/search/export, and TUI resume are covered; live calendar answer requires model credentials and calendar tooling |
+| unattended Linear cron | Cron and Linear delivery are covered against local GraphQL mocks; real unattended Linear comments require credentials and a live issue |
+| Claude Code MCP swarm dispatch | Direct real swarm/herdr and mounted Claude Code MCP dispatch evidence has been captured; Linear mirroring remains credential-gated and default managed-service swarm env must be supplied |
+| profile isolation | Local concurrent profile daemon isolation is covered; launchd-managed `work`/`personal` daemons remain approval-gated |
+| crash recovery and idempotency | Covered by crash-recovery, swarm-restart, cron, and swarm smoke tests |
+
 ---
 
 ## 18. What we explicitly steal vs invent
@@ -554,4 +576,11 @@ The clanky-specific surface — gateway routing, TUI dashboard, Linear bridge, s
 
 ## Next action
 
-Phase 0 is small enough to do in one sitting: scaffold `~/clanky`, install Pi packages, boot a `SessionRegistry` that creates and answers one prompt, end. Once that runs, Phase 1 (UDS + RPC TUI + `clanky send`) is the first user-facing milestone.
+Run the remaining live gates in `docs/live-gates.md`, or record explicit waivers there before claiming v1 completion. The next non-mutating preflight is:
+
+```bash
+pnpm clanky doctor --home ~/.clanky
+pnpm --silent clanky doctor --home ~/.clanky --json
+```
+
+Do not retry `launchctl bootstrap` for `com.clanky.daemon` or the profile daemons without explicit approval.

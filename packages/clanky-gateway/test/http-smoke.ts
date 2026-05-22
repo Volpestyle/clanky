@@ -67,6 +67,84 @@ try {
 		throw new Error("HTTP /status returned unexpected payload");
 	}
 
+	const memoryStatus = await fetchRecord(`${baseUrl}/memory/status`, token);
+	if (memoryStatus.atoms !== 0 || typeof memoryStatus.selfFile !== "string") {
+		throw new Error(`HTTP /memory/status returned unexpected payload: ${JSON.stringify(memoryStatus)}`);
+	}
+	const memoryConsent = await fetchRecord(`${baseUrl}/memory/consent`, token, {
+		method: "PUT",
+		body: {
+			scope: "channel",
+			subjectId: "http-channel",
+			enabled: true,
+			mode: "channel",
+		},
+	});
+	if (memoryConsent.enabled !== true || memoryConsent.scope !== "channel") {
+		throw new Error(`HTTP /memory/consent returned unexpected payload: ${JSON.stringify(memoryConsent)}`);
+	}
+	const memoryRemember = await fetchRecord(`${baseUrl}/memory`, token, {
+		method: "POST",
+		body: {
+			scope: "project",
+			subjectId: process.cwd(),
+			type: "decision",
+			claim: "HTTP memory smoke stores source-grounded decisions.",
+			sourceText: "HTTP memory smoke stores source-grounded decisions.",
+			confirmed: true,
+			confidence: 0.88,
+		},
+	});
+	if (memoryRemember.saved !== true || !isRecord(memoryRemember.atom)) {
+		throw new Error(`HTTP /memory remember returned unexpected payload: ${JSON.stringify(memoryRemember)}`);
+	}
+	const memoryId = stringProperty(memoryRemember.atom, "id");
+	if (memoryId === undefined) throw new Error(`HTTP memory id was missing: ${JSON.stringify(memoryRemember)}`);
+	const memorySearch = await fetchRecord(
+		`${baseUrl}/memory?q=${encodeURIComponent("source-grounded decisions")}&scope=project&subjectId=${encodeURIComponent(process.cwd())}`,
+		token,
+	);
+	if (!hasIdItem(arrayProperty(memorySearch, "atoms"), memoryId)) {
+		throw new Error(`HTTP /memory search did not include stored memory: ${JSON.stringify(memorySearch)}`);
+	}
+	const memoryExport = await fetchRecord(`${baseUrl}/memory/export`, token);
+	if (
+		!hasIdItem(arrayProperty(memoryExport, "atoms"), memoryId) ||
+		arrayProperty(memoryExport, "events").length === 0
+	) {
+		throw new Error(`HTTP /memory/export missed stored memory: ${JSON.stringify(memoryExport)}`);
+	}
+	const memoryForget = await fetchRecord(`${baseUrl}/memory/${memoryId}`, token, { method: "DELETE" });
+	if (memoryForget.forgotten !== 1) {
+		throw new Error(`HTTP /memory/:id did not forget one memory: ${JSON.stringify(memoryForget)}`);
+	}
+	await server.messaging.broker.handleIncoming({
+		platform: "telegram",
+		platformMessageId: "memory-msg-1",
+		chatId: "memory-chat",
+		chatType: "dm",
+		userId: "memory-user",
+		timestamp: Date.now(),
+		text: "Gateway messaging should record source events for allowed DM messages.",
+		type: "text",
+		attachments: [],
+		mentionsBot: true,
+	});
+	const messagingMemoryExport = await server.registry.exportMemory();
+	if (
+		!messagingMemoryExport.events.some(
+			(event) =>
+				event.source === "telegram" &&
+				event.sourceId === "memory-msg-1" &&
+				event.scope === "user" &&
+				event.subjectId === "telegram:user:memory-user",
+		)
+	) {
+		throw new Error(
+			`Gateway messaging memory bridge did not record the inbound event: ${JSON.stringify(messagingMemoryExport)}`,
+		);
+	}
+
 	const initialSessions = await fetchJson(`${baseUrl}/sessions`, token);
 	if (!isRecord(initialSessions) || !Array.isArray(initialSessions.sessions)) {
 		throw new Error("HTTP /sessions returned unexpected payload");
@@ -431,6 +509,10 @@ function hasNestedRecordValue(
 
 function hasNamedItem(items: unknown[], name: string): boolean {
 	return items.some((item) => isRecord(item) && item.name === name);
+}
+
+function hasIdItem(items: unknown[], id: string): boolean {
+	return items.some((item) => isRecord(item) && item.id === id);
 }
 
 function hasCronJob(items: unknown[], jobId: string): boolean {
