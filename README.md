@@ -2,12 +2,27 @@
 
 Clanky is a standalone personal Pi agent. It owns its persona, profile-local
 state, memory, Linear stores, and bundled skills. It does not run its own
-daemon, messaging gateway, scheduler, HTTP server, WebSocket server, or
-multi-agent room system.
+daemon, scheduler, HTTP server, WebSocket server, or multi-agent room
+system.
 
 AgentRoom is the room/runtime daemon. Clanky works naturally inside any
 AgentRoom because AgentRoom can launch it as a normal Pi harness command and
 audit the room send/read flow around it.
+
+## Deployment Topologies
+
+Two supported shapes; pick one per profile. Full contract in
+`docs/AGENTROOM.md`.
+
+- **Standalone Clanky.** No AgentRoom daemon. For chat (e.g. Discord),
+  Clanky imports `@agentroom/chat-discord` as a library and runs the
+  gateway in-process under his own bot token. Direct Discord <-> Clanky.
+- **Enrolled multi-agent room.** AgentRoom daemon owns the chat gateway and
+  the connector bot token. Inbound traffic routes to a designated lead
+  Clanky; worker Clankies receive work via AgentRoom's native messaging and
+  never see Discord directly. Multi-agent attribution in chat uses Discord
+  webhook mode so a single bot token can post as distinct
+  `username`/`avatar_url` per agent.
 
 ## Layout
 

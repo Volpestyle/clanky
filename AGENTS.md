@@ -20,11 +20,10 @@
 - Use pnpm only. Do not add npm lockfiles or npm scripts.
 - Keep the workspace `minimumReleaseAge`, `strictPeerDependencies`, `verifyStoreIntegrity`, and explicit `onlyBuiltDependencies` pnpm guards enabled unless the user explicitly approves changing supply-chain policy.
 - Keep package boundaries clean:
-  - `clanky-core` owns Pi integration, sessions, cron, skills, state, memory, Linear stores, and model-facing tools.
-  - `clanky-gateway` owns HTTP, MCP, WebSocket, UDS gateway dispatch, and external MCP subprocesses.
-  - `clanky-messaging` owns Telegram/Discord adapters, the streaming broker, pairing, mirror, footer, sticker cache, and hook registry.
-  - `clanky-tui` owns dashboard/chat clients over the daemon socket.
-  - `clanky-cli` is a thin command surface over gateway/core operations.
+  - `agents/clanky` (`@clanky/agent`) owns the runnable Pi `InteractiveMode`, persona wiring, and the `clanky` bin.
+  - `packages/clanky-core` (`@clanky/core`) owns Pi integration, memory, profile paths, state storage, Linear stores, skills loading, and model-facing tools.
+  - `skills/` holds bundled Clanky skills loaded from disk.
+- Chat gateways (Discord, etc.) are not packages in this repo. Clanky consumes them either by importing `@agentroom/chat-discord` in standalone mode or by deferring to an AgentRoom daemon in enrolled mode. See `docs/AGENTROOM.md`.
 - Do not patch or vendor Pi. Use published `@earendil-works/pi-*` packages and exported APIs.
 
 ## Verification
@@ -37,9 +36,7 @@
 
 ## Live Gates
 
-- Do not retry launchd bootstrap for `com.clanky.daemon` without explicit user approval.
-- Model, Linear, calendar, messaging tokens, and launchd-managed profile-daemon checks remain live gates requiring credentials, service installation, or user approval. Claude Code MCP mount evidence is captured on this machine; rerun it only for revalidation.
-- Use `pnpm clanky doctor --home ~/.clanky` for non-mutating live-gate preflight.
+- Model, Linear, and chat-gateway tokens (Discord bot tokens, etc.) remain live gates requiring credentials or user approval. Standalone Clanky reads them from its own profile; enrolled Clanky must never read them at all.
 
 ## State Safety
 
