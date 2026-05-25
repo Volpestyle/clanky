@@ -46,13 +46,18 @@ async function main(): Promise<void> {
 
 		const skills = runtime.services.resourceLoader.getSkills().skills;
 		const skillNames = skills.map((s) => s.name);
-		// Bundled clanky skills include "daily-digest", "linear-bridge", "pi-tui-coder".
+		// Bundled clanky skills include browser skills plus operational skills.
 		// We don't hard-fail if names changed, but we DO require at least one merged
 		// skill so we know the skillsOverride hook fired.
 		if (skillNames.length === 0) {
 			console.warn("smoke: no skills loaded (expected at least the bundled set)");
 		} else {
 			console.log(`smoke: loaded ${skillNames.length} skills: ${skillNames.join(", ")}`);
+		}
+		for (const expectedSkill of ["clanky-chrome-cdp", "clanky-playwright-browser"]) {
+			if (!skillNames.includes(expectedSkill)) {
+				throw new Error(`smoke: bundled browser skill ${expectedSkill} was not loaded`);
+			}
 		}
 
 		const extensionsResult = runtime.services.resourceLoader.getExtensions();

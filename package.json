@@ -5,6 +5,10 @@
 	"type": "module",
 	"packageManager": "pnpm@10.33.4",
 	"scripts": {
+		"browser:cdp": "chrome-remote-interface",
+		"browser:chrome-debug": "tsx scripts/chrome-cdp-launch.ts",
+		"browser:install": "playwright install chromium",
+		"browser:playwright": "playwright",
 		"check": "biome check --write --error-on-warnings . && tsgo --noEmit",
 		"clanky": "tsx agents/clanky/src/bin.ts",
 		"smoke": "pnpm smoke:clanky && pnpm smoke:agent-tools",
@@ -16,6 +20,8 @@
 		"@types/node": "^24.3.0",
 		"@types/ws": "^8.18.1",
 		"@typescript/native-preview": "7.0.0-dev.20260120.1",
+		"chrome-remote-interface": "^0.34.0",
+		"playwright": "^1.60.0",
 		"tsx": "^4.20.3",
 		"typescript": "^5.9.2"
 	},
